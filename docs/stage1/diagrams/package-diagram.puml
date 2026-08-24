@@ -1,0 +1,71 @@
+@startuml FinReview_Package
+title FinReview Co. — Package diagram (development view)
+skinparam shadowing false
+
+package "ui" {
+  [Workbench]
+  [Auth]
+}
+
+package "orchestration" {
+  [OrchestratorAgent]
+  [WorkPlan]
+  [ReviewJob]
+}
+
+package "agents" {
+  [ParserAgent]
+  [ConsistencyAgent]
+  [RatioAgent]
+  [AnomalyAgent]
+  [ComplianceAgent]
+  [ReportWriterAgent]
+}
+
+package "domain" {
+  [Engagement]
+  [FinancialStatement]
+  [Finding]
+  [ReviewReport]
+  [ReviewPolicy]
+}
+
+package "tools" {
+  [DocumentTool]
+  [CalculatorTool]
+  [MarketDataTool]
+}
+
+package "llm" {
+  [ILLMClient]
+  [LLMService]
+  [PromptSchemas]
+}
+
+package "persistence" {
+  [Repositories]
+  [ObjectStore]
+  [StandardsStore]
+}
+
+ui --> orchestration
+ui --> domain
+orchestration --> agents
+orchestration --> domain
+orchestration --> llm
+agents --> domain
+agents --> tools
+agents --> llm
+tools --> persistence
+domain --> persistence
+llm ..> persistence : optional prompt logs\n(no training use, AGR-03)
+
+note bottom of domain
+  Future specialists depend on
+  domain + orchestration ports,
+  not on ui. Stage 2 can add
+  AnomalyAgent without migrating
+  Engagement.
+end note
+
+@enduml

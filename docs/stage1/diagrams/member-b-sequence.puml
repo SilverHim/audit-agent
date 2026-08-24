@@ -1,0 +1,51 @@
+@startuml MemberB_Sequence_UC03_UC04
+title Member B — Sequence: UC-03 + UC-04 under Orchestrator (REQ-B-01)
+autonumber
+participant "OrchestratorAgent" as Orch
+participant "ConsistencyAgent" as Cons
+participant "RatioAgent" as Ratio
+participant "CalculatorTool" as Calc
+participant "MarketDataAPI" as Mkt
+participant "LLMService" as LLM
+participant "ReviewJob" as Job
+
+Orch -> Job : Running
+Orch -> Cons : assign Consistency Task
+Orch -> Ratio : assign Ratio Task
+
+par consistency
+  activate Cons
+  Cons -> Calc : tieOut(lineItems)
+  Calc --> Cons : pass/fail + numbers
+  Cons -> LLM : explain(failures, numbers)\n**(interaction)**
+  LLM --> Cons : grounded narrative
+  Cons --> Orch : Findings + TaskResult
+  deactivate Cons
+else ratios
+  activate Ratio
+  Ratio -> Calc : compute(ratioPack)
+  Calc --> Ratio : RatioResult[]
+  opt OPT-03 enabled
+    Ratio -> Mkt : peerBand(industry)
+    alt API failure
+      Mkt --> Ratio : unavailable
+    else ok
+      Mkt --> Ratio : band
+    end
+  end
+  Ratio -> LLM : commentary(results, thresholds)\n**(interaction)**
+  LLM --> Ratio : commentary
+  Ratio --> Orch : RatioResults + Findings
+  deactivate Ratio
+end
+
+alt material failure or stale outputs
+  Orch -> LLM : propose WorkPlan patch\n**(decision)**
+  LLM --> Orch : patch
+  Orch -> Orch : validate against dependency graph
+  Orch -> Job : Replanning then Running (UC-08)
+else all required tasks ok
+  Orch -> Job : AwaitingHuman
+end
+
+@enduml

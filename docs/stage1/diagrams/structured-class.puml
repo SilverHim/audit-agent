@@ -1,0 +1,55 @@
+@startuml FinReview_Structured_Class
+title FinReview Co. — Structured class / composite structure (OrchestratorAgent)
+skinparam shadowing false
+skinparam componentStyle uml2
+
+class OrchestratorAgent {
+}
+
+OrchestratorAgent +-- planOut
+OrchestratorAgent +-- findingIn
+OrchestratorAgent +-- humanGate
+OrchestratorAgent +-- llmPort
+OrchestratorAgent +-- toolPort
+
+interface "IWorkPlan" as IPlan
+interface "IFinding" as IFind
+interface "IHumanApproval" as IHuman
+interface "ILLMClient" as ILLM
+interface "ITool" as ITool
+
+planOut - IPlan
+findingIn - IFind
+humanGate - IHuman
+llmPort - ILLM
+toolPort - ITool
+
+component "ParserAgent" as Parser
+component "ConsistencyAgent" as Cons
+component "RatioAgent" as Ratio
+component "ReportWriterAgent" as Writer
+component "LLMService" as LLM
+component "CalculatorTool" as Calc
+component "DocumentTool" as Doc
+actor "Practitioner" as Prac
+
+IPlan )-- Parser : assign intake
+IPlan )-- Cons : assign tie-out
+IPlan )-- Ratio : assign ratios
+IPlan )-- Writer : assign memo
+Parser --( IFind : parse issues
+Cons --( IFind : consistency findings
+Ratio --( IFind : ratio findings
+Writer --( IHuman : draft ready
+Prac --( IHuman : confirm / dismiss / more info
+LLM --( ILLM : complete(schema)
+Calc --( ITool
+Doc --( ITool
+
+note bottom of OrchestratorAgent
+  Ports isolate future specialists:
+  a new AnomalyAgent binds to planOut + findingIn
+  without changing Engagement / Finding classes.
+end note
+
+@enduml

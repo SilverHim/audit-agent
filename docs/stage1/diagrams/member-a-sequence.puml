@@ -1,0 +1,54 @@
+@startuml MemberA_Sequence_UC01
+title Member A — Sequence: UC-01 Create Review Engagement (REQ-A-01)
+autonumber
+actor Practitioner
+participant "UI" as UI
+participant "OrchestratorAgent" as Orch
+participant "LLMService" as LLM
+participant "Engagement" as Eng
+participant "ParserAgent" as Parser
+participant "DocumentTool" as Doc
+
+Practitioner -> UI : natural-language brief\n(entity, period, emphasis, materiality cue)
+UI -> Orch : createEngagement(brief)
+activate Orch
+Orch -> LLM : complete(scoping schema)\n**(decision + perception of brief)**
+activate LLM
+alt timeout
+  LLM --> Orch : error
+  Orch --> UI : remain Draft; retry or short form
+else success
+  LLM --> Orch : StructuredScope
+end
+deactivate LLM
+
+opt missing entity or period
+  Orch -> LLM : clarifying question\n**(interaction)**
+  LLM --> Orch : question
+  Orch --> Practitioner : ask clarification
+  Practitioner -> Orch : answer
+end
+
+Orch -> Eng : new Draft
+Orch -> Eng : apply(scope, policy) => Scoped
+Orch --> Practitioner : checklist of required statements
+
+Practitioner -> UI : confirm or edit materiality
+UI -> Orch : confirmScope()
+Orch -> Eng : store ReviewPolicy
+
+Practitioner -> UI : upload files (UC-02 starts)
+UI -> Orch : ingest(files)
+Orch -> Parser : assign intake Task
+activate Parser
+Parser -> Doc : extract(files)
+Doc --> Parser : raw tables
+Parser -> LLM : map to LineItems\n**(perception)**
+LLM --> Parser : canonical rows
+Parser -> Eng : persist FinancialStatement *
+Parser --> Orch : TaskResult
+deactivate Parser
+Orch --> Practitioner : parse preview
+deactivate Orch
+
+@enduml

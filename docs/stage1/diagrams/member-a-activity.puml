@@ -1,0 +1,43 @@
+@startuml MemberA_Activity_UC02
+title Member A — Activity: UC-02 Upload and Parse Statements (REQ-A-01)
+skinparam shadowing false
+
+|#LightBlue|Practitioner|
+start
+:Select files and
+intended statement types;
+
+|#LightGreen|ParserAgent|
+while (Source unreadable?) is (yes)
+  |#Wheat|DocumentTool|
+  :Extract text / tables;
+  |#LightBlue|Practitioner|
+  :Upload replacement;
+endwhile (no)
+
+|#Wheat|DocumentTool|
+:Extract text / tables;
+|#Pink|LLMService|
+:Map tables to canonical
+statement schema
+<<(perception)>>;
+|#LightGreen|ParserAgent|
+:Write FinancialStatement
+and LineItem graph;
+
+if (Low-confidence rows\nor totals mismatch?) then (yes)
+  |#LightBlue|Practitioner|
+  :Manually map or
+  override with comment;
+else (no)
+endif
+
+|#LightBlue|Practitioner|
+:Accept parse preview;
+|#LightGreen|ParserAgent|
+:Set Engagement = Parsed
+then ReadyForReview
+if intake gate satisfied;
+stop
+
+@enduml

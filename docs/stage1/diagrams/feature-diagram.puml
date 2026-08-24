@@ -1,0 +1,30 @@
+@startmindmap FinReview_Feature_Diagram
+title FinReview Co. — Feature diagram (group)
+caption Mandatory = filled; optional = dashed annotation; alternatives under LLM and Input.
+
+* **FinReview Co.**
+** F-Identity <<mandatory>>\nNFR: confidentiality
+** F-Engagement <<mandatory>>\nNFR: interpretability
+** F-Intake <<mandatory>>\nNFR: accuracy, latency
+*** F-InputFormat <<or>>
+**** PDF
+**** Excel
+**** XBRL <<optional OPT-07>>
+** F-Orchestration <<mandatory>>\nNFR: auditability
+** F-Adapt <<mandatory>>\nNFR: termination
+** F-HITL <<mandatory>>
+** F-Consistency <<mandatory>>\nNFR: numerical correctness
+** F-Ratios <<mandatory>>\nNFR: reproducibility
+** F-Reporting <<mandatory>>\nNFR: traceability, completeness
+** F-LLM <<mandatory>>
+*** F-LLMProvider <<alternative xor>>
+**** Cloud LLM
+**** Local LLM <<optional OPT-06>>
+** F-Tools <<mandatory>>
+** F-Anomaly <<optional OPT-01>>
+** F-ComplianceRAG <<optional OPT-02>>\nNFR: citation integrity
+** F-Benchmark <<optional OPT-03>>
+** F-MultiPeriod <<optional OPT-04>>
+** F-Export <<optional OPT-05>>
+** F-Voice <<optional OPT-08>>
+@endmindmap

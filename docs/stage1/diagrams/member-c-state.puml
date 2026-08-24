@@ -1,0 +1,29 @@
+@startuml MemberC_State_Finding
+title Member C — State machine: Finding (REQ-C-01, UC-07)
+skinparam shadowing false
+
+[*] --> Proposed : Specialist creates alert
+
+Proposed --> EvidenceAttached : attachEvidence()\nlocator + payload present
+Proposed --> Proposed : narrative added\n(cannot Confirm yet)
+
+EvidenceAttached --> Confirmed : Practitioner.confirm()\n[evidence.locator != null]
+EvidenceAttached --> Dismissed : Practitioner.dismiss(reason)
+EvidenceAttached --> NeedsMoreInfo : Practitioner.requestMoreInfo()
+
+NeedsMoreInfo --> EvidenceAttached : producing agent supplies\nadditional Evidence (UC-08)
+NeedsMoreInfo --> Dismissed : Practitioner dismisses after rework
+
+Confirmed --> IncludedInReport : ReviewReport.freeze()
+Dismissed --> [*] : omitted or appendix only
+
+IncludedInReport --> [*]
+
+note right of EvidenceAttached
+  AGR-02 gate: Confirm transition
+  is guarded on evidence presence.
+  LLM may phrase narrative but
+  cannot move this state machine.
+end note
+
+@enduml

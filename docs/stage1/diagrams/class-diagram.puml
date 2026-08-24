@@ -1,0 +1,202 @@
+@startuml FinReview_Class_Diagram
+title FinReview Co. — Elementary structure (design-time class diagram)
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+hide circle
+
+interface ILLMClient {
+  +complete(prompt: Prompt, schema: JsonSchema): StructuredOutput
+}
+
+interface ITool {
+  +name(): String
+  +invoke(args: Map): ToolResult
+}
+
+class LLMService {
+  -provider: ProviderKind
+  +complete(prompt, schema): StructuredOutput
+}
+LLMService ..|> ILLMClient
+
+abstract class Tool {
+  +name(): String
+  +invoke(args): ToolResult
+}
+Tool ..|> ITool
+
+class DocumentTool
+class CalculatorTool
+class MarketDataTool
+Tool <|-- DocumentTool
+Tool <|-- CalculatorTool
+Tool <|-- MarketDataTool
+
+class User {
+  -userId: UUID
+  -email: String
+  -role: Practitioner
+  +authenticate()
+}
+
+class ReviewPolicy {
+  -materialityAbs: Money
+  -materialityPct: Decimal
+  -maxReplans: Integer
+  -anomalyEnabled: Boolean
+  -complianceEnabled: Boolean
+  -benchmarkEnabled: Boolean
+}
+
+class Engagement {
+  -engagementId: UUID
+  -entityName: String
+  -period: Period
+  -framework: AccountingFramework
+  -state: EngagementState
+  +confirmScope()
+  +close()
+}
+
+class WorkPlan {
+  -version: Integer
+  +patch(invalidated: Set<Task>): WorkPlan
+}
+
+class Task {
+  -taskId: UUID
+  -kind: TaskKind
+  -state: TaskState
+  -dependsOn: Set<Task>
+}
+
+class ReviewJob {
+  -jobId: UUID
+  -replanCount: Integer
+  -state: ReviewJobState
+  +requestReplan(trigger: ReplanTrigger)
+}
+
+class FinancialStatement {
+  -statementId: UUID
+  -type: StatementType
+  -currency: Currency
+  -sourceLocator: Locator
+}
+
+class LineItem {
+  -code: String
+  -label: String
+  -amount: Decimal
+  -period: Period
+  -confidence: Decimal
+  -sourceLocator: Locator
+}
+
+class RatioResult {
+  -formulaId: String
+  -value: Decimal
+  -inputs: Map
+}
+
+class Finding {
+  -findingId: UUID
+  -severity: Severity
+  -narrative: String
+  -state: FindingState
+  +attachEvidence(e: Evidence)
+  +confirm()
+  +dismiss(reason: String)
+  +requestMoreInfo()
+}
+
+class Evidence {
+  -kind: EvidenceKind
+  -locator: Locator
+  -payload: String
+}
+
+class ReviewReport {
+  -reportId: UUID
+  -banner: String
+  -issuedAt: DateTime
+  +freeze()
+}
+
+class AgentMessage {
+  -messageId: UUID
+  -role: MessageRole
+  -body: String
+  -createdAt: DateTime
+}
+
+abstract class Agent {
+  -agentId: UUID
+  -name: String
+  +handle(task: Task): TaskResult
+}
+Agent o--> ILLMClient : uses 1
+Agent o--> ITool : uses 0..*
+
+class OrchestratorAgent {
+  +plan(engagement: Engagement): WorkPlan
+  +replan(job: ReviewJob, trigger): WorkPlan
+}
+class ParserAgent
+class ConsistencyAgent
+class RatioAgent
+class AnomalyAgent
+class ComplianceAgent
+class ReportWriterAgent
+
+Agent <|-- OrchestratorAgent
+Agent <|-- ParserAgent
+Agent <|-- ConsistencyAgent
+Agent <|-- RatioAgent
+Agent <|-- AnomalyAgent
+Agent <|-- ComplianceAgent
+Agent <|-- ReportWriterAgent
+
+User "1" -- "0..*" Engagement : owns
+Engagement "1" *-- "1" ReviewPolicy : composition
+Engagement "1" o-- "1..*" FinancialStatement : aggregation
+Engagement "1" *-- "1..*" WorkPlan : composition
+Engagement "1" -- "0..1" ReviewJob : current
+Engagement "1" -- "0..*" ReviewReport : produces
+
+FinancialStatement "1" *-- "1..*" LineItem : composition
+WorkPlan "1" *-- "1..*" Task : composition
+ReviewJob "1" --> "1" WorkPlan : executes
+
+Task "0..*" --> "0..1" Agent : assigned
+OrchestratorAgent "1" --> "1..*" Agent : coordinates
+
+Finding "1" *-- "1..*" Evidence : composition
+Finding "0..*" --> "0..*" LineItem : cites
+Finding "0..*" --> "0..*" RatioResult : cites
+RatioResult "0..*" --> "1..*" LineItem : derived from
+
+ReviewReport "1" *-- "0..*" Finding : composition
+ReviewReport "1" --> "1" Engagement
+
+AgentMessage "0..*" --> "1" Agent : from
+AgentMessage "0..*" --> "1" Task : about
+
+ParserAgent ..> DocumentTool
+ConsistencyAgent ..> CalculatorTool
+RatioAgent ..> CalculatorTool
+RatioAgent ..> MarketDataTool
+
+note right of Agent
+  Specialisation (generalisation)
+  is the primary extension point
+  for future specialist agents.
+end note
+
+note bottom of Finding
+  AGR-02: Confirm is allowed
+  only if Evidence multiplicity
+  is 1..* and locator present.
+end note
+
+@enduml

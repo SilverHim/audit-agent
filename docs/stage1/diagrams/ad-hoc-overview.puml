@@ -1,0 +1,78 @@
+@startuml FinReview_AdHoc_Overview
+title FinReview Co. — Ad hoc overall software design (optional)
+skinparam backgroundColor white
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor "Practitioner\n(one-person firm)" as P
+actor "Client" as C
+
+package "Presentation" {
+  [Web Workbench] as UI
+}
+
+package "Orchestration" {
+  [OrchestratorAgent] as Orch
+  [WorkPlan / ReviewJob] as Plan
+}
+
+package "Specialist Agents" {
+  [ParserAgent] as Parser
+  [ConsistencyAgent] as Cons
+  [RatioAgent] as Ratio
+  [AnomalyAgent\n(optional)] as Ano
+  [ComplianceAgent\n(optional)] as Comp
+  [ReportWriterAgent] as Writer
+}
+
+package "Domain" {
+  [Engagement] as Eng
+  [FinancialStatement] as FS
+  [Finding] as Find
+  [ReviewReport] as Rep
+}
+
+package "Infrastructure" {
+  [LLMService] as LLM
+  [DocumentTool] as Doc
+  [CalculatorTool] as Calc
+  [MarketDataAPI] as Mkt
+  [StandardsStore] as Std
+  [Object Store] as Blob
+}
+
+C --> UI : supplies files
+P --> UI : brief, upload, approve
+UI --> Orch
+Orch --> Plan
+Orch --> Parser
+Orch --> Cons
+Orch --> Ratio
+Orch --> Ano
+Orch --> Comp
+Orch --> Writer
+Parser --> FS
+Cons --> Find
+Ratio --> Find
+Ano --> Find
+Comp --> Find
+Writer --> Rep
+Orch --> LLM
+Parser --> LLM
+Parser --> Doc
+Cons --> Calc
+Ratio --> Calc
+Ratio --> Mkt
+Comp --> Std
+UI --> Blob
+Eng --> FS
+Eng --> Rep
+
+note right of Orch
+  LLM roles:
+  perception (parse),
+  decision (plan / replan),
+  interaction (clarify, explain)
+end note
+
+@enduml

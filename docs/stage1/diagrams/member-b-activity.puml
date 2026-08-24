@@ -1,0 +1,52 @@
+@startuml MemberB_Activity_UC03
+title Member B — Activity: UC-03 Cross-Statement Consistency Review (REQ-B-01)
+skinparam shadowing false
+
+|#LightBlue|OrchestratorAgent|
+start
+:Create Consistency Task;
+if (Required statements\npresent?) then (no)
+  :Block task;
+  :Request UC-02 or policy waiver;
+  stop
+else (yes)
+endif
+
+|#Honeydew|ConsistencyAgent|
+:Load LineItems;
+|#Wheat|CalculatorTool|
+:Evaluate rules:
+accounting equation;
+NI vs RE movement;
+cash vs CFS net change
+<<(deterministic arithmetic)>>;
+
+|#Honeydew|ConsistencyAgent|
+if (Rule failed?) then (yes)
+  |#Pink|LLMService|
+  :Explain using numeric
+  evidence only
+  <<(interaction / narrative)>>;
+  |#Honeydew|ConsistencyAgent|
+  if (Narrative contradicts numbers?) then (yes)
+    :Keep finding; drop narrative;
+  else (no)
+    :Attach narrative to Finding;
+  endif
+  :Store Finding (Proposed);
+else (no)
+  :Record pass evidence;
+endif
+
+|#LightBlue|OrchestratorAgent|
+if (Material inconsistency?) then (yes)
+  :Mark step failed;
+  :Enter UC-08 replan
+  <<(decision)>>;
+else (no)
+  :Continue WorkPlan
+  (ratios / report);
+endif
+stop
+
+@enduml

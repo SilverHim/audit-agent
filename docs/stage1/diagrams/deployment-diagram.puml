@@ -1,0 +1,43 @@
+@startuml FinReview_Deployment
+title FinReview Co. — Deployment diagram (Stage 2 target)
+skinparam shadowing false
+skinparam nodeStyle rectangle
+
+node "Practitioner browser" {
+  artifact "SPA (React)" as SPA
+}
+
+node "FinReview API host" {
+  artifact "API (FastAPI / similar)" as API
+  artifact "Agent runtime\n(LangGraph / CrewAI)" as RT
+  artifact "Relational DB" as DB
+}
+
+node "Object storage" {
+  artifact "Source PDFs / workbooks" as Blob
+}
+
+node "LLM cloud (xor local GPU)" {
+  artifact "Chat Completions API" as LLM
+}
+
+node "Optional data plane" {
+  artifact "Vector DB (standards RAG)" as VDB
+  artifact "Market data API" as MKT
+}
+
+SPA --> API : HTTPS
+API --> RT
+RT --> DB
+API --> Blob
+RT --> LLM : inference only (AGR-03)
+RT --> VDB
+RT --> MKT
+
+note right of LLM
+  ASM-05: provider outage queues
+  ReviewJob; checks are not skipped
+  silently.
+end note
+
+@enduml

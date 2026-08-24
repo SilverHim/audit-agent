@@ -1,0 +1,37 @@
+@startuml MemberB_State_ReviewJob
+title Member B — State machine: ReviewJob (REQ-B-01, UC-03 / UC-08)
+skinparam shadowing false
+
+[*] --> Queued : WorkPlan vN accepted
+
+Queued --> Planning : OrchestratorAgent.plan()
+
+Planning --> Running : tasks assigned
+Planning --> AwaitingHuman : LLM plan invalid;\npractitioner must edit policy
+
+Running --> Running : specialist TaskResult (pass)
+Running --> AwaitingHuman : planned tasks done
+Running --> Replanning : consistency fail /\nnew artefact /\nfinding NeedsMoreInfo
+Running --> Cancelled : Practitioner abort
+
+Replanning --> Running : validated patch;\nonly affected tasks rerun
+Replanning --> AwaitingHuman : maxReplans exceeded\n(termination NFR)
+Replanning --> Replanning : LLM proposes full restart;\npatch rejected; graph cut used
+
+AwaitingHuman --> Replanning : dismiss / more info /\npolicy change (UC-09)
+AwaitingHuman --> Completed : report issued (UC-07)
+AwaitingHuman --> Cancelled : Practitioner closes without issue
+
+Completed --> [*]
+Cancelled --> [*]
+
+note right of Replanning
+  LLM decides a patch;
+  OrchestratorAgent enforces
+  the deterministic dependency
+  graph so the job cannot
+  silently restart everything
+  (protects REQ-B-01).
+end note
+
+@enduml

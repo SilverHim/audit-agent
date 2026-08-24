@@ -1,0 +1,57 @@
+@startuml MemberC_Activity_UC07
+title Member C — Activity: UC-07 Generate and Approve Review Report (REQ-C-01)
+skinparam shadowing false
+
+|#LightGreen|OrchestratorAgent|
+start
+:Collect Findings
+from completed tasks;
+
+|#Lavender|ReportWriterAgent|
+:Group findings by theme;
+|#Pink|LLMService|
+:Draft sections
+(scope, procedures,
+findings, limitations)
+<<(interaction)>>;
+|#Lavender|ReportWriterAgent|
+:Show AGR-01 banner;
+:Present draft + evidence;
+
+|#LightBlue|Practitioner|
+while (Unchecked finding?) is (yes)
+  if (Evidence complete\nAGR-02?) then (no)
+    :Confirm disabled;
+    :Dismiss or Needs more info;
+  else (yes)
+    :Confirm / Dismiss /\nNeeds more info;
+  endif
+endwhile (no)
+
+|#LightGreen|OrchestratorAgent|
+if (Any Needs more info?) then (yes)
+  :Trigger UC-08
+  for producing agent;
+  stop
+else (no)
+endif
+
+|#LightBlue|Practitioner|
+if (Request wording only?) then (yes)
+  |#Pink|LLMService|
+  :Regenerate prose;
+  |#Lavender|ReportWriterAgent|
+  :Keep numeric tables frozen;
+else (no)
+endif
+
+|#LightBlue|Practitioner|
+:Accept draft;
+|#Lavender|ReportWriterAgent|
+:Freeze ReviewReport;
+:Include Confirmed findings only;
+|#LightGreen|OrchestratorAgent|
+:Engagement := Closed;
+stop
+
+@enduml

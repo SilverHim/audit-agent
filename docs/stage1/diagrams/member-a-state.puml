@@ -1,0 +1,38 @@
+@startuml MemberA_State_Engagement
+title Member A — State machine: Engagement (REQ-A-01, UC-01 / UC-02)
+skinparam shadowing false
+
+[*] --> Draft : Practitioner submits brief
+
+Draft --> Draft : LLM timeout / retry
+Draft --> Scoped : StructuredScope confirmed
+Draft --> Failed : abandoned
+
+Scoped --> DocumentsIn : files uploaded
+Scoped --> Scoped : policy edit (UC-09)
+
+DocumentsIn --> DocumentsIn : parse error; replacement file
+DocumentsIn --> Parsed : ParserAgent persist + accept
+DocumentsIn --> Failed : unreadable sources, no override
+
+Parsed --> ReadyForReview : intake gate satisfied
+Parsed --> DocumentsIn : practitioner rejects preview
+
+ReadyForReview --> Closed : report issued (UC-07)
+ReadyForReview --> DocumentsIn : replacement artefact (UC-08 trigger)
+ReadyForReview --> Failed : max replans / cancelled job
+
+Failed --> [*]
+Closed --> [*]
+
+note right of Draft
+  LLM perception of NL brief
+  and decision of WorkPlan
+end note
+
+note right of DocumentsIn
+  LLM perception of tables;
+  amounts never invented
+end note
+
+@enduml

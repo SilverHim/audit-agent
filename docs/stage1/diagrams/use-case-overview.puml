@@ -1,0 +1,71 @@
+@startuml FinReview_UseCase_Overview
+title FinReview Co. — Use case overview (all actors and stakeholders)
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide circle
+
+actor "Practitioner" as Prac
+actor "Client" as Client
+actor "LLMService" as LLM
+actor "DocumentTool" as Doc
+actor "CalculatorTool" as Calc
+actor "MarketDataAPI" as Mkt
+actor "StandardsStore" as Std
+
+rectangle "FinReview Co." {
+  usecase "UC-01 Create Review\nEngagement" as UC01
+  usecase "UC-02 Upload and Parse\nStatements" as UC02
+  usecase "UC-03 Cross-Statement\nConsistency Review" as UC03
+  usecase "UC-04 Ratio and\nTrend Analysis" as UC04
+  usecase "UC-05 Detect Anomalies\n(optional)" as UC05
+  usecase "UC-06 Check Disclosure\nCompleteness (optional)" as UC06
+  usecase "UC-07 Generate and Approve\nReview Report" as UC07
+  usecase "UC-08 Adaptive Re-Review" as UC08
+  usecase "UC-09 Manage Review Policy" as UC09
+}
+
+Prac --> UC01
+Prac --> UC02
+Prac --> UC07
+Prac --> UC09
+Prac --> UC08 : trigger / confirm diff
+Client --> UC02 : supply files
+
+UC01 ..> UC09 : <<include>>
+UC02 ..> UC01 : <<include>>
+UC03 ..> UC02 : <<include>>
+UC04 ..> UC02 : <<include>>
+UC05 ..> UC02 : <<include>>
+UC06 ..> UC02 : <<include>>
+UC07 ..> UC03 : <<include>>
+UC07 ..> UC04 : <<include>>
+UC08 ..> UC03 : <<extend>>
+UC08 ..> UC07 : <<extend>>
+UC03 ..> UC08 : on material fail
+UC05 ..> UC07 : findings
+UC06 ..> UC07 : findings
+
+LLM ..> UC01
+LLM ..> UC02
+LLM ..> UC03
+LLM ..> UC04
+LLM ..> UC07
+LLM ..> UC08
+Doc ..> UC02
+Calc ..> UC03
+Calc ..> UC04
+Mkt ..> UC04
+Std ..> UC06
+
+note bottom of UC01
+  Member A — REQ-A-01
+end note
+note bottom of UC03
+  Member B — REQ-B-01
+end note
+note bottom of UC07
+  Member C — REQ-C-01
+end note
+
+@enduml

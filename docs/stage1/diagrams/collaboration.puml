@@ -1,0 +1,30 @@
+@startuml FinReview_Collaboration
+title FinReview Co. — Collaboration: one analytical review
+skinparam shadowing false
+
+together {
+  class "Planner\n(OrchestratorAgent)" as Planner
+  class "Specialist\n(Parser / Consistency / Ratio / Writer)" as Spec
+  class "Calculator\n(ITool)" as Calc
+  class "Language model\n(ILLMClient)" as LLM
+  class "Approver\n(Practitioner)" as Appr
+}
+
+Planner --> Spec : 1: assign Task
+Spec --> Calc : 2: invoke numeric tool
+Calc --> Spec : 3: ToolResult
+Spec --> LLM : 4: explain grounded in ToolResult
+LLM --> Spec : 5: narrative
+Spec --> Planner : 6: Finding + TaskResult
+Planner --> Appr : 7: present draft / diff
+Appr --> Planner : 8: confirm | dismiss | moreInfo | replan
+Planner --> Spec : 9: patched WorkPlan (UC-08)
+
+note right of Planner
+  Collaboration roles, not extra classes:
+  Planner, Specialist, Approver.
+  Objects from the class diagram
+  play these roles at runtime.
+end note
+
+@enduml

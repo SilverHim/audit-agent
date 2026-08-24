@@ -1,0 +1,136 @@
+@startuml FinReview_Object_Diagram
+title FinReview Co. — Object diagram (runtime snapshot, FY2025 engagement)
+skinparam shadowing false
+hide circle
+
+object "prac:User" as prac {
+  email = "partner@finreview.example"
+}
+
+object "e1:Engagement" as e1 {
+  entityName = "Harbor Retail Pty Ltd"
+  period = "FY2025"
+  state = ReadyForReview
+}
+
+object "pol:ReviewPolicy" as pol {
+  materialityAbs = 50_000
+  maxReplans = 3
+  anomalyEnabled = true
+}
+
+object "job:ReviewJob" as job {
+  state = AwaitingHuman
+  replanCount = 1
+}
+
+object "plan_v2:WorkPlan" as plan {
+  version = 2
+}
+
+object "t_cons:Task" as tcons {
+  kind = Consistency
+  state = Completed
+}
+
+object "t_ratio:Task" as tratio {
+  kind = Ratio
+  state = Completed
+}
+
+object "t_rep:Task" as trep {
+  kind = Report
+  state = Running
+}
+
+object "orch:OrchestratorAgent" as orch {
+  name = "Partner-Orchestrator"
+}
+
+object "cons:ConsistencyAgent" as cons {
+  name = "Tie-out"
+}
+
+object "ratio:RatioAgent" as ratio {
+  name = "Analytics"
+}
+
+object "writer:ReportWriterAgent" as writer {
+  name = "Memo-Writer"
+}
+
+object "bs:FinancialStatement" as bs {
+  type = BalanceSheet
+}
+
+object "is:FinancialStatement" as is {
+  type = IncomeStatement
+}
+
+object "cfs:FinancialStatement" as cfs {
+  type = CashFlow
+}
+
+object "li_cash:LineItem" as cash {
+  code = "Cash"
+  amount = 1_200_000
+}
+
+object "li_ni:LineItem" as ni {
+  code = "NetIncome"
+  amount = 340_000
+}
+
+object "f1:Finding" as f1 {
+  state = Confirmed
+  severity = High
+  narrative = "Cash movement does not articulate to CFS"
+}
+
+object "ev1:Evidence" as ev1 {
+  kind = NumericRule
+  locator = "BS p.4 / CFS p.7"
+}
+
+object "f2:Finding" as f2 {
+  state = Proposed
+  severity = Medium
+  narrative = "Current ratio 0.72 below policy floor 1.0"
+}
+
+object "rr1:RatioResult" as rr1 {
+  formulaId = "current_ratio"
+  value = 0.72
+}
+
+object "rep:ReviewReport" as rep {
+  banner = "Analytical review — not an audit opinion"
+}
+
+prac --> e1
+e1 *-- pol
+e1 --> job
+e1 *-- plan
+e1 o-- bs
+e1 o-- is
+e1 o-- cfs
+job --> plan
+plan *-- tcons
+plan *-- tratio
+plan *-- trep
+tcons --> cons
+tratio --> ratio
+trep --> writer
+orch --> cons
+orch --> ratio
+orch --> writer
+bs *-- cash
+is *-- ni
+f1 *-- ev1
+f1 --> cash
+f2 --> rr1
+rep *-- f1
+rep *-- f2
+e1 --> rep
+
+@enduml

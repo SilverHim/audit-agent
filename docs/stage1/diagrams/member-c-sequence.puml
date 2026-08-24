@@ -1,0 +1,57 @@
+@startuml MemberC_Sequence_UC07
+title Member C — Sequence: evidence-backed findings to approval (REQ-C-01, UC-05/06/07)
+autonumber
+participant "AnomalyAgent" as Ano
+participant "ComplianceAgent" as Comp
+participant "Finding" as Find
+participant "ReportWriterAgent" as Writer
+participant "LLMService" as LLM
+participant "OrchestratorAgent" as Orch
+actor Practitioner
+
+opt OPT-01 enabled
+  Ano -> Ano : run heuristics
+  Ano -> Find : create Proposed + Evidence\n(account, period, calc, locator)
+  Ano -> LLM : narrative from evidence fields only\n**(interaction)**
+  LLM --> Ano : narrative
+end
+
+opt OPT-02 enabled
+  Comp -> Comp : RAG checklist vs notes
+  Comp -> Find : create Proposed + standard citation
+end
+
+Orch -> Writer : assemble report Task
+activate Writer
+Writer -> Find : collect Proposed/Confirmed
+Writer -> LLM : draft memo sections\n**(interaction)**
+LLM --> Writer : draft
+Writer --> Practitioner : draft + evidence cards\n+ AGR-01 banner
+
+loop each finding
+  alt missing locator
+    Practitioner -> Find : Confirm forbidden
+    Practitioner -> Find : dismiss() or requestMoreInfo()
+  else Confirm
+    Practitioner -> Find : confirm()
+  else Dismiss
+    Practitioner -> Find : dismiss(reason)
+  else Needs more info
+    Practitioner -> Find : requestMoreInfo()
+    Practitioner -> Orch : trigger UC-08
+  end
+end
+
+opt wording change only
+  Practitioner -> Writer : editSection(id)
+  Writer -> LLM : regenerate prose
+  LLM --> Writer : new prose
+  Writer -> Writer : numeric evidence unchanged
+end
+
+Practitioner -> Writer : accept()
+Writer -> Writer : freeze(); composition of Confirmed findings
+Writer --> Orch : Issued
+deactivate Writer
+
+@enduml

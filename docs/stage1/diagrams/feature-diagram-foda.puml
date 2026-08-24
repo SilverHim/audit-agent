@@ -1,0 +1,72 @@
+@startuml FinReview_Feature_FODA
+title FinReview Co. — Feature diagram (FODA-style)
+skinparam shadowing false
+skinparam backgroundColor white
+hide circle
+hide members
+
+together {
+  class FinReview as "**FinReview Co.**" <<root>>
+}
+
+package "Mandatory (filled)" {
+  class Identity as "F-Identity\nNFR: confidentiality"
+  class Engagement as "F-Engagement\nNFR: interpretability"
+  class Intake as "F-Intake\nNFR: accuracy, latency"
+  class Orchestration as "F-Orchestration\nNFR: auditability"
+  class Adapt as "F-Adapt\nNFR: termination"
+  class HITL as "F-HITL"
+  class Consistency as "F-Consistency\nNFR: numerical correctness"
+  class Ratios as "F-Ratios\nNFR: reproducibility"
+  class Reporting as "F-Reporting\nNFR: traceability, completeness"
+  class LLM as "F-LLM"
+  class Tools as "F-Tools"
+}
+
+package "Optional (empty)" {
+  class Anomaly as "F-Anomaly\nOPT-01"
+  class RAG as "F-ComplianceRAG\nOPT-02\nNFR: citation integrity"
+  class Bench as "F-Benchmark\nOPT-03"
+  class Multi as "F-MultiPeriod\nOPT-04"
+  class Export as "F-Export\nOPT-05"
+  class Voice as "F-Voice\nOPT-08"
+}
+
+package "Alternative / OR" {
+  class LLMProv as "F-LLMProvider\n<<xor>>"
+  class Cloud as "Cloud LLM"
+  class Local as "Local LLM\nOPT-06"
+  class Input as "F-InputFormat\n<<or>>"
+  class PDF
+  class Excel
+  class XBRL as "XBRL\nOPT-07"
+}
+
+FinReview *-- Identity : mandatory
+FinReview *-- Engagement : mandatory
+FinReview *-- Intake : mandatory
+FinReview *-- Orchestration : mandatory
+FinReview *-- Adapt : mandatory
+FinReview *-- HITL : mandatory
+FinReview *-- Consistency : mandatory
+FinReview *-- Ratios : mandatory
+FinReview *-- Reporting : mandatory
+FinReview *-- LLM : mandatory
+FinReview *-- Tools : mandatory
+FinReview o-- Anomaly : optional
+FinReview o-- RAG : optional
+FinReview o-- Bench : optional
+FinReview o-- Multi : optional
+FinReview o-- Export : optional
+FinReview o-- Voice : optional
+
+Intake *-- Input
+Input o-- PDF : or
+Input o-- Excel : or
+Input o-- XBRL : or
+
+LLM *-- LLMProv
+LLMProv -- Cloud : xor
+LLMProv -- Local : xor
+
+@enduml
