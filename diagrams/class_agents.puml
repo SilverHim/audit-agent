@@ -27,7 +27,9 @@ package "Agents (Tier 3; A1 realises Tier 4)" as P5 {
     schedule(pack) : ScheduleRow[]
     fanOut(layer) : Send[]
     mergePatch(patch)
-    checkReassessmentTrigger()
+    fanIn() : recompute procedure status
+    afterFanIn() : next route
+    gateRoute(gate) : route
     interruptAt(gate)
     queryState(engagementId, scope) : StateView
     submit(command : ReviewRecord | GateDecision) : Result
@@ -80,7 +82,7 @@ package "Agents (Tier 3; A1 realises Tier 4)" as P5 {
     rerun(proc, judgment, evidence) : Judgment
   }
   class "A7 ReviewAgent" as A7 {
-    independentConclusion(evidence) : String
+    independentConclusion(evidence) : (conclusion, ReasoningStep[])
     compare(own, theirs) : CriticVerdict
   }
   class "A8 WorkpaperAgent" as A8 {
@@ -117,7 +119,7 @@ package "Support Services" as P6 {
   class ProcedureLibrary {
     load(id) : ProcedureTemplate
     match(account, assertion, riskLevel) : ProcedureTemplate[]
-    closure(dependsOn) : ProcedureTemplate[]
+    closure(dependsOn, stopAt) : ProcedureTemplate[]
   }
   class JudgmentEngine {
     buildJudgment(findings, proc) : Judgment

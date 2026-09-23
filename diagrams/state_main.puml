@@ -136,11 +136,13 @@ legend right
     FIN-01 and FIN-02 = one decision each; RPT-01 approve = sign.
   r = ReviewRecord.decision on a ReviewTask (queue item, not a gate).
   d.disposition = per-gate payload validated by A1 (gate x disposition matrix):
-    ACC-10 continue / modify_opinion / withdraw; GEN-14 lodge / not_required (Figure 3b);
+    ACC-10 continue / modify_opinion / withdraw; GATE-R withdraw (handled as the ACC-10 exit);
+    GEN-14 lodge / not_required (Figure 3b);
     PLN-18 approve = scope limitation accepted. Withdrawal is possible from P1 to P4 and GATE-R;
     every entry into Withdrawn seals the workpapers (hashes, read-only, 18.5).
   Pending StatutoryReport records (Figure 3b) block Gate_RPT01 (M-12) and survive Withdrawn.
-  insufficient_info keeps a gate open and re-presents; the self-loop is drawn on ACC-01 only.
+  insufficient_info keeps a gate open and re-presents (18.4 gate_route);
+  ACC-01 is the exception and returns to BackgroundCheck.
   Blue = waiting for external input or re-execution
   [H] = history: resume where paused
   Dashed = production-only transition

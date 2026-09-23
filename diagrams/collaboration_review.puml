@@ -28,7 +28,7 @@ object ":EvidenceStore" as ES
 object ":AuditTrail" as AT
 
 ' ================= Interaction 1: the A6 instance produces the Judgment =================
-A1 -- A6 : 1: A1 -> A6  Send(fw-L1-2, EngagementState, procedures\nincl. CSH-02 hybrid L3) -> runProcedure(CSH-02)\n1.13: A6 -> A1  (return) StatePatch: Judgment v1, Exception,\nProcedureRun, ReviewTask draft, Procedure -> awaiting_human
+A1 -- A6 : 1: A1 -> A6  Send(fw-L1-2, EngagementState, procedures\nincl. CSH-02 hybrid L3) -> runProcedure(CSH-02)\n1.13: A6 -> A1  (return) StatePatch: Judgment v1, Exception,\nProcedureRun, ReviewTask draft; A1 sets Procedure\n-> awaiting_human at fan-in
 
 RE -- A6 : 1.1: A6 -> RE  bindParams(rule, engagement), run(rule)\n1.2: RE -> A6  (return) 1 Exception - confirmed balance differs\nfrom the ledger by AUD 142,000; EvidencePointers\n(reply, ledger; no reasoning chain)
 
@@ -68,7 +68,8 @@ note bottom of A7
   A6 -> A7 is the only direct agent-to-agent
   call: a synchronous sub-graph, input =
   evidence pointers and conclusion, output =
-  criticVerdict, not via EngagementState (5.3).
+  criticVerdict, reason, independent conclusion
+  and reasoning chain, not via EngagementState (5.3).
   Two rounds avoid anchoring on the conclusion.
   GEN-09 is evaluated on the default level
   (L3) before the 7.4 downgrade to L1

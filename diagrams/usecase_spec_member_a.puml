@@ -155,7 +155,8 @@ manual-engine procedures.
     a candidate explanation and reasoning chain per Exception.
 5. Judgments that hit a GEN-09 trigger rule are reviewed by A7
     ReviewAgent: first pass on evidence pointers only, second pass
-    compares; writes critic_verdict and critic_reason_type.
+    compares; writes critic_verdict, critic_reason_type, reason and the
+    independent conclusion with its reasoning chain (validated per 8.6).
     Inconsistent for insufficient evidence -> Loop 1, back to step 4;
     other reasons or Loop 1 exhausted -> dispute item for the human
     queue. Judgments not hit are marked skipped.

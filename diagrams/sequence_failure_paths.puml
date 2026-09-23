@@ -39,7 +39,7 @@ A6 -> A6 : assemble the four context layers per 8.5\n(system, standards, task, d
 == F-3 / F-1 / F-2 / F-4: one nested alt, nothing is written outside the patch ==
 
 alt#Gold #Cornsilk F-3b  a single batch is still over context_budget (8.5)
-  A6 -> A6 : no LLM call is made; ProcedureRun -> failed,\nfailureReason = needs_manual_scope (8.5); Procedure -> awaiting_human
+  A6 -> A6 : no LLM call is made; ProcedureRun -> failed,\nfailureReason = needs_manual_scope (8.5); A1 sets Procedure -> awaiting_human at fan-in
   A6 -> A6 : draft ReviewTask (kind = failed, target = ProcedureRun)\ninto the StatePatch
   A6 -> TR : log(context over budget, no LLM call made)
   note over A6, TR : **Outcome** - ProcedureRun failed (needs_manual_scope), Procedure awaiting_human,\none ReviewTask draft of kind = failed in the patch. No Judgment exists, so the\nvalidation levels and F-4 below are never entered.\nHuman narrows the scope (rerun + rerunParams) or performs it (manual_result);\nscope_limited / not_applicable also allowed (UC-04 failed row).
@@ -110,7 +110,7 @@ else within context_budget, batching included
       deactivate JE
 
       alt#Gold #Cornsilk F-4  GEN-09 trigger hit on this Judgment and A7 still inconsistent after Loop 1 (11, UC-03)
-        A6 -> A7 : independentConclusion(evidence pointers), compare(own, theirs)\n**the only direct agent-to-agent call**: in = pointers + conclusion, out = criticVerdict
+        A6 -> A7 : independentConclusion(evidence pointers), compare(own, theirs)\n**the only direct agent-to-agent call**: in = pointers + conclusion, out = criticVerdict + independent conclusion and reasoning chain
         activate A7
         A7 --> A6 : criticVerdict = inconsistent,\ncriticReasonType = insufficient_evidence
         deactivate A7
@@ -119,11 +119,11 @@ else within context_budget, batching included
         end
         A6 -> A6 : final Judgment flagged dispute, disputeRounds recorded;\nA6 conclusion and A7 independent conclusion kept side by side with both chains
         A6 -> A6 : draft ReviewTask (kind = dispute, target = Judgment)\ninto the StatePatch -> adjudication lane, no confidence ranking, no blind
-        note over A6, A7 : **Outcome** - last ProcedureRun succeeded, Procedure -> in_dispute\n(not a settled state, blocks FIN-05), ReviewTask draft kind = dispute.\nOnly decision allowed: dispute_resolution = a6_upheld / a7_upheld / neither\n(neither must carry human_conclusion or more_procedures).
+        note over A6, A7 : **Outcome** - last ProcedureRun succeeded; A1 sets Procedure -> in_dispute at fan-in\n(not a settled state, blocks FIN-05), ReviewTask draft kind = dispute.\nOnly decision allowed: dispute_resolution = a6_upheld / a7_upheld / neither\n(neither must carry human_conclusion or more_procedures).
 
       else GEN-09 not hit, or the verdict is consistent
         A6 -> A6 : criticVerdict = skipped or consistent
-        note over A6, A7 : **Outcome** - no dispute; the effective level from the common step below\ndecides the landing: L1 / L2 / blind / 9.1 mandatory rows draft a ReviewTask\nkind = normal; L3 normal items and L4 close automatically, Procedure -> completed\n(9.2 still samples 5% as kind = blind). All of it stays in the patch.
+        note over A6, A7 : **Outcome** - no dispute; the effective level from the common step below\ndecides the landing: L1 / L2 / blind / 9.1 mandatory rows draft a ReviewTask\nkind = normal; L3 normal items and L4 are auto-closed by A1 at fan-in (Procedure -> completed)\n(9.2 still samples 5% as kind = blind). Runs, Judgments and task drafts stay in the patch.
       end
 
       A6 -> A6 : apply 7.4 downgrade rules and compute confidence (8.4) for every kept\nJudgment (dispute, unsupported, downgraded or clean)

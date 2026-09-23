@@ -205,7 +205,9 @@ repeat
   and AuditOutputStore (reducer keeps highest version),
   ReviewTask drafts from the instances are published
   to the queue here after validation,
-  auto-closed results do not enter the queue;
+  auto-closed results do not enter the queue,
+  A1 recomputes Procedure status from Runs,
+  Judgments and pending ReviewTasks;
 
   if (Reassessment flag raised?) then (yes)
     :Instances stopped at safe points,

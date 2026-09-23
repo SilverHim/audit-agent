@@ -16,7 +16,8 @@ skinparam ConditionEndStyle diamond
 
 |Orchestrator & Rule Engine|
 start
-:Procedure -> executing, entry action: new ProcedureRun
+:Procedure -> executing inside the instance (A1 records the
+outcome at fan-in), entry action: new ProcedureRun
 (trigger from caller: initial / loop2_extend / rerun /
 needs_review / correction), loop1Rounds = 0;
 switch (Procedure engine?)
@@ -63,7 +64,8 @@ case (hybrid / llm)
       |LLM Agent|
       :A7 reviews: round 1 independent conclusion
       from evidence only, round 2 compare
-      -> criticVerdict, criticReasonType;
+      -> criticVerdict, criticReasonType,
+      independent conclusion and reasoning chain;
       |Orchestrator & Rule Engine|
     else (no)
       :criticVerdict = skipped;
@@ -84,14 +86,14 @@ package Run, Exceptions and Judgments into the StatePatch
 if (Human needed?\nmanual: never (the result is the human's own),\neffective level L1 / L2 or blind, 9.1 mandatory rows,\nA7 inconsistent, dispute, failed / unattributed, stale) then (yes)
   :Draft ReviewTask (kind normal / dispute / unattributed / failed,
   target = Judgment, Exception, ProcedureRun or Procedure + version)
-  into the StatePatch, A1 publishes it after fan-in,
+  into the StatePatch; at fan-in A1 publishes it and sets
   Procedure -> awaiting_human (dispute -> in_dispute);
 else (no: L3 normal / L4)
   if (timing = interim and period not covered?) then (yes)
-    :Procedure -> interim_completed,
+    :At fan-in A1 sets Procedure -> interim_completed,
     waits for the linked GEN-24 instance;
   else (no)
-    :Auto-close: Procedure -> completed,
+    :At fan-in A1 auto-closes: Procedure -> completed,
     result recorded;
   endif
   if (9.2 sample: 5% of high-confidence Judgments?) then (yes)

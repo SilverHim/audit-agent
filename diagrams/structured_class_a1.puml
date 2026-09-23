@@ -47,7 +47,7 @@ component "A1 Orchestrator   <<structured class>>" as A1 {
   portout servicePort
 
   component "StateMachine   <<part>>\nStateGraph P0–P4: nodes, edges,\nconditional edges, interrupts\n--\nmergePatch(patch)\nqueryState(engagementId, scope) : StateView\narchive()" as SM
-  component "GateController   <<part>>\n6 static interrupt_before points\n+ GATE-R, PLN-18, ACC-10, GEN-14 via interrupt()\nvalidates version, gate state,\nkind x decision, gate x disposition\n--\ninterruptAt(gate)\nsubmit(ReviewRecord | GateDecision) : Result\ncheckReassessmentTrigger()" as GC
+  component "GateController   <<part>>\n6 static interrupt_before points\n+ GATE-R, PLN-18, ACC-10, GEN-14 via interrupt()\nvalidates version, gate state,\nkind x decision, gate x disposition\n--\ninterruptAt(gate)\nsubmit(ReviewRecord | GateDecision) : Result\ngateRoute(gate) : route" as GC
   component "PackAssembler   <<part>>\nobjective-level assembly,\ndependency closure, acyclicity\n--\nassemblePack(objectives) : Procedure[]\ncoverageGate() : {covered, uncovered,\nscope_limited_pending}" as PA
   component "Scheduler   <<part>>\ndeterministic, no LLM; inputs are only\nthe procedure pack, the dependency DAG\nand the parallel cap (18.5)\n--\nschedule(pack) : ScheduleRow[]\nfanOut(layer) : Send[]" as SCH
   component "TrailWriter   <<part>>\nappend-only; every transition, gate\ndecision, assembly and schedule table.\nA checkpoint is not the audit trail (18.5)\n--\nlog(entry)" as TW
@@ -56,7 +56,7 @@ component "A1 Orchestrator   <<structured class>>" as A1 {
   SM --> PA : P1 assembly;\nre-assembly after\nGATE-R approve (loop 3)
   PA --> SCH : procedure_pack\n(acyclic, closure complete)
   SCH --> SM : Send fan-out per layer,\nautomatic fan-in
-  SM --> GC : at fan_in and after every decision:\ncheckReassessmentTrigger()
+  SM --> GC : at fan_in: recompute procedure status,\npromote the safe-point flag, afterFanIn() route
   GC --> SM : interrupt_before / resume;\nafter a validated write,\nrecompute procedure status
 
   ' ---- every part logs ----
