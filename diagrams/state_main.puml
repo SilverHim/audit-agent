@@ -1,0 +1,160 @@
+@startuml state_main
+title Figure 3a  State Machine — Engagement Lifecycle (driven by A1 Orchestrator)\n[Individual task · Member A]\nTransition syntax: event [guard] / action
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam state {
+  BackgroundColor<<gate>> #FFF4CC
+  BackgroundColor<<wait>> #E3EEFF
+}
+
+[*] --> P0_Acceptance : engagementCreated
+
+state P0_Acceptance {
+  state Gate_ACC01 <<gate>>
+  state Gate_ACC08 <<gate>>
+  [*] -right-> BackgroundCheck
+  BackgroundCheck -right-> Gate_ACC01 : scorecardReady (A2)
+  Gate_ACC01 -down-> BackgroundCheck : [d.insufficientInfo] / queueQueries
+  Gate_ACC01 -right-> Preconditions : [d.approve && versionMatches]\n/ updateProfile
+  Preconditions -down-> Gate_ACC08 : termsReady (A2: ACC-08 framework,\nengagement letter, s328A appointment)
+}
+Gate_ACC01 --> Declined : [d.reject && versionMatches]\n/ recordReason
+Gate_ACC08 --> Declined : [d.reject && versionMatches] / recordReason
+Gate_ACC08 --> P1_Planning : [d.approve && versionMatches]\n/ ACC-09 governance plan
+Declined --> [*]
+
+state P1_Planning {
+  state Gate_P1_step1 <<gate>>
+  state Gate_P1_step2 <<gate>>
+  state Gate_PLN18 <<gate>>
+  state AwaitingData <<wait>>
+  AwaitingData : retries > 3 / ACC-10 gate (continue or withdraw)
+  [*] -right-> Ingesting
+  Ingesting -right-> QualityCheck : ingestDone\n(PLN-10..12, A3)
+  QualityCheck -down-> AwaitingData : qcDone [fails]\n/ requestData
+  AwaitingData -up-> QualityCheck : dataReceived
+  QualityCheck -right-> RiskAssessing : qcDone [passes]
+  RiskAssessing -right-> Gate_P1_step1 : objectivesRated (A4)
+  Gate_P1_step1 -right-> Assembling : [d.approve && versionMatches]\n/ apply d.edits, version +1 on edited RiskItems
+  Gate_P1_step1 -down-> RiskAssessing : [d.reject] / applyEdits
+  Assembling -down-> Assembling : coverageChecked [uncovered]\n/ add procedures
+  Assembling -down-> Gate_PLN18 : coverageChecked\n[scope_limited_pending] (18.4)
+  Gate_PLN18 -up-> Assembling : [d.approve] / record approval bound to\nplan version, mark scope_limited\n(routes to opinion); re-check passes
+  Gate_PLN18 -left-> RiskAssessing : [d.reject] / add procedures\nor revise (withdraw: ACC-10)
+  Assembling -down-> Gate_P1_step2 : coverageChecked [ok]\n/ createPlan vN (draft), draftNarrative (A4)
+  Gate_P1_step2 -down-> RiskAssessing : [d.reject] / recordComments, newDraft vN+1
+}
+Gate_P1_step2 --> P2_Executing : [d.approve && versionMatches]\n/ approvePlan vN
+
+state P2_Executing {
+  [*] -right-> Scheduling
+  Scheduling -right-> Fieldwork : scheduled\n/ Send fan-out (A6 ×N; A5 sends\nconfirmations once, returns)
+  Fieldwork -right-> Reviewing : layerDone / fan-in\n(confirmation replies are events,\nnot awaited here)
+  Reviewing -down-> Fieldwork : [r.moreProcedures] (loop 2),\nnextLayer or confirmationEvent
+}
+P2_Executing --> RiskReassessment : reassessmentFlag [raised at\nsafe point] / stop dispatch, instances\nstop at next safe point, keep Judgments
+state RiskReassessment {
+  state GATE_R <<gate>>
+  [*] -right-> Reassessing
+  Reassessing -right-> GATE_R : proposalReady (A4)
+}
+GATE_R -up-> Assembling : [d.approve && versionMatches]\n/ reviseRiskItems, markNeedsReview,\nclearFlag (no re-ingest)
+GATE_R -left-> P2_Executing[H] : [d.reject] / recordReason,\nclearFlag (resume where paused)
+GATE_R -down-> Withdrawn : [d.disposition = withdraw] / ACC-10
+P1_Planning -right-> Withdrawn : ACC-10 [d.disposition = withdraw]
+P2_Executing -right-> Withdrawn : ACC-10 [d.disposition = withdraw]
+P3_Completion -right-> Withdrawn : ACC-10 [d.disposition = withdraw]
+P4_Reporting -right-> Withdrawn : ACC-10 [d.disposition = withdraw]
+Withdrawn --> [*]
+Reviewing --> P3_Completion : packSettled\n[all procedure_pack procedures settled,\nno open dispute, no confirmation pending]
+
+state P3_Completion {
+  state Gate_FIN <<gate>>
+  state AwaitingCorrection <<wait>>
+  state Blocked <<wait>>
+  state ReExecuting <<wait>>
+  [*] -right-> MisstatementTriage
+  MisstatementTriage -right-> Communicating : triaged [misstatements]\n/ FIN-03, FIN-08
+  Communicating -right-> AwaitingCorrection : communicated
+  AwaitingCorrection -right-> Verifying : adjustmentsReceived\n/ GEN-05 incremental
+  AwaitingCorrection -down-> QC : managementDeclined\nor stopWaiting [human]\n/ recordUncorrected
+  Verifying -right-> QC : verified [entries match]\n/ corrected or partially_corrected,\nresidual to FIN-04
+  Verifying -left-> Communicating : verified [entries mismatch]\n/ re-communicate
+  MisstatementTriage -down-> QC : triaged [none]
+  QC -down-> Blocked : qcDone [gaps] / listGaps
+  Blocked -up-> QC : gapsClosed [no rerun]
+  Blocked -right-> ReExecuting : gapsClosed [rerun needed]\n/ schedule subset (A6)
+  ReExecuting -up-> QC : subsetSettled [evidence only,\nno new or changed misstatement]
+  ReExecuting -left-> MisstatementTriage : subsetSettled [new or\nchanged misstatement]
+  QC -right-> Gate_FIN : qcDone [pass: coverage, settled,\nFIN-15 explained, FIN-19 no deviations,\nna_pending confirmed, exclusions logged]\n/ opinionCandidate (A9)
+  Gate_FIN -up-> QC : [d.reject]\n/ markNeedsReview (more procedures)
+}
+Gate_FIN --> P4_Reporting : [d.approve(FIN-01) && d.approve(FIN-02)\n&& versionMatches] / setOpinionType
+
+state P4_Reporting {
+  state Gate_RPT01 <<gate>>
+  state AwaitingEQR <<wait>>
+  [*] -right-> Drafting
+  Drafting -right-> Annotating : draftReady\n/ newReportVersion (A10)
+  Annotating -down-> Drafting : annotationsSubmitted [some]\n/ version +1
+  Annotating -right-> EQR_Check : annotationsSubmitted [none]
+  EQR_Check -down-> AwaitingEQR : [eqrRequired && !complete]
+  EQR_Check -up-> Annotating : [eqrRequired && complete\n&& open items] / openItems
+  AwaitingEQR -left-> Annotating : eqrFindings / openItems
+  AwaitingEQR -up-> EQR_Check : eqrCompleted
+  EQR_Check -right-> Gate_RPT01 : [!eqrRequired ||\n(complete && no open items)]
+  Gate_RPT01 -left-> Annotating : [d.reject] / recordComments
+}
+P4_Reporting -up-> MisstatementTriage : newEvidence [affects conclusion]\nor newMisstatement\n/ invalidate report versions,\napprovals, EQR record
+Gate_RPT01 --> Archived : [d.approve && versionMatches\n&& noPendingStatutoryReport (Fig. 3b)\n&& FIN-10, FIN-18, FIN-12, RPT-08 done]\n/ sign, reportDate = today, RPT-06 hashes + lock
+Archived -[dashed]right-> Amended : additionRequested\n(production only, 17.2)
+Amended -[dashed]-> Archived : editor, reviewer,\ntime, reason recorded
+
+state PostReportFacts {
+  [*] -right-> Discussing
+  Discussing -right-> Deciding : discussedWithManagement (RPT-11)
+}
+Archived -down-> PostReportFacts : newFactKnown\n[would have amended report]
+Deciding -up-> Archived : [no amendment]\n/ recordConclusion
+Deciding -up-> ReExecuting : [amend] / reopen GEN-06, GEN-07 and\naffected procedures to the new report date;\ninvalidate report versions, approvals, EQR;\nsigned version stays locked, notify recipients
+
+note bottom of Archived
+  Archived stays reactive (production may add to the file);
+  Declined and Withdrawn are the final states (M-14).
+  A material report revision after EQR invalidates
+  the EQR record and returns to EQR_Check.
+end note
+
+legend right
+  Yellow = human gate (interrupt). Every transition leaving a gate is
+  triggered by decisionSubmitted(d) via DecisionSubmit; guards on d shown.
+  d = GateDecision.decision in {approve, reject, insufficient_info}, one enum for all gates:
+    ACC-01 approve = accept engagement; ACC-08 approve = terms and appointment confirmed;
+    PLN-01/03 reject = rework with edits;
+    PLN-15 and GATE-R approve = plan / risk revision approved;
+    FIN-01 and FIN-02 = one decision each; RPT-01 approve = sign.
+  r = ReviewRecord.decision on a ReviewTask (queue item, not a gate).
+  d.disposition = per-gate payload validated by A1 (gate x disposition matrix):
+    ACC-10 continue / modify_opinion / withdraw; GEN-14 lodge / not_required (Figure 3b);
+    PLN-18 approve = scope limitation accepted. Withdrawal is possible from P1 to P4 and GATE-R;
+    every entry into Withdrawn seals the workpapers (hashes, read-only, 18.5).
+  Pending StatutoryReport records (Figure 3b) block Gate_RPT01 (M-12) and survive Withdrawn.
+  insufficient_info keeps a gate open and re-presents; the self-loop is drawn on ACC-01 only.
+  Blue = waiting for external input or re-execution
+  [H] = history: resume where paused
+  Dashed = production-only transition
+endlegend
+
+' ---- layout: stack the phases ----
+P0_Acceptance -[hidden]down-> P1_Planning
+P1_Planning -[hidden]down-> P2_Executing
+P2_Executing -[hidden]down-> P3_Completion
+P3_Completion -[hidden]down-> P4_Reporting
+P4_Reporting -[hidden]down-> Archived
+Archived -[hidden]down-> PostReportFacts
+P2_Executing -[hidden]right-> RiskReassessment
+P0_Acceptance -[hidden]right-> Declined
+RiskReassessment -[hidden]down-> Withdrawn
+P3_Completion -[hidden]right-> Withdrawn
+@enduml

@@ -1,0 +1,196 @@
+@startuml usecase_spec_member_c
+title Figure 6C  Use Case Specification — UC-07 to UC-09\n[Individual task · Member C]
+
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam packageStyle rectangle
+skinparam nodesep 30
+skinparam ranksep 90
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+skinparam rectangle {
+  BorderColor #333333
+  BackgroundColor #FFFFFF
+}
+skinparam note {
+  FontSize 15
+  BackgroundColor #FFFFF0
+  BorderColor #999999
+}
+skinparam legend {
+  FontSize 17
+}
+
+' ================= Actors (top row) =================
+actor "EQR Reviewer" as EQR
+actor "RCA\n(Registered\nCompany Auditor)" as RCA
+actor "Client\n(audited entity: management\nand those charged\nwith governance)" as CL
+actor "External Data Source\n(ASIC Connect / ABN Lookup,\naccounting systems,\nconfirmation platform)" as EXT
+
+' ================= System boundary =================
+rectangle "Audit Support System" as SYS {
+  usecase "UC-07\nArchiving and\nengagement switch\n(P4 -> Archived)" as UC07
+  usecase "UC-08\nProgress and\nprovenance enquiry\n(any phase)" as UC08
+  usecase "UC-09\nStatutory notification\nand withdrawal\n(any phase)" as UC09
+  usecase "UC-02\nPlanning and risk assessment\n(P1)" as UC02 <<see Figure 6A>> #F2F2F2;line:999999;text:888888;line.dashed
+  usecase "UC-04\nException review and\njudgment confirmation\n(P2)" as UC04 <<see Figure 6B>> #F2F2F2;line:999999;text:888888;line.dashed
+  usecase "UC-05\nRisk re-assessment\n(P2 -> P1)" as UC05 <<see Figure 6B>> #F2F2F2;line:999999;text:888888;line.dashed
+  usecase "UC-06\nCompletion evaluation and\nreport generation\n(P3 -> P4)" as UC06 <<see Figure 6B>> #F2F2F2;line:999999;text:888888;line.dashed
+}
+
+' ================= Associations =================
+RCA -- UC07
+RCA -- UC08
+RCA -- UC09
+
+CL -- UC09 : NOCLAR discussion,\ngovernance response\n(GEN-13, EthicsBreach)
+EXT -- UC09 : lodgement in the\nprescribed form
+EQR -- UC07 : read-only access\nto the archive
+
+' ================= Use case relations (base use cases are in Figures 6A and 6B) =================
+UC09 .down.> UC05 : <<extend>> (b)
+UC09 .down.> UC02 : <<extend>> (c)
+UC09 .down.> UC04 : <<extend>> (d)
+UC09 .down.> UC06 : <<extend>> (e)
+
+' ================= Use case specifications =================
+note as N07
+**UC-07 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** report signed (RPT-01); P4.
+**Main success scenario**
+1. After RPT-01, A1 Orchestrator triggers RPT-06: A8 WorkpaperAgent
+    hashes every file in the engagement directory and writes
+    engagement.json.
+2. The engagement directory becomes read-only; the state moves
+    to Archived.
+3. A9 QCAgent generates the archive manifest (procedure disposition
+    distribution, Judgment, review record and override counts, EQR
+    record) for read-only access by the EQR Reviewer and regulatory
+    inspection.
+4. A2 ClientIntel updates the client profile with the engagement id,
+    this year's risk list and misstatement summary as next year's prior.
+5. RCA returns to the engagement list and may create the next
+    engagement.
+**Extensions / Alternatives**
+2a. Workpaper added after archiving -> Amended, recording modifier,
+      reviewer, time and reason (production only; excluded from the
+      prototype).
+2b. Facts learned after signing that would have changed the report
+      -> RPT-11 PostReportFacts: discuss with management, decide on
+      amendment, notify the report recipients; if amended, P3
+      ReExecuting reopens GEN-06, GEN-07 and affected procedures to a
+      new report date, then P4 issues a new report version with an
+      emphasis-of-matter or other-matter paragraph; old approvals and
+      EQR record lapse; the original signed version stays locked.
+**Postconditions:** engagement Archived, all files hashed and
+read-only; archive manifest available; client profile updated.
+end note
+
+note as N08
+**UC-08 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** RCA asks a question; any phase.
+**Main success scenario**
+1. RCA asks A10 ConciergeAgent: the current step, which procedures
+    are complete, which await review, where a figure comes from,
+    what a workpaper means.
+2. A10 runs GEN-10: takes the EngagementState slice for the question
+    (progress from phase and procedure status, provenance from the
+    EvidencePointer chain, deliverables from Judgment or Workpaper)
+    and narrates it to RCA.
+3. For a judgment, A10 also gives the reasoning chain, the
+    counter-argument and the A7 ReviewAgent conclusion, not only
+    the conclusion.
+4. On "open it", A10 gives drill-down links: the current state-machine
+    position and each agent's procedure status, the object's full
+    context, and audit_trail; RCA then returns to the conversation.
+5. The conversation call is written to audit_trail
+    (type = conversation).
+**Extensions / Alternatives**
+(any step) A10 unavailable -> Tier 5 switches to the form interface
+      and board; RCA operates directly with the same actions and fields.
+**Postconditions:** question answered from EngagementState;
+conversation recorded in audit_trail.
+end note
+
+note as N09
+**UC-09 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** any phase; a procedure, a GEN-23 response or
+an A10 interaction reveals non-compliance, undue influence or interference
+with the audit (GEN-13); GEN-12 finds an independence breach or conflict
+of interest; management refuses to lift a scope limitation (GEN-19);
+FIN-18 finds the representations unreliable.
+**Main success scenario**
+1. A6 FieldworkAgent runs GEN-13: records a NoclarMatter (facts, awareness
+    date, discussed with, response, whether adequate) and evaluates the
+    effect on the statements and the audit; A1 Orchestrator raises the
+    Loop 3 flag.
+2. A5 EvidenceAgent runs GEN-14: determines the legal source by entity_type
+    and fact type (s311 28 days; AFS licensee s990K 7 days, (2)(b) and (2)(c)
+    without materiality test; s324CA conflict of interest 7 days) and
+    creates a StatutoryReport whose dueAt runs from the awareness date and
+    cannot be edited.
+3. A10 ConciergeAgent presents the facts and statutory judgment elements;
+    RCA decides whether to lodge and records the reason (GateDecision
+    gate = GEN-14, lodge / not_required); lodge -> A5 lodges in the
+    prescribed form, copies the statutory recipients and records lodgedAt.
+    Reminders escalate 3 days before due and when overdue; an undecided
+    report blocks RPT-01.
+4. Independence breach -> A2 ClientIntel records an EthicsBreach: end the
+    interest or relationship, evaluate consequences, communicate in writing
+    with governance and record whether it agrees.
+5. ACC-10 continuance re-evaluation: A10 presents the facts and the
+    applicability of ASA 705 para 13, s329 and APES 110 R400.85; RCA
+    decides continue, modify_opinion or withdraw (GateDecision
+    gate = ACC-10).
+6. Withdraw -> decision maker, time and reason recorded; need for ASIC
+    consent routed per s329 and RG 26; the engagement enters Withdrawn
+    and the workpapers are hashed and sealed.
+**Extensions / Alternatives**
+3a. not_required -> recorded with the reason.
+3b. After a lodge decision GATE-R rejects the risk revision -> the
+      statutory clock is unaffected and keeps running.
+4a. Governance does not agree -> ACC-10 (step 5).
+**Postconditions:** StatutoryReport lodged (lodgedAt) or not_required
+with reason; ACC-10 decision recorded; if withdrawn, engagement
+Withdrawn and sealed.
+end note
+
+UC07 .down.. N07
+UC08 .down.. N08
+UC09 .down.. N09
+
+' ================= Legend =================
+legend right
+  |= Notation |= Meaning |
+  | actor to use case | association; the label states what the actor supplies or receives |
+  | <<extend>> | conditional insertion; the arrow points from the extending use case to the base, guard letter on the arrow |
+  | (b) | GATE-R decision = withdraw |
+  | (c) | AwaitingData retries exhausted -> ACC-10 |
+  | (d) | NOCLAR found, or management refuses to remove a scope limitation |
+  | (e) | FIN-18 representations unreliable, or FIN-10 independence breach |
+  | (P0 … P4) | phase of the main state machine (12.3) in which the use case runs |
+  | grey use case | belongs to another member's figure (<<see Figure 6A>>, <<see Figure 6B>>); shown only to anchor the relation |
+  |= Rule |= |
+  | Single entry | every human interaction passes through A10; agents are not shown inside the boundary |
+  | Actor scope | Client supplies data, documents and letters and answers enquiries and communications as management or governance; External Data Source covers registry, accounting and confirmation interfaces and statutory lodgement |
+  | Guard, not a relation | an undecided statutory notification in UC-09 blocks RPT-01 in UC-06 (M-12) |
+  | Trigger, not a relation | UC-06 to UC-07 is a state transition |
+  | UC-07 extension points | workpaper added after archiving -> Amended; facts known after the report date -> RPT-11 PostReportFacts re-opens P3 ReExecuting, then P4 |
+  | Other use cases | UC-01 to UC-03: Figure 6A (Member A); UC-04 to UC-06: Figure 6B (Member B); all nine: Figure 6 |
+endlegend
+
+' ================= Layout =================
+EQR -[hidden]right- RCA
+RCA -[hidden]right- CL
+CL -[hidden]right- EXT
+UC07 -[hidden]right- UC08
+UC08 -[hidden]right- UC09
+UC06 -[hidden]down- N09
+N07 -[hidden]right- N08
+N08 -[hidden]right- N09
+@enduml

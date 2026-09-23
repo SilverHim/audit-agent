@@ -1,0 +1,214 @@
+@startuml sequence_failure_paths
+title Figure 5b - Sequence Diagram: Failure Paths of GEN-02 "Journal Exception Attribution" (hybrid) in one A6 Instance\n[Individual task · Member B]\nFailure branches F-1 to F-5 (14) modelled as nested alt fragments: a failing branch simply does not enter the computation below it,\nand every branch - failing or not - returns through the same StatePatch to A1
+
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam shadowing false
+skinparam sequenceMessageAlign first
+skinparam NoteBackgroundColor #FFF8DC
+skinparam NoteBorderColor #888800
+
+participant "A1 Orchestrator\n(scheduler, mergePatch,\nDecisionSubmit)" as A1
+participant "A6 FieldworkAgent\ninstance fw-L-i" as A6
+participant "RuleEngine" as RE
+participant "FinancialDataStore" as FDS
+participant "JudgmentEngine\n(OutputValidator)" as JE
+participant "LLMClient\n(main model)" as LLM
+participant "A7 ReviewAgent\n(critic client)" as A7
+participant "AuditTrail" as TR
+participant "AuditOutputStore" as OUT
+participant "ReviewQueue" as RQ
+participant "A10 ConciergeAgent" as A10
+actor "RCA" as RCA
+
+autonumber
+
+== Main line: rule stage and context assembly ==
+
+A1 -> A6 : fanOut(layer): Send(instance fw-L-i,\nprocedures incl. GEN-02)
+activate A6
+A6 -> A6 : Procedure GEN-02 -> executing\nentry: new ProcedureRun(trigger = initial), loop1Rounds = 0
+A6 -> RE : bindParams(rule, engagement), run(rule)\nhybrid pre-filter: the exceptions raised by the GEN-05 full journal scan
+activate RE
+RE -> FDS : query(sql, params)
+FDS --> RE : Row[]
+RE --> A6 : Exception[] with EvidencePointers\n(rule stage, no reasoning chain, no A7)
+deactivate RE
+A6 -> A6 : assemble the four context layers per 8.5\n(system, standards, task, data); EngagementState itself never enters the prompt
+
+== F-3 / F-1 / F-2 / F-4: one nested alt, nothing is written outside the patch ==
+
+alt#Gold #Cornsilk F-3b  a single batch is still over context_budget (8.5)
+  A6 -> A6 : no LLM call is made; ProcedureRun -> failed,\nfailureReason = needs_manual_scope (8.5); Procedure -> awaiting_human
+  A6 -> A6 : draft ReviewTask (kind = failed, target = ProcedureRun)\ninto the StatePatch
+  A6 -> TR : log(context over budget, no LLM call made)
+  note over A6, TR : **Outcome** - ProcedureRun failed (needs_manual_scope), Procedure awaiting_human,\none ReviewTask draft of kind = failed in the patch. No Judgment exists, so the\nvalidation levels and F-4 below are never entered.\nHuman narrows the scope (rerun + rerunParams) or performs it (manual_result);\nscope_limited / not_applicable also allowed (UC-04 failed row).
+
+else within context_budget, batching included
+
+  alt#99BBDD #EFF5FC F-3a  context_budget exceeded, batching fits
+    A6 -> A6 : split into batches, never truncate; one call per batch,\none Judgment per Exception, no context shared between batches
+    loop for each batch: batchNo on ProcedureRun
+      A6 -> LLM : complete(prompt_batch, output_schema)
+      A6 -> TR : log(llm_call: model version, prompt, input hash, params, batchNo)
+    end
+    note over A6, TR : Evidence coverage (8.4) is computed per batch; cross-batch aggregation\nis done by rules, not by the LLM. Everything below is drawn for one call\nand applies to every batch.
+  else the context fits in a single call
+    A6 -> LLM : complete(prompt, output_schema)
+    A6 -> TR : log(llm_call: model version, prompt, input hash, params)
+  end
+
+  alt#99BBDD #EFF5FC F-1  LLM endpoint times out or is rate limited (14)
+    LLM --> A6 : timeout / 429 rate limited
+    A6 -> TR : log(attempt no., failure reason)
+    A6 -> A6 : retry with backoff **inside the node** (18.5);\nstill failing -> the call is queued for a later window (14)
+    A6 -> A6 : window exhausted -> engine fallback (8.6): **hybrid** degrades to the rule engine\nand keeps the rule result, Exception.disposition = unattributed; engine = **llm** has no rule\nresult to fall back on -> ProcedureRun -> failed, failureReason = llm_unavailable
+    A6 -> A6 : draft ReviewTask (kind = unattributed, target = Exception)\ninto the StatePatch; kind = failed, target = ProcedureRun when engine = llm
+    note over A6, TR : **Outcome** - Procedure awaiting_human, no Judgment either way,\nso validation and F-4 are never entered.\nhybrid: rule result kept, Exception unattributed, ReviewTask draft kind = unattributed;\nallowed decisions override / misstatement / more_procedures (UC-04), confirm is refused,\nan unattributed exception is not a disposition.\nengine = llm: ProcedureRun failed (llm_unavailable), ReviewTask draft kind = failed;\nallowed decisions rerun / manual_result / scope_limited / not_applicable.
+
+  else response received
+    LLM --> A6 : structured output (candidate explanations + reasoning chains)
+    A6 -> JE : buildJudgment(findings, GEN-02)
+    activate JE
+
+    alt#7FA87F #F2F8F2 F-2a  syntax or structure violates output_schema, 2 retries exhausted (8.6 levels 1-2)
+      JE -> JE : validateSyntax, validateStructure -> fail
+      loop at most 2 retries, parse error handed back
+        JE --> A6 : validation error
+        A6 -> LLM : complete(prompt + error, output_schema)
+        A6 -> TR : log(retry attempt and its failure)
+      end
+      JE --> A6 : retries exhausted, no valid Judgment object
+      deactivate JE
+      A6 -> A6 : engine fallback (8.6): **hybrid** keeps the rule result,\nException.disposition = unattributed; for engine = **llm** the same\nexhaustion sets ProcedureRun -> failed instead
+      A6 -> A6 : draft ReviewTask (kind = unattributed, target = Exception)\ninto the StatePatch; kind = failed, target = ProcedureRun when engine = llm
+      A6 -> TR : log(validation exhausted, fallback taken)
+      note over A6, TR : **Outcome** - Procedure awaiting_human; hybrid: rule result kept,\nException unattributed, ReviewTask draft kind = unattributed.\nengine = llm: ProcedureRun failed, ReviewTask draft kind = failed.\nNo Judgment exists, so F-4 is never entered.
+
+    else levels 1-2 pass, a Judgment object exists
+
+      alt#99BBDD #EFF5FC F-2b  reference validation fails (8.6 level 3)
+        JE -> JE : validateReferences: sourceId exists, amount matches the entry,\ndocument type matches evidence_required
+        alt some pointers are still valid
+          JE --> A6 : that step flagged unsupported and **kept** (8.3);\nJudgment continues with reduced evidence coverage
+          note over A6, JE : **Outcome** - Judgment kept with unsupported steps,\nno ReviewTask draft of its own; it continues into F-4 below.
+        else no valid pointer at all
+          JE --> A6 : Judgment kept whole, nothing discarded;\nthe whole Judgment is degraded to the human queue (7.4)
+          A6 -> A6 : draft ReviewTask (kind = normal, target = Judgment)\ninto the StatePatch
+          note over A6, JE : **Outcome** - Judgment kept, Procedure awaiting_human,\nReviewTask draft kind = normal; it still passes through F-4 below.
+        end
+
+      else F-2c  semantic validation fails (8.6 level 4)
+        JE -> JE : validateSemantics: reasoning chain non-empty, every fact carries a pointer,\nevery inference cites a previous step, confidence within 0..1,\nsuggested action agrees with the conclusion
+        JE --> A6 : Judgment **kept**, degraded per 7.4 - nothing discarded
+        A6 -> A6 : draft ReviewTask (kind = normal, target = Judgment)\ninto the StatePatch
+        note over A6, JE : **Outcome** - Judgment kept and flagged, Procedure awaiting_human,\nReviewTask draft kind = normal. Whether the evidence supports the\nconclusion is re-derived by A7 under GEN-09 (8.6 level 4).
+
+      else all four levels pass
+        JE --> A6 : Judgment (conclusion, reasoning chain,\ncounter-argument, confidence)
+      end
+      deactivate JE
+
+      alt#Gold #Cornsilk F-4  GEN-09 trigger hit on this Judgment and A7 still inconsistent after Loop 1 (11, UC-03)
+        A6 -> A7 : independentConclusion(evidence pointers), compare(own, theirs)\n**the only direct agent-to-agent call**: in = pointers + conclusion, out = criticVerdict
+        activate A7
+        A7 --> A6 : criticVerdict = inconsistent,\ncriticReasonType = insufficient_evidence
+        deactivate A7
+        loop Loop 1: loop1Rounds < 3 and new system-internal evidence found
+          A6 -> A6 : gatherMore() -> new ProcedureRun(trigger = loop1_retry),\nre-generate, re-validate (8.6), A7 re-compares; old Judgment -> supersededBy
+        end
+        A6 -> A6 : final Judgment flagged dispute, disputeRounds recorded;\nA6 conclusion and A7 independent conclusion kept side by side with both chains
+        A6 -> A6 : draft ReviewTask (kind = dispute, target = Judgment)\ninto the StatePatch -> adjudication lane, no confidence ranking, no blind
+        note over A6, A7 : **Outcome** - last ProcedureRun succeeded, Procedure -> in_dispute\n(not a settled state, blocks FIN-05), ReviewTask draft kind = dispute.\nOnly decision allowed: dispute_resolution = a6_upheld / a7_upheld / neither\n(neither must carry human_conclusion or more_procedures).
+
+      else GEN-09 not hit, or the verdict is consistent
+        A6 -> A6 : criticVerdict = skipped or consistent
+        note over A6, A7 : **Outcome** - no dispute; the effective level from the common step below\ndecides the landing: L1 / L2 / blind / 9.1 mandatory rows draft a ReviewTask\nkind = normal; L3 normal items and L4 close automatically, Procedure -> completed\n(9.2 still samples 5% as kind = blind). All of it stays in the patch.
+      end
+
+      A6 -> A6 : apply 7.4 downgrade rules and compute confidence (8.4) for every kept\nJudgment (dispute, unsupported, downgraded or clean)
+    end
+  end
+end
+
+== F-5  Fan-in: one return path for every branch above (8.6 agent layer, 14) ==
+
+note over A6, A1 : Failure results travel back exactly like successful ones: the instance writes\nnothing to AuditOutputStore or ReviewQueue itself (18.4). Everything above is\na draft until A1 has merged it; business results reach AuditOutputStore only\nthrough A1, after the merge has passed.
+
+alt#Gold #Cornsilk F-5a  the instance returned a StatePatch
+  A6 --> A1 : StatePatch (Judgments, Exceptions, ProcedureRuns, ReviewTask drafts)
+  A1 -> A1 : mergePatch: four checks (8.6 agent layer) - write scope (18.3.1),\ntype, ID uniqueness, foreign key (Judgment -> procedure_pack)
+
+  alt#99BBDD #EFF5FC any check fails, first attempt
+    A1 -> TR : log(merge rejected, failing check, patch **not** merged)
+    A1 -> A6 : re-run this execution once (new ProcedureRun)
+    A6 --> A1 : StatePatch (re-run)
+    A1 -> A1 : the same four checks again
+
+    alt#7FA87F #F2F8F2 the re-run patch fails again
+      A1 -> A1 : every ProcedureRun in the patch -> failed, failureReason = patch_rejected;\nthe drafts both patches carried are discarded with them
+      A1 -> OUT : write(failed ProcedureRuns)
+      A1 -> RQ : publish(one ReviewTask kind = failed per ProcedureRun)
+      note over A1, RQ : **Outcome** - Procedure awaiting_human. This is the only case in which A1 creates a\nReviewTask itself (the system failed to execute it); everywhere else A6 drafts the task\nand A1 only publishes it.\nAllowed decisions: rerun / manual_result / scope_limited / not_applicable (UC-04).
+
+    else the re-run patch passes the four checks
+      A1 -> A1 : merge by ID into EngagementState\n(reducer keeps the highest version)
+      A1 -> OUT : write(Judgments, Exceptions, ProcedureRuns)
+      A1 -> RQ : publish(ReviewTask drafts from the re-run patch)
+      note over A1, RQ : **Outcome** - the same landing as a first-attempt pass: one extra ProcedureRun\nfor the re-run, nothing failed. Business Store first, checkpoint after (18.5).
+    end
+
+  else all four checks pass on the first patch
+    A1 -> A1 : merge by ID into EngagementState\n(reducer keeps the highest version)
+    A1 -> OUT : write(Judgments, Exceptions, ProcedureRuns)
+    A1 -> RQ : publish(ReviewTask drafts from the patch)
+    note over A1, RQ : The drafts become visible to the human only at this point. A task the user can\nsee is therefore always a task whose state A1 has already accepted.
+  end
+
+else F-5b  the instance crashed or timed out, no StatePatch at all
+  A1 -> A1 : nothing returns from fw-L-i: re-schedule its remaining procedures to other\ninstances (grouping is an optimisation, not a constraint); Judgments already\nmerged from its earlier patches are kept
+  A1 -> TR : log(schedule change; the schedule table is deterministic, no LLM)
+  note over A1, TR : **Outcome** - no ReviewTask at all and nothing written for this execution;\nthe remaining procedures stay planned and re-enter executing under another\ninstance with a new ProcedureRun. The human is never notified.
+end
+deactivate A6
+
+== Main line: every branch that needs a human ends in the same queue (details in Figure 4a) ==
+
+opt a published ReviewTask exists for this procedure
+  note over RQ, RCA : Entered only for tasks the merge actually published. Results that closed\nautomatically and were not sampled (9.2), and the silent re-scheduling of F-5b,\npublish no task and expect no human decision.
+  A10 -> RQ : rank()
+  RQ --> A10 : next ReviewTask by 9.1 tier
+  activate A10
+  A10 -> RCA : present(task) with the decisions allowed for its kind:\nreasoning chain and evidence, or rule result (unattributed),\nor failure reason (failed), or scope request (scope_limited)
+  RCA -> A10 : decision + reason (empty reason refused)
+  A10 -> A1 : submit(ReviewRecord) via DecisionSubmit -\nwhole object built verbatim from the form fields, no LLM
+  deactivate A10
+  A1 -> A1 : validate targetVersion, gate state and\ntask kind x decision matrix (UC-04)
+  A1 -> OUT : write(ReviewRecord), recompute Procedure status: completed only when every\nReviewTask is decided, no open dispute, no follow-up run pending and the period is covered\n(timing != interim or periodCovered); otherwise awaiting_human / in_dispute / executing / interim_completed
+  A1 -> TR : log(human decision, reviewer, dwell time)
+end
+
+legend right
+  |= Fragment |= Failure (14) |= Outcome left in the StatePatch |
+  | F-1 | LLM timeout or rate limit | hybrid: rule result kept, Exception unattributed, draft kind unattributed; engine = llm: ProcedureRun failed (llm_unavailable), draft kind failed; Procedure awaiting_human |
+  | F-2a | output_schema violated, 2 retries exhausted | same engine fallback as F-1 (hybrid unattributed, llm failed) |
+  | F-2b | EvidencePointer references invalid | some valid: step flagged unsupported and kept, Judgment continues; none valid: Judgment kept, draft kind normal |
+  | F-2c | semantic validation fails (chain, pointers, confidence, action) | Judgment kept and degraded per 7.4, draft kind normal, Procedure awaiting_human |
+  | F-3 | context_budget exceeded | batched calls with batchNo; a single batch still over -> ProcedureRun failed (needs_manual_scope), draft kind failed |
+  | F-4 | Loop 1 exhausted, A7 inconsistent | Judgment flagged dispute, draft kind dispute, Procedure in_dispute |
+  | F-5 | merge checks fail, or no patch returns at all | patch received: checks, one re-run, then pass (merge, write, publish) or fail (runs failed, A1 publishes failed tasks); no patch: silent re-scheduling |
+  ----
+  Notation: **Outcome** states what a branch leaves behind - ProcedureRun, Procedure and the kind of any ReviewTask draft.
+  It is not a stop: failure results still travel back to A1 in the StatePatch, and the nesting of the alt fragments is what
+  keeps a failed branch out of the validation, F-4 and confidence steps below it. ReviewTasks become visible to the human
+  only after A1 has merged the patch (18.4): A6 drafts them, A1 publishes them, and a patch rejected twice publishes none
+  of its drafts - only the failed tasks A1 creates itself. Business results (Judgments, Exceptions, ProcedureRuns) are
+  written to AuditOutputStore by A1 after the merge, never by the instance or the JudgmentEngine.
+  The opt at the bottom marks the human lane as conditional: it is entered only for a task the merge published, so an
+  automatic close that was not sampled and a silent re-scheduling (F-5b) end the execution without any human step.
+  Every LLM call, retry and failure writes one AuditTrail line (M-07); retry, degradation and timeout are
+  implemented inside the node, not left to framework defaults (18.5).
+  A1, A5 and A9 never call the LLM. A6 -> A7 is the only direct agent-to-agent call; every other exchange
+  travels as a StatePatch through A1. The human talks only to A10, and A10 writes only through DecisionSubmit.
+endlegend
+@enduml

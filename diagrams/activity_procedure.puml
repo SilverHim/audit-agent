@@ -1,0 +1,122 @@
+@startuml
+title Figure 4b - Activity Diagram: Single Procedure Execution inside an A6 Instance (called per procedure from Figure 4a-2)\n[Individual task · Member C]\nEngine split, output validation, A7 independent review, Loop 1, auto-disposition, safe point
+
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam ActivityBackgroundColor White
+skinparam ActivityBorderColor #444444
+skinparam ActivityDiamondBackgroundColor #FFF8DC
+skinparam ActivityDiamondBorderColor #888800
+skinparam ConditionEndStyle diamond
+
+|Human|
+|Concierge|
+|Orchestrator & Rule Engine|
+|LLM Agent|
+
+|Orchestrator & Rule Engine|
+start
+:Procedure -> executing, entry action: new ProcedureRun
+(trigger from caller: initial / loop2_extend / rerun /
+needs_review / correction), loop1Rounds = 0;
+switch (Procedure engine?)
+case (rule)
+  :RuleEngine runs SQL on FinancialDataStore
+  -> Exceptions with EvidencePointers
+  (no reasoning chain, no A7);
+case (manual)
+  |Concierge|
+  :Assign task to RCA
+  (stocktake, interview) with checklist;
+  |Human|
+  :Perform procedure, report result
+  and upload evidence;
+  |Concierge|
+  :Collect result;
+  |Orchestrator & Rule Engine|
+  :Record result and evidence (no A7);
+case (hybrid / llm)
+  :hybrid only: RuleEngine pre-filters
+  candidates (e.g. GEN-05 -> GEN-02);
+  repeat
+    |LLM Agent|
+    :A6 generates Judgment: structured output,
+    reasoning chain, counter-argument;
+    |Orchestrator & Rule Engine|
+    switch (OutputValidator (8.6)?)
+    case (format error, 2 retries exhausted)
+      :Fallback: hybrid keeps rule result
+      flagged unattributed, llm marks
+      ProcedureRun failed;
+      break
+    case (some pointers invalid)
+      :Keep the Judgment, flag those steps
+      unsupported, evidence coverage drops,
+      continue through 7.4 and 8.4;
+    case (no valid pointer, or semantic check fails)
+      :Keep the Judgment, flag it for a human
+      (7.4 downgrade), nothing discarded;
+    case (valid)
+      :Judgment accepted;
+    endswitch
+    if (GEN-09 trigger hit?) then (yes)
+      |LLM Agent|
+      :A7 reviews: round 1 independent conclusion
+      from evidence only, round 2 compare
+      -> criticVerdict, criticReasonType;
+      |Orchestrator & Rule Engine|
+    else (no)
+      :criticVerdict = skipped;
+    endif
+  backward :Loop 1: A6 gathers more evidence (system data only),\nnew ProcedureRun (loop1_retry), loop1Rounds + 1,\nold Judgment -> supersededBy;
+  repeat while (Loop 1 needed?\nA6 self-judged evidence insufficient, or A7 inconsistent\nfor insufficient_evidence, loop1Rounds < 3, new evidence found) is (yes) not (no)
+  if (A7 still inconsistent?) then (yes)
+    :Flag as dispute (adjudication lane,
+    no confidence ranking, no blind);
+  else (no)
+  endif
+endswitch
+|Orchestrator & Rule Engine|
+:Apply downgrade rules (7.4), compute confidence (8.4)
+(manual: skipped, the human's result is final),
+package Run, Exceptions and Judgments into the StatePatch
+(A1 writes them to AuditOutputStore after fan-in);
+if (Human needed?\nmanual: never (the result is the human's own),\neffective level L1 / L2 or blind, 9.1 mandatory rows,\nA7 inconsistent, dispute, failed / unattributed, stale) then (yes)
+  :Draft ReviewTask (kind normal / dispute / unattributed / failed,
+  target = Judgment, Exception, ProcedureRun or Procedure + version)
+  into the StatePatch, A1 publishes it after fan-in,
+  Procedure -> awaiting_human (dispute -> in_dispute);
+else (no: L3 normal / L4)
+  if (timing = interim and period not covered?) then (yes)
+    :Procedure -> interim_completed,
+    waits for the linked GEN-24 instance;
+  else (no)
+    :Auto-close: Procedure -> completed,
+    result recorded;
+  endif
+  if (9.2 sample: 5% of high-confidence Judgments?) then (yes)
+    :Draft ReviewTask kind blind
+    (conclusion hidden at presentation);
+  else (no)
+  endif
+endif
+if (Safe point: result hits Loop 3 blocking condition?\nfraud indicator, uncorrected > 70% of OM,\nundisclosed related party, major subsequent event) then (yes)
+  :Raise reassessment flag: all instances stop
+  at next safe point, A1 stops dispatching;
+else (no)
+endif
+stop
+
+legend right
+  |= Lane |= Who |
+  | Human | RCA; manual-engine procedures only, via Concierge |
+  | Concierge | A10; assigns manual tasks, collects results verbatim |
+  | Orchestrator & Rule Engine | A6 instance control flow, RuleEngine, OutputValidator, persistence; deterministic |
+  | LLM Agent | A6 generation, A7 critic (separate client) |
+  |= Path |= |
+  | Loop 1 | Two entries share loop1Rounds < 3; every re-run is a new ProcedureRun and passes OutputValidator again |
+  | Fallback | Format retries exhausted: hybrid keeps rule result (unattributed), llm marks Run failed. Some pointers invalid: steps flagged unsupported, flow continues. No valid pointer or semantic failure: Judgment kept, flagged for a human |
+  | ReviewTask | Drafted inside the instance, travels in the StatePatch, visible only after A1 has merged it (Figure 4a) |
+  | Safe point | Checked after every procedure; flag raised here is read by A1 and other instances (Figure 4a) |
+endlegend
+@enduml

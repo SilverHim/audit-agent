@@ -1,0 +1,1037 @@
+[
+ {
+  "no": "AASB 1",
+  "title": "First-time Adoption of Australian Accounting Standards",
+  "operative": "2025-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2025-03/AASB1_07-15_COMPoct23_01-25.pdf",
+  "bytes": 458318
+ },
+ {
+  "no": "AASB 2",
+  "title": "Share-based Payment",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_2.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB2_07-15_COMPdec21_01-22.pdf",
+  "bytes": 1672824
+ },
+ {
+  "no": "AASB 3",
+  "title": "Business Combinations",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_3.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB3_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1343046
+ },
+ {
+  "no": "AASB 3",
+  "title": "Business Combinations",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB3_08-15_BC_2008-11.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB3_08-15_BC_2008-11.pdf",
+  "bytes": 119063
+ },
+ {
+  "no": "AASB 4",
+  "title": "Insurance Contracts",
+  "operative": "2021-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_4.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB4_08-15_COMPsep20_01-21.pdf",
+  "bytes": 1076020
+ },
+ {
+  "no": "AASB 5",
+  "title": "Non-current Assets Held for Sale and Discontinued Operations",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_5.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB5_08-15_COMPdec22_01-23.pdf",
+  "bytes": 983659
+ },
+ {
+  "no": "AASB 6",
+  "title": "Exploration for and Evaluation of Mineral Resources",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_6.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB6_08-15_COMPmar20_07-21.pdf",
+  "bytes": 959698
+ },
+ {
+  "no": "AASB 7",
+  "title": "Financial Instruments: Disclosures",
+  "operative": "2024-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_7.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB7_08-15_COMPjun23_01-24.pdf",
+  "bytes": 488579
+ },
+ {
+  "no": "AASB 8",
+  "title": "Operating Segments",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_8.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB8_08-15_COMPmar20_07-21.pdf",
+  "bytes": 966588
+ },
+ {
+  "no": "AASB 9",
+  "title": "Financial Instruments",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_9.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB9_12-14_COMPdec22_01-23.pdf",
+  "bytes": 2195229
+ },
+ {
+  "no": "AASB 10",
+  "title": "Consolidated Financial Statements",
+  "operative": "2025-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_10.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2025-04/AASB10_07-15_ACOMPnov24_01-25_0.pdf",
+  "bytes": 866247
+ },
+ {
+  "no": "AASB 10",
+  "title": "Consolidated Financial Statements",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB10_07-15_BC_2011-5_2011-6.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB10_07-15_BC_2011-5_2011-6.pdf",
+  "bytes": 132555
+ },
+ {
+  "no": "AASB 10",
+  "title": "Consolidated Financial Statements",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB10_07-15_BC_2013-5.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB10_07-15_BC_2013-5.pdf",
+  "bytes": 136645
+ },
+ {
+  "no": "AASB 10",
+  "title": "Consolidated Financial Statements",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB10_07-15_BC_2013-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB10_07-15_BC_2013-8.pdf",
+  "bytes": 172450
+ },
+ {
+  "no": "AASB 11",
+  "title": "Joint Arrangements",
+  "operative": "2019-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_11.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB11_07-15_COMPfeb18_01-19.pdf",
+  "bytes": 1084846
+ },
+ {
+  "no": "AASB 12",
+  "title": "Disclosure of Interests in Other Entities",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_12.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB12_08-15_COMPmar20_07-21.pdf",
+  "bytes": 1053990
+ },
+ {
+  "no": "AASB 13",
+  "title": "Fair Value Measurement",
+  "operative": "2024-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_13.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB13_08-15_COMPdec22_01-24.pdf",
+  "bytes": 796400
+ },
+ {
+  "no": "AASB 13",
+  "title": "Fair Value Measurement",
+  "operative": "2024-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB13_08-15_BC_2015-7.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB13_08-15_BC_2015-7.pdf",
+  "bytes": 143035
+ },
+ {
+  "no": "AASB 13",
+  "title": "Fair Value Measurement",
+  "operative": "2024-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB13_12-22_BC_2022-10.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-12/AASB13_12-22_BC_2022-10.pdf",
+  "bytes": 1045096
+ },
+ {
+  "no": "AASB 14",
+  "title": "Regulatory Deferral Accounts",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_14.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB14_06-14_COMPdec21_01-22.pdf",
+  "bytes": 1046069
+ },
+ {
+  "no": "AASB 14",
+  "title": "Regulatory Deferral Accounts",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB14_06-14_BC_AASB14_0.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB14_06-14_BC_AASB14_0.pdf",
+  "bytes": 117354
+ },
+ {
+  "no": "AASB 15",
+  "title": "Revenue from Contracts with Customers",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_15.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB15_12-14_COMPdec22_01-23.pdf",
+  "bytes": 2051124
+ },
+ {
+  "no": "AASB 15",
+  "title": "Revenue from Contracts with Customers",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB15_12-14_BC_2016-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB15_12-14_BC_2016-8.pdf",
+  "bytes": 220222
+ },
+ {
+  "no": "AASB 15",
+  "title": "Revenue from Contracts with Customers",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB15_12-14_BC_2018-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB15_12-14_BC_2018-4.pdf",
+  "bytes": 283197
+ },
+ {
+  "no": "AASB 15",
+  "title": "Revenue from Contracts with Customers",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB15_12-14_BC_2022-3.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-05/AASB15_12-14_BC_2022-3.pdf",
+  "bytes": 186314
+ },
+ {
+  "no": "AASB 15",
+  "title": "Revenue from Contracts with Customers",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB15_12-14_BC_2019-6.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-08/AASB15_12-14_BC_2019-6.pdf",
+  "bytes": 85521
+ },
+ {
+  "no": "AASB 16",
+  "title": "Leases",
+  "operative": "2024-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_16.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB16_02-16_COMPnov22_01-24.pdf",
+  "bytes": 531893
+ },
+ {
+  "no": "AASB 16",
+  "title": "Leases",
+  "operative": "2024-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB16_02-16_BC_2018-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB16_02-16_BC_2018-8.pdf",
+  "bytes": 148624
+ },
+ {
+  "no": "AASB 16",
+  "title": "Leases",
+  "operative": "2024-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB16_02-16_BC_2019-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB16_02-16_BC_2019-8.pdf",
+  "bytes": 160551
+ },
+ {
+  "no": "AASB 16",
+  "title": "Leases",
+  "operative": "2024-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB16_11-22_BC_2022-3.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-12/AASB16_11-22_BC_2022-3.pdf",
+  "bytes": 600976
+ },
+ {
+  "no": "AASB 17",
+  "title": "Insurance Contracts",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_17.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB17_07-17_COMPdec22_01-23.pdf",
+  "bytes": 1862007
+ },
+ {
+  "no": "AASB 17",
+  "title": "Insurance Contracts",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB17_07-17_BC_2022-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-05/AASB17_07-17_BC_2022-8.pdf",
+  "bytes": 76855
+ },
+ {
+  "no": "AASB 17",
+  "title": "Insurance Contracts",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB17_07-17_BC_AASB17.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-05/AASB17_07-17_BC_AASB17.pdf",
+  "bytes": 154362
+ },
+ {
+  "no": "AASB 101",
+  "title": "Presentation of Financial Statements",
+  "operative": "2024-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_101.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB101_07-15_COMPdec22_01-24.pdf",
+  "bytes": 1392155
+ },
+ {
+  "no": "AASB 102",
+  "title": "Inventories",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_102.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB102_07-15_COMPdec21_01-22.pdf",
+  "bytes": 926041
+ },
+ {
+  "no": "AASB 102",
+  "title": "Inventories",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB102_07-15_BC_2007-5.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB102_07-15_BC_2007-5.pdf",
+  "bytes": 124087
+ },
+ {
+  "no": "AASB 107",
+  "title": "Statement of Cash Flows",
+  "operative": "2024-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_107.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB107_08-15_COMPjun23_01-24.pdf",
+  "bytes": 407164
+ },
+ {
+  "no": "AASB 108",
+  "title": "Accounting Policies, Changes in Accounting Estimates and Errors",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_108.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB108_08-15_COMPmar21_01-23.pdf",
+  "bytes": 992505
+ },
+ {
+  "no": "AASB 110",
+  "title": "Events after the Reporting Period",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_110.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB110_08-15_COMPmar20_07-21.pdf",
+  "bytes": 952415
+ },
+ {
+  "no": "AASB 112",
+  "title": "Income Taxes",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_112.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB112_08-15_COMPsep23_01-23.pdf",
+  "bytes": 1953114
+ },
+ {
+  "no": "AASB 116",
+  "title": "Property, Plant and Equipment",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_116.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB116_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1140699
+ },
+ {
+  "no": "AASB 119",
+  "title": "Employee Benefits",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_119.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB119_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1259356
+ },
+ {
+  "no": "AASB 120",
+  "title": "Accounting for Government Grants and Disclosure of Government Assistance",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_120.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB120_08-15_COMPmar20_07-21.pdf",
+  "bytes": 866092
+ },
+ {
+  "no": "AASB 121",
+  "title": "The Effects of Changes in Foreign Exchange Rates",
+  "operative": "2025-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_121.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2025-03/AASB121_08-15_COMPoct23_01-25.pdf",
+  "bytes": 410837
+ },
+ {
+  "no": "AASB 123",
+  "title": "Borrowing Costs",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_123.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB123_08-15_COMPmar20_07-21.pdf",
+  "bytes": 956018
+ },
+ {
+  "no": "AASB 123",
+  "title": "Borrowing Costs",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB123_08-15_BC_AASB123.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB123_08-15_BC_AASB123.pdf",
+  "bytes": 115914
+ },
+ {
+  "no": "AASB 124",
+  "title": "Related Party Disclosures",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_124.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB124_07-15_COMPdec22_01-23.pdf",
+  "bytes": 1122322
+ },
+ {
+  "no": "AASB 124",
+  "title": "Related Party Disclosures",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB124_07-15_BC_2015-6.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB124_07-15_BC_2015-6.pdf",
+  "bytes": 147754
+ },
+ {
+  "no": "AASB 127",
+  "title": "Separate Financial Statements",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_127.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB127_08-15_COMPdec21_01-22.pdf",
+  "bytes": 864096
+ },
+ {
+  "no": "AASB 128",
+  "title": "Investments in Associates and Joint Ventures",
+  "operative": "2025-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_128.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2025-04/AASB128_08-15_ACOMPnov24_01-25_0.pdf",
+  "bytes": 448612
+ },
+ {
+  "no": "AASB 128",
+  "title": "Investments in Associates and Joint Ventures",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB128_08-15_BC_2011-5_2011-6.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB128_08-15_BC_2011-5_2011-6.pdf",
+  "bytes": 129932
+ },
+ {
+  "no": "AASB 128",
+  "title": "Investments in Associates and Joint Ventures",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB128_08-15_BC_2015-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB128_08-15_BC_2015-4.pdf",
+  "bytes": 111532
+ },
+ {
+  "no": "AASB 129",
+  "title": "Financial Reporting in Hyperinflationary Economies",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_129.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB129_08-15_COMPmar20_07-21.pdf",
+  "bytes": 853646
+ },
+ {
+  "no": "AASB 132",
+  "title": "Financial Instruments: Presentation",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_132.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB132_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1662361
+ },
+ {
+  "no": "AASB 133",
+  "title": "Earnings per Share",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_133.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB133_08-15_COMPmar20_07-21.pdf",
+  "bytes": 1591039
+ },
+ {
+  "no": "AASB 134",
+  "title": "Interim Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_134.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB134_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1165682
+ },
+ {
+  "no": "AASB 136",
+  "title": "Impairment of Assets",
+  "operative": "2025-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_136.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2026-03/AASB136_08-15_COMPjan26_02-26.pdf",
+  "bytes": 651939
+ },
+ {
+  "no": "AASB 136",
+  "title": "Impairment of Assets",
+  "operative": "2025-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB136_08-15_BC_2016-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB136_08-15_BC_2016-4.pdf",
+  "bytes": 174460
+ },
+ {
+  "no": "AASB 137",
+  "title": "Provisions, Contingent Liabilities and Contingent Assets",
+  "operative": "2025-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_137.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2026-03/AASB137_08-15_COMPjan26_02-26.pdf",
+  "bytes": 467722
+ },
+ {
+  "no": "AASB 138",
+  "title": "Intangible Assets",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_138.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB138_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1134399
+ },
+ {
+  "no": "AASB 139",
+  "title": "Financial Instruments: Recognition and Measurement",
+  "operative": "2021-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_139.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB139_08-15_COMPsep20_01-21.pdf",
+  "bytes": 1234246
+ },
+ {
+  "no": "AASB 140",
+  "title": "Investment Property",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_140.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB140_08-15_COMPdec22_01-23.pdf",
+  "bytes": 1048349
+ },
+ {
+  "no": "AASB 141",
+  "title": "Agriculture",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_141.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB141_08-15_COMPjun20_01-22.pdf",
+  "bytes": 916668
+ },
+ {
+  "no": "AASB 1004",
+  "title": "Contributions",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1004.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1004_12-07_COMPmar20_07-21.pdf",
+  "bytes": 1071906
+ },
+ {
+  "no": "AASB 1004",
+  "title": "Contributions",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1004_12-07_BC_AASB1004.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1004_12-07_BC_AASB1004.pdf",
+  "bytes": 159660
+ },
+ {
+  "no": "AASB 1004",
+  "title": "Contributions",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1004_12-07_BC_AASB1058.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1004_12-07_BC_AASB1058.pdf",
+  "bytes": 153041
+ },
+ {
+  "no": "AASB 1023",
+  "title": "General Insurance Contracts",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1023.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1023_07-04_COMPdec22_01-23.pdf",
+  "bytes": 1480410
+ },
+ {
+  "no": "AASB 1039",
+  "title": "Concise Financial Reports",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1039.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1039_08-08_COMPdec21_01-22.pdf",
+  "bytes": 923848
+ },
+ {
+  "no": "AASB 1048",
+  "title": "Interpretation of Standards",
+  "operative": "2024-12-31",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1048.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1048_11-24.pdf",
+  "bytes": 471589
+ },
+ {
+  "no": "AASB 1048",
+  "title": "Interpretation of Standards",
+  "operative": "2024-12-31",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1048_ES_11-24.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1048_ES_11-24.pdf",
+  "bytes": 230198
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1049.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1049_10-07_COMPdec21_01-23.pdf",
+  "bytes": 1387512
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1049_10-07_BC_2008-9.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1049_10-07_BC_2008-9.pdf",
+  "bytes": 126506
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1049_10-07_BC_2011-13.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1049_10-07_BC_2011-13.pdf",
+  "bytes": 173210
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1049_10-07_BC_2011-3.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1049_10-07_BC_2011-3.pdf",
+  "bytes": 131254
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1049_10-07_BC_2012-8.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1049_10-07_BC_2012-8.pdf",
+  "bytes": 122005
+ },
+ {
+  "no": "AASB 1049",
+  "title": "Whole of Government and General Government Sector Financial Reporting",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1049_10-07_BC_AASB1049_0.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1049_10-07_BC_AASB1049_0.pdf",
+  "bytes": 226985
+ },
+ {
+  "no": "AASB 1050",
+  "title": "Administered Items",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1050.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1050_12-07_COMPmar20_07-21.pdf",
+  "bytes": 387683
+ },
+ {
+  "no": "AASB 1050",
+  "title": "Administered Items",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1050_12-07_BC_AASB1050.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1050_12-07_BC_AASB1050.pdf",
+  "bytes": 127996
+ },
+ {
+  "no": "AASB 1051",
+  "title": "Land Under Roads",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1051.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1051_12-07_COMPmar20_07-21.pdf",
+  "bytes": 372987
+ },
+ {
+  "no": "AASB 1051",
+  "title": "Land Under Roads",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1051_12-07_BC_AASB1051.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB1051_12-07_BC_AASB1051.pdf",
+  "bytes": 132668
+ },
+ {
+  "no": "AASB 1052",
+  "title": "Disaggregated Disclosures",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1052.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1052_12-07_COMPdec21_01-22.pdf",
+  "bytes": 346315
+ },
+ {
+  "no": "AASB 1052",
+  "title": "Disaggregated Disclosures",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1052_12-07_BC_AASB1052.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1052_12-07_BC_AASB1052.pdf",
+  "bytes": 123612
+ },
+ {
+  "no": "AASB 1053",
+  "title": "Application of Tiers of Australian Accounting Standards",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1053.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1053_06-10_COMPmay22_07-21.pdf",
+  "bytes": 1893469
+ },
+ {
+  "no": "AASB 1053",
+  "title": "Application of Tiers of Australian Accounting Standards",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1053_06-10_BC_2014-2.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1053_06-10_BC_2014-2.pdf",
+  "bytes": 148349
+ },
+ {
+  "no": "AASB 1053",
+  "title": "Application of Tiers of Australian Accounting Standards",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1053_06-10_BC_AASB1053.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1053_06-10_BC_AASB1053.pdf",
+  "bytes": 260356
+ },
+ {
+  "no": "AASB 1053",
+  "title": "Application of Tiers of Australian Accounting Standards",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1053_06-10_BC_2022-2.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-03/AASB1053_06-10_BC_2022-2.pdf",
+  "bytes": 204487
+ },
+ {
+  "no": "AASB 1054",
+  "title": "Australian Additional Disclosures",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1054.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1054_05-11_COMPdec22_01-23.pdf",
+  "bytes": 2463370
+ },
+ {
+  "no": "AASB 1054",
+  "title": "Australian Additional Disclosures",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1054_05-11_BC_2019-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1054_05-11_BC_2019-4.pdf",
+  "bytes": 383471
+ },
+ {
+  "no": "AASB 1054",
+  "title": "Australian Additional Disclosures",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1054_05-11_BC_2019-5.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1054_05-11_BC_2019-5.pdf",
+  "bytes": 129020
+ },
+ {
+  "no": "AASB 1054",
+  "title": "Australian Additional Disclosures",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1054_05-11_BC_AASB1054.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1054_05-11_BC_AASB1054.pdf",
+  "bytes": 127658
+ },
+ {
+  "no": "AASB 1054",
+  "title": "Australian Additional Disclosures",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1054_05-11_BC_2022-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-03/AASB1054_05-11_BC_2022-4.pdf",
+  "bytes": 213117
+ },
+ {
+  "no": "AASB 1055",
+  "title": "Budgetary Reporting",
+  "operative": "2021-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1055.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1055_03-13_COMPmar20_07-21.pdf",
+  "bytes": 427996
+ },
+ {
+  "no": "AASB 1055",
+  "title": "Budgetary Reporting",
+  "operative": "2021-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1055_03-13_BC_AASB1055.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1055_03-13_BC_AASB1055.pdf",
+  "bytes": 173322
+ },
+ {
+  "no": "AASB 1056",
+  "title": "Superannuation Entities",
+  "operative": "2023-07-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1056.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1056_12-23.pdf",
+  "bytes": 660720
+ },
+ {
+  "no": "AASB 1056",
+  "title": "Superannuation Entities",
+  "operative": "2023-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1056_ES_12-23.pdf",
+  "url": "https://aasb.gov.au/admin/file/content105/c9/AASB1056_ES_12-23.pdf",
+  "bytes": 222513
+ },
+ {
+  "no": "AASB 1056",
+  "title": "Superannuation Entities",
+  "operative": "2023-07-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1056_12-23_BC_AASB1056.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2024-01/AASB1056_12-23_BC_AASB1056.pdf",
+  "bytes": 511841
+ },
+ {
+  "no": "AASB 1057",
+  "title": "Application of Australian Accounting Standards",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1057.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1057_07-15_COMPdec22_01-23.pdf",
+  "bytes": 1696808
+ },
+ {
+  "no": "AASB 1057",
+  "title": "Application of Australian Accounting Standards",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1057_07-15_BC_2019-1.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB1057_07-15_BC_2019-1.pdf",
+  "bytes": 213129
+ },
+ {
+  "no": "AASB 1057",
+  "title": "Application of Australian Accounting Standards",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1057_07-15_BC_2020-2.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB1057_07-15_BC_2020-2.pdf",
+  "bytes": 484234
+ },
+ {
+  "no": "AASB 1057",
+  "title": "Application of Australian Accounting Standards",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1057_07-15_BC_AASB1057.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB1057_07-15_BC_AASB1057.pdf",
+  "bytes": 117884
+ },
+ {
+  "no": "AASB 1058",
+  "title": "Income of Not-for-Profit Entities",
+  "operative": "2023-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1058.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1058_12-16_COMPdec22_01-23.pdf",
+  "bytes": 1753921
+ },
+ {
+  "no": "AASB 1058",
+  "title": "Income of Not-for-Profit Entities",
+  "operative": "2023-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1058_12-16_BC_AASB1058.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-07/AASB1058_12-16_BC_AASB1058.pdf",
+  "bytes": 935048
+ },
+ {
+  "no": "AASB 1059",
+  "title": "Service Concession Arrangements: Grantors",
+  "operative": "2022-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1059.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content105/c9/AASB1059_07-17_COMPdec21_01-22.pdf",
+  "bytes": 2106748
+ },
+ {
+  "no": "AASB 1059",
+  "title": "Service Concession Arrangements: Grantors",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1059_07-17_BC_2019-2.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1059_07-17_BC_2019-2.pdf",
+  "bytes": 156882
+ },
+ {
+  "no": "AASB 1059",
+  "title": "Service Concession Arrangements: Grantors",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1059_07-17_BC_2021-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1059_07-17_BC_2021-4.pdf",
+  "bytes": 142494
+ },
+ {
+  "no": "AASB 1059",
+  "title": "Service Concession Arrangements: Grantors",
+  "operative": "2022-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1059_07-17_BC_AASB1059.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1059_07-17_BC_AASB1059.pdf",
+  "bytes": 329699
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "main",
+  "file": "03_会计准则_AASB/AASB_1060.pdf",
+  "url": "https://www.aasb.gov.au/admin/file/content102/c3/AASB1060_KeyFacts_03-20_1585193851825.pdf",
+  "bytes": 345049
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_2020-7.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1060_03-20_BC_2020-7.pdf",
+  "bytes": 143550
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_2020-9.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1060_03-20_BC_2020-9.pdf",
+  "bytes": 231885
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_2021-1.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1060_03-20_BC_2021-1.pdf",
+  "bytes": 159810
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_AASB1060.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2022-08/AASB1060_03-20_BC_AASB1060.pdf",
+  "bytes": 286165
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_2021-6.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-09/AASB1060_03-20_BC_2021-6.pdf",
+  "bytes": 135813
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-20_BC_2023-4.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2023-10/AASB1060_03-20_BC_2023-4.pdf",
+  "bytes": 457610
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_09-23_BC_2023-3.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2024-01/AASB1060_09-23_BC_2023-3.pdf",
+  "bytes": 484993
+ },
+ {
+  "no": "AASB 1060",
+  "title": "General Purpose Financial Statements – Simplified Disclosures for For-Profit and Not-for-Profit Tier 2 Entities",
+  "operative": "2025-01-01",
+  "kind": "sub",
+  "file": "03_会计准则_AASB/附属文件_BC_ES/AASB1060_03-24_BC_2024-1.pdf",
+  "url": "https://standards.aasb.gov.au/sites/default/files/2024-07/AASB1060_03-24_BC_2024-1.pdf",
+  "bytes": 499062
+ }
+]

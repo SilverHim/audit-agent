@@ -1,0 +1,127 @@
+@startuml requirements_member_b
+top to bottom direction
+title Figure 7B  User Requirement Diagram — Human Judgement and Interaction\n[Individual task · Member B]\n(SysML requirement notation expressed in PlantUML; source: spec 3.0-3.2, 12.4)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 25
+skinparam ranksep 55
+skinparam legend {
+  FontSize 19
+  BackgroundColor #F7F7F2
+  BorderColor #9A9A8C
+}
+skinparam class {
+  BackgroundColor<<requirement>> #FDF3E7
+  BorderColor<<requirement>> #C07A2C
+  ArrowColor #9A9A9A
+}
+skinparam noteBackgroundColor #F7F7F2
+skinparam noteBorderColor #9A9A8C
+hide circle
+
+' ================= Top-level requirement =================
+class "Audit Support System" as SYS <<requirement>> #EDE7F6 {
+  id = "REQ-00"
+  text = "Enable a single RCA to complete\na statutory audit engagement"
+}
+
+' ================= Containers =================
+class "Mandatory requirements" as MREQ <<requirement>> #F6E3C8 {
+  id = "REQ-M"
+  text = "Capabilities the system must provide\n(spec 3.1)"
+}
+class "Optional requirements" as OREQ <<requirement>> #D8E6F5 {
+  id = "REQ-O"
+  text = "Features deferred or configurable\n(spec 3.2)"
+}
+
+' ================= Mandatory (Member B) =================
+class "M-06" as M06 <<requirement>> {
+  id = "M-06"
+  text = "A human override must record\na written reason"
+}
+class "M-07" as M07 <<requirement>> {
+  id = "M-07"
+  text = "Log AI calls, human actions, transitions,\nrule runs, external acts and failures"
+}
+class "M-10" as M10 <<requirement>> {
+  id = "M-10"
+  text = "Audit plan approved by RCA before\nexecution; versioned on revision"
+}
+class "M-11" as M11 <<requirement>> {
+  id = "M-11"
+  text = "Single interaction entry point; relay\ndecisions verbatim; form fallback"
+}
+
+' ================= Optional (Member B) =================
+class "O-03" as O03 <<requirement>> #E8F1FA {
+  id = "O-03"
+  text = "Mobile review interface for\nthe review queue"
+}
+class "O-04" as O04 <<requirement>> #E8F1FA {
+  id = "O-04"
+  text = "Generate audit reports in\nmultiple languages"
+}
+class "O-06" as O06 <<requirement>> #E8F1FA {
+  id = "O-06"
+  text = "Feedback loop: override data\ndrives rule refinement"
+}
+
+' ================= Containment =================
+SYS +-- MREQ
+SYS +-- OREQ
+
+MREQ +-- M06
+MREQ +-- M07
+MREQ +-- M10
+MREQ +-- M11
+
+OREQ +-- O03
+OREQ +-- O04
+OREQ +-- O06
+
+' ================= Derive =================
+M06 .[#7B4FA0,thickness=2,norank].> M07 : <<deriveReqt>>
+M06 <.[#7B4FA0,thickness=2,norank]. O06 : <<deriveReqt>>
+
+' ================= Informal description =================
+note right of SYS
+  <b>Informal description</b>
+  As the RCA, I work with the system through one
+  entry point that passes on my decisions word for
+  word, and a form takes over when that entry point
+  is unavailable. Execution does not start until I
+  approve the audit plan, which keeps a version
+  each time it is revised; when I overrule an AI
+  judgment I must write down why. AI calls, my own
+  actions and every state change are all logged.
+  Later, I would like to review from my phone,
+  issue reports in other languages, and let my
+  overrides refine the rules.
+end note
+
+' ================= Layout =================
+MREQ -[hidden]right- OREQ
+
+M10 -[hidden]right- M11
+M11 -[hidden]right- M07
+M07 -[hidden]right- M06
+
+O06 -[hidden]right- O03
+O03 -[hidden]right- O04
+
+M06 -[hidden]right- O06
+
+legend bottom
+  Notation
+  ====
+  Box <<requirement>> = one requirement, carrying its id and text.
+  Crosshair line (+--) = SysML containment; the crosshair sits on the container.
+  Dashed arrow <<deriveReqt>> = the derived requirement points at its source.
+  Beige = mandatory (spec 3.1); blue = optional (spec 3.2).
+  ----
+  Other requirements: Figure 7A (Member A), Figure 7C (Member C); full set in Figure 7.
+end legend
+@enduml

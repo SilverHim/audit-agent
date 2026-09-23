@@ -1,0 +1,224 @@
+@startuml requirements
+top to bottom direction
+title Figure 7  User Requirement Diagram — Mandatory and Optional Requirements\n(SysML requirement notation expressed in PlantUML; source: spec 3.0-3.2, 12.4)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 25
+skinparam ranksep 55
+skinparam legend {
+  FontSize 19
+  BackgroundColor #F7F7F2
+  BorderColor #9A9A8C
+}
+skinparam class {
+  BackgroundColor<<requirement>> #FDF3E7
+  BorderColor<<requirement>> #C07A2C
+  ArrowColor #9A9A9A
+}
+skinparam noteBackgroundColor #F7F7F2
+skinparam noteBorderColor #9A9A8C
+hide circle
+
+' ================= Top-level requirement =================
+class "Audit Support System" as SYS <<requirement>> #EDE7F6 {
+  id = "REQ-00"
+  text = "Enable a single RCA to complete\na statutory audit engagement"
+}
+
+' ================= Containers =================
+class "Mandatory requirements" as MREQ <<requirement>> #F6E3C8 {
+  id = "REQ-M"
+  text = "Capabilities the system must provide\n(spec 3.1)"
+}
+class "Optional requirements" as OREQ <<requirement>> #D8E6F5 {
+  id = "REQ-O"
+  text = "Features deferred or configurable\n(spec 3.2)"
+}
+
+' ================= Mandatory M-01 .. M-14 =================
+class "M-01" as M01 <<requirement>> {
+  id = "M-01"
+  text = "Scan all journal entries in full;\nno sampling"
+}
+class "M-02" as M02 <<requirement>> {
+  id = "M-02"
+  text = "Every judgment traceable to source\nevidence via EvidencePointer"
+}
+class "M-03" as M03 <<requirement>> {
+  id = "M-03"
+  text = "Statutory decision points need explicit\nhuman confirmation to proceed"
+}
+class "M-04" as M04 <<requirement>> {
+  id = "M-04"
+  text = "Block report generation until workpaper\ncoverage and disposition are complete"
+}
+class "M-05" as M05 <<requirement>> {
+  id = "M-05"
+  text = "Every AI judgment exposes\na visible reasoning chain"
+}
+class "M-06" as M06 <<requirement>> {
+  id = "M-06"
+  text = "A human override must record\na written reason"
+}
+class "M-07" as M07 <<requirement>> {
+  id = "M-07"
+  text = "Log AI calls, human actions, transitions,\nrule runs, external acts and failures"
+}
+class "M-08" as M08 <<requirement>> {
+  id = "M-08"
+  text = "Re-flag affected completed procedures\nwhen risk assessment is revised"
+}
+class "M-09" as M09 <<requirement>> {
+  id = "M-09"
+  text = "Verify ASIC registration and ABN\nat engagement acceptance"
+}
+class "M-10" as M10 <<requirement>> {
+  id = "M-10"
+  text = "Audit plan approved by RCA before\nexecution; versioned on revision"
+}
+class "M-11" as M11 <<requirement>> {
+  id = "M-11"
+  text = "Single interaction entry point; relay\ndecisions verbatim; form fallback"
+}
+class "M-12" as M12 <<requirement>> {
+  id = "M-12"
+  text = "Clock statutory notification deadlines;\npending ones block signature"
+}
+class "M-13" as M13 <<requirement>> {
+  id = "M-13"
+  text = "All pre-signature statutory preconditions\nmust pass before RPT-01"
+}
+class "M-14" as M14 <<requirement>> {
+  id = "M-14"
+  text = "Withdrawal at any phase; workpapers\nsealed on exit"
+}
+
+' ================= Optional O-01 .. O-06 =================
+class "O-01" as O01 <<requirement>> #E8F1FA {
+  id = "O-01"
+  text = "Manage several engagements\nconcurrently"
+}
+class "O-02" as O02 <<requirement>> #E8F1FA {
+  id = "O-02"
+  text = "Extend external sources: litigation\nsearch and adverse media"
+}
+class "O-03" as O03 <<requirement>> #E8F1FA {
+  id = "O-03"
+  text = "Mobile review interface for\nthe review queue"
+}
+class "O-04" as O04 <<requirement>> #E8F1FA {
+  id = "O-04"
+  text = "Generate audit reports in\nmultiple languages"
+}
+class "O-05" as O05 <<requirement>> #E8F1FA {
+  id = "O-05"
+  text = "Reuse the client profile across\nsuccessive audit years"
+}
+class "O-06" as O06 <<requirement>> #E8F1FA {
+  id = "O-06"
+  text = "Feedback loop: override data\ndrives rule refinement"
+}
+
+' ================= Containment =================
+SYS +-- MREQ
+SYS +-- OREQ
+
+MREQ +-- M01
+MREQ +-- M02
+MREQ +-- M03
+MREQ +-- M04
+MREQ +-- M05
+MREQ +-- M06
+MREQ +-- M07
+MREQ +-- M08
+MREQ +-- M09
+MREQ +-- M10
+MREQ +-- M11
+MREQ +-- M12
+MREQ +-- M13
+MREQ +-- M14
+
+OREQ +-- O01
+OREQ +-- O02
+OREQ +-- O03
+OREQ +-- O04
+OREQ +-- O05
+OREQ +-- O06
+
+' ================= Derive =================
+M05 .[#7B4FA0,thickness=2,norank].> M02 : <<deriveReqt>>
+M06 .[#7B4FA0,thickness=2,norank].> M07 : <<deriveReqt>>
+M03 <.[#7B4FA0,thickness=2]. M13 : <<deriveReqt>>
+M13 .[#7B4FA0,thickness=2,norank].> M12 : <<deriveReqt>>\n(no pending report)
+M06 <.[#7B4FA0,thickness=2]. O06 : <<deriveReqt>>
+
+' ================= Scope note and acceptance criteria (12.4) =================
+note left of SYS
+  Scope agreed with the stakeholder: clauses
+  AG-01 to AG-06 (spec 3.0); capabilities left
+  out are listed as exclusions (spec 3.3).
+end note
+
+note bottom of M09
+  Raised from O-02 to mandatory because
+  P0 depends on it (3.1): change history,
+  not a derivation.
+end note
+
+note bottom of M01
+  Acceptance: 3,000 entries in under
+  3 s; 100% recall on seeded anomalies.
+end note
+
+note bottom of M04
+  Acceptance (excerpt of 12.4): blocks unless coverage is
+  100%, every procedure is disposed, scope_limited and
+  not_applicable_pending items are approved, mandatory
+  fragments referenced, exclusion registers and P0/P1
+  manual results are in.
+end note
+
+note bottom of M12
+  Acceptance: dueAt computed from awareDate and
+  not editable; escalated 3 days before due and
+  again when overdue; blocks RPT-01 while pending.
+end note
+
+' ================= Layout =================
+MREQ -[hidden]right- OREQ
+
+M01 -[hidden]right- M02
+M02 -[hidden]right- M03
+M03 -[hidden]right- M04
+M04 -[hidden]right- M05
+M06 -[hidden]right- M07
+M07 -[hidden]right- M08
+M08 -[hidden]right- M09
+M09 -[hidden]right- M10
+M11 -[hidden]right- M12
+M12 -[hidden]right- M13
+M13 -[hidden]right- M14
+M01 -[hidden]down- M06
+M06 -[hidden]down- M11
+
+O01 -[hidden]right- O02
+O03 -[hidden]right- O04
+O05 -[hidden]right- O06
+O01 -[hidden]down- O03
+O03 -[hidden]down- O05
+
+M05 -[hidden]right- O01
+M10 -[hidden]right- O03
+
+legend bottom
+  Notation
+  ====
+  Box <<requirement>> = one requirement, carrying its id and text.
+  Crosshair line (+--) = SysML containment; the crosshair sits on the container.
+  Dashed arrow <<deriveReqt>> = the derived requirement points at its source.
+  Beige = mandatory (spec 3.1); blue = optional (spec 3.2).
+  Notes give the acceptance criteria from the traceability matrix (12.4).
+end legend
+@enduml

@@ -1,0 +1,284 @@
+@startuml feature
+title Figure 8  Feature Diagram — Audit Support System\n(● mandatory, ○ optional; F-AUTO lists the four supported levels, the effective level is a run-time attribute per procedure instance)
+
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 28
+skinparam ranksep 40
+skinparam rectangle {
+  BackgroundColor White
+  BorderColor #333333
+  FontSize 20
+}
+skinparam ArrowFontSize 18
+top to bottom direction
+
+rectangle "**Audit Support System**" as ROOT
+
+' Invisible fan-out points: drawing aid only, not features.
+rectangle " " as H1 #line:transparent;back:transparent
+rectangle " " as H2 #line:transparent;back:transparent
+rectangle " " as H3 #line:transparent;back:transparent
+rectangle " " as H4 #line:transparent;back:transparent
+rectangle " " as H5 #line:transparent;back:transparent
+
+' ================= Row 1 =================
+rectangle "● F-ACC  Engagement acceptance\n<size:15>M-09</size>" as F_ACC
+rectangle "● F-PLAN  Planning & risk assessment" as F_PLAN
+rectangle "● F-MAT  Materiality levels" as F_MAT
+rectangle "● F-RISK  Risk register" as F_RISK
+rectangle "● F-OBJ  Audit objectives\n(account × assertion)" as F_OBJ
+rectangle "● F-PACK  Objective-level\nprocedure assembly" as F_PACK
+rectangle "● F-APLAN  Overall audit plan\n<size:15>M-10</size>" as F_APLAN
+
+rectangle "● F-INGEST  Data ingestion" as F_INGEST
+rectangle "● F-API  Accounting system API" as F_API
+rectangle "● F-OFFLINE  Offline document pipeline\n(classify, OCR, extract, link)" as F_OFFLINE
+
+rectangle "● F-EXEC  Procedure execution" as F_EXEC
+rectangle "● F-JE  Full-population\njournal entry scan\n<size:15>M-01</size>" as F_JE
+rectangle "● F-CYCLE  Cycle procedures\n(transaction / balance / estimate)" as F_CYCLE
+rectangle "● F-CONF  Confirmations" as F_CONF
+
+' ================= Row 2 =================
+rectangle "● F-JUDG  Judgment generation" as F_JUDG
+rectangle "● F-EVID  Evidence traceability\n<size:15>M-02</size>" as F_EVID
+rectangle "● F-CHAIN  Reasoning chain\n<size:15>M-05</size>" as F_CHAIN
+rectangle "● F-COUNTER  Counter-arguments" as F_COUNTER
+
+rectangle "● F-REVIEW  Review" as F_REVIEW
+rectangle "● F-CRITIC  Independent AI review (A7)" as F_CRITIC
+rectangle "● F-QUEUE  Tiered review queue" as F_QUEUE
+rectangle "● F-BLIND  Blind-test sampling" as F_BLIND
+rectangle "● F-OVERRIDE  Override record\n<size:15>M-06</size>" as F_OVERRIDE
+
+rectangle "● F-CONCIERGE  Single dialogue entry\n<size:15>M-11</size>" as F_CONCIERGE
+rectangle "● F-PRESENT  Judgment & gate\npresentation, verbatim relay" as F_PRESENT
+rectangle "● F-QUEUEVIEW  Structured queue view\n(filter, sort, side-by-side, batch)" as F_QUEUEVIEW
+rectangle "● F-EXPLAIN  Progress, deliverable\nand source explanation" as F_EXPLAIN
+rectangle "● F-DRILL  Black-box drill-down" as F_DRILL
+rectangle "● F-FALLBACK  Fallback form UI" as F_FALLBACK
+
+' ================= Row 3 =================
+rectangle "● F-MISST  Misstatement lifecycle" as F_MISST
+rectangle "● F-COMM  Management communication" as F_COMM
+rectangle "● F-VERIFY  Correction verification" as F_VERIFY
+
+rectangle "● F-GATE  Statutory judgment gates\n<size:15>M-03</size>" as F_GATE
+rectangle "● F-LOOP  Feedback loops\n<size:15>M-08</size>" as F_LOOP
+rectangle "● F-QC  Completeness check\n<size:15>M-04</size>" as F_QC
+
+rectangle "● F-RPT  Report generation" as F_RPT
+rectangle "● F-REVISE  Multi-round\nannotated revision" as F_REVISE
+
+rectangle "● F-TRAIL  Audit trail\n<size:15>M-07</size>" as F_TRAIL
+
+rectangle "● F-AUTO  Autonomy level" as F_AUTO
+rectangle "supported autonomy levels (all four are always present)\nthe effective level of a procedure instance is a run-time attribute, not a product choice (7.4)" as AUTOGRP #line.dashed {
+  rectangle "L1  Advisory\n<size:15>AI proposes, human decides each</size>" as L1
+  rectangle "L2  Judgment + review\n<size:15>human reviews each</size>" as L2
+  rectangle "L3  Exception-based\n<size:15>human reviews exceptions only</size>" as L3
+  rectangle "L4  Autonomous\n<size:15>post-hoc sampling</size>" as L4
+}
+rectangle "run-time constraints (not features)\n<size:15>gated procedure (F-GATE) => effective level = L1, never L4</size>\n<size:15>blind flag: set on L1 when cumulative downgrade hits the floor;</size>\n<size:15>evidence only, no AI suggestion (7.4)</size>" as F_BLINDFLAG #line.dashed
+
+' ================= Row 4 =================
+rectangle "● F-STAT  Statutory duties\n<size:15>M-12, M-13</size>" as F_STAT
+rectangle "● F-NOCLAR  NOCLAR response\n& ASIC notification clock" as F_NOCLAR
+rectangle "● F-INDEP  Independence monitoring\n& s307C declaration" as F_INDEP
+rectangle "● F-S307  s307 / s308 reportable matters\n& pre-signature conditions" as F_S307
+
+rectangle "● F-GOV  Governance & management\ncommunication" as F_GOV
+rectangle "● F-GOVID  Governance body identification" as F_GOVID
+rectangle "● F-ENQ  Management enquiry\n& documented responses" as F_ENQ
+rectangle "● F-COMMLOG  Communication log\n<size:15>(plan, fraud, deficiency, uncorrected</size>\n<size:15>misstatements, intended opinion)</size>" as F_COMMLOG
+
+rectangle "● F-FSR  FS reconciliation\n& presentation" as F_FSR
+rectangle "● F-RECON  FS-to-records reconciliation" as F_RECON
+rectangle "● F-DISC  Disclosure completeness\n& presentation" as F_DISC
+rectangle "● F-GC  Going-concern mitigation\nplans & disclosure" as F_GC
+
+rectangle "● F-CTRL  Internal control\nunderstanding & deficiencies" as F_CTRL
+rectangle "● F-EXIT  Withdrawal &\npost-report facts\n<size:15>M-14</size>" as F_EXIT
+
+' ================= Row 5 (optional features) =================
+rectangle "○ F-VECTOR  Client document\nvector search" as F_VECTOR
+rectangle "○ F-MULTI  Concurrent engagements\n<size:15>O-01</size>" as F_MULTI
+rectangle "○ F-EXT  Extended external data\n<size:15>O-02</size>" as F_EXT
+rectangle "○ F-MOBILE  Mobile review\n<size:15>O-03</size>" as F_MOBILE
+rectangle "○ F-I18N  Multilingual reports\n<size:15>O-04</size>" as F_I18N
+rectangle "○ F-PROFILE  Client profile reuse\n<size:15>O-05</size>" as F_PROFILE
+rectangle "○ F-FEEDBACK  Feedback closure\n<size:15>O-06</size>" as F_FEEDBACK
+
+' ================= Tree edges =================
+ROOT -- H1
+ROOT -- H2
+ROOT -- H3
+ROOT -- H4
+ROOT -- H5
+
+H1 -- F_ACC
+H1 -- F_PLAN
+H1 -- F_INGEST
+H1 -- F_EXEC
+
+H2 -- F_JUDG
+H2 -- F_REVIEW
+H2 -- F_CONCIERGE
+
+H3 -- F_MISST
+H3 -- F_GATE
+H3 -- F_LOOP
+H3 -- F_QC
+H3 -- F_RPT
+H3 -- F_TRAIL
+H3 -- F_AUTO
+
+H4 -- F_STAT
+H4 -- F_GOV
+H4 -- F_FSR
+H4 -- F_CTRL
+H4 -- F_EXIT
+
+H5 -- F_VECTOR
+H5 -- F_MULTI
+H5 -- F_EXT
+H5 -- F_MOBILE
+H5 -- F_I18N
+H5 -- F_PROFILE
+H5 -- F_FEEDBACK
+
+F_PLAN -- F_MAT
+F_PLAN -- F_RISK
+F_PLAN -- F_OBJ
+F_PLAN -- F_PACK
+F_PLAN -- F_APLAN
+
+F_INGEST -- F_API
+F_INGEST -- F_OFFLINE
+
+F_EXEC -- F_JE
+F_EXEC -- F_CYCLE
+F_EXEC -- F_CONF
+
+F_JUDG -- F_EVID
+F_JUDG -- F_CHAIN
+F_JUDG -- F_COUNTER
+
+F_REVIEW -- F_CRITIC
+F_REVIEW -- F_QUEUE
+F_REVIEW -- F_BLIND
+F_REVIEW -- F_OVERRIDE
+
+F_CONCIERGE -- F_PRESENT
+F_CONCIERGE -- F_QUEUEVIEW
+F_CONCIERGE -- F_EXPLAIN
+F_CONCIERGE -- F_DRILL
+F_CONCIERGE -- F_FALLBACK
+
+F_MISST -- F_COMM
+F_MISST -- F_VERIFY
+
+F_RPT -- F_REVISE
+
+F_AUTO -- L1
+F_AUTO -- L2
+F_AUTO -- L3
+F_AUTO -- L4
+F_AUTO -- F_BLINDFLAG
+
+F_STAT -- F_NOCLAR
+F_STAT -- F_INDEP
+F_STAT -- F_S307
+
+F_GOV -- F_GOVID
+F_GOV -- F_ENQ
+F_GOV -- F_COMMLOG
+
+F_FSR -- F_RECON
+F_FSR -- F_DISC
+F_FSR -- F_GC
+
+' ================= Cross-tree constraints (12.6) =================
+F_BLIND .[norank].> F_QUEUE : <<requires>>
+F_FEEDBACK .[norank].> F_OVERRIDE : <<requires>>
+
+' ================= Layout =================
+ROOT -[hidden]down- F_ACC
+F_ACC -[hidden]down- F_MAT
+F_ACC -[hidden]right- F_PLAN
+F_PLAN -[hidden]right- F_INGEST
+F_INGEST -[hidden]right- F_EXEC
+F_MAT -[hidden]right- F_RISK
+F_RISK -[hidden]right- F_OBJ
+F_OBJ -[hidden]right- F_PACK
+F_PACK -[hidden]right- F_APLAN
+F_APLAN -[hidden]right- F_API
+F_API -[hidden]right- F_OFFLINE
+F_OFFLINE -[hidden]right- F_JE
+F_JE -[hidden]right- F_CYCLE
+F_CYCLE -[hidden]right- F_CONF
+
+F_CONF -[hidden]down- H2
+F_JUDG -[hidden]right- F_REVIEW
+F_REVIEW -[hidden]right- F_CONCIERGE
+F_EVID -[hidden]right- F_CHAIN
+F_CHAIN -[hidden]right- F_COUNTER
+F_COUNTER -[hidden]right- F_CRITIC
+F_CRITIC -[hidden]right- F_QUEUE
+F_QUEUE -[hidden]right- F_BLIND
+F_BLIND -[hidden]right- F_OVERRIDE
+F_OVERRIDE -[hidden]right- F_PRESENT
+F_PRESENT -[hidden]right- F_QUEUEVIEW
+F_QUEUEVIEW -[hidden]right- F_EXPLAIN
+F_EXPLAIN -[hidden]right- F_DRILL
+F_DRILL -[hidden]right- F_FALLBACK
+
+F_FALLBACK -[hidden]down- H3
+F_MISST -[hidden]right- F_GATE
+F_GATE -[hidden]right- F_LOOP
+F_LOOP -[hidden]right- F_QC
+F_QC -[hidden]right- F_RPT
+F_RPT -[hidden]right- F_TRAIL
+F_TRAIL -[hidden]right- F_AUTO
+F_COMM -[hidden]right- F_VERIFY
+F_VERIFY -[hidden]right- F_REVISE
+F_REVISE -[hidden]right- F_BLINDFLAG
+L1 -[hidden]right- L2
+L2 -[hidden]right- L3
+L3 -[hidden]right- L4
+
+F_BLINDFLAG -[hidden]down- H4
+L2 -[hidden]down- H4
+F_STAT -[hidden]right- F_GOV
+F_GOV -[hidden]right- F_FSR
+F_FSR -[hidden]right- F_CTRL
+F_CTRL -[hidden]right- F_EXIT
+F_NOCLAR -[hidden]right- F_INDEP
+F_INDEP -[hidden]right- F_S307
+F_S307 -[hidden]right- F_GOVID
+F_GOVID -[hidden]right- F_ENQ
+F_ENQ -[hidden]right- F_COMMLOG
+F_COMMLOG -[hidden]right- F_RECON
+F_RECON -[hidden]right- F_DISC
+F_DISC -[hidden]right- F_GC
+
+F_GC -[hidden]down- H5
+F_STAT -[hidden]down- F_VECTOR
+F_VECTOR -[hidden]right- F_MULTI
+F_MULTI -[hidden]right- F_EXT
+F_EXT -[hidden]right- F_MOBILE
+F_MOBILE -[hidden]right- F_I18N
+F_I18N -[hidden]right- F_PROFILE
+F_PROFILE -[hidden]right- F_FEEDBACK
+
+legend bottom
+  ● mandatory feature    ○ optional feature
+  Solid line = sub-feature of the node it hangs from; unlabelled junctions are drawing aids, not features
+  Dashed boxes = the four supported levels (always all present) and the run-time constraints that pick the effective level per procedure instance (7.1, 7.4)
+  <<requires>> = cross-tree constraint (12.6): F-BLIND requires F-QUEUE; F-FEEDBACK requires F-OVERRIDE
+  <<excludes>> notation is not used: this product has no mutually exclusive features; "gated procedure never runs at L4" is a run-time object constraint, shown in the dashed note
+  M-xx / O-xx = requirement traced in the matrix (12.4)
+end legend
+
+@enduml

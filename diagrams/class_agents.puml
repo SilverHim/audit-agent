@@ -1,0 +1,326 @@
+@startuml class_agents
+left to right direction
+title Figure 1b  Class Diagram — Agents, Support Services, Contracts and Implementations
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 25
+skinparam ranksep 45
+hide empty members
+hide <<domain>> circle
+
+' ================= Agents (Tier 3 / Tier 4) =================
+package "Agents (Tier 3; A1 realises Tier 4)" as P5 {
+  abstract class Agent {
+    {abstract} run(state : EngagementState) : StatePatch
+  }
+  abstract class ProcedureAgent {
+    {abstract} selectProcedures(riskProfile) : Procedure[]
+    {abstract} execute(procedures) : Finding[]
+    {abstract} interpret(findings) : StatePatch
+  }
+  class "A1 Orchestrator" as A1 {
+    assemblePack(objectives) : Procedure[]
+    coverageGate() : {covered, uncovered,\n scope_limited_pending}
+    schedule(pack) : ScheduleRow[]
+    fanOut(layer) : Send[]
+    mergePatch(patch)
+    checkReassessmentTrigger()
+    interruptAt(gate)
+    queryState(engagementId, scope) : StateView
+    submit(command : ReviewRecord | GateDecision) : Result
+    archive()
+  }
+  class "A2 ClientIntel" as A2 {
+    queryRegistries(abn)
+    scoreAcceptance() : Scorecard
+    confirmPreconditions() : EngagementTerms
+    identifyGovernance()
+    monitorIndependence() : EthicsBreach[]
+    reassessContinuance() : ContinuanceDecision
+    updateProfile()
+  }
+  class "A3 IngestAgent" as A3 {
+    onInboxEvent(file)
+    ingestApi(source)
+    splitAndClassify(file) : Document[]
+    digitize(doc)
+    extract(doc)
+    link(doc)
+    qualityCheck() : Report
+    missingDocumentList() : Item[]
+  }
+  class "A4 RiskAssessor" as A4 {
+    baselineObjectives(trialBalance) : AuditObjective[]
+    rateRisks(objectives) : RiskItem[]
+    proposeMateriality() : Judgment
+    draftPlan() : AuditPlan
+    identifyFRLevelRisks() : RiskItem[]
+    decideControlReliance()
+    revisitMateriality() : AuditPlan
+    signOffReview() : QCReport
+    reassess(evidence) : ReassessmentRequest
+  }
+  class "A5 EvidenceAgent" as A5 {
+    sendConfirmation(party)
+    chaseConfirmation(id)
+    monitorSubsequentEvents()
+    traceOwnership(abn)
+    obtainRepresentationLetter()
+    sendLegalLetter(counsel)
+    scheduleEnquiry(question) : ManagementEnquiry
+    lodgeStatutoryReport(report)
+  }
+  class "A6 FieldworkAgent" as A6 <<multi-instance>> {
+    runProcedure(proc) : ProcedureRun
+    gen09Trigger(judgment) : Boolean
+    gatherMore(proc, judgment) : Evidence[]
+    rerun(proc, judgment, evidence) : Judgment
+  }
+  class "A7 ReviewAgent" as A7 {
+    independentConclusion(evidence) : String
+    compare(own, theirs) : CriticVerdict
+  }
+  class "A8 WorkpaperAgent" as A8 {
+    classifyMisstatement(m)
+    scheduleCommunication(m)
+    verifyCorrection(m, entries)
+    evaluateStatutoryMatters() : StatutoryFindings
+    writeWorkpaper(judgments) : Workpaper
+    lockAndArchive()
+  }
+  class "A9 QCAgent" as A9 {
+    accumulateUncorrected() : Decimal
+    completenessCheck() : QCReport
+    crossIndexCheck() : QCReport
+    reconcileFinancialStatements()
+    checkRepresentations() : LetterStatus
+    ethicsChecklist()
+    routeOpinion() : OpinionRoute
+  }
+  class "A10 ConciergeAgent" as A10 {
+    present(item)
+    explain(question) : String
+    collectDecision() : ReviewRecord | GateDecision
+    draftReport(opinionRoute) : AuditReportVersion
+    revise(annotations) : AuditReportVersion
+    logCommunication(kind) : GovernanceCommunication
+    issueIndependenceDeclaration()
+    fallbackToForm()
+  }
+}
+
+' ================= Support Services =================
+package "Support Services" as P6 {
+  class ProcedureLibrary {
+    load(id) : ProcedureTemplate
+    match(account, assertion, riskLevel) : ProcedureTemplate[]
+    closure(dependsOn) : ProcedureTemplate[]
+  }
+  class JudgmentEngine {
+    buildJudgment(findings, proc) : Judgment
+    computeConfidence(judgment) : Float
+    generateCounterArgument(judgment) : String
+  }
+  class OutputValidator {
+    validateSyntax(raw)
+    validateStructure(raw, schema)
+    validateReferences(judgment)
+    validateSemantics(judgment)
+  }
+  class ReviewQueue {
+    enqueue(task : ReviewTask)
+    rank() : ReviewTask[]
+    adjudicationLane() : ReviewTask[]
+    sampleBlind(rate) : ReviewTask[]
+    agreementStats(procedureId)
+  }
+  class RuleEngine {
+    bindParams(rule, engagement)
+    run(rule) : Exception[]
+  }
+  class AuditTrail {
+    log(entry)
+  }
+  class VectorIndex {
+    search(query, scope, topK) : Hit[]
+  }
+}
+
+' ================= Contracts (interfaces) =================
+package "Contracts (interfaces, depend on nothing)" as P7 {
+  interface StateQuery {
+    queryState(engagementId, scope) : StateView
+  }
+  interface DecisionSubmit {
+    submit(command : ReviewRecord | GateDecision) : Result
+  }
+  interface LLMClient {
+    complete(prompt, outputSchema) : Structured
+  }
+  interface ExternalDataSource {
+    fetch(endpoint, params) : Payload
+    submit(endpoint, payload) : Receipt
+  }
+  interface FinancialDataStore {
+    query(sql, params) : Row[]
+    upsert(table, rows) : Integer
+    dataVersion() : Integer
+  }
+  interface AuditOutputStore {
+    read(id) : Object
+    write(object)
+  }
+  interface EvidenceStore {
+    store(file) : Document
+    resolve(pointer) : Snapshot
+    seal(engagementId) : Hash[]
+  }
+  interface CheckpointSaver {
+    save(threadId, state)
+    load(threadId) : State
+  }
+}
+
+' ================= Implementations (Persistence & Tier 1 adapters) =================
+package "Implementations (Persistence & Tier 1 adapters), injected by composition root" as P9 {
+  class SQLiteFinancialDataStore
+  class JsonAuditOutputStore
+  class FileEvidenceStore
+  class SqliteCheckpointSaver
+  class "LLMProviderAdapter\n(main, critic, mock)" as LLMA
+  class AccountingAdapter
+  class UploadHandler
+  class "BankingAdapter,\nPayrollAdapter" as BankA
+  class RegistryAdapter
+  class ConfirmationAdapter
+}
+
+' ================= Domain objects (see Figure 1a) =================
+package "Domain model & contracts (Figure 1a, 18.3)" as P8 {
+  class EngagementState <<domain>> {
+    phase, audit_objectives, risk_register,\n procedure_pack, judgments, review_tasks, ...
+    one writer per field (18.3.1)
+  }
+  class StatePatch <<domain>> {
+    partial EngagementState returned by an agent;\n merged by A1 after the four checks (8.6)
+  }
+  class Judgment <<domain>>
+  class ReviewTask <<domain>>
+  class ScheduleRow <<domain>>
+  class ReviewRecord <<domain>>
+  class GateDecision <<domain>>
+  class AuditReportVersion <<domain>>
+  class Document <<domain>>
+  class StatutoryReport <<domain>>
+  class GovernanceCommunication <<domain>>
+}
+
+' ================= Inheritance & realisation =================
+Agent <|-- A1
+Agent <|-- ProcedureAgent
+ProcedureAgent <|-- A2
+ProcedureAgent <|-- A3
+ProcedureAgent <|-- A4
+ProcedureAgent <|-- A5
+ProcedureAgent <|-- A6
+ProcedureAgent <|-- A7
+ProcedureAgent <|-- A8
+ProcedureAgent <|-- A9
+ProcedureAgent <|-- A10
+
+A1 ..|> StateQuery
+A1 ..|> DecisionSubmit : validates target version,\ngate state, kind x decision,\ngate x disposition
+SQLiteFinancialDataStore ..|> FinancialDataStore
+JsonAuditOutputStore ..|> AuditOutputStore
+FileEvidenceStore ..|> EvidenceStore
+SqliteCheckpointSaver ..|> CheckpointSaver
+LLMA ..|> LLMClient
+AccountingAdapter ..|> ExternalDataSource
+UploadHandler ..|> ExternalDataSource
+BankA ..|> ExternalDataSource
+RegistryAdapter ..|> ExternalDataSource
+ConfirmationAdapter ..|> ExternalDataSource
+
+' ================= LLM / external-source dependencies summarised in notes =================
+note left of LLMClient
+  Called by A2, A3, A4, A6, A7, A8, A10 (4.1);
+  A7 uses a separate client instance (critic model).
+  A1, A5, A9 never call the LLM.
+end note
+note left of ExternalDataSource
+  Called by A2 (registries), A3 (accounting API,
+  upload inbox), A5 (confirmations, registries;
+  submit for confirmations and statutory lodgement).
+end note
+
+' ================= Other dependencies =================
+A1 ..> ProcedureLibrary : assemblePack
+A1 ..> ScheduleRow : schedule node
+A1 ..> EngagementState : mergePatch, interrupt
+A1 ..> CheckpointSaver
+A1 ..> ReviewQueue : publishes ReviewTasks\nafter mergePatch
+A1 ..> AuditOutputStore : writes Judgments, Exceptions,\nProcedureRuns after mergePatch;\ngate_decisions, review_records, process status
+A3 ..> EvidenceStore
+A3 ..> FinancialDataStore : upsert
+A3 ..> Document
+A6 ..> RuleEngine
+A6 ..> JudgmentEngine
+A6 ..> A7 : invokes as sub-graph
+A6 ..> Judgment : builds (draft in\nthe StatePatch)
+A2 ..> Judgment : llm / hybrid procedures
+A4 ..> Judgment : llm / hybrid procedures
+A8 ..> Judgment : llm / hybrid procedures
+A6 ..> ReviewTask : drafts when human needed\n(Fig. 4b); A1 publishes after mergePatch
+A7 ..> Judgment : writes criticVerdict
+A8 ..> AuditOutputStore : reads judgments by account;\nwrites go through the StatePatch
+A9 ..> AuditOutputStore : reads everything for QC;\nwrites go through the StatePatch
+A10 ..> ReviewQueue
+A10 ..> ReviewTask : presents
+A10 ..> StateQuery : reads state
+A10 ..> DecisionSubmit : submits decisions
+A10 ..> ReviewRecord : builds (verbatim)
+A10 ..> GateDecision : builds (verbatim)
+A10 ..> AuditReportVersion
+A10 ..> GovernanceCommunication : logs verbatim
+A5 ..> StatutoryReport : lodges; dueAt set by A1
+
+JudgmentEngine *-- OutputValidator
+RuleEngine ..> FinancialDataStore : SQL pushdown
+RuleEngine ..> ProcedureLibrary : reads rule YAML
+ReviewQueue ..> AuditOutputStore
+VectorIndex ..> EvidenceStore
+
+note bottom of AuditTrail
+  Every agent and service writes AuditTrail
+  (LLM calls, human actions, state transitions,
+  rule runs, external actions, failures).
+  Edges omitted for readability.
+end note
+note top of Agent
+  All agents exchange EngagementState
+  through A1 (StatePatch); only A6 -> A7
+  is a direct sub-graph call (5.3).
+end note
+note bottom of DecisionSubmit
+  Single write path for human decisions:
+  A10 panel and Tier 5 fallback forms both
+  submit the whole ReviewRecord or GateDecision;
+  A1 checks targetVersion, gate state and the
+  task kind x decision and gate x disposition
+  matrices before writing
+  (18.5, UC-04).
+end note
+
+' ================= Layout hints =================
+A1 -[hidden]down- A6
+A2 -[hidden]down- A7
+A3 -[hidden]down- A8
+A4 -[hidden]down- A9
+A5 -[hidden]down- A10
+Agent -[hidden]down- ProcedureLibrary
+ReviewQueue -[hidden]down- StateQuery
+FinancialDataStore -[hidden]down- SQLiteFinancialDataStore
+@enduml

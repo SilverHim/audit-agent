@@ -1,0 +1,79 @@
+@startuml state_objects_member_c
+left to right direction
+title Figure 3b-2  Object State Machines — Misstatement, StatutoryReport, Document   (event [guard] / action)\n[Individual task · Member C]
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam state {
+  BackgroundColor<<settled>> #E8F5E9
+  BackgroundColor<<wait>> #E3EEFF
+}
+
+state "Misstatement" as MS {
+  state "identified" as MS_identified
+  state "communicated" as MS_communicated
+  state "verifying" as MS_verifying
+  state "corrected" as MS_corrected <<settled>>
+  state "partially_corrected" as MS_partial
+  state "uncorrected" as MS_uncorrected
+  state "evaluated" as MS_evaluated <<settled>>
+  state "closed" as MS_closed <<settled>>
+  [*] --> MS_identified : decisionSubmitted\n[r.misstatement]
+  MS_identified --> MS_communicated : communicated (FIN-08)
+  MS_communicated --> MS_verifying : adjustmentReceived\n/ GEN-05 incremental, FIN-09
+  MS_communicated --> MS_uncorrected : managementDeclined\nor stopWaiting [human]
+  MS_verifying --> MS_corrected : verified [entries match,\nresidual = 0]
+  MS_verifying --> MS_partial : verified [entries match,\nresidual > 0] / residualAmount
+  MS_verifying --> MS_communicated : verified [entries mismatch]\n/ re-communicate
+  MS_partial --> MS_evaluated : decisionSubmitted [FIN-01]\n(residual counted in FIN-04\nonly if > clearlyTrivial)
+  MS_uncorrected --> MS_evaluated : decisionSubmitted [FIN-01]
+  MS_corrected --> MS_closed : engagementArchived
+  MS_evaluated --> MS_closed : engagementArchived
+}
+
+state "StatutoryReport" as SR {
+  state "pending" as SR_pending <<wait>>
+  state "lodged" as SR_lodged <<settled>>
+  state "not_required" as SR_nr <<settled>>
+  SR_pending : dueAt - 3d or overdue / escalate (A10)
+  [*] --> SR_pending : created (GEN-14, A5)\n/ dueAt = awareDate + 28d (s311)\nor 7d (s990K, s324CA), not editable
+  SR_pending --> SR_lodged : decisionSubmitted [d.disposition = lodge]\n/ A5 lodges in the prescribed form, lodgedAt
+  SR_pending --> SR_nr : decisionSubmitted\n[d.disposition = not_required] / reason
+}
+note bottom of SR
+  Driven by a persisted timer, independent of the engagement phase;
+  survives Withdrawn (M-12). Any pending record blocks Gate_RPT01
+  (Figure 3a). d = GateDecision on the GEN-14 gate.
+end note
+
+state "Document" as DOC {
+  state resume <<choice>>
+  state "done" as DOC_done <<settled>>
+  state "needs_manual" as DOC_manual <<wait>>
+  [*] --> received : inboxEvent (A3)
+  received --> classified : classifyDone (DOC-01)
+  received --> DOC_manual : classifyFailed [after 1 retry]\n/ failedStep = classify
+  classified --> digitized : digitizeDone (DOC-02/03)
+  classified --> DOC_manual : digitizeFailed\n/ failedStep = digitize
+  digitized --> extracted : extractDone (DOC-04..06)
+  digitized --> DOC_manual : extractFailed\n/ failedStep = extract
+  extracted --> linked : linkDone (DOC-07)
+  extracted --> DOC_manual : linkFailed\n/ failedStep = link
+  linked --> DOC_done : reliabilityTagged
+  DOC_manual --> resume : humanCompletedStep
+  resume --> classified : [failedStep = classify]
+  resume --> digitized : [failedStep = digitize]
+  resume --> extracted : [failedStep = extract]
+  resume --> linked : [failedStep = link]
+}
+note bottom of DOC
+  Each state means "that step is complete". Event-driven by A3, independent of phase.
+  done is settled, not final: a re-upload creates a new Document version.
+end note
+
+legend right
+  Green = settled (counts for QC).
+  r = ReviewRecord.decision, submitted via DecisionSubmit
+  (defined in the Procedure note, Figure 3b-1, Member B).
+endlegend
+@enduml

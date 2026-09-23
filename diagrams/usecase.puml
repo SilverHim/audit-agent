@@ -1,0 +1,108 @@
+@startuml usecase
+left to right direction
+title Figure 6  Use Case Diagram — Actors and the Nine Use Cases\n(the phase P0–P4 in which each use case runs is shown in the ellipse; agents are not modelled here)
+
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam packageStyle rectangle
+skinparam nodesep 30
+skinparam ranksep 90
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+skinparam rectangle {
+  BorderColor #333333
+  BackgroundColor #FFFFFF
+}
+
+' ================= Actor: the human user, on the left =================
+actor "RCA\n(Registered\nCompany Auditor)" as RCA
+
+' ================= Actors: external parties, on the right =================
+actor "Client\n(audited entity: management\nand those charged\nwith governance)" as CL
+actor "External Data Source\n(ASIC Connect / ABN Lookup,\naccounting systems,\nconfirmation platform)" as EXT
+actor "EQR Reviewer" as EQR
+
+' ================= System boundary =================
+rectangle "Audit Support System" as SYS {
+  usecase "UC-01\nEngagement acceptance\n(P0)" as UC01
+  usecase "UC-02\nPlanning and risk assessment\n(P1)" as UC02
+  usecase "UC-03\nProcedure execution and\nfull-population JE testing\n(P2)" as UC03
+  usecase "UC-04\nException review and\njudgment confirmation\n(P2)" as UC04
+  usecase "UC-05\nRisk re-assessment\n(P2 -> P1)" as UC05
+  usecase "UC-06\nCompletion evaluation and\nreport generation\n(P3 -> P4)" as UC06
+  usecase "UC-07\nArchiving and\nengagement switch\n(P4 -> Archived)" as UC07
+  usecase "UC-08\nProgress and\nprovenance enquiry\n(any phase)" as UC08
+  usecase "UC-09\nStatutory notification\nand withdrawal\n(any phase)" as UC09
+}
+
+' ================= Associations: left actors =================
+RCA -- UC01
+RCA -- UC02
+RCA -- UC03 : manual-engine\nprocedures
+RCA -- UC04
+RCA -- UC05
+RCA -- UC06
+RCA -- UC07
+RCA -- UC08
+RCA -- UC09
+
+UC01 -- CL : engagement letter,\nmanagement undertakings
+UC02 -- CL : draft statements,\ndocuments, further data
+UC06 -- CL : response on misstatements,\nadjusting entries,\nrepresentation letter
+UC05 -- CL : governance discussion\nafter a fraud trigger (GEN-16)
+UC09 -- CL : NOCLAR discussion,\ngovernance response\n(GEN-13, EthicsBreach)
+
+UC01 -- EXT : ASIC registration,\nABN validity,\ncourt records
+UC02 -- EXT : accounting\nsystem feed
+UC03 -- EXT : confirmations (A5),\naccounting data
+UC04 -- EXT : evidence for\nadditional procedures (A5)
+UC06 -- EXT : adjusting entries\nvia API
+UC09 -- EXT : lodgement in the\nprescribed form
+
+UC06 -- EQR : pre-signature review\n[eqr_required]
+UC07 -- EQR : read-only access\nto the archive
+
+' ================= Explicit use case relations =================
+UC05 .[norank].> UC04 : <<extend>> (a)
+UC09 .[norank].> UC05 : <<extend>> (b)
+UC09 .[norank].> UC02 : <<extend>> (c)
+UC09 .[norank].> UC04 : <<extend>> (d)
+UC09 .[norank].> UC06 : <<extend>> (e)
+
+' ================= Notes =================
+
+' ================= Legend =================
+legend right
+  |= Notation |= Meaning |
+  | actor to use case | association; the label states what the actor supplies or receives |
+  | <<extend>> | conditional insertion; the arrow points from the extending use case to the base, guard letter on the arrow |
+  | (a) | uncorrected misstatements exceed 70% of overall materiality |
+  | (b) | GATE-R decision = withdraw |
+  | (c) | AwaitingData retries exhausted -> ACC-10 |
+  | (d) | NOCLAR found, or management refuses to remove a scope limitation |
+  | (e) | FIN-18 representations unreliable, or FIN-10 independence breach |
+  | (P0 … P4) | phase of the main state machine (12.3) in which the use case runs |
+  |= Rule |= |
+  | Single entry | every human interaction passes through A10; agents are not shown inside the boundary |
+  | Actor scope | Client supplies data, documents and letters and answers enquiries and communications as management or governance; External Data Source covers registry, accounting and confirmation interfaces and statutory lodgement |
+  | Guard, not a relation | an undecided statutory notification in UC-09 blocks RPT-01 in UC-06 (M-12) |
+  | Trigger, not a relation | UC-02 to UC-03, UC-06 to UC-07, and queue-driven entry into UC-04 are state transitions |
+  | UC-03 | started automatically by the P1 -> P2 transition; RCA performs the manual-engine procedures inside it, A5 reaches the confirmation platform |
+  | UC-07 extension points | workpaper added after archiving -> Amended; facts known after the report date -> RPT-11 PostReportFacts re-opens P3 ReExecuting, then P4 |
+endlegend
+
+' ================= Layout =================
+CL -[hidden]right- EXT
+EXT -[hidden]right- EQR
+UC01 -[hidden]left- UC02
+UC02 -[hidden]left- UC03
+UC03 -[hidden]left- UC04
+UC04 -[hidden]left- UC06
+UC06 -[hidden]left- UC07
+UC07 -[hidden]left- UC08
+UC05 -[hidden]left- UC09
+UC04 -[hidden]down-> UC05
+UC06 -[hidden]down-> UC09
+@enduml

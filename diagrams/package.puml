@@ -1,0 +1,212 @@
+@startuml package
+title Figure 2  Package Diagram — Modules, Contracts and External Systems\n(dependencies point downward or to the Contracts package; no cycles)
+
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 20
+skinparam ranksep 40
+
+' ================= Tier 5 =================
+package "Tier 5  Presentation & Access" as T5 {
+  package "Frontend (React)" as FE {
+    [A10 panel\n(chat + structured queue view)] as Panel
+    [Drill-down views] as Drill
+    [Fallback forms] as Forms
+    [Client document portal] as Portal
+  }
+  package "API (FastAPI)" as API {
+    [Auth & engagement\nauthorisation] as Auth
+    [Chat & queue endpoints] as ChatEP
+    [Upload endpoint] as UpEP
+    [StateQuery / DecisionSubmit\nHTTP facade] as Facade
+    [App bootstrap\n(composition root)] as Boot
+  }
+}
+
+' ================= Tier 4 =================
+package "Tier 4  Orchestration (realised by A1 Orchestrator)" as T4 {
+  [StateGraph P0–P4] as SG
+  [GateController\n(6 static interrupts + dynamic\nGATE-R, PLN-18, ACC-10, GEN-14)] as GC
+  [PackAssembler] as PA
+  [Scheduler] as SCH
+  [TrailWriter] as TW
+  [StateQuery / DecisionSubmit\nimplementation\n(validates target version, gate state,\nkind x decision, gate x disposition)] as DS
+}
+
+' ================= Tier 3 =================
+package "Tier 3  Agents" as T3 {
+  [Agent / ProcedureAgent\nbase classes] as Base
+  [A2 ClientIntel] as A2
+  [A3 IngestAgent] as A3
+  [A4 RiskAssessor] as A4
+  [A5 EvidenceAgent] as A5
+  [A6 FieldworkAgent ×N] as A6
+  [A7 ReviewAgent] as A7
+  [A8 WorkpaperAgent] as A8
+  [A9 QCAgent] as A9
+  [A10 ConciergeAgent] as A10
+}
+
+' ================= Support Services =================
+package "Support Services" as SV {
+  [ProcedureLibrary] as PL
+  [JudgmentEngine\n+ OutputValidator] as JE
+  [ReviewQueue] as RQ
+  [RuleEngine] as RE
+  [AuditTrail] as AT
+  [VectorIndex] as VI
+}
+
+' ================= Domain Model & Contracts =================
+package "Domain Model & Contracts\n(depends on nothing)" as DM {
+  [Domain classes\n(Figure 1a)] as Dom
+  [EngagementState / StatePatch] as ESP
+  [Store interfaces:\nFinancialDataStore, AuditOutputStore,\nEvidenceStore, CheckpointSaver] as StoreIf
+  [LLMClient,\nExternalDataSource interfaces] as ExtIf
+  [StateQuery, DecisionSubmit\ninterfaces] as UiIf
+}
+
+' ================= Tier 2 =================
+package "Tier 2  Knowledge" as T2 {
+  package "Versioned knowledge\n(Git /knowledge, commit frozen per engagement)" as T2V {
+    [Procedure YAML ×161] as YAML
+    [rules.json] as Rules
+    [Standards fragments] as Std
+  }
+  package "Runtime knowledge data\n(/runtime, row-versioned, not in Git)" as T2R {
+    [Client profiles] as Prof
+    [agreement_stats.json] as Stats
+    [Vector index\nper engagement] as VIdx
+  }
+}
+
+' ================= Persistence =================
+package "Persistence (implementations)" as PS {
+  [SQLiteFinancialDataStore] as FDS
+  [JsonAuditOutputStore] as AOS
+  [FileEvidenceStore] as ES
+  [SqliteCheckpointSaver] as CK
+}
+
+' ================= Tier 1 =================
+package "Tier 1  Data Access & Adapters" as T1 {
+  [AccountingAdapter\n(A3)] as AccA
+  [UploadHandler +\ninbox watcher (A3)] as UpA
+  [BankingAdapter,\nPayrollAdapter (A3)] as BankA
+  [RegistryAdapter\n(A2, A5)] as RegA
+  [ConfirmationAdapter\n(A5)] as ConfA
+  [LLM provider adapters\n(main, critic, mock)] as LLMA
+}
+
+' ================= External =================
+package "External Systems (outside system boundary)" as EXT #EEEEEE {
+  [Accounting systems\n(Xero, MYOB, QuickBooks, NetSuite)] as XAcc
+  [ASIC Connect /\nABN Lookup] as XAsic
+  [ATO STP,\nOpen Banking / CDR] as XBank
+  [Confirmation\nplatform] as XConf
+  [LLM services] as XLLM
+}
+
+' ================= Cross-cutting =================
+package "Cross-cutting" as CC {
+  [Config & secrets] as Cfg
+  [Logging &\nobservability] as Log
+}
+
+' ================= Dependencies =================
+FE ..> API : HTTP / WebSocket
+API ..> T4 : StateQuery,\nDecisionSubmit
+API ..> T3 : A10 dialogue
+Boot ..> PS : wires implementations
+Boot ..> T1 : wires adapters
+T4 ..> T3 : invokes agents\n(nodes, Send)
+T4 ..> SV : ProcedureLibrary,\nAuditTrail
+T3 ..> SV
+T3 ..> T2R : profiles (A2)
+SV ..> T2V : YAML, rules,\nfragments
+SV ..> T2R : stats, vector index
+
+T5 ..> DM
+T4 ..> DM
+T3 ..> DM
+SV ..> DM
+PS ..|> DM : implements\nstore interfaces
+T1 ..|> DM : implements LLMClient,\nExternalDataSource
+T1 ..> EXT
+
+note bottom of CC
+  Used by every package
+  (edges omitted).
+end note
+note bottom of DM
+  Flows that cross tiers upward go through
+  these interfaces, never through code references:
+  upload -> EvidenceStore -> A3 watcher (event);
+  decision -> DecisionSubmit -> Tier 4 validates
+  target version & gate, then writes.
+  Chat panel and fallback forms share DecisionSubmit.
+end note
+
+' ================= Layout =================
+Panel -[hidden]right- Drill
+Drill -[hidden]right- Forms
+Forms -[hidden]right- Portal
+Auth -[hidden]right- ChatEP
+ChatEP -[hidden]right- UpEP
+UpEP -[hidden]right- Facade
+Facade -[hidden]right- Boot
+Panel -[hidden]down- Auth
+SG -[hidden]right- GC
+GC -[hidden]right- PA
+PA -[hidden]right- SCH
+SCH -[hidden]right- TW
+TW -[hidden]right- DS
+Base -[hidden]right- A2
+A2 -[hidden]right- A3
+A3 -[hidden]right- A4
+A4 -[hidden]right- A5
+A6 -[hidden]right- A7
+A7 -[hidden]right- A8
+A8 -[hidden]right- A9
+A9 -[hidden]right- A10
+Base -[hidden]down- A6
+PL -[hidden]right- JE
+JE -[hidden]right- RQ
+RQ -[hidden]right- RE
+RE -[hidden]right- AT
+AT -[hidden]right- VI
+YAML -[hidden]right- Rules
+Rules -[hidden]right- Std
+Prof -[hidden]right- Stats
+Stats -[hidden]right- VIdx
+YAML -[hidden]down- Prof
+FDS -[hidden]right- AOS
+AOS -[hidden]right- ES
+ES -[hidden]right- CK
+AccA -[hidden]right- UpA
+UpA -[hidden]right- BankA
+BankA -[hidden]right- RegA
+RegA -[hidden]right- ConfA
+ConfA -[hidden]right- LLMA
+XAcc -[hidden]right- XAsic
+XAsic -[hidden]right- XBank
+XBank -[hidden]right- XConf
+XConf -[hidden]right- XLLM
+Dom -[hidden]down- ESP
+ESP -[hidden]down- StoreIf
+StoreIf -[hidden]down- ExtIf
+ExtIf -[hidden]down- UiIf
+Cfg -[hidden]down- Log
+
+Auth -[hidden]down- SG
+SG -[hidden]down- Base
+A6 -[hidden]down- PL
+PL -[hidden]down- FDS
+CK -[hidden]right- YAML
+FDS -[hidden]down- AccA
+AccA -[hidden]down- XAcc
+A10 -[hidden]right- Dom
+VIdx -[hidden]right- Cfg
+@enduml

@@ -1,0 +1,495 @@
+@startuml class_domain
+left to right direction
+title Figure 1a  Class Diagram — Domain Model
+
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 30
+skinparam ranksep 40
+hide empty members
+
+' ================= Engagement & Planning =================
+package "Engagement & Planning" as P1 {
+  class Firm
+  class Engagement {
+    engagementId
+    phase : {P0..P4, Archived, Declined, Withdrawn}
+    versionSnapshot : {libraryCommit, standardsVersion,\n modelVersion, criticModelVersion}
+    transition(phase)
+  }
+  class AuditPlan <<immutable version>> {
+    version : Integer
+    status : {draft, approved, superseded}
+    scope, timetable
+    materiality : Decimal
+    performanceMateriality : Decimal
+    clearlyTrivial : Decimal
+    significantRiskAreas : AuditObjective[]
+    resources
+    eqrRequired : Boolean
+    eqrBasis
+    eqrRecord : {reviewer, eligibility,\n notifications, openItems[], completedAt}
+    applicableFramework : {tier1_gpfs,\n tier2_gpfs, special_purpose}
+    engagementLetterRef
+    overallResponses : {type, narrative, rationale}[]
+    controlReliance : {relied, not_relied, mixed}
+    classMaterialities : {scope, basis, amount,\n performanceAmount, reason}[]
+    unpredictabilitySeed : Integer
+    auditorExpertNotRequired : Boolean
+    feeDependencyReview
+    packSnapshot : {procedureId, templateCommit,\n params, timing, origin}[]
+    narrative
+    revisionReason
+    approvedBy, approvedAt
+    approve(user)
+    eqrComplete() : Boolean
+  }
+  class FinancialStatements {
+    version : Integer
+    lineItems : {name, amount,\n mappedTrialBalanceRefs[], evidence}[]
+    disclosureItems : {name, requiredBy,\n present, evidence}[]
+    directorsDeclarationRef
+    preparedAt
+  }
+  class AuditObjective {
+    account
+    assertion : Assertion
+    origin : {baseline, llm_added}
+    type : {account, disclosure}
+    substantiveAloneInsufficient : Boolean
+    isMaterial : Boolean
+    riskLevel : {low, medium, high, significant}
+    status : {planned, covered, completed, exception_open}
+    isCovered() : Boolean
+  }
+  class RiskItem {
+    assertion : Assertion [0..1]
+    level : {low, medium, high, significant}
+    judgmentRef : {id, version}
+    scope : {financial_report, assertion}
+    fraudRelated : Boolean
+    presumptionRebutted : Boolean
+    rebuttalReason
+    version : Integer
+    revisionReason
+    approvedBy : User
+    revise(level, reason, user)
+  }
+  class ScheduleRow {
+    layer : Integer
+    instance
+    procedures : String[]
+  }
+}
+
+' ================= Procedure Library (Tier 2) =================
+package "Procedure Library (Tier 2)" as P2 {
+  enum AutonomyLevel {
+    L1 Advisory
+    L2 Judgment+Review
+    L3 Exception-based
+    L4 Autonomous
+  }
+  enum Engine {
+    rule
+    llm
+    hybrid
+    manual
+  }
+  class ProcedureTemplate {
+    id, name, cycle, owner
+    assertions : Assertion[]
+    engine : Engine
+    defaultAutonomy : AutonomyLevel
+    triggers : TriggerCondition[]
+    params : Map
+    dependsOn : ProcedureTemplate[]
+    optionalDependsOn : ProcedureTemplate[]
+    standards : String[]
+    requiredFields : String[]
+    contextBudget : Integer
+    inputs : Map
+    outputSchema : Map
+    matches(objective) : Boolean
+    paramsFor(riskLevel) : Map
+    instantiate(params, timing) : Procedure
+  }
+  class DowngradeRule {
+    condition
+    delta : Integer
+    targetLevel : AutonomyLevel
+    blind : Boolean
+    apply(level) : AutonomyLevel
+  }
+  class Procedure {
+    templateCommit : Hash
+    objectiveIds : String[]
+    params, timing
+    autonomyLevel : AutonomyLevel
+    blind : Boolean
+    status : {planned, executing, awaiting_human,\n in_dispute, interim_completed, completed,\n needs_review, not_applicable_pending,\n not_applicable, scope_limited}
+    loop1Rounds : Integer
+    periodCovered : Boolean
+    selection : {means, population, criterion}
+    scopeLimitation : {limitationSource,\n inabilityCircumstances, inabilityReasons,\n alternativeProceduresPerformed,\n alternativeJustification,\n objectiveFailureEvaluation}
+    countDate, countScope
+    markNeedsReview()
+    markNotApplicable(reason)
+    markScopeLimited(approvedBy)
+    isTerminal() : Boolean
+  }
+  class ProcedureRun {
+    runNo : Integer
+    trigger : {initial, loop1_retry, loop2_extend,\n rerun, needs_review, correction}
+    batchNo : Integer
+    instance
+    paramsSnapshot : Map
+    inputVersions : {dataVersion, evidenceHashes[],\n riskItemVersion, planVersion}
+    startedAt, endedAt
+    status : {running, succeeded, failed}
+    failureReason
+  }
+  class Finding
+  class Exception {
+    ruleId, severity
+    entryIds : String[]
+    evidence : EvidencePointer[]
+    controlFailure : Boolean
+    disposition : {attributed,\n unattributed, not_applicable}
+  }
+}
+
+' ================= Judgment & Evidence =================
+package "Judgment & Evidence" as P3 {
+  class Judgment {
+    id, version : Integer
+    conclusion
+    confidence : Float
+    counterArgument
+    proposedAction : {accept, close, misstatement, more_evidence}
+    autonomyLevel : AutonomyLevel
+    blind : Boolean
+    criticVerdict : {consistent, inconsistent,\n not_applicable, skipped}
+    criticReason
+    criticReasonType : {insufficient_evidence,\n different_conclusion, reasoning_error}
+    disputeRounds : Integer
+    reviewStatus : {pending, confirmed, overridden, stale}
+    dependsOnVersions : {evidence[], riskItem, auditPlan}
+    blindTest : {none, pending, consistent, inconsistent}
+    performedBy : User
+    createdAt : DateTime
+    biasIndicator : {none, suspected, confirmed}
+    conflictingEvidence : {pointerA,\n pointerB, resolution}
+    supersede(newJudgment)
+    markStale()
+    isDispute() : Boolean
+  }
+  class ReasoningStep {
+    kind : {fact, standard, inference,\n assumption, limitation}
+    text
+    from : Integer[]
+    status : {supported, unsupported}
+  }
+  class EvidencePointer {
+    type : {voucher, contract, bank, delivery,\n external, expert_report, standard}
+    sourceId
+    locator
+    reliability : {external_original, external_copy,\n internal_original, internal_copy}
+    snapshot : Hash
+    resolve() : Snapshot
+  }
+  class Misstatement {
+    type : {factual, judgmental, projected}
+    account, assertion
+    amount : Decimal
+    direction : {overstated, understated}
+    fraudIndicative : Boolean
+    fraudReason
+    origin : {current_period,\n prior_period_uncorrected}
+    status : {identified, communicated, verifying,\n corrected, partially_corrected,\n uncorrected, evaluated, closed}
+    communicatedAt
+    managementResponse
+    adjustmentEntryIds : String[]
+    residualAmount : Decimal
+    evaluation : {material, immaterial}
+    evaluationReason
+    communicate()
+    recordResponse(text)
+    verify(adjustmentEntries)
+    evaluate(decision, reason)
+  }
+  class Workpaper {
+    procedureId, runIds[]
+    judgmentRefs : {id, version}[]
+    natureTimingExtent
+    resultsAndEvidence : EvidencePointer[]
+    significantMatters[]
+    performedBy : User
+    completedAt
+    reviewedBy : User
+    reviewedAt
+    reviewExtent : {full, exception_only,\n sampled_10pct, sign_off_review}
+    crossIndex[]
+  }
+  class Confirmation {
+    type : {bank, receivable, legal,\n third_party_inventory}
+    confirmingParty, addressVerifiedBy
+    sentBy, sentAt, repliedAt
+    receiptChannel : {direct_mail, direct_email,\n portal_via_client, oral}
+    result : {agreed, difference,\n no_reply, refused}
+    managementRefused : Boolean
+    refusalReason, reasonValid
+    reliabilityDoubt, doubtResolution
+    exceptionIds[]
+  }
+  class SubsequentEvent
+}
+
+' ================= Human Decisions & Report =================
+package "Human Decisions & Report" as P5 {
+  class ReviewTask {
+    kind : {normal, blind, dispute, unattributed,\n failed, scope_limited, na_pending}
+    targetType : {Judgment, Exception,\n ProcedureRun, Procedure}
+    targetId
+    targetVersion : Integer
+    tier : Integer
+    status : {pending, presented, decided}
+    createdAt, presentedAt
+    resolveTarget() : Object
+    allowedDecisions() : Decision[]
+  }
+  class ReviewRecord {
+    taskId
+    targetVersion : Integer
+    decision : {confirm, override, misstatement,\n more_procedures, dispute_resolution,\n scope_limited, rerun, manual_result,\n not_applicable, evidence_unreliable}
+    reason
+    overrideConclusion
+    disputeResolution : {a6_upheld,\n a7_upheld, neither}
+    neitherAction : {human_conclusion,\n more_procedures}
+    requestedProcedures : String[]
+    misstatementDraft : {type, account,\n assertion, amount, direction}
+    rerunParams : Map
+    manualResult : {conclusion, evidence[]}
+    consulted : Boolean
+    consultationRecord
+    reviewedBy : User
+    decidedAt : DateTime
+    dwellSeconds : Integer
+    reviewExtent : {full, exception_only,\n sampled_10pct}
+  }
+  class GateDecision {
+    gate : {ACC-01, ACC-08, ACC-10, PLN-01/03,\n PLN-15, PLN-18, FIN-01/02, RPT-01,\n GATE-R, GEN-14}
+    targetId
+    targetVersion : Integer
+    edits : {targetId, field, newValue,\n reason, rebuttalReason}[]
+    decision : {approve, reject, insufficient_info}
+    disposition : per gate (ACC-10: continue |\n modify_opinion | withdraw; GEN-14: lodge |\n not_required; FIN-01: opinion type)
+    decidedBy : User
+    decidedAt : DateTime
+    reason
+  }
+  class AuditReportVersion {
+    version : Integer
+    opinionType : {unqualified, qualified,\n adverse, disclaimer}
+    sections : {opinion, basisForOpinion,\n goingConcern, keyAuditMatters,\n otherInformation, otherLegalAndRegulatory,\n emphasisOfMatter[], otherMatter[]}
+    reportDate : Date
+    status : {draft, annotated, approved, signed}
+    judgmentRefs : {id, version}[]
+    annotations : String[]
+    approvedBy, approvedAt
+  }
+  class AuditOpinion {
+    type : {unqualified, qualified, adverse, disclaimer}
+    signedAt
+  }
+}
+
+' ================= Statutory, Communication & Representations =================
+package "Statutory, Communication & Representations" as P6 {
+  class GovernanceCommunication {
+    matter
+    kind : {planning_scope, fraud, deficiency,\n uncorrected_misstatements,\n expected_modification, completion, other}
+    form : {written, oral}
+    communicatedAt, recipients[]
+    documentRef, response
+    requiredBy
+  }
+  class ManagementEnquiry {
+    question, triggeredByProcedure
+    askedAt, respondent
+    responseText
+    corroboratingEvidence : EvidencePointer[]
+    corroborationVerdict : {corroborated,\n contradicted, uncorroborated}
+  }
+  class ControlDeficiency {
+    description
+    affectedAssertions : Assertion[]
+    source : {walkthrough, p2_exception,\n understanding}
+    relatedExceptionId, relatedJudgmentId
+    isSignificant : Boolean
+    significanceReason, potentialEffect
+    status : {open, communicated_management,\n communicated_governance, remediated}
+  }
+  class NoclarMatter {
+    facts, awareDate, source
+    discussedWith, response
+    responseAdequate : Boolean
+    isSuspected, materialToFR : Boolean
+    disposition : {no_action, communicated,\n reported, withdrawn}
+  }
+  class StatutoryReport {
+    legalBasis : {s311, s990K, s324CA}
+    awareDate, dueAt : Date
+    status : {pending, lodged, not_required}
+    decidedBy, decisionReason
+    lodgedAt, form, copiesSentTo[]
+    attachments : Document[]
+  }
+  class EthicsBreach {
+    description
+    interestOrRelationshipEnded : Boolean
+    consequenceEvaluation
+    governanceCommunicatedInWriting : Boolean
+    governanceConcurred : Boolean
+    disposition : {continued, withdrawn}
+  }
+  class WrittenRepresentationLetter {
+    status : {requested, obtained,\n refused, unreliable}
+    representations : {clause, kind, present}[]
+    signedBy[], datedAt : Date
+    inconsistencies[]
+  }
+  class UncorrectedMisstatementSchedule {
+    items : {misstatementId, amount,\n origin, evaluation}[]
+    rollover, ironCurtain : Decimal
+    preparerConclusion
+  }
+  class Consultation {
+    matter, raisedFrom
+    consultedWith, consultedWithBasis
+    date, natureAndScope, conclusion
+    agreed : Boolean
+    implementedIn
+  }
+}
+
+' ================= Offline Documents =================
+package "Offline Documents" as P4 {
+  class Document {
+    id
+    type : {contract, invoice, expense_claim,\n bank_statement, stocktake, confirmation,\n minutes, financial_statements,\n directors_declaration, annual_report,\n expert_report, engagement_letter,\n representation_letter, legal_letter, other}
+    sourceChannel : {api, upload, ocr}
+    hash : Hash
+    ocrConfidence : Float
+    reliability
+    status : {received, classified, digitized,\n extracted, linked, done, needs_manual}
+    advance()
+    failToManual(reason)
+  }
+  class Contract {
+    counterparty, counterpartyAbn
+    type : {sales, purchase, lease, loan, service}
+    amount : Decimal
+    effectiveTerms() : ContractTerm[]
+  }
+  class ContractVersion {
+    version : Integer
+    signDate
+  }
+  class ContractTerm {
+    termType : {payment, control_transfer, return,\n rebate, termination, guarantee, related_party}
+    text, page, bbox
+    supersedesTermId
+  }
+}
+
+' ================= Relationships =================
+Firm "1" -- "*" Engagement
+Engagement "1" -- "0..*" AuditPlan : versions
+Engagement "1" --> "0..1" AuditPlan : currentPlan
+Engagement "1" -- "*" AuditObjective
+Engagement "1" -- "*" RiskItem
+Engagement "1" -- "*" Procedure
+Engagement "1" -- "*" ScheduleRow
+Engagement "1" -- "*" Misstatement
+Engagement "1" -- "*" Document
+Engagement "1" -- "*" Workpaper
+Engagement "1" -- "*" Confirmation
+Engagement "1" -- "*" SubsequentEvent
+Engagement "1" -- "*" GateDecision
+Engagement "1" -- "0..*" AuditReportVersion
+Engagement "1" -- "0..1" AuditOpinion : none if declined
+
+AuditObjective "*" -- "*" Procedure : coveredBy
+AuditObjective "0..1" -- "*" RiskItem : assertion scope: objective and\nassertion required; financial_report\nscope: both empty, hangs off Engagement
+RiskItem "*" -- "0..1" Judgment : judgmentRef
+AuditPlan "*" o-- "*" Procedure : furtherProcedures\n(params of that version\nin packSnapshot)
+
+Procedure "*" --> "1" ProcedureTemplate : template
+ProcedureTemplate --> AutonomyLevel : defaultAutonomy
+ProcedureTemplate --> Engine
+ProcedureTemplate "1" *-- "*" DowngradeRule
+Procedure "1" *-- "0..*" ProcedureRun
+ProcedureRun "1" -- "*" Finding
+Finding "1" -- "*" Exception
+ProcedureRun "1" -- "*" Judgment
+
+Judgment "1" *-- "1..*" ReasoningStep
+Judgment "1" *-- "1..*" EvidencePointer
+ReasoningStep "*" --> "*" EvidencePointer : required for fact & standard
+Judgment "0..1" --> "0..1" Judgment : supersededBy
+Judgment "1" <-- "0..1" Misstatement : judgmentId
+AuditObjective "1" <-- "*" Misstatement : objectiveId
+Misstatement "0..*" --> "0..1" Procedure : verifiedByProcedure
+
+Engagement "1" -- "*" ReviewTask
+ReviewTask "1" -- "0..*" ReviewRecord : decision history;\ntargetVersion copied from task
+ReviewTask "*" ..> "0..1" Judgment : target when\ntargetType = Judgment
+note bottom of ReviewTask
+  target resolves by targetType to a Judgment,
+  an Exception (hybrid fallback, unattributed),
+  a ProcedureRun (llm failed) or a Procedure
+  (scope_limited request). Version bound (18.5).
+  allowedDecisions() is the kind x decision matrix
+  (UC-04) that A1 checks at DecisionSubmit.
+end note
+AuditReportVersion "*" --> "*" Judgment : cites id+version
+AuditOpinion "0..1" --> "1" AuditReportVersion : signedVersion
+
+Contract "1" *-- "1..*" ContractVersion
+ContractVersion "0..1" -- "1" Document
+ContractVersion "1" *-- "0..*" ContractTerm
+Confirmation "0..1" --> "0..1" Document : replyDocument
+
+Engagement "1" -- "0..1" FinancialStatements
+Engagement "1" -- "*" GovernanceCommunication
+Engagement "1" -- "*" ManagementEnquiry
+Engagement "1" -- "*" ControlDeficiency
+Engagement "1" -- "*" NoclarMatter
+NoclarMatter "1" -- "0..*" StatutoryReport
+Engagement "1" -- "*" EthicsBreach
+Engagement "1" -- "0..1" WrittenRepresentationLetter
+WrittenRepresentationLetter "1" -- "0..1" UncorrectedMisstatementSchedule : attached
+Engagement "1" -- "*" Consultation
+Procedure "1" -- "0..1" Workpaper : one per settled procedure
+ControlDeficiency "*" ..> "0..1" Exception : relatedExceptionId
+note bottom of StatutoryReport
+  dueAt = awareDate + 28 days (s311)
+  or + 7 days (s990K, s324CA); computed
+  by A1, not editable (M-12). Pending
+  reports block RPT-01.
+end note
+
+' ================= Layout hints =================
+ProcedureTemplate -[hidden]down- Contract
+ReviewTask -[hidden]down- ReviewRecord
+ReviewRecord -[hidden]down- GateDecision
+GovernanceCommunication -[hidden]down- NoclarMatter
+NoclarMatter -[hidden]down- StatutoryReport
+ManagementEnquiry -[hidden]down- ControlDeficiency
+EthicsBreach -[hidden]down- WrittenRepresentationLetter
+WrittenRepresentationLetter -[hidden]down- UncorrectedMisstatementSchedule
+GateDecision -[hidden]down- AuditReportVersion
+@enduml

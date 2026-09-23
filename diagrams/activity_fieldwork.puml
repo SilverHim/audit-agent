@@ -1,0 +1,274 @@
+@startuml
+title Figure 4a - Activity Diagram: Pack Assembly and Fieldwork (P1 gate step 2 to P2) with Feedback Loops 2 and 3\nPer-procedure execution inside an A6 instance (engine split, validation, A7, Loop 1, auto-disposition, safe point) is Figure 4b
+
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam ActivityBackgroundColor White
+skinparam ActivityBorderColor #444444
+skinparam ActivityDiamondBackgroundColor #FFF8DC
+skinparam ActivityDiamondBorderColor #888800
+skinparam ConditionEndStyle diamond
+
+|Human|
+|Concierge|
+|Orchestrator & Rule Engine|
+|LLM Agent|
+
+|Orchestrator & Rule Engine|
+start
+:Materiality, risk register and objectives confirmed
+(P1 gate step 1: PLN-01, PLN-03);
+(R)
+repeat
+  :Assemble procedure pack per AuditObjective:
+  trigger match, params and timing by risk level,
+  dependency closure, acyclic check;
+  switch (Coverage check (18.4)?)
+  case (uncovered)
+    :Add detail tests or controls
+    for the gap;
+  case (scope_limited_pending)
+    |Concierge|
+    :Present the gap the library cannot
+    close (PLN-18 gate, ASA 315 para 33);
+    |Human|
+    :Approve the scope limitation, reject
+    (more procedures) or withdraw (ACC-10);
+    |Concierge|
+    :Build GateDecision (disposition),
+    submit via DecisionSubmit;
+    |Orchestrator & Rule Engine|
+    switch (Decision?)
+    case (approve)
+      :Mark the procedure scope_limited,
+      it routes to the opinion (10);
+    case (reject)
+      :Reject: back to RiskAssessing (Figure 3a),
+      revise the objective or its risk, add procedures,
+      then re-enter at (R) after Gate_P1_step1;
+      (R)
+      detach
+    case (withdraw)
+      :ACC-10, Engagement -> Withdrawn,
+      seal workpapers;
+      stop
+    endswitch
+  case (covered)
+    :Coverage ok;
+  endswitch
+repeat while (Every objective covered\nor its gap approved?) is (no) not (yes)
+repeat
+  :Create AuditPlan vN (status draft)
+  with packSnapshot, immutable;
+  |LLM Agent|
+  :A4 drafts plan narrative for vN (PLN-15)
+  from objectives, risks and procedure pack;
+  repeat
+    |Concierge|
+    :Present plan vN;
+    |Human|
+    :Review plan, approve or return comments;
+    |Concierge|
+    :Build GateDecision (targetId = plan vN,
+    decision approve / reject, reason),
+    submit via DecisionSubmit;
+    |Orchestrator & Rule Engine|
+    :Validate target version and gate state;
+  backward :Reject submission,\nre-present current version;
+  repeat while (Version current and gate open?) is (no) not (yes)
+backward :Record comments;
+repeat while (Approved?) is (no: reject, N = N + 1) not (yes)
+:Plan vN status = approved,
+execution bound to vN;
+
+fork
+  |Orchestrator & Rule Engine|
+  :A5 sends confirmation requests once at layer 0
+  (CSH-04, REC-05), registers reminder_days and
+  deadline_days timers, returns immediately;
+  while (Confirmation event during P2?\nreply received (A3 DOC-06), reminder timer, deadline timer) is (yes)
+    switch (Event?)
+    case (reminder, no reply)
+      :A5 second request
+      (idempotent key);
+    case (reply received)
+      :Record Confirmation result,
+      release dependent procedures
+      CSH-02 / REC-03 to schedule
+      (agree -> pass, difference ->
+      Judgment via Figure 4b);
+    case (deadline, no reply)
+      :Release alternative procedures
+      REC-02 to schedule (subsequent
+      receipts, contracts, shipping docs),
+      none obtainable -> ReviewTask
+      scope_limited;
+    endswitch
+  endwhile (P2 ends)
+  detach
+fork again
+  |Concierge|
+  while (P2 not settled: ReviewQueue publishes tasks?) is (yes)
+    :Present next ReviewTask by 9.1 tier with the decisions
+    allowed for its kind: reasoning chain, evidence,
+    counter-argument, A7 verdict (blind: conclusion hidden,
+    dispute: A6 and A7 side by side no ranking,
+    failed / unattributed: rule result or failure reason,
+    scope_limited: request);
+    |Human|
+    :Decide within the allowed set: confirm / override
+    with conclusion / misstatement / more procedures /
+    adjudicate / approve scope_limited / rerun /
+    manual result / not applicable / evidence unreliable;
+    |Concierge|
+    :Build ReviewRecord (taskId, targetVersion, decision,
+    structured payload, reason, empty reason rejected),
+    submit(ReviewRecord) via DecisionSubmit, log dwell time;
+    |Orchestrator & Rule Engine|
+    if (Target version current, gate state valid\nand decision allowed for task kind?) then (no)
+      :Reject submission, re-present
+      latest version with allowed decisions;
+    else (yes)
+      switch (Decision?)
+      case (confirm / override / misstatement)
+        :reviewStatus confirmed, or
+        overrideConclusion = new Judgment
+        version (old -> supersededBy), or
+        Misstatement created from
+        misstatementDraft (handled in P3);
+      case (more procedures)
+        :Loop 2: requestedProcedures
+        added to pack (A5 evidence task
+        or substantive procedures),
+        Procedure -> executing,
+        trigger loop2_extend;
+      case (adjudicate)
+        :Write disputeResolution:
+        a6_upheld -> keep A6 conclusion,
+        a7_upheld -> A7 conclusion = new version,
+        neither -> neitherAction: human
+        conclusion or more procedures,
+        consulted flag + record if consulted;
+      case (scope_limited)
+        :management_imposed: GEN-19 record
+        of removal request required first,
+        else reject, write six fields
+        (Aus 23.1), Procedure -> scope_limited;
+      case (rerun / manual result / not applicable / evidence unreliable)
+        :rerun: Procedure -> executing,
+        trigger rerun with rerunParams,
+        manual result: manualResult
+        becomes the Judgment,
+        not applicable: Procedure ->
+        not_applicable with reason,
+        evidence unreliable: dependent
+        Judgments -> stale (propagation);
+      endswitch
+      :Recompute Procedure status: completed only when every
+      ReviewTask of the procedure is decided, no open dispute,
+      no follow-up run pending and the period is covered
+      (timing != interim or periodCovered), otherwise it stays
+      awaiting_human / in_dispute, moves to executing, or
+      parks in interim_completed until its GEN-24 completes;
+      if (Misstatement or risk data changed\nand Loop 3 blocking condition hit?) then (yes)
+        :Raise reassessment flag,
+        non-compliance or undue influence:
+        GEN-13 NoclarMatter + GEN-14
+        StatutoryReport clock (M-12);
+      else (no)
+      endif
+    endif
+    |Concierge|
+  endwhile (pack settled)
+  detach
+fork again
+  |Orchestrator & Rule Engine|
+  :P2 starts at layer 0;
+end merge
+repeat
+  |Orchestrator & Rule Engine|
+  :Schedule current layer: build DAG, topological
+  layers, group by cycle (cap 4), deterministic table,
+  procedures waiting for a confirmation event stay planned,
+  GEN-24 becomes ready when its interim procedure is
+  interim_completed, no dispatch while reassessment flag is raised;
+  fork
+    :A6 instance fw-L-0: for each procedure
+    in subset run Figure 4b until subset
+    done or reassessment flag raised;
+  fork again
+    :A6 instances fw-L-1 .. fw-L-k: same on
+    own subset, remainder of a failed
+    instance re-assigned;
+  end fork
+  :Fan-in: merge StatePatches by ID into EngagementState
+  and AuditOutputStore (reducer keeps highest version),
+  ReviewTask drafts from the instances are published
+  to the queue here after validation,
+  auto-closed results do not enter the queue;
+
+  if (Reassessment flag raised?) then (yes)
+    :Instances stopped at safe points,
+    completed Judgments kept;
+    |LLM Agent|
+    :A4 re-reasons on new evidence and rule summary:
+    risk change proposal, affected procedures;
+    repeat
+      |Concierge|
+      :Present risk change proposal (GATE-R);
+      |Human|
+      :Approve or reject with reason;
+      |Concierge|
+      :Build GateDecision, submit via DecisionSubmit;
+      |Orchestrator & Rule Engine|
+      :Validate target version and gate state;
+    backward :Re-present latest version;
+    repeat while (Valid?) is (no) not (yes)
+    switch (GATE-R decision?)
+    case (approve)
+      :RiskItem version +1 (reason, time, approver),
+      mark affected completed procedures needs_review,
+      fraud trigger: GEN-16 discussion with governance first,
+      clear flag, re-assemble pack without data re-ingest;
+      (R)
+      detach
+    case (reject)
+      :Record reason, clear flag,
+      resume from paused position (history state);
+    case (withdraw)
+      :ACC-10: record decision, seal workpapers
+      (hashes, read-only), Engagement -> Withdrawn,
+      statutory clocks keep running;
+      stop
+    endswitch
+  else (no)
+  endif
+
+  |Orchestrator & Rule Engine|
+  :Published ReviewTasks are handled by the review lane
+  in parallel (fork above), the layer loop does not wait
+  for human decisions;
+repeat while (Pack settled?\nall procedures completed / not_applicable / scope_limited,\nno open dispute, no confirmation pending,\nno pending layer, no reassessment flag) is (no) not (yes)
+:To P3 Completion (FIN-05 completeness check);
+stop
+
+legend right
+  |= Lane |= Who |
+  | Human | RCA; exchanges messages only with Concierge |
+  | Concierge | A10; presents ReviewTasks, assigns manual tasks, collects decisions verbatim (form fallback: same fields) |
+  | Orchestrator & Rule Engine | A1 (scheduling, validation, persistence, events), A5 EvidenceAgent, RuleEngine; deterministic, no LLM |
+  | LLM Agent | A4 RiskAssessor, A6 FieldworkAgent, A7 ReviewAgent |
+  |= Decision path |= |
+  | All human decisions | A10 builds GateDecision / ReviewRecord -> DecisionSubmit -> A1 validates target version and gate state -> writes |
+  |= Loop |= Level |
+  | Loop 1 | Procedure level, inside A6 instance, Figure 4b |
+  | Loop 2 | Cycle level, human-initiated additional procedures |
+  | Loop 3 | Engagement level, flag at safe point, GATE-R approve / reject / withdraw, plan version +1 |
+  |= Withdrawal |= |
+  | ACC-10 | Any phase (Figure 3a): GateDecision.disposition = withdraw, workpapers sealed |
+  |= Confirmation |= |
+  | Asynchronous | A5 sends once and returns; replies and timers are events; only dependent procedures wait, fan-in and GATE-R do not |
+  |= Review lane |= |
+  | Parallel | The ReviewTask lane runs as its own branch of the P2 fork; layer scheduling never waits for a human decision, the two lanes meet only at the pack settled condition |
+endlegend
+@enduml

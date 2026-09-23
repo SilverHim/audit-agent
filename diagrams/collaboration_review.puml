@@ -1,0 +1,132 @@
+@startuml collaboration_review
+title Figure 10 - Collaboration (Communication) Diagram: One Exception Review\n[Individual task · Member C]\nCSH-02 confirmation difference evaluation (hybrid, L3) in P2: A6 -> JudgmentEngine -> A7 -> A1 -> ReviewQueue -> A10 -> RCA -> A10 -> AuditOutputStore
+
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam shadowing false
+skinparam objectBackgroundColor White
+skinparam objectBorderColor #444444
+skinparam noteBackgroundColor #FFFDF0
+skinparam noteBorderColor #888800
+skinparam nodesep 60
+skinparam ranksep 85
+hide empty members
+
+' ================= Objects =================
+object ":A1 Orchestrator\n(DecisionSubmit, StateQuery)" as A1
+object ":RuleEngine" as RE
+object ":A6 FieldworkAgent\n(instance fw-L1-2)" as A6
+object ":LLMClient\n(main model)" as LLMM
+object ":JudgmentEngine\n(owns OutputValidator)" as JE
+object ":A7 ReviewAgent" as A7
+object ":LLMClient\n(critic model, separate client)" as LLMC
+object ":AuditOutputStore" as AOS
+object ":ReviewQueue" as RQ
+object ":A10 ConciergeAgent" as A10
+object "RCA\n(Registered Company Auditor)" as RCA <<human actor>>
+object ":EvidenceStore" as ES
+object ":AuditTrail" as AT
+
+' ================= Interaction 1: the A6 instance produces the Judgment =================
+A1 -- A6 : 1: A1 -> A6  Send(fw-L1-2, EngagementState, procedures\nincl. CSH-02 hybrid L3) -> runProcedure(CSH-02)\n1.13: A6 -> A1  (return) StatePatch: Judgment v1, Exception,\nProcedureRun, ReviewTask draft, Procedure -> awaiting_human
+
+RE -- A6 : 1.1: A6 -> RE  bindParams(rule, engagement), run(rule)\n1.2: RE -> A6  (return) 1 Exception - confirmed balance differs\nfrom the ledger by AUD 142,000; EvidencePointers\n(reply, ledger; no reasoning chain)
+
+LLMM -- A6 : 1.3: A6 -> LLMM  complete(prompt, outputSchema)\n1.4: LLMM -> A6  (return) conclusion, reasoningChain,\ncounterArgument, c_llm
+
+A6 -- JE : 1.5: A6 -> JE  buildJudgment(findings, CSH-02)\n1.6: JE -> A6  (return) Judgment v1, reviewStatus pending\n1.10: A6 -> JE  computeConfidence\n1.11: JE -> A6  (return) 0.87
+
+JE -- JE : 1.5.1: JE -> JE  OutputValidator - syntax, structure,\nreferences, semantics (<= 2 retries)
+
+A6 -- A7 : 1.8: A6 -> A7  independentConclusion(pointers) [r1], compare [r2]\n1.9: A7 -> A6  (return) criticVerdict = consistent, criticReasonType
+
+A7 -- LLMC : 1.8.1: A7 -> LLMC  complete(round 1: pointers only, no chain)\n1.8.2: A7 -> LLMC  complete(round 2: + A6 conclusion)
+
+A6 -- A6 : 1.7: A6 -> A6  gen09Trigger(judgment) -> hit:\ndefault level L3, proposedAction close\n1.12: A6 -> A6  draft ReviewTask (kind normal, target\nJudgment v1 + targetVersion) into the StatePatch\n(override_condition, 7.4: amount above\nperformance_materiality -> effective L1)
+
+A1 -down- RQ : 1.16: A1 -> RQ  publish(ReviewTask)
+
+' ================= Interaction 2: human review through A10 =================
+RQ -- A10 : 2: A10 -> RQ  rank()\n2.1: RQ -> A10  (return) ranked ReviewTask + the\ndecisions allowed for its kind (UC-04)
+
+A10 -- RCA : 2.2: A10 -> RCA  present(task) per 9.1 tier - reasoning chain,\nevidence pointers, counter-argument, A7 verdict\n2.3: RCA -> A10  show me the evidence
+
+A10 -- ES : 2.4: A10 -> ES  resolve(pointers: confirmation reply,\nbank statement, ledger line)\n2.5: ES -> A10  (return) Snapshot with coordinate box
+
+A10 -- RCA : 2.6: RCA -> A10  open the reply, the statement\nand the ledger line side by side\n2.7: RCA -> A10  decision = misstatement, misstatementDraft\nAUD 142,000, reason (verbatim, non-empty)
+
+A10 -up- A1 : 2.8: A10 -> A1  submit(ReviewRecord - taskId, targetVersion,\ndecision, payload, reason) via DecisionSubmit
+
+A1 -- A1 : 1.14: A1 -> A1  mergePatch: field authorisation, type,\nid, foreign key -> merged\n2.8.1: A1 -> A1  validate targetVersion, gate state,\nkind x decision matrix (UC-04)\n2.11: A1 -> A1  recompute Procedure -> completed
+
+A1 -down- AOS : 1.15: A1 -> AOS  write(Judgment v1 - confidence 0.87,\ncriticVerdict, reviewStatus pending; Exception; ProcedureRun)\n2.9: A1 -> AOS  write(ReviewRecord); Judgment.reviewStatus -> confirmed\n(a misstatement decision accepts the conclusion, UC-04)\n2.10: A1 -> AOS  write(Misstatement - factual, AUD 142,000)
+
+A10 -- AT : 2.12: A10 -> AT  log(dwell time from 2.2 to 2.7)\nfor the rubber-stamp alarm (9.3)
+
+' ================= Notes =================
+note bottom of A7
+  A6 -> A7 is the only direct agent-to-agent
+  call: a synchronous sub-graph, input =
+  evidence pointers and conclusion, output =
+  criticVerdict, not via EngagementState (5.3).
+  Two rounds avoid anchoring on the conclusion.
+  GEN-09 is evaluated on the default level
+  (L3) before the 7.4 downgrade to L1
+  (Figure 4b order), so A7 and the human
+  both review this Judgment.
+end note
+
+note left of RCA
+  The human exchanges messages
+  only with A10. A10 builds the
+  ReviewRecord verbatim: it never
+  rewrites the reason and never
+  infers approval from the
+  conversation (9.5).
+end note
+
+note right of RQ
+  A6 drafts the ReviewTask, A1 publishes it:
+  the task reaches the queue and A10 only
+  after mergePatch (18.3.1, 18.4).
+  Other outcomes of the same collaboration:
+  criticVerdict inconsistent for insufficient
+  evidence -> Loop 1 re-run inside A6; still
+  inconsistent -> kind dispute, adjudication
+  lane; 5% of high-confidence items -> kind blind.
+end note
+
+note right of JE
+  confidence 0.87 is computed by
+  JudgmentEngine from c_ev, c_rule,
+  c_llm and c_critic (8.4), never
+  taken from the LLM alone.
+end note
+
+note bottom of AT
+  Every object also writes AuditTrail
+  (LLM calls, rule runs, validation
+  retries, state transitions); those
+  links are omitted. FinancialDataStore
+  is omitted too: RuleEngine pushes the
+  SQL down to it.
+end note
+
+' ================= Layout hints =================
+RCA -[hidden]right- AT
+
+legend bottom
+  |= Notation |= Meaning |
+  | Object box | Runtime instance, ":Class" or ":Class (instance)"; the <<human actor>> box is the human reviewer |
+  | Undirected link | A communication path between two objects; direction is not in the line but in each message label, which names sender -> receiver |
+  | n, n.m, n.m.k | Message sequence, nested per UML: messages 1.x are sent while message 1 is being handled |
+  | (return) | Reply travelling back along the same link to the sender of the numbered call |
+  | Self link | Message an object sends to itself |
+  |= Constraint |= |
+  | LLM calls | Only A6 (main client) and A7 (critic client, a separate instance); A1, A5 and A9 never call the LLM (5.5) |
+  | Human path | RCA <-> A10 only; every decision enters the system as one whole ReviewRecord through DecisionSubmit, validated by A1 (18.5) |
+  | Agent path | All other agent traffic travels through A1 as EngagementState patches; A6 -> A7 is the single exception (5.3) |
+  | Publication | Agents never write the queue: A6 returns the ReviewTask in its StatePatch, A1 validates and merges it, then publishes (18.3.1) |
+  | Scope | Figure 5a shows the planning-phase LLM call chain (A4); this figure shows the fieldwork-phase review collaboration around one Judgment |
+endlegend
+@enduml

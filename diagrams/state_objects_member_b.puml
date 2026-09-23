@@ -1,0 +1,83 @@
+@startuml state_objects_member_b
+left to right direction
+title Figure 3b-1  Object State Machines — RiskItem, Procedure, ProcedureRun   (event [guard] / action)\n[Individual task · Member B]
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam state {
+  BackgroundColor<<settled>> #E8F5E9
+  BackgroundColor<<wait>> #E3EEFF
+}
+
+state "RiskItem" as RI {
+  state "identified" as RI_identified
+  state "confirmed" as RI_confirmed
+  state "revised" as RI_revised
+  state "closed" as RI_closed <<settled>>
+  [*] --> RI_identified : rated (A4)
+  RI_identified --> RI_confirmed : decisionSubmitted [PLN-03 confirm]\n/ edited level: revise(level, reason, user),\nversion +1 (UC-02 ext.)
+  RI_confirmed --> RI_revised : gateRApproved\n/ version +1
+  RI_revised --> RI_confirmed : reassembled
+  RI_confirmed --> RI_closed : engagementArchived
+}
+
+state "Procedure" as PR {
+  state "completed" as PR_completed <<settled>>
+  state "not_applicable" as PR_na <<settled>>
+  state "scope_limited" as PR_sl <<settled>>
+  state "in_dispute" as PR_dispute <<wait>>
+  state "awaiting_human" as PR_human <<wait>>
+  state "not_applicable_pending" as PR_nap <<wait>>
+  state "interim_completed" as PR_int <<wait>>
+  executing : entry / new ProcedureRun(trigger)
+  executing : runFailed [retries < limit] / new ProcedureRun
+  executing : loop1 [rounds < 3, new evidence] / new ProcedureRun
+  PR_completed : blindTask decided [r.override] / new Judgment version
+  [*] --> planned : assembled
+  planned --> executing : scheduled [dependencies settled\n(GEN-24 also accepts its interim procedure\nin interim_completed), no confirmation pending]\n/ trigger initial
+  planned --> PR_na : human [not applicable]\n/ recordReason
+  planned --> PR_nap : rule [not applicable]\n/ recordReason, ReviewTask na_pending
+  PR_nap --> PR_na : decisionSubmitted\n[r.confirm] (ASA 330 para 6)
+  PR_nap --> executing : decisionSubmitted\n[r.rerun] / trigger rerun
+  executing --> PR_int : runCompleted [auto-close,\ntiming = interim, !periodCovered]
+  PR_int --> PR_completed : extensionCompleted [linked GEN-24\ninstance completed] / periodCovered = true
+  PR_human --> PR_int : lastTaskDecided [r.confirm, r.override,\nr.misstatement or r.manual_result;\nno follow-up run pending;\ntiming = interim, !periodCovered]
+  executing --> PR_completed : runCompleted [auto-close:\nL3 normal or L4, no human needed,\ntiming != interim or periodCovered]
+  executing --> PR_human : runCompleted [human needed\n&& !dispute] / ReviewTask;\nor runFailed [retries exhausted];\nor contextOverBudget
+  executing --> PR_dispute : runCompleted [dispute: critic\ninconsistent after loop 1]\n/ ReviewTask dispute
+  PR_human --> PR_completed : lastTaskDecided [r.confirm, r.override,\nr.misstatement or r.manual_result;\nno follow-up run pending;\ntiming != interim or periodCovered]
+  PR_human --> executing : decisionSubmitted [r.more_procedures\nor r.rerun] / trigger loop2_extend or rerun
+  PR_human --> PR_na : decisionSubmitted\n[r.not_applicable]
+  PR_human --> needs_review : decisionSubmitted [r.evidence_unreliable]\n/ dependent Judgments -> stale, propagation (11)
+  PR_human --> PR_sl : decisionSubmitted\n[r.scope_limited] / approve
+  PR_dispute --> PR_completed : lastTaskDecided [r.dispute_resolution:\na6_upheld, a7_upheld or neither\n+ human_conclusion; timing != interim\nor periodCovered]
+  PR_dispute --> PR_int : lastTaskDecided [r.dispute_resolution\nresolved; timing = interim, !periodCovered]
+  PR_dispute --> executing : decisionSubmitted [r.dispute_resolution:\nneither + more_procedures]\n/ trigger loop2_extend
+  PR_completed --> needs_review : evidenceChanged, riskRevised,\ncorrection (11) or blindTask\ndecided [r.more_procedures]
+  PR_na --> needs_review : applicabilityChanged
+  PR_nap --> needs_review : applicabilityChanged
+  PR_int --> needs_review : evidenceChanged, riskRevised
+  PR_sl --> needs_review : evidenceAvailable
+  needs_review --> executing : rescheduled\n/ trigger needs_review or correction
+}
+note bottom of PR
+  Green = settled (counts for QC); no final state.
+  A settled procedure stays reactive and can be reopened
+  until the engagement is archived.
+  r = ReviewRecord.decision, submitted via DecisionSubmit;
+  A1 rejects a decision not allowed for the task kind (UC-04 matrix).
+  lastTaskDecided = every ReviewTask of the procedure decided.
+  not_applicable_pending and interim_completed are not settled (M-04).
+  periodCovered is set by A1 when the GEN-24 instance linked to the
+  procedure completes (ASA 330 para 22). GEN-24 is scheduled once its
+  interim procedure reaches interim_completed; interim_completed itself
+  is never settled, so the pair cannot wait on each other.
+end note
+
+state "ProcedureRun" as PRun {
+  [*] --> running : started
+  running --> succeeded : runCompleted
+  running --> failed : runFailed\n/ failureReason
+  succeeded --> [*]
+  failed --> [*] : retry = new Run\n(see Procedure)
+}
+@enduml

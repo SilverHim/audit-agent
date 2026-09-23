@@ -1,0 +1,135 @@
+@startuml requirements_member_c
+top to bottom direction
+title Figure 7C  User Requirement Diagram — Statutory Obligations\n[Individual task · Member C]\n(SysML requirement notation expressed in PlantUML; source: spec 3.0-3.2, 12.4)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 25
+skinparam ranksep 55
+skinparam legend {
+  FontSize 19
+  BackgroundColor #F7F7F2
+  BorderColor #9A9A8C
+}
+skinparam class {
+  BackgroundColor<<requirement>> #FDF3E7
+  BorderColor<<requirement>> #C07A2C
+  ArrowColor #9A9A9A
+}
+skinparam noteBackgroundColor #F7F7F2
+skinparam noteBorderColor #9A9A8C
+hide circle
+
+' ================= Top-level requirement =================
+class "Audit Support System" as SYS <<requirement>> #EDE7F6 {
+  id = "REQ-00"
+  text = "Enable a single RCA to complete\na statutory audit engagement"
+}
+
+' ================= Containers =================
+class "Mandatory requirements" as MREQ <<requirement>> #F6E3C8 {
+  id = "REQ-M"
+  text = "Capabilities the system must provide\n(spec 3.1)"
+}
+class "Optional requirements" as OREQ <<requirement>> #D8E6F5 {
+  id = "REQ-O"
+  text = "Features deferred or configurable\n(spec 3.2)"
+}
+
+' ================= Mandatory (Member C) =================
+class "M-03" as M03 <<requirement>> {
+  id = "M-03"
+  text = "Statutory decision points need explicit\nhuman confirmation to proceed"
+}
+class "M-09" as M09 <<requirement>> {
+  id = "M-09"
+  text = "Verify ASIC registration and ABN\nat engagement acceptance"
+}
+class "M-12" as M12 <<requirement>> {
+  id = "M-12"
+  text = "Clock statutory notification deadlines;\npending ones block signature"
+}
+class "M-13" as M13 <<requirement>> {
+  id = "M-13"
+  text = "All pre-signature statutory preconditions\nmust pass before RPT-01"
+}
+class "M-14" as M14 <<requirement>> {
+  id = "M-14"
+  text = "Withdrawal at any phase; workpapers\nsealed on exit"
+}
+
+' ================= Optional (Member C) =================
+class "O-05" as O05 <<requirement>> #E8F1FA {
+  id = "O-05"
+  text = "Reuse the client profile across\nsuccessive audit years"
+}
+
+' ================= Containment =================
+SYS +-- MREQ
+SYS +-- OREQ
+
+MREQ +-- M03
+MREQ +-- M09
+MREQ +-- M12
+MREQ +-- M13
+MREQ +-- M14
+
+OREQ +-- O05
+
+' ================= Derive =================
+M03 <.[#7B4FA0,thickness=2,norank]. M13 : <<deriveReqt>>
+M13 .[#7B4FA0,thickness=2,norank].> M12 : <<deriveReqt>>\n(no pending report)
+
+' ================= Informal description and acceptance criteria (12.4) =================
+note right of SYS
+  <b>Informal description</b>
+  As the RCA, I need the system to check the
+  client's ASIC registration and ABN before I
+  accept the engagement, and to stop at every
+  statutory decision point until I confirm it. It
+  should time the statutory notification deadlines
+  and stop me from signing while a notification is
+  pending or any other pre-signature condition is
+  unmet. I must be able to withdraw at any phase,
+  with the workpapers sealed when I do. Later, I
+  would like to reuse the client profile in the
+  next audit year.
+end note
+
+note bottom of M09
+  Raised from O-02 to mandatory because
+  P0 depends on it (3.1): change history,
+  not a derivation.
+  ----
+  O-02: Figure 7A (Member A).
+end note
+
+note bottom of M12
+  Acceptance: dueAt computed from awareDate and
+  not editable; escalated 3 days before due and
+  again when overdue; blocks RPT-01 while pending.
+end note
+
+' ================= Layout =================
+MREQ -[hidden]right- OREQ
+
+M09 -[hidden]right- M03
+M03 -[hidden]right- M13
+M13 -[hidden]right- M12
+M12 -[hidden]right- M14
+
+M14 -[hidden]right- O05
+
+legend bottom
+  Notation
+  ====
+  Box <<requirement>> = one requirement, carrying its id and text.
+  Crosshair line (+--) = SysML containment; the crosshair sits on the container.
+  Dashed arrow <<deriveReqt>> = the derived requirement points at its source.
+  Beige = mandatory (spec 3.1); blue = optional (spec 3.2).
+  Notes give the acceptance criteria from the traceability matrix (12.4).
+  ----
+  Other requirements: Figure 7A (Member A), Figure 7B (Member B); full set in Figure 7.
+end legend
+@enduml

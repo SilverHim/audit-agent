@@ -1,0 +1,223 @@
+@startuml usecase_spec_member_b
+title Figure 6B  Use Case Specification — UC-04 to UC-06\n[Individual task · Member B]
+
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam packageStyle rectangle
+skinparam nodesep 30
+skinparam ranksep 90
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+skinparam rectangle {
+  BorderColor #333333
+  BackgroundColor #FFFFFF
+}
+skinparam note {
+  FontSize 15
+  BackgroundColor #FFFFF0
+  BorderColor #999999
+}
+skinparam legend {
+  FontSize 17
+}
+
+' ================= Actors (top row) =================
+actor "RCA\n(Registered\nCompany Auditor)" as RCA
+actor "Client\n(audited entity: management\nand those charged\nwith governance)" as CL
+actor "External Data Source\n(ASIC Connect / ABN Lookup,\naccounting systems,\nconfirmation platform)" as EXT
+actor "EQR Reviewer" as EQR
+
+' ================= System boundary =================
+rectangle "Audit Support System" as SYS {
+  usecase "UC-04\nException review and\njudgment confirmation\n(P2)" as UC04
+  usecase "UC-05\nRisk re-assessment\n(P2 -> P1)" as UC05
+  usecase "UC-06\nCompletion evaluation and\nreport generation\n(P3 -> P4)" as UC06
+  usecase "UC-09\nStatutory notification\nand withdrawal\n(any phase)" as UC09 <<see Figure 6C>> #F2F2F2;line:999999;text:888888;line.dashed
+}
+
+' ================= Associations =================
+RCA -- UC04
+RCA -- UC05
+RCA -- UC06
+
+CL -- UC06 : response on misstatements,\nadjusting entries,\nrepresentation letter
+CL -- UC05 : governance discussion\nafter a fraud trigger (GEN-16)
+
+EXT -- UC04 : evidence for\nadditional procedures (A5)
+EXT -- UC06 : adjusting entries\nvia API
+
+EQR -- UC06 : pre-signature review\n[eqr_required]
+
+' ================= Use case relations (UC-09 is in Figure 6C) =================
+UC05 .left.> UC04 : <<extend>> (a)
+UC09 .up.> UC05 : <<extend>> (b)
+UC09 .up.> UC04 : <<extend>> (d)
+UC09 .up.> UC06 : <<extend>> (e)
+
+' ================= Use case specifications =================
+note as N04
+**UC-04 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** ReviewQueue not empty (P2).
+**Main success scenario**
+1. A10 ConciergeAgent announces pending review items with a
+    tiered overview (9.1); RCA picks the tier to start from, or
+    filters, sorts and compares evidence in the queue view.
+2. A10 presents each ReviewTask (GEN-11): a Judgment with its
+    reasoning chain, evidence pointers, counter-argument and the
+    A7 ReviewAgent independent conclusion; an unattributed task
+    with the rule result; a failed task with the failure reason;
+    a scope-limited task with the alternative-procedure record.
+    On "show evidence" A10 opens the source voucher, standard
+    fragment or scan region.
+3. RCA decides within the decision set allowed for the task type;
+    A10 builds the ReviewRecord verbatim (decision and structured
+    payload) and submits it via DecisionSubmit; an empty reason is
+    refused; A1 Orchestrator checks object version, gate state and
+    the task type x decision matrix, else re-presents.
+4. The decision takes effect: confirm; override (new Judgment
+    version, old one supersededBy); misstatement (Misstatement
+    written, Judgment confirmed); more_procedures (Loop 2 to
+    A5 EvidenceAgent or A6 FieldworkAgent); dispute_resolution;
+    scope_limited; rerun (back to executing with rerunParams);
+    manual_result; not_applicable.
+5. A1 recomputes the procedure status: completed only when all
+    its ReviewTasks are decided, no dispute is open, no extension
+    or rerun is pending and the period is covered; changed
+    misstatement or risk data are checked against Loop 3.
+6. A10 records the dwell time from presentation to confirmation;
+    5% of high-confidence items are presented blind (AI conclusion
+    hidden, RCA judges first, then compares).
+7. On "open the workflow of this one", A10 gives drill-down links:
+    the Judgment's four-layer context, the procedure and agent
+    that produced it, and audit_trail.
+**Extensions / Alternatives**
+3a. normal, blind and unattributed tasks also allow
+      evidence_unreliable: Judgments relying on that evidence
+      are marked stale.
+4a. Uncorrected misstatements exceed 70% of overall materiality
+      -> UC-05 via extend (a).
+4b. NOCLAR found, or management refuses to remove a scope
+      limitation -> UC-09 via extend (d).
+**Postconditions:** each decided ReviewTask has a ReviewRecord;
+Judgment, Misstatement and procedure status updated.
+end note
+
+note as N05
+**UC-05 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** a Loop 3 trigger condition in P2,
+e.g. uncorrected misstatements exceed 70% of overall
+materiality (UC-05 extends UC-04 via (a)).
+**Main success scenario**
+1. An instance detects the trigger at a safe point and raises the
+    reassessment flag: instances stop at their next safe point,
+    A1 Orchestrator stops dispatching, completed Judgments are kept.
+2. A4 RiskAssessor reads the new evidence and the current
+    risk_register and re-reasons with the LLM into a risk change
+    proposal: affected assertions, new level, basis, affected
+    completed procedures.
+3. A4 writes reassessment_request; A1 raises the GATE-R
+    dynamic interrupt.
+4. A10 ConciergeAgent presents the proposal; RCA approves.
+    After a fraud trigger, GEN-16 discussion with governance on
+    the procedures still needed, recorded as GovernanceCommunication.
+5. A1 increments the RiskItem version with reason, time and
+    approver, marks affected completed procedures needs_review
+    and clears the flag.
+6. A1 enters P1 assembly and re-assembles the procedure pack
+    without re-ingesting data; after the new PLN-15 version is
+    approved, new and needs_review procedures run in P2.
+**Extensions / Alternatives**
+1a. Advisory trigger -> no pause; a prompt goes to the review
+      queue; RCA may start step 2 manually.
+4a. RCA rejects -> A10 records the reason, A1 clears the flag and
+      P2 resumes where it paused (history state).
+4b. disposition = withdraw -> ACC-10 withdrawal, Withdrawn
+      (UC-09 via extend (b)).
+**Postconditions:** approved -> RiskItem version +1 with reason,
+new plan version approved, new and needs_review procedures run
+in P2; rejected -> P2 resumed.
+end note
+
+note as N06
+**UC-06 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** all P2 procedures in a disposed state (P3).
+**Main success scenario**
+1. A8 WorkpaperAgent runs FIN-03 to classify accumulated misstatements
+    and schedules FIN-08; RCA communicates the misstatements to
+    management and the system records the response.
+2. AwaitingCorrection: adjusting entries arrive via API or the offline
+    pipeline; A6 FieldworkAgent re-runs GEN-05 on the new entries; A8
+    runs FIN-09 correction verification (corrected, or partially_corrected
+    with residualAmount); affected completed procedures -> needs_review.
+3. A4 RiskAssessor runs PLN-19 materiality reassessment; A9 QCAgent runs
+    FIN-04 (rollover and iron curtain), FIN-05, FIN-06 and FIN-12; A6 runs
+    FIN-15, FIN-16, FIN-13, GEN-18 / FIN-17 and EST-06; A4 runs FIN-19;
+    RCA confirms the not_applicable_pending list.
+4. A1 Orchestrator pauses at the gate; A10 ConciergeAgent presents the
+    uncorrected misstatement summary, scope-limited items, going concern
+    evaluation, FIN-19 conclusion and FIN-11 statutory reporting matters;
+    RCA performs FIN-01 and FIN-02 and confirms the opinion type from
+    the A9 routed candidates.
+5. RCA performs FIN-14 (written governance communication); A5
+    EvidenceAgent obtains the FIN-07 representation letter; A9 runs
+    FIN-18 and FIN-10; RCA makes the pre-signature independence and
+    ethics determination.
+6. A10 applies the opinion template and has the LLM draft the report and
+    management letter, each factual assertion pointing to a Judgment;
+    RCA annotates and A10 revises (version +1) until none remain.
+7. A1 checks the EQR record when eqr_required; RCA performs RPT-09,
+    RPT-10 and RPT-07 (GovernanceCommunication); A10 issues the s307C
+    declaration (RPT-08), signed by RCA.
+8. A1 pauses at the gate; A10 presents the final report, EQR record,
+    s307C declaration and pre-signature checklist; RCA performs RPT-01,
+    approves the report version and signs (report date = signing date);
+    A8 runs RPT-06 archiving and version lock.
+**Extensions / Alternatives**
+3a. Coverage below 100%, a procedure not disposed, or scope_limited
+      not approved -> blocked with gaps listed.
+5a. Core representations missing or unreliable (FIN-18) -> hard
+      disclaimer candidate in opinion_route; FIN-18 unreliable or
+      FIN-10 independence breach -> UC-09 via extend (e).
+7a. eqr_required and the EQR record incomplete -> blocked.
+**Postconditions:** report version signed and locked (RPT-06), P4;
+UC-07 follows as a state transition.
+end note
+
+UC04 .down.. N04
+UC05 .down.. N05
+UC06 .down.. N06
+
+' ================= Legend =================
+legend right
+  |= Notation |= Meaning |
+  | actor to use case | association; the label states what the actor supplies or receives |
+  | <<extend>> | conditional insertion; the arrow points from the extending use case to the base, guard letter on the arrow |
+  | (a) | uncorrected misstatements exceed 70% of overall materiality |
+  | (b) | GATE-R decision = withdraw |
+  | (d) | NOCLAR found, or management refuses to remove a scope limitation |
+  | (e) | FIN-18 representations unreliable, or FIN-10 independence breach |
+  | (P0 … P4) | phase of the main state machine (12.3) in which the use case runs |
+  | grey use case | belongs to another member's figure (<<see Figure 6C>>); shown only to anchor the relation |
+  |= Rule |= |
+  | Single entry | every human interaction passes through A10; agents are not shown inside the boundary |
+  | Actor scope | Client supplies data, documents and letters and answers enquiries and communications as management or governance; External Data Source covers registry, accounting and confirmation interfaces and statutory lodgement |
+  | Guard, not a relation | an undecided statutory notification in UC-09 blocks RPT-01 in UC-06 (M-12) |
+  | Trigger, not a relation | UC-06 to UC-07 and queue-driven entry into UC-04 are state transitions |
+  | Other use cases | UC-01 to UC-03: Figure 6A (Member A); UC-07 to UC-09: Figure 6C (Member C); all nine: Figure 6 |
+endlegend
+
+' ================= Layout =================
+EXT -[hidden]right- RCA
+RCA -[hidden]right- CL
+CL -[hidden]right- EQR
+UC04 -[hidden]right- UC05
+UC05 -[hidden]right- UC06
+UC09 -[hidden]down- N05
+N04 -[hidden]right- N05
+N05 -[hidden]right- N06
+@enduml

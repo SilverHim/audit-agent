@@ -1,0 +1,201 @@
+@startuml usecase_spec_member_a
+title Figure 6A  Use Case Specification — UC-01 to UC-03\n[Individual task · Member A]
+
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam packageStyle rectangle
+skinparam nodesep 30
+skinparam ranksep 90
+skinparam usecase {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+skinparam rectangle {
+  BorderColor #333333
+  BackgroundColor #FFFFFF
+}
+skinparam note {
+  FontSize 15
+  BackgroundColor #FFFFF0
+  BorderColor #999999
+}
+skinparam legend {
+  FontSize 17
+}
+
+' ================= Actors (top row): the human user first, then external parties =================
+actor "RCA\n(Registered\nCompany Auditor)" as RCA
+
+actor "Client\n(audited entity: management\nand those charged\nwith governance)" as CL
+actor "External Data Source\n(ASIC Connect / ABN Lookup,\naccounting systems,\nconfirmation platform)" as EXT
+
+' ================= System boundary =================
+rectangle "Audit Support System" as SYS {
+  usecase "UC-01\nEngagement acceptance\n(P0)" as UC01
+  usecase "UC-02\nPlanning and risk assessment\n(P1)" as UC02
+  usecase "UC-03\nProcedure execution and\nfull-population JE testing\n(P2)" as UC03
+  usecase "UC-09\nStatutory notification\nand withdrawal\n(any phase)" as UC09 <<see Figure 6C>> #F2F2F2;line:999999;text:888888;line.dashed
+}
+
+' ================= Associations =================
+RCA -- UC01
+RCA -- UC02
+RCA -- UC03 : manual-engine\nprocedures
+
+CL -- UC01 : engagement letter,\nmanagement undertakings
+CL -- UC02 : draft statements,\ndocuments, further data
+
+EXT -- UC01 : ASIC registration,\nABN validity,\ncourt records
+EXT -- UC02 : accounting\nsystem feed
+EXT -- UC03 : confirmations (A5),\naccounting data
+
+' ================= Use case relations (other end in Figure 6C) =================
+UC09 .[norank].> UC02 : <<extend>> (c)
+
+' ================= Use case specifications =================
+note as N01
+**UC-01 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** a new engagement is created (P0).
+**Main success scenario**
+1. RCA creates the engagement and enters the client
+    name and ABN.
+2. A2 ClientIntel runs ACC-04 (ASIC registration status,
+    ABN validity) and ACC-05 court records (when O-02
+    is enabled) and builds the acceptance scorecard.
+3. A2 calls the LLM for ACC-03 background risk scoring
+    and ACC-02 independence threat evaluation, reading
+    related_parties and independence_flags from the
+    client profile.
+4. A1 Orchestrator pauses at the gate; A10 ConciergeAgent
+    presents the scorecard and reasoning chain; RCA
+    performs ACC-01 (accept or not); A10 writes the decision.
+5. On acceptance A2 runs ACC-08: acceptable reporting
+    framework, management's three responsibilities and
+    unrestricted access, engagement letter (ASA 210 para 10),
+    written consent to appointment and s328A validity;
+    A1 pauses at the gate, RCA confirms, A10 writes.
+6. A2 runs ACC-09: identifies those charged with governance,
+    decides whether all are involved in management, and
+    schedules the planning and completion communications
+    as GovernanceCommunication plan items.
+7. A2 creates or updates the client profile and writes
+    client_profile_ref; the engagement enters P1.
+**Extensions / Alternatives**
+2a. Change of auditor and ACC-07 not complete -> ACC-01
+      cannot be confirmed; predecessor unreachable -> reason
+      recorded (APES 110 R320.6), not_applicable.
+4a. RCA judges the information insufficient -> names
+      further queries; back to step 2.
+5a. RCA declines -> reason recorded; engagement archived
+      as Declined.
+**Postconditions:** accepted -> engagement letter confirmed,
+client_profile_ref written, phase P1; declined -> Declined.
+end note
+
+note as N02
+**UC-02 specification**
+**Primary actor:** RCA
+**Trigger / Preconditions:** engagement accepted (P1).
+**Main success scenario**
+1. A3 IngestAgent ingests the accounting system feed, the draft
+    statements and uploaded files into FinancialDataStore and
+    FinancialStatements; runs PLN-24 JE population completeness
+    check and PLN-12 data quality check.
+2. A4 RiskAssessor runs PLN-07 preliminary analytics with the P0
+    scorecard and client profile, PLN-17 internal control and ITGC,
+    PLN-20 laws and regulations, PLN-21 prior estimates, PLN-23
+    service organisations; on a first engagement A6 FieldworkAgent
+    runs PLN-22 opening balances.
+3. A4 runs PLN-04: rules enumerate material accounts x assertions
+    into the AuditObjective baseline; the LLM rates each, writes the
+    basis and suggested procedures, and may propose objectives
+    beyond the baseline (approved in step 4).
+4. A1 Orchestrator pauses at the gate; A10 ConciergeAgent presents
+    PLN-01 proposed values and the objective list; RCA confirms overall
+    and performance materiality and the clearly trivial threshold, and
+    confirms or edits each objective and RiskItem; A10 submits one
+    GateDecision (edits[]) via DecisionSubmit; A1 checks the version
+    and revises each edited RiskItem (version +1).
+5. A4 runs PLN-16 financial-statement-level risks and overall response
+    and PLN-18 (substantive procedures alone sufficient?); RCA confirms
+    at the same gate.
+6. A1 assembles procedures per objective by risk level, sets parameters,
+    generates unpredictability candidates, writes procedures.json and
+    runs the coverage rules; gaps listed -> back to step 4.
+7. A1 creates AuditPlan vN (draft, packSnapshot); A4 writes its
+    narrative (PLN-15).
+8. A10 presents vN; RCA approves; the GateDecision bound to vN is
+    submitted via DecisionSubmit; A1 checks version and gate state;
+    vN is set approved and the engagement enters P2.
+**Extensions / Alternatives**
+1a. Data quality check fails -> AwaitingData; RCA is notified to request
+      data from the Client; retries exhausted -> UC-09 via extend (c).
+4a. RCA changes a risk level -> reason recorded, RiskItem version +1.
+8a. Version stale -> current version re-presented; rejected -> vN+1
+      created, back to step 7.
+**Postconditions:** materiality and RiskItems confirmed; AuditPlan vN
+approved with procedures.json; engagement in P2.
+end note
+
+note as N03
+**UC-03 specification**
+**Primary actor:** system (A6 FieldworkAgent); RCA performs the
+manual-engine procedures.
+**Trigger / Preconditions:** AuditPlan approved; P1 -> P2 transition.
+**Main success scenario** (GEN-05 as the example)
+1. A1 Orchestrator fans out A6 instances per the schedule
+    (confirmations event-driven via A5 EvidenceAgent) and
+    dispatches GEN-05 to A6.
+2. A6 reads the GEN-05 YAML and binds parameters rule by rule;
+    RuleEngine runs the SQL on FinancialDataStore.
+3. Each result row is wrapped as an Exception carrying an
+    EvidencePointer to the journal line.
+4. For GEN-02 exception attribution (hybrid), A6 calls the LLM for
+    a candidate explanation and reasoning chain per Exception.
+5. Judgments that hit a GEN-09 trigger rule are reviewed by A7
+    ReviewAgent: first pass on evidence pointers only, second pass
+    compares; writes critic_verdict and critic_reason_type.
+    Inconsistent for insufficient evidence -> Loop 1, back to step 4;
+    other reasons or Loop 1 exhausted -> dispute item for the human
+    queue. Judgments not hit are marked skipped.
+6. Instances put Judgment, Exception, ProcedureRun and ReviewTask
+    drafts in a StatePatch; A1 validates and merges into
+    AuditOutputStore and publishes the tasks to ReviewQueue; the rest
+    close automatically; procedures whose period is covered are completed.
+**Extensions / Alternatives**
+4a. LLM output malformed -> schema check fails -> 2 retries -> still
+      failing: rule result kept, unattributed ReviewTask created for
+      the Exception.
+**Postconditions:** Judgments, Exceptions and ProcedureRuns in
+AuditOutputStore; ReviewTasks needing a human in ReviewQueue.
+end note
+
+UC01 .down. N01
+UC02 .down. N02
+UC03 .down. N03
+
+' ================= Legend =================
+legend right
+  |= Notation |= Meaning |
+  | actor to use case | association; the label states what the actor supplies or receives |
+  | <<extend>> | conditional insertion; the arrow points from the extending use case to the base, guard letter on the arrow |
+  | (c) | AwaitingData retries exhausted -> ACC-10 |
+  | (P0 … P4) | phase of the main state machine (12.3) in which the use case runs |
+  | grey use case | belongs to another member's figure (<<see Figure 6C>>); shown only to anchor the relation |
+  |= Rule |= |
+  | Single entry | every human interaction passes through A10; agents are not shown inside the boundary |
+  | Actor scope | Client supplies data, documents and letters and answers enquiries and communications as management or governance; External Data Source covers registry, accounting and confirmation interfaces and statutory lodgement |
+  | Trigger, not a relation | UC-02 to UC-03 is a state transition |
+  | UC-03 | started automatically by the P1 -> P2 transition; RCA performs the manual-engine procedures inside it, A5 reaches the confirmation platform |
+  | Other use cases | UC-04 to UC-06: Figure 6B (Member B); UC-07 to UC-09: Figure 6C (Member C); all nine: Figure 6 |
+endlegend
+
+' ================= Layout =================
+CL -[hidden]right- RCA
+RCA -[hidden]right- EXT
+UC01 -[hidden]right- UC02
+UC02 -[hidden]right- UC03
+N01 -[hidden]right- N02
+N02 -[hidden]right- N03
+@enduml

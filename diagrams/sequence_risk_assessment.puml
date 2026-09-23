@@ -1,0 +1,287 @@
+@startuml sequence_risk_assessment
+title Figure 5a  Sequence Diagram — PLN-04 Assertion-level Risk Reasoning (P1)\n[Individual task · Member A]\nFrom the A1 node dispatch to the human decision at Gate_P1_step1: four-layer context assembly, LLM call,\nstructured output, four-level validation, StatePatch merge
+
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam noteFontSize 18
+skinparam shadowing false
+skinparam maxMessageSize 560
+skinparam sequence {
+  ParticipantBackgroundColor White
+  ParticipantBorderColor #444444
+  ActorBackgroundColor White
+  LifeLineBorderColor #888888
+  ArrowColor #333333
+  GroupBackgroundColor #F2F2F2
+  DividerBackgroundColor #E3EEFF
+}
+
+actor "RCA\n(human auditor)" as RCA
+participant "A10 ConciergeAgent\n(separate StateGraph)" as A10
+participant "A1 Orchestrator\n(StateGraph; StateQuery\n+ DecisionSubmit)" as A1
+participant "A4 RiskAssessor\n(graph node)" as A4
+participant "ProcedureLibrary" as PL
+collections "Tier 2 Knowledge\n(standards fragments,\nclient profile)" as K
+database "FinancialDataStore" as FDS
+participant "LLMClient\n(LLMProviderAdapter)" as LLM
+participant "JudgmentEngine\n(+ OutputValidator)" as JE
+database "AuditTrail" as AT
+database "AuditOutputStore" as AOS
+database "CheckpointSaver" as CP
+
+autonumber
+
+== Node dispatch and procedure load ==
+
+A1 -> A4 : run(state : EngagementState) : StatePatch
+activate A4
+note over A1, A4
+  Agents never call each other (5.3). A1 hands over
+  EngagementState; A4 returns a StatePatch. A1 itself
+  never calls the LLM (4.1), and neither do A5 and A9.
+end note
+
+A4 -> A4 : selectProcedures(riskProfile) -> [PLN-04, ...]
+note over A4, FDS
+  This figure follows PLN-04 only. PLN-01, PLN-16, PLN-18 and
+  the other P1 procedures of A4 take the same path; PLN-01
+  supplies the proposed materiality shown at the gate below.
+end note
+
+A4 -> PL : load("PLN-04") : ProcedureTemplate
+activate PL
+PL --> A4 : engine = llm, autonomy_level = L2 (7.2)\nstandards = [ASA315 fragment (paragraph tbc, 4.3),\nASA240-P27]\ninputs, output_schema, context_budget\nprompt template
+deactivate PL
+
+== Baseline objectives — deterministic, no LLM ==
+
+A4 -> FDS : query(trial balance)
+activate FDS
+FDS --> A4 : Row[]
+deactivate FDS
+A4 -> K : disclosure checklist (AASB 101 and\nstandard-specific disclosure items, 17.1)
+K --> A4 : disclosure items
+
+A4 -> A4 : baselineObjectives(trialBalance)\n-> AuditObjective[], origin = baseline
+note over A4, LLM
+  Rules enumerate material accounts x standard assertions plus
+  disclosure items, so omission cannot occur by construction (P1).
+  Revenue Occurrence and Cutoff carry fraudRelated = true and
+  level = significant; these are preset and read-only for the
+  LLM (ASA240-P27), which only rates and proposes additions.
+end note
+
+== Per-objective reasoning — one LLM call per procedure execution ==
+
+loop for each AuditObjective (or batch of objectives)
+
+  A4 -> K : fetch fragments in procedure.standards
+  activate K
+  K --> A4 : fragment text + fragment ids
+  deactivate K
+
+  A4 -> FDS : query(rows and columns from inputs)
+  activate FDS
+  FDS --> A4 : Row[]
+  deactivate FDS
+
+  A4 -> A4 : assemble prompt, four layers (8.5)
+  note over A4, LLM
+    1 System   role, output JSON schema, 8.3 constraints (fixed template)
+    2 Standards  fragment text verbatim; pointers must cite fragment ids
+    3 Task   prompt template + params + this objective and its RiskItem
+    4 Data   rows and columns from inputs, prior_risk_register summary
+    EngagementState itself never enters the prompt (8.5, 18.5).
+  end note
+
+  opt assembled size > context_budget
+    A4 -> A4 : split into batches, one call each\nbatchNo into the trail, never truncate
+  end
+
+  A4 -> A4 : cacheKey = hash(engagement, procedure version,\ninput hash, evidence hash, prompt hash,\nmodel version)
+
+  alt cache hit (3.4, 18.5)
+    A4 -> AOS : read(cacheKey) : Judgment
+    activate AOS
+    AOS --> A4 : cached Judgment, LLM call skipped
+    deactivate AOS
+    A4 -> AT : log(cache hit, cacheKey)
+  else cache miss
+    A4 -> LLM : complete(prompt, outputSchema)
+    activate LLM
+    LLM --> A4 : rating, reasoning_chain,\nEvidencePointer[], c_llm,\nproposed added objectives
+    deactivate LLM
+    note over LLM, AOS
+      API structured output enforces output_schema;
+      temperature = 0 lowers variance, it is no guarantee.
+    end note
+    A4 -> AT : log(model version, full prompt,\ninput hash, params, tokens,\nlatency, batchNo)
+  end
+
+  loop until accepted, format retries at most 2
+    A4 -> JE : validate(raw, output_schema)
+    activate JE
+    JE -> JE : validateSyntax -> validateStructure\n-> validateReferences -> validateSemantics
+    alt syntax or structure invalid (8.6 levels 1-2)
+      JE --> A4 : parse / schema error
+      A4 -> LLM : complete(prompt + error, outputSchema)
+      LLM --> A4 : corrected response, re-validated on the next pass
+    else some pointers invalid (8.6 level 3)
+      JE --> A4 : accepted; those steps marked unsupported and kept (8.3),\nevidence coverage reduced, the Judgment continues
+    else no valid pointer, or semantic check fails (8.6 levels 3-4)
+      JE --> A4 : accepted but flagged for a human (7.4 downgrade);\nnothing discarded, it still continues to buildJudgment
+    else valid
+      JE --> A4 : accepted
+    end
+    deactivate JE
+  end
+  break format retries exhausted
+    A4 -> AT : log(validation exhausted)
+    ref over A4, JE, AT
+      Engine fallback: ProcedureRun failed, ReviewTask kind failed, no Judgment - Figure 5b
+    end ref
+  end
+  note over A4, AT
+    Scope: this break belongs to the per-objective loop, not to the
+    validation loop above it. Only exhausted format retries end the
+    execution here; the other three branches fall through to buildJudgment.
+  end note
+
+  A4 -> JE : buildJudgment(findings, PLN-04)
+  activate JE
+  JE -> JE : computeConfidence(judgment)
+  note over JE, CP
+    c_ev 0.3 and c_llm 0.2 apply. c_rule is hybrid-only and
+    c_critic needs A7, which an L2 procedure does not use, so
+    both weights fall to zero and the rest are renormalised (8.4).
+    Confidence is never taken from the LLM on its own.
+  end note
+  JE -> AT : log(validation result, retry count)
+  JE --> A4 : Judgment
+  deactivate JE
+  note over A4, AOS
+    JudgmentEngine only builds the Judgment and returns it; it writes no
+    business Store. A4 carries the Judgments in its StatePatch and A1
+    writes them after mergePatch (18.5). The AuditTrail write stays immediate.
+  end note
+
+end
+
+A4 -> A4 : rateRisks(objectives) : RiskItem[]\neach RiskItem.judgmentRef = {id, version};\nadded objectives get origin = llm_added
+
+== Patch merge and checkpoint ==
+
+A4 --> A1 : StatePatch { Judgments, audit_objectives, risk_register }
+deactivate A4
+note over A4, A1
+  Nothing in the patch is in a business Store yet. The instance writes
+  only the AuditTrail itself; every business result below is written by
+  A1 once the patch has passed the four checks (18.4, 18.5).
+end note
+
+loop mergePatch, at most two attempts
+  A1 -> A1 : four checks (18.3.1 authorisation, type,\nid uniqueness, foreign keys) (8.6)
+
+  alt any check fails, first attempt
+    A1 -> AT : log(merge rejected, failing check, patch discarded)
+    A1 -> A4 : re-run once (new execution)
+    A4 --> A1 : StatePatch (re-run)
+  else all four pass
+    A1 -> A1 : merge into EngagementState
+    A1 -> AOS : write(Judgments, RiskItems, AuditObjectives)
+    A1 -> CP : save(threadId, state)
+    note over A1, CP
+      Business Store first, checkpoint second (18.5). A checkpoint
+      restores execution; it is not the audit trail behind M-07.
+      The re-run that succeeds joins this same commit point.
+    end note
+  end
+end
+
+break both attempts failed
+  A1 -> AT : log(merge rejected twice)
+  ref over A1, A4, PL
+    Execution marked failed, ReviewTask kind failed; the gate is not reached - Figure 5b
+  end ref
+end
+note over A1, AT
+  Scope: this break sits at the top level of the figure, outside the
+  mergePatch loop. It ends the sequence - the gate below is never entered.
+end note
+
+== Gate_P1_step1 — PLN-01 / PLN-03, autonomy L1 ==
+
+A1 -> A1 : interruptAt(Gate_P1_step1)\nmain graph suspended
+
+activate A10
+
+loop until an approve with a current targetVersion is written
+
+  A10 -> A1 : queryState(engagementId, scope)
+  A1 --> A10 : StateView: phase at Gate_P1_step1,\nproposed materiality, objective list,\nRiskItem levels, reasoning chains, confidence
+  A10 -> RCA : notifies that the gate is reached (proactive, 5.5),\npresent(item) / explain(question)
+  RCA -> A10 : confirms or edits each objective\nand RiskItem
+
+  opt level changed, or revenue fraud presumption lowered
+    A10 -> A10 : capture the reason verbatim; a lowered\npresumption also needs rebuttalReason
+  end
+
+  A10 -> A10 : collectDecision() -> build GateDecision\n(gate = PLN-01/03, targetId = risk_register vK,\ntargetVersion, decision, edits[], reason)
+  note over RCA, A1
+    A10 transcribes the structured fields; no LLM sits in the write
+    path (18.5). One GateDecision per gate: targetId is the
+    risk_register snapshot, per-item changes travel as edits[].
+  end note
+
+  A10 -> A1 : submit(GateDecision) : Result
+  A1 -> A1 : check targetVersion and gate state
+
+  alt targetVersion stale
+    A1 --> A10 : re-present the current version,\nno new version created (18.5)
+    A10 -> A10 : loop continues, the gate stays at Gate_P1_step1
+  else d.decision = insufficient_info
+    A1 -> A1 : gate stays open; the requested\nqueries or evidence are queued
+    A1 --> A10 : re-present when the answers arrive
+    A10 -> A10 : loop continues, the gate stays at Gate_P1_step1
+  else d.decision = reject
+    A1 -> A1 : append gate_decisions; edits[] become\nrework input, RiskItems keep their version
+    A1 -> A4 : re-rate the edited items\n(Figure 3a: [d.reject] / applyEdits)
+    ref over A1, A4 : per-objective reasoning above
+    A1 -> A1 : loop continues, Gate_P1_step1 is presented again
+  else d.decision = approve, version and gate state valid
+    A1 -> A1 : append gate_decisions; apply edits[]:\nrevise(level, reason, user) on each edited\nRiskItem -> version + 1; write materiality,\nperformance_materiality, clearly_trivial
+    A1 -> AT : log(human decision, dwell time)
+    A1 -> CP : save; resume from interrupt
+  end
+
+end
+deactivate A10
+note over A10, A1
+  Only the approve branch leaves this loop. Stale, insufficient_info and
+  reject all re-present the current version at the same gate, so nothing
+  below is reached without an approval bound to a current version (18.5).
+end note
+
+ref over A1, A4, PL
+  Objective-level pack assembly, coverage gate, AuditPlan vN
+  and the PLN-15 narrative, then Gate_P1_step2 — see Figure 4a
+end ref
+
+legend right
+  |= Notation |= Meaning |
+  | Rectangle lifeline | Agent or support service (Figure 1b) |
+  | Cylinder lifeline | Store or trail behind a contract interface |
+  | Bar on a lifeline | The participant holds control |
+  | alt / opt / loop | Branch, optional fragment, repetition |
+  | break | Exit of the fragment it is drawn in, nothing below it runs |
+  | ref | Detail shown in another figure |
+  |= Invariant |= |
+  | No agent-to-agent call | A1 passes EngagementState, A4 returns StatePatch (5.3) |
+  | Human talks to A10 only | Reads via StateQuery, writes via DecisionSubmit (18.2) |
+  | Business results are written by A1 after mergePatch | JudgmentEngine only builds them (18.4, 18.5) |
+  | Only an approve leaves the gate | Stale, insufficient_info and reject re-present the current version (18.5) |
+  | LLM at procedure granularity | One execution of one procedure is one call (8.5) |
+  | Every call leaves a trail | Prompt, model version, hashes, tokens, validation (M-07) |
+endlegend
+
+@enduml

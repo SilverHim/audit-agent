@@ -1,0 +1,162 @@
+@startuml structured_class_a1
+title Figure 9  Structured Class Diagram — A1 Orchestrator\n(internal parts, ports and connectors; A1 is the LangGraph StateGraph itself, 18.2)
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam legendFontSize 20
+skinparam nodesep 25
+skinparam ranksep 45
+
+' ================= External collaborators =================
+package "Tier 5 consumers of the provided interfaces" as T5 {
+  component "A10 ConciergeAgent\n(builds ReviewRecord and\nGateDecision verbatim)" as A10
+  component "Tier 5 API facade\n(FastAPI: chat, queue,\nfallback forms)" as API
+}
+
+package "Contracts realised by A1" as PROV {
+  component "StateQuery" <<interface>> as SQ
+  component "DecisionSubmit" <<interface>> as DSUB
+}
+
+package "Tier 3 agents" as T3 {
+  collections "A2, A4..A9 ProcedureAgents\n(graph nodes, Send instances);\nA3 talks via documents + Stores,\nA10 via decisionPort" as AG
+}
+
+package "Support services" as SV {
+  component "ReviewQueue\n(ranks, adjudication lane,\nblind sampling, agreement stats)" as RQ
+  component "ProcedureLibrary" as PL
+  component "AuditTrail\n(audit_trail.jsonl)" as AT
+}
+
+package "Store contracts required by A1" as STO {
+  component "AuditOutputStore" <<interface>> as AOS
+  component "FinancialDataStore" <<interface>> as FDS
+  component "EvidenceStore" <<interface>> as ES
+  component "CheckpointSaver" <<interface>> as CKS
+}
+
+' ================= The structured class =================
+component "A1 Orchestrator   <<structured class>>" as A1 {
+
+  portin decisionPort
+  port agentPort
+  port reviewPort
+  portout storePort
+  portout servicePort
+
+  component "StateMachine   <<part>>\nStateGraph P0–P4: nodes, edges,\nconditional edges, interrupts\n--\nmergePatch(patch)\nqueryState(engagementId, scope) : StateView\narchive()" as SM
+  component "GateController   <<part>>\n6 static interrupt_before points\n+ GATE-R, PLN-18, ACC-10, GEN-14 via interrupt()\nvalidates version, gate state,\nkind x decision, gate x disposition\n--\ninterruptAt(gate)\nsubmit(ReviewRecord | GateDecision) : Result\ncheckReassessmentTrigger()" as GC
+  component "PackAssembler   <<part>>\nobjective-level assembly,\ndependency closure, acyclicity\n--\nassemblePack(objectives) : Procedure[]\ncoverageGate() : {covered, uncovered,\nscope_limited_pending}" as PA
+  component "Scheduler   <<part>>\ndeterministic, no LLM; inputs are only\nthe procedure pack, the dependency DAG\nand the parallel cap (18.5)\n--\nschedule(pack) : ScheduleRow[]\nfanOut(layer) : Send[]" as SCH
+  component "TrailWriter   <<part>>\nappend-only; every transition, gate\ndecision, assembly and schedule table.\nA checkpoint is not the audit trail (18.5)\n--\nlog(entry)" as TW
+
+  ' ---- connectors between parts ----
+  SM --> PA : P1 assembly;\nre-assembly after\nGATE-R approve (loop 3)
+  PA --> SCH : procedure_pack\n(acyclic, closure complete)
+  SCH --> SM : Send fan-out per layer,\nautomatic fan-in
+  SM --> GC : at fan_in and after every decision:\ncheckReassessmentTrigger()
+  GC --> SM : interrupt_before / resume;\nafter a validated write,\nrecompute procedure status
+
+  ' ---- every part logs ----
+  SM ..> TW
+  GC ..> TW
+  PA ..> TW
+  SCH ..> TW
+
+  ' ---- port delegation ----
+  decisionPort -- GC
+  decisionPort -- SM
+  agentPort -- SM
+  reviewPort -- GC
+  storePort -- SM
+  servicePort -- PA
+  servicePort -- TW
+}
+
+' ================= Port wiring =================
+AG <--> agentPort : EngagementState out,\nStatePatch in
+reviewPort --> RQ : review_tasks published at fan-in,\nstatus = decided after DecisionSubmit
+RQ --> reviewPort : pending and dispute counts\n(pack-settled check, non-blocking)
+
+storePort --( AOS : decisions,\nprocess status
+storePort --( FDS : dataVersion() to check\nProcedureRun.inputVersions\nat mergePatch
+storePort --( ES : seal(engagementId) on\nWithdrawn / archive (18.5)
+storePort --( CKS : checkpoint, written\nafter the Store write
+servicePort --( PL : match(), closure()
+servicePort --( AT : log(entry)
+
+decisionPort -- SQ
+decisionPort -- DSUB
+A10 --( SQ
+A10 --( DSUB
+API --( SQ
+API --( DSUB
+
+' ================= Notes =================
+note right of A1
+  A1 never calls the LLM (4.1): every part is
+  deterministic Python. A1 writes only phase,
+  version_snapshot, procedure_pack and the
+  process-status fields, never a business
+  judgement (18.3.1). StatutoryReport.dueAt is
+  computed here and is not editable (M-12).
+end note
+
+note top of AG
+  mergePatch reducer (18.3.1): one writer per field;
+  a new id is appended; the same id is overwritten by
+  the higher version; equal versions conflict and go
+  to a human. Agents never call each other, so fan-in
+  is write-conflict free (5.3).
+end note
+
+note bottom of RQ
+  A1 publishes tasks and ranks none of them: A6 instances and
+  the A5 event stream draft ReviewTasks, A1 merges the patch,
+  writes the business results, publishes the drafts and sets
+  status to decided once a ReviewRecord passes DecisionSubmit.
+  The one task A1 creates itself: kind failed, when a patch is
+  rejected twice (8.6). An empty queue does not hold the next layer.
+end note
+
+note bottom of PROV
+  decisionPort: A1 realises StateQuery and DecisionSubmit
+  (12.1, Figure 1b, 4.1). DecisionSubmit takes a whole
+  ReviewRecord or GateDecision and checks targetVersion,
+  gate state and the task kind x decision matrix before
+  writing (18.5, UC-04). The panel and the fallback forms
+  share this one path.
+end note
+
+' ================= Legend =================
+legend right
+  <b>Notation</b>
+  <<part>>  internal part of the structured class;
+      owned by A1, not shared with any other component
+  port / portin / portout  named interaction point on the
+      A1 boundary; the thin line inside A1 is a delegation
+      connector from the port to the owning part
+  ( )  provided interface, offered at a port
+  --(  required interface, consumed at a port
+  solid arrow between parts  connector, labelled with
+      what is exchanged
+  dashed arrow to TrailWriter  logging connector
+endlegend
+
+' ================= Layout hints =================
+A10 -[hidden]right- API
+SQ -[hidden]right- DSUB
+PA -[hidden]right- PROV
+PROV -[hidden]down- T5
+AOS -[hidden]right- FDS
+FDS -[hidden]right- ES
+ES -[hidden]right- CKS
+AOS -[hidden]down- CKS
+PL -[hidden]right- AT
+AT -[hidden]right- RQ
+TW -[hidden]down- AOS
+TW -[hidden]down- PL
+STO -[hidden]right- SV
+@enduml

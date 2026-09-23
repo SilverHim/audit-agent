@@ -1,0 +1,146 @@
+@startuml requirements_member_a
+top to bottom direction
+title Figure 7A  User Requirement Diagram — Execution and Evidence\n[Individual task · Member A]\n(SysML requirement notation expressed in PlantUML; source: spec 3.0-3.2, 12.4)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam defaultFontSize 20
+skinparam nodesep 25
+skinparam ranksep 55
+skinparam legend {
+  FontSize 19
+  BackgroundColor #F7F7F2
+  BorderColor #9A9A8C
+}
+skinparam class {
+  BackgroundColor<<requirement>> #FDF3E7
+  BorderColor<<requirement>> #C07A2C
+  ArrowColor #9A9A9A
+}
+skinparam noteBackgroundColor #F7F7F2
+skinparam noteBorderColor #9A9A8C
+hide circle
+
+' ================= Top-level requirement =================
+class "Audit Support System" as SYS <<requirement>> #EDE7F6 {
+  id = "REQ-00"
+  text = "Enable a single RCA to complete\na statutory audit engagement"
+}
+
+' ================= Containers =================
+class "Mandatory requirements" as MREQ <<requirement>> #F6E3C8 {
+  id = "REQ-M"
+  text = "Capabilities the system must provide\n(spec 3.1)"
+}
+class "Optional requirements" as OREQ <<requirement>> #D8E6F5 {
+  id = "REQ-O"
+  text = "Features deferred or configurable\n(spec 3.2)"
+}
+
+' ================= Mandatory (Member A) =================
+class "M-01" as M01 <<requirement>> {
+  id = "M-01"
+  text = "Scan all journal entries in full;\nno sampling"
+}
+class "M-02" as M02 <<requirement>> {
+  id = "M-02"
+  text = "Every judgment traceable to source\nevidence via EvidencePointer"
+}
+class "M-04" as M04 <<requirement>> {
+  id = "M-04"
+  text = "Block report generation until workpaper\ncoverage and disposition are complete"
+}
+class "M-05" as M05 <<requirement>> {
+  id = "M-05"
+  text = "Every AI judgment exposes\na visible reasoning chain"
+}
+class "M-08" as M08 <<requirement>> {
+  id = "M-08"
+  text = "Re-flag affected completed procedures\nwhen risk assessment is revised"
+}
+
+' ================= Optional (Member A) =================
+class "O-01" as O01 <<requirement>> #E8F1FA {
+  id = "O-01"
+  text = "Manage several engagements\nconcurrently"
+}
+class "O-02" as O02 <<requirement>> #E8F1FA {
+  id = "O-02"
+  text = "Extend external sources: litigation\nsearch and adverse media"
+}
+
+' ================= Containment =================
+SYS +-- MREQ
+SYS +-- OREQ
+
+MREQ +-- M01
+MREQ +-- M02
+MREQ +-- M04
+MREQ +-- M05
+MREQ +-- M08
+
+OREQ +-- O01
+OREQ +-- O02
+
+' ================= Derive =================
+M05 .[#7B4FA0,thickness=2,norank].> M02 : <<deriveReqt>>
+
+' ================= Scope note and acceptance criteria (12.4) =================
+note left of SYS
+  Scope agreed with the stakeholder: clauses
+  AG-01 to AG-06 (spec 3.0); capabilities left
+  out are listed as exclusions (spec 3.3).
+end note
+
+note right of SYS
+  <b>Informal description</b>
+  As the RCA, I want the system to check every
+  journal entry rather than a sample, and to show
+  me the reasoning and the source evidence behind
+  each judgment it makes. If I revise the risk
+  assessment, completed procedures affected by the
+  revision should be flagged again, and no report
+  should be produced until the workpapers cover
+  every audit objective and every procedure is
+  disposed. Later, I would like to run several
+  engagements at once and to draw on litigation
+  searches and adverse media.
+end note
+
+note bottom of M01
+  Acceptance: 3,000 entries in under
+  3 s; 100% recall on seeded anomalies.
+end note
+
+note bottom of M04
+  Acceptance (excerpt of 12.4): blocks unless coverage is
+  100%, every procedure is disposed, scope_limited and
+  not_applicable_pending items are approved, mandatory
+  fragments referenced, exclusion registers and P0/P1
+  manual results are in.
+end note
+
+' ================= Layout =================
+MREQ -[hidden]right- OREQ
+
+M01 -[hidden]right- M02
+M02 -[hidden]right- M05
+M05 -[hidden]right- M04
+M04 -[hidden]right- M08
+
+O01 -[hidden]right- O02
+
+M08 -[hidden]right- O01
+
+legend bottom
+  Notation
+  ====
+  Box <<requirement>> = one requirement, carrying its id and text.
+  Crosshair line (+--) = SysML containment; the crosshair sits on the container.
+  Dashed arrow <<deriveReqt>> = the derived requirement points at its source.
+  Beige = mandatory (spec 3.1); blue = optional (spec 3.2).
+  Notes give the acceptance criteria from the traceability matrix (12.4).
+  ----
+  Other requirements: Figure 7B (Member B), Figure 7C (Member C); full set in Figure 7.
+end legend
+@enduml
