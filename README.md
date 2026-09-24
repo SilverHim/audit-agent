@@ -42,6 +42,17 @@ API                  FastAPI 路由（认证、对话、复核、决定提交、
 
 ```
 .
+├── docs/
+│   ├── ELEC5620_设计规格说明书.md
+│   ├── Demo需求文档.md
+│   ├── 开发接口文档.md
+│   ├── 合成数据集设计.md
+│   ├── 协作规范.md
+│   ├── diagrams/               UML 模型图（PlantUML）
+│   ├── slides/                 系统设计讲解幻灯片
+│   ├── 课程要求/               项目说明与评分标准
+│   ├── 参考资料/               准则与法规原文
+│   └── 归档/                   仓库早期文件
 ├── src/
 │   ├── backend/
 │   │   ├── main.py             应用入口
@@ -59,6 +70,7 @@ API                  FastAPI 路由（认证、对话、复核、决定提交、
 ├── tests/
 ├── eval/                       评估集与指标
 ├── data/                       合成演示数据
+├── docker/                     数据库初始化脚本
 ├── pyproject.toml
 ├── langgraph.json
 └── compose.yml
@@ -104,7 +116,7 @@ uv run langgraph dev                               # 在 LangGraph Studio 中调
 cd src/frontend && bun run generate-client        # 后端接口变动后重新生成前端客户端
 ```
 
-提交流程与代码检查见 [协作规范.md](协作规范.md)。
+提交流程与代码检查见 [协作规范](docs/协作规范.md)。
 
 ## 团队
 
