@@ -1,0 +1,9 @@
+id: ACC-01
+name: 是否承接
+phase: P0_Acceptance
+cycle: Acceptance
+owner: A2
+engine: manual
+autonomy_level: L1
+gate: ACC-01
+depends_on: [ACC-04]

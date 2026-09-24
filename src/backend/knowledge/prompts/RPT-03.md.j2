@@ -1,0 +1,98 @@
+{#
+RPT-03 报告文本生成 → ReportDraft，每个 revision 调用一次；只写意见段与形成意见的基础段。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
+变量：
+  client_name    被审计单位名称（Engagement.client_name）
+  task.params    period_end
+  revision       本次起草的 revision，首稿为 1
+  opinion_type   FIN-01 确定的意见类型：unqualified 或 qualified
+  fin01_reason   FIN-01 GateDecision.reason
+  schedule       UncorrectedSchedule：items[misstatement_id、amount_cents、direction]、total_cents、materiality_cents
+  misstatements  schedule.items 对应的 Misstatement：id、judgment_id、type、account、assertion、amount_cents、direction
+  judgments      上述错报关联的已确认 Judgment：id、version、procedure_id、subject_id、conclusion、evidence
+  previous       上一 revision 的 {opinion, basis_for_opinion}，首稿为 null
+  annotations    RPT-01 对上一 revision 的批注：section、quote、comment；首稿为空
+  standards      StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set period_end = task.params.period_end %}
+{% set qualified = opinion_type == "qualified" %}
+You draft two sections of the independent auditor's report on the financial report of {{ client_name }} for the year ended {{ period_end }}, audited under Australian Auditing Standards and the Corporations Act 2001: the Opinion section and the Basis for Opinion section. The other sections come from a fixed template; do not write them.
+
+Opinion type: **{{ opinion_type }}**, decided by the auditor at FIN-01. Do not change it.
+
+## Inputs
+
+Auditor's reason at FIN-01: {{ fin01_reason }}
+
+{% if qualified %}
+Uncorrected misstatements:
+```json
+{{ misstatements | tojson(indent=2) }}
+```
+
+Total uncorrected misstatements: {{ schedule.total_cents }} cents.
+
+Confirmed judgments behind them:
+{% for j in judgments %}
+- {{ j.id }} (version {{ j.version }}, {{ j.procedure_id }}, subject {{ j.subject_id }}): {{ j.conclusion }}
+  Evidence: {% for e in j.evidence %}{{ e.type }} {{ e.source_id }} ({{ e.locator }}{% if e.page %}, p.{{ e.page }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}
+{% endfor %}
+{% endif %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+{% if previous %}
+## Revision {{ revision }}
+
+Previous text:
+
+Opinion:
+{{ previous.opinion }}
+
+Basis for Opinion:
+{{ previous.basis_for_opinion }}
+
+Reviewer annotations to address:
+{% for a in annotations %}
+- [{{ a.section }}]{% if a.quote %} on "{{ a.quote }}"{% endif %}: {{ a.comment }}
+{% endfor %}
+
+Revise the previous text so that every annotation is addressed. Keep all other wording unchanged.
+{% endif %}
+
+## Opinion section (ASA700-P23{% if qualified %}, ASA705-P16{% endif %})
+
+- First line: the heading "{{ "Qualified Opinion" if qualified else "Opinion" }}".
+- Paragraph 1: we have audited the financial report of {{ client_name }} (the Company), which comprises the statement of financial position as at {{ period_end }}, the statement of profit or loss and other comprehensive income, the statement of changes in equity and the statement of cash flows for the year then ended, notes to the financial statements including material accounting policy information, and the directors' declaration.
+{% if qualified %}
+- Paragraph 2: in our opinion, except for the effects of the matter described in the Basis for Qualified Opinion section of our report, the accompanying financial report is in accordance with the Corporations Act 2001, including giving a true and fair view of the Company's financial position as at {{ period_end }} and of its financial performance for the year then ended, and complying with Australian Accounting Standards and the Corporations Regulations 2001.
+{% else %}
+- Paragraph 2: in our opinion, the accompanying financial report is in accordance with the Corporations Act 2001, including giving a true and fair view of the Company's financial position as at {{ period_end }} and of its financial performance for the year then ended, and complying with Australian Accounting Standards and the Corporations Regulations 2001.
+{% endif %}
+
+## Basis section (ASA700-P28{% if qualified %}, ASA705-P16, ASA705-P20, ASA705-P21{% endif %})
+
+- First line: the heading "{{ "Basis for Qualified Opinion" if qualified else "Basis for Opinion" }}".
+{% if qualified %}
+- First paragraph(s): for each uncorrected misstatement, describe the matter as stated in its judgment conclusion, name the affected account, and quantify the financial effect: the amount and whether the account is overstated or understated. State effects on other line items (receivables, cost of sales, profit, income tax, equity) only where the inputs give them.
+{% endif %}
+- Then state that:
+  - the audit was conducted in accordance with Australian Auditing Standards, and our responsibilities are described in the Auditor's Responsibilities for the Audit of the Financial Report section;
+  - we are independent of the Company in accordance with the auditor independence requirements of the Corporations Act 2001 and the ethical requirements of APES 110 Code of Ethics for Professional Accountants (including Independence Standards), and have fulfilled our other ethical responsibilities under that Code;
+  - the independence declaration required by the Corporations Act 2001, given to the directors of the Company, would be in the same terms if given at the time of this report;
+  - the audit evidence obtained is sufficient and appropriate to provide a basis for our {{ "qualified " if qualified else "" }}opinion.
+
+## Rules
+
+- Every factual statement about a misstatement must come from the misstatements or judgments above. Do not mention materiality amounts, procedures performed, or facts not in the inputs.
+- Australian English. Amounts in Australian dollars, e.g. "$1,250,000" (drop ".00"; keep cents otherwise). Dates as "1 July 2025".
+- Plain text; paragraphs separated by a blank line; no Markdown.
+
+## Output (ReportDraft)
+
+- `opinion`: the full Opinion section, heading first.
+- `basis_for_opinion`: the full Basis section, heading first.
+- `judgment_refs`: `{"id", "version"}` for every judgment whose facts appear in the text; empty for an unqualified opinion.

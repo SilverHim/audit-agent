@@ -62,9 +62,9 @@ note as N07
 **Trigger / Preconditions:** report signed (RPT-01); P4.
 **Main success scenario**
 1. After RPT-01, A1 Orchestrator triggers RPT-06: A8 WorkpaperAgent
-    hashes every file in the engagement directory and writes
-    engagement.json.
-2. The engagement directory becomes read-only; the state moves
+    hashes every record and evidence original of the engagement and
+    writes the hashes to the engagements table.
+2. The engagement's records become read-only (row-level security); the state moves
     to Archived.
 3. A9 QCAgent generates the archive manifest (procedure disposition
     distribution, Judgment, review record and override counts, EQR

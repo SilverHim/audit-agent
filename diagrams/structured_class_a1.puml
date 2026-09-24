@@ -27,7 +27,7 @@ package "Tier 3 agents" as T3 {
 package "Support services" as SV {
   component "ReviewQueue\n(ranks, adjudication lane,\nblind sampling, agreement stats)" as RQ
   component "ProcedureLibrary" as PL
-  component "AuditTrail\n(audit_trail.jsonl)" as AT
+  component "AuditTrail\n(audit_trail table)" as AT
 }
 
 package "Store contracts required by A1" as STO {

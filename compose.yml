@@ -1,0 +1,22 @@
+name: elec5620-audit
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      AUDIT_OWNER_PASSWORD: ${AUDIT_OWNER_PASSWORD:-audit_owner}
+      AUDIT_APP_PASSWORD: ${AUDIT_APP_PASSWORD:-audit_app}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d audit"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  db-data:

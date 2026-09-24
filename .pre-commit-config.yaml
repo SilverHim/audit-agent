@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - {id: ruff, name: ruff, entry: uv run ruff check --fix --force-exclude, language: system, types: [python]}
+      - {id: ruff-format, name: ruff format, entry: uv run ruff format --force-exclude, language: system, types: [python]}
+      - {id: mypy, name: mypy, entry: uv run mypy src/backend, language: system, types: [python], pass_filenames: false}
+      - id: frontend
+        name: biome + tsc
+        entry: bash -c 'cd src/frontend && bunx biome check --write . && bunx tsc -b'
+        language: system
+        files: ^src/frontend/
+        pass_filenames: false
+      - {id: pytest, name: pytest, entry: uv run pytest -m "not slow" -q, language: system, pass_filenames: false, stages: [pre-push]}

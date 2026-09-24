@@ -1,0 +1,15 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: ASA 450
+title: Evaluation of Misstatements Identified during the Audit
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: ASA450-P05
+    paragraph: "5"
+    topic: accumulate_misstatements
+    text: ""   # 待摘录
+    procedures: [PLN-01, FIN-04]
+  - id: ASA450-P11
+    paragraph: "11"
+    topic: evaluate_uncorrected
+    text: ""   # 待摘录
+    procedures: [FIN-01]

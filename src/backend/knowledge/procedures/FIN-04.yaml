@@ -1,0 +1,16 @@
+id: FIN-04
+name: 错报累计
+phase: P3_Completion
+cycle: Completion
+owner: A9
+engine: rule
+autonomy_level: L3
+params:
+  materiality_cents: {ref: materiality_cents}
+  clearly_trivial_cents: {ref: clearly_trivial_cents}
+standards: [ASA450-P05]
+# 无 SQL，A9 从 state.misstatements（本版全部 uncorrected）计算 UncorrectedSchedule：
+# - amount_cents > clearly_trivial_cents 的进 items，其余的 id 进 excluded_trivial_ids
+# - total_cents = items 的 amount_cents 之和，不按 direction 抵销
+# - materiality_cents 取 params；total_cents >= materiality_cents 时 candidate_opinion = qualified，否则 unqualified
+rules: []

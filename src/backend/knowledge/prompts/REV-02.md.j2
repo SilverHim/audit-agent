@@ -1,0 +1,118 @@
+{#
+REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 选中或 REV-08 R01 命中）。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
+变量：
+  subject_id              发票 ID
+  task.params             period_end、window_days、threshold_cents
+  task.risks              本程序覆盖的 RiskItem：id、assertion、level、fraud_related、description
+  data.invoice            sales_invoice 行：source_type、id、invoice_no、customer、contract_id、invoice_date、
+                          posting_date、amount_cents、journal_entry_id
+  data.delivery_notes     该发票的 delivery_note 行列表：source_type、id、delivery_no、invoice_id、shipped_date、
+                          signed_date、signed_by；无则为空列表
+  data.contract           发票所属 Contract（字段同 REV-03），无则为 null
+  data.document           合同 PDF 的 DocumentRef，无则为 null
+  data.contract_judgment  该合同的 REV-03 Judgment：id、conclusion、review_status；无则为 null
+  rule_findings           该发票上 REV-08 的 AuditException：id、rule_id、severity、amount_cents、detail
+  standards               StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set inv = data.invoice %}
+{% set period_end = task.params.period_end %}
+You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ period_end }}, prepared under Australian Accounting Standards.
+
+## Task
+
+Decide whether sales invoice {{ inv.invoice_no }} (ID {{ subject_id }}), posted on {{ inv.posting_date }} for {{ inv.amount_cents }} cents, is recorded in the period in which control of the goods passed to the customer.
+
+## Inputs
+
+Invoice:
+```json
+{{ inv | tojson(indent=2) }}
+```
+
+Delivery notes:
+{% if data.delivery_notes %}
+```json
+{{ data.delivery_notes | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Contract:
+{% if data.contract %}
+```json
+{{ data.contract | tojson(indent=2) }}
+```
+
+Contract document:
+```json
+{{ data.document | tojson(indent=2) }}
+```
+{% else %}
+No contract is linked to this invoice.
+{% endif %}
+
+REV-03 evaluation of the contract (guidance only; cite the contract term itself as evidence):
+{% if data.contract_judgment %}
+{{ data.contract_judgment.id }} ({{ data.contract_judgment.review_status }}): {{ data.contract_judgment.conclusion }}
+{% else %}
+None.
+{% endif %}
+
+Rule findings on this invoice:
+{% for x in rule_findings %}
+- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, detail {{ x.detail | tojson }}
+{% else %}
+None.
+{% endfor %}
+
+Risks addressed:
+{% for r in task.risks %}
+- {{ r.id }}: {{ r.assertion }}, {{ r.level }}{% if r.fraud_related %}, fraud-related{% endif %}. {{ r.description }}
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. Transfer event: take it from the contract's control_transfer term (AASB15-P38), read with the REV-03 conclusion. Where they differ, follow the term text and record a limitation.
+2. Transfer date: the date of that event on the delivery note. Transfer on customer signature or receipt → `signed_date`; transfer on shipment → `shipped_date`.
+3. Revenue belongs to the period in which the transfer date falls (AASB15-P31). The period ends on {{ period_end }}.
+4. Address every rule finding in the reasoning chain. If you conclude `accept` despite a finding, state why it does not indicate a misstatement.
+
+## proposed_action
+
+- `accept`: the transfer date is on or before {{ period_end }}.
+- `misstatement`: the invoice is posted on or before {{ period_end }} but the transfer date is after it. Fill `misstatement_draft`: `type` factual, `account` "Revenue", `assertion` Cutoff, `amount_cents` {{ inv.amount_cents }} (the invoice amount), `direction` overstated.
+- `more_evidence`: no delivery note, the date of the transfer event is missing, no contract is linked, the terms do not determine the transfer point, or the invoice covers deliveries that fall in different periods.
+- Do not use `close`.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: the period the invoice belongs to, the transfer event and its date, and for a misstatement the amount and direction.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Invoice row | invoice | sales_invoice | row `id` | column name, e.g. posting_date | null | internal_original |
+| Delivery note row | delivery | delivery_note | row `id` | column name, e.g. signed_date | null | internal_original |
+{% if data.contract %}
+| Contract term | contract | document | {{ data.contract.document_id }} | term ID | the term's `page` | {{ data.document.reliability }} |
+{% endif %}
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

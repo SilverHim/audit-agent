@@ -1,0 +1,8 @@
+id: PLN-03
+name: 风险清单终审
+phase: P1_Planning
+cycle: Planning
+owner: A4
+engine: manual
+autonomy_level: L1
+gate: PLN-01/03

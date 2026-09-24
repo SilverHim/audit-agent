@@ -1,0 +1,9 @@
+id: RPT-01
+name: 审计报告批准与签字
+phase: P4_Reporting
+cycle: Reporting
+owner: A10
+engine: manual
+autonomy_level: L1
+gate: RPT-01
+depends_on: [RPT-03]

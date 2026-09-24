@@ -1,0 +1,30 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: ASA 705
+title: Modifications to the Opinion in the Independent Auditor’s Report
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: ASA705-P07
+    paragraph: "7"
+    topic: qualified_opinion
+    text: ""   # 待摘录
+    procedures: [FIN-01]
+  - id: ASA705-P08
+    paragraph: "8"
+    topic: adverse_opinion
+    text: ""   # 待摘录
+    procedures: [FIN-01]
+  - id: ASA705-P16
+    paragraph: "16"
+    topic: modified_opinion_heading
+    text: ""   # 待摘录
+    procedures: [RPT-03]
+  - id: ASA705-P20
+    paragraph: "20"
+    topic: basis_for_modified_opinion
+    text: ""   # 待摘录
+    procedures: [RPT-03]
+  - id: ASA705-P21
+    paragraph: "21"
+    topic: quantify_misstatement_effect
+    text: ""   # 待摘录
+    procedures: [RPT-03]

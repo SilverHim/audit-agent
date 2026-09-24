@@ -1,0 +1,10 @@
+# 报告固定段落。底本：ASA 700 [Aus] Illustration 1A（无保留）、ASA 705 [Aus] Illustration 1A（保留），
+# 去掉关键审计事项与其他信息两段。占位符：{entity_name}、{period_end}、{auditor_name}。文本待从原文摘录。
+unqualified:
+  directors_responsibilities: ""
+  auditor_responsibilities: ""
+  other_legal_and_regulatory: ""
+qualified:
+  directors_responsibilities: ""
+  auditor_responsibilities: ""
+  other_legal_and_regulatory: ""

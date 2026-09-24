@@ -1,0 +1,80 @@
+{#
+REV-03 收入合同条款评价 → JudgmentDraft，每份合同调用一次。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
+变量：
+  subject_id     合同 ID
+  task.params    period_end
+  task.risks     本程序覆盖的 RiskItem：id、assertion、level、fraud_related、description
+  data.contract  Contract：id、document_id、counterparty、counterparty_abn、amount_cents、sign_date、
+                 terms[id、term_type、text、page]、evidence
+  data.document  合同 PDF 的 DocumentRef：id、file_name、page_count、reliability
+  standards      StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set doc_id = data.contract.document_id %}
+You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ task.params.period_end }}, prepared under Australian Accounting Standards.
+
+## Task
+
+Evaluate sales contract {{ subject_id }}:
+1. Identify when control of the goods passes to the customer, and the term that sets it.
+2. Identify other terms that bear on revenue recognition: return rights, rebates, acceptance conditions, bill-and-hold, consignment, guarantees, related-party terms.
+
+REV-02 relies on your conclusion to test whether invoices under this contract near {{ task.params.period_end }} are recorded in the correct period.
+
+## Inputs
+
+Contract:
+```json
+{{ data.contract | tojson(indent=2) }}
+```
+
+Contract document:
+```json
+{{ data.document | tojson(indent=2) }}
+```
+
+Risks addressed:
+{% for r in task.risks %}
+- {{ r.id }}: {{ r.assertion }}, {{ r.level }}{% if r.fraud_related %}, fraud-related{% endif %}. {{ r.description }}
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+- AASB15-P31: revenue is recognised when the performance obligation is satisfied, that is, when the customer obtains control of the goods.
+- AASB15-P38: for an obligation satisfied at a point in time, identify that point from the indicators of control transfer: present right to payment, legal title, physical possession, significant risks and rewards of ownership, customer acceptance.
+- A term that names the event on which control, title or risk passes (e.g. the customer signing the delivery note) sets the transfer point, unless another term contradicts it.
+- Use only the terms in the input. Record any term you would need but cannot find as a limitation.
+
+## proposed_action
+
+- `accept`: the transfer point can be determined from the terms.
+- `more_evidence`: the transfer point cannot be determined, or terms conflict on it.
+- Do not use `close` or `misstatement`. Return rights, rebates and similar terms do not change proposed_action; name them with their term IDs in the conclusion.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: the transfer event and the term ID that sets it, then any other relevant terms with their term IDs.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: null.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Contract term | contract | document | {{ doc_id }} | term ID | the term's `page` | {{ data.document.reliability }} |
+| Contract field (counterparty, amount_cents, sign_date) | contract | document | {{ doc_id }} | field name | page in `data.contract.evidence` | {{ data.document.reliability }} |
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

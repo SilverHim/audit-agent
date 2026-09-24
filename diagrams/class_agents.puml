@@ -188,10 +188,10 @@ package "Contracts (interfaces, depend on nothing)" as P7 {
 
 ' ================= Implementations (Persistence & Tier 1 adapters) =================
 package "Implementations (Persistence & Tier 1 adapters), injected by composition root" as P9 {
-  class SQLiteFinancialDataStore
-  class JsonAuditOutputStore
+  class PostgresFinancialDataStore
+  class PostgresAuditOutputStore
   class FileEvidenceStore
-  class SqliteCheckpointSaver
+  class PostgresCheckpointSaver
   class "LLMProviderAdapter\n(main, critic, mock)" as LLMA
   class AccountingAdapter
   class UploadHandler
@@ -235,10 +235,10 @@ ProcedureAgent <|-- A10
 
 A1 ..|> StateQuery
 A1 ..|> DecisionSubmit : validates target version,\ngate state, kind x decision,\ngate x disposition
-SQLiteFinancialDataStore ..|> FinancialDataStore
-JsonAuditOutputStore ..|> AuditOutputStore
+PostgresFinancialDataStore ..|> FinancialDataStore
+PostgresAuditOutputStore ..|> AuditOutputStore
 FileEvidenceStore ..|> EvidenceStore
-SqliteCheckpointSaver ..|> CheckpointSaver
+PostgresCheckpointSaver ..|> CheckpointSaver
 LLMA ..|> LLMClient
 AccountingAdapter ..|> ExternalDataSource
 UploadHandler ..|> ExternalDataSource
@@ -324,5 +324,5 @@ A4 -[hidden]down- A9
 A5 -[hidden]down- A10
 Agent -[hidden]down- ProcedureLibrary
 ReviewQueue -[hidden]down- StateQuery
-FinancialDataStore -[hidden]down- SQLiteFinancialDataStore
+FinancialDataStore -[hidden]down- PostgresFinancialDataStore
 @enduml

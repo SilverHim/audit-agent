@@ -121,7 +121,7 @@ note as N02
     and PLN-18 (substantive procedures alone sufficient?); RCA confirms
     at the same gate.
 6. A1 assembles procedures per objective by risk level, sets parameters,
-    generates unpredictability candidates, writes procedures.json and
+    generates unpredictability candidates, writes the procedures table and
     runs the coverage rules; gaps listed -> back to step 4.
 7. A1 creates AuditPlan vN (draft, packSnapshot); A4 writes its
     narrative (PLN-15).
@@ -135,7 +135,7 @@ note as N02
 8a. Version stale -> current version re-presented; rejected -> vN+1
       created, back to step 7.
 **Postconditions:** materiality and RiskItems confirmed; AuditPlan vN
-approved with procedures.json; engagement in P2.
+approved with the procedures table; engagement in P2.
 end note
 
 note as N03

@@ -1,0 +1,28 @@
+id: CSH-05
+name: 流水账面核对
+phase: P2_Executing
+cycle: Cash
+owner: A6
+engine: rule
+autonomy_level: L4
+assertions: [Existence]
+triggers:
+  - {account: Cash, assertions: [Existence], level: [low, medium, high, significant]}
+params:
+  period_end: {ref: period_end}
+rules:
+  - id: B01
+    name: 对账单期末余额与总账不符
+    severity: medium
+    sql: |
+      -- 待 B 实现
+      -- 来源：bank_accounts b
+      --       对账单余额：bank_transactions 中 bank_account_id = b.id AND txn_date <= :period_end 的最后一笔
+      --                   （ORDER BY txn_date DESC, id DESC）的 balance_after_cents
+      --       账面余额：trial_balance（period = 'current'，account_code = b.gl_account_code）的 balance_cents
+      -- 条件：b.engagement_id = :eid
+      --       AND (对账单余额 IS NULL OR 对账单余额 <> 账面余额)
+      -- 输出：'bank_account' AS source_type、b.id AS source_id、对账单余额 - 账面余额 AS amount_cents、
+      --       对账单余额 AS statement_balance_cents、账面余额 AS book_balance_cents、
+      --       最后一笔的 id AS last_bank_transaction_id
+      -- ORDER BY b.id

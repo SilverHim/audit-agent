@@ -1,0 +1,21 @@
+name: ci
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - run: ~/.local/bin/uv sync --frozen
+      - run: ~/.local/bin/uv run ruff check . && ~/.local/bin/uv run mypy src/backend
+      - run: ~/.local/bin/uv run pytest -m "not slow" -q
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -fsSL https://bun.sh/install | bash
+      - run: ~/.bun/bin/bun install --frozen-lockfile
+      - run: ~/.bun/bin/bun run lint && ~/.bun/bin/bun run build

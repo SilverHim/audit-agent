@@ -75,19 +75,19 @@ package "Tier 2  Knowledge" as T2 {
     [rules.json] as Rules
     [Standards fragments] as Std
   }
-  package "Runtime knowledge data\n(/runtime, row-versioned, not in Git)" as T2R {
+  package "Runtime knowledge data\n(PostgreSQL tables, row-versioned, not in Git)" as T2R {
     [Client profiles] as Prof
-    [agreement_stats.json] as Stats
-    [Vector index\nper engagement] as VIdx
+    [agreement_stats] as Stats
+    [Vector index (pgvector)\nby engagement_id] as VIdx
   }
 }
 
 ' ================= Persistence =================
 package "Persistence (implementations)" as PS {
-  [SQLiteFinancialDataStore] as FDS
-  [JsonAuditOutputStore] as AOS
+  [PostgresFinancialDataStore] as FDS
+  [PostgresAuditOutputStore] as AOS
   [FileEvidenceStore] as ES
-  [SqliteCheckpointSaver] as CK
+  [PostgresCheckpointSaver] as CK
 }
 
 ' ================= Tier 1 =================

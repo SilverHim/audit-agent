@@ -1,0 +1,15 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: ASA 700
+title: Forming an Opinion and Reporting on a Financial Report
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: ASA700-P23
+    paragraph: "23"
+    topic: opinion_section
+    text: ""   # 待摘录
+    procedures: [RPT-03]
+  - id: ASA700-P28
+    paragraph: "28"
+    topic: basis_for_opinion
+    text: ""   # 待摘录
+    procedures: [RPT-03]

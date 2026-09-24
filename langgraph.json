@@ -1,0 +1,9 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "audit": "./src/backend/orchestration/studio.py:graph"
+  },
+  "env": ".env",
+  "python_version": "3.13"
+}

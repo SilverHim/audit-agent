@@ -1,0 +1,52 @@
+id: CSH-02
+name: 函证差异评价
+phase: P2_Executing
+cycle: Cash
+owner: A6
+engine: hybrid
+autonomy_level: L3
+assertions: [Existence]
+triggers:
+  - {account: Cash, assertions: [Existence], level: [medium, high, significant]}
+params:
+  period_end: {ref: period_end}
+  subsequent_days: 10           # 期后流水范围
+  lookback_days: 5              # 期末前总账分录范围
+depends_on: [CSH-05, DOC-06]
+standards: [ASA505-P14]
+evidence_required: [external, bank]
+# D01 回函与账面差额由 A6 在代码中生成，不写 SQL（回函余额在 AuditOutputStore，不经 FinancialDataStore.query 跨表读取）：
+#   对每个 Confirmation，book = FinancialDataStore.trial_balance(current) 中 gl_account_code 的余额；
+#   confirmed_balance_cents ≠ book 时建 AuditException：id X-CSH-02-{run_no}-D01-{n}，rule_id D01，severity medium，
+#   source_type bank_account，source_ids [bank_account_id]，amount_cents = confirmed - book；Confirmation 写 book、difference、result = difference。
+#   相等时 Confirmation 写 book、difference_cents = 0、result = agreed，不调 LLM。
+# 判断对象 = D01 例外的 source_id；D02、D03 的行按 bank_account_id 切给对应账户
+rules:
+  - id: D02
+    name: 候选调节项：期后银行流水
+    severity: low
+    emit: rows
+    sql: |
+      -- 待 B 实现
+      -- 来源：bank_transactions t
+      -- 条件：t.engagement_id = :eid
+      --       AND t.txn_date > :period_end AND t.txn_date <= :period_end + :subsequent_days
+      -- 输出：'bank_transaction' AS source_type、t.id、t.bank_account_id、t.txn_date、t.amount_cents、
+      --       t.description、t.reference
+      -- ORDER BY t.bank_account_id, t.txn_date, t.id
+  - id: D03
+    name: 候选调节项：期末前银行科目分录
+    severity: low
+    emit: rows
+    sql: |
+      -- 待 B 实现
+      -- 来源：journal_entries j JOIN bank_accounts b ON b.gl_account_code = j.account_code
+      -- 条件：j.engagement_id = :eid
+      --       AND j.posting_date BETWEEN :period_end - :lookback_days AND :period_end
+      -- 输出：'journal_entry' AS source_type、j.id、b.id AS bank_account_id、j.entry_no、j.posting_date、
+      --       j.debit_cents、j.credit_cents、j.description、j.source_doc
+      -- ORDER BY b.id, j.posting_date, j.id
+llm:
+  prompt: CSH-02.md.j2
+  output_model: JudgmentDraft
+  context_budget: 8000

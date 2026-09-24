@@ -1,0 +1,44 @@
+id: PLN-07
+name: 初步分析程序
+phase: P1_Planning
+cycle: Planning
+owner: A4
+engine: rule
+autonomy_level: L3
+params:
+  change_pct: 0.2               # 变动率绝对值下限
+  min_change_cents: 10000000    # 变动额绝对值下限 100,000.00
+  revenue_account_codes: ["4100"]
+  cost_of_sales_account_codes: ["5100"]
+rules:
+  - id: A01
+    name: 科目本期与上期变动超阈值
+    severity: medium
+    sql: |
+      -- 待 B 实现
+      -- 来源：c = trial_balance WHERE engagement_id = :eid AND period = 'current'，
+      --       p = trial_balance WHERE engagement_id = :eid AND period = 'prior'，各为子查询，
+      --       c FULL JOIN p ON c.account_code = p.account_code；
+      --       JOIN accounts a ON a.engagement_id = :eid AND a.code = COALESCE(c.account_code, p.account_code)
+      -- change_cents = COALESCE(c.balance_cents, 0) - COALESCE(p.balance_cents, 0)（借方为正）
+      -- 条件：ABS(change_cents) >= :min_change_cents
+      --       AND (COALESCE(p.balance_cents, 0) = 0 OR ABS(change_cents) >= :change_pct * ABS(p.balance_cents))
+      -- 输出：'trial_balance' AS source_type、COALESCE(c.account_code, p.account_code) AS source_id、
+      --       change_cents AS amount_cents、a.name AS account_name、c.balance_cents AS current_cents、
+      --       p.balance_cents AS prior_cents、change_cents::numeric / NULLIF(ABS(p.balance_cents), 0) AS change_pct
+      -- ORDER BY source_id
+  - id: A02
+    name: 比率计算取数
+    severity: low
+    emit: rows
+    sql: |
+      -- 待 B 实现
+      -- 来源：trial_balance t JOIN accounts a ON a.code = t.account_code，按 t.period 分组（current、prior）
+      -- revenue_cents = -SUM(t.balance_cents) WHERE a.code = ANY(:revenue_account_codes)
+      -- cost_of_sales_cents = SUM(t.balance_cents) WHERE a.code = ANY(:cost_of_sales_account_codes)
+      -- 条件：t.engagement_id = :eid
+      -- 输出：period、revenue_cents、cost_of_sales_cents
+      -- ORDER BY period
+      -- A4 据此写 AnalyticsResult.ratios：
+      --   gross_margin_current、gross_margin_prior = (revenue - cost_of_sales) / revenue
+      --   revenue_growth = current revenue / prior revenue - 1

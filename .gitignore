@@ -1,1 +1,13 @@
 .DS_Store
+参考资料/
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.langgraph_api/
+var/
+node_modules/
+.claude/

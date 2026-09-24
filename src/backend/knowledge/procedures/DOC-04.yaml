@@ -1,0 +1,11 @@
+id: DOC-04
+name: 合同要素抽取
+phase: P1_Planning
+cycle: Revenue
+owner: A3
+engine: llm
+autonomy_level: L2
+llm:
+  prompt: DOC-04.md.j2
+  output_model: ContractExtraction
+  context_budget: 8000

@@ -1,0 +1,10 @@
+id: FIN-01
+name: 未更正错报评价
+phase: P3_Completion
+cycle: Completion
+owner: A9
+engine: manual
+autonomy_level: L1
+gate: FIN-01
+depends_on: [FIN-04]
+standards: [ASA450-P11, ASA705-P07, ASA705-P08]

@@ -1,0 +1,15 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: AASB 15
+title: Revenue from Contracts with Customers
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: AASB15-P31
+    paragraph: "31"
+    topic: control_transfer
+    text: ""   # 待摘录
+    procedures: [REV-03, REV-02]
+  - id: AASB15-P38
+    paragraph: "38"
+    topic: control_transfer_point_in_time
+    text: ""   # 待摘录
+    procedures: [REV-03, REV-02]

@@ -1,0 +1,35 @@
+id: REV-02
+name: 收入截止性判断
+phase: P2_Executing
+cycle: Revenue
+owner: A6
+engine: hybrid
+autonomy_level: L2
+assertions: [Occurrence, Cutoff]
+triggers:
+  - {account: Revenue, assertions: [Cutoff], level: [medium, high, significant]}
+params:
+  window_days: {by_risk: {medium: 10, high: 15, significant: 20}}
+  threshold_cents: {ref: performance_materiality_cents}
+  period_end: {ref: period_end}
+depends_on: [REV-03, REV-08]
+standards: [AASB15-P31, AASB15-P38]
+evidence_required: [invoice, delivery, contract]
+# 判断对象 = S01 选中的发票 ∪ REV-08 R01 例外的 source_id，每张发票一条 Judgment
+rules:
+  - id: S01
+    name: 期末窗口内超过执行重要性的发票
+    severity: medium
+    emit: rows
+    sql: |
+      SELECT id, invoice_no, contract_id, posting_date, amount_cents
+      FROM sales_invoices
+      WHERE engagement_id = :eid
+        AND posting_date BETWEEN CAST(:period_end AS date) - CAST(:window_days AS int)
+                             AND CAST(:period_end AS date)
+        AND amount_cents >= :threshold_cents
+      ORDER BY id
+llm:
+  prompt: REV-02.md.j2
+  output_model: JudgmentDraft
+  context_budget: 8000

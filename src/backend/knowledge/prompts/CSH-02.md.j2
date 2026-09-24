@@ -1,0 +1,123 @@
+{#
+CSH-02 函证差异评价 → JudgmentDraft，每个 D01 命中的银行账户调用一次。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
+变量：
+  subject_id                    银行账户 ID
+  task.params                   period_end、subsequent_days、lookback_days
+  task.risks                    本程序覆盖的 RiskItem：id、assertion、level、fraud_related、description
+  data.bank_account             bank_account 行：source_type、id、bank_name、bsb、account_no、gl_account_code
+  data.confirmation             Confirmation：id、confirming_party、balance_date、confirmed_balance_cents、
+                                receipt_channel、reply_document_id、evidence
+  data.reply_document           回函 PDF 的 DocumentRef：id、file_name、page_count、reliability
+  data.book_balance_cents       gl_account_code 的本期期末试算表余额
+  data.difference_cents         回函余额减账面余额
+  data.subsequent_transactions  本账户的 D02 行：source_type、id、txn_date、amount_cents（存入为正）、description、reference
+  data.period_end_entries       本账户的 D03 行：source_type、id、entry_no、posting_date、debit_cents、credit_cents、
+                                description、source_doc
+  rule_findings                 本账户的 AuditException（CSH-02 D01、CSH-05 B01）：id、procedure_id、rule_id、
+                                severity、amount_cents、detail
+  standards                     StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set ba = data.bank_account %}
+{% set conf = data.confirmation %}
+{% set period_end = task.params.period_end %}
+You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ period_end }}.
+
+## Task
+
+The bank's confirmed balance for account {{ ba.account_no }} (ID {{ subject_id }}, {{ ba.bank_name }}) differs from the book balance. Investigate the difference and decide whether it indicates a misstatement (ASA505-P14).
+
+- Confirmed balance: {{ conf.confirmed_balance_cents }} cents as at {{ conf.balance_date }}
+- Book balance (GL account {{ ba.gl_account_code }}) at {{ period_end }}: {{ data.book_balance_cents }} cents
+- Difference, confirmed minus book: {{ data.difference_cents }} cents
+
+## Inputs
+
+Bank account:
+```json
+{{ ba | tojson(indent=2) }}
+```
+
+Confirmation:
+```json
+{{ conf | tojson(indent=2) }}
+```
+
+Reply document:
+```json
+{{ data.reply_document | tojson(indent=2) }}
+```
+
+Bank transactions in the {{ task.params.subsequent_days }} days after {{ period_end }}:
+{% if data.subsequent_transactions %}
+```json
+{{ data.subsequent_transactions | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+GL entries on the bank account in the {{ task.params.lookback_days }} days up to {{ period_end }}:
+{% if data.period_end_entries %}
+```json
+{{ data.period_end_entries | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Rule findings on this account:
+{% for x in rule_findings %}
+- {{ x.id }}: {{ x.procedure_id }} rule {{ x.rule_id }}, amount {{ x.amount_cents }} cents, detail {{ x.detail | tojson }}
+{% endfor %}
+
+Risks addressed:
+{% for r in task.risks %}
+- {{ r.id }}: {{ r.assertion }}, {{ r.level }}{% if r.fraud_related %}, fraud-related{% endif %}. {{ r.description }}
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. The confirmed balance must be at the period end: `balance_date` equals {{ period_end }}.
+2. Reconciling items:
+   - Deposit in transit: a receipt debited to the bank GL account on or before {{ period_end }} and credited by the bank after it, for the same amount.
+   - Unpresented payment: a payment credited to the bank GL account on or before {{ period_end }} and debited by the bank after it, for the same amount.
+   - Book balance = bank balance + deposits in transit − unpresented payments. The difference they explain (confirmed minus book) = unpresented payments − deposits in transit.
+3. Match on amount first, then date and reference or description. A bank transaction after {{ period_end }} without a GL entry on or before {{ period_end }} is not a reconciling item.
+
+## proposed_action
+
+- `close`: criterion 1 holds and matched reconciling items explain the difference to the cent.
+- `misstatement`: the inputs show a recording error in the book balance, such as a GL entry whose amount differs from the bank transaction with the same reference, or a duplicated GL entry. Fill `misstatement_draft`: `type` factual, `account` "Cash"; book balance too high → `assertion` Existence, `direction` overstated; too low → `assertion` Completeness, `direction` understated; `amount_cents` = the error, equal to a referenced row's amount or the difference between two referenced rows.
+- `more_evidence`: criterion 1 fails, or any part of the difference is unexplained and the inputs do not show an error.
+- Do not use `accept`.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: the difference, what explains it, and whether it is a misstatement.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Confirmation reply field | external | document | {{ conf.reply_document_id }} | field name, e.g. confirmed_balance_cents | page in `confirmation.evidence` | {{ data.reply_document.reliability }} |
+| Book balance | voucher | trial_balance | {{ ba.gl_account_code }} | current_cents | null | internal_original |
+| Bank transaction row | bank | bank_transaction | row `id` | column name, e.g. txn_date | null | external_copy |
+| GL entry row | voucher | journal_entry | row `id` | column name, e.g. posting_date | null | internal_original |
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

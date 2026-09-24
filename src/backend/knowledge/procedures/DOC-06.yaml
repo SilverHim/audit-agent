@@ -1,0 +1,12 @@
+id: DOC-06
+name: 函证回函抽取
+phase: P2_Executing
+cycle: Cash
+owner: A3
+engine: llm
+autonomy_level: L3
+depends_on: [CSH-04]
+llm:
+  prompt: DOC-06.md.j2
+  output_model: ConfirmationExtraction
+  context_budget: 8000

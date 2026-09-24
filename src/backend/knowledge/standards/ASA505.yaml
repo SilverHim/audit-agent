@@ -1,0 +1,15 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: ASA 505
+title: External Confirmations
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: ASA505-P07
+    paragraph: "7"
+    topic: control_over_requests
+    text: ""   # 待摘录
+    procedures: [CSH-04]
+  - id: ASA505-P14
+    paragraph: "14"
+    topic: exceptions
+    text: ""   # 待摘录
+    procedures: [CSH-02]

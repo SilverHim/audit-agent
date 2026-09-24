@@ -1,0 +1,15 @@
+# 段落号已对照 参考资料/ 中的现行编译版核对；text 由 A 从原文摘录填入（参考资料/ 不进 Git）
+standard: ASA 320
+title: Materiality in Planning and Performing an Audit
+compiled: ""   # 填所用编译版日期
+fragments:
+  - id: ASA320-P10
+    paragraph: "10"
+    topic: overall_materiality
+    text: ""   # 待摘录
+    procedures: [PLN-01]
+  - id: ASA320-P11
+    paragraph: "11"
+    topic: performance_materiality
+    text: ""   # 待摘录
+    procedures: [PLN-01]

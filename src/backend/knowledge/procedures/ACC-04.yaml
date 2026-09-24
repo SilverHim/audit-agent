@@ -1,0 +1,14 @@
+id: ACC-04
+name: ASIC / ABN 核查
+phase: P0_Acceptance
+cycle: Acceptance
+owner: A2
+engine: rule
+autonomy_level: L3
+# 无 SQL，A2 调 RegistrySource：
+# - abn_active：abn(engagement.abn) 有记录且 status = Active
+# - name_match：AbnRecord.entity_name 与 client_profile.legal_name 忽略大小写、空白与标点后相等
+# - company_registered：asic_company(AbnRecord.acn，为空取 client_profile.acn) 有记录且 status = Registered
+# 每次查询写一行 external_call 留痕；RegistryCheck.evidence 指向该留痕（type = external，source_type = trail）
+# 未通过的检查各出一条 AuditException：rule_id 取检查名，severity high，source_ids 为 [engagement.abn]
+rules: []

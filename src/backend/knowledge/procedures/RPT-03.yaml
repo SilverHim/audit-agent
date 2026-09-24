@@ -1,0 +1,15 @@
+id: RPT-03
+name: 报告文本生成
+phase: P4_Reporting
+cycle: Reporting
+owner: A10
+engine: llm
+autonomy_level: L2
+params:
+  period_end: {ref: period_end}
+depends_on: [FIN-01]
+standards: [ASA700-P23, ASA700-P28, ASA705-P16, ASA705-P20, ASA705-P21]
+llm:
+  prompt: RPT-03.md.j2
+  output_model: ReportDraft
+  context_budget: 8000
