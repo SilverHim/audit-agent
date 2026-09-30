@@ -1,20 +1,20 @@
 # Speaker script — 8 minute introduction
 
-ELEC5620 Group 16. English deck: `Group16-audit-support-8min.pptx`.
+ELEC5620 Group 16. English deck: `Group16-audit-support.pptx`.
 
-Three speakers. Spoken time is about 7 minutes 45 seconds, including the three figure flashes. Page turns bring it to about 8 minutes.
+Three speakers. Spoken time is about 9 minutes if the A6 workflow and the prototype walk-through are both included. Skip those two pages to stay near 8 minutes.
 
 | Speaker | Slides | Subject | Time |
 |---|---|---|---|
 | Member C | 1–3 | Positioning and the five phases | about 2:20 |
-| Member A | 4–7 | Agents, Figure 1b, design models, Figure 3a | about 2:50 |
-| Member B | 8–11 | Use cases, Figure 6, one audit line, close | about 2:30 |
+| Member A | 4–9 | Agents, one fieldwork workflow, collaboration, design models, the state machine | about 3:45 |
+| Member B | 10–14 | Use cases, the prototype run, one audit line, close | about 2:55 |
 
-Slides 5, 7, and 9 are figure flashes. Each is one sentence. Skip a flash if the talk is running long. The appendix after slide 12 is not spoken.
+Slide 6 is one agent's workflow. Slides 7, 9, and 11 are simplified diagrams. Slide 12 is the prototype execution path. Skip slide 6 or slide 12 if the talk is running long. The full PlantUML figures stay in the appendix, from slide 15, and are not spoken.
 
 A7 independent review and A8 workpapers are in the specification. This prototype has not wired them in. A10 dialogue is not in this prototype either. Presentation goes through the gate and review screens. Report drafting is already on A10.
 
-The diagram PNGs already in `docs/diagrams/out` are embedded. Each figure slide also links to the tracked `.puml` on the university GitHub. That repository is private to the group. The labels on a fitted diagram are small; open the source to read every box.
+Procedure counts on the agent slide are the specification of 161. This prototype runs 17 of them. The appendix still embeds the diagram PNGs from `docs/diagrams/out`, with a link to each tracked `.puml`. That repository is private to the group.
 
 ## 1. Title
 
@@ -36,69 +36,91 @@ The work runs in five phases. Acceptance checks the ABN and ASIC, and the audito
 
 ## 4. Ten agents
 
-**Member A · about 70 seconds · cumulative 3:35**
+**Member A · about 40 seconds · cumulative 3:05**
 
-The ten agents are split by what they produce, not by account area. A1 is the orchestrator: the state machine, the gates, and the schedule. It does not call a language model. A2 checks background and independence. A3 turns contracts and replies into structured data. A4 rates risk and materiality. A5 collects external evidence, such as a confirmation. A6 makes the substantive judgments, and it can run as several instances. A7 re-reads the evidence with a different model, so a model does not review itself. A8 writes the workpapers. A9 does rule-based quality control, including the misstatement roll-up. A10 is the only door. It presents the item and passes the decision on. It does not decide. Agents do not call each other. Results go into the engagement state, and A1 merges them. A7 is the one exception: it reviews before that merge. The dashed roles, A7 and A8, are in the specification. This prototype has not wired them in. Presentation goes through the gate and review screens. Report drafting is already on A10.
+The ten agents are split by what they produce, not by account area, so the procedure library can grow without adding roles. A1 is the orchestrator: the state machine, the gates, and the schedule. It does not call a language model. Acceptance and planning are A2, A3, and A4. Execution is A5 and A6, and A6 can run as several instances. The dashed cards, A7 and A8, are in the specification and are not wired into this prototype. A9 does the rule-based roll-up. A10 is the only door. The next slide says what each one produces.
 
-## 5. Figure 1b — Class diagram — agents, services, and contracts
+## 5. What each agent produces
 
-**Member A · about 15 seconds · cumulative 3:50**
+**Member A · about 50 seconds · cumulative 3:55**
 
-This is Figure 1b, the agent and service model. We will not read every box. The full source is linked on the slide.
+The map named the ten roles. This is what each one produces. A1 does not run procedures. It only advances the state machine. The other nine share the 161 procedures in the specification. A2, A3, and A4 cover acceptance and planning. A5 sends confirmations and does not call a model. A6 does the substantive work. Most of the procedures sit there, and it can run as several instances. A7 reads the evidence again on a different model, so a model does not review itself. A8 writes the workpapers. Both are specification only. A9 is rules: the roll-up and the completeness checks. A10 is the only door. It presents the item and drafts the report. It records the auditor's decision as given. It does not decide.
+
+## 6. A6, one procedure: judge the cutoff
+
+**Member A · about 40 seconds · cumulative 4:35**
+
+Take one agent, and one procedure it actually owns. A6 is Fieldwork. REV-02 is the revenue cutoff judgment. A1 does not start it until the three-way match and the contract judgment are already in the state. A rule then selects the invoices: inside the cutoff window, and large enough, or already flagged as a cutoff exception. The model judges one invoice at a time. It sees that invoice, the delivery note, the contract, and two paragraphs of AASB 15. It does not see the whole ledger. What comes back is a judgment: a conclusion, a reasoning chain, a counter-argument, and pointers to the page. Because this procedure is level 2, the item waits. The auditor confirms it, overrides it, or records the misstatement. On the synthetic file, invoice SI-2026-0612 was posted on 28 June and signed on 3 July. A6 proposes a misstatement of 142,000. It does not record that misstatement itself.
+
+**If over time:** Skip this page. The later case still walks the same invoice.
+
+## 7. How the agents collaborate
+
+**Member A · about 20 seconds · cumulative 4:55**
+
+This is the collaboration model, simplified from Figure 1b. Agents do not call each other. A1 hands each one the engagement state and merges the patch that comes back, after four checks. The dashed cards are specification only. The one exception is A7: A6 calls it before the merge, on a different model, and only with the evidence. The auditor comes in through A10.
 
 **If over time:** Skip this page.
 
-## 6. Three constraints on autonomy
+## 8. Three constraints on autonomy
 
-**Member A · about 70 seconds · cumulative 5:00**
+**Member A · about 55 seconds · cumulative 5:50**
 
 There are three constraints. First, bounded autonomy. The macro flow is a state machine. A gate does not move until the auditor makes an explicit decision. In execution, procedures run in dependency layers, in parallel within a layer. After the merge the flow continues, waits for a person, or enters completion. Second, four autonomy levels: the person decides, the person reviews each item, the person sees only exceptions, or the person samples afterwards. A significant risk, an amount above performance materiality, or low confidence moves the level down. Thirty-two statutory procedures stay at level one and never move up. Third, a judgment is a conclusion, a reasoning chain, a counter-argument, a confidence score, and evidence pointers. Four checks: syntax, structure, references, and semantics. A fact has to point at a document. A standard has to point at a fragment in the knowledge base. That is my part.
 
 The autonomy levels follow Sheridan and Verplank, 1978, compressed to the four review habits used in audit.
 
-## 7. Figure 3a — State machine — engagement lifecycle
+## 9. Five phases, gold gates
 
-**Member A · about 15 seconds · cumulative 5:15**
+**Member A · about 20 seconds · cumulative 6:10**
 
-This is Figure 3a, the engagement state machine. The yellow states are the human gates. We will not trace every arrow.
+This is the engagement state machine, simplified from Figure 3a. Five phases run in order. The gold bars are the human gates: accept or decline, approve the plan, confirm the opinion, and sign or send the report back. Execution has no gate of its own. When the pack settles, completion starts. A risk flag can send execution back to planning. Decline and withdrawal are the two ways out. Hand over to the next speaker.
 
 **If over time:** Skip this page. Hand over to Member B either way.
 
-## 8. Nine use cases
+## 10. Nine use cases
 
-**Member B · about 50 seconds · cumulative 6:05**
+**Member B · about 40 seconds · cumulative 6:50**
 
 There are nine use cases, and they sit on those five phases. The first seven follow the phases: acceptance, planning, execution, exception review, risk re-assessment, completion and the report, then archiving. The last two can cut in at any phase: asking where the work is and where a figure came from, and statutory notification or withdrawal. Besides the auditor, the actors are the client, external data sources, and the engagement quality reviewer before signature. Risk re-assessment can pull an engagement that has already started execution back into planning.
 
-## 9. Figure 6 — Use cases — actors and the nine use cases
+## 11. Who joins each use case
 
-**Member B · about 15 seconds · cumulative 6:20**
+**Member B · about 20 seconds · cumulative 7:10**
 
-This is Figure 6, the nine use cases and who supplies what. We will not read the legend.
+This is Figure 6, redrawn so the room can read it. The registered company auditor joins every use case. The client supplies the letter, the file, and the replies. External data covers the registers, the accounting system, and confirmations. The engagement quality reviewer comes in before signature, and afterwards can only read the archive. Risk re-assessment can pull execution back to planning. Statutory notice or withdrawal can cut in at any phase.
 
 **If over time:** Skip this page.
 
-## 10. Cutoff error to a qualified opinion
+## 12. How this prototype runs one engagement
 
-**Member B · about 65 seconds · cumulative 7:25**
+**Member B · about 35 seconds · cumulative 7:45**
+
+This is the path this prototype actually runs, not the full specification. A1 schedules execution in three layers. In the first layer, A6 matches the invoice to the delivery note and reads the contract, while A5 sends the bank confirmation and A6 compares the balances. A1 merges those results. In the next layer, A6 makes the cutoff judgment: the invoice was recorded on 28 June and signed for on 3 July, so it proposes a misstatement of 142,000. A3 reads the bank reply. In the last layer, A6 explains the 50,000 gap as a deposit in transit. The auditor confirms both items on the review queue. A9 rolls the cutoff above materiality, and A10 drafts the report. The next page is the same case, told as three scenes.
+
+**If over time:** Skip this page. The next page still tells the same case.
+
+## 13. Cutoff error to a qualified opinion
+
+**Member B · about 60 seconds · cumulative 8:45**
 
 One line through the synthetic data. The company is fictional. Year-end 30 June 2026, revenue about 12 million Australian dollars. An invoice for 142,000 is recorded on 28 June, and the goods are signed for on 3 July. Control transfers on signing, so three-way matching flags the cutoff. The judgment proposes a misstatement, and the auditor confirms it. The bank reply is 50,000 below the book. That difference is a deposit in transit, recorded on 30 June and received on 2 July, so the system proposes that it is not a misstatement. The auditor confirms that too. The cutoff amount sits above the top of the overall-materiality range, 60 to 120 thousand, so completion proposes a qualified opinion. The signature waits until the auditor confirms the opinion type. The invoice, the delivery note, and the reply open from the judgment.
 
-## 11. Close
+## 14. Close
 
-**Member B · about 20 seconds · cumulative 7:45 including the three flashes**
+**Member B · about 20 seconds · cumulative 9:05 if every added page is spoken**
 
 Three sentences. The judgment stays with the person. Execution, traceability, and the block stay with the system. Ten agents collaborate by what they produce, and the orchestrator is the only scheduler. The higher the risk, the lower the autonomy. Thank you. Questions welcome. Do not present the appendix unless someone asks for a figure.
 
-**If over time:** If the three figure flashes were skipped, this close lands near 7:00. Page turns still bring a full reading to about 8:00.
+**If over time:** Skip the A6 workflow and the prototype walk-through to land near 7:50. Skipping the three diagram slides as well lands near 6:50.
 
-## 12. Appendix divider
+## 15. Appendix divider
 
 **Not spoken**
 
 Stop unless a question asks for a specific figure.
 
-## 13. Figure 1a — Class diagram — domain model
+## 16. Figure 1a — Class diagram — domain model
 
 **Not spoken**
 
@@ -106,7 +128,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/class_domain.puml
 
-## 14. Figure 1b — Class diagram — agents, services, and contracts
+## 17. Figure 1b — Class diagram — agents, services, and contracts
 
 **Not spoken**
 
@@ -114,7 +136,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/class_agents.puml
 
-## 15. Figure 2 — Package diagram — modules and contracts
+## 18. Figure 2 — Package diagram — modules and contracts
 
 **Not spoken**
 
@@ -122,7 +144,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/package.puml
 
-## 16. Figure 3a — State machine — engagement lifecycle
+## 19. Figure 3a — State machine — engagement lifecycle
 
 **Not spoken**
 
@@ -130,7 +152,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/state_main.puml
 
-## 17. Figure 3b — Object state machines
+## 20. Figure 3b — Object state machines
 
 **Not spoken**
 
@@ -138,7 +160,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/state_objects.puml
 
-## 18. Figure 3b-1 — Object states — risk, procedure, run
+## 21. Figure 3b-1 — Object states — risk, procedure, run
 
 **Not spoken**
 
@@ -146,7 +168,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/state_objects_member_b.puml
 
-## 19. Figure 3b-2 — Object states — misstatement, statutory report, document
+## 22. Figure 3b-2 — Object states — misstatement, statutory report, document
 
 **Not spoken**
 
@@ -154,7 +176,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/state_objects_member_c.puml
 
-## 20. Figure 4a — Activity — pack assembly and fieldwork
+## 23. Figure 4a — Activity — pack assembly and fieldwork
 
 **Not spoken**
 
@@ -162,7 +184,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/activity_fieldwork.puml
 
-## 21. Figure 4a-1 — Activity — pack assembly and plan approval
+## 24. Figure 4a-1 — Activity — pack assembly and plan approval
 
 **Not spoken**
 
@@ -170,7 +192,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/activity_planning.puml
 
-## 22. Figure 4a-2 — Activity — fieldwork execution and feedback loops
+## 25. Figure 4a-2 — Activity — fieldwork execution and feedback loops
 
 **Not spoken**
 
@@ -178,7 +200,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/activity_execution.puml
 
-## 23. Figure 4b — Activity — one procedure inside an A6 instance
+## 26. Figure 4b — Activity — one procedure inside an A6 instance
 
 **Not spoken**
 
@@ -186,7 +208,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/activity_procedure.puml
 
-## 24. Figure 5a — Sequence — assertion-level risk reasoning
+## 27. Figure 5a — Sequence — assertion-level risk reasoning
 
 **Not spoken**
 
@@ -194,7 +216,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/sequence_risk_assessment.puml
 
-## 25. Figure 5b — Sequence — failure paths of a journal-exception attribution
+## 28. Figure 5b — Sequence — failure paths of a journal-exception attribution
 
 **Not spoken**
 
@@ -202,7 +224,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/sequence_failure_paths.puml
 
-## 26. Figure 6 — Use cases — actors and the nine use cases
+## 29. Figure 6 — Use cases — actors and the nine use cases
 
 **Not spoken**
 
@@ -210,7 +232,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/usecase.puml
 
-## 27. Figure 6A — Use case specification — UC-01 to UC-03
+## 30. Figure 6A — Use case specification — UC-01 to UC-03
 
 **Not spoken**
 
@@ -218,7 +240,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/usecase_spec_member_a.puml
 
-## 28. Figure 6B — Use case specification — UC-04 to UC-06
+## 31. Figure 6B — Use case specification — UC-04 to UC-06
 
 **Not spoken**
 
@@ -226,7 +248,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/usecase_spec_member_b.puml
 
-## 29. Figure 6C — Use case specification — UC-07 to UC-09
+## 32. Figure 6C — Use case specification — UC-07 to UC-09
 
 **Not spoken**
 
@@ -234,7 +256,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/usecase_spec_member_c.puml
 
-## 30. Figure 7 — Requirements — mandatory and optional
+## 33. Figure 7 — Requirements — mandatory and optional
 
 **Not spoken**
 
@@ -242,7 +264,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/requirements.puml
 
-## 31. Figure 7A — Requirements — execution and evidence
+## 34. Figure 7A — Requirements — execution and evidence
 
 **Not spoken**
 
@@ -250,7 +272,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/requirements_member_a.puml
 
-## 32. Figure 7B — Requirements — human judgement and interaction
+## 35. Figure 7B — Requirements — human judgement and interaction
 
 **Not spoken**
 
@@ -258,7 +280,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/requirements_member_b.puml
 
-## 33. Figure 7C — Requirements — statutory obligations
+## 36. Figure 7C — Requirements — statutory obligations
 
 **Not spoken**
 
@@ -266,7 +288,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/requirements_member_c.puml
 
-## 34. Figure 8 — Feature diagram — audit support system
+## 37. Figure 8 — Feature diagram — audit support system
 
 **Not spoken**
 
@@ -274,7 +296,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/feature.puml
 
-## 35. Figure 9 — Structured class — A1 Orchestrator
+## 38. Figure 9 — Structured class — A1 Orchestrator
 
 **Not spoken**
 
@@ -282,7 +304,7 @@ Not spoken.
 
 https://github.sydney.edu.au/ELEC5620-Wed-14-16-Group-16/ELEC5620-demo/blob/main/docs/diagrams/structured_class_a1.puml
 
-## 36. Figure 10 — Collaboration — one exception review
+## 39. Figure 10 — Collaboration — one exception review
 
 **Not spoken**
 
