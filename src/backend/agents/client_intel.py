@@ -1,15 +1,206 @@
-"""A2：ACC-04。返回字段：acceptance_scorecard、exceptions、procedure_runs。"""
+"""A2: ACC-04. 返回字段: acceptance_scorecard, exceptions, procedure_runs."""
 
-from typing import ClassVar
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from backend.agents.base import ProcedureAgent, RunContext
-from backend.contracts.models import AgentId
+from backend.contracts.models import (
+    AbnRecord,
+    AcceptanceScorecard,
+    AgentId,
+    AsicCompanyRecord,
+    AuditException,
+    ClientProfile,
+    EvidencePointer,
+    EvidenceType,
+    ProcedureRun,
+    RegistryCheck,
+    RunStatus,
+    TrailEntry,
+    TrailKind,
+)
 from backend.contracts.state import StatePatch
 
 
+def normalize_name(name: str) -> str:
+    """名称比对前的规范化: 转小写, 只留字母和数字 (去掉空白与标点)."""
+    result = ""
+    for ch in name.lower():
+        if ch.isalnum():
+            result += ch
+
+    return result
+
+
+def trail_pointer(trail_id: str, locator: str) -> EvidencePointer:
+    """指向一次登记查询留痕的证据指针: locator 写结论依据的是查询结果里的哪个字段."""
+
+    return EvidencePointer(type=EvidenceType.external, source_type="trail", source_id=trail_id, locator=locator)
+
+
+def check_abn_active(abn: str, record: AbnRecord | None, trail_id: str) -> RegistryCheck:
+    """ABN 有效: 登记系统里查得到这个 ABN, 且 status 为 Active."""
+    evidence = trail_pointer(trail_id=trail_id, locator="status")
+
+    if record is not None:
+        passed = record.status == "Active"
+        detail = f"ABN {abn} status: {record.status}"
+    else:
+        passed = False
+        detail = f"ABN {abn} not found in ABN Lookup"
+
+    return RegistryCheck(check="abn_active", passed=passed, detail=detail, evidence=evidence)
+
+
+def check_name_match(record: AbnRecord | None, legal_name: str, trail_id: str) -> RegistryCheck:
+    """名称一致: 登记名称与客户申报的法定名称规范化后相等."""
+    evidence = trail_pointer(trail_id=trail_id, locator="entity_name")
+
+    if record is not None:
+        passed = normalize_name(record.entity_name) == normalize_name(legal_name)
+        detail = f"Registered name: {record.entity_name}; declared name: {legal_name}"
+    else:
+        passed = False
+        detail = "ABN record not found, names cannot be compared"
+
+    return RegistryCheck(check="name_match", passed=passed, detail=detail, evidence=evidence)
+
+
+def check_company_registered(acn: str | None, record: AsicCompanyRecord | None, trail_id: str) -> RegistryCheck:
+    """公司已注册: 按 ACN 在 ASIC 查得到记录, 且 status 为 Registered."""
+    if acn is None:
+        passed = False
+        locator = "acn"
+        detail = "No ACN on ABN record, ASIC not queried"
+    elif record is None:
+        passed = False
+        locator = "status"
+        detail = f"ACN {acn} not found in ASIC register"
+    else:
+        passed = record.status == "Registered"
+        locator = "status"
+        detail = f"ACN {acn} status: {record.status}"
+
+    evidence = trail_pointer(trail_id=trail_id, locator=locator)
+
+    return RegistryCheck(check="company_registered", passed=passed, detail=detail, evidence=evidence)
+
+
+def build_exception(check: RegistryCheck, run: ProcedureRun, abn: str) -> AuditException:
+    """未通过的检查生成一条例外: rule_id 取检查名, severity 为 high, 涉及对象为客户 ABN."""
+    return AuditException(
+        id=f"X-{run.procedure_id}-{run.run_no}-{check.check}-1",
+        procedure_id=run.procedure_id,
+        rule_id=check.check,
+        run_id=run.id,
+        severity="high",
+        source_ids=[abn],
+        evidence=[check.evidence],
+    )
+
+
+def build_scorecard(
+    checks: list[RegistryCheck],
+    exceptions: list[AuditException],
+    profile: ClientProfile,
+    previous: AcceptanceScorecard | None,
+) -> AcceptanceScorecard:
+    """汇总三项检查生成承接评分卡. previous 是状态里已有的评分卡, 首次执行为 None."""
+
+    version = previous.version + 1 if previous is not None else 1
+
+    return AcceptanceScorecard(
+        id="SCORECARD",
+        version=version,
+        registry_checks=checks,
+        exception_ids=[n.id for n in exceptions],
+        client_profile_version=profile.version,
+    )
+
+
+def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
+    """把运行中的执行记录置为成功终态. 版本号不变: 运行中那一版不写入存储, 终态就是第 1 版."""
+    return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at})
+
+
 class ClientIntelAgent(ProcedureAgent):
-    agent_id: ClassVar[AgentId] = AgentId.A2
-    procedures: ClassVar[frozenset[str]] = frozenset({"ACC-04"})
+    """A2: 执行 ACC-04, 查 ABN 与 ASIC 登记, 产出承接评分卡."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A2  # 智能体编号
+    procedures: ClassVar[frozenset[str]] = frozenset({"ACC-04"})  # 负责的程序
+
+    async def record_query(self, ctx: RunContext, summary: str, payload: dict[str, Any]) -> str:
+        """写一行 external_call 留痕, 返回留痕 ID."""
+        entry = TrailEntry(
+            engagement_id=ctx.engagement.id,
+            kind=TrailKind.external_call,
+            actor=self.agent_id,
+            procedure_id=ctx.procedure.id,
+            run_id=ctx.run.id,
+            summary=summary,
+            payload=payload,
+        )
+
+        return await self.deps.trail.record(entry)
+
+    async def lookup_abn(self, ctx: RunContext, abn: str) -> tuple[AbnRecord | None, str]:
+        """查 ABN 登记并记一条留痕, 返回 (查询结果, 留痕 ID). 查不到也要记留痕."""
+        record = await self.deps.registry.abn(abn)
+        trail_id = await self.record_query(
+            ctx=ctx,
+            summary=f"ABN Lookup {abn}",
+            payload={"abn": abn, "result": record.model_dump(mode="json") if record is not None else None},
+        )
+
+        return (record, trail_id)
+
+    async def lookup_asic(self, ctx: RunContext, acn: str) -> tuple[AsicCompanyRecord | None, str]:
+        """按 ACN 查 ASIC 公司登记并记一条留痕, 返回 (查询结果, 留痕 ID)."""
+        record = await self.deps.registry.asic_company(acn)
+        trail_id = await self.record_query(
+            ctx=ctx,
+            summary=f"ASIC company search {acn}",
+            payload={"acn": acn, "result": record.model_dump(mode="json") if record is not None else None},
+        )
+
+        return (record, trail_id)
+
+    async def collect_checks(self, ctx: RunContext, profile: ClientProfile) -> list[RegistryCheck]:
+        """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered."""
+        abn_record, abn_trail_id = await self.lookup_abn(ctx=ctx, abn=profile.abn)
+        check_list = []
+        check_list.append(check_abn_active(abn=profile.abn, record=abn_record, trail_id=abn_trail_id))
+        check_list.append(check_name_match(record=abn_record, legal_name=profile.legal_name, trail_id=abn_trail_id))
+
+        acn = abn_record.acn if abn_record is not None else None
+        if acn is not None:
+            asic_record, asic_trail_id = await self.lookup_asic(ctx=ctx, acn=acn)
+        else:
+            asic_record, asic_trail_id = None, abn_trail_id
+
+        check_list.append(check_company_registered(acn=acn, record=asic_record, trail_id=asic_trail_id))
+
+        return check_list
 
     async def run(self, ctx: RunContext) -> StatePatch:
-        raise NotImplementedError(ctx.procedure.id)
+        """执行 ACC-04: 读客户画像, 做三项检查, 返回评分卡, 例外与执行记录终态."""
+        profile = await self.deps.engagements.client_profile(ctx.engagement.client_id)
+
+        if profile is None:
+            raise LookupError(f"client profile {ctx.engagement.client_id} not found")
+
+        check_list = await self.collect_checks(ctx=ctx, profile=profile)
+        exceptions = []
+        for check in check_list:
+            if not check.passed:
+                exceptions.append(build_exception(check=check, run=ctx.run, abn=profile.abn))
+
+        scorecard = build_scorecard(
+            checks=check_list, exceptions=exceptions, profile=profile, previous=ctx.state["acceptance_scorecard"]
+        )
+
+        return {
+            "acceptance_scorecard": scorecard,
+            "exceptions": exceptions,
+            "procedure_runs": [finish_run(ctx.run, datetime.now(UTC))],
+        }

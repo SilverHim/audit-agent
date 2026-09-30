@@ -2,7 +2,7 @@
 DOC-04 合同要素抽取 → ContractExtraction，每份合同文档调用一次。
 渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
 变量：
-  client_name  被审计单位名称（Engagement.client_name）
+  client_name  被审计单位名称（ClientProfile.legal_name）
   document     DocumentRef：id、file_name、page_count、reliability
   pages        list[str]，PDF 文本层，pages[0] 为第 1 页
 #}

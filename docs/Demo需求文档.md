@@ -22,7 +22,7 @@ P4 报告   RPT-03 生成报告初稿 →【闸门】RPT-01 附批注退回修�
 | 阶段 | 程序 | 引擎 · 自主度 | Agent | 本版做法 |
 |---|---|---|---|---|
 | P0 | ACC-04 ASIC / ABN 核查 | 规则 · L3 | A2 | 查 mock 登记数据：ABN 有效、名称一致、公司状态正常，不符出 Exception |
-| P0 | ACC-01 是否承接 | 闸门 · L1 | A2 | 呈递 ACC-04 结果与预置客户画像；承接进 P1，拒绝进 Declined，信息不足重跑 ACC-04 |
+| P0 | ACC-01 是否承接 | 闸门 · L1 | A2 | 呈递 ACC-04 结果与客户画像；承接进 P1，拒绝进 Declined，信息不足留在闸门；审计师更新客户资料后自动重跑 ACC-04 并重新呈报 |
 | P1 | DOC-04 合同要素抽取 | LLM · L2 | A3 | 读合同 PDF 文本层，抽出合同对象与条款，每个字段带页码指针；结果直接入库，前端可查看，不建复核任务 |
 | P1 | PLN-07 初步分析程序 | 规则 · L3 | A4 | 本期与上期试算表逐科目比较，变动超阈值出 Exception；算毛利率、收入增长率 |
 | P1 | PLN-01 重要性水平 | 闸门 · L1 | A4 | 规则按收入、总资产、税前利润三个基准算候选区间；审计师选定基准与比例，系统算出执行重要性与明显微小门槛 |
@@ -82,11 +82,11 @@ completion → gate_fin → report_draft → gate_rpt01 → { report_draft | arc
 ```
 
 - 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
-- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，信息不足回 p0_intel；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。
+- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_intel 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
 - assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。
 - schedule 按依赖图拓扑分层，同层按循环分组，用 `Send` 派发 fieldwork 实例，上限 4；fieldwork 按程序的 owner 调用对应 Agent。
 - fan_in 用按 ID 合并的 reducer 收各实例返回的 ProcedureRun、Exception、Judgment、ReviewTask，由 A1 重算程序状态：有待决任务为 awaiting_human，否则为 completed；rerun 决定时由 DecisionSubmit 先置 executing，不受待决任务影响。
-- after_fan_in：有就绪程序回 schedule；P2 程序全部 completed 进 completion；否则进 await_events，节点内 `interrupt()`，复核决定写入后恢复。
+- after_fan_in：有待决复核任务进 await_events，节点内 `interrupt()`，复核决定写入后恢复；还有 planned 或 executing 的程序回 schedule；P2 程序全部 completed 进 completion。程序状态与任务对不上（awaiting_human 却无待决任务，或有待执行程序却一个也派不出）时抛 ScheduleStuck，不空转。
 - 项目阶段：P0_Acceptance、P1_Planning、P2_Executing、P3_Completion、P4_Reporting、Archived、Declined。程序状态：planned、executing、awaiting_human、completed。
 - EngagementState 的字段、reducer 与写入归属见 [开发接口文档.md](开发接口文档.md) 第 3 节。
 
@@ -132,9 +132,9 @@ sales_invoices、delivery_notes、bank_accounts 为本版新增，供 REV-08、C
 
 | 页面 | 内容 |
 |---|---|
-| 登录、项目列表 | 新建项目：客户名称、ABN、期初日、期末日；数据集固定传 demo |
+| 登录、项目列表 | 新建项目：期初日、期末日；数据集固定传 demo，客户名称与 ABN 取数据集的客户画像 |
 | 项目总览 | P0–P4 进度条、当前闸门、程序状态表、复核待办数 |
-| 闸门 | 四道闸门各一个表单：展示材料，选 approve / reject / insufficient_info，填理由和逐项修改（P1 改重要性与风险等级，RPT-01 写批注） |
+| 闸门 | 四道闸门各一个表单：展示材料，选 approve / reject / insufficient_info，填理由和逐项修改（P1 改重要性与风险等级，RPT-01 写批注）；ACC-01 另可更新客户资料，保存后自动重跑 ACC-04 |
 | 复核队列 | 任务列表；详情页并排显示结论、推理链、证据、反方论证、置信度；只显示 ReviewQueue.allowed 给出的决定 |
 | 证据查看 | 点击证据指针打开 PDF 并跳到对应页；分录、发票、发运单明细 |
 | 合同 | DOC-04 抽出的合同与条款，条款链接到原文页 |

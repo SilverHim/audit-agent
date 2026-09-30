@@ -2,7 +2,7 @@
 RPT-03 报告文本生成 → ReportDraft，每个 revision 调用一次；只写意见段与形成意见的基础段。
 渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
 变量：
-  client_name    被审计单位名称（Engagement.client_name）
+  client_name    被审计单位名称（ClientProfile.legal_name）
   task.params    period_end
   revision       本次起草的 revision，首稿为 1
   opinion_type   FIN-01 确定的意见类型：unqualified 或 qualified

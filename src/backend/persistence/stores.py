@@ -1,4 +1,4 @@
-"""Store 与 DatasetLoader 的 PostgreSQL / 文件系统实现（B 负责），方法签名与 contracts/ports.py 一致。"""
+"""Store 与 DatasetLoader 的 PostgreSQL / 文件系统实现 (B 负责), 方法签名与 contracts/ports.py 一致."""
 
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
@@ -27,6 +27,8 @@ T = TypeVar("T", bound=Versioned)
 
 
 class PostgresFinancialDataStore:
+    """FinancialDataStore 的 PostgreSQL 实现."""
+
     async def query(self, eid: str, sql: str, params: Mapping[str, Any]) -> list[dict[str, Any]]:
         raise NotImplementedError
 
@@ -67,6 +69,8 @@ class PostgresFinancialDataStore:
 
 
 class PostgresAuditOutputStore:
+    """AuditOutputStore 的 PostgreSQL 实现."""
+
     async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
         raise NotImplementedError
 
@@ -84,8 +88,10 @@ class PostgresAuditOutputStore:
 
 
 class FileEvidenceStore:
+    """EvidenceStore 的文件系统实现: 原件存在 root/{eid}/evidence/ 下."""
+
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root  # 原件根目录, 即 EVIDENCE_ROOT
 
     async def save(
         self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
@@ -103,8 +109,10 @@ class FileEvidenceStore:
 
 
 class CsvDatasetLoader:
+    """DatasetLoader 的实现: 读数据集目录下的 CSV 与 JSON."""
+
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root  # 数据集根目录, 即 DATASET_ROOT
 
     async def load(self, eid: str, dataset: str) -> None:
         raise NotImplementedError
@@ -117,12 +125,12 @@ class CsvDatasetLoader:
 
 
 class PostgresEngagementStore:
+    """EngagementStore 的 PostgreSQL 实现."""
+
     async def create(
         self,
         *,
         owner_id: str,
-        client_name: str,
-        abn: str,
         period_start: date,
         period_end: date,
         dataset: str,
@@ -146,11 +154,16 @@ class PostgresEngagementStore:
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:
         raise NotImplementedError
 
+    async def save_profile(self, profile: ClientProfile) -> ClientProfile:
+        raise NotImplementedError
+
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
         raise NotImplementedError
 
 
 class PostgresUserStore:
+    """UserStore 的 PostgreSQL 实现."""
+
     async def by_email(self, email: str) -> tuple[User, str] | None:
         raise NotImplementedError
 
