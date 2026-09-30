@@ -1,4 +1,4 @@
-"""POST /auth/login；GET /users/me 放 users 路由。"""
+"""POST /auth/login; GET /users/me 放 users 路由."""
 
 from fastapi import APIRouter
 

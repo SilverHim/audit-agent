@@ -1,4 +1,4 @@
-"""复核队列：任务类型判定、建任务、允许的决定（A 负责）。规则见 开发接口文档.md 第 5 节"需要人"。"""
+"""复核队列: 任务类型判定, 建任务, 允许的决定 (A 负责). 规则见 开发接口文档.md 第 5 节"需要人"."""
 
 from collections.abc import Sequence
 from datetime import datetime
@@ -21,6 +21,8 @@ MANUAL_RESULT_PROCEDURES = frozenset({"REV-03", "REV-02", "CSH-02"})
 
 
 class ReviewQueue:
+    """复核队列: 判定哪些结果需要人, 建复核任务, 给出每类任务允许的决定."""
+
     @staticmethod
     def allowed(task: ReviewTask) -> frozenset[Decision]:
         if task.kind is TaskKind.normal:
@@ -34,7 +36,7 @@ class ReviewQueue:
     def classify(
         self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Sequence[AuditException]
     ) -> TaskKind | None:
-        """某个判断对象的结果需要哪类任务；None 表示自动关闭。整次执行失败由 A1 另行处理。"""
+        """某个判断对象的结果需要哪类任务; None 表示自动关闭. 整次执行失败由 A1 另行处理."""
         if outcome.failure == "unattributed":
             return TaskKind.unattributed if rule_findings else TaskKind.failed
         if outcome.failure == "failed" or outcome.judgment is None:

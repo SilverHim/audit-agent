@@ -1,4 +1,4 @@
-"""应用入口与组装根：注入 Store、适配器与检查点，编译主图，挂路由（C 负责，A 提供图与编排入口）。"""
+"""应用入口与组装根: 注入 Store, 适配器与检查点, 编译主图, 挂路由 (C 负责, A 提供图与编排入口)."""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def operation_id(route: APIRoute) -> str:
-    """生成的前端函数名为 {标签}{函数名}，如 healthHealth。"""
+    """生成的前端函数名为 {标签}{函数名}, 如 healthHealth."""
     return f"{route.tags[0]}-{route.name}" if route.tags else route.name
 
 

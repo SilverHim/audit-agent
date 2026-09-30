@@ -1,4 +1,4 @@
-"""GET documents、contracts、evidence/{document_id}、records/{source_type}/{source_id}、confirmations。"""
+"""GET documents, contracts, evidence/{document_id}, records/{source_type}/{source_id}, confirmations."""
 
 from fastapi import APIRouter
 

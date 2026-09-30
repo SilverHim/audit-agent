@@ -1,4 +1,4 @@
-"""数据库连接。每个事务开头设 app.engagement_id，行级安全按它过滤。"""
+"""数据库连接. 每个事务开头设 app.engagement_id, 行级安全按它过滤."""
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine

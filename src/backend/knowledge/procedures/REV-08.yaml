@@ -29,24 +29,24 @@ rules:
     severity: high
     sql: |
       -- 待 B 实现
-      -- 来源：sales_invoices i LEFT JOIN delivery_notes d ON d.invoice_id = i.id
-      -- 条件：i.engagement_id = :eid
-      --       AND i.posting_date 在 [:period_end - :window_days, :period_end]（同 R01）
+      -- 来源: sales_invoices i LEFT JOIN delivery_notes d ON d.invoice_id = i.id
+      -- 条件: i.engagement_id = :eid
+      --       AND i.posting_date 在 [:period_end - :window_days, :period_end] (同 R01)
       --       AND (d.id IS NULL OR d.signed_date IS NULL)
-      -- 输出：'sales_invoice' AS source_type、i.id AS source_id、i.amount_cents、i.invoice_no、
-      --       i.posting_date、i.contract_id、d.id AS delivery_note_id（缺单时为空）
+      -- 输出:'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents, i.invoice_no,
+      --       i.posting_date, i.contract_id, d.id AS delivery_note_id (缺单时为空)
       -- ORDER BY i.id
   - id: R03
     name: 收款金额与发票不符
     severity: medium
     sql: |
       -- 待 B 实现
-      -- 来源：sales_invoices i JOIN bank_transactions t
+      -- 来源: sales_invoices i JOIN bank_transactions t
       --       ON t.amount_cents > 0 AND position(i.invoice_no IN t.reference) > 0
-      -- 条件：i.engagement_id = :eid
-      --       AND i.posting_date 在 [:period_end - :window_days, :period_end]（同 R01）
-      --       按 i.id 分组，HAVING SUM(t.amount_cents) <> i.amount_cents；无收款的发票不出例外
-      -- 输出：'sales_invoice' AS source_type、i.id AS source_id、
-      --       i.amount_cents - SUM(t.amount_cents) AS amount_cents、i.amount_cents AS invoice_amount_cents、
-      --       SUM(t.amount_cents) AS received_cents、string_agg(t.id, ',' ORDER BY t.id) AS bank_transaction_ids
+      -- 条件: i.engagement_id = :eid
+      --       AND i.posting_date 在 [:period_end - :window_days, :period_end] (同 R01)
+      --       按 i.id 分组, HAVING SUM(t.amount_cents) <> i.amount_cents; 无收款的发票不出例外
+      -- 输出:'sales_invoice' AS source_type, i.id AS source_id,
+      --       i.amount_cents - SUM(t.amount_cents) AS amount_cents, i.amount_cents AS invoice_amount_cents,
+      --       SUM(t.amount_cents) AS received_cents, string_agg(t.id, ',' ORDER BY t.id) AS bank_transaction_ids
       -- ORDER BY i.id

@@ -1,4 +1,4 @@
-"""GET /engagements/{eid}/gate；POST /engagements/{eid}/gate-decisions。"""
+"""GET /engagements/{eid}/gate; POST /engagements/{eid}/gate-decisions."""
 
 from fastapi import APIRouter
 

@@ -1,4 +1,4 @@
-"""程序编号 → 执行它的 Agent 实例。闸门步骤（ACC-01、PLN-01/03 的决定、FIN-01、RPT-01）由 A1 的闸门节点处理。"""
+"""程序编号 → 执行它的 Agent 实例. 闸门步骤 (ACC-01, PLN-01/03 的决定, FIN-01, RPT-01) 由 A1 的闸门节点处理."""
 
 from backend.agents.base import AgentDeps, ProcedureAgent
 from backend.agents.client_intel import ClientIntelAgent

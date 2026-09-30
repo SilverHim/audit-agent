@@ -1,4 +1,4 @@
-"""服务之间传递的数据对象，定义见 开发接口文档.md 第 5 节。"""
+"""服务之间传递的数据对象, 定义见 开发接口文档.md 第 5 节."""
 
 from typing import Any, Literal
 
@@ -6,27 +6,35 @@ from backend.contracts.models import AuditException, Judgment, Model
 
 
 class RuleResult(Model):
-    exceptions: list[AuditException]
-    rows: dict[str, list[dict[str, Any]]]
+    """RuleEngine 执行一条程序全部规则的结果."""
+
+    exceptions: list[AuditException]  # emit = exception 的规则产出的例外
+    rows: dict[str, list[dict[str, Any]]]  # emit = rows 的规则返回的行, 按规则编号
 
 
 class JudgmentContext(Model):
-    subject_id: str
-    task: dict[str, Any]
-    data: dict[str, Any]
-    rule_findings: list[AuditException] = []
-    fixture_key: str
+    """送给 JudgmentEngine 的一个判断对象的上下文."""
+
+    subject_id: str  # 判断对象 ID
+    task: dict[str, Any]  # 任务说明: 参数, 覆盖的审计目标与风险
+    data: dict[str, Any]  # 该判断需要的数据行与抽取要素
+    rule_findings: list[AuditException] = []  # 该对象的规则例外 (混合程序), 本程序与前置程序的都算
+    fixture_key: str  # mock 模式下取固定输出用的键
 
 
 class JudgmentOutcome(Model):
-    judgment: Judgment | None
-    failure: Literal["failed", "unattributed"] | None
-    attempts: int
-    trail_ids: list[str]
+    """JudgmentEngine 对一个判断对象的产出."""
+
+    judgment: Judgment | None  # 判断, 失败时为空
+    failure: Literal["failed", "unattributed"] | None  # 失败类型, 成功时为空
+    attempts: int  # 调用大模型的次数, 含重试
+    trail_ids: list[str]  # 每次大模型调用的留痕 ID
 
 
 class ValidationReport(Model):
-    level_failed: Literal["syntax", "structure", "reference", "semantic"] | None
-    retryable: bool
-    unsupported_steps: list[int]
-    errors: list[str]
+    """OutputValidator 对一次 LLM 输出的四级校验结果."""
+
+    level_failed: Literal["syntax", "structure", "reference", "semantic"] | None  # 未通过的级别, 全部通过为空
+    retryable: bool  # 能否回传错误重试: 语法, 结构失败为真
+    unsupported_steps: list[int]  # 证据指针解析不了的推理步骤下标
+    errors: list[str]  # 错误信息

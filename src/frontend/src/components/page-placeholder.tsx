@@ -4,11 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 type Props = {
   title: string
   description: string
-  // 该页要用到的端点，见 开发接口文档.md 第 10 节
+  // 该页要用到的端点, 见 开发接口文档.md 第 10 节
   endpoints: string[]
 }
 
-// 页面骨架：C 实现页面时替换掉
+// 页面骨架: C 实现页面时替换掉
 export function PagePlaceholder({ title, description, endpoints }: Props) {
   return (
     <div className="space-y-4">

@@ -1,4 +1,4 @@
-"""P2 调度：依赖图分层、就绪判定、按循环分组。只用程序包、依赖图、并行上限三个输入，不调 LLM。"""
+"""P2 调度: 依赖图分层, 就绪判定, 按循环分组. 只用程序包, 依赖图, 并行上限三个输入, 不调 LLM."""
 
 from collections import defaultdict
 
@@ -11,7 +11,7 @@ def p2_procedures(pack: list[Procedure]) -> list[Procedure]:
 
 
 def build_schedule(pack: list[Procedure], library: ProcedureLibrary, cap: int) -> list[ScheduleRow]:
-    """拓扑分层：只依赖 P2 以外程序的在第 0 层；同层按 cycle 分组，组数超上限时合并最小两组。"""
+    """拓扑分层: 只依赖 P2 以外程序的在第 0 层; 同层按 cycle 分组, 组数超上限时合并最小两组."""
     procs = {p.id: p for p in p2_procedures(pack)}
     layer: dict[str, int] = {}
 
@@ -40,7 +40,7 @@ def build_schedule(pack: list[Procedure], library: ProcedureLibrary, cap: int) -
 
 
 def ready_procedures(pack: list[Procedure], library: ProcedureLibrary) -> list[str]:
-    """待执行（planned 或 executing）且 P2 内的前置都已 completed 的程序。P2 以外的前置在此之前已完成。"""
+    """待执行 (planned 或 executing) 且 P2 内的前置都已 completed 的程序. P2 以外的前置在此之前已完成."""
     p2 = {p.id: p for p in p2_procedures(pack)}
     return [
         pid

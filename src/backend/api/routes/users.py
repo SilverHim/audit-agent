@@ -1,4 +1,4 @@
-"""GET /users/me。"""
+"""GET /users/me."""
 
 from fastapi import APIRouter
 

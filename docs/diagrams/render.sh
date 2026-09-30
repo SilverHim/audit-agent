@@ -1,6 +1,6 @@
 #!/bin/zsh
 # 渲染 docs/diagrams/*.puml -> docs/diagrams/out/{png,svg}
-# 用法：docs/diagrams/render.sh [file.puml ...]   不带参数则渲染全部
+# 用法: docs/diagrams/render.sh [file.puml ...]   不带参数则渲染全部
 set -e
 cd "$(dirname "$0")"
 JAR=~/.local/lib/plantuml.jar

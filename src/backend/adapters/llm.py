@@ -1,4 +1,4 @@
-"""LLM 客户端（A 负责）。mock 模式读 fixtures，live 模式接真实提供商（选型未定）。"""
+"""LLM 客户端 (A 负责). mock 模式读 fixtures, live 模式接真实提供商 (选型未定)."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from backend.core.config import Settings
 
 
 class MockLLMClient:
-    """读 {fixtures}/{procedure_id}/{fixture_key}.json，找不到读 default.json。"""
+    """读 {fixtures}/{procedure_id}/{fixture_key}.json, 找不到读 default.json."""
 
     def __init__(self, fixtures_root: Path) -> None:
         self.root = fixtures_root
@@ -33,7 +33,7 @@ class MockLLMClient:
 
 
 class LiveLLMClient:
-    """真实提供商，M3 前定选型后实现。"""
+    """真实提供商, M3 前定选型后实现."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

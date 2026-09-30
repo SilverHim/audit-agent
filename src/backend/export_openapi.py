@@ -1,4 +1,4 @@
-"""导出 OpenAPI 文档供前端生成客户端：uv run python -m backend.export_openapi <输出路径>。不启动服务、不连数据库。"""
+"""导出 OpenAPI 文档供前端生成客户端: uv run python -m backend.export_openapi <输出路径>. 不启动服务, 不连数据库."""
 
 import json
 import sys

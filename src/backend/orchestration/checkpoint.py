@@ -1,4 +1,4 @@
-"""检查点：序列化白名单与连接。setup() 只在迁移阶段以属主角色执行（开发接口文档.md 第 9 节）。"""
+"""检查点: 序列化白名单与连接. setup() 只在迁移阶段以属主角色执行 (开发接口文档.md 第 9 节)."""
 
 import inspect
 import sys
@@ -21,7 +21,7 @@ _STATE_MODULES = (backend.contracts.models, backend.contracts.services)
 
 
 def checkpoint_serde() -> JsonPlusSerializer:
-    """状态里的 Pydantic 对象须登记，否则反序列化会被拒绝。"""
+    """状态里的 Pydantic 对象须登记, 否则反序列化会被拒绝."""
     allowed = [
         obj
         for module in _STATE_MODULES
@@ -45,7 +45,7 @@ async def open_checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointS
 
 
 async def setup_checkpoint_tables(owner_url: str) -> None:
-    """迁移阶段调用：以属主角色建检查点表。"""
+    """迁移阶段调用: 以属主角色建检查点表."""
     async with AsyncPostgresSaver.from_conn_string(owner_url) as saver:
         await saver.setup()
 

@@ -11,7 +11,7 @@ triggers:
 params:
   as_of: {ref: period_end}
 standards: [ASA505-P07]
-# 无 SQL，A5 对 FinancialDataStore.bank_accounts 的每个账户发函：
-# - ConfirmationRequest.as_of = params.as_of；idempotency_key = {eid}:CSH-04:{bank_account_id}
-# - 按开发接口文档第 6 节外部动作顺序提交、存档回函，建 Confirmation（ID = C-{bank_account_id}）
+# 无 SQL, A5 对 FinancialDataStore.bank_accounts 的每个账户发函:
+# - ConfirmationRequest.as_of = params.as_of; idempotency_key = {eid}:CSH-04:{bank_account_id}
+# - 按开发接口文档第 6 节外部动作顺序提交, 存档回函, 建 Confirmation (ID = C-{bank_account_id})
 rules: []

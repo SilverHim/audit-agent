@@ -1,4 +1,4 @@
-"""A5：CSH-04。返回字段：confirmations、documents、procedure_runs。"""
+"""A5: CSH-04. 返回字段: confirmations, documents, procedure_runs."""
 
 from typing import ClassVar
 
@@ -8,8 +8,10 @@ from backend.contracts.state import StatePatch
 
 
 class EvidenceAgent(ProcedureAgent):
-    agent_id: ClassVar[AgentId] = AgentId.A5
-    procedures: ClassVar[frozenset[str]] = frozenset({"CSH-04"})
+    """A5: 执行 CSH-04, 向银行发询证函并存档回函."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A5  # 智能体编号
+    procedures: ClassVar[frozenset[str]] = frozenset({"CSH-04"})  # 负责的程序
 
     async def run(self, ctx: RunContext) -> StatePatch:
         raise NotImplementedError(ctx.procedure.id)

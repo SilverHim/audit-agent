@@ -1,4 +1,4 @@
-"""JWT 与口令哈希（C 负责）。"""
+"""JWT 与口令哈希 (C 负责)."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +26,6 @@ def create_access_token(user_id: str) -> str:
 
 
 def decode_access_token(token: str) -> str:
-    """返回用户 ID；过期或签名不符抛 jwt.PyJWTError。"""
+    """返回用户 ID; 过期或签名不符抛 jwt.PyJWTError."""
     payload = jwt.decode(token, get_settings().JWT_SECRET, algorithms=[ALGORITHM])
     return str(payload["sub"])

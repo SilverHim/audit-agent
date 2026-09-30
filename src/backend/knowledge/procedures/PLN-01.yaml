@@ -23,11 +23,11 @@ rules:
     emit: rows
     sql: |
       -- 待 B 实现
-      -- 来源：trial_balance t（period = 'current'）JOIN accounts a ON a.code = t.account_code
-      -- 条件：t.engagement_id = :eid
-      -- 输出三行 basis、base_amount_cents：
-      --   'revenue'：-SUM(t.balance_cents) WHERE a.code = ANY(:revenue_account_codes)
-      --   'total_assets'：SUM(t.balance_cents) WHERE a.type = 'asset'
-      --   'profit_before_tax'：-SUM(t.balance_cents) WHERE a.type IN ('revenue', 'expense') AND a.code <> ALL(:income_tax_account_codes)
+      -- 来源: trial_balance t (period = 'current') JOIN accounts a ON a.code = t.account_code
+      -- 条件: t.engagement_id = :eid
+      -- 输出三行 basis, base_amount_cents:
+      --   'revenue': -SUM(t.balance_cents) WHERE a.code = ANY(:revenue_account_codes)
+      --   'total_assets': SUM(t.balance_cents) WHERE a.type = 'asset'
+      --   'profit_before_tax': -SUM(t.balance_cents) WHERE a.type IN ('revenue', 'expense') AND a.code <> ALL(:income_tax_account_codes)
       -- ORDER BY basis
-      -- A4 按 params.candidates 写 MaterialityCandidate：low_cents = ROUND(base × pct_low)，high_cents = ROUND(base × pct_high)
+      -- A4 按 params.candidates 写 MaterialityCandidate: low_cents = ROUND(base × pct_low), high_cents = ROUND(base × pct_high)

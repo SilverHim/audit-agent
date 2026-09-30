@@ -11,7 +11,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    // 开发时 /api 转发到 FastAPI，避免跨域
+    // 开发时 /api 转发到 FastAPI, 避免跨域
     proxy: { '/api': 'http://localhost:8000' },
   },
 })

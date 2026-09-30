@@ -1,4 +1,4 @@
-"""GET /standards/{fragment_id}。"""
+"""GET /standards/{fragment_id}."""
 
 from fastapi import APIRouter
 

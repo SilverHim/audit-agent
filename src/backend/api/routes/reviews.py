@@ -1,5 +1,5 @@
-"""GET /engagements/{eid}/review-tasks；POST /engagements/{eid}/review-records；
-GET procedures/{pid}、judgments/{jid}、exceptions。
+"""GET /engagements/{eid}/review-tasks; POST /engagements/{eid}/review-records;
+GET procedures/{pid}, judgments/{jid}, exceptions.
 """
 
 from fastapi import APIRouter

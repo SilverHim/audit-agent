@@ -1,9 +1,11 @@
-"""审计留痕（B 负责）：只追加，独立事务写入。"""
+"""审计留痕 (B 负责): 只追加, 独立事务写入."""
 
 from backend.contracts.models import TrailEntry, TrailKind
 
 
 class PostgresAuditTrail:
+    """AuditTrail 的 PostgreSQL 实现, 独立事务写入."""
+
     async def record(self, entry: TrailEntry) -> str:
         raise NotImplementedError
 

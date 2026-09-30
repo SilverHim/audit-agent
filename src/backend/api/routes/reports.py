@@ -1,4 +1,4 @@
-"""GET misstatements、reports、trail、trail/{trail_id}。"""
+"""GET misstatements, reports, trail, trail/{trail_id}."""
 
 from fastapi import APIRouter
 

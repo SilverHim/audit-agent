@@ -14,7 +14,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 迁移以属主角色执行（DATABASE_OWNER_URL），表定义见 backend/persistence/models.py
+# 迁移以属主角色执行 (DATABASE_OWNER_URL), 表定义见 backend/persistence/models.py
 from backend.core.config import get_settings  # noqa: E402
 from backend.persistence.models import metadata  # noqa: E402
 
