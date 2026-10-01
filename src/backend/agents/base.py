@@ -1,6 +1,7 @@
 """Agent 抽象基类与依赖."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -54,8 +55,12 @@ class RunContext:
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
 
 
-class ProcedureAgent(ABC):
-    """执行审计程序的 Agent 的抽象基类: 子类声明编号与负责的程序, 并实现 run."""
+class ProcedureAgent[F](ABC):
+    """执行审计程序的 Agent 的抽象基类, 对应设计规格 5.3 的三步: 选程序, 执行, 解读.
+
+    子类声明编号与负责的程序, 实现 execute 与 interpret; F 是 execute 产出的原始发现类型.
+    run 是模板方法, 子类不覆写.
+    """
 
     agent_id: ClassVar[AgentId]  # 智能体编号, 子类给值
     procedures: ClassVar[frozenset[str]]  # 负责的程序编号, 子类给值
@@ -63,6 +68,19 @@ class ProcedureAgent(ABC):
     def __init__(self, deps: AgentDeps) -> None:
         self.deps = deps  # 外部依赖工具箱
 
+    def select_procedures(self, templates: Iterable[ProcedureTemplate]) -> list[ProcedureTemplate]:
+        """从程序模板中选出本 Agent 负责的程序. 按目标与风险装配由 A1 完成, 这里只按归属筛选."""
+        return [t for t in templates if t.id in self.procedures]
+
     @abstractmethod
+    async def execute(self, ctx: RunContext) -> F:
+        """执行一条程序, 返回原始发现 (规则命中, 外部查询结果或 LLM 输出), 不组装状态片段."""
+
+    @abstractmethod
+    async def interpret(self, ctx: RunContext, findings: F) -> StatePatch:
+        """把原始发现解读为要并入编排状态的片段. procedure_runs 须含 ctx.run 的终态 (succeeded 或 failed)."""
+
     async def run(self, ctx: RunContext) -> StatePatch:
-        """执行一条程序, 返回要并入编排状态的片段. procedure_runs 须含 ctx.run 的终态 (succeeded 或 failed)."""
+        """编排节点调用的唯一入口: 先 execute, 再 interpret."""
+        findings = await self.execute(ctx)
+        return await self.interpret(ctx, findings)

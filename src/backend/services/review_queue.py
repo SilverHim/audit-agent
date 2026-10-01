@@ -16,20 +16,25 @@ from backend.contracts.models import (
     TaskKind,
 )
 from backend.contracts.services import JudgmentOutcome
-
-MANUAL_RESULT_PROCEDURES = frozenset({"REV-03", "REV-02", "CSH-02"})
+from backend.services.procedure_library import ProcedureLibrary
 
 
 class ReviewQueue:
-    """复核队列: 判定哪些结果需要人, 建复核任务, 给出每类任务允许的决定."""
+    """复核队列: 判定哪些结果需要人, 建复核任务, 给出每类任务允许的决定.
 
-    @staticmethod
-    def allowed(task: ReviewTask) -> frozenset[Decision]:
+    按程序区分的规则读程序 YAML 的 always_review 与 manual_result_allowed, 不按程序编号分支.
+    """
+
+    def __init__(self, library: ProcedureLibrary) -> None:
+        self.library = library  # 程序库: 按任务的 procedure_id 取模板
+
+    def allowed(self, task: ReviewTask) -> frozenset[Decision]:
+        """某个任务允许的决定. failed 任务带判断对象且模板允许时, 另可人工执行并提交结果."""
         if task.kind is TaskKind.normal:
             return frozenset({Decision.confirm, Decision.override, Decision.misstatement})
         if task.kind is TaskKind.unattributed:
             return frozenset({Decision.override, Decision.misstatement})
-        if task.procedure_id in MANUAL_RESULT_PROCEDURES and task.subject_id is not None:
+        if task.subject_id is not None and self.library.load(task.procedure_id).manual_result_allowed:
             return frozenset({Decision.rerun, Decision.manual_result})
         return frozenset({Decision.rerun})
 
@@ -45,7 +50,7 @@ class ReviewQueue:
         if (
             j.autonomy_level in (AutonomyLevel.L1, AutonomyLevel.L2)
             or j.proposed_action in (ProposedAction.misstatement, ProposedAction.more_evidence)
-            or template.id == "CSH-02"
+            or template.always_review
         ):
             return TaskKind.normal
         return None

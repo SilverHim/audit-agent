@@ -33,6 +33,7 @@ from backend.services.rule_engine import SqlRuleEngine
 
 def build_deps(settings: Settings) -> AgentDeps:
     fin = PostgresFinancialDataStore()
+    library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
     dataset_dir = settings.DATASET_ROOT / "demo"
     return AgentDeps(
         fin=fin,
@@ -43,8 +44,8 @@ def build_deps(settings: Settings) -> AgentDeps:
         llm=make_llm_client(settings),
         rules=SqlRuleEngine(fin),
         judgments=JudgmentEngine(),
-        queue=ReviewQueue(),
-        library=ProcedureLibrary(settings.KNOWLEDGE_ROOT),
+        queue=ReviewQueue(library),
+        library=library,
         trail=PostgresAuditTrail(),
         registry=MockRegistrySource(dataset_dir),
         confirmations=MockConfirmationChannel(dataset_dir),

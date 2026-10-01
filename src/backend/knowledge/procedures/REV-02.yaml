@@ -5,6 +5,7 @@ cycle: Revenue
 owner: A6
 engine: hybrid
 autonomy_level: L2
+manual_result_allowed: true
 assertions: [Occurrence, Cutoff]
 triggers:
   - {account: Revenue, assertions: [Cutoff], level: [medium, high, significant]}

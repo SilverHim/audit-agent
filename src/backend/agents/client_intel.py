@@ -1,5 +1,6 @@
 """A2: ACC-04. 返回字段: acceptance_scorecard, exceptions, procedure_runs."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
@@ -123,7 +124,15 @@ def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
     return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at})
 
 
-class ClientIntelAgent(ProcedureAgent):
+@dataclass(frozen=True)
+class Acc04Findings:
+    """ACC-04 的原始发现: 客户画像与三项登记检查结果."""
+
+    profile: ClientProfile  # 客户画像
+    checks: list[RegistryCheck]  # 三项检查, 顺序为 abn_active, name_match, company_registered
+
+
+class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
     """A2: 执行 ACC-04, 查 ABN 与 ASIC 登记, 产出承接评分卡."""
 
     agent_id: ClassVar[AgentId] = AgentId.A2  # 智能体编号
@@ -182,21 +191,29 @@ class ClientIntelAgent(ProcedureAgent):
 
         return check_list
 
-    async def run(self, ctx: RunContext) -> StatePatch:
-        """执行 ACC-04: 读客户画像, 做三项检查, 返回评分卡, 例外与执行记录终态."""
+    async def execute(self, ctx: RunContext) -> Acc04Findings:
+        """执行 ACC-04: 读客户画像, 查 ABN 与 ASIC, 返回三项检查结果."""
         profile = await self.deps.engagements.client_profile(ctx.engagement.client_id)
 
         if profile is None:
             raise LookupError(f"client profile {ctx.engagement.client_id} not found")
 
         check_list = await self.collect_checks(ctx=ctx, profile=profile)
+
+        return Acc04Findings(profile=profile, checks=check_list)
+
+    async def interpret(self, ctx: RunContext, findings: Acc04Findings) -> StatePatch:
+        """未通过的检查出例外, 汇总评分卡, 执行记录置成功终态."""
         exceptions = []
-        for check in check_list:
+        for check in findings.checks:
             if not check.passed:
-                exceptions.append(build_exception(check=check, run=ctx.run, abn=profile.abn))
+                exceptions.append(build_exception(check=check, run=ctx.run, abn=findings.profile.abn))
 
         scorecard = build_scorecard(
-            checks=check_list, exceptions=exceptions, profile=profile, previous=ctx.state["acceptance_scorecard"]
+            checks=findings.checks,
+            exceptions=exceptions,
+            profile=findings.profile,
+            previous=ctx.state["acceptance_scorecard"],
         )
 
         return {

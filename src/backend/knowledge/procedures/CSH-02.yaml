@@ -5,6 +5,8 @@ cycle: Cash
 owner: A6
 engine: hybrid
 autonomy_level: L3
+always_review: true              # 函证差异一律由人评价 (ASA 505 para 14)
+manual_result_allowed: true
 assertions: [Existence]
 triggers:
   - {account: Cash, assertions: [Existence], level: [medium, high, significant]}

@@ -1,5 +1,7 @@
 """程序编号 → 执行它的 Agent 实例. 闸门步骤 (ACC-01, PLN-01/03 的决定, FIN-01, RPT-01) 由 A1 的闸门节点处理."""
 
+from typing import Any
+
 from backend.agents.base import AgentDeps, ProcedureAgent
 from backend.agents.client_intel import ClientIntelAgent
 from backend.agents.concierge import ConciergeAgent
@@ -9,7 +11,7 @@ from backend.agents.ingest import IngestAgent
 from backend.agents.qc import QCAgent
 from backend.agents.risk_assessor import RiskAssessorAgent
 
-AGENT_CLASSES: tuple[type[ProcedureAgent], ...] = (
+AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
     ClientIntelAgent,
     IngestAgent,
     RiskAssessorAgent,
@@ -20,10 +22,16 @@ AGENT_CLASSES: tuple[type[ProcedureAgent], ...] = (
 )
 
 
-def build_agents(deps: AgentDeps) -> dict[str, ProcedureAgent]:
-    agents: dict[str, ProcedureAgent] = {}
+def build_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """每个 Agent 从程序库中选出自己负责的程序; 声明了却没有模板的程序视为配置错误."""
+    templates = deps.library.all()
+    agents: dict[str, ProcedureAgent[Any]] = {}
     for cls in AGENT_CLASSES:
         instance = cls(deps)
-        for pid in cls.procedures:
-            agents[pid] = instance
+        selected = instance.select_procedures(templates)
+        missing = cls.procedures - {t.id for t in selected}
+        if missing:
+            raise LookupError(f"{cls.__name__} 负责的程序没有模板: {sorted(missing)}")
+        for template in selected:
+            agents[template.id] = instance
     return agents

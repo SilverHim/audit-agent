@@ -93,15 +93,17 @@ def p0_state() -> EngagementState:
     return initial_state(ENGAGEMENT, [make_procedure("ACC-04"), make_procedure("ACC-01")], NUMBAT_PROFILE.version)
 
 
-class SpyAgent(ProcedureAgent):
+class SpyAgent(ProcedureAgent[None]):
     """记下收到的 ctx, 返回空片段, 用来检查节点传给 Agent 的上下文."""
 
     agent_id: ClassVar[AgentId] = AgentId.A2  # 智能体编号
     procedures: ClassVar[frozenset[str]] = frozenset({"ACC-04"})  # 负责的程序
     ctx: RunContext | None = None  # 最近一次收到的上下文
 
-    async def run(self, ctx: RunContext) -> StatePatch:
+    async def execute(self, ctx: RunContext) -> None:
         self.ctx = ctx
+
+    async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
         return {}
 
 

@@ -62,7 +62,7 @@ class GraphNodes:
     def __init__(self, deps: AgentDeps, parallel_cap: int) -> None:
         self.deps = deps  # 外部依赖工具箱
         self.parallel_cap = parallel_cap  # fieldwork 实例并行上限
-        self.agents: dict[str, ProcedureAgent] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
+        self.agents: dict[str, ProcedureAgent[Any]] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
 
     async def execute(self, state: EngagementState, procedure_id: str) -> StatePatch:
         """执行一条 P2 以外的程序: 建执行记录, 调负责的 Agent, 程序出 completed 新版本.
