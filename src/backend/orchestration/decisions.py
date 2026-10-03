@@ -1,10 +1,12 @@
 """DecisionSubmit (A 负责): 审计师决定的唯一写入口. 取锁 → 校验 → 一个事务内写入决定及其效果 → 越过闸门 → 后台继续.
 
-校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 本版先实现 ACC-01 闸门决定.
+校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 闸门决定; PLN-01/03 已校验,
+效果待实现.
 """
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
@@ -18,21 +20,26 @@ from backend.contracts.models import (
     ClientProfile,
     Engagement,
     GateDecision,
+    GateEdit,
     GateId,
     GateVerdict,
+    MaterialityCandidates,
+    MaterialityChoice,
     Phase,
     Procedure,
     ProcedureStatus,
     ReviewRecord,
+    RiskItem,
     TrailEntry,
     TrailKind,
+    Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.nodes import save_outputs, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner
 
-ACC01_NOT_ALLOWED = ("materiality", "edits", "disposition", "annotations")  # 其他闸门专用字段, ACC-01 决定不得填写
+GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations")  # 只在某道闸门的某种决定下可填的字段
 
 
 def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
@@ -54,14 +61,88 @@ def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     }
 
 
-def check_acc01_fields(decision: GateDecision) -> None:
-    """ACC-01 决定的字段校验: reject 与 insufficient_info 须填 reason; 其他闸门专用字段须为空."""
-    if decision.decision is not GateVerdict.approve and not decision.reason:
-        raise DecisionRejected("MISSING_FIELD", "reason")
-    # None 与空列表都视为未填
-    filled = [name for name in ACC01_NOT_ALLOWED if getattr(decision, name)]
+def required_fields(decision: GateDecision) -> list[str]:
+    """闸门决定的必填字段, 即第 7 节必填表: 通过以外都须填 reason, FIN-01 一律须填; PLN-01/03 通过须填 materiality;
+    FIN-01 通过须填 disposition; RPT-01 驳回须填 annotations."""
+    approve = decision.decision is GateVerdict.approve
+    required = ["reason"] if not approve or decision.gate is GateId.FIN_01 else []
+    if approve and decision.gate is GateId.PLN_01_03:
+        required.append("materiality")
+    if approve and decision.gate is GateId.FIN_01:
+        required.append("disposition")
+    if decision.decision is GateVerdict.reject and decision.gate is GateId.RPT_01:
+        required.append("annotations")
+    return required
+
+
+def allowed_fields(decision: GateDecision) -> set[str]:
+    """闸门决定可填的闸门专用字段 (GATE_SPECIFIC 中的), 即必填表 "只允许在此填" 一列; 其余专用字段须为空."""
+    approve = decision.decision is GateVerdict.approve
+    if approve and decision.gate is GateId.PLN_01_03:
+        return {"materiality", "edits"}
+    if approve and decision.gate is GateId.FIN_01:
+        return {"disposition"}
+    if decision.decision is GateVerdict.reject and decision.gate is GateId.RPT_01:
+        return {"annotations"}
+    return set()
+
+
+def check_fields(decision: GateDecision) -> None:
+    """闸门决定的字段校验: 必填的缺了报 MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空列表都视为未填."""
+    missing = [name for name in required_fields(decision) if not getattr(decision, name)]
+    if missing:
+        raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
+    allowed = allowed_fields(decision)
+    filled = [name for name in GATE_SPECIFIC if getattr(decision, name) and name not in allowed]
     if filled:
         raise DecisionRejected("FIELD_NOT_ALLOWED", ", ".join(filled))
+
+
+def to_cents(amount: Decimal) -> int:
+    """金额四舍五入到整数分 (0.5 进位)."""
+    return int(amount.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def materiality_amounts(candidates: MaterialityCandidates, choice: MaterialityChoice) -> tuple[int, int, int]:
+    """按审计师的选择算出 (整体重要性, 执行重要性, 明显微小门槛), 单位分.
+
+    整体重要性 = 所选基准金额 × pct; 执行重要性 = 整体重要性 × performance_pct; 明显微小 = 整体重要性 ×
+    clearly_trivial_pct. 比例按十进制计算 (Decimal(str(x)), 避免二进制浮点误差), 每项各自四舍五入到整数分.
+    例: 收入基准 1200000000, {0.01, 0.75, 0.05} → (12000000, 9000000, 600000). basis 须在候选中 (check_materiality).
+    """
+    candidate = next(c for c in candidates.candidates if c.basis == choice.basis)
+    overall = to_cents(Decimal(candidate.base_amount_cents) * Decimal(str(choice.pct)))
+    performance = to_cents(Decimal(overall) * Decimal(str(choice.performance_pct)))
+    trivial = to_cents(Decimal(overall) * Decimal(str(choice.clearly_trivial_pct)))
+    return overall, performance, trivial
+
+
+def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoice) -> None:
+    """重要性选择的取值校验, 不过报 INVALID_VALUE: basis 在候选中; pct 在该候选 [pct_low, pct_high] 内;
+    performance_pct 在 performance_pct_range 内 (闭区间); clearly_trivial_pct 大于 0 且不超过候选给的比例 (Q8)."""
+    candidate = next((c for c in candidates.candidates if c.basis == choice.basis), None)
+    if candidate is None:
+        raise DecisionRejected("INVALID_VALUE", f"materiality.basis {choice.basis} 不在候选中")
+    if not candidate.pct_low <= choice.pct <= candidate.pct_high:
+        raise DecisionRejected("INVALID_VALUE", f"materiality.pct 应在 [{candidate.pct_low}, {candidate.pct_high}] 内")
+    low, high = candidates.performance_pct_range
+    if not low <= choice.performance_pct <= high:
+        raise DecisionRejected("INVALID_VALUE", f"materiality.performance_pct 应在 [{low}, {high}] 内")
+    if not 0 < choice.clearly_trivial_pct <= candidates.clearly_trivial_pct:
+        raise DecisionRejected(
+            "INVALID_VALUE", f"materiality.clearly_trivial_pct 应在 (0, {candidates.clearly_trivial_pct}] 内"
+        )
+
+
+def check_edits(edits: list[GateEdit], risks: dict[str, RiskItem]) -> None:
+    """风险等级修改的取值校验, 不过报 INVALID_VALUE: target_id 在风险清单中, 同一风险项只改一次."""
+    unknown = [e.target_id for e in edits if e.target_id not in risks]
+    if unknown:
+        raise DecisionRejected("INVALID_VALUE", f"edits 的 target_id 不在风险清单中: {', '.join(unknown)}")
+    ids = [e.target_id for e in edits]
+    repeated = sorted({i for i in ids if ids.count(i) > 1})
+    if repeated:
+        raise DecisionRejected("INVALID_VALUE", f"同一风险项改了多次: {', '.join(repeated)}")
 
 
 class GraphDecisionSubmit:
@@ -129,6 +210,40 @@ class GraphDecisionSubmit:
             raise
         self.runner.launch(eid, None)
 
+    async def gate_target(self, eid: str, gate: GateId) -> Versioned | None:
+        """闸门呈报材料在 Store 中的当前版本, 决定须绑定它 (与 GraphStateQuery.gate 的 target 一致); 没有返回 None."""
+        store = self.deps.output_store
+        if gate is GateId.ACC_01:
+            return await store.get(eid, AcceptanceScorecard, "SCORECARD")
+        if gate is GateId.PLN_01_03:
+            return await store.get(eid, MaterialityCandidates, "MATERIALITY")
+        raise NotImplementedError(f"{gate} 的闸门决定尚未实现")
+
+    async def check_gate_decision(self, eid: str, decision: GateDecision) -> Versioned:
+        """第 7 节校验顺序中 NOT_AT_GATE 之后的部分: 材料与修改项的版本, 字段, 取值, 决定 ID 未用过.
+
+        返回决定绑定的材料 (Store 中的当前版本). 不过抛 DecisionRejected.
+        """
+        store = self.deps.output_store
+        # 决定须绑定材料的当前版本 (读 Store): 审计师看材料期间材料可能已重跑出新版
+        target = await self.gate_target(eid, decision.gate)
+        if target is None or (decision.target_id, decision.target_version) != (target.id, target.version):
+            raise DecisionRejected("VERSION_MISMATCH", f"{decision.gate} 的呈报材料已更新, 请刷新后重新决定")
+        risks = {r.id: r for r in await store.latest(eid, RiskItem)} if decision.edits else {}
+        for edit in decision.edits:  # 不存在的风险项留给下面的 INVALID_VALUE
+            risk = risks.get(edit.target_id)
+            if risk is not None and risk.version != edit.target_version:
+                raise DecisionRejected("VERSION_MISMATCH", f"风险项 {risk.id} 已是第 {risk.version} 版")
+        check_fields(decision)
+        # materiality 只在 PLN-01/03 通过时可填 (上一步已查), 此时材料即重要性候选
+        if decision.materiality is not None and isinstance(target, MaterialityCandidates):
+            check_materiality(target, decision.materiality)
+        check_edits(decision.edits, risks)
+        # 同一决定 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算: 一律拒绝
+        if await store.get(eid, GateDecision, decision.id) is not None:
+            raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision.id} 已用过")
+        return target
+
     async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
         """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
         if isinstance(decision, ReviewRecord):
@@ -136,14 +251,9 @@ class GraphDecisionSubmit:
         async with self._deciding(eid) as (_, snapshot):
             if current_gate(snapshot.next) is not decision.gate:
                 raise DecisionRejected("NOT_AT_GATE", f"当前不在 {decision.gate} 闸门")
+            await self.check_gate_decision(eid, decision)
             if decision.gate is not GateId.ACC_01:
-                raise NotImplementedError(f"{decision.gate} 的闸门决定尚未实现")
-
-            # 决定须绑定材料的当前版本 (读 Store): 审计师看材料期间评分卡可能已重跑出新版
-            scorecard = await self.deps.output_store.get(eid, AcceptanceScorecard, "SCORECARD")
-            if scorecard is None or (decision.target_id, decision.target_version) != (scorecard.id, scorecard.version):
-                raise DecisionRejected("VERSION_MISMATCH", "评分卡已更新, 请刷新后重新决定")
-            check_acc01_fields(decision)
+                raise NotImplementedError(f"{decision.gate} 的闸门决定已校验, 效果尚未实现")
 
             effects = acc01_effects(snapshot.values["procedure_pack"], decision)
             values = await self._write_acc01(eid, decision, effects)

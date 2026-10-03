@@ -9,20 +9,28 @@ import pytest
 from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
+    Annotation,
     ClientProfile,
     Engagement,
     GateDecision,
+    GateEdit,
     GateId,
     GateVerdict,
+    MaterialityCandidate,
+    MaterialityCandidates,
+    MaterialityChoice,
     OpinionType,
     Phase,
     Procedure,
     ProcedureStatus,
+    ReportSection,
+    RiskItem,
+    RiskLevel,
     TrailEntry,
     TrailKind,
 )
 from backend.orchestration import runner as runner_module
-from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects
+from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects, materiality_amounts
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
@@ -39,6 +47,7 @@ from tests.fakes import (
 )
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
+ANNOTATION = Annotation(section=ReportSection.opinion, comment="x")
 
 
 def acc01_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
@@ -585,3 +594,257 @@ async def test_profile_update_elsewhere_does_not_pull_back_engagement_in_p1() ->
     with pytest.raises(DecisionRejected) as e:  # RESUME_REQUIRED 的检查在 NOT_AT_GATE 之前
         await submit.update_client_profile(ENG2.id, FIXED_PROFILE.model_copy(update={"version": 3}), updated_by="U-2")
     assert e.value.code == "NOT_AT_GATE"
+
+
+# ── R09 闸门决定按闸门分派, PLN-01/03 校验 ──
+
+CHOICE = MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.75, clearly_trivial_pct=0.05)
+
+
+def pln_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
+    """绑定 MATERIALITY 第 1 版的 PLN-01/03 决定: approve 带合成数据集第 7 节的选择, 其余带理由.
+
+    changes 覆盖任意字段.
+    """
+    decision = GateDecision(
+        id="D-PLN",
+        gate=GateId.PLN_01_03,
+        target_id="MATERIALITY",
+        target_version=1,
+        decision=verdict,
+        materiality=CHOICE if verdict is GateVerdict.approve else None,
+        reason=None if verdict is GateVerdict.approve else "收入口径应剔除关联方销售",
+        decided_by="U-1",
+        decided_at=NOW,
+    )
+    return decision.model_copy(update=changes)
+
+
+def edit(target_id: str = "RISK-CASH-EXI", target_version: int = 1) -> GateEdit:
+    return GateEdit(
+        target_id=target_id, target_version=target_version, field="level", new_value=RiskLevel.significant, reason="x"
+    )
+
+
+async def at_pln_gate() -> Started:
+    """新项目跑到 ACC-01, approve 后 P1 用 Numbat 脚本 Agent 跑完, 停在 PLN-01/03 闸门前."""
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(s.runner, EID)
+    assert await s.next_nodes() == ("gate_p1_risk",)
+    return s
+
+
+async def assert_rejected(s: Started, decision: GateDecision, code: str, detail: str | None = None) -> None:
+    """提交被拒: 错误码对, Store 无新写入, 项目锁已释放, 图不动."""
+    rows_before, next_before = list(s.output_store.rows), await s.next_nodes()
+
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, decision)
+
+    assert e.value.code == code, e.value
+    if detail is not None:
+        assert detail in str(e.value)
+    assert s.output_store.rows == rows_before
+    assert not s.runner.is_running(EID)
+    assert await s.next_nodes() == next_before
+
+
+@pytest.mark.parametrize(
+    ("decision", "code", "detail"),
+    [
+        (pln_decision(GateVerdict.approve, materiality=None), "MISSING_FIELD", "materiality"),
+        (pln_decision(GateVerdict.reject, reason=None), "MISSING_FIELD", "reason"),
+        (pln_decision(GateVerdict.insufficient_info, reason=""), "MISSING_FIELD", "reason"),
+        (pln_decision(GateVerdict.reject, materiality=CHOICE), "FIELD_NOT_ALLOWED", "materiality"),
+        (pln_decision(GateVerdict.reject, edits=[edit()]), "FIELD_NOT_ALLOWED", "edits"),
+        (pln_decision(GateVerdict.approve, disposition=OpinionType.qualified), "FIELD_NOT_ALLOWED", "disposition"),
+        (pln_decision(GateVerdict.approve, annotations=[ANNOTATION]), "FIELD_NOT_ALLOWED", "annotations"),
+        (pln_decision(GateVerdict.approve, target_version=2), "VERSION_MISMATCH", None),
+        (pln_decision(GateVerdict.approve, target_id="ANALYTICS"), "VERSION_MISMATCH", None),
+        (pln_decision(GateVerdict.approve, edits=[edit(target_version=2)]), "VERSION_MISMATCH", "RISK-CASH-EXI"),
+        (
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.02})),
+            "INVALID_VALUE",
+            "pct",
+        ),
+        (
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.004})),
+            "INVALID_VALUE",
+            "pct",
+        ),
+        (
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"performance_pct": 0.8})),
+            "INVALID_VALUE",
+            "performance_pct",
+        ),
+        (
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"clearly_trivial_pct": 0.0})),
+            "INVALID_VALUE",
+            "clearly_trivial_pct",
+        ),
+        (
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"clearly_trivial_pct": 0.06})),
+            "INVALID_VALUE",
+            "clearly_trivial_pct",
+        ),
+        (pln_decision(GateVerdict.approve, edits=[edit("RISK-XXX")]), "INVALID_VALUE", "RISK-XXX"),
+        (pln_decision(GateVerdict.approve, edits=[edit(), edit()]), "INVALID_VALUE", "RISK-CASH-EXI"),
+        (pln_decision(GateVerdict.approve, id="D-ACC"), "INVALID_VALUE", "D-ACC"),
+    ],
+    ids=[
+        "approve_without_materiality",
+        "reject_without_reason",
+        "insufficient_info_empty_reason",
+        "reject_with_materiality",
+        "reject_with_edits",
+        "disposition",
+        "annotations",
+        "stale_target_version",
+        "wrong_target",
+        "stale_edit_version",
+        "pct_above_range",
+        "pct_below_range",
+        "performance_pct",
+        "clearly_trivial_zero",
+        "clearly_trivial_above_candidate",
+        "unknown_risk",
+        "same_risk_twice",
+        "reused_decision_id",
+    ],
+)
+async def test_pln_decision_rejected(decision: GateDecision, code: str, detail: str | None) -> None:
+    s = await at_pln_gate()
+
+    await assert_rejected(s, decision, code, detail)
+
+
+@pytest.mark.parametrize(
+    ("decision", "code", "detail"),
+    [
+        (pln_decision(GateVerdict.approve, target_version=2, materiality=None), "VERSION_MISMATCH", None),
+        (pln_decision(GateVerdict.reject, edits=[edit(target_version=2)]), "VERSION_MISMATCH", "RISK-CASH-EXI"),
+        (
+            pln_decision(GateVerdict.approve, edits=[edit("RISK-XXX", 9), edit(target_version=2)]),
+            "VERSION_MISMATCH",
+            "RISK-CASH-EXI",
+        ),
+        (pln_decision(GateVerdict.reject, edits=[edit("RISK-XXX", 9)]), "FIELD_NOT_ALLOWED", "edits"),
+        (pln_decision(GateVerdict.reject, reason=None, edits=[edit("RISK-XXX", 9)]), "MISSING_FIELD", "reason"),
+        (pln_decision(GateVerdict.approve, id="D-ACC", materiality=None), "MISSING_FIELD", "materiality"),
+        (
+            pln_decision(GateVerdict.approve, id="D-ACC", materiality=CHOICE.model_copy(update={"pct": 0.02})),
+            "INVALID_VALUE",
+            "materiality.pct",
+        ),
+        (pln_decision(GateVerdict.approve, id="D-ACC", edits=[edit(), edit()]), "INVALID_VALUE", "同一风险项"),
+    ],
+    ids=[
+        "stale_target_before_missing_field",
+        "stale_edit_before_field_not_allowed",
+        "stale_edit_before_unknown_edit",
+        "field_not_allowed_before_unknown_edit",
+        "missing_field_first_among_fields",
+        "missing_field_before_reused_id",
+        "bad_pct_before_reused_id",
+        "repeated_edit_before_reused_id",
+    ],
+)
+async def test_pln_errors_reported_in_section_7_order(decision: GateDecision, code: str, detail: str | None) -> None:
+    """同时有几处错时按第 7 节顺序报第一处: 版本 → 字段 → 取值 → 决定 ID (Codex R09-01)."""
+    s = await at_pln_gate()
+
+    await assert_rejected(s, decision, code, detail)
+
+
+@pytest.mark.parametrize("kind", ["materiality", "risk"])
+async def test_pln_versions_read_from_store_not_checkpoint(kind: str) -> None:
+    """Store 中的材料或风险项已是第 2 版而检查点仍是第 1 版: 绑定第 1 版报 VERSION_MISMATCH, 绑定第 2 版通过校验."""
+    s = await at_pln_gate()
+    model, target_id = (MaterialityCandidates, "MATERIALITY") if kind == "materiality" else (RiskItem, "RISK-CASH-EXI")
+    current = await s.output_store.get(EID, model, target_id)
+    assert current is not None
+    await s.output_store.put(EID, [current.model_copy(update={"version": 2})], actor="U-1")
+    stale = {} if kind == "materiality" else {"edits": [edit()]}
+    fresh = {"target_version": 2} if kind == "materiality" else {"edits": [edit(target_version=2)]}
+
+    await assert_rejected(s, pln_decision(GateVerdict.approve, **stale), "VERSION_MISMATCH")
+    with pytest.raises(NotImplementedError, match="效果尚未实现"):
+        await s.submit.submit(EID, pln_decision(GateVerdict.approve, **fresh))
+
+
+async def test_pln_decision_at_acc01_not_at_gate() -> None:
+    s = await started()
+
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "NOT_AT_GATE")
+
+
+async def test_acc01_decision_at_pln_gate_not_at_gate() -> None:
+    s = await at_pln_gate()
+
+    await assert_rejected(s, acc01_decision(GateVerdict.approve, id="D-9"), "NOT_AT_GATE")
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        pln_decision(GateVerdict.approve),
+        pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.005})),
+        pln_decision(
+            GateVerdict.approve, materiality=CHOICE.model_copy(update={"basis": "profit_before_tax", "pct": 0.05})
+        ),
+        pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"performance_pct": 0.5})),
+        pln_decision(GateVerdict.approve, edits=[edit(), edit("RISK-REV-CUT")]),
+        pln_decision(GateVerdict.reject),
+        pln_decision(GateVerdict.insufficient_info),
+    ],
+    ids=["demo_choice", "revenue_pct_low", "pbt_pct", "performance_low", "two_edits", "reject", "insufficient_info"],
+)
+async def test_valid_pln_decision_passes_checks_then_effects_not_implemented(decision: GateDecision) -> None:
+    """闭区间边界 (revenue 0.005 与 0.01, profit_before_tax 0.05, performance 0.5 与 0.75, 明显微小 0.05) 都通过校验;
+    效果留给下一步, 暂抛 NotImplementedError, 什么都不写, 锁已释放."""
+    s = await at_pln_gate()
+    rows_before = list(s.output_store.rows)
+
+    with pytest.raises(NotImplementedError, match="效果尚未实现"):
+        await s.submit.submit(EID, decision)
+
+    assert s.output_store.rows == rows_before
+    assert not s.runner.is_running(EID)
+
+
+async def test_reused_acc01_decision_id_rejected() -> None:
+    """ACC-01 信息不足 D-1 留在闸门, 再以 D-1 提交 approve: 拒绝, 不按新内容写效果 (BASE-02)."""
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.insufficient_info))
+    await wait_idle(s.runner, EID)
+
+    await assert_rejected(s, acc01_decision(GateVerdict.approve), "INVALID_VALUE", "D-1")
+    assert s.latest_procedure("ACC-01").status is ProcedureStatus.planned
+
+
+# ── 重要性三项 ──
+
+
+@pytest.mark.parametrize(
+    ("base", "choice", "expected"),
+    [
+        (1200000000, CHOICE, (12000000, 9000000, 600000)),
+        # 1234567 × 0.005 = 6172.835 → 6173; 6173 × 0.75 = 4629.75 → 4630; 6173 × 0.05 = 308.65 → 309
+        (1234567, CHOICE.model_copy(update={"pct": 0.005}), (6173, 4630, 309)),
+        # 整体 5000 × 0.01 = 50; 执行 50 × 0.57 按十进制为 28.5 → 29 (浮点为 28.499999999999996, 会得 28);
+        # 明显微小 50 × 0.05 = 2.5 → 3 (Python 的 round 按银行家舍入会得 2)
+        (5000, CHOICE.model_copy(update={"performance_pct": 0.57}), (50, 29, 3)),
+    ],
+)
+def test_materiality_amounts(base: int, choice: MaterialityChoice, expected: tuple[int, int, int]) -> None:
+    candidates = MaterialityCandidates(
+        id="MATERIALITY",
+        candidates=[
+            MaterialityCandidate(
+                basis="revenue", base_amount_cents=base, pct_low=0, pct_high=1, low_cents=0, high_cents=base
+            )
+        ],
+    )
+
+    assert materiality_amounts(candidates, choice) == expected

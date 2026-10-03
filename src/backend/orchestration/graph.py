@@ -85,10 +85,11 @@ def gate_route(gate: GateId) -> Callable[[EngagementState], GateRoute]:
         decisions = [d for d in state["gate_decisions"] if d.gate is gate]
         if not decisions:
             return "represent"
-        # 3. 以最后一条决定为准; 它绑定的材料不是当前版本 (如评分卡已重跑出新版), 视为过期
+        # 3. 以最后一条决定为准; 它绑定的材料不是当前版本 (如评分卡已重跑出新版), 视为过期;
+        #    材料缺失 (状态与流程不符) 也不放行, 留在闸门重新呈报
         d = decisions[-1]
         target = _gate_target(state, gate)
-        if target is not None and (d.target_id, d.target_version) != target:
+        if target is None or (d.target_id, d.target_version) != target:
             return "represent"
         # 4. 按决定种类出闸门
         if d.decision is GateVerdict.approve:

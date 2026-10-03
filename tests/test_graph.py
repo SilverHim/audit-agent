@@ -1,6 +1,7 @@
 """主图: 验证拓扑, 四道静态中断, 闸门决定经 aupdate_state(as_node=闸门) 越过闸门. p0_intel 已实装, 其余节点尚为占位."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
 from langchain_core.runnables import RunnableConfig
@@ -10,22 +11,33 @@ from langgraph.graph.state import CompiledStateGraph
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
+    AuditReportVersion,
     ClientProfile,
     Engagement,
     GateDecision,
     GateId,
     GateVerdict,
+    MaterialityCandidates,
+    OpinionType,
     Phase,
     ProcedureStatus,
     ReviewTask,
     TargetType,
     TaskKind,
+    UncorrectedSchedule,
 )
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import checkpoint_serde, open_checkpointer
 from backend.orchestration.decisions import acc01_effects
-from backend.orchestration.graph import GATE_NODES, ScheduleStuck, after_fan_in, compile_graph, route_schedule
+from backend.orchestration.graph import (
+    GATE_NODES,
+    ScheduleStuck,
+    after_fan_in,
+    compile_graph,
+    gate_route,
+    route_schedule,
+)
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner, fixed_procedures
 from backend.orchestration.scheduler import build_schedule
@@ -47,9 +59,33 @@ from tests.fakes import (
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
 
 
-# 各闸门的呈报材料 ID: ACC-01, PLN-01/03 的材料已由节点产出, 决定须绑定其第 1 版;
-# FIN-01, RPT-01 的材料尚为空, 不校验绑定
-TARGETS = {GateId.ACC_01: "SCORECARD", GateId.PLN_01_03: "MATERIALITY", GateId.FIN_01: "T", GateId.RPT_01: "T"}
+# 各闸门的呈报材料 ID, 决定须绑定其第 1 版. ACC-01, PLN-01/03 的材料由节点产出; FIN-01, RPT-01 的节点尚为占位,
+# 遍历时随决定一并写入材料 (MATERIALS), 否则闸门因材料缺失一直重新呈报
+TARGETS = {
+    GateId.ACC_01: "SCORECARD",
+    GateId.PLN_01_03: "MATERIALITY",
+    GateId.FIN_01: "SCHEDULE",
+    GateId.RPT_01: "REPORT-1",
+}
+MATERIALS: dict[GateId, dict[str, Any]] = {
+    GateId.FIN_01: {
+        "uncorrected_schedule": UncorrectedSchedule(
+            id="SCHEDULE",
+            items=[],
+            excluded_trivial_ids=[],
+            total_cents=0,
+            materiality_cents=12000000,
+            candidate_opinion=OpinionType.unqualified,
+        )
+    },
+    GateId.RPT_01: {
+        "report_versions": [
+            AuditReportVersion(
+                id="REPORT-1", revision=1, opinion_type=OpinionType.unqualified, sections={}, judgment_refs=[]
+            )
+        ]
+    },
+}
 
 
 def _decision(n: int, gate: GateId, verdict: GateVerdict, target_version: int = 1) -> GateDecision:
@@ -155,7 +191,8 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
     for n, (gate, verdict, after_decision, next_gate) in enumerate(steps):
         snapshot = await app.aget_state(config)
         assert snapshot.next == (GATE_NODES[gate],)
-        await app.aupdate_state(config, {"gate_decisions": [_decision(n, gate, verdict)]}, as_node=GATE_NODES[gate])
+        values = {"gate_decisions": [_decision(n, gate, verdict)], **MATERIALS.get(gate, {})}
+        await app.aupdate_state(config, values, as_node=GATE_NODES[gate])
         assert (await app.aget_state(config)).next == (after_decision,)
         await app.ainvoke(None, config)
         assert (await app.aget_state(config)).next == ((next_gate,) if next_gate else ())
@@ -314,3 +351,19 @@ def test_after_fan_in_raises_when_awaiting_without_task() -> None:
 
     with pytest.raises(ScheduleStuck, match="REV-08"):
         after_fan_in(state)
+
+
+# ── R09 (BASE-07): 闸门材料缺失时不放行 ──
+
+
+@pytest.mark.parametrize("gate", [GateId.PLN_01_03, GateId.FIN_01, GateId.RPT_01])
+def test_gate_route_represents_when_material_missing(gate: GateId) -> None:
+    """有本闸门的通过决定, 但状态里没有材料 (与流程不符): 不按决定放行, 留在闸门重新呈报; 补上材料后按决定通过."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state["gate_decisions"] = [_decision(0, gate, GateVerdict.approve)]
+
+    assert gate_route(gate)(state) == "represent"
+
+    material = MATERIALS.get(gate) or {"materiality_candidates": MaterialityCandidates(id="MATERIALITY", candidates=[])}
+    state.update(material)  # type: ignore[typeddict-item]
+    assert gate_route(gate)(state) == "approve"
