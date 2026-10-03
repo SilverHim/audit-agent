@@ -9,13 +9,18 @@ from typing import Any, TypedDict, cast
 
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
+from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
+    AcceptanceScorecard,
     AgentId,
+    AnalyticsResult,
+    AuditException,
     Engagement,
+    Judgment,
     Phase,
     Procedure,
     ProcedureRun,
@@ -23,12 +28,13 @@ from backend.contracts.models import (
     ReviewTask,
     RunStatus,
     RunTrigger,
+    TargetType,
     TaskKind,
     Versioned,
 )
 from backend.contracts.ports import AuditOutputStore
 from backend.contracts.state import EngagementState, StatePatch
-from backend.orchestration.merge import MergeRejected, check_patch
+from backend.orchestration.merge import AGENT_FIELDS, MergeRejected, check_patch, check_refs, field_type
 from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
@@ -102,6 +108,77 @@ def has_failed_task(patch: StatePatch) -> bool:
     return any(task.kind is TaskKind.failed for task in patch.get("review_tasks", []))
 
 
+async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: ProcedureRun) -> StatePatch:
+    """重放: 取回某次已是终态的执行在 Store 中的产出, 组成片段. 不调 Agent, LLM 与外部接口, 也不重取当前时间.
+
+    节点写 Store 之后, 写检查点之前中断, 恢复时会重跑; 本次执行已在 Store 中且为终态时, 用它代替调 Agent.
+    run: Store 中该执行的终态记录; writer: 执行它的 Agent, 按其写入范围 (merge.AGENT_FIELDS) 决定取哪些字段:
+    - 带 run_id 的对象 (例外, 判断): 取该 run_id 下各对象的最新版本;
+    - 不带 run_id 的产出 (评分卡, 分析结果, 重要性候选, 审计目标, 风险清单, 汇总表, 报告, 函证): 取 Store 最新版本,
+      单个对象的字段 (如评分卡) 各只有一个固定 ID;
+    - documents: 取 FinancialDataStore.documents.
+    另取该 run_id 下的复核任务 (含 A1 代写的 failed 任务).
+    再补齐引用, 使片段自成一体: 片段中对象 (判断, 评分卡, 分析结果) 的 exception_ids 与任务的例外目标所指的例外,
+    取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id 仍是 REV-08 那次); 片段中对象所属的
+    其他执行记录也取回 (如回退检查点后重放第 1 次, 最新评分卡来自第 2 次, 其例外属于第 2 次执行).
+    执行失败时 Agent 的片段当初已丢弃, 只取执行记录与任务. execute 与 fieldwork 共用.
+    """
+    store = deps.output_store
+    fields = AGENT_FIELDS.get(writer, frozenset())
+    patch: StatePatch = {"procedure_runs": [run]}
+    tasks = await store.latest(eid, ReviewTask, run_id=run.id)
+    if tasks or "review_tasks" in fields:
+        patch["review_tasks"] = tasks
+    if run.status is RunStatus.failed:
+        return patch
+
+    for field in sorted(fields - {"review_tasks"}):
+        model, is_list = field_type(field)
+        if field == "documents":
+            patch[field] = await deps.financial_store.documents(eid)
+        elif issubclass(model, BaseModel) and "run_id" in model.model_fields:
+            patch[field] = await store.latest(eid, model, run_id=run.id)
+        elif is_list:
+            patch[field] = await store.latest(eid, model)
+        else:
+            found: list[Any] = await store.latest(eid, model)
+            if found:
+                patch[field] = found[0]
+
+    if "exceptions" in fields:
+        await add_referenced_exceptions(store, eid, patch)
+    await add_referenced_runs(store, eid, patch)
+    return patch
+
+
+async def add_referenced_exceptions(store: AuditOutputStore, eid: str, patch: StatePatch) -> None:
+    """把片段中对象引用而片段里还没有的例外 (Store 最新版本) 追加进 patch["exceptions"]."""
+    referenced: list[str] = []
+    for value in patch.values():
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, Judgment | AcceptanceScorecard | AnalyticsResult):
+                referenced += item.exception_ids
+            elif isinstance(item, ReviewTask) and item.target_type is TargetType.AuditException:
+                referenced.append(item.target_id)
+    have = {x.id for x in patch["exceptions"]}
+    for exception_id in dict.fromkeys(referenced):  # 去重并保持顺序
+        exception = None if exception_id in have else await store.get(eid, AuditException, exception_id)
+        if exception is not None:
+            patch["exceptions"].append(exception)
+            have.add(exception_id)
+
+
+async def add_referenced_runs(store: AuditOutputStore, eid: str, patch: StatePatch) -> None:
+    """把片段中例外, 判断, 任务所属而片段里还没有的执行记录 (Store 中的) 追加进 patch["procedure_runs"]."""
+    referenced = [item.run_id for field in ("exceptions", "judgments", "review_tasks") for item in patch.get(field, [])]
+    have = {run.id for run in patch["procedure_runs"]}
+    for run_id in dict.fromkeys(referenced):
+        run = None if run_id in have else await store.get(eid, ProcedureRun, run_id)
+        if run is not None:
+            patch["procedure_runs"].append(run)
+            have.add(run_id)
+
+
 def update_procedure(pack: list[Procedure], procedure_id: str, **changes: Any) -> list[Procedure]:
     """修改程序包中指定程序的字段并生成新版本 (version +1), 返回新的完整程序包, 原列表与原对象不变.
 
@@ -170,22 +247,6 @@ class GraphNodes:
             return patch, agent.agent_id
         return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
 
-    async def stored_failure(self, eid: str, run_id: str) -> StatePatch | None:
-        """恢复保护: Store 中本次执行已是终态且带 failed 任务时, 返回 Store 中的该执行与它的全部任务; 否则返回 None.
-
-        上次执行在此失败并等人, 恢复时节点从头执行; 若再调 Agent 而这次成功了, 会写出与 Store 矛盾的结果
-        (Store 里已是失败执行与 awaiting_human). 所以不调 Agent, 照 Store 里的结果再走一次等待.
-        成功执行的完整取回 (评分卡等产出) 见 R04.
-        """
-        stored = await self.deps.output_store.get(eid, ProcedureRun, run_id)
-        if stored is None or stored.status is RunStatus.running:
-            return None
-        patch: StatePatch = {
-            "procedure_runs": [stored],
-            "review_tasks": await self.deps.output_store.latest(eid, ReviewTask, run_id=run_id),
-        }
-        return patch if has_failed_task(patch) else None
-
     async def execute(self, state: EngagementState, procedure_id: str) -> StatePatch:
         """执行一条 P2 以外的程序: 建执行记录, 调 Agent 并校验片段, 程序出新版本, 同一事务内写入 Store.
 
@@ -194,7 +255,8 @@ class GraphNodes:
         执行期间不生成 executing 版本, 程序包中的原对象直接传给 Agent.
         Agent 的异常与片段校验不过不向上抛, 转成失败执行与 failed 任务 (见 run_agent); 节点自身的错误 (项目缺失,
         参数解析不了, 写 Store 失败) 照常抛出, 由 runner 记入 run_error.
-        恢复时本次执行已失败并在等人的, 不再调 Agent (见 stored_failure).
+        重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs).
+        上次在此失败并等人的同样如此, 不会因再调 Agent 成功而绕过等待, 写出与 Store 矛盾的结果.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         engagement = await self.deps.engagement_store.get(state["engagement_id"])
@@ -203,11 +265,16 @@ class GraphNodes:
         template = self.deps.library.load(procedure_id)
         procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
         ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state)
-        replayed = await self.stored_failure(engagement.id, procedure_run.id)
-        if replayed is not None:
-            patch, writer = replayed, AgentId.A1
+        agent = self.agents[procedure_id]
+        stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+        if stored_run is not None and stored_run.status is not RunStatus.running:
+            patch, writer = await stored_outputs(self.deps, engagement.id, agent.agent_id, stored_run), agent.agent_id
+            # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误
+            problems = check_refs(patch, state)
+            if problems:
+                raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
         else:
-            patch, writer = await self.run_agent(self.agents[procedure_id], ctx)
+            patch, writer = await self.run_agent(agent, ctx)
         waiting = has_failed_task(patch)
         status = ProcedureStatus.awaiting_human if waiting else ProcedureStatus.completed
         pack = update_procedure(state["procedure_pack"], procedure_id, status=status)

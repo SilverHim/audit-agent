@@ -411,16 +411,6 @@ async def test_p0_intel_saves_outputs_in_one_transaction() -> None:
     }
 
 
-async def test_p0_intel_replay_uses_stored_run() -> None:
-    """RUN-ACC-04-1 已在 Store 中 (上次执行已提交, 检查点未写入), 状态中的执行记录应取已存对象."""
-    stored_run = make_run().model_copy(update={"status": RunStatus.succeeded, "ended_at": NOW})
-    nodes = make_nodes(output_store=FakeOutputStore([*p0_pack(), stored_run]))
-
-    patch = await nodes.p0_intel(p0_state())
-
-    assert patch["procedure_runs"][0].ended_at == NOW
-
-
 # ── R03 P2 以外程序失败: 转失败执行与 failed 任务, 节点内等人处理 ──
 
 EID = ENGAGEMENT.id

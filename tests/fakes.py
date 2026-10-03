@@ -19,6 +19,8 @@ from backend.contracts.models import (
     AuditObjective,
     AutonomyLevel,
     ClientProfile,
+    DocumentRef,
+    DocumentType,
     Engagement,
     Phase,
     Procedure,
@@ -133,6 +135,16 @@ class FakeTrail:
     ) -> list[TrailEntry]:
         hits = [e for e in self.entries if e.engagement_id == eid and (kind is None or e.kind is kind)]
         return hits[offset : offset + limit]
+
+
+class FakeFinancialStore:
+    """假财务数据存储: 目前只提供证据文件登记 (documents), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+
+    def __init__(self, documents: list[DocumentRef] | None = None) -> None:
+        self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+
+    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
+        return [d for d in self.document_refs if type is None or d.type is type]
 
 
 @dataclass(frozen=True)
@@ -401,10 +413,12 @@ def make_deps(
     trail: FakeTrail,
     engagement_store: FakeEngagementStore | None = None,
     output_store: FakeOutputStore | None = None,
+    financial_store: FakeFinancialStore | None = None,
 ) -> AgentDeps:
-    """真实依赖里换掉登记系统, 留痕, 项目存储与审计产出存储. 其余依赖只构造不连接.
+    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储与财务数据存储. 其余依赖只构造不连接.
 
-    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储缺省为空. 两者绑定, 项目存储的写入加入审计产出的事务.
+    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空.
+    项目存储与审计产出存储绑定, 项目存储的写入加入审计产出的事务.
     """
     if engagement_store is None:
         engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
@@ -417,6 +431,7 @@ def make_deps(
         trail=trail,
         engagement_store=engagement_store,
         output_store=output_store,
+        financial_store=financial_store or FakeFinancialStore(),
     )
 
 
