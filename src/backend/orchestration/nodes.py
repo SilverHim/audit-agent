@@ -3,6 +3,7 @@
 闸门节点不做业务处理: 决定由 DecisionSubmit 写入, 并以 aupdate_state(as_node=闸门节点) 直接越过闸门.
 """
 
+import copy
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 
@@ -10,8 +11,10 @@ from langgraph.types import interrupt
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.registry import build_agents
+from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AgentId,
+    Engagement,
     Phase,
     Procedure,
     ProcedureRun,
@@ -23,6 +26,7 @@ from backend.contracts.models import (
 from backend.contracts.ports import AuditOutputStore
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.scheduler import build_schedule
+from backend.services.procedure_library import ProcedureLibrary, highest_risk
 
 
 class FieldworkInput(TypedDict):
@@ -49,6 +53,26 @@ def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any]
         started_at=started_at,
         status=RunStatus.running,
     )
+
+
+def build_run(
+    library: ProcedureLibrary,
+    template: ProcedureTemplate,
+    procedure: Procedure,
+    engagement: Engagement,
+    state: EngagementState,
+    started_at: datetime,
+) -> ProcedureRun:
+    """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
+
+    参数 = 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它为准).
+    解析用的风险等级取程序关联审计目标的最高等级. 参数解析不了 (如重要性尚未确定) 时抛错, 不建执行记录.
+    Procedure.params 深拷贝后叠加: 其中的列表与字典若与快照共用, 改一处会连带改到程序和历次执行的快照.
+    """
+    risk_level = highest_risk(state["audit_objectives"], procedure.objective_ids)
+    resolved = library.resolve_params(template, engagement, state, risk_level)
+    params = {**resolved, **copy.deepcopy(procedure.params)}
+    return next_run(procedure.id, state["procedure_runs"], params, started_at)
 
 
 def update_procedure(pack: list[Procedure], procedure_id: str, **changes: Any) -> list[Procedure]:
@@ -106,19 +130,9 @@ class GraphNodes:
         engagement = await self.deps.engagement_store.get(state["engagement_id"])
         if engagement is None:
             raise LookupError(f"Engagement {state['engagement_id']} not found")
-        procedure_run = next_run(
-            procedure_id=procedure_id,
-            runs=state["procedure_runs"],
-            params=procedure.params,
-            started_at=datetime.now(UTC),
-        )
-        ctx = RunContext(
-            engagement=engagement,
-            procedure=procedure,
-            template=self.deps.library.load(procedure_id),
-            run=procedure_run,
-            state=state,
-        )
+        template = self.deps.library.load(procedure_id)
+        procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
+        ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state)
         agent = self.agents[procedure_id]
         patch = await agent.run(ctx)
         pack = update_procedure(state["procedure_pack"], procedure_id, status=ProcedureStatus.completed)

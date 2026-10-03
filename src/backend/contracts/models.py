@@ -465,7 +465,7 @@ class Procedure(Versioned):
     phase: Phase  # 所属阶段
     template_commit: str  # 实例化时程序库的 git commit
     objective_ids: list[str] = []  # 覆盖的审计目标
-    params: dict[str, Any] = {}  # 执行参数, 来自模板, 重跑时可改
+    params: dict[str, Any] = {}  # rerun 决定改的参数; 建执行记录时叠加在模板参数的解析结果上, 同名键以它为准
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus = ProcedureStatus.planned  # 程序状态
     rerun_subject_ids: list[str] = []  # 重跑时只重判的对象, 为空则整条重跑; 重跑后清空
@@ -478,7 +478,7 @@ class ProcedureRun(Versioned):
     run_no: int  # 第几次执行, 从 1 起
     trigger: RunTrigger  # 首次执行还是重跑
     instance: str | None = None  # 执行它的 fieldwork 实例, P2 以外为空
-    params_snapshot: dict[str, Any]  # 执行时的参数快照
+    params_snapshot: dict[str, Any]  # 执行时的参数快照: 模板参数解析结果叠加 Procedure.params
     started_at: datetime  # 开始时间
     ended_at: datetime | None = None  # 结束时间, 运行中为空
     status: RunStatus  # 运行中, 成功或失败

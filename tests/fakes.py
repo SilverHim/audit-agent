@@ -13,6 +13,7 @@ from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AbnRecord,
     AsicCompanyRecord,
+    AuditObjective,
     AutonomyLevel,
     ClientProfile,
     Engagement,
@@ -73,6 +74,14 @@ ENGAGEMENT = Engagement(
     created_at=NOW,
     updated_at=NOW,
 )
+# 数据集预置的审计目标 (合成数据集设计.md 2.4 节): 收入两条为特别风险, 货币资金为高风险
+NUMBAT_OBJECTIVES = [
+    AuditObjective(
+        id="OBJ-REV-OCC", account="Revenue", assertion="Occurrence", risk_level="significant", is_material=True
+    ),
+    AuditObjective(id="OBJ-REV-CUT", account="Revenue", assertion="Cutoff", risk_level="significant", is_material=True),
+    AuditObjective(id="OBJ-CASH-EXI", account="Cash", assertion="Existence", risk_level="high", is_material=True),
+]
 
 
 # ── 假工具 ──

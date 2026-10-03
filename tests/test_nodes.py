@@ -1,7 +1,7 @@
 """主图节点. 依赖用 tests/fakes.py 的假实现, 节点函数直接调用, 不经图."""
 
-from datetime import timedelta
-from typing import ClassVar
+from datetime import date, timedelta
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import ValidationError
@@ -10,6 +10,7 @@ from backend.agents.base import ProcedureAgent, RunContext
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
+    AuditObjective,
     Phase,
     Procedure,
     ProcedureStatus,
@@ -18,12 +19,15 @@ from backend.contracts.models import (
     ScheduleRow,
 )
 from backend.contracts.state import EngagementState, StatePatch, initial_state
-from backend.orchestration.nodes import GraphNodes, next_run, save_outputs, update_procedure
+from backend.core.config import get_settings
+from backend.orchestration.nodes import GraphNodes, build_run, next_run, save_outputs, update_procedure
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_ABN,
     NUMBAT_ASIC,
+    NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     TYPO_PROFILE,
     FakeEngagementStore,
@@ -144,6 +148,7 @@ async def test_execute_builds_context_for_agent() -> None:
     assert spy.ctx.template.id == "ACC-04"
     assert spy.ctx.run.id == "RUN-ACC-04-1"
     assert spy.ctx.run.status == RunStatus.running
+    assert spy.ctx.run.params_snapshot == {}  # ACC-04 模板没有参数
     assert spy.ctx.state is state
 
 
@@ -184,6 +189,140 @@ async def test_execute_raises_when_engagement_missing() -> None:
 
     with pytest.raises(LookupError):
         await nodes.execute(p0_state(), "ACC-04")
+
+
+# ── R01 建执行记录: 模板参数按项目与状态解析, 再叠加 rerun 改的参数 ──
+
+PERIOD_END = date(2026, 6, 30)
+
+
+def library() -> ProcedureLibrary:
+    return ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+
+
+def numbat_state(materiality_set: bool = True) -> EngagementState:
+    """Numbat 进入 P2 时的状态: 审计目标按数据集预置; 重要性取演示中闸门批准的值 (合成数据集设计.md 第 7 节)."""
+    state = initial_state(ENGAGEMENT, [], NUMBAT_PROFILE.version)
+    state["audit_objectives"] = list(NUMBAT_OBJECTIVES)
+    if materiality_set:
+        state["materiality_cents"] = 12_000_000
+        state["performance_materiality_cents"] = 9_000_000
+        state["clearly_trivial_cents"] = 600_000
+    return state
+
+
+def assembled(
+    lib: ProcedureLibrary,
+    procedure_id: str,
+    objectives: list[AuditObjective] = NUMBAT_OBJECTIVES,
+    **changes: Any,
+) -> Procedure:
+    """同 assemble_pack 实例化一条程序: objective_ids 为 trigger 匹配到的审计目标. changes 覆盖其他字段."""
+    template = lib.load(procedure_id)
+    return Procedure(
+        id=procedure_id,
+        phase=template.phase,
+        template_commit=lib.commit,
+        objective_ids=[o.id for o in objectives if template in lib.match(o)],
+        autonomy_level=template.autonomy_level,
+        **changes,
+    )
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "expected"),
+    [
+        ("REV-08", {"window_days": 20, "period_end": PERIOD_END}),
+        ("REV-02", {"window_days": 20, "threshold_cents": 9_000_000, "period_end": PERIOD_END}),
+        ("CSH-04", {"as_of": PERIOD_END}),
+        ("CSH-02", {"period_end": PERIOD_END, "subsequent_days": 10, "lookback_days": 5}),
+        ("FIN-04", {"materiality_cents": 12_000_000, "clearly_trivial_cents": 600_000}),
+    ],
+)
+def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str, Any]) -> None:
+    """Numbat 的收入目标都是特别风险, window_days 取 20; ref 取项目期末与闸门批准的重要性."""
+    lib = library()
+
+    run = build_run(lib, lib.load(procedure_id), assembled(lib, procedure_id), ENGAGEMENT, numbat_state(), NOW)
+
+    assert run.params_snapshot == expected
+    assert run.id == f"RUN-{procedure_id}-1"
+    assert run.status == RunStatus.running
+
+
+def test_build_run_literal_params_equal_yaml() -> None:
+    lib = library()
+
+    run = build_run(lib, lib.load("PLN-07"), assembled(lib, "PLN-07"), ENGAGEMENT, numbat_state(), NOW)
+
+    assert run.params_snapshot == lib.load("PLN-07").params
+
+
+def test_build_run_uses_highest_linked_risk() -> None:
+    """REV-08 关联中风险与高风险两条收入目标: 取高风险的 15 天; 货币资金的特别风险不关联, 不取 20 天."""
+    objectives = [
+        AuditObjective(
+            id="OBJ-REV-OCC", account="Revenue", assertion="Occurrence", risk_level="medium", is_material=True
+        ),
+        AuditObjective(id="OBJ-REV-CUT", account="Revenue", assertion="Cutoff", risk_level="high", is_material=True),
+        AuditObjective(
+            id="OBJ-CASH-EXI", account="Cash", assertion="Existence", risk_level="significant", is_material=True
+        ),
+    ]
+    state = numbat_state()
+    state["audit_objectives"] = objectives
+    lib = library()
+
+    run = build_run(lib, lib.load("REV-08"), assembled(lib, "REV-08", objectives), ENGAGEMENT, state, NOW)
+
+    assert run.params_snapshot["window_days"] == 15
+
+
+def test_build_run_rerun_params_override_template() -> None:
+    """rerun 决定把 window_days 改为 25: 同名键以 Procedure.params 为准, 其余照常解析; 执行记录取第 2 号."""
+    state = numbat_state()
+    state["procedure_runs"] = [make_run("REV-08", 1)]
+    lib = library()
+    procedure = assembled(lib, "REV-08", params={"window_days": 25})
+
+    run = build_run(lib, lib.load("REV-08"), procedure, ENGAGEMENT, state, NOW)
+
+    assert run.params_snapshot == {"window_days": 25, "period_end": PERIOD_END}
+    assert run.id == "RUN-REV-08-2"
+    assert run.trigger == RunTrigger.rerun
+
+
+def test_build_run_snapshot_not_shared_with_procedure() -> None:
+    """rerun 把 PLN-07 的收入科目改为 ["4200"]: 改第 2 次执行快照里的列表, 程序与第 1 次快照不受影响."""
+    state = numbat_state()
+    lib = library()
+    template = lib.load("PLN-07")
+    procedure = assembled(lib, "PLN-07", params={"revenue_account_codes": ["4200"]})
+    first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
+    state["procedure_runs"] = [first]
+    second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
+
+    second.params_snapshot["revenue_account_codes"].append("4300")
+
+    assert procedure.params["revenue_account_codes"] == ["4200"]
+    assert first.params_snapshot["revenue_account_codes"] == ["4200"]
+    assert template.params["revenue_account_codes"] == ["4100"]
+
+
+def test_build_run_refuses_unset_materiality() -> None:
+    """重要性未经闸门确定 (状态中为 None) 时执行 FIN-04: 抛错, 不建执行记录."""
+    lib = library()
+
+    with pytest.raises(ValueError, match="materiality_cents"):
+        build_run(lib, lib.load("FIN-04"), assembled(lib, "FIN-04"), ENGAGEMENT, numbat_state(False), NOW)
+
+
+def test_build_run_by_risk_without_objectives() -> None:
+    """REV-08 没有关联审计目标, 无从按风险取 window_days: 抛错."""
+    lib = library()
+
+    with pytest.raises(ValueError, match=r"REV-08\.window_days"):
+        build_run(lib, lib.load("REV-08"), assembled(lib, "REV-08", []), ENGAGEMENT, numbat_state(), NOW)
 
 
 # ── 需求 2 第 1 步: 节点返回前在一个事务里写 Store, 状态用 put 返回的对象 ──

@@ -1,5 +1,6 @@
 """程序库: 加载程序 YAML 与准则片段, trigger 匹配, 依赖闭包, 参数解析 (A 负责)."""
 
+import copy
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -13,6 +14,22 @@ from backend.contracts.state import EngagementState
 
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
+RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, significant (枚举定义顺序)
+
+
+def highest_risk(objectives: Iterable[AuditObjective], objective_ids: Iterable[str]) -> RiskLevel | None:
+    """程序针对的审计目标中最高的风险等级, 用来取 by_risk 参数. 程序没有关联审计目标时返回 None.
+
+    objectives: 状态中的全部审计目标; objective_ids: 程序关联的审计目标 ID (Procedure.objective_ids).
+    关联的 ID 在 objectives 中找不到时抛 LookupError: 程序包与审计目标对不上, 按缺失的目标取值会算错参数.
+    """
+    by_id = {o.id: o for o in objectives}
+    ids = list(objective_ids)
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        raise LookupError(f"审计目标不存在: {', '.join(missing)}")
+    levels = [by_id[i].risk_level for i in ids]
+    return max(levels, key=RISK_ORDER.index) if levels else None
 
 
 class ProcedureLibrary:
@@ -73,23 +90,40 @@ class ProcedureLibrary:
         return [self._templates[pid] for pid in ordered]
 
     def resolve_params(
-        self, template: ProcedureTemplate, engagement: Engagement, state: EngagementState, risk_level: RiskLevel
+        self,
+        template: ProcedureTemplate,
+        engagement: Engagement,
+        state: EngagementState,
+        risk_level: RiskLevel | None,
     ) -> dict[str, Any]:
-        """params 取值: 字面量, {by_risk: {...}} 或 {ref: 名称}."""
+        """解析模板参数. 每个参数三种写法: 字面量, {by_risk: {等级: 值}} 或 {ref: 名称}.
+
+        risk_level: 程序关联审计目标的最高等级 (见 highest_risk), 没有关联目标为 None.
+        by_risk 参数在 risk_level 为 None 或没有该等级的取值时抛 ValueError.
+        ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; 未知的 ref 名称抛 KeyError.
+        字面量深拷贝, 改返回值不会改到模板.
+        """
         out: dict[str, Any] = {}
         for key, value in template.params.items():
             if isinstance(value, dict) and "by_risk" in value:
+                if risk_level is None:
+                    raise ValueError(f"{template.id}.{key}: 按风险等级取值, 但程序没有关联审计目标")
+                if risk_level.value not in value["by_risk"]:
+                    raise ValueError(f"{template.id}.{key}: 没有 {risk_level.value} 等级的取值")
                 out[key] = value["by_risk"][risk_level.value]
             elif isinstance(value, dict) and "ref" in value:
                 ref = value["ref"]
                 if ref in ENGAGEMENT_REFS:
                     out[key] = getattr(engagement, ref)
                 elif ref in STATE_REFS:
-                    out[key] = state[ref]  # type: ignore[literal-required]
+                    resolved = state[ref]  # type: ignore[literal-required]
+                    if resolved is None:
+                        raise ValueError(f"{template.id}.{key}: {ref} 尚未确定")
+                    out[key] = resolved
                 else:
                     raise KeyError(f"{template.id}.{key}: 未知 ref {ref}")
             else:
-                out[key] = value
+                out[key] = copy.deepcopy(value)
         return out
 
     def fragment(self, fragment_id: str) -> StandardFragment | None:
