@@ -10,6 +10,7 @@ from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
+    AuditObjective,
     ClientProfile,
     Engagement,
     GateDecision,
@@ -30,17 +31,21 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.orchestration import runner as runner_module
-from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects, materiality_amounts
+from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects, materiality_amounts, pln_effects
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_CANDIDATES,
+    NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
+    NUMBAT_RISKS,
     TYPO_PROFILE,
     EngagementWrite,
     FakeEngagementStore,
     FakeOutputStore,
     FakeTrail,
     NoTaskAsyncio,
+    assert_pack_synced,
     make_procedure,
     make_runner,
     wait_idle,
@@ -635,6 +640,12 @@ async def at_pln_gate() -> Started:
     return s
 
 
+def stop_after_submit(s: Started) -> None:
+    """submit 写入并越过闸门后不在后台继续执行, 释放项目锁: 只看这一步的结果. P2 的 fieldwork 尚为占位,
+    PLN-01/03 通过后若继续执行会在那里出错."""
+    s.runner.launch = lambda eid, graph_input: s.runner.release(eid)  # type: ignore[method-assign]
+
+
 async def assert_rejected(s: Started, decision: GateDecision, code: str, detail: str | None = None) -> None:
     """提交被拒: 错误码对, Store 无新写入, 项目锁已释放, 图不动."""
     rows_before, next_before = list(s.output_store.rows), await s.next_nodes()
@@ -769,8 +780,8 @@ async def test_pln_versions_read_from_store_not_checkpoint(kind: str) -> None:
     fresh = {"target_version": 2} if kind == "materiality" else {"edits": [edit(target_version=2)]}
 
     await assert_rejected(s, pln_decision(GateVerdict.approve, **stale), "VERSION_MISMATCH")
-    with pytest.raises(NotImplementedError, match="效果尚未实现"):
-        await s.submit.submit(EID, pln_decision(GateVerdict.approve, **fresh))
+    stop_after_submit(s)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, **fresh))  # 通过校验, 不抛 DecisionRejected
 
 
 async def test_pln_decision_at_acc01_not_at_gate() -> None:
@@ -800,17 +811,15 @@ async def test_acc01_decision_at_pln_gate_not_at_gate() -> None:
     ],
     ids=["demo_choice", "revenue_pct_low", "pbt_pct", "performance_low", "two_edits", "reject", "insufficient_info"],
 )
-async def test_valid_pln_decision_passes_checks_then_effects_not_implemented(decision: GateDecision) -> None:
-    """闭区间边界 (revenue 0.005 与 0.01, profit_before_tax 0.05, performance 0.5 与 0.75, 明显微小 0.05) 都通过校验;
-    效果留给下一步, 暂抛 NotImplementedError, 什么都不写, 锁已释放."""
+async def test_valid_pln_decision_accepted(decision: GateDecision) -> None:
+    """闭区间边界 (revenue 0.005 与 0.01, profit_before_tax 0.05, performance 0.5 与 0.75, 明显微小 0.05) 都通过校验,
+    决定写入 Store."""
     s = await at_pln_gate()
-    rows_before = list(s.output_store.rows)
+    stop_after_submit(s)
 
-    with pytest.raises(NotImplementedError, match="效果尚未实现"):
-        await s.submit.submit(EID, decision)
+    await s.submit.submit(EID, decision)
 
-    assert s.output_store.rows == rows_before
-    assert not s.runner.is_running(EID)
+    assert await s.output_store.get(EID, GateDecision, decision.id) == decision
 
 
 async def test_reused_acc01_decision_id_rejected() -> None:
@@ -848,3 +857,252 @@ def test_materiality_amounts(base: int, choice: MaterialityChoice, expected: tup
     )
 
     assert materiality_amounts(candidates, choice) == expected
+
+
+# ── R10 PLN-01/03 决定的效果 ──
+
+
+def by_id(objs: list[Any]) -> dict[str, Any]:
+    return {o.id: o for o in objs}
+
+
+async def test_pln_approve_sets_materiality_completes_programs_and_moves_on() -> None:
+    """验收 1: 三个金额进状态; PLN-01, PLN-03 completed; 决定与两条程序新版本同一次提交; 1 行 decision 留痕;
+    越过闸门后进装配 (Numbat 带出的审计目标会装配出 P2 程序, fieldwork 尚为占位, 故只查越过闸门这一步)."""
+    s = await at_pln_gate()
+    commits_before = len(s.output_store.commits)
+    trail_before = len(decision_trail(s))
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("assemble_pack",)
+    values = snapshot.values
+    assert (values["materiality_cents"], values["performance_materiality_cents"], values["clearly_trivial_cents"]) == (
+        12000000,
+        9000000,
+        600000,
+    )
+    pack = by_id(values["procedure_pack"])
+    assert (pack["PLN-01"].version, pack["PLN-01"].status) == (3, ProcedureStatus.completed)
+    assert (pack["PLN-03"].version, pack["PLN-03"].status) == (2, ProcedureStatus.completed)
+    [commit] = s.output_store.commits[commits_before:]
+    assert [(type(o).__name__, o.id, o.version) for o in commit] == [
+        ("GateDecision", "D-PLN", 1),
+        ("Procedure", "PLN-01", 3),
+        ("Procedure", "PLN-03", 2),
+    ]
+    [entry] = decision_trail(s)[trail_before:]
+    assert (entry.procedure_id, entry.idempotency_key, entry.actor) == ("PLN-01", "D-PLN", "U-1")
+    await assert_pack_synced(values["procedure_pack"], s.output_store)
+
+
+async def test_pln_approve_with_edit_versions_risk_and_objective() -> None:
+    """验收 2: 现金存在性风险 high → significant: 风险项 v2 (等级, 理由, 确认人), 目标 v2 risk_level significant;
+    其余风险项与目标仍 v1; 新版本与决定同一次提交."""
+    s = await at_pln_gate()
+    commits_before = len(s.output_store.commits)
+    raise_cash = GateEdit(
+        target_id="RISK-CASH-EXI",
+        target_version=1,
+        field="level",
+        new_value=RiskLevel.significant,
+        reason="期末大额在途存款",
+    )
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, edits=[raise_cash]))
+
+    values = (await s.runner.app.aget_state(GraphRunner.config(EID))).values
+    risks, objectives = by_id(values["risk_register"]), by_id(values["audit_objectives"])
+    cash = risks["RISK-CASH-EXI"]
+    assert (cash.version, cash.level, cash.revision_reason, cash.approved_by) == (
+        2,
+        RiskLevel.significant,
+        "期末大额在途存款",
+        "U-1",
+    )
+    assert (objectives["OBJ-CASH-EXI"].version, objectives["OBJ-CASH-EXI"].risk_level) == (2, RiskLevel.significant)
+    assert {r.id: r.version for r in values["risk_register"]} == {
+        "RISK-REV-OCC": 1,
+        "RISK-REV-CUT": 1,
+        "RISK-CASH-EXI": 2,
+    }
+    assert {o.id: o.version for o in values["audit_objectives"]} == {
+        "OBJ-REV-OCC": 1,
+        "OBJ-REV-CUT": 1,
+        "OBJ-CASH-EXI": 2,
+    }
+    [commit] = s.output_store.commits[commits_before:]
+    assert {(type(o).__name__, o.id, o.version) for o in commit} == {
+        ("GateDecision", "D-PLN", 1),
+        ("Procedure", "PLN-01", 3),
+        ("Procedure", "PLN-03", 2),
+        ("RiskItem", "RISK-CASH-EXI", 2),
+        ("AuditObjective", "OBJ-CASH-EXI", 2),
+    }
+    assert await s.output_store.get(EID, RiskItem, "RISK-CASH-EXI") == cash
+
+
+def test_pln_effects_lowering_risk_recomputes_objective_from_its_risks() -> None:
+    """验收 3, 6 (纯函数): 收入截止风险 significant → medium, 目标下只有这一条风险, 目标降为 medium;
+    改了等级但目标最高等级不变时目标不出新版本."""
+    pack = [make_procedure("PLN-01", version=2), make_procedure("PLN-03")]
+    candidates = MaterialityCandidates(id="MATERIALITY", candidates=NUMBAT_CANDIDATES)
+    lower = GateEdit(target_id="RISK-REV-CUT", target_version=1, field="level", new_value=RiskLevel.medium, reason="x")
+    extra = NUMBAT_RISKS[0].model_copy(update={"id": "RISK-REV-OCC-2", "level": RiskLevel.low})
+    same = GateEdit(target_id="RISK-REV-OCC-2", target_version=1, field="level", new_value=RiskLevel.medium, reason="y")
+    decision = pln_decision(GateVerdict.approve, edits=[lower, same])
+
+    effects = pln_effects(pack, [*NUMBAT_RISKS, extra], NUMBAT_OBJECTIVES, candidates, decision)
+
+    objectives = by_id(effects["audit_objectives"])
+    assert (objectives["OBJ-REV-CUT"].version, objectives["OBJ-REV-CUT"].risk_level) == (2, RiskLevel.medium)
+    assert objectives["OBJ-REV-OCC"] is NUMBAT_OBJECTIVES[0]  # 其下仍有 significant 的风险, 目标不变
+    assert by_id(effects["risk_register"])["RISK-REV-OCC-2"].level is RiskLevel.medium
+    assert [p.status for p in effects["procedure_pack"]] == [ProcedureStatus.completed, ProcedureStatus.completed]
+    assert pack[0].status is ProcedureStatus.planned  # 输入不变
+
+
+@pytest.mark.parametrize("verdict", [GateVerdict.reject, GateVerdict.insufficient_info])
+def test_pln_effects_non_approve_only_records_decision(verdict: GateVerdict) -> None:
+    decision = pln_decision(verdict)
+    candidates = MaterialityCandidates(id="MATERIALITY", candidates=NUMBAT_CANDIDATES)
+
+    assert pln_effects([], NUMBAT_RISKS, NUMBAT_OBJECTIVES, candidates, decision) == {"gate_decisions": [decision]}
+
+
+async def test_pln_reject_reruns_analytics_and_old_binding_goes_stale() -> None:
+    """验收 4: 驳回只写决定与留痕; 回 p1_analytics 重跑出 RUN-PLN-07-2, RUN-PLN-01-2, ANALYTICS v2, MATERIALITY v2,
+    再停在闸门; 之后绑定 MATERIALITY v1 的决定报 VERSION_MISMATCH."""
+    s = await at_pln_gate()
+    commits_before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.reject))
+    await wait_idle(s.runner, EID)
+
+    decision_commit = s.output_store.commits[commits_before]
+    assert [(type(o).__name__, o.id) for o in decision_commit] == [("GateDecision", "D-PLN")]
+    assert decision_trail(s)[-1].idempotency_key == "D-PLN"
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("gate_p1_risk",)
+    values = snapshot.values
+    assert {"RUN-PLN-07-2", "RUN-PLN-01-2"} <= {r.id for r in values["procedure_runs"]}
+    assert (values["analytics"].version, values["materiality_candidates"].version) == (2, 2)
+    assert values["materiality_cents"] is None
+    await assert_rejected(s, pln_decision(GateVerdict.approve, id="D-PLN-2"), "VERSION_MISMATCH")
+    await s.submit.submit(EID, pln_decision(GateVerdict.insufficient_info, id="D-PLN-3", target_version=2))
+    await wait_idle(s.runner, EID)
+    assert (await s.runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
+
+
+async def test_pln_insufficient_info_stays_at_gate() -> None:
+    """验收 5: 信息不足只写决定与留痕, 仍停在闸门, 程序与金额都不动."""
+    s = await at_pln_gate()
+    commits_before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.insufficient_info))
+    await wait_idle(s.runner, EID)
+
+    assert [[(type(o).__name__, o.id) for o in c] for c in s.output_store.commits[commits_before:]] == [
+        [("GateDecision", "D-PLN")]
+    ]
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("gate_p1_risk",)
+    assert snapshot.values["materiality_cents"] is None
+    assert by_id(snapshot.values["procedure_pack"])["PLN-01"].status is ProcedureStatus.planned
+    assert decision_trail(s)[-1].summary == "PLN-01/03 insufficient_info"
+
+
+# ── Codex R10-01, R10-02: Store 与检查点不一致时, 效果按 Store 算, 材料同步进状态, 不顺带写无关版本 ──
+
+
+async def test_edit_applied_on_store_version_when_checkpoint_behind() -> None:
+    """Store 中现金风险已是 v2 (检查点 v1), 决定绑定 v2: 出 v3 并真正应用修改, 状态同步为 Store 的版本."""
+    s = await at_pln_gate()
+    current = await s.output_store.get(EID, RiskItem, "RISK-CASH-EXI")
+    assert current is not None
+    await s.output_store.put(EID, [current.model_copy(update={"version": 2})], actor="U-1")
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, edits=[edit(target_version=2)]))
+
+    cash = await s.output_store.get(EID, RiskItem, "RISK-CASH-EXI")
+    assert cash is not None
+    assert (cash.version, cash.level, cash.revision_reason, cash.approved_by) == (3, RiskLevel.significant, "x", "U-1")
+    objective = await s.output_store.get(EID, AuditObjective, "OBJ-CASH-EXI")
+    assert objective is not None and objective.risk_level is RiskLevel.significant
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert by_id(snapshot.values["risk_register"])["RISK-CASH-EXI"] == cash
+    assert snapshot.next == ("assemble_pack",)
+
+
+async def test_objective_recomputed_with_store_only_peer_risk() -> None:
+    """目标下另有一条只在 Store 中的 significant 风险: 把原风险降为 medium 后目标仍为 significant."""
+    s = await at_pln_gate()
+    current = await s.output_store.get(EID, RiskItem, "RISK-CASH-EXI")
+    assert current is not None
+    peer = current.model_copy(update={"id": "RISK-CASH-EXI-2", "level": RiskLevel.significant})
+    await s.output_store.put(EID, [peer], actor="U-1")
+    lower = GateEdit(target_id=current.id, target_version=1, field="level", new_value=RiskLevel.medium, reason="y")
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, edits=[lower]))
+
+    objective = await s.output_store.get(EID, AuditObjective, "OBJ-CASH-EXI")
+    assert objective is not None and objective.risk_level is RiskLevel.significant
+    values = (await s.runner.app.aget_state(GraphRunner.config(EID))).values
+    assert peer.id in by_id(values["risk_register"])
+
+
+async def test_approve_on_store_candidates_reaches_assembly() -> None:
+    """Store 中候选已是 v2 (金额翻倍), 检查点 v1: 绑定 v2 的通过按 v2 算金额, 状态同步 v2, 路由不判过期."""
+    s = await at_pln_gate()
+    current = await s.output_store.get(EID, MaterialityCandidates, "MATERIALITY")
+    assert current is not None
+    doubled = [c.model_copy(update={"base_amount_cents": c.base_amount_cents * 2}) for c in current.candidates]
+    await s.output_store.put(EID, [current.model_copy(update={"version": 2, "candidates": doubled})], actor="U-1")
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, target_version=2))
+
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("assemble_pack",)
+    assert snapshot.values["materiality_candidates"].version == 2
+    assert snapshot.values["materiality_cents"] == 24000000
+
+
+async def test_checkpoint_ahead_versions_not_written_along() -> None:
+    """检查点里 PLN-07 比 Store 新 (人为制造): 决定只写自己新出的版本, 不顺带写 PLN-07."""
+    s = await at_pln_gate()
+    config = GraphRunner.config(EID)
+    pack = (await s.runner.app.aget_state(config)).values["procedure_pack"]
+    ahead = [p.model_copy(update={"version": p.version + 1}) if p.id == "PLN-07" else p for p in pack]
+    await s.runner.app.aupdate_state(config, {"procedure_pack": ahead}, as_node="p1_analytics")
+    commits_before = len(s.output_store.commits)
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+
+    [commit] = s.output_store.commits[commits_before:]
+    assert [(type(o).__name__, o.id) for o in commit] == [
+        ("GateDecision", "D-PLN"),
+        ("Procedure", "PLN-01"),
+        ("Procedure", "PLN-03"),
+    ]
+
+
+async def test_same_version_with_different_content_in_store_rejected() -> None:
+    """Store 已有 PLN-01 的下一版 (内容不同), 效果算出的同号版本会被 put 当作已存在而丢掉: 整体回滚,
+    VERSION_MISMATCH, 不写决定与留痕."""
+    s = await at_pln_gate()
+    stored = await s.output_store.get(EID, Procedure, "PLN-01")
+    assert stored is not None
+    await s.output_store.put(EID, [stored.model_copy(update={"version": stored.version + 1})], actor="U-1")
+    trail_before = len(decision_trail(s))
+
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "VERSION_MISMATCH", "PLN-01")
+
+    assert await s.output_store.get(EID, GateDecision, "D-PLN") is None
+    assert len(decision_trail(s)) == trail_before

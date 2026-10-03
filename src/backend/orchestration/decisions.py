@@ -1,7 +1,6 @@
 """DecisionSubmit (A 负责): 审计师决定的唯一写入口. 取锁 → 校验 → 一个事务内写入决定及其效果 → 越过闸门 → 后台继续.
 
-校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 闸门决定; PLN-01/03 已校验,
-效果待实现.
+校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 与 PLN-01/03 闸门决定.
 """
 
 from collections.abc import AsyncIterator
@@ -17,6 +16,7 @@ from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
+    AuditObjective,
     ClientProfile,
     Engagement,
     GateDecision,
@@ -30,11 +30,13 @@ from backend.contracts.models import (
     ProcedureStatus,
     ReviewRecord,
     RiskItem,
+    RiskLevel,
     TrailEntry,
     TrailKind,
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch
+from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import save_outputs, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner
@@ -59,6 +61,88 @@ def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
         "procedure_pack": update_procedure(pack, "ACC-01", status=ProcedureStatus.completed),
         "phase": phase,
     }
+
+
+RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
+GATE_MATERIAL = {  # 闸门呈报材料在状态中的字段; 越过闸门时把决定绑定的那一版 (读自 Store) 一并写入
+    GateId.ACC_01: "acceptance_scorecard",
+    GateId.PLN_01_03: "materiality_candidates",
+}
+VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives")  # 效果中会出新版本的对象列表
+GATE_PROCEDURE = {  # 闸门决定的留痕记在哪条程序下
+    GateId.ACC_01: "ACC-01",
+    GateId.PLN_01_03: "PLN-01",
+    GateId.FIN_01: "FIN-01",
+    GateId.RPT_01: "RPT-01",
+}
+
+
+def pln_effects(
+    pack: list[Procedure],
+    risks: list[RiskItem],
+    objectives: list[AuditObjective],
+    candidates: MaterialityCandidates,
+    decision: GateDecision,
+) -> StatePatch:
+    """PLN-01/03 闸门决定的效果, 纯函数 (恢复补做时可复用), 由 aupdate_state(as_node="gate_p1_risk") 写入状态.
+
+    pack, risks, objectives: 当前的程序包, 风险清单, 审计目标; candidates: 决定绑定的重要性候选.
+    - approve: PLN-01, PLN-03 置 completed; 每条 edit 使该风险项出新版本 (等级, 修改理由, 确认人为决定人);
+      风险等级变了的审计目标重算 risk_level (取其下风险项的最高等级) 出新版本; 按 materiality 算出重要性三项.
+      风险清单与审计目标传完整列表 (状态中这两个字段整体替换); 没有修改时不放这两个键.
+    - reject: 只记决定, 路由回 p1_analytics 重新分析. insufficient_info: 只记决定, 留在闸门重新呈报.
+    """
+    if decision.decision is not GateVerdict.approve:
+        return {"gate_decisions": [decision]}
+    assert decision.materiality is not None  # 通过时必填, 已由 check_fields 保证
+    pack = update_procedure(pack, "PLN-01", status=ProcedureStatus.completed)
+    pack = update_procedure(pack, "PLN-03", status=ProcedureStatus.completed)
+    overall, performance, trivial = materiality_amounts(candidates, decision.materiality)
+    effects: StatePatch = {
+        "gate_decisions": [decision],
+        "procedure_pack": pack,
+        "materiality_cents": overall,
+        "performance_materiality_cents": performance,
+        "clearly_trivial_cents": trivial,
+    }
+    if not decision.edits:
+        return effects
+
+    edits = {e.target_id: e for e in decision.edits}
+    new_risks = [
+        risk.model_copy(
+            update={
+                "version": risk.version + 1,
+                "level": edits[risk.id].new_value,
+                "revision_reason": edits[risk.id].reason,
+                "approved_by": decision.decided_by,
+            }
+        )
+        if risk.id in edits
+        else risk
+        for risk in risks
+    ]
+    new_objectives = []
+    for objective in objectives:
+        levels = [r.level for r in new_risks if r.objective_id == objective.id]
+        level = max(levels, key=RISK_ORDER.index) if levels else objective.risk_level
+        if level is objective.risk_level:
+            new_objectives.append(objective)
+        else:
+            new_objectives.append(objective.model_copy(update={"version": objective.version + 1, "risk_level": level}))
+    return {**effects, "risk_register": new_risks, "audit_objectives": new_objectives}
+
+
+def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
+    """效果中新出的版本: 程序包, 风险清单, 审计目标里 (id, version) 不在效果输入 (sources 同名字段) 中的对象.
+
+    决定只写这些; 输入里本来就有的不写, 即使它们比 Store 新 (检查点领先 Store 时不顺带写出无关版本).
+    """
+    created: list[Versioned] = []
+    for key in VERSIONED_EFFECTS:
+        before = {(o.id, o.version) for o in sources.get(key, [])}
+        created += [o for o in effects.get(key, []) if (o.id, o.version) not in before]
+    return created
 
 
 def required_fields(decision: GateDecision) -> list[str]:
@@ -251,39 +335,56 @@ class GraphDecisionSubmit:
         async with self._deciding(eid) as (_, snapshot):
             if current_gate(snapshot.next) is not decision.gate:
                 raise DecisionRejected("NOT_AT_GATE", f"当前不在 {decision.gate} 闸门")
-            await self.check_gate_decision(eid, decision)
-            if decision.gate is not GateId.ACC_01:
+            target = await self.check_gate_decision(eid, decision)
+            # 效果的输入: 程序包取检查点; 风险清单与审计目标取 Store, 与校验 edits 版本时读的一致
+            sources: StatePatch = {"procedure_pack": snapshot.values["procedure_pack"]}
+            if decision.gate is GateId.ACC_01:
+                effects = acc01_effects(sources["procedure_pack"], decision)
+            elif decision.gate is GateId.PLN_01_03:
+                assert isinstance(target, MaterialityCandidates)  # gate_target 对 PLN-01/03 取的就是重要性候选
+                sources["risk_register"] = await self.deps.output_store.latest(eid, RiskItem)
+                sources["audit_objectives"] = await self.deps.output_store.latest(eid, AuditObjective)
+                effects = pln_effects(
+                    sources["procedure_pack"], sources["risk_register"], sources["audit_objectives"], target, decision
+                )
+            else:
                 raise NotImplementedError(f"{decision.gate} 的闸门决定已校验, 效果尚未实现")
-
-            effects = acc01_effects(snapshot.values["procedure_pack"], decision)
-            values = await self._write_acc01(eid, decision, effects)
+            written = await self._write_gate(eid, decision, effects, new_versions(effects, sources))
+            # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致
+            written[GATE_MATERIAL[decision.gate]] = target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由 gate_route 按刚写入的决定选出口
-            await self.app.aupdate_state(GraphRunner.config(eid), values, as_node="gate_acc01")
+            await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=GATE_NODES[decision.gate])
 
-    async def _write_acc01(self, eid: str, decision: GateDecision, effects: StatePatch) -> StatePatch:
-        """在一个事务内写入 ACC-01 决定及其效果, 提交后写 decision 留痕.
+    async def _write_gate(
+        self, eid: str, decision: GateDecision, effects: StatePatch, created: list[Versioned]
+    ) -> StatePatch:
+        """在一个事务内写入闸门决定及其效果, 提交后写 decision 留痕. 返回要写入状态的片段 (决定换成 Store 返回的).
 
-        返回要写入状态的片段 (决定换成 Store 返回的对象).
+        决定的写入者为决定人; created 为效果新出的版本 (见 new_versions), 写入者为 A1. Store 若已有其中某个
+        (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
+        (_deciding 转为 VERSION_MISMATCH). 阶段变化同步到 engagements 表, 进入 Declined 时最后置 locked.
         """
         output_store = self.deps.output_store
         async with output_store.transaction(eid):
             stored = await save_outputs(output_store, eid, {"gate_decisions": [decision]}, actor=decision.decided_by)
-            if "procedure_pack" in effects:  # approve, reject: ACC-01 出 completed 新版本
-                acc01 = next(p for p in effects["procedure_pack"] if p.id == "ACC-01")
-                await output_store.put(eid, [acc01], actor=AgentId.A1)
-            if "phase" in effects:  # 阶段变化同步到 engagements 表; 拒绝承接时最后置 locked
+            saved = await output_store.put(eid, created, actor=AgentId.A1)
+            if saved != created:
+                clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+            if "phase" in effects:
                 declined = effects["phase"] is Phase.Declined
                 await self.deps.engagement_store.update(eid, phase=effects["phase"], locked=True if declined else None)
         # 留痕是独立事务, 不随业务回滚: 提交成功后再写, 才不会留下业务已回滚的决定.
         # 防重复键为决定 ID. 写失败时 Store 已提交而检查点未跟上: 再提交报 RESUME_REQUIRED
         # (拒绝承接已置 locked 的报 ENGAGEMENT_LOCKED), 由 resume/recover 补做并补写留痕
+        procedure_id = GATE_PROCEDURE[decision.gate]
         await self.deps.trail.record(
             TrailEntry(
                 engagement_id=eid,
                 kind=TrailKind.decision,
                 actor=decision.decided_by,
-                procedure_id="ACC-01",
-                summary=f"ACC-01 {decision.decision.value}",
+                procedure_id=procedure_id,
+                summary=f"{decision.gate.value} {decision.decision.value}",
                 idempotency_key=decision.id,
                 payload={"decision_id": decision.id, "reason": decision.reason},
             )
