@@ -22,6 +22,7 @@ from backend.contracts.models import (
     Decision,
     Engagement,
     Judgment,
+    Misstatement,
     Phase,
     Procedure,
     ProcedureRun,
@@ -571,9 +572,34 @@ class GraphNodes:
         return {**result, "procedure_pack": pack, "staged_results": None}
 
     async def await_events(self, state: EngagementState) -> StatePatch:
+        """等审计师处理 P2 的复核任务: interrupt() 暂停, 决定写入 Store 后以 Command(resume=决定 ID) 恢复.
+
+        恢复后从 Store 读回复核决定, 任务, 判断, 例外, 错报与程序的最新版本, 整体并入状态 (接口文档第 7 节),
+        之后回 fan_in 重新判断去向. 决定写入的对象都在其中, 不必按决定类型逐一推断;
+        程序包按状态中的顺序换成 Store 的最新版本.
+        恢复值在 Store 中没有对应的决定 (如绕过 DecisionSubmit 传入未写入的 ID) 时抛 LookupError, 写明原因与恢复办法:
+        LangGraph 把恢复值交给 interrupt() 后, 节点出错再恢复仍取回同一个值, 须以 fan_in 身份重写检查点,
+        再让图继续执行一步, 重新停到等复核.
+        """
+        eid = state["engagement_id"]
+        store = self.deps.output_store
         record_id = interrupt({"awaiting": "review"})
-        del record_id  # TODO(M2): 按 record_id 从 Store 读回 DecisionSubmit 写入的对象返回
-        return {}
+        if await store.get(eid, ReviewRecord, record_id) is None:
+            raise LookupError(
+                f"复核决定 {record_id} 不在 Store 中, 等复核的节点读不回它: 复核决定须先经 DecisionSubmit 写入 Store, "
+                f"再以其 ID 恢复. 这个 ID 已交给节点, 之后的恢复仍会取回它并再次报错; "
+                f'恢复办法: 先以 fan_in 身份重写检查点 (aupdate_state(config, {{}}, as_node="fan_in")), '
+                f"再让图继续执行 (ainvoke(None, config)), 图重新停到等复核后再提交决定"
+            )
+        latest = {p.id: p for p in await store.latest(eid, Procedure)}
+        return {
+            "review_records": await store.latest(eid, ReviewRecord),
+            "review_tasks": await store.latest(eid, ReviewTask),
+            "judgments": await store.latest(eid, Judgment),
+            "exceptions": await store.latest(eid, AuditException),
+            "misstatements": await store.latest(eid, Misstatement),
+            "procedure_pack": [latest.get(p.id, p) for p in state["procedure_pack"]],
+        }
 
     # ── P3, P4 ──
     async def completion(self, state: EngagementState) -> StatePatch:
