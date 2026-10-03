@@ -36,7 +36,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
-from backend.contracts.state import EngagementState, StatePatch
+from backend.contracts.state import EngagementState, StagedResult, StatePatch
 from backend.orchestration.merge import AGENT_FIELDS, MergeRejected, check_patch, check_refs, field_type
 from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
@@ -286,33 +286,52 @@ class GraphNodes:
             return patch, agent.agent_id
         return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
 
-    async def attempt(
-        self, state: EngagementState, engagement: Engagement, procedure_id: str, outstanding: list[ReviewTask]
-    ) -> tuple[StatePatch, list[Procedure]]:
-        """执行一次程序: 建执行记录, 调 Agent (或重放取 Store), 程序出新版本, 同一事务内写入 Store.
+    async def perform(
+        self, state: EngagementState, engagement: Engagement, procedure_id: str, instance: str | None = None
+    ) -> StagedResult:
+        """执行一条程序一次, 不写 Store: 建执行记录, 调 Agent (见 run_agent). attempt 与 fieldwork 共用.
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
-        outstanding: 本节点之前各次执行留下, 尚未决定的 failed 任务 (如 DOC-04 两份合同失败, 只重跑了一份).
-        返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段或 outstanding 中有待决的 failed 任务为
-        awaiting_human, 否则为 completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的
-        这一次执行有效).
-        重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs),
-        程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
+        instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
+        返回程序编号, 执行记录 ID, 写入者与要写入的片段.
+        重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
+        取回的执行是失败的, 写入者为 A1.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
         procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
-        ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state)
+        procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
-        if stored_run is not None and stored_run.status is not RunStatus.running:
-            patch, writer = await stored_outputs(self.deps, engagement.id, agent.agent_id, stored_run), agent.agent_id
+        if stored_run is None or stored_run.status is RunStatus.running:
+            ctx = RunContext(
+                engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
+            )
+            patch, writer = await self.run_agent(agent, ctx)
+        else:
+            patch = await stored_outputs(self.deps, engagement.id, agent.agent_id, stored_run)
             # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误
             problems = check_refs(patch, state)
             if problems:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
-        else:
-            patch, writer = await self.run_agent(agent, ctx)
+            writer = AgentId.A1 if stored_run.status is RunStatus.failed else agent.agent_id
+        return StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
+
+    async def attempt(
+        self, state: EngagementState, engagement: Engagement, procedure_id: str, outstanding: list[ReviewTask]
+    ) -> tuple[StatePatch, list[Procedure]]:
+        """执行一次程序 (见 perform), 程序出新版本, 同一事务内写入 Store. 执行 P2 以外的程序用.
+
+        state: 本次执行看到的状态, 见 perform.
+        outstanding: 本节点之前各次执行留下, 尚未决定的 failed 任务 (如 DOC-04 两份合同失败, 只重跑了一份).
+        返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段或 outstanding 中有待决的 failed 任务为
+        awaiting_human, 否则为 completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的
+        这一次执行有效).
+        重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
+        """
+        result = await self.perform(state, engagement, procedure_id)
+        patch, writer = result["patch"], result["writer"]
+        template = self.deps.library.load(procedure_id)
         pending = [t for t in [*failed_tasks(patch), *outstanding] if t.status is TaskStatus.pending]
         # 闸门程序 (如 PLN-01) 执行成功后保持 planned, 由 DecisionSubmit 在闸门 approve 时置 completed (Q5)
         done = ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
@@ -466,8 +485,21 @@ class GraphNodes:
         return {"schedule_table": build_schedule(state["procedure_pack"], self.deps.library, self.parallel_cap)}
 
     async def fieldwork(self, payload: FieldworkInput) -> StatePatch:
-        """一个 A6 实例 (也执行 A3 的 DOC-06, A5 的 CSH-04). 不写 Store, 只返回 staged_results."""
-        raise NotImplementedError("TODO(M2): 建 ProcedureRun → agents[pid].run(ctx); 异常由 A1 转为 failed Run 与任务")
+        """一个 fieldwork 实例: 依次执行派给它的程序各一次, 结果放进 staged_results, 不写 Store (接口文档第 3 节).
+
+        程序由负责的 Agent 执行 (多为 A6, 另有 A3 的 DOC-06, A5 的 CSH-04), 执行记录带实例名.
+        各程序都以派发时的状态快照执行: 同一实例的程序在调度表的同一层, 互不依赖.
+        每条程序一个暂存项 (见 perform): Agent 抛异常或片段校验不过时为 A1 代写的失败执行与 failed 任务,
+        同实例的其余程序照常执行; 只拦 Exception, 取消 (asyncio.CancelledError) 等照常抛出.
+        Store 中已有本次执行的终态时按重放规则取回, 不调 Agent.
+        写入 Store, 并入状态与程序新版本都由 fan_in 完成.
+        """
+        state = payload["state"]
+        engagement = await self.deps.engagement_store.get(state["engagement_id"])
+        if engagement is None:
+            raise LookupError(f"Engagement {state['engagement_id']} not found")
+        staged = [await self.perform(state, engagement, pid, payload["instance"]) for pid in payload["procedure_ids"]]
+        return {"staged_results": staged}
 
     async def fan_in(self, state: EngagementState) -> StatePatch:
         # TODO(M2): 校验 staged_results → 在一个事务内 put → 并入正式字段 → 重算本轮程序状态

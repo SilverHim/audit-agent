@@ -47,7 +47,7 @@ from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
 from backend.orchestration.checkpoint import checkpoint_serde
-from backend.orchestration.graph import compile_graph
+from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 
@@ -644,6 +644,18 @@ class ScriptA4(ScriptAgent):
     agent_id: ClassVar[AgentId] = AgentId.A4
 
 
+class ScriptA5(ScriptAgent):
+    """以 A5 (外部证据) 身份写片段的脚本 Agent, 可写 confirmations, documents."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A5
+
+
+class ScriptA6(ScriptAgent):
+    """以 A6 (实质性程序) 身份写片段的脚本 Agent, 可写例外, 判断, 复核任务, 函证."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A6
+
+
 def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, ProcedureAgent[Any]]:
     """P1 三条程序的脚本 Agent, 产出按合成数据集设计第 7 节第 3-5 行. 真实的 A3, A4 由 R37, R38 实现.
 
@@ -767,11 +779,13 @@ def make_runner(
     engagement_store: FakeEngagementStore | None = None,
     output_store: FakeOutputStore | None = None,
     agents: Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]] | None = None,
+    interrupt_before: Sequence[str] = (),
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
     agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)};
     其余程序同 make_graph_nodes.
+    interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -781,7 +795,11 @@ def make_runner(
     nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))
-    app = compile_graph(nodes, InMemorySaver(serde=checkpoint_serde()))
+    saver = InMemorySaver(serde=checkpoint_serde())
+    if interrupt_before:
+        app = build_graph(nodes).compile(checkpointer=saver, interrupt_before=[*GATES, *interrupt_before])
+    else:
+        app = compile_graph(nodes, saver)
     return GraphRunner(app, deps), output_store
 
 

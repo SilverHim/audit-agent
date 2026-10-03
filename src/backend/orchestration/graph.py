@@ -116,7 +116,9 @@ def route_schedule(nodes: GraphNodes) -> Callable[[EngagementState], list[Send] 
     """生成 schedule 之后的路由函数: 给有可执行程序的每个实例发一个 Send, 并行执行 fieldwork.
 
     返回 Send 列表时, LangGraph 同时启动多个 fieldwork, 每个拿到自己的 FieldworkInput;
-    P2 程序都已结束时返回 "fan_in", 直接去汇合. 外层传 nodes 是为了拿程序库 (闭包, 同 gate_route).
+    P2 程序都已结束时返回 "fan_in", 直接去汇合. 外层传 nodes 是为了拿程序库与并行上限 (闭包, 同 gate_route).
+    一次最多派 nodes.parallel_cap 个实例: 不同层的实例同时就绪时 (如几条程序同时重跑) 可能超过上限,
+    按调度表顺序 (层号小的在前) 派到上限, 其余留到 fan_in 之后的下一轮.
     派不出却还有计划中或执行中的程序时抛 ScheduleStuck: 返回 fan_in 会与 after_fan_in 来回空转到递归上限.
     """
 
@@ -135,7 +137,7 @@ def route_schedule(nodes: GraphNodes) -> Callable[[EngagementState], list[Send] 
             if ready.intersection(row.procedure_ids)
         ]
         if sends:
-            return sends
+            return sends[: nodes.parallel_cap]
         # 一个都派不出, 却还有要执行的程序: 说明前置卡在不会再变的状态上, 正常不会出现
         unfinished = [p for p in p2_procedures(state["procedure_pack"]) if p.status in UNFINISHED]
         if unfinished:

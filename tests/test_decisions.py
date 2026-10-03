@@ -641,8 +641,8 @@ async def at_pln_gate() -> Started:
 
 
 def stop_after_submit(s: Started) -> None:
-    """submit 写入并越过闸门后不在后台继续执行, 释放项目锁: 只看这一步的结果. P2 的 fieldwork 尚为占位,
-    PLN-01/03 通过后若继续执行会在那里出错."""
+    """submit 写入并越过闸门后不在后台继续执行, 释放项目锁: 只看这一步的结果. fan_in 尚未并入暂存结果,
+    PLN-01/03 通过后若继续执行会反复派发同一批程序, 直到递归上限."""
     s.runner.launch = lambda eid, graph_input: s.runner.release(eid)  # type: ignore[method-assign]
 
 

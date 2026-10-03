@@ -5,6 +5,7 @@ from typing import Annotated, Any, TypedDict, TypeVar
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
+    AgentId,
     AnalyticsResult,
     AuditException,
     AuditObjective,
@@ -29,6 +30,16 @@ from backend.contracts.models import (
 )
 
 StatePatch = dict[str, Any]
+
+
+class StagedResult(TypedDict):
+    """fieldwork 实例执行一条程序一次的结果, 暂存在 staged_results, 由 fan_in 校验后写入 Store 并并入状态."""
+
+    procedure_id: str  # 执行的程序
+    run_id: str  # 本次执行记录的 ID
+    writer: AgentId  # 片段的写入者: 执行程序的 Agent; 执行失败时为 A1
+    patch: StatePatch  # 要写入的片段, 含本次执行记录的终态
+
 
 V = TypeVar("V", bound=Versioned)
 R = TypeVar("R", DocumentRef, ReviewRecord, GateDecision, Misstatement)
@@ -72,7 +83,7 @@ def append_unique(left: list[R], right: list[R] | None) -> list[R]:
     return out
 
 
-def staged(left: list[StatePatch], right: list[StatePatch] | None) -> list[StatePatch]:
+def staged(left: list[StagedResult], right: list[StagedResult] | None) -> list[StagedResult]:
     """追加; 收到 None 时清空, 只由 fan_in 发出."""
     if right is None:
         return []
@@ -97,7 +108,7 @@ class EngagementState(TypedDict):
     procedure_pack: list[Procedure]  # 程序包: 全部程序实例, 每次写入传完整列表
     schedule_table: list[ScheduleRow]  # P2 调度表
     documents: Annotated[list[DocumentRef], replace_by_id]  # 证据文件, 同 id 后到者替换
-    staged_results: Annotated[list[StatePatch], staged]  # fieldwork 实例的返回, fan_in 校验后并入并清空
+    staged_results: Annotated[list[StagedResult], staged]  # fieldwork 实例的返回, fan_in 校验后并入并清空
     procedure_runs: Annotated[list[ProcedureRun], upsert_by_id]  # 执行记录, 按 id 与版本合并
     exceptions: Annotated[list[AuditException], upsert_by_id]  # 例外, 按 id 与版本合并
     judgments: Annotated[list[Judgment], upsert_by_id]  # 判断, 按 id 与版本合并
