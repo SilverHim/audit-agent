@@ -37,7 +37,15 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.state import EngagementState, StagedResult, StatePatch
-from backend.orchestration.merge import AGENT_FIELDS, MergeRejected, check_patch, check_refs, field_type
+from backend.orchestration.merge import (
+    AGENT_FIELDS,
+    TARGET_FIELDS,
+    MergeRejected,
+    check_ids,
+    check_patch,
+    check_refs,
+    field_type,
+)
 from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
@@ -118,8 +126,10 @@ async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: Proced
     - documents: 取 FinancialDataStore.documents.
     另取该 run_id 下的复核任务 (含 A1 代写的 failed 任务).
     再补齐引用, 使片段自成一体: 片段中对象 (判断, 评分卡, 分析结果) 的 exception_ids 与任务的例外目标所指的例外,
-    取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id 仍是 REV-08 那次); 片段中对象所属的
-    其他执行记录也取回 (如回退检查点后重放第 1 次, 最新评分卡来自第 2 次, 其例外属于第 2 次执行).
+    取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id 仍是 REV-08 那次); 以片段中对象为目标的
+    复核任务也取最新版本 (取回的例外是决定改出的新版本时, 以其旧版本为目标的任务在同一事务里已置 decided, 要一并取回,
+    否则状态中的旧任务看上去过期); 片段中对象所属的其他执行记录也取回 (如回退检查点后重放第 1 次, 最新评分卡来自
+    第 2 次, 其例外属于第 2 次执行).
     执行失败时 Agent 的片段当初已丢弃, 只取执行记录与任务. execute 与 fieldwork 共用.
     """
     store = deps.output_store
@@ -146,6 +156,7 @@ async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: Proced
 
     if "exceptions" in fields:
         await add_referenced_exceptions(store, eid, patch)
+    await add_target_tasks(store, eid, patch)
     await add_referenced_runs(store, eid, patch)
     return patch
 
@@ -165,6 +176,21 @@ async def add_referenced_exceptions(store: AuditOutputStore, eid: str, patch: St
         if exception is not None:
             patch["exceptions"].append(exception)
             have.add(exception_id)
+
+
+async def add_target_tasks(store: AuditOutputStore, eid: str, patch: StatePatch) -> None:
+    """把以片段中对象 (判断, 例外, 执行记录) 为目标而片段里还没有的复核任务 (Store 最新版本)
+    追加进 patch["review_tasks"]."""
+    have = {task.id for task in patch.get("review_tasks", [])}
+    found: list[ReviewTask] = []
+    for field in TARGET_FIELDS.values():
+        for target in patch.get(field, []):
+            for task in await store.latest(eid, ReviewTask, target_id=target.id):
+                if task.id not in have:
+                    found.append(task)
+                    have.add(task.id)
+    if found:
+        patch["review_tasks"] = [*patch.get("review_tasks", []), *found]
 
 
 async def add_referenced_runs(store: AuditOutputStore, eid: str, patch: StatePatch) -> None:
@@ -504,7 +530,11 @@ class GraphNodes:
     async def fan_in(self, state: EngagementState) -> StatePatch:
         """汇合本轮各 fieldwork 实例的暂存结果: 一个事务内写入 Store, 以 Store 返回的对象并入状态, 清空 staged_results.
 
-        各暂存项的片段按其写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
+        各暂存项依次处理. 先对已并入本轮前面各项的状态再查一遍 ID, 版本与外键 (merge.check_ids, check_refs):
+        各项在 fieldwork 中都按派发时的状态校验过, 但同轮几项合起来可能冲突, 如前一项把某例外改出 v2, 后一项仍交回
+        v1, 或建了指向 v1 的待决任务. 不过的项丢弃片段, 改为 A1 写的失败执行与 failed 任务 (结束时间沿用原执行的),
+        其余项照常写入. 字段归属与本次执行的终态只在 fieldwork 查: A1 的失败片段与重放取回的片段按 Agent 的规则会被误拒.
+        片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
         本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human, 否则为 completed; rerun_subject_ids 清空.
         重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
@@ -517,13 +547,19 @@ class GraphNodes:
         store = self.deps.output_store
         executed = list(dict.fromkeys(item["procedure_id"] for item in staged))
         result: StatePatch = {}
+        current = state  # 已并入本轮前面各项的状态, 用来校验后面的项
         async with store.transaction(eid):
             for item in staged:
-                saved = await save_outputs(
-                    store, eid, item["patch"], actor=item["writer"], evidence_store=self.deps.evidence_store
-                )
+                patch, writer = item["patch"], item["writer"]
+                problems = [*check_ids(patch, current), *check_refs(patch, current)]
+                if problems:
+                    run = next(r for r in patch["procedure_runs"] if r.id == item["run_id"])
+                    ended_at = run.ended_at or datetime.now(UTC)
+                    patch, writer = fail_run(self.deps.queue, run, str(MergeRejected(problems)), ended_at), AgentId.A1
+                saved = await save_outputs(store, eid, patch, actor=writer, evidence_store=self.deps.evidence_store)
                 merge_patch(result, saved)
-            tasks = apply_patch(state, result)["review_tasks"]
+                current = apply_patch(current, saved)
+            tasks = current["review_tasks"]
             pack = state["procedure_pack"]
             for procedure_id in executed:
                 pending = any(t.procedure_id == procedure_id and t.status is TaskStatus.pending for t in tasks)

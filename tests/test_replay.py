@@ -16,15 +16,18 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Judgment,
     MaterialityCandidates,
+    ProcedureRun,
     ProcedureStatus,
     ProposedAction,
     Reliability,
     ReviewStatus,
     RiskItem,
+    TaskKind,
     TaskStatus,
 )
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.nodes import GraphNodes, fail_run, stored_outputs, update_procedure
+from backend.orchestration.merge import check_refs
+from backend.orchestration.nodes import GraphNodes, apply_patch, fail_run, stored_outputs, update_procedure
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
@@ -40,6 +43,7 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    ScriptA6,
     ScriptAgent,
     finished,
     make_deps,
@@ -47,6 +51,7 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
+from tests.test_fieldwork import assembled, dispatch
 from tests.test_nodes import p0_pack, p0_state, single_node
 
 EID = ENGAGEMENT.id
@@ -363,3 +368,53 @@ async def test_replay_with_broken_references_is_a_node_error() -> None:
 
     with pytest.raises(RuntimeError, match="X-ACC-04-1-abn_active-1"):
         await nodes.p0_intel(p0_state())
+
+
+async def test_replay_takes_decided_task_of_older_run_with_new_exception() -> None:
+    """REV-02 第 1 次执行留下指向例外 v1 的待决任务, 第 2 次执行 (重跑, 判断引用该例外) 已写入 Store; 之后审计师决定
+    该任务, 同一事务写出例外 v2 与任务 decided. 回退到第 2 次派发前的检查点重放: 取回例外 v2 时须一并取回已决定的
+    任务, 否则检查点中的待决任务看上去过期, 重放报错. 重放不调 Agent, Store 不新增."""
+    nodes, store, state = await assembled()
+    x = exception(1)
+    run1 = finished(make_run("REV-02", 1))
+    pending = nodes.deps.queue.make_task(TaskKind.unattributed, x, "REV-02", run1.id, now=NOW)
+    rev02 = next(p for p in state["procedure_pack"] if p.id == "REV-02")
+    executing = rev02.model_copy(update={"version": 2, "status": ProcedureStatus.executing})
+    await store.put(EID, [finished(make_run("REV-08")), x, run1, pending, executing], actor="A1")
+    state.update(  # type: ignore[typeddict-item]
+        procedure_runs=[finished(make_run("REV-08")), run1],
+        exceptions=[x],
+        review_tasks=[pending],
+        procedure_pack=[executing if p.id == "REV-02" else p for p in state["procedure_pack"]],
+    )
+
+    def rerun(ctx: object) -> dict[str, object]:
+        run = finished(ctx.run)  # type: ignore[attr-defined]
+        j = judgment("REV-02", "SI-2026-0612", exception_ids=[x.id]).model_copy(
+            update={"id": "J-REV-02-2-SI-2026-0612", "run_id": run.id}
+        )
+        task = nodes.deps.queue.make_task(TaskKind.normal, j, "REV-02", run.id, now=NOW)
+        return {"procedure_runs": [run], "judgments": [j], "review_tasks": [task]}
+
+    agent = ScriptA6(nodes.deps, rerun)  # type: ignore[arg-type]
+    nodes.agents["REV-02"] = agent
+    staged = apply_patch(state, await nodes.fieldwork(dispatch(state, "REV-02", instance="fw-1-1")))
+    await nodes.fan_in(staged)
+    decided = pending.model_copy(update={"version": 2, "status": TaskStatus.decided})
+    attributed = exception(1, version=2)
+    async with store.transaction(EID):
+        await store.put(EID, [attributed, decided], actor="A1")
+    rows = list(store.rows)
+
+    output = await nodes.fieldwork(dispatch(state, "REV-02", instance="fw-1-1"))
+
+    [item] = output["staged_results"]
+    assert agent.calls == 1
+    assert decided in item["patch"]["review_tasks"] and attributed in item["patch"]["exceptions"]
+    staged = apply_patch(state, output)
+    patch = await nodes.fan_in(staged)
+    final = apply_patch(staged, patch)
+    assert store.rows == rows
+    assert next(t for t in final["review_tasks"] if t.id == pending.id) == decided
+    assert check_refs(patch, final) == []
+    assert await store.get(EID, ProcedureRun, "RUN-REV-02-2") in final["procedure_runs"]

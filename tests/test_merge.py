@@ -221,10 +221,49 @@ def test_version_lower_than_state_rejected() -> None:
 
 
 def test_same_version_as_state_allowed() -> None:
-    """重放时片段与状态中的对象同版本, 并入时被忽略, 不算错."""
+    """重放时片段与状态中的对象同版本同内容, 并入时被忽略, 不算错."""
     state = make_state(judgments=[judgment()])
 
     assert reasons_of(a6_patch(), state=state) == []
+
+
+def test_same_version_with_different_content_rejected() -> None:
+    """状态已有 J1 v1, 片段给内容不同的 v1: 写 Store 时同号跳过, 修改会悄悄丢失, 应拒绝."""
+    state = make_state(judgments=[judgment()])
+    patch = a6_patch(judgments=[judgment().model_copy(update={"conclusion": "改了结论却没升版本"})])
+
+    assert reasons_of(patch, state=state) == [f"judgments 中 {J1} v1 与状态中已有的同版本内容不同"]
+
+
+def test_update_that_makes_state_pending_task_stale_rejected() -> None:
+    """状态中有指向 J1 v1 的待决任务, 片段把 J1 改为 v2 而没有一并处理该任务: 任务过期, 应拒绝."""
+    earlier = finished(make_run("REV-03", 1))
+    state = make_state(judgments=[judgment(run_id=earlier.id)], review_tasks=[task(run_id=earlier.id)])
+    state["procedure_runs"] = [earlier]
+    rerun = make_run("REV-03", 2)
+    patch = a6_patch(
+        judgments=[judgment(run_id=earlier.id).model_copy(update={"version": 2})],
+        review_tasks=[],
+        procedure_runs=[finished(rerun)],
+    )
+
+    assert reasons_of(patch, state=state, run=rerun) == [f"Judgment {J1} 改为 v2, 待决任务 T-{J1}-v1 记的 v1 随之过期"]
+
+
+def test_update_with_task_decided_in_same_patch_allowed() -> None:
+    """片段把 J1 改为 v2, 同时把指向 v1 的任务置为已决定: 不算过期."""
+    earlier = finished(make_run("REV-03", 1))
+    state = make_state(judgments=[judgment(run_id=earlier.id)], review_tasks=[task(run_id=earlier.id)])
+    state["procedure_runs"] = [earlier]
+    decided = task(run_id=earlier.id).model_copy(update={"version": 2, "status": TaskStatus.decided})
+    rerun = make_run("REV-03", 2)
+    patch = a6_patch(
+        judgments=[judgment(run_id=earlier.id).model_copy(update={"version": 2})],
+        review_tasks=[decided],
+        procedure_runs=[finished(rerun)],
+    )
+
+    assert reasons_of(patch, state=state, run=rerun) == []
 
 
 # ── 验收 3: 外键 ──

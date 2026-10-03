@@ -100,10 +100,11 @@ def check_fields(patch: StatePatch, writer: AgentId) -> list[str]:
 
 
 def check_ids(patch: StatePatch, state: EngagementState) -> list[str]:
-    """ID 唯一与版本不倒退.
+    """ID 唯一, 版本不倒退, 同版本内容一致.
 
     同一字段内 ID 不重复; 状态中已有同 ID 的更高版本时拒绝: 有 upsert_by_id 的字段并入时会抛 VersionConflict,
     整体替换的字段 (如 risk_register, acceptance_scorecard) 会被旧版本覆盖.
+    状态中已有同 ID 同版本而内容不同时拒绝: 写 Store 时同号跳过并返回已存对象, 片段的修改会悄悄丢失.
     """
     reasons = []
     for field, value in patch.items():
@@ -114,8 +115,12 @@ def check_ids(patch: StatePatch, state: EngagementState) -> list[str]:
         current = {item.id: item for item in objects(state.get(field))}
         for item in items:
             old = current.get(item.id)
-            if isinstance(item, Versioned) and isinstance(old, Versioned) and item.version < old.version:
+            if not (isinstance(item, Versioned) and isinstance(old, Versioned)):
+                continue
+            if item.version < old.version:
                 reasons.append(f"{field} 中 {item.id} v{item.version} 低于状态中已有的 v{old.version}")
+            elif item.version == old.version and item != old:
+                reasons.append(f"{field} 中 {item.id} v{item.version} 与状态中已有的同版本内容不同")
     return reasons
 
 
@@ -127,6 +132,7 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
     - Judgment, AcceptanceScorecard, AnalyticsResult: exception_ids 的每一项在片段或状态的例外中.
     - ReviewTask: target_type 对应字段中有 target_id. 待决任务的 target_version 须等于目标当前版本 (否则提交决定时
       必报版本不符); 已决定任务 (重放取回的) 记的是复核时的版本, 目标之后可能被决定改出新版本, 只须不高于当前版本.
+    - 反向: 片段把某对象改出新版本, 而状态中有以它的原版本为目标的待决任务 (片段没有一并更新该任务), 任务随之过期.
     """
     pack = {procedure.id for procedure in state["procedure_pack"]}
     runs = known(patch, state, "procedure_runs")
@@ -157,6 +163,28 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
                     )
                 elif target.version < item.target_version:
                     reasons.append(f"{name} 的 target_version {item.target_version} 高于目标当前版本 v{target.version}")
+    reasons += stale_tasks(patch, state)
+    return reasons
+
+
+def stale_tasks(patch: StatePatch, state: EngagementState) -> list[str]:
+    """片段把某对象改出新版本, 使状态中以它原版本为目标的待决任务过期 (审计师提交决定时必报版本不符).
+
+    只看原本有效的任务 (target_version 等于状态中目标的版本); 片段自带同 ID 任务的不算, 由 check_refs 查片段中的任务.
+    """
+    own = {task.id for task in objects(patch.get("review_tasks"))}
+    reasons = []
+    for task in objects(state.get("review_tasks")):
+        if task.status is not TaskStatus.pending or task.id in own:
+            continue
+        field = TARGET_FIELDS[task.target_type]
+        before = {o.id: o for o in objects(state.get(field))}.get(task.target_id)
+        after = {o.id: o for o in objects(patch.get(field))}.get(task.target_id)
+        if before is not None and after is not None and before.version == task.target_version != after.version:
+            reasons.append(
+                f"{task.target_type} {task.target_id} 改为 v{after.version}, "
+                f"待决任务 {task.id} 记的 v{task.target_version} 随之过期"
+            )
     return reasons
 
 
