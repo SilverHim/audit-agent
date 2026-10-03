@@ -18,6 +18,7 @@ from backend.contracts.models import (
     Phase,
     Procedure,
     ProcedureStatus,
+    TrailEntry,
     TrailKind,
 )
 from backend.orchestration import runner as runner_module
@@ -306,9 +307,10 @@ async def test_update_profile_only_at_acc01() -> None:
 
 
 async def test_submit_requires_resume_when_profile_ahead_of_checkpoint() -> None:
-    """画像新版本已保存, 检查点的 client_profile_version 还是旧的: 须先 resume."""
+    """本项目已采用画像新版本 (Store 已提交), 检查点的 client_profile_version 还是旧的: 须先 resume."""
     s = await started(TYPO_PROFILE)
     await s.engagement_store.save_profile(FIXED_PROFILE)
+    await s.engagement_store.update(EID, client_profile_version=2)
 
     with pytest.raises(DecisionRejected) as e:
         await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
@@ -365,6 +367,7 @@ async def test_acc01_decision_rolled_back_when_engagement_update_fails(monkeypat
     assert s.output_store.rows == rows_before
     assert not s.runner.is_running(EID)
     assert await s.next_nodes() == ("gate_acc01",)
+    assert TrailKind.decision not in s.trail_kinds()  # 留痕在提交后才写, 回滚了就没有
 
 
 async def test_submit_rechecks_lock_after_acquiring(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -427,3 +430,158 @@ async def test_submit_launch_failure_releases_lock(monkeypatch: pytest.MonkeyPat
     assert not s.runner.is_running(EID)
     [coro] = no_tasks.coros
     assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+
+# ── F2: 留痕在业务事务提交后写; 画像按本项目采用的版本判断 ──
+
+
+def decision_trail(s: Started) -> list[TrailEntry]:
+    assert isinstance(s.runner.deps.trail, FakeTrail)
+    return [e for e in s.runner.deps.trail.entries if e.kind is TrailKind.decision]
+
+
+async def test_decision_trail_written_after_commit_with_key() -> None:
+    s = await started()
+
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
+
+    [entry] = decision_trail(s)
+    assert entry.idempotency_key == "D-1"
+    assert entry.payload["decision_id"] == "D-1"
+    await wait_idle(s.runner, EID)
+
+
+async def test_trail_failure_after_commit_requires_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """决定已提交, 写留痕失败: 抛出并释放锁, 检查点没越过闸门; 再提交报 RESUME_REQUIRED, 由 resume 补做与补写留痕."""
+    s = await started()
+
+    async def broken_record(entry: TrailEntry) -> str:
+        raise RuntimeError("留痕写入失败")
+
+    monkeypatch.setattr(s.runner.deps.trail, "record", broken_record)
+
+    with pytest.raises(RuntimeError, match="留痕写入失败"):
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
+
+    assert [d.id for d in s.output_store.rows if isinstance(d, GateDecision)] == ["D-1"]
+    assert not s.runner.is_running(EID)
+    assert await s.next_nodes() == ("gate_acc01",)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-2"))
+    assert e.value.code == "RESUME_REQUIRED"
+
+
+async def test_reject_trail_failure_reports_locked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """拒绝承接已提交 (项目置 locked), 写留痕失败: 再提交按校验顺序先报 ENGAGEMENT_LOCKED, 不是 RESUME_REQUIRED.
+
+    检查点仍停在 gate_acc01, 由 recover/resume 补做 (第 7 节: 已锁定但检查点停在闸门的不跳过) 并补写留痕.
+    """
+    s = await started()
+
+    async def broken_record(entry: TrailEntry) -> str:
+        raise RuntimeError("留痕写入失败")
+
+    monkeypatch.setattr(s.runner.deps.trail, "record", broken_record)
+
+    with pytest.raises(RuntimeError, match="留痕写入失败"):
+        await s.submit.submit(EID, acc01_decision(GateVerdict.reject))
+
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.locked
+    assert await s.next_nodes() == ("gate_acc01",)
+    assert not s.runner.is_running(EID)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-2"))
+    assert e.value.code == "ENGAGEMENT_LOCKED"
+
+
+async def test_update_profile_adopts_version_in_one_commit() -> None:
+    """画像新版本与本项目采用的版本在同一次提交; 留痕在提交后写, 防重复键为 客户-v版本."""
+    s = await started(TYPO_PROFILE)
+
+    await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+
+    [commit] = [c for c in s.output_store.commits if any(isinstance(w, EngagementWrite) for w in c)]
+    assert commit == [
+        EngagementWrite("save_profile", "CLIENT-001", {"version": 2}),
+        EngagementWrite("update", EID, {"client_profile_version": 2}),
+    ]
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.client_profile_version == 2
+    [entry] = decision_trail(s)
+    assert entry.idempotency_key == "CLIENT-001-v2"
+    await wait_idle(s.runner, EID)
+
+
+async def test_update_profile_rolled_back_when_adoption_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """改项目采用的版本失败: 已暂存的画像一并回滚, 不写留痕, 锁释放, 仍停在 ACC-01."""
+    s = await started(TYPO_PROFILE)
+    real_update = s.engagement_store.update
+
+    async def broken_update(eid: str, **changes: Any) -> None:
+        if "client_profile_version" in changes:
+            raise RuntimeError("engagements 写入失败")
+        await real_update(eid, **changes)
+
+    monkeypatch.setattr(s.engagement_store, "update", broken_update)
+
+    with pytest.raises(RuntimeError, match="engagements 写入失败"):
+        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+
+    assert await s.engagement_store.client_profile("CLIENT-001") == TYPO_PROFILE
+    assert decision_trail(s) == []
+    assert not s.runner.is_running(EID)
+    assert await s.next_nodes() == ("gate_acc01",)
+
+
+ENG2 = ENGAGEMENT.model_copy(update={"id": "ENG-2026-002"})  # 同一客户 CLIENT-001 的另一个项目
+
+
+async def test_shared_client_profile_update_does_not_block_other_engagement() -> None:
+    """项目 1 在 ACC-01 把画像改到第 2 版; 项目 2 建于其后, 仍采用第 1 版 (数据集画像).
+
+    项目 2 的 ACC-04 按第 1 版核查 (名称写错, 出 name_match 例外); 它的决定不报 RESUME_REQUIRED, 正常进入 P1.
+    """
+    engagement_store = FakeEngagementStore([TYPO_PROFILE], [ENGAGEMENT, ENG2])
+    runner, output_store = make_runner(engagement_store=engagement_store)
+    submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await wait_idle(runner, EID)
+
+    await runner.start(ENG2.id)
+    await wait_idle(runner, ENG2.id)
+    card2 = await output_store.get(ENG2.id, AcceptanceScorecard, "SCORECARD")
+    assert card2 is not None
+    assert (card2.client_profile_version, card2.exception_ids) == (1, ["X-ACC-04-1-name_match-1"])
+
+    await submit.submit(ENG2.id, acc01_decision(GateVerdict.approve, id="D-2"))
+    await wait_idle(runner, ENG2.id)
+
+    snapshot2 = await runner.app.aget_state(GraphRunner.config(ENG2.id))
+    assert snapshot2.next == ("gate_p1_risk",)
+    assert runner.run_error(ENG2.id) is None
+    e1, e2 = await engagement_store.get(EID), await engagement_store.get(ENG2.id)
+    assert e1 is not None and e2 is not None
+    assert (e1.client_profile_version, e2.client_profile_version) == (2, 1)
+
+
+async def test_profile_update_elsewhere_does_not_pull_back_engagement_in_p1() -> None:
+    """项目 2 已过 ACC-01 停在 PLN-01/03 闸门, 项目 1 随后改画像: 项目 2 的检查点不动, 也不须 resume."""
+    engagement_store = FakeEngagementStore([TYPO_PROFILE], [ENGAGEMENT, ENG2])
+    runner, _ = make_runner(engagement_store=engagement_store)
+    submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    for eid in (EID, ENG2.id):
+        await runner.start(eid)
+        await wait_idle(runner, eid)
+    await submit.submit(ENG2.id, acc01_decision(GateVerdict.approve, id="D-2"))
+    await wait_idle(runner, ENG2.id)
+
+    await submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await wait_idle(runner, EID)
+
+    assert (await runner.app.aget_state(GraphRunner.config(ENG2.id))).next == ("gate_p1_risk",)
+    with pytest.raises(DecisionRejected) as e:  # RESUME_REQUIRED 的检查在 NOT_AT_GATE 之前
+        await submit.update_client_profile(ENG2.id, FIXED_PROFILE.model_copy(update={"version": 3}), updated_by="U-2")
+    assert e.value.code == "NOT_AT_GATE"

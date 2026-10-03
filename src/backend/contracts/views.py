@@ -64,7 +64,9 @@ class AcceptanceMaterial(Model):
     kind: Literal["ACC-01"] = "ACC-01"  # 材料类型标记, 用于区分四种材料
     scorecard: AcceptanceScorecard  # 承接评分卡
     exceptions: list[AuditException]  # 未通过的检查生成的例外
-    client_profile: ClientProfile  # 客户画像的最新版本, ACC-01 页面据此编辑客户资料
+    # 客户画像的最新版本 (可能由同客户的其他项目更新), ACC-01 页面据此编辑客户资料;
+    # 评分卡依据的版本见 scorecard.client_profile_version
+    client_profile: ClientProfile
 
 
 class PlanningMaterial(Model):

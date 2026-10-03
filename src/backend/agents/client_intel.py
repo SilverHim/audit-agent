@@ -16,6 +16,7 @@ from backend.contracts.models import (
     EvidenceType,
     ProcedureRun,
     RegistryCheck,
+    Reliability,
     RunStatus,
     TrailEntry,
     TrailKind,
@@ -36,7 +37,14 @@ def normalize_name(name: str) -> str:
 def trail_pointer(trail_id: str, locator: str) -> EvidencePointer:
     """指向一次登记查询留痕的证据指针: locator 写结论依据的是查询结果里的哪个字段."""
 
-    return EvidencePointer(type=EvidenceType.external, source_type="trail", source_id=trail_id, locator=locator)
+    # 审计师直接向官方登记系统查询取得, 属外部原件 (ASA 500 A31)
+    return EvidencePointer(
+        type=EvidenceType.external,
+        source_type="trail",
+        source_id=trail_id,
+        locator=locator,
+        reliability=Reliability.external_original,
+    )
 
 
 def check_abn_active(abn: str, record: AbnRecord | None, trail_id: str) -> RegistryCheck:
@@ -192,11 +200,15 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
         return check_list
 
     async def execute(self, ctx: RunContext) -> Acc04Findings:
-        """执行 ACC-04: 读客户画像, 查 ABN 与 ASIC, 返回三项检查结果."""
-        profile = await self.deps.engagement_store.client_profile(ctx.engagement.client_id)
+        """执行 ACC-04: 读本项目采用的那版客户画像, 查 ABN 与 ASIC, 返回三项检查结果.
+
+        画像版本取状态中的 client_profile_version, 不取全局最新: 同客户的其他项目改过画像, 不影响本项目的核查.
+        """
+        version = ctx.state["client_profile_version"]
+        profile = await self.deps.engagement_store.client_profile(ctx.engagement.client_id, version)
 
         if profile is None:
-            raise LookupError(f"client profile {ctx.engagement.client_id} not found")
+            raise LookupError(f"client profile {ctx.engagement.client_id} v{version} not found")
 
         check_list = await self.collect_checks(ctx=ctx, profile=profile)
 

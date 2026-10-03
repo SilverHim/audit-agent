@@ -22,6 +22,7 @@ from backend.contracts.models import (
     EvidenceType,
     ExceptionDisposition,
     RegistryCheck,
+    Reliability,
     RunStatus,
     TrailKind,
 )
@@ -67,17 +68,26 @@ def test_abn_active_fails_when_not_found() -> None:
 
 
 def test_checks_point_to_registry_query_trail() -> None:
-    """三项核查的证据都指向登记查询那行留痕 (ACC-04.yaml: type = external, source_type = trail), 整体比较全部字段."""
+    """三项核查的证据都指向登记查询那行留痕 (ACC-04.yaml 的规定), 整体比较全部字段."""
     checks = [
         check_abn_active("68900042015", NUMBAT_ABN, "TR-1"),
         check_name_match(NUMBAT_ABN, NUMBAT_PROFILE.legal_name, "TR-1"),
         check_company_registered("900042015", NUMBAT_ASIC, "TR-2"),
     ]
 
+    def pointer(source_id: str, locator: str) -> EvidencePointer:
+        return EvidencePointer(
+            type=EvidenceType.external,
+            source_type="trail",
+            source_id=source_id,
+            locator=locator,
+            reliability=Reliability.external_original,
+        )
+
     assert [c.evidence for c in checks] == [
-        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-1", locator="status"),
-        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-1", locator="entity_name"),
-        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-2", locator="status"),
+        pointer("TR-1", "status"),
+        pointer("TR-1", "entity_name"),
+        pointer("TR-2", "status"),
     ]
 
 
@@ -380,14 +390,21 @@ async def test_run_failed_checks_create_exceptions() -> None:
     assert patch["procedure_runs"][0].status == RunStatus.succeeded  # 检查不通过不算执行失败
 
 
-async def test_run_reads_latest_profile_of_engagement_client() -> None:
+async def test_run_reads_profile_version_in_state() -> None:
+    """读状态中本项目采用的第 3 版 (名称正确), 不读更早的第 1 版, 也不读别的项目改出的第 5 版 (名称都写错)."""
+    typo = NUMBAT_PROFILE.model_copy(update={"legal_name": "Numbat Electronics Pty Ltd"})
     other = NUMBAT_PROFILE.model_copy(update={"id": "CLIENT-002", "abn": "51824753556", "version": 7})
-    store = FakeEngagementStore([NUMBAT_PROFILE, NUMBAT_PROFILE.model_copy(update={"version": 3}), other])
+    store = FakeEngagementStore(
+        [typo, NUMBAT_PROFILE.model_copy(update={"version": 3}), typo.model_copy(update={"version": 5}), other]
+    )
     agent, trail = make_agent(numbat_registry(), store)
+    ctx = make_ctx(agent.deps)
+    ctx.state["client_profile_version"] = 3
 
-    patch = await agent.run(make_ctx(agent.deps))
+    patch = await agent.run(ctx)
 
     assert patch["acceptance_scorecard"].client_profile_version == 3
+    assert patch["exceptions"] == []  # 第 3 版名称与登记一致; 读错成第 1 或第 5 版会出 name_match 例外
     assert trail.entries[0].payload["abn"] == "68900042015"
 
 

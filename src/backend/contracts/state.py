@@ -86,7 +86,7 @@ class EngagementState(TypedDict):
     phase: Phase  # 当前阶段
     version_snapshot: dict[str, str]  # 程序库 commit, 模型, prompt 的版本快照
     acceptance_scorecard: AcceptanceScorecard | None  # 承接评分卡, A2 写
-    client_profile_version: int  # 最新客户画像版本; 更新客户资料后写入, ACC-01 路由据此判断评分卡是否过期
+    client_profile_version: int  # 本项目采用的画像版本; ACC-04 按它读画像, ACC-01 路由据此判断评分卡是否过期
     analytics: AnalyticsResult | None  # 初步分析结果, A4 写
     materiality_candidates: MaterialityCandidates | None  # 重要性候选, A4 写
     materiality_cents: int | None  # 整体重要性, PLN-01/03 闸门确定; 只在图状态中

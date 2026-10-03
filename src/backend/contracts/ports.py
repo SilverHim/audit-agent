@@ -152,7 +152,8 @@ class EngagementStore(Protocol):
         dataset: str,
         profile: ClientProfile,
     ) -> Engagement:
-        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; 画像写入 client_profiles; phase = P0_Acceptance."""
+        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id, client_profile_version = profile.version;
+        画像写入 client_profiles; phase = P0_Acceptance."""
         ...
 
     async def get(self, eid: str) -> Engagement | None: ...
@@ -164,8 +165,10 @@ class EngagementStore(Protocol):
         phase: Phase | None = None,
         locked: bool | None = None,
         version_snapshot: dict[str, str] | None = None,
+        client_profile_version: int | None = None,
     ) -> None:
-        """同时刷新 updated_at; locked 置真后不可回退; 在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        """传 None 的不改, 同时刷新 updated_at; locked 置真后不可回退;
+        在 AuditOutputStore.transaction 块内调用时加入该事务."""
         ...
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...

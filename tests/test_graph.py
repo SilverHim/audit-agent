@@ -130,6 +130,7 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
         period_end=date(2026, 6, 30),
         dataset="demo",
         owner_id="U-1",
+        client_profile_version=1,
         phase=Phase.P0_Acceptance,
         created_at=NOW,
         updated_at=NOW,

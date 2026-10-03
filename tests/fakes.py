@@ -72,6 +72,7 @@ ENGAGEMENT = Engagement(
     period_end=date(2026, 6, 30),
     dataset="demo",
     owner_id="U-1",
+    client_profile_version=1,
     phase=Phase.P0_Acceptance,
     created_at=NOW,
     updated_at=NOW,
@@ -200,14 +201,20 @@ class FakeEngagementStore:
         phase: Phase | None = None,
         locked: bool | None = None,
         version_snapshot: dict[str, str] | None = None,
+        client_profile_version: int | None = None,
     ) -> None:
-        """改项目的阶段, 锁定与版本快照, 传 None 的不改; 同时刷新 updated_at. locked 置真后不可回退."""
+        """改项目的阶段, 锁定, 版本快照与采用的画像版本, 传 None 的不改; 同时刷新 updated_at. locked 置真后不可回退."""
         current = await self.get(eid)
         if current is None:
             raise LookupError(f"Engagement {eid} not found")
         if current.locked and locked is False:
             raise ValueError(f"{eid} 已锁定, 不可解锁")
-        changes = {"phase": phase, "locked": locked, "version_snapshot": version_snapshot}
+        changes = {
+            "phase": phase,
+            "locked": locked,
+            "version_snapshot": version_snapshot,
+            "client_profile_version": client_profile_version,
+        }
         kept = {k: v for k, v in changes.items() if v is not None}
         updated = current.model_copy(update={**kept, "updated_at": datetime.now(UTC)})
         txn = self._txn()

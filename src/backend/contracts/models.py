@@ -431,6 +431,7 @@ class Engagement(Model):
     period_end: date  # 财年截止日
     dataset: str  # 载入的合成数据集名, demo 为 "demo"
     owner_id: str  # 项目负责人的用户 ID
+    client_profile_version: int  # 本项目采用的客户画像版本: 建项目时的版本, 本项目更新客户资料后为新版本
     phase: Phase  # 当前阶段
     locked: bool = False  # 签字或拒绝承接后锁定, 拒绝一切写入
     version_snapshot: dict[str, str] = {}  # 程序库 commit, 模型, prompt 的版本快照

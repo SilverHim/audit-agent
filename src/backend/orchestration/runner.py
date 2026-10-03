@@ -116,10 +116,11 @@ class GraphRunner:
             engagement = await self.deps.engagement_store.get(eid)
             if engagement is None:
                 raise LookupError(f"Engagement {eid} not found")
-            # 项目刚建, 最新版画像即创建时的版本; ACC-01 路由据此判断评分卡是否过期
-            profile = await self.deps.engagement_store.client_profile(engagement.client_id)
+            # 图状态记本项目采用的画像版本 (建项目时的版本), 不取全局最新: 同客户的其他项目可能已改过画像
+            version = engagement.client_profile_version
+            profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
             if profile is None:
-                raise LookupError(f"client profile {engagement.client_id} not found")
+                raise LookupError(f"client profile {engagement.client_id} v{version} not found")
             # 固定集第 1 版先入库: 节点写程序新版本时, put 要求已有上一版
             pack = fixed_procedures(self.deps.library)
             await self.deps.output_store.put(eid, pack, actor=AgentId.A1)

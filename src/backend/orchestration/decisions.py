@@ -67,8 +67,8 @@ def check_acc01_fields(decision: GateDecision) -> None:
 class GraphDecisionSubmit:
     """DecisionSubmit 的实现: 审计师所有决定的唯一写入口.
 
-    写入顺序: 先在一个事务内写 Store (决定, 程序新版本, 留痕, 项目阶段), 再以闸门节点身份写入检查点,
-    最后交给 runner 在后台继续执行. 项目锁从校验前一直持有到后台执行停下.
+    写入顺序: 先在一个事务内写 Store (决定, 程序新版本, 项目阶段), 提交后写 decision 留痕 (独立事务),
+    再以闸门节点身份写入检查点, 最后交给 runner 在后台继续执行. 项目锁从校验前一直持有到后台执行停下.
     """
 
     def __init__(self, app: CompiledStateGraph[EngagementState], deps: AgentDeps, runner: GraphRunner) -> None:
@@ -85,7 +85,8 @@ class GraphDecisionSubmit:
     async def _check_resume_required(self, engagement: Engagement, values: dict[str, Any]) -> None:
         """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断), 须先 resume 补做, 不接受新的决定.
 
-        两种情况: Store 中有检查点里没有的决定; 客户画像最新版本高于检查点的 client_profile_version.
+        两种情况: Store 中有检查点里没有的决定; 项目采用的画像版本 (Engagement.client_profile_version) 高于检查点的.
+        比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须 resume.
         """
         eid = engagement.id
         stored = {d.id for d in await self.deps.output_store.latest(eid, GateDecision)}
@@ -95,9 +96,10 @@ class GraphDecisionSubmit:
         if missing:
             raise DecisionRejected("RESUME_REQUIRED", ", ".join(sorted(missing)))
         version_in_state = values.get("client_profile_version")  # 未启动的项目没有
-        latest = await self.deps.engagement_store.client_profile(engagement.client_id)
-        if version_in_state is not None and latest is not None and latest.version > version_in_state:
-            raise DecisionRejected("RESUME_REQUIRED", f"客户画像第 {latest.version} 版未写入检查点")
+        if version_in_state is not None and engagement.client_profile_version > version_in_state:
+            raise DecisionRejected(
+                "RESUME_REQUIRED", f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
+            )
 
     @asynccontextmanager
     async def _deciding(self, eid: str) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
@@ -149,32 +151,40 @@ class GraphDecisionSubmit:
             await self.app.aupdate_state(GraphRunner.config(eid), values, as_node="gate_acc01")
 
     async def _write_acc01(self, eid: str, decision: GateDecision, effects: StatePatch) -> StatePatch:
-        """在一个事务内写入 ACC-01 决定及其效果, 返回要写入状态的片段 (决定换成 Store 返回的对象)."""
+        """在一个事务内写入 ACC-01 决定及其效果, 提交后写 decision 留痕.
+
+        返回要写入状态的片段 (决定换成 Store 返回的对象).
+        """
         output_store = self.deps.output_store
         async with output_store.transaction(eid):
             stored = await save_outputs(output_store, eid, {"gate_decisions": [decision]}, actor=decision.decided_by)
             if "procedure_pack" in effects:  # approve, reject: ACC-01 出 completed 新版本
                 acc01 = next(p for p in effects["procedure_pack"] if p.id == "ACC-01")
                 await output_store.put(eid, [acc01], actor=AgentId.A1)
-            await self.deps.trail.record(
-                TrailEntry(
-                    engagement_id=eid,
-                    kind=TrailKind.decision,
-                    actor=decision.decided_by,
-                    procedure_id="ACC-01",
-                    summary=f"ACC-01 {decision.decision.value}",
-                    payload={"decision_id": decision.id, "reason": decision.reason},
-                )
-            )
             if "phase" in effects:  # 阶段变化同步到 engagements 表; 拒绝承接时最后置 locked
                 declined = effects["phase"] is Phase.Declined
                 await self.deps.engagement_store.update(eid, phase=effects["phase"], locked=True if declined else None)
+        # 留痕是独立事务, 不随业务回滚: 提交成功后再写, 才不会留下业务已回滚的决定.
+        # 防重复键为决定 ID. 写失败时 Store 已提交而检查点未跟上: 再提交报 RESUME_REQUIRED
+        # (拒绝承接已置 locked 的报 ENGAGEMENT_LOCKED), 由 resume/recover 补做并补写留痕
+        await self.deps.trail.record(
+            TrailEntry(
+                engagement_id=eid,
+                kind=TrailKind.decision,
+                actor=decision.decided_by,
+                procedure_id="ACC-01",
+                summary=f"ACC-01 {decision.decision.value}",
+                idempotency_key=decision.id,
+                payload={"decision_id": decision.id, "reason": decision.reason},
+            )
+        )
         return {**effects, **stored}
 
     async def update_client_profile(self, eid: str, profile: ClientProfile, *, updated_by: str) -> None:
         """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.
 
-        profile.id 须为项目 client_id, version 须为最新版本 +1. updated_by 为操作用户 ID, 写入留痕.
+        profile.id 须为项目 client_id, version 须为该客户画像的最新版本 +1 (画像跨项目共用, 版本号全局递增).
+        保存画像与改项目采用的版本在一个事务内, 提交后写 decision 留痕. updated_by 为操作用户 ID, 写入留痕.
         """
         async with self._deciding(eid) as (engagement, snapshot):
             if current_gate(snapshot.next) is not GateId.ACC_01:
@@ -187,19 +197,21 @@ class GraphDecisionSubmit:
             if profile.id != engagement.client_id:
                 raise DecisionRejected("INVALID_VALUE", f"profile.id 应为 {engagement.client_id}")
 
-            async with self.deps.output_store.transaction(eid):  # save_profile 与留痕加入同一事务
+            async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
                 saved = await self.deps.engagement_store.save_profile(profile)
-                await self.deps.trail.record(
-                    TrailEntry(
-                        engagement_id=eid,
-                        kind=TrailKind.decision,
-                        actor=updated_by,
-                        procedure_id="ACC-01",
-                        summary=f"客户资料更新至第 {saved.version} 版",
-                        payload={"client_id": saved.id, "version": saved.version},
-                    )
+                await self.deps.engagement_store.update(eid, client_profile_version=saved.version)
+            await self.deps.trail.record(  # 提交后写, 理由同 _write_acc01
+                TrailEntry(
+                    engagement_id=eid,
+                    kind=TrailKind.decision,
+                    actor=updated_by,
+                    procedure_id="ACC-01",
+                    summary=f"客户资料更新至第 {saved.version} 版",
+                    idempotency_key=f"{saved.id}-v{saved.version}",
+                    payload={"client_id": saved.id, "version": saved.version},
                 )
-            # 只写最新画像版本号: ACC-01 的路由发现评分卡依据的版本落后, 选 rerun 回 p0_intel
+            )
+            # 只写新版本号: ACC-01 的路由发现评分卡依据的版本落后, 选 rerun 回 p0_intel
             await self.app.aupdate_state(
                 GraphRunner.config(eid), {"client_profile_version": saved.version}, as_node="gate_acc01"
             )

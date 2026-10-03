@@ -9,6 +9,6 @@ autonomy_level: L3
 # - abn_active: abn(client_profile.abn) 有记录且 status = Active
 # - name_match: AbnRecord.entity_name 与 client_profile.legal_name 忽略大小写, 空白与标点后相等
 # - company_registered: asic_company(AbnRecord.acn) 有记录且 status = Registered; ABN 查不到或无 ACN 时不查 ASIC, 本项不通过
-# 每次查询写一行 external_call 留痕; RegistryCheck.evidence 指向该留痕 (type = external, source_type = trail)
+# 每次查询写一行 external_call 留痕; RegistryCheck.evidence 指向该留痕 (type = external, source_type = trail, reliability = external_original)
 # 未通过的检查各出一条 AuditException: rule_id 取检查名, severity high, source_ids 为 [client_profile.abn]
 rules: []

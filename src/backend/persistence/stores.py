@@ -148,6 +148,7 @@ class PostgresEngagementStore:
         phase: Phase | None = None,
         locked: bool | None = None,
         version_snapshot: dict[str, str] | None = None,
+        client_profile_version: int | None = None,
     ) -> None:
         raise NotImplementedError
 
