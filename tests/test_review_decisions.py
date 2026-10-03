@@ -1,43 +1,56 @@
-"""R17 复核决定校验: submit 收到 ReviewRecord 时按接口文档第 7 节的顺序校验, 不过抛对应错误码, 不写数据, 释放项目锁."""
+"""复核决定. R17 校验: submit 收到 ReviewRecord 时按接口文档第 7 节的顺序校验, 不过抛对应错误码, 不写数据, 释放项目锁.
+R18 写入与 confirm: 一个事务写决定, 效果, 任务 decided 与程序新版本, 提交后写留痕, 后台以决定 ID 恢复."""
 
 from typing import Any
 
 import pytest
 from langgraph.types import Command
 
-from backend.contracts.errors import DecisionRejected, RuleError
+from backend.contracts.errors import DecisionRejected, RuleError, VersionConflict
 from backend.contracts.models import (
     Assertion,
+    AuditException,
     Decision,
     Direction,
+    ExceptionDisposition,
     GateDecision,
     GateVerdict,
     Judgment,
     ManualResult,
     MisstatementDraft,
     MisstatementType,
+    Procedure,
     ProcedureRun,
+    ProcedureStatus,
     ReviewRecord,
+    ReviewStatus,
     ReviewTask,
     TaskKind,
     TaskStatus,
+    TrailKind,
 )
+from backend.orchestration.decisions import recompute_procedure
 from backend.orchestration.runner import GraphRunner
+from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
+    FakeTrail,
     ScriptA4,
     ScriptA6,
+    assert_pack_synced,
     finished,
+    make_procedure,
     make_runner,
+    numbat_cash_agents,
     numbat_p2_agents,
     preset_rerun,
     wait_idle,
 )
-from tests.test_await_events import confirm
+from tests.test_await_events import confirm, waiting_for_review
 from tests.test_decisions import Started, acc01_decision, pln_decision, started
 from tests.test_fieldwork import p2_agents
 from tests.test_rerun import failed_at_p0, pending_task
@@ -113,11 +126,19 @@ async def assert_rejected(s: Started, decision: ReviewRecord, code: str, detail:
     )
 
 
+class Passed(Exception):
+    """校验通过, 到了写入那一步 (测试里替换 _apply_review 抛出它, 只看校验, 不写)."""
+
+
 async def assert_passes(s: Started, decision: ReviewRecord) -> None:
-    """通过校验: 写入与效果尚未实现 (R18 起), 抛 NotImplementedError; 不写 Store, 项目锁已释放."""
+    """通过校验: 走到写入那一步; 写入被替换, 不写 Store, 项目锁已释放."""
     rows = list(s.output_store.rows)
 
-    with pytest.raises(NotImplementedError, match="复核决定已通过校验"):
+    async def stop(*args: Any) -> None:
+        raise Passed
+
+    s.submit._apply_review = stop  # type: ignore[method-assign]
+    with pytest.raises(Passed):
         await s.submit.submit(EID, decision)
 
     assert s.output_store.rows == rows
@@ -360,3 +381,172 @@ async def test_third_wait_lists_both_records() -> None:
     assert [w.value["records"] for t in snapshot.tasks for w in t.interrupts] == [["D-FIRST", "D-SECOND"]]
 
     await assert_passes(s, record((await pending_task(store)).id, Decision.rerun, id="D-THIRD"))
+
+
+# ── R18 复核决定写入与 confirm ──
+
+
+async def waiting_on_revenue() -> Started:
+    """停在 await_events, 只剩 REV-03 的 3 个 normal 任务 (见 test_await_events.waiting_for_review)."""
+    runner, store = await waiting_for_review()
+    return Started(runner, store, runner.deps.engagement_store)  # type: ignore[arg-type]
+
+
+def commit_after(s: Started, before: int) -> list[Any]:
+    [commit] = s.output_store.commits[before:]
+    return commit
+
+
+def decisions_in_trail(s: Started) -> list[Any]:
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return [e for e in trail.entries if e.kind is TrailKind.decision]
+
+
+async def test_confirm_writes_in_one_commit_and_resumes() -> None:
+    """R18 验收 1: confirm 第 1 份合同: 立即返回且在后台运行; 一次提交含决定, 判断 v2 confirmed, 任务 v2 decided,
+    REV-03 仍有待决任务, 不出新版本; 1 行 decision 留痕; 后台结束后图停回 await_events, 状态含该决定."""
+    s = await waiting_on_revenue()
+    trail_before = len(decisions_in_trail(s))
+    before = len(s.output_store.commits)
+    decision = record(id="D-1")
+
+    await s.submit.submit(EID, decision)
+    assert s.runner.is_running(EID)
+    await wait_idle(s.runner, EID)
+
+    commit = commit_after(s, before)
+    assert [(type(o).__name__, o.id, o.version) for o in commit] == [
+        ("ReviewRecord", "D-1", 1),
+        ("Judgment", "J-REV-03-1-CON-001", 2),
+        ("ReviewTask", NORMAL, 2),
+    ]
+    assert commit[1].review_status is ReviewStatus.confirmed and commit[2].status is TaskStatus.decided
+    [entry] = decisions_in_trail(s)[trail_before:]
+    assert (entry.actor, entry.procedure_id, entry.idempotency_key) == ("U-1", "REV-03", "D-1")
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert s.runner.run_error(EID) is None
+    assert snapshot.next == ("await_events",)
+    assert decision in snapshot.values["review_records"]
+
+
+async def test_last_confirm_completes_program_in_same_commit() -> None:
+    """R18 验收 2, 6: 三个 confirm 依次提交 (每次恢复后再提交, 不报须先恢复); 第 3 个的提交含 REV-03 completed 新版本;
+    图继续派发 REV-02, P2 全部完成后停在 FIN-01 闸门前; 程序包与 Store 一致."""
+    s = await waiting_on_revenue()
+    for n in (1, 2):
+        await s.submit.submit(EID, record(f"T-J-REV-03-1-CON-00{n}-v1", id=f"D-{n}"))
+        await wait_idle(s.runner, EID)
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, record("T-J-REV-03-1-CON-003-v1", id="D-3"))
+    await wait_idle(s.runner, EID)
+
+    rev03 = next(o for o in s.output_store.commits[before] if isinstance(o, Procedure))  # 决定那一次提交; 之后图继续跑
+    assert (rev03.id, rev03.status) == ("REV-03", ProcedureStatus.completed)
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert s.runner.run_error(EID) is None
+    assert snapshot.next == ("gate_fin",)
+    await assert_pack_synced(snapshot.values["procedure_pack"], s.output_store)
+
+
+async def test_confirm_attributes_exceptions_in_same_commit() -> None:
+    """R18 验收 3: confirm 函证比对的判断 J-CSH-02-1-BA-01: 它解释的 X-CSH-05-1-B01-1 与 X-CSH-02-1-D01-1 出新版本
+    attributed, 与决定同一次提交; CSH-02 再无待决任务, 同一提交出 completed 新版本."""
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+    runner, store = make_runner(
+        engagement_store=engagement_store,
+        agents=lambda deps: {**p2_agents(deps), **numbat_p2_agents(deps), **numbat_cash_agents(deps)},
+    )
+    s = Started(runner, store, engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+    await wait_idle(runner, EID)
+    assert await s.next_nodes() == ("await_events",)
+    before = len(store.commits)
+
+    await s.submit.submit(EID, record("T-J-CSH-02-1-BA-01-v1", id="D-CSH"))
+    await wait_idle(runner, EID)
+
+    commit = commit_after(s, before)
+    attributed = {o.id: o for o in commit if isinstance(o, AuditException)}
+    assert sorted(attributed) == ["X-CSH-02-1-D01-1", "X-CSH-05-1-B01-1"]
+    assert all(
+        (x.version, x.disposition, x.attributed_by) == (2, ExceptionDisposition.attributed, "J-CSH-02-1-BA-01")
+        for x in attributed.values()
+    )
+    [csh02] = [o for o in commit if isinstance(o, Procedure)]
+    assert (csh02.id, csh02.status) == ("CSH-02", ProcedureStatus.completed)
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert {x.id: x for x in snapshot.values["exceptions"]}["X-CSH-05-1-B01-1"] == attributed["X-CSH-05-1-B01-1"]
+
+
+async def test_version_conflict_on_write_rejected_and_rolled_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R18 验收 5: 写入时 put 抛 VersionConflict: 报 VERSION_MISMATCH, 整个事务回滚, Store 无新增, 锁释放, 不留痕."""
+    s = await waiting_on_revenue()
+    put_original = s.output_store.put
+
+    async def conflicting(eid: str, objs: Any, *, actor: str) -> Any:
+        if any(isinstance(o, Judgment) for o in objs):
+            raise VersionConflict("J-REV-03-1-CON-001 v2 已存在")
+        return await put_original(eid, objs, actor=actor)
+
+    monkeypatch.setattr(s.output_store, "put", conflicting)
+    trail_before = len(decisions_in_trail(s))
+
+    await assert_rejected(s, record(), "VERSION_MISMATCH")
+    assert len(decisions_in_trail(s)) == trail_before
+
+
+def test_attribute_exceptions_is_pure() -> None:
+    """R18 验收 4: 归因函数输入置 confirmed 的判断与当前例外, 输出例外新版本; 已归因的跳过; 缺例外抛错; 输入不变."""
+    base = AuditException(
+        id="X-1",
+        procedure_id="CSH-05",
+        run_id="RUN-CSH-05-1",
+        rule_id="B01",
+        severity="medium",
+        source_ids=[],
+        evidence=[],
+    )
+    done = base.model_copy(
+        update={"id": "X-2", "version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": "J-0"}
+    )
+    other = base.model_copy(update={"id": "X-3"})
+    judgment = Judgment.model_construct(id="J-1", exception_ids=["X-1", "X-2"])
+    exceptions = [base, done, other]
+
+    assert attribute_exceptions(judgment, exceptions) == [
+        base.model_copy(update={"version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": "J-1"})
+    ]
+    assert exceptions == [base, done, other] and base.version == 1
+    with pytest.raises(LookupError, match="X-9"):
+        attribute_exceptions(Judgment.model_construct(id="J-1", exception_ids=["X-9"]), exceptions)
+
+
+@pytest.mark.parametrize(
+    ("status", "pending", "decision", "expected"),
+    [
+        (ProcedureStatus.awaiting_human, 1, Decision.confirm, None),
+        (ProcedureStatus.awaiting_human, 0, Decision.confirm, ProcedureStatus.completed),
+        (ProcedureStatus.awaiting_human, 2, Decision.rerun, ProcedureStatus.executing),
+        (ProcedureStatus.executing, 0, Decision.confirm, None),
+    ],
+)
+def test_recompute_procedure(
+    status: ProcedureStatus, pending: int, decision: Decision, expected: ProcedureStatus | None
+) -> None:
+    """复核决定后的程序状态: rerun 为 executing; 否则有待决任务为 awaiting_human, 没有为 completed; 状态不变不出新版本;
+    已是 executing (有 rerun 待派发) 时不因别的决定改掉."""
+    procedure = make_procedure("REV-03", status=status)
+    tasks = [ReviewTask.model_construct(id=f"T-{n}") for n in range(pending)]
+
+    updated = recompute_procedure(procedure, tasks, decision)
+
+    if expected is None:
+        assert updated is None
+    else:
+        assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)

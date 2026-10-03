@@ -22,6 +22,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     ClientProfile,
     Confirmation,
+    ConfirmationResult,
     Decision,
     DocumentRef,
     DocumentStatus,
@@ -826,6 +827,88 @@ def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
         "CSH-04": ScriptA5(deps, csh04),
         "CSH-05": ScriptA6(deps, csh05),
     }
+
+
+def numbat_cash_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """现金线后两条程序的脚本 Agent, 产出按合成数据集设计第 7 节第 11, 13 行. 真实 Agent 由 M3 实现.
+
+    DOC-06: 两份函证写入回函余额 (BA-01 120840000, BA-02 40000000, 截至 2026-06-30), 两份回函置 extracted.
+    CSH-02: BA-01 账面 125840000, 差额 -5000000, 结果 difference, 例外 X-CSH-02-{n}-D01-1, 判断 J-CSH-02-{n}-BA-01
+    (在途存款造成的时间性差异, 建议关闭, 解释 CSH-05 与本程序的两条例外) 与一条 normal 任务; BA-02 相符, 不出判断.
+    """
+    replied = {"BA-01": 120840000, "BA-02": 40000000}
+    booked = {"BA-01": 125840000, "BA-02": 40000000}
+
+    def doc06(ctx: RunContext) -> StatePatch:
+        confirmations = [
+            c.model_copy(
+                update={
+                    "version": c.version + 1,
+                    "confirmed_balance_cents": replied[c.bank_account_id],
+                    "balance_date": date(2026, 6, 30),
+                }
+            )
+            for c in ctx.state["confirmations"]
+        ]
+        documents = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_REPLIES]
+        return {"procedure_runs": [finished(ctx.run)], "confirmations": confirmations, "documents": documents}
+
+    def csh02(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        confirmations = []
+        for c in ctx.state["confirmations"]:
+            difference = replied[c.bank_account_id] - booked[c.bank_account_id]
+            confirmations.append(
+                c.model_copy(
+                    update={
+                        "version": c.version + 1,
+                        "book_balance_cents": booked[c.bank_account_id],
+                        "difference_cents": difference,
+                        "result": ConfirmationResult.difference if difference else ConfirmationResult.agreed,
+                    }
+                )
+            )
+        exception = AuditException(
+            id=f"X-CSH-02-{run.run_no}-D01-1",
+            procedure_id="CSH-02",
+            run_id=run.id,
+            rule_id="D01",
+            severity="medium",
+            source_ids=["BA-01"],
+            amount_cents=-5000000,
+            evidence=[EvidencePointer(type="bank", source_type="bank_account", source_id="BA-01", locator="balance")],
+        )
+        cash05 = next(x for x in ctx.state["exceptions"] if x.procedure_id == "CSH-05" and x.source_ids == ["BA-01"])
+        pointer = EvidencePointer(
+            type="bank", source_type="bank_transaction", source_id="BT-01-20260702-01", locator="amount"
+        )
+        judgment = Judgment(
+            id=f"J-CSH-02-{run.run_no}-BA-01",
+            procedure_id="CSH-02",
+            run_id=run.id,
+            subject_id="BA-01",
+            conclusion="在途存款造成的时间性差异, 不认定错报",
+            confidence=0.9,
+            confidence_parts={"evidence": 0.9, "rule": 1.0, "llm": 0.85},
+            reasoning_chain=[ReasoningStep(kind=StepKind.fact, text="2026-07-02 到账 50,000.00", evidence=[pointer])],
+            evidence=[pointer],
+            counter_argument="期后到账也可能是另一笔款项",
+            proposed_action=ProposedAction.close,
+            exception_ids=[cash05.id, exception.id],
+            autonomy_level=ctx.procedure.autonomy_level,
+            performed_by=ctx.engagement.owner_id,
+            created_at=NOW,
+        )
+        task = deps.queue.make_task(TaskKind.normal, judgment, "CSH-02", run.id, now=NOW)
+        return {
+            "procedure_runs": [run],
+            "confirmations": confirmations,
+            "exceptions": [exception],
+            "judgments": [judgment],
+            "review_tasks": [task],
+        }
+
+    return {"DOC-06": ScriptA3(deps, doc06), "CSH-02": ScriptA6(deps, csh02)}
 
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:

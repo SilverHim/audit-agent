@@ -10,7 +10,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import StateSnapshot
+from langgraph.types import Command, StateSnapshot
 
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected, VersionConflict
@@ -34,6 +34,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     ReviewRecord,
+    ReviewStatus,
     ReviewTask,
     RiskItem,
     RiskLevel,
@@ -48,6 +49,7 @@ from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import save_outputs, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner
+from backend.services.review_queue import attribute_exceptions
 
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations")  # 只在某道闸门的某种决定下可填的字段
 
@@ -270,6 +272,33 @@ def check_review_fields(record: ReviewRecord) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", ", ".join(filled))
 
 
+def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
+    """confirm 的效果: 判断出新版本置 confirmed, 它解释的例外置 attributed (见 attribute_exceptions).
+
+    judgment: 任务的目标判断 (Store 当前版本); exceptions: 其 exception_ids 所指例外的当前版本. 纯函数.
+    """
+    confirmed = judgment.model_copy(update={"version": judgment.version + 1, "review_status": ReviewStatus.confirmed})
+    return [confirmed, *attribute_exceptions(confirmed, exceptions)]
+
+
+def recompute_procedure(procedure: Procedure, pending: list[ReviewTask], decision: Decision) -> Procedure | None:
+    """复核决定写入后目标程序的新版本 (第 7 节): rerun 时为 executing; 否则仍有待决任务为 awaiting_human,
+    没有为 completed. 程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序
+    置为完成. 状态不变时返回 None, 不出新版本.
+
+    pending: 该程序在本决定之后仍待决的任务 (不含本决定处理的任务).
+    """
+    if decision is Decision.rerun:
+        status = ProcedureStatus.executing
+    elif procedure.status is ProcedureStatus.executing:
+        return None
+    else:
+        status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+    if status is procedure.status:
+        return None
+    return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
+
+
 def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
     """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
     {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
@@ -321,12 +350,13 @@ class GraphDecisionSubmit:
             )
 
     @asynccontextmanager
-    async def _deciding(self, eid: str) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
+    async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
         """submit 与 update_client_profile 共用的外壳, 用法: async with self._deciding(eid) as (engagement, snapshot).
 
         进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 读检查点, 查 RESUME_REQUIRED.
         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
-        块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放.
+        块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放. resume 为复核决定 ID 时以
+        Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定与更新客户资料为 None (已越过闸门).
         """
         engagement = await self._engagement(eid)
         if engagement.locked:  # 第 7 节校验顺序: 锁定先于项目锁 (ENGAGEMENT_BUSY)
@@ -346,7 +376,7 @@ class GraphDecisionSubmit:
         except BaseException:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
             raise
-        self.runner.launch(eid, None)
+        self.runner.launch(eid, None if resume is None else Command(resume=resume))
 
     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
         """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定与复核决定共用一张 decisions 表 (第 9 节), 两类都查.
@@ -435,9 +465,9 @@ class GraphDecisionSubmit:
     async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
         """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
         if isinstance(decision, ReviewRecord):
-            async with self._deciding(eid) as (_, snapshot):
-                await self.check_review_record(eid, decision, snapshot)
-                raise NotImplementedError("复核决定已通过校验, 写入与效果尚未实现")
+            async with self._deciding(eid, resume=decision.id) as (_, snapshot):
+                task = await self.check_review_record(eid, decision, snapshot)
+                await self._apply_review(eid, decision, task)
             return
         async with self._deciding(eid) as (_, snapshot):
             if current_gate(snapshot.next) is not decision.gate:
@@ -461,6 +491,47 @@ class GraphDecisionSubmit:
             written[GATE_MATERIAL[decision.gate]] = target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由 gate_route 按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=GATE_NODES[decision.gate])
+
+    async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask) -> None:
+        """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
+
+        效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
+        (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
+        (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回 (await_events, 第 7 节恢复机制).
+        已实现 confirm.
+        """
+        store = self.deps.output_store
+        if record.decision is Decision.confirm:
+            judgment = await store.get(eid, Judgment, task.target_id)
+            assert judgment is not None  # 校验时已按任务目标取到
+            exceptions = [await store.get(eid, AuditException, x) for x in judgment.exception_ids]
+            effects = confirm_effects(judgment, [x for x in exceptions if x is not None])
+        else:
+            raise NotImplementedError(f"复核决定 {record.decision} 的效果尚未实现")
+        decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
+        procedure = await store.get(eid, Procedure, task.procedure_id)
+        assert procedure is not None  # 任务所属程序在程序包中, 已入库
+        pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
+        updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id], record.decision)
+        created = [*effects, decided, *([updated] if updated else [])]
+        async with store.transaction(eid):
+            await store.put(eid, [record], actor=record.reviewed_by)
+            saved = await store.put(eid, created, actor=AgentId.A1)
+            if saved != created:
+                clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+        # 留痕在业务事务提交后写, 防重复键为决定 ID; 写失败时再提交报 RESUME_REQUIRED (同闸门决定)
+        await self.deps.trail.record(
+            TrailEntry(
+                engagement_id=eid,
+                kind=TrailKind.decision,
+                actor=record.reviewed_by,
+                procedure_id=task.procedure_id,
+                summary=f"{task.id} {record.decision.value}",
+                idempotency_key=record.id,
+                payload={"decision_id": record.id, "task_id": task.id, "reason": record.reason},
+            )
+        )
 
     async def _write_gate(
         self, eid: str, decision: GateDecision, effects: StatePatch, created: list[Versioned]

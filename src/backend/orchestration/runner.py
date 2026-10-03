@@ -1,9 +1,11 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
@@ -56,10 +58,11 @@ class GraphRunner:
         """最近一次后台执行的异常, 没有为 None."""
         return self.errors.get(eid)
 
-    def launch(self, eid: str, graph_input: EngagementState | None) -> None:
+    def launch(self, eid: str, graph_input: EngagementState | Command[Any] | None) -> None:
         """在后台推进图并立即返回. 调用前须已取得项目锁, 由后台任务结束时释放; 任务建不起来时在此释放后抛出.
 
-        graph_input: 新项目为初始状态; 闸门决定写入后继续执行为 None.
+        graph_input: 新项目为初始状态; 闸门决定写入后继续执行为 None; 复核决定写入后为 Command(resume=决定 ID),
+        交给停在节点内 interrupt() 的节点.
         """
         # self._advance(...) 不加 await, 得到尚未执行的协程; create_task 将其放入后台执行并立即返回任务对象
         coro = self._advance(eid, graph_input)
@@ -79,7 +82,7 @@ class GraphRunner:
             del self.tasks[eid]
             self.release(eid)
 
-    async def _advance(self, eid: str, graph_input: EngagementState | None) -> None:
+    async def _advance(self, eid: str, graph_input: EngagementState | Command[Any] | None) -> None:
         """后台任务: 推进图到下一个中断或结束. 异常记入 errors 不再抛出; 无论成败, 最后释放项目锁."""
         try:
             await self.app.ainvoke(graph_input, self.config(eid))  # 执行到下一个中断或结束才返回

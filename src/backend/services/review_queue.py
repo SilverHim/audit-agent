@@ -1,4 +1,4 @@
-"""复核队列: 任务类型判定, 建任务, 允许的决定 (A 负责). 规则见 开发接口文档.md 第 5 节"需要人"."""
+"""复核队列: 任务类型判定, 建任务, 允许的决定, 例外归因 (A 负责). 规则见 开发接口文档.md 第 5 节"需要人", 第 7 节."""
 
 from collections.abc import Sequence
 from datetime import datetime
@@ -8,6 +8,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     Decision,
+    ExceptionDisposition,
     Judgment,
     ProcedureRun,
     ProposedAction,
@@ -17,6 +18,34 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import JudgmentOutcome
 from backend.services.procedure_library import ProcedureLibrary
+
+
+def attribute_exceptions(judgment: Judgment, exceptions: Sequence[AuditException]) -> list[AuditException]:
+    """判断置 confirmed 后归因它解释的例外: exception_ids 中的例外出新版本, 置 attributed, attributed_by 为该判断 ID.
+
+    exceptions: 各例外的当前版本, 须含 exception_ids 中的全部, 缺了抛 LookupError; 其余忽略.
+    已归因的不再出新版本. 返回例外新版本, 顺序同 exception_ids. 纯函数, 不读写存储;
+    DecisionSubmit (confirm 等决定) 与 A6 自动关闭共用 (接口文档第 7 节 "凡 Judgment 置 confirmed").
+    例: J-CSH-02-1-BA-01 解释 X-CSH-05-1-B01-1 与 X-CSH-02-1-D01-1, 二者各出 v2 attributed.
+    """
+    current = {x.id: x for x in exceptions}
+    attributed = []
+    for exception_id in judgment.exception_ids:
+        exception = current.get(exception_id)
+        if exception is None:
+            raise LookupError(f"{judgment.id} 解释的例外 {exception_id} 不在给定的例外中")
+        if exception.disposition is ExceptionDisposition.attributed:
+            continue
+        attributed.append(
+            exception.model_copy(
+                update={
+                    "version": exception.version + 1,
+                    "disposition": ExceptionDisposition.attributed,
+                    "attributed_by": judgment.id,
+                }
+            )
+        )
+    return attributed
 
 
 class ReviewQueue:
