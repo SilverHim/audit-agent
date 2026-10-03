@@ -21,23 +21,31 @@ from backend.contracts.models import (
     AuditObjective,
     AutonomyLevel,
     ClientProfile,
+    Confirmation,
     Decision,
     DocumentRef,
     DocumentStatus,
     DocumentType,
     Engagement,
+    EvidencePointer,
+    Judgment,
     MaterialityCandidate,
     MaterialityCandidates,
     Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProposedAction,
+    ReasoningStep,
+    ReceiptChannel,
     Reliability,
     ReviewRecord,
     ReviewTask,
     RiskItem,
     RunStatus,
     RunTrigger,
+    StepKind,
+    TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -138,6 +146,20 @@ NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同; ID 为占位, 
     )
     for n in (1, 2, 3)
 ]
+NUMBAT_REPLIES = [  # CSH-04 存档的 2 份银行回函 (合成数据集设计第 7 节第 10 行); ID 为占位
+    DocumentRef(
+        id=f"DOC-RPLBA0{n}00000",
+        type=DocumentType.confirmation,
+        file_name=file_name,
+        sha256=f"{n}a" * 32,
+        page_count=2,
+        reliability=Reliability.external_original,
+        status="received",
+        uploaded_at=NOW,
+    )
+    for n, file_name in ((1, "12345601.pdf"), (2, "23456702.pdf"))
+]
+NUMBAT_BANKS = {"BA-01": "Harbourline Bank Limited", "BA-02": "Bluegum Savings Bank Limited"}  # 第 2.3 节
 NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
     MaterialityCandidate(
         basis="revenue",
@@ -703,6 +725,107 @@ def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, Procedu
         return patch
 
     return {"DOC-04": ScriptA3(deps, doc04), "PLN-07": ScriptA4(deps, pln07), "PLN-01": ScriptA4(deps, pln01)}
+
+
+def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """P2 第 0 层四条程序的脚本 Agent, 产出按合成数据集设计第 7 节第 7, 8, 10, 12 行. 真实 Agent 由 M3 实现.
+
+    REV-08: 例外 X-REV-08-{n}-R01-1 (SI-2026-0612 跨期, 14200000). REV-03: 3 份合同各一条 accept 判断与一条 normal 任务.
+    CSH-04: C-BA-01, C-BA-02 第 1 版与 2 份回函 (执行时登记进财务数据存储, 代替 EvidenceStore.save).
+    CSH-05: 例外 X-CSH-05-{n}-B01-1 (BA-01 对账单比总账少 5000000). {n} 为 run_no.
+    """
+
+    def rev08(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        exception = AuditException(
+            id=f"X-REV-08-{run.run_no}-R01-1",
+            procedure_id="REV-08",
+            run_id=run.id,
+            rule_id="R01",
+            severity="high",
+            source_ids=["SI-2026-0612"],
+            amount_cents=14200000,
+            detail={"posting_date": "2026-06-28", "signed_date": "2026-07-03"},
+            evidence=[
+                EvidencePointer(
+                    type="invoice", source_type="sales_invoice", source_id="SI-2026-0612", locator="posting_date"
+                )
+            ],
+        )
+        return {"procedure_runs": [run], "exceptions": [exception]}
+
+    def rev03(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        judgments = []
+        for contract in NUMBAT_CONTRACTS:
+            subject = contract.file_name.removesuffix(".pdf")
+            clause = EvidencePointer(
+                type="contract",
+                source_type="document",
+                source_id=contract.id,
+                locator="5.1",
+                page=2,
+                reliability=contract.reliability,
+            )
+            judgments.append(
+                Judgment(
+                    id=f"J-REV-03-{run.run_no}-{subject}",
+                    procedure_id="REV-03",
+                    run_id=run.id,
+                    subject_id=subject,
+                    conclusion="控制权在客户签收时转移, 按签收时点确认收入",
+                    confidence=0.9,
+                    confidence_parts={"evidence": 0.9, "rule": 1.0, "llm": 0.85},
+                    reasoning_chain=[ReasoningStep(kind=StepKind.fact, text="合同约定签收时转移", evidence=[clause])],
+                    evidence=[clause],
+                    counter_argument="退货权或返利可能使控制权转移时点推后",
+                    proposed_action=ProposedAction.accept,
+                    autonomy_level=ctx.procedure.autonomy_level,
+                    performed_by=ctx.engagement.owner_id,
+                    created_at=NOW,
+                )
+            )
+        tasks = [deps.queue.make_task(TaskKind.normal, j, "REV-03", run.id, now=NOW) for j in judgments]
+        return {"procedure_runs": [run], "judgments": judgments, "review_tasks": tasks}
+
+    def csh04(ctx: RunContext) -> StatePatch:
+        registered = deps.financial_store.document_refs  # type: ignore[attr-defined]
+        registered.extend(d for d in NUMBAT_REPLIES if d not in registered)
+        confirmations = [
+            Confirmation(
+                id=f"C-{account}",
+                bank_account_id=account,
+                confirming_party=bank,
+                idempotency_key=f"{ctx.engagement.id}:CSH-04:{account}",
+                sent_at=NOW,
+                reply_document_id=reply.id,
+                receipt_channel=ReceiptChannel.direct_email,
+            )
+            for (account, bank), reply in zip(NUMBAT_BANKS.items(), NUMBAT_REPLIES, strict=True)
+        ]
+        return {"procedure_runs": [finished(ctx.run)], "confirmations": confirmations, "documents": NUMBAT_REPLIES}
+
+    def csh05(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        exception = AuditException(
+            id=f"X-CSH-05-{run.run_no}-B01-1",
+            procedure_id="CSH-05",
+            run_id=run.id,
+            rule_id="B01",
+            severity="medium",
+            source_ids=["BA-01"],
+            amount_cents=-5000000,
+            detail={"statement_cents": 120840000, "gl_cents": 125840000},
+            evidence=[EvidencePointer(type="bank", source_type="bank_account", source_id="BA-01", locator="balance")],
+        )
+        return {"procedure_runs": [run], "exceptions": [exception]}
+
+    return {
+        "REV-08": ScriptA6(deps, rev08),
+        "REV-03": ScriptA6(deps, rev03),
+        "CSH-04": ScriptA5(deps, csh04),
+        "CSH-05": ScriptA6(deps, csh05),
+    }
 
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:

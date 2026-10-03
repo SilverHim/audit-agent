@@ -502,8 +502,37 @@ class GraphNodes:
         return {"staged_results": staged}
 
     async def fan_in(self, state: EngagementState) -> StatePatch:
-        # TODO(M2): 校验 staged_results → 在一个事务内 put → 并入正式字段 → 重算本轮程序状态
-        return {"staged_results": None}
+        """汇合本轮各 fieldwork 实例的暂存结果: 一个事务内写入 Store, 以 Store 返回的对象并入状态, 清空 staged_results.
+
+        各暂存项的片段按其写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
+        本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
+        (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human, 否则为 completed; rerun_subject_ids 清空.
+        重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
+        没有暂存结果 (如 await_events 之后回到这里) 时只清空, 不写.
+        """
+        staged = state["staged_results"]
+        if not staged:
+            return {"staged_results": None}
+        eid = state["engagement_id"]
+        store = self.deps.output_store
+        executed = list(dict.fromkeys(item["procedure_id"] for item in staged))
+        result: StatePatch = {}
+        async with store.transaction(eid):
+            for item in staged:
+                saved = await save_outputs(
+                    store, eid, item["patch"], actor=item["writer"], evidence_store=self.deps.evidence_store
+                )
+                merge_patch(result, saved)
+            tasks = apply_patch(state, result)["review_tasks"]
+            pack = state["procedure_pack"]
+            for procedure_id in executed:
+                pending = any(t.procedure_id == procedure_id and t.status is TaskStatus.pending for t in tasks)
+                status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+                pack = update_procedure(pack, procedure_id, status=status, rerun_subject_ids=[])
+            stored = await store.put(eid, [p for p in pack if p.id in executed], actor=AgentId.A1)
+        saved_versions = {p.id: cast(Procedure, p) for p in stored}
+        pack = [saved_versions.get(p.id, p) for p in pack]
+        return {**result, "procedure_pack": pack, "staged_results": None}
 
     async def await_events(self, state: EngagementState) -> StatePatch:
         record_id = interrupt({"awaiting": "review"})
