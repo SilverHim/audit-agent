@@ -19,6 +19,7 @@ from backend.contracts.models import (
     AuditObjective,
     AutonomyLevel,
     ClientProfile,
+    Decision,
     DocumentRef,
     DocumentType,
     Engagement,
@@ -26,8 +27,11 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ReviewRecord,
+    ReviewTask,
     RunStatus,
     RunTrigger,
+    TaskStatus,
     TrailEntry,
     TrailKind,
     Versioned,
@@ -495,6 +499,56 @@ class ScriptA3(ScriptAgent):
     """以 A3 (文件抽取) 身份写片段的脚本 Agent, 可写 documents, confirmations, review_tasks."""
 
     agent_id: ClassVar[AgentId] = AgentId.A3
+
+
+class ScriptA4(ScriptAgent):
+    """以 A4 (风险评估) 身份写片段的脚本 Agent, 可写分析结果, 重要性候选, 审计目标, 风险清单, 例外."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A4
+
+
+async def preset_rerun(
+    store: FakeOutputStore,
+    task: ReviewTask,
+    record_id: str = "D-1",
+    rerun_params: dict[str, Any] | None = None,
+    eid: str = ENGAGEMENT.id,
+) -> ReviewRecord:
+    """模拟审计师对 failed 任务提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节决定的效果 rerun 行),
+    在一个事务内: 决定, 任务 decided 新版本, 程序 executing 新版本 (params 合并 rerun_params, rerun_subject_ids
+    追加任务的 subject_id). 真正的 DecisionSubmit 由 R21 实现. 返回写入的决定.
+    """
+    record = ReviewRecord(
+        id=record_id,
+        task_id=task.id,
+        target_version=task.target_version,
+        decision=Decision.rerun,
+        reason="外部系统已恢复, 重跑",
+        rerun_params=rerun_params,
+        reviewed_by="U-001",
+        decided_at=NOW,
+    )
+    procedure = await store.get(eid, Procedure, task.procedure_id)
+    assert procedure is not None
+    subjects = [*procedure.rerun_subject_ids, task.subject_id] if task.subject_id else []
+    rerun = procedure.model_copy(
+        update={
+            "version": procedure.version + 1,
+            "status": ProcedureStatus.executing,
+            "params": {**procedure.params, **(rerun_params or {})},
+            "rerun_subject_ids": subjects,
+        }
+    )
+    decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
+    async with store.transaction(eid):
+        await store.put(eid, [record, decided, rerun], actor="A1")
+    return record
+
+
+async def assert_pack_synced(pack: list[Procedure], store: FakeOutputStore, eid: str = ENGAGEMENT.id) -> None:
+    """程序包每条与 Store 中该程序的最新版本逐字段相等: 写 Procedure 新版本的节点与决定都须保持这一点."""
+    for procedure in pack:
+        assert await store.get(eid, Procedure, procedure.id) == procedure, procedure.id
 
 
 def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engagement = ENGAGEMENT) -> RunContext:

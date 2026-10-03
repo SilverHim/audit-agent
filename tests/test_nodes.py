@@ -578,7 +578,8 @@ class TransientRegistry(FakeRegistry):
 @pytest.mark.parametrize("resume", [None, Command(resume="D-1")], ids=["ainvoke_none", "resume_with_decision"])
 async def test_resume_after_failure_does_not_call_agent_again(resume: Command[str] | None) -> None:
     """失败后恢复, 节点从头执行: 本次执行在 Store 中已失败, 不再调 Agent (这次会成功), 照 Store 再走等待.
-    不带决定恢复则再次停在同一 interrupt(); 带决定恢复则进入 R05 占位 (Codex R03-01)."""
+    不带决定恢复则再次停在同一 interrupt(); 带决定 ID 恢复则去 Store 读该决定, 这里没有预置,
+    报决定不存在 (Codex R03-01)."""
     registry = TransientRegistry()
     runner, store = make_runner(registry=registry)
     config = GraphRunner.config(EID)
@@ -589,7 +590,7 @@ async def test_resume_after_failure_does_not_call_agent_again(resume: Command[st
     if resume is None:
         await runner.app.ainvoke(None, config)
     else:
-        with pytest.raises(NotImplementedError, match="D-1"):
+        with pytest.raises(LookupError, match="D-1"):
             await runner.app.ainvoke(resume, config)
 
     assert registry.calls == 1
@@ -622,7 +623,7 @@ async def test_resume_keeps_waiting_when_failed_task_would_disappear() -> None:
     config = GraphRunner.config(EID)
     await app.ainvoke(initial_state(ENGAGEMENT, pack, 1), config)
 
-    with pytest.raises(NotImplementedError, match="D-1"):
+    with pytest.raises(LookupError, match="D-1"):
         await app.ainvoke(Command(resume="D-1"), config)
 
     assert agent.calls == 1
@@ -678,18 +679,6 @@ async def test_cancelled_agent_writes_nothing() -> None:
     with pytest.raises(asyncio.CancelledError):
         await nodes.execute(p0_state(), "ACC-04")
     assert store.commits == []
-
-
-async def test_resume_after_wait_not_implemented_yet() -> None:
-    """验收 5: interrupt() 返回决定 ID 后的重跑留给 R05, 先抛 NotImplementedError."""
-    nodes = make_nodes()
-    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, boom)
-    app = single_node(nodes, "ACC-04")
-    config = GraphRunner.config(EID)
-    await app.ainvoke(p0_state(), config)
-
-    with pytest.raises(NotImplementedError, match="D-1"):
-        await app.ainvoke(Command(resume="D-1"), config)
 
 
 async def test_graph_interrupt_from_agent_is_not_a_failure() -> None:

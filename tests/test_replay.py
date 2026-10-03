@@ -138,7 +138,7 @@ async def test_replay_failed_run_waits_without_calling_agent() -> None:
 
 
 async def test_replay_waits_even_after_task_decided() -> None:
-    """失败任务已被决定 (decided) 后重放: 仍走到同一 interrupt(), 取回决定 ID (R05 在此之后重跑)."""
+    """失败任务已被决定 (decided) 后重放: 仍走到同一 interrupt(), 取回决定 ID."""
     deps = make_deps(FakeRegistry(), FakeTrail())
     failure = fail_run(deps.queue, make_run(), "RuntimeError: boom", NOW)
     task = failure["review_tasks"][0]
@@ -150,12 +150,8 @@ async def test_replay_waits_even_after_task_decided() -> None:
     config = GraphRunner.config(EID)
     await app.ainvoke(p0_state(), config)
 
-    try:
+    with pytest.raises(LookupError, match="D-1"):  # interrupt() 取回了 D-1, 去 Store 读它 (这里没有预置)
         await app.ainvoke(Command(resume="D-1"), config)
-    except NotImplementedError as e:
-        assert "D-1" in str(e)
-    else:
-        raise AssertionError("应进入 R05 占位")
 
 
 # ── 验收 5: 各类产出的取回规则 ──

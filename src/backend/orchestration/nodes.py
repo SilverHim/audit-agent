@@ -19,17 +19,20 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     AuditException,
+    Decision,
     Engagement,
     Judgment,
     Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ReviewRecord,
     ReviewTask,
     RunStatus,
     RunTrigger,
     TargetType,
     TaskKind,
+    TaskStatus,
     Versioned,
 )
 from backend.contracts.ports import AuditOutputStore
@@ -99,13 +102,9 @@ def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datet
     return {"procedure_runs": [failed], "review_tasks": [task]}
 
 
-def has_failed_task(patch: StatePatch) -> bool:
-    """片段里有 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务): 程序要在节点内等人处理.
-
-    按任务类型判断, 不看任务是否待决: 审计师决定后任务置 decided, 恢复时节点从头执行, 取回的仍是这些任务,
-    仍须走到同一个 interrupt() 取回那个决定.
-    """
-    return any(task.kind is TaskKind.failed for task in patch.get("review_tasks", []))
+def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
+    """片段里的 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务), 不论是否已决定."""
+    return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
 
 
 async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: ProcedureRun) -> StatePatch:
@@ -247,21 +246,19 @@ class GraphNodes:
             return patch, agent.agent_id
         return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
 
-    async def execute(self, state: EngagementState, procedure_id: str) -> StatePatch:
-        """执行一条 P2 以外的程序: 建执行记录, 调 Agent 并校验片段, 程序出新版本, 同一事务内写入 Store.
+    async def attempt(
+        self, state: EngagementState, engagement: Engagement, procedure_id: str, outstanding: list[ReviewTask]
+    ) -> tuple[StatePatch, list[Procedure]]:
+        """执行一次程序: 建执行记录, 调 Agent (或重放取 Store), 程序出新版本, 同一事务内写入 Store.
 
-        程序新版本的状态: 片段有 failed 任务 (执行失败时 A1 建的, 或 Agent 建的单对象失败任务) 为 awaiting_human,
-        写入后在节点内 interrupt() 等人处理; 否则为 completed, 返回写入后的片段与更新后的完整程序包.
-        执行期间不生成 executing 版本, 程序包中的原对象直接传给 Agent.
-        Agent 的异常与片段校验不过不向上抛, 转成失败执行与 failed 任务 (见 run_agent); 节点自身的错误 (项目缺失,
-        参数解析不了, 写 Store 失败) 照常抛出, 由 runner 记入 run_error.
-        重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs).
-        上次在此失败并等人的同样如此, 不会因再调 Agent 成功而绕过等待, 写出与 Store 矛盾的结果.
+        state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
+        outstanding: 本节点之前各次执行留下, 尚未决定的 failed 任务 (如 DOC-04 两份合同失败, 只重跑了一份).
+        返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段或 outstanding 中有待决的 failed 任务为
+        awaiting_human, 否则为 completed; rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
+        重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs),
+        程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
-        engagement = await self.deps.engagement_store.get(state["engagement_id"])
-        if engagement is None:
-            raise LookupError(f"Engagement {state['engagement_id']} not found")
         template = self.deps.library.load(procedure_id)
         procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
         ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state)
@@ -275,22 +272,84 @@ class GraphNodes:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
         else:
             patch, writer = await self.run_agent(agent, ctx)
-        waiting = has_failed_task(patch)
-        status = ProcedureStatus.awaiting_human if waiting else ProcedureStatus.completed
-        pack = update_procedure(state["procedure_pack"], procedure_id, status=status)
+        pending = [t for t in [*failed_tasks(patch), *outstanding] if t.status is TaskStatus.pending]
+        status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+        pack = update_procedure(state["procedure_pack"], procedure_id, status=status, rerun_subject_ids=[])
         updated = next(p for p in pack if p.id == procedure_id)  # 本程序的新版本
         # 片段与程序新版本在同一事务内写入, 保证原子性. 程序新版本取 put 的返回: 重放时为 Store 中已存的那一版
         async with self.deps.output_store.transaction(engagement.id):
             stored = await save_outputs(self.deps.output_store, engagement.id, patch, actor=writer)
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
-        pack = [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+        return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
 
-        if waiting:
-            # 节点在此暂停, 本次返回值不进状态, 失败执行与任务只在 Store 中; 总览按检查点里的中断显示"等复核".
-            # 恢复时节点从头执行, interrupt() 返回审计师决定的 ID
-            record_id = interrupt({"awaiting": "human", "procedure_id": procedure_id, "run_id": procedure_run.id})
-            raise NotImplementedError(f"收到决定 {record_id} 后重跑 {procedure_id} 尚未实现 (R05)")
-        return {**stored, "procedure_pack": pack}
+    async def read_rerun(
+        self, eid: str, record_id: str, failed: dict[str, ReviewTask], waiting: Procedure
+    ) -> tuple[ReviewRecord, Procedure]:
+        """读回审计师对某个 failed 任务的决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
+
+        failed: 本节点各次执行建的, 还没有读回过决定的 failed 任务, 决定须针对其中之一; 已读回过决定的任务不在其中,
+        同一决定 ID 被再次送来 (如在第二次等待时误用 ainvoke(None) 继续, LangGraph 沿用上次的恢复值) 会被拒绝.
+        waiting: 等待时写出的 awaiting_human 程序版本. 程序版本取 waiting.version + 1, 即 rerun 决定在同一事务里写出的
+        那一版 (executing, 含合并后的 params 与 rerun_subject_ids), 不取最新版本: 节点重放时会依次经过多次等待,
+        最新版本可能是之后的决定写出的.
+        决定不存在抛 LookupError; 不是 rerun, 不针对 failed 中的任务, 或其程序版本缺失, 不是 executing 时抛 ValueError.
+        """
+        store = self.deps.output_store
+        record = await store.get(eid, ReviewRecord, record_id)
+        if record is None:
+            raise LookupError(f"ReviewRecord {record_id} not found")
+        if record.decision is not Decision.rerun:
+            raise ValueError(f"{record_id} 是 {record.decision}, {waiting.id} 失败后只能 rerun")
+        if record.task_id not in failed:
+            raise ValueError(f"{record_id} 处理的任务 {record.task_id} 不是 {waiting.id} 待处理的失败任务")
+        procedure = await store.get(eid, Procedure, waiting.id, waiting.version + 1)
+        if procedure is None or procedure.status is not ProcedureStatus.executing:
+            raise ValueError(f"{record_id} 没有写出 {waiting.id} v{waiting.version + 1} executing")
+        return record, procedure
+
+    async def execute(self, state: EngagementState, procedure_id: str) -> StatePatch:
+        """执行一条 P2 以外的程序, 失败时在节点内等人决定 rerun 后重跑, 直到不再有待决的失败 (接口文档第 7 节恢复机制).
+
+        每次执行见 attempt. 执行后程序为 awaiting_human (本次或之前留下的 failed 任务还有待决的) 时, interrupt() 暂停;
+        审计师对其中一个任务提交 rerun 决定后以 Command(resume=决定 ID) 恢复, 节点从头执行: 已结束的执行按重放规则
+        取 Store, 各次 interrupt() 依次取回已提交的决定 ID. 取回决定后读回它写出的程序版本 (见 read_rerun),
+        以 run_no + 1 再执行一次. 一次失败留下多个任务时, 逐个决定, 逐个重跑.
+        返回历次执行写入的片段 (含失败的执行与已决定的任务), 读回的决定, 以及最终的完整程序包.
+        执行期间不生成 executing 版本, 程序包中的原对象直接传给 Agent.
+        Agent 的异常与片段校验不过转成失败执行与 failed 任务 (见 run_agent); 节点自身的错误 (项目缺失,
+        参数解析不了, 写 Store 失败, 决定不对) 照常抛出, 由 runner 记入 run_error.
+        """
+        engagement = await self.deps.engagement_store.get(state["engagement_id"])
+        if engagement is None:
+            raise LookupError(f"Engagement {state['engagement_id']} not found")
+        current = state  # 每次执行看到的状态: 带上之前各次的执行记录与程序新版本
+        result: StatePatch = {}  # 历次执行写入的对象与读回的决定, 节点结束时一并并入状态
+        failed: dict[str, ReviewTask] = {}  # 本节点各次执行建的, 还没有读回过决定的 failed 任务
+        while True:
+            patch, pack = await self.attempt(current, engagement, procedure_id, list(failed.values()))
+            for key, value in patch.items():
+                result[key] = [*result.get(key, []), *value] if isinstance(value, list) else value
+            failed.update({task.id: task for task in failed_tasks(patch)})
+            waiting = next(p for p in pack if p.id == procedure_id)
+            if waiting.status is not ProcedureStatus.awaiting_human:
+                return {**result, "procedure_pack": pack}
+
+            run_id = patch["procedure_runs"][0].id
+            # 节点在此暂停, 返回值不进状态, 失败执行与任务只在 Store 中; 总览按检查点里的中断显示"等复核".
+            # 恢复时节点从头执行, 走到这里时 interrupt() 返回审计师决定的 ID
+            record_id = interrupt({"awaiting": "human", "procedure_id": procedure_id, "run_id": run_id})
+            record, procedure = await self.read_rerun(engagement.id, record_id, failed, waiting)
+            # 被决定的任务已在 result 中: 节点能越过 interrupt() 时一定是在重放, 取回的是任务的最新版本 (decided)
+            del failed[record.task_id]
+            result["review_records"] = [*result.get("review_records", []), record]
+            current = cast(
+                EngagementState,
+                {
+                    **current,
+                    "procedure_runs": [*current["procedure_runs"], *patch["procedure_runs"]],
+                    "procedure_pack": [procedure if p.id == procedure_id else p for p in pack],
+                },
+            )
 
     # ── P0 ──
     async def p0_intel(self, state: EngagementState) -> StatePatch:
