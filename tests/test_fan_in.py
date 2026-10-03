@@ -271,7 +271,8 @@ async def test_fan_in_without_staged_results_only_clears() -> None:
 
 
 async def test_graph_merges_layer_zero_and_waits_for_review() -> None:
-    """图走过两道闸门: 第 0 层并入后, REV-03 有 3 条待决任务, 停在 await_events 等复核; 状态与 Store 一致."""
+    """图走过两道闸门: 第 0 层并入后 REV-03 有 3 条待决任务; 派完可派发的程序后停在 await_events 等复核;
+    状态与 Store 一致."""
     runner, store = make_runner(
         engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]),
         agents=lambda deps: {**p2_agents(deps), **numbat_p2_agents(deps)},
@@ -652,3 +653,39 @@ async def test_staged_order_follows_dispatch_not_completion(slow: str, cancel: b
     assert await store.get(EID, Confirmation, old.id) == first
     loser = await store.get(EID, ProcedureRun, "RUN-DOC-06-1")
     assert loser is not None and loser.failure_reason is not None and "同版本内容不同" in loser.failure_reason
+
+
+async def test_graph_dispatches_cash_line_before_waiting_for_revenue_review() -> None:
+    """R15: 第 0 层并入后 REV-03 等复核, 现金线不停: 第 1 层 DOC-06, 第 2 层 CSH-02 各派一轮并完成;
+    收入线的 REV-02 依赖 REV-03, 仍为 planned; 再没有可派发的, 停在 await_events."""
+    runner, store = make_runner(
+        engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]),
+        agents=lambda deps: {**p2_agents(deps), **numbat_p2_agents(deps)},
+    )
+    submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await submit.submit(EID, pln_decision(GateVerdict.approve))
+    await wait_idle(runner, EID)
+
+    snapshot = await runner.app.aget_state(GraphRunner.config(EID))
+    assert runner.run_error(EID) is None
+    assert snapshot.next == ("await_events",)
+    pack = by_id(snapshot.values["procedure_pack"])
+    assert {pid: pack[pid].status for pid in ["DOC-06", "CSH-02", "REV-02"]} == {
+        "DOC-06": COMPLETED,
+        "CSH-02": COMPLETED,
+        "REV-02": ProcedureStatus.planned,
+    }
+    runs = {r.id: r.instance for r in snapshot.values["procedure_runs"] if r.instance}
+    assert runs == {
+        "RUN-CSH-04-1": "fw-0-0",
+        "RUN-CSH-05-1": "fw-0-0",
+        "RUN-REV-03-1": "fw-0-1",
+        "RUN-REV-08-1": "fw-0-1",
+        "RUN-DOC-06-1": "fw-1-0",
+        "RUN-CSH-02-1": "fw-2-0",
+    }
+    await assert_pack_synced(snapshot.values["procedure_pack"], store)

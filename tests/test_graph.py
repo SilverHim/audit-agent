@@ -340,17 +340,44 @@ def test_route_schedule_raises_when_unfinished_but_none_ready() -> None:
         route_schedule(nodes)(state)
 
 
-def test_after_fan_in_waits_for_pending_task() -> None:
-    state = _p2_state(_p2_nodes(), {"REV-08": AWAITING, "REV-03": DONE, "REV-02": PLANNED}, pending_tasks=1)
+def test_after_fan_in_dispatches_before_waiting() -> None:
+    """R15 验收 1: REV-03 有待决任务, 而 DOC-06 的前置 CSH-04 已完成: 先派发 DOC-06, 不停下等复核."""
+    nodes = _p2_nodes()
+    state = _p2_state(nodes, {"CSH-04": DONE, "DOC-06": PLANNED, "REV-03": AWAITING}, pending_tasks=1)
 
-    assert after_fan_in(state) == "await_events"
+    assert after_fan_in(nodes)(state) == "schedule"
+
+
+def test_after_fan_in_waits_for_pending_task() -> None:
+    """R15 验收 2: 没有可派发的 (REV-02 等 REV-08 复核), 有待决任务: 等复核."""
+    nodes = _p2_nodes()
+    state = _p2_state(nodes, {"REV-08": AWAITING, "REV-03": DONE, "REV-02": PLANNED}, pending_tasks=1)
+
+    assert after_fan_in(nodes)(state) == "await_events"
+
+
+def test_after_fan_in_completes_when_all_done() -> None:
+    nodes = _p2_nodes()
+    state = _p2_state(nodes, {"REV-08": DONE, "REV-03": DONE, "REV-02": DONE})
+
+    assert after_fan_in(nodes)(state) == "completion"
 
 
 def test_after_fan_in_raises_when_awaiting_without_task() -> None:
-    state = _p2_state(_p2_nodes(), {"REV-08": AWAITING, "REV-03": DONE, "REV-02": DONE})
+    nodes = _p2_nodes()
+    state = _p2_state(nodes, {"REV-08": AWAITING, "REV-03": DONE, "REV-02": DONE})
 
-    with pytest.raises(ScheduleStuck, match="REV-08"):
-        after_fan_in(state)
+    with pytest.raises(ScheduleStuck, match="REV-08 为 awaiting_human"):
+        after_fan_in(nodes)(state)
+
+
+def test_after_fan_in_raises_when_planned_cannot_be_dispatched() -> None:
+    """REV-02 等的 REV-08 在等人却没有待决任务: 永远派不出, 报错并说明卡在哪."""
+    nodes = _p2_nodes()
+    state = _p2_state(nodes, {"REV-08": AWAITING, "REV-03": DONE, "REV-02": PLANNED})
+
+    with pytest.raises(ScheduleStuck, match=r"REV-02 等 REV-08 \(awaiting_human\)"):
+        after_fan_in(nodes)(state)
 
 
 # ── R09 (BASE-07): 闸门材料缺失时不放行 ──

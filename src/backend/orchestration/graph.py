@@ -147,22 +147,32 @@ def route_schedule(nodes: GraphNodes) -> Callable[[EngagementState], list[Send] 
     return route
 
 
-def after_fan_in(state: EngagementState) -> Literal["schedule", "await_events", "completion"]:
-    """fan_in 汇合之后去哪. 按顺序判断, 先命中先走:
+def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], Literal["schedule", "await_events", "completion"]]:
+    """生成 fan_in 之后的路由函数. 按顺序判断, 先命中先走 (先派发, 没有可派发的再等复核):
 
-    有待决的复核任务 → await_events 等审计师; 还有计划中或执行中的 P2 程序 → schedule 派下一轮;
-    P2 程序全部完成 → completion. 剩下的只可能是 awaiting_human 却没有待决任务, 抛 ScheduleStuck:
-    进 await_events 会永远等不到决定.
+    有可派发的 P2 程序 (待执行且前置都已完成) → schedule, 不因别的程序等复核而停下;
+    有待决的复核任务 → await_events 等审计师; P2 程序全部完成 → completion.
+    都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 而没有待决任务),
+    或 awaiting_human 却没有待决任务, 进 await_events 会永远等不到决定.
+    外层传 nodes 是为了拿程序库 (闭包, 同 route_schedule).
     """
-    p2 = p2_procedures(state["procedure_pack"])
-    if any(t.status is TaskStatus.pending for t in state["review_tasks"]):
-        return "await_events"
-    if any(p.status in UNFINISHED for p in p2):
-        return "schedule"
-    if all(p.status is ProcedureStatus.completed for p in p2):
-        return "completion"
-    waiting = [p.id for p in p2 if p.status is ProcedureStatus.awaiting_human]
-    raise ScheduleStuck(f"P2 调度卡住: {', '.join(waiting)} 为 awaiting_human, 却没有待决的复核任务")
+
+    def route(state: EngagementState) -> Literal["schedule", "await_events", "completion"]:
+        pack = state["procedure_pack"]
+        if ready_procedures(pack, nodes.deps.library):
+            return "schedule"
+        if any(t.status is TaskStatus.pending for t in state["review_tasks"]):
+            return "await_events"
+        p2 = p2_procedures(pack)
+        if all(p.status is ProcedureStatus.completed for p in p2):
+            return "completion"
+        unfinished = [p for p in p2 if p.status in UNFINISHED]
+        if unfinished:
+            raise ScheduleStuck(_stuck_detail(pack, unfinished, nodes.deps.library))
+        waiting = [p.id for p in p2 if p.status is ProcedureStatus.awaiting_human]
+        raise ScheduleStuck(f"P2 调度卡住: {', '.join(waiting)} 为 awaiting_human, 却没有待决的复核任务")
+
+    return route
 
 
 def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
@@ -196,7 +206,7 @@ def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
     # 条件边: 执行完由路由函数选下一个节点; 第三个参数列出所有可能的去向
     g.add_conditional_edges("schedule", route_schedule(nodes), ["fieldwork", "fan_in"])
     g.add_edge("fieldwork", "fan_in")  # 所有并行实例都结束后才进 fan_in
-    g.add_conditional_edges("fan_in", after_fan_in, ["schedule", "await_events", "completion"])
+    g.add_conditional_edges("fan_in", after_fan_in(nodes), ["schedule", "await_events", "completion"])
     g.add_edge("await_events", "fan_in")  # 审计师处理完复核, 回 fan_in 重新判断
     g.add_edge("completion", "gate_fin")
     g.add_edge("report_draft", "gate_rpt01")

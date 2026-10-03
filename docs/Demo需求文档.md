@@ -87,7 +87,7 @@ completion → gate_fin → report_draft → gate_rpt01 → { report_draft | arc
 - schedule 按依赖图拓扑分层，同层按循环分组，用 `Send` 派发 fieldwork 实例，上限 4；fieldwork 按程序的 owner 调用对应 Agent。
 - fan_in 用按 ID 合并的 reducer 收各实例返回的 ProcedureRun、Exception、Judgment、ReviewTask，由 A1 重算程序状态：有待决任务为 awaiting_human，否则为 completed；rerun 决定时由 DecisionSubmit 先置 executing，不受待决任务影响。
 - P2 以外的程序（ACC-04、DOC-04、PLN-07、PLN-01、FIN-04、RPT-03）由所在节点直接执行。整次失败（Agent 抛异常或片段校验不过）时，节点写入 failed 的执行记录与 failed 任务；单个对象失败（如 DOC-04 一份合同抽取失败）时，执行记录仍为 succeeded，Agent 的片段照常写入，其中带该对象的 failed 任务。两种情况程序都置 awaiting_human，然后在节点内 `interrupt()`；审计师选 rerun 后在同一节点内重跑。
-- after_fan_in：有待决复核任务进 await_events，节点内 `interrupt()`，复核决定写入后恢复；还有 planned 或 executing 的程序回 schedule；P2 程序全部 completed 进 completion。程序状态与任务对不上（awaiting_human 却无待决任务，或有待执行程序却一个也派不出）时抛 ScheduleStuck，不空转。
+- after_fan_in：先派发后等复核。有可派发的程序（planned 或 executing，前置都已 completed）回 schedule，不因别的程序等复核而停下；没有可派发的而有待决复核任务进 await_events，节点内 `interrupt()`，复核决定写入后恢复；P2 程序全部 completed 进 completion。程序状态与任务对不上（awaiting_human 却无待决任务，或有待执行程序却一个也派不出）时抛 ScheduleStuck，不空转。
 - 项目阶段：P0_Acceptance、P1_Planning、P2_Executing、P3_Completion、P4_Reporting、Archived、Declined。程序状态：planned、executing、awaiting_human、completed。
 - EngagementState 的字段、reducer 与写入归属见 [开发接口文档.md](开发接口文档.md) 第 3 节。
 
