@@ -1,26 +1,41 @@
-"""主图节点. 依赖用 tests/fakes.py 的假实现, 节点函数直接调用, 不经图."""
+"""主图节点. 依赖用 tests/fakes.py 的假实现; 节点函数直接调用, 要 interrupt() 的经单节点图调用."""
 
+import asyncio
 from datetime import date, timedelta
 from typing import Any, ClassVar
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphInterrupt
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 from pydantic import ValidationError
 
 from backend.agents.base import ProcedureAgent, RunContext
+from backend.contracts.errors import RuleError
 from backend.contracts.models import (
+    AbnRecord,
     AcceptanceScorecard,
     AgentId,
     AuditObjective,
     Phase,
     Procedure,
+    ProcedureRun,
     ProcedureStatus,
+    ReviewTask,
     RunStatus,
     RunTrigger,
     ScheduleRow,
+    TargetType,
+    TaskKind,
+    TaskStatus,
 )
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
-from backend.orchestration.nodes import GraphNodes, build_run, next_run, save_outputs, update_procedure
+from backend.orchestration.checkpoint import checkpoint_serde
+from backend.orchestration.nodes import GraphNodes, build_run, fail_run, next_run, save_outputs, update_procedure
+from backend.orchestration.runner import GraphRunner
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -34,9 +49,14 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    ScriptA3,
+    ScriptAgent,
+    finished,
     make_deps,
     make_procedure,
     make_run,
+    make_runner,
+    wait_idle,
 )
 
 # ── 3a 执行记录取号, 4c 程序改字段出新版本 ──
@@ -120,7 +140,7 @@ def p0_state() -> EngagementState:
 
 
 class SpyAgent(ProcedureAgent[None]):
-    """记下收到的 ctx, 返回空片段, 用来检查节点传给 Agent 的上下文."""
+    """记下收到的 ctx, 只返回本次执行的终态, 用来检查节点传给 Agent 的上下文."""
 
     agent_id: ClassVar[AgentId] = AgentId.A2  # 智能体编号
     procedures: ClassVar[frozenset[str]] = frozenset({"ACC-04"})  # 负责的程序
@@ -130,7 +150,7 @@ class SpyAgent(ProcedureAgent[None]):
         self.ctx = ctx
 
     async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
-        return {}
+        return {"procedure_runs": [finished(ctx.run)]}
 
 
 async def test_execute_builds_context_for_agent() -> None:
@@ -399,3 +419,316 @@ async def test_p0_intel_replay_uses_stored_run() -> None:
     patch = await nodes.p0_intel(p0_state())
 
     assert patch["procedure_runs"][0].ended_at == NOW
+
+
+# ── R03 P2 以外程序失败: 转失败执行与 failed 任务, 节点内等人处理 ──
+
+EID = ENGAGEMENT.id
+
+
+def boom(ctx: RunContext) -> StatePatch:
+    raise RuntimeError("boom")
+
+
+def rule_error(ctx: RunContext) -> StatePatch:
+    raise RuleError("REV-08.R01: SQL 超时")
+
+
+def scorecard_with_judgments(ctx: RunContext) -> StatePatch:
+    """A2 越权写 judgments: 合并校验不过."""
+    return {"acceptance_scorecard": scorecard([]), "judgments": [], "procedure_runs": [finished(ctx.run)]}
+
+
+def single_node(nodes: GraphNodes, procedure_id: str) -> CompiledStateGraph[EngagementState]:
+    """只有一个节点的图: 节点即 nodes.execute(state, procedure_id). interrupt() 只能在图里调用, 故用它测等待."""
+    graph = StateGraph(EngagementState)
+
+    async def step(state: EngagementState) -> StatePatch:
+        return await nodes.execute(state, procedure_id)
+
+    graph.add_node("step", step)
+    graph.add_edge(START, "step")
+    graph.add_edge("step", END)
+    return graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
+
+
+def test_fail_run_builds_failed_run_and_task() -> None:
+    nodes = make_nodes()
+
+    patch = fail_run(nodes.deps.queue, make_run(), "RuntimeError: boom", NOW)
+
+    run = patch["procedure_runs"][0]
+    assert (run.id, run.status, run.failure_reason, run.ended_at) == (
+        "RUN-ACC-04-1",
+        RunStatus.failed,
+        "RuntimeError: boom",
+        NOW,
+    )
+    assert run.started_at == make_run().started_at and run.version == 1  # 其余字段不变
+    task = patch["review_tasks"][0]
+    assert task == ReviewTask(
+        id="T-RUN-ACC-04-1-v1",
+        kind=TaskKind.failed,
+        procedure_id="ACC-04",
+        target_type=TargetType.ProcedureRun,
+        target_id="RUN-ACC-04-1",
+        target_version=1,
+        run_id="RUN-ACC-04-1",
+        subject_id=None,
+        status=TaskStatus.pending,
+        created_at=NOW,
+    )
+    assert set(patch) == {"procedure_runs", "review_tasks"}
+
+
+async def test_run_agent_returns_valid_patch_as_is() -> None:
+    nodes = make_nodes()
+    ctx = RunContext(
+        engagement=ENGAGEMENT,
+        procedure=p0_pack()[0],
+        template=nodes.deps.library.load("ACC-04"),
+        run=make_run(),
+        state=p0_state(),
+    )
+    patch = {"acceptance_scorecard": scorecard([]), "exceptions": [], "procedure_runs": [finished(make_run())]}
+
+    result, writer = await nodes.run_agent(ScriptAgent(nodes.deps, lambda ctx: patch), ctx)
+
+    assert result is patch
+    assert writer is AgentId.A2
+
+
+@pytest.mark.parametrize(
+    ("script", "reason"),
+    [
+        (boom, "RuntimeError: boom"),
+        (rule_error, "RuleError: REV-08.R01: SQL 超时"),
+        (scorecard_with_judgments, "merge_rejected: A2 不能写字段 judgments"),
+    ],
+)
+async def test_failure_writes_failed_run_task_and_waits(script: Any, reason: str) -> None:
+    """验收 1, 2: Agent 抛异常 (含 RuleError) 或片段校验不过: 不向上抛, 一次提交写失败执行, failed 任务与
+    ACC-04 的 awaiting_human 新版本, Agent 片段不写入; 然后停在节点内 interrupt()."""
+    store = FakeOutputStore(list(p0_pack()))
+    nodes = make_nodes(output_store=store)
+    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, script)
+    app = single_node(nodes, "ACC-04")
+    config = GraphRunner.config(EID)
+
+    result = await app.ainvoke(p0_state(), config)
+
+    assert [i.value for i in result["__interrupt__"]] == [
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-1"}
+    ]
+    assert len(store.commits) == 1
+    run, task, procedure = store.commits[0]
+    assert isinstance(run, ProcedureRun)
+    assert (run.id, run.status, run.failure_reason, run.ended_at is not None) == (
+        "RUN-ACC-04-1",
+        RunStatus.failed,
+        reason,
+        True,
+    )
+    assert isinstance(task, ReviewTask)
+    assert (task.id, task.kind, task.target_type, task.target_id, task.subject_id, task.status) == (
+        "T-RUN-ACC-04-1-v1",
+        TaskKind.failed,
+        TargetType.ProcedureRun,
+        "RUN-ACC-04-1",
+        None,
+        TaskStatus.pending,
+    )
+    assert isinstance(procedure, Procedure)
+    assert (procedure.id, procedure.version, procedure.status) == ("ACC-04", 2, ProcedureStatus.awaiting_human)
+    snapshot = await app.aget_state(config)
+    assert snapshot.next == ("step",)  # 停在节点内, 本次返回值未进状态
+    assert snapshot.values["procedure_runs"] == []
+    assert snapshot.values["acceptance_scorecard"] is None
+
+
+async def test_agent_patch_with_pending_failed_task_is_written_then_waits() -> None:
+    """验收 4: DOC-04 一份合同失败, Agent 返回 succeeded 执行与带 subject_id 的 failed 任务: 片段照常写入, 然后等待."""
+    pack = [make_procedure("DOC-04", Phase.P1_Planning)]
+    store = FakeOutputStore(list(pack))
+    nodes = make_nodes(output_store=store)
+
+    def one_contract_failed(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        task = nodes.deps.queue.make_task(
+            TaskKind.failed, run, procedure_id="DOC-04", run_id=run.id, now=NOW, subject_id="CON-002"
+        )
+        return {"procedure_runs": [run], "review_tasks": [task]}
+
+    nodes.agents["DOC-04"] = ScriptA3(nodes.deps, one_contract_failed)
+    app = single_node(nodes, "DOC-04")
+
+    result = await app.ainvoke(initial_state(ENGAGEMENT, pack, 1), GraphRunner.config(EID))
+
+    assert "__interrupt__" in result
+    run, task, procedure = store.commits[0]
+    assert (run.id, run.status) == ("RUN-DOC-04-1", RunStatus.succeeded)
+    assert (task.id, task.subject_id, task.status) == ("T-RUN-DOC-04-1-CON-002-v1", "CON-002", TaskStatus.pending)
+    assert (procedure.id, procedure.version, procedure.status) == ("DOC-04", 2, ProcedureStatus.awaiting_human)
+
+
+class TransientRegistry(FakeRegistry):
+    """第一次查 ABN 抛错, 之后恢复正常: 用来测恢复时不再调 Agent."""
+
+    def __init__(self) -> None:
+        super().__init__({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
+        self.calls = 0  # ABN 查询次数
+
+    async def abn(self, abn: str) -> AbnRecord | None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("临时登记故障")
+        return await super().abn(abn)
+
+
+@pytest.mark.parametrize("resume", [None, Command(resume="D-1")], ids=["ainvoke_none", "resume_with_decision"])
+async def test_resume_after_failure_does_not_call_agent_again(resume: Command[str] | None) -> None:
+    """失败后恢复, 节点从头执行: 本次执行在 Store 中已失败, 不再调 Agent (这次会成功), 照 Store 再走等待.
+    不带决定恢复则再次停在同一 interrupt(); 带决定恢复则进入 R05 占位 (Codex R03-01)."""
+    registry = TransientRegistry()
+    runner, store = make_runner(registry=registry)
+    config = GraphRunner.config(EID)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    rows = list(store.rows)
+
+    if resume is None:
+        await runner.app.ainvoke(None, config)
+    else:
+        with pytest.raises(NotImplementedError, match="D-1"):
+            await runner.app.ainvoke(resume, config)
+
+    assert registry.calls == 1
+    assert store.rows == rows  # 没有新写入: 无评分卡, 执行记录仍为 failed, ACC-04 仍为 awaiting_human v2
+    snapshot = await runner.app.aget_state(config)
+    assert [task.name for task in snapshot.tasks] == ["p0_intel"]  # 仍停在 p0_intel, 没有进 ACC-01 闸门
+    assert snapshot.values["procedure_runs"] == []
+    if resume is None:
+        assert snapshot.next == ("p0_intel",)  # 再次停在同一 interrupt()
+    else:
+        assert "D-1" in str(snapshot.tasks[0].error)  # 节点出错时 LangGraph 的 next 为空, 出错的任务记在 tasks 里
+
+
+async def test_resume_keeps_waiting_when_failed_task_would_disappear() -> None:
+    """DOC-04 第一次带单对象失败任务, 再调会不带: 恢复时不调 Agent, 仍按 Store 中的任务等待."""
+    pack = [make_procedure("DOC-04", Phase.P1_Planning)]
+    store = FakeOutputStore(list(pack))
+    nodes = make_nodes(output_store=store)
+
+    def first_time_fails_one(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        if agent.calls > 1:
+            return {"procedure_runs": [run]}
+        task = nodes.deps.queue.make_task(TaskKind.failed, run, "DOC-04", run.id, NOW, subject_id="CON-002")
+        return {"procedure_runs": [run], "review_tasks": [task]}
+
+    agent = ScriptA3(nodes.deps, first_time_fails_one)
+    nodes.agents["DOC-04"] = agent
+    app = single_node(nodes, "DOC-04")
+    config = GraphRunner.config(EID)
+    await app.ainvoke(initial_state(ENGAGEMENT, pack, 1), config)
+
+    with pytest.raises(NotImplementedError, match="D-1"):
+        await app.ainvoke(Command(resume="D-1"), config)
+
+    assert agent.calls == 1
+    assert [(type(r).__name__, r.id, r.version) for r in store.rows] == [
+        ("Procedure", "DOC-04", 1),
+        ("ProcedureRun", "RUN-DOC-04-1", 1),
+        ("ReviewTask", "T-RUN-DOC-04-1-CON-002-v1", 1),
+        ("Procedure", "DOC-04", 2),
+    ]  # 恢复后没有新写入
+
+
+async def test_failure_written_by_a1_agent_patch_by_agent() -> None:
+    """写入者: 失败执行与任务记 A1; Agent 的片段记 Agent 编号; 程序新版本一律记 A1. 任务创建时间即失败时间."""
+
+    class ActorStore(FakeOutputStore):
+        def __init__(self, rows: list[Procedure]) -> None:
+            super().__init__(list(rows))
+            self.actors: list[tuple[list[str], str]] = []  # (写入的对象 ID, 写入者)
+
+        async def put(self, eid: str, objs: Any, *, actor: str) -> Any:
+            self.actors.append(([obj.id for obj in objs], actor))
+            return await super().put(eid, objs, actor=actor)
+
+    failing = ActorStore(p0_pack())
+    nodes = make_nodes(output_store=failing)
+    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, boom)
+    await single_node(nodes, "ACC-04").ainvoke(p0_state(), GraphRunner.config(EID))
+    run, task, _ = failing.commits[0]
+    assert run.ended_at == task.created_at
+    assert failing.actors == [
+        (["RUN-ACC-04-1"], AgentId.A1),
+        (["T-RUN-ACC-04-1-v1"], AgentId.A1),
+        (["ACC-04"], AgentId.A1),
+    ]
+
+    passing = ActorStore(p0_pack())
+    nodes = make_nodes(output_store=passing)
+    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)]})
+    await nodes.execute(p0_state(), "ACC-04")
+    assert passing.actors == [(["RUN-ACC-04-1"], AgentId.A2), (["ACC-04"], AgentId.A1)]
+
+
+async def test_cancelled_agent_writes_nothing() -> None:
+    """取消不是执行失败: CancelledError 原样抛出, 不写失败执行与任务."""
+    store = FakeOutputStore(p0_pack())
+    nodes = make_nodes(output_store=store)
+
+    def cancelled(ctx: RunContext) -> StatePatch:
+        raise asyncio.CancelledError
+
+    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await nodes.execute(p0_state(), "ACC-04")
+    assert store.commits == []
+
+
+async def test_resume_after_wait_not_implemented_yet() -> None:
+    """验收 5: interrupt() 返回决定 ID 后的重跑留给 R05, 先抛 NotImplementedError."""
+    nodes = make_nodes()
+    nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, boom)
+    app = single_node(nodes, "ACC-04")
+    config = GraphRunner.config(EID)
+    await app.ainvoke(p0_state(), config)
+
+    with pytest.raises(NotImplementedError, match="D-1"):
+        await app.ainvoke(Command(resume="D-1"), config)
+
+
+async def test_graph_interrupt_from_agent_is_not_a_failure() -> None:
+    """LangGraph 的中断信号不是执行失败, 原样抛出."""
+    nodes = make_nodes()
+
+    def interrupts(ctx: RunContext) -> StatePatch:
+        raise GraphInterrupt(())
+
+    ctx = RunContext(
+        engagement=ENGAGEMENT,
+        procedure=p0_pack()[0],
+        template=nodes.deps.library.load("ACC-04"),
+        run=make_run(),
+        state=p0_state(),
+    )
+
+    with pytest.raises(GraphInterrupt):
+        await nodes.run_agent(ScriptAgent(nodes.deps, interrupts), ctx)
+
+
+async def test_store_failure_is_a_node_error() -> None:
+    """验收 6: 节点自身的错误 (此处写 Store 失败) 照常抛出, 不转 failed 任务."""
+
+    class BrokenStore(FakeOutputStore):
+        async def put(self, eid: str, objs: Any, *, actor: str) -> Any:
+            raise RuntimeError("Store 不可用")
+
+    nodes = make_nodes(output_store=BrokenStore())
+
+    with pytest.raises(RuntimeError, match="Store 不可用"):
+        await nodes.execute(p0_state(), "ACC-04")

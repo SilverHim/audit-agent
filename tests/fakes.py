@@ -1,19 +1,20 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
-from collections.abc import AsyncIterator, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from backend.agents.base import AgentDeps, RunContext
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AbnRecord,
+    AgentId,
     AsicCompanyRecord,
     AuditObjective,
     AutonomyLevel,
@@ -29,7 +30,7 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
-from backend.contracts.state import initial_state
+from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
 from backend.orchestration.checkpoint import checkpoint_serde
@@ -449,6 +450,38 @@ def make_run(procedure_id: str = "ACC-04", run_no: int = 1, params: dict[str, An
     )
 
 
+def finished(run: ProcedureRun, status: RunStatus = RunStatus.succeeded) -> ProcedureRun:
+    """执行记录的终态: 置 succeeded (或给定状态), 结束时间为 NOW."""
+    return run.model_copy(update={"status": status, "ended_at": NOW})
+
+
+class ScriptAgent(ProcedureAgent[None]):
+    """脚本 Agent: 不查数据也不调 LLM, 片段由 script(ctx) 给出 (也可在其中抛异常), 编排测试用它代替真实 Agent.
+
+    以 A2 的身份写片段; 要以别的 Agent 身份写 (如 A3 才能写 review_tasks) 时用子类改 agent_id. calls 为被调用次数.
+    """
+
+    agent_id: ClassVar[AgentId] = AgentId.A2  # 智能体编号, 决定片段可写哪些字段
+    procedures: ClassVar[frozenset[str]] = frozenset()  # 不经注册表, 由测试直接放进 GraphNodes.agents
+
+    def __init__(self, deps: AgentDeps, script: Callable[[RunContext], StatePatch]) -> None:
+        super().__init__(deps)
+        self.script = script  # 收到上下文, 返回片段
+        self.calls = 0  # 被调用次数
+
+    async def execute(self, ctx: RunContext) -> None:
+        self.calls += 1
+
+    async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
+        return self.script(ctx)
+
+
+class ScriptA3(ScriptAgent):
+    """以 A3 (文件抽取) 身份写片段的脚本 Agent, 可写 documents, confirmations, review_tasks."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A3
+
+
 def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engagement = ENGAGEMENT) -> RunContext:
     """某条程序第 1 次执行的上下文: Procedure 为 planned 第 1 版, Run 置 running."""
     template = deps.library.load(procedure_id)
@@ -468,14 +501,24 @@ def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engageme
 
 
 def make_runner(
-    registry: FakeRegistry | None = None, engagement_store: FakeEngagementStore | None = None
+    registry: FakeRegistry | None = None,
+    engagement_store: FakeEngagementStore | None = None,
+    output_store: FakeOutputStore | None = None,
+    agents: Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]] | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
-    """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 为空 (由 start 写入固定集). 返回 runner 与审计产出存储."""
+    """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
+
+    agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)}; 其余程序用真实 Agent.
+    """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
-    output_store = FakeOutputStore()
+    if output_store is None:
+        output_store = FakeOutputStore()
     deps = make_deps(registry, FakeTrail(), engagement_store, output_store)
-    app = compile_graph(GraphNodes(deps, parallel_cap=2), InMemorySaver(serde=checkpoint_serde()))
+    nodes = GraphNodes(deps, parallel_cap=2)
+    if agents is not None:
+        nodes.agents.update(agents(deps))
+    app = compile_graph(nodes, InMemorySaver(serde=checkpoint_serde()))
     return GraphRunner(app, deps), output_store
 
 

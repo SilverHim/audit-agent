@@ -27,7 +27,7 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
-from tests.test_runner import BrokenRegistry
+from tests.test_runner import BrokenOutputStore, BrokenRegistry
 
 EID = ENGAGEMENT.id
 NOW = datetime(2026, 10, 3, tzinfo=UTC)
@@ -159,7 +159,7 @@ async def test_overview_while_running() -> None:
 
 
 async def test_overview_shows_run_error() -> None:
-    runner, _ = make_runner(registry=BrokenRegistry())
+    runner, _ = make_runner(output_store=BrokenOutputStore())
     query = GraphStateQuery(runner.app, runner.deps, runner)
     await runner.start(EID)
     await wait_idle(runner, EID)
@@ -168,8 +168,24 @@ async def test_overview_shows_run_error() -> None:
 
     assert o.running is False
     assert o.run_error is not None
-    assert "ABN Lookup 不可用" in o.run_error
+    assert "Store 不可用" in o.run_error
     assert o.current_gate is None  # 停在出错的 p0_intel, 不在闸门
+    assert o.awaiting_review is False
+
+
+async def test_overview_while_waiting_after_failure() -> None:
+    """R03 验收 3: ACC-04 失败后停在节点内等待: 等复核, 不在执行, 无后台错误, 1 个待办."""
+    runner, _ = make_runner(registry=BrokenRegistry())
+    query = GraphStateQuery(runner.app, runner.deps, runner)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+
+    o = await query.overview(EID)
+
+    assert (o.awaiting_review, o.running, o.run_error, o.pending_tasks) == (True, False, None, 1)
+    assert o.current_gate is None
+    acc04 = next(p for p in o.procedures if p.id == "ACC-04")
+    assert (acc04.status, acc04.pending_tasks) == (ProcedureStatus.awaiting_human, 1)
 
 
 async def test_overview_counts_pending_tasks_from_store() -> None:

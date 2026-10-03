@@ -2,13 +2,14 @@
 
 import asyncio
 import inspect
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import AbnRecord
+from backend.contracts.models import AbnRecord, ProcedureRun, ReviewTask, RunStatus, Versioned
 from backend.main import lifespan
 from backend.orchestration import runner as runner_module
 from backend.orchestration.runner import GraphRunner, fixed_procedures
@@ -16,6 +17,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
     FakeEngagementStore,
+    FakeOutputStore,
     FakeRegistry,
     NoTaskAsyncio,
     make_runner,
@@ -26,10 +28,19 @@ EID = ENGAGEMENT.id
 
 
 class BrokenRegistry(FakeRegistry):
-    """ABN Lookup 不可用: 查询即抛错, 用来制造后台执行失败."""
+    """ABN Lookup 不可用: 查询即抛错. ACC-04 执行失败, 节点转成失败执行与 failed 任务后等人处理."""
 
     async def abn(self, abn: str) -> AbnRecord | None:
         raise RuntimeError("ABN Lookup 不可用")
+
+
+class BrokenOutputStore(FakeOutputStore):
+    """写执行记录时抛错 (start 写固定集不受影响): 节点自身出错, 用来制造后台执行错误 run_error."""
+
+    async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
+        if any(isinstance(obj, ProcedureRun) for obj in objs):
+            raise RuntimeError("Store 不可用")
+        return await super().put(eid, objs, actor=actor)
 
 
 class HangingRegistry(FakeRegistry):
@@ -85,7 +96,7 @@ async def test_start_rejects_when_busy() -> None:
 
 
 async def test_background_error_is_recorded_and_lock_released() -> None:
-    runner, _ = make_runner(registry=BrokenRegistry())
+    runner, _ = make_runner(output_store=BrokenOutputStore())
 
     await runner.start(EID)
     await wait_idle(runner, EID)  # 后台任务不把异常抛给等待者
@@ -93,7 +104,25 @@ async def test_background_error_is_recorded_and_lock_released() -> None:
     assert not runner.is_running(EID)
     error = runner.run_error(EID)
     assert error is not None
-    assert "ABN Lookup 不可用" in error
+    assert "Store 不可用" in error
+
+
+async def test_agent_failure_waits_instead_of_run_error() -> None:
+    """R03: Agent 出错不是后台执行错误: 失败执行与 failed 任务写入 Store, 图停在 p0_intel 节点内等人处理, 锁已释放."""
+    runner, store = make_runner(registry=BrokenRegistry())
+
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+
+    assert not runner.is_running(EID)
+    assert runner.run_error(EID) is None
+    run = await store.get(EID, ProcedureRun, "RUN-ACC-04-1")
+    assert run is not None and run.status is RunStatus.failed
+    assert run.failure_reason == "RuntimeError: ABN Lookup 不可用"
+    assert [t.id for t in await store.latest(EID, ReviewTask)] == ["T-RUN-ACC-04-1-v1"]
+    snapshot = await runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("p0_intel",)
+    assert [i.value["run_id"] for task in snapshot.tasks for i in task.interrupts] == ["RUN-ACC-04-1"]
 
 
 async def test_success_clears_previous_error() -> None:
