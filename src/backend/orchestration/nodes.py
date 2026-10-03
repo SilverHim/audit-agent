@@ -5,7 +5,7 @@
 
 import copy
 from datetime import UTC, datetime
-from typing import Any, TypedDict, cast
+from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
@@ -35,7 +35,7 @@ from backend.contracts.models import (
     TaskStatus,
     Versioned,
 )
-from backend.contracts.ports import AuditOutputStore
+from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import AGENT_FIELDS, MergeRejected, check_patch, check_refs, field_type
 from backend.orchestration.scheduler import build_schedule
@@ -193,26 +193,66 @@ def update_procedure(pack: list[Procedure], procedure_id: str, **changes: Any) -
     return result
 
 
-async def save_outputs(output_store: AuditOutputStore, eid: str, patch: StatePatch, actor: str) -> StatePatch:
+async def save_outputs(
+    output_store: AuditOutputStore,
+    eid: str,
+    patch: StatePatch,
+    actor: str,
+    evidence_store: EvidenceStore | None = None,
+) -> StatePatch:
     """将状态片段中的审计产出写入 Store, 返回以 Store 返回对象替换后的片段, 供节点写入状态.
 
     按值的类型处理:
     - Versioned 对象 (如评分卡): 写入, 取 Store 返回的对象;
     - 元素均为 Versioned 的列表 (如例外): 整体写入, 取 Store 返回的列表;
+    - documents (证据文件登记): 逐份调 evidence_store.set_status 写入文件的处理状态 (如 extracted), 原样保留;
     - 其他值 (如 phase, 调度表): 不写入, 原样保留.
     Store 返回的通常即写入的对象; 重放时同 (id, version) 已存在, 不重复写入并返回已存对象, 使状态与 Store 一致.
-    事务由调用方开启.
+    事务由调用方开启; set_status 在事务块内调用时加入该事务 (接口文档第 4 节).
     """
     result: StatePatch = {}
     for key, value in patch.items():
         if isinstance(value, Versioned):
             stored_list = await output_store.put(eid=eid, objs=[value], actor=actor)
             result[key] = stored_list[0]
+        elif key == "documents":
+            if evidence_store is None:
+                raise ValueError("片段含 documents, 须传 evidence_store")
+            for document in value:
+                await evidence_store.set_status(eid, document.id, document.status)
+            result[key] = value
         elif isinstance(value, list) and all(isinstance(v, Versioned) for v in value):
             result[key] = await output_store.put(eid=eid, objs=value, actor=actor)
         else:
             result[key] = value
     return result
+
+
+# 状态中带合并规则 (reducer) 的字段 -> 合并函数, 取自 EngagementState 的 Annotated 注解
+REDUCERS = {
+    name: get_args(hint)[1]
+    for name, hint in get_type_hints(EngagementState, include_extras=True).items()
+    if get_origin(hint) is Annotated
+}
+
+
+def apply_patch(state: EngagementState, patch: StatePatch) -> EngagementState:
+    """按状态的合并规则把片段并入状态的副本, 原状态不变. 节点内依次执行几条程序时, 后一条据此看到前一条的结果.
+
+    带 reducer 的字段 (如 procedure_runs 的 upsert_by_id) 用 reducer 合并, 其余字段直接替换, 与 LangGraph 一致.
+    """
+    merged: dict[str, Any] = dict(state)
+    for key, value in patch.items():
+        reducer = REDUCERS.get(key)
+        merged[key] = reducer(state[key], value) if reducer else value  # type: ignore[literal-required]
+    return cast(EngagementState, merged)
+
+
+def merge_patch(result: StatePatch, patch: StatePatch) -> None:
+    """把一个片段并进节点的累计结果. 带 reducer 的列表字段拼接 (并入状态时由 reducer 按 ID 与版本去重);
+    其余字段后者覆盖, 包括每次都传完整列表的 procedure_pack, audit_objectives, risk_register."""
+    for key, value in patch.items():
+        result[key] = [*result.get(key, []), *value] if key in REDUCERS else value
 
 
 class GraphNodes:
@@ -254,7 +294,8 @@ class GraphNodes:
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         outstanding: 本节点之前各次执行留下, 尚未决定的 failed 任务 (如 DOC-04 两份合同失败, 只重跑了一份).
         返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段或 outstanding 中有待决的 failed 任务为
-        awaiting_human, 否则为 completed; rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
+        awaiting_human, 否则为 completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的
+        这一次执行有效).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs),
         程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         """
@@ -273,12 +314,16 @@ class GraphNodes:
         else:
             patch, writer = await self.run_agent(agent, ctx)
         pending = [t for t in [*failed_tasks(patch), *outstanding] if t.status is TaskStatus.pending]
-        status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+        # 闸门程序 (如 PLN-01) 执行成功后保持 planned, 由 DecisionSubmit 在闸门 approve 时置 completed (Q5)
+        done = ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
+        status = ProcedureStatus.awaiting_human if pending else done
         pack = update_procedure(state["procedure_pack"], procedure_id, status=status, rerun_subject_ids=[])
         updated = next(p for p in pack if p.id == procedure_id)  # 本程序的新版本
         # 片段与程序新版本在同一事务内写入, 保证原子性. 程序新版本取 put 的返回: 重放时为 Store 中已存的那一版
         async with self.deps.output_store.transaction(engagement.id):
-            stored = await save_outputs(self.deps.output_store, engagement.id, patch, actor=writer)
+            stored = await save_outputs(
+                self.deps.output_store, engagement.id, patch, actor=writer, evidence_store=self.deps.evidence_store
+            )
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
 
@@ -327,8 +372,7 @@ class GraphNodes:
         failed: dict[str, ReviewTask] = {}  # 本节点各次执行建的, 还没有读回过决定的 failed 任务
         while True:
             patch, pack = await self.attempt(current, engagement, procedure_id, list(failed.values()))
-            for key, value in patch.items():
-                result[key] = [*result.get(key, []), *value] if isinstance(value, list) else value
+            merge_patch(result, patch)
             failed.update({task.id: task for task in failed_tasks(patch)})
             waiting = next(p for p in pack if p.id == procedure_id)
             if waiting.status is not ProcedureStatus.awaiting_human:
@@ -361,10 +405,27 @@ class GraphNodes:
 
     # ── P1 ──
     async def p1_ingest(self, state: EngagementState) -> StatePatch:
-        return {}  # TODO(M2): DatasetLoader.load, 再由 A3 执行 DOC-04
+        """载入合成数据集 (财务表入库, 合同 PDF 登记为证据文件), 再由 A3 执行 DOC-04 抽取合同要素.
+
+        DatasetLoader.load 已载入则跳过, 节点重放时再调一次无妨.
+        """
+        engagement = await self.deps.engagement_store.get(state["engagement_id"])
+        if engagement is None:
+            raise LookupError(f"Engagement {state['engagement_id']} not found")
+        await self.deps.datasets.load(engagement.id, engagement.dataset)
+        return await self.execute(state, "DOC-04")
 
     async def p1_analytics(self, state: EngagementState) -> StatePatch:
-        return {}  # TODO(M2): A4 执行 PLN-07, PLN-01, 读数据集预置的审计目标与风险清单
+        """A4 依次执行 PLN-07 (初步分析) 与 PLN-01 (重要性候选, 首次带出数据集预置的审计目标与风险清单).
+
+        PLN-01 在 PLN-07 的结果之上执行 (程序包, 执行记录等按状态的合并规则并入). 返回两次的片段合并, 程序包为最终的.
+        """
+        result: StatePatch = {}
+        for procedure_id in ("PLN-07", "PLN-01"):
+            patch = await self.execute(state, procedure_id)
+            merge_patch(result, patch)
+            state = apply_patch(state, patch)
+        return result
 
     async def assemble_pack(self, state: EngagementState) -> StatePatch:
         """按审计目标匹配 trigger, 补齐依赖闭包, 只把尚不在程序包中的 P2 程序加入."""

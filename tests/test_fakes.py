@@ -8,9 +8,13 @@ from backend.contracts.errors import VersionConflict
 from backend.contracts.models import Phase
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
+    DocumentWrite,
     EngagementWrite,
     FakeEngagementStore,
+    FakeEvidenceStore,
+    FakeFinancialStore,
     FakeOutputStore,
     bind_stores,
     make_procedure,
@@ -153,3 +157,24 @@ async def test_writing_other_engagement_inside_transaction_is_an_error() -> None
     with pytest.raises(AssertionError, match="ENG-OTHER"):
         async with output_store.transaction(EID):
             await output_store.put("ENG-OTHER", [make_procedure("ACC-04")], actor="A1")
+
+
+async def test_document_status_joins_transaction() -> None:
+    """证据文件状态在事务块内写入: 块正常结束才生效并记进同一次提交, 块内抛错则丢弃."""
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS))
+    output_store = FakeOutputStore()
+    evidence = FakeEvidenceStore(financial, output_store)
+    doc = NUMBAT_CONTRACTS[0].id
+
+    with pytest.raises(RuntimeError, match="提交前出错"):
+        async with output_store.transaction(EID):
+            await evidence.set_status(EID, doc, "extracted")
+            raise RuntimeError("提交前出错")
+    assert [d.status for d in await financial.documents(EID)] == ["received"] * 3
+
+    async with output_store.transaction(EID):
+        await evidence.set_status(EID, doc, "extracted")
+        assert (await financial.documents(EID))[0].status == "received"  # 提交前不生效
+    assert (await financial.documents(EID))[0].status == "extracted"
+    assert output_store.commits == [[DocumentWrite(doc, "extracted")]]
+    assert evidence.calls == [(doc, "extracted", True), (doc, "extracted", True)]

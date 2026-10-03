@@ -15,20 +15,27 @@ from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AbnRecord,
     AgentId,
+    AnalyticsResult,
     AsicCompanyRecord,
+    AuditException,
     AuditObjective,
     AutonomyLevel,
     ClientProfile,
     Decision,
     DocumentRef,
+    DocumentStatus,
     DocumentType,
     Engagement,
+    MaterialityCandidate,
+    MaterialityCandidates,
     Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    Reliability,
     ReviewRecord,
     ReviewTask,
+    RiskItem,
     RunStatus,
     RunTrigger,
     TaskStatus,
@@ -92,6 +99,71 @@ NUMBAT_OBJECTIVES = [
     AuditObjective(id="OBJ-REV-CUT", account="Revenue", assertion="Cutoff", risk_level="significant", is_material=True),
     AuditObjective(id="OBJ-CASH-EXI", account="Cash", assertion="Existence", risk_level="high", is_material=True),
 ]
+NUMBAT_RISKS = [  # 合成数据集设计第 2.4 节
+    RiskItem(
+        id="RISK-REV-OCC",
+        objective_id="OBJ-REV-OCC",
+        assertion="Occurrence",
+        level="significant",
+        fraud_related=True,
+        description="Presumed fraud risk that revenue is recorded for sales that did not occur.",
+    ),
+    RiskItem(
+        id="RISK-REV-CUT",
+        objective_id="OBJ-REV-CUT",
+        assertion="Cutoff",
+        level="significant",
+        fraud_related=True,
+        description="Risk that June sales are recognised although control passes to customers after year end.",
+    ),
+    RiskItem(
+        id="RISK-CASH-EXI",
+        objective_id="OBJ-CASH-EXI",
+        assertion="Existence",
+        level="high",
+        fraud_related=False,
+        description="Risk that bank balances recorded in the general ledger do not exist or are overstated.",
+    ),
+]
+NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同; ID 为占位, B 出 manifest 后由 R54 替换
+    DocumentRef(
+        id=f"DOC-CON00{n}000000",
+        type=DocumentType.contract,
+        file_name=f"CON-00{n}.pdf",
+        sha256=f"{n}" * 64,
+        page_count=4 if n == 3 else 3,
+        reliability=Reliability.external_copy,
+        status="received",
+        uploaded_at=NOW,
+    )
+    for n in (1, 2, 3)
+]
+NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
+    MaterialityCandidate(
+        basis="revenue",
+        base_amount_cents=1200000000,
+        pct_low=0.005,
+        pct_high=0.01,
+        low_cents=6000000,
+        high_cents=12000000,
+    ),
+    MaterialityCandidate(
+        basis="total_assets",
+        base_amount_cents=800000000,
+        pct_low=0.01,
+        pct_high=0.02,
+        low_cents=8000000,
+        high_cents=16000000,
+    ),
+    MaterialityCandidate(
+        basis="profit_before_tax",
+        base_amount_cents=150000000,
+        pct_low=0.05,
+        pct_high=0.05,
+        low_cents=7500000,
+        high_cents=7500000,
+    ),
+]
 
 
 # ── 假工具 ──
@@ -152,6 +224,14 @@ class FakeFinancialStore:
 
 
 @dataclass(frozen=True)
+class DocumentWrite:
+    """证据文件处理状态的一次写入 (EvidenceStore.set_status), 记进 FakeOutputStore.commits, 用来检查是否在同一事务里."""
+
+    document_id: str  # 文件 ID
+    status: str  # 新状态, 如 extracted
+
+
+@dataclass(frozen=True)
 class EngagementWrite:
     """项目存储的一次写入, 与审计产出一起记进 FakeOutputStore.commits, 用来检查它们是否在同一事务里."""
 
@@ -168,9 +248,10 @@ class FakeTxn:
     owner: asyncio.Task[Any] | None  # 开事务的任务; 只有它 (含其中的嵌套调用) 在事务里
     active: bool = True  # 块结束后置假, 之后不再有人能加入
     objs: list[Versioned] = field(default_factory=list)  # 暂存的审计产出
-    log: list[Versioned | EngagementWrite] = field(default_factory=list)  # 全部写入, 按调用顺序
+    log: list[Versioned | EngagementWrite | DocumentWrite] = field(default_factory=list)  # 全部写入, 按调用顺序
     engagements: dict[str, Engagement] = field(default_factory=dict)  # 暂存的项目改动, 项目编号 -> 改后的项目
     profiles: list[ClientProfile] = field(default_factory=list)  # 暂存的新画像
+    on_commit: list[Callable[[], None]] = field(default_factory=list)  # 提交时依次执行的生效动作 (如文件状态)
 
 
 class FakeEngagementStore:
@@ -380,6 +461,8 @@ class FakeOutputStore:
             self.rows_of(eid).extend(txn.objs)
             if self.engagement_store is not None:
                 self.engagement_store.commit(txn)
+            for action in txn.on_commit:
+                action()
             self.commits.append(txn.log)
         finally:
             txn.active = False
@@ -403,6 +486,55 @@ class NoTaskAsyncio:
         raise RuntimeError("事件循环已关闭")
 
 
+class FakeEvidenceStore:
+    """假证据文件存储: 只实现 set_status, 改的是 FakeFinancialStore 里登记的文件. 在审计产出事务块内调用时加入该事务:
+    提交才生效, 抛错则丢弃, 并记进该次提交. calls 记下每次调用 (文件 ID, 状态, 是否在事务内)."""
+
+    def __init__(self, financial_store: FakeFinancialStore, output_store: FakeOutputStore | None = None) -> None:
+        self.financial_store = financial_store  # 文件登记所在
+        self.output_store = output_store  # 共用其事务
+        self.calls: list[tuple[str, str, bool]] = []  # (文件 ID, 状态, 是否在事务内)
+
+    async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
+        refs = self.financial_store.document_refs
+        i = next((i for i, d in enumerate(refs) if d.id == document_id), None)
+        if i is None:
+            raise LookupError(f"document {document_id} not found")
+
+        def apply() -> None:
+            refs[i] = refs[i].model_copy(update={"status": status})
+
+        txn = self.output_store.active_txn() if self.output_store is not None else None
+        self.calls.append((document_id, status, txn is not None))
+        if txn is None:
+            apply()
+        else:
+            txn.log.append(DocumentWrite(document_id, status))
+            txn.on_commit.append(apply)
+
+
+class FakeDatasetLoader:
+    """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
+
+    预置计划数据取 Numbat 的.
+    """
+
+    def __init__(self, financial_store: FakeFinancialStore) -> None:
+        self.financial_store = financial_store  # 合同登记到这里
+        self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
+
+    async def load(self, eid: str, dataset: str) -> None:
+        self.loads.append((eid, dataset))
+        known = {d.id for d in self.financial_store.document_refs}
+        self.financial_store.document_refs += [d for d in NUMBAT_CONTRACTS if d.id not in known]
+
+    def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
+        return list(NUMBAT_OBJECTIVES), list(NUMBAT_RISKS)
+
+    def client_profile(self, dataset: str) -> ClientProfile:
+        return NUMBAT_PROFILE
+
+
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
     """让项目存储加入审计产出存储的事务, 同真实实现共用一个数据库事务."""
     engagement_store.bind(output_store)
@@ -419,23 +551,28 @@ def make_deps(
     output_store: FakeOutputStore | None = None,
     financial_store: FakeFinancialStore | None = None,
 ) -> AgentDeps:
-    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储与财务数据存储. 其余依赖只构造不连接.
+    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储与数据集载入.
+    其余依赖只构造不连接.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空.
-    项目存储与审计产出存储绑定, 项目存储的写入加入审计产出的事务.
+    项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
         engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     if output_store is None:
         output_store = FakeOutputStore()
     bind_stores(engagement_store, output_store)
+    if financial_store is None:
+        financial_store = FakeFinancialStore()
     return replace(
         build_deps(get_settings()),
         registry=registry,
         trail=trail,
         engagement_store=engagement_store,
         output_store=output_store,
-        financial_store=financial_store or FakeFinancialStore(),
+        financial_store=financial_store,
+        evidence_store=FakeEvidenceStore(financial_store, output_store),
+        datasets=FakeDatasetLoader(financial_store),
     )
 
 
@@ -505,6 +642,62 @@ class ScriptA4(ScriptAgent):
     """以 A4 (风险评估) 身份写片段的脚本 Agent, 可写分析结果, 重要性候选, 审计目标, 风险清单, 例外."""
 
     agent_id: ClassVar[AgentId] = AgentId.A4
+
+
+def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, ProcedureAgent[Any]]:
+    """P1 三条程序的脚本 Agent, 产出按合成数据集设计第 7 节第 3-5 行. 真实的 A3, A4 由 R37, R38 实现.
+
+    DOC-04: 3 份合同置 extracted. PLN-07: ANALYTICS 与例外 X-PLN-07-{run_no}-A01-1 (应收账款 1100 变动 35%).
+    PLN-01: MATERIALITY (第 3.2 节三个基准); 状态中风险清单为空且 presets 为真时带出第 2.4 节 3 条目标与 3 条风险.
+    presets 为假时 PLN-01 不带审计目标, 装配不出 P2 程序, 图可直接走到 FIN-01 闸门.
+    分析结果与重要性候选在状态已有时出下一版.
+    """
+
+    def doc04(ctx: RunContext) -> StatePatch:
+        extracted = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS]
+        return {"documents": extracted, "procedure_runs": [finished(ctx.run)]}
+
+    def pln07(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        exception = AuditException(
+            id=f"X-PLN-07-{run.run_no}-A01-1",
+            procedure_id="PLN-07",
+            run_id=run.id,
+            rule_id="A01",
+            severity="medium",
+            source_ids=["1100"],
+            amount_cents=52500000,
+            detail={"account_code": "1100", "current_cents": 202500000, "prior_cents": 150000000, "change_pct": 0.35},
+            evidence=[],
+        )
+        previous = ctx.state["analytics"]
+        analytics = AnalyticsResult(
+            id="ANALYTICS",
+            version=previous.version + 1 if previous else 1,
+            ratios={"gross_margin": 0.3, "gross_margin_prior": 0.305, "revenue_growth": 0.1538},
+            exception_ids=[exception.id],
+        )
+        return {"analytics": analytics, "exceptions": [exception], "procedure_runs": [run]}
+
+    def pln01(ctx: RunContext) -> StatePatch:
+        previous = ctx.state["materiality_candidates"]
+        candidates = MaterialityCandidates(
+            id="MATERIALITY", version=previous.version + 1 if previous else 1, candidates=NUMBAT_CANDIDATES
+        )
+        patch: StatePatch = {"materiality_candidates": candidates, "procedure_runs": [finished(ctx.run)]}
+        if presets and not ctx.state["risk_register"]:
+            patch["audit_objectives"] = list(NUMBAT_OBJECTIVES)
+            patch["risk_register"] = list(NUMBAT_RISKS)
+        return patch
+
+    return {"DOC-04": ScriptA3(deps, doc04), "PLN-07": ScriptA4(deps, pln07), "PLN-01": ScriptA4(deps, pln01)}
+
+
+def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
+    """主图节点: 已实装的 Agent 用真实的, P1 三条程序用 Numbat 脚本 Agent (见 numbat_p1_agents)."""
+    nodes = GraphNodes(deps, parallel_cap)
+    nodes.agents.update(numbat_p1_agents(deps, presets))
+    return nodes
 
 
 async def preset_rerun(
@@ -577,14 +770,15 @@ def make_runner(
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
-    agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)}; 其余程序用真实 Agent.
+    agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)};
+    其余程序同 make_graph_nodes.
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
     if output_store is None:
         output_store = FakeOutputStore()
     deps = make_deps(registry, FakeTrail(), engagement_store, output_store)
-    nodes = GraphNodes(deps, parallel_cap=2)
+    nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))
     app = compile_graph(nodes, InMemorySaver(serde=checkpoint_serde()))

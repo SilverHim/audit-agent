@@ -40,18 +40,23 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     make_deps,
+    make_graph_nodes,
     make_procedure,
 )
 
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
 
 
+# 各闸门的呈报材料 ID: ACC-01, PLN-01/03 的材料已由节点产出, 决定须绑定其第 1 版;
+# FIN-01, RPT-01 的材料尚为空, 不校验绑定
+TARGETS = {GateId.ACC_01: "SCORECARD", GateId.PLN_01_03: "MATERIALITY", GateId.FIN_01: "T", GateId.RPT_01: "T"}
+
+
 def _decision(n: int, gate: GateId, verdict: GateVerdict, target_version: int = 1) -> GateDecision:
-    # ACC-01 的材料已由 p0_intel 真实产出, 决定须绑定 SCORECARD 第 1 版; 其余闸门材料尚为空, 不校验绑定
     return GateDecision(
         id=f"D-{n}",
         gate=gate,
-        target_id="SCORECARD" if gate is GateId.ACC_01 else "T",
+        target_id=TARGETS[gate],
         target_version=target_version,
         decision=verdict,
         reason=None if verdict is GateVerdict.approve else "test",
@@ -88,7 +93,7 @@ async def _run_to_acc01(profile: ClientProfile = NUMBAT_PROFILE) -> tuple[Graph,
     """新项目从 START 跑到 ACC-01 闸门前停下. 返回图, 配置与项目存储 (用来更新客户画像)."""
     store = FakeEngagementStore([profile], [ENGAGEMENT])
     deps = _fake_deps(ENGAGEMENT, store)
-    app = compile_graph(GraphNodes(deps, parallel_cap=2), InMemorySaver(serde=checkpoint_serde()))
+    app = compile_graph(make_graph_nodes(deps, presets=False), InMemorySaver(serde=checkpoint_serde()))
     config = GraphRunner.config(ENGAGEMENT.id)
     await app.ainvoke(initial_state(ENGAGEMENT, fixed_procedures(deps.library), profile.version), config)
     return app, config, store
@@ -136,7 +141,7 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
         updated_at=NOW,
     )
     deps = _fake_deps(engagement)
-    app = compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), checkpointer)
+    app = compile_graph(make_graph_nodes(deps, settings.PARALLEL_CAP, presets=False), checkpointer)
     config = GraphRunner.config(engagement.id)
     await app.ainvoke(initial_state(engagement, fixed_procedures(deps.library), NUMBAT_PROFILE.version), config)
 
