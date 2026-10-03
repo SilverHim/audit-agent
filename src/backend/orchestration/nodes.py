@@ -428,24 +428,38 @@ class GraphNodes:
         return result
 
     async def assemble_pack(self, state: EngagementState) -> StatePatch:
-        """按审计目标匹配 trigger, 补齐依赖闭包, 只把尚不在程序包中的 P2 程序加入."""
+        """装配 P2 程序包: 按审计目标匹配 trigger, 补齐依赖闭包, 只把尚不在程序包中的 P2 程序加入.
+
+        每条审计目标至少要被一条程序的 trigger 匹配到, 否则抛 ValueError 阻断 (Demo需求文档第 4.1 节), 什么都不写.
+        新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节).
+        objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 为空.
+        没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
+        """
         library = self.deps.library
-        matched = {t.id: obj.id for obj in state["audit_objectives"] for t in library.match(obj)}
+        objectives = state["audit_objectives"]
+        uncovered = [o.id for o in objectives if not library.match(o)]
+        if uncovered:
+            raise ValueError(f"审计目标没有程序覆盖, 不能装配: {', '.join(uncovered)}")
+        matched = {t.id for o in objectives for t in library.match(o)}
         existing = {p.id for p in state["procedure_pack"]}
         added = [
             Procedure(
                 id=t.id,
                 phase=t.phase,
                 template_commit=library.commit,
-                objective_ids=[o.id for o in state["audit_objectives"] if t in library.match(o)],
+                objective_ids=[o.id for o in objectives if t in library.match(o)],
                 autonomy_level=t.autonomy_level,
             )
-            for t in library.closure(matched)
+            for t in library.closure(sorted(matched))
             if t.phase is Phase.P2_Executing and t.id not in existing
         ]
         if not added:
             return {}
-        return {"procedure_pack": [*state["procedure_pack"], *added], "phase": Phase.P2_Executing}
+        eid = state["engagement_id"]
+        async with self.deps.output_store.transaction(eid):
+            stored = await self.deps.output_store.put(eid, added, actor=AgentId.A1)
+            await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+        return {"procedure_pack": [*state["procedure_pack"], *stored], "phase": Phase.P2_Executing}
 
     # ── P2 ──
     async def schedule(self, state: EngagementState) -> StatePatch:
