@@ -4,6 +4,7 @@ import inspect
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from enum import Enum
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -21,12 +22,15 @@ _STATE_MODULES = (backend.contracts.models, backend.contracts.services)
 
 
 def checkpoint_serde() -> JsonPlusSerializer:
-    """状态里的 Pydantic 对象须登记, 否则反序列化会被拒绝."""
+    """状态里的 Pydantic 对象与枚举须登记, 否则反序列化会被拒绝.
+
+    未登记的枚举不报错, 而是退化为普通字符串: 状态顶层的 phase 读回后 `is Phase.X` 恒为假.
+    """
     allowed = [
         obj
         for module in _STATE_MODULES
         for _, obj in inspect.getmembers(module, inspect.isclass)
-        if issubclass(obj, BaseModel) and obj.__module__ == module.__name__
+        if issubclass(obj, (BaseModel, Enum)) and obj.__module__ == module.__name__
     ]
     return JsonPlusSerializer(allowed_msgpack_modules=allowed)
 

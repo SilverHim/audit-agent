@@ -193,7 +193,7 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
 
     async def execute(self, ctx: RunContext) -> Acc04Findings:
         """执行 ACC-04: 读客户画像, 查 ABN 与 ASIC, 返回三项检查结果."""
-        profile = await self.deps.engagements.client_profile(ctx.engagement.client_id)
+        profile = await self.deps.engagement_store.client_profile(ctx.engagement.client_id)
 
         if profile is None:
             raise LookupError(f"client profile {ctx.engagement.client_id} not found")

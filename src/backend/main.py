@@ -14,8 +14,10 @@ from backend.agents.base import AgentDeps
 from backend.api.routes import api_router
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import open_checkpointer
+from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
+from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import (
     CsvDatasetLoader,
@@ -32,17 +34,17 @@ from backend.services.rule_engine import SqlRuleEngine
 
 
 def build_deps(settings: Settings) -> AgentDeps:
-    fin = PostgresFinancialDataStore()
+    financial_store = PostgresFinancialDataStore()
     library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
     dataset_dir = settings.DATASET_ROOT / "demo"
     return AgentDeps(
-        fin=fin,
-        outputs=PostgresAuditOutputStore(),
-        evidence=FileEvidenceStore(settings.EVIDENCE_ROOT),
+        financial_store=financial_store,
+        output_store=PostgresAuditOutputStore(),
+        evidence_store=FileEvidenceStore(settings.EVIDENCE_ROOT),
         datasets=CsvDatasetLoader(settings.DATASET_ROOT),
-        engagements=PostgresEngagementStore(),
+        engagement_store=PostgresEngagementStore(),
         llm=make_llm_client(settings),
-        rules=SqlRuleEngine(fin),
+        rules=SqlRuleEngine(financial_store),
         judgments=JudgmentEngine(),
         queue=ReviewQueue(library),
         library=library,
@@ -59,7 +61,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with open_checkpointer(settings) as checkpointer:
         graph = compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), checkpointer)
         app.state.deps = deps
-        app.state.runner = GraphRunner(graph)
+        app.state.runner = GraphRunner(graph, deps)
+        app.state.query = GraphStateQuery(graph, deps, app.state.runner)
+        app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
         yield
 
 

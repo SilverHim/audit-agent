@@ -34,7 +34,9 @@ from tests.fakes import (
     NUMBAT_ABN,
     NUMBAT_ASIC,
     NUMBAT_PROFILE,
+    TYPO_PROFILE,
     FakeEngagementStore,
+    FakeOutputStore,
     FakeRegistry,
     FakeTrail,
     make_deps,
@@ -71,15 +73,15 @@ async def test_walk_through_all_gates_postgres() -> None:
 
 
 def _fake_deps(engagement: Engagement, store: FakeEngagementStore | None = None) -> AgentDeps:
-    """B 的存储与登记 mock 未就绪, 用 tests/fakes.py 的假实现."""
+    """B 的存储与登记 mock 未就绪, 用 tests/fakes.py 的假实现. 审计产出存储预置固定集程序第 1 版, 同 runner.start."""
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
-    return make_deps(registry, FakeTrail(), store or FakeEngagementStore([NUMBAT_PROFILE], [engagement]))
+    output_store = FakeOutputStore()
+    deps = make_deps(registry, FakeTrail(), store or FakeEngagementStore([NUMBAT_PROFILE], [engagement]), output_store)
+    output_store.rows.extend(fixed_procedures(deps.library))
+    return deps
 
 
 Graph = CompiledStateGraph[EngagementState]
-
-# 客户申报的名称写错了: name_match 不通过, 审计师要客户更正
-TYPO_PROFILE = NUMBAT_PROFILE.model_copy(update={"legal_name": "Numbat Electronics Pty Ltd"})
 
 
 async def _run_to_acc01(profile: ClientProfile = NUMBAT_PROFILE) -> tuple[Graph, RunnableConfig, FakeEngagementStore]:
@@ -116,6 +118,7 @@ async def test_p0_runs_acc04_and_stops_at_acc01() -> None:
     assert pack["ACC-04"].status == ProcedureStatus.completed
     assert pack["ACC-04"].version == 2
     assert pack["ACC-01"].status == ProcedureStatus.planned
+    assert values["phase"] is Phase.P0_Acceptance  # 检查点读回的顶层枚举仍是枚举, 不是字符串
 
 
 async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:

@@ -29,11 +29,11 @@ from backend.services.review_queue import ReviewQueue
 class AgentDeps:
     """Agent 的工具箱: 外部依赖由组装根 main.build_deps 一次注入, 测试时可换成假实现."""
 
-    fin: FinancialDataStore  # 财务数据: 试算表, 分录, 发票, 银行流水等
-    outputs: AuditOutputStore  # 审计产出的存储; Agent 只读, 写入经 StatePatch
-    evidence: EvidenceStore  # 证据原件 (PDF) 的存档与读取
+    financial_store: FinancialDataStore  # 财务数据: 试算表, 分录, 发票, 银行流水等
+    output_store: AuditOutputStore  # 审计产出的存储; Agent 只读, 写入经 StatePatch
+    evidence_store: EvidenceStore  # 证据原件 (PDF) 的存档与读取
     datasets: DatasetLoader  # 合成数据集的载入与预置计划数据
-    engagements: EngagementStore  # 项目与客户画像; 只读
+    engagement_store: EngagementStore  # 项目与客户画像; 只读
     llm: LLMClient  # 大语言模型客户端, mock 或真实
     rules: RuleEngine  # 规则引擎: 执行程序 YAML 里的 SQL, 结果包装成例外
     judgments: JudgmentEngine  # 判断引擎: 组装上下文, 调大模型, 校验输出, 算置信度

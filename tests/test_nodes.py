@@ -1,21 +1,33 @@
 """主图节点. 依赖用 tests/fakes.py 的假实现, 节点函数直接调用, 不经图."""
 
+from datetime import timedelta
 from typing import ClassVar
 
 import pytest
 from pydantic import ValidationError
 
 from backend.agents.base import ProcedureAgent, RunContext
-from backend.contracts.models import AgentId, Phase, ProcedureStatus, RunStatus, RunTrigger
+from backend.contracts.models import (
+    AcceptanceScorecard,
+    AgentId,
+    Phase,
+    Procedure,
+    ProcedureStatus,
+    RunStatus,
+    RunTrigger,
+    ScheduleRow,
+)
 from backend.contracts.state import EngagementState, StatePatch, initial_state
-from backend.orchestration.nodes import GraphNodes, next_run, update_procedure
+from backend.orchestration.nodes import GraphNodes, next_run, save_outputs, update_procedure
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_ABN,
     NUMBAT_ASIC,
     NUMBAT_PROFILE,
+    TYPO_PROFILE,
     FakeEngagementStore,
+    FakeOutputStore,
     FakeRegistry,
     FakeTrail,
     make_deps,
@@ -83,14 +95,24 @@ def test_update_procedure_rejects_misspelled_field() -> None:
 # ── 3b execute 与 p0_intel: 注入假登记, 假留痕, 假项目存储, 用真的 ClientIntelAgent ──
 
 
-def make_nodes(engagements: FakeEngagementStore | None = None) -> GraphNodes:
+def p0_pack() -> list[Procedure]:
+    """项目刚启动时的程序包: ACC-04 与 ACC-01 都是 planned 第 1 版."""
+    return [make_procedure("ACC-04"), make_procedure("ACC-01")]
+
+
+def make_nodes(
+    engagement_store: FakeEngagementStore | None = None, output_store: FakeOutputStore | None = None
+) -> GraphNodes:
+    """审计产出存储缺省预置 p0_pack, 同 runner.start 把固定集第 1 版写进 Store."""
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
-    return GraphNodes(make_deps(registry, FakeTrail(), engagements), parallel_cap=2)
+    if output_store is None:
+        output_store = FakeOutputStore(list(p0_pack()))
+    return GraphNodes(make_deps(registry, FakeTrail(), engagement_store, output_store), parallel_cap=2)
 
 
 def p0_state() -> EngagementState:
-    """项目刚启动的状态: 程序包里 ACC-04 与 ACC-01 都是 planned 第 1 版."""
-    return initial_state(ENGAGEMENT, [make_procedure("ACC-04"), make_procedure("ACC-01")], NUMBAT_PROFILE.version)
+    """项目刚启动的状态."""
+    return initial_state(ENGAGEMENT, p0_pack(), NUMBAT_PROFILE.version)
 
 
 class SpyAgent(ProcedureAgent[None]):
@@ -162,3 +184,79 @@ async def test_execute_raises_when_engagement_missing() -> None:
 
     with pytest.raises(LookupError):
         await nodes.execute(p0_state(), "ACC-04")
+
+
+# ── 需求 2 第 1 步: 节点返回前在一个事务里写 Store, 状态用 put 返回的对象 ──
+
+LATER = NOW + timedelta(hours=1)
+
+
+def scorecard(exception_ids: list[str]) -> AcceptanceScorecard:
+    return AcceptanceScorecard(
+        id="SCORECARD", registry_checks=[], exception_ids=exception_ids, client_profile_version=1
+    )
+
+
+async def test_save_outputs_stores_and_keeps_other_values() -> None:
+    store = FakeOutputStore()
+    card = scorecard([])
+    runs = [make_run("ACC-04", 1), make_run("PLN-07", 1)]
+    row = ScheduleRow(layer=0, instance="fw-0-1", procedure_ids=["REV-08"])
+    patch = {
+        "acceptance_scorecard": card,
+        "procedure_runs": runs,
+        "exceptions": [],
+        "phase": Phase.P1_Planning,
+        "client_profile_version": 2,
+        "schedule_table": [row],  # 元素不是 Versioned 的列表不入库
+    }
+
+    result = await save_outputs(store, ENGAGEMENT.id, patch, actor="A2")
+
+    assert result == patch
+    assert store.rows == [card, *runs]
+
+
+async def test_save_outputs_returns_stored_objects_on_replay() -> None:
+    """节点写入 Store 后, 写检查点前中断, 恢复时重跑.
+
+    新生成对象与已存对象 id, version 相同而内容不同, 状态应取已存对象.
+    """
+    stored_card = scorecard(["X-1"])
+    stored_run = make_run().model_copy(update={"status": RunStatus.succeeded, "ended_at": NOW})
+    store = FakeOutputStore([stored_card, stored_run])
+    replayed = {
+        "acceptance_scorecard": scorecard(["X-2"]),
+        "procedure_runs": [stored_run.model_copy(update={"ended_at": LATER})],
+    }
+
+    result = await save_outputs(store, ENGAGEMENT.id, replayed, actor="A2")
+
+    assert result["acceptance_scorecard"].exception_ids == ["X-1"]
+    assert result["procedure_runs"][0].ended_at == NOW
+    assert store.rows == [stored_card, stored_run]  # 没有重复写入
+
+
+async def test_p0_intel_saves_outputs_in_one_transaction() -> None:
+    store = FakeOutputStore(list(p0_pack()))
+    nodes = make_nodes(FakeEngagementStore([TYPO_PROFILE], [ENGAGEMENT]), store)
+
+    await nodes.p0_intel(p0_state())
+
+    assert len(store.commits) == 1  # 评分卡, 例外, 执行记录与程序新版本在同一次提交里
+    assert {(type(o).__name__, o.id, o.version) for o in store.commits[0]} == {
+        ("AcceptanceScorecard", "SCORECARD", 1),
+        ("AuditException", "X-ACC-04-1-name_match-1", 1),
+        ("ProcedureRun", "RUN-ACC-04-1", 1),
+        ("Procedure", "ACC-04", 2),
+    }
+
+
+async def test_p0_intel_replay_uses_stored_run() -> None:
+    """RUN-ACC-04-1 已在 Store 中 (上次执行已提交, 检查点未写入), 状态中的执行记录应取已存对象."""
+    stored_run = make_run().model_copy(update={"status": RunStatus.succeeded, "ended_at": NOW})
+    nodes = make_nodes(output_store=FakeOutputStore([*p0_pack(), stored_run]))
+
+    patch = await nodes.p0_intel(p0_state())
+
+    assert patch["procedure_runs"][0].ended_at == NOW
