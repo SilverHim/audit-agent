@@ -22,6 +22,7 @@ from backend.contracts.models import (
     ClientProfile,
     Decision,
     Engagement,
+    ExceptionDisposition,
     GateDecision,
     GateEdit,
     GateId,
@@ -29,6 +30,7 @@ from backend.contracts.models import (
     Judgment,
     MaterialityCandidates,
     MaterialityChoice,
+    Misstatement,
     Phase,
     Procedure,
     ProcedureRun,
@@ -281,6 +283,42 @@ def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> lis
     return [confirmed, *attribute_exceptions(confirmed, exceptions)]
 
 
+def misstatement_effects(record: ReviewRecord, target: Versioned, exceptions: list[AuditException]) -> list[Versioned]:
+    """misstatement 的效果 (第 7 节): 按决定的错报草稿建 Misstatement M-{决定 ID}, 来源二选一.
+
+    target 为判断 (normal 任务): 判断置 confirmed 并归因其例外 (同 confirm), 错报记 judgment_id.
+    target 为例外 (unattributed 任务): 例外出新版本置 attributed, attributed_by 为空 (没有解释它的判断),
+    错报记 exception_id. exceptions: target 为判断时其 exception_ids 所指例外的当前版本. 纯函数.
+    """
+    draft = record.misstatement_draft
+    assert draft is not None  # 校验时已查必填
+    if isinstance(target, Judgment):
+        effects = confirm_effects(target, exceptions)
+        source: dict[str, str | None] = {"judgment_id": target.id, "exception_id": None}
+    else:
+        assert isinstance(target, AuditException)  # unattributed 任务的目标是例外
+        effects = [
+            target.model_copy(update={"version": target.version + 1, "disposition": ExceptionDisposition.attributed})
+        ]
+        source = {"judgment_id": None, "exception_id": target.id}
+    misstatement = Misstatement(id=f"M-{record.id}", review_record_id=record.id, **source, **draft.model_dump())
+    return [*effects, misstatement]
+
+
+def review_effects(record: ReviewRecord, target: Versioned, exceptions: list[AuditException]) -> list[Versioned]:
+    """复核决定的效果 (第 7 节决定的效果表, 不含任务 decided 与程序重算). 纯函数.
+
+    target: 任务目标的当前版本 (判断, 例外或执行记录); exceptions: target 为判断时其解释的例外的当前版本.
+    已实现 confirm, misstatement.
+    """
+    if record.decision is Decision.confirm:
+        assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
+        return confirm_effects(target, exceptions)
+    if record.decision is Decision.misstatement:
+        return misstatement_effects(record, target, exceptions)
+    raise NotImplementedError(f"复核决定 {record.decision} 的效果尚未实现")
+
+
 def recompute_procedure(procedure: Procedure, pending: list[ReviewTask], decision: Decision) -> Procedure | None:
     """复核决定写入后目标程序的新版本 (第 7 节): rerun 时为 executing; 否则仍有待决任务为 awaiting_human,
     没有为 completed. 程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序
@@ -498,16 +536,15 @@ class GraphDecisionSubmit:
         效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
         (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回 (await_events, 第 7 节恢复机制).
-        已实现 confirm.
         """
         store = self.deps.output_store
-        if record.decision is Decision.confirm:
-            judgment = await store.get(eid, Judgment, task.target_id)
-            assert judgment is not None  # 校验时已按任务目标取到
-            exceptions = [await store.get(eid, AuditException, x) for x in judgment.exception_ids]
-            effects = confirm_effects(judgment, [x for x in exceptions if x is not None])
-        else:
-            raise NotImplementedError(f"复核决定 {record.decision} 的效果尚未实现")
+        target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
+        assert target is not None  # 校验时已按任务目标取到
+        exceptions: list[AuditException] = []
+        if isinstance(target, Judgment):
+            found = [await store.get(eid, AuditException, x) for x in target.exception_ids]
+            exceptions = [x for x in found if x is not None]
+        effects = review_effects(record, target, exceptions)
         decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库

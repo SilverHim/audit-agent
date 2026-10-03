@@ -17,6 +17,7 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     AsicCompanyRecord,
+    Assertion,
     AuditException,
     AuditObjective,
     AutonomyLevel,
@@ -24,6 +25,7 @@ from backend.contracts.models import (
     Confirmation,
     ConfirmationResult,
     Decision,
+    Direction,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -32,6 +34,8 @@ from backend.contracts.models import (
     Judgment,
     MaterialityCandidate,
     MaterialityCandidates,
+    MisstatementDraft,
+    MisstatementType,
     Phase,
     Procedure,
     ProcedureRun,
@@ -909,6 +913,71 @@ def numbat_cash_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
         }
 
     return {"DOC-06": ScriptA3(deps, doc06), "CSH-02": ScriptA6(deps, csh02)}
+
+
+NUMBAT_CUTOFF_DRAFT = MisstatementDraft(  # 合成数据集设计第 7 节第 9 行: SI-2026-0612 收入高估
+    type=MisstatementType.factual,
+    account="Revenue",
+    assertion=Assertion.Cutoff,
+    amount_cents=14200000,
+    direction=Direction.overstated,
+)
+
+
+def numbat_rev02_agents(deps: AgentDeps, attributes: bool = True) -> dict[str, ProcedureAgent[Any]]:
+    """REV-02 收入截止判断的脚本 Agent, 产出按合成数据集设计第 7 节第 9 行. 真实 Agent 由 M3 实现.
+
+    SI-2026-0612: 控制权 2026-07-03 转移, 属下期, 建议认定错报 (NUMBAT_CUTOFF_DRAFT), 解释 REV-08 的跨期例外;
+    SI-2026-0618: 2026-06-30 签收, 期间正确, accept. 各一条 normal 任务.
+    attributes 为假时模拟未能解释该例外: SI-2026-0612 不出判断, 改建以例外为目标的 unattributed 任务.
+    """
+
+    def rev02(ctx: RunContext) -> StatePatch:
+        run = finished(ctx.run)
+        cutoff = next(x for x in ctx.state["exceptions"] if x.procedure_id == "REV-08" and x.rule_id == "R01")
+        invoice = EvidencePointer(type="invoice", source_type="sales_invoice", source_id="SI-2026-0612", locator="date")
+
+        def judgment(subject: str, conclusion: str, **fields: Any) -> Judgment:
+            return Judgment(
+                id=f"J-REV-02-{run.run_no}-{subject}",
+                procedure_id="REV-02",
+                run_id=run.id,
+                subject_id=subject,
+                conclusion=conclusion,
+                confidence=0.9,
+                confidence_parts={"evidence": 0.9, "rule": 1.0, "llm": 0.85},
+                reasoning_chain=[ReasoningStep(kind=StepKind.fact, text="发运单签收日期", evidence=[invoice])],
+                evidence=[invoice],
+                counter_argument="签收单日期可能晚于实际交付",
+                autonomy_level=ctx.procedure.autonomy_level,
+                performed_by=ctx.engagement.owner_id,
+                created_at=NOW,
+                **fields,
+            )
+
+        judgments = [judgment("SI-2026-0618", "2026-06-30 签收, 期间正确", proposed_action=ProposedAction.accept)]
+        tasks = []
+        if attributes:
+            judgments.insert(
+                0,
+                judgment(
+                    "SI-2026-0612",
+                    "控制权 2026-07-03 转移, 属下期, 本期收入高估",
+                    proposed_action=ProposedAction.misstatement,
+                    misstatement_draft=NUMBAT_CUTOFF_DRAFT,
+                    exception_ids=[cutoff.id],
+                ),
+            )
+        else:
+            tasks.append(
+                deps.queue.make_task(
+                    TaskKind.unattributed, cutoff, "REV-02", run.id, now=NOW, subject_id="SI-2026-0612"
+                )
+            )
+        tasks = [*(deps.queue.make_task(TaskKind.normal, j, "REV-02", run.id, now=NOW) for j in judgments), *tasks]
+        return {"procedure_runs": [run], "judgments": judgments, "review_tasks": tasks}
+
+    return {"REV-02": ScriptA6(deps, rev02)}
 
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:

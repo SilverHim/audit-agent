@@ -17,6 +17,7 @@ from backend.contracts.models import (
     GateVerdict,
     Judgment,
     ManualResult,
+    Misstatement,
     MisstatementDraft,
     MisstatementType,
     Procedure,
@@ -35,6 +36,7 @@ from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_CUTOFF_DRAFT,
     NUMBAT_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
@@ -47,6 +49,7 @@ from tests.fakes import (
     make_runner,
     numbat_cash_agents,
     numbat_p2_agents,
+    numbat_rev02_agents,
     preset_rerun,
     wait_idle,
 )
@@ -550,3 +553,126 @@ def test_recompute_procedure(
         assert updated is None
     else:
         assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)
+
+
+# ── R19 misstatement 决定 ──
+
+CUTOFF = "X-REV-08-1-R01-1"  # REV-08 的跨期例外: SI-2026-0612 期末前入账, 期后签收
+
+
+async def waiting_on_cutoff(attributes: bool = True) -> Started:
+    """收入线复核完 REV-03 (三个 confirm) 后 REV-02 执行, 停在 await_events 等 REV-02 的两个任务.
+    attributes 为假时 REV-02 没解释跨期例外, 其任务为以例外为目标的 unattributed 任务 (见 numbat_rev02_agents)."""
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+    runner, store = make_runner(
+        engagement_store=engagement_store,
+        agents=lambda deps: {**p2_agents(deps), **numbat_p2_agents(deps), **numbat_rev02_agents(deps, attributes)},
+    )
+    s = Started(runner, store, engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+    await wait_idle(runner, EID)
+    for n in (1, 2, 3):
+        await s.submit.submit(EID, record(f"T-J-REV-03-1-CON-00{n}-v1", id=f"D-{n}"))
+        await wait_idle(runner, EID)
+    assert await s.next_nodes() == ("await_events",)
+    assert {t.procedure_id for t in await store.latest(EID, ReviewTask, status=TaskStatus.pending)} == {"REV-02"}
+    return s
+
+
+async def test_misstatement_on_judgment() -> None:
+    """R19 验收 1, 3: 对 SI-2026-0612 的判断认定错报: 同一提交建 M-{决定 ID} (来源为判断), 判断 v2 confirmed,
+    跨期例外出新版本 attributed (由该判断解释); REV-02 另有待决任务, 不出新版本. 恢复后状态含该错报."""
+    s = await waiting_on_cutoff()
+    before = len(s.output_store.commits)
+    decision = record(
+        "T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT
+    )
+
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    [misstatement] = [o for o in commit if isinstance(o, Misstatement)]
+    assert misstatement == Misstatement(
+        id="M-D-M",
+        judgment_id="J-REV-02-1-SI-2026-0612",
+        exception_id=None,
+        review_record_id="D-M",
+        **NUMBAT_CUTOFF_DRAFT.model_dump(),
+    )
+    assert misstatement.status == "uncorrected"
+    [judgment] = [o for o in commit if isinstance(o, Judgment)]
+    assert (judgment.version, judgment.review_status) == (2, ReviewStatus.confirmed)
+    [exception] = [o for o in commit if isinstance(o, AuditException)]
+    assert (exception.id, exception.disposition, exception.attributed_by) == (
+        CUTOFF,
+        ExceptionDisposition.attributed,
+        "J-REV-02-1-SI-2026-0612",
+    )
+    assert not [o for o in commit if isinstance(o, Procedure)]
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert snapshot.values["misstatements"] == [misstatement]
+    assert snapshot.next == ("await_events",)
+
+
+async def test_misstatement_takes_reviewer_draft() -> None:
+    """审计师改了草稿 (金额与类型) 再认定: 错报取决定里的草稿, 不取判断里 AI 给的; 提交与恢复后都是."""
+    s = await waiting_on_cutoff()
+    revised = NUMBAT_CUTOFF_DRAFT.model_copy(update={"type": MisstatementType.judgmental, "amount_cents": 13000000})
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(
+        EID, record("T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=revised)
+    )
+    await wait_idle(s.runner, EID)
+
+    [misstatement] = [o for o in s.output_store.commits[before] if isinstance(o, Misstatement)]
+    assert (misstatement.type, misstatement.amount_cents) == (MisstatementType.judgmental, 13000000)
+    assert (await s.runner.app.aget_state(CONFIG)).values["misstatements"] == [misstatement]
+
+
+async def test_misstatement_on_unattributed_exception() -> None:
+    """R19 验收 2: REV-02 没解释跨期例外, 对以例外为目标的 unattributed 任务认定错报: 错报来源为该例外 (judgment_id 空);
+    例外出新版本 attributed, attributed_by 为空 (没有解释它的判断)."""
+    s = await waiting_on_cutoff(attributes=False)
+    before = len(s.output_store.commits)
+    decision = record(f"T-{CUTOFF}-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT)
+
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    [misstatement] = [o for o in commit if isinstance(o, Misstatement)]
+    assert (misstatement.judgment_id, misstatement.exception_id) == (None, CUTOFF)
+    [exception] = [o for o in commit if isinstance(o, AuditException)]
+    assert (exception.version, exception.disposition, exception.attributed_by) == (
+        2,
+        ExceptionDisposition.attributed,
+        None,
+    )
+    assert not [o for o in commit if isinstance(o, Judgment)]
+
+
+async def test_program_completes_after_last_cutoff_decision() -> None:
+    """R19 验收 3: 认定错报后再确认 SI-2026-0618: REV-02 无待决任务, 同一提交出 completed; 错报留在状态中,
+    P2 全部完成, 停在 FIN-01 闸门前."""
+    s = await waiting_on_cutoff()
+    await s.submit.submit(
+        EID,
+        record("T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT),
+    )
+    await wait_idle(s.runner, EID)
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, record("T-J-REV-02-1-SI-2026-0618-v1", id="D-OK"))
+    await wait_idle(s.runner, EID)
+
+    [rev02] = [o for o in s.output_store.commits[before] if isinstance(o, Procedure)]
+    assert (rev02.id, rev02.status) == ("REV-02", ProcedureStatus.completed)
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert [m.id for m in snapshot.values["misstatements"]] == ["M-D-M"]
+    assert snapshot.next == ("gate_fin",)
