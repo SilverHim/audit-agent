@@ -508,7 +508,7 @@ async def test_failure_writes_failed_run_task_and_waits(script: Any, reason: str
     result = await app.ainvoke(p0_state(), config)
 
     assert [i.value for i in result["__interrupt__"]] == [
-        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-1"}
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-1", "records": []}
     ]
     assert len(store.commits) == 1
     run, task, procedure = store.commits[0]

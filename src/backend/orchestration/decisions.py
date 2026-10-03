@@ -1,6 +1,7 @@
 """DecisionSubmit (A 负责): 审计师决定的唯一写入口. 取锁 → 校验 → 一个事务内写入决定及其效果 → 越过闸门 → 后台继续.
 
-校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 与 PLN-01/03 闸门决定.
+校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 与 PLN-01/03 闸门决定,
+以及复核决定的校验.
 """
 
 from collections.abc import AsyncIterator
@@ -16,21 +17,28 @@ from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
+    AuditException,
     AuditObjective,
     ClientProfile,
+    Decision,
     Engagement,
     GateDecision,
     GateEdit,
     GateId,
     GateVerdict,
+    Judgment,
     MaterialityCandidates,
     MaterialityChoice,
     Phase,
     Procedure,
+    ProcedureRun,
     ProcedureStatus,
     ReviewRecord,
+    ReviewTask,
     RiskItem,
     RiskLevel,
+    TargetType,
+    TaskStatus,
     TrailEntry,
     TrailKind,
     Versioned,
@@ -229,6 +237,46 @@ def check_edits(edits: list[GateEdit], risks: dict[str, RiskItem]) -> None:
         raise DecisionRejected("INVALID_VALUE", f"同一风险项改了多次: {', '.join(repeated)}")
 
 
+# 复核决定的必填字段与只允许在此填的字段 (第 7 节必填表); reason 是通用字段, confirm 也可以填
+REVIEW_REQUIRED: dict[Decision, list[str]] = {
+    Decision.confirm: [],
+    Decision.override: ["reason", "override_conclusion"],
+    Decision.misstatement: ["reason", "misstatement_draft"],
+    Decision.rerun: ["reason"],
+    Decision.manual_result: ["reason", "manual_result"],
+}
+REVIEW_SPECIFIC = ("override_conclusion", "misstatement_draft", "rerun_params", "manual_result")
+REVIEW_ALLOWED: dict[Decision, set[str]] = {
+    Decision.confirm: set(),
+    Decision.override: {"override_conclusion"},
+    Decision.misstatement: {"misstatement_draft"},
+    Decision.rerun: {"rerun_params"},
+    Decision.manual_result: {"manual_result"},
+}
+TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类型 -> 在 Store 中的对象类型
+    TargetType.Judgment: Judgment,
+    TargetType.AuditException: AuditException,
+    TargetType.ProcedureRun: ProcedureRun,
+}
+
+
+def check_review_fields(record: ReviewRecord) -> None:
+    """复核决定的字段校验: 必填的缺了报 MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空值都视为未填."""
+    missing = [name for name in REVIEW_REQUIRED[record.decision] if not getattr(record, name)]
+    if missing:
+        raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
+    filled = [name for name in REVIEW_SPECIFIC if getattr(record, name) and name not in REVIEW_ALLOWED[record.decision]]
+    if filled:
+        raise DecisionRejected("FIELD_NOT_ALLOWED", ", ".join(filled))
+
+
+def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
+    """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
+    {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
+    看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
+    return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
+
+
 class GraphDecisionSubmit:
     """DecisionSubmit 的实现: 审计师所有决定的唯一写入口.
 
@@ -247,16 +295,22 @@ class GraphDecisionSubmit:
             raise LookupError(f"Engagement {eid} not found")
         return engagement
 
-    async def _check_resume_required(self, engagement: Engagement, values: dict[str, Any]) -> None:
+    async def _check_resume_required(self, engagement: Engagement, snapshot: StateSnapshot) -> None:
         """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断), 须先 resume 补做, 不接受新的决定.
 
         两种情况: Store 中有检查点里没有的决定; 项目采用的画像版本 (Engagement.client_profile_version) 高于检查点的.
         比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须 resume.
+        节点内等待时, 本节点已读回的决定在节点返回前不进状态, 列在等待载荷的 records 中 (如 ACC-04 重跑后又失败,
+        第一个 rerun 决定已用过), 也算检查点里有.
         """
         eid = engagement.id
+        values = snapshot.values
         stored = {d.id for d in await self.deps.output_store.latest(eid, GateDecision)}
         stored |= {r.id for r in await self.deps.output_store.latest(eid, ReviewRecord)}
         in_state = {d.id for d in values.get("gate_decisions", [])} | {r.id for r in values.get("review_records", [])}
+        for waiting in waiting_payloads(snapshot):
+            if isinstance(waiting, dict):
+                in_state.update(waiting.get("records", []))
         missing = stored - in_state
         if missing:
             raise DecisionRejected("RESUME_REQUIRED", ", ".join(sorted(missing)))
@@ -284,7 +338,7 @@ class GraphDecisionSubmit:
             if engagement.locked:
                 raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
             snapshot = await self.app.aget_state(GraphRunner.config(eid))
-            await self._check_resume_required(engagement, snapshot.values)
+            await self._check_resume_required(engagement, snapshot)
             yield engagement, snapshot
         except VersionConflict as e:
             self.runner.release(eid)
@@ -293,6 +347,15 @@ class GraphDecisionSubmit:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
             raise
         self.runner.launch(eid, None)
+
+    async def _check_decision_id(self, eid: str, decision_id: str) -> None:
+        """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定与复核决定共用一张 decisions 表 (第 9 节), 两类都查.
+
+        同一 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算.
+        """
+        store = self.deps.output_store
+        if await store.get(eid, GateDecision, decision_id) or await store.get(eid, ReviewRecord, decision_id):
+            raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
 
     async def gate_target(self, eid: str, gate: GateId) -> Versioned | None:
         """闸门呈报材料在 Store 中的当前版本, 决定须绑定它 (与 GraphStateQuery.gate 的 target 一致); 没有返回 None."""
@@ -323,15 +386,59 @@ class GraphDecisionSubmit:
         if decision.materiality is not None and isinstance(target, MaterialityCandidates):
             check_materiality(target, decision.materiality)
         check_edits(decision.edits, risks)
-        # 同一决定 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算: 一律拒绝
-        if await store.get(eid, GateDecision, decision.id) is not None:
-            raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision.id} 已用过")
+        await self._check_decision_id(eid, decision.id)
         return target
+
+    async def check_review_record(self, eid: str, record: ReviewRecord, snapshot: StateSnapshot) -> ReviewTask:
+        """第 7 节校验顺序中 RESUME_REQUIRED 之后的部分, 对复核决定: 任务存在且待决, 图在节点内等待, 版本,
+        允许的决定, 字段, 取值. 任务与目标对象读 Store 的最新版本. 返回所处理的任务. 不过抛 DecisionRejected.
+        """
+        store = self.deps.output_store
+        task = await store.get(eid, ReviewTask, record.task_id)
+        if task is None:
+            raise DecisionRejected("TASK_NOT_FOUND", record.task_id)
+        if task.status is not TaskStatus.pending:
+            raise DecisionRejected("TASK_NOT_PENDING", f"{task.id} 已决定")
+        waits = waiting_payloads(snapshot)
+        if not waits:
+            raise DecisionRejected("NOT_AWAITING_REVIEW", "当前不在等复核")
+        # 等待中的节点上次恢复时出错 (如收到不在 Store 中的决定 ID): 它此后每次恢复都取回旧值再出错, 新决定送不到它,
+        # 写进 Store 只会成为"须先恢复"的决定. 按检查点判断 (任务带 error), 重启后照样成立
+        broken = [task for task in snapshot.tasks if task.interrupts and task.error]
+        if broken:
+            raise DecisionRejected(
+                "NOT_AWAITING_REVIEW",
+                f"等待中的节点 {broken[0].name} 上次恢复时出错, 须先按错误信息恢复: {broken[0].error}",
+            )
+        # P2 以外程序失败后的等待只处理该程序的任务; 别的程序的决定送进去, 节点读回时会报错停下
+        if not any(not isinstance(w, dict) or w.get("procedure_id") in (None, task.procedure_id) for w in waits):
+            raise DecisionRejected("NOT_AWAITING_REVIEW", f"当前不在等 {task.procedure_id} 的决定")
+        # 决定须绑定任务记的目标版本, 且目标此后没有出新版本 (审计师看材料期间可能被别的决定改过)
+        target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
+        if record.target_version != task.target_version or target is None or target.version != task.target_version:
+            current = target.version if target is not None else None
+            raise DecisionRejected(
+                "VERSION_MISMATCH",
+                f"{task.target_id} 当前为第 {current} 版, 任务与决定绑定的是第 {record.target_version} 版",
+            )
+        if record.decision not in self.deps.queue.allowed(task):
+            raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
+        check_review_fields(record)
+        # rerun_params 只能改模板已有的参数: build_run 把它叠加到解析结果上, 不查键名, 拼错的键会悄悄无效
+        params = self.deps.library.load(task.procedure_id).params
+        unknown = sorted(set(record.rerun_params or {}) - set(params))
+        if unknown:
+            raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有参数 {', '.join(unknown)}")
+        await self._check_decision_id(eid, record.id)
+        return task
 
     async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
         """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
         if isinstance(decision, ReviewRecord):
-            raise NotImplementedError("复核决定随 P2 实现")
+            async with self._deciding(eid) as (_, snapshot):
+                await self.check_review_record(eid, decision, snapshot)
+                raise NotImplementedError("复核决定已通过校验, 写入与效果尚未实现")
+            return
         async with self._deciding(eid) as (_, snapshot):
             if current_gate(snapshot.next) is not decision.gate:
                 raise DecisionRejected("NOT_AT_GATE", f"当前不在 {decision.gate} 闸门")

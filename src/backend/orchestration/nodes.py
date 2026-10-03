@@ -426,8 +426,15 @@ class GraphNodes:
 
             run_id = patch["procedure_runs"][0].id
             # 节点在此暂停, 返回值不进状态, 失败执行与任务只在 Store 中; 总览按检查点里的中断显示"等复核".
-            # 恢复时节点从头执行, 走到这里时 interrupt() 返回审计师决定的 ID
-            record_id = interrupt({"awaiting": "human", "procedure_id": procedure_id, "run_id": run_id})
+            # 恢复时节点从头执行, 走到这里时 interrupt() 返回审计师决定的 ID.
+            # records 列出已读回的决定: 本次调用读回的, 加上传入状态里的 (同一图节点先执行的程序读回的, 如 p1_analytics
+            # 中 PLN-07 重跑用过的决定, 已在传给 PLN-01 的状态里). 它们在图节点返回前不进检查点,
+            # DecisionSubmit 据此判断它们不是"须先恢复"的; 列出检查点里已有的也无妨
+            read = [*state["review_records"], *result.get("review_records", [])]
+            applied = list(dict.fromkeys(r.id for r in read))
+            record_id = interrupt(
+                {"awaiting": "human", "procedure_id": procedure_id, "run_id": run_id, "records": applied}
+            )
             record, procedure = await self.read_rerun(engagement.id, record_id, failed, waiting)
             # 被决定的任务已在 result 中: 节点能越过 interrupt() 时一定是在重放, 取回的是任务的最新版本 (decided)
             del failed[record.task_id]
