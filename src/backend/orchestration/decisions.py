@@ -19,9 +19,11 @@ from backend.contracts.models import (
     AgentId,
     AuditException,
     AuditObjective,
+    AutonomyLevel,
     ClientProfile,
     Decision,
     Engagement,
+    EvidencePointer,
     ExceptionDisposition,
     GateDecision,
     GateEdit,
@@ -35,6 +37,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProposedAction,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
@@ -305,17 +308,131 @@ def misstatement_effects(record: ReviewRecord, target: Versioned, exceptions: li
     return [*effects, misstatement]
 
 
-def review_effects(record: ReviewRecord, target: Versioned, exceptions: list[AuditException]) -> list[Versioned]:
+def human_judgment_id(task: ReviewTask, subject_id: str, taken: set[str]) -> str:
+    """人工建的判断的 ID (第 0 节): J-{procedure_id}-{run_no}-{subject_id}-H{n}, run_no 取任务 run_id 的编号,
+    n 取 taken (检查点状态中已有的判断 ID) 中未用的最小号. 同一判断对象已有 -H1 时取 -H2; 按同一状态重算得同一 ID.
+    例: 任务 run_id RUN-REV-02-1, subject_id SI-2026-0618 → J-REV-02-1-SI-2026-0618-H1.
+    """
+    run_no = task.run_id.rsplit("-", 1)[1]
+    base = f"J-{task.procedure_id}-{run_no}-{subject_id}"
+    n = 1
+    while f"{base}-H{n}" in taken:
+        n += 1
+    return f"{base}-H{n}"
+
+
+def human_judgment(
+    record: ReviewRecord,
+    task: ReviewTask,
+    judgment_id: str,
+    *,
+    subject_id: str,
+    conclusion: str,
+    evidence: list[EvidencePointer],
+    exception_ids: list[str],
+) -> Judgment:
+    """override 与 manual_result 建的人工判断, 置 confirmed. 只填人给的 (结论, 证据, 解释的例外); 其余取固定值:
+    置信度 1.0, 推理链, 分项与反方论证为空, 建议 accept, 自主度 L1, 执行人为复核人, 时间为决定时间."""
+    return Judgment(
+        id=judgment_id,
+        procedure_id=task.procedure_id,
+        run_id=task.run_id,
+        subject_id=subject_id,
+        conclusion=conclusion,
+        confidence=1.0,
+        confidence_parts={},
+        reasoning_chain=[],
+        evidence=evidence,
+        counter_argument="",
+        proposed_action=ProposedAction.accept,
+        exception_ids=exception_ids,
+        autonomy_level=AutonomyLevel.L1,
+        review_status=ReviewStatus.confirmed,
+        performed_by=record.reviewed_by,
+        created_at=record.decided_at,
+    )
+
+
+def override_effects(
+    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+) -> list[Versioned]:
+    """override 的效果 (第 7 节). 按 override_conclusion 建人工判断 -H{n}, 置 confirmed 并归因其例外.
+
+    target 为判断 (normal 任务): 人工判断沿用原判断的判断对象, 证据与 exception_ids; 原判断出新版本置 overridden,
+    superseded_by 记人工判断. target 为例外 (unattributed 任务): 判断对象取任务的 subject_id, 证据取例外的,
+    exception_ids 为该例外. exceptions: target 为判断时其解释的例外的当前版本. 纯函数.
+    """
+    conclusion = record.override_conclusion
+    assert conclusion is not None  # 校验时已查必填
+    if isinstance(target, Judgment):
+        jid = human_judgment_id(task, target.subject_id, taken)
+        human = human_judgment(
+            record,
+            task,
+            jid,
+            subject_id=target.subject_id,
+            conclusion=conclusion,
+            evidence=target.evidence,
+            exception_ids=target.exception_ids,
+        )
+        overridden = target.model_copy(
+            update={"version": target.version + 1, "review_status": ReviewStatus.overridden, "superseded_by": jid}
+        )
+        return [overridden, human, *attribute_exceptions(human, exceptions)]
+    assert isinstance(target, AuditException) and task.subject_id is not None  # unattributed 任务带判断对象
+    jid = human_judgment_id(task, task.subject_id, taken)
+    human = human_judgment(
+        record,
+        task,
+        jid,
+        subject_id=task.subject_id,
+        conclusion=conclusion,
+        evidence=target.evidence,
+        exception_ids=[target.id],
+    )
+    return [human, *attribute_exceptions(human, [target])]
+
+
+def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str]) -> list[Versioned]:
+    """manual_result 的效果 (第 7 节): 失败任务的判断对象由人给出结论与证据, 建人工判断 -H{n}, 置 confirmed. 纯函数."""
+    result = record.manual_result
+    assert result is not None and task.subject_id is not None  # 校验: 必填; allowed 只对带 subject_id 的任务开放
+    jid = human_judgment_id(task, task.subject_id, taken)
+    return [
+        human_judgment(
+            record,
+            task,
+            jid,
+            subject_id=task.subject_id,
+            conclusion=result.conclusion,
+            evidence=result.evidence,
+            exception_ids=[],
+        )
+    ]
+
+
+def review_effects(
+    record: ReviewRecord,
+    task: ReviewTask,
+    target: Versioned,
+    exceptions: list[AuditException],
+    taken: set[str],
+) -> list[Versioned]:
     """复核决定的效果 (第 7 节决定的效果表, 不含任务 decided 与程序重算). 纯函数.
 
-    target: 任务目标的当前版本 (判断, 例外或执行记录); exceptions: target 为判断时其解释的例外的当前版本.
-    已实现 confirm, misstatement.
+    task: 决定处理的任务; target: 任务目标的当前版本 (判断, 例外或执行记录);
+    exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号.
+    已实现 confirm, misstatement, override, manual_result.
     """
     if record.decision is Decision.confirm:
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
         return confirm_effects(target, exceptions)
     if record.decision is Decision.misstatement:
         return misstatement_effects(record, target, exceptions)
+    if record.decision is Decision.override:
+        return override_effects(record, task, target, exceptions, taken)
+    if record.decision is Decision.manual_result:
+        return manual_result_effects(record, task, taken)
     raise NotImplementedError(f"复核决定 {record.decision} 的效果尚未实现")
 
 
@@ -505,7 +622,7 @@ class GraphDecisionSubmit:
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task = await self.check_review_record(eid, decision, snapshot)
-                await self._apply_review(eid, decision, task)
+                await self._apply_review(eid, decision, task, snapshot)
             return
         async with self._deciding(eid) as (_, snapshot):
             if current_gate(snapshot.next) is not decision.gate:
@@ -530,12 +647,13 @@ class GraphDecisionSubmit:
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由 gate_route 按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=GATE_NODES[decision.gate])
 
-    async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask) -> None:
+    async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
 
         效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
         (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回 (await_events, 第 7 节恢复机制).
+        snapshot: 当前检查点, 人工判断按其中已有的判断取号 (-H{n}).
         """
         store = self.deps.output_store
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
@@ -544,7 +662,8 @@ class GraphDecisionSubmit:
         if isinstance(target, Judgment):
             found = [await store.get(eid, AuditException, x) for x in target.exception_ids]
             exceptions = [x for x in found if x is not None]
-        effects = review_effects(record, target, exceptions)
+        taken = {j.id for j in snapshot.values.get("judgments", [])}
+        effects = review_effects(record, task, target, exceptions, taken)
         decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库

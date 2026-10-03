@@ -1,7 +1,8 @@
 """复核决定. R17 校验: submit 收到 ReviewRecord 时按接口文档第 7 节的顺序校验, 不过抛对应错误码, 不写数据, 释放项目锁.
 R18 写入与 confirm: 一个事务写决定, 效果, 任务 decided 与程序新版本, 提交后写留痕, 后台以决定 ID 恢复."""
 
-from typing import Any
+from datetime import timedelta
+from typing import Any, cast
 
 import pytest
 from langgraph.types import Command
@@ -10,8 +11,10 @@ from backend.contracts.errors import DecisionRejected, RuleError, VersionConflic
 from backend.contracts.models import (
     Assertion,
     AuditException,
+    AutonomyLevel,
     Decision,
     Direction,
+    EvidencePointer,
     ExceptionDisposition,
     GateDecision,
     GateVerdict,
@@ -23,6 +26,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProposedAction,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
@@ -30,7 +34,7 @@ from backend.contracts.models import (
     TaskStatus,
     TrailKind,
 )
-from backend.orchestration.decisions import recompute_procedure
+from backend.orchestration.decisions import human_judgment_id, recompute_procedure
 from backend.orchestration.runner import GraphRunner
 from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
@@ -43,6 +47,7 @@ from tests.fakes import (
     FakeTrail,
     ScriptA4,
     ScriptA6,
+    ScriptAgent,
     assert_pack_synced,
     finished,
     make_procedure,
@@ -676,3 +681,170 @@ async def test_program_completes_after_last_cutoff_decision() -> None:
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert [m.id for m in snapshot.values["misstatements"]] == ["M-D-M"]
     assert snapshot.next == ("gate_fin",)
+
+
+# ── R20 override 与 manual_result 决定 ──
+
+
+async def test_override_judgment_creates_human_judgment() -> None:
+    """R20 验收 1, 5: 推翻 SI-2026-0612 的判断 (它解释跨期例外): 同一提交里原判断 v2 overridden,
+    superseded_by 记人工判断; 人工判断 J-REV-02-1-SI-2026-0612-H1 v1 confirmed, 沿用原判断的执行记录, 判断对象,
+    证据与 exception_ids, 其余只填人给的; 例外改由人工判断归因; 任务 decided, 留痕 1 行;
+    REV-02 另有待决任务, 不出新版本."""
+    s = await waiting_on_cutoff()
+    original = await s.output_store.get(EID, Judgment, "J-REV-02-1-SI-2026-0612")
+    assert original is not None
+    trail_before = len(decisions_in_trail(s))
+    before = len(s.output_store.commits)
+    decided_at = NOW + timedelta(days=1)  # 与原判断的生成时间不同: 人工判断的时间取决定时间
+    decision = record(
+        "T-J-REV-02-1-SI-2026-0612-v1",
+        Decision.override,
+        id="D-O",
+        override_conclusion="控制权在验收时转移, 属本期",
+        decided_at=decided_at,
+    )
+
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    judgments = {o.id: o for o in commit if isinstance(o, Judgment)}
+    hid = "J-REV-02-1-SI-2026-0612-H1"
+    old = judgments[original.id]
+    assert (old.version, old.review_status, old.superseded_by) == (2, ReviewStatus.overridden, hid)
+    assert judgments[hid] == Judgment(
+        id=hid,
+        procedure_id="REV-02",
+        run_id="RUN-REV-02-1",
+        subject_id="SI-2026-0612",
+        conclusion="控制权在验收时转移, 属本期",
+        confidence=1.0,
+        confidence_parts={},
+        reasoning_chain=[],
+        evidence=original.evidence,
+        counter_argument="",
+        proposed_action=ProposedAction.accept,
+        exception_ids=[CUTOFF],
+        autonomy_level=AutonomyLevel.L1,
+        review_status=ReviewStatus.confirmed,
+        performed_by="U-1",
+        created_at=decided_at,
+    )
+    [exception] = [o for o in commit if isinstance(o, AuditException)]
+    assert (exception.id, exception.attributed_by) == (CUTOFF, hid)
+    [task] = [o for o in commit if isinstance(o, ReviewTask)]
+    assert task.status is TaskStatus.decided
+    assert not [o for o in commit if isinstance(o, Procedure)]
+    [entry] = decisions_in_trail(s)[trail_before:]
+    assert (entry.procedure_id, entry.idempotency_key) == ("REV-02", "D-O")
+    assert hid in {j.id for j in (await s.runner.app.aget_state(CONFIG)).values["judgments"]}
+
+
+async def test_override_unattributed_exception() -> None:
+    """R20 验收 2: 推翻以例外为目标的 unattributed 任务: 按任务的执行记录与判断对象建 J-REV-02-1-SI-2026-0612-H1,
+    exception_ids 为该例外, 证据取例外的, confirmed; 例外改由它归因."""
+    s = await waiting_on_cutoff(attributes=False)
+    exception = await s.output_store.get(EID, AuditException, CUTOFF)
+    assert exception is not None
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(
+        EID, record(f"T-{CUTOFF}-v1", Decision.override, id="D-O", override_conclusion="跨期发票, 已与客户确认")
+    )
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    [human] = [o for o in commit if isinstance(o, Judgment)]
+    assert (human.id, human.run_id, human.subject_id, human.exception_ids, human.evidence) == (
+        "J-REV-02-1-SI-2026-0612-H1",
+        "RUN-REV-02-1",
+        "SI-2026-0612",
+        [CUTOFF],
+        exception.evidence,
+    )
+    assert human.review_status is ReviewStatus.confirmed
+    [attributed] = [o for o in commit if isinstance(o, AuditException)]
+    assert (attributed.version, attributed.attributed_by) == (2, human.id)
+
+
+async def test_manual_result_for_failed_subject() -> None:
+    """R20 验收 3: REV-03 对 CON-003 抽取失败 (单对象 failed 任务), 审计师人工给结果: 建 J-REV-03-1-CON-003-H1,
+    结论与证据取人给的, confirmed, 不解释例外."""
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+
+    def agents(deps: Any) -> dict[str, Any]:
+        numbat = numbat_p2_agents(deps)
+        script = cast(ScriptAgent, numbat["REV-03"]).script
+
+        def one_failed(ctx: Any) -> Any:
+            patch = script(ctx)
+            run = patch["procedure_runs"][0]
+            failed = deps.queue.make_task(TaskKind.failed, run, "REV-03", run.id, now=NOW, subject_id="CON-003")
+            keep = [j for j in patch["judgments"] if j.subject_id != "CON-003"]
+            tasks = [t for t in patch["review_tasks"] if t.target_id in {j.id for j in keep}]
+            return {**patch, "judgments": keep, "review_tasks": [*tasks, failed]}
+
+        return {**p2_agents(deps), **numbat, "REV-03": ScriptA6(deps, one_failed)}
+
+    runner, store = make_runner(engagement_store=engagement_store, agents=agents)
+    s = Started(runner, store, engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+    await wait_idle(runner, EID)
+    pointer = EvidencePointer(
+        type="contract", source_type="document", source_id="DOC-CON003000000", locator="T2", page=2
+    )
+    result = ManualResult(conclusion="配送中心收货员签收时控制权转移", evidence=[pointer])
+    before = len(store.commits)
+
+    await s.submit.submit(
+        EID, record("T-RUN-REV-03-1-CON-003-v1", Decision.manual_result, id="D-H", manual_result=result)
+    )
+    await wait_idle(runner, EID)
+
+    [human] = [o for o in store.commits[before] if isinstance(o, Judgment)]
+    assert (human.id, human.conclusion, human.evidence, human.exception_ids, human.review_status) == (
+        "J-REV-03-1-CON-003-H1",
+        result.conclusion,
+        [pointer],
+        [],
+        ReviewStatus.confirmed,
+    )
+
+
+def test_human_judgment_id_takes_next_free_number() -> None:
+    """R20 验收 4: 同一判断对象已有 -H1 时取 -H2; 只看给定的已有 ID (检查点状态), 同样输入得同一 ID."""
+    task = ReviewTask.model_construct(procedure_id="REV-02", run_id="RUN-REV-02-1")
+    base = "J-REV-02-1-SI-2026-0618"
+
+    assert human_judgment_id(task, "SI-2026-0618", set()) == f"{base}-H1"
+    assert human_judgment_id(task, "SI-2026-0618", {f"{base}-H1", "J-REV-02-1-SI-2026-0612-H1"}) == f"{base}-H2"
+    rerun = ReviewTask.model_construct(procedure_id="REV-02", run_id="RUN-REV-02-12")
+    assert human_judgment_id(rerun, "SI-2026-0618", {f"{base}-H1"}) == "J-REV-02-12-SI-2026-0618-H1"
+
+
+async def test_human_judgment_numbered_from_checkpoint() -> None:
+    """R20 验收 4: 取号看检查点状态: 状态中已有 J-REV-02-1-SI-2026-0618-H1 时, 再推翻 SI-2026-0618 的判断得 -H2."""
+    s = await waiting_on_cutoff()
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    h1 = next(j for j in snapshot.values["judgments"] if j.id == "J-REV-02-1-SI-2026-0618")
+    earlier = snapshot._replace(
+        values={
+            **snapshot.values,
+            "judgments": [*snapshot.values["judgments"], h1.model_copy(update={"id": f"{h1.id}-H1"})],
+        }
+    )
+    task = await s.output_store.get(EID, ReviewTask, "T-J-REV-02-1-SI-2026-0618-v1")
+    assert task is not None
+    before = len(s.output_store.commits)
+
+    await s.submit._apply_review(
+        EID, record(task.id, Decision.override, id="D-O2", override_conclusion="另有依据"), task, earlier
+    )
+
+    created = {o.id for o in s.output_store.commits[before] if isinstance(o, Judgment)}
+    assert "J-REV-02-1-SI-2026-0618-H2" in created
