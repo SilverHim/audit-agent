@@ -15,12 +15,15 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
 )
-from backend.orchestration.decisions import acc01_effects
+from backend.contracts.views import PlanningMaterial
+from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects
 from backend.orchestration.query import GraphStateQuery, current_gate
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
+    NUMBAT_RISKS,
     TYPO_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
@@ -216,3 +219,92 @@ async def test_overview_raises_when_engagement_missing() -> None:
 
     with pytest.raises(LookupError):
         await query.overview(EID)
+
+
+# ── R08 PLN-01/03 闸门材料 ──
+
+
+async def at_pln_gate() -> tuple[GraphRunner, GraphStateQuery, FakeOutputStore]:
+    """新项目跑到 ACC-01, 提交 approve, P1 用 Numbat 脚本 Agent 跑完, 停在 PLN-01/03 闸门前."""
+    runner, query, store = await started()
+    submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    approve = GateDecision(
+        id="D-ACC",
+        gate=GateId.ACC_01,
+        target_id="SCORECARD",
+        target_version=1,
+        decision=GateVerdict.approve,
+        decided_by="U-001",
+        decided_at=NOW,
+    )
+    await submit.submit(EID, approve)
+    await wait_idle(runner, EID)
+    return runner, query, store
+
+
+async def test_gate_shows_planning_material() -> None:
+    _, query, _ = await at_pln_gate()
+
+    view = await query.gate(EID)
+
+    assert view is not None
+    assert (view.gate, view.target_id, view.target_version) == (GateId.PLN_01_03, "MATERIALITY", 1)
+    material = view.material
+    assert isinstance(material, PlanningMaterial) and material.kind == "PLN-01/03"
+    assert (material.analytics.id, material.analytics.version) == ("ANALYTICS", 1)
+    assert [x.id for x in material.analytics_exceptions] == ["X-PLN-07-1-A01-1"]
+    assert [c.basis for c in material.candidates.candidates] == ["revenue", "total_assets", "profit_before_tax"]
+    assert material.objectives == NUMBAT_OBJECTIVES
+    assert material.risks == NUMBAT_RISKS
+
+
+async def test_gate_after_pln_reject_shows_rerun_material_only() -> None:
+    """驳回后 p1_analytics 重跑再停: 材料为第 2 版, 分析例外只列第 2 次 PLN-07 的 (状态里两次的例外都在)."""
+    runner, query, _ = await at_pln_gate()
+    config = GraphRunner.config(EID)
+    reject = GateDecision(
+        id="D-PLN",
+        gate=GateId.PLN_01_03,
+        target_id="MATERIALITY",
+        target_version=1,
+        decision=GateVerdict.reject,
+        reason="收入口径应剔除关联方销售",
+        decided_by="U-001",
+        decided_at=NOW,
+    )
+    # 模拟 DecisionSubmit 写入驳回 (PLN-01/03 决定的写入由后续需求实现): 以闸门节点身份写入后继续
+    await runner.app.aupdate_state(config, {"gate_decisions": [reject]}, as_node="gate_p1_risk")
+    await runner.app.ainvoke(None, config)
+
+    view = await query.gate(EID)
+
+    assert view is not None and (view.gate, view.target_version) == (GateId.PLN_01_03, 2)
+    material = view.material
+    assert isinstance(material, PlanningMaterial)
+    assert material.analytics.version == 2
+    assert [x.id for x in material.analytics_exceptions] == ["X-PLN-07-2-A01-1"]
+    state_exceptions = (await runner.app.aget_state(config)).values["exceptions"]
+    assert [x.id for x in state_exceptions] == ["X-PLN-07-1-A01-1", "X-PLN-07-2-A01-1"]
+
+
+async def test_overview_at_pln_gate() -> None:
+    _, query, _ = await at_pln_gate()
+
+    o = await query.overview(EID)
+
+    assert o.current_gate is GateId.PLN_01_03
+    assert (o.running, o.awaiting_review, o.run_error) == (False, False, None)
+    status = {p.id: p.status for p in o.procedures}
+    assert status["DOC-04"] is ProcedureStatus.completed
+    assert status["PLN-07"] is ProcedureStatus.completed
+    assert status["PLN-01"] is ProcedureStatus.planned  # 闸门批准才 completed
+    assert status["ACC-01"] is ProcedureStatus.completed
+
+
+async def test_gate_material_missing_is_an_error() -> None:
+    """停在闸门而材料缺失 (状态与流程不符): 不拼出残缺的材料, 报错."""
+    runner, query, _ = await at_pln_gate()
+    await runner.app.aupdate_state(GraphRunner.config(EID), {"materiality_candidates": None}, as_node="p1_analytics")
+
+    with pytest.raises(LookupError, match="缺初步分析结果或重要性候选"):
+        await query.gate(EID)

@@ -8,9 +8,24 @@ from collections import Counter
 from langgraph.graph.state import CompiledStateGraph
 
 from backend.agents.base import AgentDeps
-from backend.contracts.models import ClientProfile, Engagement, GateId, Phase, Procedure, ReviewTask, TaskStatus
+from backend.contracts.models import (
+    AuditException,
+    ClientProfile,
+    Engagement,
+    GateId,
+    Phase,
+    Procedure,
+    ReviewTask,
+    TaskStatus,
+)
 from backend.contracts.state import EngagementState
-from backend.contracts.views import AcceptanceMaterial, EngagementOverview, GateView, ProcedureSummary
+from backend.contracts.views import (
+    AcceptanceMaterial,
+    EngagementOverview,
+    GateView,
+    PlanningMaterial,
+    ProcedureSummary,
+)
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.runner import GraphRunner
 
@@ -91,18 +106,43 @@ class GraphStateQuery:
         )
 
     async def gate(self, eid: str) -> GateView | None:
-        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None. 本版先实现 ACC-01."""
+        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None. 已实现 ACC-01 与 PLN-01/03.
+
+        GateView 的 target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期.
+        停在闸门而材料缺失 (状态与流程不符) 时抛 LookupError.
+        """
         snapshot = await self.app.aget_state(GraphRunner.config(eid))
         gate = current_gate(snapshot.next)
         if gate is None:
             return None
-        if gate is not GateId.ACC_01:
-            raise NotImplementedError(f"{gate} 的闸门材料尚未实现")
+        values = snapshot.values
+        if gate is GateId.ACC_01:
+            scorecard = values["acceptance_scorecard"]
+            if scorecard is None:
+                raise LookupError(f"{eid} 停在 ACC-01 闸门, 但没有承接评分卡")
+            _, profile = await self._engagement_and_profile(eid)
+            material = AcceptanceMaterial(
+                scorecard=scorecard,
+                exceptions=referenced(values["exceptions"], scorecard.exception_ids),
+                client_profile=profile,
+            )
+            return GateView(gate=gate, target_id=scorecard.id, target_version=scorecard.version, material=material)
+        if gate is GateId.PLN_01_03:
+            analytics, candidates = values["analytics"], values["materiality_candidates"]
+            if analytics is None or candidates is None:
+                raise LookupError(f"{eid} 停在 PLN-01/03 闸门, 但缺初步分析结果或重要性候选")
+            planning = PlanningMaterial(
+                analytics=analytics,
+                analytics_exceptions=referenced(values["exceptions"], analytics.exception_ids),
+                candidates=candidates,
+                objectives=values["audit_objectives"],
+                risks=values["risk_register"],
+            )
+            return GateView(gate=gate, target_id=candidates.id, target_version=candidates.version, material=planning)
+        raise NotImplementedError(f"{gate} 的闸门材料尚未实现")
 
-        scorecard = snapshot.values["acceptance_scorecard"]
-        # 状态中的例外含历次执行的 (upsert_by_id 只增不删), 只取当前评分卡引用的
-        exceptions = [x for x in snapshot.values["exceptions"] if x.id in scorecard.exception_ids]
-        _, profile = await self._engagement_and_profile(eid)
-        material = AcceptanceMaterial(scorecard=scorecard, exceptions=exceptions, client_profile=profile)
-        # target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期
-        return GateView(gate=gate, target_id=scorecard.id, target_version=scorecard.version, material=material)
+
+def referenced(exceptions: list[AuditException], ids: list[str]) -> list[AuditException]:
+    """状态中的例外含历次执行的 (upsert_by_id 只增不删), 只取材料引用的那些, 按引用顺序."""
+    by_id = {x.id: x for x in exceptions}
+    return [by_id[i] for i in ids if i in by_id]
