@@ -64,7 +64,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.runner = GraphRunner(graph, deps)
         app.state.query = GraphStateQuery(graph, deps, app.state.runner)
         app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
-        yield
+        try:
+            yield
+        finally:
+            await app.state.runner.shutdown()  # 关闭检查点连接前停掉后台任务, 否则它们会用已关闭的连接
 
 
 def operation_id(route: APIRoute) -> str:

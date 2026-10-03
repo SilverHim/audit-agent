@@ -103,15 +103,19 @@ class GraphDecisionSubmit:
     async def _deciding(self, eid: str) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
         """submit 与 update_client_profile 共用的外壳, 用法: async with self._deciding(eid) as (engagement, snapshot).
 
-        进入时: 查项目锁定, 取项目锁, 读检查点, 查 RESUME_REQUIRED.
+        进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 读检查点, 查 RESUME_REQUIRED.
         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
         块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放.
         """
         engagement = await self._engagement(eid)
-        if engagement.locked:
+        if engagement.locked:  # 第 7 节校验顺序: 锁定先于项目锁 (ENGAGEMENT_BUSY)
             raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
         self.runner.acquire(eid)  # 取不到抛 ENGAGEMENT_BUSY
         try:
+            # 取锁前读到的项目可能已过时: 读完到取锁之间, 另一个决定可能刚拒绝承接并锁定了项目
+            engagement = await self._engagement(eid)
+            if engagement.locked:
+                raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
             snapshot = await self.app.aget_state(GraphRunner.config(eid))
             await self._check_resume_required(engagement, snapshot.values)
             yield engagement, snapshot
@@ -175,12 +179,13 @@ class GraphDecisionSubmit:
         async with self._deciding(eid) as (engagement, snapshot):
             if current_gate(snapshot.next) is not GateId.ACC_01:
                 raise DecisionRejected("NOT_AT_GATE", "只能在 ACC-01 闸门更新客户资料")
-            if profile.id != engagement.client_id:
-                raise DecisionRejected("INVALID_VALUE", f"profile.id 应为 {engagement.client_id}")
+            # 第 7 节校验顺序: VERSION_MISMATCH 先于 INVALID_VALUE. 版本号按项目客户的最新画像算, 不按 profile.id
             latest = await self.deps.engagement_store.client_profile(engagement.client_id)
             expected = latest.version + 1 if latest is not None else 1
             if profile.version != expected:
                 raise DecisionRejected("VERSION_MISMATCH", f"客户画像应为第 {expected} 版")
+            if profile.id != engagement.client_id:
+                raise DecisionRejected("INVALID_VALUE", f"profile.id 应为 {engagement.client_id}")
 
             async with self.deps.output_store.transaction(eid):  # save_profile 与留痕加入同一事务
                 saved = await self.deps.engagement_store.save_profile(profile)

@@ -16,7 +16,15 @@ from backend.agents.client_intel import (
     normalize_name,
     trail_pointer,
 )
-from backend.contracts.models import AcceptanceScorecard, ExceptionDisposition, RegistryCheck, RunStatus, TrailKind
+from backend.contracts.models import (
+    AcceptanceScorecard,
+    EvidencePointer,
+    EvidenceType,
+    ExceptionDisposition,
+    RegistryCheck,
+    RunStatus,
+    TrailKind,
+)
 from tests.fakes import (
     NUMBAT_ABN,
     NUMBAT_ASIC,
@@ -56,6 +64,21 @@ def test_abn_active_fails_when_not_found() -> None:
     assert not check.passed
     assert "68900042015" in check.detail
     assert check.evidence.locator == "status"
+
+
+def test_checks_point_to_registry_query_trail() -> None:
+    """三项核查的证据都指向登记查询那行留痕 (ACC-04.yaml: type = external, source_type = trail), 整体比较全部字段."""
+    checks = [
+        check_abn_active("68900042015", NUMBAT_ABN, "TR-1"),
+        check_name_match(NUMBAT_ABN, NUMBAT_PROFILE.legal_name, "TR-1"),
+        check_company_registered("900042015", NUMBAT_ASIC, "TR-2"),
+    ]
+
+    assert [c.evidence for c in checks] == [
+        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-1", locator="status"),
+        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-1", locator="entity_name"),
+        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-2", locator="status"),
+    ]
 
 
 # ── name_match ──

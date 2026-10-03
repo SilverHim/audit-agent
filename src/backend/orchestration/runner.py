@@ -57,13 +57,27 @@ class GraphRunner:
         return self.errors.get(eid)
 
     def launch(self, eid: str, graph_input: EngagementState | None) -> None:
-        """在后台推进图并立即返回. 调用前须已取得项目锁, 由后台任务结束时释放.
+        """在后台推进图并立即返回. 调用前须已取得项目锁, 由后台任务结束时释放; 任务建不起来时在此释放后抛出.
 
         graph_input: 新项目为初始状态; 闸门决定写入后继续执行为 None.
         """
-        # self._advance(...) 不加 await, 得到尚未执行的协程; create_task 将其放入后台执行并立即返回任务对象.
-        # 任务须保留引用, 否则可能在完成前被回收
-        self.tasks[eid] = asyncio.create_task(self._advance(eid, graph_input))
+        # self._advance(...) 不加 await, 得到尚未执行的协程; create_task 将其放入后台执行并立即返回任务对象
+        coro = self._advance(eid, graph_input)
+        try:
+            task = asyncio.create_task(coro)
+        except BaseException:
+            coro.close()  # 协程不会再执行, 关掉以免回收时告警"从未 await"
+            self.release(eid)
+            raise
+        self.tasks[eid] = task  # 须保留引用, 否则任务可能在完成前被回收
+        # 兜底: 任务在开始执行前就被取消时, _advance 的 finally 不会执行, 由结束回调释放锁
+        task.add_done_callback(lambda t: self._forget(eid, t))
+
+    def _forget(self, eid: str, task: asyncio.Task[None]) -> None:
+        """后台任务结束后清理项目锁与任务引用. 只在登记的仍是这个任务时清理, 不误删之后为同一项目新建的任务."""
+        if self.tasks.get(eid) is task:
+            del self.tasks[eid]
+            self.release(eid)
 
     async def _advance(self, eid: str, graph_input: EngagementState | None) -> None:
         """后台任务: 推进图到下一个中断或结束. 异常记入 errors 不再抛出; 无论成败, 最后释放项目锁."""
@@ -74,9 +88,23 @@ class GraphRunner:
             # 后台任务无人等待, 异常抛出即丢失; 记入 errors, 由总览的 run_error 展示给前端
             self.errors[eid] = f"{type(e).__name__}: {e}"
         finally:
-            # 无论成败都释放项目锁, 否则该项目此后的所有操作都会被拒绝 (ENGAGEMENT_BUSY)
-            self.release(eid)
-            self.tasks.pop(eid, None)
+            # 无论成败都释放项目锁, 否则该项目此后的所有操作都会被拒绝 (ENGAGEMENT_BUSY).
+            # 在任务内释放而不只靠结束回调: 等待任务的一方醒来时锁已释放
+            task = asyncio.current_task()
+            if task is not None:
+                self._forget(eid, task)
+
+    async def shutdown(self) -> None:
+        """应用退出前调用: 取消全部后台任务并等它们结束. 返回时没有运行中的任务, 项目锁都已释放.
+
+        被取消的执行停在最近的检查点, 下次启动由 recover 继续.
+        """
+        running = list(self.tasks.items())
+        for _, task in running:
+            task.cancel()
+        await asyncio.gather(*(task for _, task in running), return_exceptions=True)
+        for eid, task in running:
+            self._forget(eid, task)
 
     async def start(self, eid: str) -> None:
         """新项目启动: 取得项目锁, 固定集程序第 1 版写入 Store, 以初始状态在后台推进到第一个中断.
@@ -95,11 +123,12 @@ class GraphRunner:
             # 固定集第 1 版先入库: 节点写程序新版本时, put 要求已有上一版
             pack = fixed_procedures(self.deps.library)
             await self.deps.output_store.put(eid, pack, actor=AgentId.A1)
+            graph_input = initial_state(engagement, pack, profile.version)
         except BaseException:
             # 后台任务尚未启动, 不会由 _advance 释放, 须在此释放
             self.release(eid)
             raise
-        self.launch(eid, initial_state(engagement, pack, profile.version))
+        self.launch(eid, graph_input)
 
     async def resume(self, eid: str) -> None:
         raise NotImplementedError

@@ -2,7 +2,10 @@
 
 from typing import Any
 
+import pytest
+
 from backend.contracts.models import (
+    AuditException,
     AutonomyLevel,
     Decision,
     Judgment,
@@ -15,7 +18,7 @@ from backend.contracts.services import JudgmentOutcome
 from backend.core.config import get_settings
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
-from tests.fakes import NOW
+from tests.fakes import NOW, make_run
 
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 QUEUE = ReviewQueue(LIBRARY)
@@ -81,3 +84,66 @@ def test_normal_and_unattributed_decisions_unchanged() -> None:
     unattributed = make_task("REV-02", TaskKind.unattributed, subject_id="INV-1")
     assert QUEUE.allowed(normal) == frozenset({Decision.confirm, Decision.override, Decision.misstatement})
     assert QUEUE.allowed(unattributed) == frozenset({Decision.override, Decision.misstatement})
+
+
+# ── classify 与 make_task: 第 5 节"需要人"表, 第 0 节任务 ID 规则 ──
+
+REV02 = LIBRARY.load("REV-02")  # hybrid, 不带 always_review
+
+
+def rule_exception() -> AuditException:
+    """REV-08 查出的一条例外, 作 unattributed 判定用的规则例外."""
+    fields: dict[str, Any] = {"id": "X-REV-08-1-R01-1", "version": 1, "procedure_id": "REV-08"}
+    return AuditException.model_construct(**fields)
+
+
+@pytest.mark.parametrize(
+    ("level", "action", "expected"),
+    [
+        (AutonomyLevel.L1, ProposedAction.accept, TaskKind.normal),
+        (AutonomyLevel.L2, ProposedAction.accept, TaskKind.normal),
+        (AutonomyLevel.L3, ProposedAction.misstatement, TaskKind.normal),
+        (AutonomyLevel.L3, ProposedAction.more_evidence, TaskKind.normal),
+        (AutonomyLevel.L3, ProposedAction.accept, None),
+    ],
+)
+def test_classify_success_by_autonomy_and_action(
+    level: AutonomyLevel, action: ProposedAction, expected: TaskKind | None
+) -> None:
+    """L1, L2 一律交人; L3 只在建议认定错报或补充证据时交人, 其余自动关闭."""
+    assert QUEUE.classify(REV02, make_outcome("REV-02", level, action), []) is expected
+
+
+def test_classify_unattributed_depends_on_rule_findings() -> None:
+    """无法归因: 有规则例外才成 unattributed 任务 (人要判断例外怎么处理); 没有例外就是 failed."""
+    outcome = JudgmentOutcome(judgment=None, failure="unattributed", attempts=3, trail_ids=[])
+
+    assert QUEUE.classify(REV02, outcome, [rule_exception()]) is TaskKind.unattributed
+    assert QUEUE.classify(REV02, outcome, []) is TaskKind.failed
+
+
+@pytest.mark.parametrize("failure", ["failed", None])
+def test_classify_without_judgment_is_failed(failure: str | None) -> None:
+    """校验失败或没有判断对象 (judgment 为空) 都成 failed 任务, 有没有规则例外都一样."""
+    outcome = JudgmentOutcome(judgment=None, failure=failure, attempts=3, trail_ids=[])  # type: ignore[arg-type]
+
+    assert QUEUE.classify(REV02, outcome, [rule_exception()]) is TaskKind.failed
+
+
+def test_make_task_ids_and_target_types() -> None:
+    """ID 为 T-{目标}-v{版本}; 只有带判断对象的 failed 任务在中间加对象 ID. target_type 按目标的类型."""
+    judgment = make_outcome("REV-02", AutonomyLevel.L2, ProposedAction.accept).judgment
+    assert judgment is not None
+    judgment = judgment.model_copy(update={"version": 2})
+    run = make_run("REV-02", 1)
+
+    normal = QUEUE.make_task(TaskKind.normal, judgment, "REV-02", run.id, NOW, subject_id="SI-1")
+    unattributed = QUEUE.make_task(TaskKind.unattributed, rule_exception(), "REV-02", run.id, NOW, subject_id="SI-1")
+    failed = QUEUE.make_task(TaskKind.failed, run, "REV-02", run.id, NOW, subject_id="SI-1")
+    failed_whole = QUEUE.make_task(TaskKind.failed, run, "REV-02", run.id, NOW)
+
+    assert (normal.id, normal.target_type, normal.target_version) == ("T-J-REV-02-1-S1-v2", TargetType.Judgment, 2)
+    assert (unattributed.id, unattributed.target_type) == ("T-X-REV-08-1-R01-1-v1", TargetType.AuditException)
+    assert (failed.id, failed.target_type) == ("T-RUN-REV-02-1-SI-1-v1", TargetType.ProcedureRun)
+    assert failed_whole.id == "T-RUN-REV-02-1-v1"
+    assert [t.subject_id for t in (normal, unattributed, failed, failed_whole)] == ["SI-1", "SI-1", "SI-1", None]

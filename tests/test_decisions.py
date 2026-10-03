@@ -1,14 +1,16 @@
 """审计师决定: 效果纯函数直接调用; submit 经图与假依赖, 验证校验, 写入与越过闸门."""
 
+import inspect
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from backend.contracts.errors import DecisionRejected
+from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     ClientProfile,
+    Engagement,
     GateDecision,
     GateId,
     GateVerdict,
@@ -18,15 +20,18 @@ from backend.contracts.models import (
     ProcedureStatus,
     TrailKind,
 )
+from backend.orchestration import runner as runner_module
 from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
     TYPO_PROFILE,
+    EngagementWrite,
     FakeEngagementStore,
     FakeOutputStore,
     FakeTrail,
+    NoTaskAsyncio,
     make_procedure,
     make_runner,
     wait_idle,
@@ -196,11 +201,14 @@ async def test_submit_rejects_when_busy() -> None:
     runner, _ = make_runner(engagement_store=engagement_store)
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
     await runner.start(EID)  # 后台还在执行 ACC-04
+    task = runner.tasks[EID]
 
     with pytest.raises(DecisionRejected) as e:
         await submit.submit(EID, acc01_decision(GateVerdict.approve))
 
     assert e.value.code == "ENGAGEMENT_BUSY"
+    assert runner.is_running(EID)  # 被拒的提交不能放掉后台任务持有的锁
+    assert runner.tasks[EID] is task and not task.done()
     await wait_idle(runner, EID)
 
 
@@ -271,6 +279,7 @@ async def test_update_profile_then_approve_reaches_p1() -> None:
         (TYPO_PROFILE.model_copy(update={"version": 3}), "VERSION_MISMATCH"),  # 应为第 2 版
         (TYPO_PROFILE.model_copy(update={"version": 1}), "VERSION_MISMATCH"),  # 不能覆盖已有版本
         (FIXED_PROFILE.model_copy(update={"id": "CLIENT-999"}), "INVALID_VALUE"),  # 不是本项目的客户
+        (FIXED_PROFILE.model_copy(update={"id": "CLIENT-999", "version": 3}), "VERSION_MISMATCH"),  # 都错: 版本在前
     ],
 )
 async def test_update_profile_rejects_invalid(profile: ClientProfile, code: str) -> None:
@@ -305,3 +314,116 @@ async def test_submit_requires_resume_when_profile_ahead_of_checkpoint() -> None
         await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
 
     assert e.value.code == "RESUME_REQUIRED"
+
+
+# ── F1: 取锁后重读项目, 事务原子性, 写入失败时释放锁 ──
+
+
+def describe(write: object) -> object:
+    """commits 里的一项写入: 审计产出写成 (类名, id, 版本), 项目存储写入原样."""
+    if isinstance(write, EngagementWrite):
+        return write
+    assert isinstance(write, (GateDecision, Procedure))
+    return (type(write).__name__, write.id, write.version)
+
+
+@pytest.mark.parametrize(
+    ("verdict", "changes"),
+    [
+        (GateVerdict.approve, {"phase": Phase.P1_Planning}),
+        (GateVerdict.reject, {"phase": Phase.Declined, "locked": True}),
+    ],
+)
+async def test_acc01_decision_and_effects_in_one_commit(verdict: GateVerdict, changes: dict[str, Any]) -> None:
+    """第 7 节: 决定, ACC-01 新版本与项目阶段 (拒绝时最后置 locked) 在一个事务内写入."""
+    s = await started()
+
+    await s.submit.submit(EID, acc01_decision(verdict))
+
+    [commit] = [c for c in s.output_store.commits if any(isinstance(o, GateDecision) for o in c)]
+    assert [describe(o) for o in commit] == [
+        ("GateDecision", "D-1", 1),
+        ("Procedure", "ACC-01", 2),
+        EngagementWrite("update", EID, changes),
+    ]
+    await wait_idle(s.runner, EID)
+
+
+async def test_acc01_decision_rolled_back_when_engagement_update_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """项目阶段写不进去: 决定与 ACC-01 新版本一并回滚, 锁释放, 图仍停在闸门."""
+    s = await started()
+
+    async def broken_update(eid: str, **changes: Any) -> None:
+        raise RuntimeError("engagements 写入失败")
+
+    monkeypatch.setattr(s.engagement_store, "update", broken_update)
+    rows_before = list(s.output_store.rows)
+
+    with pytest.raises(RuntimeError, match="engagements 写入失败"):
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
+
+    assert s.output_store.rows == rows_before
+    assert not s.runner.is_running(EID)
+    assert await s.next_nodes() == ("gate_acc01",)
+
+
+async def test_submit_rechecks_lock_after_acquiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """取锁前读到的项目还没锁定, 取锁时已被另一个拒绝承接的决定锁定: 报 ENGAGEMENT_LOCKED, 不是 NOT_AT_GATE."""
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.reject))
+    await wait_idle(s.runner, EID)  # 已走到 declined 结束
+    real_get = s.engagement_store.get
+    reads = 0
+
+    async def stale_first_read(eid: str) -> Engagement | None:
+        nonlocal reads
+        reads += 1
+        engagement = await real_get(eid)
+        if reads == 1 and engagement is not None:
+            return engagement.model_copy(update={"locked": False})  # 拒绝提交前读到的旧值
+        return engagement
+
+    monkeypatch.setattr(s.engagement_store, "get", stale_first_read)
+    rows_before = list(s.output_store.rows)
+
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-2"))
+
+    assert e.value.code == "ENGAGEMENT_LOCKED"
+    assert not s.runner.is_running(EID)
+    assert s.output_store.rows == rows_before
+
+
+async def test_update_profile_version_conflict_releases_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """校验通过后, 同客户的另一个项目抢先存了第 2 版: save_profile 抛 VersionConflict, 转为 VERSION_MISMATCH."""
+    s = await started(TYPO_PROFILE)
+    real_save = s.engagement_store.save_profile
+
+    async def raced_save(profile: ClientProfile) -> ClientProfile:
+        s.engagement_store.profiles.append(FIXED_PROFILE)  # 另一个项目刚存的第 2 版
+        return await real_save(profile)
+
+    monkeypatch.setattr(s.engagement_store, "save_profile", raced_save)
+
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+
+    assert e.value.code == "VERSION_MISMATCH"
+    assert isinstance(e.value.__cause__, VersionConflict)
+    assert not s.runner.is_running(EID)
+    assert await s.next_nodes() == ("gate_acc01",)
+    assert TrailKind.decision not in s.trail_kinds()
+
+
+async def test_submit_launch_failure_releases_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """决定已写入, 建后台任务失败: 抛出且释放锁, 不留下 ENGAGEMENT_BUSY."""
+    s = await started()
+    no_tasks = NoTaskAsyncio()
+    monkeypatch.setattr(runner_module, "asyncio", no_tasks)
+
+    with pytest.raises(RuntimeError, match="事件循环已关闭"):
+        await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
+
+    assert not s.runner.is_running(EID)
+    [coro] = no_tasks.coros
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED

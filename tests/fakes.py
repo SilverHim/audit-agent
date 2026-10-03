@@ -1,8 +1,10 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
-from collections.abc import AsyncIterator, Sequence
+import asyncio
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any, TypeVar
 
@@ -108,10 +110,10 @@ class FakeRegistry:
 
 
 class FakeTrail:
-    """假留痕: 存在内存列表里, 按写入顺序发号 TR-1, TR-2, ..."""
+    """假留痕: 存在内存列表里, 按写入顺序发号 TR-1, TR-2, ... 读取按项目过滤. 独立于业务事务, 写入即生效."""
 
     def __init__(self) -> None:
-        self.entries: list[TrailEntry] = []  # 已写入的留痕, 按写入顺序
+        self.entries: list[TrailEntry] = []  # 已写入的留痕, 各项目混在一起, 按写入顺序
 
     async def record(self, entry: TrailEntry) -> str:
         trail_id = f"TR-{len(self.entries) + 1}"
@@ -119,26 +121,60 @@ class FakeTrail:
         return trail_id
 
     async def get(self, eid: str, id: str) -> TrailEntry | None:
-        return next((e for e in self.entries if e.id == id), None)
+        return next((e for e in self.entries if e.engagement_id == eid and e.id == id), None)
 
     async def find_success(self, eid: str, idempotency_key: str) -> TrailEntry | None:
-        return next((e for e in self.entries if e.idempotency_key == idempotency_key), None)
+        return next((e for e in self.entries if e.engagement_id == eid and e.idempotency_key == idempotency_key), None)
 
     async def list(
         self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
     ) -> list[TrailEntry]:
-        hits = [e for e in self.entries if kind is None or e.kind is kind]
+        hits = [e for e in self.entries if e.engagement_id == eid and (kind is None or e.kind is kind)]
         return hits[offset : offset + limit]
 
 
+@dataclass(frozen=True)
+class EngagementWrite:
+    """项目存储的一次写入, 与审计产出一起记进 FakeOutputStore.commits, 用来检查它们是否在同一事务里."""
+
+    op: str  # "update" 或 "save_profile"
+    target: str  # update 为项目编号, save_profile 为客户编号
+    changes: dict[str, Any]  # update 为改了的字段, save_profile 为 {"version": 版本号}
+
+
+@dataclass
+class FakeTxn:
+    """一个进行中的假事务: 块内的写入先暂存在这里, 块正常结束才一起生效, 块内抛错则全部丢弃."""
+
+    eid: str  # 事务所属项目
+    owner: asyncio.Task[Any] | None  # 开事务的任务; 只有它 (含其中的嵌套调用) 在事务里
+    active: bool = True  # 块结束后置假, 之后不再有人能加入
+    objs: list[Versioned] = field(default_factory=list)  # 暂存的审计产出
+    log: list[Versioned | EngagementWrite] = field(default_factory=list)  # 全部写入, 按调用顺序
+    engagements: dict[str, Engagement] = field(default_factory=dict)  # 暂存的项目改动, 项目编号 -> 改后的项目
+    profiles: list[ClientProfile] = field(default_factory=list)  # 暂存的新画像
+
+
 class FakeEngagementStore:
-    """假项目存储: 实现读项目, 改项目状态, 读写客户画像; create, list 调用即抛 NotImplementedError."""
+    """假项目存储: 实现读项目, 改项目状态, 读写客户画像; create, list 调用即抛 NotImplementedError.
+
+    bind 到 FakeOutputStore 后, 在它的 transaction 块内调用 update 与 save_profile 会加入该事务 (第 4 节):
+    块内读得到暂存的改动, 块正常结束才生效并与审计产出记进同一个 commits 项, 块内抛错一并丢弃.
+    """
 
     def __init__(
         self, profiles: list[ClientProfile] | None = None, engagements: list[Engagement] | None = None
     ) -> None:
-        self.profiles = profiles or []  # 客户画像, 同一客户可有多个版本
-        self.engagements = engagements or []  # 审计项目
+        self.profiles = profiles or []  # 已生效的客户画像, 同一客户可有多个版本
+        self.engagements = engagements or []  # 已生效的审计项目
+        self.output_store: FakeOutputStore | None = None  # 共用事务的审计产出存储, bind 后才有
+
+    def bind(self, output_store: "FakeOutputStore") -> None:
+        """之后在 output_store 的事务块内写入时加入该事务."""
+        self.output_store = output_store
+
+    def _txn(self) -> FakeTxn | None:
+        return self.output_store.active_txn() if self.output_store is not None else None
 
     async def create(
         self,
@@ -152,6 +188,9 @@ class FakeEngagementStore:
         raise NotImplementedError
 
     async def get(self, eid: str) -> Engagement | None:
+        txn = self._txn()
+        if txn is not None and eid in txn.engagements:
+            return txn.engagements[eid]
         return next((e for e in self.engagements if e.id == eid), None)
 
     async def update(
@@ -163,19 +202,29 @@ class FakeEngagementStore:
         version_snapshot: dict[str, str] | None = None,
     ) -> None:
         """改项目的阶段, 锁定与版本快照, 传 None 的不改; 同时刷新 updated_at. locked 置真后不可回退."""
-        for i, e in enumerate(self.engagements):
-            if e.id == eid:
-                if e.locked and locked is False:
-                    raise ValueError(f"{eid} 已锁定, 不可解锁")
-                changes = {"phase": phase, "locked": locked, "version_snapshot": version_snapshot}
-                kept = {k: v for k, v in changes.items() if v is not None}
-                self.engagements[i] = e.model_copy(update={**kept, "updated_at": datetime.now(UTC)})
-                return
-        raise LookupError(f"Engagement {eid} not found")
+        current = await self.get(eid)
+        if current is None:
+            raise LookupError(f"Engagement {eid} not found")
+        if current.locked and locked is False:
+            raise ValueError(f"{eid} 已锁定, 不可解锁")
+        changes = {"phase": phase, "locked": locked, "version_snapshot": version_snapshot}
+        kept = {k: v for k, v in changes.items() if v is not None}
+        updated = current.model_copy(update={**kept, "updated_at": datetime.now(UTC)})
+        txn = self._txn()
+        if txn is not None:
+            txn.engagements[eid] = updated
+            txn.log.append(EngagementWrite("update", eid, kept))
+        else:
+            self._apply_engagement(updated)
+
+    def _apply_engagement(self, engagement: Engagement) -> None:
+        self.engagements = [engagement if e.id == engagement.id else e for e in self.engagements]
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:
-        """version 为空取最新版本; 查不到返回 None."""
-        hits = [p for p in self.profiles if p.id == client_id and (version is None or p.version == version)]
+        """version 为空取最新版本; 查不到返回 None. 事务块内读得到本事务暂存的画像."""
+        txn = self._txn()
+        visible = self.profiles + (txn.profiles if txn is not None else [])
+        hits = [p for p in visible if p.id == client_id and (version is None or p.version == version)]
         return max(hits, key=lambda p: p.version, default=None)
 
     async def save_profile(self, profile: ClientProfile) -> ClientProfile:
@@ -184,8 +233,19 @@ class FakeEngagementStore:
         expected = latest.version + 1 if latest is not None else 1
         if profile.version != expected:
             raise VersionConflict(f"{profile.id}: v{profile.version}, 应为 v{expected}")
-        self.profiles.append(profile)
+        txn = self._txn()
+        if txn is not None:
+            txn.profiles.append(profile)
+            txn.log.append(EngagementWrite("save_profile", profile.id, {"version": profile.version}))
+        else:
+            self.profiles.append(profile)
         return profile
+
+    def commit(self, txn: FakeTxn) -> None:
+        """FakeOutputStore 提交事务时调用: 暂存的项目改动与画像生效."""
+        for engagement in txn.engagements.values():
+            self._apply_engagement(engagement)
+        self.profiles.extend(txn.profiles)
 
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
         raise NotImplementedError
@@ -195,26 +255,58 @@ T = TypeVar("T", bound=Versioned)
 
 
 class FakeOutputStore:
-    """假审计产出存储, 只服务一个项目 (忽略 eid). 规则同开发接口文档第 4 节 AuditOutputStore.
+    """假审计产出存储, 按项目分开存. 规则同开发接口文档第 4 节 AuditOutputStore.
 
     transaction 块内的 put 先暂存, 块正常结束才一起提交, 块内抛错则全部丢弃; 块外的每次 put 各自提交.
+    事务记在 contextvar 里, 只对开事务的任务有效: 与真实连接一样, 别的任务 (含事务块内新建的子任务) 不在事务里.
     """
 
-    def __init__(self, rows: list[Versioned] | None = None) -> None:
-        self.rows = rows or []  # 已提交对象, 按写入顺序; 构造时传入的视为此前已提交
-        self.commits: list[list[Versioned]] = []  # 每次提交写入的新对象, 用于检查哪些对象属于同一事务
-        self.pending: list[Versioned] | None = None  # 事务块内暂存的新对象, 不在事务中时为 None
+    def __init__(self, rows: list[Versioned] | None = None, eid: str = ENGAGEMENT.id) -> None:
+        self.default_eid = eid  # rows 属性对应的项目, 单项目测试不必传
+        self.by_eid: dict[str, list[Versioned]] = {eid: list(rows or [])}  # 项目编号 -> 已提交对象, 按写入顺序
+        self.commits: list[list[Versioned | EngagementWrite]] = []  # 每次提交写入的内容, 各项目按提交顺序
+        self.current: ContextVar[FakeTxn | None] = ContextVar(f"fake_txn_{id(self)}", default=None)  # 当前事务
+        self.engagement_store: FakeEngagementStore | None = None  # 共用事务的项目存储
 
-    def _visible(self) -> list[Versioned]:
-        """读写可见的对象: 已提交对象与本事务暂存对象."""
-        return self.rows + (self.pending or [])
+    @property
+    def rows(self) -> list[Versioned]:
+        """默认项目的已提交对象."""
+        return self.rows_of(self.default_eid)
+
+    def rows_of(self, eid: str) -> list[Versioned]:
+        """某个项目的已提交对象."""
+        return self.by_eid.setdefault(eid, [])
+
+    def active_txn(self) -> FakeTxn | None:
+        """当前任务自己开的, 尚未结束的事务; 不在事务中为 None.
+
+        contextvar 会被事务块内新建的子任务继承, 事务结束后也可能还被引用, 所以只认开事务的任务与未结束的事务.
+        """
+        txn = self.current.get()
+        if txn is None or not txn.active or txn.owner is not asyncio.current_task():
+            return None
+        return txn
+
+    def _txn(self, eid: str) -> FakeTxn | None:
+        """当前任务所在的本项目事务; 不在事务中为 None. 在别的项目的事务里写入属于调用方错误, 抛 AssertionError."""
+        txn = self.active_txn()
+        if txn is not None and txn.eid != eid:
+            raise AssertionError(f"在 {txn.eid} 的事务里写 {eid}")
+        return txn
+
+    def _visible(self, eid: str) -> list[Versioned]:
+        """读写可见的对象: 本项目已提交对象与本任务事务暂存的本项目对象."""
+        txn = self.active_txn()
+        staged = txn.objs if txn is not None and txn.eid == eid else []
+        return self.rows_of(eid) + staged
 
     async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
         """同 (类型, id, version) 已存在则跳过并返回已存对象; 否则 version 须为已有最大值 +1, 不符抛 VersionConflict."""
+        txn = self._txn(eid)
         result: list[Versioned] = []
         new: list[Versioned] = []
         for obj in objs:
-            same_id = [r for r in self._visible() + new if type(r) is type(obj) and r.id == obj.id]
+            same_id = [r for r in self._visible(eid) + new if type(r) is type(obj) and r.id == obj.id]
             stored = next((r for r in same_id if r.version == obj.version), None)
             if stored is not None:
                 result.append(stored)
@@ -224,16 +316,17 @@ class FakeOutputStore:
                 raise VersionConflict(f"{type(obj).__name__} {obj.id}: v{obj.version}, 应为 v{expected}")
             new.append(obj)
             result.append(obj)
-        if self.pending is not None:
-            self.pending.extend(new)
+        if txn is not None:
+            txn.objs.extend(new)
+            txn.log.extend(new)
         else:
-            self.rows.extend(new)
-            self.commits.append(new)
+            self.rows_of(eid).extend(new)
+            self.commits.append(list(new))
         return result
 
     async def get(self, eid: str, kind: type[T], id: str, version: int | None = None) -> T | None:
         """version 为空取最新版本; 查不到返回 None."""
-        hits = [r for r in self._visible() if isinstance(r, kind) and r.id == id]
+        hits = [r for r in self._visible(eid) if isinstance(r, kind) and r.id == id]
         if version is not None:
             hits = [r for r in hits if r.version == version]
         return max(hits, key=lambda r: r.version, default=None)
@@ -241,30 +334,55 @@ class FakeOutputStore:
     async def latest(self, eid: str, kind: type[T], **filters: Any) -> list[T]:
         """每个 id 的最新版本, 再按顶层字段相等过滤."""
         newest: dict[str, T] = {}
-        for r in self._visible():
+        for r in self._visible(eid):
             if isinstance(r, kind) and (r.id not in newest or r.version > newest[r.id].version):
                 newest[r.id] = r
         return [r for r in newest.values() if all(getattr(r, k) == v for k, v in filters.items())]
 
     async def history(self, eid: str, kind: type[T], id: str) -> list[T]:
         """某个 id 的全部版本, 按版本号升序."""
-        return sorted((r for r in self._visible() if isinstance(r, kind) and r.id == id), key=lambda r: r.version)
+        return sorted((r for r in self._visible(eid) if isinstance(r, kind) and r.id == id), key=lambda r: r.version)
 
     @asynccontextmanager
     async def transaction(self, eid: str) -> AsyncIterator[None]:
-        """块内的 put 共用一个事务; 嵌套调用加入外层事务."""
-        if self.pending is not None:
+        """块内的 put 与绑定的项目存储写入共用一个事务; 嵌套调用加入外层事务."""
+        if self._txn(eid) is not None:
             yield
             return
-        self.pending = []
+        txn = FakeTxn(eid, owner=asyncio.current_task())
+        token = self.current.set(txn)
         try:
             yield
-        except BaseException:
-            self.pending = None
-            raise
-        self.rows.extend(self.pending)
-        self.commits.append(self.pending)
-        self.pending = None
+            self.rows_of(eid).extend(txn.objs)
+            if self.engagement_store is not None:
+                self.engagement_store.commit(txn)
+            self.commits.append(txn.log)
+        finally:
+            txn.active = False
+            self.current.reset(token)
+
+
+class NoTaskAsyncio:
+    """替换 runner 模块里的 asyncio: 建后台任务即失败, 其余照常. 用来测任务建不起来时项目锁是否释放.
+
+    收到的协程记在 coros 里, 不替调用方关闭: 由测试检查 launch 自己有没有关.
+    """
+
+    def __init__(self) -> None:
+        self.coros: list[Coroutine[Any, Any, Any]] = []  # create_task 收到的协程
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(asyncio, name)
+
+    def create_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        self.coros.append(coro)
+        raise RuntimeError("事件循环已关闭")
+
+
+def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
+    """让项目存储加入审计产出存储的事务, 同真实实现共用一个数据库事务."""
+    engagement_store.bind(output_store)
+    output_store.engagement_store = engagement_store
 
 
 # ── 组装 ──
@@ -278,12 +396,13 @@ def make_deps(
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储与审计产出存储. 其余依赖只构造不连接.
 
-    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储缺省为空.
+    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储缺省为空. 两者绑定, 项目存储的写入加入审计产出的事务.
     """
     if engagement_store is None:
         engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     if output_store is None:
         output_store = FakeOutputStore()
+    bind_stores(engagement_store, output_store)
     return replace(
         build_deps(get_settings()),
         registry=registry,
