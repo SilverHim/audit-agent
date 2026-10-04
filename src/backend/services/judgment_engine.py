@@ -16,6 +16,7 @@ from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtrac
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    Confirmation,
     DocumentRef,
     DocumentType,
     Engine,
@@ -264,11 +265,15 @@ class OutputValidator:
         if output is None:
             return ValidationReport(level_failed=level, retryable=True, unsupported_steps=[], errors=errors)
         unsupported: list[int] = []
+        notes: list[str] = []
         if isinstance(output, JudgmentDraft):
             output, level, unsupported, errors = await self._judgment(eid, output, ctx)
         elif isinstance(output, ContractExtraction | ConfirmationExtraction):
             output, errors = self._extraction(output, ctx.document)
             level = "reference" if errors else None
+            if level is None and isinstance(output, ConfirmationExtraction) and ctx.confirmation is not None:
+                errors, notes = await self._confirmation(eid, output, ctx.confirmation)
+                level = "semantic" if errors else None
         else:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         return ValidationReport(
@@ -276,8 +281,29 @@ class OutputValidator:
             retryable=False,
             unsupported_steps=unsupported,
             errors=errors,
+            notes=notes,
             output=output,
         )
+
+    async def _confirmation(
+        self, eid: str, output: ConfirmationExtraction, confirmation: Confirmation
+    ) -> tuple[list[str], list[str]]:
+        """回函抽取的语义级: 抽出的账号须等于被函证账户的账号, 否则判失败 (回函不是这个账户的).
+
+        回函渠道与 CSH-04 回执记录的不符时只记提示, 不判失败: 渠道以回执为准. 返回 (错误, 提示).
+        """
+        account = await self.financial.record(eid, "bank_account", confirmation.bank_account_id)
+        if account is None:
+            return [f"被函证的账户 {confirmation.bank_account_id} 不存在"], []
+        errors = []
+        account_id, expected_no = confirmation.bank_account_id, account["account_no"]
+        if output.account_no != expected_no:
+            errors.append(f"回函账号 {output.account_no} 与账户 {account_id} 的账号 {expected_no} 不符")
+        notes = []
+        expected, stated = confirmation.receipt_channel, output.receipt_channel
+        if stated is not None and expected is not None and stated != expected:
+            notes.append(f"回函写明的渠道 {stated} 与回执记录的 {expected} 不符, 以回执为准")
+        return errors, notes
 
     async def _judgment(
         self, eid: str, draft: JudgmentDraft, ctx: ValidationContext
@@ -479,6 +505,7 @@ class JudgmentEngine:
                     "raw": response.raw,
                     "level_failed": report.level_failed,
                     "errors": report.errors,
+                    "notes": report.notes,
                 },
             )
         )

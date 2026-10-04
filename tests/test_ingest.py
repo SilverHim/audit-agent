@@ -176,12 +176,6 @@ async def test_rerun_only_listed_contract() -> None:
     assert [d.id for d in patch["documents"]] == [NUMBAT_CONTRACTS[1].id]
 
 
-async def test_doc06_not_yet_implemented() -> None:
-    agent, _, _, _ = setup()
-    with pytest.raises(NotImplementedError, match="DOC-06"):
-        await agent.execute(make_ctx(agent.deps, "DOC-06"))
-
-
 # ── mock 客户端与节点 ─────────────────────────────────────────
 
 

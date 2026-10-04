@@ -2,7 +2,7 @@
 
 from typing import Any, Generic, Literal, TypeVar
 
-from backend.contracts.models import AuditException, DocumentRef, Judgment, Model
+from backend.contracts.models import AuditException, Confirmation, DocumentRef, Judgment, Model
 
 T = TypeVar("T")
 
@@ -39,6 +39,7 @@ class ValidationContext(Model):
     rule_findings: list[AuditException] = []  # 该判断对象的规则例外, 即判断归因的例外; 错报金额可等于其金额
     document: DocumentRef | None = None  # 抽取类程序 (DOC-04, DOC-06) 本次抽取的文件, 指针只能指向它
     judgments: list[Judgment] = []  # 状态中的判断, 供 RPT-03 校验 judgment_refs
+    confirmation: Confirmation | None = None  # DOC-06 本次抽取的函证 (CSH-04 所建), 核对回函账号与回函渠道
 
 
 class ValidationReport(Model, Generic[T]):
@@ -48,9 +49,9 @@ class ValidationReport(Model, Generic[T]):
     retryable: bool  # 能否回传错误重试: 语法, 结构失败为真
     unsupported_steps: list[int]  # 证据指针解析不了的推理步骤下标
     errors: list[str]  # 错误信息
-    output: T | None = (
-        None  # 通过结构校验的输出, 解析得了的证据指针 type 与 reliability 已按来源改写; 语法或结构失败为空
-    )
+    notes: list[str] = []  # 不影响通过与否的提示, 如回函渠道与回执不符; 随 llm_call 留痕记录
+    # 通过结构校验的输出, 解析得了的证据指针 type 与 reliability 已按来源改写; 语法或结构失败为空
+    output: T | None = None
 
 
 class LLMCallResult(Model, Generic[T]):

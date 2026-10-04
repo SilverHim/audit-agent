@@ -204,6 +204,92 @@ def numbat_contracts() -> list[Contract]:
     ]
 
 
+def reply_pages(
+    bank: str,
+    address: str,
+    ref: str,
+    account: str,
+    kind: str,
+    bsb: str,
+    number: str,
+    balance: str,
+    interest: str,
+    officer: str,
+) -> list[str]:
+    """一份银行回函两页的文本层 (合成数据集设计第 6.4 节版式), 页脚含页码."""
+    footer = f"{bank} | Ref {ref} | Page {{n}} of 2"
+    page1 = f"""{bank.upper()}
+{address}
+
+BANK CONFIRMATION - AUDIT REPLY
+Our reference: {ref}
+
+To: The Auditor
+Tessellate Audit Partners
+Level 9, 1 Illustration Place, Sydney NSW 2000
+confirmations@tessellate-audit.example
+
+Customer: Numbat Electronic Components Pty Ltd (ABN 68 900 042 015)
+Confirmation date: 30 June 2026
+
+In reply to your request, we confirm the following information recorded in our books
+for the customer at close of business on 30 June 2026.
+
+Section 1 - Accounts
+Account name:    Numbat Electronic Components Pty Ltd - {account}
+Account type:    {kind}
+BSB:             {bsb}
+Account number:  {number}
+Currency:        AUD
+{balance}
+{interest}
+{footer.format(n=1)}"""
+    page2 = f"""Section 2 - Facilities, guarantees and security
+None held for the customer at 30 June 2026.
+
+Section 3 - Other accounts
+The customer held no other accounts with {bank} at 30 June 2026.
+
+Section 4 - Delivery of this reply
+This reply is sent by email directly to the auditor named on page 1. It has not been
+sent to the customer.
+
+This information is given without liability on the part of the bank or its officers.
+
+Authorised officer: {officer}
+{bank}
+{footer.format(n=2)}"""
+    return [page1, page2]
+
+
+NUMBAT_REPLY_PAGES = {  # 两份回函的文本层 (合成数据集设计第 6.4, 6.5 节), 文件 ID -> 各页
+    NUMBAT_REPLIES[0].id: reply_pages(
+        "Harbourline Bank Limited",
+        "ABN 82 920 069 414\nAudit Confirmations Unit, Level 3, 100 Example Street, Sydney NSW 2000",
+        "HBL-AC-2026-004512",
+        "Operating Account",
+        "Business Transaction Account",
+        "999-101",
+        "12345601",
+        "Balance at 30 June 2026:  AUD 1,208,400.00 (credit)",
+        "Accrued interest at 30 June 2026:  nil",
+        "Karen Whitfield, Audit Confirmations Unit",
+    ),
+    NUMBAT_REPLIES[1].id: reply_pages(
+        "Bluegum Savings Bank Limited",
+        "ABN 30 921 070 788\nConfirmations Team, 55 Sample Lane, Melbourne VIC 3000",
+        "BGS-AUD-26-00871",
+        "Business Saver",
+        "Business Savings Account",
+        "999-202",
+        "23456702",
+        "Balance at 30 June 2026:  AUD 400,000.00 (credit)",
+        "Interest of AUD 1,190.00 was credited on 30 June 2026.",
+        "Marcus Hale, Confirmations Team",
+    ),
+}
+
+
 NUMBAT_BANKS = {"BA-01": "Harbourline Bank Limited", "BA-02": "Bluegum Savings Bank Limited"}  # 第 2.3 节
 NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | BankTransaction] = [
     # 合成数据集设计第 5.1 节: 两张跨期场景发票与 SI-2026-0547 (期后收款)
@@ -718,10 +804,15 @@ class FakeEvidenceStore:
         return doc
 
     async def pages(self, eid: str, document_id: str) -> list[str]:
-        """每页一行短文本 "{文件名} page {n}", 页数取文件登记的 page_count; 未登记抛 LookupError."""
+        """Numbat 回函取 NUMBAT_REPLY_PAGES; 其余每页一行短文本 "{文件名} page {n}", 页数取文件登记的 page_count.
+
+        未登记抛 LookupError.
+        """
         doc = next((d for d in self.financial_store.document_refs if d.id == document_id), None)
         if doc is None:
             raise LookupError(f"document {document_id} not found")
+        if document_id in NUMBAT_REPLY_PAGES:
+            return list(NUMBAT_REPLY_PAGES[document_id])
         return [f"{doc.file_name} page {n}" for n in range(1, doc.page_count + 1)]
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:

@@ -1,7 +1,7 @@
 """OutputValidator 四级校验: 语法, 结构, 引用, 语义 (开发接口文档第 5 节)."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -16,12 +16,14 @@ from backend.contracts.llm_outputs import (
 )
 from backend.contracts.models import (
     AuditException,
+    Confirmation,
     DocumentRef,
     DocumentType,
     EvidencePointer,
     EvidenceType,
     ProposedAction,
     ReasoningStep,
+    ReceiptChannel,
     Reliability,
     StepKind,
     TermType,
@@ -519,6 +521,58 @@ async def test_confirmation_extraction_points_at_reply() -> None:
     ]
     bad = await extract(out.model_copy(update={"evidence": [pointer.model_copy(update={"page": 3})]}), reply, "DOC-06")
     assert bad.level_failed == "reference"
+
+
+def reply_extraction(**changes: Any) -> ConfirmationExtraction:
+    reply = NUMBAT_REPLIES[0]
+    pointer = EvidencePointer(
+        type=EvidenceType.external, source_type="document", source_id=reply.id, locator="account_no", page=1
+    )
+    base = ConfirmationExtraction(
+        confirming_party="Harbourline Bank Limited",
+        account_no="12345601",
+        confirmed_balance_cents=120840000,
+        balance_date=date(2026, 6, 30),
+        receipt_channel=ReceiptChannel.direct_email,
+        evidence=[pointer],
+    )
+    return base.model_copy(update=changes)
+
+
+def sent_confirmation(account: str = "BA-01", channel: ReceiptChannel = ReceiptChannel.direct_email) -> Confirmation:
+    return Confirmation(
+        id=f"C-{account}",
+        bank_account_id=account,
+        confirming_party="Harbourline Bank Limited",
+        idempotency_key=f"{EID}:CSH-04:{account}",
+        sent_at=datetime(2026, 7, 1, tzinfo=UTC),
+        reply_document_id=NUMBAT_REPLIES[0].id,
+        receipt_channel=channel,
+    )
+
+
+async def check_reply(output: ConfirmationExtraction, confirmation: Confirmation | None) -> Any:
+    validator, _ = make_validator(documents=[NUMBAT_REPLIES[0]])
+    ctx = ValidationContext(document=NUMBAT_REPLIES[0], confirmation=confirmation)
+    return await validator.validate(EID, LIBRARY.load("DOC-06"), respond(output), ctx)
+
+
+async def test_reply_account_must_match_confirmed_account() -> None:
+    assert (await check_reply(reply_extraction(), sent_confirmation())).level_failed is None
+    report = await check_reply(reply_extraction(account_no="23456702"), sent_confirmation())
+    assert report.level_failed == "semantic" and not report.retryable
+    assert report.errors == ["回函账号 23456702 与账户 BA-01 的账号 12345601 不符"]
+    missing = await check_reply(reply_extraction(), sent_confirmation("BA-09"))
+    assert missing.level_failed == "semantic" and missing.errors == ["被函证的账户 BA-09 不存在"]
+    # 不给函证时只做引用级 (DOC-04 等其他抽取)
+    assert (await check_reply(reply_extraction(account_no="x"), None)).level_failed is None
+
+
+async def test_reply_channel_mismatch_is_only_a_note() -> None:
+    report = await check_reply(reply_extraction(receipt_channel=ReceiptChannel.portal_via_client), sent_confirmation())
+    assert report.level_failed is None and report.errors == []
+    assert report.notes == ["回函写明的渠道 portal_via_client 与回执记录的 direct_email 不符, 以回执为准"]
+    assert (await check_reply(reply_extraction(receipt_channel=None), sent_confirmation())).notes == []
 
 
 # ── 报告草稿 ─────────────────────────────────────────
