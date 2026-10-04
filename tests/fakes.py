@@ -27,6 +27,7 @@ from backend.contracts.models import (
     ClientProfile,
     Confirmation,
     ConfirmationResult,
+    Contract,
     Decision,
     Direction,
     DocumentRef,
@@ -345,8 +346,8 @@ class FakeTrail:
 
 
 class FakeFinancialStore:
-    """假财务数据存储: 目前只提供证据文件登记 (documents) 与取一行明细 (record), 其余方法用到时再补.
-    B 的 Postgres 实现就绪前代替它."""
+    """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record) 与合同读写 (contracts, save_contract),
+    其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self, documents: list[DocumentRef] | None = None, records: dict[tuple[str, str], dict[str, Any]] | None = None
@@ -354,10 +355,19 @@ class FakeFinancialStore:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
+        self.saved_contracts: dict[str, Contract] = {}  # save_contract 写入的合同, 合同编号 -> 合同, 各项目共用
+        self.save_calls: list[str] = []  # save_contract 的每次调用 (合同编号)
 
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
         self.record_calls.append((source_type, source_id))
         return self.records.get((source_type, source_id))
+
+    async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]:
+        return [c for cid, c in sorted(self.saved_contracts.items()) if ids is None or cid in ids]
+
+    async def save_contract(self, eid: str, contract: Contract) -> None:
+        self.save_calls.append(contract.id)
+        self.saved_contracts[contract.id] = contract
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
         return [d for d in self.document_refs if type is None or d.type is type]
@@ -634,13 +644,22 @@ class NoTaskAsyncio:
 
 
 class FakeEvidenceStore:
-    """假证据文件存储: 只实现 set_status, 改的是 FakeFinancialStore 里登记的文件. 在审计产出事务块内调用时加入该事务:
-    提交才生效, 抛错则丢弃, 并记进该次提交. calls 记下每次调用 (文件 ID, 状态, 是否在事务内)."""
+    """假证据文件存储: 只实现 pages 与 set_status, 读改的是 FakeFinancialStore 里登记的文件.
+
+    set_status 在审计产出事务块内调用时加入该事务: 提交才生效, 抛错则丢弃, 并记进该次提交.
+    calls 记下每次调用 (文件 ID, 状态, 是否在事务内)."""
 
     def __init__(self, financial_store: FakeFinancialStore, output_store: FakeOutputStore | None = None) -> None:
         self.financial_store = financial_store  # 文件登记所在
         self.output_store = output_store  # 共用其事务
         self.calls: list[tuple[str, str, bool]] = []  # (文件 ID, 状态, 是否在事务内)
+
+    async def pages(self, eid: str, document_id: str) -> list[str]:
+        """每页一行短文本 "{文件名} page {n}", 页数取文件登记的 page_count; 未登记抛 LookupError."""
+        doc = next((d for d in self.financial_store.document_refs if d.id == document_id), None)
+        if doc is None:
+            raise LookupError(f"document {document_id} not found")
+        return [f"{doc.file_name} page {n}" for n in range(1, doc.page_count + 1)]
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
         refs = self.financial_store.document_refs

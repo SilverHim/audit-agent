@@ -1,10 +1,11 @@
 """ProcedureAgent 三步: 按归属选程序, run 先 execute 后 interpret, 注册表覆盖全部声明的程序."""
 
+import asyncio
 from typing import ClassVar
 
 import pytest
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, gather_all
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.registry import AGENT_CLASSES, build_agents
 from backend.contracts.models import AgentId
@@ -61,3 +62,49 @@ def test_build_agents_rejects_procedure_without_template(monkeypatch: pytest.Mon
     monkeypatch.setattr(FieldworkAgent, "procedures", frozenset({"REV-08", "XYZ-99"}))
     with pytest.raises(LookupError, match="XYZ-99"):
         build_agents(make_plain_deps())
+
+
+async def test_gather_all_keeps_order() -> None:
+    async def value(n: int) -> int:
+        await asyncio.sleep(0)
+        return n
+
+    assert await gather_all(value(n) for n in (3, 1, 2)) == [3, 1, 2]
+    assert await gather_all([]) == []
+
+
+async def test_gather_all_waits_for_others_then_raises_first_error() -> None:
+    done: list[str] = []
+
+    async def slow() -> str:
+        for _ in range(5):
+            await asyncio.sleep(0)
+        done.append("slow")
+        return "slow"
+
+    async def fail(message: str) -> str:
+        raise ValueError(message)
+
+    with pytest.raises(ValueError, match="first"):
+        await gather_all([slow(), fail("first"), fail("second")])
+    assert done == ["slow"]
+
+
+async def test_gather_all_cancels_children_when_cancelled() -> None:
+    started = asyncio.Event()
+    cancelled: list[bool] = []
+
+    async def forever() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    outer = asyncio.create_task(gather_all([forever()]))
+    await started.wait()
+    outer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await outer
+    assert cancelled == [True]

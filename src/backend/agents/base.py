@@ -1,10 +1,11 @@
 """Agent 抽象基类与依赖."""
 
+import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RunStatus
@@ -58,6 +59,19 @@ class RunContext:
     template: ProcedureTemplate  # 该程序的模板, 来自程序 YAML
     run: ProcedureRun  # 本次执行记录, 状态为 running
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
+
+
+async def gather_all[T](aws: Iterable[Awaitable[T]]) -> list[T]:
+    """并发执行, 全部结束后按输入顺序返回结果; 有出错的, 等其余都结束后抛第一个错误 (按输入顺序).
+
+    asyncio.gather 遇错立即上抛而不取消其余任务, 它们会在 Agent 返回后继续运行, 可能在重跑之后才写入旧结果
+    (如 DOC-04 的 save_contract). 这里不留仍在运行的任务. 外层被取消时, 未完成的任务随之取消.
+    """
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return cast(list[T], results)
 
 
 def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
