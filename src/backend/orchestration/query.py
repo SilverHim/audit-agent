@@ -30,7 +30,7 @@ from backend.contracts.views import (
     ReportMaterial,
 )
 from backend.orchestration.graph import GATE_NODES
-from backend.orchestration.runner import GraphRunner
+from backend.orchestration.runner import GraphRunner, resume_required
 
 GATE_OF_NODE: dict[str, GateId] = {node: gate for gate, node in GATE_NODES.items()}  # 闸门节点名 -> 闸门
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
@@ -96,7 +96,7 @@ class GraphStateQuery:
             engagement=engagement,
             client_name=profile.legal_name,
             running=self.runner.is_running(eid),
-            run_error=self.runner.run_error(eid),
+            run_error=self.runner.run_error(eid) or await self._resume_hint(eid),
             current_gate=current_gate(snapshot.next),
             # 节点内 interrupt() 暂停时, 对应的待执行任务带 interrupts; 闸门是静态中断, 不带
             awaiting_review=any(task.interrupts for task in snapshot.tasks),
@@ -107,6 +107,25 @@ class GraphStateQuery:
             clearly_trivial_cents=values.get("clearly_trivial_cents"),
             opinion_route=values.get("opinion_route"),
         )
+
+    async def _resume_hint(self, eid: str) -> str | None:
+        """Store 已写入而检查点没跟上 (决定写入后检查点写失败, 或进程在两者之间中断) 时的提示: 新决定会被拒,
+        须先 resume. 没有则为 None.
+
+        后台执行或决定提交进行中 (持有项目锁) 时两者本来就暂时不一致, 不判断. 项目, 检查点与 Store 在这里重读,
+        读取期间项目锁被取得过 (有提交开始) 也不判断: 否则可能拿提交前的检查点比提交后的 Store, 误报.
+        """
+        mark = self.runner.lock_count(eid)
+        if self.runner.is_running(eid):
+            return None
+        engagement = await self.deps.engagement_store.get(eid)
+        snapshot = await self.app.aget_state(GraphRunner.config(eid))
+        if engagement is None or snapshot.metadata is None:
+            return None
+        missing = await resume_required(self.deps, engagement, snapshot)
+        if missing is None or self.runner.lock_count(eid) != mark:
+            return None
+        return f"RESUME_REQUIRED: 检查点未跟上 Store ({missing}), 须先 resume"
 
     async def gate(self, eid: str) -> GateView | None:
         """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None.

@@ -288,7 +288,7 @@ class FakeTxn:
 
 
 class FakeEngagementStore:
-    """假项目存储: 实现读项目, 改项目状态, 读写客户画像; create, list 调用即抛 NotImplementedError.
+    """假项目存储: 实现读项目, 列项目, 改项目状态, 读写客户画像; create 调用即抛 NotImplementedError.
 
     bind 到 FakeOutputStore 后, 在它的 transaction 块内调用 update 与 save_profile 会加入该事务 (第 4 节):
     块内读得到暂存的改动, 块正常结束才生效并与审计产出记进同一个 commits 项, 块内抛错一并丢弃.
@@ -386,7 +386,8 @@ class FakeEngagementStore:
         self.profiles.extend(txn.profiles)
 
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
-        raise NotImplementedError
+        """owner_id 为空列全部 (供 recover), 否则只列该用户的项目."""
+        return [e for e in self.engagements if owner_id is None or e.owner_id == owner_id]
 
 
 T = TypeVar("T", bound=Versioned)

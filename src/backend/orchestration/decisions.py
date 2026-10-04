@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from langgraph.graph.state import CompiledStateGraph
@@ -58,7 +57,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import save_outputs, update_procedure
 from backend.orchestration.query import current_gate
-from backend.orchestration.runner import GraphRunner
+from backend.orchestration.runner import GraphRunner, resume_required, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.review_queue import attribute_exceptions
 
@@ -528,13 +527,6 @@ def rerun_procedure(procedure: Procedure, record: ReviewRecord, task: ReviewTask
     )
 
 
-def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
-    """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
-    {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
-    看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
-    return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
-
-
 class GraphDecisionSubmit:
     """DecisionSubmit 的实现: 审计师所有决定的唯一写入口.
 
@@ -561,29 +553,13 @@ class GraphDecisionSubmit:
         return engagement
 
     async def _check_resume_required(self, engagement: Engagement, snapshot: StateSnapshot) -> None:
-        """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断), 须先 resume 补做, 不接受新的决定.
+        """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断) 时须先 resume 补做, 不接受新的决定.
 
-        两种情况: Store 中有检查点里没有的决定; 项目采用的画像版本 (Engagement.client_profile_version) 高于检查点的.
-        比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须 resume.
-        节点内等待时, 本节点已读回的决定在节点返回前不进状态, 列在等待载荷的 records 中 (如 ACC-04 重跑后又失败,
-        第一个 rerun 决定已用过), 也算检查点里有.
+        判断见 runner.resume_required.
         """
-        eid = engagement.id
-        values = snapshot.values
-        stored = {d.id for d in await self.deps.output_store.latest(eid, GateDecision)}
-        stored |= {r.id for r in await self.deps.output_store.latest(eid, ReviewRecord)}
-        in_state = {d.id for d in values.get("gate_decisions", [])} | {r.id for r in values.get("review_records", [])}
-        for waiting in waiting_payloads(snapshot):
-            if isinstance(waiting, dict):
-                in_state.update(waiting.get("records", []))
-        missing = stored - in_state
-        if missing:
-            raise DecisionRejected("RESUME_REQUIRED", ", ".join(sorted(missing)))
-        version_in_state = values.get("client_profile_version")  # 未启动的项目没有
-        if version_in_state is not None and engagement.client_profile_version > version_in_state:
-            raise DecisionRejected(
-                "RESUME_REQUIRED", f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
-            )
+        missing = await resume_required(self.deps, engagement, snapshot)
+        if missing is not None:
+            raise DecisionRejected("RESUME_REQUIRED", missing)
 
     @asynccontextmanager
     async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:

@@ -5,12 +5,13 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
+from langgraph.types import Command, StateSnapshot
 
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import AgentId, Phase, Procedure
+from backend.contracts.models import AgentId, Engagement, GateDecision, Phase, Procedure, ReviewRecord
 from backend.contracts.state import EngagementState, initial_state
+from backend.orchestration.graph import GATE_NODES
 from backend.services.procedure_library import ProcedureLibrary
 
 
@@ -21,6 +22,44 @@ def fixed_procedures(library: ProcedureLibrary) -> list[Procedure]:
         for t in library.all()
         if t.phase is not Phase.P2_Executing
     ]
+
+
+def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
+    """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
+    {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
+    看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
+    return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
+
+
+def waiting_for_human(snapshot: StateSnapshot) -> bool:
+    """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点)."""
+    gates = set(GATE_NODES.values())
+    return any(node in gates for node in snapshot.next) or any(task.interrupts for task in snapshot.tasks)
+
+
+async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> str | None:
+    """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断) 的内容, 须先补做; 没有返回 None.
+
+    两种情况: Store 中有检查点里没有的决定; 项目采用的画像版本 (Engagement.client_profile_version) 高于检查点的.
+    比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须补做.
+    节点内等待时, 本节点已读回的决定在节点返回前不进状态, 列在等待载荷的 records 中 (如 ACC-04 重跑后又失败,
+    第一个 rerun 决定已用过), 也算检查点里有.
+    """
+    eid = engagement.id
+    values = snapshot.values
+    stored = {d.id for d in await deps.output_store.latest(eid, GateDecision)}
+    stored |= {r.id for r in await deps.output_store.latest(eid, ReviewRecord)}
+    in_state = {d.id for d in values.get("gate_decisions", [])} | {r.id for r in values.get("review_records", [])}
+    for waiting in waiting_payloads(snapshot):
+        if isinstance(waiting, dict):
+            in_state.update(waiting.get("records", []))
+    missing = stored - in_state
+    if missing:
+        return ", ".join(sorted(missing))
+    version_in_state = values.get("client_profile_version")  # 未启动的项目没有
+    if version_in_state is not None and engagement.client_profile_version > version_in_state:
+        return f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
+    return None
 
 
 class GraphRunner:
@@ -35,6 +74,7 @@ class GraphRunner:
         self.busy: set[str] = set()  # 持有项目锁的项目编号
         self.tasks: dict[str, asyncio.Task[None]] = {}  # 项目编号 -> 后台任务; 保留引用, 防止任务未完成即被回收
         self.errors: dict[str, str] = {}  # 项目编号 -> 最近一次后台执行的异常, 成功推进后清除
+        self.acquired: dict[str, int] = {}  # 项目编号 -> 取得项目锁的累计次数, 读者据此判断期间有没有写入
 
     @staticmethod
     def config(eid: str) -> RunnableConfig:
@@ -45,6 +85,12 @@ class GraphRunner:
         if eid in self.busy:
             raise DecisionRejected("ENGAGEMENT_BUSY", f"{eid} 正在执行")
         self.busy.add(eid)
+        self.acquired[eid] = self.acquired.get(eid, 0) + 1
+
+    def lock_count(self, eid: str) -> int:
+        """该项目取得项目锁的累计次数. 写 Store 与检查点都在持锁期间: 读前读后次数相同且读前未持锁, 说明读取期间
+        没有写入, 读到的 Store 与检查点是同一时刻的."""
+        return self.acquired.get(eid, 0)
 
     def release(self, eid: str) -> None:
         """释放项目锁."""
@@ -85,7 +131,9 @@ class GraphRunner:
     async def _advance(self, eid: str, graph_input: EngagementState | Command[Any] | None) -> None:
         """后台任务: 推进图到下一个中断或结束. 异常记入 errors 不再抛出; 无论成败, 最后释放项目锁."""
         try:
-            await self.app.ainvoke(graph_input, self.config(eid))  # 执行到下一个中断或结束才返回
+            # 执行到下一个中断或结束才返回. durability="sync": 每步的检查点写完才进入下一步, 进程被杀时
+            # 已执行完的节点都在检查点里, recover 不会重跑它们 (默认 async 下最后一步可能还没落盘)
+            await self.app.ainvoke(graph_input, self.config(eid), durability="sync")
             self.errors.pop(eid, None)  # 成功推进, 清除上次的错误
         except Exception as e:
             # 后台任务无人等待, 异常抛出即丢失; 记入 errors, 由总览的 run_error 展示给前端
@@ -109,6 +157,23 @@ class GraphRunner:
         for eid, task in running:
             self._forget(eid, task)
 
+    async def _initial_input(self, engagement: Engagement) -> EngagementState:
+        """新项目的初始状态. 固定集程序第 1 版先入库 (节点写程序新版本时, put 要求已有上一版); 已入库时 put 跳过,
+        状态取 Store 中的那一版."""
+        # 图状态记本项目采用的画像版本 (建项目时的版本), 不取全局最新: 同客户的其他项目可能已改过画像
+        version = engagement.client_profile_version
+        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
+        if profile is None:
+            raise LookupError(f"client profile {engagement.client_id} v{version} not found")
+        pack = await self.deps.output_store.put(engagement.id, fixed_procedures(self.deps.library), actor=AgentId.A1)
+        return initial_state(engagement, [p for p in pack if isinstance(p, Procedure)], profile.version)
+
+    async def _engagement(self, eid: str) -> Engagement:
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None:
+            raise LookupError(f"Engagement {eid} not found")
+        return engagement
+
     async def start(self, eid: str) -> None:
         """新项目启动: 取得项目锁, 固定集程序第 1 版写入 Store, 以初始状态在后台推进到第一个中断.
 
@@ -116,26 +181,61 @@ class GraphRunner:
         """
         self.acquire(eid)
         try:
-            engagement = await self.deps.engagement_store.get(eid)
-            if engagement is None:
-                raise LookupError(f"Engagement {eid} not found")
-            # 图状态记本项目采用的画像版本 (建项目时的版本), 不取全局最新: 同客户的其他项目可能已改过画像
-            version = engagement.client_profile_version
-            profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
-            if profile is None:
-                raise LookupError(f"client profile {engagement.client_id} v{version} not found")
-            # 固定集第 1 版先入库: 节点写程序新版本时, put 要求已有上一版
-            pack = fixed_procedures(self.deps.library)
-            await self.deps.output_store.put(eid, pack, actor=AgentId.A1)
-            graph_input = initial_state(engagement, pack, profile.version)
+            graph_input = await self._initial_input(await self._engagement(eid))
         except BaseException:
             # 后台任务尚未启动, 不会由 _advance 释放, 须在此释放
             self.release(eid)
             raise
         self.launch(eid, graph_input)
 
+    async def _proceed(self, eid: str) -> None:
+        """已持项目锁时按第 7 节 recover 规则处理一个项目: 要继续执行则交给后台任务 (锁随之交出), 否则释放锁.
+
+        只看检查点, 不看项目阶段 (已归档的项目若检查点仍停在闸门, 照样处理):
+        - 没有检查点 (start 写了固定集, 第一步还没落盘就中断): 以初始状态重新推进.
+        - 已结束 (next 与待执行任务都为空): 不动.
+        - Store 有检查点里没有的决定或画像版本: 先补做. 补做尚未实现, 抛 NotImplementedError.
+        - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动. 不调 ainvoke(None):
+          节点内第二次及以后的等待会沿用上次的恢复值, 等于凭空多出一个决定.
+        - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
+        出错时释放锁后抛出.
+        """
+        try:
+            snapshot = await self.app.aget_state(self.config(eid))
+            engagement = await self._engagement(eid)
+            graph_input: EngagementState | None = None
+            if snapshot.metadata is None:
+                graph_input = await self._initial_input(engagement)
+            else:
+                if not snapshot.next and not snapshot.tasks:
+                    self.release(eid)
+                    return
+                missing = await resume_required(self.deps, engagement, snapshot)
+                if missing is not None:
+                    raise NotImplementedError(f"检查点未跟上 Store ({missing}), 恢复补做尚未实现")
+                if waiting_for_human(snapshot):
+                    self.release(eid)
+                    return
+        except BaseException:
+            self.release(eid)
+            raise
+        self.launch(eid, graph_input)
+
     async def resume(self, eid: str) -> None:
-        raise NotImplementedError
+        """手动重试一个项目 (后台执行出错后, 由 POST /resume 调用): 取项目锁 (取不到抛 ENGAGEMENT_BUSY),
+        再按 recover 规则处理 (见 _proceed). 继续执行时返回时 is_running 为真, 成功推进后 run_error 清空;
+        停在闸门或等人, 或已结束时不改状态, 不持锁."""
+        self.acquire(eid)
+        await self._proceed(eid)
 
     async def recover(self) -> None:
-        raise NotImplementedError
+        """应用启动时对全部项目按 recover 规则处理 (见 _proceed). 要继续执行的项目返回时 is_running 为真.
+
+        一个项目出错记入其 run_error, 不影响其他项目.
+        """
+        for engagement in await self.deps.engagement_store.list():
+            try:
+                self.acquire(engagement.id)
+                await self._proceed(engagement.id)
+            except Exception as e:
+                self.errors[engagement.id] = f"{type(e).__name__}: {e}"

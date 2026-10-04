@@ -1,5 +1,6 @@
 """应用入口与组装根: 注入 Store, 适配器与检查点, 编译主图, 挂路由 (C 负责, A 提供图与编排入口)."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -64,6 +65,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.runner = GraphRunner(graph, deps)
         app.state.query = GraphStateQuery(graph, deps, app.state.runner)
         app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
+        try:
+            await app.state.runner.recover()  # 按检查点恢复上次中途停下的项目 (接口文档第 7 节 recover 规则)
+        except NotImplementedError:  # EngagementStore.list 尚未实现时不阻断启动
+            logging.getLogger(__name__).warning("EngagementStore.list 未实现, 跳过启动恢复")
         try:
             yield
         finally:
