@@ -19,6 +19,7 @@ from backend.contracts.models import (
     AgentId,
     AuditException,
     AuditObjective,
+    AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
     Decision,
@@ -102,6 +103,7 @@ GATE_MATERIAL = {  # 闸门呈报材料在状态中的字段; 越过闸门时把
     GateId.ACC_01: "acceptance_scorecard",
     GateId.PLN_01_03: "materiality_candidates",
     GateId.FIN_01: "uncorrected_schedule",
+    GateId.RPT_01: "report_versions",  # 列表字段, 写入 [当前报告]
 }
 VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives")  # 效果中会出新版本的对象列表
 GATE_PROCEDURE = {  # 闸门决定的留痕记在哪条程序下
@@ -588,7 +590,8 @@ class GraphDecisionSubmit:
             return await store.get(eid, MaterialityCandidates, "MATERIALITY")
         if gate is GateId.FIN_01:
             return await store.get(eid, UncorrectedSchedule, "SCHEDULE")
-        raise NotImplementedError(f"{gate} 的闸门决定尚未实现")
+        reports = await store.latest(eid, AuditReportVersion)  # RPT-01: 修订轮次最大的那份报告的当前版本
+        return max(reports, key=lambda r: r.revision) if reports else None
 
     async def check_gate_decision(self, eid: str, decision: GateDecision) -> Versioned:
         """第 7 节校验顺序中 NOT_AT_GATE 之后的部分: 材料与修改项的版本, 字段, 取值, 决定 ID 未用过.
@@ -688,7 +691,8 @@ class GraphDecisionSubmit:
                 raise NotImplementedError(f"{decision.gate} 的闸门决定已校验, 效果尚未实现")
             written = await self._write_gate(eid, decision, effects, new_versions(effects, sources))
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致
-            written[GATE_MATERIAL[decision.gate]] = target
+            field = GATE_MATERIAL[decision.gate]
+            written[field] = [target] if field == "report_versions" else target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由 gate_route 按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=GATE_NODES[decision.gate])
 

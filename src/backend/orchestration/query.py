@@ -13,6 +13,7 @@ from backend.contracts.models import (
     ClientProfile,
     Engagement,
     GateId,
+    GateVerdict,
     Phase,
     Procedure,
     ReviewTask,
@@ -26,6 +27,7 @@ from backend.contracts.views import (
     GateView,
     PlanningMaterial,
     ProcedureSummary,
+    ReportMaterial,
 )
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.runner import GraphRunner
@@ -107,7 +109,9 @@ class GraphStateQuery:
         )
 
     async def gate(self, eid: str) -> GateView | None:
-        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None. 已实现 ACC-01, PLN-01/03 与 FIN-01.
+        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None.
+
+        RPT-01 的材料为当前报告 (修订轮次最大的一版) 与此前的退回决定 (含批注; 信息不足的决定不在其中).
 
         GateView 的 target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期.
         停在闸门而材料缺失 (状态与流程不符) 时抛 LookupError.
@@ -146,7 +150,13 @@ class GraphStateQuery:
                 raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
             completion = CompletionMaterial(schedule=schedule, misstatements=values["misstatements"])
             return GateView(gate=gate, target_id=schedule.id, target_version=schedule.version, material=completion)
-        raise NotImplementedError(f"{gate} 的闸门材料尚未实现")
+        reports = values["report_versions"]
+        if not reports:
+            raise LookupError(f"{eid} 停在 RPT-01 闸门, 但没有报告")
+        report = max(reports, key=lambda r: r.revision)  # 当前报告: 修订轮次最大的一版
+        rejected = [d for d in values["gate_decisions"] if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject]
+        reporting = ReportMaterial(report=report, previous_decisions=rejected)
+        return GateView(gate=gate, target_id=report.id, target_version=report.version, material=reporting)
 
 
 def referenced(exceptions: list[AuditException], ids: list[str]) -> list[AuditException]:

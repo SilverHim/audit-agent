@@ -20,6 +20,7 @@ from backend.contracts.models import (
     Assertion,
     AuditException,
     AuditObjective,
+    AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
     Confirmation,
@@ -31,11 +32,15 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    GateId,
+    GateVerdict,
     Judgment,
+    JudgmentRef,
     MaterialityCandidate,
     MaterialityCandidates,
     MisstatementDraft,
     MisstatementType,
+    OpinionType,
     Phase,
     Procedure,
     ProcedureRun,
@@ -44,6 +49,7 @@ from backend.contracts.models import (
     ReasoningStep,
     ReceiptChannel,
     Reliability,
+    ReportSection,
     ReviewRecord,
     ReviewTask,
     RiskItem,
@@ -683,6 +689,12 @@ class ScriptA6(ScriptAgent):
     agent_id: ClassVar[AgentId] = AgentId.A6
 
 
+class ScriptA10(ScriptAgent):
+    """以 A10 (报告) 身份写片段的脚本 Agent, 可写 report_versions, review_tasks."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A10
+
+
 def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, ProcedureAgent[Any]]:
     """P1 三条程序的脚本 Agent, 产出按合成数据集设计第 7 节第 3-5 行. 真实的 A3, A4 由 R37, R38 实现.
 
@@ -980,15 +992,54 @@ def numbat_rev02_agents(deps: AgentDeps, attributes: bool = True) -> dict[str, P
     return {"REV-02": ScriptA6(deps, rev02)}
 
 
+def numbat_report_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """RPT-03 的脚本 Agent, 产出按合成数据集设计第 7 节第 16 行. 真实 Agent 由 M3 实现.
+
+    出 REPORT-{n} 第 1 版, n 为状态中已有报告数 + 1; 意见类型取 FIN-01 选定的 opinion_route; 意见段与形成意见的基础段
+    写明收入高估, 引用已确认的 J-REV-02-1-SI-2026-0612 (状态中没有时不引用). 第 2 轮起回应最近一次 RPT-01 退回,
+    基础段补写合同 CON-001 第 5.1 条.
+    """
+
+    def rpt03(ctx: RunContext) -> StatePatch:
+        state = ctx.state
+        revision = len(state["report_versions"]) + 1
+        opinion = state["opinion_route"] or OpinionType.unqualified
+        fact = "收入高估 AUD 142,000: 发票 SI-2026-0612 于 2026-06-28 入账, 客户 2026-07-03 签收."
+        basis = fact
+        rejects = [d for d in state["gate_decisions"] if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject]
+        if revision > 1:
+            basis += " 合同 CON-001 第 5.1 条约定签收时转移控制权."
+        cited = [j for j in state["judgments"] if j.id == "J-REV-02-1-SI-2026-0612"]
+        report = AuditReportVersion(
+            id=f"REPORT-{revision}",
+            revision=revision,
+            opinion_type=opinion,
+            sections={
+                ReportSection.opinion: f"{opinion.value} opinion. {fact}",
+                ReportSection.basis_for_opinion: basis,
+                ReportSection.directors_responsibilities: "董事责任",
+                ReportSection.auditor_responsibilities: "审计师责任",
+                ReportSection.other_legal_and_regulatory: "",
+            },
+            judgment_refs=[JudgmentRef(id=j.id, version=j.version) for j in cited],
+            addresses_decision_id=rejects[-1].id if revision > 1 and rejects else None,
+        )
+        return {"procedure_runs": [finished(ctx.run)], "report_versions": [report]}
+
+    return {"RPT-03": ScriptA10(deps, rpt03)}
+
+
 def numbat_all_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
     """P2 七条程序的 Numbat 脚本 Agent, 产出按合成数据集设计第 7 节第 7-13 行 (第 0 层四条, 现金线两条, REV-02)."""
     return {**numbat_p2_agents(deps), **numbat_cash_agents(deps), **numbat_rev02_agents(deps)}
 
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
-    """主图节点: 已实装的 Agent 用真实的, P1 三条程序用 Numbat 脚本 Agent (见 numbat_p1_agents)."""
+    """主图节点: 已实装的 Agent 用真实的, P1 三条程序与 RPT-03 用 Numbat 脚本 Agent (见 numbat_p1_agents,
+    numbat_report_agents)."""
     nodes = GraphNodes(deps, parallel_cap)
     nodes.agents.update(numbat_p1_agents(deps, presets))
+    nodes.agents.update(numbat_report_agents(deps))
     return nodes
 
 

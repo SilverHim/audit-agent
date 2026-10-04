@@ -655,7 +655,9 @@ class GraphNodes:
         return await self.execute(state, "FIN-04", phase=Phase.P3_Completion)
 
     async def report_draft(self, state: EngagementState) -> StatePatch:
-        return {}  # TODO(M2): A10 执行 RPT-03, 出下一 revision
+        """A10 执行 RPT-03, 出审计报告的下一修订 (REPORT-{revision}, 第 1 版); RPT-01 退回后回到这里, 按批注修订,
+        以 rerun 再执行一次. 执行与写入见 execute."""
+        return await self.execute(state, "RPT-03")
 
     async def archive(self, state: EngagementState) -> StatePatch:
         return {}  # 项目已由 DecisionSubmit 锁定, 此处只写留痕

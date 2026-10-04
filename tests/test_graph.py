@@ -87,15 +87,14 @@ MATERIALS: dict[GateId, dict[str, Any]] = {
 }
 
 
-# 遍历时随决定一并写入状态的值: PLN-01/03 通过写入重要性三项 (同 DecisionSubmit, FIN-04 按它们取参数);
-# RPT-01 的首稿节点尚为占位, 报告随决定写入, 否则闸门因材料缺失一直重新呈报. ACC-01, PLN-01/03, FIN-01 的材料由节点产出
+# 遍历时随决定一并写入状态的值: PLN-01/03 通过写入重要性三项 (同 DecisionSubmit, FIN-04 按它们取参数).
+# 各闸门的材料由节点产出
 WALK_WRITES: dict[GateId, dict[str, Any]] = {
     GateId.PLN_01_03: {
         "materiality_cents": 12000000,
         "performance_materiality_cents": 9000000,
         "clearly_trivial_cents": 600000,
     },
-    GateId.RPT_01: MATERIALS[GateId.RPT_01],
 }
 
 
@@ -202,7 +201,11 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
     for n, (gate, verdict, after_decision, next_gate) in enumerate(steps):
         snapshot = await app.aget_state(config)
         assert snapshot.next == (GATE_NODES[gate],)
-        values = {"gate_decisions": [_decision(n, gate, verdict)], **WALK_WRITES.get(gate, {})}
+        decision = _decision(n, gate, verdict)
+        if gate is GateId.RPT_01:  # 报告由 report_draft 产出, 退回后出下一修订: 决定绑定当前报告
+            current = max(snapshot.values["report_versions"], key=lambda r: r.revision)
+            decision = decision.model_copy(update={"target_id": current.id, "target_version": current.version})
+        values = {"gate_decisions": [decision], **WALK_WRITES.get(gate, {})}
         await app.aupdate_state(config, values, as_node=GATE_NODES[gate])
         assert (await app.aget_state(config)).next == (after_decision,)
         await app.ainvoke(None, config)
