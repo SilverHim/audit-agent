@@ -21,6 +21,7 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState
 from backend.contracts.views import (
     AcceptanceMaterial,
+    CompletionMaterial,
     EngagementOverview,
     GateView,
     PlanningMaterial,
@@ -106,7 +107,7 @@ class GraphStateQuery:
         )
 
     async def gate(self, eid: str) -> GateView | None:
-        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None. 已实现 ACC-01 与 PLN-01/03.
+        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None. 已实现 ACC-01, PLN-01/03 与 FIN-01.
 
         GateView 的 target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期.
         停在闸门而材料缺失 (状态与流程不符) 时抛 LookupError.
@@ -139,6 +140,12 @@ class GraphStateQuery:
                 risks=values["risk_register"],
             )
             return GateView(gate=gate, target_id=candidates.id, target_version=candidates.version, material=planning)
+        if gate is GateId.FIN_01:
+            schedule = values["uncorrected_schedule"]
+            if schedule is None:
+                raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
+            completion = CompletionMaterial(schedule=schedule, misstatements=values["misstatements"])
+            return GateView(gate=gate, target_id=schedule.id, target_version=schedule.version, material=completion)
         raise NotImplementedError(f"{gate} 的闸门材料尚未实现")
 
 

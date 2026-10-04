@@ -1,7 +1,7 @@
 """DecisionSubmit (A 负责): 审计师决定的唯一写入口. 取锁 → 校验 → 一个事务内写入决定及其效果 → 越过闸门 → 后台继续.
 
-校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01 与 PLN-01/03 闸门决定,
-以及复核决定的校验.
+校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01, PLN-01/03, FIN-01 闸门决定
+与全部复核决定.
 """
 
 from collections.abc import AsyncIterator
@@ -33,6 +33,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     MaterialityChoice,
     Misstatement,
+    OpinionType,
     Phase,
     Procedure,
     ProcedureRun,
@@ -47,6 +48,7 @@ from backend.contracts.models import (
     TaskStatus,
     TrailEntry,
     TrailKind,
+    UncorrectedSchedule,
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch
@@ -78,10 +80,28 @@ def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     }
 
 
+def fin01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
+    """FIN-01 闸门决定的效果 (第 7 节), 纯函数, 由 aupdate_state(as_node="gate_fin") 写入状态.
+
+    approve: FIN-01 置 completed, opinion_route 取审计师选的意见类型 (可与候选意见不同), 阶段进 P4_Reporting;
+    reject 与 insufficient_info: 只记决定 (reject 由路由回 completion 重做汇总表, insufficient_info 留在闸门重新呈报).
+    """
+    if decision.decision is not GateVerdict.approve:
+        return {"gate_decisions": [decision]}
+    return {
+        "gate_decisions": [decision],
+        "procedure_pack": update_procedure(pack, "FIN-01", status=ProcedureStatus.completed),
+        "opinion_route": decision.disposition,
+        "phase": Phase.P4_Reporting,
+    }
+
+
+FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
 GATE_MATERIAL = {  # 闸门呈报材料在状态中的字段; 越过闸门时把决定绑定的那一版 (读自 Store) 一并写入
     GateId.ACC_01: "acceptance_scorecard",
     GateId.PLN_01_03: "materiality_candidates",
+    GateId.FIN_01: "uncorrected_schedule",
 }
 VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives")  # 效果中会出新版本的对象列表
 GATE_PROCEDURE = {  # 闸门决定的留痕记在哪条程序下
@@ -566,6 +586,8 @@ class GraphDecisionSubmit:
             return await store.get(eid, AcceptanceScorecard, "SCORECARD")
         if gate is GateId.PLN_01_03:
             return await store.get(eid, MaterialityCandidates, "MATERIALITY")
+        if gate is GateId.FIN_01:
+            return await store.get(eid, UncorrectedSchedule, "SCHEDULE")
         raise NotImplementedError(f"{gate} 的闸门决定尚未实现")
 
     async def check_gate_decision(self, eid: str, decision: GateDecision) -> Versioned:
@@ -588,6 +610,10 @@ class GraphDecisionSubmit:
         if decision.materiality is not None and isinstance(target, MaterialityCandidates):
             check_materiality(target, decision.materiality)
         check_edits(decision.edits, risks)
+        if decision.disposition is not None and decision.disposition not in FIN01_DISPOSITIONS:
+            raise DecisionRejected(
+                "INVALID_VALUE", f"意见类型只能选 unqualified 或 qualified, 不能选 {decision.disposition}"
+            )
         await self._check_decision_id(eid, decision.id)
         return target
 
@@ -656,6 +682,8 @@ class GraphDecisionSubmit:
                 effects = pln_effects(
                     sources["procedure_pack"], sources["risk_register"], sources["audit_objectives"], target, decision
                 )
+            elif decision.gate is GateId.FIN_01:
+                effects = fin01_effects(sources["procedure_pack"], decision)
             else:
                 raise NotImplementedError(f"{decision.gate} 的闸门决定已校验, 效果尚未实现")
             written = await self._write_gate(eid, decision, effects, new_versions(effects, sources))
