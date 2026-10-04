@@ -5,11 +5,11 @@ import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from backend.agents.base import AgentDeps, ProcedureAgent
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import DecisionRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -34,6 +34,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
+from backend.contracts.state import StatePatch
 from backend.core.config import get_settings
 from backend.orchestration import runner as runner_module
 from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects, materiality_amounts, pln_effects
@@ -51,9 +52,12 @@ from tests.fakes import (
     FakeOutputStore,
     FakeTrail,
     NoTaskAsyncio,
+    ScriptA4,
+    ScriptAgent,
     assert_pack_synced,
     make_procedure,
     make_runner,
+    numbat_p1_agents,
     numbat_pln01_with,
     wait_idle,
 )
@@ -1257,3 +1261,61 @@ async def test_same_version_with_different_content_in_store_rejected() -> None:
 
     assert await s.output_store.get(EID, GateDecision, "D-PLN") is None
     assert len(decision_trail(s)) == trail_before
+
+
+# ── R61 基准金额不为正的重要性候选: 照常列出, 不能以它通过 (Q18) ──
+
+
+def loss_making(base_amount_cents: int) -> Agents:
+    """PLN-01 同 Numbat, 但税前利润基准金额改为 base_amount_cents (亏损为负), 候选区间随之."""
+
+    def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+        numbat = cast(ScriptAgent, numbat_p1_agents(deps)["PLN-01"]).script
+
+        def pln01(ctx: RunContext) -> StatePatch:
+            patch = numbat(ctx)
+            candidates = patch["materiality_candidates"]
+            assert candidates is not None
+            loss = [
+                c.model_copy(
+                    update={
+                        "base_amount_cents": base_amount_cents,
+                        "low_cents": round(base_amount_cents * c.pct_low),
+                        "high_cents": round(base_amount_cents * c.pct_high),
+                    }
+                )
+                if c.basis == "profit_before_tax"
+                else c
+                for c in candidates.candidates
+            ]
+            return {**patch, "materiality_candidates": candidates.model_copy(update={"candidates": loss})}
+
+        return {"PLN-01": ScriptA4(deps, pln01)}
+
+    return agents
+
+
+PBT = MaterialityChoice(basis="profit_before_tax", pct=0.05, performance_pct=0.75, clearly_trivial_pct=0.05)
+
+
+@pytest.mark.parametrize("base_amount_cents", [-150000000, 0])
+async def test_pln_approve_rejected_for_non_positive_basis(base_amount_cents: int) -> None:
+    """验收 1, 2: 税前亏损 (或为零) 时候选照常列出; 以税前利润为基准通过报 INVALID_VALUE (消息含基准名), 不写 Store."""
+    s = await at_pln_gate(loss_making(base_amount_cents))
+    candidates = (await s.runner.app.aget_state(GraphRunner.config(EID))).values["materiality_candidates"]
+    pbt = next(c for c in candidates.candidates if c.basis == "profit_before_tax")
+    assert pbt.base_amount_cents == base_amount_cents
+
+    await assert_rejected(s, pln_decision(GateVerdict.approve, materiality=PBT), "INVALID_VALUE", "profit_before_tax")
+
+
+async def test_pln_other_basis_approves_when_loss_making() -> None:
+    """验收 1: 税前亏损时选收入基准照常通过, 重要性按收入算."""
+    s = await at_pln_gate(loss_making(-150000000))
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("assemble_pack",)
+    assert snapshot.values["materiality_cents"] == 12000000
