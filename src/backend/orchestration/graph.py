@@ -18,7 +18,16 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
-from backend.contracts.models import GateId, GateVerdict, Procedure, ProcedureStatus, TaskStatus, Versioned
+from backend.contracts.models import (
+    GateDecision,
+    GateId,
+    GateVerdict,
+    Procedure,
+    ProcedureStatus,
+    ReportStatus,
+    TaskStatus,
+    Versioned,
+)
 from backend.contracts.state import EngagementState
 from backend.orchestration.nodes import FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
@@ -89,6 +98,8 @@ def gate_route(gate: GateId) -> Callable[[EngagementState], GateRoute]:
         #    材料缺失 (状态与流程不符) 也不放行, 留在闸门重新呈报
         d = decisions[-1]
         target = _gate_target(state, gate)
+        if _signed_by(state, d):
+            return "approve"  # 签字使报告出了新版本, 决定绑定的是签字前那一版, 仍放行
         if target is None or (d.target_id, d.target_version) != target:
             return "represent"
         # 4. 按决定种类出闸门
@@ -99,6 +110,19 @@ def gate_route(gate: GateId) -> Callable[[EngagementState], GateRoute]:
         return "represent"  # 信息不足
 
     return route
+
+
+def _signed_by(state: EngagementState, decision: GateDecision) -> bool:
+    """当前报告是这条 RPT-01 通过决定签的字: 报告已 signed, 正是决定绑定的那份报告的下一版."""
+    if decision.gate is not GateId.RPT_01 or decision.decision is not GateVerdict.approve:
+        return False
+    reports = state["report_versions"]
+    report = max(reports, key=lambda r: r.revision) if reports else None
+    return (
+        report is not None
+        and report.status is ReportStatus.signed
+        and (report.id, report.version) == (decision.target_id, decision.target_version + 1)
+    )
 
 
 def _stuck_detail(pack: list[Procedure], unfinished: list[Procedure], library: ProcedureLibrary) -> str:

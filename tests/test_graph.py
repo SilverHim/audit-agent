@@ -21,6 +21,7 @@ from backend.contracts.models import (
     OpinionType,
     Phase,
     ProcedureStatus,
+    ReportStatus,
     ReviewTask,
     TargetType,
     TaskKind,
@@ -408,3 +409,25 @@ def test_gate_route_represents_when_material_missing(gate: GateId) -> None:
     material = MATERIALS.get(gate) or {"materiality_candidates": MaterialityCandidates(id="MATERIALITY", candidates=[])}
     state.update(material)  # type: ignore[typeddict-item]
     assert gate_route(gate)(state) == "approve"
+
+
+# ── R26: RPT-01 签字后放行 ──
+
+
+@pytest.mark.parametrize(
+    ("status", "version", "verdict", "route"),
+    [
+        (ReportStatus.signed, 2, GateVerdict.approve, "approve"),  # 签字出了 v2, 决定绑定 v1
+        (ReportStatus.draft, 2, GateVerdict.approve, "represent"),  # 未签字的新版本: 决定过期
+        (ReportStatus.signed, 3, GateVerdict.approve, "represent"),  # 不是决定那一版的下一版
+        (ReportStatus.signed, 2, GateVerdict.reject, "represent"),  # 只有通过决定会签字
+    ],
+)
+def test_gate_route_rpt01_after_signing(status: ReportStatus, version: int, verdict: GateVerdict, route: str) -> None:
+    """RPT-01 通过使报告出签字版, 决定绑定的是签字前一版: 仍放行到 archive; 其余版本不符仍重新呈报."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state["gate_decisions"] = [_decision(0, GateId.RPT_01, verdict)]
+    [report] = MATERIALS[GateId.RPT_01]["report_versions"]
+    state["report_versions"] = [report.model_copy(update={"version": version, "status": status})]
+
+    assert gate_route(GateId.RPT_01)(state) == route

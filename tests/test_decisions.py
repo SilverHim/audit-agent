@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from backend.contracts.errors import DecisionRejected, VersionConflict
+from backend.contracts.errors import DecisionRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
@@ -168,9 +168,12 @@ async def test_submit_reject_declines_and_locks() -> None:
     await wait_idle(s.runner, EID)
 
     assert await s.next_nodes() == ()  # 走到 declined 结束
+    assert s.runner.run_error(EID) is None  # 项目已 locked, declined 不写 Store, 正常结束
     engagement = await s.engagement_store.get(EID)
     assert engagement is not None
     assert (engagement.phase, engagement.locked) == (Phase.Declined, True)
+    with pytest.raises(EngagementLocked):
+        await s.output_store.put(EID, [acc01_decision(GateVerdict.approve, id="D-RAW")], actor="U-1")
 
 
 async def test_submit_insufficient_info_stays_at_gate() -> None:

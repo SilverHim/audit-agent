@@ -1,9 +1,12 @@
-"""R25 RPT-01 闸门: report_draft 由 A10 出报告首稿; 闸门呈报当前报告与此前的退回决定; RPT-01 决定按必填表校验."""
+"""RPT-01 闸门. R25: report_draft 由 A10 出报告首稿; 闸门呈报当前报告与此前的退回决定; RPT-01 决定按必填表校验.
+R26: approve 签字归档并锁定项目, reject 回 report_draft 出下一修订, 信息不足重呈."""
 
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
 
+from backend.contracts.errors import DecisionRejected, EngagementLocked
 from backend.contracts.models import (
     Annotation,
     AuditReportVersion,
@@ -12,17 +15,23 @@ from backend.contracts.models import (
     GateVerdict,
     JudgmentRef,
     OpinionType,
+    Phase,
+    Procedure,
     ProcedureRun,
+    ProcedureStatus,
     ReportSection,
+    ReportStatus,
     RunStatus,
     RunTrigger,
+    TrailKind,
+    Versioned,
 )
 from backend.contracts.views import ReportMaterial
-from backend.orchestration.graph import GATE_NODES
+from backend.orchestration.decisions import rpt01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
-from tests.fakes import NOW, wait_idle
-from tests.test_decisions import CHOICE, Started, assert_rejected, edit
+from tests.fakes import NOW, NUMBAT_PROFILE, EngagementWrite, FakeTrail, make_procedure, wait_idle
+from tests.test_decisions import CHOICE, Started, assert_rejected, edit, stop_after_submit
 from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import EID
 
@@ -66,14 +75,23 @@ async def gate_view(s: Started) -> Any:
 
 
 async def reject_and_redraft(s: Started) -> GateDecision:
-    """模拟 RPT-01 退回 (效果由 R26 实现, 这里直接以闸门身份写入决定), 继续执行: report_draft 出 REPORT-2."""
+    """RPT-01 退回 REPORT-1 (批注同合成数据集第 7 节第 17 行), 后台继续: report_draft 出 REPORT-2, 再停在闸门前."""
     rejected = rpt_decision(GateVerdict.reject, id="D-RPT-REJECT")
-    await s.runner.app.aupdate_state(CONFIG, {"gate_decisions": [rejected]}, as_node=GATE_NODES[GateId.RPT_01])
-    s.runner.acquire(EID)
-    s.runner.launch(EID, None)
+    await s.submit.submit(EID, rejected)
     await wait_idle(s.runner, EID)
     assert await s.next_nodes() == ("gate_rpt01",)
     return rejected
+
+
+def latest(s: Started, model: type[Any], oid: str) -> Any:
+    return max((r for r in s.output_store.rows if isinstance(r, model) and r.id == oid), key=lambda r: r.version)
+
+
+def decision_trail(s: Started) -> list[tuple[str | None, str | None]]:
+    """decision 留痕的 (程序编号, 防重复键), 按写入顺序."""
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return [(e.procedure_id, e.idempotency_key) for e in trail.entries if e.kind is TrailKind.decision]
 
 
 async def test_report_draft_writes_first_revision() -> None:
@@ -149,14 +167,154 @@ async def test_decision_on_superseded_report_rejected() -> None:
     await assert_rejected(s, rpt_decision(GateVerdict.approve, id="D-RPT-2"), "VERSION_MISMATCH")
 
 
-@pytest.mark.parametrize("verdict", [GateVerdict.approve, GateVerdict.reject, GateVerdict.insufficient_info])
-async def test_valid_rpt01_decision_not_yet_applied(verdict: GateVerdict) -> None:
-    """验收 4: 校验通过的 RPT-01 决定暂抛 NotImplementedError (效果由下一条需求实现), 不写 Store, 锁释放."""
+# ── R26: RPT-01 决定的效果 ──
+
+SIGNED_AT = datetime(2026, 10, 2, 15, tzinfo=UTC)  # 悉尼已是 10 月 3 日 01:00 (夏令时 10 月 4 日才开始)
+
+
+async def test_reject_returns_to_report_draft() -> None:
+    """验收 1: reject 只写决定 (一次提交) 与 1 行 decision 留痕 (RPT-01 下); 下一步 report_draft; RPT-01 不变."""
     s = await at_rpt_gate()
+    stop_after_submit(s)
+    commits, trail = len(s.output_store.commits), len(decision_trail(s))
+    rpt01 = latest(s, Procedure, "RPT-01")
+    decision = rpt_decision(GateVerdict.reject)
+
+    await s.submit.submit(EID, decision)
+
+    assert s.output_store.commits[commits:] == [[decision]]
+    assert decision_trail(s)[trail:] == [("RPT-01", "D-RPT")]
+    assert await s.next_nodes() == ("report_draft",)
+    assert latest(s, Procedure, "RPT-01") == rpt01
+
+
+async def test_insufficient_info_stays_at_gate() -> None:
+    """验收 2: 信息不足只写决定与 1 行 decision 留痕; 报告与 RPT-01 不变, 仍停在闸门; 呈报的此前退回决定不含它."""
+    s = await at_rpt_gate()
+    rejected = await reject_and_redraft(s)
+    commits, trail = len(s.output_store.commits), len(decision_trail(s))
+    report, rpt01 = latest(s, AuditReportVersion, "REPORT-2"), latest(s, Procedure, "RPT-01")
+    decision = rpt_decision(GateVerdict.insufficient_info, id="D-RPT-INFO", target_id="REPORT-2")
+
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+
+    assert s.output_store.commits[commits:] == [[decision]]
+    assert decision_trail(s)[trail:] == [("RPT-01", "D-RPT-INFO")]
+    assert (latest(s, AuditReportVersion, "REPORT-2"), latest(s, Procedure, "RPT-01")) == (report, rpt01)
+    assert await s.next_nodes() == ("gate_rpt01",)
+    assert (await gate_view(s)).material.previous_decisions == [rejected]
+
+
+async def approve_report_2(s: Started) -> tuple[GateDecision, int]:
+    """退回一次后批准 REPORT-2 v1, 签字时刻 SIGNED_AT; 返回决定与提交前的提交数."""
+    await reject_and_redraft(s)
+    s.submit.now = lambda: SIGNED_AT
+    commits = len(s.output_store.commits)
+    decision = rpt_decision(GateVerdict.approve, id="D-RPT-APPROVE", target_id="REPORT-2")
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+    return decision, commits
+
+
+async def test_approve_signs_report_and_locks_last() -> None:
+    """验收 3: approve 一次提交写决定, REPORT-2 v2 (signed, 报告日 2026-10-03, 签字人为决定人, 签字时刻为 now)
+    与 RPT-01 completed 新版本; 阶段 Archived 与 locked 在同一提交, 排在全部 put 之后."""
+    s = await at_rpt_gate()
+    rpt01 = latest(s, Procedure, "RPT-01")
+
+    decision, commits = await approve_report_2(s)
+
+    [commit] = s.output_store.commits[commits:]
+    *puts, last = commit
+    assert all(isinstance(o, Versioned) for o in puts)
+    assert last == EngagementWrite("update", EID, {"phase": Phase.Archived, "locked": True})
+    assert decision in puts
+    [report] = [o for o in puts if isinstance(o, AuditReportVersion)]
+    assert (report.id, report.version, report.status) == ("REPORT-2", 2, ReportStatus.signed)
+    assert (report.report_date, report.approved_by, report.approved_at) == (date(2026, 10, 3), "U-1", SIGNED_AT)
+    assert report.sections == latest(s, AuditReportVersion, "REPORT-2").sections  # 签字不改正文
+    [procedure] = [o for o in puts if isinstance(o, Procedure)]
+    assert (procedure.id, procedure.version, procedure.status) == (
+        "RPT-01",
+        rpt01.version + 1,
+        ProcedureStatus.completed,
+    )
+    assert decision_trail(s)[-1] == ("RPT-01", "D-RPT-APPROVE")
+
+
+async def test_approve_routes_to_archive_and_ends() -> None:
+    """验收 4: 签字后报告已是 v2, 决定绑定 v1, 仍放行到 archive; archive 不写 Store, 图结束, 无后台错误.
+    检查点: REPORT-1 v1 draft, REPORT-2 v2 signed, 阶段 Archived."""
+    s = await at_rpt_gate()
+
+    decision, commits = await approve_report_2(s)
+
+    assert len(s.output_store.commits) == commits + 1  # 只有决定那一次提交, archive 没有写入
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert snapshot.next == () and s.runner.run_error(EID) is None
+    assert [(r.id, r.version, r.status) for r in snapshot.values["report_versions"]] == [
+        ("REPORT-1", 1, ReportStatus.draft),
+        ("REPORT-2", 2, ReportStatus.signed),
+    ]
+    assert snapshot.values["phase"] is Phase.Archived
+    assert snapshot.values["gate_decisions"][-1] == decision
+
+
+async def test_signed_engagement_is_read_only() -> None:
+    """验收 5: 签字后项目 locked: 再提交决定与更新客户资料报 ENGAGEMENT_LOCKED; 直接写 Store 抛 EngagementLocked."""
+    s = await at_rpt_gate()
+    await approve_report_2(s)
     rows = list(s.output_store.rows)
 
-    with pytest.raises(NotImplementedError, match="RPT-01"):
-        await s.submit.submit(EID, rpt_decision(verdict))
-
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, rpt_decision(GateVerdict.approve, id="D-RPT-AGAIN", target_id="REPORT-2"))
+    assert e.value.code == "ENGAGEMENT_LOCKED"
+    profile = NUMBAT_PROFILE.model_copy(update={"version": NUMBAT_PROFILE.version + 1})
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, profile, updated_by="U-1")
+    assert e.value.code == "ENGAGEMENT_LOCKED"
+    with pytest.raises(EngagementLocked):
+        await s.output_store.put(EID, [rpt_decision(GateVerdict.approve, id="D-RAW")], actor="U-1")
     assert s.output_store.rows == rows
     assert not s.runner.is_running(EID)
+
+
+@pytest.mark.parametrize(
+    ("now", "report_date"),
+    [
+        (SIGNED_AT, date(2026, 10, 3)),
+        (datetime(2026, 10, 2, 13, 59, tzinfo=UTC), date(2026, 10, 2)),  # 悉尼 23:59, 仍是 10 月 2 日
+    ],
+)
+def test_rpt01_effects_is_pure(now: datetime, report_date: date) -> None:
+    """验收 6: 效果是纯函数: approve 出报告签字版, RPT-01 completed 新版本与阶段 Archived, 报告日按悉尼取当天;
+    驳回与信息不足只有决定; 输入不变."""
+    pack = [make_procedure("RPT-03", Phase.P4_Reporting), make_procedure("RPT-01", Phase.P4_Reporting)]
+    report = AuditReportVersion(
+        id="REPORT-2", revision=2, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
+    )
+    approve = rpt_decision(GateVerdict.approve, target_id="REPORT-2")
+
+    effects = rpt01_effects(pack, approve, report, now)
+
+    assert effects["gate_decisions"] == [approve]
+    assert [(p.id, p.version, p.status) for p in effects["procedure_pack"]] == [
+        ("RPT-03", 1, ProcedureStatus.planned),
+        ("RPT-01", 2, ProcedureStatus.completed),
+    ]
+    [signed] = effects["report_versions"]
+    assert signed == report.model_copy(
+        update={
+            "version": 2,
+            "status": ReportStatus.signed,
+            "report_date": report_date,
+            "approved_by": "U-1",
+            "approved_at": now,
+        }
+    )
+    assert effects["phase"] is Phase.Archived
+    assert (pack[1].version, report.version, report.status) == (1, 1, ReportStatus.draft)
+    for verdict in (GateVerdict.reject, GateVerdict.insufficient_info):
+        decision = rpt_decision(verdict)
+        assert rpt01_effects(pack, decision, report, now) == {"gate_decisions": [decision]}

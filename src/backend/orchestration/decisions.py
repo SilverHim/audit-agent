@@ -1,13 +1,14 @@
 """DecisionSubmit (A 负责): 审计师决定的唯一写入口. 取锁 → 校验 → 一个事务内写入决定及其效果 → 越过闸门 → 后台继续.
 
-校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节. 已实现 ACC-01, PLN-01/03, FIN-01 闸门决定
-与全部复核决定.
+校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
@@ -40,6 +41,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     ProposedAction,
+    ReportStatus,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
@@ -97,6 +99,8 @@ def fin01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     }
 
 
+REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
+LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
 FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
 GATE_MATERIAL = {  # 闸门呈报材料在状态中的字段; 越过闸门时把决定绑定的那一版 (读自 Store) 一并写入
@@ -105,13 +109,43 @@ GATE_MATERIAL = {  # 闸门呈报材料在状态中的字段; 越过闸门时把
     GateId.FIN_01: "uncorrected_schedule",
     GateId.RPT_01: "report_versions",  # 列表字段, 写入 [当前报告]
 }
-VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives")  # 效果中会出新版本的对象列表
+# 效果中会出新版本的对象列表
+VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives", "report_versions")
 GATE_PROCEDURE = {  # 闸门决定的留痕记在哪条程序下
     GateId.ACC_01: "ACC-01",
     GateId.PLN_01_03: "PLN-01",
     GateId.FIN_01: "FIN-01",
     GateId.RPT_01: "RPT-01",
 }
+
+
+def rpt01_effects(
+    pack: list[Procedure], decision: GateDecision, report: AuditReportVersion, now: datetime
+) -> StatePatch:
+    """RPT-01 闸门决定的效果 (第 7 节), 纯函数, 由 aupdate_state(as_node="gate_rpt01") 写入状态.
+
+    report 为决定绑定的当前报告, now 为签字时刻 (UTC). approve: 报告出新版本, 置 signed, 报告日取 now 在悉尼的
+    当天 (第 0 节), 签字人与签字时刻; RPT-01 置 completed; 阶段进 Archived. 项目 locked 写 engagements 表,
+    不在状态里, 由 submit 处理. reject 与 insufficient_info: 只记决定 (reject 由路由回 report_draft 出下一修订,
+    insufficient_info 留在闸门重新呈报).
+    """
+    if decision.decision is not GateVerdict.approve:
+        return {"gate_decisions": [decision]}
+    signed = report.model_copy(
+        update={
+            "version": report.version + 1,
+            "status": ReportStatus.signed,
+            "report_date": now.astimezone(REPORT_TZ).date(),
+            "approved_by": decision.decided_by,
+            "approved_at": now,
+        }
+    )
+    return {
+        "gate_decisions": [decision],
+        "procedure_pack": update_procedure(pack, "RPT-01", status=ProcedureStatus.completed),
+        "report_versions": [signed],
+        "phase": Phase.Archived,
+    }
 
 
 def pln_effects(
@@ -171,7 +205,7 @@ def pln_effects(
 
 
 def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
-    """效果中新出的版本: 程序包, 风险清单, 审计目标里 (id, version) 不在效果输入 (sources 同名字段) 中的对象.
+    """效果中新出的版本: 程序包, 风险清单, 审计目标, 报告里 (id, version) 不在效果输入 (sources 同名字段) 中的对象.
 
     决定只写这些; 输入里本来就有的不写, 即使它们比 Store 新 (检查点领先 Store 时不顺带写出无关版本).
     """
@@ -507,10 +541,17 @@ class GraphDecisionSubmit:
     再以闸门节点身份写入检查点, 最后交给 runner 在后台继续执行. 项目锁从校验前一直持有到后台执行停下.
     """
 
-    def __init__(self, app: CompiledStateGraph[EngagementState], deps: AgentDeps, runner: GraphRunner) -> None:
+    def __init__(
+        self,
+        app: CompiledStateGraph[EngagementState],
+        deps: AgentDeps,
+        runner: GraphRunner,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self.app = app  # 编译好的主图, 用于读检查点与 aupdate_state
         self.deps = deps  # 外部依赖
         self.runner = runner  # 项目锁与后台执行
+        self.now = now  # 当前时刻 (UTC), RPT-01 签字时刻与报告日取它; 测试可注入固定时刻
 
     async def _engagement(self, eid: str) -> Engagement:
         engagement = await self.deps.engagement_store.get(eid)
@@ -688,11 +729,15 @@ class GraphDecisionSubmit:
             elif decision.gate is GateId.FIN_01:
                 effects = fin01_effects(sources["procedure_pack"], decision)
             else:
-                raise NotImplementedError(f"{decision.gate} 的闸门决定已校验, 效果尚未实现")
+                assert isinstance(target, AuditReportVersion)  # gate_target 对 RPT-01 取的就是当前报告
+                sources["report_versions"] = [target]
+                effects = rpt01_effects(sources["procedure_pack"], decision, target, self.now())
             written = await self._write_gate(eid, decision, effects, new_versions(effects, sources))
-            # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致
+            # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
+            # 效果已出材料的新版本时 (RPT-01 签字) 只写新版本, 路由另行放行 (gate_route)
             field = GATE_MATERIAL[decision.gate]
-            written[field] = [target] if field == "report_versions" else target
+            if field not in written:
+                written[field] = [target] if field == "report_versions" else target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由 gate_route 按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=GATE_NODES[decision.gate])
 
@@ -748,7 +793,8 @@ class GraphDecisionSubmit:
 
         决定的写入者为决定人; created 为效果新出的版本 (见 new_versions), 写入者为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
-        (_deciding 转为 VERSION_MISMATCH). 阶段变化同步到 engagements 表, 进入 Declined 时最后置 locked.
+        (_deciding 转为 VERSION_MISMATCH). 阶段变化同步到 engagements 表, 进入 Declined 或 Archived 时最后置 locked
+        (排在全部 put 之后: 置 locked 后 put 抛 EngagementLocked).
         """
         output_store = self.deps.output_store
         async with output_store.transaction(eid):
@@ -758,8 +804,8 @@ class GraphDecisionSubmit:
                 clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
                 raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
             if "phase" in effects:
-                declined = effects["phase"] is Phase.Declined
-                await self.deps.engagement_store.update(eid, phase=effects["phase"], locked=True if declined else None)
+                locking = effects["phase"] in LOCKING_PHASES
+                await self.deps.engagement_store.update(eid, phase=effects["phase"], locked=True if locking else None)
         # 留痕是独立事务, 不随业务回滚: 提交成功后再写, 才不会留下业务已回滚的决定.
         # 防重复键为决定 ID. 写失败时 Store 已提交而检查点未跟上: 再提交报 RESUME_REQUIRED
         # (拒绝承接已置 locked 的报 ENGAGEMENT_LOCKED), 由 resume/recover 补做并补写留痕

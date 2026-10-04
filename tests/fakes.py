@@ -11,7 +11,7 @@ from typing import Any, ClassVar, TypeVar
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
-from backend.contracts.errors import VersionConflict
+from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AbnRecord,
     AgentId,
@@ -439,8 +439,14 @@ class FakeOutputStore:
         return self.rows_of(eid) + staged
 
     async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
-        """同 (类型, id, version) 已存在则跳过并返回已存对象; 否则 version 须为已有最大值 +1, 不符抛 VersionConflict."""
+        """同 (类型, id, version) 已存在则跳过并返回已存对象; 否则 version 须为已有最大值 +1, 不符抛 VersionConflict.
+
+        绑定的项目存储中该项目已 locked (含本事务刚置的) 时抛 EngagementLocked.
+        """
         txn = self._txn(eid)
+        engagement = await self.engagement_store.get(eid) if self.engagement_store is not None else None
+        if engagement is not None and engagement.locked:
+            raise EngagementLocked(eid)
         result: list[Versioned] = []
         new: list[Versioned] = []
         for obj in objs:
