@@ -1,6 +1,7 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -67,7 +68,14 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
-from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
+from backend.contracts.ports import (
+    ConfirmationReceipt,
+    ConfirmationRequest,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    T_out,
+)
 from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
 from backend.contracts.state import StatePatch, initial_state
@@ -384,6 +392,10 @@ class FakeFinancialStore:
         self.record_calls.append((source_type, source_id))
         return self.records.get((source_type, source_id))
 
+    async def bank_accounts(self, eid: str) -> list[BankAccount]:
+        """records 中的 bank_account 行, 按写入顺序."""
+        return [BankAccount.model_validate(row) for (kind, _), row in self.records.items() if kind == "bank_account"]
+
     async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]:
         """按写入顺序返回 (真实实现的顺序没有约定, 调用方自行排序)."""
         return [c for cid, c in self.saved_contracts.items() if ids is None or cid in ids]
@@ -667,7 +679,7 @@ class NoTaskAsyncio:
 
 
 class FakeEvidenceStore:
-    """假证据文件存储: 只实现 pages 与 set_status, 读改的是 FakeFinancialStore 里登记的文件.
+    """假证据文件存储: 实现 save, pages 与 set_status, 读写的是 FakeFinancialStore 里登记的文件.
 
     set_status 在审计产出事务块内调用时加入该事务: 提交才生效, 抛错则丢弃, 并记进该次提交.
     calls 记下每次调用 (文件 ID, 状态, 是否在事务内)."""
@@ -676,6 +688,34 @@ class FakeEvidenceStore:
         self.financial_store = financial_store  # 文件登记所在
         self.output_store = output_store  # 共用其事务
         self.calls: list[tuple[str, str, bool]] = []  # (文件 ID, 状态, 是否在事务内)
+        self.saves: list[str] = []  # save 的每次调用 (文件名)
+        self.page_counts: dict[str, int] = {}  # save 登记的页数, 文件名 -> 页数; 缺省 2
+
+    async def save(
+        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+    ) -> DocumentRef:
+        """登记为 DOC-{sha256 前 12 位}, received; 同一哈希已登记则返回已有记录 (接口文档第 4 节).
+
+        页数取 page_counts, 缺省 2. saves 记下每次调用的文件名.
+        """
+        self.saves.append(file_name)
+        sha256 = hashlib.sha256(data).hexdigest()
+        refs = self.financial_store.document_refs
+        existing = next((d for d in refs if d.sha256 == sha256), None)
+        if existing is not None:
+            return existing
+        doc = DocumentRef(
+            id=f"DOC-{sha256[:12]}",
+            type=type,
+            file_name=file_name,
+            sha256=sha256,
+            page_count=self.page_counts.get(file_name, 2),
+            reliability=reliability,
+            status="received",
+            uploaded_at=NOW,
+        )
+        refs.append(doc)
+        return doc
 
     async def pages(self, eid: str, document_id: str) -> list[str]:
         """每页一行短文本 "{文件名} page {n}", 页数取文件登记的 page_count; 未登记抛 LookupError."""
@@ -846,6 +886,36 @@ class FakeJudgmentEngine:
         return self.outcomes[ctx.subject_id](ctx, run)
 
 
+class FakeConfirmationChannel:
+    """假函证平台: 按账户返回预置回执 (回函内容为 "{账号} reply"), 同一幂等键返回第一次的同一回执; submits 记下每次调用.
+
+    channel 为回函渠道; replies 为假时回执没有回函; body 非空时各账户的回函内容都取它 (可为 b"").
+    """
+
+    def __init__(
+        self, channel: ReceiptChannel = ReceiptChannel.direct_email, replies: bool = True, body: bytes | None = None
+    ) -> None:
+        self.channel = channel  # 回函渠道
+        self.replies = replies  # 是否回函
+        self.body = body  # 统一的回函内容, 为空时按账号生成
+        self.receipts: dict[str, ConfirmationReceipt] = {}  # 幂等键 -> 第一次的回执
+        self.submits: list[tuple[str, ConfirmationRequest]] = []  # (幂等键, 请求), 按调用顺序
+
+    async def submit(self, eid: str, req: ConfirmationRequest, idempotency_key: str) -> ConfirmationReceipt:
+        self.submits.append((idempotency_key, req))
+        if idempotency_key not in self.receipts:
+            self.receipts[idempotency_key] = ConfirmationReceipt(
+                sent_at=datetime(2026, 7, 1, 9, len(self.receipts), tzinfo=UTC),
+                replied_at=date(2026, 7, 8) if self.replies else None,
+                reply_file_name=f"{req.account_no}.pdf" if self.replies else None,
+                reply_bytes=(self.body if self.body is not None else f"{req.account_no} reply".encode())
+                if self.replies
+                else None,
+                receipt_channel=self.channel if self.replies else None,
+            )
+        return self.receipts[idempotency_key]
+
+
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.
 
@@ -903,12 +973,14 @@ def make_deps(
     financial_store: FakeFinancialStore | None = None,
     rules: FakeRuleEngine | None = None,
     llm: LLMClient | None = None,
+    confirmations: FakeConfirmationChannel | None = None,
 ) -> AgentDeps:
-    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入与规则引擎.
+    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎与函证平台.
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储与留痕重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
-    大模型缺省为 mock 模式的固定输出客户端. 项目存储与证据文件存储的写入加入审计产出存储的事务.
+    大模型缺省为 mock 模式的固定输出客户端; 函证平台缺省为假平台 (直达邮件回函).
+    项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
         engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
@@ -932,6 +1004,7 @@ def make_deps(
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
         rules=rules if rules is not None else FakeRuleEngine(),
+        confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
     )
 
 
