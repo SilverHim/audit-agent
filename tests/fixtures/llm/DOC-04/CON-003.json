@@ -1,0 +1,56 @@
+{
+  "counterparty": "Galah Retail Electronics Pty Ltd",
+  "counterparty_abn": "20903046122",
+  "amount_cents": null,
+  "sign_date": "2025-06-16",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-CON003000000",
+      "locator": "counterparty",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-CON003000000",
+      "locator": "counterparty_abn",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-CON003000000",
+      "locator": "sign_date",
+      "page": 1
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "payment",
+      "text": "3.1 Prices are those in the Supplier's price list current on the date of the purchase order, excluding GST.\n3.2 The Supplier will issue a tax invoice on dispatch of each delivery. The Customer must pay each tax invoice within 30 days after the invoice date.",
+      "page": 2
+    },
+    {
+      "term_type": "control_transfer",
+      "text": "4.1 The Supplier will deliver Products to the Customer's distribution centre at 120 Placeholder Avenue, Moorebank NSW 2170.\n4.2 Title to and risk in Products pass to the Customer when the Customer's receiving officer signs the delivery docket at the distribution centre.",
+      "page": 2
+    },
+    {
+      "term_type": "return_right",
+      "text": "5.1 The Customer may return any Products that are unsold, undamaged and in their original packaging within 30 days after delivery. The Supplier will issue a credit note for the full invoiced price of returned Products within 10 business days after receiving them.",
+      "page": 3
+    },
+    {
+      "term_type": "rebate",
+      "text": "6.1 If the Customer's total purchases under this Agreement in a Contract Year, excluding GST and net of returns, exceed AUD 600,000, the Supplier will pay the Customer a rebate equal to 3% of those total purchases.\n6.2 The rebate is paid by credit note within 30 days after the end of the Contract Year.",
+      "page": 3
+    },
+    {
+      "term_type": "termination",
+      "text": "8.1 Either party may terminate this Agreement by giving 90 days' written notice to the other party.\n8.2 Either party may terminate this Agreement immediately by written notice if the other party commits a material breach and does not remedy it within 14 days after receiving notice of the breach.",
+      "page": 4
+    }
+  ]
+}
