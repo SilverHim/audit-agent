@@ -1,0 +1,146 @@
+{
+  "conclusion": "Invoice SI-2026-0618 belongs to the year ended 30 June 2026: control passed when the customer signed delivery note DN-2026-0618 on 30 June 2026, on or before the period end.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-2026-0618 to Quoll Automation Pty Ltd for $95,000 was posted on 29 June 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-2026-0618",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Delivery note DN-2026-0618 was signed by the customer's representative (Ravi Okafor) on 30 June 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-2026-0618",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 of contract CON-002 (CON-002-T1): title to and risk in the goods pass to the customer when its authorised representative signs the delivery note at the delivery address.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-CON002000000",
+          "locator": "CON-002-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "For an obligation satisfied at a point in time, indicators of control include legal title and the significant risks and rewards of ownership (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Control of the goods transferred on 30 June 2026, the date the delivery note was signed.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the goods (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The invoice was posted on 29 June 2026 and control transferred on 30 June 2026, within the year ended 30 June 2026, so the revenue is recorded in the correct period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-2026-0618",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-2026-0618",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-CON002000000",
+      "locator": "CON-002-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A later signed delivery note for the same goods, or evidence that DN-2026-0618 was signed after 30 June 2026, would overturn this conclusion.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

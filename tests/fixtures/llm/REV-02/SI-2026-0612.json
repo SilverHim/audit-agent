@@ -1,0 +1,162 @@
+{
+  "conclusion": "Invoice SI-2026-0612 belongs to the year ending 30 June 2027: control passed when the customer signed delivery note DN-2026-0612 on 3 July 2026, after the 30 June 2026 year end. Revenue for the year ended 30 June 2026 is overstated by $142,000.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-2026-0612 to Bilby Robotics Pty Ltd for $142,000 was posted on 28 June 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-2026-0612",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Delivery note DN-2026-0612 was signed by the customer's representative (Daniel Price) on 3 July 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-2026-0612",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 of contract CON-001 (CON-001-T1): title to and risk in the goods pass to the customer when its authorised representative signs the delivery note at the delivery address.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-CON001000000",
+          "locator": "CON-001-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "For an obligation satisfied at a point in time, indicators of control include legal title and the significant risks and rewards of ownership (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Control of the goods transferred on 3 July 2026, the date the delivery note was signed.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the goods (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Rule finding X-REV-08-1-R01-1 reports the same gap: posting on 28 June 2026 and signature on 3 July 2026 fall on opposite sides of the period end.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The invoice was posted on 28 June 2026 but control transferred on 3 July 2026, after the period end of 30 June 2026, so revenue of $142,000 is recorded in the wrong period and revenue for the year is overstated by $142,000. This explains rule finding X-REV-08-1-R01-1.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-2026-0612",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-2026-0612",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-CON001000000",
+      "locator": "CON-001-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A document showing that the customer obtained control on or before 30 June 2026, such as an earlier signed delivery note or a bill-and-hold arrangement, would overturn this conclusion.",
+  "proposed_action": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Revenue",
+    "assertion": "Cutoff",
+    "amount_cents": 14200000,
+    "direction": "overstated"
+  },
+  "self_confidence": 0.9
+}

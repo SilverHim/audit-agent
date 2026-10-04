@@ -19,14 +19,18 @@ from backend.contracts.models import (
     ReviewStatus,
     RiskLevel,
     RunStatus,
+    StepKind,
+    StepStatus,
     TargetType,
     TaskKind,
+    TrailKind,
 )
 from backend.contracts.records import DeliveryNote, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
     NUMBAT_CONTRACTS,
+    NUMBAT_CUTOFF_DRAFT,
     NUMBAT_OBJECTIVES,
     NUMBAT_RECORDS,
     NUMBAT_RISKS,
@@ -79,10 +83,12 @@ def setup(
     rows: list[dict[str, Any]] | None = None,
     rerun: list[str] | None = None,
     documents: list[Any] | None = None,
+    real: bool = False,
 ) -> tuple[FieldworkAgent, RunContext, FakeJudgmentEngine]:
     """A6 与 REV-02 第 1 次执行: 财务数据为 Numbat 的发票, 发运单与 3 份合同; 状态有抽取过的合同文件,
     REV-08 的跨期例外 X1 与两份合同已确认的 REV-03 判断. outcomes 缺省两张发票都判断通过 (L2, 建 normal 任务).
-    rows 替换规则 S01 选中的行 (缺省为 Numbat 的两张)."""
+    rows 替换规则 S01 选中的行 (缺省为 Numbat 的两张). real 为真时用真实判断引擎 (大模型为 mock 模式,
+    读 tests/fixtures/llm/REV-02), 返回的假引擎不被调用."""
     engine = FakeJudgmentEngine(outcomes if outcomes is not None else {i: passed() for i in INVOICES})
     financial = FakeFinancialStore(
         list(NUMBAT_CONTRACTS), records=NUMBAT_RECORDS if records is None else records, contracts=numbat_contracts()
@@ -90,7 +96,9 @@ def setup(
     rules = FakeRuleEngine()
     if rows is not None:
         rules.results["REV-02"] = lambda run: RuleResult(exceptions=[], rows={"S01": rows})
-    deps = replace(make_deps(FakeRegistry(), FakeTrail(), financial_store=financial, rules=rules), judgments=engine)  # type: ignore[arg-type]
+    deps = make_deps(FakeRegistry(), FakeTrail(), financial_store=financial, rules=rules)
+    if not real:
+        deps = replace(deps, judgments=engine)  # type: ignore[arg-type]
     ctx = make_ctx(deps, "REV-02")
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-CUT"], "rerun_subject_ids": rerun or []}
@@ -364,3 +372,52 @@ async def test_failures_mark_exception_or_fail_subject() -> None:
     ]
     assert patch["review_tasks"][1].target_type is TargetType.ProcedureRun
     assert patch["judgments"] == [] and patch["procedure_runs"][0].status is RunStatus.succeeded
+
+
+# ── R44 模拟模型输出 ─────────────────────────────────────────
+
+
+async def test_fixtures_pass_real_engine_in_one_attempt() -> None:
+    """验收 3: 两份 mock 输出经真实判断引擎各一次通过, 无失败; SI-2026-0612 解释跨期例外."""
+    agent, ctx, _ = setup(real=True)
+    patch = await agent.run(ctx)
+    trail = agent.deps.trail
+    assert isinstance(trail, FakeTrail)
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    assert [e.payload["fixture_key"] for e in calls] == INVOICES
+    assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
+    judgments = {j.subject_id: j for j in patch["judgments"]}
+    assert sorted(judgments) == INVOICES
+    for j in judgments.values():  # 每一步的指针都解析得了 (页码在范围内, 行存在), 没有步骤被标为无支撑
+        assert all(step.status is not StepStatus.unsupported for step in j.reasoning_chain), j.id
+    assert judgments["SI-2026-0612"].exception_ids == [X1.id]
+    assert judgments["SI-2026-0618"].exception_ids == []
+    assert [t.id for t in patch["review_tasks"]] == [f"T-J-REV-02-1-{i}-v1" for i in INVOICES]
+
+
+async def test_si0612_fixture_is_cutoff_misstatement() -> None:
+    """验收 1: 建议认定错报, 草稿 {factual, Revenue, Cutoff, 14200000, overstated}; 证据为发票入账日, 发运单签收日,
+    CON-001 第 5.1 条 (第 2 页) 与两条准则."""
+    agent, ctx, _ = setup(real=True)
+    [j] = [j for j in (await agent.run(ctx))["judgments"] if j.subject_id == "SI-2026-0612"]
+    assert j.proposed_action is ProposedAction.misstatement and j.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+    assert [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence] == [
+        ("sales_invoice", "SI-2026-0612", "posting_date", None),
+        ("delivery_note", "DN-2026-0612", "signed_date", None),
+        ("document", "DOC-CON001000000", "CON-001-T1", 2),
+        ("standard", "AASB15-P38", "para 38", None),
+        ("standard", "AASB15-P31", "para 31", None),
+    ]
+    assert "X-REV-08-1-R01-1" in " ".join(step.text for step in j.reasoning_chain)  # 推理链回应了规则例外
+    assert j.reasoning_chain[-1].kind is StepKind.inference
+
+
+async def test_si0618_fixture_accepts() -> None:
+    """验收 2: SI-2026-0618 于 2026-06-30 签收, 期间正确, accept, 无错报草稿."""
+    agent, ctx, _ = setup(real=True)
+    [j] = [j for j in (await agent.run(ctx))["judgments"] if j.subject_id == "SI-2026-0618"]
+    assert j.proposed_action is ProposedAction.accept and j.misstatement_draft is None
+    assert ("delivery_note", "DN-2026-0618", "signed_date") in {
+        (p.source_type, p.source_id, p.locator) for p in j.evidence
+    }
+    assert "30 June 2026" in j.conclusion
