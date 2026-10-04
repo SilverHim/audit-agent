@@ -440,7 +440,7 @@ async def test_resume_at_second_wait_does_not_advance() -> None:
 
 async def test_store_ahead_of_checkpoint_is_not_skipped_by_phase() -> None:
     """验收 5: 只看检查点, 不看阶段: 决定已提交 (项目 Declined 且 locked) 而检查点仍停在 ACC-01 闸门时不跳过,
-    交给补做 (尚未实现, 记入 run_error); 总览提示须 resume. 已走到 END 的项目跳过."""
+    总览提示须 resume; recover 补做 (R30) 后走 declined 到 END."""
     runner, store = make_runner()
     await runner.start(EID)
     await wait_idle(runner, EID)
@@ -455,10 +455,10 @@ async def test_store_ahead_of_checkpoint_is_not_skipped_by_phase() -> None:
 
     runner = restart(runner)
     await runner.recover()
+    await wait_idle(runner, EID)
 
-    assert not runner.is_running(EID)
-    error = runner.run_error(EID)
-    assert error is not None and "恢复补做尚未实现" in error and decision.id in error
+    snapshot = await runner.app.aget_state(config())
+    assert (snapshot.next, snapshot.values["phase"], runner.run_error(EID)) == ((), Phase.Declined, None)
 
 
 @pytest.mark.parametrize("pause_kind", [Procedure, GateDecision])

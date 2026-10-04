@@ -218,7 +218,7 @@ class GraphRunner:
         只看检查点, 不看项目阶段 (已归档的项目若检查点仍停在闸门, 照样处理):
         - 没有检查点 (start 写了固定集, 第一步还没落盘就中断): 以初始状态重新推进.
         - 已结束 (next 与待执行任务都为空): 不动.
-        - Store 有检查点里没有的决定或画像版本: 先补做. 补做尚未实现, 抛 NotImplementedError.
+        - Store 有检查点里没有的决定或画像版本: 先补做 (见 _catch_up), 再按补做后的检查点往下判断.
         - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动. 不调 ainvoke(None):
           节点内第二次及以后的等待会沿用上次的恢复值, 等于凭空多出一个决定.
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
@@ -234,9 +234,8 @@ class GraphRunner:
                 if not snapshot.next and not snapshot.tasks:
                     self.release(eid)
                     return
-                missing = await resume_required(self.deps, engagement, snapshot)
-                if missing is not None:
-                    raise NotImplementedError(f"检查点未跟上 Store ({missing}), 恢复补做尚未实现")
+                if await resume_required(self.deps, engagement, snapshot) is not None:
+                    snapshot = await self._catch_up(engagement)
                 if waiting_for_human(snapshot):
                     self.release(eid)
                     return
@@ -244,6 +243,21 @@ class GraphRunner:
             self.release(eid)
             raise
         self.launch(eid, graph_input)
+
+    async def _catch_up(self, engagement: Engagement) -> StateSnapshot:
+        """补做 Store 已提交而检查点没跟上的闸门决定 (见 recovery.catch_up), 返回补做后的检查点.
+
+        复核决定与客户画像的补做尚未实现: 补做后检查点仍未跟上时抛 NotImplementedError.
+        """
+        # 在此导入: recovery 依赖 decisions, decisions 依赖本模块, 放在模块开头会循环导入
+        from backend.orchestration.recovery import catch_up
+
+        await catch_up(self.app, self.deps, engagement)
+        snapshot = await self.app.aget_state(self.config(engagement.id))
+        missing = await resume_required(self.deps, engagement, snapshot)
+        if missing is not None:
+            raise NotImplementedError(f"检查点未跟上 Store ({missing}), 复核决定与客户画像的补做尚未实现")
+        return snapshot
 
     async def resume(self, eid: str) -> None:
         """手动重试一个项目 (后台执行出错后, 由 POST /resume 调用): 取项目锁 (取不到抛 ENGAGEMENT_BUSY),
