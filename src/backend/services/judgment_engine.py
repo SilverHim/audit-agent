@@ -23,10 +23,12 @@ from backend.contracts.models import (
     EvidencePointer,
     EvidenceType,
     Judgment,
+    OpinionType,
     ProcedureRun,
     ProposedAction,
     ReasoningStep,
     Reliability,
+    ReviewStatus,
     SourceType,
     StepKind,
     StepStatus,
@@ -190,6 +192,43 @@ def rule_consistency(action: ProposedAction, has_findings: bool) -> float:
     return 1.0 if action in (ProposedAction.accept, ProposedAction.close) else 0.0
 
 
+# 两段首行的标题, 按意见类型 (ASA 700 第 23, 28 段, ASA 705 第 16, 20 段)
+REPORT_HEADINGS = {
+    OpinionType.unqualified: ("Opinion", "Basis for Opinion"),
+    OpinionType.qualified: ("Qualified Opinion", "Basis for Qualified Opinion"),
+}
+
+
+def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | None, list[str]]:
+    """报告草稿的引用与语义两级. 返回 (未通过的级别, 错误).
+
+    引用: judgment_refs 的每条须是状态中的判断 (ctx.judgments), 版本为当前版本且已确认.
+    语义: 意见段与基础段首行为该意见类型的标题; 保留意见须引用至少一条判断. ctx.opinion 为空时抛 ValueError.
+    """
+    if ctx.opinion is None:
+        raise ValueError("报告草稿的校验须给出意见类型 (ValidationContext.opinion)")
+    current = {j.id: j for j in ctx.judgments}
+    errors = []
+    for ref in draft.judgment_refs:
+        judgment = current.get(ref.id)
+        if judgment is None:
+            errors.append(f"引用的判断 {ref.id} 不在状态中")
+        elif ref.version != judgment.version:
+            errors.append(f"引用的判断 {ref.id} v{ref.version} 不是当前版本 v{judgment.version}")
+        elif judgment.review_status is not ReviewStatus.confirmed:
+            errors.append(f"引用的判断 {ref.id} 尚未确认 ({judgment.review_status})")
+    if errors:
+        return "reference", errors
+    opinion_heading, basis_heading = REPORT_HEADINGS[ctx.opinion]
+    if draft.opinion.strip().splitlines()[:1] != [opinion_heading]:
+        errors.append(f"意见段首行应为 {opinion_heading}")
+    if draft.basis_for_opinion.strip().splitlines()[:1] != [basis_heading]:
+        errors.append(f"基础段首行应为 {basis_heading}")
+    if ctx.opinion is OpinionType.qualified and not draft.judgment_refs:
+        errors.append("保留意见须引用形成错报的已确认判断")
+    return ("semantic" if errors else None), errors
+
+
 class PointerResolver:
     """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次."""
 
@@ -275,7 +314,7 @@ class OutputValidator:
                 errors, notes = await self._confirmation(eid, output, ctx.confirmation)
                 level = "semantic" if errors else None
         elif isinstance(output, ReportDraft):
-            level, errors = None, []  # ReportDraft 的引用与语义校验见 RPT-03 输出校验 (尚未实现), 现只做到结构级
+            level, errors = report_checks(output, ctx)
         else:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         return ValidationReport(

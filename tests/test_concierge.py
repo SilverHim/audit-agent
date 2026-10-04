@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from langgraph.types import Command
 
 from backend.agents.base import RunContext
 from backend.agents.concierge import ConciergeAgent
@@ -14,6 +15,7 @@ from backend.contracts.models import (
     AgentId,
     Assertion,
     AuditReportVersion,
+    Decision,
     Direction,
     GateDecision,
     GateId,
@@ -23,11 +25,18 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementType,
     OpinionType,
+    Procedure,
+    ProcedureStatus,
     ProposedAction,
     ReportSection,
     ReportStatus,
     ReviewStatus,
+    ReviewTask,
     RunStatus,
+    RunTrigger,
+    TargetType,
+    TaskKind,
+    TaskStatus,
     TrailKind,
     UncorrectedItem,
     UncorrectedSchedule,
@@ -49,10 +58,12 @@ from tests.fakes import (
     make_ctx,
     make_deps,
     numbat_all_p2_agents,
+    preset_rerun,
     wait_idle,
 )
 from tests.test_fin_gate import REASON, fin_decision
 from tests.test_flow import EID, approve_materiality, review_all, start_numbat
+from tests.test_nodes import single_node
 
 CUTOFF = Judgment(  # 合成数据集设计第 7 节第 9 行, 审计师决定 misstatement 后 v2 confirmed
     id="J-REV-02-1-SI-2026-0612",
@@ -231,10 +242,98 @@ async def test_revision_is_max_plus_one() -> None:
         await agent.run(RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, state))  # type: ignore[arg-type]
 
 
-async def test_validation_failure_raises() -> None:
-    agent, ctx, _ = setup(llm=ScriptedLLM({"r1": ["x", "y", "z"]}))
-    with pytest.raises(ValueError, match="RPT-03 第 1 稿未通过 syntax 校验"):
-        await agent.run(ctx)
+def r1_raw(**changes: Any) -> str:
+    raw = (get_settings().LLM_FIXTURES_ROOT / "RPT-03" / "r1.json").read_text()
+    return ReportDraft.model_validate_json(raw).model_copy(update=changes).model_dump_json()
+
+
+async def test_retry_after_parse_error() -> None:
+    agent, ctx, trail = setup(llm=ScriptedLLM({"r1": ["not json", r1_raw()]}))
+    [report] = (await agent.run(ctx))["report_versions"]
+    assert report.id == "REPORT-1"
+    assert [e.payload["attempt"] for e in trail.entries if e.kind is TrailKind.llm_call] == [1, 2]
+
+
+async def handed_to_human(agent: ConciergeAgent, ctx: RunContext) -> dict[str, Any]:
+    """经 A1 的 run_agent: 校验失败时整次执行失败, 建以执行为目标的 failed 任务 (无对象, 只能 rerun)."""
+    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    assert writer is AgentId.A1 and "report_versions" not in patch
+    [run] = patch["procedure_runs"]
+    assert run.id == "RUN-RPT-03-1" and run.status is RunStatus.failed
+    [task] = patch["review_tasks"]
+    assert (task.id, task.kind, task.subject_id) == ("T-RUN-RPT-03-1-v1", TaskKind.failed, None)
+    assert agent.deps.queue.allowed(task) == frozenset({Decision.rerun})
+    return {"failure_reason": run.failure_reason}
+
+
+async def test_three_syntax_failures_fail_the_run() -> None:
+    agent, ctx, trail = setup(llm=ScriptedLLM({"r1": ["x", "{}", "still bad"]}))
+    result = await handed_to_human(agent, ctx)
+    assert "未通过 syntax 校验" in result["failure_reason"] and "Output is not valid JSON" in result["failure_reason"]
+    assert len([e for e in trail.entries if e.kind is TrailKind.llm_call]) == 3
+
+
+@pytest.mark.parametrize(
+    ("changes", "level"),
+    [
+        ({"judgment_refs": [JudgmentRef(id=CUTOFF.id, version=1)]}, "reference"),
+        ({"opinion": "Opinion\n\nclean"}, "semantic"),
+    ],
+)
+async def test_reference_or_semantic_failure_fails_after_one_call(changes: dict[str, Any], level: str) -> None:
+    llm = ScriptedLLM({"r1": [r1_raw(**changes), r1_raw()]})
+    agent, ctx, _ = setup(llm=llm)
+    result = await handed_to_human(agent, ctx)
+    assert f"未通过 {level} 校验" in result["failure_reason"]
+    assert len(llm.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_replies",
+    [
+        ["{}", "{}", "{}"],
+        [r1_raw(opinion="## Qualified Opinion\n\nbody")],
+        [r1_raw(judgment_refs=[JudgmentRef(id=CUTOFF.id, version=1)])],
+    ],
+    ids=["structure", "semantic", "reference"],
+)
+async def test_report_node_failure_waits_then_rerun_drafts_report(bad_replies: list[str]) -> None:
+    """(Codex R52 探针) report_draft 节点中校验失败: 写失败的 Run, 任务与 awaiting_human, 节点内等待, 不出报告;
+    重放不重调模型; 审计师 rerun 后第 2 次执行出 REPORT-1."""
+    llm = ScriptedLLM({"r1": [*bad_replies, r1_raw()]})
+    agent, ctx, _ = setup(llm=llm)
+    store = agent.deps.output_store
+    await store.put(ENGAGEMENT.id, [ctx.procedure], actor=AgentId.A1)
+    nodes = GraphNodes(agent.deps, parallel_cap=2)
+    nodes.agents["RPT-03"] = agent
+    app = single_node(nodes, "RPT-03")
+    config = GraphRunner.config(ENGAGEMENT.id)
+
+    result = await app.ainvoke(ctx.state, config)
+
+    assert result["__interrupt__"][0].value["run_id"] == "RUN-RPT-03-1"
+    [task] = await store.latest(ENGAGEMENT.id, ReviewTask, status=TaskStatus.pending)
+    assert (task.id, task.target_type, task.target_id, task.subject_id) == (
+        "T-RUN-RPT-03-1-v1",
+        TargetType.ProcedureRun,
+        "RUN-RPT-03-1",
+        None,
+    )
+    procedure = await store.get(ENGAGEMENT.id, Procedure, "RPT-03")
+    assert procedure is not None and procedure.status is ProcedureStatus.awaiting_human
+    assert not result["report_versions"]
+    await app.ainvoke(None, config)
+    assert len(llm.requests) == len(bad_replies)
+
+    await preset_rerun(store, task, "D-RPT-RERUN")
+    result = await app.ainvoke(Command(resume="D-RPT-RERUN"), config)
+
+    assert [(r.id, r.status, r.trigger) for r in result["procedure_runs"]] == [
+        ("RUN-RPT-03-1", RunStatus.failed, RunTrigger.initial),
+        ("RUN-RPT-03-2", RunStatus.succeeded, RunTrigger.rerun),
+    ]
+    assert [r.id for r in result["report_versions"]] == ["REPORT-1"]
+    assert len(llm.requests) == len(bad_replies) + 1
 
 
 # ── 接入 report_draft 节点 ─────────────────────────────────────────

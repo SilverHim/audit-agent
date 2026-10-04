@@ -69,7 +69,7 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             ctx.template,
             ctx.run,
             variables,
-            ValidationContext(judgments=state["judgments"]),
+            ValidationContext(judgments=state["judgments"], opinion=opinion),
             self.agent_id,
             f"r{revision}",
         )

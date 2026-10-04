@@ -17,15 +17,22 @@ from backend.contracts.llm_outputs import (
 from backend.contracts.models import (
     AuditException,
     Confirmation,
+    Decision,
     DocumentRef,
     DocumentType,
     EvidencePointer,
     EvidenceType,
+    Judgment,
+    JudgmentRef,
+    OpinionType,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
     Reliability,
+    ReviewRecord,
+    ReviewStatus,
     StepKind,
+    TaskKind,
     TermType,
     TrailEntry,
     TrailKind,
@@ -33,10 +40,13 @@ from backend.contracts.models import (
 from backend.contracts.ports import LLMResponse
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
+from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import OutputValidator, output_model, supported_amounts
 from backend.services.procedure_library import ProcedureLibrary
+from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
     ENGAGEMENT,
+    NOW,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_RECORDS,
@@ -578,12 +588,127 @@ async def test_reply_channel_mismatch_is_only_a_note() -> None:
 # ── 报告草稿 ─────────────────────────────────────────
 
 
-async def test_report_draft_passes_after_structure() -> None:
-    """ReportDraft 的引用与语义校验尚未接入 (RPT-03 输出校验), 现在通过结构级即算通过; 语法失败照常可重试."""
+QUALIFIED_DRAFT = ReportDraft(
+    opinion="Qualified Opinion\n\nWe have audited ...",
+    basis_for_opinion="Basis for Qualified Opinion\n\nRevenue is overstated by $142,000 ...",
+    judgment_refs=[JudgmentRef(id="J-REV-02-1-SI-2026-0612", version=2)],
+)
+
+
+def confirmed_judgment(version: int = 2, status: ReviewStatus = ReviewStatus.confirmed) -> Judgment:
+    return Judgment(
+        id="J-REV-02-1-SI-2026-0612",
+        version=version,
+        procedure_id="REV-02",
+        run_id="RUN-REV-02-1",
+        subject_id="SI-2026-0612",
+        conclusion="overstated",
+        confidence=0.9,
+        confidence_parts={},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="none",
+        proposed_action=ProposedAction.misstatement,
+        autonomy_level="L2",
+        review_status=status,
+        performed_by="U-1",
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+
+
+async def check_report(
+    draft: ReportDraft, judgments: list[Judgment], opinion: OpinionType | None = OpinionType.qualified
+) -> Any:
     validator, _ = make_validator()
-    rpt03 = LIBRARY.load("RPT-03")
-    draft = ReportDraft(opinion="Opinion", basis_for_opinion="Basis for Opinion", judgment_refs=[])
-    report = await validator.validate(EID, rpt03, respond(draft), ValidationContext(judgments=[]))
-    assert report.level_failed is None and report.output == draft
-    syntax = await validator.validate(EID, rpt03, respond(None, raw="{"), ValidationContext())
-    assert syntax.level_failed == "syntax" and syntax.retryable
+    ctx = ValidationContext(judgments=judgments, opinion=opinion)
+    return await validator.validate(EID, LIBRARY.load("RPT-03"), respond(draft), ctx)
+
+
+async def test_report_draft_passes() -> None:
+    report = await check_report(QUALIFIED_DRAFT, [confirmed_judgment()])
+    assert report.level_failed is None and report.errors == [] and report.output == QUALIFIED_DRAFT
+    clean = ReportDraft(opinion="Opinion\n\n...", basis_for_opinion="Basis for Opinion\n\n...", judgment_refs=[])
+    assert (await check_report(clean, [], OpinionType.unqualified)).level_failed is None
+
+
+@pytest.mark.parametrize(
+    ("judgments", "error"),
+    [
+        ([], "引用的判断 J-REV-02-1-SI-2026-0612 不在状态中"),
+        ([confirmed_judgment(version=3)], "引用的判断 J-REV-02-1-SI-2026-0612 v2 不是当前版本 v3"),
+        ([confirmed_judgment(status=ReviewStatus.pending)], "引用的判断 J-REV-02-1-SI-2026-0612 尚未确认 (pending)"),
+    ],
+)
+async def test_report_reference_failures(judgments: list[Judgment], error: str) -> None:
+    report = await check_report(QUALIFIED_DRAFT, judgments)
+    assert report.level_failed == "reference" and not report.retryable and report.errors == [error]
+
+
+@pytest.mark.parametrize(
+    ("changes", "opinion", "error"),
+    [
+        ({"opinion": "Opinion\n\n..."}, OpinionType.qualified, "意见段首行应为 Qualified Opinion"),
+        (
+            {"basis_for_opinion": "Basis for Opinion\n\n..."},
+            OpinionType.qualified,
+            "基础段首行应为 Basis for Qualified Opinion",
+        ),
+        ({"judgment_refs": []}, OpinionType.qualified, "保留意见须引用形成错报的已确认判断"),
+        ({}, OpinionType.unqualified, "意见段首行应为 Opinion"),
+    ],
+)
+async def test_report_semantic_failures(changes: dict[str, Any], opinion: OpinionType, error: str) -> None:
+    report = await check_report(QUALIFIED_DRAFT.model_copy(update=changes), [confirmed_judgment()], opinion)
+    assert report.level_failed == "semantic" and not report.retryable and error in report.errors
+
+
+async def test_report_needs_opinion_type() -> None:
+    with pytest.raises(ValueError, match=r"ValidationContext\.opinion"):
+        await check_report(QUALIFIED_DRAFT, [confirmed_judgment()], None)
+
+
+async def test_report_syntax_failure_is_retryable() -> None:
+    validator, _ = make_validator()
+    report = await validator.validate(EID, LIBRARY.load("RPT-03"), respond(None, raw="{"), ValidationContext())
+    assert report.level_failed == "syntax" and report.retryable
+
+
+async def test_report_headings_tolerate_surrounding_whitespace_and_crlf() -> None:
+    draft = QUALIFIED_DRAFT.model_copy(
+        update={
+            "opinion": " \n Qualified Opinion\r\n\r\nbody\n ",
+            "basis_for_opinion": "\n Basis for Qualified Opinion\r\n\r\nbody ",
+        }
+    )
+    assert (await check_report(draft, [confirmed_judgment()])).level_failed is None
+
+
+async def test_report_reference_failure_reported_before_headings() -> None:
+    report = await check_report(QUALIFIED_DRAFT.model_copy(update={"opinion": "wrong"}), [])
+    assert report.level_failed == "reference"
+    assert report.errors == ["引用的判断 J-REV-02-1-SI-2026-0612 不在状态中"]
+
+
+async def test_report_may_cite_human_replacement_but_not_overridden_original() -> None:
+    """审计师 override 后: 人工替代判断 -H1 (confirmed) 可引用, 被推翻的原判断 (overridden) 不可."""
+    original = confirmed_judgment(version=1, status=ReviewStatus.pending)
+    task = ReviewQueue(LIBRARY).make_task(TaskKind.normal, original, "REV-02", original.run_id, NOW)
+    record = ReviewRecord(
+        id="D-OVERRIDE",
+        task_id=task.id,
+        target_version=1,
+        decision=Decision.override,
+        reason="人工复核",
+        override_conclusion="人工替代结论",
+        reviewed_by="U-1",
+        decided_at=NOW,
+    )
+    old, human = override_effects(record, task, original, [], {original.id})
+    assert isinstance(old, Judgment) and isinstance(human, Judgment) and human.id.endswith("-H1")
+    cites_human = QUALIFIED_DRAFT.model_copy(
+        update={"judgment_refs": [JudgmentRef(id=human.id, version=human.version)]}
+    )
+    assert (await check_report(cites_human, [old, human])).level_failed is None
+    cites_original = QUALIFIED_DRAFT.model_copy(update={"judgment_refs": [JudgmentRef(id=old.id, version=old.version)]})
+    report = await check_report(cites_original, [old, human])
+    assert report.level_failed == "reference" and "尚未确认 (overridden)" in report.errors[0]

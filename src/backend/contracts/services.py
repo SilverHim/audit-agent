@@ -2,7 +2,7 @@
 
 from typing import Any, Generic, Literal, TypeVar
 
-from backend.contracts.models import AuditException, Confirmation, DocumentRef, Judgment, Model
+from backend.contracts.models import AuditException, Confirmation, DocumentRef, Judgment, Model, OpinionType
 
 T = TypeVar("T")
 
@@ -40,6 +40,7 @@ class ValidationContext(Model):
     document: DocumentRef | None = None  # 抽取类程序 (DOC-04, DOC-06) 本次抽取的文件, 指针只能指向它
     judgments: list[Judgment] = []  # 状态中的判断, 供 RPT-03 校验 judgment_refs
     confirmation: Confirmation | None = None  # DOC-06 本次抽取的函证 (CSH-04 所建), 核对回函账号与回函渠道
+    opinion: OpinionType | None = None  # RPT-03 应出的意见类型 (FIN-01 选定), 核对两段的标题
 
 
 class ValidationReport(Model, Generic[T]):
