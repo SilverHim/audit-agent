@@ -1560,6 +1560,7 @@ def numbat_report_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
                 ReportSection.directors_responsibilities: "董事责任",
                 ReportSection.auditor_responsibilities: "审计师责任",
                 ReportSection.other_legal_and_regulatory: "",
+                ReportSection.signature: "签名",
             },
             judgment_refs=[JudgmentRef(id=j.id, version=j.version) for j in cited],
             addresses_decision_id=rejects[-1].id if revision > 1 and rejects else None,

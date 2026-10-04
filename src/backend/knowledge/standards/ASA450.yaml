@@ -13,5 +13,8 @@ fragments:
   - id: ASA450-P11
     paragraph: "11"
     topic: evaluate_uncorrected
-    text: ""   # 待摘录
+    text: |
+      The auditor shall determine whether uncorrected misstatements are material, individually or in aggregate. In making this determination, the auditor shall consider:
+      (a) The size and nature of the misstatements, both in relation to particular classes of transactions, account balances or disclosures and the financial report as a whole, and the particular circumstances of their occurrence; and
+      (b) The effect of uncorrected misstatements related to prior periods on the relevant classes of transactions, account balances or disclosures, and the financial report as a whole.
     procedures: [FIN-01]

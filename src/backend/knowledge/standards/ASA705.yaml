@@ -1,30 +1,40 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: ASA 705
 title: Modifications to the Opinion in the Independent Auditor’s Report
-compiled: ""   # 填所用编译版日期
+compiled: "2023-03-22"   # Compilation number 2
 fragments:
   - id: ASA705-P07
     paragraph: "7"
     topic: qualified_opinion
-    text: ""   # 待摘录
+    text: |
+      The auditor shall express a qualified opinion when:
+      (a) The auditor, having obtained sufficient appropriate audit evidence, concludes that misstatements, individually or in the aggregate, are material, but not pervasive, to the financial report; or
+      (b) The auditor is unable to obtain sufficient appropriate audit evidence on which to base the opinion, but the auditor concludes that the possible effects on the financial report of undetected misstatements, if any, could be material but not pervasive.
     procedures: [FIN-01]
   - id: ASA705-P08
     paragraph: "8"
     topic: adverse_opinion
-    text: ""   # 待摘录
+    text: |
+      The auditor shall express an adverse opinion when the auditor, having obtained sufficient appropriate audit evidence, concludes that misstatements, individually or in the aggregate, are both material and pervasive to the financial report.
     procedures: [FIN-01]
   - id: ASA705-P16
     paragraph: "16"
     topic: modified_opinion_heading
-    text: ""   # 待摘录
+    text: |
+      When the auditor modifies the audit opinion, the auditor shall use the heading “Qualified Opinion,” “Adverse Opinion,” or “Disclaimer of Opinion,” as appropriate, for the Opinion section.
     procedures: [RPT-03]
   - id: ASA705-P20
     paragraph: "20"
     topic: basis_for_modified_opinion
-    text: ""   # 待摘录
+    text: |
+      When the auditor modifies the opinion on the financial report, the auditor shall, in addition to the specific elements required by ASA 700:
+      (a) Amend the heading “Basis for Opinion” required by paragraph 28 of ASA 700 to “Basis for Qualified Opinion,” “Basis for Adverse Opinion,” or “Basis for Disclaimer of Opinion,” as appropriate; and
+      (b) Within this section, include a description of the matter giving rise to the modification.
     procedures: [RPT-03]
   - id: ASA705-P21
     paragraph: "21"
     topic: quantify_misstatement_effect
-    text: ""   # 待摘录
+    text: |
+      If there is a material misstatement of the financial report that relates to specific amounts in the financial report (including quantitative disclosures), the auditor shall include in the Basis for Opinion section a description and quantification of the financial effects of the misstatement, unless impracticable. If it is not practicable to quantify the financial effects, the auditor shall so state in this section.
     procedures: [RPT-03]

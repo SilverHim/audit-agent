@@ -1,15 +1,25 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: ASA 700
 title: Forming an Opinion and Reporting on a Financial Report
-compiled: ""   # 填所用编译版日期
+compiled: "2025-12-02"   # Compilation Number 10, 含 AUASB 2025-8 (适用于 2025-07-01 起开始的年度)
 fragments:
   - id: ASA700-P23
     paragraph: "23"
     topic: opinion_section
-    text: ""   # 待摘录
+    text: |
+      The first section of the auditor’s report shall include the auditor’s opinion, and shall have the heading “Opinion.”
     procedures: [RPT-03]
   - id: ASA700-P28
     paragraph: "28"
     topic: basis_for_opinion
-    text: ""   # 待摘录
+    text: |
+      The auditor’s report shall include a section, directly following the Opinion section, with the heading “Basis for Opinion”, that:
+      (a) States that the audit was conducted in accordance with Australian Auditing Standards;
+      (b) Refers to the section of the auditor’s report that describes the auditor’s responsibilities under the Australian Auditing Standards;
+      (c) [Deleted by the AUASB. Refer Aus 28.1(c)]
+      Aus 28.1(c) Includes a statement that the auditor is independent of the entity in accordance with the relevant ethical requirements relating to the audit, and has fulfilled the auditor’s other ethical responsibilities in accordance with these requirements.
+      (i) The statement shall identify the relevant ethical requirements applicable within Australia;
+      (ii) If the relevant ethical requirements require the auditor to publicly disclose when the auditor applied independence requirements specific to audits of financial reports of certain entities, the statement shall indicate that the auditor is independent of the entity in accordance with the independence requirements applicable to the audits of those entities; and
+      (d) States whether the auditor believes that the audit evidence the auditor has obtained is sufficient and appropriate to provide a basis for the auditor’s opinion.
     procedures: [RPT-03]

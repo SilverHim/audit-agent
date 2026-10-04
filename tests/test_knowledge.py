@@ -47,8 +47,26 @@ STANDARD_PDFS = {  # 准则 YAML 文件名 -> 原文 PDF
     "ASA320": "01_审计准则_ASA/ASA_320.pdf",
     "ASA450": "01_审计准则_ASA/ASA_450.pdf",
     "ASA505": "01_审计准则_ASA/ASA_505.pdf",
+    "ASA700": "01_审计准则_ASA/ASA_700.pdf",
+    "ASA705": "01_审计准则_ASA/ASA_705.pdf",
 }
-EXCERPTED = ["AASB15-P31", "AASB15-P38", "ASA320-P10", "ASA320-P11", "ASA450-P05", "ASA505-P07", "ASA505-P14"]
+EXCERPTED = [
+    "AASB15-P31",
+    "AASB15-P38",
+    "ASA320-P10",
+    "ASA320-P11",
+    "ASA450-P05",
+    "ASA450-P11",
+    "ASA505-P07",
+    "ASA505-P14",
+    "ASA700-P23",
+    "ASA700-P28",
+    "ASA705-P07",
+    "ASA705-P08",
+    "ASA705-P16",
+    "ASA705-P20",
+    "ASA705-P21",
+]
 # 页眉页脚行: "ASA 505 – compiled - 10 - AUDITING STANDARD", "AASB 15-compiled 21 STANDARD",
 # "Authorised Version F2023C00402 registered 03/05/2023", 页首 "Auditing Standard ASA 505"
 RUNNING_LINE = re.compile(
@@ -113,14 +131,79 @@ def test_normalise_joins_hyphen_and_drops_refs() -> None:
     assert normalise("bill-and-\nhold (Ref: Para. A3-A6)\n  next") == "bill-and-hold next"
 
 
-@pytest.mark.parametrize("procedure_id", ["PLN-01", "CSH-04", "CSH-02", "REV-03", "REV-02"])
-def test_p1_p2_procedure_standards_have_text(procedure_id: str) -> None:
+@pytest.mark.parametrize(
+    "procedure_id", ["PLN-01", "CSH-04", "CSH-02", "REV-03", "REV-02", "FIN-04", "FIN-01", "RPT-03"]
+)
+def test_procedure_standards_have_text(procedure_id: str) -> None:
     lib = ProcedureLibrary(ROOT)
     template = lib.load(procedure_id)
     assert template.standards
     for fragment_id in template.standards:
         fragment = lib.fragment(fragment_id)
         assert fragment is not None and fragment.text.strip(), fragment_id
+
+
+REPORT_SECTIONS = ["directors_responsibilities", "auditor_responsibilities", "other_legal_and_regulatory", "signature"]
+
+
+def report_template() -> dict[str, Any]:
+    return yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+
+
+@cache
+def illustration_1a() -> str:
+    """ASA 700 [Aus] Illustration 1A 的正文 (编译版第 39-42 页), 去页眉页脚后归一."""
+    with pdfplumber.open(REFERENCE / STANDARD_PDFS["ASA700"]) as pdf:
+        pages = [pdf.pages[i].extract_text() or "" for i in range(38, 42)]
+    assert "[Aus] Illustration 1A:" in pages[0]
+    title = standard_doc("ASA700")["title"]
+    lines = [line for page in pages for line in page.splitlines() if not RUNNING_LINE.fullmatch(line) and line != title]
+    return normalise("\n".join(lines))
+
+
+@pytest.mark.parametrize("opinion", ["unqualified", "qualified"])
+def test_report_template_sections(opinion: str) -> None:
+    sections = report_template()[opinion]
+    assert list(sections) == REPORT_SECTIONS
+    for name in ("directors_responsibilities", "auditor_responsibilities", "signature"):
+        assert sections[name].strip(), name
+    assert sections["other_legal_and_regulatory"] == ""  # Q14: 签名块另放 signature 段
+
+
+def test_report_fixed_text_equals_illustration() -> None:
+    """董事责任与审计师责任两段拼起来, 与 ASA 700 Illustration 1A 中对应区段逐字相同 (完整, 有序), 区段扣除按约定排除的:
+    "说明见 AUASB 网站" 的方括号段与其后两条版式说明 (第 41 段), 以及第 40(b) 段起的上市主体内容."""
+    source = illustration_1a()
+    body = source[
+        source.index("Responsibilities of the Directors for the Financial Report") : source.index(
+            "We also provide the directors with a statement"
+        )
+    ]
+    expected = body[: body.index("[A further description")] + body[body.index("As part of an audit in accordance") :]
+    sections = report_template()["unqualified"]
+    actual = normalise(sections["directors_responsibilities"] + "\n" + sections["auditor_responsibilities"])
+    assert actual == expected.strip()
+
+
+def test_report_template_placeholders_and_listed_entity_content() -> None:
+    template = report_template()
+    assert template["qualified"] == template["unqualified"]  # ASA 705 Illustration 1A 这几段按 ASA 700 写
+    text = "\n".join(template["unqualified"].values())
+    assert set(re.findall(r"{(\w+)}", text)) <= {"entity_name", "period_end", "auditor_name"}
+    filled = text.format(
+        entity_name="Numbat Electronic Components Pty Ltd", period_end="30 June 2026", auditor_name="A"
+    )
+    assert "{" not in filled and "}" not in filled
+    assert "{auditor_name}" in template["unqualified"]["signature"]
+    lowered = text.lower()
+    for listed_only in (
+        "key audit matter",
+        "other information",
+        "remuneration report",
+        "public interest",
+        "auasb.gov.au",
+    ):
+        assert listed_only not in lowered, listed_only
 
 
 def test_assembly_and_layers() -> None:

@@ -273,6 +273,7 @@ class ReportSection(StrEnum):
     directors_responsibilities = "directors_responsibilities"  # 董事责任
     auditor_responsibilities = "auditor_responsibilities"  # 审计师责任
     other_legal_and_regulatory = "other_legal_and_regulatory"  # 其他法律法规要求
+    signature = "signature"  # 签名块: 审计师姓名, 事务所, 地址
 
 
 class ReportStatus(StrEnum):
