@@ -12,8 +12,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.ingest import build_contract
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
+from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
     AbnRecord,
     AgentId,
@@ -178,6 +180,22 @@ NUMBAT_REPLIES = [  # CSH-04 存档的 2 份银行回函 (合成数据集设计�
     )
     for n, file_name in ((1, "12345601.pdf"), (2, "23456702.pdf"))
 ]
+
+
+def numbat_contracts() -> list[Contract]:
+    """DOC-04 由 3 份合同抽出的合同与 11 条条款 (合成数据集设计第 6.6 节), 取自 tests/fixtures/llm/DOC-04 的模型输出."""
+    root = get_settings().LLM_FIXTURES_ROOT / "DOC-04"
+    return [
+        build_contract(
+            document.file_name.removesuffix(".pdf"),
+            document,
+            ContractExtraction.model_validate_json((root / document.file_name.replace(".pdf", ".json")).read_text()),
+            "RUN-DOC-04-1",
+        )
+        for document in NUMBAT_CONTRACTS
+    ]
+
+
 NUMBAT_BANKS = {"BA-01": "Harbourline Bank Limited", "BA-02": "Bluegum Savings Bank Limited"}  # 第 2.3 节
 NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | BankTransaction] = [
     # 合成数据集设计第 5.1 节: 两张跨期场景发票与 SI-2026-0547 (期后收款)
@@ -350,12 +368,16 @@ class FakeFinancialStore:
     其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
-        self, documents: list[DocumentRef] | None = None, records: dict[tuple[str, str], dict[str, Any]] | None = None
+        self,
+        documents: list[DocumentRef] | None = None,
+        records: dict[tuple[str, str], dict[str, Any]] | None = None,
+        contracts: list[Contract] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
-        self.saved_contracts: dict[str, Contract] = {}  # save_contract 写入的合同, 合同编号 -> 合同, 各项目共用
+        # 合同, 合同编号 -> 合同, 各项目共用; 预置的与 save_contract 写入的都在这里
+        self.saved_contracts: dict[str, Contract] = {c.id: c for c in contracts or []}
         self.save_calls: list[str] = []  # save_contract 的每次调用 (合同编号)
 
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
@@ -363,7 +385,8 @@ class FakeFinancialStore:
         return self.records.get((source_type, source_id))
 
     async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]:
-        return [c for cid, c in sorted(self.saved_contracts.items()) if ids is None or cid in ids]
+        """按写入顺序返回 (真实实现的顺序没有约定, 调用方自行排序)."""
+        return [c for cid, c in self.saved_contracts.items() if ids is None or cid in ids]
 
     async def save_contract(self, eid: str, contract: Contract) -> None:
         self.save_calls.append(contract.id)

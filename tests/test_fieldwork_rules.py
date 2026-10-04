@@ -117,7 +117,7 @@ async def test_rule_error_becomes_failed_run_by_a1() -> None:
     assert patch["review_tasks"][0].kind is TaskKind.failed
 
 
-@pytest.mark.parametrize("procedure_id", ["REV-03", "REV-02", "CSH-02"])
+@pytest.mark.parametrize("procedure_id", ["REV-02", "CSH-02"])
 async def test_judgment_programs_not_yet_implemented(procedure_id: str) -> None:
     deps = make_deps(FakeRegistry(), FakeTrail())
     agent, ctx = FieldworkAgent(deps), make_ctx(deps, procedure_id)

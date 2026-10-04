@@ -78,7 +78,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
 
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
-        self.subject_sources: dict[str, SubjectSource] = {}  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
+        self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
+            "REV-03": self.rev03_subjects,
+        }
 
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
         """程序编号对应的 (执行, 解读). 没有登记的程序抛 NotImplementedError."""
@@ -140,6 +142,23 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             return Judged(jctx, outcome)
 
         return await gather_all(judge(s) for s in subjects)
+
+    async def rev03_subjects(self, ctx: RunContext) -> list[Subject]:
+        """REV-03 的判断对象: DOC-04 抽出的全部合同, 按合同编号排序.
+
+        data 为 {contract, document} (REV-03.md.j2 头注释), document 取状态中该合同的文件登记; 不在状态中抛 LookupError
+        (DOC-04 写合同与文件状态不在同一事务, 对不上说明存储与检查点不一致). 没有规则例外.
+        """
+        contracts = sorted(await self.deps.financial_store.contracts(ctx.engagement.id), key=lambda c: c.id)
+        documents = {d.id: d for d in ctx.state["documents"]}
+        subjects = []
+        for contract in contracts:
+            document = documents.get(contract.document_id)
+            if document is None:
+                raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 不在状态中")
+            data = {"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")}
+            subjects.append(Subject(contract.id, data))
+        return subjects
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
