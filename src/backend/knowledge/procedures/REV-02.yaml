@@ -16,7 +16,7 @@ params:
 depends_on: [REV-03, REV-08]
 standards: [AASB15-P31, AASB15-P38]
 evidence_required: [invoice, delivery, contract]
-# 判断对象 = S01 选中的发票 ∪ REV-08 R01 例外的 source_id, 每张发票一条 Judgment
+# 判断对象 = S01 选中的发票 ∪ REV-08 尚未归因的例外 (R01, R02, R03 都算) 的 source_id, 每张发票一条 Judgment
 rules:
   - id: S01
     name: 期末窗口内超过执行重要性的发票

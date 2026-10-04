@@ -1,5 +1,5 @@
 {#
-REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 选中或 REV-08 R01 命中）。
+REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 选中或 REV-08 尚未归因的例外命中）。
 渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
 变量：
   subject_id              发票 ID
@@ -12,7 +12,7 @@ REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 
   data.contract           发票所属 Contract（字段同 REV-03），无则为 null
   data.document           合同 PDF 的 DocumentRef，无则为 null
   data.contract_judgment  该合同的 REV-03 Judgment：id、conclusion、review_status；无则为 null
-  rule_findings           该发票上 REV-08 的 AuditException：id、rule_id、severity、amount_cents、detail
+  rule_findings           该发票上 REV-08 尚未归因的 AuditException：id、rule_id、severity、amount_cents、detail
   standards               StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set inv = data.invoice %}

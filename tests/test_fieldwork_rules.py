@@ -115,11 +115,3 @@ async def test_rule_error_becomes_failed_run_by_a1() -> None:
     [run] = patch["procedure_runs"]
     assert run.status is RunStatus.failed and run.failure_reason == "RuleError: B01 timed out"
     assert patch["review_tasks"][0].kind is TaskKind.failed
-
-
-@pytest.mark.parametrize("procedure_id", ["REV-02"])
-async def test_judgment_programs_not_yet_implemented(procedure_id: str) -> None:
-    deps = make_deps(FakeRegistry(), FakeTrail())
-    agent, ctx = FieldworkAgent(deps), make_ctx(deps, procedure_id)
-    with pytest.raises(NotImplementedError, match=procedure_id):
-        await agent.execute(ctx)

@@ -476,7 +476,8 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts) 与试算表 (trial_balance), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes) 与试算表 (trial_balance),
+    其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -503,6 +504,19 @@ class FakeFinancialStore:
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
         return [BankAccount.model_validate(row) for (kind, _), row in self.records.items() if kind == "bank_account"]
+
+    async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]:
+        """records 中 ID 在 ids 内的 sales_invoice 行, 按写入顺序 (真实实现的顺序没有约定, 调用方自行排序)."""
+        return [
+            SalesInvoice.model_validate(row)
+            for (kind, rid), row in self.records.items()
+            if kind == "sales_invoice" and rid in ids
+        ]
+
+    async def delivery_notes(self, eid: str, invoice_ids: Sequence[str]) -> list[DeliveryNote]:
+        """records 中发票在 invoice_ids 内的 delivery_note 行, 按写入顺序的倒序 (调用方须自行排序)."""
+        notes = [DeliveryNote.model_validate(row) for (kind, _), row in self.records.items() if kind == "delivery_note"]
+        return [n for n in reversed(notes) if n.invoice_id in invoice_ids]
 
     async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]:
         """按写入顺序返回 (真实实现的顺序没有约定, 调用方自行排序)."""
@@ -1000,10 +1014,24 @@ def numbat_csh05_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计第 7 节第 9 行), 列按 REV-02.yaml
+    {
+        "id": f"SI-2026-{n}",
+        "invoice_no": f"SI-2026-{n}",
+        "contract_id": contract,
+        "posting_date": day,
+        "amount_cents": amount,
+    }
+    for n, contract, day, amount in (
+        ("0612", "CON-001", date(2026, 6, 28), 14200000),
+        ("0618", "CON-002", date(2026, 6, 29), 9500000),
+    )
+]
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
     "PLN-07": lambda run: RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS}),
     "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
+    "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
     "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
     "CSH-02": lambda run: RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS}),
 }

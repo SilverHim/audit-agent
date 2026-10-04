@@ -104,6 +104,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         super().__init__(deps)
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
+            "REV-02": self.rev02_subjects,
         }
 
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
@@ -183,6 +184,80 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             data = {"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")}
             subjects.append(Subject(contract.id, data))
         return subjects
+
+    async def rev02_subjects(self, ctx: RunContext) -> list[Subject]:
+        """REV-02 的判断对象: 规则 S01 选中的发票, 加前置程序 (REV-08) 尚未归因的例外所指的发票 (Q13: R01, R02, R03
+        都算), 去重后按发票 ID 排序; 先按 in_scope 筛选, 再取数据.
+
+        data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice 与 delivery_notes (按 ID 排序) 带 source_type;
+        contract, document (状态中该合同的文件登记), contract_judgment (该合同当前有效的 REV-03 判断,
+        见 contract_judgment) 在发票没有合同时为 null. 规则例外为该发票上前置程序尚未归因的例外 (按 ID 排序).
+        发票, 合同或合同文件查不到抛 LookupError.
+        """
+        eid = ctx.engagement.id
+        store = self.deps.financial_store
+        rules = await self.run_rules(ctx)
+        earlier = set(ctx.template.depends_on)
+        open_findings = sorted(
+            (
+                x
+                for x in ctx.state["exceptions"]
+                if x.procedure_id in earlier and x.disposition is not ExceptionDisposition.attributed
+            ),
+            key=lambda x: x.id,
+        )
+        selected = {row["id"] for row in rules.rows.get("S01", [])}
+        ids = sorted(i for i in selected | {i for x in open_findings for i in x.source_ids} if in_scope(ctx, i))
+        if not ids:
+            return []
+        invoices = {i.id: i for i in await store.sales_invoices(eid, ids)}
+        missing = [i for i in ids if i not in invoices]
+        if missing:
+            raise LookupError(f"发票不在财务数据中: {', '.join(missing)}")
+        notes: dict[str, list[dict[str, Any]]] = {i: [] for i in ids}
+        for note in sorted(await store.delivery_notes(eid, ids), key=lambda n: n.id):
+            notes[note.invoice_id].append({"source_type": "delivery_note", **note.model_dump(mode="json")})
+        contract_ids = sorted({cast(str, invoices[i].contract_id) for i in ids if invoices[i].contract_id})
+        contracts = {c.id: c for c in await store.contracts(eid, contract_ids)} if contract_ids else {}
+        documents = {d.id: d for d in ctx.state["documents"]}
+        subjects = []
+        for invoice_id in ids:
+            invoice = invoices[invoice_id]
+            contract, document, judgment = None, None, None
+            if invoice.contract_id is not None:
+                found = contracts.get(invoice.contract_id)
+                if found is None:
+                    raise LookupError(f"发票 {invoice_id} 的合同 {invoice.contract_id} 不在财务数据中")
+                doc = documents.get(found.document_id)
+                if doc is None:
+                    raise LookupError(f"合同 {found.id} 的文件 {found.document_id} 不在状态中")
+                contract, document = found.model_dump(mode="json"), doc.model_dump(mode="json")
+                judgment = self.contract_judgment(ctx, found.id)
+            data = {
+                "invoice": {"source_type": "sales_invoice", **invoice.model_dump(mode="json")},
+                "delivery_notes": notes[invoice_id],
+                "contract": contract,
+                "document": document,
+                "contract_judgment": judgment,
+            }
+            subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
+        return subjects
+
+    @staticmethod
+    def contract_judgment(ctx: RunContext, contract_id: str) -> dict[str, Any] | None:
+        """该合同当前有效的 REV-03 判断 (id, conclusion, review_status): 状态中该合同未被推翻的 REV-03 判断里最新的一条
+        (被 override 时即人工判断); 没有为 None."""
+        candidates = [
+            j
+            for j in ctx.state["judgments"]
+            if j.procedure_id == "REV-03"
+            and j.subject_id == contract_id
+            and j.review_status is not ReviewStatus.overridden
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda j: (j.created_at, j.id))
+        return latest.model_dump(mode="json", include={"id", "conclusion", "review_status"})
 
     async def assess_confirmations(self, ctx: RunContext) -> CashFindings:
         """CSH-02 的执行: 先做规则部分 (D01, 在代码中做), 再对有差异的账户组装上下文交判断引擎.
