@@ -517,7 +517,7 @@ class AcceptanceScorecard(Versioned):
 class AnalyticsResult(Versioned):
     """PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外."""
 
-    ratios: dict[str, float]  # 比率: 毛利率, 收入增长率等, 本期与上期各一
+    ratios: dict[str, float]  # 比率: gross_margin_current, gross_margin_prior, revenue_growth, 四位小数
     exception_ids: list[str]  # 变动超阈值的例外
 
 

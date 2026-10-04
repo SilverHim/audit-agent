@@ -1,7 +1,7 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -12,6 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import EngagementLocked, VersionConflict
+from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
     AgentId,
@@ -63,6 +64,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
+from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
@@ -655,6 +657,69 @@ class FakeEvidenceStore:
             txn.on_commit.append(apply)
 
 
+NUMBAT_A02_ROWS = [  # PLN-07 A02 的取数 (合成数据集设计第 3.2 节): 收入与销售成本, 本期与上期
+    {"period": "current", "revenue_cents": 1200000000, "cost_of_sales_cents": 840000000},
+    {"period": "prior", "revenue_cents": 1040000000, "cost_of_sales_cents": 722800000},
+]
+NUMBAT_M01_ROWS = [  # PLN-01 M01 的取数 (第 3.2 节), 按 basis 排序
+    {"basis": "profit_before_tax", "base_amount_cents": 150000000},
+    {"basis": "revenue", "base_amount_cents": 1200000000},
+    {"basis": "total_assets", "base_amount_cents": 800000000},
+]
+
+
+def numbat_pln07_exception(run: ProcedureRun) -> AuditException:
+    """PLN-07 A01 对应收账款 1100 的变动例外 (合成数据集设计第 7 节第 4 行), 字段按 PLN-07.yaml 的输出列."""
+    return AuditException(
+        id=f"X-PLN-07-{run.run_no}-A01-1",
+        procedure_id="PLN-07",
+        run_id=run.id,
+        rule_id="A01",
+        severity="medium",
+        source_ids=["1100"],
+        amount_cents=52500000,
+        detail={
+            "account_name": "Trade receivables",
+            "current_cents": 202500000,
+            "prior_cents": 150000000,
+            "change_pct": 0.35,
+        },
+        evidence=[
+            EvidencePointer(
+                type="voucher",
+                source_type="trial_balance",
+                source_id="1100",
+                locator="balance_cents",
+                reliability="internal_original",
+            )
+        ],
+    )
+
+
+NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
+    "PLN-07": lambda run: RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS}),
+    "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
+}
+
+
+class FakeRuleEngine:
+    """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.
+
+    calls 记下每次调用 (程序编号, Run ID, 参数). B 的 SqlRuleEngine 就绪前代替它.
+    """
+
+    def __init__(self, results: Mapping[str, Callable[[ProcedureRun], RuleResult]] | None = None) -> None:
+        self.results = dict(NUMBAT_RULES if results is None else results)  # 程序编号 -> 按执行生成结果
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []  # (程序编号, Run ID, 参数)
+
+    async def run(
+        self, eid: str, template: ProcedureTemplate, run: ProcedureRun, params: Mapping[str, Any]
+    ) -> RuleResult:
+        self.calls.append((template.id, run.id, dict(params)))
+        make = self.results.get(template.id)
+        return make(run) if make is not None else RuleResult(exceptions=[], rows={})
+
+
 class FakeDatasetLoader:
     """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
 
@@ -692,11 +757,12 @@ def make_deps(
     engagement_store: FakeEngagementStore | None = None,
     output_store: FakeOutputStore | None = None,
     financial_store: FakeFinancialStore | None = None,
+    rules: FakeRuleEngine | None = None,
 ) -> AgentDeps:
-    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储与数据集载入.
+    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入与规则引擎.
     其余依赖只构造不连接.
 
-    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空.
+    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果.
     项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
@@ -715,6 +781,7 @@ def make_deps(
         financial_store=financial_store,
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
+        rules=rules if rules is not None else FakeRuleEngine(),
     )
 
 
@@ -834,7 +901,7 @@ def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, Procedu
         analytics = AnalyticsResult(
             id="ANALYTICS",
             version=previous.version + 1 if previous else 1,
-            ratios={"gross_margin": 0.3, "gross_margin_prior": 0.305, "revenue_growth": 0.1538},
+            ratios={"gross_margin_current": 0.3, "gross_margin_prior": 0.305, "revenue_growth": 0.1538},
             exception_ids=[exception.id],
         )
         return {"analytics": analytics, "exceptions": [exception], "procedure_runs": [run]}
