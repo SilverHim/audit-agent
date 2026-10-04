@@ -24,7 +24,7 @@ def report_date_text(day: date) -> str:
 
 
 class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
-    """A10: 执行 RPT-03, 生成审计报告初稿 (按批注修订尚未接入).
+    """A10: 执行 RPT-03, 生成审计报告初稿, RPT-01 退回后按批注修订.
 
     模型只写意见段与形成意见的基础段, 其余段落取 templates/report.yaml 中该意见类型的固定文本, 代入占位符.
     """
@@ -33,7 +33,7 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
     procedures: ClassVar[frozenset[str]] = frozenset({"RPT-03"})  # 负责的程序
 
     async def execute(self, ctx: RunContext) -> AuditReportVersion:
-        """起草下一修订 REPORT-{revision} (revision 为状态中最大修订号 + 1), 草稿第 1 版.
+        """起草下一修订 REPORT-{revision} (revision 为状态中最大修订号 + 1), 草稿第 1 版; 修订时带上一稿与退回批注.
 
         意见类型取 FIN-01 选定的 opinion_route; 模型输入见 RPT-03.md.j2 头注释, fixture_key 为 r{revision}.
         校验不通过时抛 ValueError (含最后一次的错误), 由 A1 按执行失败处理.
@@ -43,8 +43,7 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
         if opinion is None:
             raise ValueError("RPT-03 需要 FIN-01 选定的意见类型 (opinion_route)")
         revision = max((r.revision for r in state["report_versions"]), default=0) + 1
-        if revision > 1:
-            raise NotImplementedError("RPT-03 按 RPT-01 批注修订")
+        previous, annotations, addresses = self.revision_inputs(ctx, revision)
         engagement = ctx.engagement
         version = state["client_profile_version"]
         profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
@@ -59,8 +58,8 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             "revision": revision,
             "opinion_type": opinion.value,
             "fin01_reason": self.fin01_reason(ctx),
-            "previous": None,
-            "annotations": [],
+            "previous": previous,
+            "annotations": annotations,
             "standards": self.deps.judgments.standards(ctx.template),
             **self.misstatement_inputs(ctx),
         }
@@ -93,7 +92,39 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
                 **fixed,
             },
             judgment_refs=draft.judgment_refs,
+            addresses_decision_id=addresses,
         )
+
+    @staticmethod
+    def revision_inputs(
+        ctx: RunContext, revision: int
+    ) -> tuple[dict[str, str] | None, list[dict[str, Any]], str | None]:
+        """修订的输入: (上一稿的意见段与基础段, 上一稿最近一次被 RPT-01 退回的批注, 该退回决定 ID);
+        首稿为 (None, [], None).
+
+        上一稿取状态中修订号为 revision - 1 的报告的当前版本; 退回决定须针对上一稿 (target_id), 信息不足的决定不算退回.
+        修订时找不到上一稿或针对它的退回决定抛 LookupError.
+        """
+        if revision == 1:
+            return None, [], None
+        state = ctx.state
+        earlier = [r for r in state["report_versions"] if r.revision == revision - 1]
+        if not earlier:
+            raise LookupError(f"RPT-03 第 {revision} 稿找不到第 {revision - 1} 稿")
+        last = max(earlier, key=lambda r: r.version)
+        rejects = [
+            d
+            for d in state["gate_decisions"]
+            if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject and d.target_id == last.id
+        ]
+        if not rejects:
+            raise LookupError(f"RPT-03 第 {revision} 稿找不到 RPT-01 对 {last.id} 的退回决定")
+        reject = rejects[-1]
+        previous = {
+            "opinion": last.sections[ReportSection.opinion],
+            "basis_for_opinion": last.sections[ReportSection.basis_for_opinion],
+        }
+        return previous, [a.model_dump(mode="json") for a in reject.annotations], reject.id
 
     @staticmethod
     def fin01_reason(ctx: RunContext) -> str:

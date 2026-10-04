@@ -1,5 +1,6 @@
 """A10 RPT-03 报告首稿: 模型写意见段与基础段, 其余段落取 report.yaml 固定文本 (合成数据集设计第 7 节第 15, 16 行)."""
 
+import json
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -13,6 +14,7 @@ from backend.agents.concierge import ConciergeAgent
 from backend.contracts.llm_outputs import ReportDraft
 from backend.contracts.models import (
     AgentId,
+    Annotation,
     Assertion,
     AuditReportVersion,
     Decision,
@@ -25,6 +27,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementType,
     OpinionType,
+    Phase,
     Procedure,
     ProcedureStatus,
     ProposedAction,
@@ -44,6 +47,7 @@ from backend.contracts.models import (
 )
 from backend.core.config import get_settings
 from backend.orchestration.nodes import GraphNodes
+from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
@@ -57,6 +61,7 @@ from tests.fakes import (
     ScriptedLLM,
     make_ctx,
     make_deps,
+    make_run,
     numbat_all_p2_agents,
     preset_rerun,
     wait_idle,
@@ -64,6 +69,7 @@ from tests.fakes import (
 from tests.test_fin_gate import REASON, fin_decision
 from tests.test_flow import EID, approve_materiality, review_all, start_numbat
 from tests.test_nodes import single_node
+from tests.test_rpt_gate import rpt_decision
 
 CUTOFF = Judgment(  # 合成数据集设计第 7 节第 9 行, 审计师决定 misstatement 后 v2 confirmed
     id="J-REV-02-1-SI-2026-0612",
@@ -232,14 +238,121 @@ async def test_same_state_same_report() -> None:
     assert first == second
 
 
-async def test_revision_is_max_plus_one() -> None:
-    agent, ctx, _ = setup()
-    earlier = AuditReportVersion(
-        id="REPORT-3", revision=3, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
+REJECT = GateDecision(  # 合成数据集设计第 7 节第 17 行的第一次退回
+    id="D-r",
+    gate=GateId.RPT_01,
+    target_id="REPORT-1",
+    target_version=1,
+    decision=GateVerdict.reject,
+    annotations=[
+        Annotation(
+            section=ReportSection.basis_for_opinion,
+            comment="Cite the contract clause that sets the point at which control transfers.",
+        )
+    ],
+    reason="Basis section needs the contract term",
+    decided_by="U-1",
+    decided_at=NOW,
+)
+
+
+def report(revision: int, basis: str = "Basis for Qualified Opinion\n\nold basis.") -> AuditReportVersion:
+    return AuditReportVersion(
+        id=f"REPORT-{revision}",
+        revision=revision,
+        opinion_type=OpinionType.qualified,
+        sections={
+            ReportSection.opinion: f"Qualified Opinion\n\nrevision {revision}.",
+            ReportSection.basis_for_opinion: basis,
+        },
+        judgment_refs=[JudgmentRef(id=CUTOFF.id, version=2)],
     )
-    state = ctx.state | {"report_versions": [earlier]}
-    with pytest.raises(NotImplementedError, match="批注修订"):  # 第 4 稿要按批注修订, 尚未接入
-        await agent.run(RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, state))  # type: ignore[arg-type]
+
+
+def revising(state: dict[str, Any], run_no: int, llm: Any = None) -> tuple[ConciergeAgent, RunContext, FakeTrail]:
+    """RPT-01 退回后的再一次 RPT-03 执行 (trigger rerun)."""
+    agent, ctx, trail = setup(llm=llm)
+    run = make_run("RPT-03", run_no=run_no, params=ctx.run.params_snapshot)
+    return agent, RunContext(ctx.engagement, ctx.procedure, ctx.template, run, ctx.state | state), trail  # type: ignore[arg-type]
+
+
+async def test_second_revision_addresses_reject() -> None:
+    first = report(1)
+    agent, ctx, trail = revising(
+        {"report_versions": [first], "gate_decisions": [fin01(OpinionType.qualified), REJECT]}, run_no=2
+    )
+    patch = await agent.run(ctx)
+    [report2] = patch["report_versions"]
+    assert (report2.id, report2.version, report2.revision, report2.addresses_decision_id) == ("REPORT-2", 1, 2, "D-r")
+    assert patch["procedure_runs"][0].id == "RUN-RPT-03-2" and patch["procedure_runs"][0].trigger is RunTrigger.rerun
+    assert ctx.state["report_versions"] == [first]  # REPORT-1 不变
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    assert entry.payload["fixture_key"] == "r2"
+    prompt = entry.payload["messages"][0]["content"]
+    assert "## Revision 2" in prompt
+    assert first.sections[ReportSection.opinion] in prompt and first.sections[ReportSection.basis_for_opinion] in prompt
+    assert "- [basis_for_opinion]: Cite the contract clause that sets the point at which control transfers." in prompt
+
+
+async def test_r2_fixture_cites_contract_clause() -> None:
+    agent, ctx, _ = revising(
+        {"report_versions": [report(1)], "gate_decisions": [fin01(OpinionType.qualified), REJECT]}, 2
+    )
+    [report2] = (await agent.run(ctx))["report_versions"]
+    basis = report2.sections[ReportSection.basis_for_opinion]
+    assert "Clause 5.1 of contract CON-001" in basis and "signs the delivery note" in basis
+    assert report2.judgment_refs == [JudgmentRef(id=CUTOFF.id, version=2)]
+
+
+async def test_third_revision_uses_latest_reject_only() -> None:
+    second_reject = REJECT.model_copy(
+        update={
+            "id": "D-r2",
+            "target_id": "REPORT-2",
+            "annotations": [Annotation(section=ReportSection.opinion, comment="Shorten the opinion.")],
+        }
+    )
+    pending = REJECT.model_copy(
+        update={"id": "D-info", "decision": GateVerdict.insufficient_info, "annotations": [], "target_id": "REPORT-2"}
+    )
+    report2 = report(2, "Basis for Qualified Opinion\n\nsecond basis.")
+    state = {
+        "report_versions": [report(1), report2],
+        "gate_decisions": [fin01(OpinionType.qualified), REJECT, second_reject, pending],
+    }
+    llm = ScriptedLLM({"r3": [ReportDraft.model_validate_json(r1_raw()).model_dump_json()]})
+    agent, ctx, _ = revising(state, run_no=3, llm=llm)
+    [report3] = (await agent.run(ctx))["report_versions"]
+    assert (report3.id, report3.revision, report3.addresses_decision_id) == ("REPORT-3", 3, "D-r2")
+    prompt = llm.requests[0].messages[0].content
+    assert "second basis." in prompt and "old basis." not in prompt
+    assert "- [opinion]: Shorten the opinion." in prompt and "Cite the contract clause" not in prompt
+
+
+async def test_latest_reject_of_previous_report_wins() -> None:
+    """同一稿有两条退回决定时取后一条的批注."""
+    later = REJECT.model_copy(
+        update={"id": "D-r-later", "annotations": [Annotation(section=ReportSection.opinion, comment="Later note.")]}
+    )
+    state = {"report_versions": [report(1)], "gate_decisions": [fin01(OpinionType.qualified), REJECT, later]}
+    llm = ScriptedLLM({"r2": [r1_raw()]})
+    agent, ctx, _ = revising(state, run_no=2, llm=llm)
+    [report2] = (await agent.run(ctx))["report_versions"]
+    assert report2.addresses_decision_id == "D-r-later"
+    prompt = llm.requests[0].messages[0].content
+    assert "- [opinion]: Later note." in prompt and "Cite the contract clause" not in prompt
+
+
+@pytest.mark.parametrize(
+    "decisions",
+    [[], [REJECT.model_copy(update={"target_id": "REPORT-0"})]],
+    ids=["no_reject", "reject_of_other_report"],
+)
+async def test_revision_without_reject_of_previous_report_raises(decisions: list[GateDecision]) -> None:
+    """修订时须有针对上一稿的退回决定, 否则报错 (不拿别的报告的批注来改)."""
+    agent, ctx, _ = revising({"report_versions": [report(1)], "gate_decisions": decisions}, run_no=2)
+    with pytest.raises(LookupError, match="REPORT-1 的退回决定"):
+        await agent.run(ctx)
 
 
 def r1_raw(**changes: Any) -> str:
@@ -457,3 +570,98 @@ async def test_owner_missing_raises_before_llm() -> None:
     with pytest.raises(LookupError, match="U-1"):
         await agent.run(ctx)
     assert not [e for e in trail.entries if e.kind is TrailKind.llm_call]
+
+
+# ── Codex R53 探针: 主图上的退回与修订 ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize("crash_after_store", [False, True], ids=["normal", "crash_after_store"])
+async def test_reject_revision_and_sign_on_main_graph(monkeypatch: pytest.MonkeyPatch, crash_after_store: bool) -> None:
+    """主图: RPT-01 退回 → A10 出第 2 稿 → 再停在 RPT-01, 呈报 REPORT-2 → 通过后签字归档. crash_after_store 时
+    第 2 稿写入 Store 后, 检查点更新前中断, resume 后重放取 Store, 不再调模型."""
+    original = GraphNodes.attempt
+    crashed = False
+
+    async def attempt(self: GraphNodes, *args: Any, **kwargs: Any) -> Any:
+        nonlocal crashed
+        result = await original(self, *args, **kwargs)
+        if crash_after_store and not crashed and any(r.id == "REPORT-2" for r in result[0].get("report_versions", [])):
+            crashed = True
+            raise RuntimeError("R53: 第二稿写 Store 后, 检查点更新前中断")
+        return result
+
+    monkeypatch.setattr(GraphNodes, "attempt", attempt)
+    s = await start_numbat(lambda deps: {**numbat_all_p2_agents(deps), "RPT-03": ConciergeAgent(deps)})
+    await approve_materiality(s)
+    await wait_idle(s.runner, EID)
+    await review_all(s)
+    await s.submit.submit(EID, fin_decision(GateVerdict.approve))
+    await wait_idle(s.runner, EID)
+    config = GraphRunner.config(EID)
+    [first] = (await s.runner.app.aget_state(config)).values["report_versions"]
+
+    reject = rpt_decision(GateVerdict.reject, id="D-R53-REJECT")
+    await s.submit.submit(EID, reject)
+    await wait_idle(s.runner, EID)
+    if crash_after_store:
+        assert crashed and "R53" in (s.runner.run_error(EID) or "")
+        assert (await s.runner.app.aget_state(config)).values["report_versions"] == [first]
+        await s.runner.resume(EID)
+        await wait_idle(s.runner, EID)
+
+    assert s.runner.run_error(EID) is None
+    assert await s.next_nodes() == ("gate_rpt01",)
+    values = (await s.runner.app.aget_state(config)).values
+    assert [r.id for r in values["report_versions"]] == ["REPORT-1", "REPORT-2"] and values["report_versions"][
+        0
+    ] == first
+    second = values["report_versions"][1]
+    assert (second.revision, second.version, second.addresses_decision_id) == (2, 1, reject.id)
+    assert "Clause 5.1 of contract CON-001" in second.sections[ReportSection.basis_for_opinion]
+    runs = [r for r in values["procedure_runs"] if r.procedure_id == "RPT-03"]
+    assert [(r.id, r.trigger, r.status) for r in runs] == [
+        ("RUN-RPT-03-1", RunTrigger.initial, RunStatus.succeeded),
+        ("RUN-RPT-03-2", RunTrigger.rerun, RunStatus.succeeded),
+    ]
+    calls = [e for e in s.runner.deps.trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "RPT-03"]
+    assert [e.payload["fixture_key"] for e in calls] == ["r1", "r2"]
+    assert first.sections[ReportSection.opinion] in calls[1].payload["messages"][0]["content"]
+    view = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).gate(EID)
+    assert view is not None and (view.target_id, view.target_version) == ("REPORT-2", 1)
+
+    await s.submit.submit(EID, rpt_decision(GateVerdict.approve, id="D-R53-APPROVE", target_id="REPORT-2"))
+    await wait_idle(s.runner, EID)
+
+    values = (await s.runner.app.aget_state(config)).values
+    assert values["phase"] is Phase.Archived and values["report_versions"][0] == first
+    assert values["report_versions"][1].status is ReportStatus.signed
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.locked
+
+
+def test_previous_draft_is_current_version_of_previous_revision() -> None:
+    agent, ctx, _ = setup()
+    old = report(1, "old version")
+    current = old.model_copy(
+        update={
+            "version": 2,
+            "sections": {ReportSection.opinion: "current opinion", ReportSection.basis_for_opinion: "current basis"},
+        }
+    )
+    state = ctx.state | {"report_versions": [current, old], "gate_decisions": [REJECT]}
+    previous, annotations, addresses = agent.revision_inputs(replace(ctx, state=state), 2)
+    assert previous == {"opinion": "current opinion", "basis_for_opinion": "current basis"}
+    assert annotations[0]["comment"] == REJECT.annotations[0].comment and addresses == REJECT.id
+
+
+def test_r2_fixture_only_adds_contract_clause() -> None:
+    """r2 与 r1 只差基础段补写的第 5.1 条一句, 意见段与引用不变."""
+    root = get_settings().LLM_FIXTURES_ROOT / "RPT-03"
+    first = json.loads((root / "r1.json").read_text())
+    second = json.loads((root / "r2.json").read_text())
+    insertion = (
+        "Clause 5.1 of contract CON-001 with Bilby Robotics Pty Ltd provides that title to and risk in the goods pass "
+        "to the customer when its authorised representative signs the delivery note. "
+    )
+    assert second["opinion"] == first["opinion"] and second["judgment_refs"] == first["judgment_refs"]
+    assert second["basis_for_opinion"].replace(insertion, "") == first["basis_for_opinion"]
