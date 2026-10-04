@@ -1,15 +1,19 @@
 """判断引擎与输出校验 (A 负责). 规则见 开发接口文档.md 第 5 节."""
 
+import hashlib
 import json
-from collections.abc import Iterable, Sequence
-from typing import Any, Literal, cast
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Literal, NoReturn, cast
 
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 from pydantic import BaseModel, ValidationError
 
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, JudgmentDraft
 from backend.contracts.models import (
+    AgentId,
     AuditException,
     DocumentRef,
     DocumentType,
@@ -21,10 +25,25 @@ from backend.contracts.models import (
     Reliability,
     SourceType,
     StepKind,
+    TrailEntry,
     TrailKind,
 )
-from backend.contracts.ports import AuditTrail, FinancialDataStore, LLMResponse, T_out
-from backend.contracts.services import JudgmentContext, JudgmentOutcome, ValidationContext, ValidationReport
+from backend.contracts.ports import (
+    AuditTrail,
+    FinancialDataStore,
+    LLMClient,
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    T_out,
+)
+from backend.contracts.services import (
+    JudgmentContext,
+    JudgmentOutcome,
+    LLMCallResult,
+    ValidationContext,
+    ValidationReport,
+)
 from backend.services.procedure_library import ProcedureLibrary
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
@@ -42,6 +61,18 @@ ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
 DOCUMENT_EVIDENCE = {DocumentType.contract: EvidenceType.contract, DocumentType.confirmation: EvidenceType.external}
 # 不算行金额的金额列: 银行流水的交易后余额是累计数, 不是这一行的金额
 NOT_ROW_AMOUNTS = {"balance_after_cents"}
+MAX_ATTEMPTS = 3  # 首次调用加语法, 结构失败后最多 2 次重试
+# 系统提示词: 要求只输出符合输出模型 JSON schema 的一个对象
+SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON schema below. \
+Write nothing before or after the object.
+
+{schema}"""
+# 语法或结构失败后追加的用户消息
+RETRY_PROMPT = """Your previous reply failed validation:
+
+{errors}
+
+Reply again with a single JSON object that conforms to the schema."""
 
 
 def output_model(template: ProcedureTemplate) -> type[BaseModel]:
@@ -293,8 +324,131 @@ class OutputValidator:
         return output.model_copy(update={"evidence": evidence}), errors
 
 
+def json_default(value: object) -> NoReturn:
+    """tojson 遇到不能序列化的对象时调用: 缺变量 (StrictUndefined) 抛 UndefinedError, 其余仍抛 TypeError.
+
+    StrictUndefined 只在取值, 转字符串等操作时报错, json.dumps 只会说它不能序列化, 看不出是缺了变量.
+    """
+    if isinstance(value, Undefined):
+        str(value)  # StrictUndefined 转字符串即抛 UndefinedError, 消息写明缺的是哪个变量
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def prompt_env(root: Path) -> Environment:
+    """提示词模板的 Jinja2 环境: 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义."""
+    env = Environment(
+        loader=FileSystemLoader(root), trim_blocks=True, lstrip_blocks=True, undefined=StrictUndefined, autoescape=False
+    )
+    env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
+    return env
+
+
+def prompt_hash(system: str, messages: Sequence[LLMMessage]) -> str:
+    """送给大模型的完整输入 (system 与 messages) 的 sha256: 规范 JSON, 键排序, 不留空白, 非 ASCII 字符原样."""
+    canonical = json.dumps(
+        {"system": system, "messages": [m.model_dump() for m in messages]},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class JudgmentEngine:
-    """判断引擎: 组装上下文, 调大模型, 校验输出, 算置信度, 产出 Judgment."""
+    """判断引擎: 组装上下文, 调大模型, 校验输出, 算置信度, 产出 Judgment.
+
+    调大模型的公共部分 (渲染, 重试, 留痕) 在 call_llm, judge 与抽取类程序 (DOC-04, DOC-06), 报告 (RPT-03) 共用.
+    """
+
+    def __init__(
+        self, llm: LLMClient, validator: OutputValidator, trail: AuditTrail, library: ProcedureLibrary
+    ) -> None:
+        self.llm = llm  # 大模型客户端
+        self.validator = validator  # 四级校验
+        self.trail = trail  # 写 llm_call 留痕
+        self.prompts = prompt_env(library.root / "prompts")  # 提示词模板
+
+    def render(self, template: ProcedureTemplate, variables: Mapping[str, Any]) -> str:
+        """按程序模板 llm.prompt 渲染提示词. 缺变量抛 jinja2.UndefinedError, 属调用方的错, 不算大模型失败."""
+        if template.llm is None:
+            raise ValueError(f"{template.id} 没有 llm 配置")
+        return self.prompts.get_template(template.llm.prompt).render(variables)
+
+    async def call_llm(
+        self,
+        eid: str,
+        template: ProcedureTemplate,
+        run: ProcedureRun,
+        variables: Mapping[str, Any],
+        ctx: ValidationContext,
+        actor: AgentId,
+        fixture_key: str = "default",
+    ) -> LLMCallResult[Any]:
+        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
+
+        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json")),
+        ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
+        """
+        model = output_model(template)
+        assert template.llm is not None  # output_model 已确认
+        system = SYSTEM_PROMPT.format(schema=json.dumps(model.model_json_schema(), indent=2))
+        messages = [LLMMessage(role="user", content=self.render(template, variables))]
+        trail_ids: list[str] = []
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            request = LLMRequest(
+                procedure_id=run.procedure_id,
+                run_id=run.id,
+                system=system,
+                messages=messages,
+                max_tokens=template.llm.max_tokens,
+                fixture_key=fixture_key,
+            )
+            response = await self.llm.complete(request, model)
+            report = await self.validator.validate(eid, template, response, ctx)
+            trail_ids.append(await self.record(eid, actor, request, response, report, attempt))
+            if not report.retryable or attempt == MAX_ATTEMPTS:
+                break
+            messages = [
+                *messages,
+                LLMMessage(role="assistant", content=response.raw),
+                LLMMessage(role="user", content=RETRY_PROMPT.format(errors="\n".join(report.errors))),
+            ]
+        return LLMCallResult(report=report, attempts=attempt, trail_ids=trail_ids)
+
+    async def record(
+        self,
+        eid: str,
+        actor: AgentId,
+        request: LLMRequest,
+        response: LLMResponse[Any],
+        report: ValidationReport[Any],
+        attempt: int,
+    ) -> str:
+        """写一次尝试的 llm_call 留痕, 返回留痕 ID. payload 存提示词全文与原文, 供复查."""
+        outcome = report.level_failed or "passed"
+        return await self.trail.record(
+            TrailEntry(
+                engagement_id=eid,
+                kind=TrailKind.llm_call,
+                actor=actor,
+                procedure_id=request.procedure_id,
+                run_id=request.run_id,
+                summary=f"{request.procedure_id} {request.fixture_key} 第 {attempt} 次调用大模型: {outcome}",
+                model=response.model,
+                prompt_hash=prompt_hash(request.system, request.messages),
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                payload={
+                    "attempt": attempt,
+                    "fixture_key": request.fixture_key,
+                    "system": request.system,
+                    "messages": [m.model_dump() for m in request.messages],
+                    "raw": response.raw,
+                    "level_failed": report.level_failed,
+                    "errors": report.errors,
+                },
+            )
+        )
 
     async def judge(
         self, eid: str, template: ProcedureTemplate, run: ProcedureRun, ctx: JudgmentContext, performed_by: str

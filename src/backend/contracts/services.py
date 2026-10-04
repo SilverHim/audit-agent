@@ -51,3 +51,11 @@ class ValidationReport(Model, Generic[T]):
     output: T | None = (
         None  # 通过结构校验的输出, 解析得了的证据指针 type 与 reliability 已按来源改写; 语法或结构失败为空
     )
+
+
+class LLMCallResult(Model, Generic[T]):
+    """JudgmentEngine.call_llm 的结果: 最后一次尝试的校验结果, 尝试次数与各次留痕."""
+
+    report: ValidationReport[T]  # 最后一次尝试的校验结果, level_failed 为空即通过
+    attempts: int  # 调用大模型的次数, 含重试
+    trail_ids: list[str]  # 每次尝试的 llm_call 留痕 ID, 与尝试一一对应

@@ -28,7 +28,7 @@ from backend.persistence.stores import (
     PostgresFinancialDataStore,
 )
 from backend.services.audit_trail import PostgresAuditTrail
-from backend.services.judgment_engine import JudgmentEngine
+from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from backend.services.rule_engine import SqlRuleEngine
@@ -38,18 +38,20 @@ def build_deps(settings: Settings) -> AgentDeps:
     financial_store = PostgresFinancialDataStore()
     library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
     dataset_dir = settings.DATASET_ROOT / "demo"
+    llm = make_llm_client(settings)
+    trail = PostgresAuditTrail()
     return AgentDeps(
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(),
         evidence_store=FileEvidenceStore(settings.EVIDENCE_ROOT),
         datasets=CsvDatasetLoader(settings.DATASET_ROOT),
         engagement_store=PostgresEngagementStore(),
-        llm=make_llm_client(settings),
+        llm=llm,
         rules=SqlRuleEngine(financial_store),
-        judgments=JudgmentEngine(),
+        judgments=JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library),
         queue=ReviewQueue(library),
         library=library,
-        trail=PostgresAuditTrail(),
+        trail=trail,
         registry=MockRegistrySource(dataset_dir),
         confirmations=MockConfirmationChannel(dataset_dir),
     )

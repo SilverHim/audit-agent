@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime
 from typing import Any, ClassVar, TypeVar
 
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import EngagementLocked, VersionConflict
@@ -63,6 +64,7 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
+from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch, initial_state
@@ -73,6 +75,7 @@ from backend.orchestration.decisions import rerun_group, rerun_procedure
 from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -702,6 +705,36 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
 }
 
 
+class ScriptedLLM:
+    """假大模型: 按 fixture_key 依次返回预置的原文, 用请求的输出模型解析 (同 MockLLMClient); 记下每次请求.
+
+    token 数按请求消息条数与原文长度给出, 用来核对留痕取的是响应里的值. 每次调用先让出一次事件循环, 并发时交错执行.
+    """
+
+    def __init__(self, replies: Mapping[str, Sequence[str]], model: str = "scripted") -> None:
+        self.replies = {key: list(raws) for key, raws in replies.items()}  # fixture_key -> 待返回的原文, 按顺序
+        self.model = model  # 响应里的模型名
+        self.requests: list[LLMRequest] = []  # 收到的请求, 按调用顺序
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        self.requests.append(req)
+        await asyncio.sleep(0)
+        raw = self.replies[req.fixture_key].pop(0)
+        try:
+            output: T_out | None = output_model.model_validate_json(raw)
+            error = None
+        except ValidationError as e:
+            output, error = None, str(e)
+        return LLMResponse(
+            output=output,
+            raw=raw,
+            model=self.model,
+            input_tokens=100 * len(req.messages),
+            output_tokens=len(raw),
+            error=error,
+        )
+
+
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.
 
@@ -758,12 +791,13 @@ def make_deps(
     output_store: FakeOutputStore | None = None,
     financial_store: FakeFinancialStore | None = None,
     rules: FakeRuleEngine | None = None,
+    llm: LLMClient | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入与规则引擎.
-    其余依赖只构造不连接.
+    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储与留痕重建.
 
-    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果.
-    项目存储与证据文件存储的写入加入审计产出存储的事务.
+    项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
+    大模型缺省为 mock 模式的固定输出客户端. 项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
         engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
@@ -772,8 +806,13 @@ def make_deps(
     bind_stores(engagement_store, output_store)
     if financial_store is None:
         financial_store = FakeFinancialStore()
+    deps = build_deps(get_settings())
+    llm = llm if llm is not None else deps.llm
+    judgments = JudgmentEngine(llm, OutputValidator(financial_store, deps.library, trail), trail, deps.library)
     return replace(
-        build_deps(get_settings()),
+        deps,
+        llm=llm,
+        judgments=judgments,
         registry=registry,
         trail=trail,
         engagement_store=engagement_store,

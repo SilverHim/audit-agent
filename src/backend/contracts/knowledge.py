@@ -39,6 +39,7 @@ class LLMSpec(Model):
     prompt: str  # knowledge/prompts/ 下的 Jinja2 模板文件名
     output_model: str  # contracts/llm_outputs.py 中的输出模型类名
     context_budget: int = 8000  # 上下文 token 预算
+    max_tokens: int = 4096  # 单次调用最多输出的 token 数, 程序 YAML 可覆盖
 
 
 class ProcedureTemplate(Model):
