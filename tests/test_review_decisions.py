@@ -536,23 +536,20 @@ def test_attribute_exceptions_is_pure() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "pending", "decision", "expected"),
+    ("status", "pending", "expected"),
     [
-        (ProcedureStatus.awaiting_human, 1, Decision.confirm, None),
-        (ProcedureStatus.awaiting_human, 0, Decision.confirm, ProcedureStatus.completed),
-        (ProcedureStatus.awaiting_human, 2, Decision.rerun, ProcedureStatus.executing),
-        (ProcedureStatus.executing, 0, Decision.confirm, None),
+        (ProcedureStatus.awaiting_human, 1, None),
+        (ProcedureStatus.awaiting_human, 0, ProcedureStatus.completed),
+        (ProcedureStatus.executing, 0, None),
     ],
 )
-def test_recompute_procedure(
-    status: ProcedureStatus, pending: int, decision: Decision, expected: ProcedureStatus | None
-) -> None:
-    """复核决定后的程序状态: rerun 为 executing; 否则有待决任务为 awaiting_human, 没有为 completed; 状态不变不出新版本;
+def test_recompute_procedure(status: ProcedureStatus, pending: int, expected: ProcedureStatus | None) -> None:
+    """rerun 以外的决定后的程序状态: 有待决任务为 awaiting_human, 没有为 completed; 状态不变不出新版本;
     已是 executing (有 rerun 待派发) 时不因别的决定改掉."""
     procedure = make_procedure("REV-03", status=status)
     tasks = [ReviewTask.model_construct(id=f"T-{n}") for n in range(pending)]
 
-    updated = recompute_procedure(procedure, tasks, decision)
+    updated = recompute_procedure(procedure, tasks)
 
     if expected is None:
         assert updated is None

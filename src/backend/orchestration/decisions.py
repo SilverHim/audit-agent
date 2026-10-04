@@ -422,7 +422,6 @@ def review_effects(
 
     task: 决定处理的任务; target: 任务目标的当前版本 (判断, 例外或执行记录);
     exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号.
-    已实现 confirm, misstatement, override, manual_result.
     """
     if record.decision is Decision.confirm:
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
@@ -433,25 +432,43 @@ def review_effects(
         return override_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.manual_result:
         return manual_result_effects(record, task, taken)
-    raise NotImplementedError(f"复核决定 {record.decision} 的效果尚未实现")
+    return []  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
 
 
-def recompute_procedure(procedure: Procedure, pending: list[ReviewTask], decision: Decision) -> Procedure | None:
-    """复核决定写入后目标程序的新版本 (第 7 节): rerun 时为 executing; 否则仍有待决任务为 awaiting_human,
-    没有为 completed. 程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序
-    置为完成. 状态不变时返回 None, 不出新版本.
+def recompute_procedure(procedure: Procedure, pending: list[ReviewTask]) -> Procedure | None:
+    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human, 没有为 completed.
+    程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序置为完成.
+    状态不变时返回 None, 不出新版本.
 
     pending: 该程序在本决定之后仍待决的任务 (不含本决定处理的任务).
     """
-    if decision is Decision.rerun:
-        status = ProcedureStatus.executing
-    elif procedure.status is ProcedureStatus.executing:
+    if procedure.status is ProcedureStatus.executing:
         return None
-    else:
-        status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+    status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
     if status is procedure.status:
         return None
     return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
+
+
+def rerun_procedure(procedure: Procedure, record: ReviewRecord, task: ReviewTask) -> Procedure:
+    """rerun 决定写出的程序新版本 (第 7 节): 置 executing (不论还有无别的待决任务), params 合并 rerun_params,
+    rerun_subject_ids 追加任务的 subject_id; 任务 subject_id 为空 (整次失败) 时置空, 整条重跑.
+    程序已是 executing (前一个 rerun 尚待派发) 时同样出新版本: 追加对象; 前一个已是整条重跑 (为空) 时仍整条重跑.
+    P2 程序由下一轮派发重跑, P2 以外的程序由所在节点读回这一版后重跑 (nodes.read_rerun 取等待版本 + 1).
+    例: REV-03 对 CON-003 的 failed 任务 rerun → REV-03 新版本 executing, rerun_subject_ids [CON-003].
+    """
+    whole = task.subject_id is None or (
+        procedure.status is ProcedureStatus.executing and not procedure.rerun_subject_ids
+    )
+    subjects = [] if whole else list(dict.fromkeys([*procedure.rerun_subject_ids, task.subject_id]))
+    return procedure.model_copy(
+        update={
+            "version": procedure.version + 1,
+            "status": ProcedureStatus.executing,
+            "params": {**procedure.params, **(record.rerun_params or {})},
+            "rerun_subject_ids": subjects,
+        }
+    )
 
 
 def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
@@ -668,7 +685,10 @@ class GraphDecisionSubmit:
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
-        updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id], record.decision)
+        if record.decision is Decision.rerun:
+            updated: Procedure | None = rerun_procedure(procedure, record, task)
+        else:
+            updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id])
         created = [*effects, decided, *([updated] if updated else [])]
         async with store.transaction(eid):
             await store.put(eid, [record], actor=record.reviewed_by)
