@@ -42,6 +42,11 @@ class LiveLLMClient:
         raise NotImplementedError("LLM 选型未定")
 
 
+def llm_version(settings: Settings) -> dict[str, str]:
+    """项目启动时冻结进 version_snapshot 的 LLM 信息: 模式与模型名 (mock 模式为 "mock")."""
+    return {"llm_mode": settings.LLM_MODE, "model": "mock" if settings.LLM_MODE == "mock" else settings.LLM_MODEL}
+
+
 def make_llm_client(settings: Settings) -> LLMClient:
     if settings.LLM_MODE == "mock":
         return MockLLMClient(settings.LLM_FIXTURES_ROOT)

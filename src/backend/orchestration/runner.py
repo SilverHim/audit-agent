@@ -1,16 +1,19 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 
+from backend.adapters.llm import llm_version
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import AgentId, Engagement, GateDecision, Phase, Procedure, ReviewRecord
 from backend.contracts.state import EngagementState, initial_state
+from backend.core.config import get_settings
 from backend.orchestration.graph import GATE_NODES
 from backend.services.procedure_library import ProcedureLibrary
 
@@ -68,9 +71,13 @@ class GraphRunner:
     同一项目同时只允许一个图执行. 项目锁在 start, resume 与 DecisionSubmit 入口取得, 图停在中断或结束时释放.
     """
 
-    def __init__(self, app: CompiledStateGraph[EngagementState], deps: AgentDeps) -> None:
+    def __init__(
+        self, app: CompiledStateGraph[EngagementState], deps: AgentDeps, llm: dict[str, str] | None = None
+    ) -> None:
         self.app = app  # 编译好的主图
         self.deps = deps  # 外部依赖
+        # LLM 模式与模型名, 项目启动时冻结进 version_snapshot; 缺省按当前配置 (见 adapters.llm.llm_version)
+        self.llm = llm if llm is not None else llm_version(get_settings())
         self.busy: set[str] = set()  # 持有项目锁的项目编号
         self.tasks: dict[str, asyncio.Task[None]] = {}  # 项目编号 -> 后台任务; 保留引用, 防止任务未完成即被回收
         self.errors: dict[str, str] = {}  # 项目编号 -> 最近一次后台执行的异常, 成功推进后清除
@@ -157,16 +164,33 @@ class GraphRunner:
         for eid, task in running:
             self._forget(eid, task)
 
+    def freeze_versions(self) -> dict[str, str]:
+        """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 冻结时刻 (UTC, ISO 8601)."""
+        return {
+            "procedure_library_commit": self.deps.library.commit,
+            **self.llm,
+            "prompts_sha256": self.deps.library.prompts_sha256(),
+            "frozen_at": datetime.now(UTC).isoformat(),
+        }
+
     async def _initial_input(self, engagement: Engagement) -> EngagementState:
-        """新项目的初始状态. 固定集程序第 1 版先入库 (节点写程序新版本时, put 要求已有上一版); 已入库时 put 跳过,
-        状态取 Store 中的那一版."""
+        """新项目的初始状态. 一个事务内: 固定集程序第 1 版入库 (节点写程序新版本时, put 要求已有上一版; 已入库时
+        put 跳过, 状态取 Store 中的那一版), 项目还没有版本快照时冻结并写入 engagements 表 (已有的不覆盖).
+        初始状态的版本快照与项目表一致."""
         # 图状态记本项目采用的画像版本 (建项目时的版本), 不取全局最新: 同客户的其他项目可能已改过画像
         version = engagement.client_profile_version
         profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
         if profile is None:
             raise LookupError(f"client profile {engagement.client_id} v{version} not found")
-        pack = await self.deps.output_store.put(engagement.id, fixed_procedures(self.deps.library), actor=AgentId.A1)
-        return initial_state(engagement, [p for p in pack if isinstance(p, Procedure)], profile.version)
+        snapshot = engagement.version_snapshot or self.freeze_versions()
+        async with self.deps.output_store.transaction(engagement.id):
+            pack = await self.deps.output_store.put(
+                engagement.id, fixed_procedures(self.deps.library), actor=AgentId.A1
+            )
+            if not engagement.version_snapshot:
+                await self.deps.engagement_store.update(engagement.id, version_snapshot=snapshot)
+        frozen = engagement.model_copy(update={"version_snapshot": snapshot})
+        return initial_state(frozen, [p for p in pack if isinstance(p, Procedure)], profile.version)
 
     async def _engagement(self, eid: str) -> Engagement:
         engagement = await self.deps.engagement_store.get(eid)

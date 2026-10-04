@@ -518,7 +518,7 @@ async def test_update_profile_adopts_version_in_one_commit() -> None:
 
     await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
 
-    [commit] = [c for c in s.output_store.commits if any(isinstance(w, EngagementWrite) for w in c)]
+    [commit] = [c for c in s.output_store.commits if EngagementWrite("save_profile", "CLIENT-001", {"version": 2}) in c]
     assert commit == [
         EngagementWrite("save_profile", "CLIENT-001", {"version": 2}),
         EngagementWrite("update", EID, {"client_profile_version": 2}),

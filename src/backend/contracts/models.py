@@ -434,7 +434,7 @@ class Engagement(Model):
     client_profile_version: int  # 本项目采用的客户画像版本: 建项目时的版本, 本项目更新客户资料后为新版本
     phase: Phase  # 当前阶段
     locked: bool = False  # 签字或拒绝承接后锁定, 拒绝一切写入
-    version_snapshot: dict[str, str] = {}  # 程序库 commit, 模型, prompt 的版本快照
+    version_snapshot: dict[str, str] = {}  # 启动时冻结: 程序库 commit, LLM 模式与模型, prompt 摘要, 冻结时刻
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
 

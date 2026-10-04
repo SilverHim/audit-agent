@@ -127,11 +127,11 @@ async def test_gate_is_none_after_decline() -> None:
 
 
 async def test_overview_at_acc01() -> None:
-    _, query, _ = await started()
+    runner, query, _ = await started()
 
     o = await query.overview(EID)
 
-    assert o.engagement == ENGAGEMENT
+    assert o.engagement == await runner.deps.engagement_store.get(EID)  # 启动时写入了版本快照
     assert o.client_name == NUMBAT_PROFILE.legal_name
     assert (o.running, o.run_error) == (False, None)
     assert o.current_gate is GateId.ACC_01

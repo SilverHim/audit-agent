@@ -2,14 +2,20 @@
 依赖用 tests/fakes.py 的假实现."""
 
 import asyncio
+import hashlib
 import inspect
+import shutil
+import subprocess
 from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from langgraph.types import Command
 
+from backend.adapters.llm import llm_version
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AbnRecord,
@@ -24,16 +30,19 @@ from backend.contracts.models import (
     RunStatus,
     Versioned,
 )
+from backend.core.config import Settings, get_settings
 from backend.main import lifespan
 from backend.orchestration import runner as runner_module
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, fixed_procedures
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_ABN,
     NUMBAT_ASIC,
     NUMBAT_PROFILE,
+    EngagementWrite,
     FakeEngagementStore,
     FakeOutputStore,
     FakeRegistry,
@@ -96,9 +105,9 @@ async def test_start_saves_fixed_procedures_v1() -> None:
     await runner.start(EID)
     await wait_idle(runner, EID)
 
-    first = store.commits[0]  # start 写入的那一批, 在 p0_intel 之前
+    *first, _ = store.commits[0]  # start 写入的那一批, 在 p0_intel 之前; 末项为版本快照 (见 R32 的测试)
     assert [p.id for p in first] == [p.id for p in fixed_procedures(runner.deps.library)]
-    assert all(p.version == 1 for p in first)
+    assert all(isinstance(p, Procedure) and p.version == 1 for p in first)
 
 
 async def test_start_rejects_when_busy() -> None:
@@ -542,3 +551,98 @@ async def test_lifespan_calls_recover(monkeypatch: pytest.MonkeyPatch) -> None:
         pass
 
     assert called == [True]
+
+
+# ── R32: version_snapshot 冻结 ──
+
+SNAPSHOT_KEYS = {"procedure_library_commit", "llm_mode", "model", "prompts_sha256", "frozen_at"}
+
+
+async def test_start_freezes_version_snapshot() -> None:
+    """验收 1: start 冻结版本快照 (mock 模式模型名为 mock), 与固定集在同一次提交, 排在固定集之后;
+    图的初始状态与项目表中的快照相同."""
+    runner, store = make_runner()
+
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+
+    *pack, write = store.commits[0]
+    assert all(isinstance(p, Procedure) for p in pack)
+    assert isinstance(write, EngagementWrite) and (write.op, write.target) == ("update", EID)
+    snapshot = write.changes["version_snapshot"]
+    assert set(snapshot) == SNAPSHOT_KEYS
+    library = runner.deps.library
+    assert (snapshot["procedure_library_commit"], snapshot["prompts_sha256"]) == (
+        library.commit,
+        library.prompts_sha256(),
+    )
+    assert (snapshot["llm_mode"], snapshot["model"]) == ("mock", "mock")
+    assert datetime.fromisoformat(snapshot["frozen_at"]).tzinfo is not None
+    engagement = await runner.deps.engagement_store.get(EID)
+    assert engagement is not None and engagement.version_snapshot == snapshot
+    history = [s async for s in runner.app.aget_state_history(config())]
+    assert history[-2].values["version_snapshot"] == snapshot  # 输入写入后, p0_intel 之前
+
+
+async def test_existing_snapshot_is_not_overwritten() -> None:
+    """验收 4: 项目已有版本快照 (如没有检查点时 recover 重新推进): 不覆盖, 初始状态沿用它."""
+    frozen = {"procedure_library_commit": "abc", "llm_mode": "mock", "model": "mock"}
+    engagement = ENGAGEMENT.model_copy(update={"version_snapshot": frozen})
+    runner, store = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [engagement]))
+
+    await runner.recover()  # 没有检查点, 以初始状态推进
+    await wait_idle(runner, EID)
+
+    assert not any(isinstance(w, EngagementWrite) for w in store.commits[0])
+    assert (await runner.deps.engagement_store.get(EID)).version_snapshot == frozen  # type: ignore[union-attr]
+    history = [s async for s in runner.app.aget_state_history(config())]
+    assert history[-2].values["version_snapshot"] == frozen
+
+
+def test_llm_version_by_mode() -> None:
+    """验收 1: live 模式模型名取 LLM_MODEL, mock 模式为 mock."""
+    assert llm_version(Settings(LLM_MODE="live", LLM_MODEL="model-x")) == {"llm_mode": "live", "model": "model-x"}
+    assert llm_version(Settings(LLM_MODE="mock", LLM_MODEL="model-x")) == {"llm_mode": "mock", "model": "mock"}
+
+
+def test_prompts_sha256_changes_with_any_prompt(tmp_path: Path) -> None:
+    """验收 2: prompts/*.j2 按文件名排序后内容的 sha256; 改任一 prompt 后变化."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    library = ProcedureLibrary(root)
+    prompts = sorted((root / "prompts").glob("*.j2"), key=lambda p: p.name)
+    assert library.prompts_sha256() == hashlib.sha256(b"".join(p.read_bytes() for p in prompts)).hexdigest()
+    before = library.prompts_sha256()
+
+    prompts[-1].write_text(prompts[-1].read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    assert library.prompts_sha256() != before
+
+
+def git(path: Path, *args: str) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.strip()
+
+
+def test_library_commit_dirty_and_unknown(tmp_path: Path) -> None:
+    """验收 3: 干净的工作区为 HEAD; 有未提交改动 (含未跟踪文件) 加 -dirty; 不在 git 仓库中为 unknown."""
+    repo = tmp_path / "repo"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, repo)
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    head = git(repo, "rev-parse", "HEAD")
+    assert ProcedureLibrary(repo).commit == head
+
+    git(repo, "config", "status.showUntrackedFiles", "no")  # 仓库配置不显示未跟踪文件时同样算改动
+    (repo / "prompts" / "NEW.md.j2").write_text("x", encoding="utf-8")
+    assert ProcedureLibrary(repo).commit == f"{head}-dirty"
+
+    plain = tmp_path / "plain"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, plain)
+    assert ProcedureLibrary(plain).commit == "unknown"

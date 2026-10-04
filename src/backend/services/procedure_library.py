@@ -1,6 +1,7 @@
 """程序库: 加载程序 YAML 与准则片段, trigger 匹配, 依赖闭包, 参数解析 (A 负责)."""
 
 import copy
+import hashlib
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -49,7 +50,7 @@ class ProcedureLibrary:
             doc = yaml.safe_load(p.read_text(encoding="utf-8"))
             for f in doc["fragments"]:
                 self._fragments[f["id"]] = StandardFragment(standard=doc["standard"], **f)
-        self.commit = _git_commit(root)  # knowledge 目录当前的 git commit
+        self.commit = _git_commit(root)  # knowledge 目录当前的 git commit, 有未提交改动时加 -dirty
 
     def load(self, procedure_id: str) -> ProcedureTemplate:
         return self._templates[procedure_id]
@@ -129,12 +130,25 @@ class ProcedureLibrary:
     def fragment(self, fragment_id: str) -> StandardFragment | None:
         return self._fragments.get(fragment_id)
 
+    def prompts_sha256(self) -> str:
+        """prompts/*.j2 按文件名排序后, 各文件内容依次拼接的 sha256. 每次调用重新读文件, 改任一 prompt 即变化."""
+        digest = hashlib.sha256()
+        for p in sorted((self.root / "prompts").glob("*.j2"), key=lambda p: p.name):
+            digest.update(p.read_bytes())
+        return digest.hexdigest()
+
+
+def _git(path: Path, *args: str) -> str:
+    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=True, timeout=5)
+    return out.stdout.strip()
+
 
 def _git_commit(path: Path) -> str:
+    """path 所在仓库的 HEAD; path 下有未提交的改动 (含未跟踪文件) 时加 -dirty; 不在 git 仓库中或无 git 时为 unknown."""
     try:
-        out = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True, check=True, timeout=5
-        )
-        return out.stdout.strip()
+        commit = _git(path, "rev-parse", "HEAD")
+        # 显式列出未跟踪文件, 不受 status.showUntrackedFiles 配置影响
+        dirty = _git(path, "status", "--porcelain", "--untracked-files=all", "--", ".")
     except (OSError, subprocess.SubprocessError):
         return "unknown"
+    return f"{commit}-dirty" if dirty else commit

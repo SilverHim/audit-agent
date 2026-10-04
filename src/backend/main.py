@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
 from backend.adapters.confirmation_mock import MockConfirmationChannel
-from backend.adapters.llm import make_llm_client
+from backend.adapters.llm import llm_version, make_llm_client
 from backend.adapters.registry_mock import MockRegistrySource
 from backend.agents.base import AgentDeps
 from backend.api.routes import api_router
@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with open_checkpointer(settings) as checkpointer:
         graph = compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), checkpointer)
         app.state.deps = deps
-        app.state.runner = GraphRunner(graph, deps)
+        app.state.runner = GraphRunner(graph, deps, llm_version(settings))
         app.state.query = GraphStateQuery(graph, deps, app.state.runner)
         app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
         try:
