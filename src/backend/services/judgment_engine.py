@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
@@ -17,14 +18,17 @@ from backend.contracts.models import (
     AuditException,
     DocumentRef,
     DocumentType,
+    Engine,
     EvidencePointer,
     EvidenceType,
+    Judgment,
     ProcedureRun,
     ProposedAction,
     ReasoningStep,
     Reliability,
     SourceType,
     StepKind,
+    StepStatus,
     TrailEntry,
     TrailKind,
 )
@@ -158,6 +162,31 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     if draft.proposed_action is ProposedAction.misstatement and draft.misstatement_draft is None:
         errors.append("建议认定错报, 但没有错报草稿")
     return errors
+
+
+def evidence_coverage(
+    required: Sequence[EvidenceType], steps: Sequence[ReasoningStep], weights: Mapping[str, float]
+) -> float:
+    """c_evidence: evidence_required 中每种证据取已取得指针中可靠性权重最高的, 没取得记 0, 再取平均.
+
+    只计受支持步骤里的指针: 标为 unsupported 的步骤, 其指针一个都不算. 没有可靠性的指针 (准则) 不计.
+    """
+    best: dict[EvidenceType, float] = {}
+    for step in steps:
+        if step.status is StepStatus.unsupported:
+            continue
+        for p in step.evidence:
+            if p.reliability is not None:
+                best[p.type] = max(best.get(p.type, 0.0), weights[p.reliability])
+    return sum(best.get(t, 0.0) for t in required) / len(required)
+
+
+def rule_consistency(action: ProposedAction, has_findings: bool) -> float:
+    """c_rule: 规则结果与结论方向一致为 1, 否则为 0. 有规则例外时一致指建议 misstatement 或 more_evidence,
+    没有例外时一致指建议 accept 或 close."""
+    if has_findings:
+        return 1.0 if action in (ProposedAction.misstatement, ProposedAction.more_evidence) else 0.0
+    return 1.0 if action in (ProposedAction.accept, ProposedAction.close) else 0.0
 
 
 class PointerResolver:
@@ -366,7 +395,11 @@ class JudgmentEngine:
         self.llm = llm  # 大模型客户端
         self.validator = validator  # 四级校验
         self.trail = trail  # 写 llm_call 留痕
+        self.library = library  # 取准则片段
         self.prompts = prompt_env(library.root / "prompts")  # 提示词模板
+        rules = json.loads((library.root / "rules.json").read_text(encoding="utf-8"))
+        self.confidence_weights: dict[str, float] = rules["confidence_weights"]  # 置信度各分项的权重
+        self.reliability_weights: dict[str, float] = rules["reliability_weights"]  # 证据可靠性的权重
 
     def render(self, template: ProcedureTemplate, variables: Mapping[str, Any]) -> str:
         """按程序模板 llm.prompt 渲染提示词. 缺变量抛 jinja2.UndefinedError, 属调用方的错, 不算大模型失败."""
@@ -453,4 +486,81 @@ class JudgmentEngine:
     async def judge(
         self, eid: str, template: ProcedureTemplate, run: ProcedureRun, ctx: JudgmentContext, performed_by: str
     ) -> JudgmentOutcome:
-        raise NotImplementedError("组装上下文 → LLMClient → OutputValidator (重试 2 次)→ 置信度")
+        """对一个判断对象调大模型, 把通过校验的草稿补全为 Judgment (review_status pending, 由调用方分类).
+
+        失败 (重试耗尽, 引用或语义失败) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
+        调用方 Agent 取模板 owner; performed_by 为项目负责人.
+        """
+        fragments = []
+        for fragment_id in template.standards:
+            fragment = self.library.fragment(fragment_id)
+            if fragment is None:
+                raise LookupError(f"{template.id}: 准则片段 {fragment_id} 未注册")
+            fragments.append(fragment.model_dump(mode="json"))
+        variables = {
+            "subject_id": ctx.subject_id,
+            "task": ctx.task,
+            "data": ctx.data,
+            "rule_findings": [x.model_dump(mode="json") for x in ctx.rule_findings],
+            "standards": fragments,
+        }
+        result = await self.call_llm(
+            eid,
+            template,
+            run,
+            variables,
+            ValidationContext(rule_findings=ctx.rule_findings),
+            template.owner,
+            ctx.fixture_key,
+        )
+        report = result.report
+        if report.level_failed is not None:
+            failure: Literal["failed", "unattributed"] = (
+                "unattributed" if template.engine is Engine.hybrid else "failed"
+            )
+            return JudgmentOutcome(judgment=None, failure=failure, attempts=result.attempts, trail_ids=result.trail_ids)
+        draft = cast(JudgmentDraft, report.output)
+        steps = [
+            step.model_copy(
+                update={"status": StepStatus.unsupported if i in report.unsupported_steps else StepStatus.supported}
+            )
+            for i, step in enumerate(draft.reasoning_chain)
+        ]
+        parts = self.confidence_parts(template, draft, steps, bool(ctx.rule_findings))
+        judgment = Judgment(
+            id=f"J-{template.id}-{run.run_no}-{ctx.subject_id}",
+            procedure_id=template.id,
+            run_id=run.id,
+            subject_id=ctx.subject_id,
+            conclusion=draft.conclusion,
+            confidence=self.confidence(parts),
+            confidence_parts={k: round(v, 4) for k, v in parts.items()},
+            reasoning_chain=steps,
+            evidence=draft.evidence,
+            counter_argument=draft.counter_argument,
+            proposed_action=draft.proposed_action,
+            misstatement_draft=draft.misstatement_draft,
+            exception_ids=[x.id for x in ctx.rule_findings],
+            autonomy_level=template.autonomy_level,
+            performed_by=performed_by,
+            created_at=datetime.now(UTC),
+            trail_ref=result.trail_ids[-1],
+        )
+        return JudgmentOutcome(judgment=judgment, failure=None, attempts=result.attempts, trail_ids=result.trail_ids)
+
+    def confidence_parts(
+        self, template: ProcedureTemplate, draft: JudgmentDraft, steps: Sequence[ReasoningStep], has_findings: bool
+    ) -> dict[str, float]:
+        """置信度的适用分项: evidence (模板有 evidence_required 时), rule (仅 hybrid), llm (模型自报)."""
+        parts: dict[str, float] = {}
+        if template.evidence_required:
+            parts["evidence"] = evidence_coverage(template.evidence_required, steps, self.reliability_weights)
+        if template.engine is Engine.hybrid:
+            parts["rule"] = rule_consistency(draft.proposed_action, has_findings)
+        parts["llm"] = draft.self_confidence
+        return parts
+
+    def confidence(self, parts: Mapping[str, float]) -> float:
+        """confidence = Σ w_i · c_i / Σ w_i, 只对 parts 中的分项求和, 四位小数."""
+        weights = {k: self.confidence_weights[k] for k in parts}
+        return round(sum(weights[k] * parts[k] for k in parts) / sum(weights.values()), 4)
