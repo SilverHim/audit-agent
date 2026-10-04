@@ -67,7 +67,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
-from backend.contracts.services import RuleResult
+from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
 from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
@@ -804,6 +804,23 @@ class ScriptedLLM:
             output_tokens=len(raw),
             error=error,
         )
+
+
+class FakeJudgmentEngine:
+    """假判断引擎: 按 subject_id 返回预置结果 (按上下文与执行记录生成), 记下每次收到的程序, 上下文与 performed_by.
+
+    没有预置的对象抛 KeyError. 真实引擎 (调大模型) 见 services/judgment_engine.py.
+    """
+
+    def __init__(self, outcomes: Mapping[str, Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]]) -> None:
+        self.outcomes = dict(outcomes)  # 判断对象 ID -> 生成结果
+        self.calls: list[tuple[str, JudgmentContext, str]] = []  # (程序编号, 上下文, performed_by), 按调用顺序
+
+    async def judge(
+        self, eid: str, template: ProcedureTemplate, run: ProcedureRun, ctx: JudgmentContext, performed_by: str
+    ) -> JudgmentOutcome:
+        self.calls.append((template.id, ctx, performed_by))
+        return self.outcomes[ctx.subject_id](ctx, run)
 
 
 class FakeRuleEngine:
