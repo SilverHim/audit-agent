@@ -47,7 +47,11 @@ class AgentDeps:
 
 @dataclass(frozen=True)
 class RunContext:
-    """一次程序执行的上下文: 节点在执行前准备好, 传给 Agent.run."""
+    """一次程序执行的上下文: 节点在执行前准备好, 传给 Agent.run.
+
+    procedure.rerun_subject_ids 非空时只重判其中的对象 (上一轮整组失败的对象, 可能多个), 只给本轮再次失败的对象
+    建 failed 任务; 为空时整条执行.
+    """
 
     engagement: Engagement  # 所属审计项目
     procedure: Procedure  # 要执行的程序实例, 含参数与状态

@@ -1,31 +1,63 @@
-"""R30 恢复补做: 闸门决定已写入 Store 而检查点没跟上 (写检查点失败, 或进程在两者之间中断) 时, recover 与 resume
-从 Store 与该决定重建效果, 以该闸门节点身份写入检查点后继续 (接口文档第 7 节 recover 规则第 2 条)."""
+"""恢复补做: 决定已写入 Store 而检查点没跟上 (写检查点失败, 或进程在两者之间中断) 时, recover 与 resume 先补做再继续
+(接口文档第 7 节 recover 规则第 2 条). R30: 闸门决定从 Store 与该决定重建效果, 以该闸门节点身份写入检查点.
+R31: 客户画像版本写入检查点后回 p0_intel; 复核决定以 Command(resume=决定 ID) 交给等待中的节点."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+from langgraph.types import Command
 
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
+    AcceptanceScorecard,
     AuditObjective,
     AuditReportVersion,
+    Decision,
     GateVerdict,
+    Judgment,
     OpinionType,
     Phase,
+    ProcedureRun,
     ProcedureStatus,
     ReportStatus,
+    ReviewRecord,
+    ReviewTask,
     RiskItem,
     RiskLevel,
+    TaskKind,
+    TaskStatus,
     TrailEntry,
     TrailKind,
 )
 from backend.orchestration.decisions import acc01_effects
 from backend.orchestration.query import GraphStateQuery
-from backend.orchestration.runner import GraphRunner
-from tests.fakes import ENGAGEMENT, FakeTrail, wait_idle
-from tests.test_decisions import Started, acc01_decision, at_pln_gate, edit, pln_decision, started
+from backend.orchestration.runner import GraphRunner, waiting_payloads
+from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
+    TYPO_PROFILE,
+    FakeTrail,
+    ScriptA3,
+    ScriptA4,
+    finished,
+    make_runner,
+    preset_rerun,
+    wait_idle,
+)
+from tests.test_decisions import (
+    FIXED_PROFILE,
+    Started,
+    acc01_decision,
+    at_pln_gate,
+    edit,
+    pln_decision,
+    started,
+    stop_after_submit,
+)
 from tests.test_fin_gate import at_fin_gate, fin_decision
+from tests.test_flow import REVIEWS, approve_materiality, start_numbat
+from tests.test_rerun import CrashAfterCommit, FlakyRegistry, failed_at_p0
 from tests.test_rpt_gate import at_rpt_gate, reject_and_redraft, rpt_decision
 
 EID = ENGAGEMENT.id
@@ -320,3 +352,449 @@ async def test_missing_decisions_caught_up_in_decision_order() -> None:
     after = await s.runner.app.aget_state(CONFIG)
     assert after.next == () and [d.id for d in after.values["gate_decisions"]] == ["D-FIRST", "D-LAST"]
     assert len(s.output_store.commits) == commits
+
+
+# ── R31: 客户画像与复核决定 ──
+
+
+async def test_profile_update_caught_up_then_reruns_acc04() -> None:
+    """R31 验收 1: 更新客户资料已提交 (项目采用第 2 版), 检查点仍记第 1 版: resume 写入第 2 版, 回 p0_intel 重跑,
+    出 RUN-ACC-04-2 与 SCORECARD v2; 提交时已写的留痕不重复."""
+    s = await started(TYPO_PROFILE)
+    lose_checkpoint_write(s)
+    with pytest.raises(RuntimeError, match="检查点写入失败"):
+        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert snapshot.next == ("gate_acc01",) and snapshot.values["client_profile_version"] == 2
+    assert await s.output_store.get(EID, ProcedureRun, "RUN-ACC-04-2") is not None
+    scorecard = await s.output_store.get(EID, AcceptanceScorecard, "SCORECARD")
+    assert scorecard is not None and (scorecard.version, scorecard.client_profile_version) == (2, 2)
+    assert decision_keys(s) == ["CLIENT-001-v2"]
+
+
+async def test_other_engagement_profile_does_not_trigger_catch_up() -> None:
+    """R31 验收 1: 同客户的另一项目把全局最新画像升到第 2 版, 本项目采用的仍是第 1 版: 不补做, 检查点不动."""
+    s = await started(TYPO_PROFILE)
+    await s.engagement_store.save_profile(FIXED_PROFILE)
+    before = (await s.runner.app.aget_state(CONFIG)).config
+
+    await s.runner.recover()
+
+    assert not s.runner.is_running(EID) and s.runner.run_error(EID) is None
+    assert (await s.runner.app.aget_state(CONFIG)).config == before
+
+
+async def test_review_decision_at_await_events_resumed() -> None:
+    """R31 验收 2: P2 等复核时复核决定已提交, 进程在恢复节点前中断: resume 以 Command(resume=决定 ID) 交给
+    await_events, 决定进检查点; 再 recover 一次, 检查点与 Store 不变 (验收 3)."""
+    s = await start_numbat()
+    await approve_materiality(s)
+    await wait_idle(s.runner, EID)
+    launch = s.runner.launch
+    stop_after_submit(s)
+    decision = REVIEWS[0]
+    await s.submit.submit(EID, decision)
+    s.runner.launch = launch  # type: ignore[method-assign]
+    assert decision.id not in {r.id for r in (await s.runner.app.aget_state(CONFIG)).values["review_records"]}
+
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert decision.id in {r.id for r in snapshot.values["review_records"]}
+    assert snapshot.next == ("await_events",) and s.runner.run_error(EID) is None
+    rows = list(s.output_store.rows)
+    await s.runner.recover()
+    assert not s.runner.is_running(EID)
+    assert (await s.runner.app.aget_state(CONFIG)).config == snapshot.config and s.output_store.rows == rows
+
+
+async def test_rerun_decision_in_p0_node_resumed_with_trail_backfilled() -> None:
+    """R31 验收 2, 4 与补 (F2): ACC-04 失败等人时 rerun 决定已写入 Store, 没写留痕, 节点未恢复: recover 补写
+    decision 留痕与 ACC-04 awaiting_human→executing, 以该决定恢复节点, 重跑成功停在 ACC-01 闸门; 再 resume 不重复."""
+    runner, store, _ = await failed_at_p0()
+    await preset_rerun(store, (await store.latest(EID, ReviewTask))[0], "D-1")
+    s = Started(runner, store, runner.deps.engagement_store)  # type: ignore[arg-type]
+
+    await runner.recover()
+    await wait_idle(runner, EID)
+    await runner.resume(EID)
+    await wait_idle(runner, EID)
+
+    assert (await runner.app.aget_state(CONFIG)).next == ("gate_acc01",)
+    assert await store.get(EID, ProcedureRun, "RUN-ACC-04-2") is not None
+    assert decision_keys(s) == ["D-1"]
+    acc04 = [(b, a) for pid, b, a in transitions(s) if pid == "ACC-04"]
+    assert acc04 == [("planned", "awaiting_human"), ("awaiting_human", "executing"), ("executing", "completed")]
+
+
+async def test_profile_trail_failure_during_catch_up_is_retried() -> None:
+    """更新客户资料提交后留痕没写成, 补做时这行留痕又写失败: 画像版本仍不进检查点 (记 run_error);
+    再次重启 recover 补齐留痕 (只一行) 后回 p0_intel 重跑."""
+    s = await started(TYPO_PROFILE)
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    real = trail.record
+
+    async def crash(entry: TrailEntry) -> str:
+        raise RuntimeError("进程中断")
+
+    trail.record = crash  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="进程中断"):
+        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    runner = GraphRunner(s.runner.app, s.runner.deps)
+    await runner.recover()  # 留痕仍写不了
+    assert "进程中断" in (runner.run_error(EID) or "")
+    assert (await runner.app.aget_state(CONFIG)).values["client_profile_version"] == 1
+
+    trail.record = real  # type: ignore[method-assign]
+    runner = GraphRunner(s.runner.app, s.runner.deps)
+    await runner.recover()
+    await wait_idle(runner, EID)
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert (snapshot.next, snapshot.values["client_profile_version"]) == (("gate_acc01",), 2)
+    assert decision_keys(s) == ["CLIENT-001-v2"]
+
+
+async def crash_after_rerun(failures: int) -> tuple[GraphRunner, FlakyRegistry, Any]:
+    """ACC-04 第 1 次失败等人; rerun 决定 D-1 只写入 Store (节点未恢复); 第一次 recover 以 D-1 恢复节点, 重跑的
+    RUN-ACC-04-2 提交后进程被杀 (节点出错, 下一次等待还没登记). failures: 登记系统前几次查询失败."""
+    store = CrashAfterCommit("RUN-ACC-04-2")
+    registry = FlakyRegistry(failures)
+    runner, _ = make_runner(output_store=store, registry=registry)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await preset_rerun(store, (await store.latest(EID, ReviewTask))[0], "D-1")
+    first = GraphRunner(runner.app, runner.deps)
+    await first.recover()
+    await wait_idle(first, EID)
+    assert "被杀" in (first.run_error(EID) or "")
+    return runner, registry, store
+
+
+async def test_node_error_after_reading_decision_recovered() -> None:
+    """R31-01: 以 D-1 恢复后重跑成功, 但写检查点前被杀: 再次 recover 仍以 D-1 恢复, 到 ACC-01 闸门, 不再查登记."""
+    runner, registry, _ = await crash_after_rerun(failures=1)
+
+    restarted = GraphRunner(runner.app, runner.deps)
+    await restarted.recover()
+    await wait_idle(restarted, EID)
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert (snapshot.next, restarted.run_error(EID)) == (("gate_acc01",), None)
+    assert [r.id for r in snapshot.values["review_records"]] == ["D-1"] and registry.calls == 2
+
+
+async def submit_rerun(
+    runner: GraphRunner, store: Any, decision_id: str, decided_at: datetime = NOW, subject_id: str | None = None
+) -> None:
+    """经正式入口对当前待决的失败任务 (有多个时取 subject_id 那个) 提交 rerun, 等后台停下. decided_at 可故意
+    倒置, 验证恢复不靠决定时间排序."""
+    pending = await store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    [task] = [t for t in pending if subject_id is None or t.subject_id == subject_id]
+    s = Started(runner, store, runner.deps.engagement_store)
+    await s.submit.submit(
+        EID,
+        ReviewRecord(
+            id=decision_id,
+            task_id=task.id,
+            target_version=task.target_version,
+            decision=Decision.rerun,
+            reason="重新执行",
+            reviewed_by="U-1",
+            decided_at=decided_at,
+        ),
+    )
+    await wait_idle(runner, EID)
+
+
+async def restarted(runner: GraphRunner, entry: str) -> GraphRunner:
+    """共用检查点与存储重启, 以 recover 或 resume 恢复, 等后台停下; 恢复不出错."""
+    again = GraphRunner(runner.app, runner.deps)
+    if entry == "recover":
+        await again.recover()
+    else:
+        await again.resume(EID)
+    await wait_idle(again, EID)
+    assert again.run_error(EID) is None
+    return again
+
+
+@pytest.mark.parametrize("entry", ["recover", "resume"])
+async def test_node_error_before_second_wait_does_not_reuse_decision(entry: str) -> None:
+    """R31-01, R31-02: 经正式入口提交 D-1, 重跑又失败, 第 2 次等待登记前被杀 (节点带着错误). 再次 recover 或 resume
+    后停在第 2 次等待, 节点不再带错误, 不再查登记; 之后正式提交 D-2 照常重跑到 ACC-01 闸门."""
+    store = CrashAfterCommit("RUN-ACC-04-2")
+    registry = FlakyRegistry(failures=2)
+    runner, _ = make_runner(output_store=store, registry=registry)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await submit_rerun(runner, store, "D-1")
+    assert "被杀" in (runner.run_error(EID) or "")
+
+    runner = await restarted(runner, entry)
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert waiting_payloads(snapshot) == [
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-2", "records": ["D-1"]}
+    ]
+    assert not any(t.error for t in snapshot.tasks) and registry.calls == 2
+    await submit_rerun(runner, store, "D-2")
+    final = await runner.app.aget_state(CONFIG)
+    assert (final.next, runner.run_error(EID), registry.calls) == (("gate_acc01",), None, 3)
+    assert [r.id for r in final.values["review_records"]] == ["D-1", "D-2"]
+
+
+async def test_node_error_after_second_decision_redelivers_in_order() -> None:
+    """R31-02: 节点已读回 D-1, 停在第 2 次等待; 正式提交 D-2 后重跑又失败, 第 3 次等待登记前被杀. recover 复制检查点后
+    依次交回 D-1, D-2, 停在第 3 次等待且不带错误, 不再查登记; 之后提交 D-3 到 ACC-01 闸门."""
+    store = CrashAfterCommit("RUN-ACC-04-3")
+    registry = FlakyRegistry(failures=3)
+    runner, _ = make_runner(output_store=store, registry=registry)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await submit_rerun(runner, store, "D-1")
+    await submit_rerun(runner, store, "D-2")
+    assert "被杀" in (runner.run_error(EID) or "")
+
+    runner = await restarted(runner, "recover")
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert waiting_payloads(snapshot) == [
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-3", "records": ["D-1", "D-2"]}
+    ]
+    assert not any(t.error for t in snapshot.tasks) and registry.calls == 3
+    await submit_rerun(runner, store, "D-3")
+    final = await runner.app.aget_state(CONFIG)
+    assert (final.next, registry.calls) == (("gate_acc01",), 4)
+    assert [r.id for r in await store.latest(EID, ProcedureRun)] == [f"RUN-ACC-04-{n}" for n in range(1, 5)]
+
+
+async def test_node_error_across_two_procedures_redelivers_in_order() -> None:
+    """R31-02: p1_analytics 内 PLN-07 失败一次 (D-PLN07 重跑), PLN-01 失败两次; 提交 D-PLN01-1 后 PLN-01 重跑又失败,
+    下一次等待登记前被杀. recover 依次交回 D-PLN07, D-PLN01-1, 停在 PLN-01 第 2 次等待, Agent 不多执行;
+    之后提交 D-PLN01-2 到 PLN-01/03 闸门."""
+    store = CrashAfterCommit("RUN-PLN-01-2")
+    seen: list[tuple[str, int]] = []
+
+    def agents(deps: Any) -> dict[str, Any]:
+        def pln07(ctx: Any) -> Any:
+            seen.append(("PLN-07", ctx.run.run_no))
+            if ctx.run.run_no == 1:
+                raise RuntimeError("分析失败")
+            return {"procedure_runs": [finished(ctx.run)]}
+
+        def pln01(ctx: Any) -> Any:
+            seen.append(("PLN-01", ctx.run.run_no))
+            if ctx.run.run_no <= 2:
+                raise RuntimeError("重要性失败")
+            return {"procedure_runs": [finished(ctx.run)]}
+
+        return {"PLN-07": ScriptA4(deps, pln07), "PLN-01": ScriptA4(deps, pln01)}
+
+    runner, _ = make_runner(output_store=store, agents=agents)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await Started(runner, store, runner.deps.engagement_store).submit.submit(  # type: ignore[arg-type]
+        EID, acc01_decision(GateVerdict.approve, id="D-GATE")
+    )
+    await wait_idle(runner, EID)
+    await submit_rerun(runner, store, "D-PLN07", NOW + timedelta(seconds=2))  # 决定时间倒置
+    await submit_rerun(runner, store, "D-PLN01-1", NOW + timedelta(seconds=1))
+    assert "被杀" in (runner.run_error(EID) or "")
+
+    runner = await restarted(runner, "recover")
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert waiting_payloads(snapshot) == [
+        {"awaiting": "human", "procedure_id": "PLN-01", "run_id": "RUN-PLN-01-2", "records": ["D-PLN07", "D-PLN01-1"]}
+    ]
+    assert not any(t.error for t in snapshot.tasks)
+    await submit_rerun(runner, store, "D-PLN01-2")
+    assert (await runner.app.aget_state(CONFIG)).next == ("gate_p1_risk",)
+    assert seen == [("PLN-07", 1), ("PLN-07", 2), ("PLN-01", 1), ("PLN-01", 2), ("PLN-01", 3)]
+
+
+async def test_await_events_error_after_reading_decision_recovered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R31-01: await_events 读回复核决定后读 Store (判断) 临时失败 (节点出错): 再次 recover 仍以该决定恢复,
+    决定进检查点."""
+    s = await start_numbat()
+    await approve_materiality(s)
+    await wait_idle(s.runner, EID)
+    launch = s.runner.launch
+    stop_after_submit(s)
+    decision = REVIEWS[0]
+    await s.submit.submit(EID, decision)
+    s.runner.launch = launch  # type: ignore[method-assign]
+    latest = s.output_store.latest
+    failed: list[bool] = []
+
+    async def flaky_latest(eid: str, kind: type[Any], **filters: Any) -> list[Any]:
+        if kind is Judgment and not failed:  # 判断只有等复核的节点读回时才读, 恢复补做不读
+            failed.append(True)
+            raise RuntimeError("读回时临时失败")
+        return await latest(eid, kind, **filters)
+
+    monkeypatch.setattr(s.output_store, "latest", flaky_latest)
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+    assert "临时失败" in (s.runner.run_error(EID) or "")
+
+    restarted = GraphRunner(s.runner.app, s.runner.deps)
+    await restarted.recover()
+    await wait_idle(restarted, EID)
+
+    assert restarted.run_error(EID) is None
+    assert decision.id in {r.id for r in (await s.runner.app.aget_state(CONFIG)).values["review_records"]}
+
+
+@pytest.mark.parametrize("cut", ["after_copy", "after_first_redelivery"])
+async def test_catch_up_interrupted_after_copy_continues(cut: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R31-03: 节点已读回 D-1, D-2, 正式提交 D-3 后重跑又失败, 下一次等待登记前被杀. 补做复制检查点后, 或交回 D-1 后
+    又中断 (记 run_error); 再次 recover 从 Store 重算顺序接着交, 停在第 4 次等待 (records D-1, D-2, D-3) 且不带错误,
+    不再查登记, Store 不变."""
+    store = CrashAfterCommit("RUN-ACC-04-4")
+    registry = FlakyRegistry(failures=4)
+    runner, _ = make_runner(output_store=store, registry=registry)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    for n in (1, 2, 3):  # 决定时间倒置: D-1 最晚
+        await submit_rerun(runner, store, f"D-{n}", NOW + timedelta(seconds=4 - n))
+    assert "被杀" in (runner.run_error(EID) or "")
+    rows = list(store.rows)
+    app = runner.app
+    update, invoke = app.aupdate_state, app.ainvoke
+
+    async def cut_after_copy(*args: Any, **kwargs: Any) -> Any:
+        result = await update(*args, **kwargs)
+        if kwargs.get("as_node") == "__copy__":
+            raise RuntimeError("复制后中断")
+        return result
+
+    async def cut_after_first(graph_input: Any, *args: Any, **kwargs: Any) -> Any:
+        result = await invoke(graph_input, *args, **kwargs)
+        if isinstance(graph_input, Command) and graph_input.resume == "D-1":
+            raise RuntimeError("交回 D-1 后中断")
+        return result
+
+    if cut == "after_copy":
+        monkeypatch.setattr(app, "aupdate_state", cut_after_copy)
+    else:
+        monkeypatch.setattr(app, "ainvoke", cut_after_first)
+    interrupted = GraphRunner(app, runner.deps)
+    await interrupted.recover()
+    await wait_idle(interrupted, EID)
+    assert "中断" in (interrupted.run_error(EID) or "")
+    monkeypatch.setattr(app, "aupdate_state", update)
+    monkeypatch.setattr(app, "ainvoke", invoke)
+
+    await restarted(runner, "recover")
+
+    after = await app.aget_state(CONFIG)
+    assert waiting_payloads(after) == [
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-4", "records": ["D-1", "D-2", "D-3"]}
+    ]
+    assert not any(t.error for t in after.tasks)
+    assert registry.calls == 4 and store.rows == rows
+
+
+async def test_group_rerun_recovered_in_run_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Q17: DOC-04 第 1 次 CON-001, CON-002 失败, 对 CON-002 提交 D-Z 整组重跑; 第 2 次 CON-001 又失败, 提交 D-A;
+    第 3 次 CON-001 仍失败, 写检查点前被杀. 决定时间倒置 (D-A 早于 D-Z), 补做复制后又中断; 再次 recover 按执行轮次
+    交回 D-Z, D-A, 停在第 3 次等待且不带错误, 不多执行; D-Z 的留痕列出一并关闭的 CON-001 任务."""
+    store = CrashAfterCommit("RUN-DOC-04-3")
+    seen: list[tuple[int, list[str]]] = []
+
+    def agents(deps: Any) -> dict[str, Any]:
+        def doc04(ctx: Any) -> Any:
+            seen.append((ctx.run.run_no, list(ctx.procedure.rerun_subject_ids)))
+            run = finished(ctx.run)
+            failing = {1: ["CON-001", "CON-002"], 2: ["CON-001"], 3: ["CON-001"]}.get(ctx.run.run_no, [])
+            tasks = [
+                deps.queue.make_task(TaskKind.failed, run, "DOC-04", run.id, NOW, subject_id=subject)
+                for subject in failing
+            ]
+            return {"procedure_runs": [run], "review_tasks": tasks}
+
+        return {"DOC-04": ScriptA3(deps, doc04)}
+
+    runner, _ = make_runner(output_store=store, agents=agents)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await Started(runner, store, runner.deps.engagement_store).submit.submit(  # type: ignore[arg-type]
+        EID, acc01_decision(GateVerdict.approve, id="D-GATE")
+    )
+    await wait_idle(runner, EID)
+    await submit_rerun(runner, store, "D-Z", NOW + timedelta(seconds=2), subject_id="CON-002")
+    await submit_rerun(runner, store, "D-A", NOW + timedelta(seconds=1))
+    assert "被杀" in (runner.run_error(EID) or "")
+    update = runner.app.aupdate_state
+
+    async def cut_after_copy(*args: Any, **kwargs: Any) -> Any:
+        result = await update(*args, **kwargs)
+        if kwargs.get("as_node") == "__copy__":
+            raise RuntimeError("复制后中断")
+        return result
+
+    monkeypatch.setattr(runner.app, "aupdate_state", cut_after_copy)
+    interrupted = GraphRunner(runner.app, runner.deps)
+    await interrupted.recover()
+    assert "复制后中断" in (interrupted.run_error(EID) or "")
+    monkeypatch.setattr(runner.app, "aupdate_state", update)
+
+    await restarted(runner, "recover")
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert waiting_payloads(snapshot) == [
+        {"awaiting": "human", "procedure_id": "DOC-04", "run_id": "RUN-DOC-04-3", "records": ["D-Z", "D-A"]}
+    ]
+    assert not any(t.error for t in snapshot.tasks)
+    assert seen == [(1, []), (2, ["CON-001", "CON-002"]), (3, ["CON-001"])]
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [entry] = [e for e in trail.entries if e.idempotency_key == "D-Z"]
+    assert entry.payload["closed_task_ids"] == ["T-RUN-DOC-04-1-CON-001-v1"]
+
+
+async def test_group_rerun_trail_backfilled_with_closed_tasks() -> None:
+    """Q17: DOC-04 第 1 次两份合同失败, rerun 决定只写入 Store (留痕没写成, 节点未恢复): recover 补写的留痕列出
+    一并关闭的另一份合同的任务, 节点整组重跑后走到重要性闸门."""
+    seen: list[list[str]] = []
+
+    def agents(deps: Any) -> dict[str, Any]:
+        def doc04(ctx: Any) -> Any:
+            seen.append(list(ctx.procedure.rerun_subject_ids))
+            run = finished(ctx.run)
+            failing = ["CON-001", "CON-002"] if ctx.run.run_no == 1 else []
+            tasks = [
+                deps.queue.make_task(TaskKind.failed, run, "DOC-04", run.id, NOW, subject_id=subject)
+                for subject in failing
+            ]
+            return {"procedure_runs": [run], "review_tasks": tasks}
+
+        return {"DOC-04": ScriptA3(deps, doc04)}
+
+    runner, store = make_runner(agents=agents)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await Started(runner, store, runner.deps.engagement_store).submit.submit(  # type: ignore[arg-type]
+        EID, acc01_decision(GateVerdict.approve, id="D-GATE")
+    )
+    await wait_idle(runner, EID)
+    pending = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
+    await preset_rerun(store, pending[1], "D-1")
+
+    await runner.recover()
+    await wait_idle(runner, EID)
+
+    assert (await runner.app.aget_state(CONFIG)).next == ("gate_p1_risk",) and runner.run_error(EID) is None
+    assert seen == [[], ["CON-001", "CON-002"]]
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [entry] = [e for e in trail.entries if e.idempotency_key == "D-1"]
+    assert entry.payload["closed_task_ids"] == ["T-RUN-DOC-04-1-CON-001-v1"]

@@ -469,7 +469,7 @@ class Procedure(Versioned):
     params: dict[str, Any] = {}  # rerun 决定改的参数; 建执行记录时叠加在模板参数的解析结果上, 同名键以它为准
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus = ProcedureStatus.planned  # 程序状态
-    rerun_subject_ids: list[str] = []  # 重跑时只重判的对象, 为空则整条重跑; 重跑后清空
+    rerun_subject_ids: list[str] = []  # 重跑时只重判的对象 (rerun 关闭的那组失败任务的), 为空则整条重跑; 重跑后清空
 
 
 class ProcedureRun(Versioned):

@@ -4,7 +4,9 @@ P2 程序由下一轮派发重跑, P2 以外的程序由所在节点重跑."""
 from collections.abc import Callable
 from typing import Any, cast
 
-from backend.contracts.errors import RuleError
+import pytest
+
+from backend.contracts.errors import DecisionRejected, RuleError
 from backend.contracts.models import (
     Decision,
     GateVerdict,
@@ -19,12 +21,13 @@ from backend.contracts.models import (
     TaskStatus,
 )
 from backend.contracts.state import StatePatch
-from backend.orchestration.decisions import rerun_procedure
+from backend.orchestration.decisions import rerun_group, rerun_procedure
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_PROFILE,
     FakeEngagementStore,
+    FakeTrail,
     ScriptA6,
     ScriptAgent,
     assert_pack_synced,
@@ -59,8 +62,8 @@ def flaky_rev08(failures: int) -> Agents:
     return agents
 
 
-def rev03_cannot_read_con003(seen: list[list[str]]) -> Agents:
-    """REV-03 第 1 次对 CON-003 抽取失败 (带 subject_id 的 failed 任务), 另两份照常出判断与任务;
+def rev03_cannot_read(seen: list[list[str]], failing: tuple[str, ...] = ("CON-003",)) -> Agents:
+    """REV-03 第 1 次对 failing 中的合同抽取失败 (各一个带 subject_id 的 failed 任务), 其余照常出判断与任务;
     重跑时只判 rerun_subject_ids 中的合同. seen 记下每次执行时 ctx.procedure.rerun_subject_ids."""
 
     def agents(deps: Any) -> dict[str, Any]:
@@ -72,17 +75,25 @@ def rev03_cannot_read_con003(seen: list[list[str]]) -> Agents:
             patch = script(ctx)
             run = patch["procedure_runs"][0]
             only = set(ctx.procedure.rerun_subject_ids)
-            judgments = [j for j in patch["judgments"] if (j.subject_id in only if only else j.subject_id != "CON-003")]
+            judgments = [
+                j for j in patch["judgments"] if (j.subject_id in only if only else j.subject_id not in failing)
+            ]
             tasks = [t for t in patch["review_tasks"] if t.target_id in {j.id for j in judgments}]
             if not only:
-                tasks.append(
-                    deps.queue.make_task(TaskKind.failed, run, "REV-03", run.id, now=NOW, subject_id="CON-003")
-                )
+                tasks += [
+                    deps.queue.make_task(TaskKind.failed, run, "REV-03", run.id, now=NOW, subject_id=subject)
+                    for subject in failing
+                ]
             return {**patch, "judgments": judgments, "review_tasks": tasks}
 
         return {**p2_agents(deps), **numbat, "REV-03": ScriptA6(deps, rev03)}
 
     return agents
+
+
+def rev03_cannot_read_con003(seen: list[list[str]]) -> Agents:
+    """REV-03 第 1 次只有 CON-003 抽取失败, 见 rev03_cannot_read."""
+    return rev03_cannot_read(seen)
 
 
 async def at_review(agents: Agents) -> Started:
@@ -178,6 +189,37 @@ async def test_rerun_of_one_subject() -> None:
     await assert_pack_synced(snapshot.values["procedure_pack"], s.output_store)
 
 
+async def test_rerun_closes_whole_group_in_p2() -> None:
+    """Q17: REV-03 第 1 次 CON-002, CON-003 都抽取失败. 对 CON-003 的任务 rerun: 同一次提交里两个 failed 任务都
+    decided, REV-03 executing, 重判对象为两份合同; 留痕列出一并关闭的任务; 重跑时 Agent 看到两份;
+    之后对已关闭的 CON-002 任务再提交报 TASK_NOT_PENDING."""
+    seen: list[list[str]] = []
+    s = await at_review(rev03_cannot_read(seen, ("CON-002", "CON-003")))
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, rerun("T-RUN-REV-03-1-CON-003-v1", "D-R3"))
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    assert sorted((o.id, o.status) for o in commit if isinstance(o, ReviewTask)) == [
+        ("T-RUN-REV-03-1-CON-002-v1", TaskStatus.decided),
+        ("T-RUN-REV-03-1-CON-003-v1", TaskStatus.decided),
+    ]
+    [rev03] = [o for o in commit if isinstance(o, Procedure)]
+    assert (rev03.status, rev03.rerun_subject_ids) == (ProcedureStatus.executing, ["CON-002", "CON-003"])
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [entry] = [e for e in trail.entries if e.idempotency_key == "D-R3"]
+    assert entry.payload["closed_task_ids"] == ["T-RUN-REV-03-1-CON-002-v1"]
+    assert seen == [[], ["CON-002", "CON-003"]]
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    pending = sorted(t.id for t in snapshot.values["review_tasks"] if t.status is TaskStatus.pending)
+    assert pending == ["T-J-REV-03-1-CON-001-v1", "T-J-REV-03-2-CON-002-v1", "T-J-REV-03-2-CON-003-v1"]
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, rerun("T-RUN-REV-03-1-CON-002-v1", "D-R2"))
+    assert e.value.code == "TASK_NOT_PENDING"
+
+
 async def test_rerun_fails_again_then_rerun_again() -> None:
     """验收 4: 重跑再失败, 得 T-RUN-REV-08-2-v1; 对它再 rerun, 得 RUN-REV-08-3 并完成."""
     s = await at_review(flaky_rev08(2))
@@ -210,23 +252,38 @@ async def test_rerun_in_p0_node_reaches_gate() -> None:
 
 
 def test_rerun_procedure() -> None:
-    """rerun 写出的程序版本: executing, 合并参数, 追加判断对象; 整次失败 (无对象) 为整条重跑;
-    前一个 rerun 尚待派发且为整条重跑时, 再来一个对象的 rerun 仍整条重跑."""
-    task = ReviewTask.model_construct(subject_id="CON-003")
+    """rerun 写出的程序版本 (Q17 整组重跑): executing, 合并参数, 重判对象为整组任务的对象 (去重排序);
+    组内有整次失败的任务 (无对象) 时整条重跑."""
     decision = rerun("T", "D", window_days=25)
     awaiting = make_procedure("REV-03", status=ProcedureStatus.awaiting_human).model_copy(
         update={"params": {"window_days": 20, "x": 1}, "rerun_subject_ids": []}
     )
 
-    one = rerun_procedure(awaiting, decision, task)
+    def tasks(*subjects: str | None) -> list[ReviewTask]:
+        return [ReviewTask.model_construct(subject_id=s) for s in subjects]
+
+    one = rerun_procedure(awaiting, decision, tasks("CON-003"))
     assert (one.version, one.status, one.params, one.rerun_subject_ids) == (
         awaiting.version + 1,
         ProcedureStatus.executing,
         {"window_days": 25, "x": 1},
         ["CON-003"],
     )
-    two = rerun_procedure(one, rerun("T", "D"), ReviewTask.model_construct(subject_id="CON-002"))
-    assert two.rerun_subject_ids == ["CON-003", "CON-002"]
-    whole = rerun_procedure(awaiting, decision, ReviewTask.model_construct(subject_id=None))
-    assert whole.rerun_subject_ids == []
-    assert rerun_procedure(whole, decision, task).rerun_subject_ids == []
+    assert rerun_procedure(awaiting, decision, tasks("CON-003", "CON-002", "CON-003")).rerun_subject_ids == [
+        "CON-002",
+        "CON-003",
+    ]
+    assert rerun_procedure(awaiting, decision, tasks(None)).rerun_subject_ids == []
+    assert rerun_procedure(awaiting, decision, tasks("CON-003", None)).rerun_subject_ids == []
+
+
+def test_rerun_group() -> None:
+    """rerun 关闭的组: 被决定的任务在前, 其后为同程序其余待决的 failed 任务 (按 ID); 别的程序的, 非 failed 的不在内."""
+
+    def task(tid: str, kind: TaskKind = TaskKind.failed, procedure_id: str = "REV-03") -> ReviewTask:
+        return ReviewTask.model_construct(id=tid, kind=kind, procedure_id=procedure_id)
+
+    decided = task("T-3")
+    pending = [task("T-2"), decided, task("T-1"), task("T-J", TaskKind.normal), task("T-X", procedure_id="REV-08")]
+
+    assert [t.id for t in rerun_group(decided, pending)] == ["T-3", "T-1", "T-2"]

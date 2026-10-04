@@ -66,6 +66,7 @@ from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
 from backend.orchestration.checkpoint import checkpoint_serde
+from backend.orchestration.decisions import rerun_group, rerun_procedure
 from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
@@ -1058,8 +1059,9 @@ async def preset_rerun(
     eid: str = ENGAGEMENT.id,
 ) -> ReviewRecord:
     """模拟审计师对 failed 任务提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节决定的效果 rerun 行),
-    在一个事务内: 决定, 任务 decided 新版本, 程序 executing 新版本 (params 合并 rerun_params, rerun_subject_ids
-    追加任务的 subject_id). 真正的 DecisionSubmit 由 R21 实现. 返回写入的决定.
+    在一个事务内: 决定, 同程序全部待决的 failed 任务 decided 新版本 (一轮失败算一组, Q17), 程序 executing 新版本
+    (params 合并 rerun_params, rerun_subject_ids 取整组对象). 组与程序新版本用 DecisionSubmit 的同一套函数算.
+    返回写入的决定.
     """
     record = ReviewRecord(
         id=record_id,
@@ -1073,18 +1075,11 @@ async def preset_rerun(
     )
     procedure = await store.get(eid, Procedure, task.procedure_id)
     assert procedure is not None
-    subjects = [*procedure.rerun_subject_ids, task.subject_id] if task.subject_id else []
-    rerun = procedure.model_copy(
-        update={
-            "version": procedure.version + 1,
-            "status": ProcedureStatus.executing,
-            "params": {**procedure.params, **(rerun_params or {})},
-            "rerun_subject_ids": subjects,
-        }
-    )
-    decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
+    pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
+    group = rerun_group(task, pending)
+    decided = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in group]
     async with store.transaction(eid):
-        await store.put(eid, [record, decided, rerun], actor="A1")
+        await store.put(eid, [record, *decided, rerun_procedure(procedure, record, group)], actor="A1")
     return record
 
 

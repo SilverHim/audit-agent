@@ -423,8 +423,7 @@ async def test_resume_at_gate_does_nothing() -> None:
 
 
 async def test_resume_at_second_wait_does_not_advance() -> None:
-    """节点内第 2 次等待 (ACC-04 重跑后又失败, next 为空): resume 不调 ainvoke(None), 否则第 2 个 interrupt()
-    会沿用上次的恢复值 D-1, 凭空多出一个决定."""
+    """节点内第 2 次等待 (ACC-04 重跑后又失败, next 为空): resume 不推进, 检查点不变, 不再查登记."""
     runner, store, registry = await failed_at_p0(failures=2)
     await preset_rerun(store, (await store.latest(EID, ReviewTask))[0], "D-1")
     await runner.app.ainvoke(Command(resume="D-1"), config())
@@ -508,7 +507,8 @@ async def test_recover_busy_project_keeps_owner_lock() -> None:
 
 
 async def test_missing_decision_detected_before_second_wait_is_skipped() -> None:
-    """节点内第 2 次等待 (next 为空) 时 Store 已有检查点里没有的决定 D-2: 先查补做 (尚未实现, 抛出), 不按等待跳过."""
+    """节点内第 2 次等待 (next 为空) 时 Store 已有检查点里没有的决定 D-2: 先查补做, 不按等待跳过;
+    补做 (R31) 以 D-2 恢复该节点, ACC-04 第 3 次执行成功, 停在 ACC-01 闸门."""
     first, store, registry = await failed_at_p0(failures=2)
     await preset_rerun(store, (await store.latest(EID, ReviewTask))[0], "D-1")
     await first.app.ainvoke(Command(resume="D-1"), config())
@@ -516,10 +516,11 @@ async def test_missing_decision_detected_before_second_wait_is_skipped() -> None
     await preset_rerun(store, second, "D-2")
     runner = restart(first)
 
-    with pytest.raises(NotImplementedError, match="D-2"):
-        await runner.resume(EID)
+    await runner.resume(EID)
+    await wait_idle(runner, EID)
 
-    assert not runner.is_running(EID) and registry.calls == 2
+    assert (await runner.app.aget_state(config())).next == ("gate_acc01",)
+    assert registry.calls == 3 and runner.run_error(EID) is None
 
 
 async def test_advance_writes_checkpoints_synchronously(monkeypatch: pytest.MonkeyPatch) -> None:

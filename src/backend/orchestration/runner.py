@@ -219,15 +219,14 @@ class GraphRunner:
         - 没有检查点 (start 写了固定集, 第一步还没落盘就中断): 以初始状态重新推进.
         - 已结束 (next 与待执行任务都为空): 不动.
         - Store 有检查点里没有的决定或画像版本: 先补做 (见 _catch_up), 再按补做后的检查点往下判断.
-        - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动. 不调 ainvoke(None):
-          节点内第二次及以后的等待会沿用上次的恢复值, 等于凭空多出一个决定.
+        - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动, 等人时没有新决定可交.
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
         出错时释放锁后抛出.
         """
         try:
             snapshot = await self.app.aget_state(self.config(eid))
             engagement = await self._engagement(eid)
-            graph_input: EngagementState | None = None
+            graph_input: EngagementState | Command[Any] | None = None
             if snapshot.metadata is None:
                 graph_input = await self._initial_input(engagement)
             else:
@@ -235,8 +234,8 @@ class GraphRunner:
                     self.release(eid)
                     return
                 if await resume_required(self.deps, engagement, snapshot) is not None:
-                    snapshot = await self._catch_up(engagement)
-                if waiting_for_human(snapshot):
+                    snapshot, graph_input = await self._catch_up(engagement)
+                if graph_input is None and waiting_for_human(snapshot):
                     self.release(eid)
                     return
         except BaseException:
@@ -244,20 +243,20 @@ class GraphRunner:
             raise
         self.launch(eid, graph_input)
 
-    async def _catch_up(self, engagement: Engagement) -> StateSnapshot:
-        """补做 Store 已提交而检查点没跟上的闸门决定 (见 recovery.catch_up), 返回补做后的检查点.
-
-        复核决定与客户画像的补做尚未实现: 补做后检查点仍未跟上时抛 NotImplementedError.
-        """
+    async def _catch_up(self, engagement: Engagement) -> tuple[StateSnapshot, Command[Any] | None]:
+        """补做 Store 已提交而检查点没跟上的内容 (见 recovery.catch_up). 返回补做后的检查点与继续执行的输入:
+        复核决定为 Command(resume=决定 ID), 交给等待中的节点读回; 其余为 None. 后者补做后检查点仍未跟上时抛
+        RuntimeError."""
         # 在此导入: recovery 依赖 decisions, decisions 依赖本模块, 放在模块开头会循环导入
         from backend.orchestration.recovery import catch_up
 
-        await catch_up(self.app, self.deps, engagement)
+        resume = await catch_up(self.app, self.deps, engagement)
         snapshot = await self.app.aget_state(self.config(engagement.id))
-        missing = await resume_required(self.deps, engagement, snapshot)
-        if missing is not None:
-            raise NotImplementedError(f"检查点未跟上 Store ({missing}), 复核决定与客户画像的补做尚未实现")
-        return snapshot
+        if resume is None:
+            missing = await resume_required(self.deps, engagement, snapshot)
+            if missing is not None:
+                raise RuntimeError(f"补做后检查点仍未跟上 Store ({missing})")
+        return snapshot, resume
 
     async def resume(self, eid: str) -> None:
         """手动重试一个项目 (后台执行出错后, 由 POST /resume 调用): 取项目锁 (取不到抛 ENGAGEMENT_BUSY),

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from langgraph.graph.state import CompiledStateGraph
@@ -47,6 +48,7 @@ from backend.contracts.models import (
     RiskItem,
     RiskLevel,
     TargetType,
+    TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -55,7 +57,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import GATE_NODES
-from backend.orchestration.nodes import save_outputs, update_procedure
+from backend.orchestration.nodes import rerun_subjects, save_outputs, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner, resume_required, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
@@ -506,24 +508,47 @@ def recompute_procedure(procedure: Procedure, pending: list[ReviewTask]) -> Proc
     return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
 
 
-def rerun_procedure(procedure: Procedure, record: ReviewRecord, task: ReviewTask) -> Procedure:
+def rerun_group(task: ReviewTask, pending: list[ReviewTask]) -> list[ReviewTask]:
+    """rerun 决定关闭的一组 failed 任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序其余待决的
+    failed 任务 (都来自该程序最近一次执行), 按 ID 排序. pending 为该程序当前全部待决任务; normal, unattributed
+    任务不在组内."""
+    siblings = [
+        t for t in pending if t.kind is TaskKind.failed and t.procedure_id == task.procedure_id and t.id != task.id
+    ]
+    return [task, *sorted(siblings, key=lambda t: t.id)]
+
+
+def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[ReviewTask]) -> Procedure:
     """rerun 决定写出的程序新版本 (第 7 节): 置 executing (不论还有无别的待决任务), params 合并 rerun_params,
-    rerun_subject_ids 追加任务的 subject_id; 任务 subject_id 为空 (整次失败) 时置空, 整条重跑.
-    程序已是 executing (前一个 rerun 尚待派发) 时同样出新版本: 追加对象; 前一个已是整条重跑 (为空) 时仍整条重跑.
+    rerun_subject_ids 取整组任务的对象 (见 nodes.rerun_subjects; 组内有整次失败的任务时为空, 整条重跑).
+    整组在同一事务里关闭, 程序处于 executing 时已没有待决的 failed 任务, 不会再来第二个 rerun.
     P2 程序由下一轮派发重跑, P2 以外的程序由所在节点读回这一版后重跑 (nodes.read_rerun 取等待版本 + 1).
-    例: REV-03 对 CON-003 的 failed 任务 rerun → REV-03 新版本 executing, rerun_subject_ids [CON-003].
+    例: REV-03 第 1 次 CON-002, CON-003 失败, 对其中任一个 rerun → REV-03 新版本 executing,
+    rerun_subject_ids [CON-002, CON-003].
     """
-    whole = task.subject_id is None or (
-        procedure.status is ProcedureStatus.executing and not procedure.rerun_subject_ids
-    )
-    subjects = [] if whole else list(dict.fromkeys([*procedure.rerun_subject_ids, task.subject_id]))
     return procedure.model_copy(
         update={
             "version": procedure.version + 1,
             "status": ProcedureStatus.executing,
             "params": {**procedure.params, **(record.rerun_params or {})},
-            "rerun_subject_ids": subjects,
+            "rerun_subject_ids": rerun_subjects(group),
         }
+    )
+
+
+def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[str]) -> TrailEntry:
+    """复核决定的 decision 留痕, 决定提交与恢复补写共用. closed: rerun 时随同关闭的同组任务 ID (不含 task)."""
+    payload: dict[str, Any] = {"decision_id": record.id, "task_id": task.id, "reason": record.reason}
+    if closed:
+        payload["closed_task_ids"] = closed
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=record.reviewed_by,
+        procedure_id=task.procedure_id,
+        summary=f"{task.id} {record.decision.value}" + (f", 同组 {len(closed)} 个任务一并关闭" if closed else ""),
+        idempotency_key=record.id,
+        payload=payload,
     )
 
 
@@ -721,6 +746,7 @@ class GraphDecisionSubmit:
 
     async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
+        rerun 时连同同程序其余待决的 failed 任务一并置 decided (一轮失败算一组, 见 rerun_group).
 
         效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
@@ -736,15 +762,17 @@ class GraphDecisionSubmit:
             exceptions = [x for x in found if x is not None]
         taken = {j.id for j in snapshot.values.get("judgments", [])}
         effects = review_effects(record, task, target, exceptions, taken)
-        decided = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
         if record.decision is Decision.rerun:
-            updated: Procedure | None = rerun_procedure(procedure, record, task)
+            group = rerun_group(task, pending)
+            updated: Procedure | None = rerun_procedure(procedure, record, group)
         else:
+            group = [task]
             updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id])
-        created = [*effects, decided, *([updated] if updated else [])]
+        decided = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in group]
+        created = [*effects, *decided, *([updated] if updated else [])]
         async with store.transaction(eid):
             await store.put(eid, [record], actor=record.reviewed_by)
             saved = await store.put(eid, created, actor=AgentId.A1)
@@ -752,17 +780,7 @@ class GraphDecisionSubmit:
                 clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
                 raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
         # 留痕在业务事务提交后写, 防重复键为决定 ID; 写失败时再提交报 RESUME_REQUIRED (同闸门决定)
-        await self.deps.trail.record(
-            TrailEntry(
-                engagement_id=eid,
-                kind=TrailKind.decision,
-                actor=record.reviewed_by,
-                procedure_id=task.procedure_id,
-                summary=f"{task.id} {record.decision.value}",
-                idempotency_key=record.id,
-                payload={"decision_id": record.id, "task_id": task.id, "reason": record.reason},
-            )
-        )
+        await self.deps.trail.record(review_trail(eid, record, task, [t.id for t in group[1:]]))
         await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
 
     async def _write_gate(

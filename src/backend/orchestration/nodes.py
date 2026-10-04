@@ -117,6 +117,24 @@ def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
     return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
 
 
+def rerun_subjects(group: list[ReviewTask]) -> list[str]:
+    """rerun 决定关闭的一组 failed 任务要重判的对象 (Q17 一轮失败算一组, 整组重跑): 各任务的 subject_id 去重排序;
+    其中有整次失败的任务 (subject_id 为空) 时为空, 整条重跑."""
+    if any(t.subject_id is None for t in group):
+        return []
+    return sorted({t.subject_id for t in group if t.subject_id is not None})
+
+
+# 各图节点依次执行的 P2 以外程序 (接口文档第 3 节). 节点按它执行, 恢复补做按它确定同一节点内复核决定的先后
+NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
+    "p0_intel": ("ACC-04",),
+    "p1_ingest": ("DOC-04",),
+    "p1_analytics": ("PLN-07", "PLN-01"),
+    "completion": ("FIN-04",),
+    "report_draft": ("RPT-03",),
+}
+
+
 async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: ProcedureRun) -> StatePatch:
     """重放: 取回某次已是终态的执行在 Store 中的产出, 组成片段. 不调 Agent, LLM 与外部接口, 也不重取当前时间.
 
@@ -371,24 +389,22 @@ class GraphNodes:
         state: EngagementState,
         engagement: Engagement,
         procedure_id: str,
-        outstanding: list[ReviewTask],
         phase: Phase | None = None,
     ) -> tuple[StatePatch, list[Procedure]]:
         """执行一次程序 (见 perform), 程序出新版本, 同一事务内写入 Store. 执行 P2 以外的程序用.
 
         state: 本次执行看到的状态, 见 perform.
-        outstanding: 本节点之前各次执行留下, 尚未决定的 failed 任务 (如 DOC-04 两份合同失败, 只重跑了一份).
         phase: 节点同时推进的阶段 (如 completion 置 P3_Completion), 在同一事务内写入 engagements 表; 为空不写.
-        返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段或 outstanding 中有待决的 failed 任务为
-        awaiting_human, 否则为 completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的
-        这一次执行有效).
+        返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本次片段中有待决的 failed 任务为 awaiting_human, 否则为
+        completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
+        之前各次执行留下的 failed 任务都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
         """
         result = await self.perform(state, engagement, procedure_id)
         patch, writer = result["patch"], result["writer"]
         template = self.deps.library.load(procedure_id)
-        pending = [t for t in [*failed_tasks(patch), *outstanding] if t.status is TaskStatus.pending]
+        pending = [t for t in failed_tasks(patch) if t.status is TaskStatus.pending]
         # 闸门程序 (如 PLN-01) 执行成功后保持 planned, 由 DecisionSubmit 在闸门 approve 时置 completed (Q5)
         done = ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
         status = ProcedureStatus.awaiting_human if pending else done
@@ -420,12 +436,14 @@ class GraphNodes:
     ) -> tuple[ReviewRecord, Procedure]:
         """读回审计师对某个 failed 任务的决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
 
-        failed: 本节点各次执行建的, 还没有读回过决定的 failed 任务, 决定须针对其中之一; 已读回过决定的任务不在其中,
-        同一决定 ID 被再次送来 (如在第二次等待时误用 ainvoke(None) 继续, LangGraph 沿用上次的恢复值) 会被拒绝.
+        failed: 正在等待的这一轮执行建的 failed 任务, 同属一组 (Q17), 决定须针对其中之一: 第 k 次等待只接受针对
+        第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph 沿用上次的恢复值) 时, execute 在调用前就跳过, 不到这里.
         waiting: 等待时写出的 awaiting_human 程序版本. 程序版本取 waiting.version + 1, 即 rerun 决定在同一事务里写出的
         那一版 (executing, 含合并后的 params 与 rerun_subject_ids), 不取最新版本: 节点重放时会依次经过多次等待,
-        最新版本可能是之后的决定写出的.
-        决定不存在抛 LookupError; 不是 rerun, 不针对 failed 中的任务, 或其程序版本缺失, 不是 executing 时抛 ValueError.
+        最新版本可能是之后的决定写出的. 这一版的 rerun_subject_ids 须覆盖整组 (见 rerun_subjects), 否则决定没有
+        关闭整组, 只重跑一部分会把程序置 completed 而留下待决的任务.
+        决定不存在抛 LookupError; 不是 rerun, 不针对 failed 中的任务, 或其程序版本缺失, 不是 executing, 没覆盖整组
+        时抛 ValueError.
         """
         store = self.deps.output_store
         record = await store.get(eid, ReviewRecord, record_id)
@@ -438,15 +456,22 @@ class GraphNodes:
         procedure = await store.get(eid, Procedure, waiting.id, waiting.version + 1)
         if procedure is None or procedure.status is not ProcedureStatus.executing:
             raise ValueError(f"{record_id} 没有写出 {waiting.id} v{waiting.version + 1} executing")
+        expected = rerun_subjects(list(failed.values()))
+        if procedure.rerun_subject_ids != expected:
+            raise ValueError(
+                f"{record_id} 写出的 {waiting.id} v{procedure.version} 重判对象为 {procedure.rerun_subject_ids}, "
+                f"应覆盖整组 {expected or '(整条重跑)'}"
+            )
         return record, procedure
 
     async def execute(self, state: EngagementState, procedure_id: str, phase: Phase | None = None) -> StatePatch:
         """执行一条 P2 以外的程序, 失败时在节点内等人决定 rerun 后重跑, 直到不再有待决的失败 (接口文档第 7 节恢复机制).
 
-        每次执行见 attempt. 执行后程序为 awaiting_human (本次或之前留下的 failed 任务还有待决的) 时, interrupt() 暂停;
+        每次执行见 attempt. 执行后程序为 awaiting_human (本次执行留下待决的 failed 任务) 时, interrupt() 暂停;
         审计师对其中一个任务提交 rerun 决定后以 Command(resume=决定 ID) 恢复, 节点从头执行: 已结束的执行按重放规则
         取 Store, 各次 interrupt() 依次取回已提交的决定 ID. 取回决定后读回它写出的程序版本 (见 read_rerun),
-        以 run_no + 1 再执行一次. 一次失败留下多个任务时, 逐个决定, 逐个重跑.
+        以 run_no + 1 再执行一次. 一次失败留下多个任务时算一组 (Q17): 对其中任一个 rerun 即整组关闭, 下一轮一起重跑
+        这组的全部对象; 第 k 次等待只接受针对第 k 轮任务的决定.
         返回历次执行写入的片段 (含失败的执行与已决定的任务), 读回的决定, 以及最终的完整程序包.
         phase: 节点同时推进的阶段 (见 attempt), 不为空时返回的片段带上它.
         执行期间不生成 executing 版本, 程序包中的原对象直接传给 Agent.
@@ -458,16 +483,18 @@ class GraphNodes:
             raise LookupError(f"Engagement {state['engagement_id']} not found")
         current = state  # 每次执行看到的状态: 带上之前各次的执行记录与程序新版本
         result: StatePatch = {}  # 历次执行写入的对象与读回的决定, 节点结束时一并并入状态
-        failed: dict[str, ReviewTask] = {}  # 本节点各次执行建的, 还没有读回过决定的 failed 任务
         while True:
-            patch, pack = await self.attempt(current, engagement, procedure_id, list(failed.values()), phase)
+            patch, pack = await self.attempt(current, engagement, procedure_id, phase)
             merge_patch(result, patch)
-            failed.update({task.id: task for task in failed_tasks(patch)})
             waiting = next(p for p in pack if p.id == procedure_id)
             if waiting.status is not ProcedureStatus.awaiting_human:
                 return {**result, "procedure_pack": pack, **({"phase": phase} if phase is not None else {})}
 
             run_id = patch["procedure_runs"][0].id
+            # 这一轮执行建的 failed 任务, 同属一组 (Q17); 重放时取回的是最新版本 (可能已 decided), 也算在内.
+            # 按 run_id 过滤作防御: 单份产出程序的成功执行重放时, stored_outputs 会把之后各轮的执行与任务一并取回
+            # (目前 P2 以外的单份产出程序只会整次失败, 失败执行重放只取回自己的任务)
+            failed = {task.id: task for task in failed_tasks(patch) if task.run_id == run_id}
             # 节点在此暂停, 返回值不进状态, 失败执行与任务只在 Store 中; 总览按检查点里的中断显示"等复核".
             # 恢复时节点从头执行, 走到这里时 interrupt() 返回审计师决定的 ID.
             # records 列出已读回的决定: 本次调用读回的, 加上传入状态里的 (同一图节点先执行的程序读回的, 如 p1_analytics
@@ -475,12 +502,15 @@ class GraphNodes:
             # DecisionSubmit 据此判断它们不是"须先恢复"的; 列出检查点里已有的也无妨
             read = [*state["review_records"], *result.get("review_records", [])]
             applied = list(dict.fromkeys(r.id for r in read))
-            record_id = interrupt(
-                {"awaiting": "human", "procedure_id": procedure_id, "run_id": run_id, "records": applied}
-            )
+            payload = {"awaiting": "human", "procedure_id": procedure_id, "run_id": run_id, "records": applied}
+            record_id = interrupt(payload)
+            # 送来的是已读回过的决定, 不是新决定, 再等一次. 节点读回决定后出错 (下一次等待还没登记) 时, LangGraph
+            # 在之后的每次运行里都会把那次的恢复值再交给一个 interrupt(): 重放时第一次等待取到它, 下一次等待又取到它.
+            # 每次 interrupt() 各占一个序号, 跳过的也一样, 重放时按同样的顺序跳过
+            while record_id in applied:
+                record_id = interrupt(payload)
             record, procedure = await self.read_rerun(engagement.id, record_id, failed, waiting)
-            # 被决定的任务已在 result 中: 节点能越过 interrupt() 时一定是在重放, 取回的是任务的最新版本 (decided)
-            del failed[record.task_id]
+            # 整组任务已在 result 中: 节点能越过 interrupt() 时一定是在重放, 取回的是任务的最新版本 (decided)
             result["review_records"] = [*result.get("review_records", []), record]
             current = cast(
                 EngagementState,
@@ -494,7 +524,8 @@ class GraphNodes:
     # ── P0 ──
     async def p0_intel(self, state: EngagementState) -> StatePatch:
         """A2 执行 ACC-04, 产出承接评分卡."""
-        return await self.execute(state=state, procedure_id="ACC-04")
+        [procedure_id] = NODE_PROCEDURES["p0_intel"]
+        return await self.execute(state=state, procedure_id=procedure_id)
 
     async def gate(self, state: EngagementState) -> StatePatch:
         return {}  # 四道闸门共用, 不处理业务; 出口由路由函数按 GateDecision 决定
@@ -509,7 +540,8 @@ class GraphNodes:
         if engagement is None:
             raise LookupError(f"Engagement {state['engagement_id']} not found")
         await self.deps.datasets.load(engagement.id, engagement.dataset)
-        return await self.execute(state, "DOC-04")
+        [procedure_id] = NODE_PROCEDURES["p1_ingest"]
+        return await self.execute(state, procedure_id)
 
     async def p1_analytics(self, state: EngagementState) -> StatePatch:
         """A4 依次执行 PLN-07 (初步分析) 与 PLN-01 (重要性候选, 首次带出数据集预置的审计目标与风险清单).
@@ -517,7 +549,7 @@ class GraphNodes:
         PLN-01 在 PLN-07 的结果之上执行 (程序包, 执行记录等按状态的合并规则并入). 返回两次的片段合并, 程序包为最终的.
         """
         result: StatePatch = {}
-        for procedure_id in ("PLN-07", "PLN-01"):
+        for procedure_id in NODE_PROCEDURES["p1_analytics"]:
             patch = await self.execute(state, procedure_id)
             merge_patch(result, patch)
             state = apply_patch(state, patch)
@@ -662,12 +694,14 @@ class GraphNodes:
         阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行一次,
         出 SCHEDULE 下一版.
         """
-        return await self.execute(state, "FIN-04", phase=Phase.P3_Completion)
+        [procedure_id] = NODE_PROCEDURES["completion"]
+        return await self.execute(state, procedure_id, phase=Phase.P3_Completion)
 
     async def report_draft(self, state: EngagementState) -> StatePatch:
         """A10 执行 RPT-03, 出审计报告的下一修订 (REPORT-{revision}, 第 1 版); RPT-01 退回后回到这里, 按批注修订,
         以 rerun 再执行一次. 执行与写入见 execute."""
-        return await self.execute(state, "RPT-03")
+        [procedure_id] = NODE_PROCEDURES["report_draft"]
+        return await self.execute(state, procedure_id)
 
     async def archive(self, state: EngagementState) -> StatePatch:
         """终点: 项目已由 RPT-01 签字锁定, 不再写 Store. 补写进入 Archived 的阶段留痕 (只能由报告阶段进入;

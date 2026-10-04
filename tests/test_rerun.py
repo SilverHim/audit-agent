@@ -17,6 +17,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ReviewRecord,
     ReviewTask,
     RunStatus,
     RunTrigger,
@@ -295,7 +296,7 @@ async def test_rerun_without_executing_version_is_a_node_error(v3: str) -> None:
     assert registry.calls == 1
 
 
-# ── Codex R05-01: 一次失败留下多个任务, 逐个决定, 逐个重跑 ──
+# ── Q17: 一次失败留下多个任务算一组, 对其一 rerun 即整组关闭, 整组重跑 (原 Codex R05-01 为逐个决定) ──
 
 
 def doc04_node(script_for_run: dict[int, list[str]]) -> tuple[FakeOutputStore, object, list[RunContext]]:
@@ -321,72 +322,123 @@ def doc04_node(script_for_run: dict[int, list[str]]) -> tuple[FakeOutputStore, o
     return store, single_node(nodes, "DOC-04"), seen
 
 
-async def test_two_contracts_failed_rerun_one_by_one() -> None:
-    """第 1 次 CON-001, CON-002 都失败. 先对 CON-001 决定 D-1: 重跑 CON-001 成功, 但 CON-002 仍待决, 程序保持
-    awaiting_human 继续等. 再对第 1 次留下的 CON-002 任务决定 D-2: 重跑 CON-002, 无待决失败, completed."""
+async def test_two_contracts_failed_rerun_together() -> None:
+    """第 1 次 CON-001, CON-002 都失败. 对 CON-001 决定 D-1: 同一次提交里两个任务都 decided, 程序 executing,
+    重判对象为两份合同; 恢复后一起重跑, 都成功, completed, 不再等待."""
     store, app, seen = doc04_node({1: ["CON-001", "CON-002"]})
     await app.ainvoke(initial_state(ENGAGEMENT, [make_procedure("DOC-04", Phase.P1_Planning)], 1), CONFIG)
-    first, second = await store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    first, _ = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
+    commits = len(store.commits)
     await preset_rerun(store, first, "D-1")
+    [commit] = store.commits[commits:]
+    assert sorted((o.id, o.status) for o in commit if isinstance(o, ReviewTask)) == [
+        ("T-RUN-DOC-04-1-CON-001-v1", TaskStatus.decided),
+        ("T-RUN-DOC-04-1-CON-002-v1", TaskStatus.decided),
+    ]
 
     result = await app.ainvoke(Command(resume="D-1"), CONFIG)
 
-    assert [i.value["run_id"] for i in result["__interrupt__"]] == ["RUN-DOC-04-2"]
-    assert [t.subject_id for t in await store.latest(EID, ReviewTask, status=TaskStatus.pending)] == ["CON-002"]
-    assert versions(store.rows, "DOC-04")[-1] == (4, ProcedureStatus.awaiting_human)
-
-    await preset_rerun(store, second, "D-2")
-    result = await app.ainvoke(Command(resume="D-2"), CONFIG)
-
-    assert [ctx.procedure.rerun_subject_ids for ctx in seen] == [[], ["CON-001"], ["CON-002"]]
-    assert [r.id for r in result["review_records"]] == ["D-1", "D-2"]
-    assert {(t.id, t.status) for t in result["review_tasks"]} == {
-        ("T-RUN-DOC-04-1-CON-001-v1", TaskStatus.decided),
-        ("T-RUN-DOC-04-1-CON-002-v1", TaskStatus.decided),
-    }
+    assert "__interrupt__" not in result
+    assert [ctx.procedure.rerun_subject_ids for ctx in seen] == [[], ["CON-001", "CON-002"]]
+    assert [r.id for r in result["review_records"]] == ["D-1"]
     assert versions(store.rows, "DOC-04") == [
         (1, ProcedureStatus.planned),
         (2, ProcedureStatus.awaiting_human),
         (3, ProcedureStatus.executing),
-        (4, ProcedureStatus.awaiting_human),
-        (5, ProcedureStatus.executing),
-        (6, ProcedureStatus.completed),
+        (4, ProcedureStatus.completed),
     ]
     await assert_pack_synced(result["procedure_pack"], store)
 
 
-async def test_old_task_decided_while_rerun_failed_again() -> None:
-    """第 1 次 CON-001, CON-002 失败; D-1 重跑 CON-001 又失败 (新任务). 此时对第 1 次留下的 CON-002 决定 D-2 合法,
-    重跑 CON-002; 之后对第 2 次的 CON-001 任务决定 D-3, 重跑成功后 completed."""
+async def test_each_decision_targets_the_latest_run() -> None:
+    """第 1 次 CON-001, CON-002 失败, D-1 整组重跑, 第 2 次只有 CON-001 又失败: 唯一待决任务属 RUN-DOC-04-2;
+    D-2 只重跑 CON-001, 成功后 completed. 第 k 个决定针对第 k 次执行."""
     store, app, seen = doc04_node({1: ["CON-001", "CON-002"], 2: ["CON-001"]})
     await app.ainvoke(initial_state(ENGAGEMENT, [make_procedure("DOC-04", Phase.P1_Planning)], 1), CONFIG)
-    first, second = await store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    first, _ = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
     await preset_rerun(store, first, "D-1")
     await app.ainvoke(Command(resume="D-1"), CONFIG)
+
+    [second] = await store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    assert (second.run_id, second.subject_id) == ("RUN-DOC-04-2", "CON-001")
     await preset_rerun(store, second, "D-2")
+    result = await app.ainvoke(Command(resume="D-2"), CONFIG)
 
-    await app.ainvoke(Command(resume="D-2"), CONFIG)
-
-    [third] = await store.latest(EID, ReviewTask, status=TaskStatus.pending)
-    assert (third.run_id, third.subject_id) == ("RUN-DOC-04-2", "CON-001")
-    await preset_rerun(store, third, "D-3")
-    result = await app.ainvoke(Command(resume="D-3"), CONFIG)
-
-    assert [ctx.procedure.rerun_subject_ids for ctx in seen] == [[], ["CON-001"], ["CON-002"], ["CON-001"]]
+    assert [ctx.procedure.rerun_subject_ids for ctx in seen] == [[], ["CON-001", "CON-002"], ["CON-001"]]
     assert result["procedure_pack"][0].status is ProcedureStatus.completed
     await assert_pack_synced(result["procedure_pack"], store)
 
 
-async def test_reused_decision_at_second_wait_is_rejected() -> None:
-    """第 2 次等待时误用 ainvoke(None) 继续, LangGraph 把 D-1 再给第 2 个 interrupt(): D-1 的任务已处理过, 拒绝,
-    不重跑, Store 无新增 (R29 的 recover, resume 不应这样调用)."""
+async def test_decision_on_earlier_round_task_is_a_node_error() -> None:
+    """第 2 次等待时送来针对第 1 次执行任务的 rerun 决定 (绕过正式入口): 不是这一轮的失败任务, 节点出错, 不重跑."""
+    store, app, _ = doc04_node({1: ["CON-001", "CON-002"], 2: ["CON-001"]})
+    await app.ainvoke(initial_state(ENGAGEMENT, [make_procedure("DOC-04", Phase.P1_Planning)], 1), CONFIG)
+    first, second = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
+    await preset_rerun(store, first, "D-1")
+    await app.ainvoke(Command(resume="D-1"), CONFIG)
+    stale = ReviewRecord(
+        id="D-OLD",
+        task_id=second.id,
+        target_version=second.target_version,
+        decision=Decision.rerun,
+        reason="x",
+        reviewed_by="U-1",
+        decided_at=NOW,
+    )
+    await store.put(EID, [stale], actor="U-1")
+
+    with pytest.raises(ValueError, match="T-RUN-DOC-04-1-CON-002-v1 不是 DOC-04 待处理的失败任务"):
+        await app.ainvoke(Command(resume="D-OLD"), CONFIG)
+
+    assert await store.get(EID, ProcedureRun, "RUN-DOC-04-3") is None
+
+
+async def test_rerun_not_covering_whole_group_is_a_node_error() -> None:
+    """决定写出的程序版本只重判组内一个对象 (没有整组关闭): 节点出错, 不重跑, 以免只重跑一部分就置 completed."""
+    store, app, _ = doc04_node({1: ["CON-001", "CON-002"]})
+    await app.ainvoke(initial_state(ENGAGEMENT, [make_procedure("DOC-04", Phase.P1_Planning)], 1), CONFIG)
+    first, _ = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
+    await preset_rerun(store, first, "D-1")
+    rows = store.rows_of(EID)
+    i = next(i for i, r in enumerate(rows) if isinstance(r, Procedure) and r.version == 3)
+    rows[i] = rows[i].model_copy(update={"rerun_subject_ids": ["CON-001"]})
+
+    with pytest.raises(ValueError, match="应覆盖整组"):
+        await app.ainvoke(Command(resume="D-1"), CONFIG)
+
+    assert await store.get(EID, ProcedureRun, "RUN-DOC-04-2") is None
+
+
+async def test_reused_decision_at_second_wait_is_skipped() -> None:
+    """第 2 次等待时以 ainvoke(None) 继续, LangGraph 把 D-1 再给下一个 interrupt(): D-1 已读回过, 节点跳过它接着等,
+    不重跑, Store 无新增, 仍等第 2 次失败的决定; 之后提交 D-2 照常重跑 (R31)."""
     runner, store, registry = await failed_at_p0(failures=2)
     await preset_rerun(store, await pending_task(store), "D-1")
     await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
     rows = list(store.rows)
 
-    with pytest.raises(ValueError, match="D-1 处理的任务 T-RUN-ACC-04-1-v1 不是 ACC-04 待处理的失败任务"):
-        await runner.app.ainvoke(None, CONFIG)
+    await runner.app.ainvoke(None, CONFIG)
+
+    snapshot = await runner.app.aget_state(CONFIG)
+    assert [i.value for t in snapshot.tasks for i in t.interrupts] == [
+        {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-2", "records": ["D-1"]}
+    ]
+    assert registry.calls == 2 and store.rows == rows
+    await preset_rerun(store, await pending_task(store), "D-2")
+    await runner.app.ainvoke(Command(resume="D-2"), CONFIG)
+    assert (await runner.app.aget_state(CONFIG)).next == ("gate_acc01",) and registry.calls == 3
+
+
+async def test_later_round_decision_at_earlier_wait_is_a_node_error() -> None:
+    """ACC-04 失败两次, D-1, D-2 依次决定后, 复制检查点让节点从头执行, 却先送来 D-2: 第 1 次等待只认第 1 轮的
+    失败任务, D-2 针对第 2 轮, 节点出错, 不多执行."""
+    runner, store, registry = await failed_at_p0(failures=2)
+    await preset_rerun(store, await pending_task(store), "D-1")
+    await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
+    await preset_rerun(store, await pending_task(store), "D-2")
+    await runner.app.aupdate_state(CONFIG, None, as_node="__copy__")
+
+    with pytest.raises(ValueError, match="T-RUN-ACC-04-2-v1 不是 ACC-04 待处理的失败任务"):
+        await runner.app.ainvoke(Command(resume="D-2"), CONFIG)
 
     assert registry.calls == 2
-    assert store.rows == rows
