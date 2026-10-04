@@ -1,12 +1,14 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: ASA 450
 title: Evaluation of Misstatements Identified during the Audit
-compiled: ""   # 填所用编译版日期
+compiled: "2017-09-14"   # Compilation no. 2
 fragments:
   - id: ASA450-P05
     paragraph: "5"
     topic: accumulate_misstatements
-    text: ""   # 待摘录
+    text: |
+      The auditor shall accumulate misstatements identified during the audit, other than those that are clearly trivial.
     procedures: [PLN-01, FIN-04]
   - id: ASA450-P11
     paragraph: "11"

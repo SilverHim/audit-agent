@@ -1,8 +1,12 @@
 import re
-from datetime import date
+from datetime import date, datetime
+from functools import cache
 from pathlib import Path
+from typing import Any
 
+import pdfplumber
 import pytest
+import yaml
 from jinja2 import Environment, FileSystemLoader
 
 from backend.contracts.llm_outputs import ContractExtraction
@@ -35,6 +39,88 @@ def test_standards_referenced_are_registered() -> None:
     lib = ProcedureLibrary(ROOT)
     missing = {s for t in lib.all() for s in t.standards if lib.fragment(s) is None}
     assert not missing
+
+
+REFERENCE = Path(__file__).parents[1] / "docs" / "参考资料"  # 准则原文 PDF
+STANDARD_PDFS = {  # 准则 YAML 文件名 -> 原文 PDF
+    "AASB15": "03_会计准则_AASB/AASB_15.pdf",
+    "ASA320": "01_审计准则_ASA/ASA_320.pdf",
+    "ASA450": "01_审计准则_ASA/ASA_450.pdf",
+    "ASA505": "01_审计准则_ASA/ASA_505.pdf",
+}
+EXCERPTED = ["AASB15-P31", "AASB15-P38", "ASA320-P10", "ASA320-P11", "ASA450-P05", "ASA505-P07", "ASA505-P14"]
+# 页眉页脚行: "ASA 505 – compiled - 10 - AUDITING STANDARD", "AASB 15-compiled 21 STANDARD",
+# "Authorised Version F2023C00402 registered 03/05/2023", 页首 "Auditing Standard ASA 505"
+RUNNING_LINE = re.compile(
+    r"(?:ASA|AASB) \d+\s*[-–]\s*compiled\b.*STANDARD|Authorised Version \S+ registered \S+|Auditing Standard ASA \d+"
+)
+
+
+def normalise(text: str) -> str:
+    """去掉 (Ref: Para. ...) 交叉引用, 行尾连字符直接接下一行 (bill-and-hold), 空白归一为单个空格."""
+    text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text)
+    text = re.sub(r"-\n", "-", text)
+    return " ".join(text.split())
+
+
+def standard_doc(name: str) -> dict[str, Any]:
+    return yaml.safe_load((ROOT / "standards" / f"{name}.yaml").read_text(encoding="utf-8"))
+
+
+@cache
+def standard_text(name: str) -> str:
+    """逐页抽准则 PDF 的文本层, 去掉页眉页脚行与页首的准则标题行后归一.
+
+    本准则摘录的片段都已出现后再多读一页即停 (片段之后的下一段可能在下一页), 免读整份.
+    """
+    title = standard_doc(name)["title"]
+    wanted = [normalise(f["text"]) for f in standard_doc(name)["fragments"] if f["text"]]
+    lines: list[str] = []
+    found_at: int | None = None
+    with pdfplumber.open(REFERENCE / STANDARD_PDFS[name]) as pdf:
+        for i, page in enumerate(pdf.pages):
+            page_lines = (page.extract_text() or "").splitlines()
+            lines += [line for line in page_lines if not RUNNING_LINE.fullmatch(line) and line != title]
+            if found_at is None and all(w in normalise("\n".join(lines)) for w in wanted):
+                found_at = i
+            if found_at is not None and i > found_at:
+                break
+    return normalise("\n".join(lines))
+
+
+@pytest.mark.parametrize("fragment_id", EXCERPTED)
+def test_fragment_text_is_verbatim_from_pdf(fragment_id: str) -> None:
+    fragment = ProcedureLibrary(ROOT).fragment(fragment_id)
+    assert fragment is not None and fragment.text.strip()
+    excerpt = normalise(fragment.text)
+    source = standard_text(fragment_id.split("-")[0])
+    assert excerpt in source
+    # 整段: 段号紧挨着正文 (ASA 为 "10. ", AASB 为 "31 "), 正文之后紧接下一段的段号, 中间至多隔一行不带句号的小标题
+    after = rf"(?: [A-Z][^.]*?)? {int(fragment.paragraph) + 1}\.? [A-Z(]"
+    assert re.search(rf"(?:^| ){re.escape(fragment.paragraph)}\.? {re.escape(excerpt)}{after}", source)
+
+
+@pytest.mark.parametrize("name", list(STANDARD_PDFS))
+def test_compiled_date_matches_pdf(name: str) -> None:
+    with pdfplumber.open(REFERENCE / STANDARD_PDFS[name]) as pdf:
+        cover = pdf.pages[0].extract_text() or ""
+    found = re.search(r"Compilation [Dd]ate: (\d{1,2} \w+ \d{4})", cover)
+    assert found is not None
+    assert standard_doc(name)["compiled"] == datetime.strptime(found[1], "%d %B %Y").date().isoformat()
+
+
+def test_normalise_joins_hyphen_and_drops_refs() -> None:
+    assert normalise("bill-and-\nhold (Ref: Para. A3-A6)\n  next") == "bill-and-hold next"
+
+
+@pytest.mark.parametrize("procedure_id", ["PLN-01", "CSH-04", "CSH-02", "REV-03", "REV-02"])
+def test_p1_p2_procedure_standards_have_text(procedure_id: str) -> None:
+    lib = ProcedureLibrary(ROOT)
+    template = lib.load(procedure_id)
+    assert template.standards
+    for fragment_id in template.standards:
+        fragment = lib.fragment(fragment_id)
+        assert fragment is not None and fragment.text.strip(), fragment_id
 
 
 def test_assembly_and_layers() -> None:

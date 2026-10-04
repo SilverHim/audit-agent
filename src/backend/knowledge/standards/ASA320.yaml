@@ -1,15 +1,18 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: ASA 320
 title: Materiality in Planning and Performing an Audit
-compiled: ""   # 填所用编译版日期
+compiled: "2023-12-14"   # Compilation Number 4
 fragments:
   - id: ASA320-P10
     paragraph: "10"
     topic: overall_materiality
-    text: ""   # 待摘录
+    text: |
+      When establishing the overall audit strategy, the auditor shall determine materiality for the financial report as a whole. If, in the specific circumstances of the entity, there is one or more particular classes of transactions, account balances or disclosures for which misstatements of lesser amounts than materiality for the financial report as a whole could reasonably be expected to influence the economic decisions of users taken on the basis of the financial report, the auditor shall also determine the materiality level or levels to be applied to those particular classes of transactions, account balances or disclosures.
     procedures: [PLN-01]
   - id: ASA320-P11
     paragraph: "11"
     topic: performance_materiality
-    text: ""   # 待摘录
+    text: |
+      The auditor shall determine performance materiality for purposes of assessing the risks of material misstatement and determining the nature, timing and extent of further audit procedures.
     procedures: [PLN-01]

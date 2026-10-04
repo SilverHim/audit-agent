@@ -1,15 +1,22 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: ASA 505
 title: External Confirmations
-compiled: ""   # 填所用编译版日期
+compiled: "2021-12-14"   # Compilation Number 2
 fragments:
   - id: ASA505-P07
     paragraph: "7"
     topic: control_over_requests
-    text: ""   # 待摘录
+    text: |
+      When using external confirmation procedures, the auditor shall maintain control over external confirmation requests, including:
+      (a) Determining the information to be confirmed or requested;
+      (b) Selecting the appropriate confirming party;
+      (c) Designing the confirmation requests, including determining that requests are properly addressed and contain return information for responses to be sent directly to the auditor; and
+      (d) Sending the requests, including follow-up requests when applicable, to the confirming party.
     procedures: [CSH-04]
   - id: ASA505-P14
     paragraph: "14"
     topic: exceptions
-    text: ""   # 待摘录
+    text: |
+      The auditor shall investigate exceptions to determine whether or not they are indicative of misstatements.
     procedures: [CSH-02]

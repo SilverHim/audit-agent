@@ -1,15 +1,23 @@
-# 段落号已对照 docs/参考资料/ 中的现行编译版核对; text 由 A 从 docs/参考资料/ 的原文摘录填入
+# 段落号与正文已对照 docs/参考资料/ 中的现行编译版核对 (tests/test_knowledge.py 自动比对);
+# text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行
 standard: AASB 15
 title: Revenue from Contracts with Customers
-compiled: ""   # 填所用编译版日期
+compiled: "2022-12-31"   # Compilation no. 8, 适用于 2023-01-01 至 2026-07-01 前开始的年度
 fragments:
   - id: AASB15-P31
     paragraph: "31"
     topic: control_transfer
-    text: ""   # 待摘录
+    text: |
+      An entity shall recognise revenue when (or as) the entity satisfies a performance obligation by transferring a promised good or service (ie an asset) to a customer. An asset is transferred when (or as) the customer obtains control of that asset.
     procedures: [REV-03, REV-02]
   - id: AASB15-P38
     paragraph: "38"
     topic: control_transfer_point_in_time
-    text: ""   # 待摘录
+    text: |
+      If a performance obligation is not satisfied over time in accordance with paragraphs 35–37, an entity satisfies the performance obligation at a point in time. To determine the point in time at which a customer obtains control of a promised asset and the entity satisfies a performance obligation, the entity shall consider the requirements for control in paragraphs 31–34. In addition, an entity shall consider indicators of the transfer of control, which include, but are not limited to, the following:
+      (a) The entity has a present right to payment for the asset—if a customer is presently obliged to pay for an asset, then that may indicate that the customer has obtained the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset in exchange.
+      (b) The customer has legal title to the asset—legal title may indicate which party to a contract has the ability to direct the use of, and obtain substantially all of the remaining benefits from, an asset or to restrict the access of other entities to those benefits. Therefore, the transfer of legal title of an asset may indicate that the customer has obtained control of the asset. If an entity retains legal title solely as protection against the customer’s failure to pay, those rights of the entity would not preclude the customer from obtaining control of an asset.
+      (c) The entity has transferred physical possession of the asset—the customer’s physical possession of an asset may indicate that the customer has the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset or to restrict the access of other entities to those benefits. However, physical possession may not coincide with control of an asset. For example, in some repurchase agreements and in some consignment arrangements, a customer or consignee may have physical possession of an asset that the entity controls. Conversely, in some bill-and-hold arrangements, the entity may have physical possession of an asset that the customer controls. Paragraphs B64–B76, B77–B78 and B79–B82 provide guidance on accounting for repurchase agreements, consignment arrangements and bill-and-hold arrangements, respectively.
+      (d) The customer has the significant risks and rewards of ownership of the asset—the transfer of the significant risks and rewards of ownership of an asset to the customer may indicate that the customer has obtained the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset. However, when evaluating the risks and rewards of ownership of a promised asset, an entity shall exclude any risks that give rise to a separate performance obligation in addition to the performance obligation to transfer the asset. For example, an entity may have transferred control of an asset to a customer but not yet satisfied an additional performance obligation to provide maintenance services related to the transferred asset.
+      (e) The customer has accepted the asset—the customer’s acceptance of an asset may indicate that it has obtained the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset. To evaluate the effect of a contractual customer acceptance clause on when control of an asset is transferred, an entity shall consider the guidance in paragraphs B83–B86.
     procedures: [REV-03, REV-02]
