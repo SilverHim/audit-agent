@@ -59,8 +59,7 @@ from tests.fakes import (
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
 
 
-# 各闸门的呈报材料 ID, 决定须绑定其第 1 版. ACC-01, PLN-01/03 的材料由节点产出; FIN-01, RPT-01 的节点尚为占位,
-# 遍历时随决定一并写入材料 (MATERIALS), 否则闸门因材料缺失一直重新呈报
+# 各闸门的呈报材料 ID, 决定须绑定其第 1 版. MATERIALS 为各闸门材料的样例 (闸门路由测试用)
 TARGETS = {
     GateId.ACC_01: "SCORECARD",
     GateId.PLN_01_03: "MATERIALITY",
@@ -85,6 +84,18 @@ MATERIALS: dict[GateId, dict[str, Any]] = {
             )
         ]
     },
+}
+
+
+# 遍历时随决定一并写入状态的值: PLN-01/03 通过写入重要性三项 (同 DecisionSubmit, FIN-04 按它们取参数);
+# RPT-01 的首稿节点尚为占位, 报告随决定写入, 否则闸门因材料缺失一直重新呈报. ACC-01, PLN-01/03, FIN-01 的材料由节点产出
+WALK_WRITES: dict[GateId, dict[str, Any]] = {
+    GateId.PLN_01_03: {
+        "materiality_cents": 12000000,
+        "performance_materiality_cents": 9000000,
+        "clearly_trivial_cents": 600000,
+    },
+    GateId.RPT_01: MATERIALS[GateId.RPT_01],
 }
 
 
@@ -191,7 +202,7 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
     for n, (gate, verdict, after_decision, next_gate) in enumerate(steps):
         snapshot = await app.aget_state(config)
         assert snapshot.next == (GATE_NODES[gate],)
-        values = {"gate_decisions": [_decision(n, gate, verdict)], **MATERIALS.get(gate, {})}
+        values = {"gate_decisions": [_decision(n, gate, verdict)], **WALK_WRITES.get(gate, {})}
         await app.aupdate_state(config, values, as_node=GATE_NODES[gate])
         assert (await app.aget_state(config)).next == (after_decision,)
         await app.ainvoke(None, config)

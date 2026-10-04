@@ -1,5 +1,5 @@
 """R22 P2 端到端: 经 runner 与 DecisionSubmit, 用 Numbat 脚本 Agent 从项目启动走过 ACC-01, PLN-01/03 与全部复核,
-停在 FIN-01 闸门前, 结果与合成数据集设计第 7 节一致; P2 中途取消后恢复, 已完成的实例不重跑."""
+进入完成阶段 (FIN-04) 后停在 FIN-01 闸门前, 结果与合成数据集设计第 7 节一致; P2 中途取消后恢复, 已完成的实例不重跑."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
@@ -12,6 +12,7 @@ from backend.contracts.models import (
     GateVerdict,
     Judgment,
     Misstatement,
+    OpinionType,
     Phase,
     Procedure,
     ProcedureRun,
@@ -20,6 +21,7 @@ from backend.contracts.models import (
     ReviewStatus,
     ReviewTask,
     TaskStatus,
+    UncorrectedSchedule,
 )
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
@@ -119,7 +121,10 @@ async def assert_numbat_result(s: Started) -> None:
     assert sorted(r.procedure_id for r in runs) == sorted(P2)
     assert all(r.run_no == 1 and r.instance for r in runs)
     overview = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).overview(EID)
-    assert (overview.pending_tasks, overview.run_error, overview.engagement.phase) == (0, None, Phase.P2_Executing)
+    assert (overview.pending_tasks, overview.run_error, overview.engagement.phase) == (0, None, Phase.P3_Completion)
+    schedule = await store.get(EID, UncorrectedSchedule, "SCHEDULE")  # 完成阶段 FIN-04 的汇总表 (第 7 节第 14 行)
+    assert schedule is not None
+    assert (schedule.total_cents, schedule.candidate_opinion) == (14200000, OpinionType.qualified)
     snapshot = await s.runner.app.aget_state(CONFIG)
     await assert_pack_synced(snapshot.values["procedure_pack"], store)
 

@@ -3,10 +3,11 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import ClassVar
 
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun
+from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RunStatus
 from backend.contracts.ports import (
     AuditOutputStore,
     AuditTrail,
@@ -53,6 +54,11 @@ class RunContext:
     template: ProcedureTemplate  # 该程序的模板, 来自程序 YAML
     run: ProcedureRun  # 本次执行记录, 状态为 running
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
+
+
+def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
+    """把运行中的执行记录置为成功终态. 版本号不变: 运行中那一版不写入存储, 终态就是第 1 版."""
+    return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at})
 
 
 class ProcedureAgent[F](ABC):

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from backend.agents.base import ProcedureAgent, RunContext
+from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
@@ -17,7 +17,6 @@ from backend.contracts.models import (
     ProcedureRun,
     RegistryCheck,
     Reliability,
-    RunStatus,
     TrailEntry,
     TrailKind,
 )
@@ -125,11 +124,6 @@ def build_scorecard(
         exception_ids=[n.id for n in exceptions],
         client_profile_version=profile.version,
     )
-
-
-def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
-    """把运行中的执行记录置为成功终态. 版本号不变: 运行中那一版不写入存储, 终态就是第 1 版."""
-    return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at})
 
 
 @dataclass(frozen=True)
