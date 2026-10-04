@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Literal, TypeVar
 
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
@@ -76,7 +76,14 @@ from backend.contracts.ports import (
     LLMResponse,
     T_out,
 )
-from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
+from backend.contracts.records import (
+    BankAccount,
+    BankTransaction,
+    DeliveryNote,
+    JournalEntry,
+    SalesInvoice,
+    TrialBalanceRow,
+)
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
 from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
@@ -369,6 +376,10 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
         reference="SI-2026-0547",
     ),
 ]
+NUMBAT_TRIAL_BALANCE = [  # 本期试算表中两个银行账户的总账科目 (合成数据集设计第 3.1 节); 其余科目用到时再补
+    TrialBalanceRow(period="current", account_code="1010", balance_cents=125840000),
+    TrialBalanceRow(period="current", account_code="1020", balance_cents=40000000),
+]
 NUMBAT_RECORDS = {  # FinancialDataStore.record 取得到的行, (行类型, 行 ID) -> 行
     (source_type, row.id): row.model_dump()
     for row in NUMBAT_ROWS
@@ -458,16 +469,18 @@ class FakeTrail:
 
 
 class FakeFinancialStore:
-    """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record) 与合同读写 (contracts, save_contract),
-    其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
+    银行账户 (bank_accounts) 与试算表 (trial_balance), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
         documents: list[DocumentRef] | None = None,
         records: dict[tuple[str, str], dict[str, Any]] | None = None,
         contracts: list[Contract] | None = None,
+        trial_balance: list[TrialBalanceRow] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+        self.trial_balance_rows = list(trial_balance or [])  # 试算表的行, 两期混在一起, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
         # 合同, 合同编号 -> 合同, 各项目共用; 预置的与 save_contract 写入的都在这里
@@ -477,6 +490,9 @@ class FakeFinancialStore:
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
         self.record_calls.append((source_type, source_id))
         return self.records.get((source_type, source_id))
+
+    async def trial_balance(self, eid: str, period: Literal["current", "prior"]) -> list[TrialBalanceRow]:
+        return [r for r in self.trial_balance_rows if r.period == period]
 
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
