@@ -699,9 +699,61 @@ def numbat_pln07_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
+    """REV-08 R01 对 SI-2026-0612 的跨期例外 (合成数据集设计第 7 节第 7 行), 字段按 REV-08.yaml 的输出列."""
+    return AuditException(
+        id=f"X-REV-08-{run.run_no}-R01-1",
+        procedure_id="REV-08",
+        run_id=run.id,
+        rule_id="R01",
+        severity="high",
+        source_ids=["SI-2026-0612"],
+        amount_cents=14200000,
+        detail={"posting_date": "2026-06-28", "signed_date": "2026-07-03"},
+        evidence=[
+            EvidencePointer(
+                type="invoice",
+                source_type="sales_invoice",
+                source_id="SI-2026-0612",
+                locator="posting_date",
+                reliability="internal_original",
+            )
+        ],
+    )
+
+
+def numbat_csh05_exception(run: ProcedureRun) -> AuditException:
+    """CSH-05 B01 对 BA-01 的余额不符例外 (第 7 节第 12 行): 对账单比总账少 50,000.00, 字段按 CSH-05.yaml 的输出列."""
+    return AuditException(
+        id=f"X-CSH-05-{run.run_no}-B01-1",
+        procedure_id="CSH-05",
+        run_id=run.id,
+        rule_id="B01",
+        severity="medium",
+        source_ids=["BA-01"],
+        amount_cents=-5000000,
+        detail={
+            "statement_balance_cents": 120840000,
+            "book_balance_cents": 125840000,
+            "last_bank_transaction_id": "BT-01-20260630-03",
+        },
+        evidence=[
+            EvidencePointer(
+                type="bank",
+                source_type="bank_account",
+                source_id="BA-01",
+                locator="balance",
+                reliability="external_copy",
+            )
+        ],
+    )
+
+
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
     "PLN-07": lambda run: RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS}),
     "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
+    "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
+    "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
 }
 
 
@@ -969,22 +1021,7 @@ def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
 
     def rev08(ctx: RunContext) -> StatePatch:
         run = finished(ctx.run)
-        exception = AuditException(
-            id=f"X-REV-08-{run.run_no}-R01-1",
-            procedure_id="REV-08",
-            run_id=run.id,
-            rule_id="R01",
-            severity="high",
-            source_ids=["SI-2026-0612"],
-            amount_cents=14200000,
-            detail={"posting_date": "2026-06-28", "signed_date": "2026-07-03"},
-            evidence=[
-                EvidencePointer(
-                    type="invoice", source_type="sales_invoice", source_id="SI-2026-0612", locator="posting_date"
-                )
-            ],
-        )
-        return {"procedure_runs": [run], "exceptions": [exception]}
+        return {"procedure_runs": [run], "exceptions": [numbat_rev08_exception(run)]}
 
     def rev03(ctx: RunContext) -> StatePatch:
         run = finished(ctx.run)
@@ -1039,18 +1076,7 @@ def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
 
     def csh05(ctx: RunContext) -> StatePatch:
         run = finished(ctx.run)
-        exception = AuditException(
-            id=f"X-CSH-05-{run.run_no}-B01-1",
-            procedure_id="CSH-05",
-            run_id=run.id,
-            rule_id="B01",
-            severity="medium",
-            source_ids=["BA-01"],
-            amount_cents=-5000000,
-            detail={"statement_cents": 120840000, "gl_cents": 125840000},
-            evidence=[EvidencePointer(type="bank", source_type="bank_account", source_id="BA-01", locator="balance")],
-        )
-        return {"procedure_runs": [run], "exceptions": [exception]}
+        return {"procedure_runs": [run], "exceptions": [numbat_csh05_exception(run)]}
 
     return {
         "REV-08": ScriptA6(deps, rev08),
