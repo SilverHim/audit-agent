@@ -1,14 +1,28 @@
-"""R22 P2 端到端: 经 runner 与 DecisionSubmit, 用 Numbat 脚本 Agent 从项目启动走过 ACC-01, PLN-01/03 与全部复核,
-进入完成阶段 (FIN-04) 后停在 FIN-01 闸门前, 结果与合成数据集设计第 7 节一致; P2 中途取消后恢复, 已完成的实例不重跑."""
+"""端到端: 经 runner 与 DecisionSubmit, 用 Numbat 脚本 Agent 走合成数据集设计第 7 节的演示流程.
+
+R22: 从项目启动走过 ACC-01, PLN-01/03 与全部复核, 进入完成阶段 (FIN-04) 后停在 FIN-01 闸门前;
+P2 中途取消后恢复, 已完成的实例不重跑. R27 (M2 验收): 接着经 FIN-01 与 RPT-01 (先退回再批准) 到归档.
+"""
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
+import pytest
+
 from backend.agents.base import AgentDeps, RunContext
+from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
+    Annotation,
     AuditException,
+    AuditReportVersion,
+    Confirmation,
+    ConfirmationResult,
     Decision,
+    DocumentType,
+    ExceptionDisposition,
+    GateDecision,
+    GateId,
     GateVerdict,
     Judgment,
     Misstatement,
@@ -17,19 +31,24 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ReportSection,
+    ReportStatus,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
     TaskStatus,
+    TrailKind,
     UncorrectedSchedule,
 )
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
+    NOW,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_PROFILE,
     FakeEngagementStore,
+    FakeTrail,
     ScriptA6,
     ScriptAgent,
     assert_pack_synced,
@@ -193,3 +212,124 @@ async def test_cancel_mid_p2_and_resume_without_rerunning_finished_instance() ->
     }
     await review_all(s)
     await assert_numbat_result(s)
+
+
+# ── R27: M2 验收, P0-P4 全流程 ──
+
+# 合成数据集设计第 7 节第 15, 17 行的闸门决定
+FIN_APPROVE = GateDecision(
+    id="D-FIN",
+    gate=GateId.FIN_01,
+    target_id="SCHEDULE",
+    target_version=1,
+    decision=GateVerdict.approve,
+    disposition=OpinionType.qualified,
+    reason=(
+        "Uncorrected cutoff misstatement of AUD 142,000 exceeds overall materiality of AUD 120,000; "
+        "its effects are material but not pervasive."
+    ),
+    decided_by="U-1",
+    decided_at=NOW,
+)
+RPT_REJECT = GateDecision(
+    id="D-RPT-REJECT",
+    gate=GateId.RPT_01,
+    target_id="REPORT-1",
+    target_version=1,
+    decision=GateVerdict.reject,
+    annotations=[
+        Annotation(
+            section=ReportSection.basis_for_opinion,
+            comment="Cite the contract clause that sets the point at which control transfers.",
+        )
+    ],
+    reason="基础段须引用控制权转移的合同条款",
+    decided_by="U-1",
+    decided_at=NOW,
+)
+RPT_APPROVE = GateDecision(
+    id="D-RPT-APPROVE",
+    gate=GateId.RPT_01,
+    target_id="REPORT-2",
+    target_version=1,
+    decision=GateVerdict.approve,
+    decided_by="U-1",
+    decided_at=NOW,
+)
+
+
+async def submit_gate(s: Started, decision: GateDecision, next_nodes: tuple[str, ...]) -> None:
+    """提交闸门决定, 等后台执行停下, 停在 next_nodes."""
+    await s.submit.submit(EID, decision)
+    await wait_idle(s.runner, EID)
+    assert await s.next_nodes() == next_nodes, decision.id
+
+
+async def test_numbat_m2_flow_reaches_archive() -> None:
+    """验收 1-3: 启动 → ACC-01 → PLN-01/03 → 全部复核 → FIN-01 approve qualified → RPT-01 退回一次再批准 → 归档.
+    各阶段产出与演示结束时的汇总同合成数据集设计第 7 节."""
+    s = await start_numbat()
+    await approve_materiality(s)
+    await wait_idle(s.runner, EID)
+    await review_all(s)
+    await assert_numbat_result(s)
+    store = s.output_store
+    # 验收 1: 汇总表 (第 14 行)
+    schedule = await store.get(EID, UncorrectedSchedule, "SCHEDULE")
+    assert schedule is not None and schedule.version == 1
+    [misstatement] = await store.latest(EID, Misstatement)
+    assert [(i.misstatement_id, i.amount_cents, i.direction) for i in schedule.items] == [
+        (misstatement.id, 14200000, misstatement.direction)
+    ]
+    assert (schedule.total_cents, schedule.materiality_cents, schedule.candidate_opinion) == (
+        14200000,
+        12000000,
+        OpinionType.qualified,
+    )
+
+    # 验收 2: FIN-01 通过后出 REPORT-1; 退回后出 REPORT-2, 回应那次退回; 批准后图结束
+    await submit_gate(s, FIN_APPROVE, ("gate_rpt01",))
+    assert [r.id for r in await store.latest(EID, AuditReportVersion)] == ["REPORT-1"]
+    await submit_gate(s, RPT_REJECT, ("gate_rpt01",))
+    report_2 = await store.get(EID, AuditReportVersion, "REPORT-2")
+    assert report_2 is not None and report_2.addresses_decision_id == RPT_REJECT.id
+    await submit_gate(s, RPT_APPROVE, ())
+
+    # 验收 3: 最终结果
+    reports = {r.id: r for r in await store.latest(EID, AuditReportVersion)}
+    assert {rid: (r.version, r.status) for rid, r in reports.items()} == {
+        "REPORT-1": (1, ReportStatus.draft),
+        "REPORT-2": (2, ReportStatus.signed),
+    }
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert snapshot.values["opinion_route"] is OpinionType.qualified
+    gate_decisions = ["D-ACC", "D-PLN", "D-FIN", "D-RPT-REJECT", "D-RPT-APPROVE"]
+    assert [d.id for d in snapshot.values["gate_decisions"]] == gate_decisions
+    assert sorted(d.id for d in await store.latest(EID, GateDecision)) == sorted(gate_decisions)
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and (engagement.phase, engagement.locked) == (Phase.Archived, True)
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    decided = [e.idempotency_key for e in trail.entries if e.kind is TrailKind.decision]
+    assert decided == ["D-ACC", "D-PLN", *(d.id for d in REVIEWS), "D-FIN", "D-RPT-REJECT", "D-RPT-APPROVE"]
+    # 演示结束时的汇总 (第 7 节末表)
+    exceptions = await store.latest(EID, AuditException)
+    assert sorted((x.id, x.disposition) for x in exceptions) == [
+        ("X-CSH-02-1-D01-1", ExceptionDisposition.attributed),
+        ("X-CSH-05-1-B01-1", ExceptionDisposition.attributed),
+        ("X-PLN-07-1-A01-1", ExceptionDisposition.open),
+        ("X-REV-08-1-R01-1", ExceptionDisposition.attributed),
+    ]
+    confirmations = {c.id: c.result for c in await store.latest(EID, Confirmation)}
+    assert confirmations == {"C-BA-01": ConfirmationResult.difference, "C-BA-02": ConfirmationResult.agreed}
+    assert misstatement.status == "uncorrected"
+    documents = await s.runner.deps.financial_store.documents(EID)
+    assert sorted((d.type, d.status) for d in documents) == [
+        *[(DocumentType.confirmation, "extracted")] * 2,
+        *[(DocumentType.contract, "extracted")] * 3,
+    ]
+    # 签字后只读, 后台没有错误
+    assert s.runner.run_error(EID) is None
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, RPT_APPROVE.model_copy(update={"id": "D-AFTER"}))
+    assert e.value.code == "ENGAGEMENT_LOCKED"
