@@ -20,6 +20,7 @@ from backend.contracts.ports import (
     LLMClient,
     RegistrySource,
     RuleEngine,
+    UserStore,
 )
 from backend.contracts.state import EngagementState, StatePatch
 from backend.services.judgment_engine import JudgmentEngine
@@ -44,6 +45,7 @@ class AgentDeps:
     trail: AuditTrail  # 审计留痕, 只追加
     registry: RegistrySource  # ABN 与 ASIC 登记查询
     confirmations: ConfirmationChannel  # 函证平台: 发询证函, 收回函
+    users: UserStore  # 用户; 只读, RPT-03 取项目负责人姓名作签名
 
 
 @dataclass(frozen=True)

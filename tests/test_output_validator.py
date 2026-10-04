@@ -578,11 +578,12 @@ async def test_reply_channel_mismatch_is_only_a_note() -> None:
 # ── 报告草稿 ─────────────────────────────────────────
 
 
-async def test_report_draft_reference_checks_not_yet_implemented() -> None:
+async def test_report_draft_passes_after_structure() -> None:
+    """ReportDraft 的引用与语义校验尚未接入 (RPT-03 输出校验), 现在通过结构级即算通过; 语法失败照常可重试."""
     validator, _ = make_validator()
     rpt03 = LIBRARY.load("RPT-03")
     draft = ReportDraft(opinion="Opinion", basis_for_opinion="Basis for Opinion", judgment_refs=[])
-    with pytest.raises(NotImplementedError):
-        await validator.validate(EID, rpt03, respond(draft), ValidationContext(judgments=[]))
+    report = await validator.validate(EID, rpt03, respond(draft), ValidationContext(judgments=[]))
+    assert report.level_failed is None and report.output == draft
     syntax = await validator.validate(EID, rpt03, respond(None, raw="{"), ValidationContext())
     assert syntax.level_failed == "syntax" and syntax.retryable

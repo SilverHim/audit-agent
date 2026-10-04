@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
-from backend.contracts.models import AuditObjective, Engagement, RiskLevel
+from backend.contracts.models import AuditObjective, Engagement, OpinionType, ReportSection, RiskLevel
 from backend.contracts.state import EngagementState
 
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
@@ -51,6 +51,11 @@ class ProcedureLibrary:
             for f in doc["fragments"]:
                 self._fragments[f["id"]] = StandardFragment(standard=doc["standard"], **f)
         self.commit = _git_commit(root)  # knowledge 目录当前的 git commit, 有未提交改动时加 -dirty
+        report = yaml.safe_load((root / "templates" / "report.yaml").read_text(encoding="utf-8"))
+        self._report: dict[OpinionType, dict[ReportSection, str]] = {  # 意见类型 -> 报告固定段落 (含占位符)
+            OpinionType(opinion): {ReportSection(name): text for name, text in sections.items()}
+            for opinion, sections in report.items()
+        }
 
     def load(self, procedure_id: str) -> ProcedureTemplate:
         return self._templates[procedure_id]
@@ -129,6 +134,13 @@ class ProcedureLibrary:
 
     def fragment(self, fragment_id: str) -> StandardFragment | None:
         return self._fragments.get(fragment_id)
+
+    def report_sections(self, opinion: OpinionType) -> dict[ReportSection, str]:
+        """templates/report.yaml 中该意见类型的固定段落 (董事责任, 审计师责任, 其他法律法规要求, 签名块).
+
+        正文含占位符 {entity_name}, {period_end}, {auditor_name}, 由 RPT-03 代入.
+        """
+        return dict(self._report[opinion])
 
     def prompts_sha256(self) -> str:
         """prompts/*.j2 按文件名排序后, 各文件内容依次拼接的 sha256. 每次调用重新读文件, 改任一 prompt 即变化."""

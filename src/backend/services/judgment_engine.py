@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, JudgmentDraft
+from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, JudgmentDraft, ReportDraft
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -274,6 +274,8 @@ class OutputValidator:
             if level is None and isinstance(output, ConfirmationExtraction) and ctx.confirmation is not None:
                 errors, notes = await self._confirmation(eid, output, ctx.confirmation)
                 level = "semantic" if errors else None
+        elif isinstance(output, ReportDraft):
+            level, errors = None, []  # ReportDraft 的引用与语义校验见 RPT-03 输出校验 (尚未实现), 现只做到结构级
         else:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         return ValidationReport(
@@ -510,6 +512,16 @@ class JudgmentEngine:
             )
         )
 
+    def standards(self, template: ProcedureTemplate) -> list[dict[str, Any]]:
+        """程序引用的准则片段 (提示词变量 standards, JSON 形式). 未注册的片段抛 LookupError, 在调用大模型之前."""
+        fragments = []
+        for fragment_id in template.standards:
+            fragment = self.library.fragment(fragment_id)
+            if fragment is None:
+                raise LookupError(f"{template.id}: 准则片段 {fragment_id} 未注册")
+            fragments.append(fragment.model_dump(mode="json"))
+        return fragments
+
     async def judge(
         self, eid: str, template: ProcedureTemplate, run: ProcedureRun, ctx: JudgmentContext, performed_by: str
     ) -> JudgmentOutcome:
@@ -518,18 +530,12 @@ class JudgmentEngine:
         失败 (重试耗尽, 引用或语义失败) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
         调用方 Agent 取模板 owner; performed_by 为项目负责人.
         """
-        fragments = []
-        for fragment_id in template.standards:
-            fragment = self.library.fragment(fragment_id)
-            if fragment is None:
-                raise LookupError(f"{template.id}: 准则片段 {fragment_id} 未注册")
-            fragments.append(fragment.model_dump(mode="json"))
         variables = {
             "subject_id": ctx.subject_id,
             "task": ctx.task,
             "data": ctx.data,
             "rule_findings": [x.model_dump(mode="json") for x in ctx.rule_findings],
-            "standards": fragments,
+            "standards": self.standards(template),
         }
         result = await self.call_llm(
             eid,

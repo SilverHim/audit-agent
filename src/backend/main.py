@@ -26,6 +26,7 @@ from backend.persistence.stores import (
     PostgresAuditOutputStore,
     PostgresEngagementStore,
     PostgresFinancialDataStore,
+    PostgresUserStore,
 )
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
@@ -54,6 +55,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         trail=trail,
         registry=MockRegistrySource(dataset_dir),
         confirmations=MockConfirmationChannel(dataset_dir),
+        users=PostgresUserStore(),
     )
 
 

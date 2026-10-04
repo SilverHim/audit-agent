@@ -66,6 +66,7 @@ from backend.contracts.models import (
     TaskStatus,
     TrailEntry,
     TrailKind,
+    User,
     Versioned,
 )
 from backend.contracts.ports import (
@@ -169,6 +170,7 @@ NUMBAT_RISKS = [  # 合成数据集设计第 2.4 节
         description="Risk that bank balances recorded in the general ledger do not exist or are overstated.",
     ),
 ]
+NUMBAT_AUDITOR = User(id="U-1", email="j.ellis@tessellate-audit.example", full_name="Jordan Ellis")  # 项目负责人, 合成
 NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同; ID 为占位, B 出 manifest 后由 R54 替换
     DocumentRef(
         id=f"DOC-CON00{n}000000",
@@ -1083,6 +1085,19 @@ class FakeConfirmationChannel:
         return self.receipts[idempotency_key]
 
 
+class FakeUserStore:
+    """假用户存储: 只实现 get, 按 ID 取预置用户."""
+
+    def __init__(self, users: list[User] | None = None) -> None:
+        self.users = {u.id: u for u in (users if users is not None else [NUMBAT_AUDITOR])}  # 用户 ID -> 用户
+
+    async def by_email(self, email: str) -> tuple[User, str] | None:
+        raise NotImplementedError
+
+    async def get(self, user_id: str) -> User | None:
+        return self.users.get(user_id)
+
+
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.
 
@@ -1142,7 +1157,8 @@ def make_deps(
     llm: LLMClient | None = None,
     confirmations: FakeConfirmationChannel | None = None,
 ) -> AgentDeps:
-    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎与函证平台.
+    """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
+    函证平台与用户.
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储与留痕重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
@@ -1172,6 +1188,7 @@ def make_deps(
         datasets=FakeDatasetLoader(financial_store),
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
+        users=FakeUserStore(),
     )
 
 
