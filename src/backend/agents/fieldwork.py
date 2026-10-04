@@ -6,7 +6,9 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
+
+from pydantic import TypeAdapter
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
 from backend.contracts.models import (
@@ -25,6 +27,7 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
 )
+from backend.contracts.records import BankAccount
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
 from backend.contracts.state import StatePatch
 from backend.services.review_queue import attribute_exceptions
@@ -60,6 +63,7 @@ Findings = RuleResult | list[Judged] | CashFindings  # 规则程序为规则结�
 Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返回原始发现
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
 SubjectSource = Callable[[RunContext], Awaitable[list[Subject]]]  # 判断程序取全部判断对象
+JSON_ROWS = TypeAdapter(list[dict[str, Any]])  # 规则返回的行转 JSON 形式 (日期为字符串), 供提示词 tojson
 
 
 def subjects_awaiting_review(ctx: RunContext) -> set[str]:
@@ -78,6 +82,12 @@ def subjects_awaiting_review(ctx: RunContext) -> set[str]:
         elif task.target_type is TargetType.Judgment and task.target_id in judgments:
             waiting.add(judgments[task.target_id].subject_id)
     return waiting
+
+
+def in_scope(ctx: RunContext, subject_id: str) -> bool:
+    """该对象本次要不要处理: rerun_subject_ids 非空时须在其中, 且不在已交人处理的对象里."""
+    only = ctx.procedure.rerun_subject_ids
+    return (not only or subject_id in only) and subject_id not in subjects_awaiting_review(ctx)
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
@@ -101,7 +111,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         handlers: dict[str, tuple[Execute, Interpret]] = {
             "REV-08": (self.run_rules, self.rule_exceptions),
             "CSH-05": (self.run_rules, self.rule_exceptions),
-            "CSH-02": (self.compare_confirmations, self.cash_patch),
+            "CSH-02": (self.assess_confirmations, self.cash_patch),
         }
         handlers |= {pid: (self.judge_subjects, self.judgments_patch) for pid in self.subject_sources}
         if procedure_id not in handlers:
@@ -132,12 +142,11 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         fixture_key 为对象 ID; performed_by 为项目负责人. 一个对象失败 (引擎返回 failure) 不影响其他对象;
         引擎抛异常时等其余对象结束再上抛.
         """
-        subjects = await self.subject_sources[ctx.procedure.id](ctx)
-        only = set(ctx.procedure.rerun_subject_ids)
-        if only:
-            subjects = [s for s in subjects if s.subject_id in only]
-        waiting = subjects_awaiting_review(ctx)
-        subjects = [s for s in subjects if s.subject_id not in waiting]
+        return await self.judge_all(ctx, await self.subject_sources[ctx.procedure.id](ctx))
+
+    async def judge_all(self, ctx: RunContext, subjects: list[Subject]) -> list[Judged]:
+        """对给定的判断对象做判断 (judge_subjects 的后半, CSH-02 先比对余额再交它): 筛选同 judge_subjects."""
+        subjects = [s for s in subjects if in_scope(ctx, s.subject_id)]
         objectives = set(ctx.procedure.objective_ids)
         risks = [r.model_dump(mode="json") for r in ctx.state["risk_register"] if r.objective_id in objectives]
         # 参数快照按 JSON 取 (日期转成字符串), 与提示词头注释 "对象均为 model_dump(mode="json")" 一致
@@ -175,23 +184,25 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             subjects.append(Subject(contract.id, data))
         return subjects
 
-    async def compare_confirmations(self, ctx: RunContext) -> CashFindings:
-        """CSH-02 的规则部分 (D01, 在代码中做): 逐个函证比较回函余额与本期试算表中该账户总账科目的余额.
+    async def assess_confirmations(self, ctx: RunContext) -> CashFindings:
+        """CSH-02 的执行: 先做规则部分 (D01, 在代码中做), 再对有差异的账户组装上下文交判断引擎.
 
-        相等时函证写账面余额, 差额 0, 结果 agreed; 不等时结果 difference, 并建 D01 例外 X-CSH-02-{run_no}-D01-{n}
-        (n 按银行账户 ID 排序编号, 金额为回函减账面, 证据为回函余额所在页与试算表科目).
-        函证还没有回函余额时抛 ValueError. rerun 时只比对 rerun_subject_ids 中的账户.
+        规则部分逐个函证比较回函余额与本期试算表中该账户总账科目的余额: 相等时函证写账面余额, 差额 0, 结果 agreed;
+        不等时结果 difference, 并建 D01 例外 X-CSH-02-{run_no}-D01-{n} (n 按银行账户 ID 排序编号, 金额为回函减账面,
+        证据为回函余额所在页与试算表科目). 函证还没有回函余额时抛 ValueError. 账户的筛选同判断对象 (in_scope).
+        判断对象为有 D01 的账户, 候选调节项取规则 D02, D03 的行 (按账户切分).
         """
         eid = ctx.engagement.id
+        rules = await self.run_rules(ctx)
         accounts = {a.id: a for a in await self.deps.financial_store.bank_accounts(eid)}
         books = {r.account_code: r.balance_cents for r in await self.deps.financial_store.trial_balance(eid, "current")}
-        only = set(ctx.procedure.rerun_subject_ids)
         confirmations = sorted(
-            (c for c in ctx.state["confirmations"] if not only or c.bank_account_id in only),
+            (c for c in ctx.state["confirmations"] if in_scope(ctx, c.bank_account_id)),
             key=lambda c: c.bank_account_id,
         )
         updated: list[Confirmation] = []
         exceptions: list[AuditException] = []
+        subjects: list[Subject] = []
         for c in confirmations:
             if c.confirmed_balance_cents is None:
                 raise ValueError(f"{c.id} 还没有回函余额 (DOC-06 未抽取)")
@@ -201,50 +212,103 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             book = books[account.gl_account_code]
             difference = c.confirmed_balance_cents - book
             result = ConfirmationResult.agreed if difference == 0 else ConfirmationResult.difference
-            updated.append(
-                c.model_copy(
-                    update={
-                        "version": c.version + 1,
-                        "book_balance_cents": book,
-                        "difference_cents": difference,
-                        "result": result,
-                    }
-                )
+            confirmation = c.model_copy(
+                update={
+                    "version": c.version + 1,
+                    "book_balance_cents": book,
+                    "difference_cents": difference,
+                    "result": result,
+                }
             )
+            updated.append(confirmation)
             if difference:
-                reply = [p for p in c.evidence if p.locator == "confirmed_balance_cents"]
-                ledger = EvidencePointer(
-                    type=EvidenceType.voucher,
-                    source_type="trial_balance",
-                    source_id=account.gl_account_code,
-                    locator="balance_cents",
-                    reliability=Reliability.internal_original,
-                )
-                exceptions.append(
-                    AuditException(
-                        id=f"X-CSH-02-{ctx.run.run_no}-D01-{len(exceptions) + 1}",
-                        procedure_id=ctx.procedure.id,
-                        run_id=ctx.run.id,
-                        rule_id="D01",
-                        severity="medium",
-                        source_ids=[account.id],
-                        amount_cents=difference,
-                        detail={
-                            "confirmed_balance_cents": c.confirmed_balance_cents,
-                            "book_balance_cents": book,
-                            "gl_account_code": account.gl_account_code,
-                        },
-                        evidence=[*reply, ledger],
-                    )
-                )
-        return CashFindings(updated, exceptions)
+                d01 = self.difference_exception(ctx, confirmation, account, len(exceptions) + 1)
+                exceptions.append(d01)
+                subjects.append(self.cash_subject(ctx, confirmation, account, d01, rules))
+        return CashFindings(updated, exceptions, await self.judge_all(ctx, subjects))
+
+    @staticmethod
+    def difference_exception(
+        ctx: RunContext, confirmation: Confirmation, account: BankAccount, n: int
+    ) -> AuditException:
+        """回函与账面不符的 D01 例外 (CSH-02.yaml 注释): 证据为回函余额所在页与试算表中的总账科目."""
+        reply = [p for p in confirmation.evidence if p.locator == "confirmed_balance_cents"]
+        ledger = EvidencePointer(
+            type=EvidenceType.voucher,
+            source_type="trial_balance",
+            source_id=account.gl_account_code,
+            locator="balance_cents",
+            reliability=Reliability.internal_original,
+        )
+        return AuditException(
+            id=f"X-CSH-02-{ctx.run.run_no}-D01-{n}",
+            procedure_id=ctx.procedure.id,
+            run_id=ctx.run.id,
+            rule_id="D01",
+            severity="medium",
+            source_ids=[account.id],
+            amount_cents=confirmation.difference_cents,
+            detail={
+                "confirmed_balance_cents": confirmation.confirmed_balance_cents,
+                "book_balance_cents": confirmation.book_balance_cents,
+                "gl_account_code": account.gl_account_code,
+            },
+            evidence=[*reply, ledger],
+        )
+
+    @staticmethod
+    def cash_subject(
+        ctx: RunContext, confirmation: Confirmation, account: BankAccount, d01: AuditException, rules: RuleResult
+    ) -> Subject:
+        """有差异账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
+
+        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (按 ID 排序), 再加本次的 D01.
+        回函取状态 documents 中的记录, 不在状态中抛 LookupError.
+        """
+        documents = {d.id: d for d in ctx.state["documents"]}
+        reply = documents.get(cast(str, confirmation.reply_document_id))
+        if reply is None:
+            raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 不在状态中")
+        earlier = set(ctx.template.depends_on)
+        findings = sorted(
+            (
+                x
+                for x in ctx.state["exceptions"]
+                if x.procedure_id in earlier
+                and account.id in x.source_ids
+                and x.disposition is not ExceptionDisposition.attributed
+            ),
+            key=lambda x: x.id,
+        )
+
+        def rows(rule_id: str) -> list[dict[str, Any]]:
+            mine = [r for r in rules.rows.get(rule_id, []) if r.get("bank_account_id") == account.id]
+            return cast(list[dict[str, Any]], JSON_ROWS.dump_python(mine, mode="json"))
+
+        data = {
+            "bank_account": {"source_type": "bank_account", **account.model_dump(mode="json")},
+            "confirmation": confirmation.model_dump(mode="json"),
+            "reply_document": reply.model_dump(mode="json"),
+            "book_balance_cents": confirmation.book_balance_cents,
+            "difference_cents": confirmation.difference_cents,
+            "subsequent_transactions": rows("D02"),
+            "period_end_entries": rows("D03"),
+        }
+        return Subject(account.id, data, [*findings, d01])
 
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """CSH-02 的解读: 函证新版本与 D01 例外, 加上有差异账户的判断片段 (judgments_patch)."""
+        """CSH-02 的解读: 函证新版本与 D01 例外, 加上有差异账户的判断片段 (judgments_patch).
+
+        判断失败时第一条规则例外可能就是本次的 D01, 片段里同一例外只留最高版本.
+        """
         assert isinstance(findings, CashFindings)
         patch = self.judgments_patch(ctx, findings.judged)
+        latest: dict[str, AuditException] = {}
+        for x in [*findings.exceptions, *patch["exceptions"]]:
+            if x.id not in latest or x.version > latest[x.id].version:
+                latest[x.id] = x
         patch["confirmations"] = findings.confirmations
-        patch["exceptions"] = [*findings.exceptions, *patch["exceptions"]]
+        patch["exceptions"] = list(latest.values())
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:

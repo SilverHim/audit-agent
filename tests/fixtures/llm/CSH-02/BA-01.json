@@ -1,0 +1,162 @@
+{
+  "conclusion": "The bank confirms AUD 1,208,400.00 at 30 June 2026 against a book balance of AUD 1,258,400.00. The AUD 50,000.00 difference is a deposit in transit: receipt CR-SI-2026-0547 was recorded in the ledger on 30 June 2026 and the bank credited it on 2 July 2026 (BT-01-20260702-01). It is a timing difference, not a misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The bank confirms a balance of AUD 1,208,400.00 for account 12345601 as at 30 June 2026.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-RPLBA0100000",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-RPLBA0100000",
+          "locator": "balance_date",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "GL account 1010 shows AUD 1,258,400.00 at 30 June 2026, so confirmed minus book is -AUD 50,000.00.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "1010",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Receipt CR-SI-2026-0547 of AUD 50,000.00 from Echidna Controls was debited to account 1010 on 30 June 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CR-SI-2026-0547-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank credited AUD 50,000.00 from Echidna Controls, reference SI-2026-0547, on 2 July 2026.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-01-20260702-01",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "The auditor investigates exceptions to determine whether they indicate misstatements (ASA 505 para 14).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The receipt was recorded before year end and credited by the bank after it for the same amount and reference, so it is a deposit in transit.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The deposit in transit explains the whole difference to the cent, so the exception is a timing difference and not a misstatement.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-RPLBA0100000",
+      "locator": "confirmed_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-RPLBA0100000",
+      "locator": "balance_date",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "1010",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CR-SI-2026-0547-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-01-20260702-01",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA505-P14",
+      "locator": "para 14",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "If the 2 July credit related to a different receipt, or the bank had no record of the June remittance, the difference would be unexplained.",
+  "proposed_action": "close",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

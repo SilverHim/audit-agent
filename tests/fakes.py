@@ -393,6 +393,9 @@ NUMBAT_RECORDS = {  # FinancialDataStore.record 取得到的行, (行类型, 行
         }[type(row)]
     ]
 }
+NUMBAT_RECORDS |= {  # 试算表行: source_id 为科目代码, 取本期
+    ("trial_balance", r.account_code): r.model_dump() for r in NUMBAT_TRIAL_BALANCE
+}
 NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
     MaterialityCandidate(
         basis="revenue",
@@ -888,6 +891,62 @@ def numbat_pln07_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+NUMBAT_D02_ROWS = [  # CSH-02 D02: 期后 10 天的银行流水 (合成数据集设计第 5.4 节), BA-02 在此期间无流水
+    {
+        "source_type": "bank_transaction",
+        "id": tid,
+        "bank_account_id": "BA-01",
+        "txn_date": day,
+        "amount_cents": amount,
+        "description": description,
+        "reference": reference,
+    }
+    for tid, day, amount, description, reference in (
+        ("BT-01-20260701-01", date(2026, 7, 1), 3145000, "EFT CREDIT WALLABY INSTRUMENTS PTY LTD", "SI-2026-0519"),
+        (
+            "BT-01-20260701-02",
+            date(2026, 7, 1),
+            -2600000,
+            "EFT DEBIT EXAMPLE INDUSTRIAL ESTATES PTY LTD",
+            "RENT-2026-07",
+        ),
+        ("BT-01-20260702-01", date(2026, 7, 2), 5000000, "EFT CREDIT ECHIDNA CONTROLS PTY LTD", "SI-2026-0547"),
+        ("BT-01-20260703-01", date(2026, 7, 3), 1892000, "EFT CREDIT BANKSIA POWER SYSTEMS PTY LTD", "SI-2026-0520"),
+        ("BT-01-20260706-01", date(2026, 7, 6), 2467550, "EFT CREDIT PLATYPUS SENSOR WORKS PTY LTD", "SI-2026-0521"),
+        ("BT-01-20260708-01", date(2026, 7, 8), 1238000, "EFT CREDIT LORIKEET LIGHTING PTY LTD", "SI-2026-0522"),
+        ("BT-01-20260709-01", date(2026, 7, 9), 2711025, "EFT CREDIT KOOKABURRA TELECOM PTY LTD", "SI-2026-0523"),
+        ("BT-01-20260710-01", date(2026, 7, 10), 1596425, "EFT CREDIT MAGPIE SECURITY SYSTEMS PTY LTD", "SI-2026-0524"),
+    )
+]
+NUMBAT_D03_ROWS = [  # CSH-02 D03: 期末前 5 天两个银行科目上的分录行 (第 4.4, 5.4 节); 付款行的摘要为示意
+    {
+        "source_type": "journal_entry",
+        "id": jid,
+        "bank_account_id": account,
+        "entry_no": jid.rsplit("-", 1)[0],
+        "posting_date": date(2026, 6, 30),
+        "debit_cents": debit,
+        "credit_cents": credit,
+        "description": description,
+        "source_doc": source_doc,
+    }
+    for jid, account, debit, credit, description, source_doc in (
+        (
+            "CR-SI-2026-0547-1",
+            "BA-01",
+            5000000,
+            0,
+            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+            "SI-2026-0547",
+        ),
+        ("CP-AP-2026-06-B-2", "BA-01", 0, 35500000, "Payment AP-2026-06-B - Tasman Passive Components", "AP-2026-06-B"),
+        ("CP-FRT-2026-06-2", "BA-01", 0, 2000000, "Payment FRT-2026-06 - Redgum Freight", "FRT-2026-06"),
+        ("CP-OPEX-2026-06-2", "BA-01", 0, 1555000, "Payment OPEX-2026-06 - sundry suppliers", "OPEX-2026-06"),
+        ("GJ-202606-INT-1", "BA-02", 119000, 0, "Interest credited June 2026", "INT-2026-06"),
+    )
+]
+
+
 def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
     """REV-08 R01 对 SI-2026-0612 的跨期例外 (合成数据集设计第 7 节第 7 行), 字段按 REV-08.yaml 的输出列."""
     return AuditException(
@@ -943,6 +1002,7 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
     "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
+    "CSH-02": lambda run: RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS}),
 }
 
 
