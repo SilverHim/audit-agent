@@ -1,0 +1,534 @@
+"""OutputValidator 四级校验: 语法, 结构, 引用, 语义 (开发接口文档第 5 节)."""
+
+import json
+from datetime import date
+from typing import Any
+
+import pytest
+from pydantic import BaseModel
+
+from backend.contracts.llm_outputs import (
+    ConfirmationExtraction,
+    ContractExtraction,
+    ExtractedTerm,
+    JudgmentDraft,
+    ReportDraft,
+)
+from backend.contracts.models import (
+    AuditException,
+    DocumentRef,
+    DocumentType,
+    EvidencePointer,
+    EvidenceType,
+    ProposedAction,
+    ReasoningStep,
+    Reliability,
+    StepKind,
+    TermType,
+    TrailEntry,
+    TrailKind,
+)
+from backend.contracts.ports import LLMResponse
+from backend.contracts.services import ValidationContext
+from backend.core.config import get_settings
+from backend.services.judgment_engine import OutputValidator, output_model, supported_amounts
+from backend.services.procedure_library import ProcedureLibrary
+from tests.fakes import (
+    ENGAGEMENT,
+    NUMBAT_CONTRACTS,
+    NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_RECORDS,
+    NUMBAT_REPLIES,
+    FakeFinancialStore,
+    FakeTrail,
+)
+
+EID = ENGAGEMENT.id
+LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+REV02 = LIBRARY.load("REV-02")
+CON001 = NUMBAT_CONTRACTS[0]  # DOC-CON001000000, 3 页, external_copy
+FIXTURES = get_settings().LLM_FIXTURES_ROOT
+
+
+def make_validator(
+    trail: FakeTrail | None = None, documents: list[DocumentRef] | None = None
+) -> tuple[OutputValidator, FakeFinancialStore]:
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS) + (documents or []), NUMBAT_RECORDS)
+    return OutputValidator(financial, LIBRARY, trail or FakeTrail()), financial
+
+
+def respond[T: BaseModel](output: T | None, raw: str | None = None, error: str | None = None) -> LLMResponse[T]:
+    return LLMResponse(
+        output=output,
+        raw=raw if raw is not None else (output.model_dump_json() if output is not None else ""),
+        model="mock",
+        input_tokens=0,
+        output_tokens=0,
+        error=error,
+    )
+
+
+# 模型填的 type 与 reliability 故意写错, 校验后应按来源改写
+INVOICE = EvidencePointer(
+    type=EvidenceType.contract,
+    source_type="sales_invoice",
+    source_id="SI-2026-0612",
+    locator="posting_date",
+    reliability=Reliability.external_original,
+)
+DELIVERY = EvidencePointer(
+    type=EvidenceType.invoice, source_type="delivery_note", source_id="DN-2026-0612", locator="signed_date"
+)
+CLAUSE = EvidencePointer(
+    type=EvidenceType.external,
+    source_type="document",
+    source_id=CON001.id,
+    locator="CON-001-T1",
+    page=2,
+    reliability=Reliability.external_original,
+)
+STANDARD = EvidencePointer(
+    type=EvidenceType.voucher,
+    source_type="standard",
+    source_id="AASB15-P38",
+    locator="para 38",
+    reliability=Reliability.internal_copy,
+)
+
+
+def cutoff_draft(**changes: Any) -> JudgmentDraft:
+    """REV-02 对 SI-2026-0612 的草稿 (合成数据集设计第 7 节第 9 行): 控制权 2026-07-03 转移, 收入高估."""
+    draft = JudgmentDraft(
+        conclusion="SI-2026-0612 控制权在 2026-07-03 签收时转移, 属下期, 本期收入高估 142,000.00.",
+        reasoning_chain=[
+            ReasoningStep(kind=StepKind.fact, text="发票 2026-06-28 入账.", evidence=[INVOICE]),
+            ReasoningStep(kind=StepKind.fact, text="客户 2026-07-03 签收发运单.", evidence=[DELIVERY]),
+            ReasoningStep(kind=StepKind.fact, text="合同第 5.1 条约定签收时转移控制权.", evidence=[CLAUSE]),
+            ReasoningStep(kind=StepKind.standard, text="在某一时点转移控制权时确认收入.", evidence=[STANDARD]),
+            ReasoningStep(kind=StepKind.inference, text="收入属下期, 本期高估.", from_steps=[0, 1, 2, 3]),
+        ],
+        evidence=[INVOICE, DELIVERY, CLAUSE, STANDARD],
+        counter_argument="若客户在 2026-06-30 前已取得控制权, 结论不成立.",
+        proposed_action=ProposedAction.misstatement,
+        misstatement_draft=NUMBAT_CUTOFF_DRAFT,
+        self_confidence=0.9,
+    )
+    return draft.model_copy(update=changes)
+
+
+def with_step(draft: JudgmentDraft, index: int, **changes: Any) -> JudgmentDraft:
+    chain = list(draft.reasoning_chain)
+    chain[index] = chain[index].model_copy(update=changes)
+    return draft.model_copy(update={"reasoning_chain": chain})
+
+
+async def check(output: Any, raw: str | None = None, ctx: ValidationContext | None = None, **kw: Any) -> Any:
+    validator, _ = make_validator(**kw)
+    return await validator.validate(EID, REV02, respond(output, raw), ctx or ValidationContext())
+
+
+# ── 签名与上下文 ─────────────────────────────────────────
+
+
+def test_validation_context_defaults() -> None:
+    ctx = ValidationContext()
+    assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == []
+
+
+def test_output_model_resolves_every_llm_procedure() -> None:
+    models = {t.id: output_model(t) for t in LIBRARY.all() if t.llm is not None}
+    assert models == {
+        "DOC-04": ContractExtraction,
+        "DOC-06": ConfirmationExtraction,
+        "REV-03": JudgmentDraft,
+        "REV-02": JudgmentDraft,
+        "CSH-02": JudgmentDraft,
+        "RPT-03": ReportDraft,
+    }
+
+
+def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
+    bad = REV02.model_copy(update={"llm": REV02.llm.model_copy(update={"output_model": "Nope"})})  # type: ignore[union-attr]
+    with pytest.raises(ValueError, match="Nope"):
+        output_model(bad)
+    with pytest.raises(ValueError, match="llm"):
+        output_model(LIBRARY.load("REV-08"))
+
+
+# ── 语法与结构 ─────────────────────────────────────────
+
+
+async def test_raw_not_json_is_syntax_and_retryable() -> None:
+    report = await check(None, raw="", ctx=None)
+    assert report.level_failed == "syntax" and report.retryable
+    assert report.output is None and report.unsupported_steps == []
+    assert report.errors[0].startswith("Output is not valid JSON")
+
+
+async def test_syntax_error_keeps_client_error() -> None:
+    validator, _ = make_validator()
+    report = await validator.validate(EID, REV02, respond(None, raw="", error="fixture_not_found"), ValidationContext())
+    assert report.level_failed == "syntax" and report.errors[-1] == "fixture_not_found"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("proposed_action", "reject"), ("self_confidence", 1.2), ("self_confidence", -0.1)]
+)
+async def test_raw_json_not_matching_model_is_structure(field: str, value: Any) -> None:
+    data = cutoff_draft().model_dump(mode="json") | {field: value}
+    report = await check(None, raw=json.dumps(data))
+    assert report.level_failed == "structure" and report.retryable and report.output is None
+    assert field in report.errors[0]
+
+
+async def test_output_of_wrong_model_is_structure() -> None:
+    extraction = ContractExtraction(
+        counterparty="Bilby Robotics Pty Ltd",
+        counterparty_abn=None,
+        amount_cents=None,
+        sign_date=None,
+        evidence=[],
+        terms=[],
+    )
+    report = await check(extraction)
+    assert report.level_failed == "structure" and report.retryable
+    assert "expected JudgmentDraft" in report.errors[0]
+
+
+async def test_valid_raw_is_parsed_when_output_missing() -> None:
+    report = await check(None, raw=cutoff_draft().model_dump_json())
+    assert report.level_failed is None and isinstance(report.output, JudgmentDraft)
+
+
+# ── 引用 ─────────────────────────────────────────
+
+
+async def test_cutoff_draft_passes() -> None:
+    report = await check(cutoff_draft())
+    assert report.level_failed is None and not report.retryable
+    assert report.unsupported_steps == [] and report.errors == []
+
+
+async def test_pointer_type_and_reliability_come_from_source() -> None:
+    report = await check(cutoff_draft())
+    expected = [
+        (EvidenceType.invoice, Reliability.internal_original),
+        (EvidenceType.delivery, Reliability.internal_original),
+        (EvidenceType.contract, Reliability.external_copy),
+        (EvidenceType.standard, None),
+    ]
+    chain = report.output.reasoning_chain
+    assert [(p.type, p.reliability) for step in chain[:4] for p in step.evidence] == expected
+    assert [(p.type, p.reliability) for p in report.output.evidence] == expected
+    # 其余字段不动
+    assert [p.source_id for p in report.output.evidence] == ["SI-2026-0612", "DN-2026-0612", CON001.id, "AASB15-P38"]
+    assert report.output.evidence[2].page == 2 and report.output.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        DELIVERY.model_copy(update={"source_id": "DN-9999"}),  # 查无此行
+        CLAUSE.model_copy(update={"page": 4}),  # 合同只有 3 页
+        CLAUSE.model_copy(update={"page": None}),  # 文件指针须带页码
+        CLAUSE.model_copy(update={"source_id": "DOC-NOPE"}),  # 文件未登记
+        STANDARD.model_copy(update={"source_id": "ASA999-P1"}),  # 准则片段未注册
+        EvidencePointer(type=EvidenceType.external, source_type="trail", source_id="TR-404", locator="status"),
+    ],
+)
+async def test_unresolvable_pointer_marks_its_step(bad: EvidencePointer) -> None:
+    report = await check(with_step(cutoff_draft(), 1, evidence=[bad]))
+    assert report.level_failed is None and report.unsupported_steps == [1]
+    assert len(report.errors) == 1 and report.errors[0].startswith("第 1 步指针")
+    # 解析不了的指针原样保留
+    assert report.output.reasoning_chain[1].evidence == [bad]
+
+
+async def test_step_with_one_bad_pointer_among_good_is_unsupported() -> None:
+    bad = DELIVERY.model_copy(update={"source_id": "DN-9999"})
+    report = await check(with_step(cutoff_draft(), 1, evidence=[DELIVERY, bad]))
+    assert report.level_failed is None and report.unsupported_steps == [1]
+
+
+async def test_bad_pointer_only_in_evidence_list_is_reported_without_step() -> None:
+    draft = cutoff_draft()
+    bad = DELIVERY.model_copy(update={"source_id": "DN-9999"})
+    report = await check(draft.model_copy(update={"evidence": [*draft.evidence, bad]}))
+    assert report.level_failed is None and report.unsupported_steps == []
+    assert report.errors == ["evidence 中指针 delivery_note DN-9999: 查无此行"]
+
+
+async def test_no_resolvable_pointer_is_reference_failure() -> None:
+    gone = {
+        "sales_invoice": "SI-9999",
+        "delivery_note": "DN-9999",
+        "document": "DOC-NOPE",
+        "standard": "ASA999-P1",
+    }
+
+    def broken(p: EvidencePointer) -> EvidencePointer:
+        return p.model_copy(update={"source_id": gone[p.source_type]})
+
+    draft = cutoff_draft()
+    chain = [s.model_copy(update={"evidence": [broken(p) for p in s.evidence]}) for s in draft.reasoning_chain]
+    report = await check(
+        draft.model_copy(update={"reasoning_chain": chain, "evidence": [broken(p) for p in draft.evidence]})
+    )
+    assert report.level_failed == "reference" and not report.retryable
+    assert report.unsupported_steps == [0, 1, 2, 3]
+    assert report.errors[-1] == "没有一个能解析的证据指针"
+
+
+async def test_trail_pointer_must_be_external_call() -> None:
+    trail = FakeTrail()
+    lookup = await trail.record(TrailEntry(engagement_id=EID, kind=TrailKind.external_call, actor="A2", summary="ABN"))
+    decision = await trail.record(TrailEntry(engagement_id=EID, kind=TrailKind.decision, actor="U-1", summary="决定"))
+    other = await trail.record(
+        TrailEntry(engagement_id="E-OTHER", kind=TrailKind.external_call, actor="A2", summary="x")
+    )
+
+    def at(trail_id: str) -> EvidencePointer:
+        return EvidencePointer(type=EvidenceType.voucher, source_type="trail", source_id=trail_id, locator="status")
+
+    draft = with_step(cutoff_draft(), 0, evidence=[at(lookup)])
+    draft = with_step(draft, 1, evidence=[at(decision)])
+    draft = with_step(draft, 2, evidence=[at(other)])
+    report = await check(draft, trail=trail)
+    assert report.unsupported_steps == [1, 2]
+    [pointer] = report.output.reasoning_chain[0].evidence
+    assert (pointer.type, pointer.reliability) == (EvidenceType.external, Reliability.external_original)
+    assert "不是外部调用" in report.errors[0] and "留痕不存在" in report.errors[1]
+
+
+async def test_reply_document_pointer_is_external_and_other_document_is_not_evidence() -> None:
+    reply = NUMBAT_REPLIES[0]
+    memo = CON001.model_copy(update={"id": "DOC-MEMO", "type": DocumentType.other})
+    draft = with_step(cutoff_draft(), 2, evidence=[CLAUSE.model_copy(update={"source_id": reply.id, "page": 1})])
+    draft = with_step(draft, 1, evidence=[CLAUSE.model_copy(update={"source_id": memo.id})])
+    report = await check(draft, documents=[reply, memo])
+    [pointer] = report.output.reasoning_chain[2].evidence
+    assert (pointer.type, pointer.reliability) == (EvidenceType.external, Reliability.external_original)
+    assert report.unsupported_steps == [1] and "other 类文件不作证据" in report.errors[0]
+
+
+@pytest.mark.parametrize(
+    ("source_type", "source_id", "expected"),
+    [
+        ("journal_entry", "CR-SI-2026-0547-1", (EvidenceType.voucher, Reliability.internal_original)),
+        ("sales_invoice", "SI-2026-0612", (EvidenceType.invoice, Reliability.internal_original)),
+        ("delivery_note", "DN-2026-0612", (EvidenceType.delivery, Reliability.internal_original)),
+        ("bank_transaction", "BT-01-20260630-03", (EvidenceType.bank, Reliability.external_copy)),
+        ("bank_account", "BA-01", (EvidenceType.bank, Reliability.external_copy)),
+        ("trial_balance", "1010", (EvidenceType.voucher, Reliability.internal_original)),
+    ],
+)
+async def test_every_row_type_maps_per_rule_engine_table(
+    source_type: str, source_id: str, expected: tuple[EvidenceType, Reliability]
+) -> None:
+    validator, financial = make_validator()
+    financial.records[("trial_balance", "1010")] = {"account_code": "1010", "balance_cents": 125840000}
+    pointer = row(source_type, source_id).model_copy(update={"reliability": Reliability.internal_copy})
+    draft = with_step(
+        cutoff_draft(proposed_action=ProposedAction.accept, misstatement_draft=None), 0, evidence=[pointer]
+    )
+    report = await validator.validate(EID, REV02, respond(draft), ValidationContext())
+    assert report.level_failed is None
+    [resolved] = report.output.reasoning_chain[0].evidence
+    assert (resolved.type, resolved.reliability) == expected
+
+
+async def test_each_source_is_looked_up_once() -> None:
+    validator, financial = make_validator()
+    report = await validator.validate(EID, REV02, respond(cutoff_draft()), ValidationContext())
+    assert report.level_failed is None
+    assert financial.record_calls == [("sales_invoice", "SI-2026-0612"), ("delivery_note", "DN-2026-0612")]
+
+
+# ── 错报金额 ─────────────────────────────────────────
+
+
+def misstated(amount: int, pointers: list[EvidencePointer] | None = None) -> JudgmentDraft:
+    draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount}))
+    if pointers is None:
+        return draft
+    return with_step(draft, 0, evidence=pointers).model_copy(update={"evidence": [*draft.evidence, *pointers]})
+
+
+def row(source_type: str, source_id: str) -> EvidencePointer:
+    return EvidencePointer(type=EvidenceType.bank, source_type=source_type, source_id=source_id, locator="amount_cents")  # type: ignore[arg-type]
+
+
+B01 = AuditException(  # CSH-05 的余额不符例外 (合成数据集设计第 7 节第 12 行), 金额带符号
+    id="X-CSH-05-1-B01-1",
+    procedure_id="CSH-05",
+    run_id="RUN-CSH-05-1",
+    rule_id="B01",
+    severity="high",
+    source_ids=["BA-01"],
+    amount_cents=-5000000,
+    evidence=[],
+)
+
+
+async def test_misstatement_amount_not_traceable_is_reference_failure() -> None:
+    report = await check(misstated(14000000))
+    assert report.level_failed == "reference" and not report.retryable
+    assert report.errors == ["错报金额 14000000 不等于引用行的金额, 两条引用行之差或归因例外的金额"]
+
+
+async def test_misstatement_amount_may_equal_attributed_exception_by_absolute_value() -> None:
+    assert (await check(misstated(5000000))).level_failed == "reference"
+    report = await check(misstated(5000000), ctx=ValidationContext(rule_findings=[B01]))
+    assert report.level_failed is None
+
+
+@pytest.mark.parametrize(
+    ("amount", "passes"),
+    [
+        (5000000, True),  # 分录行借方金额
+        (1555000, True),  # 流水金额取绝对值
+        (3445000, True),  # 两行之差: 5000000 - 1555000
+        (6555000, False),  # 带符号相减不算
+        (120840000, False),  # 交易后余额不是这一行的金额
+    ],
+)
+async def test_misstatement_amount_from_rows_or_their_difference(amount: int, passes: bool) -> None:
+    pointers = [row("journal_entry", "CR-SI-2026-0547-1"), row("bank_transaction", "BT-01-20260630-03")]
+    report = await check(misstated(amount, pointers))
+    assert (report.level_failed is None) is passes
+
+
+def test_supported_amounts_skip_zero_and_bool() -> None:
+    rows = [{"amount_cents": 100, "flag_cents": True}, {"amount_cents": -100, "zero_cents": 0}]
+    assert supported_amounts(rows, []) == {100}
+
+
+# ── 语义 ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda d: d.model_copy(update={"reasoning_chain": []}), "推理链为空"),
+        (lambda d: with_step(d, 0, evidence=[]), "第 0 步 fact 没有证据指针"),
+        (lambda d: with_step(d, 3, evidence=[]), "第 3 步 standard 没有证据指针"),
+        (lambda d: with_step(d, 3, evidence=[INVOICE]), "第 3 步 standard 没有指向准则片段"),
+        (lambda d: with_step(d, 4, from_steps=[0, 4]), "第 4 步 inference 引用了非前序步骤 [4]"),
+        (lambda d: with_step(d, 2, kind=StepKind.inference, from_steps=[3]), "第 2 步 inference 引用了非前序步骤 [3]"),
+        (lambda d: with_step(d, 4, from_steps=[-1]), "第 4 步 inference 引用了非前序步骤 [-1]"),
+        (lambda d: with_step(d, 4, from_steps=[]), "第 4 步 inference 没有引用前序步骤"),
+        (lambda d: d.model_copy(update={"misstatement_draft": None}), "建议认定错报, 但没有错报草稿"),
+    ],
+)
+async def test_semantic_failures(change: Any, error: str) -> None:
+    report = await check(change(cutoff_draft()))
+    assert report.level_failed == "semantic" and not report.retryable
+    assert error in report.errors
+
+
+async def test_semantic_errors_follow_pointer_errors() -> None:
+    draft = with_step(cutoff_draft(), 1, evidence=[DELIVERY.model_copy(update={"source_id": "DN-9999"})])
+    report = await check(with_step(draft, 4, from_steps=[]))
+    assert report.level_failed == "semantic" and report.unsupported_steps == [1]
+    assert report.errors == ["第 1 步指针 delivery_note DN-9999: 查无此行", "第 4 步 inference 没有引用前序步骤"]
+
+
+async def test_other_actions_need_no_misstatement_draft() -> None:
+    draft = cutoff_draft(proposed_action=ProposedAction.more_evidence, misstatement_draft=None)
+    assert (await check(draft)).level_failed is None
+
+
+# ── 抽取 ─────────────────────────────────────────
+
+
+def con001() -> ContractExtraction:
+    raw = (FIXTURES / "DOC-04" / "CON-001.json").read_text(encoding="utf-8")
+    return ContractExtraction.model_validate_json(raw)
+
+
+async def extract(output: Any, document: DocumentRef | None = CON001, procedure: str = "DOC-04") -> Any:
+    validator, _ = make_validator()
+    return await validator.validate(EID, LIBRARY.load(procedure), respond(output), ValidationContext(document=document))
+
+
+async def test_contract_extraction_passes_and_takes_reliability_from_document() -> None:
+    report = await extract(con001())
+    assert report.level_failed is None and report.errors == []
+    assert {(p.type, p.reliability) for p in report.output.evidence} == {
+        (EvidenceType.contract, Reliability.external_copy)
+    }
+    assert report.output.terms == con001().terms
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"page": 4},  # 合同只有 3 页
+        {"page": 0},  # 页码从 1 起
+        {"page": None},
+        {"source_id": NUMBAT_CONTRACTS[1].id},  # 别的合同
+        {"source_type": "standard"},
+    ],
+)
+async def test_extraction_pointer_outside_document_fails_whole_output(change: dict[str, Any]) -> None:
+    out = con001()
+    evidence = [out.evidence[0].model_copy(update=change), *out.evidence[1:]]
+    report = await extract(out.model_copy(update={"evidence": evidence}))
+    assert report.level_failed == "reference" and not report.retryable
+    assert report.unsupported_steps == [] and len(report.errors) == 1
+
+
+async def test_extraction_term_page_outside_document_fails() -> None:
+    out = con001()
+    terms = [*out.terms, ExtractedTerm(term_type=TermType.termination, text="x", page=9)]
+    report = await extract(out.model_copy(update={"terms": terms}))
+    assert report.level_failed == "reference" and report.errors == ["条款 termination 页码 9 不在 1-3 之间"]
+
+
+async def test_extraction_without_pointers_fails() -> None:
+    report = await extract(con001().model_copy(update={"evidence": []}))
+    assert report.level_failed == "reference" and report.errors == ["没有证据指针"]
+
+
+async def test_extraction_needs_document_in_context() -> None:
+    with pytest.raises(ValueError, match=r"ValidationContext\.document"):
+        await extract(con001(), document=None)
+
+
+async def test_confirmation_extraction_points_at_reply() -> None:
+    reply = NUMBAT_REPLIES[0]
+    pointer = EvidencePointer(
+        type=EvidenceType.contract,
+        source_type="document",
+        source_id=reply.id,
+        locator="confirmed_balance_cents",
+        page=1,
+    )
+    out = ConfirmationExtraction(
+        confirming_party="Harbourline Bank Limited",
+        account_no="12345601",
+        confirmed_balance_cents=120840000,
+        balance_date=date(2026, 6, 30),
+        receipt_channel=None,
+        evidence=[pointer],
+    )
+    report = await extract(out, document=reply, procedure="DOC-06")
+    assert report.level_failed is None
+    assert [(p.type, p.reliability) for p in report.output.evidence] == [
+        (EvidenceType.external, Reliability.external_original)
+    ]
+    bad = await extract(out.model_copy(update={"evidence": [pointer.model_copy(update={"page": 3})]}), reply, "DOC-06")
+    assert bad.level_failed == "reference"
+
+
+# ── 报告草稿 ─────────────────────────────────────────
+
+
+async def test_report_draft_reference_checks_not_yet_implemented() -> None:
+    validator, _ = make_validator()
+    rpt03 = LIBRARY.load("RPT-03")
+    draft = ReportDraft(opinion="Opinion", basis_for_opinion="Basis for Opinion", judgment_refs=[])
+    with pytest.raises(NotImplementedError):
+        await validator.validate(EID, rpt03, respond(draft), ValidationContext(judgments=[]))
+    syntax = await validator.validate(EID, rpt03, respond(None, raw="{"), ValidationContext())
+    assert syntax.level_failed == "syntax" and syntax.retryable

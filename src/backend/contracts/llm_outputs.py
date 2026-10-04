@@ -2,6 +2,8 @@
 
 from datetime import date
 
+from pydantic import Field
+
 from backend.contracts.models import (
     EvidencePointer,
     JudgmentRef,
@@ -23,7 +25,7 @@ class JudgmentDraft(Model):
     counter_argument: str  # 反方论证
     proposed_action: ProposedAction  # 建议动作
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
-    self_confidence: float  # 模型自报的置信度 0-1, 计入置信度的 llm 分项
+    self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1, 计入置信度的 llm 分项
 
 
 class ExtractedTerm(Model):

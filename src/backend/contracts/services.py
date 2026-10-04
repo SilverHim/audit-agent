@@ -1,8 +1,10 @@
 """服务之间传递的数据对象, 定义见 开发接口文档.md 第 5 节."""
 
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
-from backend.contracts.models import AuditException, Judgment, Model
+from backend.contracts.models import AuditException, DocumentRef, Judgment, Model
+
+T = TypeVar("T")
 
 
 class RuleResult(Model):
@@ -31,10 +33,21 @@ class JudgmentOutcome(Model):
     trail_ids: list[str]  # 每次大模型调用的留痕 ID
 
 
-class ValidationReport(Model):
+class ValidationContext(Model):
+    """OutputValidator 校验一次 LLM 输出时用到的上下文."""
+
+    rule_findings: list[AuditException] = []  # 该判断对象的规则例外, 即判断归因的例外; 错报金额可等于其金额
+    document: DocumentRef | None = None  # 抽取类程序 (DOC-04, DOC-06) 本次抽取的文件, 指针只能指向它
+    judgments: list[Judgment] = []  # 状态中的判断, 供 RPT-03 校验 judgment_refs
+
+
+class ValidationReport(Model, Generic[T]):
     """OutputValidator 对一次 LLM 输出的四级校验结果."""
 
     level_failed: Literal["syntax", "structure", "reference", "semantic"] | None  # 未通过的级别, 全部通过为空
     retryable: bool  # 能否回传错误重试: 语法, 结构失败为真
     unsupported_steps: list[int]  # 证据指针解析不了的推理步骤下标
     errors: list[str]  # 错误信息
+    output: T | None = (
+        None  # 通过结构校验的输出, 解析得了的证据指针 type 与 reliability 已按来源改写; 语法或结构失败为空
+    )

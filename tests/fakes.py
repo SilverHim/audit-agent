@@ -62,6 +62,7 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
+from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, JournalEntry, SalesInvoice
 from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.main import build_deps
@@ -172,6 +173,97 @@ NUMBAT_REPLIES = [  # CSH-04 存档的 2 份银行回函 (合成数据集设计�
     for n, file_name in ((1, "12345601.pdf"), (2, "23456702.pdf"))
 ]
 NUMBAT_BANKS = {"BA-01": "Harbourline Bank Limited", "BA-02": "Bluegum Savings Bank Limited"}  # 第 2.3 节
+NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | BankTransaction] = [
+    # 合成数据集设计第 5.1 节: 两张跨期场景发票与 SI-2026-0547 (期后收款)
+    *(
+        SalesInvoice(
+            id=f"SI-2026-{n}",
+            invoice_no=f"SI-2026-{n}",
+            customer=customer,
+            customer_abn=abn,
+            contract_id=contract,
+            invoice_date=day,
+            posting_date=day,
+            amount_cents=amount,
+            journal_entry_id=f"SJ-2026-{n}-2",
+        )
+        for n, customer, abn, contract, day, amount in (
+            ("0612", "Bilby Robotics Pty Ltd", "11901043383", "CON-001", date(2026, 6, 28), 14200000),
+            ("0618", "Quoll Automation Pty Ltd", "46902044759", "CON-002", date(2026, 6, 29), 9500000),
+            ("0547", "Echidna Controls Pty Ltd", "52904047490", None, date(2026, 5, 29), 5000000),
+        )
+    ),
+    *(
+        DeliveryNote(
+            id=f"DN-2026-{n}",
+            delivery_no=f"DN-2026-{n}",
+            invoice_id=f"SI-2026-{n}",
+            shipped_date=shipped,
+            signed_date=signed,
+            signed_by=by,
+        )
+        for n, shipped, signed, by in (
+            ("0612", date(2026, 7, 1), date(2026, 7, 3), "Daniel Price"),
+            ("0618", date(2026, 6, 29), date(2026, 6, 30), "Ravi Okafor"),
+            ("0547", date(2026, 5, 29), date(2026, 6, 1), "Tom Nguyen"),
+        )
+    ),
+    # 第 5.2 节: SI-2026-0547 的收款分录 (借 1010)
+    JournalEntry(
+        id="CR-SI-2026-0547-1",
+        entry_no="CR-SI-2026-0547",
+        posting_date=date(2026, 6, 30),
+        created_at=datetime(2026, 6, 30, 6, 40, tzinfo=UTC),
+        created_by="ar.clerk",
+        approved_by="fin.controller",
+        account_code="1010",
+        debit_cents=5000000,
+        description="Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+        source_doc="SI-2026-0547",
+    ),
+    # 第 5.4 节: 两个银行账户, BA-01 期末前后的两笔流水
+    BankAccount(
+        id="BA-01", bank_name="Harbourline Bank Limited", bsb="999-101", account_no="12345601", gl_account_code="1010"
+    ),
+    BankAccount(
+        id="BA-02",
+        bank_name="Bluegum Savings Bank Limited",
+        bsb="999-202",
+        account_no="23456702",
+        gl_account_code="1020",
+    ),
+    BankTransaction(
+        id="BT-01-20260630-03",
+        bank_account_id="BA-01",
+        txn_date=date(2026, 6, 30),
+        amount_cents=-1555000,
+        balance_after_cents=120840000,
+        description="EFT DEBIT SUNDRY SUPPLIERS",
+        reference="OPEX-2026-06",
+    ),
+    BankTransaction(
+        id="BT-01-20260702-01",
+        bank_account_id="BA-01",
+        txn_date=date(2026, 7, 2),
+        amount_cents=5000000,
+        balance_after_cents=126385000,
+        description="EFT CREDIT ECHIDNA CONTROLS PTY LTD",
+        reference="SI-2026-0547",
+    ),
+]
+NUMBAT_RECORDS = {  # FinancialDataStore.record 取得到的行, (行类型, 行 ID) -> 行
+    (source_type, row.id): row.model_dump()
+    for row in NUMBAT_ROWS
+    for source_type in [
+        {
+            SalesInvoice: "sales_invoice",
+            DeliveryNote: "delivery_note",
+            JournalEntry: "journal_entry",
+            BankAccount: "bank_account",
+            BankTransaction: "bank_transaction",
+        }[type(row)]
+    ]
+}
 NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
     MaterialityCandidate(
         basis="revenue",
@@ -248,10 +340,19 @@ class FakeTrail:
 
 
 class FakeFinancialStore:
-    """假财务数据存储: 目前只提供证据文件登记 (documents), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    """假财务数据存储: 目前只提供证据文件登记 (documents) 与取一行明细 (record), 其余方法用到时再补.
+    B 的 Postgres 实现就绪前代替它."""
 
-    def __init__(self, documents: list[DocumentRef] | None = None) -> None:
+    def __init__(
+        self, documents: list[DocumentRef] | None = None, records: dict[tuple[str, str], dict[str, Any]] | None = None
+    ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+        self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
+        self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
+
+    async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
+        self.record_calls.append((source_type, source_id))
+        return self.records.get((source_type, source_id))
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
         return [d for d in self.document_refs if type is None or d.type is type]
