@@ -811,6 +811,8 @@ class FakeEvidenceStore:
         self.output_store = output_store  # 共用其事务
         self.calls: list[tuple[str, str, bool]] = []  # (文件 ID, 状态, 是否在事务内)
         self.saves: list[str] = []  # save 的每次调用 (文件名)
+        # save 的每次调用的 (文件名, 内容 sha256, 文件类型, 可靠性), 检查存档参数
+        self.save_args: list[tuple[str, str, DocumentType, Reliability]] = []
         self.page_counts: dict[str, int] = {}  # save 登记的页数, 文件名 -> 页数; 缺省 2
 
     async def save(
@@ -818,10 +820,11 @@ class FakeEvidenceStore:
     ) -> DocumentRef:
         """登记为 DOC-{sha256 前 12 位}, received; 同一哈希已登记则返回已有记录 (接口文档第 4 节).
 
-        页数取 page_counts, 缺省 2. saves 记下每次调用的文件名.
+        页数取 page_counts, 缺省 2. saves 记下每次调用的文件名, save_args 记下文件名, 内容哈希, 类型与可靠性.
         """
         self.saves.append(file_name)
         sha256 = hashlib.sha256(data).hexdigest()
+        self.save_args.append((file_name, sha256, type, reliability))
         refs = self.financial_store.document_refs
         existing = next((d for d in refs if d.sha256 == sha256), None)
         if existing is not None:
