@@ -30,6 +30,7 @@ from backend.contracts.views import (
     ReportMaterial,
 )
 from backend.orchestration.graph import GATE_NODES
+from backend.orchestration.nodes import uncovered_objectives
 from backend.orchestration.runner import GraphRunner, resume_required
 
 GATE_OF_NODE: dict[str, GateId] = {node: gate for gate, node in GATE_NODES.items()}  # 闸门节点名 -> 闸门
@@ -130,6 +131,7 @@ class GraphStateQuery:
     async def gate(self, eid: str) -> GateView | None:
         """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None.
 
+        PLN-01/03 的材料另列按当前风险等级没有程序覆盖的审计目标 (有则不能通过, 见 DecisionSubmit).
         RPT-01 的材料为当前报告 (修订轮次最大的一版) 与此前的退回决定 (含批注; 信息不足的决定不在其中).
 
         GateView 的 target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期.
@@ -161,6 +163,7 @@ class GraphStateQuery:
                 candidates=candidates,
                 objectives=values["audit_objectives"],
                 risks=values["risk_register"],
+                uncovered_objective_ids=uncovered_objectives(self.deps.library, values["audit_objectives"]),
             )
             return GateView(gate=gate, target_id=candidates.id, target_version=candidates.version, material=planning)
         if gate is GateId.FIN_01:

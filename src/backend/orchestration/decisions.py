@@ -57,7 +57,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import GATE_NODES
-from backend.orchestration.nodes import rerun_subjects, save_outputs, update_procedure
+from backend.orchestration.nodes import rerun_subjects, save_outputs, uncovered_objectives, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner, resume_required, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
@@ -160,9 +160,9 @@ def pln_effects(
     """PLN-01/03 闸门决定的效果, 纯函数 (恢复补做时可复用), 由 aupdate_state(as_node="gate_p1_risk") 写入状态.
 
     pack, risks, objectives: 当前的程序包, 风险清单, 审计目标; candidates: 决定绑定的重要性候选.
-    - approve: PLN-01, PLN-03 置 completed; 每条 edit 使该风险项出新版本 (等级, 修改理由, 确认人为决定人);
-      风险等级变了的审计目标重算 risk_level (取其下风险项的最高等级) 出新版本; 按 materiality 算出重要性三项.
-      风险清单与审计目标传完整列表 (状态中这两个字段整体替换); 没有修改时不放这两个键.
+    - approve: PLN-01, PLN-03 置 completed; 按 edits 修改风险等级与审计目标 (revise_risks); 按 materiality 算出
+      重要性三项. 风险清单与审计目标总传完整列表 (状态中这两个字段整体替换): 没有修改时即输入 (Store 的当前版本),
+      使检查点与通过前的覆盖检查, 之后的装配用同一份目标.
     - reject: 只记决定, 路由回 p1_analytics 重新分析. insufficient_info: 只记决定, 留在闸门重新呈报.
     """
     if decision.decision is not GateVerdict.approve:
@@ -178,9 +178,19 @@ def pln_effects(
         "performance_materiality_cents": performance,
         "clearly_trivial_cents": trivial,
     }
-    if not decision.edits:
-        return effects
+    new_risks, new_objectives = revise_risks(risks, objectives, decision)
+    return {**effects, "risk_register": new_risks, "audit_objectives": new_objectives}
 
+
+def revise_risks(
+    risks: list[RiskItem], objectives: list[AuditObjective], decision: GateDecision
+) -> tuple[list[RiskItem], list[AuditObjective]]:
+    """PLN-01/03 通过时按 edits 修改风险等级: 每条 edit 使该风险项出新版本 (等级, 修改理由, 确认人为决定人);
+    风险等级变了的审计目标重算 risk_level (取其下风险项的最高等级) 出新版本. 返回完整的风险清单与审计目标,
+    没改的仍是原对象; 没有 edits 时原样返回, 不重算. 闸门效果与通过前的覆盖检查共用, 两者所见的目标一致.
+    """
+    if not decision.edits:
+        return list(risks), list(objectives)
     edits = {e.target_id: e for e in decision.edits}
     new_risks = [
         risk.model_copy(
@@ -203,7 +213,7 @@ def pln_effects(
             new_objectives.append(objective)
         else:
             new_objectives.append(objective.model_copy(update={"version": objective.version + 1, "risk_level": level}))
-    return {**effects, "risk_register": new_risks, "audit_objectives": new_objectives}
+    return new_risks, new_objectives
 
 
 def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
@@ -660,8 +670,27 @@ class GraphDecisionSubmit:
             raise DecisionRejected(
                 "INVALID_VALUE", f"意见类型只能选 unqualified 或 qualified, 不能选 {decision.disposition}"
             )
+        if decision.gate is GateId.PLN_01_03 and decision.decision is GateVerdict.approve:
+            await self._check_coverage(eid, decision)
         await self._check_decision_id(eid, decision.id)
         return target
+
+    async def _check_coverage(self, eid: str, decision: GateDecision) -> None:
+        """PLN-01/03 通过时, 通过后的每条审计目标 (同闸门效果: revise_risks, 没有 edits 时为 Store 的当前目标)
+        须有程序 trigger 匹配, 否则 INVALID_VALUE.
+
+        风险清单与审计目标取 Store, 与闸门效果的输入一致; 效果把这份目标写入状态, 装配用的也是它.
+        有缺口时审计师只能驳回, 或改风险等级使其被覆盖; assemble_pack 的阻断保留作兜底.
+        """
+        store = self.deps.output_store
+        risks = await store.latest(eid, RiskItem)
+        objectives = await store.latest(eid, AuditObjective)
+        _, revised = revise_risks(risks, objectives, decision)
+        uncovered = uncovered_objectives(self.deps.library, revised)
+        if uncovered:
+            raise DecisionRejected(
+                "INVALID_VALUE", f"审计目标没有程序覆盖, 不能通过 (请驳回或改风险等级): {', '.join(uncovered)}"
+            )
 
     async def check_review_record(self, eid: str, record: ReviewRecord, snapshot: StateSnapshot) -> ReviewTask:
         """第 7 节校验顺序中 RESUME_REQUIRED 之后的部分, 对复核决定: 任务存在且待决, 图在节点内等待, 版本,

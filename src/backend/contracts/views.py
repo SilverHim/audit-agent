@@ -78,6 +78,7 @@ class PlanningMaterial(Model):
     candidates: MaterialityCandidates  # 重要性候选
     objectives: list[AuditObjective]  # 审计目标
     risks: list[RiskItem]  # 风险清单
+    uncovered_objective_ids: list[str]  # 按当前风险等级没有程序覆盖的审计目标; 非空时不能通过, 须驳回或改风险等级
 
 
 class CompletionMaterial(Model):

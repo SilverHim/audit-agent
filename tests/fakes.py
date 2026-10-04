@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from typing import Any, ClassVar, Literal, TypeVar
+from typing import Any, ClassVar, Literal, TypeVar, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
@@ -95,6 +95,7 @@ from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from backend.services.procedure_library import ProcedureLibrary
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -1156,10 +1157,11 @@ def make_deps(
     rules: FakeRuleEngine | None = None,
     llm: LLMClient | None = None,
     confirmations: FakeConfirmationChannel | None = None,
+    library: ProcedureLibrary | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
-    函证平台与用户.
-    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储与留痕重建.
+    函证平台与用户 (给了 library 时另换程序库).
+    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
     大模型缺省为 mock 模式的固定输出客户端; 函证平台缺省为假平台 (直达邮件回函).
@@ -1174,9 +1176,11 @@ def make_deps(
         financial_store = FakeFinancialStore()
     deps = build_deps(get_settings())
     llm = llm if llm is not None else deps.llm
-    judgments = JudgmentEngine(llm, OutputValidator(financial_store, deps.library, trail), trail, deps.library)
+    library = library if library is not None else deps.library
+    judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
     return replace(
         deps,
+        library=library,
         llm=llm,
         judgments=judgments,
         registry=registry,
@@ -1325,6 +1329,26 @@ def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, Procedu
         return patch
 
     return {"DOC-04": ScriptA3(deps, doc04), "PLN-07": ScriptA4(deps, pln07), "PLN-01": ScriptA4(deps, pln01)}
+
+
+def numbat_pln01_with(
+    objective: AuditObjective, risk: RiskItem
+) -> Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]]:
+    """make_runner 的 agents: PLN-01 同 numbat_p1_agents, 带出预置目标与风险时另加 objective 与 risk."""
+
+    def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+        numbat = cast(ScriptAgent, numbat_p1_agents(deps)["PLN-01"]).script
+
+        def pln01(ctx: RunContext) -> StatePatch:
+            patch = numbat(ctx)
+            if "audit_objectives" in patch:
+                patch["audit_objectives"] = [*patch["audit_objectives"], objective]
+                patch["risk_register"] = [*patch["risk_register"], risk]
+            return patch
+
+        return {"PLN-01": ScriptA4(deps, pln01)}
+
+    return agents
 
 
 def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
@@ -1663,18 +1687,20 @@ def make_runner(
     output_store: FakeOutputStore | None = None,
     agents: Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]] | None = None,
     interrupt_before: Sequence[str] = (),
+    library: ProcedureLibrary | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
     agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)};
     其余程序同 make_graph_nodes.
     interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
+    library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
     if output_store is None:
         output_store = FakeOutputStore()
-    deps = make_deps(registry, FakeTrail(), engagement_store, output_store)
+    deps = make_deps(registry, FakeTrail(), engagement_store, output_store, library=library)
     nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))

@@ -1,11 +1,15 @@
 """审计师决定: 效果纯函数直接调用; submit 经图与假依赖, 验证校验, 写入与越过闸门."""
 
 import inspect
+import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from backend.agents.base import AgentDeps, ProcedureAgent
 from backend.contracts.errors import DecisionRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -30,9 +34,11 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
+from backend.core.config import get_settings
 from backend.orchestration import runner as runner_module
 from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects, materiality_amounts, pln_effects
 from backend.orchestration.runner import GraphRunner
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
@@ -48,6 +54,7 @@ from tests.fakes import (
     assert_pack_synced,
     make_procedure,
     make_runner,
+    numbat_pln01_with,
     wait_idle,
 )
 
@@ -136,9 +143,14 @@ class Started:
         return [e.kind for e in self.runner.deps.trail.entries]
 
 
-async def started(profile: ClientProfile = NUMBAT_PROFILE) -> Started:
+Agents = Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]]  # make_runner 的 agents
+
+
+async def started(
+    profile: ClientProfile = NUMBAT_PROFILE, agents: Agents | None = None, library: ProcedureLibrary | None = None
+) -> Started:
     engagement_store = FakeEngagementStore([profile], [ENGAGEMENT])
-    runner, output_store = make_runner(engagement_store=engagement_store)
+    runner, output_store = make_runner(engagement_store=engagement_store, agents=agents, library=library)
     await runner.start(EID)
     await wait_idle(runner, EID)
     return Started(runner, output_store, engagement_store)
@@ -634,9 +646,9 @@ def edit(target_id: str = "RISK-CASH-EXI", target_version: int = 1) -> GateEdit:
     )
 
 
-async def at_pln_gate() -> Started:
-    """新项目跑到 ACC-01, approve 后 P1 用 Numbat 脚本 Agent 跑完, 停在 PLN-01/03 闸门前."""
-    s = await started()
+async def at_pln_gate(agents: Agents | None = None, library: ProcedureLibrary | None = None) -> Started:
+    """新项目跑到 ACC-01, approve 后 P1 用 Numbat 脚本 Agent 跑完, 停在 PLN-01/03 闸门前. agents, library 见 started."""
+    s = await started(agents=agents, library=library)
     await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
     await wait_idle(s.runner, EID)
     assert await s.next_nodes() == ("gate_p1_risk",)
@@ -1016,6 +1028,142 @@ async def test_pln_insufficient_info_stays_at_gate() -> None:
     assert snapshot.values["materiality_cents"] is None
     assert by_id(snapshot.values["procedure_pack"])["PLN-01"].status is ProcedureStatus.planned
     assert decision_trail(s)[-1].summary == "PLN-01/03 insufficient_info"
+
+
+# ── R60 审计目标覆盖缺口: 有缺口时不能通过, 只能驳回或改风险等级 ──
+
+
+def inventory(level: RiskLevel = RiskLevel.high) -> Agents:
+    """PLN-01 在 Numbat 的 3 条目标外另带存货存在性目标 OBJ-INV-EXI 与其风险项 RISK-INV-EXI (等级 level).
+    knowledge 中没有存货的程序, 任何等级都没有覆盖."""
+    objective = AuditObjective(
+        id="OBJ-INV-EXI", account="Inventory", assertion="Existence", risk_level=level, is_material=True
+    )
+    risk = RiskItem(
+        id="RISK-INV-EXI",
+        objective_id="OBJ-INV-EXI",
+        assertion="Existence",
+        level=level,
+        fraud_related=False,
+        description="Risk that inventory recorded at year end does not exist.",
+    )
+    return numbat_pln01_with(objective, risk)
+
+
+def significant_only_library(tmp_path: Path) -> ProcedureLibrary:
+    """knowledge 目录的副本, CSH-05 另加一条只在 significant 时匹配的存货存在性 trigger:
+    存货目标只因风险等级没被覆盖."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    path = root / "procedures" / "CSH-05.yaml"
+    line = "  - {account: Cash, assertions: [Existence], level: [low, medium, high, significant]}\n"
+    text = path.read_text(encoding="utf-8")
+    assert line in text
+    extra = "  - {account: Inventory, assertions: [Existence], level: [significant]}\n"
+    path.write_text(text.replace(line, line + extra), encoding="utf-8")
+    return ProcedureLibrary(root)
+
+
+def inventory_edit(new_value: RiskLevel) -> GateEdit:
+    return GateEdit(
+        target_id="RISK-INV-EXI", target_version=1, field="level", new_value=new_value, reason="存货盘点差异"
+    )
+
+
+async def test_pln_approve_rejected_when_objective_uncovered() -> None:
+    """验收 2: 存货目标没有程序覆盖, approve 报 INVALID_VALUE (消息含其 ID), 不写 Store, 图不动."""
+    s = await at_pln_gate(inventory())
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "INVALID_VALUE", "OBJ-INV-EXI")
+
+
+async def test_pln_reject_allowed_when_objective_uncovered() -> None:
+    """验收 2: 有缺口时驳回照常写入, 回 p1_analytics 重新分析后再停在闸门."""
+    s = await at_pln_gate(inventory())
+    commits_before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.reject))
+    await wait_idle(s.runner, EID)
+
+    assert [(type(o).__name__, o.id) for o in s.output_store.commits[commits_before]] == [("GateDecision", "D-PLN")]
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("gate_p1_risk",)
+    assert snapshot.values["materiality_candidates"].version == 2
+
+
+async def test_pln_edit_raising_risk_covers_objective(tmp_path: Path) -> None:
+    """验收 3: 存货目标在 high 时没有程序覆盖, approve 被拒; 同时把其风险改到 significant 则按改后的等级算覆盖, 通过:
+    风险项与目标出 v2, 越过闸门进装配."""
+    s = await at_pln_gate(inventory(), significant_only_library(tmp_path))
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "INVALID_VALUE", "OBJ-INV-EXI")
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, edits=[inventory_edit(RiskLevel.significant)]))
+
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == ("assemble_pack",)
+    objectives = by_id(snapshot.values["audit_objectives"])
+    assert (objectives["OBJ-INV-EXI"].version, objectives["OBJ-INV-EXI"].risk_level) == (2, RiskLevel.significant)
+
+
+async def test_pln_edit_lowering_risk_uncovers_objective(tmp_path: Path) -> None:
+    """存货目标在 significant 时有程序覆盖, 不改等级可以通过; 把其风险降到 high 后没有覆盖, 报 INVALID_VALUE."""
+    s = await at_pln_gate(inventory(RiskLevel.significant), significant_only_library(tmp_path))
+    lowered = pln_decision(GateVerdict.approve, edits=[inventory_edit(RiskLevel.high)])
+    await assert_rejected(s, lowered, "INVALID_VALUE", "OBJ-INV-EXI")
+    stop_after_submit(s)
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+
+    assert await s.next_nodes() == ("assemble_pack",)
+
+
+async def test_no_edits_checks_objective_level_as_written(tmp_path: Path) -> None:
+    """(Codex R60-01) 没有 edits 时覆盖检查不按风险重算目标等级: Store 中另有一条 significant 的同目标风险,
+    目标仍为 high (效果不重算, 装配用的也是 high), 照样报缺口."""
+    s = await at_pln_gate(inventory(), significant_only_library(tmp_path))
+    risk = await s.output_store.get(EID, RiskItem, "RISK-INV-EXI")
+    assert risk is not None
+    await s.output_store.put(
+        EID, [risk.model_copy(update={"id": "RISK-INV-EXI-2", "level": RiskLevel.significant})], actor="U-1"
+    )
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "INVALID_VALUE", "OBJ-INV-EXI")
+
+
+async def test_approve_syncs_store_objectives_so_assembly_matches_check(tmp_path: Path) -> None:
+    """(Codex R60-02) Store 中存货风险与目标已是 significant v2 (检查点仍为 high v1): 覆盖检查按 Store 通过,
+    效果把 Store 的完整目标写入状态, 装配按 significant 进行, 不再卡住."""
+    s = await at_pln_gate(inventory(), significant_only_library(tmp_path))
+    risk = await s.output_store.get(EID, RiskItem, "RISK-INV-EXI")
+    objective = await s.output_store.get(EID, AuditObjective, "OBJ-INV-EXI")
+    assert risk is not None and objective is not None
+    raised = [
+        risk.model_copy(update={"version": 2, "level": RiskLevel.significant}),
+        objective.model_copy(update={"version": 2, "risk_level": RiskLevel.significant}),
+    ]
+    await s.output_store.put(EID, raised, actor="U-1")
+
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+    await wait_idle(s.runner, EID)
+
+    assert s.runner.run_error(EID) is None
+    values = (await s.runner.app.aget_state(GraphRunner.config(EID))).values
+    assert by_id(values["audit_objectives"])["OBJ-INV-EXI"] == raised[1]
+    assert values["phase"] is Phase.P2_Executing
+
+
+def test_pln_effects_without_edits_carry_current_lists_unchanged() -> None:
+    """没有 edits 时效果仍带完整风险清单与审计目标 (原对象, 不重算), 用来把 Store 的版本同步进状态."""
+    candidates = MaterialityCandidates(id="MATERIALITY", candidates=NUMBAT_CANDIDATES)
+    inconsistent = [NUMBAT_OBJECTIVES[0].model_copy(update={"risk_level": RiskLevel.low}), *NUMBAT_OBJECTIVES[1:]]
+    effects = pln_effects([], NUMBAT_RISKS, inconsistent, candidates, pln_decision(GateVerdict.approve))
+    assert effects["risk_register"] == NUMBAT_RISKS and effects["audit_objectives"] == inconsistent
+
+
+async def test_pln_coverage_checked_after_other_invalid_values() -> None:
+    """覆盖检查在其余取值校验之后: 重要性比例越界与缺口同时存在时先报比例."""
+    s = await at_pln_gate(inventory())
+    bad = pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.5}))
+    await assert_rejected(s, bad, "INVALID_VALUE", "materiality.pct")
 
 
 # ── Codex R10-01, R10-02: Store 与检查点不一致时, 效果按 Store 算, 材料同步进状态, 不顺带写无关版本 ──

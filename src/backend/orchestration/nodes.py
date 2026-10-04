@@ -19,6 +19,7 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     AuditException,
+    AuditObjective,
     Decision,
     Engagement,
     Judgment,
@@ -243,6 +244,14 @@ async def add_referenced_runs(store: AuditOutputStore, eid: str, patch: StatePat
         if run is not None:
             patch["procedure_runs"].append(run)
             have.add(run_id)
+
+
+def uncovered_objectives(library: ProcedureLibrary, objectives: list[AuditObjective]) -> list[str]:
+    """按各目标当前的风险等级, 没有任何程序 trigger 匹配到的审计目标 ID, 按 objectives 顺序.
+
+    装配时有这样的目标即阻断 (Demo需求文档第 4.1 节); PLN-01/03 闸门呈报缺口, 有缺口时不能通过.
+    """
+    return [o.id for o in objectives if not library.match(o)]
 
 
 def update_procedure(pack: list[Procedure], procedure_id: str, **changes: Any) -> list[Procedure]:
@@ -566,7 +575,7 @@ class GraphNodes:
         """
         library = self.deps.library
         objectives = state["audit_objectives"]
-        uncovered = [o.id for o in objectives if not library.match(o)]
+        uncovered = uncovered_objectives(library, objectives)
         if uncovered:
             raise ValueError(f"审计目标没有程序覆盖, 不能装配: {', '.join(uncovered)}")
         matched = {t.id for o in objectives for t in library.match(o)}

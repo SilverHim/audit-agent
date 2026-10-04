@@ -30,15 +30,18 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
+from tests.test_decisions import Agents, inventory
 from tests.test_runner import BrokenOutputStore, BrokenRegistry
 
 EID = ENGAGEMENT.id
 NOW = datetime(2026, 10, 3, tzinfo=UTC)
 
 
-async def started(profile: ClientProfile = NUMBAT_PROFILE) -> tuple[GraphRunner, GraphStateQuery, FakeOutputStore]:
-    """新项目启动并在后台跑到 ACC-01 闸门前. 返回 runner, query 与审计产出存储."""
-    runner, store = make_runner(engagement_store=FakeEngagementStore([profile], [ENGAGEMENT]))
+async def started(
+    profile: ClientProfile = NUMBAT_PROFILE, agents: Agents | None = None
+) -> tuple[GraphRunner, GraphStateQuery, FakeOutputStore]:
+    """新项目启动并在后台跑到 ACC-01 闸门前. 返回 runner, query 与审计产出存储. agents 见 make_runner."""
+    runner, store = make_runner(engagement_store=FakeEngagementStore([profile], [ENGAGEMENT]), agents=agents)
     await runner.start(EID)
     await wait_idle(runner, EID)
     return runner, GraphStateQuery(runner.app, runner.deps, runner), store
@@ -224,9 +227,9 @@ async def test_overview_raises_when_engagement_missing() -> None:
 # ── R08 PLN-01/03 闸门材料 ──
 
 
-async def at_pln_gate() -> tuple[GraphRunner, GraphStateQuery, FakeOutputStore]:
+async def at_pln_gate(agents: Agents | None = None) -> tuple[GraphRunner, GraphStateQuery, FakeOutputStore]:
     """新项目跑到 ACC-01, 提交 approve, P1 用 Numbat 脚本 Agent 跑完, 停在 PLN-01/03 闸门前."""
-    runner, query, store = await started()
+    runner, query, store = await started(agents=agents)
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
     approve = GateDecision(
         id="D-ACC",
@@ -256,6 +259,18 @@ async def test_gate_shows_planning_material() -> None:
     assert [c.basis for c in material.candidates.candidates] == ["revenue", "total_assets", "profit_before_tax"]
     assert material.objectives == NUMBAT_OBJECTIVES
     assert material.risks == NUMBAT_RISKS
+    assert material.uncovered_objective_ids == []  # Numbat 的 3 条目标都有程序覆盖
+
+
+async def test_planning_material_lists_uncovered_objectives() -> None:
+    """R60: PLN-01 另带存货存在性目标, knowledge 中没有存货的程序: 材料列出它, 其余目标不在缺口中."""
+    _, query, _ = await at_pln_gate(inventory())
+
+    view = await query.gate(EID)
+
+    assert view is not None and isinstance(view.material, PlanningMaterial)
+    assert [o.id for o in view.material.objectives] == [*(o.id for o in NUMBAT_OBJECTIVES), "OBJ-INV-EXI"]
+    assert view.material.uncovered_objective_ids == ["OBJ-INV-EXI"]
 
 
 async def test_gate_after_pln_reject_shows_rerun_material_only() -> None:
