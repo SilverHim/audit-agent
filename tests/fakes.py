@@ -1719,6 +1719,9 @@ def make_runner(
     agents: Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]] | None = None,
     interrupt_before: Sequence[str] = (),
     library: ProcedureLibrary | None = None,
+    financial_store: FakeFinancialStore | None = None,
+    trail: FakeTrail | None = None,
+    confirmations: FakeConfirmationChannel | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -1726,12 +1729,21 @@ def make_runner(
     其余程序同 make_graph_nodes.
     interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
+    financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
     if output_store is None:
         output_store = FakeOutputStore()
-    deps = make_deps(registry, FakeTrail(), engagement_store, output_store, library=library)
+    deps = make_deps(
+        registry,
+        trail if trail is not None else FakeTrail(),
+        engagement_store,
+        output_store,
+        financial_store,
+        confirmations=confirmations,
+        library=library,
+    )
     nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))
