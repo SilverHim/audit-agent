@@ -48,6 +48,7 @@ from backend.orchestration.merge import (
     field_type,
 )
 from backend.orchestration.scheduler import build_schedule
+from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
 
@@ -382,6 +383,7 @@ class GraphNodes:
         awaiting_human, 否则为 completed (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的
         这一次执行有效).
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
+        提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
         """
         result = await self.perform(state, engagement, procedure_id)
         patch, writer = result["patch"], result["writer"]
@@ -407,6 +409,10 @@ class GraphNodes:
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
             if phase is not None:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
+        entries = await procedure_transitions(self.deps.output_store, engagement.id, [saved])
+        if phase is not None:
+            entries += phase_transition(engagement.id, state["phase"], phase, procedure_id)
+        await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
 
     async def read_rerun(
@@ -524,6 +530,7 @@ class GraphNodes:
         新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节).
         objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 为空.
         没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
+        提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写).
         """
         library = self.deps.library
         objectives = state["audit_objectives"]
@@ -549,6 +556,7 @@ class GraphNodes:
         async with self.deps.output_store.transaction(eid):
             stored = await self.deps.output_store.put(eid, added, actor=AgentId.A1)
             await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+        await record_transitions(self.deps.trail, phase_transition(eid, state["phase"], Phase.P2_Executing))
         return {"procedure_pack": [*state["procedure_pack"], *stored], "phase": Phase.P2_Executing}
 
     # ── P2 ──
@@ -583,6 +591,7 @@ class GraphNodes:
         本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human, 否则为 completed; rerun_subject_ids 清空.
         重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
+        提交后写程序状态的 transition 留痕.
         没有暂存结果 (如 await_events 之后回到这里) 时只清空, 不写.
         """
         staged = state["staged_results"]
@@ -611,6 +620,7 @@ class GraphNodes:
                 status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
                 pack = update_procedure(pack, procedure_id, status=status, rerun_subject_ids=[])
             stored = await store.put(eid, [p for p in pack if p.id in executed], actor=AgentId.A1)
+        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, stored))
         saved_versions = {p.id: cast(Procedure, p) for p in stored}
         pack = [saved_versions.get(p.id, p) for p in pack]
         return {**result, "procedure_pack": pack, "staged_results": None}
@@ -660,7 +670,15 @@ class GraphNodes:
         return await self.execute(state, "RPT-03")
 
     async def archive(self, state: EngagementState) -> StatePatch:
-        return {}  # 项目已由 DecisionSubmit 锁定, 此处只写留痕
+        """终点: 项目已由 RPT-01 签字锁定, 不再写 Store. 补写进入 Archived 的阶段留痕 (只能由报告阶段进入;
+        DecisionSubmit 提交后已写过, 同键跳过)."""
+        eid = state["engagement_id"]
+        await record_transitions(self.deps.trail, phase_transition(eid, Phase.P4_Reporting, Phase.Archived, "RPT-01"))
+        return {}
 
     async def declined(self, state: EngagementState) -> StatePatch:
+        """终点: 项目已由 ACC-01 拒绝承接锁定, 不再写 Store. 补写进入 Declined 的阶段留痕 (只能由承接阶段进入;
+        DecisionSubmit 提交后已写过, 同键跳过)."""
+        eid = state["engagement_id"]
+        await record_transitions(self.deps.trail, phase_transition(eid, Phase.P0_Acceptance, Phase.Declined, "ACC-01"))
         return {}

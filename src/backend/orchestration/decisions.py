@@ -59,6 +59,7 @@ from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import save_outputs, update_procedure
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner
+from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.review_queue import attribute_exceptions
 
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations")  # 只在某道闸门的某种决定下可填的字段
@@ -732,7 +733,8 @@ class GraphDecisionSubmit:
                 assert isinstance(target, AuditReportVersion)  # gate_target 对 RPT-01 取的就是当前报告
                 sources["report_versions"] = [target]
                 effects = rpt01_effects(sources["procedure_pack"], decision, target, self.now())
-            written = await self._write_gate(eid, decision, effects, new_versions(effects, sources))
+            created = new_versions(effects, sources)
+            written = await self._write_gate(eid, decision, effects, created, snapshot.values["phase"])
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
             # 效果已出材料的新版本时 (RPT-01 签字) 只写新版本, 路由另行放行 (gate_route)
             field = GATE_MATERIAL[decision.gate]
@@ -785,11 +787,13 @@ class GraphDecisionSubmit:
                 payload={"decision_id": record.id, "task_id": task.id, "reason": record.reason},
             )
         )
+        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
 
     async def _write_gate(
-        self, eid: str, decision: GateDecision, effects: StatePatch, created: list[Versioned]
+        self, eid: str, decision: GateDecision, effects: StatePatch, created: list[Versioned], phase: Phase
     ) -> StatePatch:
-        """在一个事务内写入闸门决定及其效果, 提交后写 decision 留痕. 返回要写入状态的片段 (决定换成 Store 返回的).
+        """在一个事务内写入闸门决定及其效果, 提交后写 decision 留痕与 transition 留痕 (程序状态, 阶段由 phase 变为
+        效果中的阶段). 返回要写入状态的片段 (决定换成 Store 返回的).
 
         决定的写入者为决定人; created 为效果新出的版本 (见 new_versions), 写入者为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
@@ -821,6 +825,10 @@ class GraphDecisionSubmit:
                 payload={"decision_id": decision.id, "reason": decision.reason},
             )
         )
+        entries = await procedure_transitions(output_store, eid, saved)
+        if "phase" in effects:
+            entries += phase_transition(eid, phase, effects["phase"], procedure_id)
+        await record_transitions(self.deps.trail, entries)
         return {**effects, **stored}
 
     async def update_client_profile(self, eid: str, profile: ClientProfile, *, updated_by: str) -> None:

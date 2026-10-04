@@ -24,6 +24,7 @@ from backend.contracts.models import (
     RiskItem,
     TaskKind,
     TaskStatus,
+    TrailKind,
 )
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.merge import check_refs
@@ -80,7 +81,7 @@ def counted_nodes(store: FakeOutputStore) -> tuple[GraphNodes, CountingRegistry,
 
 
 async def test_replay_acc04_takes_store_objects_without_calling_agent() -> None:
-    """第一次真跑 (验收 3: Run 不在 Store, 正常执行), 第二次以同一状态重跑: 不查登记, 不写留痕,
+    """第一次真跑 (验收 3: Run 不在 Store, 正常执行), 第二次以同一状态重跑: 不查登记, 不写外部调用留痕,
     片段与第一次逐字段相等 (含 ended_at), 评分卡, 例外, 执行记录就是 Store 中的对象, Store 无新增."""
     store = FakeOutputStore(list(p0_pack()))
     first_nodes, first_registry, _ = counted_nodes(store)
@@ -91,7 +92,9 @@ async def test_replay_acc04_takes_store_objects_without_calling_agent() -> None:
     nodes, registry, trail = counted_nodes(store)
     second = await nodes.p0_intel(p0_state())
 
-    assert (registry.abn_calls, registry.asic_queries, trail.entries) == (0, [], [])
+    assert (registry.abn_calls, registry.asic_queries) == (0, [])
+    # 不重做外部调用, 也不写其留痕; 只有程序状态的 transition (这里换了新的留痕存储, 同一存储中同键跳过, 见 test_trail)
+    assert [e.kind for e in trail.entries] == [TrailKind.transition]
     assert second == first
     assert second["acceptance_scorecard"] is next(r for r in rows if r.id == "SCORECARD")
     assert [x.id for x in second["exceptions"]] == ["X-ACC-04-1-name_match-1"]
