@@ -980,6 +980,11 @@ def numbat_rev02_agents(deps: AgentDeps, attributes: bool = True) -> dict[str, P
     return {"REV-02": ScriptA6(deps, rev02)}
 
 
+def numbat_all_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """P2 七条程序的 Numbat 脚本 Agent, 产出按合成数据集设计第 7 节第 7-13 行 (第 0 层四条, 现金线两条, REV-02)."""
+    return {**numbat_p2_agents(deps), **numbat_cash_agents(deps), **numbat_rev02_agents(deps)}
+
+
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
     """主图节点: 已实装的 Agent 用真实的, P1 三条程序用 Numbat 脚本 Agent (见 numbat_p1_agents)."""
     nodes = GraphNodes(deps, parallel_cap)
