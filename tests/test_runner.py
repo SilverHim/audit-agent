@@ -246,6 +246,9 @@ async def test_lifespan_exit_stops_background_tasks(monkeypatch: pytest.MonkeyPa
         started.set()
         await asyncio.Event().wait()
 
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("backend.persistence.stores.PostgresEngagementStore.list", AsyncMock(return_value=[]))
     monkeypatch.setattr(GraphRunner, "_advance", hanging_advance)
     app = FastAPI()
     async with lifespan(app):
@@ -539,13 +542,16 @@ async def test_advance_writes_checkpoints_synchronously(monkeypatch: pytest.Monk
 
 
 async def test_lifespan_calls_recover(monkeypatch: pytest.MonkeyPatch) -> None:
-    """应用启动时调 recover; 项目列表尚未实现 (NotImplementedError) 时不阻断启动."""
+    """应用启动时调 recover; 项目清单为空时不启动后台任务."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("backend.persistence.stores.PostgresEngagementStore.list", AsyncMock(return_value=[]))
     called: list[bool] = []
     original = GraphRunner.recover
 
     async def recover(self: GraphRunner) -> None:
         called.append(True)
-        await original(self)  # Postgres 项目存储的 list 尚未实现
+        await original(self)
 
     monkeypatch.setattr(GraphRunner, "recover", recover)
     async with lifespan(FastAPI()):

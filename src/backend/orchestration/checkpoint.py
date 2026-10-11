@@ -6,11 +6,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
@@ -35,6 +35,25 @@ def checkpoint_serde() -> JsonPlusSerializer:
     return JsonPlusSerializer(allowed_msgpack_modules=allowed)
 
 
+class AuditPostgresSaver(AsyncPostgresSaver):
+    """Restore domain enums stored inline as JSON strings by the Postgres saver.
+
+    Primitive channels bypass msgpack; the serializer allowlist only covers blobs.
+    This shared read hook applies to both latest-checkpoint and history reads.
+    """
+
+    async def _load_checkpoint_tuple(self, value: DictRow) -> CheckpointTuple:
+        checkpoint = await super()._load_checkpoint_tuple(value)
+        channels = checkpoint.checkpoint["channel_values"]
+        for key, kind in (
+            ("phase", backend.contracts.models.Phase),
+            ("opinion_route", backend.contracts.models.OpinionType),
+        ):
+            if channels.get(key) is not None:
+                channels[key] = kind(channels[key])
+        return checkpoint
+
+
 @asynccontextmanager
 async def open_checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointSaver[str]]:
     if settings.CHECKPOINT_BACKEND == "memory":
@@ -45,7 +64,7 @@ async def open_checkpointer(settings: Settings) -> AsyncIterator[BaseCheckpointS
         kwargs={"autocommit": True, "row_factory": dict_row, "prepare_threshold": 0},
         open=False,
     ) as pool:
-        yield AsyncPostgresSaver(pool, serde=checkpoint_serde())  # type: ignore[arg-type]
+        yield AuditPostgresSaver(pool, serde=checkpoint_serde())  # type: ignore[arg-type]
 
 
 async def setup_checkpoint_tables(owner_url: str) -> None:

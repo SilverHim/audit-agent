@@ -29,25 +29,22 @@ rules:
     severity: low
     emit: rows
     sql: |
-      -- 待 B 实现
-      -- 来源: bank_transactions t
-      -- 条件: t.engagement_id = :eid
-      --       AND t.txn_date > :period_end AND t.txn_date <= :period_end + :subsequent_days
-      -- 输出:'bank_transaction' AS source_type, t.id, t.bank_account_id, t.txn_date, t.amount_cents,
-      --       t.description, t.reference
-      -- ORDER BY t.bank_account_id, t.txn_date, t.id
+      SELECT 'bank_transaction' AS source_type, t.id, t.bank_account_id, t.txn_date,
+             t.amount_cents, t.description, t.reference
+      FROM bank_transactions t WHERE t.engagement_id=:eid AND t.txn_date>CAST(:period_end AS date)
+        AND t.txn_date<=CAST(:period_end AS date)+CAST(:subsequent_days AS int)
+      ORDER BY t.bank_account_id, t.txn_date, t.id
   - id: D03
     name: 候选调节项：期末前银行科目分录
     severity: low
     emit: rows
     sql: |
-      -- 待 B 实现
-      -- 来源: journal_entries j JOIN bank_accounts b ON b.gl_account_code = j.account_code
-      -- 条件: j.engagement_id = :eid
-      --       AND j.posting_date BETWEEN :period_end - :lookback_days AND :period_end
-      -- 输出:'journal_entry' AS source_type, j.id, b.id AS bank_account_id, j.entry_no, j.posting_date,
-      --       j.debit_cents, j.credit_cents, j.description, j.source_doc
-      -- ORDER BY b.id, j.posting_date, j.id
+      SELECT 'journal_entry' AS source_type, j.id, b.id AS bank_account_id, j.entry_no,
+             j.posting_date, j.debit_cents, j.credit_cents, j.description, j.source_doc
+      FROM journal_entries j JOIN bank_accounts b ON b.engagement_id=j.engagement_id AND b.gl_account_code=j.account_code
+      WHERE j.engagement_id=:eid
+        AND j.posting_date BETWEEN CAST(:period_end AS date)-CAST(:lookback_days AS int) AND CAST(:period_end AS date)
+      ORDER BY b.id, j.posting_date, j.id
 llm:
   prompt: CSH-02.md.j2
   output_model: JudgmentDraft

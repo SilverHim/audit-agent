@@ -1,0 +1,35 @@
+[
+  {
+    "id": "RISK-REV-OCC",
+    "version": 1,
+    "objective_id": "OBJ-REV-OCC",
+    "assertion": "Occurrence",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Presumed fraud risk that revenue is recorded for sales that did not occur, to meet growth expectations (revenue up 15.4% on the prior year).",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-REV-CUT",
+    "version": 1,
+    "objective_id": "OBJ-REV-CUT",
+    "assertion": "Cutoff",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Risk that sales invoiced before 30 June 2026 are recognised although control of the goods passes to customers after year end; June revenue is 12.5% of the annual total.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-CASH-EXI",
+    "version": 1,
+    "objective_id": "OBJ-CASH-EXI",
+    "assertion": "Existence",
+    "level": "high",
+    "fraud_related": false,
+    "description": "Risk that bank balances recorded in the general ledger do not exist or are overstated at 30 June 2026.",
+    "revision_reason": null,
+    "approved_by": null
+  }
+]

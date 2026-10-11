@@ -15,30 +15,25 @@ rules:
     name: 科目本期与上期变动超阈值
     severity: medium
     sql: |
-      -- 待 B 实现
-      -- 来源: c = trial_balance WHERE engagement_id = :eid AND period = 'current',
-      --       p = trial_balance WHERE engagement_id = :eid AND period = 'prior', 各为子查询,
-      --       c FULL JOIN p ON c.account_code = p.account_code;
-      --       JOIN accounts a ON a.engagement_id = :eid AND a.code = COALESCE(c.account_code, p.account_code)
-      -- change_cents = COALESCE(c.balance_cents, 0) - COALESCE(p.balance_cents, 0) (借方为正)
-      -- 条件: ABS(change_cents) >= :min_change_cents
-      --       AND (COALESCE(p.balance_cents, 0) = 0 OR ABS(change_cents) >= :change_pct * ABS(p.balance_cents))
-      -- 输出:'trial_balance' AS source_type, COALESCE(c.account_code, p.account_code) AS source_id,
-      --       change_cents AS amount_cents, a.name AS account_name, c.balance_cents AS current_cents,
-      --       p.balance_cents AS prior_cents, change_cents::numeric / NULLIF(ABS(p.balance_cents), 0) AS change_pct
-      -- ORDER BY source_id
+      WITH balances AS (
+       SELECT COALESCE(c.account_code,p.account_code) AS code, c.balance_cents AS current_cents,
+              p.balance_cents AS prior_cents, COALESCE(c.balance_cents,0)-COALESCE(p.balance_cents,0) AS change_cents
+       FROM (SELECT * FROM trial_balance WHERE engagement_id=:eid AND period='current') c
+       FULL JOIN (SELECT * FROM trial_balance WHERE engagement_id=:eid AND period='prior') p ON c.account_code=p.account_code)
+      SELECT 'trial_balance' AS source_type, b.code AS source_id, b.change_cents AS amount_cents,
+             a.name AS account_name, b.current_cents, b.prior_cents,
+             CAST(b.change_cents AS numeric)/NULLIF(ABS(b.prior_cents),0) AS change_pct
+      FROM balances b JOIN accounts a ON a.engagement_id=:eid AND a.code=b.code
+      WHERE ABS(b.change_cents)>=:min_change_cents
+       AND (COALESCE(b.prior_cents,0)=0 OR ABS(b.change_cents)>=:change_pct*ABS(b.prior_cents))
+      ORDER BY source_id
   - id: A02
     name: 比率计算取数
     severity: low
     emit: rows
     sql: |
-      -- 待 B 实现
-      -- 来源: trial_balance t JOIN accounts a ON a.code = t.account_code, 按 t.period 分组 (current, prior)
-      -- revenue_cents = -SUM(t.balance_cents) WHERE a.code = ANY(:revenue_account_codes)
-      -- cost_of_sales_cents = SUM(t.balance_cents) WHERE a.code = ANY(:cost_of_sales_account_codes)
-      -- 条件: t.engagement_id = :eid
-      -- 输出: period, revenue_cents, cost_of_sales_cents
-      -- ORDER BY period
-      -- A4 据此写 AnalyticsResult.ratios:
-      --   gross_margin_current, gross_margin_prior = (revenue - cost_of_sales) / revenue
-      --   revenue_growth = current revenue / prior revenue - 1
+      SELECT t.period,
+       COALESCE(-SUM(t.balance_cents) FILTER (WHERE a.code=ANY(:revenue_account_codes)),0) AS revenue_cents,
+       COALESCE(SUM(t.balance_cents) FILTER (WHERE a.code=ANY(:cost_of_sales_account_codes)),0) AS cost_of_sales_cents
+      FROM trial_balance t JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
+      WHERE t.engagement_id=:eid GROUP BY t.period ORDER BY t.period

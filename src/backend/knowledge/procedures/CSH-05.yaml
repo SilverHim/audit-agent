@@ -15,14 +15,14 @@ rules:
     name: 对账单期末余额与总账不符
     severity: medium
     sql: |
-      -- 待 B 实现
-      -- 来源: bank_accounts b
-      --       对账单余额: bank_transactions 中 bank_account_id = b.id AND txn_date <= :period_end 的最后一笔
-      --                   (ORDER BY txn_date DESC, id DESC) 的 balance_after_cents
-      --       账面余额: trial_balance (period = 'current', account_code = b.gl_account_code) 的 balance_cents
-      -- 条件: b.engagement_id = :eid
-      --       AND (对账单余额 IS NULL OR 对账单余额 <> 账面余额)
-      -- 输出:'bank_account' AS source_type, b.id AS source_id, 对账单余额 - 账面余额 AS amount_cents,
-      --       对账单余额 AS statement_balance_cents, 账面余额 AS book_balance_cents,
-      --       最后一笔的 id AS last_bank_transaction_id
-      -- ORDER BY b.id
+      SELECT 'bank_account' AS source_type, b.id AS source_id,
+             s.balance_after_cents-t.balance_cents AS amount_cents,
+             s.balance_after_cents AS statement_balance_cents, t.balance_cents AS book_balance_cents,
+             s.id AS last_bank_transaction_id
+      FROM bank_accounts b
+      LEFT JOIN LATERAL (SELECT id, balance_after_cents FROM bank_transactions
+        WHERE engagement_id=b.engagement_id AND bank_account_id=b.id AND txn_date<=CAST(:period_end AS date)
+        ORDER BY txn_date DESC, id DESC LIMIT 1) s ON true
+      LEFT JOIN trial_balance t ON t.engagement_id=b.engagement_id AND t.account_code=b.gl_account_code AND t.period='current'
+      WHERE b.engagement_id=:eid AND (s.balance_after_cents IS NULL OR t.balance_cents IS NULL OR s.balance_after_cents<>t.balance_cents)
+      ORDER BY b.id

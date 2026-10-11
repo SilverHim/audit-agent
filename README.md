@@ -91,8 +91,10 @@ docker compose up -d db
 
 ```bash
 uv sync
+uv run python data/check_demo.py                       # 检查已随仓库提供的合成数据
 uv run alembic upgrade head
 uv run python -m backend.orchestration.checkpoint setup   # 建检查点表，首次执行一次
+uv run python -m backend.persistence.seed                # 创建 .env 配置的演示审计师
 uv run fastapi dev src/backend/main.py
 ```
 
@@ -115,6 +117,8 @@ uv run ruff check . && uv run mypy src/backend   # 代码检查
 uv run langgraph dev                               # 在 LangGraph Studio 中调试编排图（仅限合成数据）
 cd src/frontend && bun run generate-client        # 后端接口变动后重新生成前端客户端
 ```
+
+B 角色实现、数据重建与真实 PostgreSQL 验证步骤见 [B 角色交付说明](docs/Member-B交付说明.md)。
 
 提交流程与代码检查见 [协作规范](docs/协作规范.md)。
 

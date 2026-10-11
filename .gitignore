@@ -72,7 +72,11 @@ replay_pid*
 application-local.yml
 application-secret.yml
 uploads/
-data/
+# Only the documented synthetic demo is versioned; runtime evidence stays local.
+/data/*
+!/data/*.py
+!/data/demo_spec.json
+!/data/demo/
 
 # Python
 __pycache__/

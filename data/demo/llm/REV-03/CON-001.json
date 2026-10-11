@@ -1,0 +1,90 @@
+{
+  "conclusion": "Control of the goods passes to Bilby Robotics Pty Ltd when its authorised representative signs the delivery note at the delivery address (CON-001-T1). Payment falls due 30 days after the signed delivery note (CON-001-T2); the contract has no return right or rebate terms.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 (CON-001-T1): title to and risk in the goods pass to the customer when its authorised representative signs the delivery note at the delivery address; until then the seller has no right to payment.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3e7fb18af92a",
+          "locator": "CON-001-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the promised goods (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "For an obligation satisfied at a point in time, indicators of control include a present right to payment, legal title and the significant risks and rewards of ownership (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Legal title, risk and the right to payment all pass when the delivery note is signed, so control transfers and revenue is recognised at that point.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3e7fb18af92a",
+      "locator": "CON-001-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A side arrangement under which the customer takes control before signing, such as a bill-and-hold agreement, would move the transfer point.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

@@ -1,5 +1,6 @@
 """ABN Lookup 与 ASIC 查询的 mock (B 负责): 读数据集目录下的 registry/."""
 
+import json
 from pathlib import Path
 
 from backend.contracts.models import AbnRecord, AsicCompanyRecord
@@ -12,7 +13,11 @@ class MockRegistrySource:
         self.dataset_dir = dataset_dir  # 数据集目录
 
     async def abn(self, abn: str) -> AbnRecord | None:
-        raise NotImplementedError
+        data = json.loads((self.dataset_dir / "registry" / "abn.json").read_text())
+        row = data.get("".join(abn.split()))
+        return AbnRecord.model_validate(row) if row is not None else None
 
     async def asic_company(self, acn: str) -> AsicCompanyRecord | None:
-        raise NotImplementedError
+        data = json.loads((self.dataset_dir / "registry" / "asic.json").read_text())
+        row = data.get("".join(acn.split()))
+        return AsicCompanyRecord.model_validate(row) if row is not None else None

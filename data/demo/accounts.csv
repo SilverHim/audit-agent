@@ -1,0 +1,24 @@
+code,name,type
+1010,Cash at bank - Operating,asset
+1020,Cash at bank - Savings,asset
+1100,Trade receivables,asset
+1150,Allowance for expected credit losses,asset
+1200,Inventory,asset
+1300,Prepayments,asset
+1500,Plant and equipment - cost,asset
+1510,Plant and equipment - accumulated depreciation,asset
+2100,Trade payables,liability
+2200,Accrued expenses,liability
+2300,Employee provisions,liability
+2400,Income tax payable,liability
+3100,Share capital,equity
+3200,Retained earnings,equity
+4100,Sales revenue,revenue
+4200,Interest income,revenue
+5100,Cost of goods sold,expense
+6100,Salaries and wages,expense
+6200,Rent,expense
+6300,Freight outwards,expense
+6400,Depreciation,expense
+6500,Other operating expenses,expense
+8100,Income tax expense,expense

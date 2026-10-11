@@ -1,0 +1,53 @@
+{
+  "counterparty": "Bilby Robotics Pty Ltd",
+  "counterparty_abn": "11901043383",
+  "amount_cents": 14200000,
+  "sign_date": "2026-05-20",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3e7fb18af92a",
+      "locator": "counterparty",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3e7fb18af92a",
+      "locator": "counterparty_abn",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3e7fb18af92a",
+      "locator": "amount_cents",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3e7fb18af92a",
+      "locator": "sign_date",
+      "page": 1
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "text": "5.1 Title to and risk in the Goods pass to the Customer when the Customer's authorised representative signs the delivery note at the Delivery Address. Until then the Goods remain the property and at the risk of the Seller, and the Seller has no right to payment for them.",
+      "page": 2
+    },
+    {
+      "term_type": "payment",
+      "text": "6.1 The Seller may invoice the Goods on or after the date of dispatch.\n6.2 The Customer must pay each tax invoice within 30 days after the date of the signed delivery note, by electronic funds transfer to the Seller's nominated bank account.",
+      "page": 2
+    },
+    {
+      "term_type": "termination",
+      "text": "8.1 Either party may terminate this Contract by written notice if the other party commits a material breach and does not remedy it within 14 days after receiving notice of the breach.",
+      "page": 3
+    }
+  ]
+}

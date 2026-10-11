@@ -1,0 +1,502 @@
+{
+  "profile": {
+    "id": "CLIENT-001",
+    "version": 1,
+    "legal_name": "Numbat Electronic Components Pty Ltd",
+    "abn": "68900042015",
+    "entity_type": "small_proprietary",
+    "industry_anzsic": "3494",
+    "listed": false,
+    "directors": [
+      "Jordan Avery",
+      "Priya Raman"
+    ],
+    "notes": "Fictitious company for demonstration. Wholesale distributor of electronic components to manufacturers and retailers in NSW and VIC. Financial year ends 30 June. Audit requested by shareholders."
+  },
+  "abn": {
+    "68900042015": {
+      "abn": "68900042015",
+      "acn": "900042015",
+      "entity_name": "Numbat Electronic Components Pty Ltd",
+      "status": "Active",
+      "entity_type": "Australian Private Company"
+    }
+  },
+  "asic": {
+    "900042015": {
+      "acn": "900042015",
+      "name": "Numbat Electronic Components Pty Ltd",
+      "status": "Registered",
+      "registered_date": "2011-03-14"
+    }
+  },
+  "objectives": [
+    {
+      "id": "OBJ-REV-OCC",
+      "version": 1,
+      "account": "Revenue",
+      "assertion": "Occurrence",
+      "risk_level": "significant",
+      "is_material": true
+    },
+    {
+      "id": "OBJ-REV-CUT",
+      "version": 1,
+      "account": "Revenue",
+      "assertion": "Cutoff",
+      "risk_level": "significant",
+      "is_material": true
+    },
+    {
+      "id": "OBJ-CASH-EXI",
+      "version": 1,
+      "account": "Cash",
+      "assertion": "Existence",
+      "risk_level": "high",
+      "is_material": true
+    }
+  ],
+  "risks": [
+    {
+      "id": "RISK-REV-OCC",
+      "version": 1,
+      "objective_id": "OBJ-REV-OCC",
+      "assertion": "Occurrence",
+      "level": "significant",
+      "fraud_related": true,
+      "description": "Presumed fraud risk that revenue is recorded for sales that did not occur, to meet growth expectations (revenue up 15.4% on the prior year).",
+      "revision_reason": null,
+      "approved_by": null
+    },
+    {
+      "id": "RISK-REV-CUT",
+      "version": 1,
+      "objective_id": "OBJ-REV-CUT",
+      "assertion": "Cutoff",
+      "level": "significant",
+      "fraud_related": true,
+      "description": "Risk that sales invoiced before 30 June 2026 are recognised although control of the goods passes to customers after year end; June revenue is 12.5% of the annual total.",
+      "revision_reason": null,
+      "approved_by": null
+    },
+    {
+      "id": "RISK-CASH-EXI",
+      "version": 1,
+      "objective_id": "OBJ-CASH-EXI",
+      "assertion": "Existence",
+      "level": "high",
+      "fraud_related": false,
+      "description": "Risk that bank balances recorded in the general ledger do not exist or are overstated at 30 June 2026.",
+      "revision_reason": null,
+      "approved_by": null
+    }
+  ],
+  "tb": [
+    [
+      "1010",
+      "Cash at bank - Operating",
+      "1,258,400.00",
+      "1,150,000.00",
+      "108,400.00",
+      "9.43%",
+      ""
+    ],
+    [
+      "1020",
+      "Cash at bank - Savings",
+      "400,000.00",
+      "386,000.00",
+      "14,000.00",
+      "3.63%",
+      ""
+    ],
+    [
+      "1100",
+      "Trade receivables",
+      "2,025,000.00",
+      "1,500,000.00",
+      "525,000.00",
+      "35.00%",
+      "**命中**"
+    ],
+    [
+      "1150",
+      "Allowance for expected credit losses",
+      "−60,000.00",
+      "−50,000.00",
+      "−10,000.00",
+      "20.00%",
+      "额不足"
+    ],
+    [
+      "1200",
+      "Inventory",
+      "2,950,000.00",
+      "2,600,000.00",
+      "350,000.00",
+      "13.46%",
+      ""
+    ],
+    [
+      "1300",
+      "Prepayments",
+      "146,600.00",
+      "130,000.00",
+      "16,600.00",
+      "12.77%",
+      ""
+    ],
+    [
+      "1500",
+      "Plant and equipment - cost",
+      "2,480,000.00",
+      "2,350,000.00",
+      "130,000.00",
+      "5.53%",
+      ""
+    ],
+    [
+      "1510",
+      "Plant and equipment - accumulated depreciation",
+      "−1,200,000.00",
+      "−1,040,000.00",
+      "−160,000.00",
+      "15.38%",
+      ""
+    ],
+    [
+      "2100",
+      "Trade payables",
+      "−1,530,000.00",
+      "−1,300,000.00",
+      "−230,000.00",
+      "17.69%",
+      ""
+    ],
+    [
+      "2200",
+      "Accrued expenses",
+      "−287,000.00",
+      "−245,000.00",
+      "−42,000.00",
+      "17.14%",
+      ""
+    ],
+    [
+      "2300",
+      "Employee provisions",
+      "−222,000.00",
+      "−190,000.00",
+      "−32,000.00",
+      "16.84%",
+      ""
+    ],
+    [
+      "2400",
+      "Income tax payable",
+      "−150,000.00",
+      "−130,000.00",
+      "−20,000.00",
+      "15.38%",
+      ""
+    ],
+    [
+      "3100",
+      "Share capital",
+      "−1,000,000.00",
+      "−1,000,000.00",
+      "0.00",
+      "0.00%",
+      ""
+    ],
+    [
+      "3200",
+      "Retained earnings",
+      "−3,761,000.00",
+      "−3,269,200.00",
+      "−491,800.00",
+      "15.04%",
+      ""
+    ],
+    [
+      "4100",
+      "Sales revenue",
+      "−12,000,000.00",
+      "−10,400,000.00",
+      "−1,600,000.00",
+      "15.38%",
+      ""
+    ],
+    [
+      "4200",
+      "Interest income",
+      "−14,000.00",
+      "−12,000.00",
+      "−2,000.00",
+      "16.67%",
+      ""
+    ],
+    [
+      "5100",
+      "Cost of goods sold",
+      "8,400,000.00",
+      "7,228,000.00",
+      "1,172,000.00",
+      "16.21%",
+      ""
+    ],
+    [
+      "6100",
+      "Salaries and wages",
+      "1,180,000.00",
+      "1,050,000.00",
+      "130,000.00",
+      "12.38%",
+      ""
+    ],
+    [
+      "6200",
+      "Rent",
+      "312,000.00",
+      "300,000.00",
+      "12,000.00",
+      "4.00%",
+      ""
+    ],
+    [
+      "6300",
+      "Freight outwards",
+      "240,000.00",
+      "205,000.00",
+      "35,000.00",
+      "17.07%",
+      ""
+    ],
+    [
+      "6400",
+      "Depreciation",
+      "160,000.00",
+      "150,000.00",
+      "10,000.00",
+      "6.67%",
+      ""
+    ],
+    [
+      "6500",
+      "Other operating expenses",
+      "222,000.00",
+      "205,000.00",
+      "17,000.00",
+      "8.29%",
+      ""
+    ],
+    [
+      "8100",
+      "Income tax expense",
+      "450,000.00",
+      "382,200.00",
+      "67,800.00",
+      "17.74%",
+      ""
+    ],
+    [
+      "",
+      "**合计**",
+      "**0.00**",
+      "**0.00**",
+      "",
+      "",
+      ""
+    ]
+  ],
+  "customers": [
+    [
+      "Bilby Robotics Pty Ltd",
+      "11901043383",
+      "Daniel Price",
+      "CON-001；只有 S1 一张发票"
+    ],
+    [
+      "Quoll Automation Pty Ltd",
+      "46902044759",
+      "Ravi Okafor",
+      "CON-002；只有 S2 一张发票"
+    ],
+    [
+      "Galah Retail Electronics Pty Ltd",
+      "20903046122",
+      "Sophie Lindqvist",
+      "CON-003；全年 24 张发票"
+    ],
+    [
+      "Echidna Controls Pty Ltd",
+      "52904047490",
+      "Tom Nguyen",
+      "填充池；在途收款发票 SI-2026-0547"
+    ],
+    [
+      "Wallaby Instruments Pty Ltd",
+      "87905048866",
+      "Aisha Rahman",
+      "填充池"
+    ],
+    [
+      "Banksia Power Systems Pty Ltd",
+      "66906050235",
+      "Liam O'Connor",
+      "填充池"
+    ],
+    [
+      "Cassowary Audio Pty Ltd",
+      "24907051601",
+      "Grace Kim",
+      "填充池"
+    ],
+    [
+      "Platypus Sensor Works Pty Ltd",
+      "44908052979",
+      "Mateo Rossi",
+      "填充池"
+    ],
+    [
+      "Dingo Drive Technologies Pty Ltd",
+      "18909054342",
+      "Hannah Webb",
+      "填充池"
+    ],
+    [
+      "Lorikeet Lighting Pty Ltd",
+      "73910055711",
+      "Kenji Sato",
+      "填充池"
+    ],
+    [
+      "Wombat Solar Pty Ltd",
+      "20911057086",
+      "Olivia Brennan",
+      "填充池"
+    ],
+    [
+      "Kookaburra Telecom Pty Ltd",
+      "67912058452",
+      "Samuel Adeyemi",
+      "填充池"
+    ],
+    [
+      "Possum Medical Devices Pty Ltd",
+      "13913059828",
+      "Chloe Martin",
+      "填充池"
+    ],
+    [
+      "Emu Rail Signals Pty Ltd",
+      "66914061199",
+      "Noah Fischer",
+      "填充池"
+    ],
+    [
+      "Magpie Security Systems Pty Ltd",
+      "24915062565",
+      "Isla Murphy",
+      "填充池"
+    ]
+  ],
+  "fixed": [
+    [
+      "SI-2026-0519",
+      "Wallaby Instruments Pty Ltd",
+      "87905048866",
+      "",
+      "2026-05-18",
+      "3145000",
+      "SJ-2026-0519-2"
+    ],
+    [
+      "SI-2026-0520",
+      "Banksia Power Systems Pty Ltd",
+      "66906050235",
+      "",
+      "2026-05-18",
+      "1892000",
+      "SJ-2026-0520-2"
+    ],
+    [
+      "SI-2026-0521",
+      "Platypus Sensor Works Pty Ltd",
+      "44908052979",
+      "",
+      "2026-05-18",
+      "2467550",
+      "SJ-2026-0521-2"
+    ],
+    [
+      "SI-2026-0522",
+      "Lorikeet Lighting Pty Ltd",
+      "73910055711",
+      "",
+      "2026-05-18",
+      "1238000",
+      "SJ-2026-0522-2"
+    ],
+    [
+      "SI-2026-0523",
+      "Kookaburra Telecom Pty Ltd",
+      "67912058452",
+      "",
+      "2026-05-18",
+      "2711025",
+      "SJ-2026-0523-2"
+    ],
+    [
+      "SI-2026-0524",
+      "Magpie Security Systems Pty Ltd",
+      "24915062565",
+      "",
+      "2026-05-18",
+      "1596425",
+      "SJ-2026-0524-2"
+    ],
+    [
+      "SI-2026-0547",
+      "Echidna Controls Pty Ltd",
+      "52904047490",
+      "",
+      "2026-05-29",
+      "5000000",
+      "SJ-2026-0547-2"
+    ],
+    [
+      "SI-2026-0612",
+      "Bilby Robotics Pty Ltd",
+      "11901043383",
+      "CON-001",
+      "2026-06-28",
+      "14200000",
+      "SJ-2026-0612-2"
+    ],
+    [
+      "SI-2026-0618",
+      "Quoll Automation Pty Ltd",
+      "46902044759",
+      "CON-002",
+      "2026-06-29",
+      "9500000",
+      "SJ-2026-0618-2"
+    ]
+  ],
+  "contract1": [
+    "SALES CONTRACT\nContract No. CON-001\n\nDate: 20 May 2026\n\nParties\nSeller:   Numbat Electronic Components Pty Ltd (ABN 68 900 042 015)\n          Unit 7, 42 Example Parade, Silverwater NSW 2128\nCustomer: Bilby Robotics Pty Ltd (ABN 11 901 043 383)\n          15 Sample Road, Wetherill Park NSW 2164\n\n1. Goods\n1.1 The Seller agrees to sell and the Customer agrees to buy the goods described in\nthe Schedule (Goods) on the terms of this Contract.\n\nSchedule\nItem  Description                             Quantity  Unit price (AUD)  Amount (AUD)\n1     Servo drive controller module SDC-400        200            560.00    112,000.00\n2     Encoder interface board EIB-12               300            100.00     30,000.00\n      Total Contract Price (excluding GST)                                  142,000.00\n\n2. Price\n2.1 The Total Contract Price is AUD 142,000.00, excluding GST. The price is fixed and\nis not subject to any discount, rebate or price adjustment. GST is payable in addition.\n\n3. Delivery Date\n3.1 The Seller must deliver the Goods to the Customer's premises at 15 Sample Road,\nWetherill Park NSW 2164 (Delivery Address) on 29 June 2026, or on another date agreed\nin writing.\n",
+    "4. Delivery\n4.1 The Seller will deliver the Goods at its cost to the Delivery Address. Each\ndelivery must be accompanied by a delivery note that identifies this Contract.\n4.2 The Customer's authorised representative will inspect the Goods on arrival and,\nif they conform to this Contract, sign the delivery note.\n\n5. Title and Risk\n5.1 Title to and risk in the Goods pass to the Customer when the Customer's authorised\nrepresentative signs the delivery note at the Delivery Address. Until then the Goods\nremain the property and at the risk of the Seller, and the Seller has no right to\npayment for them.\n\n6. Invoicing and Payment\n6.1 The Seller may invoice the Goods on or after the date of dispatch.\n6.2 The Customer must pay each tax invoice within 30 days after the date of the signed\ndelivery note, by electronic funds transfer to the Seller's nominated bank account.\n",
+    "7. Warranty\n7.1 The Seller warrants that the Goods will be free from defects in materials and\nworkmanship for 12 months after delivery. The Seller will repair or replace defective\nGoods at its cost. This clause does not limit any rights the Customer has under the\nAustralian Consumer Law.\n\n8. Termination\n8.1 Either party may terminate this Contract by written notice if the other party\ncommits a material breach and does not remedy it within 14 days after receiving notice\nof the breach.\n\n9. General\n9.1 This Contract is the entire agreement between the parties about its subject\nmatter. It may be varied only in writing signed by both parties.\n9.2 This Contract is governed by the laws of New South Wales.\n\nSigned for Numbat Electronic Components Pty Ltd\nJordan Avery, Director                    Date: 20 May 2026\n\nSigned for Bilby Robotics Pty Ltd\nMei Tran, Director                        Date: 20 May 2026\n"
+  ],
+  "contract3": [
+    "SUPPLY AGREEMENT\nContract No. CON-003\n\nDate: 16 June 2025\n\nParties\nSupplier: Numbat Electronic Components Pty Ltd (ABN 68 900 042 015)\n          Unit 7, 42 Example Parade, Silverwater NSW 2128\nCustomer: Galah Retail Electronics Pty Ltd (ABN 20 903 046 122)\n          120 Placeholder Avenue, Moorebank NSW 2170\n\nBackground\nThe Customer operates electronics retail stores and wishes to buy components and\naccessories from the Supplier for resale.\n\n1. Term\n1.1 This Agreement starts on 1 July 2025 and ends on 30 June 2027 unless terminated\nearlier under clause 8.\n1.2 A Contract Year is each 12-month period starting on 1 July.\n\n2. Orders\n2.1 The Customer may place purchase orders for products listed in the Supplier's\ncurrent price list (Products). This Agreement does not oblige the Customer to buy any\nminimum quantity and does not state a total contract value.\n2.2 Each accepted purchase order forms a separate contract on the terms of this\nAgreement.\n",
+    "3. Price and Payment\n3.1 Prices are those in the Supplier's price list current on the date of the purchase\norder, excluding GST.\n3.2 The Supplier will issue a tax invoice on dispatch of each delivery. The Customer\nmust pay each tax invoice within 30 days after the invoice date.\n\n4. Delivery, Title and Risk\n4.1 The Supplier will deliver Products to the Customer's distribution centre at\n120 Placeholder Avenue, Moorebank NSW 2170.\n4.2 Title to and risk in Products pass to the Customer when the Customer's receiving\nofficer signs the delivery docket at the distribution centre.\n",
+    "5. Right of Return\n5.1 The Customer may return any Products that are unsold, undamaged and in their\noriginal packaging within 30 days after delivery. The Supplier will issue a credit\nnote for the full invoiced price of returned Products within 10 business days after\nreceiving them.\n\n6. Volume Rebate\n6.1 If the Customer's total purchases under this Agreement in a Contract Year,\nexcluding GST and net of returns, exceed AUD 600,000, the Supplier will pay the\nCustomer a rebate equal to 3% of those total purchases.\n6.2 The rebate is paid by credit note within 30 days after the end of the Contract Year.\n\n7. Warranty\n7.1 The Supplier warrants that Products will be free from defects in materials and\nworkmanship for 12 months after delivery. This clause does not limit any rights the\nCustomer has under the Australian Consumer Law.\n",
+    "8. Termination\n8.1 Either party may terminate this Agreement by giving 90 days' written notice to the\nother party.\n8.2 Either party may terminate this Agreement immediately by written notice if the\nother party commits a material breach and does not remedy it within 14 days after\nreceiving notice of the breach.\n\n9. General\n9.1 This Agreement is the entire agreement between the parties about its subject\nmatter. It may be varied only in writing signed by both parties.\n9.2 This Agreement is governed by the laws of New South Wales.\n\nSigned for Numbat Electronic Components Pty Ltd\nJordan Avery, Director                    Date: 16 June 2025\n\nSigned for Galah Retail Electronics Pty Ltd\nHarriet Cole, Director                    Date: 16 June 2025\n"
+  ],
+  "confirmation1": [
+    "HARBOURLINE BANK LIMITED\nABN 82 920 069 414\nAudit Confirmations Unit, Level 3, 100 Example Street, Sydney NSW 2000\n\nBANK CONFIRMATION - AUDIT REPLY\nOur reference: HBL-AC-2026-004512\n\nTo: The Auditor\nTessellate Audit Partners\nLevel 9, 1 Illustration Place, Sydney NSW 2000\nconfirmations@tessellate-audit.example\n\nCustomer: Numbat Electronic Components Pty Ltd (ABN 68 900 042 015)\nConfirmation date: 30 June 2026\n\nIn reply to your request, we confirm the following information recorded in our books\nfor the customer at close of business on 30 June 2026.\n\nSection 1 - Accounts\nAccount name:    Numbat Electronic Components Pty Ltd - Operating Account\nAccount type:    Business Transaction Account\nBSB:             999-101\nAccount number:  12345601\nCurrency:        AUD\nBalance at 30 June 2026:  AUD 1,208,400.00 (credit)\nAccrued interest at 30 June 2026:  nil\n",
+    "Section 2 - Facilities, guarantees and security\nNone held for the customer at 30 June 2026.\n\nSection 3 - Other accounts\nThe customer held no other accounts with Harbourline Bank Limited at 30 June 2026.\n\nSection 4 - Delivery of this reply\nThis reply is sent by email directly to the auditor named on page 1. It has not been\nsent to the customer.\n\nThis information is given without liability on the part of the bank or its officers.\n\nAuthorised officer: Karen Whitfield, Audit Confirmations Unit\nHarbourline Bank Limited\n"
+  ]
+}

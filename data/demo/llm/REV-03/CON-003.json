@@ -1,0 +1,146 @@
+{
+  "conclusion": "Control of the products passes to Galah Retail Electronics when its receiving officer signs the delivery docket at the distribution centre (CON-003-T2). The agreement also gives a 30-day return right for unsold products (CON-003-T3) and a 3% volume rebate on annual purchases above AUD 600,000 (CON-003-T4); these affect the amount of revenue, not the transfer point.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Clause 4.2 (CON-003-T2): title to and risk in the products pass when the customer's receiving officer signs the delivery docket at the distribution centre.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-245af45c3dc0",
+          "locator": "CON-003-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 (CON-003-T3): the customer may return unsold, undamaged products in original packaging within 30 days after delivery for a full credit.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-245af45c3dc0",
+          "locator": "CON-003-T3",
+          "page": 3,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 6.1 (CON-003-T4): if purchases in a contract year exceed AUD 600,000 net of returns, the supplier pays a rebate of 3% of those purchases.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-245af45c3dc0",
+          "locator": "CON-003-T4",
+          "page": 3,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the promised goods (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "For an obligation satisfied at a point in time, indicators of control include legal title, physical possession and the significant risks and rewards of ownership (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Title, risk and physical possession pass on signature of the delivery docket, so control transfers at that point.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The return right and the volume rebate make the consideration variable but do not change when control passes; revenue is recognised on signature of the delivery docket.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        2,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-245af45c3dc0",
+      "locator": "CON-003-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-245af45c3dc0",
+      "locator": "CON-003-T3",
+      "page": 3,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-245af45c3dc0",
+      "locator": "CON-003-T4",
+      "page": 3,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that the customer can direct the products or that the supplier keeps the risks after the docket is signed, for example a consignment practice, would move the transfer point.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

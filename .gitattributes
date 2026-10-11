@@ -1,0 +1,5 @@
+# Preserve manifest hashes across Windows and Linux checkouts.
+/data/demo/** -text
+/data/demo/**/*.pdf binary
+/data/demo_spec.json text eol=lf
+/docker/initdb/*.sh text eol=lf
