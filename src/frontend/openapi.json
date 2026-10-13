@@ -29,6 +29,4769 @@
           }
         }
       }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "表单字段 username 为审计师邮箱.",
+        "operationId": "auth-login",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_auth-login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Me",
+        "operationId": "users-me",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/engagements": {
+      "get": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "List Engagements",
+        "description": "只列出当前用户的项目. 闸门与待办数取总览, 与详情页一致.",
+        "operationId": "engagements-list_engagements",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EngagementSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Engagements-List Engagements"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Create Engagement",
+        "description": "客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真.",
+        "operationId": "engagements-create_engagement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngagementCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/engagements/{eid}": {
+      "get": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Get Engagement",
+        "operationId": "engagements-get_engagement",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementOverview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/resume": {
+      "post": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Resume Engagement",
+        "description": "run_error 非空时重试. 项目忙返回 409 ENGAGEMENT_BUSY.",
+        "operationId": "engagements-resume_engagement",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/gate": {
+      "get": {
+        "tags": [
+          "gates"
+        ],
+        "summary": "Get Gate",
+        "description": "不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND.",
+        "operationId": "gates-get_gate",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/gate-decisions": {
+      "post": {
+        "tags": [
+          "gates"
+        ],
+        "summary": "Submit Gate Decision",
+        "operationId": "gates-submit_gate_decision",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateDecisionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/client-profile": {
+      "put": {
+        "tags": [
+          "gates"
+        ],
+        "summary": "Update Client Profile",
+        "description": "只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.",
+        "operationId": "gates-update_client_profile",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientProfileIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/review-tasks": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "List Review Tasks",
+        "description": "status 省略时返回全部. allowed_decisions 取 ReviewQueue.allowed.",
+        "operationId": "reviews-list_review_tasks",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewTaskView"
+                  },
+                  "title": "Response Reviews-List Review Tasks"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/review-records": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Submit Review Record",
+        "operationId": "reviews-submit_review_record",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRecordIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/procedures/{pid}": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Get Procedure",
+        "operationId": "reviews-get_procedure",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcedureDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/judgments/{jid}": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Get Judgment",
+        "description": "version 省略时取最新版. review_records 是指向这条判断的复核决定.",
+        "operationId": "reviews-get_judgment",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "jid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jid"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgmentDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/exceptions": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "List Exceptions",
+        "operationId": "reviews-list_exceptions",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "procedure_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Procedure Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditException"
+                  },
+                  "title": "Response Reviews-List Exceptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/documents": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Documents",
+        "operationId": "evidence-list_documents",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentRef"
+                  },
+                  "title": "Response Evidence-List Documents"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/contracts": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Contracts",
+        "operationId": "evidence-list_contracts",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Contract"
+                  },
+                  "title": "Response Evidence-List Contracts"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/evidence/{document_id}": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Get Evidence",
+        "description": "原件 PDF. 前端带令牌下载后用 #page=N 跳页.",
+        "operationId": "evidence-get_evidence",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/records/{source_type}/{source_id}": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Get Record",
+        "description": "一行财务明细. 金额字段仍是分.",
+        "operationId": "evidence-get_record",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "journal_entry",
+                "sales_invoice",
+                "delivery_note",
+                "bank_transaction",
+                "bank_account",
+                "trial_balance"
+              ],
+              "type": "string",
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Evidence-Get Record"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/confirmations": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Confirmations",
+        "operationId": "evidence-list_confirmations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Confirmation"
+                  },
+                  "title": "Response Evidence-List Confirmations"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/misstatements": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Get Misstatements",
+        "description": "汇总表取 SCHEDULE; 重要性与意见类型取项目总览.",
+        "operationId": "reports-get_misstatements",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MisstatementReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/reports": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Get Reports",
+        "description": "decisions 只含 RPT-01, 含退回批注与签字.",
+        "operationId": "reports-get_reports",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportBundle"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/trail": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "List Trail",
+        "operationId": "reports-list_trail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TrailKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrailEntry"
+                  },
+                  "title": "Response Reports-List Trail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/trail/{trail_id}": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Get Trail",
+        "operationId": "reports-get_trail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trail_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Trail Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrailEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/standards/{fragment_id}": {
+      "get": {
+        "tags": [
+          "standards"
+        ],
+        "summary": "Get Standard",
+        "operationId": "standards-get_standard",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fragment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fragment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandardFragment"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AcceptanceMaterial": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "ACC-01",
+            "title": "Kind",
+            "default": "ACC-01"
+          },
+          "scorecard": {
+            "$ref": "#/components/schemas/AcceptanceScorecard"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditException"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "client_profile": {
+            "$ref": "#/components/schemas/ClientProfile"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scorecard",
+          "exceptions",
+          "client_profile"
+        ],
+        "title": "AcceptanceMaterial",
+        "description": "ACC-01 闸门的呈报材料."
+      },
+      "AcceptanceScorecard": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "registry_checks": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryCheck"
+            },
+            "type": "array",
+            "title": "Registry Checks"
+          },
+          "exception_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exception Ids"
+          },
+          "client_profile_version": {
+            "type": "integer",
+            "title": "Client Profile Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "registry_checks",
+          "exception_ids",
+          "client_profile_version"
+        ],
+        "title": "AcceptanceScorecard",
+        "description": "承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料."
+      },
+      "AgentId": {
+        "type": "string",
+        "enum": [
+          "A1",
+          "A2",
+          "A3",
+          "A4",
+          "A5",
+          "A6",
+          "A7",
+          "A8",
+          "A9",
+          "A10"
+        ],
+        "title": "AgentId",
+        "description": "智能体编号. A7, A8 本版不实现, 只占位."
+      },
+      "AnalyticsResult": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "ratios": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Ratios"
+          },
+          "exception_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exception Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "ratios",
+          "exception_ids"
+        ],
+        "title": "AnalyticsResult",
+        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外."
+      },
+      "Annotation": {
+        "properties": {
+          "section": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "comment": {
+            "type": "string",
+            "title": "Comment"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "section",
+          "comment"
+        ],
+        "title": "Annotation",
+        "description": "RPT-01 退回报告时对某一段的批注."
+      },
+      "Assertion": {
+        "type": "string",
+        "enum": [
+          "Occurrence",
+          "Completeness",
+          "Accuracy",
+          "Cutoff",
+          "Existence",
+          "Valuation",
+          "Rights"
+        ],
+        "title": "Assertion",
+        "description": "审计认定."
+      },
+      "AuditException": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Severity"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail",
+            "default": {}
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/ExceptionDisposition",
+            "default": "open"
+          },
+          "attributed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributed By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "procedure_id",
+          "run_id",
+          "rule_id",
+          "severity",
+          "source_ids",
+          "evidence"
+        ],
+        "title": "AuditException",
+        "description": "例外: 规则程序查出的异常, 如跨期发票, 余额不符. 规格书中叫 Exception, 改名避开 Python 内置名."
+      },
+      "AuditObjective": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/Assertion"
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/RiskLevel"
+          },
+          "is_material": {
+            "type": "boolean",
+            "title": "Is Material"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "account",
+          "assertion",
+          "risk_level",
+          "is_material"
+        ],
+        "title": "AuditObjective",
+        "description": "审计目标: 某科目的某项认定, 风险等级取其下风险项的最高等级."
+      },
+      "AuditReportVersion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "opinion_type": {
+            "$ref": "#/components/schemas/OpinionType"
+          },
+          "sections": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ReportSection"
+            },
+            "type": "object",
+            "title": "Sections"
+          },
+          "judgment_refs": {
+            "items": {
+              "$ref": "#/components/schemas/JudgmentRef"
+            },
+            "type": "array",
+            "title": "Judgment Refs"
+          },
+          "addresses_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addresses Decision Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReportStatus",
+            "default": "draft"
+          },
+          "report_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Date"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "opinion_type",
+          "sections",
+          "judgment_refs"
+        ],
+        "title": "AuditReportVersion",
+        "description": "审计报告的一个修订版本, 签字后锁定."
+      },
+      "AutonomyLevel": {
+        "type": "string",
+        "enum": [
+          "L1",
+          "L2",
+          "L3",
+          "L4"
+        ],
+        "title": "AutonomyLevel",
+        "description": "AI 自主度."
+      },
+      "Body_auth-login": {
+        "properties": {
+          "grant_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^password$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "title": "Password"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": ""
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "password",
+            "title": "Client Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Body_auth-login"
+      },
+      "ClientProfile": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "industry_anzsic": {
+            "type": "string",
+            "title": "Industry Anzsic"
+          },
+          "listed": {
+            "type": "boolean",
+            "title": "Listed"
+          },
+          "directors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Directors"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "legal_name",
+          "abn",
+          "entity_type",
+          "industry_anzsic",
+          "listed",
+          "directors"
+        ],
+        "title": "ClientProfile",
+        "description": "客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id."
+      },
+      "ClientProfileIn": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "industry_anzsic": {
+            "type": "string",
+            "title": "Industry Anzsic"
+          },
+          "listed": {
+            "type": "boolean",
+            "title": "Listed"
+          },
+          "directors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Directors"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "legal_name",
+          "abn",
+          "entity_type",
+          "industry_anzsic",
+          "listed",
+          "directors"
+        ],
+        "title": "ClientProfileIn",
+        "description": "更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1."
+      },
+      "CompletionMaterial": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "FIN-01",
+            "title": "Kind",
+            "default": "FIN-01"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/UncorrectedSchedule"
+          },
+          "misstatements": {
+            "items": {
+              "$ref": "#/components/schemas/Misstatement"
+            },
+            "type": "array",
+            "title": "Misstatements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schedule",
+          "misstatements"
+        ],
+        "title": "CompletionMaterial",
+        "description": "FIN-01 闸门的呈报材料."
+      },
+      "Confirmation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "type": {
+            "type": "string",
+            "const": "bank",
+            "title": "Type",
+            "default": "bank"
+          },
+          "bank_account_id": {
+            "type": "string",
+            "title": "Bank Account Id"
+          },
+          "confirming_party": {
+            "type": "string",
+            "title": "Confirming Party"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "sent_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Sent At"
+          },
+          "reply_document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply Document Id"
+          },
+          "receipt_channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptChannel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replied At"
+          },
+          "balance_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balance Date"
+          },
+          "confirmed_balance_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Balance Cents"
+          },
+          "book_balance_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Balance Cents"
+          },
+          "difference_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference Cents"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConfirmationResult",
+            "default": "pending"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bank_account_id",
+          "confirming_party",
+          "idempotency_key",
+          "sent_at"
+        ],
+        "title": "Confirmation",
+        "description": "一份银行询证函: 发函, 回函, 回函余额与账面的比对结果."
+      },
+      "ConfirmationResult": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "agreed",
+          "difference"
+        ],
+        "title": "ConfirmationResult",
+        "description": "函证结果."
+      },
+      "Contract": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "counterparty": {
+            "type": "string",
+            "title": "Counterparty"
+          },
+          "counterparty_abn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty Abn"
+          },
+          "type": {
+            "type": "string",
+            "const": "sales",
+            "title": "Type",
+            "default": "sales"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "sign_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sign Date"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/ContractTerm"
+            },
+            "type": "array",
+            "title": "Terms"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "extracted_by_run": {
+            "type": "string",
+            "title": "Extracted By Run"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "counterparty",
+          "counterparty_abn",
+          "amount_cents",
+          "sign_date",
+          "terms",
+          "extracted_by_run"
+        ],
+        "title": "Contract",
+        "description": "DOC-04 从合同 PDF 抽取出的合同要素与条款."
+      },
+      "ContractTerm": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "term_type": {
+            "$ref": "#/components/schemas/TermType"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "term_type",
+          "text",
+          "page"
+        ],
+        "title": "ContractTerm",
+        "description": "合同中的一个条款."
+      },
+      "Decision": {
+        "type": "string",
+        "enum": [
+          "confirm",
+          "override",
+          "misstatement",
+          "rerun",
+          "manual_result"
+        ],
+        "title": "Decision",
+        "description": "复核决定."
+      },
+      "Direction": {
+        "type": "string",
+        "enum": [
+          "overstated",
+          "understated"
+        ],
+        "title": "Direction",
+        "description": "错报方向."
+      },
+      "DocumentRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/DocumentType"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "page_count": {
+            "type": "integer",
+            "title": "Page Count"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/Reliability"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "extracted",
+              "needs_manual"
+            ],
+            "title": "Status"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Uploaded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "file_name",
+          "sha256",
+          "page_count",
+          "reliability",
+          "status",
+          "uploaded_at"
+        ],
+        "title": "DocumentRef",
+        "description": "已存档的证据文件 (合同, 回函等 PDF) 的登记信息."
+      },
+      "DocumentType": {
+        "type": "string",
+        "enum": [
+          "contract",
+          "confirmation",
+          "other"
+        ],
+        "title": "DocumentType",
+        "description": "证据文件类型."
+      },
+      "Engagement": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Period End"
+          },
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "owner_id": {
+            "type": "string",
+            "title": "Owner Id"
+          },
+          "client_profile_version": {
+            "type": "integer",
+            "title": "Client Profile Version"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked",
+            "default": false
+          },
+          "version_snapshot": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Version Snapshot",
+            "default": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "client_id",
+          "period_start",
+          "period_end",
+          "dataset",
+          "owner_id",
+          "client_profile_version",
+          "phase",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Engagement",
+        "description": "审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."
+      },
+      "EngagementCreate": {
+        "properties": {
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Period End"
+          },
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "period_start",
+          "period_end",
+          "dataset"
+        ],
+        "title": "EngagementCreate",
+        "description": "新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像."
+      },
+      "EngagementOverview": {
+        "properties": {
+          "engagement": {
+            "$ref": "#/components/schemas/Engagement"
+          },
+          "client_name": {
+            "type": "string",
+            "title": "Client Name"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          },
+          "run_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Error"
+          },
+          "current_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GateId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "awaiting_review": {
+            "type": "boolean",
+            "title": "Awaiting Review"
+          },
+          "procedures": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureSummary"
+            },
+            "type": "array",
+            "title": "Procedures"
+          },
+          "pending_tasks": {
+            "type": "integer",
+            "title": "Pending Tasks"
+          },
+          "materiality_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materiality Cents"
+          },
+          "performance_materiality_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Performance Materiality Cents"
+          },
+          "clearly_trivial_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clearly Trivial Cents"
+          },
+          "opinion_route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpinionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engagement",
+          "client_name",
+          "running",
+          "run_error",
+          "current_gate",
+          "awaiting_review",
+          "procedures",
+          "pending_tasks",
+          "materiality_cents",
+          "performance_materiality_cents",
+          "clearly_trivial_cents",
+          "opinion_route"
+        ],
+        "title": "EngagementOverview",
+        "description": "项目总览页的数据."
+      },
+      "EngagementSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "client_name": {
+            "type": "string",
+            "title": "Client Name"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "current_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GateId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_tasks": {
+            "type": "integer",
+            "title": "Pending Tasks"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "client_name",
+          "phase",
+          "current_gate",
+          "pending_tasks",
+          "updated_at"
+        ],
+        "title": "EngagementSummary",
+        "description": "项目列表中的一行."
+      },
+      "Engine": {
+        "type": "string",
+        "enum": [
+          "rule",
+          "llm",
+          "hybrid",
+          "manual"
+        ],
+        "title": "Engine",
+        "description": "程序的执行方式."
+      },
+      "EvidencePointer": {
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/EvidenceType"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "journal_entry",
+              "sales_invoice",
+              "delivery_note",
+              "bank_transaction",
+              "bank_account",
+              "trial_balance",
+              "document",
+              "standard",
+              "trail"
+            ],
+            "title": "Source Type"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "locator": {
+            "type": "string",
+            "title": "Locator"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "reliability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reliability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "source_type",
+          "source_id",
+          "locator"
+        ],
+        "title": "EvidencePointer",
+        "description": "证据指针: 结论依据的是哪条证据 (source_id) 的哪一处 (locator), 前端据此打开原文."
+      },
+      "EvidenceType": {
+        "type": "string",
+        "enum": [
+          "voucher",
+          "invoice",
+          "delivery",
+          "bank",
+          "contract",
+          "external",
+          "standard"
+        ],
+        "title": "EvidenceType",
+        "description": "证据种类."
+      },
+      "ExceptionDisposition": {
+        "type": "string",
+        "enum": [
+          "open",
+          "attributed",
+          "unattributed"
+        ],
+        "title": "ExceptionDisposition",
+        "description": "例外的归因状态."
+      },
+      "GateDecision": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "gate": {
+            "$ref": "#/components/schemas/GateId"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/GateVerdict"
+          },
+          "materiality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterialityChoice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edits": {
+            "items": {
+              "$ref": "#/components/schemas/GateEdit"
+            },
+            "type": "array",
+            "title": "Edits",
+            "default": []
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpinionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "type": "array",
+            "title": "Annotations",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "decided_by": {
+            "type": "string",
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "gate",
+          "target_id",
+          "target_version",
+          "decision",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "GateDecision",
+        "description": "审计师在闸门作出的决定, 附该闸门特有的内容 (重要性, 意见类型, 批注等)."
+      },
+      "GateDecisionIn": {
+        "properties": {
+          "gate": {
+            "$ref": "#/components/schemas/GateId"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/GateVerdict"
+          },
+          "materiality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterialityChoice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edits": {
+            "items": {
+              "$ref": "#/components/schemas/GateEdit"
+            },
+            "type": "array",
+            "title": "Edits",
+            "default": []
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpinionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            },
+            "type": "array",
+            "title": "Annotations",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "gate",
+          "target_id",
+          "target_version",
+          "decision"
+        ],
+        "title": "GateDecisionIn",
+        "description": "闸门决定请求体: 去掉 id, version, decided_by, decided_at, 由服务端填写."
+      },
+      "GateEdit": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "field": {
+            "type": "string",
+            "const": "level",
+            "title": "Field"
+          },
+          "new_value": {
+            "$ref": "#/components/schemas/RiskLevel"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_id",
+          "target_version",
+          "field",
+          "new_value",
+          "reason"
+        ],
+        "title": "GateEdit",
+        "description": "PLN-01/03 闸门中对一个风险项等级的修改."
+      },
+      "GateId": {
+        "type": "string",
+        "enum": [
+          "ACC-01",
+          "PLN-01/03",
+          "FIN-01",
+          "RPT-01"
+        ],
+        "title": "GateId",
+        "description": "四道闸门."
+      },
+      "GateVerdict": {
+        "type": "string",
+        "enum": [
+          "approve",
+          "reject",
+          "insufficient_info"
+        ],
+        "title": "GateVerdict",
+        "description": "闸门决定."
+      },
+      "GateView": {
+        "properties": {
+          "gate": {
+            "$ref": "#/components/schemas/GateId"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "material": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AcceptanceMaterial"
+              },
+              {
+                "$ref": "#/components/schemas/PlanningMaterial"
+              },
+              {
+                "$ref": "#/components/schemas/CompletionMaterial"
+              },
+              {
+                "$ref": "#/components/schemas/ReportMaterial"
+              }
+            ],
+            "title": "Material",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "ACC-01": "#/components/schemas/AcceptanceMaterial",
+                "FIN-01": "#/components/schemas/CompletionMaterial",
+                "PLN-01/03": "#/components/schemas/PlanningMaterial",
+                "RPT-01": "#/components/schemas/ReportMaterial"
+              }
+            }
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "gate",
+          "target_id",
+          "target_version",
+          "material"
+        ],
+        "title": "GateView",
+        "description": "闸门页的数据: 当前闸门与要呈报的材料."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IdBody": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "IdBody",
+        "description": "202 响应: 刚写入的决定 ID."
+      },
+      "Judgment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "confidence_parts": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Confidence Parts"
+          },
+          "reasoning_chain": {
+            "items": {
+              "$ref": "#/components/schemas/ReasoningStep"
+            },
+            "type": "array",
+            "title": "Reasoning Chain"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "counter_argument": {
+            "type": "string",
+            "title": "Counter Argument"
+          },
+          "proposed_action": {
+            "$ref": "#/components/schemas/ProposedAction"
+          },
+          "misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exception_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exception Ids",
+            "default": []
+          },
+          "autonomy_level": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/ReviewStatus",
+            "default": "pending"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          },
+          "performed_by": {
+            "type": "string",
+            "title": "Performed By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "trail_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trail Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "procedure_id",
+          "run_id",
+          "subject_id",
+          "conclusion",
+          "confidence",
+          "confidence_parts",
+          "reasoning_chain",
+          "evidence",
+          "counter_argument",
+          "proposed_action",
+          "autonomy_level",
+          "performed_by",
+          "created_at"
+        ],
+        "title": "Judgment",
+        "description": "AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作."
+      },
+      "JudgmentDetail": {
+        "properties": {
+          "judgment": {
+            "$ref": "#/components/schemas/Judgment"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/Judgment"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "review_records": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRecord"
+            },
+            "type": "array",
+            "title": "Review Records"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "judgment",
+          "versions",
+          "review_records"
+        ],
+        "title": "JudgmentDetail",
+        "description": "一条判断的当前版本, 历史版本与相关复核决定."
+      },
+      "JudgmentRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "title": "JudgmentRef",
+        "description": "报告中引用的一条判断."
+      },
+      "ManualResult": {
+        "properties": {
+          "conclusion": {
+            "type": "string",
+            "title": "Conclusion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conclusion"
+        ],
+        "title": "ManualResult",
+        "description": "人工直接给出的结果, 用于 manual_result 决定."
+      },
+      "MaterialityCandidate": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "revenue",
+              "total_assets",
+              "profit_before_tax"
+            ],
+            "title": "Basis"
+          },
+          "base_amount_cents": {
+            "type": "integer",
+            "title": "Base Amount Cents"
+          },
+          "pct_low": {
+            "type": "number",
+            "title": "Pct Low"
+          },
+          "pct_high": {
+            "type": "number",
+            "title": "Pct High"
+          },
+          "low_cents": {
+            "type": "integer",
+            "title": "Low Cents"
+          },
+          "high_cents": {
+            "type": "integer",
+            "title": "High Cents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "base_amount_cents",
+          "pct_low",
+          "pct_high",
+          "low_cents",
+          "high_cents"
+        ],
+        "title": "MaterialityCandidate",
+        "description": "按一个基准 (收入, 总资产或税前利润) 算出的重要性候选区间."
+      },
+      "MaterialityCandidates": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialityCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "performance_pct_range": {
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Performance Pct Range",
+            "default": [
+              0.5,
+              0.75
+            ]
+          },
+          "clearly_trivial_pct": {
+            "type": "number",
+            "title": "Clearly Trivial Pct",
+            "default": 0.05
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "candidates"
+        ],
+        "title": "MaterialityCandidates",
+        "description": "PLN-01 算出的全部重要性候选, PLN-01/03 闸门的呈报材料."
+      },
+      "MaterialityChoice": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "revenue",
+              "total_assets",
+              "profit_before_tax"
+            ],
+            "title": "Basis"
+          },
+          "pct": {
+            "type": "number",
+            "title": "Pct"
+          },
+          "performance_pct": {
+            "type": "number",
+            "title": "Performance Pct"
+          },
+          "clearly_trivial_pct": {
+            "type": "number",
+            "title": "Clearly Trivial Pct"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "pct",
+          "performance_pct",
+          "clearly_trivial_pct"
+        ],
+        "title": "MaterialityChoice",
+        "description": "审计师在 PLN-01/03 闸门选定的重要性基准与比例."
+      },
+      "Misstatement": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judgment Id"
+          },
+          "exception_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exception Id"
+          },
+          "review_record_id": {
+            "type": "string",
+            "title": "Review Record Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/MisstatementType"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/Assertion"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "status": {
+            "type": "string",
+            "const": "uncorrected",
+            "title": "Status",
+            "default": "uncorrected"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "judgment_id",
+          "exception_id",
+          "review_record_id",
+          "type",
+          "account",
+          "assertion",
+          "amount_cents",
+          "direction"
+        ],
+        "title": "Misstatement",
+        "description": "已认定的错报, 来自某条判断或例外. 本版一律按未更正处理."
+      },
+      "MisstatementDraft": {
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/MisstatementType"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/Assertion"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "account",
+          "assertion",
+          "amount_cents",
+          "direction"
+        ],
+        "title": "MisstatementDraft",
+        "description": "判断建议认定错报时附带的错报草稿."
+      },
+      "MisstatementReport": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Misstatement"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UncorrectedSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materiality_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materiality Cents"
+          },
+          "opinion_route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpinionType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "schedule",
+          "materiality_cents",
+          "opinion_route"
+        ],
+        "title": "MisstatementReport",
+        "description": "错报列表, 未更正汇总, 以及总览里的重要性与意见."
+      },
+      "MisstatementType": {
+        "type": "string",
+        "enum": [
+          "factual",
+          "judgmental",
+          "projected"
+        ],
+        "title": "MisstatementType",
+        "description": "错报类型."
+      },
+      "OpinionType": {
+        "type": "string",
+        "enum": [
+          "unqualified",
+          "qualified",
+          "adverse",
+          "disclaimer"
+        ],
+        "title": "OpinionType",
+        "description": "审计意见类型."
+      },
+      "Phase": {
+        "type": "string",
+        "enum": [
+          "P0_Acceptance",
+          "P1_Planning",
+          "P2_Executing",
+          "P3_Completion",
+          "P4_Reporting",
+          "Archived",
+          "Declined"
+        ],
+        "title": "Phase",
+        "description": "项目阶段."
+      },
+      "PlanningMaterial": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "PLN-01/03",
+            "title": "Kind",
+            "default": "PLN-01/03"
+          },
+          "analytics": {
+            "$ref": "#/components/schemas/AnalyticsResult"
+          },
+          "analytics_exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditException"
+            },
+            "type": "array",
+            "title": "Analytics Exceptions"
+          },
+          "candidates": {
+            "$ref": "#/components/schemas/MaterialityCandidates"
+          },
+          "objectives": {
+            "items": {
+              "$ref": "#/components/schemas/AuditObjective"
+            },
+            "type": "array",
+            "title": "Objectives"
+          },
+          "risks": {
+            "items": {
+              "$ref": "#/components/schemas/RiskItem"
+            },
+            "type": "array",
+            "title": "Risks"
+          },
+          "uncovered_objective_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uncovered Objective Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "analytics",
+          "analytics_exceptions",
+          "candidates",
+          "objectives",
+          "risks",
+          "uncovered_objective_ids"
+        ],
+        "title": "PlanningMaterial",
+        "description": "PLN-01/03 闸门的呈报材料."
+      },
+      "Procedure": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "template_commit": {
+            "type": "string",
+            "title": "Template Commit"
+          },
+          "objective_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objective Ids",
+            "default": []
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          },
+          "autonomy_level": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcedureStatus",
+            "default": "planned"
+          },
+          "rerun_subject_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rerun Subject Ids",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "phase",
+          "template_commit",
+          "autonomy_level"
+        ],
+        "title": "Procedure",
+        "description": "本项目中一条审计程序的实例, 如 REV-02. 模板见 knowledge/procedures/."
+      },
+      "ProcedureDetail": {
+        "properties": {
+          "procedure": {
+            "$ref": "#/components/schemas/Procedure"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
+          "standards": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Standards"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureRun"
+            },
+            "type": "array",
+            "title": "Runs"
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditException"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "judgments": {
+            "items": {
+              "$ref": "#/components/schemas/Judgment"
+            },
+            "type": "array",
+            "title": "Judgments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "procedure",
+          "name",
+          "depends_on",
+          "standards",
+          "runs",
+          "exceptions",
+          "judgments"
+        ],
+        "title": "ProcedureDetail",
+        "description": "一条程序的执行记录, 例外与判断."
+      },
+      "ProcedureRun": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "run_no": {
+            "type": "integer",
+            "title": "Run No"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/RunTrigger"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance"
+          },
+          "params_snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params Snapshot"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "procedure_id",
+          "run_no",
+          "trigger",
+          "params_snapshot",
+          "started_at",
+          "status"
+        ],
+        "title": "ProcedureRun",
+        "description": "程序的一次执行记录: 第几次, 起因, 起止时间, 成败. 重跑会产生新记录."
+      },
+      "ProcedureStatus": {
+        "type": "string",
+        "enum": [
+          "planned",
+          "executing",
+          "awaiting_human",
+          "completed"
+        ],
+        "title": "ProcedureStatus",
+        "description": "程序状态."
+      },
+      "ProcedureSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AgentId"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "autonomy_level": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcedureStatus"
+          },
+          "pending_tasks": {
+            "type": "integer",
+            "title": "Pending Tasks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "phase",
+          "owner",
+          "engine",
+          "autonomy_level",
+          "status",
+          "pending_tasks"
+        ],
+        "title": "ProcedureSummary",
+        "description": "项目总览中的一行程序状态."
+      },
+      "ProposedAction": {
+        "type": "string",
+        "enum": [
+          "accept",
+          "close",
+          "misstatement",
+          "more_evidence"
+        ],
+        "title": "ProposedAction",
+        "description": "判断的建议动作."
+      },
+      "ReasoningStep": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/StepKind"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "from_steps": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "From Steps",
+            "default": []
+          },
+          "status": {
+            "$ref": "#/components/schemas/StepStatus",
+            "default": "supported"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "ReasoningStep",
+        "description": "推理链中的一步."
+      },
+      "ReceiptChannel": {
+        "type": "string",
+        "enum": [
+          "direct_mail",
+          "direct_email",
+          "portal_via_client",
+          "oral"
+        ],
+        "title": "ReceiptChannel",
+        "description": "回函渠道, 决定回函的可靠性."
+      },
+      "RegistryCheck": {
+        "properties": {
+          "check": {
+            "type": "string",
+            "enum": [
+              "abn_active",
+              "name_match",
+              "company_registered"
+            ],
+            "title": "Check"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EvidencePointer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "check",
+          "passed",
+          "detail",
+          "evidence"
+        ],
+        "title": "RegistryCheck",
+        "description": "ACC-04 的一项登记检查结果."
+      },
+      "Reliability": {
+        "type": "string",
+        "enum": [
+          "external_original",
+          "external_copy",
+          "internal_original",
+          "internal_copy"
+        ],
+        "title": "Reliability",
+        "description": "证据可靠性, 影响置信度权重."
+      },
+      "ReportBundle": {
+        "properties": {
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditReportVersion"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateDecision"
+            },
+            "type": "array",
+            "title": "Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "versions",
+          "decisions"
+        ],
+        "title": "ReportBundle",
+        "description": "报告各修订版, 以及全部 RPT-01 决定 (含批注)."
+      },
+      "ReportMaterial": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "RPT-01",
+            "title": "Kind",
+            "default": "RPT-01"
+          },
+          "report": {
+            "$ref": "#/components/schemas/AuditReportVersion"
+          },
+          "previous_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateDecision"
+            },
+            "type": "array",
+            "title": "Previous Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "report",
+          "previous_decisions"
+        ],
+        "title": "ReportMaterial",
+        "description": "RPT-01 闸门的呈报材料."
+      },
+      "ReportSection": {
+        "type": "string",
+        "enum": [
+          "opinion",
+          "basis_for_opinion",
+          "directors_responsibilities",
+          "auditor_responsibilities",
+          "other_legal_and_regulatory",
+          "signature"
+        ],
+        "title": "ReportSection",
+        "description": "审计报告段落."
+      },
+      "ReportStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "signed"
+        ],
+        "title": "ReportStatus",
+        "description": "报告版本状态."
+      },
+      "ReviewRecord": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "override_conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Conclusion"
+          },
+          "misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rerun_params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerun Params"
+          },
+          "manual_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "task_id",
+          "target_version",
+          "decision",
+          "reviewed_by",
+          "decided_at"
+        ],
+        "title": "ReviewRecord",
+        "description": "审计师对一个复核任务作出的决定及理由."
+      },
+      "ReviewRecordIn": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "override_conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Conclusion"
+          },
+          "misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rerun_params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerun Params"
+          },
+          "manual_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task_id",
+          "target_version",
+          "decision"
+        ],
+        "title": "ReviewRecordIn",
+        "description": "复核决定请求体: 去掉 id, version, reviewed_by, decided_at."
+      },
+      "ReviewStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "confirmed",
+          "overridden"
+        ],
+        "title": "ReviewStatus",
+        "description": "判断的复核状态."
+      },
+      "ReviewTask": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "target_type": {
+            "$ref": "#/components/schemas/TargetType"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "target_version": {
+            "type": "integer",
+            "title": "Target Version"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus",
+            "default": "pending"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "procedure_id",
+          "target_type",
+          "target_id",
+          "target_version",
+          "run_id",
+          "created_at"
+        ],
+        "title": "ReviewTask",
+        "description": "复核任务: 需要人处理的一件事, 进复核队列."
+      },
+      "ReviewTaskView": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/ReviewTask"
+          },
+          "procedure_name": {
+            "type": "string",
+            "title": "Procedure Name"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgment"
+              },
+              {
+                "$ref": "#/components/schemas/AuditException"
+              },
+              {
+                "$ref": "#/components/schemas/ProcedureRun"
+              }
+            ],
+            "title": "Target"
+          },
+          "allowed_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "type": "array",
+            "title": "Allowed Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "procedure_name",
+          "target",
+          "allowed_decisions"
+        ],
+        "title": "ReviewTaskView",
+        "description": "复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定."
+      },
+      "RiskItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "objective_id": {
+            "type": "string",
+            "title": "Objective Id"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/Assertion"
+          },
+          "level": {
+            "$ref": "#/components/schemas/RiskLevel"
+          },
+          "fraud_related": {
+            "type": "boolean",
+            "title": "Fraud Related"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "revision_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Reason"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "objective_id",
+          "assertion",
+          "level",
+          "fraud_related",
+          "description"
+        ],
+        "title": "RiskItem",
+        "description": "风险清单中的一项, 挂在某个审计目标下, 可在 PLN-01/03 闸门改等级."
+      },
+      "RiskLevel": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "significant"
+        ],
+        "title": "RiskLevel",
+        "description": "风险等级."
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "title": "RunStatus",
+        "description": "一次执行的状态."
+      },
+      "RunTrigger": {
+        "type": "string",
+        "enum": [
+          "initial",
+          "rerun"
+        ],
+        "title": "RunTrigger",
+        "description": "一次执行的起因."
+      },
+      "StandardFragment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "standard": {
+            "type": "string",
+            "title": "Standard"
+          },
+          "paragraph": {
+            "type": "string",
+            "title": "Paragraph"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "procedures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Procedures"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "standard",
+          "paragraph",
+          "topic",
+          "text",
+          "procedures"
+        ],
+        "title": "StandardFragment",
+        "description": "准则片段: 某准则某段落的原文摘录, 供推理链引用."
+      },
+      "StepKind": {
+        "type": "string",
+        "enum": [
+          "fact",
+          "standard",
+          "inference",
+          "assumption",
+          "limitation"
+        ],
+        "title": "StepKind",
+        "description": "推理步骤类型."
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "supported",
+          "unsupported"
+        ],
+        "title": "StepStatus",
+        "description": "推理步骤有没有证据支撑."
+      },
+      "TargetType": {
+        "type": "string",
+        "enum": [
+          "Judgment",
+          "AuditException",
+          "ProcedureRun"
+        ],
+        "title": "TargetType",
+        "description": "复核任务指向的对象类型."
+      },
+      "TaskKind": {
+        "type": "string",
+        "enum": [
+          "normal",
+          "unattributed",
+          "failed"
+        ],
+        "title": "TaskKind",
+        "description": "复核任务类型."
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "decided"
+        ],
+        "title": "TaskStatus",
+        "description": "复核任务状态."
+      },
+      "TermType": {
+        "type": "string",
+        "enum": [
+          "payment",
+          "control_transfer",
+          "return_right",
+          "rebate",
+          "termination",
+          "guarantee",
+          "related_party"
+        ],
+        "title": "TermType",
+        "description": "合同条款类型."
+      },
+      "Token": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "bearer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_token"
+        ],
+        "title": "Token",
+        "description": "登录成功返回的访问令牌."
+      },
+      "TrailEntry": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "engagement_id": {
+            "type": "string",
+            "title": "Engagement Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TrailKind"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prompt_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Hash"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload",
+            "default": {}
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engagement_id",
+          "kind",
+          "actor",
+          "summary"
+        ],
+        "title": "TrailEntry",
+        "description": "审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改."
+      },
+      "TrailKind": {
+        "type": "string",
+        "enum": [
+          "llm_call",
+          "external_call",
+          "decision",
+          "transition"
+        ],
+        "title": "TrailKind",
+        "description": "留痕类型."
+      },
+      "UncorrectedItem": {
+        "properties": {
+          "misstatement_id": {
+            "type": "string",
+            "title": "Misstatement Id"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "misstatement_id",
+          "amount_cents",
+          "direction"
+        ],
+        "title": "UncorrectedItem",
+        "description": "未更正错报汇总表中的一行."
+      },
+      "UncorrectedSchedule": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UncorrectedItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "excluded_trivial_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Excluded Trivial Ids"
+          },
+          "total_cents": {
+            "type": "integer",
+            "title": "Total Cents"
+          },
+          "materiality_cents": {
+            "type": "integer",
+            "title": "Materiality Cents"
+          },
+          "candidate_opinion": {
+            "$ref": "#/components/schemas/OpinionType"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "items",
+          "excluded_trivial_ids",
+          "total_cents",
+          "materiality_cents",
+          "candidate_opinion"
+        ],
+        "title": "UncorrectedSchedule",
+        "description": "未更正错报汇总表: FIN-04 产出, FIN-01 闸门的呈报材料. 规格书中叫 UncorrectedMisstatementSchedule."
+      },
+      "User": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "full_name"
+        ],
+        "title": "User",
+        "description": "系统用户, 即审计师."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   }
 }

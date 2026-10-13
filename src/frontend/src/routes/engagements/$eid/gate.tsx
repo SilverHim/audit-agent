@@ -1,14 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PagePlaceholder } from '@/components/page-placeholder'
+import { GatePanel } from '@/components/gate-form'
+import { decisionsDisabled } from '@/lib/engagement'
+import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/gate')({ component: Gate })
 
 function Gate() {
+  const { eid } = Route.useParams()
+  const overview = useEngagement(eid)
   return (
-    <PagePlaceholder
-      title="Gate"
-      description="Material and decision form for ACC-01, PLN-01/03, FIN-01 and RPT-01."
-      endpoints={['GET /api/v1/engagements/{eid}/gate', 'POST /api/v1/engagements/{eid}/gate-decisions']}
-    />
+    <div className="space-y-4">
+      <h1 className="font-heading text-2xl font-semibold">Gate</h1>
+      <GatePanel eid={eid} disabled={decisionsDisabled(overview.data)} />
+    </div>
   )
 }

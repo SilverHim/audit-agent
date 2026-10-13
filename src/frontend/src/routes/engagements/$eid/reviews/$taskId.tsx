@@ -1,18 +1,25 @@
+import { useQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
-import { PagePlaceholder } from '@/components/page-placeholder'
+import { reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
+import { QueryState } from '@/components/query-state'
+import { ReviewDetail } from '@/components/review-detail'
+import { decisionsDisabled } from '@/lib/engagement'
+import { useEngagement } from '@/lib/use-engagement'
 
-export const Route = createFileRoute('/engagements/$eid/reviews/$taskId')({ component: ReviewTaskDetail })
+export const Route = createFileRoute('/engagements/$eid/reviews/$taskId')({ component: ReviewTaskPage })
 
-function ReviewTaskDetail() {
+function ReviewTaskPage() {
+  const { eid, taskId } = Route.useParams()
+  const overview = useEngagement(eid)
+  const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid } }))
+  const item = tasks.data?.find((task) => task.task.id === taskId)
   return (
-    <PagePlaceholder
-      title="Review task"
-      description="Conclusion, reasoning chain, evidence, counter-argument and confidence side by side; only the decisions allowed for the task."
-      endpoints={[
-        'GET /api/v1/engagements/{eid}/review-tasks',
-        'GET /api/v1/engagements/{eid}/judgments/{jid}',
-        'POST /api/v1/engagements/{eid}/review-records',
-      ]}
-    />
+    <QueryState isPending={tasks.isPending} error={tasks.error}>
+      {item ? (
+        <ReviewDetail eid={eid} item={item} disabled={decisionsDisabled(overview.data)} />
+      ) : (
+        <p className="text-muted-foreground text-sm">Review task {taskId} was not found.</p>
+      )}
+    </QueryState>
   )
 }

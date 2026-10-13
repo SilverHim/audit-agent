@@ -4,6 +4,2014 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+/**
+ * AcceptanceMaterial
+ *
+ * ACC-01 闸门的呈报材料.
+ */
+export type AcceptanceMaterial = {
+    /**
+     * Kind
+     */
+    kind?: 'ACC-01';
+    scorecard: AcceptanceScorecard;
+    /**
+     * Exceptions
+     */
+    exceptions: Array<AuditException>;
+    client_profile: ClientProfile;
+};
+
+/**
+ * AcceptanceScorecard
+ *
+ * 承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料.
+ */
+export type AcceptanceScorecard = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Registry Checks
+     */
+    registry_checks: Array<RegistryCheck>;
+    /**
+     * Exception Ids
+     */
+    exception_ids: Array<string>;
+    /**
+     * Client Profile Version
+     */
+    client_profile_version: number;
+};
+
+/**
+ * AgentId
+ *
+ * 智能体编号. A7, A8 本版不实现, 只占位.
+ */
+export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
+
+/**
+ * AnalyticsResult
+ *
+ * PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外.
+ */
+export type AnalyticsResult = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Ratios
+     */
+    ratios: {
+        [key: string]: number;
+    };
+    /**
+     * Exception Ids
+     */
+    exception_ids: Array<string>;
+};
+
+/**
+ * Annotation
+ *
+ * RPT-01 退回报告时对某一段的批注.
+ */
+export type Annotation = {
+    section: ReportSection;
+    /**
+     * Quote
+     */
+    quote?: string | null;
+    /**
+     * Comment
+     */
+    comment: string;
+};
+
+/**
+ * Assertion
+ *
+ * 审计认定.
+ */
+export type Assertion = 'Occurrence' | 'Completeness' | 'Accuracy' | 'Cutoff' | 'Existence' | 'Valuation' | 'Rights';
+
+/**
+ * AuditException
+ *
+ * 例外: 规则程序查出的异常, 如跨期发票, 余额不符. 规格书中叫 Exception, 改名避开 Python 内置名.
+ */
+export type AuditException = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Severity
+     */
+    severity: 'low' | 'medium' | 'high';
+    /**
+     * Source Ids
+     */
+    source_ids: Array<string>;
+    /**
+     * Amount Cents
+     */
+    amount_cents?: number | null;
+    /**
+     * Detail
+     */
+    detail?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Evidence
+     */
+    evidence: Array<EvidencePointer>;
+    disposition?: ExceptionDisposition;
+    /**
+     * Attributed By
+     */
+    attributed_by?: string | null;
+};
+
+/**
+ * AuditObjective
+ *
+ * 审计目标: 某科目的某项认定, 风险等级取其下风险项的最高等级.
+ */
+export type AuditObjective = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Account
+     */
+    account: string;
+    assertion: Assertion;
+    risk_level: RiskLevel;
+    /**
+     * Is Material
+     */
+    is_material: boolean;
+};
+
+/**
+ * AuditReportVersion
+ *
+ * 审计报告的一个修订版本, 签字后锁定.
+ */
+export type AuditReportVersion = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Revision
+     */
+    revision: number;
+    opinion_type: OpinionType;
+    /**
+     * Sections
+     */
+    sections: {
+        [key in ReportSection]?: string;
+    };
+    /**
+     * Judgment Refs
+     */
+    judgment_refs: Array<JudgmentRef>;
+    /**
+     * Addresses Decision Id
+     */
+    addresses_decision_id?: string | null;
+    status?: ReportStatus;
+    /**
+     * Report Date
+     */
+    report_date?: string | null;
+    /**
+     * Approved By
+     */
+    approved_by?: string | null;
+    /**
+     * Approved At
+     */
+    approved_at?: string | null;
+};
+
+/**
+ * AutonomyLevel
+ *
+ * AI 自主度.
+ */
+export type AutonomyLevel = 'L1' | 'L2' | 'L3' | 'L4';
+
+/**
+ * Body_auth-login
+ */
+export type BodyAuthLogin = {
+    /**
+     * Grant Type
+     */
+    grant_type?: string | null;
+    /**
+     * Username
+     */
+    username: string;
+    /**
+     * Password
+     */
+    password: string;
+    /**
+     * Scope
+     */
+    scope?: string;
+    /**
+     * Client Id
+     */
+    client_id?: string | null;
+    /**
+     * Client Secret
+     */
+    client_secret?: string | null;
+};
+
+/**
+ * ClientProfile
+ *
+ * 客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id.
+ */
+export type ClientProfile = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Legal Name
+     */
+    legal_name: string;
+    /**
+     * Abn
+     */
+    abn: string;
+    /**
+     * Entity Type
+     */
+    entity_type: string;
+    /**
+     * Industry Anzsic
+     */
+    industry_anzsic: string;
+    /**
+     * Listed
+     */
+    listed: boolean;
+    /**
+     * Directors
+     */
+    directors: Array<string>;
+    /**
+     * Notes
+     */
+    notes?: string;
+};
+
+/**
+ * ClientProfileIn
+ *
+ * 更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1.
+ */
+export type ClientProfileIn = {
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Legal Name
+     */
+    legal_name: string;
+    /**
+     * Abn
+     */
+    abn: string;
+    /**
+     * Entity Type
+     */
+    entity_type: string;
+    /**
+     * Industry Anzsic
+     */
+    industry_anzsic: string;
+    /**
+     * Listed
+     */
+    listed: boolean;
+    /**
+     * Directors
+     */
+    directors: Array<string>;
+    /**
+     * Notes
+     */
+    notes?: string;
+};
+
+/**
+ * CompletionMaterial
+ *
+ * FIN-01 闸门的呈报材料.
+ */
+export type CompletionMaterial = {
+    /**
+     * Kind
+     */
+    kind?: 'FIN-01';
+    schedule: UncorrectedSchedule;
+    /**
+     * Misstatements
+     */
+    misstatements: Array<Misstatement>;
+};
+
+/**
+ * Confirmation
+ *
+ * 一份银行询证函: 发函, 回函, 回函余额与账面的比对结果.
+ */
+export type Confirmation = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Type
+     */
+    type?: 'bank';
+    /**
+     * Bank Account Id
+     */
+    bank_account_id: string;
+    /**
+     * Confirming Party
+     */
+    confirming_party: string;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+    /**
+     * Sent At
+     */
+    sent_at: string;
+    /**
+     * Reply Document Id
+     */
+    reply_document_id?: string | null;
+    receipt_channel?: ReceiptChannel | null;
+    /**
+     * Replied At
+     */
+    replied_at?: string | null;
+    /**
+     * Balance Date
+     */
+    balance_date?: string | null;
+    /**
+     * Confirmed Balance Cents
+     */
+    confirmed_balance_cents?: number | null;
+    /**
+     * Book Balance Cents
+     */
+    book_balance_cents?: number | null;
+    /**
+     * Difference Cents
+     */
+    difference_cents?: number | null;
+    result?: ConfirmationResult;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
+ * ConfirmationResult
+ *
+ * 函证结果.
+ */
+export type ConfirmationResult = 'pending' | 'agreed' | 'difference';
+
+/**
+ * Contract
+ *
+ * DOC-04 从合同 PDF 抽取出的合同要素与条款.
+ */
+export type Contract = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Document Id
+     */
+    document_id: string;
+    /**
+     * Counterparty
+     */
+    counterparty: string;
+    /**
+     * Counterparty Abn
+     */
+    counterparty_abn: string | null;
+    /**
+     * Type
+     */
+    type?: 'sales';
+    /**
+     * Amount Cents
+     */
+    amount_cents: number | null;
+    /**
+     * Sign Date
+     */
+    sign_date: string | null;
+    /**
+     * Terms
+     */
+    terms: Array<ContractTerm>;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+    /**
+     * Extracted By Run
+     */
+    extracted_by_run: string;
+};
+
+/**
+ * ContractTerm
+ *
+ * 合同中的一个条款.
+ */
+export type ContractTerm = {
+    /**
+     * Id
+     */
+    id: string;
+    term_type: TermType;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Page
+     */
+    page: number;
+};
+
+/**
+ * Decision
+ *
+ * 复核决定.
+ */
+export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result';
+
+/**
+ * Direction
+ *
+ * 错报方向.
+ */
+export type Direction = 'overstated' | 'understated';
+
+/**
+ * DocumentRef
+ *
+ * 已存档的证据文件 (合同, 回函等 PDF) 的登记信息.
+ */
+export type DocumentRef = {
+    /**
+     * Id
+     */
+    id: string;
+    type: DocumentType;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Sha256
+     */
+    sha256: string;
+    /**
+     * Page Count
+     */
+    page_count: number;
+    reliability: Reliability;
+    /**
+     * Status
+     */
+    status: 'received' | 'extracted' | 'needs_manual';
+    /**
+     * Uploaded At
+     */
+    uploaded_at: string;
+};
+
+/**
+ * DocumentType
+ *
+ * 证据文件类型.
+ */
+export type DocumentType = 'contract' | 'confirmation' | 'other';
+
+/**
+ * Engagement
+ *
+ * 审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取.
+ */
+export type Engagement = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Client Id
+     */
+    client_id: string;
+    /**
+     * Period Start
+     */
+    period_start: string;
+    /**
+     * Period End
+     */
+    period_end: string;
+    /**
+     * Dataset
+     */
+    dataset: string;
+    /**
+     * Owner Id
+     */
+    owner_id: string;
+    /**
+     * Client Profile Version
+     */
+    client_profile_version: number;
+    phase: Phase;
+    /**
+     * Locked
+     */
+    locked?: boolean;
+    /**
+     * Version Snapshot
+     */
+    version_snapshot?: {
+        [key: string]: string;
+    };
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * EngagementCreate
+ *
+ * 新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像.
+ */
+export type EngagementCreate = {
+    /**
+     * Period Start
+     */
+    period_start: string;
+    /**
+     * Period End
+     */
+    period_end: string;
+    /**
+     * Dataset
+     */
+    dataset: string;
+};
+
+/**
+ * EngagementOverview
+ *
+ * 项目总览页的数据.
+ */
+export type EngagementOverview = {
+    engagement: Engagement;
+    /**
+     * Client Name
+     */
+    client_name: string;
+    /**
+     * Running
+     */
+    running: boolean;
+    /**
+     * Run Error
+     */
+    run_error: string | null;
+    current_gate: GateId | null;
+    /**
+     * Awaiting Review
+     */
+    awaiting_review: boolean;
+    /**
+     * Procedures
+     */
+    procedures: Array<ProcedureSummary>;
+    /**
+     * Pending Tasks
+     */
+    pending_tasks: number;
+    /**
+     * Materiality Cents
+     */
+    materiality_cents: number | null;
+    /**
+     * Performance Materiality Cents
+     */
+    performance_materiality_cents: number | null;
+    /**
+     * Clearly Trivial Cents
+     */
+    clearly_trivial_cents: number | null;
+    opinion_route: OpinionType | null;
+};
+
+/**
+ * EngagementSummary
+ *
+ * 项目列表中的一行.
+ */
+export type EngagementSummary = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Client Name
+     */
+    client_name: string;
+    phase: Phase;
+    current_gate: GateId | null;
+    /**
+     * Pending Tasks
+     */
+    pending_tasks: number;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * Engine
+ *
+ * 程序的执行方式.
+ */
+export type Engine = 'rule' | 'llm' | 'hybrid' | 'manual';
+
+/**
+ * EvidencePointer
+ *
+ * 证据指针: 结论依据的是哪条证据 (source_id) 的哪一处 (locator), 前端据此打开原文.
+ */
+export type EvidencePointer = {
+    type: EvidenceType;
+    /**
+     * Source Type
+     */
+    source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail';
+    /**
+     * Source Id
+     */
+    source_id: string;
+    /**
+     * Locator
+     */
+    locator: string;
+    /**
+     * Page
+     */
+    page?: number | null;
+    reliability?: Reliability | null;
+};
+
+/**
+ * EvidenceType
+ *
+ * 证据种类.
+ */
+export type EvidenceType = 'voucher' | 'invoice' | 'delivery' | 'bank' | 'contract' | 'external' | 'standard';
+
+/**
+ * ExceptionDisposition
+ *
+ * 例外的归因状态.
+ */
+export type ExceptionDisposition = 'open' | 'attributed' | 'unattributed';
+
+/**
+ * GateDecision
+ *
+ * 审计师在闸门作出的决定, 附该闸门特有的内容 (重要性, 意见类型, 批注等).
+ */
+export type GateDecision = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    gate: GateId;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    decision: GateVerdict;
+    materiality?: MaterialityChoice | null;
+    /**
+     * Edits
+     */
+    edits?: Array<GateEdit>;
+    disposition?: OpinionType | null;
+    /**
+     * Annotations
+     */
+    annotations?: Array<Annotation>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Decided By
+     */
+    decided_by: string;
+    /**
+     * Decided At
+     */
+    decided_at: string;
+};
+
+/**
+ * GateDecisionIn
+ *
+ * 闸门决定请求体: 去掉 id, version, decided_by, decided_at, 由服务端填写.
+ */
+export type GateDecisionIn = {
+    gate: GateId;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    decision: GateVerdict;
+    materiality?: MaterialityChoice | null;
+    /**
+     * Edits
+     */
+    edits?: Array<GateEdit>;
+    disposition?: OpinionType | null;
+    /**
+     * Annotations
+     */
+    annotations?: Array<Annotation>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
+ * GateEdit
+ *
+ * PLN-01/03 闸门中对一个风险项等级的修改.
+ */
+export type GateEdit = {
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    /**
+     * Field
+     */
+    field: 'level';
+    new_value: RiskLevel;
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
+ * GateId
+ *
+ * 四道闸门.
+ */
+export type GateId = 'ACC-01' | 'PLN-01/03' | 'FIN-01' | 'RPT-01';
+
+/**
+ * GateVerdict
+ *
+ * 闸门决定.
+ */
+export type GateVerdict = 'approve' | 'reject' | 'insufficient_info';
+
+/**
+ * GateView
+ *
+ * 闸门页的数据: 当前闸门与要呈报的材料.
+ */
+export type GateView = {
+    gate: GateId;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    /**
+     * Material
+     */
+    material: ({
+        kind: 'ACC-01';
+    } & AcceptanceMaterial) | ({
+        kind: 'PLN-01/03';
+    } & PlanningMaterial) | ({
+        kind: 'FIN-01';
+    } & CompletionMaterial) | ({
+        kind: 'RPT-01';
+    } & ReportMaterial);
+};
+
+/**
+ * HTTPValidationError
+ */
+export type HttpValidationError = {
+    /**
+     * Detail
+     */
+    detail?: Array<ValidationError>;
+};
+
+/**
+ * IdBody
+ *
+ * 202 响应: 刚写入的决定 ID.
+ */
+export type IdBody = {
+    /**
+     * Id
+     */
+    id: string;
+};
+
+/**
+ * Judgment
+ *
+ * AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作.
+ */
+export type Judgment = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    /**
+     * Conclusion
+     */
+    conclusion: string;
+    /**
+     * Confidence
+     */
+    confidence: number;
+    /**
+     * Confidence Parts
+     */
+    confidence_parts: {
+        [key: string]: number;
+    };
+    /**
+     * Reasoning Chain
+     */
+    reasoning_chain: Array<ReasoningStep>;
+    /**
+     * Evidence
+     */
+    evidence: Array<EvidencePointer>;
+    /**
+     * Counter Argument
+     */
+    counter_argument: string;
+    proposed_action: ProposedAction;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Exception Ids
+     */
+    exception_ids?: Array<string>;
+    autonomy_level: AutonomyLevel;
+    review_status?: ReviewStatus;
+    /**
+     * Superseded By
+     */
+    superseded_by?: string | null;
+    /**
+     * Performed By
+     */
+    performed_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Trail Ref
+     */
+    trail_ref?: string | null;
+};
+
+/**
+ * JudgmentDetail
+ *
+ * 一条判断的当前版本, 历史版本与相关复核决定.
+ */
+export type JudgmentDetail = {
+    judgment: Judgment;
+    /**
+     * Versions
+     */
+    versions: Array<Judgment>;
+    /**
+     * Review Records
+     */
+    review_records: Array<ReviewRecord>;
+};
+
+/**
+ * JudgmentRef
+ *
+ * 报告中引用的一条判断.
+ */
+export type JudgmentRef = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version: number;
+};
+
+/**
+ * ManualResult
+ *
+ * 人工直接给出的结果, 用于 manual_result 决定.
+ */
+export type ManualResult = {
+    /**
+     * Conclusion
+     */
+    conclusion: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
+ * MaterialityCandidate
+ *
+ * 按一个基准 (收入, 总资产或税前利润) 算出的重要性候选区间.
+ */
+export type MaterialityCandidate = {
+    /**
+     * Basis
+     */
+    basis: 'revenue' | 'total_assets' | 'profit_before_tax';
+    /**
+     * Base Amount Cents
+     */
+    base_amount_cents: number;
+    /**
+     * Pct Low
+     */
+    pct_low: number;
+    /**
+     * Pct High
+     */
+    pct_high: number;
+    /**
+     * Low Cents
+     */
+    low_cents: number;
+    /**
+     * High Cents
+     */
+    high_cents: number;
+};
+
+/**
+ * MaterialityCandidates
+ *
+ * PLN-01 算出的全部重要性候选, PLN-01/03 闸门的呈报材料.
+ */
+export type MaterialityCandidates = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Candidates
+     */
+    candidates: Array<MaterialityCandidate>;
+    /**
+     * Performance Pct Range
+     */
+    performance_pct_range?: [
+        number,
+        number
+    ];
+    /**
+     * Clearly Trivial Pct
+     */
+    clearly_trivial_pct?: number;
+};
+
+/**
+ * MaterialityChoice
+ *
+ * 审计师在 PLN-01/03 闸门选定的重要性基准与比例.
+ */
+export type MaterialityChoice = {
+    /**
+     * Basis
+     */
+    basis: 'revenue' | 'total_assets' | 'profit_before_tax';
+    /**
+     * Pct
+     */
+    pct: number;
+    /**
+     * Performance Pct
+     */
+    performance_pct: number;
+    /**
+     * Clearly Trivial Pct
+     */
+    clearly_trivial_pct: number;
+};
+
+/**
+ * Misstatement
+ *
+ * 已认定的错报, 来自某条判断或例外. 本版一律按未更正处理.
+ */
+export type Misstatement = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Judgment Id
+     */
+    judgment_id: string | null;
+    /**
+     * Exception Id
+     */
+    exception_id: string | null;
+    /**
+     * Review Record Id
+     */
+    review_record_id: string;
+    type: MisstatementType;
+    /**
+     * Account
+     */
+    account: string;
+    assertion: Assertion;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    direction: Direction;
+    /**
+     * Status
+     */
+    status?: 'uncorrected';
+};
+
+/**
+ * MisstatementDraft
+ *
+ * 判断建议认定错报时附带的错报草稿.
+ */
+export type MisstatementDraft = {
+    type: MisstatementType;
+    /**
+     * Account
+     */
+    account: string;
+    assertion: Assertion;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    direction: Direction;
+};
+
+/**
+ * MisstatementReport
+ *
+ * 错报列表, 未更正汇总, 以及总览里的重要性与意见.
+ */
+export type MisstatementReport = {
+    /**
+     * Items
+     */
+    items: Array<Misstatement>;
+    schedule: UncorrectedSchedule | null;
+    /**
+     * Materiality Cents
+     */
+    materiality_cents: number | null;
+    opinion_route: OpinionType | null;
+};
+
+/**
+ * MisstatementType
+ *
+ * 错报类型.
+ */
+export type MisstatementType = 'factual' | 'judgmental' | 'projected';
+
+/**
+ * OpinionType
+ *
+ * 审计意见类型.
+ */
+export type OpinionType = 'unqualified' | 'qualified' | 'adverse' | 'disclaimer';
+
+/**
+ * Phase
+ *
+ * 项目阶段.
+ */
+export type Phase = 'P0_Acceptance' | 'P1_Planning' | 'P2_Executing' | 'P3_Completion' | 'P4_Reporting' | 'Archived' | 'Declined';
+
+/**
+ * PlanningMaterial
+ *
+ * PLN-01/03 闸门的呈报材料.
+ */
+export type PlanningMaterial = {
+    /**
+     * Kind
+     */
+    kind?: 'PLN-01/03';
+    analytics: AnalyticsResult;
+    /**
+     * Analytics Exceptions
+     */
+    analytics_exceptions: Array<AuditException>;
+    candidates: MaterialityCandidates;
+    /**
+     * Objectives
+     */
+    objectives: Array<AuditObjective>;
+    /**
+     * Risks
+     */
+    risks: Array<RiskItem>;
+    /**
+     * Uncovered Objective Ids
+     */
+    uncovered_objective_ids: Array<string>;
+};
+
+/**
+ * Procedure
+ *
+ * 本项目中一条审计程序的实例, 如 REV-02. 模板见 knowledge/procedures/.
+ */
+export type Procedure = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    phase: Phase;
+    /**
+     * Template Commit
+     */
+    template_commit: string;
+    /**
+     * Objective Ids
+     */
+    objective_ids?: Array<string>;
+    /**
+     * Params
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+    autonomy_level: AutonomyLevel;
+    status?: ProcedureStatus;
+    /**
+     * Rerun Subject Ids
+     */
+    rerun_subject_ids?: Array<string>;
+};
+
+/**
+ * ProcedureDetail
+ *
+ * 一条程序的执行记录, 例外与判断.
+ */
+export type ProcedureDetail = {
+    procedure: Procedure;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Depends On
+     */
+    depends_on: Array<string>;
+    /**
+     * Standards
+     */
+    standards: Array<string>;
+    /**
+     * Runs
+     */
+    runs: Array<ProcedureRun>;
+    /**
+     * Exceptions
+     */
+    exceptions: Array<AuditException>;
+    /**
+     * Judgments
+     */
+    judgments: Array<Judgment>;
+};
+
+/**
+ * ProcedureRun
+ *
+ * 程序的一次执行记录: 第几次, 起因, 起止时间, 成败. 重跑会产生新记录.
+ */
+export type ProcedureRun = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Run No
+     */
+    run_no: number;
+    trigger: RunTrigger;
+    /**
+     * Instance
+     */
+    instance?: string | null;
+    /**
+     * Params Snapshot
+     */
+    params_snapshot: {
+        [key: string]: unknown;
+    };
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Ended At
+     */
+    ended_at?: string | null;
+    status: RunStatus;
+    /**
+     * Failure Reason
+     */
+    failure_reason?: string | null;
+};
+
+/**
+ * ProcedureStatus
+ *
+ * 程序状态.
+ */
+export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'completed';
+
+/**
+ * ProcedureSummary
+ *
+ * 项目总览中的一行程序状态.
+ */
+export type ProcedureSummary = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    phase: Phase;
+    owner: AgentId;
+    engine: Engine;
+    autonomy_level: AutonomyLevel;
+    status: ProcedureStatus;
+    /**
+     * Pending Tasks
+     */
+    pending_tasks: number;
+};
+
+/**
+ * ProposedAction
+ *
+ * 判断的建议动作.
+ */
+export type ProposedAction = 'accept' | 'close' | 'misstatement' | 'more_evidence';
+
+/**
+ * ReasoningStep
+ *
+ * 推理链中的一步.
+ */
+export type ReasoningStep = {
+    kind: StepKind;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+    /**
+     * From Steps
+     */
+    from_steps?: Array<number>;
+    status?: StepStatus;
+};
+
+/**
+ * ReceiptChannel
+ *
+ * 回函渠道, 决定回函的可靠性.
+ */
+export type ReceiptChannel = 'direct_mail' | 'direct_email' | 'portal_via_client' | 'oral';
+
+/**
+ * RegistryCheck
+ *
+ * ACC-04 的一项登记检查结果.
+ */
+export type RegistryCheck = {
+    /**
+     * Check
+     */
+    check: 'abn_active' | 'name_match' | 'company_registered';
+    /**
+     * Passed
+     */
+    passed: boolean;
+    /**
+     * Detail
+     */
+    detail: string;
+    evidence: EvidencePointer;
+};
+
+/**
+ * Reliability
+ *
+ * 证据可靠性, 影响置信度权重.
+ */
+export type Reliability = 'external_original' | 'external_copy' | 'internal_original' | 'internal_copy';
+
+/**
+ * ReportBundle
+ *
+ * 报告各修订版, 以及全部 RPT-01 决定 (含批注).
+ */
+export type ReportBundle = {
+    /**
+     * Versions
+     */
+    versions: Array<AuditReportVersion>;
+    /**
+     * Decisions
+     */
+    decisions: Array<GateDecision>;
+};
+
+/**
+ * ReportMaterial
+ *
+ * RPT-01 闸门的呈报材料.
+ */
+export type ReportMaterial = {
+    /**
+     * Kind
+     */
+    kind?: 'RPT-01';
+    report: AuditReportVersion;
+    /**
+     * Previous Decisions
+     */
+    previous_decisions: Array<GateDecision>;
+};
+
+/**
+ * ReportSection
+ *
+ * 审计报告段落.
+ */
+export type ReportSection = 'opinion' | 'basis_for_opinion' | 'directors_responsibilities' | 'auditor_responsibilities' | 'other_legal_and_regulatory' | 'signature';
+
+/**
+ * ReportStatus
+ *
+ * 报告版本状态.
+ */
+export type ReportStatus = 'draft' | 'signed';
+
+/**
+ * ReviewRecord
+ *
+ * 审计师对一个复核任务作出的决定及理由.
+ */
+export type ReviewRecord = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    decision: Decision;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Override Conclusion
+     */
+    override_conclusion?: string | null;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Rerun Params
+     */
+    rerun_params?: {
+        [key: string]: unknown;
+    } | null;
+    manual_result?: ManualResult | null;
+    /**
+     * Reviewed By
+     */
+    reviewed_by: string;
+    /**
+     * Decided At
+     */
+    decided_at: string;
+};
+
+/**
+ * ReviewRecordIn
+ *
+ * 复核决定请求体: 去掉 id, version, reviewed_by, decided_at.
+ */
+export type ReviewRecordIn = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    decision: Decision;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Override Conclusion
+     */
+    override_conclusion?: string | null;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Rerun Params
+     */
+    rerun_params?: {
+        [key: string]: unknown;
+    } | null;
+    manual_result?: ManualResult | null;
+};
+
+/**
+ * ReviewStatus
+ *
+ * 判断的复核状态.
+ */
+export type ReviewStatus = 'pending' | 'confirmed' | 'overridden';
+
+/**
+ * ReviewTask
+ *
+ * 复核任务: 需要人处理的一件事, 进复核队列.
+ */
+export type ReviewTask = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    kind: TaskKind;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    target_type: TargetType;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Target Version
+     */
+    target_version: number;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id?: string | null;
+    status?: TaskStatus;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
+ * ReviewTaskView
+ *
+ * 复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定.
+ */
+export type ReviewTaskView = {
+    task: ReviewTask;
+    /**
+     * Procedure Name
+     */
+    procedure_name: string;
+    /**
+     * Target
+     */
+    target: Judgment | AuditException | ProcedureRun;
+    /**
+     * Allowed Decisions
+     */
+    allowed_decisions: Array<Decision>;
+};
+
+/**
+ * RiskItem
+ *
+ * 风险清单中的一项, 挂在某个审计目标下, 可在 PLN-01/03 闸门改等级.
+ */
+export type RiskItem = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Objective Id
+     */
+    objective_id: string;
+    assertion: Assertion;
+    level: RiskLevel;
+    /**
+     * Fraud Related
+     */
+    fraud_related: boolean;
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Revision Reason
+     */
+    revision_reason?: string | null;
+    /**
+     * Approved By
+     */
+    approved_by?: string | null;
+};
+
+/**
+ * RiskLevel
+ *
+ * 风险等级.
+ */
+export type RiskLevel = 'low' | 'medium' | 'high' | 'significant';
+
+/**
+ * RunStatus
+ *
+ * 一次执行的状态.
+ */
+export type RunStatus = 'running' | 'succeeded' | 'failed';
+
+/**
+ * RunTrigger
+ *
+ * 一次执行的起因.
+ */
+export type RunTrigger = 'initial' | 'rerun';
+
+/**
+ * StandardFragment
+ *
+ * 准则片段: 某准则某段落的原文摘录, 供推理链引用.
+ */
+export type StandardFragment = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Standard
+     */
+    standard: string;
+    /**
+     * Paragraph
+     */
+    paragraph: string;
+    /**
+     * Topic
+     */
+    topic: string;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Procedures
+     */
+    procedures: Array<string>;
+};
+
+/**
+ * StepKind
+ *
+ * 推理步骤类型.
+ */
+export type StepKind = 'fact' | 'standard' | 'inference' | 'assumption' | 'limitation';
+
+/**
+ * StepStatus
+ *
+ * 推理步骤有没有证据支撑.
+ */
+export type StepStatus = 'supported' | 'unsupported';
+
+/**
+ * TargetType
+ *
+ * 复核任务指向的对象类型.
+ */
+export type TargetType = 'Judgment' | 'AuditException' | 'ProcedureRun';
+
+/**
+ * TaskKind
+ *
+ * 复核任务类型.
+ */
+export type TaskKind = 'normal' | 'unattributed' | 'failed';
+
+/**
+ * TaskStatus
+ *
+ * 复核任务状态.
+ */
+export type TaskStatus = 'pending' | 'decided';
+
+/**
+ * TermType
+ *
+ * 合同条款类型.
+ */
+export type TermType = 'payment' | 'control_transfer' | 'return_right' | 'rebate' | 'termination' | 'guarantee' | 'related_party';
+
+/**
+ * Token
+ *
+ * 登录成功返回的访问令牌.
+ */
+export type Token = {
+    /**
+     * Access Token
+     */
+    access_token: string;
+    /**
+     * Token Type
+     */
+    token_type?: string;
+};
+
+/**
+ * TrailEntry
+ *
+ * 审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改.
+ */
+export type TrailEntry = {
+    /**
+     * Id
+     */
+    id?: string | null;
+    /**
+     * Engagement Id
+     */
+    engagement_id: string;
+    kind: TrailKind;
+    /**
+     * Actor
+     */
+    actor: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id?: string | null;
+    /**
+     * Run Id
+     */
+    run_id?: string | null;
+    /**
+     * Summary
+     */
+    summary: string;
+    /**
+     * Model
+     */
+    model?: string | null;
+    /**
+     * Prompt Hash
+     */
+    prompt_hash?: string | null;
+    /**
+     * Input Tokens
+     */
+    input_tokens?: number | null;
+    /**
+     * Output Tokens
+     */
+    output_tokens?: number | null;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key?: string | null;
+    /**
+     * Payload
+     */
+    payload?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Created At
+     */
+    created_at?: string | null;
+};
+
+/**
+ * TrailKind
+ *
+ * 留痕类型.
+ */
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition';
+
+/**
+ * UncorrectedItem
+ *
+ * 未更正错报汇总表中的一行.
+ */
+export type UncorrectedItem = {
+    /**
+     * Misstatement Id
+     */
+    misstatement_id: string;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    direction: Direction;
+};
+
+/**
+ * UncorrectedSchedule
+ *
+ * 未更正错报汇总表: FIN-04 产出, FIN-01 闸门的呈报材料. 规格书中叫 UncorrectedMisstatementSchedule.
+ */
+export type UncorrectedSchedule = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Items
+     */
+    items: Array<UncorrectedItem>;
+    /**
+     * Excluded Trivial Ids
+     */
+    excluded_trivial_ids: Array<string>;
+    /**
+     * Total Cents
+     */
+    total_cents: number;
+    /**
+     * Materiality Cents
+     */
+    materiality_cents: number;
+    candidate_opinion: OpinionType;
+};
+
+/**
+ * User
+ *
+ * 系统用户, 即审计师.
+ */
+export type User = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Full Name
+     */
+    full_name: string;
+};
+
+/**
+ * ValidationError
+ */
+export type ValidationError = {
+    /**
+     * Location
+     */
+    loc: Array<string | number>;
+    /**
+     * Message
+     */
+    msg: string;
+    /**
+     * Error Type
+     */
+    type: string;
+    /**
+     * Input
+     */
+    input?: unknown;
+    /**
+     * Context
+     */
+    ctx?: {
+        [key: string]: unknown;
+    };
+};
+
 export type HealthHealthData = {
     body?: never;
     path?: never;
@@ -23,3 +2031,751 @@ export type HealthHealthResponses = {
 };
 
 export type HealthHealthResponse = HealthHealthResponses[keyof HealthHealthResponses];
+
+export type AuthLoginData = {
+    body: BodyAuthLogin;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/login';
+};
+
+export type AuthLoginErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AuthLoginError = AuthLoginErrors[keyof AuthLoginErrors];
+
+export type AuthLoginResponses = {
+    /**
+     * Successful Response
+     */
+    200: Token;
+};
+
+export type AuthLoginResponse = AuthLoginResponses[keyof AuthLoginResponses];
+
+export type UsersMeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/users/me';
+};
+
+export type UsersMeResponses = {
+    /**
+     * Successful Response
+     */
+    200: User;
+};
+
+export type UsersMeResponse = UsersMeResponses[keyof UsersMeResponses];
+
+export type EngagementsListEngagementsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/engagements';
+};
+
+export type EngagementsListEngagementsResponses = {
+    /**
+     * Response Engagements-List Engagements
+     *
+     * Successful Response
+     */
+    200: Array<EngagementSummary>;
+};
+
+export type EngagementsListEngagementsResponse = EngagementsListEngagementsResponses[keyof EngagementsListEngagementsResponses];
+
+export type EngagementsCreateEngagementData = {
+    body: EngagementCreate;
+    path?: never;
+    query?: never;
+    url: '/api/v1/engagements';
+};
+
+export type EngagementsCreateEngagementErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsCreateEngagementError = EngagementsCreateEngagementErrors[keyof EngagementsCreateEngagementErrors];
+
+export type EngagementsCreateEngagementResponses = {
+    /**
+     * Successful Response
+     */
+    201: EngagementOverview;
+};
+
+export type EngagementsCreateEngagementResponse = EngagementsCreateEngagementResponses[keyof EngagementsCreateEngagementResponses];
+
+export type EngagementsGetEngagementData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}';
+};
+
+export type EngagementsGetEngagementErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsGetEngagementError = EngagementsGetEngagementErrors[keyof EngagementsGetEngagementErrors];
+
+export type EngagementsGetEngagementResponses = {
+    /**
+     * Successful Response
+     */
+    200: EngagementOverview;
+};
+
+export type EngagementsGetEngagementResponse = EngagementsGetEngagementResponses[keyof EngagementsGetEngagementResponses];
+
+export type EngagementsResumeEngagementData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/resume';
+};
+
+export type EngagementsResumeEngagementErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsResumeEngagementError = EngagementsResumeEngagementErrors[keyof EngagementsResumeEngagementErrors];
+
+export type EngagementsResumeEngagementResponses = {
+    /**
+     * Successful Response
+     */
+    202: unknown;
+};
+
+export type GatesGetGateData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/gate';
+};
+
+export type GatesGetGateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GatesGetGateError = GatesGetGateErrors[keyof GatesGetGateErrors];
+
+export type GatesGetGateResponses = {
+    /**
+     * Successful Response
+     */
+    200: GateView;
+};
+
+export type GatesGetGateResponse = GatesGetGateResponses[keyof GatesGetGateResponses];
+
+export type GatesSubmitGateDecisionData = {
+    body: GateDecisionIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/gate-decisions';
+};
+
+export type GatesSubmitGateDecisionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GatesSubmitGateDecisionError = GatesSubmitGateDecisionErrors[keyof GatesSubmitGateDecisionErrors];
+
+export type GatesSubmitGateDecisionResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type GatesSubmitGateDecisionResponse = GatesSubmitGateDecisionResponses[keyof GatesSubmitGateDecisionResponses];
+
+export type GatesUpdateClientProfileData = {
+    body: ClientProfileIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/client-profile';
+};
+
+export type GatesUpdateClientProfileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GatesUpdateClientProfileError = GatesUpdateClientProfileErrors[keyof GatesUpdateClientProfileErrors];
+
+export type GatesUpdateClientProfileResponses = {
+    /**
+     * Successful Response
+     */
+    202: unknown;
+};
+
+export type ReviewsListReviewTasksData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Status
+         */
+        status?: TaskStatus | null;
+    };
+    url: '/api/v1/engagements/{eid}/review-tasks';
+};
+
+export type ReviewsListReviewTasksErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsListReviewTasksError = ReviewsListReviewTasksErrors[keyof ReviewsListReviewTasksErrors];
+
+export type ReviewsListReviewTasksResponses = {
+    /**
+     * Response Reviews-List Review Tasks
+     *
+     * Successful Response
+     */
+    200: Array<ReviewTaskView>;
+};
+
+export type ReviewsListReviewTasksResponse = ReviewsListReviewTasksResponses[keyof ReviewsListReviewTasksResponses];
+
+export type ReviewsSubmitReviewRecordData = {
+    body: ReviewRecordIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/review-records';
+};
+
+export type ReviewsSubmitReviewRecordErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsSubmitReviewRecordError = ReviewsSubmitReviewRecordErrors[keyof ReviewsSubmitReviewRecordErrors];
+
+export type ReviewsSubmitReviewRecordResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type ReviewsSubmitReviewRecordResponse = ReviewsSubmitReviewRecordResponses[keyof ReviewsSubmitReviewRecordResponses];
+
+export type ReviewsGetProcedureData = {
+    body?: never;
+    path: {
+        /**
+         * Pid
+         */
+        pid: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/procedures/{pid}';
+};
+
+export type ReviewsGetProcedureErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsGetProcedureError = ReviewsGetProcedureErrors[keyof ReviewsGetProcedureErrors];
+
+export type ReviewsGetProcedureResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProcedureDetail;
+};
+
+export type ReviewsGetProcedureResponse = ReviewsGetProcedureResponses[keyof ReviewsGetProcedureResponses];
+
+export type ReviewsGetJudgmentData = {
+    body?: never;
+    path: {
+        /**
+         * Jid
+         */
+        jid: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Version
+         */
+        version?: number | null;
+    };
+    url: '/api/v1/engagements/{eid}/judgments/{jid}';
+};
+
+export type ReviewsGetJudgmentErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsGetJudgmentError = ReviewsGetJudgmentErrors[keyof ReviewsGetJudgmentErrors];
+
+export type ReviewsGetJudgmentResponses = {
+    /**
+     * Successful Response
+     */
+    200: JudgmentDetail;
+};
+
+export type ReviewsGetJudgmentResponse = ReviewsGetJudgmentResponses[keyof ReviewsGetJudgmentResponses];
+
+export type ReviewsListExceptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Procedure Id
+         */
+        procedure_id?: string | null;
+    };
+    url: '/api/v1/engagements/{eid}/exceptions';
+};
+
+export type ReviewsListExceptionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsListExceptionsError = ReviewsListExceptionsErrors[keyof ReviewsListExceptionsErrors];
+
+export type ReviewsListExceptionsResponses = {
+    /**
+     * Response Reviews-List Exceptions
+     *
+     * Successful Response
+     */
+    200: Array<AuditException>;
+};
+
+export type ReviewsListExceptionsResponse = ReviewsListExceptionsResponses[keyof ReviewsListExceptionsResponses];
+
+export type EvidenceListDocumentsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents';
+};
+
+export type EvidenceListDocumentsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListDocumentsError = EvidenceListDocumentsErrors[keyof EvidenceListDocumentsErrors];
+
+export type EvidenceListDocumentsResponses = {
+    /**
+     * Response Evidence-List Documents
+     *
+     * Successful Response
+     */
+    200: Array<DocumentRef>;
+};
+
+export type EvidenceListDocumentsResponse = EvidenceListDocumentsResponses[keyof EvidenceListDocumentsResponses];
+
+export type EvidenceListContractsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/contracts';
+};
+
+export type EvidenceListContractsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListContractsError = EvidenceListContractsErrors[keyof EvidenceListContractsErrors];
+
+export type EvidenceListContractsResponses = {
+    /**
+     * Response Evidence-List Contracts
+     *
+     * Successful Response
+     */
+    200: Array<Contract>;
+};
+
+export type EvidenceListContractsResponse = EvidenceListContractsResponses[keyof EvidenceListContractsResponses];
+
+export type EvidenceGetEvidenceData = {
+    body?: never;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/evidence/{document_id}';
+};
+
+export type EvidenceGetEvidenceErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceGetEvidenceError = EvidenceGetEvidenceErrors[keyof EvidenceGetEvidenceErrors];
+
+export type EvidenceGetEvidenceResponses = {
+    /**
+     * Successful Response
+     */
+    200: Blob | File;
+};
+
+export type EvidenceGetEvidenceResponse = EvidenceGetEvidenceResponses[keyof EvidenceGetEvidenceResponses];
+
+export type EvidenceGetRecordData = {
+    body?: never;
+    path: {
+        /**
+         * Source Type
+         */
+        source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance';
+        /**
+         * Source Id
+         */
+        source_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/records/{source_type}/{source_id}';
+};
+
+export type EvidenceGetRecordErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceGetRecordError = EvidenceGetRecordErrors[keyof EvidenceGetRecordErrors];
+
+export type EvidenceGetRecordResponses = {
+    /**
+     * Response Evidence-Get Record
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type EvidenceGetRecordResponse = EvidenceGetRecordResponses[keyof EvidenceGetRecordResponses];
+
+export type EvidenceListConfirmationsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/confirmations';
+};
+
+export type EvidenceListConfirmationsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListConfirmationsError = EvidenceListConfirmationsErrors[keyof EvidenceListConfirmationsErrors];
+
+export type EvidenceListConfirmationsResponses = {
+    /**
+     * Response Evidence-List Confirmations
+     *
+     * Successful Response
+     */
+    200: Array<Confirmation>;
+};
+
+export type EvidenceListConfirmationsResponse = EvidenceListConfirmationsResponses[keyof EvidenceListConfirmationsResponses];
+
+export type ReportsGetMisstatementsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/misstatements';
+};
+
+export type ReportsGetMisstatementsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReportsGetMisstatementsError = ReportsGetMisstatementsErrors[keyof ReportsGetMisstatementsErrors];
+
+export type ReportsGetMisstatementsResponses = {
+    /**
+     * Successful Response
+     */
+    200: MisstatementReport;
+};
+
+export type ReportsGetMisstatementsResponse = ReportsGetMisstatementsResponses[keyof ReportsGetMisstatementsResponses];
+
+export type ReportsGetReportsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/reports';
+};
+
+export type ReportsGetReportsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReportsGetReportsError = ReportsGetReportsErrors[keyof ReportsGetReportsErrors];
+
+export type ReportsGetReportsResponses = {
+    /**
+     * Successful Response
+     */
+    200: ReportBundle;
+};
+
+export type ReportsGetReportsResponse = ReportsGetReportsResponses[keyof ReportsGetReportsResponses];
+
+export type ReportsListTrailData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Kind
+         */
+        kind?: TrailKind | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+    };
+    url: '/api/v1/engagements/{eid}/trail';
+};
+
+export type ReportsListTrailErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReportsListTrailError = ReportsListTrailErrors[keyof ReportsListTrailErrors];
+
+export type ReportsListTrailResponses = {
+    /**
+     * Response Reports-List Trail
+     *
+     * Successful Response
+     */
+    200: Array<TrailEntry>;
+};
+
+export type ReportsListTrailResponse = ReportsListTrailResponses[keyof ReportsListTrailResponses];
+
+export type ReportsGetTrailData = {
+    body?: never;
+    path: {
+        /**
+         * Trail Id
+         */
+        trail_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/trail/{trail_id}';
+};
+
+export type ReportsGetTrailErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReportsGetTrailError = ReportsGetTrailErrors[keyof ReportsGetTrailErrors];
+
+export type ReportsGetTrailResponses = {
+    /**
+     * Successful Response
+     */
+    200: TrailEntry;
+};
+
+export type ReportsGetTrailResponse = ReportsGetTrailResponses[keyof ReportsGetTrailResponses];
+
+export type StandardsGetStandardData = {
+    body?: never;
+    path: {
+        /**
+         * Fragment Id
+         */
+        fragment_id: string;
+    };
+    query?: never;
+    url: '/api/v1/standards/{fragment_id}';
+};
+
+export type StandardsGetStandardErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type StandardsGetStandardError = StandardsGetStandardErrors[keyof StandardsGetStandardErrors];
+
+export type StandardsGetStandardResponses = {
+    /**
+     * Successful Response
+     */
+    200: StandardFragment;
+};
+
+export type StandardsGetStandardResponse = StandardsGetStandardResponses[keyof StandardsGetStandardResponses];
