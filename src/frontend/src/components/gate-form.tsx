@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CircleCheck, CircleX } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -21,23 +22,28 @@ import type {
   RiskItem,
   RiskLevel,
 } from '@/client/types.gen'
-import { PointerList } from '@/components/evidence-link'
+import { Code, SectionLabel, StatusPill } from '@/components/chrome'
+import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
+import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
+import { useI18n } from '@/lib/i18n'
 import { formatAud, formatPct } from '@/lib/money'
+import type { Messages } from '@/locales/en'
+
+// 阶段决定 (闸门) 的材料与决定卡片. 对话工作台和表单视图共用
 
 type NoteDraft = Annotation & { id: string }
 
 function newNote(): NoteDraft {
   return { id: crypto.randomUUID(), section: 'opinion', quote: '', comment: '' }
 }
-const REPORT_SECTIONS: ReportSection[] = [
+export const REPORT_SECTIONS: ReportSection[] = [
   'opinion',
   'basis_for_opinion',
   'directors_responsibilities',
@@ -45,258 +51,231 @@ const REPORT_SECTIONS: ReportSection[] = [
   'other_legal_and_regulatory',
   'signature',
 ]
-const FIN_OPINIONS: OpinionType[] = ['unqualified', 'qualified']
+const FIN_OPINIONS: OpinionType[] = ['unqualified', 'qualified', 'adverse', 'disclaimer']
 const RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high', 'significant']
+const VERDICTS: GateVerdict[] = ['approve', 'reject', 'insufficient_info']
+const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 text-[14px]'
 
-export function GatePanel({ eid, disabled }: { eid: string; disabled: boolean }) {
-  const gate = useQuery({
+export function useGate(eid: string, enabled = true) {
+  return useQuery({
     ...gatesGetGateOptions({ path: { eid } }),
+    enabled,
     retry: (count, error) => !isApiCode(error, 'NOT_AT_GATE') && !isApiCode(error, 'NOT_FOUND') && count < 1,
   })
-  if (gate.error && isApiCode(gate.error, 'NOT_AT_GATE')) {
-    return <p className="text-muted-foreground text-sm">The engagement is not waiting at a gate.</p>
-  }
+}
+
+function Panel({ title, aside, children }: { title: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
-    <QueryState isPending={gate.isPending} error={gate.error}>
-      {gate.data ? (
-        <div className="space-y-6">
-          <GateMaterial eid={eid} view={gate.data} disabled={disabled} />
-          <GateDecisionForm eid={eid} view={gate.data} disabled={disabled} />
-        </div>
-      ) : null}
-    </QueryState>
+    <section className="overflow-hidden rounded-xl border bg-card">
+      <div className="flex flex-wrap items-center gap-2.5 border-line-soft border-b px-4 py-3">
+        <span className="font-semibold">{title}</span>
+        <span className="flex-1" />
+        {aside}
+      </div>
+      <div className="flex flex-col gap-3 p-4">{children}</div>
+    </section>
   )
 }
 
-export function RptSignForm({ eid, disabled }: { eid: string; disabled: boolean }) {
-  const gate = useQuery({
-    ...gatesGetGateOptions({ path: { eid } }),
-    retry: (count, error) => !isApiCode(error, 'NOT_AT_GATE') && count < 1,
-  })
-  const view = gate.data
-  if (view?.material.kind !== 'RPT-01') return null
-  return <GateDecisionForm eid={eid} view={view} disabled={disabled} />
+export function ExceptionList({ eid, items }: { eid: string; items: AuditException[] }) {
+  const { t } = useI18n()
+  if (!items.length) return null
+  return (
+    <Panel title={t.card.exceptions}>
+      {items.map((item) => (
+        <div key={item.id} className="flex flex-col gap-1.5 text-[14px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <Code className="font-semibold">{item.id}</Code>
+            <StatusPill tone={item.severity === 'high' ? 'risk' : 'warn'}>{item.severity}</StatusPill>
+            <Code>{formatAud(item.amount_cents)}</Code>
+          </div>
+          <ExceptionDetail detail={item.detail ?? {}} />
+          <PointerList eid={eid} pointers={item.evidence} />
+        </div>
+      ))}
+    </Panel>
+  )
 }
 
-function GateMaterial({ eid, view, disabled }: { eid: string; view: GateView; disabled: boolean }) {
+function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
+  const account = detail.account_name
+  const current = detail.current_cents
+  const prior = detail.prior_cents
+  const change = Number(detail.change_pct)
+  if (typeof account === 'string' && typeof current === 'number' && typeof prior === 'number') {
+    return (
+      <span className="text-secondary-foreground" lang="en">
+        {account}: <Code>{formatAud(prior)}</Code> → <Code>{formatAud(current)}</Code>
+        {Number.isFinite(change) ? ` (${change > 0 ? '+' : ''}${(change * 100).toFixed(1)}%)` : ''}
+      </span>
+    )
+  }
+  return (
+    <pre className="overflow-x-auto rounded-md bg-muted p-2.5 font-mono text-xs">{JSON.stringify(detail, null, 2)}</pre>
+  )
+}
+
+export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
+  const { t } = useI18n()
   const material = view.material
   if (material.kind === 'ACC-01') {
+    const checks = material.scorecard.registry_checks
+    const passed = checks.filter((check) => check.passed).length
     return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Acceptance checks</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {material.scorecard.registry_checks.map((check) => (
-              <div key={check.check} className="space-y-1 text-sm">
-                <p>
-                  <span className="font-medium">{check.check}</span> · {check.passed ? 'passed' : 'failed'}
-                </p>
-                <p>{check.detail}</p>
-                <PointerList eid={eid} pointers={[check.evidence]} />
-              </div>
+      <div className="flex flex-col gap-3">
+        <Panel
+          title={
+            <>
+              <Code className="mr-2 rounded-md bg-muted px-1.5 py-0.5 text-[12px]">ACC-04</Code>
+              {t.procedureNames['ACC-04']}
+            </>
+          }
+          aside={
+            <span
+              className={
+                passed === checks.length ? 'font-medium text-[12.5px] text-ok' : 'font-medium text-[12.5px] text-risk'
+              }
+            >
+              {t.card.checks(passed, checks.length)}
+            </span>
+          }
+        >
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {checks.map((check) => (
+              <li key={check.check} className="flex flex-wrap items-center gap-3 py-1.5">
+                {check.passed ? (
+                  <CircleCheck className="size-[18px] text-ok" aria-hidden="true" />
+                ) : (
+                  <CircleX className="size-[18px] text-risk" aria-hidden="true" />
+                )}
+                <span className="flex min-w-[200px] flex-1 flex-col">
+                  <span>{t.checks[check.check]}</span>
+                  <span className="text-[12.5px] text-muted-foreground" lang="en">
+                    {check.detail}
+                  </span>
+                </span>
+                <EvidenceLink eid={eid} pointer={check.evidence} label={t.card.registers[check.check]} />
+              </li>
             ))}
-          </CardContent>
-        </Card>
+          </ul>
+        </Panel>
         <ExceptionList eid={eid} items={material.exceptions} />
-        <ProfileForm eid={eid} profile={material.client_profile} disabled={disabled} />
       </div>
     )
   }
   if (material.kind === 'PLN-01/03') {
     return (
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Analytics</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
+      <div className="flex flex-col gap-3">
+        <Panel title={t.planning.analytics}>
+          <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[14px]">
             {Object.entries(material.analytics.ratios).map(([name, value]) => (
-              <p key={name}>
-                {name}: {value.toFixed(4)}
-              </p>
+              <div key={name} className="contents">
+                <dt className="text-muted-foreground">{t.ratios[name] ?? name}</dt>
+                <dd className="m-0 font-mono">{formatPct(value)}</dd>
+              </div>
             ))}
-          </CardContent>
-        </Card>
+          </dl>
+        </Panel>
         <ExceptionList eid={eid} items={material.analytics_exceptions} />
-        {material.uncovered_objective_ids.length > 0 ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              These objectives have no procedure coverage: {material.uncovered_objective_ids.join(', ')}. Approve stays
-              disabled until the risk levels change or the plan is rejected.
-            </AlertDescription>
-          </Alert>
-        ) : null}
       </div>
     )
   }
   if (material.kind === 'FIN-01') {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Uncorrected misstatements</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <p>Candidate opinion: {material.schedule.candidate_opinion}</p>
-          <p>Total: {formatAud(material.schedule.total_cents)}</p>
-          <p>Overall materiality: {formatAud(material.schedule.materiality_cents)}</p>
-          <p>{material.misstatements.length} misstatement(s) recorded.</p>
-        </CardContent>
-      </Card>
+      <Panel title={t.gates['FIN-01']}>
+        <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[14px]">
+          <dt className="text-muted-foreground">{t.completion.candidate}</dt>
+          <dd className="m-0 font-semibold">{t.opinions[material.schedule.candidate_opinion]}</dd>
+          <dt className="text-muted-foreground">{t.completion.total}</dt>
+          <dd className="m-0 font-mono">{formatAud(material.schedule.total_cents)}</dd>
+          <dt className="text-muted-foreground">{t.completion.materiality}</dt>
+          <dd className="m-0 font-mono">{formatAud(material.schedule.materiality_cents)}</dd>
+        </dl>
+        <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
+        <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-[14px]">
+          {material.misstatements.map((item) => (
+            <li key={item.id} className="flex flex-wrap gap-2 rounded-lg border px-3 py-2">
+              <Code className="font-semibold">{item.id}</Code>
+              <span>
+                {item.account} · {t.assertions[item.assertion]} · {t.directions[item.direction]}
+              </span>
+              <span className="flex-1" />
+              <Code>{formatAud(item.amount_cents)}</Code>
+            </li>
+          ))}
+        </ul>
+      </Panel>
     )
   }
   return <ReportPreview report={material.report} decisions={material.previous_decisions} />
 }
 
-function ExceptionList({ eid, items }: { eid: string; items: AuditException[] }) {
-  if (!items.length) return <p className="text-muted-foreground text-sm">No exceptions.</p>
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Exceptions</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {items.map((item) => (
-          <div key={item.id} className="space-y-1 text-sm">
-            <p className="font-medium">
-              {item.id} · {item.severity} · {formatAud(item.amount_cents)}
-            </p>
-            <p className="text-muted-foreground">{JSON.stringify(item.detail)}</p>
-            <PointerList eid={eid} pointers={item.evidence} />
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
+type ReportMaterial = Extract<GateView['material'], { kind: 'RPT-01' }>
 
 export function ReportPreview({
   report,
   decisions,
 }: {
-  report: Extract<GateView['material'], { kind: 'RPT-01' }>['report']
-  decisions: Extract<GateView['material'], { kind: 'RPT-01' }>['previous_decisions']
+  report: ReportMaterial['report']
+  decisions: ReportMaterial['previous_decisions']
 }) {
+  const { t } = useI18n()
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            Revision {report.revision} · {report.opinion_type} · {report.status}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+    <div className="flex flex-col gap-3">
+      <Panel
+        title={t.reportCard.revision(report.revision, t.opinions[report.opinion_type])}
+        aside={report.status === 'signed' ? <StatusPill tone="ok">{t.stageStatus.signed}</StatusPill> : null}
+      >
+        <div
+          className="flex flex-col gap-4 rounded-md border bg-white px-6 py-5 font-serif text-[14px] leading-relaxed"
+          lang="en"
+        >
           {REPORT_SECTIONS.map((section) => (
-            <section key={section}>
-              <h3 className="font-medium capitalize">{section.replaceAll('_', ' ')}</h3>
-              <p className="whitespace-pre-wrap">{report.sections[section] || '—'}</p>
+            <section key={section} className="flex flex-col gap-1">
+              <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
+                {t.reportSections[section]}
+              </h3>
+              <p className="m-0 whitespace-pre-wrap">{report.sections[section] || '—'}</p>
             </section>
           ))}
-        </CardContent>
-      </Card>
+        </div>
+      </Panel>
       {decisions.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Earlier comments</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            {decisions.map((decision) => (
-              <div key={decision.id}>
-                <p className="font-medium">
-                  {decision.decision} · {decision.reason}
-                </p>
-                {(decision.annotations ?? []).map((note) => (
-                  <p key={`${decision.id}-${note.section}-${note.comment}`}>
-                    {note.section}: {note.comment}
-                  </p>
-                ))}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <Panel title={t.reportCard.earlier}>
+          {decisions.map((decision) => (
+            <div key={decision.id} className="flex flex-col gap-1 text-[14px]">
+              <span className="font-medium">{decision.reason}</span>
+              {(decision.annotations ?? []).map((note) => (
+                <span key={`${decision.id}-${note.section}-${note.comment}`} className="text-secondary-foreground">
+                  {t.reportSections[note.section]}: {note.comment}
+                </span>
+              ))}
+            </div>
+          ))}
+        </Panel>
       ) : null}
     </div>
   )
 }
 
-function ProfileForm({ eid, profile, disabled }: { eid: string; profile: ClientProfile; disabled: boolean }) {
+export function GateDecisionCard({
+  eid,
+  view,
+  disabled,
+  deferred = false,
+  onDefer,
+  deferring = false,
+}: {
+  eid: string
+  view: GateView
+  disabled: boolean
+  deferred?: boolean
+  onDefer?: () => void
+  deferring?: boolean
+}) {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
-  const [legalName, setLegalName] = useState(profile.legal_name)
-  const [abn, setAbn] = useState(profile.abn)
-  const [entityType, setEntityType] = useState(profile.entity_type)
-  const [industry, setIndustry] = useState(profile.industry_anzsic)
-  const [listed, setListed] = useState(profile.listed)
-  const [directors, setDirectors] = useState(profile.directors.join('\n'))
-  const [notes, setNotes] = useState(profile.notes ?? '')
-  const save = useMutation({
-    ...gatesUpdateClientProfileMutation(),
-    onSuccess: async () => {
-      toast.success('Client profile saved. ACC-04 will run again.')
-      await invalidateEngagement(queryClient, eid)
-    },
-    onError: (error) => toast.error(apiMessage(error)),
-  })
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Client profile</CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        <Field label="Legal name">
-          <Input value={legalName} onChange={(event) => setLegalName(event.target.value)} />
-        </Field>
-        <Field label="ABN">
-          <Input value={abn} onChange={(event) => setAbn(event.target.value)} />
-        </Field>
-        <Field label="Entity type">
-          <Input value={entityType} onChange={(event) => setEntityType(event.target.value)} />
-        </Field>
-        <Field label="ANZSIC">
-          <Input value={industry} onChange={(event) => setIndustry(event.target.value)} />
-        </Field>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} />
-          Listed
-        </label>
-        <Field label="Directors, one per line">
-          <Textarea value={directors} onChange={(event) => setDirectors(event.target.value)} />
-        </Field>
-        <Field label="Notes">
-          <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
-        </Field>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled || save.isPending}
-          onClick={() =>
-            save.mutate({
-              path: { eid },
-              body: {
-                version: (profile.version ?? 1) + 1,
-                legal_name: legalName,
-                abn,
-                entity_type: entityType,
-                industry_anzsic: industry,
-                listed,
-                directors: directors
-                  .split('\n')
-                  .map((line) => line.trim())
-                  .filter(Boolean),
-                notes,
-              },
-            })
-          }
-        >
-          Save profile and rerun ACC-04
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
-function GateDecisionForm({ eid, view, disabled }: { eid: string; view: GateView; disabled: boolean }) {
-  const queryClient = useQueryClient()
+  const [verdict, setVerdict] = useState<GateVerdict | null>(null)
   const [reason, setReason] = useState('')
   const [choice, setChoice] = useState<MaterialityChoice | null>(
     view.material.kind === 'PLN-01/03' ? initialChoice(view.material.candidates) : null,
@@ -308,23 +287,27 @@ function GateDecisionForm({ eid, view, disabled }: { eid: string; view: GateView
   )
   const [levelReasons, setLevelReasons] = useState<Record<string, string>>({})
   const [disposition, setDisposition] = useState<OpinionType>(
-    view.material.kind === 'FIN-01' && FIN_OPINIONS.includes(view.material.schedule.candidate_opinion)
-      ? view.material.schedule.candidate_opinion
-      : 'qualified',
+    view.material.kind === 'FIN-01' ? view.material.schedule.candidate_opinion : 'qualified',
   )
   const [notes, setNotes] = useState<NoteDraft[]>([newNote()])
   const submit = useMutation({
     ...gatesSubmitGateDecisionMutation(),
     onSuccess: async () => {
-      toast.success('Gate decision submitted')
+      toast.success(t.toasts.decisionRecorded)
       setReason('')
       await invalidateEngagement(queryClient, eid)
     },
     onError: (error) => toast.error(apiMessage(error)),
   })
 
-  const send = (decision: GateVerdict) => {
-    const body = buildDecision(view, decision, { reason, choice, levels, levelReasons, disposition, notes })
+  const gate = view.gate
+  const uncovered = view.material.kind === 'PLN-01/03' && view.material.uncovered_objective_ids.length > 0
+  const busy = disabled || submit.isPending
+  const required = verdict != null && (verdict !== 'approve' || gate === 'FIN-01')
+
+  const send = () => {
+    if (!verdict) return
+    const body = buildDecision(view, verdict, { reason, choice, levels, levelReasons, disposition, notes }, t)
     if (typeof body === 'string') {
       toast.error(body)
       return
@@ -332,59 +315,93 @@ function GateDecisionForm({ eid, view, disabled }: { eid: string; view: GateView
     submit.mutate({ path: { eid }, body })
   }
 
-  const uncovered = view.material.kind === 'PLN-01/03' && view.material.uncovered_objective_ids.length > 0
-  const busy = disabled || submit.isPending
-
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{view.gate}</CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        {view.material.kind === 'PLN-01/03' && choice ? (
-          <PlanningFields
-            candidates={view.material.candidates}
-            risks={view.material.risks}
-            choice={choice}
-            onChoice={setChoice}
-            levels={levels}
-            onLevel={(id, level) => setLevels((current) => ({ ...current, [id]: level }))}
-            levelReasons={levelReasons}
-            onLevelReason={(id, value) => setLevelReasons((current) => ({ ...current, [id]: value }))}
+    <DecisionFrame
+      title={
+        <>
+          <Code className="font-semibold">{gate}</Code> · {t.gateQuestions[gate]}
+        </>
+      }
+      note={deferred ? t.workspace.deferredNote : undefined}
+      footer={
+        <>
+          {onDefer && !deferred ? (
+            <Button type="button" variant="outline" size="lg" disabled={busy || deferring} onClick={onDefer}>
+              {t.card.decideLater}
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button
+            type="button"
+            size="lg"
+            disabled={busy || !verdict || (required && !reason.trim()) || (verdict === 'approve' && uncovered)}
+            onClick={send}
+          >
+            {t.card.record}
+          </Button>
+        </>
+      }
+    >
+      {view.material.kind === 'PLN-01/03' && choice ? (
+        <PlanningFields
+          candidates={view.material.candidates}
+          risks={view.material.risks}
+          choice={choice}
+          onChoice={setChoice}
+          levels={levels}
+          onLevel={(id, level) => setLevels((current) => ({ ...current, [id]: level }))}
+          levelReasons={levelReasons}
+          onLevelReason={(id, value) => setLevelReasons((current) => ({ ...current, [id]: value }))}
+        />
+      ) : null}
+      {uncovered && view.material.kind === 'PLN-01/03' ? (
+        <Alert variant="destructive">
+          <AlertDescription>{t.planning.uncovered(view.material.uncovered_objective_ids.join(', '))}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
+        <legend className="sr-only">{t.card.decision}</legend>
+        {VERDICTS.map((item) => (
+          <OptionCard
+            key={item}
+            name={`gate-${gate}`}
+            value={item}
+            checked={verdict === item}
+            onSelect={() => setVerdict(item)}
+            label={t.verdicts[gate][item]}
+            hint={t.verdictHints[gate][item]}
+            disabled={busy || (item === 'approve' && uncovered)}
           />
-        ) : null}
-        {view.material.kind === 'FIN-01' ? (
-          <Field label="Opinion">
-            <select
-              className="h-8 rounded-lg border px-2 text-sm"
-              value={disposition}
-              onChange={(event) => setDisposition(event.target.value as OpinionType)}
-            >
-              {FIN_OPINIONS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </Field>
-        ) : null}
-        {view.material.kind === 'RPT-01' ? <AnnotationFields notes={notes} onChange={setNotes} /> : null}
-        <Field label="Reason">
-          <Textarea value={reason} onChange={(event) => setReason(event.target.value)} />
-        </Field>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" disabled={busy || uncovered} onClick={() => send('approve')}>
-            {view.gate === 'RPT-01' ? 'Sign and archive' : 'Approve'}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => send('reject')}>
-            {view.gate === 'ACC-01' ? 'Decline' : 'Reject'}
-          </Button>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => send('insufficient_info')}>
-            Insufficient information
-          </Button>
+        ))}
+      </fieldset>
+
+      {view.material.kind === 'FIN-01' && verdict === 'approve' ? (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="fin-opinion" className="font-semibold text-[13px]">
+            {t.completion.opinion}
+          </label>
+          <select
+            id="fin-opinion"
+            className={SELECT}
+            value={disposition}
+            onChange={(event) => setDisposition(event.target.value as OpinionType)}
+          >
+            {FIN_OPINIONS.map((item) => (
+              <option key={item} value={item}>
+                {t.opinions[item]}
+              </option>
+            ))}
+          </select>
         </div>
-      </CardContent>
-    </Card>
+      ) : null}
+      {view.material.kind === 'RPT-01' && verdict === 'reject' ? (
+        <AnnotationFields notes={notes} onChange={setNotes} />
+      ) : null}
+
+      <ReasonField id={`gate-reason-${gate}`} value={reason} onChange={setReason} required={required} />
+    </DecisionFrame>
   )
 }
 
@@ -407,136 +424,177 @@ function PlanningFields({
   levelReasons: Record<string, string>
   onLevelReason: (id: string, reason: string) => void
 }) {
+  const { t } = useI18n()
   const selected = candidates.candidates.find((item) => item.basis === choice.basis)
   const range = candidates.performance_pct_range ?? [0.5, 0.75]
   const overall = selected ? Math.round(selected.base_amount_cents * choice.pct) : null
   return (
-    <div className="grid gap-3">
-      {candidates.candidates.map((item) => (
-        <p key={item.basis} className="text-sm">
-          {item.basis}: base {formatAud(item.base_amount_cents)}, range {formatPct(item.pct_low)}–
-          {formatPct(item.pct_high)} ({formatAud(item.low_cents)}–{formatAud(item.high_cents)})
-        </p>
-      ))}
-      <Field label="Basis">
-        <select
-          className="h-8 rounded-lg border px-2 text-sm"
-          value={choice.basis}
-          onChange={(event) => {
-            const basis = event.target.value as MaterialityChoice['basis']
-            const next = candidates.candidates.find((item) => item.basis === basis)
-            onChoice({ ...choice, basis, pct: next?.pct_high ?? choice.pct })
-          }}
-        >
+    <div className="flex flex-col gap-3.5">
+      <div className="flex flex-col gap-1.5">
+        <SectionLabel>{t.planning.candidates}</SectionLabel>
+        <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[13.5px]">
           {candidates.candidates.map((item) => (
-            <option key={item.basis} value={item.basis}>
-              {item.basis}
-            </option>
+            <li key={item.basis} className="flex flex-wrap gap-x-2">
+              <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
+              <Code>{formatAud(item.base_amount_cents)}</Code>
+              <span className="text-muted-foreground">
+                · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
+                <Code>{formatAud(item.high_cents)}</Code>
+              </span>
+            </li>
           ))}
-        </select>
-      </Field>
-      <Field
-        label={`Overall materiality percentage (${formatPct(selected?.pct_low)}–${formatPct(selected?.pct_high)})`}
-      >
-        <Input
-          type="number"
-          step="0.001"
-          value={choice.pct}
-          onChange={(event) => onChoice({ ...choice, pct: Number(event.target.value) })}
-        />
-      </Field>
-      <Field label={`Performance materiality percentage (${formatPct(range[0])}–${formatPct(range[1])})`}>
-        <Input
-          type="number"
-          step="0.01"
-          value={choice.performance_pct}
-          onChange={(event) => onChoice({ ...choice, performance_pct: Number(event.target.value) })}
-        />
-      </Field>
-      <Field label="Clearly trivial percentage">
-        <Input
-          type="number"
-          step="0.01"
-          value={choice.clearly_trivial_pct}
-          onChange={(event) => onChoice({ ...choice, clearly_trivial_pct: Number(event.target.value) })}
-        />
-      </Field>
-      <p className="text-sm">
-        Preview overall {formatAud(overall)}
-        {overall != null ? `, performance ${formatAud(Math.round(overall * choice.performance_pct))}` : ''}
-      </p>
-      {risks.map((risk) => (
-        <div key={risk.id} className="grid gap-2 rounded-md border p-3 text-sm">
-          <p className="font-medium">
-            {risk.id} · {risk.assertion}
-            {risk.fraud_related ? ' · fraud' : ''}
-          </p>
-          <p>{risk.description}</p>
+        </ul>
+      </div>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
+        <LabeledField id="pln-basis" label={t.planning.basis}>
           <select
-            className="h-8 rounded-lg border px-2"
-            value={levels[risk.id] ?? risk.level}
-            onChange={(event) => onLevel(risk.id, event.target.value as RiskLevel)}
+            id="pln-basis"
+            className={SELECT}
+            value={choice.basis}
+            onChange={(event) => {
+              const basis = event.target.value as MaterialityChoice['basis']
+              const next = candidates.candidates.find((item) => item.basis === basis)
+              onChoice({ ...choice, basis, pct: next?.pct_high ?? choice.pct })
+            }}
           >
-            {RISK_LEVELS.map((level) => (
-              <option key={level} value={level}>
-                {level}
+            {candidates.candidates.map((item) => (
+              <option key={item.basis} value={item.basis}>
+                {t.bases[item.basis] ?? item.basis}
               </option>
             ))}
           </select>
-          {(levels[risk.id] ?? risk.level) !== risk.level ? (
-            <Input
-              placeholder="Reason for the level change"
-              value={levelReasons[risk.id] ?? ''}
-              onChange={(event) => onLevelReason(risk.id, event.target.value)}
-            />
-          ) : null}
-        </div>
-      ))}
+        </LabeledField>
+        <LabeledField
+          id="pln-pct"
+          label={t.planning.overallPct(formatPct(selected?.pct_low), formatPct(selected?.pct_high))}
+        >
+          <Input
+            id="pln-pct"
+            className="h-10 font-mono"
+            type="number"
+            step="0.001"
+            value={choice.pct}
+            onChange={(event) => onChoice({ ...choice, pct: Number(event.target.value) })}
+          />
+        </LabeledField>
+        <LabeledField id="pln-perf" label={t.planning.performancePct(formatPct(range[0]), formatPct(range[1]))}>
+          <Input
+            id="pln-perf"
+            className="h-10 font-mono"
+            type="number"
+            step="0.01"
+            value={choice.performance_pct}
+            onChange={(event) => onChoice({ ...choice, performance_pct: Number(event.target.value) })}
+          />
+        </LabeledField>
+        <LabeledField id="pln-trivial" label={t.planning.trivialPct}>
+          <Input
+            id="pln-trivial"
+            className="h-10 font-mono"
+            type="number"
+            step="0.01"
+            value={choice.clearly_trivial_pct}
+            onChange={(event) => onChoice({ ...choice, clearly_trivial_pct: Number(event.target.value) })}
+          />
+        </LabeledField>
+      </div>
+      <span className="rounded-lg bg-muted px-3 py-2 text-[13.5px]">
+        {t.planning.preview(
+          formatAud(overall),
+          overall != null ? formatAud(Math.round(overall * choice.performance_pct)) : '—',
+        )}
+      </span>
+      <div className="flex flex-col gap-2">
+        <SectionLabel>{t.planning.risks}</SectionLabel>
+        {risks.map((risk) => {
+          const level = levels[risk.id] ?? risk.level
+          return (
+            <div key={risk.id} className="flex flex-col gap-2 rounded-[10px] border p-3 text-[14px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <Code className="font-semibold">{risk.id}</Code>
+                <span>{t.assertions[risk.assertion]}</span>
+                {risk.fraud_related ? <StatusPill tone="risk">{t.planning.fraud}</StatusPill> : null}
+                <span className="flex-1" />
+                <label htmlFor={`level-${risk.id}`} className="sr-only">
+                  {risk.id}
+                </label>
+                <select
+                  id={`level-${risk.id}`}
+                  className={SELECT}
+                  value={level}
+                  onChange={(event) => onLevel(risk.id, event.target.value as RiskLevel)}
+                >
+                  {RISK_LEVELS.map((item) => (
+                    <option key={item} value={item}>
+                      {t.riskLevels[item]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <span className="text-secondary-foreground" lang="en">
+                {risk.description}
+              </span>
+              {level !== risk.level ? (
+                <Input
+                  placeholder={t.planning.levelReason}
+                  value={levelReasons[risk.id] ?? ''}
+                  onChange={(event) => onLevelReason(risk.id, event.target.value)}
+                />
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
 function AnnotationFields({ notes, onChange }: { notes: NoteDraft[]; onChange: (notes: NoteDraft[]) => void }) {
+  const { t } = useI18n()
+  const update = (id: string, patch: Partial<NoteDraft>) =>
+    onChange(notes.map((item) => (item.id === id ? { ...item, ...patch } : item)))
   return (
-    <div className="grid gap-3">
+    <div className="flex flex-col gap-3">
       {notes.map((note) => (
-        <div key={note.id} className="grid gap-2">
+        <div key={note.id} className="flex flex-col gap-2 rounded-[10px] border p-3">
           <select
-            className="h-8 rounded-lg border px-2 text-sm"
+            aria-label={t.reportCard.section}
+            className={SELECT}
             value={note.section}
-            onChange={(event) =>
-              onChange(
-                notes.map((item) =>
-                  item.id === note.id ? { ...item, section: event.target.value as ReportSection } : item,
-                ),
-              )
-            }
+            onChange={(event) => update(note.id, { section: event.target.value as ReportSection })}
           >
             {REPORT_SECTIONS.map((section) => (
               <option key={section} value={section}>
-                {section}
+                {t.reportSections[section]}
               </option>
             ))}
           </select>
           <Input
-            placeholder="Quoted text"
+            placeholder={t.reportCard.quote}
             value={note.quote ?? ''}
-            onChange={(event) =>
-              onChange(notes.map((item) => (item.id === note.id ? { ...item, quote: event.target.value } : item)))
-            }
+            onChange={(event) => update(note.id, { quote: event.target.value })}
           />
           <Textarea
-            placeholder="Comment"
+            placeholder={t.reportCard.comment}
             value={note.comment}
-            onChange={(event) =>
-              onChange(notes.map((item) => (item.id === note.id ? { ...item, comment: event.target.value } : item)))
-            }
+            onChange={(event) => update(note.id, { comment: event.target.value })}
           />
         </div>
       ))}
-      <Button type="button" variant="outline" onClick={() => onChange([...notes, newNote()])}>
-        Add comment
+      <Button type="button" variant="outline" className="self-start" onClick={() => onChange([...notes, newNote()])}>
+        {t.reportCard.addComment}
       </Button>
+    </div>
+  )
+}
+
+function LabeledField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-[12.5px] text-[#4a5262]">
+        {label}
+      </label>
+      {children}
     </div>
   )
 }
@@ -552,6 +610,7 @@ function buildDecision(
     disposition: OpinionType
     notes: NoteDraft[]
   },
+  t: Messages,
 ): GateDecisionIn | string {
   const reason = input.reason.trim()
   const base: GateDecisionIn = {
@@ -561,23 +620,27 @@ function buildDecision(
     decision,
     reason: reason || null,
   }
-  if (decision !== 'approve' && !reason) return 'A reason is required'
-  if (view.material.kind === 'FIN-01' && decision === 'approve' && !reason) return 'FIN-01 approval needs a reason'
+  if (decision !== 'approve' && !reason) return t.errors.reasonRequired
+  if (view.material.kind === 'FIN-01' && decision === 'approve' && !reason) return t.errors.reasonRequired
   if (view.material.kind === 'PLN-01/03' && decision === 'approve') {
-    if (!input.choice) return 'Choose a materiality basis'
-    const edits: GateEdit[] = view.material.risks.flatMap((risk) => {
-      const level = input.levels[risk.id] ?? risk.level
-      if (level === risk.level) return []
-      const editReason = input.levelReasons[risk.id]?.trim()
-      if (!editReason) return []
-      return [
-        { target_id: risk.id, target_version: risk.version ?? 1, field: 'level', new_value: level, reason: editReason },
-      ]
-    })
+    if (!input.choice) return t.errors.chooseBasis
     const missing = view.material.risks.find(
       (risk) => (input.levels[risk.id] ?? risk.level) !== risk.level && !input.levelReasons[risk.id]?.trim(),
     )
-    if (missing) return `Give a reason for changing ${missing.id}`
+    if (missing) return t.planning.giveReason(missing.id)
+    const edits: GateEdit[] = view.material.risks.flatMap((risk) => {
+      const level = input.levels[risk.id] ?? risk.level
+      if (level === risk.level) return []
+      return [
+        {
+          target_id: risk.id,
+          target_version: risk.version ?? 1,
+          field: 'level',
+          new_value: level,
+          reason: input.levelReasons[risk.id]?.trim() ?? '',
+        },
+      ]
+    })
     return { ...base, materiality: input.choice, edits }
   }
   if (view.material.kind === 'FIN-01' && decision === 'approve') return { ...base, disposition: input.disposition }
@@ -585,7 +648,7 @@ function buildDecision(
     const annotations = input.notes
       .map((note) => ({ section: note.section, quote: note.quote?.trim() || null, comment: note.comment.trim() }))
       .filter((note) => note.comment)
-    if (!annotations.length) return 'Add at least one comment'
+    if (!annotations.length) return t.reportCard.needComment
     return { ...base, annotations }
   }
   return base
@@ -602,11 +665,155 @@ function initialChoice(candidates: MaterialityCandidates): MaterialityChoice {
   }
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+// 表单视图: 材料加决定卡片
+export function GatePanel({ eid, disabled }: { eid: string; disabled: boolean }) {
+  const { t } = useI18n()
+  const gate = useGate(eid)
+  if (gate.error && isApiCode(gate.error, 'NOT_AT_GATE')) {
+    return <p className="text-muted-foreground text-sm">{t.formView.notAtGate}</p>
+  }
   return (
-    <div className="grid gap-1 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </div>
+    <QueryState isPending={gate.isPending} error={gate.error}>
+      {gate.data ? (
+        <div className="flex flex-col gap-5">
+          <GateMaterial eid={eid} view={gate.data} />
+          {gate.data.material.kind === 'ACC-01' ? (
+            <ProfileForm eid={eid} profile={gate.data.material.client_profile} disabled={disabled} />
+          ) : null}
+          <GateDecisionCard eid={eid} view={gate.data} disabled={disabled} />
+        </div>
+      ) : null}
+    </QueryState>
+  )
+}
+
+export function RptSignForm({ eid, disabled }: { eid: string; disabled: boolean }) {
+  const gate = useGate(eid)
+  const view = gate.data
+  if (view?.material.kind !== 'RPT-01') return null
+  return <GateDecisionCard eid={eid} view={view} disabled={disabled} />
+}
+
+export function ProfileForm({
+  eid,
+  profile,
+  disabled,
+  onDone,
+}: {
+  eid: string
+  profile: ClientProfile
+  disabled: boolean
+  onDone?: () => void
+}) {
+  const { t } = useI18n()
+  const queryClient = useQueryClient()
+  const [legalName, setLegalName] = useState(profile.legal_name)
+  const [abn, setAbn] = useState(profile.abn)
+  const [entityType, setEntityType] = useState(profile.entity_type)
+  const [industry, setIndustry] = useState(profile.industry_anzsic)
+  const [listed, setListed] = useState(profile.listed)
+  const [directors, setDirectors] = useState(profile.directors.join('\n'))
+  const [notes, setNotes] = useState(profile.notes ?? '')
+  const save = useMutation({
+    ...gatesUpdateClientProfileMutation(),
+    onSuccess: async () => {
+      toast.success(t.toasts.profileSaved)
+      await invalidateEngagement(queryClient, eid)
+      onDone?.()
+    },
+    onError: (error) => toast.error(apiMessage(error)),
+  })
+  const field = 'h-10'
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+      <span className="font-semibold">{t.formView.profile}</span>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
+        <LabeledField id="pf-name" label={t.clientPage.legalName}>
+          <Input
+            id="pf-name"
+            className={field}
+            value={legalName}
+            onChange={(event) => setLegalName(event.target.value)}
+          />
+        </LabeledField>
+        <LabeledField id="pf-abn" label={t.clientPage.abn}>
+          <Input
+            id="pf-abn"
+            className={`${field} font-mono`}
+            value={abn}
+            onChange={(event) => setAbn(event.target.value)}
+          />
+        </LabeledField>
+        <LabeledField id="pf-type" label={t.clientPage.entityType}>
+          <select
+            id="pf-type"
+            className={SELECT}
+            value={entityType}
+            onChange={(event) => setEntityType(event.target.value)}
+          >
+            {Object.entries(t.clientPage.entityTypes).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </LabeledField>
+        <LabeledField id="pf-industry" label={t.clientPage.industry}>
+          <Input
+            id="pf-industry"
+            className={`${field} font-mono`}
+            value={industry}
+            onChange={(event) => setIndustry(event.target.value)}
+          />
+        </LabeledField>
+      </div>
+      <label className="flex items-center gap-2 text-[14px]">
+        <input
+          type="checkbox"
+          className="size-4 accent-primary"
+          checked={listed}
+          onChange={(event) => setListed(event.target.checked)}
+        />
+        {t.clientPage.listed}
+      </label>
+      <LabeledField id="pf-directors" label={`${t.clientPage.directors} · ${t.clientPage.directorsHint}`}>
+        <Textarea id="pf-directors" value={directors} onChange={(event) => setDirectors(event.target.value)} />
+      </LabeledField>
+      <LabeledField id="pf-notes" label={t.clientPage.notes}>
+        <Textarea id="pf-notes" value={notes} onChange={(event) => setNotes(event.target.value)} />
+      </LabeledField>
+      <span className="text-[13px] text-muted-foreground">{t.clientPage.rerunNote}</span>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          disabled={disabled || save.isPending}
+          onClick={() =>
+            save.mutate({
+              path: { eid },
+              body: {
+                version: (profile.version ?? 1) + 1,
+                legal_name: legalName.trim(),
+                abn: abn.replaceAll(' ', ''),
+                entity_type: entityType,
+                industry_anzsic: industry.trim(),
+                listed,
+                directors: directors
+                  .split('\n')
+                  .map((line) => line.trim())
+                  .filter(Boolean),
+                notes,
+              },
+            })
+          }
+        >
+          {t.clientPage.save}
+        </Button>
+        {onDone ? (
+          <Button type="button" variant="outline" onClick={onDone}>
+            {t.clientPage.cancel}
+          </Button>
+        ) : null}
+      </div>
+    </section>
   )
 }

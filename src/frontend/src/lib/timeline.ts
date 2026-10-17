@@ -1,0 +1,116 @@
+import type { GateId, Phase, TrailEntry } from '@/client/types.gen'
+import type { ConciergeCitation } from '@/lib/new-api'
+
+// 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
+
+export type TimelineItem =
+  | { kind: 'created'; at: string }
+  | { kind: 'phase'; at: string; phase: Phase }
+  | { kind: 'completed'; at: string; ids: string[] }
+  | { kind: 'decision'; at: string; target: string; gate: GateId | null; verdict: string; reason: string | null }
+  | { kind: 'deferral'; at: string; target: string; deferred: boolean }
+  | {
+      kind: 'qa'
+      at: string
+      id: string
+      question: string
+      answer: string
+      citations: ConciergeCitation[]
+      aborted: boolean
+    }
+  | {
+      kind: 'data'
+      at: string
+      id: string
+      action: string
+      table: string | null
+      document: string | null
+      records: number | null
+      file: string | null
+    }
+
+const GATES: GateId[] = ['ACC-01', 'PLN-01/03', 'FIN-01', 'RPT-01']
+
+// 任务 ID 形如 T-J-REV-02-1-SI-2026-0612-v1, 取判断对象 SI-2026-0612
+export function subjectOfTask(taskId: string): string {
+  const match = taskId.match(/^T-[A-Z]+-([A-Z]+-\d+)-(\d+)-(.+)-v\d+$/)
+  return match?.[3] ?? taskId
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value.length ? value : null
+}
+
+export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
+  const sorted = [...entries].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
+  const items: TimelineItem[] = []
+  let completed: { at: string; ids: string[] } | null = null
+  const flush = () => {
+    if (completed?.ids.length) items.push({ kind: 'completed', ...completed })
+    completed = null
+  }
+
+  if (sorted[0]?.created_at) items.push({ kind: 'created', at: sorted[0].created_at })
+
+  for (const entry of sorted) {
+    const at = entry.created_at ?? ''
+    const payload = (entry.payload ?? {}) as Record<string, unknown>
+    const kind = entry.kind as string
+    if (kind === 'transition') {
+      if (payload.object === 'engagement' && str(payload.to)) {
+        flush()
+        items.push({ kind: 'phase', at, phase: payload.to as Phase })
+      } else if (payload.object === 'procedure' && payload.to === 'completed' && str(payload.id)) {
+        if (!completed) completed = { at, ids: [] }
+        const id = payload.id as string
+        if (!completed.ids.includes(id)) completed.ids.push(id)
+      }
+      continue
+    }
+    if (kind === 'decision') {
+      flush()
+      const parts = entry.summary.trim().split(/\s+/)
+      const verdict = parts.at(-1) ?? ''
+      const head = parts.slice(0, -1).join(' ')
+      const gate = GATES.find((item) => item === head) ?? null
+      const target = gate ?? (str(payload.task_id) ? subjectOfTask(payload.task_id as string) : head)
+      items.push({ kind: 'decision', at, target, gate, verdict, reason: str(payload.reason) })
+      continue
+    }
+    if (kind === 'deferral') {
+      flush()
+      const id = str(payload.target_id) ?? ''
+      const target = payload.target_type === 'review_task' ? subjectOfTask(id) : id
+      items.push({ kind: 'deferral', at, target, deferred: payload.deferred === true })
+      continue
+    }
+    if (kind === 'data') {
+      flush()
+      items.push({
+        kind: 'data',
+        at,
+        id: entry.id ?? at,
+        action: str(payload.action) ?? '',
+        table: str(payload.table_kind),
+        document: str(payload.document_type),
+        records: typeof payload.records === 'number' ? payload.records : null,
+        file: str(payload.file_name),
+      })
+      continue
+    }
+    if (kind === 'conversation') {
+      flush()
+      items.push({
+        kind: 'qa',
+        at,
+        id: entry.id ?? at,
+        question: str(payload.question) ?? entry.summary,
+        answer: str(payload.answer) ?? '',
+        citations: Array.isArray(payload.citations) ? (payload.citations as ConciergeCitation[]) : [],
+        aborted: payload.aborted === true,
+      })
+    }
+  }
+  flush()
+  return items
+}

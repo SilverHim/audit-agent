@@ -1,87 +1,136 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { reviewsGetProcedureOptions, reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
-import { PointerList } from '@/components/evidence-link'
+import { Code, PageHeader, StatusPill } from '@/components/chrome'
+import { PointerList, standardLabel } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { buttonVariants } from '@/components/ui/button'
+import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
+import { procedureName } from '@/lib/review'
 
 export const Route = createFileRoute('/engagements/$eid/procedures/$pid')({ component: ProcedurePage })
 
+// 程序的执行记录: 每次执行, 规则发现, 判断
 function ProcedurePage() {
   const { eid, pid } = Route.useParams()
+  const { t, lang, formatDateTime } = useI18n()
   const detail = useQuery(reviewsGetProcedureOptions({ path: { eid, pid } }))
   const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid } }))
+  const data = detail.data
   return (
-    <QueryState isPending={detail.isPending} error={detail.error}>
-      {detail.data ? (
-        <div className="space-y-6">
-          <div>
-            <h1 className="font-heading text-2xl font-semibold">
-              {detail.data.procedure.id} · {detail.data.name}
-            </h1>
-            <p className="text-muted-foreground text-sm">
-              {detail.data.procedure.status} · depends on {detail.data.depends_on.join(', ') || 'nothing'} · standards{' '}
-              {detail.data.standards.join(', ') || 'none'}
-            </p>
-          </div>
-          <Card>
-            <CardHeader>
-              <CardTitle>Runs</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {detail.data.runs.map((run) => (
-                <p key={run.id}>
-                  {run.id} · {run.trigger} · {run.status} · {run.failure_reason ?? 'ok'}
-                </p>
-              ))}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Exceptions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {detail.data.exceptions.map((item) => (
-                <div key={item.id}>
-                  <p>
-                    {item.id} · {item.severity} · {item.disposition} · {formatAud(item.amount_cents)}
-                  </p>
-                  <PointerList eid={eid} pointers={item.evidence} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Judgments</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {detail.data.judgments.map((judgment) => {
-                const task = tasks.data?.find((item) => item.task.target_id === judgment.id)
-                return (
-                  <div key={judgment.id}>
-                    <p className="font-medium">{judgment.conclusion}</p>
-                    <p>
-                      {judgment.review_status} · {judgment.proposed_action} · {judgment.subject_id}
-                    </p>
-                    {task ? (
-                      <Link
-                        to="/engagements/$eid/reviews/$taskId"
-                        params={{ eid, taskId: task.task.id }}
-                        className="underline"
+    <>
+      <PageHeader
+        title={
+          <>
+            <Code>{pid}</Code> · {procedureName(t, pid, data?.name)}
+          </>
+        }
+        subtitle={
+          data
+            ? `${t.procStatus[data.procedure.status ?? 'planned']} · ${t.proceduresPage.runsAfter}: ${data.depends_on.join(', ') || t.proceduresPage.noneValue} · ${t.proceduresPage.standards}: ${data.standards.map((code) => standardLabel(code, lang)).join(', ') || t.proceduresPage.noneValue}`
+            : undefined
+        }
+        actions={
+          <Link
+            to="/engagements/$eid/procedures"
+            params={{ eid }}
+            search={{ selected: pid }}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            {t.nav.procedures}
+          </Link>
+        }
+      />
+      <div className="mx-auto flex w-full max-w-[1000px] flex-col gap-5 px-4 py-6 sm:px-7">
+        <QueryState isPending={detail.isPending} error={detail.error}>
+          {data ? (
+            <>
+              <Block title={t.procedureDetail.runs}>
+                {data.runs.length ? (
+                  data.runs.map((run) => (
+                    <div key={run.id} className="flex flex-wrap items-center gap-2.5 text-[14px]">
+                      <span className="font-semibold">{t.procedureDetail.run(run.run_no)}</span>
+                      <StatusPill
+                        tone={run.status === 'failed' ? 'risk' : run.status === 'succeeded' ? 'ok' : 'accent'}
                       >
-                        Open review task
-                      </Link>
-                    ) : null}
-                    <PointerList eid={eid} pointers={judgment.evidence} />
-                  </div>
-                )
-              })}
-            </CardContent>
-          </Card>
-        </div>
-      ) : null}
-    </QueryState>
+                        {run.status}
+                      </StatusPill>
+                      <span className="text-muted-foreground">{formatDateTime(run.started_at)}</span>
+                      {run.failure_reason ? <span lang="en">{run.failure_reason}</span> : null}
+                    </div>
+                  ))
+                ) : (
+                  <Empty />
+                )}
+              </Block>
+              <Block title={t.procedureDetail.exceptions}>
+                {data.exceptions.length ? (
+                  data.exceptions.map((item) => (
+                    <div key={item.id} className="flex flex-col gap-1.5 text-[14px]">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Code className="font-semibold">{item.id}</Code>
+                        <StatusPill tone={item.severity === 'high' ? 'risk' : 'warn'}>{item.severity}</StatusPill>
+                        <Code>{formatAud(item.amount_cents)}</Code>
+                      </span>
+                      <PointerList eid={eid} pointers={item.evidence} />
+                    </div>
+                  ))
+                ) : (
+                  <Empty />
+                )}
+              </Block>
+              <Block title={t.procedureDetail.judgments}>
+                {data.judgments.length ? (
+                  data.judgments.map((judgment) => {
+                    const task = tasks.data?.find((item) => item.task.target_id === judgment.id)
+                    return (
+                      <div key={judgment.id} className="flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-[14px]">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <Code className="font-semibold">{judgment.subject_id}</Code>
+                          <span>{t.proposed[judgment.proposed_action]}</span>
+                          <Code className="text-muted-foreground">{judgment.confidence.toFixed(2)}</Code>
+                          <span className="flex-1" />
+                          {task ? (
+                            <Link
+                              to="/engagements/$eid/reviews/$taskId"
+                              params={{ eid, taskId: task.task.id }}
+                              className="text-[13px] text-accent-foreground underline underline-offset-2"
+                            >
+                              {t.workspace.formView}
+                            </Link>
+                          ) : null}
+                        </span>
+                        <p className="m-0" lang="en">
+                          {judgment.conclusion}
+                        </p>
+                        <PointerList eid={eid} pointers={judgment.evidence} />
+                      </div>
+                    )
+                  })
+                ) : (
+                  <Empty />
+                )}
+              </Block>
+            </>
+          ) : null}
+        </QueryState>
+      </div>
+    </>
   )
+}
+
+function Block({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border bg-card p-5">
+      <h2 className="m-0 font-semibold text-base">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function Empty() {
+  const { t } = useI18n()
+  return <span className="text-[13px] text-muted-foreground">{t.procedureDetail.none}</span>
 }

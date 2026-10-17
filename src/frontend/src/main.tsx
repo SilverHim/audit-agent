@@ -5,6 +5,7 @@ import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { queryClient } from '@/lib/api'
+import { I18nProvider } from '@/lib/i18n'
 import { routeTree } from './routeTree.gen'
 
 const router = createRouter({ routeTree, context: { queryClient }, defaultPreload: 'intent' })
@@ -20,8 +21,10 @@ if (!root) throw new Error('#root not found')
 
 createRoot(root).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <I18nProvider>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </I18nProvider>
   </StrictMode>,
 )

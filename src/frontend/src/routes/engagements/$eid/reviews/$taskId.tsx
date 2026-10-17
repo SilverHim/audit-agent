@@ -1,25 +1,103 @@
 import { useQuery } from '@tanstack/react-query'
-import { createFileRoute } from '@tanstack/react-router'
-import { reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { MessageCircle } from 'lucide-react'
+import { useMemo } from 'react'
+import { toast } from 'sonner'
+import { reviewsListExceptionsOptions, reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
+import { Code, PageHeader, StatusPill } from '@/components/chrome'
+import { JudgmentCard, ReviewDecisionCard } from '@/components/concierge'
 import { QueryState } from '@/components/query-state'
-import { ReviewDetail } from '@/components/review-detail'
+import { buttonVariants } from '@/components/ui/button'
 import { decisionsDisabled } from '@/lib/engagement'
+import { apiMessage } from '@/lib/errors'
+import { useI18n } from '@/lib/i18n'
+import { deferralKey, useDeferrals, useSetDeferral } from '@/lib/new-api'
+import { procedureName, rankTasks } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/reviews/$taskId')({ component: ReviewTaskPage })
 
+// 表单视图: 单个复核事项, 与对话里呈现的是同一张判断卡片和决定卡片
 function ReviewTaskPage() {
   const { eid, taskId } = Route.useParams()
-  const overview = useEngagement(eid)
+  const { t } = useI18n()
+  const navigate = useNavigate()
+  const overview = useEngagement(eid).data
   const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid } }))
-  const item = tasks.data?.find((task) => task.task.id === taskId)
+  const exceptions = useQuery(reviewsListExceptionsOptions({ path: { eid } }))
+  const deferrals = useDeferrals(eid)
+  const setDeferral = useSetDeferral(eid)
+  const ranked = useMemo(() => {
+    const view = tasks.data?.find((task) => task.task.id === taskId)
+    if (!view) return null
+    const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
+    return rankTasks([view], byId, overview)[0] ?? null
+  }, [tasks.data, exceptions.data, overview, taskId])
+  const deferred = (deferrals.data ?? []).some((item) => deferralKey(item) === `task:${taskId}`)
+  const pending = ranked?.view.task.status === 'pending'
+
   return (
-    <QueryState isPending={tasks.isPending} error={tasks.error}>
-      {item ? (
-        <ReviewDetail eid={eid} item={item} disabled={decisionsDisabled(overview.data)} />
-      ) : (
-        <p className="text-muted-foreground text-sm">Review task {taskId} was not found.</p>
-      )}
-    </QueryState>
+    <>
+      <PageHeader
+        title={
+          ranked ? (
+            <>
+              <Code>{ranked.subject}</Code> ·{' '}
+              {procedureName(t, ranked.view.task.procedure_id, ranked.view.procedure_name)}
+            </>
+          ) : (
+            taskId
+          )
+        }
+        subtitle={t.workspace.formView}
+        actions={
+          <Link
+            to="/engagements/$eid"
+            params={{ eid }}
+            search={pending ? { focus: `task:${taskId}` } : {}}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            <MessageCircle className="size-4" aria-hidden="true" />
+            {t.formView.backToConcierge}
+          </Link>
+        }
+      />
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5 px-4 py-6 sm:px-7">
+        <QueryState isPending={tasks.isPending} error={tasks.error}>
+          {ranked ? (
+            <>
+              <JudgmentCard eid={eid} ranked={ranked} />
+              {pending ? (
+                <ReviewDecisionCard
+                  eid={eid}
+                  ranked={ranked}
+                  disabled={decisionsDisabled(overview)}
+                  deferred={deferred}
+                  deferring={setDeferral.isPending}
+                  onDefer={() =>
+                    setDeferral.mutate(
+                      { target_type: 'review_task', target_id: taskId, deferred: true },
+                      {
+                        onSuccess: () => {
+                          toast.success(t.toasts.deferred)
+                          void navigate({ to: '/engagements/$eid/decisions', params: { eid } })
+                        },
+                        onError: (error) => toast.error(apiMessage(error)),
+                      },
+                    )
+                  }
+                />
+              ) : (
+                <StatusPill tone="ok" className="self-start">
+                  {t.formView.alreadyDecided}
+                </StatusPill>
+              )}
+            </>
+          ) : (
+            <p className="text-muted-foreground text-sm">{t.decisionsPage.none}</p>
+          )}
+        </QueryState>
+      </div>
+    </>
   )
 }

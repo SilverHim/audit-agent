@@ -11,18 +11,26 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as RegisterRouteImport } from './routes/register'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as EngagementsIndexRouteImport } from './routes/engagements/index'
 import { Route as EngagementsEidRouteRouteImport } from './routes/engagements/$eid/route'
 import { Route as EngagementsEidIndexRouteImport } from './routes/engagements/$eid/index'
+import { Route as EngagementsEidClientRouteImport } from './routes/engagements/$eid/client'
 import { Route as EngagementsEidContractsRouteImport } from './routes/engagements/$eid/contracts'
+import { Route as EngagementsEidDecisionsRouteImport } from './routes/engagements/$eid/decisions'
 import { Route as EngagementsEidEvidenceRouteImport } from './routes/engagements/$eid/evidence'
 import { Route as EngagementsEidGateRouteImport } from './routes/engagements/$eid/gate'
 import { Route as EngagementsEidMisstatementsRouteImport } from './routes/engagements/$eid/misstatements'
 import { Route as EngagementsEidReportRouteImport } from './routes/engagements/$eid/report'
 import { Route as EngagementsEidTrailRouteImport } from './routes/engagements/$eid/trail'
+import { Route as EngagementsEidDataIndexRouteImport } from './routes/engagements/$eid/data/index'
+import { Route as EngagementsEidDataKindRouteImport } from './routes/engagements/$eid/data/$kind'
+import { Route as EngagementsEidProceduresIndexRouteImport } from './routes/engagements/$eid/procedures/index'
 import { Route as EngagementsEidProceduresPidRouteImport } from './routes/engagements/$eid/procedures/$pid'
 import { Route as EngagementsEidReviewsIndexRouteImport } from './routes/engagements/$eid/reviews/index'
 import { Route as EngagementsEidReviewsTaskIdRouteImport } from './routes/engagements/$eid/reviews/$taskId'
+import { Route as EngagementsEidDataDocumentsDocIdRouteImport } from './routes/engagements/$eid/data/documents/$docId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -32,6 +40,16 @@ const IndexRoute = IndexRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EngagementsIndexRoute = EngagementsIndexRouteImport.update({
@@ -49,9 +67,19 @@ const EngagementsEidIndexRoute = EngagementsEidIndexRouteImport.update({
   path: '/',
   getParentRoute: () => EngagementsEidRouteRoute,
 } as any)
+const EngagementsEidClientRoute = EngagementsEidClientRouteImport.update({
+  id: '/client',
+  path: '/client',
+  getParentRoute: () => EngagementsEidRouteRoute,
+} as any)
 const EngagementsEidContractsRoute = EngagementsEidContractsRouteImport.update({
   id: '/contracts',
   path: '/contracts',
+  getParentRoute: () => EngagementsEidRouteRoute,
+} as any)
+const EngagementsEidDecisionsRoute = EngagementsEidDecisionsRouteImport.update({
+  id: '/decisions',
+  path: '/decisions',
   getParentRoute: () => EngagementsEidRouteRoute,
 } as any)
 const EngagementsEidEvidenceRoute = EngagementsEidEvidenceRouteImport.update({
@@ -80,6 +108,22 @@ const EngagementsEidTrailRoute = EngagementsEidTrailRouteImport.update({
   path: '/trail',
   getParentRoute: () => EngagementsEidRouteRoute,
 } as any)
+const EngagementsEidDataIndexRoute = EngagementsEidDataIndexRouteImport.update({
+  id: '/data/',
+  path: '/data/',
+  getParentRoute: () => EngagementsEidRouteRoute,
+} as any)
+const EngagementsEidDataKindRoute = EngagementsEidDataKindRouteImport.update({
+  id: '/data/$kind',
+  path: '/data/$kind',
+  getParentRoute: () => EngagementsEidRouteRoute,
+} as any)
+const EngagementsEidProceduresIndexRoute =
+  EngagementsEidProceduresIndexRouteImport.update({
+    id: '/procedures/',
+    path: '/procedures/',
+    getParentRoute: () => EngagementsEidRouteRoute,
+  } as any)
 const EngagementsEidProceduresPidRoute =
   EngagementsEidProceduresPidRouteImport.update({
     id: '/procedures/$pid',
@@ -98,108 +142,164 @@ const EngagementsEidReviewsTaskIdRoute =
     path: '/reviews/$taskId',
     getParentRoute: () => EngagementsEidRouteRoute,
   } as any)
+const EngagementsEidDataDocumentsDocIdRoute =
+  EngagementsEidDataDocumentsDocIdRouteImport.update({
+    id: '/data/documents/$docId',
+    path: '/data/documents/$docId',
+    getParentRoute: () => EngagementsEidRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/engagements/$eid': typeof EngagementsEidRouteRouteWithChildren
   '/engagements/': typeof EngagementsIndexRoute
+  '/engagements/$eid/client': typeof EngagementsEidClientRoute
   '/engagements/$eid/contracts': typeof EngagementsEidContractsRoute
+  '/engagements/$eid/decisions': typeof EngagementsEidDecisionsRoute
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
+  '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
+  '/engagements/$eid/data/': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/procedures/': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews/': typeof EngagementsEidReviewsIndexRoute
+  '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/engagements': typeof EngagementsIndexRoute
+  '/engagements/$eid/client': typeof EngagementsEidClientRoute
   '/engagements/$eid/contracts': typeof EngagementsEidContractsRoute
+  '/engagements/$eid/decisions': typeof EngagementsEidDecisionsRoute
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid': typeof EngagementsEidIndexRoute
+  '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
+  '/engagements/$eid/data': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/procedures': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews': typeof EngagementsEidReviewsIndexRoute
+  '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/register': typeof RegisterRoute
+  '/settings': typeof SettingsRoute
   '/engagements/$eid': typeof EngagementsEidRouteRouteWithChildren
   '/engagements/': typeof EngagementsIndexRoute
+  '/engagements/$eid/client': typeof EngagementsEidClientRoute
   '/engagements/$eid/contracts': typeof EngagementsEidContractsRoute
+  '/engagements/$eid/decisions': typeof EngagementsEidDecisionsRoute
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
+  '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
+  '/engagements/$eid/data/': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/procedures/': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews/': typeof EngagementsEidReviewsIndexRoute
+  '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/login'
+    | '/register'
+    | '/settings'
     | '/engagements/$eid'
     | '/engagements/'
+    | '/engagements/$eid/client'
     | '/engagements/$eid/contracts'
+    | '/engagements/$eid/decisions'
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
+    | '/engagements/$eid/data/$kind'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
+    | '/engagements/$eid/data/'
+    | '/engagements/$eid/procedures/'
     | '/engagements/$eid/reviews/'
+    | '/engagements/$eid/data/documents/$docId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/login'
+    | '/register'
+    | '/settings'
     | '/engagements'
+    | '/engagements/$eid/client'
     | '/engagements/$eid/contracts'
+    | '/engagements/$eid/decisions'
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid'
+    | '/engagements/$eid/data/$kind'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
+    | '/engagements/$eid/data'
+    | '/engagements/$eid/procedures'
     | '/engagements/$eid/reviews'
+    | '/engagements/$eid/data/documents/$docId'
   id:
     | '__root__'
     | '/'
     | '/login'
+    | '/register'
+    | '/settings'
     | '/engagements/$eid'
     | '/engagements/'
+    | '/engagements/$eid/client'
     | '/engagements/$eid/contracts'
+    | '/engagements/$eid/decisions'
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
+    | '/engagements/$eid/data/$kind'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
+    | '/engagements/$eid/data/'
+    | '/engagements/$eid/procedures/'
     | '/engagements/$eid/reviews/'
+    | '/engagements/$eid/data/documents/$docId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  RegisterRoute: typeof RegisterRoute
+  SettingsRoute: typeof SettingsRoute
   EngagementsEidRouteRoute: typeof EngagementsEidRouteRouteWithChildren
   EngagementsIndexRoute: typeof EngagementsIndexRoute
 }
@@ -218,6 +318,20 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/engagements/': {
@@ -241,11 +355,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EngagementsEidIndexRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
+    '/engagements/$eid/client': {
+      id: '/engagements/$eid/client'
+      path: '/client'
+      fullPath: '/engagements/$eid/client'
+      preLoaderRoute: typeof EngagementsEidClientRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
     '/engagements/$eid/contracts': {
       id: '/engagements/$eid/contracts'
       path: '/contracts'
       fullPath: '/engagements/$eid/contracts'
       preLoaderRoute: typeof EngagementsEidContractsRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
+    '/engagements/$eid/decisions': {
+      id: '/engagements/$eid/decisions'
+      path: '/decisions'
+      fullPath: '/engagements/$eid/decisions'
+      preLoaderRoute: typeof EngagementsEidDecisionsRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
     '/engagements/$eid/evidence': {
@@ -283,6 +411,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EngagementsEidTrailRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
+    '/engagements/$eid/data/': {
+      id: '/engagements/$eid/data/'
+      path: '/data'
+      fullPath: '/engagements/$eid/data/'
+      preLoaderRoute: typeof EngagementsEidDataIndexRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
+    '/engagements/$eid/data/$kind': {
+      id: '/engagements/$eid/data/$kind'
+      path: '/data/$kind'
+      fullPath: '/engagements/$eid/data/$kind'
+      preLoaderRoute: typeof EngagementsEidDataKindRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
+    '/engagements/$eid/procedures/': {
+      id: '/engagements/$eid/procedures/'
+      path: '/procedures'
+      fullPath: '/engagements/$eid/procedures/'
+      preLoaderRoute: typeof EngagementsEidProceduresIndexRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
     '/engagements/$eid/procedures/$pid': {
       id: '/engagements/$eid/procedures/$pid'
       path: '/procedures/$pid'
@@ -304,33 +453,52 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EngagementsEidReviewsTaskIdRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
+    '/engagements/$eid/data/documents/$docId': {
+      id: '/engagements/$eid/data/documents/$docId'
+      path: '/data/documents/$docId'
+      fullPath: '/engagements/$eid/data/documents/$docId'
+      preLoaderRoute: typeof EngagementsEidDataDocumentsDocIdRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
   }
 }
 
 interface EngagementsEidRouteRouteChildren {
+  EngagementsEidClientRoute: typeof EngagementsEidClientRoute
   EngagementsEidContractsRoute: typeof EngagementsEidContractsRoute
+  EngagementsEidDecisionsRoute: typeof EngagementsEidDecisionsRoute
   EngagementsEidEvidenceRoute: typeof EngagementsEidEvidenceRoute
   EngagementsEidGateRoute: typeof EngagementsEidGateRoute
   EngagementsEidMisstatementsRoute: typeof EngagementsEidMisstatementsRoute
   EngagementsEidReportRoute: typeof EngagementsEidReportRoute
   EngagementsEidTrailRoute: typeof EngagementsEidTrailRoute
   EngagementsEidIndexRoute: typeof EngagementsEidIndexRoute
+  EngagementsEidDataKindRoute: typeof EngagementsEidDataKindRoute
   EngagementsEidProceduresPidRoute: typeof EngagementsEidProceduresPidRoute
   EngagementsEidReviewsTaskIdRoute: typeof EngagementsEidReviewsTaskIdRoute
+  EngagementsEidDataIndexRoute: typeof EngagementsEidDataIndexRoute
+  EngagementsEidProceduresIndexRoute: typeof EngagementsEidProceduresIndexRoute
   EngagementsEidReviewsIndexRoute: typeof EngagementsEidReviewsIndexRoute
+  EngagementsEidDataDocumentsDocIdRoute: typeof EngagementsEidDataDocumentsDocIdRoute
 }
 
 const EngagementsEidRouteRouteChildren: EngagementsEidRouteRouteChildren = {
+  EngagementsEidClientRoute: EngagementsEidClientRoute,
   EngagementsEidContractsRoute: EngagementsEidContractsRoute,
+  EngagementsEidDecisionsRoute: EngagementsEidDecisionsRoute,
   EngagementsEidEvidenceRoute: EngagementsEidEvidenceRoute,
   EngagementsEidGateRoute: EngagementsEidGateRoute,
   EngagementsEidMisstatementsRoute: EngagementsEidMisstatementsRoute,
   EngagementsEidReportRoute: EngagementsEidReportRoute,
   EngagementsEidTrailRoute: EngagementsEidTrailRoute,
   EngagementsEidIndexRoute: EngagementsEidIndexRoute,
+  EngagementsEidDataKindRoute: EngagementsEidDataKindRoute,
   EngagementsEidProceduresPidRoute: EngagementsEidProceduresPidRoute,
   EngagementsEidReviewsTaskIdRoute: EngagementsEidReviewsTaskIdRoute,
+  EngagementsEidDataIndexRoute: EngagementsEidDataIndexRoute,
+  EngagementsEidProceduresIndexRoute: EngagementsEidProceduresIndexRoute,
   EngagementsEidReviewsIndexRoute: EngagementsEidReviewsIndexRoute,
+  EngagementsEidDataDocumentsDocIdRoute: EngagementsEidDataDocumentsDocIdRoute,
 }
 
 const EngagementsEidRouteRouteWithChildren =
@@ -339,6 +507,8 @@ const EngagementsEidRouteRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  RegisterRoute: RegisterRoute,
+  SettingsRoute: SettingsRoute,
   EngagementsEidRouteRoute: EngagementsEidRouteRouteWithChildren,
   EngagementsIndexRoute: EngagementsIndexRoute,
 }
