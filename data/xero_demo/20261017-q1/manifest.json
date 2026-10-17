@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "631e9c037e15f7f68234880357aeff98bef0c35a9253ade878baf11e70f7094b",
+  "spec_sha256": "16b2ef2af1db7a8274530353727b37060c0a7a85c3beddf896ab01490ba29465",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -73,6 +73,13 @@
   },
   "files": [
     {
+      "path": "bank_accounts.csv",
+      "sha256": "e397f5df46002033732c5269462e6adf1517081881f20ede6bc03b950b707902",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "client_profile.json",
       "sha256": "c037417a42ec54d299fb97e9bc7cb3781473092b3652d32c03d0b0071ab100ac",
       "synthetic": true,
@@ -80,8 +87,80 @@
       "xero_refs": []
     },
     {
+      "path": "confirmations/12345678.pdf",
+      "sha256": "d111883a3741723ae31647c571a0b9019d3f5296ef79e8d313cb5d9b671c3553",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "BA-090",
+        "BT-090-0072"
+      ]
+    },
+    {
+      "path": "confirmations/12345679.pdf",
+      "sha256": "66b0be79cdd480386191725355ab130cbfce14a89029964e6eb6e3aac3a5c7d0",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "BA-091",
+        "BT-091-0001",
+        "BT-091-0002"
+      ]
+    },
+    {
+      "path": "confirmations/receipts.json",
+      "sha256": "37798dcd218cb618dceca3b94632515bf4198609244f29e11f8494cc81cd4234",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "contract_links.csv",
+      "sha256": "bf7185563c111a29d788e38c593a65ebf5583824997b181ec69f3fab3417edee",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "contracts/CON-X01.pdf",
+      "sha256": "00d1f7a96285ad3ef246fc6d94ce393e5c8f9dcc6fbd8735d974631876725eff",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
+      ]
+    },
+    {
+      "path": "contracts/CON-X02.pdf",
+      "sha256": "079cffb50819715068dc0e97cb3e5dfe40663f583d74daab23f13aea92c6f173",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+        "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+        "SI-b2c02d0b-41a8-4d4d-97d7-014c78b3547d",
+        "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9"
+      ]
+    },
+    {
+      "path": "contracts/CON-X03.pdf",
+      "sha256": "3e9f7e6da6519cc43d29fd7f2cead41ba779da8c3b526c473612f96b7a8d0d8c",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
+      ]
+    },
+    {
       "path": "dataset_traits.json",
       "sha256": "00a7d9cc83e0d069fead814682c97542172c0f29ba8280b6cad00a40768ece2a",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "delivery_notes.csv",
+      "sha256": "cf8ee061be9f88c983094df725bd36ceea88afc6e3b3f1072ce5172b6e2b68f5",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -193,6 +272,66 @@
     }
   ],
   "documents": [
+    {
+      "path": "confirmations/12345678.pdf",
+      "sha256": "d111883a3741723ae31647c571a0b9019d3f5296ef79e8d313cb5d9b671c3553",
+      "document_id": "DOC-d111883a3741",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "page_count": 2,
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "synthetic": true
+    },
+    {
+      "path": "confirmations/12345679.pdf",
+      "sha256": "66b0be79cdd480386191725355ab130cbfce14a89029964e6eb6e3aac3a5c7d0",
+      "document_id": "DOC-66b0be79cdd4",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "page_count": 2,
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "synthetic": true
+    },
+    {
+      "path": "contracts/CON-X01.pdf",
+      "sha256": "00d1f7a96285ad3ef246fc6d94ce393e5c8f9dcc6fbd8735d974631876725eff",
+      "document_id": "DOC-00d1f7a96285",
+      "type": "contract",
+      "reliability": "external_copy",
+      "page_count": 3,
+      "document_date": "2026-09-01",
+      "related_ids": [],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "contracts/CON-X02.pdf",
+      "sha256": "079cffb50819715068dc0e97cb3e5dfe40663f583d74daab23f13aea92c6f173",
+      "document_id": "DOC-079cffb50819",
+      "type": "contract",
+      "reliability": "external_copy",
+      "page_count": 3,
+      "document_date": "2026-06-24",
+      "related_ids": [],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "contracts/CON-X03.pdf",
+      "sha256": "3e9f7e6da6519cc43d29fd7f2cead41ba779da8c3b526c473612f96b7a8d0d8c",
+      "document_id": "DOC-3e9f7e6da651",
+      "type": "contract",
+      "reliability": "external_copy",
+      "page_count": 3,
+      "document_date": "2026-08-10",
+      "related_ids": [],
+      "registration": "load",
+      "synthetic": true
+    },
     {
       "path": "documents/engagement/appointment.pdf",
       "sha256": "5479f1f3ac66089d56abdf8e02bc0f2b1902ce0fa47bb8f043e9ae9f5ad78b02",

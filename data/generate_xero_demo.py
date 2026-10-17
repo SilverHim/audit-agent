@@ -180,8 +180,9 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 
 
 def generate(snapshot_dir: Path, out: Path) -> Path:
-    """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 规格写有正文的 PDF,
-    登记 PDF, documents/index.csv; 其余各段由后续需求补进."""
+    """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 合同关联, 服务完成记录,
+    开户行, 回函渠道, 规格写有正文的 PDF (承接文件, 合同, 回函), 登记 PDF, documents/index.csv;
+    其余各段由后续需求补进."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -190,12 +191,28 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
         raise SystemExit(f"快照 {snapshot_dir} 缺组织信息 (organisation.json 或 OrganisationID)")
     if not spec["profile"]["id"].startswith(prefix):
         raise SystemExit(f"画像 ID {spec['profile']['id']} 不以 {prefix} 开头")
+    refs = [ref for doc in spec["documents"] for ref in file_refs(spec, doc["path"])]  # 与 manifest 同一来源
+    missing = RefIndex(Snapshot(snapshot_dir)).missing(refs) if refs else []
+    if missing:
+        raise SystemExit(f"xero_refs 在快照中找不到: {', '.join(sorted(set(missing)))}")
     out.mkdir(parents=True, exist_ok=True)
     write_json(out, "dataset_traits.json", spec["traits"])
     write_json(out, "client_profile.json", spec["profile"])
     write_json(out, "planning/audit_objectives.json", spec["planning"]["audit_objectives"])
     write_json(out, "planning/risk_register.json", spec["planning"]["risk_register"])
     write_registry(out, spec["registry"])
+    write_csv(out, "contract_links.csv", ["invoice_no", "contract_id"], spec["contract_links"])
+    write_csv(
+        out,
+        "delivery_notes.csv",
+        ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"],
+        spec["delivery_notes"],
+    )
+    write_csv(
+        out, "bank_accounts.csv", ["id", "bank_name", "bsb", "account_no", "gl_account_code"], spec["bank_accounts"]
+    )
+    if spec["receipts"]:
+        write_json(out, "confirmations/receipts.json", spec["receipts"])
     for doc in spec["documents"]:
         if "pages" in doc:
             write_pdf(out / doc["path"], ["\n".join(page) for page in doc["pages"]], doc["footer"], spec["header"])
@@ -203,6 +220,18 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
     write_index(out, spec["documents"])
     write_manifest(out, snapshot_dir)
     return out
+
+
+def write_csv(out: Path, name: str, columns: list[str], rows: list[dict[str, Any]]) -> None:
+    """规格里的一段表写成 CSV (换行 \\n, 列顺序按 columns; 表头同 data/demo 的同名表); 没有行时不写."""
+    if not rows:
+        return
+    path = out / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\n", extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_registry(out: Path, registry: dict[str, Any]) -> None:
@@ -418,14 +447,13 @@ def file_refs(spec: dict[str, Any], rel: str) -> list[str]:
 
 def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = None) -> dict[str, Any]:
     """重算补造目录的 manifest: 各文件哈希与合成标志, PDF 的登记信息, 快照各文件哈希 (不含 contacts.json).
-    xero_refs 中有快照里找不到的对象时失败. 测试副本传 injected (场景名)."""
+    测试副本传 injected (场景名). xero_refs 是否都在快照中由 generate 核对."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
     snapshot = Snapshot(snapshot_dir)
     files: list[dict[str, Any]] = []
     documents: list[dict[str, Any]] = []
-    refs: list[str] = []
     for path in sorted(directory.rglob("*")):
         rel = path.relative_to(directory).as_posix()
         if not path.is_file() or rel == "manifest.json":
@@ -437,7 +465,6 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
             "generator": GENERATOR,
             "xero_refs": file_refs(spec, rel),
         }
-        refs.extend(item["xero_refs"])
         files.append(item)
         if path.suffix == ".pdf":
             doc = document_meta(spec, rel)
@@ -457,10 +484,6 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
                     "synthetic": True,
                 }
             )
-    if refs:
-        missing = RefIndex(snapshot).missing(refs)
-        if missing:
-            raise SystemExit(f"xero_refs 在快照中找不到: {', '.join(sorted(set(missing)))}")
     manifest: dict[str, Any] = {
         "dataset": spec["dataset"],
         "generator": GENERATOR,

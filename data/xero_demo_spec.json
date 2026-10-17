@@ -605,12 +605,616 @@
           "Date: 2 September 2026"
         ]
       ]
+    },
+    {
+      "path": "contracts/CON-X01.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-09-01",
+      "related_ids": [],
+      "registration": "load",
+      "index": false,
+      "xero_refs": [
+        "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
+      ],
+      "footer": "Contract No. CON-X01",
+      "pages": [
+        [
+          "STATEMENT OF WORK No. 2 - PORTAL MODULE DEVELOPMENT",
+          "Contract No. CON-X01",
+          "",
+          "Date: 1 September 2026",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: DIISR - Small Business Services",
+          "",
+          "This Statement of Work No. 2 covers further development for the Customer's Small",
+          "Business Services portal (Customer reference: Portal proj).",
+          "",
+          "1. Services",
+          "1.1 The Supplier will develop a self-service enquiry module for the Customer's Small",
+          "Business Services portal (the Module), as described in the Schedule.",
+          "",
+          "Schedule",
+          "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
+          "1     Portal module development, developer days       10      650.00      6,500.00",
+          "      Contract Price (excluding GST)                                      6,500.00",
+          "",
+          "2. Price and Development Period",
+          "2.1 The Contract Price is $6,500.00 excluding GST (10 developer days at $650.00). GST",
+          "is payable in addition.",
+          "2.2 The Supplier will carry out the development from 3 September 2026 to",
+          "16 September 2026 (the Development Period)."
+        ],
+        [
+          "3. Development and Deployment",
+          "3.1 The Supplier will carry out the development in its own development environment.",
+          "When development is finished, the Supplier will deploy the Module to the Customer's",
+          "environment.",
+          "",
+          "4. Completion",
+          "4.1 The Services are complete when the Supplier has deployed the Module to the",
+          "Customer's environment and the Customer's Project Sponsor has signed the Completion",
+          "Certificate (the Completion Date). Title to and control of the Module pass to the",
+          "Customer on the Completion Date.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier may issue a tax invoice on or after the Completion Date.",
+          "5.2 The Customer must pay each tax invoice by its due date, which is no later than",
+          "30 days after the date of the invoice."
+        ],
+        [
+          "6. Variations",
+          "6.1 Any change to the Contract Price must be agreed by both parties in writing.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Statement of Work by giving 10 Business Days'",
+          "written notice to the other party.",
+          "7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is",
+          "not entitled to payment for the Module.",
+          "",
+          "8. General",
+          "8.1 This Statement of Work may be varied only in writing signed by both parties.",
+          "8.2 This Statement of Work is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 1 September 2026",
+          "",
+          "Signed for DIISR - Small Business Services",
+          "Priya Natarajan, Project Sponsor          Date: 1 September 2026"
+        ]
+      ]
+    },
+    {
+      "path": "contracts/CON-X02.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-06-24",
+      "related_ids": [],
+      "registration": "load",
+      "index": false,
+      "xero_refs": [
+        "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+        "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+        "SI-b2c02d0b-41a8-4d4d-97d7-014c78b3547d",
+        "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9"
+      ],
+      "footer": "Contract No. CON-X02",
+      "pages": [
+        [
+          "MANAGED SUPPORT AGREEMENT",
+          "Contract No. CON-X02",
+          "",
+          "Date: 24 June 2026",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: Hamilton Smith Pty (ABN 19 900 043 058)",
+          "",
+          "1. Services",
+          "1.1 The Supplier will provide managed IT support services to the Customer: help desk",
+          "support, remote monitoring of the Customer's computers and servers, and software",
+          "updates (the Support Services).",
+          "",
+          "2. Term",
+          "2.1 This Agreement starts on 1 July 2026 and ends on 30 June 2027 (the Term), unless it",
+          "is terminated earlier under clause 7.",
+          "",
+          "3. Monthly Fee",
+          "3.1 The Customer will pay a Monthly Fee of $500.00 excluding GST for each calendar month",
+          "of the Term. GST is payable in addition."
+        ],
+        [
+          "4. Provision of the Support Services",
+          "4.1 The Support Services are provided throughout each calendar month, and the Customer",
+          "simultaneously receives and consumes the benefit of the Support Services as the Supplier",
+          "provides them.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier will issue a tax invoice for the Monthly Fee of each calendar month on",
+          "or about the 17th day of that month.",
+          "5.2 The Customer must pay each tax invoice within 14 days after the date of the",
+          "invoice."
+        ],
+        [
+          "6. Service Levels",
+          "6.1 If the Supplier does not respond to a Priority 1 request within 4 business hours,",
+          "the Customer may claim a credit of 10% of the Monthly Fee for that month.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Agreement by giving 30 days' written notice to the",
+          "other party.",
+          "",
+          "8. General",
+          "8.1 This Agreement may be varied only in writing signed by both parties.",
+          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 24 June 2026",
+          "",
+          "Signed for Hamilton Smith Pty",
+          "Tom Reilly, Operations Manager            Date: 24 June 2026"
+        ]
+      ]
+    },
+    {
+      "path": "contracts/CON-X03.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-08-10",
+      "related_ids": [],
+      "registration": "load",
+      "index": false,
+      "xero_refs": [
+        "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
+      ],
+      "footer": "Contract No. CON-X03",
+      "pages": [
+        [
+          "PROJECT MANAGEMENT SERVICES AGREEMENT",
+          "Contract No. CON-X03",
+          "",
+          "Date: 10 August 2026",
+          "Customer purchase order: H008-346",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: Maddox Publishing Group (ABN 21 900 043 067)",
+          "",
+          "1. Services",
+          "1.1 The Supplier will provide an on-site project manager for the Customer's CRM",
+          "integration project on 6 on-site days (the On-site Days).",
+          "",
+          "Schedule",
+          "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
+          "1     On-site project management, days                 6      700.00      4,200.00",
+          "      Total price (excluding GST)                                         4,200.00",
+          "",
+          "2. Price",
+          "2.1 The price is 6 On-site Days at $700.00 per day, a total of $4,200.00 excluding GST.",
+          "GST is payable in addition.",
+          "",
+          "3. Scheduling",
+          "3.1 The On-site Days will be scheduled between 11 August 2026 and 26 August 2026 as",
+          "agreed with the Customer."
+        ],
+        [
+          "4. Acceptance",
+          "4.1 Each On-site Day is accepted when the Customer signs the timesheet for that day.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier will issue a tax invoice after the sixth On-site Day. The Customer",
+          "must pay the invoice within 10 days after the date of the invoice."
+        ],
+        [
+          "6. Absence",
+          "6.1 If the project manager is absent for part of an On-site Day, the Supplier will",
+          "credit $350.00 for each half day of absence.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Agreement by giving 5 Business Days' written",
+          "notice to the other party.",
+          "",
+          "8. General",
+          "8.1 This Agreement may be varied only in writing signed by both parties.",
+          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 10 August 2026",
+          "",
+          "Signed for Maddox Publishing Group",
+          "Nora Fitzgerald, Production Director      Date: 10 August 2026"
+        ]
+      ]
+    },
+    {
+      "path": "confirmations/12345678.pdf",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "index": false,
+      "xero_refs": [
+        "BA-090",
+        "BT-090-0072"
+      ],
+      "confirmation": {
+        "bank_account_id": "BA-090",
+        "balance_cents": -1090044,
+        "accrued_interest_cents": 0
+      },
+      "footer": "Wattlebrook Bank Limited | Ref WBL-AC-2026-093001",
+      "pages": [
+        [
+          "WATTLEBROOK BANK LIMITED",
+          "ABN 82 938 074 116",
+          "Audit Confirmations Unit, Level 5, 200 Example Street, Sydney NSW 2000",
+          "",
+          "BANK CONFIRMATION - AUDIT REPLY",
+          "Our reference: WBL-AC-2026-093001",
+          "",
+          "To: The Auditor",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "confirmations@tessellate-audit.example",
+          "",
+          "Customer: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "Confirmation date: 30 September 2026",
+          "",
+          "In reply to your request, we confirm the following information recorded in our books",
+          "for the customer at close of business on 30 September 2026.",
+          "",
+          "Section 1 - Accounts",
+          "Account name:    Demo Company (AU) Pty Ltd - Business Bank Account",
+          "Account type:    Business Transaction Account",
+          "BSB:             306-234",
+          "Account number:  12345678",
+          "Currency:        AUD",
+          "Balance at 30 September 2026: AUD 10,900.44 (debit - account overdrawn)",
+          "Accrued interest and fees not yet debited: nil"
+        ],
+        [
+          "Section 2 - Facilities, guarantees and security",
+          "Facility:        Business overdraft on account 12345678",
+          "Limit:           AUD 15,000.00",
+          "Repayment:       Repayable on demand",
+          "Review:          Annual review due 31 March 2027",
+          "Security:        Personal guarantee given by Alex Morgan",
+          "Set-off:         There are no set-off arrangements between the customer's accounts.",
+          "",
+          "Section 3 - Other accounts",
+          "Account 12345679 (Business Savings Account): AUD 11,581.23 (credit) at 30 September 2026.",
+          "",
+          "Section 4 - Delivery of this reply",
+          "This reply is sent by email directly to the auditor named on page 1. It has not been",
+          "sent to the customer.",
+          "",
+          "This information is given without liability on the part of the bank or its officers.",
+          "",
+          "Authorised officer: Helen Marsh, Audit Confirmations Unit",
+          "Wattlebrook Bank Limited"
+        ]
+      ]
+    },
+    {
+      "path": "confirmations/12345679.pdf",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "index": false,
+      "xero_refs": [
+        "BA-091",
+        "BT-091-0001",
+        "BT-091-0002"
+      ],
+      "confirmation": {
+        "bank_account_id": "BA-091",
+        "balance_cents": 1158123,
+        "accrued_interest_cents": 4853
+      },
+      "footer": "Wattlebrook Bank Limited | Ref WBL-AC-2026-093002",
+      "pages": [
+        [
+          "WATTLEBROOK BANK LIMITED",
+          "ABN 82 938 074 116",
+          "Audit Confirmations Unit, Level 5, 200 Example Street, Sydney NSW 2000",
+          "",
+          "BANK CONFIRMATION - AUDIT REPLY",
+          "Our reference: WBL-AC-2026-093002",
+          "",
+          "To: The Auditor",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "confirmations@tessellate-audit.example",
+          "",
+          "Customer: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "Confirmation date: 30 September 2026",
+          "",
+          "In reply to your request, we confirm the following information recorded in our books",
+          "for the customer at close of business on 30 September 2026.",
+          "",
+          "Section 1 - Accounts",
+          "Account name:    Demo Company (AU) Pty Ltd - Business Savings Account",
+          "Account type:    Business Savings Account",
+          "BSB:             306-234",
+          "Account number:  12345679",
+          "Currency:        AUD",
+          "Balance at 30 September 2026: AUD 11,581.23 (credit)",
+          "No interest was credited to this account between 1 July 2026 and 30 September 2026.",
+          "Accrued interest at 30 September 2026, not yet credited to the account: AUD 48.53",
+          "(in the customer's favour; interest period 16 September to 15 October 2026, payable on",
+          "16 October 2026)"
+        ],
+        [
+          "Section 2 - Facilities, guarantees and security",
+          "Facilities: none",
+          "",
+          "Section 3 - Other accounts",
+          "See our separate reply for account 12345678.",
+          "",
+          "Section 4 - Delivery of this reply",
+          "This reply is sent by email directly to the auditor named on page 1. It has not been",
+          "sent to the customer.",
+          "",
+          "This information is given without liability on the part of the bank or its officers.",
+          "",
+          "Authorised officer: Helen Marsh, Audit Confirmations Unit",
+          "Wattlebrook Bank Limited"
+        ]
+      ]
     }
   ],
-  "contract_links": [],
-  "delivery_notes": [],
-  "bank_accounts": [],
-  "receipts": {},
+  "contract_links": [
+    {
+      "invoice_no": "ORC1026",
+      "contract_id": "CON-X01"
+    },
+    {
+      "invoice_no": "ORC1003",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1008",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1016",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1020",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1014",
+      "contract_id": "CON-X03"
+    }
+  ],
+  "delivery_notes": [
+    {
+      "id": "SR-ORC1000",
+      "delivery_no": "SR-ORC1000",
+      "invoice_no": "ORC1000",
+      "shipped_date": "2026-07-27",
+      "signed_date": "2026-07-31",
+      "signed_by": "Harriet Lowe"
+    },
+    {
+      "id": "SR-ORC1001",
+      "delivery_no": "SR-ORC1001",
+      "invoice_no": "ORC1001",
+      "shipped_date": "2026-07-20",
+      "signed_date": "2026-07-31",
+      "signed_by": "Priya Natarajan"
+    },
+    {
+      "id": "SR-ORC1002",
+      "delivery_no": "SR-ORC1002",
+      "invoice_no": "ORC1002",
+      "shipped_date": "2026-07-20",
+      "signed_date": "2026-07-24",
+      "signed_by": "Marco Bellini"
+    },
+    {
+      "id": "SR-ORC1004",
+      "delivery_no": "SR-ORC1004",
+      "invoice_no": "ORC1004",
+      "shipped_date": "2026-07-29",
+      "signed_date": "2026-07-29",
+      "signed_by": "Grace Holloway"
+    },
+    {
+      "id": "SR-ORC1006",
+      "delivery_no": "SR-ORC1006",
+      "invoice_no": "ORC1006",
+      "shipped_date": "2026-07-21",
+      "signed_date": "2026-07-23",
+      "signed_by": "Owen Fraser"
+    },
+    {
+      "id": "SR-ORC1007",
+      "delivery_no": "SR-ORC1007",
+      "invoice_no": "ORC1007",
+      "shipped_date": "2026-07-06",
+      "signed_date": "2026-07-31",
+      "signed_by": "Lena Sorensen"
+    },
+    {
+      "id": "SR-ORC1008",
+      "delivery_no": "SR-ORC1008",
+      "invoice_no": "ORC1008",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1009",
+      "delivery_no": "SR-ORC1009",
+      "invoice_no": "ORC1009",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1010",
+      "delivery_no": "SR-ORC1010",
+      "invoice_no": "ORC1010",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1011",
+      "delivery_no": "SR-ORC1011",
+      "invoice_no": "ORC1011",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1012",
+      "delivery_no": "SR-ORC1012",
+      "invoice_no": "ORC1012",
+      "shipped_date": "2026-08-13",
+      "signed_date": "2026-08-14",
+      "signed_by": "Marco Bellini"
+    },
+    {
+      "id": "SR-ORC1013",
+      "delivery_no": "SR-ORC1013",
+      "invoice_no": "ORC1013",
+      "shipped_date": "2026-08-14",
+      "signed_date": "2026-08-20",
+      "signed_by": "Samir Haddad"
+    },
+    {
+      "id": "SR-ORC1014",
+      "delivery_no": "SR-ORC1014",
+      "invoice_no": "ORC1014",
+      "shipped_date": "2026-08-11",
+      "signed_date": "2026-08-26",
+      "signed_by": "Nora Fitzgerald"
+    },
+    {
+      "id": "SR-ORC1015",
+      "delivery_no": "SR-ORC1015",
+      "invoice_no": "ORC1015",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-04",
+      "signed_by": "Ben Archer"
+    },
+    {
+      "id": "SR-ORC1016",
+      "delivery_no": "SR-ORC1016",
+      "invoice_no": "ORC1016",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1017",
+      "delivery_no": "SR-ORC1017",
+      "invoice_no": "ORC1017",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1018",
+      "delivery_no": "SR-ORC1018",
+      "invoice_no": "ORC1018",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1019",
+      "delivery_no": "SR-ORC1019",
+      "invoice_no": "ORC1019",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1020",
+      "delivery_no": "SR-ORC1020",
+      "invoice_no": "ORC1020",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1021",
+      "delivery_no": "SR-ORC1021",
+      "invoice_no": "ORC1021",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1022",
+      "delivery_no": "SR-ORC1022",
+      "invoice_no": "ORC1022",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1023",
+      "delivery_no": "SR-ORC1023",
+      "invoice_no": "ORC1023",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1024",
+      "delivery_no": "SR-ORC1024",
+      "invoice_no": "ORC1024",
+      "shipped_date": "2026-08-19",
+      "signed_date": "2026-08-19",
+      "signed_by": "Ruth Carmody"
+    },
+    {
+      "id": "SR-ORC1026",
+      "delivery_no": "SR-ORC1026",
+      "invoice_no": "ORC1026",
+      "shipped_date": "2026-09-03",
+      "signed_date": "2026-09-17",
+      "signed_by": "Priya Natarajan"
+    }
+  ],
+  "bank_accounts": [
+    {
+      "id": "BA-090",
+      "bank_name": "Wattlebrook Bank Limited",
+      "bsb": "306234",
+      "account_no": "12345678",
+      "gl_account_code": "090"
+    },
+    {
+      "id": "BA-091",
+      "bank_name": "Wattlebrook Bank Limited",
+      "bsb": "306234",
+      "account_no": "12345679",
+      "gl_account_code": "091"
+    }
+  ],
+  "receipts": {
+    "12345678": {
+      "receipt_channel": "direct_email"
+    },
+    "12345679": {
+      "receipt_channel": "direct_email"
+    }
+  },
   "payroll": [],
   "adjustments": [],
   "financial_statements": {},

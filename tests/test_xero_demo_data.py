@@ -529,8 +529,17 @@ def test_manifest_layout() -> None:
     assert manifest["generator"] == "data/generate_xero_demo.py"  # type: ignore[index]
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
     assert [f["path"] for f in manifest["files"]] == [  # type: ignore[index]
+        "bank_accounts.csv",
         "client_profile.json",
+        "confirmations/12345678.pdf",
+        "confirmations/12345679.pdf",
+        "confirmations/receipts.json",
+        "contract_links.csv",
+        "contracts/CON-X01.pdf",
+        "contracts/CON-X02.pdf",
+        "contracts/CON-X03.pdf",
         "dataset_traits.json",
+        "delivery_notes.csv",
         "documents/engagement/appointment.pdf",
         "documents/engagement/engagement_letter.pdf",
         "documents/index.csv",
@@ -569,7 +578,7 @@ def test_check_passes() -> None:
 
 def test_check_without_snapshot_still_checks_files(tmp_path: Path) -> None:
     notes = checker.check(SUPPLEMENTS, tmp_path / "absent")
-    assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0]
+    assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0] and "补造表与快照的核对" in notes[0]
     copy = copy_supplements(tmp_path)
     (copy / "dataset_traits.json").write_bytes((copy / "dataset_traits.json").read_bytes() + b" ")
     assert "dataset_traits.json: sha256 与 manifest 不符" in check_error(copy, tmp_path / "absent")
@@ -593,7 +602,7 @@ def test_unlisted_missing_and_unflagged_files(tmp_path: Path) -> None:
     (copy / "extra.csv").write_text("a\n", encoding="utf-8")
     (copy / "planning" / "risk_register.json").unlink()
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
-    manifest["files"][0]["synthetic"] = False
+    next(f for f in manifest["files"] if f["path"] == "client_profile.json")["synthetic"] = False
     (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     lines = check_error(copy, tmp_path / "absent").splitlines()
     assert f"{copy / 'extra.csv'}: 不在 manifest 清单中" in lines
@@ -737,7 +746,7 @@ def test_xero_refs_must_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     patched.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(generator, "SPEC", patched)
     manifest = json.loads((generator.generate(SNAPSHOT, tmp_path / "ok") / "manifest.json").read_text())
-    assert manifest["files"][0]["path"] == "client_profile.json" and manifest["files"][0]["xero_refs"] == good
+    assert next(f for f in manifest["files"] if f["path"] == "client_profile.json")["xero_refs"] == good
     invoices = json.loads((SNAPSHOT / "invoices.json").read_text(encoding="utf-8"))
     draft = next(i for i in invoices if i["Type"] == "ACCREC" and i["Status"] not in {"AUTHORISED", "PAID"})
     bad = ["XJ-580-4", "SI-00000000", f"SI-{draft['InvoiceID']}", "BT-090-9999", "BA-200", "99999"]
@@ -863,7 +872,9 @@ def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
     generator.write_manifest(copy, snapshot)
-    assert checker.check(copy, snapshot, determinism=False, scan=[]) == []
+    assert checker.check(copy, snapshot, determinism=False, scan=[]) == [
+        "快照缺 dataset.json, invoices.json, accounts.json, bank_statements.json: 跳过补造表与快照的核对"
+    ]
     (snapshot / "organisation.json").write_text("[{}]", encoding="utf-8")
     generator.write_manifest(copy, snapshot)  # 快照哈希随之更新, 只剩组织信息的问题
     assert check_error(copy, snapshot, scan=[]).splitlines() == [
@@ -1160,6 +1171,13 @@ def test_documents_in_manifest_and_index() -> None:
         for d in manifest["documents"]  # type: ignore[index]
     ]
     assert rows == [
+        *(
+            (f"confirmations/{n}.pdf", "confirmation", "external_original", "2026-09-30", "confirmation", 2)
+            for n in ("12345678", "12345679")
+        ),
+        ("contracts/CON-X01.pdf", "contract", "external_copy", "2026-09-01", "load", 3),
+        ("contracts/CON-X02.pdf", "contract", "external_copy", "2026-06-24", "load", 3),
+        ("contracts/CON-X03.pdf", "contract", "external_copy", "2026-08-10", "load", 3),
         ("documents/engagement/appointment.pdf", "minutes", "internal_copy", "2026-08-27", "engagement", 4),
         (
             "documents/engagement/engagement_letter.pdf",
@@ -1182,7 +1200,9 @@ def test_documents_in_manifest_and_index() -> None:
             1,
         ),
     ]
-    assert sum(r[-1] for r in rows) == 14
+    assert (
+        sum(r[-1] for r in rows[5:]) == 14 and sum(r[-1] for r in rows[:5]) == 13
+    )  # 承接与登记 14 页, 合同与回函 13 页
     for item in manifest["documents"]:  # type: ignore[index]
         assert item["document_id"] == "DOC-" + item["sha256"][:12] and item["related_ids"] == [] and item["synthetic"]
     assert (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8") == (
@@ -1354,4 +1374,230 @@ def test_person_pdf_and_line_order(tmp_path: Path) -> None:
         f"{letter}: 第 3 页文本层缺 4 行来源内容或顺序不对",  # 每一行都在, 只是顺序不对
         f"{person.with_suffix('.pdf')}: 第 1 页文本层缺 1 行来源内容或顺序不对",
         f"{person.with_suffix('.pdf')}: 应为 1 页且含姓名, 出生日期与各公司 ACN",
+    ]
+
+
+# ── 收入合同, 服务完成记录, 合同关联与银行回函 ───────────────
+
+
+def test_contract_pages() -> None:
+    x01 = pdf_texts(SUPPLEMENTS / "contracts" / "CON-X01.pdf")
+    assert len(x01) == 3 and not any("ABN" in page for page in x01)  # 决定 11: DIISR 保留原名, 不写 ABN
+    assert "Customer: DIISR - Small Business Services" in x01[0] and "Date: 1 September 2026" in x01[0]
+    assert "2.1 The Contract Price is $6,500.00 excluding GST (10 developer days at $650.00)." in x01[0]
+    assert "from 3 September 2026 to 16 September 2026" in x01[0]
+    assert (
+        "4.1 The Services are complete when the Supplier has deployed the Module to the Customer's environment and "
+        "the Customer's Project Sponsor has signed the Completion Certificate (the Completion Date). Title to and "
+        "control of the Module pass to the Customer on the Completion Date."
+    ) in x01[1]
+    assert "3.1 The Supplier will carry out the development in its own development environment." in x01[1]
+    assert "5.1 The Supplier may issue a tax invoice on or after the Completion Date." in x01[1]
+    assert "no later than 30 days after the date of the invoice" in x01[1]
+    assert "6.1 Any change to the Contract Price must be agreed by both parties in writing." in x01[2]
+    assert "giving 10 Business Days' written notice" in x01[2]
+    assert (
+        "7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is not entitled to "
+        "payment for the Module."
+    ) in x01[2]  # 终止时无权收款: 第 35(c) 段不满足
+    x02 = pdf_texts(SUPPLEMENTS / "contracts" / "CON-X02.pdf")
+    assert len(x02) == 3 and "Customer: Hamilton Smith Pty (ABN 19 900 043 058)" in x02[0]
+    assert "Date: 24 June 2026" in x02[0] and "starts on 1 July 2026 and ends on 30 June 2027" in x02[0]
+    assert "Monthly Fee of $500.00 excluding GST" in x02[0]
+    assert (
+        "4.1 The Support Services are provided throughout each calendar month, and the Customer simultaneously "
+        "receives and consumes the benefit of the Support Services as the Supplier provides them."
+    ) in x02[1]  # 第 35(a) 段
+    assert "on or about the 17th day of that month" in x02[1] and "within 14 days after the date" in x02[1]
+    assert "Priority 1 request within 4 business hours" in x02[2] and "10% of the Monthly Fee" in x02[2]
+    assert "7.1 Either party may terminate this Agreement by giving 30 days' written notice" in x02[2]
+    x03 = pdf_texts(SUPPLEMENTS / "contracts" / "CON-X03.pdf")
+    assert len(x03) == 3 and "Customer: Maddox Publishing Group (ABN 21 900 043 067)" in x03[0]
+    assert "for the Customer's CRM integration project" in x03[0]  # 同 ORC1014 的发票行描述
+    assert "Date: 10 August 2026 Customer purchase order: H008-346" in x03[0]
+    assert "6 On-site Days at $700.00 per day, a total of $4,200.00 excluding GST" in x03[0]
+    assert "4.1 Each On-site Day is accepted when the Customer signs the timesheet" in x03[1]
+    assert "within 10 days after the date of the invoice" in x03[1]
+    assert "credit $350.00 for each half day of absence" in x03[2] and "5 Business Days' written" in x03[2]
+
+
+def table(name: str) -> list[dict[str, str]]:
+    import csv
+
+    with (SUPPLEMENTS / name).open(newline="", encoding="utf-8") as stream:
+        return list(csv.DictReader(stream))
+
+
+def test_contract_links_and_delivery_notes() -> None:
+    assert [(r["invoice_no"], r["contract_id"]) for r in table("contract_links.csv")] == [
+        ("ORC1026", "CON-X01"),
+        ("ORC1003", "CON-X02"),
+        ("ORC1008", "CON-X02"),
+        ("ORC1016", "CON-X02"),
+        ("ORC1020", "CON-X02"),
+        ("ORC1014", "CON-X03"),
+    ]
+    rows = table("delivery_notes.csv")
+    assert list(rows[0]) == ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"]
+    expected = {
+        **{f"ORC{n}": ("2026-07-01", "2026-07-31") for n in range(1008, 1012)},
+        **{f"ORC{n}": ("2026-08-01", "2026-08-31") for n in range(1016, 1020)},
+        **{f"ORC{n}": ("2026-09-01", "2026-09-30") for n in range(1020, 1024)},
+        "ORC1006": ("2026-07-21", "2026-07-23"),
+        "ORC1002": ("2026-07-20", "2026-07-24"),
+        "ORC1004": ("2026-07-29", "2026-07-29"),
+        "ORC1000": ("2026-07-27", "2026-07-31"),
+        "ORC1001": ("2026-07-20", "2026-07-31"),
+        "ORC1007": ("2026-07-06", "2026-07-31"),
+        "ORC1012": ("2026-08-13", "2026-08-14"),
+        "ORC1013": ("2026-08-14", "2026-08-20"),
+        "ORC1014": ("2026-08-11", "2026-08-26"),
+        "ORC1015": ("2026-09-01", "2026-09-04"),
+        "ORC1024": ("2026-08-19", "2026-08-19"),
+        "ORC1026": ("2026-09-03", "2026-09-17"),
+    }
+    assert {r["invoice_no"]: (r["shipped_date"], r["signed_date"]) for r in rows} == expected and len(rows) == 24
+    assert all(r["id"] == r["delivery_no"] == f"SR-{r['invoice_no']}" and r["signed_by"] for r in rows)
+    sponsor = next(r["signed_by"] for r in rows if r["invoice_no"] == "ORC1026")
+    x01 = pdf_texts(SUPPLEMENTS / "contracts" / "CON-X01.pdf")[2]
+    assert f"{sponsor}, Project Sponsor" in x01  # 完工证书由 DIISR Project Sponsor 签
+
+
+def test_bank_accounts_and_receipts() -> None:
+    demo_header = (REPO / "data" / "demo" / "bank_accounts.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert (SUPPLEMENTS / "bank_accounts.csv").read_text(encoding="utf-8") == (
+        f"{demo_header}\n"
+        "BA-090,Wattlebrook Bank Limited,306234,12345678,090\n"
+        "BA-091,Wattlebrook Bank Limited,306234,12345679,091\n"
+    )
+    assert read("confirmations/receipts.json") == {
+        "12345678": {"receipt_channel": "direct_email"},
+        "12345679": {"receipt_channel": "direct_email"},
+    }
+
+
+def test_confirmation_pages() -> None:
+    overdraft = pdf_texts(SUPPLEMENTS / "confirmations" / "12345678.pdf")
+    assert len(overdraft) == 2
+    first, second = overdraft
+    assert "WATTLEBROOK BANK LIMITED ABN 82 938 074 116" in first and "Tessellate Audit Partners" in first
+    assert "Customer: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)" in first
+    assert "Balance at 30 September 2026: AUD 10,900.44 (debit - account overdrawn)" in first
+    assert "accrued interest and fees not yet debited: nil" in first.lower()
+    for words in (
+        "Limit: AUD 15,000.00",
+        "Repayable on demand",
+        "Annual review due 31 March 2027",
+        "Personal guarantee given by Alex Morgan",
+        "There are no set-off arrangements",
+        "Account 12345679 (Business Savings Account): AUD 11,581.23 (credit)",
+        "This reply is sent by email directly to the auditor",
+    ):
+        assert words in second, words
+    assert all("Wattlebrook Bank Limited | Ref WBL-AC-2026-093001" in page for page in overdraft)
+    savings = pdf_texts(SUPPLEMENTS / "confirmations" / "12345679.pdf")
+    assert len(savings) == 2
+    assert "Balance at 30 September 2026: AUD 11,581.23 (credit)" in savings[0]
+    assert "No interest was credited to this account between 1 July 2026 and 30 September 2026" in savings[0]
+    assert (
+        "Accrued interest at 30 September 2026, not yet credited to the account: AUD 48.53 (in the customer's "
+        "favour; interest period 16 September to 15 October 2026, payable on 16 October 2026)"
+    ) in savings[0]
+    assert "Facilities: none" in savings[1] and "This reply is sent by email directly to the auditor" in savings[1]
+    assert all("Wattlebrook Bank Limited | Ref WBL-AC-2026-093002" in page for page in savings)
+
+
+def test_table_problems_are_reported(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    notes = (copy / "delivery_notes.csv").read_text(encoding="utf-8").splitlines()
+    notes[1] = notes[1].replace("2026-07-27", "2026-08-02")  # SR-ORC1000 开始日晚于完成日
+    notes.append(notes[2].replace("SR-ORC1001,SR-ORC1001", "SR-X,SR-ORC1001"))  # 重复且 id 不对
+    (copy / "delivery_notes.csv").write_text("\n".join(notes) + "\n", encoding="utf-8")
+    (copy / "contract_links.csv").write_text(
+        "invoice_no,contract_id\nORC1026,CON-X01\nORC1026,CON-X09\n", encoding="utf-8"
+    )
+    edit_json(copy / "confirmations" / "receipts.json", lambda d: d["12345679"].update(receipt_channel="fax"))
+    reply = copy / "confirmations" / "12345678.pdf"
+    source = next(d for d in spec()["documents"] if d["path"] == "confirmations/12345678.pdf")["pages"]
+    pages = ["\n".join(p).replace("10,900.44", "10,900.40") for p in source]
+    generator.write_pdf(reply, pages, "Wattlebrook Bank Limited | Ref WBL-AC-2026-093001", HEADER)
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    lines = check_error(copy, tmp_path / "absent").splitlines()
+    assert [line for line in lines if "文本层" not in line] == [
+        f"{copy / 'delivery_notes.csv'}: 同一发票有多条记录: ORC1001",
+        f"{copy / 'delivery_notes.csv'}: id 与 delivery_no 应为 SR-{{发票号}}: SR-X",
+        f"{copy / 'delivery_notes.csv'}: 开始日晚于完成日: SR-ORC1000",
+        f"{copy / 'contract_links.csv'}: 发票号重复: ORC1026",
+        f"{copy / 'contract_links.csv'}: 合同 PDF 不存在: CON-X09",
+        f"{copy / 'confirmations' / 'receipts.json'}: receipt_channel 不是有效的回函渠道",
+        f"{reply}: 第 1 页没有写出规格中的余额或应计利息",
+    ]
+
+
+@needs_snapshot
+def test_tables_agree_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert checker.check_against_snapshot(SUPPLEMENTS, SNAPSHOT) == []
+    copy = copy_supplements(tmp_path)
+    notes = (copy / "delivery_notes.csv").read_text(encoding="utf-8").splitlines()
+    notes = [n for n in notes if ",ORC1015," not in n]  # 少一张本期发票
+    notes.append("SR-ORC1027,SR-ORC1027,ORC1027,2026-10-01,2026-10-16,Priya Natarajan")  # 期后且未生效
+    (copy / "delivery_notes.csv").write_text("\n".join(notes) + "\n", encoding="utf-8")
+    links = (copy / "contract_links.csv").read_text(encoding="utf-8")
+    (copy / "contract_links.csv").write_text(links + "ORC1028,CON-X02\n", encoding="utf-8")  # 草稿发票
+    accounts = (copy / "bank_accounts.csv").read_text(encoding="utf-8").replace("12345679,091", "12345670,091")
+    (copy / "bank_accounts.csv").write_text(accounts, encoding="utf-8")
+    data = spec()
+    for doc in data["documents"]:
+        if doc.get("confirmation", {}).get("bank_account_id") == "BA-091":
+            doc["confirmation"].update(balance_cents=1158124, accrued_interest_cents=9705)
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    assert checker.check_against_snapshot(copy, SNAPSHOT) == [
+        f"{copy / 'delivery_notes.csv'}: 不是本期生效的销售发票: ORC1027",
+        f"{copy / 'delivery_notes.csv'}: 没有记录的本期发票应恰好是 ORC1003, ORC1005",
+        f"{copy / 'contract_links.csv'}: 快照中没有这些生效发票: ORC1028",
+        f"{copy / 'bank_accounts.csv'}: BA-091 与快照银行科目的账号不一致",
+        f"{patched}: confirmations/12345679.pdf 的余额与快照对账单期末余额不符",
+        f"{patched}: confirmations/12345679.pdf 的应计利息不等于 BT-091-0002 按 15/30 折算",
+    ]
+
+
+def test_more_table_problems(tmp_path: Path) -> None:
+    """坏日期不拖累别的表; 回函渠道少一个账号; 应计利息写成 10 月全额; 其他账户一节的余额与该账户回函不符."""
+    copy = copy_supplements(tmp_path)
+    notes = (copy / "delivery_notes.csv").read_text(encoding="utf-8").replace("2026-09-17,Priya", "2026-09-31,Priya")
+    (copy / "delivery_notes.csv").write_text(notes, encoding="utf-8")
+    links = (copy / "contract_links.csv").read_text(encoding="utf-8")
+    (copy / "contract_links.csv").write_text(links + "ORC1014,CON-X03\n", encoding="utf-8")
+    edit_json(copy / "confirmations" / "receipts.json", lambda d: d.pop("12345678"))
+    documents = {d["path"]: d for d in spec()["documents"]}
+    for path, old, new in (
+        ("confirmations/12345679.pdf", "AUD 48.53", "AUD 97.05"),  # 第 6.1 节指出的抽取风险
+        ("confirmations/12345678.pdf", "11,581.23", "11,581.24"),
+    ):
+        pages = ["\n".join(p).replace(old, new) for p in documents[path]["pages"]]
+        generator.write_pdf(copy / path, pages, documents[path]["footer"], HEADER)
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    lines = [line for line in check_error(copy, tmp_path / "absent").splitlines() if "文本层" not in line]
+    assert lines == [
+        f"{copy / 'delivery_notes.csv'}: 日期格式不对: SR-ORC1026",
+        f"{copy / 'contract_links.csv'}: 发票号重复: ORC1014",
+        f"{copy / 'confirmations' / 'receipts.json'}: 账号应与回函 PDF 一一对应",
+        f"{copy / 'confirmations' / '12345678.pdf'}: 其他账户 12345679 的余额与该账户回函不符",
+        f"{copy / 'confirmations' / '12345679.pdf'}: 第 1 页没有写出规格中的余额或应计利息",
+    ]
+
+
+@needs_snapshot
+def test_bank_accounts_and_refs_against_snapshot(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    accounts = (copy / "bank_accounts.csv").read_text(encoding="utf-8").splitlines()
+    (copy / "bank_accounts.csv").write_text("\n".join(accounts[:2]) + "\n", encoding="utf-8")  # 少了 BA-091
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    next(f for f in manifest["files"] if f["path"] == "contracts/CON-X03.pdf")["xero_refs"].append("XJ-99999")
+    (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")  # --inject 副本不在生成时核对
+    assert checker.check_against_snapshot(copy, SNAPSHOT) == [
+        f"{copy / 'bank_accounts.csv'}: 行应与快照银行科目 BA-090, BA-091 一一对应",
+        f"{copy / 'manifest.json'}: xero_refs 在快照中找不到: XJ-99999",
     ]

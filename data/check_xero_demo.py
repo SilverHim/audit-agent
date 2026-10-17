@@ -1,14 +1,16 @@
-"""Xero 演示数据集补造文件的校验: manifest 哈希, 快照哈希, 合成标志, 模型严格校验, 登录账号联系人扫描与确定性.
+"""Xero 演示数据集补造文件的校验: manifest 与快照哈希, 合成标志, 模型严格校验, 登记与号码, 补造表与 PDF 内容,
+补造表与快照的核对, 登录账号联系人扫描与确定性.
 
 用法: uv run python data/check_xero_demo.py [--snapshot 20261017-q1 或快照目录] [--dir 补造目录]
 
 - 问题全部收集后一次抛 CheckError, 每行一项, 只写文件名; 登录账号联系人的姓名与邮箱只在内存里比对, 不打印, 不写文件.
-- 没有本地快照时跳过快照哈希, 画像 ID 前缀, 联系人扫描与确定性, 补造文件本身照常核对; 快照在而 contacts.json
-  缺失或无法解析时报错, 不静默跳过联系人扫描.
+- 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对, 联系人扫描与确定性, 补造文件本身照常核对;
+  快照在而 contacts.json 缺失或无法解析时报错, 不静默跳过联系人扫描.
 设计见 docs/Xero演示数据集设计.md 第 9.4 节.
 """
 
 import argparse
+import csv
 import hashlib
 import io
 import json
@@ -17,6 +19,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
@@ -25,9 +28,17 @@ import generate_xero_demo as gen
 import pdfplumber
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from backend.contracts.models import AbnRecord, AsicCompanyRecord, AuditObjective, ClientProfile, RiskItem
+from backend.contracts.models import (
+    AbnRecord,
+    AsicCompanyRecord,
+    AuditObjective,
+    ClientProfile,
+    ReceiptChannel,
+    RiskItem,
+)
 
 REPO = gen.ROOT.parent
+CHANNELS = frozenset(c.value for c in ReceiptChannel)
 NO_SNAPSHOT = "没有本地 Xero 快照"
 PROFILE_NOTES_PREFIX = "Synthetic – for demonstration only"
 TRAIT_KEYS = frozenset(
@@ -85,16 +96,27 @@ def check(
         *guarded(directory, check_models, directory),
         *guarded(directory / "registry", check_registry, directory),
         *guarded(directory, check_numbers, directory),
+        *guarded(directory / "delivery_notes.csv", check_delivery_notes, directory),
+        *guarded(directory / "contract_links.csv", check_contract_links, directory),
+        *guarded(directory / "confirmations", check_receipts, directory),
+        *guarded(directory / "confirmations", check_confirmation_text, directory),
         *guarded(directory, check_pdf_content, directory, manifest),
     ]
     notes: list[str] = []
     if snapshot_dir.is_dir():
         problems += guarded(snapshot_dir, check_snapshot, directory, manifest, snapshot_dir)
+        problems += guarded(snapshot_dir, check_against_snapshot, directory, snapshot_dir)
+        if not snapshot_complete(snapshot_dir):
+            missing = [f"{n}.json" for n in SNAPSHOT_TABLE_FILES if not (snapshot_dir / f"{n}.json").is_file()]
+            notes.append(f"快照缺 {', '.join(missing)}: 跳过补造表与快照的核对")
         problems += guarded(snapshot_dir / "contacts.json", scan_login_contact, snapshot_dir, [directory, *scan])
         if determinism:
             problems += guarded(directory, check_determinism, directory, snapshot_dir)
     else:
-        notes.append(f"{NO_SNAPSHOT} ({rel(snapshot_dir)}): 跳过快照哈希, 画像 ID 前缀, 登录账号联系人扫描与确定性检查")
+        notes.append(
+            f"{NO_SNAPSHOT} ({rel(snapshot_dir)}): 跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, "
+            "合同关联, 开户行, xero_refs, 回函余额与应计利息), 登录账号联系人扫描与确定性检查"
+        )
     if problems:
         raise CheckError("\n".join(problems))
     return notes
@@ -509,6 +531,231 @@ def missing_in_order(source: str, text: str) -> int:
 def normalize_case(text: str) -> str:
     """只归一空白, 保留大小写."""
     return re.sub(r"\s+", " ", text)
+
+
+TABLES = {
+    "contract_links.csv": ["invoice_no", "contract_id"],
+    "delivery_notes.csv": ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"],
+    "bank_accounts.csv": ["id", "bank_name", "bsb", "account_no", "gl_account_code"],
+}  # 补造 CSV 的列 (表头同 data/demo 的同名表)
+UNSERVED = frozenset({"ORC1003", "ORC1005"})  # 本期没有服务完成记录的发票: 重复开票与已并入 ORC1006 的 (第 3.3 节)
+INTEREST = ("BA-091", "BT-091-0002", 15, 30)  # 应计利息 = 期后首次入账利息 × 期内天数 / 计息期天数 (第 2.8 节)
+
+
+def read_table(directory: Path, name: str, *, quiet: bool = False) -> list[dict[str, str]] | None:
+    """读补造 CSV; 文件不存在时为 None. 表头不对时抛 CheckError, quiet 时返回 None (由不带 quiet 的检查报出)."""
+    path = directory / name
+    if not path.is_file():
+        return None
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        rows = list(reader)
+        if reader.fieldnames != TABLES[name]:
+            if quiet:
+                return None
+            raise CheckError(f"{rel(path)}: 表头应为 {', '.join(TABLES[name])}")
+    return rows
+
+
+def iso(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def money(cents: int) -> str:
+    """回函的金额写法: AUD 10,900.44."""
+    return f"AUD {abs(cents) / 100:,.2f}"
+
+
+def confirmations() -> list[dict[str, Any]]:
+    """规格中带 confirmation 事实 (bank_account_id, balance_cents, accrued_interest_cents) 的回函."""
+    return [doc for doc in gen.load_spec()["documents"] if "confirmation" in doc]
+
+
+def check_delivery_notes(directory: Path) -> list[str]:
+    """服务完成记录: 每张发票至多一条, id 与 delivery_no 为 SR-{发票号}, 日期合法且开始日不晚于完成日."""
+    notes = read_table(directory, "delivery_notes.csv")
+    if notes is None:
+        return []
+    problems: list[str] = []
+    where = rel(directory / "delivery_notes.csv")
+    repeated = sorted(n for n, c in Counter(r["invoice_no"] for r in notes).items() if c > 1)
+    if repeated:
+        problems.append(f"{where}: 同一发票有多条记录: {', '.join(repeated)}")
+    wrong_id = [r["id"] for r in notes if not r["id"] == r["delivery_no"] == f"SR-{r['invoice_no']}"]
+    if wrong_id:
+        problems.append(f"{where}: id 与 delivery_no 应为 SR-{{发票号}}: {', '.join(wrong_id)}")
+    spans = {r["id"]: (iso(r["shipped_date"]), iso(r["signed_date"])) for r in notes}
+    bad = [i for i, (a, b) in spans.items() if a is None or b is None]
+    if bad:
+        problems.append(f"{where}: 日期格式不对: {', '.join(bad)}")
+    late = [i for i, (a, b) in spans.items() if a and b and a > b]
+    if late:
+        problems.append(f"{where}: 开始日晚于完成日: {', '.join(late)}")
+    return problems
+
+
+def check_contract_links(directory: Path) -> list[str]:
+    """合同关联: 发票号不重复, 合同 PDF 存在."""
+    links = read_table(directory, "contract_links.csv")
+    if links is None:
+        return []
+    problems: list[str] = []
+    where = rel(directory / "contract_links.csv")
+    repeated = sorted(n for n, c in Counter(r["invoice_no"] for r in links).items() if c > 1)
+    if repeated:
+        problems.append(f"{where}: 发票号重复: {', '.join(repeated)}")
+    lost = sorted(
+        {r["contract_id"] for r in links if not (directory / "contracts" / f"{r['contract_id']}.pdf").is_file()}
+    )
+    if lost:
+        problems.append(f"{where}: 合同 PDF 不存在: {', '.join(lost)}")
+    return problems
+
+
+def check_receipts(directory: Path) -> list[str]:
+    """回函渠道: 账号与回函 PDF 一一对应, receipt_channel 是有效渠道."""
+    receipts = read_json(directory / "confirmations" / "receipts.json")
+    replies = {p.stem for p in (directory / "confirmations").glob("*.pdf")}
+    if receipts is None and not replies:
+        return []
+    where = rel(directory / "confirmations" / "receipts.json")
+    if not isinstance(receipts, dict) or set(receipts) != replies:
+        return [f"{where}: 账号应与回函 PDF 一一对应"]
+    if any(not isinstance(v, dict) or v.get("receipt_channel") not in CHANNELS for v in receipts.values()):
+        return [f"{where}: receipt_channel 不是有效的回函渠道"]
+    return []
+
+
+OTHER_ACCOUNT = re.compile(r"Account (\d+) \([^)]*\): (AUD [\d,]+\.\d{2}) \((credit|debit)")
+
+
+def check_confirmation_text(directory: Path) -> list[str]:
+    """回函写法: 第 1 页写出规格中的余额与应计利息; 其他账户一节提到的账号, 金额与方向等于该账号回函的余额."""
+    problems: list[str] = []
+    docs = confirmations()
+    balances = {Path(doc["path"]).stem: doc["confirmation"]["balance_cents"] for doc in docs}
+    for doc in docs:
+        texts = pdf_pages(directory / doc["path"])
+        if not texts:
+            continue  # 缺失或无法解析由其他检查报
+        facts, first = doc["confirmation"], normalize_case(texts[0])
+        side = "debit" if facts["balance_cents"] < 0 else "credit"
+        accrued = facts["accrued_interest_cents"]
+        wanted = [f"{money(facts['balance_cents'])} ({side}", money(accrued) if accrued else ": nil"]
+        if not all(w in first for w in wanted):
+            problems.append(f"{rel(directory / doc['path'])}: 第 1 页没有写出规格中的余额或应计利息")
+        for number, amount, direction in OTHER_ACCOUNT.findall(normalize_case(" ".join(texts))):
+            other = balances.get(number)
+            if other is not None and (amount, direction) != (money(other), "debit" if other < 0 else "credit"):
+                problems.append(f"{rel(directory / doc['path'])}: 其他账户 {number} 的余额与该账户回函不符")
+    return problems
+
+
+SNAPSHOT_TABLE_FILES = ("dataset", "invoices", "accounts", "bank_statements")  # 补造表与快照核对要读的快照文件
+
+
+def snapshot_complete(snapshot_dir: Path) -> bool:
+    return all((snapshot_dir / f"{name}.json").is_file() for name in SNAPSHOT_TABLE_FILES)
+
+
+def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
+    """补造表与快照核对, 各项互不影响: 服务完成记录, 合同关联, 开户行, xero_refs, 回函余额与应计利息.
+    快照缺 SNAPSHOT_TABLE_FILES 任一文件时不做 (manifest 记了这些文件, 哈希核对已报出; check 另记说明)."""
+    from backend.adapters.xero_dataset import LIVE_DOCUMENTS, xero_date
+
+    if not snapshot_complete(snapshot_dir):
+        return []
+    snapshot = gen.Snapshot(snapshot_dir)
+    dataset = snapshot.load("dataset")
+    period = date.fromisoformat(dataset["period_start"]), date.fromisoformat(dataset["period_end"])
+    live = [i for i in snapshot.load("invoices") if i.get("Type") == "ACCREC" and i.get("Status") in LIVE_DOCUMENTS]
+    in_period = {i["InvoiceNumber"] for i in live if period[0] <= xero_date(i) <= period[1]}
+    steps: list[tuple[Path, Callable[..., list[str]], tuple[Any, ...]]] = [
+        (directory / "delivery_notes.csv", snapshot_delivery_notes, (directory, in_period)),
+        (directory / "contract_links.csv", snapshot_contract_links, (directory, {i["InvoiceNumber"] for i in live})),
+        (directory / "bank_accounts.csv", snapshot_bank_accounts, (directory, snapshot)),
+        (directory / "manifest.json", snapshot_refs, (directory, snapshot)),
+        (gen.SPEC, snapshot_confirmations, (snapshot, period[1])),
+    ]
+    return [problem for where, step, args in steps for problem in guarded(where, step, *args)]
+
+
+def snapshot_delivery_notes(directory: Path, in_period: set[str]) -> list[str]:
+    """服务完成记录的发票都是本期生效的销售发票, 没有记录的恰好是 UNSERVED."""
+    notes = read_table(directory, "delivery_notes.csv", quiet=True)
+    if notes is None:
+        return []
+    where, noted = rel(directory / "delivery_notes.csv"), {r["invoice_no"] for r in notes}
+    problems = [f"{where}: 不是本期生效的销售发票: {', '.join(sorted(noted - in_period))}"] if noted - in_period else []
+    if in_period - noted != UNSERVED:
+        problems.append(f"{where}: 没有记录的本期发票应恰好是 {', '.join(sorted(UNSERVED))}")
+    return problems
+
+
+def snapshot_contract_links(directory: Path, live: set[str]) -> list[str]:
+    """合同关联的发票在快照中存在且已生效."""
+    links = read_table(directory, "contract_links.csv", quiet=True)
+    unknown = sorted({r["invoice_no"] for r in links} - live) if links else []
+    return [f"{rel(directory / 'contract_links.csv')}: 快照中没有这些生效发票: {', '.join(unknown)}"] if unknown else []
+
+
+def snapshot_bank_accounts(directory: Path, snapshot: gen.Snapshot) -> list[str]:
+    """开户行覆盖表与快照银行科目一一对应 (id 不重复, 不缺不多), 每行的 bsb, 账号与科目一致."""
+    from backend.adapters.xero_dataset import map_bank_accounts
+
+    accounts = read_table(directory, "bank_accounts.csv", quiet=True)
+    if accounts is None:
+        return []
+    where = rel(directory / "bank_accounts.csv")
+    expected = {a.id: a for a in map_bank_accounts(snapshot.load("accounts"))}
+    ids = Counter(row["id"] for row in accounts)
+    problems: list[str] = []
+    if set(ids) != set(expected) or max(ids.values(), default=0) > 1:
+        problems.append(f"{where}: 行应与快照银行科目 {', '.join(sorted(expected))} 一一对应")
+    for row in accounts:
+        a = expected.get(row["id"])
+        if a is not None and (row["bsb"], row["account_no"], row["gl_account_code"]) != (
+            a.bsb,
+            a.account_no,
+            a.gl_account_code,
+        ):
+            problems.append(f"{where}: {row['id']} 与快照银行科目的账号不一致")
+    return problems
+
+
+def snapshot_refs(directory: Path, snapshot: gen.Snapshot) -> list[str]:
+    """manifest 的 xero_refs 都在快照中 (测试副本经 --inject 重写 manifest 时不在生成脚本核对, 由此兜底)."""
+    manifest = read_json(directory / "manifest.json")
+    refs = [r for item in manifest["files"] for r in item["xero_refs"]] if isinstance(manifest, dict) else []
+    missing = gen.RefIndex(snapshot).missing(refs) if refs else []
+    if missing:
+        return [f"{rel(directory / 'manifest.json')}: xero_refs 在快照中找不到: {', '.join(sorted(set(missing)))}"]
+    return []
+
+
+def snapshot_confirmations(snapshot: gen.Snapshot, period_end: date) -> list[str]:
+    """回函余额等于对账单期末前最后一行的余额; 应计利息按 INTEREST 推算 (四舍五入)."""
+    from backend.adapters.xero_dataset import map_bank_transactions
+
+    problems: list[str] = []
+    lines = map_bank_transactions(snapshot)  # type: ignore[arg-type]
+    account, line_id, days, period_days = INTEREST
+    for doc in confirmations():
+        facts = doc["confirmation"]
+        closing = [t for t in lines if t.bank_account_id == facts["bank_account_id"] and t.txn_date <= period_end]
+        if not closing or closing[-1].balance_after_cents != facts["balance_cents"]:
+            problems.append(f"{rel(gen.SPEC)}: {doc['path']} 的余额与快照对账单期末余额不符")
+        if facts["bank_account_id"] == account:
+            amount = next((t.amount_cents for t in lines if t.id == line_id), None)
+            accrued = None if amount is None else int((Decimal(amount) * days / period_days).quantize(1, ROUND_HALF_UP))
+            if accrued != facts["accrued_interest_cents"]:
+                problems.append(
+                    f"{rel(gen.SPEC)}: {doc['path']} 的应计利息不等于 {line_id} 按 {days}/{period_days} 折算"
+                )
+    return problems
 
 
 def check_snapshot(directory: Path, manifest: dict[str, Any], snapshot_dir: Path) -> list[str]:

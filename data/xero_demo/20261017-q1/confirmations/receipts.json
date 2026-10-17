@@ -1,0 +1,8 @@
+{
+  "12345678": {
+    "receipt_channel": "direct_email"
+  },
+  "12345679": {
+    "receipt_channel": "direct_email"
+  }
+}

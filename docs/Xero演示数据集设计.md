@@ -287,6 +287,8 @@ AJE-X05: 与 AJE-X01 同属第 1 轮 (M-5 与 M-1 都在 P2 发现), 编号按�
 
 ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006, 都没有对应服务.
 
+签收人化名写在生成规格 delivery_notes 段, 每个客户一个; SR-ORC1026 与 SR-ORC1001 的签收人 Priya Natarajan 即 CON-X01 上签字的 DIISR Project Sponsor.
+
 **contract_links.csv**: invoice_no, contract_id. ORC1026 → CON-X01; ORC1003, 1008, 1016, 1020 → CON-X02; ORC1014 → CON-X03.
 
 ### 3.4 关键对象 ID
@@ -414,6 +416,10 @@ documents/index.csv 列 19 份: #1, 2 (engagement 类, 供 load_engagement_docum
   - 7.1 任一方提前 10 Business Days 通知终止; 7.2 在 Completion Date 前终止的, 供方无权就模块收款. 所以第 35(b)(c) 段都不满足, 收入在某一时点 (完工日) 确认.
 - 关联发票 ORC1026; 完工日 09-17 在期内, 9 月确认正确.
 
+CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benefit of the Support Services as the Supplier provides them" (贴近 AASB 15 第 35(a) 段用语); CON-X03 的项目写 "CRM integration project", 同 ORC1014 的发票行描述. 括号中的 ACN 是 ABN 后 9 位, 合同只印 ABN. ORC1026 的 Xero 行描述 "Development work - developer onsite per day" 与 CON-X01 3.1 字面不同, 载入器不带发票行描述, 不影响 REV-03 的预期.
+
+签字人 (化名): 供方 Alex Morgan (Director); DIISR Priya Natarajan (Project Sponsor), Hamilton Smith Tom Reilly (Operations Manager), Maddox Nora Fitzgerald (Production Director). manifest 的 document_date 为签订日, xero_refs 为关联发票的 SI- ID.
+
 **CON-X02: Hamilton Smith Pty, "Managed Support Agreement"** (不变)
 - 第 1 页: ABN 19 900 043 058 (ACN 900 043 058); 2026-06-24 签订; 期限 2026-07-01 至 2027-06-30; Monthly Fee $500.00 excl GST, 不写总价.
 - 第 2 页: 4.1 客户在每个自然月内随服务提供而取得利益; 5.1 每月 17 日前后开当月发票; 5.2 开票后 14 天内付款.
@@ -435,6 +441,8 @@ documents/index.csv 列 19 份: #1, 2 (engagement 类, 供 load_engagement_docum
 **BA-090 回函**的 "accrued interest and fees not yet debited: nil" 不变. 抽取口径 (第 6.1 节): 应计利息记银行欠客户为正, 客户欠银行为负, 写 nil 为 0, 回函没提为空.
 
 **receipts.json**: 两个账号的 receipt_channel 都是 direct_email.
+
+两份回函的 manifest document_date 用确认日 2026-09-30, reliability 为 external_original (direct_email 是直接渠道); 银行签发人 Helen Marsh (化名); 12345679 第 2 页的其他账户一节只写 "See our separate reply for account 12345678". 生成规格每份回函另记 confirmation {bank_account_id, balance_cents, accrued_interest_cents}, 校验脚本据此核对 PDF 第 1 页的写法, 对账单 09-30 前末行余额 (BT-090-0072, BT-091-0001) 与 4853 的推算 (BT-091-0002 × 15 / 30, 四舍五入).
 
 ### 4.5 关联方与租赁文件 (documents/related_party)
 
@@ -1057,14 +1065,14 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
     扫描范围: 补造目录全部文件 (PDF 查文本层), 生成规格, 本文, `tests/fixtures/` 下的 llm_xero, llm_xero_only17, xero_injections, llm_injected (不存在的跳过). 连续空白视为一个空格.
   - 模型与键: client_profile.json 用 ClientProfile, planning 两份用 AuditObjective 与 RiskItem 严格校验 (不做类型转换); dataset_traits.json 的键集合等于第 5.2 节的 11 个键.
   - 确定性: 另生成到临时目录, 逐文件逐字节比较. 生成脚本写完后自动调用校验, 任一项不过即非零退出.
-  - 没有本地快照时跳过快照哈希, 画像 ID 前缀, 联系人扫描与确定性 (说明写 "没有本地 Xero 快照"), 补造文件的哈希, 合成标志与模型校验照常做. 问题全部收集后一次报出, 每行一项, 只写文件名.
+  - 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, 合同关联, 开户行, xero_refs, 回函余额与应计利息), 联系人扫描与确定性 (说明写 "没有本地 Xero 快照"), 补造文件的哈希, 合成标志与模型校验照常做. 问题全部收集后一次报出, 每行一项, 只写文件名.
   - 复算第 3 节的快照关键数 (分录与作废对数, 09-30 试算表与主要余额, 对账单行数, 月度收入, 重要性, 录入时间晚于 10-19 的 15 笔) 并比对 20261017-mock (第 9.2 节); 第 5 节规则命中与第 7 节计数不在校验脚本复算 (见 "本版不做"), 分别由各程序的连库测试与合并终验核对.
 
 ---
 
 ### 9.5 文件格式与载入端口 (实现时以此为准)
 
-**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败.
+**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
 
 **document 的登记途径 (registration)** 共 29 份 55 页: load 20 (3 份收入合同加 index.csv 中除承接文件外的 17 份, 载入时登记), engagement 2 (appointment.pdf, engagement_letter.pdf, 由 `load_engagement_documents` 在 P0 登记), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时存档), upload 1 (声明书, FIN-07 人工任务经上传接口登记).
 
