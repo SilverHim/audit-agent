@@ -195,21 +195,23 @@ class LlmSettingsService:
     async def resolve_key(
         self, slot: LlmSlot, provider: LlmProvider, base_url: str, api_key: str | None
     ) -> tuple[str, LlmSettings | None]:
-        """请求要用的密钥: 给了就用给的; 没给时 Ollama 不用密钥, 其余沿用库里该套的密钥.
+        """请求要用的密钥: 给了就用给的; 没给时 Ollama 不用密钥, 其余沿用该套当前生效的密钥 (config: 库里的,
+        没存过时按回退规则取 .env 或主模型的), 与界面显示的 has_key 一致.
 
-        沿用时服务商与接口地址须与库里的一致, 否则 INVALID_VALUE: 不让已存的密钥被发到别的地址. 库里没有密钥时
-        MISSING_FIELD. 返回 (明文密钥, 库里的该套配置); 沿用的密钥在这里解密.
+        沿用时服务商与接口地址须与生效配置一致, 否则 INVALID_VALUE: 不让已有的密钥被发到别的地址. 生效配置没有密钥时
+        MISSING_FIELD. 返回 (明文密钥, 库里的该套配置); 库里的密钥在这里解密.
         """
         stored = await self.store.get(slot)
         if api_key:
             return api_key, stored
         if provider == "ollama":
             return "", stored
-        if stored is None or stored.api_key_encrypted is None:
-            raise SettingsRejected("MISSING_FIELD", "api_key: 这一套还没有保存过密钥, 须填写")
-        if (stored.provider, stored.base_url) != (provider, base_url):
+        current_provider, current_url, _, key = await self.config(slot)
+        if not key:
+            raise SettingsRejected("MISSING_FIELD", "api_key: 这一套还没有密钥, 须填写")
+        if (current_provider, normalize_url(current_url)) != (provider, base_url):
             raise SettingsRejected("INVALID_VALUE", "改了服务商或接口地址, 须重新填写密钥")
-        return decrypt_secret(stored.api_key_encrypted, self.settings.SETTINGS_SECRET_KEY), stored
+        return key, stored
 
     async def update(
         self,
@@ -221,7 +223,8 @@ class LlmSettingsService:
         api_key: str | None,
         updated_by: str,
     ) -> SlotView:
-        """保存一套配置, live 模式下随即热切换. api_key 为空表示沿用已存的密钥 (见 resolve_key); Ollama 不填时清掉密钥.
+        """保存一套配置, live 模式下随即热切换. api_key 为空表示沿用当前生效的密钥 (见 resolve_key);
+        Ollama 不填时清掉密钥.
 
         校验不过抛 SettingsRejected, 主密钥不可用抛 SecretKeyError, 都在写库之前. 主模型保存后, 复核模型若没有
         自己的配置 (跟随主模型), 一并切换.
@@ -235,13 +238,13 @@ class LlmSettingsService:
         self, slot: LlmSlot, provider: LlmProvider, base_url: str, model: str, api_key: str | None, updated_by: str
     ) -> SlotView:
         key, stored = await self.resolve_key(slot, provider, base_url, api_key)
-        if api_key:
-            encrypted: str | None = encrypt_secret(api_key, self.settings.SETTINGS_SECRET_KEY)
-            shown = last4(api_key)
-        elif key and stored is not None:
-            encrypted, shown = stored.api_key_encrypted, stored.key_last4
-        else:
+        encrypted: str | None
+        if not key:  # Ollama 不填密钥: 清掉
             encrypted, shown = None, None
+        elif not api_key and stored is not None and stored.api_key_encrypted is not None:
+            encrypted, shown = stored.api_key_encrypted, stored.key_last4  # 沿用本套已存的, 不重新加密
+        else:  # 新填的, 或沿用回退来的 (.env 或主模型的), 加密后存进本套
+            encrypted, shown = encrypt_secret(key, self.settings.SETTINGS_SECRET_KEY), last4(key)
         row = LlmSettings(
             slot=slot,
             provider=provider,
@@ -267,7 +270,7 @@ class LlmSettingsService:
     ) -> ConnectionTest:
         """用请求里还没保存的值发一次最小的请求 (JSON 模式, 要模型回 {"ok": true}), 超时 20 秒, 不重试.
 
-        api_key 为空时按 resolve_key 沿用库里的密钥. 不改库, 不切换客户端. 失败不抛, 记在结果里; message 已脱敏.
+        api_key 为空时按 resolve_key 沿用当前生效的密钥. 不改库, 不切换客户端. 失败不抛, 记在结果里; message 已脱敏.
         """
         base_url, model = normalize_url(base_url), model.strip()
         check_input(base_url, model)

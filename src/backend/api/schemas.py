@@ -227,7 +227,7 @@ class LlmSettingsView(Model):
 
 
 class LlmSlotIn(Model):
-    """保存或测试一套配置. api_key 为空表示沿用已存的密钥 (服务商与接口地址须不变)."""
+    """保存或测试一套配置. api_key 为空表示沿用当前生效的密钥 (GET 显示的那把; 服务商与接口地址须不变)."""
 
     provider: LlmProvider
     base_url: str

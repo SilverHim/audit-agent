@@ -263,6 +263,29 @@ async def test_connection_uses_stored_key_when_blank() -> None:
     assert result.ok and server.requests[0].headers["authorization"] == f"Bearer {KEY}"
 
 
+async def test_blank_key_uses_the_key_shown_for_unsaved_slots() -> None:
+    """没存过的套, 界面显示的是回退来的密钥 (.env 的; 复核模型为主模型的), has_key 为真: 留空测试连接与保存都沿用它,
+    保存时加密存进本套. 改了服务商或接口地址照样拒绝, 不把它发到别的地址."""
+    server = Server((200, completion('{"ok": true}')))
+    svc = service(transport=httpx.MockTransport(server.handler), LLM_MODEL="gpt-5", LLM_API_KEY="sk-env-9999")
+    shown = await svc.view("primary")
+    blank: dict[str, Any] = {"provider": shown.provider, "base_url": shown.base_url, "model": "gpt-5", "api_key": None}
+    assert shown.has_key and (await svc.test("primary", **blank)).ok
+    for moved in ({"base_url": "https://attacker.example/v1"}, {"provider": "deepseek"}):
+        with pytest.raises(SettingsRejected) as e:
+            await svc.test("primary", **{**blank, **moved})
+        assert e.value.code == "INVALID_VALUE"
+    assert [r.headers["authorization"] for r in server.requests] == ["Bearer sk-env-9999"]
+
+    view = await svc.update("primary", updated_by="U-1", **blank)
+    await svc.update("review", updated_by="U-1", **{**blank, "model": "gpt-5-mini"})  # 复核模型沿用主模型的
+    rows = store_of(svc).rows
+    assert view.key_last4 == "9999"
+    for slot in ("primary", "review"):
+        encrypted = rows[slot].api_key_encrypted
+        assert encrypted is not None and decrypt_secret(encrypted, MASTER) == "sk-env-9999"
+
+
 # ── 版本快照 ──
 
 
