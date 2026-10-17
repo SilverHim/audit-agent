@@ -9,19 +9,23 @@
 """
 
 import argparse
+import hashlib
+import io
 import json
 import re
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 
 import generate_xero_demo as gen
 import pdfplumber
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from backend.contracts.models import AuditObjective, ClientProfile, RiskItem
+from backend.contracts.models import AbnRecord, AsicCompanyRecord, AuditObjective, ClientProfile, RiskItem
 
 REPO = gen.ROOT.parent
 NO_SNAPSHOT = "没有本地 Xero 快照"
@@ -79,6 +83,9 @@ def check(
         *guarded(manifest_path, check_manifest, directory, manifest),
         *guarded(directory, check_synthetic, directory, manifest, header),
         *guarded(directory, check_models, directory),
+        *guarded(directory / "registry", check_registry, directory),
+        *guarded(directory, check_numbers, directory),
+        *guarded(directory, check_pdf_content, directory, manifest),
     ]
     notes: list[str] = []
     if snapshot_dir.is_dir():
@@ -161,13 +168,24 @@ def read_json(path: Path) -> Any:
         return None
 
 
+PDF_TEXTS: dict[str, list[str] | None] = {}  # 按文件内容的 sha256 缓存文本层, 同一份 PDF 只解析一次
+
+
 def pdf_pages(path: Path) -> list[str] | None:
-    """PDF 各页的文本层; 无法解析时为 None."""
+    """PDF 各页的文本层; 读不到或无法解析时为 None."""
     try:
-        with pdfplumber.open(path) as pdf:
-            return [page.extract_text() or "" for page in pdf.pages]
-    except Exception:
+        data = path.read_bytes()
+    except OSError:
         return None
+    digest = hashlib.sha256(data).hexdigest()
+    if digest not in PDF_TEXTS:
+        try:
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                PDF_TEXTS[digest] = [page.extract_text() or "" for page in pdf.pages]
+        except Exception:
+            PDF_TEXTS[digest] = None
+    texts = PDF_TEXTS[digest]
+    return None if texts is None else list(texts)
 
 
 def files_of(directory: Path) -> Iterator[Path]:
@@ -246,6 +264,251 @@ def check_models(directory: Path) -> list[str]:
         extra, lack = sorted(keys - TRAIT_KEYS), sorted(TRAIT_KEYS - keys)
         problems.append(f"{rel(traits)}: 键与第 5.2 节不符 (多 {extra}, 缺 {lack})")
     return problems
+
+
+def abn_valid(abn: str) -> bool:
+    """ABN 校验位: 首位减 1, 按权重 10, 1, 3, ..., 19 加权求和, 能被 89 整除."""
+    if not (len(abn) == 11 and abn.isdigit()):
+        return False
+    digits = [int(c) for c in abn]
+    digits[0] -= 1
+    return sum(d * w for d, w in zip(digits, (10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19), strict=True)) % 89 == 0
+
+
+def acn_valid(acn: str) -> bool:
+    """ACN 校验位: 前 8 位按权重 8 至 1 加权求和, (10 - 和 mod 10) mod 10 等于第 9 位."""
+    if not (len(acn) == 9 and acn.isdigit()):
+        return False
+    total = sum(int(c) * w for c, w in zip(acn[:8], range(8, 0, -1), strict=True))
+    return (10 - total % 10) % 10 == int(acn[8])
+
+
+class Officeholder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    birth_date: date | None
+    role: Literal["director", "secretary"]
+    appointed: date
+
+
+class Shareholding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    kind: Literal["person", "company"]
+    acn: str | None
+    share_class: str
+    shares: int
+    pct: float
+
+
+class Extract(BaseModel):
+    """公司摘录 JSON (第 9.5 节); 契约模型 AsicExtract 按同名字段建 (JSON 键 class)."""
+
+    model_config = ConfigDict(extra="forbid")
+    acn: str
+    name: str
+    type: str
+    company_class: str = Field(alias="class")
+    subclass: str
+    status: Literal["Registered", "Deregistered"]
+    registered_date: date
+    officeholders: list[Officeholder]
+    shareholders: list[Shareholding]
+    paid_up_cents: int | None
+    file_name: str
+
+
+class PersonRole(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    acn: str
+    company_name: str
+    role: Literal["director", "secretary", "shareholder"]
+    appointed: date | None
+    shares: int | None
+
+
+class Person(BaseModel):
+    """人员检索 JSON (第 9.5 节); 契约模型 PersonSearch 按同名字段建."""
+
+    model_config = ConfigDict(extra="forbid")
+    family_name: str
+    given_name: str
+    birth_date: date
+    roles: list[PersonRole]
+    file_name: str
+
+
+def check_registry(directory: Path) -> list[str]:
+    """登记 mock: abn.json, asic.json 按 AbnRecord, AsicCompanyRecord 严格校验, 键等于号码; 摘录与人员检索的格式;
+    全部 ABN 与 ACN 通过校验位; 摘录的 ACN 与名称与 abn.json, asic.json 一致; 人员检索的职务与持股
+    和各摘录的高管, 股东一一对应. 没有 registry/ 时不查."""
+    root = directory / "registry"
+    if not root.is_dir():
+        return []
+    problems: list[str] = []
+    missing = [name for name in ("abn.json", "asic.json") if not (root / name).is_file()]
+    if missing:
+        return [f"{rel(root / name)}: 文件不存在" for name in missing]
+    try:
+        abns = TypeAdapter(dict[str, AbnRecord]).validate_json((root / "abn.json").read_bytes(), strict=True)
+        asics = TypeAdapter(dict[str, AsicCompanyRecord]).validate_json((root / "asic.json").read_bytes(), strict=True)
+    except ValidationError as error:
+        return [f"{rel(root)}: abn.json 或 asic.json 不符合领域模型 ({error.error_count()} 处)"]
+    problems += [f"{rel(root / 'abn.json')}: 键 {k} 与行内 ABN 不符" for k, v in abns.items() if k != v.abn]
+    problems += [f"{rel(root / 'asic.json')}: 键 {k} 与行内 ACN 不符" for k, v in asics.items() if k != v.acn]
+    extracts: dict[str, Extract] = {}
+    for path in sorted((root / "extracts").glob("*.json")):
+        try:
+            extract = Extract.model_validate_json(path.read_bytes(), strict=True)
+        except ValidationError as error:
+            problems.append(f"{rel(path)}: 不符合摘录格式 ({error.error_count()} 处)")
+            continue
+        extracts[extract.acn] = extract
+        if path.stem != extract.acn or extract.file_name != f"{extract.acn}.pdf":
+            problems.append(f"{rel(path)}: 文件名与 acn 或 file_name 不符")
+        total = sum(s.shares for s in extract.shareholders)
+        if any(abs(s.pct - s.shares / total) > 1e-9 for s in extract.shareholders):
+            problems.append(f"{rel(path)}: 股东持股比例与股数不符")
+        record = asics.get(extract.acn)
+        if record is None or record.name != extract.name or record.registered_date != extract.registered_date:
+            problems.append(f"{rel(path)}: 与 asic.json 的名称或注册日不一致")
+        if not any(r.acn == extract.acn and r.entity_name == extract.name for r in abns.values()):
+            problems.append(f"{rel(path)}: abn.json 中没有同 ACN 同名称的主体")
+    persons: list[tuple[Path, Person]] = []
+    for path in sorted((root / "persons").glob("*.json")):
+        try:
+            person = Person.model_validate_json(path.read_bytes(), strict=True)
+        except ValidationError as error:
+            problems.append(f"{rel(path)}: 不符合人员检索格式 ({error.error_count()} 处)")
+            continue
+        persons.append((path, person))
+        key = gen.person_key(person.model_dump(mode="json"))
+        if path.stem != key or person.file_name != f"{key}.pdf":
+            problems.append(f"{rel(path)}: 文件名或 file_name 不是 {key}")
+        if Counter(role_rows(person)) != Counter(expected_roles(person, extracts.values())):
+            problems.append(f"{rel(path)}: 职务与持股和公司摘录不一一对应")
+    problems += [
+        f"{rel(root / 'abn.json')}: ABN {r.abn} 的后 9 位不是 ACN {r.acn}"
+        for r in abns.values()
+        if r.acn and r.abn[2:] != r.acn
+    ]
+    profile = read_json(directory / "client_profile.json")
+    if isinstance(profile, dict):
+        record = abns.get(str(profile.get("abn")))
+        if record is None or record.entity_name != profile.get("legal_name"):
+            problems.append(f"{rel(directory / 'client_profile.json')}: 画像的 ABN 与法定名称不在 abn.json 中")
+    numbers = [*abns, *(r.abn for r in abns.values())]
+    companies = [*asics, *extracts, *(r.acn for r in abns.values() if r.acn)]
+    companies += [s.acn for e in extracts.values() for s in e.shareholders if s.acn]
+    companies += [r.acn for _, p in persons for r in p.roles]
+    problems += [f"{rel(root)}: ABN {n} 校验位不对" for n in sorted(set(numbers)) if not abn_valid(n)]
+    problems += [f"{rel(root)}: ACN {n} 校验位不对" for n in sorted(set(companies)) if not acn_valid(n)]
+    return problems
+
+
+ABN_TEXT = re.compile(r"\bABN (\d{2} \d{3} \d{3} \d{3})\b")
+ACN_TEXT = re.compile(r"\bACN (\d{3} \d{3} \d{3})\b")
+
+
+def check_numbers(directory: Path) -> list[str]:
+    """登记目录之外的 ABN 与 ACN 也要通过校验位: 画像的 abn, 规格中 PDF 正文写出的 "ABN dd ddd ddd ddd"
+    与 "ACN ddd ddd ddd" (合同, 回函, 承接文件等)."""
+    problems: list[str] = []
+    profile = read_json(directory / "client_profile.json")
+    if isinstance(profile, dict) and not abn_valid(str(profile.get("abn", ""))):
+        problems.append(f"{rel(directory / 'client_profile.json')}: ABN {profile.get('abn')} 校验位不对")
+    for doc in gen.load_spec()["documents"]:
+        text = "\n".join("\n".join(page) for page in doc.get("pages", []))
+        bad = [n for n in ABN_TEXT.findall(text) if not abn_valid(n.replace(" ", ""))]
+        bad += [n for n in ACN_TEXT.findall(text) if not acn_valid(n.replace(" ", ""))]
+        if bad:
+            problems.append(f"{rel(gen.SPEC)}: {doc['path']} 正文中的号码校验位不对: {', '.join(bad)}")
+    return problems
+
+
+RoleRow = tuple[str, str, str, date | None, int | None]
+
+
+def role_rows(person: Person) -> list[RoleRow]:
+    return [(r.acn, r.company_name, r.role, r.appointed, r.shares) for r in person.roles]
+
+
+def expected_roles(person: Person, extracts: Iterable[Extract]) -> list[RoleRow]:
+    """按摘录推出某人应有的职务 (同名且同生日的高管) 与持股 (同名的个人股东)."""
+    name = f"{person.given_name} {person.family_name}"
+    rows: list[RoleRow] = []
+    for e in extracts:
+        rows += [
+            (e.acn, e.name, h.role, h.appointed, None)
+            for h in e.officeholders
+            if h.name == name and h.birth_date == person.birth_date
+        ]
+        rows += [
+            (e.acn, e.name, "shareholder", None, s.shares)
+            for s in e.shareholders
+            if s.name == name and s.kind == "person"
+        ]
+    return rows
+
+
+def check_pdf_content(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """PDF 的页数与内容: manifest 的 page_count 等于实际页数; 规格写有正文的 PDF 与按登记 JSON 渲染的 PDF,
+    每页每个非空行都出现在该页文本层 (空白归一); 登记 PDF 每页含名称, ACN 与日期."""
+    problems: list[str] = []
+    expected = gen.pdf_sources(directory)
+    for doc in manifest["documents"]:
+        path = directory / doc["path"]
+        texts = pdf_pages(path) if path.is_file() else None
+        if texts is None:
+            continue  # 缺失或无法解析由 check_manifest 与 check_synthetic 报
+        if doc.get("page_count") != len(texts):
+            problems.append(f"{rel(path)}: manifest 的 page_count 与实际页数 {len(texts)} 不符")
+        pages = expected.get(doc["path"])
+        if pages is None:
+            continue
+        if len(pages) != len(texts):
+            problems.append(f"{rel(path)}: 页数 {len(texts)} 与来源的 {len(pages)} 页不符")
+            continue
+        for n, (page, text) in enumerate(zip(pages, texts, strict=True), 1):
+            lack = missing_in_order(page, text)
+            if lack:
+                problems.append(f"{rel(path)}: 第 {n} 页文本层缺 {lack} 行来源内容或顺序不对")
+    for path in sorted((directory / "registry" / "extracts").glob("*.pdf")):
+        data = read_json(path.with_suffix(".json"))
+        texts = pdf_pages(path)
+        if isinstance(data, dict) and texts:
+            keys = [data["name"], gen.spaced_acn(data["acn"]), gen.long_date(data["registered_date"])]
+            pages = [n for n, t in enumerate(texts, 1) if not all(k in normalize_case(t) for k in keys)]
+            if len(texts) != 2 or pages:
+                problems.append(f"{rel(path)}: 应为 2 页且每页含名称, ACN 与注册日")
+    for path in sorted((directory / "registry" / "persons").glob("*.pdf")):
+        data = read_json(path.with_suffix(".json"))
+        texts = pdf_pages(path)
+        if isinstance(data, dict) and texts:
+            keys = [data["family_name"].upper(), data["given_name"], gen.long_date(data["birth_date"])]
+            keys += [gen.spaced_acn(r["acn"]) for r in data["roles"]]
+            if len(texts) != 1 or not all(k in normalize_case(texts[0]) for k in keys):
+                problems.append(f"{rel(path)}: 应为 1 页且含姓名, 出生日期与各公司 ACN")
+    return problems
+
+
+def missing_in_order(source: str, text: str) -> int:
+    """来源的非空行按顺序在文本层中依次查找 (区分大小写, 空白归一), 返回找不到的行数."""
+    have, start, lack = normalize_case(text), 0, 0
+    for line in source.splitlines():
+        if not line.strip():
+            continue
+        found = have.find(normalize_case(line).strip(), start)
+        if found < 0:
+            lack += 1
+        else:
+            start = found + len(normalize_case(line).strip())
+    return lack
+
+
+def normalize_case(text: str) -> str:
+    """只归一空白, 保留大小写."""
+    return re.sub(r"\s+", " ", text)
 
 
 def check_snapshot(directory: Path, manifest: dict[str, Any], snapshot_dir: Path) -> list[str]:

@@ -1,0 +1,29 @@
+{
+  "acn": "900043049",
+  "name": "Morgan Advisory Pty Ltd",
+  "type": "APTY",
+  "class": "LMSH",
+  "subclass": "PROP",
+  "status": "Registered",
+  "registered_date": "2019-07-01",
+  "officeholders": [
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "director",
+      "appointed": "2019-07-01"
+    }
+  ],
+  "shareholders": [
+    {
+      "name": "Alex Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 100,
+      "pct": 1.0
+    }
+  ],
+  "paid_up_cents": null,
+  "file_name": "900043049.pdf"
+}

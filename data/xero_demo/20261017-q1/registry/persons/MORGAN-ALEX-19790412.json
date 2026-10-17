@@ -1,0 +1,57 @@
+{
+  "family_name": "Morgan",
+  "given_name": "Alex",
+  "birth_date": "1979-04-12",
+  "roles": [
+    {
+      "acn": "900043021",
+      "company_name": "Demo Company (AU) Pty Ltd",
+      "role": "director",
+      "appointed": "2018-09-03",
+      "shares": null
+    },
+    {
+      "acn": "900043021",
+      "company_name": "Demo Company (AU) Pty Ltd",
+      "role": "secretary",
+      "appointed": "2018-09-03",
+      "shares": null
+    },
+    {
+      "acn": "900043021",
+      "company_name": "Demo Company (AU) Pty Ltd",
+      "role": "shareholder",
+      "appointed": null,
+      "shares": 85
+    },
+    {
+      "acn": "900043030",
+      "company_name": "Victoria Property Agency Pty Ltd",
+      "role": "director",
+      "appointed": "2014-03-03",
+      "shares": null
+    },
+    {
+      "acn": "900043030",
+      "company_name": "Victoria Property Agency Pty Ltd",
+      "role": "shareholder",
+      "appointed": null,
+      "shares": 50
+    },
+    {
+      "acn": "900043049",
+      "company_name": "Morgan Advisory Pty Ltd",
+      "role": "director",
+      "appointed": "2019-07-01",
+      "shares": null
+    },
+    {
+      "acn": "900043049",
+      "company_name": "Morgan Advisory Pty Ltd",
+      "role": "shareholder",
+      "appointed": null,
+      "shares": 100
+    }
+  ],
+  "file_name": "MORGAN-ALEX-19790412.pdf"
+}

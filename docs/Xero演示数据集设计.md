@@ -1072,6 +1072,11 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - 公司摘录: {acn, name, type, class, subclass, status, registered_date, officeholders [{name, birth_date, role (director | secretary), appointed}], shareholders [{name, kind (person | company), acn, share_class, shares, pct}], paid_up_cents, file_name}.
 - 人员检索: {family_name, given_name, birth_date, roles [{acn, company_name, role (director | secretary | shareholder), appointed, shares}], file_name}.
 - 公司摘录 PDF 各 2 页 (第 1 页公司与高管, 第 2 页股本与股东), 人员检索 1 页.
+- 已缴股本只有 Demo 有 (paid_up_cents 100, 即 1.00, 第 2.2 节); VPA 与 Morgan Advisory 的 paid_up_cents 为 null, PDF 写 "not shown". 人员检索 JSON 的姓名按自然大小写 (Morgan, Alex), 文件名与节点 ID 用大写.
+- PDF 内容只取自同名 JSON (页眉取生成规格): 公司摘录两页都写名称, 带空格的 ACN (900 043 021) 与注册日; 人员检索写姓名, 出生日期与各公司 ACN. 测试副本改 JSON 后用 `render_registry_pdfs` 重绘.
+- 登记 PDF 的登记信息按目录规则推出 (registry/extracts 与 registry/persons 下的 PDF: registry_extract, external_original, registration registry, document_date 为检索日即 data_as_of 2026-10-17), 不在生成规格 documents 段逐份登记; 测试副本新增的摘录 (T6, 第 8.8 节) 也按此登记.
+
+**生成规格的 documents 段**: 每份 PDF 一项 {path, type, reliability, document_date, related_ids, registration, index, xero_refs}; index 为真的进 documents/index.csv. 正文写在规格里的 PDF (承接文件, 合同, 回函等) 另有 footer 与 pages (每页一组行); 登记 PDF 不在本段, 由登记 JSON 渲染. 校验脚本核对每页文本层按顺序含来源的每个非空行 (区分大小写, 空白归一).
 
 **delivery_notes.csv**: id 与 delivery_no 都是 `SR-{发票号}` (如 SR-ORC1026), 24 行, 日期见第 3.3 节; 载入器把 invoice_no 换成 SI- ID, 发票号找不到或重复即报错.
 

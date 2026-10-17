@@ -10,6 +10,7 @@
 """
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -179,7 +180,8 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 
 
 def generate(snapshot_dir: Path, out: Path) -> Path:
-    """按规格写全部补造文件与 manifest. 本版写数据集声明, 客户画像与计划预置; 其余各段由后续需求补进."""
+    """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 规格写有正文的 PDF,
+    登记 PDF, documents/index.csv; 其余各段由后续需求补进."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -193,15 +195,216 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
     write_json(out, "client_profile.json", spec["profile"])
     write_json(out, "planning/audit_objectives.json", spec["planning"]["audit_objectives"])
     write_json(out, "planning/risk_register.json", spec["planning"]["risk_register"])
+    write_registry(out, spec["registry"])
+    for doc in spec["documents"]:
+        if "pages" in doc:
+            write_pdf(out / doc["path"], ["\n".join(page) for page in doc["pages"]], doc["footer"], spec["header"])
     render_registry_pdfs(out)
+    write_index(out, spec["documents"])
     write_manifest(out, snapshot_dir)
     return out
 
 
+def write_registry(out: Path, registry: dict[str, Any]) -> None:
+    """登记 mock: registry/abn.json, asic.json, extracts/{acn}.json 与 persons/{姓-名-yyyymmdd}.json (第 2.5 节)."""
+    if not registry:
+        return
+    write_json(out, "registry/abn.json", registry["abn"])
+    write_json(out, "registry/asic.json", registry["asic"])
+    for extract in registry["extracts"]:
+        write_json(out, f"registry/extracts/{extract['acn']}.json", extract)
+    for person in registry["persons"]:
+        write_json(out, f"registry/persons/{person_key(person)}.json", person)
+
+
+def person_key(person: dict[str, Any]) -> str:
+    """人员检索的文件名主干 {姓}-{名}-{yyyymmdd}, 大写, 如 MORGAN-ALEX-19790412."""
+    return f"{person['family_name']}-{person['given_name']}-{person['birth_date'].replace('-', '')}".upper()
+
+
+def write_index(out: Path, documents: list[dict[str, Any]]) -> None:
+    """documents/index.csv: 规格中 index 为真的文件, 列 path, document_type, reliability, document_date, related_ids
+    (以 ";" 分隔); 载入器据此登记证据文件 (第 9.5 节)."""
+    rows = [doc for doc in documents if doc.get("index")]
+    if not rows:
+        return
+    path = out / "documents" / "index.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(["path", "document_type", "reliability", "document_date", "related_ids"])
+        for doc in rows:
+            writer.writerow(
+                [doc["path"], doc["type"], doc["reliability"], doc["document_date"], ";".join(doc["related_ids"])]
+            )
+
+
+MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+COMPANY_CODES = {
+    "APTY": "Australian Proprietary Company",
+    "APUB": "Australian Public Company",
+    "LMSH": "Limited by Shares",
+    "PROP": "Proprietary Company",
+}  # 登记摘录里类型代码的说明, 只用于版式
+
+
+def long_date(value: str | None) -> str:
+    """2018-09-03 → 3 September 2018; 空为 "-"."""
+    if not value:
+        return "-"
+    year, month, day = (int(x) for x in value.split("-"))
+    return f"{day} {MONTHS[month - 1]} {year}"
+
+
+def spaced_acn(acn: str) -> str:
+    """900043021 → 900 043 021."""
+    return f"{acn[:3]} {acn[3:6]} {acn[6:]}"
+
+
+def extract_pages(data: dict[str, Any]) -> list[str]:
+    """公司摘录 2 页: 第 1 页公司与高管, 第 2 页股本与股东; 每页都写名称, ACN 与注册日."""
+    acn, name, registered = spaced_acn(data["acn"]), data["name"], long_date(data["registered_date"])
+    holders = [
+        f"{h['name']:<22}{long_date(h['birth_date']):<20}{h['role'].title():<12}{long_date(h['appointed'])}"
+        for h in data["officeholders"]
+    ]
+    classes: dict[str, int] = {}
+    for holder in data["shareholders"]:
+        classes[holder["share_class"]] = classes.get(holder["share_class"], 0) + holder["shares"]
+    paid = "not shown" if data["paid_up_cents"] is None else f"AUD {data['paid_up_cents'] / 100:,.2f}"
+    members = [
+        f"{m['name']:<22}{m['kind']:<9}{spaced_acn(m['acn']) if m['acn'] else '-':<13}{m['share_class']:<7}"
+        f"{m['shares']:<8}{m['pct']:.0%}"
+        for m in data["shareholders"]
+    ]
+    page1 = [
+        "COMPANY EXTRACT (MOCK REGISTRY SEARCH)",
+        "",
+        "Organisation details",
+        f"Name:               {name}",
+        f"ACN:                {acn}",
+        f"Type:               {data['type']} {COMPANY_CODES.get(data['type'], '')}".rstrip(),
+        f"Class:              {data['class']} {COMPANY_CODES.get(data['class'], '')}".rstrip(),
+        f"Subclass:           {data['subclass']} {COMPANY_CODES.get(data['subclass'], '')}".rstrip(),
+        f"Status:             {data['status']}",
+        f"Registration date:  {registered}",
+        "",
+        "Office holders",
+        f"{'Name':<22}{'Date of birth':<20}{'Role':<12}Appointed",
+        *holders,
+    ]
+    page2 = [
+        "COMPANY EXTRACT (MOCK REGISTRY SEARCH) - SHARES",
+        "",
+        f"Company: {name}",
+        f"ACN {acn}, registered {registered}",
+        "",
+        "Share structure",
+        f"{'Class':<7}{'Number issued':<16}Total amount paid",
+        *(f"{share_class:<7}{count:<16}{paid}" for share_class, count in classes.items()),
+        "",
+        "Members",
+        f"{'Name':<22}{'Kind':<9}{'ACN':<13}{'Class':<7}{'Shares':<8}Percentage",
+        *members,
+    ]
+    return ["\n".join(page1), "\n".join(page2)]
+
+
+def person_pages(data: dict[str, Any]) -> list[str]:
+    """人员检索 1 页: 姓名, 出生日期与各公司的职务和持股."""
+    roles = [
+        f"{spaced_acn(r['acn']):<13}{r['company_name']:<34}{r['role'].title():<13}{long_date(r['appointed']):<20}"
+        f"{r['shares'] if r['shares'] is not None else '-'}"
+        for r in data["roles"]
+    ]
+    page = [
+        "PERSON SEARCH (MOCK REGISTRY SEARCH)",
+        "",
+        f"Name:           {data['family_name'].upper()}, {data['given_name']}",
+        f"Date of birth:  {long_date(data['birth_date'])}",
+        "",
+        "Roles and shareholdings",
+        f"{'ACN':<13}{'Company':<34}{'Role':<13}{'Appointed':<20}Shares",
+        *roles,
+    ]
+    return ["\n".join(page)]
+
+
+def pdf_sources(directory: Path) -> dict[str, list[str]]:
+    """各 PDF 的来源正文 (按页): 规格写有正文的取规格, 登记 PDF 取目录内同名 JSON 的渲染结果. 供校验核对文本层.
+    读不出或缺字段的登记 JSON 跳过 (格式问题由校验的登记核对报出)."""
+    sources = {
+        doc["path"]: ["\n".join(page) for page in doc["pages"]] for doc in load_spec()["documents"] if "pages" in doc
+    }
+    for folder, render in (("extracts", extract_pages), ("persons", person_pages)):
+        for path in sorted((directory / "registry" / folder).glob("*.json")):
+            try:
+                pages = render(read_spec_json(path))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
+                continue
+            sources[path.with_suffix(".pdf").relative_to(directory).as_posix()] = pages
+    return sources
+
+
+REGISTRY_PDFS = ("registry/extracts/", "registry/persons/")  # 登记 PDF 的目录, 登记信息按规则推出
+
+
+def document_meta(spec: dict[str, Any], rel: str) -> dict[str, Any] | None:
+    """PDF 的登记信息: 规格 documents 段有就取它; 登记 PDF (含测试副本新增的) 按规则推出: registry_extract,
+    external_original, registration registry, 文件日期为检索日 (数据集声明的 data_as_of); 都不是时为 None."""
+    for doc in spec["documents"]:
+        if doc["path"] == rel:
+            return dict(doc)
+    if rel.startswith(REGISTRY_PDFS):
+        return {
+            "path": rel,
+            "type": "registry_extract",
+            "reliability": "external_original",
+            "document_date": spec["traits"]["data_as_of"],
+            "related_ids": [],
+            "registration": "registry",
+        }
+    return None
+
+
+def read_spec_json(path: Path) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
 def render_registry_pdfs(directory: Path) -> list[Path]:
-    """按目录内的登记 JSON (registry/extracts, registry/persons) 渲染同名 PDF, 只读 JSON. 登记 JSON 由后续需求生成,
-    没有时不做事. 测试副本改了登记 JSON 后调用它重绘."""
-    return []
+    """按目录内的登记 JSON (registry/extracts/*.json, registry/persons/*.json) 渲染同名 PDF, 内容只取自 JSON
+    (页眉取规格). 测试副本改了登记 JSON 后调用它重绘. 返回写出的 PDF."""
+    header = load_spec()["header"]
+    written: list[Path] = []
+    for path in sorted((directory / "registry" / "extracts").glob("*.json")):
+        data = read_spec_json(path)
+        write_pdf(
+            path.with_suffix(".pdf"),
+            extract_pages(data),
+            f"Mock registry extract | ACN {spaced_acn(data['acn'])}",
+            header,
+        )
+        written.append(path.with_suffix(".pdf"))
+    for path in sorted((directory / "registry" / "persons").glob("*.json")):
+        data = read_spec_json(path)
+        footer = f"Mock person search | {data['family_name'].upper()}, {data['given_name']}"
+        write_pdf(path.with_suffix(".pdf"), person_pages(data), footer, header)
+        written.append(path.with_suffix(".pdf"))
+    return written
 
 
 def file_refs(spec: dict[str, Any], rel: str) -> list[str]:
@@ -222,7 +425,6 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
     snapshot = Snapshot(snapshot_dir)
     files: list[dict[str, Any]] = []
     documents: list[dict[str, Any]] = []
-    meta = {doc["path"]: doc for doc in spec["documents"]}
     refs: list[str] = []
     for path in sorted(directory.rglob("*")):
         rel = path.relative_to(directory).as_posix()
@@ -238,9 +440,9 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
         refs.extend(item["xero_refs"])
         files.append(item)
         if path.suffix == ".pdf":
-            if rel not in meta:
+            doc = document_meta(spec, rel)
+            if doc is None:
                 raise SystemExit(f"PDF {rel} 在规格 documents 段没有登记信息")
-            doc = meta[rel]
             documents.append(
                 {
                     "path": rel,

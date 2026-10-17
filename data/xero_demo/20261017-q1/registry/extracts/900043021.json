@@ -1,0 +1,43 @@
+{
+  "acn": "900043021",
+  "name": "Demo Company (AU) Pty Ltd",
+  "type": "APTY",
+  "class": "LMSH",
+  "subclass": "PROP",
+  "status": "Registered",
+  "registered_date": "2018-09-03",
+  "officeholders": [
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "director",
+      "appointed": "2018-09-03"
+    },
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "secretary",
+      "appointed": "2018-09-03"
+    }
+  ],
+  "shareholders": [
+    {
+      "name": "Alex Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 85,
+      "pct": 0.85
+    },
+    {
+      "name": "Sam Whitfield",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 15,
+      "pct": 0.15
+    }
+  ],
+  "paid_up_cents": 100,
+  "file_name": "900043021.pdf"
+}

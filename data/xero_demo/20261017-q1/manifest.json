@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "f9cb01474e8247f67adce98551e6f9a2cb817dfbf68a37db3740f7447ccbdac7",
+  "spec_sha256": "631e9c037e15f7f68234880357aeff98bef0c35a9253ade878baf11e70f7094b",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -87,6 +87,27 @@
       "xero_refs": []
     },
     {
+      "path": "documents/engagement/appointment.pdf",
+      "sha256": "5479f1f3ac66089d56abdf8e02bc0f2b1902ce0fa47bb8f043e9ae9f5ad78b02",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "documents/engagement/engagement_letter.pdf",
+      "sha256": "351f2ee6630740c4fce3515bde8bd0bd15440e9674937a6197a7e3eb6a8b8483",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "documents/index.csv",
+      "sha256": "e831fd49e83cd0963a104bf7717bf6bbf226c5f9744c11bf9dc59ac97fb62ae9",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "planning/audit_objectives.json",
       "sha256": "2b3d87a17df590d617cd83c13207d8f2a4e8366c43e9aea49ca8de78c36af468",
       "synthetic": true,
@@ -99,7 +120,150 @@
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
+    },
+    {
+      "path": "registry/abn.json",
+      "sha256": "647173e4ecfd9bcd7d310a928ca533e727035f323505d85e7427fa8b94ee1549",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/asic.json",
+      "sha256": "5527e6096307f52b9b7bebd046e8f053296325d4d2e441099c7a5e6edb295b72",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043021.json",
+      "sha256": "4ca6f36c2fe27d1af9c843f5cbc24ed9ed8b7ec4e284b676b9ae93c0ea160b3c",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043021.pdf",
+      "sha256": "c15d981bf4f98a9f49e2c8a6fb467ee49b58ec552a2df06441330d00fbab40fb",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043030.json",
+      "sha256": "11b8d60f665af30eb2a1123f8391c2d92d5ea5f1c7eba0e6421fc3c42cc3cefe",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043030.pdf",
+      "sha256": "d7305364b2aef020c1407d8e896d7ee339396d22826888e5c1a04e9252335a5f",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043049.json",
+      "sha256": "0c12a715198a204cb7f100415bea8f390a35a92a03e656fe21591636eb92e2c6",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/extracts/900043049.pdf",
+      "sha256": "7a45958ff2c1a02b17fdec4b68fa36a4fc3f7c1ec0a1ead1e2a40934f17d3fb2",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/persons/MORGAN-ALEX-19790412.json",
+      "sha256": "53b633eef7b34b8a1a77329a74cd3084306a011da41c50d30212e81bd39160f6",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "registry/persons/MORGAN-ALEX-19790412.pdf",
+      "sha256": "b70a571c433bd11ecfaae7557e37b504d2395611681dd3b49b0255a9e9168084",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
     }
   ],
-  "documents": []
+  "documents": [
+    {
+      "path": "documents/engagement/appointment.pdf",
+      "sha256": "5479f1f3ac66089d56abdf8e02bc0f2b1902ce0fa47bb8f043e9ae9f5ad78b02",
+      "document_id": "DOC-5479f1f3ac66",
+      "type": "minutes",
+      "reliability": "internal_copy",
+      "page_count": 4,
+      "document_date": "2026-08-27",
+      "related_ids": [],
+      "registration": "engagement",
+      "synthetic": true
+    },
+    {
+      "path": "documents/engagement/engagement_letter.pdf",
+      "sha256": "351f2ee6630740c4fce3515bde8bd0bd15440e9674937a6197a7e3eb6a8b8483",
+      "document_id": "DOC-351f2ee66307",
+      "type": "engagement_letter",
+      "reliability": "external_copy",
+      "page_count": 3,
+      "document_date": "2026-08-28",
+      "related_ids": [],
+      "registration": "engagement",
+      "synthetic": true
+    },
+    {
+      "path": "registry/extracts/900043021.pdf",
+      "sha256": "c15d981bf4f98a9f49e2c8a6fb467ee49b58ec552a2df06441330d00fbab40fb",
+      "document_id": "DOC-c15d981bf4f9",
+      "type": "registry_extract",
+      "reliability": "external_original",
+      "page_count": 2,
+      "document_date": "2026-10-17",
+      "related_ids": [],
+      "registration": "registry",
+      "synthetic": true
+    },
+    {
+      "path": "registry/extracts/900043030.pdf",
+      "sha256": "d7305364b2aef020c1407d8e896d7ee339396d22826888e5c1a04e9252335a5f",
+      "document_id": "DOC-d7305364b2ae",
+      "type": "registry_extract",
+      "reliability": "external_original",
+      "page_count": 2,
+      "document_date": "2026-10-17",
+      "related_ids": [],
+      "registration": "registry",
+      "synthetic": true
+    },
+    {
+      "path": "registry/extracts/900043049.pdf",
+      "sha256": "7a45958ff2c1a02b17fdec4b68fa36a4fc3f7c1ec0a1ead1e2a40934f17d3fb2",
+      "document_id": "DOC-7a45958ff2c1",
+      "type": "registry_extract",
+      "reliability": "external_original",
+      "page_count": 2,
+      "document_date": "2026-10-17",
+      "related_ids": [],
+      "registration": "registry",
+      "synthetic": true
+    },
+    {
+      "path": "registry/persons/MORGAN-ALEX-19790412.pdf",
+      "sha256": "b70a571c433bd11ecfaae7557e37b504d2395611681dd3b49b0255a9e9168084",
+      "document_id": "DOC-b70a571c433b",
+      "type": "registry_extract",
+      "reliability": "external_original",
+      "page_count": 1,
+      "document_date": "2026-10-17",
+      "related_ids": [],
+      "registration": "registry",
+      "synthetic": true
+    }
+  ]
 }

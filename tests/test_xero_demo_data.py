@@ -531,8 +531,21 @@ def test_manifest_layout() -> None:
     assert [f["path"] for f in manifest["files"]] == [  # type: ignore[index]
         "client_profile.json",
         "dataset_traits.json",
+        "documents/engagement/appointment.pdf",
+        "documents/engagement/engagement_letter.pdf",
+        "documents/index.csv",
         "planning/audit_objectives.json",
         "planning/risk_register.json",
+        "registry/abn.json",
+        "registry/asic.json",
+        "registry/extracts/900043021.json",
+        "registry/extracts/900043021.pdf",
+        "registry/extracts/900043030.json",
+        "registry/extracts/900043030.pdf",
+        "registry/extracts/900043049.json",
+        "registry/extracts/900043049.pdf",
+        "registry/persons/MORGAN-ALEX-19790412.json",
+        "registry/persons/MORGAN-ALEX-19790412.pdf",
     ]
     for item in manifest["files"]:  # type: ignore[index]
         assert list(item) == ["path", "sha256", "synthetic", "generator", "xero_refs"]
@@ -719,16 +732,16 @@ def test_output_does_not_depend_on_contacts(tmp_path: Path) -> None:
 def test_xero_refs_must_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data = spec()
     good = ["SI-77b338ef-ecc0-4b95-a0d7-2617b0054611", "XJ-580-1", "BT-091-0001", "BA-090", "840"]
-    data["documents"] = [{"path": "client_profile.json", "xero_refs": good}]
+    data["documents"] = [*data["documents"], {"path": "client_profile.json", "xero_refs": good}]
     patched = tmp_path / "spec.json"
     patched.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(generator, "SPEC", patched)
     manifest = json.loads((generator.generate(SNAPSHOT, tmp_path / "ok") / "manifest.json").read_text())
-    assert manifest["files"][0]["xero_refs"] == good
+    assert manifest["files"][0]["path"] == "client_profile.json" and manifest["files"][0]["xero_refs"] == good
     invoices = json.loads((SNAPSHOT / "invoices.json").read_text(encoding="utf-8"))
     draft = next(i for i in invoices if i["Type"] == "ACCREC" and i["Status"] not in {"AUTHORISED", "PAID"})
     bad = ["XJ-580-4", "SI-00000000", f"SI-{draft['InvoiceID']}", "BT-090-9999", "BA-200", "99999"]
-    data["documents"][0]["xero_refs"] = [*good, *bad]  # 草稿, 作废的发票不进载入器, 也不算能找到
+    data["documents"][-1]["xero_refs"] = [*good, *bad]  # 草稿, 作废的发票不进载入器, 也不算能找到
     patched.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(SystemExit, match="xero_refs 在快照中找不到") as raised:
         generator.generate(SNAPSHOT, tmp_path / "bad")
@@ -775,7 +788,10 @@ def test_inject_rewrites_copy_manifest(tmp_path: Path, monkeypatch: pytest.Monke
     assert manifest["injected"] == "T1"
     listed = {f["path"]: f["sha256"] for f in manifest["files"]}
     assert listed["dataset_traits.json"] == generator.sha256(copy / "dataset_traits.json")
-    assert generator.render_registry_pdfs(copy) == []  # 登记 JSON 由后续需求生成, 现在没有可重绘的
+    assert [p.relative_to(copy).as_posix() for p in generator.render_registry_pdfs(copy)] == [
+        *(f"registry/extracts/{acn}.pdf" for acn in ("900043021", "900043030", "900043049")),
+        "registry/persons/MORGAN-ALEX-19790412.pdf",
+    ]
     monkeypatch.setattr(generator, "OUT_ROOT", copy.parent)  # 当作正式目录: 不许带 injected
     lines = check_error(copy, tmp_path / "absent").splitlines()
     assert f"{copy / 'manifest.json'}: 正式目录的 manifest 不得有 injected 键" in lines
@@ -998,3 +1014,344 @@ def test_manifest_file_items_take_no_extra_keys(tmp_path: Path) -> None:
     manifest["files"][0]["note"] = "extra"
     (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     assert check_error(copy, tmp_path / "absent") == f"{copy / 'manifest.json'}: manifest 结构不符 (1 处)"
+
+
+# ── 承接文件与登记 mock ─────────────────────────────────────
+
+
+def pdf_texts(path: Path) -> list[str]:
+    with pdfplumber.open(path) as pdf:
+        return [re.sub(r"\s+", " ", page.extract_text() or "") for page in pdf.pages]
+
+
+def test_appointment_pages() -> None:
+    pages = pdf_texts(SUPPLEMENTS / "documents" / "engagement" / "appointment.pdf")
+    assert len(pages) == 4
+    expected = [
+        ["14 August 2026", "section 248B(1)", "section 323D(2A)", "30 September 2026", "(a) ", "(b) ", "(c) "],
+        ["20 August 2026", "Sam Whitfield", "15 of the 100 ordinary shares", "(section 293(3)(c))", "section 293(1)"],
+        [
+            "25 August 2026",
+            "Section 328A",
+            "Tessellate Audit Partners",
+            "Jordan Ellis, Registered Company Auditor No. 300471",
+        ],
+        ["27 August 2026", "section 325(1)", "appoints Tessellate Audit Partners as auditor"],
+    ]
+    for n, (page, words) in enumerate(zip(pages, expected, strict=True), 1):
+        assert all(w in page for w in words), (n, [w for w in words if w not in page])
+    assert "the previous 5 financial years (FY2022 to FY2026) was 12 months long" in pages[0]
+    assert "Signed in the firm name" in pages[2] and "Signed in the member's own name" in pages[2]
+
+
+def test_engagement_letter_pages() -> None:
+    pages = pdf_texts(SUPPLEMENTS / "documents" / "engagement" / "engagement_letter.pdf")
+    assert len(pages) == 3
+    first, second, third = pages
+    assert "28 August 2026" in first and "Alex Morgan, Director" in first
+    assert (
+        "1. Objective and scope of the audit" in first and "2. Our responsibilities" in first
+    )  # ASA 210 第 10(a)(b) 段
+    assert (
+        "(ASA 510, paragraph 6)" in first and "(ASA 710, paragraph 14)" in first and "Other Matter paragraph" in first
+    )
+    assert "4. Responsibilities of the directors" in second and "5. Applicable financial reporting framework" in second
+    for item in ("(i) for the preparation", "(ii) for such internal control", "(iii) to provide us with"):
+        assert item in second, item  # 第 6(b)(i)-(iii) 段
+    assert "Australian Accounting Standards - Simplified Disclosures." in second and "not entirely comparable" in second
+    assert "6. Form and content of our report" in third and "differs from its expected form and content" in third
+    assert "AUD 4,800, excluding GST" in third and "Date: 2 September 2026" in third
+    text = " ".join(pages)
+    assert "AASB 1060" not in text and "paragraph" not in second  # 简化披露框架不写 AASB 1060 段号
+
+
+def registry_blocks() -> tuple[object, object]:
+    """第 2.5 节的 abn.json 与 asic.json 代码块 (块内用 // 注释分隔两份)."""
+    block = re.search(r"```json\n(.*?)```", section(doc(), "### 2.5 登记 mock"), re.S)
+    assert block
+    parts = re.split(r"^// registry/\w+\.json\n", block.group(1), flags=re.M)
+    abn, asic = (json.loads(part) for part in parts if part.strip())
+    return abn, asic
+
+
+def test_registry_json_matches_design() -> None:
+    from backend.contracts.models import AbnRecord, AsicCompanyRecord
+
+    abn, asic = registry_blocks()
+    assert read("registry/abn.json") == abn and list(abn) == ["25900043021", "27900043030", "17900043049"]  # type: ignore[arg-type]
+    assert read("registry/asic.json") == asic
+    assert [r["registered_date"] for r in asic.values()] == ["2018-09-03", "2014-03-03", "2019-07-01"]  # type: ignore[attr-defined]
+    for row in abn.values():  # type: ignore[attr-defined]
+        AbnRecord.model_validate(row)
+    for row in asic.values():  # type: ignore[attr-defined]
+        AsicCompanyRecord.model_validate(row)
+
+
+def test_extracts_and_person_search() -> None:
+    alex = {"name": "Alex Morgan", "birth_date": "1979-04-12"}
+    demo = read("registry/extracts/900043021.json")
+    assert list(demo) == [  # type: ignore[arg-type]
+        "acn", "name", "type", "class", "subclass", "status", "registered_date",
+        "officeholders", "shareholders", "paid_up_cents", "file_name",
+    ]  # fmt: skip
+    assert (demo["type"], demo["class"], demo["subclass"], demo["paid_up_cents"]) == ("APTY", "LMSH", "PROP", 100)  # type: ignore[index]
+    assert demo["officeholders"] == [  # type: ignore[index]
+        {**alex, "role": "director", "appointed": "2018-09-03"},
+        {**alex, "role": "secretary", "appointed": "2018-09-03"},
+    ]
+    assert demo["shareholders"] == [  # type: ignore[index]
+        {"name": "Alex Morgan", "kind": "person", "acn": None, "share_class": "ORD", "shares": 85, "pct": 0.85},
+        {"name": "Sam Whitfield", "kind": "person", "acn": None, "share_class": "ORD", "shares": 15, "pct": 0.15},
+    ]  # 只持股的 Sam 没有出生日期
+    vpa = read("registry/extracts/900043030.json")
+    assert vpa["officeholders"] == [  # type: ignore[index]
+        {"name": "Dana Morgan", "birth_date": "1981-11-03", "role": "director", "appointed": "2014-03-03"},
+        {**alex, "role": "director", "appointed": "2014-03-03"},
+    ]
+    assert [(h["name"], h["shares"], h["pct"]) for h in vpa["shareholders"]] == [  # type: ignore[index]
+        ("Dana Morgan", 50, 0.5),
+        ("Alex Morgan", 50, 0.5),
+    ]
+    advisory = read("registry/extracts/900043049.json")
+    assert advisory["officeholders"] == [{**alex, "role": "director", "appointed": "2019-07-01"}]  # type: ignore[index]
+    assert [(h["name"], h["shares"], h["pct"]) for h in advisory["shareholders"]] == [("Alex Morgan", 100, 1.0)]  # type: ignore[index]
+    person = read("registry/persons/MORGAN-ALEX-19790412.json")
+    assert (person["family_name"], person["given_name"], person["birth_date"]) == ("Morgan", "Alex", "1979-04-12")  # type: ignore[index]
+    assert [(r["acn"], r["role"], r["appointed"], r["shares"]) for r in person["roles"]] == [  # type: ignore[index]
+        ("900043021", "director", "2018-09-03", None),
+        ("900043021", "secretary", "2018-09-03", None),
+        ("900043021", "shareholder", None, 85),
+        ("900043030", "director", "2014-03-03", None),
+        ("900043030", "shareholder", None, 50),
+        ("900043049", "director", "2019-07-01", None),
+        ("900043049", "shareholder", None, 100),
+    ]
+    assert person["file_name"] == "MORGAN-ALEX-19790412.pdf"  # type: ignore[index]
+
+
+def test_registry_pdfs_follow_json(tmp_path: Path) -> None:
+    for acn, name in (("900043021", "Demo Company (AU) Pty Ltd"), ("900043030", "Victoria Property Agency Pty Ltd")):
+        pages = pdf_texts(SUPPLEMENTS / "registry" / "extracts" / f"{acn}.pdf")
+        assert len(pages) == 2 and all(name in p and f"{acn[:3]} {acn[3:6]} {acn[6:]}" in p for p in pages)
+        assert "Office holders" in pages[0] and "Members" in pages[1]
+    demo = pdf_texts(SUPPLEMENTS / "registry" / "extracts" / "900043021.pdf")
+    assert "Alex Morgan 12 April 1979 Secretary 3 September 2018" in demo[0]
+    assert "ORD 100 AUD 1.00" in demo[1] and "Sam Whitfield person - ORD 15 15%" in demo[1]
+    person = pdf_texts(SUPPLEMENTS / "registry" / "persons" / "MORGAN-ALEX-19790412.pdf")
+    assert len(person) == 1 and "MORGAN, Alex" in person[0] and "12 April 1979" in person[0]
+    assert "900 043 030 Victoria Property Agency Pty Ltd Shareholder - 50" in person[0]
+    copy = copy_supplements(tmp_path)
+    target = copy / "registry" / "extracts" / "900043030.json"
+    data = json.loads(target.read_text(encoding="utf-8"))
+    data["officeholders"].append(
+        {"name": "Quinn Example", "birth_date": None, "role": "secretary", "appointed": "2020-01-02"}
+    )
+    target.write_text(json.dumps(data), encoding="utf-8")
+    before = target.with_suffix(".pdf").read_bytes()
+    generator.render_registry_pdfs(copy)  # 测试副本改登记 JSON 后重绘
+    assert target.with_suffix(".pdf").read_bytes() != before
+    assert "Quinn Example - Secretary 2 January 2020" in pdf_texts(target.with_suffix(".pdf"))[0]
+
+
+def test_documents_in_manifest_and_index() -> None:
+    manifest = read("manifest.json")
+    rows = [
+        (d["path"], d["type"], d["reliability"], d["document_date"], d["registration"], d["page_count"])
+        for d in manifest["documents"]  # type: ignore[index]
+    ]
+    assert rows == [
+        ("documents/engagement/appointment.pdf", "minutes", "internal_copy", "2026-08-27", "engagement", 4),
+        (
+            "documents/engagement/engagement_letter.pdf",
+            "engagement_letter",
+            "external_copy",
+            "2026-08-28",
+            "engagement",
+            3,
+        ),
+        *(
+            (f"registry/extracts/{acn}.pdf", "registry_extract", "external_original", "2026-10-17", "registry", 2)
+            for acn in ("900043021", "900043030", "900043049")
+        ),
+        (
+            "registry/persons/MORGAN-ALEX-19790412.pdf",
+            "registry_extract",
+            "external_original",
+            "2026-10-17",
+            "registry",
+            1,
+        ),
+    ]
+    assert sum(r[-1] for r in rows) == 14
+    for item in manifest["documents"]:  # type: ignore[index]
+        assert item["document_id"] == "DOC-" + item["sha256"][:12] and item["related_ids"] == [] and item["synthetic"]
+    assert (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8") == (
+        "path,document_type,reliability,document_date,related_ids\n"
+        "documents/engagement/appointment.pdf,minutes,internal_copy,2026-08-27,\n"
+        "documents/engagement/engagement_letter.pdf,engagement_letter,external_copy,2026-08-28,\n"
+    )
+
+
+def test_registry_numbers_pass_check_digits() -> None:
+    for abn in ("25900043021", "27900043030", "17900043049", "82938074116"):
+        assert checker.abn_valid(abn), abn
+    for acn in ("900043021", "900043030", "900043049"):
+        assert checker.acn_valid(acn), acn
+    assert not checker.abn_valid("25900043022") and not checker.abn_valid("12345678901")
+    assert not checker.acn_valid("900043022") and not checker.acn_valid("90004302")
+
+
+def test_registry_inconsistencies_are_reported(tmp_path: Path) -> None:
+    snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+    copy = copy_supplements(tmp_path)
+    registry = copy / "registry"
+    abn = json.loads((registry / "abn.json").read_text(encoding="utf-8"))
+    abn["17900043049"]["entity_name"] = "Morgan Advisory Services Pty Ltd"  # 与摘录名称不一致
+    abn["18900043049"] = {**abn["17900043049"], "abn": "18900043049"}  # 校验位不对
+    (registry / "abn.json").write_text(json.dumps(abn), encoding="utf-8")
+    person_path = registry / "persons" / "MORGAN-ALEX-19790412.json"
+    person = json.loads(person_path.read_text(encoding="utf-8"))
+    del person["roles"][4]  # 少了 VPA 的 50 股
+    person_path.write_text(json.dumps(person), encoding="utf-8")
+    vpa_path = registry / "extracts" / "900043030.json"
+    vpa = json.loads(vpa_path.read_text(encoding="utf-8"))
+    vpa["registered_date"] = "2014-03-04"  # 与 asic.json 不一致, 且不重绘 PDF
+    vpa_path.write_text(json.dumps(vpa), encoding="utf-8")
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert lines == [
+        f"{vpa_path}: 与 asic.json 的名称或注册日不一致",
+        f"{registry / 'extracts' / '900043049.json'}: abn.json 中没有同 ACN 同名称的主体",
+        f"{person_path}: 职务与持股和公司摘录不一一对应",
+        f"{registry}: ABN 18900043049 校验位不对",
+        f"{vpa_path.with_suffix('.pdf')}: 第 1 页文本层缺 1 行来源内容或顺序不对",
+        f"{vpa_path.with_suffix('.pdf')}: 第 2 页文本层缺 1 行来源内容或顺序不对",
+        f"{vpa_path.with_suffix('.pdf')}: 应为 2 页且每页含名称, ACN 与注册日",  # 改了 JSON 没重绘 PDF
+    ]
+
+
+def test_pdf_page_count_and_text_mismatch(tmp_path: Path) -> None:
+    snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+    copy = copy_supplements(tmp_path)
+    letter = copy / "documents" / "engagement" / "engagement_letter.pdf"
+    spec_pages = next(d for d in spec()["documents"] if d["path"].endswith("engagement_letter.pdf"))["pages"]
+    pages = ["\n".join(p) for p in spec_pages]
+    generator.write_pdf(letter, [pages[0], pages[1], pages[2].replace("4,800", "4,900")], "x", HEADER)
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert lines == [f"{letter}: 第 3 页文本层缺 1 行来源内容或顺序不对"]
+    generator.write_pdf(letter, pages[:2], "x", HEADER)
+    generator.write_manifest(copy, snapshot)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert [d["page_count"] for d in manifest["documents"] if d["path"].endswith("letter.pdf")] == [2]
+    assert check_error(copy, snapshot, scan=[]).splitlines() == [f"{letter}: 页数 2 与来源的 3 页不符"]
+
+
+def zed_snapshot(tmp_path: Path) -> Path:
+    return fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+
+
+def edit_json(path: Path, change: object) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    change(data)  # type: ignore[operator]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_injected_registry_extract_gets_derived_metadata(tmp_path: Path) -> None:
+    """注入测试 T6 在副本新增一份公司摘录: 重绘后 manifest 按目录规则登记, 不要求规格逐份写登记信息."""
+    snapshot = zed_snapshot(tmp_path)
+    copy = copy_supplements(tmp_path)
+    extract = json.loads((copy / "registry" / "extracts" / "900043049.json").read_text(encoding="utf-8"))
+    extract.update(acn="900043076", name="Synthetic Supplier Pty Ltd", file_name="900043076.pdf")
+    (copy / "registry" / "extracts" / "900043076.json").write_text(json.dumps(extract), encoding="utf-8")
+    generator.render_registry_pdfs(copy)
+    manifest = generator.write_manifest(copy, snapshot, injected="T6")
+    added = next(d for d in manifest["documents"] if d["path"] == "registry/extracts/900043076.pdf")
+    assert (added["type"], added["reliability"], added["registration"], added["document_date"]) == (
+        "registry_extract",
+        "external_original",
+        "registry",
+        "2026-10-17",
+    )
+    assert added["page_count"] == 2
+
+
+def test_numbers_outside_registry_are_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = zed_snapshot(tmp_path)
+    copy = copy_supplements(tmp_path)
+    edit_json(copy / "client_profile.json", lambda d: d.update(abn="25900043012"))
+    data = spec()
+    letter = next(d for d in data["documents"] if d["path"].endswith("appointment.pdf"))
+    letter["pages"][0][1] = "ACN 900 043 022   ABN 25 900 043 021"
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert f"{copy / 'client_profile.json'}: 画像的 ABN 与法定名称不在 abn.json 中" in lines
+    assert f"{copy / 'client_profile.json'}: ABN 25900043012 校验位不对" in lines
+    assert f"{patched}: documents/engagement/appointment.pdf 正文中的号码校验位不对: 900 043 022" in lines
+
+
+def test_more_registry_inconsistencies(tmp_path: Path) -> None:
+    snapshot = zed_snapshot(tmp_path)
+    copy = copy_supplements(tmp_path)
+    registry = copy / "registry"
+    edit_json(registry / "asic.json", lambda d: d.update({"900043022": {**d["900043021"], "acn": "900043022"}}))
+    demo = registry / "extracts" / "900043021.json"
+    edit_json(demo, lambda d: d["shareholders"][0].update(pct=0.8))  # 85 股写成 80%
+    person = registry / "persons" / "MORGAN-ALEX-19790412.json"
+    edit_json(person, lambda d: d["roles"][0].update(shares=0))  # 职务行的 shares 应为 null
+    advisory = registry / "extracts" / "900043049.json"
+    advisory.rename(registry / "extracts" / "900043050.json")
+    advisory.with_suffix(".pdf").rename(registry / "extracts" / "900043050.pdf")
+    generator.render_registry_pdfs(copy)  # PDF 随 JSON 重绘, 只剩登记数据本身的问题
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert lines == [
+        f"{demo}: 股东持股比例与股数不符",
+        f"{registry / 'extracts' / '900043050.json'}: 文件名与 acn 或 file_name 不符",
+        f"{person}: 职务与持股和公司摘录不一一对应",
+        f"{registry}: ACN 900043022 校验位不对",
+    ]
+
+
+def test_registry_key_names_and_broken_json(tmp_path: Path) -> None:
+    """摘录键写成 company_class 报格式问题; 坏的登记 JSON 不妨碍其他 PDF 的内容核对."""
+    snapshot = zed_snapshot(tmp_path)
+    copy = copy_supplements(tmp_path)
+    vpa = copy / "registry" / "extracts" / "900043030.json"
+    edit_json(vpa, lambda d: d.update(company_class=d.pop("class")))
+    letter = copy / "documents" / "engagement" / "engagement_letter.pdf"
+    spec_pages = next(d for d in spec()["documents"] if d["path"].endswith("engagement_letter.pdf"))["pages"]
+    pages = ["\n".join(p) for p in spec_pages]
+    generator.write_pdf(letter, [pages[0], pages[1], pages[2].replace("4,800", "4,900")], "x", HEADER)
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert lines == [
+        f"{vpa}: 不符合摘录格式 (1 处)",
+        f"{copy / 'registry/persons/MORGAN-ALEX-19790412.json'}: 职务与持股和公司摘录不一一对应",  # VPA 不计
+        f"{letter}: 第 3 页文本层缺 1 行来源内容或顺序不对",  # 没有因坏摘录中断
+    ]
+
+
+def test_person_pdf_and_line_order(tmp_path: Path) -> None:
+    snapshot = zed_snapshot(tmp_path)
+    copy = copy_supplements(tmp_path)
+    person = copy / "registry" / "persons" / "MORGAN-ALEX-19790412.json"
+    edit_json(person, lambda d: d.update(birth_date="1979-04-13"))  # 改 JSON 不重绘 PDF
+    letter = copy / "documents" / "engagement" / "engagement_letter.pdf"
+    spec_pages = next(d for d in spec()["documents"] if d["path"].endswith("engagement_letter.pdf"))["pages"]
+    last = list(spec_pages[2])
+    a, b = last.index("Tessellate Audit Partners"), last.index("Alex Morgan, Director")
+    last[a], last[b] = last[b], last[a]  # 两处签名对调
+    generator.write_pdf(letter, ["\n".join(spec_pages[0]), "\n".join(spec_pages[1]), "\n".join(last)], "x", HEADER)
+    generator.write_manifest(copy, snapshot)
+    lines = check_error(copy, snapshot, scan=[]).splitlines()
+    assert lines == [
+        f"{person}: 文件名或 file_name 不是 MORGAN-ALEX-19790413",
+        f"{person}: 职务与持股和公司摘录不一一对应",
+        f"{letter}: 第 3 页文本层缺 4 行来源内容或顺序不对",  # 每一行都在, 只是顺序不对
+        f"{person.with_suffix('.pdf')}: 第 1 页文本层缺 1 行来源内容或顺序不对",
+        f"{person.with_suffix('.pdf')}: 应为 1 页且含姓名, 出生日期与各公司 ACN",
+    ]

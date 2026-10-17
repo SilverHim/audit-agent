@@ -10,14 +10,28 @@
     "entry_timestamps_note": "Created timestamps are regenerated when the Xero demo company is reset; 15 journals carry created times after 19 October 2026 and up to 26 November 2026.",
     "reversal_reference_pattern": "Reversal of ID (\\d+)",
     "reversal_entry_no_template": "XJ-{1}",
-    "counterparty_prefixes": ["payment to", "payment from", "payment:"],
+    "counterparty_prefixes": [
+      "payment to",
+      "payment from",
+      "payment:"
+    ],
     "audit_adjustment_entry_prefix": "AJE-",
     "payroll_accounts": {
-      "wages_expense": ["477"],
-      "super_expense": ["478"],
-      "super_payable": ["826"],
-      "wages_payable": ["804"],
-      "leave_provision": ["805"]
+      "wages_expense": [
+        "477"
+      ],
+      "super_expense": [
+        "478"
+      ],
+      "super_payable": [
+        "826"
+      ],
+      "wages_payable": [
+        "804"
+      ],
+      "leave_provision": [
+        "805"
+      ]
     },
     "payroll_register": "payroll/employees.csv"
   },
@@ -29,14 +43,37 @@
     "entity_type": "small_proprietary",
     "industry_anzsic": "7000",
     "listed": false,
-    "directors": ["Alex Morgan"],
+    "directors": [
+      "Alex Morgan"
+    ],
     "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."
   },
   "planning": {
     "audit_objectives": [
-      {"id": "OBJ-REV-OCC", "version": 1, "account": "Revenue", "assertion": "Occurrence", "risk_level": "significant", "is_material": true},
-      {"id": "OBJ-REV-CUT", "version": 1, "account": "Revenue", "assertion": "Cutoff", "risk_level": "significant", "is_material": true},
-      {"id": "OBJ-CASH-EXI", "version": 1, "account": "Cash", "assertion": "Existence", "risk_level": "high", "is_material": true}
+      {
+        "id": "OBJ-REV-OCC",
+        "version": 1,
+        "account": "Revenue",
+        "assertion": "Occurrence",
+        "risk_level": "significant",
+        "is_material": true
+      },
+      {
+        "id": "OBJ-REV-CUT",
+        "version": 1,
+        "account": "Revenue",
+        "assertion": "Cutoff",
+        "risk_level": "significant",
+        "is_material": true
+      },
+      {
+        "id": "OBJ-CASH-EXI",
+        "version": 1,
+        "account": "Cash",
+        "assertion": "Existence",
+        "risk_level": "high",
+        "is_material": true
+      }
     ],
     "risk_register": [
       {
@@ -74,8 +111,502 @@
       }
     ]
   },
-  "registry": {},
-  "documents": [],
+  "registry": {
+    "abn": {
+      "25900043021": {
+        "abn": "25900043021",
+        "acn": "900043021",
+        "entity_name": "Demo Company (AU) Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      },
+      "27900043030": {
+        "abn": "27900043030",
+        "acn": "900043030",
+        "entity_name": "Victoria Property Agency Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      },
+      "17900043049": {
+        "abn": "17900043049",
+        "acn": "900043049",
+        "entity_name": "Morgan Advisory Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      }
+    },
+    "asic": {
+      "900043021": {
+        "acn": "900043021",
+        "name": "Demo Company (AU) Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2018-09-03"
+      },
+      "900043030": {
+        "acn": "900043030",
+        "name": "Victoria Property Agency Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2014-03-03"
+      },
+      "900043049": {
+        "acn": "900043049",
+        "name": "Morgan Advisory Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2019-07-01"
+      }
+    },
+    "extracts": [
+      {
+        "acn": "900043021",
+        "name": "Demo Company (AU) Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2018-09-03",
+        "officeholders": [
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2018-09-03"
+          },
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "secretary",
+            "appointed": "2018-09-03"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 85,
+            "pct": 0.85
+          },
+          {
+            "name": "Sam Whitfield",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 15,
+            "pct": 0.15
+          }
+        ],
+        "paid_up_cents": 100,
+        "file_name": "900043021.pdf"
+      },
+      {
+        "acn": "900043030",
+        "name": "Victoria Property Agency Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2014-03-03",
+        "officeholders": [
+          {
+            "name": "Dana Morgan",
+            "birth_date": "1981-11-03",
+            "role": "director",
+            "appointed": "2014-03-03"
+          },
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2014-03-03"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Dana Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 50,
+            "pct": 0.5
+          },
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 50,
+            "pct": 0.5
+          }
+        ],
+        "paid_up_cents": null,
+        "file_name": "900043030.pdf"
+      },
+      {
+        "acn": "900043049",
+        "name": "Morgan Advisory Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2019-07-01",
+        "officeholders": [
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2019-07-01"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 100,
+            "pct": 1.0
+          }
+        ],
+        "paid_up_cents": null,
+        "file_name": "900043049.pdf"
+      }
+    ],
+    "persons": [
+      {
+        "family_name": "Morgan",
+        "given_name": "Alex",
+        "birth_date": "1979-04-12",
+        "roles": [
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "director",
+            "appointed": "2018-09-03",
+            "shares": null
+          },
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "secretary",
+            "appointed": "2018-09-03",
+            "shares": null
+          },
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 85
+          },
+          {
+            "acn": "900043030",
+            "company_name": "Victoria Property Agency Pty Ltd",
+            "role": "director",
+            "appointed": "2014-03-03",
+            "shares": null
+          },
+          {
+            "acn": "900043030",
+            "company_name": "Victoria Property Agency Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 50
+          },
+          {
+            "acn": "900043049",
+            "company_name": "Morgan Advisory Pty Ltd",
+            "role": "director",
+            "appointed": "2019-07-01",
+            "shares": null
+          },
+          {
+            "acn": "900043049",
+            "company_name": "Morgan Advisory Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 100
+          }
+        ],
+        "file_name": "MORGAN-ALEX-19790412.pdf"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "path": "documents/engagement/appointment.pdf",
+      "type": "minutes",
+      "reliability": "internal_copy",
+      "document_date": "2026-08-27",
+      "related_ids": [],
+      "registration": "engagement",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Appointment of auditor",
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "RESOLUTION OF THE SOLE DIRECTOR",
+          "Passed under section 248B(1) of the Corporations Act 2001 (Cth)",
+          "",
+          "Date: 14 August 2026",
+          "",
+          "Change of financial year",
+          "",
+          "The Company has only one director. The director passes the following resolution by",
+          "recording it and signing the record.",
+          "",
+          "1. Under section 323D(2A) of the Corporations Act 2001, the financial year of the Company",
+          "   that started on 1 July 2026 is to end on 30 September 2026. Each later financial year",
+          "   is to start on 1 October and end on 30 September.",
+          "",
+          "2. The director confirms that:",
+          "   (a) the shortened financial year starts at the end of the previous financial year,",
+          "       which ended on 30 June 2026;",
+          "   (b) each of the previous 5 financial years (FY2022 to FY2026) was 12 months long, and",
+          "       no financial year was shortened in reliance on section 323D(2A); and",
+          "   (c) the change is made in good faith in the best interests of the Company: it meets",
+          "       the shareholders agreement of 15 June 2026, which calls for audited financial",
+          "       reports for years ending 30 September, and aligns the reporting year with the",
+          "       October renewal cycle of the Company's customer contracts.",
+          "",
+          "3. The accounting records are to be closed at 30 September 2026, and a financial report",
+          "   is to be prepared for the period 1 July 2026 to 30 September 2026.",
+          "",
+          "Recorded and signed by the sole director:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Sole Director",
+          "14 August 2026"
+        ],
+        [
+          "DIRECTION BY A SHAREHOLDER",
+          "Section 293 of the Corporations Act 2001 (Cth)",
+          "",
+          "To:   The Directors",
+          "      Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "      23 Main Street, Marineville NSW 2000",
+          "From: Sam Whitfield",
+          "Date: 20 August 2026",
+          "",
+          "1. I hold 15 of the 100 ordinary shares in Demo Company (AU) Pty Ltd. My shares carry 15%",
+          "   of the votes in the Company, which is a small proprietary company.",
+          "",
+          "2. Under section 293(1) of the Corporations Act 2001, I direct the Company to:",
+          "   (a) prepare a financial report and directors' report for the financial year ending",
+          "       30 September 2026; and",
+          "   (b) send them to all shareholders.",
+          "",
+          "3. Under section 293(3) I specify that the financial report is to be audited",
+          "   (section 293(3)(c)). I do not specify that the financial report need not comply with",
+          "   the accounting standards, and a complete directors' report is to be prepared.",
+          "",
+          "4. This direction is signed by the shareholder giving it (section 293(2)(a)) and is made",
+          "   no later than 12 months after the end of the financial year concerned",
+          "   (section 293(2)(b)).",
+          "",
+          "",
+          "______________________________",
+          "Sam Whitfield",
+          "Shareholder (15 ordinary shares)",
+          "20 August 2026"
+        ],
+        [
+          "TESSELLATE AUDIT PARTNERS",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "25 August 2026",
+          "",
+          "The Directors",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "CONSENT TO ACT AS AUDITOR",
+          "Section 328A of the Corporations Act 2001 (Cth)",
+          "",
+          "Tessellate Audit Partners consents to act as auditor of Demo Company (AU) Pty Ltd for the",
+          "financial year ending 30 September 2026. This consent is given before the appointment is",
+          "made.",
+          "",
+          "The partner responsible for the audit is Jordan Ellis, a member of the firm and a",
+          "registered company auditor (Registered Company Auditor No. 300471). As section 328A(2)",
+          "requires for a notice given by a firm, this notice is signed by that member both in the",
+          "firm name and in the member's own name.",
+          "",
+          "Signed in the firm name:",
+          "",
+          "______________________________",
+          "Tessellate Audit Partners",
+          "by Jordan Ellis, Partner",
+          "",
+          "Signed in the member's own name:",
+          "",
+          "______________________________",
+          "Jordan Ellis, Registered Company Auditor No. 300471",
+          "25 August 2026"
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "RESOLUTION OF THE SOLE DIRECTOR",
+          "Passed under section 248B(1) of the Corporations Act 2001 (Cth)",
+          "",
+          "Date: 27 August 2026",
+          "",
+          "Appointment of auditor",
+          "",
+          "1. No auditor has been appointed by the Company in general meeting.",
+          "",
+          "2. Tessellate Audit Partners has consented in writing, before this appointment, to act as",
+          "   auditor of the Company (notice dated 25 August 2026 under section 328A).",
+          "",
+          "3. Under section 325(1) of the Corporations Act 2001, the director appoints Tessellate",
+          "   Audit Partners as auditor of the Company with effect from 27 August 2026, to audit the",
+          "   financial report for the financial year ending 30 September 2026 as required by the",
+          "   shareholder direction of 20 August 2026 (section 293(3)(c)).",
+          "",
+          "4. The director is to sign the audit engagement letter on behalf of the Company.",
+          "",
+          "Recorded and signed by the sole director:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Sole Director",
+          "27 August 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/engagement/engagement_letter.pdf",
+      "type": "engagement_letter",
+      "reliability": "external_copy",
+      "document_date": "2026-08-28",
+      "related_ids": [],
+      "registration": "engagement",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Tessellate Audit Partners | Audit engagement letter | Demo Company (AU) Pty Ltd",
+      "pages": [
+        [
+          "TESSELLATE AUDIT PARTNERS",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "28 August 2026",
+          "",
+          "Alex Morgan, Director",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "Dear Director",
+          "",
+          "AUDIT ENGAGEMENT - FINANCIAL YEAR ENDING 30 SEPTEMBER 2026",
+          "",
+          "1. Objective and scope of the audit",
+          "You have requested that we audit the financial report of Demo Company (AU) Pty Ltd, which",
+          "comprises the statement of financial position as at 30 September 2026, the statement of",
+          "profit or loss and other comprehensive income, the statement of changes in equity and the",
+          "statement of cash flows for the period from 1 July 2026 to 30 September 2026, notes to the",
+          "financial statements and the directors' declaration. The audit is required by the",
+          "shareholder direction of 20 August 2026 under section 293 of the Corporations Act 2001.",
+          "",
+          "The objective of our audit is to obtain reasonable assurance about whether the financial",
+          "report as a whole is free from material misstatement, whether due to fraud or error, and",
+          "to issue an auditor's report that includes our opinion. Reasonable assurance is a high",
+          "level of assurance, but is not a guarantee that an audit will always detect a material",
+          "misstatement when it exists.",
+          "",
+          "2. Our responsibilities",
+          "We will conduct our audit in accordance with Australian Auditing Standards, which require",
+          "us to comply with ethical requirements. We will identify and assess the risks of material",
+          "misstatement, design and perform procedures responsive to those risks, obtain an",
+          "understanding of internal control relevant to the audit, evaluate the accounting policies",
+          "and estimates used, and conclude on the use of the going concern basis of accounting. We",
+          "will communicate in writing any significant deficiencies in internal control that we",
+          "identify. Because of the inherent limitations of an audit, there is an unavoidable risk",
+          "that some material misstatements may not be detected.",
+          "",
+          "3. Initial audit engagement",
+          "This is our first audit of the Company, and the financial report for the year ended",
+          "30 June 2026 was not audited. We will obtain sufficient appropriate audit evidence about",
+          "whether the opening balances at 1 July 2026 contain misstatements that materially affect",
+          "the current period's financial report (ASA 510, paragraph 6): we will determine whether",
+          "the closing balances at 30 June 2026 have been correctly brought forward, whether they",
+          "reflect appropriate accounting policies, and we will perform specific procedures on them.",
+          "Because the prior period financial report was not audited, our auditor's report will",
+          "include an Other Matter paragraph stating that the corresponding figures are unaudited",
+          "(ASA 710, paragraph 14)."
+        ],
+        [
+          "4. Responsibilities of the directors",
+          "Our audit will be conducted on the basis that the directors acknowledge and understand",
+          "that they have responsibility:",
+          "(i)   for the preparation of the financial report that gives a true and fair view in",
+          "      accordance with the Corporations Act 2001 and the applicable financial reporting",
+          "      framework set out in section 5;",
+          "(ii)  for such internal control as the directors determine is necessary to enable the",
+          "      preparation of a financial report that is free from material misstatement, whether",
+          "      due to fraud or error; and",
+          "(iii) to provide us with:",
+          "      a. access to all information of which the directors are aware that is relevant to",
+          "         the preparation of the financial report, such as records, documentation and",
+          "         other matters;",
+          "      b. additional information that we may request from the directors for the purpose",
+          "         of the audit; and",
+          "      c. unrestricted access to persons within the Company from whom we determine it",
+          "         necessary to obtain audit evidence.",
+          "",
+          "As part of our audit process we will request from the directors written confirmation",
+          "concerning representations made to us in connection with the audit.",
+          "",
+          "5. Applicable financial reporting framework",
+          "The financial report is to be prepared in accordance with the Corporations Act 2001 and",
+          "Australian Accounting Standards - Simplified Disclosures.",
+          "",
+          "The current period covers the 3 months from 1 July 2026 to 30 September 2026, while the",
+          "comparative figures cover the 12 months ended 30 June 2026. The amounts presented are",
+          "therefore not entirely comparable, and the financial report is to disclose this."
+        ],
+        [
+          "6. Form and content of our report",
+          "We expect to issue a written auditor's report on the financial report, addressed to the",
+          "members of the Company, expressing our opinion and including the Other Matter paragraph",
+          "described in section 3. There may be circumstances in which our report differs from its",
+          "expected form and content, depending on the findings of the audit.",
+          "",
+          "7. Fees",
+          "Our fee for the audit is AUD 4,800, excluding GST. We will issue our invoice when the",
+          "auditor's report is signed. We provide no other services to the Company.",
+          "",
+          "8. Agreement of terms",
+          "Please sign and return a copy of this letter to confirm that it is in accordance with",
+          "your understanding of the arrangements for our audit of the financial report.",
+          "",
+          "Yours faithfully",
+          "",
+          "",
+          "______________________________",
+          "Tessellate Audit Partners",
+          "Jordan Ellis, Partner (Registered Company Auditor No. 300471)",
+          "",
+          "",
+          "Acknowledged and agreed on behalf of Demo Company (AU) Pty Ltd:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "Date: 2 September 2026"
+        ]
+      ]
+    }
+  ],
   "contract_links": [],
   "delivery_notes": [],
   "bank_accounts": [],

@@ -1,0 +1,20 @@
+{
+  "900043021": {
+    "acn": "900043021",
+    "name": "Demo Company (AU) Pty Ltd",
+    "status": "Registered",
+    "registered_date": "2018-09-03"
+  },
+  "900043030": {
+    "acn": "900043030",
+    "name": "Victoria Property Agency Pty Ltd",
+    "status": "Registered",
+    "registered_date": "2014-03-03"
+  },
+  "900043049": {
+    "acn": "900043049",
+    "name": "Morgan Advisory Pty Ltd",
+    "status": "Registered",
+    "registered_date": "2019-07-01"
+  }
+}
