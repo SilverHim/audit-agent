@@ -191,6 +191,8 @@ compose.yml                        B
 - ACC-08、PLN-15 两个闸门步骤，EQR
 - 原型替身与 not_implemented 注册：程序库只放本版 17 条
 - 向量索引、文档分类与 OCR：数据集自带文档类型，只读 PDF 文本层
+- Xero 收款与发票对应表（payments.json 的分配记录），因而期后监控 GEN-07 S04 “期末应收到截止日仍未收回” 暂缓
+- 分录表加 reverses_entry_no 列：作废对仍由规则按数据集声明的冲回说明格式识别
 
 ## 7. 准则片段
 
