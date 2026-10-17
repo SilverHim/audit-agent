@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, type Options as Options2, type RequestResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -94,6 +94,34 @@ export const engagementsResumeEngagement = <ThrowOnError extends boolean = false
 });
 
 /**
+ * Get Client Profile
+ *
+ * 客户画像的最新版与第 1 版起的历史, 版本最高的承接评分卡及其例外.
+ *
+ * editable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.
+ */
+export const engagementsGetClientProfile = <ThrowOnError extends boolean = false>(options: Options<EngagementsGetClientProfileData, ThrowOnError>): RequestResult<EngagementsGetClientProfileResponses, EngagementsGetClientProfileErrors, ThrowOnError> => (options.client ?? client).get<EngagementsGetClientProfileResponses, EngagementsGetClientProfileErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/client-profile',
+    ...options
+});
+
+/**
+ * Update Client Profile
+ *
+ * 只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
+ */
+export const gatesUpdateClientProfile = <ThrowOnError extends boolean = false>(options: Options<GatesUpdateClientProfileData, ThrowOnError>): RequestResult<GatesUpdateClientProfileResponses, GatesUpdateClientProfileErrors, ThrowOnError> => (options.client ?? client).put<GatesUpdateClientProfileResponses, GatesUpdateClientProfileErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/client-profile',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Get Gate
  *
  * 不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND.
@@ -110,21 +138,6 @@ export const gatesGetGate = <ThrowOnError extends boolean = false>(options: Opti
 export const gatesSubmitGateDecision = <ThrowOnError extends boolean = false>(options: Options<GatesSubmitGateDecisionData, ThrowOnError>): RequestResult<GatesSubmitGateDecisionResponses, GatesSubmitGateDecisionErrors, ThrowOnError> => (options.client ?? client).post<GatesSubmitGateDecisionResponses, GatesSubmitGateDecisionErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/engagements/{eid}/gate-decisions',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
-});
-
-/**
- * Update Client Profile
- *
- * 只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
- */
-export const gatesUpdateClientProfile = <ThrowOnError extends boolean = false>(options: Options<GatesUpdateClientProfileData, ThrowOnError>): RequestResult<GatesUpdateClientProfileResponses, GatesUpdateClientProfileErrors, ThrowOnError> => (options.client ?? client).put<GatesUpdateClientProfileResponses, GatesUpdateClientProfileErrors, ThrowOnError>({
-    security: [{ scheme: 'bearer', type: 'http' }],
-    url: '/api/v1/engagements/{eid}/client-profile',
     ...options,
     headers: {
         'Content-Type': 'application/json',

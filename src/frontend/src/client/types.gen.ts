@@ -358,6 +358,32 @@ export type ClientProfileIn = {
 };
 
 /**
+ * ClientProfileView
+ *
+ * 客户资料页: 客户画像的最新版与历史, 承接评分卡及其例外, 能否编辑.
+ */
+export type ClientProfileView = {
+    profile: ClientProfile;
+    /**
+     * History
+     */
+    history: Array<ClientProfile>;
+    /**
+     * Engagement Profile Version
+     */
+    engagement_profile_version: number;
+    scorecard: AcceptanceScorecard | null;
+    /**
+     * Exceptions
+     */
+    exceptions: Array<AuditException>;
+    /**
+     * Editable
+     */
+    editable: boolean;
+};
+
+/**
  * CompletionMaterial
  *
  * FIN-01 闸门的呈报材料.
@@ -2218,6 +2244,64 @@ export type EngagementsResumeEngagementResponses = {
     202: unknown;
 };
 
+export type EngagementsGetClientProfileData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/client-profile';
+};
+
+export type EngagementsGetClientProfileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsGetClientProfileError = EngagementsGetClientProfileErrors[keyof EngagementsGetClientProfileErrors];
+
+export type EngagementsGetClientProfileResponses = {
+    /**
+     * Successful Response
+     */
+    200: ClientProfileView;
+};
+
+export type EngagementsGetClientProfileResponse = EngagementsGetClientProfileResponses[keyof EngagementsGetClientProfileResponses];
+
+export type GatesUpdateClientProfileData = {
+    body: ClientProfileIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/client-profile';
+};
+
+export type GatesUpdateClientProfileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GatesUpdateClientProfileError = GatesUpdateClientProfileErrors[keyof GatesUpdateClientProfileErrors];
+
+export type GatesUpdateClientProfileResponses = {
+    /**
+     * Successful Response
+     */
+    202: unknown;
+};
+
 export type GatesGetGateData = {
     body?: never;
     path: {
@@ -2277,34 +2361,6 @@ export type GatesSubmitGateDecisionResponses = {
 };
 
 export type GatesSubmitGateDecisionResponse = GatesSubmitGateDecisionResponses[keyof GatesSubmitGateDecisionResponses];
-
-export type GatesUpdateClientProfileData = {
-    body: ClientProfileIn;
-    path: {
-        /**
-         * Eid
-         */
-        eid: string;
-    };
-    query?: never;
-    url: '/api/v1/engagements/{eid}/client-profile';
-};
-
-export type GatesUpdateClientProfileErrors = {
-    /**
-     * Validation Error
-     */
-    422: HttpValidationError;
-};
-
-export type GatesUpdateClientProfileError = GatesUpdateClientProfileErrors[keyof GatesUpdateClientProfileErrors];
-
-export type GatesUpdateClientProfileResponses = {
-    /**
-     * Successful Response
-     */
-    202: unknown;
-};
 
 export type ReviewsListReviewTasksData = {
     body?: never;

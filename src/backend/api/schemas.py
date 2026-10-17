@@ -4,9 +4,11 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from backend.contracts.models import (
+    AcceptanceScorecard,
     Annotation,
     AuditException,
     AuditReportVersion,
+    ClientProfile,
     Decision,
     GateDecision,
     GateEdit,
@@ -98,6 +100,17 @@ class ClientProfileIn(Model):
     listed: bool
     directors: list[str]
     notes: str = ""
+
+
+class ClientProfileView(Model):
+    """客户资料页: 客户画像的最新版与历史, 承接评分卡及其例外, 能否编辑."""
+
+    profile: ClientProfile  # 最新版, 口径同 ACC-01 闸门材料 (可能由同客户的其他项目更新)
+    history: list[ClientProfile]  # 第 1 版到最新版, 按版本升序
+    engagement_profile_version: int  # 本项目采用的画像版本 (Engagement.client_profile_version)
+    scorecard: AcceptanceScorecard | None  # 版本最高的承接评分卡, ACC-04 还没跑过时为空
+    exceptions: list[AuditException]  # 评分卡 exception_ids 引用的例外
+    editable: bool  # 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 无待恢复的错误
 
 
 class ReviewTaskView(Model):

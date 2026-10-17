@@ -267,6 +267,108 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/client-profile": {
+      "get": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Get Client Profile",
+        "description": "客户画像的最新版与第 1 版起的历史, 版本最高的承接评分卡及其例外.\n\neditable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.",
+        "operationId": "engagements-get_client_profile",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientProfileView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "gates"
+        ],
+        "summary": "Update Client Profile",
+        "description": "只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.",
+        "operationId": "gates-update_client_profile",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientProfileIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/gate": {
       "get": {
         "tags": [
@@ -356,62 +458,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/IdBody"
                 }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/engagements/{eid}/client-profile": {
-      "put": {
-        "tags": [
-          "gates"
-        ],
-        "summary": "Update Client Profile",
-        "description": "只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.",
-        "operationId": "gates-update_client_profile",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "eid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Eid"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ClientProfileIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           },
@@ -2014,6 +2060,57 @@
         ],
         "title": "ClientProfileIn",
         "description": "更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1."
+      },
+      "ClientProfileView": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/ClientProfile"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ClientProfile"
+            },
+            "type": "array",
+            "title": "History"
+          },
+          "engagement_profile_version": {
+            "type": "integer",
+            "title": "Engagement Profile Version"
+          },
+          "scorecard": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AcceptanceScorecard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exceptions": {
+            "items": {
+              "$ref": "#/components/schemas/AuditException"
+            },
+            "type": "array",
+            "title": "Exceptions"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile",
+          "history",
+          "engagement_profile_version",
+          "scorecard",
+          "exceptions",
+          "editable"
+        ],
+        "title": "ClientProfileView",
+        "description": "客户资料页: 客户画像的最新版与历史, 承接评分卡及其例外, 能否编辑."
       },
       "CompletionMaterial": {
         "properties": {

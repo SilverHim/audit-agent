@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -170,6 +170,47 @@ export const engagementsResumeEngagementMutation = (options?: Partial<Options<En
     return mutationOptions;
 };
 
+export const engagementsGetClientProfileQueryKey = (options: Options<EngagementsGetClientProfileData>) => createQueryKey('engagementsGetClientProfile', options);
+
+/**
+ * Get Client Profile
+ *
+ * 客户画像的最新版与第 1 版起的历史, 版本最高的承接评分卡及其例外.
+ *
+ * editable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.
+ */
+export const engagementsGetClientProfileOptions = (options: Options<EngagementsGetClientProfileData>) => queryOptions<EngagementsGetClientProfileResponse, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, ReturnType<typeof engagementsGetClientProfileQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await engagementsGetClientProfile({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: engagementsGetClientProfileQueryKey(options)
+});
+
+/**
+ * Update Client Profile
+ *
+ * 只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
+ */
+export const gatesUpdateClientProfileMutation = (options?: Partial<Options<GatesUpdateClientProfileData>>): UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> => {
+    const mutationOptions: UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await gatesUpdateClientProfile({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const gatesGetGateQueryKey = (options: Options<GatesGetGateData>) => createQueryKey('gatesGetGate', options);
 
 /**
@@ -197,25 +238,6 @@ export const gatesSubmitGateDecisionMutation = (options?: Partial<Options<GatesS
     const mutationOptions: UseMutationOptions<GatesSubmitGateDecisionResponse, GatesSubmitGateDecisionError, Options<GatesSubmitGateDecisionData>> = {
         mutationFn: async (fnOptions) => {
             const { data } = await gatesSubmitGateDecision({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-/**
- * Update Client Profile
- *
- * 只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
- */
-export const gatesUpdateClientProfileMutation = (options?: Partial<Options<GatesUpdateClientProfileData>>): UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> => {
-    const mutationOptions: UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await gatesUpdateClientProfile({
                 ...options,
                 ...fnOptions,
                 throwOnError: true

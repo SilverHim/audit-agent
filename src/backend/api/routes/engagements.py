@@ -1,4 +1,4 @@
-"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume."""
+"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile."""
 
 from typing import Annotated
 
@@ -7,8 +7,15 @@ from fastapi import APIRouter, Depends, Response
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_deps, get_query, get_runner, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import EngagementCreate, EngagementSummary
-from backend.contracts.models import Engagement, User
+from backend.api.schemas import ClientProfileView, EngagementCreate, EngagementSummary
+from backend.contracts.models import (
+    AcceptanceScorecard,
+    AuditException,
+    ClientProfile,
+    Engagement,
+    GateId,
+    User,
+)
 from backend.contracts.views import EngagementOverview
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
@@ -87,3 +94,47 @@ async def resume_engagement(
     async with catch_api():
         await runner.resume(engagement.id)
     return Response(status_code=202)
+
+
+@router.get("/{eid}/client-profile")
+async def get_client_profile(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+    query: Annotated[GraphStateQuery, Depends(get_query)],
+) -> ClientProfileView:
+    """客户画像的最新版与第 1 版起的历史, 版本最高的承接评分卡及其例外.
+
+    editable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.
+    """
+    eid, client_id = engagement.id, engagement.client_id
+    async with catch_api():
+        profile = await deps.engagement_store.client_profile(client_id)
+        if profile is None:
+            raise api_error("NOT_FOUND", client_id)
+        history: list[ClientProfile] = []
+        for version in range(1, profile.version + 1):
+            earlier = await deps.engagement_store.client_profile(client_id, version)
+            if earlier is not None:
+                history.append(earlier)
+        scorecards = await deps.output_store.latest(eid, AcceptanceScorecard)
+        scorecard = max(scorecards, key=lambda item: item.version, default=None)
+        exceptions: list[AuditException] = []
+        for exception_id in scorecard.exception_ids if scorecard else []:
+            exception = await deps.output_store.get(eid, AuditException, exception_id)
+            if exception is not None:
+                exceptions.append(exception)
+        overview = await query.overview(eid)
+    editable = (
+        overview.current_gate is GateId.ACC_01
+        and not overview.engagement.locked
+        and not overview.running
+        and overview.run_error is None
+    )
+    return ClientProfileView(
+        profile=profile,
+        history=history,
+        engagement_profile_version=overview.engagement.client_profile_version,
+        scorecard=scorecard,
+        exceptions=exceptions,
+        editable=editable,
+    )
