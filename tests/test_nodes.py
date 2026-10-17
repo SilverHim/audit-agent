@@ -313,20 +313,20 @@ def test_build_run_rerun_params_override_template() -> None:
 
 
 def test_build_run_snapshot_not_shared_with_procedure() -> None:
-    """rerun 把 PLN-07 的收入科目改为 ["4200"]: 改第 2 次执行快照里的列表, 程序与第 1 次快照不受影响."""
+    """rerun 把 PLN-07 的收入科目改为 ["other_income"]: 改第 2 次执行快照里的列表, 程序与第 1 次快照不受影响."""
     state = numbat_state()
     lib = library()
     template = lib.load("PLN-07")
-    procedure = assembled(lib, "PLN-07", params={"revenue_account_codes": ["4200"]})
+    procedure = assembled(lib, "PLN-07", params={"revenue_categories": ["other_income"]})
     first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
     state["procedure_runs"] = [first]
     second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
 
-    second.params_snapshot["revenue_account_codes"].append("4300")
+    second.params_snapshot["revenue_categories"].append("cost_of_sales")
 
-    assert procedure.params["revenue_account_codes"] == ["4200"]
-    assert first.params_snapshot["revenue_account_codes"] == ["4200"]
-    assert template.params["revenue_account_codes"] == ["4100"]
+    assert procedure.params["revenue_categories"] == ["other_income"]
+    assert first.params_snapshot["revenue_categories"] == ["other_income"]
+    assert template.params["revenue_categories"] == ["revenue"]
 
 
 def test_build_run_refuses_unset_materiality() -> None:

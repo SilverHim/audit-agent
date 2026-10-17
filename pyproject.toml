@@ -30,11 +30,13 @@ packages = ["src/backend"]
 dev = [
     "langgraph-cli[inmem]>=0.4.31",
     "mypy>=2.3.1",
+    "openpyxl>=3.1.5",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "reportlab>=5.0.1",
     "ruff>=0.16.8",
+    "types-openpyxl>=3.1.5.20261017",
     "types-pyyaml>=6.0.12.20260906",
 ]
 

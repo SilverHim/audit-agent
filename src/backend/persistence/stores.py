@@ -1,11 +1,11 @@
-"""Store 与 DatasetLoader 的 PostgreSQL / 文件系统实现 (B 负责), 方法签名与 contracts/ports.py 一致."""
+"""Store 与 DatasetLoader 的 PostgreSQL / 文件系统实现, 方法签名与 contracts/ports.py 一致."""
 
 import asyncio
 import csv
 import hashlib
 import io
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -19,6 +19,8 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from backend.adapters.xero_dataset import Snapshot, build_tables
+from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.contracts import records
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
@@ -36,10 +38,13 @@ from backend.contracts.models import (
     User,
     Versioned,
 )
+from backend.contracts.ports import DatasetLoader
 from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, SalesInvoice, TrialBalanceRow
 from backend.core.config import get_settings
 from backend.persistence import models as m
 from backend.persistence.db import default_engine, transaction, writable
+from backend.services.account_mapping import classify_by_name, with_category
+from backend.services.ledger import PROFIT_AND_LOSS, opening_balances
 
 T = TypeVar("T", bound=Versioned)
 
@@ -90,12 +95,13 @@ class PostgresFinancialDataStore(Store):
             if not account:
                 raise LookupError(account_code)
             prior = {r.account_code: r.balance_cents for r in await self.trial_balance(eid, "prior")}
-            kinds = {r["code"]: r["type"] for r in await self.rows(eid, select(accounts))}
-            opening = prior.get(account_code, 0)
-            if kinds[account_code] in {"revenue", "expense"}:
-                opening = 0
-            elif account_code == "3200":
-                opening += sum(value for code, value in prior.items() if kinds[code] in {"revenue", "expense"})
+            rows = await self.rows(eid, select(accounts))
+            kinds = {r["code"]: r["type"] for r in rows}
+            # 旧项目的科目没有标准分类 (迁移 0002 之前载入), 按名称补上
+            categories = {r["code"]: r.get("category") or classify_by_name(r["name"], r["type"]) for r in rows}
+            opening = 0 if kinds[account_code] in PROFIT_AND_LOSS else prior.get(account_code, 0)
+            if categories[account_code] == "retained_earnings":  # 上期损益转入留存收益
+                opening = opening_balances(prior, kinds, categories).get(account_code, 0)
             engagement = await PostgresEngagementStore(self.engine).get(eid)
             if engagement is None:
                 raise LookupError(eid)
@@ -353,25 +359,31 @@ class FileEvidenceStore(Store):
                 raise FileNotFoundError(document_id)
 
 
-class CsvDatasetLoader(Store):
-    def __init__(
-        self, root: Path, engine: AsyncEngine | None = None, evidence_store: FileEvidenceStore | None = None
-    ) -> None:
+FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
+    "accounts": records.Account,
+    "trial_balance": TrialBalanceRow,
+    "journal_entries": records.JournalEntry,
+    "sales_invoices": SalesInvoice,
+    "delivery_notes": DeliveryNote,
+    "bank_accounts": BankAccount,
+    "bank_transactions": BankTransaction,
+}  # 财务表 → 行模型, 与 m.FINANCIAL 同序
+
+
+Tables = tuple[Mapping[str, Sequence[BaseModel]], Sequence[Path]]  # (财务表 → 行, 合同 PDF 路径)
+
+
+class TableLoader(Store):
+    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads; 已载入则跳过.
+
+    源数据在确认尚未载入之后才读取与转换 (build), 已载入的项目不再依赖源文件.
+    """
+
+    def __init__(self, engine: AsyncEngine | None = None, evidence_store: FileEvidenceStore | None = None) -> None:
         super().__init__(engine)
-        self.root = root
         self.evidence_store = evidence_store or FileEvidenceStore(get_settings().EVIDENCE_ROOT, self.engine)
 
-    async def load(self, eid: str, dataset: str) -> None:
-        directory = safe_child(self.root, dataset)
-        classes: list[type[BaseModel]] = [
-            records.Account,
-            TrialBalanceRow,
-            records.JournalEntry,
-            SalesInvoice,
-            DeliveryNote,
-            BankAccount,
-            BankTransaction,
-        ]
+    async def insert(self, eid: str, dataset: str, build: Callable[[], Tables]) -> None:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             existing = await self.rows(eid, select(m.dataset_loads))
@@ -379,18 +391,12 @@ class CsvDatasetLoader(Store):
                 if existing[0]["dataset"] != dataset:
                     raise ValueError("Engagement already has a different dataset")
                 return
-            for (name, table), kind in zip(m.FINANCIAL.items(), classes, strict=True):
-                with (directory / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
-                    rows = [
-                        dict(
-                            engagement_id=eid,
-                            **kind.model_validate({k: (v if v != "" else None) for k, v in r.items()}).model_dump(),
-                        )
-                        for r in csv.DictReader(stream)
-                    ]
+            tables, contracts = build()
+            for name, table in m.FINANCIAL.items():
+                rows = [dict(engagement_id=eid, **row.model_dump()) for row in tables.get(name, ())]
                 if rows:
                     await conn.execute(insert(table), rows)
-            for path in sorted((directory / "contracts").glob("*.pdf")):
+            for path in contracts:
                 await self.evidence_store.save(
                     eid, path.name, path.read_bytes(), type=DocumentType.contract, reliability=Reliability.external_copy
                 )
@@ -398,15 +404,108 @@ class CsvDatasetLoader(Store):
                 insert(m.dataset_loads).values(engagement_id=eid, dataset=dataset, data_version=1, loaded_at=now())
             )
 
+
+class CsvDatasetLoader(TableLoader):
+    """CSV 数据集 (如 Numbat): 每张财务表一个 CSV; 科目没有 category 列时按名称映射标准分类."""
+
+    def __init__(
+        self, root: Path, engine: AsyncEngine | None = None, evidence_store: FileEvidenceStore | None = None
+    ) -> None:
+        super().__init__(engine, evidence_store)
+        self.root = root
+
+    async def load(self, eid: str, dataset: str) -> None:
+        directory = safe_child(self.root, dataset)
+
+        def build() -> Tables:
+            tables: dict[str, list[BaseModel]] = {}
+            for name, kind in FINANCIAL_ROWS.items():
+                with (directory / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
+                    rows = [
+                        kind.model_validate({k: (v if v != "" else None) for k, v in r.items()})
+                        for r in csv.DictReader(stream)
+                    ]
+                tables[name] = [with_category(r) if isinstance(r, records.Account) else r for r in rows]
+            return tables, sorted((directory / "contracts").glob("*.pdf"))
+
+        await self.insert(eid, dataset, build)
+
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
-        directory = safe_child(self.root, dataset) / "planning"
-        return (
-            [AuditObjective.model_validate(r) for r in json.loads((directory / "audit_objectives.json").read_text())],
-            [RiskItem.model_validate(r) for r in json.loads((directory / "risk_register.json").read_text())],
-        )
+        return read_planning(safe_child(self.root, dataset) / "planning")
 
     def client_profile(self, dataset: str) -> ClientProfile:
         return ClientProfile.model_validate_json((safe_child(self.root, dataset) / "client_profile.json").read_text())
+
+
+class XeroDatasetLoader(TableLoader):
+    """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
+
+    规划预设取通用模板 (planning 目录), 客户画像取快照的组织信息. 映射见 adapters.xero_dataset.
+    """
+
+    PREFIX = "xero/"
+
+    def __init__(
+        self,
+        root: Path,
+        planning: Path,
+        engine: AsyncEngine | None = None,
+        evidence_store: FileEvidenceStore | None = None,
+    ) -> None:
+        super().__init__(engine, evidence_store)
+        self.root = root  # 快照目录的上级, 如 data/external/xero/api
+        self.planning = planning  # 通用规划预设目录
+
+    def directory(self, dataset: str) -> Path:
+        """数据集名 → 快照目录 (不查是否存在); 名称不合法抛 ValueError."""
+        if not dataset.startswith(self.PREFIX):
+            raise ValueError(f"不是 Xero 数据集: {dataset}")
+        return safe_child(self.root, dataset.removeprefix(self.PREFIX))
+
+    def snapshot(self, dataset: str) -> Snapshot:
+        """快照; 目录不存在抛 FileNotFoundError (建项目接口据此报 NOT_FOUND)."""
+        directory = self.directory(dataset)
+        if not directory.is_dir():
+            raise FileNotFoundError(f"没有 Xero 快照 {dataset}")
+        return Snapshot(directory)
+
+    async def load(self, eid: str, dataset: str) -> None:
+        self.directory(dataset)  # 名称先校验; 快照是否存在等确认未载入后再查
+        await self.insert(eid, dataset, lambda: (build_tables(self.snapshot(dataset)), ()))
+
+    def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
+        return read_planning(self.planning)
+
+    def client_profile(self, dataset: str) -> ClientProfile:
+        return xero_client_profile(self.snapshot(dataset))
+
+
+class RoutingDatasetLoader:
+    """按数据集名的前缀选载入器 (如 "xero/" 走 Xero), 其余走默认的 CSV 载入器."""
+
+    def __init__(self, default: DatasetLoader, by_prefix: Mapping[str, DatasetLoader]) -> None:
+        self.default = default
+        self.by_prefix = dict(by_prefix)
+
+    def pick(self, dataset: str) -> DatasetLoader:
+        return next((loader for prefix, loader in self.by_prefix.items() if dataset.startswith(prefix)), self.default)
+
+    async def load(self, eid: str, dataset: str) -> None:
+        await self.pick(dataset).load(eid, dataset)
+
+    def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
+        return self.pick(dataset).planning_presets(dataset)
+
+    def client_profile(self, dataset: str) -> ClientProfile:
+        return self.pick(dataset).client_profile(dataset)
+
+
+def read_planning(directory: Path) -> tuple[list[AuditObjective], list[RiskItem]]:
+    """读目录下的 audit_objectives.json 与 risk_register.json."""
+    return (
+        [AuditObjective.model_validate(r) for r in json.loads((directory / "audit_objectives.json").read_text())],
+        [RiskItem.model_validate(r) for r in json.loads((directory / "risk_register.json").read_text())],
+    )
 
 
 class PostgresEngagementStore(Store):

@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     LLM_FIXTURES_ROOT: Path = ROOT / "tests" / "fixtures" / "llm"  # mock 模式的固定输出目录
     PARALLEL_CAP: int = 4  # fieldwork 实例并行上限
 
+    XERO_CLIENT_ID: str = ""  # Xero 应用的 Client ID (不是密钥), 为空时不能接 Xero
+    XERO_CLIENT_SECRET: str = ""  # Web app 类型的 client secret, 只放 .env; 为空时按 PKCE 授权
+    XERO_REDIRECT_URI: str = "http://localhost:8765/callback"  # 授权回调地址, 须与 Xero 应用登记的一致
+    XERO_TOKEN_PATH: Path = ROOT / "var" / "xero" / "token.json"  # 令牌文件, 含刷新令牌, 不入库
+    XERO_TENANT_ID: str = ""  # 要拉取的组织, 为空时取授权连接里唯一的组织
+    XERO_PAID_ENDPOINTS: Literal["live", "mock", "off"] = "off"  # 付费接口: 真实, 网页导出模拟, 不取 (退回单据反推)
+
     JWT_SECRET: str = "change-me"  # 登录令牌的签名密钥
     JWT_EXPIRE_MINUTES: int = 480  # 登录令牌有效期, 单位分钟
     SEED_USER_EMAIL: str = "rca@example.com"  # seed 脚本建的审计师账号

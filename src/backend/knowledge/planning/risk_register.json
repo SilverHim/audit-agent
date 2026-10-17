@@ -1,0 +1,35 @@
+[
+  {
+    "id": "RISK-REV-OCC",
+    "version": 1,
+    "objective_id": "OBJ-REV-OCC",
+    "assertion": "Occurrence",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Presumed fraud risk in revenue recognition (ASA 240): revenue may be recorded for sales that did not occur. Default template; the auditor confirms or revises the level at the planning gate.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-REV-CUT",
+    "version": 1,
+    "objective_id": "OBJ-REV-CUT",
+    "assertion": "Cutoff",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Risk that sales near period end are recognised in the wrong period. Default template; the auditor confirms or revises the level at the planning gate.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-CASH-EXI",
+    "version": 1,
+    "objective_id": "OBJ-CASH-EXI",
+    "assertion": "Existence",
+    "level": "high",
+    "fraud_related": false,
+    "description": "Risk that bank balances recorded in the general ledger do not exist or are overstated at period end. Default template; the auditor confirms or revises the level at the planning gate.",
+    "revision_reason": null,
+    "approved_by": null
+  }
+]

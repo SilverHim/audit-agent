@@ -25,6 +25,8 @@ from backend.persistence.stores import (
     PostgresEngagementStore,
     PostgresFinancialDataStore,
     PostgresUserStore,
+    RoutingDatasetLoader,
+    XeroDatasetLoader,
     now,
 )
 from backend.services.audit_trail import PostgresAuditTrail
@@ -94,9 +96,9 @@ async def test_load_rules_and_project_isolation(storage):
         window_days=20,
         change_pct=0.2,
         min_change_cents=10000000,
-        revenue_account_codes=["4100"],
-        cost_of_sales_account_codes=["5100"],
-        income_tax_account_codes=["8100"],
+        revenue_categories=["revenue"],
+        cost_of_sales_categories=["cost_of_sales"],
+        income_tax_categories=["income_tax"],
         subsequent_days=10,
         lookback_days=5,
         threshold_cents=9000000,
@@ -364,3 +366,53 @@ async def test_rule_edge_cases(storage):
     assert next(r for r in cash if r["source_id"] == "BA-02")["amount_cents"] is None
     analytics = await financial.query(e.id, sql("PLN-07", "A01"), dict(change_pct=0.2, min_change_cents=10000000))
     assert analytics[0]["change_pct"] is None
+
+
+XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 不入库; 没有时跳过
+
+
+async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
+    """Xero 快照经 XeroDatasetLoader 载入真实库: 各表有数, 科目带标准分类,
+    生产的 gl_balance 对每个科目等于本期试算表."""
+    url = os.getenv("TEST_DATABASE_URL")
+    snapshot = ROOT / "data/external/xero/api" / XERO_SNAPSHOT.removeprefix("xero/")
+    if not url or not snapshot.exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    loader = RoutingDatasetLoader(
+        CsvDatasetLoader(ROOT / "data", engine, FileEvidenceStore(tmp_path, engine)),
+        {
+            "xero/": XeroDatasetLoader(
+                snapshot.parent, ROOT / "src/backend/knowledge/planning", engine, FileEvidenceStore(tmp_path, engine)
+            )
+        },
+    )
+    profile = loader.client_profile(XERO_SNAPSHOT).model_copy(update={"id": "CLIENT-" + uuid4().hex})
+    e = await PostgresEngagementStore(engine).create(
+        owner_id=user,
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 11, 30),
+        dataset=XERO_SNAPSHOT,
+        profile=profile,
+    )
+    await loader.load(e.id, XERO_SNAPSHOT)
+    financial = PostgresFinancialDataStore(engine)
+    counts = {t: (await financial.query(e.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] for t in m.FINANCIAL}
+    assert counts["accounts"] > 0 and counts["journal_entries"] > 0 and counts["delivery_notes"] == 0
+    unmapped = await financial.query(e.id, "SELECT code FROM accounts WHERE category IS NULL", {})
+    assert len(unmapped) <= 1  # Demo 只有中转科目认不出
+    current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
+    diff = {
+        code: (balance, gl)
+        for code, balance in current.items()
+        if balance != (gl := await financial.gl_balance(e.id, code, date(2026, 11, 30)))
+    }
+    assert diff == {}
+    await engine.dispose()

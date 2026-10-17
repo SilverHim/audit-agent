@@ -28,6 +28,8 @@ from backend.persistence.stores import (
     PostgresEngagementStore,
     PostgresFinancialDataStore,
     PostgresUserStore,
+    RoutingDatasetLoader,
+    XeroDatasetLoader,
 )
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
@@ -48,7 +50,17 @@ def build_deps(settings: Settings) -> AgentDeps:
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(engine),
         evidence_store=evidence_store,
-        datasets=CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
+        datasets=RoutingDatasetLoader(
+            CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
+            {
+                XeroDatasetLoader.PREFIX: XeroDatasetLoader(
+                    settings.DATASET_ROOT / "external" / "xero" / "api",
+                    settings.KNOWLEDGE_ROOT / "planning",
+                    engine,
+                    evidence_store,
+                )
+            },
+        ),
         engagement_store=PostgresEngagementStore(engine),
         llm=llm,
         rules=SqlRuleEngine(financial_store),

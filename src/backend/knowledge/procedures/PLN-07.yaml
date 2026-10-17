@@ -8,8 +8,8 @@ autonomy_level: L3
 params:
   change_pct: 0.2               # 变动率绝对值下限
   min_change_cents: 10000000    # 变动额绝对值下限 100,000.00
-  revenue_account_codes: ["4100"]
-  cost_of_sales_account_codes: ["5100"]
+  revenue_categories: [revenue]              # 毛利率, 收入增长率的收入取这些标准分类 (accounts.category)
+  cost_of_sales_categories: [cost_of_sales]  # 毛利率的成本取这些标准分类
 rules:
   - id: A01
     name: 科目本期与上期变动超阈值
@@ -33,7 +33,7 @@ rules:
     emit: rows
     sql: |
       SELECT t.period,
-       COALESCE(-SUM(t.balance_cents) FILTER (WHERE a.code=ANY(:revenue_account_codes)),0) AS revenue_cents,
-       COALESCE(SUM(t.balance_cents) FILTER (WHERE a.code=ANY(:cost_of_sales_account_codes)),0) AS cost_of_sales_cents
+       COALESCE(-SUM(t.balance_cents) FILTER (WHERE a.category=ANY(:revenue_categories)),0) AS revenue_cents,
+       COALESCE(SUM(t.balance_cents) FILTER (WHERE a.category=ANY(:cost_of_sales_categories)),0) AS cost_of_sales_cents
       FROM trial_balance t JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
       WHERE t.engagement_id=:eid GROUP BY t.period ORDER BY t.period

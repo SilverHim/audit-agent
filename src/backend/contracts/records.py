@@ -5,6 +5,40 @@ from typing import Literal
 
 from backend.contracts.models import Model
 
+# 标准科目分类: 程序按分类取科目, 不写死各公司, 各 ERP 的科目代码. 载入数据时由连接器映射, 认不出为 None (未映射)
+AccountCategory = Literal[
+    # 资产
+    "cash",  # 货币资金
+    "receivables",  # 应收款项 (含坏账准备)
+    "inventory",  # 存货
+    "prepayments",  # 预付款项
+    "other_current_assets",  # 其他流动资产
+    "property_plant_equipment",  # 固定资产 (含累计折旧)
+    "intangible_assets",  # 无形资产
+    "other_non_current_assets",  # 其他非流动资产
+    # 负债
+    "payables",  # 应付账款
+    "accruals",  # 预提费用
+    "tax_payable",  # 应交税费 (所得税, GST, PAYG)
+    "employee_provisions",  # 应付职工薪酬与员工准备
+    "borrowings",  # 借款与透支
+    "other_current_liabilities",  # 其他流动负债
+    "other_non_current_liabilities",  # 其他非流动负债
+    # 权益
+    "share_capital",  # 股本
+    "retained_earnings",  # 留存收益
+    "other_equity",  # 其他权益
+    # 损益
+    "revenue",  # 主营收入
+    "other_income",  # 其他收入 (利息, 股利, 处置收益等)
+    "cost_of_sales",  # 销售成本
+    "employee_expenses",  # 职工薪酬费用
+    "depreciation_amortisation",  # 折旧与摊销
+    "finance_costs",  # 财务费用
+    "operating_expenses",  # 其他经营费用
+    "income_tax",  # 所得税费用
+]
+
 
 class Account(Model):
     """科目表的一行."""
@@ -12,6 +46,7 @@ class Account(Model):
     code: str  # 科目代码
     name: str  # 科目名称
     type: Literal["asset", "liability", "equity", "revenue", "expense"]  # 科目类别: 资产, 负债, 权益, 收入, 费用
+    category: AccountCategory | None = None  # 标准分类, 载入时映射; None 为未映射
 
 
 class TrialBalanceRow(Model):

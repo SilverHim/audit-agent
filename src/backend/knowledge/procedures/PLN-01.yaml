@@ -13,8 +13,8 @@ params:
     - {basis: profit_before_tax, pct_low: 0.05, pct_high: 0.05}
   performance_pct_range: [0.5, 0.75]
   clearly_trivial_pct: 0.05
-  revenue_account_codes: ["4100"]
-  income_tax_account_codes: ["8100"]
+  revenue_categories: [revenue]          # 收入基准取这些标准分类的科目 (accounts.category)
+  income_tax_categories: [income_tax]    # 税前利润扣除的所得税分类
 standards: [ASA320-P10, ASA320-P11, ASA450-P05]
 rules:
   - id: M01
@@ -22,11 +22,11 @@ rules:
     severity: low
     emit: rows
     sql: |
-      WITH balances AS (SELECT t.balance_cents, a.code, a.type FROM trial_balance t
+      WITH balances AS (SELECT t.balance_cents, a.code, a.type, COALESCE(a.category,'') AS category FROM trial_balance t
        JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
        WHERE t.engagement_id=:eid AND t.period='current')
-      SELECT 'revenue' AS basis, COALESCE(-SUM(balance_cents),0) AS base_amount_cents FROM balances WHERE code=ANY(:revenue_account_codes)
+      SELECT 'revenue' AS basis, COALESCE(-SUM(balance_cents),0) AS base_amount_cents FROM balances WHERE category=ANY(:revenue_categories)
       UNION ALL SELECT 'total_assets', COALESCE(SUM(balance_cents),0) FROM balances WHERE type='asset'
       UNION ALL SELECT 'profit_before_tax', COALESCE(-SUM(balance_cents),0) FROM balances
-       WHERE type IN ('revenue','expense') AND code<>ALL(:income_tax_account_codes)
+       WHERE type IN ('revenue','expense') AND category<>ALL(:income_tax_categories)
       ORDER BY basis

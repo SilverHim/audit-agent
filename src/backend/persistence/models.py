@@ -27,6 +27,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
     for field in fields.split():
         name_, typ = field.split(":")
         optional = {
+            "accounts": {"category"},
             "journal_entries": {"approved_by", "description", "source_doc"},
             "sales_invoices": {"customer_abn", "contract_id", "journal_entry_id"},
             "delivery_notes": {"shipped_date", "signed_date", "signed_by"},
@@ -60,7 +61,7 @@ engagements = table(
 engagements.c.owner_id.append_foreign_key(ForeignKey("users.id"))
 client_profiles = table("client_profiles", "id:s version:i data:j updated_at:t", ("id", "version"), scoped=False)
 FINANCIAL = {
-    "accounts": table("accounts", "code:s name:s type:s", ("code",)),
+    "accounts": table("accounts", "code:s name:s type:s category:s", ("code",)),
     "trial_balance": table("trial_balance", "period:s account_code:s balance_cents:b", ("period", "account_code")),
     "journal_entries": table(
         "journal_entries",
