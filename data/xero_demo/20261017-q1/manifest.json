@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "27bcae61caae92b47f0621b59e385bf671cb5162b68aecaa65eeba79686b46b6",
+  "spec_sha256": "59ea270e64f3572721256addd837909a455a74f03904774c5c5242580e2385f9",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -72,6 +72,13 @@
     ]
   },
   "files": [
+    {
+      "path": "adjustments/journal_entries.csv",
+      "sha256": "0414ffae23f53046e898faee9874b8a6ad39ca4d3e6b5f9a31e7a36d9765d46b",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
     {
       "path": "bank_accounts.csv",
       "sha256": "e397f5df46002033732c5269462e6adf1517081881f20ede6bc03b950b707902",
@@ -180,6 +187,24 @@
       "xero_refs": []
     },
     {
+      "path": "documents/evidence/accounting_policies_extract.pdf",
+      "sha256": "4fa0cdebd60904a54482bee41758d1c0bdfa2f5e28d7d4a097f9394308dce332",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-499"
+      ]
+    },
+    {
+      "path": "documents/evidence/diisr_email.pdf",
+      "sha256": "15dd687e1994e982bad5ae00c10923ae3b13649407bd56630997f9f319b382ce",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-720"
+      ]
+    },
+    {
       "path": "documents/evidence/director_loan_agreement.pdf",
       "sha256": "1f4bc9aec6b334a789d0661b51ad81dce7230aaaf02585b79983670a797e3170",
       "synthetic": true,
@@ -208,6 +233,24 @@
       ]
     },
     {
+      "path": "documents/evidence/expense_claim_E003.pdf",
+      "sha256": "86a39387addbf894f8f93de9e2aecfeb0c7a27fc08360d7f318520ab99e38536",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "documents/evidence/fixed_asset_register.pdf",
+      "sha256": "4873d193e29fd79fcbf5865a900f3d8606b927860c3d19deeebba66f583695c2",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ]
+    },
+    {
       "path": "documents/evidence/going_concern_memo_forecast.pdf",
       "sha256": "3298fa1057e871202ce1ae0d58bdcbda04ed4fa2421ff46902fb98f17cbc774d",
       "synthetic": true,
@@ -215,8 +258,48 @@
       "xero_refs": []
     },
     {
+      "path": "documents/evidence/jakaranda_quote.pdf",
+      "sha256": "d9d09582d6109bd266dfab85813de9587fb95212eb5f115cd33159bdd1253b22",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "BT-090-0099"
+      ]
+    },
+    {
+      "path": "documents/evidence/payroll_register_terms.pdf",
+      "sha256": "c15fb3b8b78e64baf043a7ec2b7115a5022ba266f318f974a0eddeb1182ea386",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "804",
+        "805",
+        "826"
+      ]
+    },
+    {
+      "path": "documents/evidence/ridgeway_order_CRM08-12.pdf",
+      "sha256": "9b6f1c663d9825edeed44a10986005fc42276ed9d7d7360890bd1d11dce1a724",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-647",
+        "BT-090-0092"
+      ]
+    },
+    {
+      "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+      "sha256": "0db690a7c05e22d9f9b3f9f283a54da245aab3295bc46d71044cb67f5c1c1f90",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-548",
+        "BT-090-0097"
+      ]
+    },
+    {
       "path": "documents/index.csv",
-      "sha256": "ffd8814d75dead64ffdb5a923eafd430fc9daf799e00b213999fd013f467cb23",
+      "sha256": "b87b629efe689d38ffa70ee0d3bd6ecbbd43b37f1ae2a0607fbbb96671e711d3",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -253,6 +336,13 @@
     {
       "path": "documents/related_party/vpa_sale_termination_notice.pdf",
       "sha256": "abcccf593a3f5a2e4dafff4011020fa6186a90d52c04e4abc350399ee87c29d6",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "payroll/employees.csv",
+      "sha256": "bd191c2f422043a5234f534403968226dbe4ac01809d8e16bd2dd7dcdd181149",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -428,6 +518,34 @@
       "synthetic": true
     },
     {
+      "path": "documents/evidence/accounting_policies_extract.pdf",
+      "sha256": "4fa0cdebd60904a54482bee41758d1c0bdfa2f5e28d7d4a097f9394308dce332",
+      "document_id": "DOC-4fa0cdebd609",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "page_count": 1,
+      "document_date": "2026-07-01",
+      "related_ids": [
+        "XJ-499"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/diisr_email.pdf",
+      "sha256": "15dd687e1994e982bad5ae00c10923ae3b13649407bd56630997f9f319b382ce",
+      "document_id": "DOC-15dd687e1994",
+      "type": "correspondence",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-10-13",
+      "related_ids": [
+        "XJ-720"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
       "path": "documents/evidence/director_loan_agreement.pdf",
       "sha256": "1f4bc9aec6b334a789d0661b51ad81dce7230aaaf02585b79983670a797e3170",
       "document_id": "DOC-1f4bc9aec6b3",
@@ -473,6 +591,36 @@
       "synthetic": true
     },
     {
+      "path": "documents/evidence/expense_claim_E003.pdf",
+      "sha256": "86a39387addbf894f8f93de9e2aecfeb0c7a27fc08360d7f318520ab99e38536",
+      "document_id": "DOC-86a39387addb",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "page_count": 2,
+      "document_date": "2026-08-14",
+      "related_ids": [
+        "E003"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/fixed_asset_register.pdf",
+      "sha256": "4873d193e29fd79fcbf5865a900f3d8606b927860c3d19deeebba66f583695c2",
+      "document_id": "DOC-4873d193e29f",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "page_count": 1,
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
       "path": "documents/evidence/going_concern_memo_forecast.pdf",
       "sha256": "3298fa1057e871202ce1ae0d58bdcbda04ed4fa2421ff46902fb98f17cbc774d",
       "document_id": "DOC-3298fa1057e8",
@@ -482,6 +630,66 @@
       "document_date": "2026-10-16",
       "related_ids": [
         "CLIENT-XERO-3C1332BB-Q1"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/jakaranda_quote.pdf",
+      "sha256": "d9d09582d6109bd266dfab85813de9587fb95212eb5f115cd33159bdd1253b22",
+      "document_id": "DOC-d9d09582d610",
+      "type": "internal_record",
+      "reliability": "internal_copy",
+      "page_count": 1,
+      "document_date": "2026-10-08",
+      "related_ids": [
+        "BT-090-0099"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/payroll_register_terms.pdf",
+      "sha256": "c15fb3b8b78e64baf043a7ec2b7115a5022ba266f318f974a0eddeb1182ea386",
+      "document_id": "DOC-c15fb3b8b78e",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "page_count": 2,
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "804",
+        "805",
+        "826"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/ridgeway_order_CRM08-12.pdf",
+      "sha256": "9b6f1c663d9825edeed44a10986005fc42276ed9d7d7360890bd1d11dce1a724",
+      "document_id": "DOC-9b6f1c663d98",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-10-02",
+      "related_ids": [
+        "XJ-647",
+        "BT-090-0092"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+      "sha256": "0db690a7c05e22d9f9b3f9f283a54da245aab3295bc46d71044cb67f5c1c1f90",
+      "document_id": "DOC-0db690a7c05e",
+      "type": "supplier_invoice",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-09-05",
+      "related_ids": [
+        "XJ-548",
+        "BT-090-0097"
       ],
       "registration": "load",
       "synthetic": true

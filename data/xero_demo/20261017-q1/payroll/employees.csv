@@ -1,0 +1,4 @@
+employee_id,name,start_date,employment_type,pay_period_days,gross_per_period_cents
+E001,Oliver Gray,2026-07-20,full_time,14,240000
+E002,Tracy Green,2026-07-20,full_time,14,180000
+E003,Odette Garrison,2026-07-20,full_time,14,250000

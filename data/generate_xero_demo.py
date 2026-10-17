@@ -181,8 +181,8 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 
 def generate(snapshot_dir: Path, out: Path) -> Path:
     """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 合同关联, 服务完成记录,
-    开户行, 回函渠道, 规格写有正文的 PDF (承接文件, 合同, 回函), 登记 PDF, documents/index.csv;
-    其余各段由后续需求补进."""
+    开户行, 回函渠道, 工资册, 更正分录, 规格写有正文的 PDF (承接, 合同, 回函, 关联方与证据文件), 登记 PDF,
+    documents/index.csv; 其余各段由后续需求补进."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -213,6 +213,8 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
     )
     if spec["receipts"]:
         write_json(out, "confirmations/receipts.json", spec["receipts"])
+    write_csv(out, "payroll/employees.csv", PAYROLL_COLUMNS, spec["payroll"])
+    write_csv(out, "adjustments/journal_entries.csv", JOURNAL_COLUMNS, [csv_row(r) for r in spec["adjustments"]])
     for doc in spec["documents"]:
         if "pages" in doc:
             write_pdf(out / doc["path"], ["\n".join(page) for page in doc["pages"]], doc["footer"], spec["header"])
@@ -220,6 +222,35 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
     write_index(out, spec["documents"])
     write_manifest(out, snapshot_dir)
     return out
+
+
+PAYROLL_COLUMNS = [
+    "employee_id",
+    "name",
+    "start_date",
+    "employment_type",
+    "pay_period_days",
+    "gross_per_period_cents",
+]  # 工资册 (第 9.1 节; 金额按 _cents 约定)
+JOURNAL_COLUMNS = [
+    "id",
+    "entry_no",
+    "posting_date",
+    "created_at",
+    "created_by",
+    "approved_by",
+    "account_code",
+    "debit_cents",
+    "credit_cents",
+    "description",
+    "source_doc",
+    "is_adjustment",
+]  # 表头同 data/demo/journal_entries.csv (JournalEntry 的字段顺序)
+
+
+def csv_row(row: dict[str, Any]) -> dict[str, Any]:
+    """CSV 单元格写法同 data/demo: 布尔写 true/false, 空值写空串."""
+    return {k: ("true" if v else "false") if isinstance(v, bool) else ("" if v is None else v) for k, v in row.items()}
 
 
 def write_csv(out: Path, name: str, columns: list[str], rows: list[dict[str, Any]]) -> None:

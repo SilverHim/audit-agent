@@ -314,7 +314,7 @@ INDEX_ROWS = [
     "| CLIENT-XERO-3C1332BB-Q1;BT-090-0107;BT-090-0130 |",
     "| documents/evidence/fixed_asset_register.pdf | internal_record | internal_original | 2026-09-30 "
     "| XJ-499;XJ-626;XJ-676 |",
-    "| documents/evidence/expense_claim_E003.pdf | internal_record | internal_original | 2026-09-14 | E003 |",
+    "| documents/evidence/expense_claim_E003.pdf | internal_record | internal_original | 2026-08-14 | E003 |",
     "| documents/evidence/payroll_register_terms.pdf | internal_record | internal_original "
     "| 2026-09-30 | 804;805;826 |",
     "| documents/evidence/accounting_policies_extract.pdf | internal_record | internal_original "
@@ -529,6 +529,7 @@ def test_manifest_layout() -> None:
     assert manifest["generator"] == "data/generate_xero_demo.py"  # type: ignore[index]
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
     assert [f["path"] for f in manifest["files"]] == [  # type: ignore[index]
+        "adjustments/journal_entries.csv",
         "bank_accounts.csv",
         "client_profile.json",
         "confirmations/12345678.pdf",
@@ -542,15 +543,24 @@ def test_manifest_layout() -> None:
         "delivery_notes.csv",
         "documents/engagement/appointment.pdf",
         "documents/engagement/engagement_letter.pdf",
+        "documents/evidence/accounting_policies_extract.pdf",
+        "documents/evidence/diisr_email.pdf",
         "documents/evidence/director_loan_agreement.pdf",
         "documents/evidence/director_loan_confirmation.pdf",
         "documents/evidence/director_support_letter.pdf",
+        "documents/evidence/expense_claim_E003.pdf",
+        "documents/evidence/fixed_asset_register.pdf",
         "documents/evidence/going_concern_memo_forecast.pdf",
+        "documents/evidence/jakaranda_quote.pdf",
+        "documents/evidence/payroll_register_terms.pdf",
+        "documents/evidence/ridgeway_order_CRM08-12.pdf",
+        "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
         "documents/index.csv",
         "documents/related_party/harbourview_lease.pdf",
         "documents/related_party/rm2031_sublease.pdf",
         "documents/related_party/vpa_rent_letter.pdf",
         "documents/related_party/vpa_sale_termination_notice.pdf",
+        "payroll/employees.csv",
         "planning/audit_objectives.json",
         "planning/risk_register.json",
         "registry/abn.json",
@@ -1730,7 +1740,7 @@ def test_memo_october_receipts_match_bank_statements() -> None:
 
 def test_r66_index_rows_and_manifest() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 11 and rows[3:] == [
+    assert rows[3:11] == [
         "documents/related_party/vpa_rent_letter.pdf,agreement,external_copy,2026-06-25,ACN-900043030;XJ-420;XJ-518;XJ-593",
         "documents/related_party/vpa_sale_termination_notice.pdf,correspondence,external_copy,2026-08-28,ACN-900043030",
         "documents/related_party/harbourview_lease.pdf,agreement,external_copy,2026-09-22,ACN-900043030;XJ-613",
@@ -1744,7 +1754,7 @@ def test_r66_index_rows_and_manifest() -> None:
         "CLIENT-XERO-3C1332BB-Q1;BT-090-0107;BT-090-0130",
     ]
     docs = manifest_documents()
-    new = [r.split(",")[0] for r in rows[3:]]
+    new = [r.split(",")[0] for r in rows[3:11]]
     assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 12  # type: ignore[call-overload]
 
 
@@ -1801,3 +1811,260 @@ def test_more_index_problems(tmp_path: Path) -> None:
     (copy / "documents" / "index.csv").unlink()
     generator.write_manifest(copy, zed_snapshot(tmp_path / "again"))
     assert check_error(copy, tmp_path / "absent") == f"{where}: 缺 documents/index.csv (规格有 {count} 份 index 文件)"
+
+
+# ── 其他证据文件, 工资册与更正分录 ──────────────────────────
+
+
+def evidence(name: str) -> list[str]:
+    return pdf_texts(SUPPLEMENTS / "documents" / "evidence" / name)
+
+
+def test_other_evidence_documents() -> None:
+    register = evidence("fixed_asset_register.pdf")
+    assert len(register) == 1 and "As at 30 September 2026" in register[0]
+    assert "Total cost at 30 September 2026: Nil" in register[0]
+    assert "Additions after the reporting date (for information)" in register[0]
+    assert "04 Oct 2026 ABC Furniture Desks, chairs, reception furniture 710 6,300.00" in register[0]
+    assert "11 Oct 2026 PC Complete Laptop for Tracy Green 720 1,969.99" in register[0]
+    claim = evidence("expense_claim_E003.pdf")
+    assert len(claim) == 2 and "Employee name: Odette Garrison" in claim[0] and "Employee number: E003" in claim[0]
+    assert "Date of claim: 14 August 2026" in claim[0] and "Total claimed 296.95" in claim[0]
+    assert (
+        "GST included 26.31" in claim[0]
+        and "Approved for payment: Alex Morgan, Director Date: 16 August 2026" in claim[0]
+    )
+    assert claim[1].count("Receipt ") == 4 and "Total of receipts AUD 296.95" in claim[1]  # 4 张收据
+    assert "Grainger" not in " ".join(claim)  # 系统录入的误写只在 Xero 里
+    payroll = evidence("payroll_register_terms.pdf")
+    assert len(payroll) == 2
+    for row in (
+        "E001 Oliver Gray 20 Jul 2026 Full-time Fortnightly 2,400.00",
+        "E002 Tracy Green 20 Jul 2026 Full-time Fortnightly 1,800.00",
+        "E003 Odette Garrison 20 Jul 2026 Full-time Fortnightly 2,500.00",
+        "Total 33,500.00 7,535.00 25,965.00",
+    ):
+        assert row in payroll[0], row
+    assert "ends on the pay day, a Sunday" in payroll[0]
+    assert "4 weeks of paid annual leave" in payroll[1] and "National Employment Standards" in payroll[1]
+    policies = evidence("accounting_policies_extract.pdf")
+    assert len(policies) == 1 and "1 July 2026" in policies[0]
+    assert (
+        "their cost, net of any trade discount or supplier credit, is AUD 1,000 or more, excluding GST" in policies[0]
+    )
+    assert "office equipment over 5 years" in policies[0] and "for each on-site day as it is provided" in policies[0]
+    email = evidence("diisr_email.pdf")
+    assert len(email) == 1 and "Date: 13 October 2026" in email[0]
+    assert "price concession of AUD 1,050.00 plus GST on invoice ORC1026" in email[0]
+    assert "commercial arrangement agreed today" in email[0] and "credit note for AUD 1,155.00" in email[0]
+    smart = evidence("smart_agency_invoice_SM0195-70135.pdf")
+    assert len(smart) == 1 and "Invoice date: 5 September 2026" in smart[0]
+    assert "Design concepts for advertising material 4 September 2026 1,818.18" in smart[0]
+    assert "Total (GST inclusive) 2,000.00" in smart[0] and "Due date: 19 September 2026" in smart[0]
+    order = evidence("ridgeway_order_CRM08-12.pdf")
+    assert len(order) == 1 and "PURCHASE ORDER CRM08-12" in order[0] and "Date: 2 October 2026" in order[0]
+    assert "3 days per week on site" in order[0] and "starting on 5 October 2026" in order[0]
+    assert "invoice each month in advance at the start of the month" in order[0]
+    quote = evidence("jakaranda_quote.pdf")
+    assert len(quote) == 1 and "Date: 8 October 2026" in quote[0] and "(new project)" in quote[0]
+    assert "A deposit of AUD 2,000.00 is payable on acceptance" in quote[0]
+
+
+def test_r67_index_rows_and_manifest() -> None:
+    rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
+    ev = "documents/evidence/"
+    assert len(rows) == 19 and rows[11:] == [  # 表头加 18 行
+        f"{ev}fixed_asset_register.pdf,internal_record,internal_original,2026-09-30,XJ-499;XJ-626;XJ-676",
+        f"{ev}expense_claim_E003.pdf,internal_record,internal_original,2026-08-14,E003",
+        f"{ev}payroll_register_terms.pdf,internal_record,internal_original,2026-09-30,804;805;826",
+        f"{ev}accounting_policies_extract.pdf,internal_record,internal_original,2026-07-01,XJ-499",
+        f"{ev}diisr_email.pdf,correspondence,external_copy,2026-10-13,XJ-720",
+        f"{ev}smart_agency_invoice_SM0195-70135.pdf,supplier_invoice,external_copy,2026-09-05,XJ-548;BT-090-0097",
+        f"{ev}ridgeway_order_CRM08-12.pdf,agreement,external_copy,2026-10-02,XJ-647;BT-090-0092",
+        f"{ev}jakaranda_quote.pdf,internal_record,internal_copy,2026-10-08,BT-090-0099",
+    ]
+    docs = manifest_documents()
+    new = [r.split(",")[0] for r in rows[11:]]
+    assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 10  # type: ignore[call-overload]
+
+
+def test_payroll_and_adjustments_tables() -> None:
+    from backend.contracts.records import JournalEntry
+
+    assert (SUPPLEMENTS / "payroll" / "employees.csv").read_text(encoding="utf-8") == (
+        "employee_id,name,start_date,employment_type,pay_period_days,gross_per_period_cents\n"
+        "E001,Oliver Gray,2026-07-20,full_time,14,240000\n"
+        "E002,Tracy Green,2026-07-20,full_time,14,180000\n"
+        "E003,Odette Garrison,2026-07-20,full_time,14,250000\n"
+    )
+    demo_header = (REPO / "data" / "demo" / "journal_entries.csv").read_text(encoding="utf-8").splitlines()[0]
+    rows = table("adjustments/journal_entries.csv")
+    assert (SUPPLEMENTS / "adjustments" / "journal_entries.csv").read_text(encoding="utf-8").splitlines()[
+        0
+    ] == demo_header
+    assert [
+        (r["id"], r["account_code"], int(r["debit_cents"]), int(r["credit_cents"]), r["source_doc"]) for r in rows
+    ] == [
+        ("AJE-X01-1", "711", 82500, 0, "XJ-499"),
+        ("AJE-X01-2", "710", 0, 75000, "XJ-499"),
+        ("AJE-X01-3", "820", 0, 7500, "XJ-499"),
+        ("AJE-X02-1", "478", 426120, 0, "826"),
+        ("AJE-X02-2", "826", 0, 426120, "826"),
+        ("AJE-X03-1", "477", 201000, 0, "804"),
+        ("AJE-X03-2", "804", 0, 201000, "804"),
+        ("AJE-X04-1", "477", 268736, 0, "805"),
+        ("AJE-X04-2", "805", 0, 268736, "805"),
+        ("AJE-X05-1", "620", 4853, 0, "BA-091"),
+        ("AJE-X05-2", "270", 0, 4853, "BA-091"),
+    ]
+    created = {r["entry_no"]: r["created_at"] for r in rows}
+    assert created == {
+        "AJE-X01": "2026-10-20T03:00:00Z",
+        "AJE-X02": "2026-10-21T23:30:00Z",
+        "AJE-X03": "2026-10-21T23:30:00Z",
+        "AJE-X04": "2026-10-21T23:30:00Z",
+        "AJE-X05": "2026-10-20T03:00:00Z",
+    }
+    for r in rows:
+        entry = JournalEntry.model_validate({k: (v if v != "" else None) for k, v in r.items()})
+        assert (str(entry.posting_date), entry.created_by, entry.approved_by, entry.is_adjustment) == (
+            "2026-09-30",
+            "xero",
+            None,
+            True,
+        )
+        assert entry.description and entry.description.startswith(f"Audit adjustment {entry.entry_no}")
+        assert "revers" not in entry.description.lower()
+    s28 = section(doc(), "### 2.8 更正分录 (adjustments/journal_entries.csv, 全部合成)")
+    for r in rows:
+        assert f'"{r["description"]}"' in s28, r["id"]  # 每一行都是第 2.8 节写出的原句
+
+
+def test_payroll_self_check() -> None:
+    staff = table("payroll/employees.csv")
+    gross = sum(int(r["gross_per_period_cents"]) for r in staff)
+    assert gross == 670000 and gross * 3 // 10 == 201000
+    assert round(73 / 7 * 4 / 52 * (gross / 2)) == 268736  # 07-20 至 09-30 共 73 天, 周工资 3,350
+    assert round((3350000 + 201000) * 0.12) == 426120
+
+
+def test_adjustment_problems_are_reported(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    path = copy / "adjustments" / "journal_entries.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[3] = lines[3].replace(",0,7500,", ",0,7600,")  # AJE-X01 借贷不平衡
+    lines[6] = lines[6].replace("wages accrued for", "reversal of wages accrued for")
+    lines[7] = lines[7].replace(",0,201000,", ",0,200000,").replace(",201000,0,", ",200000,0,")
+    lines[6] = lines[6].replace(",201000,0,", ",200000,0,")  # AJE-X03 改成 2,000.00, 仍平衡
+    (copy / "payroll" / "employees.csv").write_text(
+        (copy / "payroll" / "employees.csv")
+        .read_text(encoding="utf-8")
+        .replace("2026-07-20,full_time,14,250000", "2026-07-13,full_time,14,250000"),
+        encoding="utf-8",
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    where = copy / "adjustments" / "journal_entries.csv"
+    staff = copy / "payroll" / "employees.csv"
+    assert [line for line in check_error(copy, tmp_path / "absent").splitlines() if "index.csv" not in line] == [
+        f"{where}: AJE-X01 借贷不平衡",
+        f"{where}: AJE-X03 各行摘要应相同",
+        f"{where}: AJE-X03 的摘要应以 Audit adjustment AJE-X03 开头且不含 revers",
+        f"{staff}: 应计工资更正额不等于每期毛工资合计 × 3 / 10",
+        f"{staff}: 年假更正额不等于按工资册推算的金额",
+    ]
+    lines[1] = lines[1].replace(",xero,,711,", ",xero,,711,x")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    generator.write_manifest(copy, zed_snapshot(tmp_path / "again"))
+    assert f"{where}: AJE-X01-1 不符合 JournalEntry (1 处)" in check_error(copy, tmp_path / "absent").splitlines()
+
+
+@needs_snapshot
+def test_adjusted_trial_balance(tmp_path: Path) -> None:
+    snapshot = generator.Snapshot(SNAPSHOT)
+    assert checker.snapshot_adjustments(SUPPLEMENTS, snapshot) == []
+    copy = copy_supplements(tmp_path)
+    path = copy / "adjustments" / "journal_entries.csv"
+    text = (
+        path.read_text(encoding="utf-8")
+        .replace(",478,426120,0,", ",478,426000,0,")
+        .replace(",826,0,426120,", ",826,0,426000,")
+    )
+    path.write_text(
+        text.replace(
+            "AJE-X05-1,AJE-X05,2026-09-30,2026-10-20T03:00:00Z,xero,,620,",
+            "AJE-X05-1,AJE-X05,2026-09-30,2026-10-20T03:00:00Z,xero,,999,",
+        ),
+        encoding="utf-8",
+    )
+    where = copy / "adjustments" / "journal_entries.csv"
+    assert checker.snapshot_adjustments(copy, snapshot) == [
+        f"{where}: 科目不在快照科目表: 999",
+        f"{where}: 更正后试算表与设计不符: 478, 620, 826",
+        f"{where}: 更正后本期损益 -2213579 不等于 -2213699",
+        f"{where}: 养老金更正额不等于 (更正前工资费用 + 应计工资) × 0.12",
+    ]
+
+
+@needs_snapshot
+def test_adjustments_must_post_at_period_end(tmp_path: Path) -> None:
+    """全部更正分录的入账日一致但不是期末时报出."""
+    copy = copy_supplements(tmp_path)
+    path = copy / "adjustments" / "journal_entries.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    moved = [lines[0], *(line.replace(",2026-09-30,", ",2026-09-29,", 1) for line in lines[1:])]
+    assert len(moved) == 12 and all(",2026-09-29," in line for line in moved[1:])
+    path.write_text("\n".join(moved) + "\n", encoding="utf-8")
+    assert checker.snapshot_adjustments(copy, generator.Snapshot(SNAPSHOT)) == [
+        f"{path}: 更正分录的入账日应为期末 2026-09-30",
+    ]
+
+
+def test_more_adjustment_problems(tmp_path: Path) -> None:
+    """前缀, 行 ID, is_adjustment, 录入人与审批人, 入账日不一; 某行不合模型时只报一次."""
+    copy = copy_supplements(tmp_path)
+    path = copy / "adjustments" / "journal_entries.csv"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines[4] = lines[4].replace("AJE-X02-1,AJE-X02", "AJE-X02-3,AJE-X02")  # 行 ID 不连续
+    lines[6] = lines[6].replace(",xero,,477,", ",alex,cfo,477,")  # 录入人与审批人
+    lines[8] = lines[8].replace(",true", ",false").replace("2026-09-30", "2026-09-29")  # 非调整分录, 入账日不同
+    lines[10] = lines[10].replace("AJE-X05-1,AJE-X05,", "ADJ-X05-1,ADJ-X05,")
+    lines[11] = lines[11].replace("AJE-X05-2,AJE-X05,", "ADJ-X05-2,ADJ-X05,")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    where = copy / "adjustments" / "journal_entries.csv"
+    got = [line for line in check_error(copy, tmp_path / "absent").splitlines() if str(where) in line]
+    assert got == [
+        f"{where}: AJE-X02 的行 ID 应为 AJE-X02-1 起连续编号",
+        f"{where}: AJE-X03 的录入人应为 xero, 审批人应为空",
+        f"{where}: AJE-X04 的 is_adjustment 应为 true",
+        f"{where}: ADJ-X05 不以 AJE- 开头",
+        f"{where}: ADJ-X05 的摘要应以 Audit adjustment ADJ-X05 开头且不含 revers",
+        f"{where}: 更正分录的入账日应全部相同 (期末)",
+    ]
+    lines[1] = lines[1].replace(",xero,,711,", ",xero,,711,x")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    generator.write_manifest(copy, zed_snapshot(tmp_path / "again"))
+    message = check_error(copy, tmp_path / "absent")
+    assert message.count("AJE-X01-1 不符合 JournalEntry") == 1  # 不在工资自检下重复报
+
+
+@needs_snapshot
+def test_expense_claim_matches_xero_entry() -> None:
+    """报销单 E003 的收据与 Xero 中这笔报销的入账分录 XJ-493 逐张对得上, 日期不晚于入账日."""
+    from datetime import date
+
+    from backend.adapters.xero_dataset import journal_entries_from_api, journal_rows
+
+    entries = journal_entries_from_api(generator.Snapshot(SNAPSHOT))  # type: ignore[arg-type]
+    claim = next(e for e in entries if e.entry_no == "XJ-493")
+    lines = [r for r in journal_rows([claim]) if r.entry_no == "XJ-493"]
+    gst = sum(r.debit_cents for r in lines if r.account_code == "820")
+    nets = sorted(r.debit_cents for r in lines if r.account_code in ("493", "420"))
+    receipts = evidence("expense_claim_E003.pdf")[1]
+    amounts = [amount(a) for a in re.findall(r"AUD ([\d,]+\.\d\d) \(", receipts)][:4]
+    gst_parts = [amount(a) for a in re.findall(r"GST AUD ([\d,]+\.\d\d) included", receipts)]
+    assert sum(gst_parts) == gst == 2631 and sum(amounts) == 29695
+    assert sorted(a - g for a, g in zip(amounts, [*gst_parts, 0], strict=True)) == nets  # 不含税额逐张相等
+    days = [int(d) for d in re.findall(r"(\d\d) Aug 2026", receipts)]
+    assert len(days) == 4 and max(date(2026, 8, d) for d in days) <= claim.posting_date == date(2026, 8, 16)

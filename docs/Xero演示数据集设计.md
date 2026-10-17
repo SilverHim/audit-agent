@@ -208,6 +208,8 @@ significant 下 REV-08 与 REV-02 窗口都是 20 天 (09-10 至 09-30), 与 hig
 
 应计工资的 SG 241.20 计入 M-2 (826), 不计入 M-4; 每笔更正分录只对应一条错报的一个科目, FIN-09 不会判成部分更正.
 
+AJE-X02 至 X04 的摘要: "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00", "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026", "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026". 同一笔的各行摘要相同. 校验脚本复算: 每笔借贷平衡, 科目都在快照科目表, 09-30 试算表加 5 笔后的各科目与本期损益 -22,136.99; 工资数据自检 (应计工资 3/10, 年假 73/7 × 4/52 × 周工资, 养老金 12%, 后两项法定原文待核 T2).
+
 AJE-X05: 与 AJE-X01 同属第 1 轮 (M-5 与 M-1 都在 P2 发现), 编号按设计先后排在 X04 之后, 不按入账先后重编 (避免改动 X02 至 X04 的全部引用). Xero 科目表没有应计收入科目, 借方用 620 Prepayments (ASS.CUR.REC.PRE, 标准分类 prepayments, 属流动资产中的应收与预付); 贷方 270 Interest Income 的标准分类是 other_income (Xero 科目类型 OTHERINCOME), 不进 PLN-01 与 PLN-19 的收入基准 (revenue_categories 只含 revenue), 重要性不变. 48.53 = 10-16 入账的利息 97.05 (BT-091-0002, XJ-718) 按计息期 09-16 至 10-15 折算到 09-30 的 15/30, 是补造回函的设定, 银行侧没有原始记录.
 
 ---
@@ -333,7 +335,7 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 14 | Harbourview 新租约 (09-22, 前 2 页) | 2 | 4.5 | GEN-03, GEN-06 |
 | 15 | RM2031 分租协议 (10-15) | 1 | 4.5 | GEN-06 |
 | 16 | 固定资产登记表 (截至 09-30) | 1 | 截至 09-30 "Nil"; 另列 "Additions after the reporting date (for information)": 10-04 家具 6,300 (710), 10-11 笔记本 1,969.99 (720) | GEN-02 (XJ-499), GEN-06 |
-| 17 | 报销单 E003 | 2 | 申请人 Odette Garrison (员工号 E003), 4 张收据合计 296.95; 系统录入时把姓误写为 "Grainger" | GEN-02 (XJ-575) |
+| 17 | 报销单 E003 | 2 | 申请人 Odette Garrison (员工号 E003), 08-14 填报, 08-16 批准; 4 张收据 (08-03 至 08-12) 合计 296.95, 逐张对上 XJ-493 (08-16 入账: 差旅 493 三行, 含税 179.00, 30.45, 80.00; 招待 420 一行 7.50, 不抵扣进项税; 进项税 26.31); 系统录入时把姓误写为 "Grainger" | GEN-02 (XJ-575) |
 | 18 | 工资册与雇佣条款 | 2 | 三人 07-20 入职全职; 双周发薪截至发薪日 (周日); 毛工资每期 Garrison 2,500, Gray 2,400, Green 1,800; 适用 NES 年假 | FIN-15 |
 | 19 | 会计政策摘录 | 1 | 资本化门槛 1,000 (不含税), 排除 Oliver 笔记本净额 886 的资本化问题 | FIN-15, FIN-12 |
 | 20 | 董事借款协议 (2018-09-10) | 2 | 4.6 | GEN-02 (XJ-397), FIN-12 |
@@ -341,7 +343,7 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 22 | 持续经营备忘录与 13 个月现金流预测 (10-16) | 3 | 4.6 | GEN-04, FIN-02 |
 | 23 | 董事支持函 (10-16) | 1 | 4.6 | GEN-04, FIN-02, GEN-06 |
 | 24 | DIISR 邮件 (10-13), 商定 1,050 让步 | 1 | 6.4 (决定 14) | GEN-06 |
-| 25 | SMART Agency 税务发票 SM0195-70135 (09-05) | 1 | 按 Xero 账单原样: "Design concepts for advertising material", 2,000 含税, 服务交付 09-04 | GEN-06; 注入测试 T3 |
+| 25 | SMART Agency 税务发票 SM0195-70135 (09-05) | 1 | 按 Xero 账单原样: "Design concepts for advertising material", 2,000 含税, 服务交付 09-04, 到期 09-19; 抬头 SMART Agency Pty Ltd, ABN 23 900 043 076 (与 T6 的合成号码相同, 基线登记 mock 中没有这家) | GEN-06; 注入测试 T3, T6 |
 | 26 | Ridgeway University 订单 CRM08-12 (10-02) | 1 | 10 月 5 日起每周 3 天驻场项目管理, 月初预开票 (对上 ORC01025) | GEN-06 |
 | 27 | Jakaranda Maple Systems 报价单 (10-08) | 1 | 新项目报价, 要求 2,000 订金 | GEN-06 |
 | 28 | financial_statements/fs_v1.pdf (10-22 编成, 10-23 董事声明) | 4 | 4.7 | FIN-12, RPT-03 |
@@ -966,7 +968,7 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 ### 8.8 T6 关联方交易未披露
 
 (a) 改动 (补造副本; 格式同 2.5 节)
-- `registry/abn.json` 加键 "23900043076": 改前不存在, 改后 {abn 23900043076, acn 900043076, entity_name SMART Agency Pty Ltd, status Active, entity_type Australian Private Company} (合成号码, 校验通过, 只用于测试).
+- `registry/abn.json` 加键 "23900043076": 改前不存在, 改后 {abn 23900043076, acn 900043076, entity_name SMART Agency Pty Ltd, status Active, entity_type Australian Private Company} (合成号码, 校验通过; 基线的 SMART Agency 发票已印此号码 (第 4 节表 #25), 基线登记 mock 中没有这家).
 - `registry/asic.json` 加键 "900043076": 改前不存在, 改后 {acn 900043076, name SMART Agency Pty Ltd, status Registered, registered_date 2021-02-01}.
 - 新增 `registry/extracts/900043076.json`: officeholders [Alex Morgan (1979-04-12) director 2021-02-01]; shareholders [Alex Morgan person ORD 40 pct 0.4, Casey Turner (化名, 与本公司无关) person ORD 60 pct 0.6]. 同名 PDF 2 页.
 - 改 `registry/persons/MORGAN-ALEX-19790412.json` 的 roles: 改前为 2.5 节的 7 项; 改后在末尾加 [900043076 director 2021-02-01, 900043076 shareholder 40], 共 9 项. 同名 PDF 重新生成, 多两行.
@@ -1106,7 +1108,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 | documents/evidence/going_concern_memo_forecast.pdf | internal_record | internal_original | 2026-10-16 | CLIENT-XERO-3C1332BB-Q1 |
 | documents/evidence/director_support_letter.pdf | correspondence | internal_original | 2026-10-16 | CLIENT-XERO-3C1332BB-Q1;BT-090-0107;BT-090-0130 |
 | documents/evidence/fixed_asset_register.pdf | internal_record | internal_original | 2026-09-30 | XJ-499;XJ-626;XJ-676 |
-| documents/evidence/expense_claim_E003.pdf | internal_record | internal_original | 2026-09-14 | E003 |
+| documents/evidence/expense_claim_E003.pdf | internal_record | internal_original | 2026-08-14 | E003 |
 | documents/evidence/payroll_register_terms.pdf | internal_record | internal_original | 2026-09-30 | 804;805;826 |
 | documents/evidence/accounting_policies_extract.pdf | internal_record | internal_original | 2026-07-01 | XJ-499 |
 | documents/evidence/diisr_email.pdf | correspondence | external_copy | 2026-10-13 | XJ-720 |

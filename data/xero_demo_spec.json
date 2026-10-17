@@ -1511,6 +1511,424 @@
           "Director and shareholder"
         ]
       ]
+    },
+    {
+      "path": "documents/evidence/fixed_asset_register.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ],
+      "footer": "Fixed asset register | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "Nil",
+        "Additions after the reporting date (for information)",
+        "6,300.00",
+        "1,969.99"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "FIXED ASSET REGISTER",
+          "As at 30 September 2026",
+          "Prepared by: Alex Morgan, Director, 16 October 2026",
+          "",
+          "Assets held at 30 September 2026",
+          "",
+          "Asset     Description                          Account  Cost (AUD)  Carrying amount (AUD)",
+          "Nil       The Company held no capitalised office equipment, furniture or computer",
+          "          equipment at 30 September 2026. Items below the capitalisation threshold",
+          "          (accounting policy 1.1) are expensed and are not recorded in this register.",
+          "",
+          "Total cost at 30 September 2026:                                Nil",
+          "Total carrying amount at 30 September 2026:                     Nil",
+          "",
+          "Additions after the reporting date (for information)",
+          "",
+          "Date         Supplier       Description                        Account  Cost excl GST (AUD)",
+          "04 Oct 2026  ABC Furniture  Desks, chairs, reception furniture   710             6,300.00",
+          "11 Oct 2026  PC Complete    Laptop for Tracy Green               720             1,969.99",
+          "",
+          "These items were bought after 30 September 2026 and are not assets at that date."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/expense_claim_E003.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-08-14",
+      "related_ids": [
+        "E003"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Expense claim E003 | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "Odette Garrison",
+        "E003",
+        "296.95"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "EMPLOYEE EXPENSE CLAIM",
+          "",
+          "Employee name:    Odette Garrison",
+          "Employee number:  E003",
+          "Date of claim:    14 August 2026",
+          "Purpose:          Travel to client sites and a client meeting, August 2026",
+          "",
+          "Receipts attached (see page 2)",
+          "",
+          "No.  Date         Supplier                Description               Amount incl GST (AUD)",
+          "1    03 Aug 2026  Coastline Coaches       Return coach fare, Sydney               179.00",
+          "2    05 Aug 2026  Marineville Taxis       Taxi to client site                      30.45",
+          "3    10 Aug 2026  Central City Parking    Parking at client site, 2 days           80.00",
+          "4    12 Aug 2026  Harbour Cafe            Morning tea, client meeting               7.50",
+          "                                          Total claimed                           296.95",
+          "                                          GST included                             26.31",
+          "",
+          "Declaration: I incurred these expenses for the Company's business and have not claimed",
+          "them elsewhere.",
+          "",
+          "Signed: Odette Garrison                   Date: 14 August 2026",
+          "",
+          "Approved for payment: Alex Morgan, Director    Date: 16 August 2026",
+          "Payment method: electronic funds transfer to the employee's nominated account"
+        ],
+        [
+          "RECEIPTS - EXPENSE CLAIM OF ODETTE GARRISON (E003), 14 AUGUST 2026",
+          "",
+          "Receipt 1 - Coastline Coaches, 03 Aug 2026",
+          "  Return coach fare, Marineville to Sydney        AUD 179.00 (GST AUD 16.27 included)",
+          "",
+          "Receipt 2 - Marineville Taxis, 05 Aug 2026",
+          "  Fare, 23 Main Street to client site             AUD 30.45 (GST AUD 2.77 included)",
+          "",
+          "Receipt 3 - Central City Parking, 10 Aug 2026",
+          "  Parking at client site, 2 days                  AUD 80.00 (GST AUD 7.27 included)",
+          "",
+          "Receipt 4 - Harbour Cafe, 12 Aug 2026",
+          "  Morning tea for client meeting                  AUD 7.50 (entertainment, no GST claimed)",
+          "",
+          "Total of receipts                                 AUD 296.95 (GST AUD 26.31)"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/payroll_register_terms.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "804",
+        "805",
+        "826"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "804",
+        "805",
+        "826"
+      ],
+      "footer": "Payroll register and terms | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "2,500.00",
+        "2,400.00",
+        "1,800.00",
+        "20 Jul 2026",
+        "National Employment Standards"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "PAYROLL REGISTER - 1 JULY 2026 TO 30 SEPTEMBER 2026",
+          "Prepared by: Alex Morgan, Director, 30 September 2026",
+          "",
+          "Employees",
+          "ID    Name             Start date   Employment  Pay frequency  Gross per period (AUD)",
+          "E001  Oliver Gray      20 Jul 2026  Full-time   Fortnightly                  2,400.00",
+          "E002  Tracy Green      20 Jul 2026  Full-time   Fortnightly                  1,800.00",
+          "E003  Odette Garrison  20 Jul 2026  Full-time   Fortnightly                  2,500.00",
+          "                                                Total per pay period         6,700.00",
+          "",
+          "Each pay period is 14 days and ends on the pay day, a Sunday. The first pay period ran",
+          "from 20 July 2026 to 2 August 2026.",
+          "",
+          "Pay runs",
+          "Pay day      Period                    Gross (AUD)  PAYG withheld (AUD)  Net paid (AUD)",
+          "02 Aug 2026  20 Jul - 02 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "16 Aug 2026  03 Aug - 16 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "30 Aug 2026  17 Aug - 30 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "13 Sep 2026  31 Aug - 13 Sep 2026         6,700.00             1,507.00        5,193.00",
+          "27 Sep 2026  14 Sep - 27 Sep 2026         6,700.00             1,507.00        5,193.00",
+          "Total                                    33,500.00             7,535.00       25,965.00",
+          "",
+          "The next pay day is 11 October 2026 for the period 28 September to 11 October 2026."
+        ],
+        [
+          "TERMS OF EMPLOYMENT (SUMMARY) - ALL EMPLOYEES",
+          "",
+          "1. Employment type: full-time, 38 hours per week, Monday to Friday.",
+          "2. Pay: fortnightly in arrears, on the Sunday that ends each 14-day pay period, by",
+          "   electronic funds transfer.",
+          "3. Annual leave: 4 weeks of paid annual leave for each year of service under the",
+          "   National Employment Standards, accruing progressively from the start date.",
+          "4. Superannuation: the Company pays superannuation guarantee contributions for each",
+          "   employee each quarter.",
+          "5. Tax: the Company withholds PAYG from each pay and remits it to the Australian",
+          "   Taxation Office.",
+          "",
+          "Acknowledged by each employee on their start date, 20 July 2026:",
+          "Oliver Gray (E001), Tracy Green (E002), Odette Garrison (E003)"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/accounting_policies_extract.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-07-01",
+      "related_ids": [
+        "XJ-499"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "XJ-499"
+      ],
+      "footer": "Accounting policies | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "net of any trade discount or supplier credit, is AUD 1,000 or more"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "ACCOUNTING POLICIES (EXTRACT)",
+          "Approved by the director, 1 July 2026",
+          "",
+          "1. Property, plant and equipment",
+          "1.1 Items of office equipment, furniture and computer equipment are capitalised when",
+          "their cost, net of any trade discount or supplier credit, is AUD 1,000 or more,",
+          "excluding GST. Items costing less are expensed when bought.",
+          "1.2 Capitalised items are depreciated on a straight-line basis from the date they are",
+          "ready for use: office equipment over 5 years, furniture over 10 years and computer",
+          "equipment over 3 years.",
+          "",
+          "2. Revenue",
+          "2.1 Revenue is recognised as each contract's performance obligations are satisfied:",
+          "monthly support fees in the month in which the support is provided; development work",
+          "when it is complete and accepted under the contract; training when it is delivered;",
+          "and on-site project management for each on-site day as it is provided.",
+          "",
+          "3. Expenses",
+          "3.1 Expenses are recorded when incurred, on the basis of the supplier's tax invoice or",
+          "the employee's approved expense claim."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/diisr_email.pdf",
+      "type": "correspondence",
+      "reliability": "external_copy",
+      "document_date": "2026-10-13",
+      "related_ids": [
+        "XJ-720"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "XJ-720"
+      ],
+      "footer": "Email | DIISR - Small Business Services",
+      "keywords": [
+        "13 October 2026",
+        "1,050.00"
+      ],
+      "pages": [
+        [
+          "EMAIL",
+          "",
+          "From:     Priya Natarajan, Project Sponsor, DIISR - Small Business Services",
+          "          <priya.natarajan@diisr.example>",
+          "To:       Alex Morgan <alex.morgan@demo-company.example>",
+          "Date:     13 October 2026, 2:15 pm",
+          "Subject:  Portal programme - price concession on ORC1026",
+          "",
+          "Hi Alex,",
+          "",
+          "Thanks for meeting with us this morning about the next stage of the portal programme.",
+          "",
+          "As agreed, the Department will accept a price concession of AUD 1,050.00 plus GST on",
+          "invoice ORC1026 for the portal module, as part of our agreement to continue with you for",
+          "the next stage. The concession is a commercial arrangement agreed today. The module was",
+          "deployed and the completion certificate was signed on 17 September 2026, and we have no",
+          "issues with the work delivered.",
+          "",
+          "Please send us a credit note for AUD 1,155.00 including GST. We will pay the balance of",
+          "ORC1026 net of the credit.",
+          "",
+          "Regards,",
+          "Priya Natarajan",
+          "Project Sponsor",
+          "DIISR - Small Business Services"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+      "type": "supplier_invoice",
+      "reliability": "external_copy",
+      "document_date": "2026-09-05",
+      "related_ids": [
+        "XJ-548",
+        "BT-090-0097"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "XJ-548",
+        "BT-090-0097"
+      ],
+      "footer": "SMART Agency Pty Ltd | Tax invoice SM0195-70135",
+      "keywords": [
+        "Design concepts for advertising material",
+        "2,000.00",
+        "4 September 2026"
+      ],
+      "pages": [
+        [
+          "SMART AGENCY PTY LTD",
+          "ABN 23 900 043 076",
+          "",
+          "TAX INVOICE",
+          "",
+          "Invoice number:  SM0195-70135",
+          "Invoice date:    5 September 2026",
+          "Due date:        19 September 2026",
+          "",
+          "To: Demo Company (AU) Pty Ltd",
+          "    23 Main Street, Marineville NSW 2000",
+          "",
+          "Description                                        Service delivered   Amount (AUD)",
+          "Design concepts for advertising material           4 September 2026        1,818.18",
+          "                                                   GST                       181.82",
+          "                                                   Total (GST inclusive)   2,000.00",
+          "",
+          "Payment terms: 14 days. Please quote the invoice number with your payment."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/ridgeway_order_CRM08-12.pdf",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "document_date": "2026-10-02",
+      "related_ids": [
+        "XJ-647",
+        "BT-090-0092"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "XJ-647",
+        "BT-090-0092"
+      ],
+      "footer": "Ridgeway University | Purchase order CRM08-12",
+      "keywords": [
+        "3 days per week",
+        "5 October 2026",
+        "in advance"
+      ],
+      "pages": [
+        [
+          "RIDGEWAY UNIVERSITY",
+          "Procurement Office",
+          "",
+          "PURCHASE ORDER CRM08-12",
+          "",
+          "Date:      2 October 2026",
+          "Supplier:  Demo Company (AU) Pty Ltd, 23 Main Street, Marineville NSW 2000",
+          "",
+          "Description",
+          "Onsite project management for the CRM Project, 3 days per week on site at the",
+          "University, starting on 5 October 2026 and continuing to 18 December 2026.",
+          "",
+          "Fees",
+          "AUD 5,625.00 plus GST per calendar month. The supplier will invoice each month in",
+          "advance at the start of the month. Payment within 10 days of the invoice date.",
+          "",
+          "Authorised by: Hannah Okoro, Procurement Officer        Date: 2 October 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/jakaranda_quote.pdf",
+      "type": "internal_record",
+      "reliability": "internal_copy",
+      "document_date": "2026-10-08",
+      "related_ids": [
+        "BT-090-0099"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [
+        "BT-090-0099"
+      ],
+      "footer": "Quotation Q-2026-014 | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "8 October 2026",
+        "deposit of AUD 2,000.00"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "QUOTATION Q-2026-014 (file copy)",
+          "",
+          "Date:      8 October 2026",
+          "Customer:  Jakaranda Maple Systems",
+          "Project:   Inventory system integration (new project)",
+          "",
+          "Description                                   Quantity   Rate (AUD)   Amount (AUD)",
+          "Integration development, developer days             16       650.00      10,400.00",
+          "                                              Total (excluding GST)      10,400.00",
+          "",
+          "Terms",
+          "- A deposit of AUD 2,000.00 is payable on acceptance of this quotation. Work starts",
+          "  when the deposit is received.",
+          "- The balance is invoiced on completion of the project.",
+          "- This quotation is valid for 30 days.",
+          "",
+          "Prepared by: Alex Morgan, Director"
+        ]
+      ]
     }
   ],
   "contract_links": [
@@ -1757,8 +2175,188 @@
       "receipt_channel": "direct_email"
     }
   },
-  "payroll": [],
-  "adjustments": [],
+  "payroll": [
+    {
+      "employee_id": "E001",
+      "name": "Oliver Gray",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 240000
+    },
+    {
+      "employee_id": "E002",
+      "name": "Tracy Green",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 180000
+    },
+    {
+      "employee_id": "E003",
+      "name": "Odette Garrison",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 250000
+    }
+  ],
+  "adjustments": [
+    {
+      "id": "AJE-X01-1",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "711",
+      "debit_cents": 82500,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X01-2",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "710",
+      "debit_cents": 0,
+      "credit_cents": 75000,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X01-3",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "820",
+      "debit_cents": 0,
+      "credit_cents": 7500,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X02-1",
+      "entry_no": "AJE-X02",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "478",
+      "debit_cents": 426120,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+      "source_doc": "826",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X02-2",
+      "entry_no": "AJE-X02",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "826",
+      "debit_cents": 0,
+      "credit_cents": 426120,
+      "description": "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+      "source_doc": "826",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X03-1",
+      "entry_no": "AJE-X03",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "477",
+      "debit_cents": 201000,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026",
+      "source_doc": "804",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X03-2",
+      "entry_no": "AJE-X03",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "804",
+      "debit_cents": 0,
+      "credit_cents": 201000,
+      "description": "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026",
+      "source_doc": "804",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X04-1",
+      "entry_no": "AJE-X04",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "477",
+      "debit_cents": 268736,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026",
+      "source_doc": "805",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X04-2",
+      "entry_no": "AJE-X04",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "805",
+      "debit_cents": 0,
+      "credit_cents": 268736,
+      "description": "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026",
+      "source_doc": "805",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X05-1",
+      "entry_no": "AJE-X05",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "620",
+      "debit_cents": 4853,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",
+      "source_doc": "BA-091",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X05-2",
+      "entry_no": "AJE-X05",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "270",
+      "debit_cents": 0,
+      "credit_cents": 4853,
+      "description": "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",
+      "source_doc": "BA-091",
+      "is_adjustment": true
+    }
+  ],
   "financial_statements": {},
   "manual": {},
   "notes": "Synthetic – for demonstration only. Supplements for the Xero Demo Company (AU) snapshot 20261017-q1; the snapshot itself is never modified. Bank names NAB, National Australia Bank, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data: both bank accounts are held with Wattlebrook Bank Limited (fictitious). People are pseudonyms; the Xero login contact is never copied: only the check script reads it, in memory, to confirm it appears in no file."

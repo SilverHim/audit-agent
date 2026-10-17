@@ -1,0 +1,12 @@
+id,entry_no,posting_date,created_at,created_by,approved_by,account_code,debit_cents,credit_cents,description,source_doc,is_adjustment
+AJE-X01-1,AJE-X01,2026-09-30,2026-10-20T03:00:00Z,xero,,711,82500,0,Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026,XJ-499,true
+AJE-X01-2,AJE-X01,2026-09-30,2026-10-20T03:00:00Z,xero,,710,0,75000,Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026,XJ-499,true
+AJE-X01-3,AJE-X01,2026-09-30,2026-10-20T03:00:00Z,xero,,820,0,7500,Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026,XJ-499,true
+AJE-X02-1,AJE-X02,2026-09-30,2026-10-21T23:30:00Z,xero,,478,426120,0,"Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",826,true
+AJE-X02-2,AJE-X02,2026-09-30,2026-10-21T23:30:00Z,xero,,826,0,426120,"Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",826,true
+AJE-X03-1,AJE-X03,2026-09-30,2026-10-21T23:30:00Z,xero,,477,201000,0,Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026,804,true
+AJE-X03-2,AJE-X03,2026-09-30,2026-10-21T23:30:00Z,xero,,804,0,201000,Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026,804,true
+AJE-X04-1,AJE-X04,2026-09-30,2026-10-21T23:30:00Z,xero,,477,268736,0,Audit adjustment AJE-X04: annual leave accrued to 30 September 2026,805,true
+AJE-X04-2,AJE-X04,2026-09-30,2026-10-21T23:30:00Z,xero,,805,0,268736,Audit adjustment AJE-X04: annual leave accrued to 30 September 2026,805,true
+AJE-X05-1,AJE-X05,2026-09-30,2026-10-20T03:00:00Z,xero,,620,4853,0,"Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",BA-091,true
+AJE-X05-2,AJE-X05,2026-09-30,2026-10-20T03:00:00Z,xero,,270,0,4853,"Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",BA-091,true

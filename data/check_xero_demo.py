@@ -17,7 +17,7 @@ import json
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -36,6 +36,7 @@ from backend.contracts.models import (
     ReceiptChannel,
     RiskItem,
 )
+from backend.contracts.records import JournalEntry
 
 REPO = gen.ROOT.parent
 CHANNELS = frozenset(c.value for c in ReceiptChannel)
@@ -102,6 +103,8 @@ def check(
         *guarded(directory / "confirmations", check_confirmation_text, directory),
         *guarded(directory / "documents" / "index.csv", check_index, directory, manifest),
         *guarded(directory, check_keywords, directory),
+        *guarded(directory / "adjustments" / "journal_entries.csv", check_adjustments, directory),
+        *guarded(directory / "payroll" / "employees.csv", check_payroll, directory),
         *guarded(directory, check_pdf_content, directory, manifest),
     ]
     notes: list[str] = []
@@ -419,8 +422,8 @@ def check_registry(directory: Path) -> list[str]:
     ]
     profile = read_json(directory / "client_profile.json")
     if isinstance(profile, dict):
-        record = abns.get(str(profile.get("abn")))
-        if record is None or record.entity_name != profile.get("legal_name"):
+        abn = abns.get(str(profile.get("abn")))
+        if abn is None or abn.entity_name != profile.get("legal_name"):
             problems.append(f"{rel(directory / 'client_profile.json')}: 画像的 ABN 与法定名称不在 abn.json 中")
     numbers = [*abns, *(r.abn for r in abns.values())]
     companies = [*asics, *extracts, *(r.acn for r in abns.values() if r.acn)]
@@ -503,8 +506,8 @@ def check_pdf_content(directory: Path, manifest: dict[str, Any]) -> list[str]:
         texts = pdf_pages(path)
         if isinstance(data, dict) and texts:
             keys = [data["name"], gen.spaced_acn(data["acn"]), gen.long_date(data["registered_date"])]
-            pages = [n for n, t in enumerate(texts, 1) if not all(k in normalize_case(t) for k in keys)]
-            if len(texts) != 2 or pages:
+            bad = [n for n, t in enumerate(texts, 1) if not all(k in normalize_case(t) for k in keys)]
+            if len(texts) != 2 or bad:
                 problems.append(f"{rel(path)}: 应为 2 页且每页含名称, ACN 与注册日")
     for path in sorted((directory / "registry" / "persons").glob("*.pdf")):
         data = read_json(path.with_suffix(".json"))
@@ -541,6 +544,7 @@ TABLES = {
     "delivery_notes.csv": ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"],
     "bank_accounts.csv": ["id", "bank_name", "bsb", "account_no", "gl_account_code"],
     "documents/index.csv": ["path", "document_type", "reliability", "document_date", "related_ids"],
+    "adjustments/journal_entries.csv": list(JournalEntry.model_fields),
     "payroll/employees.csv": [
         "employee_id",
         "name",
@@ -670,7 +674,7 @@ XERO_REF = re.compile(r"(?:XJ|BT|SI|BA)-|\d+$")  # 由快照核对的关联对�
 EMPLOYEE = re.compile(r"E\d{3}$")  # 员工号, 对照 payroll/employees.csv
 
 
-def related(row: dict[str, str | None]) -> list[str]:
+def related(row: Mapping[str, str | None]) -> list[str]:
     return [x for x in (row.get("related_ids") or "").split(";") if x]
 
 
@@ -727,6 +731,111 @@ def check_keywords(directory: Path) -> list[str]:
     return problems
 
 
+ACCRUED_DAYS = (3, 10)  # 09-28 至 09-30 为下一个 10 个工作日发薪期中的 3 天
+LEAVE_WEEKS_PER_YEAR = 4  # 年假每年 4 周 (NES, 法定原文待核 T2)
+SG_RATE = Decimal("0.12")  # 养老金费率 (法定原文待核 T2)
+# 以上三项是工资数据自检的口径 (第 5.5 节 F03 至 F05), 只核数据, 不实现 FIN-15
+EXPECTED_AFTER_ADJUSTMENTS = {
+    "710": 0,
+    "711": 0,
+    "820": -126697,
+    "826": -426120,
+    "804": -201000,
+    "805": -268736,
+    "477": 3819736,
+    "478": 426120,
+    "620": 4853,
+    "270": -4853,
+}  # 09-30 试算表加 5 笔更正后的余额 (借正贷负, 第 3.2, 4.7 节)
+PROFIT_AFTER_ADJUSTMENTS = -2213699  # 更正后本期损益 (亏损 22,136.99)
+ADJUSTMENT_CREATED_BY = "xero"  # 更正分录的录入人, 同载入器; 实际录入人写在摘要里 (第 2.8 节)
+
+
+def adjustment_entries(directory: Path) -> list[JournalEntry] | None:
+    """读更正分录 CSV 为 JournalEntry (空串按 None); 文件不存在时为 None, 某行不合模型时抛 CheckError."""
+    rows = read_table(directory, "adjustments/journal_entries.csv")
+    if rows is None:
+        return None
+    entries: list[JournalEntry] = []
+    for row in rows:
+        try:
+            entries.append(JournalEntry.model_validate({k: (v if v != "" else None) for k, v in row.items()}))
+        except ValidationError as error:
+            raise CheckError(
+                f"{rel(directory / 'adjustments' / 'journal_entries.csv')}: {row.get('id')} 不符合 JournalEntry "
+                f"({error.error_count()} 处)"
+            ) from None
+    return entries
+
+
+def check_adjustments(directory: Path) -> list[str]:
+    """更正分录 (第 2.8 节共同字段): 每行合 JournalEntry; 每笔借贷平衡; entry_no 以数据集声明的前缀开头; 行 ID 为
+    {entry_no}-{n}; 都是调整分录; 录入人 xero (同载入器), 审批人为空; 全部同一个入账日 (快照比对时再核为期末);
+    同一笔各行摘要相同, 以 "Audit adjustment {entry_no}" 开头且不含 revers 字样."""
+    entries = adjustment_entries(directory)
+    if entries is None:
+        return []
+    where = rel(directory / "adjustments" / "journal_entries.csv")
+    traits = read_json(directory / "dataset_traits.json")
+    prefix = traits.get("audit_adjustment_entry_prefix", "AJE-") if isinstance(traits, dict) else "AJE-"
+    problems: list[str] = []
+    groups: dict[str, list[JournalEntry]] = {}
+    for line in entries:
+        groups.setdefault(line.entry_no, []).append(line)
+    for no, lines in groups.items():
+        if sum(x.debit_cents - x.credit_cents for x in lines) != 0:
+            problems.append(f"{where}: {no} 借贷不平衡")
+        if not no.startswith(prefix):
+            problems.append(f"{where}: {no} 不以 {prefix} 开头")
+        if [x.id for x in lines] != [f"{no}-{n}" for n in range(1, len(lines) + 1)]:
+            problems.append(f"{where}: {no} 的行 ID 应为 {no}-1 起连续编号")
+        if not all(x.is_adjustment for x in lines):
+            problems.append(f"{where}: {no} 的 is_adjustment 应为 true")
+        if any(x.created_by != ADJUSTMENT_CREATED_BY or x.approved_by is not None for x in lines):
+            problems.append(f"{where}: {no} 的录入人应为 {ADJUSTMENT_CREATED_BY}, 审批人应为空")
+        texts = {x.description or "" for x in lines}
+        if len(texts) != 1:
+            problems.append(f"{where}: {no} 各行摘要应相同")
+        if not all(t.startswith(f"Audit adjustment {no}") and "revers" not in t.lower() for t in texts):
+            problems.append(f"{where}: {no} 的摘要应以 Audit adjustment {no} 开头且不含 revers")
+    if len({x.posting_date for x in entries}) > 1:
+        problems.append(f"{where}: 更正分录的入账日应全部相同 (期末)")
+    return problems
+
+
+def credited(entries: list[JournalEntry], codes: list[str]) -> int:
+    return sum(x.credit_cents - x.debit_cents for x in entries if x.account_code in codes)
+
+
+def check_payroll(directory: Path) -> list[str]:
+    """工资数据自检: 应计工资 = 每期毛工资合计 × 3 / 10; 年假 = 入职日至期末的天数 / 7 × 4 / 52 × 周工资 (四舍五入);
+    分别等于更正分录贷记应付工资与年假准备科目的金额 (科目取数据集声明的 payroll_accounts)."""
+    staff = read_table(directory, "payroll/employees.csv")
+    try:
+        entries = adjustment_entries(directory)
+    except CheckError:
+        return []  # 更正分录格式问题由 check_adjustments 报
+    traits = read_json(directory / "dataset_traits.json")
+    if not staff or entries is None or not isinstance(traits, dict):
+        return []
+    accounts = traits["payroll_accounts"]
+    where = rel(directory / "payroll" / "employees.csv")
+    period_end = max(x.posting_date for x in entries)
+    gross = sum(int(r["gross_per_period_cents"]) for r in staff)
+    days, of = ACCRUED_DAYS
+    problems: list[str] = []
+    if credited(entries, accounts["wages_payable"]) != gross * days // of:
+        problems.append(f"{where}: 应计工资更正额不等于每期毛工资合计 × {days} / {of}")
+    leave = Decimal(0)
+    for r in staff:
+        employed = (period_end - date.fromisoformat(r["start_date"])).days + 1
+        weekly = Decimal(int(r["gross_per_period_cents"])) * 7 / int(r["pay_period_days"])
+        leave += Decimal(employed) / 7 * LEAVE_WEEKS_PER_YEAR / 52 * weekly
+    if credited(entries, accounts["leave_provision"]) != int(leave.quantize(Decimal(1), ROUND_HALF_UP)):
+        problems.append(f"{where}: 年假更正额不等于按工资册推算的金额")
+    return problems
+
+
 SNAPSHOT_TABLE_FILES = ("dataset", "invoices", "accounts", "bank_statements")  # 补造表与快照核对要读的快照文件
 
 
@@ -753,6 +862,7 @@ def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
         (directory / "manifest.json", snapshot_refs, (directory, snapshot)),
         (gen.SPEC, snapshot_confirmations, (snapshot, period[1])),
         (directory / "documents" / "index.csv", snapshot_related, (directory, snapshot)),
+        (directory / "adjustments" / "journal_entries.csv", snapshot_adjustments, (directory, snapshot)),
     ]
     return [problem for where, step, args in steps for problem in guarded(where, step, *args)]
 
@@ -819,6 +929,46 @@ def snapshot_related(directory: Path, snapshot: gen.Snapshot) -> list[str]:
         where = rel(directory / "documents" / "index.csv")
         return [f"{where}: 关联对象在快照中找不到: {', '.join(sorted(set(missing)))}"]
     return []
+
+
+def snapshot_adjustments(directory: Path, snapshot: gen.Snapshot) -> list[str]:
+    """更正分录与快照: 科目都在快照科目表; 期末试算表加更正后各科目等于 EXPECTED_AFTER_ADJUSTMENTS,
+    本期损益等于 PROFIT_AFTER_ADJUSTMENTS; 养老金更正额 = (更正前工资费用 + 应计工资) × 费率."""
+    from backend.adapters.xero_dataset import map_accounts, trial_balance_cents
+
+    try:
+        entries = adjustment_entries(directory)
+    except CheckError:
+        return []  # 格式问题由 check_adjustments 报
+    if not entries:
+        return []
+    where = rel(directory / "adjustments" / "journal_entries.csv")
+    problems: list[str] = []
+    period_end = date.fromisoformat(snapshot.load("dataset")["period_end"])
+    if any(x.posting_date != period_end for x in entries):
+        problems.append(f"{where}: 更正分录的入账日应为期末 {period_end}")
+    accounts = {a.code: a for a in map_accounts(snapshot.load("accounts"))}
+    unknown = sorted({x.account_code for x in entries} - accounts.keys())
+    if unknown:
+        problems.append(f"{where}: 科目不在快照科目表: {', '.join(unknown)}")
+    before = trial_balance_cents(snapshot.load(f"trial_balance_{period_end.isoformat()}"))
+    after = Counter(before)
+    for x in entries:
+        after[x.account_code] += x.debit_cents - x.credit_cents
+    wrong = sorted(code for code, cents in EXPECTED_AFTER_ADJUSTMENTS.items() if after.get(code, 0) != cents)
+    if wrong:
+        problems.append(f"{where}: 更正后试算表与设计不符: {', '.join(wrong)}")
+    profit = -sum(c for code, c in after.items() if code in accounts and accounts[code].type in ("revenue", "expense"))
+    if profit != PROFIT_AFTER_ADJUSTMENTS:
+        problems.append(f"{where}: 更正后本期损益 {profit} 不等于 {PROFIT_AFTER_ADJUSTMENTS}")
+    traits = read_json(directory / "dataset_traits.json")
+    if isinstance(traits, dict):
+        pay = traits["payroll_accounts"]
+        wages = sum(before.get(code, 0) for code in pay["wages_expense"]) + credited(entries, pay["wages_payable"])
+        sg = int((Decimal(wages) * SG_RATE).quantize(Decimal(1), ROUND_HALF_UP))
+        if credited(entries, pay["super_payable"]) != sg:
+            problems.append(f"{where}: 养老金更正额不等于 (更正前工资费用 + 应计工资) × {SG_RATE}")
+    return problems
 
 
 def snapshot_confirmations(snapshot: gen.Snapshot, period_end: date) -> list[str]:
