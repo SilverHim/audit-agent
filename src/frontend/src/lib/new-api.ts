@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { client } from '@/client/client.gen'
-import type { AcceptanceScorecard, AuditException, ClientProfile, EvidencePointer } from '@/client/types.gen'
+import type {
+  AcceptanceScorecard,
+  AuditException,
+  ClientProfile,
+  ConciergeCitation,
+  ConciergeQuestion,
+} from '@/client/types.gen'
 import { getToken } from '@/lib/auth'
 import { invalidateEngagement } from '@/lib/engagement'
 
@@ -137,29 +143,7 @@ export function useTestLlmSlot() {
   })
 }
 
-// R7, R8 审计助理问答
-export type CitationKind = 'judgment' | 'procedure' | 'evidence' | 'trail'
-export type ConciergeCitation = { kind: CitationKind; id: string; label: string; pointer?: EvidencePointer | null }
-export type ConversationTurn = {
-  question: string
-  answer: string
-  lang: 'zh' | 'en'
-  citations: ConciergeCitation[]
-  trail_id?: string
-  created_at?: string | null
-}
-
-export function conversationKey(eid: string) {
-  return [{ _id: 'conversationListConversation', path: { eid } }] as const
-}
-
-export function useConversation(eid: string) {
-  return useQuery({
-    queryKey: conversationKey(eid),
-    queryFn: () => orEmpty(call<ConversationTurn[]>('get', '/api/v1/engagements/{eid}/conversation', { eid }), []),
-  })
-}
-
+// 审计助理问答: 历史与一次性问答用生成的客户端; 流式接口返回 text/event-stream, 生成的客户端不读事件流, 这里用 fetch 读
 type StreamHandlers = {
   onDelta: (text: string) => void
   onCitations: (citations: ConciergeCitation[]) => void
@@ -169,7 +153,7 @@ type StreamHandlers = {
 // 事件流: tool (正在查什么, 可多次), delta (多次), citations, done; 出错时 error. EventSource 不能带登录令牌, 用 fetch 读
 export async function streamConcierge(
   eid: string,
-  body: { question: string; lang: 'zh' | 'en' },
+  body: ConciergeQuestion,
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<{ trail_id: string | null }> {

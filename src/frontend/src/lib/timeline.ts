@@ -1,5 +1,4 @@
-import type { GateId, Phase, TrailEntry } from '@/client/types.gen'
-import type { ConciergeCitation } from '@/lib/new-api'
+import type { ConciergeCitation, GateId, Phase, TrailEntry } from '@/client/types.gen'
 
 // 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
 

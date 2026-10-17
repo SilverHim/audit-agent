@@ -553,6 +553,7 @@ export const zh: Messages = {
     sources: '信息来源',
     failed: '审计助理暂时无法回答，请重试。',
     busy: '审计助理还在回答上一个问题，请稍后再问。',
+    settings: '模型设置有问题，请到设置页检查后再问。',
     looking: (label) => `正在查看${label}…`,
     aborted: '回答未完成',
   },

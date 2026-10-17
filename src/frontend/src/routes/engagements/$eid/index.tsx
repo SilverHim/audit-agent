@@ -8,7 +8,7 @@ import {
   reviewsListExceptionsOptions,
   reviewsListReviewTasksOptions,
 } from '@/client/@tanstack/react-query.gen'
-import type { EngagementOverview, GateView } from '@/client/types.gen'
+import type { ConciergeCitation, EngagementOverview, GateView } from '@/client/types.gen'
 import { Code, StatusPill } from '@/components/chrome'
 import {
   ConciergeMessage,
@@ -28,14 +28,7 @@ import { decisionsDisabled } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
-import {
-  type ConciergeCitation,
-  deferralKey,
-  NotAvailable,
-  streamConcierge,
-  useDeferrals,
-  useSetDeferral,
-} from '@/lib/new-api'
+import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
 import { type RankedTask, rankTasks } from '@/lib/review'
 import { buildTimeline, type TimelineItem } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
@@ -178,12 +171,7 @@ function Workspace() {
       if (local) update({ answer: local, status: 'done' })
       else
         update({
-          answer:
-            error instanceof NotAvailable
-              ? t.ask.failed
-              : isApiCode(error, 'CONVERSATION_BUSY')
-                ? t.ask.busy
-                : apiMessage(error),
+          answer: error instanceof NotAvailable ? t.ask.failed : askFailure(error, t),
           status: 'failed',
         })
     }
@@ -281,6 +269,13 @@ function Workspace() {
       <Composer onAsk={ask} busy={turns.some((turn) => turn.status === 'streaming')} eid={eid} />
     </div>
   )
+}
+
+// 问答失败的提示: 正在回答上一个问题, 模型设置有问题, 其余 (模型不可用, 上下文超长等) 一律请稍后重试
+function askFailure(error: unknown, t: Messages): string {
+  if (isApiCode(error, 'CONVERSATION_BUSY')) return t.ask.busy
+  if (isApiCode(error, 'SETTINGS_KEY_MISSING') || isApiCode(error, 'SETTINGS_KEY_INVALID')) return t.ask.settings
+  return t.ask.failed
 }
 
 function formatYearEnd(overview: EngagementOverview, lang: 'zh' | 'en'): string {

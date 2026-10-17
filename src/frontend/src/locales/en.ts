@@ -582,6 +582,7 @@ export const en = {
     sources: 'Sources',
     failed: 'Concierge could not answer. Try again.',
     busy: 'Concierge is still answering the previous question. Ask again shortly.',
+    settings: 'The model settings need attention. Check the settings page, then ask again.',
     looking: (label: string) => `Looking at ${label}…`,
     aborted: 'Answer not completed',
   },
