@@ -26,6 +26,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ReviewRecord,
     ReviewTask,
+    ReviewTier,
     UncorrectedSchedule,
 )
 
@@ -114,12 +115,14 @@ class ClientProfileView(Model):
 
 
 class ReviewTaskView(Model):
-    """复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定."""
+    """复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定, 涉及金额与复核档位."""
 
     task: ReviewTask
     procedure_name: str
     target: Judgment | AuditException | ProcedureRun
     allowed_decisions: list[Decision]
+    amount_cents: int | None  # 涉及金额, 保留正负号; 取值顺序见 services.review_queue.task_amount
+    tier: ReviewTier  # 复核档位, 按金额绝对值与置信度判定 (services.review_queue.review_tier)
 
 
 class ProcedureDetail(Model):

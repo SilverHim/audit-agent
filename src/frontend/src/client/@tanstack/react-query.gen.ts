@@ -253,7 +253,8 @@ export const reviewsListReviewTasksQueryKey = (options: Options<ReviewsListRevie
 /**
  * List Review Tasks
  *
- * status 省略时返回全部. allowed_decisions 取 ReviewQueue.allowed.
+ * status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
+ * amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
  */
 export const reviewsListReviewTasksOptions = (options: Options<ReviewsListReviewTasksData>) => queryOptions<ReviewsListReviewTasksResponse, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReturnType<typeof reviewsListReviewTasksQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

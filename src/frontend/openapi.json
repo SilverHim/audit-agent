@@ -480,7 +480,7 @@
           "reviews"
         ],
         "summary": "List Review Tasks",
-        "description": "status 省略时返回全部. allowed_decisions 取 ReviewQueue.allowed.",
+        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.",
         "operationId": "reviews-list_review_tasks",
         "security": [
           {
@@ -4535,6 +4535,20 @@
             },
             "type": "array",
             "title": "Allowed Decisions"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/ReviewTier"
           }
         },
         "additionalProperties": false,
@@ -4543,10 +4557,23 @@
           "task",
           "procedure_name",
           "target",
-          "allowed_decisions"
+          "allowed_decisions",
+          "amount_cents",
+          "tier"
         ],
         "title": "ReviewTaskView",
-        "description": "复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定."
+        "description": "复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定, 涉及金额与复核档位."
+      },
+      "ReviewTier": {
+        "type": "string",
+        "enum": [
+          "full_review",
+          "check_evidence",
+          "read_reasoning",
+          "batch_eligible"
+        ],
+        "title": "ReviewTier",
+        "description": "复核档位 (规格书 9.1 节): 复核任务按金额与置信度分档, 决定审计师要看到什么程度."
       },
       "RiskItem": {
         "properties": {

@@ -162,6 +162,15 @@ class TaskKind(StrEnum):
     failed = "failed"  # 执行或校验失败
 
 
+class ReviewTier(StrEnum):
+    """复核档位 (规格书 9.1 节): 复核任务按金额与置信度分档, 决定审计师要看到什么程度."""
+
+    full_review = "full_review"  # 完整复核: 超过执行重要性, 或独立复核不一致
+    check_evidence = "check_evidence"  # 查验证据: 置信度低于 0.70, 或目标不是判断
+    read_reasoning = "read_reasoning"  # 阅读推理链: 置信度 0.70-0.90, 或高置信但不能批量
+    batch_eligible = "batch_eligible"  # 可批量确认: 置信度高于 0.90 且金额不超过明显微小临界值
+
+
 class TaskStatus(StrEnum):
     """复核任务状态."""
 

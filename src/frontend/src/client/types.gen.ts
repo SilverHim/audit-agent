@@ -1747,7 +1747,7 @@ export type ReviewTask = {
 /**
  * ReviewTaskView
  *
- * 复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定.
+ * 复核队列中的一项: 任务, 程序名, 目标对象, 允许的决定, 涉及金额与复核档位.
  */
 export type ReviewTaskView = {
     task: ReviewTask;
@@ -1763,7 +1763,19 @@ export type ReviewTaskView = {
      * Allowed Decisions
      */
     allowed_decisions: Array<Decision>;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number | null;
+    tier: ReviewTier;
 };
+
+/**
+ * ReviewTier
+ *
+ * 复核档位 (规格书 9.1 节): 复核任务按金额与置信度分档, 决定审计师要看到什么程度.
+ */
+export type ReviewTier = 'full_review' | 'check_evidence' | 'read_reasoning' | 'batch_eligible';
 
 /**
  * RiskItem
