@@ -55,9 +55,9 @@ async def restart(s: Started) -> Started:
 async def assert_same_as_uninterrupted(s: Started, channel: FakeConfirmationChannel) -> None:
     """验收 1, 2: 结果, 留痕行数与证据指针同不中断时; 函证只发 2 次; 第 0 层程序都只有第 1 次执行."""
     await assert_results(s)
-    assert_trail_counts(s)  # 含 CSH-04 的 external_call 2 行, llm_call 13 行
+    assert_trail_counts(trail_of(s).entries)  # 含 CSH-04 的 external_call 2 行, llm_call 15 行 (含 GEN-09 两轮)
     await assert_pointers_resolve(s)
-    assert_fixtures_used_once(s)
+    assert_fixtures_used_once(trail_of(s).entries)
     assert len(channel.submits) == 2
     values = (await s.runner.app.aget_state(CONFIG)).values
     runs = sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0)

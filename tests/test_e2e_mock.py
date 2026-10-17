@@ -1,19 +1,28 @@
 """验收: 真实 Agent, 判断引擎与 mock 大模型 (tests/fixtures/llm) 下离线跑完 P0-P4, 四道闸门与全部复核按
 合成数据集设计第 7 节决定; 外部系统, 规则引擎与存储用假实现预置 Numbat 的数据."""
 
+import json
+import os
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import AsyncExitStack
 from datetime import date
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import insert
+from sqlalchemy.ext.asyncio import create_async_engine
 
+from backend.adapters.llm import llm_version
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.concierge import ConciergeAgent
 from backend.agents.ingest import IngestAgent
 from backend.agents.risk_assessor import RiskAssessorAgent
-from backend.contracts.errors import DecisionRejected
+from backend.contracts.errors import DecisionRejected, EngagementLocked
 from backend.contracts.models import (
+    AcceptanceScorecard,
     Assertion,
     AuditException,
     AuditReportVersion,
@@ -21,6 +30,7 @@ from backend.contracts.models import (
     ConfirmationResult,
     Direction,
     DocumentType,
+    EvidencePointer,
     ExceptionDisposition,
     GateVerdict,
     Judgment,
@@ -33,16 +43,23 @@ from backend.contracts.models import (
     ProposedAction,
     ReportSection,
     ReportStatus,
+    ReviewRecord,
     ReviewStatus,
     ReviewTask,
     TaskStatus,
+    TrailEntry,
     TrailKind,
     UncorrectedSchedule,
 )
 from backend.contracts.ports import LLMClient
-from backend.core.config import get_settings
+from backend.core.config import Settings, get_settings
+from backend.main import build_deps
+from backend.orchestration.checkpoint import open_checkpointer
+from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
+from backend.persistence import models as m
+from backend.persistence.stores import now
 from backend.services.judgment_engine import OutputValidator, PointerResolver
 from tests.fakes import (
     ENGAGEMENT,
@@ -64,6 +81,7 @@ from tests.test_flow import FIN_APPROVE, REVIEWS, RPT_APPROVE, RPT_REJECT, submi
 from tests.test_p2_agents_demo import replies
 
 EID = ENGAGEMENT.id
+REPO = Path(__file__).resolve().parents[1]
 
 
 def real_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
@@ -135,17 +153,18 @@ async def test_results_match_dataset(demo: Started) -> None:
     await assert_results(demo)
 
 
-async def assert_results(s: Started) -> None:
-    """验收 2: 例外, 判断, 任务, 函证, 错报, 重要性, 汇总表, 报告, 项目与文件的最终状态."""
+async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> None:
+    """验收 2: 例外, 判断, 任务, 函证, 错报, 重要性, 汇总表, 报告, 项目与文件的最终状态.
+    eid 为项目编号, approver 为签字人 (项目负责人) 的用户 ID; 存储可以是假实现或真实实现."""
     store = s.output_store
-    exceptions = await store.latest(EID, AuditException)
+    exceptions = await store.latest(eid, AuditException)
     assert sorted((x.id, x.disposition) for x in exceptions) == [
         ("X-CSH-02-1-D01-1", ExceptionDisposition.attributed),
         ("X-CSH-05-1-B01-1", ExceptionDisposition.attributed),
         ("X-PLN-07-1-A01-1", ExceptionDisposition.open),
         ("X-REV-08-1-R01-1", ExceptionDisposition.attributed),
     ]
-    judgments = await store.latest(EID, Judgment)
+    judgments = await store.latest(eid, Judgment)
     assert sorted((j.id, j.version, j.review_status) for j in judgments) == [
         (jid, 2, ReviewStatus.confirmed)
         for jid in sorted(
@@ -174,9 +193,9 @@ async def assert_results(s: Started) -> None:
         ProposedAction.close,
         ["X-CSH-05-1-B01-1", "X-CSH-02-1-D01-1"],
     )
-    tasks = await store.latest(EID, ReviewTask)
+    tasks = await store.latest(eid, ReviewTask)
     assert sorted(t.target_id for t in tasks) == sorted(by_id) and all(t.status is TaskStatus.decided for t in tasks)
-    confirmations = {c.id: c for c in await store.latest(EID, Confirmation)}
+    confirmations = {c.id: c for c in await store.latest(eid, Confirmation)}
     assert {
         cid: (c.result, c.confirmed_balance_cents, c.balance_date, c.book_balance_cents, c.difference_cents)
         for cid, c in confirmations.items()
@@ -184,7 +203,7 @@ async def assert_results(s: Started) -> None:
         "C-BA-01": (ConfirmationResult.difference, 120840000, date(2026, 6, 30), 125840000, -5000000),
         "C-BA-02": (ConfirmationResult.agreed, 40000000, date(2026, 6, 30), 40000000, 0),
     }
-    [misstatement] = await store.latest(EID, Misstatement)
+    [misstatement] = await store.latest(eid, Misstatement)
     assert (
         misstatement.judgment_id,
         misstatement.type,
@@ -202,21 +221,21 @@ async def assert_results(s: Started) -> None:
         Direction.overstated,
         "uncorrected",
     )
-    contracts = await s.runner.deps.financial_store.contracts(EID)
+    contracts = await s.runner.deps.financial_store.contracts(eid)
     assert sorted(c.id for c in contracts) == ["CON-001", "CON-002", "CON-003"]
     assert sum(len(c.terms) for c in contracts) == 11  # 第 6.6 节: 3 份合同共 11 条条款
-    values = (await s.runner.app.aget_state(GraphRunner.config(EID))).values
+    values = (await s.runner.app.aget_state(GraphRunner.config(eid))).values
     assert (values["materiality_cents"], values["performance_materiality_cents"], values["clearly_trivial_cents"]) == (
         12000000,
         9000000,
         600000,
     )
-    candidates = await store.get(EID, MaterialityCandidates, "MATERIALITY")
+    candidates = await store.get(eid, MaterialityCandidates, "MATERIALITY")
     assert candidates is not None
     assert [(c.basis, c.base_amount_cents) for c in candidates.candidates] == [
         (c.basis, c.base_amount_cents) for c in NUMBAT_CANDIDATES
     ]
-    schedule = await store.get(EID, UncorrectedSchedule, "SCHEDULE")
+    schedule = await store.get(eid, UncorrectedSchedule, "SCHEDULE")
     assert schedule is not None
     assert (schedule.total_cents, schedule.materiality_cents, schedule.candidate_opinion) == (
         14200000,
@@ -224,22 +243,22 @@ async def assert_results(s: Started) -> None:
         OpinionType.qualified,
     )
     assert [(i.misstatement_id, i.amount_cents) for i in schedule.items] == [(misstatement.id, 14200000)]
-    reports = {r.id: r for r in await store.latest(EID, AuditReportVersion)}
+    reports = {r.id: r for r in await store.latest(eid, AuditReportVersion)}
     assert (reports["REPORT-1"].version, reports["REPORT-1"].status) == (1, ReportStatus.draft)
     signed = reports["REPORT-2"]
     assert (signed.version, signed.status, signed.addresses_decision_id, signed.approved_by) == (
         2,
         ReportStatus.signed,
         RPT_REJECT.id,
-        "U-1",
+        approver,
     )
     assert signed.judgment_refs == [JudgmentRef(id="J-REV-02-1-SI-2026-0612", version=2)]
     assert signed.sections[ReportSection.opinion].startswith("Qualified Opinion")
     assert "Clause 5.1 of contract CON-001" in signed.sections[ReportSection.basis_for_opinion]
     assert signed.sections[ReportSection.signature].startswith("Jordan Ellis\n")
-    engagement = await s.engagement_store.get(EID)
+    engagement = await s.engagement_store.get(eid)
     assert engagement is not None and (engagement.phase, engagement.locked) == (Phase.Archived, True)
-    documents = await s.runner.deps.financial_store.documents(EID)
+    documents = await s.runner.deps.financial_store.documents(eid)
     assert sorted((d.type, d.status) for d in documents) == [
         *[(DocumentType.confirmation, "extracted")] * 2,
         *[(DocumentType.contract, "extracted")] * 3,
@@ -247,13 +266,13 @@ async def assert_results(s: Started) -> None:
 
 
 async def test_trail_counts(demo: Started) -> None:
-    assert_trail_counts(demo)
+    assert_trail_counts(trail_of(demo).entries)
 
 
-def assert_trail_counts(s: Started) -> None:
+def assert_trail_counts(entries: Sequence[TrailEntry]) -> None:
     """验收 3: llm_call 15 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, GEN-09 2, RPT-03 2), decision 11 行,
-    external_call 4 行 (ACC-04 2, CSH-04 2). GEN-09 两行是 A7 对 BA-01 (L3, 建议关闭) 的两轮独立复核."""
-    entries = trail_of(s).entries
+    external_call 4 行 (ACC-04 2, CSH-04 2). GEN-09 两行是 A7 对 BA-01 (L3, 建议关闭) 的两轮独立复核.
+    entries 为该项目的全部留痕."""
     llm = Counter(e.procedure_id for e in entries if e.kind is TrailKind.llm_call)
     assert llm == {"DOC-04": 3, "DOC-06": 2, "REV-03": 3, "REV-02": 2, "CSH-02": 1, "GEN-09": 2, "RPT-03": 2}
     assert len([e for e in entries if e.kind is TrailKind.decision]) == 11
@@ -265,32 +284,61 @@ async def test_every_evidence_pointer_resolves(demo: Started) -> None:
     await assert_pointers_resolve(demo)
 
 
-async def assert_pointers_resolve(s: Started) -> None:
-    """验收 4: 判断 (推理链与证据), 合同与函证的证据指针都能解析 (行存在, 页码不超过页数, 准则已注册, 留痕存在)."""
-    deps = s.runner.deps
-    resolver = PointerResolver(deps.judgments.validator, EID)
-    pointers = []
-    for j in await s.output_store.latest(EID, Judgment):
+async def evidence_pointers(s: Started, eid: str = EID, *, everything: bool = False) -> list[EvidencePointer]:
+    """判断 (推理链与证据), 合同与函证的证据指针. everything 时另含例外, 承接评分卡的登记检查与复核决定的人工结果,
+    即存储中全部带指针的对象 (R56 验收 2; 假存储只预置了部分试算表行, 例外指针在假实现下解析不全)."""
+    store = s.output_store
+    pointers: list[EvidencePointer] = []
+    for j in await store.latest(eid, Judgment):
         pointers += [*j.evidence, *(p for step in j.reasoning_chain for p in step.evidence)]
-    for c in await deps.financial_store.contracts(EID):
+    if everything:
+        for x in await store.latest(eid, AuditException):
+            pointers += x.evidence
+        for card in await store.latest(eid, AcceptanceScorecard):
+            pointers += [check.evidence for check in card.registry_checks]
+        for r in await store.latest(eid, ReviewRecord):
+            pointers += r.manual_result.evidence if r.manual_result is not None else []
+    for c in await s.runner.deps.financial_store.contracts(eid):
         pointers += c.evidence
-    for c in await s.output_store.latest(EID, Confirmation):
+    for c in await store.latest(eid, Confirmation):
         pointers += c.evidence
+    return pointers
+
+
+async def assert_pointers_resolve(s: Started, eid: str = EID, *, everything: bool = False) -> list[EvidencePointer]:
+    """验收 4: 判断 (推理链与证据), 合同与函证的证据指针都能解析 (行存在, 页码不超过页数, 准则已注册, 留痕存在);
+    everything 同 evidence_pointers. 返回检查过的指针."""
+    resolver = PointerResolver(s.runner.deps.judgments.validator, eid)
+    pointers = await evidence_pointers(s, eid, everything=everything)
     assert len(pointers) > 30
     for p in pointers:
         resolved, reason = await resolver.resolve(p)
         assert resolved is not None, (p, reason)
+    return pointers
+
+
+async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -> None:
+    """(Codex R56 探针) everything 时在判断, 合同, 函证之外另收例外与承接评分卡的全部指针, 一条不漏."""
+    base = await evidence_pointers(demo)
+    full = await evidence_pointers(demo, everything=True)
+    exceptions = await demo.output_store.latest(EID, AuditException)
+    [card] = await demo.output_store.latest(EID, AcceptanceScorecard)
+    assert len(exceptions) == 4 and all(x.evidence for x in exceptions) and len(card.registry_checks) == 3
+    extra = [p for x in exceptions for p in x.evidence] + [check.evidence for check in card.registry_checks]
+    assert len(full) == len(base) + len(extra)
+    assert all(p in full for p in [*base, *extra])
 
 
 async def test_every_fixture_used_once_and_passes(demo: Started) -> None:
-    assert_fixtures_used_once(demo)
+    assert_fixtures_used_once(trail_of(demo).entries)
 
 
-def assert_fixtures_used_once(s: Started) -> None:
-    """验收 5: tests/fixtures/llm 下每个文件都在流程中被读到一次, 一次通过四级校验 (attempt 1, 无失败级别)."""
+def assert_fixtures_used_once(entries: Sequence[TrailEntry]) -> None:
+    """验收 5: tests/fixtures/llm 下每个文件都在流程中被读到一次, 一次通过四级校验 (attempt 1, 无失败级别).
+    entries 为该项目的全部留痕."""
     root = get_settings().LLM_FIXTURES_ROOT
     files = sorted((p.parent.name, p.stem) for p in root.glob("*/*.json"))
-    calls = [e for e in trail_of(s).entries if e.kind is TrailKind.llm_call]
+    calls = [e for e in entries if e.kind is TrailKind.llm_call]
     assert sorted((e.procedure_id, e.payload["fixture_key"]) for e in calls) == files
     assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
 
@@ -350,3 +398,78 @@ async def test_every_program_runs_with_a_real_agent(monkeypatch: pytest.MonkeyPa
         "GEN-09": 2,
         "RPT-03": 2,
     }
+
+
+# ── R56: 真实存储变体 ──
+
+
+@pytest.mark.slow
+async def test_real_storage_variant(tmp_path: Path) -> None:
+    """R56: 同 R55 的决定, 换用真实 Postgres 存储与检查点, 规则 SQL, 数据集载入 (data/demo), 证据文件与 mock 函证平台,
+    大模型仍为 mock (tests/fixtures/llm, 文档 ID 已对齐 manifest): 结果, 留痕与证据指针同 R55; 文件 ID 与 document 指针
+    都是 manifest 的文档 ID; 签字后 AuditOutputStore.put 抛 EngagementLocked.
+    需 TEST_DATABASE_URL 指向已迁移并建好检查点表的独立测试库; 每次运行新建用户与项目, 不清理."""
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需设 TEST_DATABASE_URL: 已迁移并建好检查点表的独立测试库")
+    settings = Settings(
+        DATABASE_URL=url,
+        CHECKPOINT_BACKEND="postgres",
+        DATASET_ROOT=REPO / "data",
+        EVIDENCE_ROOT=tmp_path,
+        LLM_MODE="mock",
+    )
+    owner = "USR-" + uuid4().hex
+    engine = create_async_engine(settings.sqlalchemy_url)
+    async with engine.begin() as conn:  # 签字块取项目负责人的姓名 (第 7 节第 17 行)
+        await conn.execute(
+            insert(m.users).values(
+                id=owner, email=f"{owner}@example.com", full_name="Jordan Ellis", password_hash="-", created_at=now()
+            )
+        )
+    await engine.dispose()
+    deps = build_deps(settings)
+    profile = deps.datasets.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex})
+    engagement = await deps.engagement_store.create(
+        owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
+    )
+    eid = engagement.id
+    async with AsyncExitStack() as stack:
+        saver = await stack.enter_async_context(open_checkpointer(settings))
+        runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))
+        s = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
+        try:
+            await runner.start(eid)
+            await wait_idle(runner, eid)
+            for decision in [
+                acc01_decision(GateVerdict.approve, id="D-ACC"),
+                pln_decision(GateVerdict.approve),
+                *REVIEWS,
+                FIN_APPROVE,
+                RPT_REJECT,
+                RPT_APPROVE,
+            ]:
+                actor = "reviewed_by" if isinstance(decision, ReviewRecord) else "decided_by"
+                await s.submit.submit(eid, decision.model_copy(update={actor: owner}))
+                await wait_idle(runner, eid)
+                assert runner.run_error(eid) is None, (decision.id, runner.run_error(eid))
+
+            await assert_results(s, eid, approver=owner)
+            entries = await deps.trail.list(eid, limit=10_000)
+            assert_trail_counts(entries)
+            assert_fixtures_used_once(entries)
+            pointers = await assert_pointers_resolve(s, eid, everything=True)
+            assert {"trail", "bank_account"} <= {p.source_type for p in pointers}  # 评分卡的登记留痕, CSH-05 例外的账户
+            manifest = json.loads((REPO / "data" / "demo" / "manifest.json").read_text(encoding="utf-8"))
+            document_ids = {d["document_id"] for d in manifest["documents"]}
+            assert {d.id for d in await deps.financial_store.documents(eid)} == document_ids
+            assert {p.source_id for p in pointers if p.source_type == "document"} == document_ids
+
+            judgment = (await deps.output_store.latest(eid, Judgment))[0]
+            with pytest.raises(EngagementLocked):
+                await deps.output_store.put(
+                    eid, [judgment.model_copy(update={"version": judgment.version + 1})], actor=owner
+                )
+        finally:
+            await runner.shutdown()
+            await deps.financial_store.engine.dispose()  # type: ignore[attr-defined]
