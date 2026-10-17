@@ -32,7 +32,7 @@ P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
 
 
 def test_all_procedures_load() -> None:
-    assert len(ProcedureLibrary(ROOT).all()) == 17
+    assert len(ProcedureLibrary(ROOT).all()) == 18  # Demo 的 17 条加 GEN-09 (A7 独立复核)
 
 
 def test_standards_referenced_are_registered() -> None:

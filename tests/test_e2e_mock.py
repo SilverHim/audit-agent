@@ -39,6 +39,7 @@ from backend.contracts.models import (
     TrailKind,
     UncorrectedSchedule,
 )
+from backend.contracts.ports import LLMClient
 from backend.core.config import get_settings
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
@@ -75,6 +76,7 @@ async def start_demo(
     agents: Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]] = real_agents,
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
+    review_llm: LLMClient | None = None,
 ) -> Started:
     """启动 → ACC-01 approve → PLN-01/03 approve (收入 1%, 75%, 5%); 返回时后台正在执行 P2 (不等待).
     财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障."""
@@ -86,6 +88,7 @@ async def start_demo(
         financial_store=financial,
         trail=trail,
         confirmations=confirmations,
+        review_llm=review_llm,
     )
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
@@ -248,11 +251,11 @@ async def test_trail_counts(demo: Started) -> None:
 
 
 def assert_trail_counts(s: Started) -> None:
-    """验收 3: llm_call 13 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, RPT-03 2), decision 11 行,
-    external_call 4 行 (ACC-04 2, CSH-04 2)."""
+    """验收 3: llm_call 15 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, GEN-09 2, RPT-03 2), decision 11 行,
+    external_call 4 行 (ACC-04 2, CSH-04 2). GEN-09 两行是 A7 对 BA-01 (L3, 建议关闭) 的两轮独立复核."""
     entries = trail_of(s).entries
     llm = Counter(e.procedure_id for e in entries if e.kind is TrailKind.llm_call)
-    assert llm == {"DOC-04": 3, "DOC-06": 2, "REV-03": 3, "REV-02": 2, "CSH-02": 1, "RPT-03": 2}
+    assert llm == {"DOC-04": 3, "DOC-06": 2, "REV-03": 3, "REV-02": 2, "CSH-02": 1, "GEN-09": 2, "RPT-03": 2}
     assert len([e for e in entries if e.kind is TrailKind.decision]) == 11
     external = Counter(e.procedure_id for e in entries if e.kind is TrailKind.external_call)
     assert external == {"ACC-04": 2, "CSH-04": 2}
@@ -338,4 +341,12 @@ async def test_every_program_runs_with_a_real_agent(monkeypatch: pytest.MonkeyPa
     }
     assert dict(calls) == agents
     assert Counter(pid for pid, _ in calls) == {pid: 2 if pid == "RPT-03" else 1 for pid in agents}
-    assert Counter(validations) == {"DOC-04": 3, "DOC-06": 2, "REV-03": 3, "REV-02": 2, "CSH-02": 1, "RPT-03": 2}
+    assert Counter(validations) == {
+        "DOC-04": 3,
+        "DOC-06": 2,
+        "REV-03": 3,
+        "REV-02": 2,
+        "CSH-02": 1,
+        "GEN-09": 2,
+        "RPT-03": 2,
+    }

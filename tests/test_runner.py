@@ -562,7 +562,14 @@ async def test_lifespan_calls_recover(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # ── R32: version_snapshot 冻结 ──
 
-SNAPSHOT_KEYS = {"procedure_library_commit", "llm_mode", "model", "prompts_sha256", "frozen_at"}
+SNAPSHOT_KEYS = {
+    "procedure_library_commit",
+    "llm_mode",
+    "model",
+    "critic_model_version",
+    "prompts_sha256",
+    "frozen_at",
+}
 
 
 async def test_start_freezes_version_snapshot() -> None:
@@ -583,7 +590,7 @@ async def test_start_freezes_version_snapshot() -> None:
         library.commit,
         library.prompts_sha256(),
     )
-    assert (snapshot["llm_mode"], snapshot["model"]) == ("mock", "mock")
+    assert (snapshot["llm_mode"], snapshot["model"], snapshot["critic_model_version"]) == ("mock", "mock", "mock")
     assert datetime.fromisoformat(snapshot["frozen_at"]).tzinfo is not None
     engagement = await runner.deps.engagement_store.get(EID)
     assert engagement is not None and engagement.version_snapshot == snapshot
@@ -607,9 +614,11 @@ async def test_existing_snapshot_is_not_overwritten() -> None:
 
 
 def test_llm_version_by_mode() -> None:
-    """验收 1: live 模式模型名取 LLM_MODEL, mock 模式为 mock."""
-    assert llm_version(Settings(LLM_MODE="live", LLM_MODEL="model-x")) == {"llm_mode": "live", "model": "model-x"}
-    assert llm_version(Settings(LLM_MODE="mock", LLM_MODEL="model-x")) == {"llm_mode": "mock", "model": "mock"}
+    """验收 1: live 模式模型名取 LLM_MODEL, mock 模式为 mock; 复核模型 (critic_model_version) 回退为主模型."""
+    live = {"llm_mode": "live", "model": "model-x", "critic_model_version": "model-x"}
+    assert llm_version(Settings(LLM_MODE="live", LLM_MODEL="model-x")) == live
+    mock = {"llm_mode": "mock", "model": "mock", "critic_model_version": "mock"}
+    assert llm_version(Settings(LLM_MODE="mock", LLM_MODEL="model-x")) == mock
 
 
 def test_prompts_sha256_changes_with_any_prompt(tmp_path: Path) -> None:

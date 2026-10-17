@@ -2,7 +2,15 @@
 
 from typing import Any, Generic, Literal, TypeVar
 
-from backend.contracts.models import AuditException, Confirmation, DocumentRef, Judgment, Model, OpinionType
+from backend.contracts.models import (
+    AuditException,
+    Confirmation,
+    DocumentRef,
+    EvidencePointer,
+    Judgment,
+    Model,
+    OpinionType,
+)
 
 T = TypeVar("T")
 
@@ -41,6 +49,8 @@ class ValidationContext(Model):
     judgments: list[Judgment] = []  # 状态中的判断, 供 RPT-03 校验 judgment_refs
     confirmation: Confirmation | None = None  # DOC-06 本次抽取的函证 (CSH-04 所建), 核对回函账号与回函渠道
     opinion: OpinionType | None = None  # RPT-03 应出的意见类型 (FIN-01 选定), 核对两段的标题
+    # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页), 否则该步 unsupported
+    allowed_evidence: list[EvidencePointer] | None = None
 
 
 class ValidationReport(Model, Generic[T]):
@@ -61,3 +71,4 @@ class LLMCallResult(Model, Generic[T]):
     report: ValidationReport[T]  # 最后一次尝试的校验结果, level_failed 为空即通过
     attempts: int  # 调用大模型的次数, 含重试
     trail_ids: list[str]  # 每次尝试的 llm_call 留痕 ID, 与尝试一一对应
+    model: str = ""  # 最后一次尝试实际用的模型名 (响应里的)

@@ -48,7 +48,7 @@ def setup(
     )
     deps = make_deps(FakeRegistry(), trail, financial_store=financial)
     if engine is not None:
-        deps = replace(deps, judgments=engine)
+        deps = replace(deps, judgments=engine, review_llm=None)
     ctx = make_ctx(deps, "REV-03")
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}

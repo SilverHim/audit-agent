@@ -160,6 +160,38 @@ class TaskKind(StrEnum):
     normal = "normal"  # 复核一条判断
     unattributed = "unattributed"  # 例外没有判断解释
     failed = "failed"  # 执行或校验失败
+    dispute = "dispute"  # 独立复核 (A7) 与 A6 结论不一致, 由审计师仲裁
+
+
+class CriticVerdict(StrEnum):
+    """独立复核 (A7, GEN-09) 的结论."""
+
+    consistent = "consistent"  # 从证据独立重推的结论与 A6 一致
+    inconsistent = "inconsistent"  # 不一致: 建争议任务, 由审计师仲裁
+    not_applicable = "not_applicable"  # 命中触发规则, 但复核没有完成 (如复核模型输出不合格), 转人工复核
+    skipped = "skipped"  # 不复核: 自主度 L1, L2 由审计师逐条复核, 或未命中触发规则
+
+
+class CriticReasonType(StrEnum):
+    """独立复核判不一致的理由类型."""
+
+    insufficient_evidence = "insufficient_evidence"  # 证据不足以支持结论
+    different_conclusion = "different_conclusion"  # 同样的证据得出不同结论
+    reasoning_error = "reasoning_error"  # 结论不能从其所依据的事实推出
+
+
+class DisputeResolution(StrEnum):
+    """争议任务的仲裁结果."""
+
+    a6_upheld = "a6_upheld"  # 采用 A6 的结论
+    a7_upheld = "a7_upheld"  # 采用独立复核的结论与推理链, 建新的判断
+    neither = "neither"  # 都不采用, 由 neither_action 决定怎么办
+
+
+class NeitherAction(StrEnum):
+    """仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做."""
+
+    human_conclusion = "human_conclusion"  # 审计师给出结论 (override_conclusion), 效果同推翻
 
 
 class ReviewTier(StrEnum):
@@ -194,6 +226,7 @@ class Decision(StrEnum):
     misstatement = "misstatement"  # 认定错报
     rerun = "rerun"  # 重跑
     manual_result = "manual_result"  # 人工给出结果
+    dispute_resolution = "dispute_resolution"  # 仲裁争议 (只用于 dispute 任务)
 
 
 class GateId(StrEnum):
@@ -303,7 +336,7 @@ class TrailKind(StrEnum):
 
 
 class AgentId(StrEnum):
-    """智能体编号. A7, A8 本版不实现, 只占位."""
+    """智能体编号. A8 本版不实现, 只占位."""
 
     A1 = "A1"  # Orchestrator: 编排, 闸门, 程序包装配, 调度
     A2 = "A2"  # ClientIntel: 客户背景与登记核查
@@ -401,6 +434,14 @@ class Judgment(Versioned):
     performed_by: str  # 用户 ID: AI 生成的记项目负责人, 人工建的记决定人
     created_at: datetime  # 生成时间
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
+    # 独立复核 (A7, GEN-09) 的结果, 由 A6 在判断第 1 版写入前同步调用 A7 填写; 人工建的判断不经复核
+    critic_verdict: CriticVerdict = CriticVerdict.skipped  # 复核结论
+    critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型, 其余为空
+    critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
+    critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
+    critic_reasoning_chain: list[ReasoningStep] = []  # 第一轮的独立推理链, 无效时仲裁不提供 a7_upheld
+    critic_model: str | None = None  # 复核用的模型名 (响应里的)
+    critic_trail_ref: str | None = None  # 第二轮 (比对) 调用的留痕 ID
 
 
 class AuditException(Versioned):
@@ -604,6 +645,10 @@ class ReviewRecord(Versioned):
     misstatement_draft: MisstatementDraft | None = None  # misstatement 时的错报草稿
     rerun_params: dict[str, Any] | None = None  # rerun 时要改的参数
     manual_result: ManualResult | None = None  # manual_result 时人给的结果
+    dispute_resolution: DisputeResolution | None = None  # dispute_resolution 时的仲裁结果
+    neither_action: NeitherAction | None = (
+        None  # 仲裁为 neither 时必填, 本版只有 human_conclusion (附 override_conclusion)
+    )
     reviewed_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间
 

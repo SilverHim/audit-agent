@@ -337,8 +337,10 @@ def make_live_client(
 
 
 def llm_version(settings: Settings) -> dict[str, str]:
-    """.env 给出的 LLM 信息: 模式与模型名 (mock 模式为 "mock"). 设置页保存后以 LlmSettingsService.versions 为准."""
-    return {"llm_mode": settings.LLM_MODE, "model": "mock" if settings.LLM_MODE == "mock" else settings.LLM_MODEL}
+    """.env 给出的 LLM 信息: 模式, 主模型与复核模型的模型名 (mock 模式都为 "mock"; 复核模型回退为主模型).
+    设置页保存后以 LlmSettingsService.versions 为准."""
+    model = "mock" if settings.LLM_MODE == "mock" else settings.LLM_MODEL
+    return {"llm_mode": settings.LLM_MODE, "model": model, "critic_model_version": model}
 
 
 def env_provider(settings: Settings) -> LlmProvider:

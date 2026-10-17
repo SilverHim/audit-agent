@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from backend.contracts.llm_outputs import (
     ConfirmationExtraction,
     ContractExtraction,
+    CriticIndependent,
     ExtractedTerm,
     JudgmentDraft,
     ReportDraft,
@@ -156,6 +157,7 @@ def test_output_model_resolves_every_llm_procedure() -> None:
         "REV-02": JudgmentDraft,
         "CSH-02": JudgmentDraft,
         "RPT-03": ReportDraft,
+        "GEN-09": CriticIndependent,  # 第二轮的 CriticVerdictOut 由 A7 换模板的 llm 配置 (review.VERDICT_SPEC)
     }
 
 

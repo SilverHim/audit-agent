@@ -28,6 +28,7 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
     AgentId.A5: frozenset({"confirmations", "documents"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
+    AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
     AgentId.A9: frozenset({"uncorrected_schedule"}),
     AgentId.A10: frozenset({"report_versions", "review_tasks"}),
 }

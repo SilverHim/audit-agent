@@ -15,7 +15,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from backend.adapters.xero_dataset import Snapshot, snapshot_period
+from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
@@ -1759,6 +1759,7 @@ def make_runner(
     financial_store: FakeFinancialStore | None = None,
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
+    review_llm: LLMClient | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -1767,6 +1768,7 @@ def make_runner(
     interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
+    review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -1780,6 +1782,7 @@ def make_runner(
         financial_store,
         confirmations=confirmations,
         library=library,
+        review_llm=review_llm,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:
@@ -1854,3 +1857,16 @@ def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:
         }
     )
     return profile, engagement
+
+
+def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
+    """Xero 快照映射出的财务数据装进假财务存储: 发票, 分录与银行流水按行可取 (record), 另有试算表."""
+    tables = build_tables(snapshot)
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for source, rows in (
+        ("sales_invoice", tables["sales_invoices"]),
+        ("journal_entry", tables["journal_entries"]),
+        ("bank_transaction", tables["bank_transactions"]),
+    ):
+        records |= {(source, row.id): row.model_dump() for row in rows}
+    return FakeFinancialStore(records=records, trial_balance=list(tables["trial_balance"]))

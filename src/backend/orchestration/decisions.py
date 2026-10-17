@@ -23,7 +23,9 @@ from backend.contracts.models import (
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
+    CriticVerdict,
     Decision,
+    DisputeResolution,
     Engagement,
     EvidencePointer,
     ExceptionDisposition,
@@ -35,6 +37,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     MaterialityChoice,
     Misstatement,
+    NeitherAction,
     OpinionType,
     Phase,
     Procedure,
@@ -325,14 +328,24 @@ REVIEW_REQUIRED: dict[Decision, list[str]] = {
     Decision.misstatement: ["reason", "misstatement_draft"],
     Decision.rerun: ["reason"],
     Decision.manual_result: ["reason", "manual_result"],
+    Decision.dispute_resolution: ["reason", "dispute_resolution"],
 }
-REVIEW_SPECIFIC = ("override_conclusion", "misstatement_draft", "rerun_params", "manual_result")
+REVIEW_SPECIFIC = (
+    "override_conclusion",
+    "misstatement_draft",
+    "rerun_params",
+    "manual_result",
+    "dispute_resolution",
+    "neither_action",
+)
 REVIEW_ALLOWED: dict[Decision, set[str]] = {
     Decision.confirm: set(),
     Decision.override: {"override_conclusion"},
     Decision.misstatement: {"misstatement_draft"},
     Decision.rerun: {"rerun_params"},
     Decision.manual_result: {"manual_result"},
+    # 仲裁可附错报草稿: 采用的结论认定为错报时一并登记; neither_action 与 override_conclusion 只用于 neither
+    Decision.dispute_resolution: {"dispute_resolution", "neither_action", "override_conclusion", "misstatement_draft"},
 }
 TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类型 -> 在 Store 中的对象类型
     TargetType.Judgment: Judgment,
@@ -342,13 +355,28 @@ TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类
 
 
 def check_review_fields(record: ReviewRecord) -> None:
-    """复核决定的字段校验: 必填的缺了报 MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空值都视为未填."""
+    """复核决定的字段校验: 必填的缺了报 MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空值都视为未填.
+
+    仲裁另按结果: neither 须填 neither_action (本版只有 human_conclusion) 与 override_conclusion; a6_upheld,
+    a7_upheld 不能填这两项.
+    """
     missing = [name for name in REVIEW_REQUIRED[record.decision] if not getattr(record, name)]
     if missing:
         raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
     filled = [name for name in REVIEW_SPECIFIC if getattr(record, name) and name not in REVIEW_ALLOWED[record.decision]]
     if filled:
         raise DecisionRejected("FIELD_NOT_ALLOWED", ", ".join(filled))
+    if record.decision is not Decision.dispute_resolution:
+        return
+    neither_fields = ("neither_action", "override_conclusion")
+    if record.dispute_resolution is DisputeResolution.neither:
+        missing = [name for name in neither_fields if not getattr(record, name)]
+        if missing:
+            raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
+    else:
+        filled = [name for name in neither_fields if getattr(record, name)]
+        if filled:
+            raise DecisionRejected("FIELD_NOT_ALLOWED", f"{record.dispute_resolution} 不填 {', '.join(filled)}")
 
 
 def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
@@ -485,6 +513,71 @@ def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str
     ]
 
 
+def critic_judgment(record: ReviewRecord, task: ReviewTask, target: Judgment, judgment_id: str) -> Judgment:
+    """a7_upheld 建的判断: 结论与推理链取独立复核第一轮的, 证据为该推理链引用的指针 (去重; 没有时沿用原判断的),
+    解释的例外同原判断, 留痕指向复核的比对调用; 由审计师采纳, 置 confirmed, 执行人为复核人. 纯函数."""
+    seen: set[tuple[str, str, str, int | None]] = set()
+    evidence: list[EvidencePointer] = []
+    for p in (p for step in target.critic_reasoning_chain for p in step.evidence):
+        if (key := (p.source_type, p.source_id, p.locator, p.page)) not in seen:
+            seen.add(key)
+            evidence.append(p)
+    adopted = human_judgment(
+        record,
+        task,
+        judgment_id,
+        subject_id=target.subject_id,
+        conclusion=target.critic_conclusion or "",
+        evidence=evidence or target.evidence,
+        exception_ids=target.exception_ids,
+    )
+    return adopted.model_copy(
+        update={
+            "reasoning_chain": target.critic_reasoning_chain,
+            "trail_ref": target.critic_trail_ref,
+            "critic_verdict": CriticVerdict.not_applicable,
+        }
+    )
+
+
+def dispute_effects(
+    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+) -> list[Versioned]:
+    """仲裁的效果 (规格书第 11 节争议项出口): a6_upheld 同 confirm; a7_upheld 以独立复核的结论与推理链建新判断
+    -H{n} (critic_judgment), 原判断置 overridden 并记 superseded_by; neither (human_conclusion) 同 override.
+    附了 misstatement_draft 时另建 Misstatement M-{决定 ID}, 来源为最终采用的判断. 纯函数.
+    """
+    assert isinstance(target, Judgment)  # dispute 任务的目标是判断
+    resolution = record.dispute_resolution
+    if resolution is DisputeResolution.a6_upheld:
+        effects = confirm_effects(target, exceptions)
+        adopted = effects[0]
+    elif resolution is DisputeResolution.a7_upheld:
+        jid = human_judgment_id(task, target.subject_id, taken)
+        adopted = critic_judgment(record, task, target, jid)
+        overridden = target.model_copy(
+            update={"version": target.version + 1, "review_status": ReviewStatus.overridden, "superseded_by": jid}
+        )
+        effects = [overridden, adopted, *attribute_exceptions(adopted, exceptions)]
+    else:
+        assert record.neither_action is NeitherAction.human_conclusion  # 校验时已查
+        effects = override_effects(record, task, target, exceptions, taken)
+        adopted = effects[1]
+    draft = record.misstatement_draft
+    if draft is not None:
+        assert isinstance(adopted, Judgment)
+        effects.append(
+            Misstatement(
+                id=f"M-{record.id}",
+                judgment_id=adopted.id,
+                exception_id=None,
+                review_record_id=record.id,
+                **draft.model_dump(),
+            )
+        )
+    return effects
+
+
 def review_effects(
     record: ReviewRecord,
     task: ReviewTask,
@@ -506,7 +599,10 @@ def review_effects(
         return override_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.manual_result:
         return manual_result_effects(record, task, taken)
-    return []  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
+    if record.decision is Decision.dispute_resolution:
+        return dispute_effects(record, task, target, exceptions, taken)
+    assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
+    return []
 
 
 def recompute_procedure(procedure: Procedure, pending: list[ReviewTask]) -> Procedure | None:
@@ -555,6 +651,8 @@ def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[Revi
 def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[str]) -> TrailEntry:
     """复核决定的 decision 留痕, 决定提交与恢复补写共用. closed: rerun 时随同关闭的同组任务 ID (不含 task)."""
     payload: dict[str, Any] = {"decision_id": record.id, "task_id": task.id, "reason": record.reason}
+    if record.dispute_resolution is not None:
+        payload["dispute_resolution"] = record.dispute_resolution.value
     if closed:
         payload["closed_task_ids"] = closed
     return TrailEntry(
@@ -733,6 +831,12 @@ class GraphDecisionSubmit:
         if record.decision not in self.deps.queue.allowed(task):
             raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
         check_review_fields(record)
+        if (
+            record.dispute_resolution is DisputeResolution.a7_upheld
+            and isinstance(target, Judgment)
+            and DisputeResolution.a7_upheld not in self.deps.queue.resolutions(task, target)
+        ):
+            raise DecisionRejected("INVALID_VALUE", "独立复核的推理链没有通过校验, 不能采用其结论 (a7_upheld)")
         # rerun_params 只能改模板已有的参数: build_run 把它叠加到解析结果上, 不查键名, 拼错的键会悄悄无效
         params = self.deps.library.load(task.procedure_id).params
         unknown = sorted(set(record.rerun_params or {}) - set(params))

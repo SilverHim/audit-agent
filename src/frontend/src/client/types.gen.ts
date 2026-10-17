@@ -53,7 +53,7 @@ export type AcceptanceScorecard = {
 /**
  * AgentId
  *
- * 智能体编号. A7, A8 本版不实现, 只占位.
+ * 智能体编号. A8 本版不实现, 只占位.
  */
 export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
 
@@ -543,6 +543,20 @@ export type ContractTerm = {
 };
 
 /**
+ * CriticReasonType
+ *
+ * 独立复核判不一致的理由类型.
+ */
+export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' | 'reasoning_error';
+
+/**
+ * CriticVerdict
+ *
+ * 独立复核 (A7, GEN-09) 的结论.
+ */
+export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | 'skipped';
+
+/**
  * DatasetSummary
  *
  * 新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN.
@@ -567,7 +581,7 @@ export type DatasetSummary = {
  *
  * 复核决定.
  */
-export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result';
+export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result' | 'dispute_resolution';
 
 /**
  * DeferralIn
@@ -619,6 +633,13 @@ export type DeferralView = {
  * 错报方向.
  */
 export type Direction = 'overstated' | 'understated';
+
+/**
+ * DisputeResolution
+ *
+ * 争议任务的仲裁结果.
+ */
+export type DisputeResolution = 'a6_upheld' | 'a7_upheld' | 'neither';
 
 /**
  * DocumentRef
@@ -1110,6 +1131,28 @@ export type Judgment = {
      * Trail Ref
      */
     trail_ref?: string | null;
+    critic_verdict?: CriticVerdict;
+    critic_reason_type?: CriticReasonType | null;
+    /**
+     * Critic Reason
+     */
+    critic_reason?: string | null;
+    /**
+     * Critic Conclusion
+     */
+    critic_conclusion?: string | null;
+    /**
+     * Critic Reasoning Chain
+     */
+    critic_reasoning_chain?: Array<ReasoningStep>;
+    /**
+     * Critic Model
+     */
+    critic_model?: string | null;
+    /**
+     * Critic Trail Ref
+     */
+    critic_trail_ref?: string | null;
 };
 
 /**
@@ -1428,6 +1471,13 @@ export type MisstatementReport = {
  * 错报类型.
  */
 export type MisstatementType = 'factual' | 'judgmental' | 'projected';
+
+/**
+ * NeitherAction
+ *
+ * 仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做.
+ */
+export type NeitherAction = 'human_conclusion';
 
 /**
  * OpinionType
@@ -1773,6 +1823,8 @@ export type ReviewRecord = {
         [key: string]: unknown;
     } | null;
     manual_result?: ManualResult | null;
+    dispute_resolution?: DisputeResolution | null;
+    neither_action?: NeitherAction | null;
     /**
      * Reviewed By
      */
@@ -1814,6 +1866,8 @@ export type ReviewRecordIn = {
         [key: string]: unknown;
     } | null;
     manual_result?: ManualResult | null;
+    dispute_resolution?: DisputeResolution | null;
+    neither_action?: NeitherAction | null;
 };
 
 /**
@@ -1890,6 +1944,10 @@ export type ReviewTaskView = {
      */
     amount_cents: number | null;
     tier: ReviewTier;
+    /**
+     * Allowed Resolutions
+     */
+    allowed_resolutions?: Array<DisputeResolution>;
 };
 
 /**
@@ -2016,7 +2074,7 @@ export type TargetType = 'Judgment' | 'AuditException' | 'ProcedureRun';
  *
  * 复核任务类型.
  */
-export type TaskKind = 'normal' | 'unattributed' | 'failed';
+export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute';
 
 /**
  * TaskStatus

@@ -11,6 +11,7 @@ from typing import Any, ClassVar, cast
 from pydantic import TypeAdapter
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
+from backend.agents.review import ReviewAgent
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -102,6 +103,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
 
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
+        self.reviewer = ReviewAgent(deps)  # A7: 每生成一条模型类判断即同步调用其独立复核 (GEN-09)
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,
@@ -164,6 +166,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             outcome = await self.deps.judgments.judge(
                 ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id
             )
+            if outcome.judgment is not None:
+                # 独立复核在分类与写入之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
+                outcome = outcome.model_copy(update={"judgment": await self.reviewer.review(ctx, outcome.judgment)})
             return Judged(jctx, outcome)
 
         return await gather_all(judge(s) for s in subjects)
@@ -389,7 +394,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
 
-        - normal: 判断待复核, 以判断 v1 为目标建任务.
+        - normal, dispute: 判断待复核 (dispute 为独立复核不一致, 由审计师仲裁), 以判断 v1 为目标建任务.
         - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions).
         - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
         - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
@@ -408,9 +413,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             findings_of_subject = judged.ctx.rule_findings
             kind = queue.classify(ctx.template, judged.outcome, findings_of_subject)
             judgment = judged.outcome.judgment
-            if judgment is not None and kind is TaskKind.normal:
+            if judgment is not None and kind in (TaskKind.normal, TaskKind.dispute):
                 judgments.append(judgment)
-                tasks.append(queue.make_task(TaskKind.normal, judgment, pid, run.id, now))
+                tasks.append(queue.make_task(kind, judgment, pid, run.id, now))
             elif judgment is not None and kind is None:
                 confirmed = judgment.model_copy(update={"review_status": ReviewStatus.confirmed})
                 judgments.append(confirmed)

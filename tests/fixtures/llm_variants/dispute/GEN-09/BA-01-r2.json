@@ -1,0 +1,5 @@
+{
+  "critic_verdict": "inconsistent",
+  "critic_reason_type": "different_conclusion",
+  "critic_reason": "The original treats the AUD 50,000.00 as a deposit in transit; on the same evidence the receipt was not banked until after the period end, so cash at 30 June 2026 is overstated."
+}

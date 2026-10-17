@@ -8,7 +8,9 @@ from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
+    CriticVerdict,
     Decision,
+    DisputeResolution,
     EvidencePointer,
     ExceptionDisposition,
     Judgment,
@@ -20,6 +22,7 @@ from backend.contracts.models import (
     TaskKind,
 )
 from backend.contracts.services import JudgmentOutcome
+from backend.services.judgment_engine import critic_chain_ok
 from backend.services.procedure_library import ProcedureLibrary
 
 
@@ -111,12 +114,17 @@ def review_tier(
 ) -> ReviewTier:
     """复核档位 (规格书 9.1 节), 按顺序判断, 命中即停. 金额一律按绝对值比较; 阈值未定 (PLN-01/03 之前) 为 None.
 
+    0. 争议任务, 或判断的独立复核为不一致: 完整复核 (9.1 "A7 不一致" 一行).
     1. 目标不是判断 (例外或执行记录): 查验证据.
     2. 金额超过执行重要性: 完整复核 (执行重要性未定时跳过).
     3. 置信度低于 0.70: 查验证据; 不超过 0.90: 阅读推理链.
     4. 置信度高于 0.90: L1 或任务不是 normal 的阅读推理链; 金额为空或不超过明显微小临界值的可批量确认;
        其余阅读推理链. "金额较小" 取明显微小临界值是保守口径 (规格书只写了 "低"), 要调改这一处.
     """
+    if task.kind is TaskKind.dispute or (
+        isinstance(target, Judgment) and target.critic_verdict is CriticVerdict.inconsistent
+    ):
+        return ReviewTier.full_review
     if not isinstance(target, Judgment):
         return ReviewTier.check_evidence
     if performance_cents is not None and amount is not None and abs(amount) > performance_cents:
@@ -142,7 +150,10 @@ class ReviewQueue:
         self.library = library  # 程序库: 按任务的 procedure_id 取模板
 
     def allowed(self, task: ReviewTask) -> frozenset[Decision]:
-        """某个任务允许的决定. failed 任务带判断对象且模板允许时, 另可人工执行并提交结果."""
+        """某个任务允许的决定. dispute 任务只能仲裁 (确认会绕过仲裁); failed 任务带判断对象且模板允许时,
+        另可人工执行并提交结果."""
+        if task.kind is TaskKind.dispute:
+            return frozenset({Decision.dispute_resolution})
         if task.kind is TaskKind.normal:
             return frozenset({Decision.confirm, Decision.override, Decision.misstatement})
         if task.kind is TaskKind.unattributed:
@@ -160,6 +171,10 @@ class ReviewQueue:
         if outcome.failure == "failed" or outcome.judgment is None:
             return TaskKind.failed
         j = outcome.judgment
+        if j.critic_verdict is CriticVerdict.inconsistent:
+            return TaskKind.dispute  # 独立复核不一致: 单列仲裁, 优先于其余规则
+        if j.critic_verdict is CriticVerdict.not_applicable:
+            return TaskKind.normal  # 命中触发规则而复核没做成: 这条判断本来没人看, 交人复核
         if (
             j.autonomy_level in (AutonomyLevel.L1, AutonomyLevel.L2)
             or j.proposed_action in (ProposedAction.misstatement, ProposedAction.more_evidence)
@@ -167,6 +182,14 @@ class ReviewQueue:
         ):
             return TaskKind.normal
         return None
+
+    @staticmethod
+    def resolutions(task: ReviewTask, target: Judgment | AuditException | ProcedureRun) -> list[DisputeResolution]:
+        """争议任务可选的仲裁结果; A7 的推理链没通过 8.6 校验时不提供 a7_upheld. 不是争议任务为空."""
+        if task.kind is not TaskKind.dispute or not isinstance(target, Judgment):
+            return []
+        a7 = [DisputeResolution.a7_upheld] if critic_chain_ok(target.critic_reasoning_chain) else []
+        return [DisputeResolution.a6_upheld, *a7, DisputeResolution.neither]
 
     def make_task(
         self,

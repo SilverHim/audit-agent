@@ -194,7 +194,11 @@ async def test_hot_switch_next_call_uses_new_model_and_slots_are_independent() -
     ]
     assert (primary.model_name, review.model_name) == ("claude-sonnet-5-5", "claude-fable-5-1")
     assert all(r.headers["authorization"] == f"Bearer {KEY}" for r in server.requests)
-    assert svc.versions() == {"llm_mode": "live", "model": "claude-sonnet-5-5"}
+    assert svc.versions() == {
+        "llm_mode": "live",
+        "model": "claude-sonnet-5-5",
+        "critic_model_version": "claude-fable-5-1",
+    }
 
 
 async def test_mock_mode_saves_but_keeps_fixtures() -> None:
@@ -202,7 +206,7 @@ async def test_mock_mode_saves_but_keeps_fixtures() -> None:
     await save(svc)
     assert "primary" in store_of(svc).rows
     assert isinstance(svc.clients["primary"].inner, MockLLMClient)
-    assert svc.versions() == {"llm_mode": "mock", "model": "mock"}
+    assert svc.versions() == {"llm_mode": "mock", "model": "mock", "critic_model_version": "mock"}
 
 
 async def test_load_applies_saved_slots_and_survives_errors() -> None:

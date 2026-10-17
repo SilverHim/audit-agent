@@ -195,12 +195,12 @@ async def test_numbat_review_queue_tiers() -> None:
         "T-J-REV-03-1-CON-001-v1": (0.84, None, "read_reasoning"),
         "T-J-REV-03-1-CON-002-v1": (0.84, None, "read_reasoning"),
         "T-J-REV-03-1-CON-003-v1": (0.82, None, "read_reasoning"),
-        # 函证差异: 两条例外都是 -50,000 澳元, 置信度 0.5625 低于 0.70
-        "T-J-CSH-02-1-BA-01-v1": (0.5625, -5_000_000, "check_evidence"),
+        # 函证差异: 两条例外都是 -50,000 澳元; 独立复核一致后置信度 0.65 (原 0.5625), 仍低于 0.70
+        "T-J-CSH-02-1-BA-01-v1": (0.65, -5_000_000, "check_evidence"),
     }
     assert [v["task"]["created_at"] for v in first] == sorted(v["task"]["created_at"] for v in first)
     assert tiers(second) == {
-        "T-J-CSH-02-1-BA-01-v1": (0.5625, -5_000_000, "check_evidence"),
+        "T-J-CSH-02-1-BA-01-v1": (0.65, -5_000_000, "check_evidence"),
         # 截止性: 0612 有错报草稿 142,000 澳元, 0618 没有草稿与例外, 取发票金额 95,000 澳元; 都超过执行重要性 90,000
         "T-J-REV-02-1-SI-2026-0612-v1": (0.875, 14_200_000, "full_review"),
         "T-J-REV-02-1-SI-2026-0618-v1": (0.875, 9_500_000, "full_review"),

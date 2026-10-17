@@ -98,7 +98,7 @@ def setup(
         rules.results["REV-02"] = lambda run: RuleResult(exceptions=[], rows={"S01": rows})
     deps = make_deps(FakeRegistry(), FakeTrail(), financial_store=financial, rules=rules)
     if not real:
-        deps = replace(deps, judgments=engine)  # type: ignore[arg-type]
+        deps = replace(deps, judgments=engine, review_llm=None)  # type: ignore[arg-type]
     ctx = make_ctx(deps, "REV-02")
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-CUT"], "rerun_subject_ids": rerun or []}

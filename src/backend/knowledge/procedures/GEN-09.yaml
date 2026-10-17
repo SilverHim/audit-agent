@@ -1,0 +1,21 @@
+id: GEN-09
+name: 判断独立复核
+# 贯穿程序 (规格书 6.3 GEN-09): 不单独装配与派发, 由 A6 对每条模型类判断同步调用 A7 (agents/review.py).
+# triggers 为空且没有程序依赖它, 所以不进程序包; 阶段记 P2 只为不进固定集 (runner.fixed_procedures).
+phase: P2_Executing
+cycle: Pervasive
+owner: A7
+engine: llm
+autonomy_level: L4
+# 触发规则 (任一命中即复核, agents/review.py 的 triggers): 程序运行时自主度 L3/L4 且建议 accept 或 close;
+#   推理链含 assumption 步骤; 按判断 ID 的 sha256 抽样 (sample_rate, 重放结果不变).
+# 跳过规则: 运行时自主度 L1, L2 记 skipped (审计师逐条复核). 本期不做: 提示词或配置刚改过, 人机一致率低 (无一致率统计).
+params:
+  sample_rate: 0.05             # 跳过人群的抽样比例, 供复核率与错误发现率统计
+# 两轮调用都用复核模型 (AgentDeps.review_llm) 与独立的系统提示词 (规格书 5.5 同源偏差):
+#   第一轮只给证据指针解析出的内容, 不给结论与推理链 → CriticIndependent (独立结论与推理链, 经 8.6 校验);
+#   第二轮再给 A6 的结论 → CriticVerdictOut (第二轮的提示词与输出模型见 agents/review.py VERDICT_SPEC)
+llm:
+  prompt: GEN-09.md.j2
+  output_model: CriticIndependent
+  context_budget: 8000

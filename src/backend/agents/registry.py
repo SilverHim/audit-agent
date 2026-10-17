@@ -9,6 +9,7 @@ from backend.agents.evidence import EvidenceAgent
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import IngestAgent
 from backend.agents.qc import QCAgent
+from backend.agents.review import ReviewAgent
 from backend.agents.risk_assessor import RiskAssessorAgent
 
 AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
@@ -17,6 +18,7 @@ AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
     RiskAssessorAgent,
     EvidenceAgent,
     FieldworkAgent,
+    ReviewAgent,
     QCAgent,
     ConciergeAgent,
 )

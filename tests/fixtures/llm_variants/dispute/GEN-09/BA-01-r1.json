@@ -1,0 +1,108 @@
+{
+  "conclusion": "The ledger includes a AUD 50,000.00 receipt dated 30 June 2026 that the bank only credited on 2 July 2026. On this evidence alone the cash balance at 30 June 2026 is overstated by AUD 50,000.00, a cut-off misstatement, unless the remittance is shown to have been banked by 30 June.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The bank's reply confirms AUD 1,208,400.00 in account 12345601 at 30 June 2026.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-RPLBA0100000",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-RPLBA0100000",
+          "locator": "balance_date",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The trial balance shows AUD 1,258,400.00 in GL account 1010 at 30 June 2026, AUD 50,000.00 more than the bank.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "1010",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "A receipt of AUD 50,000.00 (CR-SI-2026-0547) was debited to GL account 1010 on 30 June 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CR-SI-2026-0547-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank credited AUD 50,000.00 with reference SI-2026-0547 to the account on 2 July 2026.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-01-20260702-01",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Differences between the confirmation and the records are investigated to see whether they indicate misstatements.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The bank holds no AUD 50,000.00 at 30 June 2026 for the receipt the ledger records on that day.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Without evidence that the funds were in transit at the period end, the ledger overstates cash by AUD 50,000.00, which is a misstatement.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        4,
+        5
+      ]
+    }
+  ]
+}

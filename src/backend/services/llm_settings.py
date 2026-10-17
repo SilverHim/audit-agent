@@ -119,9 +119,15 @@ class LlmSettingsService:
         return self.settings.LLM_MODE == "live"
 
     def versions(self) -> dict[str, str]:
-        """项目启动时冻结进版本快照的 LLM 信息: 模式与主模型当前生效的模型名 (mock 模式为 "mock")."""
-        model = self.clients["primary"].model_name if self.live else "mock"
-        return {"llm_mode": self.settings.LLM_MODE, "model": model}
+        """项目启动时冻结进版本快照的 LLM 信息: 模式, 主模型与复核模型当前生效的模型名 (mock 模式都为 "mock").
+        复核模型的记为 critic_model_version (规格书 5.5)."""
+        if not self.live:
+            return {"llm_mode": self.settings.LLM_MODE, "model": "mock", "critic_model_version": "mock"}
+        return {
+            "llm_mode": self.settings.LLM_MODE,
+            "model": self.clients["primary"].model_name,
+            "critic_model_version": self.clients["review"].model_name,
+        }
 
     async def load(self) -> None:
         """启动时把库里的配置换到客户端上. 只在 live 模式读库; 某一套读不了 (库不可用, 主密钥缺失或不对) 时记日志,

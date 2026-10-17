@@ -1,4 +1,4 @@
 {
-  "confidence_weights": {"evidence": 0.3, "rule": 0.3, "llm": 0.2},
+  "confidence_weights": {"evidence": 0.3, "rule": 0.3, "llm": 0.2, "critic": 0.2},
   "reliability_weights": {"external_original": 1.0, "external_copy": 0.8, "internal_original": 0.7, "internal_copy": 0.5}
 }

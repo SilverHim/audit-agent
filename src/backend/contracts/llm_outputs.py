@@ -1,10 +1,12 @@
 """LLM 结构化输出模型, 定义见 开发接口文档.md 第 5 节."""
 
 from datetime import date
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from backend.contracts.models import (
+    CriticReasonType,
     EvidencePointer,
     JudgmentRef,
     MisstatementDraft,
@@ -64,3 +66,25 @@ class ReportDraft(Model):
     opinion: str  # 意见段正文
     basis_for_opinion: str  # 形成意见的基础段正文
     judgment_refs: list[JudgmentRef]  # 事实断言引用的已确认判断
+
+
+class CriticIndependent(Model):
+    """GEN-09 第一轮: 独立复核只看证据得出的结论与推理链 (不看 A6 的结论). 推理链的规则同 JudgmentDraft."""
+
+    conclusion: str  # 独立结论
+    reasoning_chain: list[ReasoningStep]  # 独立推理链, fact 只能引用第一轮给出的证据指针
+
+
+class CriticVerdictOut(Model):
+    """GEN-09 第二轮: 独立结论与 A6 结论的比对."""
+
+    critic_verdict: Literal["consistent", "inconsistent"]  # 一致或不一致
+    critic_reason_type: CriticReasonType | None = None  # 不一致时必填, 一致时为空
+    critic_reason: str  # 一致或不一致之处
+
+    @model_validator(mode="after")
+    def reason_type_with_verdict(self) -> Self:
+        """不一致必须给理由类型, 一致不能给 (结构级, 不合时回传模型重试)."""
+        if (self.critic_verdict == "inconsistent") != (self.critic_reason_type is not None):
+            raise ValueError("critic_reason_type is required when inconsistent and must be null when consistent")
+        return self

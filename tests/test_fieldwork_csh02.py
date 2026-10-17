@@ -100,7 +100,7 @@ def setup(
     if not real_engine:
         default = passed(proposed_action=ProposedAction.close)
         engine = FakeJudgmentEngine(outcomes or {a: default for a in ("BA-01", "BA-02")})
-        deps = replace(deps, judgments=engine)
+        deps = replace(deps, judgments=engine, review_llm=None)
     ctx = make_ctx(deps, "CSH-02")
     procedure = ctx.procedure.model_copy(update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-CASH-EXI"]})
     params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None)
@@ -305,9 +305,17 @@ async def test_ba01_fixture_passes_real_engine() -> None:
     agent, ctx, trail = setup(real_engine=True)
     patch = await agent.run(ctx)
     calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
-    assert len(calls) == 1 and calls[0].payload["attempt"] == 1 and calls[0].payload["level_failed"] is None
+    # A6 一次, 再由 A7 (L3, 建议关闭, 命中主规则) 用复核模型做两轮独立复核
+    assert [(e.procedure_id, e.actor, e.payload["fixture_key"]) for e in calls] == [
+        ("CSH-02", "A6", "BA-01"),
+        ("GEN-09", "A7", "BA-01-r1"),
+        ("GEN-09", "A7", "BA-01-r2"),
+    ]
+    assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
     [j] = patch["judgments"]
     assert j.proposed_action is ProposedAction.close and j.misstatement_draft is None
+    # 一致: 置信度计入复核分项 (0.3 × 0.9 + 0.3 × 0 + 0.2 × 0.9 + 0.2 × 1) / 1.0
+    assert (j.critic_verdict, j.critic_trail_ref, j.confidence) == ("consistent", calls[2].id, 0.65)
     assert "50,000.00" in j.conclusion and "deposit in transit" in j.conclusion
     assert "CR-SI-2026-0547" in j.conclusion and "BT-01-20260702-01" in j.conclusion
     sources = {(p.source_type, p.source_id) for p in j.evidence}

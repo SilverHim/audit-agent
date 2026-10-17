@@ -85,6 +85,7 @@ async def list_review_tasks(
                         overview.performance_materiality_cents,
                         overview.clearly_trivial_cents,
                     ),
+                    allowed_resolutions=deps.queue.resolutions(task, target),
                 )
             )
     return views

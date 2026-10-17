@@ -12,7 +12,14 @@ from pydantic import BaseModel, ValidationError
 
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, JudgmentDraft, ReportDraft
+from backend.contracts.llm_outputs import (
+    ConfirmationExtraction,
+    ContractExtraction,
+    CriticIndependent,
+    CriticVerdictOut,
+    JudgmentDraft,
+    ReportDraft,
+)
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -148,10 +155,11 @@ def document_pointer(p: EvidencePointer, doc: DocumentRef) -> tuple[EvidencePoin
     return p.model_copy(update={"type": evidence_type, "reliability": doc.reliability}), ""
 
 
-def judgment_semantics(draft: JudgmentDraft) -> list[str]:
-    """JudgmentDraft 的语义校验, 返回错误 (空为通过)."""
-    errors = [] if draft.reasoning_chain else ["推理链为空"]
-    for i, step in enumerate(draft.reasoning_chain):
+def chain_semantics(steps: Sequence[ReasoningStep]) -> list[str]:
+    """推理链的语义校验 (规格书 8.3, 8.6), 返回错误 (空为通过): 非空; fact, standard 带证据指针, standard 指向准则片段;
+    inference 引用前序步骤. 判断草稿与独立复核 (GEN-09) 的推理链共用."""
+    errors = [] if steps else ["推理链为空"]
+    for i, step in enumerate(steps):
         if step.kind in (StepKind.fact, StepKind.standard) and not step.evidence:
             errors.append(f"第 {i} 步 {step.kind} 没有证据指针")
         elif step.kind is StepKind.standard and all(p.source_type != "standard" for p in step.evidence):
@@ -162,9 +170,26 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
                 errors.append(f"第 {i} 步 inference 没有引用前序步骤")
             elif later:
                 errors.append(f"第 {i} 步 inference 引用了非前序步骤 {later}")
+    return errors
+
+
+def judgment_semantics(draft: JudgmentDraft) -> list[str]:
+    """JudgmentDraft 的语义校验, 返回错误 (空为通过): 推理链 (chain_semantics), 建议错报须有错报草稿."""
+    errors = chain_semantics(draft.reasoning_chain)
     if draft.proposed_action is ProposedAction.misstatement and draft.misstatement_draft is None:
         errors.append("建议认定错报, 但没有错报草稿")
     return errors
+
+
+def evidence_key(p: EvidencePointer) -> tuple[str, str, int | None]:
+    """独立复核证据白名单的比对键: 文件按 (来源, 页), 第一轮只给了所引页的文字; 其余按来源, 页为空."""
+    return p.source_type, p.source_id, p.page if p.source_type == "document" else None
+
+
+def critic_chain_ok(steps: Sequence[ReasoningStep]) -> bool:
+    """独立复核的推理链是否通过 8.6 校验: 每步都有证据支撑 (指针可解析, 且在第一轮给出的证据内), 语义无错.
+    不通过的, 争议仲裁不提供 a7_upheld (规格书 6.3 GEN-09)."""
+    return all(step.status is StepStatus.supported for step in steps) and not chain_semantics(steps)
 
 
 def evidence_coverage(
@@ -315,6 +340,12 @@ class OutputValidator:
                 level = "semantic" if errors else None
         elif isinstance(output, ReportDraft):
             level, errors = report_checks(output, ctx)
+        elif isinstance(output, CriticIndependent):
+            # 引用与语义问题只记下, 不判失败: 推理链照存, 仲裁时 critic_chain_ok 据此不提供 a7_upheld
+            output, unsupported, errors = await self._critic(eid, output, ctx)
+            level = None
+        elif isinstance(output, CriticVerdictOut):
+            level = None  # 只做语法与结构两级
         else:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         return ValidationReport(
@@ -388,6 +419,29 @@ class OutputValidator:
             return draft, "reference", unsupported, errors
         semantic = judgment_semantics(draft)
         return draft, "semantic" if semantic else None, unsupported, errors + semantic
+
+    async def _critic(
+        self, eid: str, output: CriticIndependent, ctx: ValidationContext
+    ) -> tuple[CriticIndependent, list[int], list[str]]:
+        """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页),
+        否则该步不受支持. 返回 (改写指针后的输出, 不受支持的步骤, 错误)."""
+        resolver = PointerResolver(self, eid)
+        allowed = {evidence_key(p) for p in ctx.allowed_evidence or []}
+        errors: list[str] = []
+        steps: list[ReasoningStep] = []
+        unsupported: list[int] = []
+        for i, step in enumerate(output.reasoning_chain):
+            pointers, ok = [], True
+            for p in step.evidence:
+                resolved, reason = await resolver.resolve(p)
+                if resolved is None or evidence_key(p) not in allowed:
+                    ok = False
+                    errors.append(f"第 {i} 步指针 {p.source_type} {p.source_id}: {reason or '不在给出的证据内'}")
+                pointers.append(resolved or p)
+            steps.append(step.model_copy(update={"evidence": pointers}))
+            if not ok:
+                unsupported.append(i)
+        return output.model_copy(update={"reasoning_chain": steps}), unsupported, errors + chain_semantics(steps)
 
     @staticmethod
     def _extraction(
@@ -483,27 +537,33 @@ class JudgmentEngine:
         ctx: ValidationContext,
         actor: AgentId,
         fixture_key: str = "default",
+        *,
+        llm: LLMClient | None = None,
+        system: str = SYSTEM_PROMPT,
     ) -> LLMCallResult[Any]:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
         引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json")),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
+        请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
+        llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
         """
         model = output_model(template)
         assert template.llm is not None  # output_model 已确认
-        system = SYSTEM_PROMPT.format(schema=json.dumps(model.model_json_schema(), indent=2))
+        client = llm if llm is not None else self.llm
+        system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
         messages = [LLMMessage(role="user", content=self.render(template, variables))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
             request = LLMRequest(
-                procedure_id=run.procedure_id,
+                procedure_id=template.id,
                 run_id=run.id,
                 system=system,
                 messages=messages,
                 max_tokens=template.llm.max_tokens,
                 fixture_key=fixture_key,
             )
-            response = await self.llm.complete(request, model)
+            response = await client.complete(request, model)
             report = await self.validator.validate(eid, template, response, ctx)
             trail_ids.append(await self.record(eid, actor, request, response, report, attempt))
             if not report.retryable or attempt == MAX_ATTEMPTS:
@@ -513,7 +573,7 @@ class JudgmentEngine:
                 LLMMessage(role="assistant", content=response.raw),
                 LLMMessage(role="user", content=RETRY_PROMPT.format(errors="\n".join(report.errors))),
             ]
-        return LLMCallResult(report=report, attempts=attempt, trail_ids=trail_ids)
+        return LLMCallResult(report=report, attempts=attempt, trail_ids=trail_ids, model=response.model)
 
     async def record(
         self,

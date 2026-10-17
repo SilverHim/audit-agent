@@ -80,6 +80,14 @@
       "sha256": "b941515e9d5aad51bfe14a9ee280267943f10dbdb585b28bcde3e04749dd6d58"
     },
     {
+      "path": "llm/GEN-09/BA-01-r1.json",
+      "sha256": "34e482ca95f6e6ea4c5a185ace5b3068b4bf281d4412778712f2e6762ef3e80e"
+    },
+    {
+      "path": "llm/GEN-09/BA-01-r2.json",
+      "sha256": "a8976893f606609756d02eae805a8a056c8ba93f52fd4a25fa638be43527c58d"
+    },
+    {
       "path": "llm/REV-02/SI-2026-0612.json",
       "sha256": "0bf36fb2a0446484be725e6de86ae9490893f992b9b3a8a44f5887dcdffbe01d"
     },

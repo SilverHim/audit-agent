@@ -95,7 +95,7 @@ def setup(
     subjects 经 subject_sources 登记 (各判断程序接入前, 用它代替程序自己的取对象逻辑).
     """
     engine = FakeJudgmentEngine(outcomes)
-    deps = replace(make_deps(FakeRegistry(), FakeTrail()), judgments=engine)  # type: ignore[arg-type]
+    deps = replace(make_deps(FakeRegistry(), FakeTrail()), judgments=engine, review_llm=None)  # type: ignore[arg-type]
     ctx = make_ctx(deps, procedure_id)
     procedure = ctx.procedure.model_copy(
         update={"objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"], "rerun_subject_ids": rerun or []}
@@ -307,7 +307,7 @@ async def test_full_rerun_keeps_subject_in_human_hands(third: str) -> None:
 
         engine = FakeJudgmentEngine({a: for_a, b: for_b})
         engines.append(engine)
-        agent = FieldworkAgent(replace(deps, judgments=engine))
+        agent = FieldworkAgent(replace(deps, judgments=engine, review_llm=None))
 
         async def source(ctx: RunContext) -> list[Subject]:
             current_x = next(x for x in ctx.state["exceptions"] if x.id == X1.id)

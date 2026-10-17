@@ -1,0 +1,38 @@
+{#
+GEN-09 判断独立复核第二轮 → CriticVerdictOut：第一轮之后再给 A6 的结论，比对两者是否一致。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
+变量：
+  subject_id      判断对象 ID
+  procedure       被复核的程序：id、name、assertions
+  independent     本复核第一轮的结论：conclusion、reasoning_chain（ReasoningStep 列表）
+  generator       原分析人员的结论：conclusion、proposed_action（accept、close、misstatement、more_evidence）
+#}
+You are the independent reviewer from the previous step, assisting a registered company auditor. You reached your own conclusion on subject {{ subject_id }} under "{{ procedure.name }}" ({{ procedure.id }}) from the evidence alone. Now compare it with the original analyst's conclusion.
+
+## Your independent conclusion
+
+{{ independent.conclusion }}
+
+Your reasoning:
+{% for step in independent.reasoning_chain %}
+{{ loop.index0 }}. [{{ step.kind }}] {{ step.text }}
+{% endfor %}
+
+## The original analyst's conclusion
+
+{{ generator.conclusion }}
+
+Proposed action: {{ generator.proposed_action }}
+
+## Task
+
+Decide whether the two conclusions agree on what the evidence shows and on whether there is a misstatement. Differences in wording or detail do not count; a different finding, amount, period or proposed treatment does.
+
+## Output (CriticVerdictOut)
+
+- `critic_verdict`: `consistent` or `inconsistent`.
+- `critic_reason_type`: null when consistent. When inconsistent, one of:
+  - `insufficient_evidence`: the evidence does not support the original conclusion, or either conclusion needs evidence that is not there.
+  - `different_conclusion`: the same evidence supports a different conclusion.
+  - `reasoning_error`: the original conclusion does not follow from the facts it relies on.
+- `critic_reason`: one to three sentences naming the specific point of agreement or disagreement.

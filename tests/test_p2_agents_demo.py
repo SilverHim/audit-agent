@@ -155,7 +155,8 @@ async def run_p2() -> Demo:
 
 
 async def test_runs_succeed_and_each_judgment_in_one_attempt() -> None:
-    """验收 1, 2: 7 条程序各一次执行都成功; 8 次判断与抽取都一次通过 (大模型调用全部 attempt 1, 无失败)."""
+    """验收 1, 2: 7 条程序各一次执行都成功; 8 次判断与抽取, 以及 A7 对 BA-01 的 2 次独立复核都一次通过
+    (大模型调用全部 attempt 1, 无失败)."""
     demo = await run_p2()
     assert sorted((r.id, r.status) for r in demo.state["procedure_runs"]) == sorted(
         (f"RUN-{pid}-1", RunStatus.succeeded) for layer in LAYERS for pid in layer
@@ -166,6 +167,7 @@ async def test_runs_succeed_and_each_judgment_in_one_attempt() -> None:
         + [("REV-02", i) for i in ("SI-2026-0612", "SI-2026-0618")]
         + [("DOC-06", a) for a in ("BA-01", "BA-02")]
         + [("CSH-02", "BA-01")]
+        + [("GEN-09", "BA-01-r1"), ("GEN-09", "BA-01-r2")]  # A7 对 BA-01 (L3, 建议关闭) 的两轮独立复核
     )
     assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
 

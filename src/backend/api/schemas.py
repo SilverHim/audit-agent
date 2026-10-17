@@ -10,6 +10,7 @@ from backend.contracts.models import (
     AuditReportVersion,
     ClientProfile,
     Decision,
+    DisputeResolution,
     GateDecision,
     GateEdit,
     GateId,
@@ -21,6 +22,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementDraft,
     Model,
+    NeitherAction,
     OpinionType,
     Phase,
     Procedure,
@@ -99,6 +101,8 @@ class ReviewRecordIn(Model):
     misstatement_draft: MisstatementDraft | None = None
     rerun_params: dict[str, Any] | None = None
     manual_result: ManualResult | None = None
+    dispute_resolution: DisputeResolution | None = None
+    neither_action: NeitherAction | None = None
 
 
 class ClientProfileIn(Model):
@@ -134,6 +138,8 @@ class ReviewTaskView(Model):
     allowed_decisions: list[Decision]
     amount_cents: int | None  # 涉及金额, 保留正负号; 取值顺序见 services.review_queue.task_amount
     tier: ReviewTier  # 复核档位, 按金额绝对值与置信度判定 (services.review_queue.review_tier)
+    # 争议任务可选的仲裁结果 (独立复核的推理链无效时没有 a7_upheld); 其余任务为空
+    allowed_resolutions: list[DisputeResolution] = []
 
 
 class ProcedureDetail(Model):

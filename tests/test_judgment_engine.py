@@ -294,5 +294,5 @@ async def test_unregistered_standard_raises_before_llm_call() -> None:
 
 def test_build_deps_constructs_engine() -> None:
     engine = build_deps(SETTINGS).judgments
-    assert engine.confidence_weights == {"evidence": 0.3, "rule": 0.3, "llm": 0.2}
+    assert engine.confidence_weights == {"evidence": 0.3, "rule": 0.3, "llm": 0.2, "critic": 0.2}
     assert engine.reliability_weights["external_copy"] == 0.8
