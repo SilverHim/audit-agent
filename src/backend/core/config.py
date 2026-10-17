@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""  # live 模式的密钥, 只放 .env
     LLM_FIXTURES_ROOT: Path = ROOT / "tests" / "fixtures" / "llm"  # mock 模式的固定输出目录
     PARALLEL_CAP: int = 4  # fieldwork 实例并行上限
+    CONCIERGE_MAX_STEPS: int = 6  # 审计助理一轮最多调几次带工具的模型, 到了再调一次收尾
+    CONCIERGE_CONTEXT_BUDGET: int = 24000  # 一轮开始时系统提示 + 历史 + 问题的估算 token 上限, 超过即压缩历史
+    CONCIERGE_TURN_RESERVE: int = 8000  # 一轮工具结果合计的 token 预算
+    CONCIERGE_KEEP_TURNS: int = 4  # 压缩历史时保留原文的最近轮数
+    CONCIERGE_TOOL_RESULT_CHARS: int = 6000  # 单个工具结果最多字符数, 超出截断
 
     XERO_CLIENT_ID: str = ""  # Xero 应用的 Client ID (不是密钥), 为空时不能接 Xero
     XERO_CLIENT_SECRET: str = ""  # Web app 类型的 client secret, 只放 .env; 为空时按 PKCE 授权

@@ -976,6 +976,168 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/conversation": {
+      "get": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "List Conversation",
+        "description": "历史问答, 按时间升序; 取自 conversation 留痕, 不含压缩摘要.",
+        "operationId": "conversation-list_conversation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationTurn"
+                  },
+                  "title": "Response Conversation-List Conversation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Ask Concierge",
+        "description": "一次性返回回答. 与流式接口的回答和引用规则相同.",
+        "operationId": "conversation-ask_concierge",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConciergeQuestion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConciergeAnswer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/conversation/stream": {
+      "post": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Stream Concierge",
+        "description": "流式返回回答 (事件见模块说明). 审计师中途断开时, 已生成的部分记入留痕并标 aborted.",
+        "operationId": "conversation-stream_concierge",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConciergeQuestion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE 事件流",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/documents": {
       "get": {
         "tags": [
@@ -2363,6 +2525,100 @@
         "title": "CompletionMaterial",
         "description": "FIN-01 闸门的呈报材料."
       },
+      "ConciergeAnswer": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ConciergeCitation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "trail_id": {
+            "type": "string",
+            "title": "Trail Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answer",
+          "citations",
+          "trail_id"
+        ],
+        "title": "ConciergeAnswer",
+        "description": "一次提问的完整回答."
+      },
+      "ConciergeCitation": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "judgment",
+              "procedure",
+              "evidence",
+              "trail"
+            ],
+            "title": "Kind"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "pointer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidencePointer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "title": "ConciergeCitation",
+        "description": "回答引用的来源: 回答文本里提到的编号, 且在本轮工具结果或对话上下文中出现过."
+      },
+      "ConciergeQuestion": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Question"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Lang"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "lang"
+        ],
+        "title": "ConciergeQuestion",
+        "description": "审计师的一次提问."
+      },
       "Confirmation": {
         "properties": {
           "id": {
@@ -2627,6 +2883,66 @@
         ],
         "title": "ContractTerm",
         "description": "合同中的一个条款."
+      },
+      "ConversationTurn": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Lang"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/ConciergeCitation"
+            },
+            "type": "array",
+            "title": "Citations"
+          },
+          "trail_id": {
+            "type": "string",
+            "title": "Trail Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "aborted": {
+            "type": "boolean",
+            "title": "Aborted",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "answer",
+          "lang",
+          "citations",
+          "trail_id",
+          "created_at"
+        ],
+        "title": "ConversationTurn",
+        "description": "历史中的一轮问答, 取自 conversation 留痕."
       },
       "CriticReasonType": {
         "type": "string",
@@ -5553,7 +5869,9 @@
           "external_call",
           "decision",
           "transition",
-          "deferral"
+          "deferral",
+          "conversation",
+          "conversation_summary"
         ],
         "title": "TrailKind",
         "description": "留痕类型."

@@ -401,6 +401,63 @@ export type CompletionMaterial = {
 };
 
 /**
+ * ConciergeAnswer
+ *
+ * 一次提问的完整回答.
+ */
+export type ConciergeAnswer = {
+    /**
+     * Answer
+     */
+    answer: string;
+    /**
+     * Citations
+     */
+    citations: Array<ConciergeCitation>;
+    /**
+     * Trail Id
+     */
+    trail_id: string;
+};
+
+/**
+ * ConciergeCitation
+ *
+ * 回答引用的来源: 回答文本里提到的编号, 且在本轮工具结果或对话上下文中出现过.
+ */
+export type ConciergeCitation = {
+    /**
+     * Kind
+     */
+    kind: 'judgment' | 'procedure' | 'evidence' | 'trail';
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Label
+     */
+    label: string;
+    pointer?: EvidencePointer | null;
+};
+
+/**
+ * ConciergeQuestion
+ *
+ * 审计师的一次提问.
+ */
+export type ConciergeQuestion = {
+    /**
+     * Question
+     */
+    question: string;
+    /**
+     * Lang
+     */
+    lang: 'zh' | 'en';
+};
+
+/**
  * Confirmation
  *
  * 一份银行询证函: 发函, 回函, 回函余额与账面的比对结果.
@@ -540,6 +597,42 @@ export type ContractTerm = {
      * Page
      */
     page: number;
+};
+
+/**
+ * ConversationTurn
+ *
+ * 历史中的一轮问答, 取自 conversation 留痕.
+ */
+export type ConversationTurn = {
+    /**
+     * Question
+     */
+    question: string;
+    /**
+     * Answer
+     */
+    answer: string;
+    /**
+     * Lang
+     */
+    lang: 'zh' | 'en';
+    /**
+     * Citations
+     */
+    citations: Array<ConciergeCitation>;
+    /**
+     * Trail Id
+     */
+    trail_id: string;
+    /**
+     * Created At
+     */
+    created_at: string | null;
+    /**
+     * Aborted
+     */
+    aborted?: boolean;
 };
 
 /**
@@ -2194,7 +2287,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary';
 
 /**
  * UncorrectedItem
@@ -2855,6 +2948,96 @@ export type DeferralsSetDeferralResponses = {
 };
 
 export type DeferralsSetDeferralResponse = DeferralsSetDeferralResponses[keyof DeferralsSetDeferralResponses];
+
+export type ConversationListConversationData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/conversation';
+};
+
+export type ConversationListConversationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ConversationListConversationError = ConversationListConversationErrors[keyof ConversationListConversationErrors];
+
+export type ConversationListConversationResponses = {
+    /**
+     * Response Conversation-List Conversation
+     *
+     * Successful Response
+     */
+    200: Array<ConversationTurn>;
+};
+
+export type ConversationListConversationResponse = ConversationListConversationResponses[keyof ConversationListConversationResponses];
+
+export type ConversationAskConciergeData = {
+    body: ConciergeQuestion;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/conversation';
+};
+
+export type ConversationAskConciergeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ConversationAskConciergeError = ConversationAskConciergeErrors[keyof ConversationAskConciergeErrors];
+
+export type ConversationAskConciergeResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConciergeAnswer;
+};
+
+export type ConversationAskConciergeResponse = ConversationAskConciergeResponses[keyof ConversationAskConciergeResponses];
+
+export type ConversationStreamConciergeData = {
+    body: ConciergeQuestion;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/conversation/stream';
+};
+
+export type ConversationStreamConciergeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ConversationStreamConciergeError = ConversationStreamConciergeErrors[keyof ConversationStreamConciergeErrors];
+
+export type ConversationStreamConciergeResponses = {
+    /**
+     * SSE 事件流
+     */
+    200: unknown;
+};
 
 export type EvidenceListDocumentsData = {
     body?: never;

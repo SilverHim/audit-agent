@@ -1,0 +1,32 @@
+{#
+审计助理对话历史的增量摘要: 较早的若干轮问答连同上一份摘要压成一份新摘要 (参考 pi 的 compaction).
+变量:
+  previous   上一份摘要, 没有为空串
+  turns      要压缩的各轮: question, answer, citations (各项 id)
+"[Auditor] " 开头的行供 mock 规则模型识别, 勿改格式.
+#}
+Update the running summary of a conversation between an auditor and the audit assistant. Do not continue the conversation and do not answer any question in it.
+{% if previous %}
+
+<previous-summary>
+{{ previous }}
+</previous-summary>
+{% endif %}
+
+<conversation>
+{% for turn in turns %}
+[Auditor] {{ turn.question }}
+[Assistant] {{ turn.answer }}
+{% if turn.citations %}
+[Cited] {{ turn.citations | join(", ") }}
+{% endif %}
+{% endfor %}
+</conversation>
+
+Write the new summary in the language the auditor used, in at most 400 words, under these headings:
+1. Questions the auditor asked
+2. Answers and conclusions given, with the IDs cited
+3. Follow-ups still open
+4. The auditor's stated preferences
+
+Merge everything from the previous summary that is still relevant. Keep IDs, amounts and dates exactly as written. Do not add anything that is not in the conversation.

@@ -13,6 +13,7 @@ from backend.adapters.confirmation_mock import MockConfirmationChannel
 from backend.adapters.llm import SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.registry_mock import MockRegistrySource
 from backend.agents.base import AgentDeps
+from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
 from backend.api.errors import validation_error
 from backend.api.routes import api_router
 from backend.core.config import Settings, get_settings
@@ -102,11 +103,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.runner = GraphRunner(graph, deps, llm_settings.versions)
             app.state.query = GraphStateQuery(graph, deps, app.state.runner)
             app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
+            app.state.concierge = ConciergeChat(
+                deps, app.state.query, make_chat_source(settings, llm_settings), ChatLimits.from_settings(settings)
+            )
             try:
                 await app.state.runner.recover()
                 yield
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.
+                await app.state.concierge.shutdown()
                 await app.state.runner.shutdown()
     finally:
         await engine.dispose()

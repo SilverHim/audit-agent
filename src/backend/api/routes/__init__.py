@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from backend.api.routes import (
     auth,
+    conversation,
     datasets,
     deferrals,
     engagements,
@@ -25,6 +26,7 @@ for module in (
     gates,
     reviews,
     deferrals,
+    conversation,
     evidence,
     reports,
     standards,

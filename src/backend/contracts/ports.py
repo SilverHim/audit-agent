@@ -4,7 +4,7 @@
 上层只依赖这里的 Protocol, 具体实现在组装根 (main.py) 注入.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import date, datetime
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel
 
+from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
@@ -285,6 +286,29 @@ class LLMClient(Protocol):
     """大语言模型客户端: mock 按程序返回固定输出, live 调真实模型."""
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]: ...
+
+
+class ChatModel(Protocol):
+    """审计助理 (A10) 用的对话模型: 带工具调用的流式 Chat Completions.
+
+    产出若干 TextDelta, 最后一个 AssistantTurn (文本, 工具调用, token 数). 只在产出第一个事件之前重试;
+    调用方停止迭代 (aclose 或取消) 时关闭上游连接.
+    """
+
+    def stream_chat(
+        self,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSpec],
+        *,
+        tool_choice: Literal["auto", "none"] = "auto",
+        max_tokens: int,
+    ) -> AsyncIterator[ChatEvent]: ...
+
+
+class ChatModelSource(Protocol):
+    """每次提问时取当前生效的对话模型: 设置页切换主模型后, 下一次提问即用新的."""
+
+    async def current(self) -> ChatModel: ...
 
 
 class RuleEngine(Protocol):

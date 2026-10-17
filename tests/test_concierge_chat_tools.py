@@ -1,0 +1,291 @@
+"""审计助理的只读工具 (tools.py) 与引用匹配 (citations.py)."""
+
+import json
+from datetime import UTC, datetime
+from typing import Any
+
+from backend.agents.concierge_chat.citations import match_citations
+from backend.agents.concierge_chat.tools import ToolBox, ToolEnv, minimize, pseudonym
+from backend.contracts.conversation import ConciergeCitation, ToolCall
+from backend.contracts.models import (
+    AnalyticsResult,
+    AuditException,
+    AutonomyLevel,
+    CriticReasonType,
+    CriticVerdict,
+    EvidencePointer,
+    EvidenceType,
+    GateId,
+    Judgment,
+    MaterialityCandidates,
+    ProposedAction,
+    ReasoningStep,
+    ReviewTask,
+    RiskItem,
+    StepKind,
+    TargetType,
+    TaskKind,
+    TrailEntry,
+    TrailKind,
+)
+from backend.contracts.views import GateView, PlanningMaterial
+from tests.chat_fakes import FixedState, chat_deps, make_overview
+from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
+    NUMBAT_RECORDS,
+    FakeFinancialStore,
+    FakeOutputStore,
+    FakeTrail,
+    numbat_contracts,
+)
+
+EID = ENGAGEMENT.id
+INVOICE = EvidencePointer(
+    type=EvidenceType.invoice, source_type="sales_invoice", source_id="SI-2026-0612", locator="posting_date"
+)
+DELIVERY = EvidencePointer(
+    type=EvidenceType.delivery, source_type="delivery_note", source_id="DN-2026-0612", locator="signed_date"
+)
+STANDARD = EvidencePointer(type=EvidenceType.standard, source_type="standard", source_id="AASB15-P38", locator="38")
+
+
+JUDGMENT = Judgment(
+    id="J-REV-02-1-SI-2026-0612",
+    procedure_id="REV-02",
+    run_id="RUN-REV-02-1",
+    subject_id="SI-2026-0612",
+    conclusion="SI-2026-0612 的收入记早了: 控制权在 7 月 3 日才转移.",
+    confidence=0.82,
+    confidence_parts={"evidence": 0.8, "rule": 1.0, "llm": 0.7},
+    reasoning_chain=[
+        ReasoningStep(kind=StepKind.fact, text="发票 6 月 28 日入账", evidence=[INVOICE]),
+        ReasoningStep(kind=StepKind.fact, text="发运单 7 月 3 日签收", evidence=[DELIVERY]),
+        ReasoningStep(kind=StepKind.standard, text="AASB 15 第 38 段: 控制权转移时确认", evidence=[STANDARD]),
+        ReasoningStep(kind=StepKind.inference, text="收入应计入下期", from_steps=[0, 1, 2]),
+    ],
+    evidence=[INVOICE, DELIVERY],
+    counter_argument="若合同约定出厂即转移控制权, 则 6 月确认正确.",
+    proposed_action=ProposedAction.misstatement,
+    autonomy_level=AutonomyLevel.L2,
+    performed_by="U-1",
+    created_at=NOW,
+    critic_verdict=CriticVerdict.inconsistent,
+    critic_reason_type=CriticReasonType.different_conclusion,
+    critic_reason="发运单显示 7 月 3 日才签收",
+    critic_conclusion="收入应计入下期",
+)
+TASK = ReviewTask(
+    id="T-J-REV-02-1-SI-2026-0612-v1",
+    kind=TaskKind.normal,
+    procedure_id="REV-02",
+    target_type=TargetType.Judgment,
+    target_id=JUDGMENT.id,
+    target_version=1,
+    run_id="RUN-REV-02-1",
+    created_at=NOW,
+)
+EXCEPTION = AuditException(
+    id="X-REV-08-1-R01-1",
+    procedure_id="REV-08",
+    run_id="RUN-REV-08-1",
+    rule_id="R01",
+    severity="high",
+    source_ids=["SI-2026-0612"],
+    amount_cents=14200000,
+    evidence=[INVOICE],
+)
+
+
+def env(trail: FakeTrail | None = None, max_chars: int = 6000, state: FixedState | None = None) -> ToolEnv:
+    deps = chat_deps(
+        trail,
+        output_store=FakeOutputStore([JUDGMENT, TASK, EXCEPTION]),
+        financial_store=FakeFinancialStore(records=NUMBAT_RECORDS),
+    )
+    return ToolEnv(EID, deps, state if state is not None else FixedState(), max_chars)
+
+
+async def call(name: str, args: dict[str, Any] | str = "{}", tool_env: ToolEnv | None = None) -> tuple[Any, Any]:
+    arguments = args if isinstance(args, str) else json.dumps(args)
+    outcome = await ToolBox().call(tool_env or env(), ToolCall(id="c", name=name, arguments=arguments))
+    try:
+        return outcome, json.loads(outcome.content)
+    except ValueError:  # 截断后的结果不是完整 JSON
+        return outcome, outcome.content
+
+
+def test_specs_never_take_engagement_id() -> None:
+    for spec in ToolBox().specs:
+        assert spec.parameters["type"] == "object"
+        assert not {"eid", "engagement_id"} & set(spec.parameters.get("properties", {}))
+
+
+async def test_overview_gives_progress_amounts_and_procedure_citations() -> None:
+    outcome, data = await call("get_overview")
+    assert outcome.ok
+    assert (data["phase"], data["procedures_completed"], data["procedures_total"]) == ("P2_Executing", 2, 3)
+    assert data["materiality"] == "AUD 120,000.00"
+    assert set(outcome.cites) == {"REV-08", "CSH-05", "REV-02"}
+
+
+async def test_judgment_carries_reasoning_counter_argument_and_critic() -> None:
+    outcome, data = await call("get_judgment", {"judgment_id": JUDGMENT.id})
+    assert outcome.ok
+    assert data["counter_argument"].startswith("若合同约定")
+    assert [s["kind"] for s in data["reasoning_chain"]] == ["fact", "fact", "standard", "inference"]
+    assert data["reasoning_chain"][1]["evidence"][0]["source_id"] == "DN-2026-0612"
+    assert data["critic_verdict"] == "inconsistent"
+    assert data["critic_reason"] == "发运单显示 7 月 3 日才签收"
+    assert set(outcome.cites) == {JUDGMENT.id, "SI-2026-0612", "DN-2026-0612", "AASB15-P38"}
+    assert outcome.cites["DN-2026-0612"].pointer == DELIVERY
+
+
+async def test_missing_judgment_is_an_error_text_not_an_exception() -> None:
+    outcome, data = await call("get_judgment", {"judgment_id": "J-NOPE"})
+    assert not outcome.ok
+    assert "J-NOPE" in data["error"]
+
+
+async def test_bad_arguments_and_unknown_tool_become_error_text() -> None:
+    outcome, data = await call("get_judgment", "{not json")
+    assert not outcome.ok and "JSON" in data["error"]
+    outcome, data = await call("get_judgment", {"judgment_id": "J-1", "eid": "ENG-OTHER"})
+    assert not outcome.ok and "参数不合要求" in data["error"]
+    outcome, data = await call("delete_everything")
+    assert not outcome.ok and "没有这个工具" in data["error"]
+
+
+async def test_tool_exception_becomes_error_text() -> None:
+    class Broken(FixedState):
+        async def overview(self, eid: str) -> Any:
+            raise RuntimeError("database unavailable")
+
+    outcome, data = await call("get_overview", tool_env=env(state=Broken()))
+    assert not outcome.ok and "RuntimeError" in data["error"]
+
+
+async def test_evidence_masks_accounts_and_pseudonymises_people() -> None:
+    outcome, data = await call("get_evidence", {"source_type": "bank_account", "source_id": "BA-01"})
+    assert data["row"]["account_no"] == "***601" and data["row"]["bsb"] == "***101"
+    assert "12345601" not in outcome.content
+    outcome, data = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"})
+    assert data["row"]["created_by"] == pseudonym("ar.clerk") != data["row"]["approved_by"]
+    assert "ar.clerk" not in outcome.content
+    assert data["row"]["debit_aud"] == "AUD 50,000.00"
+    outcome, data = await call("get_evidence", {"source_type": "delivery_note", "source_id": "DN-2026-0612"})
+    assert "Daniel Price" not in outcome.content
+    assert outcome.cites["DN-2026-0612"].kind == "evidence"
+
+
+async def test_open_items_list_gate_then_tasks_with_deferral() -> None:
+    trail = FakeTrail()
+    await trail.record(
+        TrailEntry(
+            engagement_id=EID,
+            kind=TrailKind.deferral,
+            actor="U-1",
+            summary="稍后处理",
+            payload={"target_type": "review_task", "target_id": TASK.id, "deferred": True},
+            created_at=datetime(2026, 9, 30, 1, tzinfo=UTC),
+        )
+    )
+    state = FixedState(view=make_overview(current_gate=GateId.FIN_01))
+    outcome, data = await call("list_open_items", tool_env=env(trail, state=state))
+    assert [i["type"] for i in data["items"]] == ["gate_decision", "review_task"]
+    assert data["items"][0] == {"type": "gate_decision", "gate": "FIN-01", "deferred": False}
+    assert data["items"][1]["deferred"] is True
+    assert data["items"][1]["subject_id"] == "SI-2026-0612"
+    assert JUDGMENT.id in outcome.cites
+
+
+async def test_contracts_list_and_terms_with_pages() -> None:
+    deps = chat_deps(financial_store=FakeFinancialStore(records=NUMBAT_RECORDS, contracts=numbat_contracts()))
+    contract_env = ToolEnv(EID, deps, FixedState(), 6000)
+    outcome, data = await call("get_contract", tool_env=contract_env)
+    assert [c["id"] for c in data["contracts"]] == ["CON-001", "CON-002", "CON-003"]
+    outcome, data = await call("get_contract", {"contract_id": "CON-001"}, tool_env=contract_env)
+    assert outcome.ok and data["counterparty"] == "Bilby Robotics Pty Ltd"
+    first = data["terms"][0]
+    assert first["id"] == "CON-001-T1" and first["page"] >= 1 and first["text"]
+    citation = outcome.cites["CON-001-T1"]
+    assert citation.pointer is not None and citation.pointer.page == first["page"]
+    assert citation.pointer.source_id == next(c.document_id for c in numbat_contracts() if c.id == "CON-001")
+    outcome, data = await call("get_contract", {"contract_id": "CON-404"}, tool_env=contract_env)
+    assert not outcome.ok and "CON-404" in data["error"]
+
+
+async def test_gate_material_pseudonymises_nested_people() -> None:
+    material = PlanningMaterial(
+        analytics=AnalyticsResult(id="ANALYTICS", ratios={}, exception_ids=[]),
+        analytics_exceptions=[],
+        candidates=MaterialityCandidates(id="MATERIALITY", candidates=[]),
+        objectives=[],
+        risks=[
+            RiskItem(
+                id="R-1",
+                objective_id="O-1",
+                assertion="Occurrence",
+                level="low",
+                fraud_related=False,
+                description="risk",
+                approved_by="raw.person",
+            )
+        ],
+        uncovered_objective_ids=[],
+    )
+    view = GateView(gate=GateId.PLN_01_03, target_id="MATERIALITY", target_version=1, material=material)
+    outcome, data = await call("get_gate", tool_env=env(state=FixedState(gate_view=view)))
+    assert outcome.ok and "raw.person" not in outcome.content
+    assert data["material"]["risks"][0]["approved_by"] == pseudonym("raw.person")
+
+
+async def test_same_person_gets_the_same_pseudonym_across_tools() -> None:
+    _, row = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"})
+    assert row["row"]["created_by"] == pseudonym("ar.clerk")  # 只化名一次, 不会被二次化名
+
+
+def test_generated_amount_wins_regardless_of_key_order() -> None:
+    first = minimize({"amount_cents": 12345, "amount_aud": "AUD 999.00"})
+    second = minimize({"amount_aud": "AUD 999.00", "amount_cents": 12345})
+    assert first["amount_aud"] == second["amount_aud"] == "AUD 123.45"
+
+
+async def test_long_results_are_truncated() -> None:
+    outcome, _ = await call("get_judgment", {"judgment_id": JUDGMENT.id}, tool_env=env(max_chars=200))
+    assert outcome.ok
+    assert len(outcome.content) < 300 and outcome.content.endswith("换更具体的查询]")
+
+
+async def test_trail_search_excludes_conversation_and_newest_first() -> None:
+    trail = FakeTrail()
+    for kind, summary in [
+        (TrailKind.llm_call, "REV-02 调用大模型"),
+        (TrailKind.conversation, "审计师的问题"),
+        (TrailKind.decision, "确认 REV-02"),
+    ]:
+        await trail.record(
+            TrailEntry(engagement_id=EID, kind=kind, actor="U-1", procedure_id="REV-02", summary=summary)
+        )
+    outcome, data = await call("search_trail", {"procedure_id": "REV-02"}, tool_env=env(trail))
+    assert [e["summary"] for e in data["entries"]] == ["确认 REV-02", "REV-02 调用大模型"]
+    assert set(outcome.cites) == {"TR-3", "TR-1"}
+
+
+def cite(cid: str, kind: Any = "judgment") -> ConciergeCitation:
+    return ConciergeCitation(kind=kind, id=cid, label=cid)
+
+
+def test_citations_need_boundaries_and_prefer_long_ids() -> None:
+    cites = [cite("REV-02", "procedure"), cite("J-REV-02-1-SI-2026-0612"), cite("CON-001", "evidence")]
+    pool = {c.id: c for c in cites}
+    answer = "判断J-REV-02-1-SI-2026-0612认为收入记早了；合同条款见 CON-001-T1。程序REV-02还有 1 项待复核。"
+    found = match_citations(answer, pool)
+    assert [c.id for c in found] == ["J-REV-02-1-SI-2026-0612", "REV-02"]
+
+
+def test_citations_only_from_pool_and_deduplicated() -> None:
+    pool = {"SI-2026-0612": cite("SI-2026-0612", "evidence")}
+    answer = "SI-2026-0612 与 SI-2026-0618 都在期末前后；SI-2026-0612 的发运单晚于期末。"
+    assert [c.id for c in match_citations(answer, pool)] == ["SI-2026-0612"]
+    assert match_citations("", pool) == [] and match_citations(answer, {}) == []

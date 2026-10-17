@@ -333,6 +333,8 @@ class TrailKind(StrEnum):
     decision = "decision"  # 人的决定
     transition = "transition"  # 状态迁移
     deferral = "deferral"  # 人工标记或取消稍后处理
+    conversation = "conversation"  # 审计助理的一轮问答
+    conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
 
 
 class AgentId(StrEnum):
