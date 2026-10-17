@@ -281,6 +281,7 @@ export const zh: Messages = {
     disputeUnavailable: '独立复核的推理链未通过校验，不能直接采用',
     conclusion: '你的结论',
     conclusionHint: '（必填，保存为该判断的新版本）',
+    conclusionHintDispute: '（必填，保存为新的人工判断，原判断标为已推翻）',
     misstatement: '错报',
     copyDraft: '复制建议数据',
     msFields: { type: '类型', account: '科目', assertion: '认定', direction: '方向' },

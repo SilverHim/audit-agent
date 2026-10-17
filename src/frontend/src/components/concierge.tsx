@@ -518,22 +518,26 @@ export function ReviewDecisionCard({
       ) : null}
 
       {isDispute ? (
-        <label className="flex items-center gap-2 text-[13.5px]">
+        <div className="flex items-center gap-2 text-[13.5px]">
           <input
+            id={`attach-ms-${view.task.id}`}
             type="checkbox"
             className="size-4 accent-primary"
             checked={withMisstatement}
             disabled={busy}
             onChange={(event) => setWithMisstatement(event.target.checked)}
           />
-          {t.card.attachMisstatement}
-        </label>
+          <label htmlFor={`attach-ms-${view.task.id}`}>{t.card.attachMisstatement}</label>
+        </div>
       ) : null}
 
       {needsConclusion ? (
         <div className="flex flex-col gap-1.5">
           <label htmlFor={`conclusion-${view.task.id}`} className="font-semibold text-[13px]">
-            {t.card.conclusion} <span className="font-normal text-muted-foreground">{t.card.conclusionHint}</span>
+            {t.card.conclusion}{' '}
+            <span className="font-normal text-muted-foreground">
+              {isDispute ? t.card.conclusionHintDispute : t.card.conclusionHint}
+            </span>
           </label>
           <Textarea
             id={`conclusion-${view.task.id}`}

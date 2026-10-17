@@ -292,6 +292,7 @@ export const en = {
     disputeUnavailable: "The independent review's reasoning did not pass validation and cannot be adopted as is",
     conclusion: 'Your conclusion',
     conclusionHint: '(required; becomes a new version of the judgment)',
+    conclusionHintDispute: '(required; saved as a new auditor judgment, and the original is marked overridden)',
     misstatement: 'Misstatement',
     copyDraft: 'Copy the proposed figures',
     msFields: { type: 'Type', account: 'Account', assertion: 'Assertion', direction: 'Direction' },
