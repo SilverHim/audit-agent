@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["passed", "summary", "previous_findings", "findings", "checks"],
+  "properties": {
+    "passed": {"type": "boolean", "description": "没有未解决的 blocker 与 major 时为真"},
+    "summary": {"type": "string", "description": "两三句结论"},
+    "previous_findings": {
+      "type": "array",
+      "description": "第 1 轮为空数组; 之后逐条给上一轮问题的状态",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "note"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"type": "string", "enum": ["fixed", "not_fixed", "withdrawn"]},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "category", "file", "line", "problem", "suggestion", "probe_test"],
+        "properties": {
+          "id": {"type": "string", "description": "如 R62-01"},
+          "severity": {"type": "string", "enum": ["blocker", "major", "minor", "nit"]},
+          "category": {"type": "string", "enum": ["correctness", "requirement", "contract", "test", "convention", "data", "other"]},
+          "file": {"type": "string", "description": "仓库相对路径"},
+          "line": {"type": ["integer", "null"]},
+          "problem": {"type": "string"},
+          "suggestion": {"type": "string"},
+          "probe_test": {"type": ["string", "null"], "description": "佐证探针测试的路径, 没有为 null"}
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "description": "pytest, ruff, mypy 三项必跑, 另加探针",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "result"],
+        "properties": {
+          "command": {"type": "string"},
+          "result": {"type": "string"}
+        }
+      }
+    }
+  }
+}

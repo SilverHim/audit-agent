@@ -1,0 +1,112 @@
+{
+ "group": "智能体协作 (GEN-09 判断独立复核, GEN-10 进度与来源解释, GEN-11 判断呈递与决定收集)",
+ "issues": [
+  {
+   "key": "AC-2/AC-4/AC-8/AC-11 (测试全绿)",
+   "severity": "blocker",
+   "problem": "草稿把 Numbat 全流程的改动全部压到最后的 AC-13, 但从 AC-2 起, 每条需求都会让已有的验收测试变红. 这违反 '每条需求 pytest 全绿' 的开发流程, 每一步都得返工. (1) AC-2 一往 tests/fixtures/llm 加 GEN-09 的 fixture, test_e2e_mock 的 assert_fixtures_used_once 就会失败 (它要求目录下每个文件在流程中恰被读一次); test_knowledge 的 test_fixture_document_ids_in_manifest 遇到 GEN-09 的 document 指针时, expected_document 会抛 LookupError, 它对 checked 字典的精确断言也对不上. AC-8 加 GEN-11 fixture, AC-11 加 GEN-10 fixture 时同理. (2) AC-4 把 A7 接进 A6 以后, CSH-02 (L3, close) 会触发 A7, 判不一致并建 dispute 任务. 这时 AC-5 还没做, ReviewQueue.allowed 对 dispute 走到最后一个分支, 只允许 rerun, 所以 R55 的 D-CSH02 confirm 会被拒. test_p2_agents_demo 对 llm_call 集合和 '6 条 pending normal 任务' 的断言也会失败. 这些测试文件都不在 AC-2 或 AC-4 的 scope_files 里.",
+   "evidence": "tests/test_e2e_mock.py:332-339 (files = root.glob(\"*/*.json\") 与 llm_call 全集比对); tests/test_knowledge.py:427-437 (expected_document 对未知程序抛 LookupError), :441-470; tests/test_p2_agents_demo.py:163-169, :207; services/review_queue.py:62-68 (非 normal, unattributed 且无 subject_id 时只给 rerun); tests/test_flow.py:78 (D-CSH02 为 confirm)",
+   "fix": "二选一, 写进草稿: (a) 每条需求同步改受影响的集成测试. AC-2 改 test_knowledge 的 expected_document 和 checked (GEN-09 指向 confirmations/12345601.pdf), assert_fixtures_used_once 暂时排除 GEN-09/10/11 目录. AC-4 同步改 test_p2_agents_demo, test_fieldwork_csh02, test_e2e_mock, test_e2e_restart 的计数与 BA-01 的任务类型, 并把 AC-5 排到 AC-4 之前或与它合并, 保证 R55 一直可走通. (b) A7 接入加开关 (如 rules.json 的 critic_enabled, 缺省关), AC-13 再打开. 不管选哪种, 都把受影响的测试文件列进各条的 scope_files."
+  },
+  {
+   "key": "AC-4 (自主度来源)",
+   "severity": "major",
+   "problem": "AC-4.1 让 critic_due 读 Procedure.autonomy_level, 但 AC-4.5 的后半句 'Procedure 改为 L3 且第二轮 consistent: J-REV-03-1-CON-001 v1 即 confirmed, 不建任务' 用现有代码做不到. 原因: Judgment.autonomy_level 取自模板 (REV-03 为 L2), 而 classify 按判断上的自主度判 L1, L2, 一律走 normal. 规格书 7.4 规定判断的有效级别从 Procedure 的装配后级别出发. 草稿没有在任何一条里改 judge 的取值, AC-4 的 scope 也不含 judgment_engine.py.",
+   "evidence": "services/judgment_engine.py:616 autonomy_level=template.autonomy_level; services/review_queue.py:80; orchestration/runner.py:24 与 nodes.py:589 Procedure 也取模板级别; 规格书 7.4 (1116 行: 装配时降级写入 Procedure.autonomyLevel, 判断级降级作用于 Judgment.autonomyLevel)",
+   "fix": "二选一: (a) AC-4 改为 judge 接收 RunContext.procedure 的级别, 写入 Judgment.autonomy_level, scope 加 judgment_engine.py, FakeJudgmentEngine 和相关测试; (b) 明确这是动态降级组的产出, 把 AC-4.5 的后半句改成 '判断与 Procedure 同为 L3' 的构造, 并把降级组的对应需求列为前置."
+  },
+  {
+   "key": "AC-5 (a6_upheld 与错报)",
+   "severity": "major",
+   "problem": "AC-5.3 只覆盖 A6 建议 close 的情况. 在真实使用中, A6 建议 misstatement 的 L3, L4 判断也会被 A7 复核 (抽样 5%, 全为 internal_copy, 推理链有 assumption 或 unsupported 步骤都会命中), 复核不一致就成为 dispute. 这时按 AC-5.3 的口径裁 a6_upheld, 只会把判断置 confirmed, 不建 Misstatement. 现有设计里只有 misstatement 决定会写错报, 结果 A6 认定的错报会从汇总表 (FIN-04) 漏掉, 意见类型可能算错. 同样, neither + human_conclusion 只能同 override 建 -H1, 无法记人认定的错报.",
+   "evidence": "orchestration/decisions.py:370-391 (misstatement_effects 只由 misstatement 决定调用), :427-468 (override_effects 不建错报); 规格书 6.3 GEN-09 trigger (1003-1009 行) 不限于 accept/close; UC-04 出口 (2117 行)",
+   "fix": "AC-5 增加两条验收: a6_upheld 且 A6 的 proposed_action 为 misstatement 时, 按 A6 的 misstatement_draft (记录可改) 建 M-{记录 ID}, judgment_id 为原判断; neither + human_conclusion 允许带 misstatement_draft, 有则建错报并挂到 -H1. 同时写明 a7_upheld 在 A7 不建议错报却带了 misstatement_draft 时报 FIELD_NOT_ALLOWED. 这一口径可并入待定问题 2 一起问用户."
+  },
+  {
+   "key": "AC-8 (失败任务卡片)",
+   "severity": "major",
+   "problem": "AC-8.2 写 'failed 任务 T-RUN-REV-02-1-SI-2026-0618-v1 含 RUN-REV-02-1 的 failure_reason'. 但单个判断对象失败时, 执行记录是成功终态, failure_reason 为空, 这条验收拿不到失败原因. 失败级别和错误信息只在该对象的 llm_call 留痕 payload 里 (level_failed, errors). 另外, 这个任务和 T-X-REV-08-1-R01-1-v2 在 Numbat 全流程中并不存在 (0618 在 R55 里判断成功), 须在测试里另行构造, 草稿没有写明.",
+   "evidence": "agents/fieldwork.py:396-397, :425-426 (以成功终态的执行记录建带对象的 failed 任务); agents/base.py:79-81 finish_run 不写 failure_reason; tests/test_fieldwork_rev02.py:363-375 (该任务来自人为构造的失败)",
+   "fix": "卡片的失败原因按两种情况取: 整次执行失败取 ProcedureRun.failure_reason; 带 subject_id 的失败任务取该 run_id 下, fixture_key 为 subject_id 的最后一行 llm_call 的 level_failed 与 errors. 验收注明这两个任务由测试构造, 不是 Numbat 流程的产物."
+  },
+  {
+   "key": "GEN-11 范围 (决定收集与闸门呈递)",
+   "severity": "major",
+   "problem": "规格书里 GEN-11 有两半: '任一 Judgment 入队或闸门到达' 时呈递, 以及由 A10 逐字构造 ReviewRecord, GateDecision 后经 DecisionSubmit 提交, 写入后回显确认. 草稿只做复核任务的呈递和停留时长, AC-11.6 还明确规定对话不产生决定. 闸门呈递 (ACC-01, PLN-01/03, FIN-01, RPT-01), 对话面板内的决定提交与回显, A10 主动通报 (闸门到达, 队列有待复核项) 都没有做, 也没有写进 '本版不做'. 规格书 15 节的 '转达一致率' 也因此无从统计.",
+   "evidence": "规格书 6.1.2 (774 行) GEN-11 触发含闸门到达; 18.2 (2553 行) A10 逐字构造 ReviewRecord 或 GateDecision 经 DecisionSubmit 提交; 18.5 (2850 行) 写入后回显确认; 14 节 (2345 行); 5.4 (657 行) proactiveness 为主动通报闸门到达; UC-04 第 1 步 (2102 行)",
+   "fix": "加一个待定问题: 对话面板的决定提交走 A10 (GraphConversation.submit 逐字构造整对象, 写 conversation 留痕关联决定 ID, 返回回显), 还是只走表单. 闸门呈递和主动通报要么补需求, 要么写入 Demo需求文档第 6 节 '本版不做' 并在 risks 里注明."
+  },
+  {
+   "key": "AC-2.6",
+   "severity": "minor",
+   "problem": "AC-2.6 说 'test_knowledge 的 fixture 校验按文件名后缀取输出模型'. 但 test_knowledge 现在没有按输出模型校验 fixture 结构的测试, 所谓 '改校验规则' 没有可改的对象. 草稿也没有提到真正会被卡住的 test_fixture_document_ids_in_manifest.",
+   "evidence": "tests/test_knowledge.py 全部测试函数 (36-514 行) 中无按 output_model 的 fixture 结构校验; :427-470",
+   "fix": "改写为: 新增 GEN-09 fixture 的结构校验 (按 -independent, -compare 后缀分别用 CriticIndependent, CriticComparison 做 model_validate_json); 同时改 expected_document 与 checked, 让 GEN-09/J-CSH-02-1-BA-01-* 指向 confirmations/12345601.pdf."
+  },
+  {
+   "key": "AC-4.9",
+   "severity": "minor",
+   "problem": "AC-4.9 要求 override, manual_result 建的人工判断 critic_verdict 为 not_applicable, 但人工判断由 decisions.human_judgment 构造, AC-4 的 scope_files 没有 decisions.py, 也没有 test_review_decisions.py. 另外 a7_upheld 建的 -H1 带 A7 的推理链和证据, 偏离 Q10 '人工判断只填人给的' 的口径, 而草稿没有说明它的 confidence, confidence_parts, counter_argument, trail_ref 怎么填.",
+   "evidence": "orchestration/decisions.py:409-432 human_judgment; 需求清单 Q10 (只填人给的, 推理链留空); AC-5.4",
+   "fix": "AC-4 的 scope 加上 orchestration/decisions.py 与 tests/test_review_decisions.py. AC-5.4 列全 a7_upheld 判断的每个字段 (建议 trail_ref 取 critic_trail_ids[0], confidence 与分项为空或固定值), 并注明这是 Q10 之外的新口径."
+  },
+  {
+   "key": "AC-7 (档位写入点)",
+   "severity": "minor",
+   "problem": "AC-7.1 说 failed 任务的档位为 3, 但 scope 只列了 fieldwork.py 和 nodes.fail_run. 这样 A3 (DOC-04, DOC-06) 建的 failed 任务档位为 None, 按 AC-7.5 会排到最后, 与 7.1 矛盾. 另外 AC-7.4 的 briefing 含 '复核过快提示 (AC-9)', 而 AC-9 排在 AC-7 之后, 7.4 落成测试时这个字段还不存在.",
+   "evidence": "agents/ingest.py:134 (另一个 make_task 调用方); services/review_queue.py:89-112 make_task; AC-9 前置为 AC-8, AC-8 前置为 AC-7",
+   "fix": "把档位计算放进 ReviewQueue.make_task (传入金额阈值), 所有调用方自动带档位, scope 加 ingest.py. 复核过快字段从 AC-7.4 移到 AC-9, 并把 contracts/views.py 加进 AC-9 的 scope."
+  },
+  {
+   "key": "AC-9.5 (阈值)",
+   "severity": "minor",
+   "problem": "复核过快的阈值规格书没有给, 草稿在验收里直接写 '缺省 20 秒, 由用户确认'. 这是把未拍板的值写进了验收, 与用户 '未核实不固化规则, 拍板项做选择题' 的要求相违.",
+   "evidence": "规格书 9.3 (1308-1310 行) 只说 '平均时长低于阈值时预警', 未给数值; /Users/chen/.claude/CLAUDE.md '资料与事实' 与 '需要我拍板的事项'",
+   "fix": "移进 open_questions (给出候选值及各自的正反面), 拍板前 AC-9.5 标暂缓."
+  },
+  {
+   "key": "AC-3.3 (指针匹配)",
+   "severity": "minor",
+   "problem": "把 '指针在输入集合中' 定为按 (source_type, source_id, locator) 匹配过严. locator 是模型写的自由文本: A6 对 BT-01-20260702-01 的指针 locator 为 amount_cents, 对 CR-SI-2026-0547-1 为 debit_cents. 而 A7 的核心论点要引用这两行的 txn_date, posting_date 和 description. 按草稿的规则, A7 写 locator txn_date 会被判引用失败, fixture 只能把日期事实挂在 amount_cents 指针上, 真实模型更会频繁失败.",
+   "evidence": "tests/fixtures/llm/CSH-02/BA-01.json evidence 中各指针的 locator; AC-2.4 结论依赖 2 July 2026 入账与 remittance advice",
+   "fix": "行指针按 (source_type, source_id) 匹配, document 指针按 (source_id, page) 匹配, 准则按 source_id 匹配, locator 不参与比对."
+  },
+  {
+   "key": "AC-9/AC-12 (留痕分页)",
+   "severity": "minor",
+   "problem": "停留时长要找某复核人最近一次呈递, 会话记忆要从留痕重建, 二者都依赖 AuditTrail.list(eid, kind=conversation). 这个接口缺省 limit 100, 按时间升序返回, 没有 session 或 task 过滤. 对话超过 100 行后, 取到的只是最早的 100 行: 最近的呈递取不到, 停留时长会算成更早一次呈递的值或空, 会话记忆也会丢失最近几轮.",
+   "evidence": "services/audit_trail.py:41-50 (limit=100, order_by created_at 升序); contracts/ports.py:285",
+   "fix": "验收写明按 offset 翻页读完 (或由 B 给 list 加 procedure_id 与 payload 过滤), 并加一条测试: 先写 101 行以上 conversation 留痕, 再验证停留时长与会话记忆取的都是最近的记录."
+  },
+  {
+   "key": "contract_changes (文档同步)",
+   "severity": "minor",
+   "problem": "文档同步列得不全. (1) 合成数据集设计第 7 节第 13 行仍写 '1 条 normal (T-J-CSH-02-1-BA-01-v1); confirm', 而 AC-13 改为 dispute 任务加 a6_upheld. (2) Demo需求文档第 7 节准则片段表没有加 ASA220-P37, ASA220-P38. (3) 第 1 节演示流程, 第 5 节代码清单 (新文件 agents/review.py, orchestration/conversation.py), 第 8 节验收没有更新. (4) 第 6 节只删不加: 环 1 (A7 以证据不足判不一致时自动追加取证) 与 neither + more_procedures 本版不做, 应写进第 6 节.",
+   "evidence": "docs/合成数据集设计.md:884; docs/Demo需求文档.md:184-210 (第 6, 7 节); 草稿 contract_changes 最后一项只列 Demo需求文档第 2, 4.2, 6 节",
+   "fix": "contract_changes 补上述各节. 合成数据集设计第 7 节第 13 行归 B, 列入 data_needs."
+  },
+  {
+   "key": "AC-8 (争议讲解)",
+   "severity": "minor",
+   "problem": "dispute 任务也会生成一段 LLM 白话讲解. 规格书要求争议项 A10 不总结谁更有理, 而讲解恰恰最容易出现倾向性. 草稿自己也承认代码查不出措辞倾向, 但仍对 dispute 任务开放讲解, 演示和真实使用中都可能违背 9.5.",
+   "evidence": "规格书 9.5 (1327 行) 争议项 A10 不总结谁更有理; 5.2 (596 行) 不总结, 不推断; 草稿 risks 第 4 条",
+   "fix": "dispute 任务的 TaskPresentation 不调 LLM, 只给并排卡片 (或只叙述证据内容, 不涉及两方结论), 并在验收里写明 dispute 任务不写 GEN-11 留痕. 对应调整 AC-13.3 的 conversation 行数和 GEN-11 fixture."
+  }
+ ],
+ "missing": [
+  "A7 的监测指标没有覆盖, 也没有写明本版不做: 规格书 5.5 (663 行) 要求 A7 与生成者的一致率进 agreement_stats; 15 节 (2370-2372 行) 有复核率, 一致率, 错误发现率与误阻断率. 至少应在 briefing 或接口文档里给出数据来源, 或列入本版不做.",
+  "会话记忆的清除没有设计: 规格书 8.5 (1226 行) 写明 '会话结束清除', 草稿只有重建, 没有会话结束或过期的定义.",
+  "规格书 GEN-09 output_schema (1018 行) 写明 '未通过校验的不提供 a7_upheld'. 草稿只处理了 A7 整体失败的情况; 第一轮通过, 第二轮失败时 critic_verdict 与独立结论是否保留, 是否可裁 a7_upheld, 没有写.",
+  "AC-3 让 critic 引擎读 EvidenceStore.pages, 但 JudgmentEngine 的构造参数没有 EvidenceStore. 改构造签名会影响 tests/test_judgment_engine.py:54 与 tests/fakes.py:1215 的直接构造, 两处都未列入 scope.",
+  "ConciergeAgent.procedures 是否加入 GEN-10, GEN-11 没有写明 (AC-4.8 对 A7 写了). 另外 AC-8, AC-11 新增 YAML 会让 test_knowledge.py:37 的程序总数再 +2, 这两条没有列这个改动.",
+  "B 需要配合的地方没有列全: 新增 conversation 留痕后, 前端与 API 的 trail 种类筛选 (GET /trail?kind=), ProcedureStatus.in_dispute 的数据库与前端枚举, 都应列为外部依赖."
+ ],
+ "extra_questions": [
+  "A6 建议错报的判断在仲裁中被裁 a6_upheld 时, 是否按 A6 的错报草稿自动建错报 (可改金额)? 审计师 '都不采纳' 并自己给结论时, 能否同时认定错报?",
+  "审计师在 A10 对话面板里作决定时, 由 A10 构造决定并在写入后回显确认 (规格书 18.2, 18.5), 还是本版只走表单? 闸门到达时 A10 的呈递与主动通报这次做不做?",
+  "判断上的自主度改取 Procedure 的装配后级别, 这一改动由本组 (A7 接入) 做, 还是由动态降级组做? 这决定 AC-4.5 能否按现写法验收.",
+  "AC-2 到 AC-12 期间已有全流程测试会变红, 采用 '每条同步改测试' 还是 'A7 与对话加开关, AC-13 再打开'?",
+  "复核过快的阈值取多少秒 (规格书未给), 按最近几条复核记录的均值判断?"
+ ],
+ "verdict": "需修改后再进开发. 已核对通过的部分: 程序归属, 引擎与自主度 (A7 GEN-09, A10 GEN-10/11, 均为 LLM, L4), 准则段落 (ASA 220 para 37, 38, Compilation Date 14 December 2023; ASQM 1 para 31(d)(e); ASA 230 para 9(c), 均已用 pdftotext 对照原文), 数据行 (journal_entries.csv 第 1354 行, bank_transactions.csv 第 680 行), 置信度算术 (0.5625, 0.65), 任务排序, ID 规则, 引用的代码行号. 必须先解决的问题有五个: (1) AC-2 和 AC-4 一落地, R54, R55, R49 等已有测试就会变红, 与 '每条全绿' 的流程冲突 (blocker); (2) 判断上的自主度取自模板, AC-4.5 按现写法无法通过; (3) a6_upheld 或 neither 时会漏记错报; (4) 子对象失败的任务拿不到 failure_reason; (5) GEN-11 的决定收集与闸门呈递既没有覆盖, 也没有明确排除. 其余是范围漏列和文档同步问题, 改动不大."
+}

@@ -1,0 +1,900 @@
+{
+ "group": "分录扫描与关联方 (GEN-05, GEN-02, GEN-08, GEN-03, GEN-01)",
+ "requirements": [
+  {
+   "key": "JR-0",
+   "title": "文档: 本组范围与 Numbat 数据场景定稿",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "在 Demo需求文档 与 合成数据集设计 中写明 5 条程序的做法, 依赖, 分层, Numbat 预期结果与新增数据, 供 B 改生成脚本; 订正规格书中与准则原文不符的分录测试段号与示例 SQL 的时区写法.",
+   "scope_files": [
+    "docs/Demo需求文档.md (第 1, 2, 3, 7 节)",
+    "docs/合成数据集设计.md (第 2.1, 2.2, 2.3, 4.4, 4.5, 4.6, 4.7, 7 节; 新增第 5.5 节分录扫描场景, 第 5.6 节关联方场景)",
+    "docs/ELEC5620_设计规格说明书.md (4.3 片段表 427 行, 6.3 GEN-05 示例 883-950 行)"
+   ],
+   "basis": [
+    "规格书 6.1.1 归属表 (706-707 行: GEN-08 归 A5, GEN-01 至 GEN-06 归 A6)",
+    "规格书 6.1.2 依赖表 (756 行 GEN-02 ← GEN-05; 802-803 行 GEN-03 ← DOC-04, GEN-08; GEN-01 ← GEN-03, GEN-08)",
+    "规格书 7.2 贯穿程序行 (1075 行: GEN-01 L1, GEN-02 L2, GEN-03 L2, GEN-05 L3, GEN-08 L4)",
+    "规格书 15.2 合成数据集 (2386-2404 行: 组 A 五类分录异常, 组 B 关联方交易)",
+    "ASA 240 (Compilation 8, 2023-12-14) 第 32, 33(a), A44 段, 已用 pdftotext 核对",
+    "合成数据集设计第 2, 4, 5, 7 节"
+   ],
+   "prerequisites": [],
+   "external_deps": [
+    "B: 按本文档改 data/demo_spec.json, data/generate_demo.py, data/check_demo.py 出数据 (见 data_needs D1-D3); 合成数据集设计中 B 负责的章节由 B 确认"
+   ],
+   "acceptance": [
+    "Demo需求文档第 2 节程序清单增 5 行 (引擎·自主度, Agent, 本版做法); 依赖图加 GEN-02 ← GEN-05, GEN-03 ← DOC-04、GEN-08, GEN-01 ← GEN-03、GEN-08; P2 分层改为 第 0 层 REV-08, REV-03, CSH-04, CSH-05, GEN-05, GEN-08; 第 1 层 REV-02, DOC-06, GEN-02, GEN-03; 第 2 层 CSH-02, GEN-01.",
+    "合成数据集设计第 7 节新增 GEN-05 (12 条例外, ID 与金额同 JR-5 验收 2), GEN-02 (9 条判断), GEN-08 (OWNERSHIP 6 节点 10 条关系, 例外 X-GEN-08-1-R01-1), GEN-03 (2 条判断), GEN-01 (1 条判断) 的预期行; 汇总表改为 例外 17, 判断 18, 任务 18, 文件 10.",
+    "data_needs D1-D3 的行与值逐条写入第 2.1, 2.2, 2.3, 4.4, 4.5, 4.6 节; 第 3.1 节试算表, 第 5.4 节所列 11 行银行流水, 第 4.7 节第 1, 2, 3, 5, 18, 19, 21 条的数值不变.",
+    "规格书 4.3 片段表 'ASA240-P32 分录测试要求' 改为 ASA240-P33 (现行编译版第 33(a) 段为分录测试, 第 32 段为管理层凌驾属特别风险); 6.3 GEN-05 示例的 strftime 写法加注: 按 Australia/Sydney 本地时间取星期与时刻 (Postgres 写法), 并删去对 SQLite 的依赖.",
+    "交付前 grep 文档中无 § 符号."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-1",
+   "title": "P2 固定集装配",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "程序模板可声明 fixed (规格书 6.1 固定集: 全量分录扫描与关联方每个审计都做), assemble_pack 不论审计目标一律装配并补齐依赖闭包, objective_ids 为空; 不改现有 trigger 与依赖加入的语义.",
+   "scope_files": [
+    "src/backend/contracts/knowledge.py (ProcedureTemplate.fixed)",
+    "src/backend/services/procedure_library.py (fixed 程序清单, 加载校验)",
+    "src/backend/orchestration/nodes.py (assemble_pack, 567-601 行)",
+    "docs/开发接口文档.md 第 8.1 节",
+    "tests/test_assemble.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "规格书 6.1 固定集与装配集 (697 行)",
+    "规格书第 10 节 P1 目标级装配 (1361-1394 行)",
+    "contracts/knowledge.py:59 现注释 'triggers 为空时 P2 以外为固定集, P2 只经依赖加入'",
+    "Demo需求文档第 4.1 节 assemble_pack"
+   ],
+   "prerequisites": [
+    "R11",
+    "R60"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "ProcedureTemplate 增 fixed: bool = False; 接口文档第 8.1 节写明: fixed 的 P2 程序装配时一律加入, triggers 可为空; 未标 fixed 且无 trigger 的 P2 程序 (如 DOC-06) 仍只经依赖加入.",
+    "临时 knowledge 目录放一条 fixed P2 模板 X (无 trigger) 与其前置 Y (无 trigger, 非 fixed): Numbat 审计目标下装配结果含 X 与 Y, 二者 objective_ids 为 []; 去掉 fixed 后 X, Y 都不装配.",
+    "fixed 模板的 params 含 {by_risk: ...} 时 ProcedureLibrary 构造即抛 ValueError (消息含程序编号): 没有关联审计目标取不到风险等级.",
+    "未被覆盖的审计目标仍按 R60 阻断, fixed 程序不计入覆盖.",
+    "PLN-01/03 驳回后再通过, 二次 assemble_pack 不重复加入已在程序包中的 fixed 程序 (procedure_pack 中各 ID 只出现一次)."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "JR-2",
+   "title": "客户画像加关联方声明与审批限额, 参数可引用画像",
+   "procedures": [
+    "GEN-05",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "ClientProfile 增审批限额, 关键管理人员, 管理层申报的关联方与股权结构 (规格书 4.3 画像字段); 程序参数可用 {ref: approval_limit_cents} 取本项目采用版本的画像值.",
+   "scope_files": [
+    "src/backend/contracts/models.py (ClientProfile, KeyPerson, DeclaredParty, DeclaredHolding)",
+    "src/backend/services/procedure_library.py (PROFILE_REFS, resolve_params 增 profile 参数)",
+    "src/backend/orchestration/nodes.py (build_run 及 execute, fieldwork 取画像)",
+    "tests/fakes.py (NUMBAT_PROFILE)",
+    "tests/test_knowledge.py",
+    "docs/开发接口文档.md 第 2.3 节, 第 8.1 节"
+   ],
+   "basis": [
+    "规格书 4.3 客户画像 (452-483 行: approval_limit 供 JE-R03, key_personnel, related_parties, ownership 供 GEN-01, GEN-03, GEN-08)",
+    "ASA 550 第 13 段 (向管理层询问关联方身份, 已核原文)",
+    "procedure_library.py:16-17 STATE_REFS, ENGAGEMENT_REFS; :130 未知 ref 抛 KeyError"
+   ],
+   "prerequisites": [
+    "R01"
+   ],
+   "external_deps": [
+    "B: data/demo/client_profile.json 加 D1 字段, persistence 的 client_profiles 存取新字段; 先用 tests/fakes.py 的 NUMBAT_PROFILE 预置 D1",
+    "C: ACC-01 闸门 '更新客户资料' 表单与 API 展示新字段 (可选字段, 不阻塞 A)"
+   ],
+   "acceptance": [
+    "ClientProfile 增 approval_limit_cents: int | None = None, key_personnel, related_parties, ownership (默认空列表); 不含这些键的现有 client_profile.json 仍能 model_validate; NUMBAT_PROFILE 带 D1 的值 (approval_limit_cents 1000000, related_parties [Avery Family Holdings Pty Ltd, abn 47916073106, parent_entity]).",
+    "{ref: approval_limit_cents} 解析为画像值: RUN-GEN-05-1.params_snapshot.approval_limit_cents == 1000000; 画像该字段为 None 时抛 ValueError (消息含 'approval_limit_cents 尚未确定'), 不建执行记录; 未知 ref 仍抛 KeyError.",
+    "画像按 state.client_profile_version 取: 同客户另一项目把画像改到 v2 (approval_limit_cents 500000) 后, 本项目 v1 仍解析为 1000000.",
+    "execute 与 fieldwork 共用同一取画像与 build_run 路径; main.build_deps 与 make_deps 构造成功, 现有测试全部通过.",
+    "ACC-04 的三项检查与 ACC-01 画像更新流程不受影响 (test_client_intel, test_decisions 通过)."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-3",
+   "title": "契约: 分录读取与登记摘录端口, 登记摘录文件类型",
+   "procedures": [
+    "GEN-02",
+    "GEN-08",
+    "GEN-03"
+   ],
+   "goal": "FinancialDataStore 可按凭证号取分录行; RegistrySource 可取 ASIC 公司摘录 (高管与股东) 与人员检索, 回执带摘录 PDF 原件; 摘录存档为 registry_extract 文件, 可作 document 证据指针 (ID 由内容哈希确定, fixture 可引用).",
+   "scope_files": [
+    "src/backend/contracts/ports.py (FinancialDataStore.journal_entries, RegistrySource.asic_extract, asic_person)",
+    "src/backend/contracts/models.py (Officeholder, Shareholding, AsicExtract, PersonRole, PersonSearch; DocumentType.registry_extract)",
+    "src/backend/services/judgment_engine.py (DOCUMENT_EVIDENCE 增 registry_extract → external)",
+    "tests/fakes.py (FakeFinancialStore.journal_entries, FakeRegistry 扩展)",
+    "tests/test_output_validator.py",
+    "docs/开发接口文档.md 第 2.1, 2.7, 4, 5 节"
+   ],
+   "basis": [
+    "规格书 4.2 journal_entries 表 (311-330 行, created_at 周末深夜检测, created_by 异常用户检测)",
+    "规格书 5.2 A5 职责 '股权穿透' (590 行)",
+    "ASA 550 第 15 段 (检查记录与文件以发现未申报关联方, 已核原文)",
+    "judgment_engine.py:65 DOCUMENT_EVIDENCE 现只认 contract, confirmation",
+    "开发接口文档第 5 节 OutputValidator 文件指针规则"
+   ],
+   "prerequisites": [],
+   "external_deps": [
+    "B: SqlFinancialDataStore.journal_entries, MockRegistrySource.asic_extract 与 asic_person (读 data/demo/registry/ 下 D2 的 JSON 与 PDF); 先用 FakeFinancialStore, FakeRegistry 预置 D2, D3"
+   ],
+   "acceptance": [
+    "journal_entries(eid, ['SJ-2026-0612']) 返回 SJ-2026-0612-1, SJ-2026-0612-2 两行, 按 id 排序; 凭证号不存在返回 [].",
+    "asic_extract('900042015') 返回 officeholders [Jordan Avery (1972-08-19) director 2011-03-14, Priya Raman (1979-02-03) director 2014-07-01], shareholders [Avery Family Holdings Pty Ltd company acn 916073106 ORD 600000 pct 0.6, Priya Raman person ORD 400000 pct 0.4], file_name '900042015.pdf', file_bytes 非空; 查不到返回 None.",
+    "asic_person('Raman', 'Priya', 1979-02-03) 返回 roles [900042015 director 2014-07-01, 900042015 shareholder 400000, 903046122 director 2019-05-06, 903046122 shareholder 60]; 姓名或出生日期不符返回 None.",
+    "DocumentType 增 registry_extract; OutputValidator 把指向 registry_extract 文件的指针改写为 type external, reliability 取 DocumentRef (external_original); page 0 或大于 page_count 判解析不了.",
+    "FakeRegistry 记录查询顺序 (含 ABN, 摘录, 人员三类); 现有 ACC-04 测试通过; 接口文档对应各节同步."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-4",
+   "title": "契约: OwnershipGraph 状态字段与 A5 写入归属",
+   "procedures": [
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "新增股权与任职关系图 OwnershipGraph (项目固定 ID OWNERSHIP), 进编排状态与 Store; A5 可写 ownership_graph 与 exceptions.",
+   "scope_files": [
+    "src/backend/contracts/models.py (OwnershipGraph, PartyNode, PartyLink)",
+    "src/backend/contracts/state.py (ownership_graph, initial_state)",
+    "src/backend/orchestration/merge.py (AGENT_FIELDS A5)",
+    "tests/test_merge.py",
+    "tests/test_replay.py",
+    "docs/开发接口文档.md 第 0 节 ID 规则, 第 2 节, 第 3 节字段与写入归属, 第 6 节 Agent 表"
+   ],
+   "basis": [
+    "规格书 5.2 A5 '股权穿透' 与 6.1.2 GEN-03 ← GEN-08 (A5 → A6 跨 Agent)",
+    "规格书 5.3 Agent 间只经 EngagementState 传递 (612 行)",
+    "merge.py:25-33 AGENT_FIELDS; state.py:93-122; nodes.py:139-203 stored_outputs 按写入者取字段",
+    "checkpoint.py:21-35 白名单自动登记 contracts.models"
+   ],
+   "prerequisites": [
+    "R02",
+    "R04"
+   ],
+   "external_deps": [
+    "B: persistence/models.py:101-113 OUTPUT_KINDS 登记 OwnershipGraph (建议新种类 registry_graphs) 与迁移; 先用 FakeOutputStore",
+    "C: 项目页展示关系图 (可选; 不做时经证据指针打开摘录 PDF 查看)"
+   ],
+   "acceptance": [
+    "OwnershipGraph(Versioned) id 固定 OWNERSHIP: nodes [PartyNode id, kind company|person, name, acn, abn, birth_date], links [PartyLink from_id, to_id, relation director|secretary|shareholder, shares, pct, appointed, ceased, evidence: EvidencePointer]; 节点 ID 规则写入接口文档第 0 节: 公司 ACN-{acn}, 人员 PER-{姓}-{名}-{yyyymmdd} (大写, 如 PER-RAMAN-PRIYA-19790203).",
+    "状态增 ownership_graph: OwnershipGraph | None, 初值 None; AGENT_FIELDS A5 为 {confirmations, documents, exceptions, ownership_graph}; A5 片段带 ownership_graph 通过 check_patch, A6 片段带它被拒 (merge_rejected 文本含 ownership_graph).",
+    "InMemorySaver 存取一轮后 state['ownership_graph'] 仍为 OwnershipGraph 实例, 节点 kind 仍为枚举.",
+    "stored_outputs 重放 GEN-08 终态 Run: 片段含 Store 最新 OWNERSHIP 与 RUN-GEN-08-1 下的例外, 不调 RegistrySource; 重放 CSH-04 时片段带上 OWNERSHIP 亦能并入状态, 不报 VersionConflict (同版本 upsert).",
+    "接口文档第 3 节字段表, 写入归属表, 第 6 节 A5 返回字段同步."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "JR-5",
+   "title": "准则片段原文: 分录测试与关联方",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "填 ASA 240, ASA 550, AASB 124 相关段落原文, 由现有 PDF 比对测试守住; 适用框架为 Tier 2 时的 AASB 1060 段落待原文到手再补.",
+   "scope_files": [
+    "src/backend/knowledge/standards/ASA240.yaml",
+    "src/backend/knowledge/standards/ASA550.yaml",
+    "src/backend/knowledge/standards/AASB124.yaml",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "docs/参考资料/01_审计准则_ASA/ASA_240.pdf (Compilation 8, 2023-12-14): 第 32, 33 段, A44 段, 已用 pdftotext 核对",
+    "docs/参考资料/01_审计准则_ASA/ASA_550.pdf (Compilation 4, 2023-12-14): 第 10, 13, 15, 21, 22, 25, 26, 27, Aus 27.1, Aus 27.2 段, 已核对",
+    "docs/参考资料/03_会计准则_AASB/AASB_124.pdf (Compilation 3, 2022-12-31): 第 9 段定义, 已核对; AusB1 段写明本准则不适用于采用 AASB 1060 的 Tier 2 主体",
+    "ASA_240_(2026-12-15起生效).pdf 只适用于 2026-12-15 及以后开始的期间, Numbat 截至 2026-06-30 用现行版",
+    "开发接口文档第 8.2 节"
+   ],
+   "prerequisites": [
+    "R39"
+   ],
+   "external_deps": [
+    "用户: AASB 1060 正本 (参考资料中 AASB_1060.pdf 只是 Key facts 摘要); 到手前不建 AASB 1060 片段, 相关结论只引 AASB 124 第 9 段与 ASA 550 第 10(b) 段"
+   ],
+   "acceptance": [
+    "ASA240.yaml: ASA240-P32 (管理层凌驾属特别风险), ASA240-P33 (分录测试 (a)(i)-(iii), 只摘 (a) 项), ASA240-A44 (分录选取考虑的事项); compiled '2023-12-14'.",
+    "ASA550.yaml: ASA550-P13, ASA550-P15, ASA550-P21, ASA550-P22, ASA550-P25, ASA550-P26, ASA550-P27, ASA550-Aus27.2 (Aus 段 ID 写法在文件头注释约定); compiled '2023-12-14'.",
+    "AASB124.yaml: AASB124-P09 (related party 与 key management personnel 定义); compiled '2022-12-31'.",
+    "tests/test_knowledge.py 的 PDF 比对覆盖全部新片段并通过; 每个片段 procedures 列出引用它的程序 (JR-6 至 JR-13 的 YAML standards 与之一致, test_standards_referenced_are_registered 通过).",
+    "片段文件头注释写明: 分录测试段号以现行编译版为准 (第 33(a) 段), 规格书 4.3 旧写法 P32 已由 JR-0 订正."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-6",
+   "title": "A6 GEN-05 全量分录扫描",
+   "procedures": [
+    "GEN-05"
+   ],
+   "goal": "FieldworkAgent 执行 GEN-05: 按 YAML 规则对全部分录取例外, 每条规则每笔凭证一条例外, 原样返回, 不建任务; 规则口径写在 YAML 注释, SQL 由 B 写.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-05.yaml",
+    "src/backend/agents/fieldwork.py (procedures, handler)",
+    "tests/fakes.py (NUMBAT_RULES 增 GEN-05 预置, 约 1037 行)",
+    "tests/test_fieldwork_gen05.py",
+    "tests/test_knowledge.py (程序数 18)"
+   ],
+   "basis": [
+    "规格书 6.3 GEN-05 YAML (883-950 行, JE-R01 至 JE-R06)",
+    "规格书 4.2 journal_entries 表注释 (316-317 行: 周末深夜检测, 异常用户检测)",
+    "ASA 240 第 33(a) 段, A44 段 (made by individuals who typically do not make journal entries; round numbers; end of period)",
+    "规格书 12.5 UC-03 步骤 1-3 (2091-2093 行)",
+    "开发接口文档第 5 节 RuleEngine 约定"
+   ],
+   "prerequisites": [
+    "R40",
+    "JR-2",
+    "JR-5"
+   ],
+   "external_deps": [
+    "B: GEN-05 七条规则的 SQL (R01, R02 口径视问题 2, R03, R04, R05, R07, R08), 按 Australia/Sydney 本地时间判断星期与时刻; 数据 D3; 先用 FakeRuleEngine 预置下列 12 条例外",
+    "FIN-08/09 所在组: R06 (审计调整期间的其他分录) 与增量扫描参数, 依赖错报沟通时间, 不在本组"
+   ],
+   "acceptance": [
+    "YAML: owner A6, engine rule, autonomy L3, phase P2_Executing, cycle Pervasive, fixed false (JR-15 打开), assertions [Occurrence, Completeness, Accuracy], params {period_start, period_end, performance_materiality_cents, clearly_trivial_cents 均 ref; approval_limit_cents ref (画像); timezone 'Australia/Sydney'; business_hours [7, 20]; rare_user_max 2; rare_type_min 20}, standards [ASA240-P32, ASA240-P33]; 规则 R01 周末录入的重大收入 (high), R02 整数金额 (medium), R03 恰低于审批限额的付款 (high), R04 审批缺失或自审自批 (high), R05 期末前三日冲销 (high), R07 非常规制单人 (medium), R08 非工作时间录入 (medium); 注释写清每条口径, 输出列 source_type journal_entry, source_id (同凭证取 id 最小的命中行), amount_cents, entry_no, posting_date, created_at, created_by, approved_by.",
+    "FakeRuleEngine 按 Numbat (含 D3) 预置, A6 原样返回 12 条例外: X-GEN-05-1-R01-1 (SJ-2026-0612-2, 14200000); X-GEN-05-1-R02-1 至 R02-5 (GJ-202508-COGS-1 63000000, GJ-202601-COGS-1 56000000, GJ-202606-COGS-1 105000000, GJ-202606-DEP-1 16000000, GJ-202606-TAX-1 45000000); X-GEN-05-1-R03-1 (CP-BFS-2026-04-1, 995000), X-GEN-05-1-R03-2 (CP-BFS-2026-05-1, 990000); X-GEN-05-1-R04-1, X-GEN-05-1-R07-1, X-GEN-05-1-R08-1 (均 SJ-2026-0612-1, 14200000); X-GEN-05-1-R05-1 (GJ-202606-ECLR-1, 2500000). RUN-GEN-05-1 succeeded, ended_at 非空; 无 judgments, review_tasks.",
+    "RuleEngine.run 收到的 params == params_snapshot: performance_materiality_cents 9000000, clearly_trivial_cents 600000, approval_limit_cents 1000000, period_end 2026-06-30.",
+    "RuleError 原样上抛, A1 代写 RUN-GEN-05-1 failed 与 T-RUN-GEN-05-1-v1 (failed, allowed {rerun}).",
+    "FieldworkAgent.procedures 含 GEN-05; test_all_procedures_load 断言 18; 现有测试通过.",
+    "B 的 slow 验收 (列入 R56 变体): 真实 SQL 对 data/demo 恰得上面 12 条; 反例: 按 UTC 取星期时 created_at 落在周末的分录行有 144 行, 按 Australia/Sydney 只有 SJ-2026-0612 两行, 测试断言用的是本地时间."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-7",
+   "title": "A6 GEN-02 分录例外归因: 判断对象与上下文",
+   "procedures": [
+    "GEN-02"
+   ],
+   "goal": "按凭证号把 GEN-05 尚未归因的例外分组, 每笔凭证一个判断对象, 组装分录行, 原始单据, 账户余额, 制单与审批人的活动分布, 对冲分录与舞弊相关风险, 走 A6 判断公共流程出 Judgment 与复核任务.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-02.yaml",
+    "src/backend/knowledge/prompts/GEN-02.md.j2",
+    "src/backend/agents/fieldwork.py (subject_sources 登记 gen02_subjects)",
+    "src/backend/contracts/knowledge.py (LLMSpec.allowed_actions, 视问题 3)",
+    "src/backend/services/judgment_engine.py (结构级校验 allowed_actions, 视问题 3)",
+    "tests/fakes.py",
+    "tests/test_fieldwork_gen02.py",
+    "docs/开发接口文档.md 第 5 节 (LLM 输出模型表, 需要人表), 第 6 节 A6 判断程序说明, 第 8.1 节"
+   ],
+   "basis": [
+    "规格书 6.4 hybrid 典型为异常归因 (958 行), 7.2 GEN-02 L2 (1075 行)",
+    "规格书 12.5 UC-03 步骤 4 与扩展 (2094, 2100 行)",
+    "规格书 8.5 不送全量分录, 只送规则筛出的例外及其关联行 (1236 行)",
+    "ASA 240 第 33(a)(i) 段 (询问), A44 段",
+    "fieldwork.py:139-169 判断公共流程, :389-427 judgments_patch; 开发接口文档第 6 节 A6 判断程序段"
+   ],
+   "prerequisites": [
+    "R41",
+    "JR-3",
+    "JR-5",
+    "JR-6"
+   ],
+   "external_deps": [
+    "B: GEN-02 的 U01 (制单人, 审批人按凭证类型的凭证数, rows) 与 U02 (期内同科目同金额借贷相反的分录对, rows) SQL; 先用 FakeRuleEngine 预置 Numbat 行"
+   ],
+   "acceptance": [
+    "YAML: owner A6, engine hybrid, autonomy L2, cycle Pervasive, fixed false, depends_on [GEN-05], standards [ASA240-P32, ASA240-P33, ASA240-A44], evidence_required [voucher], manual_result_allowed true, rules U01, U02 (emit rows), llm {prompt GEN-02.md.j2, output_model JudgmentDraft}; 视问题 3 选 1 时 llm.allowed_actions [accept, close, more_evidence].",
+    "判断对象: GEN-05 未归因例外按 detail.entry_no 分组, 按凭证号排序, Numbat 为 [CP-BFS-2026-04, CP-BFS-2026-05, GJ-202508-COGS, GJ-202601-COGS, GJ-202606-COGS, GJ-202606-DEP, GJ-202606-ECLR, GJ-202606-TAX, SJ-2026-0612] 共 9 个; 例外 detail 缺 entry_no 抛 ValueError; rerun_subject_ids 与已交人处理的对象按 in_scope 过滤.",
+    "SJ-2026-0612: rule_findings [X-GEN-05-1-R01-1, X-GEN-05-1-R04-1, X-GEN-05-1-R07-1, X-GEN-05-1-R08-1]; data.entry_lines 为 SJ-2026-0612-1, -2 (带 source_type journal_entry, created_at 2026-06-28T11:14:00Z); data.source_document 为 sales_invoice SI-2026-0612 与 delivery_note DN-2026-0612 (signed_date 2026-07-03); data.account_balances 为 1100, 4100 本期与上期试算表行; data.user_activity 为 fin.controller 的 U01 行 (SJ 1 笔, GJ 44 笔); data.fraud_risks 为 RISK-REV-OCC, RISK-REV-CUT; fixture_key SJ-2026-0612.",
+    "CP-BFS-2026-04 的 data.bank_transactions 为 BT-01-20260430-06 (reference BFS-2026-04, -995000); GJ-202606-ECLR 的 data.offsetting_entries 含 GJ-202603-ECLS-1, -2 (U02).",
+    "渲染出的提示词中 journal_entry 行只有本凭证与其对冲凭证, 不含其他循环的判断 (规格书 8.5).",
+    "FakeJudgmentEngine 下: 9 条 Judgment, 9 条 normal 任务 T-J-GEN-02-1-{凭证号}-v1 (如 T-J-GEN-02-1-SJ-2026-0612-v1); 各 Judgment 的 exception_ids 为该凭证的例外.",
+    "SJ-2026-0612 判断失败: X-GEN-05-1-R01-1 出 v2 unattributed, 建 T-X-GEN-05-1-R01-1-v2 (subject_id SJ-2026-0612), allowed {override, misstatement}; 其余对象照常, RUN-GEN-02-1 succeeded.",
+    "视问题 3 选 1: 脚本化 LLM 第 1 次给 proposed_action misstatement → 结构级失败, 第 2 次请求的错误信息列出允许的动作, attempts 2; 程序数断言 19."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-8",
+   "title": "GEN-02 fixture",
+   "procedures": [
+    "GEN-02"
+   ],
+   "goal": "9 份 fixture 经真实判断引擎一次通过四级校验, 结论与合成数据集新增第 7 节一致.",
+   "scope_files": [
+    "tests/fixtures/llm/GEN-02/ (CP-BFS-2026-04, CP-BFS-2026-05, GJ-202508-COGS, GJ-202601-COGS, GJ-202606-COGS, GJ-202606-DEP, GJ-202606-ECLR, GJ-202606-TAX, SJ-2026-0612 共 9 个 .json)",
+    "tests/fakes.py (NUMBAT_RECORDS 增分录, 流水, 试算表行)",
+    "tests/test_fieldwork_gen02.py"
+   ],
+   "basis": [
+    "合成数据集设计第 3.1, 3.2, 4.4, 5.1, 5.2 节与 data_needs D3",
+    "ASA 240 第 33(a) 段, A44 段",
+    "开发接口文档第 5 节 OutputValidator, 置信度"
+   ],
+   "prerequisites": [
+    "R35",
+    "JR-7"
+   ],
+   "external_deps": [
+    "B: 重新运行 data/generate_demo.py 把新 fixture 复制到 data/demo/llm (test_runtime_fixtures_match_test_fixtures 通过)"
+   ],
+   "acceptance": [
+    "9 份 fixture 经真实 JudgmentEngine 与 MockLLMClient: attempts 1, failure 空, 全部证据指针可解析; 均无 misstatement_draft.",
+    "SJ-2026-0612: proposed_action more_evidence; 结论写明 2026-06-28 (周日) 21:14 Sydney 由 fin.controller 录入并自批, 该用户全年仅此一笔销售分录, 对应发票 SI-2026-0612 的发运单 2026-07-03 才签收, 有管理层凌驾迹象, 截止问题由收入截止测试评价, 需按 ASA 240 第 33(a)(i) 段询问; 证据含 journal_entry SJ-2026-0612-1 (created_at, approved_by), SJ-2026-0612-2, sales_invoice SI-2026-0612, delivery_note DN-2026-0612, ASA240-P33, ASA240-A44; self_confidence 0.8 → confidence_parts {evidence 0.7, rule 1.0, llm 0.8}, confidence 0.8375.",
+    "CP-BFS-2026-04, CP-BFS-2026-05: more_evidence; 结论写明付给 Bandicoot Facility Services Pty Ltd 的 9,950.00 与 9,900.00 恰低于 10,000.00 审批限额, 由 fin.controller 而非 cfo 审批; 证据含两笔分录行与 BT-01-20260430-06, BT-01-20260529-07.",
+    "GJ-202508-COGS, GJ-202601-COGS, GJ-202606-COGS: accept, 为当月销售收入 70% 的成本结转, 与试算表 5100 8,400,000.00 / 4100 12,000,000.00 一致; GJ-202606-DEP: accept, 等于 1510 本期 -1,200,000.00 与上期 -1,040,000.00 之差; GJ-202606-TAX: accept, 为税前利润 1,500,000.00 的 30%; GJ-202606-ECLR: accept, 冲回 2026-03-31 的 GJ-202603-ECLS (同额 25,000.00), 全年净影响为零.",
+    "accept 的判断 confidence_parts.rule 为 0 (有规则例外而建议 accept), 置信度低于 more_evidence 的判断, 测试断言该顺序."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-9",
+   "title": "A5 GEN-08 股权穿透",
+   "procedures": [
+    "GEN-08"
+   ],
+   "goal": "EvidenceAgent 执行 GEN-08: 由客户 ABN 取 ACN, 取公司摘录, 向上穿透法人股东, 对本实体与控制链上的董事与股东做人员检索, 再取检索出的其他公司摘录; 摘录原件存档, 建 OwnershipGraph; 与管理层申报清单比对, 未申报的关联候选出规则例外. 不调 LLM (规格书 5.5 A5 确定性).",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-08.yaml",
+    "src/backend/agents/evidence.py (按程序编号分派, gen08)",
+    "tests/fakes.py (FakeRegistry 预置 D2, FakeEvidenceStore 登记摘录)",
+    "tests/test_evidence_gen08.py",
+    "tests/test_evidence.py (CSH-04 回归)",
+    "docs/开发接口文档.md 第 6 节外部动作"
+   ],
+   "basis": [
+    "规格书 6.1.1 A5 含 GEN-08 (706 行), 7.2 GEN-08 L4 规则 (1075 行)",
+    "规格书 5.5 A5 确定性设计依据 (642 行)",
+    "AASB 124 第 9 段 (a)(i)-(iii), (b)(i), (b)(vi), (b)(vii) (已核原文)",
+    "ASA 550 第 15 段",
+    "开发接口文档第 6 节外部动作三步 (find_success → submit → external_call)"
+   ],
+   "prerequisites": [
+    "R45",
+    "JR-2",
+    "JR-3",
+    "JR-4"
+   ],
+   "external_deps": [
+    "B: MockRegistrySource 两个新方法与 data/demo/registry/ 下 D2 的 JSON 与 5 份 PDF, manifest 登记; 先用 FakeRegistry 与 FakeEvidenceStore (文档 ID 先用占位, 同 R36/R54 做法)"
+   ],
+   "acceptance": [
+    "YAML: owner A5, engine rule, autonomy L4, cycle Pervasive, fixed false, params {max_depth 3, person_hops 1}, standards [AASB124-P09, ASA550-P15]; 规则 R01 关联候选未申报 (high), R02 穿透中断 (medium) 在代码中生成, YAML 注释写口径.",
+    "查询顺序: ABN 68900042015 → 摘录 900042015 → 摘录 916073106 → 人员 Avery Jordan 1972-08-19 → 人员 Raman Priya 1979-02-03 → 摘录 903046122; external_call 6 行, idempotency_key 为 {eid}:GEN-08:abn:68900042015, {eid}:GEN-08:extract:900042015 等, payload 含 document_id (ABN 查询除外).",
+    "5 份摘录 PDF 经 EvidenceStore.save 存档 (type registry_extract, reliability external_original), 片段 documents 5 条 status extracted.",
+    "ownership_graph OWNERSHIP v1: 节点 6 (ACN-900042015, ACN-916073106, ACN-903046122, PER-AVERY-JORDAN-19720819, PER-RAMAN-PRIYA-19790203, PER-RAMAN-ARJUN-19771112); 关系 10 (Jordan 任 Numbat 董事, Priya 任 Numbat 董事, AFH 持 Numbat 0.6, Priya 持 Numbat 0.4, Jordan 任 AFH 董事, Jordan 持 AFH 1.0, Priya 任 Galah 董事, Priya 持 Galah 0.6, Arjun 任 Galah 董事, Arjun 持 Galah 0.4); 每条 evidence 为对应摘录的 document 指针 (高管第 1 页, 股东第 2 页, 人员检索第 1 页).",
+    "exceptions: X-GEN-08-1-R01-1 (rule_id R01, high, source_ids [ACN-903046122], amount_cents null, detail {name Galah Retail Electronics Pty Ltd, abn 20903046122, via PER-RAMAN-PRIYA-19790203, relations [director, shareholder 0.6]}, evidence 2 条 document 指针); Avery Family Holdings 按 ABN 47916073106 与申报清单匹配, 不出例外; RUN-GEN-08-1 succeeded, 无任务.",
+    "幂等: 预置 6 行成功留痕后运行, RegistrySource 0 次, EvidenceStore.save 0 次, 图与例外与首次逐字段相等; 只预置前 3 行时只补查后 3 项.",
+    "摘录 916073106 返回 None: 出 X-GEN-08-1-R02-1 (R02, medium, source_ids [ACN-916073106]), Jordan 与 AFH 的关系不入图, 其余照常; 只检索 AASB 124 第 9(a) 段所列人员, PER-RAMAN-ARJUN-19771112 不检索.",
+    "EvidenceAgent.procedures 为 {CSH-04, GEN-08}, 按程序编号分派, test_evidence 全部通过; 程序数断言 20."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "JR-10",
+   "title": "A6 GEN-03 关联方图谱研判: 判断对象与上下文",
+   "procedures": [
+    "GEN-03"
+   ],
+   "goal": "对关系图中报告主体以外的每个公司各出一条 Judgment: 按 AASB 124 第 9 段判断是否关联方, 是否已申报, 本期交易与条款; 合同与发票经 ABN 后 9 位与 ACN 匹配.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-03.yaml",
+    "src/backend/knowledge/prompts/GEN-03.md.j2",
+    "src/backend/agents/fieldwork.py (subject_sources 登记 gen03_subjects)",
+    "tests/fakes.py",
+    "tests/test_fieldwork_gen03.py",
+    "docs/开发接口文档.md 第 6 节"
+   ],
+   "basis": [
+    "规格书 6.1.2 GEN-03 ← DOC-04, GEN-08 (802 行), 7.2 GEN-03 L2 LLM",
+    "ASA 550 第 21, 22 段; AASB 124 第 9 段 (已核原文)",
+    "规格书 8.5 未脱敏个人信息不送 LLM (1243 行)",
+    "合成数据集设计第 5.3, 6.3, 6.6 节 (CON-003 条款)"
+   ],
+   "prerequisites": [
+    "R37",
+    "R41",
+    "JR-5",
+    "JR-9"
+   ],
+   "external_deps": [
+    "B: GEN-03 的 C01 (按客户 ABN 汇总本期销售: 张数, 金额, 首末开票日, 期末未收金额, rows) 与 C02 (3xxx 权益科目本期分录, rows) SQL; 先用 FakeRuleEngine 预置 Numbat 行"
+   ],
+   "acceptance": [
+    "YAML: owner A6, engine llm, autonomy L2, cycle Pervasive, fixed false, depends_on [DOC-04, GEN-08], standards [AASB124-P09, ASA550-P21, ASA550-P22], evidence_required [external, contract], manual_result_allowed true, rules C01, C02 (emit rows), llm {GEN-03.md.j2, JudgmentDraft}.",
+    "判断对象: ownership_graph 中报告主体以外的公司节点, 按节点 ID 排序: [ACN-903046122, ACN-916073106]; 状态无 ownership_graph 时抛 LookupError.",
+    "ACN-903046122: data.entity {name Galah Retail Electronics Pty Ltd, acn 903046122, abn 20903046122}; data.links 为与之相连的 4 条关系 (带 document 指针); data.declared null; data.contracts [CON-003 (T1-T5)] 与其 DocumentRef; data.sales 为 C01 行 {invoice_count 24, total_cents 45391479, first 2025-07-07, last 2026-06-25, outstanding_cents 5161181}; rule_findings [X-GEN-08-1-R01-1]; fixture_key ACN-903046122.",
+    "ACN-916073106: data.declared 为申报清单中的 Avery Family Holdings Pty Ltd (parent_entity); data.equity_entries 含 CP-DIV-2025-11-1 (3200 借 40000000); rule_findings [].",
+    "渲染出的提示词不含任何 birth_date 值 (如 1979-02-03); Standards 段含 AASB124-P09 原文.",
+    "FakeJudgmentEngine 下 2 条 normal 任务 T-J-GEN-03-1-ACN-903046122-v1, T-J-GEN-03-1-ACN-916073106-v1; ACN-903046122 失败时建 T-RUN-GEN-03-1-ACN-903046122-v1 (failed), allowed {rerun, manual_result}; 程序数断言 21."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-11",
+   "title": "GEN-03 fixture",
+   "procedures": [
+    "GEN-03"
+   ],
+   "goal": "2 份 fixture 经真实判断引擎一次通过, Galah 判为未申报关联方, AFH 判为已申报母公司.",
+   "scope_files": [
+    "tests/fixtures/llm/GEN-03/ACN-903046122.json",
+    "tests/fixtures/llm/GEN-03/ACN-916073106.json",
+    "tests/test_fieldwork_gen03.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "AASB 124 第 9(b)(vi) 段, ASA 550 第 22 段 (已核原文)",
+    "合成数据集设计第 6.3 节 CON-003 第 5.1, 6.1 条",
+    "data_needs D1, D2"
+   ],
+   "prerequisites": [
+    "JR-10"
+   ],
+   "external_deps": [
+    "B: 摘录 PDF 的 document_id 以 manifest 为准, B 出 PDF 后替换 fixture 中的占位 ID (同 R54); data/demo/llm 重新生成"
+   ],
+   "acceptance": [
+    "ACN-903046122: proposed_action more_evidence, misstatement_draft null, exception_ids [X-GEN-08-1-R01-1]; 结论写明: Numbat 董事 Priya Raman 持股 60% 并任董事, Galah 依 AASB 124 第 9(b)(vi) 段为关联方, 管理层申报清单未列; 本期销售 24 张共 453,914.79, 期末未收 51,611.81; CON-003 含 30 天退货权 (CON-003-T3) 与 3% 返利 (CON-003-T4); 需按 ASA 550 第 22 段要求管理层列明全部交易并询问控制失效原因.",
+    "证据含 Priya Raman 人员检索 document 第 1 页, Galah 摘录 document 第 2 页 (股东), CON-003 document 第 1 页 (counterparty) 与第 3 页 (条款), sales_invoice SI-2026-0008 与 SI-2026-0605, AASB124-P09, ASA550-P22; self_confidence 0.85 → confidence_parts {evidence 0.9, llm 0.85}, confidence 0.88.",
+    "ACN-916073106: proposed_action accept; 结论写明母公司持股 60%, 已申报, 本期分得股利 240,000.00 (CP-DIV-2025-11 共 400,000.00 的 60%); 证据含 Numbat 摘录 document 第 2 页, journal_entry CP-DIV-2025-11-1, AASB124-P09.",
+    "两份经真实 JudgmentEngine 与 MockLLMClient attempts 1, failure 空."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-12",
+   "title": "A6 GEN-01 关联方完整性终审",
+   "procedures": [
+    "GEN-01"
+   ],
+   "goal": "在 GEN-03 结清后, 把管理层申报清单与已复核的识别结果比对, 出一条 L1 建议判断, 一律由审计师逐条决定 (承载方式视问题 1, 推荐作复核任务); 视问题 4 把结论只读带到 FIN-01 闸门材料.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-01.yaml",
+    "src/backend/knowledge/prompts/GEN-01.md.j2",
+    "src/backend/agents/fieldwork.py (subject_sources 登记 gen01_subjects)",
+    "tests/fixtures/llm/GEN-01/CLIENT-001.json",
+    "tests/fakes.py",
+    "tests/test_fieldwork_gen01.py",
+    "视问题 4: src/backend/contracts/views.py (CompletionMaterial, 84 行), src/backend/orchestration/query.py, docs/开发接口文档.md 第 7, 10 节"
+   ],
+   "basis": [
+    "规格书 6.1.2 GEN-01 '闸门; A5 → A6' (803 行); 12.2 GateDecision.gate 枚举无 GEN-01 (1690 行); 18 节静态中断列表无 GEN-01 (2825-2830 行); 7.5 GEN-01 属设计选择 (1158 行)",
+    "ASA 550 第 13, 22, 25, 26, 27, Aus 27.2 段 (已核原文)",
+    "规格书第 11 节环 3 '发现未披露关联方' 为阻断条件 (1518 行), Demo需求文档第 6 节本版不做环 3"
+   ],
+   "prerequisites": [
+    "JR-11",
+    "R18"
+   ],
+   "external_deps": [
+    "C (视问题 4 选 1): FIN-01 闸门页显示关联方完整性结论一栏; A 先在 GraphStateQuery 返回, 前端未改时不影响闸门提交"
+   ],
+   "acceptance": [
+    "YAML: owner A6, engine llm, autonomy L1, always_review true, manual_result_allowed true, cycle Pervasive, fixed false, depends_on [GEN-03, GEN-08], standards [ASA550-P13, ASA550-P22, ASA550-P25, ASA550-P26, ASA550-P27], evidence_required [external].",
+    "判断对象 1 个, subject_id 为客户画像 ID CLIENT-001; data: declared (画像 related_parties, key_personnel, ownership), identified (状态中 GEN-03 各对象当前有效的判断: id, subject_id, conclusion, proposed_action, review_status; 被推翻时取人工判断), open_exceptions (GEN-08 未归因例外), graph (节点与关系, 不含 birth_date); fixture_key CLIENT-001.",
+    "GEN-03 有待决任务时 ready_procedures 不含 GEN-01; GEN-03 两条任务决定后才派发.",
+    "fixture CLIENT-001: proposed_action more_evidence, misstatement_draft null; 结论写明申报清单不完整, 漏列 Galah Retail Electronics Pty Ltd, 并列出 ASA 550 第 22 段后续 (要求管理层列明交易, 询问控制失效原因, 重新考虑其他未申报关联方), 第 26 段书面声明, 第 27 段治理层沟通; 经真实判断引擎 attempts 1; J-GEN-01-1-CLIENT-001 autonomy_level L1, confidence_parts 无 rule 键.",
+    "不论置信度与建议动作都建 T-J-GEN-01-1-CLIENT-001-v1 (normal), allowed {confirm, override, misstatement}.",
+    "视问题 4 选 1: CompletionMaterial 增 related_party_conclusion {judgment_id, version, conclusion, review_status}, 无 GEN-01 判断时为 null; Numbat 的 FIN-01 材料带 J-GEN-01-1-CLIENT-001 v2 confirmed; recovery 的材料重建同样带出.",
+    "程序数断言 22; 现有测试通过."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-13",
+   "title": "本组 Agent 层集成测试",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "用真实 JudgmentEngine, MockLLMClient, fixture 与假存储, 按层直接调用本组 5 条程序的 Agent, 层间模拟复核 confirm, 产出与合成数据集新增第 7 节一致 (R49 写法).",
+   "scope_files": [
+    "tests/test_p2_gen_demo.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "合成数据集设计第 7 节 (JR-0 新增行)",
+    "R49 的写法 (tests/test_p2_agents_demo.py)"
+   ],
+   "prerequisites": [
+    "JR-8",
+    "JR-11",
+    "JR-12",
+    "R49"
+   ],
+   "external_deps": [
+    "无 (全部用假实现预置 Numbat 的 D1-D3 数据)"
+   ],
+   "acceptance": [
+    "层 0 (GEN-05, GEN-08) → 层 1 (GEN-02, GEN-03) → 模拟 GEN-03 两条 confirm (判断出 v2 confirmed, X-GEN-08-1-R01-1 出 v2 attributed) → 层 2 (GEN-01); 片段经 reducer 并入状态.",
+    "每次 judge attempts 1, failure 空; llm_call 12 行 (GEN-02 9, GEN-03 2, GEN-01 1), external_call 6 行 (GEN-08).",
+    "例外 13 条 (GEN-05 12, GEN-08 1); Judgment 12 条 (J-GEN-02-1-{9 个凭证号}, J-GEN-03-1-ACN-903046122, J-GEN-03-1-ACN-916073106, J-GEN-01-1-CLIENT-001); normal 任务 12 条.",
+    "全部 Judgment 与 OwnershipGraph 的证据指针经 OutputValidator 可解析 (document 页码不超过 page_count)."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "JR-14",
+   "title": "启用装配与编排测试更新",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "5 条程序 YAML 打开 fixed, Numbat 程序包变为 12 条 P2; 脚本 Agent 与编排测试随之更新, 全部测试通过. 前面各条 fixed 先为 false, 避免一加 YAML 就改动全部编排测试的程序包.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-05.yaml, GEN-02.yaml, GEN-08.yaml, GEN-03.yaml, GEN-01.yaml (fixed: true)",
+    "tests/fakes.py (numbat_all_p2_agents 增 5 条脚本 Agent, make_runner 默认 FakeRegistry 带 D2)",
+    "tests/test_flow.py (REVIEWS, P2)",
+    "tests/test_knowledge.py (test_assembly_and_layers)",
+    "受影响的编排测试: tests/test_graph.py, test_fan_in.py, test_await_events.py, test_recovery.py, test_e2e_restart.py 等"
+   ],
+   "basis": [
+    "JR-1 固定集",
+    "scheduler.py:13-50 分层与就绪; graph.py:149-199 先派发后等复核 (Q7)",
+    "Demo需求文档第 2 节 P2 分层 (JR-0 更新后)"
+   ],
+   "prerequisites": [
+    "JR-1",
+    "JR-13"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "Numbat 装配: P2 为原 7 条加 GEN-05, GEN-02, GEN-08, GEN-03, GEN-01 共 12 条; 后 5 条 objective_ids 为 [].",
+    "build_schedule (cap 4): {0: {REV-08, REV-03, CSH-04, CSH-05, GEN-05, GEN-08}, 1: {REV-02, DOC-06, GEN-02, GEN-03}, 2: {CSH-02, GEN-01}}; 第 0 层实例 fw-0-0 [CSH-04, CSH-05], fw-0-1 [GEN-05, GEN-08], fw-0-2 [REV-03, REV-08].",
+    "脚本 Agent 下 test_flow: 第 1 轮派第 0 层 6 条; 第 2 轮派 DOC-06, GEN-02, GEN-03; 第 3 轮派 CSH-02; 之后进 await_events; REV-03 三条确认后派 REV-02, GEN-03 两条确认后派 GEN-01; 18 条复核决定后停在 gate_fin, P2 12 条 completed.",
+    "全部现有测试通过; 因程序包变化而改的断言在确认材料中逐条列出 (文件:行号, 原值 → 新值)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "JR-15",
+   "title": "验收: mock 离线全流程加入本组程序 (R55 扩展)",
+   "procedures": [
+    "GEN-05",
+    "GEN-02",
+    "GEN-08",
+    "GEN-03",
+    "GEN-01"
+   ],
+   "goal": "真实 Agent, 判断引擎与 MockLLMClient 下离线跑完 P0-P4, 本组 12 条新复核按演示决定处理, 结果, 留痕与证据指针对照合成数据集第 7 节; 中途重启不重复登记查询.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/test_e2e_restart.py",
+    "tests/test_flow.py (REVIEWS)",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "Demo需求文档第 8 节第 1, 3, 4, 5 条",
+    "合成数据集设计第 7 节 (JR-0 更新后)",
+    "R55, R57 的验收口径"
+   ],
+   "prerequisites": [
+    "JR-14",
+    "R55",
+    "R57"
+   ],
+   "external_deps": [
+    "B: 真实存储, 规则 SQL, 登记 mock 与数据就绪后的 R56 slow 变体结果相同; 就绪前只跑假实现"
+   ],
+   "acceptance": [
+    "决定: R55 原有决定外, GEN-02 9 条, GEN-03 2 条, GEN-01 1 条均 confirm; 顺序 REV-03 ×3, REV-02 ×2, CSH-02, GEN-02 ×9, GEN-03 ×2, GEN-01, 每次提交前停在 await_events.",
+    "结果: 例外 17 条 (X-PLN-07-1-A01-1 open; 其余 16 条 attributed, 其中 X-GEN-05-1-* 12 条 attributed_by 为对应的 J-GEN-02-1-{凭证号}, X-GEN-08-1-R01-1 attributed_by J-GEN-03-1-ACN-903046122); Judgment 18 条 confirmed v2; 任务 18 条 decided; Misstatement 仍只 1 条 14200000 overstated; OWNERSHIP v1 6 节点 10 关系; 文件 10 份 (合同 3, 回函 2, 登记摘录 5, 均 extracted); P2 12 条 completed; SCHEDULE, 意见与 REPORT-2 同 R55.",
+    "留痕: llm_call 25 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, GEN-02 9, GEN-03 2, GEN-01 1, RPT-03 2); decision 23 行; external_call 10 行 (ACC-04 2, CSH-04 2, GEN-08 6).",
+    "全部证据指针经 OutputValidator 可解析; tests/fixtures/llm 下新增 12 份 fixture 均通过四级校验; 签字后提交任一决定仍报 ENGAGEMENT_LOCKED.",
+    "重启变体: 第 2 轮 GEN-02 执行中取消后台任务, 用同一检查点与存储 recover 跑到 Archived; GEN-08 的 external_call 仍为 6 行, RegistrySource 无重复查询, llm_call 总数与不中断时相同 (25)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "D1 客户画像增审批限额与关联方声明",
+   "for_keys": [
+    "JR-2",
+    "JR-6",
+    "JR-9",
+    "JR-10",
+    "JR-12"
+   ],
+   "owner": "B",
+   "detail": "data/demo/client_profile.json (经 demo_spec.json profile) 增: approval_limit_cents 1000000; key_personnel [{name Jordan Avery, role Managing Director, since 2011}, {name Priya Raman, role Director, since 2014}]; related_parties [{name Avery Family Holdings Pty Ltd, abn 47916073106, relationship parent_entity}] (故意不列 Galah); ownership [{holder Avery Family Holdings Pty Ltd, pct 0.6}, {holder Priya Raman, pct 0.4}]. directors 不变. 与第 2.1 节 'Audit requested by shareholders' 一致. 合成数据集设计第 2.1 节同步."
+  },
+  {
+   "what": "D2 登记 mock: ABN, ASIC 摘录与人员检索 (含 5 份 PDF)",
+   "for_keys": [
+    "JR-3",
+    "JR-9",
+    "JR-10",
+    "JR-11",
+    "JR-12"
+   ],
+   "owner": "B",
+   "detail": "abn.json 增 47916073106 (acn 916073106, Avery Family Holdings Pty Ltd, Active, Australian Private Company) 与 20903046122 (acn 903046122, Galah Retail Electronics Pty Ltd, Active); 两个 ABN 已按官方算法校验 (ACN 校验位亦通过). asic.json 增 916073106 (Registered, 2010-11-02), 903046122 (Registered, 2019-05-06). 新增 registry/extracts/{acn}.json 与 .pdf (各 2 页: 第 1 页公司信息与高管, 第 2 页股本与股东): 900042015 高管 Jordan Avery (出生 1972-08-19) 董事 2011-03-14, Priya Raman (1979-02-03) 董事 2014-07-01; 股东 Avery Family Holdings Pty Ltd (916073106) ORD 600000, Priya Raman ORD 400000 (合计 1,000,000 股, 与试算表 3100 股本 1,000,000.00 一致). 916073106 高管 Jordan Avery 董事 2010-11-02; 股东 Jordan Avery ORD 100. 903046122 高管 Priya Raman 董事 2019-05-06, Arjun Raman (1977-11-12) 董事 2019-05-06; 股东 Priya Raman ORD 60, Arjun Raman ORD 40. 新增 registry/persons/AVERY-JORDAN-19720819.json/.pdf 与 RAMAN-PRIYA-19790203.json/.pdf (各 1 页, 列出上述在任职务与持股). PDF 页眉同第 6 节 FICTITIOUS DOCUMENT 一行, reportlab invariant=1; manifest.documents 登记 5 份 (type registry_extract, page_count, document_id). 第 4.7 节加: 5 份 PDF 页数与文本含所列姓名与 ACN."
+  },
+  {
+   "what": "D3 埋设分录异常 (R03 恰低于审批限额, R05 期末前三日冲销), 试算表与关键银行余额不变",
+   "for_keys": [
+    "JR-6",
+    "JR-7",
+    "JR-8",
+    "JR-13",
+    "JR-15"
+   ],
+   "owner": "B",
+   "detail": "(1) 2026-04-30 原 OPEX-2026-04 付款 15,550.00 拆为 SUNDRY 5,600.00 (CP-OPEX-2026-04 改 560000, BT-01-20260430-05 改 -560000) 与新增 CP-BFS-2026-04 (借 6500 995000 / 贷 1010, description 'EFT DEBIT BANDICOOT FACILITY SERVICES PTY LTD', source_doc BFS-2026-04, created_at 2026-04-30T05:05:00Z, created_by ap.clerk, approved_by fin.controller), 银行新行 BT-01-20260430-06 (-995000, reference BFS-2026-04); (2) 2026-05-29 同法: CP-OPEX-2026-05 改 565000, BT-01-20260529-06 改 -565000, 新增 CP-BFS-2026-05 (990000, created_at 2026-05-29T04:50:00Z) 与 BT-01-20260529-07 (-990000); 两日日终余额 146777913, 161453800 不变. (3) GJ-202603-ECLS (2026-03-31, 借 6500 2500000 / 贷 1150, 'Specific ECL provision - Echidna Controls Pty Ltd overdue balance', created_at 2026-03-31T05:10:00Z, fin.controller / cfo); GJ-202606-ECLR (2026-06-29, 借 1150 2500000 / 贷 6500, 'Reversal of specific ECL provision - Echidna Controls Pty Ltd', created_at 2026-06-29T06:30:00Z, fin.controller / cfo). 行数: journal_entries 2686 → 2694, bank_transactions 696 → 698 (BA-01 684 → 686). 第 2.3 节其他交易方加 Bandicoot Facility Services Pty Ltd; 第 4.5 节其他费用行注明 4, 5 月拆分; 第 4.7 节第 5, 17-22 条照常通过. 已核: 现有数据无冲销摘要, 无审批限额带内的付款, 周末与非工作时间录入只有 SJ-2026-0612."
+  },
+  {
+   "what": "D4 规则 SQL, 端口实现与产出存储",
+   "for_keys": [
+    "JR-3",
+    "JR-4",
+    "JR-6",
+    "JR-7",
+    "JR-9",
+    "JR-10",
+    "JR-15"
+   ],
+   "owner": "B",
+   "detail": "GEN-05 R01-R05, R07, R08 的 SQL (按 YAML 注释口径, Postgres, created_at 转 Australia/Sydney 后取 ISODOW 与小时; 每规则每凭证一行, 返回 entry_no 列); R02 口径按问题 2 的选择. GEN-02 U01, U02; GEN-03 C01, C02 的 rows SQL. SqlFinancialDataStore.journal_entries; MockRegistrySource.asic_extract, asic_person; persistence OUTPUT_KINDS 登记 OwnershipGraph 与迁移; 重新运行 generate_demo.py 复制 tests/fixtures/llm 新目录到 data/demo/llm. 期望结果: 对 data/demo 恰得 JR-6 验收 2 的 12 条例外."
+  },
+  {
+   "what": "D5 AASB 1060 正本",
+   "for_keys": [
+    "JR-5",
+    "JR-10",
+    "JR-11",
+    "JR-12"
+   ],
+   "owner": "用户 (提供原文)",
+   "detail": "docs/参考资料/03_会计准则_AASB/AASB_1060.pdf 只是 Key facts 摘要, 不是准则正文. AASB 124 AusB1 段写明其不适用于采用 AASB 1060 的 Tier 2 主体; Numbat 为 small proprietary, 若按 Tier 2 编制, 关联方披露要求在 AASB 1060 中. 到手前 GEN-03, GEN-01 的提示词与 fixture 只引 AASB 124 第 9 段定义与 ASA 550 第 10(b) 段, 不写 AASB 1060 段号; 也需确认 Numbat 采用的财务报告框架 (Tier 1 还是 Tier 2)."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "src/backend/contracts/knowledge.py ProcedureTemplate",
+   "change": "增 fixed: bool = False (P2 固定集, 不论审计目标一律装配); fixed 模板禁止 by_risk 参数",
+   "doc_section": "开发接口文档第 8.1 节"
+  },
+  {
+   "target": "src/backend/contracts/knowledge.py LLMSpec (视问题 3)",
+   "change": "增 allowed_actions: list[ProposedAction] | None = None; OutputValidator 结构级校验 proposed_action 在其中, 不在则可重试",
+   "doc_section": "开发接口文档第 5 节 OutputValidator, 第 8.1 节"
+  },
+  {
+   "target": "src/backend/contracts/models.py ClientProfile",
+   "change": "增 approval_limit_cents: int | None, key_personnel: list[KeyPerson], related_parties: list[DeclaredParty], ownership: list[DeclaredHolding] 及三个新模型, 均有默认值",
+   "doc_section": "开发接口文档第 2.3 节"
+  },
+  {
+   "target": "src/backend/services/procedure_library.py resolve_params",
+   "change": "增 profile: ClientProfile | None 参数与 PROFILE_REFS {approval_limit_cents}; build_run 按 state.client_profile_version 取画像",
+   "doc_section": "开发接口文档第 8.1 节参数写法, 第 5 节 ProcedureLibrary"
+  },
+  {
+   "target": "src/backend/contracts/ports.py FinancialDataStore",
+   "change": "增 journal_entries(eid, entry_nos) -> list[JournalEntry]",
+   "doc_section": "开发接口文档第 4 节"
+  },
+  {
+   "target": "src/backend/contracts/ports.py RegistrySource 与 contracts/models.py",
+   "change": "增 asic_extract(acn) -> AsicExtract | None, asic_person(family_name, given_names, birth_date) -> PersonSearch | None; 新模型 Officeholder, Shareholding, AsicExtract (含 file_name, file_bytes), PersonRole, PersonSearch",
+   "doc_section": "开发接口文档第 2.7 节, 第 4 节"
+  },
+  {
+   "target": "src/backend/contracts/models.py DocumentType 与 services/judgment_engine.py DOCUMENT_EVIDENCE",
+   "change": "DocumentType 增 registry_extract; 文件指针 registry_extract → EvidenceType.external, reliability 取 DocumentRef",
+   "doc_section": "开发接口文档第 2.1 节, 第 5 节 OutputValidator"
+  },
+  {
+   "target": "src/backend/contracts/models.py OwnershipGraph, PartyNode, PartyLink; contracts/state.py",
+   "change": "新对象 (固定 ID OWNERSHIP, 节点 ID ACN-{acn} 与 PER-{姓}-{名}-{yyyymmdd}); 状态增 ownership_graph 字段, initial_state 为 None",
+   "doc_section": "开发接口文档第 0 节 ID 规则, 第 2 节, 第 3 节字段表"
+  },
+  {
+   "target": "src/backend/orchestration/merge.py AGENT_FIELDS",
+   "change": "A5 增 exceptions, ownership_graph",
+   "doc_section": "开发接口文档第 3 节写入归属, 第 6 节 Agent 返回字段表"
+  },
+  {
+   "target": "src/backend/contracts/models.py Judgment.subject_id, AuditException.source_ids 注释",
+   "change": "subject_id 增 '凭证号 (GEN-02), 公司节点 ID (GEN-03), 客户画像 ID (GEN-01)'; source_ids 可为非财务行 ID (GEN-08 为节点 ID, 同 ACC-04 用 ABN)",
+   "doc_section": "开发接口文档第 2.2 节"
+  },
+  {
+   "target": "开发接口文档第 5, 6 节表格",
+   "change": "A5 程序 CSH-04, GEN-08; A6 增 GEN-05, GEN-02, GEN-03, GEN-01; JudgmentDraft 适用程序增 GEN-02, GEN-03, GEN-01; 需要人表 hybrid 增 GEN-02, llm 增 GEN-03, GEN-01; manual_result_allowed 列表增 GEN-02, GEN-03, GEN-01; A6 判断程序段补三条程序的判断对象与 data; 外部动作段补 GEN-08 幂等键",
+   "doc_section": "开发接口文档第 5 节, 第 6 节"
+  },
+  {
+   "target": "src/backend/contracts/views.py CompletionMaterial (视问题 4)",
+   "change": "增 related_party_conclusion (GEN-01 当前有效判断的 id, version, conclusion, review_status), 可为 null; GraphStateQuery 与 recovery 的材料重建带出",
+   "doc_section": "开发接口文档第 7 节, 第 10 节视图"
+  },
+  {
+   "target": "src/backend/persistence/models.py OUTPUT_KINDS (B)",
+   "change": "登记 OwnershipGraph 产出种类与迁移",
+   "doc_section": "开发接口文档第 9 节"
+  },
+  {
+   "target": "knowledge/standards/ASA240.yaml, ASA550.yaml, AASB124.yaml",
+   "change": "新增片段文件, Aus 段片段 ID 写法 (ASA550-Aus27.2) 补入命名约定",
+   "doc_section": "开发接口文档第 8.2 节, Demo需求文档第 7 节"
+  },
+  {
+   "target": "docs/ELEC5620_设计规格说明书.md 4.3 片段表与 6.3 GEN-05 示例",
+   "change": "ASA240-P32 '分录测试要求' 改为 ASA240-P33 (现行编译版第 33(a) 段); 示例 SQL 的 strftime 周末判断改按 Australia/Sydney 本地时间并注明 Postgres 写法",
+   "doc_section": "规格书 4.3 (427 行), 6.3 (883-950 行)"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "关联方完整性终审 (规格书依赖表写它是 '闸门') 放在哪里让审计师拍板?",
+   "options": [
+    {
+     "label": "(推荐) 当作执行阶段一条 '人逐条决定' 的建议判断, 进复核队列, 用现有的确认, 推翻, 认定错报三种决定; 它结清后才能进入完成阶段",
+     "pros": "不新增闸门, 改动集中在这一条程序; 规格书类图的闸门种类和第 18 节静态中断列表本来就没有它, 第 7.5 节把它列为设计选择而非法定闸门; 发现问题时就处理, 符合关联方准则 '及时沟通' 的要求",
+     "cons": "前端上它出现在复核队列而不是闸门页; 决定里没有 '批准/驳回' 的说法"
+    },
+    {
+     "label": "并入 '未更正错报评价与意见类型' 那道闸门, 审计师确认意见时一并确认关联方是否完整",
+     "pros": "与准则 '形成意见时评价关联方处理与披露' 的时点一致",
+     "cons": "到完成阶段才有人看, 发现太晚; 要改这道闸门的材料与决定契约, 前端同步改"
+    },
+    {
+     "label": "新增一道独立闸门, 放在执行阶段结束, 进入完成阶段之前",
+     "pros": "字面上与规格书依赖表的 '闸门' 一致",
+     "cons": "要改闸门编号, 主图, 决定校验, 材料视图, 恢复补做, 前端与数据库约 10 处; 与规格书类图和第 18 节闸门清单不一致"
+    }
+   ],
+   "recommendation": "选第 1 项. 规格书三处对它的说法不一致, 只有依赖表叫它闸门, 而决定种类与中断清单都没有它; 作 L1 复核任务最省改动, 且依赖就绪规则天然保证它结清前不进完成阶段.",
+   "affects": [
+    "JR-12",
+    "JR-14",
+    "JR-15"
+   ]
+  },
+  {
+   "question": "按规格书原样, '整数金额' 这条分录规则在现有数据上会查出 26 笔 (每月运费 12 笔, 税款 4 笔, 股利, 设备款, 期末计提等常规整额), 每笔都要模型解释一次, 再由审计师复核一次. 怎么收窄?",
+   "options": [
+    {
+     "label": "(推荐) 只查没有原始单据的手工总账分录, 金额为整万元且不低于执行重要性",
+     "pros": "现有数据命中 5 笔 (三个月的销售成本结转, 全年折旧, 所得税), 都是期末估计类分录, 正是准则提到的高风险类型; 分录例外归因共 9 次判断, 9 个复核任务",
+     "cons": "漏掉经银行付款的整额异常 (如整额付给关联方), 这类要靠其他规则"
+    },
+    {
+     "label": "按规格书原样: 全部分录, 整万元且高于明显微小门槛",
+     "pros": "不偏离规格书, 覆盖最广",
+     "cons": "分录例外归因共 30 次判断, 30 个复核任务, 大多是每月固定运费这类常规付款, 演示与真实使用都很拖"
+    },
+    {
+     "label": "整数金额只作辅助标记: 照记例外, 但只有同一笔分录还命中其他规则时才送模型判断",
+     "pros": "模型调用最少 (4 次), 规则仍完整执行",
+     "cons": "只命中整数金额的 26 条例外一直无人处理 (同初步分析的变动例外), 底稿上留着未处置的例外"
+    }
+   ],
+   "recommendation": "选第 1 项: 命中量可控, 且选中的正是期末手工估计分录; 规格书原文的口径在真实客户上同样会被常规整额淹没.",
+   "affects": [
+    "JR-0",
+    "JR-6",
+    "JR-8",
+    "JR-15"
+   ]
+  },
+  {
+   "question": "同一笔 142,000 的跨期销售分录, 既被收入截止测试查出, 也会被分录例外归因查出 (周日深夜录入, 自审自批). 错报只该记一次, 怎么防止重复?",
+   "options": [
+    {
+     "label": "(推荐) 分录例外归因只判断 '有无不当分录或舞弊迹象', 不提错报金额: 程序模板声明它允许的建议动作 (不含认定错报), 模型给出认定错报时按格式错误要求重答; 审计师复核时仍可手选认定错报",
+     "pros": "错报只由对应科目程序认定, 汇总表不会重复; 做法是模板配置, 不按程序编号写分支",
+     "cons": "某笔分录的问题若没有科目程序覆盖, 要审计师自己选认定错报"
+    },
+    {
+     "label": "不限制, 由审计师自己避免重复",
+     "pros": "不改契约",
+     "cons": "本例两条判断都可能建议认定 142,000, 审计师点两次就重复计入, 汇总变成 284,000, 意见判断偏重"
+    },
+    {
+     "label": "让分录例外归因排在收入截止测试之后执行, 上下文带上已有的判断",
+     "pros": "模型能看到已认定的错报, 自己避开",
+     "cons": "偏离规格书依赖表 (它只依赖全量分录扫描); 换客户时错报若来自尚未实现的程序, 仍会重复"
+    }
+   ],
+   "recommendation": "选第 1 项: 从源头上让分录测试只管 '是否不当', 金额归科目程序; 改动是一个通用的模板字段.",
+   "affects": [
+    "JR-7",
+    "JR-8",
+    "JR-15"
+   ]
+  },
+  {
+   "question": "查出未申报的关联方后, 这个结论要不要带到出具意见的闸门上?",
+   "options": [
+    {
+     "label": "(推荐) 在 '未更正错报评价与意见类型' 闸门材料中只读列出关联方完整性结论, 审计师选意见类型时看得到",
+     "pros": "对应关联方准则第 25 段与 Aus 27.2 段 (形成意见时评价关联方披露, 不符要修改意见); 只加一个只读栏位, 不改决定",
+     "cons": "改闸门材料契约, 前端加一栏"
+    },
+    {
+     "label": "不带, 结论只留在复核记录里",
+     "pros": "不改契约",
+     "cons": "审计师在意见闸门上看不到, 容易漏掉对披露与意见的影响"
+    },
+    {
+     "label": "按规格书走项目级风险重评 (规格书把 '发现未披露关联方' 列为阻断条件)",
+     "pros": "与规格书第 11 节一致",
+     "cons": "风险重评闸门本版未实现, 要先做整套项目级反馈环, 远超本组范围"
+    }
+   ],
+   "recommendation": "选第 1 项: 改动小, 又保证意见闸门上不漏; 风险重评留到反馈环实现时再接.",
+   "affects": [
+    "JR-12",
+    "JR-15"
+   ]
+  }
+ ],
+ "risks": [
+  "加 fixed 程序会让所有用真实程序库装配 Numbat 的编排测试的程序包从 7 条变 12 条; 故 JR-6 至 JR-12 的 YAML 先以 fixed false 落地, 由 JR-14 统一打开并更新脚本 Agent 与断言. 若其他组 (持续经营, 期后事项) 也需要 P2 固定集, JR-1 应只做一次, 他组引用.",
+  "时区: journal_entries.created_at 存 UTC. 已实测按 UTC 取星期, 周末行有 144 行 (悉尼周一上午即 UTC 周日), 按 Australia/Sydney 只有 SJ-2026-0612 两行; 规格书 6.3 示例 SQL 用 SQLite strftime 且未换算时区, B 照抄会大量误报.",
+  "留痕 ID 为 TR-{uuid4}, fixture 无法预先引用; 故登记查询结果改为存档摘录 PDF (文件 ID 由内容哈希确定) 作 document 证据. 这要求 B 生成 5 份 PDF 并登记 manifest, fixture 的文档 ID 需在 B 出 PDF 后对齐 (同 R54).",
+  "规格书 4.3 写 'ASA240-P32 分录测试要求', 现行编译版 (Compilation 8) 分录测试在第 33(a) 段, 第 32 段是管理层凌驾属特别风险; 规格书 7.2 与 6.1.2 对 GEN-01 是否闸门的说法互相不一致 (见问题 1).",
+  "适用框架未定: Numbat 为 small proprietary, 若按 Tier 2 (AASB 1060) 编制, AASB 124 的披露段不适用 (AusB1), 而参考资料中的 AASB_1060.pdf 只是摘要; 原文到手前关联方结论只引定义段, 披露段号待核.",
+  "规格书 8.5 与 UC-03 写 '每条例外独立 Judgment', 本组按凭证分组 (SJ-2026-0612 的 4 条例外合成 1 条判断), 沿用 REV-02 按发票, CSH-02 按账户的现有做法; 若用户坚持按例外出判断, GEN-02 判断数从 9 变 12.",
+  "more_evidence 的判断 (SJ-2026-0612, 两笔 Bandicoot 付款, Galah, 完整性终审) 只能 confirm 表示知悉, 本版没有追加程序 (more_procedures) 与管理层询问 (GEN-23) 的后续机制, 需由 '通用人工程序机制' 所在组承接; ASA 550 第 22 段要求的后续动作目前只写在结论里.",
+  "重放按写入者取字段: A5 增写 ownership_graph 与 exceptions 后, 重放 CSH-04 也会取回 OWNERSHIP 最新版本 (nodes.py:139-203); JR-4 验收 4 守住同版本 upsert 不冲突, 但 '单对象字段取之后执行' 的分支会对 CSH-04 多查一次执行记录, 需在 xhigh 审核时确认无副作用.",
+  "个人信息: 人员节点含出生日期 (用于识别同名人), 送模型前须去掉 (规格书 8.5); JR-10 验收 5 守住.",
+  "演示时长: P2 复核任务从 6 条增至 18 条, GEN-02 的 9 条多为 accept; 批量确认 (规格书 9.1) 不在本组, 若其他组未实现, 演示需逐条点. 真实 LLM (R59) 下新提示词需另调, 尤其 GEN-03 引用摘录页码.",
+  "真实使用: ASIC 摘录与人员检索按次收费, GEN-08 用幂等键防重复查询 (JR-9 验收 6); 人员检索按姓名加出生日期匹配, 真实 ASIC 同名多人时需人工确认, mock 不覆盖此情形.",
+  "范围外的下游: GEN-12 独立性监控 (由 GEN-08, GEN-03 触发), EXP-04 关联方费用, GEN-17 超常规交易不在本次三级范围; RPT-07 (第 3 级, 治理层沟通) 与书面声明程序应读取 GEN-01 结论 (ASA 550 第 26, 27 段), 需与该组对齐字段.",
+  "GEN-05 的 R06 (审计调整期间的其他分录) 与 P3 增量扫描依赖错报沟通时间 (FIN-08) 与更正验证 (FIN-09), 本组不做, 由该组在 GEN-05 YAML 中补规则与参数; 两组同改一个 YAML, 注意先后."
+ ]
+}

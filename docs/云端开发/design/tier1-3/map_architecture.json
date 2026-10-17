@@ -1,0 +1,139 @@
+地图: 在当前代码里加一条程序要改哪些地方 (WT=/Users/chen/Desktop/Computer_Science/ELEC5620/assignment/.claude/worktrees/nostalgic-heisenberg-882de9, 路径都相对 WT/src/backend, 测试相对 WT/tests)
+
+〇 需求写法 (需求清单.md R33-R53)
+- 格式: "## Rnn 标题", 下面依次是 目标, 范围 (列文件), 依据 (文档名加节号), 前置 (Rxx; 外部依赖: B 的 X 先用 tests/fakes.py 的 FakeY 预置第 n 节数据), 验收 (编号列出, 写具体 ID, 金额, 任务 ID, 如 T-J-REV-02-1-SI-2026-0612-v1), 状态.
+- 粒度: 一个 Agent 的一段能力 (R41 公共流程, R42/R43 各一条程序) 单独成条; fixture 单独成条 (R36, R44); 层集成测试单独成条 (R49).
+
+一 P2 程序 (rule / llm / hybrid) 的完整路径
+1. YAML: knowledge/procedures/X.yaml, 模型是 contracts/knowledge.py:45 ProcedureTemplate. 要写的字段: owner, engine, autonomy_level, always_review, manual_result_allowed, triggers, params, depends_on, standards, evidence_required, rules (RuleSpec:26, emit exception/rows, SQL 归 B), llm (LLMSpec:36, prompt 与 output_model).
+   - 参数的 ref 只认 STATE_REFS 和 ENGAGEMENT_REFS 两个集合 (services/procedure_library.py:16-17), 其他名字抛 KeyError (:130). by_risk 要求程序关联了审计目标 (:115).
+   - 程序库启动时自动加载 (procedure_library.py:41-47), 不需要注册.
+2. 准则与提示词: 片段放 knowledge/standards/*.yaml. tests/test_knowledge.py:112 会校验片段与 PDF 原文逐字一致. 提示词放 knowledge/prompts/X.md.j2, 变量见 judge 的 variables (judgment_engine.py:572-578).
+   - 新输出模型加在 contracts/llm_outputs.py.
+   - OutputValidator.validate 只认 JudgmentDraft, ContractExtraction, ConfirmationExtraction, ReportDraft 四种 (judgment_engine.py:308-317), 其他模型直接抛 NotImplementedError (:319).
+3. Agent 接入: registry.build_agents 按 ClassVar procedures 把程序映射到 Agent 实例 (agents/registry.py:25-37). 声明了程序却没有模板会抛 LookupError (:32-34). 反过来, 有模板没有 Agent 会在 nodes.perform 的 self.agents[procedure_id] 处抛 KeyError (orchestration/nodes.py:380).
+   - A6: 在 procedures 里加编号 (agents/fieldwork.py:101). 纯规则程序在 handler 里登记 (run_rules, rule_exceptions) (:112-116). 判断程序在 subject_sources 里登记一个 "取判断对象" 函数 (:105-108), 自动套用 judge_subjects→judge_all→judgments_patch (:139-169, :389-427).
+   - A3 用 handler (agents/ingest.py:67-75).
+   - 新 Agent 类要三处同时改: 加进 AGENT_CLASSES (registry.py:14-22); 在 merge.AGENT_FIELDS 写可写字段 (orchestration/merge.py:25-33), A7, A8 目前不在表里; AgentId 已有 A1-A10 (contracts/models.py:295-306).
+4. 装配: 首个 PLN-01/03 approve 之后 assemble_pack (nodes.py:567-601) 运行, 按 library.match (trigger) 与 closure (depends_on 闭包) 只加入 P2 程序, 写入 Procedure v1 (autonomy_level 取模板, :589). 有审计目标没有程序覆盖时阻断 (:578-580). DecisionSubmit._check_coverage 在通过前也查一遍 (decisions.py:684-699).
+5. 调度: build_schedule 按 depends_on 拓扑分层, 同层按 cycle 分组 (orchestration/scheduler.py:13-39). ready_procedures 只看 P2 内部的前置 (:42-50). route_schedule 给每个实例发 Send("fieldwork") (graph.py:149-171).
+6. 执行: fieldwork (nodes.py:607-622) 对每条程序调 perform (:365-394): build_run 解析参数并叠加 Procedure.params (:83-100) → run_agent (:342-363) → Agent.run, 再 check_patch (merge.py:211). 异常或校验不过时, A1 用 fail_run 代写 failed 执行与 failed 任务 (nodes.py:103-113). Store 里已有终态时按 stored_outputs 重放 (:139-203), 不再调 Agent.
+7. 汇合: fan_in (nodes.py:624-667) 在一个事务内依次处理各暂存结果. 先 check_ids 与 check_refs, 再 save_outputs (:272-304). 程序新版本: 有待决任务为 awaiting_human, 否则 completed (:659-663). after_fan_in 依次判断 schedule, await_events, completion (graph.py:174-199).
+8. 复核任务: ReviewQueue.classify (services/review_queue.py:70-85) 的规则: L1/L2, 建议 misstatement 或 more_evidence, 或 always_review → normal; L3/L4 → None, 即自动 confirmed 并归因例外 (fieldwork.py:414-417). hybrid 失败 → unattributed, llm 失败 → failed. 任务 ID 规则见 make_task (:87-112).
+9. 决定: API 调 GraphDecisionSubmit.submit (decisions.py:744-750) → check_review_record (:701-742), 依次校验: 任务待决, 图在等待, 版本, queue.allowed (review_queue.py:60-68), 字段 (decisions.py:322-351), rerun_params 只能是模板已有的键 (:737-740).
+   - _apply_review (:782-819) 在一个事务内写入: review_effects (:488-509) 的产出, 任务 decided, 程序新版本. 程序新版本: recompute_procedure (:512-524), rerun 时为 rerun_procedure (:537-552), 一组任务整组关闭 (Q17).
+10. 状态重算: await_events 被恢复后从 Store 整体读回 6 类对象 (ReviewRecord, ReviewTask, Judgment, AuditException, Misstatement, Procedure) 和程序包 (nodes.py:669-697), 然后回 fan_in 再判断去向. 决定如果改了别的对象, 要在这里加读回.
+
+二 P2 以外程序 (P0, P1, P3, P4) 与闸门
+- 节点与程序的对应写死在 NODE_PROCEDURES (nodes.py:130-136): p0_intel=ACC-04, p1_ingest=DOC-04, p1_analytics=PLN-07→PLN-01, completion=FIN-04, report_draft=RPT-03. 节点函数在 :534-713.
+- 执行链: GraphNodes.execute (:476-531) → attempt (:396-441) → perform.
+  - attempt 在同一事务里写片段, 程序新版本和阶段 (:430-436). 带 gate 的模板 (如 PLN-01) 成功后保持 planned (:418).
+  - 失败时 interrupt 等人 rerun, 再由 read_rerun 读回决定 (:443-474).
+  - 节点里有多条程序时, 依次 apply_patch 再 merge_patch (:555-565).
+- 新增非 P2 程序要改四处:
+  1. YAML. runner.fixed_procedures 会把所有非 P2 模板在启动时实例化 (orchestration/runner.py:21-27). 只对新项目生效.
+  2. 挂进 NODE_PROCEDURES 中的某个节点, 或新增节点.
+  3. 在 build_graph 里加节点和边 (graph.py:202-250).
+  4. 恢复补做依赖 NODE_PROCEDURES 定复核决定的读回顺序 (recovery.py:252-261); 节点不在表里会抛 RuntimeError (:252-253).
+- 四道闸门:
+
+  | 闸门 | 节点 | 材料 | 效果函数 | 出口 |
+  |---|---|---|---|---|
+  | ACC-01 | gate_acc01 | SCORECARD | acc01_effects (decisions.py:69) | approve→p1_ingest, reject→declined, rerun→p0_intel |
+  | PLN-01/03 | gate_p1_risk | MATERIALITY | pln_effects (:153), revise_risks (:185) | approve→assemble_pack, reject→p1_analytics |
+  | FIN-01 | gate_fin | SCHEDULE | fin01_effects (:88) | approve→report_draft, reject→completion |
+  | RPT-01 | gate_rpt01 | 最新修订报告 | rpt01_effects (:124), 签字锁定 | approve→archive, reject→report_draft |
+
+  - 出口定义在 graph.py:241-246, 每道闸门另有 represent 回到自身 (:249).
+  - 闸门节点本身为空 (nodes.py:539-540), 去向全由 gate_route (graph.py:76-112) 决定, 依据是最后一条决定绑定的材料版本 (_gate_target :56-73).
+- 加一个新闸门, 逐处改:
+  - contracts/models.py: GateId (:190-196); GateDecision 字段 (:628-641). disposition 目前只能是 OpinionType, 规格要求按闸门限定枚举.
+  - graph.py: GATE_NODES (:37-42), _gate_target, exits. interrupt_before=GATES 自动生效 (:257).
+  - decisions.py: GATE_MATERIAL (:108), GATE_PROCEDURE (:116), required_fields 与 allowed_fields (:231-254), GATE_SPECIFIC (:66), gate_target (:643-653), check_gate_decision 中该闸门的专项校验 (:655-682), submit 的分派与新的 *_effects 纯函数 (:751-780). 效果里新出版本的对象要加进 VERSIONED_EFFECTS (:115).
+  - query.py: GraphStateQuery.gate 的材料分支 (:131-181); contracts/views.py 新增 *Material 类并加入 GateMaterial 联合 (:100-104).
+  - recovery.py: MATERIAL_MODELS (:47-52), gate_values 的重建分支 (:65-103).
+  - 外部依赖: C 的 api/routes/gates.py; B 的 persistence/models.py:112 gate_materials 种类表.
+- 在已有闸门里加一个步骤: 改该闸门的 effects, required 与 allowed, check_gate_decision, 材料视图, gate_values 重建. 如果写入图状态里独有的字段 (例如重要性三项只在图状态里), recovery 必须能重算 (参照 :79-91).
+
+三 Agent 清单 (ProcedureAgent 契约在 agents/base.py:84-112)
+- 契约: 类变量 agent_id 与 procedures; 抽象方法 execute(ctx)→F 与 interpret(ctx, F)→StatePatch; run 是模板方法, 子类不覆写.
+  - RunContext (:51-63) 包含 engagement, procedure, template, run (running), state (只读).
+  - procedure_runs 必须带 ctx.run 的终态 (finish_run :79-81). 并发用 gather_all (:66-76).
+  - 依赖包 AgentDeps (:31-48).
+
+  | 编号 | 类 | 文件 | 负责程序 |
+  |---|---|---|---|
+  | A2 | ClientIntelAgent | agents/client_intel.py:137 | ACC-04 |
+  | A3 | IngestAgent | agents/ingest.py:61 | DOC-04, DOC-06 |
+  | A4 | RiskAssessorAgent | agents/risk_assessor.py:81 | PLN-07, PLN-01 |
+  | A5 | EvidenceAgent | agents/evidence.py:39 | CSH-04 |
+  | A6 | FieldworkAgent | agents/fieldwork.py:93 | REV-08, REV-03, REV-02, CSH-05, CSH-02 |
+  | A9 | QCAgent | agents/qc.py:11 | FIN-04, 纯计算 |
+  | A10 | ConciergeAgent | agents/concierge.py:26 | RPT-03 |
+
+- A1 不是 Agent 类, 由 GraphNodes, DecisionSubmit 和闸门承担.
+- A7 Review 与 A8 Workpaper 只有枚举占位 (models.py:304-305), 没有类, 也不在 AGENT_FIELDS 里.
+- 闸门程序 ACC-01, PLN-03, FIN-01, RPT-01 没有 Agent, 不经 perform (registry.py:1 注释).
+
+四 判断引擎, 校验, LLM, 复核对象
+- JudgmentEngine (judgment_engine.py:453).
+  - call_llm (:477-516): 渲染提示词, system 带 schema, 语法或结构失败最多试 3 次 (:71), 每次尝试写 llm_call 留痕 (:518-552).
+  - judge (:564-621): Judgment ID 为 J-{pid}-{run_no}-{subject} (:603); 置信度 = evidence/rule/llm 分项加权 (:623-638, 权重在 knowledge/rules.json).
+  - OutputValidator 四级: syntax, structure, reference, semantic (:287-327).
+- MockLLMClient (adapters/llm.py:53-75) 读 {root}/{procedure_id}/{fixture_key}.json, 找不到退回 default.json.
+  - 测试固定读 tests/fixtures/llm (tests/conftest.py:7-8). 运行时读 data/demo/llm (.env.example:11).
+  - 两份必须内容一致 (tests/test_knowledge.py:502-514); 由 B 的 data/generate_demo.py 复制, 所以新 fixture 要两处同步.
+  - fixture_key 约定为判断对象 ID (fieldwork.py:162); RPT-03 用 r1, r2.
+- 任务类型与决定矩阵现状:
+  - 代码: TaskKind 只有 normal, unattributed, failed (models.py:157-162). TargetType 只有 Judgment, AuditException, ProcedureRun (:172-177). TaskStatus 只有 pending, decided. Decision 只有 confirm, override, misstatement, rerun, manual_result 五个 (:180-187).
+  - 矩阵 (review_queue.py:60-68): normal 可 {confirm, override, misstatement}; unattributed 可 {override, misstatement}; failed 可 {rerun}, 模板 manual_result_allowed 且任务带 subject_id 时另可 manual_result.
+  - 规格 UC-04 (规格书 2106-2115 行): 任务类型还有 blind, dispute, scope_limited, na_pending; 决定还有 more_procedures, dispute_resolution, scope_limited, not_applicable, evidence_unreliable; TargetType 还有 Procedure; TaskStatus 还有 presented.
+  - 计数有出入: 规格书 2477 行写 "九种决定", 但 12.2 节 ReviewRecord.decision (约 1679 行) 列了 10 个值 (多 evidence_unreliable). 以哪个为准不确定.
+- 现有 ReviewRecord (models.py:586-598) 缺规格里的 disputeResolution, neitherAction, requestedProcedures, consulted, dwellSeconds, reviewExtent.
+
+五 现有对象与缺口
+- 已有对象 (contracts/models.py):
+  - Judgment (:373), AuditException (:396), Procedure (:464), ProcedureRun (:476).
+  - AcceptanceScorecard (:510), AnalyticsResult (:518), MaterialityCandidates (:536), UncorrectedSchedule (:552).
+  - ReviewTask (:565), ReviewRecord (:586), GateDecision (:628), MaterialityChoice (:611).
+  - Misstatement (:644): status 固定为 Literal["uncorrected"] (:655).
+  - Confirmation (:661), DocumentRef (:680), Contract (:702).
+  - AuditReportVersion (:724): status 只有 draft, signed (:279-283); ReportSection 只有 6 段 (:268-276).
+  - 状态字段与 reducer 在 contracts/state.py:93-122, initial_state 在 :125.
+  - 新对象进状态要改: state.py; merge.AGENT_FIELDS; stored_outputs 自动按 field_type 处理; checkpoint 序列化自动放行 contracts.models 里的类 (orchestration/checkpoint.py:21-35); B 的 persistence/models.py:101-113 OUTPUT_KINDS.
+- 与规格书 12.2 节相比缺的对象: Firm, AuditPlan, Finding, DowngradeRule, Workpaper, SubsequentEvent, AuditOpinion, FinancialStatements, GovernanceCommunication, ManagementEnquiry, ControlDeficiency, NoclarMatter, StatutoryReport, EthicsBreach, WrittenRepresentationLetter, Consultation, ContractVersion.
+- 已有对象缺的字段:
+  - Misstatement 缺生命周期: objectiveId, fraudIndicative, origin, communicatedAt, managementResponse, adjustmentEntryIds, verifiedByProcedure, residualAmount, evaluation (规格 1822-1839 行). 这与 FIN-02, 03, 08, 09 直接相关.
+  - Judgment 缺: blind, criticVerdict 一组字段, stale, closureBasis, dependsOnVersions.
+  - Procedure 的状态只有 4 个, 规格是 10 个.
+  - GateId 只有 4 个. 规格还有 ACC-08, PLN-15, FIN-02 (都在本次第 2-3 级范围内), 以及 ACC-10, PLN-18, GATE-R, GEN-14.
+
+六 占位与未实现
+- NotImplementedError 只有三处: agents/ingest.py:74, agents/fieldwork.py:119 (handler 未登记的程序), services/judgment_engine.py:319 (新输出模型).
+- manual 引擎: Engine.manual 只出现在 YAML 里 (ACC-01, PLN-01, PLN-03, FIN-01, RPT-01), 代码里没有任何按 manual 分支的地方.
+  - PLN-01 标了 manual, 实际由 A4 执行 (risk_assessor.py:85).
+  - 规格里 "A10 派任务给人, 收回结果" 的通用人工程序机制 (规格书 1391 行) 完全没有实现.
+- autonomy_level:
+  - 模板值进 Procedure (nodes.py:589, runner.py:24), 但 Judgment 取的是模板值, 不是 Procedure 值 (judgment_engine.py:616).
+  - classify 只按 L1/L2 与 L3/L4 二分 (review_queue.py:80).
+  - 人工判断固定为 L1 (decisions.py:423).
+  - 没有动态降级, 没有 DowngradeRule.
+- blind: src 和 tests 都 grep 不到.
+
+七 测试组织
+- tests/fakes.py:
+  - 各种假实现: FakeOutputStore (:674), FakeFinancialStore (:481), FakeRuleEngine 按程序预置 RuleResult (:1137, 预置表约在 :1040), ScriptedLLM 按 fixture_key 依次出原文 (:1047), FakeJudgmentEngine 按 subject_id 返回结果 (:1077).
+  - make_deps 在真实依赖上替换假实现 (:1186).
+  - make_ctx 构造单条程序第 1 次执行的上下文 (:1701), 用于直接测 Agent.
+- ScriptAgent (:1269) 及子类 ScriptA3/A4/A5/A6/A10 (:1290-1317): 不读数据, 由 script(ctx) 直接给片段, 子类只改 agent_id 来决定可写字段. 编排测试用它代替真实 Agent.
+  - Numbat 脚本集: numbat_p1_agents (:1320), numbat_p2_agents (:1389), numbat_all_p2_agents (:1649).
+  - make_graph_nodes 默认 P1 和 RPT-03 用脚本 (:1654-1660).
+- make_runner (:1719-1759): 内存检查点, 可传 agents 替换, 可传 interrupt_before 额外停在某节点. wait_idle 等后台任务结束 (:1762).
+  - 提交决定的辅助: preset_rerun (:1663), Started 与 acc01_decision, pln_decision (tests/test_decisions.py), submit_gate, REVIEWS, FIN_APPROVE (tests/test_flow.py).
+- e2e: tests/test_e2e_mock.py 用真实 Agent, 真实 JudgmentEngine 与 MockLLMClient 离线跑完 P0-P4 (start_demo :72, finish_demo :97).
+  - :302-340 断言每条程序由哪个真实 Agent 执行几次. 加程序要更新这张表, 以及 tests/test_flow.py 的 REVIEWS.
+- 加程序必改的现有断言:
+  - tests/test_knowledge.py:37 断言程序总数 == 17.
+  - tests/test_knowledge.py:211-226 断言 Numbat 装配集与分层.
+  - fixture 目录 tests/fixtures/llm/{程序}/{对象}.json 与 data/demo/llm 保持一致.
+- Agent 层集成测试的模板: tests/test_p2_agents_demo.py (R49 写法).

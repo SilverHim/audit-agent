@@ -1,0 +1,621 @@
+[
+  {
+    "CreditNoteID": "7df8949c-b71f-40c0-bbcf-39f2f450f286",
+    "CreditNoteNumber": "03391",
+    "Payments": [],
+    "ID": "7df8949c-b71f-40c0-bbcf-39f2f450f286",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCPAYCREDIT",
+    "Reference": "",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "31509107-06ad-4b81-9505-3b98e97398fe",
+        "Amount": 218.9,
+        "Date": "/Date(1785888000000+0000)/",
+        "Invoice": {
+          "InvoiceID": "673dd7cc-beb7-4697-83d4-0c47cb400cc2",
+          "InvoiceNumber": "",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-16T09:40:09Z",
+    "Contact": {
+      "ContactID": "d0cd2c4f-18a0-4f7c-a32a-2db00f29d298",
+      "Name": "PC Complete",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-07-31T00:00:00",
+    "Date": "/Date(1785456000000+0000)/",
+    "DueDateString": "2026-07-31T00:00:00",
+    "DueDate": "/Date(1785456000000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "Description": "Internal DVD drive couldn't be supplied, backorder (Oliver laptop)",
+        "UnitAmount": 199.0,
+        "TaxType": "INPUT",
+        "TaxAmount": 19.9,
+        "LineAmount": 199.0,
+        "AccountCode": "453",
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "2a9788f3-9781-4182-b0af-27f986e0345f",
+        "AccountID": "8ab9d684-f897-4168-b5d1-2279bf74bb82"
+      }
+    ],
+    "SubTotal": 199.0,
+    "TotalTax": 19.9,
+    "Total": 218.9,
+    "UpdatedDateUTC": "/Date(1221558009467+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1785888000000+0000)/"
+  },
+  {
+    "CreditNoteID": "3bffc09b-79f2-490d-b91b-c59b700b43a4",
+    "CreditNoteNumber": "CR1001",
+    "SentToContact": true,
+    "Payments": [],
+    "ID": "3bffc09b-79f2-490d-b91b-c59b700b43a4",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCRECCREDIT",
+    "Reference": "Portal proj",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "302bb095-716b-4b42-85f1-68eb97942763",
+        "Amount": 26.4,
+        "Date": "/Date(1786924800000+0000)/",
+        "Invoice": {
+          "InvoiceID": "f571c38b-5be1-41e1-ad5a-ff6184284beb",
+          "InvoiceNumber": "ORC1001",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-17T07:37:09Z",
+    "Contact": {
+      "ContactID": "860b99a9-0958-4c8d-a98f-bb1f092b16bb",
+      "Name": "DIISR - Small Business Services",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-08-15T00:00:00",
+    "Date": "/Date(1786752000000+0000)/",
+    "DueDateString": "2026-08-15T00:00:00",
+    "DueDate": "/Date(1786752000000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "ItemCode": "PMDD",
+        "Description": "Credit for hourly rate review.\r\nReduction of $1.50 NOW $83.50/h down from $85.00/hr",
+        "UnitAmount": 24.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 2.4,
+        "LineAmount": 24.0,
+        "AccountCode": "200",
+        "Item": {
+          "ItemID": "3e772ebe-0aa6-458f-a913-73e09fafeed1",
+          "Name": "Project management & implementation due diligence",
+          "Code": "PMDD"
+        },
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "ab61b25f-24f5-4d36-bfe3-745d4bf77720",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 24.0,
+    "TotalTax": 2.4,
+    "Total": 26.4,
+    "UpdatedDateUTC": "/Date(1221637029397+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1786924800000+0000)/"
+  },
+  {
+    "CreditNoteID": "4f67130a-749a-4ee6-98b2-743adbc11245",
+    "CreditNoteNumber": "",
+    "Payments": [],
+    "ID": "4f67130a-749a-4ee6-98b2-743adbc11245",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCPAYCREDIT",
+    "Reference": "",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "9044fd62-2508-4378-954c-0d6fa0f20a86",
+        "Amount": 200.0,
+        "Date": "/Date(1788307200000+0000)/",
+        "Invoice": {
+          "InvoiceID": "7dae876a-b424-436b-a4e6-17b3fdeec80c",
+          "InvoiceNumber": "",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-19T09:33:28Z",
+    "Contact": {
+      "ContactID": "0f471ca5-15c9-405e-a1b9-7cc35194b673",
+      "Name": "Party Hire",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-09-19T00:00:00",
+    "Date": "/Date(1789776000000+0000)/",
+    "DueDateString": "2026-09-19T00:00:00",
+    "DueDate": "/Date(1789776000000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "Description": "Refund bond for return of clean",
+        "UnitAmount": 200.0,
+        "TaxType": "EXEMPTEXPENSES",
+        "TaxAmount": 0.0,
+        "LineAmount": 200.0,
+        "AccountCode": "420",
+        "Tracking": [],
+        "Quantity": 1.0,
+        "LineItemID": "681a7b41-32f0-4560-9ad3-e9421bca4bd0",
+        "AccountID": "18e27517-81e0-437c-bc21-fbba8e30d6bb"
+      }
+    ],
+    "SubTotal": 200.0,
+    "TotalTax": 0.0,
+    "Total": 200.0,
+    "UpdatedDateUTC": "/Date(1221816808073+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1788307200000+0000)/"
+  },
+  {
+    "CreditNoteID": "50e98404-2fba-4031-af67-8ba4bb227c44",
+    "CreditNoteNumber": "CR1005",
+    "SentToContact": true,
+    "Payments": [],
+    "ID": "50e98404-2fba-4031-af67-8ba4bb227c44",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCRECCREDIT",
+    "Reference": "",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "d33044ed-9a07-448c-9062-f65d621afd84",
+        "Amount": 550.0,
+        "Date": "/Date(1785456000000+0000)/",
+        "Invoice": {
+          "InvoiceID": "b75b3928-ab72-4424-8b93-9cdbbde4cd72",
+          "InvoiceNumber": "ORC1005",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-25T09:39:19Z",
+    "Contact": {
+      "ContactID": "571a2414-81ff-4f8f-8498-d91d83793131",
+      "Name": "Bank West",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-07-31T00:00:00",
+    "Date": "/Date(1785456000000+0000)/",
+    "DueDateString": "2026-07-31T00:00:00",
+    "DueDate": "/Date(1785456000000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "ItemCode": "Train-MS",
+        "Description": "Credit full invoice and included in suite of training invoiced via ORC1006",
+        "UnitAmount": 500.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 50.0,
+        "LineAmount": 500.0,
+        "AccountCode": "200",
+        "Item": {
+          "ItemID": "32147268-0576-46db-9c3b-adfd311035f5",
+          "Name": "Half day training - Microsoft Office",
+          "Code": "Train-MS"
+        },
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "South",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "2e31f27b-cf29-4124-98f0-68ebcf0d3b29",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 500.0,
+    "TotalTax": 50.0,
+    "Total": 550.0,
+    "UpdatedDateUTC": "/Date(1222335559627+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1785456000000+0000)/"
+  },
+  {
+    "CreditNoteID": "371cd138-1e5c-4ec1-a8c6-a1c10e8bdab1",
+    "CreditNoteNumber": "CR1003",
+    "SentToContact": true,
+    "Payments": [],
+    "ID": "371cd138-1e5c-4ec1-a8c6-a1c10e8bdab1",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCRECCREDIT",
+    "Reference": "Monthly Support",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "a6a7f1a7-8038-47bc-bc69-4918dba7beec",
+        "Amount": 550.0,
+        "Date": "/Date(1785024000000+0000)/",
+        "Invoice": {
+          "InvoiceID": "4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "InvoiceNumber": "ORC1003",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-25T09:39:19Z",
+    "Contact": {
+      "ContactID": "1b2be6e9-8d58-4da9-aaf8-4fe5471b653c",
+      "Name": "Hamilton Smith Pty",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-07-26T00:00:00",
+    "Date": "/Date(1785024000000+0000)/",
+    "DueDateString": "2026-07-26T00:00:00",
+    "DueDate": "/Date(1785024000000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "ItemCode": "Support-M",
+        "Description": "Duplicate invoice sent in error for last month - fully credited",
+        "UnitAmount": 500.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 50.0,
+        "LineAmount": 500.0,
+        "AccountCode": "200",
+        "Item": {
+          "ItemID": "0b190a96-8fa9-4870-b703-ac925fd4e272",
+          "Name": "Desktop/network support via email & phone",
+          "Code": "Support-M"
+        },
+        "Tracking": [],
+        "Quantity": 1.0,
+        "LineItemID": "7733f655-eb38-4abe-a5b5-2a047814a6a1",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 500.0,
+    "TotalTax": 50.0,
+    "Total": 550.0,
+    "UpdatedDateUTC": "/Date(1222335559657+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1785024000000+0000)/"
+  },
+  {
+    "CreditNoteID": "482c018b-d329-4e05-9b4f-7a4cfc695aa0",
+    "CreditNoteNumber": "CR1014",
+    "SentToContact": true,
+    "Payments": [],
+    "ID": "482c018b-d329-4e05-9b4f-7a4cfc695aa0",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCRECCREDIT",
+    "Reference": "Yr ref H008-346",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "625c5f3e-d998-4d72-beac-1e0a96de0c8b",
+        "Amount": 227.27,
+        "Date": "/Date(1788566400000+0000)/",
+        "Invoice": {
+          "InvoiceID": "aa0173af-8707-4e7f-8dde-4c7a357bd312",
+          "InvoiceNumber": "ORC1014",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      },
+      {
+        "AllocationID": "2c391297-d750-4b0e-aa10-0af27e7b0f85",
+        "Amount": 157.73,
+        "Date": "/Date(1789516800000+0000)/",
+        "Invoice": {
+          "InvoiceID": "aa0173af-8707-4e7f-8dde-4c7a357bd312",
+          "InvoiceNumber": "ORC1014",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-09-25T09:39:40Z",
+    "Contact": {
+      "ContactID": "ef6f54c1-eb45-4956-b8cd-1be82ad665f2",
+      "Name": "Maddox Publishing Group",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-09-03T00:00:00",
+    "Date": "/Date(1788393600000+0000)/",
+    "DueDateString": "2026-09-03T00:00:00",
+    "DueDate": "/Date(1788393600000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "ItemCode": "PMD",
+        "Description": "Credit half day Project Management onsite fee",
+        "UnitAmount": 350.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 35.0,
+        "LineAmount": 350.0,
+        "AccountCode": "200",
+        "Item": {
+          "ItemID": "a1173989-626f-4667-b0de-ffc712327fdb",
+          "Name": "Project Management - onsite daily rate",
+          "Code": "PMD"
+        },
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "e2349a0d-f366-4a32-bbf1-da3d3ece0e86",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 350.0,
+    "TotalTax": 35.0,
+    "Total": 385.0,
+    "UpdatedDateUTC": "/Date(1222335580737+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1789516800000+0000)/"
+  },
+  {
+    "CreditNoteID": "43c678ee-f357-48e2-b192-b6e3634762f9",
+    "CreditNoteNumber": "1026C",
+    "Payments": [],
+    "ID": "43c678ee-f357-48e2-b192-b6e3634762f9",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "Type": "ACCRECCREDIT",
+    "Reference": "Portal proj",
+    "RemainingCredit": 0.0,
+    "Allocations": [
+      {
+        "AllocationID": "9ce30851-d22f-48d8-a450-170d92ef28d2",
+        "Amount": 1155.0,
+        "Date": "/Date(1795564800000+0000)/",
+        "Invoice": {
+          "InvoiceID": "77b338ef-ecc0-4b95-a0d7-2617b0054611",
+          "InvoiceNumber": "ORC1026",
+          "Payments": [],
+          "CreditNotes": [],
+          "Prepayments": [],
+          "Overpayments": [],
+          "IsDiscounted": false,
+          "InvoiceAddresses": [],
+          "HasErrors": false,
+          "InvoicePaymentServices": [],
+          "LineItems": []
+        }
+      }
+    ],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2008-10-01T15:24:57Z",
+    "Contact": {
+      "ContactID": "860b99a9-0958-4c8d-a98f-bb1f092b16bb",
+      "Name": "DIISR - Small Business Services",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-10-16T00:00:00",
+    "Date": "/Date(1792108800000+0000)/",
+    "DueDateString": "2026-10-16T00:00:00",
+    "DueDate": "/Date(1792108800000+0000)/",
+    "Status": "PAID",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "ItemCode": "DevD",
+        "Description": "Credit development as agreed",
+        "UnitAmount": 1050.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 105.0,
+        "LineAmount": 1050.0,
+        "AccountCode": "200",
+        "Item": {
+          "ItemID": "c27221d7-8290-4204-9f3d-0cfb7c5a3d6f",
+          "Name": "Development work - developer onsite per day",
+          "Code": "DevD"
+        },
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "6abb1eb0-9351-4a22-9162-2590f958b179",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 1050.0,
+    "TotalTax": 105.0,
+    "Total": 1155.0,
+    "UpdatedDateUTC": "/Date(1222874697100+0000)/",
+    "CurrencyCode": "AUD",
+    "FullyPaidOnDate": "/Date(1795564800000+0000)/"
+  },
+  {
+    "CreditNoteID": "b356e488-2678-4be4-ad4b-d294df2d48d6",
+    "CreditNoteNumber": "ORC1037",
+    "SentToContact": true,
+    "Payments": [],
+    "ID": "b356e488-2678-4be4-ad4b-d294df2d48d6",
+    "HasErrors": false,
+    "InvoiceAddresses": [],
+    "CurrencyRate": 1.0,
+    "Type": "ACCRECCREDIT",
+    "Reference": "",
+    "RemainingCredit": 60.5,
+    "Allocations": [],
+    "HasAttachments": false,
+    "UpdatedDateUTCString": "2013-11-22T20:50:56Z",
+    "Contact": {
+      "ContactID": "0a4cf37b-a1a8-4753-9ee2-f9207f63a8ff",
+      "Name": "City Limousines",
+      "Addresses": [],
+      "Phones": [],
+      "ContactGroups": [],
+      "ContactPersons": [],
+      "HasValidationErrors": false
+    },
+    "DateString": "2026-09-15T00:00:00",
+    "Date": "/Date(1789430400000+0000)/",
+    "BrandingThemeID": "aefae6d5-7bbe-4e2e-aadc-302cd07a0fc1",
+    "Status": "AUTHORISED",
+    "LineAmountTypes": "Exclusive",
+    "LineItems": [
+      {
+        "Description": "Credit on overcharge for work last month as discussed",
+        "UnitAmount": 55.0,
+        "TaxType": "OUTPUT",
+        "TaxAmount": 5.5,
+        "LineAmount": 55.0,
+        "AccountCode": "200",
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "Eastside",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "Options": []
+          }
+        ],
+        "Quantity": 1.0,
+        "LineItemID": "abe301c1-53b0-405e-99ce-53387dc0e9cb",
+        "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452"
+      }
+    ],
+    "SubTotal": 55.0,
+    "TotalTax": 5.5,
+    "Total": 60.5,
+    "UpdatedDateUTC": "/Date(1385153456397+0000)/",
+    "CurrencyCode": "AUD"
+  }
+]

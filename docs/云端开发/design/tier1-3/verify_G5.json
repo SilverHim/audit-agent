@@ -1,0 +1,193 @@
+{
+ "group": "承接与计划的法定步骤及人工程序机制 (ACC-08 约定与委任核验, PLN-15 总体审计计划, PLN-19 重要性重估, 通用人工程序机制)",
+ "issues": [
+  {
+   "key": "AP-4, AP-5, AP-8, AP-9, AP-12, AP-13",
+   "severity": "blocker",
+   "problem": "节点与决定拆成两条, 前一条合入后到后一条合入前, 全流程测试不可能全绿. AP-4 让图停在 gate_acc08, 但 ACC-08 决定在 AP-5 之前提交不了. gate_target 对未知闸门会落到 RPT-01 分支, 读报告而报 VERSION_MISMATCH; GATE_PROCEDURE[decision.gate] 会抛 KeyError. AP-8 停在 gate_p1_plan, AP-12 停在 gate_pln19, 情况相同. AP-4 验收 5 写的 \"其余既有测试通过\" 与 AP-8 验收 4 的 \"改由 AP-9 承担\" 都做不到. 这违背每条需求 pytest 全绿后单独快照的流程.",
+   "evidence": "src/backend/orchestration/decisions.py:643-653 (gate_target 的 else 分支即 RPT-01), :116 GATE_PROCEDURE, :845; tests/test_trail.py:180-216, tests/test_e2e_mock.py 全流程都要越过 P0, P1 闸门",
+   "fix": "三选一. (1) 把节点与决定合成一条, 超出 M 就把契约部分拆出去. (2) 节点条目同时带上最小的 approve 路径 (gate_target, GATE_PROCEDURE, GATE_MATERIAL, *_effects 只做 approve), 校验, 驳回与恢复留在后一条. (3) 新闸门节点先由开关控制, 后一条再打开. 每条的验收写明合入后哪些全流程测试按什么新序列走通."
+  },
+  {
+   "key": "AP-4",
+   "severity": "major",
+   "problem": "ports.DatasetLoader 新增 load_engagement_documents 后, B 的 CsvDatasetLoader 不再满足 Protocol. main.py 注入 datasets=CsvDatasetLoader(...) 在 mypy strict 下报错, 所以 \"A 先用 FakeDatasetLoader\" 过不了 mypy 全绿. AP-1 与 AP-4 的 scope_files 都没列 src/backend/contracts/ports.py 和接口文档第 4 节.",
+   "evidence": "src/backend/contracts/ports.py:131-140; src/backend/main.py:51; src/backend/persistence/stores.py:356; contract_changes 一栏列了 ports.py 却没归入任何条目",
+   "fix": "AP-4 的 scope 加上 contracts/ports.py 与接口文档第 4 节. 外部依赖写明: B 先在 CsvDatasetLoader 加上该方法 (实现或 NotImplementedError 占位) 才能开工, 列为前置; 或者经 B 同意, 由 A 加占位."
+  },
+  {
+   "key": "AP-2, AP-7, AP-11",
+   "severity": "major",
+   "problem": "新增 tests/fixtures/llm/ACC-08/TERMS.json, PLN-15/r1.json, PLN-19/MATERIALITY.json 后, 现有测试会立即变红. (1) test_fixture_document_ids_in_manifest 的 expected_document 对 ACC-08 抛 LookupError; 占位文档 ID 不在 manifest 中; checked 字典也写死了 11 项. (2) test_runtime_fixtures_match_test_fixtures 要求 data/demo/llm 中有同名文件, 而复制要等 B. 这三条的 scope 都没列 tests/test_knowledge.py, 只在 AP-17 验收 5, 6 提到.",
+   "evidence": "tests/test_knowledge.py:429-468 (expected_document, test_fixture_document_ids_in_manifest), :502-514 (test_runtime_fixtures_match_test_fixtures); 草稿 data_needs 第 3, 4 项 owner 为 B",
+   "fix": "AP-2, AP-7, AP-11 的 scope 加上 tests/test_knowledge.py, 验收写明 expected_document 对 ACC-08 的期望 (约定书与委任文件) 与 checked 的新项. 把 B 交付 manifest 条目与 data/demo/llm 复制列为这三条的前置; 或者约定占位期间这两个测试怎样保持绿, 例如由 A 同步复制 fixture, 并说明这与 R54 的做法是否一致."
+  },
+  {
+   "key": "AP-2, AP-3",
+   "severity": "major",
+   "problem": "\"terms_checks 有不过的项而 proposed_action 为 accept 判语义失败, 不重试, 整次失败\" 会形成死循环. 整次失败的 failed 任务只允许 rerun (subject_id 为空, 不能 manual_result). mock 是确定的, 真实 LLM 在同样的文件上也多半给出同样建议, 每次 rerun 都再失败, 永远到不了 gate_acc08, 审计师看不到 TERMS 与例外. AP-5 已经在闸门拦住有例外时的通过, 这条语义规则是多余的, 而且有害.",
+   "evidence": "src/backend/services/review_queue.py:58-66 (allowed: 无 subject_id 的 failed 只给 rerun); AP-3 验收 4; AP-5 验收 2",
+   "fix": "删去这条语义失败规则. 改为: 规则不过时照常出例外并呈报, judgment 记 LLM 的原建议 (c_rule 为 0, 置信度随之降低), 或者 A2 把建议改为 more_evidence 并在 reasoning 留注. 由闸门决定兜底."
+  },
+  {
+   "key": "AP-5",
+   "severity": "major",
+   "problem": "approve 的硬拦截范围与依据都不对. (1) ASA 210 第 8 段只规定两种情形不得承接: 框架不可接受 (6(a), 且有第 19 段例外) 与未取得 6(b) 的确认. 草稿把 T02 (第 10 段要素), T04 (s293), T05 (s328A), T06 (签署人) 都按第 8 段拦截, 并在消息中引第 8 段, 引用错误. (2) T01 把 special_purpose 判为不过, 而规格书把 special_purpose 列为有效框架, 处理是强制加强调事项段 (ASA 800). (3) 草稿的风险栏承认抽取可能出错, 要靠审计师看原文, 但闸门没有改正事实或越过例外的途径. update_client_profile 只能在 ACC-01 用, insufficient_info 重跑结果相同, reject 即拒绝承接. 抽取错或画像董事有误时只能 Declined.",
+   "evidence": "ASA_210.pdf 第 8 段原文 (pdftotext 已核); 规格书 12.2 AuditPlan.applicableFramework 1795 行; decisions.py:863-869 (只在 ACC-01 更新客户资料); 草稿 risks 第 5, 7 条",
+   "fix": "只把 T01 (不可接受, 不含 special_purpose) 与 T03 的不过项作为 approve 的硬拦截, 依据写 ASA 210 第 8(a)(b) 段. T05 不过时写 s328A(4) 委任无效, 由审计师判断补救 (重新委任), 不引第 8 段. T02, T04, T06 改为提示, 要求 approve 填 reason 说明处理. 另外给出纠错途径: GateDecision 增加对 TERMS 抽取事实的 edits (像 PLN-01/03 的 edits 一样带版本与理由), 或者在 ACC-08 闸门也允许更新客户资料并重跑."
+  },
+  {
+   "key": "AP-5",
+   "severity": "major",
+   "problem": "信息不足走 rerun 的前提是客户补交了新的同意书或决议, 但本组没有定义 P0 阶段怎样补交文件. 上传端点出现在 AP-14 (人工程序上下文). 路由 rerun 在提交决定后立即重跑, 新文件必须在提交前已经登记. AP-3 只按 type 取 \"engagement_letter 与 minutes 的文件\", 补交后会有两份以上的 minutes; AP-2 验收 4 又把指针限定为 \"本次两份文件之一\", 页数写死 3 和 3. 多文件时 LLM 输入, 选哪份, 校验口径都没有定义.",
+   "evidence": "AP-3 验收 1, AP-2 验收 4, AP-5 验收 5, AP-14 external_deps (上传端点), open_questions 第 5 项的理由",
+   "fix": "AP-3, AP-2 改为按 type 取全部文件 (按上传时间或文件名排序), 指针可指向其中任一份, 页数取各自的 DocumentRef.page_count. 写明 P0 阶段经上传端点补交的流程与 type 取值, 并把上传端点列为 AP-5 的 C 依赖. AP-5 验收 5 的测试先登记一份新同意书 (日期早于委任), 再提交 insufficient_info, 断言 TERMS v2 的 T05 通过."
+  },
+  {
+   "key": "AP-6",
+   "severity": "major",
+   "problem": "准则片段的逐字结论与原文不符. pdfplumber 抽出的 ASA 300 第 9 段带脚注上标, 正文为 \"under ASA 315.5\" 与 \"under ASA 330.6\". 带脚注问题的不止 P08, P09 也有, 照现有测试会失败. P08 的问题实际是跨页, 页底脚注行 \"1 See ASA 220 ...\" 夹在 (b) 与 (c) 之间. 所以 \"ASA300-P07, P09 逐字一致, P08 待核\" 写反了一半.",
+   "evidence": "docs/参考资料/01_审计准则_ASA/ASA_300.pdf 第 10-11 页 pdfplumber 输出; tests/test_knowledge.py:79-120 (normalise 与逐字测试不处理脚注)",
+   "fix": "验收 5 改为: 只有 P07 可直接通过. P09 要先扩展逐字测试 (去掉紧跟在词尾的脚注序号, 删除页底脚注行) 才能加入, P08 同理. 扩展算在本条范围内并加单元测试; 否则 standards 只列 ASA300-P07."
+  },
+  {
+   "key": "AP-10",
+   "severity": "major",
+   "problem": "\"P13 之后隔小标题 Documentation 接 14 段, 符合现有正则\" 不成立. 归一后的原文是 \"... remain appropriate. 4 See ASA 450, paragraph A16. Documentation 14. The auditor ...\". 页底脚注行夹在中间, 现有 after 正则 (只容许一个不带句号的大写开头小标题) 匹配不上, ASA320-P13 的逐字测试会失败.",
+   "evidence": "docs/参考资料/01_审计准则_ASA/ASA_320.pdf 第 10-11 页 (已用 pdfplumber 加现有 normalise 复现); tests/test_knowledge.py:119-120",
+   "fix": "在 AP-10 中扩展逐字测试, 删除页底脚注行 (形如 \"^\\d+ See ...\"), 并补对应的单元测试; 或者 standards 暂不放 P13. 一并检查 ASA450-P10 (已核, 后面直接接 11 段, 没有问题)."
+  },
+  {
+   "key": "AP-6, AP-13",
+   "severity": "major",
+   "problem": "计划的 ID 与版本规则自相矛盾. AP-6 定 \"PLAN-{revision}, version 只随状态变\", AP-13 的重要性修订却出 PLAN-1 v3: 状态没变, 内容变了, 修订理由也写进去. 规格书 11 节第 1526 行写 PLN-19 修订 \"直接出 vN+1\", M-10 要求 \"版本 +1 且含修改理由\", 按草稿自己的规则应是新修订 PLAN-2. 另外规格书 AuditPlan.status 含 superseded, 草稿只有 draft 和 approved: PLAN-2 出现后 PLAN-1 一直是 draft, 当前计划只能靠最大 revision 推断.",
+   "evidence": "AP-6 验收 1, 6; AP-13 验收 3; 规格书 1526 行, 2048 行 (M-10), 1786 行 (status: draft, approved, superseded)",
+   "fix": "统一规则, 建议二选一. (a) 任何内容修订都出新 revision (PLAN-{n+1}, 直接 approved, addresses_decision_id 为 PLN-19 决定), 旧版出新版本置 superseded. (b) 改第 0 节, 定为 \"同一 revision 的内容修订也加 version\". 无论选哪种, 都要写明 PLN-15 驳回后旧 PLAN 是否置 superseded, 并同步 AP-16, AP-17 的最终状态断言 (PLAN-1 v2 或 v3, PLAN-2)."
+  },
+  {
+   "key": "AP-10, AP-13",
+   "severity": "major",
+   "problem": "重估材料缺少复用 check_materiality 与 materiality_amounts 需要的字段. 这两个函数要的是 MaterialityCandidates (含 performance_pct_range, clearly_trivial_pct), 而 MaterialityReassessment 只有 candidates 列表. AP-13 验收 1 校验的 \"[0.5, 0.75]\" 与 \"(0, 0.05]\" 在新模型中没有来源, PLN-19.yaml 的 params 也没列. AP-13 的恢复补做 \"按决定与 REASSESSMENT 重算三项\" 同样缺这两个值.",
+   "evidence": "src/backend/orchestration/decisions.py:273-308 (参数类型为 MaterialityCandidates); src/backend/contracts/models.py:536-541; AP-10 验收 1, 4",
+   "fix": "MaterialityReassessment 增加 performance_pct_range 与 clearly_trivial_pct (取 PLN-19 参数, 与 PLN-01 一致); 或者把 candidates 字段改为内嵌一个 MaterialityCandidates. 验收写明校验与重算都基于它."
+  },
+  {
+   "key": "AP-10, AP-11",
+   "severity": "major",
+   "problem": "调整后基准只定义了收入: basis_accounts 只有 {revenue: [Revenue]}. 收入高估同样使税前利润高估, 审计师若在 PLN-01/03 选了 profit_before_tax 或 total_assets, PLN-19 就算不出或算错调整后基准. 错报方向的符号 (高估减, 低估加) 没写. change_pct 为负 (-0.125), 却写成 \"-0.125 ≥ 0.10 出例外\", 比较口径不清.",
+   "evidence": "AP-10 验收 4 (basis_accounts), AP-11 验收 1, 3; data/demo/trial_balance.csv (revenue 1200000000, profit_before_tax 150000000); 合成数据集设计.md 第 880 行 (错报 account Revenue, overstated)",
+   "fix": "写明三种基准各自受哪些科目的错报影响 (revenue: Revenue; profit_before_tax: 收入与费用类科目; total_assets: 资产类科目) 与方向符号, 例外条件写成 |change_pct| ≥ revise_threshold_pct. 补一个按 profit_before_tax 选择的变体验收 (14200000 高估 → 基准 135800000, 按 0.05 算 6790000)."
+  },
+  {
+   "key": "AP-5, AP-13",
+   "severity": "major",
+   "problem": "开放问题 4 的目的是不让判断一直悬着, 但重跑路径仍会留下悬着的判断. ACC-08 选 insufficient_info 后重跑出 J-ACC-08-2, J-ACC-08-1 一直 pending. PLN-19 reject 后重跑出 J-PLN-19-2, J-PLN-19-1 也一直 pending. 草稿自己在开放问题 4 写过: \"以后的底稿完整性检查会把它们当作未处理\".",
+   "evidence": "AP-5 验收 5, AP-13 验收 4; open_questions 第 4 项 cons",
+   "fix": "在 *_effects 中规定: insufficient_info 与 reject 引发重跑时, 原判断出新版本并标为被取代. 可以新增 ReviewStatus.superseded, 或者用 overridden 并在 superseded_by 填新判断 ID (新判断要在重跑后才有, 需另定写入点). 也可以规定重跑节点负责把同一 subject 的旧 pending 判断置为取代. 两条的验收都加上对旧判断状态的断言."
+  },
+  {
+   "key": "AP-1, AP-3",
+   "severity": "minor",
+   "problem": "置信度的验收自相矛盾. AP-3 写 \"按 rules.json 权重含 evidence, rule, llm 三项\", 但 confidence_parts 只在模板有 evidence_required 时才算 evidence 项, 而 AP-1 的 ACC-08.yaml 没有 evidence_required. confidence_parts 的参数是 JudgmentDraft, EngagementTermsReview 并不是它的子类. 验收也没给具体数值, 测试无法区分对错.",
+   "evidence": "src/backend/services/judgment_engine.py:623-638; AP-1 验收 4; AP-3 验收 2",
+   "fix": "AP-1 的 ACC-08.yaml 加 evidence_required: [contract, voucher] (按 DOCUMENT_EVIDENCE 映射); 或者删去 evidence 分项. AP-3 写出 Numbat 的期望置信度 (例如 evidence (0.8+0.5)/2=0.65, rule 1, llm 取 fixture 值, 再按权重算出四位小数), 并说明怎样把 EngagementTermsReview 适配给 confidence_parts."
+  },
+  {
+   "key": "AP-1, AP-10",
+   "severity": "minor",
+   "problem": "接口文档第 5 节 \"需要人\" 表规定自主度 L1, L2 的判断建 normal 任务, hybrid 重试耗尽为 unattributed (保留规则结果). ACC-08 与 PLN-19 的判断不建任务, 改由闸门呈报; 失败一律按整次失败处理. 两点都与该表不同, 草稿的文档改动没有列第 5 节的这两处.",
+   "evidence": "docs/开发接口文档.md 第 5 节 \"需要人\" 表 (L1, L2 → normal) 与 \"重试耗尽或判为失败: hybrid 保留规则结果\"",
+   "fix": "AP-1 的文档改动加上第 5 节: 闸门程序 (gate 非空) 的判断不建复核任务, 由闸门决定处理 (按开放问题 4); ACC-08 的规则作用于 LLM 抽取结果, LLM 失败即整次失败. AP-10 对 PLN-19 写同样的说明."
+  },
+  {
+   "key": "AP-2",
+   "severity": "minor",
+   "problem": "T04 与 T05 没有完全对上法条原文. s293(2)(a) 要求指示由提出指示的股东签署, T04 没有核对 direction.signed_by. s328A(1)(a) 原文是同意须在委任之前给出, T05 用 ≤, 允许同一天, 且没有说明理由. s328A(2) 要求事务所的同意由该所的注册公司审计师签署, T05 没有核对签署人的注册资格 (数据里有注册号 300471).",
+   "evidence": "CorporationsAct2001 C148 第 2 卷 s293(2)(a), s328A(1)(a), (2) (pdftotext 已核)",
+   "fix": "T04 增加 signed_by 与提出指示的股东一致. T05 定为 given_on < resolution_on; 同日按不过处理或单列提示, 并写明理由. 增加 consent 的 registered_auditor_no 字段且须非空. 每项各补一个变体."
+  },
+  {
+   "key": "AP-1, AP-2",
+   "severity": "minor",
+   "problem": "漏了规格书对 ACC-08 的一项要求. 规格书写明约定书须 \"含年度报告构成与其他信息安排\", RPT-10 以 ACC-08 的年度报告构成为前置. T02 只核对第 10 段五要素, EngagementTerms 也没有这项字段.",
+   "evidence": "规格书 10 节 P0 第 1343 行, UC-01 第 5 步 2144 行, 6.1.2 第 827 行 (RPT-10 前置 ACC-08 年度报告构成)",
+   "fix": "EngagementTerms 增加 annual_report_composition 与 other_information_arrangement (present 与指针), 约定书 PDF 第 3 页加对应文字. 若本级决定不做, 写进 Demo需求文档第 6 节 \"本版不做\" 并说明理由."
+  },
+  {
+   "key": "AP-14",
+   "severity": "minor",
+   "problem": "DocumentType 的取值与规格书不一致. 新增的 correspondence 不在规格书 Document.type 枚举中, 规格书有 legal_letter 与 other. minutes 与 representation_letter 映射为 EvidenceType.voucher, 而 voucher 的注释是 \"凭证, 如分录, 试算表\", 语义不符.",
+   "evidence": "规格书 12.2 Document.type (1842 行); src/backend/contracts/models.py:94-103 EvidenceType 注释",
+   "fix": "上传类型改用规格书已有的取值 (如 other, legal_letter). 另外在 EvidenceType 的注释或接口文档第 5 节映射表中写明 voucher 也涵盖内部文件 (会议纪要, 声明书), 以免日后误改."
+  },
+  {
+   "key": "AP-15",
+   "severity": "minor",
+   "problem": "人工程序与模板 owner 的关系没有定义. 规格书把 FIN-07 归 A5, FIN-08, FIN-14 归 A8, RPT-07 归 A10, 而本机制按 \"engine manual 且 gate 为空\" 一律交给 ConciergeAgent 执行. 写入者 (A10) 与模板 owner 会不一致, 总览显示的 owner 也会不同. 测试模板 TST-M01 的 owner 恰好是 A10, 掩盖了这个问题.",
+   "evidence": "规格书 6.1.1 程序归属表 (701-713 行), 18.4 fieldwork 中 manual 分支 (2728 行: 由 concierge 收结果); contracts/views.py ProcedureSummary.owner",
+   "fix": "写明 owner 表示负责的 Agent, 执行者固定为 A10. 补一个 owner 为 A5 的测试模板, 断言 build_agents 映射到 ConciergeAgent, 片段写入者为 A10, 留痕的 actor 为 A10; 并同步接口文档第 6 节."
+  },
+  {
+   "key": "AP-15",
+   "severity": "minor",
+   "problem": "AP-15 的验收 2 用 monkeypatch 往 NODE_PROCEDURES[\"completion\"] 放两条程序, 但 completion 节点现在写成 [procedure_id] = NODE_PROCEDURES[\"completion\"], 两条时会解包失败. 验收没有要求 completion 改为逐条执行.",
+   "evidence": "src/backend/orchestration/nodes.py:706",
+   "fix": "AP-15 验收加上: completion 与 p0_intel 等单程序节点按 NODE_PROCEDURES 逐条执行 (同 p1_analytics 的写法), 阶段只随第一条程序写入. 也可以等 AP-12 改完 completion 后再做, 前置加 AP-12."
+  },
+  {
+   "key": "AP-4 (data_needs)",
+   "severity": "minor",
+   "problem": "B 的 CsvDatasetLoader.load 以 dataset_loads 表有记录判断已载入. load_engagement_documents 若也写这张表, 或复用 load 的判断, 之后 p1_ingest 调 load 就会跳过财务表.",
+   "evidence": "src/backend/persistence/stores.py:377-381",
+   "fix": "data_needs 第 3 项写明: load_engagement_documents 只按文件哈希判断是否已登记, 不读也不写 dataset_loads. AP-4 用 FakeDatasetLoader 加一条测试: 先调 load_engagement_documents 再调 load, 两者都生效."
+  },
+  {
+   "key": "AP-2 (data_needs)",
+   "severity": "minor",
+   "problem": "合成数据里同意并签约定书的审计师是 Jordan Ellis (测试用 FakeUserStore 的 U-1 也是他). 但按 Q15, 报告签名取项目负责人 User.full_name, 而种子用户是 \"Demo Auditor\". 真实运行时, 同意任职的审计师与报告签字人不是同一人, 演示中会露出矛盾. 本组也没有核对两者是否一致.",
+   "evidence": "src/backend/persistence/seed.py:25; tests/fakes.py:176; 需求清单 Q15",
+   "fix": "二选一: 请 B 或 C 把种子用户改名为 Jordan Ellis; 或者增加 T07 \"consent.own_name 与项目负责人 full_name 一致\" (只作提示)."
+  },
+  {
+   "key": "AP-1",
+   "severity": "minor",
+   "problem": "粒度偏大. 公司法片段的逐字测试实际上是一套新解析器: 条号为 328A 这样的字母数字, 正文中夹着 Chapter, Part, Division, Section 等页眉行和 \"Compilation No. 148\" 页脚. pdfplumber 要读到第 2 卷约 240 页, 会明显拖慢默认测试 (not slow). 再加上 ACC-08 的全部契约与两份文档的改动, 超出一个 M.",
+   "evidence": "CorporationsAct2001 C148 Vol2 s293 跨页 (第 45-46 页), s328A 跨页 (第 211-212 页); tests/test_knowledge.py:90-108",
+   "fix": "把公司法片段与逐字测试的扩展拆成一条 S. 测试只读目标页范围, 或标 slow, 并说明 CI 怎么跑."
+  },
+  {
+   "key": "AP-3, AP-7, AP-11",
+   "severity": "minor",
+   "problem": "重放取回的字段按 Agent 而不按程序. A2 加了 engagement_terms, judgments, documents 之后, ACC-04 重放也会取回这些字段; A4 加了 audit_plans, materiality_reassessment, judgments 之后, PLN-07, PLN-01, PLN-15, PLN-19 重放会互相带上对方的单对象产出, 并触发 \"之后的执行\" 检查. 这部分没有验收覆盖. 不一定出错, 但属于未验证的回归面.",
+   "evidence": "src/backend/orchestration/nodes.py:139-203 (stored_outputs 按 AGENT_FIELDS[writer] 取字段)",
+   "fix": "AP-3 与 AP-11 各加一条重放验收: 回退到节点执行之前的检查点再重放, 片段字段与首次执行相同, 不引入其他程序的产出. 或者让 stored_outputs 按程序声明取哪些字段."
+  },
+  {
+   "key": "AP-7",
+   "severity": "minor",
+   "problem": "计划骨架由谁建, 与规格书不同. 规格书写的是装配后 A1 建 AuditPlan vN (含 packSnapshot, draft), A4 只写叙述; 草稿改为 A4 在 PLN-15 中确定性地组装骨架. 这个偏离没有说明理由, 也没有同步规格书.",
+   "evidence": "规格书 10 节第 1376 行, UC-02 第 7 步 2084 行",
+   "fix": "在 AP-7 的 goal 中写明为什么由 A4 组装 (例如 A1 不写业务产出, 见 18.3.1), 并在规格书或接口文档第 3 节字段归属中注明; 或者改由 assemble_pack 建骨架."
+  }
+ ],
+ "missing": [
+  "AP-1, AP-4 没有列 contracts/ports.py 与接口文档第 4 节 (DatasetLoader 新方法).",
+  "接口文档第 5 节 \"需要人\" 表与 hybrid 失败语义, 要为闸门程序的 L1 判断与 ACC-08, PLN-19 的整次失败补规则.",
+  "规格书要求约定书含 \"年度报告构成与其他信息安排\" (1343, 2144 行), 草稿没有建模, 也没有写进 \"本版不做\".",
+  "P0 阶段补交约定或委任文件的途径 (上传端点在 P0 是否可用, type 取值, 多份文件时取哪份), 这是开放问题 5 选第 1 项的前提.",
+  "上传证据文件没有任何留痕要求. 规格书 6.4 写明 manual 程序 \"系统负责排程与留痕\", 上传件直接经 EvidenceStore.save 登记, 不经 DecisionSubmit 也不写 audit_trail.",
+  "重跑后旧的 L1 建议判断 (J-ACC-08-1, J-PLN-19-1) 的终态规则.",
+  "PLN-15 批准时 auditor_expert_not_required 为 false (需要审计师专家) 怎么处理: 允许通过只作记录, 还是拦截.",
+  "ACC-08 闸门上更正抽取事实或客户画像的途径; 现在只能拒绝承接.",
+  "规格书 12.2 GateDecision.gate 清单与第 2511 行 (\"ACC-08 与 PLN-15 闸门步骤不在 Stage 2\") 需要同步修改, 草稿只在 PLN-19 一项提到改规格书."
+ ],
+ "extra_questions": [
+  "节点与决定要分开提交: 选择合并成一条, 节点条目先带最小的 approve 路径, 还是用开关推迟启用? (见 blocker)",
+  "ACC-08 闸门有例外时: 只有 ASA 210 第 8 段的两种情形 (T01 框架不可接受, T03 未取得 6(b) 确认) 硬拦截, 其余要求填理由后可以通过. 是否同意?",
+  "special_purpose 框架按规格书视为可接受 (报告加 ASA 800 强调事项段), 还是在本级仍作为 T01 不通过?",
+  "重要性修订后的计划: 出新修订 PLAN-{n+1}, 还是同一修订加版本? 这决定第 0 节 ID 规则的写法.",
+  "PLN-19 若审计师在 PLN-01/03 选的不是收入基准, 调整后基准按哪些科目的错报计算? 本级只支持收入基准, 还是三种基准都做?",
+  "人工程序模板的 owner 按规格书写 (FIN-07 为 A5, FIN-08 为 A8), 执行者固定为 A10. 是否同意?"
+ ],
+ "verdict": "需修改后再开发. 程序归属, 引擎, 自主度, 闸门位置 (gate_acc08, gate_p1_plan) 与规格书一致. ASA 210 第 6, 10 段, s293, s325, s328A, ASQM 1 第 34(f) 段, ASA 450 第 10 段的引用已核对原文, 没有问题; Numbat 的金额 (重要性三项, 1185800000, 11858000, 11400000, 8550000, 570000) 和留痕计数 (transition 28 行, decision 14 行, llm_call 16 行) 都已验算. 但有一个阻断: 节点与决定分条后, 中间状态下全流程测试不可能全绿. 另有几项会导致返工: DatasetLoader Protocol 改动过不了 mypy; 新 fixture 会弄红现有的 manifest 与运行目录一致性测试; ACC-08 的语义失败与闸门硬拦截会造成死循环, 而且错引 ASA 210 第 8 段; ASA 300 第 9 段与 ASA 320 第 13 段的逐字结论与原文不符; 计划 ID 与版本规则自相矛盾; 重估材料缺少校验所需的字段; 调整后基准只定义了收入; 重跑后旧建议判断一直悬着. 修正上面这些问题并回答附加问题后, 粒度大体可以控制在 S/M; AP-1 建议把公司法片段拆出去."
+}

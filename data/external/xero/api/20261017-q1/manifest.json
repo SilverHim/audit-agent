@@ -1,0 +1,26 @@
+{
+  "pulled_at": "2026-10-17T15:37:28.486990+00:00",
+  "tenant_id": "3c1332bb-175c-411a-83e8-1b6a809f05d1",
+  "tenant_name": "Demo Company (AU)",
+  "scope": "accounting.settings.read accounting.contacts.read accounting.invoices.read accounting.payments.read accounting.banktransactions.read accounting.manualjournals.read accounting.reports.trialbalance.read accounting.reports.banksummary.read offline_access",
+  "paid_endpoints": "mock",
+  "counts": {
+    "organisation": 1,
+    "accounts": 62,
+    "bank_transfers": 1,
+    "contacts": 83,
+    "invoices": 92,
+    "credit_notes": 8,
+    "payments": 71,
+    "bank_transactions": 88,
+    "manual_journals": 4,
+    "overpayments": 0,
+    "prepayments": 0,
+    "trial_balance_2026-06-30": 1,
+    "trial_balance_2026-09-30": 1,
+    "journals": 368,
+    "bank_statements": 1
+  },
+  "unavailable": {},
+  "calls": 21
+}

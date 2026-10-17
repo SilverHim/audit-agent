@@ -1,0 +1,385 @@
+{
+  "ReportID": "TrialBalance",
+  "ReportName": "Trial Balance",
+  "ReportType": "TrialBalance",
+  "ReportTitles": [
+    "Trial Balance",
+    "Demo Company (AU)",
+    "As at 30 June 2026"
+  ],
+  "ReportDate": "17 October 2026",
+  "UpdatedDateUTC": "/Date(1792226139904)/",
+  "Fields": [],
+  "Rows": [
+    {
+      "RowType": "Header",
+      "Cells": [
+        {
+          "Value": "Account"
+        },
+        {
+          "Value": "Debit"
+        },
+        {
+          "Value": "Credit"
+        },
+        {
+          "Value": "YTD Debit"
+        },
+        {
+          "Value": "YTD Credit"
+        }
+      ]
+    },
+    {
+      "RowType": "Section",
+      "Title": "Revenue",
+      "Rows": [
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "Sales (200)",
+              "Attributes": [
+                {
+                  "Value": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "4200.00",
+              "Attributes": [
+                {
+                  "Value": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "RowType": "Section",
+      "Title": "Expenses",
+      "Rows": [
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "Consulting & Accounting (412)",
+              "Attributes": [
+                {
+                  "Value": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "3600.00",
+              "Attributes": [
+                {
+                  "Value": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "Office Expenses (453)",
+              "Attributes": [
+                {
+                  "Value": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "8000.00",
+              "Attributes": [
+                {
+                  "Value": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "Printing & Stationery (461)",
+              "Attributes": [
+                {
+                  "Value": "b18eaea6-4d11-462c-ac30-7975108b5859",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "b18eaea6-4d11-462c-ac30-7975108b5859",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "b18eaea6-4d11-462c-ac30-7975108b5859",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "512.00",
+              "Attributes": [
+                {
+                  "Value": "b18eaea6-4d11-462c-ac30-7975108b5859",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "b18eaea6-4d11-462c-ac30-7975108b5859",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "RowType": "Section",
+      "Title": "Assets",
+      "Rows": [
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "Business Bank Account (090)",
+              "Attributes": [
+                {
+                  "Value": "13918178-849a-4823-9a31-57b7eac713d7",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "13918178-849a-4823-9a31-57b7eac713d7",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "13918178-849a-4823-9a31-57b7eac713d7",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "13918178-849a-4823-9a31-57b7eac713d7",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "8703.20",
+              "Attributes": [
+                {
+                  "Value": "13918178-849a-4823-9a31-57b7eac713d7",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "RowType": "Section",
+      "Title": "Liabilities",
+      "Rows": [
+        {
+          "RowType": "Row",
+          "Cells": [
+            {
+              "Value": "GST (820)",
+              "Attributes": [
+                {
+                  "Value": "66e60a82-99d8-47d1-956b-5baea404acba",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "66e60a82-99d8-47d1-956b-5baea404acba",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "0.00",
+              "Attributes": [
+                {
+                  "Value": "66e60a82-99d8-47d1-956b-5baea404acba",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "791.20",
+              "Attributes": [
+                {
+                  "Value": "66e60a82-99d8-47d1-956b-5baea404acba",
+                  "Id": "account"
+                }
+              ]
+            },
+            {
+              "Value": "",
+              "Attributes": [
+                {
+                  "Value": "66e60a82-99d8-47d1-956b-5baea404acba",
+                  "Id": "account"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "RowType": "Section",
+      "Title": "",
+      "Rows": [
+        {
+          "RowType": "SummaryRow",
+          "Cells": [
+            {
+              "Value": "Total"
+            },
+            {
+              "Value": "0.00"
+            },
+            {
+              "Value": "0.00"
+            },
+            {
+              "Value": "12903.20"
+            },
+            {
+              "Value": "12903.20"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

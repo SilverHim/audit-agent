@@ -1,0 +1,876 @@
+{
+ "group": "持续经营与期后事项 (GEN-07 期后监控, GEN-06 期后事项研判, GEN-04 持续经营评价, FIN-02 持续经营结论)",
+ "requirements": [
+  {
+   "key": "GC-01",
+   "title": "P2 固定集装配",
+   "procedures": [
+    "GEN-07",
+    "GEN-06",
+    "GEN-04"
+   ],
+   "goal": "程序模板新增 fixed 标记: P2 固定集程序不按风险 trigger, 每个项目在 PLN-01/03 通过后都装配 (规格书第 6 节: 持续经营, 期后事项等每个审计都做); objective_ids 为空, 不计入审计目标覆盖. 现状 triggers 为空的 P2 模板只经依赖加入 (contracts/knowledge.py:61 注释), 无法表达固定集.",
+   "scope_files": [
+    "src/backend/contracts/knowledge.py",
+    "src/backend/services/procedure_library.py",
+    "src/backend/orchestration/nodes.py",
+    "docs/开发接口文档.md",
+    "tests/test_nodes.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 第 6 节 固定集与装配集 (697 行)",
+    "ELEC5620_设计规格说明书.md 6.1.2 GEN-04, GEN-06 行 (804-805 行)",
+    "开发接口文档.md 第 8.1 节 (triggers 为空时的含义)",
+    "Demo需求文档.md 第 4.1 节 (每条审计目标至少被一条程序覆盖)",
+    "代码: orchestration/nodes.py:567-601 assemble_pack, runner.py:21-27 fixed_procedures"
+   ],
+   "prerequisites": [
+    "R11",
+    "R60"
+   ],
+   "external_deps": [
+    "无. 若第 1 级 (全量分录扫描) 一组已引入同义的固定集字段, 合并为一处, 不另起名字"
+   ],
+   "acceptance": [
+    "1. ProcedureTemplate 新增 fixed: bool = False, 只对 phase P2_Executing 的模板有意义; 非 P2 模板写 fixed: true, 或 fixed 模板的 params 含 by_risk (固定集没有关联审计目标, 取不到等级), ProcedureLibrary 加载即抛 ValueError.",
+    "2. 临时 knowledge 目录加 P2 模板 X-FIX (fixed true, triggers 空, depends_on 空): Numbat 3 条审计目标下 assemble_pack 装入 REV-08, REV-03, REV-02, CSH-04, DOC-06, CSH-05, CSH-02 与 X-FIX 共 8 条, X-FIX 第 1 版 planned, objective_ids [], autonomy_level 取模板, 与其余新程序同一事务写入.",
+    "3. 再加 X-DEP (fixed true, depends_on [X-FIX]): 两者都装入, build_schedule 中 X-DEP 比 X-FIX 低一层.",
+    "4. 已在程序包中的 fixed 程序不重复加入 (重放, PLN-01/03 驳回后再通过); uncovered_objectives 与 R60 的覆盖校验结果不变 (fixed 程序不计入覆盖).",
+    "5. 现有 knowledge 下没有 fixed 模板时, Numbat 装配集与 test_knowledge 的分层断言不变; 接口文档第 8.1 节补 fixed 一行."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-02",
+   "title": "准则片段原文: ASA 560, ASA 570, AASB 110",
+   "procedures": [
+    "GEN-07",
+    "GEN-06",
+    "GEN-04",
+    "FIN-02",
+    "RPT-03"
+   ],
+   "goal": "新增三份准则片段文件并填原文, 纳入 PDF 逐字比对测试. 段落号已用 pdftotext 从 docs/参考资料 原文核对: ASA 560 para 6, 7, 8; ASA 570 para 10, Aus 13.2, 16, 17, 18, 21, 22, 23; AASB 110 para 8, 9, 10, 13, 21.",
+   "scope_files": [
+    "src/backend/knowledge/standards/ASA560.yaml",
+    "src/backend/knowledge/standards/ASA570.yaml",
+    "src/backend/knowledge/standards/AASB110.yaml",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "docs/参考资料/01_审计准则_ASA/ASA_560.pdf (Compilation date 14 December 2021) para 6-8",
+    "docs/参考资料/01_审计准则_ASA/ASA_570.pdf (Compilation date 22 March 2023) para 10, Aus 13.2, 16-18, 21-23",
+    "docs/参考资料/03_会计准则_AASB/AASB_110.pdf (Compilation date 30 June 2021) para 8-10, 13, 21",
+    "ELEC5620_设计规格说明书.md 第 2 节准则映射 (78-79 行), 片段表 ASA570-Aus13 (446 行)",
+    "开发接口文档.md 第 8.2 节; R39 的逐字比对方法"
+   ],
+   "prerequisites": [
+    "R39",
+    "R50"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "1. 16 个片段 text 非空: ASA560-P06, ASA560-P07, ASA560-P08; ASA570-P10, ASA570-Aus13.2 (paragraph \"Aus 13.2\"), ASA570-P16, ASA570-P17, ASA570-P18, ASA570-P21, ASA570-P22, ASA570-P23; AASB110-P08, AASB110-P09, AASB110-P10, AASB110-P13, AASB110-P21. compiled 分别为 2021-12-14, 2023-03-22, 2021-06-30, test_compiled_date_matches_pdf 通过.",
+    "2. STANDARD_PDFS 加三份 PDF, EXCERPTED 加 16 个 ID, test_fragment_text_is_verbatim_from_pdf 全部通过. 整段正则支持 \"Aus 13.2\" 段号 (下一段为 14); 跨页夹脚注的段 (ASA560-P06 夹脚注 3, ASA570-P16 夹脚注 4) 与跨页页脚 (AASB110-P09) 由本条扩展测试的过滤规则处理, 不放宽对其余片段的要求. (待核: 以 pdfplumber 实际抽取为准; 某段确实无法自动比对时, 在测试中列出原因并保留人工核对记录, 不静默跳过)",
+    "3. 不收 ASA570-P11, P12: P11 后紧跟脚注与两行小标题, P12 的下一段为 \"[Deleted by the AUASB...]\", 整段正则无法定位; 本组程序不引用它们.",
+    "4. 片段 procedures: ASA560-P06, P07 → GEN-07, GEN-06; ASA560-P08 → GEN-06, FIN-02; AASB110-* → GEN-06; ASA570-P10, Aus13.2, P16 → GEN-04; ASA570-P17, P18 → GEN-04, FIN-02; ASA570-P21 → FIN-02; ASA570-P22, P23 → FIN-02, RPT-03.",
+    "5. 各程序 YAML 接入后, test_procedure_standards_have_text 的参数表加 GEN-07, GEN-06, GEN-04, FIN-02 并通过."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-03",
+   "title": "A5 GEN-07 期后监控",
+   "procedures": [
+    "GEN-07"
+   ],
+   "goal": "EvidenceAgent 执行 GEN-07: 经 RuleEngine 扫描期后窗口内的非常规银行流水 (S01) 与非现金分录 (S02), 产出例外作为期后事项候选, 返回成功的 Run; 建 A5 按程序编号分派的骨架. 不调 LLM (规格书 A5 为规则加外部 API). 规则程序的唯一产出是例外 (规格书 12.2 Exception), 本版不另建 SubsequentEvent 对象.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-07.yaml",
+    "src/backend/agents/evidence.py",
+    "src/backend/orchestration/merge.py",
+    "docs/开发接口文档.md",
+    "tests/fakes.py",
+    "tests/test_evidence_gen07.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 6.1.1 (706 行 A5 含 GEN-07), 7.2 (1075 行 GEN-07 L4 规则), 第 10 节 P3 Agent 行 (1422 行), 18.3.1 subsequent_events 行 (2637 行)",
+    "ASA 560 para 6, 7 (期后事项程序覆盖期末至报告日或尽可能接近)",
+    "开发接口文档.md 第 0 节例外 ID, 第 5 节 RuleEngine 约定, 第 6 节 A5 返回字段",
+    "合成数据集设计.md 新增第 5.5 节 (见 data_needs)"
+   ],
+   "prerequisites": [
+    "GC-01",
+    "GC-02",
+    "R40",
+    "R45"
+   ],
+   "external_deps": [
+    "B 的 GEN-07 S01, S02 SQL 与第 5.5 节数据: A 先用 FakeRuleEngine 按程序编号返回预置 RuleResult (tests/fakes.py 预置表), SQL 口径写在 YAML 注释"
+   ],
+   "acceptance": [
+    "1. GEN-07.yaml: phase P2_Executing, cycle Pervasive, owner A5, engine rule, autonomy_level L4, fixed false (GC-12 打开), params {period_end: {ref: period_end}, subsequent_days: 31, clearly_trivial_cents: {ref: clearly_trivial_cents}}, standards [ASA560-P06, ASA560-P07], evidence_required [bank, voucher], rules S01 (medium), S02 (high). Numbat 重要性确定后 params_snapshot 为 {period_end 2026-06-30, subsequent_days 31, clearly_trivial_cents 600000}; 重要性未定时 build_run 抛 ValueError.",
+    "2. YAML 注释写明口径供 B 写 SQL: S01 = txn_date 在 (period_end, period_end + subsequent_days] 内, |amount_cents| > clearly_trivial_cents, reference 不以 SI-, RENT-, AP-, PAY-, FRT-, OPEX-, INT-, ATO- 开头; S02 = posting_date 在同一窗口, 不涉及银行科目 (bank_accounts.gl_account_code) 的分录, 每个 entry_no 只取资产或负债科目那一行, amount_cents = |debit_cents - credit_cents| > clearly_trivial_cents.",
+    "3. FakeRuleEngine 对 GEN-07 返回 X-GEN-07-1-S01-1 (S01, medium, source_ids [BT-01-20260729-01], amount_cents -30000000) 与 X-GEN-07-1-S02-1 (S02, high, [GJ-202607-ECL-2], 3368000): 片段 exceptions 只含这两条且原样不改 (open); procedure_runs 为 [RUN-GEN-07-1 succeeded, ended_at 非空]; 无 judgments, review_tasks; 无 llm_call 与 external_call 留痕.",
+    "4. RuleEngine.run 收到 GEN-07 模板, ctx.run 与 params_snapshot; RuleError 原样抛出 (A1 按 R03 写 RUN-GEN-07-1 failed 与 T-RUN-GEN-07-1-v1, allowed 只有 {rerun}); 无命中时 exceptions [], Run succeeded.",
+    "5. A5 按程序编号分派: CSH-04 的 R45 全部测试不变; 未登记的程序抛 NotImplementedError. AGENT_FIELDS[A5] 加 exceptions, check_patch 接受 A5 写例外; 接口文档第 6 节返回字段表同步.",
+    "6. 程序总数断言随之 +1."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-04",
+   "title": "A6 GEN-06 期后事项研判: 判断对象与上下文",
+   "procedures": [
+    "GEN-06"
+   ],
+   "goal": "以 GEN-07 尚未归因的例外为判断对象, 每个对象组装上下文 (例外所指的行, 期后分录点名客户的期末未收发票, 本期试算表, 窗口与重要性), 走 R41 公共流程: 判断为调整事项且未入账时建议错报 (建 normal 任务), 非调整事项或常规事项 accept/close 时按 L3 自动关闭并归因例外, 失败按 hybrid 建 unattributed 任务.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-06.yaml",
+    "src/backend/knowledge/prompts/GEN-06.md.j2",
+    "src/backend/agents/fieldwork.py",
+    "tests/fakes.py",
+    "tests/test_fieldwork_gen06.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 6.1.1 (707 行 A6 含 GEN-06), 6.1.2 (805 行 GEN-06 ← GEN-07), 7.2 (1075 行 GEN-06 L3 混合), 15.2 (2405 行 GEN-06 的 L3 关闭型判断), 18.3.1 (2637 行)",
+    "ASA 560 para 8; AASB 110 para 8, 9(b)(i), 10, 12-13, 21",
+    "开发接口文档.md 第 5 节需要人表与 JudgmentContext, 第 0 节 Judgment 与 ReviewTask ID",
+    "需求清单 R41, R43 (判断对象写法), Q12 (错报金额口径)"
+   ],
+   "prerequisites": [
+    "GC-02",
+    "GC-03",
+    "R41",
+    "R43"
+   ],
+   "external_deps": [
+    "B 的 GEN-06 规则 E01 (emit rows) SQL: 期后分录 description 中点名的客户在期末尚未收款的发票, 输出列 source_type sales_invoice, id, customer, invoice_date, amount_cents, matched_entry_id; A 先用 FakeRuleEngine 返回 E01 行 [SI-2026-0559, SI-2026-0613] (matched_entry_id GJ-202607-ECL-2)",
+    "FakeFinancialStore 预置第 5.5 节的行与本期试算表全部 23 个科目 (合成数据集设计第 3.1 节)"
+   ],
+   "acceptance": [
+    "1. GEN-06.yaml: phase P2_Executing, cycle Pervasive, owner A6, engine hybrid, autonomy_level L3, fixed false (GC-12 打开), depends_on [GEN-07], params {period_end: ref, subsequent_days: 31, performance_materiality_cents: ref, clearly_trivial_cents: ref}, standards [ASA560-P06, ASA560-P08, AASB110-P08, AASB110-P09, AASB110-P10, AASB110-P13, AASB110-P21], evidence_required [voucher, bank], rules [E01 emit rows], llm GEN-06.md.j2 / JudgmentDraft.",
+    "2. 判断对象为状态中 procedure_id GEN-07 且 disposition 不为 attributed 的例外, subject_id 取 source_ids[0], 按 subject_id 排序: [BT-01-20260729-01, GJ-202607-ECL-2]; 各自 rule_findings 为该例外当前版本; 再按 in_scope 筛选 (rerun_subject_ids, 已交人处理的对象).",
+    "3. data (GEN-06.md.j2 头注释, 均为 JSON 形式): BT-01-20260729-01 的 row 带 source_type bank_transaction (txn_date 2026-07-29, amount_cents -30000000, reference DIV-2026-07), related_invoices []; GJ-202607-ECL-2 的 row 带 source_type journal_entry (posting_date 2026-07-31, credit_cents 3368000, description 含 Dingo Drive Technologies Pty Ltd), related_invoices 为 E01 中 matched_entry_id 等于它的行 [SI-2026-0559 (1684000, 2026-06-05), SI-2026-0613 (1684000, 2026-06-29)]; 两者 trial_balance 为本期 23 行; task.params 含窗口 2026-07-01 至 2026-07-31, performance_materiality_cents 9000000, clearly_trivial_cents 600000; fixture_key 为 subject_id.",
+    "4. FakeJudgmentEngine 下: BT-01-20260729-01 返回 L3 accept → 不建任务, J-GEN-06-1-BT-01-20260729-01 v1 confirmed, X-GEN-07-1-S01-1 v2 attributed (attributed_by 该判断); GJ-202607-ECL-2 返回 misstatement → J-GEN-06-1-GJ-202607-ECL-2 pending, 建 T-J-GEN-06-1-GJ-202607-ECL-2-v1 (normal, target Judgment v1, run_id RUN-GEN-06-1), X-GEN-07-1-S02-1 不变.",
+    "5. GJ-202607-ECL-2 判断失败: X-GEN-07-1-S02-1 v2 unattributed, 建 T-X-GEN-07-1-S02-1-v2 (subject_id GJ-202607-ECL-2), ReviewQueue.allowed 为 {override, misstatement}; 另一对象照常, RUN-GEN-06-1 succeeded.",
+    "6. 无 GEN-07 未归因例外时 judgments [], Run succeeded; 渲染出的 prompt 含 ASA560-P08, AASB110-P09, AASB110-P13 原文与 2026-07-31, 不含另一判断对象的行."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-05",
+   "title": "GEN-06 fixture",
+   "procedures": [
+    "GEN-06"
+   ],
+   "goal": "BT-01-20260729-01 (非调整事项: 期后宣告并支付的末期股利) 与 GJ-202607-ECL-2 (调整事项: 客户期后进入自愿管理) 两份 fixture, 经真实判断引擎一次通过四级校验.",
+   "scope_files": [
+    "tests/fixtures/llm/GEN-06/BT-01-20260729-01.json",
+    "tests/fixtures/llm/GEN-06/GJ-202607-ECL-2.json",
+    "tests/test_fieldwork_gen06.py"
+   ],
+   "basis": [
+    "AASB 110 para 9(b)(i) (客户期后破产通常证实期末已信用减值), para 12-13 (期后宣告的股利不确认为负债, 在附注披露), para 21",
+    "ASA 560 para 8",
+    "开发接口文档.md 第 4 节 MockLLMClient, 第 5 节 OutputValidator; Q12",
+    "合成数据集设计.md 新增第 5.5 节与第 7 节新增行"
+   ],
+   "prerequisites": [
+    "GC-04",
+    "R35"
+   ],
+   "external_deps": [
+    "data/demo/llm/GEN-06/ 副本由 B 的 data/generate_demo.py 复制 (tests/test_knowledge.py 一致性测试覆盖); 复制前 A 的测试只读 tests/fixtures/llm"
+   ],
+   "acceptance": [
+    "1. BT-01-20260729-01.json: proposed_action accept, misstatement_draft null; 结论写明 2026-07-28 宣告, 2026-07-29 支付的 FY2026 末期股利 AUD 300,000 为非调整事项, 期末不确认负债 (AASB 110 para 12, 13), 金额超过整体重要性须在附注披露 (para 21); 证据含 bank_transaction BT-01-20260729-01 (amount_cents, description), trial_balance 3200, AASB110-P13, AASB110-P21; 含一步 limitation: 财务报表附注草稿未提供, 披露是否充分留待列报评价.",
+    "2. GJ-202607-ECL-2.json: proposed_action misstatement, draft {judgmental, Trade receivables, Valuation, 3368000, overstated}; 结论写明 Dingo Drive Technologies Pty Ltd 于 2026-07-14 进入自愿管理, 证实期末应收 SI-2026-0559, SI-2026-0613 (合计 AUD 33,680) 已发生信用减值, 属调整事项 (AASB 110 para 9(b)(i)), 管理层在 2026-07-31 才计提, 期末应收高估; 证据含 journal_entry GJ-202607-ECL-2 (credit_cents, description), sales_invoice SI-2026-0559, SI-2026-0613 (amount_cents), trial_balance 1150, AASB110-P08, AASB110-P09.",
+    "3. 真实 JudgmentEngine 与 MockLLMClient: 两次 judge 各 attempts 1, failure 空, 2 行 llm_call (procedure_id GEN-06, actor A6); J-GEN-06-1-GJ-202607-ECL-2 的 exception_ids [X-GEN-07-1-S02-1]; 错报金额 3368000 等于归因例外金额 (Q12 按绝对值), 引用校验通过; 把 amount_cents 改为 3000000 → reference 失败, 不重试.",
+    "4. 两份 fixture 的全部 source_id 在 FakeFinancialStore 与第 5.5 节数据中存在, 准则 ID 已注册."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-06",
+   "title": "A6 GEN-04 持续经营评价 (含 fixture)",
+   "procedures": [
+    "GEN-04"
+   ],
+   "goal": "以客户为唯一判断对象, A6 按 YAML 中的科目清单从本期与上期试算表算流动性与偿债指标, 连同初步分析结果, 重要性候选中的税前利润与客户画像组装上下文, 调 LLM 评价是否存在可能导致对持续经营能力产生重大疑虑的事项或情况 (ASA 570 para 10, 17, 18); L2 一律建 normal 任务; 提供 Numbat fixture.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-04.yaml",
+    "src/backend/knowledge/prompts/GEN-04.md.j2",
+    "src/backend/agents/fieldwork.py",
+    "tests/fakes.py",
+    "tests/fixtures/llm/GEN-04/CLIENT-001.json",
+    "tests/test_fieldwork_gen04.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 6.1.2 (804 行: 前置 PLN-07, CSH-03, REC-06, DOC-04), 7.2 (1075 行 GEN-04 L2 LLM), 片段表 ASA570-Aus13 (446 行: 评估期锚在审计报告日)",
+    "ASA 570 para 10, Aus 13.2, 16, 17, 18",
+    "合成数据集设计.md 第 3.1, 3.2 节 (试算表与关键数)",
+    "需求清单 R41 公共流程"
+   ],
+   "prerequisites": [
+    "GC-01",
+    "GC-02",
+    "R35",
+    "R41"
+   ],
+   "external_deps": [
+    "FakeFinancialStore.trial_balance 补全第 3.1 节本期与上期共 46 行 (A 改 tests/fakes.py); 真实数据已有, 无新增数据",
+    "depends_on 只写 [PLN-07]: 规格书另列 CSH-03, REC-06 未实现, DOC-04 本数据集没有借款合同, 均不建模"
+   ],
+   "acceptance": [
+    "1. GEN-04.yaml: phase P2_Executing, cycle Pervasive, owner A6, engine llm, autonomy_level L2, fixed false (GC-12 打开), manual_result_allowed true, depends_on [PLN-07], params {period_end: ref, assessment_months: 12, current_asset_accounts [1010, 1020, 1100, 1150, 1200, 1300], current_liability_accounts [2100, 2200, 2300, 2400], inventory_accounts [1200], cash_accounts [1010, 1020]}, standards [ASA570-P10, ASA570-Aus13.2, ASA570-P16, ASA570-P17, ASA570-P18], evidence_required [voucher], llm GEN-04.md.j2 / JudgmentDraft.",
+    "2. 判断对象 [CLIENT-001] (engagement.client_id), Judgment ID J-GEN-04-1-CLIENT-001, fixture_key CLIENT-001; rule_findings [] (X-PLN-07-1-A01-1 只放进 data, 不归因, 保持 open).",
+    "3. data.indicators (整数分, 比率四位小数): current {current_assets_cents 672000000, current_liabilities_cents 218900000, net_current_assets_cents 453100000, current_ratio 3.0699, quick_ratio 1.7222, cash_cents 165840000, net_assets_cents 581100000}; prior {571600000, 186500000, 385100000, 3.0649, 1.6708, 153600000, 516100000}. net_assets = 资产与负债科目余额之和 (借正贷负). data 另含 analytics (ANALYTICS 当前版 ratios), analytics_exceptions [X-PLN-07-1-A01-1], profit_before_tax_cents 150000000 (取 MATERIALITY 的 profit_before_tax 候选基准), client_profile (CLIENT-001 v1).",
+    "4. 试算表缺参数中列出的科目抛 LookupError; 流动负债为 0 时 current_ratio, quick_ratio 为 null, 不抛错.",
+    "5. FakeJudgmentEngine 下 L2 accept: Judgment pending, 建 T-J-GEN-04-1-CLIENT-001-v1 (normal, target Judgment v1); 失败: 建 T-RUN-GEN-04-1-CLIENT-001-v1 (failed, subject_id CLIENT-001), allowed {rerun, manual_result}.",
+    "6. fixture CLIENT-001.json: accept, misstatement_draft null; 结论为未识别可能导致对持续经营能力产生重大疑虑的事项或情况, 持续经营基础适当, 无重大不确定性; 推理链引用 trial_balance 1010, 1020, 1100, 1200, 2100, 2200, 2300, 2400 与 ASA570-P10, ASA570-Aus13.2, ASA570-P17; 一步 limitation 写明数据集未提供管理层的持续经营评估与现金流预测, 评估期为自审计报告日起约 12 个月 (Aus 13.2), 须向管理层询问并取得书面声明 (para 16(e)); counter_argument 提到应收增长 35% (X-PLN-07-1-A01-1) 的回款风险. 经真实判断引擎 attempts 1, 1 行 llm_call (procedure_id GEN-04); 渲染 prompt 含 ASA570-P17, ASA570-P18 原文与 12 个月评估期."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-07",
+   "title": "FIN-02 输出模型与校验",
+   "procedures": [
+    "FIN-02"
+   ],
+   "goal": "新增持续经营结论建议的输出模型 GoingConcernAdvice 与 OutputValidator 分支 (现状对未登记模型抛 NotImplementedError, judgment_engine.py:319): 引用级查 judgment_refs (存在, 当前版本, 已确认, 须含当前有效的持续经营评价判断) 与证据指针; 语义级沿用判断草稿的推理链规则.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/llm_outputs.py",
+    "src/backend/contracts/services.py",
+    "src/backend/services/judgment_engine.py",
+    "docs/开发接口文档.md",
+    "tests/test_output_validator.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 7.2 (1076 行 FIN-02 L1 LLM), 8.6 输出契约, 18.5 可复现性",
+    "ASA 570 para 17, 18, 21-23 (四种结论)",
+    "开发接口文档.md 第 5 节 OutputValidator 四级与重试规则",
+    "需求清单 R33, R52 (judgment_refs 校验写法)"
+   ],
+   "prerequisites": [
+    "GC-02",
+    "R33",
+    "R34"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "1. 枚举 GoingConcernOutcome: no_material_uncertainty, material_uncertainty_disclosed, material_uncertainty_not_disclosed, basis_inappropriate. GoingConcernAdvice 字段: proposed_outcome, conclusion, reasoning_chain, evidence, counter_argument, judgment_refs (JudgmentRef 列表), self_confidence (0-1). ValidationContext 新增 required_refs: list[str] (须被引用的判断 ID). 写入接口文档第 2.1, 5 节.",
+    "2. 合法输出 (refs [J-GEN-04-1-CLIENT-001 v2, J-GEN-06-1-BT-01-20260729-01 v1, J-GEN-06-1-GJ-202607-ECL-2 v2], 均为状态中当前版且 confirmed; 指针 trial_balance 1010, bank_transaction BT-01-20260729-01, standard ASA570-P17; required_refs [J-GEN-04-1-CLIENT-001]) → level_failed 空, 指针 type 与 reliability 按来源改写 (同 R33 验收 5).",
+    "3. reference 失败, 不重试: ref 不在状态中; 版本不是当前版本; 判断为 pending; required_refs 中的 ID 不在 judgment_refs 中; 指针全部解析不了.",
+    "4. semantic 失败, 不重试: 推理链为空; fact 或 standard 步骤无指针; standard 步骤没有 source_type standard 的指针; inference 的 from_steps 含自身或之后的下标; proposed_outcome 不是 no_material_uncertainty 而推理链没有引用 ASA570-P18 的 standard 步骤.",
+    "5. raw 不是 JSON → syntax; proposed_outcome 为 \"ok\" → structure (两者可重试, 由 R34 重试最多 2 次).",
+    "6. JudgmentDraft, ContractExtraction, ConfirmationExtraction, ReportDraft 的现有测试全部通过."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-08",
+   "title": "A6 FIN-02 结论建议与 completion 节点",
+   "procedures": [
+    "FIN-02",
+    "FIN-04"
+   ],
+   "goal": "completion 节点在 FIN-04 之后由 A6 执行 FIN-02: 汇总当前有效的持续经营评价判断与期后事项判断, 调 LLM 出结论建议, 写闸门材料 GOING_CONCERN 的下一版. FIN-02 是闸门程序, 执行成功后保持 planned 直到闸门通过 (同 Q5 的 PLN-01); LLM 失败按 R03, R05 在节点内等 rerun.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-02.yaml",
+    "src/backend/knowledge/procedures/FIN-01.yaml",
+    "src/backend/knowledge/prompts/FIN-02.md.j2",
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/state.py",
+    "src/backend/orchestration/merge.py",
+    "src/backend/orchestration/nodes.py",
+    "src/backend/agents/fieldwork.py",
+    "src/backend/agents/registry.py",
+    "tests/fixtures/llm/FIN-02/CLIENT-001.json",
+    "tests/fakes.py",
+    "tests/test_fieldwork_fin02.py",
+    "tests/test_nodes.py",
+    "tests/test_knowledge.py",
+    "docs/开发接口文档.md"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 6.1.1 (707 行 A6 含 FIN-02; L1 程序的 owner 准备材料并呈递闸门, 712 行), 6.1.2 (823 行), 7.2 (1076 行 FIN-02 L1 LLM), 7.5 (1136 行), 第 10 节 P3 人员行 (1423 行), 12.5 UC-06 步骤 6 (2130 行)",
+    "ASA 570 para 17, 18",
+    "开发接口文档.md 第 0 节闸门材料 ID, 第 3 节写入归属与重放, 第 7 节恢复机制 (P2 以外程序失败)",
+    "Q4, Q5, Q17"
+   ],
+   "prerequisites": [
+    "GC-04",
+    "GC-06",
+    "GC-07",
+    "R23",
+    "R07"
+   ],
+   "external_deps": [
+    "B 的 persistence/models.py OUTPUT_KINDS 与 gate_materials 种类表加 GoingConcernConclusion (GOING_CONCERN), 先用 FakeOutputStore",
+    "data/demo/llm/FIN-02/ 副本由 B 复制"
+   ],
+   "acceptance": [
+    "1. 契约: GateId 新增 FIN_02 = \"FIN-02\"; 新增 GoingConcernConclusion(Versioned), id 固定 GOING_CONCERN, 字段 run_id, proposed_outcome, conclusion, reasoning_chain, evidence, counter_argument, judgment_refs, covered_to (date, 期后事项覆盖截止日), trail_ref; EngagementState 新增 going_concern: GoingConcernConclusion | None (initial_state 为 None); AGENT_FIELDS[A6] 加 going_concern. 接口文档第 0, 2.4, 3, 6 节同步.",
+    "2. FIN-02.yaml: phase P3_Completion, cycle Completion, owner A6, engine llm, autonomy_level L1, gate FIN-02, depends_on [GEN-04, GEN-06] (规格书另列 GEN-18, FIN-17, FIN-19 未实现, 不建模), standards [ASA570-P17, ASA570-P18, ASA570-P21, ASA570-P22, ASA570-P23, ASA560-P08], llm FIN-02.md.j2 / GoingConcernAdvice; FIN-01.yaml depends_on 改为 [FIN-04, FIN-02]. 新项目 start 时 FIN-02 第 1 版 planned 进固定集.",
+    "3. 上下文: gen04 为 J-GEN-04-1-CLIENT-001 的当前有效版本 (被 override 时取人工判断, 同 R43 contract_judgment 的取法); subsequent 为 GEN-06 的全部当前判断 (按 ID 排序) 与其 exception_ids 所指例外; covered_to 为 GEN-07 最近一次成功 Run 的 period_end + subsequent_days, Numbat 为 2026-07-31; fixture_key CLIENT-001; ValidationContext.judgments 为状态判断, required_refs [gen04 的 ID]. 状态中没有 GEN-04 判断抛 LookupError.",
+    "4. mock 读 fixture: 片段 going_concern 为 GOING_CONCERN v1 (run_id RUN-FIN-02-1, proposed_outcome no_material_uncertainty, judgment_refs [J-GEN-04-1-CLIENT-001 v2, J-GEN-06-1-BT-01-20260729-01 v1, J-GEN-06-1-GJ-202607-ECL-2 v2], covered_to 2026-07-31, trail_ref 为该次 llm_call 的 ID); procedure_runs [RUN-FIN-02-1 succeeded]; 1 行 llm_call (actor A6, procedure_id FIN-02). fixture 推理链引用 trial_balance 1010, 1020, 2100, bank_transaction BT-01-20260729-01 (支付股利后流动性仍充足), journal_entry GJ-202607-ECL-2, ASA570-P17, ASA570-P18, 并有一步 limitation 写明期后事项只覆盖至 2026-07-31, 管理层书面声明尚未取得.",
+    "5. NODE_PROCEDURES[completion] = (FIN-04, FIN-02): 同一节点内先 RUN-FIN-04-1 (SCHEDULE v1, phase P3_Completion), 再 RUN-FIN-02-1 (GOING_CONCERN v1); FIN-04 新版本 completed, FIN-02 新版本仍 planned; 停在 gate_fin. FIN-01 驳回后回 completion: RUN-FIN-04-2 (SCHEDULE v2) 与 RUN-FIN-02-2 (trigger rerun, GOING_CONCERN v2).",
+    "6. FIN-02 连续 3 次结构失败: RUN-FIN-02-1 failed, T-RUN-FIN-02-1-v1 (failed, target ProcedureRun, subject_id None), allowed {rerun}; FIN-02 awaiting_human, 等待载荷 procedure_id FIN-02; rerun 后 RUN-FIN-02-2 成功, 写 GOING_CONCERN v1, FIN-02 回到 planned; 重放时按 stored_outputs 取回, 不再调 LLM; 恢复补做按 NODE_PROCEDURES 中 FIN-04 在前排序.",
+    "7. make_graph_nodes 默认给 FIN-02 用脚本 A6 (产出 GOING_CONCERN), 现有经过 completion 的测试全部通过 (本条不改闸门, FIN-01 照常通过)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "GC-09",
+   "title": "gate_fin 两步: 路由, 当前闸门与材料",
+   "procedures": [
+    "FIN-02",
+    "FIN-01"
+   ],
+   "goal": "gate_fin 一个节点承载 FIN-02 与 FIN-01 两条决定 (规格书 18.4), 先持续经营结论后错报与意见类型: 当前步骤按状态判断; 两条都绑定当前材料且通过才出闸门去 report_draft, 任一驳回回 completion, 缺一条或信息不足重呈. 闸门节点仍为空操作, 静态中断仍为 4 个节点.",
+   "scope_files": [
+    "src/backend/contracts/views.py",
+    "src/backend/orchestration/graph.py",
+    "src/backend/orchestration/query.py",
+    "docs/开发接口文档.md",
+    "tests/test_graph.py",
+    "tests/test_query.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 18.4 法定闸门 (2820 行: gate_fin 须本次进入后 FIN-01, FIN-02 两条决定均批准, 任一驳回回 QC, 缺一条则重呈; 2829 行)",
+    "ELEC5620_设计规格说明书.md 12.2 GateDecision (1692-1700 行: FIN 闸门为 FIN-01, FIN-02 各一条), 12.5 UC-06 步骤 6 (2130 行)",
+    "开发接口文档.md 第 7 节视图模型与 GateView",
+    "ASA 570 para 21-23 (持续经营结论决定意见路径, 故先于意见类型)"
+   ],
+   "prerequisites": [
+    "GC-08",
+    "R24"
+   ],
+   "external_deps": [
+    "C 的 api/routes/gates.py 与前端闸门页: FIN-02 表单 (结论单选与理由), FIN-01 页显示已定的持续经营结论; 契约改动写入接口文档第 7 节, C 重新生成前端 client"
+   ],
+   "acceptance": [
+    "1. GATE_NODES 含 FIN-02 → gate_fin; GATES 去重后仍为 4 个节点, compile 的 interrupt_before 不变.",
+    "2. current_gate 改为看状态 (签名加检查点 values): 停在 gate_fin 时, 本闸门没有绑定当前 GOING_CONCERN 版本的 FIN-02 approve → FIN-02, 有 → FIN-01; 其他闸门节点不变. decisions, query, recovery 的调用处同步.",
+    "3. gate_route(gate_fin) (以 aupdate_state 写入决定构造状态): 无决定 → represent; FIN-02 approve 绑 v1 而无 FIN-01 → represent; FIN-02 insufficient_info → represent; FIN-02 reject → reject (completion); FIN-02 approve + FIN-01 approve (绑当前 SCHEDULE) → approve (report_draft); FIN-02 approve + FIN-01 reject → reject; FIN-02 approve 绑 v1 而 GOING_CONCERN 已为 v2 → represent, current_gate 为 FIN-02.",
+    "4. 视图: 新增 GoingConcernMaterial (kind FIN-02: conclusion, gen04_judgment, subsequent_judgments, subsequent_exceptions) 加入 GateMaterial 联合; CompletionMaterial 新增 going_concern_outcome (已通过的 FIN-02 的 disposition). gate(): FIN-02 步为 {gate FIN-02, target GOING_CONCERN v1, conclusion v1, gen04_judgment J-GEN-04-1-CLIENT-001 当前版, subsequent_judgments [J-GEN-06-1-BT-01-20260729-01, J-GEN-06-1-GJ-202607-ECL-2], subsequent_exceptions [X-GEN-07-1-S01-1, X-GEN-07-1-S02-1]}; FIN-01 步 target SCHEDULE, going_concern_outcome no_material_uncertainty.",
+    "5. overview.current_gate 依次为 FIN-02, FIN-01; 停在 gate_fin 而 going_concern 为空时 gate() 抛 LookupError."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "GC-10",
+   "title": "FIN-02 决定: 校验, 效果与恢复补做",
+   "procedures": [
+    "FIN-02",
+    "FIN-01"
+   ],
+   "goal": "DecisionSubmit 接受 FIN-02 闸门决定: disposition 按闸门限定枚举, FIN-01 与已定的持续经营结论一致, 效果为纯函数, 写 decision 与 transition 留痕, recover 能依次补做两步; 更新全部经过 gate_fin 的既有测试.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/orchestration/decisions.py",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md",
+    "tests/test_decisions.py",
+    "tests/test_recovery.py",
+    "tests/test_flow.py",
+    "tests/test_graph.py",
+    "tests/test_e2e_mock.py",
+    "tests/test_e2e_restart.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 12.2 GateDecision.disposition 按 gate 限定枚举 (1697 行), 12.3 闸门迁移守卫 (1972 行), 18.5 决定提交单一接口",
+    "ASA 570 para 21 (不恰当 → 否定), 22 (披露充分 → 无保留加段), 23 (披露不充分 → 保留或否定)",
+    "开发接口文档.md 第 7 节校验表, 必填表, 决定的效果, 恢复机制"
+   ],
+   "prerequisites": [
+    "GC-09",
+    "R24",
+    "R30"
+   ],
+   "external_deps": [
+    "B 的 decisions 表 gate 取值与 disposition 列接受持续经营结论 (先用 FakeOutputStore)",
+    "C 的决定提交接口与表单"
+   ],
+   "acceptance": [
+    "1. GateDecision.disposition 改为 OpinionType | GoingConcernOutcome | None; 必填表: FIN-02 approve 须 disposition 与 reason, reject 与 insufficient_info 须 reason; 只有 FIN-01 approve 与 FIN-02 approve 可填 disposition. 接口文档第 2.5, 7 节同步.",
+    "2. FIN-02 approve {disposition no_material_uncertainty, reason}: 同一 commits 项写 GateDecision 与 FIN-02 completed 新版本; 1 行 decision 留痕 (procedure_id FIN-02) 与 1 行 FIN-02 的 transition; 阶段仍为 P3_Completion; 检查点 next gate_fin, current_gate FIN-01.",
+    "3. 拒绝 (Store 与检查点不变, 锁释放): FIN-02 approve 缺 disposition 或 reason → MISSING_FIELD; FIN-02 带 materiality, edits, annotations, 或 reject 带 disposition → FIELD_NOT_ALLOWED; FIN-02 disposition 为 qualified, 或 FIN-01 disposition 为 no_material_uncertainty → INVALID_VALUE; FIN-02 disposition basis_inappropriate → INVALID_VALUE, 消息说明本版不支持否定意见 (按 open_questions 推荐项); target 不是 GOING_CONCERN 当前版 → VERSION_MISMATCH; 停在 FIN-02 步提交 FIN-01, 或停在 FIN-01 步提交 FIN-02 → NOT_AT_GATE.",
+    "4. FIN-01 一致性: 已通过的 FIN-02 为 material_uncertainty_not_disclosed 时 FIN-01 只能选 qualified (unqualified → INVALID_VALUE, ASA 570 para 23); 为 no_material_uncertainty 或 material_uncertainty_disclosed 时 unqualified, qualified 都可.",
+    "5. FIN-02 reject: next completion; 继续后 RUN-FIN-04-2, RUN-FIN-02-2, 停在 gate_fin 的 FIN-02 步, target GOING_CONCERN v2, FIN-02 仍 planned. FIN-02 insufficient_info: 只写决定, 仍停在 FIN-02 步. fin02_effects 为纯函数 (程序包, 决定), 供 recover 复用.",
+    "6. recover: Store 中有 FIN-02 approve 与 FIN-01 approve 而检查点都没有 → 按 decided_at 依次补做, 先以 gate_fin 身份写 FIN-02 (之后当前步为 FIN-01), 再写 FIN-01, 补写缺失的 2 行 decision 留痕 (同键跳过), 最终 next report_draft; Store 只有 FIN-01 approve 而检查点停在 FIN-02 步 → 报错记入 run_error. MATERIAL_MODELS 与 gate_values 支持 FIN-02.",
+    "7. test_flow, test_graph, test_e2e_mock, test_e2e_restart 中经过 gate_fin 处都先提交 FIN-02 approve 再提交 FIN-01, 全部通过; R24 的 FIN-01 校验与效果验收不变."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "GC-11",
+   "title": "RPT-03 持续经营段落",
+   "procedures": [
+    "RPT-03"
+   ],
+   "goal": "RPT-03 按已通过的 FIN-02 结论写报告: 存在重大不确定性且披露充分时加 \"Material Uncertainty Related to Going Concern\" 段 (ASA 570 para 22); 披露不充分时基础段写明重大不确定性与披露不充分 (para 23(b)); 无重大不确定性时报告不变.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/llm_outputs.py",
+    "src/backend/contracts/services.py",
+    "src/backend/knowledge/procedures/RPT-03.yaml",
+    "src/backend/knowledge/prompts/RPT-03.md.j2",
+    "src/backend/agents/concierge.py",
+    "src/backend/services/judgment_engine.py",
+    "docs/开发接口文档.md",
+    "tests/test_concierge.py",
+    "tests/test_output_validator.py"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 12.2 AuditReportVersion.sections goingConcern (1705 行), 第 10 节意见路由的持续经营路径 (1437 行), P4 Agent 行 (1444 行)",
+    "ASA 570 para 22, 23",
+    "Q14 (新增报告段落改 contracts 枚举, 须告知 C 同步 API 与前端)",
+    "需求清单 R51, R52, R53"
+   ],
+   "prerequisites": [
+    "GC-10",
+    "R51",
+    "R52",
+    "R53"
+   ],
+   "external_deps": [
+    "C 的报告页渲染 going_concern 段 (ReportSection 枚举改动, 重新生成前端 client)"
+   ],
+   "acceptance": [
+    "1. ReportSection 新增 going_concern; ReportDraft 新增 going_concern: str | None = None; ValidationContext 新增 going_concern: GoingConcernOutcome | None. RPT-03.yaml standards 加 ASA570-P22, ASA570-P23, depends_on 加 FIN-02. 接口文档第 2.1, 2.6, 5 节同步.",
+    "2. prompt 变量 going_concern = {outcome, reason} 取本闸门最后一条绑定当前 GOING_CONCERN 的 FIN-02 approve; Numbat (no_material_uncertainty): prompt 含 \"Going concern: no_material_uncertainty\", 不出现 going_concern 段的写作要求; 现有 r1, r2 fixture 不改仍一次通过, REPORT sections 仍为 6 段.",
+    "3. material_uncertainty_disclosed, 脚本化 LLM 返回 going_concern 首行 \"Material Uncertainty Related to Going Concern\": REPORT-1 sections 含 going_concern, 排在 basis_for_opinion 之后; judgment_refs 可含 J-GEN-04-1-CLIENT-001.",
+    "4. semantic 失败, 只调用 1 次, 按 R52 写 RUN-RPT-03-n failed 与 failed 任务: disclosed 而 going_concern 为空或首行不对; no_material_uncertainty 而 going_concern 非空; material_uncertainty_not_disclosed 而 basis_for_opinion 不含 \"material uncertainty\" (不分大小写).",
+    "5. R51-R53 的现有测试全部通过."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-12",
+   "title": "接入流程: 打开固定集装配, 脚本流程与 Agent 层集成",
+   "procedures": [
+    "GEN-07",
+    "GEN-06",
+    "GEN-04",
+    "FIN-02"
+   ],
+   "goal": "GEN-07, GEN-06, GEN-04 的 fixed 改为 true, 进入每个项目的 P2 程序包; 脚本 Agent 流程与 R49 式 Agent 层集成测试覆盖新程序; Demo需求文档同步范围.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-07.yaml",
+    "src/backend/knowledge/procedures/GEN-06.yaml",
+    "src/backend/knowledge/procedures/GEN-04.yaml",
+    "tests/fakes.py",
+    "tests/test_flow.py",
+    "tests/test_knowledge.py",
+    "tests/test_p2_agents_demo.py",
+    "docs/Demo需求文档.md"
+   ],
+   "basis": [
+    "ELEC5620_设计规格说明书.md 第 6 节固定集 (697 行)",
+    "Demo需求文档.md 第 2 节程序表与 P2 分层, 第 3 节数据, 第 6 节本版不做 (持续经营 FIN-02 一行), 第 7 节准则片段",
+    "合成数据集设计.md 第 7 节新增行 (见 data_needs)",
+    "Q7 (先派发)"
+   ],
+   "prerequisites": [
+    "GC-01",
+    "GC-03",
+    "GC-05",
+    "GC-06",
+    "GC-10",
+    "R22",
+    "R27",
+    "R49"
+   ],
+   "external_deps": [
+    "FakeRuleEngine 预置 GEN-07 (S01, S02) 与 GEN-06 (E01); numbat_p2_agents, numbat_all_p2_agents 加 ScriptA5 (GEN-07), ScriptA6 (GEN-06, GEN-04) 脚本; 全部为 A 的 tests/fakes.py"
+   ],
+   "acceptance": [
+    "1. Numbat 装配集 10 条: REV-08, REV-03, REV-02, CSH-04, DOC-06, CSH-05, CSH-02, GEN-07, GEN-06, GEN-04; 分层 {0: REV-08, REV-03, CSH-04, CSH-05, GEN-07, GEN-04; 1: REV-02, DOC-06, GEN-06; 2: CSH-02}; 第 0 层按 cycle 分为 Cash, Pervasive, Revenue 3 个实例 (cap 4). 程序总数 21.",
+    "2. 脚本流程 (test_flow, Q7 先派发): 第 0 层 fan_in 后先派 DOC-06 与 GEN-06, 再派 CSH-02; 首次停在 await_events 时待决任务 6 条 (T-J-REV-03-1-CON-00{1,2,3}-v1, T-J-GEN-04-1-CLIENT-001-v1, T-J-GEN-06-1-GJ-202607-ECL-2-v1, T-J-CSH-02-1-BA-01-v1); REV-03 三条确认后派 REV-02, 再出 2 条任务.",
+    "3. REVIEWS 加 2 条: T-J-GEN-04-1-CLIENT-001-v1 confirm; T-J-GEN-06-1-GJ-202607-ECL-2-v1 misstatement {judgmental, Trade receivables, Valuation, 3368000, overstated}. 8 条决定后 P2 全部 completed, 进 completion, 停在 gate_fin 的 FIN-02 步.",
+    "4. FIN-02 approve no_material_uncertainty, FIN-01 approve qualified 后 SCHEDULE v1: items 2 条 (14200000 与 3368000, 均 overstated, 按决定先后), excluded_trivial_ids [], total_cents 17568000, materiality_cents 12000000, candidate qualified.",
+    "5. Agent 层集成 (真实 JudgmentEngine, MockLLMClient, 假存储): 层 0 的 GEN-07, GEN-04 → 层 1 的 GEN-06 产出与 GC-03, GC-05, GC-06 一致, 每次 judge attempts 1; 例外 5 条, Judgment 9 条.",
+    "6. Demo需求文档: 第 2 节表加 GEN-07, GEN-06, GEN-04, FIN-02 四行与依赖 (GEN-06 ← GEN-07; FIN-02 ← GEN-04, GEN-06; FIN-01 ← FIN-04, FIN-02), P2 分层改为上式; 第 3 节银行流水改为含期后至 2026-07-31; 第 6 节删去 \"持续经营 (FIN-02)\"; 第 7 节加本组片段."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "GC-13",
+   "title": "验收: mock 离线全流程加入持续经营与期后事项 (演示路径)",
+   "procedures": [
+    "GEN-07",
+    "GEN-06",
+    "GEN-04",
+    "FIN-02",
+    "FIN-04",
+    "FIN-01",
+    "RPT-03",
+    "RPT-01"
+   ],
+   "goal": "R55 的离线全流程加入本组程序, 结果与合成数据集第 7 节新增行一致; 列出全流程结果相对现状的变化, 作为课程演示的基准数字.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/test_e2e_restart.py",
+    "tests/fixtures/llm/RPT-03/r1.json",
+    "tests/fixtures/llm/RPT-03/r2.json",
+    "tests/fakes.py",
+    "docs/合成数据集设计.md"
+   ],
+   "basis": [
+    "Demo需求文档.md 第 8 节第 1, 4, 5 条",
+    "合成数据集设计.md 第 5.5 节 (新增), 第 7 节与汇总表",
+    "需求清单 R55, R57"
+   ],
+   "prerequisites": [
+    "GC-11",
+    "GC-12",
+    "R55",
+    "R57"
+   ],
+   "external_deps": [
+    "B 的 data/demo 第 5.5 节数据与 data/demo/llm 副本 (GEN-04, GEN-06 ×2, FIN-02, 改过的 RPT-03 r1, r2); R56 真实存储变体在 B 就绪后按同样数字补跑",
+    "A 先在 FakeFinancialStore 预置第 5.5 节的行与完整试算表"
+   ],
+   "acceptance": [
+    "1. 决定: R55 原有决定之外加 GEN-04 confirm, GEN-06 GJ-202607-ECL-2 misstatement (草稿同 GC-12), FIN-02 approve no_material_uncertainty (reason: No events or conditions were identified that cast significant doubt on the Company's ability to continue as a going concern; the going concern basis of accounting is appropriate.); FIN-01 approve qualified; RPT-01 先 reject 后 approve.",
+    "2. 例外 6 条: X-PLN-07-1-A01-1 open; X-REV-08-1-R01-1, X-CSH-05-1-B01-1, X-CSH-02-1-D01-1, X-GEN-07-1-S01-1, X-GEN-07-1-S02-1 attributed. Judgment 9 条: 8 条 v2 confirmed, J-GEN-06-1-BT-01-20260729-01 v1 confirmed (L3 自动关闭, 无任务). 任务 8 条全部 decided. Misstatement 2 条: judgment_id J-REV-02-1-SI-2026-0612 (14200000, factual, Revenue, Cutoff, overstated) 与 J-GEN-06-1-GJ-202607-ECL-2 (3368000, judgmental, Trade receivables, Valuation, overstated), 均 uncorrected. SCHEDULE total_cents 17568000, candidate qualified. GOING_CONCERN v1 no_material_uncertainty, covered_to 2026-07-31. 闸门决定 6 条; FIN-02 completed.",
+    "3. 报告: r1, r2 的 basis_for_opinion 在原收入截止段后补一段: Dingo Drive Technologies Pty Ltd 于 2026-07-14 进入自愿管理, 期末应收 AUD 33,680 未计提减值, 应收账款与利润高估 AUD 33,680; judgment_refs 为 [J-REV-02-1-SI-2026-0612 v2, J-GEN-06-1-GJ-202607-ECL-2 v2]. REPORT-2 v2 signed, basis 段仍含 \"Clause 5.1 of contract CON-001\", sections 6 段 (无 going_concern 段).",
+    "4. 留痕: llm_call 17 行 {DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, GEN-04 1, GEN-06 2, FIN-02 1, RPT-03 2} (现状 13); decision 14 行 (闸门 6, 复核 8; 现状 11); external_call 4 行不变; 程序状态 transition 比现状多 6 行 (GEN-07 planned→completed 1, GEN-04 与 GEN-06 各 planned→awaiting_human→completed 2, FIN-02 planned→completed 1), 阶段 transition 不变.",
+    "5. 全部 Judgment (含新 3 条), Contract, Confirmation 与 GOING_CONCERN 的证据指针经 OutputValidator 都能解析; tests/fixtures/llm 下每个文件 (含 GEN-04/CLIENT-001, GEN-06 两份, FIN-02/CLIENT-001) 在流程中被读到一次且一次通过.",
+    "6. R57 重启测试按新装配仍与不中断时一致: FakeConfirmationChannel.submit 共 2 次, 已持久化的程序不重跑; 签字后提交任一决定仍报 ENGAGEMENT_LOCKED.",
+    "7. 合成数据集设计第 7 节新增 GEN-07, GEN-06, GEN-04, FIN-02 四行并改 FIN-04, RPT-03 行与汇总表 (例外 6, Judgment 9, 任务 8, 错报 2, 汇总 175,680.00)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "BA-01 期后银行流水延长到 2026-07-31, 并埋非调整事项: 期后宣告并支付的末期股利",
+   "for_keys": [
+    "GC-03",
+    "GC-04",
+    "GC-05",
+    "GC-12",
+    "GC-13"
+   ],
+   "owner": "B",
+   "detail": "bank_transactions.csv: 新增 BT-01-20260729-01 (bank_account_id BA-01, txn_date 2026-07-29, amount_cents -30000000, description \"EFT DEBIT DIVIDEND DISTRIBUTION - FY2026 FINAL DIVIDEND DECLARED 28 JULY 2026\", reference DIV-2026-07, balance_after 按连续余额算), 2026-07-29 当天 BA-01 只有这一行. 2026-07-11 至 07-31 的常规流水按第 4.5 节规则续生成 (供应商 A 07-15, 工资 07-20, 供应商 B, 运费, 其他费用 07-31; BA-02 07-31 利息可加), 期末未收发票可在 07-13 至 07-31 收款, 但 Dingo Drive Technologies 的 SI-2026-0559, SI-2026-0613 以及 SI-2026-0612, SI-2026-0618 到 07-31 都无收款; 新增收款金额等于发票金额. 约束 (写进第 4.7 节自检): 07-01 至 07-31 的 BA-01 流水中 reference 不以 SI-, RENT-, AP-, PAY-, FRT-, OPEX-, INT-, ATO- 开头且 |amount| > 600000 的只有 BT-01-20260729-01; 2026-06-27 至 07-10 的 11 行 (第 22 条) 不变, CSH-02 的 D02 结果不变; REV-08 的 R02, R03 不出现新命中; BA-01 余额始终 ≥ 10000000. 现有行逐字节不变: 新增行用独立的随机流, 不得改变已生成的填充发票与客户分配 (fixture 引用了 SI-2026-0559, SI-2026-0613 等 ID)."
+  },
+  {
+   "what": "期后分录: 管理层在 FY2027 才为期末客户破产计提的专项减值 (调整事项)",
+   "for_keys": [
+    "GC-03",
+    "GC-04",
+    "GC-05",
+    "GC-13"
+   ],
+   "owner": "B",
+   "detail": "journal_entries.csv 新增 entry_no GJ-202607-ECL 两行: GJ-202607-ECL-1 (posting_date 2026-07-31, created_at 2026-07-31T05:30:00Z, created_by fin.controller, approved_by cfo, account_code 6500, debit_cents 3368000, credit_cents 0) 与 GJ-202607-ECL-2 (同日同人, account_code 1150, debit 0, credit 3368000); description 均为 \"Specific allowance for expected credit losses - Dingo Drive Technologies Pty Ltd (voluntary administrators appointed 14 July 2026) - SI-2026-0559, SI-2026-0613\", source_doc 空, is_adjustment false. 背景 (写进第 5.5 节): Dingo Drive Technologies Pty Ltd (ABN 18909054342, 第 2.3 节填充池客户) 于 2026-07-14 进入自愿管理, 期末未收发票 SI-2026-0559 (2026-06-05, 1684000) 与 SI-2026-0613 (2026-06-29, 1684000) 合计 3368000. 自检第 5, 6 条改为只算 posting_date ≤ 2026-06-30 的分录; 新增: posting_date > 2026-06-30 的分录只有这两行. 行数 2686 → 2688."
+  },
+  {
+   "what": "合成数据集设计文档更新",
+   "for_keys": [
+    "GC-12",
+    "GC-13"
+   ],
+   "owner": "B (第 4, 5 节); A (第 7 节预期结果)",
+   "detail": "B: 新增第 5.5 节期后事项 (上两条的行与背景), 第 1 节 manifest 行数, 第 4.6 节行数, 第 4.7 节自检; Demo需求文档第 3 节 \"含期后 10 天\" 改为至 2026-07-31. A: 第 7 节新增 GEN-07 (X-GEN-07-1-S01-1, X-GEN-07-1-S02-1), GEN-06 (两条 Judgment, 一条自动关闭, 一条 misstatement 3368000), GEN-04 (J-GEN-04-1-CLIENT-001 accept, confirm), FIN-02 (GOING_CONCERN no_material_uncertainty, approve) 四行, 改 FIN-04 行 (items 2 条, total 17568000), RPT-03 行 (基础段补 Dingo), 汇总表."
+  },
+  {
+   "what": "新 fixture 的运行时副本",
+   "for_keys": [
+    "GC-05",
+    "GC-06",
+    "GC-08",
+    "GC-13"
+   ],
+   "owner": "B",
+   "detail": "data/generate_demo.py 把 tests/fixtures/llm 下新增的 GEN-04/CLIENT-001.json, GEN-06/BT-01-20260729-01.json, GEN-06/GJ-202607-ECL-2.json, FIN-02/CLIENT-001.json 与改过的 RPT-03/r1.json, r2.json 复制到 data/demo/llm (tests/test_knowledge.py:502-514 断言两份一致)."
+  },
+  {
+   "what": "测试假实现中的 Numbat 数据",
+   "for_keys": [
+    "GC-04",
+    "GC-06",
+    "GC-12",
+    "GC-13"
+   ],
+   "owner": "A (tests/fakes.py)",
+   "detail": "NUMBAT_TRIAL_BALANCE 补全第 3.1 节本期与上期 46 行 (现只有 1010, 1020); NUMBAT_RECORDS 加 BT-01-20260729-01, GJ-202607-ECL-1/2, SI-2026-0559, SI-2026-0613; FakeRuleEngine 预置 GEN-07 (S01, S02) 与 GEN-06 (E01 行). GEN-04 不需要新数据: 管理层持续经营评估与现金流预测不提供, 作为判断中的 limitation."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "contracts/knowledge.py ProcedureTemplate",
+   "change": "新增 fixed: bool = False (P2 固定集, 不按风险每个项目都装配); 非 P2 或带 by_risk 参数时加载报错",
+   "doc_section": "开发接口文档第 8.1 节"
+  },
+  {
+   "target": "contracts/models.py GateId",
+   "change": "新增 FIN_02 = \"FIN-02\"; GATE_NODES 中 FIN-01 与 FIN-02 同为 gate_fin",
+   "doc_section": "开发接口文档第 2.1 节, 第 7 节"
+  },
+  {
+   "target": "contracts/models.py GoingConcernOutcome (新枚举)",
+   "change": "no_material_uncertainty, material_uncertainty_disclosed, material_uncertainty_not_disclosed, basis_inappropriate",
+   "doc_section": "开发接口文档第 2.1 节"
+  },
+  {
+   "target": "contracts/models.py GateDecision.disposition",
+   "change": "类型由 OpinionType | None 改为 OpinionType | GoingConcernOutcome | None, 按闸门限定: FIN-01 只能 unqualified/qualified, FIN-02 只能持续经营结论 (本版不含 basis_inappropriate), 其余闸门须为空",
+   "doc_section": "开发接口文档第 2.5 节, 第 7 节校验表与必填表"
+  },
+  {
+   "target": "contracts/models.py GoingConcernConclusion (新 Versioned)",
+   "change": "FIN-02 闸门材料, id 固定 GOING_CONCERN; 字段 run_id, proposed_outcome, conclusion, reasoning_chain, evidence, counter_argument, judgment_refs, covered_to, trail_ref",
+   "doc_section": "开发接口文档第 0 节 ID 规则 (闸门材料), 第 2.4 节"
+  },
+  {
+   "target": "contracts/models.py ReportSection",
+   "change": "新增 going_concern (Material Uncertainty Related to Going Concern 段, ASA 570 para 22); 同 Q14 须告知 C",
+   "doc_section": "开发接口文档第 2.1, 2.6 节"
+  },
+  {
+   "target": "contracts/llm_outputs.py",
+   "change": "新增 GoingConcernAdvice (FIN-02 输出); ReportDraft 新增 going_concern: str | None = None",
+   "doc_section": "开发接口文档第 5 节"
+  },
+  {
+   "target": "contracts/services.py ValidationContext",
+   "change": "新增 required_refs: list[str] (FIN-02 须引用的判断) 与 going_concern: GoingConcernOutcome | None (RPT-03 校验)",
+   "doc_section": "开发接口文档第 5 节 OutputValidator"
+  },
+  {
+   "target": "services/judgment_engine.py OutputValidator",
+   "change": "支持 GoingConcernAdvice 的引用与语义校验; report_checks 增加持续经营段规则",
+   "doc_section": "开发接口文档第 5 节"
+  },
+  {
+   "target": "contracts/state.py EngagementState",
+   "change": "新增 going_concern: GoingConcernConclusion | None, 写入者 A6 (FIN-02); initial_state 为 None",
+   "doc_section": "开发接口文档第 3 节字段与写入归属"
+  },
+  {
+   "target": "contracts/views.py",
+   "change": "新增 GoingConcernMaterial (kind FIN-02) 并入 GateMaterial 联合; CompletionMaterial 新增 going_concern_outcome",
+   "doc_section": "开发接口文档第 7 节视图模型"
+  },
+  {
+   "target": "orchestration/merge.py AGENT_FIELDS",
+   "change": "A5 加 exceptions (GEN-07); A6 加 going_concern (FIN-02)",
+   "doc_section": "开发接口文档第 6 节 Agent 返回字段表"
+  },
+  {
+   "target": "orchestration/query.py current_gate, graph.py gate_route",
+   "change": "current_gate 改为看检查点状态 (gate_fin 按 FIN-02 是否已通过分两步); gate_fin 路由须两条决定均绑定当前材料且通过",
+   "doc_section": "开发接口文档第 7 节 (GateView, recover 规则, 恢复机制)"
+  },
+  {
+   "target": "orchestration/decisions.py 决定的效果",
+   "change": "新增 FIN-02 行: approve → FIN-02 completed, 阶段不变; reject → 回 completion 重做 FIN-04 与 FIN-02; insufficient_info → 重呈; FIN-01 与已通过的持续经营结论一致性校验",
+   "doc_section": "开发接口文档第 7 节决定的效果"
+  },
+  {
+   "target": "persistence (B)",
+   "change": "OUTPUT_KINDS 与 gate_materials 种类表加 GoingConcernConclusion; decisions 表 gate 与 disposition 取值放宽; 迁移",
+   "doc_section": "开发接口文档第 9 节"
+  },
+  {
+   "target": "api 与前端 (C)",
+   "change": "GateView 新材料种类, FIN-02 决定表单, 报告页 going_concern 段, 重新生成 client",
+   "doc_section": "开发接口文档第 10 节"
+  },
+  {
+   "target": "docs/Demo需求文档.md",
+   "change": "第 2 节程序表与依赖, P2 分层, 第 3 节期后流水范围, 第 6 节删去持续经营 (FIN-02), 第 7 节片段表",
+   "doc_section": "Demo需求文档第 2, 3, 6, 7 节"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "持续经营评价和期后事项检查放在哪个阶段执行?",
+   "options": [
+    {
+     "label": "放在执行阶段, 与其他实质性程序一起并行调度, 每个项目都做 (推荐)",
+     "pros": "复用现有的并行调度, 复核任务与等待机制; 期后发现的错报在错报汇总前就已确认, 能直接进汇总表; 工作量最小",
+     "cons": "与规格书 \"完成阶段由取证智能体监控期后事项\" 的时点不完全一致; 检查截止日早于签字日"
+    },
+    {
+     "label": "放在完成阶段, 在错报汇总之前依次执行",
+     "pros": "与规格书第 10 节完成阶段的分工一致",
+     "cons": "完成阶段的节点目前只会等 \"失败重跑\", 要新增等普通复核 (确认, 认定错报) 的能力, 恢复补做的顺序也要扩展, 约多 2 条中等规模需求"
+    }
+   ],
+   "recommendation": "放在执行阶段. 演示数据是静态的, 两种时点结果相同; 时点差距用下一问的覆盖截止日与书面声明说明.",
+   "affects": [
+    "GC-01",
+    "GC-03",
+    "GC-04",
+    "GC-06",
+    "GC-12"
+   ]
+  },
+  {
+   "question": "期后事项检查截止到哪一天?",
+   "options": [
+    {
+     "label": "截止到期末后固定天数 (演示数据到 2026-07-31), 闸门与报告页显示覆盖截止日, 截止日到签字日之间由管理层书面声明覆盖 (推荐)",
+     "pros": "实现简单, 数据静态可测; 截止日写在材料里, 审计师看得到空档",
+     "cons": "签字日 (演示时为当天) 晚于截止日, 中间一段依赖书面声明程序 (第 3 级另一组) 补上, ASA 560 第 7 段要求的 \"尽可能接近报告日\" 只部分满足"
+    },
+    {
+     "label": "签字前强制重跑一次期后检查到签字当天",
+     "pros": "最符合 ASA 560 第 7 段",
+     "cons": "要新增报告阶段回到检查程序的路径; 演示数据也得覆盖到签字日, 数据每次演示都要变"
+    },
+    {
+     "label": "签字日晚于截止日就拒绝签字",
+     "pros": "规则严格, 不会漏",
+     "cons": "演示时签字日是当天, 一定会被拦; 实际使用要不停补数据"
+    }
+   ],
+   "recommendation": "固定天数加显示覆盖截止日, 等书面声明程序实现后在签字前清单里加一项检查.",
+   "affects": [
+    "GC-03",
+    "GC-08",
+    "GC-09",
+    "GC-13"
+   ]
+  },
+  {
+   "question": "期后发现客户进入破产管理 (调整事项) 后, 这笔应收减值要不要作为错报进未更正错报汇总表?",
+   "options": [
+    {
+     "label": "按全额 AUD 33,680 认定为错报, 进汇总表, 报告基础段一并描述 (推荐)",
+     "pros": "完整走通 \"发现期后事项 → AI 判为调整事项 → 审计师确认错报 → 汇总 → 报告\" 的链条, 演示说服力最强; 仍是保留意见",
+     "cons": "演示的错报合计由 142,000 变为 175,680; 两份报告 fixture, 合成数据集第 7 节与端到端断言要改"
+    },
+    {
+     "label": "设成低于明显微小门槛的金额 (如 5,052), 记为错报但不累计",
+     "pros": "顺带演示明显微小门槛 (ASA 450 第 5 段), 汇总表与报告都不变",
+     "cons": "金额设计牵强 (要编出管理人预估 85% 回收), 报告里看不到这件事"
+    },
+    {
+     "label": "假设管理层已在年末入账, 只核对无误",
+     "pros": "汇总表不变",
+     "cons": "要改试算表, 重要性候选, 分析结果与多份现有 fixture 都会连带变化"
+    }
+   ],
+   "recommendation": "按全额认定为错报. 保留意见不变, 改动集中在演示验收一条需求里.",
+   "affects": [
+    "GC-05",
+    "GC-12",
+    "GC-13"
+   ]
+  },
+  {
+   "question": "错报评价与持续经营结论是放在同一道闸门分两步, 还是另设一道闸门?",
+   "options": [
+    {
+     "label": "同一道闸门分两步, 先定持续经营结论, 再定错报与意见类型 (推荐)",
+     "pros": "与规格书 18.4 节 \"同一闸门两条决定都通过才放行\" 一致; 定意见类型时已知持续经营结论, 可做一致性校验",
+     "cons": "一个闸门节点对应两种决定, 判断当前步骤要看状态, 查询, 提交与恢复三处都要改"
+    },
+    {
+     "label": "另设一道持续经营闸门, 放在错报闸门之前",
+     "pros": "每道闸门一种决定, 代码对称, 现有错报闸门逻辑不动",
+     "cons": "与规格书不一致; 多一个静态中断点与驳回出口, 前端多一页"
+    },
+    {
+     "label": "把持续经营结论作为错报闸门决定的附加字段",
+     "pros": "改动最小",
+     "cons": "违背规格书 \"各一条决定\"; 持续经营无法单独驳回或重呈, 留痕混在一起"
+    }
+   ],
+   "recommendation": "同一道闸门分两步, 先持续经营后意见类型.",
+   "affects": [
+    "GC-09",
+    "GC-10"
+   ]
+  },
+  {
+   "question": "持续经营结论闸门前, 要不要先让 AI 写一份结论建议?",
+   "options": [
+    {
+     "label": "要: AI 汇总持续经营评价与期后事项判断, 写出结论建议与推理链, 审计师在闸门选定结论 (推荐)",
+     "pros": "符合规格书该程序为大模型程序 (7.2 节) 的设计; 演示 AI 在法定判断前提供综合意见而只有建议权",
+     "cons": "多一次模型调用, 一个新输出模型与校验, 一份 fixture; 模型失败时要重跑才能到闸门"
+    },
+    {
+     "label": "不要: 闸门材料只列已确认的持续经营评价与期后事项判断, 审计师直接选结论",
+     "pros": "少一条需求, 不会因模型失败卡住闸门",
+     "cons": "持续经营评价在执行阶段做, 看不到期后事项; 闸门前没有把两者合起来的意见"
+    }
+   ],
+   "recommendation": "要. 这是本组最能体现 AI 辅助决策的一处, 失败时沿用现有的失败任务与重跑.",
+   "affects": [
+    "GC-07",
+    "GC-08",
+    "GC-09"
+   ]
+  },
+  {
+   "question": "持续经营结论本版支持哪几种结果?",
+   "options": [
+    {
+     "label": "支持 \"无重大不确定性\", \"有重大不确定性且披露充分 (报告加专段)\", \"有重大不确定性但披露不充分 (只能出保留意见)\"; \"持续经营假设不恰当\" 本版拒绝并提示 (推荐)",
+     "pros": "覆盖常见结果; 不引入否定意见的报告模板与意见类型",
+     "cons": "持续经营假设不恰当的极端情形需在系统外处理"
+    },
+    {
+     "label": "四种全支持, 同时加否定意见的意见类型与报告模板",
+     "pros": "完整符合 ASA 570 第 21 至 23 段",
+     "cons": "意见类型闸门, 报告固定段落, 报告校验都要扩展, 另需否定意见的报告 fixture, 约多 1 条中等需求"
+    },
+    {
+     "label": "只支持 \"无重大不确定性\"",
+     "pros": "改动最少",
+     "cons": "遇到有疑虑的客户系统无法表达结论, 不满足真实可用"
+    }
+   ],
+   "recommendation": "支持前三种, 不恰当时拒绝并提示; 否定意见等意见类型扩展时一并加.",
+   "affects": [
+    "GC-07",
+    "GC-10",
+    "GC-11"
+   ]
+  }
+ ],
+ "risks": [
+  "既有测试大面积变动: GC-10 之后所有走到 gate_fin 的测试 (test_flow, test_graph, test_decisions, test_query, test_recovery, test_e2e_mock, test_e2e_restart) 都要先交 FIN-02 决定; GC-12 打开固定集后所有走 P2 的流程测试都会执行三条新程序, 需同步脚本 Agent 与 FakeRuleEngine 预置. 为此 GC-03, GC-04, GC-06 的 YAML 先以 fixed false 落地, 只经直接调用测试, 到 GC-12 统一打开.",
+  "与其他组冲突: 程序总数断言 (test_knowledge 17) 各组都会改; GateDecision.disposition 按闸门限定的改法与 ACC-08, PLN-15 等新闸门组共用, 须先约定一处实现; P2 固定集字段可能与全量分录扫描组重复; 期后数据中的 7 月分录会被全量分录扫描读到, 该组须按期间过滤; 判断独立复核 (A7) 实现后会复核本组自动关闭的股利判断, 动态降级实现后可能改变自主度, 二者都会改变本组 GC-13 的 llm_call 与任务数, 端到端数字需在各组合入后统一核对.",
+  "数据再生成风险: B 扩展 7 月流水若改变了现有随机抽取, 填充发票的客户分配会变, fixture 中的 SI-2026-0559, SI-2026-0613 将失效; data_needs 已要求新增行用独立随机流, 现有行逐字节不变.",
+  "期后事项覆盖截止日 (2026-07-31) 早于签字日, 空档依赖书面声明程序 (FIN-07, 第 3 级另一组); 在其实现前, 闸门材料与报告页只能提示该空档, ASA 560 第 7, 9 段只部分满足.",
+  "本版不建规格书 12.2 的 SubsequentEvent 对象与 18.3 的 subsequent_events 状态字段: 期后监控按规则程序惯例产出例外, 分类 (调整/非调整) 写在判断结论里; 以后若需结构化分类与披露追踪, 要补对象与 B 的表.",
+  "GEN-06 的 E01 规则按分录说明中的客户名匹配期末未收发票, 对真实数据较脆弱 (名称写法不一); 真实使用需改为按客户编号或经登记查询 (外部 API) 识别客户破产.",
+  "GEN-04 没有管理层的持续经营评估, 现金流预测与询问记录 (管理层询问程序未实现), ASA 570 第 10, 16 段只能以 limitation 步骤记录; 如客户存在疑虑事项, 缓解计划评价 (GEN-18) 与披露充分性 (FIN-17) 均未实现.",
+  "FIN-02 的模型调用失败时只能重跑, 闸门在材料生成前无法到达; 若线上模型反复失败会卡住完成阶段 (可后续增加不带 AI 建议的人工材料退路).",
+  "规格书第 11 节环 3 的 \"重大期后事项阻断\" 与风险重评本版不做, 期后发现重大事项不会自动回到计划阶段.",
+  "准则逐字比对: ASA560-P06, ASA570-P16, AASB110-P09 跨页夹脚注或页脚, ASA570-Aus13.2 段号非整数, 需扩展测试过滤规则; 段落号已用 pdftotext 核对, 逐字文本以实现时 pdfplumber 抽取为准 (GC-02 已标待核)."
+ ]
+}

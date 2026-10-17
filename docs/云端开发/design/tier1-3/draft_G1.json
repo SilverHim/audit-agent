@@ -1,0 +1,828 @@
+{
+ "group": "智能体协作 (GEN-09 判断独立复核, GEN-10 进度与来源解释, GEN-11 判断呈递与决定收集)",
+ "requirements": [
+  {
+   "key": "AC-1",
+   "title": "契约: 独立复核意见与争议裁决的领域对象",
+   "procedures": [
+    "GEN-09"
+   ],
+   "goal": "在 contracts/ 加 A7 复核意见, dispute 任务与仲裁决定所需的类型与字段, 旧数据照样可读, 同一次提交同步接口文档. 只做类型, 行为在 AC-3 起实现.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/llm_outputs.py",
+    "src/backend/contracts/knowledge.py",
+    "src/backend/contracts/services.py",
+    "src/backend/services/procedure_library.py (match, closure 跳过 on_demand)",
+    "src/backend/orchestration/runner.py (fixed_procedures 跳过 on_demand)",
+    "src/backend/knowledge/rules.json",
+    "docs/开发接口文档.md 第 2.1, 2.2, 2.5, 5, 8.1, 8.2 节",
+    "tests/test_contracts.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "规格书 12.2 Judgment 的 criticVerdict, criticReasonType, criticReason, criticConclusion, criticReasoningChain (1648-1656 行)",
+    "规格书 12.2 ReviewTask.kind, ReviewRecord.decision, disputeResolution, neitherAction, consulted (1665-1690 行)",
+    "规格书 6.3 GEN-09 output_schema (1013-1018 行)",
+    "规格书 8.4 c_critic 权重 0.2 (1218 行), 6.3 GEN-09 抽样 5% (1008 行)",
+    "规格书 UC-04 任务类型 x 决定矩阵 (2106-2115 行)",
+    "开发接口文档第 2.2, 2.5, 5 节; contracts/models.py:157-187 (TaskKind, Decision 现状), :373-393 (Judgment), :586-598 (ReviewRecord)"
+   ],
+   "prerequisites": [
+    "R33"
+   ],
+   "external_deps": [
+    "C: api/schemas.py 的 ReviewRecordIn 在 AC-5 前补 dispute_resolution, neither_action, consulted, consultation_record 四个字段 (透传); A 的测试直接构造 ReviewRecord",
+    "B: 无改动. 审计产出按 JSON 存 (persistence/models.py:101-118), audit_trail.kind 为字符串列 (:120-124)"
+   ],
+   "acceptance": [
+    "1. 新枚举: CriticVerdict {consistent, inconsistent, not_applicable, skipped}; CriticReasonType {insufficient_evidence, different_conclusion, reasoning_error}; DisputeResolution {a6_upheld, a7_upheld, neither}; NeitherAction {human_conclusion, more_procedures}; TaskKind 加 dispute; Decision 加 dispute_resolution.",
+    "2. Judgment 加 critic_verdict (缺省 skipped), critic_reason_type, critic_reason, critic_conclusion, critic_proposed_action, critic_misstatement_draft (缺省 None), critic_reasoning_chain, critic_evidence, critic_trail_ids (缺省 []); 现有 Numbat 判断的旧 JSON (如 J-REV-03-1-CON-001 v1, 无这些键) model_validate 成功, critic_verdict 为 skipped.",
+    "3. ReviewRecord 加 dispute_resolution, neither_action (缺省 None), consulted (缺省 False), consultation_record (缺省 None); 旧决定 JSON (如 D-REV03-1) 可读.",
+    "4. llm_outputs 加 CriticIndependent {conclusion, reasoning_chain, evidence, proposed_action, misstatement_draft} 与 CriticComparison {verdict: consistent 或 inconsistent, reason_type: CriticReasonType 或 null, reason}; 两者 model_json_schema() 可生成.",
+    "5. ProcedureTemplate 加 on_demand: bool = False (为真时不实例化为 Procedure, 不参与装配与调度), phase 改为可空且仅 on_demand 可为空; LLMSpec 加 followup: LLMSpec | None (第二轮的提示词与输出模型). 临时 on_demand 模板不出现在 runner.fixed_procedures, ProcedureLibrary.match 与 closure 的结果中.",
+    "6. rules.json 的 confidence_weights 加 critic 0.2, 另加 critic_sample_rate 0.05; Numbat 现有判断置信度不变 (本组探查实测: J-REV-03-1-CON-001 0.84, J-REV-03-1-CON-003 0.82, J-REV-02-1-SI-2026-0612 0.875, J-CSH-02-1-BA-01 0.5625), 因 critic 分项只在复核一致时加入.",
+    "7. 新类型都在 contracts/models.py 或 contracts/services.py, 检查点序列化自动放行 (orchestration/checkpoint.py:21-35): 含 dispute 任务的状态存回读出后 task.kind is TaskKind.dispute 成立.",
+    "8. 接口文档第 2.1, 2.2, 2.5, 5, 8.1, 8.2 节同步; AgentId.A7 注释去掉 \"本版不实现\" (models.py:295)."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-2",
+   "title": "GEN-09 程序文件, 两轮提示词, 准则片段与 Numbat fixture",
+   "procedures": [
+    "GEN-09"
+   ],
+   "goal": "写 GEN-09.yaml (on_demand), 第一轮 (独立判断) 与第二轮 (比对) 提示词, ASA 220 两个片段, 以及 A7 对 J-CSH-02-1-BA-01 的两份 fixture (判不一致: 客户 EFT 不是在途存款). 演示对象视待定问题 1 而定.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-09.yaml",
+    "src/backend/knowledge/prompts/GEN-09-independent.md.j2",
+    "src/backend/knowledge/prompts/GEN-09-compare.md.j2",
+    "src/backend/knowledge/standards/ASA220.yaml",
+    "tests/fixtures/llm/GEN-09/J-CSH-02-1-BA-01-independent.json",
+    "tests/fixtures/llm/GEN-09/J-CSH-02-1-BA-01-compare.json",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "规格书 6.3 GEN-09 (996-1018 行): owner A7, engine llm, L4, inputs [evidence_pointers, conclusion], 两轮, 第一轮不给结论",
+    "规格书 5.5 A7 的同源偏差处理 (663 行): 不拿推理链, 先独立后比对",
+    "规格书 11 节争议项出口 (1469 行), 12.5 协作图场景 CSH-02 默认 L3 经 A7 复核 (1551 行)",
+    "ASA 220 para 37, 38 (docs/参考资料/01_审计准则_ASA/ASA_220.pdf, Compilation No. 1, 14 December 2023, 已用 pdftotext 核对原文)",
+    "合成数据集设计第 5.4 节, 第 7 节第 13 行; data/demo/journal_entries.csv 第 1354 行 (CR-SI-2026-0547-1, 2026-06-30, description 含 remittance advice 30 June 2026), bank_transactions.csv 第 680 行 (BT-01-20260702-01, 2026-07-02, 5000000)"
+   ],
+   "prerequisites": [
+    "AC-1",
+    "R39",
+    "R54"
+   ],
+   "external_deps": [
+    "B: data/generate_demo.py 按目录复制 tests/fixtures/llm 到 data/demo/llm (generate_demo.py:483-493). A 加 fixture 后重新运行生成器, 更新 data/demo/llm 与 manifest.json, 交 B 确认后提交 (data/ 属 B); 两处一致由 test_knowledge.py:502-514 守住",
+    "待定问题 1 选期后事项那条时, 本条 fixture 改为对该判断, 依赖期后事项研判组的数据与 fixture"
+   ],
+   "acceptance": [
+    "1. GEN-09.yaml: owner A7, engine llm, autonomy_level L4, on_demand true, cycle Pervasive, phase 空, triggers [], standards [ASA220-P37, ASA220-P38], llm {prompt GEN-09-independent.md.j2, output_model CriticIndependent, followup {prompt GEN-09-compare.md.j2, output_model CriticComparison}}; Numbat 的 assemble_pack 结果与 fixed_procedures 都不含 GEN-09, test_knowledge.py:211-226 的装配集与分层不变, :37 的程序总数 +1.",
+    "2. ASA220-P37, ASA220-P38 的 text 与 PDF 原文逐字一致 (test_knowledge.py:112 的对照测试覆盖), compiled 写 14 December 2023.",
+    "3. 第一轮模板头注释列变量: procedure (被复核程序的 id, name, assertions), task (参数快照), subject_id, evidence (每个输入指针及其解析内容), standards (被复核程序的片段); 模板里没有 conclusion, reasoning_chain, counter_argument, proposed_action 变量. 第二轮另有 a6 {conclusion, proposed_action, misstatement_draft} 与 independent (第一轮输出), 仍不给 A6 推理链.",
+    "4. J-CSH-02-1-BA-01-independent.json: proposed_action misstatement, misstatement_draft {factual, Cash, Cutoff, 5000000, overstated}; 结论写明银行 2 July 2026 才入账 BT-01-20260702-01, 账上 30 June 2026 已按汇款通知记 CR-SI-2026-0547-1, 客户 EFT 不是本单位送存的在途存款, 30 June 现金高估且应收少计 AUD 50,000.00; fact 步骤只引用 J-CSH-02-1-BA-01 的 6 个指针 (DOC-ca18bcc6fa2d 第 1 页 confirmed_balance_cents 与 balance_date, trial_balance 1010, journal_entry CR-SI-2026-0547-1, bank_transaction BT-01-20260702-01, ASA505-P14).",
+    "5. J-CSH-02-1-BA-01-compare.json: verdict inconsistent, reason_type different_conclusion, reason 指出 A6 把客户 EFT 当作在途存款.",
+    "6. test_knowledge 的 fixture 校验按文件名后缀取输出模型 (-independent 为 CriticIndependent, -compare 为 CriticComparison), 两份都通过结构校验; tests/fixtures/llm 与 data/demo/llm 一致."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-3",
+   "title": "判断引擎: A7 两轮调用, 证据包与输出校验",
+   "procedures": [
+    "GEN-09"
+   ],
+   "goal": "JudgmentEngine 新增 critique: 按被复核判断的证据指针组装证据包, 第一轮独立得结论, 第二轮与 A6 结论比对; 两种输出各走四级校验; A7 用独立的 LLM 客户端实例; 留痕记 actor A7, 程序 GEN-09.",
+   "scope_files": [
+    "src/backend/services/judgment_engine.py (critique, call_llm 支持 procedure_id 与 followup, OutputValidator 两个新分支)",
+    "src/backend/contracts/services.py (CriticOutcome; ValidationContext.allowed_pointers)",
+    "src/backend/agents/base.py (AgentDeps.critic_judgments)",
+    "src/backend/adapters/llm.py (llm_version 加 critic_model)",
+    "src/backend/main.py (build_deps 中 critic 引擎的构造行, 按 Q16)",
+    "tests/fakes.py (make_deps)",
+    "tests/test_critique.py"
+   ],
+   "basis": [
+    "规格书 6.3 GEN-09 inputs 与 output_schema (1012-1018 行)",
+    "规格书 5.5 A7 用不同模型或至少不同系统提示词, version_snapshot 记 critic_model_version (663 行)",
+    "规格书 8.6 校验, 抽取, 报告起草与 A7 复核各有输出模型 (1275-1277 行)",
+    "规格书 18.5 A7 用独立客户端 (2848 行)",
+    "开发接口文档第 5 节 call_llm 与 llm_call 留痕; services/judgment_engine.py:308-319 (validate 现只认四种模型), :477-516 (call_llm), :232-285 (PointerResolver)"
+   ],
+   "prerequisites": [
+    "AC-1",
+    "AC-2",
+    "R33",
+    "R34",
+    "R58"
+   ],
+   "external_deps": [
+    "C: core/config.py 加 LLM_CRITIC_MODEL (缺省空, 空时同 LLM_MODEL) 并写进接口文档第 11 节; A 先用 getattr 缺省 (同 adapters/llm.py:254 的 LLM_BASE_URL 先例)",
+    "main.py 的 critic 引擎构造行由 A 按 Q16 改"
+   ],
+   "acceptance": [
+    "1. critique(eid, 被复核模板, 被复核 Run, judgment, GEN-09 模板) 返回 CriticOutcome {independent, comparison, failure, trail_ids}; 对 J-CSH-02-1-BA-01 (mock 读 AC-2 的 fixture): 2 行 llm_call, actor A7, procedure_id GEN-09, run_id RUN-CSH-02-1, fixture_key 依次为 J-CSH-02-1-BA-01-independent 与 J-CSH-02-1-BA-01-compare, 各 attempt 1, level_failed 为空.",
+    "2. 证据包: 每个输入指针附解析内容 (行取 PointerResolver.lookup, 文件取 EvidenceStore.pages 对应页, 准则取片段原文). 第一轮渲染出的提示词含 BT-01-20260702-01 与 \"remittance advice 30 June 2026\", 不含 A6 结论原文 \"deposit in transit\" 与反方论证原文; 第二轮含 A6 结论原文与 close.",
+    "3. 第一轮引用级: 指针须在输入指针集合中 (按 source_type, source_id, locator) 且能解析; 引用 journal_entry SJ-2026-0547-1 时 reference 失败, 不重试, 不调第二轮, failure 为 independent:reference, 1 行留痕. 语义级沿用 judgment_semantics, 错报金额按 Q12 口径须对上引用行 (CR-SI-2026-0547-1 的 5000000).",
+    "4. 第二轮语义级: inconsistent 须带 reason_type, consistent 时 reason_type 须为空, reason 非空; 不符时 failure 为 compare:semantic.",
+    "5. 第一轮连续 3 次语法失败: 3 行留痕, failure 为 independent:syntax, comparison 为空.",
+    "6. critic 引擎走 AgentDeps.critic_judgments (单独的 LLMClient 实例): 测试给 A6 与 A7 各一个 ScriptedLLM, A6 的那个收不到 GEN-09 请求; mock 模式下 version_snapshot 增加 critic_model mock."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AC-4",
+   "title": "A7 ReviewAgent, GEN-09 触发规则与 A6 接入",
+   "procedures": [
+    "GEN-09"
+   ],
+   "goal": "新 Agent A7: A6 每生成一条 LLM 类判断即按触发规则判定要不要复核, 命中则同步调用 A7 写入复核字段并重算置信度; ReviewQueue.classify 据复核结果建 dispute 任务或保持原规则; 复核失败时不允许自动关闭.",
+   "scope_files": [
+    "src/backend/agents/review.py (新)",
+    "src/backend/agents/registry.py",
+    "src/backend/agents/fieldwork.py (judge_all, judgments_patch)",
+    "src/backend/services/review_queue.py (critic_due, classify)",
+    "docs/开发接口文档.md 第 5 节需要人表, 第 6 节 Agent 表",
+    "tests/test_review_agent.py",
+    "tests/test_fieldwork_judging.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "规格书 5.3 Agent 间通信, A7 是唯一由 A6 同步调用的受控子图 (618 行)",
+    "规格书 6.3 GEN-09 trigger 与 skip (1003-1011 行), 主规则读 Procedure 的装配后级别 (993 行)",
+    "规格书 7.4 A7 判 inconsistent 直接进人工队列 (1109 行), 先于判断级降级运行 (1116 行)",
+    "规格书 8.4 c_critic 仅 A7 实际复核过的 L3, L4 判断, inconsistent 不计分 (1218-1220 行)",
+    "规格书 10 节 P2 自动处置 (1393-1395 行), 18.4 fieldwork 伪码 (2734-2758 行)",
+    "开发接口文档第 5 节需要人表; agents/fieldwork.py:139-169, :389-427; services/review_queue.py:70-85"
+   ],
+   "prerequisites": [
+    "AC-3",
+    "R41",
+    "R48"
+   ],
+   "external_deps": [
+    "无. FakeFinancialStore 与 FakeEvidenceStore 已预置 BA-01 数据 (tests/fakes.py)",
+    "动态降级组改写 Procedure.autonomy_level 后, 本条触发规则直接读到装配后级别, 不需另改"
+   ],
+   "acceptance": [
+    "1. ReviewQueue.critic_due(procedure, template, judgment, eid) 为纯函数: 规则程序 False; Procedure.autonomy_level 为 L1, L2 时 False (skip 优先); L3, L4 时命中任一即 True: proposed_action 为 accept 或 close; 非准则指针的 reliability 全为 internal_copy; 推理链有 assumption 步骤或 unsupported 步骤; 抽样 int(sha256(f\"{eid}:{judgment.id}\") 前 8 位十六进制, 16) / 2^32 < critic_sample_rate. 读 Procedure 的级别: Procedure L3, 模板 L2 时命中.",
+    "2. make_ctx 构造 CSH-02 (Procedure autonomy_level L3), 真实 JudgmentEngine 与 mock fixture: J-CSH-02-1-BA-01 v1 的 critic_verdict inconsistent, critic_reason_type different_conclusion, critic_conclusion 与 critic_proposed_action misstatement 取自 AC-2 fixture, critic_trail_ids 2 个; confidence 仍为 0.5625, confidence_parts 无 critic; review_status pending.",
+    "3. 同上建 T-J-CSH-02-1-BA-01-v1, kind dispute, target Judgment v1; X-CSH-05-1-B01-1 v1 与本次的 X-CSH-02-1-D01-1 v1 保持 open; CSH-02 本次 llm_call 共 3 行 (A6 1, A7 2).",
+    "4. 第二轮改为 consistent (ScriptedLLM): critic_verdict consistent, confidence_parts 加 critic 1.0, confidence 0.65 ((0.3x0.9 + 0.3x0 + 0.2x0.9 + 0.2x1) / 1.0); 任务 normal (模板 always_review).",
+    "5. REV-03 (Procedure L2): critic_verdict skipped, 不调 A7, GEN-09 留痕 0 行. REV-03 的 Procedure 改为 L3 且第二轮 consistent: J-REV-03-1-CON-001 v1 即 confirmed, 不建任务; 第二轮 inconsistent: 建 dispute 任务 T-J-REV-03-1-CON-001-v1.",
+    "6. A7 失败 (如第一轮引用失败): critic_verdict not_applicable, critic_reason 写失败级别; 即使 L3, accept 且模板 always_review 为假, 也建 normal 任务, 不自动关闭.",
+    "7. 规则程序 (REV-08, CSH-05) 与判断失败的对象 (unattributed, failed) 不调 A7; 重放 (Store 已有终态, nodes.py:139-203) 不调 A7, 留痕行数不变.",
+    "8. ReviewAgent: agent_id A7, procedures {GEN-09}, 列入 AGENT_CLASSES (缺 GEN-09.yaml 时 build_agents 抛 LookupError); execute 与 interpret 不由节点调用, 直接调用时报错; A6 持有一个 ReviewAgent 实例同步调用, 不经 EngagementState, 不进 merge.AGENT_FIELDS (A7 的结果随 A6 的判断一起交回).",
+    "9. override 与 manual_result 建的人工判断 (-H{n}) critic_verdict 为 not_applicable."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AC-5",
+   "title": "dispute 任务的仲裁决定",
+   "procedures": [
+    "GEN-09",
+    "GEN-11"
+   ],
+   "goal": "dispute 任务只接受 dispute_resolution: 采纳 A6 (a6_upheld), 采纳 A7 (a7_upheld), 都不采纳 (neither, 本版只能由人给结论); 写入效果, 决定留痕与恢复补做.",
+   "scope_files": [
+    "src/backend/services/review_queue.py (allowed)",
+    "src/backend/orchestration/decisions.py (REVIEW_REQUIRED, REVIEW_ALLOWED, check_review_fields, dispute_effects, review_effects, review_trail)",
+    "docs/开发接口文档.md 第 5 节 allowed, 第 7 节校验表与效果表",
+    "tests/test_review_decisions.py",
+    "tests/test_recovery.py"
+   ],
+   "basis": [
+    "规格书 11 节争议项出口: 人仲裁而非确认, 三值之一并附理由, neither 二选一, 咨询记 consulted (1469 行)",
+    "规格书 10 节裁决争议 (1407 行), UC-04 矩阵 dispute 行 (2109 行) 与出口 (2117 行), 9.5 争议项不开 blind, 理由逐字写入 (1327 行)",
+    "ASA 220 para 37, 38 与 ASQM 1 para 31(d)(e) (docs/参考资料 原文已用 pdftotext 核对: 意见分歧按事务所政策解决, 解决前不签报告)",
+    "开发接口文档第 7 节; orchestration/decisions.py:322-351, :488-509"
+   ],
+   "prerequisites": [
+    "AC-1",
+    "AC-4",
+    "R17",
+    "R18",
+    "R19",
+    "R20",
+    "R31"
+   ],
+   "external_deps": [
+    "C: POST /engagements/{eid}/review-records 透传 dispute_resolution, neither_action, consulted, consultation_record (api/schemas.py:76-86), 前端裁决表单 (三选一, neither 时出结论框, 咨询勾选与记录); A 先直接调 GraphDecisionSubmit.submit"
+   ],
+   "acceptance": [
+    "1. allowed(dispute 任务) = {dispute_resolution}; 对 T-J-CSH-02-1-BA-01-v1 提交 confirm, override 或 misstatement 均报 DECISION_NOT_ALLOWED, 不写 Store.",
+    "2. 字段: dispute_resolution 必填 reason 与 dispute_resolution; neither 必填 neither_action; human_conclusion 必填 override_conclusion; neither_action 为 more_procedures 报 INVALID_VALUE (本版不做追加程序); consulted 为真时 consultation_record 必填; 其他决定填这些字段报 FIELD_NOT_ALLOWED.",
+    "3. a6_upheld (D-CSH02, reason 引 CR-SI-2026-0547 记的 30 June 2026 汇款通知): J-CSH-02-1-BA-01 v2 confirmed (复核字段原样保留), X-CSH-05-1-B01-1 v2 与 X-CSH-02-1-D01-1 v2 attributed (attributed_by J-CSH-02-1-BA-01), 任务 v2 decided, CSH-02 出新版本 completed (AC-6 前为 completed, 有 AC-6 时由 in_dispute 转 completed); decision 留痕 1 行, payload 含 dispute_resolution a6_upheld 与 consulted.",
+    "4. a7_upheld: 建 J-CSH-02-1-BA-01-H1 confirmed, conclusion, reasoning_chain, evidence, proposed_action 取原判断的 critic_* 字段, exception_ids 同原判断 (两条例外 attributed_by -H1), autonomy_level L1, performed_by 复核人, critic_verdict not_applicable; 原判断 v2 overridden, superseded_by -H1. 按待定问题 2 推荐口径: 记录带 misstatement_draft (前端缺省填 critic_misstatement_draft {factual, Cash, Cutoff, 5000000, overstated}) 时另建 M-{记录 ID}, judgment_id J-CSH-02-1-BA-01-H1, review_record_id 为该记录; critic_proposed_action 为 misstatement 却没带时报 MISSING_FIELD.",
+    "5. neither + human_conclusion: 同 override_effects (decisions.py:427-468) 建 -H1, 结论取 override_conclusion, 证据继承原判断, 原判断 overridden.",
+    "6. 决定写 Store 后检查点未写即中断: recover 后由 await_events 读回, 结果同第 3 条, decision 留痕不重复 (沿用 R31 的补做)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AC-6",
+   "title": "程序状态 \"争议中\" (视待定问题 3)",
+   "procedures": [
+    "GEN-09"
+   ],
+   "goal": "有待决 dispute 任务的程序为 in_dispute; fan_in, 决定后重算, 调度与 transition 留痕都认这个状态; 争议未裁决不进 completion.",
+   "scope_files": [
+    "src/backend/contracts/models.py (ProcedureStatus.in_dispute)",
+    "src/backend/orchestration/nodes.py (fan_in :657-663)",
+    "src/backend/orchestration/decisions.py (recompute_procedure :512-524)",
+    "src/backend/orchestration/graph.py (after_fan_in :174-199, ScheduleStuck)",
+    "docs/开发接口文档.md 第 2.1, 3, 7 节",
+    "tests/test_fan_in.py",
+    "tests/test_review_decisions.py",
+    "tests/test_graph.py"
+   ],
+   "basis": [
+    "规格书 12.2 Procedure.status 十值含 in_dispute (1752 行)",
+    "规格书 12.3 in_dispute 只接受仲裁 (1988 行), 带未裁决争议项的程序不进已处置态 (2033 行)",
+    "规格书 10 节 fan-in 重算: 争议项转 in_dispute (1395 行)",
+    "ASA 220 para 38(c): 意见分歧解决前不签报告"
+   ],
+   "prerequisites": [
+    "AC-5",
+    "R13",
+    "R15",
+    "R16",
+    "R28"
+   ],
+   "external_deps": [
+    "C: 前端总览与程序详情的状态标签加 in_dispute"
+   ],
+   "acceptance": [
+    "1. fan_in: 程序有待决 dispute 任务时新版本为 in_dispute (优先于 awaiting_human), 否则规则不变; Numbat 第 2 层汇合后 CSH-02 为 in_dispute, transition 留痕一行 \"CSH-02 planned → in_dispute\".",
+    "2. recompute_procedure: 仍有待决 dispute 任务为 in_dispute; D-CSH02 (a6_upheld) 后为 completed, transition 留痕 \"CSH-02 in_dispute → completed\"; Numbat 全流程 transition 行数与 R55 相同.",
+    "3. after_fan_in: 有待决任务时 in_dispute 程序走 await_events; in_dispute 不算 completed, 以它为前置的程序不派发 (scheduler.ready_procedures); in_dispute 却没有待决任务时抛 ScheduleStuck, 消息含程序 ID.",
+    "4. GraphStateQuery.overview 的 ProcedureSummary.status 为 in_dispute, pending_tasks 计入 dispute 任务."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AC-7",
+   "title": "复核任务分档, 排序与队列概览 (GEN-11)",
+   "procedures": [
+    "GEN-11"
+   ],
+   "goal": "建任务时按规格 9.1 写档位; ReviewQueue 给出队列顺序 (争议单列在前, 不按置信度排) 与队列概览, 供 A10 呈递与 C 的队列视图使用.",
+   "scope_files": [
+    "src/backend/contracts/models.py (ReviewTask.tier)",
+    "src/backend/contracts/views.py (QueueBriefing)",
+    "src/backend/services/review_queue.py (tier, order, briefing)",
+    "src/backend/agents/fieldwork.py (建任务时带档位)",
+    "src/backend/orchestration/nodes.py (fail_run 建的 failed 任务)",
+    "docs/开发接口文档.md 第 2.5, 5 节",
+    "tests/test_review_queue.py"
+   ],
+   "basis": [
+    "规格书 9.1 分层复核表 (1287-1297 行)",
+    "规格书 5.4 ReviewQueue: 按风险与置信度排序, 争议单列仲裁 (625 行)",
+    "规格书 12.2 ReviewTask.tier (1670 行), UC-04 第 1 步按 9.1 分层给出概览 (2102 行)"
+   ],
+   "prerequisites": [
+    "AC-1",
+    "AC-4",
+    "R41"
+   ],
+   "external_deps": [
+    "C: GET /engagements/{eid}/review-tasks 按 ReviewQueue.order 排序, ReviewTaskView 带 tier, 前端分档显示与争议单列; A 先测服务"
+   ],
+   "acceptance": [
+    "1. 档位 (金额取错报草稿金额, 否则判断解释的例外金额绝对值最大者, 否则 0; 阈值取状态中的执行重要性与明显微小门槛): 5 为 dispute 任务; 4 为金额 > 执行重要性; 3 为置信度 < 0.7, 或 unattributed, failed 任务; 2 为置信度 0.7 至 0.9, 或金额 > 明显微小门槛; 1 为置信度 > 0.9 且金额 ≤ 明显微小门槛.",
+    "2. Numbat (执行重要性 9000000, 明显微小门槛 600000): T-J-REV-03-1-CON-001-v1, T-J-REV-03-1-CON-002-v1, T-J-REV-03-1-CON-003-v1 为 2 (置信度 0.84, 0.84, 0.82); T-J-REV-02-1-SI-2026-0612-v1 为 4 (14200000); T-J-REV-02-1-SI-2026-0618-v1 为 2 (0.875); T-J-CSH-02-1-BA-01-v1 为 5 (dispute; 无 A7 时为 3, 置信度 0.5625, 金额 5000000).",
+    "3. order: dispute 任务在前 (按 created_at, 不按置信度), 其余按档位降序, 置信度升序, 任务 ID; Numbat 第一次等复核时为 [T-J-CSH-02-1-BA-01-v1, T-J-REV-03-1-CON-003-v1, T-J-REV-03-1-CON-001-v1, T-J-REV-03-1-CON-002-v1].",
+    "4. briefing(eid) 返回 QueueBriefing: 位置 (闸门编号或等复核), 各档待决数, 争议数, 有序任务 ID, 复核过快提示 (AC-9); 纯计算, 不调 LLM, 不写 Store.",
+    "5. 旧任务 JSON 无 tier 时可读 (None), 排在同类最后."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-8",
+   "title": "A10 判断呈递 (GEN-11)",
+   "procedures": [
+    "GEN-11"
+   ],
+   "goal": "A10 呈递一个复核任务: 按任务类型给结构化卡片, 加一段 LLM 白话讲解; 讲解只引用卡片里的证据, 不推荐决定; 每次呈递写一行对话留痕; 讲解按任务与目标版本缓存; 讲解失败时卡片照给 (表单兜底).",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-11.yaml (owner A10, llm, L4, on_demand)",
+    "src/backend/knowledge/prompts/GEN-11.md.j2",
+    "src/backend/contracts/llm_outputs.py (TaskNarrative)",
+    "src/backend/contracts/views.py (TaskPresentation)",
+    "src/backend/contracts/models.py (TrailKind.conversation)",
+    "src/backend/contracts/ports.py (LLMRequest.run_id 可空)",
+    "src/backend/services/judgment_engine.py (call_llm 可写 conversation 留痕; TaskNarrative 校验; 公用的文中金额抽取)",
+    "src/backend/agents/concierge.py (present)",
+    "src/backend/orchestration/conversation.py (新, GraphConversation.present)",
+    "tests/fixtures/llm/GEN-11/T-J-CSH-02-1-BA-01-v1.json",
+    "tests/fixtures/llm/GEN-11/T-J-REV-02-1-SI-2026-0612-v1.json",
+    "tests/test_presentation.py"
+   ],
+   "basis": [
+    "规格书 UC-04 第 2 步: Judgment 类给推理链, 证据指针, 反论, A7 结论; 无归因类给规则结果, 失败类给失败原因 (2103 行)",
+    "规格书 9.5 对话层的人工复核, 争议项证据居中, A6 与 A7 并排, A10 不总结谁更有理 (1318-1327 行)",
+    "规格书 5.2 A10 的边界: 不总结, 不推断, 不代填, 不写判断字段 (596 行)",
+    "规格书 8.5 对话调用进 audit_trail, type conversation (1226 行); 18.5 A10 转达逐字, LLM 只负责叙述 (2850 行); M-11 (2049 行)"
+   ],
+   "prerequisites": [
+    "AC-7",
+    "R34",
+    "R51"
+   ],
+   "external_deps": [
+    "C: 新增 GET /engagements/{eid}/review-tasks/{task_id}/presentation (调 GraphConversation.present, 当前用户为呈递对象), 前端呈递卡片与争议并排视图 (证据居中); api/deps.get_conversation 由 C 加",
+    "main.py lifespan 挂 app.state.conversation 由 A 按 Q16 改",
+    "B: AuditTrail 存 conversation 种类无需迁移 (kind 为字符串列); find_success 按 idempotency_key 查 (services/audit_trail.py:25-39); 先用 FakeTrail"
+   ],
+   "acceptance": [
+    "1. dispute 任务 T-J-CSH-02-1-BA-01-v1 的卡片: a6 {conclusion, 7 步推理链, counter_argument, confidence 0.5625, proposed_action close}, a7 {critic_conclusion, critic_reasoning_chain, critic_reason_type different_conclusion, critic_reason, critic_proposed_action misstatement}; 证据为两边指针的并集 (6 个); allowed [dispute_resolution], 裁决选项 [a6_upheld, a7_upheld, neither] 及各自必填字段 (取 decisions.REVIEW_REQUIRED).",
+    "2. normal 任务 T-J-REV-02-1-SI-2026-0612-v1 的卡片含推理链, 反方论证, critic_verdict skipped, misstatement_draft 14200000, tier 4; failed 任务 T-RUN-REV-02-1-SI-2026-0618-v1 含 RUN-REV-02-1 的 failure_reason; unattributed 任务 T-X-REV-08-1-R01-1-v2 含 X-REV-08-1-R01-1 的 rule_id R01, amount_cents 14200000 与 detail.",
+    "3. 讲解: mock 读 GEN-11/{任务 ID}.json, TaskNarrative {summary, points[{text, evidence}]} 一次通过; 指针不在卡片里时引用失败; 文中金额不在卡片金额中 (如写 AUD 60,000) 时语义失败; 失败时 narrative 为空, narrative_error 写失败级别, 卡片照常返回.",
+    "4. 留痕: 每次呈递写 1 行 kind conversation, actor A10, procedure_id GEN-11, run_id 空, payload 含 task_id, target_version, user_id, presented_at; 首次呈递含提示词全文与 raw, idempotency_key 为 {eid}:GEN-11:{task_id} (只在讲解通过时写键); 同一任务再呈递读缓存, 不调 LLM, payload 记 cached_from.",
+    "5. 呈递不写 Store (审计产出的对象数与版本不变), 不提交决定; TaskPresentation 与 TaskNarrative 都没有推荐决定的字段."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-9",
+   "title": "停留时长与复核范围 (GEN-11 决定收集)",
+   "procedures": [
+    "GEN-11"
+   ],
+   "goal": "DecisionSubmit 写复核决定时按该复核人最近一次呈递算停留秒数, 记复核范围, 一并进决定留痕; 队列概览给出复核过快提示. 呈递时间来源按待定问题 4.",
+   "scope_files": [
+    "src/backend/contracts/models.py (ReviewRecord.dwell_seconds, review_extent, ReviewExtent)",
+    "src/backend/orchestration/decisions.py (_apply_review, review_trail)",
+    "src/backend/services/review_queue.py (too_fast)",
+    "src/backend/knowledge/rules.json (review_dwell_warning_seconds)",
+    "docs/开发接口文档.md 第 2.5, 7 节",
+    "tests/test_review_decisions.py"
+   ],
+   "basis": [
+    "规格书 9.3 按条记录复核停留时长, 低于阈值预警 (1308-1310 行)",
+    "规格书 12.2 ReviewRecord.dwellSeconds, reviewExtent (1689-1690 行), UC-04 第 5 步 (2118 行)",
+    "ASA 230 para 9(c) (docs/参考资料 原文已用 pdftotext 核对: 记录复核人, 复核日期与范围)"
+   ],
+   "prerequisites": [
+    "AC-8",
+    "R17",
+    "R18"
+   ],
+   "external_deps": [
+    "C: ReviewRecordIn 不收 dwell_seconds (服务端计算); 普通提交 review_extent 为 full"
+   ],
+   "acceptance": [
+    "1. 测试时钟: 10:00:00 呈递 T-J-REV-02-1-SI-2026-0612-v1, 10:01:35 提交 misstatement: 存入的记录 dwell_seconds 95, review_extent full; decision 留痕 payload 含 dwell_seconds 95.",
+    "2. 未呈递直接提交: dwell_seconds 为空; 别的用户的呈递不算 (按 reviewed_by 对 payload.user_id).",
+    "3. 呈递两次 (10:00:00, 10:01:00), 10:01:35 提交: dwell_seconds 35.",
+    "4. 提交的记录自带 dwell_seconds 时以服务端计算为准.",
+    "5. too_fast: 最近 5 条有停留时长的记录均值小于 review_dwell_warning_seconds 时 briefing 带提示; 规格书未给阈值, 缺省 20 秒, 由用户确认."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-10",
+   "title": "批量确认 (视待定问题 5, 推荐暂缓)",
+   "procedures": [
+    "GEN-11"
+   ],
+   "goal": "审计师在队列视图对第 1 档任务发起批量确认: 每条单独成 ReviewRecord, 一个事务写入, 一次恢复; 对话入口不能发起.",
+   "scope_files": [
+    "src/backend/orchestration/decisions.py (submit_batch)",
+    "src/backend/services/review_queue.py (batchable)",
+    "docs/开发接口文档.md 第 7 节",
+    "tests/test_review_decisions.py"
+   ],
+   "basis": [
+    "规格书 9.1 批量确认只适用于第一档, 由审计师在队列视图发起, L1 与 blind 逐条处理 (1297 行)",
+    "规格书 9.5 A10 不得主动提议批量确认, 不从对话推断批准 (1322 行)",
+    "规格书 12.2 reviewExtent batch (1690 行)"
+   ],
+   "prerequisites": [
+    "AC-7",
+    "AC-9",
+    "R18"
+   ],
+   "external_deps": [
+    "C: POST /engagements/{eid}/review-records/batch 与队列视图的批量按钮"
+   ],
+   "acceptance": [
+    "1. 只接受 tier 1 的 normal 任务, 且目标判断 autonomy_level 不为 L1; 混入 T-J-REV-03-1-CON-001-v1 (tier 2) 报 INVALID_VALUE, 整批不写.",
+    "2. 预置两条 tier 1 任务 (置信度 0.95, 无金额): 写 2 条 confirm 记录, review_extent batch, 各 1 行 decision 留痕, 判断各出 v2 confirmed, 一次 runner.launch.",
+    "3. Numbat 全流程没有第 1 档任务 (最高置信度 0.875), 不影响 R55.",
+    "4. GraphConversation 没有批量入口."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AC-11",
+   "title": "A10 对话问答: 状态切片与回答校验 (GEN-10)",
+   "procedures": [
+    "GEN-10"
+   ],
+   "goal": "GraphConversation.ask: 按问题取状态切片, A10 叙述回答, 校验引用与金额, 附结构化卡片 (涉及判断时带推理链, 反论, A7 结论) 与下钻链接; 全程只读, 不提交决定.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/GEN-10.yaml (owner A10, llm, L4, on_demand)",
+    "src/backend/knowledge/prompts/GEN-10.md.j2",
+    "src/backend/contracts/llm_outputs.py (ChatAnswer)",
+    "src/backend/contracts/views.py (ChatReply)",
+    "src/backend/services/judgment_engine.py (ChatAnswer 校验)",
+    "src/backend/agents/concierge.py (answer)",
+    "src/backend/orchestration/conversation.py (ask, 切片)",
+    "tests/fixtures/llm/GEN-10/progress-FIN-01.json",
+    "tests/fixtures/llm/GEN-10/J-REV-02-1-SI-2026-0612.json",
+    "tests/test_conversation.py"
+   ],
+   "basis": [
+    "规格书 UC-08 进度与来源查询 (2177-2183 行)",
+    "规格书 5.2 A10 的边界 (596 行); 8.3 生成型输出的事实断言须能回指已确认的 Judgment (1207 行)",
+    "规格书 8.5 只有 A10 持有会话记忆, 不进 Judgment (1226 行); 18.2 A10 独立于主图, 只读主图状态 (2553 行)",
+    "规格书 4.3 外部 LLM 数据边界 (526 行)"
+   ],
+   "prerequisites": [
+    "AC-8",
+    "R34"
+   ],
+   "external_deps": [
+    "C: 新增 POST /engagements/{eid}/conversation {session_id, message} 返回 ChatReply, 前端 A10 对话面板 (卡片与下钻链接按接口文档第 10 节前端约定打开); main.py 挂载同 AC-8"
+   ],
+   "acceptance": [
+    "1. 切片为纯函数: 进度部分为 phase, 当前闸门或等复核, 各程序状态, 按档位的待决任务数, 重要性三项, 意见类型, SCHEDULE; 问题里出现的对象 ID (判断, 例外, 任务, 程序, 错报, 函证, 报告) 附该对象当前版本与证据指针 (判断附推理链, 反方论证与 critic 字段).",
+    "2. fixture_key: 问题中按出现位置第一个已知对象 ID; 没有时为 progress-{位置}, 位置取闸门编号 (PLN-01/03 写作 PLN-01-03), 等复核为 review, 其余为阶段名.",
+    "3. Numbat 停在 FIN-01 闸门时问 \"Where are we in the audit?\": fixture_key progress-FIN-01; 切片含 P3_Completion, FIN-01, 7 条 P2 程序 completed, 待决任务 0, 12000000, 9000000, 600000, SCHEDULE total_cents 14200000, candidate_opinion qualified; 回答一次通过, cited 含 SCHEDULE.",
+    "4. 问 \"How was the AUD 142,000 in J-REV-02-1-SI-2026-0612 determined?\": fixture_key J-REV-02-1-SI-2026-0612; 回复带判断卡片 (v2 confirmed, 推理链, 反方论证, critic_verdict skipped) 与错报 M-D-REV02-0612 (14200000 overstated); 下钻链接含 /judgments/J-REV-02-1-SI-2026-0612 与 /trail/{trail_ref}.",
+    "5. 校验: cited 不在切片中为引用失败; 回答中的金额 (AUD 142,000, 142,000.00 等写法) 不在切片金额中为语义失败; 失败或没有对应 fixture 时 answer 为固定提示 (无法给出可靠回答, 请看下方卡片与链接), 卡片照给.",
+    "6. 只读: ask 前后审计产出对象与检查点不变, 不取项目锁 (后台执行中也可问); 问 \"Confirm all REV-03 tasks\" 不产生任何 ReviewRecord."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-12",
+   "title": "对话会话记忆与留痕 (GEN-10)",
+   "procedures": [
+    "GEN-10"
+   ],
+   "goal": "按 session_id 保留最近几轮问答作为提示词上下文, 从对话留痕重建 (重启不丢); 每次问答写一行 conversation 留痕; 记忆不进任何审计产出.",
+   "scope_files": [
+    "src/backend/orchestration/conversation.py",
+    "src/backend/agents/concierge.py",
+    "tests/test_conversation.py"
+   ],
+   "basis": [
+    "规格书 8.5 A10 持有会话级记忆, 只用于叙述与转达, 不进 Judgment (1226 行)",
+    "规格书 14 节 A10 不可用: 恢复后对话记忆重建自 audit_trail (2344 行)",
+    "规格书 UC-08 第 5 步对话调用进 audit_trail, type conversation (2181 行)"
+   ],
+   "prerequisites": [
+    "AC-11"
+   ],
+   "external_deps": [
+    "C: GET /engagements/{eid}/conversation/{session_id} 返回历史轮次, 前端刷新后恢复会话",
+    "B: AuditTrail.list(eid, kind=conversation) 为已有接口, 先用 FakeTrail"
+   ],
+   "acceptance": [
+    "1. 每次 ask 写 1 行 conversation: actor A10, procedure_id GEN-10, run_id 空, payload {session_id, user_id, question, fixture_key, slice_ids, answer, level_failed, attempt} 加提示词全文与 raw.",
+    "2. 同一 session 的第二问, 送 LLM 的 messages 含第一轮问与答 (最多最近 6 轮); 不同 session 不含.",
+    "3. 新建 GraphConversation 实例 (模拟重启) 后, 同一 session 的记忆照样从留痕重建.",
+    "4. 记忆只进提示词: ask 前后 Judgment 与其他审计产出不变."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AC-13",
+   "title": "验收: 智能体协作进入 mock 全流程",
+   "procedures": [
+    "GEN-09",
+    "GEN-10",
+    "GEN-11"
+   ],
+   "goal": "在 R55 的离线全流程中加入 A7 复核 (J-CSH-02-1-BA-01 判不一致), 争议裁决, 两次任务呈递与两次对话问答; 产出与留痕按下列变化更新. 以待定问题 1 推荐口径写, 选其他口径时按同样结构改对象.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/test_flow.py (全流程真实 Agent 用的决定表, 与脚本 Agent 的 REVIEWS 分开)",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "Demo需求文档第 8 节第 1, 4, 5 条",
+    "合成数据集设计第 7 节第 13 行与汇总表",
+    "规格书 15 节 A7 复核率, 一致率, 错误发现率 (2370-2372 行); 16 节评估场景 (2405 行)"
+   ],
+   "prerequisites": [
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9",
+    "AC-11",
+    "AC-12",
+    "R55",
+    "R56",
+    "R57"
+   ],
+   "external_deps": [
+    "B: data/demo/llm 同步 GEN-09, GEN-10, GEN-11 的 fixture (data_needs 第 1 条)",
+    "动态降级组: Numbat 下 CSH-02 装配后须为 L3 (data_needs 第 2 条), 否则 A7 按 skip 规则跳过, 本条改按跳过版本断言 (GEN-09 留痕 0 行, BA-01 为 normal 任务)"
+   ],
+   "acceptance": [
+    "1. 决定: 同 R55, 但 CSH-02 那条改为对 T-J-CSH-02-1-BA-01-v1 提交 dispute_resolution a6_upheld (D-CSH02); 提交前先呈递 T-J-CSH-02-1-BA-01-v1 与 T-J-REV-02-1-SI-2026-0612-v1; 停在 FIN-01 闸门时按 AC-11 验收 3, 4 问两句.",
+    "2. 结果: 例外 4 条同 R55; Judgment 6 条 confirmed v2, J-CSH-02-1-BA-01 的 critic_verdict inconsistent, 其余 5 条 skipped; 任务 6 条 decided (5 normal, 1 dispute); Misstatement 1 条 14200000 overstated; 意见 qualified; REPORT-2 signed.",
+    "3. 留痕: llm_call 由 13 行变为 15 行 (加 GEN-09 2 行, actor A7, run_id RUN-CSH-02-1); 新增 conversation 4 行 (GEN-11 2 行, GEN-10 2 行); decision 仍 11 行; external_call 仍 4 行; transition 行数不变, CSH-02 经 in_dispute (待定问题 3 选新增状态时).",
+    "4. tests/fixtures/llm 下每个文件 (含 GEN-09 2 份, GEN-10 2 份, GEN-11 2 份) 在流程中恰被读一次, attempt 1, 无失败级别 (assert_fixtures_used_once 同时统计 llm_call 与 conversation).",
+    "5. D-CSH02 与 D-REV02-0612 的 dwell_seconds 非空, 其余 4 条复核记录为空; 全部 review_extent full.",
+    "6. test_every_program_runs_with_a_real_agent: 加 A7 ReviewAgent 复核 1 次 (J-CSH-02-1-BA-01).",
+    "7. R56 真实存储变体与 R57 重启测试同步更新后通过; R57 的中断点在 CSH-02 之前, GEN-09 留痕行数与不中断时相同."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "GEN-09, GEN-10, GEN-11 的 fixture 同步到运行目录",
+   "for_keys": [
+    "AC-2",
+    "AC-8",
+    "AC-11",
+    "AC-13"
+   ],
+   "owner": "B",
+   "detail": "运行 data/generate_demo.py (按目录复制 tests/fixtures/llm, generate_demo.py:483-493), 把 GEN-09/J-CSH-02-1-BA-01-independent.json, GEN-09/J-CSH-02-1-BA-01-compare.json, GEN-10/progress-FIN-01.json, GEN-10/J-REV-02-1-SI-2026-0612.json, GEN-11/T-J-CSH-02-1-BA-01-v1.json, GEN-11/T-J-REV-02-1-SI-2026-0612-v1.json 复制到 data/demo/llm 并更新 manifest.json; 不加 default.json (没有 fixture 的问题走失败退路). 不需要新增数据行: A7 的论点用到的 CR-SI-2026-0547-1 (journal_entries.csv 第 1354 行, 2026-06-30, description 含 remittance advice 30 June 2026) 与 BT-01-20260702-01 (bank_transactions.csv 第 680 行, 2026-07-02, 5000000) 已在数据集中."
+  },
+  {
+   "what": "Numbat 下现金函证差异评价在装配后保持第 3 级",
+   "for_keys": [
+    "AC-2",
+    "AC-4",
+    "AC-13"
+   ],
+   "owner": "动态降级组 (A) 与 B (data/demo/planning/risk_register.json, 合成数据集设计第 2.4 节)",
+   "detail": "现 RISK-CASH-EXI 为 high (合成数据集设计第 2.4 节), 按规格书 7.4 \"该认定风险等级为 high, −1 级\" 会把 CSH-02 从 L3 降到 L2, A7 按 skip 规则跳过. 待定问题 1 选函证那条时, 三选一: (a) RISK-CASH-EXI 改为 medium (CSH-02, CSH-04 的触发条件含 medium, CSH-05 含全部等级, Numbat 装配集不变), 同步合成数据集设计第 2.4 节与引用 high 的测试; (b) 演示在重要性闸门把它改为 medium 并写理由 (GateDecision.edits); (c) 动态降级组另定. 另须确认 Numbat 不触发 \"首次服务该客户 −1 级\" (client_profile.json 无历史画像), 否则全部程序再降一级, A7 在 Numbat 中没有可复核的判断."
+  },
+  {
+   "what": "(仅当待定问题 1 选期后事项那条) 一条会自动关闭的期后事项判断对象",
+   "for_keys": [
+    "AC-2",
+    "AC-13"
+   ],
+   "owner": "B 与期后事项研判组 (GEN-06, GEN-07)",
+   "detail": "规格书 2405 行原场景: GEN-06 一条 L3 关闭型判断, A7 应判 inconsistent 且理由为同证据不同结论, 另埋一条 A7 应判 consistent 的正例. 需该组给出判断对象 ID, 数据行与 A6 fixture, 本组据此写 GEN-09 fixture 并改 AC-13 的断言; 事件须与合成数据集设计第 2.1 节 Numbat 背景一致 (NSW, VIC 电子元件批发, 财年截至 30 June 2026)."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "contracts/models.py 枚举",
+   "change": "新增 CriticVerdict, CriticReasonType, DisputeResolution, NeitherAction, ReviewExtent; TaskKind 加 dispute; Decision 加 dispute_resolution; TrailKind 加 conversation; ProcedureStatus 加 in_dispute (视待定问题 3); AgentId.A7 注释去掉 \"本版不实现\"",
+   "doc_section": "开发接口文档第 2.1 节"
+  },
+  {
+   "target": "contracts/models.py Judgment",
+   "change": "加 critic_verdict (缺省 skipped), critic_reason_type, critic_reason, critic_conclusion, critic_proposed_action, critic_misstatement_draft, critic_reasoning_chain, critic_evidence, critic_trail_ids; 均有缺省值, 旧数据可读",
+   "doc_section": "开发接口文档第 2.2 节"
+  },
+  {
+   "target": "contracts/models.py ReviewTask 与 ReviewRecord",
+   "change": "ReviewTask 加 tier (int 或 None); ReviewRecord 加 dispute_resolution, neither_action, consulted, consultation_record, dwell_seconds, review_extent (缺省 full)",
+   "doc_section": "开发接口文档第 2.5 节"
+  },
+  {
+   "target": "contracts/llm_outputs.py",
+   "change": "新增 CriticIndependent, CriticComparison (A7 两轮), TaskNarrative (GEN-11 讲解), ChatAnswer (GEN-10 回答); OutputValidator 各加引用与语义校验分支",
+   "doc_section": "开发接口文档第 5 节输出模型与 OutputValidator"
+  },
+  {
+   "target": "contracts/knowledge.py",
+   "change": "ProcedureTemplate 加 on_demand (不实例化, 不装配, 不调度), phase 改为仅 on_demand 时可空; LLMSpec 加 followup (第二轮提示词与输出模型)",
+   "doc_section": "开发接口文档第 8.1 节"
+  },
+  {
+   "target": "contracts/ports.py LLMRequest",
+   "change": "run_id 改为可空 (对话调用没有 ProcedureRun)",
+   "doc_section": "开发接口文档第 4 节 LLMClient"
+  },
+  {
+   "target": "contracts/services.py",
+   "change": "新增 CriticOutcome; ValidationContext 加 allowed_pointers (A7 与 GEN-11 只能引用的指针) 与已知金额",
+   "doc_section": "开发接口文档第 5 节"
+  },
+  {
+   "target": "contracts/views.py",
+   "change": "新增 QueueBriefing, TaskPresentation, ChatReply",
+   "doc_section": "开发接口文档第 7 节视图, 第 10 节"
+  },
+  {
+   "target": "agents/base.py AgentDeps",
+   "change": "加 critic_judgments: JudgmentEngine (A7 用的独立 LLM 客户端); main.build_deps 构造 (A 按 Q16)",
+   "doc_section": "开发接口文档第 6 节"
+  },
+  {
+   "target": "services/review_queue.py",
+   "change": "新增 critic_due, tier, order, briefing, too_fast; classify 增加 A7 不一致建 dispute, A7 失败不自动关闭; allowed 增加 dispute 只允许 dispute_resolution",
+   "doc_section": "开发接口文档第 5 节需要人表与 allowed"
+  },
+  {
+   "target": "orchestration/decisions.py",
+   "change": "dispute_resolution 的必填与只允许字段, 三种裁决的效果, dwell_seconds 由服务端按最近一次呈递计算; (视待定问题 5) submit_batch",
+   "doc_section": "开发接口文档第 7 节校验表与效果表"
+  },
+  {
+   "target": "orchestration/conversation.py (新)",
+   "change": "GraphConversation: present (GEN-11), ask (GEN-10), briefing; 挂到 app.state.conversation",
+   "doc_section": "开发接口文档第 1 节接口一览, 第 7 节"
+  },
+  {
+   "target": "knowledge/rules.json",
+   "change": "confidence_weights 加 critic 0.2; 新增 critic_sample_rate 0.05, review_dwell_warning_seconds (缺省 20, 待用户确认)",
+   "doc_section": "开发接口文档第 8.2 节"
+  },
+  {
+   "target": "HTTP API (C 实现)",
+   "change": "新增 GET /engagements/{eid}/review-tasks/{task_id}/presentation, POST /engagements/{eid}/conversation, GET /engagements/{eid}/conversation/{session_id}, (视待定问题 5) POST /engagements/{eid}/review-records/batch; ReviewRecordIn 加 dispute_resolution, neither_action, consulted, consultation_record; ReviewTaskView 加 tier 且按 ReviewQueue.order 排序",
+   "doc_section": "开发接口文档第 10 节"
+  },
+  {
+   "target": "配置项 (C 加键)",
+   "change": "LLM_CRITIC_MODEL: A7 用的模型名, 空时同 LLM_MODEL",
+   "doc_section": "开发接口文档第 11 节"
+  },
+  {
+   "target": "Demo需求文档",
+   "change": "第 2 节程序清单加 GEN-09, GEN-10, GEN-11; 第 6 节本版不做删去 \"A7 独立复核 (GEN-09)\" 与 \"A10 对话入口\"; 第 4.2 节补 dispute 任务",
+   "doc_section": "Demo需求文档第 2, 4.2, 6 节"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "期末演示里, 让 \"AI 独立复核\" 挑出不同意见并交审计师仲裁的, 用哪一条判断?",
+   "options": [
+    {
+     "label": "银行账户 BA-01 的函证差异判断 (现有数据)",
+     "pros": "数据现成, 不依赖别的组, 对象编号全确定; 分歧真实可辩: 账上 6 月 30 日按客户汇款通知记了 5 万元收款, 银行 7 月 2 日才到账, 生成方说是在途存款, 复核方说客户转账不是在途存款, 应算现金截止错误; 规格书协作图本来就用这条程序演示独立复核.",
+     "cons": "这条程序本来就必须人工复核, 不是 \"没人会看的判断\" 这一最典型场景; Numbat 现金风险为 \"高\", 按动态降级会从第 3 级降到第 2 级而被跳过, 需要降级组配合或把现金风险改为 \"中\" (见数据需求第 2 条)."
+    },
+    {
+     "label": "期后事项研判的一条判断 (规格书评估章节的原场景)",
+     "pros": "正好是本会自动关闭, 没人会看的判断, 最能体现独立复核的价值; 期后事项程序与认定风险无关, 不受 \"高风险降级\" 影响.",
+     "cons": "依赖期后事项两条程序 (另一组) 的数据, 样例与对象编号, 本组验收要等那组定; Numbat 若按 \"首次服务客户\" 降级也会降到第 2 级被跳过."
+    },
+    {
+     "label": "两条都做: 函证那条判一致作正例, 期后那条判不一致",
+     "pros": "正反例齐全, 最接近规格书的评估设计, 能同时展示复核通过与复核拦截.",
+     "cons": "工作量与跨组依赖最大, 两个降级问题都要解决."
+    },
+    {
+     "label": "只在单元测试里演示, 全流程不出现",
+     "pros": "不受降级与别组影响, 改动最少.",
+     "cons": "期末演示看不到多智能体互相复核, 失去这组最主要的展示点."
+    }
+   ],
+   "recommendation": "选第 1 项, 同时请动态降级组确认 Numbat 的现金函证差异评价装配后保持第 3 级 (或把 Numbat 现金风险定为 \"中\"); 期后事项那条等那组数据定了再作为第二个样例补上.",
+   "affects": [
+    "AC-2",
+    "AC-4",
+    "AC-13"
+   ]
+  },
+  {
+   "question": "审计师在仲裁时采纳 AI 复核方的意见, 而复核方认为这是一笔错报, 错报怎么记?",
+   "options": [
+    {
+     "label": "在同一条裁决里一起填错报内容 (缺省带入复核方给的金额, 科目等, 可改), 一次写入",
+     "pros": "一步完成, 效果与现有 \"认定错报\" 决定一致, 错报汇总不会漏; 审计师仍能改金额.",
+     "cons": "裁决决定多一组可填字段, 字段校验更复杂."
+    },
+    {
+     "label": "裁决后系统另建一条普通复核任务, 审计师再选 \"认定错报\"",
+     "pros": "沿用现有决定, 不改裁决的字段.",
+     "cons": "多一轮操作; 裁决与认定错报分两次, 期间程序一直未完成."
+    },
+    {
+     "label": "采纳复核意见时只换结论, 不记错报 (要记错报须选 \"都不采纳\" 自己写结论再处理)",
+     "pros": "实现最简单.",
+     "cons": "采纳了 \"是错报\" 的意见却不进错报汇总, 意见判断可能算错, 不合理."
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AC-5",
+    "AC-8"
+   ]
+  },
+  {
+   "question": "有争议等审计师仲裁的程序, 在项目总览上显示什么状态?",
+   "options": [
+    {
+     "label": "新增 \"争议中\"",
+     "pros": "与规格书状态机一致, 一眼看出卡在仲裁而不是普通复核; 规格书要求争议未解决的程序不算已处置.",
+     "cons": "汇合, 决定后重算, 调度判断, 前端标签都要改, 多一条需求."
+    },
+    {
+     "label": "沿用 \"等人处理\"",
+     "pros": "改动小, 现有调度与重算逻辑不动.",
+     "cons": "与规格书不一致, 总览看不出是争议, 只能点进任务才知道."
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AC-6",
+    "AC-13"
+   ]
+  },
+  {
+   "question": "审计师打开一条复核任务的时间 (用来算看了多久再决定) 记在哪里?",
+   "options": [
+    {
+     "label": "记在审计留痕里, 提交决定时据此算停留秒数",
+     "pros": "不新增写入路径, 不改任务的版本, 打开任务不会和后台执行抢项目锁; 留痕本来就要记每次对话呈递.",
+     "cons": "任务本身看不到 \"已呈递\" 状态, 与规格书任务的三种状态不完全一致."
+    },
+    {
+     "label": "复核任务出新版本, 标记 \"已呈递\" 与时间",
+     "pros": "与规格书字面一致, 任务上直接看得到.",
+     "cons": "对话入口变成任务的第二个写入者, 后台执行时打开任务会报 \"忙\"; 任务版本变化可能让已打开页面上的决定绑到旧版本而被拒."
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AC-8",
+    "AC-9"
+   ]
+  },
+  {
+   "question": "复核队列的 \"批量确认\" 这次做不做?",
+   "options": [
+    {
+     "label": "暂缓",
+     "pros": "Numbat 的 6 条任务没有一条落在 \"高置信度, 低金额\" 档 (最高置信度 0.875), 收入程序降级后为第 1 级也不允许批量, 演示看不到; 省一条需求.",
+     "cons": "规格书分层复核少了一块, 真实使用时高置信度小额事项仍要逐条点."
+    },
+    {
+     "label": "这次就做",
+     "pros": "分层复核完整, 真实使用更省时间.",
+     "cons": "多一条需求与一个接口; 演示要另造高置信度任务才看得到."
+    }
+   ],
+   "recommendation": "选第 1 项, 等真实数据里出现大量高置信度小额事项再做.",
+   "affects": [
+    "AC-10"
+   ]
+  },
+  {
+   "question": "AI 独立复核用什么模型?",
+   "options": [
+    {
+     "label": "可单独配置第二个模型名, 不配时用同一模型但换系统提示词, 两轮调用, 版本快照记复核模型",
+     "pros": "不强制多一个付费账号; 满足规格书 \"至少不同提示词\"; 想更独立时只改配置.",
+     "cons": "不配置时同一模型的同源偏差仍在, 复核方更容易同意生成方."
+    },
+    {
+     "label": "强制用不同模型, 真实模式下没配第二个模型就启动失败",
+     "pros": "同源偏差最小, 复核最独立.",
+     "cons": "多一笔配置与费用, 本地联调不便."
+    },
+    {
+     "label": "与生成方共用同一个客户端与提示词",
+     "pros": "最省事.",
+     "cons": "违背规格书 5.5 与 18.5, 复核基本失效."
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AC-3"
+   ]
+  }
+ ],
+ "risks": [
+  "动态降级与 GEN-09 冲突: 规格书 6.3 的 skip 规则让第 1, 2 级判断一律不经 A7, 而 Numbat 的收入风险为特别风险, 现金为高, 若再按 \"首次服务客户\" 降一级, Numbat 中没有一条判断在第 3, 4 级, A7 全流程不触发; AC-13 的计数取决于降级组的结论 (data_needs 第 2 条).",
+  "GEN-09 触发规则中 \"程序刚改过且复核数不足 30\" 与 \"人机一致率低于 80%\" 两条依赖 agreement_stats 与盲测 (规格书 9.2), 本次不建模, 在需求与接口文档写明; 5% 抽样用 eid 加判断 ID 的哈希代替随机数, 以保证重放与恢复结果相同.",
+  "环 1 不在范围: 规格书 11 节 A7 以 \"证据不足\" 判不一致时应先自动追加取证, 本版直接列为争议项; 环 2 不在范围: 都不采纳时只能由人给结论, 不能追加程序.",
+  "A10 讲解 \"不推荐决定, 不评谁更有理\" (规格书 9.5) 只能靠提示词与输出结构约束, 代码校验只能查引用与金额, 查不出措辞上的倾向; 需在提示词评审与真实模型联调 (R59) 时人工抽看.",
+  "回答与讲解的金额校验按文中金额必须出现在切片中, 真实模型给出合计, 差额等推导数时会被判失败而退回固定提示, 联调时可能需要放宽 (如允许切片金额之和与差).",
+  "对话与呈递把状态切片与证据内容发给外部模型, 属规格书 4.3 的外部数据边界; mock 模式只对预置问题有答案, 演示问题须按 fixture 的键提问.",
+  "A6 每命中一条触发规则要同步多等两次 LLM 调用, CSH-02 实例变慢; 真实模式下 A7 失败按 not_applicable 处理并强制人工复核, 不会卡住流程, 但会多出人工任务.",
+  "fixture 双份: data/demo/llm 由 B 的生成器复制, A 加 fixture 后须重新生成并更新 manifest.json, 这是 B 的目录, 需事先告知.",
+  "tests/test_flow.py 的 REVIEWS 给脚本 Agent 用 (BA-01 为 confirm), 真实 Agent 全流程 BA-01 改为仲裁, 两套决定表要分开, 否则其中一套会报 DECISION_NOT_ALLOWED.",
+  "复核过快的阈值规格书未给, 本组缺省 20 秒仅为占位, 须用户确认.",
+  "ConciergeAgent 同时承担 RPT-03, GEN-10, GEN-11, 文件会变大; 可按程序拆成同一 Agent 的多个模块, 但 agent_id 仍为 A10.",
+  "规格书 2477 行写 \"九种决定\", 12.2 ReviewRecord.decision 列了 10 个值 (多 evidence_unreliable), 以哪个为准不确定; 本组只加 dispute_resolution, 不受影响, 其余决定由各自所在组处理."
+ ]
+}

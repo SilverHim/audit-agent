@@ -1,0 +1,1038 @@
+{
+ "group": "完成与报告阶段的签字前提 (FIN-07, FIN-18, FIN-10, RPT-08, FIN-12, FIN-15, RPT-07, RPT-01 签字前检查)",
+ "requirements": [
+  {
+   "key": "SG-1",
+   "title": "契约: 签字前提的五类对象, 状态字段与写入归属",
+   "procedures": [
+    "FIN-07",
+    "FIN-18",
+    "FIN-10",
+    "RPT-08",
+    "FIN-12",
+    "RPT-07"
+   ],
+   "goal": "在 contracts 加入 WrittenRepresentationLetter, GovernanceCommunication, ComplianceCheck (FIN-10/12/18 共用的检查结果), IndependenceDeclaration, FinancialStatements; 状态加 4 个字段, AGENT_FIELDS 补 A5, A9, A10; ClientProfile 加收费, 独立性标记与治理层字段; DocumentType, PointerSource 增值; 同一次提交同步接口文档. 规格书的 UncorrectedMisstatementSchedule 已由现有 UncorrectedSchedule 承担 (models.py:552 docstring 已注明), 不另建; StatutoryReport 属 GEN-14/M-12, 本组不建 (见风险).",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/state.py",
+    "src/backend/contracts/ports.py",
+    "src/backend/orchestration/merge.py",
+    "docs/开发接口文档.md",
+    "tests/fakes.py",
+    "tests/test_contracts.py",
+    "tests/test_merge.py"
+   ],
+   "basis": [
+    "规格书 12.2 节 FinancialStatements, GovernanceCommunication, WrittenRepresentationLetter, UncorrectedMisstatementSchedule (1849-1940 行)",
+    "规格书 18.3 节状态字段与 18.3.1 归属表 (2600-2650 行: representation_letter 写入者 A5/A9, governance_communications 经 A10 追加)",
+    "开发接口文档第 0 节 ID 规则, 第 2, 3, 4 节",
+    "ASA 580 para 9-15 (原文已核), ASA 450 para 14 (已核), ASA 260 para 24 (已核: 口头沟通记时间与对象, 书面留副本)",
+    "Corporations Act s307C(3), (5) (Vol2 第 93-95 页, 已核)"
+   ],
+   "prerequisites": [
+    "R54"
+   ],
+   "external_deps": [
+    "B: persistence/models.py OUTPUT_KINDS 加 WrittenRepresentationLetter, GovernanceCommunication, ComplianceCheck, IndependenceDeclaration 四种及迁移; A 先用 tests/fakes.py 的 FakeOutputStore (按类型通用, 无需改)",
+    "B: FinancialDataStore.financial_statements(eid) 的 Postgres 实现与表 (见数据需求 FS); A 先在 FakeFinancialStore 预置 Numbat FS v1",
+    "C: 重新生成前端客户端 (ClientProfile 新字段, DocumentType 新值); ACC-01 闸门的画像编辑表单透传新字段"
+   ],
+   "acceptance": [
+    "1. WrittenRepresentationLetter(Versioned): id 固定 REPLETTER; status ∈ {requested, obtained, refused, unreliable}; representations [{code, kind core|specific, standard_ref, present}]; attached_schedule 为 list[UncorrectedItem] 加 schedule_ref (id, version); signed_by list[str]; dated_at date|None; period_end date; document_id str|None; inconsistencies list[str]; run_id. frozen, extra=forbid, 多字段抛 ValidationError.",
+    "2. GovernanceCommunication(Versioned): id GC-{procedure_id}-{run_no} (RPT-07 首次为 GC-RPT-07-1); kind ∈ {completion, uncorrected_misstatements, expected_modification, other}; form ∈ {written, oral}; communicated_at date; recipients list[str]; matters [{code, text, required_by, covered}]; document_id|None; response str; run_id.",
+    "3. ComplianceCheck(Versioned): id CHECK-{procedure_id} (CHECK-FIN-10, CHECK-FIN-12, CHECK-FIN-18); items [{code, description, status passed|failed|attention, standard_ref, detail, evidence}]; exception_ids; must_disclaim bool 默认 False; subject_ref (如 (FS, 1), (REPLETTER, 1)) 可空; run_id. passed 属性 = 无 failed 项.",
+    "4. IndependenceDeclaration(Versioned): id 固定 S307C; form ∈ {no_contraventions, contraventions}; contraventions list[str]; text; declarant_id; status ∈ {draft, signed}; declaration_date date|None; report_id str|None.",
+    "5. FinancialStatements(Model): id FS, version, prepared_at date, directors_declaration_date date|None, lines [{code, statement financial_position|profit_or_loss, name, amount_cents, sign ±1, account_codes, subtotal}]; ports.FinancialDataStore 加 financial_statements(eid) -> FinancialStatements | None; FakeFinancialStore 按 Numbat 数据返回 21 行, v1.",
+    "6. EngagementState 加 representation_letter (None), governance_communications (upsert_by_id), compliance_checks (upsert_by_id), independence_declaration (None); initial_state 置空; 写入检查点后读回, 各枚举字段仍为枚举 (status is ...)。",
+    "7. AGENT_FIELDS: A5 加 representation_letter, documents 保留; A9 加 compliance_checks, exceptions, review_tasks; A10 加 governance_communications, independence_declaration. A9 片段含 governance_communications 时 check_patch 抛 MergeRejected, 原因含字段名.",
+    "8. ClientProfile 加 fees (audit_fee_cents, non_audit_fee_cents, firm_total_fee_cents, dependency_pct_by_year: dict[str, float], overdue_cents, overdue_days, contingent: bool), independence_flags list[str], governance {members [{name, also_management}], all_in_management}, 均有默认值: 现有 data/demo/client_profile.json 照常载入; 加数据需求中的字段后载入为 Numbat 值.",
+    "9. DocumentType 加 representation_letter, governance_communication; PointerSource 与 SourceType 加 financial_statement_line.",
+    "10. 接口文档第 0 节 ID 表加 REPLETTER, CHECK-{procedure_id}, S307C, GC-{procedure_id}-{run_no}, FS; 第 3 节字段写入归属表与 AGENT_FIELDS 一致; 全部测试, ruff, mypy 通过."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-2",
+   "title": "准则片段与三份模板原文",
+   "procedures": [
+    "FIN-07",
+    "FIN-18",
+    "FIN-10",
+    "RPT-08",
+    "FIN-12",
+    "FIN-15",
+    "RPT-07"
+   ],
+   "goal": "填写本组程序引用的准则与法条片段原文, 扩展 PDF 逐字对照测试以支持 Aus 段, APES 110 R 段与公司法条款; 写声明书请求稿, s307C 声明, 完成阶段治理层沟通议程三份模板.",
+   "scope_files": [
+    "src/backend/knowledge/standards/ASA580.yaml",
+    "src/backend/knowledge/standards/ASA450.yaml",
+    "src/backend/knowledge/standards/ASA220.yaml",
+    "src/backend/knowledge/standards/ASA330.yaml",
+    "src/backend/knowledge/standards/ASA520.yaml",
+    "src/backend/knowledge/standards/ASA260.yaml",
+    "src/backend/knowledge/standards/ASA700.yaml",
+    "src/backend/knowledge/standards/CorpAct.yaml",
+    "src/backend/knowledge/standards/APES110.yaml",
+    "src/backend/knowledge/templates/representation_letter.yaml",
+    "src/backend/knowledge/templates/s307c.yaml",
+    "src/backend/knowledge/templates/governance_completion.yaml",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "docs/参考资料/01_审计准则_ASA: ASA_580 para 10, 11, 14, 19, 20 与 Appendix 2; ASA_450 para 12, 14; ASA_220 para 21; ASA_330 para 20; ASA_520 para 6, 7; ASA_260 para 13, 16, 17, Aus 18.1, 21; ASA_700 para 49, Aus 49.1 (均已用 pdftotext 核对段号)",
+    "docs/参考资料/04_法律_CorporationsAct Vol2: s307C(1), (3), (5), (5A) (第 93-96 页, 已核)",
+    "docs/参考资料/06_职业道德_APES: R410.9, R410.13, R410.15 (已核)",
+    "规格书 3.1 节 M-13 (167 行), 7.5 节 (1151-1157 行)"
+   ],
+   "prerequisites": [
+    "R39",
+    "R50"
+   ],
+   "external_deps": [],
+   "acceptance": [
+    "1. 片段: ASA580-P10, ASA580-P11, ASA580-P14, ASA580-P19, ASA580-P20, ASA450-P12, ASA450-P14, ASA220-P21, ASA330-P20, ASA520-P06, ASA520-P07, ASA260-P13, ASA260-P16, ASA260-P17, ASA260-Aus18.1, ASA260-P21, ASA700-P49, ASA700-Aus49.1, CorpAct-s307C-3, CorpAct-s307C-5, APES110-R410.9, APES110-R410.13, APES110-R410.15; text 非空, 与 PDF 逐字一致.",
+    "2. test_fragment_text_is_verbatim_from_pdf 的段号正则扩展: Aus x.y 段下一段为 floor(x)+1 (Aus 18.1 → 19.), R410.n 下一段为 R410.n+1 或其后的 410.n A1, 公司法 (3) 下一款为 (4); STANDARD_PDFS 加 ASA580, ASA220, ASA330, ASA520, ASA260, CorpAct (Vol2), APES110; 公司法只读 s307C 所在页段 (避免整卷解析过慢).",
+    "3. compiled 日期测试兼容公司法封面 \"Compilation date: 27/08/2026\" 与 APES 110 \"July 2025\" 写法.",
+    "4. representation_letter.yaml: core 3 条 (FR_PREPARATION, INFORMATION_ACCESS, TRANSACTIONS_RECORDED) 与 specific 7 条 (UNCORRECTED_MISSTATEMENTS, ESTIMATES, RELATED_PARTIES, SUBSEQUENT_EVENTS, FRAUD, NOCLAR, LITIGATION) 原文取自 ASA 580 Appendix 2 并逐字对照; 占位符只有 {entity_name}, {period_end}, {engagement_letter_date}; 约定书日期未知时渲染为 [insert date] 由审计师填写.",
+    "5. s307c.yaml: no_contraventions 与 contraventions 两式, 按 s307C(3)(c), (3)(d) 改写 \"this Act\" 为 \"the Corporations Act 2001\"; 用 Numbat 值 format 后无残留花括号, 含 \"no contraventions of the auditor independence requirements of the Corporations Act 2001 in relation to the audit\" 与 \"no contraventions of any applicable code of professional conduct in relation to the audit\".",
+    "6. governance_completion.yaml: 议程项 SIG_PRACTICES (ASA260-P16 (a)), DIFFICULTIES (16(b)), REPRESENTATIONS (16(c)(ii), 治理层全部参与管理时按 P13 免于重复), REPORT_FORM (16(d), 意见非 unqualified 时必选), INDEPENDENCE (P17, Aus18.1, 须书面 P21), UNCORRECTED (ASA450-P12, 汇总表 items 非空时必选).",
+    "7. test_procedure_standards_have_text 参数加 FIN-07, FIN-18, FIN-10, RPT-08, FIN-12, FIN-15, RPT-07 并通过."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-3",
+   "title": "P2 以外节点等待一般复核任务",
+   "procedures": [
+    "FIN-15",
+    "FIN-12"
+   ],
+   "goal": "execute 在 Agent 片段含 pending 的 normal 或 unattributed 任务时也写 awaiting_human 并在节点内 interrupt 等复核; 读回非 rerun 决定后从 Store 整体读回复核相关对象 (同 await_events, Q9), 程序无待决任务即继续下一条; 与现有 failed 任务 rerun 等待共用载荷, records 与恢复顺序.",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py",
+    "src/backend/orchestration/decisions.py",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md",
+    "tests/test_nodes.py",
+    "tests/test_recovery.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "规格书 10 节 P2 自动处置 (需要人的结果不分阶段建 ReviewTask, 1393 行) 与 18 节 fieldwork human_needed (2750 行)",
+    "开发接口文档第 3 节程序执行范围, 第 7 节恢复机制",
+    "需求清单 Q4, Q9, Q17"
+   ],
+   "prerequisites": [
+    "R05",
+    "R16",
+    "R18",
+    "R31"
+   ],
+   "external_deps": [
+    "若 FIN-03/FIN-09/GEN-06 等组也提出 P3 节点内等复核, 与本条合并, 只实现一次"
+   ],
+   "acceptance": [
+    "1. completion 节点以脚本 A6 执行 FIN-15, 片段含 J-FIN-15-1-1100 v1 与 T-J-FIN-15-1-1100-v1 (normal, pending): 二者与 FIN-15 awaiting_human 新版本在同一 commits 项; 等待载荷 {awaiting: review, procedure_id: FIN-15, run_id: RUN-FIN-15-1, records: []}; overview.awaiting_review 为真.",
+    "2. 对该任务 confirm: 校验通过; 恢复后状态 judgments 含 J-FIN-15-1-1100 v2 confirmed, X-FIN-15-1-F01-1 v2 attributed, FIN-15 completed; 节点继续执行 FIN-12, FIN-15 的 Agent 只被调用 1 次.",
+    "3. 停在 FIN-15 等待时对 P2 任务 T-J-REV-02-1-SI-2026-0618-v1 提交 → NOT_AWAITING_REVIEW; 对 T-J-FIN-15-1-1100-v1 提交 rerun → DECISION_NOT_ALLOWED.",
+    "4. 一次执行建 2 个 normal 任务: 第 1 个决定后 FIN-15 仍 awaiting_human, 节点再等一次 (第二次 interrupt); 第 2 个决定后继续.",
+    "5. misstatement 决定 (draft {factual, Receivables, Existence, 1000000, overstated}): M-{决定 ID} 并入状态, 之后 FIN-04 的 SCHEDULE items 含它.",
+    "6. 决定已写 Store, 检查点未跟上: recover 按 NODE_PROCEDURES 顺序与 run_no 补交, 结果与不中断一致; R05, R07, R31 的 failed 任务 rerun 测试全部照常通过.",
+    "7. 一次执行同时有 failed 与 normal 待决任务时, 先只接受 rerun (Q17 整组), 重跑后再等 normal; 文档第 7 节写明."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-4",
+   "title": "A9 FIN-12 财报与会计记录勾稽",
+   "procedures": [
+    "FIN-12"
+   ],
+   "goal": "A9 按待审财报各行映射的科目与试算表本期余额逐行核对 (K01), 查未被映射的科目 (K02); 差异出例外, 无判断解释的建 unattributed 任务; 产出 CHECK-FIN-12 并记所核对的 FS 版本.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-12.yaml",
+    "src/backend/agents/qc.py",
+    "src/backend/agents/registry.py",
+    "tests/test_qc.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 330 para 20(a) (原文已核: 财报信息与会计记录核对或调节)",
+    "规格书 6.1.2 FIN-12 行 (前置 FIN-05, 未实现不建模, 822 行附近), 7.2 节 FIN-12 为 L4 规则 (1076 行), 12.2 FinancialStatements (1849 行)",
+    "合成数据集设计第 3.1, 3.2 节试算表与关键数"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2",
+    "SG-3"
+   ],
+   "external_deps": [
+    "B: FIN-12.yaml 的 K01, K02 SQL (financial_statement_lines 联 trial_balance current) 与 FinancialDataStore.record 解析 financial_statement_line; A 先用 FakeRuleEngine 预置 K01/K02 结果, FakeFinancialStore 预置 Numbat FS v1 (数据需求 FS)"
+   ],
+   "acceptance": [
+    "1. FIN-12.yaml: owner A9, engine rule, autonomy_level L4, phase P3_Completion, cycle Completion, standards [ASA330-P20], depends_on [] (注释: FIN-05 未实现不建模), rules K01 (行金额 ≠ sign × Σ 映射科目本期余额, severity high), K02 (试算表科目未被任何非小计行映射, severity high).",
+    "2. Numbat FS v1 (21 行): CHECK-FIN-12 v1, 21 项 passed, subject_ref (FS, 1), exception_ids []; RUN-FIN-12-1 succeeded; 片段无任务; FIN-12 completed.",
+    "3. SOFP-REC 改为 195500000: X-FIN-12-1-K01-1 {source_ids [SOFP-REC], amount_cents -1000000, detail {fs_cents 195500000, tb_cents 196500000, account_codes [1100, 1150]}}, 证据指针含 trial_balance 1100, 1150 与 financial_statement_line SOFP-REC; T-X-FIN-12-1-K01-1-v1 (unattributed, subject_id SOFP-REC) pending; CHECK-FIN-12 的 SOFP-REC 项 failed; check_patch 通过.",
+    "4. FS 去掉 1300 的映射: X-FIN-12-1-K02-1 {source_ids [1300], amount_cents 14660000}, 任务 T-X-FIN-12-1-K02-1-v1.",
+    "5. 对 K01 任务 override (理由写明) → J-FIN-12-1-SOFP-REC-H1 confirmed, X-FIN-12-1-K01-1 attributed; 改提交 misstatement → M-{决定 ID}, exception_id X-FIN-12-1-K01-1.",
+    "6. financial_statements 返回 None: RUN-FIN-12-1 failed, failure_reason 含 financial statements not provided, T-RUN-FIN-12-1-v1 (failed)."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-5",
+   "title": "A6 FIN-15 期末总体复核分析程序",
+   "procedures": [
+    "FIN-15"
+   ],
+   "goal": "A6 执行 FIN-15: 规则 F01 找本期较上期变动超阈值的科目 (出例外), F02 取期末三个月收入与应收变动 (rows); 每个超阈值科目一个判断对象, LLM 结合 PLN-07 比率, 已认定错报与已确认判断解释波动; L2 一律进人工复核.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-15.yaml",
+    "src/backend/knowledge/prompts/FIN-15.md.j2",
+    "src/backend/agents/fieldwork.py",
+    "tests/test_fieldwork_fin15.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 520 para 6 (期末分析程序, 已核), para 7 (异常波动须调查, 已核)",
+    "规格书 6.1.2 FIN-15 行 (807 行), 7.2 节 FIN-15 hybrid L2 (1076 行), 10 节 P3 硬闸门 \"FIN-15 有未解释的重大波动\" (1439 行)",
+    "合成数据集设计第 3.1 节 (1100 本期 2,025,000.00, 上期 1,500,000.00, +35%)"
+   ],
+   "prerequisites": [
+    "SG-2",
+    "SG-3",
+    "R41",
+    "R35"
+   ],
+   "external_deps": [
+    "B: FIN-15.yaml 的 F01, F02 SQL; A 先用 FakeRuleEngine 预置 F01 例外与 F02 行",
+    "FIN-09, GEN-05 (第 1-2 级, 另组) 实现后在 depends_on 补上, 并保证它们在 completion 节点内先于 FIN-15"
+   ],
+   "acceptance": [
+    "1. FIN-15.yaml: owner A6, engine hybrid, autonomy_level L2, phase P3_Completion, params {change_pct 0.2, min_change_cents 10000000, performance_materiality_cents {ref: performance_materiality_cents}, revenue_account_codes [4100], receivable_account_codes [1100]}, standards [ASA520-P06, ASA520-P07], llm {prompt FIN-15.md.j2, output_model JudgmentDraft}, depends_on [].",
+    "2. Numbat: F01 出 1 条 X-FIN-15-1-F01-1 {source_type trial_balance, source_ids [1100], amount_cents 52500000, detail {current_cents 202500000, prior_cents 150000000, change_pct 0.35}}; F02 三行 2026-04 (收入 97500000, 应收变动 -15435150), 2026-05 (107500000, 6102513), 2026-06 (150000000, 98891400) (数值来自 journal_entries.csv 探查, B 以 SQL 复核); 判断对象 1 个, subject_id 1100, fixture_key 1100.",
+    "3. 提示词含 F02 三行, 状态中 PLN-07 比率 (gross_margin, revenue_growth), 全部错报 (M-… 14200000 Revenue Cutoff overstated) 与 SI-2026-0612; 不含其他科目明细.",
+    "4. 判断 J-FIN-15-1-1100 v1, autonomy_level L2, exception_ids [X-FIN-15-1-F01-1]; 建 T-J-FIN-15-1-1100-v1 (normal); 1 行 llm_call (actor A6, procedure_id FIN-15).",
+    "5. LLM 连续 3 次校验失败: 建 T-X-FIN-15-1-F01-1-v1 (unattributed, subject_id 1100), 不出判断.",
+    "6. 无科目超阈值: 不调 LLM, 无判断无任务, RUN-FIN-15-1 succeeded."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-6",
+   "title": "FIN-15 fixture",
+   "procedures": [
+    "FIN-15"
+   ],
+   "goal": "提供 FIN-15/1100.json, 结论与证据取自 Numbat 数据, 通过四级校验.",
+   "scope_files": [
+    "tests/fixtures/llm/FIN-15/1100.json",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "合成数据集设计第 3.1, 5.1 节, 第 7 节第 9 行 (SI-2026-0612 错报)",
+    "开发接口文档第 4 节 fixture 约定, 第 5 节 OutputValidator"
+   ],
+   "prerequisites": [
+    "SG-5"
+   ],
+   "external_deps": [
+    "B: data/generate_demo.py 把该文件复制到 data/demo/llm/FIN-15/1100.json, 两处一致 (test_knowledge 守护)"
+   ],
+   "acceptance": [
+    "1. conclusion 写明应收增加 35.0% (AUD 525,000), 与 2026 年 6 月销售 AUD 1,500,000 (较 5 月 AUD 1,075,000 高 39.5%) 一致, 其中 SI-2026-0612 AUD 142,000 已记为未更正截止错报, 无其他未解释波动.",
+    "2. proposed_action accept, exception_ids [X-FIN-15-1-F01-1], misstatement_draft 为空.",
+    "3. 证据: trial_balance 1100, sales_invoice SI-2026-0612, standard ASA520-P06; fact 与 standard 步骤都有指针.",
+    "4. 经 OutputValidator 四级校验 attempt 1 通过; data/demo/llm 副本内容相同."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-7",
+   "title": "completion 节点: FIN-15, FIN-12, FIN-04 与 FIN-01 材料",
+   "procedures": [
+    "FIN-15",
+    "FIN-12",
+    "FIN-04",
+    "FIN-01"
+   ],
+   "goal": "completion 依次执行 FIN-15, FIN-12, FIN-04 (FIN-04 最后, 使 FIN-15/FIN-12 的错报决定进汇总表); 再次进入时 FIN-15 已完成跳过, FIN-12 在 FS 版本未变时跳过, FIN-04 照旧 rerun; FIN-01 材料加勾稽结果与总体复核判断.",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py",
+    "src/backend/knowledge/procedures/FIN-01.yaml",
+    "src/backend/contracts/views.py",
+    "src/backend/orchestration/query.py",
+    "docs/开发接口文档.md",
+    "tests/test_completion.py",
+    "tests/test_query.py",
+    "tests/test_fin_gate.py"
+   ],
+   "basis": [
+    "规格书 6.1.2 FIN-01 行 (前置含 FIN-15, 822 行), 10 节 P3 (1415-1440 行), UC-06 第 4-6 步 (2128-2130 行)",
+    "开发接口文档第 3 节 completion, 第 7 节 CompletionMaterial"
+   ],
+   "prerequisites": [
+    "SG-3",
+    "SG-4",
+    "SG-5",
+    "R23",
+    "R24"
+   ],
+   "external_deps": [
+    "C: FIN-01 闸门页展示勾稽结果与总体复核判断 (契约改动见接口文档第 7 节)"
+   ],
+   "acceptance": [
+    "1. NODE_PROCEDURES[completion] == (FIN-15, FIN-12, FIN-04); 阶段 P3_Completion 与 FIN-15 首次执行同一事务写入; FIN-01.yaml depends_on [FIN-04, FIN-15].",
+    "2. Numbat (脚本 A6, 真实 A9): 停在 FIN-15 等复核 → confirm → CHECK-FIN-12 v1 → SCHEDULE v1 (items 1 行 14200000) → 停 gate_fin.",
+    "3. CompletionMaterial 加 fs_check (CHECK-FIN-12 v1), fs_exceptions [], analytics_judgments [J-FIN-15-1-1100 v2].",
+    "4. FIN-01 reject: RUN-FIN-04-2 (rerun), SCHEDULE v2; 无 RUN-FIN-15-2, RUN-FIN-12-2. FS 改为 v2 后再 reject: RUN-FIN-12-2 (rerun), CHECK-FIN-12 v2 subject_ref (FS, 2).",
+    "5. 新增守护测试: 每个节点内程序的 depends_on 只指向同节点中排在前面的程序或更早节点的程序与闸门."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-8",
+   "title": "A5 FIN-07 管理层声明书取得 (manual)",
+   "procedures": [
+    "FIN-07"
+   ],
+   "goal": "经通用人工程序机制: A5 按模板生成声明书请求稿 (附当前未更正错报汇总表) 派给审计师; 收回审计师登记的签字结果与上传文件后生成 REPLETTER.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-07.yaml",
+    "src/backend/agents/evidence.py",
+    "src/backend/contracts/models.py",
+    "tests/test_evidence_fin07.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 580 para 9-15 与 Appendix 2 (已核); ASA 450 para 14 (未更正错报汇总附于声明书, 已核)",
+    "规格书 6.1.2 FIN-07 行 (manual, 日期不晚于报告日, 813 行), UC-06 第 6a 步 (2131 行), 18 节 collect_manual_result (2728 行)"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2",
+    "通用人工程序机制 (第 3 级机制, 另组起草, 编号待合并)"
+   ],
+   "external_deps": [
+    "通用人工程序机制: 人工任务, 人工结果载荷校验与节点读回; 未就绪前 A 用 tests/fakes.py 的脚本人工结果直接构造载荷",
+    "B: 声明书 PDF 与 manifest (数据需求 声明书 PDF)",
+    "C: 人工结果表单与文件上传 (DocumentType representation_letter)"
+   ],
+   "acceptance": [
+    "1. FIN-07.yaml: owner A5, engine manual, autonomy_level L1, phase P3_Completion, depends_on [FIN-04, FIN-01] (注释: FIN-02 实现后补), standards [ASA580-P10, ASA580-P11, ASA580-P14, ASA450-P14], params {required_specific: 7 个代码}.",
+    "2. 请求稿含 Numbat Electronic Components Pty Ltd, 30 June 2026, 3 条核心与 7 条具体声明原文, 附表 1 行 (M-{SI-2026-0612 的错报决定 ID}, 14200000, overstated); 无残留花括号.",
+    "3. 提交人工结果 {status obtained, dated_at 2026-10-02, signed_by [Jordan Avery, Priya Raman], period_end 2026-06-30, 10 条 present, document_id 为 manifest 中 representations/representation_letter.pdf 的 ID, inconsistencies []}: REPLETTER v1, attached_schedule 等于 SCHEDULE v1 items, schedule_ref (SCHEDULE, 1), run_id RUN-FIN-07-1; RUN-FIN-07-1 succeeded; FIN-07 completed; 该文件 type representation_letter, reliability internal_original.",
+    "4. 登记 refused: REPLETTER v1 status refused, 各条 present false, signed_by [], dated_at None; 执行仍成功 (结论由 FIN-18 给出).",
+    "5. 已有 REPLETTER v1 时按 Q5 重新取得: RUN-FIN-07-2 (rerun), REPLETTER v2, 请求稿列出上次不通过的检查项.",
+    "6. status obtained 而缺 dated_at 或 signed_by: 人工结果被拒 (MISSING_FIELD), 不写 Store."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-9",
+   "title": "A9 FIN-18 书面声明完备性, 日期与可靠性校验",
+   "procedures": [
+    "FIN-18"
+   ],
+   "goal": "A9 对 REPLETTER 做规则校验 (取得状态, 核心声明, ASA 450 附表, 签署人, 期间, 具体声明, 不一致事项), 产出 CHECK-FIN-18 与 must_disclaim; 报告日校验留给 RPT-01 签字前检查.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-18.yaml",
+    "src/backend/agents/qc.py",
+    "tests/test_qc.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 580 para 9, 10, 11, 13, 14, 17, 19, 20 (已核); ASA 450 para 14 (已核)",
+    "规格书 6.1.2 FIN-18 行 (814 行), 7.5 节 (FIN-18 L1, 1155 行), 14 节失败路径 (2337 行), UC-06 第 6a 步"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2",
+    "SG-8"
+   ],
+   "external_deps": [],
+   "acceptance": [
+    "1. FIN-18.yaml: owner A9, engine rule, autonomy_level L1, phase P3_Completion, depends_on [FIN-07], standards [ASA580-P10, ASA580-P11, ASA580-P14, ASA580-P19, ASA580-P20, ASA450-P14].",
+    "2. Numbat REPLETTER v1: CHECK-FIN-18 v1 W01-W07 全 passed, must_disclaim false, subject_ref (REPLETTER, 1), exception_ids []; RUN-FIN-18-1 succeeded.",
+    "3. status refused 或 unreliable: W01 failed, must_disclaim true, X-FIN-18-1-W01-1 (severity high, 证据指向 REPLETTER 文件第 1 页); INFORMATION_ACCESS present false: W02 failed, must_disclaim true (para 20).",
+    "4. 非核心不通过, must_disclaim false: signed_by [Alex Chen] (不在客户画像 directors 中) → W04; period_end 2025-06-30 → W05; 附表金额 14000000 或少一行 → W03 (按 misstatement_id 与金额比对, 不比版本); 缺 LITIGATION → W06; inconsistencies 非空 → W07. 各出 X-FIN-18-1-W0n-1.",
+    "5. 不写 Judgment, 不建复核任务 (人的确认按 Q1, Q5 由节点与 RPT-01 处理)."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-10",
+   "title": "A9 FIN-10 职业道德与独立性履行确认",
+   "procedures": [
+    "FIN-10"
+   ],
+   "goal": "A9 按客户画像的收费, 独立性标记做 APES 110 与独立性清单检查, 产出 CHECK-FIN-10, 供 RPT-08 定声明格式, 供 RPT-01 由项目负责人认定.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-10.yaml",
+    "src/backend/agents/qc.py",
+    "tests/test_qc.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 220 para 21 (报告日前项目负责人认定道德与独立性要求已履行, 已核)",
+    "APES 110 R410.9 (审计禁止或有收费), R410.13 (长期欠费), R410.15 (非公众利益实体连续 5 年收费占比超 30%) (已核)",
+    "规格书 6.1.2 FIN-10 行 (820 行), 7.5 节 (1151 行), UC-06 第 6a 步"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2"
+   ],
+   "external_deps": [
+    "B: client_profile.json 加 fees, independence_flags, governance (数据需求 画像); A 先用 FakeEngagementStore 预置 Numbat 值",
+    "GEN-12, ACC-02 未实现: 本条只读画像, E05 如实标 attention"
+   ],
+   "acceptance": [
+    "1. FIN-10.yaml: owner A9, engine rule, autonomy_level L1, phase P3_Completion, depends_on [] (注释: GEN-12, FIN-05 未实现), standards [ASA220-P21, APES110-R410.9, APES110-R410.13, APES110-R410.15], params {dependency_pct 0.3, dependency_years 5}.",
+    "2. Numbat 画像 (audit_fee_cents 4800000, firm_total_fee_cents 240000000, dependency_pct_by_year {2026: 0.02}, overdue_cents 0, contingent false, independence_flags []): CHECK-FIN-10 v1, E01 (独立性标记) passed, E02 (或有收费) passed, E03 (收费依赖) passed, E04 (欠费) passed, E05 (持续监控记录) attention 且 detail 写明 GEN-12 未实现; exception_ids []; RUN-FIN-10-1 succeeded.",
+    "3. contingent true → E02 failed, X-FIN-10-1-E02-1; independence_flags 非空 → E01 failed; dependency_pct_by_year 2022-2026 各 0.35 → E03 failed, 只有 4 年 → passed.",
+    "4. overdue_cents 1200000, overdue_days 200 → E04 attention (R410.13 无量化标准, 不判失败).",
+    "5. 不写 Judgment, 不建任务."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-11",
+   "title": "representations 节点: 声明书, 声明书校验, 独立性检查与路由",
+   "procedures": [
+    "FIN-07",
+    "FIN-18",
+    "FIN-10",
+    "FIN-01",
+    "RPT-03"
+   ],
+   "goal": "gate_fin approve 后进新节点 representations, 依次 FIN-07 (人工等待), FIN-18, FIN-10; FIN-18 非核心不通过按 Q5 重新取得; must_disclaim 而意见不是无法表示时回 completion; 否则进 report_draft. 阶段按 Q6: FIN-01 通过后仍为 P3, RPT-03 首次执行时进 P4.",
+   "scope_files": [
+    "src/backend/orchestration/graph.py",
+    "src/backend/orchestration/nodes.py",
+    "src/backend/orchestration/decisions.py",
+    "src/backend/orchestration/recovery.py",
+    "docs/Demo需求文档.md",
+    "docs/开发接口文档.md",
+    "tests/test_graph.py",
+    "tests/test_nodes.py",
+    "tests/test_fin_gate.py",
+    "tests/test_flow.py"
+   ],
+   "basis": [
+    "规格书 UC-06 第 6a, 7 步 (2131-2132 行), 12.3 节主状态机 (P3 子状态, 1961-1975 行), 14 节 (2337 行)",
+    "开发接口文档第 3 节, 第 7 节 FIN-01 效果与恢复机制"
+   ],
+   "prerequisites": [
+    "SG-8",
+    "SG-9",
+    "SG-10",
+    "SG-3",
+    "R24",
+    "R25"
+   ],
+   "external_deps": [
+    "通用人工程序机制 (另组) 的节点内人工等待"
+   ],
+   "acceptance": [
+    "1. FIN-01 approve qualified: GateDecision 与 FIN-01 completed 新版本在同一 commits 项, opinion_route qualified, phase 仍 P3_Completion (按 Q6 推荐), next representations; R24 验收 2 与 R27, R28, R30 中阶段相关断言同步修改.",
+    "2. representations: FIN-07 人工等待 → 提交 → RUN-FIN-18-1 → RUN-FIN-10-1 → report_draft; REPORT-1 v1 与 phase P4_Reporting 同一事务, transition 留痕 P3→P4 记在 RPT-03 下.",
+    "3. FIN-18 W04 不通过: 节点再派 FIN-07 (RUN-FIN-07-2, trigger rerun), REPLETTER v2 合格后 RUN-FIN-18-2 passed, 继续 FIN-10.",
+    "4. REPLETTER status refused: CHECK-FIN-18 must_disclaim → 路由 completion, RUN-FIN-04-2, SCHEDULE v2 (视 SG-16), 停 gate_fin.",
+    "5. 第二次 FIN-01 approve 后再入 representations: FIN-07, FIN-18, FIN-10 已 completed, 不新建 Run, 直接进 report_draft.",
+    "6. NODE_PROCEDURES[representations] == (FIN-07, FIN-18, FIN-10); 人工结果已写 Store 未写检查点时 recover 按此顺序补交."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-12",
+   "title": "A10 RPT-08 s307C 独立性声明出具",
+   "procedures": [
+    "RPT-08"
+   ],
+   "goal": "A10 按 CHECK-FIN-10 选声明格式, 用 s307c.yaml 生成 S307C 草稿 (项目负责人作 lead auditor); 签署与送达随 RPT-01 签字 (s307C(5)(a)(i)).",
+   "scope_files": [
+    "src/backend/knowledge/procedures/RPT-08.yaml",
+    "src/backend/agents/concierge.py",
+    "tests/test_concierge.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "Corporations Act s307C(3)(c), (3)(d), (5)(a)(i), (5)(b) (已核); s301(2)(c): 股东指示要求审计时须按 Division 3 审计 (已核)",
+    "规格书 6.1.2 RPT-08 行 (828 行), 7.5 节 (1157 行), UC-06 第 9 步",
+    "需求清单 Q15 (auditor_name 取项目负责人 full_name)"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2",
+    "SG-10",
+    "R51"
+   ],
+   "external_deps": [],
+   "acceptance": [
+    "1. RPT-08.yaml: owner A10, engine rule, autonomy_level L1, phase P4_Reporting, depends_on [FIN-10], standards [CorpAct-s307C-3, CorpAct-s307C-5], params {declarant: lead_auditor}.",
+    "2. Numbat (CHECK-FIN-10 无 failed 项, 项目负责人 full_name Jordan Ellis): S307C v1 draft, form no_contraventions, contraventions [], declarant_id 为 owner_id, text 含 Numbat Electronic Components Pty Ltd, 30 June 2026, s307C(3)(c) 两句, Jordan Ellis, Tessellate Audit Partners; declaration_date None, report_id None; RUN-RPT-08-1 succeeded.",
+    "3. CHECK-FIN-10 的 E02 failed: form contraventions, contraventions 含 E02 说明, text 用 (3)(d) 句式列出.",
+    "4. 状态无 CHECK-FIN-10: RUN-RPT-08-1 failed, T-RUN-RPT-08-1-v1 (failed).",
+    "5. 已有 S307C v1, CHECK-FIN-10 出 v2 后再执行: S307C v2 draft."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-13",
+   "title": "A10 RPT-07 与治理层沟通 (完成阶段汇总, manual)",
+   "procedures": [
+    "RPT-07"
+   ],
+   "goal": "经通用人工程序机制: A10 按模板与当前状态生成沟通议程 (必选项随意见类型, 错报, 治理层构成变化) 派给审计师; 收回沟通记录生成 GC-RPT-07-1.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/RPT-07.yaml",
+    "src/backend/agents/concierge.py",
+    "tests/test_concierge.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 260 para 13, 16, 17, Aus 18.1, 21, 24 (已核); ASA 450 para 12 (已核); ASA 705 para 30 (预期修正意见须沟通, 已核)",
+    "规格书 6.1.2 RPT-07 行 (manual, 在 RPT-01 之前, 832 行), 10 节 P4 人员行 (1446 行), UC-06 第 9 步"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-2",
+    "R51",
+    "通用人工程序机制 (第 3 级机制, 另组)"
+   ],
+   "external_deps": [
+    "B: 治理层沟通函 PDF 与 manifest, client_profile.json 的 governance (数据需求)",
+    "C: 人工结果表单与上传 (DocumentType governance_communication)"
+   ],
+   "acceptance": [
+    "1. RPT-07.yaml: owner A10, engine manual, autonomy_level L1, phase P4_Reporting, depends_on [RPT-03] (注释: FIN-14, RPT-09 未实现), standards [ASA260-P16, ASA260-P17, ASA260-Aus18.1, ASA260-P21, ASA450-P12].",
+    "2. Numbat (opinion_route qualified, SCHEDULE 1 项, governance.all_in_management true): 必选议程 5 项 SIG_PRACTICES, DIFFICULTIES, REPORT_FORM, INDEPENDENCE (须书面), UNCORRECTED; REPRESENTATIONS 标注按 ASA 260 para 13 免于重复, 非必选.",
+    "3. 人工结果 {communicated_at 2026-10-01, form written, recipients [Jordan Avery, Priya Raman], 5 项 covered, document_id 为 manifest 中 governance/completion_communication.pdf 的 ID, response 原文}: GC-RPT-07-1 v1, kind completion; RUN-RPT-07-1 succeeded; RPT-07 completed.",
+    "4. opinion_route unqualified 且无错报: 议程无 REPORT_FORM, UNCORRECTED.",
+    "5. 人工结果漏 INDEPENDENCE 或 form oral: 对象照常记录 (由 SG-15 签字前检查拦截)."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-14",
+   "title": "pre_sign 节点: RPT-08 与 RPT-07",
+   "procedures": [
+    "RPT-08",
+    "RPT-07",
+    "RPT-03"
+   ],
+   "goal": "report_draft 之后进 pre_sign 依次执行 RPT-08, RPT-07, 再到 gate_rpt01; RPT-01 退回后再入时只重做依赖已变的 (CHECK-FIN-10 出新版本时 RPT-08), 已完成的 RPT-07 不重做.",
+   "scope_files": [
+    "src/backend/orchestration/graph.py",
+    "src/backend/orchestration/nodes.py",
+    "src/backend/orchestration/recovery.py",
+    "docs/Demo需求文档.md",
+    "docs/开发接口文档.md",
+    "tests/test_graph.py",
+    "tests/test_nodes.py"
+   ],
+   "basis": [
+    "规格书 6.1.2 RPT-07 行 (在 RPT-01 之前), RPT-08 行; UC-06 第 9, 10 步 (2134-2135 行)",
+    "开发接口文档第 3 节, 第 7 节"
+   ],
+   "prerequisites": [
+    "SG-12",
+    "SG-13",
+    "SG-11"
+   ],
+   "external_deps": [],
+   "acceptance": [
+    "1. 图: report_draft → pre_sign → gate_rpt01; NODE_PROCEDURES[pre_sign] == (RPT-08, RPT-07).",
+    "2. Numbat 首轮: RUN-RPT-08-1, RPT-07 人工等待 → 提交 → 停 gate_rpt01.",
+    "3. RPT-01 reject → report_draft (REPORT-2) → pre_sign: 无 RUN-RPT-08-2, RUN-RPT-07-2 → 停 gate_rpt01.",
+    "4. 人工结果已写 Store 未写检查点: recover 补交后结果相同; Demo需求文档第 4.1 节流程图与接口文档第 3 节同步."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-15",
+   "title": "RPT-01 签字前清单, 法定确认与签字效果",
+   "procedures": [
+    "RPT-01",
+    "FIN-10",
+    "FIN-18",
+    "FIN-12",
+    "RPT-08",
+    "RPT-07"
+   ],
+   "goal": "实现 M-13: 纯函数 presign_items (query 与 DecisionSubmit 共用) 计算签字前清单; ReportMaterial 呈报清单与待确认对象; approve 须带 attestations 绑定 CHECK-FIN-10, CHECK-FIN-18, S307C 当前版本 (Q1 推荐); 任一项不过报 PRESIGN_BLOCKED; 签字同一事务签署 S307C; recovery 重建.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/views.py",
+    "src/backend/orchestration/decisions.py",
+    "src/backend/orchestration/query.py",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md",
+    "tests/test_rpt_gate.py",
+    "tests/test_query.py",
+    "tests/test_recovery.py",
+    "tests/test_flow.py"
+   ],
+   "basis": [
+    "规格书 3.1 节 M-13 (167 行) 与 12.6 节 M-13 行 (2051 行), 6.1.2 RPT-01 行 (833 行), UC-06 第 10 步 (2135 行), 10 节 P4 分支 (1450 行)",
+    "ASA 580 para 14 (不晚于报告日, 已核), ASA 700 para 49, Aus 49.1 (报告日前提, 已核), ASA 220 para 21 (已核), s307C(5) (已核)",
+    "开发接口文档第 7 节校验表, 必填表, 决定的效果, 恢复机制"
+   ],
+   "prerequisites": [
+    "SG-1",
+    "SG-4",
+    "SG-9",
+    "SG-10",
+    "SG-12",
+    "SG-13",
+    "SG-14",
+    "R25",
+    "R26",
+    "R30"
+   ],
+   "external_deps": [
+    "C: RPT-01 闸门页展示清单与三项确认勾选, api 对 PRESIGN_BLOCKED 的 HTTP 映射 (契约改动写进接口文档第 7, 10 节)",
+    "GEN-14/M-12 无未决法定通报, EQR, RPT-09, RPT-10, GEN-23 不在范围: 清单不列, 材料中注明未纳入"
+   ],
+   "acceptance": [
+    "1. 材料 (now 注入 2026-10-02T15:00Z, Numbat 全部完成): presign 7 项 P1 道德与独立性 (CHECK-FIN-10 无 failed), P2 书面声明 (CHECK-FIN-18 无 failed, 或 must_disclaim 且报告为 disclaimer), P3 声明书日期 2026-10-02 不晚于预计报告日 2026-10-03 (相隔 1 天, 按 Q3 只显示), P4 财报勾稽 (FIN-12 completed, CHECK-FIN-12 subject_ref (FS,1) 等于最新 FS 版本, 无 open 的 FIN-12 例外), P5 s307C 声明 (S307C v1 draft), P6 治理层沟通 (GC-RPT-07-1 communicated_at 2026-10-01 不晚于报告日, 必选议程全 covered, INDEPENDENCE 为 written), P7 报告日前提 (FS prepared_at 2026-09-25, directors_declaration_date 2026-09-25 均不晚于报告日) 全部 passed; attest_targets [(CHECK-FIN-10,1), (CHECK-FIN-18,1), (S307C,1)].",
+    "2. approve 带三项 attestations: 同一次提交写 GateDecision, REPORT-2 v2 (signed, report_date 2026-10-03), S307C v2 (signed, declaration_date 2026-10-03, report_id REPORT-2), RPT-01 completed; phase Archived 与 locked 在全部 put 之后; decision 留痕 1 行.",
+    "3. 以下 approve 均报 PRESIGN_BLOCKED (消息列出项代号), Store 与检查点不变, 锁释放: REPLETTER dated_at 2026-10-04 (P3); FS prepared_at 2026-10-05 或 directors_declaration_date 为空 (P7); 存在 open 的 X-FIN-12-1-K01-1 (P4); 最新 FS 为 v2 而 CHECK-FIN-12 为 (FS,1) (P4); GC communicated_at 2026-10-04, 漏 INDEPENDENCE, 或 INDEPENDENCE 为 oral (P6); RPT-07 未完成 (P6); CHECK-FIN-10 有 failed 项 (P1); must_disclaim 而报告为 qualified (P2).",
+    "4. attestations 缺一项 → MISSING_FIELD; 绑定 CHECK-FIN-10 v1 而当前 v2 → VERSION_MISMATCH; reject 或 insufficient_info 带 attestations → FIELD_NOT_ALLOWED; reject (带批注) 不受清单影响, 照常回 report_draft.",
+    "5. 校验顺序: NOT_AT_GATE → 报告 VERSION_MISMATCH → attestations VERSION_MISMATCH → MISSING_FIELD/FIELD_NOT_ALLOWED → PRESIGN_BLOCKED → INVALID_VALUE (决定 ID 已用); 接口文档第 7 节校验表与必填表同步.",
+    "6. rpt01_effects 纯函数增加 declaration 参数, VERSIONED_EFFECTS 加 independence_declaration; approve 已写 Store 未写检查点时 recover 后检查点含 REPORT-2 v2, S307C v2, phase Archived.",
+    "7. 同一状态与 now 下 query 的 presign 与 DecisionSubmit 的判断一致 (共用 presign_items)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-16",
+   "title": "无法表示意见路径: 汇总表强制意见与 FIN-01 (视用户对拒签处理的决定)",
+   "procedures": [
+    "FIN-04",
+    "FIN-01",
+    "FIN-18"
+   ],
+   "goal": "FIN-18 判必须无法表示意见时, FIN-04 在汇总表写强制意见 disclaimer, FIN-01 只接受 disclaimer; 无强制意见时保持现状 (只能 unqualified 或 qualified).",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/agents/qc.py",
+    "src/backend/orchestration/decisions.py",
+    "src/backend/contracts/views.py",
+    "src/backend/orchestration/query.py",
+    "docs/开发接口文档.md",
+    "tests/test_qc.py",
+    "tests/test_fin_gate.py"
+   ],
+   "basis": [
+    "ASA 580 para 20 (已核)",
+    "规格书 10 节意见路由 (声明书路径为必须结论, 1432 行), 14 节 (2337 行), UC-06 第 6a 步, M-13"
+   ],
+   "prerequisites": [
+    "SG-9",
+    "SG-11",
+    "R23",
+    "R24"
+   ],
+   "external_deps": [
+    "若持续经营组 (FIN-02) 已提 FIN-01 意见类型扩展, 与本条合并, 本条只加 FIN-18 约束",
+    "C: FIN-01 闸门页按强制意见限定选项"
+   ],
+   "acceptance": [
+    "1. UncorrectedSchedule 加 mandatory_opinion: OpinionType | None; 状态中 CHECK-FIN-18 must_disclaim 时 FIN-04 出 SCHEDULE 下一版, mandatory_opinion disclaimer, candidate_opinion disclaimer; 否则 None, 原规则不变 (R23 验收全部通过).",
+    "2. mandatory_opinion disclaimer 时 FIN-01 approve 的 disposition 不是 disclaimer → INVALID_VALUE; disclaimer → 通过, opinion_route disclaimer.",
+    "3. mandatory_opinion 为空时 disposition disclaimer 或 adverse → INVALID_VALUE (同现状).",
+    "4. CompletionMaterial 加 representation_letter 与 CHECK-FIN-18.",
+    "5. 流程: REPLETTER refused → SCHEDULE v2 (disclaimer) → FIN-01 approve disclaimer → representations 不重跑 → report_draft."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "SG-17",
+   "title": "无法表示意见报告的模板与校验 (视用户对拒签处理的决定)",
+   "procedures": [
+    "RPT-03",
+    "RPT-01"
+   ],
+   "goal": "report.yaml 加 disclaimer 固定段 (审计师责任按 ASA 705 para 28 只留三句); RPT-03 支持 opinion_route disclaimer; ReportDraft 语义校验认 Disclaimer 标题.",
+   "scope_files": [
+    "src/backend/knowledge/templates/report.yaml",
+    "src/backend/knowledge/standards/ASA705.yaml",
+    "src/backend/knowledge/prompts/RPT-03.md.j2",
+    "src/backend/agents/concierge.py",
+    "src/backend/services/judgment_engine.py",
+    "tests/test_concierge.py",
+    "tests/test_output_validator.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "ASA 705 para 26, 28, 29 与 Illustration 4, 5 (已核; 示例为非公司法主体与集团审计, 须改写为 Numbat 单体公司法报告, 改写处待用户确认)",
+    "规格书 10 节 P4 (FIN-18 必须无法表示意见只放行 disclaimer 报告, 1450 行)"
+   ],
+   "prerequisites": [
+    "SG-16",
+    "R50",
+    "R51",
+    "R52"
+   ],
+   "external_deps": [],
+   "acceptance": [
+    "1. report.yaml 有 disclaimer 段: auditor_responsibilities 只含 para 28(a)(b)(c) 三句; 不含 para 26 所列两项; 片段 ASA705-P26, ASA705-P28 原文逐字通过.",
+    "2. opinion_route disclaimer: 提示词含 \"Opinion type: **disclaimer**\", judgment_refs 可空; 测试用 ScriptedLLM (不加 fixture 文件, 保持全流程 fixture 各用一次).",
+    "3. 校验: disclaimer 时 opinion 首行须为 \"Disclaimer of Opinion\", basis 首行须为 \"Basis for Disclaimer of Opinion\", 否则语义失败.",
+    "4. RPT-01: must_disclaim 时 disclaimer 报告 approve 通过 SG-15 的 P2."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "SG-18",
+   "title": "验收: mock 全流程加入签字前提 (R55 变更)",
+   "procedures": [
+    "FIN-15",
+    "FIN-12",
+    "FIN-07",
+    "FIN-18",
+    "FIN-10",
+    "RPT-08",
+    "RPT-07",
+    "RPT-01"
+   ],
+   "goal": "真实 Agent 与 MockLLMClient 下跑完 P0-P4, 新增 FIN-15 复核, 声明书与治理层沟通两次人工结果, RPT-01 带确认签字; 结果, 留痕, 证据指针对照本组数据. 只计本组增量, 其他组的增量合并时叠加.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/test_flow.py",
+    "tests/test_knowledge.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "Demo需求文档第 8 节第 1, 4, 5 条; 合成数据集设计第 7 节 (需新增本组各行); R55 验收"
+   ],
+   "prerequisites": [
+    "SG-6",
+    "SG-7",
+    "SG-11",
+    "SG-14",
+    "SG-15",
+    "R55"
+   ],
+   "external_deps": [
+    "B: data/demo 新文件 (FS, 画像字段, 两份 PDF, FIN-15 fixture 副本) 与 manifest; 真实存储变体随 R56 在 B 就绪后补",
+    "通用人工程序机制 (另组) 的人工任务 ID 与决定形式"
+   ],
+   "acceptance": [
+    "1. 决定序列: 原 R55 决定 + completion 中 T-J-FIN-15-1-1100-v1 confirm + FIN-07 人工结果 (同 SG-8 验收 3) + RPT-07 人工结果 (同 SG-13 验收 3) + RPT-01 approve 带三项 attestations; DecisionSubmit 的 now 注入 2026-10-02T15:00Z.",
+    "2. 结果: 例外 5 条 (新增 X-FIN-15-1-F01-1 attributed; X-PLN-07-1-A01-1 仍 open); Judgment 7 条 v2 confirmed (新增 J-FIN-15-1-1100); 任务 9 条全部 decided (原 6 + T-J-FIN-15-1-1100-v1 + 两个人工任务); REPLETTER v1 obtained; CHECK-FIN-10, CHECK-FIN-12, CHECK-FIN-18 各 v1 无 failed; GC-RPT-07-1 v1; S307C v2 signed declaration_date 2026-10-03 report_id REPORT-2; REPORT-2 v2 signed report_date 2026-10-03; document 7 份 (新增 representation_letter, governance_communication 各 1).",
+    "3. 留痕: llm_call 14 行 (原 13 + FIN-15 1); decision 14 行 (原 11 + FIN-15 确认 1 + 人工结果 2); external_call 4 行不变.",
+    "4. 程序总数断言 17 → 24 (本组 +7); 真实 Agent 探针表加 FIN-15 FieldworkAgent 1 次, FIN-12, FIN-18, FIN-10 QCAgent 各 1 次, FIN-07 EvidenceAgent 1 次, RPT-08, RPT-07 ConciergeAgent 各 1 次 (人工程序是否经 Agent.run 以通用机制为准).",
+    "5. tests/fixtures/llm 下每个文件 (含 FIN-15/1100.json) 读一次且 attempt 1 通过; 全部证据指针 (含 financial_statement_line 与两份新文件页码) 能解析.",
+    "6. 阶段: P3_Completion 在 FIN-15 首次执行写入, P4_Reporting 在 RPT-03 首次执行写入, 最终 Archived 且 locked; 签字后提交任一决定 → ENGAGEMENT_LOCKED."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "待审财务报表 data/demo/financial_statements.json 及其载入",
+   "for_keys": [
+    "SG-1",
+    "SG-4",
+    "SG-15",
+    "SG-18"
+   ],
+   "owner": "B",
+   "detail": "按合成数据集设计第 3.1 节试算表编制, 未调整 S1 错报 (管理层拒绝更正). {id: FS, version: 1, prepared_at: 2026-09-25, directors_declaration_date: 2026-09-25, lines: 财务状况表 10 行 SOFP-CASH 165840000 (sign 1, [1010,1020]), SOFP-REC 196500000 (1, [1100,1150]), SOFP-INV 295000000 (1, [1200]), SOFP-PRE 14660000 (1, [1300]), SOFP-PPE 128000000 (1, [1500,1510]), SOFP-PAY 181700000 (-1, [2100,2200]), SOFP-EMP 22200000 (-1, [2300]), SOFP-TAX 15000000 (-1, [2400]), SOFP-CAP 100000000 (-1, [3100]), SOFP-RE 481100000 (-1, [3200] 加全部损益科目); 损益表 11 行 PL-REV 1200000000 (-1, [4100]), PL-OI 1400000 (-1, [4200]), PL-COGS 840000000 (1, [5100]), PL-EMP 118000000 (1, [6100]), PL-OCC 31200000 (1, [6200]), PL-FRT 24000000 (1, [6300]), PL-DEP 16000000 (1, [6400]), PL-OTH 22200000 (1, [6500]), PL-PBT 150000000 (-1, 除 8100 外损益科目, subtotal), PL-TAX 45000000 (1, [8100]), PL-NP 105000000 (-1, 全部损益科目, subtotal)}. 资产合计 800000000 = 负债 218900000 + 权益 581100000. 需: financial_statement_lines 表与迁移, CsvDatasetLoader 载入, FinancialDataStore.financial_statements(eid), record(financial_statement_line, code), manifest 登记, check_demo.py 自检各行等于映射科目之和. 董事声明 (s295(4)) 对 s293 股东指示的小型私人公司是否适用待核, 日期先按 2026-09-25 给出."
+  },
+  {
+   "what": "客户画像加收费, 独立性标记与治理层",
+   "for_keys": [
+    "SG-1",
+    "SG-10",
+    "SG-13"
+   ],
+   "owner": "B",
+   "detail": "data/demo/client_profile.json 加 fees {audit_fee_cents: 4800000, non_audit_fee_cents: 0, firm_total_fee_cents: 240000000, dependency_pct_by_year: {\"2026\": 0.02}, overdue_cents: 0, overdue_days: 0, contingent: false}, independence_flags [], governance {members: [{name: Jordan Avery, also_management: true}, {name: Priya Raman, also_management: true}], all_in_management: true}. 首年审计 (Tessellate Audit Partners 为虚构事务所, 收费数值为合成); 字段名以 SG-1 契约为准. 合成数据集设计第 2.1 节同步."
+  },
+  {
+   "what": "已签署的管理层声明书 PDF",
+   "for_keys": [
+    "SG-8",
+    "SG-9",
+    "SG-18"
+   ],
+   "owner": "B",
+   "detail": "data/demo/representations/representation_letter.pdf (2 页, reportlab invariant=1): Numbat 信头, 致 Tessellate Audit Partners, 日期 2 October 2026, 期间 year ended 30 June 2026; 按 ASA 580 Appendix 2 列 3 条核心与 7 条具体声明 (原文同 SG-2 模板); 附表列 SI-2026-0612 收入高估 AUD 142,000 (Revenue, Cutoff); 签署 Jordan Avery, Priya Raman (Directors). 引用约定书日期写 15 August 2025 (若 ACC-08 组另定以其为准). 管理层对附表错报的表述 (是否按 ASA 450 A29 写明不同意并给理由) 待用户确认后定稿. manifest.documents 登记 type representation_letter 与 page_count."
+  },
+  {
+   "what": "完成阶段治理层沟通函 PDF",
+   "for_keys": [
+    "SG-13",
+    "SG-18"
+   ],
+   "owner": "B",
+   "detail": "data/demo/governance/completion_communication.pdf (2 页): Tessellate Audit Partners 致 Numbat 董事 Jordan Avery, Priya Raman, 日期 1 October 2026; 逐项: 会计实务的重要质量方面 (收入确认时点按 CON-001 第 5.1 条签收转移控制权), 审计中无重大困难, 拟出具保留意见及其原因 (ASA 705 para 30), 未更正错报 AUD 142,000 并要求更正 (ASA 450 para 12), 独立性声明 (ASA 260 Aus 18.1: 已遵守 s307C 独立性要求); 末尾董事回复一段 (措辞待用户确认). manifest 登记 type governance_communication."
+  },
+  {
+   "what": "FIN-15 规则取数复核与 fixture 副本",
+   "for_keys": [
+    "SG-5",
+    "SG-6"
+   ],
+   "owner": "B",
+   "detail": "F01 SQL 对 Numbat 只命中 1100 (52500000, +35%); F02 SQL 输出 2026-04/05/06 三个月 4100 贷方净额 97500000, 107500000, 150000000 与 1100 净变动 -15435150, 6102513, 98891400 (A 用 journal_entries.csv 探查所得, 请以 SQL 复核, 不符以 SQL 为准并告知 A 改 fixture). generate_demo.py 复制 tests/fixtures/llm/FIN-15/1100.json 到 data/demo/llm/FIN-15/."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "contracts/models.py 新对象 WrittenRepresentationLetter (含 RepresentationClause), GovernanceCommunication (含 CommunicationMatter), ComplianceCheck (含 CheckItem), IndependenceDeclaration, FinancialStatements (含 FinancialStatementLine)",
+   "change": "新增; 前四个继承 Versioned 存 AuditOutputStore, FinancialStatements 为客户数据由 FinancialDataStore 提供 (视待定问题 4)",
+   "doc_section": "开发接口文档第 2.4, 2.6 节"
+  },
+  {
+   "target": "contracts/models.py ClientProfile",
+   "change": "加 fees, independence_flags, governance, 均带默认值",
+   "doc_section": "开发接口文档第 2.3 节"
+  },
+  {
+   "target": "contracts/models.py DocumentType, PointerSource, SourceType",
+   "change": "DocumentType 加 representation_letter, governance_communication; PointerSource 与 SourceType 加 financial_statement_line",
+   "doc_section": "开发接口文档第 2.1, 2.2 节"
+  },
+  {
+   "target": "contracts/models.py GateDecision",
+   "change": "加 attestations: list[Attestation{target_id, target_version}], 只在 RPT-01 approve 必填 (CHECK-FIN-10, CHECK-FIN-18, S307C), 其余决定须为空 (视待定问题 1)",
+   "doc_section": "开发接口文档第 2.5 节, 第 7 节必填表"
+  },
+  {
+   "target": "contracts/models.py UncorrectedSchedule",
+   "change": "加 mandatory_opinion: OpinionType | None (FIN-18 必须无法表示意见时为 disclaimer) (视待定问题 2)",
+   "doc_section": "开发接口文档第 2.4 节, 第 7 节取值检查"
+  },
+  {
+   "target": "contracts/state.py EngagementState",
+   "change": "加 representation_letter, governance_communications (upsert_by_id), compliance_checks (upsert_by_id), independence_declaration; initial_state 置空",
+   "doc_section": "开发接口文档第 3 节状态与字段写入归属表"
+  },
+  {
+   "target": "orchestration/merge.py AGENT_FIELDS",
+   "change": "A5 加 representation_letter; A9 加 compliance_checks, exceptions, review_tasks; A10 加 governance_communications, independence_declaration",
+   "doc_section": "开发接口文档第 3 节字段写入归属, 第 6 节 Agent 返回字段表"
+  },
+  {
+   "target": "contracts/ports.py FinancialDataStore",
+   "change": "加 financial_statements(eid) -> FinancialStatements | None; record 支持 financial_statement_line",
+   "doc_section": "开发接口文档第 4 节"
+  },
+  {
+   "target": "contracts/views.py CompletionMaterial, ReportMaterial",
+   "change": "CompletionMaterial 加 fs_check, fs_exceptions, analytics_judgments, representation_letter, representation_check; ReportMaterial 加 presign (清单项列表), attest_targets, declaration, representation_letter, governance_communication, report_date_preview",
+   "doc_section": "开发接口文档第 7 节视图模型, 第 10 节"
+  },
+  {
+   "target": "DecisionSubmit 错误码",
+   "change": "新增 PRESIGN_BLOCKED (签字前法定前提未满足), 校验顺序排在字段检查之后, 决定 ID 检查之前",
+   "doc_section": "开发接口文档第 7 节校验表, 第 10 节 HTTP 映射"
+  },
+  {
+   "target": "决定效果: FIN-01 approve 与 RPT-01 approve",
+   "change": "FIN-01 approve 不再改阶段 (仍 P3_Completion), P4_Reporting 改由 RPT-03 首次执行写入 (视待定问题 6); RPT-01 approve 同一事务把 S307C 置 signed, declaration_date = report_date, report_id = 签字报告",
+   "doc_section": "开发接口文档第 3 节程序执行范围, 第 7 节决定的效果与恢复机制"
+  },
+  {
+   "target": "ID 规则",
+   "change": "加 REPLETTER, CHECK-{procedure_id}, S307C, GC-{procedure_id}-{run_no}, FS",
+   "doc_section": "开发接口文档第 0 节 ID 规则"
+  },
+  {
+   "target": "主图与 NODE_PROCEDURES",
+   "change": "completion 改为 (FIN-15, FIN-12, FIN-04); 新增 representations (FIN-07, FIN-18, FIN-10) 与 pre_sign (RPT-08, RPT-07) 两个节点; P2 以外节点可等待 normal/unattributed 复核任务",
+   "doc_section": "开发接口文档第 3, 7 节; Demo需求文档第 4.1 节"
+  },
+  {
+   "target": "程序库",
+   "change": "新增 7 个 YAML (FIN-07, FIN-18, FIN-10, RPT-08, FIN-12, FIN-15, RPT-07), FIN-01 depends_on 加 FIN-15, RPT-01 depends_on 加 FIN-10, FIN-18, FIN-12, RPT-08, RPT-07; 新模板 representation_letter.yaml, s307c.yaml, governance_completion.yaml",
+   "doc_section": "开发接口文档第 8.1, 8.2 节; Demo需求文档第 2 节程序清单与第 7 节准则片段"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "独立性认定, 书面声明校验结论, s307C 独立性声明签署这三项必须由审计师本人确认的事, 放在哪一步提交?",
+   "options": [
+    {
+     "label": "签字时一并确认 (推荐)",
+     "pros": "不新增待办与等待环节; 公司法 s307C 第 5 款本就要求声明与审计报告同时交给董事, 一次签字完成; 确认绑定各清单当时的版本, 清单变了须重新确认, 可追溯.",
+     "cons": "独立性认定与报告签字同一时刻, ASA 220 第 21 段要求在报告日之前认定, 同时刻是否算之前有解释空间; 签字页要多展示三份材料."
+    },
+    {
+     "label": "各自单独确认",
+     "pros": "每项认定有独立的时间与决定记录, 严格早于签字.",
+     "cons": "多三次人工操作与节点等待, 要扩展待办可指向的对象类型; 声明仍要在签字时再签一次."
+    },
+    {
+     "label": "只在不通过时找人",
+     "pros": "人工最少.",
+     "cons": "三项都是规格书 7.5 节列为法定的 L1, 跳过人违背设计, 不推荐."
+    }
+   ],
+   "recommendation": "签字时一并确认",
+   "affects": [
+    "SG-1",
+    "SG-9",
+    "SG-10",
+    "SG-12",
+    "SG-15",
+    "SG-18"
+   ]
+  },
+  {
+   "question": "管理层拒签书面声明, 或审计师认定声明不可靠时 (准则要求只能出具无法表示意见), 本轮做到什么程度?",
+   "options": [
+    {
+     "label": "完整实现 (推荐)",
+     "pros": "符合 ASA 580 第 20 段的强制要求; 回到错报评价闸门只能选无法表示意见, 报告按 ASA 705 示例出无法表示意见版本, 签字只放行这种报告; 遇到拒签不会卡死, 真实可用.",
+     "cons": "要扩展意见类型 (现在只有无保留与保留) 并新增一套报告模板与校验, 多两条 M 需求; 要与持续经营组扩展意见类型的工作合并; ASA 705 示例需改写成公司法单体报告, 改写处要你确认."
+    },
+    {
+     "label": "本轮只阻断签字",
+     "pros": "工作量小, 现有意见类型不动.",
+     "cons": "管理层坚持拒签时项目无路可走, 只能在系统外处理, 与真实可用目标不符."
+    },
+    {
+     "label": "阻断并提示撤出",
+     "pros": "与规格书撤出路径方向一致.",
+     "cons": "撤出办理不在本轮范围, 实际同样卡住."
+    }
+   ],
+   "recommendation": "完整实现",
+   "affects": [
+    "SG-11",
+    "SG-16",
+    "SG-17",
+    "SG-15"
+   ]
+  },
+  {
+   "question": "书面声明的日期要 \"尽量接近但不晚于报告日\", \"接近\" 怎么把关?",
+   "options": [
+    {
+     "label": "只拦晚于报告日, 相隔天数只显示 (推荐)",
+     "pros": "准则只规定不得晚于报告日 (ASA 580 第 14 段), 没有天数标准, 不自编规则; 签字页显示相隔几天, 由审计师判断是否要更新声明.",
+     "cons": "相隔很久的声明书也能签字, 靠人把关."
+    },
+    {
+     "label": "设事务所上限天数, 超过即拦",
+     "pros": "防止遗忘更新声明书.",
+     "cons": "天数没有准则依据, 需要你按事务所政策定一个数; 设死后特殊情况要改配置."
+    },
+    {
+     "label": "必须与报告同一天",
+     "pros": "最严格.",
+     "cons": "实务中常早一两天签署, 会频繁被拦, 不符合准则 \"尽量接近\" 的本意."
+    }
+   ],
+   "recommendation": "只拦晚于报告日, 相隔天数只显示",
+   "affects": [
+    "SG-15"
+   ]
+  },
+  {
+   "question": "待审财务报表 (各报表项目, 编制完成日, 董事声明日) 的数据放在哪?",
+   "options": [
+    {
+     "label": "当作客户财务数据, 和试算表一起由数据层提供 (推荐)",
+     "pros": "与试算表同源, 由 B 载入, 勾稽规则直接联表; 不进审计产出表, 不改恢复与重放逻辑; 勾稽结果记下核对的报表版本, 签字时比对是否最新.",
+     "cons": "与规格书 18.3 节把它列为编排状态字段的写法不同, 版本历史靠数据层保存."
+    },
+    {
+     "label": "作为审计产出对象进编排状态",
+     "pros": "与规格书一致, 版本在审计产出表中可追溯.",
+     "cons": "需要一条程序负责接入 (规格书里是数据接入阶段的程序, 本轮没有), 恢复与重放逻辑要多改."
+    }
+   ],
+   "recommendation": "当作客户财务数据, 和试算表一起由数据层提供",
+   "affects": [
+    "SG-1",
+    "SG-4",
+    "SG-15"
+   ]
+  },
+  {
+   "question": "书面声明校验发现非核心问题 (签署人不对, 期间不对, 附表与最新错报汇总不一致, 缺少要求的具体声明) 时怎么处理?",
+   "options": [
+    {
+     "label": "自动重新取得 (推荐)",
+     "pros": "与实务一致 (退回管理层重签); 系统再派一次取得声明书的人工待办并附不通过原因, 直到通过, 或审计师登记拒签/不可靠转无法表示意见.",
+     "cons": "依赖通用人工程序机制支持同一程序多轮人工任务."
+    },
+    {
+     "label": "允许审计师写理由接受",
+     "pros": "灵活, 少一轮与管理层往返.",
+     "cons": "缺少要求的声明也可能影响意见 (ASA 580 第 19 段), 接受理由要入底稿; 多一条处理路径与任务类型."
+    },
+    {
+     "label": "只阻断签字",
+     "pros": "实现最少.",
+     "cons": "签字页退回只会改报告, 不会重新取得声明书, 流程会卡住."
+    }
+   ],
+   "recommendation": "自动重新取得",
+   "affects": [
+    "SG-8",
+    "SG-9",
+    "SG-11"
+   ]
+  },
+  {
+   "question": "错报评价通过后, 到报告首稿之前新增的 \"取得声明书, 校验声明书, 独立性检查\" 这一段, 项目阶段算完成阶段还是报告阶段?",
+   "options": [
+    {
+     "label": "仍算完成阶段, 出报告首稿时才进报告阶段 (推荐)",
+     "pros": "与规格书一致 (这三条程序属完成阶段, 用例 UC-06 第 6a 步在第 7 步出稿之前); 总览显示的阶段与正在做的事对得上.",
+     "cons": "改变错报评价通过时的现有行为, 相关测试 (阶段迁移, 迁移留痕行数, 恢复补做) 要同步改."
+    },
+    {
+     "label": "错报评价通过即进报告阶段 (现状)",
+     "pros": "不改现有代码与测试.",
+     "cons": "完成阶段的程序在报告阶段执行, 总览阶段与程序所属阶段不一致."
+    }
+   ],
+   "recommendation": "仍算完成阶段, 出报告首稿时才进报告阶段",
+   "affects": [
+    "SG-11",
+    "SG-18"
+   ]
+  }
+ ],
+ "risks": [
+  "与他组重叠: FIN-07, RPT-07 依赖第 3 级 \"通用人工程序机制\" (另组), 其任务类型, ID 与决定形式未定, SG-8, SG-13, SG-18 的人工任务 ID 与决定计数只能按该机制最终定义修正; SG-3 (P2 以外节点等复核) 可能与 FIN-03/FIN-09/GEN-06 组重复, 须合并只做一次; SG-16 的 FIN-01 意见类型扩展与 FIN-02 组 (持续经营可能导致否定或无法表示) 重叠.",
+  "depends_on 只写已实现程序: FIN-07 缺 FIN-02, FIN-15 缺 FIN-09, GEN-05, FIN-10 缺 GEN-12, FIN-05, FIN-12 缺 FIN-05, RPT-07 缺 FIN-14, RPT-09; 这些程序实现后要回补 depends_on 并检查节点内顺序 (SG-7 的守护测试会提醒).",
+  "RPT-01 签字前清单不完整: 规格书 6.1.2 RPT-01 行另有 EQR, RPT-09, RPT-10, GEN-23 签字前诉讼询问, 无未决 StatutoryReport (M-12) 不在本轮范围, 清单中注明未纳入; 真实出具报告前须由审计师在系统外确认.",
+  "FIN-10 只能读客户画像: ACC-02, GEN-12 未实现, 没有持续监控与 EthicsBreach 记录, 独立性检查覆盖面有限, E05 如实标 attention; s324CA 等公司法独立性条款未逐条建模 (段号待核).",
+  "Numbat 适用性待核: 客户备注为股东要求审计 (s293 指示), 按 s301(2)(c) 指示要求审计时须按 Division 3 审计, s307C 适用 (已核); 但 s293(3)(b) 可能免除董事报告, s298(1AA)(c) 载入声明副本是否适用, 以及 s295(4) 董事声明是否适用, 均待核.",
+  "现有断言要改: test_knowledge 程序总数 17 (本组 +7), Numbat 装配集不变 (新程序都非 P2); R24, R27, R28, R30 中 FIN-01 approve 后阶段与迁移留痕行数 (视待定问题 6); R55 的任务数, 决定留痕数, llm_call 数, 文件数; 多组合并时各组增量要叠加, 计数冲突需统一调整.",
+  "准则片段逐字测试: 现有正则只支持整数段号, Aus 18.1, Aus 49.1, APES R410.n 与公司法 (3) 款须扩展; 公司法 Vol2 PDF 很大, 整卷 pdfplumber 解析会拖慢测试, 需限定页段.",
+  "ASA 705 Illustration 4, 5 是非公司法主体且为集团审计, 改写成 Numbat 公司法单体无法表示意见报告存在措辞判断, 需用户确认; 声明书附表与治理层沟通函中管理层表述为合成内容, 也需用户确认.",
+  "FIN-15 的数值 (6 月收入 150000000, 5 月 107500000, 6 月应收净变动 98891400) 来自对 journal_entries.csv 的探查脚本, 尚未经 B 的 SQL 复核; 真实 LLM 联调 (R59) 时 FIN-15 结论措辞会变, 只能走 L2 人工确认或 unattributed 退路.",
+  "报告日按 Australia/Sydney 取当天: 2026-10-04 起夏令时, 测试注入时刻需避开边界; 声明书日期是人工录入的日期, 与报告日比较按日期而非时刻.",
+  "FIN-15 判断不归因 PLN-07 的 X-PLN-07-1-A01-1 (保持现有演示结果 open); 若希望期末复核关闭计划阶段的例外, 需另行决定并改 R55 预期."
+ ]
+}

@@ -1,0 +1,159 @@
+{
+ "group": "分录扫描与关联方 (GEN-05, GEN-02, GEN-08, GEN-03, GEN-01)",
+ "issues": [
+  {
+   "key": "JR-6",
+   "severity": "major",
+   "problem": "R03 (恰低于审批限额) 按规格书 SQL `debit_cents BETWEEN limit*0.95 AND limit` 在现有数据上还会命中 GJ-202606-ECL-1 (借 6500 1000000, 恰等于限额, 是年末计提不是付款), 结果是 13 条而不是 12 条. 草稿 YAML 只写 '恰低于审批限额的付款', 没写清楚 '付款' 怎么判断 (贷 1010 / CP 凭证) 和上限是否不含等号. D3 说 '已核: 无审批限额带内的付款', 只核了付款, 没核规格书原 SQL.",
+   "evidence": "data/demo/journal_entries.csv: GJ-202606-ECL-1 debit_cents 1000000; 规格书 6.3 JE-R03 (约 916-922 行) 用 BETWEEN 两端都含; 探查脚本 /private/tmp/claude-501/jr/a.py 输出 band [('GJ-202606-ECL-1','1000000')]",
+   "fix": "在 JR-6 的 YAML 注释与 D4 写死 R03 口径: 只取同一凭证中贷记银行科目 (1010/1020) 的付款凭证的借方行, 且 limit*0.95 <= debit_cents < limit; 验收加一条反例: GJ-202606-ECL (等于限额, 非付款) 不出例外."
+  },
+  {
+   "key": "JR-9",
+   "severity": "major",
+   "problem": "幂等重建没法做到. 验收 6 要求预置 6 行成功留痕后不调 RegistrySource, 也要重建出逐字段相等的图与例外, 而且 '只预置前 3 行时只补查后 3 项'. 但留痕 payload 只写了 document_id. 摘录的结构化内容 (高管, 股东, 人员职务) 只在 RegistrySource 的返回值里, EvidenceStore 只存 PDF. 后续要查哪些人员和公司, 也取决于前面摘录的内容. 照 CSH-04 只存 document_id 的做法, 不再查询就重建不出来.",
+   "evidence": "agents/evidence.py:115-135 CSH-04 rebuild 只从 payload 取发函时间与 reply_document_id; 草稿 JR-9 验收 2 'payload 含 document_id (ABN 查询除外)'",
+   "fix": "在 JR-9 写明 external_call 的 payload 存完整的结构化回执: ABN 记录, AsicExtract 去掉 file_bytes 后的部分, PersonSearch, 外加 document_id. rebuild 只读 payload 与 FinancialDataStore.documents. 验收再加一条: payload 缺字段时抛 LookupError."
+  },
+  {
+   "key": "JR-9",
+   "severity": "major",
+   "problem": "GEN-08 的失败路径和重跑语义都没定义: 客户 ABN 查不到或 AbnRecord.acn 为空 (客户不是公司) 怎么办; 登记接口中途报错怎么办; 重跑时 OWNERSHIP 是否出 v2; 例外改编号为 X-GEN-08-2-* 后, 旧的 X-GEN-08-1-R01-1 一直 open, 会和新例外重复. 幂等键不含 run_no, 所以重跑永远不会重新查询, 这是不是想要的效果也没说.",
+   "evidence": "草稿 JR-9 幂等键 {eid}:GEN-08:extract:900042015 不含 run_no; 接口文档第 0 节 AuditException ID 含 run_no; R21 rerun 决定会让程序再执行",
+   "fix": "在 JR-9 加验收: (1) 客户 ABN 查不到或 acn 为空时抛错, 由 A1 建 failed 任务; (2) 第 3 次查询抛异常时整次失败, rerun 后只补查剩下的 (幂等键跨 run 共用, 写明这是有意为之); (3) rerun 出 OWNERSHIP v2 (版本取状态中的版本 +1), 上一次 run 未归因的例外怎么处理也要写明 (建议新 run 不重复出同一 source_ids 和 rule_id 的例外, 或者标 superseded)."
+  },
+  {
+   "key": "JR-2",
+   "severity": "major",
+   "problem": "画像缺 approval_limit_cents 时, 草稿要求 build_run 抛 ValueError. 但 fieldwork.perform 在 try 之外调用 build_run, 这个错误会让 fieldwork 节点整体出错, 图停住, 不会变成 failed 任务. GEN-05 是固定集, 每个项目都装配, 真实客户的画像只要没填审批限额就会卡死 P2. 而 ACC-01 闸门已经过了, 审计师没有入口补填. 规格书对必需数据缺失的处理是 not_executable, 不是让整条程序失败.",
+   "evidence": "orchestration/nodes.py:378-380 perform 先 build_run 再进 run_agent; procedure_library.py:126-127 ref 为 None 抛 ValueError; 规格书 6.3 JE-R04 'required_fields ... 缺失则标 not_executable, 不算通过'",
+   "fix": "二选一写进 JR-2 或 JR-6: (a) approval_limit_cents 为 None 时 R03 不执行, 出一条 not_executable 记录 (或 low severity 例外, 写明原因), 其余规则照常; (b) 在 ACC-01 或 PLN-01/03 闸门校验画像必填项, 有缺失不能通过. 验收覆盖 '画像无限额时 P2 不中断'."
+  },
+  {
+   "key": "JR-5",
+   "severity": "major",
+   "problem": "现有原文比对测试改了才能通过, 而草稿没写怎么改: test_fragment_text_is_verbatim_from_pdf 用 int(fragment.paragraph)+1 判断 '整段', 'A44' 和 'Aus 27.2' 过不了 int(). P33 只摘 (a) 项, AASB124-P09 只摘两个定义, 都不是整段. ASA 240 第 33(a) 段与 AASB 124 第 9 段都跨页, 中间夹着脚注行 ('9 See ASA 315...'), RUNNING_LINE 去不掉这些行, 子串比对会失败. 照现在的写法, 验收 4 '比对覆盖全部新片段并通过' 落不了地.",
+   "evidence": "tests/test_knowledge.py:112-120 (int(fragment.paragraph)+1 与整段正则), :71-74 RUNNING_LINE; pdftotext ASA_240.pdf 第 724-745 行: 33(a) 与 (i) 之间是脚注 9-11 和页眉",
+   "fix": "JR-5 的 scope 与验收写明测试怎么改: 应用指南段与 Aus 段的 '下一段' 判定规则; 允许摘子项的片段要标记 (如 partial: true), 只校验子串不校验整段; 归一时去掉页底脚注行; STANDARD_PDFS 加 ASA240, ASA550, AASB124. 也可以改成只摘整段."
+  },
+  {
+   "key": "JR-8",
+   "severity": "major",
+   "problem": "A 按 '全绿' 交付会被 B 的数据卡住. test_runtime_fixtures_match_test_fixtures 要求 tests/fixtures/llm 与 data/demo/llm 的文件列表完全一致, JR-8 新增 9 份 GEN-02 fixture 后, B 还没重新生成时这个测试就失败. JR-11 和 JR-12 的 fixture 含登记摘录的 document 指针: test_fixture_document_ids_in_manifest 的 expected_document 对 GEN-03 和 GEN-01 会抛 LookupError, checked 字典是写死的, 而且一份 fixture 只能对应一个 PDF, GEN-03 要引用人员检索, 摘录, CON-003 三个文件. D2 往 manifest 加 5 份 PDF 后, test_fake_documents_from_manifest 写死的 5 个文件名也会失败. 草稿说 '同 R54 先用占位 ID', 但 R54 时这些守卫测试还不存在.",
+   "evidence": "tests/test_knowledge.py:429-473 (expected_document, checked 写死), :475-499 (写死 5 份 PDF), :502-511 (两边 fixture 目录逐文件比对)",
+   "fix": "JR-8, JR-9, JR-11, JR-12 的 scope 加入 tests/test_knowledge.py, 验收写明: expected_document 改成 '允许的 PDF 集合' (GEN-03 为人员检索, 摘录, 合同); fake 文档清单加入 5 份摘录. 前置补上 D2 与 D4 (B 先出 PDF, manifest, data/demo/llm), 或者明确记为 '待 B 就绪后转绿', 并且不能和 '全绿' 的要求冲突."
+  },
+  {
+   "key": "JR-3",
+   "severity": "major",
+   "problem": "往 FinancialDataStore 和 RegistrySource 两个 Protocol 加方法后, main.py:59 把 MockRegistrySource (B) 交给 AgentDeps.registry, SqlFinancialDataStore 也一样, mypy 会报结构不符. B 没实现之前, A 这条需求的 'mypy 全绿' 做不到. 草稿只写了 '先用 FakeFinancialStore, FakeRegistry'.",
+   "evidence": "src/backend/main.py:13,59; adapters/registry_mock.py:9 MockRegistrySource 没有 asic_extract, asic_person; ports.py:51-85, 196-201",
+   "fix": "在 JR-3 定下做法: B 先在 MockRegistrySource 与 SqlFinancialDataStore 加方法 (可以先 raise NotImplementedError), 记为 JR-3 的前置; 或者经用户同意由 A 加这两处桩. 验收要写 mypy 通过."
+  },
+  {
+   "key": "JR-11",
+   "severity": "major",
+   "problem": "'管理层没有申报 Galah' 是 GEN-03 和 GEN-01 结论的核心事实, 但没有证据指针可以指向它. PointerSource 只有财务行, document, standard, trail 几类, 客户画像 (申报清单) 不能被引用. 推理链里 fact 步骤必须带指针, 模型只能把登记摘录挂在 '未申报' 这一步上, 证据和事实对不上. 底稿也就追溯不到 '依据哪一版画像判断为未申报'.",
+   "evidence": "contracts/models.py:318-327 PointerSource / SourceType; judgment_engine.py:151-157 fact 步骤必须有指针; 草稿 JR-11 证据清单里没有任何指向申报清单的指针",
+   "fix": "二选一: (a) 新增指针来源 client_profile (source_id 为 CLIENT-001, locator 为 related_parties, 加版本), 由 OutputValidator 按 state.client_profile_version 解析; (b) GEN-08 的 R01 例外 detail 写入 declared_profile_version 与比对结果, GEN-03 和 GEN-01 引用这条例外的证据. 二者都要在 JR-3 或 JR-4 的契约改动里列出."
+  },
+  {
+   "key": "JR-10",
+   "severity": "major",
+   "problem": "财务报告框架 (Tier 1 还是 Tier 2) 还没定, AASB 1060 正本也没拿到. 草稿却已经在 fixture 结论里写死 'Galah 依 AASB 124 第 9(b)(vi) 段为关联方'. AASB 124 AusB1 写明它不适用于采用 AASB 1060 的主体 (已核原文), 用户的全局规则是 '拿不到原文时停下来要, 拿到前相关结论标暂缓, 不要固化规则'. D5 只把它写成外部依赖, open_questions 里也没有框架选择这一问.",
+   "evidence": "pdftotext AASB_124.pdf 483 行 AusB1; 用户全局 CLAUDE.md '资料与事实' 一节; 草稿 JR-11 验收 1, D5",
+   "fix": "把 '先定 Numbat 采用的框架, 并取得 AASB 1060 正本' 列为 JR-10, JR-11, JR-12 的前置 (状态写暂缓), 或者在 open_questions 里新增一问让用户拍板. 定下来之前, fixture 结论只写事实 (持股, 任职) 和 ASA 550 的要求, 不写框架段号."
+  },
+  {
+   "key": "JR-6",
+   "severity": "major",
+   "problem": "R07 '非常规制单人', U01 '按凭证类型的凭证数', 以及问题 2 推荐项里的 '手工总账分录', 都需要分录类型和是否手工两个信息. 但 JournalEntry 和 CSV 都没有这两列 (规格书 4.2 有 is_manual, source_channel). 照草稿的写法, 只能靠 Numbat 的 entry_no 前缀 (SJ, CR, CP, GJ) 和 'source_doc 为空' 来推断. 这是合成数据的命名习惯, 换成真实客户 (如 Xero 导出) 就不成立, 和 '真实可用' 的目标冲突, B 写 SQL 时也没有口径可依.",
+   "evidence": "contracts/records.py:25-39 JournalEntry 无 is_manual 或类型列; journal_entries.csv 表头; 规格书 4.2 journal_entries 表 is_manual, source_channel",
+   "fix": "在 D3 与 D4 增加 journal_type (或 is_manual) 列, 由 B 在数据集与 JournalEntry 中补上. R07, U01, R02 的口径按这一列写, YAML 注释注明; 不要用 entry_no 前缀."
+  },
+  {
+   "key": "JR-6",
+   "severity": "minor",
+   "problem": "例外编号 n 按 SQL 结果顺序取, 但验收里 R02-1 至 R02-5, R03-1 和 R03-2 的顺序依赖 ORDER BY, 草稿没有要求. R05 的摘要匹配在 Postgres 里 LIKE 区分大小写, 照规格书写 '%reversal%' 匹配不到 'Reversal of specific ECL provision'.",
+   "evidence": "接口文档第 0 节 'n 按 SQL 结果顺序'; services/rule_engine.py:37,56; D3 中 GJ-202606-ECLR 的 description",
+   "fix": "YAML 注释和 D4 写明: 每条规则 ORDER BY entry_no; 摘要匹配用 ILIKE 或 lower(). B 的 slow 验收逐个断言 ID 与 source_id 的对应."
+  },
+  {
+   "key": "JR-9",
+   "severity": "minor",
+   "problem": "建图规则有几处没写清, 测试无从判断对错: (1) 同一关系可能同时出现在公司摘录和人员检索里 (如 Priya 任 Galah 董事), PartyLink.evidence 只有一个指针, 该取哪一个; (2) 真实 ASIC 摘录里股东没有出生日期, 人员节点 ID 需要出生日期, 股东怎么和高管合并成同一节点; (3) '第 9(a) 段所列人员' 怎么判定 (任职, 持股比例阈值, 经母公司间接控制); (4) 名字含空格或撇号 (如 O'Connor) 时节点 ID 怎么规范化.",
+   "evidence": "草稿 JR-4 验收 1 PartyLink.evidence: EvidencePointer (单个); JR-9 验收 4, 7; D2 中股东记录没有出生日期",
+   "fix": "JR-4 与 JR-9 补充口径: 同一关系以公司摘录为准, 人员检索只用来发现新公司; 股东按 '姓名 + 同一公司的高管出生日期' 合并, 合并不上的出 R02; 9(a) 人员 = 报告主体及其母公司的董事, 加上直接或间接持股不低于 20% 的个人; ID 只保留 A-Z, 0-9 和连字符."
+  },
+  {
+   "key": "JR-15",
+   "severity": "minor",
+   "problem": "重启变体在第 2 轮 GEN-02 执行时中断. GEN-08 在第 1 轮就已执行完并写入检查点, 恢复后不会再执行 GEN-08, '登记查询不重复' 这条在这个变体里实际上没测到.",
+   "evidence": "草稿 JR-15 验收 5; graph.py:149-166 每轮派发后才 fan_in; JR-14 调度表第 0 层含 GEN-08",
+   "fix": "再加一个变体: 第 1 轮 fan_in 写入 Store 之后, 写检查点之前中断 (或在 GEN-08 完成 3 次查询后取消), 断言恢复后 external_call 仍为 6 行, RegistrySource 只补查剩下的项."
+  },
+  {
+   "key": "JR-12",
+   "severity": "minor",
+   "problem": "GEN-01 的 fixture 结论要求写 '第 27 段治理层沟通'. 但 ASA 550 第 27 段以 'Unless all of those charged with governance are involved in managing the entity' 开头 (已核原文), Numbat 的两名董事是否都参与管理, 画像里没有这项数据 (规格书画像有 governance.all_in_management, D1 没有). 结论可能引错段.",
+   "evidence": "pdftotext ASA_550.pdf 644 行 第 27 段; 规格书 4.3 画像 governance 字段; D1 只有 key_personnel",
+   "fix": "D1 增加 governance (body, members, all_in_management). GEN-01 的提示词与 fixture 按这一项决定引用第 27 段, 还是改引 ASA 260 的相应段落."
+  },
+  {
+   "key": "JR-7",
+   "severity": "minor",
+   "problem": "data.source_document 按什么规则查到, 草稿没写: SJ 凭证用 source_doc 对发票号; CP 凭证要按银行 reference 找流水, 但 FinancialDataStore 只有 bank_transactions(账户, 日期区间), 不能按 reference 查; GJ 凭证没有原始单据. 实现时只好在代码里按凭证前缀分支. data.fraud_risks 的选取规则 (所有 fraud_related 风险) 也没写. GEN-02 是固定集, objective_ids 为空, 公共流程里的 task.risks 也会是空的.",
+   "evidence": "contracts/ports.py:66-74; fieldwork.py:151-152 risks 按 objective_ids 取",
+   "fix": "新增规则 U03 (emit rows): 按 source_doc 连接 sales_invoices, delivery_notes, bank_transactions.reference, 由 B 写 SQL, 不在代码里按前缀分支. 验收写明 fraud_risks = risk_register 中 fraud_related 为真的全部风险."
+  },
+  {
+   "key": "JR-8",
+   "severity": "minor",
+   "problem": "验收 5 把 'accept 的置信度低于 more_evidence' 写成要断言的行为. 这其实是 c_rule 公式的副作用: 对归因程序来说, 有例外却给出良性解释 (accept) 时 rule 一律记 0, 正确的 accept 判断会长期偏低, 等动态降级 (第 2 级) 上线后还会被系统性降级. 写进测试等于把这个副作用固化下来.",
+   "evidence": "judgment_engine.py:187-192 rule_consistency; 接口文档第 5 节置信度",
+   "fix": "删掉 '测试断言该顺序', 只断言 confidence_parts 的值; 把 '归因类 hybrid 程序的 c_rule 口径' 交给动态降级那组, 或作为新问题请用户拍板."
+  },
+  {
+   "key": "JR-0",
+   "severity": "minor",
+   "problem": "Demo需求文档要改的章节没列全: 第 6 节写着 '程序库只放本版 17 条', 第 4.1 节写装配只按 trigger, 第 4.2 节列了判断程序与需要人表, 第 8 节验收里有数量. 草稿只列了第 1, 2, 3, 7 节. 同时 JR-0 标 S, 却要改三份文档的十几节, 规模偏小.",
+   "evidence": "docs/Demo需求文档.md 第 6 节 '原型替身与 not_implemented 注册: 程序库只放本版 17 条', 第 4.1, 4.2, 8 节",
+   "fix": "scope 补上第 4.1, 4.2, 6, 8 节. 规模改 M, 或者拆成 'Demo需求与规格书订正' 和 '合成数据集设计 (交 B 确认)' 两条."
+  },
+  {
+   "key": "JR-9",
+   "severity": "minor",
+   "problem": "JR-9 的 YAML 引用 AASB124-P09 与 ASA550-P15, test_standards_referenced_are_registered 要求这些片段已经注册, 但 JR-9 的前置没有 JR-5. 程序数断言 (18 到 22) 按 JR-6, 7, 9, 10, 12 的顺序递增, 前置却不保证这个顺序. JR-9 一条里包含分派重构, 穿透, 存档, 留痕, 重建, 建图和例外, 超出 M 的规模.",
+   "evidence": "tests/test_knowledge.py:36-43; 草稿 JR-9 prerequisites [R45, JR-2, JR-3, JR-4]",
+   "fix": "JR-9 前置加 JR-5. 程序数断言改为断言程序编号集合包含本条程序. JR-9 拆成 '穿透与建图' 和 '幂等, 重建与失败路径' 两条."
+  },
+  {
+   "key": "JR-5",
+   "severity": "minor",
+   "problem": "片段清单前后不一致: D5 说结论引用 'ASA 550 第 10(b) 段', JR-5 的 ASA550.yaml 清单里没有 P10. ASA550-Aus27.2 列入了清单, 但 JR-6 至 JR-12 的 YAML standards 都没有引用它, 它的 procedures 会是空的. JR-6 写 'fixed false (JR-15 打开)', 实际打开 fixed 的是 JR-14.",
+   "evidence": "草稿 D5, JR-5 验收 2, JR-12 的 YAML standards, JR-6 验收 1",
+   "fix": "二者择一: 补上 ASA550-P10, 或者删掉 D5 里的这处引用. Aus27.2 要么挂到 GEN-01 的 standards, 要么移出清单. JR-6 里的 JR-15 改成 JR-14."
+  },
+  {
+   "key": "JR-10",
+   "severity": "minor",
+   "problem": "规格书 4.3 的外部数据边界要求个人姓名在发给模型前用占位符替换, 映射表留在本地. 草稿只去掉了出生日期, 董事姓名照样发给 LLM. Demo 现有程序也没做姓名脱敏, 但关联方程序是第一次成批发送自然人的身份信息.",
+   "evidence": "规格书 4.3 外部 LLM 数据边界表 '脱敏' 行 (531 行); 8.5 (1248 行)",
+   "fix": "在 risks 或 open_questions 里明确: 本组沿用 Demo 的做法, 不脱敏姓名, 只去出生日期. 或者做姓名占位替换, 并在 fixture 中使用占位名. 请用户拍板."
+  }
+ ],
+ "missing": [
+  "GEN-08 的失败路径: 客户 ABN 查不到, 客户不是公司 (acn 为空), 股东是信托或境外主体, 达到 max_depth 时怎么处理 (出 R02 还是整次失败); 真实 ASIC 同名多人时的人工确认. 这些草稿只在 risks 里提了一句, 没有验收.",
+  "规格书 15.2 要求的 JE-R02 边界用例 (普通单边分录, 真实整额, 负数冲销, 零金额, 恰等于阈值) 没进 D3, 也没进 B 的 slow 验收.",
+  "规格书 6.3 JE-R04 的 required_fields 与 not_executable 语义: 客户数据缺 created_by 或 approved_by 列时, 应标不可执行, 不算通过. 草稿把它改成按行判断 '审批缺失', 整列缺失的情形没有覆盖.",
+  "initial_state 新增 ownership_graph 后, 已有检查点 (库中进行中的项目) 读回时状态里没有这个键, recover 时可能报 KeyError. 草稿没有迁移或默认值的验收.",
+  "GEN-02 判断失败走 unattributed 时, 只有第一条例外 (R01-1) 被标 unattributed, 同一凭证的 R04, R07, R08 例外留在 open. 审计师 override 之后这三条怎么归因, 草稿没写 (现有 REV-02 也是这个做法, 但本组一个凭证常有多条例外)."
+ ],
+ "extra_questions": [
+  "Numbat 采用哪个财务报告框架 (Tier 1 全套 AASB, 还是 Tier 2 AASB 1060 简化披露, 或者按 s293 股东指示编制的特殊目的报告)? 这决定关联方结论引用哪一份准则, 需要用户先定, 并提供 AASB 1060 正本.",
+  "分录类型与是否手工: 是由 B 在 journal_entries 加一列 (journal_type 或 is_manual), 还是接受按 entry_no 前缀推断 (只对 Numbat 合成数据有效)?",
+  "给 LLM 的关联方上下文要不要把自然人姓名替换成占位符 (规格书 4.3), 还是沿用 Demo 现状只去掉出生日期?",
+  "登记摘录 PDF 与 data/demo/llm 由 B 先出, 再开工 JR-9 与 JR-11; 还是允许 A 这几条先以 '守卫测试暂红' 的状态交付?"
+ ],
+ "verdict": "草稿覆盖面完整, 已核对的数据都对得上: SJ-2026-0612 周日 21:14 (悉尼时间) 录入并自批; 按 UTC 取星期周末行有 144 行, 按悉尼时间只有 2 行; 整数金额 26 笔与推荐口径下的 5 笔; Galah 24 张发票共 45391479 分, 期末未收 5161181 分; 税前利润 1,500,000.00; 新增 ABN 与 ACN 的校验位; 置信度 0.8375 与 0.88; 分层与实例分组. ASA 240 第 32, 33(a), A44 段, ASA 550 第 13, 15, 21, 22, 25-27, Aus 27.2 段, AASB 124 第 9 段与 AusB1, 都已用原文 PDF 核对, 段号无误. 规格书把分录测试写成 P32 是错的, 应为 P33, 草稿的订正正确.\n\n但有几处会让实现走错或返工, 要先改:\n1. R03 照规格书 SQL 会多出 GJ-202606-ECL, 例外从 12 条变成 13 条.\n2. GEN-08 的留痕只存 document_id, 无法不重新查询就重建图, 重跑与失败路径也没定义.\n3. 画像缺审批限额时会让 P2 的 fieldwork 节点直接出错, 图停住.\n4. 准则原文比对测试和 fixture 与 manifest 的守卫测试都要改, B 也要先出数据, A 才能做到 '全绿'.\n5. 两个 Protocol 加方法后, mypy 在 B 实现之前会失败.\n6. '未申报' 这个事实没有证据指针可引用.\n7. 财务报告框架与 AASB 1060 未定, 按用户规则相关结论应暂缓.\n8. 分录类型与是否手工靠 Numbat 的命名习惯推断, 换到真实客户就不成立.\n\n建议补齐上述口径和前置 (D2, D4 先于 JR-9 与 JR-11; JR-5 是 JR-9 的前置; 框架问题先拍板), 再进入实现."
+}

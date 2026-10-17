@@ -1,0 +1,124 @@
+{
+ "group": "持续经营与期后事项 (GEN-07, GEN-06, GEN-04, FIN-02)",
+ "issues": [
+  {
+   "key": "GC-08",
+   "severity": "major",
+   "problem": "FIN-02 的重放取回会出错, 而且会波及全部 A6 程序. 草稿把 going_concern 加进 AGENT_FIELDS[A6], GoingConcernConclusion 又带 run_id. stored_outputs 对带 run_id 的模型一律执行 store.latest(..., run_id=...) 并把结果作为列表写进 patch, 不区分单对象字段. 结果是: (1) 重放 RUN-FIN-02-1 时 going_concern 得到列表, 不是对象; GOING_CONCERN 升到 v2 后, latest 先取各 ID 最新版再按 run_id 过滤, 得到空列表. (2) REV-02, REV-03, CSH-02 等 A6 程序重放时, patch 也会带上 going_concern: []. 随后的单对象判断 `any(field in patch and not is_list)` 会被触发, 去查之后各次执行的待决任务, 只要之后的执行在等人就抛 RuntimeError. 反过来若 GoingConcernConclusion 不带 run_id, A6 的每次重放又都会取回最新 GOING_CONCERN.",
+   "evidence": "src/backend/orchestration/nodes.py:139-204 stored_outputs: 带 run_id 的分支 `patch[field] = await store.latest(eid, model, run_id=run.id)` 不看 is_list, 单对象分支触发 later 检查; persistence/stores.py:251-257 latest 先取各 ID 最新版再过滤; 现有单对象产出 (SCORECARD, SCHEDULE 等, models.py:510-563) 都不带 run_id; 草稿 GC-08 验收 1, 6",
+   "fix": "GC-08 的 scope 加 nodes.py 的 stored_outputs, 验收补以下几条: going_concern 只在 FIN-02 的执行中取回, 按 id 与 run_id 取 history 中 run_id 相符的那一版作为单对象放入 patch; REV-02, CSH-02 等 A6 P2 程序的重放片段不含 going_concern; RUN-FIN-02-1 在 GOING_CONCERN 已有 v2 时重放, 取回 v1 并带回之后的执行 (同 FIN-04 的 later 规则). 另一种做法是把 going_concern 的写入者改为只针对 FIN-02 的字段表, 不放进 A6 的通用字段."
+  },
+  {
+   "key": "GC-05/GC-06/GC-08 (测试顺序)",
+   "severity": "major",
+   "problem": "新增 fixture 后, 现有两个全量断言会一直红到 GC-13, 违背每条需求全绿的流程. (1) test_runtime_fixtures_match_test_fixtures 要求 tests/fixtures/llm 与 data/demo/llm 的文件集合相同. GC-05, GC-06, GC-08 加了文件, 而副本由 B 复制, 复制前该测试必红. (2) test_every_fixture_used_once_and_passes 要求 tests/fixtures/llm 下每个文件都在 e2e 流程中读到一次. GEN-04 和 GEN-06 到 GC-12 才进程序包, 所以从 GC-05 到 GC-13 这条也必红. test_every_program_runs_with_a_real_agent 断言调用集合精确相等且没有 ScriptAgent; GC-08 验收 7 却让 FIN-02 默认走脚本 A6. e2e 的 real_agents 只覆盖 DOC-04, PLN-07, PLN-01, RPT-03, 所以 FIN-02 在 e2e 中是脚本, 这条断言也会失败. 草稿风险一节只说 YAML 先以 fixed false 落地, 没有处理这三条断言.",
+   "evidence": "tests/test_knowledge.py:502-514 (sorted(test_files) == sorted(runtime_files)); tests/test_e2e_mock.py:328-339 assert_fixtures_used_once; tests/test_e2e_mock.py:349-391 (not isinstance ScriptAgent, dict(calls) == agents); tests/test_e2e_mock.py:85-88 real_agents; tests/fakes.py:1654-1660 make_graph_nodes; CLAUDE.md 约定 data/ 归 B",
+   "fix": "在 GC-05, GC-06, GC-08 的验收里写明过渡办法, 二选一: (a) A 运行 B 现有的 data/generate_demo.py (不改脚本), 只复制新 fixture, 用 git add -f 提交 data/demo/llm 副本, 并在外部依赖里注明已告知 B; (b) 两个一致性断言暂按已接入流程的程序过滤, 注明到 GC-13 恢复. FIN-02 在 e2e 中的处理也要写清楚: GC-08 起 real_agents 加 FIN-02, 但 GEN-04 判断要到 GC-12 才有, 所以要么 GC-08 暂不把 FIN-02 接进 completion, 要么 e2e 显式注入脚本 A6 并在 test_every_program_runs_with_a_real_agent 中列为例外, GC-13 时去掉."
+  },
+  {
+   "key": "GC-08/GC-10/GC-13 (scope 漏测试文件)",
+   "severity": "major",
+   "problem": "有三个现有测试文件会被这几条改坏, 却不在任何一条的 scope 里. (1) tests/test_fin_gate.py (R24 的 FIN-01 闸门测试): GC-10 让 gate_fin 先停在 FIN-02 步, 直接提交 FIN-01 会报 NOT_AT_GATE. GC-10 验收 7 列的测试清单没有它. (2) tests/test_completion.py (R23): GC-08 让 completion 依次执行 FIN-04 和 FIN-02, 其中的提交断言与重放断言都会变. (3) tests/test_concierge.py: GC-13 把 r1, r2 的 judgment_refs 改为含 J-GEN-06-1-GJ-202607-ECL-2. test_concierge 的状态里只有 CUTOFF 判断, 并断言 judgment_refs == [CUTOFF v2], 引用校验会失败.",
+   "evidence": "tests/test_fin_gate.py:82-184 (提交 FIN-01 approve, reject, insufficient_info); tests/test_completion.py:33-129; tests/test_concierge.py:172, 304, 657-666 (r1/r2 judgment_refs 断言); grep 结果: 涉及 gate_fin 的测试还有 test_await_events.py, test_review_decisions.py (只断言 next, 不受影响)",
+   "fix": "GC-08 的 scope 加 tests/test_completion.py, 验收写明 completion 的提交项与重放断言改为 FIN-04, FIN-02 两段. GC-10 的 scope 与验收 7 加 tests/test_fin_gate.py: 先提交 FIN-02 approve, 再走原 FIN-01 断言. GC-13 的 scope 加 tests/test_concierge.py: 状态预置 J-GEN-06-1-GJ-202607-ECL-2 v2 confirmed 与第二条错报, R51 验收 1, 3 与 R53 验收 3 的引用断言同步改."
+  },
+  {
+   "key": "GC-08 (粒度)",
+   "severity": "major",
+   "problem": "GC-08 超过 M. 它同时包含: 契约 (GateId, GoingConcernConclusion, EngagementState 字段与文档 4 节); A6 的 FIN-02 上下文组装与 LLM 调用; fixture; completion 节点改为两条程序; 失败等待, rerun, 重放与恢复补做的排序; 注册与脚本 Agent. scope 列了 15 个文件, 还漏了上面提到的 stored_outputs 和 test_completion.",
+   "evidence": "草稿 GC-08 scope_files 15 项, 验收 1-7; 需求粒度约定 (S 半天, M 一天, 超过 M 拆开)",
+   "fix": "拆成两条. GC-08a (M): 契约, FIN-02.yaml, prompt, A6 FIN-02 执行与 fixture; 直接调用 Agent 测试, 对应验收 1-4. GC-08b (M): NODE_PROCEDURES[completion] 改为两条, 失败等待与 rerun, stored_outputs 单对象重放, 恢复补做排序, make_graph_nodes 与 e2e 的过渡, 对应验收 5-7 与上面的 stored_outputs 一条."
+  },
+  {
+   "key": "GC-08/GC-09 (GEN-04 判断取法)",
+   "severity": "major",
+   "problem": "草稿写死了 GEN-04 判断的 ID: gen04 取 J-GEN-04-1-CLIENT-001 的当前有效版本, 闸门材料与 required_refs 也指向这个 ID. 但 GEN-04 在两种失败路径下会产出别的 ID. 一是 manual_result, 人工判断为 J-GEN-04-1-CLIENT-001-H1. 二是整组 rerun 后新执行为 J-GEN-04-2-CLIENT-001. 两种情况下状态里都没有 J-GEN-04-1-CLIENT-001, 按 GC-08 验收 3 会抛 LookupError, completion 卡死. GEN-04 设了 manual_result_allowed true, 这条路径是草稿自己打开的.",
+   "evidence": "src/backend/orchestration/decisions.py:385-396 human_judgment_id (-H{n}); decisions.py:470-485 manual_result_effects; 第 0 节 Judgment ID 规则 J-{procedure_id}-{run_no}-{subject_id}; agents/fieldwork.py:247-260 contract_judgment 的取法 (按 procedure_id 与 subject_id, 排除 overridden, 取最新); 草稿 GC-06 验收 1 manual_result_allowed true, 验收 5",
+   "fix": "GC-08 验收 3 与 GC-09 验收 4 改为: gen04 取状态中 procedure_id GEN-04, subject_id 为 client_id, 且未被推翻的最新判断 (同 contract_judgment 的取法); 找不到才抛 LookupError. 增加两条验收: manual_result 产出 -H1 时 FIN-02 引用 -H1; rerun 后引用 J-GEN-04-2-CLIENT-001. required_refs 取实际找到的 ID."
+  },
+  {
+   "key": "GC-09",
+   "severity": "minor",
+   "problem": "\"gate_fin 一个节点承载两条决定\" 在现有代码里有两处必改, 草稿没有写明, scope 也不全. (1) build_graph 对 GATE_NODES.items() 逐项 add_conditional_edges. 加入 FIN-02 → gate_fin 后, 同一节点会被加两次条件边. (2) query.GATE_OF_NODE 由 GATE_NODES 反转得到, 同一节点名只会留下后写入的那道闸门. 验收 2 要求 decisions 与 recovery 的调用处同步, 但 decisions.py, recovery.py 不在 GC-09 的 scope 里. current_gate 一改签名, 这两个文件过不了 mypy.",
+   "evidence": "src/backend/orchestration/graph.py:37-43, 239-250 (exits 按 GateId, 逐闸门加条件边); orchestration/query.py:36-48; 调用处 decisions.py:752, 870, recovery.py:136, 171, 241, runner.py:39",
+   "fix": "GC-09 的验收 1 写明: 按节点建路由表, gate_fin 只加一个条件边, 由组合路由函数 (FIN-02 与 FIN-01) 决定出口; GATE_OF_NODE 改为按节点取闸门列表, 或删去, 改由 current_gate 按状态判断. scope 加 decisions.py, recovery.py, runner.py, 或把这几处签名同步并入 GC-09 的前置改动."
+  },
+  {
+   "key": "GC-02",
+   "severity": "minor",
+   "problem": "草稿列出的需要特殊处理的片段不全, 我用 pdfplumber 实际抽取核对过. (1) ASA570-P10 与 ASA570-P23 的正文里, 脚注上标和前面的数字粘在一起, 抽出来是 \"ASA 3153\" 和 \"ASA 7055\". 要逐字比对通过, 片段原文就得写成这样, 送给 LLM 的准则原文因此带错. (2) ASA570-P23 与下一段 P24 之间夹着脚注行 \"5 See ASA 705 Modifications ... Report.\". 这一行以数字开头且含句号, 现有整段正则 (中间至多一行无句号小标题) 匹配不上. 草稿只列了 P06, P16, AASB110-P09. (3) AASB110-P09 的页脚两行现有 RUNNING_LINE 已能过滤, 大概率不需要扩展.",
+   "evidence": "pdfplumber 抽取 docs/参考资料/01_审计准则_ASA/ASA_570.pdf 第 10-13 页: 第 10 段行 \"...as required by ASA 3153 the auditor shall\", 第 23 段行 \"ASA 7055; and\", 之后是 \"5 See ASA 705 Modifications to the Opinion in the Independent Auditor’s Report.\"; tests/test_knowledge.py:74-76 RUNNING_LINE, 111-120 after 正则",
+   "fix": "GC-02 验收 2 补充三点: 脚注上标的处理规则 (测试的 normalise 在比对前去掉 \"ASA nnn\" 后紧跟的脚注号, 片段原文写 \"ASA 315\", \"ASA 705\"); P23 跨页脚注的过滤; 删去对 AASB110-P09 的特殊处理, 或改为 \"若现有过滤已通过则不加\"."
+  },
+  {
+   "key": "GC-02/GC-05",
+   "severity": "minor",
+   "problem": "GC-05 的股利 fixture 结论写的依据是 \"AASB 110 para 12, 13\", GC-04 的依据也写了 12-13, 但 GC-02 没有收 AASB110-P12. 真正规定 \"不确认为负债\" 的是第 12 段 (粗体要求段), 第 13 段只是说明与披露指引. 推理链要用 standard 步骤指向第 12 段, 指针就解析不了.",
+   "evidence": "pdftotext AASB_110.pdf: 第 12 段 \"...the entity shall not recognise those dividends as a liability at the end of the reporting period.\", 第 13 段 \"...Such dividends are disclosed in the notes in accordance with AASB 101\"; 草稿 GC-04 basis, GC-05 验收 1",
+   "fix": "GC-02 加 AASB110-P12 (P12 后紧接 P13, 整段正则可直接通过), 映射到 GEN-06, GEN-06.yaml 的 standards 加它; GC-05 验收 1 的证据改为 AASB110-P12, AASB110-P13, AASB110-P21."
+  },
+  {
+   "key": "GC-06",
+   "severity": "minor",
+   "problem": "fixture 的 limitation 引用 \"须向管理层询问并取得书面声明 (para 16(e))\" 不对. 第 16 段的适用前提是已识别可能导致重大疑虑的事项或情况, 而这份 fixture 的结论恰恰是未识别. 未识别时, 风险评估阶段的询问义务在第 10(b) 段 (与管理层讨论并询问), 评估期以外的询问在第 15 段. 书面声明属于 ASA 580, 不在 570 第 16 段.",
+   "evidence": "pdftotext ASA_570.pdf: 第 16 段 \"If events or conditions have been identified that may cast significant doubt ... These procedures shall include: ... (e) Requesting written representations\"; 第 10(b) 段, 第 15 段",
+   "fix": "limitation 改为: 未取得管理层的持续经营评估, 须按 para 10(b) 与管理层讨论持续经营基础并询问, 按 para 15 询问评估期以外的事项, 评估期按 Aus 13.2; 不引用 16(e). 如需片段, 把 ASA570-P15 加入 GC-02."
+  },
+  {
+   "key": "GC-08/GC-11 (depends_on)",
+   "severity": "minor",
+   "problem": "有三处依赖与规格书 6.1.2 不一致. (1) FIN-01.yaml 改为 depends_on [FIN-04, FIN-02], 但 6.1.2 中 FIN-01 的前置是 FIN-04, FIN-15, FIN-19, EST-06, 没有 FIN-02. 两者是同一闸门的并列决定, 先后顺序由 gate_fin 路由决定, 不靠依赖. (2) GC-11 给 RPT-03 加 FIN-02, 但 6.1.2 中 RPT-03 的前置是 FIN-01 与 RPT-02. (3) GEN-04 的规格前置含 DOC-04, 而 DOC-04 已实现. 按 Demo 规则 (只写已实现程序) 应当写进去, 草稿却以 \"本数据集没有借款合同\" 为由省略. 依赖是模板层面的, 不该按某个数据集取舍.",
+   "evidence": "ELEC5620_设计规格说明书.md 6.1.2 第 822 行 (FIN-01), 823 行 (FIN-02), 830 行 (RPT-03), 804 行 (GEN-04 ← PLN-07, CSH-03, REC-06, DOC-04); Demo需求文档.md 第 2 节 \"YAML 的 depends_on 只写本表内的程序\"",
+   "fix": "FIN-01.yaml 保持 [FIN-04], 在 FIN-01.yaml 注释与接口文档第 7 节写明 gate_fin 先 FIN-02 后 FIN-01 是路由规则; RPT-03 不加 FIN-02 依赖, 只在 prompt 变量取 FIN-02 决定; GEN-04 depends_on 改为 [PLN-07, DOC-04] (DOC-04 在 P1, 不影响分层), 未实现的 CSH-03, REC-06 在需求里注明. GC-12 验收 6 的依赖图同步修改."
+  },
+  {
+   "key": "GC-09/GC-10 (候选意见)",
+   "severity": "minor",
+   "problem": "规格书第 10 节与 UC-06 要求 A9 算候选意见时把持续经营路径也算进去 (不恰当 → 否定; 披露不充分 → 保留或否定; 披露充分 → 无保留并加段). 草稿的顺序是 FIN-04 先于 FIN-02 决定执行, 所以 SCHEDULE.candidate_opinion 只按金额计算; 草稿用 FIN-01 一致性校验代替, 但没有说明这是对规格的偏离. 闸门页显示的候选意见可能与已定的持续经营结论矛盾: 例如金额对应无保留, 而结论是 material_uncertainty_not_disclosed.",
+   "evidence": "ELEC5620_设计规格说明书.md 第 10 节 P3 第 1437 行 \"矩阵之外另有五条独立决定意见的路径, A9 同样算入候选: 持续经营基础不恰当 → 否定, 重大不确定性披露不充分 → 保留或否定...\"; 12.5 UC-06 步骤 6 (第 2130 行) \"A9 按第 10 节路由给出候选 (含持续经营...)\"; agents/qc.py:49",
+   "fix": "GC-09 验收 4 补一条: FIN-01 步的 CompletionMaterial 给出综合候选, 取金额候选与持续经营结论中较严的一个 (not_disclosed 时至少 qualified). 在 FIN-01 一致性校验旁写明这是 ASA 570 para 23 的强制要求, 比规格中 \"候选可推翻\" 更严, 并同步写入接口文档第 7 节."
+  },
+  {
+   "key": "GC-12",
+   "severity": "minor",
+   "problem": "验收 4 写 \"items 2 条 (14200000 与 3368000, 均 overstated, 按决定先后)\", 但按草稿自己的流程, 顺序应当反过来. GEN-06 的任务在第一次 await_events 时就待决 (验收 2), REV-02 的任务要等 REV-03 确认后才出现. 所以 GJ 的 misstatement 先于 SI-2026-0612 作出, 汇总表应为 [3368000, 14200000]. 写成 14200000 在前, 实现照抄会写出错误的断言.",
+   "evidence": "草稿 GC-12 验收 2-4; orchestration/nodes.py:669-699 await_events 按轮读回错报并追加; agents/qc.py 按 state misstatements 顺序列 items",
+   "fix": "验收 4 写明顺序: items [GJ 来源的 3368000, SI-2026-0612 来源的 14200000]; 或明确按集合比较, 不比较顺序. GC-13 中涉及错报顺序的断言同样处理."
+  },
+  {
+   "key": "GC-04",
+   "severity": "minor",
+   "problem": "GEN-06 是 hybrid 程序, 每个判断对象都来自 GEN-07 的例外, 所以 rule_findings 一定非空. 按现有置信度规则, 有例外时只有 misstatement 或 more_evidence 记 c_rule=1. 正确判为非调整事项而 accept 的股利判断会被记 c_rule=0, 置信度被系统性压低. 动态降级机制 (第 2 级) 实现后, 这会让 GEN-06 的 L3 自动关闭判断很容易被降级. 草稿没有讨论这一点.",
+   "evidence": "src/backend/services/judgment_engine.py:187-197 rule_consistency, 623-632 confidence_parts (hybrid 才计 rule); 需求清单 \"已按推荐定\" 置信度 c_rule 一条",
+   "fix": "GC-04 写明 GEN-06 的 c_rule 口径. 一种是对象来自上游例外时, 只要结论把例外分类为调整, 非调整或常规事项之一, 就记 1; 改口径须同步接口文档第 5 节. 另一种是保持现口径, 在风险一节写明, 并通知动态降级组."
+  },
+  {
+   "key": "GC-04",
+   "severity": "minor",
+   "problem": "验收 3 写 \"task.params 含窗口 2026-07-01 至 2026-07-31\", 但按 R41, task.params 等于 params_snapshot, 即 {period_end, subsequent_days, performance_materiality_cents, clearly_trivial_cents}, 里面没有窗口字段. 窗口放在哪里 (data 新增字段, 还是靠 prompt 由 period_end 推算) 没有说清楚, 测试无法写出确定的断言.",
+   "evidence": "需求清单 R41 验收 2 (JudgmentContext.task 含 params, 等于 params_snapshot); 草稿 GC-04 验收 1, 3",
+   "fix": "改为 task.params 等于 params_snapshot {period_end 2026-06-30, subsequent_days 31, performance_materiality_cents 9000000, clearly_trivial_cents 600000}; 若需要窗口, 写明 data.window = {from: 2026-07-01, to: 2026-07-31}, 并写进 GEN-06.md.j2 头注释."
+  },
+  {
+   "key": "GC-10 (外部依赖)",
+   "severity": "minor",
+   "problem": "外部依赖写 \"B 的 decisions 表 gate 取值与 disposition 列接受持续经营结论\", 但 decisions 表没有 gate 与 disposition 列: 决定整体存在 data JSON 中. 真正要 B 改的只有 gate_materials 的种类表 (OUTPUT_KINDS) 加 GoingConcernConclusion. 按草稿写法, B 可能会去做一次不必要的迁移.",
+   "evidence": "src/backend/persistence/models.py:101-118 (decisions: [ReviewRecord, GateDecision], 表结构 id version kind data created_by created_at)",
+   "fix": "GC-10 的外部依赖改为: 无表结构变更, 决定以 JSON 存储; 只需 B 确认 API schema 与前端 client 重新生成. GC-08 的外部依赖保留 OUTPUT_KINDS[gate_materials] 加 GoingConcernConclusion."
+  }
+ ],
+ "missing": [
+  "Demo需求文档同步不全: GC-12 验收 6 只改第 2, 3, 6, 7 节, 漏了第 4.1 节 (P2 以外程序列表加 FIN-02; gate_fin 分 FIN-02, FIN-01 两步; FIN-02 驳回回 completion; 静态中断仍为 4 个) 与第 4.2 节 (GEN-07 的例外由 GEN-06 引用归因). 第 2 节 \"共 17 条\" 也要改为 21.",
+  "合成数据集设计第 7 节第 15 行 FIN-01 的 reason 还写着 AUD 142,000 超过整体重要性. 合计变为 175,680.00 后 reason 要改. RPT-03 的 prompt 带 FIN-01 理由, r1/r2 的测试也断言该理由, 但 data_needs 与 GC-13 只改了 FIN-04 行和 RPT-03 行.",
+  "ASA 560 para 7(a)-(d) 要求的程序 (了解管理层识别期后事项的程序, 询问, 阅读期后会议纪要, 阅读期后中期报告) 本组都没有做, GEN-07 只扫描银行流水与分录. GEN-06 或 FIN-02 的 fixture 与闸门材料应把这一点记为 limitation, 现在只写了书面声明未取得.",
+  "规格书 15.2 (第 2405 行) 的独立复核评估场景, 指定用 GEN-06 的一条 L3 关闭型判断, 让 A7 判 inconsistent, 并另埋一条应判 consistent 的正例. 本组的数据设计应与第 1 级 GEN-09 组约定是否再埋一条 GEN-06 争议案例, 否则 A7 组还得回头改 GEN-06 的数据与 fixture.",
+  "在途项目兼容: 新增 EngagementState.going_concern 后, 旧检查点里没有这个键; 新增 FIN-02 后, 旧项目的程序包里也没有 FIN-02. completion 节点里的 next(p for p in pack if p.id == FIN-02) 会抛 StopIteration. 需要写明不兼容, 由重建项目解决, 或者在 completion 或 recover 时补齐.",
+  "FIN-01 被驳回时, 如果 FIN-02 已经批准, 回到 completion 会再调用一次 FIN-02 的 LLM, GOING_CONCERN 升到 v2, 审计师须重新批准 FIN-02. 这符合规格书 18.4 \"已失效的批准须重新作出\", 但多一次模型调用并要求重复决定, 草稿没有在需求或待定问题里提到. GC-08 验收 5 与 GC-09 验收 3 隐含了这种行为, 应写进 GC-10 的验收, 并注明成本."
+ ],
+ "extra_questions": [
+  "过渡期 (GC-05 至 GC-12) 新 fixture 的运行时副本由谁复制: 由 A 运行 B 现有的 data/generate_demo.py 并 git add -f 提交 data/demo/llm (推荐, 保证每条需求全绿), 还是等 B 复制、在此之前暂时放宽一致性测试?",
+  "是否把 GC-12 的固定集打开提前到 GC-06 之后 (GEN-07, GEN-06, GEN-04 一落地就进程序包)? 这样 e2e 的 fixture 全用断言与真实 Agent 断言能按需求逐条推进, 代价是 test_flow 与脚本 Agent 的改动提前.",
+  "FIN-01 被驳回而 FIN-02 已批准时, 是重跑 FIN-02 并要求重新批准 (草稿现行, 与规格书 18.4 一致), 还是只重跑 FIN-04, FIN-02 的批准保持有效 (省一次模型调用, 但与 \"本次进入后两条决定\" 的字面不一致)?"
+ ],
+ "verdict": "草稿的大方向与规格书一致: 程序归属, 引擎, 自主度, A5 不调 LLM, 人只经 DecisionSubmit. 数据也核对过: Dingo 的两张期末未收发票 1684000 × 2, 试算表指标 672000000/218900000/3.0699/1.7222/581100000, 税前利润 150000000, 例外数, 判断数, 留痕数的推算都对得上. 准则段落号 (ASA 560 第 6-8 段, ASA 570 第 10, Aus 13.2, 16-18, 21-23 段, AASB 110 第 8-10, 13, 21 段) 与原文一致. 但有四个会导致返工的问题, 要先改. (1) GOING_CONCERN 作为带 run_id 的单对象, 会让 stored_outputs 的重放取错, 并波及全部 A6 程序. (2) 新 fixture 一加进来, e2e 的 fixture 全用断言, 真实 Agent 断言与 data/demo/llm 一致性测试会从 GC-05 一直红到 GC-13. (3) test_fin_gate, test_completion, test_concierge 会被改坏, 却不在任何一条的 scope 里. GC-08 也超过 M, 应拆分. (4) FIN-02 写死引用 J-GEN-04-1-CLIENT-001, GEN-04 走 manual_result 或 rerun 后会卡死. 其余是准则片段的抽取细节, 依赖写法与规格书 6.1.2 的偏离, 候选意见口径, 汇总表顺序等小问题. 改完上述各条后可以开工."
+}

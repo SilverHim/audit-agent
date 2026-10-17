@@ -1,0 +1,1120 @@
+{
+ "group": "错报闭环与动态降级 (FIN-03 错报性质分类, FIN-08 错报沟通与回复记录, FIN-09 更正验证, FIN-04 改按错报状态累计, 7.4 动态降级与 9.2 盲判机制)",
+ "requirements": [
+  {
+   "key": "MD-1",
+   "title": "错报生命周期与 A8 写入归属的契约",
+   "procedures": [
+    "FIN-03",
+    "FIN-08",
+    "FIN-09",
+    "FIN-04"
+   ],
+   "goal": "Misstatement 从固定 uncorrected 改为规格书 12.3 的生命周期对象 (identified, communicated, verifying, corrected, partially_corrected, uncorrected, evaluated, closed), 补齐分类, 沟通, 更正字段; 新增 FIN-03/FIN-09 判断携带的 \"错报更新\" 与 FIN-08 管理层回复两个载荷类型; 状态 misstatements 改为可出新版本; A8 进入字段写入归属表. 本条只改契约与 R19 的初始状态, 现有流程结果不变.",
+   "scope_files": [
+    "src/backend/contracts/models.py (MisstatementStatus 枚举; Misstatement 加 status 默认 identified, objective_id, fraud_indicative, fraud_reason, origin, classification_judgment_id, communicated_at, communicated_to, management_response, uncorrected_basis, adjustment_entry_ids, corrected_cents, residual_cents, verified_by_judgment_id, evaluation, evaluation_reason, 及状态与剩余额一致性校验; MisstatementUpdate; ManagementResponse; Judgment.misstatement_update; ReviewRecord.misstatement_update; UncorrectedItem.origin; UncorrectedSchedule.corrected_ids; AgentId 注释去掉 A8 占位说明)",
+    "src/backend/contracts/state.py (misstatements 的 reducer 由 append_unique 改为 upsert_by_id)",
+    "src/backend/orchestration/merge.py (AGENT_FIELDS 加 A8: judgments, review_tasks, misstatements)",
+    "src/backend/orchestration/decisions.py (misstatement_effects 建的错报 status 为 identified)",
+    "docs/开发接口文档.md 第 0 节 ID 表, 第 2.4, 2.5 节, 第 3 节 reducer 与写入归属表, 第 6 节 Agent 表",
+    "tests/fakes.py",
+    "tests/test_state.py",
+    "tests/test_merge.py",
+    "tests/test_decisions.py"
+   ],
+   "basis": [
+    "规格书 12.2 Misstatement (1822-1839 行), UncorrectedMisstatementSchedule (1934-1937 行)",
+    "规格书 12.3 子状态机 Misstatement (2017-2023 行)",
+    "规格书 18.3.1 字段读写归属 misstatements 行 (2636 行): 人确认为错报, A8 写 FIN-03 分类与 FIN-09 验证结果, A1 写状态迁移",
+    "规格书 6.1.1 程序归属 A8 行 (709 行)",
+    "开发接口文档第 0 节 Misstatement ID M-{review_record_id}, 第 2.5 节 Misstatement, 第 3 节 reducer 表"
+   ],
+   "prerequisites": [
+    "R19",
+    "R55"
+   ],
+   "external_deps": [
+    "B: persistence 的 misstatements 表已按 id + version 追加 JSONB 存储, 新字段无需迁移; 若 B 的序列化对 Literal 默认值有特殊处理须自查. A 先用 tests/fakes.py 的 FakeOutputStore",
+    "C: 错报相关视图 (FIN-01 闸门页, 错报列表) 显示新字段; A 不等 C, 契约变更写进接口文档第 2.5 节并告知 C"
+   ],
+   "acceptance": [
+    "1. MisstatementStatus 恰为 8 值: identified, communicated, verifying, corrected, partially_corrected, uncorrected, evaluated, closed; Misstatement 新字段默认: status identified, objective_id/fraud_indicative/fraud_reason/origin/classification_judgment_id/communicated_at/communicated_to/management_response/uncorrected_basis/residual_cents/verified_by_judgment_id/evaluation/evaluation_reason 为 None, adjustment_entry_ids [], corrected_cents 0.",
+    "2. 模型校验: status corrected 而 residual_cents 不为 0, partially_corrected 而 residual_cents 不在 (0, amount_cents) 内, uncorrected 而 uncorrected_basis 为空, 均抛 ValidationError; uncorrected_basis 只能是 refused 或 stopped_waiting.",
+    "3. R19 路径: 对 T-J-REV-02-1-SI-2026-0612-v1 提交 misstatement 决定 D-REV02-0612 (draft {factual, Revenue, Cutoff, 14200000, overstated}) 建 M-D-REV02-0612 v1, status identified, judgment_id J-REV-02-1-SI-2026-0612, 其余字段同 R19.",
+    "4. reducer: 状态已有 M-D-REV02-0612 v1 时并入 v2 替换, 再并入 v1 抛 VersionConflict; 并入同 id 同版本忽略.",
+    "5. merge.check_patch: A8 片段写 judgments, review_tasks, misstatements, procedure_runs 通过; A8 写 uncorrected_schedule 被拒; A6 写 misstatements 被拒.",
+    "6. MisstatementUpdate 含 misstatement_id, base_version, kind (classification 或 verification) 与可选的 type, fraud_indicative, fraud_reason, origin, objective_id, status, adjustment_entry_ids, corrected_cents, residual_cents; ManagementResponse 含 misstatement_id, base_version, communicated_at, communicated_to, response, agrees_to_correct, 全部必填.",
+    "7. 现有全部测试通过 (FIN-04 本条不改, 仍累计全部错报; R55 结果不变); 接口文档第 2.5 节 Misstatement 不再写 \"本版不做更正流程\"."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-2",
+   "title": "FIN-03 程序定义, 准则片段, 输出模型与 fixture",
+   "procedures": [
+    "FIN-03"
+   ],
+   "goal": "新增 FIN-03.yaml (A8, hybrid, L2), ASA240-P36 原文片段, FIN-03 提示词, 输出模型 MisstatementClassificationDraft (JudgmentDraft 子类, 加错报性质: 类型, 是否有舞弊迹象及理由) 及其语义校验, JudgmentOutcome 带回通过校验的草稿; 提供 Numbat 的 FIN-03 fixture.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-03.yaml",
+    "src/backend/knowledge/standards/ASA240.yaml (新, 片段 ASA240-P36)",
+    "src/backend/knowledge/prompts/FIN-03.md.j2",
+    "src/backend/contracts/llm_outputs.py (MisstatementNature, MisstatementClassificationDraft)",
+    "src/backend/contracts/services.py (JudgmentOutcome.draft)",
+    "src/backend/services/judgment_engine.py (分类草稿的语义校验; judge 在 outcome 中带回草稿)",
+    "tests/fixtures/llm/FIN-03/default.json",
+    "tests/test_knowledge.py (STANDARD_PDFS 加 ASA_240.pdf; 程序总数 +1; FIN-03 的 standards 有原文)",
+    "tests/test_output_validator.py"
+   ],
+   "basis": [
+    "规格书 6.1.1 (709 行) FIN-03 属 A8; 7.2 矩阵 P3 行 (1076 行) FIN-03 为 L2 混合",
+    "规格书 6.1.2 (806 行) FIN-03 前置为 \"全部 P2 Judgment 已复核\", 非程序依赖, 不写进 depends_on",
+    "规格书第 10 节 P3 (1418-1425 行): A8 对错报作性质分类含舞弊标记与期间来源",
+    "规格书 6.3 selection 注释: 本系统不做审计抽样 (3.3 准则级排除), 故不应出现 projected",
+    "ASA 240 第 36 段 (docs/参考资料/01_审计准则_ASA/ASA_240.pdf 现行编译版, 已用 pdftotext 核对段号; 不用 2026-12-15 起生效版)",
+    "ASA 450 第 11 段 (已有片段 ASA450-P11), 第 A6 段 factual/judgemental/projected 定义 (应用指南段, 现有逐字对照测试只支持数字段号, 不作片段, 只写入提示词说明)",
+    "开发接口文档第 4 节 MockLLMClient 回退 default.json, 第 5 节 OutputValidator"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "R33",
+    "R35"
+   ],
+   "external_deps": [
+    "B: 重新运行 data/generate_demo.py, 把 tests/fixtures/llm/FIN-03/ 复制到 data/demo/llm/FIN-03/ (脚本按目录 rglob 复制, 不需改脚本); 就绪前 test_knowledge 的运行期 fixture 一致性检查会报差异, A 提交时同步通知 B"
+   ],
+   "acceptance": [
+    "1. FIN-03.yaml: phase P3_Completion, cycle Completion, owner A8, engine hybrid, autonomy_level L2, manual_result_allowed false, depends_on [], standards [ASA450-P11, ASA240-P36], evidence_required [voucher], rules [] (规则部分在代码中: 审计目标映射与期间来源), llm {prompt FIN-03.md.j2, output_model MisstatementClassificationDraft}; 注释写明 \"全部 P2 判断已复核\" 由主图保证.",
+    "2. ASA240-P36 的 text 与 ASA_240.pdf 第 36 段逐字一致 (test_fragment_text_is_verbatim_from_pdf 通过), ASA240.yaml 的 compiled 与 PDF 封面 Compilation Date 一致; procedures [FIN-03].",
+    "3. MisstatementClassificationDraft = JudgmentDraft + nature {type, fraud_indicative, fraud_reason}; 语义失败 (不重试): fraud_indicative 真而 fraud_reason 为空; type 为 projected; proposed_action 不是 accept 或 more_evidence.",
+    "4. tests/fixtures/llm/FIN-03/default.json (运行期错报 ID 含 uuid, fixture_key 取不到同名文件, 故用 default): conclusion 写 SI-2026-0612 收入 AUD 142,000 为 factual 截止错报; nature {factual, fraud_indicative true (按待拍板舞弊问题推荐项), fraud_reason 写明 SJ-2026-0612 由 fin.controller 于 2026-06-28 (周日) 悉尼时间 21:14 录入并由同一人批准, 距期末两天, 货物 2026-07-01 才发出}; fact 步骤指针: journal_entry SJ-2026-0612-2 (locator created_by, approved_by, created_at), sales_invoice SI-2026-0612 (posting_date), delivery_note DN-2026-0612 (shipped_date, signed_date); standard 步骤 ASA240-P36, ASA450-P11; proposed_action accept; self_confidence 0.85.",
+    "5. 用 Numbat 数据 (FakeFinancialStore 的 SJ-2026-0612-1/-2, SI-2026-0612, DN-2026-0612) 校验 default.json 四级通过; 解析所得 ClassificationDraft 经 JudgmentOutcome.draft 带回.",
+    "6. test_all_procedures_load 的程序总数 +1 (本组 FIN-03); test_procedure_standards_have_text 覆盖 FIN-03.",
+    "7. 现有 REV-03, REV-02, CSH-02 的校验与 judge 测试不变 (JudgmentOutcome.draft 对它们为普通 JudgmentDraft)."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "MD-3",
+   "title": "A8 WorkpaperAgent 与 FIN-03 错报性质分类",
+   "procedures": [
+    "FIN-03"
+   ],
+   "goal": "新建 A8 WorkpaperAgent, 执行 FIN-03: 对每条尚未分类的 identified 错报, 规则部分定审计目标与期间来源, LLM 判类型与舞弊迹象, 产出 Judgment (带 misstatement_update, kind classification) 与复核任务; 把 A6 的判断解读流程 (judgments_patch) 抽到共用模块, A6, A8 共用.",
+   "scope_files": [
+    "src/backend/agents/workpaper.py (新, WorkpaperAgent, procedures {FIN-03}; FIN-09 由 MD-10 加入)",
+    "src/backend/agents/judging.py (新, 从 fieldwork.py 抽出 judge_all 与 judgments_patch 的共用部分)",
+    "src/backend/agents/fieldwork.py (改用共用模块)",
+    "src/backend/agents/registry.py (AGENT_CLASSES 加 WorkpaperAgent)",
+    "tests/test_workpaper.py (新)",
+    "tests/fakes.py (ScriptA8, Numbat 错报预置)"
+   ],
+   "basis": [
+    "规格书 5.2 Agent 清单 A8 行, 5.3 \"A2, A4, A8 的 llm / hybrid 程序同样产 Judgment[], 其领域对象以 judgmentRef 引用\"",
+    "规格书 8.5 上下文管理 \"不该看的: 其他循环的 Judgment\"",
+    "规格书第 10 节 P3 (1420 行) 与 UC-06 第 1 步 (2124 行)",
+    "开发接口文档第 6 节 ProcedureAgent 契约, A6 判断公共流程",
+    "ASA 240 第 36 段, ASA 450 第 11 段"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "MD-2",
+    "R41"
+   ],
+   "external_deps": [
+    "B: FinancialDataStore 按发票的 journal_entry_id 与 entry_no 取分录行 (现有 rows 查询已支持, 如不支持须 B 补), A 先用 FakeFinancialStore 预置 SJ-2026-0612-1/-2"
+   ],
+   "acceptance": [
+    "1. 状态: M-D-REV02-0612 v1 identified (judgment_id J-REV-02-1-SI-2026-0612, 该判断 v2 confirmed), Numbat 三条审计目标; mock 读 FIN-03/default.json: 片段 procedure_runs [RUN-FIN-03-1 succeeded], judgments [J-FIN-03-1-M-D-REV02-0612 v1 pending], review_tasks [T-J-FIN-03-1-M-D-REV02-0612-v1 normal]; 片段不含 misstatements (L2 待人复核).",
+    "2. J-FIN-03-1-M-D-REV02-0612.misstatement_update = {misstatement_id M-D-REV02-0612, base_version 1, kind classification, type factual, fraud_indicative true, fraud_reason 同 fixture, origin current_period, objective_id OBJ-REV-CUT}; origin 与 objective_id 来自规则部分 (Revenue + Cutoff 匹配 OBJ-REV-CUT; 本版无上期未更正错报来源, 一律 current_period), 不取 LLM.",
+    "3. 请求: procedure_id FIN-03, run_id RUN-FIN-03-1, fixture_key M-D-REV02-0612; 提示词含 \"SJ-2026-0612-2\", \"fin.controller\", \"2026-07-03\" 与 RISK-REV-CUT 的描述, 不含 J-CSH-02-1-BA-01 与 J-REV-03-1-CON-001 (不看其他判断); 1 行 llm_call, actor A8.",
+    "4. 置信度: evidence 0.7 (voucher 内部原件), rule 1.0 (无例外且 accept), llm 0.85 → confidence 0.85.",
+    "5. 无错报, 或错报已分类 (classification_judgment_id 非空), 或状态不是 identified: 不调 LLM, RUN-FIN-03-1 succeeded, 片段只有 procedure_runs.",
+    "6. 再加 M-D-TEST-2 (exception_id X-CSH-05-1-B01-1, Cash, Existence, 500000, overstated): 两条并发判断, 各一条 Judgment, M-D-TEST-2 的 objective_id OBJ-CASH-EXI; 两个任务.",
+    "7. LLM 连续 3 次结构失败: T-RUN-FIN-03-1-M-D-REV02-0612-v1 (failed, 带 subject), allowed 只有 {rerun}; 引用或语义失败只调 1 次, 同样处理.",
+    "8. A6 改用共用模块后 R40-R49 全部测试不变."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-4",
+   "title": "P2 以外程序的判断复核在节点内等待",
+   "procedures": [
+    "FIN-03",
+    "FIN-09"
+   ],
+   "goal": "P2 以外程序 (现仅 failed 任务会等人) 产出 normal 或 unattributed 任务时, 程序置 awaiting_human 并在节点内 interrupt() 等复核决定; 每次恢复后从 Store 整体读回该程序的任务, 判断, 例外, 错报与程序最新版本 (同 Q9 口径), 直到该轮任务全部决定才返回. failed 任务仍走 Q17 整组 rerun. 同一轮多个决定的恢复补做不再报 \"无法确定读回顺序\".",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py (attempt 的 pending 计入全部待决任务; execute 的等待循环分 rerun 与复核两支; read_rerun 旁加读回复核决定)",
+    "src/backend/orchestration/recovery.py (节点内复核等待的补做: 同轮多个非 rerun 决定按整体读回处理)",
+    "src/backend/orchestration/decisions.py (check_review_record 的等待 payload 判定沿用 procedure_id 过滤)",
+    "tests/test_nodes.py",
+    "tests/test_recovery.py",
+    "tests/fakes.py (ScriptA8 按脚本出 normal 任务)"
+   ],
+   "basis": [
+    "规格书 12.3 Procedure 子状态机 awaiting_human 出口 (1983-1994 行)",
+    "规格书 UC-04 第 4 步: 每条决定写入后重算程序状态, 全部任务已决才 completed",
+    "开发接口文档第 3 节 \"程序执行范围\" 与第 7 节恢复机制",
+    "需求清单 Q4 (awaiting_human 新版本), Q9 (六类最新版整体并入), Q17 (失败整组重跑)"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "R05",
+    "R07",
+    "R16",
+    "R31"
+   ],
+   "external_deps": [
+    "无 (Store, Trail 用 FakeOutputStore, FakeTrail; Agent 用 ScriptA8)"
+   ],
+   "acceptance": [
+    "1. 测试图中节点调 execute(state, \"FIN-03\"), ScriptA8 返回 J-FIN-03-1-M-D-REV02-0612 v1 与 T-J-FIN-03-1-M-D-REV02-0612-v1 (normal): 同一事务写入 RUN-FIN-03-1 succeeded, 判断, 任务与 FIN-03 v2 awaiting_human; interrupt payload {awaiting: human, procedure_id: FIN-03, run_id: RUN-FIN-03-1, records: []}; 1 行程序状态 transition (planned → awaiting_human).",
+    "2. 经 GraphDecisionSubmit 提交 confirm D-FIN03: FIN-03 v3 completed (recompute_procedure); 恢复后节点返回片段含 J v2 confirmed, T v2 decided, review_records [D-FIN03], procedure_pack 中 FIN-03 v3; ScriptA8 调用次数仍为 1.",
+    "3. 两条错报两条任务: 先 confirm D-1, 节点读回后仍等待 (payload records [D-1]), 再 override D-2 后返回; D-2 写 Store 后未写检查点时 recover 补做, 结果与不中断相同.",
+    "4. 等待 FIN-03 时提交别的程序的任务决定 → NOT_AWAITING_REVIEW; 对 normal 任务提交 rerun → DECISION_NOT_ALLOWED; Store 与检查点不变.",
+    "5. Store 已有 RUN-FIN-03-1 终态时节点重放: 不调 Agent, 依次越过已读回的决定, 结果相同.",
+    "6. R05, R07, R21, R30, R31, R57 的现有测试全部通过 (failed 任务的整组 rerun 不变)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-5",
+   "title": "错报更新随判断确认或推翻生效",
+   "procedures": [
+    "FIN-03",
+    "FIN-09"
+   ],
+   "goal": "带 misstatement_update 的判断被 confirm 时, 在同一事务内按其载荷出错报新版本 (classification 写 classification_judgment_id, verification 写 verified_by_judgment_id); override 时须由人在 ReviewRecord.misstatement_update 给出更新值, 人工判断与错报新版本同事务写入; L3/L4 自动确认时由 Agent 片段直接带错报新版本, 共用同一纯函数.",
+   "scope_files": [
+    "src/backend/orchestration/decisions.py (apply_misstatement_update 纯函数; confirm_effects, override_effects 调用; misstatement_update 字段的必填与允许规则; base_version 校验)",
+    "src/backend/agents/judging.py (自动确认时调用同一函数)",
+    "docs/开发接口文档.md 第 7 节决定的效果表, 必填表",
+    "tests/test_decisions.py",
+    "tests/test_workpaper.py"
+   ],
+   "basis": [
+    "规格书 18.3.1 (2636 行) A8 写 FIN-03 分类与 FIN-09 验证结果",
+    "规格书 UC-04 第 4 步推翻: overrideConclusion 成为新 Judgment 版本",
+    "需求清单 Q10 (人工判断只填人给的), Q9",
+    "开发接口文档第 7 节校验顺序与错误码"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "MD-3",
+    "R18",
+    "R20"
+   ],
+   "external_deps": [
+    "C: 复核页对带错报更新的判断, override 表单要能填分类或验证字段; A 先在测试中直接构造 ReviewRecord"
+   ],
+   "acceptance": [
+    "1. confirm D-FIN03 (任务 T-J-FIN-03-1-M-D-REV02-0612-v1): 同一事务写 J-FIN-03-1-M-D-REV02-0612 v2 confirmed, M-D-REV02-0612 v2 (type factual, fraud_indicative true, fraud_reason, origin current_period, objective_id OBJ-REV-CUT, classification_judgment_id J-FIN-03-1-M-D-REV02-0612, status identified), T v2 decided; 1 行 decision 留痕.",
+    "2. override 而目标判断带 misstatement_update, 记录缺 misstatement_update → MISSING_FIELD; 带 {M-D-REV02-0612, base 1, classification, factual, fraud_indicative false}: 建 J-FIN-03-1-M-D-REV02-0612-H1 (confirmed, L1, misstatement_update 取人给的), 原判断 v2 overridden 并记 superseded_by, M v2 fraud_indicative false, classification_judgment_id 为 -H1.",
+    "3. misstatement_update.base_version 与 Store 中错报当前版本不符 → VERSION_MISMATCH, 什么都不写.",
+    "4. 对 REV-02 任务 (判断不带 misstatement_update) 的 override 带 misstatement_update → FIELD_NOT_ALLOWED.",
+    "5. 合成 L3 FIN-03 判断自动确认: A8 片段同时含判断 (confirmed) 与 M v2, 与第 1 条的 M v2 内容相同.",
+    "6. 恢复后 (await_events 或 MD-4 的节点等待) 状态中 misstatements 为 M-D-REV02-0612 v2."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-6",
+   "title": "错报分诊节点 misstatement_triage 接入主图",
+   "procedures": [
+    "FIN-03"
+   ],
+   "goal": "P2 结清后先进新节点 misstatement_triage (A8 执行 FIN-03, 节点内等复核), 再进后续 P3 节点; 阶段 P3_Completion 的写入从 completion 移到这里; 无错报时 FIN-03 空执行直接通过. FIN-01 驳回仍只回 completion.",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py (misstatement_triage; NODE_PROCEDURES 加 misstatement_triage: (FIN-03,); completion 不再推进阶段)",
+    "src/backend/orchestration/graph.py (after_fan_in 的 completion 出口改指 misstatement_triage; misstatement_triage → completion, MD-7 起改为 → communicate; 模块 docstring 流程图)",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md 第 3 节, 第 7 节",
+    "docs/Demo需求文档.md 第 1 节, 第 4.1 节, 第 6 节 (移除已做项)",
+    "tests/test_graph.py",
+    "tests/test_flow.py",
+    "tests/test_recovery.py"
+   ],
+   "basis": [
+    "规格书第 10 节 P3 错报处理顺序 (1425 行): 汇总 → 沟通 → 更正 → FIN-09 → FIN-04; 无错报直接进 FIN-04",
+    "规格书 12.3 主状态机 P3_Completion 子状态 (1963-1969 行)",
+    "开发接口文档第 3 节 completion 与阶段写入, 需求清单 Q11"
+   ],
+   "prerequisites": [
+    "MD-3",
+    "MD-4",
+    "MD-5"
+   ],
+   "external_deps": [
+    "C: 总览显示新节点的等待 (awaiting_review 已覆盖节点内等待, 无需新字段)"
+   ],
+   "acceptance": [
+    "1. R22 的脚本 Agent 流程: P2 结清后进 misstatement_triage, 阶段 P3_Completion 与 RUN-FIN-03-1 同一事务写入; transition 留痕 engagement P2_Executing → P3_Completion 的 procedure_id 为 FIN-03; 图停在 misstatement_triage 等 FIN-03 复核, overview.awaiting_review 真.",
+    "2. confirm D-FIN03 后 → completion → 停在 gate_fin; SCHEDULE v1 同 R23 (items [{M-D-REV02-0612, 14200000, overstated}], qualified).",
+    "3. SI-2026-0612 改为 confirm (无错报): FIN-03 空执行 RUN-FIN-03-1 succeeded, FIN-03 completed, 不等人, 直达 completion, SCHEDULE items [], unqualified.",
+    "4. FIN-01 reject → completion: FIN-04 出 SCHEDULE v2, FIN-03 不重跑 (RUN-FIN-03-2 不存在).",
+    "5. 停在 misstatement_triage 时取消后台任务, 新 runner recover 后继续, 结果同第 2 条.",
+    "6. R27, R55 的全流程测试在加入本节点后仍通过 (多一次 FIN-03 复核决定; R55 的 llm_call 断言改为 14, decision 改为 12, 由 MD-17 统一定稿)."
+   ],
+   "size": "S",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-7",
+   "title": "FIN-08 错报沟通: 程序定义, 管理层回复登记与效果",
+   "procedures": [
+    "FIN-08"
+   ],
+   "goal": "FIN-08 作为人工程序接入: communicate 节点经通用人工程序机制把已分类的 identified 错报派给审计师, 审计师逐条登记与管理层的沟通 (时间, 对象, 回复原文, 是否同意更正); 拒绝更正的错报置 uncorrected (uncorrected_basis refused), 同意的置 communicated. 无可沟通错报时空执行. 提供参数引用 first_misstatement_communicated_at 供 GEN-05 的 JE-R06.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-08.yaml",
+    "src/backend/knowledge/standards/ASA450.yaml (加 ASA450-P08, ASA450-P09)",
+    "src/backend/orchestration/decisions.py (fin08_effects 纯函数与管理层回复校验, 挂在通用人工程序机制的结果提交上)",
+    "src/backend/orchestration/nodes.py (communicate 节点; NODE_PROCEDURES 加 communicate: (FIN-08,))",
+    "src/backend/orchestration/graph.py (misstatement_triage → communicate → completion; MD-8, MD-11 再改出口)",
+    "src/backend/orchestration/recovery.py",
+    "src/backend/services/procedure_library.py (STATE_REFS 加 first_misstatement_communicated_at)",
+    "docs/开发接口文档.md 第 2.5, 7, 8.1 节",
+    "tests/test_decisions.py",
+    "tests/test_graph.py",
+    "tests/test_knowledge.py"
+   ],
+   "basis": [
+    "规格书 6.1.2 (810 行) FIN-08 ← FIN-03, manual; 7.2 矩阵 Manual 列",
+    "规格书第 10 节 P3 人员行 (1423 行) 与错报处理顺序 (1425 行): 管理层拒绝更正记为 uncorrected 并保留回复原文",
+    "规格书 UC-06 第 1 步 (2124 行): RCA 与管理层沟通错报, 系统记录管理层回复",
+    "规格书 6.3 GEN-05 params audit_adjustment_start: engagement.first_misstatement_communicated_at",
+    "ASA 450 第 8, 9 段 (已用 pdftotext 核对 ASA_450.pdf)"
+   ],
+   "prerequisites": [
+    "MD-5",
+    "MD-6",
+    "通用人工程序机制 (第 3 级, 另组起草的需求; 定义人工程序派任务, 收结果, 节点等待的公共做法)"
+   ],
+   "external_deps": [
+    "通用人工程序机制 (A 的另一组需求): FIN-08 的结果载荷为 list[ManagementResponse], 挂在该机制的结果对象上, 字段名与提交入口随该机制对齐; 该机制就绪前本条只能完成 YAML, 片段, fin08_effects 纯函数与其单元测试",
+    "C: 人工程序页面上 FIN-08 的登记表单 (每条错报一行: 沟通时间, 沟通对象, 回复原文, 是否同意更正); A 先在测试中直接提交载荷"
+   ],
+   "acceptance": [
+    "1. FIN-08.yaml: phase P3_Completion, owner A8, engine manual, autonomy_level L1, depends_on [FIN-03], standards [ASA450-P08, ASA450-P09]; 两个片段与 ASA_450.pdf 第 8, 9 段逐字一致, 对照测试通过.",
+    "2. 状态 M-D-REV02-0612 v2 (已分类, identified): communicate 节点建 RUN-FIN-08-1 并经通用人工程序机制向审计师派任务, 任务内容列出 M-D-REV02-0612 v2 (Revenue, Cutoff, 14200000, overstated, fraud_indicative true); 图停在 communicate.",
+    "3. 提交拒绝 {M-D-REV02-0612, base_version 2, communicated_at 2026-07-23T23:00:00Z, communicated_to \"Priya Raman, Director\", response 为 data_needs 中的拒绝原文, agrees_to_correct false}: M v3 uncorrected, uncorrected_basis refused, communicated_at, communicated_to, management_response 与提交原文逐字相同; RUN-FIN-08-1 succeeded; FIN-08 completed; 1 行 decision 留痕 (procedure_id FIN-08); 之后 → completion (MD-11 后经 verify_correction).",
+    "4. 提交同意 (agrees_to_correct true, 同意原文): M v3 communicated, 其余字段同上 (出口由 MD-8 接 await_correction).",
+    "5. 校验拒绝且什么都不写: 漏了某条 identified 错报, 同一错报两行, base_version 不是当前版本 (VERSION_MISMATCH), response 为空 (MISSING_FIELD), communicated_at 晚于提交时间 (INVALID_VALUE), 错报不是 identified (INVALID_VALUE).",
+    "6. 没有 identified 错报 (无错报, 或从 FIN-09 回来的仅 communicated 重沟通除外): RUN-FIN-08-1 空执行 succeeded, FIN-08 completed, 不派任务, 不等人.",
+    "7. 参数引用 first_misstatement_communicated_at: 第 3 条之后解析为 2026-07-23T23:00:00Z; 没有已沟通错报时为 None (由引用它的 GEN-05 处理).",
+    "8. 登记写 Store 后未写检查点: recover 补做后 M v3 进状态, 结果相同."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-8",
+   "title": "等待客户更正与更正通知",
+   "procedures": [
+    "FIN-08",
+    "FIN-09"
+   ],
+   "goal": "有 communicated 错报时进 await_correction 节点 interrupt() 等待 (规格书 AwaitingCorrection 子状态); 新增决定对象 CorrectionNotice, 经 DecisionSubmit 提交两种通知: adjustments_posted (客户已过账调整分录: 节点载入调整分录, 错报置 verifying) 与 stop_waiting (审计师决定停止等待: 所列错报置 uncorrected, uncorrected_basis stopped_waiting).",
+   "scope_files": [
+    "src/backend/contracts/models.py (CorrectionNotice)",
+    "src/backend/contracts/views.py (EngagementOverview.awaiting_correction)",
+    "src/backend/orchestration/nodes.py (await_correction)",
+    "src/backend/orchestration/graph.py (communicate 出口: 有 communicated → await_correction; await_correction → verify_correction, MD-11 前暂接 completion)",
+    "src/backend/orchestration/decisions.py (submit 接受 CorrectionNotice: 校验, 效果, 留痕)",
+    "src/backend/orchestration/query.py (总览)",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md 第 2.5, 4 (DatasetLoader.load_adjustments), 7, 9, 10 节",
+    "tests/test_decisions.py",
+    "tests/test_graph.py",
+    "tests/test_recovery.py",
+    "tests/fakes.py (FakeDatasetLoader 预置调整分录)"
+   ],
+   "basis": [
+    "规格书 12.3 主状态机 AwaitingCorrection (1963-1969 行)",
+    "规格书第 10 节 P3 (1425 行): 调整分录接入后错报进 verifying; 等待更正超时由 RCA 决定是否停止等待, 停止即记未更正",
+    "规格书 18.1 映射: AwaitingData / AwaitingCorrection 为节点内 interrupt(), 外部数据到达后恢复",
+    "规格书 UC-06 第 2 步 (2125 行)",
+    "开发接口文档第 7 节 DecisionSubmit 唯一写入口"
+   ],
+   "prerequisites": [
+    "MD-7"
+   ],
+   "external_deps": [
+    "B: DatasetLoader.load_adjustments(eid, dataset) 把 data/demo/adjustments/journal_entries.csv 的行写入 journal_entries (幂等), persistence 的 decisions 表加 CorrectionNotice 种类; A 先用 FakeDatasetLoader 预置 AJE-2026-001-1/-2",
+    "C: 新端点 POST /engagements/{eid}/correction-notices 与页面上 \"客户已过账调整分录\", \"停止等待\" 两个操作; 总览显示等待更正; A 先在测试中直接调 submit"
+   ],
+   "acceptance": [
+    "1. M-D-REV02-0612 v3 communicated: 停在 await_correction, payload {awaiting: correction, misstatement_ids: [M-D-REV02-0612]}; overview.awaiting_correction 真, awaiting_review 假.",
+    "2. CorrectionNotice D-CORR {kind adjustments_posted, misstatement_ids [M-D-REV02-0612]}: 写入决定与 1 行 decision 留痕; 恢复后节点调 load_adjustments(ENG-2026-001, \"demo\") 一次, 同一事务写 M v4 verifying; 下一节点 verify_correction (MD-11 前为 completion).",
+    "3. D-STOP {kind stop_waiting, misstatement_ids [M-D-REV02-0612], reason \"Management did not post the adjustment before the report deadline.\"}: M v4 uncorrected, uncorrected_basis stopped_waiting; 不调 load_adjustments.",
+    "4. 校验拒绝且不写: 图不在 await_correction → NOT_AWAITING_CORRECTION (新错误码, 写进接口文档第 7 节); stop_waiting 缺 reason → MISSING_FIELD; misstatement_ids 含非 communicated 错报 → INVALID_VALUE; 决定 ID 已用过 → INVALID_VALUE; 项目锁定 → ENGAGEMENT_LOCKED.",
+    "5. communicate 后没有 communicated 错报 (全部拒绝): 不经 await_correction.",
+    "6. 通知写 Store 后未写检查点: recover 补做留痕并恢复, 结果相同."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-9",
+   "title": "FIN-09 程序定义, 准则片段, 输出模型与 fixture",
+   "procedures": [
+    "FIN-09"
+   ],
+   "goal": "新增 FIN-09.yaml (A8, hybrid, L2), ASA450-P07 片段, FIN-09 提示词, 输出模型 CorrectionVerificationDraft (JudgmentDraft + 是否完整更正, 涉及的其他科目) 及语义校验; 提供更正变体用的 fixture.",
+   "scope_files": [
+    "src/backend/knowledge/procedures/FIN-09.yaml (规则 V01 取调整分录行, SQL 归 B)",
+    "src/backend/knowledge/standards/ASA450.yaml (加 ASA450-P07)",
+    "src/backend/knowledge/prompts/FIN-09.md.j2",
+    "src/backend/contracts/llm_outputs.py (CorrectionVerificationDraft)",
+    "src/backend/services/judgment_engine.py (语义校验: fully_corrected 与规则算出的剩余额一致, other_accounts 只能取匹配分录中的科目)",
+    "tests/fixtures/llm/FIN-09/default.json",
+    "tests/test_knowledge.py",
+    "tests/test_output_validator.py"
+   ],
+   "basis": [
+    "规格书 6.1.2 (811 行) FIN-09 ← FIN-08, GEN-05 (增量); 7.2 矩阵 P3 行 L2 混合",
+    "规格书 UC-06 第 3 步 (2126 行): 规则核对调整分录与错报记录, LLM 判断是否完整更正及是否影响其他科目",
+    "ASA 450 第 7 段 (已核对段号与原文; 该段讲应审计师要求管理层检查并更正后追加程序, 与 \"验证已沟通错报的更正\" 的贴合度待核)",
+    "需求清单 Q12 (错报金额引用口径)"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "MD-2"
+   ],
+   "external_deps": [
+    "B: FIN-09.yaml 中 V01 的 SQL: SELECT id, entry_no, posting_date, account_code, debit_cents, credit_cents, description, source_doc FROM journal_entries WHERE engagement_id = :eid AND is_adjustment = true ORDER BY id (emit rows); 就绪前 A 用 FakeRuleEngine 预置行",
+    "B: 重新运行 generate_demo.py 复制 tests/fixtures/llm/FIN-09/ 到 data/demo/llm/FIN-09/",
+    "GEN-05 (第 1 级, 另组): depends_on 暂只写 [FIN-08], GEN-05 增量实例就绪后再加 (Demo 规则: depends_on 只写已实现程序)"
+   ],
+   "acceptance": [
+    "1. FIN-09.yaml: phase P3_Completion, owner A8, engine hybrid, autonomy_level L2, depends_on [FIN-08], standards [ASA450-P07], evidence_required [voucher], params account_codes {Revenue: {codes: [\"4100\"], normal: credit}, Cash: {codes: [\"1010\", \"1020\"], normal: debit}} (确认 resolve_params 对此字面量原样返回, 否则改成列表写法), rules [V01 emit rows], llm {FIN-09.md.j2, CorrectionVerificationDraft}.",
+    "2. ASA450-P07 与 ASA_450.pdf 第 7 段逐字一致, 对照测试通过.",
+    "3. default.json: conclusion 写 AJE-2026-001 按 AUD 142,000 借记 4100 Sales revenue, 贷记 1100 Trade receivables, SI-2026-0612 的收入高估已完整更正, 剩余额为零; fact 步骤指针 journal_entry AJE-2026-001-1 (debit_cents), AJE-2026-001-2 (credit_cents), SJ-2026-0612-2 (credit_cents); standard 步骤 ASA450-P07; proposed_action accept; fully_corrected true; other_accounts [\"1100\"]; self_confidence 0.9.",
+    "4. 用 Numbat 预置 AJE 行时 default.json 四级校验通过; 规则剩余额为 4200000 时 fully_corrected true 判语义失败 (不重试); other_accounts 含 5100 (不在匹配分录中) 判语义失败.",
+    "5. 程序总数断言再 +1."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "MD-10",
+   "title": "A8 FIN-09 更正验证",
+   "procedures": [
+    "FIN-09"
+   ],
+   "goal": "A8 执行 FIN-09: 对每条 verifying 错报, 规则部分按来源对象 (判断的 subject_id 或例外的 source_ids) 与 account_codes 匹配调整分录, 算已更正额与剩余额并定去向 (剩余额 0 → corrected; 介于 0 与金额之间 → partially_corrected; 无匹配, 方向相反或超额 → 回 communicated 并出不匹配例外); LLM 判断是否完整更正及是否影响其他科目; 产出带 misstatement_update (kind verification) 的判断与任务.",
+   "scope_files": [
+    "src/backend/agents/workpaper.py (procedures 加 FIN-09)",
+    "src/backend/agents/judging.py",
+    "tests/test_workpaper.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "规格书 12.3 Misstatement 子状态机 verifying 三条互斥出口 (2017-2023 行)",
+    "规格书第 10 节 P3 (1425 行): 剩余额进 FIN-01 评价且只在高于明显微小门槛时计入 FIN-04",
+    "规格书 UC-06 第 3 步 (2126 行)",
+    "规格书 12.2 Misstatement.adjustmentEntryIds, verifiedByProcedure, residualAmount (1832-1836 行; 本设计以 verified_by_judgment_id 指向 FIN-09 判断, 比指向程序更细)"
+   ],
+   "prerequisites": [
+    "MD-3",
+    "MD-5",
+    "MD-9"
+   ],
+   "external_deps": [
+    "B: V01 SQL 与 data/demo/adjustments (见 data_needs); A 先用 FakeRuleEngine 预置 AJE-2026-001-1/-2 两行"
+   ],
+   "acceptance": [
+    "1. 状态 M-D-REV02-0612 v4 verifying (来源 J-REV-02-1-SI-2026-0612, subject SI-2026-0612, Revenue, 14200000, overstated); 规则行 AJE-2026-001-1 (4100 借 14200000, source_doc SI-2026-0612), AJE-2026-001-2 (1100 贷 14200000): J-FIN-09-1-M-D-REV02-0612 v1 pending, misstatement_update {M-D-REV02-0612, base 4, verification, status corrected, adjustment_entry_ids [AJE-2026-001-1, AJE-2026-001-2], corrected_cents 14200000, residual_cents 0}; T-J-FIN-09-1-M-D-REV02-0612-v1 normal; RUN-FIN-09-1 succeeded; 1 行 llm_call (actor A8); 提示词含 AJE-2026-001-1.",
+    "2. 置信度: evidence 0.7, rule 1.0 (无例外且 accept), llm 0.9 → 0.8625.",
+    "3. 调整分录只借记 10000000: status partially_corrected, corrected_cents 10000000, residual_cents 4200000.",
+    "4. 调整分录记到 4200 (不在 Revenue 的 account_codes), 或 source_doc 不是 SI-2026-0612, 或借记 15000000 (超额): 出例外 X-FIN-09-1-V02-1 (amount 14200000), 判断 exception_ids [X-FIN-09-1-V02-1], misstatement_update.status communicated.",
+    "5. 没有 verifying 错报: 不调 LLM, RUN-FIN-09-1 空执行 succeeded.",
+    "6. LLM 失败 (重试耗尽): 有 V02 例外时为 unattributed 任务, 否则 failed 任务, 按 R41 规则."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-11",
+   "title": "更正验证节点 verify_correction 与错报去向分流",
+   "procedures": [
+    "FIN-09",
+    "FIN-08",
+    "GEN-05"
+   ],
+   "goal": "新节点 verify_correction: 先执行 GEN-05 的增量实例 (该程序就绪时), 再由 A8 执行 FIN-09 并在节点内等复核; 结束后按错报状态分流: 有回到 communicated 的 → communicate (FIN-08 以 rerun 再执行一次重新沟通), 否则 → completion. 拒绝路径 (无 communicated) 也经此节点, FIN-09 空执行, 保证 P3 每条程序都有终态.",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py (verify_correction; NODE_PROCEDURES 加 verify_correction: (FIN-09,), GEN-05 就绪后为 (GEN-05, FIN-09))",
+    "src/backend/orchestration/graph.py (communicate 无 communicated → verify_correction; await_correction → verify_correction; verify_correction → communicate 或 completion)",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md 第 3, 7 节",
+    "docs/Demo需求文档.md 第 4.1 节",
+    "tests/test_graph.py",
+    "tests/test_flow.py"
+   ],
+   "basis": [
+    "规格书第 10 节 P3 错报处理顺序 (1425 行): 调整分录接入并增量扫描 → FIN-09 → (PLN-19) → FIN-04; 分录与错报不匹配回 communicated 重新沟通",
+    "规格书 6.1.2 (811-812 行) FIN-09 ← FIN-08, GEN-05; FIN-04 ← FIN-03, FIN-09, PLN-19 (P3 实例)",
+    "规格书 15.2 错报更正场景 (2404 行)"
+   ],
+   "prerequisites": [
+    "MD-8",
+    "MD-10",
+    "GEN-05 全量分录扫描的增量执行 (第 1 级, 另组起草; 未就绪时本节点跳过它)"
+   ],
+   "external_deps": [
+    "GEN-05 (另组): 增量实例在 P3 节点内执行的方式 (run_no, trigger, 只扫 is_adjustment 或新入行) 由该组定, 本节点只按 NODE_PROCEDURES 依次调用",
+    "PLN-19 (第 3 级, 另组): 按 ASA 450 第 10 段应插在本节点与 completion 之间, 由该组接入"
+   ],
+   "acceptance": [
+    "1. 更正路径: D-CORR 后 → verify_correction → FIN-09 等复核 → confirm D-FIN09 (MD-5 效果: M-D-REV02-0612 v5 corrected, residual_cents 0, verified_by_judgment_id J-FIN-09-1-M-D-REV02-0612) → completion.",
+    "2. 不匹配: M v5 communicated → communicate, FIN-08 以 RUN-FIN-08-2 (trigger rerun) 再执行, 再次登记回复 (只列 M-D-REV02-0612).",
+    "3. 部分更正: M v5 partially_corrected residual 4200000 → completion.",
+    "4. 拒绝路径: communicate (M v3 uncorrected) → verify_correction (RUN-FIN-09-1 空执行, FIN-09 completed) → completion.",
+    "5. 无错报路径: misstatement_triage → communicate (空执行) → verify_correction (空执行) → completion; FIN-03, FIN-08, FIN-09 均 completed.",
+    "6. FIN-01 reject 仍回 completion, 不重跑 FIN-03, FIN-08, FIN-09.",
+    "7. 停在 verify_correction 的 FIN-09 复核时重启, recover 后继续, 结果同第 1 条."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-12",
+   "title": "FIN-04 按错报状态累计",
+   "procedures": [
+    "FIN-04"
+   ],
+   "goal": "A9 只累计 uncorrected (取金额) 与 partially_corrected (取剩余额) 中高于明显微小门槛的错报; corrected 的列入 corrected_ids; 仍有 identified, communicated, verifying 错报时 FIN-04 失败转人工; FIN-04.yaml depends_on 改为 [FIN-03, FIN-09].",
+   "scope_files": [
+    "src/backend/agents/qc.py",
+    "src/backend/knowledge/procedures/FIN-04.yaml (depends_on, 注释)",
+    "docs/开发接口文档.md 第 2.4 节 UncorrectedSchedule, 第 6 节 A9",
+    "tests/test_qc.py"
+   ],
+   "basis": [
+    "规格书 12.3 Misstatement 子状态机注释 (2023 行): FIN-04 只累计 partially_corrected 与 uncorrected 中高于明显微小门槛的金额",
+    "规格书 6.1.2 (812 行) FIN-04 ← FIN-03, FIN-09, PLN-19 (P3 实例; PLN-19 为第 3 级另组, 就绪后再加)",
+    "ASA 450 第 5 段 (ASA450-P05)",
+    "需求清单 R23 (现有 FIN-04 口径)"
+   ],
+   "prerequisites": [
+    "MD-1",
+    "MD-7"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "1. M-D-REV02-0612 uncorrected 14200000, 重要性 12000000, 明显微小 600000: SCHEDULE v1 items [{M-D-REV02-0612, 14200000, overstated, current_period}], excluded_trivial_ids [], corrected_ids [], total_cents 14200000, candidate qualified (同 R23).",
+    "2. 同一错报 corrected: items [], corrected_ids [M-D-REV02-0612], total 0, unqualified.",
+    "3. partially_corrected residual 4200000: items [{M-D-REV02-0612, 4200000, overstated, current_period}], total 4200000, unqualified; residual 600000 → excluded_trivial_ids; residual 600001 → items.",
+    "4. 状态中有 identified (或 communicated, verifying) 错报: A9 抛错, RUN-FIN-04-1 failed, T-RUN-FIN-04-1-v1 failed 任务, FIN-04 awaiting_human (Q4).",
+    "5. FIN-04.yaml depends_on [FIN-03, FIN-09]; test_knowledge 的依赖与阶段检查通过.",
+    "6. FIN-01 驳回后重做: SCHEDULE v2, corrected_ids 同 v1."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "MD-13",
+   "title": "自主度策略: 降级规则契约与纯函数",
+   "procedures": [
+    "REV-08",
+    "REV-03",
+    "REV-02",
+    "CSH-04",
+    "CSH-05",
+    "CSH-02",
+    "DOC-06",
+    "FIN-03",
+    "FIN-09"
+   ],
+   "goal": "按规格书 7.4 实现 AutonomyPolicy 纯函数 (不调 LLM, 不读写存储): 装配级 (特别风险 −2, high −1, 历史一致率低于 0.8 −1, 首次服务客户 −1 视待拍板) 与判断级 (单项金额超过执行重要性 → L1, 置信度低于 0.7 −1, 舞弊红旗 → L1); 下限 L1, 累计降级越过 L1 被截住时开 blind (待拍板口径), 规则另可自带 blind; 默认规则表放 knowledge/rules.json, 模板可用 downgrade_rules 覆盖, 函数不按程序编号分支; 返回级别, blind 与命中的规则名, 写入 Procedure 与 Judgment 供解释.",
+   "scope_files": [
+    "src/backend/contracts/knowledge.py (DowngradeRule; ProcedureTemplate.downgrade_rules; RuleSpec.fraud_flag)",
+    "src/backend/contracts/models.py (Procedure.blind, Procedure.downgrade_reasons; Judgment.blind, Judgment.blind_test, Judgment.downgrade_reasons)",
+    "src/backend/contracts/ports.py (AgreementStats Protocol: record, rate)",
+    "src/backend/agents/base.py (AgentDeps.agreement_stats)",
+    "src/backend/main.py (只改 A 组件构造行, 按 Q16)",
+    "src/backend/knowledge/rules.json (downgrade 默认表, low_confidence 0.7, agreement_threshold 0.8, agreement_min_samples 30)",
+    "src/backend/services/autonomy_policy.py (新)",
+    "docs/开发接口文档.md 第 2.2, 2.3, 4, 5, 6, 8.1, 8.2 节",
+    "tests/test_autonomy_policy.py (新)",
+    "tests/fakes.py (FakeAgreementStats)"
+   ],
+   "basis": [
+    "规格书 7.1 (1049 行) blind 标志; 7.4 动态降级表与 \"降级下限为 L1, 累计降级触及下限时开启 blind\", 装配与判断两个时点, REV-02 示例 (1097-1127 行)",
+    "规格书 6.3 override_condition 示例 (872-877 行): significant → L1 且 blind true, 金额超过执行重要性 → L1 不带 blind",
+    "规格书 12.2 DowngradeRule {condition, delta, targetLevel, blind} (1778-1782 行), ProcedureTemplate.downgradeRules",
+    "规格书 5.4 领域规则 AutonomyPolicy 为纯函数, 按程序区分的阈值写 YAML",
+    "规格书 7.5 硬上限: L1 区程序永不升级"
+   ],
+   "prerequisites": [
+    "MD-1"
+   ],
+   "external_deps": [
+    "B: agreement_stats 表与 AgreementStats 实现 (规格书 7.4: 程序编号, 项目编号, 盲测总数, 一致数, 更新时间), 迁移; A 先用 FakeAgreementStats (Numbat 为空)",
+    "PLN-16 财报层次风险, GEN-17 重大关联方交易两行降级条件依赖未实现程序, 不建模 (Demo 规则); A7 不一致与 stale 直进人工队列由 GEN-09 组接入同一函数的参数"
+   ],
+   "acceptance": [
+    "1. 装配级, Numbat 审计目标 (OBJ-REV-OCC, OBJ-REV-CUT significant, OBJ-CASH-EXI high): REV-08 L3 → L1, blind false, reasons [significant_risk]; REV-03 L2 → L1, blind true; REV-02 L2 → L1, blind true; CSH-04 L4 → L3; CSH-05 L4 → L3; CSH-02 L3 → L2, blind false, reasons [high_risk]; DOC-06 (objective_ids []) L3 不变, reasons [].",
+    "2. 程序关联多条目标时取最高风险一次 (REV-08 两条 significant 只 −2); OBJ-CASH-EXI 改为 medium 时 CSH-02 保持 L3.",
+    "3. FakeAgreementStats 预置 REV-02 {total 30, consistent 20} (0.667 < 0.8): REV-02 reasons [significant_risk, low_agreement]; total 29 时不降 (样本下限 30, 规格书未写下限, 取升级口径并写进 rules.json).",
+    "4. 判断级: J-CSH-02-1-BA-01 (confidence 0.5625 = (0.3×0.9 + 0.3×0 + 0.2×0.9) / 0.8, 程序 L2) → L1, blind false, reasons [high_risk, low_confidence]; J-REV-02-1-SI-2026-0612 (程序 L1 blind, misstatement_draft 14200000 > 执行重要性 9000000) → L1, blind true, reasons [significant_risk, amount_over_pm]; J-REV-02-1-SI-2026-0618 (无草稿无例外, 金额按 0 计) → L1 blind true, reasons [significant_risk].",
+    "5. 判断金额 = max(misstatement_draft 金额, exception_ids 中例外金额绝对值, misstatement_update 所指错报金额); J-FIN-03-1-M-D-REV02-0612 (程序 L2, 错报 14200000, fraud_indicative true) → L1, reasons [amount_over_pm, fraud_flag], blind false.",
+    "6. 舞弊红旗: 判断解释的例外所属规则 RuleSpec.fraud_flag 为真 → L1; 合成 L3 判断 confidence 0.95, 金额 0, 无红旗 → L3 不变.",
+    "7. 默认 L1 的程序 (如 FIN-01) 不升不降; 模板 downgrade_rules 覆盖默认表 (测试模板把 high_risk 改为 −2) 时按模板算; 函数体内无程序编号字面量 (测试 grep)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-14",
+   "title": "降级接入装配与判断两个时点",
+   "procedures": [
+    "REV-08",
+    "REV-03",
+    "REV-02",
+    "CSH-04",
+    "CSH-05",
+    "CSH-02",
+    "DOC-06",
+    "FIN-03",
+    "FIN-09"
+   ],
+   "goal": "装配时点: assemble_pack 写 Procedure 第 1 版时取 AutonomyPolicy 的装配级结果 (级别, blind, 原因), fixed_procedures 只套不依赖审计目标的规则; 判断时点: 共用判断流程在 JudgmentEngine.judge 之后, ReviewQueue.classify 之前 (GEN-09 的 A7 复核插在两者之间) 套判断级规则; judge 不再取模板级别; classify 读判断的有效级别, 关键证据缺失 (evidence_required 任一种在受支持步骤中无指针) 的判断强制进人工队列.",
+   "scope_files": [
+    "src/backend/orchestration/nodes.py (assemble_pack, 现 :589 取模板级别处)",
+    "src/backend/orchestration/runner.py (fixed_procedures)",
+    "src/backend/agents/judging.py (classify 前调判断级策略)",
+    "src/backend/services/judgment_engine.py (judge 的 autonomy_level 取 JudgmentContext 带入的程序级别, 现 :616 取模板值)",
+    "src/backend/contracts/services.py (JudgmentContext.autonomy_level, blind)",
+    "src/backend/services/review_queue.py (classify: 关键证据缺失 → normal)",
+    "docs/开发接口文档.md 第 3, 5 节",
+    "tests/test_nodes.py",
+    "tests/test_review_queue.py",
+    "tests/test_p2_agents_demo.py"
+   ],
+   "basis": [
+    "规格书 7.4 末段 (1116 行): 装配时降级写入 Procedure.autonomyLevel, 判断级降级在 Judgment 生成并经 A7 复核后作用于 Judgment.autonomyLevel",
+    "规格书 18 节 fieldwork 伪代码 (2741-2762 行): apply_downgrade 在 human_needed 之前",
+    "规格书第 10 节 P2 自动处置 (1395 行); 8.4 (关键证据缺失直接进人工队列, 不允许加权抵消)",
+    "需求清单 R11 (assemble_pack), R41 (判断公共流程)"
+   ],
+   "prerequisites": [
+    "MD-3",
+    "MD-13",
+    "R11"
+   ],
+   "external_deps": [
+    "GEN-09 (第 1 级, 另组): A7 复核插在 judge 与本条的判断级策略之间, 两组都改 agents/judging.py, 合并时按 7.4 \"A7 先于判断级降级\" 排序"
+   ],
+   "acceptance": [
+    "1. Numbat PLN-01/03 approve → assemble_pack 写入 P2 Procedure v1 的 autonomy_level, blind, downgrade_reasons 同 MD-13 第 1 条; 写入与阶段同一事务 (R11 不变).",
+    "2. R49 层集成测试 (真实判断引擎, mock): J-REV-03-1-CON-001/002/003 L1 blind true; J-REV-02-1-SI-2026-0612, J-REV-02-1-SI-2026-0618 L1 blind true; J-CSH-02-1-BA-01 L1 blind false reasons [high_risk, low_confidence]; 任务仍为 6 条 normal, ID 不变.",
+    "3. 合成 L3 hybrid 判断 (evidence_required [external, bank], 只有 external 指针, confidence 0.95, accept): classify 返回 normal, 不自动关闭; 补上 bank 指针后自动关闭.",
+    "4. 判断的 autonomy_level 取 Procedure (含降级) 而非模板: 模板 L3, Procedure L2 时判断为 L2.",
+    "5. PLN-01/03 闸门 edits 把 RISK-CASH-EXI 改为 medium: CSH-02 装配为 L3, J-CSH-02-1-BA-01 为 L2 (low_confidence), 仍为 normal (always_review).",
+    "6. R55 全流程在本条后仍通过 (blind 只是标志, 盲判提交由 MD-15 接入)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-15",
+   "title": "盲判: 先答后看, 比对与一致率",
+   "procedures": [
+    "REV-03",
+    "REV-02"
+   ],
+   "goal": "blind 判断的复核任务带 blind 标志; 审计师先提交独立结论 (新决定 blind_answer, 带建议动作, 结论与错报草稿), 系统比对 AI 结论记一致或不一致并写一致率, 任务出新版本 (blind_answer_id), 之后才开放普通决定 (confirm, override, misstatement); 终局决定写出的判断新版本带 blind_test. 未答前给前端的视图隐藏 AI 结论 (纯函数供 C 用).",
+   "scope_files": [
+    "src/backend/contracts/models.py (Decision.blind_answer; BlindAnswer; ReviewRecord.blind_answer; ReviewTask.blind, ReviewTask.blind_answer_id; BlindTest 枚举)",
+    "src/backend/services/review_queue.py (make_task 带 blind; allowed 按是否已答; compare_blind 纯函数; blind_view 隐藏函数)",
+    "src/backend/orchestration/decisions.py (blind_answer 的校验与效果; 终局决定写 blind_test)",
+    "src/backend/orchestration/recovery.py",
+    "docs/开发接口文档.md 第 2.1, 2.5, 7 (允许决定矩阵), 10 节",
+    "tests/test_review_queue.py",
+    "tests/test_decisions.py",
+    "tests/test_recovery.py"
+   ],
+   "basis": [
+    "规格书 7.1 (1049 行): blind 打开时 AI 仅提供数据与证据, 不显示建议, 人员独立判断后再比对",
+    "规格书 9.2 (1299-1306 行): 一致计入人机一致率, 决定集同普通任务; 9.5 (1324 行): A10 隐藏 AI 结论只给证据, 等人说出判断后再比对并记录",
+    "规格书 12.2 ReviewRecord \"一条 ReviewTask 0..* 条\" (1675 行), Judgment.blindTest (1660 行)",
+    "规格书 UC-04 第 5 步 (2118 行)"
+   ],
+   "prerequisites": [
+    "MD-14",
+    "R18",
+    "R19"
+   ],
+   "external_deps": [
+    "B: AgreementStats.record 的持久化 (agreement_stats 表); A 先用 FakeAgreementStats",
+    "C: 复核页对 blind 未答任务只显示证据 (调 blind_view), 提交独立结论后再显示 AI 结论; ReviewRecordIn 支持 blind_answer; A 先在测试中直接提交",
+    "GEN-11 (第 1 级, 另组): A10 呈递盲判的对话层做法与本条的隐藏函数对齐"
+   ],
+   "acceptance": [
+    "1. T-J-REV-02-1-SI-2026-0612-v1 (blind true): allowed 只有 {blind_answer}; 直接提交 misstatement → DECISION_NOT_ALLOWED, 不写.",
+    "2. blind_answer D-BLIND-REV02-0612 {proposed_action misstatement, misstatement_draft {factual, Revenue, Cutoff, 14200000, overstated}, conclusion 非空}: 写决定, 任务 v2 (blind_answer_id D-BLIND-REV02-0612, 仍 pending, target_version 1), 判断不出新版本 (仍 v1), agreement_stats REV-02 +1 一致, 1 行 decision 留痕; allowed 变为 {confirm, override, misstatement}.",
+    "3. 再提交 misstatement D-REV02-0612 (target_version 1): J-REV-02-1-SI-2026-0612 v2 confirmed, blind_test consistent; M-D-REV02-0612 v1; T v3 decided; RPT-03 引用的判断版本仍为 v2.",
+    "4. 比对: accept 与 close 视为一致; AI misstatement 对人 accept 为不一致; 两边都是 misstatement 但金额 14000000 或方向 understated 为不一致; 不一致时 blind_test inconsistent, 一致率记不一致.",
+    "5. blind_view(未答): 去掉 conclusion, reasoning_chain 中非 fact 步骤, counter_argument, proposed_action, misstatement_draft, confidence, confidence_parts, 只留证据指针与 fact 步骤的指针; 已答后返回完整判断.",
+    "6. 同一任务第二次 blind_answer → DECISION_NOT_ALLOWED; 非 blind 任务 (T-J-CSH-02-1-BA-01-v1) 提交 blind_answer → DECISION_NOT_ALLOWED.",
+    "7. blind_answer 写 Store 后未写检查点: recover 补做, await_events 读回任务 v2, 流程继续."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-16",
+   "title": "9.2 盲测抽查",
+   "procedures": [
+    "REV-03",
+    "REV-02",
+    "CSH-02",
+    "FIN-03",
+    "FIN-09"
+   ],
+   "goal": "对自动关闭且置信度高于 0.9 的判断按 5% 确定性抽样建 blind 类任务 (先答后看, 同 MD-15), 抽样任务不阻断程序关闭; P2 无可派发程序且只剩抽样任务时进 await_events, 决完再进 P3; 推翻只换判断版本, 程序保持 completed.",
+   "scope_files": [
+    "src/backend/contracts/models.py (TaskKind.blind)",
+    "src/backend/services/review_queue.py (抽样函数: sha256(\"{eid}:{judgment_id}\") 模 10000 小于 rate × 10000)",
+    "src/backend/agents/judging.py",
+    "src/backend/orchestration/nodes.py (fan_in 状态重算不计 blind 任务)",
+    "src/backend/orchestration/graph.py (after_fan_in)",
+    "src/backend/orchestration/decisions.py (recompute_procedure 不计 blind 任务)",
+    "src/backend/knowledge/rules.json (blind_sample_rate 0.05)",
+    "tests/test_review_queue.py",
+    "tests/test_graph.py"
+   ],
+   "basis": [
+    "规格书 9.1 第一档 (置信度高于 0.9) 与 9.2 (1299-1306 行): 对 5% 高置信度判断隐藏 AI 结论; 盲测任务决定集同普通任务, 推翻只换 Judgment 版本, 程序保持 completed",
+    "规格书第 10 节 P2 自动处置 (1395 行): 9.2 抽样盲测不阻断关闭",
+    "规格书 18 节伪代码 sample_blind (2759-2760 行)",
+    "需求清单 Q7 (先派发后等复核)"
+   ],
+   "prerequisites": [
+    "MD-15"
+   ],
+   "external_deps": [
+    "C: 复核队列显示 blind 类任务 (同 MD-15 的隐藏规则)"
+   ],
+   "acceptance": [
+    "1. 项目 ENG-2026-001 下 J-CSH-02-1-BA-08 (自动关闭, confidence 0.95) 命中抽样 (哈希模 10000 为 206 < 500), 建 T-J-CSH-02-1-BA-08-v1 (kind blind, blind true); J-CSH-02-1-BA-01 同条件不命中; confidence 0.9 (不高于 0.9) 不抽.",
+    "2. 该程序 fan_in 后为 completed (抽样任务不计 pending); 有可派发程序时先派发 (Q7); 只剩抽样任务时进 await_events; 决完后进 misstatement_triage.",
+    "3. 决定集: 先 blind_answer, 再 {confirm, override, misstatement}; override 后判断出人工版本, 程序版本不变 (仍 completed).",
+    "4. 抽样率取 rules.json blind_sample_rate; 设为 0 时不建任务.",
+    "5. Numbat 全流程无自动关闭判断, 不建 blind 类任务, MD-17 的数字不变."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "MD-17",
+   "title": "验收: mock 全流程纳入错报闭环与动态降级 (主路径: 管理层拒绝更正)",
+   "procedures": [
+    "REV-03",
+    "REV-02",
+    "CSH-02",
+    "FIN-03",
+    "FIN-08",
+    "FIN-09",
+    "FIN-04",
+    "FIN-01",
+    "RPT-03",
+    "RPT-01"
+   ],
+   "goal": "更新 R55 的离线全流程: 真实 Agent (含 A8), 真实判断引擎, MockLLMClient 下跑完 P0-P4, 收入线 5 条判断按盲判先答后决, SI-2026-0612 错报经 FIN-03 分类, FIN-08 管理层拒绝更正后进 FIN-04 与 FIN-01, 意见仍为保留; 断言程序级别, 判断, 任务, 错报生命周期, 留痕行数.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/test_flow.py (REVIEWS 加盲判先答与 FIN-03 决定, 新增 FIN-08 登记辅助)",
+    "tests/fakes.py",
+    "docs/合成数据集设计.md 第 7 节 (加 FIN-03, FIN-08, FIN-09 行与汇总表; 与 B 协调, 见 data_needs)"
+   ],
+   "basis": [
+    "需求清单 R55 验收 1-6",
+    "合成数据集设计第 7 节第 9, 14-17 行与汇总表",
+    "规格书 15.2 错报更正场景 (2404 行), 7.4 REV-02 示例 (1125 行)"
+   ],
+   "prerequisites": [
+    "MD-6",
+    "MD-7",
+    "MD-11",
+    "MD-12",
+    "MD-14",
+    "MD-15",
+    "R55"
+   ],
+   "external_deps": [
+    "B: DatasetLoader, Store, RuleEngine, ConfirmationChannel 仍用 R55 的假实现; agreement_stats 用 FakeAgreementStats",
+    "通用人工程序机制 (另组): FIN-08 登记的提交方式",
+    "R56 (真实存储变体) 待 B 就绪后同步本条数字"
+   ],
+   "acceptance": [
+    "1. 决定序列: ACC-01 approve; PLN-01/03 approve {revenue, 0.01, 0.75, 0.05}; P2 每次停在 await_events 时: 先 blind_answer D-BLIND-REV03-1/2/3 (accept), 再按 R55 confirm 三条 REV-03; D-BLIND-REV02-0612 (misstatement, 草稿同第 7 节第 9 行), D-BLIND-REV02-0618 (accept), 再 misstatement D-REV02-0612 与 confirm D-REV02-0618; confirm D-CSH02; 停在 misstatement_triage 时 confirm D-FIN03; 停在 communicate 时登记拒绝 (data_needs 的拒绝原文, communicated_at 2026-07-23T23:00:00Z, communicated_to Priya Raman, Director); FIN-01 approve qualified (理由同第 15 行); RPT-01 先 reject 后 approve.",
+    "2. 程序: P2 7 条的 autonomy_level/blind 同 MD-14 第 1 条; 本组新增 FIN-03, FIN-08, FIN-09 各一次执行 RUN-FIN-03-1, RUN-FIN-08-1, RUN-FIN-09-1 (空执行), 全部程序最终 completed.",
+    "3. 结果: 例外 4 条同 R55; Judgment 7 条 (R55 的 6 条 + J-FIN-03-1-M-D-REV02-0612), 最新版均 v2 confirmed, 收入线 5 条 blind_test consistent; J-CSH-02-1-BA-01 L1 blind false; 任务 7 条全部 decided; M-D-REV02-0612 最新 v3: uncorrected, uncorrected_basis refused, type factual, fraud_indicative true, origin current_period, objective_id OBJ-REV-CUT, classification_judgment_id J-FIN-03-1-M-D-REV02-0612, management_response 与登记原文逐字一致; SCHEDULE v1 items [{M-D-REV02-0612, 14200000, overstated, current_period}], corrected_ids [], total 14200000, qualified; REPORT-2 signed, judgment_refs [J-REV-02-1-SI-2026-0612 v2]; 一致率 REV-03 3/3, REV-02 2/2.",
+    "4. 留痕: llm_call 14 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, FIN-03 1, RPT-03 2); decision 18 行 (R55 的 11 + 盲判 5 + FIN-03 1 + FIN-08 1); external_call 4 行不变; transition 行数按实现核定并写进断言 (预计比 R55 的 32 行多 5 行: FIN-03 两次, FIN-08 两次, FIN-09 一次, 以通用人工程序机制的状态写法为准).",
+    "5. R55 验收 4, 5, 6 仍成立: 全部判断 (含 FIN-03) 的证据指针可解析; tests/fixtures/llm 下每个文件 (含 FIN-03/default.json, FIN-09/default.json) 能被对应输出模型解析并通过四级校验; 签字后提交任一决定 (含 CorrectionNotice) → ENGAGEMENT_LOCKED.",
+    "6. 停顿点顺序: gate_acc01 → gate_p1_risk → await_events (若干次) → misstatement_triage → communicate → gate_fin → gate_rpt01 → gate_rpt01 → 结束; 全程 run_error 为空.",
+    "7. R57 重启测试按新流程仍通过 (CSH-04 submit 共 2 次)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "MD-18",
+   "title": "验收: 管理层全额更正变体与报告样例按意见类型取用",
+   "procedures": [
+    "FIN-08",
+    "FIN-09",
+    "FIN-04",
+    "FIN-01",
+    "RPT-03",
+    "RPT-01"
+   ],
+   "goal": "在 MD-17 的基础上加一条管理层同意并过账调整分录的全流程: 等待更正 → 载入 AJE-2026-001 → FIN-09 验证完整更正 → FIN-04 无未更正错报 → 无保留意见 → 报告签字; 为此 RPT-03 的 fixture_key 改为 {opinion_type}-r{revision}, 两种意见的报告样例并存, 现场演示可任选一条路径.",
+   "scope_files": [
+    "tests/test_e2e_mock.py (更正变体)",
+    "src/backend/agents/concierge.py (fixture_key)",
+    "tests/fixtures/llm/RPT-03/ (r1.json, r2.json 改名为 qualified-r1.json, qualified-r2.json; 新增 unqualified-r1.json)",
+    "tests/test_concierge.py",
+    "docs/开发接口文档.md 第 4 节 fixture_key 约定",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "规格书 15.2 错报更正场景 (2404 行)",
+    "规格书 UC-06 第 2-4 步 (2125-2127 行)",
+    "开发接口文档第 4 节 fixture_key r{revision} (R51 现约定)",
+    "需求清单 R51, R53"
+   ],
+   "prerequisites": [
+    "MD-17",
+    "MD-11"
+   ],
+   "external_deps": [
+    "B: data/demo/adjustments/journal_entries.csv 与 DatasetLoader.load_adjustments (见 data_needs); 重新运行 generate_demo.py 同步 RPT-03 改名与 unqualified-r1.json; A 先用 FakeDatasetLoader",
+    "GEN-05 (另组) 增量实例就绪时, 对 AJE 两行不应出例外 (见 data_needs 对描述用词的约束)"
+   ],
+   "acceptance": [
+    "1. 决定序列同 MD-17 至 FIN-08; FIN-08 登记同意 (data_needs 的同意原文): M-D-REV02-0612 v3 communicated → 停在 await_correction; 提交 CorrectionNotice D-CORR adjustments_posted: 载入 AJE-2026-001-1/-2, M v4 verifying; FIN-09: J-FIN-09-1-M-D-REV02-0612 (L1, reasons [amount_over_pm]), T-J-FIN-09-1-M-D-REV02-0612-v1; confirm D-FIN09 → M v5 corrected, corrected_cents 14200000, residual_cents 0, adjustment_entry_ids [AJE-2026-001-1, AJE-2026-001-2], verified_by_judgment_id J-FIN-09-1-M-D-REV02-0612.",
+    "2. SCHEDULE v1 items [], corrected_ids [M-D-REV02-0612], total 0, candidate unqualified; FIN-01 approve unqualified (理由见 data_needs); RPT-03 读 unqualified-r1.json → REPORT-1 unqualified; RPT-01 直接 approve → REPORT-1 signed, Archived, locked.",
+    "3. 留痕: llm_call 14 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, FIN-03 1, FIN-09 1, RPT-03 1); decision 19 行 (ACC-01 1, PLN 1, 复核 6, 盲判 5, FIN-03 1, FIN-08 1, 更正通知 1, FIN-09 1, FIN-01 1, RPT-01 1); Judgment 8 条, 任务 8 条全部 decided.",
+    "4. RPT-03 fixture_key: qualified 第 1 版为 qualified-r1, 退回后 qualified-r2, 无保留第 1 版为 unqualified-r1; R51, R53 的测试改用新文件名后通过; MD-17 主路径结果不变.",
+    "5. 停止等待变体 (图测试): D-STOP 后 M v4 uncorrected (stopped_waiting), SCHEDULE 同 MD-17 (qualified)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "调整分录文件 data/demo/adjustments/journal_entries.csv (P1 不载入, 只在更正通知后由 load_adjustments 载入)",
+   "for_keys": [
+    "MD-8",
+    "MD-10",
+    "MD-11",
+    "MD-18"
+   ],
+   "owner": "B",
+   "detail": "列同 journal_entries.csv. 两行: (1) id AJE-2026-001-1, entry_no AJE-2026-001, posting_date 2026-06-30, created_at 2026-07-24T01:30:00Z (悉尼 2026-07-24 周五 11:30, 晚于沟通时间 2026-07-23T23:00:00Z), created_by fin.controller, approved_by cfo, account_code 4100, debit_cents 14200000, credit_cents 0, description \"Audit adjustment AJE-2026-001: SI-2026-0612 recognised in July 2026 (control transferred 3 July 2026)\", source_doc SI-2026-0612, is_adjustment true; (2) id AJE-2026-001-2, 同上但 account_code 1100, debit_cents 0, credit_cents 14200000. 描述不得含 reversal, reverse, 冲销 (否则 GEN-05 的 JE-R05 期末前三日冲销会命中); 制单人与批准人不同 (避开 JE-R04); 金额非整百万 (避开 JE-R02); JE-R03 依赖 client_profile.approval_limit, 现画像无此字段, 由 GEN-05 组核对. 试算表不随更正改动 (更正传导不在本组). 同步写进合成数据集设计第 5.2 节, generate_demo.py 生成并登记 manifest."
+  },
+  {
+   "what": "DatasetLoader.load_adjustments(eid, dataset) 接口与实现",
+   "for_keys": [
+    "MD-8",
+    "MD-18"
+   ],
+   "owner": "B",
+   "detail": "读 data/{dataset}/adjustments/journal_entries.csv 写入 journal_entries, 同 id 已存在则跳过 (幂等, 节点重放会再调); demo 数据集文件不存在时报错. 接口加进 contracts/ports.py DatasetLoader (契约由 A 同步接口文档第 4 节)."
+  },
+  {
+   "what": "FIN-09 规则 V01 的 SQL",
+   "for_keys": [
+    "MD-9",
+    "MD-10"
+   ],
+   "owner": "B",
+   "detail": "SELECT id, entry_no, posting_date, account_code, debit_cents, credit_cents, description, source_doc FROM journal_entries WHERE engagement_id = :eid AND is_adjustment = true ORDER BY id; emit rows. Numbat 更正变体下返回 AJE-2026-001-1, AJE-2026-001-2 两行, 主路径返回空."
+  },
+  {
+   "what": "LLM fixture 的运行期副本",
+   "for_keys": [
+    "MD-2",
+    "MD-9",
+    "MD-18"
+   ],
+   "owner": "B",
+   "detail": "A 新增 tests/fixtures/llm/FIN-03/default.json, FIN-09/default.json, 并把 RPT-03/r1.json, r2.json 改名为 qualified-r1.json, qualified-r2.json, 新增 unqualified-r1.json; B 重新运行 data/generate_demo.py 复制到 data/demo/llm (脚本按目录 rglob, 不需改), 保持 test_runtime_fixtures_match_test_fixtures 通过. FIN-03, FIN-09 用 default.json 是因为运行期错报 ID 为 M-D-{uuid4}, 按对象 ID 取不到同名文件."
+  },
+  {
+   "what": "合成数据集设计第 7 节加 P3 行与演示决定原文",
+   "for_keys": [
+    "MD-17",
+    "MD-18"
+   ],
+   "owner": "B",
+   "detail": "A 提供文本, B 写入 (第 7 节为 B 维护的预期结果表): 新增行 FIN-03 (J-FIN-03-1-M-{record_id}, factual, fraud_indicative true 及理由, OBJ-REV-CUT, current_period), FIN-08 (两种回复), FIN-09 (更正变体), FIN-04 两条路径, 并改汇总表. 拒绝原文: \"We do not agree to adjust. The goods for SI-2026-0612 left our warehouse on 1 July 2026 only because the carrier missed the 29 June pickup; Bilby Robotics had agreed delivery for 29 June 2026, so we consider the sale to belong to FY2026.\" 同意原文: \"We agree. Journal AJE-2026-001 dated 30 June 2026 removes invoice SI-2026-0612 (AUD 142,000) from sales revenue and trade receivables; the sale will be recognised in July 2026.\" 沟通对象 Priya Raman, Director (client_profile.json 的董事), 沟通时间 2026-07-23T23:00:00Z. 更正变体 FIN-01 理由: \"Management corrected the cutoff misstatement of AUD 142,000 (AJE-2026-001); no uncorrected misstatements remain above the clearly trivial threshold of AUD 6,000.\""
+  },
+  {
+   "what": "agreement_stats 表与 AgreementStats 实现",
+   "for_keys": [
+    "MD-13",
+    "MD-15",
+    "MD-16"
+   ],
+   "owner": "B",
+   "detail": "规格书 7.4: 每条记录含程序编号, 项目编号, 盲测总数, 一致数, 最近更新时间; 按程序编号跨项目合并查询. Numbat 无历史数据, 初始为空 (首个项目不触发 \"历史一致率低于 80%\" 降级). 写入按决定 ID 幂等 (恢复补做不重复计数)."
+  },
+  {
+   "what": "Numbat 首次服务判定的数据来源 (仅当待拍板第 4 问选做 \"首次审计再降一级\")",
+   "for_keys": [
+    "MD-13",
+    "MD-14"
+   ],
+   "owner": "B",
+   "detail": "EngagementStore 提供按 client_id 查已归档 (Archived) 项目的方法; CLIENT-001 无已归档项目即首次服务. 数据无需新增行; 选推荐项 (本版不做) 时本条不需要."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "contracts/models.py Misstatement",
+   "change": "status 由 Literal[\"uncorrected\"] 改为 MisstatementStatus (identified, communicated, verifying, corrected, partially_corrected, uncorrected, evaluated, closed), 默认 identified; 加 objective_id, fraud_indicative, fraud_reason, origin (current_period | prior_period_uncorrected), classification_judgment_id, communicated_at, communicated_to, management_response, uncorrected_basis (refused | stopped_waiting), adjustment_entry_ids, corrected_cents, residual_cents, verified_by_judgment_id, evaluation, evaluation_reason (后两项本组不写); 状态与剩余额一致性校验",
+   "doc_section": "开发接口文档第 2.5 节; 第 2.1 节枚举"
+  },
+  {
+   "target": "contracts/models.py MisstatementUpdate, Judgment.misstatement_update, ReviewRecord.misstatement_update",
+   "change": "新增 MisstatementUpdate {misstatement_id, base_version, kind classification|verification, 可选 type, fraud_indicative, fraud_reason, origin, objective_id, status, adjustment_entry_ids, corrected_cents, residual_cents}; Judgment 与 ReviewRecord 各加可选字段; confirm 时按判断的载荷, override 时按记录的载荷出错报新版本",
+   "doc_section": "开发接口文档第 2.2, 2.5 节; 第 7 节决定的效果表与必填表"
+  },
+  {
+   "target": "contracts/models.py ManagementResponse",
+   "change": "新增 FIN-08 登记载荷 {misstatement_id, base_version, communicated_at, communicated_to, response, agrees_to_correct}, 挂在通用人工程序机制的结果对象上 (挂法与该机制对齐)",
+   "doc_section": "开发接口文档第 2.5 节, 第 7 节"
+  },
+  {
+   "target": "contracts/models.py CorrectionNotice 与 DecisionSubmit.submit",
+   "change": "新增决定对象 CorrectionNotice(Versioned) {kind adjustments_posted|stop_waiting, misstatement_ids, reason, decided_by, decided_at}, ID D-{uuid4}; submit 接受 ReviewRecord | GateDecision | CorrectionNotice; 新错误码 NOT_AWAITING_CORRECTION",
+   "doc_section": "开发接口文档第 0 节 ID 表, 第 2.5 节, 第 7 节校验与效果, 第 9 节 decisions 表, 第 10 节新端点 POST /engagements/{eid}/correction-notices"
+  },
+  {
+   "target": "contracts/models.py UncorrectedItem, UncorrectedSchedule",
+   "change": "UncorrectedItem 加 origin; UncorrectedSchedule 加 corrected_ids; items 只取 uncorrected (金额) 与 partially_corrected (剩余额) 中高于明显微小门槛的",
+   "doc_section": "开发接口文档第 2.4 节, 第 6 节 A9"
+  },
+  {
+   "target": "contracts/state.py misstatements",
+   "change": "reducer 由 append_unique 改为 upsert_by_id (错报出新版本)",
+   "doc_section": "开发接口文档第 3 节 EngagementState 与 reducer 表"
+  },
+  {
+   "target": "orchestration/merge.py AGENT_FIELDS 与第 6 节 Agent 表",
+   "change": "新增 A8 WorkpaperAgent (agents/workpaper.py), 程序 FIN-03, FIN-09, 返回字段 judgments, review_tasks, misstatements; AgentId 注释去掉 A8 占位说明; 写入归属表 misstatements 行加 A8 (自动确认时) 与 A1 (DecisionSubmit)",
+   "doc_section": "开发接口文档第 3 节字段写入归属, 第 6 节"
+  },
+  {
+   "target": "contracts/llm_outputs.py 与 contracts/services.py",
+   "change": "新增 MisstatementClassificationDraft (JudgmentDraft + nature {type, fraud_indicative, fraud_reason}), CorrectionVerificationDraft (JudgmentDraft + fully_corrected, other_accounts); JudgmentOutcome 加 draft (通过校验的草稿); JudgmentContext 加 autonomy_level, blind (程序运行时级别)",
+   "doc_section": "开发接口文档第 5 节 JudgmentEngine 与 OutputValidator"
+  },
+  {
+   "target": "contracts/knowledge.py DowngradeRule, ProcedureTemplate.downgrade_rules, RuleSpec.fraud_flag",
+   "change": "新增 DowngradeRule {condition (命名条件), at assembly|judgment, delta 或 target_level, blind}; 模板可覆盖 rules.json 默认表; RuleSpec 加 fraud_flag (命中即判断级舞弊红旗)",
+   "doc_section": "开发接口文档第 8.1 节程序 YAML, 第 8.2 节 rules.json"
+  },
+  {
+   "target": "contracts/models.py Procedure, Judgment 的自主度字段",
+   "change": "Procedure 加 blind, downgrade_reasons; Judgment 加 blind, blind_test (none|consistent|inconsistent), downgrade_reasons; Judgment.autonomy_level 改为取程序运行时级别再套判断级降级 (现取模板值)",
+   "doc_section": "开发接口文档第 2.2, 2.3 节; 第 5 节 judge 说明"
+  },
+  {
+   "target": "contracts/models.py 盲判",
+   "change": "Decision 加 blind_answer; 新增 BlindAnswer {proposed_action, conclusion, misstatement_draft}; ReviewRecord 加 blind_answer; ReviewTask 加 blind, blind_answer_id; TaskKind 加 blind (9.2 抽样); 允许决定矩阵: blind 且未答 → {blind_answer}, 已答 → 同 normal",
+   "doc_section": "开发接口文档第 2.1, 2.5 节, 第 7 节允许决定矩阵, 第 10 节 ReviewRecordIn"
+  },
+  {
+   "target": "contracts/ports.py AgreementStats, DatasetLoader.load_adjustments; agents/base.py AgentDeps",
+   "change": "新增 AgreementStats Protocol (record(eid, procedure_id, record_id, consistent), rate(procedure_id) → (total, consistent) | None); DatasetLoader 加 load_adjustments; AgentDeps 加 agreement_stats (main.py 由 A 改构造行, 按 Q16)",
+   "doc_section": "开发接口文档第 4 节, 第 6 节 AgentDeps, 第 9 节 agreement_stats 表"
+  },
+  {
+   "target": "services/procedure_library.py STATE_REFS",
+   "change": "加 first_misstatement_communicated_at (已沟通错报中最早的 communicated_at, 无则 None), 供 GEN-05 JE-R06 的 audit_adjustment_start",
+   "doc_section": "开发接口文档第 8.1 节参数 ref"
+  },
+  {
+   "target": "contracts/views.py 与 orchestration/query.py",
+   "change": "EngagementOverview 加 awaiting_correction; 盲判隐藏函数 blind_view 供 C 的复核与判断详情接口使用; CompletionMaterial 的错报列表带生命周期字段",
+   "doc_section": "开发接口文档第 7 节 StateQuery 视图, 第 10 节"
+  },
+  {
+   "target": "orchestration/graph.py, nodes.py 主图",
+   "change": "新增节点 misstatement_triage (FIN-03), communicate (FIN-08), await_correction, verify_correction (FIN-09, GEN-05 增量); after_fan_in 的完成出口改指 misstatement_triage; 阶段 P3_Completion 的写入移到 misstatement_triage; NODE_PROCEDURES 加三项; P2 以外程序的 normal 任务也在节点内等待",
+   "doc_section": "开发接口文档第 3 节程序执行范围, 第 7 节恢复机制; Demo需求文档第 1 节, 第 4.1 节, 第 6 节"
+  },
+  {
+   "target": "RPT-03 fixture_key",
+   "change": "由 r{revision} 改为 {opinion_type}-r{revision} (qualified-r1, qualified-r2, unqualified-r1), 两种意见的报告样例并存 (视待拍板第 2 问)",
+   "doc_section": "开发接口文档第 4 节 MockLLMClient 与 fixture_key 约定"
+  },
+  {
+   "target": "services/review_queue.py classify",
+   "change": "读判断的有效级别 (含降级); 关键证据缺失 (evidence_required 任一种在受支持步骤中无指针) 强制 normal; blind 类抽样任务不计入程序待决",
+   "doc_section": "开发接口文档第 5 节需要人表"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "管理层对错报的回复和之后的更正, 在演示和真实使用里怎么模拟?",
+   "options": [
+    {
+     "label": "审计师在页面上登记管理层回复 (同意或拒绝, 回复原文); 同意后系统进入\"等待客户更正\", 审计师点\"客户已过账调整分录\"时系统载入预置的调整分录, 或选\"停止等待\"按未更正处理 (推荐)",
+     "pros": "与规格把错报沟通定为人工程序一致, 与管理层打交道的仍是审计师; 演示可交互; 真实使用时换成从会计系统接入分录即可",
+     "cons": "前端要加登记表单和两个按钮; 数据组要加调整分录文件与载入接口; 依赖另一组的通用人工程序做法"
+    },
+    {
+     "label": "做一个模拟管理层的组件: 系统发出沟通后按脚本自动回复, 自动过账分录",
+     "pros": "全自动, 测试最简单, 不等前端",
+     "cons": "把规定由人做的沟通变成系统自动, 与规格不符; 演示看不到审计师与管理层沟通这一步; 真实使用时这个组件没用"
+    },
+    {
+     "label": "只做管理层拒绝: 回复一律登记为拒绝, 等待更正和更正验证只写单元测试, 不进流程",
+     "pros": "工作量最小, 演示结果完全不变",
+     "cons": "规格要求的\"错报从发现到关闭\"全过程落空; 更正验证的大模型判断不进演示"
+    }
+   ],
+   "recommendation": "选第一项: 符合规格的人工程序定位, 且只多两处页面操作; 预置调整分录文件让演示可重复.",
+   "affects": [
+    "MD-7",
+    "MD-8",
+    "MD-10",
+    "MD-11",
+    "MD-18"
+   ]
+  },
+  {
+   "question": "演示公司那笔 14.2 万澳元的收入跨期错报, 管理层最后改不改?",
+   "options": [
+    {
+     "label": "主演示管理层拒绝更正, 保留意见和现有报告不变; 另加一条\"管理层全额更正\"的完整测试 (意见变无保留), 报告样例按意见类型分开存 (推荐)",
+     "pros": "现有验收数字与报告样例基本不动; 两条路都有自动测试; 现场演示可以按需要走任一条",
+     "cons": "要多维护一份无保留报告样例, 现有两个报告样例文件改名; 测试多一条全流程"
+    },
+    {
+     "label": "主演示改成管理层全额更正, 意见变为无保留",
+     "pros": "主演示就能看到错报从发现到关闭的全过程和更正验证的大模型判断",
+     "cons": "保留意见这条主线消失; 报告样例, 意见闸门理由, 验收数字都要重写"
+    },
+    {
+     "label": "在数据里再埋一笔错报: 一笔管理层更正, 一笔拒绝",
+     "pros": "一次演示两条路都走到, 最终仍是保留意见",
+     "cons": "要改合成数据和收入线已经定好的预期结果, 牵动的测试与样例最多"
+    }
+   ],
+   "recommendation": "选第一项: 保住已完成的保留意见主线, 更正路径用独立的全流程测试覆盖, 演示时可切换.",
+   "affects": [
+    "MD-17",
+    "MD-18"
+   ]
+  },
+  {
+   "question": "盲判 (隐藏 AI 结论, 审计师先独立判断) 怎么提交?",
+   "options": [
+    {
+     "label": "分两步: 审计师先交自己的独立结论, 系统马上比对并记一致率, 之后才显示 AI 的结论和推理, 再像普通复核一样确认, 推翻或认定错报 (推荐)",
+     "pros": "符合规格\"先说判断再比对\"和\"决定集同普通复核\"; 审计师独立判断后仍能参考 AI 推理; 决定之后的处理与普通复核共用一套",
+     "cons": "每条盲判多一次提交; 前端要做先隐藏后显示"
+    },
+    {
+     "label": "一步: 审计师只交自己的结论, 系统比对后自动定结果 (一致就采纳 AI 判断, 不一致以审计师结论为准)",
+     "pros": "一次提交, 前端简单",
+     "cons": "审计师看不到 AI 推理就定案, 与规格\"盲测任务的决定集同普通任务\"不符; 不一致时少了一次复看机会"
+    }
+   ],
+   "recommendation": "选第一项: 与规格两处表述都一致, 实现上复用现有复核决定的写入与恢复机制.",
+   "affects": [
+    "MD-15",
+    "MD-16",
+    "MD-17"
+   ]
+  },
+  {
+   "question": "演示公司里哪些判断要盲判? 规格的降级表有两处可以有不同理解, 结果会差一条到全部.",
+   "options": [
+    {
+     "label": "只有降级\"越过最低一级被截住\"时才盲判; \"首次审计该客户再降一级\"这条本版先不做. 结果: 收入线 5 条判断盲判; 银行函证差异那条因置信度 0.56 降到最低一级, 但不盲判 (推荐)",
+     "pros": "与规格书举的收入截止例子完全一致; 演示多 5 次先答提交, 负担适中",
+     "cons": "降级表里\"首次服务该客户\"一行暂缺; \"触及下限\"取了较窄的读法"
+    },
+    {
+     "label": "降到最低一级就盲判 (含正好降到); 首次审计这条不做. 结果: 6 条判断全部盲判",
+     "pros": "口径最严, 审计师对所有最低级判断都先独立判断",
+     "cons": "演示多一次盲判; 与规格\"金额超过执行重要性直接降到最低级但不盲判\"的示例对不上"
+    },
+    {
+     "label": "做\"首次审计再降一级\" (该客户没有已归档项目即算首次), 盲判仍按\"越过才开\". 结果: 6 条全部盲判, 其余程序也各降一级",
+     "pros": "降级表全部做全, 真实使用时新客户更谨慎",
+     "cons": "函证, 抽取等程序多降一级, 目前对它们没有实际效果; 演示最长; 要数据组提供按客户查归档项目"
+    }
+   ],
+   "recommendation": "选第一项: 与规格示例一致且演示可控; 首次审计规则在客户画像的历史积累 (归档后更新画像) 做出来后再加.",
+   "affects": [
+    "MD-13",
+    "MD-14",
+    "MD-17"
+   ]
+  },
+  {
+   "question": "错报分类时, 如果 AI 判断这笔错报有舞弊迹象 (这笔分录周日晚上由财务主管自己录入又自己批准, 是全年唯一一笔自制自批), 之后怎么办?",
+   "options": [
+    {
+     "label": "AI 标出舞弊迹象并写明理由, 这条判断降到人逐条决定; 标记呈报在未更正错报评价闸门和报告起草的材料里; 准则要求的重新评估舞弊风险与和治理层即时沟通本版不做, 列为已知缺口 (推荐)",
+     "pros": "数据里有意埋的异常被识别出来, 展示大模型的感知与判断; 改动集中在本组",
+     "cons": "准则后续要求 (重新评估舞弊风险) 暂缺, 需在报告与演示中说明"
+    },
+    {
+     "label": "样例输出判为不构成舞弊迹象, 只记分类",
+     "pros": "没有悬空的后续动作",
+     "cons": "忽略数据里有意埋的自制自批和周末入账, 也会与分录扫描组查出的结果矛盾"
+    },
+    {
+     "label": "标出并阻断后续流程, 直到审计师登记已与治理层沟通",
+     "pros": "合规链条更完整",
+     "cons": "要新增沟通登记对象与页面, 超出本组范围, 与其他组的即时沟通程序重叠"
+    }
+   ],
+   "recommendation": "选第一项: 让大模型的识别能力进演示, 同时如实标明后续程序尚未实现.",
+   "affects": [
+    "MD-2",
+    "MD-3",
+    "MD-13",
+    "MD-17"
+   ]
+  }
+ ],
+ "risks": [
+  "FIN-08 依赖第 3 级 \"通用人工程序机制\" (另组起草): 其派任务, 收结果, 节点等待的做法与结果载荷未定, ManagementResponse 的挂法须两组对齐; 该机制未就绪前 MD-7 只能完成 YAML, 片段与纯函数.",
+  "主图 P3 段多组同时改: 本组新增 misstatement_triage, communicate, await_correction, verify_correction; PLN-19 (第 3 级) 按 ASA 450 第 10 段应插在 verify_correction 与 completion 之间, FIN-15 (第 3 级) 依赖 FIN-09, FIN-07/FIN-18 附汇总表, FIN-02 与 FIN-01 共用 gate_fin, FIN-12 等也进 P3; NODE_PROCEDURES, graph.py, recovery.py 合并冲突概率高, 建议先定 P3 节点顺序表.",
+  "GEN-09 (A7, 第 1 级) 须在判断级降级之前运行 (规格书 7.4 末段), 两组都改 agents/judging.py 共用判断流程; GEN-11 (A10 呈递) 与盲判隐藏重叠, 隐藏规则须统一.",
+  "GEN-05 增量扫描 (第 1 级) 在 P3 节点内的执行方式由该组定; FIN-09 的 depends_on 暂不写 GEN-05; JE-R06 依赖本组提供的 first_misstatement_communicated_at, 无沟通时为 None 的处理由该组定.",
+  "规格书 7.4 \"累计降级触及下限时开启 blind\" 有两种读法 (越过才开 / 到达即开), 已列待拍板; \"历史一致率低于 80%\" 规格未写样本下限, 本组取 30 (同升级口径), 属推断.",
+  "降级后 Numbat 的 P2 判断全部为 L1 (人逐条决定), 演示中 \"AI 自动关闭\" 的场景为零, 9.2 盲测抽查在 Numbat 上不会触发, 只能靠单元测试展示; 与 \"以 AI 替代审计员为目标\" 的叙述要协调.",
+  "MD-16 让抽样盲测任务在 P2 结清前决完 (进 P3 前等待), 规格只说 \"不阻断关闭\" (程序状态), 未说是否阻断阶段推进, 本设计为推断.",
+  "更正传导不做: 更正后试算表版本 +1, 受影响的已完成程序标 needs_review (规格书第 10 节 \"更正传导\") 未实现, Procedure 状态也没有 needs_review; Numbat 中 S1 连带多计的销售成本 99,400 仍不在范围 (合成数据集设计第 7 节).",
+  "错报的 evaluated, closed 状态与 evaluation 字段本组不写 (FIN-01 逐条评价不在范围); FIN-04 的 rollover 与 iron curtain 双口径不做 (首个项目无上期未更正错报, origin 一律 current_period).",
+  "Q11 只记阶段与程序状态的迁移, 错报状态变化没有 transition 留痕, 只能从 misstatements 的版本历史追溯; AwaitingCorrection 不是 Phase 枚举值, 只体现在节点等待 payload 与总览.",
+  "FIN-08, FIN-09 无对象时记一次空执行并置 completed, 规格用 not_applicable 表示跳过, 本版 ProcedureStatus 无该值.",
+  "运行期错报 ID 为 M-D-{uuid4}, mock 只能回退 FIN-03/FIN-09 的 default.json; 多条错报时 mock 返回同一输出, 引用校验可能失败, 真实演示须保持一条错报或接真实 LLM.",
+  "ASA 450 第 7 段作为 FIN-09 依据的贴合度待核 (该段讲应审计师要求管理层检查并更正一类交易后追加程序); ASA 240 另有 2026-12-15 起生效的新版 PDF, Numbat 财年截至 2026-06-30 适用现行版第 36 段, 新版段号未核.",
+  "FIN-03 标出舞弊迹象后, ASA 240 第 37 段要求的重新评估舞弊风险 (环 3, GATE-R) 与 GEN-16 即时沟通均不在第 1-3 级范围, 演示须说明.",
+  "FIN-03 与 FIN-09 的判断金额 14200000 超过执行重要性, 判断级降到 L1, 都是人逐条决定; 若后续需要展示 L2 复核与 L1 的差异, Numbat 数据无法体现.",
+  "MD-6 起 R55 的断言要随各条逐步改 (llm_call 13 → 14, decision 11 → 18 等), 中间提交的 e2e 数字须每条同步, 否则 main 不绿; transition 行数依赖通用人工程序机制的状态写法, 开工时核定."
+ ]
+}

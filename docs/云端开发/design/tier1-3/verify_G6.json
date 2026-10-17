@@ -1,0 +1,190 @@
+{
+ "group": "完成与报告阶段的签字前提 (FIN-07, FIN-18, FIN-10, RPT-08, FIN-12, FIN-15, RPT-07, RPT-01 签字前检查)",
+ "issues": [
+  {
+   "key": "SG-15/SG-14/SG-13/SG-12",
+   "severity": "blocker",
+   "problem": "签字前清单拦下后没有补救路径, 会卡死. RPT-01 reject 只回 report_draft → pre_sign, 且草稿规定再入时 RPT-07 不重做 (SG-14 验收 3), representations 与 completion 都回不去. 于是: 漏 INDEPENDENCE 或口头沟通 (SG-13 验收 5 写明\"对象照常记录, 由 SG-15 拦截\") → P6 永远不过; 数据层把 FS 换成 v2 → P4 要 FIN-12 重跑, 但只有 completion 能重跑它, 从 RPT-01 已回不去; CHECK-FIN-10 有 failed → P1 永远不过; 审计师认为声明书太旧 (待定问题 3 说\"由审计师判断是否要更新\") 也无法重新取得. SG-12 验收 5 和 SG-14 \"CHECK-FIN-10 出新版本时重做 RPT-08\" 在主流程中走不到: RPT-01 退回后不会再经过 FIN-10.",
+   "evidence": "src/backend/orchestration/graph.py:236 (report_draft → gate_rpt01, 现有唯一回退); 草稿 SG-14 验收 3, SG-13 验收 5, SG-15 验收 3; 规格书 12.3 节 (1972 行附近): P4 出现影响结论的新证据或新错报时回到 P3; 规格书 1508 行: 报告实质修订或错报变化后 FIN-07 与 FIN-18 失效须重取",
+   "fix": "给 RPT-01 退回加去向, 例如 reject 增加 redo 字段, 可选 representations, pre_sign 或 completion; 或在 pre_sign 入口按清单结果自动重做未过的程序 (P6 不过则 RPT-07 新建 run). 验收里要写一条用例: 每个 P 项不过后经人操作能回到可签状态. 删去或改写 SG-12 验收 5 中走不到的用例."
+  },
+  {
+   "key": "SG-3",
+   "severity": "major",
+   "problem": "一个节点内同一轮执行有多个决定时, 恢复补做会报错. catch_up_review 按 (程序在 NODE_PROCEDURES 中的位置, run_no) 排序, 键重复直接抛 RuntimeError. SG-3 验收 4 (一轮 2 个 normal 任务), 验收 7 (failed 与 normal 并存), SG-4 一轮出多个 K01/K02 unattributed 任务, 都会产生重复键; 验收 6 仍写\"按 NODE_PROCEDURES 顺序与 run_no 补交\". 这正是 Q17 为 failed 任务解决过的问题, normal 与 unattributed 任务没有这层保证.",
+   "evidence": "src/backend/orchestration/recovery.py:254-270 (key=(order.index, run.run_no), 重复抛 \"有多个复核决定针对同一程序的同一轮执行\"); 需求清单 Q17",
+   "fix": "SG-3 写明 P2 以外节点等 normal/unattributed 决定的方式与 await_events 相同: 每读回一个决定就从 Store 整体读回 (Q9), 与读回顺序无关. 恢复时这类决定只交一个或按任意顺序交, 只有 failed 组仍按 (程序, run_no) 排序. 补一条验收: 同一轮 2 个 normal 决定都已写 Store, 检查点未跟上, recover 后结果与不中断时一致."
+  },
+  {
+   "key": "SG-11/SG-16",
+   "severity": "major",
+   "problem": "前置顺序有缺口. SG-11 验收 4 (拒签 → 回 completion → 停 gate_fin) 要靠 SG-16 才能走通, 但 SG-16 排在 SG-11 之后. 只做到 SG-11 时, FIN-01 只能选 unqualified/qualified (FIN01_DISPOSITIONS); 批准后再入 representations, FIN-18 已 completed 不重跑 (SG-11 验收 5), must_disclaim 仍为真, 又回 completion, 形成死循环. 待定问题 2 若选\"只阻断签字\", SG-11 验收 4 整条作废.",
+   "evidence": "src/backend/orchestration/decisions.py:107, 675-677 (FIN01_DISPOSITIONS 只含两种); 草稿 SG-11 验收 4, 5; SG-16 前置 SG-11",
+   "fix": "把 must_disclaim 路由与 FIN-01 只接受 disclaimer 合进同一条需求 (或让 SG-16 先于 SG-11). 在待定问题 2 定案前, SG-11 只写 must_disclaim 为假的路径."
+  },
+  {
+   "key": "SG-4",
+   "severity": "major",
+   "problem": "验收 3 要求 K01 例外的证据指针同时含 trial_balance 1100, 1150 与 financial_statement_line SOFP-REC. 但 RuleEngine 每行 SQL 只按 source_type/source_id 生成一个指针, 映射表里也没有 financial_statement_line (rule_engine.py 的 kinds[source_type] 会 KeyError). 这两处都是 B 的文件, external_deps 没列.",
+   "evidence": "src/backend/services/rule_engine.py:38-65 (evidence=[pointer] 单个); 开发接口文档第 5 节 RuleEngine 约定 (749-758 行) 映射表只有六种行类型",
+   "fix": "二选一并写进需求: (a) 外部依赖加 B 的改动: 映射表加 financial_statement_line → voucher/internal_original, 规则 SQL 支持多指针 (如 extra_pointers 列); (b) 由 A9 在 interpret 中给 K01 例外补试算表指针, 例外按 SQL 出 v1 后补指针出 v2, 任务 ID 随之变化. 验收按所选方案改写."
+  },
+  {
+   "key": "SG-9/待定问题 5",
+   "severity": "major",
+   "problem": "具体声明被拒时没有出口. ASA 580 para 19 要求: 管理层不提供某项声明时, 审计师须与管理层讨论, 重新评价其诚信, 并决定对意见的影响; para 20 规定只有 para 10, 11 的核心声明缺失或不可靠时才必须无法表示意见. 草稿的处理是: 缺 LITIGATION → W06 → 自动重新取得. 若管理层坚持不签这一项, 就会无限循环; 唯一出口是登记 refused, 但这会触发 must_disclaim, 比准则要求更重.",
+   "evidence": "docs/参考资料/01_审计准则_ASA/ASA_580.pdf para 19 (a)-(c), para 20 (pdftotext 已核); 草稿 SG-9 验收 4, 待定问题 5 推荐项",
+   "fix": "FIN-18 的非核心不通过不要自动循环: 建一个 normal 或专用任务, 让审计师选\"重新取得\"或\"接受并记录对意见的影响 (理由必填)\". status refused 只用于核心声明; 或在 representations 上加 per-clause refused. 待定问题 5 的选项照此重写."
+  },
+  {
+   "key": "SG-10/SG-12/SG-15",
+   "severity": "major",
+   "problem": "FIN-10 failed 的处理与准则和法条不符. (1) R410.15 规定连续 5 年收费占比超 30% 时, 事务所须判定并采用复核类防护措施, 这不是违反; 草稿 E03 直接判 failed, 并会经 SG-12 写进 s307C 违反声明. (2) SG-15 的 P1 要求 CHECK-FIN-10 无 failed 才能签字, 而 SG-12 验收 3 的 s307C(3)(d) 违反声明只在有 failed 时生成, 这条路径永远签不了字. 实际上 s307C(3)(d) 正是为\"有违反仍出具报告\"设计的.",
+   "evidence": "APES 110 R410.15 (pdftotext 第 10793 行起, \"shall determine whether either of the following actions might be a safeguard\"); Corporations Act Vol2 s307C(3)(d) (印刷页 94); 草稿 SG-10 验收 3, SG-12 验收 3, SG-15 验收 1, 3",
+   "fix": "E03 改为 attention, detail 要求记录所采取的防护措施. P1 改为不按 failed 拦截, 改为 attestation 时审计师须认定 (违反项须有处置记录, 如 APES 110 R400.80 起的处置); 或明确本版有违反即不能签字, 删去 SG-12 的 contraventions 用例. 二者择一, 不要同时保留."
+  },
+  {
+   "key": "SG-11/SG-15",
+   "severity": "major",
+   "problem": "声明书与校验结果过期后不会重做. 规格书规定错报变化或报告实质修订后, FIN-07 与 FIN-18 失效须重取. 草稿 SG-11 验收 5 规定 FIN-07, FIN-18 已 completed 就跳过, 不看 SCHEDULE 是否变过; SG-15 的 P2 只看 CHECK-FIN-18 有无 failed, 不核对它的 subject_ref 是否为当前 REPLETTER, 也不核对附表是否等于当前 SCHEDULE 的 items. 本组单独实现时这条路径很少走到, 但同批的 FIN-08, FIN-09, GEN-06 会在 FIN-07 之后改错报.",
+   "evidence": "规格书 1508 行; 草稿 SG-11 验收 5, SG-15 验收 1 P2",
+   "fix": "representations 再入时, 若 SCHEDULE 的 items (按 misstatement_id 与金额) 与 REPLETTER 附表不同, 则重新取得. P2 加两条: CHECK-FIN-18.subject_ref 等于最新 REPLETTER; 附表等于当前 SCHEDULE items. 各补一条验收."
+  },
+  {
+   "key": "SG-9/SG-16",
+   "severity": "major",
+   "problem": "FIN-18 的必须无法表示意见结论未经审计师确认就生效. 规格书写明 FIN-18 为 L1, 经 RCA 确认后才记必须无法表示意见, 并触发 ACC-10 (选修正意见或撤出). 草稿中 must_disclaim 一出现就自动回 completion, FIN-04 写入强制 disclaimer, FIN-01 只能选 disclaimer. 审计师要等到签字时才 attest (待定问题 1), 此时路由早已改变, 也没有撤出选项.",
+   "evidence": "规格书 7.1 节 L1 定义 (人逐条决定), 2337 行, 2131 行 (UC-06 第 6a 步); 草稿 SG-9 验收 5, SG-11 验收 4, SG-16 验收 1",
+   "fix": "二选一: (a) must_disclaim 为真时在 representations 内建任务, 让审计师确认后再路由; (b) 在需求和接口文档中写明: 审计师在 FIN-07 人工结果中登记 refused/unreliable 即视为 L1 确认, 并说明 ACC-10 撤出本版不做. 待定问题 1 也要写明它不覆盖这一点."
+  },
+  {
+   "key": "SG-2",
+   "severity": "major",
+   "problem": "逐字对照测试的段号规则写得不全, 照验收 2 实现会失败. (1) ASA700-P49 后面紧接的是 Aus 49.1, 不是 50; 现有正则的可选小标题不能含句点, 跨不过 \"49.1\". (2) ASA580-P20 和 ASA520-P07 是要求部分的最后一段, 后面是 *** 与 Application and Other Explanatory Material, 再接 A1, 没有 21. 或 8.. (3) R410.13 的下一段是 410.14 A1, 不是草稿写的 R410.14 或 410.13 A1. (4) APES 的页眉页码 (如 \"204\", \"APES 110 Code of Ethics ...\") 和公司法的页眉页脚 (Compilation No., Authorised Version C2026C00382, Chapter/Part/Division/Section 行) 都不在 RUNNING_LINE 里; R410.15 与 s307C(3) 都跨页.",
+   "evidence": "tests/test_knowledge.py:74-76 (RUNNING_LINE), 118-120 (after 正则); ASA_700 pdftotext 930-950 行; ASA_580 415-440 行; ASA_520 301-320 行; APES pdftotext 10700-10712, 10793-10815 行; CorpAct Vol2 PDF 第 131-134 页",
+   "fix": "验收 2 补齐规则: 整数段后可接 Aus x.1; 要求部分最后一段后可接 *** 或 Application and Other Explanatory Material; APES 的 R410.n 后可接 R410.n+1 或 410.(n+1) A1; 按准则分别给出页眉页脚正则. 也可以对这三类改用显式的 next_marker 字段."
+  },
+  {
+   "key": "SG-15",
+   "severity": "major",
+   "problem": "s307C(5)(b) 要求声明由作出声明的人亲自签署, 声明人是项目负责人 (declarant_id = owner_id). 但 RPT-01 approve 没有校验 decided_by 是否等于 owner_id; 草稿签字效果把 S307C 置 signed, 签字人可能不是声明人.",
+   "evidence": "Corporations Act Vol2 s307C(5)(b) (印刷页 95); src/backend/orchestration/decisions.py:141 (approved_by=decision.decided_by, 无负责人校验); 草稿 SG-12 验收 2, SG-15 验收 2",
+   "fix": "RPT-01 approve 时 decided_by 须等于 S307C.declarant_id (即 Engagement.owner_id), 否则报错, 错误码写进第 7 节校验表; S307C 加 signed_by. 补一条验收: 非负责人 approve 被拒."
+  },
+  {
+   "key": "Qn 编号",
+   "severity": "major",
+   "problem": "草稿把自己的待定问题与需求清单中已定的 Q1-Q18 都写作 \"Qn\", 编号冲突. 例: SG-11 的 \"按 Q5 重新取得\", \"阶段按 Q6\", SG-8 验收 5 的 \"按 Q5\", SG-9 验收 5 的 \"按 Q1, Q5\", SG-15 的 \"Q1 推荐\" 与 \"按 Q3 只显示\". 需求清单中 Q1 是开发顺序, Q3 是 LiveLLMClient, Q5 是 PLN-01 保持 planned, Q6 是 P2 不写 executing; 而 SG-3 的 Q4, Q9, Q17 又确实指需求清单. 实现与审核会按错的决定执行.",
+   "evidence": ".a-dev/需求清单.md 912 行起 (Q1-Q18 原文); 草稿 SG-8, SG-9, SG-11, SG-15",
+   "fix": "草稿的待定问题改用独立前缀 (如 SQ1-SQ6) 或写全称 (\"待定问题 6\"); \"Qn\" 只留给需求清单."
+  },
+  {
+   "key": "SG-5",
+   "severity": "minor",
+   "problem": "验收 5 的任务 ID 写错. FIN-15 是 hybrid, 走 A6 公共流程: 校验失败时, 本次新建的规则例外先出 v2 (置 unattributed), 再以 v2 为目标建任务, 所以 ID 应为 T-X-FIN-15-1-F01-1-v2, 不是 -v1 (CSH-02 的 D01 同理).",
+   "evidence": "开发接口文档第 6 节 874 行 (unattributed 时例外出新版本, 以新版本为目标建任务); tests/test_fieldwork_csh02.py:282 (\"T-X-CSH-02-1-D01-1-v2\")",
+   "fix": "改为 T-X-FIN-15-1-F01-1-v2, 例外 v2 为 unattributed. SG-4 也要写明 K01 例外是直接以 unattributed v1 产出, 还是先 open v1 再出 v2, 两种方式的任务 ID 不同."
+  },
+  {
+   "key": "SG-4",
+   "severity": "minor",
+   "problem": "验收 4 的结果不完整. 只去掉 SOFP-PRE 的 1300 映射时, 该行金额 14660000 不等于 sign×Σ(空)=0, K01 也会命中, 实际产出 2 条例外 (K01 SOFP-PRE 与 K02 1300).",
+   "evidence": "data/demo/trial_balance.csv (1300 current 14660000); 草稿数据需求 FS 中 SOFP-PRE (1, [1300])",
+   "fix": "测试数据改为把 1300 从映射中移除且同时删去 SOFP-PRE 行 (这样 K02 单独命中); 或在验收中同时列出 X-FIN-12-1-K01-1 与 X-FIN-12-1-K02-1."
+  },
+  {
+   "key": "SG-9",
+   "severity": "minor",
+   "problem": "验收 3 要求 refused 时 W01 例外的证据指向 REPLETTER 文件第 1 页, 但 SG-8 验收 4 中拒签的登记没有文件 (signed_by 为空, document_id 应为 None). 另外 W04 以客户画像 directors 判断签署人, 而 ASA 580 para 9 的要求是 management with appropriate responsibilities, CFO 签署也合规.",
+   "evidence": "草稿 SG-8 验收 4, SG-9 验收 3, 4; ASA 580 para 9",
+   "fix": "无文件时, W01 证据改指向人工结果的留痕 (trail) 或决定记录. W04 改为 attention, 或签署人名单改从 key_personnel 加 directors 取, 并在需求中写明来源."
+  },
+  {
+   "key": "SG-1",
+   "severity": "minor",
+   "problem": "新增 DocumentType 和 PointerSource 后, 需要同步改的地方没列全. judgment_engine.py 的 DOCUMENT_EVIDENCE 只映射 contract 和 confirmation; 接口文档第 5 节规定其他类型的文件不作证据, 指针判为解析不了. SG-18 验收 5 要求两份新文件和 financial_statement_line 的指针都能解析, 但 SG-1 的 scope 里没有 services/judgment_engine.py 与 EvidenceType. 另外 ComplianceCheck 带 exception_ids, merge.check_refs 目前只检查 Judgment, AcceptanceScorecard, AnalyticsResult 的 exception_ids, 也需要加.",
+   "evidence": "src/backend/services/judgment_engine.py:68; 开发接口文档 784 行; src/backend/orchestration/merge.py:155-158",
+   "fix": "SG-1 的 scope 加 services/judgment_engine.py, 写明 representation_letter, governance_communication 对应的 EvidenceType 与可靠性; check_refs 加入 ComplianceCheck; 接口文档第 5 节对照表同步."
+  },
+  {
+   "key": "SG-8/SG-13/SG-18",
+   "severity": "minor",
+   "problem": "人工程序的写法与规格书不一致. 规格书 18 节规定 manual 程序由 A10 派任务给审计师并收回结果, 不建 ReviewTask. SG-8 写成 A5 直接派给审计师, 不符合\"人只经 A10 交互\"; SG-18 又把两个人工任务计入 ReviewTask (9 条) 并预设了决定留痕的条数.",
+   "evidence": "规格书 2727-2729 行 (concierge.collect_manual_result, 不建 ReviewTask); 草稿 SG-8 goal, SG-18 验收 2, 3",
+   "fix": "SG-8 改为 A5 生成请求稿, 由 A10 呈递. SG-18 中任务数, 决定留痕数与人工结果形式写成待通用人工程序机制确定, 不先写死为 9 和 14."
+  },
+  {
+   "key": "SG-11",
+   "severity": "minor",
+   "problem": "scope 少了测试文件. FIN-01 approve 后不再进入 P4 会影响 tests/test_trail.py (test_m2_flow_transitions 断言 P3→P4 记在 FIN-01 下, 以及固定集程序的迁移顺序), tests/test_recovery.py, tests/test_rpt_gate.py, 这三个都含 P4_Reporting 断言. 另外 SG-11 和 SG-15 都超出 M 档: SG-11 含新节点, 路由, 自动重新取得的循环, 阶段语义改动和四条旧需求的测试改写; SG-15 含清单, 契约, 新错误码, 签字效果和恢复.",
+   "evidence": "tests/test_trail.py:180-200; grep P4_Reporting 命中 test_fin_gate, test_recovery, test_trail, test_rpt_gate",
+   "fix": "补齐 scope. SG-11 把阶段语义改动 (待定问题 6) 拆成一条 S. SG-15 拆为: (a) attestations 与 S307C 签署效果; (b) presign_items, PRESIGN_BLOCKED 与材料."
+  },
+  {
+   "key": "待定问题 2",
+   "severity": "minor",
+   "problem": "选项的代价写得不准. OpinionType 已有 adverse 与 disclaimer, 只是 FIN-01 的校验 (FIN01_DISPOSITIONS) 和接口文档第 7 节限制为两种, 不需要\"扩展意见类型\". 另外 SG-17 验收 4 依赖 SG-15 的 P2, 但前置里没列 SG-15.",
+   "evidence": "src/backend/contracts/models.py:207-213; decisions.py:107",
+   "fix": "把选项的代价改为\"放开 FIN-01 的取值限制并新增报告模板\"; SG-17 的前置加 SG-15."
+  },
+  {
+   "key": "SG-1/数据需求 画像",
+   "severity": "minor",
+   "problem": "fees 和 governance 的字段名与规格书 3.x 画像 schema 不一致. 规格书为 audit_fee_current_year, non_audit_fees, firm_total_fees, overdue_amount, overdue_age_days, referral_source, referral_source_fees_pct_by_year, governance.body; 草稿新增 contingent, 并去掉了转介来源字段. 按接口文档第 0 节, 金额字段改用 _cents 后缀是合理的, 但需求里没有写明这是有意偏离.",
+   "evidence": "规格书 470-471 行, 487 行",
+   "fix": "在 SG-1 写明与规格书字段的对照和偏离理由 (_cents 约定; contingent 用于 R410.9). 转介字段写明本版不做."
+  },
+  {
+   "key": "SG-2/SG-4",
+   "severity": "minor",
+   "problem": "片段 ID 与规格书片段表不一致: 规格书写的是 ASA330-P20a, 草稿用 ASA330-P20.",
+   "evidence": "规格书 444 行",
+   "fix": "统一成一种写法: 用 ASA330-P20 时改规格书片段表, 或片段 ID 改为 ASA330-P20a, paragraph 填 \"20\"."
+  },
+  {
+   "key": "风险 Numbat 适用性",
+   "severity": "minor",
+   "problem": "把 s295(4) 董事声明是否适用列为待核, 但仓库内已有原文: s295(1)(c) 规定财务报告由财务报表, 附注和董事声明组成, 而 s293 股东指示要求编制的正是 financial report. 按用户规则, 有原文就不应以\"待核\"推进; P7 已把董事声明日期作为硬拦截条件.",
+   "evidence": "CorporationsAct Vol2 s295(1)(c), s293(1)(a), (3) (PDF 第 70-90 页, 印刷页 45-50)",
+   "fix": "据原文结案, 写明董事声明适用并给出出处. s298(1AA)(c) 等其余待核条款同样直接查 Vol2 结案."
+  },
+  {
+   "key": "SG-13",
+   "severity": "minor",
+   "problem": "把 ASA 450 para 12 (向治理层沟通未更正错报并要求更正) 放进了 FIN-07 之后的 RPT-07. 规格书的顺序是 FIN-14 先沟通并要求更正, 之后 FIN-07 才取得附汇总表的声明书. 草稿没有说明这一顺序上的偏离.",
+   "evidence": "规格书 1425 行 (错报处理顺序), 2131 行",
+   "fix": "在需求中注明 FIN-14 未实现, 由 RPT-07 代为覆盖 ASA 450 para 12, 并记为已知偏离; 或把 UNCORRECTED 沟通提到 FIN-07 之前."
+  },
+  {
+   "key": "SG-5",
+   "severity": "minor",
+   "problem": "goal 写的是 LLM 结合\"已确认判断\"解释波动. 规格书第 8 节不许 LLM 看其他循环的 Judgment (防锚定, 唯一例外是环 3). 验收 3 实际只列了错报和发票, 与 goal 不一致. (不确定 FIN-15 作为总体复核是否应算例外, 需要定.)",
+   "evidence": "规格书 1238-1239 行",
+   "fix": "goal 改为只提供错报 (Misstatement) 与相关数据行, 不提供其他循环的 Judgment; 若确需提供, 在需求中写明这是规格书的例外并说明理由."
+  },
+  {
+   "key": "SG-3",
+   "severity": "minor",
+   "problem": "等待载荷前后不一致. goal 说与现有 failed 等待共用载荷, 现有载荷是 {awaiting: human, ...}; 验收 1 却写 {awaiting: review, procedure_id, run_id, records}. 验收 7 只说先只接受 rerun, 没写对 normal 任务提前提交决定时报哪个错误码.",
+   "evidence": "src/backend/orchestration/nodes.py:514, 681; runner.py:31-32",
+   "fix": "统一 awaiting 的取值并同步 runner.py 注释与接口文档第 7 节; 验收 7 写明错误码 (如 NOT_AWAITING_REVIEW) 并补测试."
+  }
+ ],
+ "missing": [
+  "FIN-18 判为不可靠或拒签后, 规格书要触发 ACC-10, 审计师可选修正意见或撤出 (Withdrawn). 草稿只有无法表示意见一条路, 需在需求中写明 ACC-10 与撤出本版不做, 以及对应的处理方式 (规格书 2131, 2337 行)",
+  "FIN-15 输出命中环 3 触发条件 (如总体复核发现此前未识别的舞弊风险) 时应升旗进 GATE-R (规格书 1502, 1525 行). 草稿未提, 需写明本版不做, 并说明命中时如何处理 (至少建任务)",
+  "P4 发现新证据或清单不过时回到 P3 或 pre_sign 的路径 (规格书 12.3 节). 详见 blocker 一条",
+  "声明书请求稿 (含附表) 放在哪里, 谁呈递给审计师: 存成对象, 放进任务载荷, 还是只渲染不存, 草稿没有定义; 请求稿的留痕也未提",
+  "除闸门页外, C 需要的查看入口未列: 声明书, 三份 ComplianceCheck, 治理层沟通记录, S307C 的总览与详情查询 (StateQuery/API)",
+  "RPT-01 签字人须为项目负责人 (s307C(5)(b)) 的校验",
+  "FIN-01 退回后再入 completion 时, 若错报已变, FIN-15 是否重做 (FIN-15 的判断依据含全部错报), 草稿一律跳过且未说明理由",
+  "FIN-10 违反项的处置记录 (APES 110 R400.80 起: 评价后果, 与治理层书面沟通) 本版是否建模"
+ ],
+ "extra_questions": [
+  "签字前清单不过时怎么回到能补救的地方: RPT-01 退回时可选回到哪个节点, 还是 pre_sign 自动重做未过的程序?",
+  "独立性检查发现违反时, 本版是一律不能签字, 还是允许出具列明违反事项的 s307C 声明后签字? 两种做法与 P1 拦截规则不能同时保留.",
+  "管理层拒绝某一项具体声明 (非核心) 时, 审计师能否写理由接受并继续, 而不是反复重新取得或只能无法表示意见?",
+  "RPT-01 是否只允许项目负责人签字 (声明须由声明人本人签署)?"
+ ],
+ "verdict": "还不能交给实现. 有 1 个 blocker: 签字前清单拦下后无法补救, 已从代码和流程路径确认会卡死. 另有 10 个 major, 主要有: 一轮多个决定时恢复补做会报错 (recovery.py 已确认); 拒签路径依赖排在后面的 SG-16; 规则引擎不支持多指针, 这项 B 依赖没列; 具体声明被拒时没有出口, 不符合 ASA 580 para 19; R410.15 被当成违反, 且 s307C 违反声明那条路签不了字; 声明书过期不会重做; FIN-18 的 L1 结论未经人确认就生效; 片段逐字测试的段号规则不全; 签字人没校验是否为声明人; 待定问题与需求清单的 Qn 编号冲突. 数据核对通过: FS 21 行, 资产合计 800000000 = 负债 218900000 + 权益 581100000, F01/F02 金额, 1100 变动 35%, 报告日 2026-10-03 的时区换算. 准则段号抽查: ASA 580 para 9-20, ASA 260 para 13, 16, 17, Aus 18.1, 21, 24, ASA 700 para 49 与 Aus 49.1, ASA 220 para 21, ASA 330 para 20, ASA 520 para 6, 7, ASA 450 para 12, 14, ASA 705 para 26-30, APES R410.9, R410.13, R410.15, s307C (Vol2 印刷页 93-96) 都与原文相符. 建议先解决 blocker 和 major, 把 SG-11, SG-15 拆小, 然后再做一轮审核."
+}

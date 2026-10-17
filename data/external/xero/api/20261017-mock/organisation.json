@@ -1,0 +1,58 @@
+[
+  {
+    "Name": "Demo Company (AU)",
+    "LegalName": "Demo Company (AU)",
+    "PaysTax": true,
+    "Version": "AU",
+    "OrganisationType": "COMPANY",
+    "BaseCurrency": "AUD",
+    "CountryCode": "AU",
+    "IsDemoCompany": true,
+    "OrganisationStatus": "ACTIVE",
+    "RegistrationNumber": "11111111138",
+    "TaxNumber": "xxxxxxxx616",
+    "FinancialYearEndDay": 30,
+    "FinancialYearEndMonth": 6,
+    "SalesTaxBasis": "ACCRUALS",
+    "SalesTaxPeriod": "QUARTERLY1",
+    "DefaultSalesTax": "Remember previous",
+    "DefaultPurchasesTax": "Remember previous",
+    "PeriodLockDate": "/Date(1214784000000+0000)/",
+    "CreatedDateUTC": "/Date(1792219988940)/",
+    "OrganisationEntityType": "COMPANY",
+    "Timezone": "AUSEASTERNSTANDARDTIME",
+    "ShortCode": "!!YB7h",
+    "OrganisationID": "3c1332bb-175c-411a-83e8-1b6a809f05d1",
+    "Edition": "BUSINESS",
+    "Class": "DEMO",
+    "Addresses": [
+      {
+        "AddressType": "POBOX",
+        "AddressLine1": "23 Main Street",
+        "City": "Marineville",
+        "Region": "NSW",
+        "PostalCode": "2000",
+        "Country": "",
+        "AttentionTo": ""
+      },
+      {
+        "AddressType": "STREET",
+        "AddressLine1": "23 Main Street",
+        "City": "Marineville",
+        "Region": "NSW",
+        "PostalCode": "2000",
+        "Country": "",
+        "AttentionTo": ""
+      }
+    ],
+    "Phones": [
+      {
+        "PhoneType": "OFFICE",
+        "PhoneNumber": "02 99998888",
+        "PhoneCountryCode": "61"
+      }
+    ],
+    "ExternalLinks": [],
+    "PaymentTerms": {}
+  }
+]

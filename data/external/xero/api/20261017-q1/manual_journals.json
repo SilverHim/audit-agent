@@ -1,0 +1,164 @@
+[
+  {
+    "Date": "/Date(1784246400000+0000)/",
+    "Status": "DRAFT",
+    "LineAmountTypes": "NoTax",
+    "UpdatedDateUTC": "/Date(1221214349570+0000)/",
+    "ManualJournalID": "4765d07b-aa03-4e56-9166-50661958c864",
+    "Narration": "Accrued liabilities for current month",
+    "JournalLines": [
+      {
+        "Description": "Audit services from OPC Ltd, not yet invoiced",
+        "TaxType": "INPUT",
+        "TaxAmount": 0.0,
+        "LineAmount": 190.0,
+        "AccountCode": "412",
+        "Tracking": [],
+        "AccountID": "6db51cfa-0326-4e63-a743-c78c4d99aba4",
+        "IsBlank": false
+      },
+      {
+        "Description": "Printer purchase High Street Computing, not yet invoiced",
+        "TaxType": "CAPEXINPUT",
+        "TaxAmount": 0.0,
+        "LineAmount": 679.0,
+        "AccountCode": "720",
+        "Tracking": [],
+        "AccountID": "75bbcb81-6b3d-4ca9-8522-3b582cb5c21a",
+        "IsBlank": false
+      },
+      {
+        "Description": "Accrued expenses",
+        "TaxType": "BASEXCLUDED",
+        "TaxAmount": 0.0,
+        "LineAmount": -869.0,
+        "AccountCode": "805",
+        "Tracking": [],
+        "AccountID": "38b7b812-d334-46eb-872e-67c4cfb87538",
+        "IsBlank": false
+      }
+    ],
+    "ShowOnCashBasisReports": false,
+    "DebitTotal": 869.0,
+    "CreditTotal": -869.0,
+    "HasAttachments": false
+  },
+  {
+    "Date": "/Date(1785369600000+0000)/",
+    "Status": "DRAFT",
+    "LineAmountTypes": "Exclusive",
+    "UpdatedDateUTC": "/Date(1221231840370+0000)/",
+    "ManualJournalID": "f00a355b-7374-445c-886b-0437bea4095c",
+    "Narration": "Computer expenses incorrectly coded",
+    "JournalLines": [
+      {
+        "Description": "Laptop to correct expense account",
+        "TaxType": "CAPEXINPUT",
+        "TaxAmount": 108.5,
+        "LineAmount": 1085.0,
+        "AccountCode": "720",
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "TrackingOptionID": "3f05cdf9-246b-46a2-bf6f-441da1b09b89",
+            "Options": []
+          }
+        ],
+        "AccountID": "75bbcb81-6b3d-4ca9-8522-3b582cb5c21a",
+        "IsBlank": false
+      },
+      {
+        "Description": "Laptop to wrong expense account",
+        "TaxType": "INPUT",
+        "TaxAmount": -108.5,
+        "LineAmount": -1085.0,
+        "AccountCode": "453",
+        "Tracking": [
+          {
+            "Name": "Region",
+            "Option": "North",
+            "TrackingCategoryID": "093af706-c2aa-4d97-a4ce-2d205a017eac",
+            "TrackingOptionID": "3f05cdf9-246b-46a2-bf6f-441da1b09b89",
+            "Options": []
+          }
+        ],
+        "AccountID": "8ab9d684-f897-4168-b5d1-2279bf74bb82",
+        "IsBlank": false
+      }
+    ],
+    "ShowOnCashBasisReports": false,
+    "DebitTotal": 1193.5,
+    "CreditTotal": -1193.5,
+    "HasAttachments": false
+  },
+  {
+    "Date": "/Date(1784160000000+0000)/",
+    "Status": "VOIDED",
+    "LineAmountTypes": "Exclusive",
+    "UpdatedDateUTC": "/Date(1221232030857+0000)/",
+    "ManualJournalID": "53fc5558-5b76-4ecd-ae5c-c4af3ccde87c",
+    "Narration": "Being depreciation on office equipment",
+    "JournalLines": [
+      {
+        "Description": "Office equipment depreciation",
+        "TaxType": "BASEXCLUDED",
+        "TaxAmount": 0.0,
+        "LineAmount": -275.0,
+        "AccountCode": "711",
+        "Tracking": [],
+        "AccountID": "24d010bf-5e4b-42dd-9aa3-a5484dd0686f",
+        "IsBlank": false
+      },
+      {
+        "Description": "Office equipment depreciation",
+        "TaxType": "CAPEXINPUT",
+        "TaxAmount": 25.0,
+        "LineAmount": 250.0,
+        "AccountCode": "710",
+        "Tracking": [],
+        "AccountID": "2d69b4ee-37d4-4f67-b950-32cbdd5765ed",
+        "IsBlank": false
+      }
+    ],
+    "ShowOnCashBasisReports": false,
+    "DebitTotal": 275.0,
+    "CreditTotal": -275.0,
+    "HasAttachments": false
+  },
+  {
+    "Date": "/Date(1786838400000+0000)/",
+    "Status": "POSTED",
+    "LineAmountTypes": "Exclusive",
+    "UpdatedDateUTC": "/Date(1497963518700+0000)/",
+    "ManualJournalID": "bb6cfcfc-4500-4475-bd3a-93ee512428e0",
+    "Narration": "Being depreciation on office equipment",
+    "JournalLines": [
+      {
+        "Description": "Office equipment depreciation",
+        "TaxType": "INPUT",
+        "TaxAmount": 75.0,
+        "LineAmount": 750.0,
+        "AccountCode": "710",
+        "Tracking": [],
+        "AccountID": "2d69b4ee-37d4-4f67-b950-32cbdd5765ed",
+        "IsBlank": false
+      },
+      {
+        "Description": "Office equipment depreciation",
+        "TaxType": "BASEXCLUDED",
+        "TaxAmount": 0.0,
+        "LineAmount": -825.0,
+        "AccountCode": "711",
+        "Tracking": [],
+        "AccountID": "24d010bf-5e4b-42dd-9aa3-a5484dd0686f",
+        "IsBlank": false
+      }
+    ],
+    "ShowOnCashBasisReports": true,
+    "DebitTotal": 825.0,
+    "CreditTotal": -825.0,
+    "HasAttachments": false
+  }
+]

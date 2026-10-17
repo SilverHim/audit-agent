@@ -1,0 +1,30 @@
+[
+  {
+    "BankTransferID": "53ccd58e-efbd-4715-a20e-e9db3f7195e5",
+    "CreatedDateUTCString": "2026-10-17T19:27:55",
+    "CreatedDateUTC": "/Date(1792265275970+0000)/",
+    "DateString": "2026-09-26T00:00:00",
+    "Date": "/Date(1790380800000+0000)/",
+    "FromBankAccount": {
+      "AccountID": "26028d3a-f981-44d6-a9ed-a522198870f8",
+      "Code": "091",
+      "Name": "Business Savings Account"
+    },
+    "ToBankAccount": {
+      "AccountID": "13918178-849a-4823-9a31-57b7eac713d7",
+      "Code": "090",
+      "Name": "Business Bank Account"
+    },
+    "FromTracking": [],
+    "ToTracking": [],
+    "Amount": 3500.0,
+    "FromBankTransactionID": "34440b5b-bbfa-4bd2-81f6-402a2b5a3c4b",
+    "ToBankTransactionID": "6dcdeb51-4569-48b4-8eb5-6e0ac985ffad",
+    "FromIsReconciled": true,
+    "ToIsReconciled": true,
+    "CurrencyRate": 1.0,
+    "Reference": "SV TRFR",
+    "HasAttachments": false,
+    "Status": "AUTHORISED"
+  }
+]

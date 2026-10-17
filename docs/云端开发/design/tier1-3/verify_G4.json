@@ -1,0 +1,167 @@
+{
+ "group": "错报闭环与动态降级 (FIN-03, FIN-08, FIN-09, FIN-04 改口径, 7.4 动态降级, 9.2 盲判)",
+ "issues": [
+  {
+   "key": "MD-8",
+   "severity": "major",
+   "problem": "CorrectionNotice 写 Store 后检查点没跟上时, 现有恢复机制发现不了, 补做也补不了. RESUME_REQUIRED 判定和 catch_up 只比对 GateDecision 与 ReviewRecord (还有等待载荷里的 records), 而 EngagementState 里没有字段记录哪些更正通知已经读回. 草稿的 scope 没列 runner.py 和 state.py, 第 6 条验收 (recover 补做) 按现有代码做不到. FIN-08 的管理层回复登记如果不是 ReviewRecord, 也有同样的问题.",
+   "evidence": "src/backend/orchestration/runner.py:43-65 resume_required 只取 GateDecision, ReviewRecord 和 state 的 gate_decisions/review_records; src/backend/orchestration/recovery.py:211-273 catch_up_review 只处理 ReviewRecord, 节点不在 NODE_PROCEDURES 时直接抛错 (await_correction 不在其中); src/backend/contracts/state.py:116-117 只有 review_records 和 gate_decisions; decisions.py:634 _check_decision_id 只查这两类",
+   "fix": "MD-8 补三处契约和 scope: (1) EngagementState 新增 correction_notices (append_unique), 或者把它列进 await_correction 等待载荷的 records; (2) runner.resume_required 和 recovery.catch_up 加上 CorrectionNotice 分支 (补写 decision 留痕, 用 Command(resume=通知 ID) 交给 await_correction); (3) _check_decision_id 同时查 CorrectionNotice. 第 6 条验收写明 RESUME_REQUIRED 的触发和补做的读回. MD-7 在通用人工程序机制对齐时也要定同样的三处."
+  },
+  {
+   "key": "MD-7/MD-11",
+   "severity": "major",
+   "problem": "重新沟通的路径前后矛盾. MD-11 要求 FIN-09 判定不匹配, 错报回到 communicated 后, communicate 节点用 rerun 再跑一次 FIN-08 并重新登记; 但 MD-7 第 5 条规定 \"错报不是 identified → INVALID_VALUE\", 第 6 条又说空执行条件里 \"仅 communicated 重沟通除外\". 同意更正之后的效果也只写了 identified → communicated, 没写 communicated 再次登记时怎么变. 另外 MD-11 的分流规则是 \"有 communicated → communicate\", 分不清 \"刚从 FIN-09 退回的\" 和 \"还在等客户更正的\". 只要 CorrectionNotice 只覆盖部分错报, 剩下的 communicated 错报就会被误送去重新沟通, 形成循环.",
+   "evidence": "草稿 MD-7 验收 5, 6 与 MD-11 目标及验收 2; 规格书 12.3 Misstatement 子状态机 (2017-2023 行): verifying 的出口之一是 communicated (重新沟通); 规格书第 10 节 P3 (1425 行)",
+   "fix": "在 MD-1 契约里给错报加一个标记, 比如 needs_recommunication 或 verification_result: mismatch, 由 FIN-09 的 verification 更新写入. MD-7 的校验改成: 允许 identified, 或带该标记的 communicated; 重新登记后清掉标记. MD-11 按这个标记分流, 不再按 status. MD-8 写明部分通知时其余 communicated 错报继续等待 (回到 await_correction)."
+  },
+  {
+   "key": "MD-3/MD-10",
+   "severity": "major",
+   "problem": "FIN-03 或 FIN-09 失败后没有出路, 流程会卡死. FIN-03.yaml 设了 manual_result_allowed false, LLM 一直失败时 failed 任务只能 rerun; FIN-09 失败时: 有 V02 例外的建 unattributed 任务, 允许的决定是 override 和 misstatement, 但目标是例外, 没有带 misstatement_update 的判断; 没有例外的建 failed 任务, 只能 rerun. 这几种处理都推进不了错报状态. 错报会一直停在 identified (未分类) 或 verifying, MD-12 里 FIN-04 遇到这类错报会失败并转人工, 而那个任务也只能 rerun, 走成死循环. 接真实 LLM 时这是会实际发生的.",
+   "evidence": "src/backend/services/review_queue.py:60-66 allowed (failed 只在 manual_result_allowed 时给 manual_result); src/backend/agents/fieldwork.py:419-423 unattributed 时任务目标是第一条规则例外; 草稿 MD-2 验收 1 (manual_result_allowed false), MD-10 验收 6, MD-12 验收 4; 规格书 UC-04 矩阵 failed 允许 manual_result",
+   "fix": "FIN-03.yaml 和 FIN-09.yaml 设 manual_result_allowed: true, MD-5 把 misstatement_update 的效果扩到 manual_result: 人给出分类或验证结果, 同一事务出错报新版本. FIN-09 的 unattributed 任务, override 时同样要求并接受 misstatement_update. 两种情况各加一条验收, 写明最终错报状态."
+  },
+  {
+   "key": "MD-5",
+   "severity": "major",
+   "problem": "FIN-03 和 FIN-09 的 normal 任务仍沿用 {confirm, override, misstatement} 这套决定. 如果审计师对 FIN-03 或 FIN-09 的判断选了 misstatement, 系统会按 misstatement_effects 再建一条 M-{决定 ID}, 同一笔差错就被重复计成两条错报, 新的那条又会进入分类和沟通流程.",
+   "evidence": "src/backend/services/review_queue.py:62-63 normal 任务允许 misstatement; src/backend/orchestration/decisions.py:363-382 misstatement_effects 不区分程序",
+   "fix": "MD-5 (或 MD-1) 给程序模板加一个开关, 比如 misstatement_decision_allowed: false, 或按 Judgment.misstatement_update 非空判断. 对这类判断, allowed 去掉 misstatement, 提交时报 DECISION_NOT_ALLOWED, 并加一条验收. 接口文档第 7 节的允许决定矩阵同步修改."
+  },
+  {
+   "key": "MD-1",
+   "severity": "major",
+   "problem": "第 7 条验收 (\"现有全部测试通过, R55 结果不变\") 与第 3 条 (R19 路径建的错报 status 为 identified) 互相矛盾. 现有 3 个测试断言 status 为 \"uncorrected\", 接口文档第 7 节的效果表也写着 status uncorrected, 这些都不在 scope 里. 另外, 新加的 \"uncorrected 须带 uncorrected_basis\" 校验会让已经落库的旧错报 (R56 真实库) 读出时报 ValidationError.",
+   "evidence": "tests/test_e2e_mock.py:219, tests/test_flow.py:325, tests/test_review_decisions.py:610 断言 \"uncorrected\"; docs/开发接口文档.md:1016 (misstatement 效果 status uncorrected), :342; src/backend/contracts/models.py:655",
+   "fix": "scope 加上 tests/test_e2e_mock.py, tests/test_flow.py, tests/test_review_decisions.py 和接口文档第 7 节效果表; 第 7 条验收改成 \"上述断言改为 identified, 其余结果不变\". uncorrected_basis 的必填校验要么只对新写入的对象生效, 要么写明旧数据要迁移 (或者测试库重建), 并告知 B."
+  },
+  {
+   "key": "MD-17",
+   "severity": "major",
+   "problem": "第 5 条验收 (沿用 R55 验收 5: tests/fixtures/llm 下每个文件在流程中恰好读到一次, 并通过四级校验) 在主路径上成立不了. FIN-09 在拒绝路径是空执行, FIN-09/default.json 不会被读到; MD-18 加的 unqualified-r1.json 在保留意见路径也读不到. 而且现有断言拿留痕里的 fixture_key 和文件名做比对, FIN-03 请求的 key 是 M-D-…, 文件名却是 default, 对不上. 主路径下 AJE 行没有载入, 即使单独校验 FIN-09/default.json, 引用这一级也过不了.",
+   "evidence": "tests/test_e2e_mock.py:332-339 assert_fixtures_used_once 按 (procedure_id, fixture_key) 与文件名 stem 比对; 草稿 MD-17 验收 5, MD-9 验收 3 (指针 AJE-2026-001-1)",
+   "fix": "把验收 5 改成两条路径的合集: MD-17 与 MD-18 两次全流程的 llm_call 合起来覆盖全部 fixture. 比对规则改为: 请求的 key 没有同名文件时按 default 计. 或者 FIN-03/FIN-09 改用来源对象 ID 作 fixture_key (例如 SI-2026-0612), 命名 fixture 就能直接匹配. 同时改 assert_fixtures_used_once, 写进 MD-17 和 MD-18 的 scope."
+  },
+  {
+   "key": "MD-9/MD-10",
+   "severity": "major",
+   "problem": "FIN-09 的测试数据和校验上下文不足以支撑验收. (1) MD-10 第 3 条 (部分更正) 和第 4 条 (不匹配) 要产出判断, 但 mock 只有一个 default.json (fully_corrected true, 结论写的是完整更正). 按 MD-9 第 4 条, 剩余额 4200000 时它会被判为语义失败, 结果拿到的是失败任务, 不是验收要的判断. (2) MD-9 的语义校验需要规则算出的剩余额和匹配到的分录科目, 但 judge 内部只用 ctx.rule_findings 构造 ValidationContext, 没有地方把这两样带进去. MD-9 和 MD-10 的 scope 都没有 contracts/services.py.",
+   "evidence": "src/backend/services/judgment_engine.py:572-584 judge 只传 ValidationContext(rule_findings=...); src/backend/contracts/services.py ValidationContext 字段; 草稿 MD-9 验收 4, MD-10 验收 3, 4",
+   "fix": "MD-9 契约加 ValidationContext (或 JudgmentContext) 的 expected_residual_cents 和 matched_accounts, scope 加 contracts/services.py 和 judgment_engine.judge 的转发. MD-10 的部分更正和不匹配用例写明用脚本 LLM (FakeLLM 按 key 返回), 或另外提供 FIN-09 的命名 fixture, 并写明各自的 fully_corrected 和 other_accounts."
+  },
+  {
+   "key": "MD-7",
+   "severity": "major",
+   "problem": "first_misstatement_communicated_at 按草稿做法加进 STATE_REFS 行不通. resolve_params 对 STATE_REFS 的处理是 state[ref], 值为 None 时直接抛 ValueError. 这个名字不是 EngagementState 的键 (需要从 misstatements 推算), 而第 7 条验收又要求 \"没有已沟通错报时为 None, 由 GEN-05 处理\". GEN-05 在 P2 首次执行时一定拿到 None, 会直接报参数解析失败.",
+   "evidence": "src/backend/services/procedure_library.py:124-128 (resolved = state[ref]; None 抛 ValueError); procedure_library.py:16 STATE_REFS; 规格书 6.3 GEN-05 params (895 行)",
+   "fix": "在 procedure_library 里新增一类派生引用, 比如 DERIVED_REFS, 由函数从 state.misstatements 计算, 并声明允许为 None (例如约定为 null 时规则 SQL 用 COALESCE 处理). 写进接口文档第 8.1 节, 同时与 GEN-05 组对齐 None 时的 SQL 语义. 验收加一条: 在 P2, GEN-05 的参数解析不抛错."
+  },
+  {
+   "key": "MD-3",
+   "severity": "major",
+   "problem": "FIN-03 要读的分录行 (SJ-2026-0612-1/-2) 没有现成的端口可取. 外部依赖里写的 \"现有 rows 查询已支持\" 不成立: FinancialDataStore 只有按行 ID 取一行的 record, 和只给 RuleEngine 用的 query; 按凭证号或按 source_doc 取分录行的方法不存在, FakeFinancialStore 也只有 record. FIN-03 的 rules 又是 [], 走不到 RuleEngine.",
+   "evidence": "src/backend/contracts/ports.py:54-63 (query 注明只给 RuleEngine 用, record 只取一行); tests/fakes.py:481-484 (FakeFinancialStore 其余方法用到时再补); 草稿 MD-2 验收 1 rules []",
+   "fix": "二选一, 都要写进 MD-2 或 MD-3. (a) FIN-03.yaml 加一条 emit rows 规则, 按 :source_docs 取分录 (SQL 归 B, 参数在建 Run 时由 A 从错报来源推出); (b) FinancialDataStore 新增 journal_entries(eid, source_docs) 端口 (契约由 A 定, B 实现). 外部依赖改成明确的新契约, 并写进接口文档第 4 节."
+  },
+  {
+   "key": "MD-15",
+   "severity": "major",
+   "problem": "盲判的隐藏只交给 C 在 \"复核页\" 调 blind_view, 但现有多个 API 会直接返回 AI 结论和推理, 盲判形同虚设: GET /judgments/{jid} (含全部历史版本), GET /procedures/{pid} (列出全部判断), GET /review-tasks, GET /trail/{trail_id} (llm_call 留痕的 payload 里有模型原文 raw). 规格书要求在 A10 这一层隐藏, 而不是靠某个页面自觉.",
+   "evidence": "src/backend/api/routes/reviews.py:36, 83-109, 111-130; src/backend/api/routes/reports.py:57-75; docs/开发接口文档.md:795 (llm_call payload 含 raw); 规格书 9.5 盲测行 (A10 隐藏 AI 结论只给证据)",
+   "fix": "把隐藏放到 A 这边强制执行: 在 StateQuery 提供盲判过滤后的判断视图, 或在 contracts 提供统一过滤函数, 并在接口文档第 10 节列出必须套用它的全部端点 (judgments, procedures, review-tasks, trail 详情). 未答之前, trail 详情对该判断的 llm_call 返回 403 或去掉 raw. 加验收: 未答时上述每个端点都拿不到 conclusion 和 proposed_action."
+  },
+  {
+   "key": "MD-7/MD-9",
+   "severity": "minor",
+   "problem": "ASA 450 第 8 段原文中间有脚注标号, pdfplumber 抽出来是 \"management.3 The auditor shall request...\". 现有逐字对照测试的 normalise 不去脚注, 片段原文如果不带这个 \"3\", test_fragment_text_is_verbatim_from_pdf 会失败; 带上它, 又会把 \"3\" 原样送进提示词.",
+   "evidence": "用 pdfplumber 抽 docs/参考资料/01_审计准则_ASA/ASA_450.pdf 第 10 页, 得到 \"...with the appropriate level of management.3 The auditor shall request management to correct those misstatements.\"; tests/test_knowledge.py:78-82 normalise",
+   "fix": "MD-7 写明处理方式: 对照测试的 normalise 增加去除句末脚注数字的规则 (例如 \\.(\\d+) (?=[A-Z]) → \". \"), 并补一条单元测试; 或在 ASA450.yaml 里加 footnotes_stripped 注释说明. 第 7 段 (MD-9) 与第 9 段已核对, 段号与原文正确."
+  },
+  {
+   "key": "MD-7",
+   "severity": "minor",
+   "problem": "管理层拒绝更正时, 错报从 identified 直接写成 uncorrected, 跳过了 communicated. 规格书的子状态机里 uncorrected 是从 communicated 分出来的 (沟通后拒绝或停止等待), 没有 identified → uncorrected 这条迁移. 版本历史里看不出 \"已沟通\" 这一步.",
+   "evidence": "规格书 12.3 Misstatement 子状态机 (2017-2023 行): \"identified → communicated → ... └→ uncorrected (拒绝更正或人决定停止等待)\" 分支挂在 communicated 下; 草稿 MD-7 验收 3 (M v3 uncorrected)",
+   "fix": "二选一并写进 MD-1 的状态迁移表: (a) 拒绝时同一事务写两版 (v3 communicated, v4 uncorrected), MD-17 的最新版号随之改为 v4; (b) 明确把 identified → uncorrected (须同时带 communicated_at) 列为压缩迁移, 在接口文档第 2.5 节说明与规格书的差异."
+  },
+  {
+   "key": "MD-2",
+   "severity": "minor",
+   "problem": "新增 FIN-03.yaml 后, fixed_procedures 会在项目启动时把 FIN-03 实例化进程序包 (P3 没有 trigger, 属于固定集). MD-2 之后到 MD-6 接图之前, FIN-03 会一直停在 planned. 第 7 条 \"现有测试不变\" 不准确: test_assemble 断言固定集为 10 条. MD-7 (FIN-08) 和 MD-9 (FIN-09) 也会各自再让它加 1.",
+   "evidence": "src/backend/orchestration/runner.py:21-27 fixed_procedures 收全部非 P2 程序; tests/test_assemble.py:52 len(procedure_pack) == 10",
+   "fix": "MD-2, MD-7, MD-9 的 scope 都加上 tests/test_assemble.py, 验收写明固定集条数依次为 11, 12, 13; 并注明 FIN-03 在 MD-6 前保持 planned, 总览照样显示."
+  },
+  {
+   "key": "MD-12",
+   "severity": "minor",
+   "problem": "第 5 条验收引用的 \"test_knowledge 的依赖与阶段检查\" 并不存在. 现有代码只在 P2 调度时读 depends_on, P3 的依赖没有任何地方校验, 所以写成 [FIN-03, FIN-09] 也测不出对错.",
+   "evidence": "tests/test_knowledge.py (只有 test_all_procedures_load, test_assembly_and_layers 等, 没有依赖或阶段检查); src/backend/orchestration/scheduler.py:20, 49 只看 P2",
+   "fix": "改成新增一个测试: 每条程序的 depends_on 都在程序库里, 前置程序的阶段不晚于本程序, 且 P3 节点在 NODE_PROCEDURES 中的执行顺序与依赖一致. 或者删掉这条验收."
+  },
+  {
+   "key": "MD-6/MD-13/MD-14",
+   "severity": "minor",
+   "problem": "文档同步列得不全. Demo需求文档里还有几处与本组冲突: 第 2 节程序清单 (17 条), 第 4 节决定表 (\"本版一律按未更正处理\"), 第 6 节 \"不做: 自主度动态降级, 盲测抽查; 错报沟通与更正 (FIN-03, FIN-08, FIN-09)\", 第 7 节准则片段表 (缺 ASA240-P36, ASA450-P07/P08/P09). 接口文档第 5 节写着 judge 的 \"autonomy_level 取模板\", 而 MD-14 要改它, 但不在 scope 里. MD-14 的 scope 也漏了 tests/test_judgment_engine.py:134 (断言判断为 L2).",
+   "evidence": "docs/Demo需求文档.md:107, 186-188, 第 2 节和第 7 节表; docs/开发接口文档.md:799; tests/test_judgment_engine.py:134",
+   "fix": "MD-2, MD-7, MD-9 加上 Demo需求文档第 2 节和第 7 节; MD-1 加上第 4 节决定表; MD-13 加上第 6 节第 187 行; MD-14 加上接口文档第 5 节的 judge 说明和 tests/test_judgment_engine.py."
+  },
+  {
+   "key": "MD-13",
+   "severity": "minor",
+   "problem": "Judgment.blind_test 的取值是 none|consistent|inconsistent, 少了规格书里的 pending. 盲判任务还没答的时候, 判断上没法标出 \"盲测进行中\".",
+   "evidence": "规格书 12.2 Judgment.blindTest: {none, pending, consistent, inconsistent} (1660 行); 草稿 contract_changes \"blind_test (none|consistent|inconsistent)\"",
+   "fix": "补上 pending: 生成 blind 判断时置 pending, 终局决定时写 consistent 或 inconsistent; 或者在接口文档里写明省略 pending 的理由."
+  },
+  {
+   "key": "MD-8",
+   "severity": "minor",
+   "problem": "停在 await_correction 时, 复核决定照样能通过校验. 等待载荷 {awaiting: correction} 不带 procedure_id, 而现有过滤条件对 procedure_id 为 None 的载荷一律放行, 复核决定的 ID 会被当作恢复值交给 await_correction. 另外, CorrectionNotice 只覆盖部分 communicated 错报时, 节点该继续等还是该放行, 草稿没写.",
+   "evidence": "src/backend/orchestration/decisions.py:723 (w.get(\"procedure_id\") in (None, task.procedure_id) 即放行); src/backend/orchestration/query.py:102 awaiting_review 对所有 interrupts 都为真",
+   "fix": "MD-8 加两条验收: 停在 await_correction 时提交 ReviewRecord → NOT_AWAITING_REVIEW (过滤改成按 awaiting 类型判断); 通知只列一部分 communicated 错报时, 节点写出这部分的 verifying 后, 其余的继续等待 (或者明确要求通知必须覆盖全部 communicated 错报, 否则报 INVALID_VALUE)."
+  },
+  {
+   "key": "MD-5",
+   "severity": "minor",
+   "problem": "按 L3/L4 自动确认时, A8 的片段里会直接带错报新版本, 但错报没有 run_id. 按现有重放规则 (按 run_id 取回, 另有一份无 run_id 产出的清单), 重放时这一版错报取不回来, 片段就残缺了.",
+   "evidence": "docs/开发接口文档.md 第 3 节重放规则 (不带 run_id 的产出只列评分卡, 分析结果, 汇总表, 报告, 函证等); src/backend/orchestration/nodes.py:139 stored_outputs",
+   "fix": "MD-5 的 scope 加 nodes.stored_outputs: 写入者为 A8 时, 取回本次执行的判断所指错报 (misstatement_update.misstatement_id) 的最新版本. 接口文档第 3 节重放规则同步修改, 并加一条重放验收."
+  },
+  {
+   "key": "MD-15/MD-16",
+   "severity": "minor",
+   "problem": "粒度和覆盖面有问题. MD-15 同时做新决定类型, 任务改版, 比对函数, 一致率写入, 隐藏视图, 恢复补做和 4 个文档章节, 明显超过 M. scope 也没有 nodes.py: 如果 P3 节点 (MD-4) 里出现 blind 判断, 节点得把 blind_answer 当作 \"任务还没决\" 继续等. MD-16 只考虑了 P2: P3 节点里 L3 自动关闭的 FIN-03/FIN-09 判断如果被抽中, 节点退出后这个抽样任务就再也提交不了 (check_review_record 要求正在等该程序).",
+   "evidence": "草稿 MD-15 scope; src/backend/orchestration/decisions.py:723; 规格书 18 节伪代码 sample_blind (2759-2760 行)",
+   "fix": "MD-15 拆成两条: (a) blind_answer 决定, 比对与一致率, 恢复补做; (b) 盲判过滤视图与 API 约束 (见上一条 major). 两条都把 nodes.py 的节点内等待对 blind_answer 的处理写进验收. MD-16 写明抽样只针对 P2 判断, P3 程序本版不抽, 或者定义 P3 节点在抽样任务决完前继续等待."
+  },
+  {
+   "key": "MD-13",
+   "severity": "minor",
+   "problem": "main.py 里 AgreementStats 的构造归属不清. Postgres 实现是 B 的组件, 按 Q16, A 只改 A 组件的构造行; 而 AgentDeps 加了必填字段之后, B 没交付之前 build_deps 无从构造, 真实应用会启动不了.",
+   "evidence": "需求清单 Q16 (A 只改 A 组件的构造与挂载行); 草稿 MD-13 scope \"src/backend/main.py (只改 A 组件构造行, 按 Q16)\"",
+   "fix": "写明 B 交付前的过渡做法: A 提供一个基于 AuditOutputStore 的实现, 从各项目已终局判断的 blind_test 现算 (跨项目合并), 作为 A 组件在 main.py 构造; B 的表就绪后再替换. 或者 AgentDeps.agreement_stats 可为空, 为空时不触发一致率降级, 并在验收里写明."
+  },
+  {
+   "key": "MD-3",
+   "severity": "minor",
+   "problem": "第 6 条验收里的合成错报 M-D-TEST-2 引用了 X-CSH-05-1-B01-1, 金额却写成 500000. 数据集里这条例外的金额是 −5000000 (BA-01 账面多 50,000 澳元), 而 500000 还低于明显微小门槛 600000, 和真实数据对不上, 后面复用这组数据会带来误导.",
+   "evidence": "docs/合成数据集设计.md 第 7 节第 12 行 X-CSH-05-1-B01-1 amount −5000000; tests/test_e2e_mock.py:186-191",
+   "fix": "金额改为 5000000, overstated (Cash 高估); 或者换一个不引用真实例外的 exception_id."
+  }
+ ],
+ "missing": [
+  "规格书第 10 节 P3 (1425 行) 写的 \"等待更正超时由 A10 提醒, 并请审计师决定是否停止等待\": 草稿只有 stop_waiting 决定, 没有等待期限参数, 到期提醒, 也没有总览上的超时显示.",
+  "规格书 9.2 \"一致或不一致的结果同时用于校准 8.4 的置信度权重\": 草稿没做, 也没列进本组不做的清单.",
+  "规格书第 14 节 \"引用失败的步骤标 unsupported 并降级, 语义失败降级转人工\": MD-13 的降级规则表里没有 \"存在 unsupported 推理步骤\" 这一项.",
+  "规格书 12.2 Misstatement.fraudIndicative 的注释 \"为真则进环 3 阻断\": 草稿只在待拍板和风险里提到 ASA 240 第 37 段, 没写明本版对 fraud_indicative 为真的处理 (不阻断) 与规格书不一致, 也没有在 FIN-01 闸门材料或报告里呈报这个标记的验收.",
+  "FIN-01 闸门材料 (CompletionMaterial) 要呈报管理层回复原文和拒绝理由 (ASA 450 第 9 段要求评价时考虑管理层不更正的理由): contract_changes 里提了一句, 但没有任何一条需求的验收覆盖它.",
+  "C 的 GET /engagements/{eid}/misstatements 和 FIN-01 闸门页要显示错报生命周期 (status, 回复, 剩余额, 已更正列表 corrected_ids): 只在 MD-1 的外部依赖里一笔带过, 没有给出 C 需要的字段清单和对应的接口文档第 10 节改动.",
+  "MD-6 加了新节点后, 图节点名会出现在 interrupt 载荷和总览里: query.py 的总览和前端怎样区分 \"等 FIN-03 复核\", \"等 FIN-08 登记\", \"等客户更正\" 三种等待, 只有 MD-8 加了 awaiting_correction, FIN-08 的人工登记等待没有对应字段."
+ ],
+ "extra_questions": [
+  "FIN-03 (错报分类) 和 FIN-09 (更正验证) 的大模型反复失败时, 是否允许审计师直接手工给出分类或验证结果, 让流程继续往下走? (推荐允许, 否则错报会卡住, 报告出不了)",
+  "盲判时隐藏 AI 结论这件事, 由后端在所有查询接口统一拦住, 还是交给前端页面自行隐藏? (推荐后端统一拦, 现在判断详情, 留痕详情等接口都能直接看到 AI 结论)",
+  "客户只更正了部分错报, 或者更正分录与错报对不上需要重新沟通时, 是否本版就做 \"多轮沟通, 多轮更正\" 的循环? 还是本版只支持一轮, 对不上就按未更正处理?"
+ ],
+ "verdict": "需修改后再定稿. 程序归属, 引擎, 自主度, 依赖, 硬约束 (A1/A5/A9 不调 LLM, 人只经 DecisionSubmit 提交决定, Agent 只读 Store) 都与规格书一致. 置信度算例 (0.85, 0.8625, 0.5625), 抽样哈希 206, 留痕行数 (14/18/19), 数据日期与星期都已核对无误. ASA 240 第 36 段, ASA 450 第 7-9 段的段号与原文也已核对正确. 主要问题有六类: (1) 新的决定对象 CorrectionNotice (以及 FIN-08 的登记) 没有接入恢复和 RESUME_REQUIRED 判定; (2) 重新沟通在 MD-7 与 MD-11 之间前后矛盾, 分流规则会误判还在等更正的错报; (3) FIN-03/FIN-09 失败, 以及审计师对其判断选 misstatement 时, 错报要么卡死要么重复建; (4) MD-1 和 MD-17 的部分验收与现有测试或 fixture 机制冲突, 按原文写不出能通过的测试; (5) FIN-09 的校验上下文与 mock 数据不够, 派生参数与取分录行的契约缺失; (6) 盲判隐藏只靠前端一个页面, 多个 API 会泄露 AI 结论. 以上 major 问题按建议修改后, 本组可以按 MD-1 → MD-18 的顺序开工; 拆分建议见 MD-15 那条."
+}

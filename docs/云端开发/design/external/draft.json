@@ -1,0 +1,525 @@
+{
+ "requirements": [
+  {
+   "key": "X1",
+   "title": "外部数据定位与缺失时 skip",
+   "goal": "给依赖 data/external 的测试一套统一的定位, 快照校验与 skip 机制: 在 worktree, 其他组员机器与 CI 上目录缺失时一律 skip, 不报错; 快照被重新导出 (Xero Demo 每 28 天重置) 时也 skip, 并说明原因.",
+   "scope_files": [
+    "tests/external.py (新)",
+    "tests/test_external.py (新)",
+    "tests/fixtures/xero/SHA256SUMS (新)",
+    "tests/fixtures/cuad/SHA256SUMS (新)",
+    "pyproject.toml ([tool.pytest.ini_options] markers)",
+    "CLAUDE.md 测试一节 (共享文档, 只加两行说明)"
+   ],
+   "basis": [
+    "CLAUDE.md 约定: 外部数据集放 data/external/<名称>/, 大文件不入库; 测试一节: 连库或调真实 LLM 的标 slow",
+    "WT/.gitignore 第 76 行 /data/* 忽略 data/ 下新目录; 实测 WT/data 下没有 external, 外部数据只在主 checkout 的 assignment/data/external (xero/raw 7 个文件, cuad/CUAD_v1)",
+    "pyproject.toml addopts = \"-m 'not slow'\", markers 只注册了 slow, R59 写的 live 标记未定义",
+    "tests/conftest.py 强制 LLM_MODE=mock; tests/test_llm_live.py 已有联网测试读 .env 的做法",
+    "data/external/xero/README.md: Demo 每 28 天重置, 日期按重置当天平移, 是一次性快照"
+   ],
+   "prerequisites": [],
+   "external_deps": [
+    "无. 归属 A (测试工具)"
+   ],
+   "acceptance": [
+    "1. tests/external.py 提供 external_root(): 先取环境变量 EXTERNAL_DATA_ROOT; 未设时取 git rev-parse --git-common-dir 的上级目录下的 data/external (使 worktree 找到主 checkout 的数据); 都不存在时返回仓库根下 data/external. 在 WT (nostalgic-heisenberg-882de9) 中调用, 返回 .../assignment/data/external, 且能找到 xero/raw/journal_report.xlsx 与 cuad/CUAD_v1/master_clauses.csv.",
+    "2. require_external(name, files) 返回目录 Path; 目录或任一文件缺失时 pytest.skip, 原因含 \"data/external/<name>\" 与缺失文件名. EXTERNAL_DATA_ROOT=/nonexistent 时全部依赖外部数据的测试为 skipped, 0 failed, 0 error.",
+    "3. require_snapshot(name) 按 tests/fixtures/<name>/SHA256SUMS 校验: Xero 锁 raw/ 下 7 个文件, CUAD 锁 master_clauses.csv, CUAD_v1.json 与 X3 金标准的 10 份 PDF. 任一 sha256 不符时 skip, 原因写明 \"快照已变, 预期值失效, 须重新锁定\"; 设 EXTERNAL_STRICT=1 时改为 fail.",
+    "4. require_live_llm() 在 .env 未配 LLM_API_KEY 或 LLM_MODEL 时 skip; 有配置时返回直接构造的 LiveLLMClient (沿用 test_llm_live.py 取配置的方式, 不改 conftest 的 mock 强制).",
+    "5. pyproject 注册 external (依赖 data/external) 与 live (调真实 LLM, 必须同时标 slow) 两个标记; addopts 不变. 默认 uv run pytest 在无外部数据时结果与现在相同 (只多出 skipped).",
+    "6. test_external.py 不依赖真实外部数据: 用 tmp_path 造假 git common dir 与假快照, 覆盖环境变量优先, worktree 解析, 缺目录 skip, sha 不符 skip 与 EXTERNAL_STRICT 四种情况."
+   ],
+   "size": "S",
+   "runs": "offline"
+  },
+  {
+   "key": "X2",
+   "title": "真实 LLM 调用计数与预算上限",
+   "goal": "所有真实 LLM 测试 (R59, X5, X8) 共用一个包装客户端: 统计每个程序的调用次数, 尝试次数, 校验失败级别与 token 数; 超出调用次数或 token 上限时立即停止并让测试失败, 不再发请求; 结束时打印用量. 不写死单价, 单价由环境变量给出时才折算金额.",
+   "scope_files": [
+    "tests/tools/__init__.py (新)",
+    "tests/tools/live_budget.py (新)",
+    "tests/test_live_budget.py (新)"
+   ],
+   "basis": [
+    "需求清单 R59 验收 4: llm_call 留痕的 model 与 token 数, 测试结束打印各程序尝试次数与校验失败级别统计",
+    "src/backend/services/judgment_engine.py 第 71 行 MAX_ATTEMPTS = 3 (首次加最多 2 次语法与结构重试; 引用级失败不重试)",
+    "src/backend/adapters/llm.py LiveLLMClient: token 数取自响应 (R58 验收 2)"
+   ],
+   "prerequisites": [
+    "R58",
+    "X1"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "1. BudgetedLLMClient(inner, max_calls, max_input_tokens, max_output_tokens) 实现 LLMClient 接口; 第 max_calls+1 次调用或累计 token 超限后不再调用 inner, 抛 BudgetExceeded, 消息含已用调用数与 token 数.",
+    "2. 上限可由环境变量 LIVE_MAX_CALLS, LIVE_MAX_INPUT_TOKENS, LIVE_MAX_OUTPUT_TOKENS 覆盖; 各测试的默认上限写在测试文件里 (R59: 60 次; X5: 48 次, 输入 350k, 输出 120k; X8: 51 次, 输入 200k, 输出 60k).",
+    "3. summary() 按程序编号列出调用数, 尝试次数分布, 校验失败级别计数 (语法, 结构, 引用, 业务), 输入与输出 token; 只有设了 LLM_PRICE_INPUT_PER_MTOK 与 LLM_PRICE_OUTPUT_PER_MTOK 时才输出金额, 否则只输出 token.",
+    "4. 汇总写到 var/eval/<测试名>-<UTC 时间>.json (var/ 已被忽略), 不含密钥与 Authorization 头.",
+    "5. 单元测试用 MockLLMClient 作 inner, 不联网: 超次数, 超 token, 正常累计, 无单价时不出金额四种情况."
+   ],
+   "size": "S",
+   "runs": "offline"
+  },
+  {
+   "key": "X3",
+   "title": "CUAD 离线 fixture, 金标准与评分函数",
+   "goal": "在仓库里放一小份 CUAD 节选与人工核对的金标准, 写好评分函数, 让 DOC-04 抽取结果的评分与引用校验能离线跑 (CI 可跑), 并为 X5 的真实 LLM 评测提供真值.",
+   "scope_files": [
+    "tests/fixtures/cuad/README.md (新, 署名与改动说明)",
+    "tests/fixtures/cuad/gold.json (新, 10 份金标准)",
+    "tests/fixtures/cuad/pages/CUAD-01.json, CUAD-03.json, CUAD-05.json (新, 3 份逐页文本)",
+    "tests/fixtures/llm/DOC-04/CUAD-01.json, CUAD-03.json (新, mock 输出)",
+    "tests/tools/cuad_eval.py (新)",
+    "tests/test_cuad_eval.py (新)"
+   ],
+   "basis": [
+    "CUAD 摸底第 1 节: master_clauses.csv 510 行 x 83 列, 41 类各两列; Parties-Answer 509 份非空, Agreement Date-Answer 465 份 (m/d/yy 416 条, 含 [] 遮盖 49 条), 全文 grep ABN 0 份",
+    "CUAD 摸底第 2 节: 10 份候选样本 (106 页, 301601 字符); LIMEENERGY 签订日 CUAD 写 7/7/99, 正文第 1 页为 7th day of September, 1999; PAXMEDICA CUAD 写 5/25/08, 正文为 May 25th, 2018; SPARKLING 签订日 05/[]/2000 被遮盖; LIMEENERGY 10 页而末页印 Page -14-",
+    "CUAD 摸底第 5 节: CC BY 4.0, 署名 The Atticus Project, Zenodo 4595826; 对底层 EDGAR 合同的许可状态不作保证",
+    "src/backend/knowledge/prompts/DOC-04.md.j2: 被审计单位是供应方, counterparty 为客户, guarantee 指超出标准质保的保证, terms 7 类",
+    "src/backend/services/judgment_engine.py 第 393-420 行 _extraction: 只校验页码在 1 到 page_count 之间, 不校验条款文本是否在该页"
+   ],
+   "prerequisites": [
+    "X1",
+    "R54"
+   ],
+   "external_deps": [
+    "金标准中 payment, control_transfer, return_right, rebate 四类与 REV-03 的 proposed_action 需人工确认 (见待拍板: 谁来标)"
+   ],
+   "acceptance": [
+    "1. gold.json 10 条, 别名 CUAD-01 至 CUAD-10 依次对应 NETGEAR Distributor (8 页), NANOPHASE Distributor (16), LIMEENERGY Distributor (10), Agape Supply (13), ULTRAGENYX Supply (7), HealthcareIntegratedTechnologies Reseller (5), Apollo Endosurgery Manufacturing (21), PAXMEDICA Service (7), SPARKLING Maintenance (7), Euromedia License (12); 每条含 CSV Filename, PDF 相对路径, page_count, client_name (卖方, 逐份人工定), counterparty 与别名表, 可接受的 sign_date 集合 (LIMEENERGY 为 1999-09-07, PAXMEDICA 为 2018-05-25, 并注明 CUAD 原值; SPARKLING 为 null 不计分), counterparty_abn 恒为 null, amount_cents (人工定, 框架协议为 null).",
+    "2. 6 份货物合同 (CUAD-01 至 06) 另含四类条款金标准 (起始页与原文前 60 个字母数字锚点) 与 REV-03 的 proposed_action 金标准; termination 真值由 CSV 的 Termination For Convenience, Notice Period To Terminate Renewal, Post-Termination Services 摘录自动生成.",
+    "3. 合同 ID 用别名, 不用 CUAD 原文件名 (含逗号, 空格与 #, 会进入 {contract_id}-T{n}); README 列出别名到原文件名的映射, 署名句 \"Contract Understanding Atticus Dataset (CUAD) v1, The Atticus Project, CC BY 4.0\", 链接与改动说明 (pdfplumber 抽取, 节选, 人工标注, 模型生成). 仓库只入逐页文本, 不入 PDF.",
+    "4. cuad_eval 单元测试: parse_cuad_date(\"11/5/96\") = 1996-11-05, (\"7/7/99\") = 1999-07-07, (\"10/24/05\") = 2005-10-24, (\"05/[]/2000\") = None; normalize_party 使 'Ingram Micro (\"Distributor\")' 与 'INGRAM MICRO INC.' 判为同一方 (去后缀 inc/corp/llc/ltd/limited/co/pty, difflib 相似度 ≥0.9 或互相包含); split_omitted 按 <omitted> 拆段; locate 在 CUAD-01 逐页文本中把签订日摘录定位到第 1 页; fabricated() 对文本在第 3 页而声明第 2 页的条款返回 True.",
+    "5. 引用校验: CUAD-03 (LIMEENERGY, page_count 10) 的抽取把某条款页码写成印刷页码 14 时, OutputValidator 判引用级失败; tests/fixtures/llm/DOC-04/CUAD-01.json 原样通过四级校验, 经 build_contract 得到 counterparty_abn 与 amount_cents 都为 null 的 Contract.",
+    "6. 全部测试不读 data/external, 默认 pytest 运行, 耗时 < 5 秒."
+   ],
+   "size": "M",
+   "runs": "offline"
+  },
+  {
+   "key": "X4",
+   "title": "CUAD 本地原件核对与页码真值",
+   "goal": "在有 data/external/cuad 的机器上核对文件名映射, 金标准 PDF 与仓库内逐页文本一致, 并从 PDF 自动推出页码真值; 目录缺失时 skip.",
+   "scope_files": [
+    "tests/test_cuad_local.py (新)",
+    "tests/tools/cuad_eval.py (文件名映射与逐页定位函数)"
+   ],
+   "basis": [
+    "CUAD 摸底第 0 节: PDF 311 个 .PDF 加 199 个 .pdf; 文件名把 & 与 ' 改成 _; Kallo 一行末尾多出 .pdf'; Harpoon 多 _Option Agreement 后缀; 4 份末尾带空格或连字符; 规范化后七类 174 份全部对上",
+    "CUAD 摸底第 2 节: 20 类摘录 2864 段, 只在一页 2299, 多页 550 (其中 Parties 465), 跨页 7, 找不到 8, 可定位率 99.5%; 七类 174 份全量定位约 1-3 分钟",
+    "src/backend/persistence/stores.py 第 335-340 行 FileEvidenceStore.pages 用 pdfplumber 逐页抽取"
+   ],
+   "prerequisites": [
+    "X1",
+    "X3"
+   ],
+   "external_deps": [
+    "本机 data/external/cuad (CUAD_v1.zip md5 c38f490a984420b8a62600db401fafd5)"
+   ],
+   "acceptance": [
+    "1. 标 external, 目录缺失或快照不符时 skip.",
+    "2. 文件名映射: master_clauses.csv 510 行与 full_contract_pdf 下 510 个 PDF 一一对应 (NFC 规范化, 去扩展名与首尾空白, & 与 ' 换成 _, Kallo 与 Harpoon 特判); 七类 (Distributor 32, Supply 18, Reseller 12, Manufacturing 17, Service 28, Maintenance 34, License 33) 共 174 份.",
+    "3. 金标准 10 份 PDF 的 sha256 与 SHA256SUMS 一致; 用与 stores.py 相同的 pdfplumber 调用抽出的 CUAD-01, 03, 05 逐页文本与仓库内 pages/*.json 逐页相等 (pdfplumber 版本漂移即报出).",
+    "4. 10 份金标准中 Parties 与 Agreement Date 摘录全部能定位到页 (Parties 接受页集合), 定位结果与 gold.json 记录的页一致.",
+    "5. 174 份全量定位另标 slow: 2864 段中可定位率 ≥ 99.5%, 只在一页的段数为 2299 (与摸底一致, 不一致时打印差异).",
+    "6. 不标 slow 的部分在 60 秒内跑完."
+   ],
+   "size": "S",
+   "runs": "offline"
+  },
+  {
+   "key": "X5",
+   "title": "CUAD 合同抽取与条款评价真实 LLM 评测",
+   "goal": "用真实 LLM 在 10 份 CUAD 合同上跑 DOC-04, 在其中 6 份货物合同上跑 REV-03, 走与生产相同的提示词, JudgmentEngine 与四级校验, 以 X3 金标准评分, 检验真实合同下的抽取质量, 页码准确性与反编造.",
+   "scope_files": [
+    "tests/test_eval_cuad_live.py (新)",
+    "tests/fixtures/cuad/extended.json (新, 扩展集 30 份清单)",
+    "src/backend/knowledge/procedures/DOC-04.yaml (llm.max_tokens, 视待拍板)"
+   ],
+   "basis": [
+    "CUAD 摸底第 3 节: 10 份约 75k token 合同文本加约 10k 提示词, REV-03 约 6 x 4k, 输出约 30-40k; 并发约 2-5 分钟; 扩展集可从 3-15 页的 94 份中抽 30 份",
+    "CUAD 摸底第 3 节注意事项: DOC-04 max_tokens 默认 4096 (contracts/knowledge.py 第 42 行) 可能截断逐字条款; context_budget 8000 未执行, NETGEAR, Nanophase, LimeEnergy, Apollo 按字符数/4 估算超过 8000; LiveLLMClient 默认超时 120 秒 (adapters/llm.py 第 121 行)",
+    "src/backend/knowledge/procedures/REV-03.yaml: standards [AASB15-P31, AASB15-P38], params period_end",
+    "src/backend/agents/ingest.py 第 103-109 行: DOC-04 按文档取 evidence_store.pages, 变量 client_name 取 ClientProfile.legal_name"
+   ],
+   "prerequisites": [
+    "X1",
+    "X2",
+    "X3",
+    "X4",
+    "R58"
+   ],
+   "external_deps": [
+    "本机 data/external/cuad",
+    "团队 API Key (.env)",
+    "四类条款与 REV-03 金标准的人工确认"
+   ],
+   "acceptance": [
+    "1. 标 slow, live, external; 缺 API Key 或缺 CUAD 目录时 skip. 证据库用测试内的只读实现, 页文本由 pdfplumber 从金标准 PDF 抽取 (与 stores.py 相同), document_id 与合同 ID 用别名; ClientProfile.legal_name 取 gold.client_name. 走 IngestAgent 的 DOC-04 路径与 JudgmentEngine.call_llm, 不另写提示词.",
+    "2. 调用量: DOC-04 10 次, REV-03 6 次 (只对 DOC-04 通过的货物合同), 含重试不超过 48 次; 预算上限输入 350k token, 输出 120k token (X2); DOC-04 用 max_tokens 8192, LiveLLMClient 超时 300 秒; 全部跑完 ≤ 10 分钟.",
+    "3. 硬性 (不满足即失败): 10 份中至少 9 份通过四级校验; counterparty_abn 10/10 为 null; 反编造检查 (条款 text 去非字母数字后前 60 字符出现在其声明页) 通过率 ≥ 95%; 无未处理异常; 未超预算.",
+    "4. 软性 (算出并写入 var/eval 汇总, 低于阈值时只告警, 列在打印结果里): counterparty ≥ 9/10; sign_date ≥ 8/9 (SPARKLING 不计); 页码命中 ≥ 85% (多页摘录接受页集合, 跨页允许 ±1); termination 召回 ≥ 80%; 货物合同 control_transfer 抽到 ≥ 5/6; REV-03 proposed_action 与金标准一致 ≥ 5/6; amount_cents 与金标准一致的份数.",
+    "5. CUAD-03 (LIMEENERGY) 的页码若出现 11-14 (印刷页码), 应被引用级校验拦下并记为 failed, 不计入页码命中.",
+    "6. 扩展集: 设 CUAD_EXTENDED=1 时额外跑 extended.json 的 30 份 (固定种子从 3-15 页的 94 份中抽取, 清单入库), 只跑 DOC-04, 只比 CSV 自动真值 (当事方, 签订日, 页码, termination); 上限 90 次调用, 输入 500k token; 默认不跑.",
+    "7. 每份合同的输出与评分写入 var/eval/cuad-<时间>.json; 测试打印 X2 汇总."
+   ],
+   "size": "M",
+   "runs": "slow-live-llm"
+  },
+  {
+   "key": "X6",
+   "title": "Xero Demo Company 数据集转换器 (A 测试工具)",
+   "goal": "把 data/external/xero/raw 的 7 个导出文件确定性地转换成 CsvDatasetLoader 能载入的数据集 (7 份 CSV 与 client_profile.json), 出两个变体: 季度变体 (期间 2026-07-01 至 09-30, 试算表由日记账推导) 与至 11-30 变体 (本期取导出的 1130 试算表); 同时用转换器自身的交叉核对代替易失的摸底脚本, 锁定后续测试的预期值.",
+   "scope_files": [
+    "tests/tools/xero_dataset.py (新, 含 CLI: python -m tests.tools.xero_dataset --variant q1|to1130 --out <dir>)",
+    "tests/test_xero_dataset.py (新)",
+    "tests/fixtures/xero/README.md (新, 来源与口径说明, 不含数据)",
+    "pyproject.toml, uv.lock (dev 依赖加 openpyxl; 不加则用 zipfile 解析 xlsx)"
+   ],
+   "basis": [
+    "Xero 摸底第 1 节: journal_report 368 笔 (ID 389-756), 1017 行, 借贷合计 439,695.07; 65 笔 Reversal of ID n 与原分录逐行镜像 (65/65), 有效分录 238 笔 675 行; Account Code 为带前导零的文本; Posted Date 推断为 UTC",
+    "Xero 摸底第 1 节: trial_balance_2026-06-30 6 个科目, 借贷各 12,903.20; 2026-11-30 32 个科目, 借贷各 111,754.91; 960 的 7,912.00 是自动结转, 无日记账; receivable_invoice_detail Paid 35, Approved 13, Draft 4, Voided 2, Awaiting Approval 1; 多行单据 Invoice Total 重复",
+    "Xero 摸底第 2 节字段映射: accounts.type 按 22 种 *Type 归 5 类, 803 Wage Payables Type 为空; source_doc 由科目明细 Reference 关联, 238 笔有效分录中 232 笔能关联; bank_transactions 取 090 的 133 行与 091 的 5 行; delivery_notes 无",
+    "Xero 摸底第 3 节 FIN-12: 日记账汇总与两份试算表逐科目一致, 只有 960 差 7,912.00; 200 的 FY27 Net 合计 59,944.32, FY26 4,200.00; 610 = 25,056.55",
+    "Xero 摸底第 4 节: 推荐期间 2026-07-01 至 09-30, 推导的 0930 试算表 26 个科目, 合计为 0; 期后 10-01 至 10-17 有 145 笔分录, 16 张发票, 11 笔应收收款 15,417.60",
+    "Xero 摸底第 5 节: 输出目录须单级 (safe_child, stores.py 第 51 行), data/external/xero/dataset 会被拒绝; 联系人 [登录账号联系人] 与 Posted By 来自 Demo 登录账号, 须换化名",
+    "src/backend/persistence/stores.py 第 364-396 行 CsvDatasetLoader.load: 7 个 CSV 都必须存在, 每行经记录模型 model_validate",
+    "本次复核 (/private/tmp/claude-501/xero_req/je.py): 368 组, 65 笔冲回, 1017 行; ID 499 为借 710 750.00, 借 820 75.00, 贷 711 825.00"
+   ],
+   "prerequisites": [
+    "X1"
+   ],
+   "external_deps": [
+    "本机 data/external/xero/raw (2026-10-17 快照)",
+    "口径待拍板: 期间与变体, 冲回对是否保留, 发票金额含税与否, 科目代码是否保留, Source 放哪"
+   ],
+   "acceptance": [
+    "1. 标 external, 缺目录或快照 sha256 不符时 skip. 同一输入两次转换输出逐字节相同.",
+    "2. 解析核对: 368 笔, 1017 行, 每笔借贷平衡, 借贷合计 439,695.07; 冲回 65 笔与原分录逐行镜像 65/65; 有效 238 笔 675 行; 不读 Excel 缓存的合计与滚动余额, 按值重算.",
+    "3. 季度变体 (推荐口径: 保留冲回对, 发票金额取含税, 保留 Xero 科目代码) 输出: accounts.csv 59 行 (803 归 liability); journal_entries.csv 1017 行, id 为 XJ-<Journal ID>-<行号>, entry_no 为 XJ-<Journal ID>, created_at 为 Posted Date 按 UTC 加 Z, approved_by 空, is_adjustment 全为 false, source_doc 按 (日期, 科目, 借, 贷) 关联 Reference (有效分录 232/238 有值); sales_invoices.csv 48 行 (Paid 与 Approved, 贷项通知单为负数, 多行单据不重复计 Invoice Total); delivery_notes.csv 只有表头; bank_accounts.csv 2 行 (090, 091; bsb 与账号为占位值); bank_transactions.csv 138 行; trial_balance.csv 本期为推导的 2026-09-30 余额 26 个科目且合计为 0 (含 960 借方 7,912.00 结转), 上期为 0630 表 6 个科目.",
+    "4. 至 11-30 变体: 期间 2026-07-01 至 11-30, 本期取导出的 1130 表 32 个科目, 上期取 0630 表, 其余 CSV 同季度变体.",
+    "5. 交叉核对 (转换器内置并由测试断言): 日记账截至 06-30 按科目汇总与 0630 表 6/6 一致; 截至 11-30 与 1130 表 31/32 一致, 唯一差异 960 为 7,912.00; 200 的 FY27 Paid 加 Approved Net 合计 59,944.32 等于 1130 表, FY26 4,200.00 等于 0630 表; 610 等于 Approved 合计 25,906.55 减 ORC1002 部分收款 850.00 = 25,056.55.",
+    "6. 每份 CSV 的每一行能被对应记录模型 (Account, TrialBalanceRow, JournalEntry, SalesInvoice, DeliveryNote, BankAccount, BankTransaction) 校验通过, 与 CsvDatasetLoader 第 387 行的做法相同.",
+    "7. client_profile.json: legal_name \"Demo Company (AU)\", abn 为 11 个 0 的占位值 (不对应任何真实企业, 依赖 ABN 的 ACC-04 不在 Xero 上跑), directors 为空表, notes 写明数据来源与快照日期.",
+    "8. 去标识: 输出目录全部文件中检索不到 Xero 登录账号的姓名与邮箱; Posted By 两个值映射为 XERO-USER-1 与 SYSTEM; contacts.csv 不输出.",
+    "9. CLI 输出目录名须为单级 (默认 data/xero_q1, data/xero_to1130, 被 /data/* 忽略, 不入库); 测试用 tmp_path, 不写仓库."
+   ],
+   "size": "M",
+   "runs": "offline"
+  },
+  {
+   "key": "X7",
+   "title": "Xero 数据上的规则程序验收 (连库)",
+   "goal": "把 X6 的两个变体载入真实 Postgres, 用 SqlRuleEngine 跑 GEN-05, FIN-12, PLN-07, REV-08 (FIN-15 规则部分在其需求定稿后加入), 以 Xero 的实际计数为预期值, 验证规则 SQL 在非 Numbat 的真实形态账套上不靠写死科目代码也能得出正确命中.",
+   "scope_files": [
+    "tests/test_xero_rules.py (新)"
+   ],
+   "basis": [
+    "规格书第 7.2 节 GEN-05 YAML (约第 883-950 行): JE-R01 用 created_at 星期几与 account_code LIKE '4%', JE-R02 写死 1000000 分整数倍, JE-R04 required_fields [created_by, approved_by], JE-R05 用 LIKE '%reverse%'",
+    "本次复核 (/private/tmp/claude-501/xero_req/je.py, 保留冲回对, posting_date 在 2026-07-01 至 09-30, 共 215 笔 582 行): 收入 200 贷方 > 300.00 的行 30 行; 其中 created_at 为周末的 25 行 (按 UTC 与按悉尼时间都是 25); 按 posting_date 为周末 5 行 (ID 428, 437, 481, 484, 545); 1,000.00 整数倍 6 行 (ID 428, 436, 437 的 200 各 1,000.00; ID 547, 548, 549 的 800 各 2,000.00); 10,000.00 整数倍 0 行; 100.00 整数倍 84 行 68 笔; 09-27 至 09-30 有 8 笔分录, 摘要含 revers (不分大小写) 0 笔",
+    "本次复核: ID 436 为 Reversed: City Limousines - Reversal of ID 428, ID 549 为 Reversed: SMART Agency - Reversal of ID 547; 不限期间时 created_at 周末行按悉尼时间 46, 按 UTC 47 (时区影响结果)",
+    "Xero 摸底第 3 节: PLN-07 (本期 1130, 上期 0630) 按 Numbat 参数 0 命中, 1,000.00 加 20% 为 20, 500.00 为 24; A02 收入 59,944.32, 毛利率 98.7%; REV-08 R02 在期末 09-30, 窗口 15 或 20 天命中 7 张 (Net 合计 8,945.00, 开于 09-15 至 09-17); R03 ORC1002 实收 850.00 对发票 1,100.00",
+    "src/backend/knowledge/procedures/REV-08.yaml: R01 开票入账与发运签收跨期 (连 delivery_notes), R02 缺发运单或无签收日, R03 收款金额与发票不符 (position(invoice_no IN reference))",
+    "src/backend/knowledge/procedures/PLN-07.yaml 第 11-12 行与 PLN-01.yaml 第 16 行写死 revenue_account_codes [\"4100\"]; stores.py 第 97 行 gl_balance 写死 3200"
+   ],
+   "prerequisites": [
+    "X6",
+    "R56 (真实存储就绪)",
+    "GEN-05 实装需求 (第 1-3 级新程序条目)",
+    "FIN-12 实装需求 (第 1-3 级新程序条目)",
+    "对 GEN-05, PLN-01, PLN-07, REV-08 的修改建议 (见 changes_to_existing) 落地"
+   ],
+   "external_deps": [
+    "B 的 Postgres 存储, SqlRuleEngine 与 CsvDatasetLoader (R56 同款)",
+    "本机 data/external/xero/raw"
+   ],
+   "acceptance": [
+    "1. 标 slow, external; 载入用 CsvDatasetLoader(root=tmp_path), 数据集名 xero_q1 与 xero_to1130, 每个变体一个独立 engagement.",
+    "2. GEN-05 (xero_q1, 期末 2026-09-30, 执行重要性 300.00, 明显微小 20.00, 整数单位 1,000.00, 时区 Australia/Sydney): JE-R01 25 行; JE-R02 6 行, 为 XJ-428, XJ-436, XJ-437 的 200 行与 XJ-547, XJ-548, XJ-549 的 800 行; 整数单位取默认 10,000.00 时 JE-R02 0 行; JE-R03 not_executable (客户画像无 approval_limit); JE-R04 not_executable (approved_by 全空), 都进复核队列而非视为通过; JE-R05 0 行, 注入一笔 2026-09-29 摘要为 \"Reversed: Test - Reversal of ID 1\" 的平衡分录后 1 笔命中 (验证不分大小写); 期外 (FY26 与 10 月以后) 分录不进入扫描.",
+    "3. FIN-12 (xero_to1130, 报表一侧取导出的 1130 试算表): 32 个科目中 31 个与日记账汇总一致, 唯一差异 960 为 7,912.00; 在 tmp 副本中把 610 本期余额加 100.00 后差异为 2 个科目.",
+    "4. PLN-07 (xero_to1130, 收入科目 [\"200\"], 销售成本 [\"300\",\"310\"]): 变动额下限 100,000.00 时 0 命中; 1,000.00 加 20% 时 20 命中; 500.00 加 20% 时 24 命中; A02 本期收入 5994432 分, 毛利率四舍五入为 98.7%.",
+    "5. REV-08 (xero_q1, 期末 09-30, 风险 high 即窗口 15 天): delivery_notes 为空时 R01 报 not_executable 而不是 0 行通过; R02 7 张发票; R03 只命中 ORC1002, 差额 250.00 (发票金额取含税口径时; 取不含税时本条改为断言误报数并记入风险).",
+    "6. CSH-05 在 Xero 上不跑 (银行流水只有账面一侧, 比对必然一致), 测试中以 skip 原因写明.",
+    "7. 全部预期值在测试里直接写数, 并在注释中标出由 X6 交叉核对或本条依据中的统计得出; 快照 sha 不符时整体 skip."
+   ],
+   "size": "M",
+   "runs": "slow-db"
+  },
+  {
+   "key": "X8",
+   "title": "Xero 数据上的真实 LLM 程序评测",
+   "goal": "在 Xero 的真实账务异常上用真实 LLM 跑 GEN-02 分录例外归因, GEN-04 持续经营评价, FIN-15 判断部分与 REV-02 退路, 检验模型能否依据数据里的线索归因, 能否识别真实的持续经营迹象, 以及缺证据时是否走 failed 或 unattributed 而不编结论.",
+   "scope_files": [
+    "tests/test_eval_xero_live.py (新)",
+    "tests/fixtures/xero/expected_judgments.json (新, 人工预期归因与迹象清单)"
+   ],
+   "basis": [
+    "本次复核: GEN-05 JE-R02 在 xero_q1 命中 6 行, 其中 XJ-428/436 与 XJ-547/549 是作废对 (摘要 Reversal of ID n), XJ-437 与 XJ-548 为同单位同额的重开",
+    "Xero 摸底第 3 节 FIN-15 与 GEN-04 (截至 11-30): 工资 477 为 40,200.00 而 478 与 826 无余额; 825 PAYG 9,042.00 未缴; 090 透支 -12,023.26, 日内最低 2026-10-15 的 -18,493.96; 840 Historical Adjustment 19,212.21 未清; 五个月亏损 2,837.54, FY26 亏损 7,912.00; 资产 28,106.56, 负债 38,856.10, 净资产 -10,749.54, 流动比率约 0.63",
+    "本次复核: 1130 试算表 711 贷方 825.00, 416 Depreciation 不在表中; ID 499 (2026-08-16, Being depreciation on office equipment) 借 710 750.00, 借 820 75.00, 贷 711 825.00",
+    "Xero 摸底第 3 节 REV-08 与 REV-02: 无合同与发运证据, 适合测 R59 退路, 预期走 unattributed 或 failed",
+    "规格书 6.1.1 图例 (约第 1059 行): GEN-02 混合, GEN-04 LLM, FIN-15 混合; 第 1254 行 GEN-02 每条例外独立 Judgment"
+   ],
+   "prerequisites": [
+    "X2",
+    "X6",
+    "X7",
+    "R58",
+    "GEN-02, GEN-04, FIN-15 实装需求 (第 1-3 级新程序条目)"
+   ],
+   "external_deps": [
+    "团队 API Key (.env)",
+    "B 的真实存储 (同 X7)",
+    "expected_judgments.json 的人工预期需用户确认"
+   ],
+   "acceptance": [
+    "1. 标 slow, live, external; 缺 Key 或缺数据 skip; 数据先按 X7 载入, GEN-05 的 JE-R01 在 Xero 上不交给 GEN-02 (created_at 是 Demo 重置生成的, 已在 X7 计数), 只把 JE-R02 的 6 条例外交给 GEN-02.",
+    "2. 调用量与预算: GEN-02 6 次, GEN-04 1 次, FIN-15 判断部分不超过 2 次, REV-02 不超过 8 个判断对象 (REV-08 R02 的 7 张与 R03 的 ORC1002); 含重试上限 51 次, 输入 200k token, 输出 60k token (X2).",
+    "3. GEN-02: 6 条全部产出 Judgment 或 failed 任务, 没有未处理异常; 作废对 4 行 (XJ-428, 436, 547, 549) 的归因引用对应的另一半分录行, 与预期一致至少 3/4; 6 条中 proposed_action 为 misstatement 的为 0; 全部证据指针经 OutputValidator 用真实 FinancialDataStore 解析通过.",
+    "4. GEN-04 (xero_to1130): 结论至少点出以下 5 项迹象中的 3 项: 净资产为负, 银行透支, PAYG 代扣未缴, 连续亏损, 流动比率低于 1; 每项引用的 trial_balance 行 (如 090, 825) 可解析; proposed_action 不为 close.",
+    "5. FIN-15 判断部分 (xero_to1130): 对规则部分列出的 416/711 折旧, 477 与 478/826 养老金, 825, 840 四项给出解释或要求补充证据; 不把 ID 499 的错记判为已解释; 养老金比例参数开工时按 ATO 原文核对, 未核对前不断言估算金额.",
+    "6. REV-02 (xero_q1): 因无合同与发运证据, 每个判断对象走 unattributed 任务或 failed 任务, 不出现 accept; 测试对 unattributed 提交 override, 对 failed 提交 rerun 一次后 manual_result, 流程不卡死.",
+    "7. 打印 X2 汇总; 各程序的输出, 校验失败级别与人工预期比对写入 var/eval/xero-<时间>.json."
+   ],
+   "size": "M",
+   "runs": "slow-live-llm"
+  }
+ ],
+ "changes_to_existing": [
+  "R59 (真实 LLM 联调): 目标与 Numbat 全流程验收 1-4 不变, Numbat 仍是唯一的全流程基准, R59 是否完成不依赖外部数据. 增加: (5) 测试标 slow 与 live (X1 注册的标记), 通过 X1 的 require_live_llm 取客户端, 外包 X2 的 BudgetedLLMClient, 默认上限 60 次调用 (mock 全流程 llm_call 13 行, 每次最多 3 次尝试为 39, 余量留给 rerun); (6) 同一次 uv run pytest -m live 依次跑 R59, X5 (CUAD 10 份金标准) 与 X8 (Xero), 三者合计上限 159 次调用, 输入 950k token, 输出 300k token, 结束打印合并汇总; (7) 外部数据缺失时 X5, X8 skip, R59 本身照跑; 前置加 X2, 外部依赖加 \"X5, X8 需本机 data/external\".",
+  "R58: 前置无变化; tests/test_llm_live.py 文件头写的 \"只发合成数据\" 改为 \"只发合成数据或许可允许的公开数据 (CUAD, Xero Demo Company)\", 与 CLAUDE.md 约定一致.",
+  "R55, R56: 不改. 确定性预期值仍由合成数据集设计第 7 节给出; Xero 与 CUAD 只作第二套数据, 不进入 R55, R56 的断言.",
+  "GEN-05 实装需求 (第 1-3 级新程序): (a) JE-R01 的收入判断改为按 accounts.type = 'revenue' 关联, 不用 account_code LIKE '4%' (Xero 收入科目为 200); (b) JE-R02 的整数单位改为参数 round_unit_cents, 默认 1000000, Xero 测试用 100000; (c) 全部规则加 posting_date 在 period_start 与 period_end 之间 (调整分录另走增量扫描), 否则载入的期后分录也被扫; (d) JE-R05 用 ILIKE (Postgres 的 LIKE 区分大小写, 匹配不到 Reversed 与 Reversal); (e) JE-R01, JE-R06 对 created_at 的星期与比较明确时区 (AT TIME ZONE 'Australia/Sydney'), 不限期间时 Xero 上按 UTC 与按悉尼时间结果为 47 与 46; (f) JE-R03 在客户画像无 approval_limit 时与 JE-R04 一样标 not_executable, JE-R06 在 audit_adjustment_start 为空时不执行; (g) 可选: 加参数化的疑似重复规则 (同日, 同单位, 同金额), Xero 有 2 组真值 (Hamilton Smith 550 于 07-17, Bank West 550 于 07-31, 后来分别由 CR1003, CR1005 冲销).",
+  "GEN-02 实装需求: 验收加一条: 例外上下文须带同 entry_no 的全部行与摘要, 使作废对 (Reversal of ID n) 能被归因; 预期值见 X8.",
+  "FIN-12 实装需求: 待审报表 (EngagementState.financial_statements) 缺失时允许以导出的试算表作报表一侧来源, 并在结论里注明; 预期值见 X7 验收 3.",
+  "FIN-15 实装需求: 规则部分建议包含科目关系检查 (工资与养老金, 累计折旧与折旧费用, 代扣税款长期未缴, 暂记或历史调整科目未清), Xero 至 11-30 有 4 项真值 (见 X8 验收 5); 养老金比例作参数, 取值开工时按 ATO 原文核对.",
+  "GEN-04 实装需求: 输入至少含试算表与 PLN-07 结果, 迹象清单的预期值见 X8 验收 4; 评估期参数 (ASA570-Aus13) 不受 Xero 影响.",
+  "GEN-03, GEN-08, GEN-01 实装需求: 仍以 Numbat 补造的董事与股权数据为准; Xero contacts.csv 只有共用电话 (DIISR, Melrose Parking, PC Complete 共用 0800 4389376) 这类弱信号, 不作验收数据.",
+  "PLN-01.yaml 第 16 行与 PLN-07.yaml 第 11-12 行: revenue_account_codes [\"4100\"], cost_of_sales_account_codes [\"5100\"] 写死, 换数据集即失效. 建议改为 {ref: ...} 取客户画像或项目上的科目映射, 或 SQL 改按 accounts.type 取收入 (程序 YAML 中的 SQL 归 B; B 已交接时由 A 代改并在清单注明).",
+  "REV-08.yaml R01: delivery_notes 为空时 R01 返回 0 行, 会被当成 \"无例外\". 建议声明 required_fields 或数据存在性检查, 缺发运单数据时标 not_executable (Xero 即此情形).",
+  "DOC-04.yaml: 建议加 llm.max_tokens: 8192 (真实合同逐字照抄条款, 4096 易截断, 截断属语法级失败会白白重试); context_budget 8000 只是声明, 代码未执行, 10 份金标准中 4 份超出, 另立需求或在 X5 中记录实测 token.",
+  "LiveLLMClient 超时: adapters/llm.py 第 121 行默认 120 秒, 长合同接近上限. X5 在测试里传 timeout=300; 生产是否加 LLM_TIMEOUT 配置键属 C (core/config.py 与接口文档第 11 节).",
+  "persistence/stores.py 第 97 行 gl_balance 把留存收益写死为 3200 (Xero 为 960), 现有程序只对银行科目调用, 暂不影响 X7; 记给 B, 换数据集跑全流程前须改.",
+  "main.py 第 44 行 dataset_dir = DATASET_ROOT / \"demo\" 写死 registry 与函证 mock 的目录 (属 C); 只在 Xero 跑 API 全流程时才需要改, 程序级测试绕过.",
+  "contracts/models.py 第 433 行 Engagement.dataset 注释 \"载入的合成数据集名\" 改为 \"载入的数据集名\", 同步接口文档第 9 节 (改 contracts 须同次提交改文档).",
+  "data/external/xero/README.md (用户本地文件, 不入库): 文件表中的计数与实测不符, 建议改为: journal_report 368 笔 (Journal ID 389-756) 1017 行; account_transactions 35 个有发生额的科目组 672 行; receivable_invoice_detail 55 张单据 (发票 49, 贷项通知单 6) 60 行明细; contacts.csv 没有客户或供应商标志列."
+ ],
+ "open_questions": [
+  {
+   "question": "Xero 的审计期间怎么定? 现有导出的试算表截至 11-30, 但数据其实到 10-17 就结束了.",
+   "options": [
+    {
+     "label": "转出两套: 季度期间 (7-9 月) 给分录扫描, 截止性, 期后; 截至 11-30 给报表勾稽, 持续经营, 初步分析 (推荐)",
+     "pros": "日期是真实的, 不改数据; 季度期后有 145 笔分录, 16 张发票可测截止性与期后; 11-30 一套能直接用 Xero 导出的试算表测报表勾稽 (只差 960 一项 7,912.00)",
+     "cons": "转换器要多出一个变体; 季度试算表要由日记账推导并补 960 结转; 两套预期值都要维护"
+    },
+    {
+     "label": "只用季度期间 (2026-07-01 至 09-30)",
+     "pros": "一套数据, 截止性与期后都能测",
+     "cons": "报表勾稽只能拿推导出的试算表和日记账比, 等于自己和自己比, 测不出东西"
+    },
+    {
+     "label": "只用截至 11-30 (2026-07-01 至 11-30)",
+     "pros": "直接用导出的试算表, 最省事",
+     "cons": "期末前后没有发票, 也没有期后数据, 截止性和期后程序全部空跑"
+    },
+    {
+     "label": "日期整体前移 91 天, 对齐 Numbat 的 6 月 30 日年末",
+     "pros": "和 Numbat 的财年与配置一致",
+     "cons": "摘要, 到期日, 过账时间都要跟着改, 削弱真实数据的意义, 原 FY26 分录会混进来"
+    }
+   ],
+   "recommendation": "转出两套 (季度 + 截至 11-30)"
+  },
+  {
+   "question": "Xero 日记账里 65 对 \"作废后冲回\" 的分录 (130 笔) 要不要保留在载入的分录里?",
+   "options": [
+    {
+     "label": "保留, 让分录测试面对完整总体 (推荐)",
+     "pros": "和实务一致: 分录测试应覆盖期间内全部入账分录, 作废对本身就是值得看的线索; 能测 GEN-02 是否靠 \"Reversal of ID n\" 把命中归因为作废对; 冲回对净额为零, 不影响余额",
+     "cons": "命中会变多 (例如整数金额规则在季度期间从 2 行变 6 行), 要靠 GEN-02 归因消化"
+    },
+    {
+     "label": "去掉作废对, 只载入 238 笔有效分录",
+     "pros": "命中更少更干净, 预期值更好人工核",
+     "cons": "和 Xero 的科目明细一样把作废痕迹藏掉了, 测不到作废与重开这一类真实情况"
+    }
+   ],
+   "recommendation": "保留"
+  },
+  {
+   "question": "Xero 发票载入时, 金额用含 GST 的总额还是不含税的净额?",
+   "options": [
+    {
+     "label": "用含税总额 (推荐)",
+     "pros": "银行收款是含税金额, 三单匹配里 \"收款与发票不符\" 只会真实命中 ORC1002 (实收 850.00, 发票 1,100.00)",
+     "cons": "发票金额和收入科目贷方 (不含税) 差 10%, 将来若有规则拿发票和收入分录比金额, 要另外除去 GST; 截止性错报金额要按净额另算"
+    },
+    {
+     "label": "用不含税净额",
+     "pros": "和收入科目, Numbat 的口径一致",
+     "cons": "每张已收款发票都会因 GST 差额被 \"收款与发票不符\" 误报, 这条规则在 Xero 上失去意义"
+    }
+   ],
+   "recommendation": "用含税总额"
+  },
+  {
+   "question": "Xero 的科目代码 (收入 200, 银行 090 等) 要保留, 还是转换时映射成 Numbat 的代码 (4100 等)?",
+   "options": [
+    {
+     "label": "保留 Xero 代码, 同时把程序里写死的 4100, 3200 改成按科目类别或参数取 (推荐)",
+     "pros": "真实客户的科目表各不相同, 写死代码在真实使用中必然出错, 用 Xero 正好逼出这些问题; 测试数据保持原样",
+     "cons": "要改 PLN-01, PLN-07, GEN-05 的 SQL 与 stores.py 的 gl_balance, 部分属 B 的范围"
+    },
+    {
+     "label": "转换时把 Xero 代码映射成 Numbat 代码",
+     "pros": "不用改任何程序, 马上能跑",
+     "cons": "掩盖了写死代码的问题, 要人工维护 59 个科目的映射, 映射本身也可能错"
+    }
+   ],
+   "recommendation": "保留 Xero 代码并改掉写死的代码"
+  },
+  {
+   "question": "要不要请你再从 Xero 导出利润表 (Profit and Loss) 和资产负债表 (Balance Sheet), 给报表勾稽 (FIN-12) 当真正的报表一侧?",
+   "options": [
+    {
+     "label": "暂不导出, 先用导出的 1130 试算表当报表一侧 (推荐)",
+     "pros": "不用再操作; 现有试算表与日记账已能测出 960 结转这一真实差异; 避免 Demo 重置后两次导出对不上",
+     "cons": "测的是 \"试算表与账\" 而不是 \"报表与账\", 报表的分类汇总与列报没测到"
+    },
+    {
+     "label": "现在导出, 截至 09-30 与 11-30 各一份",
+     "pros": "FIN-12 能按规格测真正的报表与账勾稽",
+     "cons": "必须在 Demo 下次重置前导出, 否则日期和金额与现有 7 个文件对不上, 整套要重新导出并重算预期值; 重置日期我查不到"
+    }
+   ],
+   "recommendation": "暂不导出"
+  },
+  {
+   "question": "CUAD 金标准里 CSV 没标的四类条款 (付款, 控制权转移, 退货, 返利) 和 REV-03 的预期结论, 由谁来标?",
+   "options": [
+    {
+     "label": "我起草 (每条写页码和原文锚点), 你抽查 6 份货物合同中的 2 份 (推荐)",
+     "pros": "你的工作量小; 每条都带页码和原文, 抽查快; 可在 X3 提交前完成",
+     "cons": "我起草的标注可能带系统性偏差, 抽查只能发现一部分"
+    },
+    {
+     "label": "你逐份标注",
+     "pros": "真值最可靠",
+     "cons": "6 份合同共约 70 页, 工作量大"
+    },
+    {
+     "label": "不标, 只评 CSV 已有的当事方, 签订日, 终止类条款",
+     "pros": "零人工",
+     "cons": "REV-03 最依赖的控制权转移等条款完全没有评测, 收入程序的核心能力测不到"
+    }
+   ],
+   "recommendation": "我起草, 你抽查 2 份"
+  },
+  {
+   "question": "\"条款原文必须真的出现在模型声明的那一页\" 这项反编造检查, 要不要直接加进正式的输出校验?",
+   "options": [
+    {
+     "label": "先只在评测里算, 等真实 LLM 评测出通过率后再定 (推荐)",
+     "pros": "不会因为 PDF 抽取的空白, 连字符差异误判而让正常输出变成失败任务 (引用级失败不重试, 直接转人工); 有了实测数据再定阈值",
+     "cons": "在加进正式校验前, 模型编出的条款只要页码在范围内就能通过"
+    },
+    {
+     "label": "现在就加进正式校验",
+     "pros": "立刻堵上编造条款的口子, 对真实使用更安全",
+     "cons": "没有实测数据, 规范化不够时会误伤, 增加人工复核负担; 也要改 Numbat 的 fixture 守住"
+    }
+   ],
+   "recommendation": "先只在评测里算"
+  },
+  {
+   "question": "Xero 数据上的真实 LLM 测试做到多大范围?",
+   "options": [
+    {
+     "label": "只做程序级: 载入 Xero 后单独跑分录归因, 持续经营, 期末复核, 截止性退路 (推荐)",
+     "pros": "不需要为 Xero 补造登记查询, 函证, 风险与审计目标等全流程材料; 调用次数可控 (上限 51 次); 每个程序的结果都能对着人工预期看",
+     "cons": "没有验证 Xero 数据在 P0 到 P4 全流程里各阶段的衔接"
+    },
+    {
+     "label": "在 Xero 上也跑一遍 P0 到 P4 全流程",
+     "pros": "最接近真实使用",
+     "cons": "要补造客户 ABN, 登记记录, 风险清单, 审计目标, 函证回函, 还要改 main.py 写死的 data/demo; 补造越多越不 \"真实\"; 调用量和排错成本都大"
+    }
+   ],
+   "recommendation": "只做程序级"
+  },
+  {
+   "question": "真实 LLM 测试每跑一整轮 (Numbat 全流程 + CUAD 10 份 + Xero) 的用量上限定多少? 我手头没有你所用模型的权威价目, 下面只按调用次数和 token 数定, 金额由你按单价换算.",
+   "options": [
+    {
+     "label": "合计不超过 159 次调用, 输入 95 万 token, 输出 30 万 token (推荐)",
+     "pros": "覆盖三部分正常用量加每次最多 2 次重试的最坏情况; 超出即停, 不会失控",
+     "cons": "按长合同计输入 token 不算少, 每次全量跑都要花这么多"
+    },
+    {
+     "label": "减半: CUAD 只跑 5 份, Xero 只跑分录归因与持续经营",
+     "pros": "花费约减半",
+     "cons": "样本太少, 9/10 这类及格线没有统计意义, 页码命中率波动大"
+    }
+   ],
+   "recommendation": "合计不超过 159 次调用, 输入 95 万 token, 输出 30 万 token"
+  },
+  {
+   "question": "CUAD 评测的及格线怎么用: 哪些不达标就判测试失败?",
+   "options": [
+    {
+     "label": "只有硬性项判失败 (校验通过 ≥9/10, ABN 全为空, 反编造 ≥95%, 无异常, 不超预算), 其余只报告 (推荐)",
+     "pros": "真实模型每次输出不同, 软性指标 (当事方, 日期, 页码, 召回) 偶尔低于阈值不至于让测试反复红; 硬性项都是 \"不能编, 不能崩\" 的底线",
+     "cons": "软性指标下滑要靠人看汇总才发现"
+    },
+    {
+     "label": "所有指标都判失败",
+     "pros": "质量下滑立刻暴露",
+     "cons": "测试不稳定, 同一代码重跑可能时红时绿, 而且每次重跑都要花钱"
+    }
+   ],
+   "recommendation": "只有硬性项判失败"
+  },
+  {
+   "question": "Xero 每笔交易的来源类型 (Spend Money, Manual Journal 等) 现有分录表没有对应列, 怎么处理?",
+   "options": [
+    {
+     "label": "不改表结构, 转换时把来源类型拼在摘要末尾, 如 \"[Xero: Manual Journal]\" (推荐)",
+     "pros": "不动 B 的表结构与接口文档; 归因时模型能看到; 规则不受影响",
+     "cons": "摘要被加工过, 和 Xero 原文不完全一样; 规则若按摘要做关键词匹配要注意"
+    },
+    {
+     "label": "由 B 给分录表加 source 列",
+     "pros": "结构清楚, 规则也能用 (例如筛手工分录)",
+     "cons": "改 contracts 与迁移, 要同步接口文档, B 已交接; Numbat 也要补这列"
+    },
+    {
+     "label": "不要来源类型",
+     "pros": "零改动",
+     "cons": "手工分录这类重要线索丢失, 归因只能靠摘要猜"
+    }
+   ],
+   "recommendation": "拼在摘要末尾"
+  }
+ ],
+ "risks": [
+  "Xero Demo 每 28 天重置, 重新导出后日期与金额都会变. X1 用 sha256 锁定 2026-10-17 的快照, 不符就 skip. 若要重新导出, 7 个文件必须同一天一起导出, 再重新锁定并重算 X7, X8 的预期值.",
+  "摸底脚本在 /private/tmp/claude-501 下 (xero_probe, cuad_probe, 本次复核用的 xero_req/je.py), 这个目录重启后会被清空. 所以 X6 的交叉核对和 X4 的定位统计要把这些数字都复现出来, 写进测试. 做到之后预期值就不再依赖临时脚本.",
+  "Xero 的 Posted Date 和 Created Date 是 Demo 重置时生成的: 在悉尼时间周日集中过账 173 笔, 36 张已付款发票中有 32 张的付款日早于创建日. JE-R01 的 25 行和 JE-R06 只能验证规则的写法对不对, 不能当成真实舞弊信号, 所以 X8 不把它们交给 GEN-02. 时区 UTC 是推断出来的, 没有原文证实.",
+  "Xero 只有一个季度的业务, 上期几乎全是零, 所以 PLN-07 几乎每个科目都算新增, 分析价值有限. 没有发运单, 也没有独立的银行对账单, 所以 REV-08 R01 和 CSH-05 在 Xero 上测不出东西.",
+  "CUAD 的签订日标注有错误: 抽样 10 份就发现 2 处 (LIMEENERGY, PAXMEDICA). 扩展集只用 CSV 自动真值, 会把一部分模型的正确答案误判成错误. 扩展集的结论只能看趋势, 不能直接当分数.",
+  "CUAD 是 1994-2020 年的美国合同, 美元计价, 没有 ABN, 金额常被遮盖. 控制权转移用 FOB, EXW 这类贸易术语表达, 和 Numbat 的 \"签收送货单即转移\" 不一样. REV-03 只带了 AASB15-P31 和 P38 两段准则, 在 CUAD 上的结论偏差可能来自准则片段不够, 而不是模型本身.",
+  "CUAD README 对底层 EDGAR 合同的许可状态不作保证. X3 只把逐页文本节选和标注放进仓库, 不放 PDF. 模型输出 fixture 含有逐字条款, 属于改编材料, 要在 README 里署名.",
+  "X6 和 X8 处理的原始数据里有用户本人的姓名和邮箱 (Demo 登录账号). 转换器必须换成化名, 并由测试守住. 探查文档与需求正文都不写出邮箱.",
+  "DOC-04 的 context_budget 声明了但没有执行. 4 份金标准合同估计超过 8000 token, 长合同可能逼近模型上下文上限或 300 秒超时. X5 只记录实测值, 不在本批解决.",
+  "真实 LLM 的价格我没有权威价目. 所有上限都按调用次数和 token 数定, 金额只在用户给出单价的环境变量后才折算. 实际花费以服务商账单为准.",
+  "依赖顺序: X7 和 X8 要等 R56 (B 的真实存储) 以及 GEN-05, GEN-02, GEN-04, FIN-12, FIN-15 的实装需求都完成, 而且这些实装需求要采纳 changes_to_existing 里的修改 (按科目类别取收入, 整数单位做成参数, 加期间过滤, 改用 ILIKE). 不采纳的话, X7 的预期计数要全部重算.",
+  "worktree 里没有 data/external. 如果 X1 的路径解析出错, 所有外部测试都会被静默 skip, 看起来像通过. 所以 X1 验收 1 要求在 WT 里能实际找到这两个文件, 并建议在 X5, X7, X8 的结束汇总里打印 skipped 的原因."
+ ]
+}

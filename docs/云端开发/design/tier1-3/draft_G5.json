@@ -1,0 +1,1017 @@
+{
+ "group": "承接与计划的法定步骤及人工程序机制 (ACC-08 约定与委任核验, PLN-15 总体审计计划, PLN-19 重要性重估, 通用人工程序机制)",
+ "requirements": [
+  {
+   "key": "AP-1",
+   "title": "ACC-08 契约, 准则片段与程序模板",
+   "procedures": [
+    "ACC-08"
+   ],
+   "goal": "为约定与委任核验建立契约: 新闸门编号 ACC-08, 呈报材料 TERMS (EngagementTerms), LLM 输出模型 EngagementTermsReview, 状态字段 engagement_terms, 约定文件的文件类型; 写 ACC-08.yaml, 提示词与准则片段 (ASA 210 第 6, 10 段; 公司法 s293, s325, s328A). 设计取向: 规格书 18.4 节把 ACC-08 定为 P0 闸门第二个静态中断点 gate_acc08, GateDecision.gate 单列 ACC-08, 一次闸门一条决定 (规格书 1692-1695 行), 所以按新闸门做, 不塞进 ACC-01 的决定.",
+   "scope_files": [
+    "src/backend/contracts/models.py",
+    "src/backend/contracts/llm_outputs.py",
+    "src/backend/contracts/state.py",
+    "src/backend/orchestration/merge.py (AGENT_FIELDS[A2])",
+    "src/backend/services/judgment_engine.py (DOCUMENT_EVIDENCE 映射)",
+    "src/backend/knowledge/procedures/ACC-08.yaml",
+    "src/backend/knowledge/prompts/ACC-08.md.j2",
+    "src/backend/knowledge/standards/ASA210.yaml",
+    "src/backend/knowledge/standards/CA2001.yaml",
+    "tests/test_knowledge.py",
+    "docs/开发接口文档.md 第 0, 2.1, 2.4, 3, 5, 6, 8.1 节",
+    "docs/Demo需求文档.md 第 2, 6 节"
+   ],
+   "basis": [
+    "规格书 6.1.1 (A2 负责 ACC-01 至 ACC-10), 6.1.2 第 726 行 (ACC-08 前置 ACC-01, 承接后 P1 准入前, 闸门), 第 728 行 (PLN-10 须待约定书与委任有效)",
+    "规格书 7.2 (P0 L1 混合), 7.5 第 1141 行 (ASA 210 para 6, 10; s328A)",
+    "规格书 10 节 P0 第 1343 行, 12.5 UC-01 第 5 步 (2144 行), 12.2 AuditPlan.applicableFramework 与 engagementLetterRef (1795-1796 行), 18.4 interrupt_before 注释 gate_acc08 (2826 行)",
+    "ASA 210 第 6 段 (a)(b)(i)-(iii), 第 8 段, 第 10 段 (a)-(e): 已用 pdftotext 核对 docs/参考资料/01_审计准则_ASA/ASA_210.pdf, Compilation Date 2 December 2025",
+    "Corporations Act 2001 C148 第 2 卷 s293(1)-(3), s325(1), s328A(1)(2)(4): 已用 pdftotext 核对 docs/参考资料/04_法律_CorporationsAct/...Vol2.pdf",
+    "开发接口文档第 0 节 ID 规则 (闸门材料固定 ID), 第 8.1 节程序 YAML"
+   ],
+   "prerequisites": [
+    "R33",
+    "R39",
+    "R50"
+   ],
+   "external_deps": [
+    "B: persistence/models.py 的 OUTPUT_KINDS 加 EngagementTerms, gate_materials 种类加 TERMS, documents.type 允许 engagement_letter 与 minutes (若有约束). A 先用 tests/fakes.py 的 FakeOutputStore 与 FakeEvidenceStore",
+    "无 C 依赖 (视图在 AP-4)"
+   ],
+   "acceptance": [
+    "1. GateId 新增 ACC_08 = \"ACC-08\"; DocumentType 新增 engagement_letter, minutes; DOCUMENT_EVIDENCE 映射 engagement_letter → contract, minutes → voucher, reliability 取 DocumentRef (约定书 external_copy, 委任文件 internal_copy, 由 EvidenceStore.save 登记时给定).",
+    "2. EngagementTerms(Versioned) id 固定 TERMS: framework (Literal tier1_gpfs, tier2_gpfs, special_purpose), elements (5 个 TermsItem: item 为 objective_scope, auditor_responsibilities, management_responsibilities, framework, report_form; present; evidence), acknowledgements (5 个 TermsItem: prepare_fr, internal_control, access_information, additional_information, unrestricted_access), letter_signed_by, letter_signed_on, direction {signed_by, votes_pct, made_on, requires_audit, evidence}, appointment {appointed_by, resolution_on, auditor_name, evidence}, consent {given_on, signed_by, firm_name_signed, own_name_signed, evidence}, checks (T01-T06 各 {passed, detail}), exception_ids, judgment_id, document_ids. 状态新增 engagement_terms: EngagementTerms | None (无 reducer), initial_state 为 None; 内存检查点读回仍为 EngagementTerms 实例.",
+    "3. EngagementTermsReview 输出模型 = 上述抽取字段 (不含 checks, exception_ids, judgment_id) 加 conclusion, reasoning_chain, counter_argument, proposed_action, self_confidence (0-1); AP-2 的 Numbat fixture 能按它解析.",
+    "4. ACC-08.yaml: phase P0_Acceptance, cycle Acceptance, owner A2, engine hybrid, autonomy_level L1, gate ACC-08, depends_on [ACC-01], standards [ASA210-P06, ASA210-P10, CA2001-S293, CA2001-S325, CA2001-S328A], params {acceptable_frameworks: [tier1_gpfs, tier2_gpfs], direction_deadline_months: 12, min_direction_votes_pct: 5}, llm {prompt ACC-08.md.j2, output_model EngagementTermsReview}; ProcedureLibrary 加载数比改前 +1, test_standards_referenced_are_registered 通过.",
+    "5. 片段 ASA210-P06, ASA210-P10 逐字与 PDF 一致 (test_knowledge 的 STANDARD_PDFS 加 ASA210, ASA210.yaml compiled \"2025-12-02\"); CA2001-S293 (s293(1)-(3)), CA2001-S325 (s325(1)), CA2001-S328A (s328A(1)(2)) 逐字与 C148 第 2 卷一致: 逐字测试扩展到公司法条文格式 (条号如 328A, 下一条为 328B), compiled \"2026-08-27\".",
+    "6. ACC-08.md.j2 头注释列变量: entity (legal_name, abn, directors), period_start, period_end, documents (每份 DocumentRef 与 pages), params, standards; StrictUndefined 下缺变量抛 UndefinedError.",
+    "7. 接口文档第 0 节闸门材料加 TERMS, Judgment 例 J-ACC-08-1-TERMS, 例外例 X-ACC-08-1-T05-1; 第 6 节 A2 行加 ACC-08 与返回字段 engagement_terms, judgments, documents; Demo需求文档第 6 节删去 ACC-08 闸门步骤."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-2",
+   "title": "ACC-08 核对规则与输出校验",
+   "procedures": [
+    "ACC-08"
+   ],
+   "goal": "纯函数 terms_checks 对 LLM 从约定书与委任文件抽出的事实做 T01-T06 确定性核对 (混合程序的规则部分); OutputValidator 支持 EngagementTermsReview 的引用与语义校验, 规则不过而 AI 建议接受时判语义失败; 提供 Numbat fixture TERMS.json.",
+   "scope_files": [
+    "src/backend/services/engagement_terms.py (新)",
+    "src/backend/services/judgment_engine.py (validate 分支)",
+    "src/backend/contracts/services.py (ValidationContext 加 documents, terms_params, directors, period_end)",
+    "tests/test_engagement_terms.py",
+    "tests/test_output_validator.py",
+    "tests/fixtures/llm/ACC-08/TERMS.json",
+    "tests/fakes.py (FakeFinancialStore.documents 与 FakeEvidenceStore 加两份约定文件)"
+   ],
+   "basis": [
+    "ASA 210 第 6(a), 6(b), 8, 10 段 (已核对原文)",
+    "Corporations Act s293(1), (2)(b), (3)(c); s325(1); s328A(1)(a), (2), (4) (已核对 C148 第 2 卷)",
+    "开发接口文档第 5 节 OutputValidator 四级与重试规则; R33 抽取类指针规则",
+    "合成数据集设计第 1 节 manifest 与确定性 (fixture 取 manifest 文档 ID)"
+   ],
+   "prerequisites": [
+    "AP-1",
+    "R33",
+    "R54"
+   ],
+   "external_deps": [
+    "B: data/demo/engagement/ 两份 PDF 与 manifest 条目 (见 data_needs). 就绪前 fixture 用与 FakeEvidenceStore 一致的占位文档 ID, B 出 manifest 后按 R54 的办法替换"
+   ],
+   "acceptance": [
+    "1. terms_checks(review, params, directors, period_end) 返回 6 项: T01 framework 在 acceptable_frameworks (ASA 210 第 6(a) 段); T02 第 10 段五要素全部 present; T03 第 6(b) 段五项确认全部 present; T04 股东指示 votes_pct ≥ 5, requires_audit 为真, made_on ≤ period_end + 12 个月 (s293(1), (2)(b), (3)(c)); T05 consent.given_on ≤ appointment.resolution_on, 且 firm_name_signed 与 own_name_signed 都为真 (s328A(1)(a), (2)); T06 letter_signed_by 在客户画像 directors 中.",
+    "2. Numbat 值: tier2_gpfs; 五要素页码 1, 1, 2, 2, 3; 五项确认都在第 2 页; Jordan Avery 2026-06-10 签回; Morgan Hale 12.0% 于 2026-05-15 指示且要求审计; 董事 2026-05-29 委任 Tessellate Audit Partners; Jordan Ellis 2026-05-27 以事务所与本人名义同意 → 6 项全部 passed.",
+    "3. 变体各只有对应一项不过: consent 2026-06-02 → T05 (detail 含 2026-06-02 与 2026-05-29); own_name_signed 假 → T05; direction made_on 2027-07-15 → T04; votes_pct 4.0 → T04; special_purpose → T01; report_form present 假 → T02; letter_signed_by \"Morgan Hale\" → T06.",
+    "4. validate: 指针 source_id 须为本次两份文件之一且 page 在 1 至 page_count (约定书 3, 委任文件 3) 内, 否则 reference, retryable 假; 五要素与五项确认各须恰好出现一次, present 为真的须有指针, 否则 semantic; terms_checks 有不过的项而 proposed_action 为 accept → semantic (消息含规则号, 如 T05); 推理链按 judgment_semantics 校验.",
+    "5. TERMS.json 通过四级校验 (level_failed 空, unsupported_steps 空); standard 步骤指向 ASA210-P06, ASA210-P10, CA2001-S328A; fact 步骤指针为约定书第 1-3 页与委任文件第 1-3 页."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-3",
+   "title": "A2 执行 ACC-08",
+   "procedures": [
+    "ACC-08"
+   ],
+   "goal": "ClientIntelAgent 执行 ACC-08: 读约定书与委任文件, 一次 call_llm 抽取事实并给出建议, 按 terms_checks 出例外, 产出 TERMS, L1 建议判断 (不建复核任务, 由闸门呈报), 两份文件置 extracted.",
+   "scope_files": [
+    "src/backend/agents/client_intel.py",
+    "src/backend/services/judgment_engine.py (建议判断补全: 复用 judge 的 ID 规则与置信度, 可加公共方法)",
+    "tests/test_client_intel.py",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "规格书 UC-01 第 5 步 (2144 行), 18.3.1 judgments 归属 (A2 的 llm/hybrid 程序在 StatePatch 中起草)",
+    "开发接口文档第 6 节 Agent 契约与返回字段, 第 5 节 call_llm 与 llm_call 留痕",
+    "合成数据集设计第 7 节 (新增 ACC-08 行, 见 data_needs)"
+   ],
+   "prerequisites": [
+    "AP-1",
+    "AP-2",
+    "R34",
+    "R35"
+   ],
+   "external_deps": [
+    "B: FinancialDataStore.documents 返回 type engagement_letter 与 minutes 的文件, EvidenceStore.pages 读文本层; A 先用 FakeFinancialStore 与 FakeEvidenceStore 预置两份文件的 DocumentRef 与页面文本"
+   ],
+   "acceptance": [
+    "1. 输入: FinancialDataStore.documents 中 type 为 engagement_letter 与 minutes 的文件 (按文件名排序) 及其 EvidenceStore.pages; fixture_key TERMS; ValidationContext 带这两份文件, 参数快照, 画像 directors, period_end 2026-06-30.",
+    "2. Numbat: 片段 engagement_terms 为 TERMS v1 (checks 6 项 passed, exception_ids []), judgments 为 [J-ACC-08-1-TERMS v1: subject_id TERMS, run_id RUN-ACC-08-1, proposed_action accept, autonomy_level L1, review_status pending, exception_ids [], performed_by U-1, confidence 按 rules.json 权重含 evidence, rule, llm 三项], documents 为两份文件置 extracted, procedure_runs [RUN-ACC-08-1 succeeded]; 片段不含 review_tasks; 1 行 llm_call (actor A2, procedure_id ACC-08, run_id RUN-ACC-08-1, fixture_key TERMS).",
+    "3. T05 变体 (ScriptedLLM 给 consent 2026-06-02 与 proposed_action more_evidence): exceptions [X-ACC-08-1-T05-1: rule_id T05, severity high, source_ids [委任文件 ID], evidence 为 consent 与 appointment 的页指针], TERMS.exception_ids 与 judgment.exception_ids 都为 [X-ACC-08-1-T05-1].",
+    "4. 同一变体而 LLM 仍给 accept: 语义失败不重试, Agent 抛 ValueError, A1 按整次失败建 T-RUN-ACC-08-1-v1 (failed, allowed 只有 rerun).",
+    "5. 已有 TERMS v1 与 RUN-ACC-08-1 时再执行: RUN-ACC-08-2 (trigger rerun), TERMS v2, J-ACC-08-2-TERMS; 同一状态执行两次结果相同.",
+    "6. 缺 engagement_letter 文件时抛 LookupError, 按整次失败处理; check_patch 对 A2 片段通过 (AGENT_FIELDS[A2] 含 engagement_terms, judgments, documents, exceptions)."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-4",
+   "title": "ACC-08 节点与闸门呈报",
+   "procedures": [
+    "ACC-08",
+    "ACC-01"
+   ],
+   "goal": "ACC-01 通过后不再直接进 P1: 先进 p0_terms 节点 (载入约定文件, A2 执行 ACC-08), 停在新静态中断 gate_acc08 呈报 TERMS; ACC-01 通过不再改阶段.",
+   "scope_files": [
+    "src/backend/orchestration/graph.py (GATE_NODES, exits, _gate_target, gate_route 的 rerun 出口)",
+    "src/backend/orchestration/nodes.py (p0_terms, NODE_PROCEDURES)",
+    "src/backend/orchestration/decisions.py (acc01_effects 不改阶段, GATE_MATERIAL, GATE_PROCEDURE, gate_target)",
+    "src/backend/orchestration/query.py",
+    "src/backend/contracts/views.py (TermsMaterial 加入 GateMaterial)",
+    "tests/fakes.py (FakeDatasetLoader.load_engagement_documents, ScriptA2 的 ACC-08 脚本)",
+    "tests/test_graph.py",
+    "tests/test_query.py",
+    "tests/test_nodes.py",
+    "tests/test_decisions.py"
+   ],
+   "basis": [
+    "规格书 18.4 第 2826 行 gate_acc08, 2835 行 (P0 闸门两个中断点, 业务上算一道)",
+    "规格书 6.1.2 第 728 行 (约定书与委任有效前不接数据), 10 节 P0 分支 (1343 行)",
+    "开发接口文档第 7 节 StateQuery.gate, 视图模型, recover 规则第 3 条, 恢复机制; Demo需求文档第 4.1 节"
+   ],
+   "prerequisites": [
+    "AP-3",
+    "R05",
+    "R08",
+    "R09",
+    "R10"
+   ],
+   "external_deps": [
+    "B: DatasetLoader 新增 load_engagement_documents(eid, dataset), 把 data/demo/engagement/ 下两份 PDF 经 EvidenceStore.save 登记 (约定书 engagement_letter external_copy, 委任文件 minutes internal_copy), 已登记则跳过; A 先用 FakeDatasetLoader",
+    "C: api/routes/gates.py 与前端 ACC-08 闸门页 (展示 6 项核对, 例外, AI 建议与两份文件跳页); 接口文档写清契约, A 不等 C"
+   ],
+   "acceptance": [
+    "1. 图: gate_acc01 approve → p0_terms → gate_acc08; gate_acc08 出口 approve → p1_ingest, reject → declined, rerun → p0_terms, represent → gate_acc08; 编译的 interrupt_before 含 gate_acc08.",
+    "2. ACC-01 approve: ACC-01 completed, phase 仍 P0_Acceptance, 不写阶段 transition; p0_terms 先调 load_engagement_documents 再 execute ACC-08; ACC-08 执行成功后程序仍为 planned (Q5); 停在 gate_acc08. 此时 DatasetLoader.load 未被调用 (财务数据未接入).",
+    "3. gate(): GateView(gate ACC-08, target_id TERMS, target_version 1), material.kind ACC-08: terms 为 TERMS v1, exceptions 按 TERMS.exception_ids (Numbat 为 []), judgment 为 J-ACC-08-1-TERMS v1, documents 为两份 DocumentRef; overview.current_gate ACC-08, ACC-04 与 ACC-01 completed, ACC-08 planned.",
+    "4. ACC-08 整次失败: 节点内等待 rerun (R05 规则), 载荷 procedure_id ACC-08; 恢复补做按 NODE_PROCEDURES[\"p0_terms\"] = (\"ACC-08\",) 定序.",
+    "5. 现有测试中 ACC-01 approve 后 phase P1_Planning, 下一节点 p1_ingest 的断言改为 P0_Acceptance, 下一节点 p0_terms; 更新客户资料与 ACC-01 rerun 路径不变, 其余既有测试通过."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-5",
+   "title": "ACC-08 闸门决定校验, 效果与恢复",
+   "procedures": [
+    "ACC-08"
+   ],
+   "goal": "ACC-08 决定按必填表与取值规则校验; 前提条件核对有不过项时不能通过 (ASA 210 第 8 段); approve 进 P1, reject 拒绝承接并锁定, insufficient_info 回 p0_terms 让 A2 重读文件; 恢复补做能重建.",
+   "scope_files": [
+    "src/backend/orchestration/decisions.py (required_fields, allowed_fields, check_gate_decision, acc08_effects, VERSIONED_EFFECTS 加 judgments)",
+    "src/backend/orchestration/graph.py (gate_route: ACC-08 的 insufficient_info 走 rerun)",
+    "src/backend/orchestration/nodes.py (declined 节点阶段留痕的 procedure_id 取最后一条决定的闸门程序)",
+    "src/backend/orchestration/recovery.py (MATERIAL_MODELS, gate_values)",
+    "tests/test_decisions.py",
+    "tests/test_graph.py",
+    "tests/test_recovery.py",
+    "docs/开发接口文档.md 第 7 节"
+   ],
+   "basis": [
+    "ASA 210 第 8 段 (前提条件不具备时不得承接, 已核对原文)",
+    "规格书 12.2 GateDecision (1692-1700 行), 12.3 闸门迁移说明 (1972 行), 18.5 审批绑定版本",
+    "开发接口文档第 7 节校验顺序, 必填表, 决定的效果, 恢复机制"
+   ],
+   "prerequisites": [
+    "AP-4",
+    "R26",
+    "R30"
+   ],
+   "external_deps": [
+    "C: 前端 ACC-08 闸门表单 (approve 无专用字段, reject 与 insufficient_info 填理由)"
+   ],
+   "acceptance": [
+    "1. 拒绝且不写 Store, 锁释放: reject 或 insufficient_info 缺 reason → MISSING_FIELD; 任一决定带 materiality, edits, disposition, annotations, plan_confirmation → FIELD_NOT_ALLOWED; target 不是 TERMS 当前版本 → VERSION_MISMATCH; 停在 gate_acc01 时提交 ACC-08 决定 → NOT_AT_GATE.",
+    "2. T05 变体下 TERMS v1 有 X-ACC-08-1-T05-1: approve → INVALID_VALUE (消息含 T05 与 ASA 210 第 8 段), 不写 Store; reject 照常写入.",
+    "3. Numbat approve (id D-ACC08): GateDecision, ACC-08 completed 新版本, J-ACC-08-1-TERMS v2 (按开放问题 4 推荐: 建议 accept 且通过 → confirmed), phase P1_Planning 在同一次提交; 1 行 decision 留痕 (procedure_id ACC-08); transition 留痕 ACC-08 planned→completed 与阶段 P0_Acceptance→P1_Planning (procedure_id ACC-08); 下一节点 p1_ingest.",
+    "4. reject (reason \"Consent was given after the appointment; the appointment has no effect under s328A(4)\"): ACC-08 completed, 判断按开放问题 4 处理 (建议 more_evidence 而驳回 → confirmed), phase Declined, locked 在全部 put 之后; declined 节点补写的阶段留痕 procedure_id 为 ACC-08.",
+    "5. insufficient_info (reason \"Client to provide a consent dated before the appointment\"): 只写决定与留痕, 路由 rerun 回 p0_terms → RUN-ACC-08-2 (rerun), TERMS v2, J-ACC-08-2-TERMS, 再停 gate_acc08 (target TERMS v2); 之后绑 TERMS v1 的决定 → VERSION_MISMATCH.",
+    "6. acc08_effects 为纯函数 (程序包, 决定, 当前判断); 写 Store 后检查点未写时 resume: gate_values 从 Store 取决定绑定的 TERMS 版本, 判断新版本, 程序包, 阶段 (engagements 表), 补写留痕不重复; 补做两次结果相同."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-6",
+   "title": "PLN-15 契约, 准则片段与程序模板",
+   "procedures": [
+    "PLN-15"
+   ],
+   "goal": "建立总体审计计划 AuditPlan (每轮修订一个 ID, 状态变化出新版本), LLM 输出模型 AuditPlanDraft, 闸门编号 PLN-15 与批准时的确认项 PlanConfirmation; 写 PLN-15.yaml, 提示词与 ASA 300 片段. 设计取向同 AP-1: 规格书 18.4 把 PLN-15 定为 P1 闸门第二个中断点 gate_p1_plan.",
+   "scope_files": [
+    "src/backend/contracts/models.py (AuditPlan, PlanItem, PlanStatus, PlanConfirmation, GateId.PLN_15, GateDecision.plan_confirmation)",
+    "src/backend/contracts/llm_outputs.py (AuditPlanDraft)",
+    "src/backend/contracts/state.py (audit_plans)",
+    "src/backend/orchestration/merge.py (AGENT_FIELDS[A4] 加 audit_plans)",
+    "src/backend/knowledge/procedures/PLN-15.yaml",
+    "src/backend/knowledge/prompts/PLN-15.md.j2",
+    "src/backend/knowledge/standards/ASA300.yaml",
+    "tests/test_knowledge.py",
+    "docs/开发接口文档.md 第 0, 2.3, 2.5, 3, 5, 6, 8.1 节"
+   ],
+   "basis": [
+    "规格书 6.1.2 第 754 行 (PLN-15 前置 PLN-09, PLN-16, 闸门第二步), 7.5 第 1140 行 (ASA 300), 10 节 P1 人员行 (1352 行: 是否需要 EQR, 不需要审计师专家的确认), 第 1376 行 (装配后建 AuditPlan vN, 批准置 approved, 驳回建 vN+1)",
+    "规格书 12.2 AuditPlan (1788-1812 行), 12.4 M-10 (未批准计划不得进 P2)",
+    "ASA 300 第 7, 8, 9 段 (已核对 docs/参考资料/01_审计准则_ASA/ASA_300.pdf, Compilation Date 14 December 2023)",
+    "Demo 规则: depends_on 只写已实现程序, PLN-09 由 A1 assemble_pack 承担, PLN-16 未实现不建模"
+   ],
+   "prerequisites": [
+    "AP-1",
+    "R39"
+   ],
+   "external_deps": [
+    "B: OUTPUT_KINDS 加 AuditPlan, gate_materials 种类加 PLAN; decisions 表的 GateDecision JSON 含 plan_confirmation. A 先用 FakeOutputStore"
+   ],
+   "acceptance": [
+    "1. AuditPlan(Versioned) id PLAN-{revision}: revision, status (draft, approved), scope, applicable_framework 与 engagement_letter_document_id (取 TERMS), materiality_cents, performance_materiality_cents, clearly_trivial_cents, significant_risk_objective_ids, items (PlanItem: procedure_id, template_commit, objective_ids, params), narrative (段落名 → 正文), procedure_notes, timetable, eqr_required, eqr_basis, auditor_expert_not_required (批准前为 None), addresses_decision_id, revision_reason, approved_by, approved_at. 状态 audit_plans 用 upsert_by_id.",
+    "2. AuditPlanDraft: overall_strategy, sections, procedure_notes [{procedure_id, nature_timing_extent}], timetable [{milestone, due}], eqr_recommendation {required, basis}, expert_assessment, standards_cited (片段 ID 列表).",
+    "3. GateId 新增 PLN_15 = \"PLN-15\"; GateDecision 新增 plan_confirmation: PlanConfirmation | None, PlanConfirmation {eqr_required: bool, eqr_basis: str, auditor_expert_not_required: bool}.",
+    "4. PLN-15.yaml: phase P1_Planning, cycle Planning, owner A4, engine llm, autonomy_level L1, gate PLN-15, depends_on [PLN-01, PLN-03] (注释写明 PLN-09, PLN-16 未实现不建模), standards [ASA300-P07, ASA300-P09] (ASA300-P08 含脚注上标, 逐字测试通过才加入, 待核), llm {prompt PLN-15.md.j2, output_model AuditPlanDraft}.",
+    "5. 片段 ASA300-P07, ASA300-P09 逐字与 PDF 一致 (STANDARD_PDFS 加 ASA300, compiled \"2023-12-14\").",
+    "6. 接口文档: 第 0 节 ID 加 PLAN-{revision} (version 只随状态变), 第 2.5 节必填表加 PLN-15 行, 第 3 节字段归属加 audit_plans (A4 生成, DecisionSubmit 出批准版), 第 6 节 A4 行加 PLN-15."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-7",
+   "title": "A4 执行 PLN-15 与输出校验",
+   "procedures": [
+    "PLN-15"
+   ],
+   "goal": "RiskAssessorAgent 执行 PLN-15: 按程序包与状态确定性地组装计划骨架 (装配快照, 重要性, 特别风险, 适用框架), 由 LLM 写总体策略与各程序的性质, 时间, 范围叙述; 校验叙述覆盖全部已装配程序; 驳回后按理由出下一修订.",
+   "scope_files": [
+    "src/backend/agents/risk_assessor.py",
+    "src/backend/services/judgment_engine.py (AuditPlanDraft 的引用与语义校验)",
+    "tests/test_risk_assessor.py",
+    "tests/test_output_validator.py",
+    "tests/fixtures/llm/PLN-15/r1.json",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 300 第 7-9 段 (总体策略与具体计划, 已核对)",
+    "规格书 UC-02 第 7, 8 步 (2084-2085 行), 12.2 AuditPlan.packSnapshot",
+    "开发接口文档第 5 节 OutputValidator, 第 6 节 A10 RPT-03 的修订模式 (r{revision} 与 addresses_decision_id)"
+   ],
+   "prerequisites": [
+    "AP-6",
+    "R34",
+    "R38",
+    "R11"
+   ],
+   "external_deps": [
+    "无 (程序包, 重要性, TERMS 均取状态; 用 FakeOutputStore)"
+   ],
+   "acceptance": [
+    "1. Numbat (PLN-01/03 approve {revenue, 0.01, 0.75, 0.05}, 装配后程序包含 7 条 P2 程序): PLAN-1 v1 draft, revision 1; items 按程序编号排序: CSH-02 {period_end 2026-06-30, subsequent_days 10, lookback_days 5} [OBJ-CASH-EXI]; CSH-04 {as_of 2026-06-30} [OBJ-CASH-EXI]; CSH-05 {period_end 2026-06-30} [OBJ-CASH-EXI]; DOC-06 {} []; REV-02 {window_days 20, threshold_cents 9000000, period_end 2026-06-30} [OBJ-REV-CUT]; REV-03 {period_end 2026-06-30} [OBJ-REV-OCC, OBJ-REV-CUT]; REV-08 {window_days 20, period_end 2026-06-30} [OBJ-REV-OCC, OBJ-REV-CUT]; template_commit 为 library.commit; 重要性 12000000, 9000000, 600000; significant_risk_objective_ids [OBJ-REV-OCC, OBJ-REV-CUT]; applicable_framework tier2_gpfs; eqr_required 等三项为 None.",
+    "2. 请求 procedure_id PLN-15, run_id RUN-PLN-15-1, fixture_key r1; prompt 含 7 个程序编号与参数, 三项重要性与框架, 不含 \"## Revision\"; 1 行 llm_call (actor A4); RUN-PLN-15-1 succeeded.",
+    "3. 校验: procedure_notes 的程序编号集合与 items 不等 (缺 CSH-02 或多出 REV-05) → semantic; standards_cited 含未注册片段 → reference; timetable 有早于 2026-06-30 的日期 → semantic; 语法与结构失败按 R34 最多 3 次.",
+    "4. 连续失败或引用, 语义失败: Agent 抛 ValueError, A1 建 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun).",
+    "5. 修订: 状态有 PLAN-1 v1 与 PLN-15 reject D-p (reason \"Add the planned timing of bank confirmations\"): 出 PLAN-2 v1 draft, revision 2, addresses_decision_id D-p, revision_reason 为该理由, fixture_key r2 (测试用 ScriptedLLM), prompt 含 \"## Revision 2\" 与该理由; PLAN-1 不变.",
+    "6. r1.json 能按 AuditPlanDraft 解析并通过四级校验."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-8",
+   "title": "PLN-15 节点与闸门呈报; 进入 P2 改由计划批准",
+   "procedures": [
+    "PLN-15"
+   ],
+   "goal": "装配后先由 plan_draft 节点执行 PLN-15, 停在 gate_p1_plan 呈报计划; assemble_pack 只写 P2 程序第 1 版, 不再改阶段, 未批准计划不派发 (M-10).",
+   "scope_files": [
+    "src/backend/orchestration/graph.py",
+    "src/backend/orchestration/nodes.py (plan_draft, NODE_PROCEDURES, assemble_pack 不写阶段)",
+    "src/backend/orchestration/query.py",
+    "src/backend/contracts/views.py (PlanMaterial)",
+    "tests/fakes.py (ScriptA4 的 PLN-15 脚本)",
+    "tests/test_graph.py",
+    "tests/test_nodes.py",
+    "tests/test_query.py",
+    "docs/开发接口文档.md 第 3, 7 节",
+    "docs/Demo需求文档.md 第 4.1 节"
+   ],
+   "basis": [
+    "规格书 18.4 第 2828 行 gate_p1_plan, UC-02 第 7-8 步, 12.4 M-10",
+    "开发接口文档第 3 节程序执行范围 (assemble_pack 与阶段同事务写入, 本条改为计划批准时写)"
+   ],
+   "prerequisites": [
+    "AP-7",
+    "R11",
+    "R22"
+   ],
+   "external_deps": [
+    "C: 前端 PLN-15 闸门页 (计划正文, 装配快照, 三项确认的表单)"
+   ],
+   "acceptance": [
+    "1. 图: gate_p1_risk approve → assemble_pack → plan_draft → gate_p1_plan; gate_p1_plan 出口 approve → schedule, reject → plan_draft, represent → gate_p1_plan; interrupt_before 含 gate_p1_plan.",
+    "2. assemble_pack 写入 7 条 P2 程序第 1 版, engagements 阶段仍 P1_Planning, 不写阶段 transition; plan_draft execute PLN-15 (Q5: 成功后仍 planned); 停在 gate_p1_plan 时 schedule_table 为空, 没有任何 fieldwork 执行记录.",
+    "3. gate(): GateView(gate PLN-15, target_id PLAN-1, target_version 1), material.kind PLN-15: plan 为 PLAN-1 v1, terms 为 TERMS 当前版本, previous_decisions 为此前的 PLN-15 驳回决定 (首次为 []); overview.current_gate PLN-15.",
+    "4. R11, R22 等既有测试中 \"装配同一事务写 P2_Executing\" 的断言改由 AP-9 的 PLN-15 approve 承担, 其余通过."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-9",
+   "title": "PLN-15 闸门决定校验, 效果与恢复",
+   "procedures": [
+    "PLN-15"
+   ],
+   "goal": "PLN-15 approve 须带三项确认 (是否需要 EQR 及依据, 不需要审计师专家), 批准即计划出 approved 新版本, PLN-15 completed, 阶段进 P2_Executing; 驳回出下一修订; 恢复补做能重建.",
+   "scope_files": [
+    "src/backend/orchestration/decisions.py (required_fields, allowed_fields, GATE_SPECIFIC 加 plan_confirmation, pln15_effects, VERSIONED_EFFECTS 加 audit_plans)",
+    "src/backend/orchestration/graph.py (_gate_target 与批准后计划已升版仍放行)",
+    "src/backend/orchestration/recovery.py",
+    "tests/test_decisions.py",
+    "tests/test_graph.py",
+    "tests/test_recovery.py",
+    "docs/开发接口文档.md 第 7 节"
+   ],
+   "basis": [
+    "规格书 10 节 P1 人员行 (1352 行), 12.2 AuditPlan.eqrRequired (ASQM 1 第 34(f) 段), auditorExpertNotRequired (ASA 620, 3.3 节)",
+    "规格书 18.5 审批绑定版本 (计划审批版本失效重呈当前版)",
+    "开发接口文档第 7 节校验顺序, 决定的效果, 恢复机制"
+   ],
+   "prerequisites": [
+    "AP-8",
+    "R26",
+    "R30"
+   ],
+   "external_deps": [
+    "C: PLN-15 闸门表单字段 plan_confirmation"
+   ],
+   "acceptance": [
+    "1. 拒绝且不写 Store: approve 缺 plan_confirmation → MISSING_FIELD; plan_confirmation.eqr_basis 为空 → INVALID_VALUE; reject 或 insufficient_info 缺 reason → MISSING_FIELD; reject 带 plan_confirmation, 或任一决定带 materiality, edits, disposition, annotations → FIELD_NOT_ALLOWED; 其他闸门的决定带 plan_confirmation → FIELD_NOT_ALLOWED; target 不是当前计划版本 → VERSION_MISMATCH.",
+    "2. approve (id D-PLAN, plan_confirmation {eqr_required false, eqr_basis \"Small proprietary company, not listed; firm policy does not require an engagement quality review\", auditor_expert_not_required true}): GateDecision, PLAN-1 v2 (approved, approved_by U-1, approved_at 为决定时刻, 三项写入), PLN-15 completed 新版本, phase P2_Executing 在同一次提交; 1 行 decision 留痕 (procedure_id PLN-15); transition 留痕 PLN-15 planned→completed 与阶段 P1_Planning→P2_Executing (procedure_id PLN-15); 下一节点 schedule, 之后照常派发第 0 层 REV-08, REV-03, CSH-04, CSH-05.",
+    "3. approve 后 PLAN-1 已为 v2 而决定绑定 v1: gate_route 仍返回 approve (同 R26 验收 4 的签字放行).",
+    "4. reject (reason \"Add the planned timing of bank confirmations\"): 下一节点 plan_draft → RUN-PLN-15-2 (rerun), PLAN-2 v1 draft (addresses_decision_id 为该决定), 再停 gate_p1_plan, target PLAN-2 v1; 之后绑 PLAN-1 v1 的决定 → VERSION_MISMATCH; 阶段仍 P1_Planning.",
+    "5. insufficient_info: 只写决定与留痕, 仍停 gate_p1_plan.",
+    "6. pln15_effects 为纯函数 (程序包, 决定, 当前计划); 写 Store 后检查点未写时 resume: gate_values 取 Store 中 PLAN-1 v2, 程序包, 阶段, 补写留痕不重复."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-10",
+   "title": "PLN-19 契约, 准则片段与程序模板",
+   "procedures": [
+    "PLN-19",
+    "FIN-04"
+   ],
+   "goal": "建立重要性重估材料 MaterialityReassessment (REASSESSMENT), LLM 输出模型 ReassessmentDraft, 闸门编号 PLN-19 (视开放问题 1); 写 PLN-19.yaml 与 ASA 320 第 12, 13 段, ASA 450 第 10 段片段; FIN-04.yaml 前置加 PLN-19.",
+   "scope_files": [
+    "src/backend/contracts/models.py (MaterialityReassessment, GateId.PLN_19)",
+    "src/backend/contracts/llm_outputs.py (ReassessmentDraft)",
+    "src/backend/contracts/state.py (materiality_reassessment)",
+    "src/backend/orchestration/merge.py (AGENT_FIELDS[A4] 加 materiality_reassessment, judgments)",
+    "src/backend/knowledge/procedures/PLN-19.yaml",
+    "src/backend/knowledge/procedures/FIN-04.yaml (depends_on, 只作文档)",
+    "src/backend/knowledge/prompts/PLN-19.md.j2",
+    "src/backend/knowledge/standards/ASA320.yaml",
+    "src/backend/knowledge/standards/ASA450.yaml",
+    "tests/test_knowledge.py",
+    "docs/开发接口文档.md 第 0, 2.4, 3, 5, 8.1 节"
+   ],
+   "basis": [
+    "规格书 6.1.2 第 755 行 (P3 在 FIN-04 前必跑一次), 第 812 行 (FIN-04 前置含 PLN-19 的 P3 实例), 7.5 第 1145 行, 10 节 P3 错报处理顺序 (1425 行), UC-06 第 4 步 (2128 行)",
+    "ASA 320 第 12, 13, 14(d) 段 (已核对原文); ASA 450 第 10 段与 A14-A15 段 (已核对原文)"
+   ],
+   "prerequisites": [
+    "AP-6",
+    "R39",
+    "R61"
+   ],
+   "external_deps": [
+    "B: PLN-19.yaml 规则 M01 的 SQL (与 PLN-01 的 M01 相同取数); OUTPUT_KINDS 加 MaterialityReassessment, gate_materials 加 REASSESSMENT. A 先用 FakeRuleEngine 预置与 PLN-01 相同的 M01 行"
+   ],
+   "acceptance": [
+    "1. MaterialityReassessment(Versioned) id REASSESSMENT: planning_choice (MaterialityChoice, 取最后一条 PLN-01/03 approve), planning_amounts (三项), candidates (按当前试算表算出的 MaterialityCandidate 列表), current_overall_cents (按原选择对当前基准重算), adjusted_base_cents 与 adjusted_overall_cents (按未更正错报调整所选基准), change_pct (四位小数), uncorrected_total_cents, procedures_using_performance_materiality, exception_ids, judgment_id; 状态 materiality_reassessment (无 reducer).",
+    "2. ReassessmentDraft = JudgmentDraft 字段加 revise: bool, suggested_choice: MaterialityChoice | None.",
+    "3. GateId 新增 PLN_19 = \"PLN-19\" (开放问题 1 选 1 时; 选 2 或 3 时本项改为不加闸门, 其余照做).",
+    "4. PLN-19.yaml: phase P3_Completion, owner A4, engine hybrid, autonomy_level L1, gate PLN-19, depends_on [PLN-01], standards [ASA320-P12, ASA320-P13, ASA450-P10], params {materiality_cents, performance_materiality_cents, clearly_trivial_cents 用 ref, candidates 与 revenue_account_codes, income_tax_account_codes 同 PLN-01, basis_accounts {revenue: [Revenue]}, revise_threshold_pct 0.10 (注释: 实务惯例, 非准则规定)}, rules [M01 emit rows], llm {prompt PLN-19.md.j2, output_model ReassessmentDraft}; FIN-04.yaml depends_on [PLN-19].",
+    "5. 片段 ASA320-P12, ASA320-P13, ASA450-P10 逐字与 PDF 一致 (P13 之后隔小标题 Documentation 接 14 段, 符合现有正则).",
+    "6. 接口文档第 0 节闸门材料加 REASSESSMENT, 例 J-PLN-19-1-MATERIALITY, X-PLN-19-1-P01-1."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-11",
+   "title": "A4 执行 PLN-19 与输出校验",
+   "procedures": [
+    "PLN-19"
+   ],
+   "goal": "RiskAssessorAgent 执行 PLN-19: 规则按当前试算表重算候选, 按未更正错报算调整后基准, 变动超阈值出例外; LLM 判断重要性是否仍适当并给建议; 产出 REASSESSMENT 与 L1 建议判断 (不建复核任务).",
+   "scope_files": [
+    "src/backend/agents/risk_assessor.py",
+    "src/backend/services/judgment_engine.py (ReassessmentDraft 校验)",
+    "tests/test_risk_assessor.py",
+    "tests/test_output_validator.py",
+    "tests/fixtures/llm/PLN-19/MATERIALITY.json",
+    "tests/fakes.py"
+   ],
+   "basis": [
+    "ASA 450 第 10 段与 A14-A15 段, ASA 320 第 12-13 段 (已核对原文)",
+    "合成数据集设计第 3.1, 3.2 节 (试算表与重要性候选), 第 7 节第 9, 14 行 (错报 14200000 overstated)",
+    "开发接口文档第 5 节 OutputValidator"
+   ],
+   "prerequisites": [
+    "AP-10",
+    "R34",
+    "R35",
+    "R38"
+   ],
+   "external_deps": [
+    "B: RuleEngine 执行 PLN-19 M01; A 先用 FakeRuleEngine 预置 M01 行 (revenue 1200000000, total_assets 800000000, profit_before_tax 150000000)"
+   ],
+   "acceptance": [
+    "1. Numbat (重要性 12000000, 9000000, 600000; PLN-01/03 approve {revenue, 0.01, 0.75, 0.05}; 错报 M-… 14200000 overstated, account Revenue): REASSESSMENT v1: candidates 与 MATERIALITY v1 三行相同; current_overall_cents 12000000; adjusted_base_cents 1185800000; adjusted_overall_cents 11858000; change_pct -0.0118; uncorrected_total_cents 14200000; procedures_using_performance_materiality [REV-02] (其模板参数 ref performance_materiality_cents 且已执行); exception_ids [].",
+    "2. J-PLN-19-1-MATERIALITY v1: subject_id MATERIALITY, proposed_action accept (revise 假), autonomy_level L1, review_status pending; 片段无 review_tasks; 1 行 llm_call (actor A4, fixture_key MATERIALITY); 推理链 standard 步骤指向 ASA450-P10 与 ASA320-P12, fact 步骤指向试算表 4100 行 (source_type trial_balance).",
+    "3. 变体: 错报 150000000 overstated Revenue → adjusted_overall_cents 10500000, change_pct -0.125 ≥ 0.10 → X-PLN-19-1-P01-1 (severity medium, amount_cents -1500000), 判断 exception_ids 含它.",
+    "4. 校验: revise 为真而 suggested_choice 为空 → semantic; suggested_choice 的 basis 不在 candidates 或 pct 超出该候选区间 → semantic; 语法与结构失败按 R34 重试; 失败时 Agent 抛 ValueError, A1 建 T-RUN-PLN-19-1-v1 (failed).",
+    "5. MATERIALITY.json 通过四级校验; 再执行出 RUN-PLN-19-2, REASSESSMENT v2, J-PLN-19-2-MATERIALITY."
+   ],
+   "size": "M",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-12",
+   "title": "PLN-19 节点与闸门呈报 (P3 在 FIN-04 前必跑一次)",
+   "procedures": [
+    "PLN-19",
+    "FIN-04"
+   ],
+   "goal": "P2 结清后先进 p3_reassess (执行 PLN-19, 阶段置 P3_Completion), 停在 gate_pln19 呈报重估; 审计师处理后才进 completion 执行 FIN-04. 按开放问题 1 推荐项; 选其他项时本条改写.",
+   "scope_files": [
+    "src/backend/orchestration/graph.py (after_fan_in 去向 p3_reassess, 新边与闸门)",
+    "src/backend/orchestration/nodes.py (p3_reassess, NODE_PROCEDURES, completion 不再改阶段)",
+    "src/backend/orchestration/query.py",
+    "src/backend/contracts/views.py (ReassessmentMaterial)",
+    "tests/fakes.py (ScriptA4 的 PLN-19 脚本)",
+    "tests/test_graph.py",
+    "tests/test_nodes.py",
+    "tests/test_query.py",
+    "docs/开发接口文档.md 第 3, 7 节",
+    "docs/Demo需求文档.md 第 4.1 节"
+   ],
+   "basis": [
+    "规格书 10 节 P3 错报处理顺序 (1425 行: PLN-19 → FIN-04), 6.1.2 第 755, 812 行",
+    "开发接口文档第 3 节 (completion 与阶段同事务写入, 本条移到 p3_reassess)"
+   ],
+   "prerequisites": [
+    "AP-11",
+    "R23",
+    "R24"
+   ],
+   "external_deps": [
+    "C: 前端 PLN-19 闸门页 (原选择与金额, 当前候选, 调整后金额, AI 建议, 修订表单复用重要性闸门的控件)"
+   ],
+   "acceptance": [
+    "1. 图: fan_in 结清 → p3_reassess → gate_pln19; 出口 approve → completion, reject → p3_reassess, represent → gate_pln19; completion → gate_fin 不变; FIN-01 reject 仍回 completion, 不重跑 PLN-19.",
+    "2. p3_reassess 执行 PLN-19, 阶段 P3_Completion 与执行同一事务写入, 阶段 transition 的 procedure_id 为 PLN-19; PLN-19 成功后仍 planned (Q5); completion 执行 FIN-04 时不再改阶段, 不重复写阶段留痕.",
+    "3. gate(): GateView(gate PLN-19, target_id REASSESSMENT, target_version 1), material.kind PLN-19: reassessment, judgment (J-PLN-19-1-MATERIALITY), misstatements (状态中全部), plan (当前批准版计划); overview.current_gate PLN-19.",
+    "4. 停在 gate_pln19 时 uncorrected_schedule 仍为 None (FIN-04 未执行)."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-13",
+   "title": "PLN-19 闸门决定, 效果与对 FIN-04 阈值的影响",
+   "procedures": [
+    "PLN-19",
+    "FIN-04"
+   ],
+   "goal": "审计师在 gate_pln19 维持或修订重要性: approve 不带 materiality 为维持, 带 materiality 为修订 (须写理由); 修订后状态中三项金额更新, 当前计划出新版本记修订理由, FIN-04 按修订后金额累计; 恢复补做能按决定重算三项.",
+   "scope_files": [
+    "src/backend/orchestration/decisions.py (字段规则, check_materiality 对 REASSESSMENT.candidates, pln19_effects)",
+    "src/backend/orchestration/recovery.py (gate_values 重算三项)",
+    "tests/test_decisions.py",
+    "tests/test_graph.py",
+    "tests/test_recovery.py",
+    "tests/test_qc.py",
+    "docs/开发接口文档.md 第 7 节"
+   ],
+   "basis": [
+    "ASA 320 第 12, 13, 14(d) 段; ASA 450 第 10 段 (已核对原文)",
+    "规格书 10 节 P3 第 1425 行 (revised 为真时 AuditPlan 版本 +1), 11 节第 1526 行",
+    "开发接口文档第 7 节取值合法 (Q8, Q18 口径), 恢复机制 (只在图状态中的三项按决定重算)"
+   ],
+   "prerequisites": [
+    "AP-12",
+    "AP-9",
+    "R30"
+   ],
+   "external_deps": [
+    "C: PLN-19 闸门表单"
+   ],
+   "acceptance": [
+    "1. 字段: approve 可带 materiality, 带时 reason 必填 (缺 → MISSING_FIELD); reject 与 insufficient_info 须 reason; 带 edits, disposition, annotations, plan_confirmation → FIELD_NOT_ALLOWED; materiality 按 REASSESSMENT.candidates 校验 (basis 不在候选, 基准金额不为正, pct 超区间, performance_pct 超 [0.5, 0.75], clearly_trivial_pct 不在 (0, 0.05] → INVALID_VALUE), 如 {revenue, 0.02, 0.75, 0.05} → INVALID_VALUE.",
+    "2. Numbat approve 不带 materiality (id D-RE): PLN-19 completed, J-PLN-19-1-MATERIALITY v2 confirmed (开放问题 4 推荐), 三项仍 12000000, 9000000, 600000, PLAN-1 不出新版本; 1 行 decision 留痕 (PLN-19); 下一节点 completion: SCHEDULE v1 与 R23 验收 1 相同 (materiality_cents 12000000, total_cents 14200000, qualified).",
+    "3. approve 带 {revenue, 0.0095, 0.75, 0.05}, reason \"Reassessed against final results; lower materiality adopted to reflect the uncorrected cutoff misstatement\": 状态 materiality_cents 11400000, performance_materiality_cents 8550000, clearly_trivial_cents 570000; PLAN-1 v3 (approved, 三项为新值, revision_reason 为该理由); J-PLN-19-1-MATERIALITY v2 overridden; PLN-19 completed; 以上与决定同一次提交; 随后 RUN-FIN-04-1 params_snapshot {materiality_cents 11400000, clearly_trivial_cents 570000}, SCHEDULE v1 materiality_cents 11400000, total_cents 14200000, candidate_opinion qualified.",
+    "4. reject (reason \"Recompute using the final trial balance\"): 下一节点 p3_reassess → RUN-PLN-19-2, REASSESSMENT v2, 再停 gate_pln19; insufficient_info 只写决定, 仍停.",
+    "5. pln19_effects 为纯函数 (程序包, 当前计划, 判断, REASSESSMENT, 决定); 写 Store 后检查点未写时 resume: 三项按 GateDecision.materiality 与决定绑定的 REASSESSMENT 重算 (不带 materiality 时不改), 计划与判断取 Store, 留痕不重复."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-14",
+   "title": "人工程序契约与提交校验",
+   "procedures": [
+    "通用人工程序机制 (FIN-07, FIN-08, RPT-07 等 manual 程序共用)"
+   ],
+   "goal": "为 engine manual 的程序建立契约: 模板的 manual 段 (操作说明, 结果模型, 最少证据数), 复核队列新任务类型 manual (待执行, 只允许 manual_result), ManualResult 加执行日期与结构化明细, 上传文件类型; DecisionSubmit 校验人工结果并写出人工判断. 按开放问题 2 推荐项.",
+   "scope_files": [
+    "src/backend/contracts/knowledge.py (ManualSpec, ProcedureTemplate.manual)",
+    "src/backend/contracts/models.py (TaskKind.manual, ManualResult.performed_on 与 details, DocumentType 加 representation_letter, correspondence, Engine.manual 注释)",
+    "src/backend/contracts/manual_results.py (新: 结果模型基类与按名查找)",
+    "src/backend/services/procedure_library.py (manual 程序须有 manual 段)",
+    "src/backend/services/review_queue.py (allowed, make_task)",
+    "src/backend/services/judgment_engine.py (DOCUMENT_EVIDENCE 加新类型)",
+    "src/backend/orchestration/decisions.py (manual_result 对 manual 任务的校验与效果)",
+    "tests/test_review_queue.py",
+    "tests/test_decisions.py",
+    "tests/fakes.py",
+    "docs/开发接口文档.md 第 2.1, 2.5, 5, 7, 8.1 节"
+   ],
+   "basis": [
+    "规格书 6.4 (manual 仅人工执行, 系统负责排程与留痕, 1028-1030 行), 10 节 P2 引擎分流 (1391 行: manual 由 A10 派任务给人并收回结果与证据), 18.4 fieldwork 中 manual 分支 (2728-2729 行), 12.2 ReviewRecord.manualResult (1685 行)",
+    "规格书 18.5 决定提交单一接口 (只收 ReviewRecord 或 GateDecision)",
+    "开发接口文档第 7 节决定的效果 (manual_result, 人工 Judgment 按 Q10 只填人给的)"
+   ],
+   "prerequisites": [
+    "R17",
+    "R20"
+   ],
+   "external_deps": [
+    "C: 上传端点 POST /engagements/{eid}/documents (multipart, 字段 type) 调 EvidenceStore.save 返回 DocumentRef; 复核任务列表区分 manual 任务并显示模板 manual.instructions; manual_result 表单 (结论, 执行日期, 证据页码, 明细). A 先用 FakeEvidenceStore.save 与 FakeFinancialStore.documents 预置上传件",
+    "B: documents.type 允许新取值; EvidenceStore.save 已有, 不改接口"
+   ],
+   "acceptance": [
+    "1. ManualSpec {instructions: str, result_model: str | None, min_evidence: int = 1, subject: str = \"RESULT\"}; engine manual 且 gate 为空的模板没有 manual 段时 ProcedureLibrary 加载即报错; 现有闸门模板 (ACC-01, PLN-01, PLN-03, FIN-01, RPT-01) 不受影响.",
+    "2. TaskKind.manual; make_task(kind manual, target 为本次 Run, subject_id 取 manual.subject) → id T-RUN-{pid}-{n}-v1, target_type ProcedureRun; ReviewQueue.allowed(manual 任务) == {manual_result}.",
+    "3. ManualResult 新增 performed_on: date, details: dict = {}; DocumentType 新增 representation_letter, correspondence, 指针映射为 voucher, reliability 取 DocumentRef.",
+    "4. 对 manual 任务提交 manual_result 的拒绝 (不写 Store): 缺 manual_result 或 reason → MISSING_FIELD; rerun 或 confirm → DECISION_NOT_ALLOWED; evidence 少于 min_evidence → INVALID_VALUE; 指针 source_type 不是 document, 文件不在本项目 FinancialDataStore.documents, 或 page 3 而 page_count 2 → INVALID_VALUE; performed_on 晚于 decided_at 的悉尼日期 → INVALID_VALUE; details 不能按 result_model 解析 (result_model 为空时 details 须为空) → INVALID_VALUE.",
+    "5. 测试模板 TST-M01 (测试 knowledge 目录, owner A10, engine manual, autonomy L1, manual {instructions \"Obtain the signed management representation letter\", result_model null, min_evidence 1}), 任务 T-RUN-TST-M01-1-v1, 上传件 DOC-0a1b2c3d4e5f (representation_letter, page_count 2, internal_original): 提交 {conclusion \"Signed letter obtained, dated 1 October 2026\", performed_on 2026-10-01, evidence [document DOC-0a1b2c3d4e5f page 2]} → J-TST-M01-1-RESULT-H1 (confirmed, evidence type voucher reliability internal_original, performed_by 为 reviewed_by, autonomy_level L1, confidence 1.0, reasoning_chain 空), 任务 v2 decided, TST-M01 出 completed 新版本, 1 行 decision 留痕, transition awaiting_human→completed.",
+    "6. ReviewRecord.manual_result.details 原样存入 decisions 表, 供后续程序 (如书面声明校验) 读取; 接口文档第 5 节需要人表加 manual 行, 第 7 节校验表与必填表加 manual_result 的新规则."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-15",
+   "title": "人工程序的派发与节点内等待",
+   "procedures": [
+    "通用人工程序机制 (FIN-07, FIN-08, RPT-07 等 manual 程序共用)"
+   ],
+   "goal": "P2 以外节点中的 manual 程序由 A10 派发: 建执行记录与 manual 任务, 程序 awaiting_human, 节点内等待审计师提交人工结果后读回并继续; 只加 YAML 即可新增人工程序; 恢复补做按节点程序顺序.",
+   "scope_files": [
+    "src/backend/agents/concierge.py (select_procedures 另选 engine manual 且 gate 为空的模板, 派发)",
+    "src/backend/agents/registry.py (P2 的 manual 模板启动即报 NotImplementedError)",
+    "src/backend/orchestration/nodes.py (attempt 把待决 manual 任务算作等人, execute 等待并读回 manual_result)",
+    "src/backend/orchestration/recovery.py (按 NODE_PROCEDURES 与 run_no 定序, 已有逻辑覆盖)",
+    "tests/test_manual.py",
+    "tests/test_recovery.py",
+    "tests/fakes.py",
+    "docs/开发接口文档.md 第 3, 6, 7 节"
+   ],
+   "basis": [
+    "规格书 18.4 第 2728-2729 行 (manual 程序由 A10 collect_manual_result), 6.5 可扩展性 (新增程序只加注册表配置)",
+    "开发接口文档第 7 节恢复机制 (P2 以外程序节点内等待, 载荷 records, 补做顺序)",
+    "Q17 (一轮失败算一组) 不适用于 manual 任务: 每次派发只有一个任务"
+   ],
+   "prerequisites": [
+    "AP-14",
+    "R03",
+    "R05",
+    "R07",
+    "R31"
+   ],
+   "external_deps": [
+    "C: 总览中 awaiting_review 为真时前端跳转到 manual 任务; 具体程序 (FIN-07, FIN-08, RPT-07) 挂到哪个节点由各自需求定, 本条只做机制"
+   ],
+   "acceptance": [
+    "1. build_agents 把 TST-M01 映射到 ConciergeAgent, 不改代码只加 YAML; 程序库中出现 phase P2_Executing 的 manual 模板时启动抛 NotImplementedError (本级不做 P2 人工程序, 如 CSH-07, INV-07).",
+    "2. 以 monkeypatch 把 TST-M01 放进 NODE_PROCEDURES[\"completion\"] 的 FIN-04 之前: completion 执行 TST-M01 → 同一事务写入 RUN-TST-M01-1 (succeeded, instance None), T-RUN-TST-M01-1-v1 (manual, pending, subject_id RESULT), TST-M01 v2 awaiting_human; transition planned→awaiting_human; llm_call 0 行; 节点 interrupt 载荷 {awaiting human, procedure_id TST-M01, run_id RUN-TST-M01-1, records}; overview.awaiting_review 为真, pending_tasks 1.",
+    "3. 提交 AP-14 验收 5 的 manual_result 后: 节点读回该决定 (须为 manual_result 且针对该任务) 与程序 v3 completed, 不新建 RUN-TST-M01-2, 继续执行 FIN-04, 停在 gate_fin; 读回到非 manual_result 决定或版本不是 completed 时抛 ValueError.",
+    "4. 恢复: 决定写 Store 后检查点未写 → recover 补写 decision 留痕, 以 Command(resume=决定 ID) 交回节点, 结果与不中断时相同, 留痕不重复; 同节点 TST-M01 等待后 FIN-04 失败再 rerun 时, 两个决定按 NODE_PROCEDURES 顺序交回.",
+    "5. 其他 P2 以外程序的失败与 rerun 等待 (R05, R07) 既有测试通过."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  },
+  {
+   "key": "AP-16",
+   "title": "验收: 脚本 Agent 全流程与迁移留痕纳入新闸门",
+   "procedures": [
+    "ACC-08",
+    "PLN-15",
+    "PLN-19"
+   ],
+   "goal": "R27, R28 的脚本 Agent 全流程加入 ACC-08, PLN-15, PLN-19 三道闸门步骤, 决定数, 留痕数与最终状态对得上.",
+   "scope_files": [
+    "tests/test_flow.py",
+    "tests/test_trail.py",
+    "tests/fakes.py (numbat_p1_agents 等脚本集加 ACC-08, PLN-15, PLN-19)"
+   ],
+   "basis": [
+    "Demo需求文档第 8 节第 1, 5 条; 合成数据集设计第 7 节 (新增行见 data_needs)",
+    "Q11 (阶段与程序状态各一行)"
+   ],
+   "prerequisites": [
+    "AP-5",
+    "AP-9",
+    "AP-13",
+    "R27",
+    "R28"
+   ],
+   "external_deps": [
+    "无"
+   ],
+   "acceptance": [
+    "1. 决定序列: ACC-01 approve, ACC-08 approve, PLN-01/03 approve {revenue, 0.01, 0.75, 0.05}, PLN-15 approve (plan_confirmation 同 AP-9 验收 2), 6 条复核同 R27, PLN-19 approve (不修订), FIN-01 approve qualified, RPT-01 reject 后 approve.",
+    "2. 闸门决定 8 条; decision 留痕 14 行 (闸门 8, 复核 6).",
+    "3. transition 留痕 28 行: 阶段 5 行 (P0→P1 procedure_id ACC-08, P1→P2 PLN-15, P2→P3 PLN-19, P3→P4 FIN-01, P4→Archived RPT-01); 程序 23 行: 固定集 13 条 (ACC-04, ACC-01, ACC-08, DOC-04, PLN-07, PLN-01, PLN-03, PLN-15, PLN-19, FIN-04, FIN-01, RPT-03, RPT-01) 各 planned→completed 1 行, REV-08, CSH-04, CSH-05, DOC-06 各 1 行, REV-03, REV-02, CSH-02 各 2 行 (经 awaiting_human).",
+    "4. 最终: TERMS v1, PLAN-1 v2 approved, REASSESSMENT v1, SCHEDULE v1 同 R27 验收 1, REPORT-2 v2 signed, Archived 且 locked."
+   ],
+   "size": "S",
+   "review_effort": "high"
+  },
+  {
+   "key": "AP-17",
+   "title": "验收: mock 离线全流程纳入承接与计划法定步骤",
+   "procedures": [
+    "ACC-08",
+    "PLN-15",
+    "PLN-19"
+   ],
+   "goal": "R55 的真实 Agent 与 MockLLMClient 全流程加入 ACC-08, PLN-15, PLN-19, 产出, 留痕与证据指针对照合成数据集第 7 节新增行; 演示路径的变化写进验收. 人工程序机制本组不挂具体程序, 不改变本流程的数字.",
+   "scope_files": [
+    "tests/test_e2e_mock.py",
+    "tests/fakes.py",
+    "tests/test_knowledge.py (程序数, fixture 两处一致)"
+   ],
+   "basis": [
+    "Demo需求文档第 8 节第 1, 4, 5 条",
+    "合成数据集设计第 7 节 (新增 ACC-08, PLN-15, PLN-19 行与汇总表, 见 data_needs)"
+   ],
+   "prerequisites": [
+    "AP-16",
+    "R55"
+   ],
+   "external_deps": [
+    "B: data/demo/engagement/ 两份 PDF, manifest, DatasetLoader.load_engagement_documents, data/demo/llm 下三份新 fixture 的复制 (见 data_needs); 就绪前用 FakeDatasetLoader 与 FakeEvidenceStore 预置同样文本; R56 真实存储变体在 B 就绪后按本条数字同步更新"
+   ],
+   "acceptance": [
+    "1. start_demo: ACC-01 approve → ACC-08 approve → PLN-01/03 approve → PLN-15 approve; finish_demo: 6 条复核后先 PLN-19 approve (不修订), 再 FIN-01, RPT-01 退回再批准. 全流程闸门停顿由 5 次增至 8 次 (ACC-01, ACC-08, PLN-01/03, PLN-15, PLN-19, FIN-01, RPT-01 两次), 复核等待 6 次不变.",
+    "2. 结果: 例外 4 条不变; Judgment 8 条全部 confirmed v2 (原 6 条加 J-ACC-08-1-TERMS, J-PLN-19-1-MATERIALITY); 任务 6 条 decided; document 7 份 extracted (原 5 份加约定书与委任文件); PLAN-1 v2 approved, items 7 条; TERMS v1 checks 6 项 passed; REASSESSMENT v1 adjusted_overall_cents 11858000; 重要性三项与 SCHEDULE v1 不变; REPORT-2 signed, opinion_route qualified.",
+    "3. 留痕: llm_call 16 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, RPT-03 2, ACC-08 1, PLN-15 1, PLN-19 1); decision 14 行; external_call 4 行不变.",
+    "4. test_every_program_runs_with_a_real_agent 的表加 ACC-08 ClientIntelAgent, PLN-15 RiskAssessorAgent, PLN-19 RiskAssessorAgent 各 1 次; 校验计数加 ACC-08 1, PLN-15 1, PLN-19 1, 每次无错误无无支撑步骤.",
+    "5. tests/fixtures/llm 下每个文件 (含 ACC-08/TERMS, PLN-15/r1, PLN-19/MATERIALITY) 被读到一次且第一次就通过; 全部证据指针 (含约定文件页指针, ASA210, ASA300, CA2001 片段) 经 OutputValidator 解析通过.",
+    "6. test_knowledge 程序数比改前 +3 (与其他组合并时以合并后总数为准), 装配集与 P2 分层断言不变; data/demo/llm 与 tests/fixtures/llm 内容一致."
+   ],
+   "size": "M",
+   "review_effort": "xhigh"
+  }
+ ],
+ "data_needs": [
+  {
+   "what": "约定书 PDF data/demo/engagement/engagement_letter.pdf (3 页, reportlab invariant=1, 带文本层, 英文)",
+   "for_keys": [
+    "AP-2",
+    "AP-3",
+    "AP-4",
+    "AP-17"
+   ],
+   "owner": "B",
+   "detail": "第 1 页: 抬头 Tessellate Audit Partners, Level 9, 1 Illustration Place, Sydney NSW 2000 (与 report.yaml 签名块一致); 日期 3 June 2026; 收件 The Directors, Numbat Electronic Components Pty Ltd (ABN 68 900 042 015), Unit 7, 42 Example Parade, Silverwater NSW 2128; 标题 Audit of the financial report for the year ending 30 June 2026; 段 Objective and scope (受股东依 s293 指示而审计, 目的为对财务报告发表意见, ASA 210 第 10(a) 段) 与 Our responsibilities (按 Australian Auditing Standards 执行, 合理保证, 第 10(b) 段). 第 2 页: Responsibilities of the directors, 董事确认 (a) 按 Australian Accounting Standards – Simplified Disclosures 与 Corporations Act 2001 编制财务报告 (第 10(c)(d) 段与 6(b)(i)), (b) 必要的内部控制 (6(b)(ii)), (c) 提供全部相关信息, 审计师要求的额外信息, 不受限制接触相关人员 (6(b)(iii) a-c). 第 3 页: Reporting, 预期报告形式并声明 \"may differ from its expected form and content\" (第 10(e) 段); Acknowledgement: Jordan Avery, Director, 10 June 2026 代表公司签回; Jordan Ellis, Partner, Tessellate Audit Partners, 3 June 2026. EvidenceStore.save type engagement_letter, reliability external_copy."
+  },
+  {
+   "what": "委任文件 PDF data/demo/engagement/appointment.pdf (3 页)",
+   "for_keys": [
+    "AP-2",
+    "AP-3",
+    "AP-4",
+    "AP-17"
+   ],
+   "owner": "B",
+   "detail": "第 1 页: Shareholder direction under section 293 of the Corporations Act 2001: Morgan Hale (新增合成人名, 非董事) 持 1,000,000 股普通股中的 120,000 股 (12% of the votes, 与试算表 3100 股本 1,000,000.00 一致), 指示公司为截至 30 June 2026 的财年编制财务报告与董事报告并发给全体股东, 按 Australian Accounting Standards – Simplified Disclosures 编制, 财务报告须审计; 签 Morgan Hale, 15 May 2026. 第 2 页: Circular resolution of the directors, 29 May 2026: 依 s325(1) 委任 Tessellate Audit Partners 为审计师, 写明股东大会未委任审计师; 签 Jordan Avery, Director 与 Priya Raman, Director (与 client_profile directors 一致). 第 3 页: Consent to act as auditor (section 328A), 27 May 2026: Tessellate Audit Partners 同意担任审计师; 以事务所名义 \"Tessellate Audit Partners\" 与本人名义 \"Jordan Ellis, Registered Company Auditor No. 300471, member of the firm\" 双签 (s328A(2)). EvidenceStore.save type minutes, reliability internal_copy. 测试变体 (只在 tests 中构造, 不进 data/demo): 同意书日期 2 June 2026."
+  },
+  {
+   "what": "manifest.json 与 DatasetLoader 新方法",
+   "for_keys": [
+    "AP-3",
+    "AP-4",
+    "AP-17"
+   ],
+   "owner": "B",
+   "detail": "manifest.documents 加两条 (path engagement/engagement_letter.pdf type engagement_letter page_count 3; engagement/appointment.pdf type minutes page_count 3; document_id 为 DOC-{sha256 前 12 位}); DatasetLoader 新增 load_engagement_documents(eid, dataset) 只登记这两份 (已登记跳过), 在 P0 调用; DatasetLoader.load (PLN-10 替代) 不再登记它们. A 先在 FakeDatasetLoader 与 FakeEvidenceStore 用占位 ID, 出 manifest 后按 R54 办法替换 fixture 中的文档 ID."
+  },
+  {
+   "what": "data/demo/llm 下三份新 fixture 的复制",
+   "for_keys": [
+    "AP-2",
+    "AP-7",
+    "AP-11",
+    "AP-17"
+   ],
+   "owner": "B",
+   "detail": "generate_demo.py 把 tests/fixtures/llm/ACC-08/TERMS.json, PLN-15/r1.json, PLN-19/MATERIALITY.json 复制到 data/demo/llm/ 同路径 (tests/test_knowledge.py 校验两处一致)."
+  },
+  {
+   "what": "PLN-19.yaml 规则 M01 的 SQL",
+   "for_keys": [
+    "AP-10",
+    "AP-11"
+   ],
+   "owner": "B",
+   "detail": "与 PLN-01.yaml 的 M01 相同 (按 revenue_account_codes 与 income_tax_account_codes 取本期 revenue, total_assets, profit_before_tax 三个基准金额, emit rows); Numbat 结果 1200000000, 800000000, 150000000. A 先用 FakeRuleEngine 预置这三行."
+  },
+  {
+   "what": "合成数据集设计.md 新增内容",
+   "for_keys": [
+    "AP-2",
+    "AP-3",
+    "AP-7",
+    "AP-11",
+    "AP-16",
+    "AP-17"
+   ],
+   "owner": "B (A 提供数值)",
+   "detail": "第 1 节文件布局加 engagement/ 目录; 新增第 2.5 节 约定与委任 (Morgan Hale 12%, 各日期, 框架 tier2_gpfs, 审计师 Jordan Ellis 与注册号 300471); 第 6 节加两份 PDF 正文与期望抽取结果; 第 7 节加行: ACC-08 (TERMS v1, 6 项 passed, J-ACC-08-1-TERMS accept, 无例外, 闸门 approve → P1_Planning), PLN-15 (PLAN-1 v1 draft, items 7 条, approve 三项确认 → PLAN-1 v2 approved, P2_Executing), PLN-19 (REASSESSMENT v1: current 12000000, adjusted_base 1185800000, adjusted_overall 11858000, change -0.0118, 无例外, J-PLN-19-1-MATERIALITY accept, approve 不修订); 汇总表 Judgment 8 条, document 7 份, llm_call 16 行."
+  },
+  {
+   "what": "持久化: 新产出种类与文件类型",
+   "for_keys": [
+    "AP-1",
+    "AP-6",
+    "AP-10",
+    "AP-14"
+   ],
+   "owner": "B",
+   "detail": "persistence/models.py OUTPUT_KINDS 加 EngagementTerms, AuditPlan, MaterialityReassessment; gate_materials 种类加 TERMS, PLAN, REASSESSMENT; documents.type 允许 engagement_letter, minutes, representation_letter, correspondence (有 CHECK 约束时加迁移); decisions 表 GateDecision JSON 多出 plan_confirmation 字段 (JSONB 无需迁移, 校验模型同步)."
+  },
+  {
+   "what": "前端与 API",
+   "for_keys": [
+    "AP-4",
+    "AP-5",
+    "AP-8",
+    "AP-9",
+    "AP-12",
+    "AP-13",
+    "AP-14",
+    "AP-15"
+   ],
+   "owner": "C",
+   "detail": "三个新闸门页 (ACC-08: 6 项核对与两份文件跳页; PLN-15: 计划正文, 装配快照与三项确认表单; PLN-19: 原选择, 当前候选, 调整后金额与修订表单); 上传端点 POST /engagements/{eid}/documents (multipart, type) 调 EvidenceStore.save; 复核任务列表区分 manual 任务并显示 instructions, manual_result 表单 (结论, 执行日期, 证据文件与页码, 明细); 改完 bun run generate-client."
+  }
+ ],
+ "contract_changes": [
+  {
+   "target": "contracts/models.py GateId",
+   "change": "新增 ACC_08 = \"ACC-08\", PLN_15 = \"PLN-15\"; PLN_19 = \"PLN-19\" 视开放问题 1",
+   "doc_section": "开发接口文档第 2.1 节; 规格书 12.2 GateDecision.gate 清单 (加 PLN-19 时须同步改规格书)"
+  },
+  {
+   "target": "contracts/models.py DocumentType",
+   "change": "新增 engagement_letter, minutes (ACC-08), representation_letter, correspondence (人工程序上传); judgment_engine.DOCUMENT_EVIDENCE 相应映射",
+   "doc_section": "开发接口文档第 2.1 节, 第 5 节 source_type 映射表, 第 9 节 documents 表"
+  },
+  {
+   "target": "contracts/models.py TaskKind 与 ManualResult",
+   "change": "TaskKind 新增 manual; ManualResult 新增 performed_on: date, details: dict",
+   "doc_section": "开发接口文档第 2.1, 2.5 节, 第 5 节需要人表, 第 7 节校验表, 必填表, 效果表"
+  },
+  {
+   "target": "contracts/models.py 新对象 EngagementTerms (及 TermsItem, 委任事实子模型)",
+   "change": "ACC-08 产出, 闸门材料, id 固定 TERMS",
+   "doc_section": "开发接口文档第 0 节 ID 规则 (闸门材料), 第 2.4 节"
+  },
+  {
+   "target": "contracts/models.py 新对象 AuditPlan (及 PlanItem, PlanStatus, PlanConfirmation)",
+   "change": "PLN-15 产出, id PLAN-{revision}, version 随状态 (draft → approved, PLN-19 修订再 +1); GateDecision 新增 plan_confirmation",
+   "doc_section": "开发接口文档第 0 节, 第 2.3 或 2.4 节, 第 2.5 节 GateDecision 与必填表"
+  },
+  {
+   "target": "contracts/models.py 新对象 MaterialityReassessment",
+   "change": "PLN-19 产出, 闸门材料, id 固定 REASSESSMENT; GateDecision.materiality 允许在 PLN-19 approve 时填 (修订)",
+   "doc_section": "开发接口文档第 0 节, 第 2.4 节, 第 7 节必填表与取值合法"
+  },
+  {
+   "target": "contracts/llm_outputs.py",
+   "change": "新增 EngagementTermsReview, AuditPlanDraft, ReassessmentDraft; OutputValidator 对三者的引用与语义校验分支 (替换 NotImplementedError 的覆盖范围)",
+   "doc_section": "开发接口文档第 5 节 LLM 输出模型与 OutputValidator"
+  },
+  {
+   "target": "contracts/services.py ValidationContext",
+   "change": "新增 documents (多文件抽取), terms_params, directors, period_end 等 ACC-08 校验所需字段",
+   "doc_section": "开发接口文档第 5 节"
+  },
+  {
+   "target": "contracts/state.py",
+   "change": "新增 engagement_terms (无 reducer), audit_plans (upsert_by_id), materiality_reassessment (无 reducer); initial_state 置空",
+   "doc_section": "开发接口文档第 3 节字段表与字段写入归属表"
+  },
+  {
+   "target": "contracts/views.py",
+   "change": "新增 TermsMaterial (kind ACC-08), PlanMaterial (kind PLN-15), ReassessmentMaterial (kind PLN-19) 并加入 GateMaterial 联合",
+   "doc_section": "开发接口文档第 7 节视图模型, 第 10 节 gate 响应"
+  },
+  {
+   "target": "contracts/knowledge.py",
+   "change": "新增 ManualSpec 与 ProcedureTemplate.manual (instructions, result_model, min_evidence, subject); 新文件 contracts/manual_results.py 放结果模型",
+   "doc_section": "开发接口文档第 8.1 节程序 YAML"
+  },
+  {
+   "target": "contracts/ports.py DatasetLoader",
+   "change": "新增 load_engagement_documents(eid, dataset) (B 实现)",
+   "doc_section": "开发接口文档第 4 节"
+  },
+  {
+   "target": "编排拓扑与阶段推进",
+   "change": "新节点 p0_terms, gate_acc08, plan_draft, gate_p1_plan, p3_reassess, gate_pln19; ACC-01 approve 不再改阶段 (改由 ACC-08 approve 进 P1), assemble_pack 不再改阶段 (改由 PLN-15 approve 进 P2), 进 P3 改在 p3_reassess; ACC-08 insufficient_info 走 rerun 回 p0_terms (视开放问题 5)",
+   "doc_section": "开发接口文档第 3 节程序执行范围, 第 7 节 recover 规则第 3 条, 决定的效果, 恢复机制; Demo需求文档第 1, 4.1 节与第 6 节 (删去 ACC-08, PLN-15 本版不做)"
+  },
+  {
+   "target": "Agent 返回字段",
+   "change": "A2 加 ACC-08 (engagement_terms, judgments, documents); A4 加 PLN-15, PLN-19 (audit_plans, materiality_reassessment, judgments); A10 加全部 engine manual 且 gate 为空的程序 (procedure_runs, review_tasks)",
+   "doc_section": "开发接口文档第 6 节 Agent 表; merge.AGENT_FIELDS"
+  },
+  {
+   "target": "准则片段",
+   "change": "新增 ASA210.yaml (P06, P10), ASA300.yaml (P07, P09), ASA320 加 P12, P13, ASA450 加 P10, CA2001.yaml (S293, S325, S328A); 逐字测试扩展到公司法 PDF",
+   "doc_section": "开发接口文档第 8.2 节; Demo需求文档第 7 节片段表"
+  }
+ ],
+ "open_questions": [
+  {
+   "question": "期末重估重要性之后, 审计师在哪里确认 \"维持\" 还是 \"修订\"? 修订后的金额要用于随后的未更正错报汇总.",
+   "options": [
+    {
+     "label": "在汇总未更正错报之前加一个确认步骤 (新的一道闸门)",
+     "pros": "修订后的金额直接用于错报汇总, 一步到位; AI 的重估理由与审计师确认在同一页, 演示能看到; 复用重要性闸门已有的取值校验与恢复补做写法",
+     "cons": "全流程多一次停顿 (闸门停顿 8 次); 规格书的闸门清单没有这一项, 要同步改规格书与接口文档"
+    },
+    {
+     "label": "并进未更正错报评价闸门: 维持就照常批准, 要修订就驳回并填新的重要性, 系统重算汇总表",
+     "pros": "不加停顿; 与准则 \"评价未更正错报前重估\" 的位置一致",
+     "cons": "汇总表先按旧金额算一遍再重算; 一条驳回决定承担两种含义, 校验, 路由与恢复都要分情况"
+    },
+    {
+     "label": "当作普通复核任务, 复核决定里加重要性字段",
+     "pros": "不加闸门",
+     "cons": "复核决定契约要加重要性字段, 三项金额只在图状态中, 恢复补做要另写; 完成阶段节点现在只会等失败任务, 要另做一种等待"
+    }
+   ],
+   "recommendation": "选第 1 项. 理由: 修订直接影响错报累计的门槛, 必须在累计之前由人确认; 新闸门可以照搬重要性闸门的校验与恢复, 实现风险最小. 若选第 2 或第 3 项, PLN-19 的节点与决定两条需求要重写.",
+   "affects": [
+    "AP-10",
+    "AP-12",
+    "AP-13",
+    "AP-16",
+    "AP-17"
+   ]
+  },
+  {
+   "question": "人工执行的程序 (如取得管理层声明书, 与管理层沟通错报, 与治理层沟通) 的待办放在哪里, 审计师怎么提交执行结果?",
+   "options": [
+    {
+     "label": "复核队列里新增 \"待执行\" 任务, 审计师上传文件, 填结论与执行日期后提交",
+     "pros": "沿用唯一的决定提交入口, 校验, 留痕, 恢复补做都现成; 前端复核页即可承载",
+     "cons": "规格书写的是人工程序 \"不建复核任务\", 要在规格书注明这是实现上的承载; 任务列表混入非复核事项, 前端要分开显示"
+    },
+    {
+     "label": "不建任务, 新开一种提交对象 (人工结果) 走同一个提交入口",
+     "pros": "概念上与复核分开",
+     "cons": "提交入口多一种对象, 校验, 留痕, 恢复补做要另写一套; 接口与前端改动更大"
+    },
+    {
+     "label": "沿用失败任务, 只放开人工结果",
+     "pros": "改动最小",
+     "cons": "程序没失败却挂着失败任务, 总览与统计会误读; 还会允许 \"重跑\" 这种无意义的决定"
+    }
+   ],
+   "recommendation": "选第 1 项. 风险最低, 与现有提交, 恢复机制一致; 规格书的 \"不建复核任务\" 本意是人工结果不再经 AI 复核, 新任务类型只允许提交人工结果, 不经复核规则, 不违背本意.",
+   "affects": [
+    "AP-14",
+    "AP-15"
+   ]
+  },
+  {
+   "question": "业务约定书这一步, AI 具体做什么?",
+   "options": [
+    {
+     "label": "读客户签回的约定书和委任文件, 逐项核对准则要求的要素与委任是否有效, 给出建议",
+     "pros": "正是准则要求的 \"书面约定并取得管理层确认\"; 结论带页码证据, 能演示 AI 读文件; 只调用一次大模型",
+     "cons": "合成数据要新增两份 PDF; 约定书由谁起草不在系统内"
+    },
+    {
+     "label": "AI 起草约定书, 审计师确认后发给客户, 签回件另行登记",
+     "pros": "省审计师起草的工作",
+     "cons": "起草件不能证明客户已确认责任, 仍要第二步核对签回件; 两种输出, 两次调用, 一个程序模板目前只支持一种输出"
+    },
+    {
+     "label": "两者都做",
+     "pros": "流程完整",
+     "cons": "工作量约翻倍, 超出本级"
+    }
+   ],
+   "recommendation": "选第 1 项; 起草约定书可作为以后的增强.",
+   "affects": [
+    "AP-1",
+    "AP-2",
+    "AP-3"
+   ]
+  },
+  {
+   "question": "闸门上 AI 给出的建议判断 (约定与委任核验, 重要性重估), 审计师在闸门作决定之后, 这条判断怎么记?",
+   "options": [
+    {
+     "label": "决定与建议一致记为 \"已确认\", 不一致记为 \"被推翻\", 不另建人工判断 (闸门决定本身就是人的结论)",
+     "pros": "判断不会一直悬着; 可统计人机一致率; 不重复记录",
+     "cons": "要写清 \"一致\" 的对应: 通过对应建议接受, 驳回对应建议不接受, 重估时维持对应建议不修订"
+    },
+    {
+     "label": "不改, 一直保持 \"待复核\"",
+     "pros": "不用改代码",
+     "cons": "判断永远悬着, 以后的底稿完整性检查会把它们当作未处理"
+    },
+    {
+     "label": "按复核推翻的规则另建一条人工判断",
+     "pros": "与复核推翻一致",
+     "cons": "闸门决定与人工判断重复记两份; 恢复补做多一类对象"
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AP-5",
+    "AP-13",
+    "AP-16",
+    "AP-17"
+   ]
+  },
+  {
+   "question": "约定与委任这道闸门选 \"信息不足\" 后, 流程怎么走?",
+   "options": [
+    {
+     "label": "回去让 AI 重读文件后再呈报 (适合客户补交了新的同意书或董事决议)",
+     "pros": "补交文件后一步就能重新核对; 符合规格书 \"信息不足回到补充查询\" 的写法",
+     "cons": "与其他闸门 \"原样重新呈报\" 不同; 没补文件时会多一次大模型调用"
+    },
+    {
+     "label": "原样重新呈报, 与其他闸门一样",
+     "pros": "各闸门行为统一",
+     "cons": "客户补交文件后没有途径触发重新核对, 只能选驳回, 而这里驳回就是拒绝承接"
+    }
+   ],
+   "recommendation": "选第 1 项.",
+   "affects": [
+    "AP-4",
+    "AP-5"
+   ]
+  }
+ ],
+ "risks": [
+  "阶段推进点移动 (ACC-01 通过不再进 P1, 装配不再进 P2, 进 P3 改在重估节点) 会改动 R10, R11, R22, R23, R27, R28, R30, R55, R57 等已完成需求的断言与 test_trail 的 25 行总数, 须在对应条目 (AP-4, AP-8, AP-12, AP-16) 内一并更新, 否则全量测试变红.",
+  "本级其他组同时改 GateId, TaskKind, DocumentType, EngagementState, merge.AGENT_FIELDS, NODE_PROCEDURES 与 test_knowledge 程序总数, 易冲突; 建议本组的契约条目 (AP-1, AP-6, AP-10, AP-14) 先合入, 程序总数断言以合并后为准.",
+  "合成数据的时间线: 约定书与委任文件日期在 2026 年 5-6 月, 而演示中系统内的承接决定发生在建项目当天 (2026-10 前后), 承接决定晚于约定书, 现实中顺序相反. 核对规则不比较系统决定时间, 演示讲解时须说明; 或请用户决定改为相对日期 (会破坏数据确定性).",
+  "一个程序模板只支持一种 LLM 输出模型, ACC-08 只能一次调用同时完成抽取与建议, 输出结构大; 接真实 LLM (Q3 选的 OpenAI 兼容接口) 时结构失败与重试概率高于现有程序, R59 联调需关注.",
+  "ACC-08 的规则核对作用在 LLM 抽取出的事实上, 抽取错 (如日期读错) 会让规则误判; 已用页码指针与引用校验兜底, 但不能保证事实正确, 需审计师在闸门看原文.",
+  "公司法片段 (s293, s325, s328A) 的逐字测试要扩展到公司法 PDF 的条文版式, 现有正则按准则段号写, 改动可能影响已有片段测试; ASA300-P08 含脚注上标, 能否逐字通过待核.",
+  "s293(3)(a) 允许股东指示财务报告不遵守部分会计准则, 是否构成特殊目的框架需职业判断; 合成数据选简化披露的通用目的框架 (tier2_gpfs) 回避了这一点, 真实使用时 T01 只是提示, 结论靠审计师.",
+  "PLN-19 下调重要性后, 准则要求复核已执行程序的性质, 时间, 范围是否仍适当 (ASA 320 第 13 段); 本级只在材料中列出用到执行重要性的程序 (Numbat 为 REV-02), 不自动标 needs_review 或重跑 (失效传播与环 3 未实现).",
+  "PLN-15 未建模: 不可预见性候选 (依赖 PLN-09 随机种子), 财报层次总体应对 (PLN-16), 控制信赖 (PLN-18), 计划批准后触发的治理层沟通 (ACC-09); 批准时记录的 \"需要 EQR\" 本级不在签字闸门强制检查.",
+  "PLN-01 模板的 engine 写的是 manual 而实际由 A4 执行; 人工程序机制按 \"engine manual 且 gate 为空\" 选程序, 避开了冲突, 但 PLN-01 的 engine 与规格书 (hybrid) 不一致, 建议另开清理需求.",
+  "人工结果的结构化明细存在复核决定里, 后续程序 (如书面声明校验, 治理层沟通记录) 若要类型化对象 (规格书的 WrittenRepresentationLetter, GovernanceCommunication), 需在各自需求中从决定映射, 两组须对齐结果模型.",
+  "本组的人工程序机制没有挂具体程序, 不改变 mock 全流程数字; FIN-07, FIN-08, RPT-07 由其他组挂入节点后, AP-17 的停顿数, 决定数与留痕数还会增加, 演示时长随之变长."
+ ]
+}
