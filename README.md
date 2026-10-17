@@ -114,7 +114,7 @@ bun run dev
 ```bash
 uv run pytest                                      # 测试
 uv run ruff check . && uv run mypy src/backend   # 代码检查
-uv run langgraph dev                               # 在 LangGraph Studio 中调试编排图（仅限合成数据）
+uv run langgraph dev                               # 在 LangGraph Studio 中调试编排图（仅限合成或公开数据）
 cd src/frontend && bun run generate-client        # 后端接口变动后重新生成前端客户端
 ```
 

@@ -1,5 +1,5 @@
 """LiveLLMClient: OpenAI 兼容接口. 单元测试用假 HTTP 传输 (httpx.MockTransport), 不联网;
-联网测试标 slow, 需在 .env 配好 LLM_MODE=live, LLM_MODEL, LLM_API_KEY (只发合成数据)."""
+联网测试标 slow, 需在 .env 配好 LLM_MODE=live, LLM_MODEL, LLM_API_KEY (只发合成或公开数据)."""
 
 import json
 import logging
