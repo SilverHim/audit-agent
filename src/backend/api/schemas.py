@@ -51,6 +51,8 @@ class EngagementSummary(Model):
 
     id: str
     client_name: str
+    period_start: date  # 审计期间起始日
+    period_end: date  # 审计期间截止日
     phase: Phase
     current_gate: GateId | None
     pending_tasks: int

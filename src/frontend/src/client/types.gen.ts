@@ -777,6 +777,14 @@ export type EngagementSummary = {
      * Client Name
      */
     client_name: string;
+    /**
+     * Period Start
+     */
+    period_start: string;
+    /**
+     * Period End
+     */
+    period_end: string;
     phase: Phase;
     current_gate: GateId | null;
     /**

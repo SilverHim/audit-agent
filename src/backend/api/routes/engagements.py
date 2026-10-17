@@ -67,6 +67,8 @@ async def list_engagements(
                 EngagementSummary(
                     id=engagement.id,
                     client_name=overview.client_name,
+                    period_start=engagement.period_start,
+                    period_end=engagement.period_end,
                     phase=overview.engagement.phase,
                     current_gate=overview.current_gate,
                     pending_tasks=overview.pending_tasks,
