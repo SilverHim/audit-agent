@@ -1,0 +1,33 @@
+{
+  "dataset": "xero/20261017-q1",
+  "data_as_of": "2026-10-17",
+  "prior_period_start": "2025-07-01",
+  "entry_timestamps_reliable": false,
+  "entry_timestamps_note": "Created timestamps are regenerated when the Xero demo company is reset; 15 journals carry created times after 19 October 2026 and up to 26 November 2026.",
+  "reversal_reference_pattern": "Reversal of ID (\\d+)",
+  "reversal_entry_no_template": "XJ-{1}",
+  "counterparty_prefixes": [
+    "payment to",
+    "payment from",
+    "payment:"
+  ],
+  "audit_adjustment_entry_prefix": "AJE-",
+  "payroll_accounts": {
+    "wages_expense": [
+      "477"
+    ],
+    "super_expense": [
+      "478"
+    ],
+    "super_payable": [
+      "826"
+    ],
+    "wages_payable": [
+      "804"
+    ],
+    "leave_provision": [
+      "805"
+    ]
+  },
+  "payroll_register": "payroll/employees.csv"
+}

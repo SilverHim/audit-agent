@@ -1,0 +1,88 @@
+{
+  "dataset": "xero/20261017-q1",
+  "snapshot": "20261017-q1",
+  "header": "Synthetic – for demonstration only. Fictitious document based on Xero Demo Company (AU) data.",
+  "traits": {
+    "dataset": "xero/20261017-q1",
+    "data_as_of": "2026-10-17",
+    "prior_period_start": "2025-07-01",
+    "entry_timestamps_reliable": false,
+    "entry_timestamps_note": "Created timestamps are regenerated when the Xero demo company is reset; 15 journals carry created times after 19 October 2026 and up to 26 November 2026.",
+    "reversal_reference_pattern": "Reversal of ID (\\d+)",
+    "reversal_entry_no_template": "XJ-{1}",
+    "counterparty_prefixes": ["payment to", "payment from", "payment:"],
+    "audit_adjustment_entry_prefix": "AJE-",
+    "payroll_accounts": {
+      "wages_expense": ["477"],
+      "super_expense": ["478"],
+      "super_payable": ["826"],
+      "wages_payable": ["804"],
+      "leave_provision": ["805"]
+    },
+    "payroll_register": "payroll/employees.csv"
+  },
+  "profile": {
+    "id": "CLIENT-XERO-3C1332BB-Q1",
+    "version": 1,
+    "legal_name": "Demo Company (AU) Pty Ltd",
+    "abn": "25900043021",
+    "entity_type": "small_proprietary",
+    "industry_anzsic": "7000",
+    "listed": false,
+    "directors": ["Alex Morgan"],
+    "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."
+  },
+  "planning": {
+    "audit_objectives": [
+      {"id": "OBJ-REV-OCC", "version": 1, "account": "Revenue", "assertion": "Occurrence", "risk_level": "significant", "is_material": true},
+      {"id": "OBJ-REV-CUT", "version": 1, "account": "Revenue", "assertion": "Cutoff", "risk_level": "significant", "is_material": true},
+      {"id": "OBJ-CASH-EXI", "version": 1, "account": "Cash", "assertion": "Existence", "risk_level": "high", "is_material": true}
+    ],
+    "risk_register": [
+      {
+        "id": "RISK-REV-OCC",
+        "version": 1,
+        "objective_id": "OBJ-REV-OCC",
+        "assertion": "Occurrence",
+        "level": "significant",
+        "fraud_related": true,
+        "description": "Presumed fraud risk (ASA 240 para 27). Revenue of AUD 32,431 for the three months is 7.7 times the AUD 4,200 recorded for the whole of FY2026; 26 invoices to 14 customers, DIISR 24%; all journals are entered by the sole director.",
+        "revision_reason": null,
+        "approved_by": null
+      },
+      {
+        "id": "RISK-REV-CUT",
+        "version": 1,
+        "objective_id": "OBJ-REV-CUT",
+        "assertion": "Cutoff",
+        "level": "significant",
+        "fraud_related": true,
+        "description": "Six invoices totalling AUD 9,000 (excl. GST) were raised on 16-17 September 2026, including a AUD 6,500 development invoice to DIISR (ORC1026) whose service completion falls close to the period end.",
+        "revision_reason": null,
+        "approved_by": null
+      },
+      {
+        "id": "RISK-CASH-EXI",
+        "version": 1,
+        "objective_id": "OBJ-CASH-EXI",
+        "assertion": "Existence",
+        "level": "high",
+        "fraud_related": false,
+        "description": "The Business Bank Account was overdrawn throughout the quarter (AUD 10,900.44 at 30 September 2026) and the Savings account held AUD 11,581.23; opening bank balances were keyed on 16 July 2026 as a conversion balance of AUD 19,212.21 credited to 840 Historical Adjustment, and the 30 June 2026 comparative omits them.",
+        "revision_reason": null,
+        "approved_by": null
+      }
+    ]
+  },
+  "registry": {},
+  "documents": [],
+  "contract_links": [],
+  "delivery_notes": [],
+  "bank_accounts": [],
+  "receipts": {},
+  "payroll": [],
+  "adjustments": [],
+  "financial_statements": {},
+  "manual": {},
+  "notes": "Synthetic – for demonstration only. Supplements for the Xero Demo Company (AU) snapshot 20261017-q1; the snapshot itself is never modified. Bank names NAB, National Australia Bank, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data: both bank accounts are held with Wattlebrook Bank Limited (fictitious). People are pseudonyms; the Xero login contact is never copied: only the check script reads it, in memory, to confirm it appears in no file."
+}

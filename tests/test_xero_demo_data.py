@@ -1,14 +1,25 @@
-"""Xero 演示数据集: 定稿文档 docs/Xero演示数据集设计.md 的内容守卫 (补造文件与校验脚本的测试由后续需求加在本文件)."""
+"""Xero 演示数据集: 定稿文档 docs/Xero演示数据集设计.md 的内容守卫, 补造文件 (data/xero_demo/) 与生成, 校验脚本."""
 
 import json
 import re
+import shutil
+import sys
 from pathlib import Path
 
+import pdfplumber
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
 SNAPSHOT = REPO / "data" / "external" / "xero" / "api" / "20261017-q1"
+SUPPLEMENTS = REPO / "data" / "xero_demo" / "20261017-q1"
+sys.path.insert(0, str(REPO / "data"))  # 生成与校验脚本在 data/, 以脚本方式互相导入
+
+import check_xero_demo as checker  # noqa: E402
+import generate_xero_demo as generator  # noqa: E402
+
+HEADER = "Synthetic – for demonstration only. Fictitious document based on Xero Demo Company (AU) data."
+needs_snapshot = pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="没有本地 Xero 快照")
 
 
 def doc() -> str:
@@ -416,3 +427,574 @@ def test_no_login_contact_in_doc() -> None:
     text = doc().lower()
     found = [i for i, value in enumerate(login_contact_values(SNAPSHOT)) if value in text]
     assert not found, f"{DOC.name} 含登录账号联系人信息"  # 只报文件名, 不打印原值
+
+
+# ── 补造文件: 生成规格, 生成脚本与校验脚本 ─────────────────────
+
+
+def spec() -> dict:
+    return json.loads(generator.SPEC.read_text(encoding="utf-8"))
+
+
+def json_block(text: str) -> object:
+    """取一节里第一个 ```json 代码块."""
+    m = re.search(r"```json\n(.*?)```", text, re.S)
+    assert m, "没有 json 代码块"
+    return json.loads(m.group(1))
+
+
+def read(name: str) -> object:
+    return json.loads((SUPPLEMENTS / name).read_text(encoding="utf-8"))
+
+
+def copy_supplements(tmp_path: Path) -> Path:
+    target = tmp_path / "supplements" / "20261017-q1"
+    shutil.copytree(SUPPLEMENTS, target)
+    return target
+
+
+def fake_snapshot(tmp_path: Path, contacts: list[dict]) -> Path:
+    """tmp 下自造的快照: 只有合成的组织信息与联系人, 没有真实快照的任何内容."""
+    root = tmp_path / "snapshot" / "20261017-q1"
+    root.mkdir(parents=True)
+    org = [{"OrganisationID": "3c1332bb-0000-4000-8000-000000000000"}]
+    (root / "organisation.json").write_text(json.dumps(org), encoding="utf-8")
+    (root / "contacts.json").write_text(json.dumps(contacts), encoding="utf-8")
+    return root
+
+
+def check_error(directory: Path, snapshot: Path, *, determinism: bool = False, **options: object) -> str:
+    with pytest.raises(checker.CheckError) as raised:
+        checker.check(directory, snapshot, determinism=determinism, **options)  # type: ignore[arg-type]
+    return str(raised.value)
+
+
+def test_spec_layout() -> None:
+    data = spec()
+    assert list(data) == [
+        "dataset",
+        "snapshot",
+        "header",
+        "traits",
+        "profile",
+        "planning",
+        "registry",
+        "documents",
+        "contract_links",
+        "delivery_notes",
+        "bank_accounts",
+        "receipts",
+        "payroll",
+        "adjustments",
+        "financial_statements",
+        "manual",
+        "notes",
+    ]
+    assert (data["dataset"], data["snapshot"], data["header"]) == ("xero/20261017-q1", "20261017-q1", HEADER)
+    for bank in ("NAB", "National Australia Bank", "Ridgeway Savings", "Business Savings Bank", "Wattlebrook Bank"):
+        assert bank in data["notes"], bank
+    assert data["notes"].startswith("Synthetic – for demonstration only.")
+
+
+def test_generated_values_match_design() -> None:
+    text = doc()
+    assert read("dataset_traits.json") == json_block(section(text, "### 5.2 数据集声明 dataset_traits.json"))
+    assert set(read("dataset_traits.json")) == checker.TRAIT_KEYS  # type: ignore[arg-type]
+    assert read("client_profile.json") == json_block(section(text, "### 2.6 客户画像 (覆盖载入器产出)"))
+    from backend.contracts.models import ClientProfile
+
+    profile = ClientProfile.model_validate(read("client_profile.json"))
+    assert (profile.id, profile.abn, profile.directors) == ("CLIENT-XERO-3C1332BB-Q1", "25900043021", ["Alex Morgan"])
+    planning = REPO / "src" / "backend" / "knowledge" / "planning"
+    template = json.loads((planning / "audit_objectives.json").read_text(encoding="utf-8"))
+    assert read("planning/audit_objectives.json") == template  # 同通用模板
+    risks = read("planning/risk_register.json")
+    generic = json.loads((planning / "risk_register.json").read_text(encoding="utf-8"))
+    assert [{k: v for k, v in r.items() if k != "description"} for r in risks] == [  # type: ignore[union-attr]
+        {k: v for k, v in r.items() if k != "description"} for r in generic
+    ]
+    s27 = section(text, "### 2.7 计划预置 (planning/)")
+    for risk in risks:  # type: ignore[union-attr]
+        assert f"- **{risk['id']}**: {risk['description']}" in s27.splitlines(), risk["id"]
+    assert [(r["level"], r["fraud_related"]) for r in risks] == [  # type: ignore[union-attr]
+        ("significant", True),
+        ("significant", True),
+        ("high", False),
+    ]
+
+
+def test_manifest_layout() -> None:
+    manifest = read("manifest.json")
+    assert list(manifest) == ["dataset", "generator", "spec_sha256", "snapshot", "files", "documents"]  # 无 injected
+    assert manifest["generator"] == "data/generate_xero_demo.py"  # type: ignore[index]
+    assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
+    assert [f["path"] for f in manifest["files"]] == [  # type: ignore[index]
+        "client_profile.json",
+        "dataset_traits.json",
+        "planning/audit_objectives.json",
+        "planning/risk_register.json",
+    ]
+    for item in manifest["files"]:  # type: ignore[index]
+        assert list(item) == ["path", "sha256", "synthetic", "generator", "xero_refs"]
+        assert item["synthetic"] is True
+    raw = (SUPPLEMENTS / "manifest.json").read_text(encoding="utf-8")
+    assert str(REPO) not in raw and "/home/" not in raw and not re.search(r"\d{4}-\d{2}-\d{2}T\d", raw)
+    assert not [p for p in SUPPLEMENTS.rglob("*") if "synthetic" in p.name.lower()]  # 文件名不写 synthetic
+    if SNAPSHOT.is_dir():
+        names = sorted(p.name for p in SNAPSHOT.iterdir() if p.is_file() and p.name != "contacts.json")
+        assert [f["path"] for f in manifest["snapshot"]["files"]] == names  # type: ignore[index]
+        assert len(names) == 16
+
+
+def test_check_passes() -> None:
+    notes = checker.check(SUPPLEMENTS, SNAPSHOT)  # 有快照时含确定性重生成与联系人扫描
+    if SNAPSHOT.is_dir():
+        assert notes == []
+    else:
+        assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0]
+
+
+def test_check_without_snapshot_still_checks_files(tmp_path: Path) -> None:
+    notes = checker.check(SUPPLEMENTS, tmp_path / "absent")
+    assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0]
+    copy = copy_supplements(tmp_path)
+    (copy / "dataset_traits.json").write_bytes((copy / "dataset_traits.json").read_bytes() + b" ")
+    assert "dataset_traits.json: sha256 与 manifest 不符" in check_error(copy, tmp_path / "absent")
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["client_profile.json", "dataset_traits.json", "planning/audit_objectives.json", "planning/risk_register.json"],
+)
+def test_one_byte_change_names_the_file(tmp_path: Path, name: str) -> None:
+    copy = copy_supplements(tmp_path)
+    data = bytearray((copy / name).read_bytes())
+    data[len(data) // 2] ^= 1
+    (copy / name).write_bytes(bytes(data))
+    message = check_error(copy, tmp_path / "absent")
+    assert f"{copy / name}: sha256 与 manifest 不符" in message.splitlines()
+
+
+def test_unlisted_missing_and_unflagged_files(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    (copy / "extra.csv").write_text("a\n", encoding="utf-8")
+    (copy / "planning" / "risk_register.json").unlink()
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"][0]["synthetic"] = False
+    (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    lines = check_error(copy, tmp_path / "absent").splitlines()
+    assert f"{copy / 'extra.csv'}: 不在 manifest 清单中" in lines
+    assert f"{copy / 'planning/risk_register.json'}: manifest 列出但文件不存在" in lines
+    assert f"{copy / 'client_profile.json'}: manifest 中 synthetic 不为 true" in lines
+
+
+def test_strict_models_and_trait_keys(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    profile = json.loads((copy / "client_profile.json").read_text(encoding="utf-8"))
+    profile["synthetic"] = True  # 领域模型 extra="forbid", 合成标志不能加成字段
+    profile["notes"] = "Profile without the synthetic prefix."
+    (copy / "client_profile.json").write_text(json.dumps(profile), encoding="utf-8")
+    traits = json.loads((copy / "dataset_traits.json").read_text(encoding="utf-8"))
+    del traits["payroll_register"]
+    (copy / "dataset_traits.json").write_text(json.dumps(traits), encoding="utf-8")
+    risks = json.loads((copy / "planning" / "risk_register.json").read_text(encoding="utf-8"))
+    risks[0]["fraud_related"] = "yes"  # 严格模式不做类型转换
+    (copy / "planning" / "risk_register.json").write_text(json.dumps(risks), encoding="utf-8")
+    generator.write_manifest(copy, fake_snapshot(tmp_path, []))
+    lines = check_error(copy, tmp_path / "absent").splitlines()
+    assert f"{copy / 'client_profile.json'}: 不符合领域模型 (1 处)" in lines
+    assert f"{copy / 'client_profile.json'}: notes 不以 'Synthetic – for demonstration only' 开头" in lines
+    assert f"{copy / 'planning/risk_register.json'}: 不符合领域模型 (1 处)" in lines
+    assert f"{copy / 'dataset_traits.json'}: 键与第 5.2 节不符 (多 [], 缺 ['payroll_register'])" in lines
+
+
+def test_login_contact_scan_reports_file_names_only(tmp_path: Path) -> None:
+    contacts = [
+        {"FirstName": "Zed", "LastName": "Example", "EmailAddress": "zed@example.invalid"},
+        {"Name": "Synthetic Customer", "FirstName": "Cy", "EmailAddress": "cy@example.invalid", "IsCustomer": True},
+        {
+            "Name": "Synthetic Vendor",
+            "FirstName": "Sy",
+            "LastName": "Vendor",
+            "EmailAddress": "sy@x.invalid",
+            "IsSupplier": True,
+        },
+        {"Name": "Synthetic Bank", "IsCustomer": False, "IsSupplier": False},
+    ]
+    snapshot = fake_snapshot(tmp_path, contacts)
+    copy = copy_supplements(tmp_path)
+    profile = json.loads((copy / "client_profile.json").read_text(encoding="utf-8"))
+    profile["notes"] += " Prepared by ZED  EXAMPLE."  # 大小写与连续空白不影响整串匹配
+    (copy / "client_profile.json").write_text(json.dumps(profile), encoding="utf-8")
+    risks = json.loads((copy / "planning" / "risk_register.json").read_text(encoding="utf-8"))
+    risks[0]["description"] += " Contact Zed@Example.invalid."
+    risks[1]["description"] += " Example only; Zed alone is fine. Cy and Sy Vendor are not the login contact."
+    (copy / "planning" / "risk_register.json").write_text(json.dumps(risks), encoding="utf-8")
+    generator.write_manifest(copy, snapshot)
+    outside = tmp_path / "fixtures" / "llm_xero" / "x.txt"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("Reviewed by zed\nexample", encoding="utf-8")  # 换行同空格
+    escaped = outside.parent / "escaped.json"
+    escaped.write_text(json.dumps({"text": "Zed\nExample"}), encoding="utf-8")  # JSON 里转义的换行
+    in_pdf = outside.parent / "letter.pdf"  # PDF 内容流是压缩的, 只能查文本层
+    generator.write_pdf(in_pdf, ["Prepared by Zed\nExample", "Contact ZED@EXAMPLE.INVALID"], "Letter", HEADER)
+    generator.write_pdf(outside.parent / "clean.pdf", ["Example only"], "Letter", HEADER)
+    (outside.parent / "broken.pdf").write_bytes(b"%PDF-1.4 not really")
+    message = check_error(copy, snapshot, scan=[tmp_path / "fixtures", tmp_path / "missing"])
+    assert message.splitlines() == [
+        f"{copy / 'client_profile.json'}: 含登录账号联系人的姓名或邮箱",
+        f"{copy / 'planning/risk_register.json'}: 含登录账号联系人的姓名或邮箱",
+        f"{outside.parent / 'broken.pdf'}: 无法读取文本层, 未能扫描登录账号联系人",
+        f"{escaped}: 含登录账号联系人的姓名或邮箱",
+        f"{in_pdf}: 含登录账号联系人的姓名或邮箱",
+        f"{outside}: 含登录账号联系人的姓名或邮箱",
+    ]
+    assert "zed example" not in message.lower() and "zed@example.invalid" not in message.lower()
+
+
+def test_login_contact_must_be_unique(tmp_path: Path) -> None:
+    contacts = [{"FirstName": n, "LastName": "Example", "EmailAddress": f"{n}@example.invalid"} for n in ("A", "B")]
+    snapshot = fake_snapshot(tmp_path, contacts)
+    copy = copy_supplements(tmp_path)
+    generator.write_manifest(copy, snapshot)
+    message = check_error(copy, snapshot, scan=[])
+    assert message == f"{snapshot / 'contacts.json'}: 双否且有 FirstName 与 EmailAddress 的联系人应恰好 1 条, 实有 2 条"
+    assert "@example.invalid" not in message
+
+
+@needs_snapshot
+def test_login_contact_absent_from_repository_files() -> None:
+    assert checker.scan_login_contact(SNAPSHOT, [SUPPLEMENTS, *checker.SCAN_PATHS]) == []
+
+
+@needs_snapshot
+def test_snapshot_mismatch_is_reported(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot" / "20261017-q1"
+    shutil.copytree(SNAPSHOT, snapshot)
+    (snapshot / "payments.json").write_bytes((snapshot / "payments.json").read_bytes() + b"\n")
+    (snapshot / "contacts.json").write_bytes((snapshot / "contacts.json").read_bytes() + b"\n")  # 不进哈希清单
+    lines = check_error(SUPPLEMENTS, snapshot, scan=[]).splitlines()
+    assert lines == [f"{snapshot / 'payments.json'}: 快照文件与 manifest 所记不符 (补造文件与快照不匹配)"]
+
+
+@needs_snapshot
+def test_reads_only_whitelisted_snapshot_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.adapters import xero_dataset
+
+    parsed: list[str] = []
+
+    class Recording(generator.Snapshot):
+        def load(self, name: str) -> object:
+            parsed.append(name)
+            return super().load(name)
+
+    def forbidden(*args: object) -> None:
+        raise AssertionError("不得调用会读 contacts.json 的映射")
+
+    monkeypatch.setattr(generator, "Snapshot", Recording)
+    monkeypatch.setattr(xero_dataset, "build_tables", forbidden)
+    monkeypatch.setattr(xero_dataset, "map_sales_invoices", forbidden)
+    generator.generate(SNAPSHOT, tmp_path / "out")
+    index = generator.RefIndex(Recording(SNAPSHOT))
+    assert index.missing(["SI-77b338ef-ecc0-4b95-a0d7-2617b0054611", "XJ-580", "XJ-580-3", "BT-090-0081"]) == []
+    assert parsed and set(parsed) <= generator.READABLE | {"trial_balance_2026-06-30", "trial_balance_2026-09-30"}
+    with pytest.raises(ValueError, match="不在读取白名单内"):
+        Recording(SNAPSHOT).load("contacts")
+
+
+@needs_snapshot
+def test_output_does_not_depend_on_contacts(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot" / "20261017-q1"
+    snapshot.mkdir(parents=True)
+    for path in SNAPSHOT.iterdir():
+        if path.is_file() and path.name != "contacts.json":
+            shutil.copy2(path, snapshot / path.name)
+    out = generator.generate(snapshot, tmp_path / "out")
+    produced = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    expected = {p.relative_to(SUPPLEMENTS).as_posix(): p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
+    assert produced == expected
+
+
+@needs_snapshot
+def test_xero_refs_must_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = spec()
+    good = ["SI-77b338ef-ecc0-4b95-a0d7-2617b0054611", "XJ-580-1", "BT-091-0001", "BA-090", "840"]
+    data["documents"] = [{"path": "client_profile.json", "xero_refs": good}]
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    manifest = json.loads((generator.generate(SNAPSHOT, tmp_path / "ok") / "manifest.json").read_text())
+    assert manifest["files"][0]["xero_refs"] == good
+    invoices = json.loads((SNAPSHOT / "invoices.json").read_text(encoding="utf-8"))
+    draft = next(i for i in invoices if i["Type"] == "ACCREC" and i["Status"] not in {"AUTHORISED", "PAID"})
+    bad = ["XJ-580-4", "SI-00000000", f"SI-{draft['InvoiceID']}", "BT-090-9999", "BA-200", "99999"]
+    data["documents"][0]["xero_refs"] = [*good, *bad]  # 草稿, 作废的发票不进载入器, 也不算能找到
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(SystemExit, match="xero_refs 在快照中找不到") as raised:
+        generator.generate(SNAPSHOT, tmp_path / "bad")
+    assert str(raised.value) == f"xero_refs 在快照中找不到: {', '.join(sorted(bad))}"
+
+
+@needs_snapshot
+def test_generator_exits_nonzero_when_check_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert generator.main(["--out", str(tmp_path / "ok")]) == 0
+    data = spec()
+    data["profile"]["notes"] = "Not flagged."
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    assert generator.main(["--out", str(tmp_path / "bad")]) == 1
+
+
+def no_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把会写文件的函数换成立即失败的替身: 守卫一旦退化, 测试当场失败, 不会先写进仓库的原始数据."""
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("守卫没有拦住, 已走到写文件的步骤")
+
+    for name in ("generate", "write_manifest", "render_registry_pdfs"):
+        monkeypatch.setattr(generator, name, refuse)
+    monkeypatch.setattr(checker, "check", refuse)
+
+
+def test_inject_refuses_repository_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    no_writes(monkeypatch)
+    before = {p: p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
+    assert generator.main(["--inject", "T1"]) == 2
+    assert generator.main(["--inject", "T1", "--out", str(generator.OUT_ROOT / "other")]) == 2
+    assert not (generator.OUT_ROOT / "other").exists()
+    assert {p: p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()} == before
+
+
+def test_inject_rewrites_copy_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    copy = copy_supplements(tmp_path)
+    snapshot = SNAPSHOT if SNAPSHOT.is_dir() else fake_snapshot(tmp_path, [])
+    (copy / "dataset_traits.json").write_text('{"changed": true}\n', encoding="utf-8")
+    assert generator.main(["--inject", "T1", "--out", str(copy), "--snapshot", str(snapshot)]) == 0
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["injected"] == "T1"
+    listed = {f["path"]: f["sha256"] for f in manifest["files"]}
+    assert listed["dataset_traits.json"] == generator.sha256(copy / "dataset_traits.json")
+    assert generator.render_registry_pdfs(copy) == []  # 登记 JSON 由后续需求生成, 现在没有可重绘的
+    monkeypatch.setattr(generator, "OUT_ROOT", copy.parent)  # 当作正式目录: 不许带 injected
+    lines = check_error(copy, tmp_path / "absent").splitlines()
+    assert f"{copy / 'manifest.json'}: 正式目录的 manifest 不得有 injected 键" in lines
+
+
+def test_pdf_layout_and_determinism(tmp_path: Path) -> None:
+    pages = ["Line one\nLine two", "Second page"]
+    first, second = tmp_path / "a" / "doc.pdf", tmp_path / "b" / "doc.pdf"
+    generator.write_pdf(first, pages, "Test document", HEADER)
+    generator.write_pdf(second, pages, "Test document", HEADER)
+    assert first.read_bytes() == second.read_bytes()
+    with pdfplumber.open(first) as pdf:
+        assert [(p.width, p.height) for p in pdf.pages] == [(595, 842), (595, 842)]
+        texts = [p.extract_text() for p in pdf.pages]
+        assert [t.splitlines()[0] for t in texts] == [HEADER, HEADER]
+        assert all(f"Test document | Page {n} of 2" in t for n, t in enumerate(texts, 1))
+        assert "Line two" in texts[0] and "Second page" in texts[1]
+    assert pdf.pages[0].chars[0]["fontname"].endswith("Courier") and pdf.pages[0].chars[0]["size"] == 9
+    generator.write_pdf(tmp_path / "c" / "bad.pdf", pages, "Test document", "Other header")
+    problems = checker.check_synthetic(tmp_path / "c", {"files": [], "documents": []}, HEADER)
+    assert problems == [f"{tmp_path / 'c' / 'bad.pdf'}: 第 1, 2 页文本层没有合成页眉"]
+
+
+def test_output_guard_protects_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--inject 只许仓库外已存在且没有链接的副本; 普通生成只许 data/xero_demo/<快照名> 或仓库外. 拒绝时不写任何文件."""
+    no_writes(monkeypatch)
+    protected = [REPO / "data" / "demo" / "manifest.json", generator.SNAPSHOTS / "20261017-q1" / "manifest.json"]
+    before = {p: p.read_bytes() for p in protected if p.exists()}
+    monkeypatch.chdir(REPO)
+    for argv in (
+        ["--inject", "T1", "--out", "data/demo"],
+        ["--inject", "T1", "--out", "data/external/xero/api/20261017-q1"],
+        ["--inject", "T1", "--out", "data/xero_demo/../xero_demo/20261017-q1"],
+        ["--out", "data/demo"],
+        ["--out", "data/external/xero/api/20261017-q1"],
+    ):
+        assert generator.main(argv) == 2, argv
+    link = tmp_path / "link"
+    link.symlink_to(SUPPLEMENTS, target_is_directory=True)
+    assert generator.main(["--inject", "T1", "--out", str(link)]) == 2  # 顺着目录链接指回正式目录
+    assert generator.main(["--inject", "T1", "--out", str(tmp_path / "missing")]) == 2
+    assert not (tmp_path / "missing").exists()
+    copy = copy_supplements(tmp_path)
+    (copy / "manifest.json").unlink()
+    (copy / "manifest.json").symlink_to(SUPPLEMENTS / "manifest.json")
+    assert generator.main(["--inject", "T1", "--out", str(copy)]) == 2  # 副本里的文件链接
+    (copy / "manifest.json").unlink()
+    (copy / "manifest.json").hardlink_to(copy / "dataset_traits.json")
+    assert generator.main(["--inject", "T1", "--out", str(copy)]) == 2
+    assert {p: p.read_bytes() for p in protected if p.exists()} == before
+
+
+def test_malformed_inputs_are_reported_not_raised(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    absent = tmp_path / "absent"
+    (copy / "broken.pdf").write_bytes(b"%PDF-1.4 not really")
+    lines = check_error(copy, absent).splitlines()
+    assert f"{copy / 'broken.pdf'}: 无法解析 PDF" in lines and f"{copy / 'broken.pdf'}: 不在 manifest 清单中" in lines
+    (copy / "broken.pdf").unlink()
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    del manifest["files"][0]["path"]
+    (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert check_error(copy, absent) == f"{copy / 'manifest.json'}: manifest 结构不符 (1 处)"
+    (copy / "manifest.json").write_text("{", encoding="utf-8")
+    assert check_error(copy, absent) == f"{copy / 'manifest.json'}: 没有 manifest.json 或不是合法的 JSON"
+
+
+def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
+    snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+    copy = copy_supplements(tmp_path)
+    generator.write_manifest(copy, snapshot)
+    assert checker.check(copy, snapshot, determinism=False, scan=[]) == []
+    (snapshot / "organisation.json").write_text("[{}]", encoding="utf-8")
+    generator.write_manifest(copy, snapshot)  # 快照哈希随之更新, 只剩组织信息的问题
+    assert check_error(copy, snapshot, scan=[]).splitlines() == [
+        f"{snapshot / 'organisation.json'}: 快照缺组织信息, 无从核对画像 ID 前缀"
+    ]
+    (snapshot / "organisation.json").write_text('[{"OrganisationID": "3c1332bb-0000-4000-8000-000000000000"}]')
+    generator.write_manifest(copy, snapshot)
+    (snapshot / "contacts.json").write_text("[", encoding="utf-8")
+    message = f"{snapshot / 'contacts.json'}: 快照没有 contacts.json 或无法解析, 无从扫描登录账号联系人"
+    assert check_error(copy, snapshot, scan=[]) == message
+    (snapshot / "contacts.json").unlink()  # contacts.json 不在快照哈希清单内, 缺了也要报, 不静默跳过扫描
+    assert check_error(copy, snapshot, scan=[]) == message
+
+
+def test_regeneration_failure_keeps_other_problems(tmp_path: Path) -> None:
+    """Demo 重置后的新快照套上旧补造: 快照不符与无法重新生成都要报出."""
+    snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+    copy = copy_supplements(tmp_path)
+    generator.write_manifest(copy, snapshot)
+    (snapshot / "organisation.json").write_text('[{"OrganisationID": "aaaabbbb-0000-4000-8000-000000000000"}]')
+    lines = check_error(copy, snapshot, scan=[], determinism=True).splitlines()
+    assert lines == [
+        f"{snapshot / 'organisation.json'}: 快照文件与 manifest 所记不符 (补造文件与快照不匹配)",
+        f"{copy / 'client_profile.json'}: 画像 ID 不以 CLIENT-XERO-AAAABBBB- 开头",
+        f"{copy}: 无法重新生成 (画像 ID CLIENT-XERO-3C1332BB-Q1 不以 CLIENT-XERO-AAAABBBB- 开头)",
+    ]
+
+
+def test_snapshot_argument_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "20261017-q1").mkdir()
+    monkeypatch.chdir(tmp_path)  # 当前目录下的同名目录不会被当成快照
+    assert generator.resolve_snapshot("20261017-q1") == generator.SNAPSHOTS / "20261017-q1"
+    assert generator.resolve_snapshot("./20261017-q1") == Path("./20261017-q1")
+    assert generator.resolve_snapshot(tmp_path / "x") == tmp_path / "x"
+
+
+def test_pdf_page_limits(tmp_path: Path) -> None:
+    fits = "\n".join("x" * generator.LINE_WIDTH for _ in range(generator.PAGE_LINES))
+    generator.write_pdf(tmp_path / "fits.pdf", [fits], "Footer", HEADER)
+    with pdfplumber.open(tmp_path / "fits.pdf") as pdf:
+        assert max(c["x1"] for c in pdf.pages[0].chars) <= 595 - 40 + 1
+        body = [c for c in pdf.pages[0].chars if c["fontname"].endswith("Courier")]
+        footer = [c for c in pdf.pages[0].chars if c["fontname"].endswith("Helvetica")]
+        assert max(c["bottom"] for c in body) < min(c["top"] for c in footer)  # 正文压不到页脚
+    with pytest.raises(ValueError, match="第 2 页有 57 行"):
+        generator.write_pdf(tmp_path / "long.pdf", ["one", fits + "\nmore"], "Footer", HEADER)
+    with pytest.raises(ValueError, match=r"第 1 页有 1 行超过 95 字$"):
+        generator.write_pdf(tmp_path / "wide.pdf", ["y" * 96], "Footer", HEADER)
+    with pytest.raises(ValueError, match=r"第 1 页有 1 行超过 95 字$"):  # 页眉也算
+        generator.write_pdf(tmp_path / "wide.pdf", ["short"], "Footer", HEADER.ljust(generator.LINE_WIDTH + 1, "x"))
+    assert not (tmp_path / "long.pdf").exists() and not (tmp_path / "wide.pdf").exists()
+
+
+@needs_snapshot
+def test_regeneration_in_fresh_process_with_other_hash_seed(tmp_path: Path) -> None:
+    """另起进程并换 PYTHONHASHSEED 重新生成, 与入库目录逐字节相同 (校验脚本的确定性检查在同一进程内)."""
+    import os
+    import subprocess
+
+    out = tmp_path / "out"
+    env = {**os.environ, "PYTHONHASHSEED": "12345"}
+    script = REPO / "data" / "generate_xero_demo.py"
+    result = subprocess.run([sys.executable, str(script), "--out", str(out)], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-500:]
+    produced = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    expected = {p.relative_to(SUPPLEMENTS).as_posix(): p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
+    assert produced == expected
+
+
+def test_line_endings_are_protected() -> None:
+    """补造文件, 生成规格与快照的哈希都按字节算, Windows 检出不得转换换行."""
+    rules = (REPO / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    for rule in (
+        "/data/xero_demo/** -text",
+        "/data/xero_demo/**/*.pdf binary",
+        "/data/xero_demo_spec.json text eol=lf",
+        "/data/external/xero/** -text",
+    ):
+        assert rule in rules, rule
+    if not (REPO / ".git").exists():
+        return
+    import subprocess
+
+    paths = ["data/xero_demo/20261017-q1/manifest.json", "data/external/xero/api/20261017-q1/accounts.json"]
+    result = subprocess.run(["git", "check-attr", "text", "--", *paths], cwd=REPO, capture_output=True, text=True)
+    assert result.stdout.splitlines() == [f"{p}: text: unset" for p in paths]
+    result = subprocess.run(
+        ["git", "check-attr", "eol", "--", "data/xero_demo_spec.json"], cwd=REPO, capture_output=True, text=True
+    )
+    assert result.stdout.strip() == "data/xero_demo_spec.json: eol: lf"
+
+
+def test_guard_recognises_aliases_without_normalisation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """模拟大小写不敏感的文件系统: 路径不做规范化 (resolve 不跟随链接), 另一个写法指向同一目录, 守卫仍认得出."""
+    import os
+
+    alias = tmp_path / "alias"
+    alias.symlink_to(REPO, target_is_directory=True)
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=False: Path(os.path.abspath(self)))
+    assert generator.inside(alias / "data" / "demo", REPO)
+    assert generator.same_path(alias / "data" / "xero_demo" / "20261017-q1", SUPPLEMENTS)
+    assert generator.same_path(alias / "data" / "xero_demo" / "new-snapshot", generator.OUT_ROOT / "new-snapshot")
+    snapshot = generator.SNAPSHOTS / "20261017-q1"
+    assert generator.out_problem(alias / "data" / "demo", snapshot, inject=False)
+    assert generator.out_problem(alias / "data" / "xero_demo" / "20261017-q1", snapshot, inject=False) is None
+    assert generator.out_problem(alias / "data" / "xero_demo" / "20261017-q1", snapshot, inject=True)
+
+
+def test_normal_generation_refuses_links_in_existing_output(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "manifest.json").symlink_to(tmp_path / "elsewhere.json")
+    problem = generator.out_problem(out, generator.SNAPSHOTS / "20261017-q1", inject=False)
+    assert problem == f"输出目录中有符号链接或硬链接: {out / 'manifest.json'}"
+    assert generator.main(["--out", str(out)]) == 2
+    assert not (tmp_path / "elsewhere.json").exists()
+
+
+def test_unexpected_error_in_one_step_keeps_others(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    copy = copy_supplements(tmp_path)
+    (copy / "extra.csv").write_text("a\n", encoding="utf-8")
+
+    def broken(directory: Path) -> list[str]:
+        raise RuntimeError("Zed Example appears in the failing file")  # 异常消息不得进报告
+
+    monkeypatch.setattr(checker, "check_models", broken)
+    message = check_error(copy, tmp_path / "absent")
+    assert message.splitlines() == [f"{copy / 'extra.csv'}: 不在 manifest 清单中", f"{copy}: 校验中断 (RuntimeError)"]
+    assert "Zed" not in message
+
+
+def test_regeneration_error_message_is_not_copied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
+    copy = copy_supplements(tmp_path)
+    generator.write_manifest(copy, snapshot)
+
+    def broken(snapshot_dir: Path, out: Path) -> Path:
+        raise ValueError("Invalid isoformat string: 'Zed Example'")
+
+    monkeypatch.setattr(generator, "generate", broken)
+    message = check_error(copy, snapshot, scan=[], determinism=True)
+    assert message == f"{copy}: 无法重新生成 (ValueError)"
+
+
+def test_manifest_file_items_take_no_extra_keys(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"][0]["note"] = "extra"
+    (copy / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert check_error(copy, tmp_path / "absent") == f"{copy / 'manifest.json'}: manifest 结构不符 (1 处)"

@@ -1,0 +1,105 @@
+{
+  "dataset": "xero/20261017-q1",
+  "generator": "data/generate_xero_demo.py",
+  "spec_sha256": "f9cb01474e8247f67adce98551e6f9a2cb817dfbf68a37db3740f7447ccbdac7",
+  "snapshot": {
+    "name": "xero/20261017-q1",
+    "files": [
+      {
+        "path": "accounts.json",
+        "sha256": "66b68b298503214709550f2dacb3809404a5de6a2fe9fab546db2b43cb3ac64d"
+      },
+      {
+        "path": "bank_statements.json",
+        "sha256": "0a2d340eb4ec6fa4c0d5b18470c8ca88bb5835d05c6849d13892e2fd6dffd1a1"
+      },
+      {
+        "path": "bank_transactions.json",
+        "sha256": "a9eccaa4cdf86269bcc3e2b10b6324d004a02ced62a39cccefc21718050d4481"
+      },
+      {
+        "path": "bank_transfers.json",
+        "sha256": "6b471cd08e39f2523e739793d9c797139e795c1130f009a8ce30c99ebb644c89"
+      },
+      {
+        "path": "credit_notes.json",
+        "sha256": "857e442dd819824bdf6eccb219681c0e78d9fcd2e847497e42d0c01126831dcc"
+      },
+      {
+        "path": "dataset.json",
+        "sha256": "443cf6a5b7f18e8a1a32bb4fa11e44a8a696e75e4086324166e37082127bac64"
+      },
+      {
+        "path": "invoices.json",
+        "sha256": "16658ee7a9751bd0ed01265ffea50149ee9a8c14337dc680ad4a20f88e814c95"
+      },
+      {
+        "path": "journals.json",
+        "sha256": "d8b396fffd91e3cc0d864137c05b8b7127985a4d8ae3b4a84a30fa8208088811"
+      },
+      {
+        "path": "manifest.json",
+        "sha256": "2a7ec359d71543f8f5193dc73f5d3e5b5f29ed92c96024b6f8f4480abef366c6"
+      },
+      {
+        "path": "manual_journals.json",
+        "sha256": "725aa8a9a70a8e7cf1185ec7249b4c2be4ce5cc5814d53450bc6ff005424dfdc"
+      },
+      {
+        "path": "organisation.json",
+        "sha256": "6c8bf9f5bb5597c5bde192a947c66922da94bc3ce124ccb4bebdfb59f73a5dc6"
+      },
+      {
+        "path": "overpayments.json",
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "path": "payments.json",
+        "sha256": "41518f8f20b2a1b4b6ab5c052324acd71c956354d9a51d48e87d99b36e8bc021"
+      },
+      {
+        "path": "prepayments.json",
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "path": "trial_balance_2026-06-30.json",
+        "sha256": "6bb24d3d489714a0a64e78cd93c47846e4309fd2024fe112fbc07d654ed1fc57"
+      },
+      {
+        "path": "trial_balance_2026-09-30.json",
+        "sha256": "63b0595736a7b0d357c455f034997a930bea0bf4bc94d98df1a9e8b89411dfaa"
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "client_profile.json",
+      "sha256": "c037417a42ec54d299fb97e9bc7cb3781473092b3652d32c03d0b0071ab100ac",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "dataset_traits.json",
+      "sha256": "00a7d9cc83e0d069fead814682c97542172c0f29ba8280b6cad00a40768ece2a",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "planning/audit_objectives.json",
+      "sha256": "2b3d87a17df590d617cd83c13207d8f2a4e8366c43e9aea49ca8de78c36af468",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "planning/risk_register.json",
+      "sha256": "13895be3ecc4072e235645af36c4ae6349edb5f10240d2170be393c2f563a606",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    }
+  ],
+  "documents": []
+}

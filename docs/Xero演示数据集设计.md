@@ -78,7 +78,7 @@ data/
 | Morgan Advisory Pty Ltd | ACN 900 043 049, ABN 17 900 043 049, 2019-07-01 注册; Alex 是董事兼唯一股东; 已申报, 本期没有交易 | 无, 作对照 |
 | Harbourview Nominees Pty Ltd | 物业买方, 与本公司无关, 不进关系图 | 无 |
 | Tessellate Audit Partners / Jordan Ellis | 沿用 Numbat 的虚构事务所; Jordan Ellis 是合伙人 (Registered Company Auditor No. 300471) | 无 |
-| Wattlebrook Bank Limited | 虚构银行, ABN 82 938 074 116 (校验通过); 090 与 091 两户都在这家行, BSB 306234 沿用 Xero | Xero 对账单与摘要里的 "NAB", "National Australia Bank", "Ridgeway Savings", "Business Savings Bank" 视为 Demo 的占位银行名 (第 2.6 节与 manifest 写明) |
+| Wattlebrook Bank Limited | 虚构银行, ABN 82 938 074 116 (校验通过); 090 与 091 两户都在这家行, BSB 306234 沿用 Xero | Xero 对账单与摘要里的 "NAB", "National Australia Bank", "Ridgeway Savings", "Business Savings Bank" 视为 Demo 的占位银行名 (第 2.6 节画像 notes 与生成规格 notes 写明) |
 
 **股本**: 100 股普通股, 每股 0.01 元, 已缴足, 共 1.00 元, 注册时由 Alex 缴入, 包含在 840 的转换余额里. 1.00 低于明显微小 16.22, 不计入错报.
 
@@ -1054,13 +1054,17 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
   - 重算 manifest 哈希; 核对快照哈希.
   - 合成标志: 领域对象模型 `extra="forbid"` (contracts/models.py), client_profile.json, registry 各行, planning JSON, delivery_notes.csv 等按模型严格校验, 不能加 synthetic 字段或列. 所以合成标志只放在 manifest (每个文件 `synthetic: true`) 与文本字段 (画像 notes, PDF 页眉, 分录摘要). 校验脚本核对: manifest 中每个文件都有 `synthetic: true`; 每份 PDF 每页含合成页眉; 画像 notes 以 "Synthetic – for demonstration only" 开头.
   - 登录账号联系人: 快照里 IsCustomer 与 IsSupplier 都为假的联系人有 39 个 (含 Victoria Property Agency, 3 名员工, Business Savings Bank, 这些名字在设计与补造文件里合法出现), 不能按 "双否" 认定. 口径改为 "双否且有 FirstName 与 EmailAddress", 断言恰好 1 条 (当前快照唯一). 在内存里取它的全名 (FirstName 加 LastName) 与邮箱, 不区分大小写整串匹配, 断言不出现在任何生成文件中; 不单独匹配姓或名 (短字符串会在普通单词里误中); 不打印, 不写入任何文件; 断言失败只报文件名.
+    扫描范围: 补造目录全部文件 (PDF 查文本层), 生成规格, 本文, `tests/fixtures/` 下的 llm_xero, llm_xero_only17, xero_injections, llm_injected (不存在的跳过). 连续空白视为一个空格.
+  - 模型与键: client_profile.json 用 ClientProfile, planning 两份用 AuditObjective 与 RiskItem 严格校验 (不做类型转换); dataset_traits.json 的键集合等于第 5.2 节的 11 个键.
+  - 确定性: 另生成到临时目录, 逐文件逐字节比较. 生成脚本写完后自动调用校验, 任一项不过即非零退出.
+  - 没有本地快照时跳过快照哈希, 画像 ID 前缀, 联系人扫描与确定性 (说明写 "没有本地 Xero 快照"), 补造文件的哈希, 合成标志与模型校验照常做. 问题全部收集后一次报出, 每行一项, 只写文件名.
   - 复算第 3 节的快照关键数 (分录与作废对数, 09-30 试算表与主要余额, 对账单行数, 月度收入, 重要性, 录入时间晚于 10-19 的 15 笔) 并比对 20261017-mock (第 9.2 节); 第 5 节规则命中与第 7 节计数不在校验脚本复算 (见 "本版不做"), 分别由各程序的连库测试与合并终验核对.
 
 ---
 
 ### 9.5 文件格式与载入端口 (实现时以此为准)
 
-**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ-, BT-, BA-, 科目代码) 都须在快照中找到.
+**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败.
 
 **document 的登记途径 (registration)** 共 29 份 55 页: load 20 (3 份收入合同加 index.csv 中除承接文件外的 17 份, 载入时登记), engagement 2 (appointment.pdf, engagement_letter.pdf, 由 `load_engagement_documents` 在 P0 登记), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时存档), upload 1 (声明书, FIN-07 人工任务经上传接口登记).
 

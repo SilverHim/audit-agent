@@ -77,6 +77,8 @@ uploads/
 !/data/*.py
 !/data/demo_spec.json
 !/data/demo/
+!/data/xero_demo_spec.json
+!/data/xero_demo/
 
 # Python
 __pycache__/
