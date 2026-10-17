@@ -36,7 +36,7 @@ from backend.orchestration import runner as runner_module
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, fixed_procedures
-from backend.services.procedure_library import ProcedureLibrary
+from backend.services.procedure_library import ProcedureLibrary, git_env
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_ABN,
@@ -627,11 +627,13 @@ def test_prompts_sha256_changes_with_any_prompt(tmp_path: Path) -> None:
 
 
 def git(path: Path, *args: str) -> str:
+    """在 path 的仓库里执行 git; 不继承钩子导出的 GIT_* 变量, 否则在 pre-push 里会作用到外层仓库."""
     out = subprocess.run(
         ["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
         capture_output=True,
         text=True,
         check=True,
+        env=git_env(),
     )
     return out.stdout.strip()
 

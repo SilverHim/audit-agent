@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import os
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -150,8 +151,16 @@ class ProcedureLibrary:
         return digest.hexdigest()
 
 
+def git_env() -> dict[str, str]:
+    """git 子进程的环境: 去掉 GIT_DIR 等 GIT_* 变量. 在 git 钩子里运行时 (如 pre-push 跑测试) 这些变量指向外层仓库,
+    继承下来会让 -C 指定的目录失效, 读错仓库甚至改写外层仓库的配置."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def _git(path: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=True, timeout=5)
+    out = subprocess.run(
+        ["git", "-C", str(path), *args], capture_output=True, text=True, check=True, timeout=5, env=git_env()
+    )
     return out.stdout.strip()
 
 
