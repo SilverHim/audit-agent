@@ -542,7 +542,15 @@ def test_manifest_layout() -> None:
         "delivery_notes.csv",
         "documents/engagement/appointment.pdf",
         "documents/engagement/engagement_letter.pdf",
+        "documents/evidence/director_loan_agreement.pdf",
+        "documents/evidence/director_loan_confirmation.pdf",
+        "documents/evidence/director_support_letter.pdf",
+        "documents/evidence/going_concern_memo_forecast.pdf",
         "documents/index.csv",
+        "documents/related_party/harbourview_lease.pdf",
+        "documents/related_party/rm2031_sublease.pdf",
+        "documents/related_party/vpa_rent_letter.pdf",
+        "documents/related_party/vpa_sale_termination_notice.pdf",
         "planning/audit_objectives.json",
         "planning/risk_register.json",
         "registry/abn.json",
@@ -1164,52 +1172,63 @@ def test_registry_pdfs_follow_json(tmp_path: Path) -> None:
     assert "Quinn Example - Secretary 2 January 2020" in pdf_texts(target.with_suffix(".pdf"))[0]
 
 
+def manifest_documents() -> dict[str, tuple[object, ...]]:
+    """manifest documents 段: 路径 → (类型, 可靠性, 文件日期, 登记途径, 页数, 关联对象)."""
+    return {
+        d["path"]: (
+            d["type"],
+            d["reliability"],
+            d["document_date"],
+            d["registration"],
+            d["page_count"],
+            d["related_ids"],
+        )
+        for d in read("manifest.json")["documents"]  # type: ignore[index]
+    }
+
+
 def test_documents_in_manifest_and_index() -> None:
-    manifest = read("manifest.json")
-    rows = [
-        (d["path"], d["type"], d["reliability"], d["document_date"], d["registration"], d["page_count"])
-        for d in manifest["documents"]  # type: ignore[index]
-    ]
-    assert rows == [
-        *(
-            (f"confirmations/{n}.pdf", "confirmation", "external_original", "2026-09-30", "confirmation", 2)
-            for n in ("12345678", "12345679")
-        ),
-        ("contracts/CON-X01.pdf", "contract", "external_copy", "2026-09-01", "load", 3),
-        ("contracts/CON-X02.pdf", "contract", "external_copy", "2026-06-24", "load", 3),
-        ("contracts/CON-X03.pdf", "contract", "external_copy", "2026-08-10", "load", 3),
-        ("documents/engagement/appointment.pdf", "minutes", "internal_copy", "2026-08-27", "engagement", 4),
-        (
-            "documents/engagement/engagement_letter.pdf",
+    docs = manifest_documents()
+    expected = {
+        "documents/engagement/appointment.pdf": ("minutes", "internal_copy", "2026-08-27", "engagement", 4, []),
+        "documents/engagement/engagement_letter.pdf": (
             "engagement_letter",
             "external_copy",
             "2026-08-28",
             "engagement",
             3,
+            [],
         ),
-        *(
-            (f"registry/extracts/{acn}.pdf", "registry_extract", "external_original", "2026-10-17", "registry", 2)
+        **{
+            f"registry/extracts/{acn}.pdf": ("registry_extract", "external_original", "2026-10-17", "registry", 2, [])
             for acn in ("900043021", "900043030", "900043049")
-        ),
-        (
-            "registry/persons/MORGAN-ALEX-19790412.pdf",
+        },
+        "registry/persons/MORGAN-ALEX-19790412.pdf": (
             "registry_extract",
             "external_original",
             "2026-10-17",
             "registry",
             1,
+            [],
         ),
+        **{
+            f"confirmations/{n}.pdf": ("confirmation", "external_original", "2026-09-30", "confirmation", 2, [])
+            for n in ("12345678", "12345679")
+        },
+        "contracts/CON-X01.pdf": ("contract", "external_copy", "2026-09-01", "load", 3, []),
+        "contracts/CON-X02.pdf": ("contract", "external_copy", "2026-06-24", "load", 3, []),
+        "contracts/CON-X03.pdf": ("contract", "external_copy", "2026-08-10", "load", 3, []),
+    }
+    assert {path: docs[path] for path in expected} == expected
+    pages = [v[4] for v in expected.values()]
+    assert sum(pages[:6]) == 14 and sum(pages[6:]) == 13  # 承接与登记 14 页, 回函与合同 13 页
+    for item in read("manifest.json")["documents"]:  # type: ignore[index]
+        assert item["document_id"] == "DOC-" + item["sha256"][:12] and item["synthetic"]
+    assert (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()[:3] == [
+        "path,document_type,reliability,document_date,related_ids",
+        "documents/engagement/appointment.pdf,minutes,internal_copy,2026-08-27,",
+        "documents/engagement/engagement_letter.pdf,engagement_letter,external_copy,2026-08-28,",
     ]
-    assert (
-        sum(r[-1] for r in rows[5:]) == 14 and sum(r[-1] for r in rows[:5]) == 13
-    )  # 承接与登记 14 页, 合同与回函 13 页
-    for item in manifest["documents"]:  # type: ignore[index]
-        assert item["document_id"] == "DOC-" + item["sha256"][:12] and item["related_ids"] == [] and item["synthetic"]
-    assert (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8") == (
-        "path,document_type,reliability,document_date,related_ids\n"
-        "documents/engagement/appointment.pdf,minutes,internal_copy,2026-08-27,\n"
-        "documents/engagement/engagement_letter.pdf,engagement_letter,external_copy,2026-08-28,\n"
-    )
 
 
 def test_registry_numbers_pass_check_digits() -> None:
@@ -1263,7 +1282,7 @@ def test_pdf_page_count_and_text_mismatch(tmp_path: Path) -> None:
     generator.write_pdf(letter, pages[:2], "x", HEADER)
     generator.write_manifest(copy, snapshot)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
-    assert [d["page_count"] for d in manifest["documents"] if d["path"].endswith("letter.pdf")] == [2]
+    assert [d["page_count"] for d in manifest["documents"] if d["path"].endswith("engagement_letter.pdf")] == [2]
     assert check_error(copy, snapshot, scan=[]).splitlines() == [f"{letter}: 页数 2 与来源的 3 页不符"]
 
 
@@ -1601,3 +1620,184 @@ def test_bank_accounts_and_refs_against_snapshot(tmp_path: Path) -> None:
         f"{copy / 'bank_accounts.csv'}: 行应与快照银行科目 BA-090, BA-091 一一对应",
         f"{copy / 'manifest.json'}: xero_refs 在快照中找不到: XJ-99999",
     ]
+
+
+# ── 关联方, 董事借款与持续经营文件 ──────────────────────────
+
+
+def test_related_party_documents() -> None:
+    rent = pdf_texts(SUPPLEMENTS / "documents" / "related_party" / "vpa_rent_letter.pdf")
+    assert len(rent) == 1 and "25 June 2026" in rent[0] and "ACN 900 043 030" in rent[0]
+    assert "Rent: AUD 1,500.00 per calendar month plus GST." in rent[0]
+    assert "payable on the 21st day of that month" in rent[0] and "No written lease will be entered into" in rent[0]
+    assert "at least one month's written notice" in rent[0]
+    assert "Dana Morgan Director, Victoria Property Agency Pty Ltd" in rent[0] and "Alex Morgan, Director" in rent[0]
+    notice = pdf_texts(SUPPLEMENTS / "documents" / "related_party" / "vpa_sale_termination_notice.pdf")
+    assert len(notice) == 1 and "28 August 2026" in notice[0]
+    assert "to Harbourview Nominees Pty Ltd. Settlement is due on 30 September 2026" in notice[0]
+    assert "will end on 30 September 2026" in notice[0] and "Truxton Property Management" in notice[0]
+    lease = pdf_texts(SUPPLEMENTS / "documents" / "related_party" / "harbourview_lease.pdf")
+    assert len(lease) == 2 and "Date: 22 September 2026" in lease[0]
+    assert "starts on 1 October 2026 and ends on 30 September 2028" in lease[0]
+    assert "The annual rent is AUD 12,886.32 plus GST" in lease[0] and "AUD 1,073.86 plus GST" in lease[0]
+    assert "may sublet part of the Premises with the Landlord's prior written consent" in lease[0]
+    sublease = pdf_texts(SUPPLEMENTS / "documents" / "related_party" / "rm2031_sublease.pdf")
+    assert len(sublease) == 1 and "Date: 15 October 2026" in sublease[0] and "Majestic Contracting" in sublease[0]
+    assert "Rent: AUD 450.00 per month" in sublease[0] and "room RM2031" in sublease[0]
+    assert round(1073.86 * 12, 2) == 12886.32  # 年租与月租对得上
+
+
+def test_director_loan_and_support_documents() -> None:
+    agreement = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "director_loan_agreement.pdf")
+    assert len(agreement) == 2 and "Date: 10 September 2018" in agreement[0]
+    assert "working capital" in agreement[0] and "The loan is interest-free." in agreement[0]
+    assert "The loan is unsecured." in agreement[0] and "repayable on demand" in agreement[0]
+    confirmation = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "director_loan_confirmation.pdf")
+    assert len(confirmation) == 1 and "16 October 2026" in confirmation[0]
+    assert "AUD 19,212.21 recorded in account 840" in confirmation[0] and "includes the AUD 1.00" in confirmation[0]
+    assert "opening bank balances were brought in against account 840" in confirmation[0]
+    assert '"Loan from director" within current liabilities' in confirmation[0]
+    support = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "director_support_letter.pdf")
+    assert len(support) == 1 and "16 October 2026" in support[0]
+    assert "for 12 months from the date of the auditor's report" in support[0]
+    assert "AUD 19,212.21" in support[0] and "up to AUD 40,000" in support[0]
+    assert "AUD 1,000.00 on 12 October 2026 and AUD 1,500.00 on 15 October 2026" in support[0]
+    assert "asset" not in support[0].lower()  # 不附个人资产证明 (ASA 570 A13, A19)
+
+
+def forecast_rows() -> list[list[str]]:
+    page = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "going_concern_memo_forecast.pdf")[1]
+    return re.findall(
+        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) 20\d\d) ((?:\(?[\d,]+\.\d\d\)? ?){6})(\*)?", page
+    )
+
+
+def amount(text: str) -> int:
+    value = int(text.strip("()").replace(",", "").replace(".", ""))
+    return -value if text.startswith("(") else value
+
+
+def test_going_concern_memo_and_forecast() -> None:
+    pages = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "going_concern_memo_forecast.pdf")
+    assert len(pages) == 3 and "Date: 16 October 2026" in pages[0]
+    assert "13 months from October 2026 to October 2027" in pages[0] and "late October 2027" in pages[0]
+    assert "Overdraft limit 15,000.00" in pages[0] and "Unused overdraft at 30 September 2026 4,099.56" in pages[0]
+    assert "Total receipts 1-16 October 26,991.65" in pages[0] and "Net cash at 16 October 2026 13,353.72" in pages[0]
+    assert "PAYG withholding of AUD 7,535.00" in pages[2] and "superannuation guarantee of AUD 4,261.20" in pages[2]
+    assert "PC Complete, AUD 2,166.99" in pages[2] and "about AUD 14,500 per month" in pages[2]
+    assert "funding gaps in November 2026 and January 2027" in pages[2] and "AUD 6,000 and AUD 14,000" in pages[2]
+    assert "AUD 3,014.00 of PAYG withheld from the 11 and 25 October pay runs" in pages[2]
+    customers = re.findall(r"\d\d Oct ([A-Z][^\d]+?) ([\d,]+\.\d\d) ", pages[0].split("Customer receipts")[0])
+    assert len(customers) == 13 and sum(amount(a) for _, a in customers) == 2170510
+    assert "Customer receipts 21,705.10" in pages[0] and "Payments 1-16 October 14,318.72" in pages[0]
+    rows = forecast_rows()
+    months = [r[0] for r in rows]
+    assert months == [f"{m} 2026" for m in ("Oct", "Nov", "Dec")] + [
+        f"{m} 2027" for m in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct")
+    ]
+    cash, funding = 68079, 0  # 09-30 两户净额 11,581.23 - 10,900.44
+    for month, numbers, star in rows:
+        receipts, payments, before, director, closing, available = (amount(x) for x in numbers.split())
+        assert before == cash + receipts - payments and closing == before + director, month
+        assert available == closing + 1500000 and bool(star) == (before + 1500000 < 0), month
+        cash, funding = closing, funding + director
+    assert [r[0] for r in rows if r[2]] == ["Nov 2026", "Jan 2027"]  # 缺口只在这两个月
+    assert funding - 250000 <= 4000000  # 10 月已转入的 2,500 之外, 追加不超过支持函的 40,000
+
+
+@needs_snapshot
+def test_memo_october_receipts_match_bank_statements() -> None:
+    from datetime import date
+
+    from backend.adapters.xero_dataset import map_bank_transactions
+
+    lines = map_bank_transactions(generator.Snapshot(SNAPSHOT))  # type: ignore[arg-type]
+    window = [t for t in lines if date(2026, 10, 1) <= t.txn_date <= date(2026, 10, 16)]
+    assert sum(t.amount_cents for t in window if t.amount_cents > 0) == 2699165
+    assert -sum(t.amount_cents for t in window if t.amount_cents < 0) == 1431872
+    last = {t.bank_account_id: t.balance_after_cents for t in window}
+    assert last["BA-090"] + last["BA-091"] == 1335372  # 备忘录第 1 页的 16 日净额
+    page = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "going_concern_memo_forecast.pdf")[0]
+    listed = sorted(
+        (int(day), amount(value))
+        for day, value in re.findall(r"(\d\d) Oct [A-Z][^\d]+? ([\d,]+\.\d\d) ", page.split("Interest and other")[0])
+    )
+    others = {"BT-090-0107", "BT-090-0130", "BT-090-0121", "BT-090-0138", "BT-091-0002"}  # 董事转入与 336.55 的三笔
+    statement = sorted((t.txn_date.day, t.amount_cents) for t in window if t.amount_cents > 0 and t.id not in others)
+    assert listed == statement  # 逐笔对上对账单 (客户回款 13 笔, 订金与分租各 1 笔)
+    assert sum(t.amount_cents for t in window if t.id in others - {"BT-090-0107", "BT-090-0130"}) == 33655
+
+
+def test_r66_index_rows_and_manifest() -> None:
+    rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 11 and rows[3:] == [
+        "documents/related_party/vpa_rent_letter.pdf,agreement,external_copy,2026-06-25,ACN-900043030;XJ-420;XJ-518;XJ-593",
+        "documents/related_party/vpa_sale_termination_notice.pdf,correspondence,external_copy,2026-08-28,ACN-900043030",
+        "documents/related_party/harbourview_lease.pdf,agreement,external_copy,2026-09-22,ACN-900043030;XJ-613",
+        "documents/related_party/rm2031_sublease.pdf,agreement,external_copy,2026-10-15,BT-090-0131",
+        "documents/evidence/director_loan_agreement.pdf,agreement,internal_original,2018-09-10,XJ-397",
+        "documents/evidence/director_loan_confirmation.pdf,correspondence,internal_original,2026-10-16,"
+        "XJ-397;CLIENT-XERO-3C1332BB-Q1",
+        "documents/evidence/going_concern_memo_forecast.pdf,internal_record,internal_original,2026-10-16,"
+        "CLIENT-XERO-3C1332BB-Q1",
+        "documents/evidence/director_support_letter.pdf,correspondence,internal_original,2026-10-16,"
+        "CLIENT-XERO-3C1332BB-Q1;BT-090-0107;BT-090-0130",
+    ]
+    docs = manifest_documents()
+    new = [r.split(",")[0] for r in rows[3:]]
+    assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 12  # type: ignore[call-overload]
+
+
+def test_index_problems_are_reported(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    index = (copy / "documents" / "index.csv").read_text(encoding="utf-8")
+    index = index.replace("ACN-900043030;XJ-613", "ACN-900043099;XJ-613").replace(
+        "2026-10-16,CLIENT-XERO-3C1332BB-Q1\n", "2026-10-16,CLIENT-XERO-OTHER\n"
+    )
+    (copy / "documents" / "index.csv").write_text(index, encoding="utf-8")
+    support = copy / "documents" / "evidence" / "director_support_letter.pdf"
+    source = next(d for d in spec()["documents"] if d["path"].endswith("director_support_letter.pdf"))
+    generator.write_pdf(support, ["\n".join(source["pages"][0]).replace("40,000", "4,000")], source["footer"], HEADER)
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    lines = [line for line in check_error(copy, tmp_path / "absent").splitlines() if "文本层缺 1 行" not in line]
+    where = copy / "documents" / "index.csv"
+    assert lines == [
+        f"{where}: documents/related_party/harbourview_lease.pdf 与 manifest 的登记信息不一致",
+        f"{where}: documents/evidence/going_concern_memo_forecast.pdf 与 manifest 的登记信息不一致",
+        f"{where}: documents/related_party/harbourview_lease.pdf 的关联对象 ACN-900043099 不在 registry/asic.json",
+        f"{where}: documents/evidence/going_concern_memo_forecast.pdf 的关联对象 CLIENT-XERO-OTHER 不是画像 ID",
+        f"{support}: 文本层缺关键词 40,000",
+    ]
+
+
+@needs_snapshot
+def test_index_xero_objects_must_exist(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    index = (copy / "documents" / "index.csv").read_text(encoding="utf-8").replace(";XJ-613", ";XJ-99999")
+    (copy / "documents" / "index.csv").write_text(index, encoding="utf-8")
+    assert checker.snapshot_related(copy, generator.Snapshot(SNAPSHOT)) == [
+        f"{copy / 'documents' / 'index.csv'}: 关联对象在快照中找不到: XJ-99999"
+    ]
+
+
+def test_more_index_problems(tmp_path: Path) -> None:
+    """index.csv 换序, 缺列, 未知类型的关联对象; 删掉 index.csv 也要报."""
+    copy = copy_supplements(tmp_path)
+    rows = (copy / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
+    rows[3], rows[4] = rows[4], rows[3]  # 换序
+    rows[5] = rows[5].replace("ACN-900043030;XJ-613", "ZZ-1")  # 未知类型
+    rows[6] = rows[6].split(",")[0]  # 只剩一列
+    (copy / "documents" / "index.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    generator.write_manifest(copy, zed_snapshot(tmp_path))
+    where = copy / "documents" / "index.csv"
+    count = sum(1 for d in spec()["documents"] if d.get("index"))
+    lines = check_error(copy, tmp_path / "absent").splitlines()
+    assert lines == [
+        f"{where}: 行应为规格中 index 为真的 {count} 份文件, 顺序同规格",
+        f"{where}: documents/related_party/harbourview_lease.pdf 与 manifest 的登记信息不一致",
+        f"{where}: documents/related_party/rm2031_sublease.pdf 与 manifest 的登记信息不一致",
+        f"{where}: documents/related_party/harbourview_lease.pdf 的关联对象 ZZ-1 类型未知",
+    ]
+    (copy / "documents" / "index.csv").unlink()
+    generator.write_manifest(copy, zed_snapshot(tmp_path / "again"))
+    assert check_error(copy, tmp_path / "absent") == f"{where}: 缺 documents/index.csv (规格有 {count} 份 index 文件)"

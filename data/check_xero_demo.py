@@ -100,6 +100,8 @@ def check(
         *guarded(directory / "contract_links.csv", check_contract_links, directory),
         *guarded(directory / "confirmations", check_receipts, directory),
         *guarded(directory / "confirmations", check_confirmation_text, directory),
+        *guarded(directory / "documents" / "index.csv", check_index, directory, manifest),
+        *guarded(directory, check_keywords, directory),
         *guarded(directory, check_pdf_content, directory, manifest),
     ]
     notes: list[str] = []
@@ -115,7 +117,8 @@ def check(
     else:
         notes.append(
             f"{NO_SNAPSHOT} ({rel(snapshot_dir)}): 跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, "
-            "合同关联, 开户行, xero_refs, 回函余额与应计利息), 登录账号联系人扫描与确定性检查"
+            "合同关联, 开户行, xero_refs, 回函余额与应计利息, index.csv 的 Xero 关联对象), "
+            "登录账号联系人扫描与确定性检查"
         )
     if problems:
         raise CheckError("\n".join(problems))
@@ -537,6 +540,15 @@ TABLES = {
     "contract_links.csv": ["invoice_no", "contract_id"],
     "delivery_notes.csv": ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"],
     "bank_accounts.csv": ["id", "bank_name", "bsb", "account_no", "gl_account_code"],
+    "documents/index.csv": ["path", "document_type", "reliability", "document_date", "related_ids"],
+    "payroll/employees.csv": [
+        "employee_id",
+        "name",
+        "start_date",
+        "employment_type",
+        "pay_period_days",
+        "gross_per_period_cents",
+    ],
 }  # 补造 CSV 的列 (表头同 data/demo 的同名表)
 UNSERVED = frozenset({"ORC1003", "ORC1005"})  # 本期没有服务完成记录的发票: 重复开票与已并入 ORC1006 的 (第 3.3 节)
 INTEREST = ("BA-091", "BT-091-0002", 15, 30)  # 应计利息 = 期后首次入账利息 × 期内天数 / 计息期天数 (第 2.8 节)
@@ -654,6 +666,67 @@ def check_confirmation_text(directory: Path) -> list[str]:
     return problems
 
 
+XERO_REF = re.compile(r"(?:XJ|BT|SI|BA)-|\d+$")  # 由快照核对的关联对象: 分录, 流水, 发票, 银行账户, 科目代码
+EMPLOYEE = re.compile(r"E\d{3}$")  # 员工号, 对照 payroll/employees.csv
+
+
+def related(row: dict[str, str | None]) -> list[str]:
+    return [x for x in (row.get("related_ids") or "").split(";") if x]
+
+
+def check_index(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """documents/index.csv: 每行的文件在 manifest documents 段, 类型, 可靠性, 日期与关联对象一致, 且是规格中
+    index 为真的全部文件; 关联对象中的 ACN- 在 registry/asic.json, CLIENT- 等于画像 ID (Xero 对象由快照核对)."""
+    wanted = [d["path"] for d in gen.load_spec()["documents"] if d.get("index")]
+    rows = read_table(directory, "documents/index.csv")
+    where = rel(directory / "documents" / "index.csv")
+    if rows is None:
+        return [f"{where}: 缺 documents/index.csv (规格有 {len(wanted)} 份 index 文件)"] if wanted else []
+    problems: list[str] = []
+    documents = {d["path"]: d for d in manifest["documents"]}
+    if [r["path"] for r in rows] != wanted:
+        problems.append(f"{where}: 行应为规格中 index 为真的 {len(wanted)} 份文件, 顺序同规格")
+    for row in rows:
+        doc = documents.get(row["path"])
+        if doc is None or (row["document_type"], row["reliability"], row["document_date"], related(row)) != (
+            doc.get("type"),
+            doc.get("reliability"),
+            doc.get("document_date"),
+            doc.get("related_ids"),
+        ):
+            problems.append(f"{where}: {row['path']} 与 manifest 的登记信息不一致")
+    asic = read_json(directory / "registry" / "asic.json")
+    companies = {f"ACN-{acn}" for acn in asic} if isinstance(asic, dict) else set()
+    profile = read_json(directory / "client_profile.json")
+    clients = {str(profile.get("id"))} if isinstance(profile, dict) else set()
+    staff = read_table(directory, "payroll/employees.csv", quiet=True) or []
+    employees = {r["employee_id"] for r in staff}
+    for row in rows:
+        for ref in related(row):
+            if ref.startswith("ACN-") and ref not in companies:
+                problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不在 registry/asic.json")
+            elif ref.startswith("CLIENT-") and ref not in clients:
+                problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不是画像 ID")
+            elif EMPLOYEE.match(ref) and ref not in employees:
+                problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不在 payroll/employees.csv")
+            elif not (ref.startswith(("ACN-", "CLIENT-")) or EMPLOYEE.match(ref) or XERO_REF.match(ref)):
+                problems.append(f"{where}: {row['path']} 的关联对象 {ref} 类型未知")
+    return problems
+
+
+def check_keywords(directory: Path) -> list[str]:
+    """规格 documents 段的 keywords: 每个关键词都出现在该 PDF 的文本层 (空白归一)."""
+    problems: list[str] = []
+    for doc in gen.load_spec()["documents"]:
+        texts = pdf_pages(directory / doc["path"]) if doc.get("keywords") else None
+        if texts:
+            text = normalize_case(" ".join(texts))
+            lack = [k for k in doc["keywords"] if normalize_case(k) not in text]
+            if lack:
+                problems.append(f"{rel(directory / doc['path'])}: 文本层缺关键词 {', '.join(lack)}")
+    return problems
+
+
 SNAPSHOT_TABLE_FILES = ("dataset", "invoices", "accounts", "bank_statements")  # 补造表与快照核对要读的快照文件
 
 
@@ -679,6 +752,7 @@ def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
         (directory / "bank_accounts.csv", snapshot_bank_accounts, (directory, snapshot)),
         (directory / "manifest.json", snapshot_refs, (directory, snapshot)),
         (gen.SPEC, snapshot_confirmations, (snapshot, period[1])),
+        (directory / "documents" / "index.csv", snapshot_related, (directory, snapshot)),
     ]
     return [problem for where, step, args in steps for problem in guarded(where, step, *args)]
 
@@ -733,6 +807,17 @@ def snapshot_refs(directory: Path, snapshot: gen.Snapshot) -> list[str]:
     missing = gen.RefIndex(snapshot).missing(refs) if refs else []
     if missing:
         return [f"{rel(directory / 'manifest.json')}: xero_refs 在快照中找不到: {', '.join(sorted(set(missing)))}"]
+    return []
+
+
+def snapshot_related(directory: Path, snapshot: gen.Snapshot) -> list[str]:
+    """documents/index.csv 关联对象中的 Xero 对象 (XJ-, BT-, SI-, BA- 与科目代码) 都在快照中."""
+    rows = read_table(directory, "documents/index.csv", quiet=True)
+    refs = [r for row in rows or [] for r in related(row) if XERO_REF.match(r)]
+    missing = gen.RefIndex(snapshot).missing(refs) if refs else []
+    if missing:
+        where = rel(directory / "documents" / "index.csv")
+        return [f"{where}: 关联对象在快照中找不到: {', '.join(sorted(set(missing)))}"]
     return []
 
 

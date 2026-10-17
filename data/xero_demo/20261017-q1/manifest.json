@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "16b2ef2af1db7a8274530353727b37060c0a7a85c3beddf896ab01490ba29465",
+  "spec_sha256": "27bcae61caae92b47f0621b59e385bf671cb5162b68aecaa65eeba79686b46b6",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -180,8 +180,79 @@
       "xero_refs": []
     },
     {
+      "path": "documents/evidence/director_loan_agreement.pdf",
+      "sha256": "1f4bc9aec6b334a789d0661b51ad81dce7230aaaf02585b79983670a797e3170",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-397"
+      ]
+    },
+    {
+      "path": "documents/evidence/director_loan_confirmation.pdf",
+      "sha256": "3738f404ca43e914307e2c94d65657390361b8d22296d838e77356e68faafe16",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-397"
+      ]
+    },
+    {
+      "path": "documents/evidence/director_support_letter.pdf",
+      "sha256": "ffde81bd827dd03d933367cb30cbdf6b84bcebe2e69a8042b14556e16c295f10",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "BT-090-0107",
+        "BT-090-0130"
+      ]
+    },
+    {
+      "path": "documents/evidence/going_concern_memo_forecast.pdf",
+      "sha256": "3298fa1057e871202ce1ae0d58bdcbda04ed4fa2421ff46902fb98f17cbc774d",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "documents/index.csv",
-      "sha256": "e831fd49e83cd0963a104bf7717bf6bbf226c5f9744c11bf9dc59ac97fb62ae9",
+      "sha256": "ffd8814d75dead64ffdb5a923eafd430fc9daf799e00b213999fd013f467cb23",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "documents/related_party/harbourview_lease.pdf",
+      "sha256": "0f8e8d98c18b7657c8b6d0071b538ee4438eab98983346420aa42a1a92c57cb4",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-613"
+      ]
+    },
+    {
+      "path": "documents/related_party/rm2031_sublease.pdf",
+      "sha256": "05ff974d6addbb6374ca30f676b7ba8f7e2bbdcfe4c71e7f901a45171d1a4e75",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "BT-090-0131"
+      ]
+    },
+    {
+      "path": "documents/related_party/vpa_rent_letter.pdf",
+      "sha256": "31d9e46263fc35a25e738e034a6e0a4460a0b1febf8adee881e46f4cc8e43e38",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-420",
+        "XJ-518",
+        "XJ-593"
+      ]
+    },
+    {
+      "path": "documents/related_party/vpa_sale_termination_notice.pdf",
+      "sha256": "abcccf593a3f5a2e4dafff4011020fa6186a90d52c04e4abc350399ee87c29d6",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -354,6 +425,125 @@
       "document_date": "2026-08-28",
       "related_ids": [],
       "registration": "engagement",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/director_loan_agreement.pdf",
+      "sha256": "1f4bc9aec6b334a789d0661b51ad81dce7230aaaf02585b79983670a797e3170",
+      "document_id": "DOC-1f4bc9aec6b3",
+      "type": "agreement",
+      "reliability": "internal_original",
+      "page_count": 2,
+      "document_date": "2018-09-10",
+      "related_ids": [
+        "XJ-397"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/director_loan_confirmation.pdf",
+      "sha256": "3738f404ca43e914307e2c94d65657390361b8d22296d838e77356e68faafe16",
+      "document_id": "DOC-3738f404ca43",
+      "type": "correspondence",
+      "reliability": "internal_original",
+      "page_count": 1,
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "XJ-397",
+        "CLIENT-XERO-3C1332BB-Q1"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/director_support_letter.pdf",
+      "sha256": "ffde81bd827dd03d933367cb30cbdf6b84bcebe2e69a8042b14556e16c295f10",
+      "document_id": "DOC-ffde81bd827d",
+      "type": "correspondence",
+      "reliability": "internal_original",
+      "page_count": 1,
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "CLIENT-XERO-3C1332BB-Q1",
+        "BT-090-0107",
+        "BT-090-0130"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/evidence/going_concern_memo_forecast.pdf",
+      "sha256": "3298fa1057e871202ce1ae0d58bdcbda04ed4fa2421ff46902fb98f17cbc774d",
+      "document_id": "DOC-3298fa1057e8",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "page_count": 3,
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "CLIENT-XERO-3C1332BB-Q1"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/related_party/harbourview_lease.pdf",
+      "sha256": "0f8e8d98c18b7657c8b6d0071b538ee4438eab98983346420aa42a1a92c57cb4",
+      "document_id": "DOC-0f8e8d98c18b",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "page_count": 2,
+      "document_date": "2026-09-22",
+      "related_ids": [
+        "ACN-900043030",
+        "XJ-613"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/related_party/rm2031_sublease.pdf",
+      "sha256": "05ff974d6addbb6374ca30f676b7ba8f7e2bbdcfe4c71e7f901a45171d1a4e75",
+      "document_id": "DOC-05ff974d6add",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-10-15",
+      "related_ids": [
+        "BT-090-0131"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/related_party/vpa_rent_letter.pdf",
+      "sha256": "31d9e46263fc35a25e738e034a6e0a4460a0b1febf8adee881e46f4cc8e43e38",
+      "document_id": "DOC-31d9e46263fc",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-06-25",
+      "related_ids": [
+        "ACN-900043030",
+        "XJ-420",
+        "XJ-518",
+        "XJ-593"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
+      "path": "documents/related_party/vpa_sale_termination_notice.pdf",
+      "sha256": "abcccf593a3f5a2e4dafff4011020fa6186a90d52c04e4abc350399ee87c29d6",
+      "document_id": "DOC-abcccf593a3f",
+      "type": "correspondence",
+      "reliability": "external_copy",
+      "page_count": 1,
+      "document_date": "2026-08-28",
+      "related_ids": [
+        "ACN-900043030"
+      ],
+      "registration": "load",
       "synthetic": true
     },
     {

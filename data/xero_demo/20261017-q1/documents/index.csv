@@ -1,3 +1,11 @@
 path,document_type,reliability,document_date,related_ids
 documents/engagement/appointment.pdf,minutes,internal_copy,2026-08-27,
 documents/engagement/engagement_letter.pdf,engagement_letter,external_copy,2026-08-28,
+documents/related_party/vpa_rent_letter.pdf,agreement,external_copy,2026-06-25,ACN-900043030;XJ-420;XJ-518;XJ-593
+documents/related_party/vpa_sale_termination_notice.pdf,correspondence,external_copy,2026-08-28,ACN-900043030
+documents/related_party/harbourview_lease.pdf,agreement,external_copy,2026-09-22,ACN-900043030;XJ-613
+documents/related_party/rm2031_sublease.pdf,agreement,external_copy,2026-10-15,BT-090-0131
+documents/evidence/director_loan_agreement.pdf,agreement,internal_original,2018-09-10,XJ-397
+documents/evidence/director_loan_confirmation.pdf,correspondence,internal_original,2026-10-16,XJ-397;CLIENT-XERO-3C1332BB-Q1
+documents/evidence/going_concern_memo_forecast.pdf,internal_record,internal_original,2026-10-16,CLIENT-XERO-3C1332BB-Q1
+documents/evidence/director_support_letter.pdf,correspondence,internal_original,2026-10-16,CLIENT-XERO-3C1332BB-Q1;BT-090-0107;BT-090-0130
