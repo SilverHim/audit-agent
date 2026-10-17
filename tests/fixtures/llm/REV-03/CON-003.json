@@ -8,7 +8,7 @@
         {
           "type": "contract",
           "source_type": "document",
-          "source_id": "DOC-CON003000000",
+          "source_id": "DOC-245af45c3dc0",
           "locator": "CON-003-T2",
           "page": 2,
           "reliability": "external_copy"
@@ -23,7 +23,7 @@
         {
           "type": "contract",
           "source_type": "document",
-          "source_id": "DOC-CON003000000",
+          "source_id": "DOC-245af45c3dc0",
           "locator": "CON-003-T3",
           "page": 3,
           "reliability": "external_copy"
@@ -38,7 +38,7 @@
         {
           "type": "contract",
           "source_type": "document",
-          "source_id": "DOC-CON003000000",
+          "source_id": "DOC-245af45c3dc0",
           "locator": "CON-003-T4",
           "page": 3,
           "reliability": "external_copy"
@@ -101,7 +101,7 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "CON-003-T2",
       "page": 2,
       "reliability": "external_copy"
@@ -109,7 +109,7 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "CON-003-T3",
       "page": 3,
       "reliability": "external_copy"
@@ -117,7 +117,7 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "CON-003-T4",
       "page": 3,
       "reliability": "external_copy"

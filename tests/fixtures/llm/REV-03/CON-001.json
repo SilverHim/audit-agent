@@ -8,7 +8,7 @@
         {
           "type": "contract",
           "source_type": "document",
-          "source_id": "DOC-CON001000000",
+          "source_id": "DOC-3e7fb18af92a",
           "locator": "CON-001-T1",
           "page": 2,
           "reliability": "external_copy"
@@ -61,7 +61,7 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON001000000",
+      "source_id": "DOC-3e7fb18af92a",
       "locator": "CON-001-T1",
       "page": 2,
       "reliability": "external_copy"

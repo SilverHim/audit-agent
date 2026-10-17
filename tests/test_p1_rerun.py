@@ -149,10 +149,16 @@ async def test_doc04_one_contract_fails_then_rerun_only_that_contract() -> None:
             seen.append(list(subjects))
             run = finished(ctx.run)
             if not subjects:  # 第 1 次: CON-002 抽取失败, 另两份抽出
-                docs = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS if "002" not in d.id]
+                docs = [
+                    d.model_copy(update={"status": "extracted"})
+                    for d in NUMBAT_CONTRACTS
+                    if d.file_name != "CON-002.pdf"
+                ]
                 task = deps.queue.make_task(TaskKind.failed, run, "DOC-04", run.id, NOW, subject_id="CON-002")
                 return {"documents": docs, "procedure_runs": [run], "review_tasks": [task]}
-            docs = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS if "002" in d.id]
+            docs = [
+                d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS if d.file_name == "CON-002.pdf"
+            ]
             return {"documents": docs, "procedure_runs": [run]}
 
         return {"DOC-04": ScriptA3(deps, doc04)}
@@ -183,9 +189,9 @@ async def test_doc04_one_contract_fails_then_rerun_only_that_contract() -> None:
     doc04 = await store.get(EID, Procedure, "DOC-04")
     assert doc04 is not None and (doc04.status, doc04.rerun_subject_ids) == (ProcedureStatus.completed, [])
     assert await store.get(EID, ProcedureRun, "RUN-DOC-04-2") is not None
-    assert sorted((d.id, d.status) for d in snapshot.values["documents"]) == [
+    assert sorted((d.id, d.status) for d in snapshot.values["documents"]) == sorted(
         (d.id, "extracted") for d in NUMBAT_CONTRACTS
-    ]
+    )
     # 存储中的文件状态与图状态一致. 恢复时: 重放第 1 次取回全部文件, 对已 extracted 的再写一次同值 (幂等);
     # 第 2 次只写 CON-002; 全部在事务内
     assert [(d.id, d.status) for d in await financial.documents(EID)] == [(d.id, "extracted") for d in NUMBAT_CONTRACTS]

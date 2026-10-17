@@ -404,7 +404,7 @@ async def test_si0612_fixture_is_cutoff_misstatement() -> None:
     assert [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence] == [
         ("sales_invoice", "SI-2026-0612", "posting_date", None),
         ("delivery_note", "DN-2026-0612", "signed_date", None),
-        ("document", "DOC-CON001000000", "CON-001-T1", 2),
+        ("document", NUMBAT_CONTRACTS[0].id, "CON-001-T1", 2),
         ("standard", "AASB15-P38", "para 38", None),
         ("standard", "AASB15-P31", "para 31", None),
     ]

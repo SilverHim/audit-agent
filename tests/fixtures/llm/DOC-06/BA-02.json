@@ -8,7 +8,7 @@
     {
       "type": "external",
       "source_type": "document",
-      "source_id": "DOC-RPLBA0200000",
+      "source_id": "DOC-0019ab721f75",
       "locator": "confirming_party",
       "page": 1,
       "reliability": "external_original"
@@ -16,7 +16,7 @@
     {
       "type": "external",
       "source_type": "document",
-      "source_id": "DOC-RPLBA0200000",
+      "source_id": "DOC-0019ab721f75",
       "locator": "account_no",
       "page": 1,
       "reliability": "external_original"
@@ -24,7 +24,7 @@
     {
       "type": "external",
       "source_type": "document",
-      "source_id": "DOC-RPLBA0200000",
+      "source_id": "DOC-0019ab721f75",
       "locator": "confirmed_balance_cents",
       "page": 1,
       "reliability": "external_original"
@@ -32,7 +32,7 @@
     {
       "type": "external",
       "source_type": "document",
-      "source_id": "DOC-RPLBA0200000",
+      "source_id": "DOC-0019ab721f75",
       "locator": "balance_date",
       "page": 1,
       "reliability": "external_original"
@@ -40,7 +40,7 @@
     {
       "type": "external",
       "source_type": "document",
-      "source_id": "DOC-RPLBA0200000",
+      "source_id": "DOC-0019ab721f75",
       "locator": "receipt_channel",
       "page": 2,
       "reliability": "external_original"

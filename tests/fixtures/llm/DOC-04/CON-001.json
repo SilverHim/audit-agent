@@ -7,28 +7,28 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON001000000",
+      "source_id": "DOC-3e7fb18af92a",
       "locator": "counterparty",
       "page": 1
     },
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON001000000",
+      "source_id": "DOC-3e7fb18af92a",
       "locator": "counterparty_abn",
       "page": 1
     },
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON001000000",
+      "source_id": "DOC-3e7fb18af92a",
       "locator": "amount_cents",
       "page": 1
     },
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON001000000",
+      "source_id": "DOC-3e7fb18af92a",
       "locator": "sign_date",
       "page": 1
     }

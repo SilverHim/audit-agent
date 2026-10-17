@@ -7,21 +7,21 @@
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "counterparty",
       "page": 1
     },
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "counterparty_abn",
       "page": 1
     },
     {
       "type": "contract",
       "source_type": "document",
-      "source_id": "DOC-CON003000000",
+      "source_id": "DOC-245af45c3dc0",
       "locator": "sign_date",
       "page": 1
     }

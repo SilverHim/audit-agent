@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -182,31 +183,33 @@ NUMBAT_RISKS = [  # 合成数据集设计第 2.4 节
     ),
 ]
 NUMBAT_AUDITOR = User(id="U-1", email="j.ellis@tessellate-audit.example", full_name="Jordan Ellis")  # 项目负责人, 合成
-NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同; ID 为占位, B 出 manifest 后由 R54 替换
-    DocumentRef(
-        id=f"DOC-CON00{n}000000",
-        type=DocumentType.contract,
-        file_name=f"CON-00{n}.pdf",
-        sha256=f"{n}" * 64,
-        page_count=4 if n == 3 else 3,
-        reliability=Reliability.external_copy,
+DEMO_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "demo" / "manifest.json"  # 合成数据集设计第 1 节
+MANIFEST_DOCUMENTS: dict[str, dict[str, Any]] = {  # manifest 登记的 PDF, 相对 data/demo 的路径 -> 条目
+    d["path"]: d for d in json.loads(DEMO_MANIFEST.read_text(encoding="utf-8"))["documents"]
+}
+
+
+def manifest_document(path: str, reliability: Reliability) -> DocumentRef:
+    """data/demo 下 path 那份 PDF 的登记: ID, 类型, 哈希与页数取 manifest, 文件名取路径末段, 状态 received."""
+    entry = MANIFEST_DOCUMENTS[path]
+    return DocumentRef(
+        id=entry["document_id"],
+        type=DocumentType(entry["type"]),
+        file_name=Path(path).name,
+        sha256=entry["sha256"],
+        page_count=entry["page_count"],
+        reliability=reliability,
         status="received",
         uploaded_at=NOW,
     )
-    for n in (1, 2, 3)
+
+
+NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同
+    manifest_document(f"contracts/CON-00{n}.pdf", Reliability.external_copy) for n in (1, 2, 3)
 ]
-NUMBAT_REPLIES = [  # CSH-04 存档的 2 份银行回函 (合成数据集设计第 7 节第 10 行); ID 为占位
-    DocumentRef(
-        id=f"DOC-RPLBA0{n}00000",
-        type=DocumentType.confirmation,
-        file_name=file_name,
-        sha256=f"{n}a" * 32,
-        page_count=2,
-        reliability=Reliability.external_original,
-        status="received",
-        uploaded_at=NOW,
-    )
-    for n, file_name in ((1, "12345601.pdf"), (2, "23456702.pdf"))
+NUMBAT_REPLIES = [  # CSH-04 存档的 2 份银行回函 (合成数据集设计第 7 节第 10 行), 文件名为账号
+    manifest_document(f"confirmations/{account_no}.pdf", Reliability.external_original)
+    for account_no in ("12345601", "23456702")
 ]
 
 

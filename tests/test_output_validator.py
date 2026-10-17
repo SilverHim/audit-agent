@@ -59,7 +59,7 @@ from tests.fakes import (
 EID = ENGAGEMENT.id
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 REV02 = LIBRARY.load("REV-02")
-CON001 = NUMBAT_CONTRACTS[0]  # DOC-CON001000000, 3 页, external_copy
+CON001 = NUMBAT_CONTRACTS[0]  # CON-001.pdf, 3 页, external_copy
 FIXTURES = get_settings().LLM_FIXTURES_ROOT
 
 

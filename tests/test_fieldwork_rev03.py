@@ -120,7 +120,8 @@ async def test_signature_contracts_cite_t1_and_standards(cid: str) -> None:
     [j] = [j for j in patch["judgments"] if j.subject_id == cid]
     pointers = [p for step in j.reasoning_chain for p in step.evidence]
     term = [p for p in pointers if p.source_type == "document"]
-    assert [(p.source_id, p.locator, p.page) for p in term] == [(f"DOC-CON00{cid[-1]}000000", f"{cid}-T1", 2)]
+    document_id = next(d.id for d in NUMBAT_CONTRACTS if d.file_name == f"{cid}.pdf")
+    assert [(p.source_id, p.locator, p.page) for p in term] == [(document_id, f"{cid}-T1", 2)]
     assert {p.source_id for p in pointers if p.source_type == "standard"} == {"AASB15-P31", "AASB15-P38"}
     assert j.reasoning_chain[-1].kind is StepKind.inference
 

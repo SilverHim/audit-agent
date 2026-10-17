@@ -1,3 +1,5 @@
+import csv
+import json
 import re
 from datetime import date, datetime
 from functools import cache
@@ -24,7 +26,7 @@ from backend.core.config import get_settings
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS
+from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 
 ROOT = get_settings().KNOWLEDGE_ROOT
@@ -394,3 +396,123 @@ def test_doc04_fixture_set() -> None:
     """验收 5: CON-001 第 7 条标准质保不列为 guarantee; DOC-04 目录下只有三份合同的 fixture, 没有 default.json."""
     assert all(t.term_type is not TermType.guarantee for t in load_extraction("CON-001").terms)
     assert sorted(p.name for p in DOC04.iterdir()) == ["CON-001.json", "CON-002.json", "CON-003.json"]
+
+
+# ── R54: fixture 文档 ID 对齐 manifest ──
+
+FIXTURES = get_settings().LLM_FIXTURES_ROOT
+DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"  # 合成数据集 (合成数据集设计第 1 节)
+
+
+def manifest_documents() -> dict[str, dict[str, Any]]:
+    """data/demo/manifest.json 登记的 PDF: 文档 ID -> 条目 (path 相对 data/demo, type, page_count, sha256)."""
+    documents = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))["documents"]
+    return {d["document_id"]: d for d in documents}
+
+
+def demo_rows(table: str) -> dict[str, dict[str, str]]:
+    """data/demo 下某张表的 CSV: id -> 行."""
+    with (DEMO / f"{table}.csv").open(encoding="utf-8", newline="") as f:
+        return {row["id"]: row for row in csv.DictReader(f)}
+
+
+def document_pointers(node: Any) -> list[dict[str, Any]]:
+    """fixture JSON 中 source_type 为 document 的全部证据指针, 含推理链各步里的."""
+    if isinstance(node, dict):
+        own = [node] if node.get("source_type") == "document" else []
+        return own + [p for value in node.values() for p in document_pointers(value)]
+    if isinstance(node, list):
+        return [p for item in node for p in document_pointers(item)]
+    return []
+
+
+def expected_document(procedure_id: str, fixture_key: str) -> str:
+    """fixture 的 document 指针应指向的 PDF (相对 data/demo): DOC-04, REV-03 为该合同; REV-02 为发票关联的合同;
+    DOC-06, CSH-02 为该银行账户的回函, 以账号命名; GEN-09 (A7 复核, 键为 {判断对象}-r1, -r2) 同被复核判断的程序."""
+    if procedure_id == "GEN-09":
+        subject = fixture_key.rsplit("-r", 1)[0]
+        judged_by = {"BA": "CSH-02", "CON": "REV-03", "SI": "REV-02"}[subject.split("-")[0]]
+        return expected_document(judged_by, subject)
+    if procedure_id in ("DOC-04", "REV-03"):
+        return f"contracts/{fixture_key}.pdf"
+    if procedure_id == "REV-02":
+        return f"contracts/{demo_rows('sales_invoices')[fixture_key]['contract_id']}.pdf"
+    if procedure_id in ("DOC-06", "CSH-02"):
+        return f"confirmations/{demo_rows('bank_accounts')[fixture_key]['account_no']}.pdf"
+    raise LookupError(f"{procedure_id} 的 fixture 不应有 document 指针")
+
+
+def test_fixture_document_ids_in_manifest() -> None:
+    """验收 1: 每个 document 指针的 source_id 都在 manifest.documents 中, 指向该 fixture 对应的 PDF
+    (合同为 contracts/CON-00x.pdf, 回函为 confirmations/{账号}.pdf), 页码不超过该 PDF 的页数.
+    有 document 指针的正是 DOC-04, DOC-06, REV-03, REV-02, CSH-02 五个程序的全部 fixture 与 GEN-09 的第一轮."""
+    documents = manifest_documents()
+    checked: dict[str, int] = {}
+    wrong = []
+    for path in sorted(FIXTURES.rglob("*.json")):
+        pointers = document_pointers(json.loads(path.read_text(encoding="utf-8")))
+        if not pointers:
+            continue
+        procedure_id, key = path.parent.name, path.stem
+        checked[f"{procedure_id}/{key}"] = len(pointers)
+        expected = expected_document(procedure_id, key)
+        for p in pointers:
+            entry = documents.get(p["source_id"])
+            if entry is None or entry["path"] != expected or not 1 <= p["page"] <= entry["page_count"]:
+                wrong.append((f"{procedure_id}/{key}", p["source_id"], p["locator"], p["page"]))
+    assert wrong == []
+    assert checked == {
+        "CSH-02/BA-01": 4,
+        "DOC-04/CON-001": 4,
+        "DOC-04/CON-002": 4,
+        "DOC-04/CON-003": 3,
+        "DOC-06/BA-01": 5,
+        "DOC-06/BA-02": 5,
+        "GEN-09/BA-01-r1": 2,
+        "REV-02/SI-2026-0612": 2,
+        "REV-02/SI-2026-0618": 2,
+        "REV-03/CON-001": 2,
+        "REV-03/CON-002": 2,
+        "REV-03/CON-003": 6,
+    }
+
+
+def test_fake_documents_from_manifest() -> None:
+    """验收 2: 假存储登记的 3 份合同与 2 份回函即 manifest 的 5 份 PDF: 文档 ID, 页数, 哈希取 manifest,
+    文件名为 PDF 路径末段, 类型一致."""
+    fakes = {d.file_name: d for d in [*NUMBAT_CONTRACTS, *NUMBAT_REPLIES]}
+    expected = {Path(d["path"]).name: d for d in manifest_documents().values()}
+
+    assert (
+        sorted(fakes)
+        == sorted(expected)
+        == [
+            "12345601.pdf",
+            "23456702.pdf",
+            "CON-001.pdf",
+            "CON-002.pdf",
+            "CON-003.pdf",
+        ]
+    )
+    for name, d in expected.items():
+        ref = fakes[name]
+        assert (ref.id, ref.page_count, ref.sha256, ref.type) == (
+            d["document_id"],
+            d["page_count"],
+            d["sha256"],
+            d["type"],
+        ), name
+
+
+def test_runtime_fixtures_match_test_fixtures() -> None:
+    """运行用 data/demo/llm (B 的生成器由本目录复制并映射文档 ID) 与测试用 fixture 内容相同: 文档 ID 已对齐,
+    映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出."""
+    test_files = {p.relative_to(FIXTURES): p for p in FIXTURES.rglob("*.json")}
+    runtime = DEMO / "llm"
+    runtime_files = {p.relative_to(runtime): p for p in runtime.rglob("*.json")}
+
+    assert sorted(test_files) == sorted(runtime_files)
+    for name, path in test_files.items():
+        assert json.loads(path.read_text(encoding="utf-8")) == json.loads(
+            runtime_files[name].read_text(encoding="utf-8")
+        ), name

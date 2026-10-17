@@ -40,6 +40,7 @@ from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_PROFILE,
     FakeEngagementStore,
@@ -793,7 +794,7 @@ async def test_manual_result_for_failed_subject() -> None:
     await s.submit.submit(EID, pln_decision(GateVerdict.approve))
     await wait_idle(runner, EID)
     pointer = EvidencePointer(
-        type="contract", source_type="document", source_id="DOC-CON003000000", locator="T2", page=2
+        type="contract", source_type="document", source_id=NUMBAT_CONTRACTS[2].id, locator="T2", page=2
     )
     result = ManualResult(conclusion="配送中心收货员签收时控制权转移", evidence=[pointer])
     before = len(store.commits)
