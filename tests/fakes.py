@@ -1139,6 +1139,9 @@ class FakeUserStore:
     async def get(self, user_id: str) -> User | None:
         return self.users.get(user_id)
 
+    async def create(self, email: str, full_name: str, password_hash: str) -> User | None:
+        raise NotImplementedError
+
 
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.

@@ -190,13 +190,17 @@ class EngagementStore(Protocol):
 
 
 class UserStore(Protocol):
-    """用户的存储 (B 实现), 供登录校验."""
+    """用户的存储 (B 实现), 供登录校验与注册."""
 
     async def by_email(self, email: str) -> tuple[User, str] | None:
-        """返回 (用户, password_hash), 登录用."""
+        """按登录名查找 (不区分大小写), 返回 (用户, password_hash), 登录用."""
         ...
 
     async def get(self, user_id: str) -> User | None: ...
+
+    async def create(self, email: str, full_name: str, password_hash: str) -> User | None:
+        """注册新用户; 登录名 (不区分大小写) 已被占用时返回 None, 不改原账号."""
+        ...
 
 
 class LlmSettingsStore(Protocol):

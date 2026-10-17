@@ -496,7 +496,6 @@ export const zh: Messages = {
       password: '密码须为 8 到 128 位',
       mismatch: '两次输入的密码不一致',
       taken: '这个账号已被注册',
-      unavailable: '暂时无法注册',
     },
   },
   settings: {

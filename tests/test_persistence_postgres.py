@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import insert, select, text
+from sqlalchemy import delete, insert, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -442,3 +442,50 @@ async def test_llm_settings_upsert_per_slot(storage):
         assert (await conn.execute(select(m.llm_settings.c.slot).where(m.llm_settings.c.slot == "review"))).all() == [
             ("review",)
         ]
+
+
+async def test_user_store_create_keeps_existing_account():
+    """注册: 登录名唯一, 同名并发注册只成功一个, 不改原账号; 测试结束删掉自己建的行."""
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("Set TEST_DATABASE_URL to a migrated disposable PostgreSQL database")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    users = PostgresUserStore(engine)
+    name = "register-" + uuid4().hex
+    other = "case-" + uuid4().hex
+    legacy = "Legacy-" + uuid4().hex + "@Example.com"
+    try:
+        results = await asyncio.gather(users.create(name, "First", "hash-1"), users.create(name, "Second", "hash-2"))
+        created = [user for user in results if user is not None]
+        assert len(created) == 1
+        found = await users.by_email(name)
+        assert found is not None
+        user, password_hash = found
+        assert user == created[0]
+        assert password_hash == {"First": "hash-1", "Second": "hash-2"}[user.full_name]
+        assert await users.get(user.id) == user
+        assert await users.create(name, "Third", "hash-3") is None
+        # 只差大小写的并发注册同样只成功一个, 查找也不区分大小写
+        variants = await asyncio.gather(
+            users.create(other, "Lower", "h-1"), users.create(other.upper(), "Upper", "h-2")
+        )
+        assert sum(user is not None for user in variants) == 1
+        assert await users.by_email(other.upper()) is not None
+        # 注册功能之前存入的含大写账号: 按小写能登录, 按小写也不能再注册
+        async with engine.begin() as conn:
+            await conn.execute(
+                insert(m.users).values(
+                    id="USR-" + uuid4().hex,
+                    email=legacy,
+                    full_name="Legacy",
+                    password_hash="h-legacy",
+                    created_at=now(),
+                )
+            )
+        found = await users.by_email(legacy.lower())
+        assert found is not None and found[1] == "h-legacy"
+        assert await users.create(legacy.lower(), "Copy", "h-copy") is None
+    finally:
+        async with engine.begin() as conn:  # 只删本测试建的账号
+            await conn.execute(delete(m.users).where(m.users.c.email.in_([name, other, other.upper(), legacy])))
+        await engine.dispose()

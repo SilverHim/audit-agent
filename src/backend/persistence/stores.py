@@ -644,16 +644,52 @@ class PostgresEngagementStore(Store):
 
 
 class PostgresUserStore(Store):
+    """用户表; email 列即登录名. 查找与判重都不区分大小写, 早于注册功能存入的含大写账号照常可用."""
+
     async def by_email(self, email: str) -> tuple[User, str] | None:
-        rows = await self.rows("", select(m.users).where(m.users.c.email == email))
-        if not rows:
+        """按登录名查找, 不区分大小写. 库里若有只差大小写的多个账号 (注册功能之前可能存在), 只认完全相同的那个."""
+        rows = await self.rows("", select(m.users).where(func.lower(m.users.c.email) == email.lower()))
+        exact = [row for row in rows if row["email"] == email]
+        if len(rows) == 1:
+            row = rows[0]
+        elif len(exact) == 1:
+            row = exact[0]
+        else:
             return None
-        row = rows[0]
         return User(id=row["id"], email=row["email"], full_name=row["full_name"]), row["password_hash"]
 
     async def get(self, user_id: str) -> User | None:
         rows = await self.rows("", select(m.users).where(m.users.c.id == user_id))
         return User(**{k: rows[0][k] for k in ("id", "email", "full_name")}) if rows else None
+
+    async def create(self, email: str, full_name: str, password_hash: str) -> User | None:
+        """登录名 (不区分大小写) 未被占用时插入一行, 否则返回 None, 不改原账号.
+
+        先按小写登录名取事务级咨询锁, 再查重再插入: 只差大小写的并发注册排队执行, 只成功一个.
+        唯一约束 (email 列, 区分大小写) 仍在, 作为最后一道保险.
+        """
+        async with transaction(self.engine, "") as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "user:" + email.lower()}
+            )
+            taken = await conn.execute(select(m.users.c.id).where(func.lower(m.users.c.email) == email.lower()))
+            if taken.first() is not None:
+                return None
+            created = (
+                await conn.execute(
+                    insert(m.users)
+                    .values(
+                        id=f"USR-{uuid4()}",
+                        email=email,
+                        full_name=full_name,
+                        password_hash=password_hash,
+                        created_at=now(),
+                    )
+                    .on_conflict_do_nothing(index_elements=[m.users.c.email])
+                    .returning(m.users.c.id)
+                )
+            ).scalar_one_or_none()
+        return None if created is None else User(id=created, email=email, full_name=full_name)
 
 
 class PostgresLlmSettingsStore(Store):

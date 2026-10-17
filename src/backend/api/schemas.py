@@ -41,6 +41,14 @@ class Token(Model):
     token_type: str = "bearer"
 
 
+class RegisterIn(Model):
+    """注册: 账号即登录名, 不限邮箱格式. 长度等规则由 handler 校验, 不合要求报 INVALID_VALUE."""
+
+    username: str
+    full_name: str
+    password: str
+
+
 class EngagementCreate(Model):
     """新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像."""
 

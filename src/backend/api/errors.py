@@ -21,6 +21,7 @@ _STATUS: dict[str, int] = {
     "TASK_NOT_PENDING": 409,
     "NOT_AWAITING_REVIEW": 409,
     "VERSION_MISMATCH": 409,
+    "USERNAME_TAKEN": 409,
     "DECISION_NOT_ALLOWED": 422,
     "MISSING_FIELD": 422,
     "FIELD_NOT_ALLOWED": 422,
@@ -54,12 +55,12 @@ async def catch_api() -> AsyncIterator[None]:
         raise api_error("NOT_FOUND", str(exc)) from exc
 
 
-SECRET_BODY_PATHS = ("/api/v1/settings/",)  # 请求体可能带密钥的接口: 校验失败时不回显输入
+SECRET_BODY_PATHS = ("/api/v1/settings/", "/api/v1/auth/")  # 请求体可能带密钥或密码的接口: 校验失败时不回显输入
 
 
 async def validation_error(request: Request, exc: Exception) -> Response:
     """请求体校验失败的 422: 沿用 FastAPI 默认格式; 但 SECRET_BODY_PATHS 下的接口去掉每条错误的 input 与 ctx,
-    否则缺字段时会把整个请求体 (含 api_key) 原样回显给前端."""
+    否则缺字段时会把整个请求体 (含 api_key 或密码) 原样回显给前端."""
     assert isinstance(exc, RequestValidationError)
     if not request.url.path.startswith(SECRET_BODY_PATHS):
         return await request_validation_exception_handler(request, exc)

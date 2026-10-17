@@ -2,13 +2,13 @@ import { useMutation } from '@tanstack/react-query'
 import { createFileRoute, Link, redirect, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
+import { authRegisterMutation } from '@/client/@tanstack/react-query.gen'
 import { BrandMark, LanguageToggle } from '@/components/chrome'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getToken, setToken } from '@/lib/auth'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { NotAvailable, registerAccount } from '@/lib/new-api'
 
 export const Route = createFileRoute('/register')({
   beforeLoad: () => {
@@ -42,19 +42,14 @@ function Register() {
   const errors = submitted ? problems(values) : {}
 
   const register = useMutation({
-    mutationFn: () =>
-      registerAccount({
-        username: values.username.trim(),
-        full_name: values.fullName.trim(),
-        password: values.password,
-      }),
+    ...authRegisterMutation(),
     onSuccess: (token) => {
       setToken(token.access_token)
       void navigate({ to: '/engagements' })
     },
     onError: (error) => {
       if (isApiCode(error, 'USERNAME_TAKEN')) setTaken(true)
-      else toast.error(error instanceof NotAvailable ? t.register.errors.unavailable : apiMessage(error))
+      else toast.error(apiMessage(error))
     },
   })
 
@@ -80,7 +75,15 @@ function Register() {
           onSubmit={(event) => {
             event.preventDefault()
             setSubmitted(true)
-            if (Object.keys(problems(values)).length === 0) register.mutate()
+            if (Object.keys(problems(values)).length === 0) {
+              register.mutate({
+                body: {
+                  username: values.username.trim(),
+                  full_name: values.fullName.trim(),
+                  password: values.password,
+                },
+              })
+            }
           }}
         >
           <h1 className="m-0 font-semibold text-[22px] tracking-tight">{t.register.title}</h1>

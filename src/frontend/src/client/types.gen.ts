@@ -1710,6 +1710,26 @@ export type ReasoningStep = {
 export type ReceiptChannel = 'direct_mail' | 'direct_email' | 'portal_via_client' | 'oral';
 
 /**
+ * RegisterIn
+ *
+ * 注册: 账号即登录名, 不限邮箱格式. 长度等规则由 handler 校验, 不合要求报 INVALID_VALUE.
+ */
+export type RegisterIn = {
+    /**
+     * Username
+     */
+    username: string;
+    /**
+     * Full Name
+     */
+    full_name: string;
+    /**
+     * Password
+     */
+    password: string;
+};
+
+/**
  * RegistryCheck
  *
  * ACC-04 的一项登记检查结果.
@@ -2318,6 +2338,31 @@ export type AuthLoginResponses = {
 };
 
 export type AuthLoginResponse = AuthLoginResponses[keyof AuthLoginResponses];
+
+export type AuthRegisterData = {
+    body: RegisterIn;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/register';
+};
+
+export type AuthRegisterErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AuthRegisterError = AuthRegisterErrors[keyof AuthRegisterErrors];
+
+export type AuthRegisterResponses = {
+    /**
+     * Successful Response
+     */
+    201: Token;
+};
+
+export type AuthRegisterResponse = AuthRegisterResponses[keyof AuthRegisterResponses];
 
 export type UsersMeData = {
     body?: never;

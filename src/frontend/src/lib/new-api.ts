@@ -41,13 +41,6 @@ export async function orEmpty<T>(promise: Promise<T>, empty: T): Promise<T> {
   }
 }
 
-// 账号注册 (U01): 成功即返回访问令牌. 后端合入后改用生成的 authRegister
-export type RegisterBody = { username: string; full_name: string; password: string }
-
-export function registerAccount(body: RegisterBody) {
-  return call<{ access_token: string; token_type: string }>('post', '/api/v1/auth/register', {}, body)
-}
-
 // R1 稍后处理
 export type DeferralTarget = 'review_task' | 'gate' | 'data_request'
 export type Deferral = { target_type: DeferralTarget; target_id: string; deferred_by: string; deferred_at: string }

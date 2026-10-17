@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, type Options as Options2, type RequestResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -26,7 +26,8 @@ export const healthHealth = <ThrowOnError extends boolean = false>(options?: Opt
 /**
  * Login
  *
- * 表单字段 username 为审计师邮箱.
+ * 表单字段 username 为账号 (登录名). 只去首尾空白, 保留原写法: UserStore 查找不区分大小写,
+ * 注册功能之前若有只差大小写的旧账号, 按原写法取完全相同的那个, 转小写就分不出来了.
  */
 export const authLogin = <ThrowOnError extends boolean = false>(options: Options<AuthLoginData, ThrowOnError>): RequestResult<AuthLoginResponses, AuthLoginErrors, ThrowOnError> => (options.client ?? client).post<AuthLoginResponses, AuthLoginErrors, ThrowOnError>({
     ...urlSearchParamsBodySerializer,
@@ -34,6 +35,20 @@ export const authLogin = <ThrowOnError extends boolean = false>(options: Options
     ...options,
     headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
+        ...options.headers
+    }
+});
+
+/**
+ * Register
+ *
+ * 开放注册: 建账号后直接返回访问令牌. 账号已被占用 409 USERNAME_TAKEN, 各项不合要求 422 INVALID_VALUE.
+ */
+export const authRegister = <ThrowOnError extends boolean = false>(options: Options<AuthRegisterData, ThrowOnError>): RequestResult<AuthRegisterResponses, AuthRegisterErrors, ThrowOnError> => (options.client ?? client).post<AuthRegisterResponses, AuthRegisterErrors, ThrowOnError>({
+    url: '/api/v1/auth/register',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
         ...options.headers
     }
 });

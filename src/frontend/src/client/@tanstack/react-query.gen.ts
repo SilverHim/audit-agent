@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, authRegister, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -60,12 +60,32 @@ export const healthHealthOptions = (options?: Options<HealthHealthData>) => quer
 /**
  * Login
  *
- * 表单字段 username 为审计师邮箱.
+ * 表单字段 username 为账号 (登录名). 只去首尾空白, 保留原写法: UserStore 查找不区分大小写,
+ * 注册功能之前若有只差大小写的旧账号, 按原写法取完全相同的那个, 转小写就分不出来了.
  */
 export const authLoginMutation = (options?: Partial<Options<AuthLoginData>>): UseMutationOptions<AuthLoginResponse, AuthLoginError, Options<AuthLoginData>> => {
     const mutationOptions: UseMutationOptions<AuthLoginResponse, AuthLoginError, Options<AuthLoginData>> = {
         mutationFn: async (fnOptions) => {
             const { data } = await authLogin({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Register
+ *
+ * 开放注册: 建账号后直接返回访问令牌. 账号已被占用 409 USERNAME_TAKEN, 各项不合要求 422 INVALID_VALUE.
+ */
+export const authRegisterMutation = (options?: Partial<Options<AuthRegisterData>>): UseMutationOptions<AuthRegisterResponse, AuthRegisterError, Options<AuthRegisterData>> => {
+    const mutationOptions: UseMutationOptions<AuthRegisterResponse, AuthRegisterError, Options<AuthRegisterData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await authRegister({
                 ...options,
                 ...fnOptions,
                 throwOnError: true

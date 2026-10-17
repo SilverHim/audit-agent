@@ -523,7 +523,6 @@ export const en = {
       password: 'The password must be 8 to 128 characters',
       mismatch: 'The passwords do not match',
       taken: 'This username is already taken',
-      unavailable: 'Registration is not available right now',
     },
   },
   settings: {

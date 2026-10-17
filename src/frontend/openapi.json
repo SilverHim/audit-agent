@@ -36,7 +36,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "表单字段 username 为审计师邮箱.",
+        "description": "表单字段 username 为账号 (登录名). 只去首尾空白, 保留原写法: UserStore 查找不区分大小写,\n注册功能之前若有只差大小写的旧账号, 按原写法取完全相同的那个, 转小写就分不出来了.",
         "operationId": "auth-login",
         "requestBody": {
           "content": {
@@ -50,6 +50,48 @@
         },
         "responses": {
           "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register",
+        "description": "开放注册: 建账号后直接返回访问令牌. 账号已被占用 409 USERNAME_TAKEN, 各项不合要求 422 INVALID_VALUE.",
+        "operationId": "auth-register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -4626,6 +4668,31 @@
         ],
         "title": "ReceiptChannel",
         "description": "回函渠道, 决定回函的可靠性."
+      },
+      "RegisterIn": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "username",
+          "full_name",
+          "password"
+        ],
+        "title": "RegisterIn",
+        "description": "注册: 账号即登录名, 不限邮箱格式. 长度等规则由 handler 校验, 不合要求报 INVALID_VALUE."
       },
       "RegistryCheck": {
         "properties": {
