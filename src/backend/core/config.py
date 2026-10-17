@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     KNOWLEDGE_ROOT: Path = ROOT / "src" / "backend" / "knowledge"  # 知识文件目录: 程序, 准则, prompt
 
     LLM_MODE: Literal["mock", "live"] = "mock"  # mock 用固定输出, live 调真实模型
+    LLM_BASE_URL: str = ""  # live 模式 OpenAI 兼容接口的地址, 为空时用 OpenAI 默认地址
     LLM_MODEL: str = ""  # live 模式的模型名
     LLM_API_KEY: str = ""  # live 模式的密钥, 只放 .env
     LLM_FIXTURES_ROOT: Path = ROOT / "tests" / "fixtures" / "llm"  # mock 模式的固定输出目录

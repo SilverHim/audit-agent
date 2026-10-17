@@ -375,9 +375,17 @@ def test_live_without_key_or_model_fails_at_startup(changes: dict[str, str], mes
 
 
 def test_make_llm_client_by_mode() -> None:
-    live = make_llm_client(Settings(LLM_MODE="live", LLM_MODEL="deepseek-chat", LLM_API_KEY=KEY))
+    """LLM_BASE_URL 为空时用 OpenAI 默认地址; 显式传空, 不受本机 .env 影响."""
+    live = make_llm_client(Settings(LLM_MODE="live", LLM_MODEL="deepseek-chat", LLM_API_KEY=KEY, LLM_BASE_URL=""))
     assert isinstance(live, LiveLLMClient) and live.url == f"{DEFAULT_BASE_URL}/chat/completions"
     assert isinstance(make_llm_client(Settings(LLM_MODE="mock")), MockLLMClient)
+
+
+def test_make_llm_client_reads_base_url_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM_BASE_URL 从环境变量与 .env 读取 (配置类未定义该键时会被忽略), 末尾斜杠不影响拼接."""
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/v1/")
+    live = make_llm_client(Settings(LLM_MODE="live", LLM_MODEL="deepseek-chat", LLM_API_KEY=KEY))
+    assert isinstance(live, LiveLLMClient) and live.url == "https://api.deepseek.com/v1/chat/completions"
 
 
 # ── 经判断引擎调用 ─────────────────────────────────────────

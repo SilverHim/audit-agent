@@ -247,9 +247,9 @@ def llm_version(settings: Settings) -> dict[str, str]:
 def make_llm_client(settings: Settings) -> LLMClient:
     """按 LLM_MODE 建客户端. live 模式密钥或模型名为空时抛 ValueError (应用启动即失败).
 
-    接口地址取配置 LLM_BASE_URL, 未配置时为 DEFAULT_BASE_URL. 该键由 C 加入 core/config.py (Q16), 加入前用缺省值.
+    接口地址取配置 LLM_BASE_URL, 为空时为 DEFAULT_BASE_URL.
     """
     if settings.LLM_MODE == "mock":
         return MockLLMClient(settings.LLM_FIXTURES_ROOT)
-    base_url = getattr(settings, "LLM_BASE_URL", "") or DEFAULT_BASE_URL
+    base_url = settings.LLM_BASE_URL or DEFAULT_BASE_URL
     return LiveLLMClient(settings.LLM_API_KEY, settings.LLM_MODEL, base_url)
