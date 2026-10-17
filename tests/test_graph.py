@@ -129,7 +129,7 @@ def _fake_deps(engagement: Engagement, store: FakeEngagementStore | None = None)
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
     output_store = FakeOutputStore()
     deps = make_deps(registry, FakeTrail(), store or FakeEngagementStore([NUMBAT_PROFILE], [engagement]), output_store)
-    output_store.rows.extend(fixed_procedures(deps.library))
+    output_store.rows_of(engagement.id).extend(fixed_procedures(deps.library))  # 按项目写入, 连库测试的项目编号是随机的
     return deps
 
 
