@@ -241,6 +241,37 @@ async def test_pull_off_skips_paid_endpoints(tmp_path: Path) -> None:
     assert "journals" not in manifest["unavailable"] and not (out / "bank_statements.json").exists()
 
 
+@pytest.mark.parametrize(("statements_end", "expected"), [(None, "2026-09-30"), (date(2026, 10, 17), "2026-10-17")])
+async def test_pull_statements_end_extends_bank_lines_past_period_end(
+    tmp_path: Path, statements_end: date | None, expected: str
+) -> None:
+    windows: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/BankStatementsPlus/statements"):
+            windows.append(request.url.params["ToDate"])
+            return httpx.Response(200, json={"bankAccountId": "B1", "statements": []})
+        if request.url.path.endswith("/Accounts"):
+            return httpx.Response(200, json={"Accounts": [{"AccountID": "B1", "Code": "090", "Type": "BANK"}]})
+        return fake_api(request)
+
+    client = make(tmp_path, handler)
+    client.clock = lambda: datetime(2026, 10, 18, tzinfo=UTC).timestamp()
+    out = tmp_path / "snap"
+    period = Period(date(2026, 7, 1), date(2026, 9, 30), date(2026, 6, 30))
+    await pull(client, out, period, paid="live", statements_end=statements_end)
+    assert windows == [expected]
+    meta = json.loads((out / "dataset.json").read_text())
+    assert meta["period_end"] == "2026-09-30" and meta["statements_end"] == expected
+
+
+async def test_pull_rejects_statements_end_before_period_end(tmp_path: Path) -> None:
+    period = Period(date(2026, 7, 1), date(2026, 9, 30), date(2026, 6, 30))
+    with pytest.raises(XeroError, match="早于本期截止日"):
+        await pull(make(tmp_path, fake_api), tmp_path / "snap", period, paid="live", statements_end=date(2026, 9, 1))
+    assert not (tmp_path / "snap").exists()
+
+
 async def test_bank_statements_split_into_twelve_month_windows(tmp_path: Path) -> None:
     windows: list[tuple[str, str]] = []
 

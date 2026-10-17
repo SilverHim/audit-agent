@@ -8,7 +8,8 @@ Basic base64(client_id:client_secret) 请求头; 没配时按 PKCE (Mobile or de
 live 调真实接口, 失败 (401, 403) 记入快照的 unavailable 不中断拉取; mock 用网页导出模拟 (见 xero_mock); off 不取.
 
 命令行: uv run python -m backend.adapters.xero login [--journals] [--bank-statements] | tenants
-        | pull --period-start D --period-end D --prior-end D [--out DIR] [--paid live|mock|off]
+        | pull --period-start D --period-end D --prior-end D [--out DIR] [--paid live|mock|off] [--statements-end D]
+--statements-end 晚于本期截止日时, 银行对账单多取期后流水 (期后事项, 函证差异调节要用).
 """
 
 import argparse
@@ -375,17 +376,27 @@ class XeroClient:
 
 
 async def pull(
-    client: XeroClient, out: Path, period: Period, *, paid: str = "off", extra_dates: list[date] | None = None
+    client: XeroClient,
+    out: Path,
+    period: Period,
+    *,
+    paid: str = "off",
+    extra_dates: list[date] | None = None,
+    statements_end: date | None = None,
 ) -> dict[str, Any]:
     """拉取全部只读资源写入 out/{名称}.json, 另写 manifest.json (条数, 不可用的资源与原因) 与 dataset.json (期间).
 
     试算表取本期截止日, 上期截止日与 extra_dates 各一份. paid 为 live 或 mock 时再取付费接口:
-    journals.json 与 bank_statements.json (银行科目 → 本期内的对账单); mock 时 client.transport 应为
+    journals.json 与 bank_statements.json (银行科目 → 本期起始日至 statements_end 的对账单; statements_end 缺省为
+    本期截止日, 晚于它时多取期后流水, 供期后事项与函证差异调节用, 写进 dataset.json); mock 时 client.transport 应为
     MockPaidTransport (快照目录用 staging(out)). 付费接口返回 401, 403 时记入 unavailable, 其余资源照常拉取.
     out 已存在时报错, 不覆盖旧快照; 先写到 staging(out), 全部成功后改名为 out, 失败不留下可载入的半成品.
     """
     if out.exists():
         raise XeroError(f"快照目录已存在, 换一个目录: {out}")
+    statements_end = statements_end or period.end
+    if statements_end < period.end:
+        raise XeroError(f"对账单截止日 {statements_end} 早于本期截止日 {period.end}")
     final, out = out, staging(out)
     shutil.rmtree(out, ignore_errors=True)  # 上次失败留下的半成品
     out.mkdir(parents=True)
@@ -423,8 +434,14 @@ async def pull(
     if paid != "off":
         await save("journals", client.journals)
         banks = [a for a in accounts or [] if a.get("Type") == "BANK"]
-        await save("bank_statements", partial(_statements, client, banks, period))
-    meta = {"source": "xero", "period_start": period.start, "period_end": period.end, "prior_end": period.prior_end}
+        await save("bank_statements", partial(_statements, client, banks, period.start, statements_end))
+    meta = {
+        "source": "xero",
+        "period_start": period.start,
+        "period_end": period.end,
+        "prior_end": period.prior_end,
+        "statements_end": statements_end,
+    }
     (out / "dataset.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     manifest["calls"] = client.calls
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -437,9 +454,9 @@ def staging(out: Path) -> Path:
     return out.with_name(f".{out.name}.partial")
 
 
-async def _statements(client: XeroClient, banks: list[dict[str, Any]], period: Period) -> dict[str, Any]:
-    """各银行科目本期的对账单, 键为科目代码."""
-    return {a["Code"]: await client.bank_statements(a["AccountID"], period.start, period.end) for a in banks}
+async def _statements(client: XeroClient, banks: list[dict[str, Any]], start: date, end: date) -> dict[str, Any]:
+    """各银行科目 [start, end] 的对账单, 键为科目代码."""
+    return {a["Code"]: await client.bank_statements(a["AccountID"], start, end) for a in banks}
 
 
 async def _list(client: XeroClient, path: str, key: str) -> list[dict[str, Any]]:
@@ -519,6 +536,12 @@ async def _main(argv: list[str] | None = None) -> None:
     pull_cmd.add_argument("--prior-end", type=date.fromisoformat, required=True, help="上期截止日")
     pull_cmd.add_argument("--date", type=date.fromisoformat, action="append", default=[], help="另取试算表的日期")
     pull_cmd.add_argument(
+        "--statements-end",
+        type=date.fromisoformat,
+        default=None,
+        help="银行对账单取到哪天, 默认本期截止日; 晚于它时含期后流水",
+    )
+    pull_cmd.add_argument(
         "--paid", choices=("live", "mock", "off"), default=None, help="付费接口, 默认 XERO_PAID_ENDPOINTS"
     )
     pull_cmd.add_argument(
@@ -551,7 +574,7 @@ async def _main(argv: list[str] | None = None) -> None:
             exports = args.exports or settings.DATASET_ROOT / "external" / "xero" / "raw"
             client.transport = MockPaidTransport(exports, staging(out), datetime.now(UTC).date())
         period = Period(args.period_start, args.period_end, args.prior_end)
-        manifest = await pull(client, out, period, paid=paid, extra_dates=args.date)
+        manifest = await pull(client, out, period, paid=paid, extra_dates=args.date, statements_end=args.statements_end)
         print(json.dumps({k: manifest[k] for k in ("counts", "unavailable", "calls")}, indent=2, ensure_ascii=False))
         print(f"快照: {out}")
 
