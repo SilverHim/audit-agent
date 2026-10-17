@@ -524,6 +524,50 @@ export type ContractTerm = {
 export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result';
 
 /**
+ * DeferralIn
+ *
+ * 标记或取消稍后处理.
+ */
+export type DeferralIn = {
+    /**
+     * Target Type
+     */
+    target_type: 'review_task' | 'gate';
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Deferred
+     */
+    deferred: boolean;
+};
+
+/**
+ * DeferralView
+ *
+ * 一项有效的稍后处理标记.
+ */
+export type DeferralView = {
+    /**
+     * Target Type
+     */
+    target_type: 'review_task' | 'gate';
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Deferred By
+     */
+    deferred_by: string;
+    /**
+     * Deferred At
+     */
+    deferred_at: string;
+};
+
+/**
  * Direction
  *
  * 错报方向.
@@ -1912,7 +1956,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral';
 
 /**
  * UncorrectedItem
@@ -2438,6 +2482,68 @@ export type ReviewsListExceptionsResponses = {
 };
 
 export type ReviewsListExceptionsResponse = ReviewsListExceptionsResponses[keyof ReviewsListExceptionsResponses];
+
+export type DeferralsListDeferralsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/deferrals';
+};
+
+export type DeferralsListDeferralsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeferralsListDeferralsError = DeferralsListDeferralsErrors[keyof DeferralsListDeferralsErrors];
+
+export type DeferralsListDeferralsResponses = {
+    /**
+     * Response Deferrals-List Deferrals
+     *
+     * Successful Response
+     */
+    200: Array<DeferralView>;
+};
+
+export type DeferralsListDeferralsResponse = DeferralsListDeferralsResponses[keyof DeferralsListDeferralsResponses];
+
+export type DeferralsSetDeferralData = {
+    body: DeferralIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/deferrals';
+};
+
+export type DeferralsSetDeferralErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeferralsSetDeferralError = DeferralsSetDeferralErrors[keyof DeferralsSetDeferralErrors];
+
+export type DeferralsSetDeferralResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type DeferralsSetDeferralResponse = DeferralsSetDeferralResponses[keyof DeferralsSetDeferralResponses];
 
 export type EvidenceListDocumentsData = {
     body?: never;

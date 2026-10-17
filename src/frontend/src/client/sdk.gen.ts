@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, type Options as Options2, type RequestResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -183,6 +183,35 @@ export const reviewsListExceptions = <ThrowOnError extends boolean = false>(opti
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/engagements/{eid}/exceptions',
     ...options
+});
+
+/**
+ * List Deferrals
+ *
+ * 当前有效的标记, 按标记时间升序. 任务已决定, 或闸门已作出决定的, 自动不在其中.
+ */
+export const deferralsListDeferrals = <ThrowOnError extends boolean = false>(options: Options<DeferralsListDeferralsData, ThrowOnError>): RequestResult<DeferralsListDeferralsResponses, DeferralsListDeferralsErrors, ThrowOnError> => (options.client ?? client).get<DeferralsListDeferralsResponses, DeferralsListDeferralsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/deferrals',
+    ...options
+});
+
+/**
+ * Set Deferral
+ *
+ * 标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.
+ *
+ * 项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;
+ * 闸门不是当前停留的 409 NOT_AT_GATE; 取消从未标记过的目标 404 NOT_FOUND.
+ */
+export const deferralsSetDeferral = <ThrowOnError extends boolean = false>(options: Options<DeferralsSetDeferralData, ThrowOnError>): RequestResult<DeferralsSetDeferralResponses, DeferralsSetDeferralErrors, ThrowOnError> => (options.client ?? client).post<DeferralsSetDeferralResponses, DeferralsSetDeferralErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/deferrals',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**

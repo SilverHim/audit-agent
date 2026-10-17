@@ -290,6 +290,7 @@ class TrailKind(StrEnum):
     external_call = "external_call"  # 外部调用, 如登记查询, 发函
     decision = "decision"  # 人的决定
     transition = "transition"  # 状态迁移
+    deferral = "deferral"  # 人工标记或取消稍后处理
 
 
 class AgentId(StrEnum):

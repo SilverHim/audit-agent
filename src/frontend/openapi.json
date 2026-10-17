@@ -749,6 +749,114 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/deferrals": {
+      "get": {
+        "tags": [
+          "deferrals"
+        ],
+        "summary": "List Deferrals",
+        "description": "当前有效的标记, 按标记时间升序. 任务已决定, 或闸门已作出决定的, 自动不在其中.",
+        "operationId": "deferrals-list_deferrals",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeferralView"
+                  },
+                  "title": "Response Deferrals-List Deferrals"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "deferrals"
+        ],
+        "summary": "Set Deferral",
+        "description": "标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.\n\n项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;\n闸门不是当前停留的 409 NOT_AT_GATE; 取消从未标记过的目标 404 NOT_FOUND.",
+        "operationId": "deferrals-set_deferral",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeferralIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/documents": {
       "get": {
         "tags": [
@@ -2211,6 +2319,70 @@
         ],
         "title": "Decision",
         "description": "复核决定."
+      },
+      "DeferralIn": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "review_task",
+              "gate"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "deferred": {
+            "type": "boolean",
+            "title": "Deferred"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id",
+          "deferred"
+        ],
+        "title": "DeferralIn",
+        "description": "标记或取消稍后处理."
+      },
+      "DeferralView": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "review_task",
+              "gate"
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "deferred_by": {
+            "type": "string",
+            "title": "Deferred By"
+          },
+          "deferred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deferred At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id",
+          "deferred_by",
+          "deferred_at"
+        ],
+        "title": "DeferralView",
+        "description": "一项有效的稍后处理标记."
       },
       "Direction": {
         "type": "string",
@@ -4642,7 +4814,8 @@
           "llm_call",
           "external_call",
           "decision",
-          "transition"
+          "transition",
+          "deferral"
         ],
         "title": "TrailKind",
         "description": "留痕类型."

@@ -88,9 +88,10 @@ def test_login_and_me(api: SimpleNamespace) -> None:
     assert ok.status_code == 200
     body = ok.json()
     assert body["token_type"] == "bearer"
-    assert api.client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {body['access_token']}"}).json()[
-        "email"
-    ] == "rca@example.com"
+    assert (
+        api.client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {body['access_token']}"}).json()["email"]
+        == "rca@example.com"
+    )
 
 
 def test_login_bad_credentials(api: SimpleNamespace) -> None:

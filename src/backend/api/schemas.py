@@ -1,7 +1,7 @@
 """HTTP 层的请求与响应模型. 领域对象仍用 contracts; 这里只放接口文档第 10 节点名由 C 定义的形状."""
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from backend.contracts.models import (
     Annotation,
@@ -143,3 +143,24 @@ class ReportBundle(Model):
 
     versions: list[AuditReportVersion]
     decisions: list[GateDecision]
+
+
+# 稍后处理的对象: 复核任务或闸门 (阶段决定)
+DeferralTarget = Literal["review_task", "gate"]
+
+
+class DeferralIn(Model):
+    """标记或取消稍后处理."""
+
+    target_type: DeferralTarget
+    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号, 如 ACC-01
+    deferred: bool  # true 标记, false 取消
+
+
+class DeferralView(Model):
+    """一项有效的稍后处理标记."""
+
+    target_type: DeferralTarget
+    target_id: str
+    deferred_by: str  # 标记人的用户 ID
+    deferred_at: datetime

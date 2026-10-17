@@ -7,11 +7,16 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
 
+import httpx
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
+from backend.adapters.xero_dataset import Snapshot, snapshot_period
+from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
 from backend.contracts.errors import EngagementLocked, VersionConflict
@@ -88,11 +93,13 @@ from backend.contracts.records import (
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
 from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
-from backend.main import build_deps
+from backend.core.security import create_access_token
+from backend.main import build_deps, create_app
 from backend.orchestration.checkpoint import checkpoint_serde
-from backend.orchestration.decisions import rerun_group, rerun_procedure
+from backend.orchestration.decisions import GraphDecisionSubmit, rerun_group, rerun_procedure
 from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
+from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.procedure_library import ProcedureLibrary
@@ -1760,3 +1767,53 @@ async def wait_idle(runner: GraphRunner, eid: str) -> None:
     task = runner.tasks.get(eid)
     if task is not None:
         await task
+
+
+# ── 经 HTTP 调接口: 依赖取自 make_runner 的 runner ──
+
+
+@asynccontextmanager
+async def api_client(runner: GraphRunner, user_id: str = NUMBAT_AUDITOR.id) -> AsyncIterator[httpx.AsyncClient]:
+    """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
+
+    与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
+    """
+    app = create_app()
+    app.state.deps = runner.deps
+    app.state.runner = runner
+    app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
+    app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
+        yield client
+
+
+# ── Xero Demo Company 快照: 本地 xero pull 的输出, 不入库; 本机没有时跳过用到它的测试 ──
+
+XERO_SNAPSHOTS = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"  # 快照目录的上级
+XERO_SNAPSHOT = "20261017-mock"  # 带付费接口模拟 (总账分录, 银行对账单) 的快照, 数据集名 xero/20261017-mock
+
+
+def xero_snapshot() -> Snapshot:
+    """本机的 Xero 快照; 没有时 pytest.skip."""
+    root = XERO_SNAPSHOTS / XERO_SNAPSHOT
+    if not (root / "organisation.json").exists():
+        pytest.skip(f"本机没有 Xero 快照 {root} (不入库, 见 data/external/xero/README.md)")
+    return Snapshot(root)
+
+
+def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:
+    """Xero 快照的客户画像, 以及以它为客户的项目 (编号, 负责人同 ENGAGEMENT, 期间与数据集取快照)."""
+    profile = xero_client_profile(snapshot)
+    period = snapshot_period(snapshot)
+    engagement = ENGAGEMENT.model_copy(
+        update={
+            "client_id": profile.id,
+            "client_profile_version": profile.version,
+            "dataset": f"xero/{XERO_SNAPSHOT}",
+            "period_start": period.start,
+            "period_end": period.end,
+        }
+    )
+    return profile, engagement
