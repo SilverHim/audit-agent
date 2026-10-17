@@ -33,6 +33,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "delivery_notes": {"shipped_date", "signed_date", "signed_by"},
             "bank_transactions": {"description", "reference"},
             "contracts": {"counterparty_abn", "amount_cents", "sign_date"},
+            "llm_settings": {"api_key_encrypted", "key_last4"},
             "audit_trail": {
                 "procedure_id",
                 "run_id",
@@ -60,6 +61,13 @@ engagements = table(
 )
 engagements.c.owner_id.append_foreign_key(ForeignKey("users.id"))
 client_profiles = table("client_profiles", "id:s version:i data:j updated_at:t", ("id", "version"), scoped=False)
+# 设置页的模型配置: 系统级, 不按项目隔离, 每套 (slot) 只存最新一行; 密钥只存密文 (迁移 0003)
+llm_settings = table(
+    "llm_settings",
+    "slot:s provider:s base_url:s model:s api_key_encrypted:s key_last4:s updated_by:s updated_at:t",
+    ("slot",),
+    scoped=False,
+)
 FINANCIAL = {
     "accounts": table("accounts", "code:s name:s type:s category:s", ("code",)),
     "trial_balance": table("trial_balance", "period:s account_code:s balance_cents:b", ("period", "account_code")),

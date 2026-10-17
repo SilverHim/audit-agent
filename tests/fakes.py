@@ -47,6 +47,8 @@ from backend.contracts.models import (
     GateVerdict,
     Judgment,
     JudgmentRef,
+    LlmSettings,
+    LlmSlot,
     MaterialityCandidate,
     MaterialityCandidates,
     MisstatementDraft,
@@ -102,6 +104,7 @@ from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
@@ -1155,6 +1158,25 @@ class FakeRuleEngine:
         return make(run) if make is not None else RuleResult(exceptions=[], rows={})
 
 
+class FakeLlmSettingsStore:
+    """假模型设置存储: 按 slot 存最新一行. fail 为真时读写都抛 OSError (模拟库不可用)."""
+
+    def __init__(self, rows: Sequence[LlmSettings] = ()) -> None:
+        self.rows: dict[str, LlmSettings] = {r.slot: r for r in rows}  # slot -> 配置
+        self.fail = False
+
+    async def get(self, slot: LlmSlot) -> LlmSettings | None:
+        if self.fail:
+            raise OSError("database unavailable")
+        return self.rows.get(slot)
+
+    async def save(self, settings: LlmSettings) -> LlmSettings:
+        if self.fail:
+            raise OSError("database unavailable")
+        self.rows[settings.slot] = settings
+        return settings
+
+
 class FakeDatasetLoader:
     """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
 
@@ -1199,13 +1221,15 @@ def make_deps(
     llm: LLMClient | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     library: ProcedureLibrary | None = None,
+    review_llm: LLMClient | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
-    大模型缺省为 mock 模式的固定输出客户端; 函证平台缺省为假平台 (直达邮件回函).
+    大模型缺省为 mock 模式的固定输出客户端; 复核模型缺省同样, 但给了 llm 而没给 review_llm 时为空 (A7 不复核,
+    免得注入的假大模型之外又读固定输出); 函证平台缺省为假平台 (直达邮件回函).
     项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
@@ -1216,6 +1240,8 @@ def make_deps(
     if financial_store is None:
         financial_store = FakeFinancialStore()
     deps = build_deps(get_settings())
+    if review_llm is None and llm is None:
+        review_llm = deps.review_llm
     llm = llm if llm is not None else deps.llm
     library = library if library is not None else deps.library
     judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
@@ -1234,6 +1260,7 @@ def make_deps(
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),
+        review_llm=review_llm,
     )
 
 
@@ -1777,18 +1804,22 @@ async def wait_idle(runner: GraphRunner, eid: str) -> None:
 
 @asynccontextmanager
 async def api_client(
-    runner: GraphRunner, user_id: str = NUMBAT_AUDITOR.id, deps: AgentDeps | None = None
+    runner: GraphRunner,
+    user_id: str = NUMBAT_AUDITOR.id,
+    deps: AgentDeps | None = None,
+    llm_settings: LlmSettingsService | None = None,
 ) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
-    deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的.
+    deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的. llm_settings: 设置页接口用的服务.
     """
     app = create_app()
     app.state.deps = deps if deps is not None else runner.deps
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    app.state.llm_settings = llm_settings
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:

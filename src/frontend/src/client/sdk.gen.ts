@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, type Options as Options2, type RequestResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -335,4 +335,43 @@ export const standardsGetStandard = <ThrowOnError extends boolean = false>(optio
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/standards/{fragment_id}',
     ...options
+});
+
+/**
+ * Get Llm Settings
+ */
+export const settingsGetLlmSettings = <ThrowOnError extends boolean = false>(options?: Options<SettingsGetLlmSettingsData, ThrowOnError>): RequestResult<SettingsGetLlmSettingsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<SettingsGetLlmSettingsResponses, unknown, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/settings/llm',
+    ...options
+});
+
+/**
+ * Update Llm Slot
+ *
+ * 保存后下一次模型调用起用新配置. 缺主密钥时 503 SETTINGS_KEY_MISSING.
+ */
+export const settingsUpdateLlmSlot = <ThrowOnError extends boolean = false>(options: Options<SettingsUpdateLlmSlotData, ThrowOnError>): RequestResult<SettingsUpdateLlmSlotResponses, SettingsUpdateLlmSlotErrors, ThrowOnError> => (options.client ?? client).put<SettingsUpdateLlmSlotResponses, SettingsUpdateLlmSlotErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/settings/llm/{slot}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Test Llm Slot
+ *
+ * 用还没保存的值测试连接; api_key 为空时用库里存的密钥.
+ */
+export const settingsTestLlmSlot = <ThrowOnError extends boolean = false>(options: Options<SettingsTestLlmSlotData, ThrowOnError>): RequestResult<SettingsTestLlmSlotResponses, SettingsTestLlmSlotErrors, ThrowOnError> => (options.client ?? client).post<SettingsTestLlmSlotResponses, SettingsTestLlmSlotErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/settings/llm/{slot}/test',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });

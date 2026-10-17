@@ -1508,6 +1508,156 @@
           }
         }
       }
+    },
+    "/api/v1/settings/llm": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Llm Settings",
+        "operationId": "settings-get_llm_settings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings/llm/{slot}": {
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Llm Slot",
+        "description": "保存后下一次模型调用起用新配置. 缺主密钥时 503 SETTINGS_KEY_MISSING.",
+        "operationId": "settings-update_llm_slot",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "primary",
+                "review"
+              ],
+              "type": "string",
+              "title": "Slot"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmSlotIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmSlotView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/llm/{slot}/test": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Test Llm Slot",
+        "description": "用还没保存的值测试连接; api_key 为空时用库里存的密钥.",
+        "operationId": "settings-test_llm_slot",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "slot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "primary",
+                "review"
+              ],
+              "type": "string",
+              "title": "Slot"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmSlotIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmTestResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3471,6 +3621,180 @@
         ],
         "title": "JudgmentRef",
         "description": "报告中引用的一条判断."
+      },
+      "LlmSettingsView": {
+        "properties": {
+          "primary": {
+            "$ref": "#/components/schemas/LlmSlotView"
+          },
+          "review": {
+            "$ref": "#/components/schemas/LlmSlotView"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "primary",
+          "review"
+        ],
+        "title": "LlmSettingsView",
+        "description": "两套模型配置: 主模型给审计助理与各审计智能体, 复核模型给独立复核智能体."
+      },
+      "LlmSlotIn": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai",
+              "deepseek",
+              "qwen",
+              "ollama",
+              "custom"
+            ],
+            "title": "Provider"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "base_url",
+          "model"
+        ],
+        "title": "LlmSlotIn",
+        "description": "保存或测试一套配置. api_key 为空表示沿用已存的密钥 (服务商与接口地址须不变)."
+      },
+      "LlmSlotView": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai",
+              "deepseek",
+              "qwen",
+              "ollama",
+              "custom"
+            ],
+            "title": "Provider"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "has_key": {
+            "type": "boolean",
+            "title": "Has Key"
+          },
+          "key_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Last4"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "base_url",
+          "model",
+          "has_key",
+          "key_last4",
+          "updated_at",
+          "updated_by"
+        ],
+        "title": "LlmSlotView",
+        "description": "设置页的一套模型配置. 不含密钥原文; 没保存过时为回退后的生效值, updated_at 为空."
+      },
+      "LlmTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "title": "Latency Ms"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ok",
+          "model",
+          "latency_ms",
+          "message"
+        ],
+        "title": "LlmTestResult",
+        "description": "测试连接的结果. message 已脱敏."
       },
       "ManualResult": {
         "properties": {

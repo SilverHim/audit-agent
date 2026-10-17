@@ -1,6 +1,7 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -72,11 +73,15 @@ class GraphRunner:
     """
 
     def __init__(
-        self, app: CompiledStateGraph[EngagementState], deps: AgentDeps, llm: dict[str, str] | None = None
+        self,
+        app: CompiledStateGraph[EngagementState],
+        deps: AgentDeps,
+        llm: dict[str, str] | Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self.app = app  # 编译好的主图
         self.deps = deps  # 外部依赖
-        # LLM 模式与模型名, 项目启动时冻结进 version_snapshot; 缺省按当前配置 (见 adapters.llm.llm_version)
+        # LLM 模式与模型名, 项目启动时冻结进 version_snapshot: 固定的字典, 或每次冻结时调用的函数 (设置页可热切换模型,
+        # 组装根传 LlmSettingsService.versions); 缺省按当前配置 (见 adapters.llm.llm_version)
         self.llm = llm if llm is not None else llm_version(get_settings())
         self.busy: set[str] = set()  # 持有项目锁的项目编号
         self.tasks: dict[str, asyncio.Task[None]] = {}  # 项目编号 -> 后台任务; 保留引用, 防止任务未完成即被回收
@@ -168,7 +173,7 @@ class GraphRunner:
         """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 冻结时刻 (UTC, ISO 8601)."""
         return {
             "procedure_library_commit": self.deps.library.commit,
-            **self.llm,
+            **(self.llm() if callable(self.llm) else self.llm),
             "prompts_sha256": self.deps.library.prompts_sha256(),
             "frozen_at": datetime.now(UTC).isoformat(),
         }

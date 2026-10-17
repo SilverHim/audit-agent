@@ -46,6 +46,8 @@ class AgentDeps:
     registry: RegistrySource  # ABN 与 ASIC 登记查询
     confirmations: ConfirmationChannel  # 函证平台: 发询证函, 收回函
     users: UserStore  # 用户; 只读, RPT-03 取项目负责人姓名作签名
+    # 复核模型的客户端, 给独立复核智能体 (A7) 用, 与 llm 是两套配置; 组装根总会注入, 只有测试为空 (A7 记 skipped)
+    review_llm: LLMClient | None = None
 
 
 @dataclass(frozen=True)

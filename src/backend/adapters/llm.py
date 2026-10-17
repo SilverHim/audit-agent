@@ -1,18 +1,22 @@
-"""LLM 客户端 (A 负责). mock 模式读 fixtures, live 模式接 OpenAI 兼容接口.
+"""LLM 客户端. mock 模式读 fixtures, live 模式接 OpenAI 兼容接口.
 
-live 按 Q3 可切换 OpenAI, DeepSeek, 通义, 本地 Ollama 等, 由 LLM_BASE_URL 指定.
+live 可接 Anthropic, OpenAI, DeepSeek, 通义, 本地 Ollama 等: 设置页按服务商保存配置, 未保存时取 .env 的
+LLM_BASE_URL, LLM_MODEL, LLM_API_KEY. 各家对请求参数的支持不同, 见 PROVIDERS. 组装根注入的是 SwitchableLLMClient,
+保存设置后热切换, 不用重启.
 """
 
 import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from backend.contracts.models import LlmProvider
 from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.core.config import Settings
 
@@ -23,31 +27,62 @@ ERROR_TEXT_LIMIT = 500  # 异常信息中服务端错误正文的最大长度 (�
 HTTP_LOGGERS = ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2", "httpcore.proxy")
 
 
+@dataclass(frozen=True)
+class ProviderTraits:
+    """一家服务商的 OpenAI 兼容接口对请求参数的支持."""
+
+    requires_key: bool  # 必须有密钥 (本地 Ollama 不要); 有密钥就发 Authorization: Bearer
+    json_mode: bool  # 发 response_format json_object (不支持的服务商靠系统提示词要求 JSON)
+    temperature: bool  # 发 temperature
+    stream_usage: bool  # 流式请求发 stream_options.include_usage 取 token 用量
+
+
+# Anthropic 一行按官方文档 (platform.claude.com/docs/en/api/openai-sdk, 2026-10-17 核对): response_format 被忽略,
+# stream_options 完全支持, Claude 4.7 及之后的模型 temperature 小于 1 即返回 400. 其余服务商的 stream_options
+# 尚未核对官方文档, 先不发, 流式时 token 记 0.
+PROVIDERS: dict[LlmProvider, ProviderTraits] = {
+    "anthropic": ProviderTraits(requires_key=True, json_mode=False, temperature=False, stream_usage=True),
+    "openai": ProviderTraits(requires_key=True, json_mode=True, temperature=True, stream_usage=True),
+    "deepseek": ProviderTraits(requires_key=True, json_mode=True, temperature=True, stream_usage=False),
+    "qwen": ProviderTraits(requires_key=True, json_mode=True, temperature=True, stream_usage=False),
+    "custom": ProviderTraits(requires_key=True, json_mode=True, temperature=True, stream_usage=False),
+    "ollama": ProviderTraits(requires_key=False, json_mode=True, temperature=True, stream_usage=False),
+}
+
+
 def retryable(status: int) -> bool:
     """可退避重试的状态码: 408 超时, 429 限流, 全部 5xx."""
     return status in (408, 429) or 500 <= status < 600
 
 
 class RedactingFilter(logging.Filter):
-    """日志过滤: 消息中出现密钥时替换为 ***. 挂在 HTTP_LOGGERS 上, 防止服务端回显的密钥写进日志."""
+    """日志过滤: 消息中出现任一已登记的密钥时替换为 ***. 挂在 HTTP_LOGGERS 上, 防止服务端回显的密钥写进日志."""
 
-    def __init__(self, secret: str) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.secret = secret  # 要脱敏的密钥
+        self.secrets: set[str] = set()  # 要脱敏的密钥: 用过的都留着 (热切换前的请求可能还在写日志)
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if self.secret in message:
-            record.msg, record.args = message.replace(self.secret, "***"), ()
+        hits = [secret for secret in self.secrets if secret in message]
+        if hits:
+            for secret in sorted(hits, key=len, reverse=True):
+                message = message.replace(secret, "***")
+            record.msg, record.args = message, ()
         return True
 
 
 def install_redaction(secret: str) -> None:
-    """给 HTTP_LOGGERS 各挂一个该密钥的 RedactingFilter (已挂过的不重复挂)."""
+    """把密钥登记到 HTTP_LOGGERS 各自唯一的 RedactingFilter 上 (没有就挂一个). 空串不登记: "" in 任何文本都为真."""
+    if not secret:
+        return
     for name in HTTP_LOGGERS:
         logger = logging.getLogger(name)
-        if not any(isinstance(f, RedactingFilter) and f.secret == secret for f in logger.filters):
-            logger.addFilter(RedactingFilter(secret))
+        found = next((f for f in logger.filters if isinstance(f, RedactingFilter)), None)
+        if found is None:
+            found = RedactingFilter()
+            logger.addFilter(found)
+        found.secrets.add(secret)
 
 
 class MockLLMClient:
@@ -79,7 +114,10 @@ class LLMTransportError(RuntimeError):
 
 
 def contains_secret(value: Any, secret: str) -> bool:
-    """JSON 解码后的值 (含嵌套的键与值) 中是否有字符串包含 secret. 用来拦下经 \\uXXXX 转义回显的密钥."""
+    """JSON 解码后的值 (含嵌套的键与值) 中是否有字符串包含 secret. 用来拦下经 \\uXXXX 转义回显的密钥.
+    secret 为空 (本地 Ollama 不用密钥) 时为假."""
+    if not secret:
+        return False
     if isinstance(value, str):
         return secret in value
     if isinstance(value, dict):
@@ -103,13 +141,14 @@ def strip_fences(raw: str) -> str:
 class LiveLLMClient:
     """OpenAI 兼容的 Chat Completions 接口: POST {base_url}/chat/completions.
 
-    system 作首条 system 消息, 其后为 req.messages; temperature, max_tokens 透传; 要求 JSON 输出
-    (response_format json_object, 各家兼容接口普遍支持; 输出模型的 JSON schema 由调用方写在 system 中,
-    见 JudgmentEngine.call_llm). 408, 429, 全部 5xx 与超时按指数退避至多重试 MAX_RETRIES 次; 其余失败状态码
+    system 作首条 system 消息, 其后为 req.messages; max_tokens 透传; temperature 与 JSON 模式 (response_format
+    json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON schema 由调用方写在 system 中,
+    见 JudgmentEngine.call_llm. 408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码
     (如 400, 401) 与连接失败不重试. 不可重试或重试耗尽时抛 LLMTransportError.
 
     密钥只放在请求头. 成功响应中出现密钥 (服务端回显) 时整体拒绝, 抛 LLMTransportError, 不让它进入 raw, 校验错误与留痕;
-    错误信息先脱敏再截断; httpx, httpcore 的日志挂脱敏过滤 (install_redaction).
+    错误信息先脱敏再截断; httpx, httpcore 的日志挂脱敏过滤 (install_redaction). 没有密钥 (本地 Ollama) 时不发
+    Authorization, 也不做这些检查.
     """
 
     def __init__(
@@ -118,24 +157,28 @@ class LiveLLMClient:
         model: str,
         base_url: str = DEFAULT_BASE_URL,
         *,
+        provider: LlmProvider = "openai",
         timeout: float = 120.0,
         backoff: float = 1.0,
+        max_retries: int = MAX_RETRIES,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
-        """api_key, model 为空抛 ValueError (live 模式的配置错误, 应用启动即失败).
+        """model 为空, 或服务商要密钥而 api_key 为空时抛 ValueError (配置错误).
 
         backoff: 第 n 次重试前等待 backoff × 2^(n-1) 秒; transport, sleep 供测试替换 (假 HTTP 传输, 不真等待).
         """
-        if not api_key:
-            raise ValueError("LLM_MODE=live 须配置 LLM_API_KEY")
         if not model:
-            raise ValueError("LLM_MODE=live 须配置 LLM_MODEL")
+            raise ValueError("缺模型名 (设置页的模型名, 或 .env 的 LLM_MODEL)")
+        if not api_key and PROVIDERS[provider].requires_key:
+            raise ValueError("缺密钥 (设置页的密钥, 或 .env 的 LLM_API_KEY)")
         self._api_key = api_key  # 只用于请求头与错误信息脱敏
         self.model = model  # 请求的模型名
+        self.provider = provider  # 服务商, 决定请求里发哪些参数
         self.url = base_url.rstrip("/") + "/chat/completions"  # 接口地址
         self.timeout = timeout  # 单次请求超时, 秒
         self.backoff = backoff  # 退避基数, 秒
+        self.max_retries = max_retries  # 传输层最多重试次数
         self._transport = transport
         self._sleep = sleep
         install_redaction(api_key)
@@ -143,16 +186,19 @@ class LiveLLMClient:
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         """调用一次 (含传输层重试). 输出按 output_model 解析: 失败时 output 为空, raw 保留原文, error 为解析错误;
         model 与 token 数取响应."""
-        body = {
+        traits = PROVIDERS[self.provider]
+        body: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": req.system},
                 *({"role": m.role, "content": m.content} for m in req.messages),
             ],
-            "temperature": req.temperature,
             "max_tokens": req.max_tokens,
-            "response_format": {"type": "json_object"},
         }
+        if traits.temperature:
+            body["temperature"] = req.temperature
+        if traits.json_mode:
+            body["response_format"] = {"type": "json_object"}
         raw, model, input_tokens, output_tokens = self._envelope(await self._post(body))
         try:
             decoded = json.loads(strip_fences(raw))
@@ -204,9 +250,9 @@ class LiveLLMClient:
 
     async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         """发请求, 可重试的失败按指数退避重试. 返回响应 JSON."""
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         failure = ""
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(self.max_retries + 1):
             if attempt:
                 await self._sleep(self.backoff * 2 ** (attempt - 1))
             try:
@@ -218,7 +264,7 @@ class LiveLLMClient:
             except httpx.TransportError as e:
                 raise LLMTransportError(self._redact(f"连接失败: {type(e).__name__}: {e}")) from None
             if response.status_code == 200:
-                if self._api_key in response.text:
+                if self._api_key and self._api_key in response.text:
                     raise LLMTransportError("响应中回显了密钥, 已拒绝 (不进入输出与留痕)")
                 try:
                     data: dict[str, Any] = response.json()
@@ -233,23 +279,76 @@ class LiveLLMClient:
             failure = f"HTTP {response.status_code} {detail}"
             if not retryable(response.status_code):
                 raise LLMTransportError(failure)
-        raise LLMTransportError(f"重试 {MAX_RETRIES} 次后仍失败: {failure}")
+        if not self.max_retries:
+            raise LLMTransportError(failure)
+        raise LLMTransportError(f"重试 {self.max_retries} 次后仍失败: {failure}")
 
     def _redact(self, text: str) -> str:
-        return text.replace(self._api_key, "***")
+        return text.replace(self._api_key, "***") if self._api_key else text
+
+
+class UnconfiguredLLMClient:
+    """live 模式还没有可用配置 (设置页与 .env 都缺密钥或模型名) 时的占位: 应用照常启动, 调用时报错,
+    程序按执行失败处理, 配好后可以重跑."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason  # 缺什么, 如 "缺密钥"
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        raise LLMTransportError(f"未配置大模型 ({self.reason}), 请在设置页配置模型与密钥")
+
+
+class SwitchableLLMClient:
+    """可热切换的客户端: 调用转发给当前的内部客户端; reload 之后, 下一次调用起用新的, 不用重启.
+
+    组装根给主模型与复核模型各建一个, 主模型那个同时注入 AgentDeps.llm 与 JudgmentEngine. 已在进行的调用
+    用的仍是开始时的内部客户端.
+    """
+
+    def __init__(self, inner: LLMClient, model_name: str) -> None:
+        self.inner = inner  # 当前的内部客户端
+        self.model_name = model_name  # 当前生效的模型名, 冻结进项目的版本快照
+
+    def reload(self, inner: LLMClient, model_name: str) -> None:
+        self.inner, self.model_name = inner, model_name
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        return await self.inner.complete(req, output_model)
+
+
+class LlmPing(BaseModel):
+    """测试连接时要求模型回的 JSON: {"ok": true}. 多出的键不算错."""
+
+    ok: bool
+
+
+def make_live_client(
+    provider: LlmProvider,
+    base_url: str,
+    model: str,
+    api_key: str,
+    **options: Any,
+) -> LLMClient:
+    """按一套配置建 live 客户端; 缺模型名或该服务商要的密钥时为 UnconfiguredLLMClient. options 透传给 LiveLLMClient."""
+    try:
+        return LiveLLMClient(api_key, model, base_url or DEFAULT_BASE_URL, provider=provider, **options)
+    except ValueError as e:
+        return UnconfiguredLLMClient(str(e))
 
 
 def llm_version(settings: Settings) -> dict[str, str]:
-    """项目启动时冻结进 version_snapshot 的 LLM 信息: 模式与模型名 (mock 模式为 "mock")."""
+    """.env 给出的 LLM 信息: 模式与模型名 (mock 模式为 "mock"). 设置页保存后以 LlmSettingsService.versions 为准."""
     return {"llm_mode": settings.LLM_MODE, "model": "mock" if settings.LLM_MODE == "mock" else settings.LLM_MODEL}
 
 
-def make_llm_client(settings: Settings) -> LLMClient:
-    """按 LLM_MODE 建客户端. live 模式密钥或模型名为空时抛 ValueError (应用启动即失败).
+def env_provider(settings: Settings) -> LlmProvider:
+    """.env 配置对应的服务商: 没填 LLM_BASE_URL 为 openai (默认地址), 否则为 custom."""
+    return "custom" if settings.LLM_BASE_URL else "openai"
 
-    接口地址取配置 LLM_BASE_URL, 为空时为 DEFAULT_BASE_URL.
-    """
+
+def make_llm_client(settings: Settings) -> LLMClient:
+    """按 LLM_MODE 建 .env 配置的客户端. live 模式缺密钥或模型名时为 UnconfiguredLLMClient (应用照常启动,
+    可在设置页配置); 接口地址取 LLM_BASE_URL, 为空时为 DEFAULT_BASE_URL."""
     if settings.LLM_MODE == "mock":
         return MockLLMClient(settings.LLM_FIXTURES_ROOT)
-    base_url = settings.LLM_BASE_URL or DEFAULT_BASE_URL
-    return LiveLLMClient(settings.LLM_API_KEY, settings.LLM_MODEL, base_url)
+    return make_live_client(env_provider(settings), settings.LLM_BASE_URL, settings.LLM_MODEL, settings.LLM_API_KEY)

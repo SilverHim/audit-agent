@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -650,3 +650,59 @@ export const standardsGetStandardOptions = (options: Options<StandardsGetStandar
     },
     queryKey: standardsGetStandardQueryKey(options)
 });
+
+export const settingsGetLlmSettingsQueryKey = (options?: Options<SettingsGetLlmSettingsData>) => createQueryKey('settingsGetLlmSettings', options);
+
+/**
+ * Get Llm Settings
+ */
+export const settingsGetLlmSettingsOptions = (options?: Options<SettingsGetLlmSettingsData>) => queryOptions<SettingsGetLlmSettingsResponse, DefaultError, SettingsGetLlmSettingsResponse, ReturnType<typeof settingsGetLlmSettingsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await settingsGetLlmSettings({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: settingsGetLlmSettingsQueryKey(options)
+});
+
+/**
+ * Update Llm Slot
+ *
+ * 保存后下一次模型调用起用新配置. 缺主密钥时 503 SETTINGS_KEY_MISSING.
+ */
+export const settingsUpdateLlmSlotMutation = (options?: Partial<Options<SettingsUpdateLlmSlotData>>): UseMutationOptions<SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotError, Options<SettingsUpdateLlmSlotData>> => {
+    const mutationOptions: UseMutationOptions<SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotError, Options<SettingsUpdateLlmSlotData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await settingsUpdateLlmSlot({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Test Llm Slot
+ *
+ * 用还没保存的值测试连接; api_key 为空时用库里存的密钥.
+ */
+export const settingsTestLlmSlotMutation = (options?: Partial<Options<SettingsTestLlmSlotData>>): UseMutationOptions<SettingsTestLlmSlotResponse, SettingsTestLlmSlotError, Options<SettingsTestLlmSlotData>> => {
+    const mutationOptions: UseMutationOptions<SettingsTestLlmSlotResponse, SettingsTestLlmSlotError, Options<SettingsTestLlmSlotData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await settingsTestLlmSlot({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};

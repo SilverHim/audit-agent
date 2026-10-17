@@ -756,6 +756,25 @@ class User(Model):
     full_name: str  # 姓名
 
 
+# 两套模型配置: 主模型给审计助理与各审计智能体, 复核模型给独立复核智能体 (A7)
+LlmSlot = Literal["primary", "review"]
+# 模型服务商, 都走 OpenAI 兼容的 Chat Completions 接口; 各家参数差异见 adapters/llm.PROVIDERS
+LlmProvider = Literal["anthropic", "openai", "deepseek", "qwen", "ollama", "custom"]
+
+
+class LlmSettings(Model):
+    """设置页保存的一套模型配置 (表 llm_settings, 系统级, 不按项目隔离). 密钥只存密文."""
+
+    slot: LlmSlot  # 哪一套
+    provider: LlmProvider  # 服务商
+    base_url: str  # 接口地址, http 或 https
+    model: str  # 模型名
+    api_key_encrypted: str | None = None  # 密钥密文 (Fernet, 主密钥 SETTINGS_SECRET_KEY); 本地 Ollama 可为空
+    key_last4: str | None = None  # 密钥最后四位, 给界面显示
+    updated_by: str  # 保存人的用户 ID
+    updated_at: datetime  # 保存时间
+
+
 class AbnRecord(Model):
     """ABN Lookup 按 ABN 查到的登记记录."""
 

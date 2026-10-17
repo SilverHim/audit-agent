@@ -13,6 +13,7 @@ from backend.core.security import decode_access_token
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.llm_settings import LlmSettingsService
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -35,6 +36,11 @@ def get_query(request: Request) -> GraphStateQuery:
 def get_decisions(request: Request) -> GraphDecisionSubmit:
     decisions: GraphDecisionSubmit = request.app.state.decisions
     return decisions
+
+
+def get_settings_service(request: Request) -> LlmSettingsService:
+    service: LlmSettingsService = request.app.state.llm_settings
+    return service
 
 
 async def current_user(

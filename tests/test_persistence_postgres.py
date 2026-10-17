@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from backend.adapters.confirmation_mock import MockConfirmationChannel
 from backend.adapters.registry_mock import MockRegistrySource
 from backend.contracts.errors import EngagementLocked, VersionConflict
-from backend.contracts.models import AuditObjective, DocumentType, Reliability, TrailEntry, TrailKind
+from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import ConfirmationRequest
 from backend.persistence import models as m
 from backend.persistence.db import transaction
@@ -24,6 +24,7 @@ from backend.persistence.stores import (
     PostgresAuditOutputStore,
     PostgresEngagementStore,
     PostgresFinancialDataStore,
+    PostgresLlmSettingsStore,
     PostgresUserStore,
     RoutingDatasetLoader,
     XeroDatasetLoader,
@@ -416,3 +417,28 @@ async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
     }
     assert diff == {}
     await engine.dispose()
+
+
+async def test_llm_settings_upsert_per_slot(storage):
+    """模型设置表 (迁移 0003): 按 slot 覆盖写入, 系统级不绑定项目; 应用角色可读写."""
+    engine, *_ = storage
+    store = PostgresLlmSettingsStore(engine)
+    first = LlmSettings(
+        slot="review",
+        provider="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        model="claude-fable-5-1",
+        api_key_encrypted="gAAAA-test",
+        key_last4="1234",
+        updated_by="U-1",
+        updated_at=now(),
+    )
+    assert await store.save(first) == first
+    assert await store.get("review") == first
+    second = first.model_copy(update={"model": "claude-opus-5-5", "api_key_encrypted": None, "key_last4": None})
+    await store.save(second)
+    assert await store.get("review") == second
+    async with engine.begin() as conn:
+        assert (await conn.execute(select(m.llm_settings.c.slot).where(m.llm_settings.c.slot == "review"))).all() == [
+            ("review",)
+        ]

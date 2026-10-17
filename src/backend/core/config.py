@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     XERO_TENANT_ID: str = ""  # 要拉取的组织, 为空时取授权连接里唯一的组织
     XERO_PAID_ENDPOINTS: Literal["live", "mock", "off"] = "off"  # 付费接口: 真实, 网页导出模拟, 不取 (退回单据反推)
 
+    # 设置页保存的模型密钥用它加密 (Fernet); 为空时不能保存密钥. 换了它, 已存的密钥就解不开, 须在设置页重填
+    SETTINGS_SECRET_KEY: str = ""
+
     JWT_SECRET: str = "change-me"  # 登录令牌的签名密钥
     JWT_EXPIRE_MINUTES: int = 480  # 登录令牌有效期, 单位分钟
     SEED_USER_EMAIL: str = "rca@example.com"  # seed 脚本建的审计师账号

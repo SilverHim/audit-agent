@@ -15,6 +15,7 @@ from backend.contracts.models import (
     GateId,
     GateVerdict,
     Judgment,
+    LlmProvider,
     ManualResult,
     MaterialityChoice,
     Misstatement,
@@ -190,3 +191,40 @@ class DeferralView(Model):
     target_id: str
     deferred_by: str  # 标记人的用户 ID
     deferred_at: datetime
+
+
+class LlmSlotView(Model):
+    """设置页的一套模型配置. 不含密钥原文; 没保存过时为回退后的生效值, updated_at 为空."""
+
+    provider: LlmProvider
+    base_url: str
+    model: str
+    has_key: bool
+    key_last4: str | None
+    updated_at: datetime | None
+    updated_by: str | None
+
+
+class LlmSettingsView(Model):
+    """两套模型配置: 主模型给审计助理与各审计智能体, 复核模型给独立复核智能体."""
+
+    primary: LlmSlotView
+    review: LlmSlotView
+
+
+class LlmSlotIn(Model):
+    """保存或测试一套配置. api_key 为空表示沿用已存的密钥 (服务商与接口地址须不变)."""
+
+    provider: LlmProvider
+    base_url: str
+    model: str
+    api_key: str | None = None
+
+
+class LlmTestResult(Model):
+    """测试连接的结果. message 已脱敏."""
+
+    ok: bool
+    model: str | None
+    latency_ms: int
+    message: str

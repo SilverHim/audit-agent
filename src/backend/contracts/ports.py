@@ -23,6 +23,8 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    LlmSettings,
+    LlmSlot,
     Model,
     Phase,
     ProcedureRun,
@@ -195,6 +197,18 @@ class UserStore(Protocol):
         ...
 
     async def get(self, user_id: str) -> User | None: ...
+
+
+class LlmSettingsStore(Protocol):
+    """设置页的模型配置 (B 实现): 系统级表, 不按项目隔离, 访问规则同 users."""
+
+    async def get(self, slot: LlmSlot) -> LlmSettings | None:
+        """该套配置; 没保存过为 None."""
+        ...
+
+    async def save(self, settings: LlmSettings) -> LlmSettings:
+        """按 slot 覆盖写入 (只存最新一行), 返回存储中的配置."""
+        ...
 
 
 class RegistrySource(Protocol):

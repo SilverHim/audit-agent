@@ -3,7 +3,11 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 
 from backend.contracts.errors import DecisionRejected
 
@@ -22,6 +26,8 @@ _STATUS: dict[str, int] = {
     "FIELD_NOT_ALLOWED": 422,
     "INVALID_VALUE": 422,
     "ENGAGEMENT_LOCKED": 423,
+    "SETTINGS_KEY_MISSING": 503,
+    "SETTINGS_KEY_INVALID": 503,
 }
 
 
@@ -46,3 +52,16 @@ async def catch_api() -> AsyncIterator[None]:
         raise http_for_decision(exc) from exc
     except LookupError as exc:
         raise api_error("NOT_FOUND", str(exc)) from exc
+
+
+SECRET_BODY_PATHS = ("/api/v1/settings/",)  # 请求体可能带密钥的接口: 校验失败时不回显输入
+
+
+async def validation_error(request: Request, exc: Exception) -> Response:
+    """请求体校验失败的 422: 沿用 FastAPI 默认格式; 但 SECRET_BODY_PATHS 下的接口去掉每条错误的 input 与 ctx,
+    否则缺字段时会把整个请求体 (含 api_key) 原样回显给前端."""
+    assert isinstance(exc, RequestValidationError)
+    if not request.url.path.startswith(SECRET_BODY_PATHS):
+        return await request_validation_exception_handler(request, exc)
+    errors = [{k: v for k, v in error.items() if k not in ("input", "ctx")} for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})

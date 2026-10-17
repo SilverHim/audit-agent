@@ -1146,6 +1146,100 @@ export type JudgmentRef = {
 };
 
 /**
+ * LlmSettingsView
+ *
+ * 两套模型配置: 主模型给审计助理与各审计智能体, 复核模型给独立复核智能体.
+ */
+export type LlmSettingsView = {
+    primary: LlmSlotView;
+    review: LlmSlotView;
+};
+
+/**
+ * LlmSlotIn
+ *
+ * 保存或测试一套配置. api_key 为空表示沿用已存的密钥 (服务商与接口地址须不变).
+ */
+export type LlmSlotIn = {
+    /**
+     * Provider
+     */
+    provider: 'anthropic' | 'openai' | 'deepseek' | 'qwen' | 'ollama' | 'custom';
+    /**
+     * Base Url
+     */
+    base_url: string;
+    /**
+     * Model
+     */
+    model: string;
+    /**
+     * Api Key
+     */
+    api_key?: string | null;
+};
+
+/**
+ * LlmSlotView
+ *
+ * 设置页的一套模型配置. 不含密钥原文; 没保存过时为回退后的生效值, updated_at 为空.
+ */
+export type LlmSlotView = {
+    /**
+     * Provider
+     */
+    provider: 'anthropic' | 'openai' | 'deepseek' | 'qwen' | 'ollama' | 'custom';
+    /**
+     * Base Url
+     */
+    base_url: string;
+    /**
+     * Model
+     */
+    model: string;
+    /**
+     * Has Key
+     */
+    has_key: boolean;
+    /**
+     * Key Last4
+     */
+    key_last4: string | null;
+    /**
+     * Updated At
+     */
+    updated_at: string | null;
+    /**
+     * Updated By
+     */
+    updated_by: string | null;
+};
+
+/**
+ * LlmTestResult
+ *
+ * 测试连接的结果. message 已脱敏.
+ */
+export type LlmTestResult = {
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Model
+     */
+    model: string | null;
+    /**
+     * Latency Ms
+     */
+    latency_ms: number;
+    /**
+     * Message
+     */
+    message: string;
+};
+
+/**
  * ManualResult
  *
  * 人工直接给出的结果, 用于 manual_result 决定.
@@ -2999,3 +3093,79 @@ export type StandardsGetStandardResponses = {
 };
 
 export type StandardsGetStandardResponse = StandardsGetStandardResponses[keyof StandardsGetStandardResponses];
+
+export type SettingsGetLlmSettingsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/settings/llm';
+};
+
+export type SettingsGetLlmSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: LlmSettingsView;
+};
+
+export type SettingsGetLlmSettingsResponse = SettingsGetLlmSettingsResponses[keyof SettingsGetLlmSettingsResponses];
+
+export type SettingsUpdateLlmSlotData = {
+    body: LlmSlotIn;
+    path: {
+        /**
+         * Slot
+         */
+        slot: 'primary' | 'review';
+    };
+    query?: never;
+    url: '/api/v1/settings/llm/{slot}';
+};
+
+export type SettingsUpdateLlmSlotErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SettingsUpdateLlmSlotError = SettingsUpdateLlmSlotErrors[keyof SettingsUpdateLlmSlotErrors];
+
+export type SettingsUpdateLlmSlotResponses = {
+    /**
+     * Successful Response
+     */
+    200: LlmSlotView;
+};
+
+export type SettingsUpdateLlmSlotResponse = SettingsUpdateLlmSlotResponses[keyof SettingsUpdateLlmSlotResponses];
+
+export type SettingsTestLlmSlotData = {
+    body: LlmSlotIn;
+    path: {
+        /**
+         * Slot
+         */
+        slot: 'primary' | 'review';
+    };
+    query?: never;
+    url: '/api/v1/settings/llm/{slot}/test';
+};
+
+export type SettingsTestLlmSlotErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SettingsTestLlmSlotError = SettingsTestLlmSlotErrors[keyof SettingsTestLlmSlotErrors];
+
+export type SettingsTestLlmSlotResponses = {
+    /**
+     * Successful Response
+     */
+    200: LlmTestResult;
+};
+
+export type SettingsTestLlmSlotResponse = SettingsTestLlmSlotResponses[keyof SettingsTestLlmSlotResponses];

@@ -31,6 +31,8 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    LlmSettings,
+    LlmSlot,
     Phase,
     Reliability,
     RiskItem,
@@ -652,3 +654,21 @@ class PostgresUserStore(Store):
     async def get(self, user_id: str) -> User | None:
         rows = await self.rows("", select(m.users).where(m.users.c.id == user_id))
         return User(**{k: rows[0][k] for k in ("id", "email", "full_name")}) if rows else None
+
+
+class PostgresLlmSettingsStore(Store):
+    """设置页的模型配置, 表 llm_settings (系统级, 不绑定项目, 事务 eid 为空串)."""
+
+    async def get(self, slot: LlmSlot) -> LlmSettings | None:
+        rows = await self.rows("", select(m.llm_settings).where(m.llm_settings.c.slot == slot))
+        return LlmSettings.model_validate(rows[0]) if rows else None
+
+    async def save(self, settings: LlmSettings) -> LlmSettings:
+        values = settings.model_dump()
+        statement = insert(m.llm_settings).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[m.llm_settings.c.slot], set_={k: v for k, v in values.items() if k != "slot"}
+        )
+        async with transaction(self.engine, "") as conn:
+            await conn.execute(statement)
+        return settings

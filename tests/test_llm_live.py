@@ -12,9 +12,15 @@ import pytest
 from backend.adapters.llm import (
     DEFAULT_BASE_URL,
     ERROR_TEXT_LIMIT,
+    HTTP_LOGGERS,
     LiveLLMClient,
     LLMTransportError,
     MockLLMClient,
+    RedactingFilter,
+    SwitchableLLMClient,
+    UnconfiguredLLMClient,
+    install_redaction,
+    make_live_client,
     make_llm_client,
     strip_fences,
 )
@@ -365,13 +371,16 @@ async def test_escaped_model_echo_not_in_trail_through_engine() -> None:
 
 @pytest.mark.parametrize(
     ("changes", "message"),
-    [({"LLM_API_KEY": ""}, "LLM_API_KEY"), ({"LLM_MODEL": ""}, "LLM_MODEL")],
+    [({"LLM_API_KEY": ""}, "缺密钥"), ({"LLM_MODEL": ""}, "缺模型名")],
 )
-def test_live_without_key_or_model_fails_at_startup(changes: dict[str, str], message: str) -> None:
-    """验收 1: live 模式密钥或模型名为空时 make_llm_client 抛配置错误 (build_deps 在启动时调用, 应用启动即失败)."""
+async def test_live_without_key_or_model_starts_and_fails_on_call(changes: dict[str, str], message: str) -> None:
+    """live 模式 .env 缺密钥或模型名时应用照常启动 (设置页要应用跑起来才能用), 调用模型时才报错, 提示到设置页配置.
+    推翻原验收 1 "启动即失败"."""
     settings = Settings(LLM_MODE="live", LLM_MODEL="deepseek-chat", LLM_API_KEY=KEY).model_copy(update=changes)
-    with pytest.raises(ValueError, match=message):
-        make_llm_client(settings)
+    unconfigured = make_llm_client(settings)
+    assert isinstance(unconfigured, UnconfiguredLLMClient)
+    with pytest.raises(LLMTransportError, match=f"{message}.*设置页"):
+        await unconfigured.complete(REQUEST, ConfirmationExtraction)
 
 
 def test_make_llm_client_by_mode() -> None:
@@ -417,3 +426,61 @@ async def test_live_doc06_extracts_ba01_reply() -> None:
     ba01 = next(c for c in patch["confirmations"] if c.bank_account_id == "BA-01")
     assert (ba01.confirmed_balance_cents, ba01.balance_date) == (120840000, date(2026, 6, 30))
     assert all(settings.LLM_API_KEY not in json.dumps(e.model_dump(mode="json")) for e in trail.entries)
+
+
+# ── 服务商差异, 无密钥, 脱敏过滤器与热切换 (R6) ─────────────
+
+
+async def test_anthropic_omits_temperature_and_json_mode() -> None:
+    """Anthropic 的兼容接口: Claude 4.7 起 temperature 小于 1 返回 400, response_format 被忽略, 两者都不发."""
+    server = Server((200, completion(raw("BA-01"), model="claude-opus-5-5")))
+    await client(server, provider="anthropic").complete(REQUEST, ConfirmationExtraction)
+    body = json.loads(server.requests[0].content)
+    assert "temperature" not in body and "response_format" not in body
+    assert server.requests[0].headers["authorization"] == f"Bearer {KEY}"
+
+
+async def test_ollama_needs_no_key_and_sends_no_authorization() -> None:
+    server = Server((200, completion(raw("BA-01"), model="llama3")))
+    live = LiveLLMClient(
+        "", "llama3", "http://localhost:11434/v1", provider="ollama", transport=httpx.MockTransport(server.handler)
+    )
+    response = await live.complete(REQUEST, ConfirmationExtraction)
+    assert "authorization" not in server.requests[0].headers
+    assert response.output is not None  # 空密钥不会把每个响应都当成 "回显了密钥"
+    with pytest.raises(ValueError, match="缺密钥"):
+        LiveLLMClient("", "gpt-5", provider="openai")
+    assert isinstance(make_live_client("deepseek", "", "deepseek-chat", ""), UnconfiguredLLMClient)
+
+
+def test_one_redacting_filter_per_logger_holds_all_keys() -> None:
+    """每个日志器只挂一个过滤器, 热切换过的密钥都登记在上面; 空串不登记 ("" in 任何文本都为真)."""
+    install_redaction("sk-first-0000")
+    install_redaction("sk-second-1111")
+    install_redaction("")
+    for name in HTTP_LOGGERS:
+        filters = [f for f in logging.getLogger(name).filters if isinstance(f, RedactingFilter)]
+        assert len(filters) == 1 and {"sk-first-0000", "sk-second-1111"} <= filters[0].secrets
+        assert "" not in filters[0].secrets
+    record = logging.LogRecord("httpx", logging.INFO, "", 0, "a sk-first-0000 b sk-second-1111", None, None)
+    filters[0].filter(record)
+    assert record.getMessage() == "a *** b ***"
+
+
+async def test_switchable_client_uses_new_inner_from_next_call() -> None:
+    first, second = (
+        Server((200, completion(raw("BA-01"), model="m-1"))),
+        Server((200, completion(raw("BA-01"), model="m-2"))),
+    )
+    switchable = SwitchableLLMClient(client(first), "m-1")
+    assert (await switchable.complete(REQUEST, ConfirmationExtraction)).model == "m-1"
+    switchable.reload(client(second), "m-2")
+    assert (await switchable.complete(REQUEST, ConfirmationExtraction)).model == "m-2"
+    assert switchable.model_name == "m-2" and len(first.requests) == len(second.requests) == 1
+
+
+async def test_no_retry_when_max_retries_is_zero() -> None:
+    server = Server((503, "busy"))
+    with pytest.raises(LLMTransportError) as e:
+        await client(server, max_retries=0).complete(REQUEST, ConfirmationExtraction)
+    assert len(server.requests) == 1 and str(e.value).startswith("HTTP 503")

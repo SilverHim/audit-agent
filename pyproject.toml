@@ -5,6 +5,7 @@ description = "基于大语言模型的多智能体审计支持系统（ELEC5620
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.20.0",
+    "cryptography>=50.0.1",
     "fastapi[standard]>=0.141.1",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
