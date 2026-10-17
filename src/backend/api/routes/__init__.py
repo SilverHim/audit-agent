@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from backend.api.routes import (
     auth,
+    datasets,
     deferrals,
     engagements,
     evidence,
@@ -14,5 +15,5 @@ from backend.api.routes import (
 )
 
 api_router = APIRouter()
-for module in (health, auth, users, engagements, gates, reviews, deferrals, evidence, reports, standards):
+for module in (health, auth, users, datasets, engagements, gates, reviews, deferrals, evidence, reports, standards):
     api_router.include_router(module.router)

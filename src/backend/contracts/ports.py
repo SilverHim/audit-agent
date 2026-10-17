@@ -139,6 +139,10 @@ class DatasetLoader(Protocol):
 
     def client_profile(self, dataset: str) -> ClientProfile: ...
 
+    def datasets(self) -> list[str]:
+        """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""
+        ...
+
 
 class EngagementStore(Protocol):
     """项目与客户画像的存储 (B 实现). 跨项目表, 不带 eid 前缀参数."""

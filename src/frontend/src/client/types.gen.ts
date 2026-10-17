@@ -543,6 +543,26 @@ export type ContractTerm = {
 };
 
 /**
+ * DatasetSummary
+ *
+ * 新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN.
+ */
+export type DatasetSummary = {
+    /**
+     * Dataset
+     */
+    dataset: string;
+    /**
+     * Legal Name
+     */
+    legal_name: string;
+    /**
+     * Abn
+     */
+    abn: string;
+};
+
+/**
  * Decision
  *
  * 复核决定.
@@ -2162,6 +2182,24 @@ export type UsersMeResponses = {
 };
 
 export type UsersMeResponse = UsersMeResponses[keyof UsersMeResponses];
+
+export type DatasetsListDatasetsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/datasets';
+};
+
+export type DatasetsListDatasetsResponses = {
+    /**
+     * Response Datasets-List Datasets
+     *
+     * Successful Response
+     */
+    200: Array<DatasetSummary>;
+};
+
+export type DatasetsListDatasetsResponse = DatasetsListDatasetsResponses[keyof DatasetsListDatasetsResponses];
 
 export type EngagementsListEngagementsData = {
     body?: never;

@@ -53,6 +53,18 @@ def now() -> datetime:
     return datetime.now(UTC)
 
 
+def subdirectories(root: Path, *required: str) -> list[str]:
+    """root 下含 required 中全部文件的子目录名, 按名称排序; 以 . 开头的 (如拉取中的 .{名}.partial) 不算.
+    root 不存在时为空."""
+    if not root.is_dir():
+        return []
+    return sorted(
+        d.name
+        for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and all((d / name).is_file() for name in required)
+    )
+
+
 def safe_child(root: Path, name: str) -> Path:
     if not name or name in {".", ".."} or "/" in name or "\\" in name:
         raise ValueError("Expected a single path component")
@@ -436,6 +448,10 @@ class CsvDatasetLoader(TableLoader):
     def client_profile(self, dataset: str) -> ClientProfile:
         return ClientProfile.model_validate_json((safe_child(self.root, dataset) / "client_profile.json").read_text())
 
+    def datasets(self) -> list[str]:
+        """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
+        return subdirectories(self.root, "client_profile.json")
+
 
 class XeroDatasetLoader(TableLoader):
     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
@@ -479,6 +495,10 @@ class XeroDatasetLoader(TableLoader):
     def client_profile(self, dataset: str) -> ClientProfile:
         return xero_client_profile(self.snapshot(dataset))
 
+    def datasets(self) -> list[str]:
+        """root 下能载入的快照 (有组织信息与期间 dataset.json), 名为 xero/{快照目录}; 拉取中的临时目录不算."""
+        return [self.PREFIX + name for name in subdirectories(self.root, "organisation.json", "dataset.json")]
+
 
 class RoutingDatasetLoader:
     """按数据集名的前缀选载入器 (如 "xero/" 走 Xero), 其余走默认的 CSV 载入器."""
@@ -498,6 +518,10 @@ class RoutingDatasetLoader:
 
     def client_profile(self, dataset: str) -> ClientProfile:
         return self.pick(dataset).client_profile(dataset)
+
+    def datasets(self) -> list[str]:
+        """各载入器的数据集合在一起, 按名称排序."""
+        return sorted(name for loader in (self.default, *self.by_prefix.values()) for name in loader.datasets())
 
 
 def read_planning(directory: Path) -> tuple[list[AuditObjective], list[RiskItem]]:

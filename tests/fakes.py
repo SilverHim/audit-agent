@@ -1176,6 +1176,9 @@ class FakeDatasetLoader:
     def client_profile(self, dataset: str) -> ClientProfile:
         return NUMBAT_PROFILE
 
+    def datasets(self) -> list[str]:
+        return ["demo"]
+
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
     """让项目存储加入审计产出存储的事务, 同真实实现共用一个数据库事务."""
@@ -1773,13 +1776,16 @@ async def wait_idle(runner: GraphRunner, eid: str) -> None:
 
 
 @asynccontextmanager
-async def api_client(runner: GraphRunner, user_id: str = NUMBAT_AUDITOR.id) -> AsyncIterator[httpx.AsyncClient]:
+async def api_client(
+    runner: GraphRunner, user_id: str = NUMBAT_AUDITOR.id, deps: AgentDeps | None = None
+) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
+    deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的.
     """
     app = create_app()
-    app.state.deps = runner.deps
+    app.state.deps = deps if deps is not None else runner.deps
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)

@@ -46,6 +46,14 @@ class EngagementCreate(Model):
     dataset: str
 
 
+class DatasetSummary(Model):
+    """新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN."""
+
+    dataset: str  # 建项目时提交的数据集名, 如 demo, xero/20261017-mock
+    legal_name: str
+    abn: str
+
+
 class EngagementSummary(Model):
     """项目列表中的一行."""
 

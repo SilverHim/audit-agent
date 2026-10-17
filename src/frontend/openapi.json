@@ -98,6 +98,37 @@
         ]
       }
     },
+    "/api/v1/datasets": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "List Datasets",
+        "description": "DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.",
+        "operationId": "datasets-list_datasets",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DatasetSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Datasets-List Datasets"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/engagements": {
       "get": {
         "tags": [
@@ -2404,6 +2435,31 @@
         ],
         "title": "ContractTerm",
         "description": "合同中的一个条款."
+      },
+      "DatasetSummary": {
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset",
+          "legal_name",
+          "abn"
+        ],
+        "title": "DatasetSummary",
+        "description": "新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN."
       },
       "Decision": {
         "type": "string",

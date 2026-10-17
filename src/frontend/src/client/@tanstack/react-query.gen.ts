@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -92,6 +92,26 @@ export const usersMeOptions = (options?: Options<UsersMeData>) => queryOptions<U
         return data;
     },
     queryKey: usersMeQueryKey(options)
+});
+
+export const datasetsListDatasetsQueryKey = (options?: Options<DatasetsListDatasetsData>) => createQueryKey('datasetsListDatasets', options);
+
+/**
+ * List Datasets
+ *
+ * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.
+ */
+export const datasetsListDatasetsOptions = (options?: Options<DatasetsListDatasetsData>) => queryOptions<DatasetsListDatasetsResponse, DefaultError, DatasetsListDatasetsResponse, ReturnType<typeof datasetsListDatasetsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await datasetsListDatasets({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: datasetsListDatasetsQueryKey(options)
 });
 
 export const engagementsListEngagementsQueryKey = (options?: Options<EngagementsListEngagementsData>) => createQueryKey('engagementsListEngagements', options);
