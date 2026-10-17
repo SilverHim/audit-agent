@@ -28,7 +28,6 @@ from backend.contracts.models import (
     DisputeResolution,
     Engagement,
     EvidencePointer,
-    ExceptionDisposition,
     GateDecision,
     GateEdit,
     GateId,
@@ -37,6 +36,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     MaterialityChoice,
     Misstatement,
+    MisstatementDraft,
     NeitherAction,
     OpinionType,
     Phase,
@@ -388,25 +388,41 @@ def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> lis
     return [confirmed, *attribute_exceptions(confirmed, exceptions)]
 
 
-def misstatement_effects(record: ReviewRecord, target: Versioned, exceptions: list[AuditException]) -> list[Versioned]:
-    """misstatement 的效果 (第 7 节): 按决定的错报草稿建 Misstatement M-{决定 ID}, 来源二选一.
+def misstatement_effects(
+    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+) -> list[Versioned]:
+    """misstatement 的效果 (第 7 节): 按决定的错报草稿建 Misstatement M-{决定 ID}, 来源为一条已确认的判断.
 
-    target 为判断 (normal 任务): 判断置 confirmed 并归因其例外 (同 confirm), 错报记 judgment_id.
-    target 为例外 (unattributed 任务): 例外出新版本置 attributed, attributed_by 为空 (没有解释它的判断),
-    错报记 exception_id. exceptions: target 为判断时其 exception_ids 所指例外的当前版本. 纯函数.
+    target 为判断 (normal 任务): 判断置 confirmed 并归因其例外 (同 confirm), 错报记该判断.
+    target 为例外 (unattributed 任务): 同 override, 建人工判断 -H{n} (结论取决定理由, 建议 misstatement, 错报草稿
+    取决定的, 证据取例外的, 解释该例外), 例外归因于它, 错报记该人工判断. 这样报告 (RPT-03) 引用的事实总能落到已确认
+    的判断上 (R59 联调发现: 原先错报只记 exception_id, 报告无判断可引, RPT-03 反复失败).
+    exceptions: target 为判断时其 exception_ids 所指例外的当前版本; taken: 检查点状态中已有的判断 ID. 纯函数.
     """
     draft = record.misstatement_draft
     assert draft is not None  # 校验时已查必填
     if isinstance(target, Judgment):
         effects = confirm_effects(target, exceptions)
-        source: dict[str, str | None] = {"judgment_id": target.id, "exception_id": None}
+        source = target.id
     else:
-        assert isinstance(target, AuditException)  # unattributed 任务的目标是例外
-        effects = [
-            target.model_copy(update={"version": target.version + 1, "disposition": ExceptionDisposition.attributed})
-        ]
-        source = {"judgment_id": None, "exception_id": target.id}
-    misstatement = Misstatement(id=f"M-{record.id}", review_record_id=record.id, **source, **draft.model_dump())
+        assert isinstance(target, AuditException) and task.subject_id is not None  # unattributed 任务带判断对象
+        assert record.reason is not None  # 校验时已查必填
+        source = human_judgment_id(task, task.subject_id, taken)
+        human = human_judgment(
+            record,
+            task,
+            source,
+            subject_id=task.subject_id,
+            conclusion=record.reason,
+            evidence=target.evidence,
+            exception_ids=[target.id],
+            proposed_action=ProposedAction.misstatement,
+            misstatement_draft=draft,
+        )
+        effects = [human, *attribute_exceptions(human, [target])]
+    misstatement = Misstatement(
+        id=f"M-{record.id}", review_record_id=record.id, judgment_id=source, exception_id=None, **draft.model_dump()
+    )
     return [*effects, misstatement]
 
 
@@ -432,9 +448,12 @@ def human_judgment(
     conclusion: str,
     evidence: list[EvidencePointer],
     exception_ids: list[str],
+    proposed_action: ProposedAction = ProposedAction.accept,
+    misstatement_draft: MisstatementDraft | None = None,
 ) -> Judgment:
-    """override 与 manual_result 建的人工判断, 置 confirmed. 只填人给的 (结论, 证据, 解释的例外); 其余取固定值:
-    置信度 1.0, 推理链, 分项与反方论证为空, 建议 accept, 自主度 L1, 执行人为复核人, 时间为决定时间."""
+    """override, manual_result 与对例外认定错报时建的人工判断, 置 confirmed. 只填人给的 (结论, 证据, 解释的例外;
+    认定错报时另有建议 misstatement 与错报草稿); 其余取固定值: 置信度 1.0, 推理链, 分项与反方论证为空,
+    自主度 L1, 执行人为复核人, 时间为决定时间."""
     return Judgment(
         id=judgment_id,
         procedure_id=task.procedure_id,
@@ -446,7 +465,8 @@ def human_judgment(
         reasoning_chain=[],
         evidence=evidence,
         counter_argument="",
-        proposed_action=ProposedAction.accept,
+        proposed_action=proposed_action,
+        misstatement_draft=misstatement_draft,
         exception_ids=exception_ids,
         autonomy_level=AutonomyLevel.L1,
         review_status=ReviewStatus.confirmed,
@@ -594,7 +614,7 @@ def review_effects(
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
         return confirm_effects(target, exceptions)
     if record.decision is Decision.misstatement:
-        return misstatement_effects(record, target, exceptions)
+        return misstatement_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.override:
         return override_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.manual_result:

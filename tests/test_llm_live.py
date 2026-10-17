@@ -175,6 +175,112 @@ async def test_client_errors_not_retried(status: int) -> None:
     assert len(server.requests) == 1 and sleeps == []
 
 
+def unsupported(param: str, code: str = "unsupported_parameter") -> tuple[int, Any]:
+    """OpenAI 对不受支持参数的 400 错误体."""
+    error = {"message": f"{param} not supported", "type": "invalid_request_error", "param": param, "code": code}
+    return 400, {"error": error}
+
+
+def bodies(server: Server) -> list[dict[str, Any]]:
+    return [json.loads(r.content) for r in server.requests]
+
+
+async def test_max_tokens_unsupported_switches_to_max_completion_tokens() -> None:
+    """(R59 联调) 推理类模型不接受 max_tokens: 改用 max_completion_tokens 重发, 此后的调用沿用, 不再先试 max_tokens."""
+    sleeps: list[float] = []
+    server = Server(unsupported("max_tokens"), (200, completion(raw("BA-01"))), (200, completion(raw("BA-01"))))
+    llm = client(server, sleeps)
+    first = await llm.complete(REQUEST, ConfirmationExtraction)
+    second = await llm.complete(REQUEST, ConfirmationExtraction)
+
+    assert isinstance(first.output, ConfirmationExtraction) and isinstance(second.output, ConfirmationExtraction)
+    sent = bodies(server)
+    assert [("max_tokens" in b, b.get("max_completion_tokens"), b["temperature"]) for b in sent] == [
+        (True, None, 0),
+        (False, 4096, 0),
+        (False, 4096, 0),
+    ]
+    assert sleeps == []  # 调整后立即重发, 不是退避重试
+
+
+async def test_temperature_unsupported_is_omitted() -> None:
+    """(R59 联调) 模型只支持默认温度: 不再发送 temperature 后重发."""
+    server = Server(unsupported("temperature", "unsupported_value"), (200, completion(raw("BA-01"))))
+    response = await client(server).complete(REQUEST, ConfirmationExtraction)
+
+    assert isinstance(response.output, ConfirmationExtraction)
+    assert [("temperature" in b, b.get("max_tokens")) for b in bodies(server)] == [(True, 4096), (False, 4096)]
+
+
+async def test_both_parameters_adapted_in_turn() -> None:
+    """(R59 联调) 两个参数先后被拒: 依次调整, 第 3 次请求用 max_completion_tokens 且不带 temperature."""
+    server = Server(
+        unsupported("max_tokens"), unsupported("temperature", "unsupported_value"), (200, completion(raw("BA-01")))
+    )
+    await client(server).complete(REQUEST, ConfirmationExtraction)
+
+    last = bodies(server)[-1]
+    assert len(server.requests) == 3
+    assert ("max_tokens" in last, last["max_completion_tokens"], "temperature" in last) == (False, 4096, False)
+
+
+async def test_adapts_parameters_without_transport_retries() -> None:
+    """设置页的测试连接 (max_retries=0) 不做传输重试, 但参数不受支持时照样调整后重发: 推理类模型也能测通."""
+    server = Server(unsupported("max_tokens"), (200, completion(raw("BA-01"))))
+    response = await client(server, max_retries=0).complete(REQUEST, ConfirmationExtraction)
+
+    assert isinstance(response.output, ConfirmationExtraction)
+    assert [b.get("max_completion_tokens") for b in bodies(server)] == [None, 4096]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        unsupported("response_format"),  # 不是可调整的参数
+        unsupported("max_tokens", "invalid_value"),  # 不是 "不受支持" 的错误码
+        (400, {"error": "bad"}),  # 错误体不是 OpenAI 格式
+        (422, {"error": {"param": "max_tokens", "code": "unsupported_parameter"}}),  # 不是 400
+        *((400, body) for body in ([], "null", False, 42, '"bad request"')),  # (Codex R59 探针) 顶层不是对象
+    ],
+)
+async def test_other_400_not_adapted(reply: tuple[int, Any]) -> None:
+    """其余 400 (及非 400 的同样错误体) 不调整参数, 照常抛 LLMTransportError, 只发一次."""
+    server = Server(reply)
+    with pytest.raises(LLMTransportError, match=f"HTTP {reply[0]}"):
+        await client(server).complete(REQUEST, ConfirmationExtraction)
+    assert len(server.requests) == 1
+
+
+async def test_same_parameter_rejected_again_raises() -> None:
+    """调整过的参数再次被拒 (改名后仍不支持) 时不再循环, 抛 LLMTransportError."""
+    server = Server(unsupported("max_tokens"), unsupported("max_tokens"))
+    with pytest.raises(LLMTransportError, match="HTTP 400"):
+        await client(server).complete(REQUEST, ConfirmationExtraction)
+    assert len(server.requests) == 2
+
+
+async def test_concurrent_call_already_adapted_still_resends() -> None:
+    """(R59 联调) 并发调用: 本次发出的是 max_tokens, 被拒前别的调用已改用 max_completion_tokens; 本次照样按新方式重发,
+    不当作 "调整过仍被拒" 而失败 (首次真实联调中 DOC-04 三份合同并发, 曾因此整次失败)."""
+    requests: list[dict[str, Any]] = []
+    llm: LiveLLMClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if "max_tokens" in body:
+            llm.token_param = "max_completion_tokens"  # 模拟并发的另一次调用先完成了调整
+            status, error = unsupported("max_tokens")
+            return httpx.Response(status, json=error)
+        return httpx.Response(200, json=completion(raw("BA-01")))
+
+    llm = LiveLLMClient(KEY, "gpt-6-luna", "https://llm.example.test/v1/", transport=httpx.MockTransport(handler))
+    response = await llm.complete(REQUEST, ConfirmationExtraction)
+
+    assert isinstance(response.output, ConfirmationExtraction)
+    assert [("max_tokens" in b, b.get("max_completion_tokens")) for b in requests] == [(True, None), (False, 4096)]
+
+
 async def test_connection_error_not_retried() -> None:
     server = Server(httpx.ConnectError("refused"))
     with pytest.raises(LLMTransportError, match="连接失败"):

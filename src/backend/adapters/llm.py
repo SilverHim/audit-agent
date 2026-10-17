@@ -113,6 +113,14 @@ class LLMTransportError(RuntimeError):
     """传输层失败: 不可重试的状态码, 重试耗尽, 响应不是 Chat Completions 的格式, 或响应回显了密钥. 消息不含密钥."""
 
 
+class UnsupportedParameter(LLMTransportError):
+    """HTTP 400 且错误体指明某个请求参数不受该模型支持 (OpenAI 错误体的 error.param 与 error.code)."""
+
+    def __init__(self, message: str, param: str) -> None:
+        super().__init__(message)
+        self.param = param  # 不受支持的参数名
+
+
 def contains_secret(value: Any, secret: str) -> bool:
     """JSON 解码后的值 (含嵌套的键与值) 中是否有字符串包含 secret. 用来拦下经 \\uXXXX 转义回显的密钥.
     secret 为空 (本地 Ollama 不用密钥) 时为假."""
@@ -143,8 +151,11 @@ class LiveLLMClient:
 
     system 作首条 system 消息, 其后为 req.messages; max_tokens 透传; temperature 与 JSON 模式 (response_format
     json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON schema 由调用方写在 system 中,
-    见 JudgmentEngine.call_llm. 408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码
-    (如 400, 401) 与连接失败不重试. 不可重试或重试耗尽时抛 LLMTransportError.
+    见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens 与非默认 temperature: 收到
+    400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature 取值不受支持时不再发送
+    temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
+    408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码 (如 400, 401) 与连接失败不重试.
+    不可重试或重试耗尽时抛 LLMTransportError.
 
     密钥只放在请求头. 成功响应中出现密钥 (服务端回显) 时整体拒绝, 抛 LLMTransportError, 不让它进入 raw, 校验错误与留痕;
     错误信息先脱敏再截断; httpx, httpcore 的日志挂脱敏过滤 (install_redaction). 没有密钥 (本地 Ollama) 时不发
@@ -181,25 +192,23 @@ class LiveLLMClient:
         self.max_retries = max_retries  # 传输层最多重试次数
         self._transport = transport
         self._sleep = sleep
+        self.token_param = "max_tokens"  # 输出上限的参数名; 模型不支持时改为 max_completion_tokens
+        self.send_temperature = True  # 是否发送 temperature; 模型只支持默认值时为假
         install_redaction(api_key)
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         """调用一次 (含传输层重试). 输出按 output_model 解析: 失败时 output 为空, raw 保留原文, error 为解析错误;
         model 与 token 数取响应."""
-        traits = PROVIDERS[self.provider]
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": req.system},
-                *({"role": m.role, "content": m.content} for m in req.messages),
-            ],
-            "max_tokens": req.max_tokens,
-        }
-        if traits.temperature:
-            body["temperature"] = req.temperature
-        if traits.json_mode:
-            body["response_format"] = {"type": "json_object"}
-        raw, model, input_tokens, output_tokens = self._envelope(await self._post(body))
+        while True:
+            body = self._body(req)
+            try:
+                data = await self._post(body)
+                break
+            except UnsupportedParameter as e:
+                # 按本次实际发出的请求判断: 并发调用可能已先一步调整过, 这时照样按新方式重发
+                if e.param not in body or not self._adapt(e.param):
+                    raise
+        raw, model, input_tokens, output_tokens = self._envelope(data)
         try:
             decoded = json.loads(strip_fences(raw))
         except ValueError:
@@ -214,6 +223,35 @@ class LiveLLMClient:
         return LLMResponse[output_model](  # type: ignore[valid-type]
             output=output, raw=raw, model=model, input_tokens=input_tokens, output_tokens=output_tokens, error=error
         )
+
+    def _body(self, req: LLMRequest) -> dict[str, Any]:
+        """请求体: temperature 与 JSON 模式按服务商的支持 (PROVIDERS); 输出上限用当前的参数名, 模型只支持默认温度时
+        不带 temperature (见 _adapt)."""
+        traits = PROVIDERS[self.provider]
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": req.system},
+                *({"role": m.role, "content": m.content} for m in req.messages),
+            ],
+            self.token_param: req.max_tokens,
+        }
+        if traits.temperature and self.send_temperature:
+            body["temperature"] = req.temperature
+        if traits.json_mode:
+            body["response_format"] = {"type": "json_object"}
+        return body
+
+    def _adapt(self, param: str) -> bool:
+        """按不受支持的参数调整请求方式 (可重复调用, 结果相同); 不是可调整的参数返回假 (调用方照常抛错).
+        调整只朝一个方向 (改用 max_completion_tokens, 不再发 temperature), 每次重发都少一个被拒参数, 不会循环."""
+        if param == "max_tokens":
+            self.token_param = "max_completion_tokens"
+            return True
+        if param == "temperature":
+            self.send_temperature = False
+            return True
+        return False
 
     def _envelope(self, data: Any) -> tuple[str, str, int, int]:
         """Chat Completions 响应的 (content, model, prompt_tokens, completion_tokens).
@@ -277,6 +315,9 @@ class LiveLLMClient:
                 return data
             detail = self._redact(f"{response.reason_phrase}: {response.text}")[:ERROR_TEXT_LIMIT]
             failure = f"HTTP {response.status_code} {detail}"
+            param = unsupported_param(response)
+            if param is not None:
+                raise UnsupportedParameter(failure, param)
             if not retryable(response.status_code):
                 raise LLMTransportError(failure)
         if not self.max_retries:
@@ -285,6 +326,22 @@ class LiveLLMClient:
 
     def _redact(self, text: str) -> str:
         return text.replace(self._api_key, "***") if self._api_key else text
+
+
+def unsupported_param(response: httpx.Response) -> str | None:
+    """400 响应中被指明不受支持的参数名: 错误体 error.code 为 unsupported_parameter 或 unsupported_value 时取
+    error.param; 其余情况 (含错误体不是这种格式) 为 None."""
+    if response.status_code != 400:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict) or error.get("code") not in ("unsupported_parameter", "unsupported_value"):
+        return None
+    param = error.get("param")
+    return param if isinstance(param, str) else None
 
 
 class UnconfiguredLLMClient:

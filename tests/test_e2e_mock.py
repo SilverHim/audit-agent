@@ -4,8 +4,9 @@
 import json
 import os
 from collections import Counter
-from collections.abc import Callable, Sequence
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -403,25 +404,35 @@ async def test_every_program_runs_with_a_real_agent(monkeypatch: pytest.MonkeyPa
 # ── R56: 真实存储变体 ──
 
 
-@pytest.mark.slow
-async def test_real_storage_variant(tmp_path: Path) -> None:
-    """R56: 同 R55 的决定, 换用真实 Postgres 存储与检查点, 规则 SQL, 数据集载入 (data/demo), 证据文件与 mock 函证平台,
-    大模型仍为 mock (tests/fixtures/llm, 文档 ID 已对齐 manifest): 结果, 留痕与证据指针同 R55; 文件 ID 与 document 指针
-    都是 manifest 的文档 ID; 签字后 AuditOutputStore.put 抛 EngagementLocked.
-    需 TEST_DATABASE_URL 指向已迁移并建好检查点表的独立测试库; 每次运行新建用户与项目, 不清理."""
+@dataclass
+class RealRun:
+    """真实存储下新建的一个项目: 流程入口 s, 全部真实依赖 deps, 项目编号 eid, 项目负责人 owner."""
+
+    s: Started
+    deps: AgentDeps
+    eid: str
+    owner: str
+
+
+@asynccontextmanager
+async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRun]:
+    """组装真实依赖 (Postgres 各存储与检查点, 规则 SQL, 数据集载入 data/demo, 证据文件库 tmp_path, mock 函证与登记查询),
+    新建用户 Jordan Ellis (报告签字块取项目负责人姓名, 第 7 节第 17 行) 与项目, 退出时停后台任务并释放连接.
+    overrides 覆盖配置 (缺省大模型为 mock). 未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需设 TEST_DATABASE_URL: 已迁移并建好检查点表的独立测试库")
-    settings = Settings(
-        DATABASE_URL=url,
-        CHECKPOINT_BACKEND="postgres",
-        DATASET_ROOT=REPO / "data",
-        EVIDENCE_ROOT=tmp_path,
-        LLM_MODE="mock",
-    )
+    config: dict[str, Any] = {
+        "DATABASE_URL": url,
+        "CHECKPOINT_BACKEND": "postgres",
+        "DATASET_ROOT": REPO / "data",
+        "EVIDENCE_ROOT": tmp_path,
+        "LLM_MODE": "mock",
+    }
+    settings = Settings(**(config | overrides))
     owner = "USR-" + uuid4().hex
     engine = create_async_engine(settings.sqlalchemy_url)
-    async with engine.begin() as conn:  # 签字块取项目负责人的姓名 (第 7 节第 17 行)
+    async with engine.begin() as conn:
         await conn.execute(
             insert(m.users).values(
                 id=owner, email=f"{owner}@example.com", full_name="Jordan Ellis", password_hash="-", created_at=now()
@@ -433,43 +444,51 @@ async def test_real_storage_variant(tmp_path: Path) -> None:
     engagement = await deps.engagement_store.create(
         owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
     )
-    eid = engagement.id
     async with AsyncExitStack() as stack:
         saver = await stack.enter_async_context(open_checkpointer(settings))
         runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))
         s = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
         try:
-            await runner.start(eid)
-            await wait_idle(runner, eid)
-            for decision in [
-                acc01_decision(GateVerdict.approve, id="D-ACC"),
-                pln_decision(GateVerdict.approve),
-                *REVIEWS,
-                FIN_APPROVE,
-                RPT_REJECT,
-                RPT_APPROVE,
-            ]:
-                actor = "reviewed_by" if isinstance(decision, ReviewRecord) else "decided_by"
-                await s.submit.submit(eid, decision.model_copy(update={actor: owner}))
-                await wait_idle(runner, eid)
-                assert runner.run_error(eid) is None, (decision.id, runner.run_error(eid))
-
-            await assert_results(s, eid, approver=owner)
-            entries = await deps.trail.list(eid, limit=10_000)
-            assert_trail_counts(entries)
-            assert_fixtures_used_once(entries)
-            pointers = await assert_pointers_resolve(s, eid, everything=True)
-            assert {"trail", "bank_account"} <= {p.source_type for p in pointers}  # 评分卡的登记留痕, CSH-05 例外的账户
-            manifest = json.loads((REPO / "data" / "demo" / "manifest.json").read_text(encoding="utf-8"))
-            document_ids = {d["document_id"] for d in manifest["documents"]}
-            assert {d.id for d in await deps.financial_store.documents(eid)} == document_ids
-            assert {p.source_id for p in pointers if p.source_type == "document"} == document_ids
-
-            judgment = (await deps.output_store.latest(eid, Judgment))[0]
-            with pytest.raises(EngagementLocked):
-                await deps.output_store.put(
-                    eid, [judgment.model_copy(update={"version": judgment.version + 1})], actor=owner
-                )
+            yield RealRun(s, deps, engagement.id, owner)
         finally:
             await runner.shutdown()
             await deps.financial_store.engine.dispose()  # type: ignore[attr-defined]
+
+
+@pytest.mark.slow
+async def test_real_storage_variant(tmp_path: Path) -> None:
+    """R56: 同 R55 的决定, 换用真实 Postgres 存储与检查点, 规则 SQL, 数据集载入 (data/demo), 证据文件与 mock 函证平台,
+    大模型仍为 mock (tests/fixtures/llm, 文档 ID 已对齐 manifest): 结果, 留痕与证据指针同 R55; 文件 ID 与 document 指针
+    都是 manifest 的文档 ID; 签字后 AuditOutputStore.put 抛 EngagementLocked."""
+    async with real_storage(tmp_path) as run:
+        s, deps, eid, owner = run.s, run.deps, run.eid, run.owner
+        await s.runner.start(eid)
+        await wait_idle(s.runner, eid)
+        for decision in [
+            acc01_decision(GateVerdict.approve, id="D-ACC"),
+            pln_decision(GateVerdict.approve),
+            *REVIEWS,
+            FIN_APPROVE,
+            RPT_REJECT,
+            RPT_APPROVE,
+        ]:
+            actor = "reviewed_by" if isinstance(decision, ReviewRecord) else "decided_by"
+            await s.submit.submit(eid, decision.model_copy(update={actor: owner}))
+            await wait_idle(s.runner, eid)
+            assert s.runner.run_error(eid) is None, (decision.id, s.runner.run_error(eid))
+
+        await assert_results(s, eid, approver=owner)
+        entries = await deps.trail.list(eid, limit=10_000)
+        assert_trail_counts(entries)
+        assert_fixtures_used_once(entries)
+        pointers = await assert_pointers_resolve(s, eid, everything=True)
+        assert {"trail", "bank_account"} <= {p.source_type for p in pointers}  # 评分卡的登记留痕, CSH-05 例外的账户
+        manifest = json.loads((REPO / "data" / "demo" / "manifest.json").read_text(encoding="utf-8"))
+        document_ids = {d["document_id"] for d in manifest["documents"]}
+        assert {d.id for d in await deps.financial_store.documents(eid)} == document_ids
+        assert {p.source_id for p in pointers if p.source_type == "document"} == document_ids
+
+        judgment = (await deps.output_store.latest(eid, Judgment))[0]
+        with pytest.raises(EngagementLocked):
+            newer = judgment.model_copy(update={"version": judgment.version + 1})
+            await deps.output_store.put(eid, [newer], actor=owner)

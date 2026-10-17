@@ -639,8 +639,9 @@ async def test_misstatement_takes_reviewer_draft() -> None:
 
 
 async def test_misstatement_on_unattributed_exception() -> None:
-    """R19 验收 2: REV-02 没解释跨期例外, 对以例外为目标的 unattributed 任务认定错报: 错报来源为该例外 (judgment_id 空);
-    例外出新版本 attributed, attributed_by 为空 (没有解释它的判断)."""
+    """R19 验收 2 (R59 联调后改): REV-02 没解释跨期例外, 对以例外为目标的 unattributed 任务认定错报: 同 override 建
+    人工判断 -H1 (结论取决定理由, 建议 misstatement, 草稿取决定的, 证据取例外的, 解释该例外, 已确认); 例外出新版本
+    attributed, attributed_by 为该人工判断; 错报记该人工判断 (exception_id 空), 报告据此可引用已确认的判断."""
     s = await waiting_on_cutoff(attributes=False)
     before = len(s.output_store.commits)
     decision = record(f"T-{CUTOFF}-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT)
@@ -649,15 +650,28 @@ async def test_misstatement_on_unattributed_exception() -> None:
     await wait_idle(s.runner, EID)
 
     commit = s.output_store.commits[before]
+    human_id = "J-REV-02-1-SI-2026-0612-H1"
+    [human] = [o for o in commit if isinstance(o, Judgment)]
+    assert (human.id, human.subject_id, human.review_status, human.proposed_action) == (
+        human_id,
+        "SI-2026-0612",
+        ReviewStatus.confirmed,
+        ProposedAction.misstatement,
+    )
+    assert (human.conclusion, human.misstatement_draft, human.exception_ids) == (
+        "复核意见",
+        NUMBAT_CUTOFF_DRAFT,
+        [CUTOFF],
+    )
     [misstatement] = [o for o in commit if isinstance(o, Misstatement)]
-    assert (misstatement.judgment_id, misstatement.exception_id) == (None, CUTOFF)
+    assert (misstatement.judgment_id, misstatement.exception_id) == (human_id, None)
     [exception] = [o for o in commit if isinstance(o, AuditException)]
+    assert exception.evidence == human.evidence
     assert (exception.version, exception.disposition, exception.attributed_by) == (
         2,
         ExceptionDisposition.attributed,
-        None,
+        human_id,
     )
-    assert not [o for o in commit if isinstance(o, Judgment)]
 
 
 async def test_program_completes_after_last_cutoff_decision() -> None:
