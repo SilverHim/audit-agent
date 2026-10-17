@@ -103,10 +103,14 @@ function SlotForm({ slot, initial }: { slot: LlmSlot; initial: LlmSlotView }) {
   const [result, setResult] = useState<LlmTestResult | null>(null)
   const local = provider === 'ollama'
   const body = { provider, base_url: baseUrl.trim(), model: model.trim(), api_key: key.trim() || null }
+  // updated_at 为空: 还没在设置页保存过, 当前生效的是配置文件里的设置
+  const fromConfig = initial.updated_at === null
   const keyStatus = local
     ? t.settings.keyNotNeeded
     : initial.has_key && initial.key_last4
-      ? t.settings.keySaved(initial.key_last4)
+      ? fromConfig
+        ? t.settings.keyFromConfig(initial.key_last4)
+        : t.settings.keySaved(initial.key_last4)
       : t.settings.keyNone
 
   const pick = (id: string) => {

@@ -5,6 +5,7 @@ import type {
   Direction,
   EngagementOverview,
   Judgment,
+  MisstatementDraft,
   MisstatementType,
   ProcedureRun,
   ReviewRecordIn,
@@ -160,18 +161,8 @@ export function buildRecord(
     return { ...base, manual_result: { conclusion: input.conclusion.trim(), evidence: [] } }
   }
   if (decision === 'misstatement') {
-    const cents = audToCents(input.amount)
-    if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
-    return {
-      ...base,
-      misstatement_draft: {
-        type: input.kind,
-        account: input.account.trim(),
-        assertion: input.assertion,
-        amount_cents: cents,
-        direction: input.direction,
-      },
-    }
+    const draft = misstatementDraft(input, t)
+    return typeof draft === 'string' ? draft : { ...base, misstatement_draft: draft }
   }
   if (decision === 'rerun' && input.params.trim()) {
     try {
@@ -183,6 +174,19 @@ export function buildRecord(
     }
   }
   return base
+}
+
+// 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案
+export function misstatementDraft(input: ReviewDraft, t: Messages): MisstatementDraft | string {
+  const cents = audToCents(input.amount)
+  if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
+  return {
+    type: input.kind,
+    account: input.account.trim(),
+    assertion: input.assertion,
+    amount_cents: cents,
+    direction: input.direction,
+  }
 }
 
 export function procedureName(t: Messages, id: string, fallback?: string): string {

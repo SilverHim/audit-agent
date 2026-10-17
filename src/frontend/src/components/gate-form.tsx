@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleCheck, CircleX } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   gatesGetGateOptions,
@@ -97,6 +97,49 @@ export function ExceptionList({ eid, items }: { eid: string; items: AuditExcepti
   )
 }
 
+// 小数比例 → 百分比文本, 去掉浮点误差 (0.05 → "5")
+function percentText(fraction: number): string {
+  return String(Math.round(fraction * 100 * 10000) / 10000)
+}
+
+// 比例按百分比输入与显示 (1 表示 1%), 存与提交仍是小数 (0.01); 换基准等外部改值时同步显示
+function PercentInput({
+  id,
+  value,
+  step,
+  onChange,
+}: {
+  id: string
+  value: number
+  step: string
+  onChange: (value: number) => void
+}) {
+  const [text, setText] = useState(() => percentText(value))
+  useEffect(() => {
+    setText((current) => (Number(current) / 100 === value ? current : percentText(value)))
+  }, [value])
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        className="h-10 pr-8 font-mono"
+        type="number"
+        inputMode="decimal"
+        step={step}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value)
+          const percent = Number(event.target.value)
+          if (event.target.value.trim() !== '' && Number.isFinite(percent)) onChange(percent / 100)
+        }}
+      />
+      <span aria-hidden="true" className="-translate-y-1/2 absolute top-1/2 right-3 text-[13px] text-muted-foreground">
+        %
+      </span>
+    </div>
+  )
+}
+
 function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
   const account = detail.account_name
   const current = detail.current_cents
@@ -110,6 +153,8 @@ function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
       </span>
     )
   }
+  // 有的规则 (如 ACC-04) 例外没有明细, 空的不显示
+  if (Object.keys(detail).length === 0) return null
   return (
     <pre className="overflow-x-auto rounded-md bg-muted p-2.5 font-mono text-xs">{JSON.stringify(detail, null, 2)}</pre>
   )
@@ -468,33 +513,22 @@ function PlanningFields({
           id="pln-pct"
           label={t.planning.overallPct(formatPct(selected?.pct_low), formatPct(selected?.pct_high))}
         >
-          <Input
-            id="pln-pct"
-            className="h-10 font-mono"
-            type="number"
-            step="0.001"
-            value={choice.pct}
-            onChange={(event) => onChoice({ ...choice, pct: Number(event.target.value) })}
-          />
+          <PercentInput id="pln-pct" step="0.05" value={choice.pct} onChange={(pct) => onChoice({ ...choice, pct })} />
         </LabeledField>
         <LabeledField id="pln-perf" label={t.planning.performancePct(formatPct(range[0]), formatPct(range[1]))}>
-          <Input
+          <PercentInput
             id="pln-perf"
-            className="h-10 font-mono"
-            type="number"
-            step="0.01"
+            step="1"
             value={choice.performance_pct}
-            onChange={(event) => onChoice({ ...choice, performance_pct: Number(event.target.value) })}
+            onChange={(performance_pct) => onChoice({ ...choice, performance_pct })}
           />
         </LabeledField>
         <LabeledField id="pln-trivial" label={t.planning.trivialPct}>
-          <Input
+          <PercentInput
             id="pln-trivial"
-            className="h-10 font-mono"
-            type="number"
-            step="0.01"
+            step="1"
             value={choice.clearly_trivial_pct}
-            onChange={(event) => onChoice({ ...choice, clearly_trivial_pct: Number(event.target.value) })}
+            onChange={(clearly_trivial_pct) => onChoice({ ...choice, clearly_trivial_pct })}
           />
         </LabeledField>
       </div>

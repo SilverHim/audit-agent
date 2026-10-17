@@ -30,6 +30,7 @@ import {
   isException,
   isJudgment,
   isRun,
+  misstatementDraft,
   procedureName,
   type RankedTask,
   type ReviewDraft,
@@ -128,7 +129,7 @@ function ReasoningChain({ eid, steps }: { eid: string; steps: ReasoningStep[] })
             </span>
             {step.from_steps?.length ? (
               <span className="text-[12.5px] text-muted-foreground">
-                {t.judgment.fromSteps(step.from_steps.join(', '))}
+                {t.judgment.fromSteps(step.from_steps.map((index) => index + 1).join(', '))}
               </span>
             ) : null}
             <PointerList eid={eid} pointers={step.evidence} />
@@ -385,6 +386,7 @@ const DIRECTIONS: Direction[] = ['overstated', 'understated']
 const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 text-[14px]'
 
 type DisputeChoice = 'a6_upheld' | 'a7_upheld' | 'neither'
+const DISPUTE_CHOICES: DisputeChoice[] = ['a6_upheld', 'a7_upheld', 'neither']
 
 export function ReviewDecisionCard({
   eid,
@@ -405,9 +407,15 @@ export function ReviewDecisionCard({
   const queryClient = useQueryClient()
   const view: ReviewTaskView = ranked.view
   const judgment = isJudgment(view.target) ? view.target : null
-  const [decision, setDecision] = useState<Decision | null>(null)
+  // 只有一种决定可选 (如争议任务只能裁决分歧) 时直接选中
+  const [decision, setDecision] = useState<Decision | null>(
+    view.allowed_decisions.length === 1 ? view.allowed_decisions[0] : null,
+  )
   const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
   const [dispute, setDispute] = useState<DisputeChoice | null>(null)
+  const [withMisstatement, setWithMisstatement] = useState(false)
+  // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
+  const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
   const isDispute = (decision as string | null) === 'dispute_resolution'
 
@@ -425,7 +433,9 @@ export function ReviewDecisionCard({
     if (isDispute) {
       if (!draft.reason.trim()) return toast.error(t.errors.reasonRequired)
       if (dispute === 'neither' && !draft.conclusion.trim()) return toast.error(t.errors.conclusionRequired)
-      const body = {
+      const attached = withMisstatement ? misstatementDraft(draft, t) : null
+      if (typeof attached === 'string') return toast.error(attached)
+      const body: ReviewRecordIn = {
         task_id: view.task.id,
         target_version: view.task.target_version,
         decision,
@@ -433,7 +443,8 @@ export function ReviewDecisionCard({
         dispute_resolution: dispute,
         neither_action: dispute === 'neither' ? 'human_conclusion' : null,
         override_conclusion: dispute === 'neither' ? draft.conclusion.trim() : null,
-      } as unknown as ReviewRecordIn
+        misstatement_draft: attached,
+      }
       submit.mutate({ path: { eid }, body })
       return
     }
@@ -443,6 +454,7 @@ export function ReviewDecisionCard({
   }
 
   const busy = disabled || submit.isPending
+  const showsMisstatement = decision === 'misstatement' || (isDispute && withMisstatement)
   const needsConclusion =
     decision === 'override' || decision === 'manual_result' || (isDispute && dispute === 'neither')
   const ready =
@@ -450,7 +462,7 @@ export function ReviewDecisionCard({
     (!reasonRequired(decision) || draft.reason.trim().length > 0) &&
     (!isDispute || dispute != null) &&
     (!needsConclusion || draft.conclusion.trim().length > 0) &&
-    (decision !== 'misstatement' || (draft.account.trim().length > 0 && draft.amount.trim().length > 0))
+    (!showsMisstatement || (draft.account.trim().length > 0 && draft.amount.trim().length > 0))
 
   return (
     <DecisionFrame
@@ -490,7 +502,7 @@ export function ReviewDecisionCard({
       {isDispute ? (
         <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
           <legend className="sr-only">{t.decisions.dispute_resolution}</legend>
-          {(['a6_upheld', 'a7_upheld', 'neither'] as const).map((choice) => (
+          {DISPUTE_CHOICES.map((choice) => (
             <OptionCard
               key={choice}
               name={`dispute-${view.task.id}`}
@@ -498,10 +510,24 @@ export function ReviewDecisionCard({
               checked={dispute === choice}
               onSelect={() => setDispute(choice)}
               label={t.card.dispute[choice]}
-              disabled={busy}
+              hint={allowedResolutions.has(choice) ? undefined : t.card.disputeUnavailable}
+              disabled={busy || !allowedResolutions.has(choice)}
             />
           ))}
         </fieldset>
+      ) : null}
+
+      {isDispute ? (
+        <label className="flex items-center gap-2 text-[13.5px]">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={withMisstatement}
+            disabled={busy}
+            onChange={(event) => setWithMisstatement(event.target.checked)}
+          />
+          {t.card.attachMisstatement}
+        </label>
       ) : null}
 
       {needsConclusion ? (
@@ -518,7 +544,7 @@ export function ReviewDecisionCard({
         </div>
       ) : null}
 
-      {decision === 'misstatement' ? (
+      {showsMisstatement ? (
         <div className="flex flex-col gap-2.5 rounded-[10px] border p-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-semibold text-[13px]">{t.card.misstatement}</span>
