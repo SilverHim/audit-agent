@@ -31,11 +31,14 @@ async def create_engagement(
     runner: Annotated[GraphRunner, Depends(get_runner)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
 ) -> EngagementOverview:
-    """客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真."""
+    """客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格或补造文件
+    与快照不匹配 422, 不建项目."""
     try:
         profile = deps.datasets.client_profile(body.dataset)
     except FileNotFoundError as exc:
         raise api_error("NOT_FOUND", body.dataset) from exc
+    except ValueError as exc:  # 含 SupplementMismatch 与画像校验失败 (ValidationError)
+        raise api_error("INVALID_VALUE", str(exc)) from exc
     try:
         engagement = await deps.engagement_store.create(
             owner_id=user.id,

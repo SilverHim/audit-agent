@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from backend.adapters.xero_dataset import Snapshot, build_tables
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
+from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
@@ -458,7 +459,10 @@ class CsvDatasetLoader(TableLoader):
 class XeroDatasetLoader(TableLoader):
     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
 
-    规划预设取通用模板 (planning 目录), 客户画像取快照的组织信息. 映射见 adapters.xero_dataset.
+    补造目录 {supplements}/{快照目录名} (Xero 演示数据集, 见 adapters.xero_supplements) 存在时, 载入与取数前先核对
+    它与快照; 有补造画像与计划预置时以它们为准. supplements 为空或该目录不存在时: 规划预设取通用模板 (planning
+    目录), 客户画像取快照的组织信息. 测试副本 (manifest 带 injected) 只在 allow_injected 下载入. 映射见
+    adapters.xero_dataset.
     """
 
     PREFIX = "xero/"
@@ -469,10 +473,15 @@ class XeroDatasetLoader(TableLoader):
         planning: Path,
         engine: AsyncEngine | None = None,
         evidence_store: FileEvidenceStore | None = None,
+        *,
+        supplements: Path | None = None,
+        allow_injected: bool = False,
     ) -> None:
         super().__init__(engine, evidence_store)
         self.root = root  # 快照目录的上级, 如 data/external/xero/api
         self.planning = planning  # 通用规划预设目录
+        self.supplements = supplements  # 补造目录的上级, 如 data/xero_demo
+        self.allow_injected = allow_injected
 
     def directory(self, dataset: str) -> Path:
         """数据集名 → 快照目录 (不查是否存在); 名称不合法抛 ValueError."""
@@ -487,15 +496,37 @@ class XeroDatasetLoader(TableLoader):
             raise FileNotFoundError(f"没有 Xero 快照 {dataset}")
         return Snapshot(directory)
 
+    def supplement(self, dataset: str) -> Supplements | None:
+        """数据集的补造目录, 已核对; 没有配置或该目录不存在时为 None. 不匹配抛 SupplementMismatch."""
+        snapshot = self.snapshot(dataset)
+        if self.supplements is None:
+            return None
+        directory = safe_child(self.supplements, dataset.removeprefix(self.PREFIX))
+        if not directory.is_dir():
+            return None
+        found = Supplements(directory, snapshot.root, dataset, self.allow_injected)
+        found.verify()
+        return found
+
     async def load(self, eid: str, dataset: str) -> None:
-        self.directory(dataset)  # 名称先校验; 快照是否存在等确认未载入后再查
-        await self.insert(eid, dataset, lambda: (build_tables(self.snapshot(dataset)), ()))
+        self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
+
+        def build() -> Tables:
+            self.supplement(dataset)
+            return build_tables(self.snapshot(dataset)), ()
+
+        await self.insert(eid, dataset, build)
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
-        return read_planning(self.planning)
+        found = self.supplement(dataset)
+        presets = found.planning_presets() if found else None
+        return presets if presets is not None else read_planning(self.planning)
 
     def client_profile(self, dataset: str) -> ClientProfile:
-        return xero_client_profile(self.snapshot(dataset))
+        found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在
+        profile = xero_client_profile(self.snapshot(dataset))
+        supplied = found.client_profile(f"{profile.id}-") if found else None
+        return supplied or profile
 
     def datasets(self) -> list[str]:
         """root 下能载入的快照 (有组织信息与期间 dataset.json), 名为 xero/{快照目录}; 拉取中的临时目录不算."""

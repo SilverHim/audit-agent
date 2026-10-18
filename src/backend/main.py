@@ -66,6 +66,7 @@ def build_deps(settings: Settings) -> AgentDeps:
                     settings.KNOWLEDGE_ROOT / "planning",
                     engine,
                     evidence_store,
+                    supplements=settings.DATASET_ROOT / "xero_demo",
                 )
             },
         ),

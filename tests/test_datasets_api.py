@@ -3,16 +3,26 @@
 用仓库里的 data 目录 (demo 即 Numbat) 与本机的 Xero Demo Company 快照 (不入库, 没有时跳过 Xero 那条).
 """
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from backend.contracts.ports import DatasetLoader
 from backend.core.config import get_settings
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
-from tests.fakes import NUMBAT_PROFILE, XERO_SNAPSHOT, XERO_SNAPSHOTS, api_client, make_runner, xero_snapshot
+from tests.fakes import (
+    NUMBAT_AUDITOR,
+    NUMBAT_PROFILE,
+    XERO_SNAPSHOT,
+    XERO_SNAPSHOTS,
+    api_client,
+    make_runner,
+    xero_snapshot,
+)
 
 URL = "/api/v1/datasets"
 NO_DB: Any = object()  # datasets 与 client_profile 只读文件, 不连库
@@ -78,3 +88,27 @@ async def test_requires_login() -> None:
     async with api_client(runner) as client:
         response = await client.get(URL, headers={"Authorization": ""})
     assert (response.status_code, response.json()["detail"]["code"]) == (401, "BAD_CREDENTIALS")
+
+
+async def test_mismatched_supplements_are_skipped_and_rejected(tmp_path: Path) -> None:
+    """补造文件与快照不匹配 (R70): GET /datasets 跳过该数据集, POST /engagements 返回 422 INVALID_VALUE, 不建项目."""
+    if not (XERO_SNAPSHOTS / "20261017-q1").is_dir():
+        pytest.skip("没有本地 Xero 快照 20261017-q1")
+    demo = tmp_path / "xero_demo"
+    shutil.copytree(get_settings().DATASET_ROOT / "xero_demo" / "20261017-q1", demo / "20261017-q1")
+    xero = XeroDatasetLoader(XERO_SNAPSHOTS, XERO_SNAPSHOTS, NO_DB, NO_DB, supplements=demo)
+    datasets = RoutingDatasetLoader(CsvDatasetLoader(get_settings().DATASET_ROOT, NO_DB, NO_DB), {"xero/": xero})
+    rows = {d["dataset"]: d for d in (await get_datasets(datasets)).json()}
+    assert rows["xero/20261017-q1"]["legal_name"] == "Demo Company (AU) Pty Ltd"  # 补造画像
+    profile = demo / "20261017-q1" / "client_profile.json"
+    profile.write_bytes(profile.read_bytes() + b" ")
+    assert "xero/20261017-q1" not in {d["dataset"] for d in (await get_datasets(datasets)).json()}
+    runner, _ = make_runner()
+    deps = replace(runner.deps, datasets=datasets)
+    before = await deps.engagement_store.list(NUMBAT_AUDITOR.id)
+    async with api_client(runner, deps=deps) as client:
+        body = {"period_start": "2026-07-01", "period_end": "2026-09-30", "dataset": "xero/20261017-q1"}
+        response = await client.post("/api/v1/engagements", json=body)
+    assert (response.status_code, response.json()["detail"]["code"]) == (422, "INVALID_VALUE")
+    assert "补造文件与快照不匹配: client_profile.json" in response.json()["detail"]["message"]
+    assert await deps.engagement_store.list(NUMBAT_AUDITOR.id) == before

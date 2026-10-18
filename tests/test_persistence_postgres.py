@@ -489,3 +489,43 @@ async def test_user_store_create_keeps_existing_account():
         async with engine.begin() as conn:  # 只删本测试建的账号
             await conn.execute(delete(m.users).where(m.users.c.email.in_([name, other, other.upper(), legacy])))
         await engine.dispose()
+
+
+async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
+    """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB v1 与
+    补造画像 CLIENT-XERO-3C1332BB-Q1 v1 并存, 不报 VersionConflict; 再建一次 (画像已在库中, 内容相同) 也照常."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-mock").exists() or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-mock, 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    loader = XeroDatasetLoader(
+        api,
+        ROOT / "src/backend/knowledge/planning",
+        engine,
+        FileEvidenceStore(tmp_path, engine),
+        supplements=ROOT / "data/xero_demo",
+    )
+    store = PostgresEngagementStore(engine)
+    periods = {"xero/20261017-mock": date(2026, 11, 30), "xero/20261017-q1": date(2026, 9, 30)}
+    for _ in range(2):
+        for dataset, end in periods.items():
+            await store.create(
+                owner_id=user,
+                period_start=date(2026, 7, 1),
+                period_end=end,
+                dataset=dataset,
+                profile=loader.client_profile(dataset),
+            )
+    mock = await store.client_profile("CLIENT-XERO-3C1332BB", 1)
+    q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1", 1)
+    assert mock is not None and mock.legal_name == "Demo Company (AU)"
+    assert q1 is not None and q1.legal_name == "Demo Company (AU) Pty Ltd" and q1.abn == "25900043021"
+    await engine.dispose()
