@@ -892,7 +892,8 @@ export const dataDataRequestsOptions = (options: Options<DataDataRequestsData>) 
  * Ready
  *
  * 确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
- * (detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.
+ * (detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);
+ * 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.
  */
 export const dataReadyMutation = (options?: Partial<Options<DataReadyData>>): UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> => {
     const mutationOptions: UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> = {

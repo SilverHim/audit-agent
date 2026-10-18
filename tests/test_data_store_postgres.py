@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from backend.contracts.data import ApprovalLogRow, ImportCommit, ImportSession, TableKind
+from backend.contracts.data import ApprovalLogRow, CheckId, ImportCommit, ImportSession, TableKind
 from backend.contracts.errors import EngagementLocked
 from backend.contracts.models import DocumentType, Reliability
 from backend.contracts.records import Account, JournalEntry
@@ -80,6 +80,7 @@ async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_pat
 
     readiness = await store.readiness(first.id)
     assert (readiness.data_version, readiness.ready_by) == (1, "dataset")
+    assert (readiness.ready_reason, readiness.ready_failed_checks) == (None, [])  # 迁移 0005 的列取缺省值
     assert readiness.ready_at == readiness.loaded_at is not None
     stats = await store.stats(first.id)
     tb = csv_rows("trial_balance")
@@ -101,14 +102,30 @@ async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_pat
 
 
 async def test_confirm_ready_keeps_first_confirmation_and_respects_lock(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    engine, (_, second), _, engagements = storage
+    engine, (clean, second), _, engagements = storage
     store = PostgresDataStore(tmp_path, engine)
 
-    first = await store.confirm_ready(second.id, "U-1")
-    again = await store.confirm_ready(second.id, "U-2")
+    # 第一次确认时没有未通过项, 再确认时有: 补记那次的理由与未通过项, 人与时间不改 (审核 R273-02)
+    plain = await store.confirm_ready(clean.id, "U-1")
+    supplemented = await store.confirm_ready(
+        clean.id, "U-2", reason="差额待客户更正", failed_checks=[CheckId.debits_equal_credits]
+    )
+    assert (supplemented.ready_at, supplemented.ready_by) == (plain.ready_at, "U-1")
+    assert (supplemented.ready_reason, supplemented.ready_failed_checks) == (
+        "差额待客户更正",
+        [CheckId.debits_equal_credits],
+    )
+    assert await store.confirm_ready(clean.id, "U-3", reason="x", failed_checks=[CheckId.journals_agree_tb]) == (
+        supplemented
+    )
+
+    failed = [CheckId.debits_equal_credits, CheckId.journals_agree_tb]
+    first = await store.confirm_ready(second.id, "U-1", reason="差额待客户更正", failed_checks=failed)
+    again = await store.confirm_ready(second.id, "U-2", reason="另一个理由", failed_checks=[])
 
     assert (first.data_version, first.ready_by) == (0, "U-1")
-    assert again == first  # 已确认的不改
+    assert (first.ready_reason, first.ready_failed_checks) == ("差额待客户更正", failed)
+    assert again == first  # 已确认的不改: 人, 时间, 理由与未通过项都是第一次的
     await engagements.update(second.id, locked=True)
     with pytest.raises(EngagementLocked):
         await store.confirm_ready(second.id, "U-3")

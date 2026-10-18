@@ -3,9 +3,10 @@ import { Database, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { StatusPill } from '@/components/chrome'
+import { DataReadyButton } from '@/components/data-ready'
 import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
-import { type DataRequest, useDataReady, useUploadDocuments } from '@/lib/data-api'
+import { type DataRequest, useUploadDocuments } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { procedureName } from '@/lib/review'
@@ -55,7 +56,6 @@ export function DataRequestCard({
 }) {
   const { t, lang } = useI18n()
   const upload = useUploadDocuments(eid)
-  const ready = useDataReady(eid)
   const fileInput = useRef<HTMLInputElement>(null)
   const [target, setTarget] = useState<DataRequest | null>(null)
   const [importing, setImporting] = useState<DataRequest | null>(null)
@@ -152,15 +152,7 @@ export function DataRequestCard({
               {t.card.decideLater}
             </Button>
           ) : null}
-          {awaiting ? (
-            <Button
-              type="button"
-              disabled={disabled || ready.isPending}
-              onClick={() => ready.mutate(undefined, { onError })}
-            >
-              {t.data.ready}
-            </Button>
-          ) : null}
+          {awaiting ? <DataReadyButton eid={eid} disabled={disabled} /> : null}
         </div>
         <Link to="/engagements/$eid/data" params={{ eid }} search={{}} className="text-[13.5px]">
           {t.requests.open}

@@ -674,6 +674,12 @@ export const en = {
     importLedger: 'Import a ledger file',
     uploadDocuments: 'Upload documents',
     ready: 'Data complete, continue planning',
+    readyCheck: {
+      title: 'Some data checks did not pass',
+      intro: 'Planning will continue on the data as it stands. Record why you are confirming it anyway.',
+      reason: 'Reason',
+      confirm: 'Confirm data complete',
+    },
     awaiting: 'Planning is waiting for the data',
     sources: 'Data sources',
     xero: {

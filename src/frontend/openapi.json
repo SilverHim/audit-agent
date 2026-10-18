@@ -2267,7 +2267,7 @@
           "data"
         ],
         "summary": "Ready",
-        "description": "确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY\n(detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.",
+        "description": "确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY\n(detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);\n项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.",
         "operationId": "data-ready",
         "security": [
           {
@@ -2285,6 +2285,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DataReadyIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -4234,6 +4251,25 @@
               }
             ],
             "title": "Ready By"
+          },
+          "ready_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready Reason"
+          },
+          "ready_failed_checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckId"
+            },
+            "type": "array",
+            "title": "Ready Failed Checks",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4242,7 +4278,26 @@
           "data_version"
         ],
         "title": "DataReadiness",
-        "description": "项目财务数据的版本与就绪确认 (表 dataset_loads)."
+        "description": "项目财务数据的版本与就绪确认 (表 dataset_loads). 确认的人与时间记下后不改; 理由与未通过项随第一次确认记下,\n那时没有未通过项而再次确认时有, 补记那次的 (DataStore.confirm_ready)."
+      },
+      "DataReadyIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DataReadyIn",
+        "description": "确认数据已齐 (POST /data/ready) 的请求体, 可不带."
       },
       "DataRequest": {
         "properties": {

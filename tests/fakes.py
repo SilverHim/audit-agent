@@ -26,6 +26,7 @@ from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
 from backend.contracts.data import (
     ApprovalLogRow,
+    CheckId,
     CheckInputs,
     CheckRun,
     ContractVersion,
@@ -1419,6 +1420,8 @@ class FakeDataStore:
         self.data_version = 1 if ready else 0  # 数据版本
         self.ready_at: datetime | None = datetime(2026, 1, 1, tzinfo=UTC) if ready else None  # 确认就绪的时间
         self.ready_by: str | None = "dataset" if ready else None  # 确认人
+        self.ready_reason: str | None = None  # 确认时的理由
+        self.ready_failed_checks: list[CheckId] = []  # 确认时最近一次体检不通过的项
         self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
         self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
         self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
@@ -1438,13 +1441,23 @@ class FakeDataStore:
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
-            data_version=self.data_version, ready_at=self.ready_at, ready_by=self.ready_by, loaded_at=self.ready_at
+            data_version=self.data_version,
+            ready_at=self.ready_at,
+            ready_by=self.ready_by,
+            loaded_at=self.ready_at,
+            ready_reason=self.ready_reason,
+            ready_failed_checks=self.ready_failed_checks,
         )
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
         self.confirm_calls.append((eid, actor))
         if self.ready_at is None:
             self.ready_at, self.ready_by = datetime.now(UTC), actor
+            self.ready_reason, self.ready_failed_checks = reason, list(failed_checks)
+        elif failed_checks and not self.ready_failed_checks:  # 同真实实现: 补记本次的理由与未通过项
+            self.ready_reason, self.ready_failed_checks = reason, list(failed_checks)
         return await self.readiness(eid)
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:

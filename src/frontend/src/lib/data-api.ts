@@ -184,10 +184,12 @@ export function useDataRequests(eid: string) {
   return useQuery(dataDataRequestsOptions({ path: { eid } }))
 }
 
+// 最近一次体检有不通过的项时须带理由 (否则 409 DATA_CHECKS_FAILED)
 export function useDataReady(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async () => (await dataReady({ path: { eid }, throwOnError: true })).data,
+    mutationFn: async (reason?: string) =>
+      (await dataReady({ path: { eid }, body: reason ? { reason } : undefined, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

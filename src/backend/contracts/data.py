@@ -44,15 +44,6 @@ class TableStats(Model):
     period_to: date | None = None  # 日期列的最晚值
 
 
-class DataReadiness(Model):
-    """项目财务数据的版本与就绪确认 (表 dataset_loads)."""
-
-    data_version: int  # 数据版本, 未接入任何数据为 0, 每次写入账表 +1
-    loaded_at: datetime | None = None  # 第一次接入数据的时间
-    ready_at: datetime | None = None  # 审计师确认数据已齐的时间, 未确认为空; 数据集载入视同确认
-    ready_by: str | None = None  # 确认人: 用户 ID; 数据集载入为 "dataset"
-
-
 class TableVersion(Model):
     """某张账表已写入的一个版本 (data_imports 中已提交的一行, 不含行快照). 旧版本不删除."""
 
@@ -102,6 +93,18 @@ class CheckRun(Model):
     data_version: int  # 体检时的数据版本
     checked_at: datetime  # 体检时间, 同一次体检的各项相同
     checks: list[DataCheck]  # 各项结果, 按 CheckId 顺序
+
+
+class DataReadiness(Model):
+    """项目财务数据的版本与就绪确认 (表 dataset_loads). 确认的人与时间记下后不改; 理由与未通过项随第一次确认记下,
+    那时没有未通过项而再次确认时有, 补记那次的 (DataStore.confirm_ready)."""
+
+    data_version: int  # 数据版本, 未接入任何数据为 0, 每次写入账表 +1
+    loaded_at: datetime | None = None  # 第一次接入数据的时间
+    ready_at: datetime | None = None  # 审计师确认数据已齐的时间, 未确认为空; 数据集载入视同确认
+    ready_by: str | None = None  # 确认人: 用户 ID; 数据集载入为 "dataset"
+    ready_reason: str | None = None  # 确认时写的理由; 最近一次体检有未通过项时必填, 没写为空
+    ready_failed_checks: list[CheckId] = []  # 确认时最近一次体检不通过 (failed) 的项, 按 CheckId 顺序
 
 
 class CheckInputs(Model):

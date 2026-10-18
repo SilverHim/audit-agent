@@ -226,6 +226,12 @@ class AccountCategoryIn(Model):
     reason: str  # 理由, 必填
 
 
+class DataReadyIn(Model):
+    """确认数据已齐 (POST /data/ready) 的请求体, 可不带."""
+
+    reason: str | None = None  # 理由; 最近一次体检有不通过的项时必填
+
+
 class ImportSheet(Model):
     """导入时换工作表."""
 

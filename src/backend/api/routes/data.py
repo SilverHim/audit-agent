@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import AccountCategoryIn, ImportSheet
+from backend.api.schemas import AccountCategoryIn, DataReadyIn, ImportSheet
 from backend.contracts.data import (
     CategoryVersion,
     DataReadiness,
@@ -149,8 +149,10 @@ async def ready(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
+    body: DataReadyIn | None = None,
 ) -> DataReadiness:
     """确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
-    (detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进."""
+    (detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);
+    项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进."""
     async with catch_api():
-        return await service.confirm_ready(engagement.id, user.id)
+        return await service.confirm_ready(engagement.id, user.id, body.reason if body else None)

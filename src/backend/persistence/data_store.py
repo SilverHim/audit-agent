@@ -135,17 +135,29 @@ class PostgresDataStore(Store):
 
     async def readiness(self, eid: str) -> DataReadiness:
         t = m.dataset_loads
-        rows = await self.rows(eid, select(t.c.data_version, t.c.loaded_at, t.c.ready_at, t.c.ready_by))
+        rows = await self.rows(eid, select(*(t.c[name] for name in DataReadiness.model_fields)))
         return DataReadiness.model_validate(rows[0]) if rows else DataReadiness(data_version=0)
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             await self.loads_row(conn, eid)
             t = m.dataset_loads
+            failed = [check.value for check in failed_checks]
             await conn.execute(
-                update(t).where(t.c.engagement_id == eid, t.c.ready_at.is_(None)).values(ready_at=now(), ready_by=actor)
+                update(t)
+                .where(t.c.engagement_id == eid, t.c.ready_at.is_(None))
+                .values(ready_at=now(), ready_by=actor, ready_reason=reason, ready_failed_checks=failed)
             )
+            if failed:  # 第一次确认时没有未通过项: 补记本次的理由与未通过项, 人与时间不改
+                empty = func.jsonb_array_length(t.c.ready_failed_checks) == 0
+                await conn.execute(
+                    update(t)
+                    .where(t.c.engagement_id == eid, empty)
+                    .values(ready_reason=reason, ready_failed_checks=failed)
+                )
         return await self.readiness(eid)
 
     async def loads_row(self, conn: AsyncConnection, eid: str) -> dict[str, Any]:

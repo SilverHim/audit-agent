@@ -25,6 +25,13 @@ export function errorText(error: unknown, t: Messages): string {
   return t.apiErrors.codes[detail.code] ?? apiMessage(error)
 }
 
+// DATA_CHECKS_FAILED 附带的未通过体检项编号
+export function failedChecks(error: unknown): string[] {
+  const detail = apiDetail(error)
+  if (detail?.code !== 'DATA_CHECKS_FAILED' || !Array.isArray(detail.failed_checks)) return []
+  return detail.failed_checks.map(String)
+}
+
 // IMPORT_PARSE_ERROR 附带的前 20 处解析失败
 export type ParseFailure = { row: number; column: string; value: string }
 

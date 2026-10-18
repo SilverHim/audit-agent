@@ -643,6 +643,12 @@ export const zh: Messages = {
     importLedger: '导入账表',
     uploadDocuments: '上传文件',
     ready: '数据已齐，继续审计计划',
+    readyCheck: {
+      title: '数据体检有未通过的项',
+      intro: '确认后，审计计划将按现有数据继续。请写明仍要确认的理由。',
+      reason: '理由',
+      confirm: '确认数据已齐',
+    },
     awaiting: '审计计划等待数据接入',
     sources: '数据来源',
     xero: {

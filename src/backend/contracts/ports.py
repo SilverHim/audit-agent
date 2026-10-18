@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.data import (
     CategoryVersion,
+    CheckId,
     CheckInputs,
     CheckRun,
     ContractVersion,
@@ -240,8 +241,11 @@ class DataStore(Protocol):
         """数据版本与就绪确认; 没接入过数据时版本为 0, 未确认."""
         ...
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
-        """记审计师确认数据已齐 (已确认的不改, 保留第一次的人与时间), 返回确认后的状态.
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
+        """记审计师确认数据已齐, 连同理由与当时最近一次体检不通过的项, 返回确认后的状态. 已确认的保留第一次的人与
+        时间; 已记的未通过项为空而本次有时, 补记本次的理由与未通过项 (要求写的理由不丢), 否则理由与未通过项也不改.
 
         项目 locked 抛 EngagementLocked."""
         ...

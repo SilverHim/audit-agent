@@ -631,14 +631,17 @@ class DataService:
             open_requests=await data.open_requests(eid),
         )
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(self, eid: str, actor: str, reason: str | None = None) -> DataReadiness:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.
 
         按顺序校验, 第一条不过即拒绝 (DataRejected): 项目锁定 ENGAGEMENT_LOCKED; 取项目锁失败 ENGAGEMENT_BUSY;
-        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables).
-        通过后记确认 (已确认的保留第一次的人与时间), 写 data 留痕 (action ready, 同键已有的跳过), 以
-        Command(resume=DATA_READY) 在后台恢复; 项目锁交给后台任务. 确认已记而图仍在等 (上次留痕或恢复没成) 时
-        再确认一次照常补写留痕并恢复; recover 与 resume 也会补做 (GraphRunner._proceed).
+        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables); 最近一次体检有不通过
+        (failed) 的项而理由为空 (去首尾空白后) DATA_CHECKS_FAILED (附 failed_checks, 需求 R273). 判断体检前先补做
+        已不对应当前数据的体检 (checkup_if_stale; 补做出错只记日志, 按已有的最近一次结果判断).
+        通过后记确认, 连同理由与这些未通过项 (规则见 DataStore.confirm_ready: 人与时间保留第一次的, 第一次没有未通过项
+        而本次有时补记本次的), 写 data 留痕 (action ready, 同键已有的跳过), 以 Command(resume=DATA_READY) 在后台恢复;
+        项目锁交给后台任务. 确认已记而图仍在等 (上次留痕或恢复没成) 时再确认一次照常校验, 补写留痕并恢复; recover 与
+        resume 也会补做 (GraphRunner._proceed).
         """
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
@@ -655,7 +658,16 @@ class DataService:
                 raise DataRejected(
                     "DATA_NOT_READY", f"还缺: {', '.join(missing)}", missing_tables=[k.value for k in missing]
                 )
-            readiness = await self.deps.data.confirm_ready(eid, actor)
+            await self.checkup_if_stale(eid)  # 写入后的体检出错时, data_checks 还是上一版数据的结果
+            failed = [check.id for check in await self.deps.data.checks(eid) if check.status == "failed"]
+            reason = (reason or "").strip() or None
+            if failed and reason is None:
+                raise DataRejected(
+                    "DATA_CHECKS_FAILED",
+                    f"体检不通过: {', '.join(failed)}; 须写明理由才能确认",
+                    failed_checks=[c.value for c in failed],
+                )
+            readiness = await self.deps.data.confirm_ready(eid, actor, reason=reason, failed_checks=failed)
             await record_transitions(self.deps.trail, [data_ready_entry(eid, readiness)])
         except BaseException:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放

@@ -796,7 +796,8 @@ export type DataCheck = {
 /**
  * DataReadiness
  *
- * 项目财务数据的版本与就绪确认 (表 dataset_loads).
+ * 项目财务数据的版本与就绪确认 (表 dataset_loads). 确认的人与时间记下后不改; 理由与未通过项随第一次确认记下,
+ * 那时没有未通过项而再次确认时有, 补记那次的 (DataStore.confirm_ready).
  */
 export type DataReadiness = {
     /**
@@ -815,6 +816,26 @@ export type DataReadiness = {
      * Ready By
      */
     ready_by?: string | null;
+    /**
+     * Ready Reason
+     */
+    ready_reason?: string | null;
+    /**
+     * Ready Failed Checks
+     */
+    ready_failed_checks?: Array<CheckId>;
+};
+
+/**
+ * DataReadyIn
+ *
+ * 确认数据已齐 (POST /data/ready) 的请求体, 可不带.
+ */
+export type DataReadyIn = {
+    /**
+     * Reason
+     */
+    reason?: string | null;
 };
 
 /**
@@ -4249,7 +4270,10 @@ export type DataDataRequestsResponses = {
 export type DataDataRequestsResponse = DataDataRequestsResponses[keyof DataDataRequestsResponses];
 
 export type DataReadyData = {
-    body?: never;
+    /**
+     * Body
+     */
+    body?: DataReadyIn | null;
     path: {
         /**
          * Eid
