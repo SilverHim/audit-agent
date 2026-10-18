@@ -265,10 +265,14 @@ GOLDEN_LINES = [
     ),
     (
         "### 9.4 是否入库, 生成与校验脚本",
+        ('  - 第 5 节规则命中与第 7 节计数不在校验脚本复算 (见 "本版不做"), 分别由各程序的连库测试与合并终验核对.'),
+    ),
+    (
+        "### 9.4 是否入库, 生成与校验脚本",
         (
-            "  - 复算第 3 节的快照关键数 (分录与作废对数, 09-30 试算表与主要余额, 对账单行数, 月度收入, 重要性"
-            ", 录入时间晚于 10-19 的 15 笔) 并比对 20261017-mock (第 9.2 节); 第 5 节规则命"
-            '中与第 7 节计数不在校验脚本复算 (见 "本版不做"), 分别由各程序的连库测试与合并终验核对.'
+            '  - 新旧快照比对 (第 9.2 节): 20261017-mock 在快照同级目录时做, 不一致报 "快照与 20261017-mock 不一致 '
+            '(Demo 可能已重置)" 并只列文件名; 没有时, 或快照本身就是 20261017-mock 时, 跳过并写说明; 0630 表读不出'
+            "或缺 prior_end 也算不一致, 已得出的文件名照常列出."
         ),
     ),
     (
@@ -596,7 +600,8 @@ def test_manifest_layout() -> None:
 def test_check_passes() -> None:
     notes = checker.check(SUPPLEMENTS, SNAPSHOT)  # 有快照时含确定性重生成与联系人扫描
     if SNAPSHOT.is_dir():
-        assert notes == []
+        mock = SNAPSHOT.parent / "20261017-mock"
+        assert notes == ([] if mock.is_dir() else [f"没有 20261017-mock ({checker.rel(mock)}): 跳过新旧快照比对"])
     else:
         assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0]
 
@@ -899,7 +904,8 @@ def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
     generator.write_manifest(copy, snapshot)
     assert checker.check(copy, snapshot, determinism=False, scan=[]) == [
         f"不是正式补造目录 ({copy}): 跳过 documents 段份数, 页数与登记途径的计数",
-        "快照缺 dataset.json, invoices.json, accounts.json, bank_statements.json: 跳过补造表与快照的核对",
+        "快照缺 dataset.json, invoices.json, accounts.json, bank_statements.json, journals.json: "
+        "跳过补造表与快照的核对, 快照关键数复算与新旧快照比对",
     ]
     (snapshot / "organisation.json").write_text("[{}]", encoding="utf-8")
     generator.write_manifest(copy, snapshot)  # 快照哈希随之更新, 只剩组织信息的问题
@@ -2580,4 +2586,146 @@ def test_manual_rounds_order_and_sources(tmp_path: Path) -> None:
         f"{folder / 'fin08_round2.json'}: misstatement_sources 的对象应与所涉更正分录的 source_doc 一一对应",
         f"{folder / 'fin08_round2.json'}: responded_at 应早于所涉更正分录的录入时间",
         f"{folder}: 第 1 轮的回复应早于第 2 轮的沟通",
+    ]
+
+
+MOCK = SNAPSHOT.parent / "20261017-mock"
+
+
+def test_snapshot_key_constants() -> None:
+    """快照关键数的常量照需求清单 R69 验收 1 (复算由下面需要快照的用例做)."""
+    assert checker.JOURNAL_COUNTS == {
+        "分录笔数与行数": (368, 1017),
+        "本期分录笔数与行数": (215, 582),
+        "作废对 (全部, 本期)": (65, 33),
+    }
+    assert checker.TRIAL_BALANCE_ROWS == 27 and checker.TRIAL_BALANCE_BALANCES["801"] == 0
+    assert checker.PROFIT_BEFORE_ADJUSTMENTS == -1322696 and checker.CURRENT_TOTALS == (2178073, 4284469)
+    assert checker.STATEMENT_KEYS == {
+        "BA-090": (142, 72, "BT-090-0072", -1090044),
+        "BA-091": (4, 1, "BT-091-0001", 1158123),
+    }
+    assert checker.MONTHLY_REVENUE == [460000, 1803600, 979500] and checker.MATERIALITY == (32431, 16216, 1622)
+    assert (
+        len(checker.LATE_ENTRIES) == 15 and checker.LATE_ENTRIES[0] == "XJ-434" and checker.LATE_ENTRIES[-1] == "XJ-755"
+    )
+
+
+@needs_snapshot
+def test_snapshot_key_numbers() -> None:
+    assert checker.check_snapshot_keys(SNAPSHOT, SUPPLEMENTS) == []
+    if not MOCK.is_dir():
+        pytest.skip("没有 20261017-mock")
+    assert checker.compare_with_mock(SNAPSHOT, MOCK) == []
+
+
+def snapshot_copies(tmp_path: Path) -> tuple[Path, Path]:
+    """快照与 20261017-mock 复制到 tmp (篡改只在副本上做, 不动原目录)."""
+    api = tmp_path / "api"
+    shutil.copytree(SNAPSHOT, api / SNAPSHOT.name)
+    if MOCK.is_dir():
+        shutil.copytree(MOCK, api / MOCK.name)
+    return api / SNAPSHOT.name, api / MOCK.name
+
+
+@needs_snapshot
+def test_tampered_journal_is_reported(tmp_path: Path) -> None:
+    """journals.json 中一行 NetAmount 改 1 分: 关键数复算, 快照哈希与新旧快照比对都报出 journals.json."""
+    before = generator.sha256(SNAPSHOT / "journals.json")
+    snapshot, mock = snapshot_copies(tmp_path)
+    journals = json.loads((snapshot / "journals.json").read_text(encoding="utf-8"))
+    line = journals[0]["JournalLines"][0]
+    assert (journals[0]["JournalNumber"], line["AccountCode"]) == (389, "800")
+    line["NetAmount"] = round(line["NetAmount"] + 0.01, 2)
+    (snapshot / "journals.json").write_text(json.dumps(journals), encoding="utf-8")
+    assert checker.check_snapshot_keys(snapshot, SUPPLEMENTS) == [
+        f"{snapshot / 'journals.json'}: 快照关键数与设计不符: 每笔借贷平衡"
+    ]
+    manifest = read("manifest.json")
+    assert any("journals.json" in x for x in checker.check_snapshot(SUPPLEMENTS, manifest, snapshot))  # type: ignore[arg-type]
+    message = check_error(SUPPLEMENTS, snapshot, scan=[])
+    assert f"{snapshot / 'journals.json'}: 快照关键数与设计不符: 每笔借贷平衡" in message.splitlines()
+    if mock.is_dir():
+        assert f"{snapshot}: 快照与 20261017-mock 不一致 (Demo 可能已重置): journals.json" in message.splitlines()
+    assert generator.sha256(SNAPSHOT / "journals.json") == before  # 原目录未动
+
+
+@needs_snapshot
+def test_more_snapshot_key_problems(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot, _ = snapshot_copies(tmp_path)
+    path = snapshot / "trial_balance_2026-09-30.json"
+    path.write_text(path.read_text(encoding="utf-8").replace('"11581.23"', '"11581.24"'), encoding="utf-8")
+    copy = copy_supplements(tmp_path)
+    edit_json(copy / "dataset_traits.json", lambda t: t.update(entry_timestamps_note="16 journals carry created times"))
+    assert checker.check_snapshot_keys(snapshot, copy) == [
+        f"{path}: 快照关键数与设计不符: 试算表合计, 主要余额 091, 流动资产与流动负债",
+        f"{copy / 'dataset_traits.json'}: entry_timestamps_note 与快照的录入时间不符",
+    ]
+    monkeypatch.setattr(checker, "MONTHLY_REVENUE", [460000, 1803600, 979501])  # 其余分支: 期望值改掉一项即报出
+    monkeypatch.setattr(checker, "LATE_ENTRIES", checker.LATE_ENTRIES[1:])
+    monkeypatch.setattr(checker, "STATEMENT_KEYS", {**checker.STATEMENT_KEYS, "BA-091": (4, 2, "BT-091-0001", 1158123)})
+    monkeypatch.setattr(checker, "JOURNAL_COUNTS", {**checker.JOURNAL_COUNTS, "作废对 (全部, 本期)": (65, 32)})
+    monkeypatch.setattr(checker, "MATERIALITY", (32431, 16215, 1622))
+    assert checker.check_snapshot_keys(SNAPSHOT, SUPPLEMENTS) == [
+        f"{checker.rel(SNAPSHOT / 'journals.json')}: 快照关键数与设计不符: 作废对 (全部, 本期), 月度收入, "
+        "录入日晚于 2026-10-19 的分录",
+        f"{checker.rel(SNAPSHOT / 'trial_balance_2026-09-30.json')}: 快照关键数与设计不符: 重要性",
+        f"{checker.rel(SNAPSHOT / 'bank_statements.json')}: 快照关键数与设计不符: 对账单 BA-091",
+    ]
+
+
+@needs_snapshot
+def test_mock_comparison(tmp_path: Path) -> None:
+    snapshot, mock = snapshot_copies(tmp_path)
+    if not mock.is_dir():
+        pytest.skip("没有 20261017-mock")
+    prior = mock / "trial_balance_2026-06-30.json"
+    prior.write_text(json.dumps(json.loads(prior.read_text(encoding="utf-8")), indent=4), encoding="utf-8")
+    (mock / "dataset.json").write_text("{}", encoding="utf-8")  # 期间声明不比
+    assert checker.compare_with_mock(snapshot, mock) == []  # 试算表按规范化比较, 排版不同不报
+    prior.write_text(prior.read_text(encoding="utf-8").replace('"4200.00"', '"4200.01"'), encoding="utf-8")
+    (mock / "contacts.json").write_bytes((mock / "contacts.json").read_bytes() + b" ")  # 只比哈希
+    (mock / "payments.json").unlink()
+    assert checker.compare_with_mock(snapshot, mock) == [
+        f"{snapshot}: 快照与 20261017-mock 不一致 (Demo 可能已重置): contacts.json, payments.json, "
+        "trial_balance_2026-06-30.json"
+    ]
+    shutil.rmtree(mock)
+    notes = checker.check(copy_supplements(tmp_path), snapshot, determinism=False, scan=[])
+    assert f"没有 20261017-mock ({mock}): 跳过新旧快照比对" in notes
+
+
+@needs_snapshot
+def test_snapshot_key_steps_are_independent(tmp_path: Path) -> None:
+    """某个文件出问题或某步意外中断, 只报该文件, 其余各项照常报出."""
+    snapshot, mock = snapshot_copies(tmp_path)
+    journals = json.loads((snapshot / "journals.json").read_text(encoding="utf-8"))
+    del journals[0]["JournalLines"][0]["NetAmount"]  # 关键数这一步中断
+    (snapshot / "journals.json").write_text(json.dumps(journals), encoding="utf-8")
+    path = snapshot / "trial_balance_2026-09-30.json"
+    path.write_text(path.read_text(encoding="utf-8").replace('"11581.23"', '"11581.24"'), encoding="utf-8")
+    assert checker.check_snapshot_keys(snapshot, SUPPLEMENTS) == [
+        f"{snapshot / 'journals.json'}: 校验中断 (KeyError)",
+        f"{path}: 快照关键数与设计不符: 试算表合计, 主要余额 091, 流动资产与流动负债",
+    ]
+    path.unlink()
+    assert f"{path}: 快照缺期末试算表" in checker.check_snapshot_keys(snapshot, SUPPLEMENTS)
+    if mock.is_dir():
+        (mock / "payments.json").unlink()
+        (snapshot / "dataset.json").write_text('{"period_start": "2026-07-01", "period_end": "2026-09-30"}')
+        assert checker.compare_with_mock(snapshot, mock) == [  # 缺 prior_end 也不丢已得出的文件名
+            f"{snapshot}: 快照与 20261017-mock 不一致 (Demo 可能已重置): journals.json, payments.json, 上期末试算表"
+        ]
+
+
+@needs_snapshot
+def test_snapshot_is_the_mock(tmp_path: Path) -> None:
+    snapshot, mock = snapshot_copies(tmp_path)
+    if mock.is_dir():
+        shutil.rmtree(mock)
+    mock.symlink_to(snapshot, target_is_directory=True)
+    copy = copy_supplements(tmp_path)
+    assert checker.check(copy, snapshot, determinism=False, scan=[]) == [
+        f"不是正式补造目录 ({copy}): 跳过 documents 段份数, 页数与登记途径的计数",
+        "快照即 20261017-mock: 跳过新旧快照比对",
     ]

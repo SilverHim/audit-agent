@@ -1,11 +1,12 @@
 """Xero 演示数据集补造文件的校验: manifest 与快照哈希, 合成标志, 模型严格校验, 登记与号码, 补造表与 PDF 内容,
-补造表与快照的核对, 登录账号联系人扫描与确定性.
+补造表与快照的核对, 快照关键数复算, 与 20261017-mock 的比对, 登录账号联系人扫描与确定性.
 
 用法: uv run python data/check_xero_demo.py [--snapshot 20261017-q1 或快照目录] [--dir 补造目录]
 
 - 问题全部收集后一次抛 CheckError, 每行一项, 只写文件名; 登录账号联系人的姓名与邮箱只在内存里比对, 不打印, 不写文件.
-- 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对, 联系人扫描与确定性, 补造文件本身照常核对;
-  快照在而 contacts.json 缺失或无法解析时报错, 不静默跳过联系人扫描.
+- 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对, 快照关键数复算, 新旧快照比对, 联系人扫描与确定性,
+  补造文件本身照常核对; 快照缺文件或没有 20261017-mock 时, 跳过的项目写在说明里; 快照在而 contacts.json 缺失或
+  无法解析时报错, 不静默跳过联系人扫描.
 设计见 docs/Xero演示数据集设计.md 第 9.4 节.
 """
 
@@ -23,6 +24,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import generate_xero_demo as gen
 import pdfplumber
@@ -120,7 +122,16 @@ def check(
         problems += guarded(snapshot_dir, check_against_snapshot, directory, snapshot_dir)
         if not snapshot_complete(snapshot_dir):
             missing = [f"{n}.json" for n in SNAPSHOT_TABLE_FILES if not (snapshot_dir / f"{n}.json").is_file()]
-            notes.append(f"快照缺 {', '.join(missing)}: 跳过补造表与快照的核对")
+            notes.append(f"快照缺 {', '.join(missing)}: 跳过补造表与快照的核对, 快照关键数复算与新旧快照比对")
+        else:
+            problems += guarded(snapshot_dir, check_snapshot_keys, snapshot_dir, directory)
+            mock = snapshot_dir.parent / MOCK_SNAPSHOT
+            if not mock.is_dir():
+                notes.append(f"没有 {MOCK_SNAPSHOT} ({rel(mock)}): 跳过新旧快照比对")
+            elif gen.same_path(mock, snapshot_dir):
+                notes.append(f"快照即 {MOCK_SNAPSHOT}: 跳过新旧快照比对")
+            else:
+                problems += guarded(mock, compare_with_mock, snapshot_dir, mock)
         problems += guarded(snapshot_dir / "contacts.json", scan_login_contact, snapshot_dir, [directory, *scan])
         if determinism:
             problems += guarded(directory, check_determinism, directory, snapshot_dir)
@@ -128,7 +139,7 @@ def check(
         notes.append(
             f"{NO_SNAPSHOT} ({rel(snapshot_dir)}): 跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, "
             "合同关联, 开户行, xero_refs, 回函余额与应计利息, index.csv 的 Xero 关联对象, 更正后试算表, "
-            "财报金额, 比较数与科目覆盖), "
+            "财报金额, 比较数与科目覆盖), 快照关键数复算, 新旧快照比对, "
             "登录账号联系人扫描与确定性检查"
         )
     if problems:
@@ -1080,11 +1091,220 @@ def check_payroll(directory: Path) -> list[str]:
     return problems
 
 
-SNAPSHOT_TABLE_FILES = ("dataset", "invoices", "accounts", "bank_statements")  # 补造表与快照核对要读的快照文件
+SNAPSHOT_TABLE_FILES = ("dataset", "invoices", "accounts", "bank_statements", "journals")  # 与快照核对要读的快照文件
 
 
 def snapshot_complete(snapshot_dir: Path) -> bool:
     return all((snapshot_dir / f"{name}.json").is_file() for name in SNAPSHOT_TABLE_FILES)
+
+
+JOURNAL_COUNTS = {
+    "分录笔数与行数": (368, 1017),
+    "本期分录笔数与行数": (215, 582),
+    "作废对 (全部, 本期)": (65, 33),
+}  # 快照分录 (第 3 节通用口径; 作废对按 reversal_reference_pattern 识别, 本期指作废与原分录都在本期)
+TRIAL_BALANCE_ROWS = 27  # 09-30 试算表行数 (含余额为 0 的 801)
+TRIAL_BALANCE_BALANCES = {
+    "090": -1090044,
+    "091": 1158123,
+    "610": 1019950,
+    "710": 75000,
+    "711": -82500,
+    "800": -400516,
+    "801": 0,
+    "820": -119197,
+    "825": -753500,
+    "840": -1921221,
+    "860": 9,
+    "960": 791200,
+    "200": -3243100,
+    "477": 3350000,
+    "469": 450000,
+}  # 09-30 主要余额 (借正贷负, 第 3.2 节)
+PROFIT_BEFORE_ADJUSTMENTS = -1322696  # 未调整的本期损益
+CURRENT_TOTALS = (2178073, 4284469)  # 流动资产, 流动负债 (透支列流动负债, 第 3.2 节)
+STATEMENT_KEYS = {
+    "BA-090": (142, 72, "BT-090-0072", -1090044),
+    "BA-091": (4, 1, "BT-091-0001", 1158123),
+}  # 对账单: 行数, 期末前行数, 期末前最后一行及其余额
+MONTHLY_REVENUE = [460000, 1803600, 979500]  # 7, 8, 9 月收入
+MATERIALITY = (32431, 16216, 1622)  # 收入 1%, 其 50% 与 5%, 四舍五入到分 (第 6.6 节)
+LATE_CUTOFF = date(2026, 10, 19)  # 录入日 (悉尼) 晚于它的分录, 在全部分录中数 (本期 13 笔, 第 5.3 节)
+LATE_ENTRIES = [f"XJ-{n}" for n in (434, 453, 464, 466, 501, 503, 535, 538, 543, 550, 557, 562, 577, 690, 755)]
+SYDNEY = ZoneInfo("Australia/Sydney")
+MOCK_SNAPSHOT = "20261017-mock"  # 新快照拉取前的旧快照; 除期间声明与试算表外应逐字节相同 (第 9.2 节)
+MOCK_SKIPPED = ("dataset.json", "manifest.json")  # 与 trial_balance_*.json 一起不逐字节比对
+
+
+def cents(amount: float) -> int:
+    return half_up(Decimal(str(amount)) * 100)
+
+
+def half_up(value: Decimal) -> int:
+    """四舍五入到整数 (金额以分计)."""
+    return int(value.quantize(Decimal(1), ROUND_HALF_UP))
+
+
+def check_snapshot_keys(snapshot_dir: Path, directory: Path) -> list[str]:
+    """复算快照关键数 (第 3 节; 只读白名单文件), 按文件分步, 各步互不影响 (某步意外中断只报该文件):
+    journals.json (分录与本期分录的笔数与行数, 作废对, 每笔借贷平衡, 月度收入, 录入日晚于 LATE_CUTOFF 的分录),
+    期末试算表 (行数, 合计, 主要余额, 本期损益, 流动资产与流动负债, 重要性), bank_statements.json (两户对账单的行数
+    与期末余额), dataset_traits.json (entry_timestamps_note 与快照的录入时间一致). 不符时按文件报出项目名, 不写数值."""
+    snapshot = gen.Snapshot(snapshot_dir)
+    dataset = snapshot.load("dataset")
+    period = date.fromisoformat(dataset["period_start"]), date.fromisoformat(dataset["period_end"])
+    traits = read_json(directory / "dataset_traits.json")
+    traits = traits if isinstance(traits, dict) else {}
+    trial_balance = snapshot_dir / f"trial_balance_{period[1].isoformat()}.json"
+    steps: list[tuple[Path, Callable[..., list[str]], tuple[Any, ...]]] = [
+        (snapshot_dir / "journals.json", journal_keys, (snapshot, period, traits)),
+        (trial_balance, trial_balance_keys, (snapshot, trial_balance)),
+        (snapshot_dir / "bank_statements.json", statement_keys, (snapshot, period[1])),
+        (directory / "dataset_traits.json", timestamp_note, (snapshot, directory, traits)),
+    ]
+    return [problem for where, step, args in steps for problem in guarded(where, step, *args)]
+
+
+def key_problems(path: Path, items: list[str]) -> list[str]:
+    return [f"{rel(path)}: 快照关键数与设计不符: {', '.join(items)}"] if items else []
+
+
+def revenue_codes(snapshot: gen.Snapshot) -> set[str]:
+    """收入基准的科目: 标准分类为 revenue 的科目 (同 PLN-01 的 revenue_categories; 270 利息属 other_income, 不计)."""
+    from backend.adapters.xero_dataset import map_accounts
+
+    return {a.code for a in map_accounts(snapshot.load("accounts")) if a.category == "revenue"}
+
+
+def late_entries(raw: list[dict[str, Any]]) -> list[str]:
+    """全部分录中录入日 (悉尼) 晚于 LATE_CUTOFF 的 (本期 13 笔, 本期之后 2 笔), 按分录号排序."""
+    from backend.adapters.xero_dataset import xero_datetime
+
+    late = [
+        j["JournalNumber"] for j in raw if xero_datetime(j, "CreatedDateUTC").astimezone(SYDNEY).date() > LATE_CUTOFF
+    ]
+    return [f"XJ-{n}" for n in sorted(late)]
+
+
+def journal_keys(snapshot: gen.Snapshot, period: tuple[date, date], traits: dict[str, Any]) -> list[str]:
+    """journals.json 的关键数 (见 check_snapshot_keys)."""
+    from backend.adapters.xero_dataset import journal_entries_from_api, journal_rows, xero_date
+
+    start, end = period
+    pattern = re.compile(str(traits.get("reversal_reference_pattern", r"Reversal of ID (\d+)")))
+    raw = snapshot.load("journals")
+    numbers = {j["JournalNumber"]: j for j in raw}
+    in_period = [j for j in raw if start <= xero_date(j, "JournalDate") <= end]
+    pairs = [(j, numbers.get(int(m.group(1)))) for j in raw if (m := pattern.search(j.get("Reference") or ""))]
+    both = [r for r, o in pairs if o and all(start <= xero_date(x, "JournalDate") <= end for x in (r, o))]
+    counts = {
+        "分录笔数与行数": (len(raw), sum(len(j["JournalLines"]) for j in raw)),
+        "本期分录笔数与行数": (len(in_period), sum(len(j["JournalLines"]) for j in in_period)),
+        "作废对 (全部, 本期)": (sum(1 for _, o in pairs if o), len(both)),
+    }
+    items = [name for name, value in JOURNAL_COUNTS.items() if counts[name] != value]
+    if any(sum(cents(x["NetAmount"]) for x in j["JournalLines"]) != 0 for j in raw):
+        items.append("每笔借贷平衡")
+    revenue = revenue_codes(snapshot)
+    monthly: Counter[int] = Counter()
+    for row in journal_rows(journal_entries_from_api(snapshot)):  # type: ignore[arg-type]
+        if row.account_code in revenue and start <= row.posting_date <= end:
+            monthly[row.posting_date.month] += row.credit_cents - row.debit_cents
+    if [monthly[m] for m in range(start.month, end.month + 1)] != MONTHLY_REVENUE:
+        items.append("月度收入")
+    if late_entries(raw) != LATE_ENTRIES:
+        items.append(f"录入日晚于 {LATE_CUTOFF} 的分录")
+    return key_problems(snapshot.root / "journals.json", items)
+
+
+def trial_balance_keys(snapshot: gen.Snapshot, path: Path) -> list[str]:
+    """期末试算表的关键数 (见 check_snapshot_keys); 文件缺失时报出."""
+    from backend.adapters.xero_dataset import map_accounts, trial_balance_cents
+
+    if not path.is_file():
+        return [f"{rel(path)}: 快照缺期末试算表"]
+    tb = trial_balance_cents(json.loads(path.read_text(encoding="utf-8")))
+    types = {a.code: a.type for a in map_accounts(snapshot.load("accounts"))}
+    kinds = {str(a.get("Code")): a.get("Type") for a in snapshot.load("accounts")}
+    balances = [c for c, v in TRIAL_BALANCE_BALANCES.items() if tb.get(c) != v]
+    current_assets = sum(v for c, v in tb.items() if kinds.get(c) == "CURRENT" or (kinds.get(c) == "BANK" and v > 0))
+    current_liabilities = -sum(
+        v for c, v in tb.items() if kinds.get(c) == "CURRLIAB" or (kinds.get(c) == "BANK" and v < 0)
+    )
+    overall = half_up(Decimal(-sum(v for c, v in tb.items() if c in revenue_codes(snapshot))) * Decimal("0.01"))
+    levels = (overall, half_up(Decimal(overall) * Decimal("0.5")), half_up(Decimal(overall) * Decimal("0.05")))
+    profit = -sum(v for c, v in tb.items() if types.get(c) in ("revenue", "expense"))
+    checks = {
+        "试算表行数": len(tb) == TRIAL_BALANCE_ROWS,
+        "试算表合计": sum(tb.values()) == 0,
+        f"主要余额 {', '.join(balances)}": not balances,
+        "本期损益": profit == PROFIT_BEFORE_ADJUSTMENTS,
+        "流动资产与流动负债": (current_assets, current_liabilities) == CURRENT_TOTALS,
+        "重要性": levels == MATERIALITY,
+    }
+    return key_problems(path, [name for name, ok in checks.items() if not ok])
+
+
+def statement_keys(snapshot: gen.Snapshot, end: date) -> list[str]:
+    """bank_statements.json 的关键数: 各账户的行数, 期末前行数, 期末前最后一行及其余额."""
+    from backend.adapters.xero_dataset import map_bank_transactions
+
+    lines = map_bank_transactions(snapshot)  # type: ignore[arg-type]
+    items: list[str] = []
+    for account, expected in STATEMENT_KEYS.items():
+        rows = [x for x in lines if x.bank_account_id == account]
+        upto = [x for x in rows if x.txn_date <= end]
+        last = (upto[-1].id, upto[-1].balance_after_cents) if upto else (None, None)
+        if (len(rows), len(upto), *last) != expected:
+            items.append(f"对账单 {account}")
+    return key_problems(snapshot.root / "bank_statements.json", items)
+
+
+def timestamp_note(snapshot: gen.Snapshot, directory: Path, traits: dict[str, Any]) -> list[str]:
+    """dataset_traits.entry_timestamps_note 写出快照的晚录入笔数, 截止日与最晚录入日. 最晚录入日按 UTC 写
+    (字段为 CreatedDateUTC; 悉尼时间为次日), 晚录入按悉尼日期数 (两种口径都是这 15 笔)."""
+    from backend.adapters.xero_dataset import xero_datetime
+
+    raw = snapshot.load("journals")
+    newest = max(xero_datetime(j, "CreatedDateUTC") for j in raw).date()
+    after, until = gen.long_date(LATE_CUTOFF.isoformat()), gen.long_date(newest.isoformat())
+    wanted = f"{len(late_entries(raw))} journals carry created times after {after} and up to {until}"
+    if wanted not in str(traits.get("entry_timestamps_note", "")):
+        return [f"{rel(directory / 'dataset_traits.json')}: entry_timestamps_note 与快照的录入时间不符"]
+    return []
+
+
+def compare_with_mock(snapshot_dir: Path, mock_dir: Path) -> list[str]:
+    """新快照与 20261017-mock (第 9.2 节): 除 MOCK_SKIPPED 与 trial_balance_*.json 外的同名文件 sha256 相同
+    (contacts.json 也只比哈希, 不解析); 上期末试算表按 trial_balance_cents 规范化后相同, 读不出或缺失也算不一致.
+    不一致只列文件名."""
+    from backend.adapters.xero_dataset import trial_balance_cents
+
+    def names(folder: Path) -> set[str]:
+        return {
+            p.name
+            for p in folder.iterdir()
+            if p.is_file() and p.name not in MOCK_SKIPPED and not p.name.startswith("trial_balance_")
+        }
+
+    ours, theirs = names(snapshot_dir), names(mock_dir)
+    differ = sorted(
+        (ours ^ theirs) | {n for n in ours & theirs if gen.sha256(snapshot_dir / n) != gen.sha256(mock_dir / n)}
+    )
+    prior = "上期末试算表"
+    try:
+        prior = f"trial_balance_{gen.Snapshot(snapshot_dir).load('dataset')['prior_end']}.json"
+        tables = [
+            trial_balance_cents(json.loads((d / prior).read_text(encoding="utf-8"))) for d in (snapshot_dir, mock_dir)
+        ]
+        same = tables[0] == tables[1]
+    except Exception:  # 缺文件, 缺 prior_end 或结构不对都算不一致, 已得出的文件名照常报出
+        same = False
+    if not same:
+        differ.append(prior)
+    if differ:
+        return [f"{rel(snapshot_dir)}: 快照与 {MOCK_SNAPSHOT} 不一致 (Demo 可能已重置): {', '.join(differ)}"]
+    return []
 
 
 def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
