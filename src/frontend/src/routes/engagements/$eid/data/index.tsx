@@ -5,14 +5,16 @@ import { AlertTriangle, CircleCheck, Clock3, FolderOpen, Link2, RefreshCw, Table
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
-import type { DocumentRef, EngagementOverview } from '@/client/types.gen'
+import type { DocumentRef, DocumentType } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { useActorName } from '@/lib/actor'
 import {
   type DataCheck,
+  type DataSummary,
   type TableKind,
   type TableSummary,
   useDataReady,
@@ -23,7 +25,7 @@ import {
   useXeroDisconnect,
   useXeroSync,
 } from '@/lib/data-api'
-import { apiMessage } from '@/lib/errors'
+import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { NotAvailable } from '@/lib/new-api'
@@ -36,17 +38,19 @@ export const Route = createFileRoute('/engagements/$eid/data/')({
   component: DataPage,
 })
 
-// 后端 R10 上线后总览带等待数据的状态
-type Overview = EngagementOverview & { awaiting_data?: boolean; missing_tables?: string[] }
-// 后端 R14 上线后文件登记带这些字段
-type Document = DocumentRef & { media_type?: string; uploaded_by?: string | null; failed_step?: string | null }
-
 const DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'
 const STEP_DONE: Record<string, number> = { received: 1, classified: 2, extracted: 6 }
 const FAILED_AT: Record<string, number> = { classify: 1, read: 2, extract: 3, link: 4 }
+// 合同与回函分类后还要抽取, 其他类型分类后即处理完 (后端停在 classified)
+const EXTRACTED_TYPES = new Set<DocumentType>(['contract', 'confirmation'])
 
+function finished(doc: DocumentRef): boolean {
+  return doc.status === 'extracted' || (doc.status === 'classified' && !EXTRACTED_TYPES.has(doc.type))
+}
+
+// Xero 接口 (R12) 还没合入时为 NotAvailable
 function failMessage(error: unknown, t: Messages): string {
-  return error instanceof NotAvailable ? t.importDialog.unavailable : apiMessage(error)
+  return error instanceof NotAvailable ? t.importDialog.unavailable : errorText(error, t)
 }
 
 function DataPage() {
@@ -54,9 +58,13 @@ function DataPage() {
   const { xero } = Route.useSearch()
   const navigate = useNavigate()
   const { t, formatDate } = useI18n()
-  const overview = useEngagement(eid).data as Overview | undefined
+  const overview = useEngagement(eid).data
   const summary = useDataSummary(eid).data ?? null
-  const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
+  // 数据管理智能体处理文件时跟着概览一起刷新处理进度
+  const documents = useQuery({
+    ...evidenceListDocumentsOptions({ path: { eid } }),
+    refetchInterval: summary?.processing ? 3000 : false,
+  })
   const upload = useUploadDocuments(eid)
   const ready = useDataReady(eid)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -83,7 +91,7 @@ function DataPage() {
     if (fileInput.current) fileInput.current.value = ''
   }
 
-  const docs = (documents.data ?? []) as Document[]
+  const docs = documents.data ?? []
   const importedTables = summary?.tables.filter((table) => table.source === 'import').length ?? 0
 
   return (
@@ -221,7 +229,7 @@ function SourceCard({
   )
 }
 
-function XeroCard({ eid, summary }: { eid: string; summary: ReturnType<typeof useDataSummary>['data'] }) {
+function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }) {
   const { t, lang, formatDateTime } = useI18n()
   const connect = useXeroConnect(eid)
   const sync = useXeroSync(eid)
@@ -250,7 +258,9 @@ function XeroCard({ eid, summary }: { eid: string; summary: ReturnType<typeof us
           <dt className="text-muted-foreground">{t.data.xero.lastSynced}</dt>
           <dd className="m-0">{xero.last_synced_at ? formatDateTime(xero.last_synced_at) : '—'}</dd>
           <dt className="text-muted-foreground">{t.data.xero.scope}</dt>
-          <dd className="m-0">{xero.scope.map((kind) => t.data.tables[kind]).join(lang === 'zh' ? '、' : ', ')}</dd>
+          <dd className="m-0">
+            {(xero.scope ?? []).map((kind) => t.data.tables[kind]).join(lang === 'zh' ? '、' : ', ')}
+          </dd>
         </dl>
       ) : null}
       <div className="mt-auto flex flex-wrap gap-2 pt-1">
@@ -401,7 +411,7 @@ function FinancialTables({
 }
 
 function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): string {
-  const p = check.params as Record<string, unknown>
+  const p = check.params ?? {}
   const num = (value: unknown) => Number(value ?? 0)
   switch (check.id) {
     case 'debits_equal_credits':
@@ -424,7 +434,10 @@ function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): string {
       return t.data.checkDetail.fields(fields.join(lang === 'zh' ? '与' : ' and '), String(p.source ?? 'Xero'))
     }
     case 'tb_agrees_statements':
-      if (check.status === 'missing_data') return t.data.checkDetail.statementsMissing
+      if (check.status === 'missing_data')
+        return num(p.statements) ? t.data.checkDetail.statementsNoTb : t.data.checkDetail.statementsMissing
+      // 报表数字的勾稽归 FIN-12, 还没执行时为 pending
+      if (check.status === 'pending') return t.data.checkDetail.statementsPending(num(p.statements))
       return p.difference_cents ? t.data.checkDetail.statementsDiff(formatAud(num(p.difference_cents))) : ''
     default:
       return ''
@@ -488,13 +501,18 @@ function Checks({ eid, checks }: { eid: string; checks: DataCheck[] }) {
   )
 }
 
-function Progress({ doc }: { doc: Document }) {
+function Progress({ doc }: { doc: DocumentRef }) {
   const { t } = useI18n()
   const manual = doc.status === 'needs_manual'
-  const done = manual ? (FAILED_AT[doc.failed_step ?? 'classify'] ?? 1) : (STEP_DONE[doc.status] ?? 1)
+  const complete = finished(doc)
+  const done = manual
+    ? (FAILED_AT[doc.failed_step ?? 'classify'] ?? 1)
+    : complete
+      ? t.data.steps.length
+      : (STEP_DONE[doc.status] ?? 1)
   const label = manual
     ? t.data.docStatus.needs_manual
-    : doc.status === 'extracted'
+    : complete
       ? t.data.docStatus.extracted
       : t.data.steps[Math.min(done, 5)]
   return (
@@ -520,7 +538,7 @@ function Progress({ doc }: { doc: Document }) {
       <span
         className={cn(
           'font-medium text-[12.5px]',
-          manual ? 'text-warn' : doc.status === 'extracted' ? 'text-ok' : 'text-accent-foreground',
+          manual ? 'text-warn' : complete ? 'text-ok' : 'text-accent-foreground',
         )}
       >
         {label}
@@ -537,14 +555,15 @@ function Documents({
   onChoose,
 }: {
   eid: string
-  docs: Document[]
+  docs: DocumentRef[]
   loading: boolean
   onFiles: (files: FileList) => void
   onChoose: () => void
 }) {
   const { t, formatDate } = useI18n()
-  const [typing, setTyping] = useState<Document | null>(null)
-  const done = docs.filter((doc) => doc.status === 'extracted').length
+  const actorName = useActorName()
+  const [typing, setTyping] = useState<DocumentRef | null>(null)
+  const done = docs.filter(finished).length
   const manual = docs.filter((doc) => doc.status === 'needs_manual').length
   const cell = 'border-line-soft border-b px-3 py-[11px]'
   return (
@@ -633,7 +652,7 @@ function Documents({
                     </td>
                     <td className={cell}>{t.data.reliabilities[doc.reliability] ?? doc.reliability}</td>
                     <td className={cn(cell, 'px-5 text-[#4a5262] text-[13px]')}>
-                      {[doc.uploaded_by, formatDate(doc.uploaded_at)].filter(Boolean).join(' · ')}
+                      {[actorName(doc.uploaded_by), formatDate(doc.uploaded_at)].filter(Boolean).join(' · ')}
                     </td>
                   </tr>
                 )
@@ -651,10 +670,10 @@ function Documents({
   )
 }
 
-function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: Document | null; onClose: () => void }) {
+function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef | null; onClose: () => void }) {
   const { t } = useI18n()
   const setType = useSetDocumentType(eid)
-  const [type, setTypeValue] = useState('contract')
+  const [type, setTypeValue] = useState<DocumentType>('contract')
   const [reason, setReason] = useState('')
   return (
     <Dialog
@@ -672,7 +691,7 @@ function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: Document | nul
           <select
             className="h-10 rounded-[9px] border border-input bg-card px-2.5 font-normal text-[14px]"
             value={type}
-            onChange={(event) => setTypeValue(event.target.value)}
+            onChange={(event) => setTypeValue(event.target.value as DocumentType)}
           >
             {Object.entries(t.data.docTypes).map(([value, label]) => (
               <option key={value} value={value}>
