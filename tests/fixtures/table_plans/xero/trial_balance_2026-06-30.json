@@ -1,0 +1,11 @@
+{
+  "kind": "trial_balance",
+  "header_row": 5,
+  "skip": [{"column": "Account Code", "pattern": "^Total$"}],
+  "fields": {"account_code": {"column": "Account Code"}},
+  "periods": [
+    {"period": "current", "balance": {"debit": "Debit - Year to date", "credit": "Credit - Year to date"}},
+    {"period": "prior", "balance": {"column": "30 June 2025"}}
+  ],
+  "amount_unit": "dollars"
+}

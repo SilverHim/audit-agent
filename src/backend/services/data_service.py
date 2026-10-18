@@ -65,7 +65,6 @@ from backend.services.data_import import (
     SCHEMAS,
     MappingError,
     UnreadableFile,
-    convert,
     media_type,
     preview,
     read_sheet,
@@ -73,6 +72,7 @@ from backend.services.data_import import (
 )
 from backend.services.data_quality import missing_tables
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
+from backend.services.table_plan import convert
 from backend.services.trail_pages import all_of_kind
 
 logger = logging.getLogger(__name__)
@@ -523,7 +523,7 @@ class DataService:
         持项目锁做完 (holding, 作业涉及该表). 已提交的会话以相同的表种类, 工作表, 日期写法与列对应再提交 (重试) 时
         不再写入, 返回上次的结果 (上次没写成的留痕已在取锁时补写). 按顺序拒绝: 锁定 423, 忙 409, 会话不存在 404,
         已提交而选择不同 INVALID_VALUE,
-        工作表不存在 INVALID_VALUE, 对应不可用 INVALID_VALUE 或 MISSING_FIELD (见 data_import.check_mapping),
+        工作表不存在 INVALID_VALUE, 对应不可用 INVALID_VALUE 或 MISSING_FIELD (见 table_plan.check_plan),
         有解析失败 IMPORT_PARSE_ERROR (detail.errors 为前 20 处 {row, column, value}). 科目表按名称归类,
         记 category_basis (services.account_mapping).
         """

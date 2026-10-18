@@ -1,0 +1,34 @@
+{
+  "kind": "sales_invoices",
+  "header_row": 1,
+  "fields": {
+    "id": {
+      "column": "id"
+    },
+    "invoice_no": {
+      "column": "invoice_no"
+    },
+    "customer": {
+      "column": "customer"
+    },
+    "customer_abn": {
+      "column": "customer_abn"
+    },
+    "contract_id": {
+      "column": "contract_id"
+    },
+    "invoice_date": {
+      "column": "invoice_date"
+    },
+    "posting_date": {
+      "column": "posting_date"
+    },
+    "amount_cents": {
+      "column": "amount_cents"
+    },
+    "journal_entry_id": {
+      "column": "journal_entry_id"
+    }
+  },
+  "date_format": "ymd"
+}

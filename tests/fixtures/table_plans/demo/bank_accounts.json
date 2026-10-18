@@ -1,0 +1,22 @@
+{
+  "kind": "bank_accounts",
+  "header_row": 1,
+  "fields": {
+    "id": {
+      "column": "id"
+    },
+    "bank_name": {
+      "column": "bank_name"
+    },
+    "bsb": {
+      "column": "bsb"
+    },
+    "account_no": {
+      "column": "account_no"
+    },
+    "gl_account_code": {
+      "column": "gl_account_code"
+    }
+  },
+  "date_format": "dmy"
+}

@@ -3,11 +3,12 @@
 这些类型不进编排状态 (EngagementState), 所以不必放在 models.py 的检查点白名单里.
 """
 
+import re
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import StrictInt, StrictStr
+from pydantic import Field, StrictInt, StrictStr, field_validator, model_validator
 
 from backend.contracts.models import Contract, DocumentType, Model
 from backend.contracts.records import AccountCategory, CategoryBasis
@@ -284,6 +285,120 @@ class ParseFailure(Model):
     row: int  # 文件中的实际行号 (第 1 行为 1, 含表头与空行)
     column: str  # 列名; 唯一键重复时为键的最后一列
     value: str  # 原值文本; 唯一键重复时为键值, 用 / 连接
+
+
+# ── 规整方案 (需求 R275): 把原样读出的工作表规整成某种账表的标准行, 由 services/table_plan 套用 ──
+
+AmountUnit = Literal["dollars", "cents"]  # 金额单位: 元 (四舍五入到分) 或整数分
+
+
+def _compiles(pattern: str) -> str:
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"pattern {pattern!r} is not a valid regular expression: {exc}") from exc
+    return pattern
+
+
+class RowRule(Model):
+    """按一列的文本认出一类行: 该列单元格的文本 (去首尾空白; 数值, 日期按导入的写法转成文本) 中有匹配 pattern 的部分
+    (re.search, 要整格匹配就写 ^ 与 $)."""
+
+    column: str  # 列名, 即表头的显示名 (重名的带 " (2)" 等后缀)
+    pattern: str  # 正则
+
+    @field_validator("pattern")
+    @classmethod
+    def pattern_compiles(cls, value: str) -> str:
+        return _compiles(value)
+
+
+class GroupTitle(RowRule):
+    """分组标题行: 只有 column 一列有值, 且其文本匹配 pattern 的行. pattern 的命名捕获组是标题里的值, 向下填充到之后的
+    数据行, 直到下一个分组标题 (没匹配上的可选组为空); 字段经 FieldSource.group 取用. 标题行本身不出行."""
+
+    @field_validator("pattern")
+    @classmethod
+    def has_named_group(cls, value: str) -> str:
+        if not re.compile(value).groupindex:
+            raise ValueError(f"group title pattern {value!r} needs at least one named group, e.g. (?P<number>...)")
+        return value
+
+
+class FieldSource(Model):
+    """一个字段的取值, 三选一: 一列 (column); 借贷两列之差 (debit 减 credit, 两列都空为 0, 只用于金额字段); 分组标题的
+    命名捕获组 (group)."""
+
+    column: str | None = None  # 取这一列
+    debit: str | None = None  # 借方列, 与 credit 同给
+    credit: str | None = None  # 贷方列
+    group: str | None = None  # 分组标题里的命名捕获组
+    # 一列带正负号拆借贷 (只用于取一列的金额字段, 不与 values 同给): positive 只取正数 (负数记 0), negative 取负数的
+    # 绝对值 (正数记 0)
+    part: Literal["positive", "negative"] | None = None
+    # 取值映射 (只用于 column 与 group): 原文 → 系统取值, 原文按导入列名的规范化 (小写, 只留字母与数字) 比较, 规范化后
+    # 不能重复; 映射表外的非空取值算解析失败, 不静默丢弃; 为空表示不映射
+    values: dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def one_source(self) -> Self:
+        if (self.debit is None) != (self.credit is None):
+            raise ValueError("debit and credit must be given together")
+        given = [self.column is not None, self.debit is not None, self.group is not None]
+        if sum(given) != 1:
+            raise ValueError("give exactly one of column, debit/credit, group")
+        if self.part is not None and self.column is None:
+            raise ValueError("part only applies to a single column")
+        if self.part is not None and self.values:
+            raise ValueError("part and values cannot be given together")
+        if self.values and self.debit is not None:
+            raise ValueError("values only apply to column or group")
+        return self
+
+
+class PeriodSource(Model):
+    """试算表的一期: 本期与上期分列的报表, 每个数据行出一行该期的余额."""
+
+    period: Literal["current", "prior"]  # 本期或上期
+    balance: FieldSource  # 余额 (借正): 一列 (可带 part) 或借贷两列; 不取分组标题
+
+    @model_validator(mode="after")
+    def balance_not_from_group(self) -> Self:
+        if self.balance.group is not None:
+            raise ValueError("a period balance must come from a column or debit/credit columns")
+        return self
+
+
+class TablePlan(Model):
+    """规整方案: 表种类, 表头行, 要跳过的行, 分组标题, 字段与取值, 试算表分期, 去重, 日期写法与金额单位.
+
+    方案只说怎么读, 不含数据行; 由 services/table_plan.apply_plan 确定性地套到全表. 账表导入的按列对应
+    (ImportCommit.mapping) 是只有列来源的方案. 读到的公司名, 期间, 把握与理由不在方案里.
+    """
+
+    kind: TableKind | None  # 规整成哪种账表; 为空表示不是账表, 不能套用
+    header_row: int = Field(default=1, ge=1)  # 表头所在行, 文件中的实际行号 (第 1 行为 1); 之前的行 (标题) 不读
+    skip: list[RowRule] = []  # 要跳过的数据行 (合计行等), 任一条匹配即跳过; 空行总是跳过
+    group_title: GroupTitle | None = None  # 分组标题行, 标题里的值向下填充
+    fields: dict[str, FieldSource] = {}  # 字段 → 取值, 字段名同导入字段 (TableSchema); 不出现的字段不对应
+    # 本期与上期分列的试算表: 每个数据行每期出一行 (只用于试算表, 此时 fields 不写 period 与 balance_cents)
+    periods: list[PeriodSource] = []
+    # 同一唯一键的行内容完全相同时只留第一行 (如每个明细行都带发票合计的发票明细); 内容不同仍算解析失败
+    dedupe: bool = False
+    date_format: DateFormat = "dmy"  # 文本日期的写法
+    amount_unit: AmountUnit | None = None  # 金额单位; 为空时按列的原始表头 (以 cents 结尾按分, 否则按元)
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if self.kind is None and (self.fields or self.periods):
+            raise ValueError("a plan for a non-table (kind null) has no fields or periods")
+        names = set(re.compile(self.group_title.pattern).groupindex) if self.group_title else set()
+        unknown = sorted({s.group for s in self.fields.values() if s.group is not None} - names)
+        if unknown:
+            raise ValueError(f"fields use groups {unknown} that the group title pattern does not capture")
+        if len({p.period for p in self.periods}) != len(self.periods):
+            raise ValueError("each period may appear only once in periods")
+        return self
 
 
 class ApprovalLogRow(Model):

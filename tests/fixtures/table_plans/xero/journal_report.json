@@ -1,0 +1,16 @@
+{
+  "kind": "journal_entries",
+  "header_row": 5,
+  "skip": [{"column": "Date", "pattern": "^Total$"}],
+  "group_title": {"column": "Date", "pattern": "^ID (?P<journal>\\d+) (?P<narration>.*)$"},
+  "fields": {
+    "entry_no": {"column": "Journal ID"},
+    "posting_date": {"column": "Date"},
+    "created_at": {"column": "Posted Date"},
+    "account_code": {"column": "Account Code"},
+    "debit_cents": {"column": "Debit"},
+    "credit_cents": {"column": "Credit"},
+    "description": {"group": "narration"}
+  },
+  "amount_unit": "dollars"
+}

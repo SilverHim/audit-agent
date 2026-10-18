@@ -12,6 +12,7 @@ from backend.contracts.data import ApprovalLogRow, TableKind
 from backend.contracts.records import Account, JournalEntry
 from backend.persistence.stores import FINANCIAL_ROWS
 from backend.services import data_import as d
+from backend.services import table_plan as tp
 
 DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "import"
@@ -31,7 +32,7 @@ def test_demo_csv_parses_like_csv_loader(kind: TableKind) -> None:
     assert preview.suggested_kind is kind
     assert preview.sheets == [kind.value] and preview.row_count == len(sheet.rows)
 
-    rows, failures = d.convert(kind, sheet, preview.suggested_mapping, preview.suggested_date_format)
+    rows, failures = tp.convert(kind, sheet, preview.suggested_mapping, preview.suggested_date_format)
 
     assert failures == []
     with path.open(newline="", encoding="utf-8") as stream:
@@ -113,7 +114,7 @@ def test_xlsx_sheets_numbers_and_dates() -> None:
     assert [n for n, _ in ledger.rows] == [3, 4]  # 实际行号, 前面的空行也算
     preview = d.preview("IMP-1", "gl.xlsx", ["Notes", "Ledger"], ledger)
     assert preview.suggested_kind is TableKind.journal_entries
-    rows, failures = d.convert(TableKind.journal_entries, ledger, preview.suggested_mapping, "dmy")
+    rows, failures = tp.convert(TableKind.journal_entries, ledger, preview.suggested_mapping, "dmy")
     assert failures == []
     assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in rows if isinstance(r, JournalEntry)] == [
         ("J1-1", "1010", 1250, 0),
@@ -128,7 +129,7 @@ def test_xls_fixture() -> None:
     sheet = d.read_sheet("accounts.xls", data)
     preview = d.preview("IMP-1", "accounts.xls", d.sheet_names("accounts.xls", data), sheet)
     assert preview.suggested_kind is TableKind.accounts
-    rows, failures = d.convert(TableKind.accounts, sheet, preview.suggested_mapping, "dmy")
+    rows, failures = tp.convert(TableKind.accounts, sheet, preview.suggested_mapping, "dmy")
     assert failures == [] and rows[0] == Account(code="1010", name="Cash at bank", type="asset")
 
 
@@ -142,18 +143,18 @@ def test_unsupported_and_broken_files() -> None:
 def test_mapping_errors() -> None:
     sheet = sheet_of("code,name,type\n1010,Cash,asset\n")
     with pytest.raises(d.MappingError) as e:
-        d.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": "type", "colour": "x"}, "dmy")
+        tp.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": "type", "colour": "x"}, "dmy")
     assert e.value.code == "INVALID_VALUE"
     with pytest.raises(d.MappingError) as e:
-        d.convert(TableKind.accounts, sheet, {"code": "code", "name": "nope", "type": "type"}, "dmy")
+        tp.convert(TableKind.accounts, sheet, {"code": "code", "name": "nope", "type": "type"}, "dmy")
     assert e.value.code == "INVALID_VALUE"
     with pytest.raises(d.MappingError) as e:
-        d.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": None}, "dmy")
+        tp.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": None}, "dmy")
     assert e.value.code == "MISSING_FIELD"
     journal = sheet_of("entry,date,account\nJ1,2025-07-01,1010\n")
     mapping = {"entry_no": "entry", "posting_date": "date", "account_code": "account"}
     with pytest.raises(d.MappingError) as e:
-        d.convert(TableKind.journal_entries, journal, mapping, "dmy")
+        tp.convert(TableKind.journal_entries, journal, mapping, "dmy")
     assert e.value.code == "MISSING_FIELD" and "debit_cents" in e.value.message
 
 
@@ -162,7 +163,7 @@ def test_failures_report_row_column_and_value() -> None:
     sheet = sheet_of(text)
     mapping = {"period": "period", "account_code": "account", "balance_cents": "balance"}
 
-    rows, failures = d.convert(TableKind.trial_balance, sheet, mapping, "dmy")
+    rows, failures = tp.convert(TableKind.trial_balance, sheet, mapping, "dmy")
 
     assert [(f.row, f.column, f.value) for f in failures] == [
         (3, "balance", "abc"),
@@ -174,7 +175,7 @@ def test_failures_report_row_column_and_value() -> None:
 
 def test_account_type_synonyms() -> None:
     sheet = sheet_of("code,name,type\n1,A,Assets\n2,B,Income\n3,C,Expenses\n")
-    rows, failures = d.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": "type"}, "dmy")
+    rows, failures = tp.convert(TableKind.accounts, sheet, {"code": "code", "name": "name", "type": "type"}, "dmy")
     assert failures == [] and [r.type for r in rows if isinstance(r, Account)] == ["asset", "revenue", "expense"]
 
 
@@ -188,11 +189,11 @@ def test_generated_ids_and_approval_log_only_mapped_fields() -> None:
         "amount_cents": "amount",
         "balance_after_cents": "balance",
     }
-    rows, _ = d.convert(TableKind.bank_transactions, bank, mapping, "ymd")
+    rows, _ = tp.convert(TableKind.bank_transactions, bank, mapping, "ymd")
     assert [r.id for r in rows] == ["BA-01-00001", "BA-01-00002", "BA-02-00001"]
 
     log = sheet_of("entry,approver\nJ1,cfo\nJ2,\n")
-    rows, failures = d.convert(TableKind.approval_log, log, {"entry_no": "entry", "approved_by": "approver"}, "dmy")
+    rows, failures = tp.convert(TableKind.approval_log, log, {"entry_no": "entry", "approved_by": "approver"}, "dmy")
     assert failures == []
     assert [r.model_dump(exclude_unset=True) for r in rows] == [
         {"entry_no": "J1", "approved_by": "cfo"},
@@ -282,7 +283,7 @@ def test_column_names_unique_and_preview_matches_conversion() -> None:
     assert sheet.headers == ["code", "name", "name", "name (2)", "type"]
     preview = d.preview("IMP-1", "x.csv", ["x"], sheet)
     mapping = {"code": "code", "name": "name (2)", "type": "type"}
-    rows, failures = d.convert(TableKind.accounts, sheet, mapping, "dmy")
+    rows, failures = tp.convert(TableKind.accounts, sheet, mapping, "dmy")
     assert failures == [] and preview.sample["name (2)"] == "C" == rows[0].name
 
 
@@ -290,14 +291,14 @@ def test_duplicate_cents_column_keeps_units() -> None:
     """重名列的显示名加了后缀, 金额单位仍按原始表头 balance_cents 读成分."""
     sheet = d.read_sheet("tb.csv", b"period,account,balance_cents,balance_cents\ncurrent,1010,100,200\n")
     mapping = {"period": "period", "account_code": "account", "balance_cents": "balance_cents (2)"}
-    rows, failures = d.convert(TableKind.trial_balance, sheet, mapping, "dmy")
+    rows, failures = tp.convert(TableKind.trial_balance, sheet, mapping, "dmy")
     assert failures == [] and rows[0].balance_cents == 200
 
 
 def test_huge_amounts_are_failures() -> None:
     sheet = d.read_sheet("tb.csv", b"period,account,balance\ncurrent,1010,1e1000000\nprior,1010,1e30\n")
     mapping = {"period": "period", "account_code": "account", "balance_cents": "balance"}
-    _, failures = d.convert(TableKind.trial_balance, sheet, mapping, "dmy")
+    _, failures = tp.convert(TableKind.trial_balance, sheet, mapping, "dmy")
     assert [(f.row, f.column, f.value) for f in failures] == [(2, "balance", "1e1000000"), (3, "balance", "1e30")]
     with pytest.raises(d.CellError):
         d.parse_amount("9" * 400, cents=True)

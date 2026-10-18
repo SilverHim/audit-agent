@@ -1,0 +1,28 @@
+{
+  "kind": "bank_transactions",
+  "header_row": 1,
+  "fields": {
+    "id": {
+      "column": "id"
+    },
+    "bank_account_id": {
+      "column": "bank_account_id"
+    },
+    "txn_date": {
+      "column": "txn_date"
+    },
+    "amount_cents": {
+      "column": "amount_cents"
+    },
+    "balance_after_cents": {
+      "column": "balance_after_cents"
+    },
+    "description": {
+      "column": "description"
+    },
+    "reference": {
+      "column": "reference"
+    }
+  },
+  "date_format": "ymd"
+}

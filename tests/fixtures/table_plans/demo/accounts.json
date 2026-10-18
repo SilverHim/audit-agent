@@ -1,0 +1,16 @@
+{
+  "kind": "accounts",
+  "header_row": 1,
+  "fields": {
+    "code": {
+      "column": "code"
+    },
+    "name": {
+      "column": "name"
+    },
+    "type": {
+      "column": "type"
+    }
+  },
+  "date_format": "dmy"
+}
