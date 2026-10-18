@@ -13,13 +13,32 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
+from backend.contracts.data import (
+    CategoryVersion,
+    CheckInputs,
+    CheckRun,
+    ContractVersion,
+    DataCheck,
+    DataReadiness,
+    DataRequest,
+    DataSource,
+    ExtractionRecord,
+    ImportSession,
+    TableKind,
+    TableStats,
+    TableVersion,
+    XeroSource,
+)
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
+    AgentId,
     AsicCompanyRecord,
     AuditObjective,
     ClientProfile,
     Contract,
+    DocumentChannel,
+    DocumentFailedStep,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -39,6 +58,8 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.records import (
+    Account,
+    AccountCategory,
     BankAccount,
     BankTransaction,
     DeliveryNote,
@@ -78,8 +99,21 @@ class FinancialDataStore(Protocol):
 
     async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]: ...
 
-    async def save_contract(self, eid: str, contract: Contract) -> None:
-        """DOC-04 写入, 按 id 覆盖合同与条款."""
+    async def save_contract(
+        self,
+        eid: str,
+        contract: Contract,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """DOC-04 写入与审计师修改共用: 按 id 覆盖合同与条款为这一版, 并在 extraction_versions 记这一版的完整内容
+        (同版本已有则覆盖, 抽取重做时幂等). changed_by, field, reason 为修改人, 改的字段与理由, 抽取所得为 A3 与空."""
+        ...
+
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        """合同的各版本, 按版本升序; 没有记录 (迁移 0004 之前抽取的) 为空."""
         ...
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]: ...
@@ -115,9 +149,23 @@ class EvidenceStore(Protocol):
     """证据原件的存储 (B 实现): 存 PDF, 登记文件, 读页面文本."""
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
-        """存原件, 算 sha256, 登记 documents; 同一哈希重复保存返回已有记录."""
+        """存原件, 算 sha256, 登记 documents; 同一哈希重复保存返回已有记录.
+
+        PDF 按 pdfplumber 数页数, 读不出 (损坏) 记 0 照样登记; 其他媒体类型页数记 1. status 为登记时的处理状态
+        (导入的账表原件已转换, 记 extracted).
+        """
         ...
 
     async def path(self, eid: str, document_id: str) -> Path: ...
@@ -128,6 +176,19 @@ class EvidenceStore(Protocol):
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
         """在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        ...
+
+    async def update_document(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        status: DocumentStatus,
+        failed_step: DocumentFailedStep | None,
+    ) -> DocumentRef:
+        """A3 处理上传文件时改登记的类型, 可靠性, 状态与卡住的步骤, 返回改后的登记; 没有该文件抛 FileNotFoundError."""
         ...
 
 
@@ -144,6 +205,154 @@ class DatasetLoader(Protocol):
 
     def datasets(self) -> list[str]:
         """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""
+        ...
+
+
+class DataStore(Protocol):
+    """数据管理的存储 (B 实现): 数据版本与就绪确认, 账表统计. 表见开发接口文档第 9 节."""
+
+    async def readiness(self, eid: str) -> DataReadiness:
+        """数据版本与就绪确认; 没接入过数据时版本为 0, 未确认."""
+        ...
+
+    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+        """记审计师确认数据已齐 (已确认的不改, 保留第一次的人与时间), 返回确认后的状态.
+
+        项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def stats(self, eid: str) -> dict[TableKind, TableStats]:
+        """各账表当前的行数与日期范围, 每种账表一项."""
+        ...
+
+    async def versions(self, eid: str) -> list[TableVersion]:
+        """全部已写入的账表版本 (不含行快照), 按数据版本升序."""
+        ...
+
+    async def checks(self, eid: str) -> list[DataCheck]:
+        """最近一次体检的各项结果, 按 CheckId 顺序; 没体检过为空."""
+        ...
+
+    async def open_requests(self, eid: str) -> int:
+        """待补交 (status open) 的请求数."""
+        ...
+
+    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+        """体检要用的财务数据汇总 (按 SQL 汇总, 口径见 services.data_quality.summarize); 发生额只算入账日期在
+        [period_start, period_end] 内的分录."""
+        ...
+
+    async def check_run(self, eid: str) -> CheckRun | None:
+        """最近一次体检 (各项结果, 体检时的数据版本与时间); 没体检过为 None."""
+        ...
+
+    async def requests(self, eid: str) -> list[DataRequest]:
+        """全部补交请求 (含已收到的), 按提出时间升序, 同时提出的按 data_quality.REQUEST_ORDER."""
+        ...
+
+    async def table_rows(
+        self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """某张账表当前的行 (账表查看): 返回 (符合搜索的总行数, 这一页的行); 行为列名 → 值, 不含 engagement_id.
+        q 为不分大小写的包含匹配: 科目表查代码与名称, 其余表查各文本列, 审批日志查各列. 排序: 科目表按代码, 试算表按
+        科目, 期间, 总账按入账日期, 凭证号, 行 ID, 其余按日期与单号. 科目表的行另带 balance_current_cents,
+        balance_prior_cents (试算表两期余额, 没有为空) 与 edited (分类依据为 auditor). 审批日志不成表, 取最新一版的
+        行快照."""
+        ...
+
+    async def account(self, eid: str, code: str) -> Account | None:
+        """科目表中的一个科目; 没有为 None."""
+        ...
+
+    async def category_history(self, eid: str) -> dict[str, list[CategoryVersion]]:
+        """各科目的分类历史 (科目代码 → 各版, 按版本升序); 没有历史的科目 (数据集载入后没改过的) 不在其中."""
+        ...
+
+    async def set_category(
+        self, eid: str, code: str, category: AccountCategory, *, actor: str, reason: str
+    ) -> CategoryVersion:
+        """审计师修改科目的标准分类, 一个事务内: 没有分类历史时先补记当前分类为第 1 版 (修改人 A3, 时间取首次载入);
+        记新的一版 (依据 auditor, 修改人, 理由); 科目表的分类与依据改为这一版; 数据版本 +1. 返回新的一版.
+        科目不存在抛 LookupError; 项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
+        """一个事务内记下一次体检: data_checks 换成这次的各项结果, 并按 ID 写入 (新建或覆盖) 给出的补交请求.
+        项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def extraction_versions(
+        self, eid: str, target_type: str | None = None, target_id: str | None = None
+    ) -> list[ExtractionRecord]:
+        """抽取结果的各版 (可按类型与对象筛), 按类型, 对象, 版本升序."""
+        ...
+
+    async def bump_version(self, eid: str) -> int:
+        """数据版本 +1 (修改抽取结果, 科目分类等不经 write_tables 的数据变动), 返回新版本."""
+        ...
+
+    async def save_extraction(
+        self,
+        eid: str,
+        target_type: str,
+        target_id: str,
+        version: int,
+        data: Mapping[str, Any],
+        *,
+        changed_by: str,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """在 extraction_versions 记一版抽取结果 (同版本已有则覆盖). target_type: confirmation (函证, 审计师修改),
+        reply (上传的回函副本的抽取结果, target_id 为文件 ID)."""
+        ...
+
+    async def write_tables(
+        self,
+        eid: str,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        source: DataSource,
+        actor: str,
+        file_name: str | None = None,
+        document_id: str | None = None,
+        import_id: str | None = None,
+        request_id: str | None = None,
+    ) -> int:
+        """新数据版本写入 (导入与 Xero 同步共用), 返回写入后的数据版本. 一个事务内: 数据版本 +1; 各表按 TableKind 顺序
+        整表替换 (审批日志不成表, 按凭证号补进总账的录入人, 审批人与审批时间, 只改对应了的列; 写总账时再套用最新一版
+        审批日志); 科目表对照分类历史 (审计师改过的沿用审计师的分类, 系统归类有变化的记一版); 每张表在 data_imports
+        记一行版本 (含行快照), 有 import_id 时把该导入会话置 committed. 行模型: 科目表 Account, 审批日志
+        ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
+        """暂存上传的原文件并登记导入会话 (status parsed)."""
+        ...
+
+    async def import_session(self, eid: str, import_id: str) -> tuple[ImportSession, bytes] | None:
+        """导入会话与暂存的原文件; 没有该会话为 None."""
+        ...
+
+    async def update_import(
+        self,
+        eid: str,
+        import_id: str,
+        *,
+        sheet: str,
+        date_format: str | None = None,
+        mapping: Mapping[str, str | None] | None = None,
+        row_count: int | None = None,
+    ) -> None:
+        """记导入会话当前的工作表; 提交时另记日期写法, 列对应与数据行数 (为空的不改). 只改未提交 (parsed) 的会话."""
+        ...
+
+
+class XeroConnections(Protocol):
+    """项目的 Xero 连接记录 (需求 R12 提供实现), 数据概览的 sources.xero 取它."""
+
+    async def source(self, eid: str) -> XeroSource:
+        """连接状态, 组织名, 最近同步时间与同步覆盖的账表; 没连接过为 not_connected."""
         ...
 
 

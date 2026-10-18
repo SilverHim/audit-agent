@@ -11,6 +11,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "langgraph>=1.2",
     "langgraph-checkpoint-postgres>=3.1.2",
+    "openpyxl>=3.1.5",
     "pdfplumber>=0.11.10",
     "psycopg[binary,pool]>=3.3.6",
     "pwdlib[argon2]>=0.3.1",
@@ -19,6 +20,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "sqlalchemy[asyncio]>=2.0.54",
     "sqlmodel>=0.0.46",
+    "xlrd>=2.0.2",
 ]
 
 [build-system]
@@ -32,7 +34,6 @@ packages = ["src/backend"]
 dev = [
     "langgraph-cli[inmem]>=0.4.31",
     "mypy>=2.3.1",
-    "openpyxl>=3.1.5",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -64,7 +65,7 @@ mypy_path = "src"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["pdfplumber.*"]
+module = ["pdfplumber.*", "xlrd.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

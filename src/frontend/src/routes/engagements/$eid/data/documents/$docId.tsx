@@ -10,23 +10,19 @@ import {
   evidenceListDocumentsOptions,
 } from '@/client/@tanstack/react-query.gen'
 import { evidenceGetEvidence } from '@/client/sdk.gen'
-import type { Confirmation, Contract, DocumentRef, EvidencePointer } from '@/client/types.gen'
+import type { Confirmation, Contract, EvidencePointer } from '@/client/types.gen'
 import { PdfViewer } from '@/components/pdf-viewer'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useEditExtraction } from '@/lib/data-api'
-import { apiMessage } from '@/lib/errors'
+import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { audToCents, formatAud } from '@/lib/money'
-import { NotAvailable } from '@/lib/new-api'
 import type { Messages } from '@/locales/en'
 
 export const Route = createFileRoute('/engagements/$eid/data/documents/$docId')({ component: DocumentView })
-
-// 后端 R14 上线后文件登记带这些字段
-type Document = DocumentRef & { media_type?: string; uploaded_by?: string | null }
 
 type Item = {
   id: string
@@ -173,7 +169,7 @@ function DocumentView() {
   const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
   const contracts = useQuery(evidenceListContractsOptions({ path: { eid } }))
   const confirmations = useQuery(evidenceListConfirmationsOptions({ path: { eid } }))
-  const doc = (documents.data as Document[] | undefined)?.find((item) => item.id === docId)
+  const doc = documents.data?.find((item) => item.id === docId)
   const mediaType = doc?.media_type ?? 'application/pdf'
   const isPdf = mediaType === 'application/pdf'
   const isImage = mediaType.startsWith('image/')
@@ -319,7 +315,7 @@ function DocumentView() {
           ) : null}
           <div className="rounded-xl bg-[#e9ecf1] p-6">
             {error ? (
-              <p className="text-destructive text-sm">{apiMessage(error)}</p>
+              <p className="text-destructive text-sm">{errorText(error, t)}</p>
             ) : !bytes ? (
               <p className="text-muted-foreground text-sm">{t.evidence.loadingPdf}</p>
             ) : isPdf ? (
@@ -489,8 +485,7 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
                     toast.success(t.docView.saved)
                     onClose()
                   },
-                  onError: (error) =>
-                    toast.error(error instanceof NotAvailable ? t.importDialog.unavailable : apiMessage(error)),
+                  onError: (error) => toast.error(errorText(error, t)),
                 },
               )
             }

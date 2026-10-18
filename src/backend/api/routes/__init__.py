@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from backend.api.routes import (
     auth,
     conversation,
+    data,
     datasets,
     deferrals,
     engagements,
@@ -28,8 +29,10 @@ for module in (
     deferrals,
     conversation,
     evidence,
+    data,
     reports,
     standards,
     settings,
 ):
     api_router.include_router(module.router)
+api_router.include_router(data.schemas_router)

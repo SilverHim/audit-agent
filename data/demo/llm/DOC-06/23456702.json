@@ -1,0 +1,49 @@
+{
+  "confirming_party": "Bluegum Savings Bank Limited",
+  "account_no": "23456702",
+  "confirmed_balance_cents": 40000000,
+  "balance_date": "2026-06-30",
+  "receipt_channel": "direct_email",
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-0019ab721f75",
+      "locator": "confirming_party",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-0019ab721f75",
+      "locator": "account_no",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-0019ab721f75",
+      "locator": "confirmed_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-0019ab721f75",
+      "locator": "balance_date",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-0019ab721f75",
+      "locator": "receipt_channel",
+      "page": 2,
+      "reliability": "external_original"
+    }
+  ]
+}

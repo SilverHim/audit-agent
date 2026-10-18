@@ -4,6 +4,7 @@
 """
 
 import copy
+import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -12,6 +13,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.checkup import DataCheckup
 from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
@@ -20,6 +22,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     AuditObjective,
+    Confirmation,
     Decision,
     Engagement,
     Judgment,
@@ -52,6 +55,10 @@ from backend.orchestration.scheduler import build_schedule
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
+
+logger = logging.getLogger(__name__)
+AWAITING_DATA = "data"  # 等财务数据就绪的等待载荷 {"awaiting": "data"} (p1_await_data, 需求 R10)
+DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
 
 
 class FieldworkInput(TypedDict):
@@ -376,7 +383,11 @@ class GraphNodes:
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
         procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
-        procedure_run = procedure_run.model_copy(update={"instance": instance})
+        # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
+        data_version = None
+        if template.phase is not Phase.P0_Acceptance:
+            data_version = (await self.deps.data.readiness(engagement.id)).data_version
+        procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
         if stored_run is None or stored_run.status is RunStatus.running:
@@ -540,15 +551,31 @@ class GraphNodes:
         return {}  # 四道闸门共用, 不处理业务; 出口由路由函数按 GateDecision 决定
 
     # ── P1 ──
-    async def p1_ingest(self, state: EngagementState) -> StatePatch:
-        """载入合成数据集 (财务表入库, 合同 PDF 登记为证据文件), 再由 A3 执行 DOC-04 抽取合同要素.
+    async def p1_await_data(self, state: EngagementState) -> StatePatch:
+        """等财务数据就绪 (需求 R10): 审计师在数据管理页接入数据并确认已齐 (POST /data/ready) 之前, 节点内
+        interrupt() 等待, 载荷 {"awaiting": "data"}. 已确认 (含数据集载入视同确认) 时直接通过, 不写状态.
 
-        DatasetLoader.load 已载入则跳过, 节点重放时再调一次无妨.
+        确认写入 Store 后以 Command(resume=DATA_READY) 恢复, 节点从头执行, 读到已确认即返回, 不再调 interrupt().
+        单独成节点而不放进 p1_ingest: 恢复值没被消费时会交给同一节点的下一个 interrupt(), 即 DOC-04 失败后的等待,
+        被当成复核决定 ID. 这里节点内只有这一个等待, 恢复值不会被别处取走.
+        恢复时仍未确认 (绕过 /data/ready 恢复) 抛 LookupError.
+
+        进节点先由 A3 体检 (需求 R15; 体检结果已对应当前数据版本时跳过, 恢复与重放不重复): 缺的必需表各提一份补交
+        请求, 已确认就绪的 (如数据集载入) 也在这里第一次体检. 体检出错只记日志, 不影响等待与推进.
         """
-        engagement = await self.deps.engagement_store.get(state["engagement_id"])
-        if engagement is None:
-            raise LookupError(f"Engagement {state['engagement_id']} not found")
-        await self.deps.datasets.load(engagement.id, engagement.dataset)
+        eid = state["engagement_id"]
+        try:
+            await DataCheckup(self.deps).run_if_stale(eid)
+        except Exception:
+            logger.exception("P1 等数据时体检失败: %s", eid)
+        readiness = await self.deps.data.readiness(eid)
+        if readiness.ready_at is None:
+            interrupt({"awaiting": AWAITING_DATA})
+            raise LookupError(f"{state['engagement_id']} 恢复时数据仍未确认就绪: 须经 POST /data/ready 确认后恢复")
+        return {}
+
+    async def p1_ingest(self, state: EngagementState) -> StatePatch:
+        """A3 执行 DOC-04 抽取合同要素. 财务数据已在 p1_await_data 之前接入, 这里不再载入数据集."""
         [procedure_id] = NODE_PROCEDURES["p1_ingest"]
         return await self.execute(state, procedure_id)
 
@@ -669,9 +696,10 @@ class GraphNodes:
     async def await_events(self, state: EngagementState) -> StatePatch:
         """等审计师处理 P2 的复核任务: interrupt() 暂停, 决定写入 Store 后以 Command(resume=决定 ID) 恢复.
 
-        恢复后从 Store 读回复核决定, 任务, 判断, 例外, 错报与程序的最新版本, 整体并入状态 (接口文档第 7 节),
+        恢复后从 Store 读回复核决定, 任务, 判断, 例外, 错报, 函证与程序的最新版本, 整体并入状态 (接口文档第 7 节),
         之后回 fan_in 重新判断去向. 决定写入的对象都在其中, 不必按决定类型逐一推断;
-        程序包按状态中的顺序换成 Store 的最新版本.
+        程序包按状态中的顺序换成 Store 的最新版本. 函证也读回: 审计师在图停着时可修改回函抽取结果 (需求 R14,
+        只写 Store), 之后的节点 (DOC-06 重跑, CSH-02) 须在库中最新版本之上出新版本.
         恢复值在 Store 中没有对应的决定 (如绕过 DecisionSubmit 传入未写入的 ID) 时抛 LookupError, 写明原因与恢复办法:
         LangGraph 把恢复值交给 interrupt() 后, 节点出错再恢复仍取回同一个值, 须以 fan_in 身份重写检查点,
         再让图继续执行一步, 重新停到等复核.
@@ -693,6 +721,7 @@ class GraphNodes:
             "judgments": await store.latest(eid, Judgment),
             "exceptions": await store.latest(eid, AuditException),
             "misstatements": await store.latest(eid, Misstatement),
+            "confirmations": await store.latest(eid, Confirmation),
             "procedure_pack": [latest.get(p.id, p) for p in state["procedure_pack"]],
         }
 

@@ -15,9 +15,8 @@ import {
   useCommitImport,
   useTableSchemas,
 } from '@/lib/data-api'
-import { apiMessage } from '@/lib/errors'
+import { errorText, type ParseFailure, parseFailures } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { NotAvailable } from '@/lib/new-api'
 
 type Mapping = Record<string, string | null>
 
@@ -57,6 +56,7 @@ export function ImportDialog({
   const [kind, setKind] = useState<TableKind>(presetKind ?? 'accounts')
   const [dateFormat, setDateFormat] = useState<DateFormat>('dmy')
   const [mapping, setMapping] = useState<Mapping>({})
+  const [failures, setFailures] = useState<ParseFailure[] | null>(null)
 
   const schema = schemas.find((item) => item.kind === kind)
   const used = new Set(Object.values(mapping).filter(Boolean))
@@ -66,6 +66,7 @@ export function ImportDialog({
   const reset = () => {
     setPreview(null)
     setMapping({})
+    setFailures(null)
     if (input.current) input.current.value = ''
   }
 
@@ -75,6 +76,7 @@ export function ImportDialog({
       const result = await startImport(eid, file, requestId)
       const nextKind = presetKind ?? result.suggested_kind ?? kind
       setPreview(result)
+      setFailures(null)
       setKind(nextKind)
       setDateFormat(result.suggested_date_format)
       setMapping(
@@ -85,7 +87,7 @@ export function ImportDialog({
         ),
       )
     } catch (error) {
-      toast.error(error instanceof NotAvailable ? t.importDialog.unavailable : apiMessage(error))
+      toast.error(errorText(error, t))
     } finally {
       setReading(false)
     }
@@ -97,8 +99,9 @@ export function ImportDialog({
       const result = await changeImportSheet(eid, preview.import_id, sheet)
       setPreview(result)
       setMapping(autoMap(schema, result.columns, result.suggested_mapping))
+      setFailures(null)
     } catch (error) {
-      toast.error(apiMessage(error))
+      toast.error(errorText(error, t))
     }
   }
 
@@ -109,6 +112,7 @@ export function ImportDialog({
 
   const submit = () => {
     if (!preview) return
+    setFailures(null)
     commit.mutate(
       { importId: preview.import_id, body: { kind, sheet: preview.sheet, date_format: dateFormat, mapping } },
       {
@@ -116,7 +120,12 @@ export function ImportDialog({
           toast.success(t.importDialog.done(t.data.tables[result.kind] ?? result.kind, result.records))
           close(false)
         },
-        onError: (error) => toast.error(apiMessage(error)),
+        // 解析失败在窗口里逐处列出, 改了对应或日期格式后可直接再导入
+        onError: (error) => {
+          const found = parseFailures(error)
+          if (found) setFailures(found)
+          else toast.error(errorText(error, t))
+        },
       },
     )
   }
@@ -328,6 +337,38 @@ export function ImportDialog({
                   </table>
                 </div>
               </div>
+
+              {failures?.length ? (
+                <div role="alert" className="flex flex-col gap-2 rounded-[10px] bg-risk-soft px-3.5 py-3">
+                  <span className="font-semibold text-[13px] text-risk">{t.importDialog.parseErrors}</span>
+                  <div className="max-h-56 overflow-y-auto">
+                    <table className="w-full border-collapse text-[13px]">
+                      <thead>
+                        <tr className="text-left text-[12px] text-muted-foreground">
+                          <th scope="col" className="w-16 py-1 pr-3 font-semibold">
+                            {t.importDialog.parseCols.row}
+                          </th>
+                          <th scope="col" className="w-[40%] py-1 pr-3 font-semibold">
+                            {t.importDialog.parseCols.column}
+                          </th>
+                          <th scope="col" className="py-1 font-semibold">
+                            {t.importDialog.parseCols.value}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {failures.map((failure) => (
+                          <tr key={`${failure.row}-${failure.column}`} className="border-line-soft border-t">
+                            <td className="py-1 pr-3 font-mono">{failure.row}</td>
+                            <td className="py-1 pr-3">{failure.column}</td>
+                            <td className="break-all py-1 font-mono">{failure.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
             </>
           )}
         </div>

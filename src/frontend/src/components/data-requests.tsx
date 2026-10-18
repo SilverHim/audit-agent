@@ -6,9 +6,8 @@ import { StatusPill } from '@/components/chrome'
 import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { type DataRequest, useDataReady, useUploadDocuments } from '@/lib/data-api'
-import { apiMessage } from '@/lib/errors'
+import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { NotAvailable } from '@/lib/new-api'
 import { procedureName } from '@/lib/review'
 import type { Messages } from '@/locales/en'
 
@@ -21,7 +20,7 @@ function requestTitle(request: DataRequest, t: Messages): string {
 }
 
 function requestReason(request: DataRequest, t: Messages, lang: 'zh' | 'en'): string {
-  const params = request.reason_params
+  const params = request.reason_params ?? {}
   if (request.reason_code === 'field_unavailable') {
     const fields = (Array.isArray(params.fields) ? params.fields : []).map(
       (field) => t.data.fieldNames[String(field)] ?? String(field),
@@ -70,8 +69,7 @@ export function DataRequestCard({
     fileInput.current?.click()
   }
 
-  const onError = (error: unknown) =>
-    toast.error(error instanceof NotAvailable ? t.importDialog.unavailable : apiMessage(error))
+  const onError = (error: unknown) => toast.error(errorText(error, t))
 
   return (
     <section
@@ -117,7 +115,7 @@ export function DataRequestCard({
               <div className="flex min-w-0 flex-[1_1_360px] flex-col gap-1.5">
                 <span className="font-semibold text-[15px]">{requestTitle(request, t)}</span>
                 <dl className="m-0 grid grid-cols-[72px_minmax(0,1fr)] gap-x-2.5 gap-y-1 text-[13px]">
-                  {request.used_for.length ? (
+                  {request.used_for?.length ? (
                     <>
                       <dt className="text-muted-foreground">{t.requests.usedFor}</dt>
                       <dd className="m-0">

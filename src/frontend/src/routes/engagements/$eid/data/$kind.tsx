@@ -8,7 +8,9 @@ import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { useActorName } from '@/lib/actor'
 import {
+  type AccountCategory,
   CATEGORIES_BY_TYPE,
   type CategoryBasis,
   TABLE_KINDS,
@@ -19,9 +21,8 @@ import {
   useDataTable,
   useSetAccountCategory,
 } from '@/lib/data-api'
-import { apiMessage } from '@/lib/errors'
+import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { NotAvailable } from '@/lib/new-api'
 
 type Search = { q?: string; page?: number; selected?: string }
 
@@ -32,7 +33,9 @@ export const Route = createFileRoute('/engagements/$eid/data/$kind')({
   validateSearch: (search: Record<string, unknown>): Search => ({
     q: typeof search.q === 'string' && search.q ? search.q : undefined,
     page: typeof search.page === 'number' && search.page > 1 ? search.page : undefined,
-    selected: typeof search.selected === 'string' ? search.selected : undefined,
+    // 科目代码是纯数字时, 手输的地址会被解析成数字
+    selected:
+      typeof search.selected === 'string' || typeof search.selected === 'number' ? String(search.selected) : undefined,
   }),
   component: DataTablePage,
 })
@@ -50,7 +53,7 @@ type AccountRow = {
   code: string
   name: string
   type: string
-  category: string | null
+  category: AccountCategory | null
   category_basis: CategoryBasis
   balance_current_cents: number | null
   balance_prior_cents: number | null
@@ -134,7 +137,7 @@ function DataTablePage() {
             onChange={(event) => setQuery(event.target.value)}
           />
           {table.error ? (
-            <p className="text-destructive text-sm">{apiMessage(table.error)}</p>
+            <p className="text-destructive text-sm">{errorText(table.error, t)}</p>
           ) : !data?.rows.length ? (
             <p className="rounded-xl border bg-card px-4 py-4 text-[13px] text-muted-foreground">
               {table.isPending ? t.app.loading : t.dataTable.none}
@@ -263,9 +266,10 @@ function AccountsTable({
 
 function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }) {
   const { t, formatDateTime } = useI18n()
+  const actorName = useActorName()
   const history = useAccountHistory(eid, row?.code ?? null)
   const save = useSetAccountCategory(eid)
-  const [category, setCategory] = useState<string | null>(null)
+  const [category, setCategory] = useState<AccountCategory | null>(null)
   const [reason, setReason] = useState('')
 
   // 换选科目时清空未保存的修改
@@ -282,8 +286,8 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
       </aside>
     )
   }
-  const draft = category ?? row.category ?? ''
-  const canSave = draft !== (row.category ?? '') && reason.trim().length > 0
+  const draft = category ?? row.category
+  const canSave = draft !== null && draft !== row.category && reason.trim().length > 0
   return (
     <aside
       aria-label={row.name}
@@ -302,8 +306,8 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
         {t.dataTable.cols.category}
         <select
           className="h-10 rounded-[9px] border border-input bg-card px-2.5 font-normal text-[14px]"
-          value={draft}
-          onChange={(event) => setCategory(event.target.value)}
+          value={draft ?? ''}
+          onChange={(event) => setCategory(event.target.value as AccountCategory)}
         >
           {row.category ? null : <option value="">{t.dataTable.unmapped}</option>}
           {(CATEGORIES_BY_TYPE[row.type] ?? []).map((item) => (
@@ -345,6 +349,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
           type="button"
           disabled={!canSave || save.isPending}
           onClick={() =>
+            draft &&
             save.mutate(
               { code: row.code, category: draft, reason: reason.trim() },
               {
@@ -353,8 +358,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
                   setCategory(null)
                   setReason('')
                 },
-                onError: (error) =>
-                  toast.error(error instanceof NotAvailable ? t.importDialog.unavailable : apiMessage(error)),
+                onError: (error) => toast.error(errorText(error, t)),
               },
             )
           }
@@ -369,7 +373,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
             <div key={version.version} className="flex flex-col gap-0.5 text-[13px]">
               <span className="flex justify-between gap-2">
                 <span className="font-semibold">
-                  {t.dataTable.version(version.version)} · {version.changed_by}
+                  {t.dataTable.version(version.version)} · {actorName(version.changed_by)}
                 </span>
                 <span className="text-muted-foreground">{formatDateTime(version.changed_at)}</span>
               </span>

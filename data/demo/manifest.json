@@ -72,12 +72,52 @@
       "sha256": "ddf742ead4105ac6aa21d458471a8bd100b80826bdacc300ce2e12a0bfaef918"
     },
     {
+      "path": "llm/DOC-06/12345601.json",
+      "sha256": "7e8c39a760605a472affabfc13dc46ffff5fc10ce7cc104724cc79a808d4233c"
+    },
+    {
+      "path": "llm/DOC-06/23456702.json",
+      "sha256": "b941515e9d5aad51bfe14a9ee280267943f10dbdb585b28bcde3e04749dd6d58"
+    },
+    {
       "path": "llm/DOC-06/BA-01.json",
       "sha256": "7e8c39a760605a472affabfc13dc46ffff5fc10ce7cc104724cc79a808d4233c"
     },
     {
       "path": "llm/DOC-06/BA-02.json",
       "sha256": "b941515e9d5aad51bfe14a9ee280267943f10dbdb585b28bcde3e04749dd6d58"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/12345601.json",
+      "sha256": "fa6249164dd405f2a855289f8feb5c6a08409a149a45fcc8fef4f0f17aab12ed"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/23456702.json",
+      "sha256": "fa6249164dd405f2a855289f8feb5c6a08409a149a45fcc8fef4f0f17aab12ed"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/CON-001.json",
+      "sha256": "ff981fb9704eada085a983f98b2d73a992cb9417adc23335b951ab4fd85d74ae"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/CON-002.json",
+      "sha256": "ff981fb9704eada085a983f98b2d73a992cb9417adc23335b951ab4fd85d74ae"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/CON-003.json",
+      "sha256": "ff981fb9704eada085a983f98b2d73a992cb9417adc23335b951ab4fd85d74ae"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/board-minutes.json",
+      "sha256": "59c3d0c2e5e652a20cfae343149f2269c6203685c156627ba9db93acc0b3e5f2"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/default.json",
+      "sha256": "7308627dbd7885f3eb5ec86130c189a248bc65d9dafff4df01b051e4105858be"
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/draft-financial-statements.json",
+      "sha256": "f16623fde986fd7397019563e59a1fa9cb77643fb692a0eb2c2015ff5d4b46d8"
     },
     {
       "path": "llm/GEN-09/BA-01-r1.json",

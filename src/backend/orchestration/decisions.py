@@ -62,7 +62,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import rerun_subjects, save_outputs, uncovered_objectives, update_procedure
 from backend.orchestration.query import current_gate
-from backend.orchestration.runner import GraphRunner, resume_required, waiting_payloads
+from backend.orchestration.runner import GraphRunner, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.review_queue import attribute_exceptions
 
@@ -826,7 +826,7 @@ class GraphDecisionSubmit:
             raise DecisionRejected("TASK_NOT_FOUND", record.task_id)
         if task.status is not TaskStatus.pending:
             raise DecisionRejected("TASK_NOT_PENDING", f"{task.id} 已决定")
-        waits = waiting_payloads(snapshot)
+        waits = review_waits(snapshot)  # 等数据就绪不收复核决定
         if not waits:
             raise DecisionRejected("NOT_AWAITING_REVIEW", "当前不在等复核")
         # 等待中的节点上次恢复时出错 (如收到不在 Store 中的决定 ID): 它此后每次恢复都取回旧值再出错, 新决定送不到它,

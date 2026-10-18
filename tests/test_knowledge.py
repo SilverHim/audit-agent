@@ -506,8 +506,14 @@ def test_fake_documents_from_manifest() -> None:
 
 def test_runtime_fixtures_match_test_fixtures() -> None:
     """运行用 data/demo/llm (B 的生成器由本目录复制并映射文档 ID) 与测试用 fixture 内容相同: 文档 ID 已对齐,
-    映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出."""
+    映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出. 上传文件处理用的固定输出 (需求 R14) 放在
+    llm_variants/upload, 不进主固定输出 (主流程要求主固定输出各用一次); 其中演示也用的分类与回函副本同样要一致,
+    agreement (只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
     test_files = {p.relative_to(FIXTURES): p for p in FIXTURES.rglob("*.json")}
+    upload = FIXTURES.parent / "llm_variants" / "upload"
+    test_files |= {
+        p.relative_to(upload): p for p in upload.rglob("*.json") if p.parent.name in ("DOC-CLASSIFY", "DOC-06")
+    }
     runtime = DEMO / "llm"
     runtime_files = {p.relative_to(runtime): p for p in runtime.rglob("*.json")}
 

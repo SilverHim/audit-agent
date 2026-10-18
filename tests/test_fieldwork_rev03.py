@@ -137,10 +137,21 @@ async def test_con003_names_transfer_point_return_right_and_rebate() -> None:
     assert locators == {"CON-003-T2", "CON-003-T3", "CON-003-T4"}
 
 
-async def test_document_missing_from_state_raises() -> None:
+async def test_document_missing_everywhere_raises() -> None:
+    """合同的文件登记状态里没有, 存储里也没有: 报 LookupError (DOC-04 之后上传的合同只在存储里, 见下条)."""
     agent, ctx, _ = setup(fake_engine(), documents=EXTRACTED[:2])
+    financial = agent.deps.financial_store
+    assert isinstance(financial, FakeFinancialStore)
+    financial.document_refs[:] = [d for d in financial.document_refs if d.file_name != "CON-003.pdf"]
     with pytest.raises(LookupError, match="CON-003"):
         await agent.run(ctx)
+
+
+async def test_document_only_in_store_is_used() -> None:
+    """DOC-04 之后上传的合同由 A3 直接处理, 文件登记只在存储里 (需求 R14): REV-03 照样取到, 正常判断."""
+    agent, ctx, _ = setup(fake_engine(), documents=EXTRACTED[:2])
+    patch = await agent.run(ctx)
+    assert sorted(j.subject_id for j in patch["judgments"]) == ["CON-001", "CON-002", "CON-003"]
 
 
 async def test_no_contracts_still_succeeds() -> None:

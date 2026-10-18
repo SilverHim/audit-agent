@@ -1,8 +1,11 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
+import csv
+import functools
 import hashlib
 import json
+import tempfile
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -14,12 +17,28 @@ from typing import Any, ClassVar, Literal, TypeVar, cast
 import httpx
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from backend.adapters.llm import MockLLMClient
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
+from backend.contracts.data import (
+    ApprovalLogRow,
+    CheckInputs,
+    CheckRun,
+    ContractVersion,
+    DataCheck,
+    DataReadiness,
+    DataRequest,
+    DataSource,
+    ExtractionRecord,
+    ImportSession,
+    TableKind,
+    TableStats,
+    TableVersion,
+)
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
@@ -39,6 +58,8 @@ from backend.contracts.models import (
     Contract,
     Decision,
     Direction,
+    DocumentChannel,
+    DocumentFailedStep,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -104,6 +125,7 @@ from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -506,6 +528,7 @@ class FakeFinancialStore:
         # 合同, 合同编号 -> 合同, 各项目共用; 预置的与 save_contract 写入的都在这里
         self.saved_contracts: dict[str, Contract] = {c.id: c for c in contracts or []}
         self.save_calls: list[str] = []  # save_contract 的每次调用 (合同编号)
+        self.contract_versions: dict[str, list[ContractVersion]] = {}  # 合同编号 → save_contract 记下的各版本
 
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
         self.record_calls.append((source_type, source_id))
@@ -535,9 +558,31 @@ class FakeFinancialStore:
         """按写入顺序返回 (真实实现的顺序没有约定, 调用方自行排序)."""
         return [c for cid, c in self.saved_contracts.items() if ids is None or cid in ids]
 
-    async def save_contract(self, eid: str, contract: Contract) -> None:
+    async def save_contract(
+        self,
+        eid: str,
+        contract: Contract,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """覆盖合同, 并按 (合同编号, 版本) 记一版 (同版本覆盖), 同真实实现."""
         self.save_calls.append(contract.id)
         self.saved_contracts[contract.id] = contract
+        versions = [v for v in self.contract_versions.get(contract.id, []) if v.version != contract.version]
+        version = ContractVersion(
+            version=contract.version,
+            contract=contract,
+            field=field,
+            reason=reason,
+            changed_by=changed_by,
+            changed_at=datetime.now(UTC),  # 同真实实现取写入时间
+        )
+        self.contract_versions[contract.id] = sorted([*versions, version], key=lambda v: v.version)
+
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        return list(self.contract_versions.get(contract_id, []))
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
         return [d for d in self.document_refs if type is None or d.type is type]
@@ -827,13 +872,29 @@ class FakeEvidenceStore:
         # save 的每次调用的 (文件名, 内容 sha256, 文件类型, 可靠性), 检查存档参数
         self.save_args: list[tuple[str, str, DocumentType, Reliability]] = []
         self.page_counts: dict[str, int] = {}  # save 登记的页数, 文件名 -> 页数; 缺省 2
+        self.contents: dict[str, bytes] = {}  # save 收到的原件, 文件 ID → 内容; path 据此写出
+        # 文件名 → 固定的文件 ID: 让上传的假文件用固定输出里的占位 ID (如 CON-001.pdf → DOC-CON001000000)
+        self.ids: dict[str, str] = {}
+        self.directory: Path | None = None  # path 写原件的临时目录
+        self.updates: list[tuple[str, DocumentType, str, str | None]] = []  # update_document 的每次调用
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
-        """登记为 DOC-{sha256 前 12 位}, received; 同一哈希已登记则返回已有记录 (接口文档第 4 节).
+        """登记为 DOC-{sha256 前 12 位}, 状态取 status (缺省 received); 同一哈希已登记则返回已有记录 (接口文档第 4 节).
 
-        页数取 page_counts, 缺省 2. saves 记下每次调用的文件名, save_args 记下文件名, 内容哈希, 类型与可靠性.
+        页数取 page_counts, 缺省 2 (非 PDF 记 1). saves 记下每次调用的文件名, save_args 记下文件名, 内容哈希,
+        类型与可靠性.
         """
         self.saves.append(file_name)
         sha256 = hashlib.sha256(data).hexdigest()
@@ -842,15 +903,22 @@ class FakeEvidenceStore:
         existing = next((d for d in refs if d.sha256 == sha256), None)
         if existing is not None:
             return existing
+        document_id = self.ids.get(file_name, f"DOC-{sha256[:12]}")
+        self.contents[document_id] = data
         doc = DocumentRef(
-            id=f"DOC-{sha256[:12]}",
+            id=document_id,
             type=type,
             file_name=file_name,
             sha256=sha256,
-            page_count=self.page_counts.get(file_name, 2),
+            page_count=(self.page_counts.get(file_name, 2) if data.startswith(b"%PDF") else 0)
+            if media_type == "application/pdf"
+            else 1,  # 同真实实现: 读不出的 PDF (不以 %PDF 开头) 记 0 页, 非 PDF 记 1
             reliability=reliability,
-            status="received",
+            status=status,
             uploaded_at=NOW,
+            media_type=media_type,
+            channel=channel,
+            uploaded_by=uploaded_by,
         )
         refs.append(doc)
         return doc
@@ -866,6 +934,38 @@ class FakeEvidenceStore:
         if document_id in NUMBAT_REPLY_PAGES:
             return list(NUMBAT_REPLY_PAGES[document_id])
         return [f"{doc.file_name} page {n}" for n in range(1, doc.page_count + 1)]
+
+    async def update_document(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        status: DocumentStatus,
+        failed_step: DocumentFailedStep | None,
+    ) -> DocumentRef:
+        """改登记的类型, 可靠性, 状态与卡住的步骤 (不加入事务), 记进 updates."""
+        refs = self.financial_store.document_refs
+        i = next((i for i, d in enumerate(refs) if d.id == document_id), None)
+        if i is None:
+            raise FileNotFoundError(document_id)
+        refs[i] = refs[i].model_copy(
+            update={"type": type, "reliability": reliability, "status": status, "failed_step": failed_step}
+        )
+        self.updates.append((document_id, type, status, failed_step))
+        return refs[i]
+
+    async def path(self, eid: str, document_id: str) -> Path:
+        """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""
+        if document_id not in self.contents:
+            raise FileNotFoundError(document_id)
+        if self.directory is None:
+            self.directory = Path(tempfile.mkdtemp(prefix="fake-evidence-"))
+        doc = next(d for d in self.financial_store.document_refs if d.id == document_id)
+        path = self.directory / f"{document_id}{Path(doc.file_name).suffix.lower()}"
+        path.write_bytes(self.contents[document_id])
+        return path
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
         refs = self.financial_store.document_refs
@@ -1184,7 +1284,7 @@ class FakeLlmSettingsStore:
 
 
 class FakeDatasetLoader:
-    """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
+    """假数据集载入: load 记下调用, 把 Numbat 的 3 份合同登记为证据文件 (received); make_deps 建好即 seed 一次.
 
     预置计划数据取 Numbat 的.
     """
@@ -1195,8 +1295,14 @@ class FakeDatasetLoader:
 
     async def load(self, eid: str, dataset: str) -> None:
         self.loads.append((eid, dataset))
+        self.seed()
+
+    def seed(self) -> "FakeDatasetLoader":
+        """模拟种子脚本已载入数据集 (P1 不再自动载入, 需求 R10): 把 Numbat 的 3 份合同登记为证据文件 (已登记的跳过),
+        不记进 loads. 返回自身, 供 make_deps 链式调用."""
         known = {d.id for d in self.financial_store.document_refs}
         self.financial_store.document_refs += [d for d in NUMBAT_CONTRACTS if d.id not in known]
+        return self
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
         return list(NUMBAT_OBJECTIVES), list(NUMBAT_RISKS)
@@ -1206,6 +1312,337 @@ class FakeDatasetLoader:
 
     def datasets(self) -> list[str]:
         return ["demo"]
+
+
+# 种子已载入整套数据集时各账表的行数 (Numbat 的量级, 只用于就绪判断与概览)
+SEEDED_STATS: dict[TableKind, TableStats] = {
+    TableKind.accounts: TableStats(records=23),
+    TableKind.trial_balance: TableStats(records=46, current=23, prior=23),
+    TableKind.journal_entries: TableStats(records=2686),
+    TableKind.sales_invoices: TableStats(records=624),
+    TableKind.bank_accounts: TableStats(records=2),
+    TableKind.bank_transactions: TableStats(records=696),
+    TableKind.delivery_notes: TableStats(records=624),
+    TableKind.approval_log: TableStats(records=0),
+}
+
+
+DEMO_DATASET = Path(__file__).resolve().parents[1] / "data" / "demo"  # Numbat 演示数据集 (CSV)
+
+
+@functools.cache
+def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
+    """Numbat 演示数据集的科目表 (按名称归类), 试算表与总账 (读一次缓存), 体检汇总用."""
+    from backend.contracts import records
+    from backend.services.account_mapping import with_category
+
+    kinds: dict[TableKind, type[BaseModel]] = {
+        TableKind.accounts: records.Account,
+        TableKind.trial_balance: records.TrialBalanceRow,
+        TableKind.journal_entries: records.JournalEntry,
+    }
+    tables: dict[TableKind, tuple[BaseModel, ...]] = {}
+    for kind, model in kinds.items():
+        with (DEMO_DATASET / f"{kind}.csv").open(newline="", encoding="utf-8") as stream:
+            rows = [model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)]
+        tables[kind] = tuple(with_category(r) if isinstance(r, records.Account) else r for r in rows)
+    return tables
+
+
+@functools.cache
+def numbat_inputs(period_start: date, period_end: date) -> CheckInputs:
+    """Numbat 演示数据集的体检汇总 (按期间缓存)."""
+    from backend.services.data_quality import summarize
+
+    tables = numbat_tables()
+    return summarize(
+        cast(Any, tables[TableKind.accounts]),
+        cast(Any, tables[TableKind.trial_balance]),
+        cast(Any, tables[TableKind.journal_entries]),
+        period_start,
+        period_end,
+        dataset="demo",
+    )
+
+
+class FakeDataStore:
+    """假数据管理存储: 数据版本, 就绪确认与各账表行数, 各项目共用.
+
+    缺省模拟种子已载入整套数据集 (数据版本 1, 视同已确认就绪, 各表有行), 现有流程照旧越过 P1 开始前的等待;
+    测试等数据就绪时传 ready=False, 并按需给 stats (没给的表行数为 0).
+    体检汇总 (check_inputs): 已就绪的以 Numbat 演示数据集为底, 未就绪的为空; write_tables 写过的科目表, 试算表,
+    总账换成写入的行, 审批日志按凭证号补进总账 (同真实实现).
+    """
+
+    def __init__(self, ready: bool = True, stats: Mapping[TableKind, TableStats] | None = None) -> None:
+        self.data_version = 1 if ready else 0  # 数据版本
+        self.ready_at: datetime | None = datetime(2026, 1, 1, tzinfo=UTC) if ready else None  # 确认就绪的时间
+        self.ready_by: str | None = "dataset" if ready else None  # 确认人
+        self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
+        self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
+        self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
+        self.check_results: list[DataCheck] = []  # 最近一次体检的结果
+        self.last_run: CheckRun | None = None  # 最近一次体检
+        self.data_requests: dict[str, DataRequest] = {}  # 补交请求 ID → 请求
+        self.open_count = 0  # 另加的待补交请求数 (直接设概览用)
+        self.seeded = ready  # 体检汇总是否以 Numbat 演示数据集为底
+        self.tables: dict[TableKind, list[BaseModel]] = {}  # write_tables 写过的科目表, 试算表, 总账的当前行
+        self.approvals: list[ApprovalLogRow] = []  # 最新一版审批日志
+        self.categories: dict[str, list[Any]] = {}  # 科目代码 → 分类历史 (CategoryVersion)
+        # write_tables 的每次调用: (各表的行, 其余关键字参数); 写入同时更新行数, 版本与数据版本
+        self.written: list[tuple[dict[TableKind, list[BaseModel]], dict[str, Any]]] = []
+        self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
+        self.import_updates: list[tuple[str, dict[str, Any]]] = []  # update_import 的每次调用 (会话 ID, 改了的字段)
+        self.extractions: dict[tuple[str, str, int], dict[str, Any]] = {}  # save_extraction 记下的 (类型, 对象, 版本)
+
+    async def readiness(self, eid: str) -> DataReadiness:
+        return DataReadiness(
+            data_version=self.data_version, ready_at=self.ready_at, ready_by=self.ready_by, loaded_at=self.ready_at
+        )
+
+    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+        self.confirm_calls.append((eid, actor))
+        if self.ready_at is None:
+            self.ready_at, self.ready_by = datetime.now(UTC), actor
+        return await self.readiness(eid)
+
+    async def stats(self, eid: str) -> dict[TableKind, TableStats]:
+        return {kind: self.table_stats.get(kind, TableStats(records=0)) for kind in TableKind}
+
+    async def versions(self, eid: str) -> list[TableVersion]:
+        return list(self.table_versions)
+
+    async def checks(self, eid: str) -> list[DataCheck]:
+        return list(self.check_results)
+
+    async def open_requests(self, eid: str) -> int:
+        return self.open_count + sum(r.status == "open" for r in self.data_requests.values())
+
+    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+        from backend.services.data_quality import summarize
+
+        if self.seeded and not self.tables and not self.approvals:
+            return numbat_inputs(period_start, period_end)
+        base: dict[TableKind, Sequence[BaseModel]] = dict(numbat_tables()) if self.seeded else {}
+        current = {**base, **self.tables}
+        journals = [cast(Any, row) for row in current.get(TableKind.journal_entries, ())]
+        for approval in self.approvals:
+            values = approval.model_dump(exclude_unset=True, exclude={"entry_no"})
+            journals = [j.model_copy(update=values) if j.entry_no == approval.entry_no else j for j in journals]
+        return summarize(
+            cast(Any, current.get(TableKind.accounts, ())),
+            cast(Any, current.get(TableKind.trial_balance, ())),
+            journals,
+            period_start,
+            period_end,
+            dataset="demo" if self.seeded else None,
+        )
+
+    async def check_run(self, eid: str) -> CheckRun | None:
+        return self.last_run
+
+    async def requests(self, eid: str) -> list[DataRequest]:
+        from backend.services.data_quality import request_order
+
+        return sorted(self.data_requests.values(), key=request_order)
+
+    def current(self, kind: TableKind) -> list[Any]:
+        """某张表当前的行: 写过的取写入的, 否则已就绪的取 Numbat 演示数据集 (只有科目表, 试算表, 总账)."""
+        if kind in self.tables:
+            return list(self.tables[kind])
+        return list(numbat_tables().get(kind, ())) if self.seeded else []
+
+    async def table_rows(
+        self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """同真实实现的搜索与排序 (只做测试用到的表)."""
+        if kind is TableKind.approval_log:
+            rows = [r.model_dump(mode="json", exclude_unset=True) for r in self.approvals]
+        else:
+            rows = [r.model_dump(mode="json") for r in self.current(kind)]
+        if kind is TableKind.accounts:
+            tb = self.current(TableKind.trial_balance)
+            balances = {p: {r.account_code: r.balance_cents for r in tb if r.period == p} for p in ("current", "prior")}
+            for row in rows:
+                row |= {
+                    "balance_current_cents": balances["current"].get(row["code"]),
+                    "balance_prior_cents": balances["prior"].get(row["code"]),
+                    "edited": row["category_basis"] == "auditor",
+                }
+            keys: tuple[str, ...] = ("code", "name")
+        else:
+            keys = tuple(k for k, v in (rows[0] if rows else {}).items() if isinstance(v, str))
+        if q:
+            needle = q.casefold()
+            rows = [r for r in rows if any(needle in str(r.get(k) or "").casefold() for k in keys)]
+        order = {
+            TableKind.accounts: ("code",),
+            TableKind.trial_balance: ("account_code", "period"),
+            TableKind.journal_entries: ("posting_date", "entry_no", "id"),
+        }.get(kind)
+        if order:
+            rows.sort(key=lambda r: tuple(str(r[k]) for k in order))
+        return len(rows), rows[offset : offset + limit]
+
+    async def account(self, eid: str, code: str) -> Any:
+        return next((a for a in self.current(TableKind.accounts) if a.code == code), None)
+
+    async def category_history(self, eid: str) -> dict[str, list[Any]]:
+        return {code: list(versions) for code, versions in self.categories.items()}
+
+    async def set_category(self, eid: str, code: str, category: Any, *, actor: str, reason: str) -> Any:
+        from backend.contracts.data import CategoryVersion
+
+        accounts = self.current(TableKind.accounts)
+        account = next((a for a in accounts if a.code == code), None)
+        if account is None:
+            raise LookupError(code)
+        history = self.categories.setdefault(code, [])
+        if not history:
+            history.append(
+                CategoryVersion(
+                    version=1,
+                    category=account.category,
+                    basis=account.category_basis,
+                    changed_by=AgentId.A3,
+                    changed_at=self.ready_at or NOW,
+                )
+            )
+        changed = CategoryVersion(
+            version=history[-1].version + 1,
+            category=category,
+            basis="auditor",
+            changed_by=actor,
+            changed_at=datetime.now(UTC),
+            reason=reason,
+        )
+        history.append(changed)
+        update = {"category": category, "category_basis": "auditor"}
+        self.tables[TableKind.accounts] = [a.model_copy(update=update) if a.code == code else a for a in accounts]
+        self.data_version += 1
+        return changed
+
+    async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
+        self.last_run = run
+        self.check_results = list(run.checks)
+        for request in requests:
+            self.data_requests[request.id] = request
+
+    async def write_tables(
+        self,
+        eid: str,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        source: DataSource,
+        actor: str,
+        file_name: str | None = None,
+        document_id: str | None = None,
+        import_id: str | None = None,
+        request_id: str | None = None,
+    ) -> int:
+        """记下调用; 数据版本 +1, 各表行数换成写入的行数 (试算表分两期, 审批日志记版本行数), 追加版本,
+        导入会话置 committed. 不做科目分类历史与审批日志补进 (见 PostgresDataStore)."""
+        kwargs = {
+            "source": source,
+            "actor": actor,
+            "file_name": file_name,
+            "document_id": document_id,
+            "import_id": import_id,
+            "request_id": request_id,
+        }
+        self.written.append(({k: list(v) for k, v in tables.items()}, kwargs))
+        for kind, rows in tables.items():
+            if kind is TableKind.approval_log:
+                self.approvals = [cast(ApprovalLogRow, r) for r in rows]
+            elif kind in (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries):
+                self.tables[kind] = list(rows)
+        self.data_version += 1
+        for kind, rows in tables.items():
+            if kind is TableKind.trial_balance:
+                current = sum(getattr(r, "period", None) == "current" for r in rows)
+                self.table_stats[kind] = TableStats(records=len(rows), current=current, prior=len(rows) - current)
+            else:
+                self.table_stats[kind] = TableStats(records=len(rows))
+            self.table_versions.append(
+                TableVersion(
+                    id=import_id or f"{source.upper()}-{kind}-v{self.data_version}",
+                    kind=kind,
+                    source=source,
+                    file_name=file_name,
+                    document_id=document_id,
+                    records=len(rows),
+                    data_version=self.data_version,
+                    request_id=request_id,
+                    created_by=actor,
+                    created_at=NOW,
+                )
+            )
+        if import_id in self.imports:
+            session, raw = self.imports[import_id]
+            [(kind, rows)] = tables.items()
+            update = {"status": "committed", "kind": kind, "records": len(rows)}
+            self.imports[import_id] = (session.model_copy(update=update), raw)
+        return self.data_version
+
+    async def bump_version(self, eid: str) -> int:
+        self.data_version += 1
+        return self.data_version
+
+    async def extraction_versions(
+        self, eid: str, target_type: str | None = None, target_id: str | None = None
+    ) -> list[ExtractionRecord]:
+        return [
+            ExtractionRecord(target_type=t, target_id=i, version=v, changed_at=NOW, **record)
+            for (t, i, v), record in sorted(self.extractions.items())
+            if (target_type is None or t == target_type) and (target_id is None or i == target_id)
+        ]
+
+    async def save_extraction(
+        self,
+        eid: str,
+        target_type: str,
+        target_id: str,
+        version: int,
+        data: Mapping[str, Any],
+        *,
+        changed_by: str,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        self.extractions[(target_type, target_id, version)] = {
+            "data": dict(data),
+            "changed_by": changed_by,
+            "field": field,
+            "reason": reason,
+        }
+
+    async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
+        self.imports[session.id] = (session, data)
+
+    async def import_session(self, eid: str, import_id: str) -> tuple[ImportSession, bytes] | None:
+        return self.imports.get(import_id)
+
+    async def update_import(
+        self,
+        eid: str,
+        import_id: str,
+        *,
+        sheet: str,
+        date_format: str | None = None,
+        mapping: Mapping[str, str | None] | None = None,
+        row_count: int | None = None,
+    ) -> None:
+        changes = {"sheet": sheet, "date_format": date_format, "mapping": mapping, "row_count": row_count}
+        self.import_updates.append((import_id, {k: v for k, v in changes.items() if v is not None}))
+        session, raw = self.imports[import_id]
+        if session.status != "parsed":  # 同真实实现: 只改未提交的会话
+            return
+        update: dict[str, Any] = {"sheet": sheet}
+        if date_format is not None:
+            update["date_format"] = date_format
+        if mapping is not None:
+            update["mapping"] = dict(mapping)
+        self.imports[import_id] = (session.model_copy(update=update), raw)
 
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
@@ -1228,6 +1665,7 @@ def make_deps(
     confirmations: FakeConfirmationChannel | None = None,
     library: ProcedureLibrary | None = None,
     review_llm: LLMClient | None = None,
+    data: FakeDataStore | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
@@ -1263,6 +1701,7 @@ def make_deps(
         financial_store=financial_store,
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
+        data=data if data is not None else FakeDataStore(),
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),
@@ -1692,7 +2131,12 @@ def numbat_all_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
     """主图节点: 已实装的 Agent 用真实的, P1 三条程序与 RPT-03 用 Numbat 脚本 Agent (见 numbat_p1_agents,
-    numbat_report_agents)."""
+    numbat_report_agents).
+
+    数据集载入换成假实现时 (make_deps 的缺省), 按种子已载入 Numbat 处理, 先登记 3 份合同: P1 不再自动载入
+    数据集 (需求 R10), 新项目的数据由审计师接入或种子脚本预先载入."""
+    if isinstance(deps.datasets, FakeDatasetLoader):
+        deps.datasets.seed()
     nodes = GraphNodes(deps, parallel_cap)
     nodes.agents.update(numbat_p1_agents(deps, presets))
     nodes.agents.update(numbat_report_agents(deps))
@@ -1766,6 +2210,7 @@ def make_runner(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    data: FakeDataStore | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -1775,6 +2220,7 @@ def make_runner(
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
+    data: 数据管理存储, 缺省为种子已载入 (视同已确认就绪, P1 前不等数据).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -1789,6 +2235,7 @@ def make_runner(
         confirmations=confirmations,
         library=library,
         review_llm=review_llm,
+        data=data,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:
@@ -1828,6 +2275,7 @@ async def api_client(
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    app.state.data_service = DataService(runner.deps, runner)
     app.state.llm_settings = llm_settings
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
@@ -1876,3 +2324,27 @@ def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
     ):
         records |= {(source, row.id): row.model_dump() for row in rows}
     return FakeFinancialStore(records=records, trial_balance=list(tables["trial_balance"]))
+
+
+# ── 上传文件处理 (需求 R14) 用的大模型: 先读变体目录, 再读主固定输出 ──
+
+UPLOAD_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "llm_variants" / "upload"
+
+
+class LayeredMockLLM:
+    """按顺序在几个固定输出目录里找 {procedure_id}/{fixture_key}.json, 都没有再按顺序找 default.json.
+
+    上传后的分类 (DOC-CLASSIFY) 与回函副本抽取 (DOC-06 按文件名) 的固定输出放在 llm_variants/upload,
+    不进主固定输出 (主流程测试要求主固定输出各用恰好一次); 合同抽取 (DOC-04) 仍读主固定输出."""
+
+    def __init__(self, *roots: Path) -> None:
+        self.clients = [MockLLMClient(root) for root in roots]
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        for client in self.clients:
+            if (client.root / req.procedure_id / f"{req.fixture_key}.json").exists():
+                return await client.complete(req, output_model)
+        for client in self.clients:
+            if (client.root / req.procedure_id / "default.json").exists():
+                return await client.complete(req, output_model)
+        return await self.clients[0].complete(req, output_model)

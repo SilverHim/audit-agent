@@ -7,6 +7,7 @@ from pydantic import Field, model_validator
 
 from backend.contracts.models import (
     CriticReasonType,
+    DocumentType,
     EvidencePointer,
     JudgmentRef,
     MisstatementDraft,
@@ -58,6 +59,13 @@ class ConfirmationExtraction(Model):
     balance_date: date  # 余额截至日
     receipt_channel: ReceiptChannel | None  # 回函渠道, 只用于核对
     evidence: list[EvidencePointer]  # 上述字段的页码指针
+
+
+class DocumentClassification(Model):
+    """A3 按文件名与首页文字给上传的文件分类."""
+
+    document_type: DocumentType | None  # 文件类型; 判断不了为空, 文件转人工指定类型
+    reason: str  # 一句话依据
 
 
 class ReportDraft(Model):

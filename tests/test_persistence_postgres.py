@@ -259,6 +259,8 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         pytest.fail("Workflow did not reach a decision point")
 
     try:
+        # 种子路径: 建项目后先载入数据集 (P1 不再自动载入, 载入即视同确认数据已齐, 需求 R10)
+        await deps.datasets.load(e.id, e.dataset)
         await runner.start(e.id)
         await settle()
         for decision in [

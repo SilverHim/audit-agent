@@ -12,10 +12,12 @@ from langgraph.types import Command, StateSnapshot
 from backend.adapters.llm import llm_version
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import AgentId, Engagement, GateDecision, Phase, Procedure, ReviewRecord
+from backend.contracts.models import AgentId, Engagement, GateDecision, GateId, Phase, Procedure, ReviewRecord
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.graph import GATE_NODES
+from backend.orchestration.nodes import AWAITING_DATA, DATA_READY
+from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.procedure_library import ProcedureLibrary
 
 
@@ -33,6 +35,21 @@ def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
     {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
+
+
+def is_data_wait(payload: Any) -> bool:
+    """等待载荷是不是等数据就绪 (不是等复核或等人决定)."""
+    return isinstance(payload, dict) and payload.get("awaiting") == AWAITING_DATA
+
+
+def awaiting_data(snapshot: StateSnapshot) -> bool:
+    """图停在 p1_await_data 等数据就绪."""
+    return any(is_data_wait(waiting) for waiting in waiting_payloads(snapshot))
+
+
+def review_waits(snapshot: StateSnapshot) -> list[Any]:
+    """节点内等审计师复核决定的等待载荷 (await_events 与 P2 以外程序失败后的等待), 不含等数据就绪."""
+    return [waiting for waiting in waiting_payloads(snapshot) if not is_data_wait(waiting)]
 
 
 def waiting_for_human(snapshot: StateSnapshot) -> bool:
@@ -225,6 +242,10 @@ class GraphRunner:
         - 已结束 (next 与待执行任务都为空): 不动.
         - Store 有检查点里没有的决定或画像版本: 先补做 (见 _catch_up), 再按补做后的检查点往下判断.
         - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动, 等人时没有新决定可交.
+          例外: 停在 p1_await_data 等数据, 而 Store 中已记审计师确认数据已齐 (确认写入后, 恢复前中断), 先补写
+          确认的 data 留痕 (同键已有的跳过; 写不成则报错, 留在等待), 再以 Command(resume=DATA_READY) 继续.
+        - 升级前的旧检查点 (需求 R10 之前 ACC-01 通过后直接到 p1_ingest, 由它载入数据集): 待执行 p1_ingest 而数据
+          未确认就绪时, 以 gate_acc01 身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
         出错时释放锁后抛出.
         """
@@ -240,13 +261,44 @@ class GraphRunner:
                     return
                 if await resume_required(self.deps, engagement, snapshot) is not None:
                     snapshot, graph_input = await self._catch_up(engagement)
-                if graph_input is None and waiting_for_human(snapshot):
+                if graph_input is None and await self._legacy_ingest(eid, snapshot):
+                    snapshot = await self._reroute_to_data_wait(eid)
+                if graph_input is None and await self._data_confirmed(eid, snapshot):
+                    graph_input = Command(resume=DATA_READY)
+                elif graph_input is None and waiting_for_human(snapshot):
                     self.release(eid)
                     return
         except BaseException:
             self.release(eid)
             raise
         self.launch(eid, graph_input)
+
+    async def _data_confirmed(self, eid: str, snapshot: StateSnapshot) -> bool:
+        """图停在 p1_await_data 等数据, 而 Store 中已记确认数据已齐 (确认写入后, 留痕或恢复前中断): 补写确认的 data
+        留痕 (同键已有的跳过) 后返回真, 由调用方恢复; 留痕写失败照常抛出, 图留在等待, 下次再补."""
+        if not awaiting_data(snapshot):
+            return False
+        readiness = await self.deps.data.readiness(eid)
+        if readiness.ready_at is None:
+            return False
+        await record_transitions(self.deps.trail, [data_ready_entry(eid, readiness)])
+        return True
+
+    async def _legacy_ingest(self, eid: str, snapshot: StateSnapshot) -> bool:
+        """升级前的旧检查点: 待执行 p1_ingest (不在节点内等待) 而数据未确认就绪.
+
+        新拓扑里 p1_ingest 只能经 p1_await_data 到达, 那时已确认; 未确认却排着 p1_ingest, 只能是旧拓扑在 ACC-01 通过
+        之后, p1_ingest 载入数据集之前中断留下的 (已载入的项目迁移时已补确认)."""
+        return (
+            snapshot.next == ("p1_ingest",)
+            and not any(task.interrupts for task in snapshot.tasks)
+            and (await self.deps.data.readiness(eid)).ready_at is None
+        )
+
+    async def _reroute_to_data_wait(self, eid: str) -> StateSnapshot:
+        """以 gate_acc01 身份重写检查点 (不改状态): ACC-01 的路由按已有的通过决定重新选出口, 新拓扑为 p1_await_data."""
+        await self.app.aupdate_state(self.config(eid), {}, as_node=GATE_NODES[GateId.ACC_01])
+        return await self.app.aget_state(self.config(eid))
 
     async def _catch_up(self, engagement: Engagement) -> tuple[StateSnapshot, Command[Any] | None]:
         """补做 Store 已提交而检查点没跟上的内容 (见 recovery.catch_up). 返回补做后的检查点与继续执行的输入:
