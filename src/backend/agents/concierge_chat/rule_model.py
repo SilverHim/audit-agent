@@ -117,6 +117,13 @@ def open_items(data: dict[str, Any], lang: Lang) -> str:
         if item["type"] == "gate_decision":
             name = GATES.get(item["gate"], {"zh": item["gate"], "en": item["gate"]})[lang]
             lines.append(f"{n}. {name}{later}")
+        elif item["type"] == "data_request":
+            used = "、".join(item.get("used_for") or []) if lang == "zh" else ", ".join(item.get("used_for") or [])
+            if lang == "zh":
+                lines.append(f"{n}. 补交{item['title']}" + (f"（{used} 要用）" if used else "") + later)
+            else:
+                what = item.get("table_kind") or item.get("document_type") or item["title"]
+                lines.append(f"{n}. Provide {what}" + (f" (needed by {used})" if used else "") + later)
         else:
             subject = item.get("subject_id") or item["target_id"]
             what = "复核" if lang == "zh" else "Review"

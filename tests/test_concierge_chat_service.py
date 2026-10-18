@@ -34,7 +34,7 @@ from tests.chat_fakes import (
 from tests.fakes import ENGAGEMENT, FakeOutputStore, FakeTrail
 from tests.test_concierge_chat_llm import KEY, chunk, sse
 from tests.test_concierge_chat_llm import make as live_model
-from tests.test_concierge_chat_tools import EXCEPTION, JUDGMENT, TASK
+from tests.test_concierge_chat_tools import EXCEPTION, JUDGMENT, TASK, data_with_requests
 
 EID = ENGAGEMENT.id
 USER = "U-1"
@@ -297,6 +297,16 @@ async def test_rule_model_materiality_and_open_items() -> None:
     items = await rule_ask("有什么需要我处理的？")
     assert items.startswith("需要你处理的事项共 1 项：")
     assert JUDGMENT.id in items
+
+
+async def test_rule_model_lists_data_requests_before_reviews() -> None:
+    trail = FakeTrail()
+    deps = chat_deps(trail, output_store=FakeOutputStore([JUDGMENT, TASK, EXCEPTION]), data=data_with_requests())
+    answer = (await make_chat(RuleChatModel(), deps).ask(EID, USER, q("有什么需要我处理的？"))).answer
+    lines = answer.splitlines()
+    assert lines[0] == "需要你处理的事项共 3 项："
+    assert lines[1:3] == ["1. 补交总账分录（REV-08 要用）", "2. 补交审批日志（REV-08、CSH-05 要用）"]
+    assert lines[3].startswith("3. 复核 REV-02")
 
 
 async def test_rule_model_refuses_to_approve_and_speaks_english() -> None:
