@@ -10,7 +10,17 @@ from typing import Any, ClassVar, cast
 
 from pydantic import TypeAdapter
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.judging import (
+    DEFAULT_STEPS,
+    Judged,
+    JudgingSteps,
+    Subject,
+    in_scope,
+    judge_all,
+    judgments_patch,
+    subjects_awaiting_review,
+)
 from backend.agents.review import ReviewAgent
 from backend.contracts.models import (
     AgentId,
@@ -22,35 +32,12 @@ from backend.contracts.models import (
     EvidencePointer,
     EvidenceType,
     ExceptionDisposition,
-    Judgment,
     Reliability,
     ReviewStatus,
-    ReviewTask,
-    TargetType,
-    TaskKind,
-    TaskStatus,
 )
 from backend.contracts.records import BankAccount
-from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
+from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
-from backend.services.review_queue import attribute_exceptions
-
-
-@dataclass(frozen=True)
-class Subject:
-    """一个判断对象: 由各判断程序按自己的规则选出, 带该对象的数据与规则例外."""
-
-    subject_id: str  # 判断对象 ID: 合同, 发票或银行账户
-    data: dict[str, Any]  # 该判断需要的数据行与抽取要素, 字段按程序提示词的头注释
-    rule_findings: list[AuditException] = field(default_factory=list)  # 该对象的规则例外 (当前版本)
-
-
-@dataclass(frozen=True)
-class Judged:
-    """一个判断对象送给判断引擎的上下文与引擎的结果."""
-
-    ctx: JudgmentContext  # 判断上下文
-    outcome: JudgmentOutcome  # 判断或失败类型
 
 
 @dataclass(frozen=True)
@@ -67,37 +54,15 @@ Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
 SubjectSource = Callable[[RunContext], Awaitable[list[Subject]]]  # 判断程序取全部判断对象
 JSON_ROWS = TypeAdapter(list[dict[str, Any]])  # 规则返回的行转 JSON 形式 (日期为字符串), 供提示词 tojson
-
-
-def subjects_awaiting_review(ctx: RunContext) -> set[str]:
-    """本程序仍有待决复核任务的判断对象: 带 subject_id 的任务 (unattributed), 或以该对象的判断为目标的 normal 任务.
-
-    这些对象已交人处理, 结论由审计师的决定给出, 整条重跑时不再重判: 重判会让其例外升版, 旧任务随之过期,
-    整次结果被合并校验拒绝; 也会多出一份待复核的判断. failed 任务在 rerun 时已整组关闭, 不在其中.
-    """
-    judgments = {j.id: j for j in ctx.state["judgments"]}
-    waiting: set[str] = set()
-    for task in ctx.state["review_tasks"]:
-        if task.procedure_id != ctx.procedure.id or task.status is not TaskStatus.pending:
-            continue
-        if task.subject_id is not None:
-            waiting.add(task.subject_id)
-        elif task.target_type is TargetType.Judgment and task.target_id in judgments:
-            waiting.add(judgments[task.target_id].subject_id)
-    return waiting
-
-
-def in_scope(ctx: RunContext, subject_id: str) -> bool:
-    """该对象本次要不要处理: rerun_subject_ids 非空时须在其中, 且不在已交人处理的对象里."""
-    only = ctx.procedure.rerun_subject_ids
-    return (not only or subject_id in only) and subject_id not in subjects_awaiting_review(ctx)
+# 判断公共流程的名字移到 agents/judging.py, 这里再导出, 原有的导入路径照用
+__all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "in_scope", "subjects_awaiting_review"]
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
     """A6: 执行收入与货币资金的实质性程序, 产出例外与判断.
 
-    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02) 共用判断流程, 各自只提供
-    "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
+    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02) 共用判断公共流程 (agents/judging.py),
+    各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
@@ -106,6 +71,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
         self.reviewer = ReviewAgent(deps)  # A7: 每生成一条模型类判断即同步调用其独立复核 (GEN-09)
+        self.steps: JudgingSteps = DEFAULT_STEPS  # 复核之后, 分类之前的判断级降级与盲测抽样, 缺省原样返回
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,
@@ -150,30 +116,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return await self.judge_all(ctx, await self.subject_sources[ctx.procedure.id](ctx))
 
     async def judge_all(self, ctx: RunContext, subjects: list[Subject]) -> list[Judged]:
-        """对给定的判断对象做判断 (judge_subjects 的后半, CSH-02 先比对余额再交它): 筛选同 judge_subjects."""
-        subjects = [s for s in subjects if in_scope(ctx, s.subject_id)]
-        objectives = set(ctx.procedure.objective_ids)
-        risks = [r.model_dump(mode="json") for r in ctx.state["risk_register"] if r.objective_id in objectives]
-        # 参数快照按 JSON 取 (日期转成字符串), 与提示词头注释 "对象均为 model_dump(mode="json")" 一致
-        task = {"params": ctx.run.model_dump(mode="json")["params_snapshot"], "risks": risks}
-
-        async def judge(subject: Subject) -> Judged:
-            jctx = JudgmentContext(
-                subject_id=subject.subject_id,
-                task=task,
-                data=subject.data,
-                rule_findings=subject.rule_findings,
-                fixture_key=subject.subject_id,
-            )
-            outcome = await self.deps.judgments.judge(
-                ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id
-            )
-            if outcome.judgment is not None:
-                # 独立复核在分类与写入之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
-                outcome = outcome.model_copy(update={"judgment": await self.reviewer.review(ctx, outcome.judgment)})
-            return Judged(jctx, outcome)
-
-        return await gather_all(judge(s) for s in subjects)
+        """对给定的判断对象走判断公共流程 (judging.judge_all; CSH-02 先比对余额再交它).
+        A7 复核与两个可替换步骤取自本 Agent (reviewer, steps)."""
+        return await judge_all(self.deps, ctx, subjects, self.reviewer, self.steps)
 
     async def rev03_subjects(self, ctx: RunContext) -> list[Subject]:
         """REV-03 的判断对象: DOC-04 抽出的全部合同, 按合同编号排序.
@@ -402,41 +347,6 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
-
-        - normal, dispute: 判断待复核 (dispute 为独立复核不一致, 由审计师仲裁), 以判断 v1 为目标建任务.
-        - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions).
-        - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
-        - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
-        执行记录置成功终态: 个别对象失败不算整次失败.
-        """
+        """判断程序的解读: 见 judging.judgments_patch."""
         assert isinstance(findings, list)
-        now = datetime.now(UTC)
-        run = finish_run(ctx.run, now)
-        queue = self.deps.queue
-        judgments: list[Judgment] = []
-        exceptions: list[AuditException] = []
-        tasks: list[ReviewTask] = []
-        pid = ctx.procedure.id
-        for judged in findings:
-            subject_id = judged.ctx.subject_id
-            findings_of_subject = judged.ctx.rule_findings
-            kind = queue.classify(ctx.template, judged.outcome, findings_of_subject)
-            judgment = judged.outcome.judgment
-            if judgment is not None and kind in (TaskKind.normal, TaskKind.dispute):
-                judgments.append(judgment)
-                tasks.append(queue.make_task(kind, judgment, pid, run.id, now))
-            elif judgment is not None and kind is None:
-                confirmed = judgment.model_copy(update={"review_status": ReviewStatus.confirmed})
-                judgments.append(confirmed)
-                exceptions += attribute_exceptions(confirmed, findings_of_subject)
-            elif kind is TaskKind.unattributed:
-                first = findings_of_subject[0]
-                marked = first.model_copy(
-                    update={"version": first.version + 1, "disposition": ExceptionDisposition.unattributed}
-                )
-                exceptions.append(marked)
-                tasks.append(queue.make_task(TaskKind.unattributed, marked, pid, run.id, now, subject_id=subject_id))
-            else:
-                tasks.append(queue.make_task(TaskKind.failed, run, pid, run.id, now, subject_id=subject_id))
-        return {"judgments": judgments, "exceptions": exceptions, "review_tasks": tasks, "procedure_runs": [run]}
+        return judgments_patch(self.deps, ctx, findings)

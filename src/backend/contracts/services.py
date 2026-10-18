@@ -4,6 +4,7 @@ from typing import Any, Generic, Literal, TypeVar
 
 from backend.contracts.models import (
     AuditException,
+    AutonomyLevel,
     Confirmation,
     DocumentRef,
     EvidencePointer,
@@ -30,6 +31,7 @@ class JudgmentContext(Model):
     data: dict[str, Any]  # 该判断需要的数据行与抽取要素
     rule_findings: list[AuditException] = []  # 该对象的规则例外 (混合程序), 本程序与前置程序的都算
     fixture_key: str  # mock 模式下取固定输出用的键
+    autonomy_level: AutonomyLevel | None = None  # 判断的自主度: 程序的运行时级别 (Procedure); 为空时取模板
 
 
 class JudgmentOutcome(Model):

@@ -7,10 +7,14 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from backend.agents import ingest, review
+from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import (
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
+    CriticVerdictOut,
+    DocumentClassification,
     ExtractedTerm,
     JudgmentDraft,
     ReportDraft,
@@ -42,7 +46,13 @@ from backend.contracts.ports import LLMResponse
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
-from backend.services.judgment_engine import OutputValidator, output_model, supported_amounts
+from backend.services.judgment_engine import (
+    CheckResult,
+    OutputValidator,
+    output_model,
+    structure_only,
+    supported_amounts,
+)
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
@@ -167,6 +177,81 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
         output_model(bad)
     with pytest.raises(ValueError, match="llm"):
         output_model(LIBRARY.load("REV-08"))
+
+
+# ── 引用与语义的分派表 (R83) ─────────────────────────────────────────
+
+
+def test_every_referenced_output_model_is_registered() -> None:
+    """引用方用到的输出模型都已登记引用与语义校验: 程序库全部模板 (含未启用的) 的 llm.output_model, 加上代码里的两份
+    规格 (上传文件分类 ingest.CLASSIFY, 独立复核第二轮 review.VERDICT_SPEC). 新加输出模型而漏登记时在此报出,
+    不至于在运行时被兜底转人工 (如上传分类转 needs_manual)."""
+    referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
+    referenced |= {output_model(ingest.CLASSIFY), getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
+    assert sorted(m.__name__ for m in referenced if m not in OutputValidator.CHECKS) == []
+
+
+def test_dispatch_table_covers_existing_models() -> None:
+    """现有 7 种输出模型都已登记引用与语义校验 (CriticVerdictOut 与 DocumentClassification 只做语法与结构)."""
+    assert set(OutputValidator.CHECKS) == {
+        JudgmentDraft,
+        ContractExtraction,
+        ConfirmationExtraction,
+        ReportDraft,
+        CriticIndependent,
+        CriticVerdictOut,
+        DocumentClassification,
+    }
+    assert OutputValidator.CHECKS[DocumentClassification] is structure_only
+
+
+class ProbeOut(BaseModel):
+    """测试用的临时输出模型."""
+
+    value: int
+
+
+def probe_template() -> Any:
+    return REV02.model_copy(update={"llm": REV02.llm.model_copy(update={"output_model": "ProbeOut"})})  # type: ignore[union-attr]
+
+
+async def test_unregistered_model_is_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
+    """输出模型没有登记校验时, 通过结构校验后抛 NotImplementedError (消息含模型名)."""
+    monkeypatch.setattr(llm_outputs, "ProbeOut", ProbeOut, raising=False)
+    validator, _ = make_validator()
+    with pytest.raises(NotImplementedError, match="ProbeOut"):
+        await validator.validate(EID, probe_template(), respond(ProbeOut(value=1)), ValidationContext())
+
+
+async def test_registered_check_decides_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """register 登记临时模型的校验后, validate 调用它, 按其返回的级别, 错误, 提示与输出出报告; 语法与结构仍在前,
+    结构不过时不调用."""
+    monkeypatch.setattr(llm_outputs, "ProbeOut", ProbeOut, raising=False)
+    monkeypatch.setattr(OutputValidator, "CHECKS", dict(OutputValidator.CHECKS))  # 登记只在本用例内有效
+    seen: list[tuple[Any, ...]] = []
+
+    async def check_probe(validator: OutputValidator, eid: str, output: ProbeOut, ctx: ValidationContext) -> Any:
+        seen.append((validator, eid, output.value, ctx))
+        if output.value % 2:
+            return CheckResult(output, "semantic", errors=["value 须为偶数"], notes=["奇数"])
+        return CheckResult(output.model_copy(update={"value": output.value // 2}))
+
+    OutputValidator.register(ProbeOut, check_probe)
+    validator, _ = make_validator()
+    ctx = ValidationContext()
+    odd = await validator.validate(EID, probe_template(), respond(ProbeOut(value=3)), ctx)
+    assert (odd.level_failed, odd.retryable, odd.errors, odd.notes, odd.unsupported_steps) == (
+        "semantic",
+        False,
+        ["value 须为偶数"],
+        ["奇数"],
+        [],
+    )
+    even = await validator.validate(EID, probe_template(), respond(ProbeOut(value=4)), ctx)
+    assert (even.level_failed, even.output) == (None, ProbeOut(value=2))
+    assert seen == [(validator, EID, 3, ctx), (validator, EID, 4, ctx)]
+    bad = await validator.validate(EID, probe_template(), respond(None, raw='{"value": "x"}'), ctx)
+    assert (bad.level_failed, bad.retryable, len(seen)) == ("structure", True, 2)
 
 
 # ── 语法与结构 ─────────────────────────────────────────

@@ -2,10 +2,11 @@
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, ClassVar, Literal, NoReturn, cast
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 from pydantic import BaseModel, ValidationError
@@ -310,13 +311,40 @@ class PointerResolver:
         return p.model_copy(update={"type": EvidenceType.external, "reliability": Reliability.external_original}), ""
 
 
+@dataclass(frozen=True)
+class CheckResult:
+    """一种输出模型的引用与语义两级校验结果."""
+
+    output: Any  # 改写证据指针后的输出 (同一模型)
+    level: Level | None = None  # 未通过的级别 (reference 或 semantic), 通过为空
+    unsupported: list[int] = field(default_factory=list)  # 证据指针解析不了的推理步骤下标
+    errors: list[str] = field(default_factory=list)  # 错误
+    notes: list[str] = field(default_factory=list)  # 不影响通过与否的提示
+
+
+# 一种输出模型的引用与语义校验: (校验器, 项目, 通过结构校验的输出, 上下文) → 结果
+Check = Callable[["OutputValidator", str, Any, ValidationContext], Awaitable[CheckResult]]
+
+
 class OutputValidator:
-    """LLM 输出的四级校验: 语法, 结构, 引用, 语义."""
+    """LLM 输出的四级校验: 语法, 结构, 引用, 语义.
+
+    语法与结构两级对所有输出模型相同; 引用与语义两级按输出模型查分派表 CHECKS. 各组新的输出模型用 register
+    登记一行校验函数, 不改 validate.
+    """
+
+    # 输出模型 → 引用与语义校验, 见 OutputValidator 类与各校验函数之后的登记
+    CHECKS: ClassVar[dict[type[BaseModel], Check]] = {}
 
     def __init__(self, financial: FinancialDataStore, library: ProcedureLibrary, trail: AuditTrail) -> None:
         self.financial = financial  # 解析行指针与文件登记
         self.library = library  # 解析准则片段
         self.trail = trail  # 解析留痕指针
+
+    @classmethod
+    def register(cls, model: type[BaseModel], check: Check) -> None:
+        """登记一种输出模型的引用与语义校验; 已登记的覆盖."""
+        cls.CHECKS[model] = check
 
     async def validate(
         self, eid: str, template: ProcedureTemplate, response: LLMResponse[T_out], ctx: ValidationContext
@@ -329,33 +357,17 @@ class OutputValidator:
         output, level, errors = parse_output(model, response)
         if output is None:
             return ValidationReport(level_failed=level, retryable=True, unsupported_steps=[], errors=errors)
-        unsupported: list[int] = []
-        notes: list[str] = []
-        if isinstance(output, JudgmentDraft):
-            output, level, unsupported, errors = await self._judgment(eid, output, ctx)
-        elif isinstance(output, ContractExtraction | ConfirmationExtraction):
-            output, errors = self._extraction(output, ctx.document)
-            level = "reference" if errors else None
-            if level is None and isinstance(output, ConfirmationExtraction) and ctx.confirmation is not None:
-                errors, notes = await self._confirmation(eid, output, ctx.confirmation)
-                level = "semantic" if errors else None
-        elif isinstance(output, ReportDraft):
-            level, errors = report_checks(output, ctx)
-        elif isinstance(output, CriticIndependent):
-            # 引用与语义问题只记下, 不判失败: 推理链照存, 仲裁时 critic_chain_ok 据此不提供 a7_upheld
-            output, unsupported, errors = await self._critic(eid, output, ctx)
-            level = None
-        elif isinstance(output, CriticVerdictOut | DocumentClassification):
-            level = None  # 只做语法与结构两级 (文件分类: 类型取值已由结构校验限定, 没有证据指针)
-        else:
+        check = self.CHECKS.get(model)
+        if check is None:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
+        result = await check(self, eid, output, ctx)
         return ValidationReport(
-            level_failed=level,
+            level_failed=result.level,
             retryable=False,
-            unsupported_steps=unsupported,
-            errors=errors,
-            notes=notes,
-            output=output,
+            unsupported_steps=result.unsupported,
+            errors=result.errors,
+            notes=result.notes,
+            output=result.output,
         )
 
     async def _confirmation(
@@ -473,6 +485,68 @@ class OutputValidator:
                 if not 1 <= t.page <= document.page_count
             ]
         return output.model_copy(update={"evidence": evidence}), errors
+
+
+# ── 各输出模型的引用与语义校验 (分派表 OutputValidator.CHECKS) ──
+
+
+async def check_judgment(
+    validator: OutputValidator, eid: str, output: JudgmentDraft, ctx: ValidationContext
+) -> CheckResult:
+    """判断草稿: 证据指针解析, 错报金额对得上, 推理链语义 (见 _judgment)."""
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    return CheckResult(draft, level, unsupported, errors)
+
+
+async def check_extraction(
+    validator: OutputValidator, eid: str, output: ContractExtraction | ConfirmationExtraction, ctx: ValidationContext
+) -> CheckResult:
+    """抽取输出: 指针只能指向本文档且页码在页数内; 回函抽取 (ctx.confirmation 非空) 另核对账号, 渠道不符只记提示."""
+    extracted, errors = validator._extraction(output, ctx.document)
+    if errors:
+        return CheckResult(extracted, "reference", errors=errors)
+    if isinstance(extracted, ConfirmationExtraction) and ctx.confirmation is not None:
+        errors, notes = await validator._confirmation(eid, extracted, ctx.confirmation)
+        return CheckResult(extracted, "semantic" if errors else None, errors=errors, notes=notes)
+    return CheckResult(extracted)
+
+
+async def check_report(
+    validator: OutputValidator, eid: str, output: ReportDraft, ctx: ValidationContext
+) -> CheckResult:
+    """报告草稿: 引用的判断须为当前已确认的版本, 两段标题与意见类型相符 (见 report_checks)."""
+    level, errors = report_checks(output, ctx)
+    return CheckResult(output, level, errors=errors)
+
+
+async def check_critic(
+    validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
+) -> CheckResult:
+    """独立复核第一轮: 引用与语义问题只记下, 不判失败; 推理链照存, 仲裁时 critic_chain_ok 据此不提供 a7_upheld."""
+    checked, unsupported, errors = await validator._critic(eid, output, ctx)
+    return CheckResult(checked, None, unsupported, errors)
+
+
+async def structure_only(
+    validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
+) -> CheckResult:
+    """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification.
+
+    文件分类的类型取值已由结构校验限定, 没有证据指针.
+    """
+    return CheckResult(output)
+
+
+for _model, _check in (
+    (JudgmentDraft, check_judgment),
+    (ContractExtraction, check_extraction),
+    (ConfirmationExtraction, check_extraction),
+    (ReportDraft, check_report),
+    (CriticIndependent, check_critic),
+    (CriticVerdictOut, structure_only),
+    (DocumentClassification, structure_only),
+):
+    OutputValidator.register(_model, _check)
 
 
 def json_default(value: object) -> NoReturn:
@@ -675,7 +749,7 @@ class JudgmentEngine:
             proposed_action=draft.proposed_action,
             misstatement_draft=draft.misstatement_draft,
             exception_ids=[x.id for x in ctx.rule_findings],
-            autonomy_level=template.autonomy_level,
+            autonomy_level=ctx.autonomy_level or template.autonomy_level,
             performed_by=performed_by,
             created_at=datetime.now(UTC),
             trail_ref=result.trail_ids[-1],
