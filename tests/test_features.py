@@ -39,7 +39,7 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
-from tests.test_assemble import P2, after_pln_approve
+from tests.test_assemble import P2, added_programs, after_pln_approve
 from tests.test_decisions import acc01_decision, started
 from tests.test_fieldwork_csh02 import setup as csh02_setup
 from tests.test_qc import misstatement
@@ -143,12 +143,12 @@ async def test_library_filters_fixed_set_and_pack(tmp_path: Path) -> None:
     assert len(fixed_procedures(base)) == 10
 
     nodes, _, _, state = after_pln_approve(library=base)
-    added = (await nodes.assemble_pack(state))["procedure_pack"][10:]
+    added = added_programs((await nodes.assemble_pack(state))["procedure_pack"])
     assert [p.id for p in added] == P2
 
     journals = ProcedureLibrary(root, {"critic", "journals"})
     nodes, _, _, state = after_pln_approve(library=journals, features=journals.features)
-    added = (await nodes.assemble_pack(state))["procedure_pack"][10:]
+    added = added_programs((await nodes.assemble_pack(state))["procedure_pack"])
     assert len(added) == 8 and [p.id for p in added if p.id not in P2] == ["X-P2"]
     assert next(p for p in added if p.id == "X-P2").objective_ids == ["OBJ-REV-CUT"]
 

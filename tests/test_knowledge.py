@@ -1,6 +1,7 @@
-import csv
 import json
 import re
+import shutil
+from dataclasses import replace
 from datetime import date, datetime
 from functools import cache
 from pathlib import Path
@@ -28,13 +29,56 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
+from tests.fixture_sets import FIXTURE_SETS, NUMBAT, FixtureSet
 
 ROOT = get_settings().KNOWLEDGE_ROOT
 P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
 
 
+# 基线 18 条: Demo 的 17 条加 GEN-09 (A7 独立复核). 新程序一律挂功能名 (模板 feature), 不进基线启用集
+BASE_18 = {
+    "ACC-01",
+    "ACC-04",
+    "CSH-02",
+    "CSH-04",
+    "CSH-05",
+    "DOC-04",
+    "DOC-06",
+    "FIN-01",
+    "FIN-04",
+    "GEN-09",
+    "PLN-01",
+    "PLN-03",
+    "PLN-07",
+    "REV-02",
+    "REV-03",
+    "REV-08",
+    "RPT-01",
+    "RPT-03",
+}
+
+
+def count_guards(root: Path) -> tuple[set[str], set[str]]:
+    """两条程序数守卫的差集, 都为空才通过: (BASE_18 中全部模板 (含未启用) 没有的, 基线启用集与 BASE_18 的对称差)."""
+    library = ProcedureLibrary(root)
+    return BASE_18 - {t.id for t in library.all(include_disabled=True)}, {t.id for t in library.all()} ^ BASE_18
+
+
 def test_all_procedures_load() -> None:
-    assert len(ProcedureLibrary(ROOT).all()) == 18  # Demo 的 17 条加 GEN-09 (A7 独立复核)
+    """全部模板包含基线 18 条, 基线启用集恰为这 18 条 (新程序加进来时不必改这里, 但须挂功能名)."""
+    assert count_guards(ROOT) == (set(), set())
+
+
+def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
+    """临时 knowledge 目录多一个 feature 为 journals 的 YAML 时两条都过; 再多一个 feature 为空的 YAML 时第二条失败."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(ROOT, root)
+    template = yaml.safe_load((root / "procedures" / "REV-02.yaml").read_text(encoding="utf-8"))
+    for pid, feature in (("X-J", "journals"), ("X-B", None)):
+        extra = {k: v for k, v in template.items() if k not in ("triggers", "depends_on", "feature")}
+        extra |= {"id": pid, **({"feature": feature} if feature else {})}
+        (root / "procedures" / f"{pid}.yaml").write_text(yaml.safe_dump(extra, allow_unicode=True), encoding="utf-8")
+        assert count_guards(root) == (set(), set() if feature else {"X-B"}), pid
 
 
 def test_standards_referenced_are_registered() -> None:
@@ -398,22 +442,12 @@ def test_doc04_fixture_set() -> None:
     assert sorted(p.name for p in DOC04.iterdir()) == ["CON-001.json", "CON-002.json", "CON-003.json"]
 
 
-# ── R54: fixture 文档 ID 对齐 manifest ──
-
-FIXTURES = get_settings().LLM_FIXTURES_ROOT
-DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"  # 合成数据集 (合成数据集设计第 1 节)
+# ── R54: fixture 文档 ID 对齐 manifest (R77: 按数据集登记表 tests/fixture_sets.py 参数化) ──
 
 
 def manifest_documents() -> dict[str, dict[str, Any]]:
     """data/demo/manifest.json 登记的 PDF: 文档 ID -> 条目 (path 相对 data/demo, type, page_count, sha256)."""
-    documents = json.loads((DEMO / "manifest.json").read_text(encoding="utf-8"))["documents"]
-    return {d["document_id"]: d for d in documents}
-
-
-def demo_rows(table: str) -> dict[str, dict[str, str]]:
-    """data/demo 下某张表的 CSV: id -> 行."""
-    with (DEMO / f"{table}.csv").open(encoding="utf-8", newline="") as f:
-        return {row["id"]: row for row in csv.DictReader(f)}
+    return NUMBAT.documents()
 
 
 def document_pointers(node: Any) -> list[dict[str, Any]]:
@@ -426,42 +460,33 @@ def document_pointers(node: Any) -> list[dict[str, Any]]:
     return []
 
 
-def expected_document(procedure_id: str, fixture_key: str) -> str:
-    """fixture 的 document 指针应指向的 PDF (相对 data/demo): DOC-04, REV-03 为该合同; REV-02 为发票关联的合同;
-    DOC-06, CSH-02 为该银行账户的回函, 以账号命名; GEN-09 (A7 复核, 键为 {判断对象}-r1, -r2) 同被复核判断的程序."""
-    if procedure_id == "GEN-09":
-        subject = fixture_key.rsplit("-r", 1)[0]
-        judged_by = {"BA": "CSH-02", "CON": "REV-03", "SI": "REV-02"}[subject.split("-")[0]]
-        return expected_document(judged_by, subject)
-    if procedure_id in ("DOC-04", "REV-03"):
-        return f"contracts/{fixture_key}.pdf"
-    if procedure_id == "REV-02":
-        return f"contracts/{demo_rows('sales_invoices')[fixture_key]['contract_id']}.pdf"
-    if procedure_id in ("DOC-06", "CSH-02"):
-        return f"confirmations/{demo_rows('bank_accounts')[fixture_key]['account_no']}.pdf"
-    raise LookupError(f"{procedure_id} 的 fixture 不应有 document 指针")
-
-
-def test_fixture_document_ids_in_manifest() -> None:
-    """验收 1: 每个 document 指针的 source_id 都在 manifest.documents 中, 指向该 fixture 对应的 PDF
-    (合同为 contracts/CON-00x.pdf, 回函为 confirmations/{账号}.pdf), 页码不超过该 PDF 的页数.
-    有 document 指针的正是 DOC-04, DOC-06, REV-03, REV-02, CSH-02 五个程序的全部 fixture 与 GEN-09 的第一轮."""
-    documents = manifest_documents()
+def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[str, str, str, int]]]:
+    """该数据集测试 fixture 中的 document 指针: 返回 (各 fixture 的指针数, 不合格的指针). 合格: source_id 在 manifest
+    中, 页码在 1 到该 PDF 页数之间; 登记了期望 PDF 函数时还须指向它给出的 PDF."""
+    documents = fs.documents()
     checked: dict[str, int] = {}
     wrong = []
-    for path in sorted(FIXTURES.rglob("*.json")):
+    for path in sorted(fs.fixtures.rglob("*.json")):
         pointers = document_pointers(json.loads(path.read_text(encoding="utf-8")))
         if not pointers:
             continue
         procedure_id, key = path.parent.name, path.stem
         checked[f"{procedure_id}/{key}"] = len(pointers)
-        expected = expected_document(procedure_id, key)
+        expected = fs.expected_document(procedure_id, key) if fs.expected_document is not None else None
         for p in pointers:
             entry = documents.get(p["source_id"])
-            if entry is None or entry["path"] != expected or not 1 <= p["page"] <= entry["page_count"]:
+            if (
+                entry is None
+                or (expected is not None and entry["path"] != expected)
+                or not 1 <= p["page"] <= entry["page_count"]
+            ):
                 wrong.append((f"{procedure_id}/{key}", p["source_id"], p["locator"], p["page"]))
-    assert wrong == []
-    assert checked == {
+    return checked, wrong
+
+
+# 有 document 指针的 fixture 及其指针数, 按登记名; 没有列出的数据集只核对指针合格
+EXPECTED_POINTERS = {
+    "numbat": {  # DOC-04, DOC-06, REV-03, REV-02, CSH-02 五个程序的全部 fixture 与 GEN-09 的第一轮
         "CSH-02/BA-01": 4,
         "DOC-04/CON-001": 4,
         "DOC-04/CON-002": 4,
@@ -475,6 +500,39 @@ def test_fixture_document_ids_in_manifest() -> None:
         "REV-03/CON-002": 2,
         "REV-03/CON-003": 6,
     }
+}
+
+
+@pytest.mark.parametrize("fs", FIXTURE_SETS, ids=lambda fs: fs.name)
+def test_fixture_document_ids_in_manifest(fs: FixtureSet) -> None:
+    """验收 1: 每个 document 指针的 source_id 都在该数据集的 manifest.documents 中, 指向该 fixture 对应的 PDF
+    (Numbat: 合同为 contracts/CON-00x.pdf, 回函为 confirmations/{账号}.pdf), 页码不超过该 PDF 的页数."""
+    checked, wrong = check_document_pointers(fs)
+    assert wrong == []
+    assert EXPECTED_POINTERS.keys() <= {f.name for f in FIXTURE_SETS}  # 登记行改名时计数核对不会静默消失
+    if fs.name in EXPECTED_POINTERS:
+        assert checked == EXPECTED_POINTERS[fs.name]
+
+
+def test_document_check_without_expected_function(tmp_path: Path) -> None:
+    """期望 PDF 函数为空的登记行只核对指针在 manifest 中且页码不超过页数."""
+    some_id, entry = next(iter(NUMBAT.documents().items()))
+    fixtures = tmp_path / "fixtures"
+
+    def pointer(source_id: str, page: int) -> dict[str, Any]:
+        return {"source_type": "document", "source_id": source_id, "locator": "x", "page": page}
+
+    for key, ptr in (
+        ("OK", pointer(some_id, entry["page_count"])),
+        ("UNKNOWN", pointer("DOC-000000000000", 1)),
+        ("PAGE", pointer(some_id, entry["page_count"] + 1)),
+    ):
+        (fixtures / "REV-03").mkdir(parents=True, exist_ok=True)
+        (fixtures / "REV-03" / f"{key}.json").write_text(json.dumps({"evidence": [ptr]}), encoding="utf-8")
+    fs = replace(NUMBAT, name="tmp", fixtures=fixtures, runtime=tmp_path / "runtime", expected_document=None)
+    checked, wrong = check_document_pointers(fs)
+    assert checked == {"REV-03/OK": 1, "REV-03/PAGE": 1, "REV-03/UNKNOWN": 1}
+    assert sorted(w[0] for w in wrong) == ["REV-03/PAGE", "REV-03/UNKNOWN"]
 
 
 def test_fake_documents_from_manifest() -> None:
@@ -504,15 +562,33 @@ def test_fake_documents_from_manifest() -> None:
         ), name
 
 
-def test_runtime_fixtures_match_test_fixtures() -> None:
-    """运行用 data/demo/llm (B 的生成器由本目录复制并映射文档 ID) 与测试用 fixture 内容相同: 文档 ID 已对齐,
-    映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出."""
-    test_files = {p.relative_to(FIXTURES): p for p in FIXTURES.rglob("*.json")}
-    runtime = DEMO / "llm"
-    runtime_files = {p.relative_to(runtime): p for p in runtime.rglob("*.json")}
-
+def check_runtime(fs: FixtureSet) -> None:
+    """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过."""
+    if not fs.runtime.is_dir():
+        raise AssertionError(f"{fs.name}: 运行副本未生成 ({fs.runtime})")
+    test_files = {p.relative_to(fs.fixtures): p for p in fs.fixtures.rglob("*.json")}
+    runtime_files = {p.relative_to(fs.runtime): p for p in fs.runtime.rglob("*.json")}
     assert sorted(test_files) == sorted(runtime_files)
     for name, path in test_files.items():
         assert json.loads(path.read_text(encoding="utf-8")) == json.loads(
             runtime_files[name].read_text(encoding="utf-8")
         ), name
+
+
+@pytest.mark.parametrize("fs", FIXTURE_SETS, ids=lambda fs: fs.name)
+def test_runtime_fixtures_match_test_fixtures(fs: FixtureSet) -> None:
+    """运行副本 (Numbat 为 data/demo/llm, B 的生成器由测试 fixture 复制并映射文档 ID) 与测试 fixture 内容相同:
+    文档 ID 已对齐, 映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出."""
+    check_runtime(fs)
+
+
+def test_runtime_check_fails_without_runtime_copy(tmp_path: Path) -> None:
+    """登记行的运行副本根不存在时失败 (运行副本未生成), 不跳过; 多一个或改了一个文件时也失败."""
+    with pytest.raises(AssertionError, match="运行副本未生成"):
+        check_runtime(replace(NUMBAT, runtime=tmp_path / "missing"))
+    runtime = tmp_path / "runtime"
+    shutil.copytree(NUMBAT.runtime, runtime)
+    check_runtime(replace(NUMBAT, runtime=runtime))
+    (runtime / "REV-03" / "CON-999.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_runtime(replace(NUMBAT, runtime=runtime))

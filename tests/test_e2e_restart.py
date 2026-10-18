@@ -24,6 +24,7 @@ from tests.test_e2e_mock import (
     assert_pointers_resolve,
     assert_results,
     assert_trail_counts,
+    enabled_programs,
     finish_demo,
     real_agents,
     start_demo,
@@ -57,7 +58,7 @@ async def assert_same_as_uninterrupted(s: Started, channel: FakeConfirmationChan
     await assert_results(s)
     assert_trail_counts(trail_of(s).entries)  # 含 CSH-04 的 external_call 2 行, llm_call 15 行 (含 GEN-09 两轮)
     await assert_pointers_resolve(s)
-    assert_fixtures_used_once(trail_of(s).entries)
+    assert_fixtures_used_once(trail_of(s).entries, enabled_programs(s.runner.deps))
     assert len(channel.submits) == 2
     values = (await s.runner.app.aget_state(CONFIG)).values
     runs = sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0)

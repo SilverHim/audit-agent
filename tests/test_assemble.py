@@ -24,6 +24,13 @@ from tests.fakes import (
 EID = ENGAGEMENT.id
 # 装配结果的顺序: 匹配到的程序按编号排序后补依赖
 P2 = ["CSH-05", "CSH-04", "DOC-06", "CSH-02", "REV-03", "REV-08", "REV-02"]
+# 基线固定集 (P2 以外的程序): 新程序挂功能名, 基线下不进固定集, 所以这里是精确集合
+FIXED = {"ACC-04", "ACC-01", "DOC-04", "PLN-07", "PLN-01", "PLN-03", "FIN-04", "FIN-01", "RPT-03", "RPT-01"}
+
+
+def added_programs(pack: list[Procedure]) -> list[Procedure]:
+    """程序包中装配新增的 (不在固定集中的) 程序, 保持顺序."""
+    return [p for p in pack if p.id not in FIXED]
 
 
 def after_pln_approve(
@@ -50,11 +57,12 @@ def after_pln_approve(
     return make_graph_nodes(deps), store, engagements, state
 
 
-def test_fixed_set_has_ten_programs() -> None:
+def test_fixed_set_is_baseline() -> None:
+    """基线固定集恰为 10 条 P2 以外的程序, 都不在 P2 阶段."""
     _, _, _, state = after_pln_approve()
 
-    assert len(state["procedure_pack"]) == 10
-    assert not set(P2) & {p.id for p in state["procedure_pack"]}
+    assert {p.id for p in state["procedure_pack"]} == FIXED and len(state["procedure_pack"]) == len(FIXED)
+    assert all(p.phase is not Phase.P2_Executing for p in state["procedure_pack"])
 
 
 async def test_assemble_adds_seven_p2_programs_with_objectives() -> None:
@@ -63,7 +71,7 @@ async def test_assemble_adds_seven_p2_programs_with_objectives() -> None:
 
     patch = await nodes.assemble_pack(state)
 
-    added = {p.id: p for p in patch["procedure_pack"][10:]}
+    added = {p.id: p for p in added_programs(patch["procedure_pack"])}
     assert list(added) == P2
     assert {pid: p.objective_ids for pid, p in added.items()} == {
         "REV-08": ["OBJ-REV-OCC", "OBJ-REV-CUT"],
@@ -77,7 +85,8 @@ async def test_assemble_adds_seven_p2_programs_with_objectives() -> None:
     assert all(
         (p.version, p.status, p.phase) == (1, ProcedureStatus.planned, Phase.P2_Executing) for p in added.values()
     )
-    assert patch["procedure_pack"][:10] == state["procedure_pack"]  # 固定集不动
+    assert [p for p in patch["procedure_pack"] if p.id in FIXED] == state["procedure_pack"]  # 固定集不动
+    assert patch["procedure_pack"][: len(state["procedure_pack"])] == state["procedure_pack"]  # 新增的追加在后
     assert patch["phase"] is Phase.P2_Executing
 
 
@@ -94,7 +103,7 @@ async def test_assemble_writes_programs_and_phase_in_one_commit() -> None:
     ]
     engagement = await engagements.get(EID)
     assert engagement is not None and engagement.phase is Phase.P2_Executing
-    for p in patch["procedure_pack"][10:]:
+    for p in added_programs(patch["procedure_pack"]):
         assert await store.get(EID, Procedure, p.id) == p
 
 
@@ -135,7 +144,7 @@ async def test_replay_returns_stored_objects() -> None:
     second = await nodes.assemble_pack(state)
 
     assert second == first
-    assert all(p.template_commit != "changed-before-replay" for p in second["procedure_pack"][10:])
+    assert all(p.template_commit != "changed-before-replay" for p in added_programs(second["procedure_pack"]))
 
 
 async def test_nothing_to_add_writes_nothing() -> None:
@@ -167,4 +176,4 @@ async def test_schedule_layers_and_groups_without_writing() -> None:
         ]
     }
     assert store.commits == commits
-    assert all(p.status is ProcedureStatus.planned for p in state["procedure_pack"][10:])
+    assert all(p.status is ProcedureStatus.planned for p in added_programs(state["procedure_pack"]))
