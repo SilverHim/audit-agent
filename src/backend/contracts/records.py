@@ -74,6 +74,15 @@ class JournalEntry(Model):
     is_adjustment: bool = False  # 是否调整分录
 
 
+class AdjustmentEntrySummary(Model):
+    """数据集中一笔可载入的更正分录的摘要 (DatasetLoader.adjustment_entries): 取该凭证首行的日期与摘要."""
+
+    entry_no: str  # 凭证号, 如 AJE-X01
+    posting_date: date  # 入账日期
+    description: str | None  # 摘要
+    line_count: int  # 行数
+
+
 class SalesInvoice(Model):
     """销售发票."""
 

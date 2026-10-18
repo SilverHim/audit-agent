@@ -86,6 +86,7 @@ from backend.contracts.ports import (
     T_out,
 )
 from backend.contracts.records import (
+    AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
     DeliveryNote,
@@ -104,6 +105,7 @@ from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.persistence.stores import natural_key
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -1189,12 +1191,43 @@ class FakeLlmSettingsStore:
 class FakeDatasetLoader:
     """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
 
-    预置计划数据取 Numbat 的.
+    预置计划数据取 Numbat 的. 更正分录取构造时预置的 adjustments: load_adjustments 记下调用, 返回所请求凭证的行
+    (按 id 排序, 凭证号不在预置中抛 LookupError), 不写假财务存储; 没有预置 (None, 同数据集没有更正分录文件) 时抛
+    FileNotFoundError. adjustment_entries 与 adjustment_entry_nos 按预置行, 凭证号自然序, 同真实实现.
     """
 
-    def __init__(self, financial_store: FakeFinancialStore) -> None:
+    def __init__(self, financial_store: FakeFinancialStore, adjustments: list[JournalEntry] | None = None) -> None:
         self.financial_store = financial_store  # 合同登记到这里
         self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
+        self.adjustments = adjustments  # 预置的更正分录行; None 表示数据集没有更正分录文件
+        self.adjustment_loads: list[tuple[str, str, list[str] | None]] = []  # (项目编号, 数据集名, 凭证号)
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        self.adjustment_loads.append((eid, dataset, list(entry_nos) if entry_nos is not None else None))
+        if self.adjustments is None:
+            raise FileNotFoundError(f"没有更正分录文件 ({dataset})")
+        known = {x.entry_no for x in self.adjustments}
+        missing = [no for no in entry_nos or () if no not in known]
+        if missing:
+            raise LookupError(f"更正分录中没有 {', '.join(missing)}")
+        wanted = set(entry_nos) if entry_nos is not None else known
+        return sorted((x for x in self.adjustments if x.entry_no in wanted), key=lambda x: x.id)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        groups: dict[str, list[JournalEntry]] = {}
+        for line in self.adjustments or []:
+            groups.setdefault(line.entry_no, []).append(line)
+        return [
+            AdjustmentEntrySummary(
+                entry_no=no, posting_date=rows[0].posting_date, description=rows[0].description, line_count=len(rows)
+            )
+            for no, rows in sorted(groups.items(), key=lambda item: natural_key(item[0]))
+        ]
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
 
     async def load(self, eid: str, dataset: str) -> None:
         self.loads.append((eid, dataset))

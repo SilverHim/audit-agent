@@ -39,9 +39,11 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.records import (
+    AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
     DeliveryNote,
+    JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
 )
@@ -141,6 +143,24 @@ class DatasetLoader(Protocol):
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]: ...
 
     def client_profile(self, dataset: str) -> ClientProfile: ...
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """按凭证号把数据集的更正分录 (adjustments/journal_entries.csv) 载入 journal_entries, 返回所请求分录的全部行,
+        按 id 排序; entry_nos 为 None 时载入文件中全部, 为空列表时不载入, 返回 [] (要全部须传 None). 幂等: 已有的
+        同 id 同内容行跳过, 有新行时 data_version 加一;
+        试算表不动. 凭证号不在文件中抛 LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛
+        ValueError; 项目锁定抛 EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""
+        ...
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        """可载入的更正分录摘要, 按凭证号自然序; 没有更正分录文件时为空."""
+        ...
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        """可载入的更正分录凭证号, 顺序同 adjustment_entries (更正通知提交时校验用)."""
+        ...
 
     def datasets(self) -> list[str]:
         """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""

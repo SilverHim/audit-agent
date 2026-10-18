@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
@@ -42,7 +43,15 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.ports import DatasetLoader
-from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, SalesInvoice, TrialBalanceRow
+from backend.contracts.records import (
+    AdjustmentEntrySummary,
+    BankAccount,
+    BankTransaction,
+    DeliveryNote,
+    JournalEntry,
+    SalesInvoice,
+    TrialBalanceRow,
+)
 from backend.core.config import get_settings
 from backend.persistence import models as m
 from backend.persistence.db import default_engine, transaction, writable
@@ -419,6 +428,87 @@ class TableLoader(Store):
                 insert(m.dataset_loads).values(engagement_id=eid, dataset=dataset, data_version=1, loaded_at=now())
             )
 
+    async def insert_adjustments(
+        self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None
+    ) -> list[JournalEntry]:
+        """更正分录载入的公共部分 (DatasetLoader.load_adjustments): 读 path, 取所请求的凭证, 在一个事务内写入
+        journal_entries (同 id 同内容的跳过), 有新行时 data_version 加一; 试算表不动. 拒绝的情况见协议说明, 都不写入."""
+        if isinstance(entry_nos, str):
+            raise TypeError("entry_nos 须为凭证号列表, 不能是单个字符串")
+        lines = read_adjustments(path)
+        wanted = (
+            list(dict.fromkeys(entry_nos)) if entry_nos is not None else list(dict.fromkeys(x.entry_no for x in lines))
+        )
+        missing = [no for no in wanted if no not in {x.entry_no for x in lines}]
+        if missing:
+            raise LookupError(f"更正分录中没有 {', '.join(missing)}")
+        chosen = sorted((x for x in lines if x.entry_no in wanted), key=lambda x: x.id)
+        unbalanced = [no for no in wanted if sum(x.debit_cents - x.credit_cents for x in chosen if x.entry_no == no)]
+        if unbalanced:
+            raise ValueError(f"更正分录借贷不平衡: {', '.join(unbalanced)}")
+        journal = m.FINANCIAL["journal_entries"]
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            loads = await self.rows(eid, select(m.dataset_loads))
+            if not loads:
+                raise ValueError("尚未载入数据集")
+            if loads[0]["dataset"] != dataset:
+                raise ValueError("Engagement already has a different dataset")
+            stored = {
+                r["id"]: JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+                for r in await self.rows(eid, select(journal).where(journal.c.id.in_([x.id for x in chosen])))
+            }
+            changed = [x.id for x in chosen if x.id in stored and stored[x.id] != x]
+            if changed:
+                raise ValueError(f"更正分录与已载入的同 ID 行内容不同: {', '.join(changed)}")
+            new = [x for x in chosen if x.id not in stored]
+            if new:
+                await conn.execute(insert(journal), [dict(engagement_id=eid, **x.model_dump()) for x in new])
+                await conn.execute(
+                    update(m.dataset_loads)
+                    .where(m.dataset_loads.c.engagement_id == eid)
+                    .values(data_version=m.dataset_loads.c.data_version + 1)
+                )
+        return chosen
+
+
+ADJUSTMENTS = Path("adjustments") / "journal_entries.csv"  # 数据集目录下的更正分录 (表头同 journal_entries.csv)
+
+
+def read_adjustments(path: Path) -> list[JournalEntry]:
+    """读更正分录 CSV (空串按 None); 文件不存在抛 FileNotFoundError, 消息含路径. created_at 须带时区 (时间存 UTC),
+    否则抛 ValueError 并列出行 ID: 无时区的值写库后读回带时区, 再次载入时会被误判为内容不同."""
+    if not path.is_file():
+        raise FileNotFoundError(f"没有更正分录文件 {path}")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = [
+            JournalEntry.model_validate({k: (v if v != "" else None) for k, v in r.items()})
+            for r in csv.DictReader(stream)
+        ]
+    naive = [x.id for x in rows if x.created_at.tzinfo is None]
+    if naive:
+        raise ValueError(f"更正分录的 created_at 没有时区: {', '.join(naive)}")
+    return rows
+
+
+def adjustment_summaries(path: Path | None) -> list[AdjustmentEntrySummary]:
+    """更正分录的凭证摘要, 按凭证号自然序 (AJE-X2 在 AJE-X10 之前); 文件不存在为空."""
+    if path is None or not path.is_file():
+        return []
+    groups: dict[str, list[JournalEntry]] = {}
+    for line in read_adjustments(path):
+        groups.setdefault(line.entry_no, []).append(line)
+    return [
+        AdjustmentEntrySummary(
+            entry_no=no, posting_date=lines[0].posting_date, description=lines[0].description, line_count=len(lines)
+        )
+        for no, lines in sorted(groups.items(), key=lambda item: natural_key(item[0]))
+    ]
+
+
+def natural_key(text: str) -> list[Any]:
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text)]
+
 
 class CsvDatasetLoader(TableLoader):
     """CSV 数据集 (如 Numbat): 每张财务表一个 CSV; 科目没有 category 列时按名称映射标准分类."""
@@ -455,6 +545,17 @@ class CsvDatasetLoader(TableLoader):
         """登记与回函 mock 读的目录: 数据集目录本身 (如 data/demo); 不存在时为 None."""
         directory = safe_child(self.root, dataset)
         return directory if directory.is_dir() else None
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.insert_adjustments(eid, dataset, safe_child(self.root, dataset) / ADJUSTMENTS, entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        return adjustment_summaries(safe_child(self.root, dataset) / ADJUSTMENTS)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
 
     def datasets(self) -> list[str]:
         """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
@@ -537,6 +638,28 @@ class XeroDatasetLoader(TableLoader):
         found = self.supplement(dataset)
         return found.root if found else None
 
+    def adjustments_path(self, dataset: str) -> Path:
+        """补造目录的更正分录文件 (已核对); 没有补造目录时抛 FileNotFoundError, 消息含应有的路径."""
+        found = self.supplement(dataset)
+        if found is None:
+            base = (
+                self.supplements / dataset.removeprefix(self.PREFIX) if self.supplements else Path("<未配置补造目录>")
+            )
+            raise FileNotFoundError(f"没有更正分录文件 {base / ADJUSTMENTS}")
+        return found.root / ADJUSTMENTS
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.insert_adjustments(eid, dataset, self.adjustments_path(dataset), entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        found = self.supplement(dataset)
+        return adjustment_summaries(found.root / ADJUSTMENTS if found else None)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
+
     def client_profile(self, dataset: str) -> ClientProfile:
         found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在
         profile = xero_client_profile(self.snapshot(dataset))
@@ -566,6 +689,17 @@ class RoutingDatasetLoader:
 
     def client_profile(self, dataset: str) -> ClientProfile:
         return self.pick(dataset).client_profile(dataset)
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.pick(dataset).load_adjustments(eid, dataset, entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        return self.pick(dataset).adjustment_entries(dataset)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return self.pick(dataset).adjustment_entry_nos(dataset)
 
     def supplement_dir(self, dataset: str) -> Path | None:
         """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有

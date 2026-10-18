@@ -105,3 +105,117 @@ def test_xero_without_supplements_tables_unchanged(tmp_path: Path) -> None:
     assert (tables, list(contracts)) == (build_tables(Snapshot(api / "20261017-mock")), [])
     assert tables["delivery_notes"] == [] and all(i.contract_id is None for i in tables["sales_invoices"])
     assert [a.bank_name for a in tables["bank_accounts"]] == ["Business Bank Account", "Business Savings Account"]
+
+
+REPO = Path(__file__).resolve().parents[1]
+XERO_API = REPO / "data" / "external" / "xero" / "api"
+
+
+def routing() -> stores.RoutingDatasetLoader:
+    xero = stores.XeroDatasetLoader(
+        XERO_API, XERO_API, engine=object(), evidence_store=object(), supplements=REPO / "data" / "xero_demo"
+    )  # type: ignore[arg-type]
+    csv = stores.CsvDatasetLoader(REPO / "data", engine=object(), evidence_store=object())  # type: ignore[arg-type]
+    return stores.RoutingDatasetLoader(csv, {"xero/": xero})
+
+
+def test_adjustment_entries_and_numbers() -> None:
+    """R73: 更正分录的凭证摘要与凭证号; 没有更正分录文件的数据集为空, 不抛错."""
+    from datetime import date
+
+    loader = routing()
+    assert loader.adjustment_entries("demo") == [] and loader.adjustment_entry_nos("demo") == []
+    if (XERO_API / "20261017-mock").is_dir():
+        assert loader.adjustment_entry_nos("xero/20261017-mock") == []
+    if not (XERO_API / "20261017-q1").is_dir():
+        pytest.skip("没有本地 Xero 快照 20261017-q1")
+    summaries = loader.adjustment_entries("xero/20261017-q1")
+    assert [s.entry_no for s in summaries] == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
+    assert loader.adjustment_entry_nos("xero/20261017-q1") == [s.entry_no for s in summaries]
+    assert [s.line_count for s in summaries] == [3, 2, 2, 2, 2] and sum(s.line_count for s in summaries) == 11
+    assert all(s.posting_date == date(2026, 9, 30) for s in summaries)
+    assert summaries[0].description is not None and summaries[0].description.startswith("Audit adjustment AJE-X01")
+
+
+async def test_load_adjustments_rejects_before_writing(tmp_path: Path) -> None:
+    """R73: 凭证号不在文件中 (LookupError, 含编号), 数据集没有更正分录文件 (FileNotFoundError, 含路径), 某笔借贷不平
+    (ValueError) 都在开事务之前拒绝 (本用例的载入器没有数据库, 走到写入就会出错)."""
+    loader = routing()
+    with pytest.raises(FileNotFoundError, match="adjustments"):
+        await loader.load_adjustments("E", "demo", ["AJE-X01"])
+    if (XERO_API / "20261017-mock").is_dir():
+        with pytest.raises(FileNotFoundError, match="20261017-mock"):
+            await loader.load_adjustments("E", "xero/20261017-mock")
+    if (XERO_API / "20261017-q1").is_dir():
+        with pytest.raises(LookupError, match="AJE-X09"):
+            await loader.load_adjustments("E", "xero/20261017-q1", ["AJE-X01", "AJE-X09"])
+    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
+    target = tmp_path / "acme" / "adjustments" / "journal_entries.csv"
+    target.parent.mkdir(parents=True)
+    target.write_text(source.read_text(encoding="utf-8").replace(",478,426120,0,", ",478,426121,0,"), encoding="utf-8")
+    acme = stores.CsvDatasetLoader(tmp_path, engine=object(), evidence_store=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="AJE-X02"):
+        await acme.load_adjustments("E", "acme", ["AJE-X02"])
+    assert [s.entry_no for s in acme.adjustment_entries("acme")][:2] == ["AJE-X01", "AJE-X02"]
+
+
+async def test_fake_loader_adjustments() -> None:
+    from tests.fakes import FakeDatasetLoader, FakeFinancialStore
+
+    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
+    if not source.is_file():
+        pytest.skip("没有补造的更正分录")
+    fake = FakeDatasetLoader(FakeFinancialStore(), adjustments=stores.read_adjustments(source))
+    rows = await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X05", "AJE-X01"])
+    assert [r.id for r in rows] == ["AJE-X01-1", "AJE-X01-2", "AJE-X01-3", "AJE-X05-1", "AJE-X05-2"]
+    assert fake.adjustment_loads == [("E", "xero/20261017-q1", ["AJE-X05", "AJE-X01"])]
+    assert fake.adjustment_entry_nos("xero/20261017-q1") == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
+    with pytest.raises(LookupError):
+        await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X09"])
+
+
+async def test_adjustment_inputs_are_checked(tmp_path: Path) -> None:
+    """created_at 没有时区时拒绝 (写库读回带时区, 重放会被误判为内容不同); 单个字符串当凭证号列表时拒绝."""
+    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
+    if not source.is_file():
+        pytest.skip("没有补造的更正分录")
+    target = tmp_path / "acme" / "adjustments" / "journal_entries.csv"
+    target.parent.mkdir(parents=True)
+    text = source.read_text(encoding="utf-8")
+    target.write_text(text.replace("2026-10-20T03:00:00Z", "2026-10-20T03:00:00", 1), encoding="utf-8")
+    acme = stores.CsvDatasetLoader(tmp_path, engine=object(), evidence_store=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="created_at 没有时区: AJE-X01-1"):
+        await acme.load_adjustments("E", "acme", ["AJE-X01"])
+    target.write_text(text, encoding="utf-8")
+    with pytest.raises(TypeError, match="凭证号列表"):
+        await acme.load_adjustments("E", "acme", "AJE-X01")  # type: ignore[arg-type]
+
+
+async def test_fake_loader_matches_real_semantics() -> None:
+    """假载入器: 凭证号自然序 (同真实实现); 没有预置更正分录时载入抛 FileNotFoundError, 列表为空."""
+    from datetime import UTC, date, datetime
+
+    from backend.contracts.records import JournalEntry
+    from tests.fakes import FakeDatasetLoader, FakeFinancialStore
+
+    def line(no: str) -> JournalEntry:
+        return JournalEntry(
+            id=f"{no}-1",
+            entry_no=no,
+            posting_date=date(2026, 9, 30),
+            created_at=datetime(2026, 10, 20, tzinfo=UTC),
+            created_by="xero",
+            approved_by=None,
+            account_code="620",
+            debit_cents=1,
+            description=None,
+            source_doc=None,
+        )
+
+    fake = FakeDatasetLoader(FakeFinancialStore(), adjustments=[line("AJE-X10"), line("AJE-X2"), line("AJE-X1")])
+    assert fake.adjustment_entry_nos("x") == ["AJE-X1", "AJE-X2", "AJE-X10"]
+    assert stores.natural_key("AJE-X2") < stores.natural_key("AJE-X10")
+    empty = FakeDatasetLoader(FakeFinancialStore())
+    assert empty.adjustment_entries("demo") == []
+    with pytest.raises(FileNotFoundError):
+        await empty.load_adjustments("E", "demo")

@@ -615,3 +615,117 @@ async def test_xero_q1_loads_supplements(tmp_path):
     assert await financial.documents(other.id) == []
     assert not (tmp_path / "ev").exists() or not any((tmp_path / "ev").rglob("*.pdf"))
     await engine.dispose()
+
+
+async def test_load_adjustments_two_rounds(tmp_path):
+    """R73: 真实库载入 xero/20261017-q1 后按两轮载入更正分录: 行数, data_version, 幂等, gl_balance, 试算表不变;
+    尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    xero = XeroDatasetLoader(
+        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
+    )
+    store = PostgresEngagementStore(engine)
+    profile = xero.client_profile("xero/20261017-q1")
+
+    async def engagement(dataset: str = "xero/20261017-q1"):
+        chosen = profile if dataset.startswith("xero/") else CsvDatasetLoader(ROOT / "data").client_profile(dataset)
+        return await store.create(
+            owner_id=user, period_start=date(2026, 7, 1), period_end=date(2026, 9, 30), dataset=dataset, profile=chosen
+        )
+
+    financial = PostgresFinancialDataStore(engine)
+
+    async def state(eid):
+        journal = (await financial.query(eid, "SELECT count(*) AS n FROM journal_entries", {}))[0]["n"]
+        version = (await financial.query(eid, "SELECT data_version FROM dataset_loads", {}))[0]["data_version"]
+        return journal, version
+
+    e = await engagement()
+    with pytest.raises(ValueError, match="尚未载入数据集"):
+        await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01"])
+    await xero.load(e.id, "xero/20261017-q1")
+    trial = await financial.trial_balance(e.id, "current")
+    assert await state(e.id) == (1017, 1)
+    first = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01", "AJE-X05"])
+    assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in first] == [
+        ("AJE-X01-1", "711", 82500, 0),
+        ("AJE-X01-2", "710", 0, 75000),
+        ("AJE-X01-3", "820", 0, 7500),
+        ("AJE-X05-1", "620", 4853, 0),
+        ("AJE-X05-2", "270", 0, 4853),
+    ]
+    assert await state(e.id) == (1022, 2)
+    assert await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01", "AJE-X05"]) == first  # 幂等
+    assert await state(e.id) == (1022, 2)
+    second = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X02", "AJE-X03", "AJE-X04"])
+    assert len(second) == 6 and await state(e.id) == (1028, 3)
+    assert len(await xero.load_adjustments(e.id, "xero/20261017-q1")) == 11  # 全部: 已有的跳过
+    assert await state(e.id) == (1028, 3)
+    assert await xero.load_adjustments(e.id, "xero/20261017-q1", []) == []  # 空列表不载入
+    assert await state(e.id) == (1028, 3)
+    as_of = date(2026, 9, 30)
+    assert [await financial.gl_balance(e.id, code, as_of) for code in ("620", "270", "710", "820")] == [
+        4853,
+        -4853,
+        0,
+        -126697,
+    ]
+    assert await financial.trial_balance(e.id, "current") == trial  # 试算表不动
+
+    # 同 ID 内容不同: 更正分录文件换成摘要改过的副本 (只替换文件位置, 走同一套写入)
+    source = ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv"
+    edited_csv = tmp_path / "edited.csv"
+    edited_csv.write_text(
+        source.read_text(encoding="utf-8").replace("Audit adjustment AJE-X01:", "Audit adjustment AJE-X01 (edited):"),
+        encoding="utf-8",
+    )
+
+    class Edited(XeroDatasetLoader):
+        def adjustments_path(self, dataset: str) -> Path:
+            return edited_csv
+
+    edited = Edited(api, ROOT / "src/backend/knowledge/planning", engine, evidence)
+    with pytest.raises(ValueError, match="AJE-X01-1"):
+        await edited.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(e.id) == (1028, 3)
+
+    # 数据集不同: 项目载入的是 demo
+    demo = await engagement("demo")
+    await CsvDatasetLoader(ROOT / "data", engine, evidence).load(demo.id, "demo")
+    before = await state(demo.id)
+    with pytest.raises(ValueError, match="different dataset"):
+        await xero.load_adjustments(demo.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(demo.id) == before
+
+    # 新项目一次载入全部: 11 行, 版本只加一
+    fresh = await engagement()
+    await xero.load(fresh.id, "xero/20261017-q1")
+    assert len(await xero.load_adjustments(fresh.id, "xero/20261017-q1")) == 11
+    assert await state(fresh.id) == (1028, 2)
+    assert [await financial.gl_balance(fresh.id, code, as_of) for code in ("620", "270", "710", "820")] == [
+        4853,
+        -4853,
+        0,
+        -126697,
+    ]
+
+    # 项目锁定
+    locked = await engagement()
+    await xero.load(locked.id, "xero/20261017-q1")
+    await store.update(locked.id, locked=True)
+    with pytest.raises(EngagementLocked):
+        await xero.load_adjustments(locked.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(locked.id) == (1017, 1)
+    await engine.dispose()

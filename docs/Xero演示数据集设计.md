@@ -1061,6 +1061,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
 10. 更正分录: 不在载入时入库. G4 的 CorrectionNotice (adjustments_posted) 增加 `adjustment_entry_nos`, `load_adjustments` 只载入列出的分录 (本数据集分两轮: AJE-X01 与 AJE-X05; AJE-X02 至 X04). Numbat 只有一轮, 不填时载入全部, 行为不变.
+    - 端口已实现 (R73): `load_adjustments(eid, dataset, entry_nos=None)` 幂等, 有新行时 data_version 加一, 试算表不动; `adjustment_entries` 与 `adjustment_entry_nos` 列出可载入的凭证. data/demo 目前没有 adjustments 目录, 对 Numbat 调用抛 FileNotFoundError, 不为 Numbat 补数据.
 11. documents/index.csv 列出的 19 份文件登记为证据文件 (类型, 可靠性, 文件日期, 关联对象); 类型取值与证据映射见第 4 节类型表, 未知类型报错.
 12. fs_v1.json 作为 FIN-12 的财报输入 (G6 的 financial_statements 端口).
 13. dataset_traits.json 供程序参数 `{ref: dataset.<键>}` 解析; payroll/employees.csv 供 FIN-15.
