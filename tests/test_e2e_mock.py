@@ -493,6 +493,8 @@ async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRu
     engagement = await deps.engagement_store.create(
         owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
     )
+    # 建项目不载入财务数据 (需求 R10): 同种子脚本的 load 载入数据集, 视同已确认数据已齐, P1 不停下等数据
+    await deps.datasets.load(engagement.id, "demo")
     async with AsyncExitStack() as stack:
         saver = await stack.enter_async_context(open_checkpointer(settings))
         runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))

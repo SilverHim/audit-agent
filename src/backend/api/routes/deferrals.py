@@ -23,15 +23,16 @@ async def list_deferrals(
     deps: Annotated[AgentDeps, Depends(get_deps)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
 ) -> list[DeferralView]:
-    """当前有效的标记, 按标记时间升序. 任务已决定, 或闸门已作出决定的, 自动不在其中."""
+    """当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 或补交请求已收到的, 自动不在其中."""
     eid = engagement.id
     async with catch_api():
         entries = await all_of_kind(deps.trail, eid, TrailKind.deferral)
         tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
         decisions = await deps.output_store.latest(eid, GateDecision)
         gate = (await query.overview(eid)).current_gate
+        requests = {r.id: r for r in await deps.data.requests(eid)}
     views = []
-    for entry in active_deferrals(entries, tasks, gate, decisions):
+    for entry in active_deferrals(entries, tasks, gate, decisions, requests):
         target_type, target_id = target_of(entry)
         views.append(
             DeferralView.model_validate(
@@ -57,7 +58,8 @@ async def set_deferral(
     """标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.
 
     项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;
-    闸门不是当前停留的 409 NOT_AT_GATE; 取消从未标记过的目标 404 NOT_FOUND.
+    闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;
+    取消从未标记过的目标 404 NOT_FOUND.
     """
     eid = engagement.id
     if engagement.locked:
@@ -66,18 +68,25 @@ async def set_deferral(
         tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
         decisions = await deps.output_store.latest(eid, GateDecision)
         gate = (await query.overview(eid)).current_gate
+        requests = {r.id: r for r in await deps.data.requests(eid)}
         if body.target_type == "review_task":
             task = tasks.get(body.target_id)
             if task is None:
                 raise api_error("NOT_FOUND", body.target_id)
             if task.status is not TaskStatus.pending:
                 raise api_error("TASK_NOT_PENDING", f"{body.target_id} 已决定")
+        elif body.target_type == "data_request":
+            request = requests.get(body.target_id)
+            if request is None:
+                raise api_error("NOT_FOUND", body.target_id)
+            if request.status != "open":
+                raise api_error("REQUEST_NOT_OPEN", f"{body.target_id} 不是待补交的请求")
         elif gate is None or gate.value != body.target_id:
             raise api_error("NOT_AT_GATE", f"当前不在 {body.target_id} 闸门", status=409)
         latest = latest_entries(await all_of_kind(deps.trail, eid, TrailKind.deferral)).get(
             (body.target_type, body.target_id)
         )
-        active = latest is not None and is_active(latest, tasks, gate, decisions)
+        active = latest is not None and is_active(latest, tasks, gate, decisions, requests)
         if active == body.deferred:
             if latest is None:
                 raise api_error("NOT_FOUND", f"{body.target_id} 没有稍后处理标记")

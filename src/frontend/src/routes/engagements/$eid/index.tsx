@@ -25,7 +25,7 @@ import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { type DataRequest, useDataRequests } from '@/lib/data-api'
 import { decisionsDisabled } from '@/lib/engagement'
-import { apiMessage, isApiCode } from '@/lib/errors'
+import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
@@ -47,9 +47,6 @@ type Current =
   | { kind: 'gate'; key: string; view: GateView; deferred: boolean }
   | { kind: 'requests'; key: string; requests: DataRequest[]; awaiting: boolean; deferred: boolean }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
-
-// 后端 R10 上线后总览带等待数据的状态
-type Overview = EngagementOverview & { awaiting_data?: boolean }
 
 type Turn = {
   id: string
@@ -92,7 +89,7 @@ function Workspace() {
     }
     // 补交资料合成一项, 排在阶段决定之后, 复核任务之前
     const open = (requests.data ?? []).filter((item) => item.status === 'open')
-    const awaiting = Boolean((overview as Overview | undefined)?.awaiting_data)
+    const awaiting = Boolean(overview?.awaiting_data)
     if (open.length || awaiting) {
       const deferred = open.length > 0 && open.every((item) => deferredKeys.has(`request:${item.id}`))
       list.push({ kind: 'requests', key: 'requests', requests: open, awaiting, deferred })
@@ -141,7 +138,7 @@ function Workspace() {
         toast.success(t.toasts.deferred)
         if (focus) void navigate({ to: '/engagements/$eid', params: { eid }, search: {} })
       },
-      (error: unknown) => toast.error(apiMessage(error)),
+      (error: unknown) => toast.error(errorText(error, t)),
     )
   }
 
@@ -310,11 +307,10 @@ function HistoryItem({
   if (item.kind === 'completed')
     return <EventLine>{t.workspace.completed(item.ids.join(lang === 'zh' ? '、' : ', '))}</EventLine>
   if (item.kind === 'deferral') {
-    return (
-      <EventLine>
-        {item.deferred ? t.workspace.deferredEvent(item.target) : t.workspace.resumedEvent(item.target)}
-      </EventLine>
-    )
+    const target = item.request
+      ? (t.data.tables[item.request] ?? t.data.docTypes[item.request] ?? item.target)
+      : item.target
+    return <EventLine>{item.deferred ? t.workspace.deferredEvent(target) : t.workspace.resumedEvent(target)}</EventLine>
   }
   if (item.kind === 'data') {
     const table = item.table ? (t.data.tables[item.table] ?? item.table) : ''

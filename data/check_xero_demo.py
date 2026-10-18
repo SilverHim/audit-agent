@@ -563,7 +563,8 @@ TABLES = {
     "delivery_notes.csv": ["id", "delivery_no", "invoice_no", "shipped_date", "signed_date", "signed_by"],
     "bank_accounts.csv": ["id", "bank_name", "bsb", "account_no", "gl_account_code"],
     "documents/index.csv": ["path", "document_type", "reliability", "document_date", "related_ids"],
-    "adjustments/journal_entries.csv": list(JournalEntry.model_fields),
+    # 表头同 data/demo/journal_entries.csv: JournalEntry 的字段, 不含审批日志导入时才补进的 approved_at
+    "adjustments/journal_entries.csv": [name for name in JournalEntry.model_fields if name != "approved_at"],
     "payroll/employees.csv": [
         "employee_id",
         "name",

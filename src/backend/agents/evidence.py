@@ -98,7 +98,7 @@ class EvidenceAgent(ProcedureAgent[list[Confirmed]]):
         return Confirmed(confirmation, document)
 
     async def archive(self, eid: str, account: BankAccount, receipt: ConfirmationReceipt) -> DocumentRef:
-        """存档回函原件 (type confirmation, 可靠性按回执渠道).
+        """存档回函原件 (type confirmation, 来源渠道 bank_direct, 可靠性按回执渠道).
 
         回执没有回函 (无文件名, 或内容为空) 时抛 ValueError: 本版只处理已回函的情况.
         """
@@ -110,6 +110,7 @@ class EvidenceAgent(ProcedureAgent[list[Confirmed]]):
             receipt.reply_bytes,
             type=DocumentType.confirmation,
             reliability=reply_reliability(receipt.receipt_channel),
+            channel="bank_direct",
         )
 
     async def rebuild(self, ctx: RunContext, account: BankAccount, key: str, payload: dict[str, object]) -> Confirmed:

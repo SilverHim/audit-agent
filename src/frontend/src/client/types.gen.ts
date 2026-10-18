@@ -51,6 +51,22 @@ export type AcceptanceScorecard = {
 };
 
 /**
+ * AccountCategoryIn
+ *
+ * 审计师修改科目的标准分类.
+ */
+export type AccountCategoryIn = {
+    /**
+     * Category
+     */
+    category: 'cash' | 'receivables' | 'inventory' | 'prepayments' | 'other_current_assets' | 'property_plant_equipment' | 'intangible_assets' | 'other_non_current_assets' | 'payables' | 'accruals' | 'tax_payable' | 'employee_provisions' | 'borrowings' | 'other_current_liabilities' | 'other_non_current_liabilities' | 'share_capital' | 'retained_earnings' | 'other_equity' | 'revenue' | 'other_income' | 'cost_of_sales' | 'employee_expenses' | 'depreciation_amortisation' | 'finance_costs' | 'operating_expenses' | 'income_tax';
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
  * AgentId
  *
  * 智能体编号. A8 本版不实现, 只占位.
@@ -272,6 +288,78 @@ export type BodyAuthLogin = {
      */
     client_secret?: string | null;
 };
+
+/**
+ * Body_data-start_import
+ */
+export type BodyDataStartImport = {
+    /**
+     * Files
+     *
+     * 单个 CSV, XLSX 或 XLS 文件, 不超过 50 MB
+     */
+    files: Array<Blob | File>;
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
+};
+
+/**
+ * Body_evidence-upload_documents
+ */
+export type BodyEvidenceUploadDocuments = {
+    /**
+     * Files
+     *
+     * PDF, DOCX, XLSX, PNG, JPG 等, 单个不超过 50 MB
+     */
+    files: Array<Blob | File>;
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
+};
+
+/**
+ * CategoryVersion
+ *
+ * 科目标准分类的一个版本: 第 1 版为写入科目表时系统的归类, 之后每次审计师修改, 或重新写入科目表时系统归类变了,
+ * 各一版 (表 account_category_history).
+ */
+export type CategoryVersion = {
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Category
+     */
+    category: 'cash' | 'receivables' | 'inventory' | 'prepayments' | 'other_current_assets' | 'property_plant_equipment' | 'intangible_assets' | 'other_non_current_assets' | 'payables' | 'accruals' | 'tax_payable' | 'employee_provisions' | 'borrowings' | 'other_current_liabilities' | 'other_non_current_liabilities' | 'share_capital' | 'retained_earnings' | 'other_equity' | 'revenue' | 'other_income' | 'cost_of_sales' | 'employee_expenses' | 'depreciation_amortisation' | 'finance_costs' | 'operating_expenses' | 'income_tax' | null;
+    /**
+     * Basis
+     */
+    basis: 'xero_type' | 'reporting_code' | 'name' | 'auditor' | null;
+    /**
+     * Changed By
+     */
+    changed_by: string;
+    /**
+     * Changed At
+     */
+    changed_at: string;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
+ * CheckId
+ *
+ * 数据质量体检项. 前端按编号本地化文案, params 的键见各项注释.
+ */
+export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available' | 'tb_agrees_statements';
 
 /**
  * ClientProfile
@@ -533,13 +621,17 @@ export type ConfirmationResult = 'pending' | 'agreed' | 'difference';
 /**
  * Contract
  *
- * DOC-04 从合同 PDF 抽取出的合同要素与条款.
+ * DOC-04 从合同 PDF 抽取出的合同要素与条款. 审计师修改抽取结果时出新版本, 各版本见 extraction_versions.
  */
 export type Contract = {
     /**
      * Id
      */
     id: string;
+    /**
+     * Version
+     */
+    version?: number;
     /**
      * Document Id
      */
@@ -600,6 +692,35 @@ export type ContractTerm = {
 };
 
 /**
+ * ContractVersion
+ *
+ * 合同抽取结果的一个版本 (表 extraction_versions): 第 1 版为抽取所得, 之后每次审计师修改一版.
+ */
+export type ContractVersion = {
+    /**
+     * Version
+     */
+    version: number;
+    contract: Contract;
+    /**
+     * Field
+     */
+    field?: string | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Changed By
+     */
+    changed_by: string;
+    /**
+     * Changed At
+     */
+    changed_at: string;
+};
+
+/**
  * ConversationTurn
  *
  * 历史中的一轮问答, 取自 conversation 留痕.
@@ -650,6 +771,144 @@ export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' 
 export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | 'skipped';
 
 /**
+ * DataCheck
+ *
+ * 一项体检的结果.
+ */
+export type DataCheck = {
+    id: CheckId;
+    /**
+     * Status
+     */
+    status: 'passed' | 'failed' | 'missing_data' | 'pending';
+    /**
+     * Params
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
+};
+
+/**
+ * DataReadiness
+ *
+ * 项目财务数据的版本与就绪确认 (表 dataset_loads).
+ */
+export type DataReadiness = {
+    /**
+     * Data Version
+     */
+    data_version: number;
+    /**
+     * Loaded At
+     */
+    loaded_at?: string | null;
+    /**
+     * Ready At
+     */
+    ready_at?: string | null;
+    /**
+     * Ready By
+     */
+    ready_by?: string | null;
+};
+
+/**
+ * DataRequest
+ *
+ * A3 提出的补交资料请求 (表 data_requests). 同一项资料只有一个请求, ID 固定为 REQ-{表种类或文件类型};
+ * 收到后又缺了时重新打开 (status 回到 open, created_at 改为重新打开的时间, resolved_at 清空).
+ */
+export type DataRequest = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Kind
+     */
+    kind: 'table' | 'document';
+    table_kind?: TableKind | null;
+    document_type?: DocumentType | null;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Used For
+     */
+    used_for?: Array<string>;
+    /**
+     * Reason Code
+     */
+    reason_code: 'missing_table' | 'field_unavailable' | 'not_provided';
+    /**
+     * Reason Params
+     */
+    reason_params?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Format Hint
+     */
+    format_hint?: string | null;
+    /**
+     * Status
+     */
+    status?: 'open' | 'received' | 'withdrawn';
+    /**
+     * Raised By
+     */
+    raised_by?: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Resolved At
+     */
+    resolved_at?: string | null;
+};
+
+/**
+ * DataSources
+ *
+ * 数据概览中的外部数据源.
+ */
+export type DataSources = {
+    xero: XeroSource;
+};
+
+/**
+ * DataSummary
+ *
+ * 数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数与待补交请求数.
+ */
+export type DataSummary = {
+    sources: DataSources;
+    /**
+     * Tables
+     */
+    tables: Array<TableSummary>;
+    /**
+     * Checks
+     */
+    checks: Array<DataCheck>;
+    /**
+     * Processing
+     */
+    processing: number;
+    /**
+     * Open Requests
+     */
+    open_requests: number;
+};
+
+/**
  * DatasetSummary
  *
  * 新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中.
@@ -697,7 +956,7 @@ export type DeferralIn = {
     /**
      * Target Type
      */
-    target_type: 'review_task' | 'gate';
+    target_type: 'review_task' | 'gate' | 'data_request';
     /**
      * Target Id
      */
@@ -717,7 +976,7 @@ export type DeferralView = {
     /**
      * Target Type
      */
-    target_type: 'review_task' | 'gate';
+    target_type: 'review_task' | 'gate' | 'data_request';
     /**
      * Target Id
      */
@@ -749,7 +1008,7 @@ export type DisputeResolution = 'a6_upheld' | 'a7_upheld' | 'neither';
 /**
  * DocumentRef
  *
- * 已存档的证据文件 (合同, 回函等 PDF) 的登记信息.
+ * 已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息.
  */
 export type DocumentRef = {
     /**
@@ -773,19 +1032,48 @@ export type DocumentRef = {
     /**
      * Status
      */
-    status: 'received' | 'extracted' | 'needs_manual';
+    status: 'received' | 'classified' | 'extracted' | 'needs_manual';
     /**
      * Uploaded At
      */
     uploaded_at: string;
+    /**
+     * Media Type
+     */
+    media_type?: string;
+    /**
+     * Channel
+     */
+    channel?: 'auditor_upload' | 'bank_direct' | 'xero';
+    /**
+     * Uploaded By
+     */
+    uploaded_by?: string | null;
+    /**
+     * Failed Step
+     */
+    failed_step?: 'classify' | 'read' | 'extract' | 'link' | null;
 };
 
 /**
  * DocumentType
  *
- * 证据文件类型.
+ * 证据文件类型. 审计师上传的文件由 A3 分类.
  */
-export type DocumentType = 'contract' | 'confirmation' | 'other';
+export type DocumentType = 'contract' | 'invoice' | 'confirmation' | 'bank_statement' | 'minutes' | 'financial_statements' | 'other';
+
+/**
+ * DocumentTypeIn
+ *
+ * 人工指定文件类型.
+ */
+export type DocumentTypeIn = {
+    type: DocumentType;
+    /**
+     * Reason
+     */
+    reason: string;
+};
 
 /**
  * Engagement
@@ -886,6 +1174,14 @@ export type EngagementOverview = {
      * Awaiting Review
      */
     awaiting_review: boolean;
+    /**
+     * Awaiting Data
+     */
+    awaiting_data: boolean;
+    /**
+     * Missing Tables
+     */
+    missing_tables: Array<TableKind>;
     /**
      * Procedures
      */
@@ -989,6 +1285,26 @@ export type EvidenceType = 'voucher' | 'invoice' | 'delivery' | 'bank' | 'contra
  * 例外的归因状态.
  */
 export type ExceptionDisposition = 'open' | 'attributed' | 'unattributed';
+
+/**
+ * ExtractionEdit
+ *
+ * 修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id}).
+ */
+export type ExtractionEdit = {
+    /**
+     * Field
+     */
+    field: string;
+    /**
+     * Value
+     */
+    value: string | number | null;
+    /**
+     * Reason
+     */
+    reason: string;
+};
 
 /**
  * GateDecision
@@ -1158,6 +1474,103 @@ export type IdBody = {
      * Id
      */
     id: string;
+};
+
+/**
+ * ImportCommit
+ *
+ * 确认导入: 表种类, 工作表, 日期写法与列对应.
+ */
+export type ImportCommit = {
+    kind: TableKind;
+    /**
+     * Sheet
+     */
+    sheet: string;
+    /**
+     * Date Format
+     */
+    date_format: 'dmy' | 'ymd' | 'mdy';
+    /**
+     * Mapping
+     */
+    mapping: {
+        [key: string]: string | null;
+    };
+};
+
+/**
+ * ImportPreview
+ *
+ * 上传账表文件后的解析结果: 工作表, 列, 样例行, 以及系统建议的表种类, 列对应与日期写法.
+ */
+export type ImportPreview = {
+    /**
+     * Import Id
+     */
+    import_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Sheets
+     */
+    sheets: Array<string>;
+    /**
+     * Sheet
+     */
+    sheet: string;
+    /**
+     * Row Count
+     */
+    row_count: number;
+    /**
+     * Columns
+     */
+    columns: Array<string>;
+    /**
+     * Sample
+     */
+    sample: {
+        [key: string]: string;
+    };
+    suggested_kind: TableKind | null;
+    /**
+     * Suggested Mapping
+     */
+    suggested_mapping: {
+        [key: string]: string | null;
+    };
+    /**
+     * Suggested Date Format
+     */
+    suggested_date_format: 'dmy' | 'ymd' | 'mdy';
+};
+
+/**
+ * ImportResult
+ *
+ * 导入提交后的结果.
+ */
+export type ImportResult = {
+    kind: TableKind;
+    /**
+     * Records
+     */
+    records: number;
+};
+
+/**
+ * ImportSheet
+ *
+ * 导入时换工作表.
+ */
+export type ImportSheet = {
+    /**
+     * Sheet
+     */
+    sheet: string;
 };
 
 /**
@@ -1744,6 +2157,10 @@ export type ProcedureRun = {
      * Failure Reason
      */
     failure_reason?: string | null;
+    /**
+     * Data Version
+     */
+    data_version?: number | null;
 };
 
 /**
@@ -1776,6 +2193,10 @@ export type ProcedureSummary = {
      * Pending Tasks
      */
     pending_tasks: number;
+    /**
+     * Stale
+     */
+    stale?: boolean;
 };
 
 /**
@@ -1813,6 +2234,22 @@ export type ReasoningStep = {
  * 回函渠道, 决定回函的可靠性.
  */
 export type ReceiptChannel = 'direct_mail' | 'direct_email' | 'portal_via_client' | 'oral';
+
+/**
+ * RecordsDetail
+ *
+ * 试算表两期各自的行数.
+ */
+export type RecordsDetail = {
+    /**
+     * Current
+     */
+    current: number;
+    /**
+     * Prior
+     */
+    prior: number;
+};
 
 /**
  * RegisterIn
@@ -2192,6 +2629,122 @@ export type StepKind = 'fact' | 'standard' | 'inference' | 'assumption' | 'limit
 export type StepStatus = 'supported' | 'unsupported';
 
 /**
+ * TableColumn
+ *
+ * 账表查看的一列.
+ */
+export type TableColumn = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Type
+     */
+    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool';
+};
+
+/**
+ * TableField
+ *
+ * 导入时可对应的一个字段.
+ */
+export type TableField = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Required
+     */
+    required: boolean;
+    /**
+     * Type
+     */
+    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool';
+};
+
+/**
+ * TableKind
+ *
+ * 账表种类: 七张财务表与审批日志. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与审批时间.
+ */
+export type TableKind = 'accounts' | 'trial_balance' | 'journal_entries' | 'sales_invoices' | 'bank_accounts' | 'bank_transactions' | 'delivery_notes' | 'approval_log';
+
+/**
+ * TablePage
+ *
+ * 账表查看的一页 (GET /data/tables/{kind}): 符合搜索条件的总行数, 各列与这一页的行.
+ */
+export type TablePage = {
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Columns
+     */
+    columns: Array<TableColumn>;
+    /**
+     * Rows
+     */
+    rows: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
+ * TableSchema
+ *
+ * 一种账表的导入字段 (GET /data/schemas).
+ */
+export type TableSchema = {
+    kind: TableKind;
+    /**
+     * Fields
+     */
+    fields: Array<TableField>;
+};
+
+/**
+ * TableSummary
+ *
+ * 数据概览中的一张账表.
+ */
+export type TableSummary = {
+    kind: TableKind;
+    /**
+     * Source
+     */
+    source: 'xero' | 'import' | null;
+    /**
+     * File Name
+     */
+    file_name: string | null;
+    /**
+     * Records
+     */
+    records: number;
+    records_detail: RecordsDetail | null;
+    /**
+     * Period From
+     */
+    period_from: string | null;
+    /**
+     * Period To
+     */
+    period_to: string | null;
+    /**
+     * Status
+     */
+    status: 'received' | 'converting' | 'not_received';
+    /**
+     * Updated At
+     */
+    updated_at: string | null;
+};
+
+/**
  * TargetType
  *
  * 复核任务指向的对象类型.
@@ -2303,7 +2856,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data';
 
 /**
  * UncorrectedItem
@@ -2401,6 +2954,30 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * XeroSource
+ *
+ * 数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections).
+ */
+export type XeroSource = {
+    /**
+     * Status
+     */
+    status: 'connected' | 'not_connected' | 'expired';
+    /**
+     * Organisation
+     */
+    organisation?: string | null;
+    /**
+     * Last Synced At
+     */
+    last_synced_at?: string | null;
+    /**
+     * Scope
+     */
+    scope?: Array<TableKind>;
 };
 
 export type HealthHealthData = {
@@ -3087,6 +3664,38 @@ export type EvidenceListDocumentsResponses = {
 
 export type EvidenceListDocumentsResponse = EvidenceListDocumentsResponses[keyof EvidenceListDocumentsResponses];
 
+export type EvidenceUploadDocumentsData = {
+    body: BodyEvidenceUploadDocuments;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents';
+};
+
+export type EvidenceUploadDocumentsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceUploadDocumentsError = EvidenceUploadDocumentsErrors[keyof EvidenceUploadDocumentsErrors];
+
+export type EvidenceUploadDocumentsResponses = {
+    /**
+     * Response Evidence-Upload Documents
+     *
+     * Successful Response
+     */
+    200: Array<DocumentRef>;
+};
+
+export type EvidenceUploadDocumentsResponse = EvidenceUploadDocumentsResponses[keyof EvidenceUploadDocumentsResponses];
+
 export type EvidenceListContractsData = {
     body?: never;
     path: {
@@ -3118,6 +3727,40 @@ export type EvidenceListContractsResponses = {
 };
 
 export type EvidenceListContractsResponse = EvidenceListContractsResponses[keyof EvidenceListContractsResponses];
+
+export type EvidenceSetDocumentTypeData = {
+    body: DocumentTypeIn;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents/{document_id}/type';
+};
+
+export type EvidenceSetDocumentTypeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceSetDocumentTypeError = EvidenceSetDocumentTypeErrors[keyof EvidenceSetDocumentTypeErrors];
+
+export type EvidenceSetDocumentTypeResponses = {
+    /**
+     * Successful Response
+     */
+    202: DocumentRef;
+};
+
+export type EvidenceSetDocumentTypeResponse = EvidenceSetDocumentTypeResponses[keyof EvidenceSetDocumentTypeResponses];
 
 export type EvidenceGetEvidenceData = {
     body?: never;
@@ -3152,6 +3795,76 @@ export type EvidenceGetEvidenceResponses = {
 };
 
 export type EvidenceGetEvidenceResponse = EvidenceGetEvidenceResponses[keyof EvidenceGetEvidenceResponses];
+
+export type EvidenceEditContractData = {
+    body: ExtractionEdit;
+    path: {
+        /**
+         * Contract Id
+         */
+        contract_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/contracts/{contract_id}';
+};
+
+export type EvidenceEditContractErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEditContractError = EvidenceEditContractErrors[keyof EvidenceEditContractErrors];
+
+export type EvidenceEditContractResponses = {
+    /**
+     * Successful Response
+     */
+    200: Contract;
+};
+
+export type EvidenceEditContractResponse = EvidenceEditContractResponses[keyof EvidenceEditContractResponses];
+
+export type EvidenceContractHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Contract Id
+         */
+        contract_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/contracts/{contract_id}/history';
+};
+
+export type EvidenceContractHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceContractHistoryError = EvidenceContractHistoryErrors[keyof EvidenceContractHistoryErrors];
+
+export type EvidenceContractHistoryResponses = {
+    /**
+     * Response Evidence-Contract History
+     *
+     * Successful Response
+     */
+    200: Array<ContractVersion>;
+};
+
+export type EvidenceContractHistoryResponse = EvidenceContractHistoryResponses[keyof EvidenceContractHistoryResponses];
 
 export type EvidenceGetRecordData = {
     body?: never;
@@ -3226,6 +3939,344 @@ export type EvidenceListConfirmationsResponses = {
 };
 
 export type EvidenceListConfirmationsResponse = EvidenceListConfirmationsResponses[keyof EvidenceListConfirmationsResponses];
+
+export type EvidenceEditConfirmationData = {
+    body: ExtractionEdit;
+    path: {
+        /**
+         * Confirmation Id
+         */
+        confirmation_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/confirmations/{confirmation_id}';
+};
+
+export type EvidenceEditConfirmationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEditConfirmationError = EvidenceEditConfirmationErrors[keyof EvidenceEditConfirmationErrors];
+
+export type EvidenceEditConfirmationResponses = {
+    /**
+     * Successful Response
+     */
+    200: Confirmation;
+};
+
+export type EvidenceEditConfirmationResponse = EvidenceEditConfirmationResponses[keyof EvidenceEditConfirmationResponses];
+
+export type DataStartImportData = {
+    body: BodyDataStartImport;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/imports';
+};
+
+export type DataStartImportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataStartImportError = DataStartImportErrors[keyof DataStartImportErrors];
+
+export type DataStartImportResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImportPreview;
+};
+
+export type DataStartImportResponse = DataStartImportResponses[keyof DataStartImportResponses];
+
+export type DataChangeImportSheetData = {
+    body: ImportSheet;
+    path: {
+        /**
+         * Import Id
+         */
+        import_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/imports/{import_id}/sheet';
+};
+
+export type DataChangeImportSheetErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataChangeImportSheetError = DataChangeImportSheetErrors[keyof DataChangeImportSheetErrors];
+
+export type DataChangeImportSheetResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImportPreview;
+};
+
+export type DataChangeImportSheetResponse = DataChangeImportSheetResponses[keyof DataChangeImportSheetResponses];
+
+export type DataCommitImportData = {
+    body: ImportCommit;
+    path: {
+        /**
+         * Import Id
+         */
+        import_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/imports/{import_id}/commit';
+};
+
+export type DataCommitImportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataCommitImportError = DataCommitImportErrors[keyof DataCommitImportErrors];
+
+export type DataCommitImportResponses = {
+    /**
+     * Successful Response
+     */
+    202: ImportResult;
+};
+
+export type DataCommitImportResponse = DataCommitImportResponses[keyof DataCommitImportResponses];
+
+export type DataSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/summary';
+};
+
+export type DataSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataSummaryError = DataSummaryErrors[keyof DataSummaryErrors];
+
+export type DataSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: DataSummary;
+};
+
+export type DataSummaryResponse = DataSummaryResponses[keyof DataSummaryResponses];
+
+export type DataTablePageData = {
+    body?: never;
+    path: {
+        kind: TableKind;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Q
+         */
+        q?: string | null;
+        /**
+         * Offset
+         */
+        offset?: number;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/v1/engagements/{eid}/data/tables/{kind}';
+};
+
+export type DataTablePageErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataTablePageError = DataTablePageErrors[keyof DataTablePageErrors];
+
+export type DataTablePageResponses = {
+    /**
+     * Successful Response
+     */
+    200: TablePage;
+};
+
+export type DataTablePageResponse = DataTablePageResponses[keyof DataTablePageResponses];
+
+export type DataSetAccountCategoryData = {
+    body: AccountCategoryIn;
+    path: {
+        /**
+         * Code
+         */
+        code: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/accounts/{code}';
+};
+
+export type DataSetAccountCategoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataSetAccountCategoryError = DataSetAccountCategoryErrors[keyof DataSetAccountCategoryErrors];
+
+export type DataSetAccountCategoryResponses = {
+    /**
+     * Successful Response
+     */
+    200: CategoryVersion;
+};
+
+export type DataSetAccountCategoryResponse = DataSetAccountCategoryResponses[keyof DataSetAccountCategoryResponses];
+
+export type DataAccountHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Code
+         */
+        code: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/accounts/{code}/history';
+};
+
+export type DataAccountHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataAccountHistoryError = DataAccountHistoryErrors[keyof DataAccountHistoryErrors];
+
+export type DataAccountHistoryResponses = {
+    /**
+     * Response Data-Account History
+     *
+     * Successful Response
+     */
+    200: Array<CategoryVersion>;
+};
+
+export type DataAccountHistoryResponse = DataAccountHistoryResponses[keyof DataAccountHistoryResponses];
+
+export type DataDataRequestsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/requests';
+};
+
+export type DataDataRequestsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataDataRequestsError = DataDataRequestsErrors[keyof DataDataRequestsErrors];
+
+export type DataDataRequestsResponses = {
+    /**
+     * Response Data-Data Requests
+     *
+     * Successful Response
+     */
+    200: Array<DataRequest>;
+};
+
+export type DataDataRequestsResponse = DataDataRequestsResponses[keyof DataDataRequestsResponses];
+
+export type DataReadyData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/ready';
+};
+
+export type DataReadyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataReadyError = DataReadyErrors[keyof DataReadyErrors];
+
+export type DataReadyResponses = {
+    /**
+     * Successful Response
+     */
+    202: DataReadiness;
+};
+
+export type DataReadyResponse = DataReadyResponses[keyof DataReadyResponses];
 
 export type ReportsGetMisstatementsData = {
     body?: never;
@@ -3471,3 +4522,21 @@ export type SettingsTestLlmSlotResponses = {
 };
 
 export type SettingsTestLlmSlotResponse = SettingsTestLlmSlotResponses[keyof SettingsTestLlmSlotResponses];
+
+export type DataTableSchemasData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/data/schemas';
+};
+
+export type DataTableSchemasResponses = {
+    /**
+     * Response Data-Table Schemas
+     *
+     * Successful Response
+     */
+    200: Array<TableSchema>;
+};
+
+export type DataTableSchemasResponse = DataTableSchemasResponses[keyof DataTableSchemasResponses];

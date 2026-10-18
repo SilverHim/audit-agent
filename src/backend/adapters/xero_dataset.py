@@ -35,6 +35,7 @@ from backend.contracts.records import (
     AccountCategory,
     BankAccount,
     BankTransaction,
+    CategoryBasis,
     JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
@@ -154,24 +155,36 @@ def account_class(xero_type: str) -> str:
     raise ValueError(f"未知的 Xero 科目类型 {xero_type}")
 
 
-def xero_category(account: dict[str, Any]) -> AccountCategory | None:
-    """Xero 科目 → 标准分类: 先看科目类型, 再看报告代码的最长前缀, 最后按名称关键词."""
+def categorize(account: dict[str, Any]) -> tuple[AccountCategory | None, CategoryBasis | None]:
+    """Xero 科目 → (标准分类, 依据): 先看科目类型, 再看报告代码的最长前缀, 最后按名称关键词; 都认不出为 (None, None)."""
     if account["Type"] in TYPE_CATEGORIES:
-        return TYPE_CATEGORIES[account["Type"]]
+        return TYPE_CATEGORIES[account["Type"]], "xero_type"
     code = str(account.get("ReportingCode") or "")
     prefixes = [p for p in REPORTING_CODES if code == p or code.startswith(p + ".")]
     if prefixes:
-        return REPORTING_CODES[max(prefixes, key=len)]
-    return classify_by_name(account["Name"], account_class(account["Type"]))
+        return REPORTING_CODES[max(prefixes, key=len)], "reporting_code"
+    category = classify_by_name(account["Name"], account_class(account["Type"]))
+    return category, "name" if category else None
+
+
+def xero_category(account: dict[str, Any]) -> AccountCategory | None:
+    """Xero 科目 → 标准分类, 规则见 categorize."""
+    return categorize(account)[0]
 
 
 def map_accounts(accounts: list[dict[str, Any]]) -> list[Account]:
-    """有科目代码的科目 (含已归档的; 没有代码的是不能记账的占位科目, 跳过), 带标准分类."""
-    return [
-        Account(code=a["Code"], name=a["Name"], type=account_class(a["Type"]), category=xero_category(a))
-        for a in accounts
-        if a.get("Code")
-    ]
+    """有科目代码的科目 (含已归档的; 没有代码的是不能记账的占位科目, 跳过), 带标准分类与依据."""
+    result = []
+    for a in accounts:
+        if not a.get("Code"):
+            continue
+        category, basis = categorize(a)
+        result.append(
+            Account(
+                code=a["Code"], name=a["Name"], type=account_class(a["Type"]), category=category, category_basis=basis
+            )
+        )
+    return result
 
 
 def system_codes(accounts: list[dict[str, Any]]) -> dict[str, str]:

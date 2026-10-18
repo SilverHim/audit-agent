@@ -1,17 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { deferralsListDeferralsOptions } from '@/client/@tanstack/react-query.gen'
 import { client } from '@/client/client.gen'
+import { deferralsSetDeferral } from '@/client/sdk.gen'
 import type {
   AcceptanceScorecard,
   AuditException,
   ClientProfile,
   ConciergeCitation,
   ConciergeQuestion,
+  DeferralIn,
+  DeferralView,
 } from '@/client/types.gen'
 import { getToken } from '@/lib/auth'
 import { invalidateEngagement } from '@/lib/engagement'
 
-// 后端需求 R1, R2, R5-R8 的接口. 类型按需求文档写; 后端合入并重新生成客户端后改用 src/client 的生成函数.
-// 接口尚未上线时 (404, 或同路径只有别的方法时的 405) 返回空结果, 页面照常可用
+// 后端需求 R1, R2, R5-R8 的接口. 稍后处理已用生成的客户端, 其余仍为过渡调用.
+// 过渡调用在接口尚未上线时 (404, 或同路径只有别的方法时的 405) 返回空结果, 页面照常可用
 
 export class NotAvailable extends Error {}
 
@@ -47,33 +51,25 @@ export async function orEmpty<T>(promise: Promise<T>, empty: T): Promise<T> {
   }
 }
 
-// R1 稍后处理
-export type DeferralTarget = 'review_task' | 'gate' | 'data_request'
-export type Deferral = { target_type: DeferralTarget; target_id: string; deferred_by: string; deferred_at: string }
+// R1 稍后处理. 补交请求不是待补交时 409 REQUEST_NOT_OPEN
+export type DeferralTarget = DeferralIn['target_type']
 
 // 对话与待决定页用同一个键标识事项: gate:ACC-01, task:{任务 ID} 或 request:{补交请求 ID}
 const DEFERRAL_PREFIX: Record<DeferralTarget, string> = { gate: 'gate', review_task: 'task', data_request: 'request' }
 
-export function deferralKey(item: Pick<Deferral, 'target_type' | 'target_id'>): string {
+export function deferralKey(item: Pick<DeferralView, 'target_type' | 'target_id'>): string {
   return `${DEFERRAL_PREFIX[item.target_type]}:${item.target_id}`
 }
 
-export function deferralsKey(eid: string) {
-  return [{ _id: 'deferralsListDeferrals', path: { eid } }] as const
-}
-
 export function useDeferrals(eid: string) {
-  return useQuery({
-    queryKey: deferralsKey(eid),
-    queryFn: () => orEmpty(call<Deferral[]>('get', '/api/v1/engagements/{eid}/deferrals', { eid }), []),
-  })
+  return useQuery(deferralsListDeferralsOptions({ path: { eid } }))
 }
 
 export function useSetDeferral(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (input: { target_type: DeferralTarget; target_id: string; deferred: boolean }) =>
-      call<{ id: string }>('post', '/api/v1/engagements/{eid}/deferrals', { eid }, input),
+    mutationFn: async (body: DeferralIn) =>
+      (await deferralsSetDeferral({ path: { eid }, body, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

@@ -29,6 +29,8 @@ class FixtureSet:
     # (程序, fixture_key) -> document 指针应指向的 PDF (manifest 中的 path);
     # 为空时只核对指针在 manifest 中且页码不超过页数
     expected_document: Callable[[str, str], str] | None = None
+    # 上传文件处理用的固定输出根 ({程序}/{键}.json), 不进主固定输出 (主流程要求主固定输出各用一次); 没有为 None
+    uploads: Path | None = None
 
     def documents(self) -> dict[str, dict[str, Any]]:
         """manifest 登记的 PDF: 文档 ID -> 条目 (path, type, page_count, sha256 等)."""
@@ -66,6 +68,7 @@ NUMBAT = FixtureSet(
     runtime=DEMO / "llm",
     manifest=DEMO / "manifest.json",
     expected_document=numbat_expected_document,
+    uploads=REPO / "tests" / "fixtures" / "llm_variants" / "upload",
 )
 XERO_DEMO = REPO / "data" / "xero_demo" / "20261017-q1"  # Xero 演示的补造目录
 XERO = FixtureSet(
@@ -76,3 +79,5 @@ XERO = FixtureSet(
     manifest=XERO_DEMO / "manifest.json",
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]
+# 上传处理的固定输出中, 演示也用而须同步进运行副本的程序: 文件分类与回函抽取
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06")

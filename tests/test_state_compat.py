@@ -25,6 +25,7 @@ from backend.contracts.models import (
     Phase,
     ReviewRecord,
     ReviewStatus,
+    TrailKind,
     UncorrectedSchedule,
     Versioned,
 )
@@ -280,9 +281,15 @@ async def numbat_to_fin(drop: bool) -> Started:
 
 
 def trail_rows(s: Started) -> list[dict[str, Any]]:
+    """留痕各行. 数据管理的 data 留痕 (体检, 补交请求) 的时间与防重复键取当时的当前时间, 两次运行必然不同,
+    比较时置空."""
     trail = s.runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    return [e.model_dump() for e in trail.entries]
+    rows = [e.model_dump() for e in trail.entries]
+    for row in rows:
+        if row["kind"] is TrailKind.data:
+            row["created_at"] = row["idempotency_key"] = None
+    return rows
 
 
 async def test_old_checkpoint_without_new_channels_runs_to_fin() -> None:

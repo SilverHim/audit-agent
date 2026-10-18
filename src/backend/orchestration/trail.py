@@ -8,6 +8,7 @@
 
 from collections.abc import Iterable
 
+from backend.contracts.data import DataReadiness
 from backend.contracts.models import AgentId, Phase, Procedure, TrailEntry, TrailKind
 from backend.contracts.ports import AuditOutputStore, AuditTrail
 
@@ -60,9 +61,24 @@ async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iter
     return entries
 
 
+def data_ready_entry(eid: str, readiness: DataReadiness) -> TrailEntry:
+    """确认数据已齐的 data 留痕 (需求 R10): actor 为确认人 (数据集载入为 "dataset"), 防重复键 {eid}:data:ready.
+
+    确认接口写, 恢复补做 (确认已写入, 留痕或恢复没跟上) 时也写; 同键已有的跳过 (record_transitions)."""
+    by_dataset = readiness.ready_by == "dataset"
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=readiness.ready_by or AgentId.A1,
+        summary="数据集已载入, 视同确认数据已齐" if by_dataset else "确认数据已齐, 开始计划阶段分析",
+        idempotency_key=f"{eid}:data:ready",
+        payload={"action": "ready"},
+    )
+
+
 async def record_transitions(trail: AuditTrail, entries: Iterable[TrailEntry]) -> None:
-    """依次写入留痕, 同键已有的跳过."""
+    """依次写入留痕, 同键已有的跳过. transition 与确认数据已齐的 data 留痕共用."""
     for entry in entries:
-        assert entry.idempotency_key is not None  # transition 一律带键
+        assert entry.idempotency_key is not None  # 这里写的留痕一律带键
         if await trail.find_success(entry.engagement_id, entry.idempotency_key) is None:
             await trail.record(entry)

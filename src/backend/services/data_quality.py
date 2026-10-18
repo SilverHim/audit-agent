@@ -1,0 +1,328 @@
+"""数据管理智能体 (A3) 的数据规则: 就绪条件 (需求 R10), 数据体检与补交请求 (需求 R15). 纯函数, 不读写存储.
+
+体检各项的口径见 开发接口文档.md 第 6 节 "数据体检"; 汇总 (CheckInputs) 由 DataStore.check_inputs 按 SQL 算,
+summarize 是同一口径的 Python 版本 (假存储与对照测试用).
+"""
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import Any
+
+from backend.adapters.xero_dataset import CREATED_BY as XERO_PREPARER
+from backend.contracts.data import (
+    CheckId,
+    CheckInputs,
+    CheckStatus,
+    DataCheck,
+    DataRequest,
+    RequestReason,
+    TableKind,
+    TableStats,
+    TableVersion,
+)
+from backend.contracts.models import DocumentType
+from backend.contracts.records import Account, JournalEntry, TrialBalanceRow
+from backend.services.ledger import PROFIT_AND_LOSS, opening_balances
+
+# P1 开始前必须接入的表: 科目表, 本期与上期试算表, 总账分录
+REQUIRED_TABLES: tuple[TableKind, ...] = (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries)
+# 不算录入人的值: 空串, 连接器的占位值 (Xero API 不提供录入人, 适配器记 "xero")
+PLACEHOLDER_PREPARERS = frozenset({"", XERO_PREPARER})
+
+
+def missing_tables(stats: Mapping[TableKind, TableStats]) -> list[TableKind]:
+    """就绪必需而还缺的表, 按 REQUIRED_TABLES 顺序. 试算表本期与上期任一期没有行都算缺."""
+    missing = []
+    for kind in REQUIRED_TABLES:
+        item = stats.get(kind)
+        if kind is TableKind.trial_balance:
+            absent = item is None or item.current == 0 or item.prior == 0
+        else:
+            absent = item is None or item.records == 0
+        if absent:
+            missing.append(kind)
+    return missing
+
+
+def missing_in(inputs: CheckInputs) -> list[TableKind]:
+    """同 missing_tables, 按体检汇总判断 (科目表没有行, 试算表任一期没有行, 总账没有行)."""
+    absent = {
+        TableKind.accounts: not inputs.account_types,
+        TableKind.trial_balance: not inputs.tb_current or not inputs.tb_prior,
+        TableKind.journal_entries: inputs.journal_rows == 0,
+    }
+    return [kind for kind in REQUIRED_TABLES if absent[kind]]
+
+
+def summarize(
+    accounts: Iterable[Account],
+    trial_balance: Iterable[TrialBalanceRow],
+    journals: Iterable[JournalEntry],
+    period_start: date,
+    period_end: date,
+    dataset: str | None = None,
+) -> CheckInputs:
+    """由各表的行算体检汇总, 口径同 PostgresDataStore.check_inputs."""
+    rows = list(journals)
+    movements: dict[str, int] = {}
+    for row in rows:
+        if period_start <= row.posting_date <= period_end:
+            movements[row.account_code] = movements.get(row.account_code, 0) + row.debit_cents - row.credit_cents
+    balances: dict[str, dict[str, int]] = {"current": {}, "prior": {}}
+    for line in trial_balance:
+        period = balances[line.period]
+        period[line.account_code] = period.get(line.account_code, 0) + line.balance_cents
+    chart = list(accounts)
+    return CheckInputs(
+        journal_rows=len(rows),
+        debit_cents=sum(r.debit_cents for r in rows),
+        credit_cents=sum(r.credit_cents for r in rows),
+        movements=movements,
+        preparer_rows=sum(r.created_by is not None and r.created_by not in PLACEHOLDER_PREPARERS for r in rows),
+        approver_rows=sum(bool(r.approved_by) for r in rows),
+        tb_current=balances["current"],
+        tb_prior=balances["prior"],
+        account_types={a.code: a.type for a in chart},
+        account_categories={a.code: a.category for a in chart},
+        dataset=dataset,
+    )
+
+
+def source_label(version: TableVersion | None, dataset: str | None) -> str:
+    """体检与请求文案里总账的来源名: Xero 同步与 Xero 快照载入为 Xero; 导入为原文件名; 其他数据集载入为
+    journal_entries.csv (数据集的总账文件). version 为总账最新一版, 数据集载入的没有版本."""
+    if version is not None:
+        if version.source == "xero":
+            return "Xero"
+        if version.source == "import":
+            return version.file_name or "import"
+    if dataset is not None and dataset.startswith("xero/"):
+        return "Xero"
+    return "journal_entries.csv"
+
+
+# ── 补交请求 ──
+
+TABLE_TITLES = {
+    TableKind.accounts: "科目表",
+    TableKind.trial_balance: "试算表 (本期与上期)",
+    TableKind.journal_entries: "总账分录",
+    TableKind.approval_log: "分录审批日志",
+}
+DOCUMENT_TITLES = {DocumentType.financial_statements: "财务报表草稿"}
+# 要用各项资料的程序 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描 (GEN-05) 判断录入与审批,
+# 报表草稿供财报与会计记录勾稽 (FIN-12)
+USED_FOR: dict[TableKind | DocumentType, list[str]] = {
+    TableKind.accounts: ["PLN-07", "PLN-01"],
+    TableKind.trial_balance: ["PLN-07", "PLN-01", "CSH-05", "CSH-02"],
+    TableKind.journal_entries: ["CSH-02", "GEN-05"],
+    TableKind.approval_log: ["GEN-05"],
+    DocumentType.financial_statements: ["FIN-12"],
+}
+TABLE_FORMATS = "csv, xlsx, xls"  # 账表请求可接受的格式 (走导入)
+DOCUMENT_FORMATS = "pdf, docx, xlsx, png, jpg"  # 文件请求可接受的格式 (走上传)
+# 各体检项要用的表: 缺数据时 request_id 指向其中第一张缺的表的请求
+CHECK_TABLES: dict[CheckId, tuple[TableKind, ...]] = {
+    CheckId.debits_equal_credits: (TableKind.journal_entries,),
+    CheckId.journals_agree_tb: (TableKind.journal_entries, TableKind.trial_balance, TableKind.accounts),
+    CheckId.count_agrees_source: (TableKind.journal_entries,),
+    CheckId.mapping_complete: (TableKind.accounts,),
+    CheckId.preparer_approver_available: (TableKind.journal_entries,),
+    CheckId.tb_agrees_statements: (TableKind.trial_balance,),
+}
+
+
+def request_id(subject: TableKind | DocumentType) -> str:
+    """补交请求的固定 ID: REQ-{表种类或文件类型}."""
+    return f"REQ-{subject.value}"
+
+
+# 同一时间提出的请求的先后: 科目表, 试算表, 总账, 审批日志, 报表草稿 (认不出的排最后, 按 ID)
+REQUEST_ORDER = [request_id(subject) for subject in USED_FOR]
+
+
+def request_order(request: DataRequest) -> tuple[datetime, int, str]:
+    """补交请求的排序键: 先按提出时间, 同时提出的按 REQUEST_ORDER."""
+    rank = REQUEST_ORDER.index(request.id) if request.id in REQUEST_ORDER else len(REQUEST_ORDER)
+    return (request.created_at, rank, request.id)
+
+
+def table_request(kind: TableKind, reason: RequestReason, params: Mapping[str, Any], now: datetime) -> DataRequest:
+    return DataRequest(
+        id=request_id(kind),
+        kind="table",
+        table_kind=kind,
+        title=TABLE_TITLES[kind],
+        used_for=USED_FOR[kind],
+        reason_code=reason,
+        reason_params=dict(params),
+        format_hint=TABLE_FORMATS,
+        created_at=now,
+    )
+
+
+def document_request(kind: DocumentType, reason: RequestReason, now: datetime) -> DataRequest:
+    return DataRequest(
+        id=request_id(kind),
+        kind="document",
+        document_type=kind,
+        title=DOCUMENT_TITLES[kind],
+        used_for=USED_FOR[kind],
+        reason_code=reason,
+        format_hint=DOCUMENT_FORMATS,
+        created_at=now,
+    )
+
+
+# ── 体检 ──
+
+
+@dataclass(frozen=True)
+class Checkup:
+    """一次体检的结论: 各项结果, 与这次认为需要补交的请求 (status open, created_at 为体检时间)."""
+
+    checks: list[DataCheck]
+    requests: list[DataRequest] = field(default_factory=list)
+
+
+def opening_of(inputs: CheckInputs) -> dict[str, int]:
+    """各科目期初余额 (见 journals_differences)."""
+    try:
+        return opening_balances(inputs.tb_prior, inputs.account_types, inputs.account_categories)
+    except ValueError:
+        return {c: v for c, v in inputs.tb_prior.items() if inputs.account_types.get(c) not in PROFIT_AND_LOSS}
+
+
+def compared_accounts(inputs: CheckInputs, opening: Mapping[str, int]) -> list[str]:
+    """勾稽比较的科目: 期间内有发生额, 在两期试算表中, 或有期初余额 (含两期试算表与分录都没有, 却承接了上期损益的
+    留存收益科目) 的, 按代码排序."""
+    return sorted(set(inputs.movements) | set(inputs.tb_current) | set(inputs.tb_prior) | set(opening))
+
+
+def journals_differences(inputs: CheckInputs) -> list[dict[str, Any]]:
+    """期间内各科目分录发生额与试算表变动 (本期余额 - 期初余额) 的差异, 按科目代码, 只列不为 0 的.
+    期初余额见 services.ledger.opening_balances (损益类归零, 上期损益转入留存收益); 留存收益科目不唯一或没有时
+    不结转, 差异会落在留存收益上. 比较的科目见 compared_accounts."""
+    opening = opening_of(inputs)
+    codes = compared_accounts(inputs, opening)
+    differences = []
+    for code in codes:
+        change = inputs.tb_current.get(code, 0) - opening.get(code, 0)
+        difference = inputs.movements.get(code, 0) - change
+        if difference:
+            differences.append({"account_code": code, "difference_cents": difference})
+    return differences
+
+
+def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVersion | None, now: datetime) -> Checkup:
+    """六项体检与补交请求.
+
+    - debits_equal_credits: 全部分录借贷合计相等; 没有分录为 missing_data.
+    - journals_agree_tb: 期间内各科目发生额与试算表变动一致 (journals_differences); 缺总账, 试算表任一期或科目表为
+      missing_data.
+    - count_agrees_source: 总账行数与来源交付的行数 (最新一版记下的 records; 数据集载入以表中行数为准) 一致.
+    - mapping_complete: 科目都已归入标准分类; 没有科目为 missing_data.
+    - preparer_approver_available: 分录里有录入人与审批人 (至少一行有真实值); 缺的字段记 missing_fields, 不通过时
+      请求审批日志 (field_unavailable, {fields, source}).
+    - tb_agrees_statements: 没有已分类的财务报表文件为 missing_data, 请求报表草稿 (not_provided); 有了而试算表缺为
+      missing_data; 都有时为 pending (报表数字的抽取与勾稽归 FIN-12, 还没实现).
+    就绪必需的表缺失时各请求一份 (missing_table). 缺数据的项 request_id 指向它要用的表中第一张缺的表的请求.
+    """
+    missing = missing_in(inputs)
+    label = source_label(journal_version, inputs.dataset)
+    requests = [table_request(kind, "missing_table", {}, now) for kind in missing]
+
+    def check(cid: CheckId, status: CheckStatus, params: Mapping[str, Any], request: str | None = None) -> DataCheck:
+        if request is None and status == "missing_data":
+            request = next((request_id(k) for k in CHECK_TABLES[cid] if k in missing), None)
+        return DataCheck(id=cid, status=status, params=dict(params), request_id=request)
+
+    has_journals = inputs.journal_rows > 0
+    checks = []
+    balanced = inputs.debit_cents == inputs.credit_cents
+    checks.append(
+        check(
+            CheckId.debits_equal_credits,
+            ("passed" if balanced else "failed") if has_journals else "missing_data",
+            {"debit_cents": inputs.debit_cents, "credit_cents": inputs.credit_cents},
+        )
+    )
+    if has_journals and not missing:
+        differences = journals_differences(inputs)
+        accounts = len(compared_accounts(inputs, opening_of(inputs)))
+        status: CheckStatus = "failed" if differences else "passed"
+        checks.append(check(CheckId.journals_agree_tb, status, {"accounts": accounts, "differences": differences}))
+    else:
+        checks.append(check(CheckId.journals_agree_tb, "missing_data", {"accounts": 0, "differences": []}))
+    expected = journal_version.records if journal_version is not None else inputs.journal_rows
+    checks.append(
+        check(
+            CheckId.count_agrees_source,
+            ("passed" if expected == inputs.journal_rows else "failed") if has_journals else "missing_data",
+            {"source": label, "expected": expected if has_journals else 0, "received": inputs.journal_rows},
+        )
+    )
+    total = len(inputs.account_types)
+    mapped = sum(inputs.account_categories.get(code) is not None for code in inputs.account_types)
+    checks.append(
+        check(
+            CheckId.mapping_complete,
+            ("passed" if mapped == total else "failed") if total else "missing_data",
+            {"mapped": mapped, "total": total},
+        )
+    )
+    absent = [
+        name for name, n in (("created_by", inputs.preparer_rows), ("approved_by", inputs.approver_rows)) if not n
+    ]
+    if not has_journals:
+        checks.append(
+            check(CheckId.preparer_approver_available, "missing_data", {"source": label, "missing_fields": []})
+        )
+    elif absent:
+        approval = table_request(TableKind.approval_log, "field_unavailable", {"fields": absent, "source": label}, now)
+        requests.append(approval)
+        params = {"source": label, "missing_fields": absent}
+        checks.append(check(CheckId.preparer_approver_available, "failed", params, approval.id))
+    else:
+        checks.append(check(CheckId.preparer_approver_available, "passed", {"source": label, "missing_fields": []}))
+    provided = {"statements": statements}  # 体检时已提供的报表草稿文件数 (新鲜度判断用, 见 DataCheckup.run_if_stale)
+    if statements == 0:
+        draft = document_request(DocumentType.financial_statements, "not_provided", now)
+        requests.append(draft)
+        checks.append(check(CheckId.tb_agrees_statements, "missing_data", provided, draft.id))
+    elif not inputs.tb_current:
+        checks.append(check(CheckId.tb_agrees_statements, "missing_data", provided))
+    else:
+        checks.append(check(CheckId.tb_agrees_statements, "pending", provided))
+    return Checkup(checks, requests)
+
+
+@dataclass(frozen=True)
+class RequestChanges:
+    """补交请求的变化: saved 为要写入的 (新提出, 重新打开, 参数变了, 转 received 的), raised 与 received 为要留痕的."""
+
+    saved: list[DataRequest] = field(default_factory=list)
+    raised: list[DataRequest] = field(default_factory=list)
+    received: list[DataRequest] = field(default_factory=list)
+
+
+def reconcile(existing: Sequence[DataRequest], wanted: Sequence[DataRequest], now: datetime) -> RequestChanges:
+    """对照已有请求与这次体检需要的请求: 没有的新提出; 已收到 (或撤回) 的重新打开 (created_at 为 now, resolved_at
+    清空); 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再需要的 (资料已补齐) 转 received."""
+    changes = RequestChanges()
+    current = {r.id: r for r in existing}
+    for request in wanted:
+        old = current.get(request.id)
+        if old is None or old.status != "open":
+            changes.saved.append(request)
+            changes.raised.append(request)
+        elif old != request.model_copy(update={"created_at": old.created_at}):
+            changes.saved.append(request.model_copy(update={"created_at": old.created_at}))
+    needed = {r.id for r in wanted}
+    for old in existing:
+        if old.status == "open" and old.id not in needed:
+            received = old.model_copy(update={"status": "received", "resolved_at": now})
+            changes.saved.append(received)
+            changes.received.append(received)
+    return changes

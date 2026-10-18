@@ -7,6 +7,7 @@ from typing import Any
 from backend.agents.concierge_chat.citations import match_citations
 from backend.agents.concierge_chat.tools import ToolBox, ToolEnv, minimize, pseudonym
 from backend.contracts.conversation import ConciergeCitation, ToolCall
+from backend.contracts.data import DataRequest, TableKind
 from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
@@ -34,6 +35,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_RECORDS,
+    FakeDataStore,
     FakeFinancialStore,
     FakeOutputStore,
     FakeTrail,
@@ -97,13 +99,45 @@ EXCEPTION = AuditException(
 )
 
 
-def env(trail: FakeTrail | None = None, max_chars: int = 6000, state: FixedState | None = None) -> ToolEnv:
+def env(
+    trail: FakeTrail | None = None,
+    max_chars: int = 6000,
+    state: FixedState | None = None,
+    data: FakeDataStore | None = None,
+) -> ToolEnv:
     deps = chat_deps(
         trail,
         output_store=FakeOutputStore([JUDGMENT, TASK, EXCEPTION]),
         financial_store=FakeFinancialStore(records=NUMBAT_RECORDS),
+        data=data,
     )
     return ToolEnv(EID, deps, state if state is not None else FixedState(), max_chars)
+
+
+def data_with_requests() -> FakeDataStore:
+    """两个待补交 (审批日志, 总账) 与一个已收到 (科目表) 的补交请求."""
+    data = FakeDataStore()
+    requests = [
+        DataRequest(
+            id=f"REQ-{kind.value}",
+            kind="table",
+            table_kind=kind,
+            title=title,
+            used_for=used_for,
+            reason_code="missing_table",
+            status=status,
+            created_at=datetime(2026, 9, 30, n, tzinfo=UTC),
+        )
+        for n, (kind, title, used_for, status) in enumerate(
+            [
+                (TableKind.accounts, "科目表", ["PLN-07"], "received"),
+                (TableKind.journal_entries, "总账分录", ["REV-08"], "open"),
+                (TableKind.approval_log, "审批日志", ["REV-08", "CSH-05"], "open"),
+            ]
+        )
+    ]
+    data.data_requests = {r.id: r for r in requests}
+    return data
 
 
 async def call(name: str, args: dict[str, Any] | str = "{}", tool_env: ToolEnv | None = None) -> tuple[Any, Any]:
@@ -197,6 +231,29 @@ async def test_open_items_list_gate_then_tasks_with_deferral() -> None:
     assert data["items"][1]["deferred"] is True
     assert data["items"][1]["subject_id"] == "SI-2026-0612"
     assert JUDGMENT.id in outcome.cites
+
+
+async def test_open_items_put_open_data_requests_between_gate_and_tasks() -> None:
+    trail = FakeTrail()
+    await trail.record(
+        TrailEntry(
+            engagement_id=EID,
+            kind=TrailKind.deferral,
+            actor="U-1",
+            summary="稍后处理",
+            payload={"target_type": "data_request", "target_id": "REQ-approval_log", "deferred": True},
+            created_at=datetime(2026, 9, 30, 5, tzinfo=UTC),
+        )
+    )
+    state = FixedState(view=make_overview(current_gate=GateId.FIN_01))
+    outcome, data = await call("list_open_items", tool_env=env(trail, state=state, data=data_with_requests()))
+    assert [i["type"] for i in data["items"]] == ["gate_decision", "data_request", "data_request", "review_task"]
+    journals, approvals = data["items"][1], data["items"][2]
+    assert (journals["request_id"], journals["deferred"]) == ("REQ-journal_entries", False)
+    assert approvals["title"] == "审批日志" and approvals["used_for"] == ["REV-08", "CSH-05"]
+    assert approvals["deferred"] is True
+    assert "REQ-accounts" not in outcome.content  # 已收到的不列
+    assert {"REV-08", "CSH-05"} <= set(outcome.cites)
 
 
 async def test_contracts_list_and_terms_with_pages() -> None:

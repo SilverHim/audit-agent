@@ -874,7 +874,7 @@
           "deferrals"
         ],
         "summary": "List Deferrals",
-        "description": "当前有效的标记, 按标记时间升序. 任务已决定, 或闸门已作出决定的, 自动不在其中.",
+        "description": "当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 或补交请求已收到的, 自动不在其中.",
         "operationId": "deferrals-list_deferrals",
         "security": [
           {
@@ -924,7 +924,7 @@
           "deferrals"
         ],
         "summary": "Set Deferral",
-        "description": "标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.\n\n项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;\n闸门不是当前停留的 409 NOT_AT_GATE; 取消从未标记过的目标 404 NOT_FOUND.",
+        "description": "标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.\n\n项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;\n闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;\n取消从未标记过的目标 404 NOT_FOUND.",
         "operationId": "deferrals-set_deferral",
         "security": [
           {
@@ -1187,6 +1187,66 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Upload Documents",
+        "description": "上传文件, 返回各文件的登记 (同一文件重复上传返回已有的); 新文件随即由 A3 在后台分类与抽取.\n类型不支持 422 INVALID_VALUE; 单个超过 50 MB 413 FILE_TOO_LARGE; 锁定 423; 忙 409.",
+        "operationId": "evidence-upload_documents",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_evidence-upload_documents"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentRef"
+                  },
+                  "title": "Response Evidence-Upload Documents"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/engagements/{eid}/contracts": {
@@ -1240,13 +1300,80 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/documents/{document_id}/type": {
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Set Document Type",
+        "description": "人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空\n422 MISSING_FIELD; 锁定 423; 忙 409.",
+        "operationId": "evidence-set_document_type",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentTypeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRef"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/evidence/{document_id}": {
       "get": {
         "tags": [
           "evidence"
         ],
         "summary": "Get Evidence",
-        "description": "原件 PDF. 前端带令牌下载后用 #page=N 跳页.",
+        "description": "原件, Content-Type 为登记的媒体类型. PDF 与图片在浏览器里显示 (PDF 前端带令牌下载后用 #page=N 跳页),\nWord, Excel, CSV 以附件下载.",
         "operationId": "evidence-get_evidence",
         "security": [
           {
@@ -1277,9 +1404,137 @@
           "200": {
             "description": "Successful Response",
             "content": {
-              "application/pdf": {
+              "application/octet-stream": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/contracts/{contract_id}": {
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Contract",
+        "description": "修改合同抽取结果, 返回新版本. field 为 counterparty, counterparty_abn, amount_cents, sign_date,\nterms[n].text, terms[n].term_type (n 从 0 起). 合同不存在 404; 理由为空 422 MISSING_FIELD; 字段或值不合法,\n与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.",
+        "operationId": "evidence-edit_contract",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Contract Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contract"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/contracts/{contract_id}/history": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Contract History",
+        "description": "合同的各版本, 按版本升序. 合同不存在 404.",
+        "operationId": "evidence-contract_history",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Contract Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContractVersion"
+                  },
+                  "title": "Response Evidence-Contract History"
                 }
               }
             }
@@ -1407,6 +1662,636 @@
                     "$ref": "#/components/schemas/Confirmation"
                   },
                   "title": "Response Evidence-List Confirmations"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/confirmations/{confirmation_id}": {
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Confirmation",
+        "description": "修改回函抽取结果, 返回函证新版本. field 为 confirming_party, balance_date, confirmed_balance_cents.\n只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 函证不存在 404; 理由为空 422 MISSING_FIELD;\n字段或值不合法, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.",
+        "operationId": "evidence-edit_confirmation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "confirmation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Confirmation Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Confirmation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/imports": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Start Import",
+        "description": "上传账表文件并解析第一个工作表, 返回列, 样例与建议. 不止一个文件或类型不支持 422 INVALID_VALUE;\n超过 50 MB 413 FILE_TOO_LARGE; 项目锁定 423.",
+        "operationId": "data-start_import",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_data-start_import"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/imports/{import_id}/sheet": {
+      "put": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Change Import Sheet",
+        "description": "换工作表, 返回该表的解析结果与建议. 导入不存在 404; 已提交或工作表不存在 422 INVALID_VALUE.",
+        "operationId": "data-change_import_sheet",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Import Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportSheet"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/imports/{import_id}/commit": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Commit Import",
+        "description": "按列对应解析全表并写入新数据版本, 原文件登记为证据文件. 解析失败 422 IMPORT_PARSE_ERROR (detail.errors 为前\n20 处 {row, column, value}); 对应不可用 422 INVALID_VALUE 或 MISSING_FIELD; 忙 409; 锁定 423; 导入不存在 404.",
+        "operationId": "data-commit_import",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "import_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Import Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportCommit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/summary": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Summary",
+        "description": "数据管理页的概览. processing 不为 0 时前端每 3 秒轮询.",
+        "operationId": "data-summary",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/tables/{kind}": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Table Page",
+        "description": "查看一张账表: {total, columns, rows}. q 为不分大小写的包含搜索 (科目表查代码与名称); limit 不超过 200.\n科目表的行另带 category, category_basis, balance_current_cents, balance_prior_cents, edited. 账表数值不能改,\n只能经导入写新版本.",
+        "operationId": "data-table_page",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TableKind"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TablePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/accounts/{code}": {
+      "put": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Set Account Category",
+        "description": "修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由为空 422 MISSING_FIELD;\n分类不属于该科目的类别或与当前相同 422 INVALID_VALUE; 科目不存在 404; 锁定 423; 忙 409.",
+        "operationId": "data-set_account_category",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCategoryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryVersion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/accounts/{code}/history": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Account History",
+        "description": "科目标准分类的各版, 按版本升序; 科目不存在 404.",
+        "operationId": "data-account_history",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Code"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryVersion"
+                  },
+                  "title": "Response Data-Account History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/requests": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Data Requests",
+        "description": "A3 提出的补交资料请求 (含已收到的), 按提出时间升序; status 为 open 的是待补交. 补交时账表走导入\n(POST /data/imports), 文件走上传 (POST /documents), 都带 request_id.",
+        "operationId": "data-data_requests",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DataRequest"
+                  },
+                  "title": "Response Data-Data Requests"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/ready": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Ready",
+        "description": "确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY\n(detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.",
+        "operationId": "data-ready",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataReadiness"
                 }
               }
             }
@@ -1862,6 +2747,37 @@
           }
         }
       }
+    },
+    "/api/v1/data/schemas": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Table Schemas",
+        "description": "各账表的导入字段, 按 TableKind 顺序; 字段名与 persistence/models.py 中 FINANCIAL 各表的列一致.",
+        "operationId": "data-table_schemas",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TableSchema"
+                  },
+                  "type": "array",
+                  "title": "Response Data-Table Schemas"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1938,6 +2854,54 @@
         ],
         "title": "AcceptanceScorecard",
         "description": "承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料."
+      },
+      "AccountCategoryIn": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "receivables",
+              "inventory",
+              "prepayments",
+              "other_current_assets",
+              "property_plant_equipment",
+              "intangible_assets",
+              "other_non_current_assets",
+              "payables",
+              "accruals",
+              "tax_payable",
+              "employee_provisions",
+              "borrowings",
+              "other_current_liabilities",
+              "other_non_current_liabilities",
+              "share_capital",
+              "retained_earnings",
+              "other_equity",
+              "revenue",
+              "other_income",
+              "cost_of_sales",
+              "employee_expenses",
+              "depreciation_amortisation",
+              "finance_costs",
+              "operating_expenses",
+              "income_tax"
+            ],
+            "title": "Category"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "category",
+          "reason"
+        ],
+        "title": "AccountCategoryIn",
+        "description": "审计师修改科目的标准分类."
       },
       "AgentId": {
         "type": "string",
@@ -2334,6 +3298,172 @@
           "password"
         ],
         "title": "Body_auth-login"
+      },
+      "Body_data-start_import": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Files",
+            "description": "单个 CSV, XLSX 或 XLS 文件, 不超过 50 MB"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_data-start_import"
+      },
+      "Body_evidence-upload_documents": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Files",
+            "description": "PDF, DOCX, XLSX, PNG, JPG 等, 单个不超过 50 MB"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_evidence-upload_documents"
+      },
+      "CategoryVersion": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "cash",
+                  "receivables",
+                  "inventory",
+                  "prepayments",
+                  "other_current_assets",
+                  "property_plant_equipment",
+                  "intangible_assets",
+                  "other_non_current_assets",
+                  "payables",
+                  "accruals",
+                  "tax_payable",
+                  "employee_provisions",
+                  "borrowings",
+                  "other_current_liabilities",
+                  "other_non_current_liabilities",
+                  "share_capital",
+                  "retained_earnings",
+                  "other_equity",
+                  "revenue",
+                  "other_income",
+                  "cost_of_sales",
+                  "employee_expenses",
+                  "depreciation_amortisation",
+                  "finance_costs",
+                  "operating_expenses",
+                  "income_tax"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "xero_type",
+                  "reporting_code",
+                  "name",
+                  "auditor"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "category",
+          "basis",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "CategoryVersion",
+        "description": "科目标准分类的一个版本: 第 1 版为写入科目表时系统的归类, 之后每次审计师修改, 或重新写入科目表时系统归类变了,\n各一版 (表 account_category_history)."
+      },
+      "CheckId": {
+        "type": "string",
+        "enum": [
+          "debits_equal_credits",
+          "journals_agree_tb",
+          "count_agrees_source",
+          "mapping_complete",
+          "preparer_approver_available",
+          "tb_agrees_statements"
+        ],
+        "title": "CheckId",
+        "description": "数据质量体检项. 前端按编号本地化文案, params 的键见各项注释."
       },
       "ClientProfile": {
         "properties": {
@@ -2772,6 +3902,11 @@
             "type": "string",
             "title": "Id"
           },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
           "document_id": {
             "type": "string",
             "title": "Document Id"
@@ -2853,7 +3988,7 @@
           "extracted_by_run"
         ],
         "title": "Contract",
-        "description": "DOC-04 从合同 PDF 抽取出的合同要素与条款."
+        "description": "DOC-04 从合同 PDF 抽取出的合同要素与条款. 审计师修改抽取结果时出新版本, 各版本见 extraction_versions."
       },
       "ContractTerm": {
         "properties": {
@@ -2883,6 +4018,58 @@
         ],
         "title": "ContractTerm",
         "description": "合同中的一个条款."
+      },
+      "ContractVersion": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "contract": {
+            "$ref": "#/components/schemas/Contract"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "contract",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "ContractVersion",
+        "description": "合同抽取结果的一个版本 (表 extraction_versions): 第 1 版为抽取所得, 之后每次审计师修改一版."
       },
       "ConversationTurn": {
         "properties": {
@@ -2965,6 +4152,269 @@
         "title": "CriticVerdict",
         "description": "独立复核 (A7, GEN-09) 的结论."
       },
+      "DataCheck": {
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CheckId"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "missing_data",
+              "pending"
+            ],
+            "title": "Status"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "DataCheck",
+        "description": "一项体检的结果."
+      },
+      "DataReadiness": {
+        "properties": {
+          "data_version": {
+            "type": "integer",
+            "title": "Data Version"
+          },
+          "loaded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded At"
+          },
+          "ready_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready At"
+          },
+          "ready_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data_version"
+        ],
+        "title": "DataReadiness",
+        "description": "项目财务数据的版本与就绪确认 (表 dataset_loads)."
+      },
+      "DataRequest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "table",
+              "document"
+            ],
+            "title": "Kind"
+          },
+          "table_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "document_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "used_for": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Used For",
+            "default": []
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "missing_table",
+              "field_unavailable",
+              "not_provided"
+            ],
+            "title": "Reason Code"
+          },
+          "reason_params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Reason Params",
+            "default": {}
+          },
+          "format_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format Hint"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "received",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "raised_by": {
+            "type": "string",
+            "title": "Raised By",
+            "default": "A3"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "reason_code",
+          "created_at"
+        ],
+        "title": "DataRequest",
+        "description": "A3 提出的补交资料请求 (表 data_requests). 同一项资料只有一个请求, ID 固定为 REQ-{表种类或文件类型};\n收到后又缺了时重新打开 (status 回到 open, created_at 改为重新打开的时间, resolved_at 清空)."
+      },
+      "DataSources": {
+        "properties": {
+          "xero": {
+            "$ref": "#/components/schemas/XeroSource"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "xero"
+        ],
+        "title": "DataSources",
+        "description": "数据概览中的外部数据源."
+      },
+      "DataSummary": {
+        "properties": {
+          "sources": {
+            "$ref": "#/components/schemas/DataSources"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableSummary"
+            },
+            "type": "array",
+            "title": "Tables"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/DataCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "processing": {
+            "type": "integer",
+            "title": "Processing"
+          },
+          "open_requests": {
+            "type": "integer",
+            "title": "Open Requests"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sources",
+          "tables",
+          "checks",
+          "processing",
+          "open_requests"
+        ],
+        "title": "DataSummary",
+        "description": "数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数与待补交请求数."
+      },
       "DatasetSummary": {
         "properties": {
           "dataset": {
@@ -3038,7 +4488,8 @@
             "type": "string",
             "enum": [
               "review_task",
-              "gate"
+              "gate",
+              "data_request"
             ],
             "title": "Target Type"
           },
@@ -3067,7 +4518,8 @@
             "type": "string",
             "enum": [
               "review_task",
-              "gate"
+              "gate",
+              "data_request"
             ],
             "title": "Target Type"
           },
@@ -3143,6 +4595,7 @@
             "type": "string",
             "enum": [
               "received",
+              "classified",
               "extracted",
               "needs_manual"
             ],
@@ -3152,6 +4605,49 @@
             "type": "string",
             "format": "date-time",
             "title": "Uploaded At"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type",
+            "default": "application/pdf"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "auditor_upload",
+              "bank_direct",
+              "xero"
+            ],
+            "title": "Channel",
+            "default": "auditor_upload"
+          },
+          "uploaded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uploaded By"
+          },
+          "failed_step": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "classify",
+                  "read",
+                  "extract",
+                  "link"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Step"
           }
         },
         "additionalProperties": false,
@@ -3167,17 +4663,40 @@
           "uploaded_at"
         ],
         "title": "DocumentRef",
-        "description": "已存档的证据文件 (合同, 回函等 PDF) 的登记信息."
+        "description": "已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息."
       },
       "DocumentType": {
         "type": "string",
         "enum": [
           "contract",
+          "invoice",
           "confirmation",
+          "bank_statement",
+          "minutes",
+          "financial_statements",
           "other"
         ],
         "title": "DocumentType",
-        "description": "证据文件类型."
+        "description": "证据文件类型. 审计师上传的文件由 A3 分类."
+      },
+      "DocumentTypeIn": {
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/DocumentType"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "reason"
+        ],
+        "title": "DocumentTypeIn",
+        "description": "人工指定文件类型."
       },
       "Engagement": {
         "properties": {
@@ -3320,6 +4839,17 @@
             "type": "boolean",
             "title": "Awaiting Review"
           },
+          "awaiting_data": {
+            "type": "boolean",
+            "title": "Awaiting Data"
+          },
+          "missing_tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "array",
+            "title": "Missing Tables"
+          },
           "procedures": {
             "items": {
               "$ref": "#/components/schemas/ProcedureSummary"
@@ -3384,6 +4914,8 @@
           "run_error",
           "current_gate",
           "awaiting_review",
+          "awaiting_data",
+          "missing_tables",
           "procedures",
           "pending_tasks",
           "materiality_cents",
@@ -3547,6 +5079,41 @@
         ],
         "title": "ExceptionDisposition",
         "description": "例外的归因状态."
+      },
+      "ExtractionEdit": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "field",
+          "value",
+          "reason"
+        ],
+        "title": "ExtractionEdit",
+        "description": "修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."
       },
       "GateDecision": {
         "properties": {
@@ -3853,6 +5420,174 @@
         ],
         "title": "IdBody",
         "description": "202 响应: 刚写入的决定 ID."
+      },
+      "ImportCommit": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TableKind"
+          },
+          "sheet": {
+            "type": "string",
+            "title": "Sheet"
+          },
+          "date_format": {
+            "type": "string",
+            "enum": [
+              "dmy",
+              "ymd",
+              "mdy"
+            ],
+            "title": "Date Format"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Mapping"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "sheet",
+          "date_format",
+          "mapping"
+        ],
+        "title": "ImportCommit",
+        "description": "确认导入: 表种类, 工作表, 日期写法与列对应."
+      },
+      "ImportPreview": {
+        "properties": {
+          "import_id": {
+            "type": "string",
+            "title": "Import Id"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "sheets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sheets"
+          },
+          "sheet": {
+            "type": "string",
+            "title": "Sheet"
+          },
+          "row_count": {
+            "type": "integer",
+            "title": "Row Count"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "sample": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Sample"
+          },
+          "suggested_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suggested_mapping": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Suggested Mapping"
+          },
+          "suggested_date_format": {
+            "type": "string",
+            "enum": [
+              "dmy",
+              "ymd",
+              "mdy"
+            ],
+            "title": "Suggested Date Format"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "import_id",
+          "file_name",
+          "sheets",
+          "sheet",
+          "row_count",
+          "columns",
+          "sample",
+          "suggested_kind",
+          "suggested_mapping",
+          "suggested_date_format"
+        ],
+        "title": "ImportPreview",
+        "description": "上传账表文件后的解析结果: 工作表, 列, 样例行, 以及系统建议的表种类, 列对应与日期写法."
+      },
+      "ImportResult": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TableKind"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "records"
+        ],
+        "title": "ImportResult",
+        "description": "导入提交后的结果."
+      },
+      "ImportSheet": {
+        "properties": {
+          "sheet": {
+            "type": "string",
+            "title": "Sheet"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sheet"
+        ],
+        "title": "ImportSheet",
+        "description": "导入时换工作表."
       },
       "Judgment": {
         "properties": {
@@ -4881,6 +6616,17 @@
               }
             ],
             "title": "Failure Reason"
+          },
+          "data_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Version"
           }
         },
         "additionalProperties": false,
@@ -4936,6 +6682,11 @@
           "pending_tasks": {
             "type": "integer",
             "title": "Pending Tasks"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -5013,6 +6764,26 @@
         ],
         "title": "ReceiptChannel",
         "description": "回函渠道, 决定回函的可靠性."
+      },
+      "RecordsDetail": {
+        "properties": {
+          "current": {
+            "type": "integer",
+            "title": "Current"
+          },
+          "prior": {
+            "type": "integer",
+            "title": "Prior"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current",
+          "prior"
+        ],
+        "title": "RecordsDetail",
+        "description": "试算表两期各自的行数."
       },
       "RegisterIn": {
         "properties": {
@@ -5700,6 +7471,241 @@
         "title": "StepStatus",
         "description": "推理步骤有没有证据支撑."
       },
+      "TableColumn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "date",
+              "datetime",
+              "amount",
+              "bool"
+            ],
+            "title": "Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "TableColumn",
+        "description": "账表查看的一列."
+      },
+      "TableField": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "date",
+              "datetime",
+              "amount",
+              "bool"
+            ],
+            "title": "Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "required",
+          "type"
+        ],
+        "title": "TableField",
+        "description": "导入时可对应的一个字段."
+      },
+      "TableKind": {
+        "type": "string",
+        "enum": [
+          "accounts",
+          "trial_balance",
+          "journal_entries",
+          "sales_invoices",
+          "bank_accounts",
+          "bank_transactions",
+          "delivery_notes",
+          "approval_log"
+        ],
+        "title": "TableKind",
+        "description": "账表种类: 七张财务表与审批日志. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与审批时间."
+      },
+      "TablePage": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumn"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "columns",
+          "rows"
+        ],
+        "title": "TablePage",
+        "description": "账表查看的一页 (GET /data/tables/{kind}): 符合搜索条件的总行数, 各列与这一页的行."
+      },
+      "TableSchema": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TableKind"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TableField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "fields"
+        ],
+        "title": "TableSchema",
+        "description": "一种账表的导入字段 (GET /data/schemas)."
+      },
+      "TableSummary": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TableKind"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "xero",
+                  "import"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          },
+          "records_detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecordsDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period From"
+          },
+          "period_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period To"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "converting",
+              "not_received"
+            ],
+            "title": "Status"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "source",
+          "file_name",
+          "records",
+          "records_detail",
+          "period_from",
+          "period_to",
+          "status",
+          "updated_at"
+        ],
+        "title": "TableSummary",
+        "description": "数据概览中的一张账表."
+      },
       "TargetType": {
         "type": "string",
         "enum": [
@@ -5908,7 +7914,8 @@
           "transition",
           "deferral",
           "conversation",
-          "conversation_summary"
+          "conversation_summary",
+          "data"
         ],
         "title": "TrailKind",
         "description": "留痕类型."
@@ -6051,6 +8058,57 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "XeroSource": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "not_connected",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "organisation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organisation"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "scope": {
+            "items": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "array",
+            "title": "Scope",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "XeroSource",
+        "description": "数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections)."
       }
     },
     "securitySchemes": {

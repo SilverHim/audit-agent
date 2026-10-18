@@ -7,7 +7,7 @@ export type TimelineItem =
   | { kind: 'phase'; at: string; phase: Phase }
   | { kind: 'completed'; at: string; ids: string[] }
   | { kind: 'decision'; at: string; target: string; gate: GateId | null; verdict: string; reason: string | null }
-  | { kind: 'deferral'; at: string; target: string; deferred: boolean }
+  | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null }
   | {
       kind: 'qa'
       at: string
@@ -80,7 +80,9 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
       flush()
       const id = str(payload.target_id) ?? ''
       const target = payload.target_type === 'review_task' ? subjectOfTask(id) : id
-      items.push({ kind: 'deferral', at, target, deferred: payload.deferred === true })
+      // 补交请求 ID 固定为 REQ-{表种类或文件类型}, 显示时换成资料名
+      const request = payload.target_type === 'data_request' ? id.replace(/^REQ-/, '') : null
+      items.push({ kind: 'deferral', at, target, deferred: payload.deferred === true, request })
       continue
     }
     if (kind === 'data') {

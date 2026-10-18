@@ -195,7 +195,7 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
     await app.ainvoke(initial_state(engagement, fixed_procedures(deps.library), NUMBAT_PROFILE.version), config)
 
     steps = [
-        (GateId.ACC_01, GateVerdict.approve, "p1_ingest", "gate_p1_risk"),
+        (GateId.ACC_01, GateVerdict.approve, "p1_await_data", "gate_p1_risk"),
         (GateId.PLN_01_03, GateVerdict.approve, "assemble_pack", "gate_fin"),
         (GateId.FIN_01, GateVerdict.approve, "report_draft", "gate_rpt01"),
         (GateId.RPT_01, GateVerdict.reject, "report_draft", "gate_rpt01"),
@@ -227,7 +227,7 @@ async def test_acc01_approve_goes_to_p1() -> None:
 
     await _decide_acc01(app, config, _decision(0, GateId.ACC_01, GateVerdict.approve))
 
-    assert (await app.aget_state(config)).next == ("p1_ingest",)
+    assert (await app.aget_state(config)).next == ("p1_await_data",)
     await app.ainvoke(None, config)
     snapshot = await app.aget_state(config)
     assert snapshot.next == ("gate_p1_risk",)  # P1 节点尚为占位, 一路走到下一道闸门
@@ -296,7 +296,7 @@ async def test_acc01_decision_on_old_scorecard_is_represented() -> None:
     assert (await app.aget_state(config)).next == ("gate_acc01",)
 
     await _decide_acc01(app, config, _decision(2, GateId.ACC_01, GateVerdict.approve, target_version=2))
-    assert (await app.aget_state(config)).next == ("p1_ingest",)
+    assert (await app.aget_state(config)).next == ("p1_await_data",)
 
 
 # ── P2 路由兜底: 状态与任务对不上时报错, 不空转 ──
@@ -440,6 +440,7 @@ BASELINE_NODES = {
     "__start__",
     "p0_intel",
     "gate_acc01",
+    "p1_await_data",
     "p1_ingest",
     "p1_analytics",
     "gate_p1_risk",
@@ -471,7 +472,7 @@ BASELINE_EDGES = [
     ("gate_acc01", "declined", True, "reject"),
     ("gate_acc01", "gate_acc01", True, "represent"),
     ("gate_acc01", "p0_intel", True, "rerun"),
-    ("gate_acc01", "p1_ingest", True, "approve"),
+    ("gate_acc01", "p1_await_data", True, "approve"),
     ("gate_fin", "completion", True, "reject"),
     ("gate_fin", "gate_fin", True, "represent"),
     ("gate_fin", "report_draft", True, "approve"),
@@ -483,6 +484,7 @@ BASELINE_EDGES = [
     ("gate_rpt01", "report_draft", True, "reject"),
     ("p0_intel", "gate_acc01", False, None),
     ("p1_analytics", "gate_p1_risk", False, None),
+    ("p1_await_data", "p1_ingest", False, None),
     ("p1_ingest", "p1_analytics", False, None),
     ("report_draft", "gate_rpt01", False, None),
     ("schedule", "fan_in", True, None),
@@ -495,7 +497,7 @@ def test_baseline_graph_structure() -> None:
     deps = make_deps(FakeRegistry(), FakeTrail(), features=NUMBAT_FEATURES)
     app = compile_graph(make_graph_nodes(deps), InMemorySaver())
     graph = app.get_graph()
-    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 18
+    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 19
     edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
     assert edges == BASELINE_EDGES
     assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]

@@ -33,7 +33,7 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
-from tests.fixture_sets import FIXTURE_SETS, NUMBAT, FixtureSet
+from tests.fixture_sets import FIXTURE_SETS, NUMBAT, UPLOAD_RUNTIME, FixtureSet
 
 ROOT = get_settings().KNOWLEDGE_ROOT
 P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
@@ -2009,10 +2009,16 @@ def test_fake_documents_from_manifest() -> None:
 
 
 def check_runtime(fs: FixtureSet) -> None:
-    """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过."""
+    """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过.
+    登记了上传处理的固定输出 (uploads) 时, 其中 UPLOAD_RUNTIME 列出的程序 (演示也用的分类与回函副本) 也须在运行副本中;
+    其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
     if not fs.runtime.is_dir():
         raise AssertionError(f"{fs.name}: 运行副本未生成 ({fs.runtime})")
     test_files = {p.relative_to(fs.fixtures): p for p in fs.fixtures.rglob("*.json")}
+    if fs.uploads is not None:
+        test_files |= {
+            p.relative_to(fs.uploads): p for p in fs.uploads.rglob("*.json") if p.parent.name in UPLOAD_RUNTIME
+        }
     runtime_files = {p.relative_to(fs.runtime): p for p in fs.runtime.rglob("*.json")}
     assert sorted(test_files) == sorted(runtime_files)
     for name, path in test_files.items():

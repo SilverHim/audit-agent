@@ -11,6 +11,7 @@ from backend.contracts.models import (
     ClientProfile,
     Decision,
     DisputeResolution,
+    DocumentType,
     GateDecision,
     GateEdit,
     GateId,
@@ -32,6 +33,7 @@ from backend.contracts.models import (
     ReviewTier,
     UncorrectedSchedule,
 )
+from backend.contracts.records import AccountCategory
 
 
 class Token(Model):
@@ -189,15 +191,15 @@ class ReportBundle(Model):
     decisions: list[GateDecision]
 
 
-# 稍后处理的对象: 复核任务或闸门 (阶段决定)
-DeferralTarget = Literal["review_task", "gate"]
+# 稍后处理的对象: 复核任务, 闸门 (阶段决定) 或补交资料请求
+DeferralTarget = Literal["review_task", "gate", "data_request"]
 
 
 class DeferralIn(Model):
     """标记或取消稍后处理."""
 
     target_type: DeferralTarget
-    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号, 如 ACC-01
+    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号 (如 ACC-01), 补交请求填请求 ID (如 REQ-approval_log)
     deferred: bool  # true 标记, false 取消
 
 
@@ -208,6 +210,26 @@ class DeferralView(Model):
     target_id: str
     deferred_by: str  # 标记人的用户 ID
     deferred_at: datetime
+
+
+class DocumentTypeIn(Model):
+    """人工指定文件类型."""
+
+    type: DocumentType  # 文件类型
+    reason: str  # 理由, 必填
+
+
+class AccountCategoryIn(Model):
+    """审计师修改科目的标准分类."""
+
+    category: AccountCategory  # 新的标准分类, 须属于该科目的类别
+    reason: str  # 理由, 必填
+
+
+class ImportSheet(Model):
+    """导入时换工作表."""
+
+    sheet: str  # 工作表名, 取解析结果的 sheets 之一
 
 
 class LlmSlotView(Model):

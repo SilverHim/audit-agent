@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from backend.contracts.data import TableKind
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
@@ -39,6 +40,9 @@ class ProcedureSummary(Model):
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus  # 按 AuditOutputStore 中 Procedure 的最新版本
     pending_tasks: int  # 按 AuditOutputStore 中 pending 任务计
+    # 最近一次执行基于的数据版本比当前旧 (之后账表, 抽取结果或科目分类有改动, 需求 R16);
+    # 没执行过或执行时没记版本为 false
+    stale: bool = False
 
 
 class EngagementOverview(Model):
@@ -50,7 +54,9 @@ class EngagementOverview(Model):
     run_error: str | None  # 最近一次后台执行的异常, 成功推进后清空; Store 领先检查点时为 RESUME_REQUIRED 提示;
     # 功能集与项目冻结的不同时为 FEATURES_MISMATCH (runner.features_mismatch)
     current_gate: GateId | None  # 正停在哪道闸门, 不在闸门为空
-    awaiting_review: bool  # 是否停在节点内等复核决定
+    awaiting_review: bool  # 是否停在节点内等复核决定 (不含等数据就绪)
+    awaiting_data: bool  # 是否停在 P1 开始前等财务数据就绪 (p1_await_data), 审计师确认数据已齐后继续
+    missing_tables: list[TableKind]  # 等数据就绪时还缺的必需表 (科目表, 本期与上期试算表, 总账分录), 现查; 不在等时为空
     procedures: list[ProcedureSummary]  # 各程序状态
     pending_tasks: int  # 待决复核任务数
     materiality_cents: int | None  # 整体重要性, 单位分

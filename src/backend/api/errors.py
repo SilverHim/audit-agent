@@ -9,7 +9,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
-from backend.contracts.errors import DecisionRejected
+from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked
 
 # 写入时的 NOT_AT_GATE 是 409; GET 闸门由路由单独返回 404, 不走这张表
 _STATUS: dict[str, int] = {
@@ -19,7 +19,11 @@ _STATUS: dict[str, int] = {
     "ENGAGEMENT_BUSY": 409,
     "RESUME_REQUIRED": 409,
     "FEATURES_MISMATCH": 409,
+    "NOT_AWAITING_DATA": 409,
+    "DATA_NOT_READY": 409,
+    "NOT_EDITABLE": 409,
     "TASK_NOT_PENDING": 409,
+    "REQUEST_NOT_OPEN": 409,
     "NOT_AWAITING_REVIEW": 409,
     "VERSION_MISMATCH": 409,
     "USERNAME_TAKEN": 409,
@@ -27,22 +31,24 @@ _STATUS: dict[str, int] = {
     "MISSING_FIELD": 422,
     "FIELD_NOT_ALLOWED": 422,
     "INVALID_VALUE": 422,
+    "IMPORT_PARSE_ERROR": 422,
+    "FILE_TOO_LARGE": 413,
     "ENGAGEMENT_LOCKED": 423,
     "SETTINGS_KEY_MISSING": 503,
     "SETTINGS_KEY_INVALID": 503,
 }
 
 
-def api_error(code: str, message: str = "", *, status: int | None = None) -> HTTPException:
-    """错误体为 {detail: {code, message}}."""
+def api_error(code: str, message: str = "", *, status: int | None = None, **extra: object) -> HTTPException:
+    """错误体为 {detail: {code, message}}; extra 并入 detail, 如 DATA_NOT_READY 的 missing_tables."""
     resolved = status if status is not None else _STATUS.get(code, 400)
-    return HTTPException(status_code=resolved, detail={"code": code, "message": message})
+    return HTTPException(status_code=resolved, detail={"code": code, "message": message, **extra})
 
 
 def http_for_decision(exc: DecisionRejected) -> HTTPException:
-    """DecisionRejected 按错误码表映射; 写入路径上的 NOT_AT_GATE 为 409."""
+    """DecisionRejected 按错误码表映射; 写入路径上的 NOT_AT_GATE 为 409. DataRejected 的 extra 并入 detail."""
     status = 409 if exc.code == "NOT_AT_GATE" else None
-    return api_error(exc.code, exc.message, status=status)
+    return api_error(exc.code, exc.message, status=status, **(exc.extra if isinstance(exc, DataRejected) else {}))
 
 
 @asynccontextmanager
@@ -52,6 +58,8 @@ async def catch_api() -> AsyncIterator[None]:
         yield
     except DecisionRejected as exc:
         raise http_for_decision(exc) from exc
+    except EngagementLocked as exc:
+        raise api_error("ENGAGEMENT_LOCKED", str(exc)) from exc
     except LookupError as exc:
         raise api_error("NOT_FOUND", str(exc)) from exc
 

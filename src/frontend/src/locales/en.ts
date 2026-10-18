@@ -115,6 +115,8 @@ export const en = {
     'FIN-01': 'Uncorrected misstatements',
     'RPT-03': 'Report drafting',
     'RPT-01': 'Report approval and sign-off',
+    'GEN-05': 'Full journal entry scan',
+    'FIN-12': 'Statements agree to accounting records',
   } as Record<string, string>,
   engines: { rule: 'Rule', llm: 'Model', hybrid: 'Rule + model', manual: 'Auditor decision' },
   levels: { L1: 'Decide each', L2: 'Review each', L3: 'Review exceptions', L4: 'Spot-check afterwards' },
@@ -383,6 +385,19 @@ export const en = {
     misstatementRequired: 'Account and amount are required',
     rerunJson: 'Parameters must be a JSON object',
     chooseBasis: 'Choose a materiality basis',
+  },
+  apiErrors: {
+    dataNotReady: (tables: string[]) => `Still missing: ${tables.join(', ')}.`,
+    codes: {
+      NOT_AWAITING_DATA: 'The audit plan is no longer waiting for data.',
+      NOT_EDITABLE:
+        'Confirmation reply fields can only be changed while the engagement waits at a stage decision or for review.',
+      REQUEST_NOT_OPEN: 'This request has already been received or withdrawn.',
+      IMPORT_PARSE_ERROR: 'Some cells could not be read. Check the column matches and the date format.',
+      FILE_TOO_LARGE: 'Each file must be 50 MB or smaller.',
+      ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
+      ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
+    } as Record<string, string>,
   },
   toasts: {
     decisionRecorded: 'Decision recorded',
@@ -747,6 +762,9 @@ export const en = {
           : `${mapped} of ${total} accounts assigned to a standard category`,
       fields: (fields: string, source: string) => `${source} does not provide ${fields}.`,
       statementsMissing: 'The client has not provided the draft statements.',
+      statementsNoTb: 'Draft statements received; the trial balance is still missing.',
+      statementsPending: (n: number) =>
+        `${n} draft statements file${n === 1 ? '' : 's'} received. The agreement is checked in Statements agree to accounting records.`,
       statementsDiff: (difference: string) => `Difference ${difference}`,
     },
     fieldNames: { created_by: 'preparer', approved_by: 'approver' } as Record<string, string>,
@@ -925,6 +943,9 @@ export const en = {
     importing: 'Importing…',
     done: (kind: string, n: number) => `${kind}: ${n} records imported`,
     unavailable: 'Importing is not available yet.',
+    parseErrors:
+      'These cells could not be read (up to 20 shown). Check the column matches and the date format, then import again.',
+    parseCols: { row: 'Row', column: 'Column', value: 'Value' },
     fields: {
       code: 'Account code',
       name: 'Name',
@@ -986,7 +1007,7 @@ export const en = {
       not_provided: 'Not yet provided by the client',
     },
     formats: { table: 'Excel or CSV', document: 'PDF, Word or Excel' },
-    awaitingIntro: 'Planning starts once the data below is complete.',
+    awaitingIntro: 'All the data planning needs has been received. Confirm to start planning.',
   },
   evidence: {
     open: 'Open',

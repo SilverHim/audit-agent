@@ -9,7 +9,7 @@ import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Literal, TypeVar
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -18,17 +18,21 @@ import pdfplumber
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
+from backend.contracts.data import ContractVersion
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
+    AgentId,
     AuditObjective,
     ClientProfile,
     Contract,
+    DocumentChannel,
+    DocumentFailedStep,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -56,6 +60,7 @@ from backend.core.config import get_settings
 from backend.persistence import models as m
 from backend.persistence.db import default_engine, transaction, writable
 from backend.services.account_mapping import classify_by_name, with_category
+from backend.services.extraction_edits import term_position
 from backend.services.ledger import PROFIT_AND_LOSS, opening_balances
 
 T = TypeVar("T", bound=Versioned)
@@ -206,18 +211,38 @@ class PostgresFinancialDataStore(Store):
                     .order_by(m.contract_terms.c.id),
                 )
                 row["terms"] = [
-                    {k: v for k, v in r.items() if k not in {"engagement_id", "contract_id"}} for r in terms
+                    {k: v for k, v in r.items() if k not in {"engagement_id", "contract_id"}}
+                    for r in sorted(terms, key=lambda r: term_position(r["id"]))
                 ]
-                result.append(Contract.model_validate(row))
+                result.append(Contract.model_validate({k: v for k, v in row.items() if k in Contract.model_fields}))
         return result
 
-    async def save_contract(self, eid: str, contract: Contract) -> None:
+    async def save_contract(
+        self,
+        eid: str,
+        contract: Contract,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             data = contract.model_dump(exclude={"terms", "evidence"})
             data["evidence"] = contract.model_dump(mode="json")["evidence"]
             stmt = insert(m.contracts).values(engagement_id=eid, **data)
             await conn.execute(stmt.on_conflict_do_update(index_elements=["engagement_id", "id"], set_=data))
+            await upsert_extraction(
+                conn,
+                eid,
+                "contract",
+                contract.id,
+                contract.version,
+                contract.model_dump(mode="json"),
+                changed_by=changed_by,
+                field=field,
+                reason=reason,
+            )
             await conn.execute(
                 delete(m.contract_terms).where(
                     m.contract_terms.c.engagement_id == eid, m.contract_terms.c.contract_id == contract.id
@@ -228,12 +253,24 @@ class PostgresFinancialDataStore(Store):
                     insert(m.contract_terms).values(engagement_id=eid, contract_id=contract.id, **term.model_dump())
                 )
 
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        t = m.extraction_versions
+        statement = (
+            select(t.c.version, t.c.data, t.c.field, t.c.reason, t.c.changed_by, t.c.changed_at)
+            .where(t.c.target_type == "contract", t.c.target_id == contract_id)
+            .order_by(t.c.version)
+        )
+        return [
+            ContractVersion.model_validate({**{k: v for k, v in r.items() if k != "data"}, "contract": r["data"]})
+            for r in await self.rows(eid, statement)
+        ]
+
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
         stmt = select(m.documents).order_by(m.documents.c.file_name, m.documents.c.id)
         if type is not None:
             stmt = stmt.where(m.documents.c.type == type)
         return [
-            DocumentRef.model_validate({k: v for k, v in r.items() if k not in {"engagement_id", "file_path"}})
+            DocumentRef.model_validate({k: v for k, v in r.items() if k in DocumentRef.model_fields})
             for r in await self.rows(eid, stmt)
         ]
 
@@ -307,7 +344,17 @@ class FileEvidenceStore(Store):
         self.root = root
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
         safe_child(self.root, file_name)
         digest = hashlib.sha256(data).hexdigest()
@@ -316,14 +363,17 @@ class FileEvidenceStore(Store):
             existing = [d for d in await PostgresFinancialDataStore(self.engine).documents(eid) if d.sha256 == digest]
             if existing:
                 return existing[0]
+            pdf = media_type == "application/pdf"
 
             def count_pages() -> int:
-                with pdfplumber.open(io.BytesIO(data)) as pdf:
-                    return len(pdf.pages)
+                """PDF 页数; 读不出 (文件损坏) 记 0: 原件照样登记, 由读取的一方报错 (上传的文件转人工处理)."""
+                try:
+                    with pdfplumber.open(io.BytesIO(data)) as document:
+                        return len(document.pages)
+                except Exception:
+                    return 0
 
-            count = await asyncio.to_thread(count_pages)
-            if count == 0:
-                raise ValueError("Empty PDF")
+            count = await asyncio.to_thread(count_pages) if pdf else 1  # 非 PDF 不分页, 记 1
             doc = DocumentRef(
                 id=f"DOC-{digest[:12]}",
                 type=type,
@@ -331,12 +381,16 @@ class FileEvidenceStore(Store):
                 sha256=digest,
                 page_count=count,
                 reliability=reliability,
-                status="received",
+                status=status,
                 uploaded_at=now(),
+                media_type=media_type,
+                channel=channel,
+                uploaded_by=uploaded_by,
             )
             directory = safe_child(safe_child(self.root, eid), "evidence")
             directory.mkdir(parents=True, exist_ok=True)
-            path = safe_child(directory, digest + ".pdf")
+            suffix = ".pdf" if pdf else PurePath(file_name).suffix.lower()  # 存档文件名为哈希加原扩展名
+            path = safe_child(directory, digest + suffix)
             # Publish complete immutable content; a rolled-back registration leaves a reusable orphan.
             temporary = directory / f".{uuid4()}.tmp"
             temporary.write_bytes(data)
@@ -382,6 +436,29 @@ class FileEvidenceStore(Store):
             if not result.rowcount:
                 raise FileNotFoundError(document_id)
 
+    async def update_document(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        status: DocumentStatus,
+        failed_step: DocumentFailedStep | None,
+    ) -> DocumentRef:
+        t = m.documents
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            result = await conn.execute(
+                update(t)
+                .where(t.c.engagement_id == eid, t.c.id == document_id)
+                .values(type=type, reliability=reliability, status=status, failed_step=failed_step)
+            )
+            if not result.rowcount:
+                raise FileNotFoundError(document_id)
+            row = (await conn.execute(select(t).where(t.c.id == document_id))).mappings().one()
+        return DocumentRef.model_validate({k: v for k, v in row.items() if k in DocumentRef.model_fields})
+
 
 FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
     "accounts": records.Account,
@@ -397,8 +474,12 @@ FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
 Tables = tuple[Mapping[str, Sequence[BaseModel]], Sequence[Path]]  # (财务表 → 行, 合同 PDF 路径)
 
 
+DATASET_READY_BY = "dataset"  # 数据集载入视同确认就绪时, dataset_loads.ready_by 记的值
+
+
 class TableLoader(Store):
-    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads; 已载入则跳过.
+    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads (数据版本 1, 视同已确认就绪);
+    已载入则跳过.
 
     源数据在确认尚未载入之后才读取与转换 (build), 已载入的项目不再依赖源文件.
     """
@@ -424,8 +505,17 @@ class TableLoader(Store):
                 await self.evidence_store.save(
                     eid, path.name, path.read_bytes(), type=DocumentType.contract, reliability=Reliability.external_copy
                 )
+            # 数据集是整套预置数据 (种子, 测试与演示项目), 载入即视同审计师已确认数据已齐, P1 不再等待
+            loaded_at = now()
             await conn.execute(
-                insert(m.dataset_loads).values(engagement_id=eid, dataset=dataset, data_version=1, loaded_at=now())
+                insert(m.dataset_loads).values(
+                    engagement_id=eid,
+                    dataset=dataset,
+                    data_version=1,
+                    loaded_at=loaded_at,
+                    ready_at=loaded_at,
+                    ready_by=DATASET_READY_BY,
+                )
             )
 
     async def insert_adjustments(
@@ -485,7 +575,8 @@ def read_adjustments(path: Path) -> list[JournalEntry]:
             JournalEntry.model_validate({k: (v if v != "" else None) for k, v in r.items()})
             for r in csv.DictReader(stream)
         ]
-    naive = [x.id for x in rows if x.created_at.tzinfo is None]
+    # created_at 可空 (导入的总账可能没有); 有值时须带时区
+    naive = [x.id for x in rows if x.created_at is not None and x.created_at.tzinfo is None]
     if naive:
         raise ValueError(f"更正分录的 created_at 没有时区: {', '.join(naive)}")
     return rows
@@ -723,6 +814,36 @@ class RoutingDatasetLoader:
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""
         return sorted(name for loader in (self.default, *self.by_prefix.values()) for name in loader.datasets())
+
+
+async def upsert_extraction(
+    conn: AsyncConnection,
+    eid: str,
+    target_type: str,
+    target_id: str,
+    version: int,
+    data: Mapping[str, Any],
+    *,
+    changed_by: str,
+    field: str | None,
+    reason: str | None,
+) -> None:
+    """在 extraction_versions 记一版抽取结果; 同 (类型, 对象, 版本) 已有则覆盖 (抽取重做时幂等)."""
+    values = {
+        "data": dict(data),
+        "field": field,
+        "reason": reason,
+        "changed_by": changed_by,
+        "changed_at": now(),
+    }
+    statement = insert(m.extraction_versions).values(
+        engagement_id=eid, target_type=target_type, target_id=target_id, version=version, **values
+    )
+    await conn.execute(
+        statement.on_conflict_do_update(
+            index_elements=["engagement_id", "target_type", "target_id", "version"], set_=values
+        )
+    )
 
 
 def read_planning(directory: Path) -> tuple[list[AuditObjective], list[RiskItem]]:

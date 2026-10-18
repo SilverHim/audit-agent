@@ -320,18 +320,40 @@ async def get_gate(env: ToolEnv, args: NoArgs) -> Found:
 
 
 async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
-    """待人处理的事项, 按 阶段决定 → 复核任务 的顺序 (补交请求接口落地后排在两者之间)."""
+    """待人处理的事项, 按 阶段决定 → 补交请求 (A3 提出, 待补交的) → 复核任务 的顺序, 同工作台; 各项标明是否已标记
+    稍后处理. 补交请求按 DataStore.requests 的顺序 (提出时间, 同批按固定顺序)."""
     deps, eid = env.deps, env.eid
     overview = await env.state.overview(eid)
     tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
     decisions = await deps.output_store.latest(eid, GateDecision)
+    requests = await deps.data.requests(eid)
     entries = await all_of_kind(deps.trail, eid, TrailKind.deferral)
-    deferred = {target_of(e) for e in active_deferrals(entries, tasks, overview.current_gate, decisions)}
+    active = active_deferrals(entries, tasks, overview.current_gate, decisions, {r.id: r for r in requests})
+    deferred = {target_of(e) for e in active}
     cites: dict[str, ConciergeCitation] = {}
     items: list[dict[str, Any]] = []
     if overview.current_gate is not None:
         gate = overview.current_gate
         items.append({"type": "gate_decision", "gate": gate.value, "deferred": ("gate", gate.value) in deferred})
+    for request in requests:
+        if request.status != "open":
+            continue
+        items.append(
+            {
+                "type": "data_request",
+                "request_id": request.id,
+                "title": request.title,
+                "kind": request.kind,
+                "table_kind": request.table_kind,
+                "document_type": request.document_type,
+                "used_for": request.used_for,
+                "reason_code": request.reason_code,
+                "reason_params": request.reason_params,
+                "deferred": ("data_request", request.id) in deferred,
+            }
+        )
+        for pid in request.used_for:
+            cites.setdefault(pid, cite_procedure(pid, procedure_name(env, pid)))
     pending = sorted((t for t in tasks.values() if t.status is TaskStatus.pending), key=lambda t: t.created_at)
     judgments = {j.id: j for j in await deps.output_store.latest(eid, Judgment)}
     for task in pending:
@@ -664,7 +686,7 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         "list_open_items",
-        "待审计师处理的事项, 依次为阶段决定, 复核任务; 标明哪些已标记稍后处理.",
+        "待审计师处理的事项, 依次为阶段决定, 待补交的资料 (缺的账表或文件), 复核任务; 标明哪些已标记稍后处理.",
         NoArgs,
         list_open_items,
         {"zh": "查看待处理事项", "en": "Checking open items"},

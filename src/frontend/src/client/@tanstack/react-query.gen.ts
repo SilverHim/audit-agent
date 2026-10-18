@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, datasetsListDatasets, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataDataRequests, dataReady, dataSetAccountCategory, datasetsListDatasets, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceContractHistory, evidenceEditConfirmation, evidenceEditContract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataReadyData, DataReadyError, DataReadyResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -389,7 +389,7 @@ export const deferralsListDeferralsQueryKey = (options: Options<DeferralsListDef
 /**
  * List Deferrals
  *
- * 当前有效的标记, 按标记时间升序. 任务已决定, 或闸门已作出决定的, 自动不在其中.
+ * 当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 或补交请求已收到的, 自动不在其中.
  */
 export const deferralsListDeferralsOptions = (options: Options<DeferralsListDeferralsData>) => queryOptions<DeferralsListDeferralsResponse, DeferralsListDeferralsError, DeferralsListDeferralsResponse, ReturnType<typeof deferralsListDeferralsQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -410,7 +410,8 @@ export const deferralsListDeferralsOptions = (options: Options<DeferralsListDefe
  * 标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.
  *
  * 项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;
- * 闸门不是当前停留的 409 NOT_AT_GATE; 取消从未标记过的目标 404 NOT_FOUND.
+ * 闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;
+ * 取消从未标记过的目标 404 NOT_FOUND.
  */
 export const deferralsSetDeferralMutation = (options?: Partial<Options<DeferralsSetDeferralData>>): UseMutationOptions<DeferralsSetDeferralResponse, DeferralsSetDeferralError, Options<DeferralsSetDeferralData>> => {
     const mutationOptions: UseMutationOptions<DeferralsSetDeferralResponse, DeferralsSetDeferralError, Options<DeferralsSetDeferralData>> = {
@@ -483,6 +484,26 @@ export const evidenceListDocumentsOptions = (options: Options<EvidenceListDocume
     queryKey: evidenceListDocumentsQueryKey(options)
 });
 
+/**
+ * Upload Documents
+ *
+ * 上传文件, 返回各文件的登记 (同一文件重复上传返回已有的); 新文件随即由 A3 在后台分类与抽取.
+ * 类型不支持 422 INVALID_VALUE; 单个超过 50 MB 413 FILE_TOO_LARGE; 锁定 423; 忙 409.
+ */
+export const evidenceUploadDocumentsMutation = (options?: Partial<Options<EvidenceUploadDocumentsData>>): UseMutationOptions<EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsError, Options<EvidenceUploadDocumentsData>> => {
+    const mutationOptions: UseMutationOptions<EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsError, Options<EvidenceUploadDocumentsData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await evidenceUploadDocuments({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const evidenceListContractsQueryKey = (options: Options<EvidenceListContractsData>) => createQueryKey('evidenceListContracts', options);
 
 /**
@@ -501,12 +522,33 @@ export const evidenceListContractsOptions = (options: Options<EvidenceListContra
     queryKey: evidenceListContractsQueryKey(options)
 });
 
+/**
+ * Set Document Type
+ *
+ * 人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空
+ * 422 MISSING_FIELD; 锁定 423; 忙 409.
+ */
+export const evidenceSetDocumentTypeMutation = (options?: Partial<Options<EvidenceSetDocumentTypeData>>): UseMutationOptions<EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeError, Options<EvidenceSetDocumentTypeData>> => {
+    const mutationOptions: UseMutationOptions<EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeError, Options<EvidenceSetDocumentTypeData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await evidenceSetDocumentType({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const evidenceGetEvidenceQueryKey = (options: Options<EvidenceGetEvidenceData>) => createQueryKey('evidenceGetEvidence', options);
 
 /**
  * Get Evidence
  *
- * 原件 PDF. 前端带令牌下载后用 #page=N 跳页.
+ * 原件, Content-Type 为登记的媒体类型. PDF 与图片在浏览器里显示 (PDF 前端带令牌下载后用 #page=N 跳页),
+ * Word, Excel, CSV 以附件下载.
  */
 export const evidenceGetEvidenceOptions = (options: Options<EvidenceGetEvidenceData>) => queryOptions<EvidenceGetEvidenceResponse, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, ReturnType<typeof evidenceGetEvidenceQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -519,6 +561,47 @@ export const evidenceGetEvidenceOptions = (options: Options<EvidenceGetEvidenceD
         return data;
     },
     queryKey: evidenceGetEvidenceQueryKey(options)
+});
+
+/**
+ * Edit Contract
+ *
+ * 修改合同抽取结果, 返回新版本. field 为 counterparty, counterparty_abn, amount_cents, sign_date,
+ * terms[n].text, terms[n].term_type (n 从 0 起). 合同不存在 404; 理由为空 422 MISSING_FIELD; 字段或值不合法,
+ * 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
+ */
+export const evidenceEditContractMutation = (options?: Partial<Options<EvidenceEditContractData>>): UseMutationOptions<EvidenceEditContractResponse, EvidenceEditContractError, Options<EvidenceEditContractData>> => {
+    const mutationOptions: UseMutationOptions<EvidenceEditContractResponse, EvidenceEditContractError, Options<EvidenceEditContractData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await evidenceEditContract({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const evidenceContractHistoryQueryKey = (options: Options<EvidenceContractHistoryData>) => createQueryKey('evidenceContractHistory', options);
+
+/**
+ * Contract History
+ *
+ * 合同的各版本, 按版本升序. 合同不存在 404.
+ */
+export const evidenceContractHistoryOptions = (options: Options<EvidenceContractHistoryData>) => queryOptions<EvidenceContractHistoryResponse, EvidenceContractHistoryError, EvidenceContractHistoryResponse, ReturnType<typeof evidenceContractHistoryQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await evidenceContractHistory({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: evidenceContractHistoryQueryKey(options)
 });
 
 export const evidenceGetRecordQueryKey = (options: Options<EvidenceGetRecordData>) => createQueryKey('evidenceGetRecord', options);
@@ -558,6 +641,272 @@ export const evidenceListConfirmationsOptions = (options: Options<EvidenceListCo
     },
     queryKey: evidenceListConfirmationsQueryKey(options)
 });
+
+/**
+ * Edit Confirmation
+ *
+ * 修改回函抽取结果, 返回函证新版本. field 为 confirming_party, balance_date, confirmed_balance_cents.
+ * 只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 函证不存在 404; 理由为空 422 MISSING_FIELD;
+ * 字段或值不合法, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
+ */
+export const evidenceEditConfirmationMutation = (options?: Partial<Options<EvidenceEditConfirmationData>>): UseMutationOptions<EvidenceEditConfirmationResponse, EvidenceEditConfirmationError, Options<EvidenceEditConfirmationData>> => {
+    const mutationOptions: UseMutationOptions<EvidenceEditConfirmationResponse, EvidenceEditConfirmationError, Options<EvidenceEditConfirmationData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await evidenceEditConfirmation({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Start Import
+ *
+ * 上传账表文件并解析第一个工作表, 返回列, 样例与建议. 不止一个文件或类型不支持 422 INVALID_VALUE;
+ * 超过 50 MB 413 FILE_TOO_LARGE; 项目锁定 423.
+ */
+export const dataStartImportMutation = (options?: Partial<Options<DataStartImportData>>): UseMutationOptions<DataStartImportResponse, DataStartImportError, Options<DataStartImportData>> => {
+    const mutationOptions: UseMutationOptions<DataStartImportResponse, DataStartImportError, Options<DataStartImportData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataStartImport({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Change Import Sheet
+ *
+ * 换工作表, 返回该表的解析结果与建议. 导入不存在 404; 已提交或工作表不存在 422 INVALID_VALUE.
+ */
+export const dataChangeImportSheetMutation = (options?: Partial<Options<DataChangeImportSheetData>>): UseMutationOptions<DataChangeImportSheetResponse, DataChangeImportSheetError, Options<DataChangeImportSheetData>> => {
+    const mutationOptions: UseMutationOptions<DataChangeImportSheetResponse, DataChangeImportSheetError, Options<DataChangeImportSheetData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataChangeImportSheet({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Commit Import
+ *
+ * 按列对应解析全表并写入新数据版本, 原文件登记为证据文件. 解析失败 422 IMPORT_PARSE_ERROR (detail.errors 为前
+ * 20 处 {row, column, value}); 对应不可用 422 INVALID_VALUE 或 MISSING_FIELD; 忙 409; 锁定 423; 导入不存在 404.
+ */
+export const dataCommitImportMutation = (options?: Partial<Options<DataCommitImportData>>): UseMutationOptions<DataCommitImportResponse, DataCommitImportError, Options<DataCommitImportData>> => {
+    const mutationOptions: UseMutationOptions<DataCommitImportResponse, DataCommitImportError, Options<DataCommitImportData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataCommitImport({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const dataSummaryQueryKey = (options: Options<DataSummaryData>) => createQueryKey('dataSummary', options);
+
+/**
+ * Summary
+ *
+ * 数据管理页的概览. processing 不为 0 时前端每 3 秒轮询.
+ */
+export const dataSummaryOptions = (options: Options<DataSummaryData>) => queryOptions<DataSummaryResponse, DataSummaryError, DataSummaryResponse, ReturnType<typeof dataSummaryQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataSummary({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataSummaryQueryKey(options)
+});
+
+export const dataTablePageQueryKey = (options: Options<DataTablePageData>) => createQueryKey('dataTablePage', options);
+
+/**
+ * Table Page
+ *
+ * 查看一张账表: {total, columns, rows}. q 为不分大小写的包含搜索 (科目表查代码与名称); limit 不超过 200.
+ * 科目表的行另带 category, category_basis, balance_current_cents, balance_prior_cents, edited. 账表数值不能改,
+ * 只能经导入写新版本.
+ */
+export const dataTablePageOptions = (options: Options<DataTablePageData>) => queryOptions<DataTablePageResponse, DataTablePageError, DataTablePageResponse, ReturnType<typeof dataTablePageQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataTablePage({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataTablePageQueryKey(options)
+});
+
+const createInfiniteParams = <K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>>(queryKey: QueryKey<Options>, page: K) => {
+    const params = { ...queryKey[0] };
+    if (page.body) {
+        params.body = {
+            ...queryKey[0].body as any,
+            ...page.body as any
+        };
+    }
+    if (page.headers) {
+        params.headers = {
+            ...queryKey[0].headers,
+            ...page.headers
+        };
+    }
+    if (page.path) {
+        params.path = {
+            ...queryKey[0].path as any,
+            ...page.path as any
+        };
+    }
+    if (page.query) {
+        params.query = {
+            ...queryKey[0].query as any,
+            ...page.query as any
+        };
+    }
+    return params as unknown as typeof page;
+};
+
+export const dataTablePageInfiniteQueryKey = (options: Options<DataTablePageData>): QueryKey<Options<DataTablePageData>> => createQueryKey('dataTablePage', options, true);
+
+/**
+ * Table Page
+ *
+ * 查看一张账表: {total, columns, rows}. q 为不分大小写的包含搜索 (科目表查代码与名称); limit 不超过 200.
+ * 科目表的行另带 category, category_basis, balance_current_cents, balance_prior_cents, edited. 账表数值不能改,
+ * 只能经导入写新版本.
+ */
+export const dataTablePageInfiniteOptions = (options: Options<DataTablePageData>) => {
+    const opts = infiniteQueryOptions<DataTablePageResponse, DataTablePageError, InfiniteData<DataTablePageResponse>, QueryKey<Options<DataTablePageData>>, number | Pick<QueryKey<Options<DataTablePageData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
+    // @ts-ignore
+    {
+        queryFn: async ({ pageParam, queryKey, signal }) => {
+            // @ts-ignore
+            const page: Pick<QueryKey<Options<DataTablePageData>>[0], 'body' | 'headers' | 'path' | 'query'> = typeof pageParam === 'object' ? pageParam : {
+                query: {
+                    offset: pageParam
+                }
+            };
+            const params = createInfiniteParams(queryKey, page);
+            const { data } = await dataTablePage({
+                ...options,
+                ...params,
+                signal,
+                throwOnError: true
+            });
+            return data;
+        },
+        queryKey: dataTablePageInfiniteQueryKey(options)
+    });
+    return opts as Omit<typeof opts, 'initialData'>;
+};
+
+/**
+ * Set Account Category
+ *
+ * 修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由为空 422 MISSING_FIELD;
+ * 分类不属于该科目的类别或与当前相同 422 INVALID_VALUE; 科目不存在 404; 锁定 423; 忙 409.
+ */
+export const dataSetAccountCategoryMutation = (options?: Partial<Options<DataSetAccountCategoryData>>): UseMutationOptions<DataSetAccountCategoryResponse, DataSetAccountCategoryError, Options<DataSetAccountCategoryData>> => {
+    const mutationOptions: UseMutationOptions<DataSetAccountCategoryResponse, DataSetAccountCategoryError, Options<DataSetAccountCategoryData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataSetAccountCategory({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+export const dataAccountHistoryQueryKey = (options: Options<DataAccountHistoryData>) => createQueryKey('dataAccountHistory', options);
+
+/**
+ * Account History
+ *
+ * 科目标准分类的各版, 按版本升序; 科目不存在 404.
+ */
+export const dataAccountHistoryOptions = (options: Options<DataAccountHistoryData>) => queryOptions<DataAccountHistoryResponse, DataAccountHistoryError, DataAccountHistoryResponse, ReturnType<typeof dataAccountHistoryQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataAccountHistory({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataAccountHistoryQueryKey(options)
+});
+
+export const dataDataRequestsQueryKey = (options: Options<DataDataRequestsData>) => createQueryKey('dataDataRequests', options);
+
+/**
+ * Data Requests
+ *
+ * A3 提出的补交资料请求 (含已收到的), 按提出时间升序; status 为 open 的是待补交. 补交时账表走导入
+ * (POST /data/imports), 文件走上传 (POST /documents), 都带 request_id.
+ */
+export const dataDataRequestsOptions = (options: Options<DataDataRequestsData>) => queryOptions<DataDataRequestsResponse, DataDataRequestsError, DataDataRequestsResponse, ReturnType<typeof dataDataRequestsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataDataRequests({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataDataRequestsQueryKey(options)
+});
+
+/**
+ * Ready
+ *
+ * 确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
+ * (detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.
+ */
+export const dataReadyMutation = (options?: Partial<Options<DataReadyData>>): UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> => {
+    const mutationOptions: UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataReady({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 export const reportsGetMisstatementsQueryKey = (options: Options<ReportsGetMisstatementsData>) => createQueryKey('reportsGetMisstatements', options);
 
@@ -616,35 +965,6 @@ export const reportsListTrailOptions = (options: Options<ReportsListTrailData>) 
     },
     queryKey: reportsListTrailQueryKey(options)
 });
-
-const createInfiniteParams = <K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>>(queryKey: QueryKey<Options>, page: K) => {
-    const params = { ...queryKey[0] };
-    if (page.body) {
-        params.body = {
-            ...queryKey[0].body as any,
-            ...page.body as any
-        };
-    }
-    if (page.headers) {
-        params.headers = {
-            ...queryKey[0].headers,
-            ...page.headers
-        };
-    }
-    if (page.path) {
-        params.path = {
-            ...queryKey[0].path as any,
-            ...page.path as any
-        };
-    }
-    if (page.query) {
-        params.query = {
-            ...queryKey[0].query as any,
-            ...page.query as any
-        };
-    }
-    return params as unknown as typeof page;
-};
 
 export const reportsListTrailInfiniteQueryKey = (options: Options<ReportsListTrailData>): QueryKey<Options<ReportsListTrailData>> => createQueryKey('reportsListTrail', options, true);
 
@@ -767,3 +1087,23 @@ export const settingsTestLlmSlotMutation = (options?: Partial<Options<SettingsTe
     };
     return mutationOptions;
 };
+
+export const dataTableSchemasQueryKey = (options?: Options<DataTableSchemasData>) => createQueryKey('dataTableSchemas', options);
+
+/**
+ * Table Schemas
+ *
+ * 各账表的导入字段, 按 TableKind 顺序; 字段名与 persistence/models.py 中 FINANCIAL 各表的列一致.
+ */
+export const dataTableSchemasOptions = (options?: Options<DataTableSchemasData>) => queryOptions<DataTableSchemasResponse, DefaultError, DataTableSchemasResponse, ReturnType<typeof dataTableSchemasQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataTableSchemas({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataTableSchemasQueryKey(options)
+});

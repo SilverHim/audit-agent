@@ -112,6 +112,8 @@ def make_overview(engagement: Engagement = ENGAGEMENT, **changes: Any) -> Engage
         run_error=None,
         current_gate=None,
         awaiting_review=True,
+        awaiting_data=False,
+        missing_tables=[],
         procedures=[
             procedure_summary("REV-08"),
             procedure_summary("CSH-05"),
