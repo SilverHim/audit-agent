@@ -513,14 +513,19 @@ class XeroDatasetLoader(TableLoader):
         found.verify()
         return found
 
+    def tables(self, dataset: str) -> Tables:
+        """载入的财务表与合同 PDF (不连库的纯函数, load 与测试共用): 快照映射出七张表 (adapters.xero_dataset); 有补造
+        目录时先核对, 再并入合同关联, 服务完成记录与开户行, 合同 PDF 取补造目录的 contracts/
+        (adapters.xero_supplements). 没有补造目录时与纯快照相同, 不登记合同."""
+        found = self.supplement(dataset)
+        tables = build_tables(self.snapshot(dataset))
+        if found is None:
+            return tables, ()
+        return found.apply(tables), found.contracts()
+
     async def load(self, eid: str, dataset: str) -> None:
         self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
-
-        def build() -> Tables:
-            self.supplement(dataset)
-            return build_tables(self.snapshot(dataset)), ()
-
-        await self.insert(eid, dataset, build)
+        await self.insert(eid, dataset, lambda: self.tables(dataset))
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
         found = self.supplement(dataset)

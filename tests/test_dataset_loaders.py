@@ -88,3 +88,20 @@ async def test_already_loaded_xero_survives_removed_snapshot(tmp_path: Path, mon
     monkeypatch.setattr(stores, "writable", writable)
     monkeypatch.setattr(loader, "rows", rows)
     await loader.load("E", "xero/removed")
+
+
+def test_xero_without_supplements_tables_unchanged(tmp_path: Path) -> None:
+    """R72: 没有补造目录的 Xero 快照 (20261017-mock) 载入的表与纯快照相同, 不登记合同; 服务完成记录为空,
+    合同关联全空, 开户行为 Xero 科目名."""
+    from backend.adapters.xero_dataset import Snapshot, build_tables
+
+    api = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"
+    if not (api / "20261017-mock").is_dir():
+        pytest.skip("没有本地 Xero 快照 20261017-mock")
+    loader = stores.XeroDatasetLoader(
+        api, api, engine=object(), evidence_store=object(), supplements=api.parents[2] / "xero_demo"
+    )  # type: ignore[arg-type]
+    tables, contracts = loader.tables("xero/20261017-mock")
+    assert (tables, list(contracts)) == (build_tables(Snapshot(api / "20261017-mock")), [])
+    assert tables["delivery_notes"] == [] and all(i.contract_id is None for i in tables["sales_invoices"])
+    assert [a.bank_name for a in tables["bank_accounts"]] == ["Business Bank Account", "Business Savings Account"]

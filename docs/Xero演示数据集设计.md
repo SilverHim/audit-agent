@@ -218,6 +218,8 @@ AJE-X05: 与 AJE-X01 同属第 1 轮 (M-5 与 M-1 都在 P2 发现), 编号按�
 
 ### 3.1 从 Xero 映射的表 (载入器 `build_tables`)
 
+载入用 `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, R72): 先核对补造目录, 再在 `build_tables` 的结果上并入补造的合同关联, 服务完成记录与开户行, 合同 PDF 取补造目录的 contracts/ (登记为 contract, external_copy, 文件 ID 同 manifest). 发票号找不到或不唯一, 合同关联或服务完成记录重复, 合同关联指向没有 PDF 的合同, bank_accounts.csv 的 id, BSB, 账号, 科目与快照不符, 或补造 CSV 缺列, 格式不对时抛 SupplementMismatch (只列文件名与编号), 不载入. 这些内容核对在载入时 (p1_ingest) 做, 失败记入 run_error; 建项目接口与 GET /datasets 只做哈希核对 (第 9.3 节第 2 项), 正式目录哈希相符即内容已由校验脚本核过. 没有补造目录的快照 (如 20261017-mock) 与纯快照相同.
+
 | 表 | 来源 | 口径与 ID | 行数 |
 |---|---|---|---|
 | accounts | accounts.json | 26 类标准分类 (迁移 0002); 855 Clearing Account 未映射 | 62 |
@@ -1054,7 +1056,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 3. `client_profile()`: 有 client_profile.json 时整份取它, 校验 id 以快照组织 ID 推出的 `CLIENT-XERO-{短 ID}-` 开头 (本数据集 CLIENT-XERO-3C1332BB-Q1), 不符抛 SupplementMismatch, 消息含该前缀. 带后缀是为了与 20261017-mock 的载入器画像 CLIENT-XERO-3C1332BB v1 区分, 避免同库建项目时 VersionConflict (2.6 节).
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.
-6. 合同 PDF: `build()` 返回补造目录的 contracts/*.pdf (现在 XeroDatasetLoader 传 `()`).
+6. 合同 PDF: `build()` 返回补造目录的 contracts/*.pdf (原来 XeroDatasetLoader 传 `()`). 第 6 至 9 项已实现 (R72, `XeroDatasetLoader.tables`).
 7. sales_invoices.contract_id 按 contract_links.csv 的 invoice_no 填.
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.

@@ -1,7 +1,9 @@
 """Real PostgreSQL acceptance tests. Set TEST_DATABASE_URL to a migrated disposable database."""
 
 import asyncio
+import json
 import os
+import shutil
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +15,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
 from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
+from backend.adapters.xero_supplements import SupplementMismatch
+from backend.agents.ingest import contract_id
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import ConfirmationRequest
@@ -535,4 +539,79 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
     q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1", 1)
     assert mock is not None and mock.legal_name == "Demo Company (AU)"
     assert q1 is not None and q1.legal_name == "Demo Company (AU) Pty Ltd" and q1.abn == "25900043021"
+    await engine.dispose()
+
+
+async def test_xero_q1_loads_supplements(tmp_path):
+    """R72: 真实库载入 xero/20261017-q1: 行数同验收 2; 每个科目 gl_balance 等于本期试算表; 3 份合同登记为证据文件;
+    服务完成记录与带合同关联的发票可按行取."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    loader = XeroDatasetLoader(
+        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
+    )
+    e = await PostgresEngagementStore(engine).create(
+        owner_id=user,
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 9, 30),
+        dataset="xero/20261017-q1",
+        profile=loader.client_profile("xero/20261017-q1"),
+    )
+    await loader.load(e.id, "xero/20261017-q1")
+    financial = PostgresFinancialDataStore(engine)
+    counts = {t: (await financial.query(e.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] for t in m.FINANCIAL}
+    assert counts == {
+        "accounts": 62,
+        "trial_balance": 33,
+        "journal_entries": 1017,
+        "sales_invoices": 42,
+        "delivery_notes": 24,
+        "bank_accounts": 2,
+        "bank_transactions": 146,
+    }
+    current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
+    assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
+    documents = await financial.documents(e.id)
+    assert sorted((d.file_name, d.type, d.reliability) for d in documents) == [
+        (f"CON-X0{n}.pdf", DocumentType.contract, Reliability.external_copy) for n in (1, 2, 3)
+    ]
+    manifest = json.loads((ROOT / "data/xero_demo/20261017-q1/manifest.json").read_text(encoding="utf-8"))
+    ids = {d["path"]: d["document_id"] for d in manifest["documents"]}
+    assert {d.id for d in documents} == {ids[f"contracts/CON-X0{n}.pdf"] for n in (1, 2, 3)}
+    assert sorted(contract_id(d) for d in documents) == ["CON-X01", "CON-X02", "CON-X03"]
+    note = await financial.record(e.id, "delivery_note", "SR-ORC1026")
+    assert note is not None and note["invoice_id"] == "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
+    invoice = await financial.record(e.id, "sales_invoice", "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611")
+    assert invoice is not None and invoice["contract_id"] == "CON-X01"
+    # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入
+    demo = tmp_path / "xero_demo"
+    shutil.copytree(ROOT / "data/xero_demo/20261017-q1", demo / "20261017-q1")
+    links = demo / "20261017-q1" / "contract_links.csv"
+    links.write_bytes(links.read_bytes() + b" ")
+    planning = ROOT / "src/backend/knowledge/planning"
+    broken = XeroDatasetLoader(api, planning, engine, FileEvidenceStore(tmp_path / "ev", engine), supplements=demo)
+    other = await PostgresEngagementStore(engine).create(
+        owner_id=user,
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 9, 30),
+        dataset="xero/20261017-q1",
+        profile=loader.client_profile("xero/20261017-q1"),
+    )
+    with pytest.raises(SupplementMismatch, match=r"contract_links\.csv"):
+        await broken.load(other.id, "xero/20261017-q1")
+    for t in m.FINANCIAL:
+        assert (await financial.query(other.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] == 0
+    assert await financial.documents(other.id) == []
+    assert not (tmp_path / "ev").exists() or not any((tmp_path / "ev").rglob("*.pdf"))
     await engine.dispose()
