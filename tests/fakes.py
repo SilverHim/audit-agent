@@ -20,7 +20,7 @@ from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_perio
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
-from backend.contracts.data import DataReadiness, TableKind, TableStats
+from backend.contracts.data import DataCheck, DataReadiness, TableKind, TableStats, TableVersion
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
@@ -1242,6 +1242,9 @@ class FakeDataStore:
         self.ready_by: str | None = "dataset" if ready else None  # 确认人
         self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
         self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
+        self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
+        self.check_results: list[DataCheck] = []  # 最近一次体检的结果
+        self.open_count = 0  # 待补交的请求数
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
@@ -1256,6 +1259,15 @@ class FakeDataStore:
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:
         return {kind: self.table_stats.get(kind, TableStats(records=0)) for kind in TableKind}
+
+    async def versions(self, eid: str) -> list[TableVersion]:
+        return list(self.table_versions)
+
+    async def checks(self, eid: str) -> list[DataCheck]:
+        return list(self.check_results)
+
+    async def open_requests(self, eid: str) -> int:
+        return self.open_count
 
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:

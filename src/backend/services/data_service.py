@@ -6,20 +6,90 @@
 from langgraph.types import Command
 
 from backend.agents.base import AgentDeps
-from backend.contracts.data import DataReadiness
+from backend.contracts.data import (
+    DataReadiness,
+    DataSources,
+    DataSummary,
+    RecordsDetail,
+    TableKind,
+    TableSummary,
+    TableVersion,
+    XeroSource,
+)
 from backend.contracts.errors import DataRejected
+from backend.contracts.ports import XeroConnections
 from backend.orchestration.nodes import DATA_READY
 from backend.orchestration.runner import GraphRunner, awaiting_data
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.data_quality import missing_tables
 
 
+class NoXeroConnections:
+    """还没有 Xero 连接记录时的缺省实现 (需求 R12 前): 一律未连接."""
+
+    async def source(self, eid: str) -> XeroSource:
+        return XeroSource(status="not_connected")
+
+
 class DataService:
     """数据管理的写操作与查询. 组装根建一个, 挂在 app.state.data_service."""
 
-    def __init__(self, deps: AgentDeps, runner: GraphRunner) -> None:
+    def __init__(self, deps: AgentDeps, runner: GraphRunner, xero: XeroConnections | None = None) -> None:
         self.deps = deps  # 外部依赖
         self.runner = runner  # 项目锁与后台推进; 图取 runner.app
+        self.xero: XeroConnections = xero if xero is not None else NoXeroConnections()  # Xero 连接记录
+        # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁
+        self.jobs: dict[str, dict[object, frozenset[str]]] = {}
+
+    def processing(self, eid: str) -> list[frozenset[str]]:
+        """该项目进行中的作业, 各作业涉及的账表种类或文件 ID."""
+        return list(self.jobs.get(eid, {}).values())
+
+    async def summary(self, eid: str) -> DataSummary:
+        """数据管理页的概览 (GET /data/summary): Xero 连接, 各账表, 最近一次体检, 进行中的作业数, 待补交请求数.
+
+        各账表按 TableKind 顺序: 来源, 原文件名与更新时间取最新一版 (data_imports 已提交的行, 数据版本最大者);
+        数据集载入的表没有版本行, 来源为空, 更新时间取首次载入时间. 行数与日期范围取当前数据.
+        状态: 有进行中的作业涉及该表为 converting; 否则有行 (审批日志: 有版本) 为 received, 没有为 not_received.
+        作业在登记期间提交数据, 提交后才注销, 所以先取作业快照再读数据 (见下).
+        """
+        # 作业快照先于读数据取, converting 与 processing 都按它: 读数据期间结束的作业仍计入 processing, 前端会再轮询
+        # 一次; processing 为 0 的响应里, 快照前结束的作业已提交, 读到的是完成后的数据
+        jobs = self.processing(eid)
+        busy = {label for job in jobs for label in job}
+        data = self.deps.data
+        stats = await data.stats(eid)
+        latest: dict[TableKind, TableVersion] = {}
+        for written in await data.versions(eid):  # 按数据版本升序, 后者覆盖前者
+            latest[written.kind] = written
+        readiness = await data.readiness(eid)
+        tables = []
+        for kind in TableKind:
+            item, version = stats[kind], latest.get(kind)
+            received = version is not None if kind is TableKind.approval_log else item.records > 0
+            status = "converting" if kind.value in busy else "received" if received else "not_received"
+            tables.append(
+                TableSummary(
+                    kind=kind,
+                    source=version.source if version is not None and version.source != "dataset" else None,
+                    file_name=version.file_name if version is not None else None,
+                    records=item.records,
+                    records_detail=RecordsDetail(current=item.current, prior=item.prior)
+                    if kind is TableKind.trial_balance
+                    else None,
+                    period_from=item.period_from,
+                    period_to=item.period_to,
+                    status=status,
+                    updated_at=version.created_at if version is not None else readiness.loaded_at if received else None,
+                )
+            )
+        return DataSummary(
+            sources=DataSources(xero=await self.xero.source(eid)),
+            tables=tables,
+            checks=await data.checks(eid),
+            processing=len(jobs),
+            open_requests=await data.open_requests(eid),
+        )
 
     async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.

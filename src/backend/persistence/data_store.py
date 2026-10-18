@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from backend.contracts.data import DataReadiness, TableKind, TableStats
+from backend.contracts.data import CheckId, DataCheck, DataReadiness, TableKind, TableStats, TableVersion
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
 from backend.persistence.stores import Store, now
@@ -87,3 +87,24 @@ class PostgresDataStore(Store):
             .limit(1)
         )
         return int((await conn.execute(statement)).scalar() or 0)
+
+    async def versions(self, eid: str) -> list[TableVersion]:
+        t = m.data_imports
+        columns = [t.c[name] for name in TableVersion.model_fields if name != "created_at"]
+        statement = (
+            select(*columns, func.coalesce(t.c.committed_at, t.c.created_at).label("created_at"))
+            .where(t.c.status == "committed")
+            .order_by(t.c.data_version, t.c.id)
+        )
+        return [TableVersion.model_validate(r) for r in await self.rows(eid, statement)]
+
+    async def checks(self, eid: str) -> list[DataCheck]:
+        t = m.data_checks
+        rows = await self.rows(eid, select(t.c.id, t.c.status, t.c.params, t.c.request_id))
+        order = list(CheckId)
+        return sorted((DataCheck.model_validate(r) for r in rows), key=lambda c: order.index(c.id))
+
+    async def open_requests(self, eid: str) -> int:
+        t = m.data_requests
+        rows = await self.rows(eid, select(func.count().label("n")).where(t.c.status == "open"))
+        return int(rows[0]["n"])

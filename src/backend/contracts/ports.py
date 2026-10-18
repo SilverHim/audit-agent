@@ -13,7 +13,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
-from backend.contracts.data import DataReadiness, TableKind, TableStats
+from backend.contracts.data import DataCheck, DataReadiness, TableKind, TableStats, TableVersion, XeroSource
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
@@ -163,6 +163,26 @@ class DataStore(Protocol):
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:
         """各账表当前的行数与日期范围, 每种账表一项."""
+        ...
+
+    async def versions(self, eid: str) -> list[TableVersion]:
+        """全部已写入的账表版本 (不含行快照), 按数据版本升序."""
+        ...
+
+    async def checks(self, eid: str) -> list[DataCheck]:
+        """最近一次体检的各项结果, 按 CheckId 顺序; 没体检过为空."""
+        ...
+
+    async def open_requests(self, eid: str) -> int:
+        """待补交 (status open) 的请求数."""
+        ...
+
+
+class XeroConnections(Protocol):
+    """项目的 Xero 连接记录 (需求 R12 提供实现), 数据概览的 sources.xero 取它."""
+
+    async def source(self, eid: str) -> XeroSource:
+        """连接状态, 组织名, 最近同步时间与同步覆盖的账表; 没连接过为 not_connected."""
         ...
 
 

@@ -2,7 +2,7 @@
 
 import csv
 import os
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ from backend.contracts.data import TableKind
 from backend.contracts.errors import EngagementLocked
 from backend.persistence import models as m
 from backend.persistence.data_store import PostgresDataStore
+from backend.persistence.db import transaction
 from backend.persistence.stores import (
     CsvDatasetLoader,
     FileEvidenceStore,
@@ -103,3 +104,90 @@ async def test_confirm_ready_keeps_first_confirmation_and_respects_lock(storage)
     await engagements.update(second.id, locked=True)
     with pytest.raises(EngagementLocked):
         await store.confirm_ready(second.id, "U-3")
+
+
+async def test_versions_checks_and_open_requests(storage) -> None:  # type: ignore[no-untyped-def]
+    """数据概览读的三项 (需求 R11): 已提交的表版本 (不含解析中的会话), 体检结果按体检项顺序, 待补交请求数."""
+    engine, (first, second), _, _ = storage
+    store = PostgresDataStore(engine)
+    assert (await store.versions(first.id), await store.checks(first.id), await store.open_requests(first.id)) == (
+        [],
+        [],
+        0,
+    )
+    at = now()
+    async with transaction(engine, first.id) as conn:
+        common = {"engagement_id": first.id, "created_by": "U-1", "created_at": at}
+        imports = [
+            {
+                **common,
+                "id": "IMP-2",
+                "kind": "accounts",
+                "source": "import",
+                "file_name": "coa.csv",
+                "records": 23,
+                "status": "committed",
+                "data_version": 2,
+                "committed_at": at + timedelta(minutes=5),  # 上传后 5 分钟才提交: 版本时间取提交时间
+            },
+            {
+                **common,
+                "id": "XERO-journal_entries-v1",
+                "kind": "journal_entries",
+                "source": "xero",
+                "records": 900,
+                "status": "committed",
+                "data_version": 1,  # 没有提交时间 (如直接写入的版本): 取创建时间
+            },
+            {**common, "id": "IMP-3", "source": "import", "file_name": "draft.xlsx", "status": "parsed"},
+        ]
+        for row in imports:  # 各行的列不同, 逐行插入
+            await conn.execute(insert(m.data_imports).values(**row))
+        await conn.execute(
+            insert(m.data_checks),
+            [
+                {
+                    "engagement_id": first.id,
+                    "id": "mapping_complete",
+                    "status": "failed",
+                    "params": {"mapped": 20, "total": 23},
+                    "data_version": 2,
+                    "checked_at": at,
+                },
+                {
+                    "engagement_id": first.id,
+                    "id": "debits_equal_credits",
+                    "status": "passed",
+                    "params": {"debit_cents": 5, "credit_cents": 5},
+                    "data_version": 2,
+                    "checked_at": at,
+                },
+            ],
+        )
+        base = {
+            "engagement_id": first.id,
+            "kind": "table",
+            "title": "t",
+            "used_for": [],
+            "reason_code": "missing_table",
+            "reason_params": {},
+            "raised_by": "A3",
+            "created_at": at,
+        }
+        await conn.execute(
+            insert(m.data_requests),
+            [
+                {**base, "id": "REQ-a", "status": "open"},
+                {**base, "id": "REQ-b", "status": "received"},
+                {**base, "id": "REQ-c", "status": "open"},
+            ],
+        )
+
+    versions = await store.versions(first.id)
+    assert [(v.id, v.kind, v.source, v.data_version, v.created_at) for v in versions] == [
+        ("XERO-journal_entries-v1", TableKind.journal_entries, "xero", 1, at),
+        ("IMP-2", TableKind.accounts, "import", 2, at + timedelta(minutes=5)),
+    ]
+    assert [c.id.value for c in await store.checks(first.id)] == ["debits_equal_credits", "mapping_complete"]
+    assert await store.open_requests(first.id) == 2
+    assert await store.versions(second.id) == []  # 行级安全: 别的项目看不到

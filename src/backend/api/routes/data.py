@@ -6,11 +6,21 @@ from fastapi import APIRouter, Depends
 
 from backend.api.deps import current_user, get_data_service, owned_engagement
 from backend.api.errors import catch_api
-from backend.contracts.data import DataReadiness
+from backend.contracts.data import DataReadiness, DataSummary
 from backend.contracts.models import Engagement, User
 from backend.services.data_service import DataService
 
 router = APIRouter(prefix="/engagements/{eid}/data", tags=["data"])
+
+
+@router.get("/summary")
+async def summary(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> DataSummary:
+    """数据管理页的概览. processing 不为 0 时前端每 3 秒轮询."""
+    async with catch_api():
+        return await service.summary(engagement.id)
 
 
 @router.post("/ready", status_code=202)
