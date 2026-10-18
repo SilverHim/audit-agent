@@ -47,7 +47,8 @@ class EngagementOverview(Model):
     engagement: Engagement  # 项目
     client_name: str  # 客户画像的 legal_name, 供页面显示
     running: bool  # 后台是否正在推进
-    run_error: str | None  # 最近一次后台执行的异常, 成功推进后清空; Store 领先检查点时为 RESUME_REQUIRED 提示
+    run_error: str | None  # 最近一次后台执行的异常, 成功推进后清空; Store 领先检查点时为 RESUME_REQUIRED 提示;
+    # 功能集与项目冻结的不同时为 FEATURES_MISMATCH (runner.features_mismatch)
     current_gate: GateId | None  # 正停在哪道闸门, 不在闸门为空
     awaiting_review: bool  # 是否停在节点内等复核决定
     procedures: list[ProcedureSummary]  # 各程序状态

@@ -41,22 +41,26 @@ function EngagementLayout() {
   }, [eid, overview.data, queryClient])
 
   const data = overview.data
+  // 功能集与项目冻结的不同 (FEATURES_MISMATCH): 重试也不会推进, 不给继续执行按钮
+  const mismatch = data?.run_error?.startsWith('FEATURES_MISMATCH') ?? false
   return (
     <EngagementShell eid={eid} overview={data}>
       {data?.run_error ? (
         <div className="px-4 pt-4 sm:px-7">
           <Alert variant="destructive">
-            <AlertTitle>{t.app.runError}</AlertTitle>
+            <AlertTitle>{mismatch ? t.app.featuresMismatch : t.app.runError}</AlertTitle>
             <AlertDescription className="flex flex-wrap items-center gap-3">
               <span className="font-mono text-xs">{data.run_error}</span>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={resume.isPending}
-                onClick={() => resume.mutate({ path: { eid } })}
-              >
-                {t.app.resume}
-              </Button>
+              {mismatch ? null : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={resume.isPending}
+                  onClick={() => resume.mutate({ path: { eid } })}
+                >
+                  {t.app.resume}
+                </Button>
+              )}
             </AlertDescription>
           </Alert>
         </div>

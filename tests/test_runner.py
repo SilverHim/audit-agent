@@ -568,6 +568,7 @@ SNAPSHOT_KEYS = {
     "model",
     "critic_model_version",
     "prompts_sha256",
+    "features",
     "frozen_at",
 }
 
@@ -591,6 +592,7 @@ async def test_start_freezes_version_snapshot() -> None:
         library.prompts_sha256(),
     )
     assert (snapshot["llm_mode"], snapshot["model"], snapshot["critic_model_version"]) == ("mock", "mock", "mock")
+    assert snapshot["features"] == "critic"  # R76: 功能集, 基线
     assert datetime.fromisoformat(snapshot["frozen_at"]).tzinfo is not None
     engagement = await runner.deps.engagement_store.get(EID)
     assert engagement is not None and engagement.version_snapshot == snapshot

@@ -328,6 +328,7 @@ def test_get_gate_when_absent(api: SimpleNamespace) -> None:
         ("VERSION_MISMATCH", 409),
         ("ENGAGEMENT_BUSY", 409),
         ("RESUME_REQUIRED", 409),
+        ("FEATURES_MISMATCH", 409),
         ("NOT_AT_GATE", 409),
         ("DECISION_NOT_ALLOWED", 422),
         ("MISSING_FIELD", 422),

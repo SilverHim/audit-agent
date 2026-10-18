@@ -62,7 +62,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import rerun_subjects, save_outputs, uncovered_objectives, update_procedure
 from backend.orchestration.query import current_gate
-from backend.orchestration.runner import GraphRunner, resume_required, waiting_payloads
+from backend.orchestration.runner import GraphRunner, features_mismatch, resume_required, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.services.review_queue import attribute_exceptions
 
@@ -724,7 +724,7 @@ class GraphDecisionSubmit:
     async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
         """submit 与 update_client_profile 共用的外壳, 用法: async with self._deciding(eid) as (engagement, snapshot).
 
-        进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 读检查点, 查 RESUME_REQUIRED.
+        进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 查功能集 (FEATURES_MISMATCH), 读检查点, 查 RESUME_REQUIRED.
         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
         块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放. resume 为复核决定 ID 时以
         Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定与更新客户资料为 None (已越过闸门).
@@ -738,6 +738,9 @@ class GraphDecisionSubmit:
             engagement = await self._engagement(eid)
             if engagement.locked:
                 raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
+            mismatch = features_mismatch(self.deps, engagement)  # 第 7 节校验顺序: 先于 RESUME_REQUIRED
+            if mismatch is not None:
+                raise DecisionRejected("FEATURES_MISMATCH", mismatch)
             snapshot = await self.app.aget_state(GraphRunner.config(eid))
             await self._check_resume_required(engagement, snapshot)
             yield engagement, snapshot

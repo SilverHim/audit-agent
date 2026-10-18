@@ -10,6 +10,7 @@ export const zh: Messages = {
     failed: '加载失败，请重试。',
     resume: '继续执行',
     runError: '上次执行因错误中止',
+    featuresMismatch: '功能开关与本项目启动时不同，项目已暂停推进。请把 FEATURES 改回项目启动时的设置并重启应用。',
     readOnly: '本项目已签字归档，只读。',
   },
   lang: { label: '语言', en: 'EN', zh: '中文' },

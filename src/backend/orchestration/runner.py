@@ -1,7 +1,7 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,6 +16,7 @@ from backend.contracts.models import AgentId, Engagement, GateDecision, Phase, P
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.graph import GATE_NODES
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 
 
@@ -64,6 +65,27 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     if version_in_state is not None and engagement.client_profile_version > version_in_state:
         return f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
     return None
+
+
+def features_text(features: Iterable[str]) -> str:
+    """功能集冻结进 version_snapshot["features"] 的写法: 功能名排序后以逗号连接 (基线为 "critic", 全关为空串)."""
+    return ",".join(sorted(features))
+
+
+LEGACY_FEATURES = features_text(BASELINE)  # 冻结功能集之前建的项目 (version_snapshot 没有 features 键) 按基线处理
+
+
+def features_mismatch(deps: AgentDeps, engagement: Engagement) -> str | None:
+    """当前进程的功能集与项目冻结的不同时返回说明, 如 "项目冻结 critic, 当前 critic,journals"; 相同, 或项目还没有
+    版本快照 (尚未启动) 时为 None. 不同时 recover 与 resume 不推进, 决定提交被拒 (FEATURES_MISMATCH): 在另一套
+    程序包与主图上恢复, 在途项目会走到不同的节点, 新闸门也可能出现在已走过的位置."""
+    if not engagement.version_snapshot:
+        return None
+    frozen = engagement.version_snapshot.get("features", LEGACY_FEATURES)
+    current = features_text(deps.features)
+    if frozen == current:
+        return None
+    return f"项目冻结 {frozen or '(空)'}, 当前 {current or '(空)'}"
 
 
 class GraphRunner:
@@ -170,11 +192,13 @@ class GraphRunner:
             self._forget(eid, task)
 
     def freeze_versions(self) -> dict[str, str]:
-        """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 冻结时刻 (UTC, ISO 8601)."""
+        """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 功能集 (见 features_text),
+        冻结时刻 (UTC, ISO 8601)."""
         return {
             "procedure_library_commit": self.deps.library.commit,
             **(self.llm() if callable(self.llm) else self.llm),
             "prompts_sha256": self.deps.library.prompts_sha256(),
+            "features": features_text(self.deps.features),
             "frozen_at": datetime.now(UTC).isoformat(),
         }
 
@@ -223,6 +247,7 @@ class GraphRunner:
         只看检查点, 不看项目阶段 (已归档的项目若检查点仍停在闸门, 照样处理):
         - 没有检查点 (start 写了固定集, 第一步还没落盘就中断): 以初始状态重新推进.
         - 已结束 (next 与待执行任务都为空): 不动.
+        - 当前功能集与项目冻结的不同 (见 features_mismatch): 不补做也不推进, run_error 记 FEATURES_MISMATCH.
         - Store 有检查点里没有的决定或画像版本: 先补做 (见 _catch_up), 再按补做后的检查点往下判断.
         - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动, 等人时没有新决定可交.
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
@@ -232,12 +257,17 @@ class GraphRunner:
             snapshot = await self.app.aget_state(self.config(eid))
             engagement = await self._engagement(eid)
             graph_input: EngagementState | Command[Any] | None = None
+            if snapshot.metadata is not None and not snapshot.next and not snapshot.tasks:
+                self.release(eid)
+                return
+            mismatch = features_mismatch(self.deps, engagement)
+            if mismatch is not None:
+                self.errors[eid] = f"FEATURES_MISMATCH: {mismatch}"
+                self.release(eid)
+                return
             if snapshot.metadata is None:
                 graph_input = await self._initial_input(engagement)
             else:
-                if not snapshot.next and not snapshot.tasks:
-                    self.release(eid)
-                    return
                 if await resume_required(self.deps, engagement, snapshot) is not None:
                     snapshot, graph_input = await self._catch_up(engagement)
                 if graph_input is None and waiting_for_human(snapshot):

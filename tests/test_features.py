@@ -1,5 +1,6 @@
-"""R75 功能开关: 登记表与校验, 程序库按功能过滤 (固定集, 装配, 依赖), build_agents, A7 的 critic 开关,
-节点只执行程序包中有的程序. 自测用的程序 (X-NEW, X-P2, Y) 写在 tmp 复制的 knowledge 目录里, 不进仓库."""
+"""功能开关. R75: 登记表与校验, 程序库按功能过滤 (固定集, 装配, 依赖), build_agents, A7 的 critic 开关, 节点只执行
+程序包中有的程序. R76: 功能集按项目冻结, 与当前进程不同时不推进, 决定被拒.
+自测用的程序 (X-NEW, X-P2, Y) 写在 tmp 复制的 knowledge 目录里, 不进仓库."""
 
 import shutil
 from dataclasses import replace
@@ -11,19 +12,41 @@ import pytest
 from backend.agents import registry
 from backend.agents.base import ProcedureAgent, RunContext
 from backend.agents.fieldwork import FieldworkAgent
-from backend.contracts.models import AgentId, Phase, TaskKind, TrailKind
+from backend.contracts.errors import DecisionRejected
+from backend.contracts.models import AgentId, GateVerdict, Phase, TaskKind, TrailKind
 from backend.contracts.state import StatePatch
 from backend.core.config import Settings, get_settings
 from backend.main import build_deps
 from backend.orchestration import nodes as graph_nodes
-from backend.orchestration.runner import fixed_procedures
+from backend.orchestration.decisions import GraphDecisionSubmit
+from backend.orchestration.graph import compile_graph
+from backend.orchestration.query import GraphStateQuery
+from backend.orchestration.runner import GraphRunner, features_mismatch, features_text, fixed_procedures
 from backend.services.features import BASELINE, FEATURES, check_features, parse_features
 from backend.services.procedure_library import ProcedureLibrary
-from tests.fakes import NUMBAT_FEATURES, FakeRegistry, FakeTrail, ScriptAgent, finished, make_deps
+from tests.fakes import (
+    ENGAGEMENT,
+    NUMBAT_FEATURES,
+    NUMBAT_PROFILE,
+    FakeEngagementStore,
+    FakeRegistry,
+    FakeTrail,
+    ScriptAgent,
+    api_client,
+    finished,
+    make_deps,
+    make_graph_nodes,
+    make_runner,
+    wait_idle,
+)
 from tests.test_assemble import P2, after_pln_approve
+from tests.test_decisions import acc01_decision, started
 from tests.test_fieldwork_csh02 import setup as csh02_setup
 from tests.test_qc import misstatement
+from tests.test_recovery import submit_lost
+from tests.test_review_decisions import record
 
+EID = ENGAGEMENT.id
 KNOWLEDGE = get_settings().KNOWLEDGE_ROOT
 X_NEW = """id: X-NEW
 name: 自测 P3 程序
@@ -274,3 +297,173 @@ def test_make_deps_keeps_features_and_library_consistent(tmp_path: Path) -> None
     assert make_deps(FakeRegistry(), FakeTrail(), library=library).features == journals
     with pytest.raises(ValueError, match="不一致"):
         make_deps(FakeRegistry(), FakeTrail(), library=library, features=BASELINE)
+
+
+# ── R76: 功能集按项目冻结与不一致拒绝 ──
+
+JOURNALS = frozenset({"critic", "journals"})
+
+
+def rebuilt(runner: GraphRunner, features: frozenset[str]) -> GraphRunner:
+    """同一检查点与存储, 换成另一功能集的进程 (模拟改了 FEATURES 后重启): 程序库, 依赖与主图按 features 重建."""
+    deps = replace(runner.deps, features=features, library=ProcedureLibrary(KNOWLEDGE, features))
+    return GraphRunner(compile_graph(make_graph_nodes(deps), runner.app.checkpointer), deps)
+
+
+async def frozen_state(runner: GraphRunner) -> tuple[Any, ...]:
+    """检查点 (值, 下一步, 历史条数) 与 Store 的行数, 用来断言被拒时什么都没写."""
+    config = GraphRunner.config(EID)
+    snapshot = await runner.app.aget_state(config)
+    history = [h async for h in runner.app.aget_state_history(config)]
+    rows = len(runner.deps.output_store.rows)  # type: ignore[attr-defined]
+    return snapshot.values, snapshot.next, len(history), rows
+
+
+async def test_mismatched_features_do_not_advance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R76 验收 1, 3: 基线启动的项目冻结 features "critic", 停在 ACC-01. 换成 {critic, journals} 的 runner:
+    recover 不调 ainvoke, run_error 为 FEATURES_MISMATCH; 提交 ACC-01 决定被拒, Store 与检查点不变, 经 HTTP 为 409;
+    resume 同样不推进. 换回基线 runner 后 recover 与提交照常."""
+    s = await started()
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.version_snapshot["features"] == "critic"
+    assert await s.next_nodes() == ("gate_acc01",)
+
+    other = rebuilt(s.runner, JOURNALS)
+    calls: list[Any] = []
+    monkeypatch.setattr(other.app, "ainvoke", lambda *args, **kwargs: calls.append(args))
+    before = await frozen_state(other)
+    await other.recover()
+    assert calls == [] and not other.is_running(EID) and not other.tasks
+    assert other.run_error(EID) == "FEATURES_MISMATCH: 项目冻结 critic, 当前 critic,journals"
+    with pytest.raises(DecisionRejected) as raised:
+        await GraphDecisionSubmit(other.app, other.deps, other).submit(EID, acc01_decision(GateVerdict.approve))
+    assert (raised.value.code, raised.value.message) == ("FEATURES_MISMATCH", "项目冻结 critic, 当前 critic,journals")
+    assert not other.is_running(EID)  # 项目锁已释放
+    async with api_client(other) as client:
+        response = await client.post(
+            f"/api/v1/engagements/{EID}/gate-decisions",
+            json={"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"},
+        )
+        assert response.status_code == 409 and response.json()["detail"]["code"] == "FEATURES_MISMATCH"
+        overview = (await client.get(f"/api/v1/engagements/{EID}")).json()
+        assert overview["run_error"].startswith("FEATURES_MISMATCH: ")
+    await other.resume(EID)
+    assert calls == [] and not other.is_running(EID)
+    assert await frozen_state(other) == before
+
+    back = rebuilt(s.runner, BASELINE)
+    await back.recover()
+    assert back.run_error(EID) is None and not back.is_running(EID)  # 停在闸门, 不推进也不报错
+    await GraphDecisionSubmit(back.app, back.deps, back).submit(EID, acc01_decision(GateVerdict.approve))
+    await wait_idle(back, EID)
+    assert back.run_error(EID) is None
+    assert (await back.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
+
+
+async def test_legacy_snapshot_counts_as_baseline() -> None:
+    """R76 验收 2: version_snapshot 没有 features 键 (冻结功能集之前建的项目) 按 "critic" 处理; 尚未冻结时不比较."""
+    legacy = ENGAGEMENT.model_copy(update={"version_snapshot": {"procedure_library_commit": "abc"}})
+    base = make_deps(FakeRegistry(), FakeTrail())
+    assert features_mismatch(base, legacy) is None
+    assert features_mismatch(replace(base, features=JOURNALS), legacy) == "项目冻结 critic, 当前 critic,journals"
+    assert features_mismatch(replace(base, features=frozenset()), legacy) == "项目冻结 critic, 当前 (空)"
+    assert features_mismatch(replace(base, features=JOURNALS), ENGAGEMENT) is None  # 没有版本快照
+    assert features_text(JOURNALS) == "critic,journals" and features_text([]) == ""
+
+    runner, _ = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [legacy]))
+    await runner.recover()  # 没有检查点, 以初始状态推进; 快照沿用旧的 (没有 features 键)
+    await wait_idle(runner, EID)
+    assert runner.run_error(EID) is None
+    assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)
+
+
+async def test_check_order_around_features_mismatch() -> None:
+    """R76 验收 4: ENGAGEMENT_LOCKED → ENGAGEMENT_BUSY → FEATURES_MISMATCH → RESUME_REQUIRED."""
+    s = await started()
+    other = rebuilt(s.runner, JOURNALS)
+
+    async def code(runner: GraphRunner) -> str:
+        decision = acc01_decision(GateVerdict.approve, id="D-9")
+        with pytest.raises(DecisionRejected) as raised:
+            await GraphDecisionSubmit(runner.app, runner.deps, runner).submit(EID, decision)
+        assert not runner.is_running(EID)  # 被拒时项目锁已释放
+        return raised.value.code
+
+    # Store 中有检查点里没有的决定 (须先 resume): 功能集不同时先报 FEATURES_MISMATCH, 相同时才报 RESUME_REQUIRED
+    s.output_store.rows.append(acc01_decision(GateVerdict.insufficient_info, id="D-STORE"))
+    assert (await code(other), await code(s.runner)) == ("FEATURES_MISMATCH", "RESUME_REQUIRED")
+    other.acquire(EID)
+    with pytest.raises(DecisionRejected, match="ENGAGEMENT_BUSY"):
+        await GraphDecisionSubmit(other.app, other.deps, other).submit(EID, acc01_decision(GateVerdict.approve))
+    other.release(EID)
+    await s.engagement_store.update(EID, locked=True)
+    assert await code(other) == "ENGAGEMENT_LOCKED"
+
+
+async def test_frozen_project_without_checkpoint_is_not_started() -> None:
+    """R76: 快照已冻结而没有检查点 (start 的事务已提交, 第一步未落盘) 时, 换功能集后 recover 不以初始状态推进,
+    也不按新功能集写固定集; 换回基线后照常推进到 ACC-01."""
+    frozen = ENGAGEMENT.model_copy(
+        update={"version_snapshot": {"procedure_library_commit": "abc", "features": "critic"}}
+    )
+    runner, store = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [frozen]))
+    other = rebuilt(runner, JOURNALS)
+    await other.recover()
+    await wait_idle(other, EID)
+    assert other.run_error(EID) == "FEATURES_MISMATCH: 项目冻结 critic, 当前 critic,journals"
+    assert (await other.app.aget_state(GraphRunner.config(EID))).metadata is None and store.rows == []
+    back = rebuilt(runner, BASELINE)
+    await back.recover()
+    await wait_idle(back, EID)
+    assert back.run_error(EID) is None
+    assert (await back.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)
+
+
+async def test_store_ahead_is_not_caught_up_under_other_features() -> None:
+    """R76: Store 领先检查点 (决定已写, 检查点未跟上) 时, 换功能集后 recover 先比对: 不补做, 检查点, Store 与留痕都不变,
+    总览显示 FEATURES_MISMATCH (先于 RESUME_REQUIRED 提示); 换回基线后照常补做, 越过 ACC-01."""
+    s = await started()
+    await submit_lost(s, acc01_decision(GateVerdict.approve))
+    other = rebuilt(s.runner, JOURNALS)
+    trail = other.deps.trail
+    assert isinstance(trail, FakeTrail)
+    before = (await frozen_state(other), len(trail.entries))
+    await other.recover()
+    await wait_idle(other, EID)
+    assert other.run_error(EID) == "FEATURES_MISMATCH: 项目冻结 critic, 当前 critic,journals"
+    assert (await frozen_state(other), len(trail.entries)) == before
+    overview = await GraphStateQuery(other.app, other.deps, other).overview(EID)
+    assert overview.run_error == other.run_error(EID)
+    back = rebuilt(s.runner, BASELINE)
+    await back.recover()
+    await wait_idle(back, EID)
+    assert back.run_error(EID) is None
+    assert (await back.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
+
+
+async def test_ended_project_is_not_flagged() -> None:
+    """R76: 已结束的项目 (ACC-01 拒绝承接后到 END) 换功能集后 recover 不记错误, 也不推进."""
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.reject))
+    await wait_idle(s.runner, EID)
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    assert snapshot.next == () and not snapshot.tasks
+    other = rebuilt(s.runner, JOURNALS)
+    await other.recover()
+    assert other.run_error(EID) is None and not other.is_running(EID)
+
+
+async def test_profile_update_and_review_record_rejected() -> None:
+    """R76: 更新客户资料与复核决定同样报 FEATURES_MISMATCH, 项目锁已释放, 检查点, Store 与画像版本都不变."""
+    s = await started()
+    other = rebuilt(s.runner, JOURNALS)
+    submit = GraphDecisionSubmit(other.app, other.deps, other)
+    before = await frozen_state(other)
+    profile = NUMBAT_PROFILE.model_copy(update={"version": NUMBAT_PROFILE.version + 1})
+    for attempt in (submit.update_client_profile(EID, profile, updated_by="U-1"), submit.submit(EID, record())):
+        with pytest.raises(DecisionRejected) as raised:
+            await attempt
+        assert raised.value.code == "FEATURES_MISMATCH" and not other.is_running(EID)
+    assert await frozen_state(other) == before
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.client_profile_version == ENGAGEMENT.client_profile_version

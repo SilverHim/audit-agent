@@ -8,6 +8,8 @@ export const en = {
     failed: 'Could not load this. Try again.',
     resume: 'Resume',
     runError: 'The last run stopped with an error',
+    featuresMismatch:
+      'Feature switches differ from those this engagement started with, so it is paused. Set FEATURES back to its original value and restart the app.',
     readOnly: 'This engagement is signed and read-only.',
   },
   lang: { label: 'Language', en: 'EN', zh: '中文' },
