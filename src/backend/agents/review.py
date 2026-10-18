@@ -9,7 +9,6 @@ consistent 且独立推理链有效时置信度计入复核分项 (8.4, 权重�
 记 not_applicable 转人工. inconsistent 由 ReviewQueue 建争议任务, 不计分.
 """
 
-import hashlib
 from collections.abc import Sequence
 from typing import Any, ClassVar, cast
 
@@ -32,6 +31,7 @@ from backend.contracts.models import (
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import PointerResolver, critic_chain_ok
+from backend.services.sampling import sampled
 
 GEN09 = "GEN-09"
 CRITIC = "critic"  # 功能名 (services/features.FEATURES), 关闭时不做独立复核
@@ -48,18 +48,14 @@ CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: �
 SKIPPED_LEVELS = (AutonomyLevel.L1, AutonomyLevel.L2)  # 跳过规则: 审计师逐条复核
 
 
-def sampled(judgment_id: str, rate: float) -> bool:
-    """确定性抽样: 判断 ID 的 sha256 前 8 位折成 [0, 1), 小于 rate 即抽中. 判断 ID 确定, 重放结果不变."""
-    return int(hashlib.sha256(judgment_id.encode()).hexdigest()[:8], 16) / 0x1_0000_0000 < rate
-
-
 def trigger(level: AutonomyLevel, judgment: Judgment, rate: float) -> str | None:
-    """命中的触发规则 (任一即复核), 没命中为 None: main 主规则; assumption 推理链含假设步骤; sample 抽样."""
+    """命中的触发规则 (任一即复核), 没命中为 None: main 主规则; assumption 推理链含假设步骤; sample 抽样
+    (services/sampling 的 critic 用途, 键为判断 ID, 重放结果不变)."""
     if level in REVIEWED_LEVELS and judgment.proposed_action in CLOSING_ACTIONS:
         return "main"
     if any(step.kind is StepKind.assumption for step in judgment.reasoning_chain):
         return "assumption"
-    if sampled(judgment.id, rate):
+    if sampled("critic", judgment.id, rate):
         return "sample"
     return None
 
