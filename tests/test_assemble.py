@@ -6,6 +6,7 @@ from backend.contracts.models import AuditObjective, Phase, Procedure, Procedure
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import fixed_procedures
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_OBJECTIVES,
@@ -27,11 +28,14 @@ P2 = ["CSH-05", "CSH-04", "DOC-06", "CSH-02", "REV-03", "REV-08", "REV-02"]
 
 def after_pln_approve(
     objectives: list[AuditObjective] = NUMBAT_OBJECTIVES,
+    library: ProcedureLibrary | None = None,
+    features: frozenset[str] | None = None,
 ) -> tuple[GraphNodes, FakeOutputStore, FakeEngagementStore, EngagementState]:
-    """PLN-01/03 通过后的项目: Store 与状态有固定集, 审计目标与风险, 重要性三项. 返回节点, 两个存储与状态."""
+    """PLN-01/03 通过后的项目: Store 与状态有固定集, 审计目标与风险, 重要性三项. 返回节点, 两个存储与状态.
+    library 与 features: 换程序库与功能集 (见 make_deps), 缺省为 knowledge 目录与基线, 给了 library 时功能集取它的."""
     store = FakeOutputStore()
     engagements = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT.model_copy(update={"phase": Phase.P1_Planning})])
-    deps = make_deps(FakeRegistry(), FakeTrail(), engagements, store)
+    deps = make_deps(FakeRegistry(), FakeTrail(), engagements, store, library=library, features=features)
     pack = fixed_procedures(deps.library)
     store.rows.extend(pack)
     state = initial_state(ENGAGEMENT, pack, 1)

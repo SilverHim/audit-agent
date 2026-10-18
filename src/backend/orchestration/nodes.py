@@ -4,6 +4,7 @@
 """
 
 import copy
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -126,7 +127,8 @@ def rerun_subjects(group: list[ReviewTask]) -> list[str]:
     return sorted({t.subject_id for t in group if t.subject_id is not None})
 
 
-# 各图节点依次执行的 P2 以外程序 (接口文档第 3 节). 节点按它执行, 恢复补做按它确定同一节点内复核决定的先后
+# 各图节点依次执行的 P2 以外程序 (接口文档第 3 节). 节点按它执行 (只取程序包中有的, 见 node_procedures),
+# 恢复补做按它确定同一节点内复核决定的先后
 NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "p0_intel": ("ACC-04",),
     "p1_ingest": ("DOC-04",),
@@ -134,6 +136,17 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "completion": ("FIN-04",),
     "report_draft": ("RPT-03",),
 }
+
+
+def node_procedures(node: str, pack: Iterable[Procedure], library: ProcedureLibrary) -> list[str]:
+    """该图节点要执行的程序: 按 NODE_PROCEDURES 的顺序, 只取程序包中有的. 挂了功能名的程序 (模板 feature 不为空)
+    不在程序包中时跳过: 功能未启用时不在固定集里 (services/features.py), 旧项目的程序包也可能缺后来新增的程序.
+    基线程序 (feature 为空) 不在程序包中是程序包出错, 抛 LookupError, 不静默跳过."""
+    present = {p.id for p in pack}
+    missing = [pid for pid in NODE_PROCEDURES[node] if pid not in present and library.load(pid).feature is None]
+    if missing:
+        raise LookupError(f"{node}: 程序包中没有基线程序 {', '.join(missing)}")
+    return [pid for pid in NODE_PROCEDURES[node] if pid in present]
 
 
 async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: ProcedureRun) -> StatePatch:
@@ -530,11 +543,20 @@ class GraphNodes:
                 },
             )
 
+    async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
+        """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的
+        合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕)."""
+        result: StatePatch = {}
+        for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
+            patch = await self.execute(state, procedure_id, phase)
+            merge_patch(result, patch)
+            state = apply_patch(state, patch)
+        return result
+
     # ── P0 ──
     async def p0_intel(self, state: EngagementState) -> StatePatch:
         """A2 执行 ACC-04, 产出承接评分卡."""
-        [procedure_id] = NODE_PROCEDURES["p0_intel"]
-        return await self.execute(state=state, procedure_id=procedure_id)
+        return await self.run_node(state, "p0_intel")
 
     async def gate(self, state: EngagementState) -> StatePatch:
         return {}  # 四道闸门共用, 不处理业务; 出口由路由函数按 GateDecision 决定
@@ -549,20 +571,14 @@ class GraphNodes:
         if engagement is None:
             raise LookupError(f"Engagement {state['engagement_id']} not found")
         await self.deps.datasets.load(engagement.id, engagement.dataset)
-        [procedure_id] = NODE_PROCEDURES["p1_ingest"]
-        return await self.execute(state, procedure_id)
+        return await self.run_node(state, "p1_ingest")
 
     async def p1_analytics(self, state: EngagementState) -> StatePatch:
         """A4 依次执行 PLN-07 (初步分析) 与 PLN-01 (重要性候选, 首次带出数据集预置的审计目标与风险清单).
 
-        PLN-01 在 PLN-07 的结果之上执行 (程序包, 执行记录等按状态的合并规则并入). 返回两次的片段合并, 程序包为最终的.
+        PLN-01 在 PLN-07 的结果之上执行 (见 run_node). 返回两次的片段合并, 程序包为最终的.
         """
-        result: StatePatch = {}
-        for procedure_id in NODE_PROCEDURES["p1_analytics"]:
-            patch = await self.execute(state, procedure_id)
-            merge_patch(result, patch)
-            state = apply_patch(state, patch)
-        return result
+        return await self.run_node(state, "p1_analytics")
 
     async def assemble_pack(self, state: EngagementState) -> StatePatch:
         """装配 P2 程序包: 按审计目标匹配 trigger, 补齐依赖闭包, 只把尚不在程序包中的 P2 程序加入.
@@ -703,14 +719,12 @@ class GraphNodes:
         阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行一次,
         出 SCHEDULE 下一版.
         """
-        [procedure_id] = NODE_PROCEDURES["completion"]
-        return await self.execute(state, procedure_id, phase=Phase.P3_Completion)
+        return await self.run_node(state, "completion", phase=Phase.P3_Completion)
 
     async def report_draft(self, state: EngagementState) -> StatePatch:
         """A10 执行 RPT-03, 出审计报告的下一修订 (REPORT-{revision}, 第 1 版); RPT-01 退回后回到这里, 按批注修订,
         以 rerun 再执行一次. 执行与写入见 execute."""
-        [procedure_id] = NODE_PROCEDURES["report_draft"]
-        return await self.execute(state, procedure_id)
+        return await self.run_node(state, "report_draft")
 
     async def archive(self, state: EngagementState) -> StatePatch:
         """终点: 项目已由 RPT-01 签字锁定, 不再写 Store. 补写进入 Archived 的阶段留痕 (只能由报告阶段进入;

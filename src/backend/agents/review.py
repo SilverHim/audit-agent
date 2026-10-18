@@ -34,6 +34,7 @@ from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import PointerResolver, critic_chain_ok
 
 GEN09 = "GEN-09"
+CRITIC = "critic"  # 功能名 (services/features.FEATURES), 关闭时不做独立复核
 # 独立的系统提示词 (5.5: 与生成者至少不同的系统提示词); {schema} 为输出模型的 JSON schema, JSON 模式要求出现 "JSON"
 CRITIC_SYSTEM = """You are an independent reviewer. Judge only from the inputs given in this conversation, \
 not from any earlier analysis you may have seen. Reply with a single JSON object that conforms to the JSON schema \
@@ -90,11 +91,14 @@ class ReviewAgent(ProcedureAgent[None]):
     async def review(self, ctx: RunContext, judgment: Judgment) -> Judgment:
         """复核 A6 在 ctx 这次执行中生成的一条判断, 返回写好 critic 字段 (consistent 时含新置信度) 的同一版本.
 
-        跳过 (skipped): 没有复核模型 (只在测试), 程序运行时自主度 L1, L2, 未命中触发规则; critic_reason 写明原因.
+        跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
+        未命中触发规则; critic_reason 写明原因.
         复核没做成 (not_applicable): 判断没有能解析的证据; 任一轮校验重试后仍失败, 或调用出错 (CancelledError 除外);
         判为 consistent 而独立推理链无效. ReviewQueue 据此转人工.
         """
         level = ctx.procedure.autonomy_level
+        if CRITIC not in self.deps.features:
+            return skip(judgment, "功能开关 critic 关闭, 不做独立复核")
         if self.deps.review_llm is None:
             return skip(judgment, "未配置复核模型, 不做独立复核")
         if level in SKIPPED_LEVELS:

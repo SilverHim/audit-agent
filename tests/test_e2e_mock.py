@@ -66,6 +66,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
     NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     NUMBAT_TRIAL_BALANCE,
@@ -96,6 +97,7 @@ async def start_demo(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] = NUMBAT_FEATURES,
 ) -> Started:
     """启动 → ACC-01 approve → PLN-01/03 approve (收入 1%, 75%, 5%); 返回时后台正在执行 P2 (不等待).
     财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障."""
@@ -108,6 +110,7 @@ async def start_demo(
         trail=trail,
         confirmations=confirmations,
         review_llm=review_llm,
+        features=features,
     )
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
@@ -428,6 +431,7 @@ async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRu
         "DATASET_ROOT": REPO / "data",
         "EVIDENCE_ROOT": tmp_path,
         "LLM_MODE": "mock",
+        "FEATURES": ",".join(sorted(NUMBAT_FEATURES)),  # Numbat 回归: 只开基线功能, 不受 .env 影响
     }
     settings = Settings(**(config | overrides))
     owner = "USR-" + uuid4().hex

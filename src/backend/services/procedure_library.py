@@ -13,6 +13,7 @@ import yaml
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
 from backend.contracts.models import AuditObjective, Engagement, OpinionType, ReportSection, RiskLevel
 from backend.contracts.state import EngagementState
+from backend.services.features import BASELINE, FEATURES, check_features
 
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
@@ -35,17 +36,33 @@ def highest_risk(objectives: Iterable[AuditObjective], objective_ids: Iterable[s
 
 
 class ProcedureLibrary:
-    """程序库: 加载程序 YAML 与准则片段, 装配时匹配 trigger 并补齐依赖."""
+    """程序库: 加载程序 YAML 与准则片段, 装配时匹配 trigger 并补齐依赖.
 
-    def __init__(self, root: Path) -> None:
+    features: 启用的功能 (services/features.py), 缺省为基线. 模板的 feature 为空或在 features 中即启用; all, match,
+    closure 只看启用的模板 (固定集与装配因此不含未启用的程序), load 不限. 启用的模板对未启用模板的依赖一律丢弃
+    (启用视图中的 depends_on 不含它们, 不分 P2, P3). 功能集或模板的 feature 有未登记的名字时抛 ValueError.
+    """
+
+    def __init__(self, root: Path, features: Iterable[str] = BASELINE) -> None:
         self.root = root  # knowledge 目录
-        self._templates = {  # 程序编号 -> 模板
-            t.id: t
-            for t in (
-                ProcedureTemplate.model_validate(yaml.safe_load(p.read_text(encoding="utf-8")))
-                for p in sorted((root / "procedures").glob("*.yaml"))
-            )
+        self.features = check_features(features)  # 启用的功能
+        templates = [
+            ProcedureTemplate.model_validate(yaml.safe_load(p.read_text(encoding="utf-8")))
+            for p in sorted((root / "procedures").glob("*.yaml"))
+        ]
+        unknown = [f"{t.id}: {t.feature}" for t in templates if t.feature is not None and t.feature not in FEATURES]
+        if unknown:
+            raise ValueError(f"程序模板的功能未登记: {', '.join(unknown)}")
+        enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
+        disabled = {t.id for t in templates} - enabled
+        self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
+            t.id: t.model_copy(update={"depends_on": [d for d in t.depends_on if d not in disabled]})
+            if disabled & set(t.depends_on)
+            else t
+            for t in templates
+            if t.id in enabled
         }
+        self._all = {t.id: self._templates.get(t.id, t) for t in templates}  # 程序编号 -> 模板, 含未启用的
         self._fragments: dict[str, StandardFragment] = {}  # 片段 ID -> 准则片段
         for p in sorted((root / "standards").glob("*.yaml")):
             doc = yaml.safe_load(p.read_text(encoding="utf-8"))
@@ -59,10 +76,16 @@ class ProcedureLibrary:
         }
 
     def load(self, procedure_id: str) -> ProcedureTemplate:
-        return self._templates[procedure_id]
+        """取模板, 含未启用的 (旧项目的程序包与留痕可能引用它们); 启用的取启用视图. 没有该程序抛 KeyError."""
+        return self._all[procedure_id]
 
-    def all(self) -> list[ProcedureTemplate]:
-        return list(self._templates.values())
+    def all(self, include_disabled: bool = False) -> list[ProcedureTemplate]:
+        """启用的模板, 按文件名顺序; include_disabled 时含未启用的 (如 build_agents 检查缺模板)."""
+        return list((self._all if include_disabled else self._templates).values())
+
+    def enabled(self, procedure_id: str) -> bool:
+        """该程序的模板是否启用."""
+        return procedure_id in self._templates
 
     def match(self, objective: AuditObjective) -> list[ProcedureTemplate]:
         return [
@@ -77,7 +100,8 @@ class ProcedureLibrary:
         ]
 
     def closure(self, ids: Iterable[str]) -> list[ProcedureTemplate]:
-        """补齐 depends_on, 含自身, 按拓扑序 (前置在前). 结果可含 P2 以外的前置, 如 DOC-04."""
+        """补齐 depends_on, 含自身, 按拓扑序 (前置在前). 结果可含 P2 以外的前置, 如 DOC-04.
+        只在启用的模板中补: 依赖按启用视图, ids 中有未启用的程序时抛 KeyError."""
         ordered: list[str] = []
         visiting: set[str] = set()
 

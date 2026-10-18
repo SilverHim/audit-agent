@@ -106,6 +106,7 @@ from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
+from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -114,6 +115,7 @@ NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
 # ── 样例数据: 合成数据集的 Numbat 公司 (合成数据集设计.md 2.1, 2.2 节) ──
 
+NUMBAT_FEATURES = BASELINE  # Numbat 回归测试的功能集: 新功能全关, 保留基线的 critic (services/features.py)
 NUMBAT_ABN = AbnRecord(
     abn="68900042015",
     acn="900042015",
@@ -1264,9 +1266,12 @@ def make_deps(
     confirmations: FakeConfirmationChannel | None = None,
     library: ProcedureLibrary | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
+    features: 启用的功能, 写入 AgentDeps.features. 没给 library 时缺省为基线, 按它建 knowledge 目录的程序库 (同
+    组装根); 给了 library 时不重建, 缺省取 library.features, 给了而与之不同时抛 ValueError (两处功能集须一致).
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
@@ -1285,7 +1290,13 @@ def make_deps(
     if review_llm is None and llm is None:
         review_llm = deps.review_llm
     llm = llm if llm is not None else deps.llm
-    library = library if library is not None else deps.library
+    if library is None:
+        features = BASELINE if features is None else features
+        library = deps.library if deps.library.features == features else ProcedureLibrary(deps.library.root, features)
+    elif features is None:
+        features = library.features
+    elif features != library.features:
+        raise ValueError(f"features {sorted(features)} 与程序库的 {sorted(library.features)} 不一致")
     judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
     return replace(
         deps,
@@ -1303,6 +1314,7 @@ def make_deps(
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),
         review_llm=review_llm,
+        features=features,
     )
 
 
@@ -1802,6 +1814,7 @@ def make_runner(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -1811,6 +1824,7 @@ def make_runner(
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
+    features: 启用的功能, 缺省为基线, 给了 library 时缺省取它的 (见 make_deps).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -1825,6 +1839,7 @@ def make_runner(
         confirmations=confirmations,
         library=library,
         review_llm=review_llm,
+        features=features,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:

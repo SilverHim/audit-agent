@@ -43,7 +43,7 @@ from backend.contracts.models import (
 )
 from backend.core.config import Settings
 from backend.orchestration.runner import GraphRunner
-from tests.fakes import NOW, NUMBAT_CUTOFF_DRAFT, wait_idle
+from tests.fakes import NOW, NUMBAT_CUTOFF_DRAFT, NUMBAT_FEATURES, wait_idle
 from tests.test_decisions import acc01_decision, pln_decision
 from tests.test_e2e_mock import REPO, RealRun, real_storage
 from tests.test_flow import FIN_APPROVE, RPT_APPROVE, RPT_REJECT
@@ -284,7 +284,8 @@ async def test_live_llm_full_flow(tmp_path: Path) -> None:
     if configured is None or not (configured.LLM_MODEL and configured.LLM_API_KEY):
         pytest.skip(".env 中没有 LLM_MODEL 或 LLM_API_KEY")
     model = configured.LLM_MODEL
-    async with real_storage(tmp_path, LLM_MODE="live", _env_file=env_file) as run:
+    features = ",".join(sorted(NUMBAT_FEATURES))  # 只开基线功能, 不受 .env 的 FEATURES 影响
+    async with real_storage(tmp_path, LLM_MODE="live", FEATURES=features, _env_file=env_file) as run:
         troubled, reruns = await drive(run)
 
         store, eid = run.deps.output_store, run.eid

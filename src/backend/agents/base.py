@@ -23,6 +23,7 @@ from backend.contracts.ports import (
     UserStore,
 )
 from backend.contracts.state import EngagementState, StatePatch
+from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
@@ -48,6 +49,8 @@ class AgentDeps:
     users: UserStore  # 用户; 只读, RPT-03 取项目负责人姓名作签名
     # 复核模型的客户端, 给独立复核智能体 (A7) 用, 与 llm 是两套配置; 组装根总会注入, 只有测试为空 (A7 记 skipped)
     review_llm: LLMClient | None = None
+    # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES
+    features: frozenset[str] = BASELINE
 
 
 @dataclass(frozen=True)

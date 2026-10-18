@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.services.features import check_features, parse_features
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -28,6 +30,8 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""  # live 模式的密钥, 只放 .env
     LLM_FIXTURES_ROOT: Path = ROOT / "tests" / "fixtures" / "llm"  # mock 模式的固定输出目录
     PARALLEL_CAP: int = 4  # fieldwork 实例并行上限
+    # 启用的功能, 逗号分隔 (登记表见 services/features.py); 缺省只有基线功能 critic, 空串全部关闭 (含 critic)
+    FEATURES: str = "critic"
     CONCIERGE_MAX_STEPS: int = 6  # 审计助理一轮最多调几次带工具的模型, 到了再调一次收尾
     CONCIERGE_CONTEXT_BUDGET: int = 24000  # 一轮开始时系统提示 + 历史 + 问题的估算 token 上限, 超过即压缩历史
     CONCIERGE_TURN_RESERVE: int = 8000  # 一轮工具结果合计的 token 预算
@@ -49,6 +53,11 @@ class Settings(BaseSettings):
     SEED_USER_EMAIL: str = "rca@example.com"  # seed 脚本建的审计师账号
     SEED_USER_PASSWORD: str = "change-me"  # seed 账号的密码
     FRONTEND_ORIGIN: str = "http://localhost:5173"  # 允许跨域访问的前端地址
+
+    @property
+    def features(self) -> frozenset[str]:
+        """FEATURES 拆成功能名集合; 有未登记的名字或依赖不满足时抛 ValueError (build_deps 因此启动即报错)."""
+        return check_features(parse_features(self.FEATURES))
 
     @property
     def sqlalchemy_url(self) -> str:

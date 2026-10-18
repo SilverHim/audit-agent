@@ -240,6 +240,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
     from backend.orchestration.graph import compile_graph
     from backend.orchestration.nodes import GraphNodes
     from backend.orchestration.runner import GraphRunner
+    from tests.fakes import NUMBAT_FEATURES
     from tests.test_decisions import acc01_decision, pln_decision
     from tests.test_flow import FIN_APPROVE, REVIEWS, RPT_APPROVE, RPT_REJECT
 
@@ -250,6 +251,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         LLM_MODE="mock",
         LLM_FIXTURES_ROOT=ROOT / "data/demo/llm",
         CHECKPOINT_BACKEND=checkpoint_backend,
+        FEATURES=",".join(sorted(NUMBAT_FEATURES)),  # Numbat 回归: 只开基线功能
     )
     deps = build_deps(settings)
     stack = AsyncExitStack()

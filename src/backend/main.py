@@ -47,7 +47,8 @@ def build_deps(settings: Settings) -> AgentDeps:
     engine = make_engine(settings)
     financial_store = PostgresFinancialDataStore(engine)
     evidence_store = FileEvidenceStore(settings.EVIDENCE_ROOT, engine)
-    library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
+    features = settings.features  # 功能开关; 有未登记的名字或依赖不满足时在这里抛 ValueError
+    library = ProcedureLibrary(settings.KNOWLEDGE_ROOT, features)
     # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置
     model_name = llm_version(settings)["model"]
     llm = SwitchableLLMClient(make_llm_client(settings), model_name)
@@ -84,6 +85,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         ),
         users=PostgresUserStore(engine),
         review_llm=review_llm,
+        features=features,
     )
 
 

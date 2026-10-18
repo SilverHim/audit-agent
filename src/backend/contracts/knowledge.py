@@ -55,6 +55,7 @@ class ProcedureTemplate(Model):
     always_review: bool = False  # 判断一律建 normal 复核任务, 不论自主度 (CSH-02: 函证差异须人评价, ASA 505 para 14)
     manual_result_allowed: bool = False  # 单个判断对象失败时, 允许人工执行并提交结果 (manual_result)
     gate: GateId | None = None  # 闸门程序的闸门编号, 其余为空
+    feature: str | None = None  # 所属功能 (services/features.FEATURES 中的名字); 为空即基线, 总是启用
     assertions: list[Assertion] = []  # 针对的认定
     triggers: list[Trigger] = []  # 装配条件; 为空时 P2 以外为固定集, P2 只经依赖加入
     params: dict[str, Any] = {}  # 参数: 字面量, {by_risk: ...} 或 {ref: 名称}

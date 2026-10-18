@@ -31,6 +31,7 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState
 from backend.orchestration.nodes import FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 
 # 闸门 → 图里的节点名. 四个节点共用一个节点函数 nodes.gate, 只是名字不同
@@ -199,8 +200,12 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], Literal["sche
     return route
 
 
-def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
-    """搭主图: 先登记节点, 再连固定边, 最后连条件边与闸门出口. 返回未编译的图."""
+def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> StateGraph[EngagementState]:
+    """搭主图: 先登记节点, 再连固定边, 最后连条件边与闸门出口. 返回未编译的图.
+
+    features: 启用的功能 (services/features.py). 基线功能集下的主图即下面的结构 (tests/test_graph.py 守卫);
+    各功能的新节点与闸门只在该功能启用时加入 (由各功能组的需求加, 目前没有).
+    """
     g = StateGraph(EngagementState)
 
     # ── 节点: 名字 → 节点函数 ──
@@ -253,5 +258,6 @@ def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
 def compile_graph(
     nodes: GraphNodes, checkpointer: BaseCheckpointSaver[str] | None = None
 ) -> CompiledStateGraph[EngagementState]:
-    """编译主图: checkpointer 每步存检查点 (测试用内存, 正式运行用 Postgres); 四道闸门前静态中断."""
-    return build_graph(nodes).compile(checkpointer=checkpointer, interrupt_before=GATES)
+    """编译主图: checkpointer 每步存检查点 (测试用内存, 正式运行用 Postgres); 四道闸门前静态中断.
+    功能集取 nodes.deps.features."""
+    return build_graph(nodes, nodes.deps.features).compile(checkpointer=checkpointer, interrupt_before=GATES)
