@@ -1,7 +1,8 @@
 """大模型 fixture 的数据集登记表 (R77): 每个数据集一行, tests/test_knowledge.py 的两个 fixture 守卫按它参数化.
 
 约定 (接口文档第 4 节 MockLLMClient): 新程序的 fixture 按数据集放, 运行副本由该数据集的生成脚本从测试 fixture 同步.
-Numbat 为 tests/fixtures/llm 与 data/demo/llm, 不再往这里加新程序的 fixture; Xero 演示的一行由 R78 登记.
+Numbat 为 tests/fixtures/llm 与 data/demo/llm, 不再往这里加新程序的 fixture; Xero 演示为 tests/fixtures/llm_xero 与
+data/xero_demo/20261017-q1/llm (R78, 另有 tests/test_xero_fixtures.py 的守卫).
 """
 
 import csv
@@ -66,4 +67,12 @@ NUMBAT = FixtureSet(
     manifest=DEMO / "manifest.json",
     expected_document=numbat_expected_document,
 )
-FIXTURE_SETS: list[FixtureSet] = [NUMBAT]
+XERO_DEMO = REPO / "data" / "xero_demo" / "20261017-q1"  # Xero 演示的补造目录
+XERO = FixtureSet(
+    name="xero",
+    dataset="xero/20261017-q1",
+    fixtures=REPO / "tests" / "fixtures" / "llm_xero",
+    runtime=XERO_DEMO / "llm",
+    manifest=XERO_DEMO / "manifest.json",
+)
+FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]

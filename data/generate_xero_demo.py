@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import os
+import shutil
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -29,6 +30,12 @@ OUT_ROOT = ROOT / "xero_demo"  # 补造目录的上级, 一个快照一套补造
 GENERATOR = "data/generate_xero_demo.py"
 READABLE = frozenset({"accounts", "invoices", "credit_notes", "journals", "bank_statements", "organisation", "dataset"})
 NOT_HASHED = frozenset({"contacts.json"})  # 快照中不读也不进哈希清单的文件 (含登录账号联系人)
+LLM_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero"  # Xero 大模型 fixture 正本: <程序>/<对象>.json, 各程序的需求写
+LLM_README = (
+    "# Synthetic – for demonstration only\n\n"
+    "Runtime copy of tests/fixtures/llm_xero for LLM_MODE=mock (Xero datasets read llm/<procedure>/<key>.json here).\n"
+    "Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures/llm_xero and regenerate.\n"
+)
 PAGE_LINES = 56  # 每页正文最多行数 (页眉与空行之外), 再多就压到页脚
 LINE_WIDTH = 95  # 每行最多字符数 (Courier 9pt 每字 5.4pt, 左右各留 40pt)
 
@@ -182,7 +189,7 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 def generate(snapshot_dir: Path, out: Path) -> Path:
     """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 合同关联, 服务完成记录,
     开户行, 回函渠道, 工资册, 更正分录, 规格写有正文的 PDF (承接, 合同, 回函, 关联方与证据文件, 财报, 声明书),
-    登记 PDF, documents/index.csv, 财报 fs_v1.json 与人工队列提交物 (manual/)."""
+    登记 PDF, documents/index.csv, 财报 fs_v1.json, 人工队列提交物 (manual/) 与大模型 fixture 的运行副本 (llm/)."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -224,8 +231,30 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
         write_financial_statements(out, spec["financial_statements"])
     for name, submission in spec["manual"].items():
         write_json(out, f"manual/{name}", submission)
+    write_llm_fixtures(out)
     write_manifest(out, snapshot_dir)
     return out
+
+
+def write_llm_fixtures(out: Path, source: Path = LLM_FIXTURES) -> None:
+    """大模型 fixture 的运行副本: 清空 out/llm 后写 README.md, 再把 source 下的 <程序>/<对象>.json 原样复制过去
+    (正本删掉的文件不留副本). source 不存在时只写 README. 正本根目录, 程序目录或文件是符号链接时拒绝 (只复制
+    仓库里的文件), 在清空之前查, 被拒时 out/llm 保持原样."""
+    if source.is_symlink():
+        raise SystemExit(f"大模型 fixture 正本 {source} 是符号链接")
+    files = sorted(source.glob("*/*.json")) if source.is_dir() else []
+    linked = [p.relative_to(source).as_posix() for p in files if p.is_symlink() or p.parent.is_symlink()]
+    if linked:
+        raise SystemExit(f"大模型 fixture 是符号链接: {', '.join(linked)}")
+    target = out / "llm"
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True)
+    (target / "README.md").write_text(LLM_README, encoding="utf-8")
+    for path in files:
+        dest = target / path.parent.name / path.name
+        dest.parent.mkdir(exist_ok=True)
+        shutil.copyfile(path, dest)
 
 
 FS_JSON = "financial_statements/fs_v1.json"

@@ -562,6 +562,7 @@ class JudgmentEngine:
                 messages=messages,
                 max_tokens=template.llm.max_tokens,
                 fixture_key=fixture_key,
+                eid=eid,
             )
             response = await client.complete(request, model)
             report = await self.validator.validate(eid, template, response, ctx)

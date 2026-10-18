@@ -16,6 +16,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
+from backend.adapters.llm import SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -1275,8 +1276,9 @@ def make_deps(
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
-    大模型缺省为 mock 模式的固定输出客户端; 复核模型缺省同样, 但给了 llm 而没给 review_llm 时为空 (A7 不复核,
-    免得注入的假大模型之外又读固定输出); 函证平台缺省为假平台 (直达邮件回函).
+    大模型缺省为 mock 模式的固定输出客户端 (按假项目存储中项目的数据集选 fixture 目录); 复核模型缺省同样,
+    但给了 llm 而没给 review_llm 时为空 (A7 不复核, 免得注入的假大模型之外又读固定输出);
+    函证平台缺省为假平台 (直达邮件回函).
     项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
@@ -1286,10 +1288,16 @@ def make_deps(
     bind_stores(engagement_store, output_store)
     if financial_store is None:
         financial_store = FakeFinancialStore()
-    deps = build_deps(get_settings())
+    settings = get_settings()
+    deps = build_deps(settings)
+
+    def mock_client() -> SwitchableLLMClient:
+        """同组装根的 mock 客户端, 但按假项目存储取项目数据集 (组装根的绑定在 Postgres 项目存储上)."""
+        return SwitchableLLMClient(make_llm_client(settings, engagement_store), llm_version(settings)["model"])
+
     if review_llm is None and llm is None:
-        review_llm = deps.review_llm
-    llm = llm if llm is not None else deps.llm
+        review_llm = mock_client()
+    llm = llm if llm is not None else mock_client()
     if library is None:
         features = BASELINE if features is None else features
         library = deps.library if deps.library.features == features else ProcedureLibrary(deps.library.root, features)

@@ -49,12 +49,13 @@ def build_deps(settings: Settings) -> AgentDeps:
     evidence_store = FileEvidenceStore(settings.EVIDENCE_ROOT, engine)
     features = settings.features  # 功能开关; 有未登记的名字或依赖不满足时在这里抛 ValueError
     library = ProcedureLibrary(settings.KNOWLEDGE_ROOT, features)
-    # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置
-    model_name = llm_version(settings)["model"]
-    llm = SwitchableLLMClient(make_llm_client(settings), model_name)
-    review_llm = SwitchableLLMClient(make_llm_client(settings), model_name)
     trail = PostgresAuditTrail(engine)
     engagement_store = PostgresEngagementStore(engine)
+    # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置.
+    # mock 模式按项目数据集选 fixture 目录 (Xero 读补造目录的 llm/), 所以要项目存储
+    model_name = llm_version(settings)["model"]
+    llm = SwitchableLLMClient(make_llm_client(settings, engagement_store), model_name)
+    review_llm = SwitchableLLMClient(make_llm_client(settings, engagement_store), model_name)
     datasets = RoutingDatasetLoader(
         CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
         {

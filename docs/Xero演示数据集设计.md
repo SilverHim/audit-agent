@@ -1038,7 +1038,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 ├── financial_statements/fs_v1.json, fs_v1.pdf
 ├── representation/representation_letter.pdf
 ├── manual/                              人工队列提交物 (FIN-08 两次回复, 声明书登记, RPT-07 回复), 演示脚本与测试读, 载入器不读
-└── llm/<程序>/<对象>.json                mock 大模型 fixture (同 data/demo/llm)
+└── llm/<程序>/<对象>.json, README.md     mock 大模型 fixture 的运行副本 (同 data/demo/llm): 生成脚本从正本
+                                         tests/fixtures/llm_xero 清空后原样复制, 另写说明; mock 按项目数据集读这里
 ```
 
 ### 9.2 快照怎么来, 怎么对应

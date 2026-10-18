@@ -291,6 +291,9 @@ class LLMRequest(Model):
     max_tokens: int  # 最多输出的 token 数
     temperature: float = 0  # 采样温度, 默认 0 求稳定
     fixture_key: str = "default"  # mock 模式下取固定输出用的键
+    eid: str = (
+        ""  # 所属项目; mock 模式按其数据集定 fixture 目录 (DatasetFixtureLLMClient), live 模式不用, 不进 prompt_hash
+    )
 
 
 class LLMResponse(Model, Generic[T_out]):

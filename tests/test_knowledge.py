@@ -478,9 +478,10 @@ def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[
             if (
                 entry is None
                 or (expected is not None and entry["path"] != expected)
+                or not isinstance(p.get("page"), int)
                 or not 1 <= p["page"] <= entry["page_count"]
             ):
-                wrong.append((f"{procedure_id}/{key}", p["source_id"], p["locator"], p["page"]))
+                wrong.append((f"{procedure_id}/{key}", p["source_id"], p["locator"], p.get("page")))
     return checked, wrong
 
 
@@ -515,24 +516,26 @@ def test_fixture_document_ids_in_manifest(fs: FixtureSet) -> None:
 
 
 def test_document_check_without_expected_function(tmp_path: Path) -> None:
-    """期望 PDF 函数为空的登记行只核对指针在 manifest 中且页码不超过页数."""
+    """期望 PDF 函数为空的登记行只核对指针在 manifest 中且页码不超过页数; 不写页码的指针报出, 不抛异常."""
     some_id, entry = next(iter(NUMBAT.documents().items()))
     fixtures = tmp_path / "fixtures"
 
-    def pointer(source_id: str, page: int) -> dict[str, Any]:
-        return {"source_type": "document", "source_id": source_id, "locator": "x", "page": page}
+    def pointer(source_id: str, page: int | None) -> dict[str, Any]:
+        found = {"source_type": "document", "source_id": source_id, "locator": "x", "page": page}
+        return found if page is not None else {k: v for k, v in found.items() if k != "page"}  # 不写 page 键
 
     for key, ptr in (
         ("OK", pointer(some_id, entry["page_count"])),
         ("UNKNOWN", pointer("DOC-000000000000", 1)),
         ("PAGE", pointer(some_id, entry["page_count"] + 1)),
+        ("NOPAGE", pointer(some_id, None)),
     ):
         (fixtures / "REV-03").mkdir(parents=True, exist_ok=True)
         (fixtures / "REV-03" / f"{key}.json").write_text(json.dumps({"evidence": [ptr]}), encoding="utf-8")
     fs = replace(NUMBAT, name="tmp", fixtures=fixtures, runtime=tmp_path / "runtime", expected_document=None)
     checked, wrong = check_document_pointers(fs)
-    assert checked == {"REV-03/OK": 1, "REV-03/PAGE": 1, "REV-03/UNKNOWN": 1}
-    assert sorted(w[0] for w in wrong) == ["REV-03/PAGE", "REV-03/UNKNOWN"]
+    assert checked == {"REV-03/NOPAGE": 1, "REV-03/OK": 1, "REV-03/PAGE": 1, "REV-03/UNKNOWN": 1}
+    assert sorted(w[0] for w in wrong) == ["REV-03/NOPAGE", "REV-03/PAGE", "REV-03/UNKNOWN"]
 
 
 def test_fake_documents_from_manifest() -> None:

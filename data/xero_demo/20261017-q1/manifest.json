@@ -357,6 +357,13 @@
       "xero_refs": []
     },
     {
+      "path": "llm/README.md",
+      "sha256": "169ada1098f224b1056615a905e46ce86e23186bb6eb43ce3297f1f44459c4dd",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "manual/fin08_round1.json",
       "sha256": "248260d469d31fb7a0b853760005f6bac56eabcac65be98541df96caad6fbe73",
       "synthetic": true,

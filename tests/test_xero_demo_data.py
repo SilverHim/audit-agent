@@ -532,7 +532,14 @@ def test_manifest_layout() -> None:
     assert list(manifest) == ["dataset", "generator", "spec_sha256", "snapshot", "files", "documents"]  # 无 injected
     assert manifest["generator"] == "data/generate_xero_demo.py"  # type: ignore[index]
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
-    assert [f["path"] for f in manifest["files"]] == [  # type: ignore[index]
+    paths = [f["path"] for f in manifest["files"]]  # type: ignore[index]
+    # llm/ 是大模型 fixture 的运行副本 (R78): 各程序段加 fixture 后随之变, 只与正本推出的集合比 (集合包含口径)
+    llm = [p for p in paths if p.startswith("llm/")]
+    fixtures = REPO / "tests" / "fixtures" / "llm_xero"
+    assert llm == sorted(
+        ["llm/README.md", *(f"llm/{p.relative_to(fixtures).as_posix()}" for p in fixtures.glob("*/*.json"))]
+    )
+    assert [p for p in paths if not p.startswith("llm/")] == [
         "adjustments/journal_entries.csv",
         "bank_accounts.csv",
         "client_profile.json",
@@ -2729,3 +2736,36 @@ def test_snapshot_is_the_mock(tmp_path: Path) -> None:
         f"不是正式补造目录 ({copy}): 跳过 documents 段份数, 页数与登记途径的计数",
         "快照即 20261017-mock: 跳过新旧快照比对",
     ]
+
+
+def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> None:
+    """R78: 运行副本 llm/ 先清空再原样复制正本的 <程序>/<对象>.json, 另写 README; 正本删掉的文件不留副本; 正本根目录,
+    程序目录或文件是符号链接时拒绝, 且在清空之前拒绝 (llm/ 保持原样); 正本不存在时只写 README."""
+    source, out = tmp_path / "llm_xero", tmp_path / "out"
+    (source / "CSH-02").mkdir(parents=True)
+    (source / "CSH-02" / "BA-01.json").write_bytes(b'{"a": 1}\n')
+    (source / "notes.md").write_text("not copied", encoding="utf-8")
+    (out / "llm" / "OLD").mkdir(parents=True)
+    (out / "llm" / "OLD" / "stale.json").write_text("{}", encoding="utf-8")
+    generator.write_llm_fixtures(out, source)
+    copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*") if p.is_file())
+    assert copied == ["CSH-02/BA-01.json", "README.md"]
+    assert (out / "llm" / "CSH-02" / "BA-01.json").read_bytes() == b'{"a": 1}\n'
+    assert "Synthetic – for demonstration only" in (out / "llm" / "README.md").read_text(encoding="utf-8")
+
+    (source / "CSH-02" / "LINK.json").symlink_to(source / "CSH-02" / "BA-01.json")
+    with pytest.raises(SystemExit, match=r"CSH-02/LINK\.json"):
+        generator.write_llm_fixtures(out, source)
+    (source / "CSH-02" / "LINK.json").unlink()
+    (source / "REV-02").symlink_to(source / "CSH-02", target_is_directory=True)  # 程序目录是符号链接
+    with pytest.raises(SystemExit, match=r"REV-02/BA-01\.json"):
+        generator.write_llm_fixtures(out, source)
+    (source / "REV-02").unlink()
+    linked = tmp_path / "linked"
+    linked.symlink_to(source)
+    with pytest.raises(SystemExit, match="符号链接"):
+        generator.write_llm_fixtures(out, linked)
+    assert (out / "llm" / "CSH-02" / "BA-01.json").exists()  # 被拒时 llm/ 保持原样
+
+    generator.write_llm_fixtures(out, tmp_path / "missing")
+    assert [p.name for p in (out / "llm").rglob("*") if p.is_file()] == ["README.md"]
