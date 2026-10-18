@@ -205,6 +205,21 @@ class TableField(Model):
     type: FieldType  # 字段类型, 决定解析方式
 
 
+class TableColumn(Model):
+    """账表查看的一列."""
+
+    name: str  # 列名; 与导入字段名一致 (前端按它本地化)
+    type: FieldType  # 字段类型, 决定显示方式
+
+
+class TablePage(Model):
+    """账表查看的一页 (GET /data/tables/{kind}): 符合搜索条件的总行数, 各列与这一页的行."""
+
+    total: int  # 符合搜索条件的总行数
+    columns: list[TableColumn]  # 各列, 按导入字段的顺序; 科目表另有分类, 依据, 两期余额与是否改过
+    rows: list[dict[str, Any]]  # 这一页的行: 列名 → 值 (金额为整数分, 日期与时间为 ISO 文本, 没有为 null)
+
+
 class TableSchema(Model):
     """一种账表的导入字段 (GET /data/schemas)."""
 

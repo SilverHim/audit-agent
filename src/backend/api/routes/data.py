@@ -2,19 +2,22 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import ImportSheet
+from backend.api.schemas import AccountCategoryIn, ImportSheet
 from backend.contracts.data import (
+    CategoryVersion,
     DataReadiness,
     DataRequest,
     DataSummary,
     ImportCommit,
     ImportPreview,
     ImportResult,
+    TableKind,
+    TablePage,
     TableSchema,
 )
 from backend.contracts.models import Engagement, User
@@ -87,6 +90,47 @@ async def summary(
     """数据管理页的概览. processing 不为 0 时前端每 3 秒轮询."""
     async with catch_api():
         return await service.summary(engagement.id)
+
+
+@router.get("/tables/{kind}")
+async def table_page(
+    kind: TableKind,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+    q: str | None = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> TablePage:
+    """查看一张账表: {total, columns, rows}. q 为不分大小写的包含搜索 (科目表查代码与名称); limit 不超过 200.
+    科目表的行另带 category, category_basis, balance_current_cents, balance_prior_cents, edited. 账表数值不能改,
+    只能经导入写新版本."""
+    async with catch_api():
+        return await service.table_page(engagement.id, kind, q, offset, limit)
+
+
+@router.put("/accounts/{code}")
+async def set_account_category(
+    code: str,
+    body: AccountCategoryIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> CategoryVersion:
+    """修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由为空 422 MISSING_FIELD;
+    分类不属于该科目的类别或与当前相同 422 INVALID_VALUE; 科目不存在 404; 锁定 423; 忙 409."""
+    async with catch_api():
+        return await service.set_account_category(engagement.id, code, body.category, body.reason, user.id)
+
+
+@router.get("/accounts/{code}/history")
+async def account_history(
+    code: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> list[CategoryVersion]:
+    """科目标准分类的各版, 按版本升序; 科目不存在 404."""
+    async with catch_api():
+        return await service.account_history(engagement.id, code)
 
 
 @router.get("/requests")

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import Text, delete, false, func, insert, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -32,7 +32,7 @@ from backend.contracts.data import (
     TableVersion,
 )
 from backend.contracts.models import AgentId
-from backend.contracts.records import Account
+from backend.contracts.records import Account, AccountCategory
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
 from backend.persistence.stores import Store, now, safe_child, upsert_extraction
@@ -48,6 +48,23 @@ DATE_COLUMNS: dict[TableKind, str] = {
 
 
 SYSTEM = AgentId.A3  # 系统归类科目时分类历史记的修改人: 数据管理智能体
+# 账表查看的排序列, 末尾都是唯一键, 分页不重不漏 (审批日志按行快照的顺序)
+TABLE_ORDER: dict[TableKind, tuple[str, ...]] = {
+    TableKind.accounts: ("code",),
+    TableKind.trial_balance: ("account_code", "period"),
+    TableKind.journal_entries: ("posting_date", "entry_no", "id"),
+    TableKind.sales_invoices: ("invoice_date", "invoice_no", "id"),
+    TableKind.bank_accounts: ("id",),
+    TableKind.bank_transactions: ("txn_date", "id"),
+    TableKind.delivery_notes: ("delivery_no", "id"),
+}
+SEARCH_COLUMNS: dict[TableKind, tuple[str, ...]] = {TableKind.accounts: ("code", "name")}  # 其余表查各文本列
+
+
+def contains(q: str) -> str:
+    """ILIKE 的包含匹配模式 (转义 %, _ 与反斜杠, 配合 escape="\\")."""
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def version_id(source: DataSource, kind: TableKind, data_version: int) -> str:
@@ -260,6 +277,107 @@ class PostgresDataStore(Store):
         rows = await self.rows(eid, select(t))
         found = [DataRequest.model_validate({k: r[k] for k in DataRequest.model_fields}) for r in rows]
         return sorted(found, key=request_order)
+
+    # ── 账表查看与科目分类 (需求 R16) ──
+
+    async def table_rows(
+        self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        if kind is TableKind.approval_log:
+            return await self.approval_rows(eid, q, offset, limit)
+        table = m.FINANCIAL[kind]
+        columns = [c for c in table.columns if c.name != "engagement_id"]
+        names = SEARCH_COLUMNS.get(kind) or tuple(c.name for c in columns if isinstance(c.type, Text))
+        condition = or_(*(table.c[n].ilike(contains(q), escape="\\") for n in names)) if q else true()
+        statement = select(*columns)
+        if kind is TableKind.accounts:
+            tb = m.FINANCIAL[TableKind.trial_balance]
+
+            def balance(period: str) -> Any:
+                total = func.sum(tb.c.balance_cents).label("cents")
+                grouped = select(tb.c.account_code, total).where(tb.c.period == period).group_by(tb.c.account_code)
+                return grouped.subquery()
+
+            current, prior = balance("current"), balance("prior")
+            edited = func.coalesce(table.c.category_basis == "auditor", false()).label("edited")
+            joined = table.outerjoin(current, current.c.account_code == table.c.code).outerjoin(
+                prior, prior.c.account_code == table.c.code
+            )
+            statement = select(
+                *columns,
+                current.c.cents.label("balance_current_cents"),
+                prior.c.cents.label("balance_prior_cents"),
+                edited,
+            ).select_from(joined)
+        order = [table.c[n] for n in TABLE_ORDER[kind]]
+        async with transaction(self.engine, eid) as conn:
+            total = (await conn.execute(select(func.count()).select_from(table).where(condition))).scalar_one()
+            found = await conn.execute(statement.where(condition).order_by(*order).offset(offset).limit(limit))
+            rows = [dict(r) for r in found.mappings()]
+        for row in rows:  # SUM 读回为 Decimal
+            for key in ("balance_current_cents", "balance_prior_cents"):
+                if row.get(key) is not None:
+                    row[key] = int(row[key])
+        return int(total), rows
+
+    async def approval_rows(self, eid: str, q: str | None, offset: int, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """审批日志最新一版的行快照, 按 q 查各列 (不分大小写的包含), 再分页."""
+        t = m.data_imports
+        statement = (
+            select(t.c.rows)
+            .where(t.c.kind == TableKind.approval_log, t.c.status == "committed")
+            .order_by(t.c.data_version.desc())
+            .limit(1)
+        )
+        found = await self.rows(eid, statement)
+        rows: list[dict[str, Any]] = list(found[0]["rows"] or []) if found else []
+        if q:
+            needle = q.casefold()
+            rows = [r for r in rows if any(needle in str(v).casefold() for v in r.values() if v is not None)]
+        return len(rows), rows[offset : offset + limit]
+
+    async def account(self, eid: str, code: str) -> Account | None:
+        a = m.FINANCIAL[TableKind.accounts]
+        found = await self.rows(eid, select(a).where(a.c.code == code))
+        return Account.model_validate({k: v for k, v in found[0].items() if k != "engagement_id"}) if found else None
+
+    async def category_history(self, eid: str) -> dict[str, list[CategoryVersion]]:
+        h = m.account_category_history
+        found = await self.rows(eid, select(h).order_by(h.c.account_code, h.c.version))
+        history: dict[str, list[CategoryVersion]] = {}
+        for r in found:
+            version = CategoryVersion.model_validate({k: r[k] for k in CategoryVersion.model_fields})
+            history.setdefault(r["account_code"], []).append(version)
+        return history
+
+    async def set_category(
+        self, eid: str, code: str, category: AccountCategory, *, actor: str, reason: str
+    ) -> CategoryVersion:
+        a, h = m.FINANCIAL[TableKind.accounts], m.account_category_history
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            loads = await self.loads_row(conn, eid)  # 行锁: 同一项目的数据写入排队
+            row = (await conn.execute(select(a).where(a.c.code == code).with_for_update())).mappings().first()
+            if row is None:
+                raise LookupError(f"科目 {code} 不存在")
+            latest = (await latest_categories(conn, eid)).get(code)
+            version = latest.version + 1 if latest is not None else 2
+            if latest is None:  # 数据集载入的科目没有历史: 先补记系统的归类
+                base = {"category": row["category"], "basis": row["category_basis"], "changed_by": SYSTEM}
+                when = loads["loaded_at"] or now()
+                await conn.execute(
+                    insert(h).values(engagement_id=eid, account_code=code, version=1, changed_at=when, **base)
+                )
+            changed = CategoryVersion(
+                version=version, category=category, basis="auditor", changed_by=actor, changed_at=now(), reason=reason
+            )
+            await conn.execute(insert(h).values(engagement_id=eid, account_code=code, **changed.model_dump()))
+            await conn.execute(update(a).where(a.c.code == code).values(category=category, category_basis="auditor"))
+            t = m.dataset_loads
+            await conn.execute(
+                update(t).where(t.c.engagement_id == eid).values(data_version=int(loads["data_version"]) + 1)
+            )
+        return changed
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         checks, table = m.data_checks, m.data_requests

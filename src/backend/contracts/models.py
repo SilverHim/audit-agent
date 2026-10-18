@@ -547,6 +547,8 @@ class ProcedureRun(Versioned):
     ended_at: datetime | None = None  # 结束时间, 运行中为空
     status: RunStatus  # 运行中, 成功或失败
     failure_reason: str | None = None  # 失败原因
+    # 执行时的项目数据版本 (需求 R16, 总览据此标过期); 承接阶段的程序 (不读财务数据) 与之前的执行为空
+    data_version: int | None = None
 
 
 class ScheduleRow(Model):

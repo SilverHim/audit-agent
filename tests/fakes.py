@@ -1388,6 +1388,7 @@ class FakeDataStore:
         self.seeded = ready  # 体检汇总是否以 Numbat 演示数据集为底
         self.tables: dict[TableKind, list[BaseModel]] = {}  # write_tables 写过的科目表, 试算表, 总账的当前行
         self.approvals: list[ApprovalLogRow] = []  # 最新一版审批日志
+        self.categories: dict[str, list[Any]] = {}  # 科目代码 → 分类历史 (CategoryVersion)
         # write_tables 的每次调用: (各表的行, 其余关键字参数); 写入同时更新行数, 版本与数据版本
         self.written: list[tuple[dict[TableKind, list[BaseModel]], dict[str, Any]]] = []
         self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
@@ -1444,6 +1445,82 @@ class FakeDataStore:
         from backend.services.data_quality import request_order
 
         return sorted(self.data_requests.values(), key=request_order)
+
+    def current(self, kind: TableKind) -> list[Any]:
+        """某张表当前的行: 写过的取写入的, 否则已就绪的取 Numbat 演示数据集 (只有科目表, 试算表, 总账)."""
+        if kind in self.tables:
+            return list(self.tables[kind])
+        return list(numbat_tables().get(kind, ())) if self.seeded else []
+
+    async def table_rows(
+        self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """同真实实现的搜索与排序 (只做测试用到的表)."""
+        if kind is TableKind.approval_log:
+            rows = [r.model_dump(mode="json", exclude_unset=True) for r in self.approvals]
+        else:
+            rows = [r.model_dump(mode="json") for r in self.current(kind)]
+        if kind is TableKind.accounts:
+            tb = self.current(TableKind.trial_balance)
+            balances = {p: {r.account_code: r.balance_cents for r in tb if r.period == p} for p in ("current", "prior")}
+            for row in rows:
+                row |= {
+                    "balance_current_cents": balances["current"].get(row["code"]),
+                    "balance_prior_cents": balances["prior"].get(row["code"]),
+                    "edited": row["category_basis"] == "auditor",
+                }
+            keys: tuple[str, ...] = ("code", "name")
+        else:
+            keys = tuple(k for k, v in (rows[0] if rows else {}).items() if isinstance(v, str))
+        if q:
+            needle = q.casefold()
+            rows = [r for r in rows if any(needle in str(r.get(k) or "").casefold() for k in keys)]
+        order = {
+            TableKind.accounts: ("code",),
+            TableKind.trial_balance: ("account_code", "period"),
+            TableKind.journal_entries: ("posting_date", "entry_no", "id"),
+        }.get(kind)
+        if order:
+            rows.sort(key=lambda r: tuple(str(r[k]) for k in order))
+        return len(rows), rows[offset : offset + limit]
+
+    async def account(self, eid: str, code: str) -> Any:
+        return next((a for a in self.current(TableKind.accounts) if a.code == code), None)
+
+    async def category_history(self, eid: str) -> dict[str, list[Any]]:
+        return {code: list(versions) for code, versions in self.categories.items()}
+
+    async def set_category(self, eid: str, code: str, category: Any, *, actor: str, reason: str) -> Any:
+        from backend.contracts.data import CategoryVersion
+
+        accounts = self.current(TableKind.accounts)
+        account = next((a for a in accounts if a.code == code), None)
+        if account is None:
+            raise LookupError(code)
+        history = self.categories.setdefault(code, [])
+        if not history:
+            history.append(
+                CategoryVersion(
+                    version=1,
+                    category=account.category,
+                    basis=account.category_basis,
+                    changed_by=AgentId.A3,
+                    changed_at=self.ready_at or NOW,
+                )
+            )
+        changed = CategoryVersion(
+            version=history[-1].version + 1,
+            category=category,
+            basis="auditor",
+            changed_by=actor,
+            changed_at=datetime.now(UTC),
+            reason=reason,
+        )
+        history.append(changed)
+        update = {"category": category, "category_basis": "auditor"}
+        self.tables[TableKind.accounts] = [a.model_copy(update=update) if a.code == code else a for a in accounts]
+        self.data_version += 1
+        return changed
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         self.last_run = run

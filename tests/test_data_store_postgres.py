@@ -28,6 +28,7 @@ from backend.persistence.stores import (
     PostgresFinancialDataStore,
     now,
 )
+from backend.services.account_mapping import with_category
 from backend.services.data_service import DataService
 
 pytestmark = pytest.mark.slow
@@ -601,3 +602,97 @@ async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage,
         pass
     assert await checkup_actions() == before
     assert before.count("check") == 3 and before.count("request_raised") == 2 and before.count("request_received") == 2
+
+
+async def test_table_view_and_category_edit_on_real_store(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """需求 R16 (真实库): 数据集载入的科目表带两期余额; 搜索的 % 与 _ 按字面匹配; 验收: 6300 改为 cost_of_sales,
+    历史两版, 留痕一条, 数据版本 +1; 重新导入科目表保留审计师的分类; 审批日志取最新一版的行快照."""
+    from backend.contracts.data import ApprovalLogRow
+    from backend.contracts.models import TrailKind
+
+    _, (loaded, _), loader, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    await loader.load(loaded.id, "demo")
+    eid = loaded.id
+
+    page = await service.table_page(eid, TableKind.accounts, "freight", 0, 50)
+    assert page.rows == [
+        {
+            "code": "6300",
+            "name": "Freight outwards",
+            "type": "expense",
+            "category": "operating_expenses",
+            "category_basis": "name",
+            "balance_current_cents": 24000000,
+            "balance_prior_cents": 20500000,
+            "edited": False,
+        }
+    ]
+    assert (await service.table_page(eid, TableKind.accounts, None, 0, 50)).total == 23
+    assert (await service.table_page(eid, TableKind.journal_entries, "%", 0, 5)).total == 0  # 按字面, 不是通配
+    journals = await service.table_page(eid, TableKind.journal_entries, "koala", 0, 3)
+    assert journals.total > 0 and len(journals.rows) == 3
+    assert isinstance(journals.rows[0]["posting_date"], date) and journals.rows[0]["debit_cents"] is not None
+
+    version = await service.set_account_category(eid, "6300", "cost_of_sales", "运费属于销售成本", "U-1")
+    history = await service.account_history(eid, "6300")
+    assert [(v.version, v.category, v.basis, v.changed_by) for v in history] == [
+        (1, "operating_expenses", "name", "A3"),
+        (2, "cost_of_sales", "auditor", "U-1"),
+    ]
+    assert version == history[-1]
+    assert (await service.deps.data.readiness(eid)).data_version == 2
+    entries = await service.deps.trail.list(eid, TrailKind.data, limit=500)
+    assert [e.idempotency_key for e in entries if e.payload["action"] == "edit"] == [f"{eid}:data:edit:account:6300:v2"]
+    [row] = (await service.table_page(eid, TableKind.accounts, "6300", 0, 50)).rows
+    assert (row["category"], row["category_basis"], row["edited"]) == ("cost_of_sales", "auditor", True)
+
+    async with service.holding(eid, ["accounts"]):  # 重新导入科目表: 系统按名称归类, 审计师改过的保留
+        accounts = [with_category(Account.model_validate(r)) for r in csv_rows("accounts")]
+        await service.write_tables(eid, {TableKind.accounts: accounts}, source="import", actor="U-1")
+    [row] = (await service.table_page(eid, TableKind.accounts, "6300", 0, 50)).rows
+    assert (row["category"], row["edited"]) == ("cost_of_sales", True)
+    assert [v.version for v in await service.account_history(eid, "6300")] == [1, 2]
+
+    log = [ApprovalLogRow(entry_no="CP-AP-2025-07-A", approved_by="cfo")]
+    async with service.holding(eid, ["approval_log"]):
+        await service.write_tables(eid, {TableKind.approval_log: log}, source="import", actor="U-1")
+    approvals = await service.table_page(eid, TableKind.approval_log, "cfo", 0, 50)
+    assert approvals.total == 1 and approvals.rows[0]["entry_no"] == "CP-AP-2025-07-A"
+
+
+async def test_table_pages_do_not_repeat_or_skip_rows_with_duplicate_numbers(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """发票号与开票日期相同, 发运单号相同的行: 逐页 (每页 1 行) 查看, 各页合起来不重不漏 (审核 FD-R16 第 1 轮)."""
+    from backend.contracts.records import DeliveryNote, SalesInvoice
+
+    _, (_, eid_holder), _, _ = storage
+    eid = eid_holder.id
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    invoices = [
+        SalesInvoice(
+            id=f"SI-{n}",
+            invoice_no="INV-1",
+            customer="Same Pty Ltd",
+            customer_abn=None,
+            contract_id=None,
+            invoice_date=date(2026, 3, 1),
+            posting_date=date(2026, 3, 1),
+            amount_cents=100 * n,
+            journal_entry_id=None,
+        )
+        for n in (3, 1, 4, 2, 5)
+    ]
+    notes = [
+        DeliveryNote(
+            id=f"DN-{n}", delivery_no="DN-1", invoice_id=f"SI-{n}", shipped_date=None, signed_date=None, signed_by=None
+        )
+        for n in (2, 5, 1, 4, 3)
+    ]
+    tables: dict[TableKind, list[Any]] = {TableKind.sales_invoices: invoices, TableKind.delivery_notes: notes}
+    async with service.holding(eid, [k.value for k in tables]):
+        await service.write_tables(eid, tables, source="import", actor="U-1")
+
+    for kind in tables:
+        pages = [await service.table_page(eid, kind, None, offset, 1) for offset in range(5)]
+        ids = [row["id"] for page in pages for row in page.rows]
+        assert ids == sorted(ids) and len(set(ids)) == 5 and all(p.total == 5 for p in pages), kind

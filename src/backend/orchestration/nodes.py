@@ -383,7 +383,11 @@ class GraphNodes:
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
         procedure_run = build_run(self.deps.library, template, procedure, engagement, state, datetime.now(UTC))
-        procedure_run = procedure_run.model_copy(update={"instance": instance})
+        # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
+        data_version = None
+        if template.phase is not Phase.P0_Acceptance:
+            data_version = (await self.deps.data.readiness(engagement.id)).data_version
+        procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
         if stored_run is None or stored_run.status is RunStatus.running:

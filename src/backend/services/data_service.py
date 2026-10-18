@@ -19,6 +19,7 @@ from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries
 from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
 from backend.contracts.data import (
+    CategoryVersion,
     ContractVersion,
     DataReadiness,
     DataSource,
@@ -31,7 +32,9 @@ from backend.contracts.data import (
     ImportResult,
     ImportSession,
     RecordsDetail,
+    TableColumn,
     TableKind,
+    TablePage,
     TableSchema,
     TableSummary,
     TableVersion,
@@ -50,12 +53,12 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import XeroConnections
-from backend.contracts.records import Account
+from backend.contracts.records import Account, AccountCategory
 from backend.orchestration.nodes import DATA_READY
 from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner, awaiting_data, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
-from backend.services.account_mapping import with_category
+from backend.services.account_mapping import CATEGORY_GROUPS, with_category
 from backend.services.data_import import (
     MAX_FAILURES,
     SCHEMAS,
@@ -165,6 +168,41 @@ def contract_retry(
         return apply_contract_edit(history[-2].contract, edit.field, edit.value) == ordered_terms(current)
     except DataRejected:
         return False
+
+
+def category_entry(eid: str, code: str, version: CategoryVersion) -> TrailEntry:
+    """科目分类修改的 data 留痕: action edit, payload 带 table_kind accounts, account_code, field category,
+    新分类与理由, actor 为修改人; 防重复键 {eid}:data:edit:account:{科目}:v{版本}, 写入与补写共用."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=version.changed_by,
+        summary=f"修改科目 {code} 的标准分类为 {version.category}, 第 {version.version} 版",
+        idempotency_key=f"{eid}:data:edit:account:{code}:v{version.version}",
+        payload={
+            "action": "edit",
+            "table_kind": TableKind.accounts.value,
+            "account_code": code,
+            "field": "category",
+            "category": version.category,
+            "reason": version.reason,
+        },
+        created_at=version.changed_at,
+    )
+
+
+def table_columns(kind: TableKind) -> list[TableColumn]:
+    """账表查看的各列: 导入字段 (名称与类型); 科目表另有分类, 依据, 两期余额与是否改过."""
+    columns = [TableColumn(name=f.name, type=f.type) for f in SCHEMAS[kind].fields]
+    if kind is TableKind.accounts:
+        columns += [
+            TableColumn(name="category", type="text"),
+            TableColumn(name="category_basis", type="text"),
+            TableColumn(name="balance_current_cents", type="amount"),
+            TableColumn(name="balance_prior_cents", type="amount"),
+            TableColumn(name="edited", type="bool"),
+        ]
+    return columns
 
 
 def schemas() -> list[TableSchema]:
@@ -285,6 +323,8 @@ class DataService:
         edits = [r for r in await self.deps.data.extraction_versions(eid) if r.field is not None]
         entries = [version_entry(eid, v) for v in versions] + [edit_entry(eid, r) for r in edits]
         entries += checkup_entries(eid, await self.deps.data.check_run(eid), await self.deps.data.requests(eid))
+        for code, history in (await self.deps.data.category_history(eid)).items():
+            entries += [category_entry(eid, code, v) for v in history if v.basis == "auditor"]
         await record_transitions(self.deps.trail, entries)
 
     async def checkup_if_stale(self, eid: str) -> None:
@@ -355,6 +395,71 @@ class DataService:
             await record_transitions(self.deps.trail, [version_entry(eid, item) for item in written])
         finally:  # 留痕写失败 (数据已提交) 也照常体检
             await self.checkup(eid)
+        return version
+
+    # ── 账表查看与科目分类修改 (需求 R16) ──
+
+    async def table_page(self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int) -> TablePage:
+        """账表查看 (GET /data/tables/{kind}): 一页的行与符合搜索的总行数, 列见 table_columns; 搜索与排序见
+        DataStore.table_rows. 账表数值不能在这里改, 只能经导入写新版本 (需求 R13)."""
+        total, rows = await self.deps.data.table_rows(eid, kind, (q or "").strip() or None, offset, limit)
+        columns = table_columns(kind)
+        return TablePage(
+            total=total, columns=columns, rows=[{c.name: row.get(c.name) for c in columns} for row in rows]
+        )
+
+    async def account_history(self, eid: str, code: str) -> list[CategoryVersion]:
+        """科目标准分类的各版 (GET /data/accounts/{code}/history), 按版本升序; 科目不存在 404. 数据集载入后没改过的
+        科目没有历史, 以当前分类作唯一一版返回 (修改人 A3, 时间取首次载入)."""
+        account = await self.deps.data.account(eid, code)
+        if account is None:
+            raise LookupError(f"科目 {code} 不存在")
+        history = (await self.deps.data.category_history(eid)).get(code)
+        if history:
+            return history
+        loaded = (await self.deps.data.readiness(eid)).loaded_at or datetime.now(UTC)
+        return [
+            CategoryVersion(
+                version=1,
+                category=account.category,
+                basis=account.category_basis,
+                changed_by=AgentId.A3,
+                changed_at=loaded,
+            )
+        ]
+
+    async def set_account_category(
+        self, eid: str, code: str, category: AccountCategory, reason: str, actor: str
+    ) -> CategoryVersion:
+        """审计师修改科目的标准分类 (PUT /data/accounts/{code}): 存储规则见 DataStore.set_category (新的一版, 科目表
+        改为它, 数据版本 +1, 一个事务); 提交后写 data 留痕 (category_entry; 没写成的下次取锁时补写), 再由 A3 体检
+        (分类影响科目映射与留存收益结转). 之后重新导入科目表时保留审计师的分类.
+        持项目锁 (锁定 423, 忙 409); 科目不存在 404; 理由为空 MISSING_FIELD; 分类不属于该科目的类别或与当前相同
+        INVALID_VALUE. 同一修改的重试 (当前分类正是同一人以同一理由改出的) 返回那一版, 不再写."""
+        reason = reason.strip()
+        if not reason:
+            raise DataRejected("MISSING_FIELD", "须填写修改分类的理由")
+        async with self.holding(eid, ()):
+            account = await self.deps.data.account(eid, code)
+            if account is None:
+                raise LookupError(f"科目 {code} 不存在")
+            if category not in CATEGORY_GROUPS[account.type]:
+                raise DataRejected("INVALID_VALUE", f"{category} 不是{account.type}类科目的标准分类")
+            if account.category == category:
+                history = (await self.deps.data.category_history(eid)).get(code, [])
+                latest = history[-1] if history else None
+                if latest is not None and (latest.basis, latest.changed_by, latest.reason) == (
+                    "auditor",
+                    actor,
+                    reason,
+                ):
+                    return latest  # 同一修改的重试; 留痕已由 holding 补写
+                raise DataRejected("INVALID_VALUE", f"科目 {code} 的分类已是 {category}")
+            version = await self.deps.data.set_category(eid, code, category, actor=actor, reason=reason)
+            try:
+                await record_transitions(self.deps.trail, [category_entry(eid, code, version)])
+            finally:  # 留痕写失败 (修改已提交) 也照常体检
+                await self.checkup(eid)
         return version
 
     # ── 账表导入 (需求 R13) ──

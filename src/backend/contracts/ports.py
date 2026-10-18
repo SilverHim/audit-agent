@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.data import (
+    CategoryVersion,
     CheckInputs,
     CheckRun,
     ContractVersion,
@@ -57,6 +58,8 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.records import (
+    Account,
+    AccountCategory,
     BankAccount,
     BankTransaction,
     DeliveryNote,
@@ -245,6 +248,32 @@ class DataStore(Protocol):
 
     async def requests(self, eid: str) -> list[DataRequest]:
         """全部补交请求 (含已收到的), 按提出时间升序, 同时提出的按 data_quality.REQUEST_ORDER."""
+        ...
+
+    async def table_rows(
+        self, eid: str, kind: TableKind, q: str | None, offset: int, limit: int
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """某张账表当前的行 (账表查看): 返回 (符合搜索的总行数, 这一页的行); 行为列名 → 值, 不含 engagement_id.
+        q 为不分大小写的包含匹配: 科目表查代码与名称, 其余表查各文本列, 审批日志查各列. 排序: 科目表按代码, 试算表按
+        科目, 期间, 总账按入账日期, 凭证号, 行 ID, 其余按日期与单号. 科目表的行另带 balance_current_cents,
+        balance_prior_cents (试算表两期余额, 没有为空) 与 edited (分类依据为 auditor). 审批日志不成表, 取最新一版的
+        行快照."""
+        ...
+
+    async def account(self, eid: str, code: str) -> Account | None:
+        """科目表中的一个科目; 没有为 None."""
+        ...
+
+    async def category_history(self, eid: str) -> dict[str, list[CategoryVersion]]:
+        """各科目的分类历史 (科目代码 → 各版, 按版本升序); 没有历史的科目 (数据集载入后没改过的) 不在其中."""
+        ...
+
+    async def set_category(
+        self, eid: str, code: str, category: AccountCategory, *, actor: str, reason: str
+    ) -> CategoryVersion:
+        """审计师修改科目的标准分类, 一个事务内: 没有分类历史时先补记当前分类为第 1 版 (修改人 A3, 时间取首次载入);
+        记新的一版 (依据 auditor, 修改人, 理由); 科目表的分类与依据改为这一版; 数据版本 +1. 返回新的一版.
+        科目不存在抛 LookupError; 项目 locked 抛 EngagementLocked."""
         ...
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:

@@ -40,6 +40,9 @@ class ProcedureSummary(Model):
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus  # 按 AuditOutputStore 中 Procedure 的最新版本
     pending_tasks: int  # 按 AuditOutputStore 中 pending 任务计
+    # 最近一次执行基于的数据版本比当前旧 (之后账表, 抽取结果或科目分类有改动, 需求 R16);
+    # 没执行过或执行时没记版本为 false
+    stale: bool = False
 
 
 class EngagementOverview(Model):

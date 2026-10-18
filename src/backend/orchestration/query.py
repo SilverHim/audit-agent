@@ -16,6 +16,7 @@ from backend.contracts.models import (
     GateVerdict,
     Phase,
     Procedure,
+    ProcedureRun,
     ReviewTask,
     TaskStatus,
 )
@@ -49,6 +50,11 @@ def current_gate(next_nodes: tuple[str, ...]) -> GateId | None:
     return None
 
 
+def stale(run: ProcedureRun | None, current_version: int) -> bool:
+    """程序是否过期 (需求 R16): 最近一次执行记了数据版本, 且比当前数据版本旧."""
+    return run is not None and run.data_version is not None and run.data_version < current_version
+
+
 class GraphStateQuery:
     """StateQuery 的实现: 给前端读项目总览与闸门材料."""
 
@@ -77,6 +83,12 @@ class GraphStateQuery:
         procedures = await self.deps.output_store.latest(eid, Procedure)
         pending = await self.deps.output_store.latest(eid, ReviewTask, status=TaskStatus.pending)
         pending_by_procedure = Counter(t.procedure_id for t in pending)  # 程序编号 -> 待决任务数, 没有的计 0
+        # 过期 (需求 R16): 最近一次执行基于的数据版本比当前旧; 完整的失效传播以后再做
+        current_version = (await self.deps.data.readiness(eid)).data_version
+        last_runs: dict[str, ProcedureRun] = {}
+        for run in await self.deps.output_store.latest(eid, ProcedureRun):
+            if run.procedure_id not in last_runs or run.run_no > last_runs[run.procedure_id].run_no:
+                last_runs[run.procedure_id] = run
 
         summaries = []
         for p in sorted(procedures, key=lambda p: (PHASE_ORDER.index(p.phase), p.id)):
@@ -91,6 +103,7 @@ class GraphStateQuery:
                     autonomy_level=p.autonomy_level,
                     status=p.status,
                     pending_tasks=pending_by_procedure[p.id],
+                    stale=stale(last_runs.get(p.id), current_version),
                 )
             )
 

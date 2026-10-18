@@ -60,6 +60,40 @@ def classify_by_name(name: str, account_type: str) -> AccountCategory | None:
     return None
 
 
+# 各科目类别可用的标准分类 (records.AccountCategory 的分组, 同序); 审计师修改分类时只能在同类里选
+CATEGORY_GROUPS: dict[str, tuple[AccountCategory, ...]] = {
+    "asset": (
+        "cash",
+        "receivables",
+        "inventory",
+        "prepayments",
+        "other_current_assets",
+        "property_plant_equipment",
+        "intangible_assets",
+        "other_non_current_assets",
+    ),
+    "liability": (
+        "payables",
+        "accruals",
+        "tax_payable",
+        "employee_provisions",
+        "borrowings",
+        "other_current_liabilities",
+        "other_non_current_liabilities",
+    ),
+    "equity": ("share_capital", "retained_earnings", "other_equity"),
+    "revenue": ("revenue", "other_income"),
+    "expense": (
+        "cost_of_sales",
+        "employee_expenses",
+        "depreciation_amortisation",
+        "finance_costs",
+        "operating_expenses",
+        "income_tax",
+    ),
+}
+
+
 def with_category(account: Account) -> Account:
     """科目没有分类时按名称补上, 依据记 name (认不出的分类与依据都为空); 已有分类的不改."""
     if account.category is not None:

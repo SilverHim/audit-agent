@@ -33,6 +33,7 @@ from backend.contracts.models import (
     ReviewTier,
     UncorrectedSchedule,
 )
+from backend.contracts.records import AccountCategory
 
 
 class Token(Model):
@@ -212,6 +213,13 @@ class DocumentTypeIn(Model):
     """人工指定文件类型."""
 
     type: DocumentType  # 文件类型
+    reason: str  # 理由, 必填
+
+
+class AccountCategoryIn(Model):
+    """审计师修改科目的标准分类."""
+
+    category: AccountCategory  # 新的标准分类, 须属于该科目的类别
     reason: str  # 理由, 必填
 
 
