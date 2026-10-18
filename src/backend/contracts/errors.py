@@ -20,3 +20,14 @@ class DecisionRejected(Exception):
         super().__init__(f"{code}: {message}" if message else code)
         self.code = code
         self.message = message
+
+
+class DataRejected(DecisionRejected):
+    """数据管理的写操作被拒; extra 随错误体一并返回, 如 DATA_NOT_READY 的 missing_tables.
+
+    沿用 DecisionRejected 的错误码表 (开发接口文档第 10 节), 接口层按同一规则映射 HTTP 状态.
+    """
+
+    def __init__(self, code: str, message: str = "", **extra: object) -> None:
+        super().__init__(code, message)
+        self.extra = extra

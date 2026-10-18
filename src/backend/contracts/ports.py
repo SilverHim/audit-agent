@@ -13,6 +13,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
+from backend.contracts.data import DataReadiness, TableKind, TableStats
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
@@ -144,6 +145,24 @@ class DatasetLoader(Protocol):
 
     def datasets(self) -> list[str]:
         """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""
+        ...
+
+
+class DataStore(Protocol):
+    """数据管理的存储 (B 实现): 数据版本与就绪确认, 账表统计. 表见开发接口文档第 9 节."""
+
+    async def readiness(self, eid: str) -> DataReadiness:
+        """数据版本与就绪确认; 没接入过数据时版本为 0, 未确认."""
+        ...
+
+    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+        """记审计师确认数据已齐 (已确认的不改, 保留第一次的人与时间), 返回确认后的状态.
+
+        项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def stats(self, eid: str) -> dict[TableKind, TableStats]:
+        """各账表当前的行数与日期范围, 每种账表一项."""
         ...
 
 

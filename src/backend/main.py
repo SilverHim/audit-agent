@@ -23,6 +23,7 @@ from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.persistence.data_store import PostgresDataStore
 from backend.persistence.db import make_engine
 from backend.persistence.stores import (
     CsvDatasetLoader,
@@ -36,6 +37,7 @@ from backend.persistence.stores import (
     XeroDatasetLoader,
 )
 from backend.services.audit_trail import PostgresAuditTrail
+from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -79,6 +81,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         registry=MockRegistrySource(dataset_dir),
         confirmations=MockConfirmationChannel(dataset_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"),
         users=PostgresUserStore(engine),
+        data=PostgresDataStore(engine),
         review_llm=review_llm,
     )
 
@@ -106,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.concierge = ConciergeChat(
                 deps, app.state.query, make_chat_source(settings, llm_settings), ChatLimits.from_settings(settings)
             )
+            app.state.data_service = DataService(deps, app.state.runner)
             try:
                 await app.state.runner.recover()
                 yield

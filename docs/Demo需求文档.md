@@ -77,11 +77,12 @@ P2 程序包分三层：第 0 层 REV-08、REV-03、CSH-04、CSH-05；第 1 层 
 LangGraph `StateGraph`，检查点用 `AsyncPostgresSaver`，thread_id 即 engagement_id。
 
 ```
-p0_intel → gate_acc01 → p1_ingest → p1_analytics → gate_p1_risk → assemble_pack
+p0_intel → gate_acc01 → p1_await_data → p1_ingest → p1_analytics → gate_p1_risk → assemble_pack
   → schedule ⇉ fieldwork × N ⇉ fan_in → { schedule | await_events | completion }
 completion → gate_fin → report_draft → gate_rpt01 → { report_draft | archive }
 ```
 
+- p1_await_data：建项目不载入财务数据，ACC-01 通过后在节点内 `interrupt()` 等审计师在数据管理页接入数据并确认已齐（数据集载入视同确认，不等）。
 - 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
 - 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_intel 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
 - assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。

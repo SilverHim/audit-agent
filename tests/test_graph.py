@@ -193,7 +193,7 @@ async def _walk(checkpointer: BaseCheckpointSaver[str], eid: str) -> None:
     await app.ainvoke(initial_state(engagement, fixed_procedures(deps.library), NUMBAT_PROFILE.version), config)
 
     steps = [
-        (GateId.ACC_01, GateVerdict.approve, "p1_ingest", "gate_p1_risk"),
+        (GateId.ACC_01, GateVerdict.approve, "p1_await_data", "gate_p1_risk"),
         (GateId.PLN_01_03, GateVerdict.approve, "assemble_pack", "gate_fin"),
         (GateId.FIN_01, GateVerdict.approve, "report_draft", "gate_rpt01"),
         (GateId.RPT_01, GateVerdict.reject, "report_draft", "gate_rpt01"),
@@ -225,7 +225,7 @@ async def test_acc01_approve_goes_to_p1() -> None:
 
     await _decide_acc01(app, config, _decision(0, GateId.ACC_01, GateVerdict.approve))
 
-    assert (await app.aget_state(config)).next == ("p1_ingest",)
+    assert (await app.aget_state(config)).next == ("p1_await_data",)
     await app.ainvoke(None, config)
     snapshot = await app.aget_state(config)
     assert snapshot.next == ("gate_p1_risk",)  # P1 节点尚为占位, 一路走到下一道闸门
@@ -294,7 +294,7 @@ async def test_acc01_decision_on_old_scorecard_is_represented() -> None:
     assert (await app.aget_state(config)).next == ("gate_acc01",)
 
     await _decide_acc01(app, config, _decision(2, GateId.ACC_01, GateVerdict.approve, target_version=2))
-    assert (await app.aget_state(config)).next == ("p1_ingest",)
+    assert (await app.aget_state(config)).next == ("p1_await_data",)
 
 
 # ── P2 路由兜底: 状态与任务对不上时报错, 不空转 ──

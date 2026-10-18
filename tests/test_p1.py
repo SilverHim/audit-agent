@@ -1,4 +1,5 @@
-"""R06 P1 节点: p1_ingest 载入数据集后执行 DOC-04, p1_analytics 依次执行 PLN-07, PLN-01. A3, A4 用 Numbat 脚本 Agent."""
+"""R06 P1 节点: p1_ingest 执行 DOC-04 (数据已在之前接入, 不再载入数据集, 需求 R10), p1_analytics 依次执行
+PLN-07, PLN-01. A3, A4 用 Numbat 脚本 Agent."""
 
 from backend.agents.base import RunContext
 from backend.contracts.models import (
@@ -63,23 +64,24 @@ def by_id(pack: list[Procedure]) -> dict[str, Procedure]:
 # ── p1_ingest: 验收 1, 2 ──
 
 
-async def test_p1_ingest_loads_dataset_before_doc04() -> None:
+async def test_p1_ingest_runs_doc04_without_loading_dataset() -> None:
+    """需求 R10: p1_ingest 不再调 DatasetLoader.load, 只执行 DOC-04, 处理已登记的合同."""
     nodes, _, state = p1_setup()
     loader = nodes.deps.datasets
     assert isinstance(loader, FakeDatasetLoader)
-    seen_loads: list[list[tuple[str, str]]] = []
+    seen: list[str] = []
     doc04 = numbat_p1_agents(nodes.deps)["DOC-04"]
 
     def recording(ctx: RunContext) -> StatePatch:
-        seen_loads.append(list(loader.loads))
+        seen.append(ctx.procedure.id)
         return doc04.script(ctx)  # type: ignore[attr-defined]
 
     nodes.agents["DOC-04"] = ScriptA3(nodes.deps, recording)
 
     await nodes.p1_ingest(state)
 
-    assert loader.loads == [(EID, "demo")]
-    assert seen_loads == [[(EID, "demo")]]  # A3 执行时数据集已载入
+    assert loader.loads == []
+    assert seen == ["DOC-04"]
 
 
 async def test_p1_ingest_writes_run_program_and_document_status_in_one_commit() -> None:

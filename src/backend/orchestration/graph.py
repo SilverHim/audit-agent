@@ -1,13 +1,14 @@
 """主图拓扑 (A 负责): 有哪些节点, 节点之间怎么连. 流程见 Demo需求文档.md 4.1 节:
 
-p0_intel → gate_acc01 → { p1_ingest | declined | p0_intel (客户画像更新后重跑) }
-p1_ingest → p1_analytics → gate_p1_risk → { assemble_pack | p1_analytics }
+p0_intel → gate_acc01 → { p1_await_data | declined | p0_intel (客户画像更新后重跑) }
+p1_await_data (等审计师接入数据并确认已齐) → p1_ingest → p1_analytics → gate_p1_risk → { assemble_pack | p1_analytics }
 assemble_pack → schedule ⇉ fieldwork × N ⇉ fan_in → { schedule | await_events | completion }
 completion → gate_fin → { report_draft | completion }
 report_draft → gate_rpt01 → { archive | report_draft }
 
 读法: → 固定边; { a | b } 条件边, 由路由函数按状态选一个; ⇉ 用 Send 并行派发多个实例.
 四道闸门 (gate_*) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口, 回到自己重新呈报.
+p1_await_data, await_events 与 P2 以外程序失败后的节点在节点内 interrupt() 等人.
 """
 
 from collections.abc import Callable, Hashable
@@ -205,6 +206,7 @@ def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
 
     # ── 节点: 名字 → 节点函数 ──
     g.add_node("p0_intel", nodes.p0_intel)
+    g.add_node("p1_await_data", nodes.p1_await_data)
     g.add_node("p1_ingest", nodes.p1_ingest)
     g.add_node("p1_analytics", nodes.p1_analytics)
     g.add_node("assemble_pack", nodes.assemble_pack)
@@ -223,6 +225,7 @@ def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
     # ── 固定边: A 执行完一定去 B ──
     g.add_edge(START, "p0_intel")
     g.add_edge("p0_intel", "gate_acc01")
+    g.add_edge("p1_await_data", "p1_ingest")
     g.add_edge("p1_ingest", "p1_analytics")
     g.add_edge("p1_analytics", "gate_p1_risk")
     g.add_edge("assemble_pack", "schedule")
@@ -239,7 +242,7 @@ def build_graph(nodes: GraphNodes) -> StateGraph[EngagementState]:
 
     # ── 闸门出口: 路由函数返回的出口名 → 下一个节点 ──
     exits: dict[GateId, dict[Hashable, str]] = {
-        GateId.ACC_01: {"approve": "p1_ingest", "reject": "declined", "rerun": "p0_intel"},
+        GateId.ACC_01: {"approve": "p1_await_data", "reject": "declined", "rerun": "p0_intel"},
         GateId.PLN_01_03: {"approve": "assemble_pack", "reject": "p1_analytics"},
         GateId.FIN_01: {"approve": "report_draft", "reject": "completion"},
         GateId.RPT_01: {"approve": "archive", "reject": "report_draft"},

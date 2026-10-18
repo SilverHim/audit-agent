@@ -31,7 +31,8 @@ from backend.contracts.views import (
 )
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import uncovered_objectives
-from backend.orchestration.runner import GraphRunner, resume_required
+from backend.orchestration.runner import GraphRunner, awaiting_data, resume_required, review_waits
+from backend.services.data_quality import missing_tables
 
 GATE_OF_NODE: dict[str, GateId] = {node: gate for gate, node in GATE_NODES.items()}  # 闸门节点名 -> 闸门
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
@@ -93,14 +94,17 @@ class GraphStateQuery:
                 )
             )
 
+        waiting_data = awaiting_data(snapshot)
         return EngagementOverview(
             engagement=engagement,
             client_name=profile.legal_name,
             running=self.runner.is_running(eid),
             run_error=self.runner.run_error(eid) or await self._resume_hint(eid),
             current_gate=current_gate(snapshot.next),
-            # 节点内 interrupt() 暂停时, 对应的待执行任务带 interrupts; 闸门是静态中断, 不带
-            awaiting_review=any(task.interrupts for task in snapshot.tasks),
+            # 节点内 interrupt() 暂停时, 对应的待执行任务带 interrupts; 闸门是静态中断, 不带. 等数据就绪另计
+            awaiting_review=bool(review_waits(snapshot)),
+            awaiting_data=waiting_data,
+            missing_tables=missing_tables(await self.deps.data.stats(eid)) if waiting_data else [],
             procedures=summaries,
             pending_tasks=len(pending),
             materiality_cents=values.get("materiality_cents"),

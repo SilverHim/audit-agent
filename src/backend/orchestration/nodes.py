@@ -53,6 +53,9 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
 
+AWAITING_DATA = "data"  # 等财务数据就绪的等待载荷 {"awaiting": "data"} (p1_await_data, 需求 R10)
+DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
+
 
 class FieldworkInput(TypedDict):
     """派给一个 fieldwork 实例的输入, 经 Send 发出."""
@@ -540,15 +543,23 @@ class GraphNodes:
         return {}  # 四道闸门共用, 不处理业务; 出口由路由函数按 GateDecision 决定
 
     # ── P1 ──
-    async def p1_ingest(self, state: EngagementState) -> StatePatch:
-        """载入合成数据集 (财务表入库, 合同 PDF 登记为证据文件), 再由 A3 执行 DOC-04 抽取合同要素.
+    async def p1_await_data(self, state: EngagementState) -> StatePatch:
+        """等财务数据就绪 (需求 R10): 审计师在数据管理页接入数据并确认已齐 (POST /data/ready) 之前, 节点内
+        interrupt() 等待, 载荷 {"awaiting": "data"}. 已确认 (含数据集载入视同确认) 时直接通过, 不写状态.
 
-        DatasetLoader.load 已载入则跳过, 节点重放时再调一次无妨.
+        确认写入 Store 后以 Command(resume=DATA_READY) 恢复, 节点从头执行, 读到已确认即返回, 不再调 interrupt().
+        单独成节点而不放进 p1_ingest: 恢复值没被消费时会交给同一节点的下一个 interrupt(), 即 DOC-04 失败后的等待,
+        被当成复核决定 ID. 这里节点内只有这一个等待, 恢复值不会被别处取走.
+        恢复时仍未确认 (绕过 /data/ready 恢复) 抛 LookupError.
         """
-        engagement = await self.deps.engagement_store.get(state["engagement_id"])
-        if engagement is None:
-            raise LookupError(f"Engagement {state['engagement_id']} not found")
-        await self.deps.datasets.load(engagement.id, engagement.dataset)
+        readiness = await self.deps.data.readiness(state["engagement_id"])
+        if readiness.ready_at is None:
+            interrupt({"awaiting": AWAITING_DATA})
+            raise LookupError(f"{state['engagement_id']} 恢复时数据仍未确认就绪: 须经 POST /data/ready 确认后恢复")
+        return {}
+
+    async def p1_ingest(self, state: EngagementState) -> StatePatch:
+        """A3 执行 DOC-04 抽取合同要素. 财务数据已在 p1_await_data 之前接入, 这里不再载入数据集."""
         [procedure_id] = NODE_PROCEDURES["p1_ingest"]
         return await self.execute(state, procedure_id)
 

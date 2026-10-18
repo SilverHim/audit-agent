@@ -198,7 +198,7 @@ class PostgresFinancialDataStore(Store):
                 row["terms"] = [
                     {k: v for k, v in r.items() if k not in {"engagement_id", "contract_id"}} for r in terms
                 ]
-                result.append(Contract.model_validate(row))
+                result.append(Contract.model_validate({k: v for k, v in row.items() if k in Contract.model_fields}))
         return result
 
     async def save_contract(self, eid: str, contract: Contract) -> None:
@@ -223,7 +223,7 @@ class PostgresFinancialDataStore(Store):
         if type is not None:
             stmt = stmt.where(m.documents.c.type == type)
         return [
-            DocumentRef.model_validate({k: v for k, v in r.items() if k not in {"engagement_id", "file_path"}})
+            DocumentRef.model_validate({k: v for k, v in r.items() if k in DocumentRef.model_fields})
             for r in await self.rows(eid, stmt)
         ]
 
@@ -387,8 +387,12 @@ FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
 Tables = tuple[Mapping[str, Sequence[BaseModel]], Sequence[Path]]  # (财务表 → 行, 合同 PDF 路径)
 
 
+DATASET_READY_BY = "dataset"  # 数据集载入视同确认就绪时, dataset_loads.ready_by 记的值
+
+
 class TableLoader(Store):
-    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads; 已载入则跳过.
+    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads (数据版本 1, 视同已确认就绪);
+    已载入则跳过.
 
     源数据在确认尚未载入之后才读取与转换 (build), 已载入的项目不再依赖源文件.
     """
@@ -414,8 +418,17 @@ class TableLoader(Store):
                 await self.evidence_store.save(
                     eid, path.name, path.read_bytes(), type=DocumentType.contract, reliability=Reliability.external_copy
                 )
+            # 数据集是整套预置数据 (种子, 测试与演示项目), 载入即视同审计师已确认数据已齐, P1 不再等待
+            loaded_at = now()
             await conn.execute(
-                insert(m.dataset_loads).values(engagement_id=eid, dataset=dataset, data_version=1, loaded_at=now())
+                insert(m.dataset_loads).values(
+                    engagement_id=eid,
+                    dataset=dataset,
+                    data_version=1,
+                    loaded_at=loaded_at,
+                    ready_at=loaded_at,
+                    ready_by=DATASET_READY_BY,
+                )
             )
 
 

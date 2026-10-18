@@ -20,6 +20,7 @@ from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_perio
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
+from backend.contracts.data import DataReadiness, TableKind, TableStats
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
@@ -104,6 +105,7 @@ from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -1184,7 +1186,7 @@ class FakeLlmSettingsStore:
 
 
 class FakeDatasetLoader:
-    """假数据集载入: load 记下调用, 首次载入时把 Numbat 的 3 份合同登记为证据文件 (received).
+    """假数据集载入: load 记下调用, 把 Numbat 的 3 份合同登记为证据文件 (received); make_deps 建好即 seed 一次.
 
     预置计划数据取 Numbat 的.
     """
@@ -1195,8 +1197,14 @@ class FakeDatasetLoader:
 
     async def load(self, eid: str, dataset: str) -> None:
         self.loads.append((eid, dataset))
+        self.seed()
+
+    def seed(self) -> "FakeDatasetLoader":
+        """模拟种子脚本已载入数据集 (P1 不再自动载入, 需求 R10): 把 Numbat 的 3 份合同登记为证据文件 (已登记的跳过),
+        不记进 loads. 返回自身, 供 make_deps 链式调用."""
         known = {d.id for d in self.financial_store.document_refs}
         self.financial_store.document_refs += [d for d in NUMBAT_CONTRACTS if d.id not in known]
+        return self
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
         return list(NUMBAT_OBJECTIVES), list(NUMBAT_RISKS)
@@ -1206,6 +1214,48 @@ class FakeDatasetLoader:
 
     def datasets(self) -> list[str]:
         return ["demo"]
+
+
+# 种子已载入整套数据集时各账表的行数 (Numbat 的量级, 只用于就绪判断与概览)
+SEEDED_STATS: dict[TableKind, TableStats] = {
+    TableKind.accounts: TableStats(records=23),
+    TableKind.trial_balance: TableStats(records=46, current=23, prior=23),
+    TableKind.journal_entries: TableStats(records=2686),
+    TableKind.sales_invoices: TableStats(records=624),
+    TableKind.bank_accounts: TableStats(records=2),
+    TableKind.bank_transactions: TableStats(records=696),
+    TableKind.delivery_notes: TableStats(records=624),
+    TableKind.approval_log: TableStats(records=0),
+}
+
+
+class FakeDataStore:
+    """假数据管理存储: 数据版本, 就绪确认与各账表行数, 各项目共用.
+
+    缺省模拟种子已载入整套数据集 (数据版本 1, 视同已确认就绪, 各表有行), 现有流程照旧越过 P1 开始前的等待;
+    测试等数据就绪时传 ready=False, 并按需给 stats (没给的表行数为 0).
+    """
+
+    def __init__(self, ready: bool = True, stats: Mapping[TableKind, TableStats] | None = None) -> None:
+        self.data_version = 1 if ready else 0  # 数据版本
+        self.ready_at: datetime | None = datetime(2026, 1, 1, tzinfo=UTC) if ready else None  # 确认就绪的时间
+        self.ready_by: str | None = "dataset" if ready else None  # 确认人
+        self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
+        self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
+
+    async def readiness(self, eid: str) -> DataReadiness:
+        return DataReadiness(
+            data_version=self.data_version, ready_at=self.ready_at, ready_by=self.ready_by, loaded_at=self.ready_at
+        )
+
+    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+        self.confirm_calls.append((eid, actor))
+        if self.ready_at is None:
+            self.ready_at, self.ready_by = datetime.now(UTC), actor
+        return await self.readiness(eid)
+
+    async def stats(self, eid: str) -> dict[TableKind, TableStats]:
+        return {kind: self.table_stats.get(kind, TableStats(records=0)) for kind in TableKind}
 
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
@@ -1228,6 +1278,7 @@ def make_deps(
     confirmations: FakeConfirmationChannel | None = None,
     library: ProcedureLibrary | None = None,
     review_llm: LLMClient | None = None,
+    data: FakeDataStore | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
@@ -1263,6 +1314,7 @@ def make_deps(
         financial_store=financial_store,
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
+        data=data if data is not None else FakeDataStore(),
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),
@@ -1692,7 +1744,12 @@ def numbat_all_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
     """主图节点: 已实装的 Agent 用真实的, P1 三条程序与 RPT-03 用 Numbat 脚本 Agent (见 numbat_p1_agents,
-    numbat_report_agents)."""
+    numbat_report_agents).
+
+    数据集载入换成假实现时 (make_deps 的缺省), 按种子已载入 Numbat 处理, 先登记 3 份合同: P1 不再自动载入
+    数据集 (需求 R10), 新项目的数据由审计师接入或种子脚本预先载入."""
+    if isinstance(deps.datasets, FakeDatasetLoader):
+        deps.datasets.seed()
     nodes = GraphNodes(deps, parallel_cap)
     nodes.agents.update(numbat_p1_agents(deps, presets))
     nodes.agents.update(numbat_report_agents(deps))
@@ -1766,6 +1823,7 @@ def make_runner(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    data: FakeDataStore | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -1775,6 +1833,7 @@ def make_runner(
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
+    data: 数据管理存储, 缺省为种子已载入 (视同已确认就绪, P1 前不等数据).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -1789,6 +1848,7 @@ def make_runner(
         confirmations=confirmations,
         library=library,
         review_llm=review_llm,
+        data=data,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:
@@ -1828,6 +1888,7 @@ async def api_client(
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    app.state.data_service = DataService(runner.deps, runner)
     app.state.llm_settings = llm_settings
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
