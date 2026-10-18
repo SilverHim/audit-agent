@@ -71,7 +71,8 @@ class StandardFragment(Model):
 
     id: str  # 片段 ID, 如 AASB15-P31
     standard: str  # 准则名, 如 AASB 15
-    paragraph: str  # 段落号
+    paragraph: str  # 段落号, 如 "33", "6(b)(i)", "Aus 13.2", "A44", "R410.15", "s307C(3)"
+    subitems: list[str] = []  # 以整段为引用单位而只摘部分子项时所摘的子项 (如 [a]); paragraph 写整段号, id 不带子项
     topic: str  # 主题, 如 control_transfer
     text: str  # 原文摘录
     procedures: list[str]  # 引用它的程序

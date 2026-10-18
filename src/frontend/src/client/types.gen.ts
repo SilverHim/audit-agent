@@ -2160,6 +2160,10 @@ export type StandardFragment = {
      */
     paragraph: string;
     /**
+     * Subitems
+     */
+    subitems?: Array<string>;
+    /**
      * Topic
      */
     topic: string;

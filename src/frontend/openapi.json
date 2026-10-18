@@ -5642,6 +5642,14 @@
             "type": "string",
             "title": "Paragraph"
           },
+          "subitems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subitems",
+            "default": []
+          },
           "topic": {
             "type": "string",
             "title": "Topic"
