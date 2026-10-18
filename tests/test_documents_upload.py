@@ -109,10 +109,14 @@ def docx(text: str) -> bytes:
     return stream.getvalue()
 
 
+CHECKUP_ACTIONS = {"check", "request_raised", "request_received"}  # A3 体检与补交请求的留痕 (需求 R15, 另测)
+
+
 def data_trail(runner: GraphRunner) -> list[dict[str, object]]:
+    """data 留痕的 payload, 不含体检与补交请求的."""
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    return [e.payload for e in trail.entries if e.kind is TrailKind.data]
+    return [e.payload for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] not in CHECKUP_ACTIONS]
 
 
 async def test_uploaded_contract_is_classified_and_extracted_like_doc04() -> None:
@@ -1009,6 +1013,6 @@ async def test_recover_and_reupload_backfill_missing_upload_trail(monkeypatch: p
     await drain(restarted)
 
     assert document(financial, "CON-001.pdf").status == "extracted"
-    entries = [e for e in trail.entries if e.kind is TrailKind.data]
+    entries = [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] not in CHECKUP_ACTIONS]
     assert [e.payload["action"] for e in entries] == ["upload", "classify"]
     assert entries[0].actor == "U-1"

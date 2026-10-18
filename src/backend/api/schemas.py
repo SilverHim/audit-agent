@@ -187,15 +187,15 @@ class ReportBundle(Model):
     decisions: list[GateDecision]
 
 
-# 稍后处理的对象: 复核任务或闸门 (阶段决定)
-DeferralTarget = Literal["review_task", "gate"]
+# 稍后处理的对象: 复核任务, 闸门 (阶段决定) 或补交资料请求
+DeferralTarget = Literal["review_task", "gate", "data_request"]
 
 
 class DeferralIn(Model):
     """标记或取消稍后处理."""
 
     target_type: DeferralTarget
-    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号, 如 ACC-01
+    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号 (如 ACC-01), 补交请求填请求 ID (如 REQ-approval_log)
     deferred: bool  # true 标记, false 取消
 
 

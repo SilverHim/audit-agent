@@ -14,9 +14,12 @@ from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.data import (
+    CheckInputs,
+    CheckRun,
     ContractVersion,
     DataCheck,
     DataReadiness,
+    DataRequest,
     DataSource,
     ExtractionRecord,
     ImportSession,
@@ -229,6 +232,24 @@ class DataStore(Protocol):
 
     async def open_requests(self, eid: str) -> int:
         """待补交 (status open) 的请求数."""
+        ...
+
+    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+        """体检要用的财务数据汇总 (按 SQL 汇总, 口径见 services.data_quality.summarize); 发生额只算入账日期在
+        [period_start, period_end] 内的分录."""
+        ...
+
+    async def check_run(self, eid: str) -> CheckRun | None:
+        """最近一次体检 (各项结果, 体检时的数据版本与时间); 没体检过为 None."""
+        ...
+
+    async def requests(self, eid: str) -> list[DataRequest]:
+        """全部补交请求 (含已收到的), 按提出时间升序, 同时提出的按 data_quality.REQUEST_ORDER."""
+        ...
+
+    async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
+        """一个事务内记下一次体检: data_checks 换成这次的各项结果, 并按 ID 写入 (新建或覆盖) 给出的补交请求.
+        项目 locked 抛 EngagementLocked."""
         ...
 
     async def extraction_versions(

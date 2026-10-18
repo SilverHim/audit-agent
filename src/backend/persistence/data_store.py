@@ -6,19 +6,24 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from backend.contracts.data import (
     ApprovalLogRow,
     CategoryVersion,
     CheckId,
+    CheckInputs,
+    CheckRun,
     DataCheck,
     DataReadiness,
+    DataRequest,
     DataSource,
     ExtractionRecord,
     ImportSession,
@@ -31,6 +36,7 @@ from backend.contracts.records import Account
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
 from backend.persistence.stores import Store, now, safe_child, upsert_extraction
+from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 
 # 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户没有
 DATE_COLUMNS: dict[TableKind, str] = {
@@ -193,6 +199,88 @@ class PostgresDataStore(Store):
         t = m.data_requests
         rows = await self.rows(eid, select(func.count().label("n")).where(t.c.status == "open"))
         return int(rows[0]["n"])
+
+    # ── 体检与补交请求 (需求 R15) ──
+
+    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+        j = m.FINANCIAL[TableKind.journal_entries]
+        tb = m.FINANCIAL[TableKind.trial_balance]
+        a = m.FINANCIAL[TableKind.accounts]
+        totals = select(
+            func.count(),
+            func.coalesce(func.sum(j.c.debit_cents), 0),
+            func.coalesce(func.sum(j.c.credit_cents), 0),
+            func.count().filter(j.c.created_by.is_not(None), j.c.created_by.not_in(sorted(PLACEHOLDER_PREPARERS))),
+            func.count().filter(j.c.approved_by.is_not(None), j.c.approved_by != ""),
+        )
+        movements = (
+            select(j.c.account_code, func.sum(j.c.debit_cents - j.c.credit_cents))
+            .where(j.c.posting_date.between(period_start, period_end))
+            .group_by(j.c.account_code)
+        )
+        balances = select(tb.c.period, tb.c.account_code, func.sum(tb.c.balance_cents)).group_by(
+            tb.c.period, tb.c.account_code
+        )
+        async with transaction(self.engine, eid) as conn:
+            rows, debit, credit, preparers, approvers = (await conn.execute(totals)).one()
+            moved = {code: int(value) for code, value in (await conn.execute(movements)).tuples()}
+            periods: dict[str, dict[str, int]] = {"current": {}, "prior": {}}
+            for period, code, value in (await conn.execute(balances)).tuples():
+                periods[period][code] = int(value)
+            chart = (await conn.execute(select(a.c.code, a.c.type, a.c.category))).tuples().all()
+            dataset = (await conn.execute(select(m.dataset_loads.c.dataset))).scalar()
+        return CheckInputs(
+            journal_rows=int(rows),
+            debit_cents=int(debit),
+            credit_cents=int(credit),
+            movements=moved,
+            preparer_rows=int(preparers),
+            approver_rows=int(approvers),
+            tb_current=periods["current"],
+            tb_prior=periods["prior"],
+            account_types={code: kind for code, kind, _ in chart},
+            account_categories={code: category for code, _, category in chart},
+            dataset=dataset,
+        )
+
+    async def check_run(self, eid: str) -> CheckRun | None:
+        t = m.data_checks
+        rows = await self.rows(eid, select(t))
+        if not rows:
+            return None
+        order = list(CheckId)
+        checks = sorted(
+            (DataCheck.model_validate({k: r[k] for k in DataCheck.model_fields}) for r in rows),
+            key=lambda c: order.index(c.id),
+        )
+        return CheckRun(data_version=rows[0]["data_version"], checked_at=rows[0]["checked_at"], checks=checks)
+
+    async def requests(self, eid: str) -> list[DataRequest]:
+        t = m.data_requests
+        rows = await self.rows(eid, select(t))
+        found = [DataRequest.model_validate({k: r[k] for k in DataRequest.model_fields}) for r in rows]
+        return sorted(found, key=request_order)
+
+    async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
+        checks, table = m.data_checks, m.data_requests
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            await conn.execute(delete(checks).where(checks.c.engagement_id == eid))
+            if run.checks:
+                values = [
+                    {
+                        "engagement_id": eid,
+                        **check.model_dump(mode="json"),
+                        "data_version": run.data_version,
+                        "checked_at": run.checked_at,
+                    }
+                    for check in run.checks
+                ]
+                await conn.execute(insert(checks), values)
+            for request in requests:
+                row = request.model_dump()
+                statement = upsert(table).values(engagement_id=eid, **row)
+                await conn.execute(statement.on_conflict_do_update(index_elements=["engagement_id", "id"], set_=row))
 
     # ── 账表写入 (导入, Xero 同步共用) ──
 

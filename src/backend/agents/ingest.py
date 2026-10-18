@@ -349,6 +349,22 @@ def unfinished(document: DocumentRef) -> bool:
 
 
 @dataclass(frozen=True)
+class Requested:
+    """上传时对应的待补交文件请求 (需求 R15)."""
+
+    request_id: str  # 请求 ID, 如 REQ-financial_statements
+    document_type: DocumentType  # 请求的文件类型
+
+
+def retype(document: DocumentRef, requested: Requested) -> bool:
+    """对着待补交的文件请求上传 (或补做这样上传的) 的审计师上传文件是否要按请求定类型: 还没分类, 分不了类 (转了人工),
+    或已分类的类型与请求的不同. 已按请求类型处理过的不再处理 (重复上传幂等). 系统存档的文件不改."""
+    if document.channel != "auditor_upload" or document.uploaded_by is None:
+        return False
+    return document.status in ("received", "needs_manual") or document.type is not requested.document_type
+
+
+@dataclass(frozen=True)
 class Job:
     """补做时要接上的作业: 定下文件当前类型的那条 classify 留痕."""
 
@@ -367,8 +383,28 @@ class DocumentIntake:
     def __init__(self, deps: AgentDeps) -> None:
         self.deps = deps  # 外部依赖
 
+    async def mark(self, eid: str, document: DocumentRef, requested: Requested) -> tuple[DocumentRef, Job]:
+        """按上传时对应的待补交文件请求定类型 (需求 R15), 不抽取: 审计师是对着这项请求上传的, 类型就取请求的文件类型,
+        不调大模型分类; 写 classify 留痕 (actor 为上传人, 理由注明请求), 登记改为该类型 (可靠性随类型), 置 classified.
+        返回改后的登记与作业 (留痕 ID 为之后抽取的作业号). 上传时在请求里就做 (登记先落库, 作业开始前中断也不丢)."""
+        note = f"按补交请求 {requested.request_id} 上传"
+        actor = document.uploaded_by or self.agent
+        job = await self.record(eid, actor, document, requested.document_type, note, requested.request_id)
+        kind = requested.document_type
+        updated = await self.deps.evidence_store.update_document(
+            eid, document.id, type=kind, reliability=RELIABILITY[kind], status="classified", failed_step=None
+        )
+        return updated, Job(job, datetime.now(UTC))
+
+    async def assign(
+        self, eid: str, document: DocumentRef, engagement: Engagement, requested: Requested
+    ) -> DocumentRef:
+        """按请求定类型 (mark) 后按类型抽取."""
+        updated, job = await self.mark(eid, document, requested)
+        return await self.classified(eid, updated, requested.document_type, engagement, job.id)
+
     async def process(self, eid: str, document: DocumentRef, engagement: Engagement) -> DocumentRef:
-        """从头处理一份文件, 返回处理后的登记."""
+        """从头处理一份文件 (读首页, 大模型分类, 按类型抽取), 返回处理后的登记."""
         try:
             text = await first_page_text(self.deps, eid, document)
         except Exception:
@@ -391,9 +427,19 @@ class DocumentIntake:
             return await self.manual(eid, document, "classify")
         return await self.classified(eid, document, kind, engagement, job)
 
-    async def resume(self, eid: str, document: DocumentRef, engagement: Engagement, job: Job | None) -> DocumentRef:
-        """补做没做完的处理 (见 unfinished): received 的从头处理; classified 的按已定类型接着抽取, job 为定下这次类型
-        的 classify 留痕 (找不到为空, 按新的作业抽取). 合同的补做规则见 contract."""
+    async def resume(
+        self,
+        eid: str,
+        document: DocumentRef,
+        engagement: Engagement,
+        job: Job | None,
+        requested: Requested | None = None,
+    ) -> DocumentRef:
+        """处理或补做一份文件: 对应了待补交的文件请求且需要按它定类型的 (见 retype) 按请求定类型 (assign); 否则
+        received 的从头处理; classified 的按已定类型接着抽取, job 为定下这次类型的 classify 留痕 (找不到为空, 按新的
+        作业抽取). 合同的补做规则见 contract."""
+        if requested is not None and retype(document, requested):
+            return await self.assign(eid, document, engagement, requested)
         if document.status == "received":
             return await self.process(eid, document, engagement)
         if job is None:
@@ -493,23 +539,32 @@ class DocumentIntake:
         )
 
     async def record(
-        self, eid: str, actor: str, document: DocumentRef, kind: DocumentType | None, reason: str | None
+        self,
+        eid: str,
+        actor: str,
+        document: DocumentRef,
+        kind: DocumentType | None,
+        reason: str | None,
+        request_id: str | None = None,
     ) -> str:
-        """分类的 data 留痕: action classify, payload 带 document_id, document_type (判断不了为空) 与理由.
-        返回留痕 ID, 用作之后抽取的作业号 (见 upload_run)."""
+        """分类的 data 留痕: action classify, payload 带 document_id, document_type (判断不了为空) 与理由; 按补交请求
+        定类型的另带 request_id (登记没改成时, 补做据此接着按请求定类型). 返回留痕 ID, 用作之后抽取的作业号."""
         label = kind.value if kind is not None else "无法判断"
+        payload: dict[str, object] = {
+            "action": "classify",
+            "document_id": document.id,
+            "document_type": kind.value if kind is not None else None,
+            "reason": reason,
+        }
+        if request_id is not None:
+            payload["request_id"] = request_id
         return await self.deps.trail.record(
             TrailEntry(
                 engagement_id=eid,
                 kind=TrailKind.data,
                 actor=actor,
                 summary=f"{document.file_name} 分类为 {label}",
-                payload={
-                    "action": "classify",
-                    "document_id": document.id,
-                    "document_type": kind.value if kind is not None else None,
-                    "reason": reason,
-                },
+                payload=payload,
                 created_at=datetime.now(UTC),
             )
         )

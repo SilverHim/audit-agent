@@ -4,6 +4,7 @@
 """
 
 import copy
+import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -12,6 +13,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.checkup import DataCheckup
 from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
@@ -54,6 +56,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
 
+logger = logging.getLogger(__name__)
 AWAITING_DATA = "data"  # 等财务数据就绪的等待载荷 {"awaiting": "data"} (p1_await_data, 需求 R10)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
 
@@ -552,8 +555,16 @@ class GraphNodes:
         单独成节点而不放进 p1_ingest: 恢复值没被消费时会交给同一节点的下一个 interrupt(), 即 DOC-04 失败后的等待,
         被当成复核决定 ID. 这里节点内只有这一个等待, 恢复值不会被别处取走.
         恢复时仍未确认 (绕过 /data/ready 恢复) 抛 LookupError.
+
+        进节点先由 A3 体检 (需求 R15; 体检结果已对应当前数据版本时跳过, 恢复与重放不重复): 缺的必需表各提一份补交
+        请求, 已确认就绪的 (如数据集载入) 也在这里第一次体检. 体检出错只记日志, 不影响等待与推进.
         """
-        readiness = await self.deps.data.readiness(state["engagement_id"])
+        eid = state["engagement_id"]
+        try:
+            await DataCheckup(self.deps).run_if_stale(eid)
+        except Exception:
+            logger.exception("P1 等数据时体检失败: %s", eid)
+        readiness = await self.deps.data.readiness(eid)
         if readiness.ready_at is None:
             interrupt({"awaiting": AWAITING_DATA})
             raise LookupError(f"{state['engagement_id']} 恢复时数据仍未确认就绪: 须经 POST /data/ready 确认后恢复")

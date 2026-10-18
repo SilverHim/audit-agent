@@ -1,6 +1,8 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
+import csv
+import functools
 import hashlib
 import json
 import tempfile
@@ -23,9 +25,13 @@ from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
 from backend.contracts.data import (
+    ApprovalLogRow,
+    CheckInputs,
+    CheckRun,
     ContractVersion,
     DataCheck,
     DataReadiness,
+    DataRequest,
     DataSource,
     ExtractionRecord,
     ImportSession,
@@ -1321,11 +1327,51 @@ SEEDED_STATS: dict[TableKind, TableStats] = {
 }
 
 
+DEMO_DATASET = Path(__file__).resolve().parents[1] / "data" / "demo"  # Numbat 演示数据集 (CSV)
+
+
+@functools.cache
+def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
+    """Numbat 演示数据集的科目表 (按名称归类), 试算表与总账 (读一次缓存), 体检汇总用."""
+    from backend.contracts import records
+    from backend.services.account_mapping import with_category
+
+    kinds: dict[TableKind, type[BaseModel]] = {
+        TableKind.accounts: records.Account,
+        TableKind.trial_balance: records.TrialBalanceRow,
+        TableKind.journal_entries: records.JournalEntry,
+    }
+    tables: dict[TableKind, tuple[BaseModel, ...]] = {}
+    for kind, model in kinds.items():
+        with (DEMO_DATASET / f"{kind}.csv").open(newline="", encoding="utf-8") as stream:
+            rows = [model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)]
+        tables[kind] = tuple(with_category(r) if isinstance(r, records.Account) else r for r in rows)
+    return tables
+
+
+@functools.cache
+def numbat_inputs(period_start: date, period_end: date) -> CheckInputs:
+    """Numbat 演示数据集的体检汇总 (按期间缓存)."""
+    from backend.services.data_quality import summarize
+
+    tables = numbat_tables()
+    return summarize(
+        cast(Any, tables[TableKind.accounts]),
+        cast(Any, tables[TableKind.trial_balance]),
+        cast(Any, tables[TableKind.journal_entries]),
+        period_start,
+        period_end,
+        dataset="demo",
+    )
+
+
 class FakeDataStore:
     """假数据管理存储: 数据版本, 就绪确认与各账表行数, 各项目共用.
 
     缺省模拟种子已载入整套数据集 (数据版本 1, 视同已确认就绪, 各表有行), 现有流程照旧越过 P1 开始前的等待;
     测试等数据就绪时传 ready=False, 并按需给 stats (没给的表行数为 0).
+    体检汇总 (check_inputs): 已就绪的以 Numbat 演示数据集为底, 未就绪的为空; write_tables 写过的科目表, 试算表,
+    总账换成写入的行, 审批日志按凭证号补进总账 (同真实实现).
     """
 
     def __init__(self, ready: bool = True, stats: Mapping[TableKind, TableStats] | None = None) -> None:
@@ -1336,7 +1382,12 @@ class FakeDataStore:
         self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
         self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
         self.check_results: list[DataCheck] = []  # 最近一次体检的结果
-        self.open_count = 0  # 待补交的请求数
+        self.last_run: CheckRun | None = None  # 最近一次体检
+        self.data_requests: dict[str, DataRequest] = {}  # 补交请求 ID → 请求
+        self.open_count = 0  # 另加的待补交请求数 (直接设概览用)
+        self.seeded = ready  # 体检汇总是否以 Numbat 演示数据集为底
+        self.tables: dict[TableKind, list[BaseModel]] = {}  # write_tables 写过的科目表, 试算表, 总账的当前行
+        self.approvals: list[ApprovalLogRow] = []  # 最新一版审批日志
         # write_tables 的每次调用: (各表的行, 其余关键字参数); 写入同时更新行数, 版本与数据版本
         self.written: list[tuple[dict[TableKind, list[BaseModel]], dict[str, Any]]] = []
         self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
@@ -1364,7 +1415,41 @@ class FakeDataStore:
         return list(self.check_results)
 
     async def open_requests(self, eid: str) -> int:
-        return self.open_count
+        return self.open_count + sum(r.status == "open" for r in self.data_requests.values())
+
+    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+        from backend.services.data_quality import summarize
+
+        if self.seeded and not self.tables and not self.approvals:
+            return numbat_inputs(period_start, period_end)
+        base: dict[TableKind, Sequence[BaseModel]] = dict(numbat_tables()) if self.seeded else {}
+        current = {**base, **self.tables}
+        journals = [cast(Any, row) for row in current.get(TableKind.journal_entries, ())]
+        for approval in self.approvals:
+            values = approval.model_dump(exclude_unset=True, exclude={"entry_no"})
+            journals = [j.model_copy(update=values) if j.entry_no == approval.entry_no else j for j in journals]
+        return summarize(
+            cast(Any, current.get(TableKind.accounts, ())),
+            cast(Any, current.get(TableKind.trial_balance, ())),
+            journals,
+            period_start,
+            period_end,
+            dataset="demo" if self.seeded else None,
+        )
+
+    async def check_run(self, eid: str) -> CheckRun | None:
+        return self.last_run
+
+    async def requests(self, eid: str) -> list[DataRequest]:
+        from backend.services.data_quality import request_order
+
+        return sorted(self.data_requests.values(), key=request_order)
+
+    async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
+        self.last_run = run
+        self.check_results = list(run.checks)
+        for request in requests:
+            self.data_requests[request.id] = request
 
     async def write_tables(
         self,
@@ -1389,6 +1474,11 @@ class FakeDataStore:
             "request_id": request_id,
         }
         self.written.append(({k: list(v) for k, v in tables.items()}, kwargs))
+        for kind, rows in tables.items():
+            if kind is TableKind.approval_log:
+                self.approvals = [cast(ApprovalLogRow, r) for r in rows]
+            elif kind in (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries):
+                self.tables[kind] = list(rows)
         self.data_version += 1
         for kind, rows in tables.items():
             if kind is TableKind.trial_balance:

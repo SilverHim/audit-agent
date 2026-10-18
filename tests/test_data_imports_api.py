@@ -177,7 +177,7 @@ async def test_commit_registers_original_writes_version_and_trail() -> None:
     }
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    [entry] = [e for e in trail.entries if e.kind is TrailKind.data]
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] == "import"]
     assert entry.payload == {
         "action": "import",
         "table_kind": "accounts",
@@ -288,7 +288,8 @@ async def test_launch_holds_lock_until_job_ends(caplog: pytest.LogCaptureFixture
     assert data.written[-1][1]["source"] == "xero"
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    assert [e.payload["action"] for e in trail.entries if e.kind is TrailKind.data] == ["sync"]
+    actions = [e.payload["action"] for e in trail.entries if e.kind is TrailKind.data]
+    assert actions.count("sync") == 1 and actions[0] == "sync"  # 其后是 A3 体检
 
     async def broken() -> None:
         raise RuntimeError("Xero 超时")
@@ -344,9 +345,13 @@ async def test_commit_retry_after_trail_failure_backfills_once(monkeypatch: pyte
     result = await service.commit_import(EID, preview.import_id, body, "U-1")
 
     assert result == ImportResult(kind=TableKind.accounts, records=1)
-    entries = [e for e in trail.entries if e.kind is TrailKind.data]
+    entries = [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] == "import"]
     assert [(e.idempotency_key, e.payload["records"]) for e in entries] == [(f"{EID}:data:v1:accounts", 1)]
     assert data.data_version == 1 and len(data.written) == 1
+    # 留痕不可用时体检照常存下 (留痕在重试时补写, 不重复)
+    assert data.last_run is not None and data.last_run.data_version == 1
+    checks = [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] == "check"]
+    assert len(checks) == 1
 
 
 async def test_sheet_change_cannot_touch_committed_import(monkeypatch: pytest.MonkeyPatch) -> None:

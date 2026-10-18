@@ -339,7 +339,7 @@ class TrailKind(StrEnum):
     deferral = "deferral"  # 人工标记或取消稍后处理
     conversation = "conversation"  # 审计助理的一轮问答
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
-    data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 补交请求, 确认数据已齐
+    data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
 
 
 class AgentId(StrEnum):

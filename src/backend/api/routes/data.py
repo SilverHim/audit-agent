@@ -4,10 +4,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
-from backend.api.deps import current_user, get_data_service, owned_engagement
+from backend.agents.base import AgentDeps
+from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
 from backend.api.schemas import ImportSheet
-from backend.contracts.data import DataReadiness, DataSummary, ImportCommit, ImportPreview, ImportResult, TableSchema
+from backend.contracts.data import (
+    DataReadiness,
+    DataRequest,
+    DataSummary,
+    ImportCommit,
+    ImportPreview,
+    ImportResult,
+    TableSchema,
+)
 from backend.contracts.models import Engagement, User
 from backend.services import data_import
 from backend.services.data_service import DataService, schemas
@@ -78,6 +87,17 @@ async def summary(
     """数据管理页的概览. processing 不为 0 时前端每 3 秒轮询."""
     async with catch_api():
         return await service.summary(engagement.id)
+
+
+@router.get("/requests")
+async def data_requests(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> list[DataRequest]:
+    """A3 提出的补交资料请求 (含已收到的), 按提出时间升序; status 为 open 的是待补交. 补交时账表走导入
+    (POST /data/imports), 文件走上传 (POST /documents), 都带 request_id."""
+    async with catch_api():
+        return await deps.data.requests(engagement.id)
 
 
 @router.post("/ready", status_code=202)

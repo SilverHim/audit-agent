@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import StrictInt, StrictStr
 
-from backend.contracts.models import Contract, Model
+from backend.contracts.models import Contract, DocumentType, Model
 from backend.contracts.records import AccountCategory, CategoryBasis
 
 
@@ -78,7 +78,9 @@ class CheckId(StrEnum):
     count_agrees_source = "count_agrees_source"  # 记录数与来源一致 {source, expected, received}
     mapping_complete = "mapping_complete"  # 科目都已归入标准分类 {mapped, total}
     preparer_approver_available = "preparer_approver_available"  # 有录入人与审批人 {source, missing_fields}
-    tb_agrees_statements = "tb_agrees_statements"  # 试算表与报表草稿一致 {difference_cents}
+    # 试算表与报表草稿一致 {statements: 已提供的报表草稿文件数}; 报表数字的抽取与勾稽归 FIN-12 (还没实现), 届时另给
+    # difference_cents
+    tb_agrees_statements = "tb_agrees_statements"
 
 
 # 体检结果: 通过, 不通过, 缺数据做不了, 还没做
@@ -91,7 +93,56 @@ class DataCheck(Model):
     id: CheckId  # 体检项
     status: CheckStatus  # 结果
     params: dict[str, Any] = {}  # 文案参数, 键见 CheckId
-    request_id: str | None = None  # 不通过时提出的补交请求
+    request_id: str | None = None  # 不通过或缺数据时对应的补交请求, 前端据此链到工作区
+
+
+class CheckRun(Model):
+    """最近一次体检 (表 data_checks: 每项只存最近一次; 历次结果在 data 留痕里)."""
+
+    data_version: int  # 体检时的数据版本
+    checked_at: datetime  # 体检时间, 同一次体检的各项相同
+    checks: list[DataCheck]  # 各项结果, 按 CheckId 顺序
+
+
+class CheckInputs(Model):
+    """体检要用的财务数据汇总 (DataStore.check_inputs, 由存储按 SQL 汇总); 体检规则见 services.data_quality."""
+
+    journal_rows: int = 0  # 总账分录行数
+    debit_cents: int = 0  # 全部分录的借方合计
+    credit_cents: int = 0  # 全部分录的贷方合计
+    movements: dict[str, int] = {}  # 审计期间内各科目分录的发生额 (借正), 期间内没有分录的科目不在其中
+    preparer_rows: int = 0  # 有录入人的分录行数; 连接器的占位值 (如 Xero 的 "xero") 与空串不算
+    approver_rows: int = 0  # 有审批人的分录行数; 空串不算
+    tb_current: dict[str, int] = {}  # 本期试算表各科目余额 (借正)
+    tb_prior: dict[str, int] = {}  # 上期试算表各科目余额
+    account_types: dict[str, str] = {}  # 科目代码 → 科目类别 (asset, liability, equity, revenue, expense)
+    account_categories: dict[str, AccountCategory | None] = {}  # 科目代码 → 标准分类, 未映射为空
+    dataset: str | None = None  # 数据集载入时的数据集名 (dataset_loads.dataset), 如 demo, xero/20261017-q1
+
+
+RequestKind = Literal["table", "document"]  # 补交的是账表 (走导入) 还是文件 (走上传)
+# 提出的原因: 就绪必需的表缺失, 来源不提供某些字段, 客户没提供
+RequestReason = Literal["missing_table", "field_unavailable", "not_provided"]
+RequestStatus = Literal["open", "received", "withdrawn"]  # 待补交, 已收到, 已撤回 (暂无自动撤回)
+
+
+class DataRequest(Model):
+    """A3 提出的补交资料请求 (表 data_requests). 同一项资料只有一个请求, ID 固定为 REQ-{表种类或文件类型};
+    收到后又缺了时重新打开 (status 回到 open, created_at 改为重新打开的时间, resolved_at 清空)."""
+
+    id: str  # REQ-{table_kind} 或 REQ-{document_type}, 如 REQ-approval_log
+    kind: RequestKind  # 账表或文件
+    table_kind: TableKind | None = None  # 账表请求的表种类
+    document_type: DocumentType | None = None  # 文件请求的文件类型
+    title: str  # 中文名称; 前端按 table_kind 或 document_type 本地化, 这里只作缺省
+    used_for: list[str] = []  # 要用这项资料的程序编号
+    reason_code: RequestReason  # 原因
+    reason_params: dict[str, Any] = {}  # 原因的参数: field_unavailable 为 {fields: [...], source}, 其余为空
+    format_hint: str | None = None  # 可接受的格式, 如 "csv, xlsx, xls"
+    status: RequestStatus = "open"  # 状态
+    raised_by: str = "A3"  # 提出者
+    created_at: datetime  # 提出 (或重新打开) 的时间
+    resolved_at: datetime | None = None  # 转为 received 的时间
 
 
 XeroStatus = Literal["connected", "not_connected", "expired"]  # Xero 连接状态: 已连接, 未连接, 授权过期

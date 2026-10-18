@@ -16,7 +16,8 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
-from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, unfinished
+from backend.agents.checkup import DataCheckup, checkup_entries
+from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
 from backend.contracts.data import (
     ContractVersion,
     DataReadiness,
@@ -278,12 +279,28 @@ class DataService:
         task.add_done_callback(finish)
 
     async def backfill_trails(self, eid: str) -> None:
-        """补写已提交而 data 留痕没写成的账表版本与抽取结果修改 (写入后留痕失败, 或进程在两者之间中断);
-        同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁之后调用."""
+        """补写已提交而 data 留痕没写成的账表版本, 抽取结果修改, 最近一次体检与补交请求的提出和收到 (写入后留痕
+        失败, 或进程在两者之间中断); 同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁之后调用."""
         versions = [v for v in await self.deps.data.versions(eid) if v.source != "dataset"]
         edits = [r for r in await self.deps.data.extraction_versions(eid) if r.field is not None]
         entries = [version_entry(eid, v) for v in versions] + [edit_entry(eid, r) for r in edits]
+        entries += checkup_entries(eid, await self.deps.data.check_run(eid), await self.deps.data.requests(eid))
         await record_transitions(self.deps.trail, entries)
+
+    async def checkup_if_stale(self, eid: str) -> None:
+        """最近一次体检已不对应当前数据时补做 (DataCheckup.run_if_stale); 持项目锁时调用, 出错只记日志."""
+        try:
+            await DataCheckup(self.deps).run_if_stale(eid)
+        except Exception:
+            logger.exception("数据体检失败: %s", eid)
+
+    async def checkup(self, eid: str) -> None:
+        """A3 跑一次体检并处理补交请求 (agents.checkup.DataCheckup); 在数据写操作或文件处理作业的最后调用 (持项目锁).
+        体检出错只记日志: 数据已提交, 不因体检失败报错; 下次写入或处理文件时再体检."""
+        try:
+            await DataCheckup(self.deps).run(eid)
+        except Exception:
+            logger.exception("数据体检失败: %s", eid)
 
     async def shutdown(self) -> None:
         """应用退出前取消后台作业并等它们结束 (锁随之释放, 见 launch 的完成回调)."""
@@ -334,7 +351,10 @@ class DataService:
             )
             for kind in sorted(tables, key=list(TableKind).index)
         ]
-        await record_transitions(self.deps.trail, [version_entry(eid, item) for item in written])
+        try:
+            await record_transitions(self.deps.trail, [version_entry(eid, item) for item in written])
+        finally:  # 留痕写失败 (数据已提交) 也照常体检
+            await self.checkup(eid)
         return version
 
     # ── 账表导入 (需求 R13) ──
@@ -408,6 +428,7 @@ class DataService:
                 chosen = (session.kind, session.sheet, session.date_format, session.mapping)
                 if chosen != (body.kind, body.sheet, body.date_format, body.mapping) or session.records is None:
                     raise DataRejected("INVALID_VALUE", f"导入 {import_id} 已提交")
+                await self.checkup_if_stale(eid)  # 上次提交后的体检失败或被跳过时补做
                 return ImportResult(kind=body.kind, records=session.records)
             try:
                 sheet = await asyncio.to_thread(read_sheet, session.file_name, raw, body.sheet)
@@ -545,8 +566,11 @@ class DataService:
         """上传文件 (POST /documents): 登记为证据文件 (先记 other, 内部副本, received, 来源 auditor_upload),
         每份写 data 留痕 (upload_entry; 同一文件只记一条, 重传时补上以前没写成的), 返回各文件的登记.
         处理没做完的文件 (ingest.unfinished: 新登记的; 以前登记了却没处理成, 如上次上传在留痕或批内后面的文件处失败;
-        分类后抽取前作业被取消) 随即由 A3 在后台处理或补做 (DocumentIntake), 作业持项目锁, 涉及这些文件;
-        已处理完的同一文件重复上传只返回已有的登记. 文件类型不支持 INVALID_VALUE; 锁定 423; 忙 409."""
+        分类后抽取前作业被取消) 随即由 A3 在后台处理或补做 (DocumentIntake), 作业持项目锁, 涉及这些文件, 做完体检;
+        已处理完的同一文件重复上传只返回已有的登记. request_id 是待补交的文件请求时, 在请求里就按请求定类型
+        (DocumentIntake.mark: classify 留痕与登记先落库, 后台只做抽取; ingest.retype: 含以前上传过而分不了类或类型不同的
+        同一文件), 返回改后的登记, 作业做完体检 (没有要处理的文件也体检); 补做没做完的文件时从上传留痕取回当时带的请求.
+        文件类型不支持 INVALID_VALUE; 锁定 423; 忙 409."""
         names = [PurePath(name.replace("\\", "/")).name or "upload" for name, _ in files]
         unsupported = [n for n in names if PurePath(n).suffix.lower() not in DOCUMENT_EXTENSIONS]
         if not files or unsupported:
@@ -556,6 +580,7 @@ class DataService:
         key = self._register(eid, ())
         try:
             await self.backfill_trails(eid)
+            requested = await self._requested(eid, request_id)
             documents: list[DocumentRef] = []
             fresh: list[DocumentRef] = []
             for name, (_, data) in zip(names, files, strict=True):
@@ -570,74 +595,140 @@ class DataService:
                 )
                 documents.append(document)
                 await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
-                if unfinished(document) and all(d.id != document.id for d in fresh):
+            jobs, wanted = await self._resume_info(eid, documents)
+            for document in documents:
+                pending = unfinished(document) or any(
+                    r is not None and retype(document, r) for r in (requested, wanted.get(document.id))
+                )
+                if pending and all(d.id != document.id for d in fresh):
                     fresh.append(document)
-            jobs = await self._classify_jobs(eid, fresh)
+            if requested is not None:  # 按请求定类型先落库, 作业开始前中断也不丢 (补做按已定类型接着做)
+                intake = DocumentIntake(self.deps)
+                for index, document in enumerate(fresh):
+                    if retype(document, requested):
+                        fresh[index], jobs[document.id] = await intake.mark(eid, document, requested)
+                        documents = [fresh[index] if d.id == document.id else d for d in documents]
+                wanted = {}
             self.jobs[eid][key] = frozenset(d.id for d in fresh)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
             raise
-        if not fresh:  # 都是已处理完的文件: 不再处理
+        if not fresh and requested is None:  # 都是已处理完的文件: 不再处理
             self._unregister(eid, key)
             self.runner.release(eid)
             return documents
-        self._spawn(eid, key, self._intake(eid, engagement, fresh, jobs))
+        self._spawn(eid, key, self._intake(eid, engagement, fresh, jobs, wanted))
         return documents
 
     def _intake(
-        self, eid: str, engagement: Engagement, documents: Sequence[DocumentRef], jobs: Mapping[str, Job]
+        self,
+        eid: str,
+        engagement: Engagement,
+        documents: Sequence[DocumentRef],
+        jobs: Mapping[str, Job],
+        requested: Mapping[str, Requested],
     ) -> Callable[[], Awaitable[None]]:
-        """后台逐份处理或补做文件的作业; jobs 为各文件定下当前类型的 classify 留痕 (见 _classify_jobs)."""
+        """后台逐份处理或补做文件的作业, 做完跑一次体检; jobs 为各文件定下当前类型的 classify 留痕, requested 为各文件
+        上传时对应的待补交文件请求 (见 _resume_info, DocumentIntake.resume)."""
 
         async def process() -> None:
             intake = DocumentIntake(self.deps)
             for document in documents:
-                await intake.resume(eid, document, engagement, jobs.get(document.id))
+                await intake.resume(eid, document, engagement, jobs.get(document.id), requested.get(document.id))
+            await self.checkup(eid)
 
         return process
 
-    async def _classify_jobs(self, eid: str, documents: Sequence[DocumentRef]) -> dict[str, Job]:
-        """已分类而没抽取完的文件 → 定下它当前类型的那条 classify 留痕 (最近一条同文件同类型的); 补做抽取时沿用它的
-        ID 作作业号, 以它的时间判断合同之后有没有被改动过 (见 DocumentIntake.contract). 找不到的不在其中."""
+    async def _requested(self, eid: str, request_id: str | None) -> Requested | None:
+        """上传带的 request_id 是待补交的文件请求时, 返回它的 ID 与文件类型; 不是 (没给, 不存在, 已收到, 是账表请求)
+        为 None, request_id 照样记在上传留痕里."""
+        if request_id is None:
+            return None
+        found = next((r for r in await self.deps.data.requests(eid) if r.id == request_id), None)
+        if found is None or found.status != "open" or found.document_type is None:
+            return None
+        return Requested(found.id, found.document_type)
+
+    async def _resume_info(
+        self, eid: str, documents: Sequence[DocumentRef]
+    ) -> tuple[dict[str, Job], dict[str, Requested]]:
+        """补做要接上的信息, 从 data 留痕里找: (1) 已分类而没抽取完的文件 → 定下它当前类型的那条 classify 留痕 (最近
+        一条同文件同类型的), 补做抽取时沿用它的 ID 作作业号, 以它的时间判断合同之后有没有被改动过 (见
+        DocumentIntake.contract); (2) 各文件最近一次类型决定所对应的待补交文件请求: 有 classify 留痕的看最近一条带不带
+        request_id (按请求定类型时带; 之后审计师或 A3 另定的类型不带, 以后来的为准), 没有的看上传留痕带的 request_id;
+        仍为 open 的文件请求才算. 调用方再用 ingest.retype 判断这次决定是否还没落到登记上 (没落上的照样按请求定类型).
+        找不到的不在其中."""
+        if not documents:
+            return {}, {}
         pending = {d.id: d.type.value for d in documents if d.status == "classified"}
-        if not pending:
-            return {}
+        ids = {d.id for d in documents}
         jobs: dict[str, Job] = {}
+        uploads: dict[str, str] = {}
+        decided: dict[str, str | None] = {}  # 最近一条 classify 留痕带的 request_id
         for entry in await all_of_kind(self.deps.trail, eid, TrailKind.data):
             document_id = entry.payload.get("document_id")
+            action = entry.payload.get("action")
+            if action == "upload" and document_id in ids and entry.payload.get("request_id"):
+                uploads[document_id] = str(entry.payload["request_id"])
+            if action == "classify" and document_id in ids:
+                found = entry.payload.get("request_id")
+                decided[document_id] = str(found) if found else None
             if (
-                entry.payload.get("action") == "classify"
+                action == "classify"
                 and document_id in pending
                 and entry.payload.get("document_type") == pending[document_id]
                 and entry.id is not None
                 and entry.created_at is not None
             ):
                 jobs[document_id] = Job(entry.id, entry.created_at)  # 按写入顺序, 后写的为准
-        return jobs
+        open_types = {r.id: r.document_type for r in await self.deps.data.requests(eid) if r.status == "open"}
+        latest = {doc: decided[doc] if doc in decided else uploads.get(doc) for doc in ids}
+        requested = {
+            doc: Requested(rid, kind)
+            for doc, rid in latest.items()
+            if rid is not None and (kind := open_types.get(rid)) is not None
+        }
+        return jobs, requested
 
     async def recover(self) -> None:
         """应用启动时 (runner.recover 之后) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
-        上次作业被取消或进程退出时留下), 处理前补写缺的上传留痕 (upload_entry). 项目已锁定的跳过; 项目锁正被占用
-        (如图在继续执行) 的这次跳过, 等下次上传或指定类型时补做. 一个项目出错只记日志, 不影响其他项目."""
+        上次作业被取消或进程退出时留下; 另含按请求定类型没落到登记上的, 见 _resume_info), 处理前补写缺的上传留痕
+        (upload_entry), 按请求定类型, 做完体检; 没有要补做的文件时, 体检结果已不对应当前数据的补做体检 (上次体检
+        失败). 项目已锁定的跳过; 项目锁正被占用 (如图在继续执行) 的这次跳过, 等下次上传或指定类型时补做.
+        一个项目出错只记日志, 不影响其他项目."""
         for engagement in await self.deps.engagement_store.list():
             eid = engagement.id
             if engagement.locked or self.runner.is_running(eid):
                 continue
             try:
-                documents = [d for d in await self.deps.financial_store.documents(eid) if unfinished(d)]
-                if not documents:
-                    continue
+                uploads = [
+                    d
+                    for d in await self.deps.financial_store.documents(eid)
+                    if d.channel == "auditor_upload" and d.uploaded_by is not None
+                ]
                 self.runner.acquire(eid)
+                try:
+                    _, decided = await self._resume_info(eid, uploads)
+                except BaseException:
+                    self.runner.release(eid)
+                    raise
+                documents = [d for d in uploads if unfinished(d) or (d.id in decided and retype(d, decided[d.id]))]
+                if not documents:
+                    try:
+                        await self.checkup_if_stale(eid)
+                    finally:
+                        self.runner.release(eid)
+                    continue
                 key = self._register(eid, (d.id for d in documents))
                 try:
                     await record_transitions(self.deps.trail, [upload_entry(eid, d) for d in documents])
-                    jobs = await self._classify_jobs(eid, documents)
+                    jobs, requested = await self._resume_info(eid, documents)
                 except BaseException:
                     self._unregister(eid, key)
                     self.runner.release(eid)
                     raise
-                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs))
+                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested))
             except Exception:
                 logger.exception("补做文件处理失败: %s", eid)
 
@@ -670,6 +761,7 @@ class DataService:
 
         async def extract() -> None:
             await intake.classified(eid, updated, kind, engagement, job)
+            await self.checkup(eid)
 
         self._spawn(eid, key, extract)
         return updated

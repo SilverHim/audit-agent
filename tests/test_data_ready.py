@@ -130,7 +130,7 @@ async def test_ready_resumes_into_p1_analysis() -> None:
     doc04 = max((r for r in store.rows if getattr(r, "id", None) == "DOC-04"), key=lambda r: r.version)
     assert getattr(doc04, "status", None) is ProcedureStatus.completed
     assert data.confirm_calls == [(EID, "U-1")]
-    assert data_trail(runner) == [{"action": "ready"}]
+    assert [p for p in data_trail(runner) if p["action"] == "ready"] == [{"action": "ready"}]  # 体检与请求的另见 R15
     assert (again.status_code, again.json()["detail"]["code"]) == (409, "NOT_AWAITING_DATA")
     overview = await GraphStateQuery(runner.app, runner.deps, runner).overview(EID)
     assert (overview.awaiting_data, overview.missing_tables) == (False, [])

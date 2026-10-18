@@ -534,3 +534,70 @@ async def test_contract_terms_read_in_extraction_order_and_edit_retry(
     assert await service.edit_contract(first.id, "CON-778", edit, "U-1") == current
     history = await service.deps.financial_store.contract_history(first.id, "CON-778")
     assert [v.version for v in history] == [1, 2] and history[0].contract == contract
+
+
+async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """需求 R15 (真实库): check_inputs 的 SQL 汇总与 data_quality.summarize 一致; 验收: Numbat 经 Xero 同步后出现
+    审批日志, 报表草稿两条请求, 导入审批日志与上传报表草稿后都转为 received; 体检与请求留痕不重复."""
+    import asyncio
+
+    from backend.adapters.xero_dataset import CREATED_BY
+    from backend.contracts.models import TrailKind
+    from tests.fakes import numbat_inputs, numbat_tables
+    from tests.test_data_checkup import approval_log_csv
+
+    _, (synced, loaded), loader, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    period = (date(2025, 7, 1), date(2026, 6, 30))
+    await loader.load(loaded.id, "demo")
+    assert await service.deps.data.check_inputs(loaded.id, *period) == numbat_inputs(*period)
+
+    tables = {kind: list(numbat_tables()[kind]) for kind in (TableKind.accounts, TableKind.trial_balance)}
+    tables[TableKind.journal_entries] = [
+        cast(JournalEntry, j).model_copy(update={"created_by": CREATED_BY, "approved_by": None})
+        for j in numbat_tables()[TableKind.journal_entries]
+    ]
+    async with service.holding(synced.id, [k.value for k in tables]):
+        await service.write_tables(synced.id, tables, source="xero", actor="U-1")
+    requests = await service.deps.data.requests(synced.id)
+    assert [(r.id, r.reason_code, r.reason_params, r.status) for r in requests] == [
+        ("REQ-approval_log", "field_unavailable", {"fields": ["created_by", "approved_by"], "source": "Xero"}, "open"),
+        ("REQ-financial_statements", "not_provided", {}, "open"),
+    ]
+    run = await service.deps.data.check_run(synced.id)
+    assert run is not None and run.data_version == 1
+    assert {c.id.value: c.status for c in run.checks}["journals_agree_tb"] == "passed"
+    assert await service.deps.data.open_requests(synced.id) == 2
+
+    preview = await service.start_import(
+        synced.id, "approval_log.csv", approval_log_csv(), actor="U-1", request_id="REQ-approval_log"
+    )
+    mapping = {"entry_no": "entry_no", "created_by": "created_by", "approved_by": "approved_by"}
+    body = ImportCommit(kind=TableKind.approval_log, sheet=preview.sheet, date_format="ymd", mapping=mapping)
+    await service.commit_import(synced.id, preview.import_id, body, "U-1")
+    await service.upload_documents(
+        synced.id, [("draft statements.pdf", b"%PDF draft")], actor="U-1", request_id="REQ-financial_statements"
+    )
+    await asyncio.gather(*list(service.tasks))
+
+    assert {r.id: r.status for r in await service.deps.data.requests(synced.id)} == {
+        "REQ-approval_log": "received",
+        "REQ-financial_statements": "received",
+    }
+    assert await service.deps.data.open_requests(synced.id) == 0
+    checks = {c.id.value: c.status for c in await service.deps.data.checks(synced.id)}
+    assert (checks["preparer_approver_available"], checks["tb_agrees_statements"]) == ("passed", "pending")
+
+    async def checkup_actions() -> list[str]:
+        entries = await service.deps.trail.list(synced.id, TrailKind.data, limit=500)
+        return [
+            e.payload["action"]
+            for e in entries
+            if e.payload["action"] in {"check", "request_raised", "request_received"}
+        ]
+
+    before = await checkup_actions()
+    async with service.holding(synced.id, []):  # 补写: 同键已有的不再写
+        pass
+    assert await checkup_actions() == before
+    assert before.count("check") == 3 and before.count("request_raised") == 2 and before.count("request_received") == 2
