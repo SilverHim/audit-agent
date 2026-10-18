@@ -15,12 +15,13 @@ from pydantic import BaseModel, ValidationError
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
 from backend.core.config import get_settings
-from backend.services.judgment_engine import output_model
+from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fixture_sets import XERO, FixtureSet
 from tests.test_knowledge import document_pointers
 
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+EVIDENCE_TYPES = {t.value for t in DOCUMENT_EVIDENCE}  # 能作证据的文件类型, 判断引擎的文件指针映射为准
 
 
 def fixture_model(library: ProcedureLibrary, procedure_id: str, fixture_key: str) -> type[BaseModel]:
@@ -34,7 +35,8 @@ def fixture_model(library: ProcedureLibrary, procedure_id: str, fixture_key: str
 
 def fixture_problems(fs: FixtureSet, library: ProcedureLibrary = LIBRARY) -> list[str]:
     """不合格的 fixture (只写文件, 程序与指针 ID, 不写内容):
-    (b) document 指针的 source_id 须在 manifest.documents 中, 1 ≤ page ≤ page_count, 所指文件类型不是 other;
+    (b) document 指针的 source_id 须在 manifest.documents 中, 1 ≤ page ≤ page_count, 所指文件类型能作证据
+    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如 financial_statements 不作证据, 判断引报表行);
     (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序, 文件须能按该程序的输出模型解析.
     fixture 根不存在或为空时没有问题."""
     problems: list[str] = []
@@ -58,8 +60,8 @@ def fixture_problems(fs: FixtureSet, library: ProcedureLibrary = LIBRARY) -> lis
                     problems.append(f"{name}: {pointer['source_id']} 不在 manifest.documents 中")
                 elif not isinstance(pointer.get("page"), int) or not 1 <= pointer["page"] <= entry["page_count"]:
                     problems.append(f"{name}: {pointer['source_id']} 的页码超出 1 至 {entry['page_count']}")
-                elif entry["type"] == "other":
-                    problems.append(f"{name}: {pointer['source_id']} 指向类型为 other 的文件")
+                elif entry["type"] not in EVIDENCE_TYPES:
+                    problems.append(f"{name}: {pointer['source_id']} 指向不作证据的 {entry['type']} 类文件")
     return problems
 
 
@@ -78,10 +80,10 @@ def write(root: Path, rel: str, value: Any) -> None:
 
 def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     """自测: 合格的 CSH-02 fixture 不报; 未知程序目录, 没有 llm 段的程序, 不符合输出模型, 指针不在 manifest,
-    页码超出 (含 0 与空), 指向 other 类型的文件都报出, 不抛异常."""
+    页码超出 (含 0 与空), 指向不作证据的文件 (待审财报 fs_v1.pdf) 都报出, 不抛异常."""
     documents = XERO.documents()
     reply = next(d for d in documents.values() if d["type"] == "confirmation")
-    other = next(d for d in documents.values() if d["type"] == "other")
+    statements = next(d for d in documents.values() if d["type"] == "financial_statements")
     good = json.loads((get_settings().LLM_FIXTURES_ROOT / "CSH-02" / "BA-01.json").read_text(encoding="utf-8"))
 
     def with_pointer(document_id: str, page: int | None) -> dict[str, Any]:
@@ -101,18 +103,19 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     write(root, "CSH-02/PAGE.json", with_pointer(reply["document_id"], reply["page_count"] + 1))
     write(root, "CSH-02/PAGE0.json", with_pointer(reply["document_id"], 0))
     write(root, "CSH-02/PAGENULL.json", with_pointer(reply["document_id"], None))  # EvidencePointer 允许 page 为空
-    write(root, "CSH-02/OTHER.json", with_pointer(other["document_id"], 1))
+    write(root, "CSH-02/STATEMENTS.json", with_pointer(statements["document_id"], 1))
     problems = fixture_problems(replace(XERO, fixtures=root))
     assert sorted({p.split(":")[0] for p in problems}) == [  # 每个不合格的指针各报一条, 这里按文件看
         "ACC-01",
         "CSH-02/BAD",
         "CSH-02/MISSING",
-        "CSH-02/OTHER",
         "CSH-02/PAGE",
         "CSH-02/PAGE0",
         "CSH-02/PAGENULL",
+        "CSH-02/STATEMENTS",
         "X-UNKNOWN",
     ]
+    assert f"CSH-02/STATEMENTS: {statements['document_id']} 指向不作证据的 financial_statements 类文件" in problems
 
 
 def test_gen09_second_round_uses_verdict_model() -> None:

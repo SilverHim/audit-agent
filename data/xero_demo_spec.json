@@ -339,7 +339,7 @@
       "reliability": "internal_copy",
       "document_date": "2026-08-27",
       "related_ids": [],
-      "registration": "engagement",
+      "registration": "acceptance",
       "index": true,
       "xero_refs": [],
       "footer": "Demo Company (AU) Pty Ltd | Appointment of auditor",
@@ -490,7 +490,7 @@
       "reliability": "external_copy",
       "document_date": "2026-08-28",
       "related_ids": [],
-      "registration": "engagement",
+      "registration": "acceptance",
       "index": true,
       "xero_refs": [],
       "footer": "Tessellate Audit Partners | Audit engagement letter | Demo Company (AU) Pty Ltd",
@@ -612,7 +612,7 @@
       "reliability": "external_copy",
       "document_date": "2026-09-01",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": false,
       "xero_refs": [
         "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
@@ -693,7 +693,7 @@
       "reliability": "external_copy",
       "document_date": "2026-06-24",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": false,
       "xero_refs": [
         "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
@@ -766,7 +766,7 @@
       "reliability": "external_copy",
       "document_date": "2026-08-10",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": false,
       "xero_refs": [
         "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
@@ -981,7 +981,7 @@
         "XJ-518",
         "XJ-593"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-420",
@@ -1044,7 +1044,7 @@
       "related_ids": [
         "ACN-900043030"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [],
       "footer": "Victoria Property Agency Pty Ltd | 23 Main Street",
@@ -1097,7 +1097,7 @@
         "ACN-900043030",
         "XJ-613"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-613"
@@ -1174,7 +1174,7 @@
       "related_ids": [
         "BT-090-0131"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "BT-090-0131"
@@ -1219,7 +1219,7 @@
       "related_ids": [
         "XJ-397"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-397"
@@ -1289,7 +1289,7 @@
         "XJ-397",
         "CLIENT-XERO-3C1332BB-Q1"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-397"
@@ -1341,7 +1341,7 @@
       "related_ids": [
         "CLIENT-XERO-3C1332BB-Q1"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [],
       "footer": "Going concern assessment | Demo Company (AU) Pty Ltd",
@@ -1466,7 +1466,7 @@
         "BT-090-0107",
         "BT-090-0130"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "BT-090-0107",
@@ -1522,7 +1522,7 @@
         "XJ-626",
         "XJ-676"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-499",
@@ -1574,7 +1574,7 @@
       "related_ids": [
         "E003"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [],
       "footer": "Expense claim E003 | Demo Company (AU) Pty Ltd",
@@ -1643,7 +1643,7 @@
         "805",
         "826"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "804",
@@ -1714,7 +1714,7 @@
       "related_ids": [
         "XJ-499"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-499"
@@ -1760,7 +1760,7 @@
       "related_ids": [
         "XJ-720"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-720"
@@ -1802,14 +1802,14 @@
     },
     {
       "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
-      "type": "supplier_invoice",
+      "type": "invoice",
       "reliability": "external_copy",
       "document_date": "2026-09-05",
       "related_ids": [
         "XJ-548",
         "BT-090-0097"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-548",
@@ -1853,7 +1853,7 @@
         "XJ-647",
         "BT-090-0092"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "XJ-647",
@@ -1895,7 +1895,7 @@
       "related_ids": [
         "BT-090-0099"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "index": true,
       "xero_refs": [
         "BT-090-0099"
@@ -1932,13 +1932,13 @@
     },
     {
       "path": "financial_statements/fs_v1.pdf",
-      "type": "other",
+      "type": "financial_statements",
       "reliability": "internal_original",
       "document_date": "2026-10-22",
       "related_ids": [
         "FS"
       ],
-      "registration": "load",
+      "registration": "statements",
       "index": true,
       "xero_refs": [],
       "footer": "Demo Company (AU) Pty Ltd | Financial report for the financial year ended 30 September 2026",
@@ -2096,7 +2096,7 @@
       "reliability": "internal_original",
       "document_date": "2026-10-23",
       "related_ids": [],
-      "registration": "upload",
+      "registration": "manual",
       "index": false,
       "xero_refs": [],
       "footer": "Demo Company (AU) Pty Ltd | Management representation letter",

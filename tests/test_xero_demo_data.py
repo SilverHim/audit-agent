@@ -88,6 +88,8 @@ def test_no_process_content() -> None:
         "原稿",
         "本轮",
         "(T9)",
+        "supplier_invoice",  # 供应商发票用上游的 invoice (第 9 批)
+        "load_engagement_documents",  # 承接文件改为上传, 端口作废
     ):
         assert text.count(word) == 0, word
     assert not re.search(r"`(?:s\d+[a-z]?_\w+|r\d_\w+|base)\.py`", text)  # 复算脚本名
@@ -324,11 +326,11 @@ INDEX_ROWS = [
     "| documents/evidence/accounting_policies_extract.pdf | internal_record | internal_original "
     "| 2026-07-01 | XJ-499 |",
     "| documents/evidence/diisr_email.pdf | correspondence | external_copy | 2026-10-13 | XJ-720 |",
-    "| documents/evidence/smart_agency_invoice_SM0195-70135.pdf | supplier_invoice | external_copy | 2026-09-05 "
+    "| documents/evidence/smart_agency_invoice_SM0195-70135.pdf | invoice | external_copy | 2026-09-05 "
     "| XJ-548;BT-090-0097 |",
     "| documents/evidence/ridgeway_order_CRM08-12.pdf | agreement | external_copy | 2026-10-02 | XJ-647;BT-090-0092 |",
     "| documents/evidence/jakaranda_quote.pdf | internal_record | internal_copy | 2026-10-08 | BT-090-0099 |",
-    "| financial_statements/fs_v1.pdf | other | internal_original | 2026-10-22 | FS |",
+    "| financial_statements/fs_v1.pdf | financial_statements | internal_original | 2026-10-22 | FS |",
 ]
 # 待审财报 18 行: (code, amount_cents, sign, account_codes, prior_amount_cents)
 FS_ROWS = [
@@ -364,10 +366,12 @@ def test_formats_section() -> None:
         "E003 Odette Garrison 2026-07-20 full_time 14 250000."
     ) in s95
     for token in (
-        "load 20 (3 份收入合同加 index.csv 中除承接文件外的 17 份, 载入时登记), engagement 2",
+        "acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传)",
+        "fieldwork 19 (3 份收入合同加 index.csv 中除承接文件与 fs_v1.pdf 外的 16 份",
+        "statements 1 (fs_v1.pdf, 完成阶段按补交请求 REQ-financial_statements 上传)",
+        "manual 1 (声明书",
         "registry 4",
         "confirmation 2",
-        "upload 1",
         "`SR-{发票号}`",
         "gross_per_period_cents",
         "communicated_at 2026-10-19T04:00:00Z",
@@ -383,7 +387,6 @@ def test_formats_section() -> None:
         "load_adjustments(eid, dataset, entry_nos=None)",
         "adjustment_entries(dataset) -> list[AdjustmentEntrySummary]",
         "adjustment_entry_nos(dataset) -> list[str]",
-        "load_engagement_documents(eid, dataset)",
         "supplements: Path | None = None, allow_injected: bool = False",
         "`RegistrySource.abn(eid, abn)`, `asic_company(eid, acn)`, `asic_extract(eid, acn)`, "
         "`asic_person(eid, family_name, given_name, birth_date)`",
@@ -1221,12 +1224,12 @@ def manifest_documents() -> dict[str, tuple[object, ...]]:
 def test_documents_in_manifest_and_index() -> None:
     docs = manifest_documents()
     expected = {
-        "documents/engagement/appointment.pdf": ("minutes", "internal_copy", "2026-08-27", "engagement", 4, []),
+        "documents/engagement/appointment.pdf": ("minutes", "internal_copy", "2026-08-27", "acceptance", 4, []),
         "documents/engagement/engagement_letter.pdf": (
             "engagement_letter",
             "external_copy",
             "2026-08-28",
-            "engagement",
+            "acceptance",
             3,
             [],
         ),
@@ -1246,9 +1249,9 @@ def test_documents_in_manifest_and_index() -> None:
             f"confirmations/{n}.pdf": ("confirmation", "external_original", "2026-09-30", "confirmation", 2, [])
             for n in ("12345678", "12345679")
         },
-        "contracts/CON-X01.pdf": ("contract", "external_copy", "2026-09-01", "load", 3, []),
-        "contracts/CON-X02.pdf": ("contract", "external_copy", "2026-06-24", "load", 3, []),
-        "contracts/CON-X03.pdf": ("contract", "external_copy", "2026-08-10", "load", 3, []),
+        "contracts/CON-X01.pdf": ("contract", "external_copy", "2026-09-01", "fieldwork", 3, []),
+        "contracts/CON-X02.pdf": ("contract", "external_copy", "2026-06-24", "fieldwork", 3, []),
+        "contracts/CON-X03.pdf": ("contract", "external_copy", "2026-08-10", "fieldwork", 3, []),
     }
     assert {path: docs[path] for path in expected} == expected
     pages = [v[4] for v in expected.values()]
@@ -1776,7 +1779,7 @@ def test_r66_index_rows_and_manifest() -> None:
     ]
     docs = manifest_documents()
     new = [r.split(",")[0] for r in rows[3:11]]
-    assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 12  # type: ignore[call-overload]
+    assert {docs[p][3] for p in new} == {"fieldwork"} and sum(int(docs[p][4]) for p in new) == 12  # type: ignore[call-overload]
 
 
 def test_index_problems_are_reported(tmp_path: Path) -> None:
@@ -1900,13 +1903,13 @@ def test_r67_index_rows_and_manifest() -> None:
         f"{ev}payroll_register_terms.pdf,internal_record,internal_original,2026-09-30,804;805;826",
         f"{ev}accounting_policies_extract.pdf,internal_record,internal_original,2026-07-01,XJ-499",
         f"{ev}diisr_email.pdf,correspondence,external_copy,2026-10-13,XJ-720",
-        f"{ev}smart_agency_invoice_SM0195-70135.pdf,supplier_invoice,external_copy,2026-09-05,XJ-548;BT-090-0097",
+        f"{ev}smart_agency_invoice_SM0195-70135.pdf,invoice,external_copy,2026-09-05,XJ-548;BT-090-0097",
         f"{ev}ridgeway_order_CRM08-12.pdf,agreement,external_copy,2026-10-02,XJ-647;BT-090-0092",
         f"{ev}jakaranda_quote.pdf,internal_record,internal_copy,2026-10-08,BT-090-0099",
     ]
     docs = manifest_documents()
     new = [r.split(",")[0] for r in rows[11:19]]
-    assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 10  # type: ignore[call-overload]
+    assert {docs[p][3] for p in new} == {"fieldwork"} and sum(int(docs[p][4]) for p in new) == 10  # type: ignore[call-overload]
 
 
 def test_payroll_and_adjustments_tables() -> None:
@@ -2280,27 +2283,30 @@ def test_representation_letter() -> None:
         "representation_letter",
         "internal_original",
         "2026-10-23",
-        "upload",
+        "manual",
         2,
     )
 
 
 def test_r68_index_rows_and_counts() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 20 and rows[19] == "financial_statements/fs_v1.pdf,other,internal_original,2026-10-22,FS"
+    assert len(rows) == 20 and rows[19] == (
+        "financial_statements/fs_v1.pdf,financial_statements,internal_original,2026-10-22,FS"
+    )
     assert not any(r.startswith("representation/") for r in rows)  # 声明书经上传接口登记, 不进 index.csv
     docs = manifest_documents()
-    assert docs[generator.FS_PDF][:5] == ("other", "internal_original", "2026-10-22", "load", 4)
+    assert docs[generator.FS_PDF][:5] == ("financial_statements", "internal_original", "2026-10-22", "statements", 4)
     manifest = read("manifest.json")
     assert checker.check_document_counts(SUPPLEMENTS, manifest) == []  # type: ignore[arg-type]
     registrations = [d[3] for d in docs.values()]
     assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 55  # type: ignore[call-overload]
     assert {r: registrations.count(r) for r in set(registrations)} == {
-        "load": 20,
-        "engagement": 2,
+        "acceptance": 2,
+        "fieldwork": 19,
+        "statements": 1,
+        "manual": 1,
         "registry": 4,
         "confirmation": 2,
-        "upload": 1,
     }
     fewer = {**manifest, "documents": manifest["documents"][1:]}  # type: ignore[index]
     assert len(checker.check_document_counts(SUPPLEMENTS, fewer)) == 1

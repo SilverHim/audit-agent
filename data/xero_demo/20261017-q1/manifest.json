@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "58e4442c9442299cb570b341e2e9c5c2edb661ad033e73f6e0a06e75bf1d8b2e",
+  "spec_sha256": "3234e2ca564ad2376109b42db99a38f612f5f8394812007ca64e8f0ce8c081b2",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -299,7 +299,7 @@
     },
     {
       "path": "documents/index.csv",
-      "sha256": "8a632591c522d9737836b0dafdce688abf2e54533081f5c623d12e86641a8a91",
+      "sha256": "7f384d4faed0dfbeaf384738efd14b74f5bd55fbdcac26aa649f4ca85b385511",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -524,7 +524,7 @@
       "page_count": 3,
       "document_date": "2026-09-01",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -536,7 +536,7 @@
       "page_count": 3,
       "document_date": "2026-06-24",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -548,7 +548,7 @@
       "page_count": 3,
       "document_date": "2026-08-10",
       "related_ids": [],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -560,7 +560,7 @@
       "page_count": 4,
       "document_date": "2026-08-27",
       "related_ids": [],
-      "registration": "engagement",
+      "registration": "acceptance",
       "synthetic": true
     },
     {
@@ -572,7 +572,7 @@
       "page_count": 3,
       "document_date": "2026-08-28",
       "related_ids": [],
-      "registration": "engagement",
+      "registration": "acceptance",
       "synthetic": true
     },
     {
@@ -586,7 +586,7 @@
       "related_ids": [
         "XJ-499"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -600,7 +600,7 @@
       "related_ids": [
         "XJ-720"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -614,7 +614,7 @@
       "related_ids": [
         "XJ-397"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -629,7 +629,7 @@
         "XJ-397",
         "CLIENT-XERO-3C1332BB-Q1"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -645,7 +645,7 @@
         "BT-090-0107",
         "BT-090-0130"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -659,7 +659,7 @@
       "related_ids": [
         "E003"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -675,7 +675,7 @@
         "XJ-626",
         "XJ-676"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -689,7 +689,7 @@
       "related_ids": [
         "CLIENT-XERO-3C1332BB-Q1"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -703,7 +703,7 @@
       "related_ids": [
         "BT-090-0099"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -719,7 +719,7 @@
         "805",
         "826"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -734,14 +734,14 @@
         "XJ-647",
         "BT-090-0092"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
       "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
       "sha256": "0db690a7c05e22d9f9b3f9f283a54da245aab3295bc46d71044cb67f5c1c1f90",
       "document_id": "DOC-0db690a7c05e",
-      "type": "supplier_invoice",
+      "type": "invoice",
       "reliability": "external_copy",
       "page_count": 1,
       "document_date": "2026-09-05",
@@ -749,7 +749,7 @@
         "XJ-548",
         "BT-090-0097"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -764,7 +764,7 @@
         "ACN-900043030",
         "XJ-613"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -778,7 +778,7 @@
       "related_ids": [
         "BT-090-0131"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -795,7 +795,7 @@
         "XJ-518",
         "XJ-593"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
@@ -809,21 +809,21 @@
       "related_ids": [
         "ACN-900043030"
       ],
-      "registration": "load",
+      "registration": "fieldwork",
       "synthetic": true
     },
     {
       "path": "financial_statements/fs_v1.pdf",
       "sha256": "015c6bb63db8a4d968a44691f5a9d277e3599e906a8afc2869f3819104e00581",
       "document_id": "DOC-015c6bb63db8",
-      "type": "other",
+      "type": "financial_statements",
       "reliability": "internal_original",
       "page_count": 4,
       "document_date": "2026-10-22",
       "related_ids": [
         "FS"
       ],
-      "registration": "load",
+      "registration": "statements",
       "synthetic": true
     },
     {
@@ -883,7 +883,7 @@
       "page_count": 2,
       "document_date": "2026-10-23",
       "related_ids": [],
-      "registration": "upload",
+      "registration": "manual",
       "synthetic": true
     }
   ]

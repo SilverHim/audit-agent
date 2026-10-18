@@ -972,7 +972,9 @@ def check_manual(directory: Path, manifest: dict[str, Any]) -> list[str]:
 
 
 DOCUMENT_COUNTS = (29, 55)  # 补造 document 的份数与总页数 (第 9.5 节)
-REGISTRATION_COUNTS = {"load": 20, "engagement": 2, "registry": 4, "confirmation": 2, "upload": 1}  # 各登记途径
+# 各登记途径的份数: 演示数据导入上传 (承接时停在 ACC-01 闸门, P1 开头停在等数据时, 完成阶段按补交请求), 人工任务上传,
+# 登记 mock 回执存档, 函证 mock 银行直达存档
+REGISTRATION_COUNTS = {"acceptance": 2, "fieldwork": 19, "statements": 1, "manual": 1, "registry": 4, "confirmation": 2}
 
 
 def check_document_counts(directory: Path, manifest: dict[str, Any]) -> list[str]:

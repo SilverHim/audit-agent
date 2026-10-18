@@ -218,7 +218,7 @@ AJE-X05: 与 AJE-X01 同属第 1 轮 (M-5 与 M-1 都在 P2 发现), 编号按�
 
 ### 3.1 从 Xero 映射的表 (载入器 `build_tables`)
 
-载入用 `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, R72): 先核对补造目录, 再在 `build_tables` 的结果上并入补造的合同关联, 服务完成记录与开户行, 合同 PDF 取补造目录的 contracts/ (登记为 contract, external_copy, 文件 ID 同 manifest). 发票号找不到或不唯一, 合同关联或服务完成记录重复, 合同关联指向没有 PDF 的合同, bank_accounts.csv 的 id, BSB, 账号, 科目与快照不符, 或补造 CSV 缺列, 格式不对时抛 SupplementMismatch (只列文件名与编号), 不载入. 这些内容核对在载入时 (p1_ingest) 做, 失败记入 run_error; 建项目接口与 GET /datasets 只做哈希核对 (第 9.3 节第 2 项), 正式目录哈希相符即内容已由校验脚本核过. 没有补造目录的快照 (如 20261017-mock) 与纯快照相同.
+账表由 `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, R72) 给出: 先核对补造目录, 再在 `build_tables` 的结果上并入补造的合同关联, 服务完成记录与开户行. 收入合同 PDF 不随账表登记: 补造目录 contracts/ 的 3 份停在等数据时经上传登记, A3 分类为 contract 并随即按 DOC-04 抽取 (第 4 节 #7-9, 第 9.5 节 fieldwork). 发票号找不到或不唯一, 合同关联或服务完成记录重复, 合同关联指向没有 PDF 的合同, bank_accounts.csv 的 id, BSB, 账号, 科目与快照不符, 或补造 CSV 缺列, 格式不对时抛 SupplementMismatch (只列文件名与编号), 不载入. 这些内容核对在载入时 (p1_ingest) 做, 失败记入 run_error; 建项目接口与 GET /datasets 只做哈希核对 (第 9.3 节第 2 项), 正式目录哈希相符即内容已由校验脚本核过. 没有补造目录的快照 (如 20261017-mock) 与纯快照相同.
 
 | 表 | 来源 | 口径与 ID | 行数 |
 |---|---|---|---|
@@ -355,25 +355,24 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 
 **文件类型, 证据种类与可靠性**
 
-现状: `DocumentType` 只有 contract, confirmation, other; `judgment_engine.DOCUMENT_EVIDENCE` 只映射 contract → contract, confirmation → external, 其他类型的文件指针在引用级被拒 ("{type} 类文件不作证据"). 各组草稿已加: registry_extract → external (G2); engagement_letter → contract, minutes → voucher, representation_letter → voucher, correspondence → voucher (G5); governance_communication (G6). 本数据集还要新增 3 类 (契约一次合并, 见需求清单 R89):
+现状 (合并上游数据管理后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, other; `judgment_engine.DOCUMENT_EVIDENCE` 只映射 contract → contract, confirmation → external, 其他类型的文件指针在引用级被拒 ("{type} 类文件不作证据"). 各组草稿已加: registry_extract → external (G2); engagement_letter → contract, minutes → voucher, representation_letter → voucher, correspondence → voucher (G5); governance_communication (G6). 本数据集还要新增 2 类 (契约一次合并, 见需求清单 R89); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
 
 | 新增 DocumentType | 证据种类 | 用于 | 为什么不复用已有类型 |
 |---|---|---|---|
 | agreement | contract | 收入合同以外的协议: 租金函, 新租约, 分租协议, 董事借款协议, 客户订单 | 不能用 contract: `agents/ingest.py` 的 DOC-04 取全部 contract 类文件逐份抽取收入条款, 租约与借款协议混进去会多出合同与大模型调用 |
-| supplier_invoice | invoice | 供应商税务发票 | 外来发票, 证据种类应为 invoice |
 | internal_record | voucher | 公司内部记录: 登记表, 报销单, 工资册, 会计政策, 备忘录与预测, 报价单 | other 不作证据 |
 
-29 份文件逐一 (reliability 取 DocumentRef, 登记时给定):
+29 份文件逐一 (reliability 取 DocumentRef). 登记途径即 manifest 的 registration: acceptance, fieldwork, statements 由演示数据导入上传 (acceptance 在承接时停在 ACC-01 闸门, fieldwork 在 P1 开头停在等数据时, statements 在完成阶段按补交请求), A3 分类 (合同随即抽取), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记; manual 经人工任务上传, 同样按 manifest 补登记; registry, confirmation 由登记 mock 与函证 mock 在程序执行时存档 (第 9.5 节):
 
 | # | 文件 | DocumentType | 证据种类 | reliability | 登记途径 |
 |---|---|---|---|---|---|
-| 1 | appointment.pdf | minutes | voucher | internal_copy (G5) | load_engagement_documents (G5) |
+| 1 | appointment.pdf | minutes | voucher | internal_copy (G5) | acceptance: 停在 ACC-01 闸门时上传 |
 | 2 | engagement_letter.pdf | engagement_letter | contract | external_copy (G5) | 同上 |
 | 3-5 | 公司摘录 3 份 | registry_extract | external | external_original (G2) | GEN-08 运行时由 RegistrySource 回执存档 |
 | 6 | 人员检索 | registry_extract | external | external_original | 同上 |
-| 7-9 | CON-X01 至 X03 | contract | contract | external_copy (stores.py 现状) | 载入器 build() |
-| 10-11 | 银行回函 2 份 | confirmation | external | 按回函渠道 (direct_email, `reply_reliability`) | CSH-04 运行时存档 |
-| 12 | VPA 租金函 | agreement | contract | external_copy | 载入器按 documents/index.csv |
+| 7-9 | CON-X01 至 X03 | contract | contract | external_copy (上游 A3 按类型取副本) | fieldwork: 等数据时上传, A3 随即按 DOC-04 抽取 |
+| 10-11 | 银行回函 2 份 | confirmation | external | 按回函渠道 (direct_email, `reply_reliability`) | confirmation: CSH-04 运行时由函证 mock 按银行直达存档 |
+| 12 | VPA 租金函 | agreement | contract | external_copy | fieldwork: 等数据时上传, 按 manifest 补登记 |
 | 13 | VPA 出售与终止通知 | correspondence | voucher (G5 映射) | external_copy | 同上 |
 | 14 | 新租约 | agreement | contract | external_copy | 同上 |
 | 15 | 分租协议 | agreement | contract | external_copy | 同上 |
@@ -386,13 +385,13 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 22 | 持续经营备忘录与预测 | internal_record | voucher | internal_original | 同上 |
 | 23 | 董事支持函 | correspondence | voucher | internal_original | 同上 |
 | 24 | DIISR 邮件 | correspondence | voucher | external_copy | 同上 |
-| 25 | SMART Agency 发票 | supplier_invoice | invoice | external_copy | 同上 |
+| 25 | SMART Agency 发票 | invoice | invoice | external_copy | 同上 |
 | 26 | Ridgeway 订单 | agreement | contract | external_copy | 同上 |
 | 27 | Jakaranda 报价单 | internal_record | voucher | internal_copy (公司发出的报价的留存副本) | 同上 |
-| 28 | fs_v1.pdf | other | 不作证据; 判断引用 financial_statement_line (G6) | internal_original | 载入器按 index.csv (只供查看) |
-| 29 | 声明书 | representation_letter | voucher | internal_original (G5 示例) | FIN-07 人工任务上传 (G5) |
+| 28 | fs_v1.pdf | financial_statements | 不作证据; 判断引用 financial_statement_line (G6) | internal_original | statements: 完成阶段按补交请求 REQ-financial_statements 上传 |
+| 29 | 声明书 | representation_letter | voucher | internal_original (G5 示例) | manual: FIN-07 人工任务上传 (G5) |
 
-documents/index.csv 列 19 份: #1, 2 (engagement 类, 供 load_engagement_documents) 与 #12 至 28; 摘录, 回函, 收入合同, 声明书按各自途径登记, 不重复列. related_ids 列写关联对象 ID (如 #12 至 #14 写 ACN-900043030, #25 写 XJ-548 与 BT-090-0097), 供 GEN-03, GEN-06 按对象取文件.
+documents/index.csv 列 19 份: #1, 2 (承接文件) 与 #12 至 28, 各项与 manifest.json documents 段的同名条目同值; 上传后的补登记一律取 manifest, 含不在 index.csv 的 3 份收入合同与声明书. 摘录与回函由 mock 存档, 不经上传, 也不列. related_ids 列写关联对象 ID (如 #12 至 #14 写 ACN-900043030, #25 写 XJ-548 与 BT-090-0097), 供 GEN-03, GEN-06 按对象取文件.
 
 ### 4.1 appointment.pdf
 
@@ -1060,13 +1059,13 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 3. `client_profile()`: 有 client_profile.json 时整份取它, 校验 id 以快照组织 ID 推出的 `CLIENT-XERO-{短 ID}-` 开头 (本数据集 CLIENT-XERO-3C1332BB-Q1), 不符抛 SupplementMismatch, 消息含该前缀. 带后缀是为了与 20261017-mock 的载入器画像 CLIENT-XERO-3C1332BB v1 区分, 避免同库建项目时 VersionConflict (2.6 节).
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.
-6. 合同 PDF: `build()` 返回补造目录的 contracts/*.pdf (原来 XeroDatasetLoader 传 `()`). 第 6 至 9 项已实现 (R72, `XeroDatasetLoader.tables`).
+6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72, `XeroDatasetLoader.tables`).
 7. sales_invoices.contract_id 按 contract_links.csv 的 invoice_no 填.
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
 10. 更正分录: 不在载入时入库. G4 的 CorrectionNotice (adjustments_posted) 增加 `adjustment_entry_nos`, `load_adjustments` 只载入列出的分录 (本数据集分两轮: AJE-X01 与 AJE-X05; AJE-X02 至 X04). Numbat 只有一轮, 不填时载入全部, 行为不变.
     - 端口已实现 (R73): `load_adjustments(eid, dataset, entry_nos=None)` 幂等, 有新行时 data_version 加一, 试算表不动; `adjustment_entries` 与 `adjustment_entry_nos` 列出可载入的凭证. data/demo 目前没有 adjustments 目录, 对 Numbat 调用抛 FileNotFoundError, 不为 Numbat 补数据.
-11. documents/index.csv 列出的 19 份文件登记为证据文件 (类型, 可靠性, 文件日期, 关联对象); 类型取值与证据映射见第 4 节类型表, 未知类型报错.
+11. documents/index.csv 列出的 19 份文件不由载入器登记: 经上传接口上传, 类型由 A3 分类, 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表; 第 9.5 节登记途径); 类型取值与证据映射见第 4 节类型表.
 12. fs_v1.json 作为 FIN-12 的财报输入 (G6 的 financial_statements 端口).
 13. dataset_traits.json 供程序参数 `{ref: dataset.<键>}` 解析; payroll/employees.csv 供 FIN-15.
 14. 快照里收款分录的 source_doc 有 "Payment: 客户名" 与 "Payment from 客户名" 两种, 都不带发票号; 若要做 GEN-07 S04, 需从 payments.json 的分配记录生成 "收款与发票对应" 表.
@@ -1096,7 +1095,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 **manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
 
-**document 的登记途径 (registration)** 共 29 份 55 页: load 20 (3 份收入合同加 index.csv 中除承接文件外的 17 份, 载入时登记), engagement 2 (appointment.pdf, engagement_letter.pdf, 由 `load_engagement_documents` 在 P0 登记), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时存档), upload 1 (声明书, FIN-07 人工任务经上传接口登记).
+**document 的登记途径 (registration)** 共 29 份 55 页: acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传), fieldwork 19 (3 份收入合同加 index.csv 中除承接文件与 fs_v1.pdf 外的 16 份, 停在等数据时由演示数据导入上传), statements 1 (fs_v1.pdf, 完成阶段按补交请求 REQ-financial_statements 上传), manual 1 (声明书, FIN-07 人工任务经上传接口上传), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时由函证 mock 按银行直达存档). 前四类经上传接口登记, A3 只认类型 (按文件名与首页分类, 合同随即抽取; 按补交请求上传的直接取请求的类型), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表, 收入合同与声明书只在 manifest).
 
 **登记摘录与人员检索 JSON** (`registry/extracts/{acn}.json`, `registry/persons/{姓-名-yyyymmdd}.json`, 同名 PDF 由 JSON 渲染):
 - 公司摘录: {acn, name, type, class, subclass, status, registered_date, officeholders [{name, birth_date, role (director | secretary), appointed}], shareholders [{name, kind (person | company), acn, share_class, shares, pct}], paid_up_cents, file_name}.
@@ -1129,10 +1128,10 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 | documents/evidence/payroll_register_terms.pdf | internal_record | internal_original | 2026-09-30 | 804;805;826 |
 | documents/evidence/accounting_policies_extract.pdf | internal_record | internal_original | 2026-07-01 | XJ-499 |
 | documents/evidence/diisr_email.pdf | correspondence | external_copy | 2026-10-13 | XJ-720 |
-| documents/evidence/smart_agency_invoice_SM0195-70135.pdf | supplier_invoice | external_copy | 2026-09-05 | XJ-548;BT-090-0097 |
+| documents/evidence/smart_agency_invoice_SM0195-70135.pdf | invoice | external_copy | 2026-09-05 | XJ-548;BT-090-0097 |
 | documents/evidence/ridgeway_order_CRM08-12.pdf | agreement | external_copy | 2026-10-02 | XJ-647;BT-090-0092 |
 | documents/evidence/jakaranda_quote.pdf | internal_record | internal_copy | 2026-10-08 | BT-090-0099 |
-| financial_statements/fs_v1.pdf | other | internal_original | 2026-10-22 | FS |
+| financial_statements/fs_v1.pdf | financial_statements | internal_original | 2026-10-22 | FS |
 
 报销单 E003 只关联员工号 (系统录名错误使它挂不到 XJ-575 上): GEN-02 对 XJ-575 给 more_evidence, 审计师调阅报销单后 override (第 7.2 节第 13 步).
 
@@ -1189,7 +1188,6 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 **载入端口与构造** (签名):
 - `XeroDatasetLoader(root, planning, engine=None, evidence_store=None, *, supplements: Path | None = None, allow_injected: bool = False)`; 补造与快照不匹配抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头, 只列文件名.
 - `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 幂等, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
-- `DatasetLoader.load_engagement_documents(eid, dataset) -> list[DocumentRef]` (P0 登记承接文件).
 - `DatasetLoader.dataset_traits(dataset) -> DatasetTraits` (缺文件时为缺省值); `DatasetLoader.period(dataset) -> tuple[date, date] | None`.
 - `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回七张表与合同 PDF 路径, load 与测试共用); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
 - `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]`; `FinancialDataStore.financial_statements(eid) -> FinancialStatements | None`, `record(eid, "financial_statement_line", code)`.
