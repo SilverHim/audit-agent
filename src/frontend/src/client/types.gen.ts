@@ -764,6 +764,13 @@ export type ConversationTurn = {
 export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' | 'reasoning_error';
 
 /**
+ * CriticTrigger
+ *
+ * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用).
+ */
+export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupported' | 'sample';
+
+/**
  * CriticVerdict
  *
  * 独立复核 (A7, GEN-09) 的结论.
@@ -1074,14 +1081,22 @@ export type DocumentRef = {
      * Failed Step
      */
     failed_step?: 'classify' | 'read' | 'extract' | 'link' | null;
+    /**
+     * Document Date
+     */
+    document_date?: string | null;
+    /**
+     * Related Ids
+     */
+    related_ids?: Array<string>;
 };
 
 /**
  * DocumentType
  *
- * 证据文件类型. 审计师上传的文件由 A3 分类.
+ * 证据文件类型. 审计师上传的文件由 A3 分类; 证据种类见 judgment_engine.DOCUMENT_EVIDENCE.
  */
-export type DocumentType = 'contract' | 'invoice' | 'confirmation' | 'bank_statement' | 'minutes' | 'financial_statements' | 'other';
+export type DocumentType = 'contract' | 'invoice' | 'confirmation' | 'bank_statement' | 'minutes' | 'financial_statements' | 'registry_extract' | 'engagement_letter' | 'representation_letter' | 'correspondence' | 'governance_communication' | 'agreement' | 'internal_record' | 'other';
 
 /**
  * DocumentTypeIn
@@ -1707,6 +1722,7 @@ export type JudgmentView = {
      */
     trail_ref?: string | null;
     critic_verdict: CriticVerdict | null;
+    critic_trigger?: CriticTrigger | null;
     critic_reason_type?: CriticReasonType | null;
     /**
      * Critic Reason
@@ -2196,7 +2212,7 @@ export type ProcedureRun = {
  *
  * 程序状态.
  */
-export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'completed';
+export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'in_dispute' | 'completed';
 
 /**
  * ProcedureSummary
@@ -2465,7 +2481,7 @@ export type ReviewRecordIn = {
  *
  * 判断的复核状态.
  */
-export type ReviewStatus = 'pending' | 'confirmed' | 'overridden';
+export type ReviewStatus = 'pending' | 'confirmed' | 'overridden' | 'superseded';
 
 /**
  * ReviewTask
@@ -2784,7 +2800,7 @@ export type TargetType = 'Judgment' | 'AuditException' | 'ProcedureRun';
  *
  * 复核任务类型.
  */
-export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute';
+export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute' | 'blind' | 'manual';
 
 /**
  * TaskStatus
@@ -2889,7 +2905,7 @@ export type TrailEntryView = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation';
 
 /**
  * UncorrectedItem

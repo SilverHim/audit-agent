@@ -59,6 +59,17 @@ def attribute_exceptions(judgment: Judgment, exceptions: Sequence[AuditException
 TRANSACTION_SOURCES = ("sales_invoice", "journal_entry", "bank_transaction")
 CHECK_EVIDENCE_BELOW = 0.70  # 置信度低于它: 查验证据
 BATCH_ABOVE = 0.90  # 置信度高于它才可能批量确认; 不超过它 (且不低于上一档): 阅读推理链
+# 各类任务允许的决定 (第 7 节允许决定矩阵), 每种任务类型一行. dispute 任务只能仲裁 (确认会绕过仲裁); failed 任务带判断
+# 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). blind 与 manual 先为空集, 由盲判与
+# 人工程序各自登记
+ALLOWED: dict[TaskKind, frozenset[Decision]] = {
+    TaskKind.normal: frozenset({Decision.confirm, Decision.override, Decision.misstatement}),
+    TaskKind.unattributed: frozenset({Decision.override, Decision.misstatement}),
+    TaskKind.failed: frozenset({Decision.rerun}),
+    TaskKind.dispute: frozenset({Decision.dispute_resolution}),
+    TaskKind.blind: frozenset(),
+    TaskKind.manual: frozenset(),
+}
 
 
 # 复核队列的派生字段 (金额, 档位, 仲裁选项) 按输出视图算: 接口给的是盲判过滤后的 JudgmentView, 被隐藏的字段不得
@@ -157,17 +168,15 @@ class ReviewQueue:
         self.library = library  # 程序库: 按任务的 procedure_id 取模板
 
     def allowed(self, task: ReviewTask) -> frozenset[Decision]:
-        """某个任务允许的决定. dispute 任务只能仲裁 (确认会绕过仲裁); failed 任务带判断对象且模板允许时,
-        另可人工执行并提交结果."""
-        if task.kind is TaskKind.dispute:
-            return frozenset({Decision.dispute_resolution})
-        if task.kind is TaskKind.normal:
-            return frozenset({Decision.confirm, Decision.override, Decision.misstatement})
-        if task.kind is TaskKind.unattributed:
-            return frozenset({Decision.override, Decision.misstatement})
-        if task.subject_id is not None and self.library.load(task.procedure_id).manual_result_allowed:
-            return frozenset({Decision.rerun, Decision.manual_result})
-        return frozenset({Decision.rerun})
+        """某个任务允许的决定: 按任务类型取 ALLOWED; failed 任务带判断对象且模板允许时, 另可人工执行并提交结果."""
+        decisions = ALLOWED[task.kind]
+        if (
+            task.kind is TaskKind.failed
+            and task.subject_id is not None
+            and self.library.load(task.procedure_id).manual_result_allowed
+        ):
+            return decisions | {Decision.manual_result}
+        return decisions
 
     def classify(
         self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Sequence[AuditException]

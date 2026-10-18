@@ -219,6 +219,54 @@ async def test_evidence_and_adapters(storage, tmp_path):
     assert await PostgresUserStore(engine).get(e.owner_id)
 
 
+# 文件类型的 7 个新取值各存一份 (Xero 补造目录的 PDF, 各不相同以免按哈希去重); 补造目录没有 governance_communication
+# 类文件, 借一份 PDF 只核对类型往返
+NEW_TYPES = {
+    DocumentType.registry_extract: "registry/extracts/900043030.pdf",
+    DocumentType.engagement_letter: "documents/engagement/engagement_letter.pdf",
+    DocumentType.representation_letter: "representation/representation_letter.pdf",
+    DocumentType.correspondence: "documents/evidence/diisr_email.pdf",
+    DocumentType.governance_communication: "contracts/CON-X02.pdf",
+    DocumentType.agreement: "documents/evidence/director_loan_agreement.pdf",
+    DocumentType.internal_record: "documents/evidence/fixed_asset_register.pdf",
+}
+
+
+async def test_new_document_types_round_trip(storage):
+    """documents.type 是 text 列 (迁移 0001 无约束, 0004 也未加), 新取值不需迁移: 各存一份后按类型取回, 读回仍是枚举;
+    文件日期与关联对象两列还没有, 读回为缺省值."""
+    engine, e, _loader, evidence = storage
+    supplements = ROOT / "data/xero_demo/20261017-q1"
+    upstream = {
+        DocumentType.contract,
+        DocumentType.invoice,
+        DocumentType.confirmation,
+        DocumentType.bank_statement,
+        DocumentType.minutes,
+        DocumentType.financial_statements,
+        DocumentType.other,
+    }
+    assert set(NEW_TYPES) == set(DocumentType) - upstream
+    saved = {
+        kind: await evidence.save(
+            e.id, Path(path).name, (supplements / path).read_bytes(), type=kind, reliability=Reliability.external_copy
+        )
+        for kind, path in NEW_TYPES.items()
+    }
+    financial = PostgresFinancialDataStore(engine)
+    for kind, doc in saved.items():
+        [back] = await financial.documents(e.id, kind)
+        assert back == doc and back.type is kind
+    assert len(await financial.documents(e.id)) == len(NEW_TYPES)
+    [loan] = await financial.documents(e.id, DocumentType.agreement)
+    assert (loan.file_name, loan.page_count, loan.document_date, loan.related_ids) == (
+        "director_loan_agreement.pdf",
+        2,
+        None,
+        [],
+    )
+
+
 @pytest.mark.parametrize("checkpoint_backend", ["memory", "postgres"])
 async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend):
     from contextlib import AsyncExitStack

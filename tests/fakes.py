@@ -232,6 +232,29 @@ def manifest_document(path: str, reliability: Reliability) -> DocumentRef:
     )
 
 
+XERO_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "manifest.json"
+XERO_DOCUMENTS: dict[str, dict[str, Any]] = {  # Xero 补造目录登记的 PDF, 相对补造目录的路径 -> 条目 (设计第 4 节类型表)
+    d["path"]: d for d in json.loads(XERO_MANIFEST.read_text(encoding="utf-8"))["documents"]
+}
+
+
+def xero_document(path: str) -> DocumentRef:
+    """Xero 补造目录下 path 那份 PDF 的登记: ID, 类型, 可靠性, 页数, 文件日期与关联对象取 manifest, 状态 received."""
+    entry = XERO_DOCUMENTS[path]
+    return DocumentRef(
+        id=entry["document_id"],
+        type=DocumentType(entry["type"]),
+        file_name=Path(path).name,
+        sha256=entry["sha256"],
+        page_count=entry["page_count"],
+        reliability=Reliability(entry["reliability"]),
+        status="received",
+        uploaded_at=NOW,
+        document_date=date.fromisoformat(entry["document_date"]),
+        related_ids=entry["related_ids"],
+    )
+
+
 NUMBAT_CONTRACTS = [  # DatasetLoader.load 登记的 3 份合同
     manifest_document(f"contracts/CON-00{n}.pdf", Reliability.external_copy) for n in (1, 2, 3)
 ]

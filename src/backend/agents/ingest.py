@@ -285,7 +285,8 @@ CLASSIFY = ProcedureTemplate(
     autonomy_level=AutonomyLevel.L2,
     llm=LLMSpec(prompt="DOC-CLASSIFY.md.j2", output_model="DocumentClassification", max_tokens=512),
 )
-# 各类型文件的可靠性 (审计师上传的都是副本): 第三方出具的为外部副本, 被审计单位自己的为内部副本
+# 各类型文件的可靠性 (审计师上传的都是副本), 每种类型一行, 按出具方: 第三方或有对方一起签署的 (合同, 回函, 对账单,
+# 登记摘录, 约定书, 协议) 为外部副本, 被审计单位自己的 (含来源不定的往来函件) 为内部副本; 之后可经补登记改
 RELIABILITY: dict[DocumentType, Reliability] = {
     DocumentType.contract: Reliability.external_copy,
     DocumentType.invoice: Reliability.internal_copy,
@@ -293,6 +294,13 @@ RELIABILITY: dict[DocumentType, Reliability] = {
     DocumentType.bank_statement: Reliability.external_copy,
     DocumentType.minutes: Reliability.internal_copy,
     DocumentType.financial_statements: Reliability.internal_copy,
+    DocumentType.registry_extract: Reliability.external_copy,
+    DocumentType.engagement_letter: Reliability.external_copy,
+    DocumentType.representation_letter: Reliability.internal_copy,
+    DocumentType.correspondence: Reliability.internal_copy,
+    DocumentType.governance_communication: Reliability.internal_copy,
+    DocumentType.agreement: Reliability.external_copy,
+    DocumentType.internal_record: Reliability.internal_copy,
     DocumentType.other: Reliability.internal_copy,
 }
 FIRST_PAGE_CHARS = 4000  # 分类时送给大模型的首页文字上限

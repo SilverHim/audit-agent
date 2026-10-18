@@ -5,6 +5,7 @@
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -70,15 +71,7 @@ def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
     return created
 
 
-# 复核决定的必填字段与只允许在此填的字段 (第 7 节必填表); reason 是通用字段, confirm 也可以填
-REVIEW_REQUIRED: dict[Decision, list[str]] = {
-    Decision.confirm: [],
-    Decision.override: ["reason", "override_conclusion"],
-    Decision.misstatement: ["reason", "misstatement_draft"],
-    Decision.rerun: ["reason"],
-    Decision.manual_result: ["reason", "manual_result"],
-    Decision.dispute_resolution: ["reason", "dispute_resolution"],
-}
+# 决定专用字段: 只有字段规则允许它的决定才能填 (见 ReviewFields.allowed); reason 是通用字段, 各决定都可以填
 REVIEW_SPECIFIC = (
     "override_conclusion",
     "misstatement_draft",
@@ -87,15 +80,38 @@ REVIEW_SPECIFIC = (
     "dispute_resolution",
     "neither_action",
 )
-REVIEW_ALLOWED: dict[Decision, set[str]] = {
-    Decision.confirm: set(),
-    Decision.override: {"override_conclusion"},
-    Decision.misstatement: {"misstatement_draft"},
-    Decision.rerun: {"rerun_params"},
-    Decision.manual_result: {"manual_result"},
+
+
+@dataclass(frozen=True)
+class ReviewFields:
+    """一种复核决定的字段规则 (第 7 节必填表): 必填字段, 与可以填的专用字段 (REVIEW_SPECIFIC 中的)."""
+
+    required: tuple[str, ...] = ()  # 必填字段, 缺了报 MISSING_FIELD
+    allowed: frozenset[str] = frozenset()  # 可以填的专用字段, 填了别的报 FIELD_NOT_ALLOWED
+
+
+# 复核决定的字段规则, 按 (任务类型, 决定) 登记; 任务类型为 None 的是该决定的通用行, 没有该任务类型的行时用它.
+# 新的任务类型对某个决定另有要求时加一行 (如人工程序的 (manual, manual_result)), 不改通用行
+REVIEW_FIELDS: dict[tuple[TaskKind | None, Decision], ReviewFields] = {
+    (None, Decision.confirm): ReviewFields(),
+    (None, Decision.override): ReviewFields(("reason", "override_conclusion"), frozenset({"override_conclusion"})),
+    (None, Decision.misstatement): ReviewFields(("reason", "misstatement_draft"), frozenset({"misstatement_draft"})),
+    (None, Decision.rerun): ReviewFields(("reason",), frozenset({"rerun_params"})),
+    (None, Decision.manual_result): ReviewFields(("reason", "manual_result"), frozenset({"manual_result"})),
     # 仲裁可附错报草稿: 采用的结论认定为错报时一并登记; neither_action 与 override_conclusion 只用于 neither
-    Decision.dispute_resolution: {"dispute_resolution", "neither_action", "override_conclusion", "misstatement_draft"},
+    (None, Decision.dispute_resolution): ReviewFields(
+        ("reason", "dispute_resolution"),
+        frozenset({"dispute_resolution", "neither_action", "override_conclusion", "misstatement_draft"}),
+    ),
 }
+
+
+def review_fields(kind: TaskKind, decision: Decision) -> ReviewFields:
+    """(任务类型, 决定) 的字段规则: 先取该任务类型的行, 没有时取该决定的通用行. 两者都没有抛 KeyError."""
+    rules = REVIEW_FIELDS.get((kind, decision))
+    return rules if rules is not None else REVIEW_FIELDS[(None, decision)]
+
+
 TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类型 -> 在 Store 中的对象类型
     TargetType.Judgment: Judgment,
     TargetType.AuditException: AuditException,
@@ -103,16 +119,18 @@ TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类
 }
 
 
-def check_review_fields(record: ReviewRecord) -> None:
-    """复核决定的字段校验: 必填的缺了报 MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空值都视为未填.
+def check_review_fields(record: ReviewRecord, kind: TaskKind) -> None:
+    """复核决定的字段校验, 规则按 (任务类型, 决定) 取 (见 review_fields): 必填的缺了报 MISSING_FIELD, 不该填的填了报
+    FIELD_NOT_ALLOWED. None 与空值都视为未填.
 
     仲裁另按结果: neither 须填 neither_action (本版只有 human_conclusion) 与 override_conclusion; a6_upheld,
     a7_upheld 不能填这两项.
     """
-    missing = [name for name in REVIEW_REQUIRED[record.decision] if not getattr(record, name)]
+    rules = review_fields(kind, record.decision)
+    missing = [name for name in rules.required if not getattr(record, name)]
     if missing:
         raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
-    filled = [name for name in REVIEW_SPECIFIC if getattr(record, name) and name not in REVIEW_ALLOWED[record.decision]]
+    filled = [name for name in REVIEW_SPECIFIC if getattr(record, name) and name not in rules.allowed]
     if filled:
         raise DecisionRejected("FIELD_NOT_ALLOWED", ", ".join(filled))
     if record.decision is not Decision.dispute_resolution:
@@ -572,7 +590,7 @@ class GraphDecisionSubmit:
             )
         if record.decision not in self.deps.queue.allowed(task):
             raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
-        check_review_fields(record)
+        check_review_fields(record, task.kind)
         if (
             record.dispute_resolution is DisputeResolution.a7_upheld
             and isinstance(target, Judgment)

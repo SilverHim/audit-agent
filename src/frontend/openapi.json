@@ -4160,6 +4160,18 @@
         "title": "CriticReasonType",
         "description": "独立复核判不一致的理由类型."
       },
+      "CriticTrigger": {
+        "type": "string",
+        "enum": [
+          "main",
+          "internal_copy",
+          "assumption",
+          "unsupported",
+          "sample"
+        ],
+        "title": "CriticTrigger",
+        "description": "独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."
+      },
       "CriticVerdict": {
         "type": "string",
         "enum": [
@@ -4705,6 +4717,26 @@
               }
             ],
             "title": "Failed Step"
+          },
+          "document_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Date"
+          },
+          "related_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4731,10 +4763,17 @@
           "bank_statement",
           "minutes",
           "financial_statements",
+          "registry_extract",
+          "engagement_letter",
+          "representation_letter",
+          "correspondence",
+          "governance_communication",
+          "agreement",
+          "internal_record",
           "other"
         ],
         "title": "DocumentType",
-        "description": "证据文件类型. 审计师上传的文件由 A3 分类."
+        "description": "证据文件类型. 审计师上传的文件由 A3 分类; 证据种类见 judgment_engine.DOCUMENT_EVIDENCE."
       },
       "DocumentTypeIn": {
         "properties": {
@@ -5861,6 +5900,16 @@
               }
             ]
           },
+          "critic_trigger": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticTrigger"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "critic_reason_type": {
             "anyOf": [
               {
@@ -6770,6 +6819,7 @@
           "planned",
           "executing",
           "awaiting_human",
+          "in_dispute",
           "completed"
         ],
         "title": "ProcedureStatus",
@@ -7274,7 +7324,8 @@
         "enum": [
           "pending",
           "confirmed",
-          "overridden"
+          "overridden",
+          "superseded"
         ],
         "title": "ReviewStatus",
         "description": "判断的复核状态."
@@ -7843,7 +7894,9 @@
           "normal",
           "unattributed",
           "failed",
-          "dispute"
+          "dispute",
+          "blind",
+          "manual"
         ],
         "title": "TaskKind",
         "description": "复核任务类型."
@@ -8051,7 +8104,8 @@
           "deferral",
           "conversation",
           "conversation_summary",
-          "data"
+          "data",
+          "presentation"
         ],
         "title": "TrailKind",
         "description": "留痕类型."

@@ -16,6 +16,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     ClientProfile,
     CriticReasonType,
+    CriticTrigger,
     CriticVerdict,
     Engagement,
     Engine,
@@ -157,6 +158,7 @@ class JudgmentView(Model):
     created_at: datetime  # 生成时间
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
     critic_verdict: CriticVerdict | None  # 独立复核结论
+    critic_trigger: CriticTrigger | None = None  # 命中的触发规则
     critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型
     critic_reason: str | None = None  # 理由
     critic_conclusion: str | None = None  # 独立结论

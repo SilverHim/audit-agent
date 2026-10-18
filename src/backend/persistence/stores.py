@@ -401,7 +401,9 @@ class FileEvidenceStore(Store):
                 temporary.unlink()
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError("Evidence hash mismatch")
-            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **doc.model_dump()))
+            # documents 表还没有文件日期与关联对象两列 (存取另做), 这两个字段先不写, 读回为缺省值
+            row = doc.model_dump(exclude={"document_date", "related_ids"})
+            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **row))
             return doc
 
     async def path(self, eid: str, document_id: str) -> Path:

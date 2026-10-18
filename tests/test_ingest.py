@@ -12,6 +12,7 @@ from backend.agents.ingest import IngestAgent
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
     Decision,
+    DocumentType,
     GateVerdict,
     ProcedureRun,
     ProcedureStatus,
@@ -40,6 +41,7 @@ from tests.fakes import (
     make_deps,
     make_runner,
     wait_idle,
+    xero_document,
 )
 from tests.test_decisions import Started, acc01_decision
 
@@ -129,6 +131,25 @@ async def test_llm_requests() -> None:
         prompt = req.messages[0].content
         assert f"The audited entity is {NUMBAT_PROFILE.legal_name};" in prompt
         assert f'<page number="2">\n{req.fixture_key}.pdf page 2\n</page>' in prompt
+
+
+async def test_only_contract_documents_extracted() -> None:
+    """DOC-04 只取 contract 类文件: 新租约 (agreement) 与收入合同同在时, 只为 CON-X01 调大模型 (设计稿第 4 节类型表)."""
+    con_x01 = xero_document("contracts/CON-X01.pdf")  # contract, 3 页
+    lease = xero_document("documents/related_party/harbourview_lease.pdf")  # 14, agreement, 2 页
+    assert (con_x01.type, con_x01.page_count, lease.type, lease.page_count) == (
+        DocumentType.contract,
+        3,
+        DocumentType.agreement,
+        2,
+    )
+    llm = ScriptedLLM({"CON-X01": [raw("CON-001").replace(NUMBAT_CONTRACTS[0].id, con_x01.id)]})
+    financial = FakeFinancialStore([lease, con_x01])
+    deps = make_deps(FakeRegistry(), FakeTrail(), financial_store=financial, llm=llm)
+    patch = await IngestAgent(deps).run(make_ctx(deps, "DOC-04"))
+    assert [r.fixture_key for r in llm.requests] == ["CON-X01"]
+    assert financial.save_calls == ["CON-X01"] and financial.saved_contracts["CON-X01"].document_id == con_x01.id
+    assert [(d.id, d.status) for d in patch["documents"]] == [(con_x01.id, "extracted")]
 
 
 # ── 失败 ─────────────────────────────────────────

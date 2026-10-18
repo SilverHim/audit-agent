@@ -218,6 +218,53 @@ async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:
     }
 
 
+async def test_type_set_to_agreement_is_external_copy_without_extraction() -> None:
+    """人工指定为协议 (收入合同以外的协议): 登记为 agreement, 外部副本, classified, 不抽取 (只有合同与回函抽取)."""
+    _, service, financial, _, _ = setup()
+    await service.upload_documents(EID, [("scan-0043.png", b"\x89PNG lease")], actor="U-1")
+    await drain(service)
+    scan = document(financial, "scan-0043.png")
+    updated = await service.set_document_type(EID, scan.id, DocumentType.agreement, "新租约扫描件", "U-1")
+    await drain(service)
+
+    assert (updated.type, updated.reliability, updated.status) == (
+        DocumentType.agreement,
+        Reliability.external_copy,
+        "classified",
+    )
+    assert document(financial, "scan-0043.png").status == "classified" and financial.save_calls == []
+
+
+def test_upload_reliability_covers_every_type() -> None:
+    """上传与人工指定类型的可靠性覆盖全部文件类型; 新增 7 类按出具方 (外部副本或内部副本)."""
+    assert set(ingest.RELIABILITY) == set(DocumentType)
+    assert {t: ingest.RELIABILITY[t] for t in list(DocumentType)[6:13]} == {
+        DocumentType.registry_extract: Reliability.external_copy,
+        DocumentType.engagement_letter: Reliability.external_copy,
+        DocumentType.representation_letter: Reliability.internal_copy,
+        DocumentType.correspondence: Reliability.internal_copy,
+        DocumentType.governance_communication: Reliability.internal_copy,
+        DocumentType.agreement: Reliability.external_copy,
+        DocumentType.internal_record: Reliability.internal_copy,
+    }
+
+
+def test_classify_prompt_lists_every_type_once() -> None:
+    """DOC-CLASSIFY 的类型表恰为全部 14 类, 每类一行; contract 只指与客户的收入合同, 租约, 借款, 采购协议与客户订单归
+    agreement."""
+    deps = make_deps(FakeRegistry(), FakeTrail())
+    prompt = deps.judgments.render(
+        ingest.CLASSIFY, {"file_name": "x.pdf", "media_type": "application/pdf", "first_page": ""}
+    )
+    rows = [line.split("|")[1].strip() for line in prompt.splitlines() if line.startswith("| ") and "|---" not in line]
+    assert rows[0] == "document_type" and rows[1:] == [t.value for t in DocumentType]
+    contract = next(line for line in prompt.splitlines() if line.startswith("| contract |"))
+    agreement = next(line for line in prompt.splitlines() if line.startswith("| agreement |"))
+    assert "a contract with a customer" in contract and "supplier" not in contract.split(";")[0]
+    for kind in ("lease", "loan agreement", "purchase or supplier agreement", "customer purchase order"):
+        assert kind in agreement, kind
+
+
 async def test_type_set_to_contract_runs_extraction() -> None:
     _, service, financial, evidence, _ = setup()
     evidence.ids["agreement.pdf"] = CON2

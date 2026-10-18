@@ -73,8 +73,22 @@ ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
     "bank_account": (EvidenceType.bank, Reliability.external_copy),
     "trial_balance": (EvidenceType.voucher, Reliability.internal_original),
 }
-# 文件指针的证据种类按文件类型, 回函属外部来源; 其他类文件定不了种类, 不作证据
-DOCUMENT_EVIDENCE = {DocumentType.contract: EvidenceType.contract, DocumentType.confirmation: EvidenceType.external}
+# 文件指针的证据种类按文件类型 (第 5 节文件指针映射表): 回函与登记摘录属外部来源, 约定书与协议按合同, 对账单按银行,
+# 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 待审财报 (判断引报表行) 与 other 不作证据, 不在表中
+DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
+    DocumentType.contract: EvidenceType.contract,
+    DocumentType.invoice: EvidenceType.invoice,
+    DocumentType.confirmation: EvidenceType.external,
+    DocumentType.bank_statement: EvidenceType.bank,
+    DocumentType.minutes: EvidenceType.voucher,
+    DocumentType.registry_extract: EvidenceType.external,
+    DocumentType.engagement_letter: EvidenceType.contract,
+    DocumentType.representation_letter: EvidenceType.voucher,
+    DocumentType.correspondence: EvidenceType.voucher,
+    DocumentType.governance_communication: EvidenceType.voucher,
+    DocumentType.agreement: EvidenceType.contract,
+    DocumentType.internal_record: EvidenceType.voucher,
+}
 # 不算行金额的金额列: 银行流水的交易后余额是累计数, 不是这一行的金额
 NOT_ROW_AMOUNTS = {"balance_after_cents"}
 MAX_ATTEMPTS = 3  # 首次调用加语法, 结构失败后最多 2 次重试
