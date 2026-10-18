@@ -444,7 +444,7 @@ NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
 
 
 class FakeRegistry:
-    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN."""
+    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN, eids 记下每次查询传的项目 ID."""
 
     def __init__(
         self,
@@ -454,11 +454,14 @@ class FakeRegistry:
         self.abn_records = abn_records or {}  # ABN -> 登记记录
         self.asic_records = asic_records or {}  # ACN -> 公司登记记录
         self.asic_queries: list[str] = []  # 查过的 ACN, 按查询顺序
+        self.eids: list[str] = []  # 每次查询 (ABN 与 ASIC) 传的项目 ID, 按查询顺序
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
+        self.eids.append(eid)
         return self.abn_records.get(abn)
 
-    async def asic_company(self, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+        self.eids.append(eid)
         self.asic_queries.append(acn)
         return self.asic_records.get(acn)
 

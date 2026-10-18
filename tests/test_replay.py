@@ -65,9 +65,9 @@ class CountingRegistry(FakeRegistry):
         super().__init__({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
         self.abn_calls = 0  # ABN 查询次数
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.abn_calls += 1
-        return await super().abn(abn)
+        return await super().abn(eid, abn)
 
 
 def counted_nodes(store: FakeOutputStore) -> tuple[GraphNodes, CountingRegistry, FakeTrail]:

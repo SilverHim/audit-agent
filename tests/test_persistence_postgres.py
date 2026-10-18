@@ -11,8 +11,8 @@ from sqlalchemy import delete, insert, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from backend.adapters.confirmation_mock import MockConfirmationChannel
-from backend.adapters.registry_mock import MockRegistrySource
+from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
+from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import ConfirmationRequest
@@ -195,8 +195,13 @@ async def test_evidence_and_adapters(storage, tmp_path):
     with pytest.raises(FileNotFoundError):
         await evidence.path("other-project", doc.id)
     registry = MockRegistrySource(ROOT / "data/demo")
-    assert (await registry.abn("68 900 042 015")).status == "Active"
-    assert await registry.abn("missing") is None
+    assert (await registry.abn(e.id, "68 900 042 015")).status == "Active"
+    assert await registry.abn(e.id, "missing") is None
+    routing = RoutingDatasetLoader(CsvDatasetLoader(ROOT / "data", engine, evidence), {})
+    by_dataset = DatasetRegistrySource(PostgresEngagementStore(engine), routing.supplement_dir)  # 按项目数据集 (demo)
+    assert (await by_dataset.asic_company(e.id, "900042015")).name == "Numbat Electronic Components Pty Ltd"
+    with pytest.raises(LookupError):
+        await by_dataset.abn("ENG-missing", "68900042015")
     req = ConfirmationRequest(
         bank_account_id="BA-01", bank_name="Harbourline", bsb="999-101", account_no="12345601", as_of=date(2026, 6, 30)
     )
@@ -205,6 +210,8 @@ async def test_evidence_and_adapters(storage, tmp_path):
     assert first == await MockConfirmationChannel(ROOT / "data/demo", tmp_path / "receipts").submit(e.id, req, "key")
     with pytest.raises(ValueError):
         await channel.submit(e.id, req.model_copy(update={"account_no": "23456702"}), "key")
+    routed = DatasetConfirmationChannel(PostgresEngagementStore(engine), routing.supplement_dir, tmp_path / "receipts")
+    assert await routed.submit(e.id, req, "key") == first  # 同一回执目录与幂等键
     assert await PostgresUserStore(engine).get(e.owner_id)
 
 

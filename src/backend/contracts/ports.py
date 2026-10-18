@@ -217,11 +217,12 @@ class LlmSettingsStore(Protocol):
 
 
 class RegistrySource(Protocol):
-    """ABN 与 ASIC 登记查询. mock 读数据集目录下的 registry/, 目录在构造时注入."""
+    """ABN 与 ASIC 登记查询, 首参为项目 ID. mock 按项目的数据集读该数据集目录下的 registry/ (Numbat 为
+    data/demo, Xero 为补造目录; 没有目录时查不到)."""
 
-    async def abn(self, abn: str) -> AbnRecord | None: ...
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
-    async def asic_company(self, acn: str) -> AsicCompanyRecord | None: ...
+    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None: ...
 
 
 class ConfirmationRequest(Model):
@@ -245,7 +246,8 @@ class ConfirmationReceipt(Model):
 
 
 class ConfirmationChannel(Protocol):
-    """函证平台: 发询证函, 收回函. mock 读数据集目录下的 confirmations/{account_no}.pdf."""
+    """函证平台: 发询证函, 收回函. mock 按项目的数据集读该数据集目录下的 confirmations/{account_no}.pdf
+    (没有目录或没有该账号的回函时为未回函)."""
 
     async def submit(self, eid: str, req: ConfirmationRequest, idempotency_key: str) -> ConfirmationReceipt:
         """同一幂等键重复调用返回同一回执."""

@@ -60,7 +60,7 @@ EID = ENGAGEMENT.id
 class BrokenRegistry(FakeRegistry):
     """ABN Lookup 不可用: 查询即抛错. ACC-04 执行失败, 节点转成失败执行与 failed 任务后等人处理."""
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         raise RuntimeError("ABN Lookup 不可用")
 
 
@@ -80,7 +80,7 @@ class HangingRegistry(FakeRegistry):
         super().__init__()
         self.entered = asyncio.Event()
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.entered.set()
         await asyncio.Event().wait()
         return None
@@ -276,12 +276,12 @@ class HangOnceRegistry(FakeRegistry):
         self.entered = asyncio.Event()
         self.calls = 0
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.calls += 1
         if self.calls == 1:
             self.entered.set()
             await asyncio.Event().wait()
-        return await super().abn(abn)
+        return await super().abn(eid, abn)
 
 
 class FailOnceOutputStore(FakeOutputStore):

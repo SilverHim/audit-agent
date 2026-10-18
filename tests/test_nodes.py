@@ -568,11 +568,11 @@ class TransientRegistry(FakeRegistry):
         super().__init__({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
         self.calls = 0  # ABN 查询次数
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("临时登记故障")
-        return await super().abn(abn)
+        return await super().abn(eid, abn)
 
 
 @pytest.mark.parametrize("resume", [None, Command(resume="D-1")], ids=["ainvoke_none", "resume_with_decision"])

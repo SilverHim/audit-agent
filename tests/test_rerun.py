@@ -56,11 +56,11 @@ class FlakyRegistry(FakeRegistry):
         self.failures = failures  # 前几次失败
         self.calls = 0  # ABN 查询次数
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.calls += 1
         if self.calls <= self.failures:
             raise RuntimeError(f"登记系统第 {self.calls} 次不可用")
-        return await super().abn(abn)
+        return await super().abn(eid, abn)
 
 
 async def failed_at_p0(failures: int = 1) -> tuple[GraphRunner, FakeOutputStore, FlakyRegistry]:

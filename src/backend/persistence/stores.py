@@ -451,6 +451,11 @@ class CsvDatasetLoader(TableLoader):
     def client_profile(self, dataset: str) -> ClientProfile:
         return ClientProfile.model_validate_json((safe_child(self.root, dataset) / "client_profile.json").read_text())
 
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录: 数据集目录本身 (如 data/demo); 不存在时为 None."""
+        directory = safe_child(self.root, dataset)
+        return directory if directory.is_dir() else None
+
     def datasets(self) -> list[str]:
         """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
         return subdirectories(self.root, "client_profile.json")
@@ -522,6 +527,11 @@ class XeroDatasetLoader(TableLoader):
         presets = found.planning_presets() if found else None
         return presets if presets is not None else read_planning(self.planning)
 
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录: 已核对的补造目录; 没有时为 None (快照里没有登记与回函数据)."""
+        found = self.supplement(dataset)
+        return found.root if found else None
+
     def client_profile(self, dataset: str) -> ClientProfile:
         found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在
         profile = xero_client_profile(self.snapshot(dataset))
@@ -551,6 +561,12 @@ class RoutingDatasetLoader:
 
     def client_profile(self, dataset: str) -> ClientProfile:
         return self.pick(dataset).client_profile(dataset)
+
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有
+        这个方法时为 None."""
+        method: Callable[[str], Path | None] | None = getattr(self.pick(dataset), "supplement_dir", None)
+        return method(dataset) if method is not None else None
 
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""

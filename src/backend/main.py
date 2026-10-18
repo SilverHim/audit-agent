@@ -9,9 +9,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
-from backend.adapters.confirmation_mock import MockConfirmationChannel
+from backend.adapters.confirmation_mock import DatasetConfirmationChannel
 from backend.adapters.llm import SwitchableLLMClient, llm_version, make_llm_client
-from backend.adapters.registry_mock import MockRegistrySource
+from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
 from backend.api.errors import validation_error
@@ -48,37 +48,40 @@ def build_deps(settings: Settings) -> AgentDeps:
     financial_store = PostgresFinancialDataStore(engine)
     evidence_store = FileEvidenceStore(settings.EVIDENCE_ROOT, engine)
     library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
-    dataset_dir = settings.DATASET_ROOT / "demo"
     # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置
     model_name = llm_version(settings)["model"]
     llm = SwitchableLLMClient(make_llm_client(settings), model_name)
     review_llm = SwitchableLLMClient(make_llm_client(settings), model_name)
     trail = PostgresAuditTrail(engine)
+    engagement_store = PostgresEngagementStore(engine)
+    datasets = RoutingDatasetLoader(
+        CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
+        {
+            XeroDatasetLoader.PREFIX: XeroDatasetLoader(
+                settings.DATASET_ROOT / "external" / "xero" / "api",
+                settings.KNOWLEDGE_ROOT / "planning",
+                engine,
+                evidence_store,
+                supplements=settings.DATASET_ROOT / "xero_demo",
+            )
+        },
+    )
     return AgentDeps(
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(engine),
         evidence_store=evidence_store,
-        datasets=RoutingDatasetLoader(
-            CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
-            {
-                XeroDatasetLoader.PREFIX: XeroDatasetLoader(
-                    settings.DATASET_ROOT / "external" / "xero" / "api",
-                    settings.KNOWLEDGE_ROOT / "planning",
-                    engine,
-                    evidence_store,
-                    supplements=settings.DATASET_ROOT / "xero_demo",
-                )
-            },
-        ),
-        engagement_store=PostgresEngagementStore(engine),
+        datasets=datasets,
+        engagement_store=engagement_store,
         llm=llm,
         rules=SqlRuleEngine(financial_store),
         judgments=JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library),
         queue=ReviewQueue(library),
         library=library,
         trail=trail,
-        registry=MockRegistrySource(dataset_dir),
-        confirmations=MockConfirmationChannel(dataset_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"),
+        registry=DatasetRegistrySource(engagement_store, datasets.supplement_dir),
+        confirmations=DatasetConfirmationChannel(
+            engagement_store, datasets.supplement_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"
+        ),
         users=PostgresUserStore(engine),
         review_llm=review_llm,
     )
