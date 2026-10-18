@@ -13,7 +13,7 @@ from backend.adapters.llm import llm_version
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import AgentId, Engagement, GateDecision, Phase, Procedure, ReviewRecord
-from backend.contracts.state import EngagementState, initial_state
+from backend.contracts.state import EngagementState, fill_defaults, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.graph import GATE_NODES
 from backend.services.features import BASELINE
@@ -52,10 +52,10 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     第一个 rerun 决定已用过), 也算检查点里有.
     """
     eid = engagement.id
-    values = snapshot.values
+    values = fill_defaults(snapshot.values)
     stored = {d.id for d in await deps.output_store.latest(eid, GateDecision)}
     stored |= {r.id for r in await deps.output_store.latest(eid, ReviewRecord)}
-    in_state = {d.id for d in values.get("gate_decisions", [])} | {r.id for r in values.get("review_records", [])}
+    in_state = {d.id for d in values["gate_decisions"]} | {r.id for r in values["review_records"]}
     for waiting in waiting_payloads(snapshot):
         if isinstance(waiting, dict):
             in_state.update(waiting.get("records", []))

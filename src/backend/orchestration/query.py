@@ -19,7 +19,7 @@ from backend.contracts.models import (
     ReviewTask,
     TaskStatus,
 )
-from backend.contracts.state import EngagementState
+from backend.contracts.state import EngagementState, fill_defaults
 from backend.contracts.views import (
     AcceptanceMaterial,
     CompletionMaterial,
@@ -70,7 +70,7 @@ class GraphStateQuery:
         """项目总览: 前端每 2 秒轮询一次, 据此显示进度, 当前闸门, 程序状态表与待办数."""
         engagement, profile = await self._engagement_and_profile(eid)
         snapshot = await self.app.aget_state(GraphRunner.config(eid))
-        values = snapshot.values  # 未启动的项目为空字典, 故下面用 get 取值
+        values = fill_defaults(snapshot.values)  # 未启动的项目检查点为空, 下面几项取缺省值 None
 
         # 程序状态与待决任务以 Store 为准: DecisionSubmit 写入后, Store 先于检查点更新
         procedures = await self.deps.output_store.latest(eid, Procedure)
@@ -103,10 +103,10 @@ class GraphStateQuery:
             awaiting_review=any(task.interrupts for task in snapshot.tasks),
             procedures=summaries,
             pending_tasks=len(pending),
-            materiality_cents=values.get("materiality_cents"),
-            performance_materiality_cents=values.get("performance_materiality_cents"),
-            clearly_trivial_cents=values.get("clearly_trivial_cents"),
-            opinion_route=values.get("opinion_route"),
+            materiality_cents=values["materiality_cents"],
+            performance_materiality_cents=values["performance_materiality_cents"],
+            clearly_trivial_cents=values["clearly_trivial_cents"],
+            opinion_route=values["opinion_route"],
         )
 
     async def _resume_hint(self, eid: str) -> str | None:
@@ -141,7 +141,7 @@ class GraphStateQuery:
         gate = current_gate(snapshot.next)
         if gate is None:
             return None
-        values = snapshot.values
+        values = fill_defaults(snapshot.values)
         if gate is GateId.ACC_01:
             scorecard = values["acceptance_scorecard"]
             if scorecard is None:

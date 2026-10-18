@@ -10,8 +10,9 @@ report_draft → gate_rpt01 → { archive | report_draft }
 四道闸门 (gate_*) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口, 回到自己重新呈报.
 """
 
-from collections.abc import Callable, Hashable
-from typing import Literal
+import functools
+from collections.abc import Awaitable, Callable, Hashable
+from typing import Any, Literal, Protocol, TypeVar
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -28,7 +29,7 @@ from backend.contracts.models import (
     TaskStatus,
     Versioned,
 )
-from backend.contracts.state import EngagementState
+from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.nodes import FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
 from backend.services.features import BASELINE
@@ -48,6 +49,59 @@ GATES = list(GATE_NODES.values())  # 四个闸门节点名, 编译时设为静�
 GateRoute = Literal["approve", "reject", "rerun", "represent"]
 
 UNFINISHED = (ProcedureStatus.planned, ProcedureStatus.executing)  # 还要派发执行的程序状态
+
+
+T = TypeVar("T")
+
+
+class StateNode(Protocol):
+    """节点函数: 收整个状态, 返回要更新的片段. 参数名须为 state, 与 LangGraph add_node 的声明一致."""
+
+    def __call__(self, state: EngagementState) -> Awaitable[StatePatch]: ...
+
+
+class FieldworkNode(Protocol):
+    """fieldwork 节点函数: 收 Send 带来的 FieldworkInput."""
+
+    def __call__(self, payload: FieldworkInput) -> Awaitable[StatePatch]: ...
+
+
+def node_with_defaults(node: StateNode) -> StateNode:
+    """登记节点函数时包一层: 先经 fill_defaults 补上检查点缺的键 (旧检查点没有新字段) 再调用. functools.wraps 让
+    LangGraph 按原函数的签名注入参数 (如 config), 包装函数原样转交."""
+
+    @functools.wraps(node)
+    async def wrapped(state: EngagementState, **injected: Any) -> StatePatch:
+        return await node(fill_defaults(state), **injected)
+
+    return wrapped
+
+
+def fieldwork_with_defaults(node: FieldworkNode) -> FieldworkNode:
+    """fieldwork 的输入是 Send 带来的 FieldworkInput, 补的是其中的状态快照 (旧检查点里待派发的 Send 带旧状态)."""
+
+    @functools.wraps(node)
+    async def wrapped(payload: FieldworkInput, **injected: Any) -> StatePatch:
+        return await node(
+            FieldworkInput(
+                instance=payload["instance"],
+                procedure_ids=payload["procedure_ids"],
+                state=fill_defaults(payload["state"]),
+            ),
+            **injected,
+        )
+
+    return wrapped
+
+
+def route_with_defaults(route: Callable[[EngagementState], T]) -> Callable[[EngagementState], T]:
+    """登记路由函数时包一层, 同 node_with_defaults."""
+
+    @functools.wraps(route)
+    def wrapped(state: EngagementState, **injected: Any) -> T:
+        return route(fill_defaults(state), **injected)
+
+    return wrapped
 
 
 class ScheduleStuck(RuntimeError):
@@ -208,22 +262,22 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     """
     g = StateGraph(EngagementState)
 
-    # ── 节点: 名字 → 节点函数 ──
-    g.add_node("p0_intel", nodes.p0_intel)
-    g.add_node("p1_ingest", nodes.p1_ingest)
-    g.add_node("p1_analytics", nodes.p1_analytics)
-    g.add_node("assemble_pack", nodes.assemble_pack)
-    g.add_node("schedule", nodes.schedule)
+    # ── 节点: 名字 → 节点函数. 节点与路由函数都包一层 fill_defaults, 旧检查点缺的键读到缺省值 ──
+    g.add_node("p0_intel", node_with_defaults(nodes.p0_intel))
+    g.add_node("p1_ingest", node_with_defaults(nodes.p1_ingest))
+    g.add_node("p1_analytics", node_with_defaults(nodes.p1_analytics))
+    g.add_node("assemble_pack", node_with_defaults(nodes.assemble_pack))
+    g.add_node("schedule", node_with_defaults(nodes.schedule))
     # fieldwork 接收 Send 传来的 FieldworkInput 而不是整个状态, 与 add_node 声明的类型对不上, 故忽略类型检查
-    g.add_node("fieldwork", nodes.fieldwork)  # type: ignore[arg-type]
-    g.add_node("fan_in", nodes.fan_in)
-    g.add_node("await_events", nodes.await_events)
-    g.add_node("completion", nodes.completion)
-    g.add_node("report_draft", nodes.report_draft)
-    g.add_node("archive", nodes.archive)
-    g.add_node("declined", nodes.declined)
+    g.add_node("fieldwork", fieldwork_with_defaults(nodes.fieldwork))  # type: ignore[call-overload]
+    g.add_node("fan_in", node_with_defaults(nodes.fan_in))
+    g.add_node("await_events", node_with_defaults(nodes.await_events))
+    g.add_node("completion", node_with_defaults(nodes.completion))
+    g.add_node("report_draft", node_with_defaults(nodes.report_draft))
+    g.add_node("archive", node_with_defaults(nodes.archive))
+    g.add_node("declined", node_with_defaults(nodes.declined))
     for node in GATES:
-        g.add_node(node, nodes.gate)  # 闸门节点什么都不做, 出口全由 gate_route 决定
+        g.add_node(node, node_with_defaults(nodes.gate))  # 闸门节点什么都不做, 出口全由 gate_route 决定
 
     # ── 固定边: A 执行完一定去 B ──
     g.add_edge(START, "p0_intel")
@@ -233,9 +287,11 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g.add_edge("assemble_pack", "schedule")
     # ── P2 循环: schedule → fieldwork × N → fan_in → 再判断去哪 ──
     # 条件边: 执行完由路由函数选下一个节点; 第三个参数列出所有可能的去向
-    g.add_conditional_edges("schedule", route_schedule(nodes), ["fieldwork", "fan_in"])
+    g.add_conditional_edges("schedule", route_with_defaults(route_schedule(nodes)), ["fieldwork", "fan_in"])
     g.add_edge("fieldwork", "fan_in")  # 所有并行实例都结束后才进 fan_in
-    g.add_conditional_edges("fan_in", after_fan_in(nodes), ["schedule", "await_events", "completion"])
+    g.add_conditional_edges(
+        "fan_in", route_with_defaults(after_fan_in(nodes)), ["schedule", "await_events", "completion"]
+    )
     g.add_edge("await_events", "fan_in")  # 审计师处理完复核, 回 fan_in 重新判断
     g.add_edge("completion", "gate_fin")
     g.add_edge("report_draft", "gate_rpt01")
@@ -251,7 +307,7 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     }
     for gate, node in GATE_NODES.items():
         # 每道闸门再加一个 represent 出口, 指向闸门自己
-        g.add_conditional_edges(node, gate_route(gate), {**exits[gate], "represent": node})
+        g.add_conditional_edges(node, route_with_defaults(gate_route(gate)), {**exits[gate], "represent": node})
     return g
 
 

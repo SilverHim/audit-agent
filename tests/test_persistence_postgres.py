@@ -229,6 +229,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         GateVerdict,
         Judgment,
         Misstatement,
+        OpinionType,
         Phase,
         ReviewTask,
         TaskStatus,
@@ -299,6 +300,9 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         await settle()
         final = await deps.engagement_store.get(e.id)
         assert final.phase == Phase.Archived and final.locked
+        # 检查点读回的顶层枚举字段 (checkpoint.TOP_LEVEL_ENUMS) 是枚举而不是字符串; Postgres 由 AuditPostgresSaver 转回
+        values = (await graph.aget_state(runner.config(e.id))).values
+        assert values["phase"] is Phase.Archived and values["opinion_route"] is OpinionType.qualified
         assert len(await deps.output_store.latest(e.id, AuditException)) == 4
         assert len(await deps.output_store.latest(e.id, Judgment)) == 6
         assert all(t.status == TaskStatus.decided for t in await deps.output_store.latest(e.id, ReviewTask))

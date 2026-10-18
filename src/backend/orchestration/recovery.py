@@ -36,7 +36,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
     Versioned,
 )
-from backend.contracts.state import EngagementState, StatePatch
+from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.decisions import GATE_MATERIAL, GATE_PROCEDURE, materiality_amounts, review_trail
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import NODE_PROCEDURES
@@ -68,7 +68,7 @@ async def gate_values(
     """一个闸门决定要写进检查点的状态片段, 读 Store 与 engagements 表重建 (同 DecisionSubmit 越过闸门时写的字段)."""
     eid = engagement.id
     store = deps.output_store
-    values = snapshot.values
+    values = fill_defaults(snapshot.values)
     patch: StatePatch = {"gate_decisions": [decision]}
     pack = latest_in_order(values["procedure_pack"], await store.latest(eid, Procedure))
     if pack != values["procedure_pack"]:
@@ -115,10 +115,11 @@ async def backfill_transitions(
 ) -> None:
     """补写决定写出的状态迁移留痕 (同键跳过): Store 中不在检查点程序包里的程序版本, 以及从检查点阶段到项目表阶段."""
     eid = engagement.id
-    before = {(p.id, p.version) for p in snapshot.values["procedure_pack"]}
+    values = fill_defaults(snapshot.values)
+    before = {(p.id, p.version) for p in values["procedure_pack"]}
     changed = [p for p in await deps.output_store.latest(eid, Procedure) if (p.id, p.version) not in before]
     entries = await procedure_transitions(deps.output_store, eid, changed)
-    entries += phase_transition(eid, snapshot.values["phase"], engagement.phase, procedure_id)
+    entries += phase_transition(eid, values["phase"], engagement.phase, procedure_id)
     await record_transitions(deps.trail, entries)
 
 
@@ -130,7 +131,7 @@ async def catch_up_gates(
     决定须针对图当前停着的闸门, 否则抛 RuntimeError (Store 与检查点对不上, 须人工处理). 返回补做后的检查点."""
     eid = engagement.id
     config = GraphRunner.config(eid)
-    known = {d.id for d in snapshot.values.get("gate_decisions", [])}
+    known = {d.id for d in fill_defaults(snapshot.values)["gate_decisions"]}
     missing = [d for d in await deps.output_store.latest(eid, GateDecision) if d.id not in known]
     for decision in sorted(missing, key=lambda d: d.decided_at):
         gate = current_gate(snapshot.next)
@@ -166,7 +167,7 @@ async def catch_up_profile(
     """项目采用的画像版本高于检查点的 (更新客户资料已提交, 检查点没跟上): 先补写 decision 留痕, 再以 ACC-01 闸门身份
     写入新版本号, ACC-01 的路由随即选 rerun 回 p0_intel. 不在 ACC-01 闸门时抛 RuntimeError. 返回补做后的检查点."""
     version = engagement.client_profile_version
-    if version <= snapshot.values["client_profile_version"]:
+    if version <= fill_defaults(snapshot.values)["client_profile_version"]:
         return snapshot
     if current_gate(snapshot.next) is not GateId.ACC_01:
         raise RuntimeError(f"客户画像第 {version} 版未进检查点, 检查点却停在 {snapshot.next}, 无法补做")
@@ -228,7 +229,7 @@ async def catch_up_review(
     """
     eid = engagement.id
     store = deps.output_store
-    in_state = {r.id for r in snapshot.values.get("review_records", [])}
+    in_state = {r.id for r in fill_defaults(snapshot.values)["review_records"]}
     waits = waiting_payloads(snapshot)
     read = {rid for w in waits if isinstance(w, dict) for rid in w.get("records", [])}  # 本节点已读回的
     all_records = await store.latest(eid, ReviewRecord)

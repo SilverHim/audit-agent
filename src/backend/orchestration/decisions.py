@@ -58,7 +58,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
     Versioned,
 )
-from backend.contracts.state import EngagementState, StatePatch
+from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.graph import GATE_NODES
 from backend.orchestration.nodes import rerun_subjects, save_outputs, uncovered_objectives, update_procedure
 from backend.orchestration.query import current_gate
@@ -879,8 +879,9 @@ class GraphDecisionSubmit:
             if current_gate(snapshot.next) is not decision.gate:
                 raise DecisionRejected("NOT_AT_GATE", f"当前不在 {decision.gate} 闸门")
             target = await self.check_gate_decision(eid, decision)
+            values = fill_defaults(snapshot.values)
             # 效果的输入: 程序包取检查点; 风险清单与审计目标取 Store, 与校验 edits 版本时读的一致
-            sources: StatePatch = {"procedure_pack": snapshot.values["procedure_pack"]}
+            sources: StatePatch = {"procedure_pack": values["procedure_pack"]}
             if decision.gate is GateId.ACC_01:
                 effects = acc01_effects(sources["procedure_pack"], decision)
             elif decision.gate is GateId.PLN_01_03:
@@ -897,7 +898,7 @@ class GraphDecisionSubmit:
                 sources["report_versions"] = [target]
                 effects = rpt01_effects(sources["procedure_pack"], decision, target, self.now())
             created = new_versions(effects, sources)
-            written = await self._write_gate(eid, decision, effects, created, snapshot.values["phase"])
+            written = await self._write_gate(eid, decision, effects, created, values["phase"])
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
             # 效果已出材料的新版本时 (RPT-01 签字) 只写新版本, 路由另行放行 (gate_route)
             field = GATE_MATERIAL[decision.gate]
@@ -922,7 +923,7 @@ class GraphDecisionSubmit:
         if isinstance(target, Judgment):
             found = [await store.get(eid, AuditException, x) for x in target.exception_ids]
             exceptions = [x for x in found if x is not None]
-        taken = {j.id for j in snapshot.values.get("judgments", [])}
+        taken = {j.id for j in fill_defaults(snapshot.values)["judgments"]}
         effects = review_effects(record, task, target, exceptions, taken)
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库

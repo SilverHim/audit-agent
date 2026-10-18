@@ -1,6 +1,8 @@
 """编排状态与 reducer, 定义见 开发接口文档.md 第 3 节."""
 
-from typing import Annotated, Any, TypedDict, TypeVar
+import copy
+from collections.abc import Mapping
+from typing import Annotated, Any, TypedDict, TypeVar, cast
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
@@ -122,34 +124,58 @@ class EngagementState(TypedDict):
     opinion_route: OpinionType | None  # FIN-01 确认的意见类型; 只在图状态中
 
 
+# 项目启动时由 initial_state 的参数给出的键, 检查点里一定有, 不登记缺省值
+REQUIRED_KEYS = ("engagement_id", "phase", "version_snapshot", "client_profile_version", "procedure_pack")
+
+# 其余各键的缺省值: 列表为 [], 单对象与 int | None 为 None. 新增状态字段须在此登记 (第 3 节字段登记清单):
+# 旧检查点没有该键时, 节点, 路由, 查询, 决定提交与恢复补做经 fill_defaults 读到缺省值
+STATE_DEFAULTS: dict[str, list[Any] | None] = {
+    "acceptance_scorecard": None,
+    "analytics": None,
+    "materiality_candidates": None,
+    "materiality_cents": None,
+    "performance_materiality_cents": None,
+    "clearly_trivial_cents": None,
+    "audit_objectives": [],
+    "risk_register": [],
+    "schedule_table": [],
+    "documents": [],
+    "staged_results": [],
+    "procedure_runs": [],
+    "exceptions": [],
+    "judgments": [],
+    "review_tasks": [],
+    "confirmations": [],
+    "report_versions": [],
+    "review_records": [],
+    "gate_decisions": [],
+    "misstatements": [],
+    "uncorrected_schedule": None,
+    "opinion_route": None,
+}
+
+
+def fill_defaults(values: Mapping[str, Any]) -> EngagementState:
+    """补上缺的登记键 (列表各取一个新的空列表), 返回新字典, 不改入参.
+
+    检查点里缺键的情形: 加字段之前存的检查点, 或没有 reducer 的通道从未写过. 带 reducer 的通道
+    LangGraph 读回时自行补空列表, 照样经这里. 未启动的项目 (检查点为空) 只补登记的键, 不补 REQUIRED_KEYS.
+    """
+    filled = dict(values)
+    for key, default in STATE_DEFAULTS.items():
+        if key not in filled:
+            filled[key] = copy.copy(default)
+    return cast(EngagementState, filled)
+
+
 def initial_state(engagement: Engagement, procedures: list[Procedure], client_profile_version: int) -> EngagementState:
-    """runner.start 的图输入: 固定集程序在此实例化, 客户画像取项目创建时的版本, 其余字段为空."""
-    return EngagementState(
-        engagement_id=engagement.id,
-        phase=engagement.phase,
-        version_snapshot=dict(engagement.version_snapshot),
-        acceptance_scorecard=None,
-        client_profile_version=client_profile_version,
-        analytics=None,
-        materiality_candidates=None,
-        materiality_cents=None,
-        performance_materiality_cents=None,
-        clearly_trivial_cents=None,
-        audit_objectives=[],
-        risk_register=[],
-        procedure_pack=procedures,
-        schedule_table=[],
-        documents=[],
-        staged_results=[],
-        procedure_runs=[],
-        exceptions=[],
-        judgments=[],
-        review_tasks=[],
-        confirmations=[],
-        report_versions=[],
-        review_records=[],
-        gate_decisions=[],
-        misstatements=[],
-        uncorrected_schedule=None,
-        opinion_route=None,
+    """runner.start 的图输入: 固定集程序在此实例化, 客户画像取项目创建时的版本, 其余字段取 STATE_DEFAULTS."""
+    return fill_defaults(
+        {
+            "engagement_id": engagement.id,
+            "phase": engagement.phase,
+            "version_snapshot": dict(engagement.version_snapshot),
+            "client_profile_version": client_profile_version,
+            "procedure_pack": procedures,
+        }
     )
