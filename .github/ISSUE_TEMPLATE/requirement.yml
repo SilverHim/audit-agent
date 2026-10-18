@@ -1,0 +1,59 @@
+name: 需求
+description: 给云端开发的新功能, 缺陷或改进
+labels: ["需求"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 要做成什么样.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型
+      options:
+        - 新功能
+        - 缺陷
+        - 改进
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 来由
+      description: 为什么要做; 缺陷写复现步骤 (项目, 操作, 实际结果).
+  - type: textarea
+    id: decisions
+    attributes:
+      label: 已定的决定
+      description: 已经拍板的事项, 尽量附原话.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收
+      description: 怎样算做完. 可以先写大概, 由云端细化.
+  - type: dropdown
+    id: schedule
+    attributes:
+      label: 排期
+      options:
+        - 马上先做
+        - 按计划排
+        - 有空再做
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 涉及
+      options:
+        - label: 后端
+        - label: 前端
+        - label: 数据
+        - label: 文档
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充

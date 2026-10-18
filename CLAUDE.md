@@ -102,4 +102,4 @@ docs/diagrams/render.sh [file.puml]       # 需要 ~/.local/lib/plantuml.jar 与
 
 ## 云端开发
 
-本仓库 (个人仓库 audit-agent) 用于云端开发, 无法连接悉尼大学 GitHub. 云端会话先读 `docs/云端开发/开发提示词.md`, 计划总纲在 `docs/云端开发/计划-第1至3级.md`, 开发流程与审核规则在同目录. Xero 数据已随仓库放在 `data/external/xero/`.
+本仓库 (个人仓库 audit-agent) 用于云端开发, 无法连接悉尼大学 GitHub. 云端会话先读 `docs/云端开发/开发提示词.md`, 计划总纲在 `docs/云端开发/计划-第1至3级.md`, 开发流程与审核规则在同目录. Xero 数据已随仓库放在 `data/external/xero/`. 新需求由用户在 GitHub Issue (标签 `需求`) 里提, 见 `docs/云端开发/开发流程.md` "新需求的入口".
