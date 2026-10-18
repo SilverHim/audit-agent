@@ -111,6 +111,7 @@ from backend.contracts.records import (
     AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
+    DatasetTraits,
     DeliveryNote,
     JournalEntry,
     SalesInvoice,
@@ -1321,13 +1322,21 @@ class FakeDatasetLoader:
     预置计划数据取 Numbat 的. 更正分录取构造时预置的 adjustments: load_adjustments 记下调用, 返回所请求凭证的行
     (按 id 排序, 凭证号不在预置中抛 LookupError), 不写假财务存储; 没有预置 (None, 同数据集没有更正分录文件) 时抛
     FileNotFoundError. adjustment_entries 与 adjustment_entry_nos 按预置行, 凭证号自然序, 同真实实现.
+    数据集声明取构造时预置的 traits (数据集名 → 声明), 没预置的数据集为缺省值; dataset_traits 记下调用的数据集名.
     """
 
-    def __init__(self, financial_store: FakeFinancialStore, adjustments: list[JournalEntry] | None = None) -> None:
+    def __init__(
+        self,
+        financial_store: FakeFinancialStore,
+        adjustments: list[JournalEntry] | None = None,
+        traits: dict[str, DatasetTraits] | None = None,
+    ) -> None:
         self.financial_store = financial_store  # 合同登记到这里
         self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
         self.adjustments = adjustments  # 预置的更正分录行; None 表示数据集没有更正分录文件
         self.adjustment_loads: list[tuple[str, str, list[str] | None]] = []  # (项目编号, 数据集名, 凭证号)
+        self.traits = dict(traits or {})  # 数据集名 → 声明, 可在测试中改
+        self.traits_calls: list[str] = []  # dataset_traits 收到的数据集名, 按调用顺序
 
     async def load_adjustments(
         self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
@@ -1355,6 +1364,10 @@ class FakeDatasetLoader:
 
     def adjustment_entry_nos(self, dataset: str) -> list[str]:
         return [x.entry_no for x in self.adjustment_entries(dataset)]
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        self.traits_calls.append(dataset)
+        return self.traits.get(dataset, DatasetTraits())
 
     async def load(self, eid: str, dataset: str) -> None:
         self.loads.append((eid, dataset))

@@ -15,22 +15,26 @@ import pdfplumber
 import pytest
 import yaml
 from jinja2 import Environment, FileSystemLoader
+from pydantic import ValidationError
 
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
     AuditObjective,
     EvidencePointer,
     EvidenceType,
+    Model,
     Phase,
     Procedure,
     RiskLevel,
     TermType,
 )
+from backend.contracts.records import DatasetTraits
 from backend.contracts.state import initial_state
 from backend.core.config import get_settings
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
-from backend.services.procedure_library import ProcedureLibrary, highest_risk
+from backend.services import procedure_library
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_SETS, NUMBAT, UPLOAD_RUNTIME, FixtureSet
@@ -1757,8 +1761,10 @@ def test_resolve_params_by_risk_needs_risk_level() -> None:
     state = initial_state(ENGAGEMENT, [], 1)
 
     with pytest.raises(ValueError, match=r"REV-08\.window_days"):
-        lib.resolve_params(lib.load("REV-08"), ENGAGEMENT, state, None)
-    assert lib.resolve_params(lib.load("CSH-04"), ENGAGEMENT, state, None) == {"as_of": date(2026, 6, 30)}
+        lib.resolve_params(lib.load("REV-08"), ENGAGEMENT, state, None, traits=DatasetTraits())
+    assert lib.resolve_params(lib.load("CSH-04"), ENGAGEMENT, state, None, traits=DatasetTraits()) == {
+        "as_of": date(2026, 6, 30)
+    }
 
 
 def test_resolve_params_by_risk_without_that_level() -> None:
@@ -1766,7 +1772,9 @@ def test_resolve_params_by_risk_without_that_level() -> None:
     lib = ProcedureLibrary(ROOT)
 
     with pytest.raises(ValueError, match="low"):
-        lib.resolve_params(lib.load("REV-02"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), RiskLevel.low)
+        lib.resolve_params(
+            lib.load("REV-02"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), RiskLevel.low, traits=DatasetTraits()
+        )
 
 
 def test_resolve_params_state_ref_not_set() -> None:
@@ -1774,20 +1782,223 @@ def test_resolve_params_state_ref_not_set() -> None:
     lib = ProcedureLibrary(ROOT)
 
     with pytest.raises(ValueError, match="materiality_cents"):
-        lib.resolve_params(lib.load("FIN-04"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None)
+        lib.resolve_params(
+            lib.load("FIN-04"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits()
+        )
 
 
 def test_resolve_params_literals_are_copies() -> None:
     """改解析结果里的列表与字典, 模板不受影响."""
     lib = ProcedureLibrary(ROOT)
 
-    out = lib.resolve_params(lib.load("PLN-01"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None)
+    out = lib.resolve_params(
+        lib.load("PLN-01"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits()
+    )
     out["candidates"][0]["pct_low"] = 0
     out["candidates"].append({"basis": "x"})
 
     candidates = lib.load("PLN-01").params["candidates"]
     assert len(candidates) == 3
     assert candidates[0]["pct_low"] == 0.005
+
+
+# ── R95: 数据集声明与 {ref: dataset.<键>} ──
+
+# Xero演示数据集设计.md 第 5.2 节的 JSON 原文 (过长的一行拆成两段相接)
+DESIGN_TRAITS = (
+    r"""{"dataset": "xero/20261017-q1",
+ "data_as_of": "2026-10-17",
+ "prior_period_start": "2025-07-01",
+ "entry_timestamps_reliable": false,
+ "entry_timestamps_note": "Created timestamps are regenerated when the Xero demo company is reset; """
+    r"""15 journals carry created times after 19 October 2026 and up to 26 November 2026.",
+ "reversal_reference_pattern": "Reversal of ID (\\d+)",
+ "reversal_entry_no_template": "XJ-{1}",
+ "counterparty_prefixes": ["payment to", "payment from", "payment:"],
+ "audit_adjustment_entry_prefix": "AJE-",
+ "payroll_accounts": {"wages_expense": ["477"], "super_expense": ["478"], "super_payable": ["826"],
+                      "wages_payable": ["804"], "leave_provision": ["805"]},
+ "payroll_register": "payroll/employees.csv"}"""
+)
+# 测试模板: 三个参数各引一处声明 (日期, 嵌套的科目列表, 有缺省值的前缀)
+REF_TEMPLATE = (
+    "id: X-REF\nname: 自测\nphase: P1_Planning\ncycle: Planning\nowner: A4\nengine: rule\nautonomy_level: L3\n"
+    "params:\n  a: {ref: dataset.prior_period_start}\n  b: {ref: dataset.payroll_accounts.wages_expense}\n"
+    "  c: {ref: dataset.audit_adjustment_entry_prefix}\n"
+)
+
+
+def design_traits() -> DatasetTraits:
+    return DatasetTraits.model_validate_json(DESIGN_TRAITS)
+
+
+def ref_library(tmp_path: Path, template: str = REF_TEMPLATE) -> ProcedureLibrary:
+    """现有 knowledge 加一个测试模板 (文件名取其 id) 的程序库."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(ROOT, root)
+    pid = yaml.safe_load(template)["id"]
+    (root / "procedures" / f"{pid}.yaml").write_text(template, encoding="utf-8")
+    return ProcedureLibrary(root)
+
+
+def test_dataset_traits_defaults() -> None:
+    """没有声明文件的数据集 (Numbat) 的缺省值, 设计稿第 5.2 节."""
+    assert DatasetTraits().model_dump() == {
+        "dataset": None,
+        "data_as_of": None,
+        "prior_period_start": None,
+        "entry_timestamps_reliable": True,
+        "entry_timestamps_note": None,
+        "reversal_reference_pattern": None,
+        "reversal_entry_no_template": None,
+        "counterparty_prefixes": ["payment to", "payment from", "payment:"],
+        "audit_adjustment_entry_prefix": "AJE-",
+        "payroll_accounts": None,
+        "payroll_register": None,
+    }
+
+
+def test_dataset_traits_from_design() -> None:
+    traits = design_traits()
+    assert (traits.prior_period_start, traits.data_as_of, traits.entry_timestamps_reliable) == (
+        date(2025, 7, 1),
+        date(2026, 10, 17),
+        False,
+    )
+    assert (traits.reversal_reference_pattern, traits.reversal_entry_no_template) == (r"Reversal of ID (\d+)", "XJ-{1}")
+    assert traits.payroll_accounts is not None
+    assert (traits.payroll_accounts.wages_expense, traits.payroll_accounts.leave_provision) == (["477"], ["805"])
+    assert DatasetTraits.model_validate(json.loads(DESIGN_TRAITS)) == traits
+    supplements = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1"  # 声明同第 5.2 节
+    assert json.loads((supplements / "dataset_traits.json").read_text(encoding="utf-8")) == json.loads(DESIGN_TRAITS)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"colour": "red"},  # 未知键
+        {"reversal_reference_pattern": "Reversal of ID (\\d+"},  # 不能编译
+        {"reversal_reference_pattern": "Reversal of ID \\d+"},  # 没有捕获组
+        {"reversal_reference_pattern": "(Reversal) of ID (\\d+)"},  # 两个捕获组
+        {"reversal_entry_no_template": "XJ-{n}"},  # 模板不含 {1}
+        {"reversal_entry_no_template": None},  # 只给格式
+        {"reversal_reference_pattern": None},  # 只给模板
+    ],
+)
+def test_dataset_traits_rejects_bad_declarations(change: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        DatasetTraits.model_validate({**json.loads(DESIGN_TRAITS), **change})
+
+
+def test_dataset_refs_resolve(tmp_path: Path) -> None:
+    """dataset. 的 ref 按声明的字段路径取值, 支持一层嵌套; 值为空时以 None 执行 (与状态 ref 不同); 结果深拷贝."""
+    lib = ref_library(tmp_path)
+    template, state = lib.load("X-REF"), initial_state(ENGAGEMENT, [], 1)
+    traits = design_traits()
+
+    out = lib.resolve_params(template, ENGAGEMENT, state, None, traits=traits)
+    assert out == {"a": date(2025, 7, 1), "b": ["477"], "c": "AJE-"}
+    assert lib.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits()) == {
+        "a": None,
+        "b": None,
+        "c": "AJE-",
+    }
+    out["b"].append("478")
+    assert traits.payroll_accounts is not None and traits.payroll_accounts.wages_expense == ["477"]
+
+
+def test_dataset_ref_to_a_nested_model_is_a_dict(tmp_path: Path) -> None:
+    template = REF_TEMPLATE.split("params:")[0] + "params:\n  accounts: {ref: dataset.payroll_accounts}\n"
+    lib = ref_library(tmp_path, template)
+    out = lib.resolve_params(
+        lib.load("X-REF"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits()
+    )
+    assert out == {
+        "accounts": {
+            k: [v]
+            for k, v in zip(
+                ["wages_expense", "super_expense", "super_payable", "wages_payable", "leave_provision"],
+                ["477", "478", "826", "804", "805"],
+                strict=True,
+            )
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "dataset.no_such_key",
+        "dataset",
+        "dataset.payroll_accounts.no_such_key",
+        "dataset.payroll_accounts.wages_expense.x",
+        "dataset.audit_adjustment_entry_prefix.x",
+        "profile.x",  # 画像命名空间尚未登记
+        "nosuch",
+    ],
+)
+def test_refs_are_checked_on_load(tmp_path: Path, ref: str) -> None:
+    """模板的 ref 写错时 ProcedureLibrary 构造即抛 ValueError, 消息含 "程序编号.参数名" 与该 ref."""
+    template = REF_TEMPLATE.split("params:")[0] + f"params:\n  bad: {{ref: {ref}}}\n"
+    with pytest.raises(ValueError, match="程序参数的 ref 写错") as e:
+        ref_library(tmp_path, template)
+    assert "X-REF.bad" in str(e.value) and ref in str(e.value)
+
+
+def test_refs_of_disabled_templates_are_checked_on_load(tmp_path: Path) -> None:
+    """功能未启用的模板 (going_concern 不在基线里) 写错 ref 也在构造时抛错, 不因功能关着而漏检."""
+    head = REF_TEMPLATE.split("params:")[0] + "feature: going_concern\n"
+    lib = ref_library(tmp_path / "good", head + "params:\n  a: {ref: dataset.prior_period_start}\n")
+    assert not lib.enabled("X-REF") and "X-REF" in {t.id for t in lib.all(include_disabled=True)}
+
+    with pytest.raises(ValueError, match="程序参数的 ref 写错") as e:
+        ref_library(tmp_path / "bad", head + "params:\n  bad: {ref: dataset.no_such_key}\n")
+    assert "X-REF.bad" in str(e.value) and "dataset.no_such_key" in str(e.value)
+
+
+class Item(Model):
+    code: str
+
+
+class ContainerTraits(Model):
+    """测试用的命名空间模型: 容器字段与可为空的嵌套模型."""
+
+    items: list[Item] = []
+    mapping: dict[str, Item] = {}
+    maybe: Item | None = None
+
+
+def test_ref_paths_do_not_enter_containers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ref 路径只往下进入嵌套模型 (含可为空的); 列表, 字典容器里的模型按字段名取不到, 加载时就报未知 ref,
+    不留到解析时 (namespace_value 对列表 getattr 会抛 AttributeError)."""
+    monkeypatch.setitem(procedure_library.REF_NAMESPACES, "probe", ContainerTraits)
+
+    assert ref_problem("probe.items.code") == "未知 ref probe.items.code"
+    assert ref_problem("probe.mapping.code") == "未知 ref probe.mapping.code"
+    assert ref_problem("probe.items") is None and ref_problem("probe.mapping") is None  # 容器可以整个取
+    assert ref_problem("probe.maybe.code") is None
+    assert ref_problem("probe.maybe.nope") == "未知 ref probe.maybe.nope"
+
+
+@pytest.mark.parametrize("ref", ["dataset.no_such_key", "nosuch", "profile.x", "dataset.payroll_accounts.x"])
+def test_resolve_params_rejects_bad_refs_of_direct_templates(tmp_path: Path, ref: str) -> None:
+    """不经程序库加载, 直接构造的模板写错 ref: resolve_params 抛 KeyError, 消息含 "程序编号.参数名" 与该 ref."""
+    lib = ref_library(tmp_path)
+    template = lib.load("X-REF").model_copy(update={"params": {"bad": {"ref": ref}}})
+    with pytest.raises(KeyError) as e:
+        lib.resolve_params(template, ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits())
+    assert "X-REF.bad" in str(e.value) and ref in str(e.value)
+
+
+def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:
+    """现有模板都过加载校验 (含未启用的); 都不引 dataset., 所以声明不同时解析结果相同."""
+    lib = ProcedureLibrary(ROOT)
+    state = initial_state(ENGAGEMENT, [], 1)
+    state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"] = 3, 2, 1
+    for template in lib.all(include_disabled=True):
+        risk = RiskLevel.significant if any("by_risk" in str(v) for v in template.params.values()) else None
+        default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits())
+        assert lib.resolve_params(template, ENGAGEMENT, state, risk, traits=design_traits()) == default, template.id
 
 
 # ── R36: DOC-04 fixture ──

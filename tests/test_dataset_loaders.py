@@ -219,3 +219,18 @@ async def test_fake_loader_matches_real_semantics() -> None:
     assert empty.adjustment_entries("demo") == []
     with pytest.raises(FileNotFoundError):
         await empty.load_adjustments("E", "demo")
+
+
+def test_dataset_traits_default_until_read_from_supplements() -> None:
+    """数据集声明: CSV (Numbat) 没有声明, 取缺省值; Xero 载入器先也取缺省值 (读补造目录的声明另做); 路由按前缀转发."""
+    from backend.contracts.records import DatasetTraits
+    from tests.fakes import FakeDatasetLoader, FakeFinancialStore
+
+    loaders = routing()
+    assert loaders.dataset_traits("demo") == DatasetTraits() == loaders.default.dataset_traits("demo")
+    assert loaders.dataset_traits("xero/20261017-q1") == DatasetTraits()
+    declared = DatasetTraits(dataset="xero/x", prior_period_start=None, audit_adjustment_entry_prefix="ADJ-")
+    xero = FakeDatasetLoader(FakeFinancialStore(), traits={"xero/x": declared})
+    picked = stores.RoutingDatasetLoader(loaders.default, {"xero/": xero})
+    assert picked.dataset_traits("xero/x") is declared and picked.dataset_traits("demo") == DatasetTraits()
+    assert xero.traits_calls == ["xero/x"]

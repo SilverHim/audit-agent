@@ -26,7 +26,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailKind,
 )
-from backend.contracts.records import TrialBalanceRow
+from backend.contracts.records import DatasetTraits, TrialBalanceRow
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
     ENGAGEMENT,
@@ -103,7 +103,7 @@ def setup(
         deps = replace(deps, judgments=engine, review_llm=None)
     ctx = make_ctx(deps, "CSH-02")
     procedure = ctx.procedure.model_copy(update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-CASH-EXI"]})
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None)
+    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
     state = ctx.state | {
         "confirmations": NUMBAT_CONFIRMATIONS if confirmations is None else confirmations,
         "documents": list(NUMBAT_REPLIES),

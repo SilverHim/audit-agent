@@ -26,6 +26,7 @@ from backend.contracts.models import (
     TaskStatus,
     TrailKind,
 )
+from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import apply_patch
 from backend.services.procedure_library import highest_risk
@@ -146,7 +147,7 @@ async def run_p2() -> Demo:
             procedure = next(p for p in state["procedure_pack"] if p.id == pid)
             template = deps.library.load(pid)
             risk = highest_risk(state["audit_objectives"], procedure.objective_ids)
-            params = deps.library.resolve_params(template, ENGAGEMENT, state, risk)
+            params = deps.library.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits())
             ctx = RunContext(ENGAGEMENT, procedure, template, make_run(pid, params=params), state)
             patches.append(await by_id[pid].run(ctx))
         for patch in patches:

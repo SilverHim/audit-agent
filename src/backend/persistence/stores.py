@@ -51,6 +51,7 @@ from backend.contracts.records import (
     AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
+    DatasetTraits,
     DeliveryNote,
     JournalEntry,
     SalesInvoice,
@@ -650,6 +651,10 @@ class CsvDatasetLoader(TableLoader):
     def adjustment_entry_nos(self, dataset: str) -> list[str]:
         return [x.entry_no for x in self.adjustment_entries(dataset)]
 
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """CSV 数据集 (如 Numbat) 没有数据集声明, 取缺省值."""
+        return DatasetTraits()
+
     def datasets(self) -> list[str]:
         """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
         return subdirectories(self.root, "client_profile.json")
@@ -757,6 +762,10 @@ class XeroDatasetLoader(TableLoader):
     def adjustment_entry_nos(self, dataset: str) -> list[str]:
         return [x.entry_no for x in self.adjustment_entries(dataset)]
 
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """数据集声明; 读补造目录的 dataset_traits.json 由后续需求做, 现在取缺省值."""
+        return DatasetTraits()
+
     def client_profile(self, dataset: str) -> ClientProfile:
         found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在
         profile = xero_client_profile(self.snapshot(dataset))
@@ -803,6 +812,9 @@ class RoutingDatasetLoader:
 
     def adjustment_entry_nos(self, dataset: str) -> list[str]:
         return self.pick(dataset).adjustment_entry_nos(dataset)
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        return self.pick(dataset).dataset_traits(dataset)
 
     def supplement_dir(self, dataset: str) -> Path | None:
         """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有

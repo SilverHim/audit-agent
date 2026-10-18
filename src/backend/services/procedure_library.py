@@ -4,19 +4,27 @@ import copy
 import hashlib
 import os
 import subprocess
+import types
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard, Union, get_args, get_origin
 
 import yaml
+from pydantic import BaseModel
 
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
 from backend.contracts.models import AuditObjective, Engagement, OpinionType, Phase, ReportSection, RiskLevel
+from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
 from backend.services.features import BASELINE, FEATURES, check_features
 
+# 参数 {ref: 名称} 可用的名称. 不带前缀的: 图状态的重要性 (为 None 时不执行) 与项目期间
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
+# 带命名空间的: 前缀 → 取值的模型, 写成 {前缀}.{字段}, 字段是嵌套模型 (或可为空的嵌套模型) 时可再往下取 (如
+# {前缀}.{字段}.{子字段}); 列表, 字典等容器字段只能整个取. dataset. 的值为 None 时以 None 执行; 新命名空间登记时一并定
+# 它的 None 策略与解析时传入的对象 (resolve_params 的 sources), 如 profile. 为 None 抛 ValueError (R127)
+REF_NAMESPACES: dict[str, type[BaseModel]] = {"dataset": DatasetTraits}
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, significant (枚举定义顺序)
 
 
@@ -61,6 +69,14 @@ class ProcedureLibrary:
         manual = [t.id for t in templates if t.manual_result_allowed and t.phase is not Phase.P2_Executing]
         if manual:
             raise ValueError(f"P2 以外的程序不能开 manual_result_allowed (失败只能 rerun): {', '.join(manual)}")
+        refs = [
+            f"{t.id}.{key}: {problem}"
+            for t in templates
+            for key, value in t.params.items()
+            if isinstance(value, dict) and "ref" in value and (problem := ref_problem(value["ref"])) is not None
+        ]
+        if refs:
+            raise ValueError(f"程序参数的 ref 写错: {'; '.join(refs)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -138,13 +154,17 @@ class ProcedureLibrary:
         engagement: Engagement,
         state: EngagementState,
         risk_level: RiskLevel | None,
+        *,
+        traits: DatasetTraits,
     ) -> dict[str, Any]:
         """解析模板参数. 每个参数三种写法: 字面量, {by_risk: {等级: 值}} 或 {ref: 名称}.
 
         risk_level: 程序关联审计目标的最高等级 (见 highest_risk), 没有关联目标为 None.
+        traits: 项目数据集的声明, dataset. 命名空间的 ref 从它取.
         by_risk 参数在 risk_level 为 None 或没有该等级的取值时抛 ValueError.
-        ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; 未知的 ref 名称抛 KeyError.
-        字面量深拷贝, 改返回值不会改到模板.
+        ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; dataset. 的值为 None
+        时照样以 None 执行; 名称写错 (见 ref_problem) 抛 KeyError.
+        字面量与取自声明的值深拷贝, 改返回值不会改到模板与声明.
         """
         out: dict[str, Any] = {}
         for key, value in template.params.items():
@@ -156,6 +176,9 @@ class ProcedureLibrary:
                 out[key] = value["by_risk"][risk_level.value]
             elif isinstance(value, dict) and "ref" in value:
                 ref = value["ref"]
+                problem = ref_problem(ref)
+                if problem is not None:
+                    raise KeyError(f"{template.id}.{key}: {problem}")
                 if ref in ENGAGEMENT_REFS:
                     out[key] = getattr(engagement, ref)
                 elif ref in STATE_REFS:
@@ -164,7 +187,7 @@ class ProcedureLibrary:
                         raise ValueError(f"{template.id}.{key}: {ref} 尚未确定")
                     out[key] = resolved
                 else:
-                    raise KeyError(f"{template.id}.{key}: 未知 ref {ref}")
+                    out[key] = namespace_value({"dataset": traits}, ref)
             else:
                 out[key] = copy.deepcopy(value)
         return out
@@ -185,6 +208,52 @@ class ProcedureLibrary:
         for p in sorted((self.root / "prompts").glob("*.j2"), key=lambda p: p.name):
             digest.update(p.read_bytes())
         return digest.hexdigest()
+
+
+def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:
+    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
+
+
+def nested_model(annotation: Any) -> type[BaseModel] | None:
+    """ref 路径可往下取的模型: 字段类型本身是模型, 或是含模型的 Union (如 PayrollAccounts | None 中的 PayrollAccounts).
+    list[模型], dict[str, 模型] 等容器不拆 (按字段名取不到容器里的元素), 与非模型字段一样为 None."""
+    if is_model(annotation):
+        return annotation
+    if get_origin(annotation) in (Union, types.UnionType):
+        return next((a for a in get_args(annotation) if is_model(a)), None)
+    return None
+
+
+def ref_problem(ref: object) -> str | None:
+    """ref 名称写错时的说明 (含该 ref), 合格为 None. 不带前缀的须在 STATE_REFS 或 ENGAGEMENT_REFS; 带前缀的命名空间须
+    已登记 (REF_NAMESPACES), 之后的字段路径逐层须是模型的字段 (嵌套模型的字段再往下一层, 如
+    dataset.payroll_accounts.wages_expense)."""
+    if not isinstance(ref, str):
+        return f"ref 须为文本: {ref!r}"
+    if ref in STATE_REFS or ref in ENGAGEMENT_REFS:
+        return None
+    namespace, _, path = ref.partition(".")
+    model: type[BaseModel] | None = REF_NAMESPACES.get(namespace)
+    if model is None:
+        return f"未知 ref {ref}"
+    if not path:
+        return f"ref {ref} 缺字段, 写成 {namespace}.<字段>"
+    for name in path.split("."):
+        if model is None or name not in model.model_fields:
+            return f"未知 ref {ref}"
+        model = nested_model(model.model_fields[name].annotation)
+    return None
+
+
+def namespace_value(sources: dict[str, BaseModel], ref: str) -> Any:
+    """命名空间 ref 的值 (名称已经 ref_problem 查过): 沿字段路径取, 中途为 None 即为 None; 模型转成字典, 其余深拷贝."""
+    namespace, _, path = ref.partition(".")
+    value: Any = sources[namespace]
+    for name in path.split("."):
+        if value is None:
+            return None
+        value = getattr(value, name)
+    return value.model_dump() if isinstance(value, BaseModel) else copy.deepcopy(value)
 
 
 def fixed_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:

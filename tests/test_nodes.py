@@ -1,6 +1,7 @@
 """主图节点. 依赖用 tests/fakes.py 的假实现; 节点函数直接调用, 要 interrupt() 的经单节点图调用."""
 
 import asyncio
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, ClassVar
 
@@ -31,6 +32,7 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
 )
+from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
@@ -45,6 +47,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     TYPO_PROFILE,
+    FakeDatasetLoader,
     FakeEngagementStore,
     FakeOutputStore,
     FakeRegistry,
@@ -263,7 +266,15 @@ def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str,
     """Numbat 的收入目标都是特别风险, window_days 取 20; ref 取项目期末与闸门批准的重要性."""
     lib = library()
 
-    run = build_run(lib, lib.load(procedure_id), assembled(lib, procedure_id), ENGAGEMENT, numbat_state(), NOW)
+    run = build_run(
+        lib,
+        lib.load(procedure_id),
+        assembled(lib, procedure_id),
+        ENGAGEMENT,
+        numbat_state(),
+        NOW,
+        traits=DatasetTraits(),
+    )
 
     assert run.params_snapshot == expected
     assert run.id == f"RUN-{procedure_id}-1"
@@ -273,7 +284,9 @@ def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str,
 def test_build_run_literal_params_equal_yaml() -> None:
     lib = library()
 
-    run = build_run(lib, lib.load("PLN-07"), assembled(lib, "PLN-07"), ENGAGEMENT, numbat_state(), NOW)
+    run = build_run(
+        lib, lib.load("PLN-07"), assembled(lib, "PLN-07"), ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits()
+    )
 
     assert run.params_snapshot == lib.load("PLN-07").params
 
@@ -293,7 +306,9 @@ def test_build_run_uses_highest_linked_risk() -> None:
     state["audit_objectives"] = objectives
     lib = library()
 
-    run = build_run(lib, lib.load("REV-08"), assembled(lib, "REV-08", objectives), ENGAGEMENT, state, NOW)
+    run = build_run(
+        lib, lib.load("REV-08"), assembled(lib, "REV-08", objectives), ENGAGEMENT, state, NOW, traits=DatasetTraits()
+    )
 
     assert run.params_snapshot["window_days"] == 15
 
@@ -305,7 +320,7 @@ def test_build_run_rerun_params_override_template() -> None:
     lib = library()
     procedure = assembled(lib, "REV-08", params={"window_days": 25})
 
-    run = build_run(lib, lib.load("REV-08"), procedure, ENGAGEMENT, state, NOW)
+    run = build_run(lib, lib.load("REV-08"), procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
 
     assert run.params_snapshot == {"window_days": 25, "period_end": PERIOD_END}
     assert run.id == "RUN-REV-08-2"
@@ -318,9 +333,9 @@ def test_build_run_snapshot_not_shared_with_procedure() -> None:
     lib = library()
     template = lib.load("PLN-07")
     procedure = assembled(lib, "PLN-07", params={"revenue_categories": ["other_income"]})
-    first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
+    first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
     state["procedure_runs"] = [first]
-    second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW)
+    second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
 
     second.params_snapshot["revenue_categories"].append("cost_of_sales")
 
@@ -334,7 +349,15 @@ def test_build_run_refuses_unset_materiality() -> None:
     lib = library()
 
     with pytest.raises(ValueError, match="materiality_cents"):
-        build_run(lib, lib.load("FIN-04"), assembled(lib, "FIN-04"), ENGAGEMENT, numbat_state(False), NOW)
+        build_run(
+            lib,
+            lib.load("FIN-04"),
+            assembled(lib, "FIN-04"),
+            ENGAGEMENT,
+            numbat_state(False),
+            NOW,
+            traits=DatasetTraits(),
+        )
 
 
 def test_build_run_by_risk_without_objectives() -> None:
@@ -342,7 +365,15 @@ def test_build_run_by_risk_without_objectives() -> None:
     lib = library()
 
     with pytest.raises(ValueError, match=r"REV-08\.window_days"):
-        build_run(lib, lib.load("REV-08"), assembled(lib, "REV-08", []), ENGAGEMENT, numbat_state(), NOW)
+        build_run(
+            lib,
+            lib.load("REV-08"),
+            assembled(lib, "REV-08", []),
+            ENGAGEMENT,
+            numbat_state(),
+            NOW,
+            traits=DatasetTraits(),
+        )
 
 
 # ── 需求 2 第 1 步: 节点返回前在一个事务里写 Store, 状态用 put 返回的对象 ──
@@ -711,3 +742,86 @@ async def test_store_failure_is_a_node_error() -> None:
 
     with pytest.raises(RuntimeError, match="Store 不可用"):
         await nodes.execute(p0_state(), "ACC-04")
+
+
+# ── R95: 参数引用项目数据集的声明 ──
+
+XERO_DATASET = "xero/20261017-q1"
+XERO_LIKE = ENGAGEMENT.model_copy(update={"dataset": XERO_DATASET})  # 数据集为 Xero 演示的项目 (其余同 Numbat)
+REF_PARAMS = {"a": date(2025, 7, 1), "b": ["477"], "c": "AJE-"}  # 测试模板按第 5.2 节声明解析的参数
+
+
+class RefSpy(ProcedureAgent[None]):
+    """测试模板 X-REF 的 Agent: 记下收到的执行记录, 只返回本次执行的终态."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A4  # 智能体编号
+    procedures: ClassVar[frozenset[str]] = frozenset({"X-REF"})  # 负责的程序
+    runs: list[ProcedureRun]  # 收到的执行记录
+
+    async def execute(self, ctx: RunContext) -> None:
+        self.runs.append(ctx.run)
+
+    async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
+        return {"procedure_runs": [finished(ctx.run)]}
+
+
+def ref_nodes(tmp_path: Any) -> tuple[GraphNodes, FakeDatasetLoader, RefSpy, FakeOutputStore]:
+    """程序库带测试模板 X-REF 的节点; 数据集载入对 Xero 演示数据集返回第 5.2 节的声明; Store 预置 X-REF 第 1 版."""
+    from tests.test_knowledge import design_traits, ref_library
+
+    output_store = FakeOutputStore([make_procedure("X-REF", Phase.P1_Planning)])
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [XERO_LIKE])
+    deps = make_deps(FakeRegistry(), FakeTrail(), engagement_store, output_store, library=ref_library(tmp_path))
+    loader = FakeDatasetLoader(deps.financial_store, traits={XERO_DATASET: design_traits()})
+    nodes = GraphNodes(replace(deps, datasets=loader), parallel_cap=2)
+    spy = RefSpy(nodes.deps)
+    spy.runs = []
+    nodes.agents["X-REF"] = spy
+    return nodes, loader, spy, output_store
+
+
+def ref_state() -> EngagementState:
+    return initial_state(XERO_LIKE, [make_procedure("X-REF", Phase.P1_Planning)], NUMBAT_PROFILE.version)
+
+
+async def test_execute_and_fieldwork_resolve_dataset_refs(tmp_path: Any) -> None:
+    """建执行记录时按项目的数据集取声明, 解析 dataset. 的 ref; execute 与 fieldwork 结果相同."""
+    nodes, loader, spy, _ = ref_nodes(tmp_path / "execute")
+    patch = await nodes.execute(ref_state(), "X-REF")
+    [run] = patch["procedure_runs"]
+    assert (run.id, run.params_snapshot) == ("RUN-X-REF-1", REF_PARAMS)
+    assert spy.runs[0].params_snapshot == REF_PARAMS and loader.traits_calls == [XERO_DATASET]
+
+    nodes, loader, spy, _ = ref_nodes(tmp_path / "fieldwork")
+    staged = await nodes.fieldwork({"instance": "fw-0-0", "procedure_ids": ["X-REF"], "state": ref_state()})
+    [result] = staged["staged_results"]
+    [run] = result["patch"]["procedure_runs"]
+    assert (run.id, run.instance, run.params_snapshot) == ("RUN-X-REF-1", "fw-0-0", REF_PARAMS)
+    assert loader.traits_calls == [XERO_DATASET]
+
+
+async def test_replay_keeps_stored_params_when_traits_change(tmp_path: Any) -> None:
+    """重放 (Store 已有终态执行): 照常先建执行记录 (取一次声明), 取回的执行以 Store 中的参数为准, 声明改了也不影响."""
+    nodes, loader, spy, store = ref_nodes(tmp_path)
+    await nodes.execute(ref_state(), "X-REF")
+    loader.traits[XERO_DATASET] = DatasetTraits()  # 声明在两次之间被改
+
+    patch = await nodes.execute(ref_state(), "X-REF")
+    [run] = patch["procedure_runs"]
+    assert run.params_snapshot == REF_PARAMS and len(spy.runs) == 1  # 不再调 Agent
+    assert loader.traits_calls == [XERO_DATASET, XERO_DATASET]
+    stored = await store.get(XERO_LIKE.id, ProcedureRun, "RUN-X-REF-1")
+    assert stored is not None and stored.params_snapshot == REF_PARAMS
+
+
+def test_numbat_params_do_not_depend_on_traits() -> None:
+    """Numbat 的 18 条程序都不引 dataset., 用第 5.2 节的声明或缺省声明建执行记录, 参数相同 (验收 7 的守卫)."""
+    from tests.test_knowledge import design_traits
+
+    lib = library()
+    assert len(lib.all()) == 18
+    for template in lib.all():
+        procedure = assembled(lib, template.id)
+        default = build_run(lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits())
+        declared = build_run(lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=design_traits())
+        assert declared.params_snapshot == default.params_snapshot, template.id

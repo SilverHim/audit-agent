@@ -8,6 +8,7 @@ from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.errors import RuleError
 from backend.contracts.models import AgentId, ProcedureRun, RiskLevel, RunStatus, TaskKind
+from backend.contracts.records import DatasetTraits
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
@@ -26,7 +27,9 @@ def setup(procedure_id: str, rules: FakeRuleEngine | None = None) -> tuple[Field
     """A6 与某条程序第 1 次执行的上下文; 参数按特别风险解析 (Numbat 收入目标为 significant)."""
     deps = make_deps(FakeRegistry(), FakeTrail(), rules=rules)
     ctx = make_ctx(deps, procedure_id)
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, RiskLevel.significant)
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, ctx.state, RiskLevel.significant, traits=DatasetTraits()
+    )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, ctx.procedure, ctx.template, run, ctx.state)
 

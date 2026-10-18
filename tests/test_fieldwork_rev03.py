@@ -16,6 +16,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailKind,
 )
+from backend.contracts.records import DatasetTraits
 from backend.contracts.services import JudgmentOutcome
 from tests.fakes import (
     NUMBAT_CONTRACTS,
@@ -53,7 +54,7 @@ def setup(
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}
     )
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None)
+    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
     state = ctx.state | {
         "procedure_pack": [procedure],
         "audit_objectives": NUMBAT_OBJECTIVES,

@@ -65,6 +65,7 @@ from backend.contracts.records import (
     AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
+    DatasetTraits,
     DeliveryNote,
     JournalEntry,
     SalesInvoice,
@@ -224,6 +225,10 @@ class DatasetLoader(Protocol):
 
     def adjustment_entry_nos(self, dataset: str) -> list[str]:
         """可载入的更正分录凭证号, 顺序同 adjustment_entries (更正通知提交时校验用)."""
+        ...
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """数据集声明 (程序参数 {ref: dataset.<键>} 的取值); 没有声明的数据集为缺省值 DatasetTraits()."""
         ...
 
     def datasets(self) -> list[str]:
