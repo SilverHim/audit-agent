@@ -362,6 +362,16 @@ async def test_rejected_patch_written_as_failure_with_others(
 XID = "X-CSH-05-1-B01-1"  # 第 0 层 CSH-05 的例外, 下面几个测试里由两条重跑的程序同时改写
 
 
+def declare(nodes: GraphNodes, procedure_id: str, *fields: str) -> None:
+    """测试脚本让程序写它本不声明的字段 (如 REV-08 建任务) 时, 给本用例的程序库补上声明: R85 起片段只能含模板
+    outputs 声明的字段. 程序库每个用例新建 (make_deps), 不影响别的用例."""
+    library = nodes.deps.library
+    original = library.load
+    template = original(procedure_id)
+    extended = template.model_copy(update={"outputs": [*template.outputs, *fields]})
+    library.load = lambda pid: extended if pid == procedure_id else original(pid)  # type: ignore[method-assign]
+
+
 async def rerun_round() -> tuple[GraphNodes, FakeOutputStore, EngagementState]:
     """第 0 层 REV-03, REV-08 都执行失败, 审计师对两个 failed 任务都选 rerun (决定写出的对象已读回状态):
     下一轮两条程序同在实例 fw-0-1 重跑, 与之并行的还有第 1 层的 DOC-06."""
@@ -448,6 +458,7 @@ async def test_task_on_target_updated_by_earlier_item_becomes_failure() -> None:
         return {"procedure_runs": [finished(ctx.run)], "review_tasks": [task]}
 
     nodes.agents["REV-08"] = ScriptA6(nodes.deps, stale_task)
+    declare(nodes, "REV-08", "review_tasks")
     state = await dispatch_round(nodes, state)
 
     patch = await nodes.fan_in(state)
@@ -533,6 +544,7 @@ async def test_rejected_item_replays_identically(conflict: str, monkeypatch: pyt
         "same_version": writes_exception(old.model_copy(update={"version": 2, "amount_cents": 1})),
     }
     nodes.agents["REV-08"] = ScriptA6(nodes.deps, scripts[conflict])
+    declare(nodes, "REV-08", "review_tasks")
     state = await dispatch_round(nodes, state)
     first_patch = await nodes.fan_in(state)
     rows = list(store.rows)
@@ -596,6 +608,7 @@ async def test_staged_order_follows_dispatch_not_completion(slow: str, cancel: b
         nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)], "confirmations": [first]}
     )
     nodes.agents["REV-08"] = ScriptA6(nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)]})
+    declare(nodes, "REV-03", "confirmations")
     nodes.agents["DOC-06"] = ScriptA3(
         nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)], "confirmations": [second]}
     )

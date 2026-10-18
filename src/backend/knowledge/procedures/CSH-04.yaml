@@ -3,6 +3,8 @@ name: 函证发起
 phase: P2_Executing
 cycle: Cash
 owner: A5
+outputs: [confirmations, documents]
+document_types: [confirmation]
 engine: rule
 autonomy_level: L4
 assertions: [Existence]

@@ -5,6 +5,7 @@ name: 判断独立复核
 phase: P2_Executing
 cycle: Pervasive
 owner: A7
+outputs: []
 engine: llm
 autonomy_level: L4
 # 功能开关 critic (services/features.py), 基线功能: 关闭时 A7 对每条判断记 skipped, 不做独立复核

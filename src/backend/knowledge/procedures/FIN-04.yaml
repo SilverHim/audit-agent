@@ -3,6 +3,7 @@ name: 错报累计
 phase: P3_Completion
 cycle: Completion
 owner: A9
+outputs: [uncorrected_schedule]
 engine: rule
 autonomy_level: L3
 params:

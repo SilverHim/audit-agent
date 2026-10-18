@@ -3,6 +3,7 @@ name: 凭证三单匹配
 phase: P2_Executing
 cycle: Revenue
 owner: A6
+outputs: [exceptions]
 engine: rule
 autonomy_level: L3
 assertions: [Occurrence, Cutoff]

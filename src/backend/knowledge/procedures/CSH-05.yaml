@@ -3,6 +3,7 @@ name: 流水账面核对
 phase: P2_Executing
 cycle: Cash
 owner: A6
+outputs: [exceptions]
 engine: rule
 autonomy_level: L4
 assertions: [Existence]

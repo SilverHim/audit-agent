@@ -44,10 +44,13 @@ from backend.contracts.models import (
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.state import EngagementState, StagedResult, StatePatch
 from backend.orchestration.merge import (
-    AGENT_FIELDS,
+    FIELD_REPLAY,
+    LATER_RUNS,
     TARGET_FIELDS,
     MergeRejected,
+    Replay,
     check_ids,
+    check_outputs,
     check_patch,
     check_refs,
     field_type,
@@ -156,16 +159,19 @@ def node_procedures(node: str, pack: Iterable[Procedure], library: ProcedureLibr
     return [pid for pid in NODE_PROCEDURES[node] if pid in present]
 
 
-async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: ProcedureRun) -> StatePatch:
+async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate, run: ProcedureRun) -> StatePatch:
     """重放: 取回某次已是终态的执行在 Store 中的产出, 组成片段. 不调 Agent, LLM 与外部接口, 也不重取当前时间.
 
     节点写 Store 之后, 写检查点之前中断, 恢复时会重跑; 本次执行已在 Store 中且为终态时, 用它代替调 Agent.
-    run: Store 中该执行的终态记录; writer: 执行它的 Agent, 按其写入范围 (merge.AGENT_FIELDS) 决定取哪些字段:
-    - 带 run_id 的对象 (例外, 判断): 取该 run_id 下各对象的最新版本;
-    - 不带 run_id 的产出 (评分卡, 分析结果, 重要性候选, 审计目标, 风险清单, 汇总表, 报告, 函证): 取 Store 最新版本,
-      单个对象的字段 (如评分卡) 各只有一个固定 ID;
-    - documents: 取 FinancialDataStore.documents.
-    另取该 run_id 下的复核任务 (含 A1 代写的 failed 任务).
+    run: Store 中该执行的终态记录; template: 该程序的模板, 只取其 outputs 声明的字段, 各按 merge.FIELD_REPLAY 取回:
+    - by_run (例外, 判断, 任务): 该 run_id 下各对象的最新版本;
+    - latest_all (函证, 审计目标, 风险清单, 报告, 错报): 全部对象的最新版本;
+    - documents: FinancialDataStore.documents 中本程序声明类型 (template.document_types) 的文件, 与第一次执行交回的
+      同类 (上传的其他类文件与导入账表的原件不取). 只到类型粒度: CSH-04 存档按哈希取回审计师先上传的别类文件时,
+      重放不带回它; 上传后分类为 confirmation 的副本不在 CSH-04, DOC-06 的在线片段里, 重放会带回;
+    - singleton (评分卡, 分析结果, 重要性候选, 汇总表): 固定 ID 的最新版本; 模型带 run_id 时须属于本程序, 否则节点错误;
+    - by_procedure (新字段用): 各对象最新版本中 run_id 属于本程序的.
+    本次执行的复核任务 (含 A1 代写的 failed 任务) 总按 run_id 取回.
     再补齐引用, 使片段自成一体: 片段中对象 (判断, 评分卡, 分析结果) 的 exception_ids 与任务的例外目标所指的例外,
     取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id 仍是 REV-08 那次); 以片段中对象为目标的
     复核任务也取最新版本 (取回的例外是决定改出的新版本时, 以其旧版本为目标的任务在同一事务里已置 decided, 要一并取回,
@@ -174,7 +180,7 @@ async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: Proced
     执行失败时 Agent 的片段当初已丢弃, 只取执行记录与任务. execute 与 fieldwork 共用.
     """
     store = deps.output_store
-    fields = AGENT_FIELDS.get(writer, frozenset())
+    fields = set(template.outputs)
     patch: StatePatch = {"procedure_runs": [run]}
     tasks = await store.latest(eid, ReviewTask, run_id=run.id)
     if tasks or "review_tasks" in fields:
@@ -182,25 +188,45 @@ async def stored_outputs(deps: AgentDeps, eid: str, writer: AgentId, run: Proced
     if run.status is RunStatus.failed:
         return patch
 
+    own_runs: set[str] | None = None  # 本程序的全部执行 ID, 用到时才查
+
+    async def owned(item: Any) -> bool:
+        nonlocal own_runs
+        if own_runs is None:
+            own_runs = {r.id for r in await store.latest(eid, ProcedureRun, procedure_id=run.procedure_id)}
+        return bool(item.run_id in own_runs)
+
     for field in sorted(fields - {"review_tasks"}):
         model, is_list = field_type(field)
-        if field == "documents":
-            patch[field] = await deps.financial_store.documents(eid)
-        elif issubclass(model, BaseModel) and "run_id" in model.model_fields:
+        replay = FIELD_REPLAY[field]
+        if replay is Replay.documents:
+            documents = await deps.financial_store.documents(eid)
+            patch[field] = [d for d in documents if d.type in template.document_types]
+        elif replay is Replay.by_run:
             patch[field] = await store.latest(eid, model, run_id=run.id)
-        elif is_list:
+        elif replay is Replay.latest_all:
             patch[field] = await store.latest(eid, model)
+        elif replay is Replay.by_procedure:
+            items: list[Any] = await store.latest(eid, model)
+            patch[field] = [x for x in items if await owned(x)]
         else:
             found: list[Any] = await store.latest(eid, model)
-            if found:
-                patch[field] = found[0]
+            if not found:
+                continue
+            item = found[0]
+            if issubclass(model, BaseModel) and "run_id" in model.model_fields and not await owned(item):
+                raise RuntimeError(
+                    f"重放 {run.id}: {field} 的最新版本 {item.id} v{item.version} 由 {item.run_id} 写, "
+                    f"不是 {run.procedure_id} 的执行"
+                )
+            patch[field] = [item] if is_list else item
 
-    # 项目里只有一份的产出 (评分卡, 分析结果, 重要性候选, 汇总表) 取的是最新版本, 回退到较早的检查点重放时可能来自
+    # 项目里只有一份 (singleton) 或按程序取 (by_procedure) 的产出取的是最新版本, 回退到较早的检查点重放时可能来自
     # 本程序之后的执行 (如 FIN-01 驳回后 FIN-04 的第 2 次); 把之后的执行一并取回, 下一次执行才会接着取号,
     # 不再撞上已有的执行而重放出同一版. 写这类产出的程序 (ACC-04, PLN-07, PLN-01, FIN-04) 不建单对象 failed 任务,
     # 成功的执行不会在节点内等待, 之后的执行只可能来自之后的节点执行, 正常重放时没有.
     # 之后的执行还有待决任务 (那次节点正在等人) 时, 重放恢复不了那次等待, 报错要求从最新的检查点恢复
-    if any(field in patch and not field_type(field)[1] for field in fields):
+    if any(field in patch and FIELD_REPLAY[field] in LATER_RUNS for field in fields):
         later = await store.latest(eid, ProcedureRun, procedure_id=run.procedure_id)
         later = sorted((r for r in later if r.run_no > run.run_no), key=lambda r: r.run_no)
         waiting = [
@@ -358,6 +384,7 @@ class GraphNodes:
         self.deps = deps  # 外部依赖
         self.parallel_cap = parallel_cap  # fieldwork 实例并行上限
         self.agents: dict[str, ProcedureAgent[Any]] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
+        check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
 
     async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
         """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
@@ -370,7 +397,12 @@ class GraphNodes:
         try:
             patch = await agent.run(ctx)
             check_patch(
-                patch, writer=agent.agent_id, procedure_id=ctx.run.procedure_id, run_id=ctx.run.id, state=ctx.state
+                patch,
+                writer=agent.agent_id,
+                procedure_id=ctx.run.procedure_id,
+                run_id=ctx.run.id,
+                state=ctx.state,
+                outputs=ctx.template.outputs,
             )
         except GraphBubbleUp:
             raise
@@ -409,7 +441,7 @@ class GraphNodes:
             )
             patch, writer = await self.run_agent(agent, ctx)
         else:
-            patch = await stored_outputs(self.deps, engagement.id, agent.agent_id, stored_run)
+            patch = await stored_outputs(self.deps, engagement.id, template, stored_run)
             # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误
             problems = check_refs(patch, state)
             if problems:

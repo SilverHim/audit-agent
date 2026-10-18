@@ -1,12 +1,14 @@
 """R04 重放: 节点写 Store 后, 写检查点前中断, 恢复时重跑. Store 中本次执行已为终态时不调 Agent, 产出从 Store 取回."""
 
+from typing import Any
+
 import pytest
 from langgraph.types import Command
 
+from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
-    AgentId,
     AnalyticsResult,
     AuditException,
     AutonomyLevel,
@@ -25,9 +27,11 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
     TrailKind,
+    Versioned,
 )
+from backend.orchestration import merge
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.merge import check_refs
+from backend.orchestration.merge import Replay, check_refs
 from backend.orchestration.nodes import GraphNodes, apply_patch, fail_run, stored_outputs, update_procedure
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
@@ -216,7 +220,7 @@ def confirmation(bank_account_id: str, version: int = 1) -> Confirmation:
 
 async def test_a6_outputs_by_run_id_latest_versions_and_referenced_exceptions() -> None:
     """A6 的 REV-02 第 1 次执行: 判断, 任务按 run_id 取各自最新版本; 判断引用的 REV-08 例外 (别的执行查出, 已被置
-    attributed) 也取最新版本; 函证不带 run_id 取最新版本; 别的执行的判断与例外不取."""
+    attributed) 也取最新版本; 别的执行的判断与例外不取; REV-02 不声明函证, 不取 (R85)."""
     run = finished(make_run("REV-02"))
     j1 = judgment("REV-02", "SI-2026-0612", exception_ids=["X-REV-08-1-R01-1"])
     j1_confirmed = judgment("REV-02", "SI-2026-0612", version=2, exception_ids=["X-REV-08-1-R01-1"])
@@ -237,19 +241,18 @@ async def test_a6_outputs_by_run_id_latest_versions_and_referenced_exceptions() 
     )
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
 
-    patch = await stored_outputs(deps, EID, AgentId.A6, run)
+    patch = await stored_outputs(deps, EID, deps.library.load("REV-02"), run)
 
     assert patch == {
         "procedure_runs": [run],
         "review_tasks": [],
-        "confirmations": [confirmation("BA-01", version=2)],
         "exceptions": [rev08_attributed],
         "judgments": [j1_confirmed],
     }
 
 
-async def test_a4_singletons_and_planning_lists_take_latest() -> None:
-    run = finished(make_run("PLN-01"))
+def a4_store(run: ProcedureRun) -> tuple[FakeOutputStore, AnalyticsResult, RiskItem]:
+    """A4 的产出都在 Store 中: 分析结果, 重要性候选 v1 与 v2, 审计目标与风险."""
     analytics = AnalyticsResult(id="ANALYTICS", ratios={"gross_margin": 0.3}, exception_ids=[])
     candidates = MaterialityCandidates(id="MATERIALITY", candidates=[])
     risk = RiskItem(
@@ -263,37 +266,87 @@ async def test_a4_singletons_and_planning_lists_take_latest() -> None:
     store = FakeOutputStore(
         [run, analytics, candidates, candidates.model_copy(update={"version": 2}), *NUMBAT_OBJECTIVES, risk]
     )
+    return store, analytics, risk
+
+
+async def test_pln07_replay_takes_only_its_outputs() -> None:
+    """PLN-07 只声明分析结果与例外: 重放只含这两项 (R85 之前按 A4 的写入范围, 还带重要性候选, 审计目标与风险)."""
+    run = finished(make_run("PLN-07"))
+    store, analytics, _ = a4_store(run)
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
 
-    patch = await stored_outputs(deps, EID, AgentId.A4, run)
+    patch = await stored_outputs(deps, EID, deps.library.load("PLN-07"), run)
 
-    assert patch["analytics"] == analytics
+    assert patch == {"procedure_runs": [run], "analytics": analytics, "exceptions": []}
+
+
+async def test_pln01_replay_takes_latest_singleton_and_planning_lists() -> None:
+    """PLN-01 声明重要性候选, 审计目标与风险清单: 候选取最新 v2, 两个列表取全部最新版本; 不含分析结果与例外."""
+    run = finished(make_run("PLN-01"))
+    store, _, risk = a4_store(run)
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
+
+    patch = await stored_outputs(deps, EID, deps.library.load("PLN-01"), run)
+
+    assert set(patch) == {"procedure_runs", "materiality_candidates", "audit_objectives", "risk_register"}
     assert patch["materiality_candidates"].version == 2
     assert patch["audit_objectives"] == NUMBAT_OBJECTIVES
     assert patch["risk_register"] == [risk]
-    assert patch["exceptions"] == []
-    assert "review_tasks" not in patch
 
 
-async def test_a3_documents_from_financial_store() -> None:
-    run = finished(make_run("DOC-04"))
-    doc = DocumentRef(
-        id="DOC-0123456789ab",
-        type=DocumentType.contract,
-        file_name="CON-001.pdf",
-        sha256="0" * 64,
-        page_count=3,
-        reliability=Reliability.external_copy,
-        status="extracted",
-        uploaded_at=NOW,
-    )
+def stored_document(n: str, type: DocumentType, file_name: str, **fields: Any) -> DocumentRef:
+    """财务存储中登记的一份文件 (ID DOC-{n}), fields 覆盖其余字段."""
+    values: dict[str, Any] = {
+        "id": f"DOC-{n}",
+        "type": type,
+        "file_name": file_name,
+        "sha256": n * 64,
+        "page_count": 3,
+        "reliability": Reliability.external_copy,
+        "status": "extracted",
+        "uploaded_at": NOW,
+    }
+    return DocumentRef.model_validate(values | fields)
+
+
+CONTRACT = stored_document("1", DocumentType.contract, "CON-001.pdf")
+REPLY = stored_document("2", DocumentType.confirmation, "BA-01-reply.pdf", channel="bank_direct", status="received")
+UPLOADED = stored_document(  # 审计师上传, A3 分类为发票
+    "3",
+    DocumentType.invoice,
+    "INV-77.pdf",
+    reliability=Reliability.internal_copy,
+    status="classified",
+    uploaded_by="U-1",
+)
+IMPORTED = stored_document(  # 导入账表的原件
+    "4",
+    DocumentType.other,
+    "gl.csv",
+    page_count=1,
+    reliability=Reliability.internal_copy,
+    media_type="text/csv",
+    uploaded_by="U-1",
+)
+
+
+@pytest.mark.parametrize(("procedure_id", "kept"), [("DOC-04", CONTRACT), ("DOC-06", REPLY), ("CSH-04", REPLY)])
+async def test_a3_a5_documents_replay_only_declared_types(procedure_id: str, kept: DocumentRef) -> None:
+    """文件取自 FinancialDataStore.documents, 只取本程序声明的类型 (document_types), 与第一次执行交回的同类:
+    上传后分类为别的类型的文件与导入账表的原件不进重放片段."""
+    run = finished(make_run(procedure_id))
     deps = make_deps(
-        FakeRegistry(), FakeTrail(), output_store=FakeOutputStore([run]), financial_store=FakeFinancialStore([doc])
+        FakeRegistry(),
+        FakeTrail(),
+        output_store=FakeOutputStore([run]),
+        financial_store=FakeFinancialStore([CONTRACT, REPLY, UPLOADED, IMPORTED]),
     )
+    template = deps.library.load(procedure_id)
 
-    patch = await stored_outputs(deps, EID, AgentId.A3, run)
+    patch = await stored_outputs(deps, EID, template, run)
 
-    assert patch == {"procedure_runs": [run], "review_tasks": [], "confirmations": [], "documents": [doc]}
+    assert set(patch) == {"procedure_runs", *template.outputs}
+    assert patch["documents"] == [kept]
 
 
 async def test_failed_run_returns_only_run_and_tasks() -> None:
@@ -304,7 +357,7 @@ async def test_failed_run_returns_only_run_and_tasks() -> None:
     store = FakeOutputStore([earlier, *failure["procedure_runs"], *failure["review_tasks"]])
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
 
-    patch = await stored_outputs(deps, EID, AgentId.A2, failure["procedure_runs"][0])
+    patch = await stored_outputs(deps, EID, deps.library.load("ACC-04"), failure["procedure_runs"][0])
 
     assert patch == failure
 
@@ -356,7 +409,7 @@ async def test_referenced_exception_brings_its_run() -> None:
     store = FakeOutputStore([prior, exception(1), run, j1])
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
 
-    patch = await stored_outputs(deps, EID, AgentId.A6, run)
+    patch = await stored_outputs(deps, EID, deps.library.load("REV-02"), run)
 
     assert patch["procedure_runs"] == [run, prior]
     assert patch["exceptions"] == [exception(1)]
@@ -421,3 +474,59 @@ async def test_replay_takes_decided_task_of_older_run_with_new_exception() -> No
     assert next(t for t in final["review_tasks"] if t.id == pending.id) == decided
     assert check_refs(patch, final) == []
     assert await store.get(EID, ProcedureRun, "RUN-REV-02-2") in final["procedure_runs"]
+
+
+# ── R85: 带 run_id 的单对象与按程序取回 (测试内定义的产出模型) ──
+
+
+class Gauge(Versioned):
+    """测试用的带 run_id 的产出 (如以后的持续经营结论)."""
+
+    run_id: str
+    value: int
+
+
+def gauge_field(monkeypatch: pytest.MonkeyPatch, field: str, hint: Any, replay: Replay) -> ProcedureTemplate:
+    """登记一个测试字段 (类型与取回方式), 返回只声明它的 FIN-04 模板 (owner A9)."""
+    monkeypatch.setitem(merge.STATE_HINTS, field, hint)
+    monkeypatch.setitem(merge.FIELD_REPLAY, field, replay)
+    return make_deps(FakeRegistry(), FakeTrail()).library.load("FIN-04").model_copy(update={"outputs": [field]})
+
+
+async def test_singleton_with_run_id_takes_latest_and_checks_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R85 验收 6: Store 有 G v1 (RUN-FIN-04-1), v2 (RUN-FIN-04-2): 重放第 1 次取 v2 并带回第 2 次执行 (同评分卡规则),
+    片段中为对象而不是列表; 另有别的程序写的 v3 时节点错误, 消息含 v3 与那次执行."""
+    template = gauge_field(monkeypatch, "gauge", Gauge | None, Replay.singleton)
+    run1, run2 = finished(make_run("FIN-04")), finished(make_run("FIN-04", run_no=2))
+    g1 = Gauge(id="GAUGE", run_id=run1.id, value=1)
+    g2 = g1.model_copy(update={"version": 2, "run_id": run2.id, "value": 2})
+    store = FakeOutputStore([run1, g1, run2, g2])
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
+
+    patch = await stored_outputs(deps, EID, template, run1)
+
+    assert patch == {"procedure_runs": [run1, run2], "gauge": g2}
+    other = finished(make_run("REV-08"))
+    await store.put(EID, [other, g1.model_copy(update={"version": 3, "run_id": other.id})], actor="A9")
+    with pytest.raises(RuntimeError, match=r"GAUGE v3 由 RUN-REV-08-1 写"):
+        await stored_outputs(deps, EID, template, run1)
+
+
+async def test_by_procedure_takes_only_this_programs_objects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """by_procedure: 各 ID 的最新版本中 run_id 属于本程序的才取 (别的程序写的不取), 并带回本程序之后的执行."""
+    template = gauge_field(monkeypatch, "gauges", list[Gauge], Replay.by_procedure)
+    run1, run2, other = (
+        finished(make_run("FIN-04")),
+        finished(make_run("FIN-04", run_no=2)),
+        finished(make_run("REV-08")),
+    )
+    mine = Gauge(id="G-1", run_id=run1.id, value=1)
+    later = Gauge(id="G-2", run_id=run2.id, value=2)
+    theirs = Gauge(id="G-3", run_id=other.id, value=3)
+    deps = make_deps(
+        FakeRegistry(), FakeTrail(), output_store=FakeOutputStore([run1, run2, other, mine, later, theirs])
+    )
+
+    patch = await stored_outputs(deps, EID, template, run1)
+
+    assert patch == {"procedure_runs": [run1, run2], "gauges": [mine, later]}

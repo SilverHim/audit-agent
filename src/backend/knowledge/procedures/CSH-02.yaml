@@ -3,6 +3,7 @@ name: 函证差异评价
 phase: P2_Executing
 cycle: Cash
 owner: A6
+outputs: [judgments, exceptions, review_tasks, confirmations]
 engine: hybrid
 autonomy_level: L3
 always_review: true              # 函证差异一律由人评价 (ASA 505 para 14)

@@ -3,6 +3,8 @@ name: 函证回函抽取
 phase: P2_Executing
 cycle: Cash
 owner: A3
+outputs: [documents, confirmations, review_tasks]
+document_types: [confirmation]
 engine: llm
 autonomy_level: L3
 depends_on: [CSH-04]

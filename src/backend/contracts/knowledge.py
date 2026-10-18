@@ -6,6 +6,7 @@ from backend.contracts.models import (
     AgentId,
     Assertion,
     AutonomyLevel,
+    DocumentType,
     Engine,
     EvidenceType,
     GateId,
@@ -50,6 +51,8 @@ class ProcedureTemplate(Model):
     phase: Phase  # 所属阶段
     cycle: str  # 所属循环, 如 Revenue, Cash
     owner: AgentId  # 执行它的智能体
+    outputs: list[str] = []  # 本程序写的状态字段 (须在 owner 的写入范围内); 合并校验与重放只认这些
+    document_types: list[DocumentType] = []  # outputs 含 documents 时本程序交回的文件类型; 重放只取这些类型的文件
     engine: Engine  # 执行方式
     autonomy_level: AutonomyLevel  # 默认自主度
     always_review: bool = False  # 判断一律建 normal 复核任务, 不论自主度 (CSH-02: 函证差异须人评价, ASA 505 para 14)
