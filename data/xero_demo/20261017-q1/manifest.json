@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "59ea270e64f3572721256addd837909a455a74f03904774c5c5242580e2385f9",
+  "spec_sha256": "58e4442c9442299cb570b341e2e9c5c2edb661ad033e73f6e0a06e75bf1d8b2e",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -299,7 +299,7 @@
     },
     {
       "path": "documents/index.csv",
-      "sha256": "b87b629efe689d38ffa70ee0d3bd6ecbbd43b37f1ae2a0607fbbb96671e711d3",
+      "sha256": "8a632591c522d9737836b0dafdce688abf2e54533081f5c623d12e86641a8a91",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -336,6 +336,50 @@
     {
       "path": "documents/related_party/vpa_sale_termination_notice.pdf",
       "sha256": "abcccf593a3f5a2e4dafff4011020fa6186a90d52c04e4abc350399ee87c29d6",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "financial_statements/fs_v1.json",
+      "sha256": "0aabf1490426aff6110434924741a6a43534b1a59a8b4b96fd6609801f9ff8c7",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": [
+        "XJ-397"
+      ]
+    },
+    {
+      "path": "financial_statements/fs_v1.pdf",
+      "sha256": "015c6bb63db8a4d968a44691f5a9d277e3599e906a8afc2869f3819104e00581",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "manual/fin08_round1.json",
+      "sha256": "248260d469d31fb7a0b853760005f6bac56eabcac65be98541df96caad6fbe73",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "manual/fin08_round2.json",
+      "sha256": "48d6e330061f15d9ec968ea69c4a5a9846950c40999b69134e7ea11d1afdd6ef",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "manual/representation.json",
+      "sha256": "20619f90cd2793aa6e8bb6a8f5ecaa9f632848b056360548ae305cbeffcc37fb",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "manual/rpt07_reply.json",
+      "sha256": "8aa9f757653691c4b5451fe5c184aa0e4b6cd1a5df3fb1f09239ef61aee99b2d",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -427,6 +471,13 @@
     {
       "path": "registry/persons/MORGAN-ALEX-19790412.pdf",
       "sha256": "b70a571c433bd11ecfaae7557e37b504d2395611681dd3b49b0255a9e9168084",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "representation/representation_letter.pdf",
+      "sha256": "18b7c2781bf0d9e78d887888b37c6e1f6345e51fc8c41eaf02c641b897d3dc7c",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -755,6 +806,20 @@
       "synthetic": true
     },
     {
+      "path": "financial_statements/fs_v1.pdf",
+      "sha256": "015c6bb63db8a4d968a44691f5a9d277e3599e906a8afc2869f3819104e00581",
+      "document_id": "DOC-015c6bb63db8",
+      "type": "other",
+      "reliability": "internal_original",
+      "page_count": 4,
+      "document_date": "2026-10-22",
+      "related_ids": [
+        "FS"
+      ],
+      "registration": "load",
+      "synthetic": true
+    },
+    {
       "path": "registry/extracts/900043021.pdf",
       "sha256": "c15d981bf4f98a9f49e2c8a6fb467ee49b58ec552a2df06441330d00fbab40fb",
       "document_id": "DOC-c15d981bf4f9",
@@ -800,6 +865,18 @@
       "document_date": "2026-10-17",
       "related_ids": [],
       "registration": "registry",
+      "synthetic": true
+    },
+    {
+      "path": "representation/representation_letter.pdf",
+      "sha256": "18b7c2781bf0d9e78d887888b37c6e1f6345e51fc8c41eaf02c641b897d3dc7c",
+      "document_id": "DOC-18b7c2781bf0",
+      "type": "representation_letter",
+      "reliability": "internal_original",
+      "page_count": 2,
+      "document_date": "2026-10-23",
+      "related_ids": [],
+      "registration": "upload",
       "synthetic": true
     }
   ]

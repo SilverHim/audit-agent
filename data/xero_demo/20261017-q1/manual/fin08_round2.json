@@ -1,0 +1,19 @@
+{
+  "procedure_id": "FIN-08",
+  "round": 2,
+  "communicated_at": "2026-10-21T04:00:00Z",
+  "recipient": "Alex Morgan, Director",
+  "form": "written",
+  "misstatement_sources": [
+    "J-FIN-15-1-826",
+    "J-FIN-15-1-804",
+    "J-FIN-15-1-805"
+  ],
+  "responded_at": "2026-10-21T22:00:00Z",
+  "response": "We agree with all three items. Journals AJE-X02 to AJE-X04 dated 30 September 2026 record superannuation guarantee of AUD 4,261.20, wages accrued for 28-30 September of AUD 2,010.00 and annual leave of AUD 2,687.36.",
+  "adjustment_entry_nos": [
+    "AJE-X02",
+    "AJE-X03",
+    "AJE-X04"
+  ]
+}

@@ -1929,6 +1929,279 @@
           "Prepared by: Alex Morgan, Director"
         ]
       ]
+    },
+    {
+      "path": "financial_statements/fs_v1.pdf",
+      "type": "other",
+      "reliability": "internal_original",
+      "document_date": "2026-10-22",
+      "related_ids": [
+        "FS"
+      ],
+      "registration": "load",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Financial report for the financial year ended 30 September 2026",
+      "keywords": [
+        "22,136.99",
+        "30,048.99",
+        "15,000",
+        "19,212.21",
+        "40,000",
+        "2,500.00",
+        "4,500.00",
+        "6,300.00",
+        "1,969.99",
+        "12,886.32",
+        "23 October 2026",
+        "material uncertainty"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "FINANCIAL REPORT FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "STATEMENT OF FINANCIAL POSITION AS AT 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Assets",
+          "Cash and cash equivalents                         11,581.23       15,081.23",
+          "Trade receivables                                 10,199.50               -",
+          "Other receivables (accrued interest)                  48.53               -",
+          "Office equipment                                          -               -",
+          "Total assets                                      21,829.26       15,081.23",
+          "",
+          "Liabilities",
+          "Bank overdraft                            3       10,900.44        4,572.22",
+          "Trade and other payables                           4,005.07               -",
+          "GST and PAYG withholding                           8,801.97        (791.20)",
+          "Employee benefit liabilities                       8,958.56               -",
+          "Loan from director                        3       19,212.21       19,212.21",
+          "Total liabilities                                 51,878.25       22,993.23",
+          "",
+          "Net liabilities                                 (30,048.99)      (7,912.00)",
+          "",
+          "Equity",
+          "Accumulated losses                              (30,048.99)      (7,912.00)",
+          "Total equity (deficiency)                       (30,048.99)      (7,912.00)",
+          "",
+          "All assets and liabilities are current. The comparative figures are unaudited and are",
+          "restated to bring in the opening bank balances and the director loan (note 1)."
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "",
+          "STATEMENT OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME",
+          "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     3 months to         Year to",
+          "                                                30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Revenue                                           32,431.00        4,200.00",
+          "Interest income                                       48.53               -",
+          "Employee benefits expense                       (42,458.56)               -",
+          "Occupancy expenses                               (6,356.00)               -",
+          "Other expenses                                   (5,801.96)     (12,112.00)",
+          "Loss for the period                             (22,136.99)      (7,912.00)",
+          "Other comprehensive income                                -               -",
+          "Total comprehensive loss                        (22,136.99)      (7,912.00)",
+          "",
+          "The current period is 3 months and the comparative period is 12 months, so the amounts",
+          "are not entirely comparable (note 1)."
+        ],
+        [
+          "NOTES TO THE FINANCIAL STATEMENTS",
+          "",
+          "1. Basis of preparation",
+          "These are general purpose financial statements prepared in accordance with the",
+          "Corporations Act 2001 and Australian Accounting Standards - Simplified Disclosures.",
+          "The Company is a for-profit proprietary company. Amounts are in Australian dollars.",
+          "By a resolution of 14 August 2026 under section 323D(2A) of the Corporations Act 2001,",
+          "the sole director shortened the financial year that started on 1 July 2026 to end on",
+          "30 September 2026; later financial years end on 30 September. This financial report",
+          "therefore covers the 3 months from 1 July 2026 to 30 September 2026. The comparative",
+          "figures cover the 12 months ended 30 June 2026 and have not been audited. They are",
+          "restated to include the opening bank balances and the loan from the director, which were",
+          "entered in the accounting records on 16 July 2026 (journal #397). The amounts are",
+          "therefore not entirely comparable.",
+          "",
+          "2. Going concern",
+          "The Company incurred a loss of AUD 22,136.99 for the financial year ended 30 September",
+          "2026 and, at that date, its current liabilities exceeded its current assets by",
+          "AUD 30,048.99. The Company's bank overdraft facility of AUD 15,000 is repayable on",
+          "demand.",
+          "The Company depends on the continued financial support of its director and on the",
+          "continued availability of the overdraft facility. The director has undertaken, for",
+          "12 months from the date of the auditor's report, not to demand repayment of the loan of",
+          "AUD 19,212.21 or of further advances, and to provide further funds of up to AUD 40,000",
+          "if the Company needs them to meet its obligations. The director's cash flow forecast to",
+          "October 2027 shows funding gaps in November 2026 and January 2027, which the director",
+          "plans to fund under that undertaking.",
+          "These events and conditions indicate that there is a material uncertainty related to",
+          "events or conditions that may cast significant doubt on the Company's ability to",
+          "continue as a going concern and, therefore, that it may be unable to realise its assets",
+          "and discharge its liabilities in the normal course of business. The financial",
+          "statements have been prepared on a going concern basis and do not include any",
+          "adjustments that might be needed if the Company could not continue as a going concern."
+        ],
+        [
+          "3. Related parties",
+          "Director: Alex Morgan is the sole director and holds 85 of the 100 shares.",
+          "Loan from director: AUD 19,212.21 at 30 September 2026 (30 June 2026: AUD 19,212.21),",
+          "interest-free, unsecured and repayable on demand; it includes the AUD 1.00 paid for",
+          "the Company's 100 ordinary shares. The director lent a further AUD 2,500.00 in October",
+          "2026 (AUD 1,000.00 on 12 October and AUD 1,500.00 on 15 October) on the same terms.",
+          "Guarantee: the director has personally guaranteed the Company's bank overdraft.",
+          "Victoria Property Agency Pty Ltd, a company of which the director and the director's",
+          "spouse are the directors and each hold 50% of the shares, owned the Company's premises",
+          "until 30 September 2026. The Company paid it rent of AUD 4,500.00 (excluding GST) for",
+          "the period, at AUD 1,500.00 per month on a month-to-month arrangement without a written",
+          "lease, ended on 30 September 2026.",
+          "Morgan Advisory Pty Ltd, controlled by the director, had no transactions with the",
+          "Company. The director received no remuneration.",
+          "",
+          "4. Events after the reporting period",
+          "- From 1 October 2026 the Company leases its premises from the new owner, Harbourview",
+          "  Nominees Pty Ltd, for two years at AUD 12,886.32 per year plus GST, and from",
+          "  15 October 2026 it sublets room RM2031.",
+          "- In October 2026 the Company bought office furniture for AUD 6,300.00 to fit out the",
+          "  premises under the new lease, and a laptop for AUD 1,969.99 (both excluding GST).",
+          "- In October 2026 the director lent the Company a further AUD 2,500.00.",
+          "",
+          "DIRECTOR'S DECLARATION",
+          "In the opinion of the sole director of Demo Company (AU) Pty Ltd:",
+          "(a) there are reasonable grounds to believe that the Company will be able to pay its",
+          "    debts as and when they become due and payable, having regard to note 2; and",
+          "(b) the financial statements and notes are in accordance with the Corporations Act 2001,",
+          "    including complying with Australian Accounting Standards - Simplified Disclosures",
+          "    and giving a true and fair view of the Company's financial position as at",
+          "    30 September 2026 and of its performance for the financial year ended on that date.",
+          "This declaration is made in accordance with a resolution of the director.",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "23 October 2026"
+        ]
+      ]
+    },
+    {
+      "path": "representation/representation_letter.pdf",
+      "type": "representation_letter",
+      "reliability": "internal_original",
+      "document_date": "2026-10-23",
+      "related_ids": [],
+      "registration": "upload",
+      "index": false,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Management representation letter",
+      "keywords": [
+        "for the financial year ended 30 September 2026",
+        "All misstatements communicated have been corrected; there are no uncorrected misstatements",
+        "Alex Morgan, Director",
+        "23 October 2026",
+        "Tessellate Audit Partners"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "23 October 2026",
+          "",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "Dear Partners",
+          "",
+          "Management representation letter",
+          "",
+          "This representation letter is provided in connection with your audit of the financial",
+          "report of Demo Company (AU) Pty Ltd for the financial year ended 30 September 2026 for",
+          "the purpose of expressing an opinion as to whether the financial report gives a true and",
+          "fair view in accordance with Australian Accounting Standards - Simplified Disclosures",
+          "and the Corporations Act 2001.",
+          "",
+          "We confirm that (to the best of our knowledge and belief, having made such enquiries as",
+          "we considered necessary for the purpose of appropriately informing ourselves):",
+          "",
+          "Financial report",
+          "1. We have fulfilled our responsibilities, as set out in the terms of the audit",
+          "   engagement dated 28 August 2026, for the preparation of the financial report in",
+          "   accordance with Australian Accounting Standards - Simplified Disclosures and the",
+          "   Corporations Act 2001; in particular the financial report gives a true and fair view",
+          "   in accordance therewith.",
+          "",
+          "Information provided",
+          "2. We have provided you with:",
+          "   (a) access to all information of which we are aware that is relevant to the",
+          "       preparation of the financial report such as records, documentation and other",
+          "       matters;",
+          "   (b) additional information that you have requested from us for the purpose of the",
+          "       audit; and",
+          "   (c) unrestricted access to persons within the Company from whom you determined it",
+          "       necessary to obtain audit evidence.",
+          "3. All transactions have been recorded in the accounting records and are reflected in",
+          "   the financial report.",
+          "",
+          "Fraud",
+          "4. We acknowledge our responsibility for the design, implementation and maintenance of",
+          "   internal control to prevent and detect fraud.",
+          "5. We have disclosed to you the results of our assessment of the risk that the financial",
+          "   report may be materially misstated as a result of fraud.",
+          "6. We have disclosed to you all information in relation to fraud or suspected fraud that",
+          "   we are aware of and that affects the Company and involves:",
+          "   (a) management;",
+          "   (b) employees who have significant roles in internal control; or",
+          "   (c) others where the fraud could have a material effect on the financial report.",
+          "7. We have disclosed to you all information in relation to allegations of fraud, or",
+          "   suspected fraud, affecting the Company's financial report communicated by employees,",
+          "   former employees, analysts, regulators or others."
+        ],
+        [
+          "Laws and regulations",
+          "8. We have disclosed to you all known instances of non-compliance or suspected",
+          "   non-compliance with laws and regulations whose effects should be considered when",
+          "   preparing the financial report.",
+          "",
+          "Related parties",
+          "9. We have disclosed to you the identity of the Company's related parties and all the",
+          "   related party relationships and transactions of which we are aware.",
+          "10. Related party relationships and transactions have been appropriately accounted for",
+          "    and disclosed in accordance with the requirements of Australian Accounting",
+          "    Standards - Simplified Disclosures (note 3 to the financial report).",
+          "",
+          "Subsequent events",
+          "11. All events subsequent to the date of the financial report and for which Australian",
+          "    Accounting Standards - Simplified Disclosures require adjustment or disclosure have",
+          "    been adjusted or disclosed.",
+          "",
+          "Going concern",
+          "12. Our plans for future actions, as described in note 2 to the financial report and in",
+          "    the going concern memo and cash flow forecast dated 16 October 2026, including the",
+          "    director's financial support, are feasible, and we intend to carry them out.",
+          "",
+          "Misstatements",
+          "13. All misstatements communicated have been corrected; there are no uncorrected",
+          "    misstatements. The schedule of uncorrected misstatements attached to this letter is",
+          "    therefore empty.",
+          "",
+          "Schedule of uncorrected misstatements: none.",
+          "",
+          "Yours faithfully",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "23 October 2026"
+        ]
+      ]
     }
   ],
   "contract_links": [
@@ -2357,7 +2630,372 @@
       "is_adjustment": true
     }
   ],
-  "financial_statements": {},
-  "manual": {},
+  "financial_statements": {
+    "id": "FS",
+    "version": 1,
+    "prepared_at": "2026-10-22",
+    "directors_declaration_date": "2026-10-23",
+    "comparative_restatement_entry_nos": [
+      "XJ-397"
+    ],
+    "lines": [
+      {
+        "code": "SOFP-CASH",
+        "statement": "financial_position",
+        "name": "Cash and cash equivalents",
+        "amount_cents": 1158123,
+        "sign": 1,
+        "account_codes": [
+          "091"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1508123
+      },
+      {
+        "code": "SOFP-REC",
+        "statement": "financial_position",
+        "name": "Trade receivables",
+        "amount_cents": 1019950,
+        "sign": 1,
+        "account_codes": [
+          "610"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-OREC",
+        "statement": "financial_position",
+        "name": "Other receivables (accrued interest)",
+        "amount_cents": 4853,
+        "sign": 1,
+        "account_codes": [
+          "620"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-PPE",
+        "statement": "financial_position",
+        "name": "Office equipment",
+        "amount_cents": 0,
+        "sign": 1,
+        "account_codes": [
+          "710",
+          "711"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-TA",
+        "statement": "financial_position",
+        "name": "Total assets",
+        "amount_cents": 2182926,
+        "sign": 1,
+        "account_codes": [
+          "091",
+          "610",
+          "620",
+          "710",
+          "711"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": 1508123
+      },
+      {
+        "code": "SOFP-OD",
+        "statement": "financial_position",
+        "name": "Bank overdraft",
+        "amount_cents": 1090044,
+        "sign": -1,
+        "account_codes": [
+          "090"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 457222
+      },
+      {
+        "code": "SOFP-PAY",
+        "statement": "financial_position",
+        "name": "Trade and other payables",
+        "amount_cents": 400507,
+        "sign": -1,
+        "account_codes": [
+          "800",
+          "801",
+          "860"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-TAX",
+        "statement": "financial_position",
+        "name": "GST and PAYG withholding",
+        "amount_cents": 880197,
+        "sign": -1,
+        "account_codes": [
+          "820",
+          "825"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -79120
+      },
+      {
+        "code": "SOFP-EMP",
+        "statement": "financial_position",
+        "name": "Employee benefit liabilities",
+        "amount_cents": 895856,
+        "sign": -1,
+        "account_codes": [
+          "804",
+          "805",
+          "826"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-DLOAN",
+        "statement": "financial_position",
+        "name": "Loan from director",
+        "amount_cents": 1921221,
+        "sign": -1,
+        "account_codes": [
+          "840"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1921221
+      },
+      {
+        "code": "SOFP-TL",
+        "statement": "financial_position",
+        "name": "Total liabilities",
+        "amount_cents": 5187825,
+        "sign": -1,
+        "account_codes": [
+          "090",
+          "800",
+          "801",
+          "860",
+          "820",
+          "825",
+          "804",
+          "805",
+          "826",
+          "840"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": 2299323
+      },
+      {
+        "code": "SOFP-EQ",
+        "statement": "financial_position",
+        "name": "Accumulated losses",
+        "amount_cents": -3004899,
+        "sign": -1,
+        "account_codes": [
+          "960",
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "PL-REV",
+        "statement": "profit_or_loss",
+        "name": "Revenue",
+        "amount_cents": 3243100,
+        "sign": -1,
+        "account_codes": [
+          "200"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 420000
+      },
+      {
+        "code": "PL-OI",
+        "statement": "profit_or_loss",
+        "name": "Interest income",
+        "amount_cents": 4853,
+        "sign": -1,
+        "account_codes": [
+          "270"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-EMP",
+        "statement": "profit_or_loss",
+        "name": "Employee benefits expense",
+        "amount_cents": 4245856,
+        "sign": 1,
+        "account_codes": [
+          "477",
+          "478"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-OCC",
+        "statement": "profit_or_loss",
+        "name": "Occupancy expenses",
+        "amount_cents": 635600,
+        "sign": 1,
+        "account_codes": [
+          "408",
+          "445",
+          "469"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-OTH",
+        "statement": "profit_or_loss",
+        "name": "Other expenses",
+        "amount_cents": 580196,
+        "sign": 1,
+        "account_codes": [
+          "400",
+          "404",
+          "412",
+          "420",
+          "429",
+          "449",
+          "453",
+          "461",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1211200
+      },
+      {
+        "code": "PL-NP",
+        "statement": "profit_or_loss",
+        "name": "Loss for the period",
+        "amount_cents": -2213699,
+        "sign": -1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -791200
+      }
+    ]
+  },
+  "manual": {
+    "fin08_round1.json": {
+      "procedure_id": "FIN-08",
+      "round": 1,
+      "communicated_at": "2026-10-19T04:00:00Z",
+      "recipient": "Alex Morgan, Director",
+      "form": "written",
+      "misstatement_sources": [
+        "J-GEN-02-1-XJ-499",
+        "J-CSH-02-1-BA-091"
+      ],
+      "responded_at": "2026-10-19T22:00:00Z",
+      "response": "We agree with both items. Journal AJE-X01 dated 30 September 2026 removes journal #499, as no office equipment was held at that date. Journal AJE-X05 dated 30 September 2026 accrues interest of AUD 48.53 on the Business Savings Account, as confirmed by the bank.",
+      "adjustment_entry_nos": [
+        "AJE-X01",
+        "AJE-X05"
+      ]
+    },
+    "fin08_round2.json": {
+      "procedure_id": "FIN-08",
+      "round": 2,
+      "communicated_at": "2026-10-21T04:00:00Z",
+      "recipient": "Alex Morgan, Director",
+      "form": "written",
+      "misstatement_sources": [
+        "J-FIN-15-1-826",
+        "J-FIN-15-1-804",
+        "J-FIN-15-1-805"
+      ],
+      "responded_at": "2026-10-21T22:00:00Z",
+      "response": "We agree with all three items. Journals AJE-X02 to AJE-X04 dated 30 September 2026 record superannuation guarantee of AUD 4,261.20, wages accrued for 28-30 September of AUD 2,010.00 and annual leave of AUD 2,687.36.",
+      "adjustment_entry_nos": [
+        "AJE-X02",
+        "AJE-X03",
+        "AJE-X04"
+      ]
+    },
+    "representation.json": {
+      "procedure_id": "FIN-07",
+      "status": "obtained",
+      "dated_at": "2026-10-23",
+      "signed_by": [
+        "Alex Morgan"
+      ],
+      "period_end": "2026-09-30",
+      "document": "representation/representation_letter.pdf",
+      "standards": [
+        "ASA580-P10",
+        "ASA580-P11",
+        "ASA560-P09",
+        "ASA570-P16",
+        "ASA550-P26",
+        "ASA240-P40",
+        "ASA250-P17"
+      ],
+      "uncorrected_schedule": []
+    },
+    "rpt07_reply.json": {
+      "procedure_id": "RPT-07",
+      "communicated_on": "2026-10-22",
+      "form": "written",
+      "recipients": [
+        "Alex Morgan"
+      ],
+      "matters": [
+        "SIG_PRACTICES",
+        "DIFFICULTIES",
+        "REPORT_FORM",
+        "INDEPENDENCE"
+      ],
+      "corrected_misstatements": 5,
+      "uncorrected_misstatements": 0,
+      "responded_on": "2026-10-22",
+      "response": "Thank you for your letter of 22 October 2026. We have read the matters you communicated: the significant qualitative aspects of our accounting practices, the significant difficulties encountered during the audit, the expected form and content of your auditor's report, including the material uncertainty related to going concern, and your statement of independence. We confirm that the five misstatements you communicated have been corrected and that we have no further matters to raise."
+    }
+  },
   "notes": "Synthetic – for demonstration only. Supplements for the Xero Demo Company (AU) snapshot 20261017-q1; the snapshot itself is never modified. Bank names NAB, National Australia Bank, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data: both bank accounts are held with Wattlebrook Bank Limited (fictitious). People are pseudonyms; the Xero login contact is never copied: only the check script reads it, in memory, to confirm it appears in no file."
 }

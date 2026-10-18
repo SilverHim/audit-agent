@@ -181,8 +181,8 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 
 def generate(snapshot_dir: Path, out: Path) -> Path:
     """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 合同关联, 服务完成记录,
-    开户行, 回函渠道, 工资册, 更正分录, 规格写有正文的 PDF (承接, 合同, 回函, 关联方与证据文件), 登记 PDF,
-    documents/index.csv; 其余各段由后续需求补进."""
+    开户行, 回函渠道, 工资册, 更正分录, 规格写有正文的 PDF (承接, 合同, 回函, 关联方与证据文件, 财报, 声明书),
+    登记 PDF, documents/index.csv, 财报 fs_v1.json 与人工队列提交物 (manual/)."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -191,7 +191,7 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
         raise SystemExit(f"快照 {snapshot_dir} 缺组织信息 (organisation.json 或 OrganisationID)")
     if not spec["profile"]["id"].startswith(prefix):
         raise SystemExit(f"画像 ID {spec['profile']['id']} 不以 {prefix} 开头")
-    refs = [ref for doc in spec["documents"] for ref in file_refs(spec, doc["path"])]  # 与 manifest 同一来源
+    refs = [ref for rel in [*(d["path"] for d in spec["documents"]), FS_JSON] for ref in file_refs(spec, rel)]
     missing = RefIndex(Snapshot(snapshot_dir)).missing(refs) if refs else []
     if missing:
         raise SystemExit(f"xero_refs 在快照中找不到: {', '.join(sorted(set(missing)))}")
@@ -220,8 +220,24 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
             write_pdf(out / doc["path"], ["\n".join(page) for page in doc["pages"]], doc["footer"], spec["header"])
     render_registry_pdfs(out)
     write_index(out, spec["documents"])
+    if spec["financial_statements"]:
+        write_financial_statements(out, spec["financial_statements"])
+    for name, submission in spec["manual"].items():
+        write_json(out, f"manual/{name}", submission)
     write_manifest(out, snapshot_dir)
     return out
+
+
+FS_JSON = "financial_statements/fs_v1.json"
+FS_PDF = "financial_statements/fs_v1.pdf"
+
+
+def write_financial_statements(out: Path, fs: dict[str, Any]) -> None:
+    """待审财报 fs_v1.json (第 9.5 节, 字段同需求清单 R216 的 FinancialStatements): 规格的报表加 document_id,
+    即同目录 fs_v1.pdf 的文件 ID (DOC- 加 sha256 前 12 位, 同 manifest), 所以须在 PDF 写出之后调用."""
+    head = {k: fs[k] for k in ("id", "version", "prepared_at", "directors_declaration_date")}
+    rest = {k: fs[k] for k in ("comparative_restatement_entry_nos", "lines")}
+    write_json(out, FS_JSON, {**head, "document_id": "DOC-" + sha256(out / FS_PDF)[:12], **rest})
 
 
 PAYROLL_COLUMNS = [
@@ -468,11 +484,13 @@ def render_registry_pdfs(directory: Path) -> list[Path]:
 
 
 def file_refs(spec: dict[str, Any], rel: str) -> list[str]:
-    """文件引用的 Xero 对象 (manifest 的 xero_refs): 文件在规格 documents 段时取其 xero_refs; 其余文件的规则由
-    后续需求补上, 暂为空."""
+    """文件引用的 Xero 对象 (manifest 的 xero_refs): 文件在规格 documents 段时取其 xero_refs; fs_v1.json 取比较数
+    重述所依据的凭证号; 其余文件的规则由后续需求补上, 暂为空."""
     for doc in spec["documents"]:
         if doc["path"] == rel:
             return list(doc.get("xero_refs", []))
+    if rel == FS_JSON and spec["financial_statements"]:
+        return list(spec["financial_statements"]["comparative_restatement_entry_nos"])
     return []
 
 

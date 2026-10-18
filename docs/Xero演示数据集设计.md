@@ -485,14 +485,22 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 1. 编制基础, 期间只有 3 个月.
 2. 持续经营: ASA 570 第 19(b) 段句式; 写明亏损 22,136.99, 净流动负债 30,048.99, 依赖董事支持与透支额度.
 3. 关联方: 董事借款 (含 10 月新增 2,500); 透支担保; VPA 房租 4,500 及其条款 (审计后补入, 第 7 节第 18 步).
-4. 期后事项: 搬迁与新租约, 家具 6,300, 笔记本 1,969.99, 董事 10 月借款 2,500.
+4. 期后事项: 新租约 (同一物业, 10-01 起租) 与 10-15 起的分租, 家具 6,300 (新租约下的装修), 笔记本 1,969.99, 董事 10 月借款 2,500.
+
+**补造写法** (`financial_statements/fs_v1.pdf` 4 页, 2026-10-22 编成, 董事声明 2026-10-23):
+- 标题与叙述的期间写 "financial year ended 30 September 2026" (同第 6 批对报告与声明书的写法; 缩短的财年仍是 financial year); 行名 "Loss for the period" 照 R216 不改.
+- 第 1 页财务状况表, 第 2 页损益表, 两页都列本期与比较数 (比较数注明未经审计); 0 写 "-", 负数与损益表的费用行加括号. 各行名称, 本期与比较数与 fs_v1.json 逐行一致, 校验按表核对所在页.
+- 第 3 页附注 1 (编制基础: 公司法与 Simplified Disclosures, 依 s323D(2A) 缩短的 3 个月财年, 比较数为 12 个月且按 XJ-397 重述, 不完全可比) 与附注 2 (持续经营: 亏损 22,136.99, 流动负债超过流动资产 30,048.99, 透支额度 15,000 随时可收回; 董事自审计报告日起 12 个月不要求还款并追加最多 40,000; 预测在 2026-11 与 2027-01 有缺口; 结论用 ASA 570 第 19(b) 段句式).
+- 第 4 页附注 3 (董事借款 19,212.21 含 1.00 股款, 10 月新增 1,000 与 1,500; 透支个人担保; VPA 为董事与其配偶的公司, 本期房租 4,500 不含 GST, 按月 1,500, 无书面租约, 9-30 终止; Morgan Advisory 无交易; 董事不领薪酬), 附注 4 (10-01 起向 Harbourview 租两年, 年租 12,886.32 加 GST; 10-15 起分租 RM2031; 家具 6,300 用于新租约下的装修, 笔记本 1,969.99, 均不含 GST; 董事 10 月借款 2,500) 与董事声明 (s295(4)(c), (d) 两项意见, 按 s295(5) 写明依董事决议作出, 签署与日期).
+- 不写 AASB 1060 的段号 (段号暂缓, 待 AASB 1060 正本, T7).
+- 只补造财务状况表与损益表 (FIN-12 只勾稽这两张表). 权益变动表与现金流量表是否可省略暂缓到拿到 AASB 1060 正本 (T7) 再定, 本版不补造; 委托书 (第 4.2 节) 照常按完整财报列举组成.
 
 ### 4.8 人工队列提交物 (manual/)
 
 - **FIN-08 第 1 轮回复 (10-20)**: "We agree with both items. Journal AJE-X01 dated 30 September 2026 removes journal #499, as no office equipment was held at that date. Journal AJE-X05 dated 30 September 2026 accrues interest of AUD 48.53 on the Business Savings Account, as confirmed by the bank."
 - **FIN-08 第 2 轮回复 (10-22)**: "We agree with all three items. Journals AJE-X02 to AJE-X04 dated 30 September 2026 record superannuation guarantee of AUD 4,261.20, wages accrued for 28-30 September of AUD 2,010.00 and annual leave of AUD 2,687.36."
-- **声明书 (10-23)**: ASA 580 第 10, 11 段; ASA 560 第 9 段; ASA 570 第 16(e) 段; ASA 550 第 26 段; ASA 240 第 40 段; ASA 250 第 17 段; 未更正错报一项写 "All misstatements communicated have been corrected; there are no uncorrected misstatements", 附表为空.
-- **RPT-07 董事回复**.
+- **声明书 (10-23)**: ASA 580 第 10, 11 段; ASA 560 第 9 段; ASA 570 第 16(e) 段; ASA 550 第 26 段; ASA 240 第 40 段; ASA 250 第 17 段; 未更正错报一项写 "All misstatements communicated have been corrected; there are no uncorrected misstatements", 附表为空. 补造为 `representation/representation_letter.pdf` 2 页: 致 Tessellate Audit Partners, 期间写 "for the financial year ended 30 September 2026", 引用 2026-08-28 的委托书. 措辞取 ASA 580 Appendix 2 (主体名改为 the Company, 框架写 Australian Accounting Standards - Simplified Disclosures 与公司法), 只有持续经营与 "无未更正错报" 两条自拟 (同 R219 模板的 drafted 项). 第 1 页: 财报责任 (Appendix 2 首条, 按 ASA 580 第 12 段与委托书写 true and fair view), 提供信息 (委托书 (iii) a-c 三小项), 交易完整, 舞弊 (ASA 240 第 40(a)-(d) 段 4 条). 第 2 页: 法规 (ASA 250), 关联方 (ASA 550 两条, 指向附注 3), 期后事项 (ASA 560), 持续经营计划可行 (ASA 570, 指向附注 2 与 10-16 的备忘录), 错报与空附表; Alex Morgan, Director 签署. 段号已按 `docs/参考资料` 原文核对. representation.json 的 standards 用准则段落 ID (ASA580-P10, ASA580-P11, ASA560-P09, ASA570-P16, ASA550-P26, ASA240-P40, ASA250-P17).
+- **RPT-07 董事回复 (10-22)**: "Thank you for your letter of 22 October 2026. We have read the matters you communicated: the significant qualitative aspects of our accounting practices, the significant difficulties encountered during the audit, the expected form and content of your auditor's report, including the material uncertainty related to going concern, and your statement of independence. We confirm that the five misstatements you communicated have been corrected and that we have no further matters to raise."
 
 ---
 
@@ -1123,7 +1131,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 **adjustments/journal_entries.csv**: 表头同 journal_entries.csv; 11 行, 行 ID 为 `AJE-X0n-k`, 金额与 source_doc 见第 2.8 节.
 
-**financial_statements/fs_v1.json**: {id "FS", version 1, prepared_at 2026-10-22, directors_declaration_date 2026-10-23, lines 18 行}, 每行 {code, statement (financial_position | profit_or_loss), name, amount_cents, sign, account_codes, subtotal, prior_amount_cents}:
+**financial_statements/fs_v1.json**: {id "FS", version 1, prepared_at 2026-10-22, directors_declaration_date 2026-10-23, document_id (fs_v1.pdf 的文件 ID, 即 DOC- 加其 sha256 前 12 位), comparative_restatement_entry_nos [XJ-397], lines 18 行} (字段同需求清单 R216 的 FinancialStatements), 每行 {code, statement (financial_position | profit_or_loss), name, amount_cents, sign, account_codes, subtotal, prior_amount_cents}; manifest 中它的 xero_refs 为 [XJ-397]:
 
 | code | amount_cents | sign | account_codes | prior_amount_cents |
 |---|---:|---|---|---:|
@@ -1148,11 +1156,17 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 比较数按 "0630 试算表加 XJ-397" 机械计算 (第 4.7, 6.6 节); 上期 GST 应收 791.20 记在 SOFP-TAX 行的上期 -79120, 不单列资产行, 以免 820 映射两次.
 
+校验脚本对财报的核对:
+- 不需要快照: 合模型, 与规格一致, 行代码不重复, document_id 正确; 同一张表的非小计行之间科目不重复; 小计等于 sign × Σ (所含各行 sign × 金额), 所含各行的科目合起来等于小计的科目; 资产 = 负债 + 权益 (本期与比较数); 期初累计亏损加本期损益等于期末; PDF 文本层有每行的名称, 本期与比较数.
+- 需要快照: 每行等于 sign × Σ (09-30 试算表加 5 笔更正) 映射科目, 比较数等于 sign × Σ (0630 表加 XJ-397); 非小计行恰好映射 33 个科目; 损益科目只在损益表与累计亏损行.
+- documents 段 29 份 55 页与各登记途径的份数只核正式目录 (测试副本会增删 PDF, 如注入 T6 新增摘录).
+
 **manual/** (人工队列提交物的中性格式, 演示脚本与测试读, 载入器不读; 各程序按自己的结果模型映射, 提交后由程序 owner 整理成领域对象, 不建人工判断):
 - fin08_round1.json: {procedure_id FIN-08, round 1, communicated_at 2026-10-19T04:00:00Z (悉尼 15:00), recipient "Alex Morgan, Director", form written, misstatement_sources [J-GEN-02-1-XJ-499, J-CSH-02-1-BA-091], responded_at 2026-10-19T22:00:00Z (悉尼 10-20 09:00, 早于 AJE-X01 的录入时间), response 第 4.8 节第 1 轮原文, adjustment_entry_nos [AJE-X01, AJE-X05]}.
 - fin08_round2.json: {procedure_id FIN-08, round 2, recipient "Alex Morgan, Director", form written, communicated_at 2026-10-21T04:00:00Z (悉尼 15:00), misstatement_sources [J-FIN-15-1-826, J-FIN-15-1-804, J-FIN-15-1-805], responded_at 2026-10-21T22:00:00Z (悉尼 10-22 09:00), response 第 2 轮原文, adjustment_entry_nos [AJE-X02, AJE-X03, AJE-X04]}.
 - representation.json: {procedure_id FIN-07, status obtained, dated_at 2026-10-23, signed_by [Alex Morgan], period_end 2026-09-30, document "representation/representation_letter.pdf", standards (第 4.8 节七项), uncorrected_schedule []}.
-- rpt07_reply.json: {procedure_id RPT-07, communicated_on 2026-10-22, form written, recipients [Alex Morgan], matters [SIG_PRACTICES, DIFFICULTIES, REPORT_FORM, INDEPENDENCE], corrected_misstatements 5, uncorrected_misstatements 0, responded_on 2026-10-22, response (董事回复原文, 写在生成规格里)}.
+- rpt07_reply.json: {procedure_id RPT-07, communicated_on 2026-10-22, form written, recipients [Alex Morgan], matters [SIG_PRACTICES, DIFFICULTIES, REPORT_FORM, INDEPENDENCE], corrected_misstatements 5, uncorrected_misstatements 0, responded_on 2026-10-22, response (董事回复原文, 写在生成规格里, 见第 4.8 节)}.
+- 校验: FIN-08 两轮键集合相同, 时刻为 UTC (以 Z 结尾), 回复晚于沟通且早于所涉更正分录的录入时间, 两轮的 adjustment_entry_nos 恰好覆盖 5 笔更正分录; 声明书登记的文件在 manifest 中 (类型 representation_letter, 日期同 dated_at), 签署人在其文本层, 附表为空; RPT-07 的已更正数等于更正分录笔数, 未更正数等于声明书附表行数.
 
 **大模型 fixture**: Xero 的 fixture 正本放 `tests/fixtures/llm_xero/<程序>/<对象>.json` (各程序的需求写), 生成脚本原样复制到 `data/xero_demo/20261017-q1/llm/` 并列入 manifest; mock 模式按项目数据集选目录 (Xero 项目读补造目录的 llm/, 其余读 LLM_FIXTURES_ROOT). document 指针直接用 manifest 的文件 ID. Numbat 的 fixture (`tests/fixtures/llm`, `data/demo/llm`) 不动.
 
@@ -1177,6 +1191,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - 从快照裁出最小 fixture 入库 (第 8.1 节).
 - 校验脚本复算第 5 节的规则命中与第 7 节的计数: 分别由各程序的连库测试与合并终验 (需求清单 R258-R263) 核对.
 - 更正传导 (第 7.2 节): 更正后试算表不改版, 依赖科目的已完成程序不标 needs_review; FIN-12, FIN-15, FIN-02 按 "试算表加已验证更正分录" 取数.
+- fs_v1 的权益变动表与现金流量表 (第 4.7 节): 是否可省略暂缓, 待 AASB 1060 正本 (T7). 在此之前, R64 委托书第 1 节与 RPT-03 审计报告第 1 段 (`knowledge/prompts/RPT-03.md.j2`) 列举的报表组成多于 fs_v1 实有的两张表; T7 定稿时要么补造两张表, 要么同步改这两处的列举.
 
 ## 待核与待正本
 

@@ -560,6 +560,12 @@ def test_manifest_layout() -> None:
         "documents/related_party/rm2031_sublease.pdf",
         "documents/related_party/vpa_rent_letter.pdf",
         "documents/related_party/vpa_sale_termination_notice.pdf",
+        "financial_statements/fs_v1.json",
+        "financial_statements/fs_v1.pdf",
+        "manual/fin08_round1.json",
+        "manual/fin08_round2.json",
+        "manual/representation.json",
+        "manual/rpt07_reply.json",
         "payroll/employees.csv",
         "planning/audit_objectives.json",
         "planning/risk_register.json",
@@ -573,6 +579,7 @@ def test_manifest_layout() -> None:
         "registry/extracts/900043049.pdf",
         "registry/persons/MORGAN-ALEX-19790412.json",
         "registry/persons/MORGAN-ALEX-19790412.pdf",
+        "representation/representation_letter.pdf",
     ]
     for item in manifest["files"]:  # type: ignore[index]
         assert list(item) == ["path", "sha256", "synthetic", "generator", "xero_refs"]
@@ -891,7 +898,8 @@ def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     generator.write_manifest(copy, snapshot)
     assert checker.check(copy, snapshot, determinism=False, scan=[]) == [
-        "快照缺 dataset.json, invoices.json, accounts.json, bank_statements.json: 跳过补造表与快照的核对"
+        f"不是正式补造目录 ({copy}): 跳过 documents 段份数, 页数与登记途径的计数",
+        "快照缺 dataset.json, invoices.json, accounts.json, bank_statements.json: 跳过补造表与快照的核对",
     ]
     (snapshot / "organisation.json").write_text("[{}]", encoding="utf-8")
     generator.write_manifest(copy, snapshot)  # 快照哈希随之更新, 只剩组织信息的问题
@@ -1873,7 +1881,7 @@ def test_other_evidence_documents() -> None:
 def test_r67_index_rows_and_manifest() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
     ev = "documents/evidence/"
-    assert len(rows) == 19 and rows[11:] == [  # 表头加 18 行
+    assert len(rows) >= 19 and rows[11:19] == [  # 表头加 R64 至 R67 的 18 行
         f"{ev}fixed_asset_register.pdf,internal_record,internal_original,2026-09-30,XJ-499;XJ-626;XJ-676",
         f"{ev}expense_claim_E003.pdf,internal_record,internal_original,2026-08-14,E003",
         f"{ev}payroll_register_terms.pdf,internal_record,internal_original,2026-09-30,804;805;826",
@@ -1884,7 +1892,7 @@ def test_r67_index_rows_and_manifest() -> None:
         f"{ev}jakaranda_quote.pdf,internal_record,internal_copy,2026-10-08,BT-090-0099",
     ]
     docs = manifest_documents()
-    new = [r.split(",")[0] for r in rows[11:]]
+    new = [r.split(",")[0] for r in rows[11:19]]
     assert {docs[p][3] for p in new} == {"load"} and sum(int(docs[p][4]) for p in new) == 10  # type: ignore[call-overload]
 
 
@@ -2068,3 +2076,508 @@ def test_expense_claim_matches_xero_entry() -> None:
     assert sorted(a - g for a, g in zip(amounts, [*gst_parts, 0], strict=True)) == nets  # 不含税额逐张相等
     days = [int(d) for d in re.findall(r"(\d\d) Aug 2026", receipts)]
     assert len(days) == 4 and max(date(2026, 8, d) for d in days) <= claim.posting_date == date(2026, 8, 16)
+
+
+PL_CODES = ["200", "270", "400", "404", "408", "412", "420", "429", "445", "449", "453", "461", "469", "477", "478"]
+PL_CODES += ["489", "493"]  # 17 个损益科目
+FS_LINES = [  # 需求清单 R216 的 XERO_FS_V1 (待审财报唯一正本): 代码, 表, 名称, 科目, sign, 小计, 本期, 比较数
+    ("SOFP-CASH", "financial_position", "Cash and cash equivalents", ["091"], 1, False, 1158123, 1508123),
+    ("SOFP-REC", "financial_position", "Trade receivables", ["610"], 1, False, 1019950, 0),
+    ("SOFP-OREC", "financial_position", "Other receivables (accrued interest)", ["620"], 1, False, 4853, 0),
+    ("SOFP-PPE", "financial_position", "Office equipment", ["710", "711"], 1, False, 0, 0),
+    ("SOFP-TA", "financial_position", "Total assets", ["091", "610", "620", "710", "711"], 1, True, 2182926, 1508123),
+    ("SOFP-OD", "financial_position", "Bank overdraft", ["090"], -1, False, 1090044, 457222),
+    ("SOFP-PAY", "financial_position", "Trade and other payables", ["800", "801", "860"], -1, False, 400507, 0),
+    ("SOFP-TAX", "financial_position", "GST and PAYG withholding", ["820", "825"], -1, False, 880197, -79120),
+    ("SOFP-EMP", "financial_position", "Employee benefit liabilities", ["804", "805", "826"], -1, False, 895856, 0),
+    ("SOFP-DLOAN", "financial_position", "Loan from director", ["840"], -1, False, 1921221, 1921221),
+    (
+        "SOFP-TL",
+        "financial_position",
+        "Total liabilities",
+        ["090", "800", "801", "860", "820", "825", "804", "805", "826", "840"],
+        -1,
+        True,
+        5187825,
+        2299323,
+    ),
+    (
+        "SOFP-EQ",
+        "financial_position",
+        "Accumulated losses",
+        ["960", *PL_CODES],
+        -1,
+        False,
+        -3004899,
+        -791200,
+    ),
+    ("PL-REV", "profit_or_loss", "Revenue", ["200"], -1, False, 3243100, 420000),
+    ("PL-OI", "profit_or_loss", "Interest income", ["270"], -1, False, 4853, 0),
+    ("PL-EMP", "profit_or_loss", "Employee benefits expense", ["477", "478"], 1, False, 4245856, 0),
+    ("PL-OCC", "profit_or_loss", "Occupancy expenses", ["408", "445", "469"], 1, False, 635600, 0),
+    (
+        "PL-OTH",
+        "profit_or_loss",
+        "Other expenses",
+        ["400", "404", "412", "420", "429", "449", "453", "461", "489", "493"],
+        1,
+        False,
+        580196,
+        1211200,
+    ),
+    (
+        "PL-NP",
+        "profit_or_loss",
+        "Loss for the period",
+        PL_CODES,
+        -1,
+        True,
+        -2213699,
+        -791200,
+    ),
+]
+
+
+def test_financial_statements_json() -> None:
+    fs = read(generator.FS_JSON)
+    assert list(fs) == [  # type: ignore[arg-type]
+        "id",
+        "version",
+        "prepared_at",
+        "directors_declaration_date",
+        "document_id",
+        "comparative_restatement_entry_nos",
+        "lines",
+    ]
+    assert (fs["id"], fs["version"], fs["prepared_at"], fs["directors_declaration_date"]) == (  # type: ignore[index]
+        "FS",
+        1,
+        "2026-10-22",
+        "2026-10-23",
+    )
+    assert fs["comparative_restatement_entry_nos"] == ["XJ-397"]  # type: ignore[index]
+    keys = ["code", "statement", "name", "account_codes", "sign", "subtotal", "amount_cents", "prior_amount_cents"]
+    assert [tuple(line[k] for k in keys) for line in fs["lines"]] == [  # type: ignore[index]
+        (c, st, n, codes, sg, sub, a, p) for c, st, n, codes, sg, sub, a, p in FS_LINES
+    ]
+    assert all(
+        list(line)
+        == ["code", "statement", "name", "amount_cents", "sign", "account_codes", "subtotal", "prior_amount_cents"]
+        for line in fs["lines"]  # type: ignore[index]
+    )
+    docs = {d["path"]: d for d in read("manifest.json")["documents"]}  # type: ignore[index]
+    assert fs["document_id"] == docs[generator.FS_PDF]["document_id"]  # type: ignore[index]
+    by = {c: (a, p) for c, *_, a, p in FS_LINES}
+    assert by["SOFP-TA"][0] == by["SOFP-TL"][0] + by["SOFP-EQ"][0]  # 21,829.26 = 51,878.25 + (30,048.99)
+    assert by["SOFP-EQ"][1] + by["PL-NP"][0] == by["SOFP-EQ"][0]  # 期初 (7,912.00) 加本期 (22,136.99)
+    manifest = read("manifest.json")
+    item = next(f for f in manifest["files"] if f["path"] == generator.FS_JSON)  # type: ignore[index]
+    assert item["xero_refs"] == ["XJ-397"]
+
+
+def test_financial_statements_pdf() -> None:
+    pages = pdf_texts(SUPPLEMENTS / generator.FS_PDF)
+    assert len(pages) == 4
+    first, second, third, fourth = pages
+    assert "FINANCIAL REPORT FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026" in first  # 第 6 批的期间写法
+    assert "STATEMENT OF FINANCIAL POSITION AS AT 30 SEPTEMBER 2026" in first
+    for row in (
+        "Cash and cash equivalents 11,581.23 15,081.23",
+        "Office equipment - -",
+        "Total assets 21,829.26 15,081.23",
+        "Bank overdraft 3 10,900.44 4,572.22",
+        "GST and PAYG withholding 8,801.97 (791.20)",
+        "Employee benefit liabilities 8,958.56 -",
+        "Total liabilities 51,878.25 22,993.23",
+        "Accumulated losses (30,048.99) (7,912.00)",
+    ):
+        assert row in first
+    assert "STATEMENT OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME" in second
+    assert "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026" in second
+    for row in (
+        "Revenue 32,431.00 4,200.00",
+        "Interest income 48.53 -",
+        "Employee benefits expense (42,458.56) -",
+        "Occupancy expenses (6,356.00) -",
+        "Other expenses (5,801.96) (12,112.00)",
+        "Loss for the period (22,136.99) (7,912.00)",
+    ):
+        assert row in second
+    assert "1. Basis of preparation" in third and "the 3 months from 1 July 2026 to 30 September 2026" in third
+    assert "section 323D(2A)" in third and "have not been audited" in third and "(journal #397)" in third
+    assert "2. Going concern" in third and "loss of AUD 22,136.99 for the financial year ended" in third
+    assert "current liabilities exceeded its current assets by AUD 30,048.99" in third
+    assert (  # ASA 570 第 19(b) 段的句式
+        "there is a material uncertainty related to events or conditions that may cast significant doubt on the "
+        "Company's ability to continue as a going concern and, therefore, that it may be unable to realise its "
+        "assets and discharge its liabilities in the normal course of business"
+    ) in third
+    assert "up to AUD 40,000" in third and "overdraft facility of AUD 15,000" in third
+    assert "3. Related parties" in fourth and "a further AUD 2,500.00 in October 2026" in fourth
+    assert "personally guaranteed the Company's bank overdraft" in fourth
+    assert "Victoria Property Agency Pty Ltd" in fourth and "rent of AUD 4,500.00 (excluding GST)" in fourth
+    assert "AUD 1,500.00 per month on a month-to-month arrangement without a written lease" in fourth
+    assert "4. Events after the reporting period" in fourth and "Harbourview Nominees Pty Ltd" in fourth
+    assert "office furniture for AUD 6,300.00" in fourth and "a laptop for AUD 1,969.99" in fourth
+    assert "the director lent the Company a further AUD 2,500.00" in fourth
+    assert "DIRECTOR'S DECLARATION" in fourth and "Alex Morgan, Director 23 October 2026" in fourth
+    assert "pay its debts as and when they become due and payable" in fourth  # s295(4)(c)
+    assert "in accordance with a resolution of the director" in fourth  # s295(5)(a)
+    assert not any("AASB 1060" in p for p in pages)  # AASB 1060 段号暂缓 (待正本), 不写准则编号
+
+
+def test_representation_letter() -> None:
+    pages = pdf_texts(SUPPLEMENTS / "representation" / "representation_letter.pdf")
+    assert len(pages) == 2
+    text = " ".join(pages)
+    assert pages[0].count("23 October 2026") >= 1 and "Tessellate Audit Partners" in pages[0]
+    assert "for the financial year ended 30 September 2026" in text
+    assert "terms of the audit engagement dated 28 August 2026" in text  # 委托书日期 (engagement_letter.pdf)
+    for phrase in (  # 第 4.8 节列出的准则内容, 措辞取 ASA 580 Appendix 2 (主体名与编制框架按本公司替换)
+        "in particular the financial report gives a true and fair view in accordance therewith",  # ASA 580 第 10, 12 段
+        "(a) access to all information of which we are aware that is relevant to the preparation of the financial "
+        "report such as records, documentation and other matters",  # ASA 580 第 11(a) 段, 委托书 (iii) a
+        "(b) additional information that you have requested from us for the purpose of the audit",  # (iii) b
+        "(c) unrestricted access to persons within the Company from whom you determined it necessary to obtain "
+        "audit evidence",  # (iii) c
+        "All transactions have been recorded in the accounting records and are reflected in the financial report",
+        "We acknowledge our responsibility for the design, implementation and maintenance of internal control to "
+        "prevent and detect fraud",  # ASA 240 第 40(a) 段
+        "the results of our assessment of the risk that the financial report may be materially misstated as a "
+        "result of fraud",  # 40(b)
+        "all information in relation to fraud or suspected fraud that we are aware of and that affects the Company "
+        "and involves: (a) management; (b) employees who have significant roles in internal control; or (c) others "
+        "where the fraud could have a material effect on the financial report",  # 40(c)
+        "allegations of fraud, or suspected fraud, affecting the Company's financial report communicated by "
+        "employees, former employees, analysts, regulators or others",  # 40(d)
+        "all known instances of non-compliance or suspected non-compliance with laws and regulations whose "
+        "effects should be considered when preparing the financial report",  # ASA 250 第 17 段
+        "the identity of the Company's related parties and all the related party relationships and transactions "
+        "of which we are aware",  # ASA 550 第 26(a) 段
+        "Related party relationships and transactions have been appropriately accounted for and disclosed",  # 26(b)
+        "All events subsequent to the date of the financial report and for which Australian Accounting Standards "
+        "- Simplified Disclosures require adjustment or disclosure have been adjusted or disclosed",  # ASA 560 第 9 段
+        "plans for future actions",  # ASA 570 第 16(e) 段
+    ):
+        assert phrase in text, phrase
+    assert "All misstatements communicated have been corrected; there are no uncorrected misstatements" in text
+    assert "Schedule of uncorrected misstatements: none." in text and "Alex Morgan, Director" in pages[1]
+    docs = manifest_documents()
+    assert docs["representation/representation_letter.pdf"][:5] == (
+        "representation_letter",
+        "internal_original",
+        "2026-10-23",
+        "upload",
+        2,
+    )
+
+
+def test_r68_index_rows_and_counts() -> None:
+    rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 20 and rows[19] == "financial_statements/fs_v1.pdf,other,internal_original,2026-10-22,FS"
+    assert not any(r.startswith("representation/") for r in rows)  # 声明书经上传接口登记, 不进 index.csv
+    docs = manifest_documents()
+    assert docs[generator.FS_PDF][:5] == ("other", "internal_original", "2026-10-22", "load", 4)
+    manifest = read("manifest.json")
+    assert checker.check_document_counts(SUPPLEMENTS, manifest) == []  # type: ignore[arg-type]
+    registrations = [d[3] for d in docs.values()]
+    assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 55  # type: ignore[call-overload]
+    assert {r: registrations.count(r) for r in set(registrations)} == {
+        "load": 20,
+        "engagement": 2,
+        "registry": 4,
+        "confirmation": 2,
+        "upload": 1,
+    }
+    fewer = {**manifest, "documents": manifest["documents"][1:]}  # type: ignore[index]
+    assert len(checker.check_document_counts(SUPPLEMENTS, fewer)) == 1
+    assert "documents 段的份数, 页数或登记途径与第 9.5 节不符" in checker.check_document_counts(SUPPLEMENTS, fewer)[0]
+
+
+def test_manual_submissions() -> None:
+    first, second = read("manual/fin08_round1.json"), read("manual/fin08_round2.json")
+    assert (
+        list(first)
+        == list(second)
+        == [  # type: ignore[arg-type]
+            "procedure_id",
+            "round",
+            "communicated_at",
+            "recipient",
+            "form",
+            "misstatement_sources",
+            "responded_at",
+            "response",
+            "adjustment_entry_nos",
+        ]
+    )
+    assert {k: v for k, v in first.items() if k != "response"} == {  # type: ignore[union-attr]
+        "procedure_id": "FIN-08",
+        "round": 1,
+        "communicated_at": "2026-10-19T04:00:00Z",
+        "recipient": "Alex Morgan, Director",
+        "form": "written",
+        "misstatement_sources": ["J-GEN-02-1-XJ-499", "J-CSH-02-1-BA-091"],
+        "responded_at": "2026-10-19T22:00:00Z",
+        "adjustment_entry_nos": ["AJE-X01", "AJE-X05"],
+    }
+    assert {k: v for k, v in second.items() if k != "response"} == {  # type: ignore[union-attr]
+        "procedure_id": "FIN-08",
+        "round": 2,
+        "communicated_at": "2026-10-21T04:00:00Z",
+        "recipient": "Alex Morgan, Director",
+        "form": "written",
+        "misstatement_sources": ["J-FIN-15-1-826", "J-FIN-15-1-804", "J-FIN-15-1-805"],
+        "responded_at": "2026-10-21T22:00:00Z",
+        "adjustment_entry_nos": ["AJE-X02", "AJE-X03", "AJE-X04"],
+    }
+    quoted = re.findall(r'第 \d 轮回复 \(10-\d\d\)\*\*: "([^"]+)"', section(doc(), "### 4.8"))
+    assert [first["response"], second["response"]] == quoted  # type: ignore[index]  # 第 4.8 节原文
+    assert "AJE-X05" in first["response"] and "48.53" in first["response"]  # type: ignore[index]
+    assert read("manual/representation.json") == {
+        "procedure_id": "FIN-07",
+        "status": "obtained",
+        "dated_at": "2026-10-23",
+        "signed_by": ["Alex Morgan"],
+        "period_end": "2026-09-30",
+        "document": "representation/representation_letter.pdf",
+        "standards": [
+            "ASA580-P10",
+            "ASA580-P11",
+            "ASA560-P09",
+            "ASA570-P16",
+            "ASA550-P26",
+            "ASA240-P40",
+            "ASA250-P17",
+        ],
+        "uncorrected_schedule": [],
+    }
+    reply = read("manual/rpt07_reply.json")
+    assert {k: v for k, v in reply.items() if k != "response"} == {  # type: ignore[union-attr]
+        "procedure_id": "RPT-07",
+        "communicated_on": "2026-10-22",
+        "form": "written",
+        "recipients": ["Alex Morgan"],
+        "matters": ["SIG_PRACTICES", "DIFFICULTIES", "REPORT_FORM", "INDEPENDENCE"],
+        "corrected_misstatements": 5,
+        "uncorrected_misstatements": 0,
+        "responded_on": "2026-10-22",
+    }
+    assert reply["response"] == spec()["manual"]["rpt07_reply.json"]["response"]  # type: ignore[index]
+    assert "material uncertainty related to going concern" in reply["response"]  # type: ignore[index]
+
+
+def fs_copy(tmp_path: Path) -> tuple[Path, Path, dict]:
+    copy = copy_supplements(tmp_path)
+    path = copy / generator.FS_JSON
+    return copy, path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_financial_statement_problems(tmp_path: Path) -> None:
+    copy, path, fs = fs_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert checker.check_financial_statements(copy, manifest) == []
+    where, pdf = path, copy / generator.FS_PDF
+    fs["lines"][0]["amount_cents"] += 1  # SOFP-CASH; 资产合计未改, 所以平衡式仍成立, 由小计报出
+    path.write_text(json.dumps(fs), encoding="utf-8")
+    assert checker.check_financial_statements(copy, manifest) == [
+        f"{where}: 与规格 financial_statements 段不一致",
+        f"{where}: 小计 SOFP-TA 的 amount_cents 不等于所含各行之和",
+        f"{pdf}: 第 1 页文本层没有 SOFP-CASH 的名称与本期, 比较数",
+    ]
+    fs["lines"][0]["amount_cents"] -= 1
+    fs["lines"][6]["account_codes"].append("091")  # SOFP-PAY 也映射 091
+    fs["lines"][17]["code"] = "PL-REV"  # 行代码重复
+    fs["document_id"] = "DOC-000000000000"
+    path.write_text(json.dumps(fs), encoding="utf-8")
+    assert checker.check_financial_statements(copy, manifest) == [
+        f"{where}: 与规格 financial_statements 段不一致",
+        f"{where}: 行代码重复",
+        f"{where}: document_id 不是 {generator.FS_PDF} 的文件 ID",
+        f"{where}: financial_position 的非小计行之间科目重复",
+        f"{where}: 小计 SOFP-TL 的科目不等于所含各行的科目",  # SOFP-PAY 的科目不再是负债合计的子集
+        f"{where}: 小计 SOFP-TL 的 amount_cents 不等于所含各行之和",
+        f"{where}: 缺行 PL-NP",
+    ]
+    fs["lines"] = fs["lines"][:5]
+    path.write_text(json.dumps({**fs, "extra": 1}), encoding="utf-8")
+    assert checker.check_financial_statements(copy, manifest) == [f"{where}: 不符合 FinancialStatements (1 处)"]
+    path.unlink()
+    assert checker.check_financial_statements(copy, manifest) == [f"{where}: 文件不存在"]
+
+
+def test_financial_statement_pages_swapped(tmp_path: Path) -> None:
+    """财务状况表与损益表互换页码时报出 (各行只在该表所在页找)."""
+    copy, _, fs = fs_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    pages = ["\n".join(p) for p in next(d for d in spec()["documents"] if d["path"] == generator.FS_PDF)["pages"]]
+    pdf = copy / generator.FS_PDF
+    generator.write_pdf(pdf, [pages[1], pages[0], *pages[2:]], "x", HEADER)
+    got = checker.check_financial_statements(copy, manifest)
+    assert got == [
+        f"{pdf}: 第 {checker.FS_PAGES[x['statement']]} 页文本层没有 {x['code']} 的名称与本期, 比较数"
+        for x in fs["lines"]
+    ]
+    generator.write_pdf(pdf, pages[:1], "x", HEADER)
+    assert checker.check_financial_statements(copy, manifest) == [f"{pdf}: 文件不存在, 无法解析或不足 2 页"]
+
+
+def test_financial_statement_totals_problems(tmp_path: Path) -> None:
+    """规格本身算错时 (小计, 资产负债平衡, 累计亏损结转) 也能报出: 用改过的规格比对."""
+    copy, path, fs = fs_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    lines = {x["code"]: x for x in fs["lines"]}
+    lines["SOFP-EQ"]["prior_amount_cents"] = -791100  # 期初累计亏损错 1 分
+    lines["SOFP-TL"]["account_codes"].remove("801")  # 小计少一个科目
+    lines["PL-NP"]["account_codes"].append("960")
+    path.write_text(json.dumps(fs), encoding="utf-8")
+    with pytest.MonkeyPatch.context() as patch:
+        changed = {**generator.load_spec(), "financial_statements": {k: v for k, v in fs.items() if k != "document_id"}}
+        patch.setattr(generator, "load_spec", lambda: changed)
+        got = checker.check_financial_statements(copy, manifest)
+    where = path
+    assert got == [
+        f"{where}: 小计 SOFP-TL 的科目不等于所含各行的科目",
+        f"{where}: 小计 SOFP-TL 的 amount_cents 不等于所含各行之和",  # SOFP-PAY 不再计入 (其比较数为 0)
+        f"{where}: 小计 PL-NP 的科目不等于所含各行的科目",
+        f"{where}: prior_amount_cents 资产 1508123 不等于负债 2299323 加权益 -791100",
+        f"{where}: 期初 SOFP-EQ 加本期 PL-NP 不等于期末 SOFP-EQ",
+        f"{copy / generator.FS_PDF}: 第 1 页文本层没有 SOFP-EQ 的名称与本期, 比较数",
+    ]
+
+
+@needs_snapshot
+def test_financial_statements_tie_to_trial_balance(tmp_path: Path) -> None:
+    from collections import Counter
+
+    from backend.adapters.xero_dataset import trial_balance_cents
+
+    snapshot = generator.Snapshot(SNAPSHOT)
+    assert checker.snapshot_financial_statements(SUPPLEMENTS, snapshot) == []
+    tb = Counter(trial_balance_cents(snapshot.load("trial_balance_2026-09-30")))
+    assert len(tb) == 27 and tb["801"] == 0
+    for row in checker.adjustment_entries(SUPPLEMENTS) or []:
+        tb[row.account_code] += row.debit_cents - row.credit_cents
+    assert len(tb) == 33  # 27 行加 804, 805, 826, 478, 620, 270
+    for code, _, _, codes, sign, _, cents, _ in FS_LINES:
+        assert cents == sign * sum(tb[c] for c in codes), code
+    copy, path, fs = fs_copy(tmp_path)
+    where = path
+    lines = {x["code"]: x for x in fs["lines"]}
+    lines["SOFP-PAY"]["account_codes"].remove("801")  # 801 余额为 0, 金额不变, 只少了映射
+    lines["PL-OTH"]["account_codes"].append("960")
+    lines["SOFP-EQ"]["account_codes"].remove("960")
+    fs["comparative_restatement_entry_nos"] = []
+    path.write_text(json.dumps(fs), encoding="utf-8")
+    assert checker.snapshot_financial_statements(copy, snapshot) == [
+        f"{where}: SOFP-CASH 的比较数不等于上期末试算表加重述分录",
+        f"{where}: SOFP-TA 的比较数不等于上期末试算表加重述分录",
+        f"{where}: SOFP-OD 的比较数不等于上期末试算表加重述分录",
+        f"{where}: SOFP-DLOAN 的比较数不等于上期末试算表加重述分录",
+        f"{where}: SOFP-TL 的比较数不等于上期末试算表加重述分录",
+        f"{where}: SOFP-EQ 不等于期末试算表加更正分录",
+        f"{where}: PL-OTH 不等于期末试算表加更正分录",
+        f"{where}: 映射的科目应恰为期末试算表与更正分录的 33 个 (缺 ['801'], 多 [])",
+        f"{where}: PL-OTH 的科目 960 类型与所在报表不符",
+    ]
+    fs["comparative_restatement_entry_nos"] = ["XJ-9999"]
+    path.write_text(json.dumps(fs), encoding="utf-8")
+    assert f"{where}: comparative_restatement_entry_nos 在快照中找不到" in checker.snapshot_financial_statements(
+        copy, snapshot
+    )
+
+
+def manual_copy(tmp_path: Path) -> tuple[Path, dict]:
+    copy = copy_supplements(tmp_path)
+    data = {n: json.loads((copy / "manual" / n).read_text(encoding="utf-8")) for n in checker.MANUAL_FILES}
+    return copy, data
+
+
+def write_manual(copy: Path, data: dict) -> None:
+    for name, value in data.items():
+        (copy / "manual" / name).write_text(json.dumps(value), encoding="utf-8")
+
+
+def test_manual_problems(tmp_path: Path) -> None:
+    copy, data = manual_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert checker.check_manual(copy, manifest) == []
+    folder = copy / "manual"
+    data["fin08_round1.json"]["note"] = "x"  # 两轮键不同
+    data["fin08_round2.json"]["responded_at"] = "2026-10-22T00:00:00Z"  # 晚于 AJE-X02 至 X04 的录入时间
+    data["fin08_round2.json"]["adjustment_entry_nos"] = ["AJE-X02", "AJE-X03", "AJE-X09"]  # 对象也随之对不上
+    data["representation.json"]["signed_by"] = ["Someone Else"]
+    data["representation.json"]["standards"] = ["ASA 580 para 10"]
+    data["rpt07_reply.json"]["corrected_misstatements"] = 4
+    write_manual(copy, data)
+    assert checker.check_manual(copy, manifest) == [
+        *(f"{folder / n}: 与规格 manual 段不一致" for n in checker.MANUAL_FILES),
+        f"{folder}: fin08_round1.json 与 fin08_round2.json 的键不同",
+        f"{folder / 'fin08_round2.json'}: misstatement_sources 的对象应与所涉更正分录的 source_doc 一一对应",
+        f"{folder / 'fin08_round2.json'}: responded_at 应早于所涉更正分录的录入时间",
+        f"{folder / 'fin08_round2.json'}: adjustment_entry_nos 不在更正分录中: AJE-X09",
+        f"{folder}: 两轮的 adjustment_entry_nos 应恰好覆盖全部 5 笔更正分录",
+        f"{folder / 'representation.json'}: signed_by 不在声明书文本层",
+        f"{folder / 'representation.json'}: standards 应为非空的准则段落 ID 列表 (如 ASA580-P10)",
+        f"{folder / 'rpt07_reply.json'}: corrected_misstatements 应等于更正分录笔数 5",
+    ]
+    copy, data = manual_copy(tmp_path / "again")
+    folder = copy / "manual"
+    data["fin08_round1.json"]["communicated_at"] = "2026-10-19 04:00"  # 不是 UTC 写法
+    data["fin08_round1.json"]["misstatement_sources"].reverse()  # 顺序不同仍一一对应, 不报
+    data["fin08_round2.json"]["round"] = 3
+    data["fin08_round2.json"]["communicated_at"] = "2026-10-22T04:00:00Z"  # 晚于回复
+    data["representation.json"]["dated_at"] = "2026-10-24"
+    data["representation.json"]["uncorrected_schedule"] = [{"id": "M-9"}]
+    data["rpt07_reply.json"]["responded_on"] = "2026-10-21"
+    write_manual(copy, data)
+    assert checker.check_manual(copy, manifest)[len(checker.MANUAL_FILES) :] == [
+        f"{folder / 'fin08_round1.json'}: procedure_id 应为 FIN-08, communicated_at 与 responded_at 应为 UTC 时刻",
+        f"{folder / 'fin08_round2.json'}: round 应为 2",
+        f"{folder / 'fin08_round2.json'}: responded_at 应晚于 communicated_at",
+        f"{folder / 'representation.json'}: dated_at 与声明书的 document_date 不一致",
+        f"{folder / 'representation.json'}: uncorrected_schedule 应为空 (全部错报已更正)",
+        f"{folder / 'rpt07_reply.json'}: uncorrected_misstatements 应等于声明书附表行数",
+        f"{folder / 'rpt07_reply.json'}: responded_on 不应早于 communicated_on",
+    ]
+    (folder / "extra.json").write_text("{}", encoding="utf-8")
+    assert checker.check_manual(copy, manifest) == [f"{folder}: 应恰为 {', '.join(checker.MANUAL_FILES)}"]
+    other = {**manifest, "documents": [d for d in manifest["documents"] if not d["path"].startswith("representation/")]}
+    (folder / "extra.json").unlink()
+    assert f"{folder / 'representation.json'}: document 不是 manifest 中类型 representation_letter 的文件" in (
+        checker.check_manual(copy, other)
+    )
+
+
+def test_index_fs_reference(tmp_path: Path) -> None:
+    copy, path, fs = fs_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert checker.check_index(copy, manifest) == []
+    path.write_text(json.dumps({**fs, "id": "FS-2"}), encoding="utf-8")
+    where = copy / "documents" / "index.csv"
+    assert checker.check_index(copy, manifest) == [
+        f"{where}: {generator.FS_PDF} 的关联对象 FS 不是 {generator.FS_JSON} 的 id"
+    ]
+
+
+def test_manual_rounds_order_and_sources(tmp_path: Path) -> None:
+    copy, data = manual_copy(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    folder = copy / "manual"
+    first, second = data["fin08_round1.json"], data["fin08_round2.json"]
+    first["misstatement_sources"], second["misstatement_sources"] = (
+        second["misstatement_sources"],
+        first["misstatement_sources"],
+    )  # 两轮的错报来源互换
+    first["responded_at"] = "2026-10-21T05:00:00Z"  # 晚于第 2 轮沟通 (仍早于第 2 轮的更正录入)
+    first["adjustment_entry_nos"], second["adjustment_entry_nos"] = (
+        ["AJE-X02"],
+        ["AJE-X01", "AJE-X03", "AJE-X04", "AJE-X05"],
+    )
+    write_manual(copy, data)
+    assert checker.check_manual(copy, manifest)[2:] == [
+        f"{folder / 'fin08_round1.json'}: misstatement_sources 的对象应与所涉更正分录的 source_doc 一一对应",
+        f"{folder / 'fin08_round2.json'}: misstatement_sources 的对象应与所涉更正分录的 source_doc 一一对应",
+        f"{folder / 'fin08_round2.json'}: responded_at 应早于所涉更正分录的录入时间",
+        f"{folder}: 第 1 轮的回复应早于第 2 轮的沟通",
+    ]

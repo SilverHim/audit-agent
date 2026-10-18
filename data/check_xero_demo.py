@@ -18,7 +18,7 @@ import re
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,6 +41,7 @@ from backend.contracts.records import JournalEntry
 REPO = gen.ROOT.parent
 CHANNELS = frozenset(c.value for c in ReceiptChannel)
 NO_SNAPSHOT = "没有本地 Xero 快照"
+NOT_OFFICIAL = "不是正式补造目录"
 PROFILE_NOTES_PREFIX = "Synthetic – for demonstration only"
 TRAIT_KEYS = frozenset(
     {
@@ -106,8 +107,14 @@ def check(
         *guarded(directory / "adjustments" / "journal_entries.csv", check_adjustments, directory),
         *guarded(directory / "payroll" / "employees.csv", check_payroll, directory),
         *guarded(directory, check_pdf_content, directory, manifest),
+        *guarded(directory / gen.FS_JSON, check_financial_statements, directory, manifest),
+        *guarded(directory / "manual", check_manual, directory, manifest),
     ]
     notes: list[str] = []
+    if gen.inside(directory, gen.OUT_ROOT):  # 测试副本会增删 PDF (如注入 T6 新增摘录), 份数只核正式目录
+        problems += guarded(manifest_path, check_document_counts, directory, manifest)
+    else:
+        notes.append(f"{NOT_OFFICIAL} ({rel(directory)}): 跳过 documents 段份数, 页数与登记途径的计数")
     if snapshot_dir.is_dir():
         problems += guarded(snapshot_dir, check_snapshot, directory, manifest, snapshot_dir)
         problems += guarded(snapshot_dir, check_against_snapshot, directory, snapshot_dir)
@@ -120,7 +127,8 @@ def check(
     else:
         notes.append(
             f"{NO_SNAPSHOT} ({rel(snapshot_dir)}): 跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, "
-            "合同关联, 开户行, xero_refs, 回函余额与应计利息, index.csv 的 Xero 关联对象), "
+            "合同关联, 开户行, xero_refs, 回函余额与应计利息, index.csv 的 Xero 关联对象, 更正后试算表, "
+            "财报金额, 比较数与科目覆盖), "
             "登录账号联系人扫描与确定性检查"
         )
     if problems:
@@ -671,6 +679,7 @@ def check_confirmation_text(directory: Path) -> list[str]:
 
 
 XERO_REF = re.compile(r"(?:XJ|BT|SI|BA)-|\d+$")  # 由快照核对的关联对象: 分录, 流水, 发票, 银行账户, 科目代码
+FS_REF = "FS"  # 关联待审财报的写法, 等于 fs_v1.json 的 id
 EMPLOYEE = re.compile(r"E\d{3}$")  # 员工号, 对照 payroll/employees.csv
 
 
@@ -680,7 +689,8 @@ def related(row: Mapping[str, str | None]) -> list[str]:
 
 def check_index(directory: Path, manifest: dict[str, Any]) -> list[str]:
     """documents/index.csv: 每行的文件在 manifest documents 段, 类型, 可靠性, 日期与关联对象一致, 且是规格中
-    index 为真的全部文件; 关联对象中的 ACN- 在 registry/asic.json, CLIENT- 等于画像 ID (Xero 对象由快照核对)."""
+    index 为真的全部文件; 关联对象中的 ACN- 在 registry/asic.json, CLIENT- 等于画像 ID, 员工号在工资册, FS 等于
+    fs_v1.json 的 id (Xero 对象由快照核对)."""
     wanted = [d["path"] for d in gen.load_spec()["documents"] if d.get("index")]
     rows = read_table(directory, "documents/index.csv")
     where = rel(directory / "documents" / "index.csv")
@@ -705,9 +715,14 @@ def check_index(directory: Path, manifest: dict[str, Any]) -> list[str]:
     clients = {str(profile.get("id"))} if isinstance(profile, dict) else set()
     staff = read_table(directory, "payroll/employees.csv", quiet=True) or []
     employees = {r["employee_id"] for r in staff}
+    fs = read_json(directory / gen.FS_JSON)
+    statements = {str(fs.get("id"))} if isinstance(fs, dict) else set()
     for row in rows:
         for ref in related(row):
-            if ref.startswith("ACN-") and ref not in companies:
+            if ref == FS_REF:
+                if ref not in statements:
+                    problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不是 {gen.FS_JSON} 的 id")
+            elif ref.startswith("ACN-") and ref not in companies:
                 problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不在 registry/asic.json")
             elif ref.startswith("CLIENT-") and ref not in clients:
                 problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不是画像 ID")
@@ -729,6 +744,235 @@ def check_keywords(directory: Path) -> list[str]:
             if lack:
                 problems.append(f"{rel(directory / doc['path'])}: 文本层缺关键词 {', '.join(lack)}")
     return problems
+
+
+class FinancialStatementLine(BaseModel):
+    """fs_v1.json 的一行 (字段同需求清单 R216 的 FinancialStatementLine; 模型进 contracts 前在此校验)."""
+
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    statement: Literal["financial_position", "profit_or_loss"]
+    name: str
+    amount_cents: int
+    sign: Literal[1, -1]
+    account_codes: list[str]
+    subtotal: bool
+    prior_amount_cents: int | None
+
+
+class FinancialStatements(BaseModel):
+    """fs_v1.json (第 9.5 节; 字段同需求清单 R216 的 FinancialStatements)."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    version: int
+    prepared_at: date
+    directors_declaration_date: date | None
+    document_id: str | None
+    comparative_restatement_entry_nos: list[str]
+    lines: list[FinancialStatementLine]
+
+
+FS_TOTALS = ("SOFP-TA", "SOFP-TL", "SOFP-EQ", "PL-NP")  # 资产合计, 负债合计, 累计亏损, 本期损益的行代码 (第 4.7 节)
+FS_PAGES = {"financial_position": 1, "profit_or_loss": 2}  # 两张表在 fs_v1.pdf 的页码 (R68 验收 2)
+
+
+def read_financial_statements(directory: Path) -> FinancialStatements | None:
+    """读 fs_v1.json; 文件不存在时为 None, 不合模型时抛 CheckError."""
+    path = directory / gen.FS_JSON
+    if not path.is_file():
+        return None
+    try:
+        return FinancialStatements.model_validate_json(path.read_bytes(), strict=True)
+    except ValidationError as error:
+        raise CheckError(f"{rel(path)}: 不符合 FinancialStatements ({error.error_count()} 处)") from None
+
+
+def shown(line: FinancialStatementLine, cents: int | None) -> str:
+    """报表 PDF 中的金额写法: 0 或缺写 "-", 负数加括号; 损益表的费用行 (sign 为 1 的非小计行) 作减项列示."""
+    if not cents:
+        return "-"
+    value = -cents if line.statement == "profit_or_loss" and line.sign == 1 and not line.subtotal else cents
+    text = f"{abs(value) // 100:,}.{abs(value) % 100:02d}"
+    return f"({text})" if value < 0 else text
+
+
+def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """待审财报 fs_v1.json (第 4.7, 9.5 节): 合模型, 与规格一致, 行代码不重复, document_id 是 fs_v1.pdf 的文件 ID;
+    同一张表的非小计行之间科目不重复, 小计 = sign × Σ (所含各行 sign × 金额), 所含各行的科目合起来等于小计的科目;
+    资产 = 负债 + 权益 (本期与比较数); 期初累计亏损加本期损益等于期末; 每行的名称, 本期与比较数在 PDF 中该表所在
+    页 (FS_PAGES) 的文本层.
+    各行金额与试算表的勾稽由快照核对 (snapshot_financial_statements)."""
+    spec = gen.load_spec()["financial_statements"]
+    where = rel(directory / gen.FS_JSON)
+    try:
+        fs = read_financial_statements(directory)
+    except CheckError as error:
+        return [str(error)]
+    if fs is None:
+        return [f"{where}: 文件不存在"] if spec else []
+    problems: list[str] = []
+    if fs.model_dump(mode="json", exclude={"document_id"}) != spec:
+        problems.append(f"{where}: 与规格 financial_statements 段不一致")
+    codes = [x.code for x in fs.lines]
+    if len(set(codes)) != len(codes):
+        problems.append(f"{where}: 行代码重复")
+    documents = {d["path"]: d for d in manifest["documents"]}
+    if fs.document_id != documents.get(gen.FS_PDF, {}).get("document_id"):
+        problems.append(f"{where}: document_id 不是 {gen.FS_PDF} 的文件 ID")
+    lines = {x.code: x for x in fs.lines}
+    for statement in ("financial_position", "profit_or_loss"):
+        items = [x for x in fs.lines if x.statement == statement and not x.subtotal]
+        mapped = [c for x in items for c in x.account_codes]
+        if len(set(mapped)) != len(mapped):
+            problems.append(f"{where}: {statement} 的非小计行之间科目重复")
+        for total in (x for x in fs.lines if x.statement == statement and x.subtotal):
+            parts = [x for x in items if set(x.account_codes) <= set(total.account_codes)]
+            if sorted(c for x in parts for c in x.account_codes) != sorted(total.account_codes):
+                problems.append(f"{where}: 小计 {total.code} 的科目不等于所含各行的科目")
+            for field in ("amount_cents", "prior_amount_cents"):
+                summed = total.sign * sum(x.sign * (getattr(x, field) or 0) for x in parts)
+                if (getattr(total, field) or 0) != summed:
+                    problems.append(f"{where}: 小计 {total.code} 的 {field} 不等于所含各行之和")
+    if all(c in lines for c in FS_TOTALS):
+        assets, liabilities, equity, profit = (lines[c] for c in FS_TOTALS)
+        for field in ("amount_cents", "prior_amount_cents"):
+            a, li, e = ((getattr(x, field) or 0) for x in (assets, liabilities, equity))
+            if a != li + e:
+                problems.append(f"{where}: {field} 资产 {a} 不等于负债 {li} 加权益 {e}")
+        if (equity.prior_amount_cents or 0) + profit.amount_cents != equity.amount_cents:
+            problems.append(f"{where}: 期初 {equity.code} 加本期 {profit.code} 不等于期末 {equity.code}")
+        if not set(profit.account_codes) <= set(equity.account_codes):
+            problems.append(f"{where}: {equity.code} 未含 {profit.code} 的全部损益科目")
+    else:
+        problems.append(f"{where}: 缺行 {', '.join(c for c in FS_TOTALS if c not in lines)}")
+    texts = pdf_pages(directory / gen.FS_PDF)
+    if texts is None or len(texts) < max(FS_PAGES.values()):
+        problems.append(f"{rel(directory / gen.FS_PDF)}: 文件不存在, 无法解析或不足 {max(FS_PAGES.values())} 页")
+    else:
+        for x in fs.lines:
+            page = FS_PAGES[x.statement]
+            row = rf"{re.escape(x.name)}(?: \d+)? {re.escape(shown(x, x.amount_cents))} "
+            if not re.search(
+                row + re.escape(shown(x, x.prior_amount_cents)) + r"(?: |$)", normalize_case(texts[page - 1])
+            ):
+                problems.append(f"{rel(directory / gen.FS_PDF)}: 第 {page} 页文本层没有 {x.code} 的名称与本期, 比较数")
+    return problems
+
+
+MANUAL_FILES = ("fin08_round1.json", "fin08_round2.json", "representation.json", "rpt07_reply.json")
+MISSTATEMENT_SOURCE = re.compile(r"J-[A-Z]{3}-\d{2}-\d+-(.+)$")  # 错报来源判断 ID: J-{程序}-{序号}-{对象}
+STANDARD_ID = re.compile(r"ASA\d{3}-P\d{2}$")  # 准则段落 ID 的写法, 同 knowledge/standards
+
+
+def utc(value: object) -> datetime | None:
+    """人工队列提交物的时刻一律写 UTC (以 Z 结尾); 不是时为 None."""
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def check_manual(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """人工队列提交物 (第 4.8, 9.5 节): 目录内恰为 MANUAL_FILES 且各等于规格; FIN-08 两轮键集合相同, round 依次为
+    1, 2, 时刻为 UTC, 回复晚于沟通且早于所涉更正分录的录入时间, 第 1 轮回复早于第 2 轮沟通, 所涉凭证号都在更正分录
+    CSV 中, 错报来源的对象等于所涉更正分录的 source_doc, 两轮合起来恰好覆盖全部更正分录;
+    声明书登记指向 manifest 中类型 representation_letter 的文件, 日期一致, 签署人在其文本层, 附表为空, 准则 ID
+    写法正确; RPT-07 的已更正错报数等于更正分录笔数, 未更正数等于声明书附表行数."""
+    spec = gen.load_spec()["manual"]
+    folder = directory / "manual"
+    if not spec:
+        return []
+    present = sorted(p.name for p in folder.glob("*")) if folder.is_dir() else []
+    if present != sorted(MANUAL_FILES) or sorted(spec) != sorted(MANUAL_FILES):
+        return [f"{rel(folder)}: 应恰为 {', '.join(MANUAL_FILES)}"]
+    data = {name: read_json(folder / name) for name in MANUAL_FILES}
+    problems = [f"{rel(folder / n)}: 与规格 manual 段不一致" for n in MANUAL_FILES if data[n] != spec[n]]
+    if not all(isinstance(v, dict) for v in data.values()):
+        return problems
+    first, second, representation, reply = (data[n] for n in MANUAL_FILES)
+    if set(first) != set(second):
+        problems.append(f"{rel(folder)}: fin08_round1.json 与 fin08_round2.json 的键不同")
+    try:
+        entries = adjustment_entries(directory) or []
+    except CheckError:
+        entries = []  # 格式问题由 check_adjustments 报
+    created: dict[str, datetime] = {}
+    sources: dict[str, str | None] = {}
+    for x in entries:
+        created[x.entry_no] = min(created.get(x.entry_no, x.created_at), x.created_at)
+        sources[x.entry_no] = x.source_doc
+    covered: list[str] = []
+    for n, (name, submission) in enumerate((("fin08_round1.json", first), ("fin08_round2.json", second)), 1):
+        where = rel(folder / name)
+        if submission.get("round") != n:
+            problems.append(f"{where}: round 应为 {n}")
+        objects = [
+            m.group(1) if (m := MISSTATEMENT_SOURCE.match(str(x))) else None
+            for x in submission.get("misstatement_sources") or []
+        ]
+        if sorted(map(str, objects)) != sorted(
+            str(sources.get(no)) for no in submission.get("adjustment_entry_nos") or []
+        ):
+            problems.append(f"{where}: misstatement_sources 的对象应与所涉更正分录的 source_doc 一一对应")
+        sent, answered = utc(submission.get("communicated_at")), utc(submission.get("responded_at"))
+        nos = list(submission.get("adjustment_entry_nos") or [])
+        covered += nos
+        if submission.get("procedure_id") != "FIN-08" or sent is None or answered is None:
+            problems.append(f"{where}: procedure_id 应为 FIN-08, communicated_at 与 responded_at 应为 UTC 时刻")
+        elif not sent < answered:
+            problems.append(f"{where}: responded_at 应晚于 communicated_at")
+        elif any(answered >= created[no] for no in nos if no in created):
+            problems.append(f"{where}: responded_at 应早于所涉更正分录的录入时间")
+        unknown = [no for no in nos if no not in created]
+        if unknown:
+            problems.append(f"{where}: adjustment_entry_nos 不在更正分录中: {', '.join(unknown)}")
+    if entries and sorted(covered) != sorted(created):
+        problems.append(f"{rel(folder)}: 两轮的 adjustment_entry_nos 应恰好覆盖全部 {len(created)} 笔更正分录")
+    answered, sent = utc(first.get("responded_at")), utc(second.get("communicated_at"))
+    if answered and sent and not answered < sent:
+        problems.append(f"{rel(folder)}: 第 1 轮的回复应早于第 2 轮的沟通")
+    where = rel(folder / "representation.json")
+    doc = {d["path"]: d for d in manifest["documents"]}.get(str(representation.get("document")))
+    if doc is None or doc.get("type") != "representation_letter":
+        problems.append(f"{where}: document 不是 manifest 中类型 representation_letter 的文件")
+    elif doc.get("document_date") != representation.get("dated_at"):
+        problems.append(f"{where}: dated_at 与声明书的 document_date 不一致")
+    else:
+        text = normalize_case(" ".join(pdf_pages(directory / doc["path"]) or []))
+        if not all(isinstance(n, str) and n in text for n in representation.get("signed_by") or [None]):
+            problems.append(f"{where}: signed_by 不在声明书文本层")
+    if representation.get("uncorrected_schedule") != []:
+        problems.append(f"{where}: uncorrected_schedule 应为空 (全部错报已更正)")
+    standards = representation.get("standards") or []
+    if not standards or not all(isinstance(x, str) and STANDARD_ID.match(x) for x in standards):
+        problems.append(f"{where}: standards 应为非空的准则段落 ID 列表 (如 ASA580-P10)")
+    where = rel(folder / "rpt07_reply.json")
+    if reply.get("corrected_misstatements") != len(created):
+        problems.append(f"{where}: corrected_misstatements 应等于更正分录笔数 {len(created)}")
+    if reply.get("uncorrected_misstatements") != len(representation.get("uncorrected_schedule") or []):
+        problems.append(f"{where}: uncorrected_misstatements 应等于声明书附表行数")
+    if not str(reply.get("communicated_on")) <= str(reply.get("responded_on")):
+        problems.append(f"{where}: responded_on 不应早于 communicated_on")
+    return problems
+
+
+DOCUMENT_COUNTS = (29, 55)  # 补造 document 的份数与总页数 (第 9.5 节)
+REGISTRATION_COUNTS = {"load": 20, "engagement": 2, "registry": 4, "confirmation": 2, "upload": 1}  # 各登记途径
+
+
+def check_document_counts(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """manifest documents 段的份数, 总页数与各登记途径的份数等于 DOCUMENT_COUNTS 与 REGISTRATION_COUNTS
+    (只对正式目录调用)."""
+    documents = manifest["documents"]
+    counts = (len(documents), sum(int(d.get("page_count") or 0) for d in documents))
+    registrations = Counter(str(d.get("registration")) for d in documents)
+    if counts != DOCUMENT_COUNTS or registrations != REGISTRATION_COUNTS:
+        got = f"{counts[0]} 份 {counts[1]} 页, {dict(sorted(registrations.items()))}"
+        return [f"{rel(directory / 'manifest.json')}: documents 段的份数, 页数或登记途径与第 9.5 节不符 ({got})"]
+    return []
 
 
 ACCRUED_DAYS = (3, 10)  # 09-28 至 09-30 为下一个 10 个工作日发薪期中的 3 天
@@ -844,7 +1088,8 @@ def snapshot_complete(snapshot_dir: Path) -> bool:
 
 
 def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
-    """补造表与快照核对, 各项互不影响: 服务完成记录, 合同关联, 开户行, xero_refs, 回函余额与应计利息.
+    """补造表与快照核对, 各项互不影响: 服务完成记录, 合同关联, 开户行, xero_refs, 回函余额与应计利息, index.csv 的
+    Xero 关联对象, 更正后试算表, 财报金额与比较数.
     快照缺 SNAPSHOT_TABLE_FILES 任一文件时不做 (manifest 记了这些文件, 哈希核对已报出; check 另记说明)."""
     from backend.adapters.xero_dataset import LIVE_DOCUMENTS, xero_date
 
@@ -863,6 +1108,7 @@ def check_against_snapshot(directory: Path, snapshot_dir: Path) -> list[str]:
         (gen.SPEC, snapshot_confirmations, (snapshot, period[1])),
         (directory / "documents" / "index.csv", snapshot_related, (directory, snapshot)),
         (directory / "adjustments" / "journal_entries.csv", snapshot_adjustments, (directory, snapshot)),
+        (directory / gen.FS_JSON, snapshot_financial_statements, (directory, snapshot)),
     ]
     return [problem for where, step, args in steps for problem in guarded(where, step, *args)]
 
@@ -968,6 +1214,56 @@ def snapshot_adjustments(directory: Path, snapshot: gen.Snapshot) -> list[str]:
         sg = int((Decimal(wages) * SG_RATE).quantize(Decimal(1), ROUND_HALF_UP))
         if credited(entries, pay["super_payable"]) != sg:
             problems.append(f"{where}: 养老金更正额不等于 (更正前工资费用 + 应计工资) × {SG_RATE}")
+    return problems
+
+
+def snapshot_financial_statements(directory: Path, snapshot: gen.Snapshot) -> list[str]:
+    """财报与快照 (第 4.7, 6.6 节): 每行 = sign × Σ (期末试算表加更正分录) 映射科目, 比较数 = sign × Σ (上期末
+    试算表加 comparative_restatement_entry_nos 的分录) 映射科目; 两张表的非小计行合起来恰好映射期末试算表与更正
+    分录的全部科目 (33 个), 上期末试算表与重述分录的科目也都有映射; 损益科目在损益表与累计亏损行, 其余只在
+    财务状况表."""
+    from backend.adapters.xero_dataset import journal_entries_from_api, journal_rows, map_accounts, trial_balance_cents
+
+    try:
+        fs = read_financial_statements(directory)
+        entries = adjustment_entries(directory) or []
+    except CheckError:
+        return []  # 格式问题由 check_financial_statements 与 check_adjustments 报
+    if fs is None:
+        return []
+    where = rel(directory / gen.FS_JSON)
+    dataset = snapshot.load("dataset")
+    current = Counter(trial_balance_cents(snapshot.load(f"trial_balance_{dataset['period_end']}")))
+    for entry in entries:
+        current[entry.account_code] += entry.debit_cents - entry.credit_cents
+    prior = Counter(trial_balance_cents(snapshot.load(f"trial_balance_{dataset['prior_end']}")))
+    nos = set(fs.comparative_restatement_entry_nos)
+    restating = [e for e in journal_entries_from_api(snapshot) if e.entry_no in nos]  # type: ignore[arg-type]
+    problems: list[str] = []
+    if {e.entry_no for e in restating} != nos:
+        problems.append(f"{where}: comparative_restatement_entry_nos 在快照中找不到")
+    restated = Counter(prior)
+    for row in journal_rows(restating):
+        restated[row.account_code] += row.debit_cents - row.credit_cents
+    for x in fs.lines:
+        if x.amount_cents != x.sign * sum(current[c] for c in x.account_codes):
+            problems.append(f"{where}: {x.code} 不等于期末试算表加更正分录")
+        if (x.prior_amount_cents or 0) != x.sign * sum(restated[c] for c in x.account_codes):
+            problems.append(f"{where}: {x.code} 的比较数不等于上期末试算表加重述分录")
+    mapped = {c for x in fs.lines if not x.subtotal for c in x.account_codes}
+    used = set(current)
+    if mapped != used:
+        lack, extra = sorted(used - mapped), sorted(mapped - used)
+        problems.append(f"{where}: 映射的科目应恰为期末试算表与更正分录的 {len(used)} 个 (缺 {lack}, 多 {extra})")
+    lack = sorted(set(restated) - mapped)
+    if lack:
+        problems.append(f"{where}: 比较数的科目没有映射: {', '.join(lack)}")
+    types = {a.code: a.type for a in map_accounts(snapshot.load("accounts"))}
+    for x in (x for x in fs.lines if not x.subtotal):
+        for code in x.account_codes:
+            pl = types.get(code) in ("revenue", "expense")
+            if pl != (x.statement == "profit_or_loss") and not (pl and x.code == FS_TOTALS[2]):
+                problems.append(f"{where}: {x.code} 的科目 {code} 类型与所在报表不符")
     return problems
 
 

@@ -1,0 +1,17 @@
+{
+  "procedure_id": "FIN-08",
+  "round": 1,
+  "communicated_at": "2026-10-19T04:00:00Z",
+  "recipient": "Alex Morgan, Director",
+  "form": "written",
+  "misstatement_sources": [
+    "J-GEN-02-1-XJ-499",
+    "J-CSH-02-1-BA-091"
+  ],
+  "responded_at": "2026-10-19T22:00:00Z",
+  "response": "We agree with both items. Journal AJE-X01 dated 30 September 2026 removes journal #499, as no office equipment was held at that date. Journal AJE-X05 dated 30 September 2026 accrues interest of AUD 48.53 on the Business Savings Account, as confirmed by the bank.",
+  "adjustment_entry_nos": [
+    "AJE-X01",
+    "AJE-X05"
+  ]
+}
