@@ -265,18 +265,39 @@ async def test_rerun_subject_ids_passed_to_agent_then_cleared() -> None:
 async def test_wrong_decision_is_a_node_error(
     record: dict[str, object] | None, error: type[Exception], match: str
 ) -> None:
-    """读回的决定不存在, 不是 rerun, 或不针对这次失败的任务: 节点出错, 不重跑."""
+    """读回的决定不存在, 不是 rerun, 或不针对这次失败的任务: 节点出错, 不重跑. 决定不针对这次失败的任务时, 它也没有
+    关闭失败任务 (去掉 decided 版本, 任务仍待决), 节点照常等待并取回它."""
     runner, store, registry = await failed_at_p0()
     if record is not None:
         written = await preset_rerun(store, await pending_task(store))
-        store.rows_of(EID).remove(written)
-        store.rows_of(EID).append(written.model_copy(update=record))
+        rows = store.rows_of(EID)
+        rows.remove(written)
+        rows.append(written.model_copy(update=record))
+        if "task_id" in record:
+            rows[:] = [r for r in rows if not (isinstance(r, ReviewTask) and r.status is TaskStatus.decided)]
 
     with pytest.raises(error, match=match):
         await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
 
     assert registry.calls == 1
     assert await store.get(EID, ProcedureRun, "RUN-ACC-04-2") is None
+
+
+async def test_decision_for_another_task_after_task_closed_is_a_node_error() -> None:
+    """Store 对不上: rerun 决定改指别的任务, 失败任务却已 decided, 程序 v3 为 executing. 节点不再等 (没有待决任务,
+    也没有针对本程序任务的决定), 但不静默走到闸门, 报错说明不一致, 不重跑, 检查点停在原处."""
+    runner, store, registry = await failed_at_p0()
+    written = await preset_rerun(store, await pending_task(store))
+    rows = store.rows_of(EID)
+    rows.remove(written)
+    rows.append(written.model_copy(update={"task_id": "T-OTHER-v1"}))
+
+    with pytest.raises(RuntimeError, match="ACC-04 没有待决任务和未读回的决定, Store 中最新版本 v3 却是 executing"):
+        await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
+
+    assert registry.calls == 1
+    assert await store.get(EID, ProcedureRun, "RUN-ACC-04-2") is None
+    assert (await runner.app.aget_state(CONFIG)).next == ("p0_intel",)
 
 
 @pytest.mark.parametrize("v3", ["missing", "completed"])

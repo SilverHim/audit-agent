@@ -175,9 +175,11 @@ async def catch_up_review(
     """Store 中有检查点里没有的复核决定时, 补写它们的留痕, 按节点读回的顺序交给节点: 前面的各以
     ainvoke(Command(resume=决定 ID)) 交出 (每交一个停在下一次等待), 返回交最后一个的 Command; 没有返回 None.
 
-    节点内等待载荷 records 列出的本节点已读回的决定不算缺. 读回顺序不靠时间推断 (Q17 一轮失败算一组, 整组重跑):
-    同一程序每轮失败只对应一个 rerun 决定, 下一轮由它触发, 所以先按程序在该节点内的执行次序 (nodes.NODE_PROCEDURES),
-    再按决定所针对任务所属执行的 run_no. 键重复说明不变式被破坏, 抛 RuntimeError.
+    节点内等待载荷 records 列出的本节点已读回的决定不算缺. 读回顺序不靠时间推断, 按 (程序在该节点内的执行次序
+    (nodes.NODE_PROCEDURES), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等, 读回后从 Store
+    整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
+    (次序, 1, 所针对任务所属执行的 run_no) 排 rerun 决定 (Q17 一轮失败算一组, 整组重跑: 同一程序每轮只对应一个 rerun
+    决定, 下一轮由它触发). 同一程序同一轮有两个 rerun 决定说明不变式被破坏, 抛 RuntimeError.
 
     等待中的节点带着错误 (读回某个决定后出错, 如重跑的执行提交后写检查点前中断) 时, 检查点里留着那次运行的错误与
     恢复值, 节点之后再停下等待时错误仍在, DecisionSubmit 会把它当成卡住的等待, 拒绝后续决定. 此时先复制检查点
@@ -214,16 +216,19 @@ async def catch_up_review(
         raise RuntimeError(f"复核决定未进检查点, 节点 {node} 不是等复核的节点, 无法补做")
     order = NODE_PROCEDURES[node]
 
-    async def key(record: ReviewRecord) -> tuple[int, int]:
+    async def key(record: ReviewRecord) -> tuple[int, int, int, str]:
         task = tasks[record.task_id]
         run = await store.get(eid, ProcedureRun, task.run_id)
         if task.procedure_id not in order or run is None:
             raise RuntimeError(f"复核决定 {record.id} 针对的任务 {task.id} 不属于节点 {node} 的执行, 无法补做")
-        return order.index(task.procedure_id), run.run_no
+        if record.decision is Decision.rerun:
+            return order.index(task.procedure_id), 1, run.run_no, ""
+        return order.index(task.procedure_id), 0, 0, task.id
 
     keys = {r.id: await key(r) for r in records}
-    if len(set(keys.values())) < len(keys):
-        raise RuntimeError(f"节点 {node} 有多个复核决定针对同一程序的同一轮执行, 无法确定读回顺序: {keys}")
+    reruns = [k for r in records if r.decision is Decision.rerun for k in [keys[r.id]]]
+    if len(set(reruns)) < len(reruns):
+        raise RuntimeError(f"节点 {node} 有多个 rerun 决定针对同一程序的同一轮执行, 无法确定读回顺序: {keys}")
     config = GraphRunner.config(eid)
     sequence = sorted(missing, key=lambda r: keys[r.id])
     if any(t.interrupts and t.error for t in snapshot.tasks):

@@ -47,9 +47,10 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.gates import check_fields, current_gate, current_spec, spec_of
-from backend.orchestration.nodes import rerun_subjects, save_outputs
+from backend.orchestration.nodes import done_status, rerun_subjects, save_outputs
 from backend.orchestration.runner import GraphRunner, features_mismatch, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.orchestration.waits import accepts
 from backend.services.review_queue import attribute_exceptions
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
@@ -373,16 +374,19 @@ def review_effects(
     return []
 
 
-def recompute_procedure(procedure: Procedure, pending: list[ReviewTask]) -> Procedure | None:
-    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human, 没有为 completed.
+def recompute_procedure(
+    procedure: Procedure, pending: list[ReviewTask], done: ProcedureStatus = ProcedureStatus.completed
+) -> Procedure | None:
+    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human, 没有为 done.
     程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序置为完成.
     状态不变时返回 None, 不出新版本.
 
     pending: 该程序在本决定之后仍待决的任务 (不含本决定处理的任务).
+    done: 没有待决任务时的状态, 取 nodes.done_status (闸门程序为 planned, 等闸门 approve, Q5).
     """
     if procedure.status is ProcedureStatus.executing:
         return None
-    status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+    status = ProcedureStatus.awaiting_human if pending else done
     if status is procedure.status:
         return None
     return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
@@ -553,8 +557,10 @@ class GraphDecisionSubmit:
                 "NOT_AWAITING_REVIEW",
                 f"等待中的节点 {broken[0].name} 上次恢复时出错, 须先按错误信息恢复: {broken[0].error}",
             )
-        # P2 以外程序失败后的等待只处理该程序的任务; 别的程序的决定送进去, 节点读回时会报错停下
-        if not any(not isinstance(w, dict) or w.get("procedure_id") in (None, task.procedure_id) for w in waits):
+        # 等待只收它能处理的任务 (waits.accepts): P2 的等复核收 P2 程序的, P2 以外节点等人只收本程序的, 等待更正
+        # 不收复核决定; 别的决定送进去, 节点读回时会报错停下或读不到
+        pack = fill_defaults(snapshot.values)["procedure_pack"]
+        if not any(accepts(w, task, pack) for w in waits):
             raise DecisionRejected("NOT_AWAITING_REVIEW", f"当前不在等 {task.procedure_id} 的决定")
         # 决定须绑定任务记的目标版本, 且目标此后没有出新版本 (审计师看材料期间可能被别的决定改过)
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
@@ -632,7 +638,8 @@ class GraphDecisionSubmit:
             updated: Procedure | None = rerun_procedure(procedure, record, group)
         else:
             group = [task]
-            updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id])
+            done = done_status(self.deps.library.load(task.procedure_id))
+            updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id], done)
         decided = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in group]
         created = [*effects, *decided, *([updated] if updated else [])]
         async with store.transaction(eid):

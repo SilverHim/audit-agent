@@ -13,6 +13,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     Confirmation,
+    Decision,
     DocumentRef,
     DocumentType,
     ExceptionDisposition,
@@ -22,6 +23,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     ProposedAction,
     Reliability,
+    ReviewRecord,
     ReviewStatus,
     RiskItem,
     TaskKind,
@@ -150,20 +152,50 @@ async def test_replay_failed_run_waits_without_calling_agent() -> None:
 
 
 async def test_replay_waits_even_after_task_decided() -> None:
-    """失败任务已被决定 (decided) 后重放: 仍走到同一 interrupt(), 取回决定 ID."""
+    """失败任务已被决定 (decided, Store 中有关闭它的 rerun 决定 D-1) 后重放: 有尚未读回的决定, 仍走到同一 interrupt(),
+    取回 D-1 去读它写出的程序版本 (这里没有预置 executing 版本, 读回报错, 说明确实取回了 D-1)."""
+    deps = make_deps(FakeRegistry(), FakeTrail())
+    failure = fail_run(deps.queue, make_run(), "RuntimeError: boom", NOW)
+    task = failure["review_tasks"][0]
+    decided = task.model_copy(update={"version": 2, "status": TaskStatus.decided})
+    waiting = update_procedure(p0_pack(), "ACC-04", status=ProcedureStatus.awaiting_human)[0]
+    record = ReviewRecord(
+        id="D-1",
+        task_id=task.id,
+        target_version=task.target_version,
+        decision=Decision.rerun,
+        reason="重跑",
+        reviewed_by="U-001",
+        decided_at=NOW,
+    )
+    store = FakeOutputStore([*p0_pack(), *failure["procedure_runs"], task, decided, waiting, record])
+    nodes, _, _ = counted_nodes(store)
+    app = single_node(nodes, "ACC-04")
+    config = GraphRunner.config(EID)
+    await app.ainvoke(p0_state(), config)
+
+    with pytest.raises(ValueError, match="D-1 没有写出 ACC-04 v3 executing"):
+        await app.ainvoke(Command(resume="D-1"), config)
+
+
+async def test_replay_with_task_decided_but_no_decision_is_a_node_error() -> None:
+    """Store 对不上: 失败任务已 decided, 却没有针对它的决定, 程序最新版本仍为 awaiting_human. 节点不再等 (没有待决任务,
+    也没有未读回的决定), 但不静默结束, 报错说明不一致, 不前进. DecisionSubmit 同一事务写决定与任务, 正常走不到."""
     deps = make_deps(FakeRegistry(), FakeTrail())
     failure = fail_run(deps.queue, make_run(), "RuntimeError: boom", NOW)
     task = failure["review_tasks"][0]
     decided = task.model_copy(update={"version": 2, "status": TaskStatus.decided})
     waiting = update_procedure(p0_pack(), "ACC-04", status=ProcedureStatus.awaiting_human)[0]
     store = FakeOutputStore([*p0_pack(), *failure["procedure_runs"], task, decided, waiting])
-    nodes, _, _ = counted_nodes(store)
+    rows = list(store.rows)
+    nodes, registry, _ = counted_nodes(store)
     app = single_node(nodes, "ACC-04")
-    config = GraphRunner.config(EID)
-    await app.ainvoke(p0_state(), config)
 
-    with pytest.raises(LookupError, match="D-1"):  # interrupt() 取回了 D-1, 去 Store 读它 (这里没有预置)
-        await app.ainvoke(Command(resume="D-1"), config)
+    mismatch = "ACC-04 没有待决任务和未读回的决定, Store 中最新版本 v2 却是 awaiting_human"
+    with pytest.raises(RuntimeError, match=mismatch):
+        await app.ainvoke(p0_state(), GraphRunner.config(EID))
+    assert registry.abn_calls == 0  # 重放取回失败执行, 不再调 Agent
+    assert store.rows == rows
 
 
 # ── 验收 5: 各类产出的取回规则 ──

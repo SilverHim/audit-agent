@@ -8,7 +8,7 @@ report_draft → gate_rpt01 → { archive | report_draft }
 
 读法: → 固定边; { a | b } 条件边, 由路由函数按状态选一个; ⇉ 用 Send 并行派发多个实例.
 四道闸门 (gate_*) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口, 回到自己重新呈报.
-p1_await_data, await_events 与 P2 以外程序失败后的节点在节点内 interrupt() 等人.
+p1_await_data, await_events 与 P2 以外节点等人 (失败或有待复核任务) 时在节点内 interrupt().
 """
 
 import functools

@@ -16,8 +16,9 @@ from backend.contracts.models import AgentId, Engagement, GateDecision, GateId, 
 from backend.contracts.state import EngagementState, fill_defaults, initial_state
 from backend.core.config import get_settings
 from backend.orchestration import gates
-from backend.orchestration.nodes import AWAITING_DATA, DATA_READY
+from backend.orchestration.nodes import DATA_READY
 from backend.orchestration.trail import data_ready_entry, record_transitions
+from backend.orchestration.waits import WaitKind, kind_of
 from backend.services.features import LEGACY_FEATURES, features_text
 from backend.services.procedure_library import ProcedureLibrary
 
@@ -33,25 +34,24 @@ def fixed_procedures(library: ProcedureLibrary) -> list[Procedure]:
 
 
 def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
-    """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
-    {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
+    """图停在节点内 interrupt() 时各等待的载荷, 不在节点内等待时为空.
+
+    种类与写法见 waits.py (WaitKind 四种): await_events 为 {"awaiting": "review", "phase"}, P2 以外节点等人为
+    {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, 等待更正
+    (correction) 由错报段使用.
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
 
 
-def is_data_wait(payload: Any) -> bool:
-    """等待载荷是不是等数据就绪 (不是等复核或等人决定)."""
-    return isinstance(payload, dict) and payload.get("awaiting") == AWAITING_DATA
-
-
 def awaiting_data(snapshot: StateSnapshot) -> bool:
-    """图停在 p1_await_data 等数据就绪."""
-    return any(is_data_wait(waiting) for waiting in waiting_payloads(snapshot))
+    """图停在 p1_await_data 等数据就绪 (载荷种类 WaitKind.data)."""
+    return any(kind_of(waiting) is WaitKind.data for waiting in waiting_payloads(snapshot))
 
 
 def review_waits(snapshot: StateSnapshot) -> list[Any]:
-    """节点内等审计师复核决定的等待载荷 (await_events 与 P2 以外程序失败后的等待), 不含等数据就绪."""
-    return [waiting for waiting in waiting_payloads(snapshot) if not is_data_wait(waiting)]
+    """节点内等审计师决定的等待载荷 (await_events, P2 以外节点等人, 以及之后的等待更正), 不含等数据就绪.
+    哪些等待收哪个任务的决定再由 waits.accepts 判断."""
+    return [waiting for waiting in waiting_payloads(snapshot) if kind_of(waiting) is not WaitKind.data]
 
 
 def waiting_for_human(snapshot: StateSnapshot) -> bool:
