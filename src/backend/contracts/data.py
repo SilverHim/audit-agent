@@ -7,7 +7,9 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from backend.contracts.models import Model
+from pydantic import StrictInt, StrictStr
+
+from backend.contracts.models import Contract, Model
 from backend.contracts.records import AccountCategory, CategoryBasis
 
 
@@ -235,3 +237,37 @@ class CategoryVersion(Model):
     changed_by: str  # 用户 ID 或智能体编号 (系统归类为 A3)
     changed_at: datetime  # 时间
     reason: str | None = None  # 审计师修改时的理由
+
+
+class ContractVersion(Model):
+    """合同抽取结果的一个版本 (表 extraction_versions): 第 1 版为抽取所得, 之后每次审计师修改一版."""
+
+    version: int  # 版本号
+    contract: Contract  # 该版的完整内容
+    field: str | None = None  # 这一版改的字段, 如 terms[0].text; 抽取所得为空
+    reason: str | None = None  # 修改理由; 抽取所得为空
+    changed_by: str  # 用户 ID; 抽取所得为 A3
+    changed_at: datetime  # 时间
+
+
+class ExtractionEdit(Model):
+    """修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."""
+
+    field: str  # 字段, 如 counterparty, terms[0].text, confirmed_balance_cents
+    value: (
+        StrictStr | StrictInt | None
+    )  # 新值: 文本, 整数分, YYYY-MM-DD 日期; 可空的字段可为 null. 严格类型: true 不当成 1
+    reason: str  # 修改理由, 必填
+
+
+class ExtractionRecord(Model):
+    """抽取结果的一版 (表 extraction_versions 的一行)."""
+
+    target_type: str  # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本)
+    target_id: str  # 合同编号, 函证 ID 或文件 ID
+    version: int  # 版本号
+    data: dict[str, Any]  # 该版完整内容
+    field: str | None = None  # 改的字段; 抽取所得为空
+    reason: str | None = None  # 修改理由
+    changed_by: str  # 用户 ID 或 A3
+    changed_at: datetime  # 时间

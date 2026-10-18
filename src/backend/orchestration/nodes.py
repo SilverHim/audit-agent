@@ -20,6 +20,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     AuditObjective,
+    Confirmation,
     Decision,
     Engagement,
     Judgment,
@@ -680,9 +681,10 @@ class GraphNodes:
     async def await_events(self, state: EngagementState) -> StatePatch:
         """等审计师处理 P2 的复核任务: interrupt() 暂停, 决定写入 Store 后以 Command(resume=决定 ID) 恢复.
 
-        恢复后从 Store 读回复核决定, 任务, 判断, 例外, 错报与程序的最新版本, 整体并入状态 (接口文档第 7 节),
+        恢复后从 Store 读回复核决定, 任务, 判断, 例外, 错报, 函证与程序的最新版本, 整体并入状态 (接口文档第 7 节),
         之后回 fan_in 重新判断去向. 决定写入的对象都在其中, 不必按决定类型逐一推断;
-        程序包按状态中的顺序换成 Store 的最新版本.
+        程序包按状态中的顺序换成 Store 的最新版本. 函证也读回: 审计师在图停着时可修改回函抽取结果 (需求 R14,
+        只写 Store), 之后的节点 (DOC-06 重跑, CSH-02) 须在库中最新版本之上出新版本.
         恢复值在 Store 中没有对应的决定 (如绕过 DecisionSubmit 传入未写入的 ID) 时抛 LookupError, 写明原因与恢复办法:
         LangGraph 把恢复值交给 interrupt() 后, 节点出错再恢复仍取回同一个值, 须以 fan_in 身份重写检查点,
         再让图继续执行一步, 重新停到等复核.
@@ -704,6 +706,7 @@ class GraphNodes:
             "judgments": await store.latest(eid, Judgment),
             "exceptions": await store.latest(eid, AuditException),
             "misstatements": await store.latest(eid, Misstatement),
+            "confirmations": await store.latest(eid, Confirmation),
             "procedure_pack": [latest.get(p.id, p) for p in state["procedure_pack"]],
         }
 

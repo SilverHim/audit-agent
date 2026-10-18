@@ -1,5 +1,6 @@
 """数据管理存储 (PostgresDataStore) 的真实 PostgreSQL 测试. 设 TEST_DATABASE_URL 为已迁移到最新的独立测试库."""
 
+import asyncio
 import csv
 import os
 from datetime import UTC, date, datetime, timedelta
@@ -397,3 +398,139 @@ async def test_import_session_staging_and_evidence_of_spreadsheet(storage, tmp_p
     )
     path = await evidence.path(first.id, doc.id)
     assert path.suffix == ".csv" and path.read_bytes() == b"a,b\n1,2\n"
+
+
+# ── 需求 R14: 上传文件的处理与抽取结果的版本 ──
+
+
+async def test_uploaded_real_contract_matches_doc04_and_versions(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """验收: 真实存储上传演示 CON-001.pdf, A3 分类并抽取 (演示固定输出), 合同与编排里 DOC-04 对数据集登记的同一份
+    合同的抽取一致 (只差执行编号); 改条款文本出第 2 版, 历史两版; 文件登记的类型与状态按处理结果更新."""
+    from dataclasses import replace
+
+    from backend.agents.ingest import IngestAgent
+    from backend.contracts.data import ExtractionEdit
+    from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+    from tests.fakes import LayeredMockLLM, make_ctx
+
+    _, (uploaded, loaded), loader, engagements = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    demo_llm = ROOT / "data" / "demo" / "llm"
+    llm = LayeredMockLLM(demo_llm)
+    deps = service.deps
+    judgments = JudgmentEngine(
+        llm, OutputValidator(deps.financial_store, deps.library, deps.trail), deps.trail, deps.library
+    )
+    deps = replace(deps, llm=llm, judgments=judgments)
+    service = DataService(deps, service.runner)
+    pdf = (DEMO / "contracts" / "CON-001.pdf").read_bytes()
+
+    [received] = await service.upload_documents(uploaded.id, [("CON-001.pdf", pdf)], actor="U-1")
+    await asyncio.gather(*list(service.tasks))
+
+    [doc] = await deps.financial_store.documents(uploaded.id)
+    assert (doc.id, doc.type, doc.status, doc.reliability, doc.page_count) == (
+        received.id,
+        DocumentType.contract,
+        "extracted",
+        Reliability.external_copy,
+        3,
+    )
+    [contract] = await deps.financial_store.contracts(uploaded.id)
+    await loader.load(loaded.id, "demo")  # 数据集登记同一份 PDF, 编排里的 DOC-04 抽取
+    engagement = await engagements.get(loaded.id)
+    assert engagement is not None
+    await IngestAgent(deps).run(make_ctx(deps, "DOC-04", engagement))
+    expected = next(c for c in await deps.financial_store.contracts(loaded.id) if c.id == "CON-001")
+    assert contract.model_copy(update={"extracted_by_run": "X"}) == expected.model_copy(
+        update={"extracted_by_run": "X"}
+    )
+
+    edit = ExtractionEdit(field="terms[0].text", value="Changed by auditor.", reason="原文")
+    await service.edit_contract(uploaded.id, "CON-001", edit, "U-1")
+    history = await service.contract_history(uploaded.id, "CON-001")
+    assert [(v.version, v.changed_by, v.field) for v in history] == [(1, "A3", None), (2, "U-1", "terms[0].text")]
+    assert history[0].contract == contract
+    assert (await deps.data.readiness(uploaded.id)).data_version == 1  # 修改抽取结果: 数据版本 0 → 1
+
+
+async def test_contract_edit_rolls_back_together_when_version_bump_fails(
+    storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """修改合同时数据版本写失败: 合同新版本与版本记录在同一事务里一起回滚 (审核 FD-R14 第 1 轮)."""
+    from backend.contracts.data import ExtractionEdit
+    from backend.contracts.models import Contract
+
+    _, (first, _), _, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    contract = Contract(
+        id="CON-777",
+        document_id="DOC-X",
+        counterparty="Before",
+        counterparty_abn=None,
+        amount_cents=None,
+        sign_date=None,
+        terms=[],
+        extracted_by_run="RUN-DOC-04-1",
+    )
+    await service.deps.financial_store.save_contract(first.id, contract)
+
+    async def broken(eid: str) -> int:
+        raise RuntimeError("数据版本写失败")
+
+    monkeypatch.setattr(service.deps.data, "bump_version", broken)
+    with pytest.raises(RuntimeError):
+        await service.edit_contract(
+            first.id, "CON-777", ExtractionEdit(field="counterparty", value="After", reason="r"), "U-1"
+        )
+
+    [current] = await service.deps.financial_store.contracts(first.id, ["CON-777"])
+    assert (current.version, current.counterparty) == (1, "Before")
+    assert [v.version for v in await service.deps.financial_store.contract_history(first.id, "CON-777")] == [1]
+    assert (await service.deps.data.readiness(first.id)).data_version == 0
+
+
+async def test_contract_terms_read_in_extraction_order_and_edit_retry(
+    storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """11 条条款: 读出按 T1, T2, ..., T11 (不按文本排序); 留痕失败后同一修改重试返回当前版本 (审核 FD-R14 第 2 轮)."""
+    from backend.contracts.data import ExtractionEdit
+    from backend.contracts.models import Contract, ContractTerm, TermType, TrailKind
+
+    _, (first, _), _, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    terms = [
+        ContractTerm(id=f"CON-778-T{n}", term_type=TermType.payment, text=f"Clause {n}", page=1) for n in range(1, 12)
+    ]
+    contract = Contract(
+        id="CON-778",
+        document_id="DOC-X",
+        counterparty="Before",
+        counterparty_abn=None,
+        amount_cents=None,
+        sign_date=None,
+        terms=terms,
+        extracted_by_run="RUN-DOC-04-1",
+    )
+    await service.deps.financial_store.save_contract(first.id, contract)
+    [stored] = await service.deps.financial_store.contracts(first.id, ["CON-778"])
+    assert [t.id for t in stored.terms] == [t.id for t in terms]
+
+    write = service.deps.trail.record
+
+    async def no_edit_trail(entry):  # type: ignore[no-untyped-def]
+        if entry.kind is TrailKind.data and entry.payload.get("action") == "edit":
+            raise RuntimeError("留痕写失败")
+        return await write(entry)
+
+    edit = ExtractionEdit(field="terms[9].text", value="Clause ten revised", reason="原文")
+    monkeypatch.setattr(service.deps.trail, "record", no_edit_trail)
+    with pytest.raises(RuntimeError):
+        await service.edit_contract(first.id, "CON-778", edit, "U-1")
+    monkeypatch.setattr(service.deps.trail, "record", write)
+    [current] = await service.deps.financial_store.contracts(first.id, ["CON-778"])
+    assert (current.version, current.terms[9].id, current.terms[9].text) == (2, "CON-778-T10", "Clause ten revised")
+
+    assert await service.edit_contract(first.id, "CON-778", edit, "U-1") == current
+    history = await service.deps.financial_store.contract_history(first.id, "CON-778")
+    assert [v.version for v in history] == [1, 2] and history[0].contract == contract

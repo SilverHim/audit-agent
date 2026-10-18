@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import tempfile
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -16,14 +17,17 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
+from backend.adapters.llm import MockLLMClient
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
 from backend.contracts.data import (
+    ContractVersion,
     DataCheck,
     DataReadiness,
     DataSource,
+    ExtractionRecord,
     ImportSession,
     TableKind,
     TableStats,
@@ -49,6 +53,7 @@ from backend.contracts.models import (
     Decision,
     Direction,
     DocumentChannel,
+    DocumentFailedStep,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -517,6 +522,7 @@ class FakeFinancialStore:
         # 合同, 合同编号 -> 合同, 各项目共用; 预置的与 save_contract 写入的都在这里
         self.saved_contracts: dict[str, Contract] = {c.id: c for c in contracts or []}
         self.save_calls: list[str] = []  # save_contract 的每次调用 (合同编号)
+        self.contract_versions: dict[str, list[ContractVersion]] = {}  # 合同编号 → save_contract 记下的各版本
 
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
         self.record_calls.append((source_type, source_id))
@@ -546,9 +552,31 @@ class FakeFinancialStore:
         """按写入顺序返回 (真实实现的顺序没有约定, 调用方自行排序)."""
         return [c for cid, c in self.saved_contracts.items() if ids is None or cid in ids]
 
-    async def save_contract(self, eid: str, contract: Contract) -> None:
+    async def save_contract(
+        self,
+        eid: str,
+        contract: Contract,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """覆盖合同, 并按 (合同编号, 版本) 记一版 (同版本覆盖), 同真实实现."""
         self.save_calls.append(contract.id)
         self.saved_contracts[contract.id] = contract
+        versions = [v for v in self.contract_versions.get(contract.id, []) if v.version != contract.version]
+        version = ContractVersion(
+            version=contract.version,
+            contract=contract,
+            field=field,
+            reason=reason,
+            changed_by=changed_by,
+            changed_at=datetime.now(UTC),  # 同真实实现取写入时间
+        )
+        self.contract_versions[contract.id] = sorted([*versions, version], key=lambda v: v.version)
+
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        return list(self.contract_versions.get(contract_id, []))
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
         return [d for d in self.document_refs if type is None or d.type is type]
@@ -838,6 +866,11 @@ class FakeEvidenceStore:
         # save 的每次调用的 (文件名, 内容 sha256, 文件类型, 可靠性), 检查存档参数
         self.save_args: list[tuple[str, str, DocumentType, Reliability]] = []
         self.page_counts: dict[str, int] = {}  # save 登记的页数, 文件名 -> 页数; 缺省 2
+        self.contents: dict[str, bytes] = {}  # save 收到的原件, 文件 ID → 内容; path 据此写出
+        # 文件名 → 固定的文件 ID: 让上传的假文件用固定输出里的占位 ID (如 CON-001.pdf → DOC-CON001000000)
+        self.ids: dict[str, str] = {}
+        self.directory: Path | None = None  # path 写原件的临时目录
+        self.updates: list[tuple[str, DocumentType, str, str | None]] = []  # update_document 的每次调用
 
     async def save(
         self,
@@ -864,12 +897,16 @@ class FakeEvidenceStore:
         existing = next((d for d in refs if d.sha256 == sha256), None)
         if existing is not None:
             return existing
+        document_id = self.ids.get(file_name, f"DOC-{sha256[:12]}")
+        self.contents[document_id] = data
         doc = DocumentRef(
-            id=f"DOC-{sha256[:12]}",
+            id=document_id,
             type=type,
             file_name=file_name,
             sha256=sha256,
-            page_count=self.page_counts.get(file_name, 2) if media_type == "application/pdf" else 1,
+            page_count=(self.page_counts.get(file_name, 2) if data.startswith(b"%PDF") else 0)
+            if media_type == "application/pdf"
+            else 1,  # 同真实实现: 读不出的 PDF (不以 %PDF 开头) 记 0 页, 非 PDF 记 1
             reliability=reliability,
             status=status,
             uploaded_at=NOW,
@@ -891,6 +928,38 @@ class FakeEvidenceStore:
         if document_id in NUMBAT_REPLY_PAGES:
             return list(NUMBAT_REPLY_PAGES[document_id])
         return [f"{doc.file_name} page {n}" for n in range(1, doc.page_count + 1)]
+
+    async def update_document(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        status: DocumentStatus,
+        failed_step: DocumentFailedStep | None,
+    ) -> DocumentRef:
+        """改登记的类型, 可靠性, 状态与卡住的步骤 (不加入事务), 记进 updates."""
+        refs = self.financial_store.document_refs
+        i = next((i for i, d in enumerate(refs) if d.id == document_id), None)
+        if i is None:
+            raise FileNotFoundError(document_id)
+        refs[i] = refs[i].model_copy(
+            update={"type": type, "reliability": reliability, "status": status, "failed_step": failed_step}
+        )
+        self.updates.append((document_id, type, status, failed_step))
+        return refs[i]
+
+    async def path(self, eid: str, document_id: str) -> Path:
+        """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""
+        if document_id not in self.contents:
+            raise FileNotFoundError(document_id)
+        if self.directory is None:
+            self.directory = Path(tempfile.mkdtemp(prefix="fake-evidence-"))
+        doc = next(d for d in self.financial_store.document_refs if d.id == document_id)
+        path = self.directory / f"{document_id}{Path(doc.file_name).suffix.lower()}"
+        path.write_bytes(self.contents[document_id])
+        return path
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
         refs = self.financial_store.document_refs
@@ -1272,6 +1341,7 @@ class FakeDataStore:
         self.written: list[tuple[dict[TableKind, list[BaseModel]], dict[str, Any]]] = []
         self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
         self.import_updates: list[tuple[str, dict[str, Any]]] = []  # update_import 的每次调用 (会话 ID, 改了的字段)
+        self.extractions: dict[tuple[str, str, int], dict[str, Any]] = {}  # save_extraction 记下的 (类型, 对象, 版本)
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
@@ -1346,6 +1416,38 @@ class FakeDataStore:
             update = {"status": "committed", "kind": kind, "records": len(rows)}
             self.imports[import_id] = (session.model_copy(update=update), raw)
         return self.data_version
+
+    async def bump_version(self, eid: str) -> int:
+        self.data_version += 1
+        return self.data_version
+
+    async def extraction_versions(
+        self, eid: str, target_type: str | None = None, target_id: str | None = None
+    ) -> list[ExtractionRecord]:
+        return [
+            ExtractionRecord(target_type=t, target_id=i, version=v, changed_at=NOW, **record)
+            for (t, i, v), record in sorted(self.extractions.items())
+            if (target_type is None or t == target_type) and (target_id is None or i == target_id)
+        ]
+
+    async def save_extraction(
+        self,
+        eid: str,
+        target_type: str,
+        target_id: str,
+        version: int,
+        data: Mapping[str, Any],
+        *,
+        changed_by: str,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        self.extractions[(target_type, target_id, version)] = {
+            "data": dict(data),
+            "changed_by": changed_by,
+            "field": field,
+            "reason": reason,
+        }
 
     async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
         self.imports[session.id] = (session, data)
@@ -2055,3 +2157,27 @@ def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
     ):
         records |= {(source, row.id): row.model_dump() for row in rows}
     return FakeFinancialStore(records=records, trial_balance=list(tables["trial_balance"]))
+
+
+# ── 上传文件处理 (需求 R14) 用的大模型: 先读变体目录, 再读主固定输出 ──
+
+UPLOAD_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "llm_variants" / "upload"
+
+
+class LayeredMockLLM:
+    """按顺序在几个固定输出目录里找 {procedure_id}/{fixture_key}.json, 都没有再按顺序找 default.json.
+
+    上传后的分类 (DOC-CLASSIFY) 与回函副本抽取 (DOC-06 按文件名) 的固定输出放在 llm_variants/upload,
+    不进主固定输出 (主流程测试要求主固定输出各用恰好一次); 合同抽取 (DOC-04) 仍读主固定输出."""
+
+    def __init__(self, *roots: Path) -> None:
+        self.clients = [MockLLMClient(root) for root in roots]
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        for client in self.clients:
+            if (client.root / req.procedure_id / f"{req.fixture_key}.json").exists():
+                return await client.complete(req, output_model)
+        for client in self.clients:
+            if (client.root / req.procedure_id / "default.json").exists():
+                return await client.complete(req, output_model)
+        return await self.clients[0].complete(req, output_model)

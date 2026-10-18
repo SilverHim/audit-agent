@@ -16,11 +16,15 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
+from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, unfinished
 from backend.contracts.data import (
+    ContractVersion,
     DataReadiness,
     DataSource,
     DataSources,
     DataSummary,
+    ExtractionEdit,
+    ExtractionRecord,
     ImportCommit,
     ImportPreview,
     ImportResult,
@@ -33,11 +37,22 @@ from backend.contracts.data import (
     XeroSource,
 )
 from backend.contracts.errors import DataRejected
-from backend.contracts.models import DocumentType, Reliability, TrailEntry, TrailKind
+from backend.contracts.models import (
+    AgentId,
+    Confirmation,
+    Contract,
+    DocumentRef,
+    DocumentType,
+    Engagement,
+    Reliability,
+    TrailEntry,
+    TrailKind,
+)
 from backend.contracts.ports import XeroConnections
 from backend.contracts.records import Account
 from backend.orchestration.nodes import DATA_READY
-from backend.orchestration.runner import GraphRunner, awaiting_data
+from backend.orchestration.query import current_gate
+from backend.orchestration.runner import GraphRunner, awaiting_data, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.account_mapping import with_category
 from backend.services.data_import import (
@@ -52,8 +67,13 @@ from backend.services.data_import import (
     sheet_names,
 )
 from backend.services.data_quality import missing_tables
+from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
+from backend.services.trail_pages import all_of_kind
 
 logger = logging.getLogger(__name__)
+TARGET_NAMES = {DocumentType.contract: "合同", DocumentType.confirmation: "回函"}  # 留痕摘要里抽取结果的名称
+# 可上传的文件 (POST /documents), 单个不超过 data_import.MAX_BYTES
+DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg"}
 TABLE_NAMES: dict[TableKind, str] = {  # 留痕摘要里的表名
     TableKind.accounts: "科目表",
     TableKind.trial_balance: "试算表",
@@ -85,6 +105,67 @@ def version_entry(eid: str, version: TableVersion) -> TrailEntry:
     )
 
 
+def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
+    """一次抽取结果修改的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同取
+    document_id, 函证取 reply_document_id); 防重复键 {eid}:data:edit:{类型}:{对象}:v{版本}, 写入与补写共用."""
+    kind = DocumentType.contract if record.target_type == "contract" else DocumentType.confirmation
+    payload: dict[str, object] = {
+        "action": "edit",
+        "document_type": kind.value,
+        "field": record.field,
+        "reason": record.reason,
+    }
+    document_id = record.data.get("document_id" if kind is DocumentType.contract else "reply_document_id")
+    if document_id:
+        payload["document_id"] = document_id
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=record.changed_by,
+        summary=f"修改{TARGET_NAMES[kind]} {record.target_id} 的抽取结果 {record.field}, 第 {record.version} 版",
+        idempotency_key=f"{eid}:data:edit:{record.target_type}:{record.target_id}:v{record.version}",
+        payload=payload,
+        created_at=datetime.now(UTC),
+    )
+
+
+def upload_entry(
+    eid: str, document: DocumentRef, request_id: str | None = None, actor: str | None = None
+) -> TrailEntry:
+    """一份上传文件的 data 留痕: action upload, payload 带 file_name, document_id (有 request_id 时带上), actor 为
+    登记的上传人 (系统存档的文件取这次上传的 actor); 防重复键 {eid}:data:upload:{文件 ID}, 上传, 重传与启动补做
+    共用 (同一文件只记一条)."""
+    payload = {"action": "upload", "file_name": document.file_name, "document_id": document.id}
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=document.uploaded_by or actor or AgentId.A3,
+        summary=f"上传 {document.file_name}",
+        idempotency_key=f"{eid}:data:upload:{document.id}",
+        payload=payload | ({"request_id": request_id} if request_id else {}),
+        created_at=datetime.now(UTC),
+    )
+
+
+def same_edit(
+    record: ExtractionRecord | ContractVersion, version: int, edit: ExtractionEdit, actor: str, reason: str
+) -> bool:
+    """这一版是否就是当前版本, 且是同一人以同一理由改同一字段得出的."""
+    return record.version == version and (record.field, record.changed_by, record.reason) == (edit.field, actor, reason)
+
+
+def contract_retry(
+    history: Sequence[ContractVersion], current: Contract, edit: ExtractionEdit, actor: str, reason: str
+) -> bool:
+    """当前合同版本是否正是这次修改上次写入的结果: 最新一版同一人以同一理由改同一字段, 把修改套在前一版上正得到它."""
+    if len(history) < 2 or not same_edit(history[-1], current.version, edit, actor, reason):
+        return False
+    try:
+        return apply_contract_edit(history[-2].contract, edit.field, edit.value) == ordered_terms(current)
+    except DataRejected:
+        return False
+
+
 def schemas() -> list[TableSchema]:
     """各账表的导入字段 (GET /data/schemas), 按 TableKind 顺序; 不随项目变化."""
     return [SCHEMAS[kind] for kind in TableKind]
@@ -108,12 +189,14 @@ class DataService:
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
         self.tasks: set[asyncio.Task[None]] = set()  # launch 起的后台作业; 保留引用, 防止完成前被回收
 
-    async def _check_unlocked(self, eid: str) -> None:
+    async def _check_unlocked(self, eid: str) -> Engagement:
+        """项目 (未锁定); 不存在抛 LookupError, 已锁定 ENGAGEMENT_LOCKED."""
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
         if engagement.locked:
             raise DataRejected("ENGAGEMENT_LOCKED", eid)
+        return engagement
 
     def _register(self, eid: str, labels: Iterable[str]) -> object:
         key = object()
@@ -154,16 +237,25 @@ class DataService:
 
     async def launch(self, eid: str, labels: Iterable[str], job: Callable[[], Awaitable[None]]) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
-        同 holding), 后台执行 job; job 结束 (成败) 时注销并释放锁. job 自己处理业务失败 (如把文件置 needs_manual);
-        漏出的异常只记日志."""
+        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销并释放锁. job 自己处理业务失败
+        (如把文件置 needs_manual); 漏出的异常只记日志."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, names)
+
+        async def run() -> None:
+            await self.backfill_trails(eid)
+            await job()
+
+        self._spawn(eid, key, run)
+
+    def _spawn(self, eid: str, key: object, job: Callable[[], Awaitable[None]]) -> None:
+        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 结束 (成败, 含还没开始就被取消) 时由任务的完成回调
+        注销并释放锁, 只做一次; 漏出的异常只记日志."""
         done = False
 
         def finish(_: object = None) -> None:
-            """注销作业并释放锁, 只做一次: 作业结束时由任务的完成回调调用, 任务还没开始就被取消也会调用."""
             nonlocal done
             if not done:
                 done = True
@@ -172,10 +264,9 @@ class DataService:
 
         async def run() -> None:
             try:
-                await self.backfill_trails(eid)
                 await job()
             except Exception:
-                logger.exception("数据作业失败: %s %s", eid, sorted(names))
+                logger.exception("数据作业失败: %s %s", eid, sorted(self.jobs.get(eid, {}).get(key, ())))
 
         try:
             task = asyncio.create_task(run())
@@ -187,10 +278,12 @@ class DataService:
         task.add_done_callback(finish)
 
     async def backfill_trails(self, eid: str) -> None:
-        """补写已提交而 data 留痕没写成的账表版本 (写入后留痕失败, 或进程在两者之间中断); 同键已有的跳过.
-        数据集载入的版本不记留痕. 在取得项目锁之后调用."""
+        """补写已提交而 data 留痕没写成的账表版本与抽取结果修改 (写入后留痕失败, 或进程在两者之间中断);
+        同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁之后调用."""
         versions = [v for v in await self.deps.data.versions(eid) if v.source != "dataset"]
-        await record_transitions(self.deps.trail, [version_entry(eid, v) for v in versions])
+        edits = [r for r in await self.deps.data.extraction_versions(eid) if r.field is not None]
+        entries = [version_entry(eid, v) for v in versions] + [edit_entry(eid, r) for r in edits]
+        await record_transitions(self.deps.trail, entries)
 
     async def shutdown(self) -> None:
         """应用退出前取消后台作业并等它们结束 (锁随之释放, 见 launch 的完成回调)."""
@@ -366,7 +459,8 @@ class DataService:
         return list(self.jobs.get(eid, {}).values())
 
     async def summary(self, eid: str) -> DataSummary:
-        """数据管理页的概览 (GET /data/summary): Xero 连接, 各账表, 最近一次体检, 进行中的作业数, 待补交请求数.
+        """数据管理页的概览 (GET /data/summary): Xero 连接, 各账表, 最近一次体检, 进行中的作业涉及的账表与文件数,
+        待补交请求数.
 
         各账表按 TableKind 顺序: 来源, 原文件名与更新时间取最新一版 (data_imports 已提交的行, 数据版本最大者);
         数据集载入的表没有版本行, 来源为空, 更新时间取首次载入时间. 行数与日期范围取当前数据.
@@ -407,7 +501,7 @@ class DataService:
             sources=DataSources(xero=await self.xero.source(eid)),
             tables=tables,
             checks=await data.checks(eid),
-            processing=len(jobs),
+            processing=sum(len(job) for job in jobs),
             open_requests=await data.open_requests(eid),
         )
 
@@ -442,3 +536,270 @@ class DataService:
             raise
         self.runner.launch(eid, Command(resume=DATA_READY))
         return readiness
+
+    # ── 文件上传, 分类与抽取结果修改 (需求 R14) ──
+
+    async def upload_documents(
+        self, eid: str, files: Sequence[tuple[str, bytes]], *, actor: str, request_id: str | None = None
+    ) -> list[DocumentRef]:
+        """上传文件 (POST /documents): 登记为证据文件 (先记 other, 内部副本, received, 来源 auditor_upload),
+        每份写 data 留痕 (upload_entry; 同一文件只记一条, 重传时补上以前没写成的), 返回各文件的登记.
+        处理没做完的文件 (ingest.unfinished: 新登记的; 以前登记了却没处理成, 如上次上传在留痕或批内后面的文件处失败;
+        分类后抽取前作业被取消) 随即由 A3 在后台处理或补做 (DocumentIntake), 作业持项目锁, 涉及这些文件;
+        已处理完的同一文件重复上传只返回已有的登记. 文件类型不支持 INVALID_VALUE; 锁定 423; 忙 409."""
+        names = [PurePath(name.replace("\\", "/")).name or "upload" for name, _ in files]
+        unsupported = [n for n in names if PurePath(n).suffix.lower() not in DOCUMENT_EXTENSIONS]
+        if not files or unsupported:
+            raise DataRejected("INVALID_VALUE", f"只支持 PDF, Word, Excel, PNG, JPG 文件: {', '.join(unsupported)}")
+        engagement = await self._check_unlocked(eid)
+        self.runner.acquire(eid)
+        key = self._register(eid, ())
+        try:
+            await self.backfill_trails(eid)
+            documents: list[DocumentRef] = []
+            fresh: list[DocumentRef] = []
+            for name, (_, data) in zip(names, files, strict=True):
+                document = await self.deps.evidence_store.save(
+                    eid,
+                    name,
+                    data,
+                    type=DocumentType.other,
+                    reliability=Reliability.internal_copy,
+                    media_type=media_type(name),
+                    uploaded_by=actor,
+                )
+                documents.append(document)
+                await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
+                if unfinished(document) and all(d.id != document.id for d in fresh):
+                    fresh.append(document)
+            jobs = await self._classify_jobs(eid, fresh)
+            self.jobs[eid][key] = frozenset(d.id for d in fresh)
+        except BaseException:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            raise
+        if not fresh:  # 都是已处理完的文件: 不再处理
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            return documents
+        self._spawn(eid, key, self._intake(eid, engagement, fresh, jobs))
+        return documents
+
+    def _intake(
+        self, eid: str, engagement: Engagement, documents: Sequence[DocumentRef], jobs: Mapping[str, Job]
+    ) -> Callable[[], Awaitable[None]]:
+        """后台逐份处理或补做文件的作业; jobs 为各文件定下当前类型的 classify 留痕 (见 _classify_jobs)."""
+
+        async def process() -> None:
+            intake = DocumentIntake(self.deps)
+            for document in documents:
+                await intake.resume(eid, document, engagement, jobs.get(document.id))
+
+        return process
+
+    async def _classify_jobs(self, eid: str, documents: Sequence[DocumentRef]) -> dict[str, Job]:
+        """已分类而没抽取完的文件 → 定下它当前类型的那条 classify 留痕 (最近一条同文件同类型的); 补做抽取时沿用它的
+        ID 作作业号, 以它的时间判断合同之后有没有被改动过 (见 DocumentIntake.contract). 找不到的不在其中."""
+        pending = {d.id: d.type.value for d in documents if d.status == "classified"}
+        if not pending:
+            return {}
+        jobs: dict[str, Job] = {}
+        for entry in await all_of_kind(self.deps.trail, eid, TrailKind.data):
+            document_id = entry.payload.get("document_id")
+            if (
+                entry.payload.get("action") == "classify"
+                and document_id in pending
+                and entry.payload.get("document_type") == pending[document_id]
+                and entry.id is not None
+                and entry.created_at is not None
+            ):
+                jobs[document_id] = Job(entry.id, entry.created_at)  # 按写入顺序, 后写的为准
+        return jobs
+
+    async def recover(self) -> None:
+        """应用启动时 (runner.recover 之后) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
+        上次作业被取消或进程退出时留下), 处理前补写缺的上传留痕 (upload_entry). 项目已锁定的跳过; 项目锁正被占用
+        (如图在继续执行) 的这次跳过, 等下次上传或指定类型时补做. 一个项目出错只记日志, 不影响其他项目."""
+        for engagement in await self.deps.engagement_store.list():
+            eid = engagement.id
+            if engagement.locked or self.runner.is_running(eid):
+                continue
+            try:
+                documents = [d for d in await self.deps.financial_store.documents(eid) if unfinished(d)]
+                if not documents:
+                    continue
+                self.runner.acquire(eid)
+                key = self._register(eid, (d.id for d in documents))
+                try:
+                    await record_transitions(self.deps.trail, [upload_entry(eid, d) for d in documents])
+                    jobs = await self._classify_jobs(eid, documents)
+                except BaseException:
+                    self._unregister(eid, key)
+                    self.runner.release(eid)
+                    raise
+                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs))
+            except Exception:
+                logger.exception("补做文件处理失败: %s", eid)
+
+    async def set_document_type(
+        self, eid: str, document_id: str, kind: DocumentType, reason: str, actor: str
+    ) -> DocumentRef:
+        """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性, 置 classified, 写 data 留痕 (action classify,
+        actor 为审计师, 带理由), 返回改后的登记; 合同与回函随即由 A3 在后台抽取 (同上传后的处理), 是一次新的作业
+        (作业号为这条留痕的 ID): 合同重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空 MISSING_FIELD;
+        文件不存在 404; 锁定 423; 忙 409."""
+        if not reason.strip():
+            raise DataRejected("MISSING_FIELD", "须填写指定类型的理由")
+        document = next((d for d in await self.deps.financial_store.documents(eid) if d.id == document_id), None)
+        if document is None:
+            raise LookupError(f"文件 {document_id} 不存在")
+        engagement = await self._check_unlocked(eid)
+        self.runner.acquire(eid)
+        key = self._register(eid, {document_id})
+        intake = DocumentIntake(self.deps)
+        try:
+            await self.backfill_trails(eid)
+            job = await intake.record(eid, actor, document, kind, reason.strip())
+            updated = await self.deps.evidence_store.update_document(
+                eid, document_id, type=kind, reliability=RELIABILITY[kind], status="classified", failed_step=None
+            )
+        except BaseException:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            raise
+
+        async def extract() -> None:
+            await intake.classified(eid, updated, kind, engagement, job)
+
+        self._spawn(eid, key, extract)
+        return updated
+
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        """合同的各版本 (GET /contracts/{id}/history), 按版本升序; 合同不存在 404. 迁移 0004 之前抽取而没改过的
+        合同没有版本记录, 以当前内容作唯一一版返回 (时间取文件登记时间)."""
+        contract = await self._contract(eid, contract_id)
+        history = await self.deps.financial_store.contract_history(eid, contract_id)
+        if history:
+            return history
+        document = next(
+            (d for d in await self.deps.financial_store.documents(eid) if d.id == contract.document_id), None
+        )
+        changed_at = document.uploaded_at if document is not None else datetime.now(UTC)
+        return [
+            ContractVersion(version=contract.version, contract=contract, changed_by=AgentId.A3, changed_at=changed_at)
+        ]
+
+    async def _contract(self, eid: str, contract_id: str) -> Contract:
+        found = await self.deps.financial_store.contracts(eid, [contract_id])
+        if not found:
+            raise LookupError(f"合同 {contract_id} 不存在")
+        return found[0]
+
+    async def edit_contract(self, eid: str, contract_id: str, edit: ExtractionEdit, actor: str) -> Contract:
+        """修改合同抽取结果 (PUT /contracts/{id}): 生成新版本 (version +1), 记修改人, 字段与理由, 数据版本 +1, 三者
+        在一个事务内; 提交后写 data 留痕 (action edit, 见 edit_entry; 没写成的下次取锁时补写). 字段见
+        extraction_edits.CONTRACT_FIELDS (条款下标从 0 起). 持项目锁 (锁定 423, 忙 409); 合同不存在 404; 理由为空
+        MISSING_FIELD; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一修改的重试 (当前版本正是同一人
+        以同一理由改同一字段得出的) 返回当前版本, 不再写. 迁移 0004 之前抽取的合同第一次修改时先补记修改前的那一版."""
+        reason = self._reason(edit)
+        async with self.locked(eid):
+            await self.backfill_trails(eid)
+            contract = await self._contract(eid, contract_id)
+            history = await self.deps.financial_store.contract_history(eid, contract_id)
+            try:
+                updated = apply_contract_edit(contract, edit.field, edit.value)
+            except DataRejected:
+                if contract_retry(history, contract, edit, actor, reason):
+                    return contract
+                raise
+            async with self.deps.output_store.transaction(eid):
+                if not history:
+                    await self.deps.financial_store.save_contract(eid, contract)  # 补记修改前的一版
+                await self.deps.financial_store.save_contract(
+                    eid, updated, changed_by=actor, field=edit.field, reason=reason
+                )
+                await self.deps.data.bump_version(eid)
+            record = ExtractionRecord(
+                target_type="contract",
+                target_id=updated.id,
+                version=updated.version,
+                data=updated.model_dump(mode="json"),
+                field=edit.field,
+                reason=reason,
+                changed_by=actor,
+                changed_at=datetime.now(UTC),
+            )
+            await record_transitions(self.deps.trail, [edit_entry(eid, record)])
+        return updated
+
+    async def edit_confirmation(self, eid: str, confirmation_id: str, edit: ExtractionEdit, actor: str) -> Confirmation:
+        """修改回函抽取结果 (PUT /confirmations/{id}): 函证出新版本 (version +1) 写入审计产出, 抽取版本表记修改人,
+        字段与理由, 数据版本 +1, 三者在一个事务内; 提交后写 data 留痕 (同 edit_contract). 字段: confirming_party,
+        balance_date, confirmed_balance_cents.
+
+        函证在编排状态里, 只在图停在闸门或等复核 (且没有出错的节点) 时可改, 否则 409 NOT_EDITABLE: 停在这两处时之后
+        写函证的节点 (DOC-06 重跑, CSH-02) 都要经过等复核恢复, 那时从库读回最新版本 (nodes.await_events); 闸门之后
+        不再有写函证的节点. CSH-02 已比对过的差额与结果不随之重算, 由数据版本标出过期 (需求 R16).
+        持项目锁 (锁定 423, 忙 409); 函证不存在 404; 理由为空 MISSING_FIELD; 字段或值不合法, 与当前相同
+        INVALID_VALUE; 同一修改的重试返回当前版本 (同 edit_contract)."""
+        reason = self._reason(edit)
+        async with self.locked(eid):
+            await self.backfill_trails(eid)
+            confirmation = await self.deps.output_store.get(eid, Confirmation, confirmation_id)
+            if confirmation is None:
+                raise LookupError(f"函证 {confirmation_id} 不存在")
+            snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
+            broken = any(task.error for task in snapshot.tasks)
+            if broken or (current_gate(snapshot.next) is None and not review_waits(snapshot)):
+                raise DataRejected("NOT_EDITABLE", "只能在图停在闸门或等复核时修改回函抽取结果")
+            try:
+                updated = apply_confirmation_edit(confirmation, edit.field, edit.value)
+            except DataRejected:
+                if await self._confirmation_retry(eid, confirmation, edit, actor, reason):
+                    return confirmation
+                raise
+            record = ExtractionRecord(
+                target_type="confirmation",
+                target_id=updated.id,
+                version=updated.version,
+                data=updated.model_dump(mode="json"),
+                field=edit.field,
+                reason=reason,
+                changed_by=actor,
+                changed_at=datetime.now(UTC),
+            )
+            async with self.deps.output_store.transaction(eid):
+                await self.deps.output_store.put(eid, [updated], actor=actor)
+                await self.deps.data.save_extraction(
+                    eid,
+                    "confirmation",
+                    updated.id,
+                    updated.version,
+                    record.data,
+                    changed_by=actor,
+                    field=edit.field,
+                    reason=reason,
+                )
+                await self.deps.data.bump_version(eid)
+            await record_transitions(self.deps.trail, [edit_entry(eid, record)])
+        return updated
+
+    async def _confirmation_retry(
+        self, eid: str, current: Confirmation, edit: ExtractionEdit, actor: str, reason: str
+    ) -> bool:
+        """当前函证版本是否正是这次修改上次写入的结果: 最新一版同一人以同一理由改同一字段,
+        把修改套在前一版上正得到它."""
+        records = await self.deps.data.extraction_versions(eid, "confirmation", current.id)
+        previous = await self.deps.output_store.get(eid, Confirmation, current.id, current.version - 1)
+        if not records or previous is None or not same_edit(records[-1], current.version, edit, actor, reason):
+            return False
+        try:
+            return apply_confirmation_edit(previous, edit.field, edit.value) == current
+        except DataRejected:
+            return False
+
+    @staticmethod
+    def _reason(edit: ExtractionEdit) -> str:
+        if not edit.reason.strip():
+            raise DataRejected("MISSING_FIELD", "须填写修改理由")
+        return edit.reason.strip()

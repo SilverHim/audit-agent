@@ -11,6 +11,7 @@ from backend.contracts.models import (
     ClientProfile,
     Decision,
     DisputeResolution,
+    DocumentType,
     GateDecision,
     GateEdit,
     GateId,
@@ -205,6 +206,13 @@ class DeferralView(Model):
     target_id: str
     deferred_by: str  # 标记人的用户 ID
     deferred_at: datetime
+
+
+class DocumentTypeIn(Model):
+    """人工指定文件类型."""
+
+    type: DocumentType  # 文件类型
+    reason: str  # 理由, 必填
 
 
 class ImportSheet(Model):

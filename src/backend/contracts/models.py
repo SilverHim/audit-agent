@@ -288,10 +288,14 @@ class ReceiptChannel(StrEnum):
 
 
 class DocumentType(StrEnum):
-    """证据文件类型."""
+    """证据文件类型. 审计师上传的文件由 A3 分类."""
 
     contract = "contract"  # 合同
+    invoice = "invoice"  # 发票
     confirmation = "confirmation"  # 询证函回函
+    bank_statement = "bank_statement"  # 银行对账单
+    minutes = "minutes"  # 会议纪要 (董事会, 股东会)
+    financial_statements = "financial_statements"  # 财务报表 (含报表草稿)
     other = "other"  # 其他
 
 
@@ -371,8 +375,10 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
-# 证据文件处理状态: 已接收, 已抽取, 需人工处理
-DocumentStatus = Literal["received", "extracted", "needs_manual"]
+# 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理
+DocumentStatus = Literal["received", "classified", "extracted", "needs_manual"]
+# 需人工处理时卡在哪一步: 分类 (判断不了类型), 读取 (读不出文字), 抽取 (抽取校验不过), 关联 (对不上业务对象)
+DocumentFailedStep = Literal["classify", "read", "extract", "link"]
 # 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件
 DocumentChannel = Literal["auditor_upload", "bank_direct", "xero"]
 
@@ -751,6 +757,7 @@ class DocumentRef(Model):
     media_type: str = "application/pdf"  # 媒体类型, 如 text/csv
     channel: DocumentChannel = "auditor_upload"  # 来源渠道
     uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
+    failed_step: DocumentFailedStep | None = None  # 需人工处理时卡在哪一步, 其余状态为空
 
 
 class ContractTerm(Model):
@@ -763,9 +770,10 @@ class ContractTerm(Model):
 
 
 class Contract(Model):
-    """DOC-04 从合同 PDF 抽取出的合同要素与条款."""
+    """DOC-04 从合同 PDF 抽取出的合同要素与条款. 审计师修改抽取结果时出新版本, 各版本见 extraction_versions."""
 
     id: str  # 合同编号, 取 PDF 文件名主干
+    version: int = 1  # 版本号: 抽取所得为第 1 版 (重新抽取接在已有版本后), 每次审计师修改 +1
     document_id: str  # 合同 PDF 的文件 ID
     counterparty: str  # 合同对方
     counterparty_abn: str | None  # 对方 ABN
@@ -774,7 +782,7 @@ class Contract(Model):
     sign_date: date | None  # 签订日
     terms: list[ContractTerm]  # 抽取出的条款
     evidence: list[EvidencePointer] = []  # 各要素的页码指针, locator 为字段名
-    extracted_by_run: str  # 抽取它的那次 DOC-04 执行
+    extracted_by_run: str  # 抽取它的那次 DOC-04 执行; 上传后由 A3 直接抽取的为 UPLOAD-{文件 ID}
 
 
 class JudgmentRef(Model):

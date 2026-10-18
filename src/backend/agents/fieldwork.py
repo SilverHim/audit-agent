@@ -17,6 +17,8 @@ from backend.contracts.models import (
     AuditException,
     Confirmation,
     ConfirmationResult,
+    DocumentRef,
+    DocumentType,
     EvidencePointer,
     EvidenceType,
     ExceptionDisposition,
@@ -176,26 +178,34 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     async def rev03_subjects(self, ctx: RunContext) -> list[Subject]:
         """REV-03 的判断对象: DOC-04 抽出的全部合同, 按合同编号排序.
 
-        data 为 {contract, document} (REV-03.md.j2 头注释), document 取状态中该合同的文件登记; 不在状态中抛 LookupError
-        (DOC-04 写合同与文件状态不在同一事务, 对不上说明存储与检查点不一致). 没有规则例外.
+        data 为 {contract, document} (REV-03.md.j2 头注释), document 为该合同的文件登记 (见 contract_documents);
+        查不到抛 LookupError. 没有规则例外.
         """
         contracts = sorted(await self.deps.financial_store.contracts(ctx.engagement.id), key=lambda c: c.id)
-        documents = {d.id: d for d in ctx.state["documents"]}
+        documents = await self.contract_documents(ctx)
         subjects = []
         for contract in contracts:
             document = documents.get(contract.document_id)
             if document is None:
-                raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 不在状态中")
+                raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 未登记")
             data = {"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")}
             subjects.append(Subject(contract.id, data))
         return subjects
+
+    async def contract_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
+        """合同的文件登记: 先取状态 documents, 状态里没有的取 FinancialDataStore.documents. 审计师在 DOC-04 之后上传的
+        合同由 A3 直接分类与抽取 (需求 R14), 文件登记只在存储里, 不经编排并入状态."""
+        documents = {d.id: d for d in ctx.state["documents"]}
+        for document in await self.deps.financial_store.documents(ctx.engagement.id, DocumentType.contract):
+            documents.setdefault(document.id, document)
+        return documents
 
     async def rev02_subjects(self, ctx: RunContext) -> list[Subject]:
         """REV-02 的判断对象: 规则 S01 选中的发票, 加前置程序 (REV-08) 尚未归因的例外所指的发票 (Q13: R01, R02, R03
         都算), 去重后按发票 ID 排序; 先按 in_scope 筛选, 再取数据.
 
         data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice 与 delivery_notes (按 ID 排序) 带 source_type;
-        contract, document (状态中该合同的文件登记), contract_judgment (该合同当前有效的 REV-03 判断,
+        contract, document (该合同的文件登记, 见 contract_documents), contract_judgment (该合同当前有效的 REV-03 判断,
         见 contract_judgment) 在发票没有合同时为 null. 规则例外为该发票上前置程序尚未归因的例外 (按 ID 排序).
         发票, 合同或合同文件查不到抛 LookupError.
         """
@@ -224,7 +234,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             notes[note.invoice_id].append({"source_type": "delivery_note", **note.model_dump(mode="json")})
         contract_ids = sorted({cast(str, invoices[i].contract_id) for i in ids if invoices[i].contract_id})
         contracts = {c.id: c for c in await store.contracts(eid, contract_ids)} if contract_ids else {}
-        documents = {d.id: d for d in ctx.state["documents"]}
+        documents = await self.contract_documents(ctx) if contracts else {}
         subjects = []
         for invoice_id in ids:
             invoice = invoices[invoice_id]
@@ -235,7 +245,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                     raise LookupError(f"发票 {invoice_id} 的合同 {invoice.contract_id} 不在财务数据中")
                 doc = documents.get(found.document_id)
                 if doc is None:
-                    raise LookupError(f"合同 {found.id} 的文件 {found.document_id} 不在状态中")
+                    raise LookupError(f"合同 {found.id} 的文件 {found.document_id} 未登记")
                 contract, document = found.model_dump(mode="json"), doc.model_dump(mode="json")
                 judgment = self.contract_judgment(ctx, found.id)
             data = {

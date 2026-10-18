@@ -14,9 +14,11 @@ from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.data import (
+    ContractVersion,
     DataCheck,
     DataReadiness,
     DataSource,
+    ExtractionRecord,
     ImportSession,
     TableKind,
     TableStats,
@@ -26,11 +28,13 @@ from backend.contracts.data import (
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
+    AgentId,
     AsicCompanyRecord,
     AuditObjective,
     ClientProfile,
     Contract,
     DocumentChannel,
+    DocumentFailedStep,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -89,8 +93,21 @@ class FinancialDataStore(Protocol):
 
     async def contracts(self, eid: str, ids: Sequence[str] | None = None) -> list[Contract]: ...
 
-    async def save_contract(self, eid: str, contract: Contract) -> None:
-        """DOC-04 写入, 按 id 覆盖合同与条款."""
+    async def save_contract(
+        self,
+        eid: str,
+        contract: Contract,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """DOC-04 写入与审计师修改共用: 按 id 覆盖合同与条款为这一版, 并在 extraction_versions 记这一版的完整内容
+        (同版本已有则覆盖, 抽取重做时幂等). changed_by, field, reason 为修改人, 改的字段与理由, 抽取所得为 A3 与空."""
+        ...
+
+    async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
+        """合同的各版本, 按版本升序; 没有记录 (迁移 0004 之前抽取的) 为空."""
         ...
 
     async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]: ...
@@ -140,7 +157,8 @@ class EvidenceStore(Protocol):
     ) -> DocumentRef:
         """存原件, 算 sha256, 登记 documents; 同一哈希重复保存返回已有记录.
 
-        PDF 按 pdfplumber 数页数, 其他媒体类型页数记 1. status 为登记时的处理状态 (导入的账表原件已转换, 记 extracted).
+        PDF 按 pdfplumber 数页数, 读不出 (损坏) 记 0 照样登记; 其他媒体类型页数记 1. status 为登记时的处理状态
+        (导入的账表原件已转换, 记 extracted).
         """
         ...
 
@@ -152,6 +170,19 @@ class EvidenceStore(Protocol):
 
     async def set_status(self, eid: str, document_id: str, status: DocumentStatus) -> None:
         """在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        ...
+
+    async def update_document(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        status: DocumentStatus,
+        failed_step: DocumentFailedStep | None,
+    ) -> DocumentRef:
+        """A3 处理上传文件时改登记的类型, 可靠性, 状态与卡住的步骤, 返回改后的登记; 没有该文件抛 FileNotFoundError."""
         ...
 
 
@@ -198,6 +229,32 @@ class DataStore(Protocol):
 
     async def open_requests(self, eid: str) -> int:
         """待补交 (status open) 的请求数."""
+        ...
+
+    async def extraction_versions(
+        self, eid: str, target_type: str | None = None, target_id: str | None = None
+    ) -> list[ExtractionRecord]:
+        """抽取结果的各版 (可按类型与对象筛), 按类型, 对象, 版本升序."""
+        ...
+
+    async def bump_version(self, eid: str) -> int:
+        """数据版本 +1 (修改抽取结果, 科目分类等不经 write_tables 的数据变动), 返回新版本."""
+        ...
+
+    async def save_extraction(
+        self,
+        eid: str,
+        target_type: str,
+        target_id: str,
+        version: int,
+        data: Mapping[str, Any],
+        *,
+        changed_by: str,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """在 extraction_versions 记一版抽取结果 (同版本已有则覆盖). target_type: confirmation (函证, 审计师修改),
+        reply (上传的回函副本的抽取结果, target_id 为文件 ID)."""
         ...
 
     async def write_tables(

@@ -17,6 +17,7 @@ from backend.contracts.llm_outputs import (
     ContractExtraction,
     CriticIndependent,
     CriticVerdictOut,
+    DocumentClassification,
     JudgmentDraft,
     ReportDraft,
 )
@@ -344,8 +345,8 @@ class OutputValidator:
             # 引用与语义问题只记下, 不判失败: 推理链照存, 仲裁时 critic_chain_ok 据此不提供 a7_upheld
             output, unsupported, errors = await self._critic(eid, output, ctx)
             level = None
-        elif isinstance(output, CriticVerdictOut):
-            level = None  # 只做语法与结构两级
+        elif isinstance(output, CriticVerdictOut | DocumentClassification):
+            level = None  # 只做语法与结构两级 (文件分类: 类型取值已由结构校验限定, 没有证据指针)
         else:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         return ValidationReport(

@@ -20,6 +20,7 @@ from backend.contracts.data import (
     DataCheck,
     DataReadiness,
     DataSource,
+    ExtractionRecord,
     ImportSession,
     TableKind,
     TableStats,
@@ -29,7 +30,7 @@ from backend.contracts.models import AgentId
 from backend.contracts.records import Account
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
-from backend.persistence.stores import Store, now, safe_child
+from backend.persistence.stores import Store, now, safe_child, upsert_extraction
 
 # 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户没有
 DATE_COLUMNS: dict[TableKind, str] = {
@@ -332,3 +333,44 @@ class PostgresDataStore(Store):
             # 只改未提交的会话: 提交后记下的选择不再变 (换表与提交在服务层另以项目锁互斥)
             statement = update(d).where(d.c.engagement_id == eid, d.c.id == import_id, d.c.status == "parsed")
             await conn.execute(statement.values(**changes))
+
+    # ── 数据版本与抽取结果 (需求 R14) ──
+
+    async def extraction_versions(
+        self, eid: str, target_type: str | None = None, target_id: str | None = None
+    ) -> list[ExtractionRecord]:
+        t = m.extraction_versions
+        statement = select(*[t.c[name] for name in ExtractionRecord.model_fields])
+        if target_type is not None:
+            statement = statement.where(t.c.target_type == target_type)
+        if target_id is not None:
+            statement = statement.where(t.c.target_id == target_id)
+        rows = await self.rows(eid, statement.order_by(t.c.target_type, t.c.target_id, t.c.version))
+        return [ExtractionRecord.model_validate(r) for r in rows]
+
+    async def bump_version(self, eid: str) -> int:
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            loads = await self.loads_row(conn, eid)
+            version = int(loads["data_version"]) + 1
+            t = m.dataset_loads
+            await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
+        return version
+
+    async def save_extraction(
+        self,
+        eid: str,
+        target_type: str,
+        target_id: str,
+        version: int,
+        data: Mapping[str, Any],
+        *,
+        changed_by: str,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            await upsert_extraction(
+                conn, eid, target_type, target_id, version, data, changed_by=changed_by, field=field, reason=reason
+            )

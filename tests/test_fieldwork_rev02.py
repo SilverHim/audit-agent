@@ -291,6 +291,9 @@ async def test_missing_data_raises(change: str, message: str) -> None:
     if change == "document":
         documents = [EXTRACTED[0], EXTRACTED[2]]
     agent, ctx, _ = setup(records=records, documents=documents)
+    if change == "document":  # 状态与存储里都没有 (只在存储里的会补查, 需求 R14)
+        financial = agent.deps.financial_store
+        financial.document_refs[:] = [d for d in financial.document_refs if d.file_name != "CON-002.pdf"]  # type: ignore[attr-defined]
     if change == "contract":
         agent.deps.financial_store.saved_contracts.pop("CON-002")  # type: ignore[attr-defined]
     with pytest.raises(LookupError, match=message):

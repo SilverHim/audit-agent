@@ -112,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.data_service = DataService(deps, app.state.runner)
             try:
                 await app.state.runner.recover()
+                await app.state.data_service.recover()
                 yield
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.
