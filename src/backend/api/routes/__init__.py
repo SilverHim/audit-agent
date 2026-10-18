@@ -35,3 +35,4 @@ for module in (
     settings,
 ):
     api_router.include_router(module.router)
+api_router.include_router(data.schemas_router)

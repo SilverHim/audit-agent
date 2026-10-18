@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Literal, TypeVar
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
     Contract,
+    DocumentChannel,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -297,7 +298,17 @@ class FileEvidenceStore(Store):
         self.root = root
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
         safe_child(self.root, file_name)
         digest = hashlib.sha256(data).hexdigest()
@@ -306,12 +317,13 @@ class FileEvidenceStore(Store):
             existing = [d for d in await PostgresFinancialDataStore(self.engine).documents(eid) if d.sha256 == digest]
             if existing:
                 return existing[0]
+            pdf = media_type == "application/pdf"
 
             def count_pages() -> int:
-                with pdfplumber.open(io.BytesIO(data)) as pdf:
-                    return len(pdf.pages)
+                with pdfplumber.open(io.BytesIO(data)) as document:
+                    return len(document.pages)
 
-            count = await asyncio.to_thread(count_pages)
+            count = await asyncio.to_thread(count_pages) if pdf else 1  # 非 PDF 不分页, 记 1
             if count == 0:
                 raise ValueError("Empty PDF")
             doc = DocumentRef(
@@ -321,12 +333,16 @@ class FileEvidenceStore(Store):
                 sha256=digest,
                 page_count=count,
                 reliability=reliability,
-                status="received",
+                status=status,
                 uploaded_at=now(),
+                media_type=media_type,
+                channel=channel,
+                uploaded_by=uploaded_by,
             )
             directory = safe_child(safe_child(self.root, eid), "evidence")
             directory.mkdir(parents=True, exist_ok=True)
-            path = safe_child(directory, digest + ".pdf")
+            suffix = ".pdf" if pdf else PurePath(file_name).suffix.lower()  # 存档文件名为哈希加原扩展名
+            path = safe_child(directory, digest + suffix)
             # Publish complete immutable content; a rolled-back registration leaves a reusable orphan.
             temporary = directory / f".{uuid4()}.tmp"
             temporary.write_bytes(data)

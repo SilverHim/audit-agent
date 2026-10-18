@@ -13,7 +13,16 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from pydantic import BaseModel
 
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
-from backend.contracts.data import DataCheck, DataReadiness, TableKind, TableStats, TableVersion, XeroSource
+from backend.contracts.data import (
+    DataCheck,
+    DataReadiness,
+    DataSource,
+    ImportSession,
+    TableKind,
+    TableStats,
+    TableVersion,
+    XeroSource,
+)
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
@@ -21,6 +30,7 @@ from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
     Contract,
+    DocumentChannel,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -116,9 +126,22 @@ class EvidenceStore(Protocol):
     """证据原件的存储 (B 实现): 存 PDF, 登记文件, 读页面文本."""
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
-        """存原件, 算 sha256, 登记 documents; 同一哈希重复保存返回已有记录."""
+        """存原件, 算 sha256, 登记 documents; 同一哈希重复保存返回已有记录.
+
+        PDF 按 pdfplumber 数页数, 其他媒体类型页数记 1. status 为登记时的处理状态 (导入的账表原件已转换, 记 extracted).
+        """
         ...
 
     async def path(self, eid: str, document_id: str) -> Path: ...
@@ -175,6 +198,46 @@ class DataStore(Protocol):
 
     async def open_requests(self, eid: str) -> int:
         """待补交 (status open) 的请求数."""
+        ...
+
+    async def write_tables(
+        self,
+        eid: str,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        source: DataSource,
+        actor: str,
+        file_name: str | None = None,
+        document_id: str | None = None,
+        import_id: str | None = None,
+        request_id: str | None = None,
+    ) -> int:
+        """新数据版本写入 (导入与 Xero 同步共用), 返回写入后的数据版本. 一个事务内: 数据版本 +1; 各表按 TableKind 顺序
+        整表替换 (审批日志不成表, 按凭证号补进总账的录入人, 审批人与审批时间, 只改对应了的列; 写总账时再套用最新一版
+        审批日志); 科目表对照分类历史 (审计师改过的沿用审计师的分类, 系统归类有变化的记一版); 每张表在 data_imports
+        记一行版本 (含行快照), 有 import_id 时把该导入会话置 committed. 行模型: 科目表 Account, 审批日志
+        ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
+        """暂存上传的原文件并登记导入会话 (status parsed)."""
+        ...
+
+    async def import_session(self, eid: str, import_id: str) -> tuple[ImportSession, bytes] | None:
+        """导入会话与暂存的原文件; 没有该会话为 None."""
+        ...
+
+    async def update_import(
+        self,
+        eid: str,
+        import_id: str,
+        *,
+        sheet: str,
+        date_format: str | None = None,
+        mapping: Mapping[str, str | None] | None = None,
+        row_count: int | None = None,
+    ) -> None:
+        """记导入会话当前的工作表; 提交时另记日期写法, 列对应与数据行数 (为空的不改). 只改未提交 (parsed) 的会话."""
         ...
 
 

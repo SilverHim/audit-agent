@@ -373,6 +373,8 @@ SourceType = Literal[
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
 # 证据文件处理状态: 已接收, 已抽取, 需人工处理
 DocumentStatus = Literal["received", "extracted", "needs_manual"]
+# 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件
+DocumentChannel = Literal["auditor_upload", "bank_direct", "xero"]
 
 
 # ── 2.2 证据与判断 ─────────────────────────────────────────
@@ -736,16 +738,19 @@ class Confirmation(Versioned):
 
 
 class DocumentRef(Model):
-    """已存档的证据文件 (合同, 回函等 PDF) 的登记信息."""
+    """已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息."""
 
     id: str  # DOC-{sha256 前 12 位}
     type: DocumentType  # 文件类型
     file_name: str  # 原文件名
     sha256: str  # 文件哈希, 用于去重与防篡改
-    page_count: int  # 页数
+    page_count: int  # 页数; 非 PDF 记 1
     reliability: Reliability  # 可靠性
     status: DocumentStatus  # 处理状态
     uploaded_at: datetime  # 存档时间
+    media_type: str = "application/pdf"  # 媒体类型, 如 text/csv
+    channel: DocumentChannel = "auditor_upload"  # 来源渠道
+    uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
 
 
 class ContractTerm(Model):

@@ -40,6 +40,10 @@ AccountCategory = Literal[
 ]
 
 
+# 科目标准分类的依据: Xero 科目类型, Xero 报告代码, 名称关键词 (services.account_mapping), 审计师修改
+CategoryBasis = Literal["xero_type", "reporting_code", "name", "auditor"]
+
+
 class Account(Model):
     """科目表的一行."""
 
@@ -47,6 +51,7 @@ class Account(Model):
     name: str  # 科目名称
     type: Literal["asset", "liability", "equity", "revenue", "expense"]  # 科目类别: 资产, 负债, 权益, 收入, 费用
     category: AccountCategory | None = None  # 标准分类, 载入时映射; None 为未映射
+    category_basis: CategoryBasis | None = None  # 分类依据; 未映射为空
 
 
 class TrialBalanceRow(Model):
@@ -63,9 +68,10 @@ class JournalEntry(Model):
     id: str  # 分录行 ID
     entry_no: str  # 凭证号, 同一笔分录的各行共用
     posting_date: date  # 入账日期
-    created_at: datetime  # 录入时间
-    created_by: str  # 录入人
+    created_at: datetime | None  # 录入时间; 导入的总账可能没有, 为空 (不编造)
+    created_by: str | None  # 录入人; 同上, 也可由审批日志补进
     approved_by: str | None  # 审批人, 未审批为空
+    approved_at: datetime | None = None  # 审批时间, 由审批日志补进
     account_code: str  # 科目代码
     debit_cents: int = 0  # 借方金额, 单位分
     credit_cents: int = 0  # 贷方金额, 单位分

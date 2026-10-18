@@ -61,7 +61,8 @@ def classify_by_name(name: str, account_type: str) -> AccountCategory | None:
 
 
 def with_category(account: Account) -> Account:
-    """科目没有分类时按名称补上; 已有分类的不改."""
+    """科目没有分类时按名称补上, 依据记 name (认不出的分类与依据都为空); 已有分类的不改."""
     if account.category is not None:
         return account
-    return account.model_copy(update={"category": classify_by_name(account.name, account.type)})
+    category = classify_by_name(account.name, account.type)
+    return account.model_copy(update={"category": category, "category_basis": "name" if category else None})

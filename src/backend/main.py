@@ -81,7 +81,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         registry=MockRegistrySource(dataset_dir),
         confirmations=MockConfirmationChannel(dataset_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"),
         users=PostgresUserStore(engine),
-        data=PostgresDataStore(engine),
+        data=PostgresDataStore(settings.EVIDENCE_ROOT, engine),
         review_llm=review_llm,
     )
 
@@ -116,6 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.
                 await app.state.concierge.shutdown()
+                await app.state.data_service.shutdown()
                 await app.state.runner.shutdown()
     finally:
         await engine.dispose()

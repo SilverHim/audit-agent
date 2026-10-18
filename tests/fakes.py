@@ -14,13 +14,21 @@ from typing import Any, ClassVar, Literal, TypeVar, cast
 import httpx
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
-from backend.contracts.data import DataCheck, DataReadiness, TableKind, TableStats, TableVersion
+from backend.contracts.data import (
+    DataCheck,
+    DataReadiness,
+    DataSource,
+    ImportSession,
+    TableKind,
+    TableStats,
+    TableVersion,
+)
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
@@ -40,6 +48,7 @@ from backend.contracts.models import (
     Contract,
     Decision,
     Direction,
+    DocumentChannel,
     DocumentRef,
     DocumentStatus,
     DocumentType,
@@ -831,11 +840,22 @@ class FakeEvidenceStore:
         self.page_counts: dict[str, int] = {}  # save 登记的页数, 文件名 -> 页数; 缺省 2
 
     async def save(
-        self, eid: str, file_name: str, data: bytes, *, type: DocumentType, reliability: Reliability
+        self,
+        eid: str,
+        file_name: str,
+        data: bytes,
+        *,
+        type: DocumentType,
+        reliability: Reliability,
+        media_type: str = "application/pdf",
+        channel: DocumentChannel = "auditor_upload",
+        uploaded_by: str | None = None,
+        status: DocumentStatus = "received",
     ) -> DocumentRef:
-        """登记为 DOC-{sha256 前 12 位}, received; 同一哈希已登记则返回已有记录 (接口文档第 4 节).
+        """登记为 DOC-{sha256 前 12 位}, 状态取 status (缺省 received); 同一哈希已登记则返回已有记录 (接口文档第 4 节).
 
-        页数取 page_counts, 缺省 2. saves 记下每次调用的文件名, save_args 记下文件名, 内容哈希, 类型与可靠性.
+        页数取 page_counts, 缺省 2 (非 PDF 记 1). saves 记下每次调用的文件名, save_args 记下文件名, 内容哈希,
+        类型与可靠性.
         """
         self.saves.append(file_name)
         sha256 = hashlib.sha256(data).hexdigest()
@@ -849,10 +869,13 @@ class FakeEvidenceStore:
             type=type,
             file_name=file_name,
             sha256=sha256,
-            page_count=self.page_counts.get(file_name, 2),
+            page_count=self.page_counts.get(file_name, 2) if media_type == "application/pdf" else 1,
             reliability=reliability,
-            status="received",
+            status=status,
             uploaded_at=NOW,
+            media_type=media_type,
+            channel=channel,
+            uploaded_by=uploaded_by,
         )
         refs.append(doc)
         return doc
@@ -1245,6 +1268,10 @@ class FakeDataStore:
         self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
         self.check_results: list[DataCheck] = []  # 最近一次体检的结果
         self.open_count = 0  # 待补交的请求数
+        # write_tables 的每次调用: (各表的行, 其余关键字参数); 写入同时更新行数, 版本与数据版本
+        self.written: list[tuple[dict[TableKind, list[BaseModel]], dict[str, Any]]] = []
+        self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
+        self.import_updates: list[tuple[str, dict[str, Any]]] = []  # update_import 的每次调用 (会话 ID, 改了的字段)
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
@@ -1268,6 +1295,85 @@ class FakeDataStore:
 
     async def open_requests(self, eid: str) -> int:
         return self.open_count
+
+    async def write_tables(
+        self,
+        eid: str,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        source: DataSource,
+        actor: str,
+        file_name: str | None = None,
+        document_id: str | None = None,
+        import_id: str | None = None,
+        request_id: str | None = None,
+    ) -> int:
+        """记下调用; 数据版本 +1, 各表行数换成写入的行数 (试算表分两期, 审批日志记版本行数), 追加版本,
+        导入会话置 committed. 不做科目分类历史与审批日志补进 (见 PostgresDataStore)."""
+        kwargs = {
+            "source": source,
+            "actor": actor,
+            "file_name": file_name,
+            "document_id": document_id,
+            "import_id": import_id,
+            "request_id": request_id,
+        }
+        self.written.append(({k: list(v) for k, v in tables.items()}, kwargs))
+        self.data_version += 1
+        for kind, rows in tables.items():
+            if kind is TableKind.trial_balance:
+                current = sum(getattr(r, "period", None) == "current" for r in rows)
+                self.table_stats[kind] = TableStats(records=len(rows), current=current, prior=len(rows) - current)
+            else:
+                self.table_stats[kind] = TableStats(records=len(rows))
+            self.table_versions.append(
+                TableVersion(
+                    id=import_id or f"{source.upper()}-{kind}-v{self.data_version}",
+                    kind=kind,
+                    source=source,
+                    file_name=file_name,
+                    document_id=document_id,
+                    records=len(rows),
+                    data_version=self.data_version,
+                    request_id=request_id,
+                    created_by=actor,
+                    created_at=NOW,
+                )
+            )
+        if import_id in self.imports:
+            session, raw = self.imports[import_id]
+            [(kind, rows)] = tables.items()
+            update = {"status": "committed", "kind": kind, "records": len(rows)}
+            self.imports[import_id] = (session.model_copy(update=update), raw)
+        return self.data_version
+
+    async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
+        self.imports[session.id] = (session, data)
+
+    async def import_session(self, eid: str, import_id: str) -> tuple[ImportSession, bytes] | None:
+        return self.imports.get(import_id)
+
+    async def update_import(
+        self,
+        eid: str,
+        import_id: str,
+        *,
+        sheet: str,
+        date_format: str | None = None,
+        mapping: Mapping[str, str | None] | None = None,
+        row_count: int | None = None,
+    ) -> None:
+        changes = {"sheet": sheet, "date_format": date_format, "mapping": mapping, "row_count": row_count}
+        self.import_updates.append((import_id, {k: v for k, v in changes.items() if v is not None}))
+        session, raw = self.imports[import_id]
+        if session.status != "parsed":  # 同真实实现: 只改未提交的会话
+            return
+        update: dict[str, Any] = {"sheet": sheet}
+        if date_format is not None:
+            update["date_format"] = date_format
+        if mapping is not None:
+            update["mapping"] = dict(mapping)
+        self.imports[import_id] = (session.model_copy(update=update), raw)
 
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:

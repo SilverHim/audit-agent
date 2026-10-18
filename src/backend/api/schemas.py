@@ -207,6 +207,12 @@ class DeferralView(Model):
     deferred_at: datetime
 
 
+class ImportSheet(Model):
+    """导入时换工作表."""
+
+    sheet: str  # 工作表名, 取解析结果的 sheets 之一
+
+
 class LlmSlotView(Model):
     """设置页的一套模型配置. 不含密钥原文; 没保存过时为回退后的生效值, updated_at 为空."""
 
