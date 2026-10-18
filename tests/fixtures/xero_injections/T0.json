@@ -1,0 +1,5 @@
+{
+  "scenario": "T0",
+  "title": "Empty patch: the copy must load exactly like the original (mechanism self-test)",
+  "ops": []
+}

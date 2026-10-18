@@ -999,7 +999,10 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 
 | 文件 | 内容 |
 |---|---|
-| `tests/test_xero_injections.py` | 夹具 `xero_case`, 原目录哈希守护, T0 至 T6 的离线断言; 需要快照的用例在没有本地快照时跳过, 只读 fixture 与补造目录的用例默认跑 (8.1 节) |
+| `tests/conftest.py` | 夹具 `xero_case` (绑定本用例的 tmp_path, 同一用例建多个副本时用 base 参数换子目录) 与会话级原目录哈希守护 `xero_originals_unchanged` |
+| `tests/xero_injection.py` | 补丁模型与执行, 联系人过滤, `shift_tb`, 分录与试算表的一致性核对, 副本 manifest 重写, 哈希工具 (R74) |
+| `tests/test_xero_case.py` | 机制自测: 补丁格式, 各 op 的正反例, 联系人过滤与扫描, 哈希守护; 空补丁 T0 的副本与原目录逐行相同 |
+| `tests/test_xero_injections.py` | T0 至 T6 的离线断言 (各场景的需求写); 需要快照的用例在没有本地快照时跳过, 只读 fixture 与补造目录的用例默认跑 (8.1 节) |
 | `tests/test_xero_injections_db.py` | `pytestmark = pytest.mark.slow`; 连库与真实大模型两组, 没有 TEST_DATABASE_URL 或本地快照时跳过 |
 | `tests/fixtures/xero_injections/T1.json` 等 | 场景补丁 |
 | `tests/fixtures/llm_injected/<场景>/<程序>/<对象>.json` | 离线 mock 的大模型输出 |
@@ -1176,6 +1179,11 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 **大模型 fixture**: Xero 的 fixture 正本放 `tests/fixtures/llm_xero/<程序>/<对象>.json` (各程序的需求写), 生成脚本原样复制到 `data/xero_demo/20261017-q1/llm/` 并列入 manifest; mock 模式按项目数据集选目录 (Xero 项目读补造目录的 llm/, 其余读 LLM_FIXTURES_ROOT). document 指针直接用 manifest 的文件 ID. Numbat 的 fixture (`tests/fixtures/llm`, `data/demo/llm`) 不动.
 
 **注入补丁** (`tests/fixtures/xero_injections/<场景>.json`): {scenario, title, ops}; op 六种: set (file, 定位, field, before, after), delete (file, 定位, before), add (file, key 或 append, after), add_file (file, content), tb_shift (code, delta_cents), render (what: registry_pdfs). file 以 "api/" 或 "xero_demo/" 开头; 定位三种: match (JSON 数组中按字段相等, 须恰好命中 1 个), key (JSON 对象的键), row (CSV 主键列); before 为 null 表示改前不存在. 执行前断言当前值等于 before.
+实现见 `tests/xero_injection.py` (R74, 补丁为 extra=forbid 的 Pydantic 模型): set 的 field 用点号写嵌套字段, 为空时指定位到的元素本身 (如对象某个键的整个值); delete 的 before 为被删的整个值; add 的 key 须原来没有, append 追加到 JSON 数组或 CSV 末尾 (CSV 行须按表头给全部列); add_file 的目标须原来没有; file 不能跳出副本目录; tb_shift 只改副本期末试算表. 夹具 `xero_case` 在 tests/conftest.py, 会话级哈希守护 `xero_originals_unchanged` 同在; 空补丁 T0 作机制自测.
+- row 匹配 CSV 的首列 (各补造 CSV 的首列都是 id). CSV 的 set 只许改表头内的列, field 为空 (整行替换) 时 after 须按表头给出全部列.
+- before 与 match 都连类型一起比 (比较规范化的 JSON, 0 与 false, 1 与 1.0 都算不同); before 不符时只报文件, 定位与字段, 不写当前值.
+- tb_shift 按余额方向改写该科目的 YTD Debit 与 YTD Credit (余额为 0 时两列都写空), 合计行 (SummaryRow) 的这两列随之重算; 本月的 Debit 与 Credit 两列不维护 (载入器与各程序只读 YTD 两列).
+- 一个目录只能建一个副本; 同一用例要成对断言 (基线 T0 与注入场景) 时, 夹具传不同的 base 子目录名.
 
 **载入端口与构造** (签名):
 - `XeroDatasetLoader(root, planning, engine=None, evidence_store=None, *, supplements: Path | None = None, allow_injected: bool = False)`; 补造与快照不匹配抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头, 只列文件名.
