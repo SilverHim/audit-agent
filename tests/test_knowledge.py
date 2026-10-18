@@ -777,6 +777,20 @@ def test_fragment_text_is_verbatim_from_pdf(fragment_id: str) -> None:
     assert boundary_problems(standard_text(stem), fragment) == []
 
 
+def test_aasb15_p35_is_the_whole_paragraph() -> None:
+    """AASB15-P35 逐字为第 35 段整段: 段号 35 紧接正文, (c) 项之后紧接 "36 An asset"; 删掉 (c) 项的副本不是整段."""
+    stem, fragment = next((s, f) for s, f in standard_fragments() if f["id"] == "AASB15-P35")
+    source = standard_text(stem)
+    assert boundary_problems(source, fragment) == []
+    [whole] = fragment_pieces(fragment)
+    assert whole.endswith("an enforceable right to payment for performance completed to date (see paragraph 37).")
+    assert source[source.index(whole) + len(whole) :].lstrip().startswith("36 An asset")
+    lines = fragment["text"].splitlines()  # 引语一行, (a) 至 (c) 各一行
+    assert len(lines) == 4 and [line[:4] for line in lines[1:]] == ["(a) ", "(b) ", "(c) "]
+    without_c = fragment["text"][: fragment["text"].index("(c)")].rstrip()
+    assert boundary_problems(source, {**fragment, "text": without_c}) == ["正文之后还有本段的内容 (不是整段)"]
+
+
 def missing_sources(directory: Path) -> str | None:
     """目录下没有在 SOURCES 登记原文的 YAML, 有时返回含文件名的说明."""
     missing = [p.name for p in sorted(directory.glob("*.yaml")) if p.stem not in SOURCES]

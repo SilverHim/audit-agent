@@ -10,6 +10,15 @@ fragments:
     text: |
       An entity shall recognise revenue when (or as) the entity satisfies a performance obligation by transferring a promised good or service (ie an asset) to a customer. An asset is transferred when (or as) the customer obtains control of that asset.
     procedures: [REV-03, REV-02]
+  - id: AASB15-P35
+    paragraph: "35"
+    topic: control_transfer_over_time
+    text: |
+      An entity transfers control of a good or service over time and, therefore, satisfies a performance obligation and recognises revenue over time, if one of the following criteria is met:
+      (a) the customer simultaneously receives and consumes the benefits provided by the entity’s performance as the entity performs (see paragraphs B3–B4);
+      (b) the entity’s performance creates or enhances an asset (for example, work in progress) that the customer controls as the asset is created or enhanced (see paragraph B5); or
+      (c) the entity’s performance does not create an asset with an alternative use to the entity (see paragraph 36) and the entity has an enforceable right to payment for performance completed to date (see paragraph 37).
+    procedures: [REV-03, REV-02]
   - id: AASB15-P38
     paragraph: "38"
     topic: control_transfer_point_in_time

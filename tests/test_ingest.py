@@ -131,6 +131,11 @@ async def test_llm_requests() -> None:
         prompt = req.messages[0].content
         assert f"The audited entity is {NUMBAT_PROFILE.legal_name};" in prompt
         assert f'<page number="2">\n{req.fixture_key}.pdf page 2\n</page>' in prompt
+        assert (
+            "| control_transfer | when title, risk or control of the goods or services passes to the customer "
+            "(for example on delivery, acceptance, or completion of the service) |"
+        ) in prompt
+        assert "control of the goods passes to the customer |" not in prompt
 
 
 async def test_only_contract_documents_extracted() -> None:
