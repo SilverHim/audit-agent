@@ -2340,11 +2340,13 @@ async def api_client(
     user_id: str = NUMBAT_AUDITOR.id,
     deps: AgentDeps | None = None,
     llm_settings: LlmSettingsService | None = None,
+    concierge: Any = None,
 ) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
     deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的. llm_settings: 设置页接口用的服务.
+    concierge: 对话接口用的审计助理 (ConciergeChat), 缺省不设.
     """
     app = create_app()
     app.state.deps = deps if deps is not None else runner.deps
@@ -2353,6 +2355,7 @@ async def api_client(
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
     app.state.data_service = DataService(runner.deps, runner)
     app.state.llm_settings = llm_settings
+    app.state.concierge = concierge
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:

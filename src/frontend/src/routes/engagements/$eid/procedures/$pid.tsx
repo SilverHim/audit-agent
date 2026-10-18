@@ -89,8 +89,10 @@ function ProcedurePage() {
                       <div key={judgment.id} className="flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-[14px]">
                         <span className="flex flex-wrap items-center gap-2">
                           <Code className="font-semibold">{judgment.subject_id}</Code>
-                          <span>{t.proposed[judgment.proposed_action]}</span>
-                          <Code className="text-muted-foreground">{judgment.confidence.toFixed(2)}</Code>
+                          <span>{judgment.proposed_action ? t.proposed[judgment.proposed_action] : '—'}</span>
+                          <Code className="text-muted-foreground">
+                            {judgment.confidence != null ? judgment.confidence.toFixed(2) : '—'}
+                          </Code>
                           <span className="flex-1" />
                           {task ? (
                             <Link

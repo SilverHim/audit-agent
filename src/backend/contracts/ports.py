@@ -44,6 +44,7 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    Judgment,
     LlmSettings,
     LlmSlot,
     Model,
@@ -70,6 +71,7 @@ from backend.contracts.records import (
     TrialBalanceRow,
 )
 from backend.contracts.services import RuleResult
+from backend.contracts.views import JudgmentView, TrailEntryView
 
 T = TypeVar("T", bound=Versioned)
 T_out = TypeVar("T_out", bound=BaseModel)
@@ -574,3 +576,13 @@ class AuditTrail(Protocol):
     async def list(
         self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
     ) -> list[TrailEntry]: ...
+
+
+class BlindFilter(Protocol):
+    """盲判过滤 (第 4 节): 判断与留痕对外输出前一律经它转成视图, 盲判时隐藏 AI 的结论 (规格书第 9.5 节, 未作独立判断前
+    不得显示 AI 结论). 返回判断或模型留痕的视图接口与对话工具都调用它 (第 10 节). 隐藏的字段置空并列入 hidden_fields,
+    不往 Judgment 里填占位值. 本版为空实现 (services/blind.py), 判定与遮盖规则由降级段实现."""
+
+    async def judgment(self, eid: str, j: Judgment) -> JudgmentView: ...
+
+    async def trail(self, eid: str, entry: TrailEntry) -> TrailEntryView: ...

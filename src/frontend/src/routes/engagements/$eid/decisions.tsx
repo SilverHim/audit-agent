@@ -151,7 +151,7 @@ function Decisions() {
                           judgment?.proposed_action === 'misstatement' && 'font-semibold text-risk',
                         )}
                       >
-                        {judgment ? t.proposed[judgment.proposed_action] : '—'}
+                        {judgment?.proposed_action ? t.proposed[judgment.proposed_action] : '—'}
                       </span>
                       <span className="text-[13px]">{t.tiers[item.tier]}</span>
                       <span>{statusPill(state)}</span>

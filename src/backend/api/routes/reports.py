@@ -14,10 +14,10 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     Misstatement,
-    TrailEntry,
     TrailKind,
     UncorrectedSchedule,
 )
+from backend.contracts.views import TrailEntryView
 from backend.orchestration.query import GraphStateQuery
 
 router = APIRouter(prefix="/engagements/{eid}", tags=["reports"])
@@ -61,9 +61,11 @@ async def list_trail(
     kind: TrailKind | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[TrailEntry]:
+) -> list[TrailEntryView]:
+    """留痕经盲判过滤 (BlindFilter) 输出."""
     async with catch_api():
-        return await deps.trail.list(engagement.id, kind, limit, offset)
+        entries = await deps.trail.list(engagement.id, kind, limit, offset)
+        return [await deps.blind_filter.trail(engagement.id, entry) for entry in entries]
 
 
 @router.get("/trail/{trail_id}")
@@ -71,9 +73,10 @@ async def get_trail(
     trail_id: str,
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
-) -> TrailEntry:
+) -> TrailEntryView:
+    """留痕经盲判过滤 (BlindFilter) 输出."""
     async with catch_api():
         entry = await deps.trail.get(engagement.id, trail_id)
-    if entry is None:
-        raise api_error("NOT_FOUND", trail_id)
-    return entry
+        if entry is None:
+            raise api_error("NOT_FOUND", trail_id)
+        return await deps.blind_filter.trail(engagement.id, entry)

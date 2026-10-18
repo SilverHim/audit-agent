@@ -1595,116 +1595,16 @@ export type ImportSheet = {
 };
 
 /**
- * Judgment
- *
- * AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作.
- */
-export type Judgment = {
-    /**
-     * Id
-     */
-    id: string;
-    /**
-     * Version
-     */
-    version?: number;
-    /**
-     * Procedure Id
-     */
-    procedure_id: string;
-    /**
-     * Run Id
-     */
-    run_id: string;
-    /**
-     * Subject Id
-     */
-    subject_id: string;
-    /**
-     * Conclusion
-     */
-    conclusion: string;
-    /**
-     * Confidence
-     */
-    confidence: number;
-    /**
-     * Confidence Parts
-     */
-    confidence_parts: {
-        [key: string]: number;
-    };
-    /**
-     * Reasoning Chain
-     */
-    reasoning_chain: Array<ReasoningStep>;
-    /**
-     * Evidence
-     */
-    evidence: Array<EvidencePointer>;
-    /**
-     * Counter Argument
-     */
-    counter_argument: string;
-    proposed_action: ProposedAction;
-    misstatement_draft?: MisstatementDraft | null;
-    /**
-     * Exception Ids
-     */
-    exception_ids?: Array<string>;
-    autonomy_level: AutonomyLevel;
-    review_status?: ReviewStatus;
-    /**
-     * Superseded By
-     */
-    superseded_by?: string | null;
-    /**
-     * Performed By
-     */
-    performed_by: string;
-    /**
-     * Created At
-     */
-    created_at: string;
-    /**
-     * Trail Ref
-     */
-    trail_ref?: string | null;
-    critic_verdict?: CriticVerdict;
-    critic_reason_type?: CriticReasonType | null;
-    /**
-     * Critic Reason
-     */
-    critic_reason?: string | null;
-    /**
-     * Critic Conclusion
-     */
-    critic_conclusion?: string | null;
-    /**
-     * Critic Reasoning Chain
-     */
-    critic_reasoning_chain?: Array<ReasoningStep>;
-    /**
-     * Critic Model
-     */
-    critic_model?: string | null;
-    /**
-     * Critic Trail Ref
-     */
-    critic_trail_ref?: string | null;
-};
-
-/**
  * JudgmentDetail
  *
  * 一条判断的当前版本, 历史版本与相关复核决定.
  */
 export type JudgmentDetail = {
-    judgment: Judgment;
+    judgment: JudgmentView;
     /**
      * Versions
      */
-    versions: Array<Judgment>;
+    versions: Array<JudgmentView>;
     /**
      * Review Records
      */
@@ -1725,6 +1625,113 @@ export type JudgmentRef = {
      * Version
      */
     version: number;
+};
+
+/**
+ * JudgmentView
+ *
+ * 判断的输出视图: 字段同 Judgment, 盲判时可隐藏的字段可空, hidden_fields 列出被隐藏的字段 (未隐藏时为空).
+ *
+ * 返回判断的接口与对话工具都经 BlindFilter.judgment 输出它, 不直接输出 Judgment (第 10 节). 不往 Judgment 里填占位值.
+ * 可隐藏的: 结论, 置信度及其分项, 推理链, 反方论证, 建议动作, 错报草稿, 独立复核 (critic_) 的各字段.
+ */
+export type JudgmentView = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    /**
+     * Conclusion
+     */
+    conclusion: string | null;
+    /**
+     * Confidence
+     */
+    confidence: number | null;
+    /**
+     * Confidence Parts
+     */
+    confidence_parts: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Reasoning Chain
+     */
+    reasoning_chain: Array<ReasoningStep> | null;
+    /**
+     * Evidence
+     */
+    evidence: Array<EvidencePointer>;
+    /**
+     * Counter Argument
+     */
+    counter_argument: string | null;
+    proposed_action: ProposedAction | null;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Exception Ids
+     */
+    exception_ids?: Array<string>;
+    autonomy_level: AutonomyLevel;
+    review_status: ReviewStatus;
+    /**
+     * Superseded By
+     */
+    superseded_by?: string | null;
+    /**
+     * Performed By
+     */
+    performed_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Trail Ref
+     */
+    trail_ref?: string | null;
+    critic_verdict: CriticVerdict | null;
+    critic_reason_type?: CriticReasonType | null;
+    /**
+     * Critic Reason
+     */
+    critic_reason?: string | null;
+    /**
+     * Critic Conclusion
+     */
+    critic_conclusion?: string | null;
+    /**
+     * Critic Reasoning Chain
+     */
+    critic_reasoning_chain: Array<ReasoningStep> | null;
+    /**
+     * Critic Model
+     */
+    critic_model?: string | null;
+    /**
+     * Critic Trail Ref
+     */
+    critic_trail_ref?: string | null;
+    /**
+     * Hidden Fields
+     */
+    hidden_fields?: Array<string>;
 };
 
 /**
@@ -2129,7 +2136,7 @@ export type ProcedureDetail = {
     /**
      * Judgments
      */
-    judgments: Array<Judgment>;
+    judgments: Array<JudgmentView>;
 };
 
 /**
@@ -2517,7 +2524,7 @@ export type ReviewTaskView = {
     /**
      * Target
      */
-    target: Judgment | AuditException | ProcedureRun;
+    target: JudgmentView | AuditException | ProcedureRun;
     /**
      * Allowed Decisions
      */
@@ -2810,11 +2817,12 @@ export type Token = {
 };
 
 /**
- * TrailEntry
+ * TrailEntryView
  *
- * 审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改.
+ * 留痕的输出视图: 字段同 TrailEntry, payload 可空 (盲判时隐藏模型调用的原始输入输出), hidden_fields 列出被隐藏的
+ * 字段. 返回留痕的接口与对话工具都经 BlindFilter.trail 输出它 (第 10 节).
  */
-export type TrailEntry = {
+export type TrailEntryView = {
     /**
      * Id
      */
@@ -2863,13 +2871,17 @@ export type TrailEntry = {
     /**
      * Payload
      */
-    payload?: {
+    payload: {
         [key: string]: unknown;
-    };
+    } | null;
     /**
      * Created At
      */
     created_at?: string | null;
+    /**
+     * Hidden Fields
+     */
+    hidden_fields?: Array<string>;
 };
 
 /**
@@ -4402,7 +4414,7 @@ export type ReportsListTrailResponses = {
      *
      * Successful Response
      */
-    200: Array<TrailEntry>;
+    200: Array<TrailEntryView>;
 };
 
 export type ReportsListTrailResponse = ReportsListTrailResponses[keyof ReportsListTrailResponses];
@@ -4436,7 +4448,7 @@ export type ReportsGetTrailResponses = {
     /**
      * Successful Response
      */
-    200: TrailEntry;
+    200: TrailEntryView;
 };
 
 export type ReportsGetTrailResponse = ReportsGetTrailResponses[keyof ReportsGetTrailResponses];

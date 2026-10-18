@@ -178,6 +178,7 @@ export const gatesSubmitGateDecision = <ThrowOnError extends boolean = false>(op
  *
  * status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
  * amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
+ * 判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
  */
 export const reviewsListReviewTasks = <ThrowOnError extends boolean = false>(options: Options<ReviewsListReviewTasksData, ThrowOnError>): RequestResult<ReviewsListReviewTasksResponses, ReviewsListReviewTasksErrors, ThrowOnError> => (options.client ?? client).get<ReviewsListReviewTasksResponses, ReviewsListReviewTasksErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -210,7 +211,7 @@ export const reviewsGetProcedure = <ThrowOnError extends boolean = false>(option
 /**
  * Get Judgment
  *
- * version 省略时取最新版. review_records 是指向这条判断的复核决定.
+ * version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出.
  */
 export const reviewsGetJudgment = <ThrowOnError extends boolean = false>(options: Options<ReviewsGetJudgmentData, ThrowOnError>): RequestResult<ReviewsGetJudgmentResponses, ReviewsGetJudgmentErrors, ThrowOnError> => (options.client ?? client).get<ReviewsGetJudgmentResponses, ReviewsGetJudgmentErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -578,6 +579,8 @@ export const reportsGetReports = <ThrowOnError extends boolean = false>(options:
 
 /**
  * List Trail
+ *
+ * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsListTrail = <ThrowOnError extends boolean = false>(options: Options<ReportsListTrailData, ThrowOnError>): RequestResult<ReportsListTrailResponses, ReportsListTrailErrors, ThrowOnError> => (options.client ?? client).get<ReportsListTrailResponses, ReportsListTrailErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -587,6 +590,8 @@ export const reportsListTrail = <ThrowOnError extends boolean = false>(options: 
 
 /**
  * Get Trail
+ *
+ * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsGetTrail = <ThrowOnError extends boolean = false>(options: Options<ReportsGetTrailData, ThrowOnError>): RequestResult<ReportsGetTrailResponses, ReportsGetTrailErrors, ThrowOnError> => (options.client ?? client).get<ReportsGetTrailResponses, ReportsGetTrailErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

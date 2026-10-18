@@ -22,6 +22,7 @@ from backend.contracts.models import (
     TaskKind,
 )
 from backend.contracts.services import JudgmentOutcome
+from backend.contracts.views import JudgmentView
 from backend.services.judgment_engine import critic_chain_ok
 from backend.services.procedure_library import ProcedureLibrary
 
@@ -60,10 +61,16 @@ CHECK_EVIDENCE_BELOW = 0.70  # 置信度低于它: 查验证据
 BATCH_ABOVE = 0.90  # 置信度高于它才可能批量确认; 不超过它 (且不低于上一档): 阅读推理链
 
 
-def subject_row(judgment: Judgment) -> EvidencePointer | None:
+# 复核队列的派生字段 (金额, 档位, 仲裁选项) 按输出视图算: 接口给的是盲判过滤后的 JudgmentView, 被隐藏的字段不得
+# 经派生字段漏出; DecisionSubmit 校验时给的是存储的 Judgment
+Shown = Judgment | JudgmentView
+
+
+def subject_row(judgment: Shown) -> EvidencePointer | None:
     """判断对象本身是交易行时, 指向该行的证据指针: source_id 等于 subject_id, 行类型在 TRANSACTION_SOURCES 中.
-    先找结论引用的证据, 再找推理链里的. 没有返回 None (如判断对象是合同或银行账户)."""
-    pointers = [*judgment.evidence, *(p for step in judgment.reasoning_chain for p in step.evidence)]
+    先找结论引用的证据, 再找推理链里的 (推理链被隐藏时不找). 没有返回 None (如判断对象是合同或银行账户)."""
+    chain = judgment.reasoning_chain or []
+    pointers = [*judgment.evidence, *(p for step in chain for p in step.evidence)]
     return next(
         (p for p in pointers if p.source_id == judgment.subject_id and p.source_type in TRANSACTION_SOURCES),
         None,
@@ -79,19 +86,19 @@ def row_amount(source_type: str, row: Mapping[str, Any]) -> int | None:
 
 
 def task_amount(
-    target: Judgment | AuditException | ProcedureRun,
+    target: Shown | AuditException | ProcedureRun,
     exceptions: Mapping[str, AuditException],
     subject_amount: int | None = None,
 ) -> int | None:
     """复核任务涉及的金额, 单位分, 保留正负号; 按顺序取到即止:
-    1. 判断有错报草稿, 取草稿金额; 2. 判断解释的例外中绝对值最大的金额; 3. 目标本身是例外, 取其金额;
+    1. 判断有错报草稿 (未被隐藏), 取草稿金额; 2. 判断解释的例外中绝对值最大的金额; 3. 目标本身是例外, 取其金额;
     4. 判断对象本身是交易行, 取该行金额 (subject_amount, 由调用方按 subject_row 读出); 5. 都没有为 None.
 
     exceptions: 例外 ID -> 当前版本, 须含 target.exception_ids 中的 (缺的跳过). 纯函数.
     """
     if isinstance(target, AuditException):
         return target.amount_cents
-    if not isinstance(target, Judgment):
+    if not isinstance(target, Judgment | JudgmentView):
         return None
     if target.misstatement_draft is not None:
         return target.misstatement_draft.amount_cents
@@ -107,7 +114,7 @@ def task_amount(
 
 def review_tier(
     task: ReviewTask,
-    target: Judgment | AuditException | ProcedureRun,
+    target: Shown | AuditException | ProcedureRun,
     amount: int | None,
     performance_cents: int | None,
     trivial_cents: int | None,
@@ -117,19 +124,19 @@ def review_tier(
     0. 争议任务, 或判断的独立复核为不一致: 完整复核 (9.1 "A7 不一致" 一行).
     1. 目标不是判断 (例外或执行记录): 查验证据.
     2. 金额超过执行重要性: 完整复核 (执行重要性未定时跳过).
-    3. 置信度低于 0.70: 查验证据; 不超过 0.90: 阅读推理链.
+    3. 置信度被隐藏或低于 0.70: 查验证据 (同前端 lib/review.ts); 不超过 0.90: 阅读推理链.
     4. 置信度高于 0.90: L1 或任务不是 normal 的阅读推理链; 金额为空或不超过明显微小临界值的可批量确认;
        其余阅读推理链. "金额较小" 取明显微小临界值是保守口径 (规格书只写了 "低"), 要调改这一处.
     """
     if task.kind is TaskKind.dispute or (
-        isinstance(target, Judgment) and target.critic_verdict is CriticVerdict.inconsistent
+        isinstance(target, Judgment | JudgmentView) and target.critic_verdict is CriticVerdict.inconsistent
     ):
         return ReviewTier.full_review
-    if not isinstance(target, Judgment):
+    if not isinstance(target, Judgment | JudgmentView):
         return ReviewTier.check_evidence
     if performance_cents is not None and amount is not None and abs(amount) > performance_cents:
         return ReviewTier.full_review
-    if target.confidence < CHECK_EVIDENCE_BELOW:
+    if target.confidence is None or target.confidence < CHECK_EVIDENCE_BELOW:
         return ReviewTier.check_evidence
     if target.confidence <= BATCH_ABOVE:
         return ReviewTier.read_reasoning
@@ -184,11 +191,12 @@ class ReviewQueue:
         return None
 
     @staticmethod
-    def resolutions(task: ReviewTask, target: Judgment | AuditException | ProcedureRun) -> list[DisputeResolution]:
-        """争议任务可选的仲裁结果; A7 的推理链没通过 8.6 校验时不提供 a7_upheld. 不是争议任务为空."""
-        if task.kind is not TaskKind.dispute or not isinstance(target, Judgment):
+    def resolutions(task: ReviewTask, target: Shown | AuditException | ProcedureRun) -> list[DisputeResolution]:
+        """争议任务可选的仲裁结果; A7 的推理链没通过 8.6 校验 (或被隐藏) 时不提供 a7_upheld. 不是争议任务为空."""
+        if task.kind is not TaskKind.dispute or not isinstance(target, Judgment | JudgmentView):
             return []
-        a7 = [DisputeResolution.a7_upheld] if critic_chain_ok(target.critic_reasoning_chain) else []
+        chain = target.critic_reasoning_chain
+        a7 = [DisputeResolution.a7_upheld] if chain is not None and critic_chain_ok(chain) else []
         return [DisputeResolution.a6_upheld, *a7, DisputeResolution.neither]
 
     def make_task(
