@@ -21,8 +21,8 @@ from backend.orchestration import nodes as graph_nodes
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.query import GraphStateQuery
-from backend.orchestration.runner import GraphRunner, features_mismatch, features_text, fixed_procedures
-from backend.services.features import BASELINE, FEATURES, check_features, parse_features
+from backend.orchestration.runner import GraphRunner, features_mismatch, fixed_procedures
+from backend.services.features import BASELINE, FEATURES, check_features, features_text, parse_features
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,

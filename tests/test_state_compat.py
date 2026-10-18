@@ -30,6 +30,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.state import REQUIRED_KEYS, STATE_DEFAULTS, EngagementState, fill_defaults, initial_state
+from backend.contracts.views import CompletionMaterial
 from backend.orchestration.checkpoint import TOP_LEVEL_ENUMS, allowed_types, restore_enums, top_level_enums
 from backend.orchestration.graph import (
     build_graph,
@@ -39,7 +40,7 @@ from backend.orchestration.graph import (
     route_with_defaults,
 )
 from backend.orchestration.nodes import FieldworkInput
-from backend.orchestration.query import CompletionMaterial, GraphStateQuery
+from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.recovery import catch_up_review
 from backend.orchestration.runner import GraphRunner, resume_required
 from backend.persistence.models import OUTPUT_KINDS

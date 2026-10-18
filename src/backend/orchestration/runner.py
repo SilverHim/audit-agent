@@ -1,7 +1,7 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,10 +15,10 @@ from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import AgentId, Engagement, GateDecision, GateId, Phase, Procedure, ReviewRecord
 from backend.contracts.state import EngagementState, fill_defaults, initial_state
 from backend.core.config import get_settings
-from backend.orchestration.graph import GATE_NODES
+from backend.orchestration import gates
 from backend.orchestration.nodes import AWAITING_DATA, DATA_READY
 from backend.orchestration.trail import data_ready_entry, record_transitions
-from backend.services.features import BASELINE
+from backend.services.features import LEGACY_FEATURES, features_text
 from backend.services.procedure_library import ProcedureLibrary
 
 
@@ -55,9 +55,10 @@ def review_waits(snapshot: StateSnapshot) -> list[Any]:
 
 
 def waiting_for_human(snapshot: StateSnapshot) -> bool:
-    """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点)."""
-    gates = set(GATE_NODES.values())
-    return any(node in gates for node in snapshot.next) or any(task.interrupts for task in snapshot.tasks)
+    """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点).
+    闸门节点按项目冻结的功能集取 (登记表, gates.node_gates)."""
+    nodes = gates.node_gates(gates.project_features(fill_defaults(snapshot.values)))
+    return any(node in nodes for node in snapshot.next) or any(task.interrupts for task in snapshot.tasks)
 
 
 async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> str | None:
@@ -83,14 +84,6 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     if version_in_state is not None and engagement.client_profile_version > version_in_state:
         return f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
     return None
-
-
-def features_text(features: Iterable[str]) -> str:
-    """功能集冻结进 version_snapshot["features"] 的写法: 功能名排序后以逗号连接 (基线为 "critic", 全关为空串)."""
-    return ",".join(sorted(features))
-
-
-LEGACY_FEATURES = features_text(BASELINE)  # 冻结功能集之前建的项目 (version_snapshot 没有 features 键) 按基线处理
 
 
 def features_mismatch(deps: AgentDeps, engagement: Engagement) -> str | None:
@@ -271,7 +264,7 @@ class GraphRunner:
           例外: 停在 p1_await_data 等数据, 而 Store 中已记审计师确认数据已齐 (确认写入后, 恢复前中断), 先补写
           确认的 data 留痕 (同键已有的跳过; 写不成则报错, 留在等待), 再以 Command(resume=DATA_READY) 继续.
         - 升级前的旧检查点 (需求 R10 之前 ACC-01 通过后直接到 p1_ingest, 由它载入数据集): 待执行 p1_ingest 而数据
-          未确认就绪时, 以 gate_acc01 身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
+          未确认就绪时, 以 ACC-01 闸门节点的身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
         出错时释放锁后抛出.
         """
@@ -327,8 +320,9 @@ class GraphRunner:
         )
 
     async def _reroute_to_data_wait(self, eid: str) -> StateSnapshot:
-        """以 gate_acc01 身份重写检查点 (不改状态): ACC-01 的路由按已有的通过决定重新选出口, 新拓扑为 p1_await_data."""
-        await self.app.aupdate_state(self.config(eid), {}, as_node=GATE_NODES[GateId.ACC_01])
+        """以 ACC-01 闸门节点 (登记表) 的身份重写检查点 (不改状态): 闸门路由按已有的通过决定重新选出口, 新拓扑为
+        p1_await_data."""
+        await self.app.aupdate_state(self.config(eid), {}, as_node=gates.spec_of(GateId.ACC_01).node)
         return await self.app.aget_state(self.config(eid))
 
     async def _catch_up(self, engagement: Engagement) -> tuple[StateSnapshot, Command[Any] | None]:

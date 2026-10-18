@@ -9,11 +9,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
-    AuditException,
     ClientProfile,
     Engagement,
-    GateId,
-    GateVerdict,
     Phase,
     Procedure,
     ProcedureRun,
@@ -22,32 +19,15 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, fill_defaults
 from backend.contracts.views import (
-    AcceptanceMaterial,
-    CompletionMaterial,
     EngagementOverview,
     GateView,
-    PlanningMaterial,
     ProcedureSummary,
-    ReportMaterial,
 )
-from backend.orchestration.graph import GATE_NODES
-from backend.orchestration.nodes import uncovered_objectives
+from backend.orchestration.gates import current_gate, current_spec
 from backend.orchestration.runner import GraphRunner, awaiting_data, resume_required, review_waits
 from backend.services.data_quality import missing_tables
 
-GATE_OF_NODE: dict[str, GateId] = {node: gate for gate, node in GATE_NODES.items()}  # 闸门节点名 -> 闸门
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
-
-
-def current_gate(next_nodes: tuple[str, ...]) -> GateId | None:
-    """图停在哪道闸门前: next_nodes 中有闸门节点则返回该闸门, 否则返回 None.
-
-    例: ("gate_acc01",) → GateId.ACC_01; ("p0_intel",) → None; () (未启动或已结束) → None.
-    """
-    for node in next_nodes:
-        if node in GATE_OF_NODE:
-            return GATE_OF_NODE[node]
-    return None
 
 
 def stale(run: ProcedureRun | None, current_version: int) -> bool:
@@ -113,7 +93,7 @@ class GraphStateQuery:
             client_name=profile.legal_name,
             running=self.runner.is_running(eid),
             run_error=self.runner.run_error(eid) or await self._resume_hint(eid),
-            current_gate=current_gate(snapshot.next),
+            current_gate=current_gate(snapshot.next, values),
             # 节点内 interrupt() 暂停时, 对应的待执行任务带 interrupts; 闸门是静态中断, 不带. 等数据就绪另计
             awaiting_review=bool(review_waits(snapshot)),
             awaiting_data=waiting_data,
@@ -146,7 +126,7 @@ class GraphStateQuery:
         return f"RESUME_REQUIRED: 检查点未跟上 Store ({missing}), 须先 resume"
 
     async def gate(self, eid: str) -> GateView | None:
-        """当前闸门的呈报材料; 不在闸门 (执行中, 等复核或已结束) 返回 None.
+        """当前闸门的呈报材料 (登记表的 view); 不在闸门 (执行中, 等复核或已结束) 返回 None.
 
         PLN-01/03 的材料另列按当前风险等级没有程序覆盖的审计目标 (有则不能通过, 见 DecisionSubmit).
         RPT-01 的材料为当前报告 (修订轮次最大的一版) 与此前的退回决定 (含批注; 信息不足的决定不在其中).
@@ -155,50 +135,9 @@ class GraphStateQuery:
         停在闸门而材料缺失 (状态与流程不符) 时抛 LookupError.
         """
         snapshot = await self.app.aget_state(GraphRunner.config(eid))
-        gate = current_gate(snapshot.next)
-        if gate is None:
-            return None
         values = fill_defaults(snapshot.values)
-        if gate is GateId.ACC_01:
-            scorecard = values["acceptance_scorecard"]
-            if scorecard is None:
-                raise LookupError(f"{eid} 停在 ACC-01 闸门, 但没有承接评分卡")
-            _, profile = await self._engagement_and_profile(eid)
-            material = AcceptanceMaterial(
-                scorecard=scorecard,
-                exceptions=referenced(values["exceptions"], scorecard.exception_ids),
-                client_profile=profile,
-            )
-            return GateView(gate=gate, target_id=scorecard.id, target_version=scorecard.version, material=material)
-        if gate is GateId.PLN_01_03:
-            analytics, candidates = values["analytics"], values["materiality_candidates"]
-            if analytics is None or candidates is None:
-                raise LookupError(f"{eid} 停在 PLN-01/03 闸门, 但缺初步分析结果或重要性候选")
-            planning = PlanningMaterial(
-                analytics=analytics,
-                analytics_exceptions=referenced(values["exceptions"], analytics.exception_ids),
-                candidates=candidates,
-                objectives=values["audit_objectives"],
-                risks=values["risk_register"],
-                uncovered_objective_ids=uncovered_objectives(self.deps.library, values["audit_objectives"]),
-            )
-            return GateView(gate=gate, target_id=candidates.id, target_version=candidates.version, material=planning)
-        if gate is GateId.FIN_01:
-            schedule = values["uncorrected_schedule"]
-            if schedule is None:
-                raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
-            completion = CompletionMaterial(schedule=schedule, misstatements=values["misstatements"])
-            return GateView(gate=gate, target_id=schedule.id, target_version=schedule.version, material=completion)
-        reports = values["report_versions"]
-        if not reports:
-            raise LookupError(f"{eid} 停在 RPT-01 闸门, 但没有报告")
-        report = max(reports, key=lambda r: r.revision)  # 当前报告: 修订轮次最大的一版
-        rejected = [d for d in values["gate_decisions"] if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject]
-        reporting = ReportMaterial(report=report, previous_decisions=rejected)
-        return GateView(gate=gate, target_id=report.id, target_version=report.version, material=reporting)
-
-
-def referenced(exceptions: list[AuditException], ids: list[str]) -> list[AuditException]:
-    """状态中的例外含历次执行的 (upsert_by_id 只增不删), 只取材料引用的那些, 按引用顺序."""
-    by_id = {x.id: x for x in exceptions}
-    return [by_id[i] for i in ids if i in by_id]
+        spec = current_spec(snapshot.next, values)
+        if spec is None:
+            return None
+        material, view = await spec.view(self.deps, eid, values)
+        return GateView(gate=spec.gate, target_id=material.id, target_version=material.version, material=view)

@@ -54,8 +54,9 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import XeroConnections
 from backend.contracts.records import Account, AccountCategory
+from backend.contracts.state import fill_defaults
+from backend.orchestration.gates import current_gate
 from backend.orchestration.nodes import DATA_READY
-from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner, awaiting_data, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.account_mapping import CATEGORY_GROUPS, with_category
@@ -959,7 +960,8 @@ class DataService:
                 raise LookupError(f"函证 {confirmation_id} 不存在")
             snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
             broken = any(task.error for task in snapshot.tasks)
-            if broken or (current_gate(snapshot.next) is None and not review_waits(snapshot)):
+            at_gate = current_gate(snapshot.next, fill_defaults(snapshot.values)) is not None
+            if broken or not (at_gate or review_waits(snapshot)):
                 raise DataRejected("NOT_EDITABLE", "只能在图停在闸门或等复核时修改回函抽取结果")
             try:
                 updated = apply_confirmation_edit(confirmation, edit.field, edit.value)

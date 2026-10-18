@@ -34,6 +34,14 @@ FEATURES: dict[str, FeatureSpec] = {
 BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回归测试显式用它 (tests/fakes.NUMBAT_FEATURES)
 
 
+def features_text(features: Iterable[str]) -> str:
+    """功能集冻结进 version_snapshot["features"] 的写法: 功能名排序后以逗号连接 (基线为 "critic", 全关为空串)."""
+    return ",".join(sorted(features))
+
+
+LEGACY_FEATURES = features_text(BASELINE)  # 冻结功能集之前建的项目 (version_snapshot 没有 features 键) 按基线处理
+
+
 def parse_features(text: str) -> frozenset[str]:
     """逗号分隔的功能名 (如 "critic,journals"), 各项去掉首尾空白, 空项忽略; 空串为空集 (全部关闭, 含 critic).
     只拆分, 不校验 (见 check_features)."""

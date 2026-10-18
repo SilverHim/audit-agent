@@ -7,99 +7,60 @@ Store 就领先检查点. 补做不重算效果, 只把 Store 中已写成的对
 (项目可能已锁定), 只补写缺失的留痕.
 """
 
-from typing import Any, TypeVar
+from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
-    AcceptanceScorecard,
     AgentId,
-    AuditObjective,
-    AuditReportVersion,
     Decision,
     Engagement,
     GateDecision,
     GateId,
     GateVerdict,
-    MaterialityCandidates,
     Procedure,
     ProcedureRun,
     ReviewRecord,
     ReviewTask,
-    RiskItem,
     TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
-    UncorrectedSchedule,
-    Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.decisions import GATE_MATERIAL, GATE_PROCEDURE, materiality_amounts, review_trail
-from backend.orchestration.graph import GATE_NODES
+from backend.orchestration.decisions import review_trail
+from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
 from backend.orchestration.nodes import NODE_PROCEDURES
-from backend.orchestration.query import current_gate
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
-
-MATERIAL_MODELS: dict[GateId, type[Versioned]] = {  # 闸门呈报材料的类型, 按决定绑定的 (id, version) 从 Store 取
-    GateId.ACC_01: AcceptanceScorecard,
-    GateId.PLN_01_03: MaterialityCandidates,
-    GateId.FIN_01: UncorrectedSchedule,
-    GateId.RPT_01: AuditReportVersion,
-}
-
-
-V = TypeVar("V", bound=Versioned)
-
-
-def latest_in_order(current: list[V], latest: list[V]) -> list[V]:
-    """按 current 的顺序换成 Store 最新版; Store 有而 current 没有的接在后面."""
-    by_id = {o.id: o for o in latest}
-    known = {o.id for o in current}
-    return [by_id.get(o.id, o) for o in current] + [o for o in latest if o.id not in known]
 
 
 async def gate_values(
     deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot, decision: GateDecision
 ) -> StatePatch:
-    """一个闸门决定要写进检查点的状态片段, 读 Store 与 engagements 表重建 (同 DecisionSubmit 越过闸门时写的字段)."""
+    """一个闸门决定要写进检查点的状态片段, 读 Store 与 engagements 表重建 (同 DecisionSubmit 越过闸门时写的字段):
+    决定, 程序包与阶段的最新版; 通过决定另由登记表的 rebuild 补专属状态 (重要性三项, 意见类型, 签字版);
+    再写决定绑定的材料."""
     eid = engagement.id
     store = deps.output_store
     values = fill_defaults(snapshot.values)
+    spec = spec_of(decision.gate)
     patch: StatePatch = {"gate_decisions": [decision]}
     pack = latest_in_order(values["procedure_pack"], await store.latest(eid, Procedure))
     if pack != values["procedure_pack"]:
         patch["procedure_pack"] = pack
     if engagement.phase is not values["phase"]:
         patch["phase"] = engagement.phase
-    if decision.decision is GateVerdict.approve:
-        if decision.gate is GateId.PLN_01_03:
-            candidates = await store.get(eid, MaterialityCandidates, decision.target_id, decision.target_version)
-            assert candidates is not None and decision.materiality is not None  # 提交时已校验
-            overall, performance, trivial = materiality_amounts(candidates, decision.materiality)
-            patch["materiality_cents"] = overall
-            patch["performance_materiality_cents"] = performance
-            patch["clearly_trivial_cents"] = trivial
-            patch["risk_register"] = latest_in_order(values["risk_register"], await store.latest(eid, RiskItem))
-            patch["audit_objectives"] = latest_in_order(
-                values["audit_objectives"], await store.latest(eid, AuditObjective)
-            )
-        elif decision.gate is GateId.FIN_01:
-            patch["opinion_route"] = decision.disposition
-        elif decision.gate is GateId.RPT_01:
-            signed = await store.get(eid, AuditReportVersion, decision.target_id)  # 签字版, 比决定绑定的高一版
-            assert signed is not None
-            patch["report_versions"] = [signed]
+    if decision.decision is GateVerdict.approve and spec.rebuild is not None:
+        patch.update(await spec.rebuild(deps, eid, decision, values))
     # 决定绑定的材料: 路由按它判断决定是否过期 (RPT-01 签字时已写签字版, 路由另行放行)
-    field = GATE_MATERIAL[decision.gate]
-    if field not in patch:
-        material = await store.get(eid, MATERIAL_MODELS[decision.gate], decision.target_id, decision.target_version)
+    if spec.material_field not in patch:
+        material = await store.get(eid, spec.material_model, decision.target_id, decision.target_version)
         if material is None:
             raise LookupError(f"{decision.id} 绑定的 {decision.target_id} v{decision.target_version} 不在 Store 中")
-        patch[field] = [material] if field == "report_versions" else material
+        patch[spec.material_field] = [material] if spec.is_list else material
     return patch
 
 
@@ -134,13 +95,12 @@ async def catch_up_gates(
     known = {d.id for d in fill_defaults(snapshot.values)["gate_decisions"]}
     missing = [d for d in await deps.output_store.latest(eid, GateDecision) if d.id not in known]
     for decision in sorted(missing, key=lambda d: d.decided_at):
-        gate = current_gate(snapshot.next)
-        if gate is not decision.gate:
-            raise RuntimeError(
-                f"{decision.id} 是 {decision.gate} 的决定, 检查点却停在 {gate or snapshot.next}, 无法补做"
-            )
+        spec = current_spec(snapshot.next, fill_defaults(snapshot.values))
+        if spec is None or spec.gate is not decision.gate:
+            at = spec.gate if spec is not None else snapshot.next
+            raise RuntimeError(f"{decision.id} 是 {decision.gate} 的决定, 检查点却停在 {at}, 无法补做")
         values = await gate_values(deps, engagement, snapshot, decision)
-        procedure_id = GATE_PROCEDURE[decision.gate]
+        procedure_id = spec.procedure_id
         # 先补留痕再写检查点: 留痕写失败时决定仍不在检查点里, 下次恢复照样补做; 反过来决定已进检查点,
         # 再也发现不了缺的留痕
         await record_once(
@@ -156,7 +116,7 @@ async def catch_up_gates(
             ),
         )
         await backfill_transitions(deps, engagement, snapshot, procedure_id)
-        await app.aupdate_state(config, values, as_node=GATE_NODES[gate])
+        await app.aupdate_state(config, values, as_node=spec.node)
         snapshot = await app.aget_state(config)
     return snapshot
 
@@ -169,7 +129,7 @@ async def catch_up_profile(
     version = engagement.client_profile_version
     if version <= fill_defaults(snapshot.values)["client_profile_version"]:
         return snapshot
-    if current_gate(snapshot.next) is not GateId.ACC_01:
+    if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not GateId.ACC_01:
         raise RuntimeError(f"客户画像第 {version} 版未进检查点, 检查点却停在 {snapshot.next}, 无法补做")
     # 先补留痕再写检查点 (理由同 catch_up_gates). 画像不记更新人, 补写的留痕记 A1
     await record_once(
@@ -185,7 +145,7 @@ async def catch_up_profile(
         ),
     )
     config = GraphRunner.config(engagement.id)
-    await app.aupdate_state(config, {"client_profile_version": version}, as_node=GATE_NODES[GateId.ACC_01])
+    await app.aupdate_state(config, {"client_profile_version": version}, as_node=spec_of(GateId.ACC_01).node)
     return await app.aget_state(config)
 
 
@@ -239,7 +199,7 @@ async def catch_up_review(
         return None
     waiting = [t.name for t in snapshot.tasks if t.interrupts]
     node = waiting[0] if waiting else (snapshot.next[0] if snapshot.next else None)
-    if current_gate(snapshot.next) is not None or node is None:
+    if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not None or node is None:
         ids = ", ".join(sorted(r.id for r in missing))
         raise RuntimeError(f"复核决定 {ids} 未进检查点, 图却不在等复核 ({snapshot.next}), 无法补做")
     tasks = {t.id: t for t in await store.latest(eid, ReviewTask)}

@@ -19,7 +19,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.views import CompletionMaterial
-from backend.orchestration.decisions import fin01_effects
+from backend.orchestration.gates import fin01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import NOW, EngagementWrite, FakeTrail, make_procedure, wait_idle

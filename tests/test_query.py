@@ -15,8 +15,10 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
 )
+from backend.contracts.state import initial_state
 from backend.contracts.views import PlanningMaterial
-from backend.orchestration.decisions import GraphDecisionSubmit, acc01_effects
+from backend.orchestration.decisions import GraphDecisionSubmit
+from backend.orchestration.gates import acc01_effects
 from backend.orchestration.query import GraphStateQuery, current_gate
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
@@ -51,10 +53,12 @@ async def started(
 
 
 def test_current_gate() -> None:
-    assert current_gate(("gate_acc01",)) is GateId.ACC_01
-    assert current_gate(("gate_p1_risk",)) is GateId.PLN_01_03
-    assert current_gate(("p0_intel",)) is None
-    assert current_gate(()) is None
+    """current_gate 按 (next, 状态) 取: 节点只挂一道闸门时即该闸门 (R86 起状态用来在一个节点的多道闸门间选)."""
+    values = initial_state(ENGAGEMENT, [], 1)
+    assert current_gate(("gate_acc01",), values) is GateId.ACC_01
+    assert current_gate(("gate_p1_risk",), values) is GateId.PLN_01_03
+    assert current_gate(("p0_intel",), values) is None
+    assert current_gate((), values) is None
 
 
 async def test_gate_is_none_before_start() -> None:

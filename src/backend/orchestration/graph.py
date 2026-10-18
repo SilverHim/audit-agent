@@ -12,7 +12,7 @@ p1_await_data, await_events 与 P2 以外程序失败后的节点在节点内 in
 """
 
 import functools
-from collections.abc import Awaitable, Callable, Hashable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Protocol, TypeVar
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -21,33 +21,21 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
 from backend.contracts.models import (
-    GateDecision,
     GateId,
-    GateVerdict,
     Procedure,
     ProcedureStatus,
-    ReportStatus,
     TaskStatus,
-    Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
+from backend.orchestration import gates
 from backend.orchestration.nodes import FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
 from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 
-# 闸门 → 图里的节点名. 四个节点共用一个节点函数 nodes.gate, 只是名字不同
-GATE_NODES: dict[GateId, str] = {
-    GateId.ACC_01: "gate_acc01",
-    GateId.PLN_01_03: "gate_p1_risk",
-    GateId.FIN_01: "gate_fin",
-    GateId.RPT_01: "gate_rpt01",
-}
-GATES = list(GATE_NODES.values())  # 四个闸门节点名, 编译时设为静态中断点
-
-# 闸门路由函数的返回值, 即闸门的出口名: 通过, 驳回, 重跑 ACC-04, 重新呈报.
-# 信息不足一律重呈 (represent); rerun 只给 ACC-01 用: 客户画像更新后回 p0_intel 重跑 ACC-04
-GateRoute = Literal["approve", "reject", "rerun", "represent"]
+# 闸门的节点, 出口, 材料与路由都在登记表 (gates.GATES); 这里给基线功能集下的两个常用视图
+GATE_NODES: dict[GateId, str] = {spec.gate: spec.node for spec in gates.registered(BASELINE)}  # 闸门 → 节点名
+GATES = gates.gate_nodes(BASELINE)  # 基线功能集下的闸门节点名 (测试与工具用); 编译按功能集取 gates.gate_nodes
 
 UNFINISHED = (ProcedureStatus.planned, ProcedureStatus.executing)  # 还要派发执行的程序状态
 
@@ -105,80 +93,13 @@ def route_with_defaults(route: Callable[[EngagementState], T]) -> Callable[[Enga
     return wrapped
 
 
+def gate_route(gate: GateId) -> Callable[[EngagementState], gates.GateRoute]:
+    """某道闸门单独的路由函数 (gates.gate_route 按闸门编号取登记行)."""
+    return gates.gate_route(gates.spec_of(gate))
+
+
 class ScheduleStuck(RuntimeError):
     """P2 调度卡住: 程序状态与复核任务对不上 (如 awaiting_human 却没有待处理任务), 再走会空转或永远暂停."""
-
-
-def _gate_target(state: EngagementState, gate: GateId) -> tuple[str, int] | None:
-    """当前闸门材料的 (id, version); 决定须绑定它, 旧版本上的决定视为无效. 还没有材料时返回 None.
-
-    每道闸门呈报的材料不同: ACC-01 是承接评分卡, PLN-01/03 是重要性候选, FIN-01 是未更正错报汇总表,
-    RPT-01 是最新一版报告.
-    """
-    obj: Versioned | None
-    if gate is GateId.ACC_01:
-        obj = state["acceptance_scorecard"]
-    elif gate is GateId.PLN_01_03:
-        obj = state["materiality_candidates"]
-    elif gate is GateId.FIN_01:
-        obj = state["uncorrected_schedule"]
-    else:
-        reports = state["report_versions"]
-        # key=lambda r: r.revision 表示按 revision 比大小, 取修订轮次最大的一版
-        obj = max(reports, key=lambda r: r.revision) if reports else None
-    return (obj.id, obj.version) if obj is not None else None
-
-
-def gate_route(gate: GateId) -> Callable[[EngagementState], GateRoute]:
-    """生成某道闸门的路由函数: 闸门节点执行后 (或 aupdate_state 以闸门身份写入后) 按状态选出口.
-
-    LangGraph 的路由函数只接收 state 一个参数, 而四道闸门的判断只差 gate 不同,
-    所以外层按 gate 各生成一个, 内层 route 记住外层的 gate (闭包).
-    """
-
-    def route(state: EngagementState) -> GateRoute:
-        # 按顺序判断, 先命中先返回
-        # 1. ACC-01: 评分卡依据的客户画像比最新的旧, 不论最后一条决定是什么都先重跑
-        scorecard = state["acceptance_scorecard"]
-        if (
-            gate is GateId.ACC_01
-            and scorecard is not None
-            and scorecard.client_profile_version < state["client_profile_version"]
-        ):
-            return "rerun"
-        # 2. 本闸门还没有决定 (gate_decisions 里混有四道闸门的决定, 只看本闸门的)
-        decisions = [d for d in state["gate_decisions"] if d.gate is gate]
-        if not decisions:
-            return "represent"
-        # 3. 以最后一条决定为准; 它绑定的材料不是当前版本 (如评分卡已重跑出新版), 视为过期;
-        #    材料缺失 (状态与流程不符) 也不放行, 留在闸门重新呈报
-        d = decisions[-1]
-        target = _gate_target(state, gate)
-        if _signed_by(state, d):
-            return "approve"  # 签字使报告出了新版本, 决定绑定的是签字前那一版, 仍放行
-        if target is None or (d.target_id, d.target_version) != target:
-            return "represent"
-        # 4. 按决定种类出闸门
-        if d.decision is GateVerdict.approve:
-            return "approve"
-        if d.decision is GateVerdict.reject:
-            return "reject"
-        return "represent"  # 信息不足
-
-    return route
-
-
-def _signed_by(state: EngagementState, decision: GateDecision) -> bool:
-    """当前报告是这条 RPT-01 通过决定签的字: 报告已 signed, 正是决定绑定的那份报告的下一版."""
-    if decision.gate is not GateId.RPT_01 or decision.decision is not GateVerdict.approve:
-        return False
-    reports = state["report_versions"]
-    report = max(reports, key=lambda r: r.revision) if reports else None
-    return (
-        report is not None
-        and report.status is ReportStatus.signed
-        and (report.id, report.version) == (decision.target_id, decision.target_version + 1)
-    )
 
 
 def _stuck_detail(pack: list[Procedure], unfinished: list[Procedure], library: ProcedureLibrary) -> str:
@@ -278,8 +199,9 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g.add_node("report_draft", node_with_defaults(nodes.report_draft))
     g.add_node("archive", node_with_defaults(nodes.archive))
     g.add_node("declined", node_with_defaults(nodes.declined))
-    for node in GATES:
-        g.add_node(node, node_with_defaults(nodes.gate))  # 闸门节点什么都不做, 出口全由 gate_route 决定
+    gate_nodes = gates.node_gates(features)  # 闸门节点 → 挂在其上的闸门, 按功能集过滤
+    for node in gate_nodes:
+        g.add_node(node, node_with_defaults(nodes.gate))  # 闸门节点什么都不做, 出口全由节点的路由决定
 
     # ── 固定边: A 执行完一定去 B ──
     g.add_edge(START, "p0_intel")
@@ -301,22 +223,17 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g.add_edge("archive", END)
     g.add_edge("declined", END)
 
-    # ── 闸门出口: 路由函数返回的出口名 → 下一个节点 ──
-    exits: dict[GateId, dict[Hashable, str]] = {
-        GateId.ACC_01: {"approve": "p1_await_data", "reject": "declined", "rerun": "p0_intel"},
-        GateId.PLN_01_03: {"approve": "assemble_pack", "reject": "p1_analytics"},
-        GateId.FIN_01: {"approve": "report_draft", "reject": "completion"},
-        GateId.RPT_01: {"approve": "archive", "reject": "report_draft"},
-    }
-    for gate, node in GATE_NODES.items():
-        # 每道闸门再加一个 represent 出口, 指向闸门自己
-        g.add_conditional_edges(node, route_with_defaults(gate_route(gate)), {**exits[gate], "represent": node})
+    # ── 闸门出口: 每个闸门节点一条条件边, 出口键 → 下一个节点 (gates.path_map; represent 回节点自身) ──
+    for node, specs in gate_nodes.items():
+        g.add_conditional_edges(node, route_with_defaults(gates.node_route(specs)), gates.path_map(specs, features))
     return g
 
 
 def compile_graph(
     nodes: GraphNodes, checkpointer: BaseCheckpointSaver[str] | None = None
 ) -> CompiledStateGraph[EngagementState]:
-    """编译主图: checkpointer 每步存检查点 (测试用内存, 正式运行用 Postgres); 四道闸门前静态中断.
+    """编译主图: checkpointer 每步存检查点 (测试用内存, 正式运行用 Postgres); 闸门节点前静态中断.
     功能集取 nodes.deps.features."""
-    return build_graph(nodes, nodes.deps.features).compile(checkpointer=checkpointer, interrupt_before=GATES)
+    features = nodes.deps.features
+    interrupts = gates.gate_nodes(features)
+    return build_graph(nodes, features).compile(checkpointer=checkpointer, interrupt_before=interrupts)
