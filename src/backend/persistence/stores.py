@@ -20,7 +20,7 @@ from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from backend.adapters.xero_dataset import Snapshot, build_tables
+from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
@@ -561,6 +561,10 @@ class CsvDatasetLoader(TableLoader):
         """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
         return subdirectories(self.root, "client_profile.json")
 
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """CSV 数据集不自带期间 (Numbat 由审计师填)."""
+        return None
+
 
 class XeroDatasetLoader(TableLoader):
     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
@@ -670,6 +674,12 @@ class XeroDatasetLoader(TableLoader):
         """root 下能载入的快照 (有组织信息与期间 dataset.json), 名为 xero/{快照目录}; 拉取中的临时目录不算."""
         return [self.PREFIX + name for name in subdirectories(self.root, "organisation.json", "dataset.json")]
 
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """快照 dataset.json 的本期起止 (载入器按它取试算表, 项目期间须与之相同); 快照不存在或没有 dataset.json 时抛
+        FileNotFoundError, dataset.json 不是 JSON, 缺键, 不是对象或日期写错时抛 ValueError (消息不带路径与文件内容)."""
+        period = snapshot_period(self.snapshot(dataset))
+        return period.start, period.end
+
 
 class RoutingDatasetLoader:
     """按数据集名的前缀选载入器 (如 "xero/" 走 Xero), 其余走默认的 CSV 载入器."""
@@ -706,6 +716,9 @@ class RoutingDatasetLoader:
         这个方法时为 None."""
         method: Callable[[str], Path | None] | None = getattr(self.pick(dataset), "supplement_dir", None)
         return method(dataset) if method is not None else None
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        return self.pick(dataset).period(dataset)
 
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""

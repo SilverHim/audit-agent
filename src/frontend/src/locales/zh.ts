@@ -473,6 +473,7 @@ export const zh: Messages = {
     yearEnded: (date) => `截至 ${date}止年度`,
     pending: (n) => `${n} 项复核待人工处理`,
     gate: (gate) => `${gate} 待人工处理`,
+    datasetsFailed: '客户清单读取失败，暂不能新建项目。',
   },
   login: {
     title: '登录',

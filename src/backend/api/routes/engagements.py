@@ -31,14 +31,21 @@ async def create_engagement(
     runner: Annotated[GraphRunner, Depends(get_runner)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
 ) -> EngagementOverview:
-    """客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格或补造文件
-    与快照不匹配 422, 不建项目."""
+    """客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件
+    与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间)."""
     try:
         profile = deps.datasets.client_profile(body.dataset)
+        period = deps.datasets.period(body.dataset)
     except FileNotFoundError as exc:
         raise api_error("NOT_FOUND", body.dataset) from exc
     except ValueError as exc:  # 含 SupplementMismatch 与画像校验失败 (ValidationError)
         raise api_error("INVALID_VALUE", str(exc)) from exc
+    if period is not None and (body.period_start, body.period_end) != period:
+        raise api_error(
+            "INVALID_VALUE",
+            f"期间须与数据集 {body.dataset} 相同: 数据集 {period[0]} 至 {period[1]}, "
+            f"请求 {body.period_start} 至 {body.period_end}",
+        )
     try:
         engagement = await deps.engagement_store.create(
             owner_id=user.id,

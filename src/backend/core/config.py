@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     EVIDENCE_ROOT: Path = ROOT / "var" / "engagements"  # 证据原件根目录
     DATASET_ROOT: Path = ROOT / "data"  # 合成数据集目录
     KNOWLEDGE_ROOT: Path = ROOT / "src" / "backend" / "knowledge"  # 知识文件目录: 程序, 准则, prompt
+    DEMO_DATASET: str = "xero/20261017-q1"  # 新建项目时默认选的数据集 (GET /datasets 的 default); Numbat (demo) 仍可选
 
     LLM_MODE: Literal["mock", "live"] = "mock"  # mock 用固定输出, live 调真实模型
     LLM_BASE_URL: str = ""  # live 模式 OpenAI 兼容接口的地址, 为空时用 OpenAI 默认地址

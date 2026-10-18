@@ -65,7 +65,8 @@ export const usersMe = <ThrowOnError extends boolean = false>(options?: Options<
 /**
  * List Datasets
  *
- * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.
+ * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像, 期间取 DatasetLoader.period; 画像或期间读不了
+ * 的跳过. 数据集名等于配置项 DEMO_DATASET 的一行 default 为真 (不在清单时都为假). 按数据集名排序.
  */
 export const datasetsListDatasets = <ThrowOnError extends boolean = false>(options?: Options<DatasetsListDatasetsData, ThrowOnError>): RequestResult<DatasetsListDatasetsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<DatasetsListDatasetsResponses, unknown, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -87,7 +88,8 @@ export const engagementsListEngagements = <ThrowOnError extends boolean = false>
 /**
  * Create Engagement
  *
- * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真.
+ * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件
+ * 与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
  */
 export const engagementsCreateEngagement = <ThrowOnError extends boolean = false>(options: Options<EngagementsCreateEngagementData, ThrowOnError>): RequestResult<EngagementsCreateEngagementResponses, EngagementsCreateEngagementErrors, ThrowOnError> => (options.client ?? client).post<EngagementsCreateEngagementResponses, EngagementsCreateEngagementErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

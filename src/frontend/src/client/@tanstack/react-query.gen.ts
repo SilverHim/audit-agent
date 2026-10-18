@@ -119,7 +119,8 @@ export const datasetsListDatasetsQueryKey = (options?: Options<DatasetsListDatas
 /**
  * List Datasets
  *
- * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.
+ * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像, 期间取 DatasetLoader.period; 画像或期间读不了
+ * 的跳过. 数据集名等于配置项 DEMO_DATASET 的一行 default 为真 (不在清单时都为假). 按数据集名排序.
  */
 export const datasetsListDatasetsOptions = (options?: Options<DatasetsListDatasetsData>) => queryOptions<DatasetsListDatasetsResponse, DefaultError, DatasetsListDatasetsResponse, ReturnType<typeof datasetsListDatasetsQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -157,7 +158,8 @@ export const engagementsListEngagementsOptions = (options?: Options<EngagementsL
 /**
  * Create Engagement
  *
- * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真.
+ * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件
+ * 与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
  */
 export const engagementsCreateEngagementMutation = (options?: Partial<Options<EngagementsCreateEngagementData>>): UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> => {
     const mutationOptions: UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> = {

@@ -58,11 +58,14 @@ class EngagementCreate(Model):
 
 
 class DatasetSummary(Model):
-    """新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN."""
+    """新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中."""
 
-    dataset: str  # 建项目时提交的数据集名, 如 demo, xero/20261017-mock
+    dataset: str  # 建项目时提交的数据集名, 如 demo, xero/20261017-q1
     legal_name: str
     abn: str
+    period_start: date | None = None  # 数据集自带的审计期间, 建项目时须与之相同; 不自带 (如 Numbat) 为空
+    period_end: date | None = None
+    default: bool = False  # 数据集名等于配置项 DEMO_DATASET, 新建项目表单默认选它
 
 
 class EngagementSummary(Model):

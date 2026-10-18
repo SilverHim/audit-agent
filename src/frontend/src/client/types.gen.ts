@@ -652,7 +652,7 @@ export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | '
 /**
  * DatasetSummary
  *
- * 新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN.
+ * 新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中.
  */
 export type DatasetSummary = {
     /**
@@ -667,6 +667,18 @@ export type DatasetSummary = {
      * Abn
      */
     abn: string;
+    /**
+     * Period Start
+     */
+    period_start?: string | null;
+    /**
+     * Period End
+     */
+    period_end?: string | null;
+    /**
+     * Default
+     */
+    default?: boolean;
 };
 
 /**

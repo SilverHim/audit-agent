@@ -1246,6 +1246,9 @@ class FakeDatasetLoader:
     def datasets(self) -> list[str]:
         return ["demo"]
 
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        return None  # 同 Numbat 的 CSV 数据集, 期间由审计师填
+
 
 def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputStore) -> None:
     """让项目存储加入审计产出存储的事务, 同真实实现共用一个数据库事务."""

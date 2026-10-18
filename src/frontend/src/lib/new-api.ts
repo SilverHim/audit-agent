@@ -96,7 +96,15 @@ export function useClientProfile(eid: string) {
 }
 
 // R5 可选客户
-export type DatasetSummary = { dataset: string; legal_name: string; abn: string }
+export type DatasetSummary = {
+  dataset: string
+  legal_name: string
+  abn: string
+  // 数据集自带的审计期间, 建项目时须与之相同; 不自带 (如 Numbat) 为空
+  period_start: string | null
+  period_end: string | null
+  default: boolean // 配置项 DEMO_DATASET 指定的默认数据集
+}
 
 export function useDatasets() {
   return useQuery({

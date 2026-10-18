@@ -166,6 +166,11 @@ class DatasetLoader(Protocol):
         """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""
         ...
 
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """数据集自带的审计期间 (起始日, 截止日), 建项目时期间须与之相同; 不自带时为 None (由审计师填).
+        Xero 取快照的 dataset.json; CSV 数据集 (如 Numbat) 为 None."""
+        ...
+
 
 class EngagementStore(Protocol):
     """项目与客户画像的存储 (B 实现). 跨项目表, 不带 eid 前缀参数."""

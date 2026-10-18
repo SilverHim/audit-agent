@@ -501,6 +501,7 @@ export const en = {
     yearEnded: (date: string) => `year ended ${date}`,
     pending: (n: number) => `${n} item${n === 1 ? '' : 's'} pending review`,
     gate: (gate: string) => `${gate} pending auditor review`,
+    datasetsFailed: 'Could not load the client list, so a new engagement cannot be created yet.',
   },
   login: {
     title: 'Sign in',

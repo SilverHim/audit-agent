@@ -94,7 +94,7 @@ uv sync
 uv run python data/check_demo.py                       # 检查已随仓库提供的合成数据
 uv run alembic upgrade head
 uv run python -m backend.orchestration.checkpoint setup   # 建检查点表，首次执行一次
-uv run python -m backend.persistence.seed                # 创建 .env 配置的演示审计师
+uv run python -m backend.persistence.seed                # 创建 .env 配置的演示审计师 (姓名 Jordan Ellis, 已有账号不改)
 uv run fastapi dev src/backend/main.py
 ```
 
