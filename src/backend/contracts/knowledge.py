@@ -57,7 +57,10 @@ class ProcedureTemplate(Model):
     gate: GateId | None = None  # 闸门程序的闸门编号, 其余为空
     feature: str | None = None  # 所属功能 (services/features.FEATURES 中的名字); 为空即基线, 总是启用
     assertions: list[Assertion] = []  # 针对的认定
-    triggers: list[Trigger] = []  # 装配条件; 为空时 P2 以外为固定集, P2 只经依赖加入
+    triggers: list[Trigger] = []  # 装配条件; 为空时 P2 以外为固定集, P2 只经依赖加入 (标 fixed 的除外)
+    # P2 固定集: PLN-01/03 通过后不论审计目标一律装配 (所属功能未启用时不装配) 并补齐依赖, objective_ids 为空,
+    # 不计入审计目标覆盖; 只用于 P2 程序, 参数不能按风险等级取值
+    fixed: bool = False
     params: dict[str, Any] = {}  # 参数: 字面量, {by_risk: ...} 或 {ref: 名称}
     depends_on: list[str] = []  # 前置程序
     standards: list[str] = []  # 引用的准则片段 ID

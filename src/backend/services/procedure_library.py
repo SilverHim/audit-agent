@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
-from backend.contracts.models import AuditObjective, Engagement, OpinionType, ReportSection, RiskLevel
+from backend.contracts.models import AuditObjective, Engagement, OpinionType, Phase, ReportSection, RiskLevel
 from backend.contracts.state import EngagementState
 from backend.services.features import BASELINE, FEATURES, check_features
 
@@ -53,6 +53,9 @@ class ProcedureLibrary:
         unknown = [f"{t.id}: {t.feature}" for t in templates if t.feature is not None and t.feature not in FEATURES]
         if unknown:
             raise ValueError(f"程序模板的功能未登记: {', '.join(unknown)}")
+        wrong = fixed_problems(templates)
+        if wrong:
+            raise ValueError(f"固定集程序写法不对: {'; '.join(wrong)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -86,6 +89,10 @@ class ProcedureLibrary:
     def enabled(self, procedure_id: str) -> bool:
         """该程序的模板是否启用."""
         return procedure_id in self._templates
+
+    def fixed(self) -> list[ProcedureTemplate]:
+        """启用的 P2 固定集模板 (fixed), 按文件名顺序: 装配时不论审计目标一律加入."""
+        return [t for t in self._templates.values() if t.fixed]
 
     def match(self, objective: AuditObjective) -> list[ProcedureTemplate]:
         return [
@@ -173,6 +180,44 @@ class ProcedureLibrary:
         for p in sorted((self.root / "prompts").glob("*.j2"), key=lambda p: p.name):
             digest.update(p.read_bytes())
         return digest.hexdigest()
+
+
+def fixed_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """固定集模板的写法问题 (消息含程序编号): fixed 只用于 P2 程序; fixed 程序不对应审计目标, 不写 triggers; 没有关联
+    审计目标, 取不到风险等级, 自身与经依赖一并加入的 P2 程序 (依赖闭包) 的参数都不能写 {by_risk: ...}."""
+    by_id = {t.id: t for t in templates}
+
+    def by_risk(t: ProcedureTemplate) -> list[str]:
+        return [key for key, value in t.params.items() if isinstance(value, dict) and "by_risk" in value]
+
+    def p2_dependencies(t: ProcedureTemplate) -> list[ProcedureTemplate]:
+        """t 的依赖闭包中的 P2 程序 (不含 t), 按首次遇到的顺序; 找不到的依赖由加载的其他校验报出, 这里跳过."""
+        found: list[ProcedureTemplate] = []
+        pending = list(t.depends_on)
+        while pending:
+            dep = by_id.get(pending.pop(0))
+            if dep is None or dep in found or dep is t:
+                continue
+            if dep.phase is Phase.P2_Executing:
+                found.append(dep)
+            pending += dep.depends_on
+        return found
+
+    problems: list[str] = []
+    for t in by_id.values():
+        if not t.fixed:
+            continue
+        if t.phase is not Phase.P2_Executing:
+            problems.append(f"{t.id} 不是 P2 程序, 不能标 fixed")
+        if t.triggers:
+            problems.append(f"{t.id} 标了 fixed, 不能再写 triggers: 固定集程序不对应审计目标")
+        problems += [f"{t.id}.{key} 按风险等级取值, 但固定集程序没有关联审计目标" for key in by_risk(t)]
+        problems += [
+            f"{t.id} 依赖的 {dep.id}.{key} 按风险等级取值, 只经固定集加入时没有关联审计目标"
+            for dep in p2_dependencies(t)
+            for key in by_risk(dep)
+        ]
+    return problems
 
 
 def git_env() -> dict[str, str]:

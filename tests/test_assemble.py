@@ -1,11 +1,25 @@
 """R11 P2 装配入库与派发: assemble_pack 把新加入的 P2 程序与阶段写进 Store 与 engagements 表; schedule 只排调度表."""
 
+import shutil
+from pathlib import Path
+
 import pytest
 
-from backend.contracts.models import AuditObjective, Phase, Procedure, ProcedureStatus, RiskLevel, ScheduleRow
+from backend.contracts.models import (
+    AuditObjective,
+    GateVerdict,
+    Phase,
+    Procedure,
+    ProcedureStatus,
+    RiskLevel,
+    ScheduleRow,
+)
 from backend.contracts.state import EngagementState, initial_state
-from backend.orchestration.nodes import GraphNodes
-from backend.orchestration.runner import fixed_procedures
+from backend.core.config import get_settings
+from backend.orchestration.nodes import GraphNodes, apply_patch, uncovered_objectives
+from backend.orchestration.runner import GraphRunner, fixed_procedures
+from backend.orchestration.scheduler import build_schedule
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -19,7 +33,10 @@ from tests.fakes import (
     FakeTrail,
     make_deps,
     make_graph_nodes,
+    make_runner,
+    wait_idle,
 )
+from tests.test_decisions import Started, acc01_decision, assert_rejected, at_pln_gate, inventory, pln_decision
 
 EID = ENGAGEMENT.id
 # 装配结果的顺序: 匹配到的程序按编号排序后补依赖
@@ -177,3 +194,124 @@ async def test_schedule_layers_and_groups_without_writing() -> None:
     }
     assert store.commits == commits
     assert all(p.status is ProcedureStatus.planned for p in added_programs(state["procedure_pack"]))
+
+
+# ── R81: P2 固定集 (模板 fixed) ──
+
+X_FIX = """id: X-FIX
+name: 自测固定集程序
+phase: P2_Executing
+cycle: Journals
+owner: A6
+engine: rule
+autonomy_level: L3
+fixed: true
+feature: journals
+"""
+X_DEP = (
+    X_FIX.replace("X-FIX", "X-DEP").replace("自测固定集程序", "自测固定集程序 (依赖 X-FIX)") + "depends_on: [X-FIX]\n"
+)
+JOURNALS = frozenset({"critic", "journals"})
+INVENTORY = AuditObjective(
+    id="OBJ-INV-EXI", account="Inventory", assertion="Existence", risk_level=RiskLevel.high, is_material=True
+)
+
+
+def fixed_library(tmp_path: Path, features: frozenset[str] = JOURNALS, **extra: str) -> ProcedureLibrary:
+    """knowledge 目录的副本另加 extra 中的程序 YAML (文件名主干 → 内容), 按 features 建程序库."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    for name, text in extra.items():
+        (root / "procedures" / f"{name}.yaml").write_text(text, encoding="utf-8")
+    return ProcedureLibrary(root, features)
+
+
+async def test_fixed_program_is_assembled_regardless_of_objectives(tmp_path: Path) -> None:
+    """R81 验收 3: journals 开启时 X-FIX 不经 trigger 也加入, 排在按编号排序的末尾; v1 planned, objective_ids 为空,
+    自主度取模板; 8 条第 1 版与阶段 P2_Executing 同一次提交. journals 关闭时仍为原 7 条."""
+    nodes, store, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"X-FIX": X_FIX}))
+    patch = await nodes.assemble_pack(state)
+    added = added_programs(patch["procedure_pack"])
+    assert [p.id for p in added] == [*P2, "X-FIX"]
+    fix = added[-1]
+    assert (fix.version, fix.status, fix.objective_ids, fix.autonomy_level.value) == (
+        1,
+        ProcedureStatus.planned,
+        [],
+        "L3",
+    )
+    [commit] = store.commits
+    assert sorted(o.id for o in commit if isinstance(o, Procedure)) == sorted([*P2, "X-FIX"])
+    assert EngagementWrite("update", EID, {"phase": Phase.P2_Executing}) in commit
+
+    base = fixed_library(tmp_path / "base", BASELINE, **{"X-FIX": X_FIX})
+    nodes, _, _, state = after_pln_approve(library=base)
+    assert [p.id for p in added_programs((await nodes.assemble_pack(state))["procedure_pack"])] == P2
+
+
+async def test_fixed_dependencies_are_closed_and_layered(tmp_path: Path) -> None:
+    """R81 验收 4: X-DEP 依赖 X-FIX, 两者都是固定集: 新增程序末尾为 X-FIX, X-DEP; 调度表中 X-DEP 比 X-FIX 低一层."""
+    library = fixed_library(tmp_path, **{"X-FIX": X_FIX, "X-DEP": X_DEP})
+    nodes, _, _, state = after_pln_approve(library=library)
+    pack = (await nodes.assemble_pack(state))["procedure_pack"]
+    assert [p.id for p in added_programs(pack)][-2:] == ["X-FIX", "X-DEP"]
+    layers = {pid: row.layer for row in build_schedule(pack, library, 4) for pid in row.procedure_ids}
+    assert layers["X-DEP"] == layers["X-FIX"] + 1
+
+
+async def test_fixed_programs_do_not_cover_objectives(tmp_path: Path) -> None:
+    """R81 验收 5: 覆盖校验不计固定集程序: 加存货存在性目标时有 X-FIX 也照样阻断, 缺口为 [OBJ-INV-EXI];
+    PLN-01/03 approve 报 INVALID_VALUE (R60 不变)."""
+    library = fixed_library(tmp_path, **{"X-FIX": X_FIX})
+    nodes, store, _, state = after_pln_approve([*NUMBAT_OBJECTIVES, INVENTORY], library=library)
+    assert uncovered_objectives(library, state["audit_objectives"]) == ["OBJ-INV-EXI"]
+    with pytest.raises(ValueError, match="OBJ-INV-EXI"):
+        await nodes.assemble_pack(state)
+    assert store.commits == []
+    s = await at_pln_gate(inventory(), library=library)
+    await assert_rejected(s, pln_decision(GateVerdict.approve), "INVALID_VALUE", "OBJ-INV-EXI")
+
+
+async def test_fixed_programs_are_not_added_twice(tmp_path: Path) -> None:
+    """R81 验收 6: 装配后再装配 (程序包已含) 不再加入; 节点重放 (同一状态再执行) 程序包中各 ID 只出现一次,
+    Store 不新增."""
+    nodes, store, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"X-FIX": X_FIX, "X-DEP": X_DEP}))
+    first = await nodes.assemble_pack(state)
+    assert await nodes.assemble_pack(apply_patch(state, first)) == {}
+    rows = len(store.rows)
+    replay = await nodes.assemble_pack(state)
+    ids = [p.id for p in replay["procedure_pack"]]
+    assert len(ids) == len(set(ids)) and replay["procedure_pack"] == first["procedure_pack"]
+    assert len(store.rows) == rows
+
+
+async def test_fixed_programs_are_sorted_with_matched(tmp_path: Path) -> None:
+    """固定集与匹配集一并按编号排序后补依赖闭包, 不追加在末尾: 编号靠前的 B-FIX 排在最前 (审核 R81-04)."""
+    early = X_FIX.replace("X-FIX", "B-FIX")
+    nodes, _, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"B-FIX": early}))
+    assert [p.id for p in added_programs((await nodes.assemble_pack(state))["procedure_pack"])] == ["B-FIX", *P2]
+
+
+async def test_fixed_program_added_once_after_reject_then_approve(tmp_path: Path) -> None:
+    """R81 验收 6 (审核 R81-05): PLN-01/03 驳回回到 p1_analytics 后再通过, 全图装配一次, X-FIX 只有第 1 版."""
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+    library = fixed_library(tmp_path, **{"X-FIX": X_FIX})
+    runner, output_store = make_runner(
+        engagement_store=engagement_store, library=library, interrupt_before=["schedule"]
+    )
+    s = Started(runner, output_store, engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, pln_decision(GateVerdict.reject))
+    await wait_idle(runner, EID)
+    assert await s.next_nodes() == ("gate_p1_risk",)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, id="D-PLN-2", target_version=2))
+    await wait_idle(runner, EID)
+    assert await s.next_nodes() == ("schedule",)
+    snapshot = await runner.app.aget_state(GraphRunner.config(EID))
+    ids = [p.id for p in snapshot.values["procedure_pack"]]
+    assert len(ids) == len(set(ids)) and "X-FIX" in ids
+    fixed = [r for r in output_store.rows if isinstance(r, Procedure) and r.id == "X-FIX"]
+    assert [(p.version, p.objective_ids) for p in fixed] == [(1, [])]

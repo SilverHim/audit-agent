@@ -21,7 +21,8 @@ from backend.services.procedure_library import ProcedureLibrary
 
 
 def fixed_procedures(library: ProcedureLibrary) -> list[Procedure]:
-    """固定集: P2 以外的程序在项目启动时实例化; P2 程序由 assemble_pack 按风险加入."""
+    """项目启动时实例化的程序: P2 以外的全部程序. P2 程序由 assemble_pack 加入: 按审计目标匹配 trigger 的, 模板标
+    fixed 的 (P2 固定集), 及其依赖闭包."""
     return [
         Procedure(id=t.id, phase=t.phase, template_commit=library.commit, autonomy_level=t.autonomy_level)
         for t in library.all()

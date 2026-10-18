@@ -581,11 +581,13 @@ class GraphNodes:
         return await self.run_node(state, "p1_analytics")
 
     async def assemble_pack(self, state: EngagementState) -> StatePatch:
-        """装配 P2 程序包: 按审计目标匹配 trigger, 补齐依赖闭包, 只把尚不在程序包中的 P2 程序加入.
+        """装配 P2 程序包: 按审计目标匹配 trigger, 并上启用的 P2 固定集 (模板 fixed), 按编号排序后补齐依赖闭包,
+        只把尚不在程序包中的 P2 程序加入.
 
         每条审计目标至少要被一条程序的 trigger 匹配到, 否则抛 ValueError 阻断 (Demo需求文档第 4.1 节), 什么都不写.
         新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节).
-        objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 为空.
+        objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 与固定集程序为空. 覆盖校验只看 trigger,
+        固定集程序不计入.
         没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
         提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写).
         """
@@ -594,7 +596,7 @@ class GraphNodes:
         uncovered = uncovered_objectives(library, objectives)
         if uncovered:
             raise ValueError(f"审计目标没有程序覆盖, 不能装配: {', '.join(uncovered)}")
-        matched = {t.id for o in objectives for t in library.match(o)}
+        matched = {t.id for o in objectives for t in library.match(o)} | {t.id for t in library.fixed()}
         existing = {p.id for p in state["procedure_pack"]}
         added = [
             Procedure(
