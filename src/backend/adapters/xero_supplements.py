@@ -6,7 +6,8 @@
 - manifest.files 的每个文件都在, sha256 相符, 目录里没有清单外的文件 (manifest.json 除外);
 - 快照目录的文件去掉 contacts.json (测试副本与派生快照里它是过滤版, 不记哈希) 恰为 snapshot.files, sha256 相符;
 - 测试副本 (manifest 带 injected) 只在 allow_injected 下放行.
-不符抛 SupplementMismatch, 消息只列文件名, 不带文件内容.
+不符抛 SupplementMismatch, 消息只列文件名, 不带文件内容. 快照不在时 (如测试的假存储) 可只调 verify_files, 只核补造
+目录自身, 各读取方法 "调用前须已 verify" 指两者之一.
 
 apply 把补造表并入快照映射出的财务表 (设计第 3.1, 3.3 节, 第 9.3 节第 6-9 项): 合同关联填
 sales_invoices.contract_id, 服务完成记录写成 delivery_notes (发票号换成 SI- ID), 开户行覆盖 bank_accounts.bank_name;

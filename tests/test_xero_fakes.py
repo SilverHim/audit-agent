@@ -5,6 +5,7 @@ fixture 只建一次假存储与依赖)."""
 import json
 import re
 from collections import Counter
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,19 @@ def test_supplement_samples() -> None:
         (False, "classified"),
     }
     assert {(d.channel, d.uploaded_by) for d in fieldwork} == {("auditor_upload", x.ENGAGEMENT.owner_id)}
+    uploads = {u.document_id: u for u in x.xero_uploads()}
+    assert [(d.reliability, d.document_date, d.related_ids) for d in fieldwork] == [
+        (uploads[d.id].reliability, uploads[d.id].document_date, uploads[d.id].related_ids) for d in fieldwork
+    ]
+    loan = next(d for d in fieldwork if d.file_name == "director_loan_agreement.pdf")
+    assert (loan.reliability, str(loan.document_date), loan.related_ids) == (
+        "internal_original",
+        "2018-09-10",
+        ["XJ-397"],
+    )
+    assert [c.extracted_by_run for c in x.xero_contracts()] == [
+        f"UPLOAD-{c.document_id}-JOB" for c in x.xero_contracts()
+    ]
     assert "AUD 48.53" in x.xero_pages(by_path()[REPLY_12345679])[0]
     assert (len(x.xero_adjustments()), {r.entry_no for r in x.xero_adjustments(["AJE-X01"])}) == (11, {"AJE-X01"})
     assert [e.employee_id for e in x.xero_employees()] == ["E001", "E002", "E003"]
@@ -94,6 +108,15 @@ async def test_financial_store_holds_the_imported_tables(store: FakeFinancialSto
     assert (invoice or {}).get("contract_id") == "CON-X01"
     assert str((note or {}).get("signed_date")) == "2026-09-17"
     assert [r.balance_cents for r in await store.trial_balance(EID, "current") if r.account_code == "091"] == [1158123]
+    assert ((await store.record(EID, "trial_balance", "091")) or {}).get("balance_cents") == 1158123  # 本期那一行
+    assert await store.record(EID, "bank_transaction", "BT-091-0001") is not None
+    engagement = x.xero_engagement()
+    assert (engagement.dataset, engagement.period_start, engagement.period_end) == (
+        x.XERO_DATASET,
+        date(2026, 7, 1),
+        date(2026, 9, 30),
+    )
+    assert (engagement.client_id, engagement.client_profile_version) == ("CLIENT-XERO-3C1332BB-Q1", 1)
     assert {a.bank_name for a in await store.bank_accounts(EID)} == {"Wattlebrook Bank Limited"}
     assert len(await store.documents(EID, related_id="ACN-900043030")) == 3
     assert [j.id for j in await store.journal_entries(EID, entry_nos=["XJ-580"])] == [
@@ -140,7 +163,10 @@ def test_doc04_fixture_matches_the_contract_pdf(cid: str) -> None:
     pages = [normalized(page) for page in x.xero_pages(document_id)]
     found = [(t.term_type.value, t.page, " ".join(re.findall(r"^(\d+\.\d+) ", t.text, re.M))) for t in extraction.terms]
     assert found == TERMS[cid]
-    assert all(normalized(t.text) in pages[t.page - 1] and re.match(r"\d+\.\d+ ", t.text) for t in extraction.terms)
+    assert all(normalized(t.text) in pages[t.page - 1] for t in extraction.terms)
+    # 不含标题: 每行以子条款号开头, 中间与末尾也没有下一节的节标题 (如 "5. Invoicing and Payment")
+    assert all(re.match(r"\d+\.\d+ ", line) for t in extraction.terms for line in t.text.splitlines())
+    assert not [t.text for t in extraction.terms if re.search(r"(^| )\d+\. [A-Z]", normalized(t.text))]
 
 
 def test_doc04_fixture_files() -> None:
@@ -198,12 +224,35 @@ async def test_data_store_counts_and_writes_through() -> None:
     data = deps.data
     stats = await data.stats(EID)
     assert (stats[TableKind.journal_entries].records, stats[TableKind.trial_balance].current) == (1017, 27)
+    assert stats[TableKind.employees].records == 3  # 演示导入之后工资册已写入
     inputs = await data.check_inputs(EID, x.xero_engagement().period_start, x.xero_engagement().period_end)
     assert (inputs.journal_rows, inputs.dataset) == (1017, x.XERO_DATASET)
     first, second = x.xero_tables()["delivery_notes"][:2]
     changed = first.model_copy(update={"signed_by": "Changed"})
     await data.write_tables(EID, {TableKind.delivery_notes: [changed]}, source="import", actor="U-1")
     assert await deps.financial_store.delivery_notes(EID, [first.invoice_id, second.invoice_id]) == [changed]
+
+
+async def test_dataset_loader_reads_the_supplements() -> None:
+    """XeroFakeDatasetLoader: load 只记调用, 不登记文件 (演示导入之后的状态, 真实载入器在 R269 之前仍登记合同);
+    计划预置, 画像, 声明, 期间与更正分录取补造与快照."""
+    store = x.xero_financial_store()
+    loader = x.XeroFakeDatasetLoader(store)
+    before = list(store.document_refs)
+    await loader.load(EID, x.XERO_DATASET)
+    assert (store.document_refs, loader.loads) == (before, [(EID, x.XERO_DATASET)])
+    assert loader.planning_presets(x.XERO_DATASET) == x.xero_presets()
+    assert loader.client_profile(x.XERO_DATASET).id == "CLIENT-XERO-3C1332BB-Q1"
+    assert loader.dataset_traits(x.XERO_DATASET) == x.xero_traits()
+    assert loader.period(x.XERO_DATASET) == (date(2026, 7, 1), date(2026, 9, 30))
+    assert loader.adjustment_entry_nos(x.XERO_DATASET) == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
+    assert [r.id for r in await loader.load_adjustments(EID, x.XERO_DATASET, ["AJE-X05"])] == ["AJE-X05-1", "AJE-X05-2"]
+
+
+async def test_rules_default_to_no_preset_results(deps: Any) -> None:
+    """make_xero_deps 的规则引擎缺省没有预置结果: 不会拿到 Numbat 的例外 (如 REV-08 的 SI-2026-0612)."""
+    result = await deps.rules.run(EID, deps.library.load("REV-08"), make_run("REV-08"), {})
+    assert result.exceptions == []
 
 
 def test_snapshot_functions_skip_without_a_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

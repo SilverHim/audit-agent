@@ -55,6 +55,7 @@ from tests.fakes import (
     FakeFinancialStore,
     FakeOutputStore,
     FakeRegistry,
+    FakeRuleEngine,
     FakeTrail,
     make_deps,
 )
@@ -197,11 +198,16 @@ def xero_registry() -> FakeRegistry:
 
 
 def xero_confirmations() -> FakeConfirmationChannel:
-    """假函证平台: 两个银行账户 (12345678, 12345679) 按银行直达邮件回函, 回函内容为补造的回函 PDF."""
+    """假函证平台: 两个银行账户 (12345678, 12345679) 回函, 内容为补造的回函 PDF, 渠道取补造目录的
+    confirmations/receipts.json (同回函 mock). 假平台只有一个渠道, 各账户的渠道不同时抛 ValueError."""
     root = supplement().root
     replies = [Path(d["path"]) for d in manifest_documents().values() if d["registration"] == "confirmation"]
+    receipts = json.loads((root / "confirmations" / "receipts.json").read_text(encoding="utf-8"))
+    channels = {receipts[p.stem]["receipt_channel"] for p in replies}
+    if len(channels) != 1:
+        raise ValueError(f"回函渠道不止一种: {sorted(channels)}")
     return FakeConfirmationChannel(
-        ReceiptChannel.direct_email, bodies={p.stem: (root / p).read_bytes() for p in sorted(replies)}
+        ReceiptChannel(channels.pop()), bodies={p.stem: (root / p).read_bytes() for p in sorted(replies)}
     )
 
 
@@ -322,11 +328,13 @@ def table_stats(tables: Mapping[str, Sequence[Any]]) -> dict[TableKind, TableSta
 
 
 class XeroFakeDataStore(FakeDataStore):
-    """Xero 演示的假数据管理存储: 数据已就绪, 行数与体检汇总按 Xero 的七张表 (数据集 xero/20261017-q1);
+    """Xero 演示的假数据管理存储: 数据已就绪, 行数与体检汇总按 Xero 的七张表 (数据集 xero/20261017-q1), 工资册的
+    行数按假财务存储里预置的;
     write_tables 照 FakeDataStore 记版本, 并把行转交给同一个假财务存储 (put_rows)."""
 
     def __init__(self, financial: FakeFinancialStore, tables: Mapping[str, Sequence[Any]]) -> None:
-        super().__init__(ready=True, stats=table_stats(tables))
+        stats = table_stats(tables) | {TableKind.employees: TableStats(records=len(financial.employee_rows))}
+        super().__init__(ready=True, stats=stats)
         self.seeded = False  # 不以 Numbat 为底
         self.financial = financial
         kinds = (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries)
@@ -364,11 +372,12 @@ def make_xero_deps(
 ) -> AgentDeps:
     """同 make_deps (其余参数原样转交), 缺省换成 Xero 演示的假实现: 登记 xero_registry(), 项目存储只有 Xero 画像与
     xero_engagement(), 财务存储 xero_financial_store(), 函证 xero_confirmations(), 数据管理 XeroFakeDataStore;
-    证据文件存储与数据集载入换成 XeroFakeEvidenceStore 与 XeroFakeDatasetLoader. 规则引擎缺省仍是 make_deps 的
-    (Numbat 的结果), Xero 的程序测试自己给."""
+    证据文件存储与数据集载入换成 XeroFakeEvidenceStore 与 XeroFakeDatasetLoader. 规则引擎缺省没有预置结果 (各程序返回
+    空结果, 不沿用 make_deps 缺省的 Numbat 例外), 要例外的测试自己给 rules."""
     financial = financial_store if financial_store is not None else xero_financial_store()
     outputs = output_store if output_store is not None else FakeOutputStore()
     kwargs.setdefault("confirmations", xero_confirmations())
+    kwargs.setdefault("rules", FakeRuleEngine({}))
     kwargs.setdefault("data", XeroFakeDataStore(financial, xero_tables()))
     deps = make_deps(
         registry if registry is not None else xero_registry(),
