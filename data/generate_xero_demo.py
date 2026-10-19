@@ -33,10 +33,15 @@ GENERATOR = "data/generate_xero_demo.py"
 READABLE = frozenset({"accounts", "invoices", "credit_notes", "journals", "bank_statements", "organisation", "dataset"})
 NOT_HASHED = frozenset({"contacts.json"})  # 快照中不读也不进哈希清单的文件 (含登录账号联系人)
 LLM_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero"  # Xero 大模型 fixture 正本: <程序>/<对象>.json, 各程序的需求写
+# 上传处理的固定输出 (Numbat 与 Xero 共用一份), 其中 UPLOAD_PROGRAMS 的也复制进运行副本: 账表识别按上传的文件名取,
+# 与数据集无关, Xero 演示项目里上传 Xero 网页导出时用得到 (需求 R277)
+UPLOAD_FIXTURES = REPO / "tests" / "fixtures" / "llm_variants" / "upload"
+UPLOAD_PROGRAMS = ("DOC-SHEET",)
 LLM_README = (
     "# Synthetic – for demonstration only\n\n"
     "Runtime copy of tests/fixtures/llm_xero for LLM_MODE=mock (Xero datasets read llm/<procedure>/<key>.json here).\n"
-    "Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures/llm_xero and regenerate.\n"
+    "DOC-SHEET/ is copied from tests/fixtures/llm_variants/upload/DOC-SHEET (upload fixtures, keyed by file name).\n"
+    "Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures and regenerate.\n"
 )
 CUAD_DIR = ROOT / "external" / "cuad" / "CUAD_v1"  # CUAD v1 (不入库), 只在校验底稿时读
 CUAD_FETCH = "uv run python -m tests.tools.cuad_fetch"  # 取 CUAD 的命令 (R245)
@@ -290,14 +295,21 @@ def file_base(spec: dict[str, Any], rel: str) -> dict[str, str] | None:
     return None
 
 
-def write_llm_fixtures(out: Path, source: Path = LLM_FIXTURES) -> None:
-    """大模型 fixture 的运行副本: 清空 out/llm 后写 README.md, 再把 source 下的 <程序>/<对象>.json 原样复制过去
-    (正本删掉的文件不留副本). source 不存在时只写 README. 正本根目录, 程序目录或文件是符号链接时拒绝 (只复制
-    仓库里的文件), 在清空之前查, 被拒时 out/llm 保持原样."""
-    if source.is_symlink():
-        raise SystemExit(f"大模型 fixture 正本 {source} 是符号链接")
+def write_llm_fixtures(
+    out: Path,
+    source: Path = LLM_FIXTURES,
+    uploads: Path = UPLOAD_FIXTURES,
+    programs: tuple[str, ...] = UPLOAD_PROGRAMS,
+) -> None:
+    """大模型 fixture 的运行副本: 清空 out/llm 后写 README.md, 再把 source 下的 <程序>/<对象>.json 与 uploads 下
+    programs 各程序的 <程序>/<键>.json 原样复制过去 (正本删掉的文件不留副本). 不存在的目录跳过 (都不存在时只写
+    README). 正本根目录, 程序目录或文件是符号链接时拒绝 (只复制仓库里的文件), 在清空之前查, 被拒时 out/llm 保持原样."""
+    for root in (source, uploads):
+        if root.is_symlink():
+            raise SystemExit(f"大模型 fixture 正本 {root} 是符号链接")
     files = sorted(source.glob("*/*.json")) if source.is_dir() else []
-    linked = [p.relative_to(source).as_posix() for p in files if p.is_symlink() or p.parent.is_symlink()]
+    files += [p for program in programs for p in sorted((uploads / program).glob("*.json"))] if uploads.is_dir() else []
+    linked = [p.relative_to(p.parents[1]).as_posix() for p in files if p.is_symlink() or p.parent.is_symlink()]
     if linked:
         raise SystemExit(f"大模型 fixture 是符号链接: {', '.join(linked)}")
     target = out / "llm"

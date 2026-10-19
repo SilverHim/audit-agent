@@ -256,30 +256,7 @@ class PostgresFinancialDataStore(Store):
     ) -> None:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            data = contract.model_dump(exclude={"terms", "evidence"})
-            data["evidence"] = contract.model_dump(mode="json")["evidence"]
-            stmt = insert(m.contracts).values(engagement_id=eid, **data)
-            await conn.execute(stmt.on_conflict_do_update(index_elements=["engagement_id", "id"], set_=data))
-            await upsert_extraction(
-                conn,
-                eid,
-                "contract",
-                contract.id,
-                contract.version,
-                contract.model_dump(mode="json"),
-                changed_by=changed_by,
-                field=field,
-                reason=reason,
-            )
-            await conn.execute(
-                delete(m.contract_terms).where(
-                    m.contract_terms.c.engagement_id == eid, m.contract_terms.c.contract_id == contract.id
-                )
-            )
-            for term in contract.terms:
-                await conn.execute(
-                    insert(m.contract_terms).values(engagement_id=eid, contract_id=contract.id, **term.model_dump())
-                )
+            await write_contract(conn, eid, contract, changed_by=changed_by, field=field, reason=reason)
 
     async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
         t = m.extraction_versions
@@ -476,18 +453,11 @@ class FileEvidenceStore(Store):
         status: DocumentStatus,
         failed_step: DocumentFailedStep | None,
     ) -> DocumentRef:
-        t = m.documents
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            result = await conn.execute(
-                update(t)
-                .where(t.c.engagement_id == eid, t.c.id == document_id)
-                .values(type=type, reliability=reliability, status=status, failed_step=failed_step)
+            return await write_document(
+                conn, eid, document_id, type=type, reliability=reliability, status=status, failed_step=failed_step
             )
-            if not result.rowcount:
-                raise FileNotFoundError(document_id)
-            row = (await conn.execute(select(t).where(t.c.id == document_id))).mappings().one()
-        return DocumentRef.model_validate({k: v for k, v in row.items() if k in DocumentRef.model_fields})
 
 
 FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
@@ -862,6 +832,67 @@ async def record_changes(conn: AsyncConnection, eid: str, version: int, inputs: 
     rows = [{"engagement_id": eid, "data_version": version, "input": i.value} for i in dict.fromkeys(inputs)]
     if rows:
         await conn.execute(insert(m.data_changes).values(rows).on_conflict_do_nothing())
+
+
+async def write_contract(
+    conn: AsyncConnection,
+    eid: str,
+    contract: Contract,
+    *,
+    changed_by: str = AgentId.A3,
+    field: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """在已开的事务里写一版合同 (FinancialDataStore.save_contract 与智能导入的确认共用): 覆盖合同与条款, 在
+    extraction_versions 记这一版."""
+    data = contract.model_dump(exclude={"terms", "evidence"})
+    data["evidence"] = contract.model_dump(mode="json")["evidence"]
+    stmt = insert(m.contracts).values(engagement_id=eid, **data)
+    await conn.execute(stmt.on_conflict_do_update(index_elements=["engagement_id", "id"], set_=data))
+    await upsert_extraction(
+        conn,
+        eid,
+        "contract",
+        contract.id,
+        contract.version,
+        contract.model_dump(mode="json"),
+        changed_by=changed_by,
+        field=field,
+        reason=reason,
+    )
+    await conn.execute(
+        delete(m.contract_terms).where(
+            m.contract_terms.c.engagement_id == eid, m.contract_terms.c.contract_id == contract.id
+        )
+    )
+    for term in contract.terms:
+        await conn.execute(
+            insert(m.contract_terms).values(engagement_id=eid, contract_id=contract.id, **term.model_dump())
+        )
+
+
+async def write_document(
+    conn: AsyncConnection,
+    eid: str,
+    document_id: str,
+    *,
+    type: DocumentType,
+    reliability: Reliability,
+    status: DocumentStatus,
+    failed_step: DocumentFailedStep | None,
+) -> DocumentRef:
+    """在已开的事务里改一份文件的登记 (EvidenceStore.update_document 与智能导入的确认共用), 返回改后的登记;
+    文件不存在抛 FileNotFoundError."""
+    t = m.documents
+    result = await conn.execute(
+        update(t)
+        .where(t.c.engagement_id == eid, t.c.id == document_id)
+        .values(type=type, reliability=reliability, status=status, failed_step=failed_step)
+    )
+    if not result.rowcount:
+        raise FileNotFoundError(document_id)
+    row = (await conn.execute(select(t).where(t.c.id == document_id))).mappings().one()
+    return DocumentRef.model_validate({k: v for k, v in row.items() if k in DocumentRef.model_fields})
 
 
 async def upsert_extraction(

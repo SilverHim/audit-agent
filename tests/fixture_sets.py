@@ -15,6 +15,9 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 DEMO = REPO / "data" / "demo"  # Numbat 合成数据集 (合成数据集设计第 1 节)
+UPLOADS = REPO / "tests" / "fixtures" / "llm_variants" / "upload"  # 上传处理的固定输出, 各数据集共用一份
+# 上传处理的固定输出中, 演示也用而须同步进 Numbat 运行副本的程序: 文件分类, 回函抽取与账表识别
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class FixtureSet:
     expected_document: Callable[[str, str], str] | None = None
     # 上传文件处理用的固定输出根 ({程序}/{键}.json), 不进主固定输出 (主流程要求主固定输出各用一次); 没有为 None
     uploads: Path | None = None
+    uploads_in_runtime: tuple[str, ...] = ()  # uploads 中也须在运行副本里的程序
 
     def documents(self) -> dict[str, dict[str, Any]]:
         """manifest 登记的 PDF: 文档 ID -> 条目 (path, type, page_count, sha256 等)."""
@@ -68,7 +72,8 @@ NUMBAT = FixtureSet(
     runtime=DEMO / "llm",
     manifest=DEMO / "manifest.json",
     expected_document=numbat_expected_document,
-    uploads=REPO / "tests" / "fixtures" / "llm_variants" / "upload",
+    uploads=UPLOADS,
+    uploads_in_runtime=UPLOAD_RUNTIME,
 )
 XERO_DEMO = REPO / "data" / "xero_demo" / "20261017-q1"  # Xero 演示的补造目录
 XERO = FixtureSet(
@@ -77,7 +82,7 @@ XERO = FixtureSet(
     fixtures=REPO / "tests" / "fixtures" / "llm_xero",
     runtime=XERO_DEMO / "llm",
     manifest=XERO_DEMO / "manifest.json",
+    uploads=UPLOADS,
+    uploads_in_runtime=("DOC-SHEET",),  # 账表识别按上传的文件名取, Xero 演示项目里上传网页导出时用 (生成脚本复制)
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]
-# 上传处理的固定输出中, 演示也用而须同步进运行副本的程序: 文件分类, 回函抽取与账表识别
-UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")

@@ -425,9 +425,16 @@ def test_recognition_output_model() -> None:
 
 
 def test_fixtures_cover_the_samples() -> None:
-    """固定输出: 4 份 Xero 导出与 Numbat 的 7 张表各一份, 都是高把握; Xero 的读到 Demo Company (AU)."""
+    """固定输出: 5 份 Xero 导出 (含期间不符一例用的 11-30 试算表) 与 Numbat 的 7 张表各一份, 都是高把握; Xero 的读到
+    Demo Company (AU)."""
     keys = sorted(p.stem for p in FIXTURES.glob("*.json"))
-    xero = ["chart_of_accounts", "journal_report", "receivable_invoice_detail", "trial_balance_2026-06-30"]
+    xero = [
+        "chart_of_accounts",
+        "journal_report",
+        "receivable_invoice_detail",
+        "trial_balance_2026-06-30",
+        "trial_balance_2026-11-30",
+    ]
     assert keys == sorted([*xero, *(k.value for k in NUMBAT_KINDS)])
     assert {fixture(k).confidence for k in keys} == {"high"}
     assert {fixture(k).company for k in xero if k != "chart_of_accounts"} == {"Demo Company (AU)"}

@@ -3,6 +3,10 @@ import { useEffect, useRef } from 'react'
 import {
   dataAccountHistoryOptions,
   dataDataRequestsOptions,
+  dataGetBatchOptions,
+  dataGetBatchQueryKey,
+  dataListBatchesOptions,
+  dataListBatchesQueryKey,
   dataSummaryOptions,
   dataTablePageOptions,
   dataTableSchemasOptions,
@@ -10,17 +14,21 @@ import {
 import {
   dataChangeImportSheet,
   dataCommitImport,
+  dataConfirmBatch,
+  dataEditBatchItem,
   dataMarkRequestUnavailable,
   dataReady,
+  dataRetryBatch,
   dataSetAccountCategory,
+  dataStartBatch,
   dataStartImport,
   evidenceEditConfirmation,
   evidenceEditContract,
   evidenceSetDocumentType,
-  evidenceUploadDocuments,
 } from '@/client/sdk.gen'
 import type {
   AccountCategoryIn,
+  BatchItemEdit,
   CategoryVersion,
   DataRequest,
   DocumentType,
@@ -36,15 +44,21 @@ import type { Messages } from '@/locales/en'
 // Xero 接口 (R12) 还没合入, 暂用过渡调用
 
 export type {
+  BatchIssue,
+  BatchItem,
   CategoryVersion,
   DataCheck,
   DataRequest,
   DataSummary,
   ExtractionEdit,
+  FieldSource,
+  ImportBatch,
   ImportCommit,
   ImportPreview,
   TableColumn,
+  TableField,
   TableKind,
+  TablePlan,
   TableSchema,
   TableSummary,
 } from '@/client/types.gen'
@@ -109,10 +123,10 @@ export function useTableSchemas(enabled: boolean) {
   return useQuery({ ...dataTableSchemasOptions(), enabled, staleTime: Number.POSITIVE_INFINITY })
 }
 
-export async function startImport(eid: string, file: File, requestId?: string) {
+export async function startImport(eid: string, file: File) {
   const { data } = await dataStartImport({
     path: { eid },
-    body: { files: [file], request_id: requestId },
+    body: { files: [file] },
     throwOnError: true,
   })
   return data
@@ -136,17 +150,66 @@ export function useCommitImport(eid: string) {
   })
 }
 
-// R14 文件
-export function useUploadDocuments(eid: string) {
+// R277 智能导入: 上传一批 (表格与其他文件混着), 查确认单 (识别中每 2 秒轮询), 调整单项, 确认导入.
+// 数据管理页的 "上传资料" 与补交卡片上的上传都走它; 确认前不写财务表, 文件暂存
+export const UPLOAD_ACCEPT = '.csv,.xlsx,.xlsm,.xls,.pdf,.doc,.docx,.png,.jpg,.jpeg'
+
+export function useStartBatch(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ files, requestId }: { files: File[]; requestId?: string }) =>
-      (await evidenceUploadDocuments({ path: { eid }, body: { files, request_id: requestId }, throwOnError: true }))
-        .data,
+      (await dataStartBatch({ path: { eid }, body: { files, request_id: requestId }, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }
 
+// 还没写入的批次 (关掉确认单后从这里回去); 有在识别的时每 3 秒刷新
+export function useOpenBatches(eid: string) {
+  return useQuery({
+    ...dataListBatchesOptions({ path: { eid } }),
+    refetchInterval: (current) => (current.state.data?.some((batch) => batch.status === 'processing') ? 3000 : false),
+  })
+}
+
+export function useBatch(eid: string, batchId: string | null) {
+  return useQuery({
+    ...dataGetBatchOptions({ path: { eid, batch_id: batchId ?? '' } }),
+    enabled: Boolean(batchId),
+    refetchInterval: (current) => (current.state.data?.status === 'processing' ? 2000 : false),
+  })
+}
+
+// 调整单项返回整张确认单 (重复的表等问题跨项重算), 直接替换缓存; 改了文件类型的批次回到 processing, 照常轮询.
+// "待确认的上传" 列表随之失效 (状态可能变成识别中, 列表据此开始轮询)
+export function useEditBatchItem(eid: string, batchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ itemId, body }: { itemId: string; body: BatchItemEdit }) =>
+      (await dataEditBatchItem({ path: { eid, batch_id: batchId, item_id: itemId }, body, throwOnError: true })).data,
+    onSuccess: (batch) => queryClient.setQueryData(dataGetBatchQueryKey({ path: { eid, batch_id: batchId } }), batch),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: dataListBatchesQueryKey({ path: { eid } }) }),
+  })
+}
+
+// 识别作业出错 (failed) 时重新识别, 从没做完的文件接着做; 返回置回 processing 的批次, 之后照常轮询
+export function useRetryBatch(eid: string, batchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => (await dataRetryBatch({ path: { eid, batch_id: batchId }, throwOnError: true })).data,
+    onSuccess: (batch) => queryClient.setQueryData(dataGetBatchQueryKey({ path: { eid, batch_id: batchId } }), batch),
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+export function useConfirmBatch(eid: string, batchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => (await dataConfirmBatch({ path: { eid, batch_id: batchId }, throwOnError: true })).data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+// R14 文件
 export function useSetDocumentType(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({

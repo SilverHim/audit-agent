@@ -5,7 +5,7 @@
 """
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -27,9 +27,12 @@ from backend.contracts.data import (
     DataReadiness,
     DataRequest,
     DataSource,
+    DocumentChange,
     ExtractionRecord,
+    ImportBatch,
     ImportSession,
     TableKind,
+    TableOrigin,
     TableStats,
     TableVersion,
     table_changes,
@@ -38,7 +41,15 @@ from backend.contracts.models import AgentId, DocumentType
 from backend.contracts.records import Account, AccountCategory
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
-from backend.persistence.stores import Store, now, record_changes, safe_child, upsert_extraction
+from backend.persistence.stores import (
+    Store,
+    now,
+    record_changes,
+    safe_child,
+    upsert_extraction,
+    write_contract,
+    write_document,
+)
 from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 
 # 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户没有
@@ -454,57 +465,85 @@ class PostgresDataStore(Store):
         document_id: str | None = None,
         import_id: str | None = None,
         request_id: str | None = None,
+        origins: Mapping[TableKind, TableOrigin] | None = None,
     ) -> int:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            loads = await self.loads_row(conn, eid)  # 行锁: 同一项目的写入排队, 版本号连续
-            version = int(loads["data_version"]) + 1
-            t = m.dataset_loads
-            await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
-            await record_changes(conn, eid, version, table_changes(tables))
-            for kind in sorted(tables, key=list(TableKind).index):  # 总账在审批日志之前
-                rows: Sequence[BaseModel] = list(tables[kind])
-                if kind is TableKind.accounts:
-                    rows = await record_categories(conn, eid, [Account.model_validate(r.model_dump()) for r in rows])
-                dumped = [r.model_dump(mode="json", exclude_unset=kind is TableKind.approval_log) for r in rows]
-                if kind is TableKind.approval_log:
-                    await apply_approvals(conn, eid, dumped)
-                else:
-                    table = m.FINANCIAL[kind]
-                    await conn.execute(delete(table).where(table.c.engagement_id == eid))
-                    if rows:
-                        await conn.execute(insert(table), [dict(engagement_id=eid, **r.model_dump()) for r in rows])
-                    if kind is TableKind.journal_entries:  # 新总账套用最新一版审批日志
-                        await apply_approvals(conn, eid, await self.latest_rows(conn, eid, TableKind.approval_log))
-                values: dict[str, Any] = {
-                    "kind": kind.value,
-                    "source": source,
-                    "document_id": document_id,
-                    "records": len(rows),
-                    "rows": dumped,
-                    "status": "committed",
-                    "data_version": version,
-                    "committed_at": now(),
-                }
-                d = m.data_imports
-                updated = 0
-                if import_id is not None:  # 导入会话: 置 committed, 记版本
-                    result = await conn.execute(
-                        update(d).where(d.c.engagement_id == eid, d.c.id == import_id).values(**values)
+            return await self._write_tables(
+                conn,
+                eid,
+                tables,
+                source=source,
+                actor=actor,
+                file_name=file_name,
+                document_id=document_id,
+                import_id=import_id,
+                request_id=request_id,
+                origins=origins,
+            )
+
+    async def _write_tables(
+        self,
+        conn: AsyncConnection,
+        eid: str,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        source: DataSource,
+        actor: str,
+        file_name: str | None = None,
+        document_id: str | None = None,
+        import_id: str | None = None,
+        request_id: str | None = None,
+        origins: Mapping[TableKind, TableOrigin] | None = None,
+    ) -> int:
+        """write_tables 在已开的事务里的写入 (智能导入的确认在同一事务里另写文件与批次), 返回新的数据版本."""
+        version = await self._bump(conn, eid, table_changes(tables))
+        for kind in sorted(tables, key=list(TableKind).index):  # 总账在审批日志之前
+            rows: Sequence[BaseModel] = list(tables[kind])
+            if kind is TableKind.accounts:
+                rows = await record_categories(conn, eid, [Account.model_validate(r.model_dump()) for r in rows])
+            dumped = [r.model_dump(mode="json", exclude_unset=kind is TableKind.approval_log) for r in rows]
+            if kind is TableKind.approval_log:
+                await apply_approvals(conn, eid, dumped)
+            else:
+                table = m.FINANCIAL[kind]
+                await conn.execute(delete(table).where(table.c.engagement_id == eid))
+                if rows:
+                    await conn.execute(insert(table), [dict(engagement_id=eid, **r.model_dump()) for r in rows])
+                if kind is TableKind.journal_entries:  # 新总账套用最新一版审批日志
+                    await apply_approvals(conn, eid, await self.latest_rows(conn, eid, TableKind.approval_log))
+            origin = (origins or {}).get(kind) or TableOrigin(
+                file_name=file_name, document_id=document_id, request_id=request_id
+            )
+            values: dict[str, Any] = {
+                "kind": kind.value,
+                "source": source,
+                "document_id": origin.document_id,
+                "records": len(rows),
+                "rows": dumped,
+                "status": "committed",
+                "data_version": version,
+                "committed_at": now(),
+            }
+            d = m.data_imports
+            updated = 0
+            if import_id is not None:  # 导入会话: 置 committed, 记版本
+                result = await conn.execute(
+                    update(d).where(d.c.engagement_id == eid, d.c.id == import_id).values(**values)
+                )
+                updated = result.rowcount
+            if not updated:
+                await conn.execute(
+                    insert(d).values(
+                        engagement_id=eid,
+                        id=import_id or version_id(source, kind, version),
+                        file_name=origin.file_name,
+                        request_id=origin.request_id,
+                        created_by=actor,
+                        created_at=now(),
+                        **values,
                     )
-                    updated = result.rowcount
-                if not updated:
-                    await conn.execute(
-                        insert(d).values(
-                            engagement_id=eid,
-                            id=import_id or version_id(source, kind, version),
-                            file_name=file_name,
-                            request_id=request_id,
-                            created_by=actor,
-                            created_at=now(),
-                            **values,
-                        )
-                    )
+                )
         return version
 
     async def latest_rows(self, conn: AsyncConnection, eid: str, kind: TableKind) -> list[dict[str, Any]]:
@@ -582,6 +621,86 @@ class PostgresDataStore(Store):
             statement = update(d).where(d.c.engagement_id == eid, d.c.id == import_id, d.c.status == "parsed")
             await conn.execute(statement.values(**changes))
 
+    # ── 智能导入的批次 (需求 R277) ──
+
+    async def save_batch(self, eid: str, batch: ImportBatch) -> None:
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            await self._save_batch(conn, eid, batch)
+
+    @staticmethod
+    async def _save_batch(conn: AsyncConnection, eid: str, batch: ImportBatch) -> None:
+        """在已开的事务里登记或覆盖一次智能导入."""
+        data = batch.model_dump(mode="json")
+        values: dict[str, Any] = {c.name: data[c.name] for c in m.import_batches.c if c.name != "engagement_id"}
+        values["created_at"], values["committed_at"] = batch.created_at, batch.committed_at
+        statement = upsert(m.import_batches).values(engagement_id=eid, **values)
+        await conn.execute(statement.on_conflict_do_update(index_elements=["engagement_id", "id"], set_=values))
+
+    async def batch(self, eid: str, batch_id: str) -> ImportBatch | None:
+        b = m.import_batches
+        rows = await self.rows(eid, select(b).where(b.c.id == batch_id))
+        return ImportBatch.model_validate({k: v for k, v in rows[0].items() if k != "engagement_id"}) if rows else None
+
+    async def batches(self, eid: str) -> list[ImportBatch]:
+        b = m.import_batches
+        return [
+            ImportBatch.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, select(b).order_by(b.c.created_at, b.c.id))
+        ]
+
+    async def commit_batch(
+        self,
+        eid: str,
+        batch: ImportBatch,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        actor: str,
+        origins: Mapping[TableKind, TableOrigin],
+        documents: Sequence[DocumentChange],
+    ) -> ImportBatch:
+        b = m.import_batches
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            # 行锁: 同一批次的确认排队; 已 committed 的是重试, 什么都不写
+            row = (await conn.execute(select(b).where(b.c.id == batch.id).with_for_update())).mappings().first()
+            if row is None:
+                raise LookupError(f"批次 {batch.id} 不存在")
+            stored = ImportBatch.model_validate({k: v for k, v in row.items() if k != "engagement_id"})
+            if stored.status == "committed":
+                return stored
+            version = (
+                await self._write_tables(conn, eid, tables, source="import", actor=actor, origins=origins)
+                if tables
+                else None
+            )
+            if any(change.contracts for change in documents):
+                # 程序执行之外写进的合同新版本, 同上传后的抽取: 记数据变动 contracts (需求 R274); 有表时记在同一版本上
+                if version is None:
+                    version = await self._bump(conn, eid, [DataInput.contracts])
+                else:
+                    await record_changes(conn, eid, version, [DataInput.contracts])
+            for change in documents:
+                await write_document(
+                    conn,
+                    eid,
+                    change.document_id,
+                    type=change.type,
+                    reliability=change.reliability,
+                    status=change.status,
+                    failed_step=change.failed_step,
+                )
+                for contract in change.contracts:
+                    await write_contract(conn, eid, contract, changed_by=SYSTEM)
+                if change.reply is not None:
+                    reply = change.reply
+                    await upsert_extraction(
+                        conn, eid, "reply", change.document_id, 1, reply, changed_by=SYSTEM, field=None, reason=None
+                    )
+            committed = batch.model_copy(update={"data_version": version})
+            await self._save_batch(conn, eid, committed)
+        return committed
+
     # ── 数据版本与抽取结果 (需求 R14) ──
 
     async def extraction_versions(
@@ -599,11 +718,15 @@ class PostgresDataStore(Store):
     async def bump_version(self, eid: str, input: DataInput) -> int:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            loads = await self.loads_row(conn, eid)
-            version = int(loads["data_version"]) + 1
-            t = m.dataset_loads
-            await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
-            await record_changes(conn, eid, version, [input])
+            return await self._bump(conn, eid, [input])
+
+    async def _bump(self, conn: AsyncConnection, eid: str, inputs: Iterable[DataInput]) -> int:
+        """在已开的事务里把数据版本 +1 并记下这次变了哪些数据, 返回新版本 (行锁: 同一项目的写入排队, 版本号连续)."""
+        loads = await self.loads_row(conn, eid)
+        version = int(loads["data_version"]) + 1
+        t = m.dataset_loads
+        await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
+        await record_changes(conn, eid, version, inputs)
         return version
 
     async def changes(self, eid: str) -> list[DataChange]:

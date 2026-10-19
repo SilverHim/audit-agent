@@ -4,48 +4,33 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { autoMap, type Mapping, RULE } from '@/lib/batch-plan'
 import {
   changeImportSheet,
   type DateFormat,
   type ImportPreview,
   startImport,
   TABLE_KINDS,
+  type TableField,
   type TableKind,
-  type TableSchema,
   useCommitImport,
   useTableSchemas,
 } from '@/lib/data-api'
 import { errorText, type ParseFailure, parseFailures } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 
-type Mapping = Record<string, string | null>
-
-const SELECT = 'h-10 w-full rounded-[9px] border border-input bg-card px-2.5 text-[13.5px]'
-
-// 换数据类型时按列名重新对应: 先取后端建议, 再按字段名与列名 (忽略大小写与分隔符) 相同的配对
-function autoMap(schema: TableSchema | undefined, columns: string[], suggested: Mapping): Mapping {
-  const plain = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
-  const result: Mapping = {}
-  for (const field of schema?.fields ?? []) {
-    const hint = suggested[field.name]
-    result[field.name] =
-      hint && columns.includes(hint) ? hint : (columns.find((column) => plain(column) === plain(field.name)) ?? null)
-  }
-  return result
-}
+export const SELECT = 'h-10 w-full rounded-[9px] border border-input bg-card px-2.5 text-[13.5px]'
 
 export function ImportDialog({
   eid,
   open,
   onOpenChange,
   kind: presetKind,
-  requestId,
 }: {
   eid: string
   open: boolean
   onOpenChange: (open: boolean) => void
   kind?: TableKind
-  requestId?: string
 }) {
   const { t } = useI18n()
   const schemas = useTableSchemas(open).data ?? []
@@ -59,8 +44,6 @@ export function ImportDialog({
   const [failures, setFailures] = useState<ParseFailure[] | null>(null)
 
   const schema = schemas.find((item) => item.kind === kind)
-  const used = new Set(Object.values(mapping).filter(Boolean))
-  const unmatched = preview?.columns.filter((column) => !used.has(column)) ?? []
   const missingRequired = (schema?.fields ?? []).some((field) => field.required && !mapping[field.name])
 
   const reset = () => {
@@ -73,7 +56,7 @@ export function ImportDialog({
   const read = async (file: File) => {
     setReading(true)
     try {
-      const result = await startImport(eid, file, requestId)
+      const result = await startImport(eid, file)
       const nextKind = presetKind ?? result.suggested_kind ?? kind
       setPreview(result)
       setFailures(null)
@@ -273,100 +256,18 @@ export function ImportDialog({
                 </label>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <span className="font-semibold text-[13px]">{t.importDialog.match}</span>
-                <div className="overflow-x-auto rounded-[10px] border">
-                  <table className="w-full min-w-[600px] border-collapse text-[13.5px]">
-                    <thead>
-                      <tr className="bg-[#fafbfc] text-left text-[12px] text-muted-foreground">
-                        <th scope="col" className="w-[30%] border-b px-3.5 py-2 font-semibold">
-                          {t.importDialog.field}
-                        </th>
-                        <th scope="col" className="w-[36%] border-b px-3.5 py-2 font-semibold">
-                          {t.importDialog.column}
-                        </th>
-                        <th scope="col" className="border-b px-3.5 py-2 font-semibold">
-                          {t.importDialog.sample}
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(schema?.fields ?? []).map((field) => {
-                        const column = mapping[field.name] ?? null
-                        const id = `map-${field.name}`
-                        return (
-                          <tr key={field.name}>
-                            <td className="border-line-soft border-b px-3.5 py-2">
-                              <label htmlFor={id}>
-                                {t.importDialog.fields[field.name] ?? field.name}
-                                {field.required ? <span className="text-risk"> *</span> : null}
-                              </label>
-                            </td>
-                            <td className="border-line-soft border-b px-3.5 py-1.5">
-                              <select
-                                id={id}
-                                className={cn(SELECT, 'h-9')}
-                                value={column ?? ''}
-                                onChange={(event) =>
-                                  setMapping((current) => ({ ...current, [field.name]: event.target.value || null }))
-                                }
-                              >
-                                <option value="">{t.importDialog.notImported}</option>
-                                {preview.columns.map((item) => (
-                                  <option key={item} value={item}>
-                                    {item}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="border-line-soft border-b px-3.5 py-2 font-mono text-[13px]">
-                              {column ? (preview.sample[column] ?? '') : ''}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                      {unmatched.length ? (
-                        <tr>
-                          <td className="px-3.5 py-2 text-muted-foreground">{t.importDialog.unmatched}</td>
-                          <td colSpan={2} className="px-3.5 py-2 text-[#4a5262] text-[13px]">
-                            {t.importDialog.unmatchedValue(unmatched.join(', '))}
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <MappingTable
+                fields={schema?.fields ?? []}
+                columns={preview.columns}
+                sample={preview.sample}
+                mapping={mapping}
+                onChange={(field, column) => setMapping((current) => ({ ...current, [field]: column }))}
+              />
 
               {failures?.length ? (
                 <div role="alert" className="flex flex-col gap-2 rounded-[10px] bg-risk-soft px-3.5 py-3">
                   <span className="font-semibold text-[13px] text-risk">{t.importDialog.parseErrors}</span>
-                  <div className="max-h-56 overflow-y-auto">
-                    <table className="w-full border-collapse text-[13px]">
-                      <thead>
-                        <tr className="text-left text-[12px] text-muted-foreground">
-                          <th scope="col" className="w-16 py-1 pr-3 font-semibold">
-                            {t.importDialog.parseCols.row}
-                          </th>
-                          <th scope="col" className="w-[40%] py-1 pr-3 font-semibold">
-                            {t.importDialog.parseCols.column}
-                          </th>
-                          <th scope="col" className="py-1 font-semibold">
-                            {t.importDialog.parseCols.value}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {failures.map((failure) => (
-                          <tr key={`${failure.row}-${failure.column}`} className="border-line-soft border-t">
-                            <td className="py-1 pr-3 font-mono">{failure.row}</td>
-                            <td className="py-1 pr-3">{failure.column}</td>
-                            <td className="break-all py-1 font-mono">{failure.value}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <FailureTable failures={failures} />
                 </div>
               ) : null}
             </>
@@ -390,5 +291,148 @@ export function ImportDialog({
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// 列对应表: 每个系统字段选文件中的一列 (或不导入), 旁边是该列的示例. 账表导入与智能导入的调整单项共用.
+// rules 为可沿用规整方案取法的字段 (字段 → 说明), 取值为 RULE 时选中它; ruleColumns 是这些取法用到的列, 不算未对应;
+// missing 为对应的列不在当前表头里的字段 (照原列名显示, 标红并写 missingText)
+export function MappingTable({
+  fields,
+  columns,
+  sample,
+  mapping,
+  onChange,
+  rules = {},
+  ruleColumns = [],
+  sampleLabel,
+  missing,
+  missingText,
+}: {
+  fields: TableField[]
+  columns: string[]
+  sample: Record<string, string>
+  mapping: Mapping
+  onChange: (field: string, column: string | null) => void
+  rules?: Record<string, string>
+  ruleColumns?: string[]
+  sampleLabel?: string
+  missing?: Set<string>
+  missingText?: string
+}) {
+  const { t } = useI18n()
+  const used = new Set([...Object.values(mapping).filter((value) => value && value !== RULE), ...ruleColumns])
+  const unmatched = columns.filter((column) => !used.has(column))
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-semibold text-[13px]">{t.importDialog.match}</span>
+      <div className="overflow-x-auto rounded-[10px] border">
+        <table className="w-full min-w-[600px] border-collapse text-[13.5px]">
+          <thead>
+            <tr className="bg-[#fafbfc] text-left text-[12px] text-muted-foreground">
+              <th scope="col" className="w-[30%] border-b px-3.5 py-2 font-semibold">
+                {t.importDialog.field}
+              </th>
+              <th scope="col" className="w-[36%] border-b px-3.5 py-2 font-semibold">
+                {t.importDialog.column}
+              </th>
+              <th scope="col" className="border-b px-3.5 py-2 font-semibold">
+                {sampleLabel ?? t.importDialog.sample}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map((field) => {
+              const column = mapping[field.name] ?? null
+              const rule = rules[field.name]
+              const absent = missing?.has(field.name) ?? false
+              const id = `map-${field.name}`
+              return (
+                <tr key={field.name}>
+                  <td className="border-line-soft border-b px-3.5 py-2">
+                    <label htmlFor={id}>
+                      {t.importDialog.fields[field.name] ?? field.name}
+                      {field.required ? <span className="text-risk"> *</span> : null}
+                    </label>
+                  </td>
+                  <td className="border-line-soft border-b px-3.5 py-1.5">
+                    <select
+                      id={id}
+                      className={cn(SELECT, 'h-9', absent && 'border-risk text-risk')}
+                      value={column ?? ''}
+                      onChange={(event) => onChange(field.name, event.target.value || null)}
+                    >
+                      <option value="">{t.importDialog.notImported}</option>
+                      {rule ? <option value={RULE}>{t.batch.sources.rule(rule)}</option> : null}
+                      {column && column !== RULE && !columns.includes(column) ? (
+                        <option value={column}>{column}</option>
+                      ) : null}
+                      {columns.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                    {absent && missingText ? (
+                      <span className="mt-1 block text-[12.5px] text-risk">{missingText}</span>
+                    ) : null}
+                  </td>
+                  <td className="break-all border-line-soft border-b px-3.5 py-2 font-mono text-[13px]">
+                    {column === RULE ? (
+                      <span className="font-sans text-[#4a5262]">{rule}</span>
+                    ) : column ? (
+                      (sample[column] ?? '')
+                    ) : (
+                      ''
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+            {unmatched.length ? (
+              <tr>
+                <td className="px-3.5 py-2 text-muted-foreground">{t.importDialog.unmatched}</td>
+                <td colSpan={2} className="px-3.5 py-2 text-[#4a5262] text-[13px]">
+                  {t.importDialog.unmatchedValue(unmatched.join(', '))}
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// 解析失败的前 20 处: 行号, 列, 原值
+export function FailureTable({ failures }: { failures: ParseFailure[] }) {
+  const { t } = useI18n()
+  return (
+    <div className="max-h-56 overflow-y-auto">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr className="text-left text-[12px] text-muted-foreground">
+            <th scope="col" className="w-16 py-1 pr-3 font-semibold">
+              {t.importDialog.parseCols.row}
+            </th>
+            <th scope="col" className="w-[40%] py-1 pr-3 font-semibold">
+              {t.importDialog.parseCols.column}
+            </th>
+            <th scope="col" className="py-1 font-semibold">
+              {t.importDialog.parseCols.value}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {failures.map((failure) => (
+            <tr key={`${failure.row}-${failure.column}-${failure.value}`} className="border-line-soft border-t">
+              <td className="py-1 pr-3 font-mono">{failure.row}</td>
+              <td className="py-1 pr-3">{failure.column}</td>
+              <td className="break-all py-1 font-mono">{failure.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

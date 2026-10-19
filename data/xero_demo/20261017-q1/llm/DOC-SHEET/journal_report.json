@@ -1,0 +1,45 @@
+{
+  "plan": {
+    "kind": "journal_entries",
+    "header_row": 5,
+    "skip": [
+      {
+        "column": "Date",
+        "pattern": "^Total$"
+      }
+    ],
+    "group_title": {
+      "column": "Date",
+      "pattern": "^ID (?P<journal>\\d+) (?P<narration>.*)$"
+    },
+    "fields": {
+      "entry_no": {
+        "column": "Journal ID"
+      },
+      "posting_date": {
+        "column": "Date"
+      },
+      "created_at": {
+        "column": "Posted Date"
+      },
+      "account_code": {
+        "column": "Account Code"
+      },
+      "debit_cents": {
+        "column": "Debit"
+      },
+      "credit_cents": {
+        "column": "Credit"
+      },
+      "description": {
+        "group": "narration"
+      }
+    },
+    "amount_unit": "dollars"
+  },
+  "company": "Demo Company (AU)",
+  "period_start": "2024-01-01",
+  "period_end": "2027-12-31",
+  "confidence": "high",
+  "reason": "Xero journal report: the headings are on row 5 and journals are grouped under \"ID n narration\" title rows, whose narration fills down as the description; Total rows are skipped and the Posted By column is not mapped."
+}

@@ -38,9 +38,12 @@ from backend.contracts.data import (
     DataReadiness,
     DataRequest,
     DataSource,
+    DocumentChange,
     ExtractionRecord,
+    ImportBatch,
     ImportSession,
     TableKind,
+    TableOrigin,
     TableStats,
     TableVersion,
     XeroConnection,
@@ -1602,6 +1605,7 @@ class FakeDataStore:
         self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
         self.import_updates: list[tuple[str, dict[str, Any]]] = []  # update_import 的每次调用 (会话 ID, 改了的字段)
         self.extractions: dict[tuple[str, str, int], dict[str, Any]] = {}  # save_extraction 记下的 (类型, 对象, 版本)
+        self.import_batches: dict[str, ImportBatch] = {}  # 智能导入的批次 ID → 批次 (save_batch 覆盖)
         # 数据变动 (同真实实现的 data_changes): 种子载入为版本 1 的全部各类数据
         self.data_changes: list[DataChange] = [DataChange(data_version=1, input=i) for i in DataInput] if ready else []
 
@@ -1783,10 +1787,11 @@ class FakeDataStore:
         document_id: str | None = None,
         import_id: str | None = None,
         request_id: str | None = None,
+        origins: Mapping[TableKind, TableOrigin] | None = None,
     ) -> int:
-        """记下调用; 数据版本 +1, 各表行数换成写入的行数 (试算表分两期, 审批日志记版本行数), 追加版本,
-        导入会话置 committed. 不做科目分类历史与审批日志补进 (见 PostgresDataStore)."""
-        kwargs = {
+        """记下调用; 数据版本 +1, 各表行数换成写入的行数 (试算表分两期, 审批日志记版本行数), 追加版本 (出处按
+        origins, 同真实实现), 导入会话置 committed. 不做科目分类历史与审批日志补进 (见 PostgresDataStore)."""
+        kwargs: dict[str, Any] = {
             "source": source,
             "actor": actor,
             "file_name": file_name,
@@ -1794,6 +1799,8 @@ class FakeDataStore:
             "import_id": import_id,
             "request_id": request_id,
         }
+        if origins is not None:  # 只在给了时记 (原有断言比较整个字典)
+            kwargs["origins"] = dict(origins)
         self.written.append(({k: list(v) for k, v in tables.items()}, kwargs))
         for kind, rows in tables.items():
             if kind is TableKind.approval_log:
@@ -1807,16 +1814,19 @@ class FakeDataStore:
                 self.table_stats[kind] = TableStats(records=len(rows), current=current, prior=len(rows) - current)
             else:
                 self.table_stats[kind] = TableStats(records=len(rows))
+            origin = (origins or {}).get(kind) or TableOrigin(
+                file_name=file_name, document_id=document_id, request_id=request_id
+            )
             self.table_versions.append(
                 TableVersion(
                     id=import_id or f"{source.upper()}-{kind}-v{self.data_version}",
                     kind=kind,
                     source=source,
-                    file_name=file_name,
-                    document_id=document_id,
+                    file_name=origin.file_name,
+                    document_id=origin.document_id,
                     records=len(rows),
                     data_version=self.data_version,
-                    request_id=request_id,
+                    request_id=origin.request_id,
                     created_by=actor,
                     created_at=NOW,
                 )
@@ -1831,6 +1841,66 @@ class FakeDataStore:
     async def bump_version(self, eid: str, input: DataInput) -> int:
         self.record(input)
         return self.data_version
+
+    async def save_batch(self, eid: str, batch: ImportBatch) -> None:
+        self.import_batches[batch.id] = batch
+
+    async def batch(self, eid: str, batch_id: str) -> ImportBatch | None:
+        return self.import_batches.get(batch_id)
+
+    async def batches(self, eid: str) -> list[ImportBatch]:
+        return sorted(self.import_batches.values(), key=lambda b: (b.created_at, b.id))
+
+    async def commit_batch(
+        self,
+        eid: str,
+        batch: ImportBatch,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        actor: str,
+        origins: Mapping[TableKind, TableOrigin],
+        documents: Sequence[DocumentChange],
+    ) -> ImportBatch:
+        """同真实实现一次写成: 批次已 committed 时什么都不写, 返回它; 有表时经 write_tables 写 (记进 written, 那里
+        出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract) 与回函抽取 (reply,
+        第 1 版); 写了合同时记数据变动 contracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据
+        版本. 批次或文件不存在时在改动之前抛出 (模拟回滚)."""
+        stored = self.import_batches.get(batch.id)
+        if stored is None:
+            raise LookupError(batch.id)
+        if stored.status == "committed":
+            return stored
+        assert self.financial is not None
+        refs = self.financial.document_refs
+        missing = [c.document_id for c in documents if all(d.id != c.document_id for d in refs)]
+        if missing:
+            raise FileNotFoundError(missing[0])
+        version = (
+            await self.write_tables(eid, tables, source="import", actor=actor, origins=origins) if tables else None
+        )
+        for change in documents:
+            i = next(i for i, d in enumerate(refs) if d.id == change.document_id)
+            refs[i] = refs[i].model_copy(
+                update={
+                    "type": change.type,
+                    "reliability": change.reliability,
+                    "status": change.status,
+                    "failed_step": change.failed_step,
+                }
+            )
+            for contract in change.contracts:
+                await self.financial.save_contract(eid, contract)
+            if change.reply is not None:
+                await self.save_extraction(eid, "reply", change.document_id, 1, change.reply, changed_by=AgentId.A3)
+        if any(change.contracts for change in documents):
+            if version is None:
+                self.record(DataInput.contracts)
+                version = self.data_version
+            else:
+                self.data_changes.append(DataChange(data_version=version, input=DataInput.contracts))
+        committed = batch.model_copy(update={"data_version": version})
+        self.import_batches[batch.id] = committed
+        return committed
 
     async def extraction_versions(
         self, eid: str, target_type: str | None = None, target_id: str | None = None
