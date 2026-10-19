@@ -5,7 +5,7 @@ cycle: Revenue
 owner: A6
 inputs: {tables: [sales_invoices]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [judgments, exceptions, review_tasks]
-reads: [sales_invoices, delivery_notes, contracts, documents]  # documents 同 REV-03
+reads: [sales_invoices, delivery_notes, journal_entries, accounts, contracts, documents]  # documents 同 REV-03; 总账与科目表: 发票分录行 (需求 R100)
 engine: hybrid
 autonomy_level: L2
 manual_result_allowed: true
@@ -17,9 +17,10 @@ params:
   threshold_cents: {ref: performance_materiality_cents}
   period_end: {ref: period_end}
 depends_on: [REV-03, REV-08]
-standards: [AASB15-P31, AASB15-P38]
+standards: [AASB15-P31, AASB15-P35, AASB15-P38]
 evidence_required: [invoice, delivery, contract]
-# 判断对象 = S01 选中的发票 ∪ REV-08 尚未归因的例外 (R01, R02, R03 都算) 的 source_id, 每张发票一条 Judgment
+# 判断对象 = S01 选中的发票 ∪ REV-08 尚未归因的例外 (R01, R02, R03 都算) 的 source_id, 每张发票一条 Judgment;
+# 上下文另带该发票过账分录的全部行 (journal_lines, 带科目名称与分类, 需求 R100)
 rules:
   - id: S01
     name: 期末窗口内超过执行重要性的发票

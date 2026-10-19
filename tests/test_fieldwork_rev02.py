@@ -25,10 +25,11 @@ from backend.contracts.models import (
     TaskKind,
     TrailKind,
 )
-from backend.contracts.records import DatasetTraits, DeliveryNote, SalesInvoice
+from backend.contracts.records import DatasetTraits, DeliveryNote, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
+    NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_OBJECTIVES,
@@ -91,7 +92,10 @@ def setup(
     读 tests/fixtures/llm/REV-02), 返回的假引擎不被调用."""
     engine = FakeJudgmentEngine(outcomes if outcomes is not None else {i: passed() for i in INVOICES})
     financial = FakeFinancialStore(  # 存储里的文件登记为 DOC-04 抽取后的 (状态写回存储), 与状态里的相同
-        list(EXTRACTED), records=NUMBAT_RECORDS if records is None else records, contracts=numbat_contracts()
+        list(EXTRACTED),
+        records=NUMBAT_RECORDS if records is None else records,
+        contracts=numbat_contracts(),
+        accounts=list(NUMBAT_ACCOUNTS),  # 销售分录的两个科目 (journal_lines 带科目名称与分类)
     )
     rules = FakeRuleEngine()
     if rows is not None:
@@ -126,6 +130,17 @@ def contexts(engine: FakeJudgmentEngine) -> dict[str, Any]:
 def invoice_json(invoice_id: str) -> dict[str, Any]:
     row = SalesInvoice.model_validate(NUMBAT_RECORDS[("sales_invoice", invoice_id)])
     return {"source_type": "sales_invoice", **row.model_dump(mode="json")}
+
+
+def line_json(line_id: str, name: str, category: str) -> dict[str, Any]:
+    """journal_lines 的一行: 分录行各列加科目名称与分类."""
+    row = JournalEntry.model_validate(NUMBAT_RECORDS[("journal_entry", line_id)])
+    return {
+        "source_type": "journal_entry",
+        **row.model_dump(mode="json"),
+        "account_name": name,
+        "account_category": category,
+    }
 
 
 def note_json(note_id: str, records: dict[tuple[str, str], dict[str, Any]] = NUMBAT_RECORDS) -> dict[str, Any]:
@@ -207,6 +222,10 @@ async def test_si0612_context() -> None:
     assert jctx.data == {
         "invoice": invoice_json("SI-2026-0612"),
         "delivery_notes": [note_json("DN-2026-0612", records), note_json("DN-2026-0612-A", records)],
+        "journal_lines": [
+            line_json("SJ-2026-0612-1", "Trade receivables", "receivables"),
+            line_json("SJ-2026-0612-2", "Sales revenue", "revenue"),
+        ],
         "contract": numbat_contracts()[0].model_dump(mode="json"),
         "document": EXTRACTED[0].model_dump(mode="json"),
         "contract_judgment": {
@@ -216,6 +235,8 @@ async def test_si0612_context() -> None:
         },
     }
     assert jctx.data["delivery_notes"][0]["signed_date"] == "2026-07-03"
+    lines = [(x["account_code"], x["debit_cents"], x["credit_cents"]) for x in jctx.data["journal_lines"]]
+    assert lines == [("1100", 14200000, 0), ("4100", 0, 14200000)]  # 需求 R100 验收 1
     assert jctx.rule_findings == [X1]
     assert jctx.task["params"] == {"window_days": 20, "threshold_cents": 9000000, "period_end": "2026-06-30"}
     assert [r["id"] for r in jctx.task["risks"]] == ["RISK-REV-CUT"]
@@ -230,6 +251,7 @@ async def test_si0618_context() -> None:
     assert jctx.data["contract"]["id"] == "CON-002" and jctx.data["document"]["id"] == EXTRACTED[1].id
     assert jctx.data["contract_judgment"]["id"] == "J-REV-03-1-CON-002"
     assert jctx.data["delivery_notes"] == [note_json("DN-2026-0618")]
+    assert [x["id"] for x in jctx.data["journal_lines"]] == ["SJ-2026-0618-1", "SJ-2026-0618-2"]
 
 
 async def test_invoice_without_contract_has_null_contract_fields() -> None:
@@ -341,6 +363,30 @@ async def test_invoices_without_contract_do_not_query_contracts() -> None:
     assert subject_found.subject_id == subject and subject_found.data["contract"] is None
 
 
+async def test_invoice_without_journal_entry_has_no_journal_lines() -> None:
+    """需求 R100 验收 2: 发票没有 journal_entry_id 时 journal_lines 为 [], 不取分录."""
+    records = dict(NUMBAT_RECORDS)
+    key = ("sales_invoice", "SI-2026-0618")
+    records[key] = {**records[key], "journal_entry_id": None}
+    agent, ctx, engine = setup(records=records)
+    await agent.run(ctx)
+    found = contexts(engine)
+    assert found["SI-2026-0618"].data["journal_lines"] == []
+    assert len(found["SI-2026-0612"].data["journal_lines"]) == 2  # 别的发票照常
+
+
+async def test_missing_journal_line_fails_whole_run_by_a1() -> None:
+    """需求 R100 验收 2: 发票指向的分录行不在财务数据中: 整次执行失败, 由 A1 建失败任务 T-RUN-REV-02-1-v1, 不调判断
+    引擎."""
+    records = dict(NUMBAT_RECORDS)
+    del records[("journal_entry", "SJ-2026-0618-2")]
+    agent, ctx, engine = setup(records=records)
+    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    assert writer is AgentId.A1 and engine.calls == []
+    assert patch["procedure_runs"][0].status is RunStatus.failed
+    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [("T-RUN-REV-02-1-v1", TaskKind.failed)]
+
+
 async def test_missing_linked_contract_fails_whole_run_by_a1() -> None:
     """发票关联的合同不在财务数据中: 整次执行失败, 由 A1 建失败任务, 不调判断引擎."""
     agent, ctx, engine = setup()
@@ -348,6 +394,50 @@ async def test_missing_linked_contract_fails_whole_run_by_a1() -> None:
     patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and engine.calls == [] and set(patch) == {"procedure_runs", "review_tasks"}
     assert patch["procedure_runs"][0].status is RunStatus.failed
+
+
+# ── 提示词 (需求 R100) ─────────────────────────────────────────
+
+
+async def rendered_prompt(invoice_id: str, **options: Any) -> str:
+    """REV-02 对该发票渲染出的提示词 (上下文取 A6 实际组装的, 渲染用真实判断引擎, 同 JudgmentEngine.judge)."""
+    agent, ctx, engine = setup(**options)
+    await agent.run(ctx)
+    jctx = contexts(engine)[invoice_id]
+    real = make_deps(FakeRegistry(), FakeTrail()).judgments
+    variables = {
+        "subject_id": jctx.subject_id,
+        "task": jctx.task,
+        "data": jctx.data,
+        "rule_findings": [x.model_dump(mode="json") for x in jctx.rule_findings],
+        "standards": real.standards(ctx.template),
+    }
+    return real.render(ctx.template, variables)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "Journal lines of the invoice's posting",
+        '"id": "SJ-2026-0612-2"',
+        "- AASB15-P35 (",  # Standards 段的一行 (程序 YAML 的 standards), 不是正文里的引用
+        "goods or services",
+        # 没有合同时的转移事件 (Criterion 1); more_evidence 里也有这个词, 只查它会放过 Criterion 1 漏写
+        "Where no contract is linked, take the event from the shipping or service-completion record",
+    ],
+)
+async def test_prompt_carries_journal_lines_and_service_rules(fragment: str) -> None:
+    """验收 4: SI-2026-0612 的提示词带分录行块与收入行, Standards 段有 AASB15-P35, 按商品或服务与服务完成记录判断."""
+    assert fragment in await rendered_prompt("SI-2026-0612")
+
+
+async def test_prompt_without_contract_does_not_ask_for_one() -> None:
+    """验收 4: 发票没有挂合同时, more_evidence 的条件里没有 "没有合同" (按发运或服务完成记录判断)."""
+    r02 = X1.model_copy(update={"id": "X-REV-08-1-R02-1", "rule_id": "R02", "source_ids": ["SI-2026-0547"]})
+    prompt = await rendered_prompt("SI-2026-0547", outcomes={"SI-2026-0547": passed()}, exceptions=[r02], rows=[])
+    assert "No contract is linked to this invoice." in prompt  # 输入里照实写明没有合同
+    [line] = [x for x in prompt.splitlines() if x.startswith("- `more_evidence`")]
+    assert "contract" not in line
 
 
 # ── 判断结果 ─────────────────────────────────────────
