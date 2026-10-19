@@ -397,6 +397,174 @@
       "xero_refs": []
     },
     {
+      "path": "llm/DOC-CLASSIFY/CON-X01.json",
+      "sha256": "f29605dc7a8e5210aa41a53ab14c03c6fb1b851b02f5e36943ffe4fecf098f38",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/CON-X02.json",
+      "sha256": "1cd32faa12db8fc64727783d6742167786bf24a165cd89336265bfee5d90b90f",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/CON-X03.json",
+      "sha256": "1d6070686663e62b1ff004a74a01707ad320d0a242283e09a474670f23cc7284",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/accounting_policies_extract.json",
+      "sha256": "5f69e9b136d023fe9d75f58b671bd8e3df9af65e83bb4747212d5d4417aa3b55",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/appointment.json",
+      "sha256": "afda1919cac933e679268b8d43b93554e01cc1c701550ee7cf263c1bd744a482",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/default.json",
+      "sha256": "7308627dbd7885f3eb5ec86130c189a248bc65d9dafff4df01b051e4105858be",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/diisr_email.json",
+      "sha256": "a1af4d91c68c37a1a87b7b1abbf97b0d39f7373365fa7e706398af0387f91a9a",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/director_loan_agreement.json",
+      "sha256": "41debd7b0391d99c353fd61ef29dff64d1e9e42d55d2c2a0bc58445e6001c60b",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/director_loan_confirmation.json",
+      "sha256": "12a9e5b02b93e9045a3c89e3c61f30239d1e5c79331ed551f1f6621522ffb719",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/director_support_letter.json",
+      "sha256": "7c50aba62c364198ba7a54b27ab40c18ae264d01ca8bb74b3aa99a1f6e905fe8",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/engagement_letter.json",
+      "sha256": "a3eb9efe517ea9c6ca65e5251172e8404c0611c384c257afef810ce12fbf1f2b",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/expense_claim_E003.json",
+      "sha256": "2980980b7bd7e84abf47c2213c1e331a94ada0191d5020d193c2b3c8adbcc27d",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/fixed_asset_register.json",
+      "sha256": "ea9a75fb5de97d15b24ba8cd80b039991947c7d8fd5470ccd4efbac0ed936d50",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/fs_v1.json",
+      "sha256": "ad8a4ad2b342e6177fabcfc8d0eca446cb72b98f4c869db7c2adb6f4f4e29ff8",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/going_concern_memo_forecast.json",
+      "sha256": "63802d5094f4809104caddf39e1c25eb30faa25a07d0e9c82d248de921fda72a",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/harbourview_lease.json",
+      "sha256": "3ea597146382ba7a59ed14d81acd442626b1408ad393112b89b8edac7252ca3f",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/jakaranda_quote.json",
+      "sha256": "1f12ee581831301a1322af7732314a89277eb4bd895213d3ea25e3f974dae395",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/payroll_register_terms.json",
+      "sha256": "42f795ec46e3f4b7ae57b2db5b739bd609f76c4ac71b56a6dcc8146ca49422d0",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/representation_letter.json",
+      "sha256": "fcaae6a66969d7cf7250fb6c739680f9cfa74e89c9e945b87caa62990ed39071",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/ridgeway_order_CRM08-12.json",
+      "sha256": "f7254b2f434b828fbf8a5a7296d53defbbdd28ec00c1a4de5824d8b5c6ebabd1",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/rm2031_sublease.json",
+      "sha256": "013b8a9120ceae5d737717044d9de13ed47690495cc4a459ec202c9564bb50b3",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/smart_agency_invoice_SM0195-70135.json",
+      "sha256": "5d0db956fc765647f1a59c28f484b02d7222b28f2b97dcd1d58f4dcf2c982894",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/vpa_rent_letter.json",
+      "sha256": "5a07fd6b96c43734e182d83158438a58dea2ae42d4e3f92aef6a7bbde8876378",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-CLASSIFY/vpa_sale_termination_notice.json",
+      "sha256": "fb1b282ca71c2b151070eda1c139c7848451e209f42ba39a7b05aeed86271453",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/DOC-SHEET/accounts.json",
       "sha256": "9f5a57dc7d9872fa38a21ce5e1f6bc3959c11a065d84fa1cb509d2218a4a4ab7",
       "synthetic": true,
