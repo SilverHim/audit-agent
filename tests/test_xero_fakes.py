@@ -12,13 +12,13 @@ from typing import Any
 import pytest
 
 from backend.agents.client_intel import ClientIntelAgent
-from backend.agents.ingest import extract_contract
+from backend.agents.ingest import IngestAgent
 from backend.contracts.data import TableKind
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import DocumentType, TrailKind
 from backend.contracts.ports import ConfirmationRequest
 from tests import xero_fakes as x
-from tests.fakes import FakeFinancialStore, make_ctx, make_run
+from tests.fakes import FakeFinancialStore, FakeTrail, make_ctx, make_run
 
 pytestmark = pytest.mark.external
 EID = x.ENGAGEMENT.id
@@ -177,18 +177,29 @@ def test_doc04_fixture_files() -> None:
     assert sum(len(c.terms) for c in x.xero_contracts()) == 11
 
 
-async def test_doc04_extraction_through_xero_deps(deps: Any) -> None:
-    """make_xero_deps 下 A3 按 DOC-04 的提示词与校验抽取 (mock 大模型读 Xero 的运行副本, 文本层取
-    XeroFakeEvidenceStore): 三份都通过校验, 抽出的合同即 xero_contracts() (只差执行 ID)."""
-    template = deps.library.load("DOC-04")
-    run = make_run("DOC-04")
-    contracts = [
-        await extract_contract(deps, EID, template, run, d, x.xero_profile())
-        for d in x.xero_documents("fieldwork")
-        if d.type is DocumentType.contract
+async def test_doc04_in_the_graph_extracts_what_the_upload_would(deps: Any) -> None:
+    """图里的 DOC-04 (IngestAgent) 在只登记了文件 (合同文件 received) 而没有合同时 (不经上传, 同数据集载入后的情形)
+    调 3 次大模型 (mock 读 Xero 的运行副本, 文本层取 XeroFakeEvidenceStore), 各一次通过, 各 save_contract 一次; 抽出的
+    合同即上传时抽的 xero_contracts(), 只差执行 ID (RUN-DOC-04-1); 3 份文件交回 extracted (需求 R108 验收 2 的对照).
+    防上传与图里两条路抽出的合同不一样."""
+    financial = x.xero_financial_store("fieldwork", contracts=False)
+    financial.document_refs = [
+        d.model_copy(update={"status": "received"}) if d.type is DocumentType.contract else d
+        for d in financial.document_refs
     ]
-    assert [c.model_copy(update={"extracted_by_run": "-"}) if c else None for c in contracts] == [
-        c.model_copy(update={"extracted_by_run": "-"}) for c in x.xero_contracts()
+    trail = FakeTrail()
+    graph = x.make_xero_deps(trail=trail, financial_store=financial)
+    patch = await IngestAgent(graph).run(make_ctx(graph, "DOC-04", engagement=x.xero_engagement()))
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    assert sorted((e.procedure_id, e.payload["fixture_key"], e.payload["attempt"]) for e in calls) == [
+        ("DOC-04", cid, 1) for cid in ("CON-X01", "CON-X02", "CON-X03")
+    ]
+    assert sorted(financial.save_calls) == ["CON-X01", "CON-X02", "CON-X03"]
+    assert sorted(financial.saved_contracts.values(), key=lambda c: c.id) == [
+        c.model_copy(update={"extracted_by_run": "RUN-DOC-04-1"}) for c in x.xero_contracts()
+    ]
+    assert sorted((d.file_name, d.status) for d in patch["documents"]) == [
+        (f"CON-X0{n}.pdf", "extracted") for n in (1, 2, 3)
     ]
     assert "6,500.00" in (await deps.evidence_store.pages(EID, by_path()["contracts/CON-X01.pdf"]))[0]
 

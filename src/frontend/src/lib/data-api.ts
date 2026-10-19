@@ -34,6 +34,7 @@ import {
   dataXeroTenant,
   evidenceEditConfirmation,
   evidenceEditContract,
+  evidenceEditRegistryExtract,
   evidenceSetDocumentDetails,
   evidenceSetDocumentType,
 } from '@/client/sdk.gen'
@@ -310,13 +311,16 @@ export function useEditExtraction(eid: string) {
       id,
       body,
     }: {
-      target: 'contracts' | 'confirmations'
+      target: 'contracts' | 'confirmations' | 'registry-extracts'
       id: string
       body: ExtractionEdit
-    }) =>
-      target === 'contracts'
-        ? (await evidenceEditContract({ path: { eid, contract_id: id }, body, throwOnError: true })).data
-        : (await evidenceEditConfirmation({ path: { eid, confirmation_id: id }, body, throwOnError: true })).data,
+    }) => {
+      if (target === 'contracts')
+        return (await evidenceEditContract({ path: { eid, contract_id: id }, body, throwOnError: true })).data
+      if (target === 'registry-extracts')
+        return (await evidenceEditRegistryExtract({ path: { eid, document_id: id }, body, throwOnError: true })).data
+      return (await evidenceEditConfirmation({ path: { eid, confirmation_id: id }, body, throwOnError: true })).data
+    },
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

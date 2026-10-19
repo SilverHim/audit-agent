@@ -18,7 +18,7 @@ import pytest
 
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel
 from backend.adapters.llm import DatasetFixtureLLMClient
-from backend.adapters.registry import CompositeRegistrySource
+from backend.adapters.registry import CompositeRegistrySource, UploadedExtracts
 from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import RunContext
 from backend.agents.risk_assessor import RiskAssessorAgent
@@ -26,6 +26,8 @@ from backend.contracts.models import (
     AcceptanceScorecard,
     AuditException,
     EvidenceType,
+    Procedure,
+    ProcedureStatus,
     ProfileSource,
     Reliability,
     TrailKind,
@@ -199,12 +201,13 @@ def spy_runner(abr: FakeAbr, guid: str) -> tuple[GraphRunner, list[str]]:
     数据集的目录)."""
     looked: list[str] = []
 
-    def registry(store: Any, directory: Callable[[str], Path | None]) -> CompositeRegistrySource:
+    def registry(store: Any, directory: Callable[[str], Path | None], deps: Any) -> CompositeRegistrySource:
         def spy(dataset: str) -> Path | None:
             looked.append(dataset)
             return directory(dataset)
 
-        return CompositeRegistrySource(store, DatasetRegistrySource(store, spy), abr.client(guid))
+        uploads = UploadedExtracts(deps.financial_store, deps.data, deps.evidence_store)
+        return CompositeRegistrySource(store, DatasetRegistrySource(store, spy), abr.client(guid), uploads)
 
     return demo_runner(registry), looked
 
@@ -221,37 +224,9 @@ NOT_QUERIED = (EvidenceType.voucher, Reliability.internal_original)  # "没有�
 QUERIED = (EvidenceType.external, Reliability.external_original)
 
 
-@pytest.mark.parametrize(
-    ("guid", "checks", "payloads", "evidence"),
-    [
-        # 没配 ABN Lookup: 三项待人工确认, 一条 "没有查询" 的留痕
-        (
-            "",
-            [None, None, None],
-            [{"abn": "44900043101", "available": False, "reason": "not_configured", "result": None}],
-            [NOT_QUERIED] * 3,
-        ),
-        # 配了 (假接口回放有效的登记): ABN 两项照常判, ASIC 摘录未接入, 只有 company_registered 待人工确认
-        (
-            FAKE_GUID,
-            [True, True, None],
-            [
-                {"abn": "44900043101", "result": WOMBAT_RECORD},
-                {"acn": "900043101", "available": False, "reason": "no_source", "result": None},
-            ],
-            [QUERIED, QUERIED, NOT_QUERIED],
-        ),
-    ],
-)
-async def test_new_client_engagement_runs_to_acc01_with_manual_checks(
-    guid: str,
-    checks: list[bool | None],
-    payloads: list[dict[str, Any]],
-    evidence: list[tuple[EvidenceType, Reliability]],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """新客户的项目没有数据集; ACC-04 不读任何数据集的登记 mock, ABN 经 ABN Lookup 实查 (没配时待人工确认), 查不了
-    的不出例外; 每次查询 (含没有查询) 记一条外部调用留痕, 不含 GUID; 客户资料页的版本历史写明来源与写入人."""
+async def new_client_engagement(guid: str) -> tuple[GraphRunner, list[str], str, dict[str, Any], dict[str, Any]]:
+    """经接口新建客户 Wombat 与它的项目 (没有数据集), 等后台停下: 返回 runner, 数据集目录的查找, 项目 ID, 总览与
+    客户资料页. ABN 经假 ABR (Wombat 为有效的公司登记, 有 ACN)."""
     runner, looked = spy_runner(FakeAbr({"44900043101": "active"}), guid)
     async with api_client(runner) as client:
         client_id = (await post(client, wombat())).json()["client_id"]
@@ -263,22 +238,53 @@ async def test_new_client_engagement_runs_to_acc01_with_manual_checks(
         await wait_idle(runner, eid)
         state = (await client.get(f"{ENGAGEMENTS}/{eid}")).json()
         view = (await client.get(f"{ENGAGEMENTS}/{eid}/client-profile")).json()
-    assert runner.run_error(eid) is None and state["current_gate"] == "ACC-01"
-    assert looked == []
-    [card] = await runner.deps.output_store.latest(eid, AcceptanceScorecard)
-    assert [c.check for c in card.registry_checks] == ["abn_active", "name_match", "company_registered"]
-    assert [c.passed for c in card.registry_checks] == checks
-    assert card.exception_ids == [] and await runner.deps.output_store.latest(eid, AuditException) == []
-    trail = runner.deps.trail
-    assert isinstance(trail, FakeTrail)
-    queries = [e for e in trail.entries if e.kind is TrailKind.external_call]
-    assert [q.payload for q in queries] == payloads
-    assert [c.evidence.source_id for c in card.registry_checks][-1] == queries[-1].id  # ASIC 一项指向最后一条
-    assert [(c.evidence.type, c.evidence.reliability) for c in card.registry_checks] == evidence
-    assert FAKE_GUID not in json.dumps([e.model_dump(mode="json") for e in trail.entries]) + caplog.text
+    assert runner.run_error(eid) is None and looked == []  # 不读任何数据集的登记 mock
     assert [(v["version"], v["source"], v["updated_by"], v["updated_by_name"]) for v in view["versions"]] == [
         (1, "manual", NUMBAT_AUDITOR.id, NUMBAT_AUDITOR.full_name)
     ]
+    return runner, looked, eid, state, view
+
+
+def external_calls(runner: GraphRunner) -> list[Any]:
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return [e for e in trail.entries if e.kind is TrailKind.external_call]
+
+
+async def test_new_client_engagement_runs_to_acc01_with_manual_checks(caplog: pytest.LogCaptureFixture) -> None:
+    """新客户的项目没有数据集, 没配 ABN Lookup: ACC-04 之前判断要不要等 ASIC 摘录时查不了 ABN, 不等 (需求 R290);
+    ACC-04 四项待人工确认, 不出例外. 两次查询各记一条 "没有查询" 的外部调用留痕, 不含 GUID; 停在 ACC-01."""
+    runner, _, eid, state, _ = await new_client_engagement("")
+    assert state["current_gate"] == "ACC-01"
+    [card] = await runner.deps.output_store.latest(eid, AcceptanceScorecard)
+    assert [c.check for c in card.registry_checks] == [
+        "abn_active",
+        "name_match",
+        "company_registered",
+        "directors_match",
+    ]
+    assert [c.passed for c in card.registry_checks] == [None] * 4
+    assert card.exception_ids == [] and await runner.deps.output_store.latest(eid, AuditException) == []
+    queries = external_calls(runner)
+    payload = {"abn": "44900043101", "available": False, "reason": "not_configured", "result": None}
+    assert [q.payload for q in queries] == [payload, payload]  # p0_inputs 一次, ACC-04 一次
+    assert {c.evidence.source_id for c in card.registry_checks} == {queries[-1].id}  # 都指向 ACC-04 的那条
+    assert [(c.evidence.type, c.evidence.reliability) for c in card.registry_checks] == [NOT_QUERIED] * 4
+    assert FAKE_GUID not in json.dumps([e.model_dump(mode="json") for e in runner.deps.trail.entries]) + caplog.text
+
+
+async def test_new_company_client_waits_for_the_asic_extract(caplog: pytest.LogCaptureFixture) -> None:
+    """配了 ABN Lookup (假接口回放有效的公司登记, 有 ACN): ACC-04 之前查一次 ABN (留痕, 不含 GUID), 还没有 ASIC 摘录,
+    ACC-04 记等待数据, A3 提出补交请求 "ASIC 摘录" (需求 R290); 不执行 ACC-04, 不到 ACC-01."""
+    runner, _, eid, state, _ = await new_client_engagement(FAKE_GUID)
+    assert state["current_gate"] is None
+    [acc04] = await runner.deps.output_store.latest(eid, Procedure, id="ACC-04")
+    assert (acc04.status, acc04.data_request_ids) == (ProcedureStatus.awaiting_data, ["REQ-registry_extract"])
+    assert await runner.deps.output_store.latest(eid, AcceptanceScorecard) == []
+    request = next(r for r in await runner.deps.data.requests(eid) if r.id == "REQ-registry_extract")
+    assert (request.title, request.used_for, request.status) == ("ASIC 摘录", ["ACC-04"], "open")
+    assert [q.payload for q in external_calls(runner)] == [{"abn": "44900043101", "result": WOMBAT_RECORD}]
+    assert FAKE_GUID not in json.dumps([e.model_dump(mode="json") for e in runner.deps.trail.entries]) + caplog.text
 
 
 async def test_next_engagement_brings_the_latest_profile() -> None:

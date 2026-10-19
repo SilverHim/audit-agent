@@ -583,7 +583,8 @@ XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 
 
 async def test_csh02_d03_d04_drop_voided_pairs(storage):
     """CSH-02 D03 与 D04 剔除作废对 (需求 R105 验收 4): 不插行时 D03, D04 的行与 tests.fakes 由 CSV 派生的
-    NUMBAT_D03_ROWS (6 行), NUMBAT_D04_ROWS (74 行) 整行相同, 给不给作废对的格式都一样 (Numbat 没有冲回凭证). 插入
+    NUMBAT_D03_ROWS (6 行), NUMBAT_D04_ROWS (74 行) 整行相同, 给不给作废对的格式都一样 (Numbat 没有冲回凭证); D02
+    与派生的 NUMBAT_D02_ROWS (8 行) 整行相同 (R107: 派生函数与 Xero 共用). 插入
     VX-1 (06-29, 1010 借 700000 / 4200 贷 700000) 与镜像的冲回凭证 VX-2 (只有 4200 一行的说明为 "Reversal of ID 1",
     1010 一行的说明不匹配: 冲回凭证按凭证号整张剔除, 不按行), 以及原凭证不存在的冲回凭证 VX-3 后: 给格式
     "Reversal of ID (\\d+)" 与模板 "VX-{1}" 时两条规则都不含这些行, 其余行与插行前整行相同; 不给 (为空) 时都含 (D03
@@ -591,7 +592,7 @@ async def test_csh02_d03_d04_drop_voided_pairs(storage):
     import yaml
 
     from backend.contracts.knowledge import ProcedureTemplate
-    from tests.fakes import NUMBAT_D03_ROWS, NUMBAT_D04_ROWS
+    from tests.fakes import NUMBAT_D02_ROWS, NUMBAT_D03_ROWS, NUMBAT_D04_ROWS
 
     engine, e, loader, _evidence = storage
     await loader.load(e.id, "demo")
@@ -608,6 +609,7 @@ async def test_csh02_d03_d04_drop_voided_pairs(storage):
     async def ids(rule: str, params: dict[str, object]) -> list[str]:
         return [r["id"] for r in await financial.query(e.id, sql[rule], params)]
 
+    assert await financial.query(e.id, sql["D02"], dict(period_end="2026-06-30", subsequent_days=10)) == NUMBAT_D02_ROWS
     expected = {"D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
     for rule in ("D03", "D04"):
         for params in (plain, voids):

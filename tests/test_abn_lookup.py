@@ -33,6 +33,7 @@ from tests.fakes import (
     make_ctx,
     make_deps,
     make_runner,
+    no_uploads,
 )
 
 WOMBAT = AbnRecord(
@@ -178,12 +179,13 @@ def composite(abr: FakeAbr, dataset: str | None, guid: str = FAKE_GUID) -> Compo
     """项目 ENGAGEMENT (dataset 按给定) 的组合登记来源: 数据集一侧是存着 Numbat 登记的假登记, ABN 实查走假 ABR."""
     store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT.model_copy(update={"dataset": dataset})])
     datasets: Any = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
-    return CompositeRegistrySource(store, datasets, abr.client(guid))
+    return CompositeRegistrySource(store, datasets, abr.client(guid), no_uploads())
 
 
 async def test_composite_routes_by_dataset() -> None:
-    """有数据集 (Numbat, Xero) 照旧读数据集的登记, 不发 ABR 请求; 新建的客户 (没有数据集) ABN 实查, ASIC 没有来源
-    (no_source); 项目不存在抛 LookupError."""
+    """有数据集 (Numbat, Xero) 照旧读数据集的登记, 不发 ABR 请求; 新建的客户 (没有数据集) ABN 实查, ASIC 摘录取上传的
+    (R290, 这里一份都没有: no_extract), 公司登记没有来源 (no_source, 新客户的 ACC-04 只看摘录); 项目不存在抛
+    LookupError."""
     abr = FakeAbr({WOMBAT.abn: "active"})
     with_dataset = composite(abr, "demo")
     assert await with_dataset.abn(ENGAGEMENT.id, NUMBAT_ABN.abn) == NUMBAT_ABN
@@ -192,8 +194,10 @@ async def test_composite_routes_by_dataset() -> None:
     new_client = composite(abr, None)
     assert await new_client.abn(ENGAGEMENT.id, WOMBAT.abn) == WOMBAT
     with pytest.raises(RegistryUnavailable) as e:
+        await new_client.asic_extract(ENGAGEMENT.id, "900043101")
+    with pytest.raises(RegistryUnavailable) as company:
         await new_client.asic_company(ENGAGEMENT.id, "900043101")
-    assert e.value.reason == "no_source" and len(abr.requests) == 1
+    assert (e.value.reason, company.value.reason, len(abr.requests)) == ("no_extract", "no_source", 1)
     with pytest.raises(LookupError):
         await new_client.abn("ENG-NONE", WOMBAT.abn)
 
@@ -215,30 +219,34 @@ SOLE_RESULT = {
 
 
 @pytest.mark.parametrize(
-    ("reply", "checks", "result"),
+    ("reply", "checks", "result", "asic"),
     [
-        ("active", [True, True, None], WOMBAT_RESULT),  # ASIC 摘录未接入: 只有 company_registered 待人工确认
-        ("cancelled", [False, True, None], {**WOMBAT_RESULT, "status": "Cancelled"}),
-        # 没有 ACN (个人独资) 或查不到: company_registered 只由 ASIC 来源判定, 没有来源即待人工确认, 不判不通过
-        ("sole_trader", [True, False, None], SOLE_RESULT),
-        ("not_found", [False, False, None], None),
+        # 公司而没有上传 ASIC 摘录 (标了客户无此类资料时 ACC-04 才走到这里, R290): 公司两项待人工确认, 记一条 "没有查询"
+        ("active", [True, True, None, None], WOMBAT_RESULT, True),
+        ("cancelled", [False, True, None, None], {**WOMBAT_RESULT, "status": "Cancelled"}, True),
+        # 没有 ACN (个人独资) 或查不到: 不要求摘录, 公司两项待人工确认, 不判不通过, 不另记 ASIC 留痕
+        ("sole_trader", [True, False, None, None], SOLE_RESULT, False),
+        ("not_found", [False, False, None, None], None, False),
     ],
 )
 async def test_acc04_checks_new_clients_against_abn_lookup(
-    reply: str, checks: list[bool | None], result: dict[str, Any] | None
+    reply: str, checks: list[bool | None], result: dict[str, Any] | None, asic: bool
 ) -> None:
     """新客户 (没有数据集) 的 ACC-04 经组合登记来源实查 ABN Lookup: 有效, 已注销, 个人独资, 查不到, 每次查询一条
-    留痕 (沿用现有的摘要与 payload, result 为解析出的登记记录), ASIC 另记一条 "没有查询"."""
+    留痕 (沿用现有的摘要与 payload, result 为解析出的登记记录); 是公司时摘录一项另记一条 "没有查询"."""
     abr = FakeAbr({WOMBAT.abn: reply})
     trail = FakeTrail()
-    agent = ClientIntelAgent(make_deps(composite(abr, None), trail))  # type: ignore[arg-type]
+    new_client = ENGAGEMENT.model_copy(update={"dataset": None})
+    store = FakeEngagementStore([NUMBAT_PROFILE], [new_client])
+    agent = ClientIntelAgent(make_deps(composite(abr, None), trail, store))  # type: ignore[arg-type]
     profile = NUMBAT_PROFILE.model_copy(update={"abn": WOMBAT.abn, "legal_name": "Wombat Analytics Pty Ltd"})
-    found = await agent.collect_checks(make_ctx(agent.deps), profile)
+    found = await agent.collect_checks(make_ctx(agent.deps, engagement=new_client), profile)
+    assert [c.check for c in found] == ["abn_active", "name_match", "company_registered", "directors_match"]
     assert [c.passed for c in found] == checks
-    abn_entry, asic_entry = trail.entries
+    abn_entry, *asic_entries = trail.entries
     assert (abn_entry.summary, abn_entry.payload) == (f"ABN Lookup {WOMBAT.abn}", {"abn": WOMBAT.abn, "result": result})
-    acn = result["acn"] if result is not None else None
-    assert asic_entry.payload == {"acn": acn, "available": False, "reason": "no_source", "result": None}
+    expected = [{"acn": WOMBAT.acn, "available": False, "reason": "no_extract", "result": None}] if asic else []
+    assert [e.payload for e in asic_entries] == expected
     assert len(abr.requests) == 1
 
 

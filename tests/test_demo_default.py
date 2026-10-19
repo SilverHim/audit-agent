@@ -71,9 +71,10 @@ class CreatingEngagementStore(FakeEngagementStore):
         return engagement
 
 
-def demo_runner(registry: Callable[[Any, Callable[[str], Path | None]], Any] | None = None) -> GraphRunner:
+def demo_runner(registry: Callable[[Any, Callable[[str], Path | None], Any], Any] | None = None) -> GraphRunner:
     """与组装根相同的数据集载入器 (CSV 加带补造目录的 Xero 快照) 与按项目数据集定位的登记 mock; 其余为假实现.
-    registry 给出时以 (项目存储, 数据集目录的定位函数) 建登记来源 (如组合实现), 替代登记 mock."""
+    registry 给出时以 (项目存储, 数据集目录的定位函数, 依赖) 建登记来源 (如组合实现, 其上传摘录一侧读依赖里的存储),
+    替代登记 mock."""
     datasets = RoutingDatasetLoader(
         CsvDatasetLoader(SETTINGS.DATASET_ROOT, NO_DB, NO_DB),
         {
@@ -88,8 +89,12 @@ def demo_runner(registry: Callable[[Any, Callable[[str], Path | None]], Any] | N
     )
     engagements = CreatingEngagementStore()
     deps = make_deps(FakeRegistry(), FakeTrail(), engagements, FakeOutputStore())
-    build = registry if registry is not None else DatasetRegistrySource
-    deps = replace(deps, datasets=datasets, registry=build(engagements, datasets.supplement_dir))
+    source = (
+        registry(engagements, datasets.supplement_dir, deps)
+        if registry is not None
+        else DatasetRegistrySource(engagements, datasets.supplement_dir)
+    )
+    deps = replace(deps, datasets=datasets, registry=source)
     app = compile_graph(make_graph_nodes(deps), InMemorySaver(serde=checkpoint_serde()))
     return GraphRunner(app, deps)
 

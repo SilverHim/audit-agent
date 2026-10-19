@@ -8,9 +8,17 @@ import {
   evidenceListConfirmationsOptions,
   evidenceListContractsOptions,
   evidenceListDocumentsOptions,
+  evidenceListRegistryExtractsOptions,
 } from '@/client/@tanstack/react-query.gen'
 import { evidenceGetEvidence } from '@/client/sdk.gen'
-import type { Confirmation, Contract, DocumentRef, EvidencePointer, Reliability } from '@/client/types.gen'
+import type {
+  Confirmation,
+  Contract,
+  DocumentRef,
+  EvidencePointer,
+  RegistryExtractView,
+  Reliability,
+} from '@/client/types.gen'
 import { PdfViewer } from '@/components/pdf-viewer'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -26,19 +34,29 @@ import type { Messages } from '@/locales/en'
 
 export const Route = createFileRoute('/engagements/$eid/data/documents/$docId')({ component: DocumentView })
 
+type EditKind = 'text' | 'long' | 'amount' | 'date' | 'choice'
+type Choice = { value: string; label: string }
+
+// 一项抽取结果可改的一个部分: 字段, 输入方式与当前值; choice 时从 choices 中选
+type EditPart = { field: string; label: string; kind: EditKind; raw: string; choices?: Choice[] }
+
 type Item = {
   id: string
-  group: 'fact' | 'term'
+  group: 'fact' | 'term' | 'officer' | 'holder'
   label: string
   value: string
   page: number
   candidates: string[]
-  edit: {
-    target: 'contracts' | 'confirmations'
+  // 只读的项 (ASIC 摘录的股东) 没有 edit, 点选只跳页
+  edit?: {
+    target: 'contracts' | 'confirmations' | 'registry-extracts'
     id: string
     field: string
-    kind: 'text' | 'long' | 'amount' | 'date'
+    kind: EditKind
     raw: string
+    choices?: Choice[]
+    label?: string // 有 more 时这一部分在对话框里的名称
+    more?: EditPart[] // 同一项另可改的部分 (高管的职务与任职日)
   }
 }
 
@@ -165,12 +183,120 @@ function confirmationItems(confirmation: Confirmation, t: Messages, formatDate: 
   return items
 }
 
+function acnForm(acn: string): string {
+  return acn.length === 9 ? `${acn.slice(0, 3)} ${acn.slice(3, 6)} ${acn.slice(6)}` : acn
+}
+
+// 当前值不在可选值里时 (正常不会有) 仍列出, 保留显示
+function choicesOf(values: string[], current: string, label: (value: string) => string): Choice[] {
+  const all = values.includes(current) ? values : [current, ...values]
+  return all.map((value) => ({ value, label: label(value) }))
+}
+
+// ASIC 摘录 (需求 R290): 登记信息, 董事与秘书 (姓名, 职务, 任职日都可改), 股东只读; abn 与注册地址没写时也列出, 可补填
+function registryItems(view: RegistryExtractView, t: Messages, formatDate: (iso: string) => string): Item[] {
+  const x = view.extraction
+  const base = { target: 'registry-extracts' as const, id: view.document_id }
+  const fact = (
+    field: string,
+    value: string,
+    candidates: string[],
+    raw: string,
+    kind: EditKind = 'text',
+    choices?: Choice[],
+  ): Item => ({
+    id: field,
+    group: 'fact',
+    label: t.docView.fields[field] ?? field,
+    value,
+    page: pageOf(x.evidence, field),
+    candidates,
+    edit: { ...base, field, kind, raw, choices },
+  })
+  // 只读的登记项 (类别, 子类): 点选跳页, 不能改
+  const readOnly = (field: string, value: string): Item => ({
+    id: field,
+    group: 'fact',
+    label: t.docView.fields[field] ?? field,
+    value,
+    page: pageOf(x.evidence, field),
+    candidates: [value],
+  })
+  const missing = t.docView.notStated
+  const statusLabel = (value: string) => t.docView.statuses[value] ?? value
+  const roleLabel = (value: string) => t.docView.roles[value] ?? value
+  const items: Item[] = [
+    fact('name', x.name, [x.name], x.name),
+    fact('acn', acnForm(x.acn), [acnForm(x.acn), x.acn], x.acn),
+    x.abn ? fact('abn', abnForm(x.abn), [abnForm(x.abn), x.abn], x.abn) : fact('abn', missing, [], ''),
+    fact(
+      'status',
+      statusLabel(x.status),
+      [x.status],
+      x.status,
+      'choice',
+      choicesOf(['Registered', 'Deregistered'], x.status, statusLabel),
+    ),
+    { ...fact('type', x.type, [x.type], x.type), label: t.docView.fields.company_type },
+    readOnly('company_class', x.company_class),
+    readOnly('subclass', x.subclass),
+    fact('registered_date', formatDate(x.registered_date), dateForms(x.registered_date), x.registered_date, 'date'),
+    x.registered_address
+      ? fact('registered_address', x.registered_address, [x.registered_address], x.registered_address)
+      : fact('registered_address', missing, [], ''),
+  ]
+  const officers: Item[] = x.officeholders.map((person, index) => ({
+    id: `officeholders-${index}`,
+    group: 'officer',
+    label: `${roleLabel(person.role)} · ${t.docView.appointed(formatDate(person.appointed))}`,
+    value: person.name,
+    page: pageOf(x.evidence, 'officeholders'),
+    candidates: [person.name],
+    edit: {
+      ...base,
+      field: `officeholders[${index}].name`,
+      kind: 'text',
+      raw: person.name,
+      label: t.docView.officerParts.name,
+      more: [
+        {
+          field: `officeholders[${index}].role`,
+          label: t.docView.officerParts.role,
+          kind: 'choice',
+          raw: person.role,
+          choices: choicesOf(['director', 'secretary'], person.role, roleLabel),
+        },
+        {
+          field: `officeholders[${index}].appointed`,
+          label: t.docView.officerParts.appointed,
+          kind: 'date',
+          raw: person.appointed,
+        },
+      ],
+    },
+  }))
+  const holders: Item[] = x.shareholders.map((holder, index) => ({
+    id: `shareholders-${index}`,
+    group: 'holder',
+    label: t.docView.shareholderKinds[holder.kind] ?? holder.kind,
+    value: `${holder.name} — ${t.docView.holding(
+      holder.shares.toLocaleString('en-AU'),
+      t.docView.shareClasses[holder.share_class] ?? holder.share_class,
+      `${Math.round(holder.pct * 10000) / 100}%`,
+    )}`,
+    page: pageOf(x.evidence, 'shareholders'),
+    candidates: [holder.name],
+  }))
+  return [...items, ...officers, ...holders]
+}
+
 function DocumentView() {
   const { eid, docId } = Route.useParams()
   const { t, formatDate } = useI18n()
   const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
   const contracts = useQuery(evidenceListContractsOptions({ path: { eid } }))
   const confirmations = useQuery(evidenceListConfirmationsOptions({ path: { eid } }))
+  const extracts = useQuery(evidenceListRegistryExtractsOptions({ path: { eid } }))
   const doc = documents.data?.find((item) => item.id === docId)
   const mediaType = doc?.media_type ?? 'application/pdf'
   const isPdf = mediaType === 'application/pdf'
@@ -211,8 +337,10 @@ function DocumentView() {
     const contract = contracts.data?.find((item) => item.document_id === docId)
     if (contract) return contractItems(contract, t, formatDate)
     const confirmation = confirmations.data?.find((item) => item.reply_document_id === docId)
-    return confirmation ? confirmationItems(confirmation, t, formatDate) : []
-  }, [contracts.data, confirmations.data, docId, t, formatDate])
+    if (confirmation) return confirmationItems(confirmation, t, formatDate)
+    const extract = extracts.data?.find((item) => item.document_id === docId)
+    return extract ? registryItems(extract, t, formatDate) : []
+  }, [contracts.data, confirmations.data, extracts.data, docId, t, formatDate])
 
   const current = items.find((item) => item.id === selected) ?? null
   const shownPage = page ?? current?.page ?? 1
@@ -222,7 +350,15 @@ function DocumentView() {
   )
   const facts = items.filter((item) => item.group === 'fact')
   const terms = items.filter((item) => item.group === 'term')
-  const isContract = items[0]?.edit.target === 'contracts'
+  const officers = items.filter((item) => item.group === 'officer')
+  const holders = items.filter((item) => item.group === 'holder')
+  const target = items.find((item) => item.edit)?.edit?.target
+  const factsTitle =
+    target === 'contracts'
+      ? t.docView.facts
+      : target === 'registry-extracts'
+        ? t.docView.registryFacts
+        : t.docView.replyFacts
 
   const pick = (item: Item) => {
     setSelected(item.id)
@@ -341,24 +477,25 @@ function DocumentView() {
             <h2 className="m-0 font-semibold text-base">{t.docView.extracted}</h2>
             {items.length ? (
               <>
-                <ItemGroup
-                  title={isContract ? t.docView.facts : t.docView.replyFacts}
-                  items={facts}
-                  selected={selected}
-                  onPick={pick}
-                />
+                <ItemGroup title={factsTitle} items={facts} selected={selected} onPick={pick} />
                 {terms.length ? (
                   <ItemGroup title={t.docView.terms} items={terms} selected={selected} onPick={pick} long />
                 ) : null}
+                {officers.length ? (
+                  <ItemGroup title={t.docView.officeholders} items={officers} selected={selected} onPick={pick} />
+                ) : null}
+                {holders.length ? (
+                  <ItemGroup title={t.docView.shareholders} items={holders} selected={selected} onPick={pick} />
+                ) : null}
                 <div className="flex justify-end border-line-soft border-t pt-2.5">
-                  <Button type="button" variant="outline" disabled={!current} onClick={() => setEditing(current)}>
+                  <Button type="button" variant="outline" disabled={!current?.edit} onClick={() => setEditing(current)}>
                     {t.docView.edit}
                   </Button>
                 </div>
               </>
             ) : (
               <p className="m-0 text-[13.5px] text-muted-foreground">
-                {contracts.isPending || confirmations.isPending ? t.app.loading : t.docView.none}
+                {contracts.isPending || confirmations.isPending || extracts.isPending ? t.app.loading : t.docView.none}
               </p>
             )}
           </aside>
@@ -417,29 +554,68 @@ function ItemGroup({
   )
 }
 
+const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 font-normal text-[14px]'
+
 function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; onClose: () => void }) {
   const { t } = useI18n()
   const edit = useEditExtraction(eid)
+  const [partIndex, setPartIndex] = useState(0)
   const [value, setValue] = useState('')
   const [reason, setReason] = useState('')
+  const parts: EditPart[] = item?.edit
+    ? [
+        {
+          field: item.edit.field,
+          label: item.edit.label ?? item.label,
+          kind: item.edit.kind,
+          raw: item.edit.raw,
+          choices: item.edit.choices,
+        },
+        ...(item.edit.more ?? []),
+      ]
+    : []
+  const part = parts[partIndex] ?? parts[0]
 
   useEffect(() => {
-    setValue(item?.edit.raw ?? '')
+    setPartIndex(0)
+    setValue(item?.edit?.raw ?? '')
     setReason('')
   }, [item])
 
-  if (!item) return null
-  const parsed = item.edit.kind === 'amount' ? audToCents(value) : value.trim()
-  const canSave = parsed !== null && parsed !== '' && value.trim() !== item.edit.raw && reason.trim().length > 0
+  if (!item?.edit || !part) return null
+  const target = item.edit
+  const choose = (index: number) => {
+    setPartIndex(index)
+    setValue(parts[index]?.raw ?? '')
+  }
+  const parsed = part.kind === 'amount' ? audToCents(value) : value.trim()
+  const canSave = parsed !== null && parsed !== '' && value.trim() !== part.raw && reason.trim().length > 0
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
           <DialogTitle className="text-base">{item.label}</DialogTitle>
         </DialogHeader>
+        {parts.length > 1 ? (
+          <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
+            <label htmlFor="extraction-part">{t.docView.part}</label>
+            <select
+              id="extraction-part"
+              className={SELECT}
+              value={partIndex}
+              onChange={(event) => choose(Number(event.target.value))}
+            >
+              {parts.map((option, index) => (
+                <option key={option.field} value={index}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
           <label htmlFor="extraction-value">{t.docView.value}</label>
-          {item.edit.kind === 'long' ? (
+          {part.kind === 'long' ? (
             <Textarea
               id="extraction-value"
               rows={5}
@@ -448,12 +624,25 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
               value={value}
               onChange={(event) => setValue(event.target.value)}
             />
+          ) : part.kind === 'choice' ? (
+            <select
+              id="extraction-value"
+              className={SELECT}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            >
+              {(part.choices ?? []).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           ) : (
             <Input
               id="extraction-value"
-              type={item.edit.kind === 'date' ? 'date' : 'text'}
-              inputMode={item.edit.kind === 'amount' ? 'decimal' : undefined}
-              className={cn('h-10 font-normal', item.edit.kind === 'amount' && 'font-mono')}
+              type={part.kind === 'date' ? 'date' : 'text'}
+              inputMode={part.kind === 'amount' ? 'decimal' : undefined}
+              className={cn('h-10 font-normal', part.kind === 'amount' && 'font-mono')}
               value={value}
               onChange={(event) => setValue(event.target.value)}
             />
@@ -481,9 +670,9 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
             onClick={() =>
               edit.mutate(
                 {
-                  target: item.edit.target,
-                  id: item.edit.id,
-                  body: { field: item.edit.field, value: parsed, reason: reason.trim() },
+                  target: target.target,
+                  id: target.id,
+                  body: { field: part.field, value: parsed, reason: reason.trim() },
                 },
                 {
                   onSuccess: () => {

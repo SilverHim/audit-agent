@@ -950,7 +950,8 @@ class GraphDecisionSubmit:
         source: ProfileSource = ProfileSource.update,
         precheck: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.
+        """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_inputs, 再到 p0_intel 重跑
+        ACC-04 再重新呈报.
 
         version 须为该客户画像的最新版本 +1 (画像跨项目共用, 版本号全局递增). changes 为请求给出的字段 (可含 id,
         须为项目 client_id): 在锁内以通过版本校验的最新一版为底合并, 没给的字段沿用, 给 None 的可空字段清空; 合并后
@@ -1010,7 +1011,7 @@ class GraphDecisionSubmit:
                     | ({} if source is ProfileSource.update else {"source": source.value}),
                 )
             )
-            # 只写新版本号: ACC-01 的路由发现评分卡依据的版本落后, 选 rerun 回 p0_intel
+            # 只写新版本号: ACC-01 的路由发现评分卡依据的版本落后, 选 rerun 回 p0_inputs
             await self.app.aupdate_state(
                 GraphRunner.config(eid),
                 {"client_profile_version": saved.version},

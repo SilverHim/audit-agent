@@ -6,6 +6,7 @@ import csv
 import functools
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import weakref
@@ -26,6 +27,7 @@ from pydantic import BaseModel, ValidationError
 import backend.main
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
+from backend.adapters.registry import UploadedExtracts
 from backend.adapters.registry_mock import person_key
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
@@ -1400,35 +1402,6 @@ def numbat_pln07_exception(run: ProcedureRun) -> AuditException:
     )
 
 
-NUMBAT_D02_ROWS = [  # CSH-02 D02: 期后 10 天的银行流水 (合成数据集设计第 5.4 节), BA-02 在此期间无流水
-    {
-        "source_type": "bank_transaction",
-        "id": tid,
-        "bank_account_id": "BA-01",
-        "txn_date": day,
-        "amount_cents": amount,
-        "description": description,
-        "reference": reference,
-    }
-    for tid, day, amount, description, reference in (
-        ("BT-01-20260701-01", date(2026, 7, 1), 3145000, "EFT CREDIT WALLABY INSTRUMENTS PTY LTD", "SI-2026-0519"),
-        (
-            "BT-01-20260701-02",
-            date(2026, 7, 1),
-            -2600000,
-            "EFT DEBIT EXAMPLE INDUSTRIAL ESTATES PTY LTD",
-            "RENT-2026-07",
-        ),
-        ("BT-01-20260702-01", date(2026, 7, 2), 5000000, "EFT CREDIT ECHIDNA CONTROLS PTY LTD", "SI-2026-0547"),
-        ("BT-01-20260703-01", date(2026, 7, 3), 1892000, "EFT CREDIT BANKSIA POWER SYSTEMS PTY LTD", "SI-2026-0520"),
-        ("BT-01-20260706-01", date(2026, 7, 6), 2467550, "EFT CREDIT PLATYPUS SENSOR WORKS PTY LTD", "SI-2026-0521"),
-        ("BT-01-20260708-01", date(2026, 7, 8), 1238000, "EFT CREDIT LORIKEET LIGHTING PTY LTD", "SI-2026-0522"),
-        ("BT-01-20260709-01", date(2026, 7, 9), 2711025, "EFT CREDIT KOOKABURRA TELECOM PTY LTD", "SI-2026-0523"),
-        ("BT-01-20260710-01", date(2026, 7, 10), 1596425, "EFT CREDIT MAGPIE SECURITY SYSTEMS PTY LTD", "SI-2026-0524"),
-    )
-]
-
-
 def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
     """REV-08 R01 对 SI-2026-0612 的跨期例外 (合成数据集设计第 7 节第 7 行), 字段按 REV-08.yaml 的输出列."""
     return AuditException(
@@ -1797,50 +1770,119 @@ def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
     return tables
 
 
-def numbat_window_lines(lookback_days: int = 5) -> list[JournalEntry]:
-    """Numbat 总账 (data/demo/journal_entries.csv) 期末前 lookback_days 天的分录行 (闭区间, 同 CSH-02 D03, D04 的窗口;
-    缺省同 CSH-02.yaml 的 lookback_days), 按 (入账日, 行 ID)."""
-    end = ENGAGEMENT.period_end
-    lines = cast(tuple[JournalEntry, ...], numbat_tables()[TableKind.journal_entries])
-    return sorted(
-        (j for j in lines if end - timedelta(days=lookback_days) <= j.posting_date <= end),
+@functools.cache
+def numbat_bank_transactions() -> tuple[BankTransaction, ...]:
+    """Numbat 演示数据集的银行流水 (data/demo/bank_transactions.csv, 读一次缓存)."""
+    with (DEMO_DATASET / "bank_transactions.csv").open(newline="", encoding="utf-8") as stream:
+        return tuple(
+            BankTransaction.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)
+        )
+
+
+def csh02_voided(lines: Iterable[JournalEntry], pattern: str | None, template: str | None) -> set[str]:
+    """CSH-02 D03, D04 要剔除的作废对的凭证号, 口径同两条规则的 WITH 段: 冲回凭证为任一行说明匹配 pattern 的凭证,
+    原凭证号为 template 中的 {1} 换成第一个捕获组 (pattern 没有捕获组时为整个匹配, 同 PostgreSQL 的 substring);
+    pattern 为空时不剔除, template 为空时只剔除冲回凭证."""
+    if pattern is None:
+        return set()
+    regex = re.compile(pattern)
+    voided: set[str] = set()
+    for line in lines:
+        found = regex.search(line.description) if line.description is not None else None
+        if found is None:
+            continue
+        voided.add(line.entry_no)
+        part = found.group(1) if regex.groups else found.group(0)
+        if template is not None and part is not None:
+            voided.add(template.replace("{1}", part))
+    return voided
+
+
+def csh02_window_rows(
+    lines: Iterable[JournalEntry],
+    bank_accounts: Iterable[BankAccount],
+    period_end: date,
+    lookback_days: int,
+    pattern: str | None = None,
+    template: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """CSH-02 D03, D04 的行, 按两条规则 SQL 的口径由分录行派生: 窗口为 [期末 - lookback_days, 期末] (闭区间), 作废对
+    (csh02_voided) 整张凭证剔除; D03 只取银行科目上的行 (按银行账户的总账科目), 按 (银行账户, 入账日, 行 ID), D04
+    取全部科目, 按 (入账日, 行 ID). 列同 SQL. Numbat 与 Xero 的假规则引擎共用."""
+    lines = list(lines)
+    voided = csh02_voided(lines, pattern, template)
+    start = period_end - timedelta(days=lookback_days)
+    window = sorted(
+        (j for j in lines if start <= j.posting_date <= period_end and j.entry_no not in voided),
         key=lambda j: (j.posting_date, j.id),
     )
+    banks = {b.gl_account_code: b.id for b in bank_accounts}
+    d03 = [
+        {
+            "source_type": "journal_entry",
+            "id": j.id,
+            "bank_account_id": banks[j.account_code],
+            "entry_no": j.entry_no,
+            "posting_date": j.posting_date,
+            "debit_cents": j.debit_cents,
+            "credit_cents": j.credit_cents,
+            "description": j.description,
+            "source_doc": j.source_doc,
+        }
+        for j in sorted(
+            (j for j in window if j.account_code in banks), key=lambda j: (banks[j.account_code], j.posting_date, j.id)
+        )
+    ]
+    d04 = [
+        {
+            "source_type": "journal_entry",
+            "id": j.id,
+            "entry_no": j.entry_no,
+            "posting_date": j.posting_date,
+            "account_code": j.account_code,
+            "debit_cents": j.debit_cents,
+            "credit_cents": j.credit_cents,
+            "description": j.description,
+        }
+        for j in window
+    ]
+    return {"D03": d03, "D04": d04}
 
 
-NUMBAT_BANK_GL = {r.gl_account_code: r.id for r in NUMBAT_ROWS if isinstance(r, BankAccount)}  # 总账科目 → 银行账户
-# CSH-02 D03, D04 的行: 由 CSV 按两条规则的口径派生 (Numbat 没有作废对, 不剔除), 列与次序同规则 SQL;
-# tests/test_persistence_postgres 核对连库结果与它们整行相同
-NUMBAT_D03_ROWS = [  # D03: 窗口内银行科目上的分录行, 按 (银行账户, 入账日, 行 ID)
-    {
-        "source_type": "journal_entry",
-        "id": j.id,
-        "bank_account_id": NUMBAT_BANK_GL[j.account_code],
-        "entry_no": j.entry_no,
-        "posting_date": j.posting_date,
-        "debit_cents": j.debit_cents,
-        "credit_cents": j.credit_cents,
-        "description": j.description,
-        "source_doc": j.source_doc,
-    }
-    for j in sorted(
-        (j for j in numbat_window_lines() if j.account_code in NUMBAT_BANK_GL),
-        key=lambda j: (NUMBAT_BANK_GL[j.account_code], j.posting_date, j.id),
-    )
-]
-NUMBAT_D04_ROWS = [  # D04: 窗口内全部科目的分录行, 按 (入账日, 行 ID)
-    {
-        "source_type": "journal_entry",
-        "id": j.id,
-        "entry_no": j.entry_no,
-        "posting_date": j.posting_date,
-        "account_code": j.account_code,
-        "debit_cents": j.debit_cents,
-        "credit_cents": j.credit_cents,
-        "description": j.description,
-    }
-    for j in numbat_window_lines()
-]
+def csh02_subsequent_rows(
+    transactions: Iterable[BankTransaction], period_end: date, subsequent_days: int
+) -> list[dict[str, Any]]:
+    """CSH-02 D02 的行, 按规则 SQL 的口径由银行流水派生: 交易日在 (期末, 期末 + subsequent_days] 内, 按 (银行账户,
+    交易日, 行 ID). 列同 SQL."""
+    end = period_end + timedelta(days=subsequent_days)
+    return [
+        {
+            "source_type": "bank_transaction",
+            "id": t.id,
+            "bank_account_id": t.bank_account_id,
+            "txn_date": t.txn_date,
+            "amount_cents": t.amount_cents,
+            "description": t.description,
+            "reference": t.reference,
+        }
+        for t in sorted(
+            (t for t in transactions if period_end < t.txn_date <= end),
+            key=lambda t: (t.bank_account_id, t.txn_date, t.id),
+        )
+    ]
+
+
+# CSH-02 D02, D03, D04 的行: 由 data/demo 的 CSV 按规则的口径派生 (Numbat 没有作废对), 天数同 CSH-02.yaml; D03, D04
+# 与连库结果整行相同由 tests/test_persistence_postgres 核对. D02 中 BA-02 在期后 10 天没有流水
+NUMBAT_D02_ROWS = csh02_subsequent_rows(numbat_bank_transactions(), ENGAGEMENT.period_end, 10)
+NUMBAT_WINDOW = csh02_window_rows(
+    cast(tuple[JournalEntry, ...], numbat_tables()[TableKind.journal_entries]),
+    [r for r in NUMBAT_ROWS if isinstance(r, BankAccount)],
+    ENGAGEMENT.period_end,
+    5,
+)
+NUMBAT_D03_ROWS = NUMBAT_WINDOW["D03"]  # 窗口内银行科目上的分录行
+NUMBAT_D04_ROWS = NUMBAT_WINDOW["D04"]  # 窗口内全部科目的分录行
 
 
 @functools.cache
@@ -2154,9 +2196,10 @@ class FakeDataStore:
         documents: Sequence[DocumentChange],
     ) -> ImportBatch:
         """同真实实现一次写成: 批次已 committed 时什么都不写, 返回它; 有表时经 write_tables 写 (记进 written, 那里
-        出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract) 与回函抽取 (reply,
-        第 1 版); 写了合同时记数据变动 contracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据
-        版本. 批次或文件不存在时在改动之前抛出 (模拟回滚)."""
+        出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract), 回函抽取 (reply,
+        第 1 版) 与 ASIC 摘录抽取 (registry_extract, 接在已有版本之后); 写了合同或摘录时记数据变动 contracts 或
+        registry_extracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据版本. 批次或文件
+        不存在时在改动之前抛出 (模拟回滚)."""
         stored = self.import_batches.get(batch.id)
         if stored is None:
             raise LookupError(batch.id)
@@ -2184,12 +2227,21 @@ class FakeDataStore:
                 await self.financial.save_contract(eid, contract)
             if change.reply is not None:
                 await self.save_extraction(eid, "reply", change.document_id, 1, change.reply, changed_by=AgentId.A3)
-        if any(change.contracts for change in documents):
+            if change.registry_extract is not None:  # 接在已有版本之后 (需求 R290)
+                known = [v for (t, i, v) in self.extractions if (t, i) == ("registry_extract", change.document_id)]
+                number = max(known, default=0) + 1
+                data = change.registry_extract
+                document_id = change.document_id
+                await self.save_extraction(eid, "registry_extract", document_id, number, data, changed_by=AgentId.A3)
+        extracted = [DataInput.contracts] if any(change.contracts for change in documents) else []
+        if any(change.registry_extract is not None for change in documents):
+            extracted.append(DataInput.registry_extracts)
+        if extracted:
             if version is None:
-                self.record(DataInput.contracts)
+                self.record(*extracted)
                 version = self.data_version
             else:
-                self.data_changes.append(DataChange(data_version=version, input=DataInput.contracts))
+                self.data_changes += [DataChange(data_version=version, input=i) for i in extracted]
         committed = batch.model_copy(update={"data_version": version})
         self.import_batches[batch.id] = committed
         return committed
@@ -2878,6 +2930,13 @@ def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engageme
         run=make_run(procedure_id, params=dict(template.params)),
         state=initial_state(engagement, [procedure], NUMBAT_PROFILE.version),
     )
+
+
+def no_uploads() -> UploadedExtracts:
+    """组合登记来源 (CompositeRegistrySource) 里没有上传任何 ASIC 摘录的一侧: 新建的客户的 ASIC 一律 no_extract
+    (需求 R290), 测不涉及摘录的用例用."""
+    financial = FakeFinancialStore()
+    return UploadedExtracts(financial, FakeDataStore(), FakeEvidenceStore(financial))
 
 
 def make_runner(

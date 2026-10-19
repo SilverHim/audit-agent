@@ -125,7 +125,15 @@ function Client() {
                         {check.detail}
                       </span>
                       <span>
-                        <EvidenceLink eid={eid} pointer={check.evidence} label={t.clientPage.viewTrail} />
+                        <EvidenceLink
+                          eid={eid}
+                          pointer={check.evidence}
+                          label={
+                            check.evidence.source_type === 'document'
+                              ? t.clientPage.viewOriginal
+                              : t.clientPage.viewTrail
+                          }
+                        />
                       </span>
                     </article>
                   ))}

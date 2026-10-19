@@ -128,7 +128,7 @@ async def catch_up_profile(
     app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot
 ) -> StateSnapshot:
     """项目采用的画像版本高于检查点的 (更新客户资料已提交, 检查点没跟上): 先补写 decision 留痕, 再以 ACC-01 闸门身份
-    写入新版本号, ACC-01 的路由随即选 rerun 回 p0_intel. 不在 ACC-01 闸门时抛 RuntimeError. 返回补做后的检查点."""
+    写入新版本号, ACC-01 的路由随即选 rerun 回 p0_inputs. 不在 ACC-01 闸门时抛 RuntimeError. 返回补做后的检查点."""
     version = engagement.client_profile_version
     if version <= fill_defaults(snapshot.values)["client_profile_version"]:
         return snapshot

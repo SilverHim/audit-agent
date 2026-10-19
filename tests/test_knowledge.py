@@ -2289,7 +2289,7 @@ def document_pointers(node: Any) -> list[dict[str, Any]]:
 
 def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[str, str, str, int]]]:
     """该数据集测试 fixture 中的 document 指针: 返回 (各 fixture 的指针数, 不合格的指针). 合格: source_id 在 manifest
-    中, 页码在 1 到该 PDF 页数之间; 登记了期望 PDF 函数时还须指向它给出的 PDF."""
+    中, 页码在 1 到该 PDF 页数之间; 登记了期望 PDF 函数且它给出对应时还须指向其中一份."""
     documents = fs.documents()
     checked: dict[str, int] = {}
     wrong = []
@@ -2304,7 +2304,7 @@ def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[
             entry = documents.get(p["source_id"])
             if (
                 entry is None
-                or (expected is not None and entry["path"] != expected)
+                or (expected is not None and entry["path"] not in expected)
                 or not isinstance(p.get("page"), int)
                 or not 1 <= p["page"] <= entry["page_count"]
             ):
@@ -2394,8 +2394,8 @@ def test_fake_documents_from_manifest() -> None:
 
 def check_runtime(fs: FixtureSet) -> None:
     """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过.
-    登记了上传处理的固定输出 (uploads) 时, 其中 uploads_in_runtime 列出的程序 (演示也用的分类, 回函副本与账表识别)
-    也须在运行副本中; 其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
+    登记了上传处理的固定输出 (uploads) 时, 其中 uploads_in_runtime 列出的程序 (演示也用的分类, 回函副本, 账表识别与
+    ASIC 摘录抽取) 也须在运行副本中; 其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
     if not fs.runtime.is_dir():
         raise AssertionError(f"{fs.name}: 运行副本未生成 ({fs.runtime})")
     test_files = {p.relative_to(fs.fixtures): p for p in fs.fixtures.rglob("*.json")}

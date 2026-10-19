@@ -108,10 +108,12 @@ def env(llm: LLMClient | None = None, engagement: Engagement | None = None, demo
 
 
 def snapshot(e: Env) -> dict[str, Any]:
-    """一个停点的状态 (副本): 文件登记, 合同, 账表版本, 数据版本, 就绪, 补交请求, 留痕."""
+    """一个停点的状态 (副本): 文件登记, 合同, save_contract 的调用 (合同编号), 账表版本, 数据版本, 就绪, 补交请求,
+    留痕."""
     return {
         "documents": list(e.financial.document_refs),
         "contracts": dict(e.financial.saved_contracts),
+        "save_calls": list(e.financial.save_calls),
         "versions": list(e.data.table_versions),
         "data_version": e.data.data_version,
         "ready_at": e.data.ready_at,
@@ -411,6 +413,30 @@ def test_fieldwork_uploads_classifies_extracts_and_registers(flow: Flow) -> None
     assert flow.awaiting == (True, [])
 
 
+def test_contracts_extracted_on_upload_name_the_audited_entity(flow: Flow) -> None:
+    """上传时 A3 对 3 份合同各按 DOC-04 调一次大模型 (fixture_key 为合同编号, 一次通过), 各 save_contract 一次, 提示词
+    里的被审计单位是项目画像的法定名称 Demo Company (AU) Pty Ltd; 条款按页编号, CON-X01 有 T1 至 T3, CON-X02 与 X03 有
+    T1 至 T4, 各合同 T1 为 control_transfer, T2 为 payment (需求 R108 验收 2). 防上传路径用错客户画像, 重试才过, 或同一
+    合同写两次."""
+    calls = [
+        e.payload
+        for e in added(flow.after_acceptance, flow.after_fieldwork)
+        if e.kind is TrailKind.llm_call and e.procedure_id == "DOC-04"
+    ]
+    assert sorted((p["fixture_key"], p["attempt"]) for p in calls) == [(f"CON-X0{n}", 1) for n in (1, 2, 3)]
+    assert all("The audited entity is Demo Company (AU) Pty Ltd;" in p["messages"][0]["content"] for p in calls)
+    saves = flow.after_fieldwork["save_calls"][len(flow.after_acceptance["save_calls"]) :]
+    assert sorted(saves) == [f"CON-X0{n}" for n in (1, 2, 3)]
+    contracts: dict[str, Contract] = flow.after_fieldwork["contracts"]
+    assert {k: [t.id for t in c.terms] for k, c in contracts.items()} == {
+        k: [f"{k}-T{n}" for n in range(1, count + 1)] for k, count in (("CON-X01", 3), ("CON-X02", 4), ("CON-X03", 4))
+    }
+    assert {(t.id[-2:], t.term_type.value) for c in contracts.values() for t in c.terms[:2]} == {
+        ("T1", "control_transfer"),
+        ("T2", "payment"),
+    }
+
+
 def test_offline_import_equals_the_r97_preset(flow: Flow) -> None:
     """验收 8: 空的 Xero 假存储做完承接与外勤后, 与 R97 预置的 xero_financial_store("fieldwork", contracts=True)
     逐对象相同 (账表, 文件登记含补登记字段, 合同; 上传时间不比, 合同执行 ID 只比到文件 ID)."""
@@ -451,13 +477,15 @@ def test_running_again_writes_nothing(flow: Flow) -> None:
 
 
 def test_doc04_reuses_the_uploaded_contracts_after_ready(flow: Flow) -> None:
-    """确认数据已齐后图继续: DOC-04 完成, 不调大模型, 3 份合同沿用第 1 版, 文件登记交回状态 (extracted)."""
+    """确认数据已齐后图继续: DOC-04 完成, 不调大模型, 不再 save_contract, 3 份合同沿用第 1 版, 文件登记交回状态
+    (extracted)."""
     assert flow.doc04 is ProcedureStatus.completed
     contracts = sorted((d.file_name, d.status) for d in flow.state_documents if d.type is DocumentType.contract)
     assert contracts == [(f"CON-X0{n}.pdf", "extracted") for n in (1, 2, 3)]
     new = added(flow.after_again, flow.after_ready)
     assert [e.procedure_id for e in new if e.kind is TrailKind.llm_call] == []
     assert flow.after_ready["contracts"] == flow.after_fieldwork["contracts"]
+    assert flow.after_ready["save_calls"] == flow.after_again["save_calls"]
     assert [e.payload.get("reason") for e in new if e.payload.get("action") == "ready"] == [READY_REASON]
 
 

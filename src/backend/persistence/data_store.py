@@ -697,12 +697,16 @@ class PostgresDataStore(Store):
                 if tables
                 else None
             )
-            if any(change.contracts for change in documents):
-                # 程序执行之外写进的合同新版本, 同上传后的抽取: 记数据变动 contracts (需求 R274); 有表时记在同一版本上
+            # 程序执行之外写进的合同新版本与 ASIC 摘录的抽取结果, 同上传后的抽取: 记数据变动 contracts 与
+            # registry_extracts (需求 R274, R290); 有表时记在同一版本上
+            extracted = [DataInput.contracts] if any(change.contracts for change in documents) else []
+            if any(change.registry_extract is not None for change in documents):
+                extracted.append(DataInput.registry_extracts)
+            if extracted:
                 if version is None:
-                    version = await self._bump(conn, eid, [DataInput.contracts])
+                    version = await self._bump(conn, eid, extracted)
                 else:
-                    await record_changes(conn, eid, version, [DataInput.contracts])
+                    await record_changes(conn, eid, version, extracted)
             for change in documents:
                 await write_document(
                     conn,
@@ -719,6 +723,25 @@ class PostgresDataStore(Store):
                     reply = change.reply
                     await upsert_extraction(
                         conn, eid, "reply", change.document_id, 1, reply, changed_by=SYSTEM, field=None, reason=None
+                    )
+                if change.registry_extract is not None:  # 接在该文件已有的抽取版本之后 (同上传后的重抽)
+                    t = m.extraction_versions
+                    latest = select(func.max(t.c.version)).where(
+                        t.c.engagement_id == eid,
+                        t.c.target_type == "registry_extract",
+                        t.c.target_id == change.document_id,
+                    )
+                    version_no = int((await conn.execute(latest)).scalar() or 0) + 1
+                    await upsert_extraction(
+                        conn,
+                        eid,
+                        "registry_extract",
+                        change.document_id,
+                        version_no,
+                        change.registry_extract,
+                        changed_by=SYSTEM,
+                        field=None,
+                        reason=None,
                     )
             committed = batch.model_copy(update={"data_version": version})
             await self._save_batch(conn, eid, committed)

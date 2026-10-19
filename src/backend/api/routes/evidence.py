@@ -1,4 +1,5 @@
-"""文件与证据: 上传与分类 (需求 R14), 文件登记, 合同与回函 (含修改与版本), 原件, 财务明细."""
+"""文件与证据: 上传与分类 (需求 R14), 文件登记, 合同与回函 (含修改与版本), ASIC 摘录的抽取结果 (需求 R290), 原件,
+财务明细."""
 
 from typing import Annotated, Any
 
@@ -9,7 +10,7 @@ from backend.agents.base import AgentDeps
 from backend.agents.ingest import extracted_from
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import ConfirmationView, DocumentDetailsIn, DocumentTypeIn
+from backend.api.schemas import ConfirmationView, DocumentDetailsIn, DocumentTypeIn, RegistryExtractView
 from backend.contracts.data import ContractVersion, ExtractionEdit, ExtractionRecord
 from backend.contracts.models import Confirmation, Contract, DocumentRef, Engagement, SourceType, User
 from backend.services import data_import
@@ -73,9 +74,9 @@ async def set_document_type(
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> DocumentRef:
-    """人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空
-    422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;
-    忙 409."""
+    """人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 文件不存在 404; 理由
+    为空 422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定
+    423; 忙 409."""
     async with catch_api():
         return await service.set_document_type(engagement.id, document_id, body.type, body.reason, user.id)
 
@@ -152,6 +153,44 @@ async def contract_history(
     """合同的各版本, 按版本升序. 合同不存在 404."""
     async with catch_api():
         return await service.contract_history(engagement.id, contract_id)
+
+
+@router.get("/registry-extracts")
+async def list_registry_extracts(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> list[RegistryExtractView]:
+    """上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的
+    不列."""
+    async with catch_api():
+        return [RegistryExtractView.of(r) for r in await service.registry_extracts(engagement.id)]
+
+
+@router.put("/registry-extracts/{document_id}")
+async def edit_registry_extract(
+    document_id: str,
+    body: ExtractionEdit,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> RegistryExtractView:
+    """修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
+    registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
+    文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+    INVALID_VALUE; 锁定 423; 忙 409."""
+    async with catch_api():
+        return RegistryExtractView.of(await service.edit_registry_extract(engagement.id, document_id, body, user.id))
+
+
+@router.get("/registry-extracts/{document_id}/history")
+async def registry_extract_history(
+    document_id: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> list[RegistryExtractView]:
+    """ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404."""
+    async with catch_api():
+        return [RegistryExtractView.of(r) for r in await service.registry_history(engagement.id, document_id)]
 
 
 @router.get("/records/{source_type}/{source_id}")

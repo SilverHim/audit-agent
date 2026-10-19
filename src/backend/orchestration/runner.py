@@ -46,8 +46,8 @@ def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
     """图停在节点内 interrupt() 时各等待的载荷, 不在节点内等待时为空.
 
     种类与写法见 waits.py (WaitKind 五种): await_events 为 {"awaiting": "review", "phase"}, P2 以外节点等人为
-    {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, await_data 为
-    {"awaiting": "inputs", "procedure_ids"}, 等待更正 (correction) 由错报段使用.
+    {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, await_data 与
+    p0_inputs (需求 R290) 为 {"awaiting": "inputs", "procedure_ids"}, 等待更正 (correction) 由错报段使用.
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
 
@@ -58,7 +58,7 @@ def awaiting_data(snapshot: StateSnapshot) -> bool:
 
 
 def awaiting_inputs(snapshot: StateSnapshot) -> bool:
-    """图停在 await_data 等程序要的数据 (载荷种类 WaitKind.inputs, 需求 R272)."""
+    """图停在 await_data 或 p0_inputs 等程序要的数据 (载荷种类 WaitKind.inputs, 需求 R272, R290)."""
     return any(kind_of(waiting) is WaitKind.inputs for waiting in waiting_payloads(snapshot))
 
 
@@ -293,8 +293,8 @@ class GraphRunner:
         - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动, 等人时没有新决定可交.
           例外: 停在 p1_await_data 等数据, 而 Store 中已记审计师确认数据已齐 (确认写入后, 恢复前中断), 先补写
           确认的 data 留痕 (同键已有的跳过; 写不成则报错, 留在等待), 再以 Command(resume=DATA_READY) 继续.
-          停在 await_data 等程序要的数据时以 Command(resume=INPUTS_CHANGED) 继续, 由节点重查 (数据写入后, 交给后台
-          恢复前中断的, 由此补上; 没有变化时节点再停下).
+          停在 await_data 或 p0_inputs 等程序要的数据时以 Command(resume=INPUTS_CHANGED) 继续, 由节点重查 (数据写入
+          后, 交给后台恢复前中断的, 由此补上; 没有变化时节点再停下).
         - 升级前的旧检查点 (需求 R10 之前 ACC-01 通过后直接到 p1_ingest, 由它载入数据集): 待执行 p1_ingest 而数据
           未确认就绪时, 以 ACC-01 闸门节点的身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).

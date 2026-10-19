@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.contracts.data import Confidence, TablePlan
 from backend.contracts.models import (
@@ -12,9 +12,11 @@ from backend.contracts.models import (
     EvidencePointer,
     MisstatementDraft,
     Model,
+    Officeholder,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
+    Shareholding,
     TermType,
 )
 
@@ -63,6 +65,41 @@ class ConfirmationExtraction(Model):
     # nil 为 0, 没有提到为空; 不取已入账的利息, 也不取以后某日应付的整期利息. 漏写按空处理 (不算结构失败); 非空时
     # 须有 locator 为 accrued_interest_cents 的本文档指针 (引用级, 需求 R104)
     accrued_interest_cents: int | None = None
+
+
+# 引用级要求有指针的摘录字段 (需求 R290): ACC-04 用它们核对公司已注册, 名称与董事名单
+REGISTRY_POINTED = ("acn", "name", "status", "officeholders")
+
+
+class RegistryExtraction(Model):
+    """A3 从上传的 ASIC 公司摘录 PDF 抽取的要素 (DOC-REGISTRY, 需求 R290): AsicExtract 的登记信息, 高管与股东,
+    加 ABN 与注册地址 (摘录没写为空). ACN 与 ABN 去掉空白后须为 9 位与 11 位数字 (结构级). evidence 的 locator 为
+    字段名, REGISTRY_POINTED 中的各字段须有指针 (引用级)."""
+
+    acn: str = Field(pattern=r"^\d{9}$")  # ACN, 9 位数字
+    abn: str | None = Field(default=None, pattern=r"^\d{11}$")  # ABN, 11 位数字; 摘录没写为空
+    name: str  # 公司名称
+    type: str  # 公司类型, 如 APTY
+    company_class: str  # 公司类别, 如 LMSH
+    subclass: str  # 子类, 如 PROP
+    status: Literal["Registered", "Deregistered"]  # 登记状态
+    registered_date: date  # 注册日期
+    registered_address: str | None = None  # 注册地址; 摘录没写为空
+    officeholders: list[Officeholder]  # 董事与秘书 (同一人任两职为两项)
+    shareholders: list[Shareholding]  # 股东
+    paid_up_cents: int | None = None  # 实缴股本 (分); 摘录没写为空
+    evidence: list[EvidencePointer]  # 各字段的页码指针, locator 为字段名
+
+    @field_validator("acn", "abn", mode="before")
+    @classmethod
+    def digits_only(cls, value: object) -> object:
+        """ACN 与 ABN 常按 3 位一组写 (900 043 030), 去掉空白再校验."""
+        return "".join(value.split()) if isinstance(value, str) else value
+
+    def unpointed(self) -> list[str]:
+        """REGISTRY_POINTED 中没有 locator 为该字段的指针的字段 (引用级校验与 ACC-04 取摘录共用)."""
+        pointed = {p.locator for p in self.evidence}
+        return [name for name in REGISTRY_POINTED if name not in pointed]
 
 
 class DocumentClassification(Model):

@@ -74,7 +74,7 @@ export type AcceptanceMaterial = {
 /**
  * AcceptanceScorecard
  *
- * 承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料.
+ * 承接评分卡: ACC-04 各项检查的汇总 (数据集客户三项, 新建的客户四项, 需求 R290), ACC-01 闸门的呈报材料.
  */
 export type AcceptanceScorecard = {
     /**
@@ -3102,6 +3102,30 @@ export type NotExecuted = {
 };
 
 /**
+ * Officeholder
+ *
+ * ASIC 公司摘录上的一名高管 (同一人任两职时为两项).
+ */
+export type Officeholder = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Birth Date
+     */
+    birth_date: string | null;
+    /**
+     * Role
+     */
+    role: 'director' | 'secretary';
+    /**
+     * Appointed
+     */
+    appointed: string;
+};
+
+/**
  * OpinionType
  *
  * 审计意见类型.
@@ -3611,7 +3635,7 @@ export type RegistryCheck = {
     /**
      * Check
      */
-    check: 'abn_active' | 'name_match' | 'company_registered';
+    check: 'abn_active' | 'name_match' | 'company_registered' | 'directors_match';
     /**
      * Passed
      */
@@ -3621,6 +3645,102 @@ export type RegistryCheck = {
      */
     detail: string;
     evidence: EvidencePointer;
+};
+
+/**
+ * RegistryExtractView
+ *
+ * 上传的一份 ASIC 摘录的抽取结果的一版 (GET /registry-extracts 取各份的当前版, history 取全部版本, 需求 R290):
+ * 文件 ID, 版本号 (1 为 A3 抽取, 之后每次重抽或审计师修改加一), 内容, 谁, 何时, 改了哪个字段与理由 (抽取所得为空).
+ */
+export type RegistryExtractView = {
+    /**
+     * Document Id
+     */
+    document_id: string;
+    /**
+     * Version
+     */
+    version: number;
+    extraction: RegistryExtraction;
+    /**
+     * Changed By
+     */
+    changed_by: string;
+    /**
+     * Changed At
+     */
+    changed_at: string;
+    /**
+     * Field
+     */
+    field: string | null;
+    /**
+     * Reason
+     */
+    reason: string | null;
+};
+
+/**
+ * RegistryExtraction
+ *
+ * A3 从上传的 ASIC 公司摘录 PDF 抽取的要素 (DOC-REGISTRY, 需求 R290): AsicExtract 的登记信息, 高管与股东,
+ * 加 ABN 与注册地址 (摘录没写为空). ACN 与 ABN 去掉空白后须为 9 位与 11 位数字 (结构级). evidence 的 locator 为
+ * 字段名, REGISTRY_POINTED 中的各字段须有指针 (引用级).
+ */
+export type RegistryExtraction = {
+    /**
+     * Acn
+     */
+    acn: string;
+    /**
+     * Abn
+     */
+    abn?: string | null;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Type
+     */
+    type: string;
+    /**
+     * Company Class
+     */
+    company_class: string;
+    /**
+     * Subclass
+     */
+    subclass: string;
+    /**
+     * Status
+     */
+    status: 'Registered' | 'Deregistered';
+    /**
+     * Registered Date
+     */
+    registered_date: string;
+    /**
+     * Registered Address
+     */
+    registered_address?: string | null;
+    /**
+     * Officeholders
+     */
+    officeholders: Array<Officeholder>;
+    /**
+     * Shareholders
+     */
+    shareholders: Array<Shareholding>;
+    /**
+     * Paid Up Cents
+     */
+    paid_up_cents?: number | null;
+    /**
+     * Evidence
+     */
+    evidence: Array<EvidencePointer>;
 };
 
 /**
@@ -4014,6 +4134,38 @@ export type ServiceOrganisation = {
      * Report Ref
      */
     report_ref?: string | null;
+};
+
+/**
+ * Shareholding
+ *
+ * ASIC 公司摘录上的一名股东.
+ */
+export type Shareholding = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Kind
+     */
+    kind: 'person' | 'company';
+    /**
+     * Acn
+     */
+    acn: string | null;
+    /**
+     * Share Class
+     */
+    share_class: string;
+    /**
+     * Shares
+     */
+    shares: number;
+    /**
+     * Pct
+     */
+    pct: number;
 };
 
 /**
@@ -5870,6 +6022,108 @@ export type EvidenceContractHistoryResponses = {
 };
 
 export type EvidenceContractHistoryResponse = EvidenceContractHistoryResponses[keyof EvidenceContractHistoryResponses];
+
+export type EvidenceListRegistryExtractsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/registry-extracts';
+};
+
+export type EvidenceListRegistryExtractsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListRegistryExtractsError = EvidenceListRegistryExtractsErrors[keyof EvidenceListRegistryExtractsErrors];
+
+export type EvidenceListRegistryExtractsResponses = {
+    /**
+     * Response Evidence-List Registry Extracts
+     *
+     * Successful Response
+     */
+    200: Array<RegistryExtractView>;
+};
+
+export type EvidenceListRegistryExtractsResponse = EvidenceListRegistryExtractsResponses[keyof EvidenceListRegistryExtractsResponses];
+
+export type EvidenceEditRegistryExtractData = {
+    body: ExtractionEdit;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/registry-extracts/{document_id}';
+};
+
+export type EvidenceEditRegistryExtractErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEditRegistryExtractError = EvidenceEditRegistryExtractErrors[keyof EvidenceEditRegistryExtractErrors];
+
+export type EvidenceEditRegistryExtractResponses = {
+    /**
+     * Successful Response
+     */
+    200: RegistryExtractView;
+};
+
+export type EvidenceEditRegistryExtractResponse = EvidenceEditRegistryExtractResponses[keyof EvidenceEditRegistryExtractResponses];
+
+export type EvidenceRegistryExtractHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/registry-extracts/{document_id}/history';
+};
+
+export type EvidenceRegistryExtractHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceRegistryExtractHistoryError = EvidenceRegistryExtractHistoryErrors[keyof EvidenceRegistryExtractHistoryErrors];
+
+export type EvidenceRegistryExtractHistoryResponses = {
+    /**
+     * Response Evidence-Registry Extract History
+     *
+     * Successful Response
+     */
+    200: Array<RegistryExtractView>;
+};
+
+export type EvidenceRegistryExtractHistoryResponse = EvidenceRegistryExtractHistoryResponses[keyof EvidenceRegistryExtractHistoryResponses];
 
 export type EvidenceGetRecordData = {
     body?: never;

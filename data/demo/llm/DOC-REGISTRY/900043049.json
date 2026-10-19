@@ -1,0 +1,104 @@
+{
+  "acn": "900043049",
+  "abn": null,
+  "name": "Morgan Advisory Pty Ltd",
+  "type": "APTY",
+  "company_class": "LMSH",
+  "subclass": "PROP",
+  "status": "Registered",
+  "registered_date": "2019-07-01",
+  "registered_address": null,
+  "officeholders": [
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "director",
+      "appointed": "2019-07-01"
+    }
+  ],
+  "shareholders": [
+    {
+      "name": "Alex Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 100,
+      "pct": 1.0
+    }
+  ],
+  "paid_up_cents": null,
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "acn",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "name",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "type",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "company_class",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "subclass",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "status",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "registered_date",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "officeholders",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "shareholders",
+      "page": 2,
+      "reliability": "external_copy"
+    }
+  ]
+}
