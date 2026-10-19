@@ -15,7 +15,7 @@ import pytest
 from backend.agents import ingest
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import IngestAgent, save_new_contract
-from backend.contracts.data import ExtractionEdit
+from backend.contracts.data import DataInput, ExtractionEdit
 from backend.contracts.errors import DataRejected, DecisionRejected
 from backend.contracts.models import (
     Confirmation,
@@ -749,7 +749,7 @@ async def test_edit_failure_commits_nothing_and_retry_backfills_trail(monkeypatc
     before = await s.runner.deps.output_store.get(EID, Confirmation, "C-BA-01")
     bump = data.bump_version
 
-    async def broken_bump(eid: str) -> int:
+    async def broken_bump(eid: str, input: DataInput) -> int:
         raise RuntimeError("数据版本写失败")
 
     monkeypatch.setattr(data, "bump_version", broken_bump)

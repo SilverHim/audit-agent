@@ -6,6 +6,7 @@ owner: A5
 inputs: {tables: [bank_accounts]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [confirmations, documents]
 document_types: [confirmation]
+reads: [bank_accounts]
 engine: rule
 autonomy_level: L4
 assertions: [Existence]

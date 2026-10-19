@@ -4,6 +4,7 @@ phase: P1_Planning
 cycle: Planning
 owner: A4
 outputs: [materiality_candidates, audit_objectives, risk_register]
+reads: [accounts, trial_balance]
 engine: manual
 autonomy_level: L1
 gate: PLN-01/03

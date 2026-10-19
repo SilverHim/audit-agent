@@ -7,7 +7,9 @@ from typing import Any
 import pytest
 
 from backend.agents.base import RunContext
+from backend.agents.evidence import legacy_key
 from backend.agents.ingest import IngestAgent
+from backend.contracts.data import DataInput
 from backend.contracts.models import (
     Confirmation,
     Decision,
@@ -25,12 +27,15 @@ from tests.fakes import (
     NUMBAT_RECORDS,
     NUMBAT_REPLIES,
     NUMBAT_REPLY_PAGES,
+    FakeDataStore,
     FakeFinancialStore,
     FakeRegistry,
     FakeTrail,
     ScriptedLLM,
+    legacy_sends,
     make_ctx,
     make_deps,
+    numbat_confirmation_key,
 )
 
 EID = ENGAGEMENT.id
@@ -44,7 +49,7 @@ def sent(account: str, reply: str | None, channel: ReceiptChannel | None = Recei
         id=f"C-{account}",
         bank_account_id=account,
         confirming_party="bank",
-        idempotency_key=f"{EID}:CSH-04:{account}",
+        idempotency_key=numbat_confirmation_key(EID, account),
         sent_at=NOW,
         reply_document_id=reply,
         receipt_channel=channel,
@@ -98,6 +103,24 @@ async def test_subjects_and_requests() -> None:
         doc = NUMBAT_REPLIES[ACCOUNTS.index(req.fixture_key)]
         assert f"document ID {doc.id}, 2 pages." in prompt
         assert f'<page number="1">\n{NUMBAT_REPLY_PAGES[doc.id][0]}\n</page>' in prompt
+
+
+async def test_legacy_key_confirmations_follow_bank_account_changes() -> None:
+    """R274-16: 识别信息进键之前发的函 (旧写法的键): 发函之后银行账户表没变过, 仍是当前的, DOC-06 照常抽取; 变过了,
+    旧键不再成立, 不再处理 (不拿旧回函与当前账户比, 等 CSH-04 按新键重发)."""
+    legacy = [c.model_copy(update={"idempotency_key": legacy_key(EID, c.bank_account_id)}) for c in CONFIRMATIONS]
+    for changed, expected in ((False, ACCOUNTS), (True, [])):
+        llm = scripted()
+        agent, ctx, _ = setup(llm, confirmations=legacy)
+        await legacy_sends(agent.deps, EID, ACCOUNTS)
+        data = agent.deps.data
+        assert isinstance(data, FakeDataStore)
+        data.record(DataInput.trial_balance)  # 别的数据变了不算
+        if changed:
+            data.record(DataInput.bank_accounts)
+        patch = await agent.run(ctx)
+        assert sorted(r.fixture_key for r in llm.requests) == expected, changed
+        assert [c.bank_account_id for c in patch["confirmations"]] == expected
 
 
 async def test_rerun_only_listed_account() -> None:

@@ -425,6 +425,7 @@ export const en = {
       FILE_TOO_LARGE: 'Each file must be 50 MB or smaller.',
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
+      NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
     } as Record<string, string>,
   },
   toasts: {
@@ -709,6 +710,47 @@ export const en = {
     exceptions: 'Rule findings',
     judgments: 'Judgments',
     none: 'None',
+  },
+  rerun: {
+    stale: 'Data updated · results out of date',
+    staleShort: 'Out of date',
+    staleHint:
+      'The data this procedure reads changed after its last run, or a procedure it depends on ran again. Rerun it to use the new data; the earlier results are kept as history.',
+    one: 'Rerun with new data',
+    all: (n: number) => `Rerun all out of date (${n})`,
+    started: 'Rerun started. New results come back to you for review.',
+    notice: (n: number) => `The data has been updated: ${n} procedure${n === 1 ? ' is' : 's are'} out of date.`,
+    groups: {
+      rerunnable: (n: number, ids: string) => `${n} can be rerun with the new data: ${ids}.`,
+      queued: (ids: string) => `Already queued to rerun: ${ids}.`,
+      marked: (ids: string) =>
+        `Planning procedures ${ids} are only marked and cannot be rerun here. To redo them, reject at the PLN-01/03 decision.`,
+    },
+    openProcedures: 'Open procedures',
+    finStale: (n: number, ids: string) =>
+      `${n} fieldwork procedure${n === 1 ? ' has' : 's have'} not been rerun since the data changed: ${ids}. Their conclusions may no longer hold. You can still approve, or rerun them first on the procedures page.`,
+    finMarked: (ids: string) =>
+      `Planning procedures ${ids} are also out of date. They are only marked and cannot be rerun on the procedures page (planning conclusions are redone only by rejecting at the PLN-01/03 decision). Before approving, judge whether they still apply.`,
+    superseded: 'Replaced by a rerun',
+    history: 'History · replaced by a rerun',
+    blocked: {
+      locked: 'The engagement is signed and read-only.',
+      planning: 'Planning procedures are only marked. To redo them, reject at the PLN-01/03 decision.',
+      queued: 'Already queued to rerun.',
+      running: 'Procedures are running. Try again when they stop.',
+      featuresMismatch: 'Feature flags differ from when this engagement started. It is paused and cannot rerun.',
+      runError: 'The last run stopped with an error. Resume it first.',
+      position: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
+      none: 'No out-of-date procedure can be rerun.',
+    },
+    errors: {
+      outdated:
+        'The selected procedures can no longer be rerun (they may already be queued or rerun). The page has been refreshed.',
+      failed: (code: string | null) =>
+        code
+          ? `The rerun was not submitted (${code}). The page has been refreshed; try again with the current state.`
+          : 'The rerun was not submitted. Check your connection and try again.',
+    },
   },
   data: {
     title: 'Data management',

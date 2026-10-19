@@ -4,6 +4,7 @@
 """
 
 import re
+from collections.abc import Iterable
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal, Self
@@ -25,6 +26,37 @@ class TableKind(StrEnum):
     bank_transactions = "bank_transactions"  # 银行流水
     delivery_notes = "delivery_notes"  # 发运单
     approval_log = "approval_log"  # 审批日志
+
+
+class DataInput(StrEnum):
+    """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 八种账表 (取值同 TableKind),
+    加审计师修改过的合同与回函抽取结果. 改科目分类改的是科目表, 记 accounts."""
+
+    accounts = "accounts"  # 科目表 (含科目分类)
+    trial_balance = "trial_balance"  # 试算表
+    journal_entries = "journal_entries"  # 总账分录
+    sales_invoices = "sales_invoices"  # 销售发票
+    bank_accounts = "bank_accounts"  # 银行账户
+    bank_transactions = "bank_transactions"  # 银行流水
+    delivery_notes = "delivery_notes"  # 发运单
+    approval_log = "approval_log"  # 审批日志 (补进总账分录的审批人与审批时间)
+    contracts = "contracts"  # 合同抽取结果 (审计师修改)
+    confirmations = "confirmations"  # 回函抽取结果 (审计师修改)
+
+
+def table_changes(kinds: Iterable[TableKind]) -> list[DataInput]:
+    """写入这些账表变了哪些数据 (按 DataInput 顺序): 各表本身; 审批日志按凭证号补进总账分录, 另记 journal_entries."""
+    found = {DataInput(kind.value) for kind in kinds}
+    if DataInput.approval_log in found:
+        found.add(DataInput.journal_entries)
+    return [i for i in DataInput if i in found]
+
+
+class DataChange(Model):
+    """一次数据变动: 哪个数据版本变了哪类数据 (表 data_changes). 一个版本可变多类 (一次写入几张账表, 数据集载入)."""
+
+    data_version: int  # 变动后的项目数据版本
+    input: DataInput  # 变了哪类数据
 
 
 # 账表的来源: Xero 同步, 审计师导入, 数据集载入 (种子与演示项目; 概览里显示为空)

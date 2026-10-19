@@ -165,6 +165,7 @@ def test_initial_state_equals_previous_literal() -> None:
         review_records=[],
         gate_decisions=[],
         misstatements=[],
+        rerun_requests=[],  # 需求 R274 加
         uncorrected_schedule=None,
         opinion_route=None,
     )

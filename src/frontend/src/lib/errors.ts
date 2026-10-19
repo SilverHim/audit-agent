@@ -7,6 +7,11 @@ export function isApiCode(error: unknown, code: string): boolean {
   return apiDetail(error)?.code === code
 }
 
+// 后端错误码; 不是后端错误体 (如网络错误) 为 null
+export function apiCode(error: unknown): string | null {
+  return apiDetail(error)?.code ?? null
+}
+
 export function apiMessage(error: unknown): string {
   const detail = apiDetail(error)
   if (detail) return detail.message ? `${detail.code}: ${detail.message}` : detail.code

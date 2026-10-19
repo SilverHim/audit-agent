@@ -19,7 +19,9 @@ from backend.contracts.data import (
     CheckInputs,
     CheckRun,
     ContractVersion,
+    DataChange,
     DataCheck,
+    DataInput,
     DataReadiness,
     DataRequest,
     DataSource,
@@ -324,7 +326,8 @@ class DataStore(Protocol):
         self, eid: str, code: str, category: AccountCategory, *, actor: str, reason: str
     ) -> CategoryVersion:
         """审计师修改科目的标准分类, 一个事务内: 没有分类历史时先补记当前分类为第 1 版 (修改人 A3, 时间取首次载入);
-        记新的一版 (依据 auditor, 修改人, 理由); 科目表的分类与依据改为这一版; 数据版本 +1. 返回新的一版.
+        记新的一版 (依据 auditor, 修改人, 理由); 科目表的分类与依据改为这一版; 数据版本 +1, 记数据变动 accounts.
+        返回新的一版.
         科目不存在抛 LookupError; 项目 locked 抛 EngagementLocked."""
         ...
 
@@ -347,8 +350,15 @@ class DataStore(Protocol):
         """抽取结果的各版 (可按类型与对象筛), 按类型, 对象, 版本升序."""
         ...
 
-    async def bump_version(self, eid: str) -> int:
-        """数据版本 +1 (修改抽取结果, 科目分类等不经 write_tables 的数据变动), 返回新版本."""
+    async def bump_version(self, eid: str, input: DataInput) -> int:
+        """数据版本 +1 (修改合同, 回函抽取结果等不经 write_tables 的数据变动), 同一事务内记一条数据变动 (input),
+        返回新版本."""
+        ...
+
+    async def changes(self, eid: str) -> list[DataChange]:
+        """全部数据变动, 按数据版本升序 (同版本按 DataInput 顺序). 每次数据版本 +1 都记下变了哪类数据: 写入账表记
+        各表, 改科目分类记 accounts, 改合同与回函记 contracts, confirmations, 数据集载入与更正分录载入记所载入的;
+        0008 迁移之前的版本中查不到种类的, 记为全部各类都变了. 过期判断只读这里 (services.staleness)."""
         ...
 
     async def save_extraction(
@@ -382,8 +392,8 @@ class DataStore(Protocol):
         """新数据版本写入 (导入与 Xero 同步共用), 返回写入后的数据版本. 一个事务内: 数据版本 +1; 各表按 TableKind 顺序
         整表替换 (审批日志不成表, 按凭证号补进总账的录入人, 审批人与审批时间, 只改对应了的列; 写总账时再套用最新一版
         审批日志); 科目表对照分类历史 (审计师改过的沿用审计师的分类, 系统归类有变化的记一版); 每张表在 data_imports
-        记一行版本 (含行快照), 有 import_id 时把该导入会话置 committed. 行模型: 科目表 Account, 审批日志
-        ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
+        记一行版本 (含行快照), 并记一条数据变动 (该表); 有 import_id 时把该导入会话置 committed. 行模型: 科目表 Account,
+        审批日志 ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
         ...
 
     async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:

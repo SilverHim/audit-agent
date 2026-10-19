@@ -12,7 +12,15 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from backend.contracts.data import ApprovalLogRow, CheckId, ImportCommit, ImportSession, TableKind
+from backend.contracts.data import (
+    ApprovalLogRow,
+    CheckId,
+    DataChange,
+    DataInput,
+    ImportCommit,
+    ImportSession,
+    TableKind,
+)
 from backend.contracts.errors import EngagementLocked
 from backend.contracts.models import DocumentType, Reliability
 from backend.contracts.records import Account, JournalEntry
@@ -498,7 +506,12 @@ async def test_uploaded_real_contract_matches_doc04_and_versions(storage, tmp_pa
     history = await service.contract_history(uploaded.id, "CON-001")
     assert [(v.version, v.changed_by, v.field) for v in history] == [(1, "A3", None), (2, "U-1", "terms[0].text")]
     assert history[0].contract == contract
-    assert (await deps.data.readiness(uploaded.id)).data_version == 1  # 修改抽取结果: 数据版本 0 → 1
+    # 上传后抽出合同 (需求 R274: 程序执行之外写进的合同记数据变动) 0 → 1, 修改抽取结果 1 → 2, 各记 contracts
+    assert (await deps.data.readiness(uploaded.id)).data_version == 2
+    assert [(c.data_version, c.input) for c in await deps.data.changes(uploaded.id)] == [
+        (1, DataInput.contracts),
+        (2, DataInput.contracts),
+    ]
 
 
 async def test_contract_edit_rolls_back_together_when_version_bump_fails(
@@ -522,7 +535,7 @@ async def test_contract_edit_rolls_back_together_when_version_bump_fails(
     )
     await service.deps.financial_store.save_contract(first.id, contract)
 
-    async def broken(eid: str) -> int:
+    async def broken(eid: str, input: DataInput) -> int:
         raise RuntimeError("数据版本写失败")
 
     monkeypatch.setattr(service.deps.data, "bump_version", broken)
@@ -1004,3 +1017,113 @@ def test_all_projects_rejects_tables_without_project_isolation() -> None:
 
     with pytest.raises(ValueError, match="users, dataset_load"), all_projects("data_requests", "users", "dataset_load"):
         pass
+
+
+async def test_data_changes_record_what_each_version_changed(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """需求 R274: 数据版本每 +1 都在 data_changes 记下变了哪类数据 (过期判断只读 changes): 数据集载入为版本 1 的
+    全部各类; 写入账表记各表, 审批日志另记总账分录; 改科目分类记 accounts; bump_version 记所给的种类 (改合同, 回函);
+    按版本升序, 同版本按 DataInput 顺序. 另一个项目读不到 (行级安全)."""
+    engine, (first, other), loader, _ = storage
+    store = PostgresDataStore(tmp_path, engine)
+    await loader.load(first.id, "demo")
+    assert await store.changes(first.id) == [DataChange(data_version=1, input=i) for i in DataInput]
+
+    accounts = [
+        Account(code="6300", name="Freight", type="expense", category="operating_expenses", category_basis="name")
+    ]
+    assert await store.write_tables(first.id, {TableKind.accounts: accounts}, source="import", actor="U-1") == 2
+    log = [ApprovalLogRow(entry_no="J1", approved_by="cfo")]
+    assert await store.write_tables(first.id, {TableKind.approval_log: log}, source="import", actor="U-1") == 3
+    await store.set_category(first.id, "6300", "cost_of_sales", actor="U-1", reason="运费计入销售成本")
+    assert await store.bump_version(first.id, DataInput.contracts) == 5
+    assert await store.bump_version(first.id, DataInput.confirmations) == 6
+
+    later = [(c.data_version, c.input) for c in await store.changes(first.id) if c.data_version > 1]
+    assert later == [
+        (2, DataInput.accounts),
+        (3, DataInput.journal_entries),
+        (3, DataInput.approval_log),
+        (4, DataInput.accounts),
+        (5, DataInput.contracts),
+        (6, DataInput.confirmations),
+    ]
+    assert (await store.readiness(first.id)).data_version == 6
+    assert await store.changes(other.id) == []
+
+
+async def test_migration_0008_backfills_data_changes_under_force_rls(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R274 (第 2 轮 R274-14): 以属主角色在一个事务里跑 0008 的 upgrade 后回滚, 不动测试库的表结构与 alembic 版本.
+    已有导入记录的项目补到了行 (版本 1 查不到种类记全部各类, 版本 2 科目表, 版本 3 审批日志另记总账分录), 没有
+    dataset_loads 的项目不补; 迁移不设 app.engagement_id (all_projects 块内暂时关掉 FORCE), 三张表的 FORCE 行级安全
+    事后都已恢复; 再跑一次不多出行. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, second), _, _ = storage
+    module = migration("0008_data_changes")
+
+    def upgrade(sync_conn: Any) -> None:
+        with Operations.context(MigrationContext.configure(sync_conn)):
+            module.upgrade()
+
+    at = now()
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def as_project(eid: str) -> None:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+
+                await as_project(first.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(engagement_id=first.id, dataset="demo", data_version=3, loaded_at=at)
+                )
+                for n, (version, kind) in enumerate(((2, "accounts"), (3, "approval_log")), start=1):
+                    await conn.execute(
+                        insert(m.data_imports).values(
+                            engagement_id=first.id,
+                            id=f"IMP-BACKFILL-{n}",
+                            kind=kind,
+                            source="import",
+                            status="committed",
+                            data_version=version,
+                            created_by="U-1",
+                            created_at=at,
+                        )
+                    )
+                await conn.execute(text("DELETE FROM data_changes"))  # 迁移之前的库上没有这些行
+                await as_project("")
+                await conn.run_sync(upgrade)
+                assert (await conn.execute(text("SELECT current_setting('app.engagement_id', true)"))).scalar() == ""
+
+                async def changes(eid: str) -> list[tuple[int, str]]:
+                    await as_project(eid)
+                    found = await conn.execute(
+                        text("SELECT data_version, input FROM data_changes ORDER BY data_version, input")
+                    )
+                    return [(int(v), str(i)) for v, i in found]
+
+                every = sorted(i.value for i in DataInput)
+                expected = [(1, i) for i in every] + [(2, "accounts"), (3, "approval_log"), (3, "journal_entries")]
+                assert await changes(first.id) == expected
+                assert await changes(second.id) == []
+                forced = await conn.execute(
+                    text(
+                        "SELECT relname, relforcerowsecurity FROM pg_class "
+                        "WHERE relname IN ('data_changes', 'dataset_loads', 'data_imports')"
+                    )
+                )
+                assert {row[1] for row in forced} == {True}
+                await as_project("")
+                await conn.run_sync(upgrade)  # 可重复执行
+                assert await changes(first.id) == expected
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()

@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import os
+import re
 import subprocess
 import types
 from collections.abc import Iterable
@@ -12,6 +13,7 @@ from typing import Any, TypeGuard, Union, get_args, get_origin
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from backend.contracts.data import DataInput
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
 from backend.contracts.models import (
     AuditObjective,
@@ -35,6 +37,10 @@ ENGAGEMENT_REFS = {"period_start", "period_end"}
 # 它的 None 策略与解析时传入的对象 (resolve_params 的 sources), 如 profile. 为 None 抛 ValueError (R127)
 REF_NAMESPACES: dict[str, type[BaseModel]] = {"dataset": DatasetTraits}
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, significant (枚举定义顺序)
+# 规则 SQL 里出现的账表名: 按 DataInput 的取值整词扫描 (长的在前), 逗号连接与子查询里的表也认得出
+SQL_TABLE = re.compile(
+    r"\b(" + "|".join(sorted((i.value for i in DataInput), key=len, reverse=True)) + r")\b", re.IGNORECASE
+)
 
 
 def highest_risk(objectives: Iterable[AuditObjective], objective_ids: Iterable[str]) -> RiskLevel | None:
@@ -86,6 +92,9 @@ class ProcedureLibrary:
         wrong = inputs_problems(templates)
         if wrong:
             raise ValueError(f"程序模板的 inputs 不对: {'; '.join(wrong)}")
+        unread = read_problems(templates)
+        if unread:
+            raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -286,6 +295,19 @@ def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
             problems.append(f"{t.id}: inputs 不能写就绪必需的表 {', '.join(required)} (由 P1 等数据保证)")
         if DocumentType.other in t.inputs.documents:
             problems.append(f"{t.id}: inputs 不能写文件类型 other")
+    return problems
+
+
+def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """规则 SQL 读到而 reads 没声明的账表 (消息含程序编号): 过期判断按 reads 看数据变动, 漏了就标不出过期.
+    SQL 里整词出现的账表名都算读了 (FROM, JOIN, 逗号连接, 子查询); 列名或别名与账表同名时也算, 宁多勿漏. 大模型与
+    Agent 另读的数据 (如 REV-02 的发运单, 合同) 靠 YAML 手写."""
+    problems = []
+    for t in templates:
+        used = {name.lower() for rule in t.rules for name in SQL_TABLE.findall(rule.sql)}
+        missing = sorted(used - {i.value for i in t.reads})
+        if missing:
+            problems.append(f"{t.id} 读 {', '.join(missing)}")
     return problems
 
 

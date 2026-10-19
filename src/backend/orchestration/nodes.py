@@ -311,6 +311,13 @@ async def add_referenced_runs(store: AuditOutputStore, eid: str, patch: StatePat
             have.add(run_id)
 
 
+async def confirmations_from_store(store: AuditOutputStore, eid: str) -> list[Confirmation]:
+    """Store 中各函证的最新版本, 写进状态用. 审计师在图停着时 (闸门或等复核) 改回函抽取结果只写 Store (需求 R14),
+    之后要算函证的节点 (DOC-06 重跑, CSH-02) 须在库中最新版本之上出新版本; 从停着的位置继续前都读回它: 等复核恢复
+    (await_events), 过期重跑写检查点 (DecisionSubmit.rerun_stale) 与其恢复补做 (recovery.catch_up_rerun)."""
+    return await store.latest(eid, Confirmation)
+
+
 def uncovered_objectives(library: ProcedureLibrary, objectives: list[AuditObjective]) -> list[str]:
     """按各目标当前的风险等级, 没有任何程序 trigger 匹配到的审计目标 ID, 按 objectives 顺序.
 
@@ -514,7 +521,9 @@ class GraphNodes:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
         entries = await procedure_transitions(self.deps.output_store, engagement.id, [saved])
         if phase is not None:
-            entries += phase_transition(engagement.id, state["phase"], phase, procedure_id)
+            entries += phase_transition(
+                engagement.id, state["phase"], phase, procedure_id, reruns=len(state["rerun_requests"])
+            )
         await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
 
@@ -977,7 +986,7 @@ class GraphNodes:
             "judgments": await store.latest(eid, Judgment),
             "exceptions": await store.latest(eid, AuditException),
             "misstatements": await store.latest(eid, Misstatement),
-            "confirmations": await store.latest(eid, Confirmation),
+            "confirmations": await confirmations_from_store(store, eid),
             "procedure_pack": [latest.get(p.id, p) for p in state["procedure_pack"]],
         }
 
@@ -999,7 +1008,9 @@ class GraphNodes:
         """终点: 项目已由 RPT-01 签字锁定, 不再写 Store. 补写进入 Archived 的阶段留痕 (只能由报告阶段进入;
         DecisionSubmit 提交后已写过, 同键跳过)."""
         eid = state["engagement_id"]
-        await record_transitions(self.deps.trail, phase_transition(eid, Phase.P4_Reporting, Phase.Archived, "RPT-01"))
+        reruns = len(state["rerun_requests"])
+        entries = phase_transition(eid, Phase.P4_Reporting, Phase.Archived, "RPT-01", reruns=reruns)
+        await record_transitions(self.deps.trail, entries)
         return {}
 
     async def declined(self, state: EngagementState) -> StatePatch:

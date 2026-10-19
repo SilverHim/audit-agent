@@ -14,6 +14,7 @@ from backend.contracts.models import (
     Phase,
     Procedure,
     ProcedureRun,
+    RerunRequest,
     ReviewTask,
     TaskStatus,
 )
@@ -24,15 +25,11 @@ from backend.contracts.views import (
     ProcedureSummary,
 )
 from backend.orchestration.gates import current_gate, current_spec
-from backend.orchestration.runner import GraphRunner, awaiting_data, resume_required, review_waits
+from backend.orchestration.runner import GraphRunner, at_rerun_point, awaiting_data, resume_required, review_waits
 from backend.services.data_quality import missing_tables
+from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
-
-
-def stale(run: ProcedureRun | None, current_version: int) -> bool:
-    """程序是否过期 (需求 R16): 最近一次执行记了数据版本, 且比当前数据版本旧."""
-    return run is not None and run.data_version is not None and run.data_version < current_version
 
 
 class GraphStateQuery:
@@ -63,15 +60,17 @@ class GraphStateQuery:
         procedures = await self.deps.output_store.latest(eid, Procedure)
         pending = await self.deps.output_store.latest(eid, ReviewTask, status=TaskStatus.pending)
         pending_by_procedure = Counter(t.procedure_id for t in pending)  # 程序编号 -> 待决任务数, 没有的计 0
-        # 过期 (需求 R16): 最近一次执行基于的数据版本比当前旧; 完整的失效传播以后再做
-        current_version = (await self.deps.data.readiness(eid)).data_version
-        last_runs: dict[str, ProcedureRun] = {}
-        for run in await self.deps.output_store.latest(eid, ProcedureRun):
-            if run.procedure_id not in last_runs or run.run_no > last_runs[run.procedure_id].run_no:
-                last_runs[run.procedure_id] = run
+        # 过期 (需求 R274): 读的数据在最近一次执行之后变过, 或依赖的程序过期或在它之后重跑过 (services.staleness);
+        # 只针对有当前结果的程序, 已被重跑取代而还没有新执行的不算
+        runs = await self.deps.output_store.latest(eid, ProcedureRun)
+        superseded = superseded_runs(await self.deps.output_store.latest(eid, RerunRequest))
+        ordered = sorted(procedures, key=lambda p: (PHASE_ORDER.index(p.phase), p.id))
+        changes = await self.deps.data.changes(eid)
+        stale = set(stale_procedures(ordered, runs, changes, self.deps.library, superseded))
+        allowed = set(rerunnable(ordered, stale))
 
         summaries = []
-        for p in sorted(procedures, key=lambda p: (PHASE_ORDER.index(p.phase), p.id)):
+        for p in ordered:
             template = self.deps.library.load(p.id)  # 名称, 执行者, 引擎取自程序模板
             summaries.append(
                 ProcedureSummary(
@@ -83,7 +82,8 @@ class GraphStateQuery:
                     autonomy_level=p.autonomy_level,
                     status=p.status,
                     pending_tasks=pending_by_procedure[p.id],
-                    stale=stale(last_runs.get(p.id), current_version),
+                    stale=p.id in stale,
+                    rerunnable=p.id in allowed,
                 )
             )
 
@@ -99,6 +99,9 @@ class GraphStateQuery:
             awaiting_data=waiting_data,
             missing_tables=missing_tables(await self.deps.data.stats(eid)) if waiting_data else [],
             procedures=summaries,
+            stale_procedure_ids=[p.id for p in ordered if p.id in stale],
+            # 图停在可重跑的位置且未锁定, 不在执行 (RESUME_REQUIRED 等另见 run_error, 提交时再判断)
+            can_rerun=not engagement.locked and not self.runner.is_running(eid) and at_rerun_point(snapshot),
             pending_tasks=len(pending),
             materiality_cents=values["materiality_cents"],
             performance_materiality_cents=values["performance_materiality_cents"],

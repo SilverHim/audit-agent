@@ -7,7 +7,9 @@ from typing import Any
 import pytest
 
 from backend.agents.base import RunContext
+from backend.agents.evidence import legacy_key
 from backend.agents.fieldwork import FieldworkAgent
+from backend.contracts.data import DataInput
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
@@ -36,15 +38,18 @@ from tests.fakes import (
     NUMBAT_REPLIES,
     NUMBAT_RISKS,
     NUMBAT_TRIAL_BALANCE,
+    FakeDataStore,
     FakeFinancialStore,
     FakeJudgmentEngine,
     FakeRegistry,
     FakeTrail,
     finished,
+    legacy_sends,
     make_ctx,
     make_deps,
     make_procedure,
     make_run,
+    numbat_confirmation_key,
     numbat_csh05_exception,
 )
 from tests.test_fieldwork_judging import failed, passed
@@ -69,7 +74,7 @@ def extracted(account: str, balance: int | None, reply: int) -> Confirmation:
         version=2,
         bank_account_id=account,
         confirming_party="bank",
-        idempotency_key=f"{EID}:CSH-04:{account}",
+        idempotency_key=numbat_confirmation_key(EID, account),
         sent_at=NOW,
         reply_document_id=doc.id,
         receipt_channel=ReceiptChannel.direct_email,
@@ -201,10 +206,29 @@ async def test_missing_reply_balance_raises() -> None:
         await agent.run(ctx)
 
 
-async def test_unknown_account_raises() -> None:
+async def test_confirmation_of_account_not_in_table_is_history() -> None:
+    """函证跟着当前的银行账户走: 账户已不在银行账户表中的函证不是当前的, CSH-02 不处理它 (不出新版本, 不报错)."""
     agent, ctx, _ = setup([extracted("BA-09", 1, 0)])
-    with pytest.raises(LookupError, match="BA-09"):
-        await agent.run(ctx)
+    patch = await agent.run(ctx)
+    assert patch["confirmations"] == [] and patch["exceptions"] == []
+
+
+async def test_legacy_key_confirmations_follow_bank_account_changes() -> None:
+    """R274-16: 识别信息进键之前发的函 (旧写法的键): 发函之后银行账户表没变过, 仍是当前的, CSH-02 照常比对 (BA-01
+    出 D01); 变过了, 旧键不再成立, 不再处理 (不出新版本, 不报错, 等 CSH-04 按新键重发)."""
+    legacy = [
+        c.model_copy(update={"idempotency_key": legacy_key(EID, c.bank_account_id)}) for c in NUMBAT_CONFIRMATIONS
+    ]
+    for changed, expected in ((False, ["BA-01", "BA-02"]), (True, [])):
+        agent, ctx, _ = setup(legacy)
+        await legacy_sends(agent.deps, EID, ["BA-01", "BA-02"])
+        data = agent.deps.data
+        assert isinstance(data, FakeDataStore)
+        if changed:
+            data.record(DataInput.bank_accounts)
+        patch = await agent.run(ctx)
+        assert [c.bank_account_id for c in patch["confirmations"]] == expected, changed
+        assert [x.rule_id for x in patch["exceptions"]] == (["D01"] if expected else [])
 
 
 # ── 判断部分 ─────────────────────────────────────────

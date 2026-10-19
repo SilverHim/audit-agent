@@ -5,20 +5,30 @@ import { reviewsGetProcedureOptions, reviewsListReviewTasksOptions } from '@/cli
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { PointerList, standardLabel } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
+import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
+import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/procedures/$pid')({ component: ProcedurePage })
 
-// 程序的执行记录: 每次执行, 规则发现, 判断
+// 程序的执行记录: 每次执行, 规则发现, 判断; 过期时给重跑入口, 被重跑取代的执行及其结果标为历史
 function ProcedurePage() {
   const { eid, pid } = Route.useParams()
   const { t, lang, formatDateTime } = useI18n()
-  const detail = useQuery(reviewsGetProcedureOptions({ path: { eid, pid } }))
+  const overview = useEngagement(eid).data
+  // 后台执行 (如重跑) 时随总览一起刷新, 新的执行记录与过期标记及时更新
+  const detail = useQuery({
+    ...reviewsGetProcedureOptions({ path: { eid, pid } }),
+    refetchInterval: overview?.running ? 2000 : false,
+  })
   const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid } }))
   const data = detail.data
+  const superseded = new Set(data?.superseded_run_ids ?? [])
+  const summary = overview?.procedures.find((item) => item.id === pid)
+  const stale = summary?.stale ?? data?.stale ?? false // 总览轮询更勤, 以它为准
   return (
     <>
       <PageHeader
@@ -47,6 +57,21 @@ function ProcedurePage() {
         <QueryState isPending={detail.isPending} error={detail.error}>
           {data ? (
             <>
+              {stale ? (
+                <section className="flex flex-col gap-2.5 rounded-xl bg-warn-soft p-4">
+                  <span>
+                    <StaleBadge onSoft />
+                  </span>
+                  <p className="m-0 text-[14px]">{t.rerun.staleHint}</p>
+                  <RerunButton
+                    eid={eid}
+                    overview={overview}
+                    procedure={
+                      summary ?? { id: pid, phase: data.procedure.phase, status: data.procedure.status ?? 'planned' }
+                    }
+                  />
+                </section>
+              ) : null}
               <Block title={t.procedureDetail.runs}>
                 {data.runs.length ? (
                   data.runs.map((run) => (
@@ -58,6 +83,7 @@ function ProcedurePage() {
                         {run.status}
                       </StatusPill>
                       <span className="text-muted-foreground">{formatDateTime(run.started_at)}</span>
+                      {superseded.has(run.id) ? <StatusPill tone="neutral">{t.rerun.superseded}</StatusPill> : null}
                       {run.failure_reason ? <span lang="en">{run.failure_reason}</span> : null}
                     </div>
                   ))
@@ -73,6 +99,7 @@ function ProcedurePage() {
                         <Code className="font-semibold">{item.id}</Code>
                         <StatusPill tone={item.severity === 'high' ? 'risk' : 'warn'}>{item.severity}</StatusPill>
                         <Code>{formatAud(item.amount_cents)}</Code>
+                        {superseded.has(item.run_id) ? <StatusPill tone="neutral">{t.rerun.history}</StatusPill> : null}
                       </span>
                       <PointerList eid={eid} pointers={item.evidence} />
                     </div>
@@ -93,6 +120,9 @@ function ProcedurePage() {
                           <Code className="text-muted-foreground">
                             {judgment.confidence != null ? judgment.confidence.toFixed(2) : '—'}
                           </Code>
+                          {superseded.has(judgment.run_id) ? (
+                            <StatusPill tone="neutral">{t.rerun.history}</StatusPill>
+                          ) : null}
                           <span className="flex-1" />
                           {task ? (
                             <Link

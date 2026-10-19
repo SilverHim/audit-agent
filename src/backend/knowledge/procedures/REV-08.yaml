@@ -5,6 +5,7 @@ cycle: Revenue
 owner: A6
 inputs: {tables: [sales_invoices, delivery_notes, bank_transactions]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [exceptions]
+reads: [sales_invoices, delivery_notes, bank_transactions]
 engine: rule
 autonomy_level: L3
 assertions: [Occurrence, Cutoff]

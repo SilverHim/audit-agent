@@ -22,6 +22,7 @@ import {
 import { DataRequestCard } from '@/components/data-requests'
 import { EvidenceLink } from '@/components/evidence-link'
 import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
+import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { type DataRequest, useDataRequests } from '@/lib/data-api'
 import { decisionsDisabled } from '@/lib/engagement'
@@ -229,6 +230,7 @@ function Workspace() {
           ))}
 
           <div ref={currentRef} className="flex scroll-mt-6 flex-col gap-5">
+            <StaleNotice eid={eid} overview={overview} />
             <CurrentItem
               eid={eid}
               overview={overview}

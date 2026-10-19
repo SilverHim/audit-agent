@@ -5,6 +5,7 @@ cycle: Cash
 owner: A6
 inputs: {tables: [bank_accounts, bank_transactions]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [judgments, exceptions, review_tasks, confirmations]
+reads: [bank_accounts, bank_transactions, journal_entries, trial_balance, confirmations]
 engine: hybrid
 autonomy_level: L3
 always_review: true              # 函证差异一律由人评价 (ASA 505 para 14)

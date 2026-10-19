@@ -26,6 +26,7 @@ import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
+import { FinStaleAlert } from '@/components/rerun'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -238,6 +239,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           <dt className="text-muted-foreground">{t.completion.materiality}</dt>
           <dd className="m-0 font-mono">{formatAud(material.schedule.materiality_cents)}</dd>
         </dl>
+        <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-[14px]">
           {material.misstatements.map((item) => (

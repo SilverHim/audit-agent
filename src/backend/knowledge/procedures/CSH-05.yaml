@@ -5,6 +5,7 @@ cycle: Cash
 owner: A6
 inputs: {tables: [bank_accounts, bank_transactions]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [exceptions]
+reads: [bank_accounts, bank_transactions, trial_balance]
 engine: rule
 autonomy_level: L4
 assertions: [Existence]

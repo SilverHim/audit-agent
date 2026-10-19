@@ -118,6 +118,12 @@ class ReviewRecordIn(Model):
     neither_action: NeitherAction | None = None
 
 
+class RerunIn(Model):
+    """重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274)."""
+
+    procedure_ids: list[str] | None = None
+
+
 class ClientProfileIn(Model):
     """更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1."""
 
@@ -165,6 +171,9 @@ class ProcedureDetail(Model):
     runs: list[ProcedureRun]
     exceptions: list[AuditException]
     judgments: list[JudgmentView]  # 经盲判过滤
+    stale: bool = False  # 过期, 口径同总览 (services.staleness)
+    rerunnable: bool = False  # 过期且能重跑 (执行阶段, 不在等重跑, 不在等数据或未执行), 同总览
+    superseded_run_ids: list[str] = []  # 被过期重跑取代的执行: 其例外与判断留作历史, 不再计入
 
 
 class JudgmentDetail(Model):

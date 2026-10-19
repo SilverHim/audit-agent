@@ -1,4 +1,4 @@
-"""复核队列, 程序详情, 判断详情与例外."""
+"""复核队列, 程序详情, 判断详情与例外; 重跑过期程序."""
 
 from datetime import UTC, datetime
 from typing import Annotated, cast
@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_decisions, get_deps, get_query, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import IdBody, JudgmentDetail, ProcedureDetail, ReviewRecordIn, ReviewTaskView
+from backend.api.schemas import IdBody, JudgmentDetail, ProcedureDetail, RerunIn, ReviewRecordIn, ReviewTaskView
 from backend.contracts.models import (
     AuditException,
     Decision,
@@ -17,6 +17,7 @@ from backend.contracts.models import (
     Judgment,
     Procedure,
     ProcedureRun,
+    RerunRequest,
     ReviewRecord,
     ReviewTask,
     SourceType,
@@ -28,6 +29,7 @@ from backend.contracts.views import JudgmentView
 from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.services.review_queue import review_tier, row_amount, subject_row, task_amount
+from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 
 router = APIRouter(prefix="/engagements/{eid}", tags=["reviews"])
 
@@ -127,6 +129,11 @@ async def get_procedure(
         exceptions = await deps.output_store.latest(engagement.id, AuditException, procedure_id=pid)
         judgments = await deps.output_store.latest(engagement.id, Judgment, procedure_id=pid)
         views = [await deps.blind_filter.judgment(engagement.id, j) for j in judgments]
+        # 过期与可重跑同总览 (以 Store 为准); 被取代的执行取 Store 中的重跑请求
+        pack = await deps.output_store.latest(engagement.id, Procedure)
+        all_runs = await deps.output_store.latest(engagement.id, ProcedureRun)
+        superseded = superseded_runs(await deps.output_store.latest(engagement.id, RerunRequest))
+        stale = stale_procedures(pack, all_runs, await deps.data.changes(engagement.id), deps.library, superseded)
     return ProcedureDetail(
         procedure=procedure,
         name=template.name,
@@ -135,7 +142,24 @@ async def get_procedure(
         runs=sorted(runs, key=lambda run: run.run_no),
         exceptions=exceptions,
         judgments=views,
+        stale=pid in stale,
+        rerunnable=pid in rerunnable(pack, stale),
+        superseded_run_ids=sorted(r.id for r in runs if r.id in superseded),
     )
+
+
+@router.post("/procedures/rerun", status_code=202)
+async def rerun_procedures(
+    body: RerunIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
+) -> IdBody:
+    """用新数据重跑过期的执行阶段程序 (单条或全部, 需求 R274); 返回重跑请求 ID. 只能在等复核, FIN-01 或 RPT-01
+    闸门处 (409 NOT_RERUNNABLE); 所列程序不是可重跑的过期程序 422 INVALID_VALUE; 锁定 423, 执行中 409."""
+    async with catch_api():
+        request = await decisions.rerun_stale(engagement.id, f"RR-{uuid4()}", body.procedure_ids, requested_by=user.id)
+    return IdBody(id=request.id)
 
 
 @router.get("/judgments/{jid}")

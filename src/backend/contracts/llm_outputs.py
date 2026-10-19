@@ -10,7 +10,6 @@ from backend.contracts.models import (
     CriticReasonType,
     DocumentType,
     EvidencePointer,
-    JudgmentRef,
     MisstatementDraft,
     Model,
     ProposedAction,
@@ -87,11 +86,12 @@ class SheetRecognition(Model):
 
 
 class ReportDraft(Model):
-    """RPT-03 生成的报告草稿: LLM 只写意见段与形成意见的基础段."""
+    """RPT-03 生成的报告草稿: LLM 只写意见段与形成意见的基础段. 引用的判断写引用键, 不写判断 ID (重跑后判断 ID
+    会变, 键不变); 由 RPT-03 换成当前判断的 ID 与版本 (见 services.judgment_engine.citation_keys)."""
 
     opinion: str  # 意见段正文
     basis_for_opinion: str  # 形成意见的基础段正文
-    judgment_refs: list[JudgmentRef]  # 事实断言引用的已确认判断
+    judgment_keys: list[str]  # 事实断言引用的已确认判断的引用键, 如 REV-02:SI-2026-0612; 取提示词列出的键
 
 
 class CriticIndependent(Model):

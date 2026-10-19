@@ -24,6 +24,7 @@ from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.evidence import confirmation_key, legacy_key
 from backend.agents.ingest import build_contract
 from backend.contracts.data import (
     ApprovalLogRow,
@@ -31,7 +32,9 @@ from backend.contracts.data import (
     CheckInputs,
     CheckRun,
     ContractVersion,
+    DataChange,
     DataCheck,
+    DataInput,
     DataReadiness,
     DataRequest,
     DataSource,
@@ -40,6 +43,7 @@ from backend.contracts.data import (
     TableKind,
     TableStats,
     TableVersion,
+    table_changes,
 )
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
@@ -1557,6 +1561,17 @@ class FakeDataStore:
         self.imports: dict[str, tuple[ImportSession, bytes]] = {}  # 导入会话 ID → (会话, 暂存的原文件)
         self.import_updates: list[tuple[str, dict[str, Any]]] = []  # update_import 的每次调用 (会话 ID, 改了的字段)
         self.extractions: dict[tuple[str, str, int], dict[str, Any]] = {}  # save_extraction 记下的 (类型, 对象, 版本)
+        # 数据变动 (同真实实现的 data_changes): 种子载入为版本 1 的全部各类数据
+        self.data_changes: list[DataChange] = [DataChange(data_version=1, input=i) for i in DataInput] if ready else []
+
+    async def changes(self, eid: str) -> list[DataChange]:
+        order = list(DataInput)
+        return sorted(self.data_changes, key=lambda c: (c.data_version, order.index(c.input)))
+
+    def record(self, *inputs: DataInput) -> None:
+        """数据版本 +1 并记下这次变了哪些数据."""
+        self.data_version += 1
+        self.data_changes += [DataChange(data_version=self.data_version, input=i) for i in dict.fromkeys(inputs)]
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
@@ -1696,7 +1711,7 @@ class FakeDataStore:
         history.append(changed)
         update = {"category": category, "category_basis": "auditor"}
         self.tables[TableKind.accounts] = [a.model_copy(update=update) if a.code == code else a for a in accounts]
-        self.data_version += 1
+        self.record(DataInput.accounts)
         return changed
 
     async def mark_unavailable(
@@ -1744,7 +1759,7 @@ class FakeDataStore:
                 self.approvals = [cast(ApprovalLogRow, r) for r in rows]
             elif kind in (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries):
                 self.tables[kind] = list(rows)
-        self.data_version += 1
+        self.record(*table_changes(tables))
         for kind, rows in tables.items():
             if kind is TableKind.trial_balance:
                 current = sum(getattr(r, "period", None) == "current" for r in rows)
@@ -1772,8 +1787,8 @@ class FakeDataStore:
             self.imports[import_id] = (session.model_copy(update=update), raw)
         return self.data_version
 
-    async def bump_version(self, eid: str) -> int:
-        self.data_version += 1
+    async def bump_version(self, eid: str, input: DataInput) -> int:
+        self.record(input)
         return self.data_version
 
     async def extraction_versions(
@@ -2128,7 +2143,7 @@ def numbat_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
                 id=f"C-{account}",
                 bank_account_id=account,
                 confirming_party=bank,
-                idempotency_key=f"{ctx.engagement.id}:CSH-04:{account}",
+                idempotency_key=numbat_confirmation_key(ctx.engagement.id, account),
                 sent_at=NOW,
                 reply_document_id=reply.id,
                 receipt_channel=ReceiptChannel.direct_email,
@@ -2391,6 +2406,35 @@ async def assert_pack_synced(pack: list[Procedure], store: FakeOutputStore, eid:
         assert await store.get(eid, Procedure, procedure.id) == procedure, procedure.id
 
 
+def numbat_confirmation_key(eid: str, account: str) -> str:
+    """Numbat 银行账户 (NUMBAT_RECORDS) 的发函幂等键, 同 CSH-04 (含识别信息摘要, evidence.confirmation_key); 不在
+    银行账户表中的账户 (用例造的, 如 BA-09) 没有识别信息, 摘要位写 not-in-table."""
+    row = NUMBAT_RECORDS.get(("bank_account", account))
+    if row is None:
+        return f"{eid}:CSH-04:{account}:not-in-table"
+    return confirmation_key(eid, BankAccount.model_validate(row))
+
+
+async def legacy_sends(deps: AgentDeps, eid: str, accounts: Sequence[str], data_version: int | None = 1) -> None:
+    """识别信息进键之前发的函: 每个账户一条旧写法键 ({eid}:CSH-04:{账户}) 的成功 external_call 留痕 (没有
+    confirmation_id), 所属的 CSH-04 第 1 次执行 (记数据版本 data_version) 存进 Store."""
+    run = finished(make_run("CSH-04")).model_copy(update={"data_version": data_version})
+    await deps.output_store.put(eid, [run], actor=AgentId.A5)
+    for account in accounts:
+        entry = TrailEntry(
+            engagement_id=eid,
+            kind=TrailKind.external_call,
+            actor=AgentId.A5,
+            procedure_id="CSH-04",
+            run_id=run.id,
+            summary=f"Bank confirmation {account} sent",
+            idempotency_key=legacy_key(eid, account),
+            payload={"bank_account_id": account},
+            created_at=NOW,
+        )
+        await deps.trail.record(entry)
+
+
 def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engagement = ENGAGEMENT) -> RunContext:
     """某条程序第 1 次执行的上下文: Procedure 为 planned 第 1 版, Run 置 running."""
     template = deps.library.load(procedure_id)
@@ -2422,6 +2466,7 @@ def make_runner(
     review_llm: LLMClient | None = None,
     features: frozenset[str] | None = None,
     data: FakeDataStore | None = None,
+    llm: LLMClient | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -2433,6 +2478,7 @@ def make_runner(
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
     features: 启用的功能, 缺省为基线, 给了 library 时缺省取它的 (见 make_deps).
     data: 数据管理存储, 缺省为种子已载入 (视同已确认就绪, P1 前不等数据).
+    llm: 主模型, 缺省为 mock 模式的固定输出 (见 make_deps; 给了时 review_llm 也要给, 否则 A7 不复核).
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -2449,6 +2495,7 @@ def make_runner(
         review_llm=review_llm,
         features=features,
         data=data,
+        llm=llm,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:

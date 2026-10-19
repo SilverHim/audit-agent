@@ -6,6 +6,7 @@ from typing import ClassVar
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import AgentId, OpinionType, UncorrectedItem, UncorrectedSchedule
 from backend.contracts.state import StatePatch
+from backend.services.staleness import current_results
 
 
 class QCAgent(ProcedureAgent[UncorrectedSchedule]):
@@ -15,7 +16,8 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
     procedures: ClassVar[frozenset[str]] = frozenset({"FIN-04"})  # 负责的程序
 
     async def execute(self, ctx: RunContext) -> UncorrectedSchedule:
-        """按状态中的错报 (本版全部未更正) 编未更正错报汇总表 SCHEDULE, 规则见 FIN-04.yaml.
+        """按状态中当前结果的错报 (本版全部未更正; 过期重跑取代的执行引出的不计, services.staleness.current_results)
+        编未更正错报汇总表 SCHEDULE, 规则见 FIN-04.yaml.
 
         高于明显微小门槛 (clearly_trivial_cents) 的错报计入 items, 等于或低于的只列 ID 于 excluded_trivial_ids;
         total_cents 为 items 金额之和, 不按高估低估抵销; 不低于整体重要性 (materiality_cents) 时候选意见为保留.
@@ -26,7 +28,7 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
         materiality, trivial = params["materiality_cents"], params["clearly_trivial_cents"]
         items: list[UncorrectedItem] = []
         excluded: list[str] = []
-        for misstatement in ctx.state["misstatements"]:
+        for misstatement in current_results(ctx.state).misstatements:
             if misstatement.amount_cents > trivial:
                 items.append(
                     UncorrectedItem(

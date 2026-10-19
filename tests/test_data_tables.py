@@ -1,6 +1,5 @@
 """需求 R16: 账表查看, 科目分类修改 (历史, 留痕, 数据版本), 程序过期标记; 存储用假实现."""
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -11,13 +10,11 @@ from backend.contracts.models import (
     GateVerdict,
     Phase,
     ProcedureRun,
-    RunStatus,
-    RunTrigger,
     TrailEntry,
     TrailKind,
 )
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.query import GraphStateQuery, stale
+from backend.orchestration.query import GraphStateQuery
 from backend.services.data_service import DataService
 from tests.fakes import (
     ENGAGEMENT,
@@ -244,36 +241,16 @@ async def test_category_edit_retry_returns_same_version_and_lock_rules(monkeypat
 # ── 过期标记 ──
 
 
-def run(version: int | None, run_no: int = 1) -> ProcedureRun:
-    return ProcedureRun(
-        id=f"RUN-PLN-07-{run_no}",
-        procedure_id="PLN-07",
-        run_no=run_no,
-        trigger=RunTrigger.initial,
-        params_snapshot={},
-        started_at=datetime(2026, 1, 1, tzinfo=UTC),
-        status=RunStatus.succeeded,
-        data_version=version,
-    )
-
-
-def test_stale_rule() -> None:
-    """过期: 最近一次执行记了数据版本且比当前旧; 没执行过, 执行时没记版本的不算."""
-    assert stale(run(1), 2) is True
-    assert stale(run(2), 2) is False
-    assert stale(run(None), 2) is False
-    assert stale(None, 2) is False
-
-
-async def test_procedures_become_stale_after_category_edit() -> None:
-    """进 P1 后各程序的执行记下数据版本; 改科目分类 (数据版本 +1) 后, 总览里已执行的程序标 stale, 没执行的不标."""
+async def test_category_edit_makes_only_account_readers_stale() -> None:
+    """进 P1 后各程序的执行记下数据版本; 改科目分类 (数据版本 +1, 记数据变动 accounts) 后, 总览里只有读科目表的
+    已执行程序 (PLN-07, PLN-01) 标 stale; 没读科目表的 (DOC-04) 与没执行的不标 (需求 R274)."""
     runner, store = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]))
     await runner.start(EID)
     await wait_idle(runner, EID)
     await GraphDecisionSubmit(runner.app, runner.deps, runner).submit(EID, acc01_decision(GateVerdict.approve))
     await wait_idle(runner, EID)
     query = GraphStateQuery(runner.app, runner.deps, runner)
-    before = {p.id: p.stale for p in (await query.overview(EID)).procedures}
+    before = await query.overview(EID)
     runs = [r for r in store.rows if isinstance(r, ProcedureRun)]
     library = runner.deps.library
     p0 = {r.procedure_id for r in runs if library.load(r.procedure_id).phase is Phase.P0_Acceptance}
@@ -282,8 +259,11 @@ async def test_procedures_become_stale_after_category_edit() -> None:
 
     service = DataService(runner.deps, runner)
     await service.set_account_category(EID, "6300", "cost_of_sales", REASON, "U-1")
-    after = {p.id: p.stale for p in (await query.overview(EID)).procedures}
+    after = await query.overview(EID)
 
     executed = {r.procedure_id for r in runs} - p0
-    assert not any(before.values())
-    assert {pid for pid, flag in after.items() if flag} == executed
+    assert executed == {"DOC-04", "PLN-07", "PLN-01"}
+    assert not any(p.stale for p in before.procedures) and before.stale_procedure_ids == []
+    assert {p.id for p in after.procedures if p.stale} == {"PLN-07", "PLN-01"}
+    assert after.stale_procedure_ids == ["PLN-01", "PLN-07"]  # 按总览的顺序 (阶段, 编号)
+    assert not any(p.rerunnable for p in after.procedures)  # 计划阶段的程序过期只标记 (Q2)

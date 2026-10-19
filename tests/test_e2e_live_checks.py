@@ -84,7 +84,7 @@ class InjectingLLM:
             if key == ("REV-02", "SI-2026-0612"):
                 del data["conclusion"]  # 每次都缺必填字段, 结构级失败重试耗尽, hybrid 有例外即 unattributed
             if req.procedure_id == "RPT-03":  # (Codex R59-09) 只写请求里给了的事实, 不沿用 fixture 自带的
-                data["judgment_refs"] = [{"id": "J-REV-02-1-SI-2026-0612-H1", "version": 1}]
+                data["judgment_keys"] = ["REV-02:SI-2026-0612:H1"]  # 人工判断 J-REV-02-1-SI-2026-0612-H1 的引用键
                 if not facts_in_request(req):
                     data["basis_for_opinion"] = "Basis for Qualified Opinion\n\nRevenue is overstated by $142,000."
         if self.mode in ("cutoff_wrong_document", "cutoff_wrong_page") and key == ("REV-02", "SI-2026-0612"):

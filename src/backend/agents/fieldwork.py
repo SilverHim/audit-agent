@@ -11,6 +11,7 @@ from typing import Any, ClassVar, cast
 from pydantic import TypeAdapter
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.evidence import current_confirmations, legacy_accounts
 from backend.agents.judging import (
     DEFAULT_STEPS,
     Judged,
@@ -38,6 +39,7 @@ from backend.contracts.models import (
 from backend.contracts.records import BankAccount
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
+from backend.services.staleness import current_results
 
 
 @dataclass(frozen=True)
@@ -147,7 +149,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
 
     async def rev02_subjects(self, ctx: RunContext) -> list[Subject]:
         """REV-02 的判断对象: 规则 S01 选中的发票, 加前置程序 (REV-08) 尚未归因的例外所指的发票 (Q13: R01, R02, R03
-        都算), 去重后按发票 ID 排序; 先按 in_scope 筛选, 再取数据.
+        都算; 只看当前结果, 过期重跑取代的执行的例外不算, services.staleness), 去重后按发票 ID 排序; 先按 in_scope
+        筛选, 再取数据.
 
         data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice 与 delivery_notes (按 ID 排序) 带 source_type;
         contract, document (该合同的文件登记, 见 contract_documents), contract_judgment (该合同当前有效的 REV-03 判断,
@@ -161,7 +164,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         open_findings = sorted(
             (
                 x
-                for x in ctx.state["exceptions"]
+                for x in current_results(ctx.state).exceptions
                 if x.procedure_id in earlier and x.disposition is not ExceptionDisposition.attributed
             ),
             key=lambda x: x.id,
@@ -206,10 +209,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     @staticmethod
     def contract_judgment(ctx: RunContext, contract_id: str) -> dict[str, Any] | None:
         """该合同当前有效的 REV-03 判断 (id, conclusion, review_status): 状态中该合同未被推翻的 REV-03 判断里最新的一条
-        (被 override 时即人工判断); 没有为 None."""
+        (被 override 时即人工判断; 只看当前结果, 过期重跑取代的执行的不算); 没有为 None."""
         candidates = [
             j
-            for j in ctx.state["judgments"]
+            for j in current_results(ctx.state).judgments
             if j.procedure_id == "REV-03"
             and j.subject_id == contract_id
             and j.review_status is not ReviewStatus.overridden
@@ -222,17 +225,24 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     async def assess_confirmations(self, ctx: RunContext) -> CashFindings:
         """CSH-02 的执行: 先做规则部分 (D01, 在代码中做), 再对有差异的账户组装上下文交判断引擎.
 
-        规则部分逐个函证比较回函余额与本期试算表中该账户总账科目的余额: 相等时函证写账面余额, 差额 0, 结果 agreed;
-        不等时结果 difference, 并建 D01 例外 X-CSH-02-{run_no}-D01-{n} (n 按银行账户 ID 排序编号, 金额为回函减账面,
-        证据为回函余额所在页与试算表科目). 函证还没有回函余额时抛 ValueError. 账户的筛选同判断对象 (in_scope).
+        只处理当前的函证 (账户仍在银行账户表中且识别信息没变, evidence.current_confirmations), 删掉或识别信息变了的
+        账户的旧函证留作历史. 规则部分逐个函证比较回函余额与本期试算表中该账户总账科目的余额: 相等时函证写账面
+        余额, 差额 0, 结果 agreed; 不等时结果 difference, 并建 D01 例外 X-CSH-02-{run_no}-D01-{n} (n 按银行账户 ID
+        排序编号, 金额为回函减账面, 证据为回函余额所在页与试算表科目). 函证还没有回函余额时抛 ValueError. 账户的
+        筛选同判断对象 (in_scope).
         判断对象为有 D01 的账户, 候选调节项取规则 D02, D03 的行 (按账户切分).
         """
         eid = ctx.engagement.id
         rules = await self.run_rules(ctx)
         accounts = {a.id: a for a in await self.deps.financial_store.bank_accounts(eid)}
         books = {r.account_code: r.balance_cents for r in await self.deps.financial_store.trial_balance(eid, "current")}
+        legacy = await legacy_accounts(self.deps, eid, accounts.values())
         confirmations = sorted(
-            (c for c in ctx.state["confirmations"] if in_scope(ctx, c.bank_account_id)),
+            (
+                c
+                for c in current_confirmations(ctx.state["confirmations"], eid, accounts.values(), legacy)
+                if in_scope(ctx, c.bank_account_id)
+            ),
             key=lambda c: c.bank_account_id,
         )
         updated: list[Confirmation] = []
@@ -297,7 +307,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     ) -> Subject:
         """有差异账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
 
-        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (按 ID 排序), 再加本次的 D01.
+        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加本次的 D01.
         回函取状态 documents 中的记录, 不在状态中抛 LookupError.
         """
         documents = {d.id: d for d in ctx.state["documents"]}
@@ -308,7 +318,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         findings = sorted(
             (
                 x
-                for x in ctx.state["exceptions"]
+                for x in current_results(ctx.state).exceptions
                 if x.procedure_id in earlier
                 and account.id in x.source_ids
                 and x.disposition is not ExceptionDisposition.attributed

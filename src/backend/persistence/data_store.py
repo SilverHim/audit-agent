@@ -21,7 +21,9 @@ from backend.contracts.data import (
     CheckId,
     CheckInputs,
     CheckRun,
+    DataChange,
     DataCheck,
+    DataInput,
     DataReadiness,
     DataRequest,
     DataSource,
@@ -30,12 +32,13 @@ from backend.contracts.data import (
     TableKind,
     TableStats,
     TableVersion,
+    table_changes,
 )
 from backend.contracts.models import AgentId, DocumentType
 from backend.contracts.records import Account, AccountCategory
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
-from backend.persistence.stores import Store, now, safe_child, upsert_extraction
+from backend.persistence.stores import Store, now, record_changes, safe_child, upsert_extraction
 from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 
 # 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户没有
@@ -391,9 +394,9 @@ class PostgresDataStore(Store):
             await conn.execute(insert(h).values(engagement_id=eid, account_code=code, **changed.model_dump()))
             await conn.execute(update(a).where(a.c.code == code).values(category=category, category_basis="auditor"))
             t = m.dataset_loads
-            await conn.execute(
-                update(t).where(t.c.engagement_id == eid).values(data_version=int(loads["data_version"]) + 1)
-            )
+            version = int(loads["data_version"]) + 1
+            await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
+            await record_changes(conn, eid, version, [DataInput.accounts])  # 科目分类在科目表上
         return changed
 
     async def mark_unavailable(
@@ -458,6 +461,7 @@ class PostgresDataStore(Store):
             version = int(loads["data_version"]) + 1
             t = m.dataset_loads
             await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
+            await record_changes(conn, eid, version, table_changes(tables))
             for kind in sorted(tables, key=list(TableKind).index):  # 总账在审批日志之前
                 rows: Sequence[BaseModel] = list(tables[kind])
                 if kind is TableKind.accounts:
@@ -592,14 +596,22 @@ class PostgresDataStore(Store):
         rows = await self.rows(eid, statement.order_by(t.c.target_type, t.c.target_id, t.c.version))
         return [ExtractionRecord.model_validate(r) for r in rows]
 
-    async def bump_version(self, eid: str) -> int:
+    async def bump_version(self, eid: str, input: DataInput) -> int:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             loads = await self.loads_row(conn, eid)
             version = int(loads["data_version"]) + 1
             t = m.dataset_loads
             await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
+            await record_changes(conn, eid, version, [input])
         return version
+
+    async def changes(self, eid: str) -> list[DataChange]:
+        t = m.data_changes
+        rows = await self.rows(eid, select(t.c.data_version, t.c.input).order_by(t.c.data_version))
+        order = list(DataInput)
+        found = [DataChange.model_validate(r) for r in rows]
+        return sorted(found, key=lambda c: (c.data_version, order.index(c.input)))
 
     async def save_extraction(
         self,
