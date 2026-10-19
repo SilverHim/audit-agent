@@ -1,0 +1,62 @@
+{
+  "conclusion": "Invoice SI-2026-0618 and its delivery note fall in the same period; the revenue is recorded in the right year and there is no misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-2026-0618 was posted to revenue.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-2026-0618",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Delivery note DN-2026-0618 was signed by the customer.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-2026-0618",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the goods.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Control passed when the delivery note was signed, in the same period as the posting.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "proposed_action": "accept",
+  "misstatement_draft": null
+}

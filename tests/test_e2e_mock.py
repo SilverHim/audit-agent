@@ -63,6 +63,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence import models as m
 from backend.persistence.stores import now
 from backend.services.judgment_engine import OutputValidator, PointerResolver
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
@@ -101,9 +102,12 @@ async def start_demo(
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
     features: frozenset[str] = NUMBAT_FEATURES,
+    llm: LLMClient | None = None,
+    library: ProcedureLibrary | None = None,
 ) -> Started:
     """启动 → ACC-01 approve → PLN-01/03 approve (收入 1%, 75%, 5%); 返回时后台正在执行 P2 (不等待).
-    财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障."""
+    财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障;
+    llm 与 library 换主模型与程序库 (如改了某程序自主度的副本, 程序库的功能集须同 features)."""
     financial = FakeFinancialStore(replies(), dict(NUMBAT_RECORDS), trial_balance=NUMBAT_TRIAL_BALANCE)
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     runner, store = make_runner(
@@ -114,6 +118,8 @@ async def start_demo(
         confirmations=confirmations,
         review_llm=review_llm,
         features=features,
+        llm=llm,
+        library=library,
     )
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
@@ -158,6 +164,8 @@ def trail_of(s: Started) -> FakeTrail:
 
 async def test_results_match_dataset(demo: Started) -> None:
     await assert_results(demo)
+    # 功能 collab 关闭 (R149 验收 5): A7 不记命中的触发规则
+    assert {j.critic_trigger for j in await demo.output_store.latest(EID, Judgment)} == {None}
 
 
 async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> None:

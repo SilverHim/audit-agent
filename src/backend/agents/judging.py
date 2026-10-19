@@ -4,7 +4,7 @@
 判断失败的对象不经中间三步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级与抽样由对应需求实现, 缺省原样返回.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -43,9 +43,12 @@ class Judged:
 
 
 class Critic(Protocol):
-    """A7 独立复核 (agents/review.ReviewAgent): 返回写好 critic 字段的同一版本判断."""
+    """A7 独立复核 (agents/review.ReviewAgent): 返回写好 critic 字段的同一版本判断. findings 为该判断解释的例外
+    (判断对象的规则例外, A6 判断时用的同一组), 校验复核方错报草稿的金额用."""
 
-    async def review(self, ctx: RunContext, judgment: Judgment) -> Judgment: ...
+    async def review(
+        self, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException] = ()
+    ) -> Judgment: ...
 
 
 Step = Callable[[RunContext, Judgment], Awaitable[Judgment]]  # 复核之后, 分类之前的一步: 收判断, 返回 (可能改过的) 判断
@@ -121,7 +124,7 @@ async def judge_all(
         outcome = await deps.judgments.judge(ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id)
         if outcome.judgment is not None:
             # 独立复核在降级与分类之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
-            judgment = await critic.review(ctx, outcome.judgment)
+            judgment = await critic.review(ctx, outcome.judgment, subject.rule_findings)
             judgment = await steps.downgrade(ctx, judgment)
             judgment = await steps.blind(ctx, judgment)
             outcome = outcome.model_copy(update={"judgment": judgment})

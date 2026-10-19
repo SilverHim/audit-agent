@@ -1227,7 +1227,7 @@ export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' 
 /**
  * CriticTrigger
  *
- * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用).
+ * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (功能 collab 打开时记进 Judgment.critic_trigger).
  */
 export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupported' | 'sample';
 
@@ -1798,6 +1798,10 @@ export type EngagementOverview = {
      */
     clearly_trivial_cents: number | null;
     opinion_route: OpinionType | null;
+    /**
+     * Features
+     */
+    features?: Array<string>;
 };
 
 /**
@@ -2525,6 +2529,8 @@ export type JudgmentView = {
      * Critic Reasoning Chain
      */
     critic_reasoning_chain: Array<ReasoningStep> | null;
+    critic_proposed_action?: ProposedAction | null;
+    critic_misstatement_draft?: MisstatementDraft | null;
     /**
      * Critic Model
      */
@@ -3462,6 +3468,14 @@ export type ReviewRecord = {
     dispute_resolution?: DisputeResolution | null;
     neither_action?: NeitherAction | null;
     /**
+     * Consulted
+     */
+    consulted?: boolean;
+    /**
+     * Consultation Record
+     */
+    consultation_record?: string | null;
+    /**
      * Reviewed By
      */
     reviewed_by: string;
@@ -3504,6 +3518,14 @@ export type ReviewRecordIn = {
     manual_result?: ManualResult | null;
     dispute_resolution?: DisputeResolution | null;
     neither_action?: NeitherAction | null;
+    /**
+     * Consulted
+     */
+    consulted?: boolean;
+    /**
+     * Consultation Record
+     */
+    consultation_record?: string | null;
 };
 
 /**
@@ -3584,6 +3606,12 @@ export type ReviewTaskView = {
      * Allowed Resolutions
      */
     allowed_resolutions?: Array<DisputeResolution>;
+    /**
+     * Draft Rules
+     */
+    draft_rules?: {
+        [key in DisputeResolution]?: 'required' | 'hidden' | 'optional';
+    };
 };
 
 /**

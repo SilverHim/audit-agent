@@ -67,9 +67,10 @@ def test_t0_copy_loads_like_the_original(tmp_path: Path) -> None:
         case.snapshot == tmp_path / "api" / inj.SNAPSHOT and case.supplements == tmp_path / "xero_demo" / inj.SNAPSHOT
     )
     original = XeroDatasetLoader(inj.SNAPSHOTS, inj.PLANNING, object(), object(), supplements=inj.SUPPLEMENTS)  # type: ignore[arg-type]
-    (copied, copied_pdfs), (tables, pdfs) = case.loader.tables(case.dataset), original.tables(case.dataset)
-    assert copied == tables
-    assert [p.read_bytes() for p in copied_pdfs] == [p.read_bytes() for p in pdfs]
+    assert case.loader.tables(case.dataset) == original.tables(case.dataset)
+    copied, source = case.loader.supplement(case.dataset), original.supplement(case.dataset)
+    assert copied is not None and source is not None
+    assert [p.read_bytes() for p in copied.contracts()] == [p.read_bytes() for p in source.contracts()]
     manifest = json.loads((case.supplements / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["injected"] == "T0"
     assert "contacts.json" not in {f["path"] for f in manifest["snapshot"]["files"]}
@@ -141,7 +142,7 @@ def test_moving_a_journal_needs_tb_shift(tmp_path: Path) -> None:
         {"op": "tb_shift", "code": "610", "delta_cents": -55000},
     ]
     case = inj.xero_case(tmp_path / "b", patch(tmp_path / "b", [move, *shifts], "TM"))
-    tables, _ = case.loader.tables(case.dataset)
+    tables = case.loader.tables(case.dataset)
     current = {r.account_code: r.balance_cents for r in tables["trial_balance"] if r.period == "current"}
     assert (current["090"], current["610"]) == (-1090044 + 55000, 1019950 - 55000)
     assert failure(tmp_path / "c", [{"op": "tb_shift", "code": "999", "delta_cents": 1}]).endswith("试算表没有科目 999")
@@ -171,7 +172,7 @@ def test_add_delete_add_file_and_csv_rows(tmp_path: Path) -> None:
         {"op": "add_file", "file": "xero_demo/notes/extra.txt", "content": "synthetic"},
     ]
     case = inj.xero_case(tmp_path / "a", patch(tmp_path / "a", ops, "TA"))
-    tables, _ = case.loader.tables(case.dataset)
+    tables = case.loader.tables(case.dataset)
     moved = next(n for n in tables["delivery_notes"] if n.id == "SR-ORC1026")
     assert str(moved.signed_date) == "2026-10-02"
     assert json.loads((case.supplements / "confirmations" / "receipts.json").read_text())["99999999"]
@@ -225,7 +226,7 @@ def test_set_row_changes_one_csv_line(tmp_path: Path) -> None:
         }
     ]
     case = inj.xero_case(tmp_path / "a", patch(tmp_path / "a", ops, "TS"))
-    tables, _ = case.loader.tables(case.dataset)
+    tables = case.loader.tables(case.dataset)
     assert str(next(n for n in tables["delivery_notes"] if n.id == "SR-ORC1026").signed_date) == "2026-10-02"
     old = (inj.SUPPLEMENTS / inj.SNAPSHOT / "delivery_notes.csv").read_text(encoding="utf-8").splitlines()
     new = (case.supplements / "delivery_notes.csv").read_text(encoding="utf-8").splitlines()
@@ -251,7 +252,7 @@ def test_delete_whole_journal_with_tb_shift(tmp_path: Path) -> None:
     ]
     case = inj.xero_case(tmp_path / "a", patch(tmp_path / "a", [delete, *shifts], "TD"))
     assert all(j["JournalNumber"] != 499 for j in json.loads((case.snapshot / "journals.json").read_text()))
-    tables, _ = case.loader.tables(case.dataset)
+    tables = case.loader.tables(case.dataset)
     current = {r.account_code: r.balance_cents for r in tables["trial_balance"] if r.period == "current"}
     assert (current.get("710", 0), current.get("711", 0), current["820"]) == (0, 0, -126697)
     report = json.loads((case.snapshot / "trial_balance_2026-09-30.json").read_text(encoding="utf-8"))
@@ -394,7 +395,7 @@ def test_fixture_is_bound_to_tmp_path(xero_case: Any, tmp_path: Path) -> None:
         tmp_path / "pair" / "api" / inj.SNAPSHOT,
         tmp_path / "pair" / "xero_demo" / inj.SNAPSHOT,
     )
-    assert pair.loader.tables(pair.dataset)[0] == case.loader.tables(case.dataset)[0]
+    assert pair.loader.tables(pair.dataset) == case.loader.tables(case.dataset)
 
 
 def test_match_compares_types(tmp_path: Path) -> None:

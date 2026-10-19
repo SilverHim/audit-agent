@@ -14,6 +14,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     Decision,
     Direction,
+    DisputeResolution,
     EvidencePointer,
     ExceptionDisposition,
     GateDecision,
@@ -34,7 +35,15 @@ from backend.contracts.models import (
     TaskStatus,
     TrailKind,
 )
-from backend.orchestration.decisions import human_judgment_id, recompute_procedure
+from backend.orchestration.decisions import (
+    check_consultation,
+    check_dispute_draft,
+    human_judgment_id,
+    kept_consultation,
+    recompute_procedure,
+    review_trail,
+)
+from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
 from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
@@ -558,6 +567,47 @@ def test_recompute_procedure(status: ProcedureStatus, pending: int, expected: Pr
         assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)
 
 
+def task_of(kind: TaskKind, n: int = 0) -> ReviewTask:
+    return ReviewTask.model_construct(id=f"T-{kind}-{n}", kind=kind)
+
+
+@pytest.mark.parametrize(
+    ("status", "kinds", "collab", "expected"),
+    [
+        (ProcedureStatus.awaiting_human, [TaskKind.dispute, TaskKind.normal], True, ProcedureStatus.in_dispute),
+        (ProcedureStatus.in_dispute, [TaskKind.dispute], True, None),
+        (ProcedureStatus.in_dispute, [TaskKind.normal], True, ProcedureStatus.awaiting_human),
+        (ProcedureStatus.in_dispute, [], True, ProcedureStatus.completed),
+        (ProcedureStatus.executing, [TaskKind.dispute], True, None),
+        (ProcedureStatus.awaiting_human, [TaskKind.dispute], False, None),
+        (ProcedureStatus.planned, [TaskKind.dispute], False, ProcedureStatus.awaiting_human),
+    ],
+)
+def test_recompute_procedure_with_disputes(
+    status: ProcedureStatus, kinds: list[TaskKind], collab: bool, expected: ProcedureStatus | None
+) -> None:
+    """R151 验收 3: collab 打开时仍有待决 dispute 任务为 in_dispute, 只有其他待决任务为 awaiting_human, 都没有为
+    completed; executing 不改; collab 关闭时照现状 (有待决任务即 awaiting_human)."""
+    procedure = make_procedure("CSH-02", status=status)
+    tasks = [task_of(kind, n) for n, kind in enumerate(kinds)]
+
+    updated = recompute_procedure(procedure, tasks, collab=collab)
+
+    if expected is None:
+        assert updated is None
+    else:
+        assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)
+
+
+def test_waiting_status_prefers_dispute_only_with_collab() -> None:
+    """有待决任务时的状态: collab 打开且有 dispute 为 in_dispute (先于其他任务), 否则 awaiting_human; 没有为 None."""
+    mixed = [task_of(TaskKind.normal), task_of(TaskKind.failed, 1), task_of(TaskKind.dispute, 2)]
+    assert waiting_status(mixed, True) is ProcedureStatus.in_dispute
+    assert waiting_status(mixed, False) is ProcedureStatus.awaiting_human
+    assert waiting_status(mixed[:2], True) is ProcedureStatus.awaiting_human
+    assert waiting_status([], True) is None and waiting_status(iter(mixed), True) is ProcedureStatus.in_dispute
+
+
 # ── R19 misstatement 决定 ──
 
 CUTOFF = "X-REV-08-1-R01-1"  # REV-08 的跨期例外: SI-2026-0612 期末前入账, 期后签收
@@ -860,3 +910,110 @@ async def test_human_judgment_numbered_from_checkpoint() -> None:
 
     created = {o.id for o in s.output_store.commits[before] if isinstance(o, Judgment)}
     assert "J-REV-02-1-SI-2026-0618-H2" in created
+
+
+# ── R150: 仲裁的错报草稿与系统外咨询 (功能 collab 打开时的校验, 纯函数) ──
+
+DISPUTE = "T-J-CSH-02-1-BA-01-v1"
+
+
+def arbitration(resolution: DisputeResolution, draft: bool = False, **fields: Any) -> ReviewRecord:
+    extra: dict[str, Any] = {"misstatement_draft": DRAFT} if draft else {}
+    return record(DISPUTE, Decision.dispute_resolution, dispute_resolution=resolution, **extra, **fields)
+
+
+def disputed_judgment(a6: ProposedAction, a7: ProposedAction | None) -> Judgment:
+    return Judgment.model_construct(id="J-CSH-02-1-BA-01", proposed_action=a6, critic_proposed_action=a7)
+
+
+@pytest.mark.parametrize(
+    ("resolution", "a6", "a7", "draft", "code"),
+    [
+        # a6_upheld 看原判断: 建议错报须带, 不建议不能带
+        (DisputeResolution.a6_upheld, ProposedAction.misstatement, None, False, "MISSING_FIELD"),
+        (DisputeResolution.a6_upheld, ProposedAction.misstatement, None, True, None),
+        (DisputeResolution.a6_upheld, ProposedAction.close, ProposedAction.misstatement, True, "FIELD_NOT_ALLOWED"),
+        (DisputeResolution.a6_upheld, ProposedAction.close, ProposedAction.misstatement, False, None),
+        # a7_upheld 看独立复核的建议动作; 为空 (旧判断) 两可
+        (DisputeResolution.a7_upheld, ProposedAction.close, ProposedAction.misstatement, False, "MISSING_FIELD"),
+        (DisputeResolution.a7_upheld, ProposedAction.close, ProposedAction.misstatement, True, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.accept, True, "FIELD_NOT_ALLOWED"),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.close, True, "FIELD_NOT_ALLOWED"),
+        (
+            DisputeResolution.a7_upheld,
+            ProposedAction.misstatement,
+            ProposedAction.more_evidence,
+            True,
+            "FIELD_NOT_ALLOWED",
+        ),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.more_evidence, False, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, None, True, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, None, False, None),
+        # neither 两可
+        (DisputeResolution.neither, ProposedAction.misstatement, ProposedAction.misstatement, False, None),
+        (DisputeResolution.neither, ProposedAction.close, ProposedAction.close, True, None),
+    ],
+)
+def test_dispute_draft_follows_adopted_side(
+    resolution: DisputeResolution, a6: ProposedAction, a7: ProposedAction | None, draft: bool, code: str | None
+) -> None:
+    """R150 验收 4 (a)(b)(c): 采纳的一方建议错报时裁决必须带错报草稿, 不建议时不能带; neither 两可."""
+    decision = arbitration(resolution, draft)
+    if code is None:
+        check_dispute_draft(decision, disputed_judgment(a6, a7))
+        return
+    with pytest.raises(DecisionRejected) as e:
+        check_dispute_draft(decision, disputed_judgment(a6, a7))
+    assert e.value.code == code
+    if code == "MISSING_FIELD":
+        assert e.value.message == "misstatement_draft"
+
+
+@pytest.mark.parametrize(
+    ("decision", "code", "message"),
+    [
+        (arbitration(DisputeResolution.a6_upheld, consulted=True), "MISSING_FIELD", "consultation_record"),
+        (arbitration(DisputeResolution.a6_upheld, consulted=True, consultation_record="  "), "MISSING_FIELD", None),
+        (arbitration(DisputeResolution.a6_upheld, consultation_record="技术合伙人"), "FIELD_NOT_ALLOWED", None),
+        (record(consulted=True, consultation_record="技术合伙人"), "FIELD_NOT_ALLOWED", None),
+        (record(consulted=True), "FIELD_NOT_ALLOWED", "consulted, consultation_record"),
+        (arbitration(DisputeResolution.a6_upheld, consulted=True, consultation_record="技术合伙人"), None, None),
+        (arbitration(DisputeResolution.a6_upheld), None, None),
+        (record(), None, None),
+    ],
+)
+def test_consultation_fields(decision: ReviewRecord, code: str | None, message: str | None) -> None:
+    """R150 验收 4 (d): consulted 为真而咨询记录空 → MISSING_FIELD; 记录非空而 consulted 假 → FIELD_NOT_ALLOWED;
+    非仲裁的决定填这两项 → FIELD_NOT_ALLOWED."""
+    if code is None:
+        check_consultation(decision)
+        return
+    with pytest.raises(DecisionRejected) as e:
+        check_consultation(decision)
+    assert e.value.code == code
+    if message is not None:
+        assert e.value.message == message
+
+
+@pytest.mark.parametrize(
+    ("consulted", "text", "kept", "trailed"),
+    [
+        (True, "  技术合伙人: 同意  ", "技术合伙人: 同意", True),  # 去首尾空白
+        (True, None, None, True),  # collab 关闭时咨询过而没写记录也收 (不校验), 留痕照记咨询过
+        (False, "技术合伙人", None, False),  # collab 关闭时没咨询却写了记录: 不存, 不进留痕
+        (False, "   ", None, False),  # 全空白的也不存 (collab 打开时 check_consultation 照收)
+    ],
+)
+def test_consultation_kept_and_trailed_only_when_consulted(
+    consulted: bool, text: str | None, kept: str | None, trailed: bool
+) -> None:
+    """第 1 轮审核 R150-03: 存下的咨询记录 consulted 为真时去首尾空白, 为假时不存; decision 留痕只在 consulted 为真
+    时带这两项, 未经 kept_consultation 的记录也一样 (防留痕只看有没有记录)."""
+    raw = arbitration(DisputeResolution.a6_upheld, consulted=consulted, consultation_record=text)
+    decision = kept_consultation(raw)
+    assert (decision.consulted, decision.consultation_record) == (consulted, kept)
+    task = ReviewTask.model_construct(id=DISPUTE, procedure_id="CSH-02")
+    assert ("consultation_record" in review_trail(EID, raw, task, []).payload) is trailed
+    payload = review_trail(EID, decision, task, []).payload
+    expected = {"consulted": True, "consultation_record": kept} if trailed else {}
+    assert {k: payload[k] for k in ("consulted", "consultation_record") if k in payload} == expected

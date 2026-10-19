@@ -53,13 +53,20 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.gates import check_fields, current_gate, current_spec, latest_in_order, spec_of
 from backend.orchestration.inputs import input_versions
-from backend.orchestration.nodes import confirmations_from_store, done_status, rerun_subjects, save_outputs
+from backend.orchestration.nodes import (
+    confirmations_from_store,
+    done_status,
+    rerun_subjects,
+    save_outputs,
+    waiting_status,
+)
 from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
 from backend.services.data_quality import OnHand
+from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import attribute_exceptions
+from backend.services.review_queue import attribute_exceptions, draft_rule
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
@@ -152,6 +159,41 @@ def check_review_fields(record: ReviewRecord, kind: TaskKind) -> None:
         filled = [name for name in neither_fields if getattr(record, name)]
         if filled:
             raise DecisionRejected("FIELD_NOT_ALLOWED", f"{record.dispute_resolution} 不填 {', '.join(filled)}")
+
+
+def check_consultation(record: ReviewRecord) -> None:
+    """系统外咨询的字段 (功能 collab, 需求 R150; 规格书第 11 节: 已咨询本身不是处置): 只有仲裁 (dispute_resolution)
+    能填; consulted 为真须填 consultation_record (咨询对象与结论), 没咨询不能填. 不过抛 DecisionRejected."""
+    filled = (record.consultation_record or "").strip()
+    if record.decision is not Decision.dispute_resolution and (record.consulted or filled):
+        raise DecisionRejected("FIELD_NOT_ALLOWED", "consulted, consultation_record")
+    if record.consulted and not filled:
+        raise DecisionRejected("MISSING_FIELD", "consultation_record")
+    if filled and not record.consulted:
+        raise DecisionRejected("FIELD_NOT_ALLOWED", "consultation_record (consulted 为假)")
+
+
+def kept_consultation(record: ReviewRecord) -> ReviewRecord:
+    """存下的咨询记录 (需求 R150): consulted 为真时去掉首尾空白, 为假时不存 (全空白的也不存; collab 打开时非空的已被
+    check_consultation 拒绝). 校验之后, 写入之前用; 留痕 (review_trail) 只在 consulted 为真时带这两项. 纯函数."""
+    text = (record.consultation_record or "").strip()
+    kept = text if record.consulted and text else None
+    return record if kept == record.consultation_record else record.model_copy(update={"consultation_record": kept})
+
+
+def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
+    """仲裁的错报草稿 (功能 collab, 需求 R150, T11 推荐项 1), 规则见 review_queue.draft_rule (复核队列的 draft_rules
+    同一个函数): required 而没带 misstatement_draft 报 MISSING_FIELD, hidden 而带了报 FIELD_NOT_ALLOWED, optional
+    两可. 不过抛 DecisionRejected."""
+    if record.dispute_resolution is None:
+        return
+    rule = draft_rule(target, record.dispute_resolution)
+    attached = record.misstatement_draft is not None
+    if rule == "required" and not attached:
+        raise DecisionRejected("MISSING_FIELD", "misstatement_draft")
+    if rule == "hidden" and attached:
+        detail = f"{record.dispute_resolution} 采纳的一方没有建议认定错报, 不带 misstatement_draft"
+        raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
 def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
@@ -251,13 +293,19 @@ def human_judgment(
 
 
 def override_effects(
-    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+    record: ReviewRecord,
+    task: ReviewTask,
+    target: Versioned,
+    exceptions: list[AuditException],
+    taken: set[str],
+    misstatement: MisstatementDraft | None = None,
 ) -> list[Versioned]:
     """override 的效果 (第 7 节). 按 override_conclusion 建人工判断 -H{n}, 置 confirmed 并归因其例外.
 
     target 为判断 (normal 任务): 人工判断沿用原判断的判断对象, 证据与 exception_ids; 原判断出新版本置 overridden,
     superseded_by 记人工判断. target 为例外 (unattributed 任务): 判断对象取任务的 subject_id, 证据取例外的,
     exception_ids 为该例外. exceptions: target 为判断时其解释的例外的当前版本. 纯函数.
+    misstatement: 仲裁 neither 附的错报草稿 (功能 collab): 不为空时人工判断建议 misstatement 并带上它.
     """
     conclusion = record.override_conclusion
     assert conclusion is not None  # 校验时已查必填
@@ -271,6 +319,8 @@ def override_effects(
             conclusion=conclusion,
             evidence=target.evidence,
             exception_ids=target.exception_ids,
+            proposed_action=ProposedAction.misstatement if misstatement is not None else ProposedAction.accept,
+            misstatement_draft=misstatement,
         )
         overridden = target.model_copy(
             update={"version": target.version + 1, "review_status": ReviewStatus.overridden, "superseded_by": jid}
@@ -308,15 +358,23 @@ def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str
     ]
 
 
-def critic_judgment(record: ReviewRecord, task: ReviewTask, target: Judgment, judgment_id: str) -> Judgment:
+def critic_judgment(
+    record: ReviewRecord, task: ReviewTask, target: Judgment, judgment_id: str, collab: bool = False
+) -> Judgment:
     """a7_upheld 建的判断: 结论与推理链取独立复核第一轮的, 证据为该推理链引用的指针 (去重; 没有时沿用原判断的),
-    解释的例外同原判断, 留痕指向复核的比对调用; 由审计师采纳, 置 confirmed, 执行人为复核人. 纯函数."""
+    解释的例外同原判断, 留痕指向复核的比对调用; 由审计师采纳, 置 confirmed, 执行人为复核人. 纯函数.
+    collab 打开时 (需求 R150) 另带建议动作与错报草稿: 记录带了草稿为 misstatement 与该草稿, 否则为独立复核的建议动作
+    (没有时 accept); 关闭时建议动作为 accept, 无草稿 (同 collab 之前)."""
     seen: set[tuple[str, str, str, int | None]] = set()
     evidence: list[EvidencePointer] = []
     for p in (p for step in target.critic_reasoning_chain for p in step.evidence):
         if (key := (p.source_type, p.source_id, p.locator, p.page)) not in seen:
             seen.add(key)
             evidence.append(p)
+    draft = record.misstatement_draft if collab else None
+    proposed = ProposedAction.accept
+    if collab:
+        proposed = ProposedAction.misstatement if draft is not None else target.critic_proposed_action or proposed
     adopted = human_judgment(
         record,
         task,
@@ -325,6 +383,8 @@ def critic_judgment(record: ReviewRecord, task: ReviewTask, target: Judgment, ju
         conclusion=target.critic_conclusion or "",
         evidence=evidence or target.evidence,
         exception_ids=target.exception_ids,
+        proposed_action=proposed,
+        misstatement_draft=draft,
     )
     return adopted.model_copy(
         update={
@@ -336,11 +396,18 @@ def critic_judgment(record: ReviewRecord, task: ReviewTask, target: Judgment, ju
 
 
 def dispute_effects(
-    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+    record: ReviewRecord,
+    task: ReviewTask,
+    target: Versioned,
+    exceptions: list[AuditException],
+    taken: set[str],
+    collab: bool = False,
 ) -> list[Versioned]:
     """仲裁的效果 (规格书第 11 节争议项出口): a6_upheld 同 confirm; a7_upheld 以独立复核的结论与推理链建新判断
     -H{n} (critic_judgment), 原判断置 overridden 并记 superseded_by; neither (human_conclusion) 同 override.
     附了 misstatement_draft 时另建 Misstatement M-{决定 ID}, 来源为最终采用的判断. 纯函数.
+    collab 打开时 (需求 R150) 采用的人工判断写明它认定的错报: a7_upheld 见 critic_judgment; neither 附了草稿时
+    建议动作为 misstatement, 错报草稿为记录的.
     """
     assert isinstance(target, Judgment)  # dispute 任务的目标是判断
     resolution = record.dispute_resolution
@@ -349,14 +416,15 @@ def dispute_effects(
         adopted = effects[0]
     elif resolution is DisputeResolution.a7_upheld:
         jid = human_judgment_id(task, target.subject_id, taken)
-        adopted = critic_judgment(record, task, target, jid)
+        adopted = critic_judgment(record, task, target, jid, collab)
         overridden = target.model_copy(
             update={"version": target.version + 1, "review_status": ReviewStatus.overridden, "superseded_by": jid}
         )
         effects = [overridden, adopted, *attribute_exceptions(adopted, exceptions)]
     else:
         assert record.neither_action is NeitherAction.human_conclusion  # 校验时已查
-        effects = override_effects(record, task, target, exceptions, taken)
+        judged = record.misstatement_draft if collab else None
+        effects = override_effects(record, task, target, exceptions, taken, judged)
         adopted = effects[1]
     draft = record.misstatement_draft
     if draft is not None:
@@ -379,11 +447,13 @@ def review_effects(
     target: Versioned,
     exceptions: list[AuditException],
     taken: set[str],
+    collab: bool = False,
 ) -> list[Versioned]:
     """复核决定的效果 (第 7 节决定的效果表, 不含任务 decided 与程序重算). 纯函数.
 
     task: 决定处理的任务; target: 任务目标的当前版本 (判断, 例外或执行记录);
-    exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号.
+    exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号;
+    collab: 功能 collab 是否打开 (仲裁的效果见 dispute_effects).
     """
     if record.decision is Decision.confirm:
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
@@ -395,15 +465,19 @@ def review_effects(
     if record.decision is Decision.manual_result:
         return manual_result_effects(record, task, taken)
     if record.decision is Decision.dispute_resolution:
-        return dispute_effects(record, task, target, exceptions, taken)
+        return dispute_effects(record, task, target, exceptions, taken, collab)
     assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
     return []
 
 
 def recompute_procedure(
-    procedure: Procedure, pending: list[ReviewTask], done: ProcedureStatus = ProcedureStatus.completed
+    procedure: Procedure,
+    pending: list[ReviewTask],
+    done: ProcedureStatus = ProcedureStatus.completed,
+    collab: bool = False,
 ) -> Procedure | None:
-    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human, 没有为 done.
+    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human (collab 打开且其中有
+    dispute 任务时为 in_dispute, 见 nodes.waiting_status), 没有为 done.
     程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序置为完成.
     状态不变时返回 None, 不出新版本.
 
@@ -412,7 +486,7 @@ def recompute_procedure(
     """
     if procedure.status is ProcedureStatus.executing:
         return None
-    status = ProcedureStatus.awaiting_human if pending else done
+    status = waiting_status(pending, collab) or done
     if status is procedure.status:
         return None
     return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
@@ -451,6 +525,9 @@ def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[
     payload: dict[str, Any] = {"decision_id": record.id, "task_id": task.id, "reason": record.reason}
     if record.dispute_resolution is not None:
         payload["dispute_resolution"] = record.dispute_resolution.value
+    if record.consulted:  # 系统外咨询 (需求 R150): 咨询过才随决定留痕对象与结论
+        payload["consulted"] = True
+        payload["consultation_record"] = record.consultation_record
     if closed:
         payload["closed_task_ids"] = closed
     return TrailEntry(
@@ -639,6 +716,10 @@ class GraphDecisionSubmit:
         if record.decision not in self.deps.queue.allowed(task):
             raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
         check_review_fields(record, task.kind)
+        if COLLAB in self.deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
+            check_consultation(record)
+            if record.decision is Decision.dispute_resolution and isinstance(target, Judgment):
+                check_dispute_draft(record, target)
         if (
             record.dispute_resolution is DisputeResolution.a7_upheld
             and isinstance(target, Judgment)
@@ -658,7 +739,7 @@ class GraphDecisionSubmit:
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task = await self.check_review_record(eid, decision, snapshot)
-                await self._apply_review(eid, decision, task, snapshot)
+                await self._apply_review(eid, kept_consultation(decision), task, snapshot)
             return
         async with self._deciding(eid) as (_, snapshot):
             values = fill_defaults(snapshot.values)
@@ -698,7 +779,7 @@ class GraphDecisionSubmit:
             # 由被过期重跑取代的判断做的归因已失效, 按未归因处理, 新判断确认时重新归因 (同 current_results)
             exceptions = released([x for x in found if x is not None], superseded_judgments(values))
         taken = {j.id for j in values["judgments"]}
-        effects = review_effects(record, task, target, exceptions, taken)
+        effects = review_effects(record, task, target, exceptions, taken, COLLAB in self.deps.features)
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
@@ -708,7 +789,8 @@ class GraphDecisionSubmit:
         else:
             group = [task]
             done = done_status(self.deps.library.load(task.procedure_id))
-            updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id], done)
+            rest = [t for t in pending if t.id != task.id]
+            updated = recompute_procedure(procedure, rest, done, COLLAB in self.deps.features)
         decided = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in group]
         created = [*effects, *decided, *([updated] if updated else [])]
         async with store.transaction(eid):

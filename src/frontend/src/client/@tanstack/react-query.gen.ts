@@ -348,6 +348,7 @@ export const reviewsListReviewTasksQueryKey = (options: Options<ReviewsListRevie
  * status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
  * amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
  * 判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
+ * draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.
  */
 export const reviewsListReviewTasksOptions = (options: Options<ReviewsListReviewTasksData>) => queryOptions<ReviewsListReviewTasksResponse, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReturnType<typeof reviewsListReviewTasksQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

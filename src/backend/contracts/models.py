@@ -74,7 +74,7 @@ class ProcedureStatus(StrEnum):
     planned = "planned"  # 计划中
     executing = "executing"  # 执行中
     awaiting_human = "awaiting_human"  # 等人处理: 有待决复核任务
-    in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (尚未使用)
+    in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (功能 collab 打开时; 关闭时仍记 awaiting_human)
     completed = "completed"  # 已完成
     awaiting_data = "awaiting_data"  # 等待数据: 模板 inputs 声明的客户资料还没有, 没执行 (需求 R272)
     no_data = "no_data"  # 未执行 (无数据): 客户无此类资料, 或前置程序未执行 (无数据); 终态, 没有执行记录
@@ -180,7 +180,7 @@ class CriticVerdict(StrEnum):
 
 
 class CriticTrigger(StrEnum):
-    """独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."""
+    """独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (功能 collab 打开时记进 Judgment.critic_trigger)."""
 
     main = "main"  # 自主度 L3, L4 且建议 accept 或 close
     internal_copy = "internal_copy"  # 引用的非准则证据全为内部副本
@@ -203,6 +203,11 @@ class DisputeResolution(StrEnum):
     a6_upheld = "a6_upheld"  # 采用 A6 的结论
     a7_upheld = "a7_upheld"  # 采用独立复核的结论与推理链, 建新的判断
     neither = "neither"  # 都不采用, 由 neither_action 决定怎么办
+
+
+# 仲裁时错报草稿随采纳的一方 (功能 collab, 需求 R150): 该方建议错报须带 (required), 建议其他动作不能带 (hidden),
+# 该方没给建议动作与 neither 两可 (optional). services.review_queue.draft_rule 定, 校验与复核队列共用
+DraftRule = Literal["required", "hidden", "optional"]
 
 
 class NeitherAction(StrEnum):
@@ -474,11 +479,15 @@ class Judgment(Versioned):
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
     # 独立复核 (A7, GEN-09) 的结果, 由 A6 在判断第 1 版写入前同步调用 A7 填写; 人工建的判断不经复核
     critic_verdict: CriticVerdict = CriticVerdict.skipped  # 复核结论
-    critic_trigger: CriticTrigger | None = None  # 命中的触发规则, 跳过时为空 (尚未填写)
+    critic_trigger: CriticTrigger | None = None  # 命中的触发规则 (功能 collab 打开时); 跳过, collab 关闭与旧数据为空
     critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型, 其余为空
     critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
     critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
     critic_reasoning_chain: list[ReasoningStep] = []  # 第一轮的独立推理链, 无效时仲裁不提供 a7_upheld
+    # 第一轮的建议动作与错报草稿 (功能 collab 打开时写回, 需求 R150); 草稿没通过第一轮校验 (建议错报而缺, 金额对不上,
+    # 不建议错报却给了) 时为空. 仲裁 a7_upheld 时据此要求或不许带错报草稿, 前端预填
+    critic_proposed_action: ProposedAction | None = None
+    critic_misstatement_draft: MisstatementDraft | None = None
     critic_model: str | None = None  # 复核用的模型名 (响应里的)
     critic_trail_ref: str | None = None  # 第二轮 (比对) 调用的留痕 ID
 
@@ -877,6 +886,8 @@ class ReviewRecord(Versioned):
     neither_action: NeitherAction | None = (
         None  # 仲裁为 neither 时必填, 本版只有 human_conclusion (附 override_conclusion)
     )
+    consulted: bool = False  # 仲裁时是否在系统外咨询过 (ASQM 1); 已咨询本身不是处置, 裁决仍是三值之一 (需求 R150)
+    consultation_record: str | None = None  # 咨询对象与结论; consulted 为真时必填 (功能 collab 打开时校验)
     reviewed_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间
 

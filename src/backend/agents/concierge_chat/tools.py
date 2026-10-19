@@ -36,6 +36,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewTask,
     SourceType,
+    TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -43,6 +44,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.views import EngagementOverview, GateView, JudgmentView, TrailEntryView
 from backend.services.deferrals import active_deferrals, target_of
+from backend.services.features import COLLAB
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, ROW_EVIDENCE
 from backend.services.trail_pages import all_of_kind
 
@@ -323,7 +325,8 @@ async def get_gate(env: ToolEnv, args: NoArgs) -> Found:
 
 async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
     """待人处理的事项, 按 阶段决定 → 补交请求 (A3 提出, 待补交的) → 复核任务 的顺序, 同工作台; 各项标明是否已标记
-    稍后处理. 补交请求按 DataStore.requests 的顺序 (提出时间, 同批按固定顺序)."""
+    稍后处理. 补交请求按 DataStore.requests 的顺序 (提出时间, 同批按固定顺序). 复核任务按创建时间, 项目开了功能
+    collab 时争议任务 (dispute) 排在其余复核任务之前."""
     deps, eid = env.deps, env.eid
     overview = await env.state.overview(eid)
     tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
@@ -356,7 +359,12 @@ async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
         )
         for pid in request.used_for:
             cites.setdefault(pid, cite_procedure(pid, procedure_name(env, pid)))
-    pending = sorted((t for t in tasks.values() if t.status is TaskStatus.pending), key=lambda t: t.created_at)
+    # 复核任务按创建时间; 功能 collab 打开时争议任务单列在前 (争议之间按创建时间, 不按置信度或金额)
+    disputes_first = COLLAB in overview.features
+    pending = sorted(
+        (t for t in tasks.values() if t.status is TaskStatus.pending),
+        key=lambda t: (not (disputes_first and t.kind is TaskKind.dispute), t.created_at),
+    )
     judgments = {j.id: j for j in await deps.output_store.latest(eid, Judgment)}
     for task in pending:
         item: dict[str, Any] = {

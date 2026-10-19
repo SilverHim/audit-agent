@@ -1,0 +1,62 @@
+{
+  "conclusion": "Invoice SI-2026-0612 was posted on 28 June 2026 and the goods were dispatched before the year end; on this evidence the revenue belongs to the year ended 30 June 2026 and there is no misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-2026-0612 for $142,000 was posted on 28 June 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-2026-0612",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Delivery note DN-2026-0612 records the delivery of the invoiced goods.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-2026-0612",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the goods.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The goods left the warehouse before 30 June 2026, so control passed in the year and the revenue is recorded in the right period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "proposed_action": "accept",
+  "misstatement_draft": null
+}

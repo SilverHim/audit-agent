@@ -22,7 +22,14 @@ from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, features_mismatch, fixed_procedures
-from backend.services.features import BASELINE, FEATURES, check_features, features_text, parse_features
+from backend.services.features import (
+    BASELINE,
+    FEATURES,
+    check_features,
+    features_text,
+    frozen_features,
+    parse_features,
+)
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -471,3 +478,12 @@ async def test_profile_update_and_review_record_rejected() -> None:
     assert await frozen_state(other) == before
     engagement = await s.engagement_store.get(EID)
     assert engagement is not None and engagement.client_profile_version == ENGAGEMENT.client_profile_version
+
+
+def test_frozen_features_of_engagement() -> None:
+    """项目的功能集 (总览的 features): 有版本快照取冻结的; 快照没有 features 键 (冻结功能集之前的项目) 按基线;
+    还没有快照 (未启动) 取当前进程的."""
+    assert frozen_features({"features": "collab,critic"}, BASELINE) == {"collab", "critic"}
+    assert frozen_features({"features": ""}, {"critic", "collab"}) == frozenset()
+    assert frozen_features({"procedure_library_commit": "abc"}, {"critic", "collab"}) == BASELINE
+    assert frozen_features({}, {"critic", "journals"}) == {"critic", "journals"}

@@ -27,6 +27,7 @@ from backend.contracts.views import (
 from backend.orchestration.gates import current_gate, current_spec
 from backend.orchestration.runner import GraphRunner, at_rerun_point, awaiting_data, resume_required, review_waits
 from backend.services.data_quality import missing_tables
+from backend.services.features import frozen_features
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
@@ -107,6 +108,7 @@ class GraphStateQuery:
             performance_materiality_cents=values["performance_materiality_cents"],
             clearly_trivial_cents=values["clearly_trivial_cents"],
             opinion_route=values["opinion_route"],
+            features=sorted(frozen_features(engagement.version_snapshot, self.deps.features)),
         )
 
     async def _resume_hint(self, eid: str) -> str | None:

@@ -3,11 +3,13 @@ import type {
   AuditException,
   Decision,
   Direction,
+  DisputeResolution,
   EngagementOverview,
   JudgmentView,
   MisstatementDraft,
   MisstatementType,
   ProcedureRun,
+  ProposedAction,
   ReviewRecordIn,
   ReviewTaskView,
 } from '@/client/types.gen'
@@ -78,23 +80,29 @@ export function taskTier(
 
 export type RankedTask = { view: ReviewTaskView; amount: number | null; tier: ReviewTier; subject: string }
 
-// 先按档位, 同档按金额从大到小, 再按创建时间
+// 先按档位, 同档按金额从大到小, 再按创建时间. 项目开了智能体协作 (功能 collab, 后端 R151) 时待决的争议任务单列
+// 在最前, 争议之间按创建时间, 不按置信度或金额; 其余顺序不变
 export function rankTasks(
   views: ReviewTaskView[],
   exceptions: Map<string, AuditException>,
   overview: EngagementOverview | undefined,
 ): RankedTask[] {
+  const disputesFirst = overview?.features?.includes('collab') ?? false
+  const dispute = (item: RankedTask) =>
+    disputesFirst && item.view.task.kind === 'dispute' && item.view.task.status === 'pending'
+  const created = (a: RankedTask, b: RankedTask) => a.view.task.created_at.localeCompare(b.view.task.created_at)
   return views
     .map((view) => {
       const amount = taskAmount(view, exceptions)
       return { view, amount, tier: taskTier(view, amount, overview), subject: taskSubject(view) }
     })
-    .sort(
-      (a, b) =>
-        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
-        (b.amount ?? -1) - (a.amount ?? -1) ||
-        a.view.task.created_at.localeCompare(b.view.task.created_at),
-    )
+    .sort((a, b) => {
+      const first = Number(dispute(b)) - Number(dispute(a))
+      if (first || (dispute(a) && dispute(b))) return first || created(a, b)
+      return (
+        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) || (b.amount ?? -1) - (a.amount ?? -1) || created(a, b)
+      )
+    })
 }
 
 export type ReviewDraft = {
@@ -121,10 +129,9 @@ export function emptyDraft(): ReviewDraft {
   }
 }
 
-// 只有人点"复制建议数据"才填入, 不预填
-export function draftFromJudgment(draft: ReviewDraft, judgment: JudgmentView): ReviewDraft {
-  const proposed = judgment.misstatement_draft
-  if (!proposed) return draft
+// 错报草稿填进表单. 只有人点"复制建议数据"才填入, 不预填; 例外: 功能 collab 打开时仲裁采纳的一方建议错报,
+// 选中即按该方的草稿预填 (见 attachRule)
+export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
   return {
     ...draft,
     account: proposed.account,
@@ -133,6 +140,63 @@ export function draftFromJudgment(draft: ReviewDraft, judgment: JudgmentView): R
     direction: proposed.direction,
     kind: proposed.type,
   }
+}
+
+// 争议任务两方的建议 (后端 R150): a6 为原判断的建议动作与错报草稿, a7 为独立复核的 (critic_ 字段; 功能 collab
+// 之前的判断没有, 为 null)
+export type DisputeSide = 'a6' | 'a7'
+export type SideProposal = { action: ProposedAction | null; draft: MisstatementDraft | null }
+
+export function sideProposal(judgment: JudgmentView | null, side: DisputeSide): SideProposal {
+  if (!judgment) return { action: null, draft: null }
+  if (side === 'a6') return { action: judgment.proposed_action ?? null, draft: judgment.misstatement_draft ?? null }
+  return { action: judgment.critic_proposed_action ?? null, draft: judgment.critic_misstatement_draft ?? null }
+}
+
+// 仲裁时 "同时登记错报" 这一项只按后端给的规则 (ReviewTaskView.draft_rules, 与后端校验 check_dispute_draft
+// 同一函数): required 自动勾选, 不能取消; hidden 不显示, 不带草稿; optional 与没给规则 (如 collab 关闭) 两可
+export type AttachRule = 'required' | 'hidden' | 'optional'
+
+export function attachRule(view: ReviewTaskView, choice: DisputeResolution | null): AttachRule {
+  return (choice ? view.draft_rules?.[choice] : undefined) ?? 'optional'
+}
+
+export type DisputeInput = {
+  choice: DisputeResolution
+  attach: boolean // 审计师勾了 "同时登记错报" (attachRule 为 optional 时才看)
+  consulted: boolean
+  consultation: string
+  collab: boolean // 项目开了 collab: 才有咨询两项
+}
+
+// 仲裁的请求体; 缺必填时返回错误文案. 错报草稿按 attachRule; collab 关闭时不带咨询字段
+export function buildDisputeRecord(
+  view: ReviewTaskView,
+  input: ReviewDraft,
+  dispute: DisputeInput,
+  t: Messages,
+): ReviewRecordIn | string {
+  const reason = input.reason.trim()
+  const conclusion = input.conclusion.trim()
+  if (!reason) return t.errors.reasonRequired
+  if (dispute.choice === 'neither' && !conclusion) return t.errors.conclusionRequired
+  const rule = attachRule(view, dispute.choice)
+  const attached = rule === 'required' || (rule === 'optional' && dispute.attach) ? misstatementDraft(input, t) : null
+  if (typeof attached === 'string') return attached
+  const consultation = dispute.consultation.trim()
+  if (dispute.collab && dispute.consulted && !consultation) return t.errors.consultationRequired
+  const body: ReviewRecordIn = {
+    task_id: view.task.id,
+    target_version: view.task.target_version,
+    decision: 'dispute_resolution',
+    reason,
+    dispute_resolution: dispute.choice,
+    neither_action: dispute.choice === 'neither' ? 'human_conclusion' : null,
+    override_conclusion: dispute.choice === 'neither' ? conclusion : null,
+    misstatement_draft: attached,
+  }
+  if (!dispute.collab) return body
+  return { ...body, consulted: dispute.consulted, consultation_record: dispute.consulted ? consultation : null }
 }
 
 export function reasonRequired(decision: Decision | null): boolean {

@@ -61,6 +61,7 @@ from backend.orchestration.merge import (
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
+from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
 
@@ -137,6 +138,22 @@ def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datet
     failed = run.model_copy(update={"status": RunStatus.failed, "ended_at": ended_at, "failure_reason": reason})
     task = queue.make_task(TaskKind.failed, failed, procedure_id=run.procedure_id, run_id=run.id, now=ended_at)
     return {"procedure_runs": [failed], "review_tasks": [task]}
+
+
+# 等人处理的程序状态: 有待决复核任务 (awaiting_human), 其中有待决的争议任务 (in_dispute, 功能 collab)
+WAITING = (ProcedureStatus.awaiting_human, ProcedureStatus.in_dispute)
+
+
+def waiting_status(pending: Iterable[ReviewTask], collab: bool) -> ProcedureStatus | None:
+    """程序有待决任务时的状态, 没有为 None: 功能 collab 打开且其中有 dispute 任务为 in_dispute (优先), 否则为
+    awaiting_human. 汇合 (fan_in), P2 以外节点的执行 (attempt) 与复核决定后的重算 (decisions.recompute_procedure) 共用.
+    """
+    tasks = list(pending)
+    if not tasks:
+        return None
+    if collab and any(task.kind is TaskKind.dispute for task in tasks):
+        return ProcedureStatus.in_dispute
+    return ProcedureStatus.awaiting_human
 
 
 def done_status(template: ProcedureTemplate) -> ProcedureStatus:
@@ -504,8 +521,9 @@ class GraphNodes:
         state: 本次执行看到的状态, 见 perform.
         phase: 节点同时推进的阶段 (如 completion 置 P3_Completion), 在同一事务内写入 engagements 表; 为空不写.
         返回 (写入后的片段, 更新后的完整程序包). 程序新版本: 本程序仍有待决任务 (本次片段建的 normal, unattributed,
-        dispute, failed 等, 或之前各次执行留下而尚未决定的, 见 pending_tasks) 为 awaiting_human, 否则为 completed
-        (闸门程序为 planned); rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
+        dispute, failed 等, 或之前各次执行留下而尚未决定的, 见 pending_tasks) 为 awaiting_human (功能 collab 打开且
+        有待决的 dispute 任务时为 in_dispute, 见 waiting_status), 否则为 completed (闸门程序为 planned);
+        rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
         之前各次执行留下的 failed 任务都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
@@ -514,7 +532,7 @@ class GraphNodes:
         patch, writer = result["patch"], result["writer"]
         template = self.deps.library.load(procedure_id)
         pending = await self.pending_tasks(engagement.id, procedure_id, patch)
-        status = ProcedureStatus.awaiting_human if pending else done_status(template)
+        status = waiting_status(pending, COLLAB in self.deps.features) or done_status(template)
         pack = update_procedure(state["procedure_pack"], procedure_id, status=status, rerun_subject_ids=[])
         updated = next(p for p in pack if p.id == procedure_id)  # 本程序的新版本
         # 新执行 (不是重放) 时 Store 中本程序可能已有更新的版本 (回退到较早的检查点后, 之前的执行写过), 接在其后取号,
@@ -716,13 +734,13 @@ class GraphNodes:
             else:
                 # 不再等: 这一轮的程序版本当时就不等人 (新执行, 或重放取回的 completed, planned) 时用它; 当时在等
                 # (读回过决定, 或重放时决定都已读回) 时取 Store 最新版本, 即最后一个决定由 DecisionSubmit 重算出的那版.
-                # 那一版仍为 awaiting_human 或 executing 说明 Store 中本程序的状态与任务, 决定对不上 (如任务已 decided
-                # 而没有针对它的决定, 或 rerun 决定改指了别的任务), 报错而不静默前进; DecisionSubmit 同一事务写决定,
-                # 任务与程序版本, 正常走不到
-                if waiting.status is ProcedureStatus.awaiting_human:
+                # 那一版仍在等人 (awaiting_human, in_dispute) 或为 executing 说明 Store 中本程序的状态与任务, 决定对不上
+                # (如任务已 decided 而没有针对它的决定, 或 rerun 决定改指了别的任务), 报错而不静默前进; DecisionSubmit
+                # 同一事务写决定, 任务与程序版本, 正常走不到
+                if waiting.status in WAITING:
                     latest = await store.get(eid, Procedure, procedure_id)
                     assert latest is not None  # 本程序已在 Store 中
-                    if latest.status in (ProcedureStatus.awaiting_human, ProcedureStatus.executing):
+                    if latest.status in (*WAITING, ProcedureStatus.executing):
                         raise RuntimeError(
                             f"{procedure_id} 没有待决任务和未读回的决定, Store 中最新版本 v{latest.version} 却是 "
                             f"{latest.status}: 程序状态与任务, 决定对不上"
@@ -920,7 +938,8 @@ class GraphNodes:
         其余项照常写入. 字段归属与本次执行的终态只在 fieldwork 查: A1 的失败片段与重放取回的片段按 Agent 的规则会被误拒.
         片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
         本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
-        (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human, 否则为 completed; rerun_subject_ids 清空.
+        (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human (功能 collab 打开且有待决的 dispute 任务时为
+        in_dispute, 见 waiting_status), 否则为 completed; rerun_subject_ids 清空.
         重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
         提交后写程序状态的 transition 留痕.
         没有暂存结果 (如 await_events 之后回到这里) 时只清空, 不写.
@@ -946,9 +965,10 @@ class GraphNodes:
                 current = apply_patch(current, saved)
             tasks = current["review_tasks"]
             pack = state["procedure_pack"]
+            collab = COLLAB in self.deps.features
             for procedure_id in executed:
-                pending = any(t.procedure_id == procedure_id and t.status is TaskStatus.pending for t in tasks)
-                status = ProcedureStatus.awaiting_human if pending else ProcedureStatus.completed
+                pending = [t for t in tasks if t.procedure_id == procedure_id and t.status is TaskStatus.pending]
+                status = waiting_status(pending, collab) or ProcedureStatus.completed
                 pack = update_procedure(pack, procedure_id, status=status, rerun_subject_ids=[])
             stored = await store.put(eid, [p for p in pack if p.id in executed], actor=AgentId.A1)
         await record_transitions(self.deps.trail, await procedure_transitions(store, eid, stored))

@@ -53,6 +53,8 @@ class ValidationContext(Model):
     opinion: OpinionType | None = None  # RPT-03 应出的意见类型 (FIN-01 选定), 核对两段的标题
     # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页), 否则该步 unsupported
     allowed_evidence: list[EvidencePointer] | None = None
+    # GEN-09 第一轮是否核对复核方的建议动作与错报草稿 (功能 collab 打开时, 需求 R150); 问题记进报告的 notes
+    critic_drafts: bool = False
 
 
 class ValidationReport(Model, Generic[T]):

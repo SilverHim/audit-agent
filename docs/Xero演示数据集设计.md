@@ -291,7 +291,7 @@ AJE-X05: 与 AJE-X01 同属第 1 轮 (M-5 与 M-1 都在 P2 发现), 编号按�
 
 ### 3.1 从 Xero 映射的表 (载入器 `build_tables`)
 
-账表由 `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, R72) 给出: 先核对补造目录, 再在 `build_tables` 的结果上并入补造的合同关联, 服务完成记录与开户行. 收入合同 PDF 不随账表登记: 补造目录 contracts/ 的 3 份停在等数据时经上传登记, A3 分类为 contract 并随即按 DOC-04 抽取 (第 4 节 #7-9, 第 9.5 节 fieldwork). 发票号找不到或不唯一, 合同关联或服务完成记录重复, 合同关联指向没有 PDF 的合同, bank_accounts.csv 的 id, BSB, 账号, 科目与快照不符, 或补造 CSV 缺列, 格式不对时抛 SupplementMismatch (只列文件名与编号), 不载入. 这些内容核对在载入时 (p1_ingest) 做, 失败记入 run_error; 建项目接口与 GET /datasets 只做哈希核对 (第 9.3 节第 2 项), 正式目录哈希相符即内容已由校验脚本核过. 没有补造目录的快照 (如 20261017-mock) 与纯快照相同.
+账表由 `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, R72) 给出: 先核对补造目录, 再在 `build_tables` 的结果上并入补造的合同关联, 服务完成记录与开户行. 收入合同 PDF 不随账表登记: 补造目录 contracts/ 的 3 份停在等数据时经上传登记, A3 分类为 contract 并随即按 DOC-04 抽取 (第 4 节 #7-9, 第 9.5 节 fieldwork); 演示数据导入 (R269) 落地之前载入仍登记这 3 份 (第 9.3 节第 6 项). 发票号找不到或不唯一, 合同关联或服务完成记录重复, 合同关联指向没有 PDF 的合同, bank_accounts.csv 的 id, BSB, 账号, 科目与快照不符, 或补造 CSV 缺列, 格式不对时抛 SupplementMismatch (只列文件名与编号), 不载入. 这些内容核对在载入时 (p1_ingest) 做, 失败记入 run_error; 建项目接口与 GET /datasets 只做哈希核对 (第 9.3 节第 2 项), 正式目录哈希相符即内容已由校验脚本核过. 没有补造目录的快照 (如 20261017-mock) 与纯快照相同.
 
 | 表 | 来源 | 口径与 ID | 行数 |
 |---|---|---|---|
@@ -428,12 +428,21 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 
 **文件类型, 证据种类与可靠性**
 
-现状 (合并上游数据管理后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, other; `judgment_engine.DOCUMENT_EVIDENCE` 只映射 contract → contract, confirmation → external, 其他类型的文件指针在引用级被拒 ("{type} 类文件不作证据"). 各组草稿已加: registry_extract → external (G2); engagement_letter → contract, minutes → voucher, representation_letter → voucher, correspondence → voucher (G5); governance_communication (G6). 本数据集还要新增 2 类 (契约一次合并, 见需求清单 R89); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
+现状 (R89 合入后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record, other 共 14 类; `judgment_engine.DOCUMENT_EVIDENCE` 映射除 financial_statements 与 other 外的全部类型, 这两类的文件指针在引用级被拒 ("{type} 类文件不作证据"). 本数据集为此新增的是下表 2 类 (agreement, internal_record, R89 一次合并); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
 
 | 新增 DocumentType | 证据种类 | 用于 | 为什么不复用已有类型 |
 |---|---|---|---|
 | agreement | contract | 收入合同以外的协议: 租金函, 新租约, 分租协议, 董事借款协议, 客户订单 | 不能用 contract: `agents/ingest.py` 的 DOC-04 取全部 contract 类文件逐份抽取收入条款, 租约与借款协议混进去会多出合同与大模型调用 |
 | internal_record | voucher | 公司内部记录: 登记表, 报销单, 工资册, 会计政策, 备忘录与预测, 报价单 | other 不作证据 |
+
+本数据集用到的上游类型 (证据种类取 `judgment_engine.DOCUMENT_EVIDENCE`):
+
+| 上游 DocumentType | 证据种类 | 本数据集用于 |
+|---|---|---|
+| invoice | invoice | 供应商发票: #25 SMART Agency 税务发票 |
+| bank_statement | bank | 不用: 银行流水取自快照, 银行回函为 confirmation |
+| minutes | voucher | 董事决议与委任文件: #1 appointment.pdf |
+| financial_statements | 不作证据 (不在映射里) | 待审财报: #28 fs_v1.pdf, 供 FIN-12 与会计记录勾稽 |
 
 29 份文件逐一 (reliability 取 DocumentRef). 登记途径即 manifest 的 registration: acceptance, fieldwork, statements 由演示数据导入上传 (acceptance 在承接时停在 ACC-01 闸门, fieldwork 在 P1 开头停在等数据时, statements 在完成阶段按补交请求), A3 分类 (合同随即抽取), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记; manual 经人工任务上传, 同样按 manifest 补登记; registry, confirmation 由登记 mock 与函证 mock 在程序执行时存档 (第 9.5 节):
 
@@ -946,6 +955,8 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 
 A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断 (L3 accept 命中主规则), 每条 2 次, 共 18 次, 全剧本 84 次 (合并终验定值, 共用裁定第 8 批); 其余判断所在程序为 L1 或 L2, 不进 A7, 推理链含假设步骤或按现有抽样公式 (判断 ID 的 sha256, 抽样率 0.05) 抽中的判断也因此不复核. 若实现改变 A7 的触发或程序的自主度, 同一提交同步本节.
 
+演示数据导入另有: 上传分类 22 次 (全剧本), 合同抽取挪到上传时, 报表行抽取 1 次 (R217). 上传分类: 演示导入上传的 23 份 (第 9.5 节) 中按补交请求上传的 fs_v1.pdf 取请求的类型, 其余 22 份各经 DOC-CLASSIFY 分类一次; 合同抽取挪到上传时: 上表 DOC-04 的 3 次改在上传后由 A3 抽取, 次数不变.
+
 **只开现有 17 条时** (新程序都关, 第 5.1 节改动与 CSH-02 D04 已做)
 - PLN-07 9 条例外, REV-08 1 条, CSH-02 D04 1 条; 判断 10 条 (REV-03 3, REV-02 6 accept; CSH-02 1 misstatement); 复核任务 10 条.
 - 错报 1 条 (M-5, 48.53, 低于整体重要性 32,431, 未更正; 本路径没有错报闭环) → FIN-04 total 4853, 未超过重要性 → FIN-01 approve unqualified → RPT-03 → RPT-01.
@@ -1157,7 +1168,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 3. `client_profile()`: 有 client_profile.json 时整份取它, 校验 id 以快照组织 ID 推出的 `CLIENT-XERO-{短 ID}-` 开头 (本数据集 CLIENT-XERO-3C1332BB-Q1), 不符抛 SupplementMismatch, 消息含该前缀. 带后缀是为了与 20261017-mock 的载入器画像 CLIENT-XERO-3C1332BB v1 区分, 避免同库建项目时 VersionConflict (2.6 节).
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.
-6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72, `XeroDatasetLoader.tables`).
+6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72): `XeroDatasetLoader.tables` 给出并入补造后的七张表 (不连库的纯函数, R268 起不再带合同路径), `supplement_tables` 与演示导入清单 (第 9.5 节) 给出补造覆盖的表.
+    - 过渡 (R268 的裁定): 演示数据导入 (R269) 落地之前, `load` 仍并入补造表并登记这 3 份合同, 演示流程不断档; R269 接手后改为只载快照 (delivery_notes 为 0, contract_id 全空, 开户行为 Xero 科目名, 不登记文件).
 7. sales_invoices.contract_id 按 contract_links.csv 的 invoice_no 填.
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
@@ -1196,6 +1208,11 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 **manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件, 含 README.md: path, sha256, synthetic true, generator, xero_refs; 3 份收入合同另有 base {dataset "CUAD v1", file 底稿在 CUAD master_clauses.csv 中的文件名}), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
 
 **document 的登记途径 (registration)** 共 29 份 57 页: acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传), fieldwork 19 (3 份收入合同加 index.csv 中除承接文件与 fs_v1.pdf 外的 16 份, 停在等数据时由演示数据导入上传), statements 1 (fs_v1.pdf, 完成阶段按补交请求 REQ-financial_statements 上传), manual 1 (声明书, FIN-07 人工任务经上传接口上传), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时由函证 mock 按银行直达存档). 前四类经上传接口登记, A3 只认类型 (按文件名与首页分类, 合同随即抽取; 按补交请求上传的直接取请求的类型), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表, 收入合同与声明书只在 manifest).
+
+**演示导入清单** (`adapters/xero_supplements.plan(loader, dataset) -> DemoPlan`, 需求 R268; 供演示数据导入 R269): 不连库, 先核对补造目录 (第 9.3 节第 2 项, 不符抛 SupplementMismatch), 没有补造目录抛 FileNotFoundError.
+- tables: 补造覆盖的账表, 按 TableKind 顺序, 各为 DemoTable {kind, file_name (来源文件, 相对补造目录), rows (整表, 写入时整表替换)}: sales_invoices 42 (contract_links.csv, 合同关联并入后 contract_id 非空 6 张), bank_accounts 2 (bank_accounts.csv, 开户行覆盖), delivery_notes 24 (delivery_notes.csv), employees 3 (数据集声明的 payroll_register, 即 payroll/employees.csv). 补造目录里没有来源文件的表不列. `XeroDatasetLoader.supplement_tables(dataset)` 与它相同.
+- uploads: manifest.documents 中登记途径为 acceptance, fieldwork, statements, manual 的 23 份, 按阶段 (同此顺序) 再按文件名排序, 各为 DemoUpload {path, file_name, stage, document_type, reliability, document_date, related_ids, request_id (statements 为 REQ-financial_statements, 其余为空), document_id}, 值同 manifest.documents (type 即 document_type). registry, confirmation 的 6 份由 mock 在程序执行时存档, 不在其中.
+- manifest.documents 的类型不是 DocumentType 取值, 登记途径不认识, 缺项或格式不对, 或 documents/index.csv 的行与 manifest.documents 不符 (没有这份文件, 或类型, 可靠性, 文件日期, 关联对象不同) 时抛 ValueError (不是 SupplementMismatch), 消息含该文件的 path.
 
 **登记摘录与人员检索 JSON** (`registry/extracts/{acn}.json`, `registry/persons/{姓-名-yyyymmdd}.json`, 同名 PDF 由 JSON 渲染):
 - 公司摘录: {acn, name, type, class, subclass, status, registered_date, officeholders [{name, birth_date, role (director | secretary), appointed}], shareholders [{name, kind (person | company), acn, share_class, shares, pct}], paid_up_cents, file_name}.
@@ -1307,7 +1324,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - `XeroDatasetLoader(root, planning, engine=None, evidence_store=None, *, supplements: Path | None = None, allow_injected: bool = False)`; 补造与快照不匹配抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头, 只列文件名.
 - `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 幂等, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
 - `DatasetLoader.dataset_traits(dataset) -> DatasetTraits` (缺文件时为缺省值); `DatasetLoader.period(dataset) -> tuple[date, date] | None`.
-- `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回七张表与合同 PDF 路径, load 与测试共用); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
+- `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回演示数据导入之后的七张表, load 与测试共用; R268 起不再带合同 PDF 路径), `supplement_tables(dataset)` 与 `xero_supplements.plan(loader, dataset)` (演示导入清单, 本节上文); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
 - `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]`; `FinancialDataStore.financial_statements(eid) -> FinancialStatements | None`, `record(eid, "financial_statement_line", code)`.
 - `RegistrySource.abn(eid, abn)`, `asic_company(eid, acn)`, `asic_extract(eid, acn)`, `asic_person(eid, family_name, given_name, birth_date)`: 按项目数据集定位登记 mock (Numbat → data/demo, Xero → 补造目录).
 - `LLMRequest.eid`: mock 按它选 fixture 目录.

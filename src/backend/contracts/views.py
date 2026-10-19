@@ -78,6 +78,9 @@ class EngagementOverview(Model):
     performance_materiality_cents: int | None  # 执行重要性, 单位分
     clearly_trivial_cents: int | None  # 明显微小门槛, 单位分
     opinion_route: OpinionType | None  # FIN-01 确认的意见类型
+    # 项目的功能集 (services/features.frozen_features: 已启动取冻结的, 未启动取当前进程的), 按名称排序; 前端据此
+    # 决定按哪个功能的规则显示 (如 collab 打开时复核队列争议在前)
+    features: list[str] = []
 
 
 class AcceptanceMaterial(Model):
@@ -178,6 +181,8 @@ class JudgmentView(Model):
     critic_reason: str | None = None  # 理由
     critic_conclusion: str | None = None  # 独立结论
     critic_reasoning_chain: list[ReasoningStep] | None  # 独立推理链
+    critic_proposed_action: ProposedAction | None = None  # 独立复核的建议动作
+    critic_misstatement_draft: MisstatementDraft | None = None  # 独立复核的错报草稿
     critic_model: str | None = None  # 复核用的模型名
     critic_trail_ref: str | None = None  # 第二轮调用的留痕 ID
     hidden_fields: list[str] = []  # 被隐藏 (置空) 的字段名

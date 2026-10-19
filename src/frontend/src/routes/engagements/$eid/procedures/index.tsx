@@ -35,6 +35,9 @@ const STATUS_TONE: Record<ProcedureStatus, Tone> = {
   no_data: 'neutral',
 }
 
+// 等人处理的状态: 有待决复核任务, 其中有待决的争议任务时为争议中 (后端 R151); 程序页默认选中它, 给 "去处理"
+const WAITING = new Set<ProcedureStatus>(['awaiting_human', 'in_dispute'])
+
 function Procedures() {
   const { eid } = Route.useParams()
   const { selected } = Route.useSearch()
@@ -58,7 +61,7 @@ function Procedures() {
 
   const current =
     procedures.find((item) => item.id === selected) ??
-    procedures.find((item) => item.status === 'awaiting_human') ??
+    procedures.find((item) => WAITING.has(item.status)) ??
     procedures[0]
   const select = (id: string) =>
     void navigate({ to: '/engagements/$eid/procedures', params: { eid }, search: { selected: id }, replace: true })
@@ -270,7 +273,7 @@ function ProcedureAside({
         )}
       </div>
       <div className="pt-1">
-        {item.status === 'awaiting_human' ? (
+        {WAITING.has(item.status) ? (
           <Link to="/engagements/$eid" params={{ eid }} search={{}} className={buttonVariants({ size: 'lg' })}>
             {t.proceduresPage.workOnIt}
           </Link>

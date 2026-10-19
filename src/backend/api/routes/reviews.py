@@ -28,6 +28,7 @@ from backend.contracts.models import (
 from backend.contracts.views import JudgmentView
 from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
+from backend.services.features import COLLAB
 from backend.services.review_queue import review_tier, row_amount, subject_row, task_amount
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 
@@ -57,7 +58,8 @@ async def list_review_tasks(
 ) -> list[ReviewTaskView]:
     """status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
     amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
-    判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出."""
+    判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
+    draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有."""
     filters: dict[str, TaskStatus] = {}
     if status is not None:
         filters["status"] = status
@@ -91,6 +93,7 @@ async def list_review_tasks(
                         overview.clearly_trivial_cents,
                     ),
                     allowed_resolutions=deps.queue.resolutions(task, shown),
+                    draft_rules=deps.queue.draft_rules(task, shown, COLLAB in overview.features),
                 )
             )
     return views

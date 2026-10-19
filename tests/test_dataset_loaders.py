@@ -22,13 +22,31 @@ async def test_already_loaded_csv_does_not_read_source_files(tmp_path: Path, mon
     async def writable(conn: Any, eid: str) -> None:
         return None
 
-    async def rows(eid: str, statement: Any) -> list[dict[str, Any]]:
-        return [{"dataset": "demo", "data_version": 1}]
+    async def load_state(conn: Any, eid: str) -> tuple[dict[str, Any], bool]:
+        return {"dataset": "demo", "data_version": 1}, True
 
     monkeypatch.setattr(stores, "transaction", no_transaction)
     monkeypatch.setattr(stores, "writable", writable)
-    monkeypatch.setattr(loader, "rows", rows)
+    monkeypatch.setattr(loader, "load_state", load_state)
     await loader.load("E", "demo")  # tmp_path/demo 不存在
+
+
+async def test_version_row_without_tables_still_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R268 验收 5: 有 dataset_loads 行 (导入, 确认就绪或补登记建的版本行) 而还没有财务表行时照常载入, 不静默跳过:
+    这里源 CSV 不存在, 读源数据即报错, 说明没有跳过 (写库部分见连库测试)."""
+    loader = stores.CsvDatasetLoader(tmp_path, engine=object(), evidence_store=object())  # type: ignore[arg-type]
+
+    async def writable(conn: Any, eid: str) -> None:
+        return None
+
+    async def load_state(conn: Any, eid: str) -> tuple[dict[str, Any], bool]:
+        return {"dataset": "demo", "data_version": 0, "ready_at": None}, False
+
+    monkeypatch.setattr(stores, "transaction", no_transaction)
+    monkeypatch.setattr(stores, "writable", writable)
+    monkeypatch.setattr(loader, "load_state", load_state)
+    with pytest.raises(FileNotFoundError, match=r"accounts\.csv"):
+        await loader.load("E", "demo")
 
 
 def xero_loader(root: Path) -> stores.XeroDatasetLoader:
@@ -81,12 +99,12 @@ async def test_already_loaded_xero_survives_removed_snapshot(tmp_path: Path, mon
     async def writable(conn: Any, eid: str) -> None:
         return None
 
-    async def rows(eid: str, statement: Any) -> list[dict[str, Any]]:
-        return [{"dataset": "xero/removed", "data_version": 1}]
+    async def load_state(conn: Any, eid: str) -> tuple[dict[str, Any], bool]:
+        return {"dataset": "xero/removed", "data_version": 1}, True
 
     monkeypatch.setattr(stores, "transaction", no_transaction)
     monkeypatch.setattr(stores, "writable", writable)
-    monkeypatch.setattr(loader, "rows", rows)
+    monkeypatch.setattr(loader, "load_state", load_state)
     await loader.load("E", "xero/removed")
 
 
@@ -101,8 +119,9 @@ def test_xero_without_supplements_tables_unchanged(tmp_path: Path) -> None:
     loader = stores.XeroDatasetLoader(
         api, api, engine=object(), evidence_store=object(), supplements=api.parents[2] / "xero_demo"
     )  # type: ignore[arg-type]
-    tables, contracts = loader.tables("xero/20261017-mock")
-    assert (tables, list(contracts)) == (build_tables(Snapshot(api / "20261017-mock")), [])
+    tables = loader.tables("xero/20261017-mock")
+    assert tables == build_tables(Snapshot(api / "20261017-mock"))
+    assert loader.supplement("xero/20261017-mock") is None and loader.supplement_tables("xero/20261017-mock") == []
     assert tables["delivery_notes"] == [] and all(i.contract_id is None for i in tables["sales_invoices"])
     assert [a.bank_name for a in tables["bank_accounts"]] == ["Business Bank Account", "Business Savings Account"]
 

@@ -95,10 +95,13 @@ class ReportDraft(Model):
 
 
 class CriticIndependent(Model):
-    """GEN-09 第一轮: 独立复核只看证据得出的结论与推理链 (不看 A6 的结论). 推理链的规则同 JudgmentDraft."""
+    """GEN-09 第一轮: 独立复核只看证据得出的结论与推理链 (不看 A6 的结论). 推理链的规则同 JudgmentDraft.
+    建议动作与错报草稿缺省为空 (旧的输出没有这两键照样通过); 建议 misstatement 时应给草稿 (需求 R150)."""
 
     conclusion: str  # 独立结论
     reasoning_chain: list[ReasoningStep]  # 独立推理链, fact 只能引用第一轮给出的证据指针
+    proposed_action: ProposedAction | None = None  # 建议动作
+    misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时的错报草稿
 
 
 class CriticVerdictOut(Model):
