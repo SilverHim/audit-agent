@@ -2232,7 +2232,8 @@ def _knowledge_library(root: Path, features: frozenset[str]) -> ProcedureLibrary
 def knowledge_library(root: Path, features: Iterable[str] = BASELINE) -> ProcedureLibrary:
     """程序库, 同 ProcedureLibrary(root, features), 但仓库的 knowledge 目录 (会话中不改; 要改的用例先复制到临时目录)
     每个功能集只加载一次: 每个用例建依赖都重新解析全部 YAML 约 0.1 秒, 是默认测试最大的一项重复开销. 返回浅拷贝,
-    用例改它的属性 (如 commit, 或把 load 换成补了声明的) 不影响别的用例; 别的目录照常新建."""
+    用例换它的属性 (如 commit, 或把 load 换成补了声明的) 不影响别的用例; 内部字典 (_templates, _all, _fragments,
+    _report) 与模板对象各拷贝共用, 只可换属性, 不可原地改. 别的目录照常新建."""
     if Path(root).resolve() != KNOWLEDGE:
         return ProcedureLibrary(root, features)
     return copy.copy(_knowledge_library(Path(root), frozenset(features)))

@@ -70,7 +70,7 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.test_await_events import confirm, waiting_for_review
-from tests.test_decisions import Started, acc01_decision, pln_decision, started
+from tests.test_decisions import Started, acc01_decision, assert_rejected, pln_decision, started
 from tests.test_fieldwork import p2_agents
 from tests.test_rerun import failed_at_p0, pending_task
 
@@ -124,25 +124,6 @@ def record(task_id: str = NORMAL, decision: Decision = Decision.confirm, **field
         decided_at=NOW,
     )
     return base.model_copy(update=fields)
-
-
-async def assert_rejected(s: Started, decision: ReviewRecord, code: str, detail: str | None = None) -> None:
-    """提交被拒: 错误码对, Store 无新写入, 项目锁已释放, 图不动."""
-    rows, snapshot = list(s.output_store.rows), await s.runner.app.aget_state(CONFIG)
-
-    with pytest.raises(DecisionRejected) as e:
-        await s.submit.submit(EID, decision)
-
-    assert e.value.code == code, e.value
-    if detail is not None:
-        assert detail in str(e.value)
-    assert s.output_store.rows == rows
-    assert not s.runner.is_running(EID)
-    after = await s.runner.app.aget_state(CONFIG)
-    assert (after.values, [t.interrupts for t in after.tasks]) == (
-        snapshot.values,
-        [t.interrupts for t in snapshot.tasks],
-    )
 
 
 class Passed(Exception):

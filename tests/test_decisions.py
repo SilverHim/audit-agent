@@ -2,7 +2,7 @@
 
 import inspect
 import shutil
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +31,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     ProfileSource,
     ReportSection,
+    ReviewRecord,
     RiskItem,
     RiskLevel,
     TrailEntry,
@@ -217,16 +218,8 @@ async def test_submit_insufficient_info_stays_at_gate() -> None:
 )
 @shared_loop
 async def test_submit_rejects_invalid_decision(acc_gate: Started, decision: GateDecision, code: str) -> None:
-    s = acc_gate
-    rows_before = list(s.output_store.rows)
-
-    with pytest.raises(DecisionRejected) as e:
-        await s.submit.submit(EID, decision)
-
-    assert e.value.code == code
-    assert s.output_store.rows == rows_before  # 什么都没写
-    assert not s.runner.is_running(EID)  # 项目锁已释放
-    assert await s.next_nodes() == ("gate_acc01",)
+    await assert_rejected(acc_gate, decision, code)
+    assert await acc_gate.next_nodes() == ("gate_acc01",)
 
 
 async def test_submit_rejects_when_busy() -> None:
@@ -327,12 +320,11 @@ async def typo_gate() -> Started:
 async def test_update_profile_rejects_invalid(typo_gate: Started, profile: ClientProfile, code: str) -> None:
     s = typo_gate
 
-    with pytest.raises(DecisionRejected) as e:
-        await s.submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1")
+    await assert_no_effect(
+        s, lambda: s.submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1"), code
+    )
 
-    assert e.value.code == code
     assert await s.engagement_store.client_profile(ENGAGEMENT.client_id) == TYPO_PROFILE  # 没有保存
-    assert not s.runner.is_running(EID)
     assert await s.next_nodes() == ("gate_acc01",)
 
 
@@ -751,19 +743,46 @@ def stop_after_submit(s: Started) -> None:
     s.runner.launch = lambda eid, graph_input: s.runner.release(eid)  # type: ignore[method-assign]
 
 
-async def assert_rejected(s: Started, decision: GateDecision, code: str, detail: str | None = None) -> None:
-    """提交被拒: 错误码对, Store 无新写入, 项目锁已释放, 图不动."""
-    rows_before, next_before = list(s.output_store.rows), await s.next_nodes()
+async def side_effects(s: Started) -> tuple[Any, ...]:
+    """被拒的提交不该改动的一切: 审计产出与各次提交, 项目与客户画像, 留痕, 检查点的状态值, 下一步与各任务的中断.
+    只提交被拒决定的参数化用例共用一次运行 (如 pln_gate), 靠它保证前一个参数没给后一个留下副作用."""
+    snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+    engagements, trail = s.engagement_store, s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return (
+        list(s.output_store.rows),
+        list(s.output_store.commits),
+        list(engagements.engagements),
+        list(engagements.profiles),
+        dict(engagements.profile_meta),
+        list(trail.entries),
+        snapshot.values,
+        snapshot.next,
+        [t.interrupts for t in snapshot.tasks],
+    )
+
+
+async def assert_no_effect(
+    s: Started, submit: Callable[[], Awaitable[Any]], code: str, detail: str | None = None
+) -> None:
+    """submit() 被拒: 错误码对 (detail 给了时在消息里), 项目锁已释放, 什么都没写 (见 side_effects)."""
+    before = await side_effects(s)
 
     with pytest.raises(DecisionRejected) as e:
-        await s.submit.submit(EID, decision)
+        await submit()
 
     assert e.value.code == code, e.value
     if detail is not None:
         assert detail in str(e.value)
-    assert s.output_store.rows == rows_before
     assert not s.runner.is_running(EID)
-    assert await s.next_nodes() == next_before
+    assert await side_effects(s) == before
+
+
+async def assert_rejected(
+    s: Started, decision: GateDecision | ReviewRecord, code: str, detail: str | None = None
+) -> None:
+    """提交闸门或复核决定被拒, 什么都没写 (见 assert_no_effect)."""
+    await assert_no_effect(s, lambda: s.submit.submit(EID, decision), code, detail)
 
 
 @pytest.mark.parametrize(
