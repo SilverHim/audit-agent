@@ -10792,6 +10792,17 @@
             ],
             "title": "Organisation"
           },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
           "last_synced_at": {
             "anyOf": [
               {
@@ -10811,6 +10822,21 @@
             "type": "array",
             "title": "Scope",
             "default": []
+          },
+          "syncing": {
+            "type": "boolean",
+            "title": "Syncing",
+            "default": false
+          },
+          "last_sync": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/XeroSyncResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -10820,6 +10846,81 @@
         ],
         "title": "XeroSource",
         "description": "数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections)."
+      },
+      "XeroSyncResult": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "expired",
+                  "xero_error",
+                  "forbidden",
+                  "settings_key",
+                  "mapping",
+                  "write"
+                ]
+              },
+              {
+                "type": "string",
+                "const": "unknown"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "array",
+            "title": "Tables",
+            "default": []
+          },
+          "skipped": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "paid_off",
+                    "statements_forbidden"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "const": "unknown"
+                }
+              ]
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "object",
+            "title": "Skipped",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "at",
+          "ok"
+        ],
+        "title": "XeroSyncResult",
+        "description": "当前连接最近一次 Xero 同步的结果, 取本项目最近一条 data 留痕 xero_synced 或 xero_sync_failed (在最近一次\nxero_disconnect 之后的; 断开过而没再同步为空). 留痕里认不出的原因代码读成 unknown, 不让概览出错."
       },
       "XeroSyncStarted": {
         "properties": {

@@ -310,6 +310,7 @@ class DataService:
         self.xero: XeroConnections = xero if xero is not None else NoXeroConnections()  # Xero 连接记录
         # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
+        self.kinds: dict[object, str] = {}  # 作业 → 作业种类 (launch 的 kind, 如 Xero 同步), 没给的不在其中
         self.tasks: set[asyncio.Task[None]] = set()  # launch 起的后台作业; 保留引用, 防止完成前被回收
 
     async def unlocked(self, eid: str) -> Engagement:
@@ -325,9 +326,11 @@ class DataService:
             raise DataRejected("ENGAGEMENT_LOCKED", eid)
         return engagement
 
-    def _register(self, eid: str, labels: Iterable[str]) -> object:
+    def _register(self, eid: str, labels: Iterable[str], kind: str | None = None) -> object:
         key = object()
         self.jobs.setdefault(eid, {})[key] = frozenset(labels)
+        if kind is not None:
+            self.kinds[key] = kind
         return key
 
     def _relabel(self, eid: str, key: object, labels: Iterable[str]) -> None:
@@ -337,8 +340,14 @@ class DataService:
     def _unregister(self, eid: str, key: object) -> None:
         jobs = self.jobs.get(eid, {})
         jobs.pop(key, None)
+        self.kinds.pop(key, None)
         if not jobs:
             self.jobs.pop(eid, None)
+
+    def running(self, eid: str, kind: str) -> bool:
+        """该项目有没有登记着的 kind 类作业 (launch 时给的种类): 从登记 (取项目锁之后, prepare 之前) 到作业结束注销,
+        期间项目锁被它占着, 再同步或导入报 ENGAGEMENT_BUSY."""
+        return any(self.kinds.get(key) == kind for key in self.jobs.get(eid, {}))
 
     @asynccontextmanager
     async def locked(self, eid: str) -> AsyncIterator[None]:
@@ -398,15 +407,16 @@ class DataService:
         labels: Iterable[str],
         job: Callable[[], Awaitable[None]],
         prepare: Callable[[], Awaitable[None]] | None = None,
+        kind: str | None = None,
     ) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
         同 holding), 再执行 prepare (有时; 起作业前要当场报错的检查, 如 Xero 连接是否可用), 它抛错时注销, 释放锁并
         上抛; 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job 自己处理
-        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志."""
+        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志. kind: 作业种类, 登记期间 running(eid, kind) 为真."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, names)
+        key = self._register(eid, names, kind)
         if prepare is not None:
             try:
                 await prepare()

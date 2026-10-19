@@ -611,6 +611,17 @@ class FakeTrail:
         hits = [e for e in self.entries if e.engagement_id == eid and (kind is None or e.kind is kind)]
         return hits[offset : offset + limit]
 
+    async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:
+        """最近一条: 同真实实现按写入时间与 ID 取最大的; 写入时间都没有 (多数测试) 时按写入顺序取最后一条."""
+        hits = [
+            (n, e)
+            for n, e in enumerate(self.entries)
+            if e.engagement_id == eid and e.kind is kind and e.payload.get("action") in actions
+        ]
+        if not hits:
+            return None
+        return max(hits, key=lambda hit: (hit[1].created_at or datetime.min.replace(tzinfo=UTC), hit[0]))[1]
+
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),

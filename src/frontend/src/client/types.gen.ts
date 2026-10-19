@@ -3923,6 +3923,10 @@ export type XeroSource = {
      */
     organisation?: string | null;
     /**
+     * Tenant Id
+     */
+    tenant_id?: string | null;
+    /**
      * Last Synced At
      */
     last_synced_at?: string | null;
@@ -3930,6 +3934,42 @@ export type XeroSource = {
      * Scope
      */
     scope?: Array<TableKind>;
+    /**
+     * Syncing
+     */
+    syncing?: boolean;
+    last_sync?: XeroSyncResult | null;
+};
+
+/**
+ * XeroSyncResult
+ *
+ * 当前连接最近一次 Xero 同步的结果, 取本项目最近一条 data 留痕 xero_synced 或 xero_sync_failed (在最近一次
+ * xero_disconnect 之后的; 断开过而没再同步为空). 留痕里认不出的原因代码读成 unknown, 不让概览出错.
+ */
+export type XeroSyncResult = {
+    /**
+     * At
+     */
+    at: string;
+    /**
+     * Ok
+     */
+    ok: boolean;
+    /**
+     * Reason
+     */
+    reason?: 'expired' | 'xero_error' | 'forbidden' | 'settings_key' | 'mapping' | 'write' | 'unknown' | null;
+    /**
+     * Tables
+     */
+    tables?: Array<TableKind>;
+    /**
+     * Skipped
+     */
+    skipped?: {
+        [key in TableKind]?: 'paid_off' | 'statements_forbidden' | 'unknown';
+    };
 };
 
 /**

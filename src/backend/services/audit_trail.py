@@ -1,5 +1,6 @@
 """Append-only audit trail, always committed independently of business writes."""
 
+from collections.abc import Sequence
 from uuid import uuid4
 
 from sqlalchemy import insert, select
@@ -48,3 +49,15 @@ class PostgresAuditTrail(Store):
         if kind is not None:
             stmt = stmt.where(audit_trail.c.kind == kind)
         return [TrailEntry.model_validate(r) for r in await self.rows(eid, stmt)]
+
+    async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:
+        if not actions:
+            return None
+        stmt = (
+            select(audit_trail)
+            .where(audit_trail.c.kind == kind, audit_trail.c.payload["action"].astext.in_(list(actions)))
+            .order_by(audit_trail.c.created_at.desc(), audit_trail.c.id.desc())
+            .limit(1)
+        )
+        rows = await self.rows(eid, stmt)
+        return TrailEntry.model_validate(rows[0]) if rows else None

@@ -194,13 +194,34 @@ class DataRequest(Model):
 XeroStatus = Literal["connected", "not_connected", "expired"]  # Xero 连接状态: 已连接, 未连接, 授权过期
 
 
+# 后台同步失败的原因代码 (data 留痕 xero_sync_failed 的 reason): 授权失效, Xero 报错, 付费接口以外的资源无权限,
+# 主密钥不可用, 响应转不了表, 写库失败
+XeroSyncFailure = Literal["expired", "xero_error", "forbidden", "settings_key", "mapping", "write"]
+# 同步没写某张表的原因 (留痕 xero_synced 的 skipped): 未取付费接口 (off, mock), live 下对账单接口 401, 403
+XeroSkipReason = Literal["paid_off", "statements_forbidden"]
+
+
+class XeroSyncResult(Model):
+    """当前连接最近一次 Xero 同步的结果, 取本项目最近一条 data 留痕 xero_synced 或 xero_sync_failed (在最近一次
+    xero_disconnect 之后的; 断开过而没再同步为空). 留痕里认不出的原因代码读成 unknown, 不让概览出错."""
+
+    at: datetime  # 结束时间 (留痕写入时间)
+    ok: bool  # 写入成功为真 (xero_synced), 失败为假 (xero_sync_failed)
+    reason: XeroSyncFailure | Literal["unknown"] | None = None  # 失败的原因代码, 成功为空
+    tables: list[TableKind] = []  # 写了的表, 失败为空
+    skipped: dict[TableKind, XeroSkipReason | Literal["unknown"]] = {}  # 没写的表与原因, 失败为空
+
+
 class XeroSource(Model):
     """数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections)."""
 
     status: XeroStatus  # 连接状态
     organisation: str | None = None  # 已连接的组织名
-    last_synced_at: datetime | None = None  # 最近一次同步时间
+    tenant_id: str | None = None  # 选定的组织 ID (多个组织未选时为空); 前端按它匹配组织列表
+    last_synced_at: datetime | None = None  # 最近一次同步 (写入成功) 的时间
     scope: list[TableKind] = []  # 同步覆盖的账表
+    syncing: bool = False  # 本项目的 Xero 同步作业在跑 (登记到结束, 期间再同步或导入报 ENGAGEMENT_BUSY)
+    last_sync: XeroSyncResult | None = None  # 最近一次同步的结果 (成功或失败); 没有同步过为空
 
 
 class XeroTenant(Model):

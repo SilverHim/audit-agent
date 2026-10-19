@@ -154,8 +154,11 @@ async def test_summary_endpoint() -> None:
     assert body["sources"]["xero"] == {
         "status": "not_connected",
         "organisation": None,
+        "tenant_id": None,
         "last_synced_at": None,
         "scope": [],
+        "syncing": False,
+        "last_sync": None,
     }
     assert [t["kind"] for t in body["tables"]] == [k.value for k in TableKind]
     assert missing.status_code == 404
