@@ -202,7 +202,9 @@ def test_dedupe_keeps_identical_lines_only() -> None:
 # ── 验收 5: Numbat 标准列, 恒等方案与按列对应一致 ──
 
 
-@pytest.mark.parametrize("kind", [k for k in TableKind if k is not TableKind.approval_log])
+@pytest.mark.parametrize(
+    "kind", [k for k in TableKind if (REPO / "data" / "demo" / f"{k}.csv").is_file()]
+)  # data/demo 的 7 张表
 def test_numbat_identity_plans_equal_mapping(kind: TableKind) -> None:
     path = REPO / "data" / "demo" / f"{kind}.csv"
     data = path.read_bytes()

@@ -118,6 +118,7 @@ TABLE_TITLES = {
     TableKind.bank_transactions: "银行流水",
     TableKind.delivery_notes: "发运单",
     TableKind.approval_log: "分录审批日志",
+    TableKind.employees: "工资册",
 }
 DOCUMENT_TITLES = {
     DocumentType.contract: "合同",

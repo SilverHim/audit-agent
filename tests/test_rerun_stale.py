@@ -142,6 +142,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
         (DataInput.bank_transactions, {"REV-08", "REV-02", "CSH-05", "CSH-02"}),  # REV-02 依赖 REV-08
         (DataInput.delivery_notes, {"REV-08", "REV-02"}),
         (DataInput.approval_log, set()),  # 没有程序直接读审批日志; 写审批日志另记 journal_entries (table_changes)
+        (DataInput.employees, set()),  # 工资册 (需求 R96): Demo 程序库里还没有程序读它 (FIN-15 由 R220 做)
         (DataInput.contracts, {"REV-03", "REV-02"}),
         (DataInput.confirmations, {"CSH-02"}),
         (DataInput.documents, {"REV-03", "REV-02", "CSH-02"}),  # 补登记: 判断引用文件页的程序 (需求 R90)

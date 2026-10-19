@@ -4,7 +4,7 @@ import re
 from datetime import date, datetime
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 
 from backend.contracts.models import Model
 
@@ -137,6 +137,17 @@ class BankTransaction(Model):
     balance_after_cents: int  # 交易后余额, 单位分
     description: str | None  # 摘要
     reference: str | None  # 参考号, 含发票号
+
+
+class Employee(Model):
+    """工资册的一行 (账表 employees, 需求 R96): 一位员工的入职, 雇佣类型与每期税前工资 (FIN-15 F03 至 F05 用)."""
+
+    employee_id: str  # 员工编号, 如 E001
+    name: str  # 姓名
+    start_date: date  # 入职日
+    employment_type: str | None = None  # 雇佣类型, 如 full_time; 没有为空
+    pay_period_days: int = Field(gt=0, le=366)  # 发薪周期的天数, 如 14; 至多一年 (366 天), 也在库里 int4 的范围内
+    gross_per_period_cents: int = Field(ge=0)  # 每期税前工资, 单位分
 
 
 class PayrollAccounts(Model):

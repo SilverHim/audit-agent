@@ -39,6 +39,7 @@ from backend.contracts.records import (
     BankAccount,
     BankTransaction,
     DeliveryNote,
+    Employee,
     JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
@@ -54,8 +55,15 @@ Cell = str | int | float | bool | date | datetime | None  # 单元格的值: CSV
 
 
 def _fields(spec: str) -> list[TableField]:
-    """ "name:type!" 列表 → 字段, ! 表示必须对应. 类型缩写: t 文本, d 日期, dt 日期时间, a 金额, b 是否."""
-    types: dict[str, FieldType] = {"t": "text", "d": "date", "dt": "datetime", "a": "amount", "b": "bool"}
+    """ "name:type!" 列表 → 字段, ! 表示必须对应. 类型缩写: t 文本, d 日期, dt 日期时间, a 金额, b 是否, i 整数."""
+    types: dict[str, FieldType] = {
+        "t": "text",
+        "d": "date",
+        "dt": "datetime",
+        "a": "amount",
+        "b": "bool",
+        "i": "integer",
+    }
     result = []
     for item in spec.split():
         name, kind = item.split(":")
@@ -84,6 +92,9 @@ SCHEMAS: dict[TableKind, TableSchema] = {
         ),
         TableKind.delivery_notes: "id:t delivery_no:t! invoice_id:t! shipped_date:d signed_date:d signed_by:t",
         TableKind.approval_log: "entry_no:t! created_by:t approved_by:t approved_at:dt",
+        TableKind.employees: (
+            "employee_id:t! name:t! start_date:d! employment_type:t pay_period_days:i! gross_per_period_cents:a!"
+        ),
     }.items()
 }
 # 至少要对应其中一个的字段组: 分录的借贷, 审批日志补进总账的三列
@@ -100,6 +111,7 @@ ROW_MODELS: dict[TableKind, type[BaseModel]] = {
     TableKind.bank_transactions: BankTransaction,
     TableKind.delivery_notes: DeliveryNote,
     TableKind.approval_log: ApprovalLogRow,
+    TableKind.employees: Employee,
 }
 # 唯一键: 同一文件里重复即解析失败 (写不进表); 审批日志一张凭证一行
 KEYS: dict[TableKind, tuple[str, ...]] = {
@@ -111,6 +123,7 @@ KEYS: dict[TableKind, tuple[str, ...]] = {
     TableKind.bank_transactions: ("id",),
     TableKind.delivery_notes: ("id",),
     TableKind.approval_log: ("entry_no",),
+    TableKind.employees: ("employee_id",),
 }
 
 # 列名的别名 (规范化后: 小写, 只留字母数字), 按优先顺序; 字段名本身 (含去掉 cents 的写法) 总是最先匹配
@@ -153,6 +166,11 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "txn_date": ("transactiondate", "valuedate", "date"),
     "balance_after_cents": ("balanceafter", "runningbalance", "balance", "closingbalance"),
     "reference": ("ref",),
+    "employee_id": ("employeeid", "employeeno", "employeenumber", "staffid", "staffno", "payrollid"),
+    "start_date": ("startdate", "commencementdate", "hiredate", "datejoined"),
+    "employment_type": ("employmenttype", "employmentbasis", "basis"),
+    "pay_period_days": ("payperioddays", "payperiod", "payfrequencydays", "periodlength"),
+    "gross_per_period_cents": ("grossperperiod", "grosspay", "grosswages", "gross", "ordinarypay"),
 }
 # 文件名提示: 规范化后的文件名含这些词时加分
 NAME_HINTS: dict[TableKind, tuple[str, ...]] = {
@@ -164,6 +182,7 @@ NAME_HINTS: dict[TableKind, tuple[str, ...]] = {
     TableKind.bank_transactions: ("banktransactions", "bankstatement", "transactions", "statement"),
     TableKind.delivery_notes: ("delivery", "dispatch", "shipment"),
     TableKind.approval_log: ("approval",),
+    TableKind.employees: (),  # 必须字段别的表都对不全, 不会与别的表平分, 不需要文件名提示
 }
 
 
@@ -760,6 +779,25 @@ def parse_bool(cell: Cell) -> bool | None:
     raise CellError("不是是否值")
 
 
+def parse_integer(cell: Cell) -> int | None:
+    """整数 (如发薪周期的天数); 空为 None. 认整数, 小数部分为 0 的数值单元格与可带千分位逗号的整数文本; 是否值,
+    带小数的数与其他文本算失败."""
+    if isinstance(cell, bool):
+        raise CellError("不是整数")
+    if isinstance(cell, int):
+        return cell
+    if isinstance(cell, float):
+        if cell.is_integer():
+            return int(cell)
+        raise CellError("不是整数")
+    text = cell_text(cell).replace(",", "")
+    if not text:
+        return None
+    if not re.fullmatch(r"[+-]?[0-9]+", text):
+        raise CellError("不是整数")
+    return int(text)
+
+
 # 科目类别与试算表期间的常见写法 → 系统取值; 其余报解析失败
 ACCOUNT_TYPES = {
     "asset": "asset",
@@ -827,6 +865,8 @@ def convert_cell(kind: TableKind, field: TableField, cell: Cell, cents: bool, da
         return parse_datetime(cell, date_format)
     if field.type == "bool":
         return parse_bool(cell)
+    if field.type == "integer":
+        return parse_integer(cell)
     return parse_text(cell)
 
 

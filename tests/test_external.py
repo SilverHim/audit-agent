@@ -20,7 +20,6 @@ from tests.external import (
     NOT_FOUND,
     external_dir,
     live_llm_settings,
-    live_without_slow,
     llm_env_files,
     main_checkout,
     require_external,
@@ -367,24 +366,35 @@ def test_llm_env_files_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert skip_reason(live_llm_settings, llm_env_files(wt)) == NO_LLM
 
 
-# ── 验收 6: live 须同时 slow, 标记已登记 ──
+# ── 验收 6: live 须同时 slow (另须写上限, 需求 R115), 标记已登记 ──
 
 
-def marked(name: str, *markers: str) -> Any:
-    return SimpleNamespace(nodeid=name, get_closest_marker=lambda m: m if m in markers else None)
+def marked(name: str, *markers: str, fixtures: tuple[str, ...] = ("live_budget",), **kwargs: Any) -> Any:
+    """假的收集项: 带 markers 这几个标记, 标记参数都是 kwargs, 取了 fixtures 这几个夹具."""
+    found = {m: SimpleNamespace(kwargs=kwargs) for m in markers}
+    return SimpleNamespace(nodeid=name, get_closest_marker=found.get, fixturenames=list(fixtures))
 
 
-def test_live_without_slow_is_a_collection_error() -> None:
-    """只标 live 未标 slow 的测试在收集阶段报错; 都标了的, 只标 slow 的照常."""
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        marked("t::live_only", "live", max_calls=1),  # 没标 slow: 默认测试会联网
+        marked("t::no_limit", "live", "slow"),  # 没写 max_calls: 跑起来没有预算
+        marked("t::no_fixture", "live", "slow", fixtures=(), max_calls=1),  # 没取 live_budget: 上限不起作用
+    ],
+)
+def test_live_markers_are_checked_at_collection(bad: Any) -> None:
+    """标了 live 的测试须同时标 slow, 写 max_calls 并取 live_budget 夹具, 否则收集阶段报错 (报出违规的测试); 合规的
+    live 测试, 只标 slow 的与不带标记的照常."""
     from tests.conftest import pytest_collection_modifyitems
 
-    items = [marked("t::both", "live", "slow"), marked("t::slow", "slow"), marked("t::bare")]
-    assert live_without_slow(items) == []
-    pytest_collection_modifyitems(None, items)
-    bad = [*items, marked("t::live_only", "live")]
-    assert live_without_slow(bad) == ["t::live_only"]
-    with pytest.raises(pytest.UsageError, match="t::live_only"):
-        pytest_collection_modifyitems(None, bad)
+    items = [marked("t::both", "live", "slow", max_calls=3), marked("t::slow", "slow"), marked("t::bare")]
+    if bad is None:
+        pytest_collection_modifyitems(None, items)
+        return
+    with pytest.raises(pytest.UsageError, match=bad.nodeid):
+        pytest_collection_modifyitems(None, [*items, bad])
 
 
 def test_markers_registered(pytestconfig: pytest.Config) -> None:

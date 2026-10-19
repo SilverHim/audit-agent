@@ -1422,3 +1422,73 @@ async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-un
                 await outer.rollback()
     finally:
         await engine.dispose()
+
+
+# ── 需求 R96: 工资册 ──
+
+
+async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R96: 以属主角色在一个事务里走 0013 降级再升级 (两次), 最后回滚. 降级后没有 employees 表; 升级后开了并强制
+    行级安全, 有项目隔离策略, 应用角色可增删改查; 一个项目写的行另一项目看不到. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, second), _, _ = storage
+    module = migration("0013_employees")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def security() -> list[tuple[bool, bool]]:
+                    found = await conn.execute(
+                        text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'employees'")
+                    )
+                    return [(bool(a), bool(b)) for a, b in found]
+
+                async def count(eid: str) -> int:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+                    return int((await conn.execute(text("SELECT count(*) FROM employees"))).scalar_one())
+
+                assert await security() == [(True, True)]  # 0001 按当前模型建库, 新库已有
+                await conn.run_sync(run("downgrade"))
+                assert await security() == []
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert await security() == [(True, True)]
+                policies = await conn.execute(text("SELECT policyname FROM pg_policies WHERE tablename = 'employees'"))
+                assert [row[0] for row in policies] == ["engagement_isolation"]
+                grants = await conn.execute(
+                    text(
+                        "SELECT privilege_type FROM information_schema.role_table_grants "
+                        "WHERE table_name = 'employees' AND grantee = 'audit_app'"
+                    )
+                )
+                assert {row[0] for row in grants} == {"SELECT", "INSERT", "UPDATE", "DELETE"}
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                await conn.execute(
+                    text(
+                        "INSERT INTO employees (engagement_id, employee_id, name, start_date, employment_type, "
+                        "pay_period_days, gross_per_period_cents) VALUES (:e, 'E001', 'Oliver Gray', '2026-07-20', "
+                        "'full_time', 14, 240000)"
+                    ),
+                    {"e": first.id},
+                )
+                assert (await count(first.id), await count(second.id)) == (1, 0)
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()

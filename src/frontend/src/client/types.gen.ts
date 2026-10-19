@@ -3804,7 +3804,7 @@ export type TableColumn = {
     /**
      * Type
      */
-    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool';
+    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool' | 'integer';
 };
 
 /**
@@ -3824,15 +3824,16 @@ export type TableField = {
     /**
      * Type
      */
-    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool';
+    type: 'text' | 'date' | 'datetime' | 'amount' | 'bool' | 'integer';
 };
 
 /**
  * TableKind
  *
- * 账表种类: 七张财务表与审批日志. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与审批时间.
+ * 账表种类: 七张财务表, 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与
+ * 审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入.
  */
-export type TableKind = 'accounts' | 'trial_balance' | 'journal_entries' | 'sales_invoices' | 'bank_accounts' | 'bank_transactions' | 'delivery_notes' | 'approval_log';
+export type TableKind = 'accounts' | 'trial_balance' | 'journal_entries' | 'sales_invoices' | 'bank_accounts' | 'bank_transactions' | 'delivery_notes' | 'approval_log' | 'employees';
 
 /**
  * TablePage

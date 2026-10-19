@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from backend.contracts.models import AuditObjective, ClientProfile, RiskItem
-from backend.contracts.records import BankAccount, DeliveryNote, SalesInvoice
+from backend.contracts.records import BankAccount, DatasetTraits, DeliveryNote, Employee, SalesInvoice
 
 MISMATCH = "补造文件与快照不匹配"
 UNHASHED = frozenset({"contacts.json"})  # 快照中不记哈希的文件
@@ -110,6 +110,37 @@ class Supplements:
             )
         except (OSError, ValueError, TypeError) as exc:  # 缺文件或不合模型; 不带出文件内容
             raise SupplementMismatch(f"{MISMATCH}: planning/ 缺文件或不合模型") from exc
+
+    def dataset_traits(self) -> DatasetTraits | None:
+        """补造的数据集声明 (dataset_traits.json, 需求 R96); 没有时为 None. 不合模型 (含未知键) 或 dataset 与数据集名
+        不符抛 SupplementMismatch (ValueError 子类), 不带出文件内容. 调用前须已 verify."""
+        path = self.root / "dataset_traits.json"
+        if not path.is_file():
+            return None
+        try:
+            traits = DatasetTraits.model_validate_json(path.read_bytes())
+        except ValidationError as exc:
+            raise SupplementMismatch(f"{MISMATCH}: dataset_traits.json 不合模型") from exc
+        if traits.dataset != self.dataset:
+            raise SupplementMismatch(f"{MISMATCH}: dataset_traits.json 的 dataset 应为 {self.dataset}")
+        return traits
+
+    def employees(self) -> list[Employee]:
+        """数据集声明的工资册 (payroll_register, 相对补造目录), 按文件中的顺序, 供演示数据导入写入 (需求 R96). 声明里
+        没有工资册或文件不存在抛 FileNotFoundError; 缺列或格式不对抛 SupplementMismatch. 调用前须已 verify."""
+        traits = self.dataset_traits()
+        register = traits.payroll_register if traits is not None else None
+        if register is None:
+            raise FileNotFoundError(f"{self.dataset} 的数据集声明没有工资册 (payroll_register)")
+        if not (self.root / register).resolve().is_relative_to(self.root.resolve()):
+            raise SupplementMismatch(f"{MISMATCH}: dataset_traits.json 的 payroll_register 不在补造目录内")
+        if not (self.root / register).is_file():
+            raise FileNotFoundError(f"没有工资册 {register}")
+        with malformed(register):
+            return [
+                Employee.model_validate({k: (v if v != "" else None) for k, v in row.items()})
+                for row in self.rows(register)
+            ]
 
     def contracts(self) -> list[Path]:
         """补造的合同 PDF (contracts/*.pdf), 按文件名排序; 合同编号取文件名主干 (CON-X01 等)."""

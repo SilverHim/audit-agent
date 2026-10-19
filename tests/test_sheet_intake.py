@@ -38,6 +38,7 @@ from backend.services.judgment_engine import OutputValidator, structure_only
 from tests.external import live_llm_settings
 from tests.fakes import ENGAGEMENT, UPLOAD_FIXTURES, FakeRegistry, FakeTrail, LayeredMockLLM, ScriptedLLM, make_deps
 from tests.test_table_plan import masked
+from tests.tools.live_budget import Budget, BudgetedLLMClient, report
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
@@ -45,7 +46,7 @@ RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
 DEMO = REPO / "data" / "demo"
 FIXTURES = UPLOAD_FIXTURES / "DOC-SHEET"
 NOW = datetime(2026, 10, 19, tzinfo=UTC)
-NUMBAT_KINDS = [k for k in TableKind if k is not TableKind.approval_log]  # data/demo 的 7 张表
+NUMBAT_KINDS = [k for k in TableKind if (DEMO / f"{k}.csv").is_file()]  # data/demo 的 7 张表 (按文件推出)
 
 
 def document(file_name: str, data: bytes) -> DocumentRef:
@@ -214,7 +215,7 @@ async def test_numbat_tables_are_high_and_match_column_names(kind: TableKind) ->
 
 
 async def test_only_the_first_rows_are_sent() -> None:
-    """样本行含标题行, 至多 30 行; 第 31 行起不进提示词. 提示词列出 8 种账表. (用应收发票明细: 有标题行, 行数多,
+    """样本行含标题行, 至多 30 行; 第 31 行起不进提示词. 提示词列出 9 种账表. (用应收发票明细: 有标题行, 行数多,
     没有人名列; Posted By 的遮蔽见日记账报表一例.)"""
     path = RAW / "receivable_invoice_detail.xlsx"
     _, trail = await recognize(path)
@@ -229,7 +230,7 @@ async def test_only_the_first_rows_are_sent() -> None:
     assert "The columns themselves are still mapped by their headings as usual" in prompt
     assert "Posted By column of a Xero journal report" in prompt and "leave it unmapped" in prompt
     assert "Do not map those columns" not in prompt
-    assert all(f"- `{t['kind']}`:" in prompt for t in TABLES) and len(TABLES) == 8
+    assert all(f"- `{t['kind']}`:" in prompt for t in TABLES) and len(TABLES) == 9
 
 
 def test_sample_rows_mask_personal_columns_and_emails() -> None:
@@ -453,13 +454,17 @@ LIVE_SAMPLES = [
 
 
 @pytest.mark.slow
-@pytest.mark.live
+@pytest.mark.live(max_calls=3)  # 一个工作表一次识别, 最多 3 次尝试 (需求 R115 的预算)
 @pytest.mark.parametrize(("path", "kind"), LIVE_SAMPLES, ids=lambda v: v.name if isinstance(v, Path) else None)
-async def test_live_recognizes_samples(path: Path, kind: TableKind) -> None:
+async def test_live_recognizes_samples(
+    path: Path, kind: TableKind, live_budget: Budget, request: pytest.FixtureRequest
+) -> None:
     """真实大模型识别各样例: 走大模型 (不退回), 认对表种类; 方案能套到全表 (失败处由确认单标红, 这里只记个数).
-    配置取环境变量或 .env (tests.external.live_llm_settings)."""
+    配置取环境变量或 .env (tests.external.live_llm_settings); 调用计入预算, 超限即失败, 结束时写用量汇总."""
     settings = live_llm_settings()
-    [reading], trail = await recognize(path, llm=make_llm_client(settings))
+    [reading], trail = await recognize(path, llm=BudgetedLLMClient(make_llm_client(settings), live_budget))
+    report(request.node.name, trail.entries, live_budget)
+    live_budget.check()
 
     assert (reading.method, reading.plan.kind) == ("llm", kind)
     assert all(settings.LLM_API_KEY not in json.dumps(e.model_dump(mode="json")) for e in trail.entries)
