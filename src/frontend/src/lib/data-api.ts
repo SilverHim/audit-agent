@@ -13,11 +13,13 @@ import {
   dataTableSchemasOptions,
   dataXeroTenantsOptions,
   dataXeroTenantsQueryKey,
+  evidenceDocumentHistoryOptions,
 } from '@/client/@tanstack/react-query.gen'
 import {
   dataChangeImportSheet,
   dataCommitImport,
   dataConfirmBatch,
+  dataDemoImport,
   dataEditBatchItem,
   dataMarkRequestUnavailable,
   dataReady,
@@ -32,6 +34,7 @@ import {
   dataXeroTenant,
   evidenceEditConfirmation,
   evidenceEditContract,
+  evidenceSetDocumentDetails,
   evidenceSetDocumentType,
 } from '@/client/sdk.gen'
 import type {
@@ -40,6 +43,7 @@ import type {
   CategoryVersion,
   DataRequest,
   DataSummary,
+  DocumentDetailsIn,
   DocumentType,
   ExtractionEdit,
   ImportCommit,
@@ -130,6 +134,16 @@ export function useXeroSync(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async () => (await dataXeroSync({ path: { eid }, throwOnError: true })).data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+// 导入演示资料的一个阶段 (后端 R269, R270): 202 返回 started 的结果, 进度看概览 (processing), 做完的结果看概览的 demo.last
+export function useDemoImport(eid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (stage: string) =>
+      (await dataDemoImport({ path: { eid }, body: { stage }, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }
@@ -265,6 +279,26 @@ export function useSetDocumentType(eid: string) {
       ).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
+}
+
+// 文件的补登记 (后端 R90): 只带改了的项; 历史取后端的文件登记各版 (GET /documents/{id}/history)
+export function useDocumentDetails(eid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ documentId, body }: { documentId: string; body: DocumentDetailsIn }) =>
+      (
+        await evidenceSetDocumentDetails({
+          path: { eid, document_id: documentId },
+          body,
+          throwOnError: true,
+        })
+      ).data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+export function useDocumentHistory(eid: string, documentId: string) {
+  return useQuery(evidenceDocumentHistoryOptions({ path: { eid, document_id: documentId } }))
 }
 
 // 抽取结果修改: 合同走 /contracts/{id}, 回函走 /confirmations/{id}

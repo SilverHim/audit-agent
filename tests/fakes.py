@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mappin
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
 from unittest import mock
@@ -1409,33 +1409,6 @@ NUMBAT_D02_ROWS = [  # CSH-02 D02: 期后 10 天的银行流水 (合成数据集
         ("BT-01-20260710-01", date(2026, 7, 10), 1596425, "EFT CREDIT MAGPIE SECURITY SYSTEMS PTY LTD", "SI-2026-0524"),
     )
 ]
-NUMBAT_D03_ROWS = [  # CSH-02 D03: 期末前 5 天两个银行科目上的分录行 (第 4.4, 5.4 节); 付款行的摘要为示意
-    {
-        "source_type": "journal_entry",
-        "id": jid,
-        "bank_account_id": account,
-        "entry_no": jid.rsplit("-", 1)[0],
-        "posting_date": date(2026, 6, 30),
-        "debit_cents": debit,
-        "credit_cents": credit,
-        "description": description,
-        "source_doc": source_doc,
-    }
-    for jid, account, debit, credit, description, source_doc in (
-        (
-            "CR-SI-2026-0547-1",
-            "BA-01",
-            5000000,
-            0,
-            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
-            "SI-2026-0547",
-        ),
-        ("CP-AP-2026-06-B-2", "BA-01", 0, 35500000, "Payment AP-2026-06-B - Tasman Passive Components", "AP-2026-06-B"),
-        ("CP-FRT-2026-06-2", "BA-01", 0, 2000000, "Payment FRT-2026-06 - Redgum Freight", "FRT-2026-06"),
-        ("CP-OPEX-2026-06-2", "BA-01", 0, 1555000, "Payment OPEX-2026-06 - sundry suppliers", "OPEX-2026-06"),
-        ("GJ-202606-INT-1", "BA-02", 119000, 0, "Interest credited June 2026", "INT-2026-06"),
-    )
-]
 
 
 def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
@@ -1509,7 +1482,9 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
     "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
-    "CSH-02": lambda run: RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS}),
+    "CSH-02": lambda run: RuleResult(
+        exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
+    ),
 }
 
 
@@ -1802,6 +1777,52 @@ def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
             rows = [model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)]
         tables[kind] = tuple(with_category(r) if isinstance(r, records.Account) else r for r in rows)
     return tables
+
+
+def numbat_window_lines(lookback_days: int = 5) -> list[JournalEntry]:
+    """Numbat 总账 (data/demo/journal_entries.csv) 期末前 lookback_days 天的分录行 (闭区间, 同 CSH-02 D03, D04 的窗口;
+    缺省同 CSH-02.yaml 的 lookback_days), 按 (入账日, 行 ID)."""
+    end = ENGAGEMENT.period_end
+    lines = cast(tuple[JournalEntry, ...], numbat_tables()[TableKind.journal_entries])
+    return sorted(
+        (j for j in lines if end - timedelta(days=lookback_days) <= j.posting_date <= end),
+        key=lambda j: (j.posting_date, j.id),
+    )
+
+
+NUMBAT_BANK_GL = {r.gl_account_code: r.id for r in NUMBAT_ROWS if isinstance(r, BankAccount)}  # 总账科目 → 银行账户
+# CSH-02 D03, D04 的行: 由 CSV 按两条规则的口径派生 (Numbat 没有作废对, 不剔除), 列与次序同规则 SQL;
+# tests/test_persistence_postgres 核对连库结果与它们整行相同
+NUMBAT_D03_ROWS = [  # D03: 窗口内银行科目上的分录行, 按 (银行账户, 入账日, 行 ID)
+    {
+        "source_type": "journal_entry",
+        "id": j.id,
+        "bank_account_id": NUMBAT_BANK_GL[j.account_code],
+        "entry_no": j.entry_no,
+        "posting_date": j.posting_date,
+        "debit_cents": j.debit_cents,
+        "credit_cents": j.credit_cents,
+        "description": j.description,
+        "source_doc": j.source_doc,
+    }
+    for j in sorted(
+        (j for j in numbat_window_lines() if j.account_code in NUMBAT_BANK_GL),
+        key=lambda j: (NUMBAT_BANK_GL[j.account_code], j.posting_date, j.id),
+    )
+]
+NUMBAT_D04_ROWS = [  # D04: 窗口内全部科目的分录行, 按 (入账日, 行 ID)
+    {
+        "source_type": "journal_entry",
+        "id": j.id,
+        "entry_no": j.entry_no,
+        "posting_date": j.posting_date,
+        "account_code": j.account_code,
+        "debit_cents": j.debit_cents,
+        "credit_cents": j.credit_cents,
+        "description": j.description,
+    }
+    for j in numbat_window_lines()
+]
 
 
 @functools.cache

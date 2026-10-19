@@ -2,11 +2,12 @@
 外勤文件, 待审财报; 再执行不重复写, 不盖掉之后的改动; 中途失败后接着做完; 与 R97 的预置状态逐对象相同. 不连库 (连库见
 test_demo_import_db). 读快照与补造目录, 标 external.
 
-整段流程 (启动 → ACC-01 闸门导入承接 → approve → p1_await_data 导入外勤 → 再执行 → 确认数据已齐 → 导入财报) 在
-模块级 fixture 里只跑一遍, 各用例看各停点留下的状态.
+整段流程 (启动 → ACC-01 闸门经数据管理页的接口导入承接 → approve → p1_await_data 导入外勤 → 再执行 → 确认数据已齐
+→ 导入财报) 在模块级 fixture 里只跑一遍, 各用例看各停点留下的状态.
 """
 
 import asyncio
+import logging
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from backend.contracts.data import (
     XERO_TABLES,
     DataInput,
     DemoImportResult,
+    DemoSummary,
     DocumentDetailsEdit,
     TableKind,
     TableVersion,
@@ -42,8 +44,17 @@ from backend.contracts.ports import LLMClient
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
-from backend.services.demo_import import DETAILS_REASON, NO_DEMO, RETYPE_REASON, DemoImport
-from tests.fakes import ENGAGEMENT, NOW, FakeEngagementStore, FakeFinancialStore, FakeTrail, LayeredMockLLM, wait_idle
+from backend.services.demo_import import DEMO_JOB, DETAILS_REASON, NO_DEMO, RETYPE_REASON, DemoImport
+from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
+    FakeEngagementStore,
+    FakeFinancialStore,
+    FakeTrail,
+    LayeredMockLLM,
+    api_client,
+    wait_idle,
+)
 from tests.xero_fakes import (
     REPO,
     XERO_DATASET,
@@ -125,8 +136,36 @@ def by_name(documents: list[DocumentRef]) -> dict[str, DocumentRef]:
     return {d.file_name: d for d in documents}
 
 
+async def import_acceptance_over_http(e: Env) -> tuple[dict[str, Any], DemoImportResult]:
+    """停在 ACC-01 闸门时经数据管理页的接口导入承接 (需求 R270): 读概览, 发起导入, 作业停住时再读概览, 放行做完后
+    再读一次. 返回各响应 (gate, started 另带状态码, during, accepted) 与这次 demo_import 留痕的结果."""
+    base = f"/api/v1/engagements/{EID}/data"
+    hold, run = asyncio.Event(), DemoImport.run
+
+    async def held(self: DemoImport, *args: Any) -> DemoImportResult:  # 作业先停住, 好在作业期间读概览 (不靠时序)
+        await hold.wait()
+        return await run(self, *args)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DemoImport, "run", held)
+        async with api_client(e.runner) as client:
+            client._transport.app.state.data_service = e.service  # type: ignore[attr-defined]
+            got = {"gate": (await client.get(f"{base}/summary")).json()}
+            started = await client.post(f"{base}/demo-import", json={"stage": "acceptance"})
+            got["started"] = {"status_code": started.status_code, **started.json()}
+            got["during"] = (await client.get(f"{base}/summary")).json()
+            hold.set()
+            await drain(e.service)
+            await wait_idle(e.runner, EID)
+            got["accepted"] = (await client.get(f"{base}/summary")).json()
+    entry = await e.trail.last_of(EID, TrailKind.data, [DEMO_JOB])
+    assert entry is not None
+    return got, DemoImportResult.model_validate({k: v for k, v in entry.payload.items() if k != "action"})
+
+
 @dataclass
 class Flow:
+    http: dict[str, Any]  # 经接口导入承接时的各响应 (import_acceptance_over_http)
     acceptance: DemoImportResult | None
     after_acceptance: dict[str, Any]
     fieldwork: DemoImportResult | None
@@ -141,15 +180,20 @@ class Flow:
     after_ready: dict[str, Any]
     statements: DemoImportResult | None
     after_statements: dict[str, Any]
+    demos: dict[str, DemoSummary]  # 各停点概览的 demo 一项 (需求 R270)
 
 
 async def run_flow() -> Flow:
     e = env()
+    demos: dict[str, DemoSummary] = {}
     await to_acceptance_gate(e.runner, EID)
-    acceptance = await import_stage(e.service, EID, "acceptance", ACTOR)
+    http, acceptance = await import_acceptance_over_http(e)
+    demos["gate"] = DemoSummary.model_validate(http["gate"]["demo"])  # 字段恰为 DemoSummary 的
+    demos["accepted"] = DemoSummary.model_validate(http["accepted"]["demo"])
     after_acceptance = snapshot(e)
     await approve_acceptance(e.runner, EID, ACTOR)
     assert (await e.runner.app.aget_state(GraphRunner.config(EID))).next == ("p1_await_data",)
+    demos["awaiting"] = await e.service.demo_summary(EID)
     fieldwork = await import_stage(e.service, EID, "fieldwork", ACTOR)
     after_fieldwork, store = snapshot(e), copy_store(e.financial)
     overview = await GraphStateQuery(e.runner.app, e.runner.deps, e.runner).overview(EID)
@@ -165,8 +209,11 @@ async def run_flow() -> Flow:
     doc04 = next(p.status for p in overview.procedures if p.id == "DOC-04")
     state_documents = list((await e.runner.app.aget_state(GraphRunner.config(EID))).values.get("documents", []))
     after_ready = snapshot(e)
+    demos["ready"] = await e.service.demo_summary(EID)
     statements = await import_stage(e.service, EID, "statements", ACTOR)
+    demos["statements"] = await e.service.demo_summary(EID)
     return Flow(
+        http,
         acceptance,
         after_acceptance,
         fieldwork,
@@ -181,6 +228,7 @@ async def run_flow() -> Flow:
         after_ready,
         statements,
         snapshot(e),
+        demos,
     )
 
 
@@ -551,17 +599,20 @@ async def test_already_imported_still_redoes_a_stale_checkup() -> None:
 
 
 def outcome(e: Env) -> tuple[Any, ...]:
-    """比对用的最终状态: 账表版本, 文件登记 (上传时间不比), 合同, 数据版本, 各类 data 留痕的条数."""
+    """比对用的最终状态: 账表版本, 文件登记 (上传时间不比), 合同, 数据版本, 各类 data 留痕的条数 (demo_import 只数
+    status imported 的)."""
     versions = [(v.kind, v.source, v.file_name, v.records, v.data_version) for v in e.data.table_versions]
     documents = sorted(
         (d.model_copy(update={"uploaded_at": NOW}) for d in e.financial.document_refs), key=lambda d: d.id
     )
     contracts = {k: (c.version, c.document_id, c.terms) for k, c in e.financial.saved_contracts.items()}
-    return versions, documents, contracts, e.data.data_version, actions(e.trail.entries)
+    imported = [x for x in e.trail.entries if x.payload.get("status") != "failed"]
+    return versions, documents, contracts, e.data.data_version, actions(imported)
 
 
 async def test_failure_midway_then_again_ends_like_one_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """外勤阶段第 10 份上传抛错 (作业中断, 已写的保留, 锁释放) 后再执行: 最终状态与一次做完相同."""
+    """外勤阶段第 10 份上传抛错 (作业中断, 已写的保留, 锁释放) 后再执行: 最终状态与一次做完相同. 中断时记一条
+    status failed 的 demo_import (阶段与错误类别, 不带错误文本), 概览的 last 读得到, 这一阶段不算导入过 (需求 R270)."""
     once = env()
     await import_stage(once.service, EID, "fieldwork", ACTOR)
     broken = env()
@@ -575,7 +626,106 @@ async def test_failure_midway_then_again_ends_like_one_run(monkeypatch: pytest.M
         return await save(eid, file_name, data, **kwargs)
 
     monkeypatch.setattr(store, "save", failing)
-    assert await import_stage(broken.service, EID, "fieldwork", ACTOR) is None  # 中断, 没记 demo_import
+    failed = await import_stage(broken.service, EID, "fieldwork", ACTOR)
+    assert failed == DemoImportResult(stage="fieldwork", status="failed", error="OSError", data_version=5)
+    [entry] = [x for x in broken.trail.entries if x.payload.get("status") == "failed"]
+    assert "磁盘写满" not in str(entry.model_dump())
+    demo = await broken.service.demo_summary(EID)
+    assert (demo.stages_done, demo.last) == ([], failed)
     assert len(broken.financial.document_refs) == 9 and not broken.runner.is_running(EID)
     await import_stage(broken.service, EID, "fieldwork", ACTOR)
     assert outcome(broken) == outcome(once)
+
+
+async def test_failure_after_everything_was_written_then_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """承接阶段全部写完 (补登记之后) 读数据版本时出错, 记 failed; 再导入一次已没有可写的, 仍记一条 imported
+    (接着做完了), 算导入过, 不再建议. 已导入过的阶段再执行时出错 (什么都没写之前) 又不算导入过, 再建议这一阶段,
+    再导入一次记 imported; 别的阶段记了 failed 不算这一阶段没做完. 防失败之后卡在 "没做完" 消不掉, 或提示再导入而
+    按钮不可点 (需求 R270)."""
+    e = env()
+    await to_acceptance_gate(e.runner, EID)
+    details, readiness = DemoImport.details, e.data.readiness
+    runs, armed = Counter[str](), {"on": False}
+
+    async def after_details(self: DemoImport, *args: Any) -> list[str]:
+        found = await details(self, *args)
+        runs["details"] += 1
+        armed["on"] = runs["details"] in (1, 3)  # 第 1, 3 次导入在补登记之后读数据版本时出错
+        return found
+
+    async def flaky(eid: str) -> Any:
+        if armed["on"]:
+            armed["on"] = False
+            raise ConnectionError("连接断开 (测试注入)")
+        return await readiness(eid)
+
+    monkeypatch.setattr(DemoImport, "details", after_details)
+    monkeypatch.setattr(e.data, "readiness", flaky)
+    got = []
+    for _ in range(4):
+        result = await import_stage(e.service, EID, "acceptance", ACTOR)
+        demo = await e.service.demo_summary(EID)
+        assert demo.last == result
+        got.append(
+            (result.status if result else None, result.uploaded if result else None, demo.stages_done, demo.suggested)
+        )
+    assert got == [
+        ("failed", [], [], "acceptance"),
+        ("imported", [], ["acceptance"], None),
+        ("failed", [], [], "acceptance"),
+        ("imported", [], ["acceptance"], None),
+    ]
+    assert len(e.financial.document_refs) == 2  # 两份承接文件, 只上传一次
+    await DemoImport(e.service, plan(demo_source(), XERO_DATASET)).record_failure(EID, "fieldwork", ACTOR, OSError())
+    assert await import_stage(e.service, EID, "acceptance", ACTOR) is None
+
+
+async def test_backfill_error_is_recorded_as_failed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """作业之前补写留痕出错也记一条 failed (阶段与错误类别), 什么都没导入; 异常照常交后台作业记日志.
+    防这次没做却看不出来."""
+    e = env()
+
+    async def broken(self: DataService, eid: str) -> None:
+        raise RuntimeError("补写留痕出错 (测试注入)")
+
+    monkeypatch.setattr(DataService, "backfill_trails", broken)
+    with caplog.at_level(logging.ERROR, logger="backend.services.data_service"):
+        failed = await import_stage(e.service, EID, "acceptance", ACTOR)
+    assert failed == DemoImportResult(stage="acceptance", status="failed", error="RuntimeError", data_version=0)
+    assert e.financial.document_refs == [] and not e.runner.is_running(EID)
+    assert any("数据作业失败" in record.getMessage() for record in caplog.records)
+
+
+# ── 数据管理页的入口 (需求 R270): 概览的 demo 一项随流程停的位置 ──
+
+
+def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
+    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后待审财报的请求仍 open,
+    建议 statements; 三段都导入后 stages_done 齐, 不再建议. last 为最近一次 (有写入的) 导入的结果."""
+    got = {
+        k: (d.available, d.stages_done, d.suggested, d.last.stage if d.last else None) for k, d in flow.demos.items()
+    }
+    assert got == {
+        "gate": (True, [], "acceptance", None),
+        "accepted": (True, ["acceptance"], None, "acceptance"),
+        "awaiting": (True, ["acceptance"], "fieldwork", "acceptance"),
+        "ready": (True, ["acceptance", "fieldwork"], "statements", "fieldwork"),
+        "statements": (True, ["acceptance", "fieldwork", "statements"], None, "statements"),
+    }
+    assert (flow.demos["accepted"].last, flow.demos["ready"].last) == (flow.acceptance, flow.fieldwork)
+
+
+def test_data_page_starts_the_import_over_http(flow: Flow) -> None:
+    """数据管理页经 POST /data/demo-import 发起承接导入: 202, started 列出要上传的两份文件 (这一阶段不写表); 作业期间
+    概览的 processing 为 2 (两份承接文件), 仍建议 acceptance (持锁的是这次导入, 不当图在跑). 防接口不按 202 返回,
+    或作业期间页面看不出在导入."""
+    started, during = flow.http["started"], flow.http["during"]
+    assert (started["status_code"], started["status"], started["tables"], started["uploaded"]) == (
+        202,
+        "started",
+        [],
+        ["appointment.pdf", "engagement_letter.pdf"],
+    )
+    assert (during["processing"], during["demo"]["suggested"], during["demo"]["stages_done"]) == (2, "acceptance", [])

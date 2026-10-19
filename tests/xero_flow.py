@@ -49,8 +49,8 @@ async def drain(service: DataService) -> None:
 
 
 async def import_stage(service: DataService, eid: str, stage: DemoStage, actor: str) -> DemoImportResult | None:
-    """经 DataService.demo_import 导入一个阶段, 等作业做完, 等图停下; 返回这次记下的 demo_import 留痕 (有写入时才有),
-    什么都没写为 None."""
+    """经 DataService.demo_import 导入一个阶段, 等作业做完, 等图停下; 返回这次记下的 demo_import 留痕的结果: 有写入,
+    或上次这一阶段没做完时为 imported, 出错时为 failed; 什么都没写 (上次也做完了) 不记留痕, 为 None."""
     before = await service.deps.trail.last_of(eid, TrailKind.data, [DEMO_JOB])
     await service.demo_import(eid, stage, actor)
     await drain(service)

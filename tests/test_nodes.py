@@ -262,7 +262,17 @@ def assembled(
         ("REV-08", {"window_days": 20, "period_end": PERIOD_END}),
         ("REV-02", {"window_days": 20, "threshold_cents": 9_000_000, "period_end": PERIOD_END}),
         ("CSH-04", {"as_of": PERIOD_END}),
-        ("CSH-02", {"period_end": PERIOD_END, "subsequent_days": 10, "lookback_days": 5}),
+        (
+            "CSH-02",
+            {
+                "period_end": PERIOD_END,
+                "subsequent_days": 10,
+                "lookback_days": 5,
+                "clearly_trivial_cents": 600_000,
+                "reversal_reference_pattern": None,  # Numbat 没有数据集声明: 作废对的格式与模板为空
+                "reversal_entry_no_template": None,
+            },
+        ),
         ("FIN-04", {"materiality_cents": 12_000_000, "clearly_trivial_cents": 600_000}),
     ],
 )

@@ -16,7 +16,14 @@ triggers:
 params:
   period_end: {ref: period_end}
   subsequent_days: 10           # 期后流水范围
-  lookback_days: 5              # 期末前总账分录范围
+  lookback_days: 5              # 期末前总账分录范围 (D03, D04 共用的窗口, 闭区间)
+  clearly_trivial_cents: {ref: clearly_trivial_cents}   # D04: 应计利息绝对值超过它才算
+  # 作废对 (数据集声明, 没有声明时为空, 不剔除): 冲回凭证的说明格式与原凭证号的模板. pattern 由 DatasetTraits 按 Python re
+  # 校验, 在下面的 SQL 里按 PostgreSQL 正则执行, 须写成两边通用的写法: 不用命名分组等 Python 独有的写法 (PostgreSQL 报错),
+  # 也不用两边都能编译而含义不同的写法, 如 \b 在 Python 为词边界, 在 PostgreSQL 为退格 (词边界写 \y), 不报错而作废对静默
+  # 不剔除. 宜只用字面量, 字符类, \d 与一个捕获组
+  reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}
+  reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
 depends_on: [CSH-05, DOC-06]
 standards: [ASA505-P14]
 evidence_required: [external, bank]
@@ -24,8 +31,14 @@ evidence_required: [external, bank]
 #   对每个 Confirmation, book = FinancialDataStore.trial_balance(current) 中 gl_account_code 的余额;
 #   confirmed_balance_cents ≠ book 时建 AuditException: id X-CSH-02-{run_no}-D01-{n}, rule_id D01, severity medium,
 #   source_type bank_account, source_ids [bank_account_id], amount_cents = confirmed - book; Confirmation 写 book, difference, result = difference.
-#   相等时 Confirmation 写 book, difference_cents = 0, result = agreed, 不调 LLM.
-# 判断对象 = D01 例外的 source_id; D02, D03 的行按 bank_account_id 切给对应账户
+#   相等时 Confirmation 写 book, difference_cents = 0, result = agreed.
+# D04 回函应计利息未入账同样由 A6 在代码中生成 (应计利息在函证上, 规则 SQL 读不到), 下面的 D04 只给候选行:
+#   Confirmation.accrued_interest_cents 不为空且绝对值 > clearly_trivial_cents, 而 D04 的行中没有 debit_cents 或 credit_cents
+#   等于其绝对值的行时, 建 AuditException: id X-CSH-02-{run_no}-D04-{n} (n 在 D04 内按 bank_account_id 排序), rule_id D04,
+#   severity medium, source_ids [bank_account_id], amount_cents = accrued_interest_cents (带符号); 函证结果不变.
+# 判断对象 = 有 D01 或 D04 例外的账户; D02, D03 的行按 bank_account_id 切给对应账户
+# D03, D04 剔除作废对: 冲回凭证 = 任一行 description 匹配 reversal_reference_pattern 的凭证, 原凭证 = 模板填入第一个捕获组;
+#   两者的行都不要. 两条规则的 WITH 段相同, 改口径时两处一起改
 rules:
   - id: D02
     name: 候选调节项：期后银行流水
@@ -42,12 +55,45 @@ rules:
     severity: low
     emit: rows
     sql: |
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      )
       SELECT 'journal_entry' AS source_type, j.id, b.id AS bank_account_id, j.entry_no,
              j.posting_date, j.debit_cents, j.credit_cents, j.description, j.source_doc
       FROM journal_entries j JOIN bank_accounts b ON b.engagement_id=j.engagement_id AND b.gl_account_code=j.account_code
       WHERE j.engagement_id=:eid
         AND j.posting_date BETWEEN CAST(:period_end AS date)-CAST(:lookback_days AS int) AND CAST(:period_end AS date)
+        AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
       ORDER BY b.id, j.posting_date, j.id
+  - id: D04
+    name: 回函应计利息的总账匹配候选
+    severity: low
+    emit: rows
+    sql: |
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      )
+      SELECT 'journal_entry' AS source_type, j.id, j.entry_no, j.posting_date, j.account_code,
+             j.debit_cents, j.credit_cents, j.description
+      FROM journal_entries j
+      WHERE j.engagement_id=:eid
+        AND j.posting_date BETWEEN CAST(:period_end AS date)-CAST(:lookback_days AS int) AND CAST(:period_end AS date)
+        AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ORDER BY j.posting_date, j.id
 llm:
   prompt: CSH-02.md.j2
   output_model: JudgmentDraft

@@ -121,6 +121,8 @@ async def test_load_rules_and_project_isolation(storage):
         subsequent_days=10,
         lookback_days=5,
         threshold_cents=9000000,
+        reversal_reference_pattern=None,  # Numbat 没有数据集声明
+        reversal_entry_no_template=None,
     )
     for path in (
         (library.root / "procedures").glob("*.yaml")
@@ -563,6 +565,74 @@ async def test_rule_edge_cases(storage):
 
 
 XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 不入库; 没有时跳过
+
+
+async def test_csh02_d03_d04_drop_voided_pairs(storage):
+    """CSH-02 D03 与 D04 剔除作废对 (需求 R105 验收 4): 不插行时 D03, D04 的行与 tests.fakes 由 CSV 派生的
+    NUMBAT_D03_ROWS (6 行), NUMBAT_D04_ROWS (74 行) 整行相同, 给不给作废对的格式都一样 (Numbat 没有冲回凭证). 插入
+    VX-1 (06-29, 1010 借 700000 / 4200 贷 700000) 与镜像的冲回凭证 VX-2 (只有 4200 一行的说明为 "Reversal of ID 1",
+    1010 一行的说明不匹配: 冲回凭证按凭证号整张剔除, 不按行), 以及原凭证不存在的冲回凭证 VX-3 后: 给格式
+    "Reversal of ID (\\d+)" 与模板 "VX-{1}" 时两条规则都不含这些行, 其余行与插行前整行相同; 不给 (为空) 时都含 (D03
+    只有银行科目 1010 的两行). 两条规则的 WITH 段写得不一致即失败."""
+    import yaml
+
+    from backend.contracts.knowledge import ProcedureTemplate
+    from tests.fakes import NUMBAT_D03_ROWS, NUMBAT_D04_ROWS
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    template = ProcedureTemplate.model_validate(
+        yaml.safe_load((ROOT / "src/backend/knowledge/procedures/CSH-02.yaml").read_text())
+    )
+    sql = {r.id: r.sql for r in template.rules}
+    plain = dict(
+        period_end="2026-06-30", lookback_days=5, reversal_reference_pattern=None, reversal_entry_no_template=None
+    )
+    voids = {**plain, "reversal_reference_pattern": r"Reversal of ID (\d+)", "reversal_entry_no_template": "VX-{1}"}
+
+    async def ids(rule: str, params: dict[str, object]) -> list[str]:
+        return [r["id"] for r in await financial.query(e.id, sql[rule], params)]
+
+    expected = {"D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
+    for rule in ("D03", "D04"):
+        for params in (plain, voids):
+            assert await financial.query(e.id, sql[rule], params) == expected[rule], rule
+
+    journal = m.FINANCIAL["journal_entries"]
+    lines = [
+        ("VX-1-1", "VX-1", "1010", 700000, 0, "Accrued interest"),
+        ("VX-1-2", "VX-1", "4200", 0, 700000, "Accrued interest"),
+        ("VX-2-1", "VX-2", "4200", 700000, 0, "Reversal of ID 1"),
+        # 同一张冲回凭证中说明不匹配的行 (在银行科目上, D03, D04 都覆盖): 随凭证一起剔除
+        ("VX-2-2", "VX-2", "1010", 0, 700000, "Accrued interest reversal"),
+        # 说明匹配格式, 而模板拼出的原凭证 (VX-9) 不存在: 只剔除这张冲回凭证本身
+        ("VX-3-1", "VX-3", "4200", 100, 0, "Reversal of ID 9"),
+    ]
+    async with transaction(engine, e.id) as conn:
+        for line_id, entry_no, account, debit, credit, description in lines:
+            await conn.execute(
+                insert(journal).values(
+                    engagement_id=e.id,
+                    id=line_id,
+                    entry_no=entry_no,
+                    posting_date=date(2026, 6, 29),
+                    created_at=None,
+                    created_by=None,
+                    approved_by=None,
+                    account_code=account,
+                    debit_cents=debit,
+                    credit_cents=credit,
+                    description=description,
+                    source_doc=None,
+                    is_adjustment=False,
+                )
+            )
+    inserted = {line[0] for line in lines}
+    assert set(await ids("D03", plain)) & inserted == {"VX-1-1", "VX-2-2"}
+    assert set(await ids("D04", plain)) & inserted == inserted
+    for rule in ("D03", "D04"):
+        assert await financial.query(e.id, sql[rule], voids) == expected[rule], rule
 
 
 async def test_rev08_r03_matches_invoice_number_digits_as_a_whole_word(storage):

@@ -10,13 +10,15 @@ import {
   evidenceListDocumentsOptions,
 } from '@/client/@tanstack/react-query.gen'
 import { evidenceGetEvidence } from '@/client/sdk.gen'
-import type { Confirmation, Contract, EvidencePointer } from '@/client/types.gen'
+import type { Confirmation, Contract, DocumentRef, EvidencePointer, Reliability } from '@/client/types.gen'
 import { PdfViewer } from '@/components/pdf-viewer'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { useEditExtraction } from '@/lib/data-api'
+import { useActorName } from '@/lib/actor'
+import { useDocumentDetails, useDocumentHistory, useEditExtraction } from '@/lib/data-api'
+import { type DetailsForm, detailsBody, detailsErrorText, detailsForm, historyFields } from '@/lib/document-details'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { audToCents, formatAud } from '@/lib/money'
@@ -330,34 +332,37 @@ function DocumentView() {
           </div>
         </section>
 
-        <aside
-          aria-label={t.docView.extracted}
-          className="flex min-w-0 flex-[1_1_340px] flex-col gap-3.5 rounded-[14px] border bg-card px-[18px] pt-[18px] pb-3.5"
-        >
-          <h2 className="m-0 font-semibold text-base">{t.docView.extracted}</h2>
-          {items.length ? (
-            <>
-              <ItemGroup
-                title={isContract ? t.docView.facts : t.docView.replyFacts}
-                items={facts}
-                selected={selected}
-                onPick={pick}
-              />
-              {terms.length ? (
-                <ItemGroup title={t.docView.terms} items={terms} selected={selected} onPick={pick} long />
-              ) : null}
-              <div className="flex justify-end border-line-soft border-t pt-2.5">
-                <Button type="button" variant="outline" disabled={!current} onClick={() => setEditing(current)}>
-                  {t.docView.edit}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <p className="m-0 text-[13.5px] text-muted-foreground">
-              {contracts.isPending || confirmations.isPending ? t.app.loading : t.docView.none}
-            </p>
-          )}
-        </aside>
+        <div className="flex min-w-0 flex-[1_1_340px] flex-col gap-5">
+          {doc ? <Registration eid={eid} doc={doc} /> : null}
+          <aside
+            aria-label={t.docView.extracted}
+            className="flex min-w-0 flex-col gap-3.5 rounded-[14px] border bg-card px-[18px] pt-[18px] pb-3.5"
+          >
+            <h2 className="m-0 font-semibold text-base">{t.docView.extracted}</h2>
+            {items.length ? (
+              <>
+                <ItemGroup
+                  title={isContract ? t.docView.facts : t.docView.replyFacts}
+                  items={facts}
+                  selected={selected}
+                  onPick={pick}
+                />
+                {terms.length ? (
+                  <ItemGroup title={t.docView.terms} items={terms} selected={selected} onPick={pick} long />
+                ) : null}
+                <div className="flex justify-end border-line-soft border-t pt-2.5">
+                  <Button type="button" variant="outline" disabled={!current} onClick={() => setEditing(current)}>
+                    {t.docView.edit}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="m-0 text-[13.5px] text-muted-foreground">
+                {contracts.isPending || confirmations.isPending ? t.app.loading : t.docView.none}
+              </p>
+            )}
+          </aside>
+        </div>
       </div>
 
       <EditDialog eid={eid} item={editing} onClose={() => setEditing(null)} />
@@ -491,6 +496,178 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
             }
           >
             {t.docView.save}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const HELD = new Set(['staged', 'not_imported']) // 还在导入确认单里或未导入的文件: 后端不收补登记
+
+// 登记信息 (后端需求 R90, 页面 R270): 当前的可靠性, 文件日期与关联对象, 补登记对话框, 历史 (后端的文件登记各版)
+function Registration({ eid, doc }: { eid: string; doc: DocumentRef }) {
+  const { t, formatDate, formatDateTime } = useI18n()
+  const actorName = useActorName()
+  const history = useDocumentHistory(eid, doc.id).data ?? []
+  const [editing, setEditing] = useState(false)
+  const held = HELD.has(doc.status)
+  const hintId = `details-hint-${doc.id}`
+  const related = doc.related_ids ?? []
+  return (
+    <section
+      aria-label={t.docView.details.title}
+      className="flex flex-col gap-3 rounded-[14px] border bg-card px-[18px] pt-[18px] pb-3.5"
+    >
+      <h2 className="m-0 font-semibold text-base">{t.docView.details.title}</h2>
+      <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13.5px]">
+        <dt className="text-muted-foreground">{t.docView.details.reliability}</dt>
+        <dd className="m-0">{t.data.reliabilities[doc.reliability] ?? doc.reliability}</dd>
+        <dt className="text-muted-foreground">{t.docView.details.documentDate}</dt>
+        <dd className="m-0">{doc.document_date ? formatDate(doc.document_date) : t.docView.details.noDate}</dd>
+        <dt className="text-muted-foreground">{t.docView.details.relatedIds}</dt>
+        <dd className="m-0 font-mono text-[13px]">
+          {related.length ? related.join(', ') : t.docView.details.noRelated}
+        </dd>
+      </dl>
+      <div className="flex flex-col items-end gap-1 border-line-soft border-t pt-2.5">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={held}
+          aria-describedby={held ? hintId : undefined}
+          onClick={() => setEditing(true)}
+        >
+          {t.docView.details.edit}
+        </Button>
+        {held ? (
+          <span id={hintId} className="text-[12.5px] text-muted-foreground">
+            {t.docView.details.unavailable}
+          </span>
+        ) : null}
+      </div>
+      {history.length ? (
+        <div className="flex flex-col gap-1.5">
+          <h3 className="m-0 font-semibold text-[12px] text-muted-foreground tracking-wide">
+            {t.docView.details.history}
+          </h3>
+          <ol className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {[...history].reverse().map((record) => (
+              <li key={record.version} className="flex flex-col gap-0.5 text-[13px]">
+                <span className="flex flex-wrap justify-between gap-x-2 text-muted-foreground text-[12.5px]">
+                  <span className="whitespace-nowrap">
+                    {t.docView.details.version(record.version)} · {historyFields(record, t)}
+                  </span>
+                  <span className="whitespace-nowrap">
+                    {[actorName(record.changed_by), formatDateTime(record.changed_at)].filter(Boolean).join(' · ')}
+                  </span>
+                </span>
+                {record.reason ? <span className="text-[#2d3443]">{record.reason}</span> : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+      {editing ? <DetailsDialog eid={eid} doc={doc} onClose={() => setEditing(false)} /> : null}
+    </section>
+  )
+}
+
+const RELIABILITIES: Reliability[] = ['external_original', 'external_copy', 'internal_original', 'internal_copy']
+
+function DetailsDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef; onClose: () => void }) {
+  const { t } = useI18n()
+  const save = useDocumentDetails(eid)
+  const [form, setForm] = useState<DetailsForm>(() => detailsForm(doc))
+  const [problem, setProblem] = useState<string | null>(null)
+  const set = (change: Partial<DetailsForm>) => {
+    setForm((current) => ({ ...current, ...change }))
+    setProblem(null)
+  }
+  const submit = () => {
+    const body = detailsBody(doc, form)
+    if (!body) {
+      setProblem(t.docView.details.noChange)
+      return
+    }
+    save.mutate(
+      { documentId: doc.id, body },
+      {
+        onSuccess: () => {
+          toast.success(t.docView.details.saved)
+          onClose()
+        },
+        onError: (error) => setProblem(detailsErrorText(error, t)),
+      },
+    )
+  }
+  return (
+    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle className="text-base">{t.docView.details.dialogTitle(doc.file_name)}</DialogTitle>
+        </DialogHeader>
+        <label className="flex flex-col gap-1.5 font-semibold text-[13px]">
+          {t.docView.details.reliability}
+          <select
+            className="h-10 rounded-[9px] border border-input bg-card px-2.5 font-normal text-[14px]"
+            value={form.reliability}
+            onChange={(event) => set({ reliability: event.target.value as Reliability })}
+          >
+            {RELIABILITIES.map((value) => (
+              <option key={value} value={value}>
+                {t.data.reliabilities[value] ?? value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
+          <label htmlFor="details-date">{t.docView.details.documentDate}</label>
+          <Input
+            id="details-date"
+            type="date"
+            className="h-10 font-normal"
+            value={form.documentDate}
+            onChange={(event) => set({ documentDate: event.target.value })}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
+          <label htmlFor="details-related">{t.docView.details.relatedIds}</label>
+          <Textarea
+            id="details-related"
+            rows={2}
+            className="font-mono font-normal"
+            aria-describedby="details-related-hint"
+            value={form.relatedIds}
+            onChange={(event) => set({ relatedIds: event.target.value })}
+          />
+          <span id="details-related-hint" className="font-normal text-[12.5px] text-muted-foreground">
+            {t.docView.details.relatedHint}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
+          <label htmlFor="details-reason">
+            {t.docView.details.reason} <span className="text-risk">*</span>
+          </label>
+          <Textarea
+            id="details-reason"
+            rows={2}
+            className="font-normal"
+            value={form.reason}
+            onChange={(event) => set({ reason: event.target.value })}
+          />
+        </div>
+        {problem ? (
+          <p role="alert" className="m-0 text-[13px] text-destructive">
+            {problem}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2.5">
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t.docView.details.cancel}
+          </Button>
+          <Button type="button" disabled={save.isPending} onClick={submit}>
+            {t.docView.details.save}
           </Button>
         </div>
       </DialogContent>

@@ -339,6 +339,13 @@ class AccountCategoryIn(Model):
     reason: str  # 理由, 必填
 
 
+class DemoImportIn(Model):
+    """演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork, statements 之一; 用字符串, 不认识的由服务报
+    422 INVALID_VALUE (同其他数据接口的错误结构)."""
+
+    stage: str
+
+
 class DataReadyIn(Model):
     """确认数据已齐 (POST /data/ready) 的请求体, 可不带."""
 

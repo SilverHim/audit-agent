@@ -3145,6 +3145,64 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/data/demo-import": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Demo Import",
+        "description": "导入演示资料的一个阶段 (需求 R269, R270): 后台按补造清单写入账表, 上传文件交 A3 处理并补登记, 做完体检;\n返回 status started 的结果 (要写的表与要上传的文件), 作业期间概览的 processing 计入. 结果看之后概览的\ndemo.last 与 stages_done. 阶段不认识或为 manual, 数据集没有演示资料 (Numbat, 没有补造目录的快照, 没有数据集的\n新客户), 补造目录与快照不符 422 INVALID_VALUE; 锁定 423; 忙 409 ENGAGEMENT_BUSY.",
+        "operationId": "data-demo_import",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoImportIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoImportResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/data/xero/connect": {
       "get": {
         "tags": [
@@ -7002,6 +7060,9 @@
           "open_requests": {
             "type": "integer",
             "title": "Open Requests"
+          },
+          "demo": {
+            "$ref": "#/components/schemas/DemoSummary"
           }
         },
         "additionalProperties": false,
@@ -7011,10 +7072,11 @@
           "tables",
           "checks",
           "processing",
-          "open_requests"
+          "open_requests",
+          "demo"
         ],
         "title": "DataSummary",
-        "description": "数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数与待补交请求数."
+        "description": "数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数, 待补交请求数与演示数据导入的入口."
       },
       "DatasetSummary": {
         "properties": {
@@ -7255,6 +7317,161 @@
         ],
         "title": "DeferralView",
         "description": "一项有效的稍后处理标记."
+      },
+      "DemoImportIn": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stage"
+        ],
+        "title": "DemoImportIn",
+        "description": "演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork, statements 之一; 用字符串, 不认识的由服务报\n422 INVALID_VALUE (同其他数据接口的错误结构)."
+      },
+      "DemoImportResult": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "acceptance",
+              "fieldwork",
+              "statements",
+              "manual"
+            ],
+            "title": "Stage"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "started",
+              "imported",
+              "already_imported",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "array",
+            "title": "Tables",
+            "default": []
+          },
+          "uploaded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uploaded",
+            "default": []
+          },
+          "retyped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Retyped",
+            "default": []
+          },
+          "needs_manual": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Needs Manual",
+            "default": []
+          },
+          "data_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Version"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stage",
+          "status"
+        ],
+        "title": "DemoImportResult",
+        "description": "演示数据导入一个阶段的结果 (需求 R269). 发起时返回 started, 内容为要写的表与要上传的文件; 做完时为 imported\n(有写入, 另记一条 data 留痕 demo_import, payload 即本对象) 或 already_imported (这一阶段都已导入过, 什么都没写,\n不记留痕); 作业中途出错为 failed (需求 R270: 同样记一条 demo_import 留痕, 只有阶段, 错误类别与数据版本, 已写的\n保留, 再执行接着做)."
+      },
+      "DemoSummary": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": false
+          },
+          "stages_done": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "acceptance",
+                "fieldwork",
+                "statements",
+                "manual"
+              ]
+            },
+            "type": "array",
+            "title": "Stages Done",
+            "default": []
+          },
+          "suggested": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "acceptance",
+                  "fieldwork",
+                  "statements",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DemoImportResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DemoSummary",
+        "description": "数据管理页的演示数据导入入口 (需求 R270). available 只对带补造目录的 Xero 演示数据集为真 (只查目录在不在,\n不核对哈希; 篡改由发起导入时的核对报出); 其余各项只在 available 时给."
       },
       "Direction": {
         "type": "string",
