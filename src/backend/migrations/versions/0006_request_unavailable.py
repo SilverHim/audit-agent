@@ -5,6 +5,8 @@
 
 from alembic import op
 
+from backend.persistence.migration_tools import all_projects
+
 revision = "0006"
 down_revision = "0005"
 branch_labels = None
@@ -18,9 +20,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # 表开了 FORCE 行级安全, 属主不设 app.engagement_id 时看不到任何行: 改全部项目的行时暂时关掉, 改完再开
-    op.execute("ALTER TABLE data_requests NO FORCE ROW LEVEL SECURITY")
-    op.execute("UPDATE data_requests SET status = 'open', resolved_at = NULL WHERE status = 'unavailable'")
-    op.execute("ALTER TABLE data_requests FORCE ROW LEVEL SECURITY")
+    with all_projects("data_requests"):  # 改全部项目的行 (FORCE 行级安全下属主不设项目时看不到任何行)
+        op.execute("UPDATE data_requests SET status = 'open', resolved_at = NULL WHERE status = 'unavailable'")
     op.execute("ALTER TABLE data_requests DROP COLUMN IF EXISTS unavailable_reason")
     op.execute("ALTER TABLE data_requests DROP COLUMN IF EXISTS resolved_by")

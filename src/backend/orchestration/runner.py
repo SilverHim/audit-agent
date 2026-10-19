@@ -321,7 +321,8 @@ class GraphRunner:
         """升级前的旧检查点: 待执行 p1_ingest (不在节点内等待) 而数据未确认就绪.
 
         新拓扑里 p1_ingest 只能经 p1_await_data 到达, 那时已确认; 未确认却排着 p1_ingest, 只能是旧拓扑在 ACC-01 通过
-        之后, p1_ingest 载入数据集之前中断留下的 (已载入的项目迁移时已补确认)."""
+        之后, p1_ingest 载入数据集之前中断留下的. 已用数据集载入的项目视同确认: 0004 本想在迁移时补记, 但在 FORCE
+        行级安全下没生效, 由回填迁移 0007 补上 (需求 R283); 没跑到 0007 的库上, 这样的项目会在这里转去等确认."""
         return (
             snapshot.next == ("p1_ingest",)
             and not any(task.interrupts for task in snapshot.tasks)

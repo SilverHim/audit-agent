@@ -873,3 +873,134 @@ async def columns_of(conn: Any) -> set[str]:
         text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_requests'")
     )
     return {row[0] for row in found}
+
+
+# ── 迁移在 FORCE 行级安全下改数据: 共用工具与 0007 回填 (需求 R283) ──
+
+
+async def test_backfill_0007_fixes_only_rows_0004_missed(storage) -> None:  # type: ignore[no-untyped-def]
+    """以属主角色在一个事务里跑 0007 的 upgrade (两次) 后回滚, 不动测试库的表结构与 alembic 版本. 第一个项目放
+    "当年漏改的行" (0004 之前的数据集载入: ready_at 为空且没有 data_version 1 的已提交导入; CSH-04 存档的回函: channel
+    仍为 auditor_upload, 没有上传人), 第二个项目放 "之后正常产生的行" (经导入接入而未确认就绪的项目, 审计师上传的
+    回函, 银行直达回函, 数据集载入的合同). 回填只改前者, 第二次是空操作, 三张表的 FORCE 行级安全都已恢复. 去掉
+    "关掉 FORCE 行级安全" 时属主看不到任何行, 前者不会被改, 这条失败. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (old, new), _, _ = storage
+    module = migration("0007_backfill_force_rls")
+
+    def upgrade(sync_conn: Any) -> None:
+        with Operations.context(MigrationContext.configure(sync_conn)):
+            module.upgrade()
+
+    loaded = datetime(2026, 1, 5, tzinfo=UTC)
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def as_project(eid: str | None) -> None:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid or ""})
+
+                async def document(eid: str, doc_id: str, kind: str, channel: str, uploader: str | None) -> None:
+                    await as_project(eid)
+                    row = {
+                        "engagement_id": eid,
+                        "id": doc_id,
+                        "type": kind,
+                        "file_name": f"{doc_id}.pdf",
+                        "file_path": f"{doc_id}.pdf",
+                        "sha256": doc_id,
+                        "page_count": 1,
+                        "reliability": "external_copy",
+                        "status": "extracted",
+                        "uploaded_at": loaded,
+                        "media_type": "application/pdf",
+                        "channel": channel,
+                        "uploaded_by": uploader,
+                    }
+                    await conn.execute(insert(m.documents).values(**row))
+
+                await as_project(old.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=old.id, dataset="demo", data_version=2, loaded_at=loaded
+                    )
+                )
+                await document(old.id, "DOC-OLD-REPLY", "confirmation", "auditor_upload", None)
+                await as_project(new.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=new.id, dataset="demo", data_version=1, loaded_at=loaded
+                    )
+                )
+                for version, status in ((1, "committed"), (None, "parsed")):
+                    await conn.execute(
+                        insert(m.data_imports).values(
+                            engagement_id=new.id,
+                            id=f"IMP-{status}",
+                            kind="accounts",
+                            source="import",
+                            status=status,
+                            data_version=version,
+                            created_by="U-1",
+                            created_at=loaded,
+                        )
+                    )
+                await document(new.id, "DOC-UP-REPLY", "confirmation", "auditor_upload", "U-1")
+                await document(new.id, "DOC-BANK-REPLY", "confirmation", "bank_direct", None)
+                await document(new.id, "DOC-SEED-CONTRACT", "contract", "auditor_upload", None)
+
+                async def state() -> dict[str, Any]:
+                    found: dict[str, Any] = {}
+                    for eid in (old.id, new.id):
+                        await as_project(eid)
+                        [load] = (await conn.execute(text("SELECT ready_at, ready_by FROM dataset_loads"))).all()
+                        found[eid] = tuple(load)
+                        for doc_id, channel in await conn.execute(text("SELECT id, channel FROM documents")):
+                            found[doc_id] = channel
+                    return found
+
+                async def forced() -> set[tuple[Any, ...]]:
+                    found = await conn.execute(
+                        text(
+                            "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+                            "WHERE relname IN ('dataset_loads', 'data_imports', 'documents')"
+                        )
+                    )
+                    return {tuple(row) for row in found}
+
+                await as_project(None)  # 同真实迁移: 不设项目
+                await conn.run_sync(upgrade)
+                after = await state()
+                assert after == {
+                    old.id: (loaded, "dataset"),  # 0004 之前的数据集载入: 视同已确认
+                    "DOC-OLD-REPLY": "bank_direct",  # CSH-04 存档的银行直达回函
+                    new.id: (None, None),  # 经导入接入, 审计师还没确认: 不动
+                    "DOC-UP-REPLY": "auditor_upload",
+                    "DOC-BANK-REPLY": "bank_direct",
+                    "DOC-SEED-CONTRACT": "auditor_upload",
+                }
+                assert await forced() == {(name, True, True) for name in ("dataset_loads", "data_imports", "documents")}
+                await as_project(None)
+                await conn.run_sync(upgrade)  # 重复执行无副作用
+                assert await state() == after
+                assert await forced() == {(name, True, True) for name in ("dataset_loads", "data_imports", "documents")}
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
+def test_all_projects_rejects_tables_without_project_isolation() -> None:
+    """工具只收按项目隔离的表, 写错表名在执行任何语句之前报错."""
+    from backend.persistence.migration_tools import all_projects
+
+    with pytest.raises(ValueError, match="users, dataset_load"), all_projects("data_requests", "users", "dataset_load"):
+        pass
