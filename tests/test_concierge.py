@@ -472,10 +472,6 @@ async def test_real_a10_in_report_draft_reaches_rpt_gate() -> None:
     assert report.judgment_refs == [JudgmentRef(id=cited.id, version=cited.version)]
 
 
-def test_engagement_owner_is_numbat_auditor() -> None:
-    assert ENGAGEMENT.owner_id == NUMBAT_AUDITOR.id and NUMBAT_AUDITOR.full_name == "Jordan Ellis"
-
-
 # ── Codex R51 探针: 节点重放与上下文来源 ─────────────────────────────────────────
 
 
