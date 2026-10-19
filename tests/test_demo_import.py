@@ -411,6 +411,27 @@ def test_fieldwork_uploads_classifies_extracts_and_registers(flow: Flow) -> None
     assert flow.awaiting == (True, [])
 
 
+def test_contracts_extracted_on_upload_name_the_audited_entity(flow: Flow) -> None:
+    """上传时 A3 对 3 份合同各按 DOC-04 调一次大模型 (fixture_key 为合同编号, 一次通过), 提示词里的被审计单位是项目
+    画像的法定名称 Demo Company (AU) Pty Ltd; 条款按页编号, CON-X01 有 T1 至 T3, CON-X02 与 X03 有 T1 至 T4, 各合同 T1
+    为 control_transfer, T2 为 payment (需求 R108 验收 2). 防上传路径用错客户画像, 或重试才过."""
+    calls = [
+        e.payload
+        for e in added(flow.after_acceptance, flow.after_fieldwork)
+        if e.kind is TrailKind.llm_call and e.procedure_id == "DOC-04"
+    ]
+    assert sorted((p["fixture_key"], p["attempt"]) for p in calls) == [(f"CON-X0{n}", 1) for n in (1, 2, 3)]
+    assert all("The audited entity is Demo Company (AU) Pty Ltd;" in p["messages"][0]["content"] for p in calls)
+    contracts: dict[str, Contract] = flow.after_fieldwork["contracts"]
+    assert {k: [t.id for t in c.terms] for k, c in contracts.items()} == {
+        k: [f"{k}-T{n}" for n in range(1, count + 1)] for k, count in (("CON-X01", 3), ("CON-X02", 4), ("CON-X03", 4))
+    }
+    assert {(t.id[-2:], t.term_type.value) for c in contracts.values() for t in c.terms[:2]} == {
+        ("T1", "control_transfer"),
+        ("T2", "payment"),
+    }
+
+
 def test_offline_import_equals_the_r97_preset(flow: Flow) -> None:
     """验收 8: 空的 Xero 假存储做完承接与外勤后, 与 R97 预置的 xero_financial_store("fieldwork", contracts=True)
     逐对象相同 (账表, 文件登记含补登记字段, 合同; 上传时间不比, 合同执行 ID 只比到文件 ID)."""
