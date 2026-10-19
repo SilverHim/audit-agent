@@ -41,6 +41,7 @@ from backend.contracts.models import (
     AbnRecord,
     AgentId,
     AsicCompanyRecord,
+    AsicExtract,
     AuditObjective,
     ClientEntry,
     ClientProfile,
@@ -55,6 +56,7 @@ from backend.contracts.models import (
     LlmSettings,
     LlmSlot,
     Model,
+    PersonSearch,
     Phase,
     ProcedureRun,
     ProfileRecord,
@@ -624,14 +626,22 @@ class LlmSettingsStore(Protocol):
 class RegistrySource(Protocol):
     """ABN 与 ASIC 登记查询, 首参为项目 ID. 组装根为组合实现 (adapters/registry.CompositeRegistrySource, 需求 R289):
     项目有数据集时读该数据集目录下的 registry/ (Numbat 为 data/demo, Xero 为补造目录; 没有目录时查不到); 项目没有
-    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 抛 RegistryUnavailable (no_source, ASIC 摘录接入前,
-    R290). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
+    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 三个方法抛 RegistryUnavailable (no_source, ASIC 摘录
+    接入前, R290). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
     async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         """按 ACN 查 ASIC 公司登记. acn 为空 (ABN 记录没有 ACN) 时不查, 只确认有没有 ASIC 来源: 有来源返回 None,
         没有抛 RegistryUnavailable (ACC-04 据此把 company_registered 转人工确认)."""
+        ...
+
+    async def asic_extract(self, eid: str, acn: str) -> AsicExtract | None:
+        """ASIC 公司摘录 (高管与股东), 带 PDF 原件 (需求 R129); 查不到为 None."""
+        ...
+
+    async def asic_person(self, eid: str, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:
+        """ASIC 人员检索 (按姓, 名与出生日期), 带 PDF 原件 (需求 R129); 查不到为 None."""
         ...
 
 

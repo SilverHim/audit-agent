@@ -1101,6 +1101,68 @@ class AsicCompanyRecord(Model):
     registered_date: date  # 注册日期
 
 
+class Officeholder(Model):
+    """ASIC 公司摘录上的一名高管 (同一人任两职时为两项)."""
+
+    name: str  # 姓名
+    birth_date: date | None  # 出生日期, 摘录没有时为空
+    role: Literal["director", "secretary"]  # 董事或秘书
+    appointed: date  # 任职日
+
+
+class Shareholding(Model):
+    """ASIC 公司摘录上的一名股东."""
+
+    name: str  # 股东名称
+    kind: Literal["person", "company"]  # 自然人或公司
+    acn: str | None  # 公司股东的 ACN, 自然人为空
+    share_class: str  # 股份类别, 如 ORD
+    shares: int  # 持股数
+    pct: float  # 持股比例, 0 至 1
+
+
+class AsicExtract(Model):
+    """ASIC 公司摘录 (需求 R129): 登记信息, 高管与股东, 回执带 PDF 原件 (登记 mock 读同名 PDF). 字段同补造目录
+    registry/extracts/{acn}.json; JSON 键 class 是 Python 保留字, 模型字段为 company_class (别名 class)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    acn: str  # ACN
+    name: str  # 公司名称
+    type: str  # 公司类型, 如 APTY
+    company_class: str = Field(alias="class")  # 公司类别, 如 LMSH
+    subclass: str  # 子类, 如 PROP
+    status: Literal["Registered", "Deregistered"]
+    registered_date: date  # 注册日期
+    officeholders: list[Officeholder]
+    shareholders: list[Shareholding]
+    paid_up_cents: int | None  # 实缴股本 (分), 摘录没有时为空
+    file_name: str  # 摘录 PDF 的文件名
+    file_bytes: bytes  # 摘录 PDF 原件
+
+
+class PersonRole(Model):
+    """ASIC 人员检索的一项: 在某家公司的一个身份."""
+
+    acn: str  # 公司 ACN
+    company_name: str  # 公司名称
+    role: Literal["director", "secretary", "shareholder"]
+    appointed: date | None  # 任职日, 股东为空
+    shares: int | None  # 持股数, 高管为空
+
+
+class PersonSearch(Model):
+    """ASIC 人员检索 (需求 R129): 按姓, 名与出生日期查到的各项身份, 回执带 PDF 原件. 字段同补造目录
+    registry/persons/{姓}-{名}-{yyyymmdd}.json."""
+
+    family_name: str  # 姓
+    given_name: str  # 名
+    birth_date: date  # 出生日期
+    roles: list[PersonRole]  # 各项身份, 按检索结果的顺序
+    file_name: str  # 检索结果 PDF 的文件名
+    file_bytes: bytes  # 检索结果 PDF 原件
+
+
 class TrailEntry(Model):
     """审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改."""
 

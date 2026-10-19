@@ -90,6 +90,11 @@ def test_supplement_samples() -> None:
     assert "AUD 48.53" in x.xero_pages(by_path()[REPLY_12345679])[0]
     assert (len(x.xero_adjustments()), {r.entry_no for r in x.xero_adjustments(["AJE-X01"])}) == (11, {"AJE-X01"})
     assert [e.employee_id for e in x.xero_employees()] == ["E001", "E002", "E003"]
+    registry = x.xero_registry()  # 登记 mock 的摘录与人员检索 (需求 R129)
+    assert (sorted(registry.extracts), [p.file_name for p in registry.persons]) == (
+        ["900043021", "900043030", "900043049"],
+        ["MORGAN-ALEX-19790412.pdf"],
+    )
 
 
 async def test_financial_store_holds_the_imported_tables(store: FakeFinancialStore) -> None:
