@@ -7,10 +7,12 @@ from pydantic import ValidationError
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
+    AsicExtract,
     Assertion,
     AuditException,
     AutonomyLevel,
     ClientProfile,
+    Confirmation,
     CriticTrigger,
     Decision,
     Direction,
@@ -181,8 +183,26 @@ def test_old_judgment_json_reads_no_critic_trigger() -> None:
     assert Judgment.model_validate_json(json.dumps(old)).critic_trigger is None
 
 
+# 第一个带别名的模型 (JSON 键 class): 检查点按字段名重建, 没有 populate_by_name 时 company_class 悄悄丢失
+EXTRACT = AsicExtract(
+    acn="900043021",
+    name="Demo Company (AU) Pty Ltd",
+    type="APTY",
+    company_class="LMSH",
+    subclass="PROP",
+    status="Registered",
+    registered_date=date(2018, 9, 3),
+    officeholders=[],
+    shareholders=[],
+    paid_up_cents=100,
+    file_name="900043021.pdf",
+    file_bytes=b"%PDF-1.4",
+)
+
+
 def test_new_values_survive_checkpoint_serde() -> None:
-    """新枚举在 contracts/models.py 中, 检查点序列化白名单自动登记: 读回仍是枚举, 不退化为字符串."""
+    """新枚举在 contracts/models.py 中, 检查点序列化白名单自动登记: 读回仍是枚举, 不退化为字符串. 带别名字段的
+    AsicExtract 读回相等."""
     serde = checkpoint_serde()
     judgment = JUDGMENT.model_copy(
         update={"critic_trigger": CriticTrigger.internal_copy, "review_status": ReviewStatus.superseded}
@@ -191,6 +211,7 @@ def test_new_values_survive_checkpoint_serde() -> None:
         "judgments": [judgment],
         "documents": [DOCUMENT.model_copy(update={"document_date": date(2026, 9, 22), "related_ids": ["XJ-613"]})],
         "kinds": [TaskKind.blind, TaskKind.manual, ProcedureStatus.in_dispute, TrailKind.presentation],
+        "extracts": [EXTRACT],
     }
     back = serde.loads_typed(serde.dumps_typed(values))
     assert back == values
@@ -346,3 +367,22 @@ def test_fee_shares_accept_the_bounds() -> None:
     fees = {"dependency_pct_by_year": {"2025": 0.0, "2026": 1.0}, "referral_source_fees_pct_by_year": {"2026": 0.25}}
     profile = ClientProfile.model_validate({**PROFILE_BASE, "fees": fees})
     assert profile.fees is not None and profile.fees.dependency_pct_by_year == {"2025": 0.0, "2026": 1.0}
+
+
+def test_confirmation_accrued_interest_reads_old_json_and_survives_checkpoint_serde() -> None:
+    """需求 R104: 不含 accrued_interest_cents 的旧函证 JSON (旧存储行) 读回为 None; 检查点序列化往返不变 (0 与
+    4853 都原样读回, 0 不退化为空)."""
+    sent = Confirmation(
+        id="C-BA-01",
+        bank_account_id="BA-01",
+        confirming_party="Harbourline Bank Limited",
+        idempotency_key="E:CSH-04:BA-01:abc",
+        sent_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    old = sent.model_dump(mode="json")
+    del old["accrued_interest_cents"]
+    assert Confirmation.model_validate_json(json.dumps(old)).accrued_interest_cents is None
+    serde = checkpoint_serde()
+    values = {"confirmations": [sent.model_copy(update={"accrued_interest_cents": v}) for v in (0, 4853, None)]}
+    back = serde.loads_typed(serde.dumps_typed(values))
+    assert back == values and [c.accrued_interest_cents for c in back["confirmations"]] == [0, 4853, None]

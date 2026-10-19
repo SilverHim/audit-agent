@@ -1,6 +1,7 @@
 """A3 DOC-06: 读回函文本层, 抽取回函余额与截至日写入函证; 单账户失败交人 (合成数据集设计第 6.4-6.6 节)."""
 
 import json
+import re
 from datetime import date
 from typing import Any
 
@@ -29,12 +30,15 @@ from tests.fakes import (
     NUMBAT_REPLY_PAGES,
     FakeDataStore,
     FakeFinancialStore,
+    FakeOutputStore,
     FakeRegistry,
     FakeTrail,
     ScriptedLLM,
+    api_client,
     legacy_sends,
     make_ctx,
     make_deps,
+    make_runner,
     numbat_confirmation_key,
 )
 
@@ -159,6 +163,10 @@ async def test_mock_extraction_updates_confirmations() -> None:
     calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
     assert len(calls) == 2 and {e.procedure_id for e in calls} == {"DOC-06"}
     assert all(e.payload["notes"] == [] for e in calls)
+    # 需求 R104: fixture 没写应计利息的键, 按空处理, 一次通过 (不算结构失败); 指针仍 5 条
+    assert all(e.payload["level_failed"] is None for e in calls)
+    assert (c1.accrued_interest_cents, c2.accrued_interest_cents) == (None, None)
+    assert (len(c1.evidence), len(c2.evidence)) == (5, 5)
 
 
 # ── 失败与提示 ─────────────────────────────────────────
@@ -207,6 +215,90 @@ async def test_pointer_page_beyond_document_fails_that_account() -> None:
     bad["evidence"][0]["page"] = 3
     agent, ctx, _ = setup(scripted(BA_01=[json.dumps(bad)]))
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
+
+
+# ── 回函应计利息 (需求 R104) ─────────────────────────────────────────
+
+
+def with_accrued(account: str, cents: int | None, page: int | None = 1) -> str:
+    """该账户 fixture 的输出加上应计利息 (测试内联, fixture 不改); page 为空时不加它的指针."""
+    data = json.loads(raw(account))
+    data["accrued_interest_cents"] = cents
+    if page is not None:
+        pointer = {**data["evidence"][0], "locator": "accrued_interest_cents", "page": page}
+        data["evidence"].append(pointer)
+    return json.dumps(data)
+
+
+@pytest.mark.parametrize("cents", [0, 4853])  # 0: 回函写 nil
+async def test_accrued_interest_is_written_to_the_confirmation(cents: int) -> None:
+    """抽出的应计利息 (带第 1 页的指针) 写入函证; 回函余额与截至日同 mock, 另一账户仍为空."""
+    agent, ctx, _ = setup(scripted(BA_01=[with_accrued("BA-01", cents)]))
+    c1, c2 = (await agent.run(ctx))["confirmations"]
+    assert (c1.accrued_interest_cents, c1.confirmed_balance_cents, c1.balance_date) == (
+        cents,
+        120840000,
+        date(2026, 6, 30),
+    )
+    assert (c2.accrued_interest_cents, c2.confirmed_balance_cents) == (None, 40000000)
+    # 指针随之写进函证 (CSH-02 的 D04 以它为证据, 需求 R105): 6 条, 应计利息一条在第 1 页
+    assert len(c1.evidence) == 6
+    assert [(p.locator, p.page) for p in c1.evidence if p.locator == "accrued_interest_cents"] == [
+        ("accrued_interest_cents", 1)
+    ]
+
+
+@pytest.mark.parametrize("page", [None, 3])  # 没有该指针; 指针页码超出页数 (2 页)
+async def test_accrued_interest_without_a_valid_pointer_fails_that_account(page: int | None) -> None:
+    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败不重试 (只调 1 次), BA-01 交人,
+    函证不更新, 另一账户照常."""
+    llm = scripted(BA_01=[with_accrued("BA-01", 4853, page), raw("BA-01")])
+    agent, ctx, _ = setup(llm)
+    assert_ba01_handed_to_human(agent, await agent.run(ctx))
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == 1
+
+
+# 应计利息口径的关键词: 每条在应计利息一节里须有一个分句同时含这几个词 (不分大小写), 不比逐字原文
+ACCRUED_RULES = {
+    "银行欠客户为正": ("positive", "bank owes"),
+    "客户欠银行为负": ("negative", "customer owes"),
+    "nil 为 0": ("0", "nil"),
+    "没提为 null": ("null", "not mention"),
+    "不取已入账的利息": ("not", "already credited"),
+    "不取以后应付的整期利息": ("not", "later date"),
+}
+
+
+async def test_prompt_states_how_to_read_accrued_interest() -> None:
+    """渲染一次 DOC-06 提示词, 截出应计利息一节 (到下一个字段为止): 按分句查各条口径的关键词; evidence 一条另要求
+    给 accrued_interest_cents 的指针."""
+    llm = scripted()
+    agent, ctx, _ = setup(llm, confirmations=CONFIRMATIONS[:1])
+    await agent.run(ctx)
+    [request] = llm.requests
+    lines = request.messages[0].content.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("- `accrued_interest_cents`"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("- `"))
+    clauses = [c.casefold() for line in lines[start:end] for c in re.split(r"[.;]\s", line)]
+    missing = [rule for rule, words in ACCRUED_RULES.items() if not any(all(w in c for w in words) for c in clauses)]
+    assert missing == []
+    assert lines[end].startswith("- `evidence`") and "accrued_interest_cents" in lines[end]
+
+
+async def test_confirmation_list_says_whether_the_reply_was_extracted() -> None:
+    """GET /confirmations 另带 reply_extracted (后端判定, 证据页据此显示应计利息 "未提及" 或 "—"): DOC-06 抽取过的
+    (evidence 指向当前回函) 为真; DOC-06 失败后审计师手填了余额 (有余额而没有指针) 与还没回函的为假."""
+    agent, ctx, _ = setup()
+    extracted = (await agent.run(ctx))["confirmations"][0]  # C-BA-01 第 2 版, 回函没提应计利息
+    manual = CONFIRMATIONS[1].model_copy(update={"version": 2, "confirmed_balance_cents": 40000000})
+    pending = sent("BA-03", None)
+    runner, _ = make_runner(
+        output_store=FakeOutputStore([CONFIRMATIONS[0], extracted, CONFIRMATIONS[1], manual, pending])
+    )
+    async with api_client(runner) as client:
+        rows = (await client.get(f"/api/v1/engagements/{EID}/confirmations")).json()
+    found = {r["id"]: (r["version"], r["accrued_interest_cents"], r["reply_extracted"]) for r in rows}
+    assert found == {"C-BA-01": (2, None, True), "C-BA-02": (2, None, False), "C-BA-03": (1, None, False)}
 
 
 async def test_reply_missing_from_state_raises() -> None:

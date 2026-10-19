@@ -161,6 +161,13 @@ Execute = Callable[[RunContext], Awaitable[list[Extracted]]]  # 执行一条程�
 Interpret = Callable[[RunContext, list[Extracted]], StatePatch]  # 把抽取结果转成状态片段
 
 
+def extracted_from(confirmation: Confirmation, document_id: str | None) -> bool:
+    """这一版函证有没有 DOC-06 对该回函 (document_id) 成功抽取的结果: evidence 里有指向它的指针 (只有 DOC-06 抽取
+    写 evidence; 审计师手改不写, 修改沿用已有的). 证据页据此区分 "回函没提应计利息" 与 "还没抽取" (需求 R104),
+    kept_edit 据此认定修改前抽取过. document_id 为空 (还没回函) 为假."""
+    return document_id is not None and any(p.source_id == document_id for p in confirmation.evidence)
+
+
 class IngestAgent(ProcedureAgent[list[Extracted]]):
     """A3: 执行 DOC-04, DOC-06, 从合同与回函 PDF 抽取要素. 按程序编号分派."""
 
@@ -274,6 +281,7 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
                     "version": confirmation.version + 1,
                     "confirmed_balance_cents": extraction.confirmed_balance_cents,
                     "balance_date": extraction.balance_date,
+                    "accrued_interest_cents": extraction.accrued_interest_cents,
                     "evidence": extraction.evidence,
                 }
             )
@@ -301,7 +309,7 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
         history = await self.deps.output_store.history(eid, Confirmation, confirmation.id)
         reply = confirmation.reply_document_id
         since = [c for c in history if c.version >= edited]
-        extracted = any(c.version < edited and any(p.source_id == reply for p in c.evidence) for c in history)
+        extracted = any(c.version < edited and extracted_from(c, reply) for c in history)
         if not since or not extracted or any(c.reply_document_id != reply for c in since):
             return None
         kept = max(since, key=lambda c: c.version)

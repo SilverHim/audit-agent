@@ -753,6 +753,8 @@ export const en = {
     book: 'Book balance',
     confirmed: 'Confirmed balance',
     difference: 'Difference',
+    accruedInterest: 'Accrued interest in reply',
+    accruedNotStated: 'Not mentioned',
     openReply: 'Open the reply',
     noReply: 'No reply received yet',
     signedOn: (date: string) => `signed ${date}`,

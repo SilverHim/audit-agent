@@ -1107,6 +1107,10 @@ export type Confirmation = {
      */
     confirmed_balance_cents?: number | null;
     /**
+     * Accrued Interest Cents
+     */
+    accrued_interest_cents?: number | null;
+    /**
      * Book Balance Cents
      */
     book_balance_cents?: number | null;
@@ -1127,6 +1131,82 @@ export type Confirmation = {
  * 函证结果.
  */
 export type ConfirmationResult = 'pending' | 'agreed' | 'difference';
+
+/**
+ * ConfirmationView
+ *
+ * 证据页的函证 (GET /confirmations): 函证各字段, 另加 reply_extracted (当前回函经 DOC-06 成功抽取过,
+ * agents/ingest.extracted_from 判定, 需求 R104). 应计利息为空时, 抽取过的是回函没提, 没抽取过的是还没读回函
+ * (如 DOC-06 失败后审计师手填了余额).
+ */
+export type ConfirmationView = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Type
+     */
+    type?: 'bank';
+    /**
+     * Bank Account Id
+     */
+    bank_account_id: string;
+    /**
+     * Confirming Party
+     */
+    confirming_party: string;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+    /**
+     * Sent At
+     */
+    sent_at: string;
+    /**
+     * Reply Document Id
+     */
+    reply_document_id?: string | null;
+    receipt_channel?: ReceiptChannel | null;
+    /**
+     * Replied At
+     */
+    replied_at?: string | null;
+    /**
+     * Balance Date
+     */
+    balance_date?: string | null;
+    /**
+     * Confirmed Balance Cents
+     */
+    confirmed_balance_cents?: number | null;
+    /**
+     * Accrued Interest Cents
+     */
+    accrued_interest_cents?: number | null;
+    /**
+     * Book Balance Cents
+     */
+    book_balance_cents?: number | null;
+    /**
+     * Difference Cents
+     */
+    difference_cents?: number | null;
+    result?: ConfirmationResult;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+    /**
+     * Reply Extracted
+     */
+    reply_extracted: boolean;
+};
 
 /**
  * Contract
@@ -5513,7 +5593,7 @@ export type EvidenceListConfirmationsResponses = {
      *
      * Successful Response
      */
-    200: Array<Confirmation>;
+    200: Array<ConfirmationView>;
 };
 
 export type EvidenceListConfirmationsResponse = EvidenceListConfirmationsResponses[keyof EvidenceListConfirmationsResponses];

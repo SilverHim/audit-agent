@@ -12,6 +12,7 @@ from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     ClientProfile,
+    Confirmation,
     Decision,
     DeclaredHolding,
     DeclaredParty,
@@ -212,6 +213,14 @@ class AbnLookupView(Model):
     reason: RegistryReason | None = None  # 查不了的原因类别 (not_configured, unreachable, rejected, service_error)
     # 给了 legal_name 且查到, 登记名称公开时: 与 ACC-04 同一规则 (client_intel.normalize_name) 比较是否一致; 否则为空
     name_matches: bool | None = None
+
+
+class ConfirmationView(Confirmation):
+    """证据页的函证 (GET /confirmations): 函证各字段, 另加 reply_extracted (当前回函经 DOC-06 成功抽取过,
+    agents/ingest.extracted_from 判定, 需求 R104). 应计利息为空时, 抽取过的是回函没提, 没抽取过的是还没读回函
+    (如 DOC-06 失败后审计师手填了余额)."""
+
+    reply_extracted: bool
 
 
 class ProfileVersionInfo(Model):

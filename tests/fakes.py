@@ -21,6 +21,7 @@ from pydantic import BaseModel, ValidationError
 
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
+from backend.adapters.registry_mock import person_key
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -57,6 +58,7 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     AsicCompanyRecord,
+    AsicExtract,
     Assertion,
     AuditException,
     AuditObjective,
@@ -87,6 +89,7 @@ from backend.contracts.models import (
     MisstatementDraft,
     MisstatementType,
     OpinionType,
+    PersonSearch,
     Phase,
     Procedure,
     ProcedureRun,
@@ -572,20 +575,27 @@ NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
 
 
 class FakeRegistry:
-    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN, eids 记下每次查询传的项目 ID."""
+    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN (公司登记), eids 记下每次查询传的项目
+    ID, queries 按顺序记下各类查询 (abn, asic, extract, person) 与所查的编号或姓名."""
 
     def __init__(
         self,
         abn_records: dict[str, AbnRecord] | None = None,
         asic_records: dict[str, AsicCompanyRecord] | None = None,
+        extracts: dict[str, AsicExtract] | None = None,
+        persons: Sequence[PersonSearch] = (),
     ) -> None:
         self.abn_records = abn_records or {}  # ABN -> 登记记录
         self.asic_records = asic_records or {}  # ACN -> 公司登记记录
-        self.asic_queries: list[str] = []  # 查过的 ACN, 按查询顺序
-        self.eids: list[str] = []  # 每次查询 (ABN 与 ASIC) 传的项目 ID, 按查询顺序
+        self.extracts = extracts or {}  # ACN -> 公司摘录 (需求 R129)
+        self.persons = list(persons)  # 人员检索结果, 按姓, 名 (不分大小写) 与出生日期匹配
+        self.asic_queries: list[str] = []  # 查过的 ACN (公司登记), 按查询顺序
+        self.eids: list[str] = []  # 每次查询传的项目 ID, 按查询顺序
+        self.queries: list[tuple[str, str]] = []  # (查询类别, 编号或 "姓 名 出生日期"), 按查询顺序
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.eids.append(eid)
+        self.queries.append(("abn", abn))
         return self.abn_records.get(abn)
 
     async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
@@ -593,7 +603,19 @@ class FakeRegistry:
         if acn is None:  # 没有 ACN 不查, 只确认有来源 (同真实实现)
             return None
         self.asic_queries.append(acn)
+        self.queries.append(("asic", acn))
         return self.asic_records.get(acn)
+
+    async def asic_extract(self, eid: str, acn: str) -> AsicExtract | None:
+        self.eids.append(eid)
+        self.queries.append(("extract", acn))
+        return self.extracts.get(acn)
+
+    async def asic_person(self, eid: str, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:
+        self.eids.append(eid)
+        self.queries.append(("person", f"{family_name} {given_name} {birth_date}"))
+        wanted = person_key(family_name, given_name, birth_date)  # 同登记 mock: 去首尾空白, 不分大小写
+        return next((p for p in self.persons if person_key(p.family_name, p.given_name, p.birth_date) == wanted), None)
 
 
 ABR_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "abr"  # 合成的 ABN Lookup 响应 (按官方 XSD 手写)

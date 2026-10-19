@@ -1973,6 +1973,7 @@
           "evidence"
         ],
         "summary": "List Confirmations",
+        "description": "各函证的最新版本, 另带 reply_extracted (当前回函经 DOC-06 成功抽取过).",
         "operationId": "evidence-list_confirmations",
         "security": [
           {
@@ -1998,7 +1999,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Confirmation"
+                    "$ref": "#/components/schemas/ConfirmationView"
                   },
                   "title": "Response Evidence-List Confirmations"
                 }
@@ -6081,6 +6082,17 @@
             ],
             "title": "Confirmed Balance Cents"
           },
+          "accrued_interest_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Interest Cents"
+          },
           "book_balance_cents": {
             "anyOf": [
               {
@@ -6137,6 +6149,159 @@
         ],
         "title": "ConfirmationResult",
         "description": "函证结果."
+      },
+      "ConfirmationView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "type": {
+            "type": "string",
+            "const": "bank",
+            "title": "Type",
+            "default": "bank"
+          },
+          "bank_account_id": {
+            "type": "string",
+            "title": "Bank Account Id"
+          },
+          "confirming_party": {
+            "type": "string",
+            "title": "Confirming Party"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "sent_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Sent At"
+          },
+          "reply_document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply Document Id"
+          },
+          "receipt_channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReceiptChannel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replied At"
+          },
+          "balance_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balance Date"
+          },
+          "confirmed_balance_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Balance Cents"
+          },
+          "accrued_interest_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Interest Cents"
+          },
+          "book_balance_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Balance Cents"
+          },
+          "difference_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference Cents"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ConfirmationResult",
+            "default": "pending"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "reply_extracted": {
+            "type": "boolean",
+            "title": "Reply Extracted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "bank_account_id",
+          "confirming_party",
+          "idempotency_key",
+          "sent_at",
+          "reply_extracted"
+        ],
+        "title": "ConfirmationView",
+        "description": "证据页的函证 (GET /confirmations): 函证各字段, 另加 reply_extracted (当前回函经 DOC-06 成功抽取过,\nagents/ingest.extracted_from 判定, 需求 R104). 应计利息为空时, 抽取过的是回函没提, 没抽取过的是还没读回函\n(如 DOC-06 失败后审计师手填了余额)."
       },
       "Contract": {
         "properties": {

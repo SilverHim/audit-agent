@@ -23,6 +23,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
+from backend.adapters.registry_mock import MockRegistrySource
 from backend.adapters.xero_supplements import STAGES, DemoStage, DemoUpload, Supplements
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import build_contract, contract_id
@@ -187,13 +188,22 @@ def xero_employees() -> list[Employee]:
 
 
 def xero_registry() -> FakeRegistry:
-    """登记 mock 的 ABN 与 ASIC 记录 (补造目录 registry/abn.json, asic.json, 各 3 条) 装进假登记系统."""
+    """登记 mock 的记录装进假登记系统: 补造目录 registry/ 的 ABN 与 ASIC 登记 (各 3 条), 公司摘录 (3 份) 与人员检索
+    (1 份, 需求 R129); 摘录与检索经 MockRegistrySource 读出 (带 PDF 原件)."""
     root = supplement().root / "registry"
     abn = json.loads((root / "abn.json").read_text(encoding="utf-8"))
     asic = json.loads((root / "asic.json").read_text(encoding="utf-8"))
+    mock = MockRegistrySource(supplement().root)
+    extracts = {p.stem: mock.extract(p.stem) for p in sorted((root / "extracts").glob("*.json"))}
+    persons = []
+    for path in sorted((root / "persons").glob("*.json")):
+        keys = json.loads(path.read_text(encoding="utf-8"))
+        persons.append(mock.person(keys["family_name"], keys["given_name"], date.fromisoformat(keys["birth_date"])))
     return FakeRegistry(
         {k: AbnRecord.model_validate(v) for k, v in abn.items()},
         {k: AsicCompanyRecord.model_validate(v) for k, v in asic.items()},
+        {k: v for k, v in extracts.items() if v is not None},
+        [p for p in persons if p is not None],
     )
 
 

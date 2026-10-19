@@ -59,6 +59,10 @@ class ConfirmationExtraction(Model):
     balance_date: date  # 余额截至日
     receipt_channel: ReceiptChannel | None  # 回函渠道, 只用于核对
     evidence: list[EvidencePointer]  # 上述字段的页码指针
+    # 回函写明的截至余额日已产生, 尚未记入账户的应计利息, 单位分: 银行欠客户为正, 客户欠银行 (利息与费用) 为负, 写
+    # nil 为 0, 没有提到为空; 不取已入账的利息, 也不取以后某日应付的整期利息. 漏写按空处理 (不算结构失败); 非空时
+    # 须有 locator 为 accrued_interest_cents 的本文档指针 (引用级, 需求 R104)
+    accrued_interest_cents: int | None = None
 
 
 class DocumentClassification(Model):

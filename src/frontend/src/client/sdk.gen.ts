@@ -503,6 +503,8 @@ export const evidenceGetRecord = <ThrowOnError extends boolean = false>(options:
 
 /**
  * List Confirmations
+ *
+ * 各函证的最新版本, 另带 reply_extracted (当前回函经 DOC-06 成功抽取过).
  */
 export const evidenceListConfirmations = <ThrowOnError extends boolean = false>(options: Options<EvidenceListConfirmationsData, ThrowOnError>): RequestResult<EvidenceListConfirmationsResponses, EvidenceListConfirmationsErrors, ThrowOnError> => (options.client ?? client).get<EvidenceListConfirmationsResponses, EvidenceListConfirmationsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
