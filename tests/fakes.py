@@ -588,8 +588,10 @@ class FakeRegistry:
         self.eids.append(eid)
         return self.abn_records.get(abn)
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         self.eids.append(eid)
+        if acn is None:  # 没有 ACN 不查, 只确认有来源 (同真实实现)
+            return None
         self.asic_queries.append(acn)
         return self.asic_records.get(acn)
 
@@ -602,7 +604,8 @@ ABR_URL = "https://abr.test/abrxmlsearch/AbrXmlSearch.asmx/SearchByABNv202001"  
 class FakeAbr:
     """假的 ABR ABN Lookup (httpx.MockTransport): 按请求表单里的 searchString 回放 tests/fixtures/abr/ 下的响应,
     把 __GUID__ 与 __ABN__ 换成请求里的值 (同真实接口回显请求, 含 GUID). replies: ABN → 响应文件名 (不带 .xml),
-    或 HTTP 状态码 (正文也回显 GUID), 或 "unreachable" (连接失败); 没列的 ABN 回 not_found. requests 记下每次请求."""
+    或 HTTP 状态码 (正文也回显 GUID; 3xx 另带 Location 指向别的主机), "unreachable" (连接失败) 或 "bad_gzip" (声称
+    gzip 而正文不是, 读响应时 httpx 抛 DecodingError); 没列的 ABN 回 not_found. requests 记下每次请求."""
 
     def __init__(self, replies: Mapping[str, str | int] | None = None) -> None:
         self.replies = dict(replies or {})
@@ -616,20 +619,24 @@ class FakeAbr:
         reply = self.replies.get(abn, "not_found")
         if reply == "unreachable":
             raise httpx.ConnectError(f"connection refused ({guid})", request=request)
+        status, headers, body = self.reply_parts(reply, guid, abn)
+        return httpx.Response(status, headers=headers, content=body)
+
+    def reply_parts(self, reply: str | int, guid: str, abn: str) -> tuple[int, dict[str, str], bytes]:
+        """一种回复的 (HTTP 状态, 响应头, 原始正文); 正文都回显 GUID."""
+        if reply == "bad_gzip":
+            return 200, {"Content-Encoding": "gzip"}, f"not gzip {guid}".encode()
         if isinstance(reply, int):
-            return httpx.Response(reply, text=f"<error>server error for {guid}</error>")
-        body = self.fixture(reply).replace(b"__GUID__", guid.encode()).replace(b"__ABN__", abn.encode())
-        return httpx.Response(200, content=body)
+            moved = {"Location": "https://elsewhere.test/abr"} if 300 <= reply < 400 else {}
+            return reply, moved, f"<error>server error for {guid}</error>".encode()
+        return 200, {}, self.fixture(reply).replace(b"__GUID__", guid.encode()).replace(b"__ABN__", abn.encode())
 
     def echoed(self, abn: str, guid: str = FAKE_GUID) -> bytes:
-        """这个 ABN 的回放内容 (响应正文, 连接失败时为异常文本), 不记进 requests: 测试据此确认假接口回显了 GUID."""
-        request = httpx.Request("POST", ABR_URL, data={"searchString": abn, "authenticationGuid": guid})
-        try:
-            body = self.handle(request).content
-        except httpx.ConnectError as exc:
-            body = str(exc).encode()
-        self.requests.pop()
-        return body
+        """这个 ABN 的回放内容 (原始正文, 连接失败时为异常文本), 不发请求: 测试据此确认假接口回显了 GUID."""
+        reply = self.replies.get(abn, "not_found")
+        if reply == "unreachable":
+            return f"connection refused ({guid})".encode()
+        return self.reply_parts(reply, guid, abn)[2]
 
     @staticmethod
     def fixture(name: str) -> bytes:

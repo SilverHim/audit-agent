@@ -261,7 +261,7 @@ export const en = {
     gateIntro: {
       'ACC-01': (passed: number, total: number, exceptions: number, manual: number) =>
         manual
-          ? `The client is ready for your acceptance decision. ACC-04 could not query every register: ${passed} of ${total} checks passed and ${manual} need your manual confirmation against ABN Lookup or ASIC${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ''}.`
+          ? `The client is ready for your acceptance decision. Of ACC-04's ${total} checks, ${passed} passed and ${manual} need your manual confirmation against ABN Lookup or ASIC${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ''}.`
           : `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
       'PLN-01/03':
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',

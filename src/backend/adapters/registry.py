@@ -28,7 +28,7 @@ class CompositeRegistrySource:
             return await self.datasets.abn(eid, abn)
         return await self.abn_lookup.abn(abn)
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         if await self.has_dataset(eid):
             return await self.datasets.asic_company(eid, acn)
         raise RegistryUnavailable(f"项目 {eid} 的客户没有数据集, ASIC 摘录尚未接入", reason="no_source")

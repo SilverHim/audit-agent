@@ -254,7 +254,7 @@ export const zh: Messages = {
     gateIntro: {
       'ACC-01': (passed, total, exceptions, manual) =>
         manual
-          ? `可以作出承接决定了。ACC-04 有登记未能查询：${total} 项检查中 ${passed} 项通过，${manual} 项待你对照 ABN Lookup 或 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
+          ? `可以作出承接决定了。ACC-04 的 ${total} 项检查中 ${passed} 项通过，${manual} 项待你对照 ABN Lookup 或 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
           : `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
       'FIN-01': (count, total, skipped) =>

@@ -629,7 +629,10 @@ class RegistrySource(Protocol):
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None: ...
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
+        """按 ACN 查 ASIC 公司登记. acn 为空 (ABN 记录没有 ACN) 时不查, 只确认有没有 ASIC 来源: 有来源返回 None,
+        没有抛 RegistryUnavailable (ACC-04 据此把 company_registered 转人工确认)."""
+        ...
 
 
 class AbnLookup(Protocol):

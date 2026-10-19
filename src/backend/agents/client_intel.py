@@ -207,18 +207,22 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
 
         return (record, trail_id)
 
-    async def record_unavailable(self, ctx: RunContext, kind: str, key: str, value: str, reason: RegistryReason) -> str:
-        """查不了登记时写一行 external_call 留痕 (payload 记 available false 与原因类别, result 为空), 返回留痕 ID."""
+    async def record_unavailable(
+        self, ctx: RunContext, kind: str, key: str, value: str | None, reason: RegistryReason
+    ) -> str:
+        """查不了登记时写一行 external_call 留痕 (payload 记 available false 与原因类别, result 为空), 返回留痕 ID.
+        value 为空 (ABN 记录没有 ACN) 时摘要写 "no ACN"."""
         return await self.record_query(
             ctx=ctx,
-            summary=f"{kind} {value}: {reason}, manual confirmation",
+            summary=f"{kind} {value or '(no ACN)'}: {reason}, manual confirmation",
             payload={key: value, **NOT_QUERIED, "reason": reason, "result": None},
         )
 
     async def collect_checks(self, ctx: RunContext, profile: ClientProfile) -> list[RegistryCheck]:
         """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered. ABN 查不了
-        (RegistryUnavailable) 时记一条 "没有查询" 的留痕, 三项都待人工确认; ABN 查到而 ASIC 查不了 (新建的客户, ASIC
-        摘录未接入) 时另记一条, 只有 company_registered 待人工确认."""
+        (RegistryUnavailable) 时记一条 "没有查询" 的留痕, 三项都待人工确认. company_registered 只由 ASIC 来源判定:
+        没有 ASIC 来源 (新建的客户, ASIC 摘录接入前) 时另记一条 "没有查询" 的 ASIC 留痕, 这一项待人工确认, 不因 ABN
+        记录没有 ACN (查不到 ABN, 个人独资, 信托等) 判不通过; 有来源而 ABN 记录没有 ACN 时照旧不通过 (ASIC 无从查)."""
         try:
             abn_record, abn_trail_id = await self.lookup_abn(ctx=ctx, abn=profile.abn)
         except RegistryUnavailable as exc:
@@ -229,18 +233,20 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
         check_list.append(check_name_match(record=abn_record, legal_name=profile.legal_name, trail_id=abn_trail_id))
 
         acn = abn_record.acn if abn_record is not None else None
-        if acn is None:
-            asic_record, asic_trail_id = None, abn_trail_id
-        else:
-            try:
+        try:
+            if acn is None:  # 不查, 只确认有没有 ASIC 来源 (没有时抛 RegistryUnavailable)
+                await self.deps.registry.asic_company(ctx.engagement.id, None)
+                asic_record, asic_trail_id = None, abn_trail_id
+            else:
                 asic_record, asic_trail_id = await self.lookup_asic(ctx=ctx, acn=acn)
-            except RegistryUnavailable as exc:
-                trail_id = await self.record_unavailable(ctx, "ASIC company search", "acn", acn, exc.reason)
-                detail = manual_detail(f"ACN {acn}", exc.reason, "ASIC")
-                evidence = trail_pointer(trail_id, "available", NOT_QUERIED)
-                manual = RegistryCheck(check="company_registered", passed=None, detail=detail, evidence=evidence)
-                check_list.append(manual)
-                return check_list
+        except RegistryUnavailable as exc:
+            trail_id = await self.record_unavailable(ctx, "ASIC company search", "acn", acn, exc.reason)
+            subject = f"ACN {acn}" if acn is not None else "the company (no ACN on the ABN record)"
+            detail = manual_detail(subject, exc.reason, "ASIC")
+            evidence = trail_pointer(trail_id, "available", NOT_QUERIED)
+            manual = RegistryCheck(check="company_registered", passed=None, detail=detail, evidence=evidence)
+            check_list.append(manual)
+            return check_list
 
         check_list.append(check_company_registered(acn=acn, record=asic_record, trail_id=asic_trail_id))
 

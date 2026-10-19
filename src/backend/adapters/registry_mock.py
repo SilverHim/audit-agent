@@ -21,7 +21,9 @@ class MockRegistrySource:
         row = data.get("".join(abn.split()))
         return AbnRecord.model_validate(row) if row is not None else None
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
+        if acn is None:  # 没有 ACN 不查 (RegistrySource.asic_company)
+            return None
         data = json.loads((self.dataset_dir / "registry" / "asic.json").read_text())
         row = data.get("".join(acn.split()))
         return AsicCompanyRecord.model_validate(row) if row is not None else None
@@ -57,6 +59,6 @@ class DatasetRegistrySource:
         source = await self.source(eid)
         return await source.abn(eid, abn) if source else None
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
-        source = await self.source(eid)
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
+        source = await self.source(eid)  # 没有数据集时抛 RegistryUnavailable, acn 为空也先查这一步
         return await source.asic_company(eid, acn) if source else None

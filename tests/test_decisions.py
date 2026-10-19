@@ -344,10 +344,21 @@ async def test_update_profile_only_at_acc01() -> None:
     assert e.value.code == "NOT_AT_GATE"
 
 
-async def test_update_profile_checks_a_changed_abn_like_new_clients() -> None:
-    """ABN 改了时另查重 (同新建客户): 已是别的客户的报 ABN_TAKEN, 带那个客户的编号与名称, 不保存; ABN 只差空格不算改,
-    不查重 (库里本客户自己的 ABN 不算撞上), 照常保存."""
+async def test_update_profile_checks_a_changed_abn_like_new_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ABN 改了时另查重 (同新建客户, 同一范围): 已是别的客户 (库里的, 或还没进库的数据集客户) 的报 ABN_TAKEN, 带那个
+    客户的编号与名称, 不保存; ABN 只差空格不算改, 不查重 (库里本客户自己的 ABN 不算撞上), 照常保存."""
+    from backend.orchestration import decisions
+
+    xero_like = NUMBAT_PROFILE.model_copy(
+        update={"id": "CLIENT-XERO-DEMO", "legal_name": "Demo Company (AU)", "abn": "25900043021"}
+    )
+    monkeypatch.setattr(decisions, "dataset_profiles", lambda datasets: [NUMBAT_PROFILE, xero_like])
     s = await started(TYPO_PROFILE)
+    with pytest.raises(DataRejected) as e:  # 撞上还没进库的数据集客户
+        await s.submit.update_client_profile(
+            EID, *profile_update(FIXED_PROFILE.model_copy(update={"abn": "25 900 043 021"})), updated_by="U-1"
+        )
+    assert (e.value.code, e.value.extra["client_id"]) == ("ABN_TAKEN", xero_like.id)
     wombat = NUMBAT_PROFILE.model_copy(update={"id": "CLIENT-M-0000000000aa", "legal_name": "Wombat Pty Ltd"})
     await s.engagement_store.create_client(
         wombat.model_copy(update={"abn": "44900043101"}), created_by="U-1", dataset_profiles=[]

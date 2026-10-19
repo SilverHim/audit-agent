@@ -80,18 +80,26 @@ async def test_lookup_maps_the_response(reply: str, expected: AbnRecord | None) 
 @pytest.mark.parametrize(
     ("reply", "reason"),
     [
-        ("guid_rejected", "rejected"),  # GUID 不被认可 (HTTP 200, 正文是 WEBSERVICES 异常)
+        # GUID 用不了的三种官方文案 (HTTP 200, 正文是 WEBSERVICES 异常): 未登记, 未注册该服务, 注册已取消
+        ("guid_rejected", "rejected"),
+        ("guid_unregistered", "rejected"),
+        ("guid_cancelled", "rejected"),
         ("system_error", "service_error"),  # 其余 WEBSERVICES 异常
         (500, "service_error"),
+        (307, "service_error"),  # 不跟随重定向: 带 GUID 的请求体不重发到 Location 的主机
+        ("bad_gzip", "service_error"),  # httpx 读正文时抛 DecodingError (不是传输错误)
         ("unreachable", "unreachable"),
     ],
 )
 async def test_lookup_failures_carry_only_the_category(reply: str | int, reason: str) -> None:
-    """查不了时抛 RegistryUnavailable, reason 为类别; 异常文本不带原始响应与原异常 (两者都回显了 GUID)."""
+    """查不了时抛 RegistryUnavailable, reason 为类别, 只发一次请求; 异常文本不带原始响应, 也不接原异常 (from None:
+    原异常不作 __cause__, 作 __context__ 时也被压制, 记 traceback 不会带出; 两者都回显了 GUID)."""
+    abr = FakeAbr({WOMBAT.abn: reply})
     with pytest.raises(RegistryUnavailable) as e:
-        await FakeAbr({WOMBAT.abn: reply}).client().abn(WOMBAT.abn)
-    assert e.value.reason == reason
-    assert e.value.__cause__ is None and FAKE_GUID not in str(e.value)
+        await abr.client().abn(WOMBAT.abn)
+    assert (e.value.reason, len(abr.requests)) == (reason, 1)
+    assert e.value.__cause__ is None and (e.value.__context__ is None or e.value.__suppress_context__)
+    assert FAKE_GUID not in str(e.value)
 
 
 def test_current_abn_is_taken_when_the_record_lists_several() -> None:
@@ -190,29 +198,47 @@ async def test_composite_routes_by_dataset() -> None:
         await new_client.abn("ENG-NONE", WOMBAT.abn)
 
 
+WOMBAT_RESULT = {  # 假 ABR 回放的有效登记 (tests/fixtures/abr/active.xml, 合成), 写成字面量
+    "abn": "44900043101",
+    "acn": "900043101",
+    "entity_name": "WOMBAT ANALYTICS PTY LTD",
+    "status": "Active",
+    "entity_type": "Australian Private Company",
+}
+SOLE_RESULT = {
+    "abn": "44900043101",
+    "acn": None,
+    "entity_name": "JANE MARY CITIZEN",
+    "status": "Active",
+    "entity_type": "Individual/Sole Trader",
+}
+
+
 @pytest.mark.parametrize(
-    ("reply", "checks"),
+    ("reply", "checks", "result"),
     [
-        ("active", [True, True, None]),  # ASIC 摘录未接入: 只有 company_registered 待人工确认
-        ("cancelled", [False, True, None]),
-        ("not_found", [False, False, False]),  # 查不到就没有 ACN, 不查 ASIC
+        ("active", [True, True, None], WOMBAT_RESULT),  # ASIC 摘录未接入: 只有 company_registered 待人工确认
+        ("cancelled", [False, True, None], {**WOMBAT_RESULT, "status": "Cancelled"}),
+        # 没有 ACN (个人独资) 或查不到: company_registered 只由 ASIC 来源判定, 没有来源即待人工确认, 不判不通过
+        ("sole_trader", [True, False, None], SOLE_RESULT),
+        ("not_found", [False, False, None], None),
     ],
 )
-async def test_acc04_checks_new_clients_against_abn_lookup(reply: str, checks: list[bool | None]) -> None:
-    """新客户 (没有数据集) 的 ACC-04 经组合登记来源实查 ABN Lookup: 有效, 已注销, 查不到三种, 每次查询一条留痕
-    (沿用现有的摘要与 payload, result 为解析出的登记记录)."""
+async def test_acc04_checks_new_clients_against_abn_lookup(
+    reply: str, checks: list[bool | None], result: dict[str, Any] | None
+) -> None:
+    """新客户 (没有数据集) 的 ACC-04 经组合登记来源实查 ABN Lookup: 有效, 已注销, 个人独资, 查不到, 每次查询一条
+    留痕 (沿用现有的摘要与 payload, result 为解析出的登记记录), ASIC 另记一条 "没有查询"."""
     abr = FakeAbr({WOMBAT.abn: reply})
     trail = FakeTrail()
     agent = ClientIntelAgent(make_deps(composite(abr, None), trail))  # type: ignore[arg-type]
     profile = NUMBAT_PROFILE.model_copy(update={"abn": WOMBAT.abn, "legal_name": "Wombat Analytics Pty Ltd"})
     found = await agent.collect_checks(make_ctx(agent.deps), profile)
     assert [c.passed for c in found] == checks
-    record = await FakeAbr({WOMBAT.abn: reply}).client().abn(WOMBAT.abn)
-    expected = record.model_dump(mode="json") if record is not None else None
-    assert (trail.entries[0].summary, trail.entries[0].payload) == (
-        f"ABN Lookup {WOMBAT.abn}",
-        {"abn": WOMBAT.abn, "result": expected},
-    )
+    abn_entry, asic_entry = trail.entries
+    assert (abn_entry.summary, abn_entry.payload) == (f"ABN Lookup {WOMBAT.abn}", {"abn": WOMBAT.abn, "result": result})
+    acn = result["acn"] if result is not None else None
+    assert asic_entry.payload == {"acn": acn, "available": False, "reason": "no_source", "result": None}
     assert len(abr.requests) == 1
 
 
@@ -227,26 +253,33 @@ async def lookup(abr: FakeAbr, *queries: dict[str, str], guid: str = FAKE_GUID) 
         return [await client.get(LOOKUP, params=q) for q in queries]
 
 
-@pytest.mark.parametrize(
-    ("reply", "legal_name", "expected"),
-    [
-        ("active", "Wombat Analytics Pty. Ltd.", {"status": "found", "name_matches": True}),  # 规范化后相同
-        ("active", "Wombat Data Pty Ltd", {"status": "found", "name_matches": False}),
-        ("active", "", {"status": "found", "name_matches": None}),  # 没给名称不比较
-        ("cancelled", "Wombat Analytics Pty Ltd", {"status": "found", "name_matches": True}),
-        ("suppressed", "Wombat Analytics Pty Ltd", {"status": "found", "name_matches": None}),  # 名称不公开
-        ("not_found", "Wombat Analytics Pty Ltd", {"status": "not_found", "record": None, "name_matches": None}),
-        (500, "Wombat Analytics Pty Ltd", {"status": "unavailable", "reason": "service_error", "record": None}),
-        ("guid_rejected", "", {"status": "unavailable", "reason": "rejected"}),
-    ],
-)
-async def test_lookup_endpoint(reply: str | int, legal_name: str, expected: dict[str, Any]) -> None:
-    [response] = await lookup(FakeAbr({WOMBAT.abn: reply}), {"abn": "44 900 043 101", "legal_name": legal_name})
-    assert response.status_code == 200
-    body = response.json()
-    assert {k: body[k] for k in expected} == expected
-    if body["status"] == "found":
-        assert body["record"]["abn"] == WOMBAT.abn and body["record"]["status"] in ("Active", "Cancelled")
+# 在线核对的各情形: (假接口的回复, 填写的法定名称, 预期的 status, name_matches, reason, record.status)
+ENDPOINT_CASES: list[tuple[str | int, str, tuple[str, bool | None, str | None, str | None]]] = [
+    ("active", "Wombat Analytics Pty. Ltd.", ("found", True, None, "Active")),  # 规范化后相同
+    ("active", "Wombat Data Pty Ltd", ("found", False, None, "Active")),
+    ("active", "", ("found", None, None, "Active")),  # 没给名称不比较
+    ("cancelled", "Wombat Analytics Pty Ltd", ("found", True, None, "Cancelled")),
+    ("suppressed", "Wombat Analytics Pty Ltd", ("found", None, None, "Active")),  # 名称不公开不比较
+    ("not_found", "Wombat Analytics Pty Ltd", ("not_found", None, None, None)),
+    (500, "Wombat Analytics Pty Ltd", ("unavailable", None, "service_error", None)),
+    ("guid_rejected", "", ("unavailable", None, "rejected", None)),
+]
+
+
+async def test_lookup_endpoint() -> None:
+    """各情形共用一个假接口与一个客户端 (每种回复一个合成 ABN, 同回复的同一 ABN; ABN 带空格写): 查到时返回登记
+    记录 (含已注销的状态) 与名称是否一致, 查不到为 not_found, 查不了为 unavailable 与原因类别, 都是 200."""
+    replies = list(dict.fromkeys(reply for reply, _, _ in ENDPOINT_CASES))
+    abns = {reply: synthetic_abn(20 + n) for n, reply in enumerate(replies)}
+    spaced = {reply: f"{a[:2]} {a[2:5]} {a[5:8]} {a[8:]}" for reply, a in abns.items()}
+    queries = [{"abn": spaced[reply], "legal_name": name} for reply, name, _ in ENDPOINT_CASES]
+    responses = await lookup(FakeAbr({abn: reply for reply, abn in abns.items()}), *queries)
+    for (reply, name, expected), response in zip(ENDPOINT_CASES, responses, strict=True):
+        body = response.json()
+        record = body["record"]
+        got = (body["status"], body["name_matches"], body["reason"], record["status"] if record else None)
+        assert (response.status_code, got) == (200, expected), (reply, name)
+        assert record is None or record["abn"] == abns[reply]
 
 
 async def test_lookup_endpoint_checks_digits_first_and_queries_each_abn_once() -> None:
@@ -291,8 +324,12 @@ REPLIES: dict[str, str | int] = {
             "not_found",
             "invalid_abn",
             "guid_rejected",
+            "guid_unregistered",
+            "guid_cancelled",
             "system_error",
             500,
+            307,
+            "bad_gzip",
             "unreachable",
         ]
     )
@@ -300,8 +337,8 @@ REPLIES: dict[str, str | int] = {
 
 
 async def test_guid_never_leaves_the_adapter(caplog: pytest.LogCaptureFixture) -> None:
-    """假接口的每种响应 (都回显了 GUID) 各走一遍适配器, ACC-04 (新客户, 组合登记来源) 与在线核对接口, DEBUG 日志全开:
-    日志全文, 全部留痕, 接口响应正文与各异常的文本里都没有假 GUID; 请求 URL 也没有."""
+    """假接口的每种响应 (都回显了 GUID, 含重定向与正文解压失败) 各走一遍适配器, ACC-04 (新客户, 组合登记来源) 与
+    在线核对接口, DEBUG 日志全开: 日志全文, 全部留痕, 接口响应正文与各异常的文本里都没有假 GUID; 请求 URL 也没有."""
     caplog.set_level(logging.DEBUG)
     abr = FakeAbr(REPLIES)
     assert all(FAKE_GUID.encode() in abr.echoed(abn) for abn in REPLIES)  # 假接口确实回显了 GUID

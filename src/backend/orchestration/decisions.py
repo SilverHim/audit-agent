@@ -974,7 +974,8 @@ class GraphDecisionSubmit:
             if problem is not None:
                 raise DecisionRejected("INVALID_VALUE", problem)
             changed = latest is None or normalize_abn(latest.abn) != normalize_abn(profile.abn)
-            others = dataset_profiles(self.deps.datasets) if changed else None  # ABN 没变不查重
+            # ABN 没变不查重: 本客户自己本就不算撞上, 查了结果相同, 只省一次全表读与 clients 咨询锁
+            others = dataset_profiles(self.deps.datasets) if changed else None
 
             async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
                 try:

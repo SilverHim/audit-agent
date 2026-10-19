@@ -54,12 +54,16 @@ class AbnLookupClient:
             raise RegistryUnavailable("ABN Lookup 未配置 GUID", reason="not_configured")
         form = {"searchString": normalize_abn(abn), "includeHistoricalDetails": "N", "authenticationGuid": self._guid}
         try:
-            async with httpx.AsyncClient(transport=self.transport, timeout=TIMEOUT) as client:
+            # 不跟随重定向 (显式写明, 不靠缺省值): 307/308 会把带 GUID 的请求体重发到 Location 指的主机
+            async with httpx.AsyncClient(transport=self.transport, timeout=TIMEOUT, follow_redirects=False) as client:
                 response = await client.post(self.url, data=form)
         except httpx.TransportError as exc:  # 连接失败, 超时等; 异常只带类别, 不接原异常 (请求体含 GUID)
             logger.warning("ABN Lookup 不可达: %s", type(exc).__name__)
             raise RegistryUnavailable("ABN Lookup 不可达", reason="unreachable") from None
-        if response.status_code != 200:
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:  # 其余 (正文解压失败, URL 配错等) 算服务出错, 同样不接原异常
+            logger.warning("ABN Lookup 出错: %s", type(exc).__name__)
+            raise RegistryUnavailable("ABN Lookup 出错", reason="service_error") from None
+        if response.status_code != 200:  # 含 3xx (不跟随)
             logger.warning("ABN Lookup 返回 HTTP %s", response.status_code)
             raise RegistryUnavailable(f"ABN Lookup 返回 HTTP {response.status_code}", reason="service_error")
         return parse_abn_response(response.content)

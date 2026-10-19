@@ -439,10 +439,11 @@ async def test_run_raises_when_profile_missing() -> None:
 
 
 class Unavailable(FakeRegistry):
-    """查不了登记的假登记: ABN 查询 (asic_only 时只有 ASIC 查询) 抛 RegistryUnavailable(reason); ABN 照常查 Numbat."""
+    """查不了登记的假登记: ABN 查询 (asic_only 时只有 ASIC 查询) 抛 RegistryUnavailable(reason); ABN 照常查,
+    登记记录缺省为 Numbat 的."""
 
-    def __init__(self, reason: RegistryReason, *, asic_only: bool = False) -> None:
-        super().__init__({"68900042015": NUMBAT_ABN})
+    def __init__(self, reason: RegistryReason, *, asic_only: bool = False, record: AbnRecord = NUMBAT_ABN) -> None:
+        super().__init__({"68900042015": record})
         self.reason, self.asic_only = reason, asic_only
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None:
@@ -450,7 +451,7 @@ class Unavailable(FakeRegistry):
             raise RegistryUnavailable("x", reason=self.reason)
         return await super().abn(eid, abn)
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         raise RegistryUnavailable("x", reason=self.reason)
 
 
@@ -476,14 +477,18 @@ async def test_abn_unavailable_leaves_all_three_checks_for_manual_confirmation()
     assert len(details) == len(REASONS)
 
 
-async def test_asic_unavailable_leaves_only_company_registered() -> None:
-    """ABN 查到 (外部原件), ASIC 查不了 (新建的客户, 摘录未接入): 前两项照常判, 只有 company_registered 待人工确认,
-    证据指向另记的 ASIC "未查询" 留痕."""
-    agent, trail = make_agent(Unavailable("no_source", asic_only=True))
+@pytest.mark.parametrize("acn", ["900042015", None])  # None: ABN 记录没有 ACN (个人独资, 信托等)
+async def test_asic_unavailable_leaves_only_company_registered(acn: str | None) -> None:
+    """ABN 查到 (外部原件), 没有 ASIC 来源 (新建的客户, 摘录未接入): 前两项照常判, 只有 company_registered 待人工
+    确认, 证据指向另记的 ASIC "未查询" 留痕; ABN 记录没有 ACN 时同样, 不判不通过 (company_registered 只由 ASIC 来源
+    判定)."""
+    agent, trail = make_agent(
+        Unavailable("no_source", asic_only=True, record=NUMBAT_ABN.model_copy(update={"acn": acn}))
+    )
     patch = await agent.run(make_ctx(agent.deps))
     checks = patch["acceptance_scorecard"].registry_checks
     abn_entry, asic_entry = trail.entries
-    assert asic_entry.payload == {"acn": "900042015", "available": False, "reason": "no_source", "result": None}
+    assert asic_entry.payload == {"acn": acn, "available": False, "reason": "no_source", "result": None}
     assert [(c.passed, c.evidence.source_id) for c in checks] == [
         (True, abn_entry.id),
         (True, abn_entry.id),
