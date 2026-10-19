@@ -670,10 +670,13 @@ class XeroLink:
         的值或画像变了, 已处理过, 或本来一致) 409 PROFILE_CHECK_STALE, 并发的两次选择只有一次写成.
 
         keep: 理由必填 (去首尾空白后为空 422 MISSING_FIELD), 写 data 留痕 xero_profile_kept.
-        update: 新版本只改对不上的项 (differences; 名称规范化后相同时保留画像原写法), 其余字段沿用该客户最新一版,
-        来源 xero. 只有停在 ACC-01 闸门时本项目采用新版本: 走更新客户资料 (decisions.update_client_profile), 由它取
-        项目锁, 锁内先按 precheck 重新核对 key, 再查闸门与版本, 路由回 p0_intel 重跑 ACC-04 再呈报. 其余时候 (未到
-        ACC-01 或已过) 在本方法的锁内只给客户写新版本 (下一年度新建项目带出), 本项目照用已采用的版本, 不写检查点.
+        update: 以该客户最新一版为底, 只改 Xero 与这一版对不上的项 (profile_differences, 名称规范化后相同时保留
+        这一版的写法), 其余字段沿用, 来源 xero; 是否提示按本项目采用的版本比 (differences), 改哪些项按合并的底比,
+        两版不同时 (本项目采用的版本落后于最新一版) 写出的仍与 Xero 一致. 最新一版已与 Xero 一致时照写一版
+        (内容同最新一版). 只有停在 ACC-01 闸门时本项目采用新版本: 走更新客户资料 (decisions.update_client_profile),
+        由它取项目锁, 锁内先按 precheck 重新核对 key, 再查闸门与版本, 路由回 p0_intel 重跑 ACC-04 再呈报. 其余时候
+        (未到 ACC-01 或已过) 在本方法的锁内只给客户写新版本 (下一年度新建项目带出), 本项目照用已采用的版本, 不写
+        检查点.
         两条路径的 ABN 校验同 ACC-01 更新客户资料 (需求 R289): 校验位不对 422 INVALID_VALUE (闸门外只在改 ABN 时查),
         改了 ABN 而已是别的客户的 409 ABN_TAKEN; 都不写画像与留痕, 核对仍待处理 (审计师可改为保持原样并写理由).
         写 data 留痕 xero_profile_updated (版本, 本项目是否采用). 留痕写不进时报错 (选择就记在留痕里)."""
@@ -693,11 +696,15 @@ class XeroLink:
                 summary = f"不按 Xero 组织信息更新客户画像, 保持第 {check.profile_version} 版"
                 await self.write(eid, actor, summary, {"action": "xero_profile_kept", **payload, "reason": text})
                 return await self.current_check(eid)
-            fields = {"legal_name": check.xero_legal_name, "abn": check.xero_abn}
-            changes: dict[str, Any] = {name: fields[name] for name in check.differences}
             latest = await self.deps.engagement_store.client_profile(engagement.client_id)
             if latest is None:
                 raise LookupError(f"客户 {engagement.client_id} 没有画像")
+            # 合并以最新一版为底, 改哪些项也按它比: 按采用的版本比时, 采用的版本落后的项会沿用最新一版里与 Xero
+            # 不同的值. 闸门内 update_client_profile 以通过版本校验的最新一版为底, 版本号按这里读到的最新一版 +1,
+            # 期间别处写了新版本即 VERSION_MISMATCH, 合并的底与这里比的是同一版
+            fields = {"legal_name": check.xero_legal_name, "abn": check.xero_abn}
+            differing = profile_differences(check.xero_legal_name, check.xero_abn, latest)
+            changes: dict[str, Any] = {name: fields[name] for name in differing}
             version = latest.version + 1
             adopted = await self.data.gate_now(eid) is GateId.ACC_01
             updated = {"action": "xero_profile_updated", **payload, "version": version, "adopted": adopted}

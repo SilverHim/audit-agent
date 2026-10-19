@@ -5,15 +5,18 @@ Xero 用 tests/test_xero_link.FakeXero (假值, 回放快照)."""
 import os
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, cast
 from uuid import uuid4
 
 import httpx
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.contracts.data import XERO_TABLES, XeroConnection, XeroTenant
+from backend.orchestration.checkpoint import checkpoint_serde
+from backend.orchestration.graph import compile_graph
+from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 from backend.persistence import models as m
 from backend.persistence.db import transaction
@@ -107,7 +110,10 @@ async def test_connect_sync_disconnect_on_real_stores(storage, tmp_path: Path) -
     engine, (synced, loaded), user = storage
     url = os.environ["TEST_DATABASE_URL"]
     deps = build_deps(Settings(_env_file=None, DATABASE_URL=url, EVIDENCE_ROOT=tmp_path, LLM_MODE="mock"))  # type: ignore[call-arg]
-    data = DataService(deps, GraphRunner(cast(Any, None), deps, {"mode": "mock", "model": "mock"}))
+    # 主图同组装根 (main.lifespan) 编译, 检查点放内存: 概览的 Xero 核对要读检查点所在的闸门 (DataService.gate_now);
+    # 这个项目没有启动, 检查点为空
+    graph = compile_graph(GraphNodes(deps, 2), InMemorySaver(serde=checkpoint_serde()))
+    data = DataService(deps, GraphRunner(graph, deps, {"mode": "mock", "model": "mock"}))
     store = PostgresXeroConnectionStore(engine)
     fake = FakeXero()
     clock = [START]
@@ -140,6 +146,9 @@ async def test_connect_sync_disconnect_on_real_stores(storage, tmp_path: Path) -
     assert (source.tenant_id, source.syncing) == (DEMO["tenantId"], False)
     assert source.last_sync is not None and (source.last_sync.ok, source.last_sync.tables) == (True, list(XERO_TABLES))
     assert (source.last_sync.skipped, source.last_sync.reason) == ({}, None)
+    # 画像与组织信息出自同一份快照: 一致; 项目没有启动, 检查点不在任何闸门, 承接阶段 (before)
+    check = source.profile_check
+    assert check is not None and (check.differences, check.stage, check.next_version) == ([], "before", 2)
 
     clock[0] += timedelta(minutes=5)
     assert await link.disconnect(synced.id, user)

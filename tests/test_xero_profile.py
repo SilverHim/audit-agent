@@ -149,6 +149,7 @@ async def test_check_follows_trail_connection_and_stage() -> None:
 
 PROFILE = API + "/profile-check"
 SYNTH_ABN = "53900040171"  # 合成, 校验位正确, 不是任何客户或数据集画像的 ABN
+BAD_CHECK_ABN = "53900040172"  # 合成, 11 位而校验位不对
 
 
 def organisation_copy(c: Case, tmp_path: Path, name: str, **fields: str) -> None:
@@ -190,12 +191,15 @@ def resolutions(c: Case) -> list[dict[str, Any]]:
     ]
 
 
-async def taken_by_numbat(http: httpx.AsyncClient, c: Case, key: str) -> list[int]:
-    """Xero 带出的 ABN 是另一个客户 (Numbat 数据集画像) 的: update 报 409 ABN_TAKEN (同 ACC-01 更新客户资料的查重,
-    带那个客户的编号), 不写画像与留痕, 核对仍待处理. 返回此时客户画像的各版版本号."""
+async def update_refused(http: httpx.AsyncClient, c: Case, key: str, status: int, code: str) -> list[int]:
+    """update 因 Xero 带出的 ABN 被拒 (同 ACC-01 更新客户资料的 ABN 校验): 是另一个客户 (Numbat 数据集画像) 的报 409
+    ABN_TAKEN, 带那个客户的编号; 校验位不对报 422 INVALID_VALUE. 都不写画像与留痕, 核对仍待处理. 返回此时客户画像的
+    各版版本号."""
     response = await choose(http, c, key, "update")
     detail = response.json()["detail"]
-    assert (response.status_code, detail["code"], detail["client_id"]) == (409, "ABN_TAKEN", NUMBAT_PROFILE.id)
+    assert (response.status_code, detail["code"]) == (status, code), response.text
+    if code == "ABN_TAKEN":
+        assert detail["client_id"] == NUMBAT_PROFILE.id
     assert [p for p in resolutions(c) if p["key"] == key] == []
     check = (await xero_source(http, c))["profile_check"]
     assert (check["key"], check["resolution"]) == (key, None)
@@ -224,14 +228,17 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
     4. 副本再改 ABN 再同步: 新的一次核对 (key 变了), 两项都提示; 旧 key 409 PROFILE_CHECK_STALE. 停在 ACC-01 的
        update 放开本方法的锁到 update_client_profile 取锁之间插进一次 keep: keep 写成, update 在锁内重新核对报 409
        (R291-02), 同一 key 只记一种选择.
-    5. Xero 带出的 ABN 是另一个客户的: update 409 ABN_TAKEN, 不写, 核对仍待处理 (闸门内与闸门外各一次).
+    5. Xero 带出的 ABN 是另一个客户的: update 409 ABN_TAKEN, 不写, 核对仍待处理 (闸门内与闸门外各一次; 闸门外另有
+       一次校验位不对: 422 INVALID_VALUE, 同样不写, R291-14).
        闸门内 update (另一份副本): 画像第 2 版 (来源 xero, 两项取 Xero 的), 本项目采用, decision 留痕带 source, 重跑
        ACC-04 回到 ACC-01; 之后一致, 不提示.
     6. 通过 ACC-01 后改名称同步 (stage after), update 只给客户写第 3 版 (来源 xero, 写入人为当前用户), 本项目仍用第 2
        版, 核对记为已处理 (adopted 假); 写选择的留痕时插进同一 key 的另一次 update: 报 409, 客户只多一版 (R291-01);
        同一 key 再选 409.
-    7. 名称只是写法不同而 ABN 不同: 只提示 ABN, next_version 4 (客户最新第 3 版 +1, 本项目用第 2 版); update 以客户
-       最新一版为底, 只改 ABN, 法定名称保留第 3 版的写法 (R291-09).
+    7. 改哪些项按客户最新一版比, 不按本项目采用的版本 (R291-13): Xero 名称与采用的第 2 版只差写法而与最新第 3 版不同,
+       ABN 也不同: 只提示 ABN, next_version 4; update 写出的第 4 版名称与 ABN 都取 Xero 的 (与 Xero 一致). Xero 名称再换
+       一种与第 4 版只差写法的, ABN 不同: 第 5 版只改 ABN, 名称保留第 4 版的写法 (R291-09). Xero 与最新第 5 版完全相同
+       而与采用的版本 ABN 不同: 照写第 6 版, 内容同第 5 版.
     8. 再改名称同步后项目锁定: 待办里不列, 选择 423 ENGAGEMENT_LOCKED.
     """
     require_xero_snapshot(XERO_SNAPSHOT)  # 假 Xero 回放这个快照
@@ -317,7 +324,7 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
 
         organisation_copy(c, tmp_path, "taken", LegalName=renamed, RegistrationNumber=NUMBAT_PROFILE.abn)
         taken = await sync(http, c)
-        assert taken is not None and await taken_by_numbat(http, c, taken["key"]) == [1]
+        assert taken is not None and await update_refused(http, c, taken["key"], 409, "ABN_TAKEN") == [1]
 
         adopted_name = "Demo Company (AU) Pty Ltd"  # 合成
         organisation_copy(c, tmp_path, "adopted", LegalName=adopted_name, RegistrationNumber=SYNTH_ABN)
@@ -350,7 +357,11 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
         holdings = "Demo Company (AU) Holdings Pty Ltd"  # 合成
         organisation_copy(c, tmp_path, "taken-later", LegalName=holdings, RegistrationNumber=NUMBAT_PROFILE.abn)
         taken = await sync(http, c)
-        assert taken is not None and await taken_by_numbat(http, c, taken["key"]) == [1, 2]
+        assert taken is not None and await update_refused(http, c, taken["key"], 409, "ABN_TAKEN") == [1, 2]
+        organisation_copy(c, tmp_path, "bad-check", LegalName=holdings, RegistrationNumber=BAD_CHECK_ABN)
+        bad = await sync(http, c)
+        assert bad is not None and bad["differences"] == ["legal_name", "abn"]
+        assert await update_refused(http, c, bad["key"], 422, "INVALID_VALUE") == [1, 2]
         organisation_copy(c, tmp_path, "later", LegalName=holdings, RegistrationNumber=SYNTH_ABN)
         fourth = await sync(http, c)
         assert fourth is not None and (fourth["differences"], fourth["stage"]) == (["legal_name"], "after")
@@ -384,13 +395,27 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
         repeat = await choose(http, c, fourth["key"], "update")
         assert (repeat.status_code, repeat.json()["detail"]["code"]) == (409, "PROFILE_CHECK_STALE")
 
-        new_abn = "83914571673"  # 合成
-        organisation_copy(c, tmp_path, "styled", LegalName="DEMO COMPANY (AU) PTY. LTD.", RegistrationNumber=new_abn)
+        new_abn, other_abn = "83914571673", "72900040170"  # 合成
+        styled = "DEMO COMPANY (AU) PTY. LTD."  # 与采用的第 2 版只差写法, 与最新第 3 版 (Holdings) 不同
+        organisation_copy(c, tmp_path, "styled", LegalName=styled, RegistrationNumber=new_abn)
         fifth = await sync(http, c)
         assert fifth is not None and (fifth["differences"], fifth["next_version"]) == (["abn"], 4)
         assert (await choose(http, c, fifth["key"], "update")).status_code == 200
         v4 = await es.client_profile(engagement.client_id)
-        assert v4 is not None and (v4.version, v4.legal_name, v4.abn) == (4, holdings, new_abn)
+        assert v4 is not None and (v4.version, v4.legal_name, v4.abn) == (4, styled, new_abn)
+        organisation_copy(c, tmp_path, "restyled", LegalName=adopted_name, RegistrationNumber=other_abn)
+        restyled = await sync(http, c)
+        assert restyled is not None and (restyled["differences"], restyled["next_version"]) == (["abn"], 5)
+        assert (await choose(http, c, restyled["key"], "update")).status_code == 200
+        v5 = await es.client_profile(engagement.client_id)
+        assert v5 is not None and (v5.version, v5.legal_name, v5.abn) == (5, styled, other_abn)
+        organisation_copy(c, tmp_path, "as-latest", LegalName=styled, RegistrationNumber=other_abn)
+        as_latest = await sync(http, c)
+        assert as_latest is not None and as_latest["differences"] == ["abn"]
+        assert (await choose(http, c, as_latest["key"], "update")).status_code == 200
+        v6 = await es.client_profile(engagement.client_id)
+        assert v6 is not None and v6.model_dump(exclude={"version"}) == v5.model_dump(exclude={"version"})
+        assert [r.profile.version for r in await es.profile_history(engagement.client_id)] == [1, 2, 3, 4, 5, 6]
 
         organisation_copy(c, tmp_path, "locked", LegalName="Demo Company (AU) Services Pty Ltd")  # 合成
         sixth = await sync(http, c)
