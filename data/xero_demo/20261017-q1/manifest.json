@@ -376,6 +376,27 @@
       "xero_refs": []
     },
     {
+      "path": "llm/DOC-04/CON-X01.json",
+      "sha256": "1a20c44f75ea2d24e8401fe96ab8f3cb87916a03184783ac28f37b487c74c108",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-04/CON-X02.json",
+      "sha256": "8b674e5723b35b7763fca013456b5d22b21c56d6c2af71760f6b214f36202c94",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-04/CON-X03.json",
+      "sha256": "1b6179028092defe5c0a6a93bc183543fbd8df732869eb8930db8bb5f77cd587",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/DOC-SHEET/accounts.json",
       "sha256": "9f5a57dc7d9872fa38a21ce5e1f6bc3959c11a065d84fa1cb509d2218a4a4ab7",
       "synthetic": true,

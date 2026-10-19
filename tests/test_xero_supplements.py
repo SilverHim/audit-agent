@@ -391,6 +391,18 @@ def test_tables_reject_repeated_invoice_number_in_snapshot(tmp_path: Path) -> No
     assert tables_error(api, demo) == "补造文件与快照不匹配: delivery_notes.csv 的发票号 ORC1024 在快照中找不到或不唯一"
 
 
+def test_verify_files_checks_the_supplements_without_the_snapshot(tmp_path: Path) -> None:
+    """R97: verify_files 只核补造目录自身, 快照不在也能核 (测试假存储用); 补造文件被改照样报不匹配."""
+    from backend.adapters.xero_supplements import Supplements
+
+    _, demo = copies(tmp_path)
+    found = Supplements(demo / "20261017-q1", tmp_path / "没有快照", DATASET)
+    assert found.verify_files()["dataset"] == DATASET
+    (demo / "20261017-q1" / "delivery_notes.csv").write_text("id\n", encoding="utf-8")
+    with pytest.raises(SupplementMismatch, match=r"delivery_notes\.csv"):
+        found.verify_files()
+
+
 # ── 需求 R96: 数据集声明与工资册 ──
 
 

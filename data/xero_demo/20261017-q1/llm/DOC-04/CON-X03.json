@@ -1,0 +1,58 @@
+{
+  "counterparty": "Maddox Publishing Group",
+  "counterparty_abn": "21900043067",
+  "amount_cents": 420000,
+  "sign_date": "2026-08-10",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "counterparty",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "counterparty_abn",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "amount_cents",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "sign_date",
+      "page": 1
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "text": "4.1 Each On-site Day is accepted when the Customer signs the timesheet for that day.",
+      "page": 2
+    },
+    {
+      "term_type": "payment",
+      "text": "5.1 The Supplier will issue a tax invoice after the sixth On-site Day. The Customer must pay the invoice within 10 days after the date of the invoice.",
+      "page": 2
+    },
+    {
+      "term_type": "rebate",
+      "text": "6.1 If the project manager is absent for part of an On-site Day, the Supplier will credit $350.00 for each half day of absence.",
+      "page": 3
+    },
+    {
+      "term_type": "termination",
+      "text": "7.1 Either party may terminate this Agreement by giving 5 Business Days' written notice to the other party.",
+      "page": 3
+    }
+  ]
+}

@@ -1445,15 +1445,21 @@ class FakeJudgmentEngine:
 class FakeConfirmationChannel:
     """假函证平台: 按账户返回预置回执 (回函内容为 "{账号} reply"), 同一幂等键返回第一次的同一回执; submits 记下每次调用.
 
-    channel 为回函渠道; replies 为假时回执没有回函; body 非空时各账户的回函内容都取它 (可为 b"").
+    channel 为回函渠道; replies 为假时回执没有回函; body 非空时各账户的回函内容都取它 (可为 b""); bodies 按账号给
+    各账户的回函内容 (如 Xero 演示的回函 PDF), 没给的账户照前两条.
     """
 
     def __init__(
-        self, channel: ReceiptChannel = ReceiptChannel.direct_email, replies: bool = True, body: bytes | None = None
+        self,
+        channel: ReceiptChannel = ReceiptChannel.direct_email,
+        replies: bool = True,
+        body: bytes | None = None,
+        bodies: Mapping[str, bytes] | None = None,
     ) -> None:
         self.channel = channel  # 回函渠道
         self.replies = replies  # 是否回函
         self.body = body  # 统一的回函内容, 为空时按账号生成
+        self.bodies = dict(bodies or {})  # 账号 → 回函内容, 优先于 body
         self.receipts: dict[str, ConfirmationReceipt] = {}  # 幂等键 -> 第一次的回执
         self.submits: list[tuple[str, ConfirmationRequest]] = []  # (幂等键, 请求), 按调用顺序
 
@@ -1464,12 +1470,16 @@ class FakeConfirmationChannel:
                 sent_at=datetime(2026, 7, 1, 9, len(self.receipts), tzinfo=UTC),
                 replied_at=date(2026, 7, 8) if self.replies else None,
                 reply_file_name=f"{req.account_no}.pdf" if self.replies else None,
-                reply_bytes=(self.body if self.body is not None else f"{req.account_no} reply".encode())
-                if self.replies
-                else None,
+                reply_bytes=self.reply_body(req.account_no) if self.replies else None,
                 receipt_channel=self.channel if self.replies else None,
             )
         return self.receipts[idempotency_key]
+
+    def reply_body(self, account_no: str) -> bytes:
+        """回函内容: bodies 中的, 否则 body, 否则 "{账号} reply"."""
+        if account_no in self.bodies:
+            return self.bodies[account_no]
+        return self.body if self.body is not None else f"{account_no} reply".encode()
 
 
 class FakeUserStore:
