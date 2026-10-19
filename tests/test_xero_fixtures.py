@@ -1,7 +1,8 @@
 """Xero 演示的大模型 fixture 守卫 (R78 验收 4 (b) 至 (d)): tests/fixtures/llm_xero/<程序>/<对象>.json. 上传分类
 (DOC-CLASSIFY, 需求 R267) 的 fixture 按文件名主干取, 补造的每份要上传的 PDF 一份, 另有 mock 下 Xero 项目上传的分类.
 登记了对应的程序 (fixture_sets.expected_documents), document 指针还须指向对应的补造 PDF (需求 R108,
-xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记.
+xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记. REV-03 三份合同的 fixture 经真实
+判断引擎一次通过, 结论与证据按 Xero 演示数据集设计第 6.2 节 (需求 R109).
 
 正本与运行副本 (data/xero_demo/20261017-q1/llm) 相同由 tests/test_knowledge.py 按 FIXTURE_SETS 核对. 这里按集合包含
 断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里 (要核对文件对应的在
@@ -15,18 +16,32 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from backend.adapters.llm import MockLLMClient
+from backend.agents.base import RunContext
+from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import CLASSIFY
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import DocumentClassification
-from backend.contracts.models import DocumentType, TrailKind
+from backend.contracts.models import (
+    CriticVerdict,
+    DocumentType,
+    Phase,
+    ProposedAction,
+    RunStatus,
+    StepKind,
+    TaskKind,
+    TrailEntry,
+    TrailKind,
+)
+from backend.contracts.state import StatePatch
 from backend.core.config import get_settings
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model
@@ -38,11 +53,22 @@ from tests.fakes import (
     FakeEngagementStore,
     FakeFinancialStore,
     FakeTrail,
+    make_ctx,
     make_runner,
 )
 from tests.fixture_sets import XERO, XERO_DEMO, ExpectedDocuments, FixtureSet, expected_documents
 from tests.test_knowledge import document_pointers
-from tests.xero_fakes import xero_tables, xero_uploads
+from tests.xero_fakes import (
+    make_xero_deps,
+    xero_contracts,
+    xero_documents,
+    xero_engagement,
+    xero_presets,
+    xero_profile,
+    xero_tables,
+    xero_traits,
+    xero_uploads,
+)
 
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 EVIDENCE_TYPES = {t.value for t in DOCUMENT_EVIDENCE}  # 能作证据的文件类型, 判断引擎的文件指针映射为准
@@ -370,3 +396,123 @@ async def test_xero_upload_is_classified_by_the_runtime_copy() -> None:
         if e.kind is TrailKind.data and e.payload.get("document_id") == invoice.id and e.payload["action"] == "classify"
     ]
     assert classified["reason"] == runtime["reason"]
+
+
+# ── REV-03 (需求 R109): 三份收入合同的条款评价, 经真实判断引擎 ──
+
+REV03_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]
+
+
+@dataclass
+class Rev03:
+    patch: StatePatch  # A6 执行 REV-03 一次的片段
+    calls: list[TrailEntry]  # 大模型调用的留痕, 按调用顺序
+
+
+async def run_rev03() -> Rev03:
+    """A6 在 Xero 假存储上执行 REV-03 第 1 次 (同 test_fieldwork_rev03 的 setup): 合同与文件登记为演示导入之后的,
+    目标为 Xero 预置的收入两条; 主模型与复核模型都是读正本 (llm_xero) 的 MockLLMClient, A7 按自主度 L2 跳过."""
+    trail = FakeTrail()
+    client = MockLLMClient(XERO.fixtures)
+    deps = make_xero_deps(trail=trail, llm=client, review_llm=client)
+    engagement = xero_engagement()
+    ctx = make_ctx(deps, "REV-03", engagement=engagement)
+    procedure = ctx.procedure.model_copy(
+        update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}
+    )
+    objectives, risks = xero_presets()
+    params = deps.library.resolve_params(
+        ctx.template, engagement, ctx.state, None, traits=xero_traits(), profile=xero_profile()
+    )
+    state = ctx.state | {
+        "procedure_pack": [procedure],
+        "audit_objectives": objectives,
+        "risk_register": risks,
+        "documents": xero_documents("fieldwork"),
+    }
+    run = ctx.run.model_copy(update={"params_snapshot": params})
+    patch = await FieldworkAgent(deps).run(RunContext(engagement, procedure, ctx.template, run, state))  # type: ignore[arg-type]
+    return Rev03(patch, [e for e in trail.entries if e.kind is TrailKind.llm_call])
+
+
+@pytest.fixture(scope="module")
+def rev03() -> Rev03:
+    return asyncio.run(run_rev03())
+
+
+@pytest.mark.external
+def test_rev03_fixtures_pass_real_engine(rev03: Rev03) -> None:
+    """验收 1, 5: 三份合同各调一次大模型 (第 1 次就通过), 提示词的 Standards 依次列出 AASB15-P31, P35, P38; 三条判断
+    J-REV-03-1-CON-X01 至 X03 都是 accept, 没有错报草稿, 推理链没有 assumption 步骤, A7 按 L2 跳过; 三条 normal
+    任务, 没有 failed 任务; 执行成功."""
+    assert [(e.procedure_id, e.payload["fixture_key"]) for e in rev03.calls] == [("REV-03", c) for c in REV03_CONTRACTS]
+    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in rev03.calls} == {(1, None)}
+    for entry in rev03.calls:
+        prompt = entry.payload["messages"][0]["content"]
+        listed = prompt.split("Standards (cite only these IDs):\n", 1)[1].split("\n## ", 1)[0].splitlines()
+        cited = [line.split(" ", 2)[1] for line in listed if line.startswith("- ")]
+        assert cited == ["AASB15-P31", "AASB15-P35", "AASB15-P38"], entry.payload["fixture_key"]
+    judgments = rev03.patch["judgments"]
+    assert [j.id for j in judgments] == [f"J-REV-03-1-{c}" for c in REV03_CONTRACTS]
+    for j in judgments:
+        assert (j.proposed_action, j.misstatement_draft, j.critic_verdict) == (
+            ProposedAction.accept,
+            None,
+            CriticVerdict.skipped,
+        )
+        assert j.critic_reason is not None and j.critic_reason.startswith("L2")
+        assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}, j.id
+    assert [(t.id, t.kind) for t in rev03.patch["review_tasks"]] == [
+        (f"T-J-REV-03-1-{c}-v1", TaskKind.normal) for c in REV03_CONTRACTS
+    ]
+    [run] = rev03.patch["procedure_runs"]
+    assert run.status is RunStatus.succeeded
+
+
+def sentence_with(text: str, anchor: str) -> str:
+    """结论中含 anchor (条款 ID) 的那一句."""
+    [found] = [s for s in re.split(r"(?<=\.)\s+", text) if anchor in s]
+    return found
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("contract", "transfer", "other", "standards"),
+    [
+        (  # 完工日 (部署且 Project Sponsor 签完工证书) 某一时点转移; 7.2 完工前终止无权收款, 第 35(b)(c) 段不满足
+            "CON-X01",
+            ("Completion Date", "deployed", "Project Sponsor", "Completion Certificate", "point in time", "AASB15-P38"),
+            ("7.2", "not entitled to payment", "35(b) and (c)", "not met"),
+            ["AASB15-P31", "AASB15-P35", "AASB15-P38"],
+        ),
+        (  # 每个自然月随服务提供取得利益, 随时间转移; 6.1 响应超时可索赔 10%, 取决于未来事件
+            "CON-X02",
+            ("each calendar month", "simultaneously receives and consumes", "over time", "35(a)"),
+            ("6.1", "10%", "4 business hours", "future event"),
+            ["AASB15-P31", "AASB15-P35"],
+        ),
+        (  # 每个驻场日按客户签字的工时表确认, 随时间转移; 6.1 项目经理缺席每半日贷记 350
+            "CON-X03",
+            ("On-site Day", "signs the timesheet", "over time", "35(a)"),
+            ("6.1", "$350.00", "half day", "absent"),
+            ["AASB15-P31", "AASB15-P35"],
+        ),
+    ],
+)
+def test_rev03_conclusion_and_evidence(
+    rev03: Rev03, contract: str, transfer: tuple[str, ...], other: tuple[str, ...], standards: list[str]
+) -> None:
+    """验收 2 至 4: 结论里定转移的一句引 T1 (转移事件与方式), 另一句引 T3 (影响收入的其他条款); 证据含该合同文件
+    T1 (第 2 页), T3 (第 3 页) 两条款的指针与所列准则片段. 只查关键词, 不比整句."""
+    [j] = [j for j in rev03.patch["judgments"] if j.subject_id == contract]
+    first, second = sentence_with(j.conclusion, f"{contract}-T1"), sentence_with(j.conclusion, f"{contract}-T3")
+    for text in transfer:
+        assert text in first, text
+    for text in other:
+        assert text in second, text
+    document = {c.id: c.document_id for c in xero_contracts()}[contract]
+    pointers = {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence}
+    assert {("document", document, f"{contract}-T1", 2), ("document", document, f"{contract}-T3", 3)} <= pointers
+    assert {(p.source_id, p.locator) for p in j.evidence if p.source_type == "standard"} >= {
+        (s, f"para {s.removeprefix('AASB15-P')}") for s in standards
+    }
