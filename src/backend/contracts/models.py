@@ -779,16 +779,17 @@ class ScheduleRow(Model):
 class RegistryCheck(Model):
     """ACC-04 的一项登记检查结果."""
 
-    check: Literal["abn_active", "name_match", "company_registered"]  # 检查项
+    # 检查项; directors_match (画像董事与 ASIC 摘录的董事一致) 只对新建的客户 (需求 R290)
+    check: Literal["abn_active", "name_match", "company_registered", "directors_match"]
     passed: bool | None  # 是否通过; None 为没有可查的登记来源 (新建的客户), 待审计师人工确认, 不出例外
     detail: str  # 给审计师看的说明
     evidence: EvidencePointer  # 指向那次登记查询的留痕
 
 
 class AcceptanceScorecard(Versioned):
-    """承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料."""
+    """承接评分卡: ACC-04 各项检查的汇总 (数据集客户三项, 新建的客户四项, 需求 R290), ACC-01 闸门的呈报材料."""
 
-    registry_checks: list[RegistryCheck]  # 三项检查结果
+    registry_checks: list[RegistryCheck]  # 各项检查结果
     exception_ids: list[str]  # 未通过的检查生成的例外
     client_profile_version: int  # 核查时用的客户画像版本
 
@@ -1123,7 +1124,9 @@ class Shareholding(Model):
 
 class AsicExtract(Model):
     """ASIC 公司摘录 (需求 R129): 登记信息, 高管与股东, 回执带 PDF 原件 (登记 mock 读同名 PDF). 字段同补造目录
-    registry/extracts/{acn}.json; JSON 键 class 是 Python 保留字, 模型字段为 company_class (别名 class)."""
+    registry/extracts/{acn}.json; JSON 键 class 是 Python 保留字, 模型字段为 company_class (别名 class).
+    新建的客户的摘录由审计师上传, A3 抽取 (需求 R290): 另有 ABN, 注册地址, 文件 ID 与各字段的页码指针; 登记 mock
+    的 JSON 没有这几项, 读出为缺省值."""
 
     # populate_by_name: 也认字段名 company_class. 检查点按字段名重建 Pydantic 对象 (cls(**字段)), 没有它时
     # company_class 在往返中悄悄丢失; 按字段名 dump 的 payload 读回也要靠它
@@ -1141,6 +1144,10 @@ class AsicExtract(Model):
     paid_up_cents: int | None  # 实缴股本 (分), 摘录没有时为空
     file_name: str  # 摘录 PDF 的文件名
     file_bytes: bytes  # 摘录 PDF 原件
+    abn: str | None = None  # ABN, 摘录没有时为空 (需求 R290)
+    registered_address: str | None = None  # 注册地址, 摘录没有时为空 (需求 R290)
+    document_id: str | None = None  # 上传摘录的证据文件 ID; 登记 mock 为空 (需求 R290)
+    evidence: list[EvidencePointer] = []  # 上传摘录各字段的页码指针 (抽取所得, locator 为字段名); 登记 mock 为空
 
 
 class PersonRole(Model):

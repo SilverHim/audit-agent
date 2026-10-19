@@ -266,7 +266,7 @@ async def test_acc01_profile_update_reruns_acc04() -> None:
 
     await _update_profile(app, config, store, NUMBAT_PROFILE.model_copy(update={"version": 2}))
 
-    assert (await app.aget_state(config)).next == ("p0_intel",)
+    assert (await app.aget_state(config)).next == ("p0_inputs",)  # 先看要不要等 ASIC 摘录 (需求 R290)
     await app.ainvoke(None, config)
     snapshot = await app.aget_state(config)
     assert snapshot.next == ("gate_acc01",)  # 重跑后回到闸门前, 重新呈报
@@ -284,7 +284,7 @@ async def test_acc01_profile_update_without_decision_reruns() -> None:
 
     await _update_profile(app, config, store, NUMBAT_PROFILE.model_copy(update={"version": 2}))
 
-    assert (await app.aget_state(config)).next == ("p0_intel",)
+    assert (await app.aget_state(config)).next == ("p0_inputs",)  # 先看要不要等 ASIC 摘录 (需求 R290)
 
 
 async def test_acc01_decision_on_old_scorecard_is_represented() -> None:
@@ -460,6 +460,7 @@ def test_gate_route_rpt01_after_signing(status: ReportStatus, version: int, verd
 # 基线功能集下的主图 (R75 验收 8): 写死现状. 各功能组加节点与闸门时这张表不变, 新节点只在功能开启时出现
 BASELINE_NODES = {
     "__start__",
+    "p0_inputs",
     "p0_intel",
     "gate_acc01",
     "p1_await_data",
@@ -482,7 +483,7 @@ BASELINE_NODES = {
 }
 # (起点, 终点, 是否条件边, 闸门出口名)
 BASELINE_EDGES = [
-    ("__start__", "p0_intel", False, None),
+    ("__start__", "p0_inputs", False, None),
     ("archive", "__end__", False, None),
     ("assemble_pack", "schedule", False, None),
     ("await_data", "fan_in", False, None),
@@ -497,7 +498,7 @@ BASELINE_EDGES = [
     ("fieldwork", "fan_in", False, None),
     ("gate_acc01", "declined", True, "reject"),
     ("gate_acc01", "gate_acc01", True, "represent"),
-    ("gate_acc01", "p0_intel", True, "rerun"),
+    ("gate_acc01", "p0_inputs", True, "rerun"),
     ("gate_acc01", "p1_await_data", True, "approve"),
     ("gate_fin", "completion", True, "reject"),
     ("gate_fin", "gate_fin", True, "represent"),
@@ -508,6 +509,8 @@ BASELINE_EDGES = [
     ("gate_rpt01", "archive", True, "approve"),
     ("gate_rpt01", "gate_rpt01", True, "represent"),
     ("gate_rpt01", "report_draft", True, "reject"),
+    ("p0_inputs", "p0_inputs", True, None),
+    ("p0_inputs", "p0_intel", True, None),
     ("p0_intel", "gate_acc01", False, None),
     ("p1_analytics", "gate_p1_risk", False, None),
     ("p1_await_data", "p1_ingest", False, None),
@@ -524,7 +527,7 @@ def test_baseline_graph_structure() -> None:
     deps = make_deps(FakeRegistry(), FakeTrail(), features=NUMBAT_FEATURES)
     app = compile_graph(make_graph_nodes(deps), InMemorySaver())
     graph = app.get_graph()
-    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 20
+    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 21
     edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
     assert edges == BASELINE_EDGES
     assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]

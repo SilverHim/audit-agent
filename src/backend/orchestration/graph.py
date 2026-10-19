@@ -1,6 +1,7 @@
 """主图拓扑 (A 负责): 有哪些节点, 节点之间怎么连. 流程见 Demo需求文档.md 4.1 节:
 
-p0_intel → gate_acc01 → { p1_await_data | declined | p0_intel (客户画像更新后重跑) }
+p0_inputs → { p0_inputs | p0_intel } (新建的公司客户先等 ASIC 摘录, 需求 R290; 有数据集的直接过)
+p0_intel → gate_acc01 → { p1_await_data | declined | p0_inputs (客户画像更新后重跑 ACC-04) }
 p1_await_data (等审计师接入数据并确认已齐) → p1_ingest → { p1_analytics | fan_in (执行阶段补跑 DOC-04 后) }
 p1_analytics → gate_p1_risk → { assemble_pack | p1_analytics }
 assemble_pack → schedule ⇉ fieldwork × N ⇉ fan_in → { p1_ingest | schedule | await_events | await_data | completion }
@@ -10,8 +11,8 @@ report_draft → gate_rpt01 → { archive | report_draft }
 
 读法: → 固定边; { a | b } 条件边, 由路由函数按状态选一个; ⇉ 用 Send 并行派发多个实例.
 四道闸门 (gate_*) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口, 回到自己重新呈报.
-p1_await_data, await_events, await_data 与 P2 以外节点等人 (失败或有待复核任务) 时在节点内 interrupt()
-(种类见 waits.py).
+p0_inputs, p1_await_data, await_events, await_data 与 P2 以外节点等人 (失败或有待复核任务) 时在节点内
+interrupt() (种类见 waits.py).
 """
 
 import functools
@@ -187,6 +188,13 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     return route
 
 
+def after_p0_inputs(state: EngagementState) -> Literal["p0_inputs", "p0_intel"]:
+    """p0_inputs 之后: ACC-04 在等 ASIC 摘录 (awaiting_data, 需求 R290) 回 p0_inputs (下一次进来没有变化时停下等待),
+    否则往下到 p0_intel."""
+    acc04 = next((p for p in state["procedure_pack"] if p.id == "ACC-04"), None)
+    return "p0_inputs" if acc04 is not None and acc04.status is ProcedureStatus.awaiting_data else "p0_intel"
+
+
 def after_ingest(state: EngagementState) -> Literal["p1_analytics", "fan_in"]:
     """p1_ingest 之后: 执行阶段 (补跑等到了合同的 DOC-04, 需求 R272) 回 fan_in, 否则 (P1) 往下到 p1_analytics."""
     return "fan_in" if state["phase"] is Phase.P2_Executing else "p1_analytics"
@@ -201,6 +209,7 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g = StateGraph(EngagementState)
 
     # ── 节点: 名字 → 节点函数. 节点与路由函数都包一层 fill_defaults, 旧检查点缺的键读到缺省值 ──
+    g.add_node("p0_inputs", node_with_defaults(nodes.p0_inputs))
     g.add_node("p0_intel", node_with_defaults(nodes.p0_intel))
     g.add_node("p1_await_data", node_with_defaults(nodes.p1_await_data))
     g.add_node("p1_ingest", node_with_defaults(nodes.p1_ingest))
@@ -221,7 +230,9 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
         g.add_node(node, node_with_defaults(nodes.gate))  # 闸门节点什么都不做, 出口全由节点的路由决定
 
     # ── 固定边: A 执行完一定去 B ──
-    g.add_edge(START, "p0_intel")
+    g.add_edge(START, "p0_inputs")
+    # 新建的公司客户还没有 ASIC 摘录时 ACC-04 记等待, 回 p0_inputs 停下; 否则往下执行 ACC-04 (需求 R290)
+    g.add_conditional_edges("p0_inputs", route_with_defaults(after_p0_inputs), ["p0_inputs", "p0_intel"])
     g.add_edge("p0_intel", "gate_acc01")
     g.add_edge("p1_await_data", "p1_ingest")
     # P1 中往下到 p1_analytics; 执行阶段补跑 DOC-04 (等到了合同) 后回 fan_in

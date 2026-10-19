@@ -37,6 +37,7 @@ from backend.agents.ingest import (
 )
 from backend.contracts.data import (
     DEMO_IMPORT_STAGES,
+    REGISTRY_TARGET,
     BatchFile,
     BatchItem,
     BatchItemEdit,
@@ -71,6 +72,7 @@ from backend.contracts.data import (
     XeroSource,
 )
 from backend.contracts.errors import DataRejected
+from backend.contracts.llm_outputs import RegistryExtraction
 from backend.contracts.models import (
     AgentId,
     Confirmation,
@@ -104,7 +106,12 @@ from backend.services.data_import import (
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
 from backend.services.demo_import import DEMO_JOB, NO_DEMO, DemoImport, stage_statuses
-from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
+from backend.services.extraction_edits import (
+    apply_confirmation_edit,
+    apply_contract_edit,
+    apply_registry_edit,
+    ordered_terms,
+)
 from backend.services.import_batches import (
     TABLE_EXTENSIONS,
     BatchIntake,
@@ -120,7 +127,13 @@ from backend.services.table_plan import apply_plan, convert
 from backend.services.trail_pages import all_of_kind
 
 logger = logging.getLogger(__name__)
-TARGET_NAMES = {DocumentType.contract: "合同", DocumentType.confirmation: "回函"}  # 留痕摘要里抽取结果的名称
+# 留痕摘要里抽取结果的名称
+TARGET_NAMES = {
+    DocumentType.contract: "合同",
+    DocumentType.confirmation: "回函",
+    DocumentType.registry_extract: "ASIC 摘录",
+}
+EDITED_TYPES = {"contract": DocumentType.contract, REGISTRY_TARGET: DocumentType.registry_extract}  # 其余为函证
 # 可上传的文件 (POST /documents), 单个不超过 data_import.MAX_BYTES
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg"}
 TABLE_NAMES: dict[TableKind, str] = {  # 留痕摘要里的表名
@@ -157,18 +170,21 @@ def version_entry(eid: str, version: TableVersion) -> TrailEntry:
 
 def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
     """一次抽取结果修改或文件补登记的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同取
-    document_id, 函证取 reply_document_id, 补登记即该文件, 类型取该版登记的); 防重复键
+    document_id, 函证取 reply_document_id, ASIC 摘录与补登记即该文件, 补登记的类型取该版登记的); 防重复键
     {eid}:data:edit:{类型}:{对象}:v{版本}, 写入与补写共用."""
     if record.target_type == DETAILS:
         return details_entry(eid, record)
-    kind = DocumentType.contract if record.target_type == "contract" else DocumentType.confirmation
+    kind = EDITED_TYPES.get(record.target_type, DocumentType.confirmation)
     payload: dict[str, object] = {
         "action": "edit",
         "document_type": kind.value,
         "field": record.field,
         "reason": record.reason,
     }
-    document_id = record.data.get("document_id" if kind is DocumentType.contract else "reply_document_id")
+    if kind is DocumentType.registry_extract:  # ASIC 摘录的抽取结果按文件记 (需求 R290)
+        document_id: object = record.target_id
+    else:
+        document_id = record.data.get("document_id" if kind is DocumentType.contract else "reply_document_id")
     if document_id:
         payload["document_id"] = document_id
     summary = f"修改{TARGET_NAMES[kind]} {record.target_id} 的抽取结果 {record.field}, 第 {record.version} 版"
@@ -1619,10 +1635,10 @@ class DataService:
     ) -> DocumentRef:
         """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性 (补登记过可靠性的保留, 否则取新类型的缺省,
         见 ingest.registered_reliability), 置 classified, 写 data 留痕 (action classify,
-        actor 为审计师, 带理由), 返回改后的登记; 合同与回函随即由 A3 在后台抽取 (同上传后的处理), 是一次新的作业
-        (作业号为这条留痕的 ID): 合同重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空 MISSING_FIELD;
-        文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时没勾选而未导入 (要导入就重新
-        上传) INVALID_VALUE; 锁定 423; 忙 409."""
+        actor 为审计师, 带理由), 返回改后的登记; 合同, 回函与 ASIC 摘录随即由 A3 在后台抽取 (同上传后的处理), 是一次
+        新的作业 (作业号为这条留痕的 ID): 合同与 ASIC 摘录重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空
+        MISSING_FIELD; 文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时没勾选而未导入
+        (要导入就重新上传) INVALID_VALUE; 锁定 423; 忙 409."""
         if not reason.strip():
             raise DataRejected("MISSING_FIELD", "须填写指定类型的理由")
         document = next((d for d in await self.deps.financial_store.documents(eid) if d.id == document_id), None)
@@ -1897,6 +1913,89 @@ class DataService:
             return apply_confirmation_edit(previous, edit.field, edit.value) == current
         except DataRejected:
             return False
+
+    # ── ASIC 摘录的抽取结果 (需求 R290) ──
+
+    async def registry_extracts(self, eid: str) -> list[ExtractionRecord]:
+        """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 现在登记为 registry_extract 的文件中有抽取版本的,
+        各取最新一版, 按文件 ID."""
+        current = await self._registry_documents(eid)
+        latest: dict[str, ExtractionRecord] = {}
+        for record in await self.deps.data.extraction_versions(eid, REGISTRY_TARGET):
+            if record.target_id in current:
+                latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
+        return [latest[k] for k in sorted(latest)]
+
+    async def registry_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:
+        """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是 ASIC
+        摘录或还没有抽取结果 404."""
+        return await self._registry_records(eid, document_id)
+
+    async def edit_registry_extract(
+        self, eid: str, document_id: str, edit: ExtractionEdit, actor: str
+    ) -> ExtractionRecord:
+        """修改 ASIC 摘录的抽取结果 (PUT /registry-extracts/{document_id}): 抽取版本表记新一版 (修改人, 字段与理由),
+        数据版本 +1 记数据变动 registry_extracts, 一个事务内; 提交后写 data 留痕 (同 edit_contract). 已执行的 ACC-04 不
+        随之过期 (承接阶段的执行不记数据版本, R274), 评分卡不自动重算; 要重跑经 ACC-01 闸门更新客户资料 (rerun).
+        字段见 extraction_edits.REGISTRY_FIELDS (高管下标从 0 起). 持项目锁 (锁定 423, 忙 409); 文件不是 ASIC 摘录或还
+        没有抽取结果 404; 理由为空 MISSING_FIELD; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一修改的
+        重试 (最新一版正是同一人以同一理由改同一字段得出的) 返回当前版本, 不再写."""
+        reason = self._reason(edit)
+        async with self.locked(eid):
+            await self.backfill_trails(eid)
+            records = await self._registry_records(eid, document_id)
+            current = records[-1]
+            extraction = RegistryExtraction.model_validate(current.data)
+            try:
+                updated = apply_registry_edit(extraction, edit.field, edit.value)
+            except DataRejected:
+                if len(records) > 1 and same_edit(current, current.version, edit, actor, reason):
+                    previous = RegistryExtraction.model_validate(records[-2].data)
+                    try:
+                        if apply_registry_edit(previous, edit.field, edit.value) == extraction:
+                            return current
+                    except DataRejected:
+                        pass
+                raise
+            record = ExtractionRecord(
+                target_type=REGISTRY_TARGET,
+                target_id=document_id,
+                version=current.version + 1,
+                data=updated.model_dump(mode="json"),
+                field=edit.field,
+                reason=reason,
+                changed_by=actor,
+                changed_at=datetime.now(UTC),
+            )
+            async with self.deps.output_store.transaction(eid):
+                await self.deps.data.save_extraction(
+                    eid,
+                    REGISTRY_TARGET,
+                    document_id,
+                    record.version,
+                    record.data,
+                    changed_by=actor,
+                    field=edit.field,
+                    reason=reason,
+                )
+                await self.deps.data.bump_version(eid, DataInput.registry_extracts)
+            await record_transitions(self.deps.trail, [edit_entry(eid, record)])
+        return record
+
+    async def _registry_documents(self, eid: str) -> set[str]:
+        """现在登记为 ASIC 摘录 (registry_extract) 的文件 ID."""
+        return {d.id for d in await self.deps.financial_store.documents(eid, DocumentType.registry_extract)}
+
+    async def _registry_records(self, eid: str, document_id: str) -> list[ExtractionRecord]:
+        """一份 ASIC 摘录抽取结果的各版, 按版本升序; 文件不是 ASIC 摘录或还没有抽取结果抛 LookupError."""
+        records = (
+            await self.deps.data.extraction_versions(eid, REGISTRY_TARGET, document_id)
+            if document_id in await self._registry_documents(eid)
+            else []
+        )
+        if not records:
+            raise LookupError(f"文件 {document_id} 不是已抽取的 ASIC 摘录")
+        return records
 
     @staticmethod
     def _reason(edit: ExtractionEdit) -> str:

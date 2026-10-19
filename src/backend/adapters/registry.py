@@ -1,23 +1,86 @@
-"""登记查询的组合实现 (需求 R289, B 负责): 有数据集的项目读数据集的登记 mock, 新建的客户 (没有数据集) 的 ABN
-经 ABR ABN Lookup 实时查; 新客户的 ASIC (公司登记, 摘录与人员检索) 在摘录接入 (R290) 前没有来源."""
+"""登记查询的组合实现 (需求 R289, R290, B 负责): 有数据集的项目读数据集的登记 mock; 新建的客户 (没有数据集) 的 ABN
+经 ABR ABN Lookup 实时查, ASIC 公司信息取审计师上传的 ASIC 摘录的最新抽取结果 (UploadedExtracts); 新客户没有人员
+检索的来源."""
 
+import asyncio
 from datetime import date
 
 from backend.adapters.registry_mock import DatasetRegistrySource
+from backend.contracts.data import REGISTRY_TARGET, ExtractionRecord
 from backend.contracts.errors import RegistryUnavailable
-from backend.contracts.models import AbnRecord, AsicCompanyRecord, AsicExtract, PersonSearch
-from backend.contracts.ports import AbnLookup, EngagementStore
+from backend.contracts.llm_outputs import RegistryExtraction
+from backend.contracts.models import AbnRecord, AsicCompanyRecord, AsicExtract, DocumentRef, DocumentType, PersonSearch
+from backend.contracts.ports import AbnLookup, DataStore, EngagementStore, EvidenceStore, FinancialDataStore
+
+
+class UploadedExtracts:
+    """新建的客户的 ASIC 摘录 (需求 R290): 现在登记为 registry_extract 且有抽取结果的上传文件, 各取抽取版本表里的
+    最新一版 (A3 抽取通过即可用, 审计师修改出新版本, 不另经确认). 原件取证据存储; 证据指针的可靠性取文件现在的登记
+    (上传缺省 external_copy, 补登记可改)."""
+
+    def __init__(self, financial: FinancialDataStore, data: DataStore, evidence: EvidenceStore) -> None:
+        self.financial = financial
+        self.data = data
+        self.evidence = evidence
+
+    async def latest(self, eid: str) -> list[tuple[DocumentRef, RegistryExtraction]]:
+        """各份可用的摘录 (登记, 最新一版抽取结果), 按上传时间与文件 ID; 没有为空."""
+        documents = {d.id: d for d in await self.financial.documents(eid, DocumentType.registry_extract)}
+        latest: dict[str, ExtractionRecord] = {}
+        for record in await self.data.extraction_versions(eid, REGISTRY_TARGET):
+            if record.target_id in documents:
+                latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
+        found = [(documents[k], RegistryExtraction.model_validate(r.data)) for k, r in latest.items()]
+        return sorted(found, key=lambda item: (item[0].uploaded_at, item[0].id))
+
+    async def extract(self, eid: str, acn: str) -> AsicExtract | None:
+        """ACN 为 acn 的摘录 (有几份时取最后上传的), 带原件; 有可用的摘录而 ACN 都对不上为 None; 一份可用的都没有
+        抛 RegistryUnavailable (no_extract)."""
+        found = await self.latest(eid)
+        if not found:
+            raise RegistryUnavailable(f"项目 {eid} 没有可用的 ASIC 摘录", reason="no_extract")
+        matched = [item for item in found if item[1].acn == acn]
+        if not matched:
+            return None
+        document, extraction = matched[-1]
+        data = await asyncio.to_thread((await self.evidence.path(eid, document.id)).read_bytes)
+        return AsicExtract(
+            acn=extraction.acn,
+            name=extraction.name,
+            type=extraction.type,
+            company_class=extraction.company_class,
+            subclass=extraction.subclass,
+            status=extraction.status,
+            registered_date=extraction.registered_date,
+            officeholders=extraction.officeholders,
+            shareholders=extraction.shareholders,
+            paid_up_cents=extraction.paid_up_cents,
+            file_name=document.file_name,
+            file_bytes=data,
+            abn=extraction.abn,
+            registered_address=extraction.registered_address,
+            document_id=document.id,
+            evidence=[p.model_copy(update={"reliability": document.reliability}) for p in extraction.evidence],
+        )
 
 
 class CompositeRegistrySource:
     """RegistrySource 的组装根实现: 按项目有没有数据集分流. 有数据集 (Numbat, Xero) 照旧走 DatasetRegistrySource,
-    不发 ABN Lookup 请求; 没有数据集时 abn 走 AbnLookup (查不了抛 RegistryUnavailable, reason 为类别), ASIC 的三个
-    方法 (asic_company, asic_extract, asic_person) 抛 RegistryUnavailable (no_source). 项目不存在抛 LookupError."""
+    不发 ABN Lookup 请求. 没有数据集时: abn 走 AbnLookup (查不了抛 RegistryUnavailable, reason 为类别); asic_extract
+    与 asic_company 取上传的摘录 (UploadedExtracts; acn 为空抛 not_company, 一份可用的摘录都没有抛 no_extract,
+    ACN 都对不上为 None); asic_person 抛 RegistryUnavailable (no_source). 项目不存在抛 LookupError."""
 
-    def __init__(self, engagements: EngagementStore, datasets: DatasetRegistrySource, abn_lookup: AbnLookup) -> None:
+    def __init__(
+        self,
+        engagements: EngagementStore,
+        datasets: DatasetRegistrySource,
+        abn_lookup: AbnLookup,
+        extracts: UploadedExtracts,
+    ) -> None:
         self.engagements = engagements
         self.datasets = datasets
         self.abn_lookup = abn_lookup
+        self.extracts = extracts
 
     async def has_dataset(self, eid: str) -> bool:
         engagement = await self.engagements.get(eid)
@@ -33,19 +96,21 @@ class CompositeRegistrySource:
     async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         if await self.has_dataset(eid):
             return await self.datasets.asic_company(eid, acn)
-        raise self.no_asic(eid)
+        if acn is None:
+            raise RegistryUnavailable(f"项目 {eid} 的客户的 ABN 登记没有 ACN, 不是公司", reason="not_company")
+        found = await self.extracts.extract(eid, acn)
+        if found is None:
+            return None
+        return AsicCompanyRecord(
+            acn=found.acn, name=found.name, status=found.status, registered_date=found.registered_date
+        )
 
     async def asic_extract(self, eid: str, acn: str) -> AsicExtract | None:
         if await self.has_dataset(eid):
             return await self.datasets.asic_extract(eid, acn)
-        raise self.no_asic(eid)
+        return await self.extracts.extract(eid, acn)
 
     async def asic_person(self, eid: str, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:
         if await self.has_dataset(eid):
             return await self.datasets.asic_person(eid, family_name, given_name, birth_date)
-        raise self.no_asic(eid)
-
-    @staticmethod
-    def no_asic(eid: str) -> RegistryUnavailable:
-        """新建的客户没有 ASIC 来源 (摘录由审计师上传, R290)."""
-        return RegistryUnavailable(f"项目 {eid} 的客户没有数据集, ASIC 摘录尚未接入", reason="no_source")
+        raise RegistryUnavailable(f"项目 {eid} 的客户没有数据集, 没有人员检索的来源", reason="no_source")

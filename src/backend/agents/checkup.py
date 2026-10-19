@@ -13,7 +13,15 @@ from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
 from backend.contracts.models import AgentId, DocumentType, Procedure, ProcedureStatus, TrailEntry, TrailKind
 from backend.contracts.records import DatasetTraits
 from backend.orchestration.trail import record_transitions
-from backend.services.data_quality import OnHand, merge_requests, on_hand, program_requests, reconcile, run_checks
+from backend.services.data_quality import (
+    OnHand,
+    merge_requests,
+    on_hand,
+    program_requests,
+    reconcile,
+    run_checks,
+    with_requested,
+)
 
 STATEMENT_READY = frozenset({"classified", "extracted"})  # 财务报表文件算已提供的状态 (分类完成)
 # 还没执行完的程序状态: 这些程序 inputs 中还没有的资料才去要 (需求 R272)
@@ -136,10 +144,17 @@ class DataCheckup:
 
     async def program_requests(self, eid: str, have: OnHand, now: datetime) -> list[DataRequest]:
         """程序要的补交请求 (需求 R272): 程序包 (Store 最新版本) 中还没执行完的程序声明而现在还没有的资料
-        (data_quality.program_requests); have 为现有的资料 (resources)."""
+        (data_quality.program_requests), 等数据的程序另并上它记下的请求所要的资料 (with_requested: ACC-04 等 ASIC
+        摘录, 需求 R290); have 为现有的资料 (resources)."""
         procedures = await self.deps.output_store.latest(eid, Procedure)
         library = self.deps.library
-        needs = {p.id: library.load(p.id).inputs for p in procedures if p.status in UNDONE}
+        needs = {
+            p.id: with_requested(library.load(p.id).inputs, p.data_request_ids)
+            if p.status is ProcedureStatus.awaiting_data
+            else library.load(p.id).inputs
+            for p in procedures
+            if p.status in UNDONE
+        }
         return program_requests(needs, have, now)
 
     async def statements(self, eid: str) -> int:

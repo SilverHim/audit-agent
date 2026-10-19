@@ -18,6 +18,7 @@ from backend.contracts.llm_outputs import (
     DocumentClassification,
     ExtractedTerm,
     JudgmentDraft,
+    RegistryExtraction,
     ReportDraft,
     SheetRecognition,
 )
@@ -201,12 +202,13 @@ def test_every_referenced_output_model_is_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 8 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做语法与
-    结构)."""
+    """现有 9 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做语法与
+    结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290)."""
     assert set(OutputValidator.CHECKS) == {
         JudgmentDraft,
         ContractExtraction,
         ConfirmationExtraction,
+        RegistryExtraction,
         ReportDraft,
         CriticIndependent,
         CriticVerdictOut,

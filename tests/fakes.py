@@ -26,6 +26,7 @@ from pydantic import BaseModel, ValidationError
 import backend.main
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
+from backend.adapters.registry import UploadedExtracts
 from backend.adapters.registry_mock import person_key
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
@@ -2154,9 +2155,10 @@ class FakeDataStore:
         documents: Sequence[DocumentChange],
     ) -> ImportBatch:
         """同真实实现一次写成: 批次已 committed 时什么都不写, 返回它; 有表时经 write_tables 写 (记进 written, 那里
-        出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract) 与回函抽取 (reply,
-        第 1 版); 写了合同时记数据变动 contracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据
-        版本. 批次或文件不存在时在改动之前抛出 (模拟回滚)."""
+        出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract), 回函抽取 (reply,
+        第 1 版) 与 ASIC 摘录抽取 (registry_extract, 接在已有版本之后); 写了合同或摘录时记数据变动 contracts 或
+        registry_extracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据版本. 批次或文件
+        不存在时在改动之前抛出 (模拟回滚)."""
         stored = self.import_batches.get(batch.id)
         if stored is None:
             raise LookupError(batch.id)
@@ -2184,12 +2186,21 @@ class FakeDataStore:
                 await self.financial.save_contract(eid, contract)
             if change.reply is not None:
                 await self.save_extraction(eid, "reply", change.document_id, 1, change.reply, changed_by=AgentId.A3)
-        if any(change.contracts for change in documents):
+            if change.registry_extract is not None:  # 接在已有版本之后 (需求 R290)
+                known = [v for (t, i, v) in self.extractions if (t, i) == ("registry_extract", change.document_id)]
+                number = max(known, default=0) + 1
+                data = change.registry_extract
+                document_id = change.document_id
+                await self.save_extraction(eid, "registry_extract", document_id, number, data, changed_by=AgentId.A3)
+        extracted = [DataInput.contracts] if any(change.contracts for change in documents) else []
+        if any(change.registry_extract is not None for change in documents):
+            extracted.append(DataInput.registry_extracts)
+        if extracted:
             if version is None:
-                self.record(DataInput.contracts)
+                self.record(*extracted)
                 version = self.data_version
             else:
-                self.data_changes.append(DataChange(data_version=version, input=DataInput.contracts))
+                self.data_changes += [DataChange(data_version=version, input=i) for i in extracted]
         committed = batch.model_copy(update={"data_version": version})
         self.import_batches[batch.id] = committed
         return committed
@@ -2878,6 +2889,13 @@ def make_ctx(deps: AgentDeps, procedure_id: str = "ACC-04", engagement: Engageme
         run=make_run(procedure_id, params=dict(template.params)),
         state=initial_state(engagement, [procedure], NUMBAT_PROFILE.version),
     )
+
+
+def no_uploads() -> UploadedExtracts:
+    """组合登记来源 (CompositeRegistrySource) 里没有上传任何 ASIC 摘录的一侧: 新建的客户的 ASIC 一律 no_extract
+    (需求 R290), 测不涉及摘录的用例用."""
+    financial = FakeFinancialStore()
+    return UploadedExtracts(financial, FakeDataStore(), FakeEvidenceStore(financial))
 
 
 def make_runner(

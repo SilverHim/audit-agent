@@ -130,7 +130,7 @@ DOCUMENT_TITLES = {
     DocumentType.bank_statement: "银行对账单",
     DocumentType.minutes: "会议纪要",
     DocumentType.financial_statements: "财务报表草稿",
-    DocumentType.registry_extract: "登记机构摘录",
+    DocumentType.registry_extract: "ASIC 摘录",
     DocumentType.engagement_letter: "审计业务约定书",
     DocumentType.representation_letter: "管理层声明书",
     DocumentType.correspondence: "往来函件",
@@ -253,6 +253,20 @@ def missing_inputs(inputs: ProcedureInputs, have: OnHand) -> list[Subject]:
     """模板 inputs 中现在还没有的资料, 按声明顺序 (先账表后文件)."""
     tables: list[Subject] = [kind for kind in inputs.tables if kind not in have.tables]
     return tables + [kind for kind in inputs.documents if kind not in have.documents]
+
+
+# 请求 ID → 资料
+SUBJECTS: dict[str, Subject] = {request_id(subject): subject for subject in [*TableKind, *DocumentType]}
+
+
+def with_requested(inputs: ProcedureInputs, request_ids: Iterable[str]) -> ProcedureInputs:
+    """模板 inputs 并上程序等数据时记下的请求 (Procedure.data_request_ids) 所要的资料, 已有的不重复, 认不出的请求 ID
+    略去. ACC-04 等 ASIC 摘录不写模板 inputs (只有新建的公司客户要), 由主图 p0_inputs 判定后记在 data_request_ids
+    (需求 R290)."""
+    subjects = [SUBJECTS[rid] for rid in request_ids if rid in SUBJECTS]
+    tables = [*inputs.tables, *(s for s in subjects if isinstance(s, TableKind) and s not in inputs.tables)]
+    documents = [*inputs.documents, *(s for s in subjects if isinstance(s, DocumentType) and s not in inputs.documents)]
+    return ProcedureInputs(tables=list(dict.fromkeys(tables)), documents=list(dict.fromkeys(documents)))
 
 
 def program_requests(needs: Mapping[str, ProcedureInputs], have: OnHand, now: datetime) -> list[DataRequest]:

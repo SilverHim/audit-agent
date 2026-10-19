@@ -39,7 +39,8 @@ class TableKind(StrEnum):
 
 class DataInput(StrEnum):
     """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 九种账表 (取值同 TableKind),
-    加审计师修改过的合同与回函抽取结果, 以及审计师补登记的文件登记. 改科目分类改的是科目表, 记 accounts."""
+    加审计师修改过的合同与回函抽取结果, 审计师补登记的文件登记, 以及上传的 ASIC 摘录的抽取结果. 改科目分类改的是
+    科目表, 记 accounts."""
 
     accounts = "accounts"  # 科目表 (含科目分类)
     trial_balance = "trial_balance"  # 试算表
@@ -53,6 +54,7 @@ class DataInput(StrEnum):
     contracts = "contracts"  # 合同抽取结果 (审计师修改)
     confirmations = "confirmations"  # 回函抽取结果 (审计师修改)
     documents = "documents"  # 文件登记: 审计师补登记的可靠性, 文件日期与关联对象 (需求 R90)
+    registry_extracts = "registry_extracts"  # 上传的 ASIC 摘录的抽取结果: A3 抽取与审计师修改 (需求 R290)
 
 
 def table_changes(kinds: Iterable[TableKind]) -> list[DataInput]:
@@ -701,6 +703,7 @@ class DocumentChange(Model):
     failed_step: DocumentFailedStep | None = None  # 卡住的步骤 (needs_manual 时为 extract)
     contracts: list[Contract] = []  # 合同: 依次写入的各版 (save_contract 的写法, 记 A3)
     reply: dict[str, Any] | None = None  # 回函副本的抽取结果 (ConfirmationExtraction 的 JSON)
+    registry_extract: dict[str, Any] | None = None  # ASIC 摘录的抽取结果 (RegistryExtraction 的 JSON, 需求 R290)
 
 
 class BatchItemEdit(Model):
@@ -756,10 +759,15 @@ class ExtractionEdit(Model):
     reason: str  # 修改理由, 必填
 
 
+REGISTRY_TARGET = "registry_extract"  # 抽取版本表里 ASIC 摘录抽取结果的 target_type, target_id 为文件 ID (需求 R290)
+
+
 class ExtractionRecord(Model):
     """抽取结果的一版 (表 extraction_versions 的一行)."""
 
-    target_type: str  # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本), document (文件登记)
+    # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本), document (文件登记), registry_extract
+    # (上传的 ASIC 摘录: A3 抽取与审计师修改, 需求 R290)
+    target_type: str
     target_id: str  # 合同编号, 函证 ID 或文件 ID
     version: int  # 版本号
     data: dict[str, Any]  # 该版完整内容

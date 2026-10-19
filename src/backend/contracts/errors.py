@@ -2,10 +2,12 @@
 
 from typing import Literal
 
-# 查不了登记的原因 (类别, 不带原始响应): 没有登记来源 (新客户的 ASIC, 没有数据集的登记 mock), 没配 ABN Lookup 的
-# GUID, ABN Lookup 不可达 (连接失败, 超时), GUID 不被认可 (未注册, 注册已取消), ABN Lookup 服务出错 (HTTP 错误,
-# 其余异常, 响应读不了)
-RegistryReason = Literal["no_source", "not_configured", "unreachable", "rejected", "service_error"]
+# 查不了登记的原因 (类别, 不带原始响应): 没有登记来源 (没有数据集的登记 mock), 没配 ABN Lookup 的 GUID, ABN Lookup
+# 不可达 (连接失败, 超时), GUID 不被认可 (未注册, 注册已取消), ABN Lookup 服务出错 (HTTP 错误, 其余异常, 响应读不了);
+# 新建的客户的 ASIC (需求 R290): ABN 登记没有 ACN (不是公司, 不要求 ASIC 摘录), 公司而没有可用的 ASIC 摘录 (标了
+# 客户无此类资料, 或上传的摘录抽取没成)
+AbnLookupReason = Literal["no_source", "not_configured", "unreachable", "rejected", "service_error"]  # ABN 一侧的类别
+RegistryReason = Literal[AbnLookupReason, "not_company", "no_extract"]
 
 
 class VersionConflict(Exception):

@@ -1,6 +1,6 @@
 """需求 R129: 登记 mock 的公司摘录与人员检索 (asic_extract, asic_person). 读 Xero 补造目录 registry/ 的 JSON 与同名
 PDF; 按项目数据集定位 (DatasetRegistrySource) 同 ABN 与 ASIC 查询, 组装根的组合实现 (CompositeRegistrySource) 对
-新建的客户没有来源. 不连库."""
+新建的客户取上传的 ASIC 摘录 (R290), 没有人员检索的来源. 不连库."""
 
 import json
 import shutil
@@ -14,7 +14,7 @@ from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySo
 from backend.contracts.errors import RegistryUnavailable
 from backend.contracts.models import AsicExtract, PersonSearch
 from tests.external import require_xero_supplements
-from tests.fakes import ENGAGEMENT, FakeAbr, FakeEngagementStore, FakeRegistry
+from tests.fakes import ENGAGEMENT, FakeAbr, FakeEngagementStore, FakeRegistry, no_uploads
 from tests.xero_fakes import XERO_DATASET
 
 EXTERNAL = pytest.mark.external  # 读补造目录的用例 (经 require_xero_supplements 定位); 纯函数用例不标
@@ -152,11 +152,14 @@ def test_person_file_name() -> None:
 @pytest.mark.parametrize("composite", [False, True], ids=["dataset", "composite"])
 @EXTERNAL
 async def test_unknown_engagement_and_new_client(root: Path, composite: bool) -> None:
-    """项目不存在抛 LookupError; 没有数据集 (新建的客户, E-3) 抛 RegistryUnavailable (no_source: 新客户的摘录由审计师
-    上传, R290). 组合实现对有数据集的项目转给数据集一侧, 都不发 ABR 请求."""
+    """项目不存在抛 LookupError; 没有数据集 (新建的客户, E-3) 抛 RegistryUnavailable: 登记 mock 一侧都是 no_source;
+    组合实现的摘录取上传的 (R290), 一份都没有为 no_extract, 人员检索仍 no_source. 组合实现对有数据集的项目转给数据集
+    一侧, 都不发 ABR 请求."""
     abr = FakeAbr()
     datasets = by_dataset(root)
-    source = CompositeRegistrySource(datasets.engagements, datasets, abr.client()) if composite else datasets
+    source = (
+        CompositeRegistrySource(datasets.engagements, datasets, abr.client(), no_uploads()) if composite else datasets
+    )
     assert (await source.asic_extract("E-0", "900043021")) is not None
     assert (await source.asic_person("E-0", "Morgan", "Alex", BIRTH)) is not None
     for eid, error in (("E-9", LookupError), ("E-3", RegistryUnavailable)):
@@ -165,7 +168,8 @@ async def test_unknown_engagement_and_new_client(root: Path, composite: bool) ->
         with pytest.raises(error) as person_error:
             await source.asic_person(eid, "Morgan", "Alex", BIRTH)
         if error is RegistryUnavailable:
-            assert [getattr(e.value, "reason", None) for e in (extract_error, person_error)] == ["no_source"] * 2
+            reasons = ["no_extract" if composite else "no_source", "no_source"]
+            assert [getattr(e.value, "reason", None) for e in (extract_error, person_error)] == reasons
     assert abr.requests == []
 
 

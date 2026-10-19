@@ -483,11 +483,12 @@ class DataStore(Protocol):
     ) -> ImportBatch:
         """确认一次智能导入 (需求 R277), 一个事务内全部写成或全不写: 有表时同 write_tables 写一个新数据版本 (source
         import, 出处取 origins); 各文件按 DocumentChange 改登记, 依次写合同的各版 (同 FinancialDataStore.save_contract,
-        记 A3) 与回函副本的抽取结果 (reply, 第 1 版); 写了合同时数据变动另记 contracts (需求 R274; 有表时记在写表的
-        版本上, 没有表时数据版本 +1 只记 contracts, 同 bump_version); 再把批次覆盖为 batch (调用方已置 committed), 记
-        写入后的数据版本 (没写表也没写合同为空). 批次 ID 是幂等键: 库里的批次已是 committed 时什么都不写, 返回库里的
-        批次. 返回写入后的批次. 批次不存在抛 LookupError, 文件不存在抛 FileNotFoundError (都整体回滚); 项目 locked
-        抛 EngagementLocked."""
+        记 A3), 回函副本的抽取结果 (reply, 第 1 版) 与 ASIC 摘录的抽取结果 (registry_extract, 接在该文件已有的版本
+        之后, 记 A3, 需求 R290); 写了合同或摘录时数据变动另记 contracts 或 registry_extracts (需求 R274; 有表时记在
+        写表的版本上, 没有表时数据版本 +1 只记这两类, 同 bump_version); 再把批次覆盖为 batch (调用方已置
+        committed), 记写入后的数据版本 (没写表, 合同与摘录时为空). 批次 ID 是幂等键: 库里的批次已是 committed 时
+        什么都不写, 返回库里的批次. 返回写入后的批次. 批次不存在抛 LookupError, 文件不存在抛 FileNotFoundError
+        (都整体回滚); 项目 locked 抛 EngagementLocked."""
         ...
 
 
@@ -630,18 +631,20 @@ class LlmSettingsStore(Protocol):
 class RegistrySource(Protocol):
     """ABN 与 ASIC 登记查询, 首参为项目 ID. 组装根为组合实现 (adapters/registry.CompositeRegistrySource, 需求 R289):
     项目有数据集时读该数据集目录下的 registry/ (Numbat 为 data/demo, Xero 为补造目录; 没有目录时查不到); 项目没有
-    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 三个方法抛 RegistryUnavailable (no_source, ASIC 摘录
-    接入前, R290). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
+    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 公司登记与摘录取审计师上传的 ASIC 摘录的最新抽取结果
+    (需求 R290: acn 为空抛 not_company, 一份可用的摘录都没有抛 no_extract, ACN 都对不上为 None), 人员检索抛
+    RegistryUnavailable (no_source). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
     async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         """按 ACN 查 ASIC 公司登记. acn 为空 (ABN 记录没有 ACN) 时不查, 只确认有没有 ASIC 来源: 有来源返回 None,
-        没有抛 RegistryUnavailable (ACC-04 据此把 company_registered 转人工确认)."""
+        没有抛 RegistryUnavailable (ACC-04 据此把 company_registered 转人工确认); 新建的客户见类说明."""
         ...
 
     async def asic_extract(self, eid: str, acn: str) -> AsicExtract | None:
-        """ASIC 公司摘录 (高管与股东), 带 PDF 原件 (需求 R129); 查不到为 None."""
+        """ASIC 公司摘录 (高管与股东), 带 PDF 原件 (需求 R129); 查不到为 None. 新建的客户取上传的摘录, 另带 ABN,
+        注册地址, 文件 ID 与各字段的页码指针 (需求 R290)."""
         ...
 
     async def asic_person(self, eid: str, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:

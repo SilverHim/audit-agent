@@ -4,12 +4,18 @@ phase: P0_Acceptance
 cycle: Acceptance
 owner: A2
 outputs: [acceptance_scorecard, exceptions]
+reads: [registry_extracts]  # 新建的客户用上传的 ASIC 摘录核对 (需求 R290). 承接阶段的执行不记数据版本, 按 R274 不判过期
 engine: rule
 autonomy_level: L3
 # 无 SQL, A2 调 RegistrySource:
 # - abn_active: abn(client_profile.abn) 有记录且 status = Active
 # - name_match: AbnRecord.entity_name 与 client_profile.legal_name 忽略大小写, 空白与标点后相等
-# - company_registered: asic_company(AbnRecord.acn) 有记录且 status = Registered; ABN 查不到或无 ACN 时不查 ASIC, 本项不通过
+# - company_registered (数据集客户): asic_company(AbnRecord.acn) 有记录且 status = Registered; ABN 查不到或无 ACN 时不查 ASIC, 本项不通过
 # 每次查询写一行 external_call 留痕; RegistryCheck.evidence 指向该留痕 (type = external, source_type = trail, reliability = external_original)
+# 新建的客户 (项目没有数据集, 需求 R290) 另按审计师上传的 ASIC 摘录 (asic_extract(AbnRecord.acn), 最新一版抽取结果) 判两项, 指针指向摘录文件:
+# - company_registered: 摘录 status = Registered, 名称与 client_profile.legal_name 规范化后相等
+# - directors_match: client_profile.directors 与摘录中 role = director 的姓名集合规范化后相等 (不比秘书)
+# - ABN 登记没有 ACN (不是公司) 或没有可用的摘录 (标了客户无此类资料, 抽取没成) 时两项待人工确认; 有摘录而 ACN 都对不上时 company_registered 不通过
+# - 是公司而还没有摘录时, 主图在 ACC-04 之前的 p0_inputs 等待 (awaiting_data, 补交请求 REQ-registry_extract)
 # 未通过的检查各出一条 AuditException: rule_id 取检查名, severity high, source_ids 为 [client_profile.abn]
 rules: []

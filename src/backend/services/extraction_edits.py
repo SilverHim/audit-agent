@@ -1,6 +1,7 @@
-"""审计师修改抽取结果 (需求 R14): 合同与回函的可改字段, 值的校验与新版本的组装. 纯函数, 不读写存储.
+"""审计师修改抽取结果 (需求 R14): 合同, 回函与 ASIC 摘录 (需求 R290) 的可改字段, 值的校验与新版本的组装. 纯函数,
+不读写存储.
 
-只能改系统抽取出的内容; 改出的新版本 version +1, 证据指针不变 (仍指向原文中的位置).
+只能改系统抽取出的内容; 改出的新版本 version +1 (摘录的版本号由抽取版本表记), 证据指针不变 (仍指向原文中的位置).
 """
 
 import re
@@ -9,6 +10,7 @@ from datetime import date
 from typing import Any
 
 from backend.contracts.errors import DataRejected
+from backend.contracts.llm_outputs import RegistryExtraction
 from backend.contracts.models import Confirmation, Contract, TermType
 
 # 合同可改的字段; 条款以下标指定, 从 0 起, 如 terms[0].text
@@ -21,6 +23,22 @@ CONTRACT_FIELDS = (
     "terms[n].term_type",
 )
 CONFIRMATION_FIELDS = ("confirming_party", "balance_date", "confirmed_balance_cents")  # 回函可改的字段
+# ASIC 摘录可改的字段 (需求 R290): 登记信息与高管的姓名, 职务, 任职日; 高管以下标指定, 从 0 起, 只改不增删; 股东只读
+REGISTRY_FIELDS = (
+    "name",
+    "acn",
+    "abn",
+    "status",
+    "type",
+    "registered_date",
+    "registered_address",
+    "officeholders[n].name",
+    "officeholders[n].role",
+    "officeholders[n].appointed",
+)
+OFFICEHOLDER_FIELD = re.compile(r"^officeholders\[(\d+)\]\.(name|role|appointed)$")
+REGISTRY_STATUS = ("Registered", "Deregistered")
+ROLES = ("director", "secretary")
 TERM_FIELD = re.compile(r"^terms\[(\d+)\]\.(text|term_type)$")
 TERM_NO = re.compile(r"-T(\d+)$")  # 条款编号 {合同编号}-T{n} 的序号
 
@@ -126,3 +144,63 @@ def apply_confirmation_edit(confirmation: Confirmation, field: str, value: Any) 
     if getattr(confirmation, field) == new:
         raise invalid(f"{field} 与当前值相同")
     return confirmation.model_copy(update={field: new, "version": confirmation.version + 1})
+
+
+def digits_value(value: Any, field: str, length: int, optional: bool) -> str | None:
+    if value is None and optional:
+        return None
+    digits = re.sub(r"\s", "", value) if isinstance(value, str) else ""
+    if not re.fullmatch(rf"\d{{{length}}}", digits):
+        raise invalid(f"{field} 须为 {length} 位数字")
+    return digits
+
+
+def choice_value(value: Any, field: str, choices: tuple[str, ...]) -> str:
+    if value not in choices:
+        raise invalid(f"{field} 须为 {', '.join(choices)} 之一")
+    return str(value)
+
+
+def optional_text(value: Any, field: str) -> str | None:
+    return None if value is None else text_value(value, field)
+
+
+def apply_registry_edit(extraction: RegistryExtraction, field: str, value: Any) -> RegistryExtraction:
+    """ASIC 摘录的抽取结果改一个字段后的新内容 (需求 R290). 高管下标从 0 起, 按抽取的顺序. 字段不认识, 下标越界,
+    值不合法或与当前相同抛 DataRejected(INVALID_VALUE)."""
+    holder = OFFICEHOLDER_FIELD.match(field)
+    if holder is not None:
+        index, part = int(holder.group(1)), holder.group(2)
+        people = extraction.officeholders
+        if index >= len(people):
+            raise invalid(f"摘录没有第 {index} 名高管 (下标从 0 起, 共 {len(people)} 名)")
+        new: Any
+        if part == "name":
+            new = text_value(value, field)
+        elif part == "role":
+            new = choice_value(value, field, ROLES)
+        else:
+            new = date_value(value, field, optional=False)
+        if getattr(people[index], part) == new:
+            raise invalid(f"{field} 与当前值相同")
+        changed = people[index].model_copy(update={part: new})
+        return extraction.model_copy(
+            update={"officeholders": [changed if i == index else p for i, p in enumerate(people)]}
+        )
+    if field in ("name", "type"):
+        new = text_value(value, field)
+    elif field == "acn":
+        new = digits_value(value, field, 9, optional=False)
+    elif field == "abn":
+        new = digits_value(value, field, 11, optional=True)
+    elif field == "status":
+        new = choice_value(value, field, REGISTRY_STATUS)
+    elif field == "registered_date":
+        new = date_value(value, field, optional=False)
+    elif field == "registered_address":
+        new = optional_text(value, field)
+    else:
+        raise invalid(f"ASIC 摘录不能改 {field}; 可改: {', '.join(REGISTRY_FIELDS)}")
+    if getattr(extraction, field) == new:
+        raise invalid(f"{field} 与当前值相同")
+    return extraction.model_copy(update={field: new})

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.checkup import DataCheckup, resources
+from backend.agents.client_intel import company_check
 from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
@@ -26,6 +27,7 @@ from backend.contracts.models import (
     ClientProfile,
     Confirmation,
     Decision,
+    DocumentType,
     Engagement,
     Judgment,
     Misstatement,
@@ -61,6 +63,7 @@ from backend.orchestration.merge import (
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
+from backend.services.data_quality import request_id
 from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
@@ -69,6 +72,10 @@ logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
 STOPPED = frozenset({ProcedureStatus.awaiting_data, ProcedureStatus.no_data})  # 因资料不执行的程序状态
 INPUTS_CHANGED = "inputs_changed"  # 数据写操作结束后交给 await_data 的恢复值; 节点不读它, 重查现有资料 (需求 R272)
+ACC04 = "ACC-04"
+EXTRACT_REQUEST = request_id(DocumentType.registry_extract)  # ACC-04 等的 ASIC 摘录的补交请求 (需求 R290)
+# p0_inputs 不重判的 ACC-04 状态: 在等人 (p0_intel 节点内) 或已记客户无此类资料 (ACC-04 不会这样记, 防御)
+NOT_REJUDGED = frozenset({ProcedureStatus.awaiting_human, ProcedureStatus.in_dispute, ProcedureStatus.no_data})
 
 
 class FieldworkInput(TypedDict):
@@ -775,6 +782,78 @@ class GraphNodes:
         return await self.refresh_inputs(state, [procedure_id], [procedure_id] if replayed else [])
 
     # ── P0 ──
+    async def p0_inputs(self, state: EngagementState) -> StatePatch:
+        """ACC-04 之前等 ASIC 摘录 (需求 R290). 有数据集的项目 (登记走数据集的 mock) 直接通过, 不查 ABN, 不写状态.
+
+        新建的客户 (没有数据集) 是公司 (ABN 登记有 ACN, client_intel.company_check 查一次 ABN 并留痕) 而还没有 ASIC
+        摘录 (有一份 registry_extract 文件即算有, 同 R272 的口径), 且该请求没标客户无此类资料时: ACC-04 出新版本记
+        awaiting_data (data_request_ids [REQ-registry_extract]), 写入 Store 与 transition 留痕, 随后由 A3 体检提出
+        补交请求 (出错只记日志), 返回片段; 路由 (after_p0_inputs) 回本节点, 再进来时没有变化, interrupt() 等待, 载荷
+        {awaiting: inputs, procedure_ids: [ACC-04]} (R272 的程序等数据, 数据写操作结束时 DataService 以
+        Command(resume=INPUTS_CHANGED) 恢复, 节点从头执行重查). 等摘录时已查明是公司, 不再查 ABN (画像只能在 ACC-01
+        闸门处更新, 那时 ACC-04 不在等). 资料到了或标了客户无此类资料: ACC-04 回到 planned, 往下到 p0_intel (无此类
+        资料时 ACC-04 照常执行, 公司两项待人工确认, 不记 no_data: ACC-01 闸门要评分卡). 不是公司或 ABN 查不了时不等.
+        ACC-01 的 rerun 出口也回到这里 (画像改了, ABN 可能变): 已完成的 ACC-04 同样重判.
+        以 Store 为准: Store 里 ACC-04 的最新版本比状态里的新, 是本节点上一次没走完时写的 (写完后留痕失败, 节点出错),
+        取 Store 那一版, 补写它的留痕 (同键跳过), 返回片段.
+        单独成节点, 节点内只有这一个等待: p0_intel 里另有 "失败等人" 的 interrupt(), 恢复值不能交错 (见
+        p1_await_data)."""
+        eid = state["engagement_id"]
+        pack = state["procedure_pack"]
+        procedure = next((p for p in pack if p.id == ACC04), None)
+        if procedure is None or procedure.status in NOT_REJUDGED:
+            return {}
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None:
+            raise LookupError(f"Engagement {eid} not found")
+        if engagement.dataset is not None:
+            return {}
+        store = self.deps.output_store
+
+        def replaced(updated: Procedure) -> StatePatch:
+            return {"procedure_pack": [updated if p.id == ACC04 else p for p in pack]}
+
+        stored = await store.get(eid, Procedure, ACC04)
+        if stored is not None and stored.version > procedure.version:
+            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [stored]))
+            return replaced(stored)
+        waiting = procedure.status is ProcedureStatus.awaiting_data and EXTRACT_REQUEST in procedure.data_request_ids
+        if waiting:
+            company = True
+        else:
+            profile = await self.deps.engagement_store.client_profile(
+                engagement.client_id, state["client_profile_version"]
+            )
+            if profile is None:
+                raise LookupError(f"client profile {engagement.client_id} v{state['client_profile_version']} not found")
+            company = await company_check(self.deps, engagement, profile) is True
+        have = await resources(self.deps, eid)
+        subject = DocumentType.registry_extract
+        wait = company and not have.has(subject) and subject not in have.unavailable
+        if wait:
+            target = (ProcedureStatus.awaiting_data, [EXTRACT_REQUEST])
+        elif procedure.status is ProcedureStatus.awaiting_data:
+            target = (ProcedureStatus.planned, [])
+        else:
+            target = (procedure.status, procedure.data_request_ids)
+        if target != (procedure.status, procedure.data_request_ids):
+            status, request_ids = target
+            updated = procedure.model_copy(
+                update={"status": status, "data_request_ids": request_ids, "version": procedure.version + 1}
+            )
+            async with store.transaction(eid):
+                written = cast(list[Procedure], await store.put(eid, [updated], actor=AgentId.A1))
+            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, written))
+            if status is ProcedureStatus.awaiting_data:
+                try:
+                    await DataCheckup(self.deps).run(eid)
+                except Exception:
+                    logger.exception("ACC-04 开始等 ASIC 摘录时体检失败: %s", eid)
+            return replaced(written[0])
+        if wait:
+            interrupt(inputs_payload([ACC04]))
+        return {}
+
     async def p0_intel(self, state: EngagementState) -> StatePatch:
         """A2 执行 ACC-04, 产出承接评分卡."""
         return await self.run_node(state, "p0_intel")

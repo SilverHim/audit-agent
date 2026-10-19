@@ -1574,7 +1574,7 @@
           "evidence"
         ],
         "summary": "Set Document Type",
-        "description": "人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空\n422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;\n忙 409.",
+        "description": "人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 文件不存在 404; 理由\n为空 422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定\n423; 忙 409.",
         "operationId": "evidence-set_document_type",
         "security": [
           {
@@ -1931,6 +1931,186 @@
                     "$ref": "#/components/schemas/ContractVersion"
                   },
                   "title": "Response Evidence-Contract History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/registry-extracts": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Registry Extracts",
+        "description": "上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的\n不列.",
+        "operationId": "evidence-list_registry_extracts",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RegistryExtractView"
+                  },
+                  "title": "Response Evidence-List Registry Extracts"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/registry-extracts/{document_id}": {
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Registry Extract",
+        "description": "修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,\nregistered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).\n文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422\nINVALID_VALUE; 锁定 423; 忙 409.",
+        "operationId": "evidence-edit_registry_extract",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryExtractView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/registry-extracts/{document_id}/history": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Registry Extract History",
+        "description": "ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404.",
+        "operationId": "evidence-registry_extract_history",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RegistryExtractView"
+                  },
+                  "title": "Response Evidence-Registry Extract History"
                 }
               }
             }
@@ -4278,7 +4458,7 @@
           "client_profile_version"
         ],
         "title": "AcceptanceScorecard",
-        "description": "承接评分卡: ACC-04 三项检查的汇总, ACC-01 闸门的呈报材料."
+        "description": "承接评分卡: ACC-04 各项检查的汇总 (数据集客户三项, 新建的客户四项, 需求 R290), ACC-01 闸门的呈报材料."
       },
       "AccountCategoryIn": {
         "properties": {
@@ -9943,6 +10123,49 @@
         "title": "NotExecuted",
         "description": "因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."
       },
+      "Officeholder": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "birth_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Date"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "director",
+              "secretary"
+            ],
+            "title": "Role"
+          },
+          "appointed": {
+            "type": "string",
+            "format": "date",
+            "title": "Appointed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "birth_date",
+          "role",
+          "appointed"
+        ],
+        "title": "Officeholder",
+        "description": "ASIC 公司摘录上的一名高管 (同一人任两职时为两项)."
+      },
       "OpinionType": {
         "type": "string",
         "enum": [
@@ -10855,7 +11078,8 @@
             "enum": [
               "abn_active",
               "name_match",
-              "company_registered"
+              "company_registered",
+              "directors_match"
             ],
             "title": "Check"
           },
@@ -10888,6 +11112,174 @@
         ],
         "title": "RegistryCheck",
         "description": "ACC-04 的一项登记检查结果."
+      },
+      "RegistryExtractView": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/RegistryExtraction"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_id",
+          "version",
+          "extraction",
+          "changed_by",
+          "changed_at",
+          "field",
+          "reason"
+        ],
+        "title": "RegistryExtractView",
+        "description": "上传的一份 ASIC 摘录的抽取结果的一版 (GET /registry-extracts 取各份的当前版, history 取全部版本, 需求 R290):\n文件 ID, 版本号 (1 为 A3 抽取, 之后每次重抽或审计师修改加一), 内容, 谁, 何时, 改了哪个字段与理由 (抽取所得为空)."
+      },
+      "RegistryExtraction": {
+        "properties": {
+          "acn": {
+            "type": "string",
+            "pattern": "^\\d{9}$",
+            "title": "Acn"
+          },
+          "abn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{11}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abn"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "company_class": {
+            "type": "string",
+            "title": "Company Class"
+          },
+          "subclass": {
+            "type": "string",
+            "title": "Subclass"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Registered",
+              "Deregistered"
+            ],
+            "title": "Status"
+          },
+          "registered_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Registered Date"
+          },
+          "registered_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered Address"
+          },
+          "officeholders": {
+            "items": {
+              "$ref": "#/components/schemas/Officeholder"
+            },
+            "type": "array",
+            "title": "Officeholders"
+          },
+          "shareholders": {
+            "items": {
+              "$ref": "#/components/schemas/Shareholding"
+            },
+            "type": "array",
+            "title": "Shareholders"
+          },
+          "paid_up_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid Up Cents"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "acn",
+          "name",
+          "type",
+          "company_class",
+          "subclass",
+          "status",
+          "registered_date",
+          "officeholders",
+          "shareholders",
+          "evidence"
+        ],
+        "title": "RegistryExtraction",
+        "description": "A3 从上传的 ASIC 公司摘录 PDF 抽取的要素 (DOC-REGISTRY, 需求 R290): AsicExtract 的登记信息, 高管与股东,\n加 ABN 与注册地址 (摘录没写为空). ACN 与 ABN 去掉空白后须为 9 位与 11 位数字 (结构级). evidence 的 locator 为\n字段名, REGISTRY_POINTED 中的各字段须有指针 (引用级)."
       },
       "Reliability": {
         "type": "string",
@@ -11622,6 +12014,57 @@
         ],
         "title": "ServiceOrganisation",
         "description": "客户使用的服务机构 (ASA 402)."
+      },
+      "Shareholding": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "company"
+            ],
+            "title": "Kind"
+          },
+          "acn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acn"
+          },
+          "share_class": {
+            "type": "string",
+            "title": "Share Class"
+          },
+          "shares": {
+            "type": "integer",
+            "title": "Shares"
+          },
+          "pct": {
+            "type": "number",
+            "title": "Pct"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "acn",
+          "share_class",
+          "shares",
+          "pct"
+        ],
+        "title": "Shareholding",
+        "description": "ASIC 公司摘录上的一名股东."
       },
       "SheetReading": {
         "properties": {

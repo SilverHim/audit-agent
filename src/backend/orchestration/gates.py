@@ -59,7 +59,8 @@ FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
 
 # 闸门路由的返回值, 即闸门的出口名: 通过, 驳回, 重跑 ACC-04, 重新呈报.
-# 信息不足一律重呈 (represent); rerun 只给 ACC-01 用: 客户画像更新后回 p0_intel 重跑 ACC-04
+# 信息不足一律重呈 (represent); rerun 只给 ACC-01 用: 客户画像更新后回 p0_inputs (新客户先看要不要等 ASIC 摘录),
+# 再重跑 ACC-04
 GateRoute = Literal["approve", "reject", "rerun", "represent"]
 Exit = str | Callable[[frozenset[str]], str]  # 出口去向: 节点名, 或按功能集取节点名的函数 (如按功能改驳回去处)
 EXIT_NAMES = ("approve", "reject", "rerun")  # 可登记的出口名; represent 一律回节点自身, 不登记
@@ -458,7 +459,7 @@ def path_map(specs: Sequence[GateSpec], features: frozenset[str]) -> dict[Hashab
 
 
 def acc01_rerun(state: EngagementState) -> GateRoute | None:
-    """评分卡依据的客户画像比项目采用的旧: 不论最后一条决定是什么, 先回 p0_intel 重跑 ACC-04."""
+    """评分卡依据的客户画像比项目采用的旧: 不论最后一条决定是什么, 先回 p0_inputs, 再到 p0_intel 重跑 ACC-04."""
     scorecard = state["acceptance_scorecard"]
     if scorecard is not None and scorecard.client_profile_version < state["client_profile_version"]:
         return "rerun"
@@ -682,7 +683,7 @@ GATES: list[GateSpec] = [
         material_field="acceptance_scorecard",
         material_model=AcceptanceScorecard,
         material_id="SCORECARD",
-        exits={"approve": "p1_await_data", "reject": "declined", "rerun": "p0_intel"},
+        exits={"approve": "p1_await_data", "reject": "declined", "rerun": "p0_inputs"},
         fields={GateVerdict.reject: REASON, GateVerdict.insufficient_info: REASON},
         effects=acc01_apply,
         view=acc01_view,

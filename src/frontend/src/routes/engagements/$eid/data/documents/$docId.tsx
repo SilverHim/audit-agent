@@ -8,9 +8,17 @@ import {
   evidenceListConfirmationsOptions,
   evidenceListContractsOptions,
   evidenceListDocumentsOptions,
+  evidenceListRegistryExtractsOptions,
 } from '@/client/@tanstack/react-query.gen'
 import { evidenceGetEvidence } from '@/client/sdk.gen'
-import type { Confirmation, Contract, DocumentRef, EvidencePointer, Reliability } from '@/client/types.gen'
+import type {
+  Confirmation,
+  Contract,
+  DocumentRef,
+  EvidencePointer,
+  RegistryExtractView,
+  Reliability,
+} from '@/client/types.gen'
 import { PdfViewer } from '@/components/pdf-viewer'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -28,13 +36,13 @@ export const Route = createFileRoute('/engagements/$eid/data/documents/$docId')(
 
 type Item = {
   id: string
-  group: 'fact' | 'term'
+  group: 'fact' | 'term' | 'officer'
   label: string
   value: string
   page: number
   candidates: string[]
   edit: {
-    target: 'contracts' | 'confirmations'
+    target: 'contracts' | 'confirmations' | 'registry-extracts'
     id: string
     field: string
     kind: 'text' | 'long' | 'amount' | 'date'
@@ -165,12 +173,64 @@ function confirmationItems(confirmation: Confirmation, t: Messages, formatDate: 
   return items
 }
 
+function acnForm(acn: string): string {
+  return acn.length === 9 ? `${acn.slice(0, 3)} ${acn.slice(3, 6)} ${acn.slice(6)}` : acn
+}
+
+// ASIC 摘录 (需求 R290): 登记信息与董事, 秘书; 可改登记字段与高管姓名 (职务, 任职日与股东经接口改或只读)
+function registryItems(view: RegistryExtractView, t: Messages, formatDate: (iso: string) => string): Item[] {
+  const x = view.extraction
+  const base = { target: 'registry-extracts' as const, id: view.document_id }
+  const fact = (
+    field: string,
+    value: string,
+    candidates: string[],
+    raw: string,
+    kind: 'text' | 'date' = 'text',
+  ): Item => ({
+    id: field,
+    group: 'fact',
+    label: t.docView.fields[field] ?? field,
+    value,
+    page: pageOf(x.evidence, field),
+    candidates,
+    edit: { ...base, field, kind, raw },
+  })
+  const items: Item[] = [
+    fact('name', x.name, [x.name], x.name),
+    fact('acn', acnForm(x.acn), [acnForm(x.acn), x.acn], x.acn),
+  ]
+  if (x.abn) items.push(fact('abn', abnForm(x.abn), [abnForm(x.abn), x.abn], x.abn))
+  items.push(fact('status', x.status, [x.status], x.status))
+  items.push({
+    ...fact('type', `${x.type} · ${x.company_class} · ${x.subclass}`, [x.type, x.company_class, x.subclass], x.type),
+    label: t.docView.fields.company_type,
+  })
+  items.push(
+    fact('registered_date', formatDate(x.registered_date), dateForms(x.registered_date), x.registered_date, 'date'),
+  )
+  if (x.registered_address) {
+    items.push(fact('registered_address', x.registered_address, [x.registered_address], x.registered_address))
+  }
+  const officers: Item[] = x.officeholders.map((person, index) => ({
+    id: `officeholders-${index}`,
+    group: 'officer',
+    label: `${t.docView.roles[person.role] ?? person.role} · ${t.docView.appointed(formatDate(person.appointed))}`,
+    value: person.name,
+    page: pageOf(x.evidence, 'officeholders'),
+    candidates: [person.name],
+    edit: { ...base, field: `officeholders[${index}].name`, kind: 'text', raw: person.name },
+  }))
+  return [...items, ...officers]
+}
+
 function DocumentView() {
   const { eid, docId } = Route.useParams()
   const { t, formatDate } = useI18n()
   const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
   const contracts = useQuery(evidenceListContractsOptions({ path: { eid } }))
   const confirmations = useQuery(evidenceListConfirmationsOptions({ path: { eid } }))
+  const extracts = useQuery(evidenceListRegistryExtractsOptions({ path: { eid } }))
   const doc = documents.data?.find((item) => item.id === docId)
   const mediaType = doc?.media_type ?? 'application/pdf'
   const isPdf = mediaType === 'application/pdf'
@@ -211,8 +271,10 @@ function DocumentView() {
     const contract = contracts.data?.find((item) => item.document_id === docId)
     if (contract) return contractItems(contract, t, formatDate)
     const confirmation = confirmations.data?.find((item) => item.reply_document_id === docId)
-    return confirmation ? confirmationItems(confirmation, t, formatDate) : []
-  }, [contracts.data, confirmations.data, docId, t, formatDate])
+    if (confirmation) return confirmationItems(confirmation, t, formatDate)
+    const extract = extracts.data?.find((item) => item.document_id === docId)
+    return extract ? registryItems(extract, t, formatDate) : []
+  }, [contracts.data, confirmations.data, extracts.data, docId, t, formatDate])
 
   const current = items.find((item) => item.id === selected) ?? null
   const shownPage = page ?? current?.page ?? 1
@@ -222,7 +284,14 @@ function DocumentView() {
   )
   const facts = items.filter((item) => item.group === 'fact')
   const terms = items.filter((item) => item.group === 'term')
-  const isContract = items[0]?.edit.target === 'contracts'
+  const officers = items.filter((item) => item.group === 'officer')
+  const target = items[0]?.edit.target
+  const factsTitle =
+    target === 'contracts'
+      ? t.docView.facts
+      : target === 'registry-extracts'
+        ? t.docView.registryFacts
+        : t.docView.replyFacts
 
   const pick = (item: Item) => {
     setSelected(item.id)
@@ -341,14 +410,12 @@ function DocumentView() {
             <h2 className="m-0 font-semibold text-base">{t.docView.extracted}</h2>
             {items.length ? (
               <>
-                <ItemGroup
-                  title={isContract ? t.docView.facts : t.docView.replyFacts}
-                  items={facts}
-                  selected={selected}
-                  onPick={pick}
-                />
+                <ItemGroup title={factsTitle} items={facts} selected={selected} onPick={pick} />
                 {terms.length ? (
                   <ItemGroup title={t.docView.terms} items={terms} selected={selected} onPick={pick} long />
+                ) : null}
+                {officers.length ? (
+                  <ItemGroup title={t.docView.officeholders} items={officers} selected={selected} onPick={pick} />
                 ) : null}
                 <div className="flex justify-end border-line-soft border-t pt-2.5">
                   <Button type="button" variant="outline" disabled={!current} onClick={() => setEditing(current)}>
@@ -358,7 +425,7 @@ function DocumentView() {
               </>
             ) : (
               <p className="m-0 text-[13.5px] text-muted-foreground">
-                {contracts.isPending || confirmations.isPending ? t.app.loading : t.docView.none}
+                {contracts.isPending || confirmations.isPending || extracts.isPending ? t.app.loading : t.docView.none}
               </p>
             )}
           </aside>

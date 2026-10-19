@@ -3,8 +3,9 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from backend.contracts.data import DocumentDetailsEdit, TableKind, XeroProfileDecision
-from backend.contracts.errors import RegistryReason
+from backend.contracts.data import DocumentDetailsEdit, ExtractionRecord, TableKind, XeroProfileDecision
+from backend.contracts.errors import AbnLookupReason
+from backend.contracts.llm_outputs import RegistryExtraction
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
@@ -210,7 +211,7 @@ class AbnLookupView(Model):
 
     status: Literal["found", "not_found", "unavailable"]  # 查到, 查不到, 查不了
     record: AbnRecord | None = None  # 查到时的登记信息 (名称不公开时 entity_name 为空串)
-    reason: RegistryReason | None = None  # 查不了的原因类别 (not_configured, unreachable, rejected, service_error)
+    reason: AbnLookupReason | None = None  # 查不了的原因类别 (not_configured, unreachable, rejected, service_error)
     # 给了 legal_name 且查到, 登记名称公开时: 与 ACC-04 同一规则 (client_intel.normalize_name) 比较是否一致; 否则为空
     name_matches: bool | None = None
 
@@ -221,6 +222,31 @@ class ConfirmationView(Confirmation):
     (如 DOC-06 失败后审计师手填了余额)."""
 
     reply_extracted: bool
+
+
+class RegistryExtractView(Model):
+    """上传的一份 ASIC 摘录的抽取结果的一版 (GET /registry-extracts 取各份的当前版, history 取全部版本, 需求 R290):
+    文件 ID, 版本号 (1 为 A3 抽取, 之后每次重抽或审计师修改加一), 内容, 谁, 何时, 改了哪个字段与理由 (抽取所得为空)."""
+
+    document_id: str
+    version: int
+    extraction: RegistryExtraction
+    changed_by: str
+    changed_at: datetime
+    field: str | None
+    reason: str | None
+
+    @classmethod
+    def of(cls, record: ExtractionRecord) -> "RegistryExtractView":
+        return cls(
+            document_id=record.target_id,
+            version=record.version,
+            extraction=RegistryExtraction.model_validate(record.data),
+            changed_by=record.changed_by,
+            changed_at=record.changed_at,
+            field=record.field,
+            reason=record.reason,
+        )
 
 
 class ProfileVersionInfo(Model):

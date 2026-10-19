@@ -67,7 +67,7 @@ def test_four_gates_registered_as_before() -> None:
             "acceptance_scorecard",
             "SCORECARD",
             "ACC-01",
-            {"approve": "p1_await_data", "reject": "declined", "rerun": "p0_intel"},
+            {"approve": "p1_await_data", "reject": "declined", "rerun": "p0_inputs"},
         ),
         GateId.PLN_01_03: (
             "gate_p1_risk",
@@ -137,7 +137,7 @@ def test_combined_route_decides_gates_in_order() -> None:
     assert exits == {
         "represent": "gate_combo",
         "ACC-01 reject": "declined",
-        "ACC-01 rerun": "p0_intel",
+        "ACC-01 rerun": "p0_inputs",
         "PLN-01/03 approve": "assemble_pack",
         "PLN-01/03 reject": "p1_analytics",
     }  # 前一道的 approve 不出节点, 不列

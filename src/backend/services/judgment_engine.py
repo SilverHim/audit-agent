@@ -15,12 +15,14 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
+    REGISTRY_POINTED,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
     CriticVerdictOut,
     DocumentClassification,
     JudgmentDraft,
+    RegistryExtraction,
     ReportDraft,
     SheetRecognition,
 )
@@ -378,6 +380,9 @@ class CheckResult:
 Check = Callable[["OutputValidator", str, Any, ValidationContext], Awaitable[CheckResult]]
 
 
+Extraction = ContractExtraction | ConfirmationExtraction | RegistryExtraction  # 抽取类输出 (引用级同一套)
+
+
 class OutputValidator:
     """LLM 输出的四级校验: 语法, 结构, 引用, 语义.
 
@@ -541,13 +546,12 @@ class OutputValidator:
         return md, []
 
     @staticmethod
-    def _extraction(
-        output: ContractExtraction | ConfirmationExtraction, document: DocumentRef | None
-    ) -> tuple[ContractExtraction | ConfirmationExtraction, list[str]]:
+    def _extraction(output: Extraction, document: DocumentRef | None) -> tuple[Extraction, list[str]]:
         """抽取输出的引用级, 返回 (改写指针后的输出, 错误).
 
         指针只能指向本文档且页码在页数内, 条款页码同样; 回函的应计利息非空时须有 locator 为 accrued_interest_cents
-        的本文档指针 (需求 R104); 有一处不成立即整条失败.
+        的本文档指针 (需求 R104); ASIC 摘录的 acn, name, status, officeholders 各须有 locator 为该字段的指针 (需求
+        R290, llm_outputs.REGISTRY_POINTED); 有一处不成立即整条失败.
         """
         if document is None:
             raise ValueError("抽取类输出的校验须给出本次抽取的文件 (ValidationContext.document)")
@@ -575,6 +579,11 @@ class OutputValidator:
             and not any(p.locator == "accrued_interest_cents" for p in output.evidence)
         ):
             errors.append("应计利息 accrued_interest_cents 非空, 却没有 locator 为 accrued_interest_cents 的指针")
+        if isinstance(output, RegistryExtraction):
+            pointed = {p.locator for p in output.evidence}
+            errors += [
+                f"摘录的 {name} 没有 locator 为 {name} 的指针" for name in REGISTRY_POINTED if name not in pointed
+            ]
         return output.model_copy(update={"evidence": evidence}), errors
 
 
@@ -590,7 +599,7 @@ async def check_judgment(
 
 
 async def check_extraction(
-    validator: OutputValidator, eid: str, output: ContractExtraction | ConfirmationExtraction, ctx: ValidationContext
+    validator: OutputValidator, eid: str, output: Extraction, ctx: ValidationContext
 ) -> CheckResult:
     """抽取输出: 指针只能指向本文档且页码在页数内; 回函抽取 (ctx.confirmation 非空) 另核对账号, 渠道不符只记提示."""
     extracted, errors = validator._extraction(output, ctx.document)
@@ -635,6 +644,7 @@ for _model, _check in (
     (JudgmentDraft, check_judgment),
     (ContractExtraction, check_extraction),
     (ConfirmationExtraction, check_extraction),
+    (RegistryExtraction, check_extraction),
     (ReportDraft, check_report),
     (CriticIndependent, check_critic),
     (CriticVerdictOut, structure_only),
