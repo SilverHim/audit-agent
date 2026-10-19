@@ -1,11 +1,10 @@
 """验收: 真实大模型 (LLM_MODE=live) 与真实存储下跑完同一流程 (R59). 审计师的决定按合成数据集设计第 7 节, 但要应对
 真实模型的输出: 失败任务提交人工结果 (允许时) 或重跑, 无判断解释的例外提交错报或推翻, 闸门决定绑定当时材料的版本.
 
-需 TEST_DATABASE_URL (同 R56) 与 .env 中的 LLM_MODEL, LLM_API_KEY (只发合成数据). worktree 里没有 .env 时读主检出的.
+需 TEST_DATABASE_URL (同 R56) 与 LLM_MODEL, LLM_API_KEY (只发合成数据): 取环境变量, LLM_ENV_FILE 或仓库 .env 中第一个
+两项都配了的 (tests.external.live_llm_settings, 需求 R114; worktree 里用 LLM_ENV_FILE 指向配置); 都没有时跳过.
 """
 
-import os
-import subprocess
 from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
@@ -41,8 +40,8 @@ from backend.contracts.models import (
     TrailKind,
     UncorrectedSchedule,
 )
-from backend.core.config import Settings
 from backend.orchestration.runner import GraphRunner
+from tests.external import LLM_KEYS, live_llm_settings
 from tests.fakes import NOW, NUMBAT_CUTOFF_DRAFT, NUMBAT_FEATURES, wait_idle
 from tests.test_decisions import acc01_decision, pln_decision
 from tests.test_e2e_mock import REPO, RealRun, real_storage
@@ -65,24 +64,6 @@ CUTOFF_REASON = (  # 认定截止性错报的理由, 即审计师的结论: 截�
     "CON-001 第 5.1 条约定客户签收发运单时所有权与风险转移, 控制权在 2026-07-03 转移, 收入属下一财年, "
     "本年收入高估 142,000"
 )
-
-
-def live_env_file() -> Path | None:
-    """真实大模型的配置文件: LLM_ENV_FILE, 仓库根的 .env, 主检出的 .env (worktree 时) 中第一个存在的."""
-    candidates = [Path(os.environ["LLM_ENV_FILE"])] if os.getenv("LLM_ENV_FILE") else []
-    candidates.append(REPO / ".env")
-    try:
-        common = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        candidates.append(Path(common).parent / ".env")
-    except (OSError, subprocess.CalledProcessError):
-        pass
-    return next((p for p in candidates if p.is_file()), None)
 
 
 async def gate_decision(run: RealRun, node: str, rejected: bool, n: int) -> GateDecision:
@@ -275,17 +256,16 @@ def llm_stats(entries: list[TrailEntry]) -> dict[str, dict[str, object]]:
     return dict(stats)
 
 
+@pytest.mark.live
 async def test_live_llm_full_flow(tmp_path: Path) -> None:
     """验收 1-4: 真实大模型跑到归档, run_error 始终为空; 每个大模型程序的结果同第 7 节, 或建了 failed / unattributed
     任务并经人工结果, 重跑, 错报或推翻后继续; 最终错报 14200000 高估, 意见保留, 报告签字; llm_call 留痕的模型为
     配置的真实模型, token 大于 0; 打印各程序尝试次数与校验失败级别."""
-    env_file = live_env_file()
-    configured = Settings(_env_file=env_file) if env_file is not None else None  # type: ignore[call-arg]
-    if configured is None or not (configured.LLM_MODEL and configured.LLM_API_KEY):
-        pytest.skip(".env 中没有 LLM_MODEL 或 LLM_API_KEY")
+    configured = live_llm_settings()  # 没配时跳过
     model = configured.LLM_MODEL
+    llm = {key: getattr(configured, key) for key in LLM_KEYS}
     features = ",".join(sorted(NUMBAT_FEATURES))  # 只开基线功能, 不受 .env 的 FEATURES 影响
-    async with real_storage(tmp_path, LLM_MODE="live", FEATURES=features, _env_file=env_file) as run:
+    async with real_storage(tmp_path, LLM_MODE="live", FEATURES=features, **llm) as run:
         troubled, reruns = await drive(run)
 
         store, eid = run.deps.output_store, run.eid

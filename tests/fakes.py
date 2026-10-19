@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
 
 import httpx
-import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
@@ -149,6 +148,7 @@ from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from backend.services.xero_link import XeroLink
+from tests.external import require_xero_snapshot
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -2782,18 +2782,15 @@ async def api_client(
         yield client
 
 
-# ── Xero Demo Company 快照: 本地 xero pull 的输出, 不入库; 本机没有时跳过用到它的测试 ──
+# ── Xero Demo Company 快照: xero pull 的输出 (本仓库已带); 找不到时跳过用到它的测试, 仓库跟踪了却找不到时失败 ──
 
 XERO_SNAPSHOTS = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"  # 快照目录的上级
 XERO_SNAPSHOT = "20261017-mock"  # 带付费接口模拟 (总账分录, 银行对账单) 的快照, 数据集名 xero/20261017-mock
 
 
 def xero_snapshot() -> Snapshot:
-    """本机的 Xero 快照; 没有时 pytest.skip."""
-    root = XERO_SNAPSHOTS / XERO_SNAPSHOT
-    if not (root / "organisation.json").exists():
-        pytest.skip(f"本机没有 Xero 快照 {root} (不入库, 见 data/external/xero/README.md)")
-    return Snapshot(root)
+    """Xero 快照 20261017-mock, 按 tests.external.require_xero_snapshot 定位与核对 (需求 R114)."""
+    return Snapshot(require_xero_snapshot(XERO_SNAPSHOT))
 
 
 def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:

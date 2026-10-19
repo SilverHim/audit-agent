@@ -90,6 +90,8 @@ docs/diagrams/render.sh [file.puml]       # 需要 ~/.local/lib/plantuml.jar 与
 - `tests/conftest.py` 强制 `CHECKPOINT_BACKEND=memory`、`LLM_MODE=mock`。
 - `tests/fakes.py` 提供假 Store、Trail、Registry 与 Numbat 样例数据。`make_deps` 在 `build_deps()` 基础上替换依赖，`make_runner` 编译带 `InMemorySaver` 的主图。runner 在后台推进，断言前须 `await wait_idle(runner, eid)`。
 - 连数据库或调真实 LLM 的测试标 `@pytest.mark.slow`。
+- 调真实大模型的测试另标 `@pytest.mark.live`（须同时标 slow，否则收集阶段报错），配置用 `tests.external.live_llm_settings()` 取：环境变量、LLM_ENV_FILE（显式指定的文件）、本仓库 .env 中第一个 LLM_MODEL 与 LLM_API_KEY 都配了的来源（LLM_BASE_URL 可选，来源之间不合并）；都没配全时跳过。worktree 里用 LLM_ENV_FILE 指向配置。
+- 依赖外部数据的测试用 `tests.external`，并标 `@pytest.mark.external`：`require_external`（data/external/<名称>，EXTERNAL_DATA_ROOT 可另指目录，缺失时跳过）；`require_xero_snapshot`、`require_xero_supplements`（Xero 快照与 data/xero_demo 补造；缺失时跳过，仓库跟踪了却找不到时失败，快照与补造的哈希不符时跳过，EXTERNAL_STRICT=1 时失败）。
 
 ## 约定
 
