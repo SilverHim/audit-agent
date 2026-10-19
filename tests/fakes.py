@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mappin
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
 from unittest import mock
@@ -1409,139 +1409,6 @@ NUMBAT_D02_ROWS = [  # CSH-02 D02: 期后 10 天的银行流水 (合成数据集
         ("BT-01-20260710-01", date(2026, 7, 10), 1596425, "EFT CREDIT MAGPIE SECURITY SYSTEMS PTY LTD", "SI-2026-0524"),
     )
 ]
-NUMBAT_D03_ROWS = [  # CSH-02 D03: 期末前 5 天两个银行科目上的分录行 (第 4.4, 5.4 节); 付款行的摘要为示意
-    {
-        "source_type": "journal_entry",
-        "id": jid,
-        "bank_account_id": account,
-        "entry_no": jid.rsplit("-", 1)[0],
-        "posting_date": date(2026, 6, 30),
-        "debit_cents": debit,
-        "credit_cents": credit,
-        "description": description,
-        "source_doc": source_doc,
-    }
-    for jid, account, debit, credit, description, source_doc in (
-        (
-            "CR-SI-2026-0547-1",
-            "BA-01",
-            5000000,
-            0,
-            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
-            "SI-2026-0547",
-        ),
-        ("CP-AP-2026-06-B-2", "BA-01", 0, 35500000, "Payment AP-2026-06-B - Tasman Passive Components", "AP-2026-06-B"),
-        ("CP-FRT-2026-06-2", "BA-01", 0, 2000000, "Payment FRT-2026-06 - Redgum Freight", "FRT-2026-06"),
-        ("CP-OPEX-2026-06-2", "BA-01", 0, 1555000, "Payment OPEX-2026-06 - sundry suppliers", "OPEX-2026-06"),
-        ("GJ-202606-INT-1", "BA-02", 119000, 0, "Interest credited June 2026", "INT-2026-06"),
-    )
-]
-
-
-# CSH-02 D04: 期末前 5 天 (06-25 至 06-30) 全部科目的分录行, 取自连库跑 D04 的结果 (Numbat 没有作废对);
-# tests/test_persistence_postgres 核对连库结果与它逐行相同
-NUMBAT_D04_ROWS = [
-    {
-        "source_type": "journal_entry",
-        "id": jid,
-        "entry_no": jid.rsplit("-", 1)[0],
-        "posting_date": date(2026, 6, day),
-        "account_code": account,
-        "debit_cents": debit,
-        "credit_cents": credit,
-        "description": description,
-    }
-    for jid, day, account, debit, credit, description in (
-        ("SJ-2026-0602-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0602 - Echidna Controls Pty Ltd"),
-        ("SJ-2026-0602-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0602 - Echidna Controls Pty Ltd"),
-        ("SJ-2026-0603-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0603 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0603-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0603 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0604-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0604 - Wombat Solar Pty Ltd"),
-        ("SJ-2026-0604-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0604 - Wombat Solar Pty Ltd"),
-        ("SJ-2026-0605-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0605 - Galah Retail Electronics Pty Ltd"),
-        ("SJ-2026-0605-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0605 - Galah Retail Electronics Pty Ltd"),
-        ("SJ-2026-0606-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0606 - Kookaburra Telecom Pty Ltd"),
-        ("SJ-2026-0606-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0606 - Kookaburra Telecom Pty Ltd"),
-        ("CR-SI-2026-0518-1", 26, "1010", 1923100, 0, "Receipt SI-2026-0518 - Cassowary Audio Pty Ltd"),
-        ("CR-SI-2026-0518-2", 26, "1100", 0, 1923100, "Receipt SI-2026-0518 - Cassowary Audio Pty Ltd"),
-        ("SJ-2026-0607-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0607 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0607-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0607 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0608-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0608 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0608-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0608 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0609-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0609 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0609-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0609 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0610-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0610 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0610-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0610 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0611-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0611 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0611-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0611 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0612-1", 28, "1100", 14200000, 0, "Sales invoice SI-2026-0612 - Bilby Robotics Pty Ltd"),
-        ("SJ-2026-0612-2", 28, "4100", 0, 14200000, "Sales invoice SI-2026-0612 - Bilby Robotics Pty Ltd"),
-        ("SJ-2026-0613-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0613 - Dingo Drive Technologies Pty Ltd"),
-        ("SJ-2026-0613-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0613 - Dingo Drive Technologies Pty Ltd"),
-        ("SJ-2026-0614-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0614 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0614-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0614 - Possum Medical Devices Pty Ltd"),
-        ("SJ-2026-0615-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0615 - Magpie Security Systems Pty Ltd"),
-        ("SJ-2026-0615-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0615 - Magpie Security Systems Pty Ltd"),
-        ("SJ-2026-0616-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0616 - Emu Rail Signals Pty Ltd"),
-        ("SJ-2026-0616-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0616 - Emu Rail Signals Pty Ltd"),
-        ("SJ-2026-0617-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0617 - Banksia Power Systems Pty Ltd"),
-        ("SJ-2026-0617-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0617 - Banksia Power Systems Pty Ltd"),
-        ("SJ-2026-0618-1", 29, "1100", 9500000, 0, "Sales invoice SI-2026-0618 - Quoll Automation Pty Ltd"),
-        ("SJ-2026-0618-2", 29, "4100", 0, 9500000, "Sales invoice SI-2026-0618 - Quoll Automation Pty Ltd"),
-        ("SJ-2026-0619-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0619 - Cassowary Audio Pty Ltd"),
-        ("SJ-2026-0619-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0619 - Cassowary Audio Pty Ltd"),
-        ("CP-AP-2026-06-B-1", 30, "2100", 35500000, 0, "EFT DEBIT TASMAN PASSIVE COMPONENTS PTY LTD"),
-        ("CP-AP-2026-06-B-2", 30, "1010", 0, 35500000, "EFT DEBIT TASMAN PASSIVE COMPONENTS PTY LTD"),
-        ("CP-FRT-2026-06-1", 30, "6300", 2000000, 0, "EFT DEBIT REDGUM FREIGHT PTY LTD"),
-        ("CP-FRT-2026-06-2", 30, "1010", 0, 2000000, "EFT DEBIT REDGUM FREIGHT PTY LTD"),
-        ("CP-OPEX-2026-06-1", 30, "6500", 1555000, 0, "EFT DEBIT SUNDRY SUPPLIERS"),
-        ("CP-OPEX-2026-06-2", 30, "1010", 0, 1555000, "EFT DEBIT SUNDRY SUPPLIERS"),
-        (
-            "CR-SI-2026-0547-1",
-            30,
-            "1010",
-            5000000,
-            0,
-            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
-        ),
-        (
-            "CR-SI-2026-0547-2",
-            30,
-            "1100",
-            0,
-            5000000,
-            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
-        ),
-        ("GJ-202606-ACC-1", 30, "6500", 4200000, 0, "Increase in accrued expenses"),
-        ("GJ-202606-ACC-2", 30, "2200", 0, 4200000, "Increase in accrued expenses"),
-        ("GJ-202606-COGS-1", 30, "5100", 105000000, 0, "Cost of goods sold"),
-        ("GJ-202606-COGS-2", 30, "1200", 0, 105000000, "Cost of goods sold"),
-        ("GJ-202606-DEP-1", 30, "6400", 16000000, 0, "Depreciation FY2026"),
-        ("GJ-202606-DEP-2", 30, "1510", 0, 16000000, "Depreciation FY2026"),
-        ("GJ-202606-ECL-1", 30, "6500", 1000000, 0, "Increase in ECL allowance"),
-        ("GJ-202606-ECL-2", 30, "1150", 0, 1000000, "Increase in ECL allowance"),
-        ("GJ-202606-INT-1", 30, "1020", 119000, 0, "Savings interest"),
-        ("GJ-202606-INT-2", 30, "4200", 0, 119000, "Savings interest"),
-        ("GJ-202606-LVE-1", 30, "6100", 3200000, 0, "Increase in annual leave provision"),
-        ("GJ-202606-LVE-2", 30, "2300", 0, 3200000, "Increase in annual leave provision"),
-        ("GJ-202606-PRE-1", 30, "1300", 1660000, 0, "Increase in prepayments"),
-        ("GJ-202606-PRE-2", 30, "6500", 0, 1660000, "Increase in prepayments"),
-        ("GJ-202606-PUR-1", 30, "1200", 107917400, 0, "Inventory purchases"),
-        ("GJ-202606-PUR-2", 30, "2100", 0, 107917400, "Inventory purchases"),
-        ("GJ-202606-TAX-1", 30, "8100", 45000000, 0, "Income tax expense FY2026"),
-        ("GJ-202606-TAX-2", 30, "2400", 0, 45000000, "Income tax expense FY2026"),
-        ("SJ-2026-0620-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0620 - Emu Rail Signals Pty Ltd"),
-        ("SJ-2026-0620-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0620 - Emu Rail Signals Pty Ltd"),
-        ("SJ-2026-0621-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0621 - Wallaby Instruments Pty Ltd"),
-        ("SJ-2026-0621-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0621 - Wallaby Instruments Pty Ltd"),
-        ("SJ-2026-0622-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0622 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0622-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0622 - Platypus Sensor Works Pty Ltd"),
-        ("SJ-2026-0623-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0623 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0623-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0623 - Lorikeet Lighting Pty Ltd"),
-        ("SJ-2026-0624-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0624 - Kookaburra Telecom Pty Ltd"),
-        ("SJ-2026-0624-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0624 - Kookaburra Telecom Pty Ltd"),
-    )
-]
 
 
 def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
@@ -1910,6 +1777,52 @@ def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
             rows = [model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)]
         tables[kind] = tuple(with_category(r) if isinstance(r, records.Account) else r for r in rows)
     return tables
+
+
+def numbat_window_lines(lookback_days: int = 5) -> list[JournalEntry]:
+    """Numbat 总账 (data/demo/journal_entries.csv) 期末前 lookback_days 天的分录行 (闭区间, 同 CSH-02 D03, D04 的窗口;
+    缺省同 CSH-02.yaml 的 lookback_days), 按 (入账日, 行 ID)."""
+    end = ENGAGEMENT.period_end
+    lines = cast(tuple[JournalEntry, ...], numbat_tables()[TableKind.journal_entries])
+    return sorted(
+        (j for j in lines if end - timedelta(days=lookback_days) <= j.posting_date <= end),
+        key=lambda j: (j.posting_date, j.id),
+    )
+
+
+NUMBAT_BANK_GL = {r.gl_account_code: r.id for r in NUMBAT_ROWS if isinstance(r, BankAccount)}  # 总账科目 → 银行账户
+# CSH-02 D03, D04 的行: 由 CSV 按两条规则的口径派生 (Numbat 没有作废对, 不剔除), 列与次序同规则 SQL;
+# tests/test_persistence_postgres 核对连库结果与它们整行相同
+NUMBAT_D03_ROWS = [  # D03: 窗口内银行科目上的分录行, 按 (银行账户, 入账日, 行 ID)
+    {
+        "source_type": "journal_entry",
+        "id": j.id,
+        "bank_account_id": NUMBAT_BANK_GL[j.account_code],
+        "entry_no": j.entry_no,
+        "posting_date": j.posting_date,
+        "debit_cents": j.debit_cents,
+        "credit_cents": j.credit_cents,
+        "description": j.description,
+        "source_doc": j.source_doc,
+    }
+    for j in sorted(
+        (j for j in numbat_window_lines() if j.account_code in NUMBAT_BANK_GL),
+        key=lambda j: (NUMBAT_BANK_GL[j.account_code], j.posting_date, j.id),
+    )
+]
+NUMBAT_D04_ROWS = [  # D04: 窗口内全部科目的分录行, 按 (入账日, 行 ID)
+    {
+        "source_type": "journal_entry",
+        "id": j.id,
+        "entry_no": j.entry_no,
+        "posting_date": j.posting_date,
+        "account_code": j.account_code,
+        "debit_cents": j.debit_cents,
+        "credit_cents": j.credit_cents,
+        "description": j.description,
+    }
+    for j in numbat_window_lines()
+]
 
 
 @functools.cache

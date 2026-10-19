@@ -267,9 +267,15 @@ def with_d04_line(agent: FieldworkAgent, **line: int) -> None:
 )
 async def test_d04_accrued_interest_not_booked(accrued: int | None, line: dict[str, int], expected: int | None) -> None:
     """R105 验收 2: BA-02 余额相符 (C-BA-02 v3 仍为 agreed); 回函应计利息绝对值超过明显微小且 D04 的行里没有等额的
-    行时出 X-CSH-02-1-D04-1 (金额带符号, detail 记搜索窗口, 证据为应计利息所在页), BA-02 进判断 (差额 0), 建
+    行时出 X-CSH-02-1-D04-1 (金额带符号, detail 记搜索窗口, 证据为应计利息所在页, 种类与可靠性取回函当前的文件登记:
+    这里把 BA-02 的回函登记为副本, 与抽取时指针上的 external_original 不同), BA-02 进判断 (差额 0), 建
     T-J-CSH-02-1-BA-02-v1; 否则只有 BA-01 的 D01, BA-02 不判断."""
     agent, ctx, engine = setup([extracted("BA-01", 120840000, 0), extracted("BA-02", 40000000, 1, accrued)])
+    copy = NUMBAT_REPLIES[1].model_copy(update={"reliability": Reliability.external_copy})
+    financial = agent.deps.financial_store
+    assert isinstance(financial, FakeFinancialStore)
+    financial.document_refs = [NUMBAT_REPLIES[0], copy]  # 文件登记以存储为准, 编排状态里的一并换
+    ctx.state["documents"] = [NUMBAT_REPLIES[0], copy]
     if line:
         with_d04_line(agent, **line)
     patch = await agent.run(ctx)
@@ -293,6 +299,7 @@ async def test_d04_accrued_interest_not_booked(accrued: int | None, line: dict[s
     }
     [pointer] = d04.evidence
     assert (pointer.source_id, pointer.locator, pointer.page) == (NUMBAT_REPLIES[1].id, "accrued_interest_cents", 1)
+    assert (pointer.type, pointer.reliability) == (EvidenceType.external, Reliability.external_copy)
     calls = {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
     assert sorted(calls) == ["BA-01", "BA-02"]
     assert calls["BA-02"].data["difference_cents"] == 0
@@ -336,11 +343,12 @@ async def test_judging_context_for_ba01() -> None:
     assert [r["id"] for r in data["subsequent_transactions"]] == [r["id"] for r in NUMBAT_D02_ROWS]
     # BT-01-20260702-01, 日期为 JSON 字符串
     assert data["subsequent_transactions"][2] == {**NUMBAT_D02_ROWS[2], "txn_date": "2026-07-02"}
-    assert [r["id"] for r in data["period_end_entries"]] == [
-        "CR-SI-2026-0547-1",
+    assert [r["id"] for r in data["period_end_entries"]] == [  # D03 中 BA-01 的行, 不带 BA-02 的
+        "CR-SI-2026-0518-1",
         "CP-AP-2026-06-B-2",
         "CP-FRT-2026-06-2",
         "CP-OPEX-2026-06-2",
+        "CR-SI-2026-0547-1",
     ]
     assert [x.id for x in jctx.rule_findings] == ["X-CSH-05-1-B01-1", "X-CSH-02-1-D01-1"]
     assert jctx.task["params"] == {  # Numbat 没有数据集声明, 作废对的格式与模板为空

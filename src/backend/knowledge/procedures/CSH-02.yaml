@@ -19,7 +19,9 @@ params:
   lookback_days: 5              # 期末前总账分录范围 (D03, D04 共用的窗口, 闭区间)
   clearly_trivial_cents: {ref: clearly_trivial_cents}   # D04: 应计利息绝对值超过它才算
   # 作废对 (数据集声明, 没有声明时为空, 不剔除): 冲回凭证的说明格式与原凭证号的模板. pattern 由 DatasetTraits 按 Python re
-  # 校验, 在下面的 SQL 里按 PostgreSQL 正则执行, 须写成两边通用的写法 (不用命名分组等 Python 独有的写法)
+  # 校验, 在下面的 SQL 里按 PostgreSQL 正则执行, 须写成两边通用的写法: 不用命名分组等 Python 独有的写法 (PostgreSQL 报错),
+  # 也不用两边都能编译而含义不同的写法, 如 \b 在 Python 为词边界, 在 PostgreSQL 为退格 (词边界写 \y), 不报错而作废对静默
+  # 不剔除. 宜只用字面量, 字符类, \d 与一个捕获组
   reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}
   reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
 depends_on: [CSH-05, DOC-06]
