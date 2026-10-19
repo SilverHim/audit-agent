@@ -1,8 +1,11 @@
 """Numbat 合成数据集的生成脚本 (data/generate_demo.py, 需求 R284): 各表的列写成常量, 与 data/demo 的表头逐字相同,
-不随契约给记录模型新加的可选字段变化. 只比对表头, 不重生成 (完整的确定性检查见 uv run python data/check_demo.py)."""
+不随契约给记录模型新加的可选字段变化. 只比对表头与 manifest 哈希, 不重生成
+(完整的确定性检查见 uv run python data/check_demo.py)."""
 
 import csv
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -47,3 +50,11 @@ def test_generator_columns_match_demo_headers() -> None:
 def test_generator_copies_the_same_upload_fixtures_as_the_guard() -> None:
     """运行副本 data/demo/llm 里同步的上传处理固定输出, 生成脚本与 test_knowledge 的守卫用同一份清单."""
     assert generator().UPLOAD_RUNTIME == UPLOAD_RUNTIME
+
+
+def test_manifest_hashes_match_files() -> None:
+    """manifest 登记的哈希与 data/demo 中的文件一致: 改了运行副本 (如 llm/ 下同步的固定输出) 须重跑生成脚本, 不手改."""
+    root = DATA / "demo"
+    files = json.loads((root / "manifest.json").read_text(encoding="utf-8"))["files"]
+    stale = [f["path"] for f in files if hashlib.sha256((root / f["path"]).read_bytes()).hexdigest() != f["sha256"]]
+    assert stale == []
