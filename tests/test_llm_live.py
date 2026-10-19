@@ -32,6 +32,7 @@ from backend.core.config import Settings
 from backend.orchestration.nodes import GraphNodes
 from tests.external import live_llm_settings
 from tests.test_ingest_doc06 import raw, setup
+from tests.tools.live_budget import Budget, BudgetedLLMClient, report
 
 KEY = "sk-test-0123456789"
 REQUEST = LLMRequest(
@@ -524,13 +525,15 @@ async def test_doc06_through_judgment_engine_with_fake_http() -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.live
-async def test_live_doc06_extracts_ba01_reply() -> None:
+@pytest.mark.live(max_calls=6)  # 两份回函, 每份最多 3 次尝试 (需求 R115 的预算)
+async def test_live_doc06_extracts_ba01_reply(live_budget: Budget) -> None:
     """验收 4 (联网): 配好的真实接口 (环境变量或 .env, tests.external.live_llm_settings) 读 BA-01 回函, 得回函余额
-    120840000, 截至 2026-06-30."""
+    120840000, 截至 2026-06-30. 调用计入预算, 超限即失败; 结束时写用量汇总."""
     settings = live_llm_settings()
-    agent, ctx, trail = setup(llm=make_llm_client(settings))
+    agent, ctx, trail = setup(llm=BudgetedLLMClient(make_llm_client(settings), live_budget))
     patch = await agent.run(ctx)
+    report("test_live_doc06_extracts_ba01_reply", trail.entries, live_budget)
+    live_budget.check()
     ba01 = next(c for c in patch["confirmations"] if c.bank_account_id == "BA-01")
     assert (ba01.confirmed_balance_cents, ba01.balance_date) == (120840000, date(2026, 6, 30))
     assert all(settings.LLM_API_KEY not in json.dumps(e.model_dump(mode="json")) for e in trail.entries)

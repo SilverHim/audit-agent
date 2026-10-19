@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from backend.adapters.llm import LLMTransportError, MockLLMClient
+from backend.adapters.llm import LLMTransportError, MockLLMClient, SwitchableLLMClient
 from backend.agents.base import AgentDeps, ProcedureAgent
 from backend.contracts.models import (
     AuditReportVersion,
@@ -36,6 +36,7 @@ from tests.fakes import (
 from tests.test_decisions import Started
 from tests.test_e2e_mock import REPO, RealRun, real_agents
 from tests.test_p2_agents_demo import replies
+from tests.tools.live_budget import Budget
 
 
 def facts_in_request(req: LLMRequest) -> bool:
@@ -111,19 +112,21 @@ class InjectingLLM:
         )
 
 
-def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, RealRun]:
-    """把验收测试的配置读取与真实存储组装换成假实现; 返回的字典在运行后装着那次的 RealRun."""
-    observed: dict[str, RealRun] = {}
+def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, Any]:
+    """把验收测试的配置读取与真实存储组装换成假实现; 返回的字典在运行后装着那次的 RealRun ("run") 与用量汇总
+    ("usage", 不写文件). 主模型与复核模型都包在 SwitchableLLMClient 里 (同组装根), 预算由 install_budget 装上."""
+    observed: dict[str, Any] = {}
 
     def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
-        deps.judgments.llm = InjectingLLM(mode)  # type: ignore[misc]
+        deps.judgments.llm = SwitchableLLMClient(InjectingLLM(mode), "probe-model")  # type: ignore[misc]
         return real_agents(deps)
 
     @asynccontextmanager
     async def storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRun]:
         financial = FakeFinancialStore(replies(), dict(NUMBAT_RECORDS), trial_balance=NUMBAT_TRIAL_BALANCE)
         # 独立复核 (A7, GEN-09) 的复核模型也换成同样的假模型: 留痕同样记假模型名与 token
-        runner, store = make_runner(financial_store=financial, agents=agents, review_llm=InjectingLLM(mode))
+        review = SwitchableLLMClient(InjectingLLM(mode), "probe-model")
+        runner, store = make_runner(financial_store=financial, agents=agents, review_llm=review)
         engagement_store = runner.deps.engagement_store
         run = RealRun(Started(runner, store, engagement_store), runner.deps, ENGAGEMENT.id, ENGAGEMENT.owner_id)  # type: ignore[arg-type]
         observed["run"] = run
@@ -135,9 +138,15 @@ def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, RealRun]:
     probe = SimpleNamespace(LLM_MODEL="probe-model", LLM_API_KEY="probe", LLM_BASE_URL="")
     monkeypatch.setattr(live, "live_llm_settings", lambda: probe)
     monkeypatch.setattr(live, "real_storage", storage)
+    monkeypatch.setattr(live, "write_summary", lambda name, data: observed.update(usage=data))
     if mode == "cutoff_unattributed_bare":
         monkeypatch.setattr(live, "CUTOFF_REASON", "跨期")  # 审计师认定错报时理由不写事实
     return observed
+
+
+def roomy() -> Budget:
+    """离线跑验收时的预算: 远大于一次流程的调用数, 不会超限."""
+    return Budget(max_calls=500)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +157,7 @@ async def test_acceptance_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     验收照常通过, 统计打印不因对象为空而崩 (R59-01); 高估换成名词说法也通过 (R59-08); 截止性判断失败后审计师对
     例外认定错报, 报告引人工判断, 照样签字归档 (R59-06)."""
     offline(monkeypatch, mode)
-    await live.test_live_llm_full_flow(tmp_path)
+    await live.test_live_llm_full_flow(tmp_path, roomy())
 
 
 @pytest.mark.parametrize(
@@ -169,14 +178,14 @@ async def test_acceptance_rejects(
     """模型结果与第 7 节不一致且不是人给的结论: 验收 2 不通过, 不一致处含注入的那一项."""
     observed = offline(monkeypatch, mode)
     with pytest.raises(AssertionError):
-        await live.test_live_llm_full_flow(tmp_path)
+        await live.test_live_llm_full_flow(tmp_path, roomy())
     assert problem in await live.mismatches(observed["run"])
 
 
 async def test_acceptance_arbitrates_dispute(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """独立复核 (A7) 判 BA-01 与原判断不一致: 建争议任务, 审计师仲裁维持原结论 (原结论同第 7 节), 照样签字归档."""
     observed = offline(monkeypatch, "critic_disagrees")
-    await live.test_live_llm_full_flow(tmp_path)
+    await live.test_live_llm_full_flow(tmp_path, roomy())
     run = observed["run"]
     tasks = await run.deps.output_store.latest(run.eid, ReviewTask)
     disputes = [(t.target_id, t.status) for t in tasks if t.kind is TaskKind.dispute]

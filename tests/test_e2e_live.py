@@ -5,7 +5,7 @@
 两项都配了的 (tests.external.live_llm_settings, 需求 R114; worktree 里用 LLM_ENV_FILE 指向配置); 都没有时跳过.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -36,7 +36,6 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
     TermType,
-    TrailEntry,
     TrailKind,
     UncorrectedSchedule,
 )
@@ -46,6 +45,7 @@ from tests.fakes import NOW, NUMBAT_CUTOFF_DRAFT, NUMBAT_FEATURES, wait_idle
 from tests.test_decisions import acc01_decision, pln_decision
 from tests.test_e2e_mock import REPO, RealRun, real_storage
 from tests.test_flow import FIN_APPROVE, RPT_APPROVE, RPT_REJECT
+from tests.tools.live_budget import Budget, install_budget, summary, write_summary
 
 pytestmark = pytest.mark.slow
 
@@ -128,9 +128,10 @@ async def review_decision(run: RealRun, task: ReviewTask, reruns: Counter[str], 
     return ReviewRecord(decision=Decision.rerun, reason="模型输出未通过校验, 重跑", **common)
 
 
-async def drive(run: RealRun) -> tuple[list[ReviewTask], Counter[str]]:
+async def drive(run: RealRun, budget: Budget) -> tuple[list[ReviewTask], Counter[str]]:
     """从启动推进到归档: 每次停下先处理待决任务 (一次一条), 没有待决任务时按所在闸门决定. 返回出现过的全部失败与
-    无解释任务, 以及各程序的重跑次数. run_error 始终为空."""
+    无解释任务, 以及各程序的重跑次数. run_error 始终为空. 每次提交决定前查预算 (需求 R115): 已超限即失败, 不再提交
+    rerun (超预算的调用在 Agent 里转成 failed 任务, 照常重跑会反复超限)."""
     s, eid = run.s, run.eid
     troubled: dict[str, ReviewTask] = {}
     reruns: Counter[str] = Counter()
@@ -146,6 +147,7 @@ async def drive(run: RealRun) -> tuple[list[ReviewTask], Counter[str]]:
         tasks = await run.deps.output_store.latest(eid, ReviewTask)
         troubled |= {t.id: t for t in tasks if t.kind in (TaskKind.failed, TaskKind.unattributed)}
         pending = sorted((t for t in tasks if t.status is TaskStatus.pending), key=lambda t: t.id)
+        budget.check()
         if pending:
             await s.submit.submit(eid, await review_decision(run, pending[0], reruns, n))
             continue
@@ -242,38 +244,29 @@ async def human_outcomes(run: RealRun) -> set[tuple[str, str]]:
     return {(j.procedure_id, j.subject_id) for j in judgments if "-H" in j.id and j.subject_id is not None}
 
 
-def llm_stats(entries: list[TrailEntry]) -> dict[str, dict[str, object]]:
-    """各程序的大模型调用统计: 调用次数, 各尝试序号的次数, 各校验失败级别的次数, token 合计."""
-    stats: dict[str, dict[str, object]] = defaultdict(dict)
-    for pid in sorted({e.procedure_id or "" for e in entries}):
-        rows = [e for e in entries if e.procedure_id == pid]
-        stats[pid] = {
-            "calls": len(rows),
-            "attempts": dict(Counter(e.payload["attempt"] for e in rows)),
-            "level_failed": dict(Counter(e.payload["level_failed"] or "passed" for e in rows)),
-            "tokens": sum((e.input_tokens or 0) + (e.output_tokens or 0) for e in rows),
-        }
-    return dict(stats)
-
-
-@pytest.mark.live
-async def test_live_llm_full_flow(tmp_path: Path) -> None:
+@pytest.mark.live(max_calls=60)  # 用量上限 (需求 R115), LIVE_MAX_CALLS 等可覆盖
+async def test_live_llm_full_flow(tmp_path: Path, live_budget: Budget) -> None:
     """验收 1-4: 真实大模型跑到归档, run_error 始终为空; 每个大模型程序的结果同第 7 节, 或建了 failed / unattributed
     任务并经人工结果, 重跑, 错报或推翻后继续; 最终错报 14200000 高估, 意见保留, 报告签字; llm_call 留痕的模型为
-    配置的真实模型, token 大于 0; 打印各程序尝试次数与校验失败级别."""
+    配置的真实模型, token 大于 0. 主模型与复核模型共用一个预算 (缺省 60 次调用), 超限即失败; 用量汇总 (各程序的
+    调用, token, 尝试次数与校验失败级别) 写 var/eval 并打印."""
     configured = live_llm_settings()  # 没配时跳过
     model = configured.LLM_MODEL
     llm = {key: getattr(configured, key) for key in LLM_KEYS}
     features = ",".join(sorted(NUMBAT_FEATURES))  # 只开基线功能, 不受 .env 的 FEATURES 影响
     async with real_storage(tmp_path, LLM_MODE="live", FEATURES=features, **llm) as run:
-        troubled, reruns = await drive(run)
+        install_budget(run.deps, live_budget)
+        try:
+            troubled, reruns = await drive(run, live_budget)
+        finally:
+            entries = await run.deps.trail.list(run.eid, TrailKind.llm_call, limit=10_000)
+            usage = summary(entries, live_budget)
+            live_budget.reported = True
+            write_summary("test_live_llm_full_flow", usage)
 
         store, eid = run.deps.output_store, run.eid
-        entries = await run.deps.trail.list(eid, TrailKind.llm_call, limit=10_000)
-        stats = llm_stats(entries)
         found = await mismatches(run)
         handled = await human_outcomes(run)
-        print("\n大模型调用统计:", stats)
         print("失败或无解释任务:", sorted((t.procedure_id, t.subject_id or "", t.kind.value) for t in troubled))
         print("重跑次数:", dict(reruns), "与第 7 节不一致:", found)
 
@@ -288,5 +281,5 @@ async def test_live_llm_full_flow(tmp_path: Path) -> None:
         assert [(r.opinion_type, r.approved_by) for r in signed] == [(OpinionType.qualified, run.owner)]
         assert entries and all(e.model and e.model.startswith(model) for e in entries)  # 验收 4
         assert all((e.input_tokens or 0) > 0 and (e.output_tokens or 0) > 0 for e in entries)
-        assert set(stats) - {"GEN-09"} == {"DOC-04", "DOC-06", "REV-03", "REV-02", "CSH-02", "RPT-03"}
+        assert set(usage["by_procedure"]) - {"GEN-09"} == {"DOC-04", "DOC-06", "REV-03", "REV-02", "CSH-02", "RPT-03"}
         assert all(e.actor == "A7" for e in entries if e.procedure_id == "GEN-09")  # 独立复核按触发规则, 次数随模型输出

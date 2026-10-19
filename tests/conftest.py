@@ -45,3 +45,28 @@ def pytest_collection_modifyitems(config, items):
     bad = live_without_slow(items)
     if bad:
         raise pytest.UsageError("标了 live 的测试须同时标 slow: " + ", ".join(bad))
+
+
+@pytest.fixture(scope="session")
+def live_session_budget(request):
+    """整个会话的大模型用量预算 (需求 R115): 上限缺省为本次选中的各 live 测试上限之和, LIVE_SESSION_MAX_* 可调低;
+    各测试的预算挂在它下面, 记账一并计入. 会话结束时有调用就写一份汇总."""
+    from tests.tools.live_budget import Budget, session_limits, summary, write_summary
+
+    budget = Budget(**session_limits(request.session.items))  # type: ignore[arg-type]
+    yield budget
+    if budget.used.calls:
+        write_summary("live-session", summary([], budget))
+
+
+@pytest.fixture
+def live_budget(request, live_session_budget):
+    """一个 live 测试的大模型用量预算: 上限取 @pytest.mark.live(max_calls=...) 的默认值, LIVE_MAX_* 覆盖. 测试自己没
+    写汇总 (reported) 而有调用时, 结束时按包装记的账写一份 (没有留痕的尝试与失败级别)."""
+    from tests.tools.live_budget import Budget, declared_limits, summary, write_summary
+
+    marker = request.node.get_closest_marker("live")
+    budget = Budget(**declared_limits(marker.kwargs if marker else {}), parent=live_session_budget)  # type: ignore[arg-type]
+    yield budget
+    if budget.used.calls and not budget.reported:
+        write_summary(request.node.name, summary([], budget))

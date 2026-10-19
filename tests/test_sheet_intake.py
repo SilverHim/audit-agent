@@ -38,6 +38,7 @@ from backend.services.judgment_engine import OutputValidator, structure_only
 from tests.external import live_llm_settings
 from tests.fakes import ENGAGEMENT, UPLOAD_FIXTURES, FakeRegistry, FakeTrail, LayeredMockLLM, ScriptedLLM, make_deps
 from tests.test_table_plan import masked
+from tests.tools.live_budget import Budget, BudgetedLLMClient, report
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
@@ -453,13 +454,17 @@ LIVE_SAMPLES = [
 
 
 @pytest.mark.slow
-@pytest.mark.live
+@pytest.mark.live(max_calls=3)  # 一个工作表一次识别, 最多 3 次尝试 (需求 R115 的预算)
 @pytest.mark.parametrize(("path", "kind"), LIVE_SAMPLES, ids=lambda v: v.name if isinstance(v, Path) else None)
-async def test_live_recognizes_samples(path: Path, kind: TableKind) -> None:
+async def test_live_recognizes_samples(
+    path: Path, kind: TableKind, live_budget: Budget, request: pytest.FixtureRequest
+) -> None:
     """真实大模型识别各样例: 走大模型 (不退回), 认对表种类; 方案能套到全表 (失败处由确认单标红, 这里只记个数).
-    配置取环境变量或 .env (tests.external.live_llm_settings)."""
+    配置取环境变量或 .env (tests.external.live_llm_settings); 调用计入预算, 超限即失败, 结束时写用量汇总."""
     settings = live_llm_settings()
-    [reading], trail = await recognize(path, llm=make_llm_client(settings))
+    [reading], trail = await recognize(path, llm=BudgetedLLMClient(make_llm_client(settings), live_budget))
+    report(request.node.name, trail.entries, live_budget)
+    live_budget.check()
 
     assert (reading.method, reading.plan.kind) == ("llm", kind)
     assert all(settings.LLM_API_KEY not in json.dumps(e.model_dump(mode="json")) for e in trail.entries)
