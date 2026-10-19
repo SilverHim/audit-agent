@@ -1686,7 +1686,7 @@ class FakeDatasetLoader:
         self.traits_calls: list[str] = []  # dataset_traits 收到的数据集名, 按调用顺序
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
         self.adjustment_loads.append((eid, dataset, list(entry_nos) if entry_nos is not None else None))
         if self.adjustments is None:
@@ -1874,7 +1874,9 @@ class FakeDataStore:
     async def open_requests(self, eid: str) -> int:
         return self.open_count + sum(r.status == "open" for r in self.data_requests.values())
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
         from backend.services.data_quality import summarize
 
         if self.seeded and not self.tables and not self.approvals:
@@ -1892,6 +1894,7 @@ class FakeDataStore:
             period_start,
             period_end,
             dataset="demo" if self.seeded else None,
+            adjustment_prefix=adjustment_prefix,
         )
 
     async def check_run(self, eid: str) -> CheckRun | None:

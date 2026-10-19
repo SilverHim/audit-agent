@@ -64,12 +64,15 @@ def summarize(
     period_start: date,
     period_end: date,
     dataset: str | None = None,
+    adjustment_prefix: str | None = None,
 ) -> CheckInputs:
-    """由各表的行算体检汇总, 口径同 PostgresDataStore.check_inputs."""
+    """由各表的行算体检汇总, 口径同 PostgresDataStore.check_inputs (发生额不算凭证号以 adjustment_prefix 开头的审计
+    更正分录)."""
     rows = list(journals)
     movements: dict[str, int] = {}
     for row in rows:
-        if period_start <= row.posting_date <= period_end:
+        adjustment = bool(adjustment_prefix) and row.entry_no.startswith(adjustment_prefix or "")
+        if period_start <= row.posting_date <= period_end and not adjustment:
             movements[row.account_code] = movements.get(row.account_code, 0) + row.debit_cents - row.credit_cents
     balances: dict[str, dict[str, int]] = {"current": {}, "prior": {}}
     for line in trial_balance:

@@ -1100,7 +1100,8 @@ async def test_xero_q1_loads_supplements(tmp_path):
 
 async def test_load_adjustments_two_rounds(tmp_path):
     """R73: 真实库载入 xero/20261017-q1 后按两轮载入更正分录: 行数, data_version, 幂等, gl_balance, 试算表不变;
-    尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写."""
+    尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写. R271: 每轮有新行时总账整表换一版 (版本行的来源,
+    原文件名, 行数与写入人), 两轮之后体检的借贷平衡, 分录与试算表, 行数与来源都通过, 计入更正分录时分录与试算表不符."""
     url = os.getenv("TEST_DATABASE_URL")
     api = ROOT / "data/external/xero/api"
     if not url or not (api / "20261017-q1").exists():
@@ -1150,7 +1151,7 @@ async def test_load_adjustments_two_rounds(tmp_path):
     assert await state(e.id) == (1022, 2)
     assert await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01", "AJE-X05"]) == first  # 幂等
     assert await state(e.id) == (1022, 2)
-    second = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X02", "AJE-X03", "AJE-X04"])
+    second = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X02", "AJE-X03", "AJE-X04"], actor=user)
     assert len(second) == 6 and await state(e.id) == (1028, 3)
     # 需求 R274: 每轮更正分录载入在 data_changes 记总账分录 (过期判断按它), 幂等的那次不记
     from backend.persistence.data_store import PostgresDataStore
@@ -1172,6 +1173,33 @@ async def test_load_adjustments_two_rounds(tmp_path):
         -126697,
     ]
     assert await financial.trial_balance(e.id, "current") == trial  # 试算表不动
+    # 需求 R271: 两轮各一版总账 (幂等与空列表的调用不出版本), 体检不计审计更正分录
+    from backend.contracts.data import DataCheck, TableKind
+    from backend.services.data_quality import run_checks
+
+    data = PostgresDataStore(tmp_path, engine)
+    journals = [v for v in await data.versions(e.id) if v.kind is TableKind.journal_entries]
+    assert [(v.id, v.data_version, v.records, v.source, v.file_name, v.created_by) for v in journals] == [
+        ("XERO-journal_entries-v2", 2, 1022, "xero", "adjustments/journal_entries.csv", "A1"),
+        ("XERO-journal_entries-v3", 3, 1028, "xero", "adjustments/journal_entries.csv", user),
+    ]
+
+    async def checks(prefix: str | None) -> dict[str, DataCheck]:
+        inputs = await data.check_inputs(e.id, date(2026, 7, 1), as_of, adjustment_prefix=prefix)
+        result = run_checks(inputs, statements=0, journal_version=journals[-1], now=now())
+        return {c.id.value: c for c in result.checks}
+
+    excluded = await checks("AJE-")
+    assert [excluded[k].status for k in ("debits_equal_credits", "journals_agree_tb", "count_agrees_source")] == [
+        "passed",
+        "passed",
+        "passed",
+    ]
+    assert excluded["count_agrees_source"].params == {"source": "Xero", "expected": 1028, "received": 1028}
+    counted = (await checks(None))["journals_agree_tb"]  # 去掉排除规则: 更正分录计入发生额
+    assert counted.status == "failed"
+    assert {"account_code": "620", "difference_cents": 4853} in counted.params["differences"]
+    assert {"account_code": "710", "difference_cents": -75000} in counted.params["differences"]
 
     # 同 ID 内容不同: 更正分录文件换成摘要改过的副本 (只替换文件位置, 走同一套写入)
     source = ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv"
@@ -1203,6 +1231,9 @@ async def test_load_adjustments_two_rounds(tmp_path):
     await xero.load(fresh.id, "xero/20261017-q1")
     assert len(await xero.load_adjustments(fresh.id, "xero/20261017-q1")) == 11
     assert await state(fresh.id) == (1028, 2)
+    assert [
+        (v.data_version, v.records) for v in await data.versions(fresh.id) if v.kind is TableKind.journal_entries
+    ] == [(2, 1028)]
     assert [await financial.gl_balance(fresh.id, code, as_of) for code in ("620", "270", "710", "820")] == [
         4853,
         -4853,

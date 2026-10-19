@@ -350,8 +350,10 @@ class XeroFakeDataStore(FakeDataStore):
         kinds = (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries)
         self.tables = {kind: list(tables[kind]) for kind in kinds}  # 体检汇总读这三张
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
-        inputs = await super().check_inputs(eid, period_start, period_end)
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
+        inputs = await super().check_inputs(eid, period_start, period_end, adjustment_prefix=adjustment_prefix)
         return inputs.model_copy(update={"dataset": XERO_DATASET})
 
     async def write_tables(self, eid: str, tables: Mapping[TableKind, Sequence[BaseModel]], **kwargs: Any) -> int:

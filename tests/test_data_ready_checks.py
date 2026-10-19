@@ -211,7 +211,7 @@ async def test_stale_checkup_is_redone_before_judging(monkeypatch: pytest.Monkey
         await import_numbat(client, (DEMO / "journal_entries.csv").read_bytes())
         inputs = data.check_inputs
 
-        async def broken(*args: Any) -> CheckInputs:
+        async def broken(*args: Any, **kwargs: Any) -> CheckInputs:
             raise RuntimeError("汇总失败")
 
         monkeypatch.setattr(data, "check_inputs", broken)

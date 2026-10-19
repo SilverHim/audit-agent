@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Text, delete, false, func, insert, or_, select, true, update
+from sqlalchemy import ColumnElement, Text, delete, false, func, insert, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -251,7 +251,9 @@ class PostgresDataStore(Store):
 
     # ── 体检与补交请求 (需求 R15) ──
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
         j = m.FINANCIAL[TableKind.journal_entries]
         tb = m.FINANCIAL[TableKind.trial_balance]
         a = m.FINANCIAL[TableKind.accounts]
@@ -262,9 +264,12 @@ class PostgresDataStore(Store):
             func.count().filter(j.c.created_by.is_not(None), j.c.created_by.not_in(sorted(PLACEHOLDER_PREPARERS))),
             func.count().filter(j.c.approved_by.is_not(None), j.c.approved_by != ""),
         )
+        counted: list[ColumnElement[bool]] = [j.c.posting_date.between(period_start, period_end)]
+        if adjustment_prefix:  # 审计更正分录不计发生额 (见 DataStore.check_inputs)
+            counted.append(~j.c.entry_no.startswith(adjustment_prefix, autoescape=True))
         movements = (
             select(j.c.account_code, func.sum(j.c.debit_cents - j.c.credit_cents))
-            .where(j.c.posting_date.between(period_start, period_end))
+            .where(*counted)
             .group_by(j.c.account_code)
         )
         balances = select(tb.c.period, tb.c.account_code, func.sum(tb.c.balance_cents)).group_by(

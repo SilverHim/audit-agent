@@ -193,6 +193,29 @@ async def test_fake_loader_adjustments() -> None:
         await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X09"])
 
 
+@pytest.mark.parametrize("actor", [None, "U-7"])
+async def test_adjustment_writer_is_passed_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, actor: str | None
+) -> None:
+    """需求 R271: 更正分录载入的写入人 (actor, 缺省 A1) 经路由与 CSV, Xero 两种载入器原样交给公共写入 (写版本行的
+    created_by), 防路由转发时丢掉而一律记成 A1."""
+    seen: list[tuple[str, str]] = []
+
+    async def insert(self: Any, eid: str, dataset: str, path: Path, entry_nos: Any, writer: str) -> list[Any]:
+        seen.append((dataset, writer))
+        return []
+
+    monkeypatch.setattr(stores.TableLoader, "insert_adjustments", insert)
+    csv = stores.CsvDatasetLoader(tmp_path, engine=object(), evidence_store=object())  # type: ignore[arg-type]
+    xero = xero_loader(tmp_path)
+    monkeypatch.setattr(xero, "adjustments_path", lambda dataset: tmp_path / "adjustments.csv")
+    routing = stores.RoutingDatasetLoader(csv, {"xero/": xero})
+    kwargs = {} if actor is None else {"actor": actor}
+    for dataset in ("demo", "xero/x"):
+        await routing.load_adjustments("E", dataset, ["AJE-X01"], **kwargs)
+    assert seen == [("demo", actor or "A1"), ("xero/x", actor or "A1")]
+
+
 async def test_adjustment_inputs_are_checked(tmp_path: Path) -> None:
     """created_at 没有时区时拒绝 (写库读回带时区, 重放会被误判为内容不同); 单个字符串当凭证号列表时拒绝."""
     source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"

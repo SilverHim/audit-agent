@@ -254,13 +254,14 @@ class DatasetLoader(Protocol):
     def client_profile(self, dataset: str) -> ClientProfile: ...
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
         """按凭证号把数据集的更正分录 (adjustments/journal_entries.csv) 载入 journal_entries, 返回所请求分录的全部行,
         按 id 排序; entry_nos 为 None 时载入文件中全部, 为空列表时不载入, 返回 [] (要全部须传 None). 幂等: 已有的
-        同 id 同内容行跳过, 有新行时 data_version 加一;
-        试算表不动. 凭证号不在文件中抛 LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛
-        ValueError; 项目锁定抛 EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""
+        同 id 同内容行跳过; 有新行时总账整表换一版 (现有行加新行, 同 DataStore.write_tables: 来源 xero, 原文件名
+        adjustments/journal_entries.csv, 写入人 actor), data_version 加一, 记版本行; 试算表不动. 凭证号不在文件中抛
+        LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛 ValueError; 项目锁定抛
+        EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""
         ...
 
     def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
@@ -324,9 +325,12 @@ class DataStore(Protocol):
         """待补交 (status open) 的请求数."""
         ...
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
         """体检要用的财务数据汇总 (按 SQL 汇总, 口径见 services.data_quality.summarize); 发生额只算入账日期在
-        [period_start, period_end] 内的分录."""
+        [period_start, period_end] 内的分录, 不算凭证号以 adjustment_prefix 开头的审计更正分录 (需求 R271: 试算表
+        不随更正改版, 计入就必然与试算表不符; 为空或空串时都算)."""
         ...
 
     async def check_run(self, eid: str) -> CheckRun | None:

@@ -25,12 +25,14 @@ from backend.contracts.records import Account, JournalEntry, TrialBalanceRow
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.persistence.stores import ADJUSTMENTS
 from backend.services.data_quality import reconcile, run_checks, summarize
 from backend.services.data_service import DataService
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
     SEEDED_STATS,
+    FakeDatasetLoader,
     FakeDataStore,
     FakeEngagementStore,
     FakeFinancialStore,
@@ -44,6 +46,7 @@ from tests.fakes import (
 )
 from tests.test_data_ready import waiting_for_data
 from tests.test_decisions import acc01_decision
+from tests.xero_fakes import XERO_DATASET, XeroFakeDataStore, make_xero_deps, xero_adjustments, xero_traits
 
 EID = ENGAGEMENT.id
 NOW = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)
@@ -242,6 +245,69 @@ def test_summarize_ignores_placeholder_preparer_and_out_of_period_journals() -> 
         date(2026, 6, 30),
     )
     assert (inputs.journal_rows, inputs.preparer_rows, inputs.movements) == (3, 0, {})
+
+
+@pytest.mark.parametrize(("prefix", "movement"), [("AJE-", 100), (None, 200), ("", 200)])
+def test_summarize_leaves_out_audit_adjustments_by_prefix(prefix: str | None, movement: int) -> None:
+    """需求 R271: 发生额不计凭证号以前缀开头的审计更正分录; 没有前缀或前缀为空串时都计 (防空串把全部分录当作更正).
+    借贷合计与行数照算全部分录."""
+    rows = [
+        JournalEntry(
+            id=f"{no}-1",
+            entry_no=no,
+            posting_date=date(2026, 6, 1),
+            created_at=None,
+            created_by=None,
+            approved_by=None,
+            account_code="1010",
+            debit_cents=100,
+            description=None,
+            source_doc=None,
+        )
+        for no in ("AJE-1", "E-1")
+    ]
+    inputs = summarize(
+        [Account(code="1010", name="Cash", type="asset", category="cash")],
+        [],
+        rows,
+        date(2025, 7, 1),
+        date(2026, 6, 30),
+        adjustment_prefix=prefix,
+    )
+    assert (inputs.journal_rows, inputs.debit_cents, inputs.movements) == (2, 200, {"1010": movement})
+
+
+@pytest.mark.external
+@pytest.mark.parametrize("prefix", [None, "ADJ-"], ids=["declared", "other_prefix"])
+async def test_checkup_leaves_out_declared_audit_adjustments(prefix: str | None) -> None:
+    """需求 R271 验收 2: Xero 演示两轮更正 (11 行) 写成总账新版本 (同 load_adjustments 的整表写入) 之后, A3 体检按
+    数据集声明的前缀 (q1 声明 AJE-) 不计更正分录, 借贷平衡, 分录与试算表, 行数与来源都通过. 声明换成别的前缀时更正
+    分录照计, 分录与试算表报差异 (含 620 +4853 与 710 -75000): 前缀取自数据集声明, 不是写死的缺省值."""
+    deps = make_xero_deps()
+    data, datasets = deps.data, deps.datasets
+    assert isinstance(data, XeroFakeDataStore) and isinstance(datasets, FakeDatasetLoader)
+    if prefix is not None:
+        declared = xero_traits().model_copy(update={"audit_adjustment_entry_prefix": prefix})
+        datasets.traits[XERO_DATASET] = declared
+    journals = [*data.tables[TableKind.journal_entries], *xero_adjustments()]
+    await data.write_tables(
+        EID, {TableKind.journal_entries: journals}, source="xero", actor="A1", file_name=ADJUSTMENTS.as_posix()
+    )
+
+    run = await DataCheckup(deps).run(EID)
+
+    checks = {c.id: c for c in run.checks}
+    assert checks[CheckId.count_agrees_source].params == {"source": "Xero", "expected": 1028, "received": 1028}
+    assert checks[CheckId.debits_equal_credits].status == "passed"
+    agree = checks[CheckId.journals_agree_tb]
+    if prefix is None:
+        assert (agree.status, agree.params["differences"]) == ("passed", [])
+    else:
+        assert agree.status == "failed"
+        differences = agree.params["differences"]
+        assert {"account_code": "620", "difference_cents": 4853} in differences
+        assert {"account_code": "710", "difference_cents": -75000} in differences
+    assert checks[CheckId.count_agrees_source].status == "passed"
 
 
 def request(rid: str, *, status: str = "open", at: datetime = NOW, **values: Any) -> DataRequest:
@@ -536,7 +602,7 @@ async def test_checkup_failure_does_not_fail_the_write(monkeypatch: pytest.Monke
     data = FakeDataStore(ready=False)
     _, service, _ = service_for(data)
 
-    async def broken(eid: str, start: date, end: date) -> CheckInputs:
+    async def broken(eid: str, start: date, end: date, **kwargs: Any) -> CheckInputs:
         raise RuntimeError("汇总失败")
 
     monkeypatch.setattr(data, "check_inputs", broken)
@@ -681,7 +747,7 @@ async def test_import_retry_redoes_checkup_skipped_after_trail_failure(monkeypat
             raise RuntimeError("留痕写失败")
         return await write(entry)
 
-    async def no_inputs(*args: Any) -> CheckInputs:
+    async def no_inputs(*args: Any, **kwargs: Any) -> CheckInputs:
         raise RuntimeError("汇总失败")
 
     monkeypatch.setattr(trail, "record", no_import_trail)
@@ -706,7 +772,7 @@ async def test_failed_checkup_after_upload_is_redone_when_p1_resumes(monkeypatch
         await service.write_tables(EID, tables, source="import", actor="U-1")
     inputs = data.check_inputs
 
-    async def no_inputs(*args: Any) -> CheckInputs:
+    async def no_inputs(*args: Any, **kwargs: Any) -> CheckInputs:
         raise RuntimeError("汇总失败")
 
     monkeypatch.setattr(data, "check_inputs", no_inputs)
@@ -732,7 +798,7 @@ async def test_recover_redoes_stale_checkup_without_unfinished_documents(monkeyp
     runner, service, _ = service_for(data)
     inputs = data.check_inputs
 
-    async def no_inputs(*args: Any) -> CheckInputs:
+    async def no_inputs(*args: Any, **kwargs: Any) -> CheckInputs:
         raise RuntimeError("汇总失败")
 
     monkeypatch.setattr(data, "check_inputs", no_inputs)

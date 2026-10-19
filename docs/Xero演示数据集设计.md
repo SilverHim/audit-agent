@@ -1177,7 +1177,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
 10. 更正分录: 不在载入时入库. G4 的 CorrectionNotice (adjustments_posted) 增加 `adjustment_entry_nos`, `load_adjustments` 只载入列出的分录 (本数据集分两轮: AJE-X01 与 AJE-X05; AJE-X02 至 X04). Numbat 只有一轮, 不填时载入全部, 行为不变.
-    - 端口已实现 (R73): `load_adjustments(eid, dataset, entry_nos=None)` 幂等, 有新行时 data_version 加一, 试算表不动; `adjustment_entries` 与 `adjustment_entry_nos` 列出可载入的凭证. data/demo 目前没有 adjustments 目录, 对 Numbat 调用抛 FileNotFoundError, 不为 Numbat 补数据.
+    - 端口已实现 (R73, R271 改): `load_adjustments(eid, dataset, entry_nos=None, *, actor="A1")` 幂等, 有新行时总账整表换一版 (现有行加新行, 经 DataStore.write_tables: 来源 xero, 原文件名 adjustments/journal_entries.csv, 记版本行, 两轮之后 records 为 1022 与 1028), data_version 加一, 试算表不动; 体检的分录与试算表一项不计凭证号以 `audit_adjustment_entry_prefix` (AJE-) 开头的行, 两轮之后照常通过; `adjustment_entries` 与 `adjustment_entry_nos` 列出可载入的凭证. data/demo 目前没有 adjustments 目录, 对 Numbat 调用抛 FileNotFoundError, 不为 Numbat 补数据.
 11. documents/index.csv 列出的 19 份文件不由载入器登记: 经上传接口上传, 类型由 A3 分类, 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表; 第 9.5 节登记途径); 类型取值与证据映射见第 4 节类型表.
 12. fs_v1.json 作为 FIN-12 的财报输入 (G6 的 financial_statements 端口).
 13. dataset_traits.json 供程序参数 `{ref: dataset.<键>}` 解析; payroll/employees.csv 供 FIN-15.
@@ -1325,7 +1325,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 **载入端口与构造** (签名):
 - `XeroDatasetLoader(root, planning, engine=None, evidence_store=None, *, supplements: Path | None = None, allow_injected: bool = False)`; 补造与快照不匹配抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头, 只列文件名.
-- `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 幂等, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
+- `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 另有关键字参数 actor, 缺省 "A1"; 幂等, 有新行时总账出一个新版本, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
 - `DatasetLoader.dataset_traits(dataset) -> DatasetTraits` (缺文件时为缺省值); `DatasetLoader.period(dataset) -> tuple[date, date] | None`.
 - `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回演示数据导入之后的七张表, load 与测试共用; R268 起不再带合同 PDF 路径), `supplement_tables(dataset)` 与 `xero_supplements.plan(loader, dataset)` (演示导入清单, 本节上文); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
 - `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]`; `FinancialDataStore.financial_statements(eid) -> FinancialStatements | None`, `record(eid, "financial_statement_line", code)`.
