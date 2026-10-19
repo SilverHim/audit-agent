@@ -768,7 +768,6 @@ def test_spec_layout() -> None:
 def test_generated_values_match_design() -> None:
     text = doc()
     assert read("dataset_traits.json") == json_block(section(text, "### 5.2 数据集声明 dataset_traits.json"))
-    assert set(read("dataset_traits.json")) == checker.TRAIT_KEYS  # type: ignore[arg-type]
     assert read("client_profile.json") == json_block(section(text, "### 2.6 客户画像 (覆盖载入器产出)"))
     from backend.contracts.models import ClientProfile
 
@@ -921,14 +920,16 @@ def test_unlisted_missing_and_unflagged_files(tmp_path: Path) -> None:
     assert f"{copy / 'client_profile.json'}: manifest 中 synthetic 不为 true" in lines
 
 
-def test_strict_models_and_trait_keys(tmp_path: Path) -> None:
+def test_strict_models_including_dataset_traits(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     profile = json.loads((copy / "client_profile.json").read_text(encoding="utf-8"))
     profile["synthetic"] = True  # 领域模型 extra="forbid", 合成标志不能加成字段
     profile["notes"] = "Profile without the synthetic prefix."
     (copy / "client_profile.json").write_text(json.dumps(profile), encoding="utf-8")
     traits = json.loads((copy / "dataset_traits.json").read_text(encoding="utf-8"))
-    del traits["payroll_register"]
+    traits["payroll_registers"] = traits.pop("payroll_register")  # 错键: 声明按模型严格解析, 未知键不合模型
+    traits["entry_timestamps_reliable"] = "no"  # 严格模式不做类型转换
+    traits["dataset"] = "xero/20261017-mock"  # 合模型, 但不是 manifest 的数据集 (载入器按数据集名核对)
     (copy / "dataset_traits.json").write_text(json.dumps(traits), encoding="utf-8")
     risks = json.loads((copy / "planning" / "risk_register.json").read_text(encoding="utf-8"))
     risks[0]["fraud_related"] = "yes"  # 严格模式不做类型转换
@@ -938,7 +939,8 @@ def test_strict_models_and_trait_keys(tmp_path: Path) -> None:
     assert f"{copy / 'client_profile.json'}: 不符合领域模型 (1 处)" in lines
     assert f"{copy / 'client_profile.json'}: notes 不以 'Synthetic – for demonstration only' 开头" in lines
     assert f"{copy / 'planning/risk_register.json'}: 不符合领域模型 (1 处)" in lines
-    assert f"{copy / 'dataset_traits.json'}: 键与第 5.2 节不符 (多 [], 缺 ['payroll_register'])" in lines
+    assert f"{copy / 'dataset_traits.json'}: 不符合领域模型 (2 处)" in lines
+    assert f"{copy / 'dataset_traits.json'}: dataset 不是 xero/20261017-q1" in lines
 
 
 def test_login_contact_scan_reports_file_names_only(tmp_path: Path) -> None:

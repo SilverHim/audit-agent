@@ -76,6 +76,7 @@ from backend.contracts.records import (
     BankTransaction,
     DatasetTraits,
     DeliveryNote,
+    Employee,
     JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
@@ -119,6 +120,10 @@ class FinancialDataStore(Protocol):
     async def delivery_notes(self, eid: str, invoice_ids: Sequence[str]) -> list[DeliveryNote]: ...
 
     async def bank_accounts(self, eid: str) -> list[BankAccount]: ...
+
+    async def employees(self, eid: str) -> list[Employee]:
+        """工资册 (需求 R96), 按员工编号排序; 没写过为空."""
+        ...
 
     async def bank_transactions(
         self, eid: str, bank_account_id: str, date_from: date, date_to: date
@@ -267,7 +272,10 @@ class DatasetLoader(Protocol):
         ...
 
     def dataset_traits(self, dataset: str) -> DatasetTraits:
-        """数据集声明 (程序参数 {ref: dataset.<键>} 的取值); 没有声明的数据集为缺省值 DatasetTraits()."""
+        """数据集声明 (程序参数 {ref: dataset.<键>} 的取值, 需求 R96 读文件): Xero 读已核对的补造目录的
+        dataset_traits.json, 不合模型 (含未知键) 或 dataset 与数据集名不符抛 ValueError (SupplementMismatch);
+        没有补造目录或没有这个文件的 Xero 快照与 CSV 数据集 (Numbat) 为缺省值 DatasetTraits(). 同步读文件, 同
+        planning_presets."""
         ...
 
     def datasets(self) -> list[str]:

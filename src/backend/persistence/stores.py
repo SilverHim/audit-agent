@@ -57,6 +57,7 @@ from backend.contracts.records import (
     BankTransaction,
     DatasetTraits,
     DeliveryNote,
+    Employee,
     JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
@@ -211,6 +212,13 @@ class PostgresFinancialDataStore(Store):
         return [
             BankAccount.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
             for r in await self.rows(eid, select(t).order_by(t.c.id))
+        ]
+
+    async def employees(self, eid: str) -> list[Employee]:
+        t = m.FINANCIAL["employees"]
+        return [
+            Employee.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, select(t).order_by(t.c.employee_id))
         ]
 
     async def bank_transactions(
@@ -500,7 +508,7 @@ FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
     "delivery_notes": DeliveryNote,
     "bank_accounts": BankAccount,
     "bank_transactions": BankTransaction,
-}  # 财务表 → 行模型, 与 m.FINANCIAL 同序
+}  # 数据集载入的财务表 → 行模型, 与 m.FINANCIAL 同序; 工资册不随数据集载入, 不在其中
 
 
 Tables = tuple[Mapping[str, Sequence[BaseModel]], Sequence[Path]]  # (财务表 → 行, 合同 PDF 路径)
@@ -792,8 +800,11 @@ class XeroDatasetLoader(TableLoader):
         return [x.entry_no for x in self.adjustment_entries(dataset)]
 
     def dataset_traits(self, dataset: str) -> DatasetTraits:
-        """数据集声明; 读补造目录的 dataset_traits.json 由后续需求做, 现在取缺省值."""
-        return DatasetTraits()
+        """数据集声明: 已核对的补造目录的 dataset_traits.json (Supplements.dataset_traits); 没有补造目录或没有这个
+        文件 (如 20261017-mock) 取缺省值."""
+        found = self.supplement(dataset)
+        traits = found.dataset_traits() if found else None
+        return traits if traits is not None else DatasetTraits()
 
     def client_profile(self, dataset: str) -> ClientProfile:
         found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在

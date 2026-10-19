@@ -402,7 +402,7 @@ function GenericTable({ columns, rows }: { columns: TableColumn[]; rows: Array<R
     if (column.type === 'bool') return value ? '✓' : '—'
     return String(value)
   }
-  const numeric = (column: TableColumn) => column.type === 'amount'
+  const numeric = (column: TableColumn) => column.type === 'amount' || column.type === 'integer'
   return (
     <div className="overflow-x-auto rounded-xl border bg-card">
       <table className="w-full border-collapse text-[13.5px]">

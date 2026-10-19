@@ -221,16 +221,31 @@ async def test_fake_loader_matches_real_semantics() -> None:
         await empty.load_adjustments("E", "demo")
 
 
-def test_dataset_traits_default_until_read_from_supplements() -> None:
-    """数据集声明: CSV (Numbat) 没有声明, 取缺省值; Xero 载入器先也取缺省值 (读补造目录的声明另做); 路由按前缀转发."""
+def test_dataset_traits_default_for_csv_and_routing() -> None:
+    """CSV (Numbat) 没有声明, 取缺省值; 路由按前缀转发."""
     from backend.contracts.records import DatasetTraits
     from tests.fakes import FakeDatasetLoader, FakeFinancialStore
 
-    loaders = routing()
-    assert loaders.dataset_traits("demo") == DatasetTraits() == loaders.default.dataset_traits("demo")
-    assert loaders.dataset_traits("xero/20261017-q1") == DatasetTraits()
+    csv = routing().default
+    assert csv.dataset_traits("demo") == DatasetTraits()
     declared = DatasetTraits(dataset="xero/x", prior_period_start=None, audit_adjustment_entry_prefix="ADJ-")
     xero = FakeDatasetLoader(FakeFinancialStore(), traits={"xero/x": declared})
-    picked = stores.RoutingDatasetLoader(loaders.default, {"xero/": xero})
+    picked = stores.RoutingDatasetLoader(csv, {"xero/": xero})
     assert picked.dataset_traits("xero/x") is declared and picked.dataset_traits("demo") == DatasetTraits()
     assert xero.traits_calls == ["xero/x"]
+
+
+@pytest.mark.external
+def test_dataset_traits_read_from_supplements() -> None:
+    """R96 验收 2: 没有补造目录的快照 (20261017-mock) 取缺省值; xero/20261017-q1 读已核对的补造目录的
+    dataset_traits.json (各值同设计第 5.2 节, 见 test_knowledge.test_dataset_traits_from_design)."""
+    from backend.contracts.records import DatasetTraits
+    from tests.external import require_xero_snapshot, require_xero_supplements
+
+    require_xero_snapshot("20261017-mock")
+    require_xero_snapshot("20261017-q1")
+    declared = require_xero_supplements("20261017-q1") / "dataset_traits.json"
+    loaders = routing()
+    assert loaders.dataset_traits("xero/20261017-mock") == DatasetTraits()
+    q1 = loaders.dataset_traits("xero/20261017-q1")
+    assert q1 == DatasetTraits.model_validate_json(declared.read_bytes()) != DatasetTraits()

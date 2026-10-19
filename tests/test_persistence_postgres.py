@@ -1059,6 +1059,7 @@ async def test_xero_q1_loads_supplements(tmp_path):
         "delivery_notes": 24,
         "bank_accounts": 2,
         "bank_transactions": 146,
+        "employees": 0,  # 工资册不随数据集载入 (需求 R96)
     }
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
@@ -1339,3 +1340,51 @@ async def test_concurrent_new_clients_with_one_abn_only_one_wins():
             assert [e.profile.id for e in await store.clients() if e.profile.abn == abn] == [won[0].id]
     finally:
         await engine.dispose()
+
+
+async def test_payroll_register_written_as_a_new_data_version(storage, tmp_path):
+    """需求 R96: 数据集载入不写工资册; 经 PostgresDataStore.write_tables (source import) 写入后 employees 按员工编号读回
+    3 行, 数据版本 +1, data_imports 一版, 记 employees 变动; 再写整表替换; 另一项目读不到 (行级安全)."""
+    from backend.contracts.data import DataChange, DataInput, TableKind
+    from backend.persistence.data_store import PostgresDataStore
+    from tests.test_employees import EXPECTED as staff  # 补造目录工资册的 3 名员工
+
+    engine, e, loader, _evidence = storage
+    other = await PostgresEngagementStore(engine).create(
+        owner_id=e.owner_id,
+        period_start=date(2025, 7, 1),
+        period_end=date(2026, 6, 30),
+        dataset="demo",
+        profile=loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex}),
+    )
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    data = PostgresDataStore(tmp_path, engine)
+    assert await financial.employees(e.id) == []  # 数据集载入不写它
+    assert (await data.stats(e.id))[TableKind.employees].records == 0
+
+    version = await data.write_tables(
+        e.id, {TableKind.employees: list(reversed(staff))}, source="import", actor="U-1", file_name="employees.csv"
+    )
+
+    rows = await financial.employees(e.id)
+    assert [(r.employee_id, r.name, r.gross_per_period_cents) for r in rows] == [
+        ("E001", "Oliver Gray", 240000),
+        ("E002", "Tracy Green", 180000),
+        ("E003", "Odette Garrison", 250000),
+    ]
+    assert rows == staff  # 入职日, 雇佣类型与发薪周期也读回 (都是 2026-07-20, full_time, 14)
+    assert version == 2 and (await data.readiness(e.id)).data_version == 2
+    assert [(v.kind, v.source, v.records, v.file_name, v.data_version) for v in await data.versions(e.id)] == [
+        (TableKind.employees, "import", 3, "employees.csv", 2)
+    ]
+    assert [c for c in await data.changes(e.id) if c.data_version == 2] == [
+        DataChange(data_version=2, input=DataInput.employees)
+    ]
+    assert (await data.stats(e.id))[TableKind.employees].records == 3
+
+    await data.write_tables(e.id, {TableKind.employees: staff[:1]}, source="import", actor="U-1")  # 整表替换
+    assert [r.employee_id for r in await financial.employees(e.id)] == ["E001"]
+    assert await financial.employees(other.id) == []
+    assert await financial.query(other.id, "SELECT count(*) AS n FROM employees", {}) == [{"n": 0}]
+    assert await financial.query(e.id, "SELECT count(*) AS n FROM employees", {}) == [{"n": 1}]

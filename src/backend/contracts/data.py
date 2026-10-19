@@ -23,7 +23,8 @@ from backend.contracts.records import AccountCategory, CategoryBasis
 
 
 class TableKind(StrEnum):
-    """账表种类: 七张财务表与审批日志. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与审批时间."""
+    """账表种类: 七张财务表, 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与
+    审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入."""
 
     accounts = "accounts"  # 科目表
     trial_balance = "trial_balance"  # 试算表 (本期与上期)
@@ -33,10 +34,11 @@ class TableKind(StrEnum):
     bank_transactions = "bank_transactions"  # 银行流水
     delivery_notes = "delivery_notes"  # 发运单
     approval_log = "approval_log"  # 审批日志
+    employees = "employees"  # 工资册 (需求 R96)
 
 
 class DataInput(StrEnum):
-    """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 八种账表 (取值同 TableKind),
+    """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 九种账表 (取值同 TableKind),
     加审计师修改过的合同与回函抽取结果, 以及审计师补登记的文件登记. 改科目分类改的是科目表, 记 accounts."""
 
     accounts = "accounts"  # 科目表 (含科目分类)
@@ -47,6 +49,7 @@ class DataInput(StrEnum):
     bank_transactions = "bank_transactions"  # 银行流水
     delivery_notes = "delivery_notes"  # 发运单
     approval_log = "approval_log"  # 审批日志 (补进总账分录的审批人与审批时间)
+    employees = "employees"  # 工资册 (需求 R96)
     contracts = "contracts"  # 合同抽取结果 (审计师修改)
     confirmations = "confirmations"  # 回函抽取结果 (审计师修改)
     documents = "documents"  # 文件登记: 审计师补登记的可靠性, 文件日期与关联对象 (需求 R90)
@@ -69,8 +72,8 @@ class DataChange(Model):
 
 # 账表的来源: Xero 同步, 审计师导入, 数据集载入 (种子与演示项目; 概览里显示为空)
 DataSource = Literal["xero", "import", "dataset"]
-# 导入字段的类型: 文本, 日期, 日期时间, 金额 (整数分), 是否
-FieldType = Literal["text", "date", "datetime", "amount", "bool"]
+# 导入字段的类型: 文本, 日期, 日期时间, 金额 (整数分), 是否, 整数 (如工资册的发薪周期天数)
+FieldType = Literal["text", "date", "datetime", "amount", "bool", "integer"]
 # 导入时文本日期的写法: 日月年, 年月日, 月日年
 DateFormat = Literal["dmy", "ymd", "mdy"]
 

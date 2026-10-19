@@ -82,6 +82,7 @@ export const TABLE_KINDS: TableKind[] = [
   'bank_transactions',
   'delivery_notes',
   'approval_log',
+  'employees',
 ]
 
 // R11 概览; 有进行中的处理时每 3 秒轮询, 处理完时刷新本项目其他数据 (文件状态, 补交请求, 总览)

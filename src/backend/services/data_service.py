@@ -124,6 +124,7 @@ TABLE_NAMES: dict[TableKind, str] = {  # 留痕摘要里的表名
     TableKind.bank_transactions: "银行流水",
     TableKind.delivery_notes: "发运单",
     TableKind.approval_log: "审批日志",
+    TableKind.employees: "工资册",
 }
 
 

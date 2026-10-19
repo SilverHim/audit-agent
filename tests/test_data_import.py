@@ -22,7 +22,7 @@ def sheet_of(text: str, name: str = "x.csv") -> d.Sheet:
     return d.read_sheet(name, text.encode("utf-8"))
 
 
-@pytest.mark.parametrize("kind", [k for k in TableKind if k is not TableKind.approval_log])
+@pytest.mark.parametrize("kind", [k for k in TableKind if (DEMO / f"{k}.csv").is_file()])  # data/demo 的 7 张表
 def test_demo_csv_parses_like_csv_loader(kind: TableKind) -> None:
     """data/demo 的 CSV: 建议的表种类与对应都对, 转换结果与 CsvDatasetLoader 的解析一致."""
     path = DEMO / f"{kind}.csv"

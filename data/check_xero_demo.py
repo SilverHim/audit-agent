@@ -40,7 +40,7 @@ from backend.contracts.models import (
     ReceiptChannel,
     RiskItem,
 )
-from backend.contracts.records import JournalEntry
+from backend.contracts.records import DatasetTraits, JournalEntry
 
 REPO = gen.ROOT.parent
 CHANNELS = frozenset(c.value for c in ReceiptChannel)
@@ -49,21 +49,6 @@ NOT_OFFICIAL = "不是正式补造目录"
 NO_CUAD = "没有 CUAD"
 BASE_KEYS = ["dataset", "file", "txt", "sha256", "excerpts"]
 PROFILE_NOTES_PREFIX = "Synthetic – for demonstration only"
-TRAIT_KEYS = frozenset(
-    {
-        "dataset",
-        "data_as_of",
-        "prior_period_start",
-        "entry_timestamps_reliable",
-        "entry_timestamps_note",
-        "reversal_reference_pattern",
-        "reversal_entry_no_template",
-        "counterparty_prefixes",
-        "audit_adjustment_entry_prefix",
-        "payroll_accounts",
-        "payroll_register",
-    }
-)  # 第 5.2 节的 11 个键
 FIXTURES = REPO / "tests" / "fixtures"
 SCAN_PATHS = (
     gen.SPEC,
@@ -77,6 +62,7 @@ MODELS: dict[str, TypeAdapter[Any]] = {
     "client_profile.json": TypeAdapter(ClientProfile),
     "planning/audit_objectives.json": TypeAdapter(list[AuditObjective]),
     "planning/risk_register.json": TypeAdapter(list[RiskItem]),
+    "dataset_traits.json": TypeAdapter(DatasetTraits),  # 第 5.2 节, 需求 R96: 按载入器读取的模型严格解析
 }  # 按领域模型严格校验的结构化文件 (extra="forbid", 不能加合成标志字段)
 
 
@@ -108,6 +94,7 @@ def check(
         *guarded(manifest_path, check_manifest, directory, manifest),
         *guarded(directory, check_synthetic, directory, manifest, header),
         *guarded(directory, check_models, directory),
+        *guarded(directory / "dataset_traits.json", check_traits_dataset, directory, manifest),
         *guarded(directory / "registry", check_registry, directory),
         *guarded(directory, check_numbers, directory),
         *guarded(directory / "delivery_notes.csv", check_delivery_notes, directory),
@@ -379,7 +366,7 @@ def check_synthetic(directory: Path, manifest: dict[str, Any], header: str) -> l
 
 
 def check_models(directory: Path) -> list[str]:
-    """结构化文件按领域模型严格校验; dataset_traits.json 的键集合等于第 5.2 节."""
+    """结构化文件按领域模型严格校验 (含 dataset_traits.json, 替代原来的键集合比较)."""
     problems: list[str] = []
     for name, adapter in MODELS.items():
         path = directory / name
@@ -390,16 +377,18 @@ def check_models(directory: Path) -> list[str]:
             adapter.validate_json(path.read_bytes(), strict=True)
         except ValidationError as error:
             problems.append(f"{rel(path)}: 不符合领域模型 ({error.error_count()} 处)")
+    return problems
+
+
+def check_traits_dataset(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """数据集声明的 dataset 须为 manifest 的数据集 (载入器按数据集名核对, 见 Supplements.dataset_traits); 文件缺失
+    或不合模型由 check_models 报."""
     traits = directory / "dataset_traits.json"
     data = read_json(traits)
-    if not traits.is_file():
-        problems.append(f"{rel(traits)}: 文件不存在")
-    elif not isinstance(data, dict):
-        problems.append(f"{rel(traits)}: 不是合法的 JSON 对象")
-    elif (keys := set(data)) != TRAIT_KEYS:
-        extra, lack = sorted(keys - TRAIT_KEYS), sorted(TRAIT_KEYS - keys)
-        problems.append(f"{rel(traits)}: 键与第 5.2 节不符 (多 {extra}, 缺 {lack})")
-    return problems
+    expected = manifest["dataset"]
+    if isinstance(data, dict) and data.get("dataset") != expected:
+        return [f"{rel(traits)}: dataset 不是 {expected}"]
+    return []
 
 
 def abn_valid(abn: str) -> bool:

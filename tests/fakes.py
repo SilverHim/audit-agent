@@ -125,6 +125,7 @@ from backend.contracts.records import (
     BankTransaction,
     DatasetTraits,
     DeliveryNote,
+    Employee,
     JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
@@ -628,8 +629,8 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts)
-    与试算表 (trial_balance), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts),
+    试算表 (trial_balance) 与工资册 (employees), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -638,8 +639,10 @@ class FakeFinancialStore:
         contracts: list[Contract] | None = None,
         trial_balance: list[TrialBalanceRow] | None = None,
         accounts: list[Account] | None = None,
+        employees: list[Employee] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+        self.employee_rows = list(employees or [])  # 工资册 (可预置; FakeDataStore.write_tables 写入时替换), 各项目共用
         self.account_rows = list(accounts or [])  # 科目表, 各项目共用
         self.trial_balance_rows = list(trial_balance or [])  # 试算表的行, 两期混在一起, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
@@ -672,6 +675,10 @@ class FakeFinancialStore:
         """科目表中代码在 codes 内的科目 (None 取全部), 按代码升序, 同真实实现."""
         wanted = set(codes) if codes is not None else None  # 先转集合, 同 journal_entries
         return sorted((a for a in self.account_rows if wanted is None or a.code in wanted), key=lambda a: a.code)
+
+    async def employees(self, eid: str) -> list[Employee]:
+        """工资册, 按员工编号排序 (同真实实现)."""
+        return sorted(self.employee_rows, key=lambda e: e.employee_id)
 
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
@@ -1918,6 +1925,8 @@ class FakeDataStore:
                 self.approvals = [cast(ApprovalLogRow, r) for r in rows]
             elif kind in (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries):
                 self.tables[kind] = list(rows)
+            elif kind is TableKind.employees and self.financial is not None:  # 工资册整表替换, FakeFinancialStore 读出
+                self.financial.employee_rows = [Employee.model_validate(r.model_dump()) for r in rows]
         self.record(*table_changes(tables))
         for kind, rows in tables.items():
             if kind is TableKind.trial_balance:

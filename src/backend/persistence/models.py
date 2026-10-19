@@ -44,6 +44,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "sales_invoices": {"customer_abn", "contract_id", "journal_entry_id"},
             "delivery_notes": {"shipped_date", "signed_date", "signed_by"},
             "bank_transactions": {"description", "reference"},
+            "employees": {"employment_type"},
             "contracts": {"counterparty_abn", "amount_cents", "sign_date"},
             "documents": {"uploaded_by", "failed_step", "document_date"},
             "engagements": {"dataset"},  # 新建的客户没有数据集 (R288)
@@ -138,6 +139,12 @@ FINANCIAL = {
         "bank_transactions",
         "id:s bank_account_id:s txn_date:d amount_cents:b balance_after_cents:b description:s reference:s",
         ("id",),
+    ),
+    # 工资册 (需求 R96, 迁移 0013): 不随数据集载入, 经 DataStore.write_tables 写入
+    "employees": table(
+        "employees",
+        "employee_id:s name:s start_date:d employment_type:s pay_period_days:i gross_per_period_cents:b",
+        ("employee_id",),
     ),
 }
 documents = table(

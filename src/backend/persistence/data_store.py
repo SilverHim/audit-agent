@@ -52,7 +52,7 @@ from backend.persistence.stores import (
 )
 from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 
-# 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户没有
+# 各表的日期列, 概览据此给日期范围; 科目表, 试算表, 银行账户与工资册 (入职日不是数据期间) 没有
 DATE_COLUMNS: dict[TableKind, str] = {
     TableKind.journal_entries: "posting_date",
     TableKind.sales_invoices: "invoice_date",
@@ -71,6 +71,7 @@ TABLE_ORDER: dict[TableKind, tuple[str, ...]] = {
     TableKind.bank_accounts: ("id",),
     TableKind.bank_transactions: ("txn_date", "id"),
     TableKind.delivery_notes: ("delivery_no", "id"),
+    TableKind.employees: ("employee_id",),
 }
 SEARCH_COLUMNS: dict[TableKind, tuple[str, ...]] = {TableKind.accounts: ("code", "name")}  # 其余表查各文本列
 

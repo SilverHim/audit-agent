@@ -386,3 +386,62 @@ def test_tables_reject_repeated_invoice_number_in_snapshot(tmp_path: Path) -> No
     other["InvoiceNumber"] = "ORC1024"
     path.write_text(json.dumps(invoices), encoding="utf-8")
     assert tables_error(api, demo) == "补造文件与快照不匹配: delivery_notes.csv 的发票号 ORC1024 在快照中找不到或不唯一"
+
+
+# ── 需求 R96: 数据集声明与工资册 ──
+
+
+def test_payroll_register_from_supplements() -> None:
+    """工资册按数据集声明的 payroll_register 读出 3 行, 按文件中的顺序 (声明各值见 test_dataset_loaders)."""
+    from tests.test_employees import EXPECTED
+
+    found = loader().supplement(DATASET)
+    assert found is not None
+    assert found.employees() == EXPECTED
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ({"typo_key": "sometimes"}, "dataset_traits.json 不合模型"),  # 未知键; 模型的各条校验见 test_knowledge
+        ({"dataset": "xero/other"}, "dataset_traits.json 的 dataset 应为 xero/20261017-q1"),
+    ],
+)
+def test_bad_dataset_traits_are_rejected(tmp_path: Path, change: dict[str, Any], expected: str) -> None:
+    """声明不合模型或不是本数据集的: SupplementMismatch (ValueError), 消息不带文件里的值."""
+    api, demo = copies(tmp_path)
+    path = demo / "20261017-q1" / "dataset_traits.json"
+    traits = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**traits, **change}), encoding="utf-8")
+    rewrite_manifest(api, demo)
+    with pytest.raises(SupplementMismatch) as raised:
+        loader(api, demo).dataset_traits(DATASET)
+    assert isinstance(raised.value, ValueError) and expected in str(raised.value)
+    assert "sometimes" not in str(raised.value) and "typo_key" not in str(raised.value)
+
+
+def test_missing_traits_default_and_payroll_register_errors(tmp_path: Path) -> None:
+    """没有声明文件时取缺省值 (工资册无从读起, FileNotFoundError); 声明的工资册文件不存在 FileNotFoundError; 指到补造
+    目录外的 SupplementMismatch. 改过文件后都按副本重写 manifest."""
+    from backend.contracts.records import DatasetTraits
+
+    api, demo = copies(tmp_path)
+    root = demo / "20261017-q1"
+    (root / "payroll" / "employees.csv").unlink()
+    rewrite_manifest(api, demo)
+    found = loader(api, demo).supplement(DATASET)
+    assert found is not None
+    with pytest.raises(FileNotFoundError, match=r"没有工资册 payroll/employees\.csv"):
+        found.employees()
+
+    traits = json.loads((root / "dataset_traits.json").read_text(encoding="utf-8"))
+    (root / "dataset_traits.json").write_text(json.dumps({**traits, "payroll_register": "../x.csv"}), encoding="utf-8")
+    rewrite_manifest(api, demo)
+    with pytest.raises(SupplementMismatch, match="payroll_register 不在补造目录内"):
+        loader(api, demo).supplement(DATASET).employees()  # type: ignore[union-attr]
+
+    (root / "dataset_traits.json").unlink()
+    rewrite_manifest(api, demo)
+    assert loader(api, demo).dataset_traits(DATASET) == DatasetTraits()
+    with pytest.raises(FileNotFoundError, match="没有工资册"):
+        loader(api, demo).supplement(DATASET).employees()  # type: ignore[union-attr]

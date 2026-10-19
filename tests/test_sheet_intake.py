@@ -46,7 +46,7 @@ RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
 DEMO = REPO / "data" / "demo"
 FIXTURES = UPLOAD_FIXTURES / "DOC-SHEET"
 NOW = datetime(2026, 10, 19, tzinfo=UTC)
-NUMBAT_KINDS = [k for k in TableKind if k is not TableKind.approval_log]  # data/demo 的 7 张表
+NUMBAT_KINDS = [k for k in TableKind if (DEMO / f"{k}.csv").is_file()]  # data/demo 的 7 张表 (按文件推出)
 
 
 def document(file_name: str, data: bytes) -> DocumentRef:
@@ -215,7 +215,7 @@ async def test_numbat_tables_are_high_and_match_column_names(kind: TableKind) ->
 
 
 async def test_only_the_first_rows_are_sent() -> None:
-    """样本行含标题行, 至多 30 行; 第 31 行起不进提示词. 提示词列出 8 种账表. (用应收发票明细: 有标题行, 行数多,
+    """样本行含标题行, 至多 30 行; 第 31 行起不进提示词. 提示词列出 9 种账表. (用应收发票明细: 有标题行, 行数多,
     没有人名列; Posted By 的遮蔽见日记账报表一例.)"""
     path = RAW / "receivable_invoice_detail.xlsx"
     _, trail = await recognize(path)
@@ -230,7 +230,7 @@ async def test_only_the_first_rows_are_sent() -> None:
     assert "The columns themselves are still mapped by their headings as usual" in prompt
     assert "Posted By column of a Xero journal report" in prompt and "leave it unmapped" in prompt
     assert "Do not map those columns" not in prompt
-    assert all(f"- `{t['kind']}`:" in prompt for t in TABLES) and len(TABLES) == 8
+    assert all(f"- `{t['kind']}`:" in prompt for t in TABLES) and len(TABLES) == 9
 
 
 def test_sample_rows_mask_personal_columns_and_emails() -> None:
