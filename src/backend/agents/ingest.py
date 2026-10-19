@@ -17,7 +17,7 @@ from typing import Any, ClassVar, cast
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
 from backend.agents.evidence import current_confirmations, legacy_accounts
-from backend.contracts.data import DataInput, DocumentChange
+from backend.contracts.data import DataInput, DocumentChange, ExtractionRecord
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, DocumentClassification
 from backend.contracts.models import (
@@ -363,6 +363,74 @@ RELIABILITY: dict[DocumentType, Reliability] = {
     DocumentType.internal_record: Reliability.internal_copy,
     DocumentType.other: Reliability.internal_copy,
 }
+DETAILS = "document"  # 抽取版本表里文件补登记的 target_type (需求 R90)
+DETAIL_FIELDS = ("reliability", "document_date", "related_ids")  # 补登记的三项; 记改了的字段 (field) 时按此顺序
+
+
+def details_data(document: DocumentRef) -> dict[str, Any]:
+    """抽取版本表里文件登记一版的内容: 类型, 可靠性, 文件日期 (YYYY-MM-DD 或空) 与关联对象."""
+    return document.model_dump(mode="json", include={"type", *DETAIL_FIELDS})
+
+
+def details_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
+    """文件登记一版 (补登记, 或补登记过的文件之后改了类型) 的 data 留痕: action edit, payload 带 document_type (该版
+    登记的类型), document_id, field, reason; 防重复键 {eid}:data:edit:document:{文件 ID}:v{版本}, 写入与补写共用."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=record.changed_by,
+        summary=f"文件 {record.target_id} 的登记改了 {record.field}, 第 {record.version} 版",
+        idempotency_key=f"{eid}:data:edit:{DETAILS}:{record.target_id}:v{record.version}",
+        payload={
+            "action": "edit",
+            "document_type": record.data["type"],
+            "document_id": record.target_id,
+            "field": record.field,
+            "reason": record.reason,
+        },
+        created_at=datetime.now(UTC),
+    )
+
+
+async def record_registration(
+    deps: AgentDeps, eid: str, before: DocumentRef, after: DocumentRef, actor: str, reason: str | None
+) -> None:
+    """补登记过的文件 (抽取版本表里已有它的 document 版本) 之后改了类型或可靠性 (审计师指定类型, 按补交请求定类型,
+    A3 分类): 照 "改一律出新版本" 再记一版 (data 为改后的登记, field 为变了的 type, reliability, 理由取这次定类型的),
+    写 data 留痕, 使 history 的最新一版与当前登记一致 (需求 R90). 没补登记过的不记 (history 以当前登记作唯一一版);
+    都没变的不记. 不改数据版本 (改类型本来就不记数据变动; 合同的重抽另记 contracts)."""
+    fields = [name for name in ("type", "reliability") if getattr(before, name) != getattr(after, name)]
+    if not fields:
+        return
+    records = await deps.data.extraction_versions(eid, DETAILS, after.id)
+    if not records:
+        return
+    record = ExtractionRecord(
+        target_type=DETAILS,
+        target_id=after.id,
+        version=records[-1].version + 1,
+        data=details_data(after),
+        field=",".join(fields),
+        reason=reason,
+        changed_by=actor,
+        changed_at=datetime.now(UTC),
+    )
+    await deps.data.save_extraction(
+        eid, DETAILS, after.id, record.version, record.data, changed_by=actor, field=record.field, reason=reason
+    )
+    await record_transitions(deps.trail, [details_entry(eid, record)])
+
+
+async def registered_reliability(deps: AgentDeps, eid: str, document: DocumentRef, kind: DocumentType) -> Reliability:
+    """文件定为 kind 类型时登记的可靠性, 只此一处决定 (需求 R90): 审计师补登记过可靠性的 (抽取版本表里有
+    target_type document, field 含 reliability 的版本) 保留登记上的值, 原件或副本与类型无关; 没补登记过的取该类型的
+    缺省 RELIABILITY[kind]. 审计师指定类型, A3 分类, 按补交请求定类型与确认导入都经这里."""
+    records = await deps.data.extraction_versions(eid, DETAILS, document.id)
+    if any(r.field is not None and "reliability" in r.field.split(",") for r in records):
+        return document.reliability
+    return RELIABILITY[kind]
+
+
 FIRST_PAGE_CHARS = 4000  # 分类时送给大模型的首页文字上限
 WORD_XML = re.compile(r"<[^>]+>")
 
@@ -496,9 +564,11 @@ class DocumentIntake:
         actor = document.uploaded_by or self.agent
         job = await self.record(eid, actor, document, requested.document_type, note, requested.request_id)
         kind = requested.document_type
+        reliability = await registered_reliability(self.deps, eid, document, kind)
         updated = await self.deps.evidence_store.update_document(
-            eid, document.id, type=kind, reliability=RELIABILITY[kind], status="classified", failed_step=None
+            eid, document.id, type=kind, reliability=reliability, status="classified", failed_step=None
         )
+        await record_registration(self.deps, eid, document, updated, actor, note)
         return updated, Job(job, datetime.now(UTC))
 
     async def assign(
@@ -575,7 +645,8 @@ class DocumentIntake:
         contract: Contract | None = None
         reply: dict[str, Any] | None = None
         # 抽取按定下的类型看这份文件 (同上传后的处理先改登记再抽取; 这里登记不改, 只给抽取与校验用的副本)
-        typed = document.model_copy(update={"type": kind, "reliability": RELIABILITY[kind], "status": "classified"})
+        reliability = await registered_reliability(self.deps, eid, document, kind)
+        typed = document.model_copy(update={"type": kind, "reliability": reliability, "status": "classified"})
         try:
             if kind is DocumentType.contract:
                 profile = await client_profile(self.deps, engagement, engagement.client_profile_version)
@@ -596,7 +667,8 @@ class DocumentIntake:
         kind = staged.document_type
         if kind is None:
             raise ValueError(f"{document.id} 没有类型, 不能确认")
-        change = DocumentChange(document_id=document.id, type=kind, reliability=RELIABILITY[kind], status="classified")
+        reliability = await registered_reliability(self.deps, eid, document, kind)
+        change = DocumentChange(document_id=document.id, type=kind, reliability=reliability, status="classified")
         if kind not in EXTRACTED_TYPES:
             return change
         if staged.contract is None and staged.reply is None:
@@ -636,10 +708,12 @@ class DocumentIntake:
     ) -> DocumentRef:
         """类型已定 (A3 分类或审计师指定): 改登记的类型与可靠性, 置 classified, 再按类型抽取. job 为定下这次类型的
         classify 留痕 ID, 用作抽取的作业号 (见 upload_run); since 只在补做时给, 为该作业开始的时间."""
-        reliability = RELIABILITY[kind]
+        reliability = await registered_reliability(self.deps, eid, document, kind)
+        before = document
         document = await self.deps.evidence_store.update_document(
             eid, document.id, type=kind, reliability=reliability, status="classified", failed_step=None
         )
+        await record_registration(self.deps, eid, before, document, AgentId.A3, None)
         try:
             if kind is DocumentType.contract:
                 done = await self.contract(eid, document, engagement, job, since)

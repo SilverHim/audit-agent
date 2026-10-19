@@ -720,8 +720,15 @@ class FakeFinancialStore:
     async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
         return list(self.contract_versions.get(contract_id, []))
 
-    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
-        return [d for d in self.document_refs if type is None or d.type is type]
+    async def documents(
+        self, eid: str, type: DocumentType | None = None, related_id: str | None = None
+    ) -> list[DocumentRef]:
+        """登记的文件 (按登记顺序); type 与 related_id 同真实实现, 都给时都须满足."""
+        return [
+            d
+            for d in self.document_refs
+            if (type is None or d.type is type) and (related_id is None or related_id in d.related_ids)
+        ]
 
 
 @dataclass(frozen=True)
@@ -1051,6 +1058,7 @@ class FakeEvidenceStore:
         self.ids: dict[str, str] = {}
         self.directory: Path | None = None  # path 写原件的临时目录
         self.updates: list[tuple[str, DocumentType, str, str | None]] = []  # update_document 的每次调用
+        self.detail_updates: list[tuple[str, bool]] = []  # update_details 的每次调用 (文件 ID, 是否在事务内)
 
     async def save(
         self,
@@ -1129,6 +1137,36 @@ class FakeEvidenceStore:
         )
         self.updates.append((document_id, type, status, failed_step))
         return refs[i]
+
+    async def update_details(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        reliability: Reliability | None,
+        document_date: date | None,
+        related_ids: Sequence[str] | None,
+    ) -> DocumentRef:
+        """补登记: 只改给了的项, 返回改后的登记; 在审计产出事务块内调用时加入该事务 (提交才生效, 同 set_status),
+        记进 detail_updates. 没有该文件抛 FileNotFoundError."""
+        refs = self.financial_store.document_refs
+        i = next((i for i, d in enumerate(refs) if d.id == document_id), None)
+        if i is None:
+            raise FileNotFoundError(document_id)
+        given = {"reliability": reliability, "document_date": document_date, "related_ids": related_ids}
+        changes = {k: list(v) if k == "related_ids" else v for k, v in given.items() if v is not None}
+        updated = refs[i].model_copy(update=changes)
+
+        def apply() -> None:
+            refs[i] = refs[i].model_copy(update=changes)
+
+        txn = self.output_store.active_txn() if self.output_store is not None else None
+        self.detail_updates.append((document_id, txn is not None))
+        if txn is None:
+            apply()
+        else:
+            txn.on_commit.append(apply)
+        return updated
 
     async def path(self, eid: str, document_id: str) -> Path:
         """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""

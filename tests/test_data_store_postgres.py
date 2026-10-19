@@ -19,6 +19,7 @@ from backend.contracts.data import (
     DataChange,
     DataInput,
     DocumentChange,
+    DocumentDetailsEdit,
     ImportCommit,
     ImportSession,
     TableKind,
@@ -1297,6 +1298,126 @@ async def test_migration_0011_round_trip(storage) -> None:  # type: ignore[no-un
                 assert await scalar("SELECT count(*) FROM client_profiles WHERE id = :c AND source IS NULL") >= 1
                 await conn.execute(text("UPDATE engagements SET dataset = NULL WHERE id = :e"), {"e": first.id})
                 assert await scalar("SELECT dataset IS NULL FROM engagements WHERE id = :e") is True
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
+# ── 需求 R90: 文件的补登记 ──
+
+
+async def test_document_details_round_trip(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """真实库上传 (FileEvidenceStore.save) 一份 PDF, 读回文件日期为空, 关联对象为 []; 补登记后读回两字段与可靠性;
+    抽取版本表两版 (A3 补记的修改前一版, 审计师的一版); 按关联对象过滤 (与类型同时给时都须满足); 数据版本 +1 并记
+    documents; 写了留痕; 另一项目读不到 (行级安全)."""
+    engine, (first, second), _, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    pdf = ROOT / "data/xero_demo/20261017-q1/documents/evidence/fixed_asset_register.pdf"
+    saved = await service.deps.evidence_store.save(
+        first.id,
+        pdf.name,
+        pdf.read_bytes(),
+        type=DocumentType.internal_record,
+        reliability=Reliability.internal_copy,
+        uploaded_by="U-1",
+        status="classified",
+    )
+    financial = PostgresFinancialDataStore(engine)
+    assert await financial.documents(first.id) == [saved]
+    assert (saved.document_date, saved.related_ids) == (None, [])
+
+    edit = DocumentDetailsEdit(
+        reliability=Reliability.internal_original,
+        document_date=date(2026, 9, 30),
+        related_ids=["XJ-499", "XJ-626", "XJ-676"],
+        reason="按补造清单",
+    )
+    [updated] = await service.set_document_details(first.id, {saved.id: edit}, "U-1")
+
+    assert (updated.reliability, updated.document_date, updated.related_ids) == (
+        Reliability.internal_original,
+        date(2026, 9, 30),
+        ["XJ-499", "XJ-626", "XJ-676"],
+    )
+    assert await financial.documents(first.id, related_id="XJ-626") == [updated]
+    assert await financial.documents(first.id, DocumentType.internal_record, "XJ-499") == [updated]
+    assert await financial.documents(first.id, DocumentType.contract, "XJ-499") == []
+    assert await financial.documents(first.id, related_id="XJ-6") == []  # 整个 ID 相同才算
+    history = await service.deps.data.extraction_versions(first.id, "document", saved.id)
+    assert [(r.version, r.changed_by, r.field, r.reason) for r in history] == [
+        (1, "A3", None, None),
+        (2, "U-1", "reliability,document_date,related_ids", "按补造清单"),
+    ]
+    assert history[1].data == {
+        "type": "internal_record",
+        "reliability": "internal_original",
+        "document_date": "2026-09-30",
+        "related_ids": ["XJ-499", "XJ-626", "XJ-676"],
+    }
+    changes = await service.deps.data.changes(first.id)
+    assert changes[-1] == DataChange(data_version=changes[-1].data_version, input=DataInput.documents)
+    key = f"{first.id}:data:edit:document:{saved.id}:v2"
+    assert await service.deps.trail.find_success(first.id, key) is not None
+    assert await financial.documents(second.id) == []
+    assert await financial.documents(second.id, related_id="XJ-499") == []
+    assert await service.deps.data.extraction_versions(second.id, "document") == []
+    with pytest.raises(LookupError):  # 别的项目的文件当作不存在
+        await service.set_document_details(second.id, {saved.id: edit}, "U-1")
+
+
+async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R90: 以属主角色在一个事务里走 0012 降级再升级 (两次), 最后回滚. 降级后 documents 没有两列; 降级时已有的行
+    升级后读回文件日期为空, 关联对象为 []. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0012_document_details")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'documents'")
+                    )
+                    return {row[0] for row in found}
+
+                await conn.run_sync(run("downgrade"))
+                assert not {"document_date", "related_ids"} & await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                await conn.execute(
+                    text(
+                        "INSERT INTO documents (engagement_id, id, type, file_name, file_path, sha256, page_count, "
+                        "reliability, status, uploaded_at) VALUES (:e, 'DOC-old000000000', 'minutes', 'old.pdf', "
+                        "'/x/old.pdf', 'old', 1, 'internal_copy', 'classified', now())"
+                    ),
+                    {"e": first.id},
+                )
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert {"document_date", "related_ids"} <= await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                found = await conn.execute(
+                    text("SELECT document_date, related_ids FROM documents WHERE id = 'DOC-old000000000'")
+                )
+                assert found.one() == (None, [])
             finally:
                 await outer.rollback()
     finally:

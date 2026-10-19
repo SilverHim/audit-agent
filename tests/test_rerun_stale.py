@@ -144,6 +144,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
         (DataInput.approval_log, set()),  # 没有程序直接读审批日志; 写审批日志另记 journal_entries (table_changes)
         (DataInput.contracts, {"REV-03", "REV-02"}),
         (DataInput.confirmations, {"CSH-02"}),
+        (DataInput.documents, {"REV-03", "REV-02", "CSH-02"}),  # 补登记: 判断引用文件页的程序 (需求 R90)
     ],
 )
 def test_stale_by_what_each_program_reads(data_input: DataInput, expected: set[str]) -> None:

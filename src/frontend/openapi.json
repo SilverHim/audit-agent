@@ -1278,6 +1278,7 @@
           "evidence"
         ],
         "summary": "List Documents",
+        "description": "已登记的文件, 按文件名排序; 给 related_id 时只列关联对象含它的.",
         "operationId": "evidence-list_documents",
         "security": [
           {
@@ -1293,6 +1294,24 @@
               "type": "string",
               "title": "Eid"
             }
+          },
+          {
+            "name": "related_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "只列关联对象含此 ID 的文件 (需求 R90)",
+              "title": "Related Id"
+            },
+            "description": "只列关联对象含此 ID 的文件 (需求 R90)"
           }
         ],
         "responses": {
@@ -1484,6 +1503,134 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DocumentRef"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/documents/{document_id}/details": {
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Set Document Details",
+        "description": "补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 文件不存在\n404; 理由为空 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或重复 422 INVALID_VALUE;\n锁定 423; 忙 409. 同一修改的重试返回当前登记.",
+        "operationId": "evidence-set_document_details",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentDetailsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRef"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/documents/{document_id}/history": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Document History",
+        "description": "文件登记的各版 (补登记), 按版本升序; 没补登记过的以当前登记作唯一一版. 文件不存在 404.",
+        "operationId": "evidence-document_history",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionRecord"
+                  },
+                  "title": "Response Evidence-Document History"
                 }
               }
             }
@@ -6677,6 +6824,57 @@
         "title": "DisputeResolution",
         "description": "争议任务的仲裁结果."
       },
+      "DocumentDetailsIn": {
+        "properties": {
+          "reliability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reliability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "document_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Date"
+          },
+          "related_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Ids"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "DocumentDetailsIn",
+        "description": "补登记一份文件 (PUT /documents/{id}/details, 需求 R90): 字段同 DocumentDetailsEdit, 只给要改的."
+      },
       "DocumentRef": {
         "properties": {
           "id": {
@@ -7290,6 +7488,70 @@
         ],
         "title": "ExtractionEdit",
         "description": "修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."
+      },
+      "ExtractionRecord": {
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "title": "Target Type"
+          },
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_type",
+          "target_id",
+          "version",
+          "data",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "ExtractionRecord",
+        "description": "抽取结果的一版 (表 extraction_versions 的一行)."
       },
       "Fees": {
         "properties": {

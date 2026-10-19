@@ -354,7 +354,7 @@ NEW_TYPES = {
 
 async def test_new_document_types_round_trip(storage):
     """documents.type 是 text 列 (迁移 0001 无约束, 0004 也未加), 新取值不需迁移: 各存一份后按类型取回, 读回仍是枚举;
-    文件日期与关联对象两列还没有, 读回为缺省值."""
+    没补登记的文件读回文件日期为空, 关联对象为 [] (补登记见 test_data_store_postgres)."""
     engine, e, _loader, evidence = storage
     supplements = ROOT / "data/xero_demo/20261017-q1"
     upstream = {

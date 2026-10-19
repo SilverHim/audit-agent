@@ -273,14 +273,16 @@ class PostgresFinancialDataStore(Store):
             for r in await self.rows(eid, statement)
         ]
 
-    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
-        stmt = select(m.documents).order_by(m.documents.c.file_name, m.documents.c.id)
+    async def documents(
+        self, eid: str, type: DocumentType | None = None, related_id: str | None = None
+    ) -> list[DocumentRef]:
+        t = m.documents
+        stmt = select(t).order_by(t.c.file_name, t.c.id)
         if type is not None:
-            stmt = stmt.where(m.documents.c.type == type)
-        return [
-            DocumentRef.model_validate({k: v for k, v in r.items() if k in DocumentRef.model_fields})
-            for r in await self.rows(eid, stmt)
-        ]
+            stmt = stmt.where(t.c.type == type)
+        if related_id is not None:
+            stmt = stmt.where(t.c.related_ids.contains([related_id]))  # JSONB 包含 (@>): 数组里有这个 ID
+        return [document_ref(r) for r in await self.rows(eid, stmt)]
 
     async def data_version(self, eid: str) -> int:
         rows = await self.rows(eid, select(m.dataset_loads.c.data_version))
@@ -409,9 +411,7 @@ class FileEvidenceStore(Store):
                 temporary.unlink()
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError("Evidence hash mismatch")
-            # documents 表还没有文件日期与关联对象两列 (存取另做), 这两个字段先不写, 读回为缺省值
-            row = doc.model_dump(exclude={"document_date", "related_ids"})
-            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **row))
+            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **doc.model_dump()))
             return doc
 
     async def path(self, eid: str, document_id: str) -> Path:
@@ -461,6 +461,35 @@ class FileEvidenceStore(Store):
             return await write_document(
                 conn, eid, document_id, type=type, reliability=reliability, status=status, failed_step=failed_step
             )
+
+    async def update_details(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        reliability: Reliability | None,
+        document_date: date | None,
+        related_ids: Sequence[str] | None,
+    ) -> DocumentRef:
+        values: dict[str, Any] = {}
+        if reliability is not None:
+            values["reliability"] = reliability
+        if document_date is not None:
+            values["document_date"] = document_date
+        if related_ids is not None:
+            values["related_ids"] = list(related_ids)
+        t = m.documents
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            where = (t.c.engagement_id == eid) & (t.c.id == document_id)
+            if values:
+                result = await conn.execute(update(t).where(where).values(**values))
+                if not result.rowcount:
+                    raise FileNotFoundError(document_id)
+            row = (await conn.execute(select(t).where(where))).mappings().first()
+            if row is None:
+                raise FileNotFoundError(document_id)
+            return document_ref(row)
 
 
 FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
@@ -895,6 +924,11 @@ async def write_document(
     if not result.rowcount:
         raise FileNotFoundError(document_id)
     row = (await conn.execute(select(t).where(t.c.id == document_id))).mappings().one()
+    return document_ref(row)
+
+
+def document_ref(row: Mapping[Any, Any]) -> DocumentRef:
+    """documents 表的一行转成登记 (去掉 engagement_id, file_path 等登记以外的列)."""
     return DocumentRef.model_validate({k: v for k, v in row.items() if k in DocumentRef.model_fields})
 
 

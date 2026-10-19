@@ -143,7 +143,12 @@ class FinancialDataStore(Protocol):
         """合同的各版本, 按版本升序; 没有记录 (迁移 0004 之前抽取的) 为空."""
         ...
 
-    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]: ...
+    async def documents(
+        self, eid: str, type: DocumentType | None = None, related_id: str | None = None
+    ) -> list[DocumentRef]:
+        """已登记的文件, 按文件名与 ID 排序. type 只取该类型; related_id 只取关联对象 (related_ids) 含它的 (需求 R90);
+        两者同时给时都须满足."""
+        ...
 
     async def data_version(self, eid: str) -> int: ...
 
@@ -216,6 +221,19 @@ class EvidenceStore(Protocol):
         failed_step: DocumentFailedStep | None,
     ) -> DocumentRef:
         """A3 处理上传文件时改登记的类型, 可靠性, 状态与卡住的步骤, 返回改后的登记; 没有该文件抛 FileNotFoundError."""
+        ...
+
+    async def update_details(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        reliability: Reliability | None,
+        document_date: date | None,
+        related_ids: Sequence[str] | None,
+    ) -> DocumentRef:
+        """补登记 (需求 R90): 只改给了的项 (None 不改), 返回改后的登记; 没有该文件抛 FileNotFoundError. 在
+        AuditOutputStore.transaction 块内调用时加入该事务."""
         ...
 
 

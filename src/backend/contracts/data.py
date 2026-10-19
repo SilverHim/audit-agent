@@ -37,7 +37,7 @@ class TableKind(StrEnum):
 
 class DataInput(StrEnum):
     """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 八种账表 (取值同 TableKind),
-    加审计师修改过的合同与回函抽取结果. 改科目分类改的是科目表, 记 accounts."""
+    加审计师修改过的合同与回函抽取结果, 以及审计师补登记的文件登记. 改科目分类改的是科目表, 记 accounts."""
 
     accounts = "accounts"  # 科目表 (含科目分类)
     trial_balance = "trial_balance"  # 试算表
@@ -49,6 +49,7 @@ class DataInput(StrEnum):
     approval_log = "approval_log"  # 审批日志 (补进总账分录的审批人与审批时间)
     contracts = "contracts"  # 合同抽取结果 (审计师修改)
     confirmations = "confirmations"  # 回函抽取结果 (审计师修改)
+    documents = "documents"  # 文件登记: 审计师补登记的可靠性, 文件日期与关联对象 (需求 R90)
 
 
 def table_changes(kinds: Iterable[TableKind]) -> list[DataInput]:
@@ -685,7 +686,7 @@ class ExtractionEdit(Model):
 class ExtractionRecord(Model):
     """抽取结果的一版 (表 extraction_versions 的一行)."""
 
-    target_type: str  # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本)
+    target_type: str  # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本), document (文件登记)
     target_id: str  # 合同编号, 函证 ID 或文件 ID
     version: int  # 版本号
     data: dict[str, Any]  # 该版完整内容
@@ -693,3 +694,13 @@ class ExtractionRecord(Model):
     reason: str | None = None  # 修改理由
     changed_by: str  # 用户 ID 或 A3
     changed_at: datetime  # 时间
+
+
+class DocumentDetailsEdit(Model):
+    """补登记一份文件 (需求 R90): 可靠性, 文件日期与关联对象, 只给要改的, None 为不改; 本版不支持把文件日期清空.
+    关联对象为业务对象的 ID (如公司 ACN, 分录号, 银行流水 ID, 客户编号), 不校验是否存在."""
+
+    reliability: Reliability | None = None  # 可靠性 (原件或副本, 内部或外部)
+    document_date: date | None = None  # 文件日期, 如签署或发出日
+    related_ids: list[str] | None = None  # 关联对象 ID, 整体替换; 不能有空串或重复
+    reason: str  # 补登记的理由, 必填

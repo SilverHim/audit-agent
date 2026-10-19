@@ -1559,6 +1559,27 @@ export type Direction = 'overstated' | 'understated';
 export type DisputeResolution = 'a6_upheld' | 'a7_upheld' | 'neither';
 
 /**
+ * DocumentDetailsIn
+ *
+ * 补登记一份文件 (PUT /documents/{id}/details, 需求 R90): 字段同 DocumentDetailsEdit, 只给要改的.
+ */
+export type DocumentDetailsIn = {
+    reliability?: Reliability | null;
+    /**
+     * Document Date
+     */
+    document_date?: string | null;
+    /**
+     * Related Ids
+     */
+    related_ids?: Array<string> | null;
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
  * DocumentRef
  *
  * 已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息.
@@ -1878,6 +1899,48 @@ export type ExtractionEdit = {
      * Reason
      */
     reason: string;
+};
+
+/**
+ * ExtractionRecord
+ *
+ * 抽取结果的一版 (表 extraction_versions 的一行).
+ */
+export type ExtractionRecord = {
+    /**
+     * Target Type
+     */
+    target_type: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Data
+     */
+    data: {
+        [key: string]: unknown;
+    };
+    /**
+     * Field
+     */
+    field?: string | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Changed By
+     */
+    changed_by: string;
+    /**
+     * Changed At
+     */
+    changed_at: string;
 };
 
 /**
@@ -4966,7 +5029,14 @@ export type EvidenceListDocumentsData = {
          */
         eid: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Related Id
+         *
+         * 只列关联对象含此 ID 的文件 (需求 R90)
+         */
+        related_id?: string | null;
+    };
     url: '/api/v1/engagements/{eid}/documents';
 };
 
@@ -5087,6 +5157,76 @@ export type EvidenceSetDocumentTypeResponses = {
 };
 
 export type EvidenceSetDocumentTypeResponse = EvidenceSetDocumentTypeResponses[keyof EvidenceSetDocumentTypeResponses];
+
+export type EvidenceSetDocumentDetailsData = {
+    body: DocumentDetailsIn;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents/{document_id}/details';
+};
+
+export type EvidenceSetDocumentDetailsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceSetDocumentDetailsError = EvidenceSetDocumentDetailsErrors[keyof EvidenceSetDocumentDetailsErrors];
+
+export type EvidenceSetDocumentDetailsResponses = {
+    /**
+     * Successful Response
+     */
+    200: DocumentRef;
+};
+
+export type EvidenceSetDocumentDetailsResponse = EvidenceSetDocumentDetailsResponses[keyof EvidenceSetDocumentDetailsResponses];
+
+export type EvidenceDocumentHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents/{document_id}/history';
+};
+
+export type EvidenceDocumentHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceDocumentHistoryError = EvidenceDocumentHistoryErrors[keyof EvidenceDocumentHistoryErrors];
+
+export type EvidenceDocumentHistoryResponses = {
+    /**
+     * Response Evidence-Document History
+     *
+     * Successful Response
+     */
+    200: Array<ExtractionRecord>;
+};
+
+export type EvidenceDocumentHistoryResponse = EvidenceDocumentHistoryResponses[keyof EvidenceDocumentHistoryResponses];
 
 export type EvidenceGetEvidenceData = {
     body?: never;

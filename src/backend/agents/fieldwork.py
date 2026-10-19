@@ -29,7 +29,6 @@ from backend.contracts.models import (
     Confirmation,
     ConfirmationResult,
     DocumentRef,
-    DocumentType,
     EvidencePointer,
     EvidenceType,
     ExceptionDisposition,
@@ -39,6 +38,7 @@ from backend.contracts.models import (
 from backend.contracts.records import BankAccount
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
+from backend.services.judgment_engine import document_pointer
 from backend.services.staleness import current_results
 
 
@@ -125,11 +125,11 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     async def rev03_subjects(self, ctx: RunContext) -> list[Subject]:
         """REV-03 的判断对象: DOC-04 抽出的全部合同, 按合同编号排序.
 
-        data 为 {contract, document} (REV-03.md.j2 头注释), document 为该合同的文件登记 (见 contract_documents);
+        data 为 {contract, document} (REV-03.md.j2 头注释), document 为该合同的文件登记 (见 registered_documents);
         查不到抛 LookupError. 没有规则例外.
         """
         contracts = sorted(await self.deps.financial_store.contracts(ctx.engagement.id), key=lambda c: c.id)
-        documents = await self.contract_documents(ctx)
+        documents = await self.registered_documents(ctx)
         subjects = []
         for contract in contracts:
             document = documents.get(contract.document_id)
@@ -139,12 +139,12 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             subjects.append(Subject(contract.id, data))
         return subjects
 
-    async def contract_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
-        """合同的文件登记: 先取状态 documents, 状态里没有的取 FinancialDataStore.documents. 审计师在 DOC-04 之后上传的
-        合同由 A3 直接分类与抽取 (需求 R14), 文件登记只在存储里, 不经编排并入状态."""
+    async def registered_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
+        """文件登记, 以存储 (FinancialDataStore.documents) 的当前登记为准: 可靠性, 文件日期与关联对象是文件登记的属性,
+        审计师补登记后 (需求 R90) 过期重跑用的就是新登记, 不用编排状态里的旧副本; 存储里没有而状态里有的才取状态.
+        审计师在 DOC-04 之后上传的合同由 A3 直接分类与抽取 (需求 R14), 文件登记只在存储里, 不经编排并入状态."""
         documents = {d.id: d for d in ctx.state["documents"]}
-        for document in await self.deps.financial_store.documents(ctx.engagement.id, DocumentType.contract):
-            documents.setdefault(document.id, document)
+        documents.update({d.id: d for d in await self.deps.financial_store.documents(ctx.engagement.id)})
         return documents
 
     async def rev02_subjects(self, ctx: RunContext) -> list[Subject]:
@@ -182,7 +182,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             notes[note.invoice_id].append({"source_type": "delivery_note", **note.model_dump(mode="json")})
         contract_ids = sorted({cast(str, invoices[i].contract_id) for i in ids if invoices[i].contract_id})
         contracts = {c.id: c for c in await store.contracts(eid, contract_ids)} if contract_ids else {}
-        documents = await self.contract_documents(ctx) if contracts else {}
+        documents = await self.registered_documents(ctx) if contracts else {}
         subjects = []
         for invoice_id in ids:
             invoice = invoices[invoice_id]
@@ -245,6 +245,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             ),
             key=lambda c: c.bank_account_id,
         )
+        documents = await self.registered_documents(ctx)
         updated: list[Confirmation] = []
         exceptions: list[AuditException] = []
         subjects: list[Subject] = []
@@ -267,17 +268,26 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             )
             updated.append(confirmation)
             if difference:
-                d01 = self.difference_exception(ctx, confirmation, account, len(exceptions) + 1)
+                reply = documents.get(cast(str, confirmation.reply_document_id))
+                if reply is None:
+                    raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 未登记")
+                d01 = self.difference_exception(ctx, confirmation, account, reply, len(exceptions) + 1)
                 exceptions.append(d01)
-                subjects.append(self.cash_subject(ctx, confirmation, account, d01, rules))
+                subjects.append(self.cash_subject(ctx, confirmation, account, reply, d01, rules))
         return CashFindings(updated, exceptions, await self.judge_all(ctx, subjects))
 
     @staticmethod
     def difference_exception(
-        ctx: RunContext, confirmation: Confirmation, account: BankAccount, n: int
+        ctx: RunContext, confirmation: Confirmation, account: BankAccount, document: DocumentRef, n: int
     ) -> AuditException:
-        """回函与账面不符的 D01 例外 (CSH-02.yaml 注释): 证据为回函余额所在页与试算表中的总账科目."""
-        reply = [p for p in confirmation.evidence if p.locator == "confirmed_balance_cents"]
+        """回函与账面不符的 D01 例外 (CSH-02.yaml 注释): 证据为回函余额所在页与试算表中的总账科目. 回函页的指针按
+        回函当前的文件登记 (document, 见 registered_documents) 经 judgment_engine.document_pointer 改写种类与可靠性,
+        不沿用 DOC-06 当时写进函证的值 (补登记后重跑即为新可靠性, 需求 R90); 页码不在登记页数内的照原样."""
+        reply = [
+            document_pointer(p, document)[0] or p
+            for p in confirmation.evidence
+            if p.locator == "confirmed_balance_cents"
+        ]
         ledger = EvidencePointer(
             type=EvidenceType.voucher,
             source_type="trial_balance",
@@ -303,17 +313,18 @@ class FieldworkAgent(ProcedureAgent[Findings]):
 
     @staticmethod
     def cash_subject(
-        ctx: RunContext, confirmation: Confirmation, account: BankAccount, d01: AuditException, rules: RuleResult
+        ctx: RunContext,
+        confirmation: Confirmation,
+        account: BankAccount,
+        reply: DocumentRef,
+        d01: AuditException,
+        rules: RuleResult,
     ) -> Subject:
         """有差异账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
 
         规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加本次的 D01.
-        回函取状态 documents 中的记录, 不在状态中抛 LookupError.
+        reply 为回函当前的文件登记 (调用方按 registered_documents 取, 未登记抛 LookupError).
         """
-        documents = {d.id: d for d in ctx.state["documents"]}
-        reply = documents.get(cast(str, confirmation.reply_document_id))
-        if reply is None:
-            raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 不在状态中")
         earlier = set(ctx.template.depends_on)
         findings = sorted(
             (

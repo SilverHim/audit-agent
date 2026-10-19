@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from backend.contracts.data import TableKind
+from backend.contracts.data import DocumentDetailsEdit, TableKind
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
@@ -299,6 +299,10 @@ class DocumentTypeIn(Model):
 
     type: DocumentType  # 文件类型
     reason: str  # 理由, 必填
+
+
+class DocumentDetailsIn(DocumentDetailsEdit):
+    """补登记一份文件 (PUT /documents/{id}/details, 需求 R90): 字段同 DocumentDetailsEdit, 只给要改的."""
 
 
 class AccountCategoryIn(Model):
