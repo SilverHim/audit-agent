@@ -6230,7 +6230,7 @@
           "sample"
         ],
         "title": "CriticTrigger",
-        "description": "独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."
+        "description": "独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (功能 collab 打开时记进 Judgment.critic_trigger)."
       },
       "CriticVerdict": {
         "type": "string",

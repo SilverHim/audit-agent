@@ -1227,7 +1227,7 @@ export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' 
 /**
  * CriticTrigger
  *
- * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用).
+ * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (功能 collab 打开时记进 Judgment.critic_trigger).
  */
 export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupported' | 'sample';
 

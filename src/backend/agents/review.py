@@ -20,11 +20,13 @@ from backend.contracts.llm_outputs import CriticIndependent, CriticVerdictOut
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
+    CriticTrigger,
     CriticVerdict,
     EvidencePointer,
     EvidenceType,
     Judgment,
     ProposedAction,
+    Reliability,
     StepKind,
     StepStatus,
 )
@@ -35,6 +37,7 @@ from backend.services.sampling import sampled
 
 GEN09 = "GEN-09"
 CRITIC = "critic"  # 功能名 (services/features.FEATURES), 关闭时不做独立复核
+COLLAB = "collab"  # 功能名: 智能体协作增量, 打开时触发规则补上 internal_copy 与 unsupported, 并记下命中的是哪条
 # 独立的系统提示词 (5.5: 与生成者至少不同的系统提示词); {schema} 为输出模型的 JSON schema, JSON 模式要求出现 "JSON"
 CRITIC_SYSTEM = """You are an independent reviewer. Judge only from the inputs given in this conversation, \
 not from any earlier analysis you may have seen. Reply with a single JSON object that conforms to the JSON schema \
@@ -48,16 +51,42 @@ CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: �
 SKIPPED_LEVELS = (AutonomyLevel.L1, AutonomyLevel.L2)  # 跳过规则: 审计师逐条复核
 
 
-def trigger(level: AutonomyLevel, judgment: Judgment, rate: float) -> str | None:
-    """命中的触发规则 (任一即复核), 没命中为 None: main 主规则; assumption 推理链含假设步骤; sample 抽样
-    (services/sampling 的 critic 用途, 键为判断 ID, 重放结果不变)."""
+def trigger(
+    level: AutonomyLevel,
+    judgment: Judgment,
+    rate: float,
+    given: Sequence[EvidencePointer] = (),
+    collab: bool = False,
+) -> CriticTrigger | None:
+    """命中的触发规则, 按顺序判定, 命中即停; 都不中为 None (规格书 6.3 GEN-09 trigger). 跳过规则 (L1, L2) 在这之前
+    由 review 判定.
+
+    - main: 运行时自主度 L3, L4 且建议 accept 或 close (会自动关闭的判断).
+    - internal_copy (collab 打开时): given 中非准则指针至少一个, 且可靠性全为 internal_copy (只靠内部复印件).
+    - assumption: 推理链有 assumption 步骤.
+    - unsupported (collab 打开时): 推理链有未获证据支撑 (status unsupported) 的步骤.
+    - sample: 抽中 (services/sampling 的 critic 用途, 键为判断 ID, 重放结果不变).
+    given: 第一轮会给出的证据 (ReviewAgent.given_evidence: 按来源重新解析, 可靠性取数据行类型或文件登记, 不采信
+    判断里填的值). collab 关闭时只判 main, assumption, sample (同 collab 之前).
+    本期不做: 提示词或配置刚改过 (procedure.changed_since_commit), 人机一致率低 (随盲测抽查删去, 不做).
+    """
     if level in REVIEWED_LEVELS and judgment.proposed_action in CLOSING_ACTIONS:
-        return "main"
+        return CriticTrigger.main
+    if collab and internal_copy_only(given):
+        return CriticTrigger.internal_copy
     if any(step.kind is StepKind.assumption for step in judgment.reasoning_chain):
-        return "assumption"
+        return CriticTrigger.assumption
+    if collab and any(step.status is StepStatus.unsupported for step in judgment.reasoning_chain):
+        return CriticTrigger.unsupported
     if sampled("critic", judgment.id, rate):
-        return "sample"
+        return CriticTrigger.sample
     return None
+
+
+def internal_copy_only(given: Sequence[EvidencePointer]) -> bool:
+    """非准则指针至少一个, 且可靠性全为 internal_copy."""
+    rows = [p for p in given if p.source_type != "standard"]
+    return bool(rows) and all(p.reliability is Reliability.internal_copy for p in rows)
 
 
 def evidence_pointers(judgment: Judgment) -> list[EvidencePointer]:
@@ -88,7 +117,9 @@ class ReviewAgent(ProcedureAgent[None]):
         """复核 A6 在 ctx 这次执行中生成的一条判断, 返回写好 critic 字段 (consistent 时含新置信度) 的同一版本.
 
         跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
-        未命中触发规则; critic_reason 写明原因.
+        未命中触发规则 (见 trigger); critic_reason 写明原因.
+        功能 collab 打开时触发规则另判 internal_copy 与 unsupported, 命中的那条写进 critic_trigger (之后复核没做成也
+        保留); 关闭时 critic_trigger 为空.
         复核没做成 (not_applicable): 判断没有能解析的证据; 任一轮校验重试后仍失败, 或调用出错 (CancelledError 除外);
         判为 consistent 而独立推理链无效. ReviewQueue 据此转人工.
         """
@@ -100,15 +131,31 @@ class ReviewAgent(ProcedureAgent[None]):
         if level in SKIPPED_LEVELS:
             return skip(judgment, f"{level.value}: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)")
         template = self.deps.library.load(GEN09)
-        if trigger(level, judgment, float(template.params.get("sample_rate", 0))) is None:
-            return skip(judgment, "未命中独立复核的触发规则")
+        rate = float(template.params.get("sample_rate", 0))
+        collab = COLLAB in self.deps.features
+        given: list[EvidencePointer] | None = None
         try:
-            return await self.cross_check(ctx, template, judgment)
+            # 第一轮要给的证据: collab 打开且主规则没命中时 internal_copy 要用, 先取, 复核时沿用
+            if collab and trigger(level, judgment, rate) is not CriticTrigger.main:
+                given = await self.given_evidence(ctx.engagement.id, judgment)
+            hit = trigger(level, judgment, rate, given or (), collab)
+            if hit is None:
+                return skip(judgment, "未命中独立复核的触发规则")
+            if collab:
+                judgment = judgment.model_copy(update={"critic_trigger": hit})
+            return await self.cross_check(ctx, template, judgment, given)
         except Exception as e:
             return incomplete(judgment, str(e))
 
-    async def cross_check(self, ctx: RunContext, template: ProcedureTemplate, judgment: Judgment) -> Judgment:
-        """两轮调用复核模型 (见模块说明). 没有能给的证据, 或任一轮未通过校验时记 not_applicable."""
+    async def cross_check(
+        self,
+        ctx: RunContext,
+        template: ProcedureTemplate,
+        judgment: Judgment,
+        given: list[EvidencePointer] | None = None,
+    ) -> Judgment:
+        """两轮调用复核模型 (见模块说明). 没有能给的证据, 或任一轮未通过校验时记 not_applicable.
+        given: review 判定触发规则时已取得的第一轮证据 (given_evidence), 为空时在这里取."""
         eid, subject = ctx.engagement.id, judgment.subject_id
         engine, llm = self.deps.judgments, self.deps.review_llm
         procedure = {
@@ -116,7 +163,7 @@ class ReviewAgent(ProcedureAgent[None]):
             "name": ctx.template.name,
             "assertions": [a.value for a in ctx.template.assertions],
         }
-        pointers = await self.given_evidence(eid, judgment)
+        pointers = given if given is not None else await self.given_evidence(eid, judgment)
         if not pointers:
             return incomplete(judgment, "判断没有能解析的证据指针")
         # 推理链可引用的: 判断引用的证据, 加上该程序的准则片段 (提示词里另列, standard 步骤指向它们)

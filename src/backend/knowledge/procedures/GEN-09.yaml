@@ -10,9 +10,12 @@ engine: llm
 autonomy_level: L4
 # 功能开关 critic (services/features.py), 基线功能: 关闭时 A7 对每条判断记 skipped, 不做独立复核
 feature: critic
-# 触发规则 (任一命中即复核, agents/review.py 的 triggers): 程序运行时自主度 L3/L4 且建议 accept 或 close;
-#   推理链含 assumption 步骤; 按判断 ID 的 sha256 抽样 (sample_rate, 重放结果不变).
-# 跳过规则: 运行时自主度 L1, L2 记 skipped (审计师逐条复核). 本期不做: 提示词或配置刚改过, 人机一致率低 (无一致率统计).
+# 跳过规则: 运行时自主度 L1, L2 记 skipped (审计师逐条复核), 先于触发规则.
+# 触发规则 (agents/review.trigger, 按顺序判定, 命中即停): main 程序运行时自主度 L3/L4 且建议 accept 或 close;
+#   internal_copy 引用的非准则证据全为内部复印件 (功能 collab); assumption 推理链含假设步骤; unsupported 推理链有
+#   未获证据支撑的步骤 (功能 collab); sample 按判断 ID 抽样 (services/sampling 的 critic 用途, sample_rate,
+#   重放结果不变). collab 打开时命中的那条记进 Judgment.critic_trigger.
+# 本期不做: 提示词或配置刚改过, 人机一致率低 (随盲测抽查删去, 不做).
 params:
   sample_rate: 0.05             # 跳过人群的抽样比例, 供复核率与错误发现率统计
 # 两轮调用都用复核模型 (AgentDeps.review_llm) 与独立的系统提示词 (规格书 5.5 同源偏差):

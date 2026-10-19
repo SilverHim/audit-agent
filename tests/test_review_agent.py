@@ -1,4 +1,5 @@
-"""A7 独立复核 (R9, GEN-09): 触发与跳过规则, 两轮输入, 结果写回判断, 置信度, 复核失败的处理.
+"""A7 独立复核 (R9, GEN-09): 触发与跳过规则 (功能 collab 打开时的 internal_copy, unsupported 与 critic_trigger 见
+R149), 两轮输入, 结果写回判断, 置信度, 复核失败的处理.
 
 判断的证据用 Xero Demo Company 快照的发票与分录行 (本机没有快照时跳过); 复核模型用脚本化的假模型,
 记下收到的请求, 核对第一轮没有结论与推理链. 文件按页给证据那条用 Numbat 合同 (Xero 没有 PDF).
@@ -15,8 +16,11 @@ from backend.agents.review import CRITIC_SYSTEM, ReviewAgent, trigger
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
+    CriticTrigger,
     CriticVerdict,
     DisputeResolution,
+    DocumentRef,
+    DocumentType,
     EvidencePointer,
     EvidenceType,
     Judgment,
@@ -24,6 +28,7 @@ from backend.contracts.models import (
     Procedure,
     ProposedAction,
     ReasoningStep,
+    Reliability,
     StepKind,
     StepStatus,
     TaskKind,
@@ -33,6 +38,7 @@ from backend.contracts.models import (
 from backend.contracts.records import JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentOutcome
 from backend.contracts.state import initial_state
+from backend.services.features import BASELINE
 from backend.services.judgment_engine import critic_chain_ok
 from backend.services.sampling import sampled
 from tests.fakes import (
@@ -55,17 +61,28 @@ CONCLUSION = "SECRET-A6-CONCLUSION: the invoice belongs to the current period." 
 CHAIN_TEXT = "SECRET-A6-CHAIN: the invoice was posted before the period end."  # 第一轮不能出现
 COUNTER = "SECRET-A6-COUNTER: a later credit note would reverse it."  # 第一轮不能出现
 REVIEW_MODEL = "claude-fable-5-1"
+COLLAB = BASELINE | {"collab"}  # 打开智能体协作 (R149 起的触发规则补齐)
 
 
 def invoice_pointer(invoice: SalesInvoice) -> EvidencePointer:
+    """发票行指针, 可靠性同校验器按来源改写后的 (internal_original)."""
     return EvidencePointer(
-        type=EvidenceType.invoice, source_type="sales_invoice", source_id=invoice.id, locator="amount_cents"
+        type=EvidenceType.invoice,
+        source_type="sales_invoice",
+        source_id=invoice.id,
+        locator="amount_cents",
+        reliability=Reliability.internal_original,
     )
 
 
 def entry_pointer(entry: JournalEntry) -> EvidencePointer:
+    """分录行指针, 可靠性同校验器按来源改写后的 (internal_original)."""
     return EvidencePointer(
-        type=EvidenceType.voucher, source_type="journal_entry", source_id=entry.id, locator="credit_cents"
+        type=EvidenceType.voucher,
+        source_type="journal_entry",
+        source_id=entry.id,
+        locator="credit_cents",
+        reliability=Reliability.internal_original,
     )
 
 
@@ -81,7 +98,12 @@ def step(kind: str, text: str, evidence: list[Any] = (), from_steps: list[int] =
 class Xero:
     """一张 Xero 发票及其收入分录行, 装进假财务存储; 判断与 A7 的运行上下文 (REV-02 的一次执行)."""
 
-    def __init__(self, level: AutonomyLevel = AutonomyLevel.L3, review: ScriptedLLM | None = None) -> None:
+    def __init__(
+        self,
+        level: AutonomyLevel = AutonomyLevel.L3,
+        review: ScriptedLLM | None = None,
+        features: frozenset[str] = BASELINE,
+    ) -> None:
         snapshot = xero_snapshot()
         financial = xero_financial_store(snapshot)
         self.invoice = SalesInvoice.model_validate(
@@ -97,8 +119,14 @@ class Xero:
         self.entry = JournalEntry.model_validate(financial.records[("journal_entry", self.invoice.journal_entry_id)])
         self.trail = FakeTrail()
         self.review = review
+        self.features = features
         self.deps = make_deps(
-            FakeRegistry(), self.trail, financial_store=financial, llm=ScriptedLLM({}), review_llm=review
+            FakeRegistry(),
+            self.trail,
+            financial_store=financial,
+            llm=ScriptedLLM({}),
+            review_llm=review,
+            features=features,
         )
         _, engagement = xero_engagement(snapshot)
         template = self.deps.library.load("REV-02")
@@ -137,6 +165,7 @@ class Xero:
             financial_store=self.deps.financial_store,
             llm=ScriptedLLM({}),
             review_llm=review,
+            features=self.features,
         )  # type: ignore[arg-type]
         return ReviewAgent(self.deps)
 
@@ -215,6 +244,147 @@ async def test_assumption_step_triggers_review_without_main_rule() -> None:
     assert trigger(AutonomyLevel.L3, with_assumption, 0.05) == "assumption"
     _, j = await reviewed(proposed_action=ProposedAction.misstatement)
     assert (j.critic_verdict, j.critic_reason) == (CriticVerdict.skipped, "未命中独立复核的触发规则")
+
+
+# ── 触发规则补齐 (R149, 功能 collab): 判定顺序与 critic_trigger ──
+
+COPY = DocumentRef(
+    id="DOC-IC-1",
+    type=DocumentType.invoice,
+    file_name="invoice-copy.pdf",
+    sha256="0" * 64,
+    page_count=1,
+    reliability=Reliability.internal_copy,
+    status="extracted",
+    uploaded_at=NOW,
+)  # 测试构造的发票复印件 (内部复印件), 一页
+COPY_PAGE = EvidencePointer(
+    type=EvidenceType.invoice, source_type="document", source_id=COPY.id, locator="amount", page=1
+)
+
+
+def copy_only(x: Xero, keep_row: bool = False, **changes: Any) -> Judgment:
+    """建议认定错报 (主规则不中), 无 assumption 的判断; 指针全换成复印件第 1 页 (keep_row 时另留发票行指针)."""
+    rows = [invoice_pointer(x.invoice)] if keep_row else []
+    chain = [
+        ReasoningStep(kind=StepKind.fact, text=CHAIN_TEXT, evidence=[COPY_PAGE, *rows]),
+        ReasoningStep(kind=StepKind.inference, text="So it is revenue.", from_steps=[0]),
+    ]
+    base = {"proposed_action": ProposedAction.misstatement, "evidence": [COPY_PAGE, *rows], "reasoning_chain": chain}
+    return x.judgment(**(base | changes))
+
+
+def copy_review(x: Xero) -> ScriptedLLM:
+    """复核模型: 第一轮只引用复印件第 1 页, 第二轮判一致."""
+    chain = [
+        step("fact", "The copy shows the invoice amount.", [COPY_PAGE]),
+        step("inference", "The invoice is revenue of the period.", from_steps=[0]),
+    ]
+    return scripted(x.invoice.id, [x.independent(chain)], [verdict()])
+
+
+async def test_collab_triggers_internal_copy_and_unsupported_in_order() -> None:
+    """验收 3: Xero 发票判断 (REV-02, L3, 建议 misstatement, 指针为发票行与分录行, internal_original), 判断 ID
+    不在 5% 抽样里. collab 打开: 照现状跳过, 复核模型收不到请求; 指针全换成复印件 DOC-IC-1 第 1 页
+    → internal_copy, 收到 -r1, -r2; 另留一个发票行指针 → 不中; 第 1 步 unsupported → unsupported.
+    命中时记下 critic_trigger, 未命中为空."""
+    x = Xero(features=COLLAB)
+    x.deps.financial_store.document_refs.append(COPY)  # type: ignore[attr-defined]
+    plain = x.judgment(proposed_action=ProposedAction.misstatement)
+    assert not sampled("critic", plain.id, 0.05)
+    keys = [f"{x.invoice.id}-r1", f"{x.invoice.id}-r2"]
+
+    async def run(judgment: Judgment) -> tuple[Judgment, list[str]]:
+        agent = x.agent(copy_review(x))
+        result = await agent.review(x.ctx, judgment)
+        assert x.review is not None
+        return result, [r.fixture_key for r in x.review.requests]
+
+    j, calls = await run(plain)
+    assert (j.critic_verdict, j.critic_reason, j.critic_trigger, calls) == (
+        CriticVerdict.skipped,
+        "未命中独立复核的触发规则",
+        None,
+        [],
+    )
+    j, calls = await run(copy_only(x))
+    assert (j.critic_trigger, calls, j.critic_verdict) == (CriticTrigger.internal_copy, keys, CriticVerdict.consistent)
+    j, calls = await run(copy_only(x, keep_row=True))
+    assert (j.critic_verdict, j.critic_trigger, calls) == (CriticVerdict.skipped, None, [])
+    chain = plain.reasoning_chain
+    unsupported = plain.model_copy(
+        update={"reasoning_chain": [chain[0].model_copy(update={"status": StepStatus.unsupported}), *chain[1:]]}
+    )
+    j, calls = await run(unsupported)
+    assert (j.critic_trigger, calls) == (CriticTrigger.unsupported, keys)
+
+
+async def test_collab_l2_skips_before_any_trigger() -> None:
+    """验收 3: 程序运行时自主度 L2 时, 复印件, unsupported 与主规则都不复核, critic_trigger 为空."""
+    x = Xero(AutonomyLevel.L2, features=COLLAB)
+    x.deps.financial_store.document_refs.append(COPY)  # type: ignore[attr-defined]
+    chain = x.judgment().reasoning_chain
+    cases = [
+        copy_only(x),
+        x.judgment(reasoning_chain=[chain[0].model_copy(update={"status": StepStatus.unsupported}), *chain[1:]]),
+        x.judgment(proposed_action=ProposedAction.close),
+    ]
+    for judgment in cases:
+        j = await x.agent(copy_review(x)).review(x.ctx, judgment)
+        assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.skipped, None)
+        assert j.critic_reason == "L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"
+        assert x.review is not None and x.review.requests == []
+
+
+async def test_collab_off_keeps_previous_rules_and_no_trigger_recorded() -> None:
+    """验收 5: collab 关闭时复印件与 unsupported 两条不判 (照现状跳过), 命中主规则时 critic_trigger 也为空."""
+    x = Xero()
+    x.deps.financial_store.document_refs.append(COPY)  # type: ignore[attr-defined]
+    chain = x.judgment().reasoning_chain
+    for judgment in (
+        copy_only(x),
+        x.judgment(
+            proposed_action=ProposedAction.misstatement,
+            reasoning_chain=[chain[0].model_copy(update={"status": StepStatus.unsupported}), *chain[1:]],
+        ),
+    ):
+        j = await x.agent(copy_review(x)).review(x.ctx, judgment)
+        assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.skipped, None)
+    _, j = await reviewed(proposed_action=ProposedAction.close)
+    assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.consistent, None)
+
+
+async def test_collab_records_main_and_keeps_trigger_when_review_incomplete() -> None:
+    """collab 打开: 主规则 (L3 建议 close) 记 main; 两轮复核没做成 (not_applicable) 时 critic_trigger 照留."""
+    x = Xero(features=COLLAB)
+    j = await x.agent(scripted(x.invoice.id, [x.independent()], [verdict()])).review(
+        x.ctx, x.judgment(proposed_action=ProposedAction.close)
+    )
+    assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.consistent, CriticTrigger.main)
+    j = await x.agent(scripted(x.invoice.id, ["not json"] * 3, [verdict()])).review(x.ctx, x.judgment())
+    assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.not_applicable, CriticTrigger.main)
+
+
+def test_trigger_order_and_sample() -> None:
+    """判定顺序 main → internal_copy → assumption → unsupported → sample, 命中即停; 准则指针不算证据, 只有准则时
+    internal_copy 不中; collab 关闭时只判 main, assumption, sample."""
+    x = Xero()
+    copy = [COPY_PAGE.model_copy(update={"reliability": Reliability.internal_copy})]
+    standard = [EvidencePointer.model_validate(standard_pointer(x.standard))]
+    assumption = ReasoningStep(kind=StepKind.assumption, text="The goods were delivered.")
+    unsupported = ReasoningStep(kind=StepKind.fact, text="x", status=StepStatus.unsupported)
+    j = x.judgment(proposed_action=ProposedAction.misstatement)
+    both = j.model_copy(update={"reasoning_chain": [assumption, unsupported]})
+    l3 = AutonomyLevel.L3
+    assert trigger(l3, j.model_copy(update={"proposed_action": ProposedAction.accept}), 0.05, copy, True) == "main"
+    assert trigger(l3, both, 0.05, copy, True) is CriticTrigger.internal_copy
+    assert trigger(l3, both, 0.05, [*copy, *standard], True) is CriticTrigger.internal_copy
+    assert trigger(l3, both, 0.05, standard, True) is CriticTrigger.assumption
+    only_unsupported = j.model_copy(update={"reasoning_chain": [unsupported]})
+    assert trigger(l3, only_unsupported, 0.05, standard, True) is CriticTrigger.unsupported
+    assert trigger(l3, only_unsupported, 0.05, copy, False) is None
+    assert trigger(l3, only_unsupported, 1.0, copy, False) is CriticTrigger.sample
+    assert trigger(l3, only_unsupported, 1.0, (), True) is CriticTrigger.unsupported
 
 
 def test_sampling_is_replayable() -> None:

@@ -19,7 +19,9 @@ class FeatureSpec:
 # 功能名 → 说明与依赖. requires 为建议值, 各组的首条需求可改
 FEATURES: dict[str, FeatureSpec] = {
     "critic": FeatureSpec("A7 独立复核 (GEN-09); 基线功能, 缺省开启"),
-    "collab": FeatureSpec("智能体协作增量: 争议中状态, 判断呈递, 停留时长", frozenset({"critic"})),
+    "collab": FeatureSpec(
+        "智能体协作增量: A7 触发规则补齐, 争议中状态, 仲裁补全, 判断呈递, 停留时长", frozenset({"critic"})
+    ),
     "journals": FeatureSpec("分录测试: GEN-05, GEN-02"),
     "related_parties": FeatureSpec("关联方: GEN-08, GEN-03, GEN-01"),
     "going_concern": FeatureSpec("持续经营: GEN-07, GEN-06, GEN-04, FIN-02 与 gate_fin 两步, 报告持续经营段"),

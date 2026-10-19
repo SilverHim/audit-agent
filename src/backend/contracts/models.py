@@ -180,7 +180,7 @@ class CriticVerdict(StrEnum):
 
 
 class CriticTrigger(StrEnum):
-    """独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."""
+    """独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (功能 collab 打开时记进 Judgment.critic_trigger)."""
 
     main = "main"  # 自主度 L3, L4 且建议 accept 或 close
     internal_copy = "internal_copy"  # 引用的非准则证据全为内部副本
@@ -474,7 +474,7 @@ class Judgment(Versioned):
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
     # 独立复核 (A7, GEN-09) 的结果, 由 A6 在判断第 1 版写入前同步调用 A7 填写; 人工建的判断不经复核
     critic_verdict: CriticVerdict = CriticVerdict.skipped  # 复核结论
-    critic_trigger: CriticTrigger | None = None  # 命中的触发规则, 跳过时为空 (尚未填写)
+    critic_trigger: CriticTrigger | None = None  # 命中的触发规则 (功能 collab 打开时); 跳过, collab 关闭与旧数据为空
     critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型, 其余为空
     critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
     critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
