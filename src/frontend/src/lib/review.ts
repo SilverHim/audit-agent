@@ -5,7 +5,7 @@ import type {
   Direction,
   DisputeResolution,
   EngagementOverview,
-  JudgmentView,
+  Judgment,
   MisstatementDraft,
   MisstatementType,
   ProcedureRun,
@@ -24,7 +24,7 @@ export const TIER_ORDER: ReviewTier[] = ['full_review', 'check_evidence', 'read_
 // 后端 R3 上线后 ReviewTaskView 自带 amount_cents 与 tier; 之前按同一规则在前端计算
 type WithTier = ReviewTaskView & { amount_cents?: number | null; tier?: ReviewTier }
 
-export function isJudgment(target: ReviewTaskView['target']): target is JudgmentView {
+export function isJudgment(target: ReviewTaskView['target']): target is Judgment {
   return 'conclusion' in target
 }
 
@@ -69,8 +69,7 @@ export function taskTier(
   if (!isJudgment(target)) return 'check_evidence'
   const performance = overview?.performance_materiality_cents
   if (performance != null && amount != null && amount > performance) return 'full_review'
-  // 盲判隐藏了置信度时按须核对证据
-  if (target.confidence == null || target.confidence < 0.7) return 'check_evidence'
+  if (target.confidence < 0.7) return 'check_evidence'
   if (target.confidence <= 0.9) return 'read_reasoning'
   if (target.autonomy_level === 'L1' || view.task.kind !== 'normal') return 'read_reasoning'
   const trivial = overview?.clearly_trivial_cents
@@ -147,9 +146,9 @@ export function draftFromMisstatement(draft: ReviewDraft, proposed: Misstatement
 export type DisputeSide = 'a6' | 'a7'
 export type SideProposal = { action: ProposedAction | null; draft: MisstatementDraft | null }
 
-export function sideProposal(judgment: JudgmentView | null, side: DisputeSide): SideProposal {
+export function sideProposal(judgment: Judgment | null, side: DisputeSide): SideProposal {
   if (!judgment) return { action: null, draft: null }
-  if (side === 'a6') return { action: judgment.proposed_action ?? null, draft: judgment.misstatement_draft ?? null }
+  if (side === 'a6') return { action: judgment.proposed_action, draft: judgment.misstatement_draft ?? null }
   return { action: judgment.critic_proposed_action ?? null, draft: judgment.critic_misstatement_draft ?? null }
 }
 

@@ -1,4 +1,4 @@
-import type { ConciergeCitation, GateId, Phase, TrailEntryView } from '@/client/types.gen'
+import type { ConciergeCitation, GateId, Phase, TrailEntry } from '@/client/types.gen'
 
 // 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
 
@@ -58,7 +58,7 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.length ? value : null
 }
 
-export function buildTimeline(entries: TrailEntryView[]): TimelineItem[] {
+export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
   const sorted = [...entries].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
   const items: TimelineItem[] = []
   let completed: { at: string; key: string; ids: string[] } | null = null

@@ -12,10 +12,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import Engagement, Phase, User
+from backend.contracts.models import Engagement, Phase, TrailEntry, TrailKind, User
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
 from backend.persistence.stores import PostgresUserStore
+from tests.fakes import FakeTrail
 
 
 def _engagement(eid: str, owner: str) -> Engagement:
@@ -83,7 +84,8 @@ class _Engagements:
 def api(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
     users = _Users()
     decisions = SimpleNamespace(submit=AsyncMock(), update_client_profile=AsyncMock())
-    deps = SimpleNamespace(users=users, engagement_store=_Engagements())
+    trail = FakeTrail()
+    deps = SimpleNamespace(users=users, engagement_store=_Engagements(), trail=trail)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
@@ -95,7 +97,8 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
 
     monkeypatch.setattr("backend.main.lifespan", lifespan)
     with TestClient(create_app()) as client:
-        yield SimpleNamespace(client=client, decisions=decisions, token=create_access_token(users.user.id), users=users)
+        token = create_access_token(users.user.id)
+        yield SimpleNamespace(client=client, decisions=decisions, token=token, users=users, trail=trail)
 
 
 def _auth(api: SimpleNamespace) -> dict[str, str]:
@@ -314,6 +317,31 @@ def test_unknown_engagement_is_not_found(api: SimpleNamespace) -> None:
     response = api.client.get("/api/v1/engagements/ENG-missing", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "NOT_FOUND"
+
+
+def test_trail_list_and_detail(api: SimpleNamespace) -> None:
+    """留痕列表按类型筛出本项目的 TrailEntry (键恰为其字段, 不多带别的), 详情与列表中同一条相同; 不存在或别的项目的
+    留痕 404 NOT_FOUND. 防列表恒空, 详情恒 404, 或输出多出视图层的键."""
+    at = datetime(2026, 7, 1, tzinfo=UTC)
+    rows = [
+        ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0612 第 1 次调用大模型: passed"),
+        ("ENG-2026-001", TrailKind.decision, "ACC-01 approve"),
+        ("ENG-2026-002", TrailKind.llm_call, "别的项目"),
+        ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0618 第 1 次调用大模型: passed"),
+    ]
+    for n, (eid, kind, summary) in enumerate(rows, 1):
+        entry = TrailEntry(id=f"TR-{n}", engagement_id=eid, kind=kind, actor="A6", summary=summary, created_at=at)
+        api.trail.entries.append(entry)
+    base = "/api/v1/engagements/ENG-2026-001/trail"
+    listed = api.client.get(base, params={"kind": "llm_call"}, headers=_auth(api))
+    assert listed.status_code == 200
+    assert [(e["id"], e["kind"]) for e in listed.json()] == [("TR-1", "llm_call"), ("TR-4", "llm_call")]
+    assert all(set(e) == set(TrailEntry.model_fields) for e in listed.json())
+    detail = api.client.get(f"{base}/TR-4", headers=_auth(api))
+    assert (detail.status_code, detail.json()) == (200, listed.json()[1])
+    for missing in ("TR-none", "TR-3"):  # TR-3 是别的项目的
+        response = api.client.get(f"{base}/{missing}", headers=_auth(api))
+        assert (response.status_code, response.json()["detail"]["code"]) == (404, "NOT_FOUND")
 
 
 def test_get_gate_when_absent(api: SimpleNamespace) -> None:

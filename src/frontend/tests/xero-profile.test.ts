@@ -1,7 +1,7 @@
 // Xero 组织信息核对卡的换算 (lib/xero-profile) 的测试, bun test 运行 (不在 tsconfig 的 src 里, 不经 tsc).
 // 数据是合成的: Xero 一边照 Demo Company (AU) 快照的组织信息, 画像一边照 Xero 演示数据集设计第 2 节的合成画像.
 import { describe, expect, test } from 'bun:test'
-import type { TrailEntryView, XeroProfileCheck, XeroSource } from '../src/client/types.gen'
+import type { TrailEntry, XeroProfileCheck, XeroSource } from '../src/client/types.gen'
 import { buildTimeline } from '../src/lib/timeline'
 import { checkStatus, pendingCheck, profileChoice, profileRows } from '../src/lib/xero-profile'
 import { zh } from '../src/locales/zh'
@@ -79,7 +79,7 @@ describe('checkStatus', () => {
 describe('buildTimeline 的 Xero 核对', () => {
   test('选择的版本与是否采用, 稍后处理标成这一类事项 (target_id 是核对的 key)', () => {
     const entry = (id: string, kind: string, payload: Record<string, unknown>) =>
-      ({ id, kind, summary: '', created_at: `2026-10-19T0${id}:00:00Z`, payload }) as unknown as TrailEntryView
+      ({ id, kind, summary: '', created_at: `2026-10-19T0${id}:00:00Z`, payload }) as unknown as TrailEntry
     const items = buildTimeline([
       entry('1', 'deferral', { target_type: 'xero_profile', target_id: CHECK.key, deferred: true }),
       entry('2', 'data', { action: 'xero_profile_kept', key: CHECK.key, profile_version: 1, reason: '合成画像' }),

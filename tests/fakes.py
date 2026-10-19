@@ -2861,15 +2861,14 @@ async def api_client(
     user_id: str = NUMBAT_AUDITOR.id,
     deps: AgentDeps | None = None,
     llm_settings: LlmSettingsService | None = None,
-    concierge: Any = None,
     xero: XeroLink | None = None,
 ) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
     deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的. llm_settings: 设置页接口用的服务.
-    concierge: 对话接口用的审计助理 (ConciergeChat), 缺省不设. xero: Xero 网页连接的服务 (需求 R279), 给了时数据接口
-    用它的 DataService, 概览的 sources.xero 读它的连接存储; 缺省为假连接存储上的一个 (一律未连接).
+    xero: Xero 网页连接的服务 (需求 R279), 给了时数据接口用它的 DataService, 概览的 sources.xero 读它的连接存储;
+    缺省为假连接存储上的一个 (一律未连接).
     """
     app = create_app()
     app.state.deps = deps if deps is not None else runner.deps
@@ -2885,7 +2884,6 @@ async def api_client(
     app.state.data_service = xero.data
     app.state.xero = xero
     app.state.llm_settings = llm_settings
-    app.state.concierge = concierge
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:

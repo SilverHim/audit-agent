@@ -41,7 +41,6 @@ from backend.persistence.stores import (
 )
 from backend.persistence.xero_connections import PostgresXeroConnectionStore
 from backend.services.audit_trail import PostgresAuditTrail
-from backend.services.blind import PassThroughBlindFilter
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
@@ -102,7 +101,6 @@ def build_deps(settings: Settings) -> AgentDeps:
         abn_lookup=CachedAbnLookup(abn_lookup),
         review_llm=review_llm,
         features=features,
-        blind_filter=PassThroughBlindFilter(),
     )
 
 

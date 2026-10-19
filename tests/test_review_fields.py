@@ -53,12 +53,11 @@ def test_allowed_has_one_row_per_task_kind() -> None:
         TaskKind.unattributed: {Decision.override, Decision.misstatement},
         TaskKind.failed: {Decision.rerun},
         TaskKind.dispute: {Decision.dispute_resolution},
-        TaskKind.blind: set(),
         TaskKind.manual: set(),
     } == ALLOWED
 
 
-@pytest.mark.parametrize("kind", [TaskKind.blind, TaskKind.manual, TaskKind.dispute])
+@pytest.mark.parametrize("kind", [TaskKind.manual, TaskKind.dispute])
 def test_manual_result_added_only_to_failed_tasks(kind: TaskKind) -> None:
     """REV-03 的模板允许 manual_result, 带判断对象; 只有 failed 任务另加 manual_result."""
     assert QUEUE.allowed(make_task("REV-03", kind, subject_id="C-001")) == ALLOWED[kind]

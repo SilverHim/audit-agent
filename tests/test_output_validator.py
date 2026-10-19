@@ -44,12 +44,14 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMResponse
-from backend.contracts.services import ValidationContext
+from backend.contracts.records import JournalEntry, SalesInvoice
+from backend.contracts.services import JudgmentContext, ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
     CheckResult,
+    JudgmentEngine,
     OutputValidator,
     citation_keys,
     judgment_key,
@@ -68,6 +70,8 @@ from tests.fakes import (
     NUMBAT_REPLIES,
     FakeFinancialStore,
     FakeTrail,
+    ScriptedLLM,
+    make_run,
     xero_document,
 )
 
@@ -575,6 +579,87 @@ B01 = AuditException(  # CSH-05 的余额不符例外 (合成数据集设计第 
     amount_cents=-5000000,
     evidence=[],
 )
+
+
+# 需求 R100 验收 3: 含 GST 的合成发票 (测试内联): 发票 715000, 收入行贷 650000, 应收行借 715000, GST 贷 65000
+SI_T = SalesInvoice(
+    id="SI-T",
+    invoice_no="SI-T",
+    customer="Test Customer Pty Ltd",
+    customer_abn=None,
+    contract_id=None,
+    invoice_date=date(2026, 6, 29),
+    posting_date=date(2026, 6, 29),
+    amount_cents=715000,
+    journal_entry_id="XJ-T-1",
+)
+XJ_T = [
+    JournalEntry(
+        id=f"XJ-T-{n}",
+        entry_no="XJ-T",
+        posting_date=date(2026, 6, 29),
+        created_at=None,
+        created_by=None,
+        approved_by=None,
+        account_code=code,
+        debit_cents=debit,
+        credit_cents=credit,
+        description="Sales invoice SI-T",
+        source_doc="SI-T",
+    )
+    for n, code, debit, credit in ((1, "4100", 0, 650000), (2, "1100", 715000, 0), (3, "2200", 0, 65000))
+]
+
+
+@pytest.mark.parametrize(
+    ("amount", "cite_line", "passes"),
+    [
+        (650000, True, True),  # 不含 GST 的收入行金额, 引了该行
+        (650000, False, False),  # 同一金额只引发票: 引用的行里没有 650000
+        (715000, False, True),  # 发票金额, 引发票
+    ],
+)
+async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_line: bool, passes: bool) -> None:
+    """REV-02 错报金额取收入行 (不含 GST) 时须引用该分录行 (真实判断引擎与 ScriptedLLM): 被引用的行金额计入可取值,
+    不引用不计 (不放宽校验)."""
+    records = dict(NUMBAT_RECORDS) | {("sales_invoice", SI_T.id): SI_T.model_dump()}
+    records |= {("journal_entry", x.id): x.model_dump() for x in XJ_T}
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), records)
+    trail = FakeTrail()
+    invoice = INVOICE.model_copy(update={"source_id": SI_T.id})
+    line = EvidencePointer(
+        type=EvidenceType.voucher, source_type="journal_entry", source_id="XJ-T-1", locator="credit_cents"
+    )
+    cited = [invoice, line] if cite_line else [invoice]
+    draft = with_step(
+        cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount})),
+        0,
+        evidence=cited,
+    )
+    draft = draft.model_copy(update={"evidence": [*cited, DELIVERY, CLAUSE, STANDARD]})
+    llm = ScriptedLLM({SI_T.id: [draft.model_dump_json()]})
+    engine = JudgmentEngine(llm, OutputValidator(financial, LIBRARY, trail), trail, LIBRARY)
+    lines = [
+        {"source_type": "journal_entry", **x.model_dump(mode="json"), "account_name": None, "account_category": None}
+        for x in XJ_T
+    ]
+    data = {
+        "invoice": {"source_type": "sales_invoice", **SI_T.model_dump(mode="json")},
+        "delivery_notes": [],
+        "journal_lines": lines,
+        "contract": None,
+        "document": None,
+        "contract_judgment": None,
+    }
+    task = {"params": {"period_end": "2026-06-30", "window_days": 20, "threshold_cents": 9000000}, "risks": []}
+    jctx = JudgmentContext(subject_id=SI_T.id, task=task, data=data, fixture_key=SI_T.id)
+    outcome = await engine.judge(EID, REV02, make_run("REV-02"), jctx, "U-1")
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    if passes:
+        assert outcome.judgment is not None and entry.payload["level_failed"] is None
+    else:
+        assert outcome.judgment is None and entry.payload["level_failed"] == "reference"
+        assert any("错报金额 650000" in error for error in entry.payload["errors"])
 
 
 async def test_misstatement_amount_not_traceable_is_reference_failure() -> None:

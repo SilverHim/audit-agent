@@ -371,7 +371,6 @@ export const reviewsListReviewTasksQueryKey = (options: Options<ReviewsListRevie
  *
  * status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
  * amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
- * 判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
  * draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.
  */
 export const reviewsListReviewTasksOptions = (options: Options<ReviewsListReviewTasksData>) => queryOptions<ReviewsListReviewTasksResponse, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReturnType<typeof reviewsListReviewTasksQueryKey>>({
@@ -447,7 +446,7 @@ export const reviewsGetJudgmentQueryKey = (options: Options<ReviewsGetJudgmentDa
 /**
  * Get Judgment
  *
- * version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出.
+ * version 省略时取最新版. review_records 是指向这条判断的复核决定.
  */
 export const reviewsGetJudgmentOptions = (options: Options<ReviewsGetJudgmentData>) => queryOptions<ReviewsGetJudgmentResponse, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReturnType<typeof reviewsGetJudgmentQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -1372,8 +1371,6 @@ export const reportsListTrailQueryKey = (options: Options<ReportsListTrailData>)
 
 /**
  * List Trail
- *
- * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsListTrailOptions = (options: Options<ReportsListTrailData>) => queryOptions<ReportsListTrailResponse, ReportsListTrailError, ReportsListTrailResponse, ReturnType<typeof reportsListTrailQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -1392,8 +1389,6 @@ export const reportsListTrailInfiniteQueryKey = (options: Options<ReportsListTra
 
 /**
  * List Trail
- *
- * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsListTrailInfiniteOptions = (options: Options<ReportsListTrailData>) => {
     const opts = infiniteQueryOptions<ReportsListTrailResponse, ReportsListTrailError, InfiniteData<ReportsListTrailResponse>, QueryKey<Options<ReportsListTrailData>>, number | Pick<QueryKey<Options<ReportsListTrailData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
@@ -1424,8 +1419,6 @@ export const reportsGetTrailQueryKey = (options: Options<ReportsGetTrailData>) =
 
 /**
  * Get Trail
- *
- * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsGetTrailOptions = (options: Options<ReportsGetTrailData>) => queryOptions<ReportsGetTrailResponse, ReportsGetTrailError, ReportsGetTrailResponse, ReturnType<typeof reportsGetTrailQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

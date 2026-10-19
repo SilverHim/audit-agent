@@ -9,6 +9,8 @@ REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 
                           posting_date、amount_cents、journal_entry_id
   data.delivery_notes     该发票的 delivery_note 行列表：source_type、id、delivery_no、invoice_id、shipped_date、
                           signed_date、signed_by；无则为空列表
+  data.journal_lines      该发票过账分录的全部行（需求 R100）：source_type journal_entry、JournalEntry 各列、
+                          account_name、account_category；按行 ID 排序；发票没有 journal_entry_id 时为空列表
   data.contract           发票所属 Contract（字段同 REV-03），无则为 null
   data.document           合同 PDF 的 DocumentRef，无则为 null
   data.contract_judgment  该合同的 REV-03 Judgment：id、conclusion、review_status；无则为 null
@@ -17,11 +19,11 @@ REV-02 收入截止性判断 → JudgmentDraft，每张发票调用一次（S01 
 #}
 {% set inv = data.invoice %}
 {% set period_end = task.params.period_end %}
-You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ period_end }}, prepared under Australian Accounting Standards.
+You assist a registered company auditor with the audit of an Australian financial report for the financial year ended {{ period_end }}, prepared under Australian Accounting Standards.
 
 ## Task
 
-Decide whether sales invoice {{ inv.invoice_no }} (ID {{ subject_id }}), posted on {{ inv.posting_date }} for {{ inv.amount_cents }} cents, is recorded in the period in which control of the goods passed to the customer.
+Decide whether sales invoice {{ inv.invoice_no }} (ID {{ subject_id }}), posted on {{ inv.posting_date }} for {{ inv.amount_cents }} cents, is recorded in the period in which control of the goods or services passed to the customer.
 
 ## Inputs
 
@@ -34,6 +36,15 @@ Delivery notes:
 {% if data.delivery_notes %}
 ```json
 {{ data.delivery_notes | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Journal lines of the invoice's posting:
+{% if data.journal_lines %}
+```json
+{{ data.journal_lines | tojson(indent=2) }}
 ```
 {% else %}
 None.
@@ -79,16 +90,16 @@ Standards (cite only these IDs):
 
 ## Criteria
 
-1. Transfer event: take it from the contract's control_transfer term (AASB15-P38), read with the REV-03 conclusion. Where they differ, follow the term text and record a limitation.
-2. Transfer date: the date of that event on the delivery note. Transfer on customer signature or receipt → `signed_date`; transfer on shipment → `shipped_date`.
-3. Revenue belongs to the period in which the transfer date falls (AASB15-P31). The period ends on {{ period_end }}.
-4. Address every rule finding in the reasoning chain. If you conclude `accept` despite a finding, state why it does not indicate a misstatement.
+1. Transfer event: take it from the contract's control_transfer term: at a point in time on customer signature or receipt, customer acceptance or completion of the service (AASB15-P38), or over time as the service is performed (AASB15-P35). Read it with the REV-03 conclusion; where they differ, follow the term text and record a limitation. Where no contract is linked, take the event from the shipping or service-completion record (the delivery notes).
+2. Transfer date: the date of that event on the delivery note. For goods, `shipped_date` is the shipment date and `signed_date` the date the customer signed for or received them. For services, `shipped_date` is the date the service started and `signed_date` the date the customer accepted it or confirmed it complete. Transfer on customer signature, receipt, acceptance or completion → `signed_date`; transfer on shipment → `shipped_date`.
+3. Revenue belongs to the period in which the transfer date falls (AASB15-P31). The period ends on {{ period_end }}. For a service whose control transfers over time, judge by the service period on the record and the part of it that falls in each period (AASB15-P35).
+4. Address every rule finding in the reasoning chain. A finding about cash receipt or reconciliation (such as R03) explains the receipt or matching only; it is not a cutoff misstatement on its own, but respond to it. If you conclude `accept` despite a finding, state why it does not indicate a misstatement.
 
 ## proposed_action
 
 - `accept`: the transfer date is on or before {{ period_end }}.
-- `misstatement`: the invoice is posted on or before {{ period_end }} but the transfer date is after it. Fill `misstatement_draft`: `type` factual, `account` "Revenue", `assertion` Cutoff, `amount_cents` {{ inv.amount_cents }} (the invoice amount), `direction` overstated.
-- `more_evidence`: no delivery note, the date of the transfer event is missing, no contract is linked, the terms do not determine the transfer point, or the invoice covers deliveries that fall in different periods.
+- `misstatement`: the invoice is posted on or before {{ period_end }} but the transfer date is after it. Fill `misstatement_draft`: `type` factual, `account` "Revenue", `assertion` Cutoff, `amount_cents` the amount of the journal line whose `account_category` is revenue (excluding GST), or the invoice amount ({{ inv.amount_cents }}) when there is no such line, `direction` overstated. Cite the line or the invoice you took the amount from.
+- `more_evidence`: there is no shipping or service-completion record, the date of the transfer event is missing, the terms do not determine the transfer point, or the invoice covers deliveries or services that fall in different periods.
 - Do not use `close`.
 
 ## Output (JudgmentDraft)
@@ -112,6 +123,8 @@ Evidence pointers. Every pointer must include `source_type`.
 |---|---|---|---|---|---|---|
 | Invoice row | invoice | sales_invoice | row `id` | column name, e.g. posting_date | null | internal_original |
 | Delivery note row | delivery | delivery_note | row `id` | column name, e.g. signed_date | null | internal_original |
+| Journal line | voucher | journal_entry | line `id` | column name, e.g. credit_cents | null | internal_original |
+| Bank transaction listed in a rule finding's detail | bank | bank_transaction | transaction ID | column name, e.g. amount_cents | null | external_copy |
 {% if data.contract %}
 | Contract term | contract | document | {{ data.contract.document_id }} | term ID | the term's `page` | {{ data.document.reliability }} |
 {% endif %}

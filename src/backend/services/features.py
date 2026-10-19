@@ -26,7 +26,7 @@ FEATURES: dict[str, FeatureSpec] = {
     "related_parties": FeatureSpec("关联方: GEN-08, GEN-03, GEN-01"),
     "going_concern": FeatureSpec("持续经营: GEN-07, GEN-06, GEN-04, FIN-02 与 gate_fin 两步, 报告持续经营段"),
     "misstatement": FeatureSpec("错报闭环: FIN-03, FIN-08, FIN-09, 等待更正, FIN-04 按状态累计, P3 骨架节点"),
-    "autonomy": FeatureSpec("自主度: 动态降级, 盲判, 盲测抽查"),
+    "autonomy": FeatureSpec("自主度: 动态降级"),
     "acceptance": FeatureSpec("承接: ACC-08 与其闸门"),
     "planning": FeatureSpec("计划: PLN-15, PLN-19 与其闸门", frozenset({"misstatement"})),
     "presign": FeatureSpec(

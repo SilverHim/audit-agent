@@ -138,7 +138,6 @@ class GraphStateQuery:
 
         GateView 的 target_id, target_version 标明材料版本: 审计师提交决定时带回, DecisionSubmit 据此判断是否过期.
         停在闸门而材料缺失 (状态与流程不符) 时抛 LookupError.
-        现有材料都不含判断与模型留痕; 以后的闸门材料要含时, 须经 deps.blind_filter 转成视图再呈报 (接口文档第 10 节).
         """
         snapshot = await self.app.aget_state(GraphRunner.config(eid))
         values = fill_defaults(snapshot.values)

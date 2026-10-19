@@ -1,7 +1,7 @@
 """判断公共流程: A6 的判断程序与之后的 A8 共用 (接口文档第 6 节 A6 判断公共流程).
 
-每个判断对象依次经过 judge → A7 复核 (critic) → 判断级降级 (downgrade) → 盲测抽样 (blind) → classify → make_task.
-判断失败的对象不经中间三步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级与抽样由对应需求实现, 缺省原样返回.
+每个判断对象依次经过 judge → A7 复核 (critic) → 判断级降级 (downgrade) → classify → make_task.
+判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级由对应需求实现, 缺省原样返回.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -61,16 +61,15 @@ async def unchanged(ctx: RunContext, judgment: Judgment) -> Judgment:
 
 @dataclass(frozen=True)
 class JudgingSteps:
-    """A7 复核之后, classify 之前的两个可替换步骤, 按此顺序执行; 收到的判断已带 critic 字段.
+    """A7 复核之后, classify 之前的可替换步骤; 收到的判断已带 critic 字段.
 
-    downgrade: 判断级降级 (规格书第 7.4 节, 在 A7 之后); blind: 盲测抽样 (第 9.2 节). 缺省都原样返回.
+    downgrade: 判断级降级 (规格书第 7.4 节, 在 A7 之后), 缺省原样返回.
     """
 
     downgrade: Step = unchanged
-    blind: Step = unchanged
 
 
-DEFAULT_STEPS = JudgingSteps()  # 两步都原样返回
+DEFAULT_STEPS = JudgingSteps()  # 原样返回
 
 
 def subjects_awaiting_review(ctx: RunContext) -> set[str]:
@@ -100,7 +99,7 @@ def in_scope(ctx: RunContext, subject_id: str) -> bool:
 async def judge_all(
     deps: AgentDeps, ctx: RunContext, subjects: list[Subject], critic: Critic, steps: JudgingSteps = DEFAULT_STEPS
 ) -> list[Judged]:
-    """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核, 降级与盲测抽样.
+    """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级.
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
     fixture_key 为对象 ID; 自主度取 Procedure 的运行时级别; performed_by 为项目负责人.
@@ -126,7 +125,6 @@ async def judge_all(
             # 独立复核在降级与分类之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
             judgment = await critic.review(ctx, outcome.judgment, subject.rule_findings)
             judgment = await steps.downgrade(ctx, judgment)
-            judgment = await steps.blind(ctx, judgment)
             outcome = outcome.model_copy(update={"judgment": judgment})
         return Judged(jctx, outcome)
 

@@ -3,7 +3,7 @@
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
@@ -35,7 +35,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewStatus,
 )
-from backend.contracts.records import BankAccount
+from backend.contracts.records import BankAccount, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import document_pointer
@@ -73,7 +73,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
         self.reviewer = ReviewAgent(deps)  # A7: 每生成一条模型类判断即同步调用其独立复核 (GEN-09)
-        self.steps: JudgingSteps = DEFAULT_STEPS  # 复核之后, 分类之前的判断级降级与盲测抽样, 缺省原样返回
+        self.steps: JudgingSteps = DEFAULT_STEPS  # 复核之后, 分类之前的判断级降级, 缺省原样返回
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,
@@ -153,9 +153,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         筛选, 再取数据.
 
         data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice 与 delivery_notes (按 ID 排序) 带 source_type;
+        journal_lines 为该发票过账分录的全部行 (见 invoice_journal_lines), 发票没有 journal_entry_id 时为 [];
         contract, document (该合同的文件登记, 见 contract_documents), contract_judgment (该合同当前有效的 REV-03 判断,
         见 contract_judgment) 在发票没有合同时为 null. 规则例外为该发票上前置程序尚未归因的例外 (按 ID 排序).
-        发票, 合同或合同文件查不到抛 LookupError.
+        发票, 发票指向的分录行, 合同或合同文件查不到抛 LookupError.
         """
         eid = ctx.engagement.id
         store = self.deps.financial_store
@@ -180,6 +181,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         notes: dict[str, list[dict[str, Any]]] = {i: [] for i in ids}
         for note in sorted(await store.delivery_notes(eid, ids), key=lambda n: n.id):
             notes[note.invoice_id].append({"source_type": "delivery_note", **note.model_dump(mode="json")})
+        journal_lines = await self.invoice_journal_lines(eid, [invoices[i] for i in ids])
         contract_ids = sorted({cast(str, invoices[i].contract_id) for i in ids if invoices[i].contract_id})
         contracts = {c.id: c for c in await store.contracts(eid, contract_ids)} if contract_ids else {}
         documents = await self.registered_documents(ctx) if contracts else {}
@@ -199,12 +201,48 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             data = {
                 "invoice": {"source_type": "sales_invoice", **invoice.model_dump(mode="json")},
                 "delivery_notes": notes[invoice_id],
+                "journal_lines": journal_lines[invoice_id],
                 "contract": contract,
                 "document": document,
                 "contract_judgment": judgment,
             }
             subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
         return subjects
+
+    async def invoice_journal_lines(
+        self, eid: str, invoices: Sequence[SalesInvoice]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """各发票过账分录的全部行 (需求 R100): journal_entry_id 指向的行经 record 取得凭证号, 再按凭证号一次取齐,
+        按行 ID 排序; 每行为 {"source_type": "journal_entry", 分录行各列 (JSON 形式), account_name, account_category}
+        (科目表里没有该科目时两项为 null). journal_entry_id 为空的发票为 []; 指向的行查不到抛 LookupError."""
+        store = self.deps.financial_store
+        entry_nos: dict[str, str] = {}
+        for invoice in invoices:
+            if invoice.journal_entry_id is None:
+                continue
+            row = await store.record(eid, "journal_entry", invoice.journal_entry_id)
+            if row is None:
+                raise LookupError(f"发票 {invoice.id} 的分录行 {invoice.journal_entry_id} 不在财务数据中")
+            entry_nos[invoice.id] = str(row["entry_no"])
+        found: dict[str, list[dict[str, Any]]] = {i.id: [] for i in invoices}
+        if not entry_nos:
+            return found
+        lines = sorted(await store.journal_entries(eid, entry_nos=sorted(set(entry_nos.values()))), key=lambda x: x.id)
+        chart = {a.code: a for a in await store.accounts(eid, sorted({x.account_code for x in lines}))}
+        by_entry: dict[str, list[dict[str, Any]]] = {}
+        for line in lines:
+            account = chart.get(line.account_code)
+            by_entry.setdefault(line.entry_no, []).append(
+                {
+                    "source_type": "journal_entry",
+                    **line.model_dump(mode="json"),
+                    "account_name": account.name if account is not None else None,
+                    "account_category": account.category if account is not None else None,
+                }
+            )
+        for invoice_id, entry_no in entry_nos.items():
+            found[invoice_id] = by_entry.get(entry_no, [])
+        return found
 
     @staticmethod
     def contract_judgment(ctx: RunContext, contract_id: str) -> dict[str, Any] | None:

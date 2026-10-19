@@ -8,7 +8,7 @@ import type {
   Assertion,
   Decision,
   Direction,
-  JudgmentView,
+  Judgment,
   MisstatementDraft,
   MisstatementType,
   ReasoningStep,
@@ -154,9 +154,9 @@ type Critic = {
   critic_conclusion?: string | null
 }
 
-function CriticPanel({ judgment }: { judgment: JudgmentView }) {
+function CriticPanel({ judgment }: { judgment: Judgment }) {
   const { t } = useI18n()
-  const critic = judgment as JudgmentView & Critic
+  const critic = judgment as Judgment & Critic
   if (!critic.critic_verdict) return null
   const verdict = critic.critic_verdict
   const tone = verdict === 'consistent' ? 'ok' : verdict === 'inconsistent' ? 'risk' : 'neutral'
@@ -230,7 +230,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
     )
   }
 
-  const parts = Object.entries(target.confidence_parts ?? {})
+  const parts = Object.entries(target.confidence_parts)
     .map(([key, value]) => `${t.judgment.parts[key] ?? key} ${value.toFixed(2)}`)
     .join(' · ')
   return (
@@ -248,16 +248,16 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
         <div className="flex basis-[140px] flex-col gap-0.5">
           <span className="text-[12px] text-muted-foreground">{t.judgment.proposed}</span>
           <span className={cn('font-semibold', target.proposed_action === 'misstatement' && 'text-risk')}>
-            {target.proposed_action ? t.proposed[target.proposed_action] : '—'}
+            {t.proposed[target.proposed_action]}
           </span>
         </div>
         <div className="flex flex-1 basis-[200px] flex-col gap-1.5">
           <span className="text-[12px] text-muted-foreground">{t.judgment.confidence}</span>
           <div className="flex items-center gap-2.5">
             <span className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-              <span className="bg-primary" style={{ width: `${Math.round((target.confidence ?? 0) * 100)}%` }} />
+              <span className="bg-primary" style={{ width: `${Math.round(target.confidence * 100)}%` }} />
             </span>
-            <Code className="font-semibold">{target.confidence != null ? target.confidence.toFixed(2) : '—'}</Code>
+            <Code className="font-semibold">{target.confidence.toFixed(2)}</Code>
           </div>
           <Code className="text-[11.5px] text-muted-foreground">{parts}</Code>
         </div>
@@ -265,12 +265,12 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       <div className="flex flex-col gap-1.5 border-line-soft border-b px-4 py-4">
         <SectionLabel>{t.judgment.conclusion}</SectionLabel>
         <p className="m-0 text-[15px] leading-[1.65]" lang="en">
-          {target.conclusion ?? '—'}
+          {target.conclusion}
         </p>
       </div>
       <div className="flex flex-col gap-2.5 border-line-soft border-b px-4 py-4">
-        <SectionLabel>{t.judgment.reasoning(target.reasoning_chain?.length ?? 0)}</SectionLabel>
-        <ReasoningChain eid={eid} steps={target.reasoning_chain ?? []} />
+        <SectionLabel>{t.judgment.reasoning(target.reasoning_chain.length)}</SectionLabel>
+        <ReasoningChain eid={eid} steps={target.reasoning_chain} />
       </div>
       <div className="flex flex-wrap">
         <div className="flex flex-1 basis-[300px] flex-col gap-1.5 bg-counter p-4">
@@ -397,7 +397,7 @@ const SIDES: DisputeSide[] = ['a6', 'a7']
 
 // 错报框上 "复制建议数据" 的来源: 功能 collab 打开的仲裁按采纳的一方 (neither 时两方都给), 其余为原判断的草稿
 function copySources(
-  judgment: JudgmentView | null,
+  judgment: Judgment | null,
   dispute: DisputeChoice | null,
   collabDispute: boolean,
 ): { side: DisputeSide; source: MisstatementDraft }[] {

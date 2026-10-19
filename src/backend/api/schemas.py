@@ -25,6 +25,7 @@ from backend.contracts.models import (
     GateId,
     GateVerdict,
     Governance,
+    Judgment,
     KeyPerson,
     LlmProvider,
     ManualResult,
@@ -49,7 +50,6 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.records import AccountCategory
-from backend.contracts.views import JudgmentView
 
 
 class Token(Model):
@@ -250,7 +250,7 @@ class ReviewTaskView(Model):
 
     task: ReviewTask
     procedure_name: str
-    target: JudgmentView | AuditException | ProcedureRun  # 判断经盲判过滤 (BlindFilter) 输出
+    target: Judgment | AuditException | ProcedureRun
     allowed_decisions: list[Decision]
     amount_cents: int | None  # 涉及金额, 保留正负号; 取值顺序见 services.review_queue.task_amount
     tier: ReviewTier  # 复核档位, 按金额绝对值与置信度判定 (services.review_queue.review_tier)
@@ -269,7 +269,7 @@ class ProcedureDetail(Model):
     standards: list[str]
     runs: list[ProcedureRun]
     exceptions: list[AuditException]
-    judgments: list[JudgmentView]  # 经盲判过滤
+    judgments: list[Judgment]
     stale: bool = False  # 过期, 口径同总览 (services.staleness)
     rerunnable: bool = False  # 过期且能重跑 (执行阶段, 不在等重跑, 不在等数据或未执行), 同总览
     superseded_run_ids: list[str] = []  # 被过期重跑取代的执行: 其例外与判断留作历史, 不再计入
@@ -278,8 +278,8 @@ class ProcedureDetail(Model):
 class JudgmentDetail(Model):
     """一条判断的当前版本, 历史版本与相关复核决定."""
 
-    judgment: JudgmentView  # 经盲判过滤
-    versions: list[JudgmentView]  # 各版本, 经盲判过滤
+    judgment: Judgment
+    versions: list[Judgment]  # 各版本
     review_records: list[ReviewRecord]
 
 

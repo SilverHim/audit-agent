@@ -63,6 +63,7 @@ def rev02_context(findings: bool = True) -> JudgmentContext:
         data={
             "invoice": json.loads(json.dumps(invoice, default=str)),
             "delivery_notes": [],
+            "journal_lines": [],  # 需求 R100 加的上下文 (这里的判断不依赖它)
             "contract": None,
             "document": None,
             "contract_judgment": None,
