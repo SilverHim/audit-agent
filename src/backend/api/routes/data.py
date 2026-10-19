@@ -345,9 +345,10 @@ async def xero_profile_check(
     decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
 ) -> XeroProfileCheck | None:
     """对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由
-    (空 422 MISSING_FIELD); update 按 Xero 的法定名称与 ABN 出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并
-    重跑 ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接
-    409 XERO_NOT_CONNECTED; 停在 ACC-01 时同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH)."""
+    (空 422 MISSING_FIELD); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑
+    ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接
+    409 XERO_NOT_CONNECTED; Xero 带出的 ABN 校验位不对 422 INVALID_VALUE, 已是别的客户的 409 ABN_TAKEN; 停在 ACC-01 时
+    同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH)."""
     async with catch_api():
         return await xero.resolve_profile(engagement.id, body.key, body.decision, body.reason, user.id, decisions)
 

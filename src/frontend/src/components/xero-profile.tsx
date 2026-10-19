@@ -9,17 +9,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { useXeroProfileCheck } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { type AcceptanceStage, profileChoice, profileRows } from '@/lib/xero-profile'
+import { profileChoice, profileRows } from '@/lib/xero-profile'
 
 type Choice = XeroProfileCheckIn['decision']
 
 // Xero 组织信息与客户画像不一致 (后端 R291): 两边的法定名称与 ABN 并列 (对不上的标红), 审计师选按 Xero 更新画像或
 // 保持原样 (理由必填). 只有停在 ACC-01 时更新由本项目采用并重新做承接核查; 其余时候 (未到 ACC-01 或已过) 只给客户写
-// 新版本 (stage 定说明文字). 工作台与数据管理页共用; inset 为工作台里与对话对齐的缩进
+// 新版本. 写出的版本 (next_version) 与本项目所处的位置 (stage) 都由后端给, 前端只按它们选文案. 工作台与数据管理页
+// 共用; inset 为工作台里与对话对齐的缩进
 export function XeroProfileCard({
   eid,
   check,
-  stage,
   disabled,
   inset = false,
   deferred = false,
@@ -28,7 +28,6 @@ export function XeroProfileCard({
 }: {
   eid: string
   check: XeroProfileCheck
-  stage: AcceptanceStage
   disabled: boolean
   inset?: boolean
   deferred?: boolean
@@ -42,7 +41,7 @@ export function XeroProfileCard({
   const busy = disabled || submit.isPending
   const ready = choice === 'update' || (choice === 'keep' && reason.trim().length > 0)
   const name = `xero-profile-${check.key}`
-  const next = check.profile_version + 1
+  const next = check.next_version
 
   const record = () => {
     if (!choice) return
@@ -107,9 +106,9 @@ export function XeroProfileCard({
           onSelect={() => setChoice('update')}
           label={t.xeroProfile.update}
           hint={
-            stage === 'at'
+            check.stage === 'at'
               ? t.xeroProfile.updateHere(next)
-              : stage === 'before'
+              : check.stage === 'before'
                 ? t.xeroProfile.updateBefore(next, check.profile_version)
                 : t.xeroProfile.updateAfter(next, check.profile_version)
           }

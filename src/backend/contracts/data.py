@@ -219,22 +219,28 @@ class XeroSyncResult(Model):
 XeroProfileField = Literal["legal_name", "abn"]  # Xero 组织信息与客户画像核对的两项: 法定名称, ABN
 XeroProfileDecision = Literal["keep", "update"]  # 审计师的选择: 保持原样 (写理由), 按 Xero 更新画像
 XeroProfileResolution = Literal["kept", "updated"]  # 记下的选择 (data 留痕 xero_profile_kept, xero_profile_updated)
+# 本项目相对承接决定 (ACC-01) 的位置: at 停在闸门 (按 Xero 更新时本项目采用新版本); before 承接阶段还没到闸门,
+# after 已过承接 (这两种只给客户写新版本)
+XeroProfileStage = Literal["before", "at", "after"]
 
 
 class XeroProfileCheck(Model):
     """Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕
-    xero_synced 的 organisation_info), 画像取本项目采用的版本; 断开后没再同步为空. differences 不为空且 resolution
-    为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或画像版本变了, key 跟着变, 再次提示."""
+    xero_synced 的 organisation_info), 须是当前选定的组织的; 画像取本项目采用的版本; 断开, 改选组织或换了组织后没再
+    同步为空. differences 不为空且 resolution 为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或
+    画像版本变了, key 跟着变, 再次提示."""
 
     key: str  # 本次核对的键 (XP- 加摘要): 组织 ID, Xero 的法定名称与 ABN, 画像版本
     xero_name: str  # 组织名 (Name)
     xero_legal_name: str  # 法定名称 (LegalName, 空时同 Name)
-    xero_abn: str | None = None  # ABN (RegistrationNumber 去非数字后 11 位); Xero 没给时为空, 只比名称
+    xero_abn: str | None = None  # ABN (RegistrationNumber 去非数字后 11 位); Xero 没给时为空, 不比 ABN
     profile_version: int  # 本项目采用的画像版本
     profile_legal_name: str
     profile_abn: str
     differences: list[XeroProfileField] = []  # 对不上的项, 空即一致
     checked_at: datetime  # 记下组织信息的那次同步的时间
+    next_version: int  # 按 Xero 更新时写出的画像版本 (该客户最新一版 +1, 可能高于本项目采用的版本 +1)
+    stage: XeroProfileStage  # 本项目相对承接决定的位置, 定按 Xero 更新时本项目是否采用新版本
     resolution: XeroProfileResolution | None = None  # 审计师对这一 key 的选择
     reason: str | None = None  # 保持原样的理由
     resolved_by: str | None = None  # 作出选择的用户 ID

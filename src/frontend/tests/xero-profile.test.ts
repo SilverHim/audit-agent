@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { TrailEntryView, XeroProfileCheck, XeroSource } from '../src/client/types.gen'
 import { buildTimeline } from '../src/lib/timeline'
-import { acceptanceStage, checkStatus, pendingCheck, profileChoice, profileRows } from '../src/lib/xero-profile'
+import { checkStatus, pendingCheck, profileChoice, profileRows } from '../src/lib/xero-profile'
 import { zh } from '../src/locales/zh'
 
 const CHECK: XeroProfileCheck = {
@@ -16,6 +16,8 @@ const CHECK: XeroProfileCheck = {
   profile_abn: '25900043021',
   differences: ['legal_name', 'abn'],
   checked_at: '2026-10-17T00:00:00Z',
+  next_version: 2,
+  stage: 'at',
 }
 
 function source(check: XeroProfileCheck | null): XeroSource {
@@ -60,27 +62,17 @@ describe('profileChoice', () => {
 })
 
 describe('checkStatus', () => {
-  test('数据管理页 Xero 卡片的一行', () => {
+  test('数据管理页 Xero 卡片的一行 (锁定时不指向核对卡)', () => {
     expect(checkStatus(null, zh)).toBeNull()
     expect(checkStatus({ ...CHECK, differences: [] }, zh)).toBe(zh.xeroProfile.status.consistent)
     expect(checkStatus(CHECK, zh)).toBe(zh.xeroProfile.status.pending)
+    expect(checkStatus(CHECK, zh, true)).toBe(zh.xeroProfile.status.differs) // 锁定的项目不列核对卡, 不写 "见下方"
     expect(checkStatus({ ...CHECK, resolution: 'kept', reason: '合成画像' }, zh)).toBe(
       zh.xeroProfile.status.kept('合成画像'),
     )
     const updated = { ...CHECK, resolution: 'updated' as const, updated_version: 2 }
     expect(checkStatus({ ...updated, adopted: true }, zh)).toBe(zh.xeroProfile.status.adopted(2))
     expect(checkStatus({ ...updated, adopted: false }, zh)).toBe(zh.xeroProfile.status.clientOnly(2, 1))
-  })
-})
-
-describe('acceptanceStage', () => {
-  test('停在 ACC-01 为 at; 承接阶段未到闸门为 before; 过了承接为 after', () => {
-    const at = { current_gate: 'ACC-01', engagement: { phase: 'P0_Acceptance' } }
-    expect(acceptanceStage(at as never)).toBe('at')
-    expect(acceptanceStage({ current_gate: null, engagement: { phase: 'P0_Acceptance' } } as never)).toBe('before')
-    expect(acceptanceStage({ current_gate: 'PLN-01/03', engagement: { phase: 'P1_Planning' } } as never)).toBe('after')
-    expect(acceptanceStage({ current_gate: null, engagement: { phase: 'P2_Executing' } } as never)).toBe('after')
-    expect(acceptanceStage(undefined)).toBe('after')
   })
 })
 

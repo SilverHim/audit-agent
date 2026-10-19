@@ -4353,8 +4353,9 @@ export type XeroDisconnected = {
  * XeroProfileCheck
  *
  * Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕
- * xero_synced 的 organisation_info), 画像取本项目采用的版本; 断开后没再同步为空. differences 不为空且 resolution
- * 为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或画像版本变了, key 跟着变, 再次提示.
+ * xero_synced 的 organisation_info), 须是当前选定的组织的; 画像取本项目采用的版本; 断开, 改选组织或换了组织后没再
+ * 同步为空. differences 不为空且 resolution 为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或
+ * 画像版本变了, key 跟着变, 再次提示.
  */
 export type XeroProfileCheck = {
     /**
@@ -4393,6 +4394,14 @@ export type XeroProfileCheck = {
      * Checked At
      */
     checked_at: string;
+    /**
+     * Next Version
+     */
+    next_version: number;
+    /**
+     * Stage
+     */
+    stage: 'before' | 'at' | 'after';
     /**
      * Resolution
      */

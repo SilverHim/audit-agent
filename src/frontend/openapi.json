@@ -3300,7 +3300,7 @@
           "data"
         ],
         "summary": "Xero Profile Check",
-        "description": "对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由\n(空 422 MISSING_FIELD); update 按 Xero 的法定名称与 ABN 出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并\n重跑 ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接\n409 XERO_NOT_CONNECTED; 停在 ACC-01 时同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH).",
+        "description": "对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由\n(空 422 MISSING_FIELD); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑\nACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接\n409 XERO_NOT_CONNECTED; Xero 带出的 ABN 校验位不对 422 INVALID_VALUE, 已是别的客户的 409 ABN_TAKEN; 停在 ACC-01 时\n同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH).",
         "operationId": "data-xero_profile_check",
         "security": [
           {
@@ -12095,6 +12095,19 @@
             "format": "date-time",
             "title": "Checked At"
           },
+          "next_version": {
+            "type": "integer",
+            "title": "Next Version"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "before",
+              "at",
+              "after"
+            ],
+            "title": "Stage"
+          },
           "resolution": {
             "anyOf": [
               {
@@ -12176,10 +12189,12 @@
           "profile_version",
           "profile_legal_name",
           "profile_abn",
-          "checked_at"
+          "checked_at",
+          "next_version",
+          "stage"
         ],
         "title": "XeroProfileCheck",
-        "description": "Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕\nxero_synced 的 organisation_info), 画像取本项目采用的版本; 断开后没再同步为空. differences 不为空且 resolution\n为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或画像版本变了, key 跟着变, 再次提示."
+        "description": "Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕\nxero_synced 的 organisation_info), 须是当前选定的组织的; 画像取本项目采用的版本; 断开, 改选组织或换了组织后没再\n同步为空. differences 不为空且 resolution 为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或\n画像版本变了, key 跟着变, 再次提示."
       },
       "XeroProfileCheckIn": {
         "properties": {

@@ -419,6 +419,7 @@ export const zh: Messages = {
       ENGAGEMENT_LOCKED: '项目已签字，只能查看。',
       NOT_RERUNNABLE: '只能在等待复核、FIN-01 或 RPT-01 阶段决定时重跑。',
       XERO_NOT_CONNECTED: '还没有连接 Xero。',
+      PROFILE_CHECK_STALE: 'Xero 组织信息的核对已变，请刷新后再选。',
       XERO_TENANT_REQUIRED: '这次授权给到了多个组织，请先选定要同步的组织。',
       XERO_RECONNECT_REQUIRED: 'Xero 授权已失效，请重新连接。',
       XERO_NOT_CONFIGURED: '后端没有配置 Xero 应用（XERO_CLIENT_ID），不能连接 Xero。',
@@ -1264,11 +1265,11 @@ export const zh: Messages = {
     noAbn: 'Xero 未提供 ABN',
     update: '按 Xero 更新客户画像',
     updateHere: (version) =>
-      `以 Xero 的法定名称与 ABN 存为第 ${version} 版，本项目采用，重新做承接核查（ACC-04）后再呈报承接决定。`,
+      `按 Xero 改对不上的项，存为第 ${version} 版，本项目采用，重新做承接核查（ACC-04）后再呈报承接决定。`,
     updateBefore: (version, current) =>
-      `给客户存为第 ${version} 版；本项目仍用第 ${current} 版。本项目还没到承接决定：可先稍后处理，到承接决定（ACC-01）时再更新，本项目即采用。`,
+      `按 Xero 改对不上的项，给客户存为第 ${version} 版；本项目仍用第 ${current} 版。本项目还没到承接决定：可先稍后处理，到承接决定（ACC-01）时再更新，本项目即采用。`,
     updateAfter: (version, current) =>
-      `给客户存为第 ${version} 版（下一年度新建项目时带出）；本项目已过承接决定，仍用第 ${current} 版（承接核查与审计报告按它）。`,
+      `按 Xero 改对不上的项，给客户存为第 ${version} 版（下一年度新建项目时带出）；本项目已过承接决定，仍用第 ${current} 版（承接核查与审计报告按它）。`,
     keep: '保持客户画像不变',
     keepHint: '写明保持原样的理由。',
     kept: '已保持客户画像不变',
@@ -1278,6 +1279,7 @@ export const zh: Messages = {
     status: {
       consistent: '与客户画像一致',
       pending: '与客户画像不一致，见下方',
+      differs: '与客户画像不一致',
       kept: (reason) => `已保持原样：${reason}`,
       adopted: (version) => `已按 Xero 更新客户画像至第 ${version} 版`,
       clientOnly: (version, current) => `已给客户写第 ${version} 版；本项目仍用第 ${current} 版`,

@@ -34,7 +34,7 @@ import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useEngagement } from '@/lib/use-engagement'
 import { skippedByReason, syncFailureText, useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
-import { acceptanceStage, checkStatus, pendingCheck } from '@/lib/xero-profile'
+import { checkStatus, pendingCheck } from '@/lib/xero-profile'
 
 export const Route = createFileRoute('/engagements/$eid/data/')({
   validateSearch: (search: Record<string, unknown>): XeroNotice => xeroNotice(search),
@@ -140,7 +140,6 @@ function DataPage() {
             key={profileCheck.key}
             eid={eid}
             check={profileCheck}
-            stage={acceptanceStage(overview)}
             disabled={Boolean(overview?.running || summary?.sources.xero?.syncing)}
           />
         ) : null}
@@ -240,7 +239,8 @@ function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }
   const joiner = lang === 'zh' ? '、' : ', '
   const last = xero.last_sync ?? null
   const skipped = last?.ok ? skippedByReason(last.skipped, t, lang) : []
-  const checked = checkStatus(xero.profile_check, t)
+  // 锁定的项目不列核对卡 (状态行不写 "见下方")
+  const checked = checkStatus(xero.profile_check, t, Boolean(useEngagement(eid).data?.engagement.locked))
   const differs = Boolean(xero.profile_check?.differences?.length && !xero.profile_check.resolution)
 
   // 一次只提交一个; action 返回 true 时保持提交中 (连接成功后整页跳到 Xero)

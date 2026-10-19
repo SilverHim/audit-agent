@@ -56,8 +56,13 @@ SCOPE = "offline_access accounting.settings.read accounting.transactions.read"  
 DEMO = {"tenantId": "3c1332bb-175c-411a-83e8-1b6a809f05d1", "tenantName": "Demo Company (AU)"}  # 快照的组织
 OTHER = {"tenantId": "00000000-0000-4000-8000-000000000002", "tenantName": "Synthetic Trading Pty Ltd"}  # 合成
 THIRD = {"tenantId": "00000000-0000-4000-8000-000000000003", "tenantName": "Synthetic Holdings Pty Ltd"}  # 合成
-# 快照 organisation.json 中核对客户画像用的三项 (需求 R291); 其余字段不进留痕
-DEMO_ORG = {"name": "Demo Company (AU)", "legal_name": "Demo Company (AU)", "abn": "11111111138"}
+# 同步留痕记下的组织信息 (需求 R291): 快照 organisation.json 中核对客户画像用的三项与是哪个组织的; 其余字段不进留痕
+DEMO_ORG = {
+    "name": "Demo Company (AU)",
+    "legal_name": "Demo Company (AU)",
+    "abn": "11111111138",
+    "tenant_id": DEMO["tenantId"],
+}
 FRONT = "http://front.test"  # 合成: 前端地址
 START = datetime(2026, 12, 15, 1, 0, tzinfo=UTC)  # 固定时钟: 晚于快照期间截止日, 银行对账单只取一段
 API = "/api/v1/engagements/{eid}/data/xero"

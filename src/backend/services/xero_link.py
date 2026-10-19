@@ -58,17 +58,19 @@ from backend.contracts.data import (
     XeroConnection,
     XeroProfileCheck,
     XeroProfileDecision,
+    XeroProfileStage,
     XeroSkipReason,
     XeroSource,
     XeroSyncFailure,
     XeroSyncResult,
     XeroTenant,
 )
-from backend.contracts.errors import DataRejected, DecisionRejected, VersionConflict
-from backend.contracts.models import ClientProfile, GateId, ProfileSource, TrailEntry, TrailKind
+from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
+from backend.contracts.models import ClientProfile, GateId, Phase, ProfileSource, TrailEntry, TrailKind
 from backend.contracts.ports import AuditTrail, EngagementStore, XeroConnectionStore
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
+from backend.services.abn import abn_problem, dataset_profiles
 from backend.services.data_service import DataService
 from backend.services.xero_profile import check_key, organisation_info, profile_differences
 
@@ -240,12 +242,14 @@ class StoredXeroConnections:
         trail: AuditTrail | None = None,
         syncing: Callable[[str], bool] = lambda eid: False,
         engagements: EngagementStore | None = None,
+        gate: Callable[[str], Awaitable[GateId | None]] | None = None,
     ) -> None:
         self.store = store
         self.now = now
         self.trail = trail  # 取 last_sync 与 profile_check; 为空时两者一律为空
         self.syncing = syncing
         self.engagements = engagements  # 取本项目采用的画像; 为空时 profile_check 为空
+        self.gate = gate  # 检查点停在哪道闸门 (DataService.gate_now); 为空时按不在闸门算 profile_check 的 stage
 
     async def source(self, eid: str) -> XeroSource:
         connection = await self.store.get(eid)
@@ -275,21 +279,30 @@ class StoredXeroConnections:
 
     async def profile_check(self, eid: str, connection: XeroConnection) -> XeroProfileCheck | None:
         """组织信息与本项目采用的客户画像的核对 (需求 R291), 按留痕现算 (不另存, 表结构不变): 组织信息取本项目
-        ORGANISATION_ACTIONS 中最近一条 data 留痕 (是断开, 或是 R291 之前没记组织信息的同步时为空), 画像取
+        ORGANISATION_ACTIONS 中最近一条 data 留痕, 须是当前选定的组织的 (organisation_info.tenant_id 等于连接的
+        tenant_id; 是断开, 改选组织或换授权后还没同步, 或是没记组织信息的同步时为空), 画像取
         Engagement.client_profile_version 那一版; 选择取 RESOLUTION_ACTIONS 中最近一条, 其 key 与本次相同才算.
-        项目或画像读不到时为空."""
+        next_version 为该客户最新一版 +1; stage 按检查点所在的闸门与项目阶段 (停在 ACC-01 为 at, 承接阶段为 before,
+        其余为 after). 项目或画像读不到时为空."""
         if self.trail is None or self.engagements is None:
             return None
         synced = await self.trail.last_of(eid, TrailKind.data, ORGANISATION_ACTIONS)
         if synced is None or synced.payload.get("action") != "xero_synced":
             return None
         info = synced.payload.get("organisation_info")
+        if not isinstance(info, dict) or info.get("tenant_id") != connection.tenant_id:
+            return None
         engagement = await self.engagements.get(eid)
-        if not isinstance(info, dict) or engagement is None:
+        if engagement is None:
             return None
         profile = await self.engagements.client_profile(engagement.client_id, engagement.client_profile_version)
-        if profile is None:
+        latest = await self.engagements.client_profile(engagement.client_id)
+        if profile is None or latest is None:
             return None
+        gate = await self.gate(eid) if self.gate is not None else None
+        stage: XeroProfileStage = (
+            "at" if gate is GateId.ACC_01 else "before" if engagement.phase is Phase.P0_Acceptance else "after"
+        )
         legal_name, abn = str(info.get("legal_name") or ""), info.get("abn") or None
         key = check_key(connection.tenant_id, legal_name, abn, profile.version)
         check = XeroProfileCheck(
@@ -302,6 +315,8 @@ class StoredXeroConnections:
             profile_abn=profile.abn,
             differences=profile_differences(legal_name, abn, profile),
             checked_at=synced.created_at or self.now(),
+            next_version=latest.version + 1,
+            stage=stage,
         )
         chosen = await self.trail.last_of(eid, TrailKind.data, RESOLUTION_ACTIONS)
         if chosen is None or chosen.payload.get("key") != key:
@@ -363,7 +378,7 @@ class XeroLink:
         self.sleep = sleep
         self.states = AuthStates(self.now)
         self.connections = StoredXeroConnections(
-            store, self.now, deps.trail, lambda eid: data.running(eid, SYNC_JOB), deps.engagement_store
+            store, self.now, deps.trail, lambda eid: data.running(eid, SYNC_JOB), deps.engagement_store, data.gate_now
         )
 
     def now(self) -> datetime:
@@ -619,6 +634,8 @@ class XeroLink:
         if connection is not None:
             update = {"last_synced_at": self.now(), "synced_tables": kinds}
             await self.store.update(eid, connection.model_copy(update=update))
+        # 组织信息记下是哪个组织的: 改选组织或换授权后, 核对不拿旧组织的值 (StoredXeroConnections.profile_check)
+        organisation["tenant_id"] = connection.tenant_id if connection is not None else None
         summary = f"Xero 同步完成, 写入 {len(kinds)} 张表" + (f", 未写 {', '.join(skipped)}" if skipped else "")
         payload: dict[str, object] = {
             "action": "xero_synced",
@@ -648,16 +665,18 @@ class XeroLink:
         actor: str,
         decisions: "GraphDecisionSubmit",
     ) -> XeroProfileCheck | None:
-        """审计师对一次核对的选择 (POST /data/xero/profile-check), 返回处理后的核对结果. 持项目锁 (同断开; 锁定 423,
-        忙 409 ENGAGEMENT_BUSY), 在锁内重新核对: 没有连接 409 XERO_NOT_CONNECTED; key 不是当前待处理的核对 (Xero 的值
-        或画像变了, 已处理过, 或本来一致) 409 PROFILE_CHECK_STALE.
+        """审计师对一次核对的选择 (POST /data/xero/profile-check), 返回处理后的核对结果. 核对, 写画像与写留痕都在同一把
+        项目锁内 (锁定 423, 忙 409 ENGAGEMENT_BUSY): 没有连接 409 XERO_NOT_CONNECTED; key 不是当前待处理的核对 (Xero
+        的值或画像变了, 已处理过, 或本来一致) 409 PROFILE_CHECK_STALE, 并发的两次选择只有一次写成.
 
         keep: 理由必填 (去首尾空白后为空 422 MISSING_FIELD), 写 data 留痕 xero_profile_kept.
-        update: 新版本只改法定名称与 ABN (Xero 没给 ABN 时只改名称), 其余字段沿用该客户最新一版, 来源 xero. 只有停在
-        ACC-01 闸门时本项目采用新版本: 放开项目锁后走更新客户资料 (decisions.update_client_profile, 自取项目锁并再查
-        闸门与版本, 路由回 p0_intel 重跑 ACC-04 再呈报). 其余时候 (未到 ACC-01 或已过) 只给客户写新版本 (下一年度新建
-        项目带出), 本项目照用已采用的版本, 不写检查点. 写 data 留痕 xero_profile_updated (版本, 本项目是否采用).
-        留痕写不进时报错 (选择就记在留痕里)."""
+        update: 新版本只改对不上的项 (differences; 名称规范化后相同时保留画像原写法), 其余字段沿用该客户最新一版,
+        来源 xero. 只有停在 ACC-01 闸门时本项目采用新版本: 走更新客户资料 (decisions.update_client_profile), 由它取
+        项目锁, 锁内先按 precheck 重新核对 key, 再查闸门与版本, 路由回 p0_intel 重跑 ACC-04 再呈报. 其余时候 (未到
+        ACC-01 或已过) 在本方法的锁内只给客户写新版本 (下一年度新建项目带出), 本项目照用已采用的版本, 不写检查点.
+        两条路径的 ABN 校验同 ACC-01 更新客户资料 (需求 R289): 校验位不对 422 INVALID_VALUE (闸门外只在改 ABN 时查),
+        改了 ABN 而已是别的客户的 409 ABN_TAKEN; 都不写画像与留痕, 核对仍待处理 (审计师可改为保持原样并写理由).
+        写 data 留痕 xero_profile_updated (版本, 本项目是否采用). 留痕写不进时报错 (选择就记在留痕里)."""
         async with self.data.locked(eid):
             engagement = await self.data.unlocked(eid)
             check = await self.pending_check(eid, key)
@@ -674,29 +693,45 @@ class XeroLink:
                 summary = f"不按 Xero 组织信息更新客户画像, 保持第 {check.profile_version} 版"
                 await self.write(eid, actor, summary, {"action": "xero_profile_kept", **payload, "reason": text})
                 return await self.current_check(eid)
-            changes: dict[str, Any] = {"legal_name": check.xero_legal_name}
-            if check.xero_abn is not None:
-                changes["abn"] = check.xero_abn
+            fields = {"legal_name": check.xero_legal_name, "abn": check.xero_abn}
+            changes: dict[str, Any] = {name: fields[name] for name in check.differences}
             latest = await self.deps.engagement_store.client_profile(engagement.client_id)
             if latest is None:
                 raise LookupError(f"客户 {engagement.client_id} 没有画像")
             version = latest.version + 1
-            adopted = await decisions.gate_now(eid) is GateId.ACC_01
+            adopted = await self.data.gate_now(eid) is GateId.ACC_01
+            updated = {"action": "xero_profile_updated", **payload, "version": version, "adopted": adopted}
+            summary = f"按 Xero 组织信息更新客户画像至第 {version} 版" + ("" if adopted else ", 本项目仍用已采用的版本")
             if not adopted:
                 try:
                     profile = ClientProfile.model_validate({**latest.model_dump(), **changes, "version": version})
                 except ValidationError as e:
                     raise DataRejected("INVALID_VALUE", f"按 Xero 合并后的客户画像不合格: {e}") from None
+                others = None  # 改了 ABN 时同 ACC-01 更新客户资料: 查校验位, 查重 (库里其他客户与数据集画像)
+                if "abn" in changes:
+                    problem = abn_problem(profile.abn)
+                    if problem is not None:
+                        raise DataRejected("INVALID_VALUE", problem)
+                    others = dataset_profiles(self.deps.datasets)
                 try:
-                    await self.deps.engagement_store.save_profile(profile, source=ProfileSource.xero, updated_by=actor)
+                    await self.deps.engagement_store.save_profile(
+                        profile, source=ProfileSource.xero, updated_by=actor, dataset_profiles=others
+                    )
                 except VersionConflict as e:
                     raise DataRejected("VERSION_MISMATCH", str(e)) from None
-        if adopted:
-            await decisions.update_client_profile(eid, version, changes, updated_by=actor, source=ProfileSource.xero)
-        summary = f"按 Xero 组织信息更新客户画像至第 {version} 版" + ("" if adopted else ", 本项目仍用已采用的版本")
-        await self.write(
-            eid, actor, summary, {"action": "xero_profile_updated", **payload, "version": version, "adopted": adopted}
+                except AbnTaken as e:
+                    raise DataRejected("ABN_TAKEN", str(e), client_id=e.client_id, legal_name=e.legal_name) from None
+                await self.write(eid, actor, summary, updated)
+                return await self.current_check(eid)
+
+        async def recheck() -> None:  # 在 update_client_profile 的项目锁内: 这期间别的选择写成了即 409
+            await self.pending_check(eid, key)
+
+        await decisions.update_client_profile(
+            eid, version, changes, updated_by=actor, source=ProfileSource.xero, precheck=recheck
         )
+        # 新版本已由本项目采用 (画像版本变了, key 随之变): 此后同一 key 的选择都报 409, 留痕在锁外写也不会重复
+        await self.write(eid, actor, summary, updated)
         return await self.current_check(eid)
 
     async def pending_check(self, eid: str, key: str) -> XeroProfileCheck:

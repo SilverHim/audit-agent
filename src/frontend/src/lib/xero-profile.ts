@@ -1,4 +1,4 @@
-import type { EngagementOverview, XeroProfileCheck, XeroProfileCheckIn, XeroSource } from '@/client/types.gen'
+import type { XeroProfileCheck, XeroProfileCheckIn, XeroSource } from '@/client/types.gen'
 import type { Messages } from '@/locales/en'
 
 // Xero 组织信息与客户画像的核对 (后端 R291). 待处理: 有对不上的项且还没作出选择; 锁定的项目不提示
@@ -36,17 +36,6 @@ export function profileRows(check: XeroProfileCheck, t: Messages): ProfileRow[] 
   ]
 }
 
-// 选 "按 Xero 更新" 时本项目跟不跟着换 (后端 R291): 只有停在承接决定 (ACC-01) 时 (at) 本项目采用新版本; 承接阶段
-// 还没到闸门 (before) 与已过承接 (after) 都只给客户写新版本, 说明文字不同 (未到闸门的可先稍后处理, 到闸门再更新)
-export type AcceptanceStage = 'before' | 'at' | 'after'
-
-export function acceptanceStage(
-  overview: Pick<EngagementOverview, 'current_gate' | 'engagement'> | undefined,
-): AcceptanceStage {
-  if (overview?.current_gate === 'ACC-01') return 'at'
-  return overview?.engagement.phase === 'P0_Acceptance' ? 'before' : 'after'
-}
-
 // 请求体; 保持原样没写理由时返回错误文案
 export function profileChoice(
   check: XeroProfileCheck,
@@ -59,8 +48,8 @@ export function profileChoice(
   return { key: check.key, decision, reason: decision === 'keep' ? text : null }
 }
 
-// 数据管理页 Xero 卡片里的核对结果一行; 没有核对 (没同步过) 时为空
-export function checkStatus(check: XeroProfileCheck | null | undefined, t: Messages): string | null {
+// 数据管理页 Xero 卡片里的核对结果一行; 没有核对 (没同步过) 时为空. 锁定的项目不列核对卡, 不写 "见下方"
+export function checkStatus(check: XeroProfileCheck | null | undefined, t: Messages, locked = false): string | null {
   if (!check) return null
   if (check.resolution === 'kept') return t.xeroProfile.status.kept(check.reason ?? '')
   if (check.resolution === 'updated') {
@@ -69,5 +58,6 @@ export function checkStatus(check: XeroProfileCheck | null | undefined, t: Messa
       ? t.xeroProfile.status.adopted(version)
       : t.xeroProfile.status.clientOnly(version, check.profile_version)
   }
-  return (check.differences ?? []).length ? t.xeroProfile.status.pending : t.xeroProfile.status.consistent
+  if (!(check.differences ?? []).length) return t.xeroProfile.status.consistent
+  return locked ? t.xeroProfile.status.differs : t.xeroProfile.status.pending
 }

@@ -3,7 +3,7 @@
 校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
 """
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -940,11 +940,6 @@ class GraphDecisionSubmit:
             await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
         return request
 
-    async def gate_now(self, eid: str) -> GateId | None:
-        """检查点当前停在哪道闸门前 (未启动, 在执行或停在节点内等待时为空). 只读, 不取项目锁."""
-        snapshot = await self.app.aget_state(GraphRunner.config(eid))
-        return current_gate(snapshot.next, fill_defaults(snapshot.values))
-
     async def update_client_profile(
         self,
         eid: str,
@@ -953,6 +948,7 @@ class GraphDecisionSubmit:
         *,
         updated_by: str,
         source: ProfileSource = ProfileSource.update,
+        precheck: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.
 
@@ -963,9 +959,12 @@ class GraphDecisionSubmit:
         已是别的客户的报 ABN_TAKEN (带那个客户的 client_id 与 legal_name), 不写. 各项校验都在锁内, 按第 7 节的顺序,
         所以项目锁定, 不在闸门或版本过期时先报对应的错. 保存画像与改项目采用的版本在一个事务内, 提交后写 decision
         留痕. updated_by 为操作用户 ID, 写入留痕. source 为新版本的来源: 客户资料页为 update, 按 Xero 组织信息更新为
-        xero (需求 R291, 留痕 payload 另带 source).
+        xero (需求 R291, 留痕 payload 另带 source). precheck 为调用方要在同一把锁内先做的核对 (按 Xero 更新时重新
+        核对 key, 不过即抛错, 锁随之释放), 在其余校验之前.
         """
         async with self._deciding(eid) as (engagement, snapshot):
+            if precheck is not None:
+                await precheck()
             if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not GateId.ACC_01:
                 raise DecisionRejected("NOT_AT_GATE", "只能在 ACC-01 闸门更新客户资料")
             # 第 7 节校验顺序: VERSION_MISMATCH 先于 INVALID_VALUE. 版本号按项目客户的最新画像算, 不按 changes 的 id

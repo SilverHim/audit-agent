@@ -40,8 +40,8 @@ def normalise_name(name: str) -> str:
 
 
 def profile_differences(legal_name: str, abn: str | None, profile: ClientProfile) -> list[XeroProfileField]:
-    """Xero 的法定名称与 ABN 比画像, 返回对不上的项 (按 legal_name, abn 的顺序). ABN 两边都有才比 (只比数字);
-    Xero 没给 ABN 时只比名称."""
+    """Xero 的法定名称与 ABN 比画像, 返回对不上的项 (按 legal_name, abn 的顺序). ABN 只比数字; Xero 没给 ABN 时不比
+    ABN, 画像缺 ABN 而 Xero 有时算对不上 (提示审计师可按 Xero 带入)."""
     found: list[XeroProfileField] = []
     if normalise_name(legal_name) != normalise_name(profile.legal_name):
         found.append("legal_name")

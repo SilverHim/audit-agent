@@ -289,6 +289,8 @@ class PendingXero:
         profile_abn="",
         differences=["legal_name"],
         checked_at=NOW,
+        next_version=2,
+        stage="after",
     )
 
     async def source(self, eid: str) -> XeroSource:

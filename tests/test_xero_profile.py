@@ -10,8 +10,9 @@ import httpx
 import pytest
 
 from backend.agents.concierge_chat.tools import NoArgs, ToolEnv, list_open_items
-from backend.contracts.data import XeroConnection, XeroProfileField
-from backend.contracts.models import ProcedureRun, ProfileSource, TrailEntry, TrailKind
+from backend.contracts.data import XeroConnection, XeroProfileCheck, XeroProfileField
+from backend.contracts.models import GateId, Phase, ProcedureRun, ProfileSource, TrailEntry, TrailKind
+from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.services.xero_link import StoredXeroConnections
 from backend.services.xero_profile import organisation_info, profile_differences
@@ -19,6 +20,7 @@ from tests.external import require_xero_snapshot
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_AUDITOR,
     NUMBAT_PROFILE,
     XERO_SNAPSHOT,
     FakeEngagementStore,
@@ -38,9 +40,11 @@ from tests.test_xero_link import API, DEMO_ORG, Case, case, client, connect, xer
         ("DEMO  company (au).", "11111111138", "Demo Company (AU)", "11111111138", []),  # 大小写, 空白, 标点
         ("Numbat Electronic Components Proprietary Limited", None, "Numbat Electronic Components Pty Ltd", "", []),
         ("Smith & Jones Pty. Ltd.", None, "Smith and Jones Pty Ltd", "", []),
+        ("Smith&Jones Pty Ltd", None, "Smith and Jones Pty Ltd", "", []),  # & 不带空格也拆开
         ("Demo Company (AU)", None, "Demo Company (AU) Pty Ltd", "", ["legal_name"]),  # 后缀不能省
         ("Numbat Electronic Components Ltd", None, "Numbat Electronic Components Pty Ltd", "", ["legal_name"]),
-        ("Demo Company (AU)", None, "Demo Company (AU)", "68900042015", []),  # Xero 没给 ABN 时只比名称
+        ("Demo Company (AU)", None, "Demo Company (AU)", "68900042015", []),  # Xero 没给 ABN 时不比 ABN
+        ("Demo Company (AU)", "11111111138", "Demo Company (AU)", "", ["abn"]),  # 画像缺 ABN 而 Xero 有: 对不上
         ("Demo Company (AU)", "11111111138", "Demo Company (AU)", "68900042015", ["abn"]),
         ("Demo Trading", "11111111138", "Demo Company (AU)", "68900042015", ["legal_name", "abn"]),
     ],
@@ -48,8 +52,9 @@ from tests.test_xero_link import API, DEMO_ORG, Case, case, client, connect, xer
 def test_profile_differences(
     xero_name: str, xero_abn: str | None, profile_name: str, profile_abn: str, expected: list[XeroProfileField]
 ) -> None:
-    """名称规范化后比 (不分大小写, 去标点, Pty/Proprietary, Ltd/Limited, & 与 and 相同, 公司后缀不能省); ABN 两边都有才
-    比. 防两种错: 写法不同就打扰审计师, 漏掉 "Pty Ltd" 与 "Ltd" 这类实质差异."""
+    """名称规范化后比 (不分大小写, 去标点, Pty/Proprietary, Ltd/Limited, & 与 and 相同, 公司后缀不能省); ABN 只比数字,
+    Xero 没给时不比, 画像缺 ABN 而 Xero 有时算对不上. 防两种错: 写法不同就打扰审计师, 漏掉 "Pty Ltd" 与 "Ltd" 这类
+    实质差异."""
     profile = NUMBAT_PROFILE.model_copy(update={"legal_name": profile_name, "abn": profile_abn})
     assert profile_differences(xero_name, xero_abn, profile) == expected
 
@@ -66,30 +71,78 @@ def test_organisation_info_takes_only_three_fields() -> None:
     assert organisation_info({"Name": "A", "RegistrationNumber": "900042015"})["abn"] is None  # 9 位是 ACN, 不当 ABN
 
 
-async def test_check_follows_adopted_version_and_connection() -> None:
-    """按留痕现算的两条边界 (组织信息为合成值): Q6 a 保持原样绑定当时的画像版本, 本项目改用画像新版本后仍对不上,
-    是新的一次核对, 再次提示 (防只按 Xero 的值认已处理); 断开后组织信息属于旧连接, 没有核对 (防断开再连前沿用)."""
+async def test_check_follows_trail_connection_and_stage() -> None:
+    """按留痕现算的边界 (组织信息为合成值), 直接用假留痕与假项目存储:
+    - stage 与 next_version (第 1 轮审核 R291-05): 承接阶段未到闸门 before, 停在 ACC-01 at, 过了承接 after;
+      next_version 为该客户最新一版 +1 (只给客户写过一版时高于本项目采用的版本 +1).
+    - Q6 a: 保持原样绑定当时的画像版本, 本项目改用画像新版本后仍对不上, 是新的一次核对, 再次提示 (防只按 Xero 的值
+      认已处理).
+    - R291-04: 组织信息只认当前选定的组织的, 改选组织后没再同步时没有核对; 另一组织同步出同样的值也是新的一次核对
+      (key 含组织 ID), 上一个组织的选择不算.
+    - 断开后没有核对."""
     v2 = NUMBAT_PROFILE.model_copy(update={"version": 2, "notes": "synthetic"})
-    engagements = FakeEngagementStore([NUMBAT_PROFILE, v2], [ENGAGEMENT])
+    v3 = v2.model_copy(update={"version": 3})  # 只给客户写的一版, 本项目没采用
+    engagements = FakeEngagementStore([NUMBAT_PROFILE, v2, v3], [ENGAGEMENT])
     trail = FakeTrail()
-    info = {"name": "Numbat", "legal_name": "Numbat Electronics Ltd", "abn": None}
-    entry = TrailEntry(engagement_id=ENGAGEMENT.id, kind=TrailKind.data, actor="U-1", summary="", created_at=NOW)
-    await trail.record(entry.model_copy(update={"payload": {"action": "xero_synced", "organisation_info": info}}))
-    connections = StoredXeroConnections(FakeXeroConnectionStore(), lambda: NOW, trail, engagements=engagements)
+    gate: list[GateId | None] = [None]
+
+    async def gate_now(eid: str) -> GateId | None:
+        return gate[0]
+
+    async def record(payload: dict[str, Any]) -> None:
+        n = len(trail.entries)
+        entry = TrailEntry(
+            engagement_id=ENGAGEMENT.id,
+            kind=TrailKind.data,
+            actor="U-1",
+            summary="",
+            payload=payload,
+            id=f"E{n}",
+            created_at=NOW + timedelta(minutes=n),
+        )
+        await trail.record(entry)
+
+    info = {"name": "Numbat", "legal_name": "Numbat Electronics Ltd", "abn": None, "tenant_id": "T-1"}
+    await record({"action": "xero_synced", "organisation_info": info})
+    connections = StoredXeroConnections(
+        FakeXeroConnectionStore(), lambda: NOW, trail, engagements=engagements, gate=gate_now
+    )
     connection = XeroConnection(tenant_id="T-1", connected_by="U-1", connected_at=NOW, refreshed_at=NOW)
-    first = await connections.profile_check(ENGAGEMENT.id, connection)
-    assert first is not None and (first.differences, first.profile_version) == (["legal_name"], 1)
-    kept = {"action": "xero_profile_kept", "key": first.key, "reason": "synthetic"}
-    later = NOW + timedelta(minutes=1)
-    await trail.record(entry.model_copy(update={"payload": kept, "id": "kept", "created_at": later}))
-    resolved = await connections.profile_check(ENGAGEMENT.id, connection)
-    assert resolved is not None and resolved.resolution == "kept"
+
+    async def check(on: XeroConnection = connection) -> XeroProfileCheck:
+        found = await connections.profile_check(ENGAGEMENT.id, on)
+        assert found is not None
+        return found
+
+    first = await check()
+    assert (first.differences, first.profile_version, first.next_version, first.stage) == (
+        ["legal_name"],
+        1,
+        4,
+        "before",
+    )
+    gate[0] = GateId.ACC_01
+    assert (await check()).stage == "at"
+    gate[0] = None
+    await engagements.update(ENGAGEMENT.id, phase=Phase.P1_Planning)
+    assert (await check()).stage == "after"
+
+    await record({"action": "xero_profile_kept", "key": first.key, "reason": "synthetic"})
+    assert (await check()).resolution == "kept"
     await engagements.update(ENGAGEMENT.id, client_profile_version=2)
-    again = await connections.profile_check(ENGAGEMENT.id, connection)
-    assert again is not None and (again.profile_version, again.resolution) == (2, None) and again.key != first.key
-    gone = {"payload": {"action": "xero_disconnect"}, "id": "gone", "created_at": later + timedelta(minutes=1)}
-    await trail.record(entry.model_copy(update=gone))
-    assert await connections.profile_check(ENGAGEMENT.id, connection) is None
+    again = await check()
+    assert (again.profile_version, again.resolution) == (2, None) and again.key != first.key
+
+    await record({"action": "xero_profile_kept", "key": again.key, "reason": "synthetic"})
+    other = connection.model_copy(update={"tenant_id": "T-2"})
+    assert await connections.profile_check(ENGAGEMENT.id, other) is None  # 改选组织, 还没同步
+    await record({"action": "xero_synced", "organisation_info": {**info, "tenant_id": "T-2"}})
+    switched = await check(other)
+    assert (switched.key != again.key, switched.resolution) == (True, None)
+    assert await connections.profile_check(ENGAGEMENT.id, connection) is None  # 回到 T-1 也不拿 T-2 的值
+
+    await record({"action": "xero_disconnect"})
+    assert await connections.profile_check(ENGAGEMENT.id, other) is None
 
 
 # ── 一次 Xero 场景运行 ──
@@ -137,30 +190,55 @@ def resolutions(c: Case) -> list[dict[str, Any]]:
     ]
 
 
+async def taken_by_numbat(http: httpx.AsyncClient, c: Case, key: str) -> list[int]:
+    """Xero 带出的 ABN 是另一个客户 (Numbat 数据集画像) 的: update 报 409 ABN_TAKEN (同 ACC-01 更新客户资料的查重,
+    带那个客户的编号), 不写画像与留痕, 核对仍待处理. 返回此时客户画像的各版版本号."""
+    response = await choose(http, c, key, "update")
+    detail = response.json()["detail"]
+    assert (response.status_code, detail["code"], detail["client_id"]) == (409, "ABN_TAKEN", NUMBAT_PROFILE.id)
+    assert [p for p in resolutions(c) if p["key"] == key] == []
+    check = (await xero_source(http, c))["profile_check"]
+    assert (check["key"], check["resolution"]) == (key, None)
+    engagement = await c.xero.data.runner.deps.engagement_store.get(c.eid)
+    assert engagement is not None
+    return [
+        r.profile.version for r in await c.xero.data.runner.deps.engagement_store.profile_history(engagement.client_id)
+    ]
+
+
 async def at_gate(http: httpx.AsyncClient, c: Case) -> dict[str, Any] | None:
     response = await http.get(f"/api/v1/engagements/{c.eid}/gate")
     return response.json() if response.status_code == 200 else None
 
 
 @pytest.mark.external
-async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
-    """R291 验收 1-3 与 Q4, Q6, Q7: xero/20261017-mock 的项目 (画像由同一份 organisation.json 生成) 推进到 ACC-01 闸门.
+async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R291 验收 1-3 与 Q4, Q6, Q7, 第 1 轮审核的修正: xero/20261017-mock 的项目 (画像由同一份 organisation.json 生成)
+    推进到 ACC-01 闸门. 名称与 ABN 都取快照或合成值.
 
-    1. 同步快照原样的组织信息: 一致, 不提示, 待办里没有这一类.
-    2. 换成改了法定名称的副本再同步: 提示 legal_name; 待办里排在补交资料之后; 可标稍后处理 (key 不对 409).
-    3. 项目锁被占时 409 ENGAGEMENT_BUSY; keep 没写理由 422 MISSING_FIELD; 写理由后已处理 (稍后处理随之失效),
-       留痕一条, 只记 key, 两项, 画像版本与理由.
-    4. 副本再改 ABN 再同步: 新的一次核对 (key 变了), 两项都提示; 旧 key 409 PROFILE_CHECK_STALE.
-    5. 闸门内 update: 画像第 2 版 (来源 xero, 两项取 Xero 的), 本项目采用, decision 留痕带 source, 重跑 ACC-04 回到
-       ACC-01; 之后一致, 不提示.
-    6. 通过 ACC-01 后再改名称同步, update 只给客户写第 3 版, 本项目采用的仍是第 2 版, 核对记为已处理 (adopted 假);
+    1. 同步快照原样的组织信息: 一致, 不提示, 待办里没有这一类; stage at, next_version 2.
+    2. 换成改了法定名称的副本再同步: 提示 legal_name; 待办里排在补交资料之后; 可标稍后处理 (key 不对 409), 标后
+       GET /deferrals 列出.
+    3. 项目锁被占时 409 ENGAGEMENT_BUSY; 选择的留痕写不进时报错, 不算已处理; keep 没写理由 422 MISSING_FIELD;
+       写理由后已处理 (稍后处理随之失效), 留痕一条, 只记 key, 两项, 画像版本与理由.
+    4. 副本再改 ABN 再同步: 新的一次核对 (key 变了), 两项都提示; 旧 key 409 PROFILE_CHECK_STALE. 停在 ACC-01 的
+       update 放开本方法的锁到 update_client_profile 取锁之间插进一次 keep: keep 写成, update 在锁内重新核对报 409
+       (R291-02), 同一 key 只记一种选择.
+    5. Xero 带出的 ABN 是另一个客户的: update 409 ABN_TAKEN, 不写, 核对仍待处理 (闸门内与闸门外各一次).
+       闸门内 update (另一份副本): 画像第 2 版 (来源 xero, 两项取 Xero 的), 本项目采用, decision 留痕带 source, 重跑
+       ACC-04 回到 ACC-01; 之后一致, 不提示.
+    6. 通过 ACC-01 后改名称同步 (stage after), update 只给客户写第 3 版 (来源 xero, 写入人为当前用户), 本项目仍用第 2
+       版, 核对记为已处理 (adopted 假); 写选择的留痕时插进同一 key 的另一次 update: 报 409, 客户只多一版 (R291-01);
        同一 key 再选 409.
-    7. 再改名称同步后项目锁定: 待办里不列, 选择 423 ENGAGEMENT_LOCKED.
+    7. 名称只是写法不同而 ABN 不同: 只提示 ABN, next_version 4 (客户最新第 3 版 +1, 本项目用第 2 版); update 以客户
+       最新一版为底, 只改 ABN, 法定名称保留第 3 版的写法 (R291-09).
+    8. 再改名称同步后项目锁定: 待办里不列, 选择 423 ENGAGEMENT_LOCKED.
     """
     require_xero_snapshot(XERO_SNAPSHOT)  # 假 Xero 回放这个快照
     c = case(tmp_path)
     runner = c.xero.data.runner
     es = runner.deps.engagement_store
+    deferrals_url = f"/api/v1/engagements/{c.eid}/deferrals"
     await runner.start(c.eid)
     await wait_idle(runner, c.eid)
     async with client(c) as http:
@@ -168,6 +246,7 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
         await connect(http, c)
         same = await sync(http, c)
         assert same is not None and same["differences"] == [] and same["xero_abn"] == DEMO_ORG["abn"]
+        assert (same["stage"], same["next_version"]) == ("at", 2)
         before = await open_types(c)  # 阶段决定与补交资料 (Xero 没有发运单与审批日志)
         assert {t for t, _ in before} == {"gate_decision", "data_request"} and before[0][0] == "gate_decision"
 
@@ -177,9 +256,11 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
         assert first is not None
         assert (first["differences"], first["xero_legal_name"], first["resolution"]) == (["legal_name"], renamed, None)
         deferral = {"target_type": "xero_profile", "target_id": first["key"], "deferred": True}
-        wrong = await http.post(f"/api/v1/engagements/{c.eid}/deferrals", json={**deferral, "target_id": "XP-other"})
+        wrong = await http.post(deferrals_url, json={**deferral, "target_id": "XP-other"})
         assert (wrong.status_code, wrong.json()["detail"]["code"]) == (409, "PROFILE_CHECK_STALE")
-        assert (await http.post(f"/api/v1/engagements/{c.eid}/deferrals", json=deferral)).status_code == 202
+        assert (await http.post(deferrals_url, json=deferral)).status_code == 202
+        marks = (await http.get(deferrals_url)).json()
+        assert [(d["target_type"], d["target_id"]) for d in marks] == [("xero_profile", first["key"])]
         assert await open_types(c) == [*before, ("xero_profile", True)]  # 排在补交资料之后
 
         runner.acquire(c.eid)  # 同断开, 选择持项目锁
@@ -188,6 +269,19 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
         finally:
             runner.release(c.eid)
         assert (busy.status_code, busy.json()["detail"]["code"]) == (409, "ENGAGEMENT_BUSY")
+        broken = c.trail.record
+
+        async def refuse(entry: TrailEntry) -> Any:  # 选择就记在留痕里: 写不进时报错
+            if entry.payload.get("action") == "xero_profile_kept":
+                raise RuntimeError("trail unavailable")
+            return await broken(entry)
+
+        monkeypatch.setattr(c.trail, "record", refuse)
+        decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+        with pytest.raises(RuntimeError):
+            await c.xero.resolve_profile(c.eid, first["key"], "keep", "reason", NUMBAT_AUDITOR.id, decisions)
+        monkeypatch.undo()
+        assert resolutions(c) == []
         missing = await choose(http, c, first["key"], "keep", "  ")
         assert (missing.status_code, missing.json()["detail"]["code"]) == (422, "MISSING_FIELD")
         kept = await choose(
@@ -198,25 +292,44 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
         assert [p["action"] for p in resolutions(c)] == ["xero_profile_kept"]
         assert set(resolutions(c)[0]) == {"action", "key", "legal_name", "abn", "profile_version", "reason"}
         assert await open_types(c) == before
-        deferrals = (await http.get(f"/api/v1/engagements/{c.eid}/deferrals")).json()
-        assert [d["target_type"] for d in deferrals] == []
+        assert (await http.get(deferrals_url)).json() == []
 
         organisation_copy(c, tmp_path, "abn", LegalName=renamed, RegistrationNumber=SYNTH_ABN)
         second = await sync(http, c)
         assert second is not None and second["key"] != first["key"]
         assert (second["differences"], second["resolution"]) == (["legal_name", "abn"], None)
         assert await open_types(c) == [*before, ("xero_profile", False)]  # 上一次核对的稍后处理不带到新的一次
-        assert (await http.get(f"/api/v1/engagements/{c.eid}/deferrals")).json() == []
         stale = await choose(http, c, first["key"], "keep", "again")
         assert (stale.status_code, stale.json()["detail"]["code"]) == (409, "PROFILE_CHECK_STALE")
+        original = GraphDecisionSubmit.update_client_profile
+        interleaved: list[httpx.Response] = []
 
-        updated = await choose(http, c, second["key"], "update")
+        async def keep_first(self: GraphDecisionSubmit, *args: Any, **kwargs: Any) -> None:
+            interleaved.append(await choose(http, c, second["key"], "keep", "synthetic reason"))
+            await original(self, *args, **kwargs)
+
+        monkeypatch.setattr(GraphDecisionSubmit, "update_client_profile", keep_first)
+        raced = await choose(http, c, second["key"], "update")
+        monkeypatch.undo()
+        assert ([r.status_code for r in interleaved], raced.status_code) == ([200], 409)
+        assert raced.json()["detail"]["code"] == "PROFILE_CHECK_STALE"
+        assert [p["action"] for p in resolutions(c) if p["key"] == second["key"]] == ["xero_profile_kept"]
+
+        organisation_copy(c, tmp_path, "taken", LegalName=renamed, RegistrationNumber=NUMBAT_PROFILE.abn)
+        taken = await sync(http, c)
+        assert taken is not None and await taken_by_numbat(http, c, taken["key"]) == [1]
+
+        adopted_name = "Demo Company (AU) Pty Ltd"  # 合成
+        organisation_copy(c, tmp_path, "adopted", LegalName=adopted_name, RegistrationNumber=SYNTH_ABN)
+        third = await sync(http, c)
+        assert third is not None and third["differences"] == ["legal_name", "abn"]
+        updated = await choose(http, c, third["key"], "update")
         assert updated.status_code == 200, updated.text
         await wait_idle(runner, c.eid)
         engagement = await es.get(c.eid)
         assert engagement is not None and engagement.client_profile_version == 2
         v2 = await es.client_profile(engagement.client_id, 2)
-        assert v2 is not None and (v2.legal_name, v2.abn) == (renamed, SYNTH_ABN)
+        assert v2 is not None and (v2.legal_name, v2.abn) == (adopted_name, SYNTH_ABN)
         assert (await es.profile_history(engagement.client_id))[-1].source is ProfileSource.xero
         [decision] = [e for e in c.trail.entries if e.kind is TrailKind.decision and e.idempotency_key.endswith("-v2")]
         assert decision.payload["source"] == "xero"
@@ -234,29 +347,56 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path) -> None:
         await wait_idle(runner, c.eid)
         assert (await at_gate(http, c) or {}).get("gate") != "ACC-01", runner.run_error(c.eid)
 
-        again = "Demo Company (AU) Holdings Pty Ltd"  # 合成
-        organisation_copy(c, tmp_path, "later", LegalName=again, RegistrationNumber=SYNTH_ABN)
-        third = await sync(http, c)
-        assert third is not None and third["differences"] == ["legal_name"]
-        later = await choose(http, c, third["key"], "update")
+        holdings = "Demo Company (AU) Holdings Pty Ltd"  # 合成
+        organisation_copy(c, tmp_path, "taken-later", LegalName=holdings, RegistrationNumber=NUMBAT_PROFILE.abn)
+        taken = await sync(http, c)
+        assert taken is not None and await taken_by_numbat(http, c, taken["key"]) == [1, 2]
+        organisation_copy(c, tmp_path, "later", LegalName=holdings, RegistrationNumber=SYNTH_ABN)
+        fourth = await sync(http, c)
+        assert fourth is not None and (fourth["differences"], fourth["stage"]) == (["legal_name"], "after")
+        record = c.trail.record
+        nested: list[httpx.Response] = []
+
+        async def resubmit(entry: TrailEntry) -> Any:  # 写选择的留痕时, 同一 key 的另一次提交
+            if entry.payload.get("action") == "xero_profile_updated" and not nested:
+                nested.append(await choose(http, c, fourth["key"], "update"))
+            return await record(entry)
+
+        monkeypatch.setattr(c.trail, "record", resubmit)
+        later = await choose(http, c, fourth["key"], "update")
+        monkeypatch.undo()
         assert later.status_code == 200, later.text
         assert (later.json()["resolution"], later.json()["updated_version"], later.json()["adopted"]) == (
             "updated",
             3,
             False,
         )
+        assert [r.status_code for r in nested] == [409]
         engagement = await es.get(c.eid)
         assert engagement is not None and engagement.client_profile_version == 2
-        latest = await es.client_profile(engagement.client_id)
-        assert latest is not None and (latest.version, latest.legal_name) == (3, again)
-        repeat = await choose(http, c, third["key"], "update")
+        history = await es.profile_history(engagement.client_id)
+        assert [r.profile.version for r in history] == [1, 2, 3]  # 只多一版
+        assert (history[-1].profile.legal_name, history[-1].source, history[-1].updated_by) == (
+            holdings,
+            ProfileSource.xero,
+            NUMBAT_AUDITOR.id,
+        )
+        repeat = await choose(http, c, fourth["key"], "update")
         assert (repeat.status_code, repeat.json()["detail"]["code"]) == (409, "PROFILE_CHECK_STALE")
 
+        new_abn = "83914571673"  # 合成
+        organisation_copy(c, tmp_path, "styled", LegalName="DEMO COMPANY (AU) PTY. LTD.", RegistrationNumber=new_abn)
+        fifth = await sync(http, c)
+        assert fifth is not None and (fifth["differences"], fifth["next_version"]) == (["abn"], 4)
+        assert (await choose(http, c, fifth["key"], "update")).status_code == 200
+        v4 = await es.client_profile(engagement.client_id)
+        assert v4 is not None and (v4.version, v4.legal_name, v4.abn) == (4, holdings, new_abn)
+
         organisation_copy(c, tmp_path, "locked", LegalName="Demo Company (AU) Services Pty Ltd")  # 合成
-        fourth = await sync(http, c)
-        assert fourth is not None and fourth["differences"] == ["legal_name"]
+        sixth = await sync(http, c)
+        assert sixth is not None and sixth["differences"] == ["legal_name", "abn"]
         assert ("xero_profile", False) in await open_types(c)
         await es.update(c.eid, locked=True)
         assert "xero_profile" not in {t for t, _ in await open_types(c)}
-        locked = await choose(http, c, fourth["key"], "keep", "locked")
+        locked = await choose(http, c, sixth["key"], "keep", "locked")
         assert (locked.status_code, locked.json()["detail"]["code"]) == (423, "ENGAGEMENT_LOCKED")

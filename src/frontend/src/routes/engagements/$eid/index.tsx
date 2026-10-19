@@ -35,7 +35,7 @@ import { type RankedTask, rankTasks } from '@/lib/review'
 import { buildTimeline, type TimelineItem } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
 import { skippedByReason } from '@/lib/xero'
-import { acceptanceStage, pendingCheck } from '@/lib/xero-profile'
+import { pendingCheck } from '@/lib/xero-profile'
 import type { Messages } from '@/locales/en'
 
 type Search = { focus?: string }
@@ -561,7 +561,6 @@ function CurrentItem({
           key={current.check.key}
           eid={eid}
           check={current.check}
-          stage={acceptanceStage(overview)}
           disabled={disabled}
           inset
           deferred={current.deferred}
