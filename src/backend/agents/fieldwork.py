@@ -5,7 +5,7 @@
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar, cast
 
 from pydantic import TypeAdapter
@@ -44,14 +44,25 @@ from backend.services.staleness import current_results
 
 @dataclass(frozen=True)
 class CashFindings:
-    """CSH-02 的原始发现: 回函与账面比对后的函证新版本与差异例外 (D01), 以及有差异账户的判断结果."""
+    """CSH-02 的原始发现: 回函与账面比对后的函证新版本, 规则部分的例外 (D01, D04), 以及要判断的账户的判断结果."""
 
     confirmations: list[Confirmation]  # 写入账面余额, 差额与结果的函证新版本
-    exceptions: list[AuditException]  # 回函与账面不符的 D01 例外
-    judged: list[Judged] = field(default_factory=list)  # 有差异账户的判断结果
+    exceptions: list[AuditException]  # 回函与账面不符的 D01 例外, 回函应计利息未入账的 D04 例外
+    judged: list[Judged] = field(default_factory=list)  # 有 D01 或 D04 的账户的判断结果
 
 
 Findings = RuleResult | list[Judged] | CashFindings  # 规则程序为规则结果, 判断程序为各对象的判断结果, CSH-02 为两者
+
+
+def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[str, Any]], trivial_cents: int) -> bool:
+    """CSH-02 D04 的判定: 回函写明的应计利息不为空, 绝对值超过明显微小 (等于不算), 且 D04 的候选行 (窗口内全部科目
+    的分录行, 已剔除作废对) 中没有借方或贷方等于该绝对值的行 (有即视为已计提). 纯函数."""
+    interest = confirmation.accrued_interest_cents
+    if interest is None or abs(interest) <= trivial_cents:
+        return False
+    return not any(abs(interest) in (line.get("debit_cents"), line.get("credit_cents")) for line in lines)
+
+
 Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返回原始发现
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
 SubjectSource = Callable[[RunContext], Awaitable[list[Subject]]]  # 判断程序取全部判断对象
@@ -261,14 +272,15 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return latest.model_dump(mode="json", include={"id", "conclusion", "review_status"})
 
     async def assess_confirmations(self, ctx: RunContext) -> CashFindings:
-        """CSH-02 的执行: 先做规则部分 (D01, 在代码中做), 再对有差异的账户组装上下文交判断引擎.
+        """CSH-02 的执行: 先做规则部分 (D01, D04, 在代码中做), 再对有例外的账户组装上下文交判断引擎.
 
         只处理当前的函证 (账户仍在银行账户表中且识别信息没变, evidence.current_confirmations), 删掉或识别信息变了的
         账户的旧函证留作历史. 规则部分逐个函证比较回函余额与本期试算表中该账户总账科目的余额: 相等时函证写账面
         余额, 差额 0, 结果 agreed; 不等时结果 difference, 并建 D01 例外 X-CSH-02-{run_no}-D01-{n} (n 按银行账户 ID
-        排序编号, 金额为回函减账面, 证据为回函余额所在页与试算表科目). 函证还没有回函余额时抛 ValueError. 账户的
-        筛选同判断对象 (in_scope).
-        判断对象为有 D01 的账户, 候选调节项取规则 D02, D03 的行 (按账户切分).
+        排序编号, 金额为回函减账面, 证据为回函余额所在页与试算表科目). 回函应计利息未入账时另建 D04 例外
+        (见 accrued_interest_exception, 在 D04 内同样按账户编号), 函证结果不变 (余额相符的仍为 agreed).
+        函证还没有回函余额时抛 ValueError. 账户的筛选同判断对象 (in_scope).
+        判断对象为有 D01 或 D04 的账户 (按账户 ID, 每个账户一次), 候选调节项取规则 D02, D03 的行 (按账户切分).
         """
         eid = ctx.engagement.id
         rules = await self.run_rules(ctx)
@@ -284,8 +296,12 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             key=lambda c: c.bank_account_id,
         )
         documents = await self.registered_documents(ctx)
+        params = ctx.run.params_snapshot
+        period_end = date.fromisoformat(str(params["period_end"]))  # 参数快照经 Store 读回时日期为字符串
+        window = (period_end - timedelta(days=int(params["lookback_days"])), period_end)  # D04 的窗口, 同 D03
         updated: list[Confirmation] = []
-        exceptions: list[AuditException] = []
+        differences: list[AuditException] = []  # D01, 按账户编号
+        accrued: list[AuditException] = []  # D04, 按账户编号
         subjects: list[Subject] = []
         for c in confirmations:
             if c.confirmed_balance_cents is None:
@@ -305,14 +321,25 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 }
             )
             updated.append(confirmation)
+            unbooked = accrued_interest_unbooked(
+                confirmation, rules.rows.get("D04", []), params["clearly_trivial_cents"]
+            )
+            if not difference and not unbooked:
+                continue
+            reply = documents.get(cast(str, confirmation.reply_document_id))
+            if reply is None:
+                raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 未登记")
+            found: list[AuditException] = []
             if difference:
-                reply = documents.get(cast(str, confirmation.reply_document_id))
-                if reply is None:
-                    raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 未登记")
-                d01 = self.difference_exception(ctx, confirmation, account, reply, len(exceptions) + 1)
-                exceptions.append(d01)
-                subjects.append(self.cash_subject(ctx, confirmation, account, reply, d01, rules))
-        return CashFindings(updated, exceptions, await self.judge_all(ctx, subjects))
+                differences.append(self.difference_exception(ctx, confirmation, account, reply, len(differences) + 1))
+                found.append(differences[-1])
+            if unbooked:
+                accrued.append(
+                    self.accrued_interest_exception(ctx, confirmation, account, reply, window, len(accrued) + 1)
+                )
+                found.append(accrued[-1])
+            subjects.append(self.cash_subject(ctx, confirmation, account, reply, found, rules))
+        return CashFindings(updated, [*differences, *accrued], await self.judge_all(ctx, subjects))
 
     @staticmethod
     def difference_exception(
@@ -350,18 +377,52 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         )
 
     @staticmethod
+    def accrued_interest_exception(
+        ctx: RunContext,
+        confirmation: Confirmation,
+        account: BankAccount,
+        document: DocumentRef,
+        window: tuple[date, date],
+        n: int,
+    ) -> AuditException:
+        """回函应计利息未入账的 D04 例外 (CSH-02.yaml 注释, 判定见 accrued_interest_unbooked): 金额为回函写明的应计利息
+        (带符号: 银行欠客户为正), detail 记应计利息, 搜索窗口 (D04 的闭区间, 同 D03) 与匹配到的行 (建例外时没有匹配,
+        恒为空). 证据为函证中应计利息所在页的指针, 按回函当前的文件登记改写种类与可靠性 (同 D01 的回函页)."""
+        reply = [
+            document_pointer(p, document)[0] or p
+            for p in confirmation.evidence
+            if p.locator == "accrued_interest_cents"
+        ]
+        return AuditException(
+            id=f"X-CSH-02-{ctx.run.run_no}-D04-{n}",
+            procedure_id=ctx.procedure.id,
+            run_id=ctx.run.id,
+            rule_id="D04",
+            severity="medium",
+            source_ids=[account.id],
+            amount_cents=confirmation.accrued_interest_cents,
+            detail={
+                "accrued_interest_cents": confirmation.accrued_interest_cents,
+                "search_from": window[0].isoformat(),
+                "search_to": window[1].isoformat(),
+                "matched_line_ids": [],
+            },
+            evidence=reply,
+        )
+
+    @staticmethod
     def cash_subject(
         ctx: RunContext,
         confirmation: Confirmation,
         account: BankAccount,
         reply: DocumentRef,
-        d01: AuditException,
+        found: Sequence[AuditException],
         rules: RuleResult,
     ) -> Subject:
-        """有差异账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
+        """有 D01 或 D04 的账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
 
-        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加本次的 D01.
-        reply 为回函当前的文件登记 (调用方按 registered_documents 取, 未登记抛 LookupError).
+        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加本次在该账户上
+        的 D01, D04 (found, 依次). reply 为回函当前的文件登记 (调用方按 registered_documents 取, 未登记抛 LookupError).
         """
         earlier = set(ctx.template.depends_on)
         findings = sorted(
@@ -388,12 +449,12 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             "subsequent_transactions": rows("D02"),
             "period_end_entries": rows("D03"),
         }
-        return Subject(account.id, data, [*findings, d01])
+        return Subject(account.id, data, [*findings, *found])
 
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """CSH-02 的解读: 函证新版本与 D01 例外, 加上有差异账户的判断片段 (judgments_patch).
+        """CSH-02 的解读: 函证新版本与 D01, D04 例外, 加上要判断的账户的判断片段 (judgments_patch).
 
-        判断失败时第一条规则例外可能就是本次的 D01, 片段里同一例外只留最高版本.
+        判断失败时第一条规则例外可能就是本次的 D01 或 D04, 片段里同一例外只留最高版本.
         """
         assert isinstance(findings, CashFindings)
         patch = self.judgments_patch(ctx, findings.judged)

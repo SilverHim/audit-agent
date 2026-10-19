@@ -2033,7 +2033,13 @@ def test_resolve_params_rejects_bad_refs_of_direct_templates(tmp_path: Path, ref
 
 
 # 引了 dataset. 的模板参数 (程序编号 → 参数名 → ref): 声明不同时只有这些参数随之不同
-DATASET_REFS = {"PLN-07": {"prior_period_start": "prior_period_start"}}  # 上期起始日 (需求 R102)
+DATASET_REFS = {
+    "PLN-07": {"prior_period_start": "prior_period_start"},  # 上期起始日 (需求 R102)
+    "CSH-02": {  # D03, D04 剔除作废对 (需求 R105)
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
+    },
+}
 
 
 def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:

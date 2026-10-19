@@ -1438,6 +1438,112 @@ NUMBAT_D03_ROWS = [  # CSH-02 D03: 期末前 5 天两个银行科目上的分录
 ]
 
 
+# CSH-02 D04: 期末前 5 天 (06-25 至 06-30) 全部科目的分录行, 取自连库跑 D04 的结果 (Numbat 没有作废对);
+# tests/test_persistence_postgres 核对连库结果与它逐行相同
+NUMBAT_D04_ROWS = [
+    {
+        "source_type": "journal_entry",
+        "id": jid,
+        "entry_no": jid.rsplit("-", 1)[0],
+        "posting_date": date(2026, 6, day),
+        "account_code": account,
+        "debit_cents": debit,
+        "credit_cents": credit,
+        "description": description,
+    }
+    for jid, day, account, debit, credit, description in (
+        ("SJ-2026-0602-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0602 - Echidna Controls Pty Ltd"),
+        ("SJ-2026-0602-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0602 - Echidna Controls Pty Ltd"),
+        ("SJ-2026-0603-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0603 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0603-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0603 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0604-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0604 - Wombat Solar Pty Ltd"),
+        ("SJ-2026-0604-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0604 - Wombat Solar Pty Ltd"),
+        ("SJ-2026-0605-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0605 - Galah Retail Electronics Pty Ltd"),
+        ("SJ-2026-0605-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0605 - Galah Retail Electronics Pty Ltd"),
+        ("SJ-2026-0606-1", 25, "1100", 1684000, 0, "Sales invoice SI-2026-0606 - Kookaburra Telecom Pty Ltd"),
+        ("SJ-2026-0606-2", 25, "4100", 0, 1684000, "Sales invoice SI-2026-0606 - Kookaburra Telecom Pty Ltd"),
+        ("CR-SI-2026-0518-1", 26, "1010", 1923100, 0, "Receipt SI-2026-0518 - Cassowary Audio Pty Ltd"),
+        ("CR-SI-2026-0518-2", 26, "1100", 0, 1923100, "Receipt SI-2026-0518 - Cassowary Audio Pty Ltd"),
+        ("SJ-2026-0607-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0607 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0607-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0607 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0608-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0608 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0608-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0608 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0609-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0609 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0609-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0609 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0610-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0610 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0610-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0610 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0611-1", 26, "1100", 1684000, 0, "Sales invoice SI-2026-0611 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0611-2", 26, "4100", 0, 1684000, "Sales invoice SI-2026-0611 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0612-1", 28, "1100", 14200000, 0, "Sales invoice SI-2026-0612 - Bilby Robotics Pty Ltd"),
+        ("SJ-2026-0612-2", 28, "4100", 0, 14200000, "Sales invoice SI-2026-0612 - Bilby Robotics Pty Ltd"),
+        ("SJ-2026-0613-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0613 - Dingo Drive Technologies Pty Ltd"),
+        ("SJ-2026-0613-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0613 - Dingo Drive Technologies Pty Ltd"),
+        ("SJ-2026-0614-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0614 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0614-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0614 - Possum Medical Devices Pty Ltd"),
+        ("SJ-2026-0615-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0615 - Magpie Security Systems Pty Ltd"),
+        ("SJ-2026-0615-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0615 - Magpie Security Systems Pty Ltd"),
+        ("SJ-2026-0616-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0616 - Emu Rail Signals Pty Ltd"),
+        ("SJ-2026-0616-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0616 - Emu Rail Signals Pty Ltd"),
+        ("SJ-2026-0617-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0617 - Banksia Power Systems Pty Ltd"),
+        ("SJ-2026-0617-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0617 - Banksia Power Systems Pty Ltd"),
+        ("SJ-2026-0618-1", 29, "1100", 9500000, 0, "Sales invoice SI-2026-0618 - Quoll Automation Pty Ltd"),
+        ("SJ-2026-0618-2", 29, "4100", 0, 9500000, "Sales invoice SI-2026-0618 - Quoll Automation Pty Ltd"),
+        ("SJ-2026-0619-1", 29, "1100", 1684000, 0, "Sales invoice SI-2026-0619 - Cassowary Audio Pty Ltd"),
+        ("SJ-2026-0619-2", 29, "4100", 0, 1684000, "Sales invoice SI-2026-0619 - Cassowary Audio Pty Ltd"),
+        ("CP-AP-2026-06-B-1", 30, "2100", 35500000, 0, "EFT DEBIT TASMAN PASSIVE COMPONENTS PTY LTD"),
+        ("CP-AP-2026-06-B-2", 30, "1010", 0, 35500000, "EFT DEBIT TASMAN PASSIVE COMPONENTS PTY LTD"),
+        ("CP-FRT-2026-06-1", 30, "6300", 2000000, 0, "EFT DEBIT REDGUM FREIGHT PTY LTD"),
+        ("CP-FRT-2026-06-2", 30, "1010", 0, 2000000, "EFT DEBIT REDGUM FREIGHT PTY LTD"),
+        ("CP-OPEX-2026-06-1", 30, "6500", 1555000, 0, "EFT DEBIT SUNDRY SUPPLIERS"),
+        ("CP-OPEX-2026-06-2", 30, "1010", 0, 1555000, "EFT DEBIT SUNDRY SUPPLIERS"),
+        (
+            "CR-SI-2026-0547-1",
+            30,
+            "1010",
+            5000000,
+            0,
+            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+        ),
+        (
+            "CR-SI-2026-0547-2",
+            30,
+            "1100",
+            0,
+            5000000,
+            "Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+        ),
+        ("GJ-202606-ACC-1", 30, "6500", 4200000, 0, "Increase in accrued expenses"),
+        ("GJ-202606-ACC-2", 30, "2200", 0, 4200000, "Increase in accrued expenses"),
+        ("GJ-202606-COGS-1", 30, "5100", 105000000, 0, "Cost of goods sold"),
+        ("GJ-202606-COGS-2", 30, "1200", 0, 105000000, "Cost of goods sold"),
+        ("GJ-202606-DEP-1", 30, "6400", 16000000, 0, "Depreciation FY2026"),
+        ("GJ-202606-DEP-2", 30, "1510", 0, 16000000, "Depreciation FY2026"),
+        ("GJ-202606-ECL-1", 30, "6500", 1000000, 0, "Increase in ECL allowance"),
+        ("GJ-202606-ECL-2", 30, "1150", 0, 1000000, "Increase in ECL allowance"),
+        ("GJ-202606-INT-1", 30, "1020", 119000, 0, "Savings interest"),
+        ("GJ-202606-INT-2", 30, "4200", 0, 119000, "Savings interest"),
+        ("GJ-202606-LVE-1", 30, "6100", 3200000, 0, "Increase in annual leave provision"),
+        ("GJ-202606-LVE-2", 30, "2300", 0, 3200000, "Increase in annual leave provision"),
+        ("GJ-202606-PRE-1", 30, "1300", 1660000, 0, "Increase in prepayments"),
+        ("GJ-202606-PRE-2", 30, "6500", 0, 1660000, "Increase in prepayments"),
+        ("GJ-202606-PUR-1", 30, "1200", 107917400, 0, "Inventory purchases"),
+        ("GJ-202606-PUR-2", 30, "2100", 0, 107917400, "Inventory purchases"),
+        ("GJ-202606-TAX-1", 30, "8100", 45000000, 0, "Income tax expense FY2026"),
+        ("GJ-202606-TAX-2", 30, "2400", 0, 45000000, "Income tax expense FY2026"),
+        ("SJ-2026-0620-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0620 - Emu Rail Signals Pty Ltd"),
+        ("SJ-2026-0620-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0620 - Emu Rail Signals Pty Ltd"),
+        ("SJ-2026-0621-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0621 - Wallaby Instruments Pty Ltd"),
+        ("SJ-2026-0621-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0621 - Wallaby Instruments Pty Ltd"),
+        ("SJ-2026-0622-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0622 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0622-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0622 - Platypus Sensor Works Pty Ltd"),
+        ("SJ-2026-0623-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0623 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0623-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0623 - Lorikeet Lighting Pty Ltd"),
+        ("SJ-2026-0624-1", 30, "1100", 1684000, 0, "Sales invoice SI-2026-0624 - Kookaburra Telecom Pty Ltd"),
+        ("SJ-2026-0624-2", 30, "4100", 0, 1684000, "Sales invoice SI-2026-0624 - Kookaburra Telecom Pty Ltd"),
+    )
+]
+
+
 def numbat_rev08_exception(run: ProcedureRun) -> AuditException:
     """REV-08 R01 对 SI-2026-0612 的跨期例外 (合成数据集设计第 7 节第 7 行), 字段按 REV-08.yaml 的输出列."""
     return AuditException(
@@ -1509,7 +1615,9 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
     "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
-    "CSH-02": lambda run: RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS}),
+    "CSH-02": lambda run: RuleResult(
+        exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
+    ),
 }
 
 

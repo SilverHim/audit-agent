@@ -1,4 +1,5 @@
-"""A6 CSH-02 函证差异评价: 规则部分 D01 比较回函与账面余额, 有差异的账户交判断 (合成数据集设计第 7 节第 12, 13 行)."""
+"""A6 CSH-02 函证差异评价: 规则部分 D01 比较回函与账面余额, D04 查回函应计利息是否已入账, 有 D01 或 D04 的账户交判断
+(合成数据集设计第 7 节第 12, 13 行; 需求 R105)."""
 
 from dataclasses import replace
 from datetime import date
@@ -29,11 +30,14 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.records import DatasetTraits, TrialBalanceRow
+from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_D02_ROWS,
+    NUMBAT_D03_ROWS,
+    NUMBAT_D04_ROWS,
     NUMBAT_RECORDS,
     NUMBAT_REPLIES,
     NUMBAT_RISKS,
@@ -42,6 +46,7 @@ from tests.fakes import (
     FakeFinancialStore,
     FakeJudgmentEngine,
     FakeRegistry,
+    FakeRuleEngine,
     FakeTrail,
     finished,
     legacy_sends,
@@ -58,17 +63,21 @@ EID = ENGAGEMENT.id
 B01 = numbat_csh05_exception(make_run("CSH-05"))  # X-CSH-05-1-B01-1
 
 
-def extracted(account: str, balance: int | None, reply: int) -> Confirmation:
-    """DOC-06 抽取后的函证第 2 版: 回函余额, 截至日与回函余额所在页的指针."""
+def extracted(account: str, balance: int | None, reply: int, accrued: int | None = None) -> Confirmation:
+    """DOC-06 抽取后的函证第 2 版: 回函余额, 截至日与回函余额所在页的指针; accrued 给了时另有回函写明的应计利息
+    及其所在页的指针 (Numbat 的两份回函都没提, 为空)."""
     doc = NUMBAT_REPLIES[reply]
-    pointer = EvidencePointer(
-        type=EvidenceType.external,
-        source_type="document",
-        source_id=doc.id,
-        locator="confirmed_balance_cents",
-        page=1,
-        reliability=Reliability.external_original,
-    )
+    pointers = [
+        EvidencePointer(
+            type=EvidenceType.external,
+            source_type="document",
+            source_id=doc.id,
+            locator=locator,
+            page=1,
+            reliability=Reliability.external_original,
+        )
+        for locator in ("confirmed_balance_cents", *(["accrued_interest_cents"] if accrued is not None else []))
+    ]
     return Confirmation(
         id=f"C-{account}",
         version=2,
@@ -79,8 +88,9 @@ def extracted(account: str, balance: int | None, reply: int) -> Confirmation:
         reply_document_id=doc.id,
         receipt_channel=ReceiptChannel.direct_email,
         confirmed_balance_cents=balance,
+        accrued_interest_cents=accrued,
         balance_date=date(2026, 6, 30) if balance is not None else None,
-        evidence=[pointer] if balance is not None else [],
+        evidence=pointers if balance is not None else [],
     )
 
 
@@ -108,15 +118,16 @@ def setup(
         deps = replace(deps, judgments=engine, review_llm=None)
     ctx = make_ctx(deps, "CSH-02")
     procedure = ctx.procedure.model_copy(update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-CASH-EXI"]})
-    params = deps.library.resolve_params(
-        ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits(), profile=None
-    )
     state = ctx.state | {
         "confirmations": NUMBAT_CONFIRMATIONS if confirmations is None else confirmations,
         "documents": list(NUMBAT_REPLIES),
         "exceptions": [B01] if exceptions is None else exceptions,
         "risk_register": NUMBAT_RISKS,
+        "clearly_trivial_cents": 600000,  # PLN-01/03 闸门批准的明显微小 (合成数据集设计第 3.2 节)
     }
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, state, None, traits=DatasetTraits(), profile=None
+    )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     ctx = RunContext(ctx.engagement, procedure, ctx.template, run, state)  # type: ignore[arg-type]
     return FieldworkAgent(deps), ctx, engine if not real_engine else trail
@@ -233,6 +244,81 @@ async def test_legacy_key_confirmations_follow_bank_account_changes() -> None:
         assert [x.rule_id for x in patch["exceptions"]] == (["D01"] if expected else [])
 
 
+def with_d04_line(agent: FieldworkAgent, **line: int) -> None:
+    """D04 的候选行 (Numbat 窗口内的分录行) 另加一行金额为 line 的行, 如 credit_cents=700000."""
+    rules = agent.deps.rules
+    assert isinstance(rules, FakeRuleEngine)
+    row = {**NUMBAT_D04_ROWS[0], "id": "GJ-INT-ACC-1", "debit_cents": 0, "credit_cents": 0, **line}
+    rules.results["CSH-02"] = lambda run: RuleResult(
+        exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": [*NUMBAT_D04_ROWS, row]}
+    )
+
+
+@pytest.mark.parametrize(
+    ("accrued", "line", "expected"),
+    [
+        (700000, {}, 700000),  # 超过明显微小 (600000), 窗口内没有 700000 的行
+        (-700000, {}, -700000),  # 客户欠银行: 金额带符号, 按绝对值比
+        (600000, {}, None),  # 等于明显微小不算
+        (700000, {"credit_cents": 700000}, None),  # 窗口内有贷方 700000 的行: 视为已计提
+        (-700000, {"debit_cents": 700000}, None),  # 借方同样算
+        (None, {}, None),  # 回函没提应计利息
+    ],
+)
+async def test_d04_accrued_interest_not_booked(accrued: int | None, line: dict[str, int], expected: int | None) -> None:
+    """R105 验收 2: BA-02 余额相符 (C-BA-02 v3 仍为 agreed); 回函应计利息绝对值超过明显微小且 D04 的行里没有等额的
+    行时出 X-CSH-02-1-D04-1 (金额带符号, detail 记搜索窗口, 证据为应计利息所在页), BA-02 进判断 (差额 0), 建
+    T-J-CSH-02-1-BA-02-v1; 否则只有 BA-01 的 D01, BA-02 不判断."""
+    agent, ctx, engine = setup([extracted("BA-01", 120840000, 0), extracted("BA-02", 40000000, 1, accrued)])
+    if line:
+        with_d04_line(agent, **line)
+    patch = await agent.run(ctx)
+    assert patch["confirmations"][1].result is ConfirmationResult.agreed
+    d04s = [x for x in patch["exceptions"] if x.rule_id == "D04"]
+    if expected is None:
+        assert d04s == [] and [jctx.subject_id for _, jctx, _ in engine.calls] == ["BA-01"]
+        return
+    [d04] = d04s
+    assert (d04.id, d04.severity, d04.source_ids, d04.amount_cents) == (
+        "X-CSH-02-1-D04-1",
+        "medium",
+        ["BA-02"],
+        expected,
+    )
+    assert d04.detail == {
+        "accrued_interest_cents": expected,
+        "search_from": "2026-06-25",
+        "search_to": "2026-06-30",
+        "matched_line_ids": [],
+    }
+    [pointer] = d04.evidence
+    assert (pointer.source_id, pointer.locator, pointer.page) == (NUMBAT_REPLIES[1].id, "accrued_interest_cents", 1)
+    calls = {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
+    assert sorted(calls) == ["BA-01", "BA-02"]
+    assert calls["BA-02"].data["difference_cents"] == 0
+    assert [x.id for x in calls["BA-02"].rule_findings] == ["X-CSH-02-1-D04-1"]
+    assert "T-J-CSH-02-1-BA-02-v1" in [t.id for t in patch["review_tasks"]]
+
+
+async def test_d04_numbered_by_account_and_judged_once_with_d01() -> None:
+    """R105 验收 3: 两个账户都有 D04 时按账户编号 (BA-01 为 D04-1, BA-02 为 D04-2); BA-01 同时有 D01, 只判断一次,
+    规则例外依次为 CSH-05 的 B01, D01, D04."""
+    confirmations = [extracted("BA-02", 40000000, 1, 700000), extracted("BA-01", 120840000, 0, 800000)]
+    agent, ctx, engine = setup(confirmations)
+    patch = await agent.run(ctx)
+    assert [(x.id, x.source_ids) for x in patch["exceptions"] if x.rule_id in ("D01", "D04")] == [
+        ("X-CSH-02-1-D01-1", ["BA-01"]),
+        ("X-CSH-02-1-D04-1", ["BA-01"]),
+        ("X-CSH-02-1-D04-2", ["BA-02"]),
+    ]
+    assert [jctx.subject_id for _, jctx, _ in engine.calls] == ["BA-01", "BA-02"]
+    findings = {jctx.subject_id: [x.id for x in jctx.rule_findings] for _, jctx, _ in engine.calls}
+    assert findings == {
+        "BA-01": ["X-CSH-05-1-B01-1", "X-CSH-02-1-D01-1", "X-CSH-02-1-D04-1"],
+        "BA-02": ["X-CSH-02-1-D04-2"],
+    }
+
+
 # ── 判断部分 ─────────────────────────────────────────
 
 
@@ -257,7 +343,14 @@ async def test_judging_context_for_ba01() -> None:
         "CP-OPEX-2026-06-2",
     ]
     assert [x.id for x in jctx.rule_findings] == ["X-CSH-05-1-B01-1", "X-CSH-02-1-D01-1"]
-    assert jctx.task["params"] == {"period_end": "2026-06-30", "subsequent_days": 10, "lookback_days": 5}
+    assert jctx.task["params"] == {  # Numbat 没有数据集声明, 作废对的格式与模板为空
+        "period_end": "2026-06-30",
+        "subsequent_days": 10,
+        "lookback_days": 5,
+        "clearly_trivial_cents": 600000,
+        "reversal_reference_pattern": None,
+        "reversal_entry_no_template": None,
+    }
     assert [r["id"] for r in jctx.task["risks"]] == ["RISK-CASH-EXI"]
 
 
