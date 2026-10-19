@@ -1,6 +1,7 @@
 """可选客户清单 (R5): GET /datasets 与各载入器的 datasets().
 
-用仓库里的 data 目录 (demo 即 Numbat) 与本机的 Xero Demo Company 快照 (不入库, 没有时跳过 Xero 那条).
+用仓库里的 data 目录 (demo 即 Numbat) 与 Xero Demo Company 快照 (经 tests.external 定位: 没有时跳过 Xero 那几条,
+仓库跟踪了却找不到时失败).
 """
 
 import json
@@ -17,14 +18,14 @@ from backend.api.routes import datasets as datasets_route
 from backend.contracts.ports import DatasetLoader
 from backend.core.config import Settings, get_settings
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
+from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import (
     NUMBAT_AUDITOR,
     NUMBAT_PROFILE,
     XERO_SNAPSHOT,
-    XERO_SNAPSHOTS,
     api_client,
     make_runner,
-    xero_snapshot,
+    xero_snapshots,
 )
 
 URL = "/api/v1/datasets"
@@ -44,8 +45,8 @@ async def get_datasets(datasets: DatasetLoader) -> httpx.Response:
         return await client.get(URL)
 
 
-async def test_lists_demo_from_data_root() -> None:
-    response = await get_datasets(loaders(get_settings().DATASET_ROOT, XERO_SNAPSHOTS))
+async def test_lists_demo_from_data_root(tmp_path: Path) -> None:
+    response = await get_datasets(loaders(get_settings().DATASET_ROOT, tmp_path / "no-xero"))
     demo = next(d for d in response.json() if d["dataset"] == "demo")
     assert demo == {
         "dataset": "demo",
@@ -58,9 +59,10 @@ async def test_lists_demo_from_data_root() -> None:
     assert all(d["dataset"] != "external" for d in response.json())  # 没有客户画像的目录不算
 
 
+@pytest.mark.external
 async def test_lists_loadable_xero_snapshot() -> None:
-    xero_snapshot()  # 本机没有快照时跳过
-    response = await get_datasets(loaders(get_settings().DATASET_ROOT, XERO_SNAPSHOTS))
+    snapshots = xero_snapshots()
+    response = await get_datasets(loaders(get_settings().DATASET_ROOT, snapshots))
     rows = {d["dataset"]: d for d in response.json()}
     assert rows[f"xero/{XERO_SNAPSHOT}"] == {
         "dataset": f"xero/{XERO_SNAPSHOT}",
@@ -73,7 +75,7 @@ async def test_lists_loadable_xero_snapshot() -> None:
     names = [d["dataset"] for d in response.json()]
     assert names == sorted(names)
     # 没有期间 dataset.json 的快照建不了项目, 不列出 (如早期免费接口的 20261017)
-    unloadable = [p.name for p in XERO_SNAPSHOTS.iterdir() if p.is_dir() and not (p / "dataset.json").exists()]
+    unloadable = [p.name for p in snapshots.iterdir() if p.is_dir() and not (p / "dataset.json").exists()]
     assert not {f"xero/{name}" for name in unloadable} & set(rows)
 
 
@@ -104,13 +106,13 @@ async def test_requires_login() -> None:
     assert (response.status_code, response.json()["detail"]["code"]) == (401, "BAD_CREDENTIALS")
 
 
+@pytest.mark.external
 async def test_mismatched_supplements_are_skipped_and_rejected(tmp_path: Path) -> None:
     """补造文件与快照不匹配 (R70): GET /datasets 跳过该数据集, POST /engagements 返回 422 INVALID_VALUE, 不建项目."""
-    if not (XERO_SNAPSHOTS / "20261017-q1").is_dir():
-        pytest.skip("没有本地 Xero 快照 20261017-q1")
+    snapshots = snapshot_dir("20261017-q1").parent
     demo = tmp_path / "xero_demo"
-    shutil.copytree(get_settings().DATASET_ROOT / "xero_demo" / "20261017-q1", demo / "20261017-q1")
-    xero = XeroDatasetLoader(XERO_SNAPSHOTS, XERO_SNAPSHOTS, NO_DB, NO_DB, supplements=demo)
+    shutil.copytree(supplements_dir("20261017-q1"), demo / "20261017-q1")
+    xero = XeroDatasetLoader(snapshots, snapshots, NO_DB, NO_DB, supplements=demo)
     datasets = RoutingDatasetLoader(CsvDatasetLoader(get_settings().DATASET_ROOT, NO_DB, NO_DB), {"xero/": xero})
     rows = {d["dataset"]: d for d in (await get_datasets(datasets)).json()}
     assert rows["xero/20261017-q1"]["legal_name"] == "Demo Company (AU) Pty Ltd"  # 补造画像
@@ -131,14 +133,16 @@ async def test_mismatched_supplements_are_skipped_and_rejected(tmp_path: Path) -
 # ── R79: 默认数据集与期间 ──
 
 Q1 = "xero/20261017-q1"
-needs_q1 = pytest.mark.skipif(not (XERO_SNAPSHOTS / "20261017-q1").is_dir(), reason="没有本地 Xero 快照 20261017-q1")
 
 
 def with_supplements() -> RoutingDatasetLoader:
-    return loaders(get_settings().DATASET_ROOT, XERO_SNAPSHOTS, get_settings().DATASET_ROOT / "xero_demo")
+    """快照 20261017-q1 与它的补造目录 (经 tests.external 定位) 加 data 目录的载入器."""
+    return loaders(
+        get_settings().DATASET_ROOT, snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent
+    )
 
 
-@needs_q1
+@pytest.mark.external
 async def test_default_row_has_period_and_supplement_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     """验收 2, 3: xero/20261017-q1 取补造画像与快照期间, default 为真; 其余行为假. DEMO_DATASET 不在清单时全部为假."""
     datasets = with_supplements()
@@ -159,7 +163,7 @@ async def test_default_row_has_period_and_supplement_profile(monkeypatch: pytest
     assert not any(d["default"] for d in (await get_datasets(datasets)).json())
 
 
-@needs_q1
+@pytest.mark.external
 @pytest.mark.parametrize(
     ("start", "end"),
     [

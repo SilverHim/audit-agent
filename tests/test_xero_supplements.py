@@ -1,6 +1,7 @@
 """Xero 演示数据集的补造目录 (R70): 载入与取数前核对 manifest 与快照, 补造画像与计划预置, 测试副本与已载入项目.
 
-用本机的 Xero 快照与入库的补造目录 data/xero_demo/; 没有快照时跳过. 篡改只在 tmp 副本上做, 不改原目录. 不连库.
+用 Xero 快照与入库的补造目录 data/xero_demo/ (经 tests.external 定位核对: 没有时跳过, 仓库跟踪了却找不到时
+失败). 篡改只在 tmp 副本上做, 不改原目录. 不连库.
 """
 
 import hashlib
@@ -16,14 +17,15 @@ import pytest
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.contracts.models import ClientProfile
 from backend.persistence import stores
+from tests.external import optional, snapshot_dir, snapshot_location, supplements_path
 
 REPO = Path(__file__).resolve().parents[1]
-SNAPSHOTS = REPO / "data" / "external" / "xero" / "api"
-SUPPLEMENTS = REPO / "data" / "xero_demo"
+SNAPSHOTS = snapshot_location("20261017-q1").parent  # 快照的上级; 只给路径, 用例经 pytestmark 的 fixture 核对
+SUPPLEMENTS = supplements_path("20261017-q1").parent  # 补造目录的上级
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"
 DATASET = "xero/20261017-q1"
 NO_DB: Any = object()  # 本文件不连库
-pytestmark = pytest.mark.skipif(not (SNAPSHOTS / "20261017-q1").is_dir(), reason="没有本地 Xero 快照")
+pytestmark = [pytest.mark.external, pytest.mark.usefixtures("q1_snapshot", "q1_supplements")]
 
 
 def loader(api: Path = SNAPSHOTS, supplements: Path | None = SUPPLEMENTS, **options: Any) -> stores.XeroDatasetLoader:
@@ -112,9 +114,11 @@ def test_profile_and_planning_from_supplements() -> None:
 def test_without_supplements_falls_back_to_snapshot() -> None:
     """supplements 为空, 或补造目录下没有该快照 (如 20261017-mock) 时照现状: 快照画像与通用模板."""
     generic = stores.read_planning(PLANNING)
-    for target, dataset in ((loader(supplements=None), DATASET), (loader(), "xero/20261017-mock")):
-        if not (SNAPSHOTS / dataset.removeprefix("xero/")).is_dir():
+    for supplements, name in ((None, "20261017-q1"), (SUPPLEMENTS, "20261017-mock")):
+        snapshot = optional(snapshot_dir, name)  # 没带 mock 快照的检出只核对 q1
+        if snapshot is None:
             continue
+        target, dataset = loader(snapshot.parent, supplements), f"xero/{name}"
         profile = target.client_profile(dataset)
         assert (profile.id, profile.version) == ("CLIENT-XERO-3C1332BB", 1)
         assert target.planning_presets(dataset) == generic

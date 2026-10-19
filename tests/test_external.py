@@ -260,7 +260,8 @@ def test_tracked_snapshot_that_is_missing_fails(tmp_path: Path) -> None:
 
 def test_partly_missing_tracked_snapshot_fails(tmp_path: Path) -> None:
     """仓库跟踪了快照, 工作区只少了一个文件 (organisation.json 还在) 时失败, 不落到 "快照与补造不匹配" 的跳过
-    (第 1 轮审核 R114-01); 没有同名补造时同样失败."""
+    (第 1 轮审核 R114-01); 没有同名补造时同样失败. 有补造时只取补造目录的同样失败 (R294: 补造一侧核对快照哈希前
+    也先看快照跟踪的文件)."""
     for name, with_supplements in (("S6", True), ("S7", False)):
         repo = tmp_path / name
         repo.mkdir()
@@ -274,6 +275,9 @@ def test_partly_missing_tracked_snapshot_fails(tmp_path: Path) -> None:
         (snapshot / "journals.json").unlink()
         reason = fail_reason(require_xero_snapshot, name, repo)
         assert NOT_FOUND in reason and f"data/external/xero/api/{name}/journals.json" in reason
+        if with_supplements:
+            reason = fail_reason(require_xero_supplements, name, repo)
+            assert NOT_FOUND in reason and f"data/external/xero/api/{name}/journals.json" in reason
 
 
 def test_tracked_supplements_that_are_missing_fail(tmp_path: Path) -> None:
@@ -289,6 +293,7 @@ def test_tracked_supplements_that_are_missing_fail(tmp_path: Path) -> None:
     assert "仓库跟踪了补造目录却找不到" in reason and "data/xero_demo/S8/manifest.json" in reason
 
 
+@pytest.mark.external
 def test_repository_snapshots_are_found_and_match() -> None:
     """本仓库实测: 跟踪了 q1 快照的 journals.json, require_xero_snapshot 返回目录且与补造的哈希表相符 (不跳过);
     补造目录同样; fakes.xero_snapshot() 取 20261017-mock (验收 7). 不是 git 检出或不带快照的检出跳过 (R114-07)."""

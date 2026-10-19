@@ -1,8 +1,11 @@
 """项目列表 (R4): GET /engagements 每行带审计期间. 用 Xero Demo Company 快照的项目 (本机没有快照时跳过)."""
 
+import pytest
+
 from tests.fakes import FakeEngagementStore, api_client, make_runner, wait_idle, xero_engagement, xero_snapshot
 
 
+@pytest.mark.external
 async def test_list_has_period_of_xero_engagement() -> None:
     profile, engagement = xero_engagement(xero_snapshot())
     runner, _ = make_runner(engagement_store=FakeEngagementStore([profile], [engagement]))

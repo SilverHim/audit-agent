@@ -216,6 +216,7 @@ async def reviewed(
 # ── 触发与跳过规则 ──
 
 
+@pytest.mark.external
 async def test_l2_judgment_is_skipped_with_reason() -> None:
     x, j = await reviewed(level=AutonomyLevel.L2)
     assert (j.critic_verdict, j.critic_reason) == (
@@ -225,6 +226,7 @@ async def test_l2_judgment_is_skipped_with_reason() -> None:
     assert x.review is not None and x.review.requests == [] and j.confidence == 0.8625
 
 
+@pytest.mark.external
 async def test_l3_closing_judgment_is_reviewed() -> None:
     x, j = await reviewed(proposed_action=ProposedAction.close)
     assert j.critic_verdict is CriticVerdict.consistent
@@ -234,6 +236,7 @@ async def test_l3_closing_judgment_is_reviewed() -> None:
     ]
 
 
+@pytest.mark.external
 async def test_assumption_step_triggers_review_without_main_rule() -> None:
     """建议认定错报 (不会自动关闭) 时主规则不命中; 推理链含 assumption 仍要复核, 没有时 (且未抽中) 跳过."""
     assumption = ReasoningStep(kind=StepKind.assumption, text="The goods were delivered.")
@@ -284,6 +287,7 @@ def copy_review(x: Xero) -> ScriptedLLM:
     return scripted(x.invoice.id, [x.independent(chain)], [verdict()])
 
 
+@pytest.mark.external
 async def test_collab_triggers_internal_copy_and_unsupported_in_order() -> None:
     """验收 3: Xero 发票判断 (REV-02, L3, 建议 misstatement, 指针为发票行与分录行, internal_original), 判断 ID
     不在 5% 抽样里. collab 打开: 照现状跳过, 复核模型收不到请求; 指针全换成复印件 DOC-IC-1 第 1 页
@@ -344,6 +348,7 @@ def lying_row(x: Xero) -> Judgment:
     return copy_only(x, evidence=[COPY_PAGE, lying])
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(
     ("make", "expected"),
     [
@@ -365,6 +370,7 @@ async def test_collab_internal_copy_reads_given_evidence(make: Any, expected: Cr
     assert j.critic_trigger is expected
 
 
+@pytest.mark.external
 async def test_collab_review_hits_sample_with_gen09_rate() -> None:
     """R149 验收 2 的 sample (第 1 轮审核 R149-05): 判断 ID 在 GEN-09 的 sample_rate (0.05) 下抽中, 没有其他触发,
     collab 打开: critic_trigger 为 sample, 复核模型收到两轮请求 (防 review 不读 GEN-09 的 sample_rate)."""
@@ -376,6 +382,7 @@ async def test_collab_review_hits_sample_with_gen09_rate() -> None:
     assert [r.fixture_key for r in review.requests] == [f"{x.invoice.id}-r1", f"{x.invoice.id}-r2"]
 
 
+@pytest.mark.external
 async def test_collab_l2_skips_before_any_trigger() -> None:
     """验收 3: 程序运行时自主度 L2 时, 复印件, unsupported 与主规则都不复核, critic_trigger 为空."""
     x = Xero(AutonomyLevel.L2, features=COLLAB)
@@ -393,6 +400,7 @@ async def test_collab_l2_skips_before_any_trigger() -> None:
         assert x.review is not None and x.review.requests == []
 
 
+@pytest.mark.external
 async def test_collab_off_keeps_previous_rules_and_no_trigger_recorded() -> None:
     """验收 5: collab 关闭时复印件与 unsupported 两条不判 (照现状跳过), 命中主规则时 critic_trigger 也为空."""
     x = Xero()
@@ -411,6 +419,7 @@ async def test_collab_off_keeps_previous_rules_and_no_trigger_recorded() -> None
     assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.consistent, None)
 
 
+@pytest.mark.external
 async def test_collab_records_main_and_keeps_trigger_when_review_incomplete() -> None:
     """collab 打开: 主规则 (L3 建议 close) 记 main; 两轮复核没做成 (not_applicable) 时 critic_trigger 照留."""
     x = Xero(features=COLLAB)
@@ -427,6 +436,7 @@ def first_round(x: Xero) -> Any:
     return [e for e in x.trail.entries if e.kind is TrailKind.llm_call and e.payload["fixture_key"].endswith("-r1")][-1]
 
 
+@pytest.mark.external
 async def test_collab_critic_draft_amount_may_come_from_explained_exceptions() -> None:
     """R150 验收 2: 复核方建议错报, 草稿金额只等于该判断解释的例外的金额 (不是给出的发票行, 分录行的金额,
     也不是两行之差): 传入例外时写回草稿; 不传时草稿不写回, critic_proposed_action 照写, 问题记进第一轮留痕的
@@ -461,6 +471,7 @@ async def test_collab_critic_draft_amount_may_come_from_explained_exceptions() -
     assert first_round(x).payload["notes"] == []
 
 
+@pytest.mark.external
 async def test_consistent_with_invalid_chain_reason_leaves_out_draft_problems() -> None:
     """第 1 轮审核 R150-04: 判一致而独立推理链无效 (not_applicable) 时, critic_reason 只写推理链的问题, 不混进草稿的
     问题 (草稿金额对不上, 记在 notes)."""
@@ -481,6 +492,7 @@ async def test_consistent_with_invalid_chain_reason_leaves_out_draft_problems() 
     assert [n for n in first_round(x).payload["notes"] if "草稿不采用" in n]
 
 
+@pytest.mark.external
 def test_trigger_order_and_sample() -> None:
     """判定顺序 main → internal_copy → assumption → unsupported → sample, 命中即停; 准则指针不算证据, 只有准则时
     internal_copy 不中; collab 关闭时只判 main, assumption, sample."""
@@ -529,6 +541,7 @@ def test_sampling_is_replayable() -> None:
     assert trigger(AutonomyLevel.L4, judgment, 0.05) == "sample"
 
 
+@pytest.mark.external
 async def test_no_review_model_means_skipped() -> None:
     x = Xero()
     j = await ReviewAgent(x.deps).review(x.ctx, x.judgment())  # make_deps 给了 llm 没给 review_llm: 复核模型为空
@@ -538,6 +551,7 @@ async def test_no_review_model_means_skipped() -> None:
 # ── 两轮输入与结果 ──
 
 
+@pytest.mark.external
 async def test_first_round_has_evidence_but_no_conclusion_or_chain() -> None:
     x, _ = await reviewed()
     assert x.review is not None
@@ -552,6 +566,7 @@ async def test_first_round_has_evidence_but_no_conclusion_or_chain() -> None:
     assert (first.procedure_id, first.run_id) == ("GEN-09", "RUN-REV-02-1")
 
 
+@pytest.mark.external
 async def test_consistent_adds_critic_part_to_confidence_and_records_review_model() -> None:
     x, j = await reviewed()
     # (0.3 × 0.7 + 0.3 × 1.0 + 0.2 × 0.9 + 0.2 × 1.0) / 1.0; 原为三项 / 0.8 = 0.8625
@@ -566,6 +581,7 @@ async def test_consistent_adds_critic_part_to_confidence_and_records_review_mode
     assert j.version == 1 and j.conclusion == CONCLUSION  # 还是 A6 的那一版, 只多了复核结果
 
 
+@pytest.mark.external
 async def test_inconsistent_keeps_confidence_and_becomes_dispute() -> None:
     x, j = await reviewed(r2=verdict("inconsistent", "different_conclusion"))
     assert (j.critic_verdict, j.critic_reason_type, j.confidence) == (
@@ -577,6 +593,7 @@ async def test_inconsistent_keeps_confidence_and_becomes_dispute() -> None:
     assert x.deps.queue.classify(x.ctx.template, outcome, []) is TaskKind.dispute
 
 
+@pytest.mark.external
 async def test_chain_citing_evidence_not_given_is_unsupported() -> None:
     """第一轮推理链引用了没给出的行: 该步不受支持, 推理链无效 (仲裁时不提供 a7_upheld); 结论照存."""
     x = Xero()
@@ -596,6 +613,7 @@ async def test_chain_citing_evidence_not_given_is_unsupported() -> None:
 # ── 复核没做成: not_applicable, 转人工 ──
 
 
+@pytest.mark.external
 @pytest.mark.parametrize("failure", ["bad_json", "error"])
 async def test_failed_review_is_not_applicable_and_goes_to_human(failure: str) -> None:
     x = Xero()
@@ -616,6 +634,7 @@ async def test_failed_review_is_not_applicable_and_goes_to_human(failure: str) -
 NOT_GIVEN = EvidencePointer(type=EvidenceType.voucher, source_type="journal_entry", source_id="NOT-GIVEN", locator="x")
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(
     "chain",
     [
@@ -645,6 +664,7 @@ async def test_consistent_with_invalid_chain_does_not_count(chain: list[dict[str
     assert x.deps.queue.classify(x.ctx.template, outcome, []) is TaskKind.normal
 
 
+@pytest.mark.external
 async def test_pointer_to_model_call_trail_is_not_given() -> None:
     """A6 校验时解析不了的指针原样留在判断里 (只要还有别的有效指针), 如指向 llm_call 留痕, 其明细里有旧输出的结论:
     第一轮不给它的内容, 推理链引用它也不受支持."""
@@ -669,6 +689,7 @@ async def test_pointer_to_model_call_trail_is_not_given() -> None:
     assert [s.status for s in j.critic_reasoning_chain] == [StepStatus.unsupported, StepStatus.supported]
 
 
+@pytest.mark.external
 async def test_no_resolvable_evidence_is_not_applicable_without_calling_model() -> None:
     x = Xero()
     review = scripted(x.invoice.id, [x.independent()], [verdict()])

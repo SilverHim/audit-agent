@@ -24,7 +24,7 @@ from backend.persistence.stores import FileEvidenceStore, PostgresEngagementStor
 from backend.persistence.xero_connections import PostgresXeroConnectionStore
 from backend.services.data_service import DataService
 from backend.services.xero_link import XeroLink
-from tests.fakes import XERO_SNAPSHOT, XERO_SNAPSHOTS, xero_engagement, xero_snapshot
+from tests.fakes import XERO_SNAPSHOT, xero_engagement, xero_snapshot, xero_snapshots
 from tests.test_data_store_postgres import table_rows
 from tests.test_xero_link import ACCESS, CODE, DEMO, REFRESH, SECRETS, START, FakeXero, settings
 
@@ -135,7 +135,7 @@ async def test_connect_sync_disconnect_on_real_stores(storage, tmp_path: Path) -
         await task
     assert (await deps.data.readiness(synced.id)).data_version == 1
     planning = ROOT / "src" / "backend" / "knowledge" / "planning"
-    loader = XeroDatasetLoader(XERO_SNAPSHOTS, planning, engine, FileEvidenceStore(tmp_path / "loaded", engine))
+    loader = XeroDatasetLoader(xero_snapshots(), planning, engine, FileEvidenceStore(tmp_path / "loaded", engine))
     await loader.load(loaded.id, f"xero/{XERO_SNAPSHOT}")
     for kind in XERO_TABLES:
         assert await table_rows(engine, synced.id, kind.value) == await table_rows(engine, loaded.id, kind.value), kind

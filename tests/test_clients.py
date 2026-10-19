@@ -37,6 +37,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader, read_planning
 from backend.services.abn import abn_problem
 from backend.services.data_quality import source_label
+from tests.external import optional, snapshot_dir
 from tests.fakes import (
     FAKE_GUID,
     NUMBAT_AUDITOR,
@@ -105,6 +106,7 @@ async def post(client: httpx.AsyncClient, body: dict[str, Any]) -> httpx.Respons
     return await client.post(CLIENTS, json=body)
 
 
+@pytest.mark.external
 async def test_clients_are_listed_per_client() -> None:
     """数据集客户按画像 id 各一行 (不按数据集), 默认数据集的客户在前; 还没进库的没有 latest_version."""
     runner = demo_runner()
@@ -121,7 +123,7 @@ async def test_clients_are_listed_per_client() -> None:
         "datasets": [{"dataset": "demo", "period_start": None, "period_end": None, "default": False}],
     }
     assert len(rows) == len(by_id)  # 每个客户一行
-    if (SETTINGS.DATASET_ROOT / "external" / "xero" / "api" / "20261017-q1").is_dir():
+    if optional(snapshot_dir, "20261017-q1") is not None:  # 有 Xero 快照时另核对它的一行
         q1 = by_id["CLIENT-XERO-3C1332BB-Q1"]
         assert rows[0] == q1 and q1["legal_name"] == "Demo Company (AU) Pty Ltd" and q1["abn"] == "25900043021"
         assert q1["datasets"] == [

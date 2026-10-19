@@ -36,14 +36,13 @@ from backend.contracts.records import Account, JournalEntry, SalesInvoice, Trial
 from backend.services import data_import as d
 from backend.services import table_plan as tp
 from backend.services.judgment_engine import OutputValidator, structure_only
-from tests.external import live_llm_settings
+from tests.external import live_llm_settings, raw_dir, snapshot_dir
 from tests.fakes import ENGAGEMENT, UPLOAD_FIXTURES, FakeRegistry, FakeTrail, LayeredMockLLM, ScriptedLLM, make_deps
 from tests.test_table_plan import masked
 from tests.tools.live_budget import Budget, BudgetedLLMClient, report
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
-RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
 DEMO = REPO / "data" / "demo"
 FIXTURES = UPLOAD_FIXTURES / "DOC-SHEET"
 NOW = datetime(2026, 10, 19, tzinfo=UTC)
@@ -101,7 +100,7 @@ def apply(reading: SheetReading, path: Path) -> tuple[list[Any], list[ParseFailu
 @functools.cache
 def posted_by_values() -> frozenset[str]:
     """journal_report.xlsx 的 Posted By 取值 (只在内存里用). 这份导出 1000 多行, 解析约 0.5 秒, 几个用例共用一次."""
-    _, rows = d.raw_rows("journal_report.xlsx", (RAW / "journal_report.xlsx").read_bytes())
+    _, rows = d.raw_rows("journal_report.xlsx", (raw_dir() / "journal_report.xlsx").read_bytes())
     values: set[str] = set()
     column: int | None = None
     for _, cells in rows:
@@ -116,9 +115,10 @@ def posted_by_values() -> frozenset[str]:
 # ── 验收 4: 测试样例在 mock 下的识别结果 ──
 
 
+@pytest.mark.external
 async def test_xero_trial_balance() -> None:
     """样例 1: 前 3 行标题, 第 5 行表头, 本期借贷两列, 上期一列, 末行 Total; 读到公司与截至日."""
-    path = RAW / "trial_balance_2026-06-30.xlsx"
+    path = raw_dir() / "trial_balance_2026-06-30.xlsx"
     [reading], trail = await recognize(path)
 
     assert (reading.method, reading.confidence, reading.sheet) == ("llm", "high", "Trial Balance")
@@ -138,9 +138,10 @@ async def test_xero_trial_balance() -> None:
     assert reading.trail_ids == [call.id]
 
 
+@pytest.mark.external
 async def test_xero_journal_report_keeps_posted_by_out_of_prompt_and_trail() -> None:
     """样例 2: 标题 3 行, 按 Journal ID 分组; 368 笔 1017 行. Posted By 的值不进提示词与留痕 (表头照留)."""
-    path = RAW / "journal_report.xlsx"
+    path = raw_dir() / "journal_report.xlsx"
     [reading], trail = await recognize(path)
 
     assert (reading.method, reading.confidence) == ("llm", "high")
@@ -164,9 +165,10 @@ async def test_xero_journal_report_keeps_posted_by_out_of_prompt_and_trail() -> 
     assert found > 0 and leaked == 0
 
 
+@pytest.mark.external
 async def test_xero_chart_of_accounts() -> None:
     """样例 3: 59 个科目, Xero 类型映射到五类 (803 的 Type 为空, 记失败处, 同 R275)."""
-    path = RAW / "chart_of_accounts.csv"
+    path = raw_dir() / "chart_of_accounts.csv"
     [reading], _ = await recognize(path)
 
     assert (reading.method, reading.confidence, reading.sheet) == ("llm", "high", "chart_of_accounts")
@@ -178,9 +180,10 @@ async def test_xero_chart_of_accounts() -> None:
     assert {r.type for r in rows} == {"asset", "liability", "equity", "revenue", "expense"}
 
 
+@pytest.mark.external
 async def test_xero_receivable_invoice_detail() -> None:
     """样例 4: 按发票分组, 有 "Total ..." 合计行; 识别为销售发票."""
-    path = RAW / "receivable_invoice_detail.xlsx"
+    path = raw_dir() / "receivable_invoice_detail.xlsx"
     [reading], _ = await recognize(path)
 
     assert (reading.method, reading.confidence) == ("llm", "high")
@@ -216,10 +219,11 @@ async def test_numbat_tables_are_high_and_match_column_names(kind: TableKind) ->
 # ── 验收 1: 只发开头的样本行, 人名列与邮箱遮蔽 ──
 
 
+@pytest.mark.external
 async def test_only_the_first_rows_are_sent() -> None:
     """样本行含标题行, 至多 30 行; 第 31 行起不进提示词. 提示词列出 9 种账表. (用应收发票明细: 有标题行, 行数多,
     没有人名列; Posted By 的遮蔽见日记账报表一例.)"""
-    path = RAW / "receivable_invoice_detail.xlsx"
+    path = raw_dir() / "receivable_invoice_detail.xlsx"
     _, trail = await recognize(path)
     prompt = prompt_of(calls(trail)[0])
     block = prompt[prompt.index("<rows>\n") + len("<rows>\n") : prompt.index("\n</rows>")].splitlines()
@@ -300,7 +304,7 @@ def test_partial_personal_headers_need_a_header_like_row(header: list[Any], row:
 def personal_values() -> list[str]:
     """Xero 登录账号联系人的全名与邮箱 (contacts.json 中不是客户也不是供应商而有名与邮箱的那一位) 与日记账报表的
     Posted By 取值, 都转小写. 只在内存里用, 不写进任何文件与断言消息."""
-    data = json.loads((REPO / "data/external/xero/api/20261017-q1/contacts.json").read_text(encoding="utf-8"))
+    data = json.loads((snapshot_dir("20261017-q1") / "contacts.json").read_text(encoding="utf-8"))
     rows = data if isinstance(data, list) else data.get("Contacts", [])
     owners = [
         c
@@ -314,12 +318,13 @@ def personal_values() -> list[str]:
     return sorted({v.lower() for v in [name, owner["EmailAddress"], *posted_by_values()] if v})
 
 
+@pytest.mark.external
 def test_samples_of_all_xero_exports_carry_no_personal_data() -> None:
     """data/external/xero/raw 下全部文件 (含联系人导出 contacts.csv) 与 Numbat CSV 当作账表上传: 每个工作表的样本行
     (DOC-SHEET) 与首页文字 (DOC-CLASSIFY) 遮蔽后命中个人信息的个数为 0; 遮蔽前联系人导出与日记账报表确有命中
     (守卫有意义). 只比计数."""
     secrets = personal_values()
-    files = sorted(RAW.iterdir()) + sorted(DEMO.glob("*.csv"))
+    files = sorted(raw_dir().iterdir()) + sorted(DEMO.glob("*.csv"))
     raw_hits: dict[str, int] = {}
     masked_hits = 0
     for path in files:
@@ -388,17 +393,19 @@ async def test_falls_back_when_the_output_never_validates() -> None:
     assert [e.payload["level_failed"] for e in calls(trail)] == ["structure"] * 3
 
 
+@pytest.mark.external
 async def test_falls_back_to_not_a_table_when_column_names_say_nothing() -> None:
     """Xero 试算表按列名认不出 (第一个非空行是报表标题): 退回时方案为不是账表."""
-    [reading], _ = await recognize(RAW / "trial_balance_2026-06-30.xlsx", name="tb-export.xlsx")
+    [reading], _ = await recognize(raw_dir() / "trial_balance_2026-06-30.xlsx", name="tb-export.xlsx")
 
     assert (reading.method, reading.plan) == ("column_names", TablePlan(kind=None))
     assert reading.reason == f"{FALLBACK}: 大模型没有给出合格的识别结果, 按列名认不出是哪张账表"
 
 
+@pytest.mark.external
 async def test_each_sheet_of_a_workbook_is_one_reading() -> None:
     """一个工作簿的每个工作表各一项, 按工作表顺序; fixture_key 加 "#工作表名"."""
-    path = RAW / "bank_statement_090.xlsx"
+    path = raw_dir() / "bank_statement_090.xlsx"
     readings, trail = await recognize(path)
     names = d.sheet_names(path.name, path.read_bytes())
 
@@ -446,23 +453,30 @@ def test_fixtures_cover_the_samples() -> None:
 
 # ── 验收 5: live 下各样例跑一次 (联网, 需配好 LLM_MODEL 与 LLM_API_KEY; 只发公开的 Xero 演示与合成数据) ──
 
-LIVE_SAMPLES = [
-    (RAW / "trial_balance_2026-06-30.xlsx", TableKind.trial_balance),
-    (RAW / "journal_report.xlsx", TableKind.journal_entries),
-    (RAW / "chart_of_accounts.csv", TableKind.accounts),
-    (RAW / "receivable_invoice_detail.xlsx", TableKind.sales_invoices),
-    *((DEMO / f"{k}.csv", k) for k in NUMBAT_KINDS),
+XERO_SAMPLES = [
+    ("trial_balance_2026-06-30.xlsx", TableKind.trial_balance),
+    ("journal_report.xlsx", TableKind.journal_entries),
+    ("chart_of_accounts.csv", TableKind.accounts),
+    ("receivable_invoice_detail.xlsx", TableKind.sales_invoices),
+]
+LIVE_SAMPLES = [  # (是否网页导出, 文件名, 表种类); 网页导出在用例里经 raw_dir 核对
+    *(
+        pytest.param(True, name, kind, id=f"{name}-{kind.value}", marks=pytest.mark.external)
+        for name, kind in XERO_SAMPLES
+    ),
+    *(pytest.param(False, f"{k}.csv", k, id=f"{k}.csv-{k.value}") for k in NUMBAT_KINDS),
 ]
 
 
 @pytest.mark.slow
 @pytest.mark.live(max_calls=3)  # 一个工作表一次识别, 最多 3 次尝试 (需求 R115 的预算)
-@pytest.mark.parametrize(("path", "kind"), LIVE_SAMPLES, ids=lambda v: v.name if isinstance(v, Path) else None)
+@pytest.mark.parametrize(("xero", "name", "kind"), LIVE_SAMPLES)
 async def test_live_recognizes_samples(
-    path: Path, kind: TableKind, live_budget: Budget, request: pytest.FixtureRequest
+    xero: bool, name: str, kind: TableKind, live_budget: Budget, request: pytest.FixtureRequest
 ) -> None:
     """真实大模型识别各样例: 走大模型 (不退回), 认对表种类; 方案能套到全表 (失败处由确认单标红, 这里只记个数).
     配置取环境变量或 .env (tests.external.live_llm_settings); 调用计入预算, 超限即失败, 结束时写用量汇总."""
+    path = (raw_dir() if xero else DEMO) / name
     settings = live_llm_settings()
     [reading], trail = await recognize(path, llm=BudgetedLLMClient(make_llm_client(settings), live_budget))
     report(request.node.name, trail.entries, live_budget)

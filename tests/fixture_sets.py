@@ -13,6 +13,10 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from tests.external import supplements_dir, supplements_path
+
 REPO = Path(__file__).resolve().parents[1]
 DEMO = REPO / "data" / "demo"  # Numbat 合成数据集 (合成数据集设计第 1 节)
 UPLOADS = REPO / "tests" / "fixtures" / "llm_variants" / "upload"  # 上传处理的固定输出, 各数据集共用一份
@@ -41,9 +45,18 @@ class FixtureSet:
     # 上传文件处理用的固定输出根 ({程序}/{键}.json), 不进主固定输出 (主流程要求主固定输出各用一次); 没有为 None
     uploads: Path | None = None
     uploads_in_runtime: tuple[str, ...] = ()  # uploads 中也须在运行副本里的程序
+    # 数据目录在外部数据定位之下的 (Xero 补造): 读 runtime 与 manifest 之前调用, 经 tests.external 核对 (仓库跟踪了却
+    # 找不到时失败, 没有时跳过); 随仓库的 data/demo 为 None
+    locate: Callable[[], Path] | None = None
+
+    def ready(self) -> None:
+        """读 runtime 与 manifest 之前调用: 有 locate 时先定位核对."""
+        if self.locate is not None:
+            self.locate()
 
     def documents(self) -> dict[str, dict[str, Any]]:
         """manifest 登记的 PDF: 文档 ID -> 条目 (path, type, page_count, sha256 等)."""
+        self.ready()
         documents = json.loads(self.manifest.read_text(encoding="utf-8"))["documents"]
         return {d["document_id"]: d for d in documents}
 
@@ -106,7 +119,7 @@ NUMBAT = FixtureSet(
     uploads=UPLOADS,
     uploads_in_runtime=UPLOAD_RUNTIME,
 )
-XERO_DEMO = REPO / "data" / "xero_demo" / "20261017-q1"  # Xero 演示的补造目录
+XERO_DEMO = supplements_path("20261017-q1")  # Xero 演示的补造目录 (只拼路径; 用例运行时经 locate 核对)
 XERO = FixtureSet(
     name="xero",
     dataset="xero/20261017-q1",
@@ -115,5 +128,8 @@ XERO = FixtureSet(
     manifest=XERO_DEMO / "manifest.json",
     uploads=UPLOADS,
     uploads_in_runtime=("DOC-SHEET",),  # 账表识别按上传的文件名取, Xero 演示项目里上传网页导出时用 (生成脚本复制)
+    locate=lambda: supplements_dir("20261017-q1"),
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]
+# 按登记表参数化用: 读外部数据定位之下目录的那一行标 external
+FIXTURE_PARAMS = [pytest.param(fs, id=fs.name, marks=pytest.mark.external if fs.locate else ()) for fs in FIXTURE_SETS]

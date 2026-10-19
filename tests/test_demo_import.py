@@ -45,6 +45,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
 from backend.services.demo_import import DEMO_JOB, DETAILS_REASON, NO_DEMO, RETYPE_REASON, DemoImport
+from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -275,7 +276,7 @@ async def test_busy_and_tampered_supplements_are_rejected(tmp_path: Path) -> Non
         await busy.service.demo_import(EID, "fieldwork", ACTOR)
     assert taken.value.code == "ENGAGEMENT_BUSY" and busy.data.table_versions == []
     copy = tmp_path / "xero_demo"
-    shutil.copytree(REPO / "data" / "xero_demo" / "20261017-q1", copy / "20261017-q1")
+    shutil.copytree(supplements_dir("20261017-q1"), copy / "20261017-q1")
     links = copy / "20261017-q1" / "contract_links.csv"
     links.write_bytes(links.read_bytes() + b" ")
     tampered = env(demo=copy)

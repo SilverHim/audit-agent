@@ -41,6 +41,7 @@ from backend.persistence.stores import (
 )
 from backend.services.account_mapping import with_category
 from backend.services.data_service import DataService
+from tests.external import supplements_dir
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -1307,13 +1308,14 @@ async def test_migration_0011_round_trip(storage) -> None:  # type: ignore[no-un
 # ── 需求 R90: 文件的补登记 ──
 
 
+@pytest.mark.external
 async def test_document_details_round_trip(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """真实库上传 (FileEvidenceStore.save) 一份 PDF, 读回文件日期为空, 关联对象为 []; 补登记后读回两字段与可靠性;
     抽取版本表两版 (A3 补记的修改前一版, 审计师的一版); 按关联对象过滤 (与类型同时给时都须满足); 数据版本 +1 并记
     documents; 写了留痕; 另一项目读不到 (行级安全)."""
     engine, (first, second), _, _ = storage
     service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
-    pdf = ROOT / "data/xero_demo/20261017-q1/documents/evidence/fixed_asset_register.pdf"
+    pdf = supplements_dir("20261017-q1") / "documents" / "evidence" / "fixed_asset_register.pdf"
     saved = await service.deps.evidence_store.save(
         first.id,
         pdf.name,
@@ -1497,6 +1499,7 @@ async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-un
 # ── 需求 R268: 先有版本行再载入 ──
 
 
+@pytest.mark.external
 async def test_seed_load_after_a_version_row_still_loads(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """R268 验收 5, 6: 先补登记一份上传文件 (建了数据版本 1 的 dataset_loads 行, 还没有财务表行) 再载入, 照常载入,
     不静默跳过: 各表与直接载入的项目逐行相同, 数据版本 2 且这一版记全部各类数据, 视同就绪; 再载入不变. 已由审计师确认
@@ -1504,7 +1507,7 @@ async def test_seed_load_after_a_version_row_still_loads(storage, tmp_path: Path
     engine, (first, second), loader, engagements = storage
     service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
     data = service.deps.data
-    pdf = ROOT / "data/xero_demo/20261017-q1/documents/evidence/fixed_asset_register.pdf"
+    pdf = supplements_dir("20261017-q1") / "documents" / "evidence" / "fixed_asset_register.pdf"
     saved = await service.deps.evidence_store.save(
         first.id,
         pdf.name,
@@ -1588,7 +1591,7 @@ async def adjustments_need_tables(ctx: dict[str, Any]) -> None:
     await data.confirm_ready(eid, "U-1", reason="先确认")
     target = tmp_path / "datasets" / "demo" / "adjustments" / "journal_entries.csv"
     target.parent.mkdir(parents=True)
-    target.write_bytes((ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv").read_bytes())
+    target.write_bytes((supplements_dir("20261017-q1") / "adjustments" / "journal_entries.csv").read_bytes())
     adjustments = CsvDatasetLoader(tmp_path / "datasets", ctx["engine"], ctx["loader"].evidence_store)
     with pytest.raises(ValueError, match="尚未载入数据集"):
         await adjustments.load_adjustments(eid, "demo", ["AJE-X01"])
@@ -1596,7 +1599,9 @@ async def adjustments_need_tables(ctx: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize(
-    "case", [partial_table, payroll_first, other_dataset, adjustments_need_tables], ids=lambda c: c.__name__
+    "case",
+    [partial_table, payroll_first, other_dataset, pytest.param(adjustments_need_tables, marks=pytest.mark.external)],
+    ids=lambda c: c.__name__,
 )
 async def test_already_loaded_means_financial_rows(storage, tmp_path: Path, case: Any) -> None:  # type: ignore[no-untyped-def]
     """R268 已载入的口径: 看数据集载入的七张财务表有没有行 (任一张有即已载入, 工资册不算), 种子载入与更正分录载入

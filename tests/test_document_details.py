@@ -33,12 +33,12 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_AUDITOR,
-    XERO_DOCUMENTS,
     FakeDataStore,
     FakeEngagementStore,
     FakeTrail,
     api_client,
     xero_document,
+    xero_documents,
 )
 from tests.test_documents_upload import data_trail, drain, setup
 from tests.test_rerun_stale import demo_at_fin_gate, overview
@@ -342,7 +342,12 @@ async def test_details_api_history_and_related_filter() -> None:
 
 # ── Xero 清单 (验收 6) ───────────────
 
-LISTED = sorted(p for p in XERO_DOCUMENTS if p.startswith(("documents/related_party/", "documents/evidence/")))
+
+def listed() -> list[str]:
+    """补造清单中关联方与审计证据两组的 16 份 (经 tests.external 定位补造目录)."""
+    return sorted(p for p in xero_documents() if p.startswith(("documents/related_party/", "documents/evidence/")))
+
+
 FIRST = ("documents/evidence/fixed_asset_register.pdf", "documents/evidence/accounting_policies_extract.pdf")
 
 
@@ -361,7 +366,7 @@ def as_uploaded(path: str) -> DocumentRef:
 
 
 def listed_edit(path: str) -> DocumentDetailsEdit:
-    entry = XERO_DOCUMENTS[path]
+    entry = xero_documents()[path]
     return edit(
         reliability=entry["reliability"], document_date=entry["document_date"], related_ids=entry["related_ids"]
     )
@@ -371,11 +376,13 @@ def names(documents: list[DocumentRef]) -> list[str]:
     return [Path(d.file_name).stem for d in documents]
 
 
+@pytest.mark.external
 async def test_xero_list_details_and_lookup_by_related_object() -> None:
     """补造清单的 16 份 (关联方与审计证据两组) 按清单补登记后按关联对象取文件; 补登记后 OutputValidator 解析固定
     资产登记簿第 1 页的指针得 internal_original (缺省时为 internal_copy)."""
-    assert len(LISTED) == 16
-    runner, service, financial, _, _ = service_with(*(as_uploaded(p) for p in LISTED))
+    documents = listed()
+    assert len(documents) == 16
+    runner, service, financial, _, _ = service_with(*(as_uploaded(p) for p in documents))
     register = as_uploaded(FIRST[0])
     pointer = EvidencePointer(
         type=EvidenceType.voucher, source_type="document", source_id=register.id, locator="page 1", page=1
@@ -389,7 +396,7 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
         "accounting_policies_extract",
         "fixed_asset_register",
     ]
-    rest = [p for p in LISTED if p not in FIRST]
+    rest = [p for p in documents if p not in FIRST]
     assert len(rest) == 14
     await service.set_document_details(EID, {p_id(p): listed_edit(p) for p in rest}, "U-1")
 
@@ -407,9 +414,9 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
         assert names(await financial.documents(EID, related_id=related)) == ["smart_agency_invoice_SM0195-70135"]
     assert names(await financial.documents(EID, related_id="E003")) == ["expense_claim_E003"]
     assert await financial.documents(EID, related_id="XJ-0") == []
-    for path in LISTED:  # 登记与清单逐项一致
+    for path in documents:  # 登记与清单逐项一致
         found = current(financial, p_id(path))
-        entry = XERO_DOCUMENTS[path]
+        entry = xero_documents()[path]
         assert (found.reliability, found.document_date, found.related_ids) == (
             Reliability(entry["reliability"]),
             date.fromisoformat(entry["document_date"]),
@@ -417,8 +424,8 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
         ), path
     # 清单里每个关联对象逐个按对象取文件, 恰为清单里含它的几份 (审核 R90-04)
     expected: dict[str, set[str]] = {}
-    for path in LISTED:
-        for related in XERO_DOCUMENTS[path]["related_ids"]:
+    for path in documents:
+        for related in xero_documents()[path]["related_ids"]:
             expected.setdefault(related, set()).add(Path(path).stem)
     for related, stems in expected.items():
         assert set(names(await financial.documents(EID, related_id=related))) == stems, related
@@ -433,7 +440,7 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
 
 
 def p_id(path: str) -> str:
-    return str(XERO_DOCUMENTS[path]["document_id"])
+    return str(xero_documents()[path]["document_id"])
 
 
 # ── 过期 (验收 7) ───────────────

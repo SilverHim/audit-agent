@@ -11,17 +11,25 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
+from tests.external import needs, snapshot_location, supplements_path
+
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
-SNAPSHOT = REPO / "data" / "external" / "xero" / "api" / "20261017-q1"
-SUPPLEMENTS = REPO / "data" / "xero_demo" / "20261017-q1"
+SNAPSHOT = snapshot_location("20261017-q1")  # 只给路径; 要快照的用例经 needs_snapshot 核对
+SUPPLEMENTS = supplements_path("20261017-q1")
+# 补造目录经 tests.external 核对 (没有时跳过, 仓库跟踪了却找不到时失败); 两个快照跟踪了却找不到时也失败, 没带时
+# 用例照旧按 "没有快照" 的走法
+pytestmark = [
+    pytest.mark.external,
+    pytest.mark.usefixtures("q1_supplements", "q1_snapshot_if_any", "mock_snapshot_if_any"),
+]
 sys.path.insert(0, str(REPO / "data"))  # 生成与校验脚本在 data/, 以脚本方式互相导入
 
 import check_xero_demo as checker  # noqa: E402
 import generate_xero_demo as generator  # noqa: E402
 
 HEADER = "Synthetic – for demonstration only. Fictitious document based on Xero Demo Company (AU) data."
-needs_snapshot = pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="没有本地 Xero 快照")
+needs_snapshot = needs("q1_snapshot")
 
 
 def doc() -> str:
@@ -481,12 +489,13 @@ def test_output_guard_protects_repository(tmp_path: Path, monkeypatch: pytest.Mo
     protected = [REPO / "data" / "demo" / "manifest.json", generator.SNAPSHOTS / "20261017-q1" / "manifest.json"]
     before = {p: p.read_bytes() for p in protected if p.exists()}
     monkeypatch.chdir(REPO)
+    snapshot = str((generator.SNAPSHOTS / "20261017-q1").relative_to(REPO))  # 相对仓库根的快照目录 (脚本的常量)
     for argv in (
         ["--inject", "T1", "--out", "data/demo"],
-        ["--inject", "T1", "--out", "data/external/xero/api/20261017-q1"],
+        ["--inject", "T1", "--out", snapshot],
         ["--inject", "T1", "--out", "data/xero_demo/../xero_demo/20261017-q1"],
         ["--out", "data/demo"],
-        ["--out", "data/external/xero/api/20261017-q1"],
+        ["--out", snapshot],
     ):
         assert generator.main(argv) == 2, argv
     link = tmp_path / "link"
@@ -2649,7 +2658,7 @@ def test_manual_rounds_order_and_sources(tmp_path: Path) -> None:
     ]
 
 
-MOCK = SNAPSHOT.parent / "20261017-mock"
+MOCK = snapshot_location("20261017-mock")
 
 
 def test_snapshot_key_constants() -> None:

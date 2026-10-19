@@ -1,5 +1,6 @@
 """登记与函证 mock 按项目数据集定位 (R71): Numbat 读 data/demo, Xero 读补造目录, 没有补造目录时查不到与未回函;
-回执幂等且按项目隔离; 项目不存在报 LookupError. 不连库; Xero 的用例在本机没有快照时跳过."""
+回执幂等且按项目隔离; 项目不存在报 LookupError. 不连库; Xero 的用例经 tests.external 定位快照与补造 (没有时跳过,
+仓库跟踪了却找不到时失败)."""
 
 import shutil
 from datetime import date
@@ -12,20 +13,22 @@ from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.contracts.ports import ConfirmationRequest
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
+from tests.external import needs, snapshot_location, supplements_path
 from tests.fakes import ENGAGEMENT, FakeEngagementStore
 
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "data"
-API = DATA / "external" / "xero" / "api"
+API = snapshot_location("20261017-q1").parent  # 快照的上级 (只给路径; 用例经 needs_q1, needs_mock 核对)
+SUPPLEMENTS = supplements_path("20261017-q1")  # 补造目录 (同上)
 NO_DB: object = object()
 NUMBAT = ENGAGEMENT
 Q1 = ENGAGEMENT.model_copy(update={"id": "ENG-2026-101", "dataset": "xero/20261017-q1"})
 MOCK = ENGAGEMENT.model_copy(update={"id": "ENG-2026-102", "dataset": "xero/20261017-mock"})
-needs_q1 = pytest.mark.skipif(not (API / "20261017-q1").is_dir(), reason="没有本地 Xero 快照 20261017-q1")
-needs_mock = pytest.mark.skipif(not (API / "20261017-mock").is_dir(), reason="没有本地 Xero 快照 20261017-mock")
+needs_q1 = needs("q1_snapshot", "q1_supplements")
+needs_mock = needs("mock_snapshot")
 
 
-def datasets(api: Path = API, supplements: Path = DATA / "xero_demo") -> RoutingDatasetLoader:
+def datasets(api: Path = API, supplements: Path = SUPPLEMENTS.parent) -> RoutingDatasetLoader:
     """与 main.build_deps 相同的组合 (不连库)."""
     xero = XeroDatasetLoader(api, api, NO_DB, NO_DB, supplements=supplements)  # type: ignore[arg-type]
     return RoutingDatasetLoader(CsvDatasetLoader(DATA, NO_DB, NO_DB), {"xero/": xero})  # type: ignore[arg-type]
@@ -73,7 +76,7 @@ async def test_xero_q1_reads_supplements(tmp_path: Path) -> None:
     assert company is not None and (company.status, company.registered_date) == ("Registered", date(2018, 9, 3))
     vpa = await registry.abn(Q1.id, "27900043030")
     assert vpa is not None and vpa.entity_name == "Victoria Property Agency Pty Ltd"
-    replies = DATA / "xero_demo" / "20261017-q1" / "confirmations"
+    replies = SUPPLEMENTS / "confirmations"
     for account, bank in (("12345678", "BA-090"), ("12345679", "BA-091")):
         receipt = await channel.submit(Q1.id, request(account, bank), f"key-{bank}")
         assert receipt.reply_bytes == (replies / f"{account}.pdf").read_bytes()
@@ -84,7 +87,7 @@ async def test_xero_q1_reads_supplements(tmp_path: Path) -> None:
 async def test_mismatched_supplements_raise(tmp_path: Path) -> None:
     api, demo = tmp_path / "api", tmp_path / "xero_demo"
     shutil.copytree(API / "20261017-q1", api / "20261017-q1")
-    shutil.copytree(DATA / "xero_demo" / "20261017-q1", demo / "20261017-q1")
+    shutil.copytree(SUPPLEMENTS, demo / "20261017-q1")
     asic = demo / "20261017-q1" / "registry" / "asic.json"
     asic.write_bytes(asic.read_bytes() + b" ")
     registry, channel = mocks(tmp_path, datasets(api, demo))
@@ -143,7 +146,7 @@ async def test_existing_receipt_is_returned_without_resolving(tmp_path: Path) ->
     """已发出的函证同键再取: 直接返回原回执, 不再核对补造目录 (之后补造被改坏也取得回); 新键照常核对."""
     api, demo = tmp_path / "api", tmp_path / "xero_demo"
     shutil.copytree(API / "20261017-q1", api / "20261017-q1")
-    shutil.copytree(DATA / "xero_demo" / "20261017-q1", demo / "20261017-q1")
+    shutil.copytree(SUPPLEMENTS, demo / "20261017-q1")
     _, channel = mocks(tmp_path, datasets(api, demo))
     first = await channel.submit(Q1.id, request("12345678", "BA-090"), "sent")
     asic = demo / "20261017-q1" / "registry" / "asic.json"

@@ -13,9 +13,9 @@ import pytest
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.persistence.stores import XeroDatasetLoader
 from tests import xero_injection as inj
+from tests.external import needs
 
-HAS_SNAPSHOT = (inj.SNAPSHOTS / inj.SNAPSHOT).is_dir()
-needs_snapshot = pytest.mark.skipif(not HAS_SNAPSHOT, reason=inj.NO_SNAPSHOT)
+needs_snapshot = needs("q1_snapshot", "q1_supplements")  # 标 external; 没有快照时跳过, 跟踪了却找不到时失败
 JOURNAL_637 = {"JournalNumber": 637}  # 10-06 的收款 (借 090, 贷 610 各 550.00), 期后
 IN_PERIOD = "/Date(1790726400000+0000)/"  # 2026-09-30
 
@@ -382,10 +382,9 @@ def test_skips_without_snapshot(tmp_path: Path) -> None:
         inj.xero_case(tmp_path, "T0", snapshots=tmp_path / "missing")
 
 
+@needs_snapshot
 def test_fixture_is_bound_to_tmp_path(xero_case: Any, tmp_path: Path) -> None:
     """conftest 的 xero_case 夹具绑定本用例的 tmp_path; 同一目录再建副本时报出原因, base 换子目录后可再建."""
-    if not HAS_SNAPSHOT:
-        pytest.skip(inj.NO_SNAPSHOT)
     case = xero_case("T0")
     assert case.snapshot.is_relative_to(tmp_path) and case.loader.allow_injected
     with pytest.raises(inj.InjectionError, match="已有副本"):

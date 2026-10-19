@@ -57,6 +57,7 @@ from backend.services.data_service import DataService
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.sampling import sample_point
+from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
@@ -68,7 +69,7 @@ from tests.fakes import (
     make_ctx,
     make_runner,
 )
-from tests.fixture_sets import XERO, XERO_DEMO, ExpectedDocuments, FixtureSet, expected_documents
+from tests.fixture_sets import XERO, ExpectedDocuments, FixtureSet, expected_documents
 from tests.test_knowledge import document_pointers
 from tests.xero_fakes import (
     XERO_RULES,
@@ -102,8 +103,9 @@ def invoice_contracts() -> dict[str, str]:
 
 @functools.cache
 def account_numbers() -> dict[str, str]:
-    """银行账户 ID → 账号 (补造的 bank_accounts.csv; BA-090 → 12345678, BA-091 → 12345679)."""
-    with (XERO_DEMO / "bank_accounts.csv").open(encoding="utf-8", newline="") as f:
+    """银行账户 ID → 账号 (补造的 bank_accounts.csv; BA-090 → 12345678, BA-091 → 12345679); 补造目录经 tests.external
+    定位."""
+    with (supplements_dir("20261017-q1") / "bank_accounts.csv").open(encoding="utf-8", newline="") as f:
         return {row["id"]: row["account_no"] for row in csv.DictReader(f)}
 
 
@@ -218,6 +220,7 @@ def write(root: Path, rel: str, value: Any) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+@pytest.mark.external
 def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     """自测: 合格的 CSH-02 与上传分类 fixture 不报; 未知程序目录, 没有 llm 段的程序, 不符合输出模型, 指针不在 manifest,
     页码超出 (含 0 与空), 指向不作证据的文件 (待审财报 fs_v1.pdf), 含邮箱, 上传分类的文件名不在 manifest 都报出,
@@ -389,7 +392,7 @@ async def test_xero_upload_is_classified_by_the_runtime_copy() -> None:
     financial.document_refs.clear()
     service = DataService(runner.deps, runner)
     entry = next(u for u in xero_uploads("fieldwork") if u.file_name == "smart_agency_invoice_SM0195-70135.pdf")
-    pdf = XERO_DEMO / entry.path
+    pdf = supplements_dir("20261017-q1") / entry.path
     await service.upload_documents(
         xero.id, [(pdf.name, pdf.read_bytes()), ("unknown.pdf", b"%PDF-1.4 not a demo document")], actor="U-1"
     )

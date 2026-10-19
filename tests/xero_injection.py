@@ -30,11 +30,13 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
 from backend.persistence.stores import XeroDatasetLoader
+from tests.external import snapshot_dir, snapshot_location, supplements_dir, supplements_path
 
 REPO = Path(__file__).resolve().parents[1]
-SNAPSHOTS = REPO / "data" / "external" / "xero" / "api"  # 快照的上级
-SUPPLEMENTS = REPO / "data" / "xero_demo"  # 补造目录的上级
 SNAPSHOT = "20261017-q1"
+# 原目录的上级, 只给路径不核对 (原目录哈希守护与断言里的对照用); xero_case 缺省经 tests.external 定位核对
+SNAPSHOTS = snapshot_location(SNAPSHOT).parent  # 快照的上级
+SUPPLEMENTS = supplements_path(SNAPSHOT).parent  # 补造目录的上级
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"
 INJECTIONS = REPO / "tests" / "fixtures" / "xero_injections"
 NO_SNAPSHOT = "没有本地 Xero 快照"
@@ -419,19 +421,24 @@ def xero_case(
     *,
     engine: Any = None,
     evidence_store: Any = None,
-    snapshots: Path = SNAPSHOTS,
-    supplements: Path = SUPPLEMENTS,
+    snapshots: Path | None = None,
+    supplements: Path | None = None,
 ) -> XeroCase:
     """按第 8.1 节生成注入副本:
     (1) 记两个原目录的逐文件哈希; (2) 复制到 tmp_path/api/<快照> 与 tmp_path/xero_demo/<快照>; (3) contacts.json 在
     内存中去掉登录账号联系人, raw/ 不复制, 断言副本不含其原值; (4) 逐条执行补丁; (5) tb_shift 调副本期末试算表,
     全部执行后核对借贷合计与分录推出的余额; (6) 重写副本 manifest (injected 为场景名); 收尾再比一次原目录哈希.
-    没有本地快照时跳过. engine 与 evidence_store 传给载入器 (连库的场景用; 不传时只用不连库的 tables 等).
-    snapshots 与 supplements 为原目录的上级, 只供本机制的自测换成自造目录."""
+    原目录缺省经 tests.external 定位核对: 没有快照时跳过, 仓库跟踪了却找不到时失败. engine 与 evidence_store 传给
+    载入器 (连库的场景用; 不传时只用不连库的 tables 等). snapshots 与 supplements 为原目录的上级, 只供本机制的自测
+    换成自造目录 (没有快照时同样跳过)."""
     import pytest
 
-    if not (snapshots / SNAPSHOT).is_dir():
+    if snapshots is None:
+        snapshots = snapshot_dir(SNAPSHOT).parent
+    elif not (snapshots / SNAPSHOT).is_dir():
         pytest.skip(NO_SNAPSHOT)
+    if supplements is None:
+        supplements = supplements_dir(SNAPSHOT).parent
     patch = read_patch(scenario)
     watched = [snapshots / SNAPSHOT, supplements / SNAPSHOT]
     before = {str(d): file_hashes(d) for d in watched}

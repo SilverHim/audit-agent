@@ -45,6 +45,7 @@ from backend.persistence.stores import (
 from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
+from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
 from tests.test_fakes import demo_rows, trail_pages_hold
 
@@ -366,11 +367,12 @@ NEW_TYPES = {
 }
 
 
+@pytest.mark.external
 async def test_new_document_types_round_trip(storage):
     """documents.type 是 text 列 (迁移 0001 无约束, 0004 也未加), 新取值不需迁移: 各存一份后按类型取回, 读回仍是枚举;
     没补登记的文件读回文件日期为空, 关联对象为 [] (补登记见 test_data_store_postgres)."""
     engine, e, _loader, evidence = storage
-    supplements = ROOT / "data/xero_demo/20261017-q1"
+    supplements = supplements_dir("20261017-q1")
     upstream = {
         DocumentType.contract,
         DocumentType.invoice,
@@ -876,13 +878,14 @@ async def test_pln07_a03_monthly_figures_from_journal(storage):
     assert rows == [{**row, **empty} if row["month"] == date(2026, 2, 1) else row for row in NUMBAT_A03_ROWS]
 
 
+@pytest.mark.external
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
     """Xero 快照经 XeroDatasetLoader 载入真实库: 各表有数, 科目带标准分类,
     生产的 gl_balance 对每个科目等于本期试算表."""
+    snapshot = snapshot_dir(XERO_SNAPSHOT.removeprefix("xero/"))  # 先核对: 跟踪了却找不到时失败
     url = os.getenv("TEST_DATABASE_URL")
-    snapshot = ROOT / "data/external/xero/api" / XERO_SNAPSHOT.removeprefix("xero/")
-    if not url or not snapshot.exists():
-        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
     engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
     user = "USR-" + uuid4().hex
     async with engine.begin() as conn:
@@ -995,14 +998,15 @@ async def test_user_store_create_keeps_existing_account():
         await engine.dispose()
 
 
+@pytest.mark.external
 async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
     """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB 与
     补造画像 CLIENT-XERO-3C1332BB-Q1 并存; 再建一次 (画像已在库中, 内容相同) 也照常. 不写死版本号 (R127): 库里
     若存着补造画像改内容之前的版本, 建项目时会出新版本, 断言最新一版的内容等于补造画像, 项目采用最新一版."""
+    api, _ = snapshot_dir("20261017-q1").parent, snapshot_dir("20261017-mock")  # 先核对两个快照
     url = os.getenv("TEST_DATABASE_URL")
-    api = ROOT / "data/external/xero/api"
-    if not url or not (api / "20261017-mock").exists() or not (api / "20261017-q1").exists():
-        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-mock, 20261017-q1")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
     engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
     user = "USR-" + uuid4().hex
     async with engine.begin() as conn:
@@ -1016,7 +1020,7 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
         ROOT / "src/backend/knowledge/planning",
         engine,
         FileEvidenceStore(tmp_path, engine),
-        supplements=ROOT / "data/xero_demo",
+        supplements=supplements_dir("20261017-q1").parent,
     )
     store = PostgresEngagementStore(engine)
     periods = {"xero/20261017-mock": date(2026, 11, 30), "xero/20261017-q1": date(2026, 9, 30)}
@@ -1106,14 +1110,15 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     await engine.dispose()
 
 
+@pytest.mark.external
 async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
     """R269 验收 11: 真实库载入 xero/20261017-q1 只载快照: 服务完成记录与工资册为 0 行, 发票的合同关联为空, 开户行取
     快照的科目名, 不登记文件 (补造部分由演示数据导入写入, 见 test_demo_import_db); 每个科目 gl_balance 等于本期试算表.
     补造与快照不匹配时不载入."""
+    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
     url = os.getenv("TEST_DATABASE_URL")
-    api = ROOT / "data/external/xero/api"
-    if not url or not (api / "20261017-q1").exists():
-        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
     engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
     user = "USR-" + uuid4().hex
     async with engine.begin() as conn:
@@ -1123,9 +1128,7 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
             )
         )
     evidence = FileEvidenceStore(tmp_path, engine)
-    loader = XeroDatasetLoader(
-        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
-    )
+    loader = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
     e = await PostgresEngagementStore(engine).create(
         owner_id=user,
         period_start=date(2026, 7, 1),
@@ -1156,7 +1159,7 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
     assert [(b["id"], b["bank_name"]) for b in banks] == sorted((b.id, b.bank_name) for b in snapshot["bank_accounts"])
     # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入
     demo = tmp_path / "xero_demo"
-    shutil.copytree(ROOT / "data/xero_demo/20261017-q1", demo / "20261017-q1")
+    shutil.copytree(supplements / "20261017-q1", demo / "20261017-q1")
     links = demo / "20261017-q1" / "contract_links.csv"
     links.write_bytes(links.read_bytes() + b" ")
     planning = ROOT / "src/backend/knowledge/planning"
@@ -1177,14 +1180,15 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
     await engine.dispose()
 
 
+@pytest.mark.external
 async def test_load_adjustments_two_rounds(tmp_path):
     """R73: 真实库载入 xero/20261017-q1 后按两轮载入更正分录: 行数, data_version, 幂等, gl_balance, 试算表不变;
     尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写. R271: 每轮有新行时总账整表换一版 (版本行的来源,
     原文件名, 行数与写入人), 两轮之后体检的借贷平衡, 分录与试算表, 行数与来源都通过, 计入更正分录时分录与试算表不符."""
+    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
     url = os.getenv("TEST_DATABASE_URL")
-    api = ROOT / "data/external/xero/api"
-    if not url or not (api / "20261017-q1").exists():
-        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
     engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
     user = "USR-" + uuid4().hex
     async with engine.begin() as conn:
@@ -1194,9 +1198,7 @@ async def test_load_adjustments_two_rounds(tmp_path):
             )
         )
     evidence = FileEvidenceStore(tmp_path, engine)
-    xero = XeroDatasetLoader(
-        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
-    )
+    xero = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
     store = PostgresEngagementStore(engine)
     profile = xero.client_profile("xero/20261017-q1")
 
@@ -1285,7 +1287,7 @@ async def test_load_adjustments_two_rounds(tmp_path):
     assert literal.movements == (await data.check_inputs(e.id, *period)).movements
 
     # 同 ID 内容不同: 更正分录文件换成摘要改过的副本 (只替换文件位置, 走同一套写入)
-    source = ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv"
+    source = supplements / "20261017-q1" / "adjustments" / "journal_entries.csv"
     edited_csv = tmp_path / "edited.csv"
     edited_csv.write_text(
         source.read_text(encoding="utf-8").replace("Audit adjustment AJE-X01:", "Audit adjustment AJE-X01 (edited):"),

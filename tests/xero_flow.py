@@ -23,15 +23,18 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
 from backend.services.demo_import import DEMO_JOB
+from tests.external import supplements_dir
 from tests.fakes import acc01_decision, wait_idle
-from tests.xero_fakes import PLANNING, SNAPSHOT_REPO, SUPPLEMENTS, snapshot_root
+from tests.xero_fakes import PLANNING, SNAPSHOT_NAME, SNAPSHOT_REPO, snapshot_root
 
 READY_REASON = "演示数据已导入"  # 确认数据已齐时的理由 (Xero 录入人为连接器占位值, 审批日志一项待补交)
 
 
-def demo_source(supplements: Path = SUPPLEMENTS) -> RoutingDatasetLoader:
+def demo_source(supplements: Path | None = None) -> RoutingDatasetLoader:
     """演示导入清单的来源, 同组装根按数据集名分流: xero/ 走不连库的 Xero 载入器 (只用 supplement; 快照取
-    tests.xero_fakes 定位到的, 没有时跳过), 其余 (Numbat) 没有补造目录. supplements 可换成补造目录的临时副本."""
+    tests.xero_fakes 定位到的, 没有时跳过), 其余 (Numbat) 没有补造目录. supplements 可换成补造目录的临时副本, 缺省
+    为经 tests.external 核对的补造根."""
+    supplements = supplements_dir(SNAPSHOT_NAME).parent if supplements is None else supplements
     xero = XeroDatasetLoader(snapshot_root(SNAPSHOT_REPO).parent, PLANNING, supplements=supplements)
     return RoutingDatasetLoader(cast(DatasetLoader, object()), {XeroDatasetLoader.PREFIX: xero})
 

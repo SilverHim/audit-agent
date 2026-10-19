@@ -114,6 +114,7 @@ def test_numbat_dataset_passes_and_only_lacks_statements() -> None:
     )
 
 
+@pytest.mark.external
 def test_xero_snapshot_lacks_preparer_and_approver() -> None:
     """Xero Demo 快照: 分录与试算表勾稽一致; Xero API 不提供录入人与审批人, 请求审批日志 (来源 Xero);
     有一个科目没归入标准分类."""

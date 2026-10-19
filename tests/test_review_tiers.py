@@ -6,6 +6,8 @@
 
 from typing import Any
 
+import pytest
+
 from backend.adapters.xero_dataset import build_tables
 from backend.contracts.models import (
     AuditException,
@@ -148,6 +150,7 @@ def test_tier_before_materiality_is_set() -> None:
 # ── 交易行取金额: Xero 快照 ──
 
 
+@pytest.mark.external
 def test_xero_transaction_rows_give_subject_amount() -> None:
     tables = build_tables(xero_snapshot())
     invoice = max(tables["sales_invoices"], key=lambda i: i.amount_cents)
