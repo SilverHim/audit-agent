@@ -146,7 +146,7 @@ class Employee(Model):
     name: str  # 姓名
     start_date: date  # 入职日
     employment_type: str | None = None  # 雇佣类型, 如 full_time; 没有为空
-    pay_period_days: int = Field(gt=0)  # 发薪周期的天数, 如 14
+    pay_period_days: int = Field(gt=0, le=366)  # 发薪周期的天数, 如 14; 至多一年 (366 天), 也在库里 int4 的范围内
     gross_per_period_cents: int = Field(ge=0)  # 每期税前工资, 单位分
 
 

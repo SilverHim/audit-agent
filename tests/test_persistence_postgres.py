@@ -1344,10 +1344,13 @@ async def test_concurrent_new_clients_with_one_abn_only_one_wins():
 
 async def test_payroll_register_written_as_a_new_data_version(storage, tmp_path):
     """需求 R96: 数据集载入不写工资册; 经 PostgresDataStore.write_tables (source import) 写入后 employees 按员工编号读回
-    3 行, 数据版本 +1, data_imports 一版, 记 employees 变动; 再写整表替换; 另一项目读不到 (行级安全)."""
+    3 行 (一行雇佣类型为空), 账表查看 (table_rows) 同序, 数据版本 +1, data_imports 一版, 记 employees 变动; 再写整表
+    替换; 另一项目读不到 (行级安全)."""
     from backend.contracts.data import DataChange, DataInput, TableKind
     from backend.persistence.data_store import PostgresDataStore
-    from tests.test_employees import EXPECTED as staff  # 补造目录工资册的 3 名员工
+    from tests.test_employees import EXPECTED
+
+    staff = [EXPECTED[0], EXPECTED[1].model_copy(update={"employment_type": None}), EXPECTED[2]]  # E002 雇佣类型为空
 
     engine, e, loader, _evidence = storage
     other = await PostgresEngagementStore(engine).create(
@@ -1373,7 +1376,12 @@ async def test_payroll_register_written_as_a_new_data_version(storage, tmp_path)
         ("E002", "Tracy Green", 180000),
         ("E003", "Odette Garrison", 250000),
     ]
-    assert rows == staff  # 入职日, 雇佣类型与发薪周期也读回 (都是 2026-07-20, full_time, 14)
+    assert rows == staff  # 入职日, 雇佣类型 (空的读回 None) 与发薪周期也读回
+    total, page = await data.table_rows(e.id, TableKind.employees, None, 0, 50)
+    assert (total, [(r["employee_id"], r["employment_type"]) for r in page]) == (
+        3,
+        [("E001", "full_time"), ("E002", None), ("E003", "full_time")],
+    )
     assert version == 2 and (await data.readiness(e.id)).data_version == 2
     assert [(v.kind, v.source, v.records, v.file_name, v.data_version) for v in await data.versions(e.id)] == [
         (TableKind.employees, "import", 3, "employees.csv", 2)

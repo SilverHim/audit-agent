@@ -421,12 +421,20 @@ def test_bad_dataset_traits_are_rejected(tmp_path: Path, change: dict[str, Any],
 
 
 def test_missing_traits_default_and_payroll_register_errors(tmp_path: Path) -> None:
-    """没有声明文件时取缺省值 (工资册无从读起, FileNotFoundError); 声明的工资册文件不存在 FileNotFoundError; 指到补造
-    目录外的 SupplementMismatch. 改过文件后都按副本重写 manifest."""
+    """声明先经补造核对: 改了声明而没重写 manifest 时报不匹配 (合模型的改动也不读进来). 没有声明文件时取缺省值
+    (工资册无从读起, FileNotFoundError); 声明的工资册文件不存在 FileNotFoundError; 指到补造目录外的
+    SupplementMismatch. 之后各步改过文件都按副本重写 manifest."""
     from backend.contracts.records import DatasetTraits
 
     api, demo = copies(tmp_path)
     root = demo / "20261017-q1"
+    traits = json.loads((root / "dataset_traits.json").read_text(encoding="utf-8"))
+    (root / "dataset_traits.json").write_text(
+        json.dumps({**traits, "prior_period_start": "2026-04-01"}), encoding="utf-8"
+    )
+    with pytest.raises(SupplementMismatch, match=r"dataset_traits\.json"):
+        loader(api, demo).dataset_traits(DATASET)
+    (root / "dataset_traits.json").write_text(json.dumps(traits), encoding="utf-8")
     (root / "payroll" / "employees.csv").unlink()
     rewrite_manifest(api, demo)
     found = loader(api, demo).supplement(DATASET)

@@ -109,20 +109,23 @@ def test_parse_integer() -> None:
 
 
 def test_bad_cells_and_duplicate_ids_are_failures() -> None:
-    """不是整数的天数, 不为正的天数 (模型约束) 与重复的员工编号各报一行; 其余行照常转换."""
+    """不是整数的天数, 不在 1 至 366 的天数 (模型约束; 超出库里 int4 的值不会写到库才报错) 与重复的员工编号各报一行;
+    其余行照常转换. 1_4 只有经整数解析才算失败 (按文本交给行模型时会被当成 14)."""
     text = (
         "employee_id,name,start_date,employment_type,pay_period_days,gross_per_period_cents\n"
         "E001,Oliver Gray,2026-07-20,full_time,fortnight,240000\n"
         "E002,Tracy Green,2026-07-20,full_time,0,180000\n"
         "E003,Odette Garrison,2026-07-20,full_time,14,250000\n"
         "E003,Odette Garrison,2026-07-20,full_time,14,250000\n"
+        "E004,Max Long,2026-07-20,full_time,3000000000,1\n"
+        "E005,Una Score,2026-07-20,full_time,1_4,1\n"
     )
     sheet = d.read_sheet("employees.csv", text.encode("utf-8"))
 
     rows, failures = tp.convert(TableKind.employees, sheet, IDENTITY, "ymd")
 
     assert rows == [EXPECTED[2]]
-    assert [f.row for f in failures] == [2, 3, 5]
+    assert [f.row for f in failures] == [2, 3, 5, 6, 7]
     assert (failures[0].column, failures[0].value) == ("pay_period_days", "fortnight")
 
 
