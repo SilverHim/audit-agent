@@ -310,6 +310,36 @@ async def test_checkup_leaves_out_declared_audit_adjustments(prefix: str | None)
     assert checks[CheckId.count_agrees_source].status == "passed"
 
 
+async def test_checkup_without_dataset_leaves_out_default_prefix() -> None:
+    """没有数据集的项目 (新建的客户) 取数据集声明的缺省前缀 AJE- (审核 R271-03): Numbat 总账加一笔 AJE- 开头的
+    平衡更正 (借 4100, 贷 1100), 分录与试算表仍一致; 不排除时 4100 与 1100 各差出这笔金额."""
+    data = FakeDataStore()
+    adjustment = [
+        JournalEntry(
+            id=f"AJE-T01-{n}",
+            entry_no="AJE-T01",
+            posting_date=date(2026, 6, 30),
+            created_at=None,
+            created_by=None,
+            approved_by=None,
+            account_code=code,
+            debit_cents=debit,
+            credit_cents=credit,
+            description="Audit adjustment",
+            source_doc=None,
+        )
+        for n, (code, debit, credit) in enumerate([("4100", 5000, 0), ("1100", 0, 5000)], start=1)
+    ]
+    data.tables[TableKind.journal_entries] = [*numbat(TableKind.journal_entries), *adjustment]
+    engagements = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT.model_copy(update={"dataset": None})])
+    runner, _ = make_runner(engagement_store=engagements, data=data)
+
+    run = await DataCheckup(runner.deps).run(EID)
+
+    agree = next(c for c in run.checks if c.id is CheckId.journals_agree_tb)
+    assert (agree.status, agree.params["differences"]) == ("passed", [])
+
+
 def request(rid: str, *, status: str = "open", at: datetime = NOW, **values: Any) -> DataRequest:
     base = {"kind": "table", "title": rid, "reason_code": "missing_table", "status": status, "created_at": at}
     return DataRequest.model_validate({"id": rid, **base, **values})

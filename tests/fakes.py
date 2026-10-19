@@ -1682,6 +1682,7 @@ class FakeDatasetLoader:
         self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
         self.adjustments = adjustments  # 预置的更正分录行; None 表示数据集没有更正分录文件
         self.adjustment_loads: list[tuple[str, str, list[str] | None]] = []  # (项目编号, 数据集名, 凭证号)
+        self.adjustment_actors: list[str] = []  # 每次 load_adjustments 收到的写入人 actor, 顺序同 adjustment_loads
         self.traits = dict(traits or {})  # 数据集名 → 声明, 可在测试中改
         self.traits_calls: list[str] = []  # dataset_traits 收到的数据集名, 按调用顺序
 
@@ -1689,6 +1690,7 @@ class FakeDatasetLoader:
         self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
         self.adjustment_loads.append((eid, dataset, list(entry_nos) if entry_nos is not None else None))
+        self.adjustment_actors.append(actor)
         if self.adjustments is None:
             raise FileNotFoundError(f"没有更正分录文件 ({dataset})")
         known = {x.entry_no for x in self.adjustments}

@@ -587,8 +587,9 @@ class TableLoader(Store):
         """更正分录载入的公共部分 (DatasetLoader.load_adjustments): 读 path, 取所请求的凭证 (同 id 同内容的已有行
         跳过); 有新行时在同一事务里经 DataStore.write_tables 把总账整表换一版 (现有行加新行): 来源 xero (客户在 Xero
         过账更正, 等同重新同步总账), 原文件名 adjustments/journal_entries.csv, 写入人 actor; 数据版本加一, 记版本行
-        与数据变动 (data 留痕由 DataService.backfill_trails 按版本行补写). 试算表不动. 拒绝的情况见协议说明, 都
-        不写入."""
+        与数据变动. data 留痕由调用方在提交后随即写 (见协议说明). 试算表不动. 写入总账时会套用最新一版审批日志, 所以
+        "同 id 同内容" 比的是请求的行按同一版审批日志补过之后的样子 (data_store.with_approvals), 返回的也是它, 即
+        库里的行. 拒绝的情况见协议说明, 都不写入."""
         if isinstance(entry_nos, str):
             raise TypeError("entry_nos 须为凭证号列表, 不能是单个字符串")
         lines = read_adjustments(path)
@@ -602,7 +603,11 @@ class TableLoader(Store):
         unbalanced = [no for no in wanted if sum(x.debit_cents - x.credit_cents for x in chosen if x.entry_no == no)]
         if unbalanced:
             raise ValueError(f"更正分录借贷不平衡: {', '.join(unbalanced)}")
+        # data_store 引用本模块, 用时再导入
+        from backend.persistence.data_store import PostgresDataStore, with_approvals
+
         journal = m.FINANCIAL["journal_entries"]
+        writer = PostgresDataStore(self.evidence_store.root, self.engine)  # 同一引擎, 并入本事务
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             existing, loaded = await self.load_state(conn, eid)  # 已载入的口径同 insert (看财务表有没有行)
@@ -610,31 +615,30 @@ class TableLoader(Store):
                 raise ValueError("尚未载入数据集")
             if existing["dataset"] != dataset:
                 raise ValueError("Engagement already has a different dataset")
+            approvals = await writer.latest_rows(conn, eid, TableKind.approval_log)
+            expected = with_approvals(chosen, approvals)  # 写进总账后的样子
             stored = {
                 r["id"]: JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
                 for r in await self.rows(eid, select(journal).where(journal.c.id.in_([x.id for x in chosen])))
             }
-            changed = [x.id for x in chosen if x.id in stored and stored[x.id] != x]
+            changed = [x.id for x in expected if x.id in stored and stored[x.id] != x]
             if changed:
                 raise ValueError(f"更正分录与已载入的同 ID 行内容不同: {', '.join(changed)}")
             new = [x for x in chosen if x.id not in stored]
             if new:
-                from backend.persistence.data_store import PostgresDataStore  # data_store 引用本模块, 用时再导入
-
                 current = [
                     JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
                     for r in await self.rows(eid, select(journal))
                 ]
                 rows = sorted([*current, *new], key=lambda x: x.id)
-                writer = PostgresDataStore(self.evidence_store.root, self.engine)  # 同一引擎, 并入本事务
-                await writer.write_tables(
+                await writer.write_tables(  # 写总账后套用最新一版审批日志 (新行同 expected)
                     eid,
                     {TableKind.journal_entries: rows},
                     source="xero",
                     actor=actor,
                     file_name=ADJUSTMENTS.as_posix(),
                 )
-        return chosen
+        return expected
 
 
 ADJUSTMENTS = Path("adjustments") / "journal_entries.csv"  # 数据集目录下的更正分录 (表头同 journal_entries.csv)

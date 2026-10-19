@@ -1200,6 +1200,10 @@ async def test_load_adjustments_two_rounds(tmp_path):
     assert counted.status == "failed"
     assert {"account_code": "620", "difference_cents": 4853} in counted.params["differences"]
     assert {"account_code": "710", "difference_cents": -75000} in counted.params["differences"]
+    # 前缀按字面量匹配 (autoescape): A_E- 里的 _ 不当通配符, 不排除 AJE- 的行 (审核 R271-03)
+    period = (date(2026, 7, 1), as_of)
+    literal = await data.check_inputs(e.id, *period, adjustment_prefix="A_E-")
+    assert literal.movements == (await data.check_inputs(e.id, *period)).movements
 
     # 同 ID 内容不同: 更正分录文件换成摘要改过的副本 (只替换文件位置, 走同一套写入)
     source = ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv"
@@ -1240,6 +1244,18 @@ async def test_load_adjustments_two_rounds(tmp_path):
         0,
         -126697,
     ]
+
+    # 审批日志列了更正凭证号 (审核 R271-01): 写总账时补上审批人, 同参数再调仍按同一版审批日志比较, 不写
+    from backend.contracts.data import ApprovalLogRow
+
+    approved = await engagement()
+    await xero.load(approved.id, "xero/20261017-q1")
+    log = [ApprovalLogRow(entry_no="AJE-X01", approved_by="Reviewer")]
+    await data.write_tables(approved.id, {TableKind.approval_log: log}, source="import", actor=user)
+    loaded = await xero.load_adjustments(approved.id, "xero/20261017-q1", ["AJE-X01"])
+    assert [r.approved_by for r in loaded] == ["Reviewer"] * 3 and await state(approved.id) == (1020, 3)
+    assert await xero.load_adjustments(approved.id, "xero/20261017-q1", ["AJE-X01"]) == loaded
+    assert await state(approved.id) == (1020, 3)
 
     # 项目锁定
     locked = await engagement()

@@ -188,6 +188,7 @@ async def test_fake_loader_adjustments() -> None:
     rows = await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X05", "AJE-X01"])
     assert [r.id for r in rows] == ["AJE-X01-1", "AJE-X01-2", "AJE-X01-3", "AJE-X05-1", "AJE-X05-2"]
     assert fake.adjustment_loads == [("E", "xero/20261017-q1", ["AJE-X05", "AJE-X01"])]
+    assert fake.adjustment_actors == ["A1"]  # 收到的写入人另记一列 (R162 断言提交更正通知的审计师)
     assert fake.adjustment_entry_nos("xero/20261017-q1") == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
     with pytest.raises(LookupError):
         await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X09"])
