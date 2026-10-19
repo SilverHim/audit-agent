@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "5739eea91612e99efa4b7477c3bacb4e9a003a18ed8a3621d8fce7b2d2363b3f",
+  "spec_sha256": "e128a6d99d8e491a553061299950a105a47946034db9a04f32b38f2ea642324d",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -88,7 +88,7 @@
     },
     {
       "path": "client_profile.json",
-      "sha256": "c037417a42ec54d299fb97e9bc7cb3781473092b3652d32c03d0b0071ab100ac",
+      "sha256": "d9c9784e810be0793dc6f2626550e1ffa0c53198214e39e62b2b61b222c01782",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

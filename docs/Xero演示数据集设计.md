@@ -171,14 +171,84 @@ ASIC 个人检索是否列持股待核 (T5), 所以设计让 Alex 在三家都�
 ### 2.6 客户画像 (覆盖载入器产出)
 
 ```json
-{"id": "CLIENT-XERO-3C1332BB-Q1", "version": 1, "legal_name": "Demo Company (AU) Pty Ltd", "abn": "25900043021",
- "entity_type": "small_proprietary", "industry_anzsic": "7000", "listed": false, "directors": ["Alex Morgan"],
- "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."}
+{
+ "id": "CLIENT-XERO-3C1332BB-Q1",
+ "version": 1,
+ "legal_name": "Demo Company (AU) Pty Ltd",
+ "abn": "25900043021",
+ "entity_type": "small_proprietary",
+ "industry_anzsic": "7000",
+ "listed": false,
+ "directors": [
+  "Alex Morgan"
+ ],
+ "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. No director remuneration in the period.",
+ "financial_year_end": "09-30",
+ "accounting_system": "Xero",
+ "engagements": [],
+ "approval_limit_cents": 500000,
+ "key_personnel": [
+  {
+   "name": "Alex Morgan",
+   "role": "Director and Company Secretary",
+   "since": "2018-09-03"
+  }
+ ],
+ "related_parties": [
+  {
+   "name": "Alex Morgan",
+   "kind": "person",
+   "relationship": "sole director and 85% shareholder",
+   "abn": null,
+   "acn": null,
+   "notes": "director loan, overdraft guarantee"
+  },
+  {
+   "name": "Morgan Advisory Pty Ltd",
+   "kind": "company",
+   "relationship": "company controlled by the director",
+   "abn": "17900043049",
+   "acn": "900043049",
+   "notes": ""
+  }
+ ],
+ "ownership": [
+  {
+   "holder": "Alex Morgan",
+   "kind": "person",
+   "shares": 85,
+   "pct": 0.85
+  },
+  {
+   "holder": "Sam Whitfield",
+   "kind": "person",
+   "shares": 15,
+   "pct": 0.15
+  }
+ ],
+ "applicable_framework": "tier2_gpfs",
+ "governance": {
+  "body": "board",
+  "members": [
+   {
+    "name": "Alex Morgan",
+    "also_management": true
+   }
+  ],
+  "all_in_management": true
+ },
+ "fees": {
+  "audit_fee_cents": 480000,
+  "non_audit_fee_cents": 0,
+  "firm_total_fee_cents": 240000000
+ },
+ "prior_period_audited": false
+}
 ```
 
-**画像 ID 带数据集后缀**: 载入器给 20261017-mock 生成的画像也是 CLIENT-XERO-3C1332BB v1, 内容不同; `PostgresEngagementStore.create` 遇到同 ID 同版本而内容不同的画像抛 VersionConflict, 同一个库里先后用两份快照建项目必有一个失败. 所以补造画像用 `CLIENT-XERO-3C1332BB-Q1`, 载入器校验它以快照组织 ID 推出的 `CLIENT-XERO-3C1332BB-` 开头 (第 9.3 节第 3 项). 不选 "库中已有同 ID 就沿用旧版本", 因为那样先建过 mock 项目的库会把通用画像套到演示项目上.
+**画像 ID 带数据集后缀**: 载入器给 20261017-mock 生成的画像也是 CLIENT-XERO-3C1332BB v1, 内容不同; `PostgresEngagementStore.create` 遇到同 ID 而内容与最新一版不同的画像会写新一版 (R127 起; 原先抛 VersionConflict), 同一个库里先后用两份快照建项目时两份画像会轮番出新版本. 所以补造画像用 `CLIENT-XERO-3C1332BB-Q1`, 载入器校验它以快照组织 ID 推出的 `CLIENT-XERO-3C1332BB-` 开头 (第 9.3 节第 3 项). 不选 "库中已有同 ID 就沿用旧版本", 因为那样先建过 mock 项目的库会把通用画像套到演示项目上.
 
-规格书 4.3 节其余字段 (accounting_system, key_personnel, ownership, related_parties, applicable_framework tier2_gpfs, governance all_in_management 为真, approval_limit_cents 500000, fees audit_fee_cents 480000 / non_audit 0 / firm_total_fee_cents 240000000) 由 G2 JR-2 扩展模型后写入; 扩展前写在 notes.
+规格书 4.3 节的扩展字段由 R127 写入画像 (financial_year_end 09-30, accounting_system Xero, approval_limit_cents 500000, key_personnel, 申报的 related_parties, ownership, applicable_framework tier2_gpfs, governance all_in_management 为真, fees audit_fee_cents 480000 / non_audit 0 / firm_total_fee_cents 240000000, engagements 为空, prior_period_audited 为假); 原先写在 notes 里的审批限额与申报的关联方随之从 notes 去掉, 其余叙述保留. 没写的扩展字段取缺省值. 申报的关联方故意不列 VPA (第 2.2 节).
 
 ### 2.7 计划预置 (planning/)
 

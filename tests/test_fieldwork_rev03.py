@@ -54,7 +54,9 @@ def setup(
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}
     )
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits(), profile=None
+    )
     state = ctx.state | {
         "procedure_pack": [procedure],
         "audit_objectives": NUMBAT_OBJECTIVES,

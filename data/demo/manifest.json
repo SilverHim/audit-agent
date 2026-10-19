@@ -193,11 +193,11 @@
     },
     {
       "path": "llm/RPT-03/r1.json",
-      "sha256": "fae926fc6d40542613747d5429037c54ad212267e01fd5d206c00f064a6e9ccb"
+      "sha256": "c018d35e4376529f96272834ea6c1907555a33bc178a0454355a1a63a447f7d5"
     },
     {
       "path": "llm/RPT-03/r2.json",
-      "sha256": "07026b6a8bd17e20be6f4c3e85d1aa76efbb4696a1bbdbd1a5b3345a22b81e32"
+      "sha256": "5f62a988119f7a29cfab531688ad06231a438b1ee830e682660766fec7747800"
     },
     {
       "path": "planning/audit_objectives.json",

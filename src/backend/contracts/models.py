@@ -1,10 +1,11 @@
 """领域对象, 定义见 开发接口文档.md 第 2 节. 其他包只引用, 不另行定义."""
 
+import re
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Model(BaseModel):
@@ -498,8 +499,127 @@ class AuditException(Versioned):
 # ── 2.3 计划与程序 ─────────────────────────────────────────
 
 
+# 客户画像中申报的个人或公司
+PartyKind = Literal["person", "company"]
+# 适用的财务报告框架: 第 1 层或第 2 层通用目的财报 (AASB 1053), 特殊目的财报
+ReportingFramework = Literal["tier1_gpfs", "tier2_gpfs", "spfr"]
+
+
+def digits_problem(value: str | None, length: int, name: str) -> str | None:
+    """value 不是 length 位 ASCII 数字时的说明, 合格或为空时为 None (只查格式, 不查校验位)."""
+    if value is None or re.fullmatch(rf"[0-9]{{{length}}}", value):
+        return None
+    return f"{name} 须为 {length} 位数字: {value!r}"
+
+
+class KeyPerson(Model):
+    """客户画像中的关键人员 (规格书第 4.3 节 key_personnel)."""
+
+    name: str  # 姓名
+    role: str  # 职务, 如 Director and Company Secretary
+    since: str | None = None  # 任职起始, 按申报原样记录, 如 2018-09-03 或 2021
+
+
+class DeclaredParty(Model):
+    """管理层申报的关联方 (ASA 550 第 13 段询问的结果), 不经核实."""
+
+    name: str  # 名称或姓名
+    kind: PartyKind  # 个人或公司
+    relationship: str  # 与本公司的关系, 如 sole director and 85% shareholder
+    abn: str | None = None  # ABN, 11 位数字
+    acn: str | None = None  # ACN, 9 位数字
+    notes: str = ""  # 申报的往来, 如 director loan
+
+    @model_validator(mode="after")
+    def numbers(self) -> Self:
+        """ABN, ACN 只查位数."""
+        problem = digits_problem(self.abn, 11, "abn") or digits_problem(self.acn, 9, "acn")
+        if problem:
+            raise ValueError(problem)
+        return self
+
+
+class DeclaredHolding(Model):
+    """申报的股权: 谁持有本公司多少股, 占多少."""
+
+    holder: str  # 持有人
+    kind: PartyKind  # 个人或公司
+    shares: int | None = Field(default=None, ge=0)  # 股数
+    pct: float | None = Field(default=None, ge=0, le=1)  # 持股比例, 0 至 1
+
+
+class GovernanceMember(Model):
+    """治理层的一名成员."""
+
+    name: str  # 姓名
+    also_management: bool  # 是否同时任管理层
+
+
+class Governance(Model):
+    """治理层的构成 (ASA 260 识别治理层, ACC-09)."""
+
+    body: str  # 治理机构, 如 board
+    members: list[GovernanceMember] = []  # 成员
+    all_in_management: bool = False  # 治理层成员是否全部参与管理
+
+
+Share = Annotated[float, Field(ge=0, le=1)]  # 比例, 0 至 1
+
+
+class Fees(Model):
+    """事务所对本客户的收费 (APES 110 R410 的收费依赖与欠费), 金额为分."""
+
+    audit_fee_cents: int = Field(default=0, ge=0)  # 本期审计费
+    non_audit_fee_cents: int = Field(default=0, ge=0)  # 本期非审计服务收费
+    firm_total_fee_cents: int = Field(default=0, ge=0)  # 事务所当年总收费
+    dependency_pct_by_year: dict[str, Share] = {}  # 各年本客户收费占事务所总收费的比例 (0 至 1), 键为年度
+    overdue_cents: int = Field(default=0, ge=0)  # 逾期未收的收费
+    overdue_days: int = Field(default=0, ge=0)  # 逾期天数
+    contingent: bool = False  # 是否有或有收费
+    referral_source: str | None = None  # 介绍来源
+    referral_source_fees_pct_by_year: dict[str, Share] = {}  # 各年介绍来源带来的收费占比 (0 至 1)
+
+
+class PriorMisstatement(Model):
+    """以前年度审计发现的错报."""
+
+    engagement: str  # 所在项目编号
+    area: str  # 领域, 如 cutoff
+    amount_cents: int  # 金额
+    corrected: bool  # 是否已更正
+
+
+class ServiceOrganisation(Model):
+    """客户使用的服务机构 (ASA 402)."""
+
+    name: str  # 名称
+    service: str  # 提供的服务, 如 payroll
+    report_type: Literal["type1", "type2"] | None = None  # 服务机构控制报告的类型, 没有为空
+    report_ref: str | None = None  # 报告的引用
+
+
+class PriorEstimateOutcome(Model):
+    """以前年度会计估计的结果 (ASA 540 回顾性复核)."""
+
+    engagement: str  # 所在项目编号
+    estimate: str  # 估计项目, 如 ecl
+    estimated_cents: int  # 当时的估计数
+    actual_cents: int  # 实际结果
+
+
+class Retention(Model):
+    """客户资料的留存安排 (APP 11.2)."""
+
+    created: date  # 建档日
+    review_by: date  # 留存复核的截止日
+    basis: str  # 依据, 如 APP 11.2
+
+
 class ClientProfile(Versioned):
-    """客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id."""
+    """客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id.
+
+    notes 之后的扩展字段 (规格书第 4.3 节, R127) 都有默认值, 旧画像照常读出; 程序参数以 {ref: profile.<字段>} 引用.
+    """
 
     legal_name: str  # 法定名称
     abn: str  # ABN, 11 位数字
@@ -508,6 +628,37 @@ class ClientProfile(Versioned):
     listed: bool  # 是否上市
     directors: list[str]  # 董事名单
     notes: str = ""  # 背景备注
+    financial_year_end: str | None = None  # 财年末, "MM-DD"
+    accounting_system: str | None = None  # 会计系统, 如 Xero
+    engagements: list[str] = []  # 本所对该客户的项目编号 (项目历史), 为空即首次服务
+    approval_limit_cents: int | None = Field(default=None, ge=0)  # 付款审批限额, 为空即没有申报
+    key_personnel: list[KeyPerson] = []  # 关键人员
+    related_parties: list[DeclaredParty] = []  # 管理层申报的关联方
+    ownership: list[DeclaredHolding] = []  # 申报的股权
+    prior_risk_register: dict[str, list[str]] = {}  # 以前项目的风险清单, 项目编号 → ["领域:等级", ...]
+    prior_misstatements: list[PriorMisstatement] = []  # 以前年度的错报
+    independence_flags: list[str] = []  # 独立性事项
+    applicable_framework: ReportingFramework | None = None  # 适用的财务报告框架
+    governance: Governance | None = None  # 治理层
+    fees: Fees | None = None  # 收费
+    service_organisations: list[ServiceOrganisation] = []  # 服务机构
+    prior_estimate_outcomes: list[PriorEstimateOutcome] = []  # 以前年度会计估计的结果
+    retention: Retention | None = None  # 留存安排
+    prior_period_audited: bool | None = None  # 上期财报是否经审计, 为空即没有申报
+
+    @model_validator(mode="after")
+    def year_end(self) -> Self:
+        """financial_year_end 须为合法的月日 "MM-DD" (2 月 29 日也可)."""
+        value = self.financial_year_end
+        if value is None:
+            return self
+        if not re.fullmatch(r"[0-9]{2}-[0-9]{2}", value):
+            raise ValueError(f"financial_year_end 须为 MM-DD: {value!r}")
+        try:
+            date(2000, int(value[:2]), int(value[3:]))
+        except ValueError:
+            raise ValueError(f"financial_year_end 不是合法的月日: {value!r}") from None
+        return self
 
 
 class Engagement(Model):

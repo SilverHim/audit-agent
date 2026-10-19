@@ -365,6 +365,8 @@ export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agre
  * ClientProfile
  *
  * 客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id.
+ *
+ * notes 之后的扩展字段 (规格书第 4.3 节, R127) 都有默认值, 旧画像照常读出; 程序参数以 {ref: profile.<字段>} 引用.
  */
 export type ClientProfile = {
     /**
@@ -403,12 +405,74 @@ export type ClientProfile = {
      * Notes
      */
     notes?: string;
+    /**
+     * Financial Year End
+     */
+    financial_year_end?: string | null;
+    /**
+     * Accounting System
+     */
+    accounting_system?: string | null;
+    /**
+     * Engagements
+     */
+    engagements?: Array<string>;
+    /**
+     * Approval Limit Cents
+     */
+    approval_limit_cents?: number | null;
+    /**
+     * Key Personnel
+     */
+    key_personnel?: Array<KeyPerson>;
+    /**
+     * Related Parties
+     */
+    related_parties?: Array<DeclaredParty>;
+    /**
+     * Ownership
+     */
+    ownership?: Array<DeclaredHolding>;
+    /**
+     * Prior Risk Register
+     */
+    prior_risk_register?: {
+        [key: string]: Array<string>;
+    };
+    /**
+     * Prior Misstatements
+     */
+    prior_misstatements?: Array<PriorMisstatement>;
+    /**
+     * Independence Flags
+     */
+    independence_flags?: Array<string>;
+    /**
+     * Applicable Framework
+     */
+    applicable_framework?: 'tier1_gpfs' | 'tier2_gpfs' | 'spfr' | null;
+    governance?: Governance | null;
+    fees?: Fees | null;
+    /**
+     * Service Organisations
+     */
+    service_organisations?: Array<ServiceOrganisation>;
+    /**
+     * Prior Estimate Outcomes
+     */
+    prior_estimate_outcomes?: Array<PriorEstimateOutcome>;
+    retention?: Retention | null;
+    /**
+     * Prior Period Audited
+     */
+    prior_period_audited?: boolean | null;
 };
 
 /**
  * ClientProfileIn
  *
- * 更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1.
+ * 更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)
+ * 都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile.
  */
 export type ClientProfileIn = {
     /**
@@ -443,6 +507,67 @@ export type ClientProfileIn = {
      * Notes
      */
     notes?: string;
+    /**
+     * Financial Year End
+     */
+    financial_year_end?: string | null;
+    /**
+     * Accounting System
+     */
+    accounting_system?: string | null;
+    /**
+     * Engagements
+     */
+    engagements?: Array<string>;
+    /**
+     * Approval Limit Cents
+     */
+    approval_limit_cents?: number | null;
+    /**
+     * Key Personnel
+     */
+    key_personnel?: Array<KeyPerson>;
+    /**
+     * Related Parties
+     */
+    related_parties?: Array<DeclaredParty>;
+    /**
+     * Ownership
+     */
+    ownership?: Array<DeclaredHolding>;
+    /**
+     * Prior Risk Register
+     */
+    prior_risk_register?: {
+        [key: string]: Array<string>;
+    };
+    /**
+     * Prior Misstatements
+     */
+    prior_misstatements?: Array<PriorMisstatement>;
+    /**
+     * Independence Flags
+     */
+    independence_flags?: Array<string>;
+    /**
+     * Applicable Framework
+     */
+    applicable_framework?: 'tier1_gpfs' | 'tier2_gpfs' | 'spfr' | null;
+    governance?: Governance | null;
+    fees?: Fees | null;
+    /**
+     * Service Organisations
+     */
+    service_organisations?: Array<ServiceOrganisation>;
+    /**
+     * Prior Estimate Outcomes
+     */
+    prior_estimate_outcomes?: Array<PriorEstimateOutcome>;
+    retention?: Retention | null;
+    /**
+     * Prior Period Audited
+     */
+    prior_period_audited?: boolean | null;
 };
 
 /**
@@ -992,6 +1117,62 @@ export type DatasetSummary = {
 export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result' | 'dispute_resolution';
 
 /**
+ * DeclaredHolding
+ *
+ * 申报的股权: 谁持有本公司多少股, 占多少.
+ */
+export type DeclaredHolding = {
+    /**
+     * Holder
+     */
+    holder: string;
+    /**
+     * Kind
+     */
+    kind: 'person' | 'company';
+    /**
+     * Shares
+     */
+    shares?: number | null;
+    /**
+     * Pct
+     */
+    pct?: number | null;
+};
+
+/**
+ * DeclaredParty
+ *
+ * 管理层申报的关联方 (ASA 550 第 13 段询问的结果), 不经核实.
+ */
+export type DeclaredParty = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Kind
+     */
+    kind: 'person' | 'company';
+    /**
+     * Relationship
+     */
+    relationship: string;
+    /**
+     * Abn
+     */
+    abn?: string | null;
+    /**
+     * Acn
+     */
+    acn?: string | null;
+    /**
+     * Notes
+     */
+    notes?: string;
+};
+
+/**
  * DeferralIn
  *
  * 标记或取消稍后处理.
@@ -1367,6 +1548,54 @@ export type ExtractionEdit = {
 };
 
 /**
+ * Fees
+ *
+ * 事务所对本客户的收费 (APES 110 R410 的收费依赖与欠费), 金额为分.
+ */
+export type Fees = {
+    /**
+     * Audit Fee Cents
+     */
+    audit_fee_cents?: number;
+    /**
+     * Non Audit Fee Cents
+     */
+    non_audit_fee_cents?: number;
+    /**
+     * Firm Total Fee Cents
+     */
+    firm_total_fee_cents?: number;
+    /**
+     * Dependency Pct By Year
+     */
+    dependency_pct_by_year?: {
+        [key: string]: number;
+    };
+    /**
+     * Overdue Cents
+     */
+    overdue_cents?: number;
+    /**
+     * Overdue Days
+     */
+    overdue_days?: number;
+    /**
+     * Contingent
+     */
+    contingent?: boolean;
+    /**
+     * Referral Source
+     */
+    referral_source?: string | null;
+    /**
+     * Referral Source Fees Pct By Year
+     */
+    referral_source_fees_pct_by_year?: {
+        [key: string]: number;
+    };
+};
+
+/**
  * GateDecision
  *
  * 审计师在闸门作出的决定, 附该闸门特有的内容 (重要性, 意见类型, 批注等).
@@ -1512,6 +1741,42 @@ export type GateView = {
     } & CompletionMaterial) | ({
         kind: 'RPT-01';
     } & ReportMaterial);
+};
+
+/**
+ * Governance
+ *
+ * 治理层的构成 (ASA 260 识别治理层, ACC-09).
+ */
+export type Governance = {
+    /**
+     * Body
+     */
+    body: string;
+    /**
+     * Members
+     */
+    members?: Array<GovernanceMember>;
+    /**
+     * All In Management
+     */
+    all_in_management?: boolean;
+};
+
+/**
+ * GovernanceMember
+ *
+ * 治理层的一名成员.
+ */
+export type GovernanceMember = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Also Management
+     */
+    also_management: boolean;
 };
 
 /**
@@ -1772,6 +2037,26 @@ export type JudgmentView = {
      * Hidden Fields
      */
     hidden_fields?: Array<string>;
+};
+
+/**
+ * KeyPerson
+ *
+ * 客户画像中的关键人员 (规格书第 4.3 节 key_personnel).
+ */
+export type KeyPerson = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Role
+     */
+    role: string;
+    /**
+     * Since
+     */
+    since?: string | null;
 };
 
 /**
@@ -2130,6 +2415,54 @@ export type PlanningMaterial = {
 };
 
 /**
+ * PriorEstimateOutcome
+ *
+ * 以前年度会计估计的结果 (ASA 540 回顾性复核).
+ */
+export type PriorEstimateOutcome = {
+    /**
+     * Engagement
+     */
+    engagement: string;
+    /**
+     * Estimate
+     */
+    estimate: string;
+    /**
+     * Estimated Cents
+     */
+    estimated_cents: number;
+    /**
+     * Actual Cents
+     */
+    actual_cents: number;
+};
+
+/**
+ * PriorMisstatement
+ *
+ * 以前年度审计发现的错报.
+ */
+export type PriorMisstatement = {
+    /**
+     * Engagement
+     */
+    engagement: string;
+    /**
+     * Area
+     */
+    area: string;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    /**
+     * Corrected
+     */
+    corrected: boolean;
+};
+
+/**
  * Procedure
  *
  * 本项目中一条审计程序的实例, 如 REV-02. 模板见 knowledge/procedures/.
@@ -2479,6 +2812,26 @@ export type RerunIn = {
 };
 
 /**
+ * Retention
+ *
+ * 客户资料的留存安排 (APP 11.2).
+ */
+export type Retention = {
+    /**
+     * Created
+     */
+    created: string;
+    /**
+     * Review By
+     */
+    review_by: string;
+    /**
+     * Basis
+     */
+    basis: string;
+};
+
+/**
  * ReviewRecord
  *
  * 审计师对一个复核任务作出的决定及理由.
@@ -2709,6 +3062,30 @@ export type RunStatus = 'running' | 'succeeded' | 'failed';
  * 一次执行的起因.
  */
 export type RunTrigger = 'initial' | 'rerun';
+
+/**
+ * ServiceOrganisation
+ *
+ * 客户使用的服务机构 (ASA 402).
+ */
+export type ServiceOrganisation = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Service
+     */
+    service: string;
+    /**
+     * Report Type
+     */
+    report_type?: 'type1' | 'type2' | null;
+    /**
+     * Report Ref
+     */
+    report_ref?: string | null;
+};
 
 /**
  * StandardFragment

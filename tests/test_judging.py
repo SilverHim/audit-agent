@@ -232,7 +232,9 @@ def rev03(level: AutonomyLevel, review: ScriptedLLM | None) -> tuple[FieldworkAg
         "risk_register": NUMBAT_RISKS,
         "documents": EXTRACTED,
     }
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits(), profile=None
+    )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, procedure, ctx.template, run, state)  # type: ignore[arg-type]
 

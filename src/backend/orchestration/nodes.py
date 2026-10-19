@@ -23,6 +23,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     AuditObjective,
+    ClientProfile,
     Confirmation,
     Decision,
     Engagement,
@@ -110,16 +111,17 @@ def build_run(
     started_at: datetime,
     *,
     traits: DatasetTraits,
+    profile: ClientProfile | None,
 ) -> ProcedureRun:
     """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
 
     参数 = 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它为准).
-    解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits. 参数解析不了 (如重要性
-    尚未确定) 时抛错, 不建执行记录.
+    解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目
+    采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录.
     Procedure.params 深拷贝后叠加: 其中的列表与字典若与快照共用, 改一处会连带改到程序和历次执行的快照.
     """
     risk_level = highest_risk(state["audit_objectives"], procedure.objective_ids)
-    resolved = library.resolve_params(template, engagement, state, risk_level, traits=traits)
+    resolved = library.resolve_params(template, engagement, state, risk_level, traits=traits, profile=profile)
     params = {**resolved, **copy.deepcopy(procedure.params)}
     return next_run(procedure.id, state["procedure_runs"], params, started_at)
 
@@ -455,8 +457,18 @@ class GraphNodes:
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
         traits = self.deps.datasets.dataset_traits(engagement.dataset)
+        # 画像按本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用
+        version = state["client_profile_version"]
+        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
         procedure_run = build_run(
-            self.deps.library, template, procedure, engagement, state, datetime.now(UTC), traits=traits
+            self.deps.library,
+            template,
+            procedure,
+            engagement,
+            state,
+            datetime.now(UTC),
+            traits=traits,
+            profile=profile,
         )
         # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
         data_version = None

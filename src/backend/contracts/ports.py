@@ -438,8 +438,10 @@ class EngagementStore(Protocol):
         dataset: str,
         profile: ClientProfile,
     ) -> Engagement:
-        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id, client_profile_version = profile.version;
-        画像写入 client_profiles; phase = P0_Acceptance."""
+        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance. profile (数据集带的画像) 与
+        client_profiles 中该客户的各版比较内容 (不看版本号): 没有该客户时按 profile 写入; 有一版相同 (数据集没变)
+        沿用最新一版, 含审计师在 ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版 (最新版本 +1). 旧版本不改.
+        client_profile_version 为写入或沿用的那一版."""
         ...
 
     async def get(self, eid: str) -> Engagement | None: ...

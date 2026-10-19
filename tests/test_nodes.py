@@ -278,6 +278,7 @@ def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str,
         numbat_state(),
         NOW,
         traits=DatasetTraits(),
+        profile=None,
     )
 
     assert run.params_snapshot == expected
@@ -289,7 +290,14 @@ def test_build_run_literal_params_equal_yaml() -> None:
     lib = library()
 
     run = build_run(
-        lib, lib.load("PLN-07"), assembled(lib, "PLN-07"), ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits()
+        lib,
+        lib.load("PLN-07"),
+        assembled(lib, "PLN-07"),
+        ENGAGEMENT,
+        numbat_state(),
+        NOW,
+        traits=DatasetTraits(),
+        profile=None,
     )
 
     assert run.params_snapshot == lib.load("PLN-07").params
@@ -311,7 +319,14 @@ def test_build_run_uses_highest_linked_risk() -> None:
     lib = library()
 
     run = build_run(
-        lib, lib.load("REV-08"), assembled(lib, "REV-08", objectives), ENGAGEMENT, state, NOW, traits=DatasetTraits()
+        lib,
+        lib.load("REV-08"),
+        assembled(lib, "REV-08", objectives),
+        ENGAGEMENT,
+        state,
+        NOW,
+        traits=DatasetTraits(),
+        profile=None,
     )
 
     assert run.params_snapshot["window_days"] == 15
@@ -324,7 +339,7 @@ def test_build_run_rerun_params_override_template() -> None:
     lib = library()
     procedure = assembled(lib, "REV-08", params={"window_days": 25})
 
-    run = build_run(lib, lib.load("REV-08"), procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
+    run = build_run(lib, lib.load("REV-08"), procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits(), profile=None)
 
     assert run.params_snapshot == {"window_days": 25, "period_end": PERIOD_END}
     assert run.id == "RUN-REV-08-2"
@@ -337,9 +352,9 @@ def test_build_run_snapshot_not_shared_with_procedure() -> None:
     lib = library()
     template = lib.load("PLN-07")
     procedure = assembled(lib, "PLN-07", params={"revenue_categories": ["other_income"]})
-    first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
+    first = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits(), profile=None)
     state["procedure_runs"] = [first]
-    second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits())
+    second = build_run(lib, template, procedure, ENGAGEMENT, state, NOW, traits=DatasetTraits(), profile=None)
 
     second.params_snapshot["revenue_categories"].append("cost_of_sales")
 
@@ -361,6 +376,7 @@ def test_build_run_refuses_unset_materiality() -> None:
             numbat_state(False),
             NOW,
             traits=DatasetTraits(),
+            profile=None,
         )
 
 
@@ -377,6 +393,7 @@ def test_build_run_by_risk_without_objectives() -> None:
             numbat_state(),
             NOW,
             traits=DatasetTraits(),
+            profile=None,
         )
 
 
@@ -818,6 +835,56 @@ async def test_replay_keeps_stored_params_when_traits_change(tmp_path: Any) -> N
     assert stored is not None and stored.params_snapshot == REF_PARAMS
 
 
+# R127: 画像的两个版本; 第 2 版由同客户的另一个项目改出 (同 PUT /client-profile 的效果)
+PROFILE_V1 = NUMBAT_PROFILE.model_copy(update={"approval_limit_cents": 500000})
+PROFILE_V2 = PROFILE_V1.model_copy(update={"version": 2, "approval_limit_cents": 600000})
+
+
+def profile_nodes(tmp_path: Any) -> tuple[GraphNodes, RefSpy, FakeEngagementStore]:
+    """程序库带测试模板 X-REF (参数 limit 引 profile.approval_limit_cents) 的节点; 项目存储有画像第 1, 2 版."""
+    from tests.test_knowledge import REF_TEMPLATE, ref_library
+
+    template = REF_TEMPLATE.split("params:")[0] + "params:\n  limit: {ref: profile.approval_limit_cents}\n"
+    output_store = FakeOutputStore([make_procedure("X-REF", Phase.P1_Planning)])
+    engagement_store = FakeEngagementStore([PROFILE_V1, PROFILE_V2], [XERO_LIKE])
+    library = ref_library(tmp_path, template)
+    nodes = GraphNodes(make_deps(FakeRegistry(), FakeTrail(), engagement_store, output_store, library=library), 2)
+    spy = RefSpy(nodes.deps)
+    spy.runs = []
+    nodes.agents["X-REF"] = spy
+    return nodes, spy, engagement_store
+
+
+def profile_state(version: int) -> EngagementState:
+    return initial_state(XERO_LIKE, [make_procedure("X-REF", Phase.P1_Planning)], version)
+
+
+async def test_profile_refs_use_the_adopted_version(tmp_path: Any) -> None:
+    """建执行记录时按 state 的 client_profile_version 取画像解析 profile. 的 ref: 本项目采用第 1 版时为 500000,
+    同客户已有第 2 版 (600000) 也不受影响; execute 与 fieldwork 相同; 采用第 2 版时为 600000."""
+    nodes, spy, _ = profile_nodes(tmp_path / "execute")
+    [run] = (await nodes.execute(profile_state(1), "X-REF"))["procedure_runs"]
+    assert run.params_snapshot == {"limit": 500000} and spy.runs[0].params_snapshot == {"limit": 500000}
+
+    nodes, _, _ = profile_nodes(tmp_path / "fieldwork")
+    staged = await nodes.fieldwork({"instance": "fw-0-0", "procedure_ids": ["X-REF"], "state": profile_state(1)})
+    [result] = staged["staged_results"]
+    assert result["patch"]["procedure_runs"][0].params_snapshot == {"limit": 500000}
+
+    nodes, _, _ = profile_nodes(tmp_path / "v2")
+    [run] = (await nodes.execute(profile_state(2), "X-REF"))["procedure_runs"]
+    assert run.params_snapshot == {"limit": 600000}
+
+
+async def test_profile_ref_without_value_does_not_build_a_run(tmp_path: Any) -> None:
+    """采用的画像没有审批限额 (参数没写 optional): 解析抛 ValueError, 不建执行记录, 不调 Agent."""
+    nodes, spy, store = profile_nodes(tmp_path)
+    store.profiles = [NUMBAT_PROFILE]
+    with pytest.raises(ValueError, match="approval_limit_cents 尚未确定"):
+        await nodes.execute(profile_state(1), "X-REF")
+    assert spy.runs == []
+
+
 def test_numbat_params_do_not_depend_on_traits() -> None:
     """Numbat 的 18 条程序都不引 dataset., 用第 5.2 节的声明或缺省声明建执行记录, 参数相同 (验收 7 的守卫)."""
     from tests.test_knowledge import design_traits
@@ -826,6 +893,10 @@ def test_numbat_params_do_not_depend_on_traits() -> None:
     assert len(lib.all()) == 18
     for template in lib.all():
         procedure = assembled(lib, template.id)
-        default = build_run(lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits())
-        declared = build_run(lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=design_traits())
+        default = build_run(
+            lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits(), profile=None
+        )
+        declared = build_run(
+            lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=design_traits(), profile=None
+        )
         assert declared.params_snapshot == default.params_snapshot, template.id

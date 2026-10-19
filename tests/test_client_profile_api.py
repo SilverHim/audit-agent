@@ -1,9 +1,10 @@
-"""客户资料 (R2): GET /engagements/{eid}/client-profile.
+"""客户资料 (R2): GET /engagements/{eid}/client-profile; PUT 时没给的字段沿用被替代的那一版 (R127).
 
 画像, 评分卡与历史用 Xero Demo Company 快照的项目 (本机没有快照时跳过); 过了 ACC-01 之后不可编辑用 Numbat:
 Xero 项目过 ACC-01 后的计划阶段在测试替身里取的是 Numbat 的财务数据, 两者混用说明不了问题.
 """
 
+from pathlib import Path
 from typing import Any
 
 from backend.contracts.models import ClientProfile
@@ -17,10 +18,14 @@ from tests.fakes import (
     xero_snapshot,
 )
 from tests.test_decisions import Started
+from tests.test_demo_default import CreatingEngagementStore
 from tests.test_flow import start_numbat
 
 EID = ENGAGEMENT.id
 URL = f"/api/v1/engagements/{EID}/client-profile"
+Q1 = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "client_profile.json"
+PERIOD = (ENGAGEMENT.period_start, ENGAGEMENT.period_end)
+ORIGINAL = ("legal_name", "abn", "entity_type", "industry_anzsic", "listed", "directors", "notes")  # 扩展前的 7 个字段
 
 
 async def xero_at_acc01() -> tuple[Started, ClientProfile]:
@@ -80,3 +85,100 @@ async def test_not_editable_after_acc01() -> None:
     assert view["profile"]["legal_name"] == "Numbat Electronic Components Pty Ltd"
     assert view["scorecard"]["exception_ids"] == []
     assert view["editable"] is False
+
+
+async def q1_at_acc01() -> tuple[Started, ClientProfile]:
+    """补造画像 CLIENT-XERO-3C1332BB-Q1 v1 (带扩展字段: 审批限额 500000, 上期未审) 的项目跑完 ACC-04, 停在 ACC-01.
+    项目存储能再建项目 (采用画像的规则同 PostgresEngagementStore.create)."""
+    profile = ClientProfile.model_validate_json(Q1.read_bytes())
+    _, engagement = xero_engagement(xero_snapshot())
+    engagement = engagement.model_copy(update={"client_id": profile.id, "client_profile_version": profile.version})
+    engagement_store = CreatingEngagementStore([profile], [engagement])
+    runner, store = make_runner(engagement_store=engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    return Started(runner, store, engagement_store), profile
+
+
+def original_body(profile: ClientProfile, version: int, **changes: Any) -> dict[str, Any]:
+    """只有扩展前 7 个字段 (与版本号) 的请求体."""
+    body = profile.model_dump(mode="json", include=set(ORIGINAL))
+    return {**body, "version": version, **changes}
+
+
+async def test_update_without_extension_fields_keeps_them() -> None:
+    """请求体只给原有 7 个字段: 新版本画像的扩展字段等于被替代的那一版 (审批限额仍为 500000, 上期未审照旧)."""
+    s, profile = await q1_at_acc01()
+    async with api_client(s.runner) as client:
+        saved = await client.put(URL, json=original_body(profile, 2, directors=["Owner A"]))
+        assert saved.status_code == 202
+        await wait_idle(s.runner, EID)
+    second = await s.engagement_store.client_profile(profile.id, 2)
+    assert second is not None and second.directors == ["Owner A"]
+    assert (second.approval_limit_cents, second.prior_period_audited) == (500000, False)
+    assert second.model_dump(exclude={"version", "directors"}) == profile.model_dump(exclude={"version", "directors"})
+
+
+async def test_update_overrides_only_given_extension_fields() -> None:
+    """给出的字段覆盖, 给 null 的可空字段清空, 没给的沿用; 再改一版时以第 2 版为底, 不回到第 1 版."""
+    s, profile = await q1_at_acc01()
+    async with api_client(s.runner) as client:
+        body = profile_body(profile, approval_limit_cents=600000, prior_period_audited=None)
+        assert (await client.put(URL, json=body)).status_code == 202
+        await wait_idle(s.runner, EID)
+        second = await s.engagement_store.client_profile(profile.id, 2)
+        assert second is not None and (second.approval_limit_cents, second.prior_period_audited) == (600000, None)
+        assert second.fees == profile.fees and second.related_parties == profile.related_parties
+
+        notes = {k: v for k, v in original_body(second, 3).items() if k != "notes"}  # notes 也可省略
+        assert (await client.put(URL, json=notes)).status_code == 202
+        await wait_idle(s.runner, EID)
+    third = await s.engagement_store.client_profile(profile.id, 3)
+    assert third is not None and third.model_dump(exclude={"version"}) == second.model_dump(exclude={"version"})
+
+
+async def test_new_engagement_adopts_the_auditor_edited_profile() -> None:
+    """审计师在项目 A 的 ACC-01 改过画像 (第 2 版) 后, 用同一数据集建项目 B: 数据集画像与第 1 版相同, B 采用改后的
+    第 2 版, 不把数据集原样写成新一版; A 之后再改也以第 2 版为底 (R127 第 1 轮审核 R127-01)."""
+    s, profile = await q1_at_acc01()
+    async with api_client(s.runner) as client:
+        body = original_body(profile, 2, approval_limit_cents=600000)
+        assert (await client.put(URL, json=body)).status_code == 202
+        await wait_idle(s.runner, EID)
+        store = s.engagement_store
+        assert isinstance(store, CreatingEngagementStore)
+        b = await store.create(
+            owner_id="USR-B",
+            period_start=PERIOD[0],
+            period_end=PERIOD[1],
+            dataset="xero/20261017-q1",
+            profile=profile,  # 数据集带的画像, 即第 1 版原样
+        )
+        assert b.client_profile_version == 2
+        assert [p.version for p in store.profiles if p.id == profile.id] == [1, 2]  # 没有多写版本
+
+        assert (await client.put(URL, json=original_body(profile, 3, directors=["Owner A"]))).status_code == 202
+        await wait_idle(s.runner, EID)
+    third = await s.engagement_store.client_profile(profile.id, 3)
+    assert third is not None and (third.approval_limit_cents, third.directors) == (600000, ["Owner A"])
+
+
+async def test_update_rejects_invalid_merged_profile() -> None:
+    """合并后不合 ClientProfile (财年末不是合法月日): 422 INVALID_VALUE, 不出新版本."""
+    s, profile = await q1_at_acc01()
+    async with api_client(s.runner) as client:
+        response = await client.put(URL, json=original_body(profile, 2, financial_year_end="13-01"))
+    assert response.status_code == 422 and response.json()["detail"]["code"] == "INVALID_VALUE"
+    assert await s.engagement_store.client_profile(profile.id, 2) is None
+
+
+def test_client_profile_in_has_every_profile_field() -> None:
+    """ClientProfileIn 与 ClientProfile 的字段 (去掉 id) 一一对应, 类型相同; 原有 6 个字段之外都可省略."""
+    from backend.api.schemas import ClientProfileIn
+
+    model = {k: f for k, f in ClientProfile.model_fields.items() if k != "id"}
+    assert list(ClientProfileIn.model_fields) == list(model)
+    for name, field in ClientProfileIn.model_fields.items():
+        assert field.annotation == model[name].annotation, name
+    required = {k for k, f in ClientProfileIn.model_fields.items() if f.is_required()}
+    assert required == {"version", *ORIGINAL} - {"notes"}

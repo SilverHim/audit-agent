@@ -60,6 +60,7 @@ from tests.fakes import (
     make_runner,
     numbat_p1_agents,
     numbat_pln01_with,
+    profile_update,
     wait_idle,
 )
 
@@ -278,7 +279,7 @@ FIXED_PROFILE = NUMBAT_PROFILE.model_copy(update={"version": 2})  # 名称改对
 async def test_update_profile_reruns_acc04_and_represents() -> None:
     s = await started(TYPO_PROFILE)
 
-    await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
     assert s.runner.is_running(EID)
     await wait_idle(s.runner, EID)
 
@@ -296,7 +297,7 @@ async def test_update_profile_reruns_acc04_and_represents() -> None:
 async def test_update_profile_then_approve_reaches_p1() -> None:
     """需求 2 全流程: 名称写错 → 更新资料重跑 → 绑定评分卡第 2 版承接 → 进入 P1."""
     s = await started(TYPO_PROFILE)
-    await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
     await wait_idle(s.runner, EID)
 
     await s.submit.submit(EID, acc01_decision(GateVerdict.approve, target_version=2))
@@ -321,7 +322,7 @@ async def test_update_profile_rejects_invalid(profile: ClientProfile, code: str)
     s = await started(TYPO_PROFILE)
 
     with pytest.raises(DecisionRejected) as e:
-        await s.submit.update_client_profile(EID, profile, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1")
 
     assert e.value.code == code
     assert await s.engagement_store.client_profile(ENGAGEMENT.client_id) == TYPO_PROFILE  # 没有保存
@@ -335,9 +336,47 @@ async def test_update_profile_only_at_acc01() -> None:
     await wait_idle(s.runner, EID)  # 已进入 P1, 停在 PLN-01/03 闸门
 
     with pytest.raises(DecisionRejected) as e:
-        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     assert e.value.code == "NOT_AT_GATE"
+
+
+BAD_YEAR_END = {"financial_year_end": "13-01"}  # 合并后不合 ClientProfile
+
+
+async def test_update_profile_merges_given_fields_onto_latest() -> None:
+    """changes 只给部分字段: 以最新一版为底合并, 没给的沿用; 合并后不合格报 INVALID_VALUE, 不保存."""
+    s = await started(TYPO_PROFILE)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, 2, BAD_YEAR_END, updated_by="U-1")
+    assert e.value.code == "INVALID_VALUE" and "financial_year_end" in str(e.value)
+    assert await s.engagement_store.client_profile(ENGAGEMENT.client_id, 2) is None
+
+    await s.submit.update_client_profile(EID, 2, {"legal_name": FIXED_PROFILE.legal_name}, updated_by="U-1")
+    await wait_idle(s.runner, EID)
+    assert await s.engagement_store.client_profile(ENGAGEMENT.client_id) == FIXED_PROFILE
+
+
+async def test_update_profile_checks_lock_gate_and_version_before_merging() -> None:
+    """合并后不合格 (财年末 13-01) 时, 版本过期, 不在闸门与项目锁定照样先报各自的错 (第 7 节顺序)."""
+    s = await started(TYPO_PROFILE)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, 3, BAD_YEAR_END, updated_by="U-1")  # 应为第 2 版
+    assert e.value.code == "VERSION_MISMATCH"
+
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve))
+    await wait_idle(s.runner, EID)  # 已进入 P1
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, 2, BAD_YEAR_END, updated_by="U-1")
+    assert e.value.code == "NOT_AT_GATE"
+
+    s = await started()
+    await s.submit.submit(EID, acc01_decision(GateVerdict.reject))
+    await wait_idle(s.runner, EID)  # 拒绝承接, 项目锁定
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.update_client_profile(EID, 2, BAD_YEAR_END, updated_by="U-1")
+    assert e.value.code == "ENGAGEMENT_LOCKED"
 
 
 async def test_submit_requires_resume_when_profile_ahead_of_checkpoint() -> None:
@@ -443,7 +482,7 @@ async def test_update_profile_version_conflict_releases_lock(monkeypatch: pytest
     monkeypatch.setattr(s.engagement_store, "save_profile", raced_save)
 
     with pytest.raises(DecisionRejected) as e:
-        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     assert e.value.code == "VERSION_MISMATCH"
     assert isinstance(e.value.__cause__, VersionConflict)
@@ -533,7 +572,7 @@ async def test_update_profile_adopts_version_in_one_commit() -> None:
     """画像新版本与本项目采用的版本在同一次提交; 留痕在提交后写, 防重复键为 客户-v版本."""
     s = await started(TYPO_PROFILE)
 
-    await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     [commit] = [c for c in s.output_store.commits if EngagementWrite("save_profile", "CLIENT-001", {"version": 2}) in c]
     assert commit == [
@@ -560,7 +599,7 @@ async def test_update_profile_rolled_back_when_adoption_fails(monkeypatch: pytes
     monkeypatch.setattr(s.engagement_store, "update", broken_update)
 
     with pytest.raises(RuntimeError, match="engagements 写入失败"):
-        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     assert await s.engagement_store.client_profile("CLIENT-001") == TYPO_PROFILE
     assert decision_trail(s) == []
@@ -581,7 +620,7 @@ async def test_shared_client_profile_update_does_not_block_other_engagement() ->
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
     await runner.start(EID)
     await wait_idle(runner, EID)
-    await submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
     await wait_idle(runner, EID)
 
     await runner.start(ENG2.id)
@@ -612,12 +651,14 @@ async def test_profile_update_elsewhere_does_not_pull_back_engagement_in_p1() ->
     await submit.submit(ENG2.id, acc01_decision(GateVerdict.approve, id="D-2"))
     await wait_idle(runner, ENG2.id)
 
-    await submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+    await submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
     await wait_idle(runner, EID)
 
     assert (await runner.app.aget_state(GraphRunner.config(ENG2.id))).next == ("gate_p1_risk",)
     with pytest.raises(DecisionRejected) as e:  # RESUME_REQUIRED 的检查在 NOT_AT_GATE 之前
-        await submit.update_client_profile(ENG2.id, FIXED_PROFILE.model_copy(update={"version": 3}), updated_by="U-2")
+        await submit.update_client_profile(
+            ENG2.id, *profile_update(FIXED_PROFILE.model_copy(update={"version": 3})), updated_by="U-2"
+        )
     assert e.value.code == "NOT_AT_GATE"
 
 

@@ -18,7 +18,15 @@ from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySo
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.agents.ingest import contract_id
 from backend.contracts.errors import EngagementLocked, VersionConflict
-from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
+from backend.contracts.models import (
+    AuditObjective,
+    ClientProfile,
+    DocumentType,
+    LlmSettings,
+    Reliability,
+    TrailEntry,
+    TrailKind,
+)
 from backend.contracts.ports import ConfirmationRequest
 from backend.contracts.records import Account, JournalEntry
 from backend.persistence import models as m
@@ -690,8 +698,9 @@ async def test_user_store_create_keeps_existing_account():
 
 
 async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
-    """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB v1 与
-    补造画像 CLIENT-XERO-3C1332BB-Q1 v1 并存, 不报 VersionConflict; 再建一次 (画像已在库中, 内容相同) 也照常."""
+    """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB 与
+    补造画像 CLIENT-XERO-3C1332BB-Q1 并存; 再建一次 (画像已在库中, 内容相同) 也照常. 不写死版本号 (R127): 库里
+    若存着补造画像改内容之前的版本, 建项目时会出新版本, 断言最新一版的内容等于补造画像, 项目采用最新一版."""
     url = os.getenv("TEST_DATABASE_URL")
     api = ROOT / "data/external/xero/api"
     if not url or not (api / "20261017-mock").exists() or not (api / "20261017-q1").exists():
@@ -713,19 +722,80 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
     )
     store = PostgresEngagementStore(engine)
     periods = {"xero/20261017-mock": date(2026, 11, 30), "xero/20261017-q1": date(2026, 9, 30)}
+    created = []
     for _ in range(2):
         for dataset, end in periods.items():
-            await store.create(
-                owner_id=user,
-                period_start=date(2026, 7, 1),
-                period_end=end,
-                dataset=dataset,
-                profile=loader.client_profile(dataset),
+            created.append(
+                await store.create(
+                    owner_id=user,
+                    period_start=date(2026, 7, 1),
+                    period_end=end,
+                    dataset=dataset,
+                    profile=loader.client_profile(dataset),
+                )
             )
-    mock = await store.client_profile("CLIENT-XERO-3C1332BB", 1)
-    q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1", 1)
+    mock = await store.client_profile("CLIENT-XERO-3C1332BB")
+    q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1")
     assert mock is not None and mock.legal_name == "Demo Company (AU)"
     assert q1 is not None and q1.legal_name == "Demo Company (AU) Pty Ltd" and q1.abn == "25900043021"
+    supplied = loader.client_profile("xero/20261017-q1")
+    assert q1.model_dump(exclude={"version"}) == supplied.model_dump(exclude={"version"})
+    assert q1.approval_limit_cents == 500000  # 扩展字段 (R127) 写进了库
+    adopted = {e.client_id: e.client_profile_version for e in created[2:]}  # 第二轮: 两份画像都已是最新一版
+    assert adopted == {mock.id: mock.version, q1.id: q1.version}
+    await engine.dispose()
+
+
+async def test_create_adopts_latest_profile_or_writes_a_new_version():
+    """R127: 建项目时数据集的画像与该客户的各版比较内容 (不看版本号): 有一版相同就沿用最新一版 (含审计师改过的),
+    都不同才写新一版 (版本 +1); 旧版本不改."""
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user, client = "USR-" + uuid4().hex, "CLIENT-R127-" + uuid4().hex[:8]
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="R127", password_hash="x", created_at=now()
+            )
+        )
+    store = PostgresEngagementStore(engine)
+    base = ClientProfile(
+        id=client,
+        legal_name="R127 Pty Ltd",
+        abn="12345678901",
+        entity_type="small_proprietary",
+        industry_anzsic="7000",
+        listed=False,
+        directors=["A"],
+    )
+
+    async def create(profile: ClientProfile) -> int:
+        engagement = await store.create(
+            owner_id=user, period_start=date(2026, 7, 1), period_end=date(2026, 9, 30), dataset="demo", profile=profile
+        )
+        return engagement.client_profile_version
+
+    async def latest() -> ClientProfile:
+        profile = await store.client_profile(client)
+        assert profile is not None
+        return profile
+
+    assert await create(base) == 1
+    assert await create(base) == 1  # 内容相同, 沿用
+    edited = base.model_copy(update={"version": 2, "directors": ["A", "B"]})
+    await store.save_profile(edited)  # 审计师在项目的 ACC-01 改了画像 (第 2 版)
+    assert await create(base) == 2  # 数据集没变 (同第 1 版): 沿用最新一版, 不把数据集原样盖回去
+    assert (await latest()).version == 2 and (await latest()).directors == ["A", "B"]
+    changed = base.model_copy(update={"approval_limit_cents": 500000})
+    assert await create(changed) == 3  # 数据集本身改了 (与各版都不同), 写第 3 版
+    assert await create(changed) == 3
+    assert await create(base) == 3  # 与第 1 版相同, 沿用最新一版, 不再多写
+    assert (await latest()).version == 3
+    first, second = await store.client_profile(client, 1), await store.client_profile(client, 2)
+    assert first is not None and first.approval_limit_cents is None and first.directors == ["A"]  # 旧版本不改
+    assert second == edited
     await engine.dispose()
 
 
