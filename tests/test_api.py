@@ -314,16 +314,18 @@ def test_missing_token(api: SimpleNamespace) -> None:
     assert api.client.get("/api/v1/users/me").status_code == 401
 
 
-def test_other_owners_engagement_is_not_found(api: SimpleNamespace) -> None:
-    response = api.client.get("/api/v1/engagements/ENG-2026-002", headers=_auth(api))
+@pytest.mark.parametrize(
+    ("path", "code"),
+    [
+        ("ENG-2026-002", "NOT_FOUND"),  # 别人的项目
+        ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
+        ("ENG-2026-001/gate", "NOT_AT_GATE"),  # 自己的项目, 不在闸门
+    ],
+)
+def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
+    response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
     assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "NOT_FOUND"
-
-
-def test_unknown_engagement_is_not_found(api: SimpleNamespace) -> None:
-    response = api.client.get("/api/v1/engagements/ENG-missing", headers=_auth(api))
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "NOT_FOUND"
+    assert response.json()["detail"]["code"] == code
 
 
 def test_trail_list_and_detail(api: SimpleNamespace) -> None:
@@ -349,12 +351,6 @@ def test_trail_list_and_detail(api: SimpleNamespace) -> None:
     for missing in ("TR-none", "TR-3"):  # TR-3 是别的项目的
         response = api.client.get(f"{base}/{missing}", headers=_auth(api))
         assert (response.status_code, response.json()["detail"]["code"]) == (404, "NOT_FOUND")
-
-
-def test_get_gate_when_absent(api: SimpleNamespace) -> None:
-    response = api.client.get("/api/v1/engagements/ENG-2026-001/gate", headers=_auth(api))
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "NOT_AT_GATE"
 
 
 @pytest.mark.parametrize(

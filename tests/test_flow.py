@@ -148,17 +148,6 @@ async def assert_numbat_result(s: Started) -> None:
     await assert_pack_synced(snapshot.values["procedure_pack"], store)
 
 
-async def test_numbat_p2_flow_reaches_fin01() -> None:
-    """验收 1, 2: 启动 → ACC-01 approve → PLN-01/03 approve → 逐条复核 → 停在 FIN-01 闸门前, 结果同第 7 节."""
-    s = await start_numbat()
-    await approve_materiality(s)
-    await wait_idle(s.runner, EID)
-
-    await review_all(s)
-
-    await assert_numbat_result(s)
-
-
 class BlockOnce(ScriptA6):
     """第一次执行在 execute 里等一个永远不会 set 的事件 (模拟 P2 中途卡住, 由测试取消); 之后照常."""
 
@@ -266,8 +255,8 @@ async def submit_gate(s: Started, decision: GateDecision, next_nodes: tuple[str,
 
 
 async def test_numbat_m2_flow_reaches_archive() -> None:
-    """验收 1-3: 启动 → ACC-01 → PLN-01/03 → 全部复核 → FIN-01 approve qualified → RPT-01 退回一次再批准 → 归档.
-    各阶段产出与演示结束时的汇总同合成数据集设计第 7 节."""
+    """验收 1-3: 启动 → ACC-01 → PLN-01/03 → 全部复核 → 停在 FIN-01 闸门前 (结果同第 7 节, 见 assert_numbat_result) →
+    FIN-01 approve qualified → RPT-01 退回一次再批准 → 归档. 各阶段产出与演示结束时的汇总同合成数据集设计第 7 节."""
     s = await start_numbat()
     await approve_materiality(s)
     await wait_idle(s.runner, EID)
