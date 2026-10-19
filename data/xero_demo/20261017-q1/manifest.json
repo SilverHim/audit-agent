@@ -531,7 +531,7 @@
     },
     {
       "path": "llm/DOC-CLASSIFY/ridgeway_order_CRM08-12.json",
-      "sha256": "f7254b2f434b828fbf8a5a7296d53defbbdd28ec00c1a4de5824d8b5c6ebabd1",
+      "sha256": "99d23405476bcab0c778407b6253d45e78fcf1c14b7ac1ffdfef67c71b836df8",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -552,7 +552,7 @@
     },
     {
       "path": "llm/DOC-CLASSIFY/vpa_rent_letter.json",
-      "sha256": "5a07fd6b96c43734e182d83158438a58dea2ae42d4e3f92aef6a7bbde8876378",
+      "sha256": "7ed150ebcbdd8b17e56a5652c5de81689e705766e1dd69557b5fa5150898229d",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
