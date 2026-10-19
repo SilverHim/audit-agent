@@ -56,6 +56,8 @@ SCOPE = "offline_access accounting.settings.read accounting.transactions.read"  
 DEMO = {"tenantId": "3c1332bb-175c-411a-83e8-1b6a809f05d1", "tenantName": "Demo Company (AU)"}  # 快照的组织
 OTHER = {"tenantId": "00000000-0000-4000-8000-000000000002", "tenantName": "Synthetic Trading Pty Ltd"}  # 合成
 THIRD = {"tenantId": "00000000-0000-4000-8000-000000000003", "tenantName": "Synthetic Holdings Pty Ltd"}  # 合成
+# 快照 organisation.json 中核对客户画像用的三项 (需求 R291); 其余字段不进留痕
+DEMO_ORG = {"name": "Demo Company (AU)", "legal_name": "Demo Company (AU)", "abn": "11111111138"}
 FRONT = "http://front.test"  # 合成: 前端地址
 START = datetime(2026, 12, 15, 1, 0, tzinfo=UTC)  # 固定时钟: 晚于快照期间截止日, 银行对账单只取一段
 API = "/api/v1/engagements/{eid}/data/xero"
@@ -371,6 +373,7 @@ async def test_callback_saves_connection_and_overview_connected(tmp_path: Path) 
             "scope": [],
             "syncing": False,
             "last_sync": None,
+            "profile_check": None,
         }
         await connect(http, c)
         source = await xero_source(http, c)
@@ -484,7 +487,12 @@ async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
         k.value for k in XERO_TABLES
     ]
     [done] = [e for e in c.trail.entries if e.payload.get("action") == "xero_synced"]
-    assert done.payload == {"action": "xero_synced", "tables": [k.value for k in XERO_TABLES], "skipped": {}}
+    assert done.payload == {
+        "action": "xero_synced",
+        "tables": [k.value for k in XERO_TABLES],
+        "skipped": {},
+        "organisation_info": DEMO_ORG,
+    }
 
 
 BANK = (TableKind.bank_accounts, TableKind.bank_transactions)
@@ -576,7 +584,12 @@ async def test_live_journals_forbidden_rebuilds_ledger_from_documents(tmp_path: 
     assert {k: len(written[k]) for k in BANK} == {k: EXPECTED_ROWS[k] for k in BANK}
     assert source["scope"] == [k.value for k in XERO_TABLES]
     [done] = [e for e in c.trail.entries if e.payload.get("action") == "xero_synced"]
-    assert done.payload == {"action": "xero_synced", "tables": [k.value for k in XERO_TABLES], "skipped": {}}
+    assert done.payload == {
+        "action": "xero_synced",
+        "tables": [k.value for k in XERO_TABLES],
+        "skipped": {},
+        "organisation_info": DEMO_ORG,
+    }
 
 
 @pytest.mark.parametrize("refresh_status", [400, 401])

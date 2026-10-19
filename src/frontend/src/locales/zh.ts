@@ -516,7 +516,7 @@ export const zh: Messages = {
     history: '版本记录',
     viewTrail: '在审计留痕中查看',
     entityTypes: { small_proprietary: '小型私人公司', large_proprietary: '大型私人公司', public: '公众公司' },
-    sources: { manual: '手工录入', dataset: '数据集', update: '审计师更新' },
+    sources: { manual: '手工录入', dataset: '数据集', update: '审计师更新', xero: 'Xero 带出' },
     notRecorded: '未记录',
   },
   projectsPage: {
@@ -816,6 +816,7 @@ export const zh: Messages = {
       disconnectTitle: '断开 Xero？',
       disconnectIntro: '断开后删除本项目的 Xero 令牌，并向 Xero 撤销授权；已同步的数据与版本保留。',
       lastResult: '上次结果',
+      profileCheck: '客户资料',
       lastOk: '成功',
       lastFailed: (reason, time) => `同步失败（${reason}），${time}`,
       skippedLine: (tables, reason) => `${tables}未写入：${reason}`,
@@ -967,6 +968,12 @@ export const zh: Messages = {
         write: '写入数据时出错',
       },
       xero_synced: (tables, reason) => `数据管理 · Xero 同步未写${tables}（${reason}）`,
+      xero_profile_kept: (version, reason) =>
+        `数据管理 · Xero 组织信息与客户画像不一致，保持第 ${version} 版（${reason}）`,
+      xero_profile_updated: (version, adopted) =>
+        adopted
+          ? `数据管理 · 已按 Xero 组织信息更新客户画像至第 ${version} 版，本项目采用`
+          : `数据管理 · 已按 Xero 组织信息给客户写第 ${version} 版画像，本项目仍用原版本`,
       syncSkipped: { paid_off: '未开通付费接口', statements_forbidden: '对账单接口无权限' },
       upload: (file) => `数据管理 · 已上传 ${file}`,
       not_imported: (files) => `数据管理 · 未导入 ${files}`,
@@ -1244,6 +1251,36 @@ export const zh: Messages = {
       type: '文件类型',
       reason: '原因',
       save: '保存',
+    },
+  },
+  xeroProfile: {
+    eyebrow: 'Xero 组织信息',
+    title: 'Xero 的组织信息与客户画像不一致',
+    intro: (time, version) =>
+      `按最近一次 Xero 同步（${time}）取到的组织信息，与本项目采用的客户画像第 ${version} 版比较，对不上的标红。`,
+    xero: 'Xero',
+    profile: (version) => `客户画像（第 ${version} 版）`,
+    fields: { legal_name: '法定名称', abn: 'ABN' },
+    noAbn: 'Xero 未提供 ABN',
+    update: '按 Xero 更新客户画像',
+    updateHere: (version) =>
+      `以 Xero 的法定名称与 ABN 存为第 ${version} 版，本项目采用，重新做承接核查（ACC-04）后再呈报承接决定。`,
+    updateBefore: (version, current) =>
+      `给客户存为第 ${version} 版；本项目仍用第 ${current} 版。本项目还没到承接决定：可先稍后处理，到承接决定（ACC-01）时再更新，本项目即采用。`,
+    updateAfter: (version, current) =>
+      `给客户存为第 ${version} 版（下一年度新建项目时带出）；本项目已过承接决定，仍用第 ${current} 版（承接核查与审计报告按它）。`,
+    keep: '保持客户画像不变',
+    keepHint: '写明保持原样的理由。',
+    kept: '已保持客户画像不变',
+    updated: '已按 Xero 更新客户画像',
+    workspaceIntro: '最近一次 Xero 同步取到的组织信息与客户画像不一致，请决定按 Xero 更新画像还是保持原样。',
+    item: 'Xero 组织信息核对',
+    status: {
+      consistent: '与客户画像一致',
+      pending: '与客户画像不一致，见下方',
+      kept: (reason) => `已保持原样：${reason}`,
+      adopted: (version) => `已按 Xero 更新客户画像至第 ${version} 版`,
+      clientOnly: (version, current) => `已给客户写第 ${version} 版；本项目仍用第 ${current} 版`,
     },
   },
   requests: {

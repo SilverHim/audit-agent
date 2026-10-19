@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from backend.contracts.data import DocumentDetailsEdit, TableKind
+from backend.contracts.data import DocumentDetailsEdit, TableKind, XeroProfileDecision
 from backend.contracts.errors import RegistryReason
 from backend.contracts.models import (
     AbnRecord,
@@ -299,15 +299,16 @@ class ReportBundle(Model):
     decisions: list[GateDecision]
 
 
-# 稍后处理的对象: 复核任务, 闸门 (阶段决定) 或补交资料请求
-DeferralTarget = Literal["review_task", "gate", "data_request"]
+# 稍后处理的对象: 复核任务, 闸门 (阶段决定), 补交资料请求或 Xero 组织信息核对 (需求 R291)
+DeferralTarget = Literal["review_task", "gate", "data_request", "xero_profile"]
 
 
 class DeferralIn(Model):
     """标记或取消稍后处理."""
 
     target_type: DeferralTarget
-    target_id: str  # 复核任务填任务 ID, 阶段决定填闸门编号 (如 ACC-01), 补交请求填请求 ID (如 REQ-approval_log)
+    # 复核任务填任务 ID, 阶段决定填闸门编号 (如 ACC-01), 补交请求填请求 ID (如 REQ-approval_log), Xero 核对填其 key
+    target_id: str
     deferred: bool  # true 标记, false 取消
 
 
@@ -380,6 +381,14 @@ class XeroDisconnected(Model):
     """断开 Xero (DELETE /data/xero)."""
 
     revoked: bool  # Xero 侧是否已撤销授权; 为 false 时本地令牌已删, 须到 Xero 后台的 Connected apps 手动移除
+
+
+class XeroProfileCheckIn(Model):
+    """审计师对 Xero 组织信息与客户画像核对的选择 (POST /data/xero/profile-check, 需求 R291)."""
+
+    key: str  # 看到的核对的 key (sources.xero.profile_check.key); 已不是当前的报 409 PROFILE_CHECK_STALE
+    decision: XeroProfileDecision  # keep 保持原样, update 按 Xero 更新画像
+    reason: str | None = None  # 保持原样的理由, keep 时必填
 
 
 class LlmSlotView(Model):

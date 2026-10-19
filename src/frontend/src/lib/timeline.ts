@@ -7,7 +7,7 @@ type TimelineEvent =
   | { kind: 'phase'; at: string; phase: Phase }
   | { kind: 'completed'; at: string; ids: string[] }
   | { kind: 'decision'; at: string; target: string; gate: GateId | null; verdict: string; reason: string | null }
-  | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null }
+  | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null; xero: boolean }
   | {
       kind: 'qa'
       at: string
@@ -28,8 +28,11 @@ type TimelineEvent =
       file: string | null
       organisation: string | null // Xero 连接, 选组织与断开的组织名
       revoked: boolean | null // Xero 断开时 Xero 侧是否已撤销授权
-      reason: string | null // Xero 同步失败的原因代码 (expired, xero_error, forbidden, settings_key, mapping, write)
+      reason: string | null // Xero 同步失败的原因代码 (expired, xero_error, forbidden, settings_key, mapping, write); 保持客户画像的理由
       skipped: Record<string, string> | null // Xero 同步没写的表 → 原因代码 (paid_off, statements_forbidden)
+      version: number | null // 按 Xero 组织信息写出的客户画像版本 (xero_profile_updated)
+      profileVersion: number | null // 保持原样时本项目采用的画像版本 (xero_profile_kept)
+      adopted: boolean | null // 按 Xero 更新时本项目是否采用了新版本
     }
 
 // key: 列表渲染用的 key, 取条目来源留痕的 ID (合并的程序完成取第一条), 刷新前后不变. 同类条目的时间可能相同
@@ -98,7 +101,9 @@ export function buildTimeline(entries: TrailEntryView[]): TimelineItem[] {
       const target = payload.target_type === 'review_task' ? subjectOfTask(id) : id
       // 补交请求 ID 固定为 REQ-{表种类或文件类型}, 显示时换成资料名
       const request = payload.target_type === 'data_request' ? id.replace(/^REQ-/, '') : null
-      items.push({ kind: 'deferral', key, at, target, deferred: payload.deferred === true, request })
+      // Xero 组织信息核对的 target_id 是核对的 key, 显示时换成事项名
+      const xero = payload.target_type === 'xero_profile'
+      items.push({ kind: 'deferral', key, at, target, deferred: payload.deferred === true, request, xero })
       continue
     }
     if (kind === 'data') {
@@ -117,6 +122,9 @@ export function buildTimeline(entries: TrailEntryView[]): TimelineItem[] {
         revoked: typeof payload.revoked === 'boolean' ? payload.revoked : null,
         reason: str(payload.reason),
         skipped: skippedTables(payload.skipped),
+        version: typeof payload.version === 'number' ? payload.version : null,
+        profileVersion: typeof payload.profile_version === 'number' ? payload.profile_version : null,
+        adopted: typeof payload.adopted === 'boolean' ? payload.adopted : null,
       })
       continue
     }

@@ -1638,7 +1638,7 @@ export type DeferralIn = {
     /**
      * Target Type
      */
-    target_type: 'review_task' | 'gate' | 'data_request';
+    target_type: 'review_task' | 'gate' | 'data_request' | 'xero_profile';
     /**
      * Target Id
      */
@@ -1658,7 +1658,7 @@ export type DeferralView = {
     /**
      * Target Type
      */
-    target_type: 'review_task' | 'gate' | 'data_request';
+    target_type: 'review_task' | 'gate' | 'data_request' | 'xero_profile';
     /**
      * Target Id
      */
@@ -3337,7 +3337,7 @@ export type ProcedureSummary = {
  *
  * 客户画像一版的来源 (client_profiles.source).
  */
-export type ProfileSource = 'manual' | 'dataset' | 'update';
+export type ProfileSource = 'manual' | 'dataset' | 'update' | 'xero';
 
 /**
  * ProfileVersionInfo
@@ -4350,6 +4350,96 @@ export type XeroDisconnected = {
 };
 
 /**
+ * XeroProfileCheck
+ *
+ * Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕
+ * xero_synced 的 organisation_info), 画像取本项目采用的版本; 断开后没再同步为空. differences 不为空且 resolution
+ * 为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或画像版本变了, key 跟着变, 再次提示.
+ */
+export type XeroProfileCheck = {
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Xero Name
+     */
+    xero_name: string;
+    /**
+     * Xero Legal Name
+     */
+    xero_legal_name: string;
+    /**
+     * Xero Abn
+     */
+    xero_abn?: string | null;
+    /**
+     * Profile Version
+     */
+    profile_version: number;
+    /**
+     * Profile Legal Name
+     */
+    profile_legal_name: string;
+    /**
+     * Profile Abn
+     */
+    profile_abn: string;
+    /**
+     * Differences
+     */
+    differences?: Array<'legal_name' | 'abn'>;
+    /**
+     * Checked At
+     */
+    checked_at: string;
+    /**
+     * Resolution
+     */
+    resolution?: 'kept' | 'updated' | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Resolved By
+     */
+    resolved_by?: string | null;
+    /**
+     * Resolved At
+     */
+    resolved_at?: string | null;
+    /**
+     * Updated Version
+     */
+    updated_version?: number | null;
+    /**
+     * Adopted
+     */
+    adopted?: boolean | null;
+};
+
+/**
+ * XeroProfileCheckIn
+ *
+ * 审计师对 Xero 组织信息与客户画像核对的选择 (POST /data/xero/profile-check, 需求 R291).
+ */
+export type XeroProfileCheckIn = {
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Decision
+     */
+    decision: 'keep' | 'update';
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
  * XeroSource
  *
  * 数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections).
@@ -4380,6 +4470,7 @@ export type XeroSource = {
      */
     syncing?: boolean;
     last_sync?: XeroSyncResult | null;
+    profile_check?: XeroProfileCheck | null;
 };
 
 /**
@@ -6296,6 +6387,38 @@ export type DataXeroSyncResponses = {
 };
 
 export type DataXeroSyncResponse = DataXeroSyncResponses[keyof DataXeroSyncResponses];
+
+export type DataXeroProfileCheckData = {
+    body: XeroProfileCheckIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero/profile-check';
+};
+
+export type DataXeroProfileCheckErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroProfileCheckError = DataXeroProfileCheckErrors[keyof DataXeroProfileCheckErrors];
+
+export type DataXeroProfileCheckResponses = {
+    /**
+     * Response Data-Xero Profile Check
+     *
+     * Successful Response
+     */
+    200: XeroProfileCheck | null;
+};
+
+export type DataXeroProfileCheckResponse = DataXeroProfileCheckResponses[keyof DataXeroProfileCheckResponses];
 
 export type DataXeroDisconnectData = {
     body?: never;

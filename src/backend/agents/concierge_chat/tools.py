@@ -42,11 +42,13 @@ from backend.contracts.models import (
     TrailKind,
     UncorrectedSchedule,
 )
+from backend.contracts.ports import XeroConnections
 from backend.contracts.views import EngagementOverview, GateView, JudgmentView, TrailEntryView
 from backend.services.deferrals import active_deferrals, target_of
 from backend.services.features import COLLAB
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, ROW_EVIDENCE
 from backend.services.trail_pages import all_of_kind
+from backend.services.xero_profile import pending as pending_check
 
 
 class StateReader(Protocol):
@@ -65,6 +67,7 @@ class ToolEnv:
     deps: AgentDeps  # 存储与程序库
     state: StateReader  # 项目位置与闸门材料
     max_chars: int  # 单个工具结果的最多字符数
+    xero: XeroConnections | None = None  # Xero 连接记录 (组织信息核对, 需求 R291); 为空时待办里没有这一类
 
 
 @dataclass(frozen=True)
@@ -324,16 +327,20 @@ async def get_gate(env: ToolEnv, args: NoArgs) -> Found:
 
 
 async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
-    """待人处理的事项, 按 阶段决定 → 补交请求 (A3 提出, 待补交的) → 复核任务 的顺序, 同工作台; 各项标明是否已标记
-    稍后处理. 补交请求按 DataStore.requests 的顺序 (提出时间, 同批按固定顺序). 复核任务按创建时间, 项目开了功能
-    collab 时争议任务 (dispute) 排在其余复核任务之前."""
+    """待人处理的事项, 按 阶段决定 → 补交请求 (A3 提出, 待补交的) → Xero 组织信息与客户画像的核对 (待处理的, 需求
+    R291; 锁定的项目不列) → 复核任务 的顺序, 同工作台; 各项标明是否已标记稍后处理. 补交请求按 DataStore.requests
+    的顺序 (提出时间, 同批按固定顺序). 复核任务按创建时间, 项目开了功能 collab 时争议任务 (dispute) 排在其余复核
+    任务之前."""
     deps, eid = env.deps, env.eid
     overview = await env.state.overview(eid)
     tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
     decisions = await deps.output_store.latest(eid, GateDecision)
     requests = await deps.data.requests(eid)
     entries = await all_of_kind(deps.trail, eid, TrailKind.deferral)
-    active = active_deferrals(entries, tasks, overview.current_gate, decisions, {r.id: r for r in requests})
+    xero = pending_check((await env.xero.source(eid)).profile_check) if env.xero is not None else None
+    xero = None if overview.engagement.locked else xero
+    by_id = {r.id: r for r in requests}
+    active = active_deferrals(entries, tasks, overview.current_gate, decisions, by_id, xero.key if xero else None)
     deferred = {target_of(e) for e in active}
     cites: dict[str, ConciergeCitation] = {}
     items: list[dict[str, Any]] = []
@@ -359,6 +366,20 @@ async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
         )
         for pid in request.used_for:
             cites.setdefault(pid, cite_procedure(pid, procedure_name(env, pid)))
+    if xero is not None:
+        items.append(
+            {
+                "type": "xero_profile",
+                "key": xero.key,
+                "differences": xero.differences,
+                "xero_legal_name": xero.xero_legal_name,
+                "xero_abn": xero.xero_abn,
+                "profile_version": xero.profile_version,
+                "profile_legal_name": xero.profile_legal_name,
+                "profile_abn": xero.profile_abn,
+                "deferred": ("xero_profile", xero.key) in deferred,
+            }
+        )
     # 复核任务按创建时间; 功能 collab 打开时争议任务单列在前 (争议之间按创建时间, 不按置信度或金额)
     disputes_first = COLLAB in overview.features
     pending = sorted(

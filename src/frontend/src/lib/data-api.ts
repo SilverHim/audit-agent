@@ -27,6 +27,7 @@ import {
   dataStartImport,
   dataXeroConnect,
   dataXeroDisconnect,
+  dataXeroProfileCheck,
   dataXeroSync,
   dataXeroTenant,
   evidenceEditConfirmation,
@@ -43,6 +44,7 @@ import type {
   ExtractionEdit,
   ImportCommit,
   TableKind,
+  XeroProfileCheckIn,
 } from '@/client/types.gen'
 import { invalidateEngagement } from '@/lib/engagement'
 import type { Messages } from '@/locales/en'
@@ -128,6 +130,16 @@ export function useXeroSync(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async () => (await dataXeroSync({ path: { eid }, throwOnError: true })).data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+// Xero 组织信息与客户画像核对的选择 (后端 R291): 保持原样 (写理由) 或按 Xero 更新画像; 返回处理后的核对
+export function useXeroProfileCheck(eid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: XeroProfileCheckIn) =>
+      (await dataXeroProfileCheck({ path: { eid }, body, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

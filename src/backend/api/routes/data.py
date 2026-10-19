@@ -1,12 +1,13 @@
 """数据管理接口 (需求 R10-R16, R277): /engagements/{eid}/data 下的概览, 导入, 智能导入的批次, 补交请求与就绪确认,
-Xero 的连接, 选组织, 同步与断开 (需求 R279; 授权回调在 integrations.py); /data/schemas."""
+Xero 的连接, 选组织, 同步与断开 (需求 R279; 授权回调在 integrations.py), Xero 组织信息与客户画像的核对 (需求 R291);
+/data/schemas."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from backend.agents.base import AgentDeps
-from backend.api.deps import current_user, get_data_service, get_deps, get_xero, owned_engagement
+from backend.api.deps import current_user, get_data_service, get_decisions, get_deps, get_xero, owned_engagement
 from backend.api.errors import api_error, catch_api
 from backend.api.schemas import (
     AccountCategoryIn,
@@ -15,6 +16,7 @@ from backend.api.schemas import (
     RequestUnavailableIn,
     XeroAuthorize,
     XeroDisconnected,
+    XeroProfileCheckIn,
     XeroSyncStarted,
     XeroTenantIn,
 )
@@ -31,10 +33,12 @@ from backend.contracts.data import (
     TableKind,
     TablePage,
     TableSchema,
+    XeroProfileCheck,
     XeroSource,
     XeroTenant,
 )
 from backend.contracts.models import Engagement, User
+from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.services import data_import
 from backend.services.data_service import DataService, schemas
 from backend.services.xero_link import XeroLink
@@ -330,6 +334,22 @@ async def xero_sync(
     Xero 连不上 502 XERO_UNAVAILABLE; 锁定 423; 忙 (含另一同步或导入) 409 ENGAGEMENT_BUSY."""
     async with catch_api():
         return XeroSyncStarted(tables=await xero.sync(engagement.id, user.id))
+
+
+@router.post("/xero/profile-check")
+async def xero_profile_check(
+    body: XeroProfileCheckIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
+) -> XeroProfileCheck | None:
+    """对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由
+    (空 422 MISSING_FIELD); update 按 Xero 的法定名称与 ABN 出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并
+    重跑 ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接
+    409 XERO_NOT_CONNECTED; 停在 ACC-01 时同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH)."""
+    async with catch_api():
+        return await xero.resolve_profile(engagement.id, body.key, body.decision, body.reason, user.id, decisions)
 
 
 @router.delete("/xero")

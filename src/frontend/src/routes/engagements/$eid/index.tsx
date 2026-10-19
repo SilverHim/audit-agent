@@ -8,7 +8,7 @@ import {
   reviewsListExceptionsOptions,
   reviewsListReviewTasksOptions,
 } from '@/client/@tanstack/react-query.gen'
-import type { ConciergeCitation, EngagementOverview, GateView } from '@/client/types.gen'
+import type { ConciergeCitation, EngagementOverview, GateView, XeroProfileCheck } from '@/client/types.gen'
 import { Code, StatusPill } from '@/components/chrome'
 import {
   ConciergeMessage,
@@ -24,7 +24,8 @@ import { EvidenceLink } from '@/components/evidence-link'
 import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
 import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { type DataRequest, useDataRequests } from '@/lib/data-api'
+import { XeroProfileCard } from '@/components/xero-profile'
+import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-api'
 import { decisionsDisabled } from '@/lib/engagement'
 import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -34,6 +35,7 @@ import { type RankedTask, rankTasks } from '@/lib/review'
 import { buildTimeline, type TimelineItem } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
 import { skippedByReason } from '@/lib/xero'
+import { acceptanceStage, pendingCheck } from '@/lib/xero-profile'
 import type { Messages } from '@/locales/en'
 
 type Search = { focus?: string }
@@ -55,6 +57,7 @@ type Current =
       awaiting: boolean
       deferred: boolean
     }
+  | { kind: 'xero'; key: string; check: XeroProfileCheck; deferred: boolean }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
 
 type Turn = {
@@ -80,6 +83,7 @@ function Workspace() {
   const deferrals = useDeferrals(eid)
   const setDeferral = useSetDeferral(eid)
   const requests = useDataRequests(eid)
+  const summary = useDataSummary(eid)
   const [turns, setTurns] = useState<Turn[]>([])
   const bottom = useRef<HTMLDivElement>(null)
   const currentRef = useRef<HTMLDivElement>(null)
@@ -104,12 +108,18 @@ function Workspace() {
       const deferred = open.length > 0 && open.every((item) => deferredKeys.has(`request:${item.id}`))
       list.push({ kind: 'requests', key: 'requests', requests: open, marked, awaiting, deferred })
     }
+    // Xero 组织信息与客户画像不一致 (后端 R291): 排在补交资料之后, 复核任务之前; 锁定的项目不提示
+    const check = pendingCheck(summary.data?.sources.xero, Boolean(overview?.engagement.locked))
+    if (check) {
+      const key = `xero:${check.key}`
+      list.push({ kind: 'xero', key, check, deferred: deferredKeys.has(key) })
+    }
     for (const item of ranked) {
       const key = `task:${item.view.task.id}`
       list.push({ kind: 'task', key, ranked: item, deferred: deferredKeys.has(key) })
     }
     return list
-  }, [overview, gate.data, ranked, deferredKeys, requests.data])
+  }, [overview, gate.data, ranked, deferredKeys, requests.data, summary.data])
 
   const current =
     candidates.find((item) => item.key === focus || (item.kind === 'requests' && focus?.startsWith('request:'))) ??
@@ -142,7 +152,9 @@ function Workspace() {
         ? [{ target_type: 'gate' as const, target_id: item.view.gate }]
         : item.kind === 'requests'
           ? item.requests.map((request) => ({ target_type: 'data_request' as const, target_id: request.id }))
-          : [{ target_type: 'review_task' as const, target_id: item.ranked.view.task.id }]
+          : item.kind === 'xero'
+            ? [{ target_type: 'xero_profile' as const, target_id: item.check.key }]
+            : [{ target_type: 'review_task' as const, target_id: item.ranked.view.task.id }]
     Promise.all(targets.map((target) => setDeferral.mutateAsync({ ...target, deferred: true }))).then(
       () => {
         toast.success(t.toasts.deferred)
@@ -184,7 +196,12 @@ function Workspace() {
     }
   }
 
-  const formView = current?.kind === 'gate' ? '/engagements/$eid/gate' : '/engagements/$eid/decisions'
+  const formView =
+    current?.kind === 'gate'
+      ? '/engagements/$eid/gate'
+      : current?.kind === 'xero'
+        ? '/engagements/$eid/data'
+        : '/engagements/$eid/decisions'
   const pendingLabel = overview?.current_gate
     ? (t.gates[overview.current_gate] ?? overview.current_gate)
     : overview && overview.pending_tasks > 0
@@ -236,8 +253,7 @@ function Workspace() {
               eid={eid}
               overview={overview}
               current={current}
-              total={candidates.length}
-              requestCount={candidates.some((item) => item.kind === 'requests') ? 1 : 0}
+              reviewTotal={candidates.filter((item) => item.kind === 'task').length}
               deferredCount={deferredCount}
               disabled={disabled}
               onDefer={defer}
@@ -320,6 +336,10 @@ function dataEventText(item: DataItem, t: Messages, lang: 'zh' | 'en'): string |
       return item.skipped ? skippedText(item.skipped, t, lang) : null // 写了的表各有一条 sync, 这里只说没写的
     case 'xero_disconnect':
       return events.xero_disconnect(item.revoked !== false)
+    case 'xero_profile_kept':
+      return events.xero_profile_kept(item.profileVersion ?? 0, item.reason ?? '')
+    case 'xero_profile_updated':
+      return events.xero_profile_updated(item.version ?? 0, item.adopted === true)
     case 'upload':
       return events.upload(item.file ?? '')
     case 'edit':
@@ -360,9 +380,11 @@ function HistoryItem({
   if (item.kind === 'completed')
     return <EventLine>{t.workspace.completed(item.ids.join(lang === 'zh' ? '、' : ', '))}</EventLine>
   if (item.kind === 'deferral') {
-    const target = item.request
-      ? (t.data.tables[item.request] ?? t.data.docTypes[item.request] ?? item.target)
-      : item.target
+    const target = item.xero
+      ? t.xeroProfile.item
+      : item.request
+        ? (t.data.tables[item.request] ?? t.data.docTypes[item.request] ?? item.target)
+        : item.target
     return <EventLine>{item.deferred ? t.workspace.deferredEvent(target) : t.workspace.resumedEvent(target)}</EventLine>
   }
   if (item.kind === 'data') {
@@ -432,19 +454,17 @@ function CurrentItem({
   eid,
   overview,
   current,
-  total,
+  reviewTotal,
   deferredCount,
   disabled,
   onDefer,
   deferring,
   onOpenDeferred,
-  requestCount,
 }: {
   eid: string
   overview: EngagementOverview | undefined
   current: Current | null
-  requestCount: number
-  total: number
+  reviewTotal: number
   deferredCount: number
   disabled: boolean
   onDefer: (item: Current) => void
@@ -531,7 +551,27 @@ function CurrentItem({
     )
   }
 
-  const reviewTotal = total - (overview.current_gate ? 1 : 0) - (requestCount ? 1 : 0)
+  if (current.kind === 'xero') {
+    return (
+      <div className="flex flex-col gap-4">
+        <ConciergeMessage>
+          <ConciergeText>{t.xeroProfile.workspaceIntro}</ConciergeText>
+        </ConciergeMessage>
+        <XeroProfileCard
+          key={current.check.key}
+          eid={eid}
+          check={current.check}
+          stage={acceptanceStage(overview)}
+          disabled={disabled}
+          inset
+          deferred={current.deferred}
+          onDefer={() => onDefer(current)}
+          deferring={deferring}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <ConciergeMessage>

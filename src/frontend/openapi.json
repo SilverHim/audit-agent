@@ -1066,7 +1066,7 @@
           "deferrals"
         ],
         "summary": "List Deferrals",
-        "description": "当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 或补交请求已收到的, 自动不在其中.",
+        "description": "当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 补交请求已收到, 或 Xero 核对已处理 (或已变) 的,\n自动不在其中.",
         "operationId": "deferrals-list_deferrals",
         "security": [
           {
@@ -1116,7 +1116,7 @@
           "deferrals"
         ],
         "summary": "Set Deferral",
-        "description": "标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.\n\n项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;\n闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;\n取消从未标记过的目标 404 NOT_FOUND.",
+        "description": "标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.\n\n项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;\n闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;\nXero 核对不是当前待处理的那一次 409 PROFILE_CHECK_STALE; 取消从未标记过的目标 404 NOT_FOUND.",
         "operationId": "deferrals-set_deferral",
         "security": [
           {
@@ -3277,6 +3277,72 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/XeroSyncStarted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/xero/profile-check": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Profile Check",
+        "description": "对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由\n(空 422 MISSING_FIELD); update 按 Xero 的法定名称与 ABN 出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并\n重跑 ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接\n409 XERO_NOT_CONNECTED; 停在 ACC-01 时同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH).",
+        "operationId": "data-xero_profile_check",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/XeroProfileCheckIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/XeroProfileCheck"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Data-Xero Profile Check"
                 }
               }
             }
@@ -7074,7 +7140,8 @@
             "enum": [
               "review_task",
               "gate",
-              "data_request"
+              "data_request",
+              "xero_profile"
             ],
             "title": "Target Type"
           },
@@ -7104,7 +7171,8 @@
             "enum": [
               "review_task",
               "gate",
-              "data_request"
+              "data_request",
+              "xero_profile"
             ],
             "title": "Target Type"
           },
@@ -10138,7 +10206,8 @@
         "enum": [
           "manual",
           "dataset",
-          "update"
+          "update",
+          "xero"
         ],
         "title": "ProfileSource",
         "description": "客户画像一版的来源 (client_profiles.source)."
@@ -11972,6 +12041,181 @@
         "title": "XeroDisconnected",
         "description": "断开 Xero (DELETE /data/xero)."
       },
+      "XeroProfileCheck": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "xero_name": {
+            "type": "string",
+            "title": "Xero Name"
+          },
+          "xero_legal_name": {
+            "type": "string",
+            "title": "Xero Legal Name"
+          },
+          "xero_abn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xero Abn"
+          },
+          "profile_version": {
+            "type": "integer",
+            "title": "Profile Version"
+          },
+          "profile_legal_name": {
+            "type": "string",
+            "title": "Profile Legal Name"
+          },
+          "profile_abn": {
+            "type": "string",
+            "title": "Profile Abn"
+          },
+          "differences": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "legal_name",
+                "abn"
+              ]
+            },
+            "type": "array",
+            "title": "Differences",
+            "default": []
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "kept",
+                  "updated"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "updated_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Version"
+          },
+          "adopted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adopted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "xero_name",
+          "xero_legal_name",
+          "profile_version",
+          "profile_legal_name",
+          "profile_abn",
+          "checked_at"
+        ],
+        "title": "XeroProfileCheck",
+        "description": "Xero 组织信息与本项目采用的客户画像的核对 (需求 R291). 组织信息取当前连接最近一次成功同步记下的 (data 留痕\nxero_synced 的 organisation_info), 画像取本项目采用的版本; 断开后没再同步为空. differences 不为空且 resolution\n为空时提示审计师. 选择与稍后处理都绑定 key: Xero 的组织, 两项取值或画像版本变了, key 跟着变, 再次提示."
+      },
+      "XeroProfileCheckIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "update"
+            ],
+            "title": "Decision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "decision"
+        ],
+        "title": "XeroProfileCheckIn",
+        "description": "审计师对 Xero 组织信息与客户画像核对的选择 (POST /data/xero/profile-check, 需求 R291)."
+      },
       "XeroSource": {
         "properties": {
           "status": {
@@ -12034,6 +12278,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/XeroSyncResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/XeroProfileCheck"
               },
               {
                 "type": "null"

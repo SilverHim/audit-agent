@@ -63,7 +63,7 @@ from backend.contracts.conversation import (
     ToolSpec,
 )
 from backend.contracts.models import AgentId, TrailEntry, TrailKind
-from backend.contracts.ports import ChatModel, ChatModelSource
+from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
 from backend.contracts.views import EngagementOverview
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError
@@ -245,6 +245,7 @@ class ConciergeChat:
         self.turns: set[ChatTurn] = set()  # 进行中的各轮, shutdown 时取消
         self.writes: set[asyncio.Task[Any]] = set()  # 写 conversation 留痕的独立任务, shutdown 时等它们写完
         self.persisting: dict[str, asyncio.Task[Any]] = {}  # 项目 -> 最近一轮还在写的留痕; 下一轮读历史前等它
+        self.xero: XeroConnections | None = None  # Xero 连接记录, 组装根在建好 XeroLink 后接上 (待办的组织信息核对)
 
     async def history(self, eid: str) -> list[ConversationTurn]:
         """项目的全部问答, 按时间升序 (不含压缩摘要)."""
@@ -443,7 +444,7 @@ class ConciergeChat:
         ctx = ChatContext(
             model=model,
             tools=self.tools,
-            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars),
+            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero),
             lang=question.lang,
             max_steps=limits.max_steps,
             max_tokens=limits.max_tokens,
