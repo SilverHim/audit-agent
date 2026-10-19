@@ -1934,6 +1934,11 @@ def make_deps(
     )
 
 
+def profile_update(profile: ClientProfile) -> tuple[int, dict[str, Any]]:
+    """DecisionSubmit.update_client_profile 的 (version, changes): 以整份画像为请求给出的字段 (含 id)."""
+    return profile.version, profile.model_dump(exclude={"version"})
+
+
 def make_procedure(
     procedure_id: str,
     phase: Phase = Phase.P0_Acceptance,

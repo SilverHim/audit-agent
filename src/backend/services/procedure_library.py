@@ -12,11 +12,13 @@ from typing import Any, TypeGuard, Union, get_args, get_origin
 
 import yaml
 from pydantic import BaseModel, ValidationError
+from pydantic_core import to_jsonable_python
 
 from backend.contracts.data import DataInput
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
 from backend.contracts.models import (
     AuditObjective,
+    ClientProfile,
     DocumentType,
     Engagement,
     OpinionType,
@@ -33,9 +35,14 @@ from backend.services.features import BASELINE, FEATURES, check_features
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
 # 带命名空间的: 前缀 → 取值的模型, 写成 {前缀}.{字段}, 字段是嵌套模型 (或可为空的嵌套模型) 时可再往下取 (如
-# {前缀}.{字段}.{子字段}); 列表, 字典等容器字段只能整个取. dataset. 的值为 None 时以 None 执行; 新命名空间登记时一并定
-# 它的 None 策略与解析时传入的对象 (resolve_params 的 sources), 如 profile. 为 None 抛 ValueError (R127)
-REF_NAMESPACES: dict[str, type[BaseModel]] = {"dataset": DatasetTraits}
+# {前缀}.{字段}.{子字段}); 列表, 字典等容器字段只能整个取. 新命名空间登记时一并定它的 None 策略 (NONE_RUNS), 取值形式
+# (JSON_NAMESPACES), 缺取值对象时的说明 (MISSING_SOURCES) 与解析时传入的对象 (resolve_params 的 sources):
+# dataset. 为项目数据集的声明, profile. 为本项目采用版本的客户画像 (R127)
+REF_NAMESPACES: dict[str, type[BaseModel]] = {"dataset": DatasetTraits, "profile": ClientProfile}
+NONE_RUNS = {"dataset"}  # 值为 None 时以 None 执行的命名空间; 其余为 None 时抛 ValueError, 除非参数写了 optional: true
+OPTIONAL_NAMESPACES = {"profile"}  # 参数可写 {ref: ..., optional: true} (为 None 时以 None 执行) 的命名空间
+JSON_NAMESPACES = {"profile"}  # 取值一律转成 JSON 兼容的值 (模型与其中的列表, 字典都成字典, 日期成文本, 枚举成值)
+MISSING_SOURCES = {"profile": "没有本项目采用的客户画像"}  # 命名空间缺取值对象时的说明
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, significant (枚举定义顺序)
 # 规则 SQL 里出现的账表名: 按 DataInput 的取值整词扫描 (长的在前), 逗号连接与子查询里的表也认得出
 SQL_TABLE = re.compile(
@@ -85,7 +92,7 @@ class ProcedureLibrary:
             f"{t.id}.{key}: {problem}"
             for t in templates
             for key, value in t.params.items()
-            if isinstance(value, dict) and "ref" in value and (problem := ref_problem(value["ref"])) is not None
+            if isinstance(value, dict) and "ref" in value and (problem := ref_param_problem(value)) is not None
         ]
         if refs:
             raise ValueError(f"程序参数的 ref 写错: {'; '.join(refs)}")
@@ -174,17 +181,25 @@ class ProcedureLibrary:
         risk_level: RiskLevel | None,
         *,
         traits: DatasetTraits,
+        profile: ClientProfile | None,
     ) -> dict[str, Any]:
-        """解析模板参数. 每个参数三种写法: 字面量, {by_risk: {等级: 值}} 或 {ref: 名称}.
+        """解析模板参数. 每个参数三种写法: 字面量, {by_risk: {等级: 值}} 或 {ref: 名称} (profile. 的 ref 可另写
+        optional: true).
 
         risk_level: 程序关联审计目标的最高等级 (见 highest_risk), 没有关联目标为 None.
         traits: 项目数据集的声明, dataset. 命名空间的 ref 从它取.
+        profile: 本项目采用版本的客户画像, profile. 命名空间的 ref 从它取; 为 None 时引用 profile. 抛 ValueError.
+            profile. 的取值一律是 JSON 兼容的值 (见 JSON_NAMESPACES), 参数快照经检查点与 Store 读回后与首次执行相等.
         by_risk 参数在 risk_level 为 None 或没有该等级的取值时抛 ValueError.
         ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; dataset. 的值为 None
-        时照样以 None 执行; 名称写错 (见 ref_problem) 抛 KeyError.
-        字面量与取自声明的值深拷贝, 改返回值不会改到模板与声明.
+        时照样以 None 执行; profile. 的值为 None 时 (含路径中途为 None) 抛 ValueError ("<字段路径> 尚未确定"), 写了
+        optional: true 时以 None 执行; 写法不对 (见 ref_param_problem) 抛 KeyError.
+        字面量与取自声明的值深拷贝, 取自画像的值是新建的 JSON 兼容值, 改返回值不会改到模板, 声明与画像.
         """
         out: dict[str, Any] = {}
+        sources: dict[str, BaseModel] = {"dataset": traits}  # 命名空间 ref 的取值对象
+        if profile is not None:
+            sources["profile"] = profile
         for key, value in template.params.items():
             if isinstance(value, dict) and "by_risk" in value:
                 if risk_level is None:
@@ -194,7 +209,7 @@ class ProcedureLibrary:
                 out[key] = value["by_risk"][risk_level.value]
             elif isinstance(value, dict) and "ref" in value:
                 ref = value["ref"]
-                problem = ref_problem(ref)
+                problem = ref_param_problem(value)
                 if problem is not None:
                     raise KeyError(f"{template.id}.{key}: {problem}")
                 if ref in ENGAGEMENT_REFS:
@@ -205,7 +220,14 @@ class ProcedureLibrary:
                         raise ValueError(f"{template.id}.{key}: {ref} 尚未确定")
                     out[key] = resolved
                 else:
-                    out[key] = namespace_value({"dataset": traits}, ref)
+                    namespace, _, path = ref.partition(".")
+                    if namespace not in sources:
+                        missing = MISSING_SOURCES.get(namespace, f"没有 {namespace}. 的取值对象")
+                        raise ValueError(f"{template.id}.{key}: {missing}, 取不到 {ref}")
+                    resolved = namespace_value(sources, ref)
+                    if resolved is None and namespace not in NONE_RUNS and not value.get("optional"):
+                        raise ValueError(f"{template.id}.{key}: {path} 尚未确定")
+                    out[key] = resolved
             else:
                 out[key] = copy.deepcopy(value)
         return out
@@ -263,14 +285,35 @@ def ref_problem(ref: object) -> str | None:
     return None
 
 
+def ref_param_problem(param: dict[str, Any]) -> str | None:
+    """{ref: ...} 参数写错时的说明 (含该 ref), 合格为 None: ref 名称见 ref_problem; 除 ref 外只许 optional 一个键,
+    其值须为布尔, 且只用于 OPTIONAL_NAMESPACES 的命名空间 (重要性等为 None 时不能以 None 执行)."""
+    ref = param.get("ref")
+    problem = ref_problem(ref)
+    if problem is not None:
+        return problem
+    extra = sorted(str(k) for k in param if k not in ("ref", "optional"))
+    if extra:
+        return f"ref {ref} 的参数只能另写 optional, 多了 {', '.join(extra)}"
+    if "optional" in param:
+        if not isinstance(param["optional"], bool):
+            return f"ref {ref} 的 optional 须为 true 或 false"
+        if str(ref).partition(".")[0] not in OPTIONAL_NAMESPACES:
+            return f"ref {ref} 不能写 optional (只用于 {', '.join(sorted(OPTIONAL_NAMESPACES))}. 的引用)"
+    return None
+
+
 def namespace_value(sources: dict[str, BaseModel], ref: str) -> Any:
-    """命名空间 ref 的值 (名称已经 ref_problem 查过): 沿字段路径取, 中途为 None 即为 None; 模型转成字典, 其余深拷贝."""
+    """命名空间 ref 的值 (名称已经 ref_problem 查过): 沿字段路径取, 中途为 None 即为 None. JSON_NAMESPACES 的值转成
+    JSON 兼容的新对象; 其余命名空间的模型转成字典, 其他值深拷贝."""
     namespace, _, path = ref.partition(".")
     value: Any = sources[namespace]
     for name in path.split("."):
         if value is None:
             return None
         value = getattr(value, name)
+    if namespace in JSON_NAMESPACES:
+        return to_jsonable_python(value)
     return value.model_dump() if isinstance(value, BaseModel) else copy.deepcopy(value)
 
 

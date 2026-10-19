@@ -54,6 +54,45 @@ def mismatch(target: stores.XeroDatasetLoader) -> str:
     return str(raised.value)
 
 
+def test_profile_extension_fields_from_supplements() -> None:
+    """R127 验收 2: 载入器读出的补造画像带规格书第 4.3 节的扩展字段; 审批限额与申报的关联方不再写在 notes."""
+    profile = loader().client_profile(DATASET)
+    assert (profile.id, profile.version) == ("CLIENT-XERO-3C1332BB-Q1", 1)
+    assert (profile.approval_limit_cents, profile.applicable_framework) == (500000, "tier2_gpfs")
+    assert (profile.accounting_system, profile.financial_year_end) == ("Xero", "09-30")
+    assert [(p.name, p.role, p.since) for p in profile.key_personnel] == [
+        ("Alex Morgan", "Director and Company Secretary", "2018-09-03")
+    ]
+    assert [(p.name, p.kind, p.abn, p.acn, p.notes) for p in profile.related_parties] == [
+        ("Alex Morgan", "person", None, None, "director loan, overdraft guarantee"),
+        ("Morgan Advisory Pty Ltd", "company", "17900043049", "900043049", ""),
+    ]
+    assert [(h.holder, h.kind, h.shares, h.pct) for h in profile.ownership] == [
+        ("Alex Morgan", "person", 85, 0.85),
+        ("Sam Whitfield", "person", 15, 0.15),
+    ]
+    assert profile.governance is not None and profile.governance.all_in_management is True
+    assert [(m.name, m.also_management) for m in profile.governance.members] == [("Alex Morgan", True)]
+    assert profile.governance.body == "board"
+    assert profile.fees is not None
+    assert (profile.fees.audit_fee_cents, profile.fees.non_audit_fee_cents, profile.fees.firm_total_fee_cents) == (
+        480000,
+        0,
+        240000000,
+    )
+    assert profile.fees.model_dump(exclude={"audit_fee_cents", "non_audit_fee_cents", "firm_total_fee_cents"}) == {
+        "dependency_pct_by_year": {},
+        "overdue_cents": 0,
+        "overdue_days": 0,
+        "contingent": False,
+        "referral_source": None,
+        "referral_source_fees_pct_by_year": {},
+    }
+    assert (profile.engagements, profile.prior_period_audited) == ([], False)
+    assert profile.notes.startswith("Synthetic – for demonstration only.")
+    assert "approval limit" not in profile.notes and "Related parties declared" not in profile.notes
+
+
 def test_profile_and_planning_from_supplements() -> None:
     profile = loader().client_profile(DATASET)
     supplied = ClientProfile.model_validate_json((SUPPLEMENTS / "20261017-q1" / "client_profile.json").read_bytes())

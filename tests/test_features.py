@@ -37,6 +37,7 @@ from tests.fakes import (
     make_deps,
     make_graph_nodes,
     make_runner,
+    profile_update,
     wait_idle,
 )
 from tests.test_assemble import P2, added_programs, after_pln_approve
@@ -460,7 +461,10 @@ async def test_profile_update_and_review_record_rejected() -> None:
     submit = GraphDecisionSubmit(other.app, other.deps, other)
     before = await frozen_state(other)
     profile = NUMBAT_PROFILE.model_copy(update={"version": NUMBAT_PROFILE.version + 1})
-    for attempt in (submit.update_client_profile(EID, profile, updated_by="U-1"), submit.submit(EID, record())):
+    for attempt in (
+        submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1"),
+        submit.submit(EID, record()),
+    ):
         with pytest.raises(DecisionRejected) as raised:
             await attempt
         assert raised.value.code == "FEATURES_MISMATCH" and not other.is_running(EID)

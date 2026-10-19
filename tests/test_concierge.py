@@ -139,7 +139,9 @@ def setup(
         "misstatements": [MISSTATEMENT],
         "judgments": [CUTOFF],
     }
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits(), profile=None
+    )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return ConciergeAgent(deps), RunContext(ctx.engagement, ctx.procedure, ctx.template, run, state), trail  # type: ignore[arg-type]
 

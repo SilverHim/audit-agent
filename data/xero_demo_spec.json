@@ -46,7 +46,67 @@
     "directors": [
       "Alex Morgan"
     ],
-    "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."
+    "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. No director remuneration in the period.",
+    "financial_year_end": "09-30",
+    "accounting_system": "Xero",
+    "engagements": [],
+    "approval_limit_cents": 500000,
+    "key_personnel": [
+      {
+        "name": "Alex Morgan",
+        "role": "Director and Company Secretary",
+        "since": "2018-09-03"
+      }
+    ],
+    "related_parties": [
+      {
+        "name": "Alex Morgan",
+        "kind": "person",
+        "relationship": "sole director and 85% shareholder",
+        "abn": null,
+        "acn": null,
+        "notes": "director loan, overdraft guarantee"
+      },
+      {
+        "name": "Morgan Advisory Pty Ltd",
+        "kind": "company",
+        "relationship": "company controlled by the director",
+        "abn": "17900043049",
+        "acn": "900043049",
+        "notes": ""
+      }
+    ],
+    "ownership": [
+      {
+        "holder": "Alex Morgan",
+        "kind": "person",
+        "shares": 85,
+        "pct": 0.85
+      },
+      {
+        "holder": "Sam Whitfield",
+        "kind": "person",
+        "shares": 15,
+        "pct": 0.15
+      }
+    ],
+    "applicable_framework": "tier2_gpfs",
+    "governance": {
+      "body": "board",
+      "members": [
+        {
+          "name": "Alex Morgan",
+          "also_management": true
+        }
+      ],
+      "all_in_management": true
+    },
+    "fees": {
+      "audit_fee_cents": 480000,
+      "non_audit_fee_cents": 0,
+      "firm_total_fee_cents": 240000000
+    },
+    "prior_period_audited": false
   },
   "planning": {
     "audit_objectives": [

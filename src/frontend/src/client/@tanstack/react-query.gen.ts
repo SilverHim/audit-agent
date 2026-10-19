@@ -238,6 +238,10 @@ export const engagementsGetClientProfileOptions = (options: Options<EngagementsG
  * Update Client Profile
  *
  * 只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
+ *
+ * 请求体没给的字段 (notes 与扩展字段) 沿用被替代的那一版 (即通过版本校验的最新一版). 合并与校验都在
+ * update_client_profile 的锁内, 按第 7 节的顺序: 项目锁定, 不在 ACC-01 或版本过期时先报对应的错; 合并后不合
+ * ClientProfile 的 (如 financial_year_end 不是合法月日) 422 INVALID_VALUE.
  */
 export const gatesUpdateClientProfileMutation = (options?: Partial<Options<GatesUpdateClientProfileData>>): UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> => {
     const mutationOptions: UseMutationOptions<unknown, GatesUpdateClientProfileError, Options<GatesUpdateClientProfileData>> = {

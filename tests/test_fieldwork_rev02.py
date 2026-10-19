@@ -113,7 +113,7 @@ def setup(
         "performance_materiality_cents": 9000000,
     }
     params = deps.library.resolve_params(
-        ctx.template, ctx.engagement, state, RiskLevel.significant, traits=DatasetTraits()
+        ctx.template, ctx.engagement, state, RiskLevel.significant, traits=DatasetTraits(), profile=None
     )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, procedure, ctx.template, run, state), engine  # type: ignore[arg-type]

@@ -37,14 +37,21 @@ NO_DB: Any = object()  # 建项目与 ACC-04 不读写财务表
 
 
 class CreatingEngagementStore(FakeEngagementStore):
-    """能建项目的假项目存储: 编号 ENG-2026-001 起顺排, 画像按传入的保存 (同 PostgresEngagementStore.create 的效果)."""
+    """能建项目的假项目存储: 编号 ENG-2026-001 起顺排; 画像与该客户的各版比较内容, 有一版相同就沿用最新一版, 都不同
+    才出新版本 (同 PostgresEngagementStore.create 的效果)."""
 
     async def create(
         self, *, owner_id: str, period_start: date, period_end: date, dataset: str, profile: ClientProfile
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
-        if await self.client_profile(profile.id, profile.version) is None:
+        versions = sorted((p for p in self.profiles if p.id == profile.id), key=lambda p: p.version)
+        if not versions:
+            self.profiles.append(profile)
+        elif any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
+            profile = versions[-1]
+        else:
+            profile = profile.model_copy(update={"version": versions[-1].version + 1})
             self.profiles.append(profile)
         engagement = Engagement(
             id=f"ENG-2026-{len(self.engagements) + 1:03d}",

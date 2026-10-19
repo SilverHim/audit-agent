@@ -56,6 +56,7 @@ from tests.fakes import (
     make_deps,
     make_run,
     make_runner,
+    profile_update,
     wait_idle,
 )
 from tests.test_fieldwork import assembled, dispatch
@@ -418,7 +419,9 @@ async def test_rewind_before_first_of_two_runs_keeps_gate_material_consistent() 
     await wait_idle(runner, EID)
     before_first = [s async for s in runner.app.aget_state_history(config) if s.next == ("p0_intel",)][-1]
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
-    await submit.update_client_profile(EID, TYPO_PROFILE.model_copy(update={"version": 2}), updated_by="U-001")
+    await submit.update_client_profile(
+        EID, *profile_update(TYPO_PROFILE.model_copy(update={"version": 2})), updated_by="U-001"
+    )
     await wait_idle(runner, EID)
     assert registry.abn_calls == 2
     rows = list(store.rows)

@@ -11,6 +11,7 @@ from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
+from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected, VersionConflict
@@ -855,22 +856,34 @@ class GraphDecisionSubmit:
             await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
         return request
 
-    async def update_client_profile(self, eid: str, profile: ClientProfile, *, updated_by: str) -> None:
+    async def update_client_profile(
+        self, eid: str, version: int, changes: Mapping[str, Any], *, updated_by: str
+    ) -> None:
         """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.
 
-        profile.id 须为项目 client_id, version 须为该客户画像的最新版本 +1 (画像跨项目共用, 版本号全局递增).
-        保存画像与改项目采用的版本在一个事务内, 提交后写 decision 留痕. updated_by 为操作用户 ID, 写入留痕.
+        version 须为该客户画像的最新版本 +1 (画像跨项目共用, 版本号全局递增). changes 为请求给出的字段 (可含 id,
+        须为项目 client_id): 在锁内以通过版本校验的最新一版为底合并, 没给的字段沿用, 给 None 的可空字段清空; 合并后
+        不合 ClientProfile 的报 INVALID_VALUE. 各项校验都在锁内, 按第 7 节的顺序, 所以项目锁定, 不在闸门或版本
+        过期时先报对应的错. 保存画像与改项目采用的版本在一个事务内, 提交后写 decision 留痕. updated_by 为操作用户
+        ID, 写入留痕.
         """
         async with self._deciding(eid) as (engagement, snapshot):
             if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not GateId.ACC_01:
                 raise DecisionRejected("NOT_AT_GATE", "只能在 ACC-01 闸门更新客户资料")
-            # 第 7 节校验顺序: VERSION_MISMATCH 先于 INVALID_VALUE. 版本号按项目客户的最新画像算, 不按 profile.id
+            # 第 7 节校验顺序: VERSION_MISMATCH 先于 INVALID_VALUE. 版本号按项目客户的最新画像算, 不按 changes 的 id
             latest = await self.deps.engagement_store.client_profile(engagement.client_id)
             expected = latest.version + 1 if latest is not None else 1
-            if profile.version != expected:
+            if version != expected:
                 raise DecisionRejected("VERSION_MISMATCH", f"客户画像应为第 {expected} 版")
-            if profile.id != engagement.client_id:
+            if changes.get("id", engagement.client_id) != engagement.client_id:
                 raise DecisionRejected("INVALID_VALUE", f"profile.id 应为 {engagement.client_id}")
+            base = latest.model_dump() if latest is not None else {}
+            try:
+                profile = ClientProfile.model_validate(
+                    {**base, **changes, "id": engagement.client_id, "version": version}
+                )
+            except ValidationError as exc:
+                raise DecisionRejected("INVALID_VALUE", f"合并后的客户画像不合格: {exc}") from None
 
             async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
                 saved = await self.deps.engagement_store.save_profile(profile)

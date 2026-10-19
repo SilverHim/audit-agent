@@ -28,7 +28,7 @@ def setup(procedure_id: str, rules: FakeRuleEngine | None = None) -> tuple[Field
     deps = make_deps(FakeRegistry(), FakeTrail(), rules=rules)
     ctx = make_ctx(deps, procedure_id)
     params = deps.library.resolve_params(
-        ctx.template, ctx.engagement, ctx.state, RiskLevel.significant, traits=DatasetTraits()
+        ctx.template, ctx.engagement, ctx.state, RiskLevel.significant, traits=DatasetTraits(), profile=None
     )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, ctx.procedure, ctx.template, run, ctx.state)

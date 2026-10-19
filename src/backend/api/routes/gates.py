@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Response
 from backend.api.deps import current_user, get_decisions, get_query, owned_engagement
 from backend.api.errors import api_error, catch_api
 from backend.api.schemas import ClientProfileIn, GateDecisionIn, IdBody
-from backend.contracts.models import ClientProfile, Engagement, GateDecision, User
+from backend.contracts.models import Engagement, GateDecision, User
 from backend.contracts.views import GateView
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
@@ -52,8 +52,13 @@ async def update_client_profile(
     user: Annotated[User, Depends(current_user)],
     decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
 ) -> Response:
-    """只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报."""
-    profile = ClientProfile.model_validate({**body.model_dump(), "id": engagement.client_id})
+    """只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.
+
+    请求体没给的字段 (notes 与扩展字段) 沿用被替代的那一版 (即通过版本校验的最新一版). 合并与校验都在
+    update_client_profile 的锁内, 按第 7 节的顺序: 项目锁定, 不在 ACC-01 或版本过期时先报对应的错; 合并后不合
+    ClientProfile 的 (如 financial_year_end 不是合法月日) 422 INVALID_VALUE.
+    """
+    changes = body.model_dump(exclude_unset=True, exclude={"version"})
     async with catch_api():
-        await decisions.update_client_profile(engagement.id, profile, updated_by=user.id)
+        await decisions.update_client_profile(engagement.id, body.version, changes, updated_by=user.id)
     return Response(status_code=202)

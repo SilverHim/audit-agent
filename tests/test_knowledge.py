@@ -20,11 +20,13 @@ from pydantic import ValidationError
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
     AuditObjective,
+    ClientProfile,
     EvidencePointer,
     EvidenceType,
     Model,
     Phase,
     Procedure,
+    Retention,
     RiskLevel,
     TermType,
 )
@@ -1775,8 +1777,8 @@ def test_resolve_params_by_risk_needs_risk_level() -> None:
     state = initial_state(ENGAGEMENT, [], 1)
 
     with pytest.raises(ValueError, match=r"REV-08\.window_days"):
-        lib.resolve_params(lib.load("REV-08"), ENGAGEMENT, state, None, traits=DatasetTraits())
-    assert lib.resolve_params(lib.load("CSH-04"), ENGAGEMENT, state, None, traits=DatasetTraits()) == {
+        lib.resolve_params(lib.load("REV-08"), ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
+    assert lib.resolve_params(lib.load("CSH-04"), ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None) == {
         "as_of": date(2026, 6, 30)
     }
 
@@ -1787,7 +1789,12 @@ def test_resolve_params_by_risk_without_that_level() -> None:
 
     with pytest.raises(ValueError, match="low"):
         lib.resolve_params(
-            lib.load("REV-02"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), RiskLevel.low, traits=DatasetTraits()
+            lib.load("REV-02"),
+            ENGAGEMENT,
+            initial_state(ENGAGEMENT, [], 1),
+            RiskLevel.low,
+            traits=DatasetTraits(),
+            profile=None,
         )
 
 
@@ -1797,7 +1804,7 @@ def test_resolve_params_state_ref_not_set() -> None:
 
     with pytest.raises(ValueError, match="materiality_cents"):
         lib.resolve_params(
-            lib.load("FIN-04"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits()
+            lib.load("FIN-04"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits(), profile=None
         )
 
 
@@ -1806,7 +1813,7 @@ def test_resolve_params_literals_are_copies() -> None:
     lib = ProcedureLibrary(ROOT)
 
     out = lib.resolve_params(
-        lib.load("PLN-01"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits()
+        lib.load("PLN-01"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits(), profile=None
     )
     out["candidates"][0]["pct_low"] = 0
     out["candidates"].append({"basis": "x"})
@@ -1910,9 +1917,9 @@ def test_dataset_refs_resolve(tmp_path: Path) -> None:
     template, state = lib.load("X-REF"), initial_state(ENGAGEMENT, [], 1)
     traits = design_traits()
 
-    out = lib.resolve_params(template, ENGAGEMENT, state, None, traits=traits)
+    out = lib.resolve_params(template, ENGAGEMENT, state, None, traits=traits, profile=None)
     assert out == {"a": date(2025, 7, 1), "b": ["477"], "c": "AJE-"}
-    assert lib.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits()) == {
+    assert lib.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None) == {
         "a": None,
         "b": None,
         "c": "AJE-",
@@ -1925,7 +1932,7 @@ def test_dataset_ref_to_a_nested_model_is_a_dict(tmp_path: Path) -> None:
     template = REF_TEMPLATE.split("params:")[0] + "params:\n  accounts: {ref: dataset.payroll_accounts}\n"
     lib = ref_library(tmp_path, template)
     out = lib.resolve_params(
-        lib.load("X-REF"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits()
+        lib.load("X-REF"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits(), profile=None
     )
     assert out == {
         "accounts": {
@@ -1947,7 +1954,7 @@ def test_dataset_ref_to_a_nested_model_is_a_dict(tmp_path: Path) -> None:
         "dataset.payroll_accounts.no_such_key",
         "dataset.payroll_accounts.wages_expense.x",
         "dataset.audit_adjustment_entry_prefix.x",
-        "profile.x",  # 画像命名空间尚未登记
+        "profile.x",  # 画像没有这个字段
         "nosuch",
     ],
 )
@@ -2000,7 +2007,9 @@ def test_resolve_params_rejects_bad_refs_of_direct_templates(tmp_path: Path, ref
     lib = ref_library(tmp_path)
     template = lib.load("X-REF").model_copy(update={"params": {"bad": {"ref": ref}}})
     with pytest.raises(KeyError) as e:
-        lib.resolve_params(template, ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits())
+        lib.resolve_params(
+            template, ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=design_traits(), profile=None
+        )
     assert "X-REF.bad" in str(e.value) and ref in str(e.value)
 
 
@@ -2011,8 +2020,123 @@ def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:
     state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"] = 3, 2, 1
     for template in lib.all(include_disabled=True):
         risk = RiskLevel.significant if any("by_risk" in str(v) for v in template.params.values()) else None
-        default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits())
-        assert lib.resolve_params(template, ENGAGEMENT, state, risk, traits=design_traits()) == default, template.id
+        default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits(), profile=None)
+        assert lib.resolve_params(template, ENGAGEMENT, state, risk, traits=design_traits(), profile=None) == default, (
+            template.id
+        )
+
+
+# ── R127: profile. 参数引用 (本项目采用版本的客户画像) ──
+
+PROFILE_TEMPLATE = REF_TEMPLATE.split("params:")[0] + (
+    "params:\n  limit: {ref: profile.approval_limit_cents}\n  fee: {ref: profile.fees.audit_fee_cents}\n"
+    "  audited: {ref: profile.prior_period_audited, optional: true}\n"
+    "  prefix: {ref: dataset.audit_adjustment_entry_prefix}\n"
+)
+
+
+def xero_profile() -> ClientProfile:
+    """补造的 Xero 演示画像 CLIENT-XERO-3C1332BB-Q1 v1 (审批限额 500000, 审计费 480000, 上期未审)."""
+    path = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "client_profile.json"
+    return ClientProfile.model_validate_json(path.read_bytes())
+
+
+def resolve_profile(lib: ProcedureLibrary, profile: ClientProfile | None) -> dict[str, Any]:
+    return lib.resolve_params(
+        lib.load("X-REF"), ENGAGEMENT, initial_state(ENGAGEMENT, [], 1), None, traits=DatasetTraits(), profile=profile
+    )
+
+
+def test_profile_refs_resolve(tmp_path: Path) -> None:
+    """profile. 按画像的字段路径取值, 支持一层嵌套 (fees.audit_fee_cents); 为 None 时抛 ValueError, 写了 optional 的
+    以 None 执行; 没有画像时引用 profile. 也抛错; dataset. 不受影响."""
+    lib = ref_library(tmp_path, PROFILE_TEMPLATE)
+    profile = xero_profile()
+    assert resolve_profile(lib, profile) == {"limit": 500000, "fee": 480000, "audited": False, "prefix": "AJE-"}
+    unset = profile.model_copy(update={"approval_limit_cents": None})
+    with pytest.raises(ValueError, match=r"X-REF\.limit: approval_limit_cents 尚未确定"):
+        resolve_profile(lib, unset)
+    with pytest.raises(ValueError, match=r"X-REF\.fee: fees\.audit_fee_cents 尚未确定"):
+        resolve_profile(lib, profile.model_copy(update={"fees": None}))  # 路径中途为 None
+    with pytest.raises(ValueError, match="没有本项目采用的客户画像"):
+        resolve_profile(lib, None)
+
+    optional = REF_TEMPLATE.split("params:")[0] + (
+        "params:\n  limit: {ref: profile.approval_limit_cents, optional: true}\n"
+        "  audited: {ref: profile.prior_period_audited, optional: false}\n"
+    )
+    lib = ref_library(tmp_path / "optional", optional)
+    assert resolve_profile(lib, unset) == {"limit": None, "audited": False}
+    with pytest.raises(ValueError, match="prior_period_audited 尚未确定"):  # optional: false 同不写
+        resolve_profile(lib, unset.model_copy(update={"prior_period_audited": None}))
+
+
+def test_profile_ref_results_are_copies(tmp_path: Path) -> None:
+    """profile. 的取值是新建的 JSON 兼容值: 列表里的模型也是字典, 改返回值不会改到画像."""
+    template = REF_TEMPLATE.split("params:")[0] + "params:\n  people: {ref: profile.key_personnel}\n"
+    lib = ref_library(tmp_path, template)
+    profile = xero_profile()
+    out = resolve_profile(lib, profile)
+    assert out["people"] == [p.model_dump(mode="json") for p in profile.key_personnel]
+    assert [p["name"] for p in out["people"]] == ["Alex Morgan"] and type(out["people"][0]) is dict
+    out["people"][0]["name"] = "Changed"
+    out["people"].clear()
+    assert len(profile.key_personnel) == 1 and profile.key_personnel[0].name == "Alex Morgan"
+
+
+def test_profile_ref_snapshot_reads_back_equal(tmp_path: Path) -> None:
+    """参数快照经检查点与 Store (JSON) 读回后与首次执行相等: 列表中的模型, 嵌套模型中的列表, 日期与枚举都已转成
+    JSON 兼容的值 (R127 第 1 轮审核 R127-03)."""
+    from backend.contracts.models import ProcedureRun, RunStatus, RunTrigger
+    from backend.orchestration.checkpoint import checkpoint_serde
+
+    template = REF_TEMPLATE.split("params:")[0] + (
+        "params:\n  people: {ref: profile.key_personnel}\n  gov: {ref: profile.governance}\n"
+        "  keep: {ref: profile.retention}\n  framework: {ref: profile.applicable_framework}\n"
+        "  parties: {ref: profile.related_parties}\n"
+    )
+    lib = ref_library(tmp_path, template)
+    profile = xero_profile().model_copy(
+        update={"retention": Retention(created=date(2025, 7, 1), review_by=date(2032, 7, 1), basis="APP 11.2")}
+    )
+    params = resolve_profile(lib, profile)
+    assert params["keep"] == {"created": "2025-07-01", "review_by": "2032-07-01", "basis": "APP 11.2"}
+    assert params["framework"] == "tier2_gpfs" and type(params["framework"]) is str
+    assert type(params["gov"]["members"][0]) is dict and type(params["parties"][0]) is dict
+    assert json.loads(json.dumps(params)) == params
+    run = ProcedureRun(
+        id="RUN-X-REF-1",
+        procedure_id="X-REF",
+        run_no=1,
+        trigger=RunTrigger.initial,
+        status=RunStatus.running,
+        params_snapshot=params,
+        started_at=ENGAGEMENT.created_at,
+    )
+    assert ProcedureRun.model_validate_json(run.model_dump_json()) == run  # Store 存 JSON 后读回
+    serde = checkpoint_serde()
+    assert serde.loads_typed(serde.dumps_typed({"r": run}))["r"] == run  # 检查点读回
+
+
+@pytest.mark.parametrize(
+    "param",
+    [
+        "{ref: profile.no_such_field}",
+        "{ref: profile.fees.no_such_field}",
+        "{ref: profile.key_personnel.name}",  # 列表里的模型按字段名取不到
+        "{ref: profile.approval_limit_cents, optional: sometimes}",  # optional 须为布尔
+        "{ref: profile.approval_limit_cents, default: 1}",  # optional 以外的多余键
+        "{ref: dataset.prior_period_start, optional: true}",  # optional 只用于 profile.
+        "{ref: materiality_cents, optional: true}",
+    ],
+)
+def test_profile_param_problems_are_checked_on_load(tmp_path: Path, param: str) -> None:
+    """profile. 路径写错, 多余的键, optional 写法不对: ProcedureLibrary 构造即抛 ValueError, 消息含
+    "程序编号.参数名"."""
+    template = REF_TEMPLATE.split("params:")[0] + f"params:\n  bad: {param}\n"
+    with pytest.raises(ValueError, match="程序参数的 ref 写错") as e:
+        ref_library(tmp_path, template)
+    assert "X-REF.bad" in str(e.value)
 
 
 # ── R36: DOC-04 fixture ──

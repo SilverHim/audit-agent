@@ -392,7 +392,7 @@
           "gates"
         ],
         "summary": "Update Client Profile",
-        "description": "只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.",
+        "description": "只在 ACC-01 可用. 保存后流程重跑 ACC-04 并重新呈报.\n\n请求体没给的字段 (notes 与扩展字段) 沿用被替代的那一版 (即通过版本校验的最新一版). 合并与校验都在\nupdate_client_profile 的锁内, 按第 7 节的顺序: 项目锁定, 不在 ACC-01 或版本过期时先报对应的错; 合并后不合\nClientProfile 的 (如 financial_year_end 不是合法月日) 422 INVALID_VALUE.",
         "operationId": "gates-update_client_profile",
         "security": [
           {
@@ -3651,6 +3651,172 @@
             "type": "string",
             "title": "Notes",
             "default": ""
+          },
+          "financial_year_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Year End"
+          },
+          "accounting_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounting System"
+          },
+          "engagements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Engagements",
+            "default": []
+          },
+          "approval_limit_cents": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Limit Cents"
+          },
+          "key_personnel": {
+            "items": {
+              "$ref": "#/components/schemas/KeyPerson"
+            },
+            "type": "array",
+            "title": "Key Personnel",
+            "default": []
+          },
+          "related_parties": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredParty"
+            },
+            "type": "array",
+            "title": "Related Parties",
+            "default": []
+          },
+          "ownership": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredHolding"
+            },
+            "type": "array",
+            "title": "Ownership",
+            "default": []
+          },
+          "prior_risk_register": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Prior Risk Register",
+            "default": {}
+          },
+          "prior_misstatements": {
+            "items": {
+              "$ref": "#/components/schemas/PriorMisstatement"
+            },
+            "type": "array",
+            "title": "Prior Misstatements",
+            "default": []
+          },
+          "independence_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Independence Flags",
+            "default": []
+          },
+          "applicable_framework": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tier1_gpfs",
+                  "tier2_gpfs",
+                  "spfr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable Framework"
+          },
+          "governance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Governance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fees": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Fees"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_organisations": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOrganisation"
+            },
+            "type": "array",
+            "title": "Service Organisations",
+            "default": []
+          },
+          "prior_estimate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/PriorEstimateOutcome"
+            },
+            "type": "array",
+            "title": "Prior Estimate Outcomes",
+            "default": []
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prior_period_audited": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Period Audited"
           }
         },
         "additionalProperties": false,
@@ -3665,7 +3831,7 @@
           "directors"
         ],
         "title": "ClientProfile",
-        "description": "客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id."
+        "description": "客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id.\n\nnotes 之后的扩展字段 (规格书第 4.3 节, R127) 都有默认值, 旧画像照常读出; 程序参数以 {ref: profile.<字段>} 引用."
       },
       "ClientProfileIn": {
         "properties": {
@@ -3704,6 +3870,171 @@
             "type": "string",
             "title": "Notes",
             "default": ""
+          },
+          "financial_year_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Year End"
+          },
+          "accounting_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounting System"
+          },
+          "engagements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Engagements",
+            "default": []
+          },
+          "approval_limit_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Limit Cents"
+          },
+          "key_personnel": {
+            "items": {
+              "$ref": "#/components/schemas/KeyPerson"
+            },
+            "type": "array",
+            "title": "Key Personnel",
+            "default": []
+          },
+          "related_parties": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredParty"
+            },
+            "type": "array",
+            "title": "Related Parties",
+            "default": []
+          },
+          "ownership": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredHolding"
+            },
+            "type": "array",
+            "title": "Ownership",
+            "default": []
+          },
+          "prior_risk_register": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Prior Risk Register",
+            "default": {}
+          },
+          "prior_misstatements": {
+            "items": {
+              "$ref": "#/components/schemas/PriorMisstatement"
+            },
+            "type": "array",
+            "title": "Prior Misstatements",
+            "default": []
+          },
+          "independence_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Independence Flags",
+            "default": []
+          },
+          "applicable_framework": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tier1_gpfs",
+                  "tier2_gpfs",
+                  "spfr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable Framework"
+          },
+          "governance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Governance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fees": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Fees"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_organisations": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOrganisation"
+            },
+            "type": "array",
+            "title": "Service Organisations",
+            "default": []
+          },
+          "prior_estimate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/PriorEstimateOutcome"
+            },
+            "type": "array",
+            "title": "Prior Estimate Outcomes",
+            "default": []
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prior_period_audited": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Period Audited"
           }
         },
         "additionalProperties": false,
@@ -3718,7 +4049,7 @@
           "directors"
         ],
         "title": "ClientProfileIn",
-        "description": "更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1."
+        "description": "更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)\n都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile."
       },
       "ClientProfileView": {
         "properties": {
@@ -4715,6 +5046,111 @@
         "title": "Decision",
         "description": "复核决定."
       },
+      "DeclaredHolding": {
+        "properties": {
+          "holder": {
+            "type": "string",
+            "title": "Holder"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "company"
+            ],
+            "title": "Kind"
+          },
+          "shares": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares"
+          },
+          "pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pct"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "holder",
+          "kind"
+        ],
+        "title": "DeclaredHolding",
+        "description": "申报的股权: 谁持有本公司多少股, 占多少."
+      },
+      "DeclaredParty": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "company"
+            ],
+            "title": "Kind"
+          },
+          "relationship": {
+            "type": "string",
+            "title": "Relationship"
+          },
+          "abn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abn"
+          },
+          "acn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acn"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "relationship"
+        ],
+        "title": "DeclaredParty",
+        "description": "管理层申报的关联方 (ASA 550 第 13 段询问的结果), 不经核实."
+      },
       "DeferralIn": {
         "properties": {
           "target_type": {
@@ -5388,6 +5824,80 @@
         "title": "ExtractionEdit",
         "description": "修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."
       },
+      "Fees": {
+        "properties": {
+          "audit_fee_cents": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Audit Fee Cents",
+            "default": 0
+          },
+          "non_audit_fee_cents": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Non Audit Fee Cents",
+            "default": 0
+          },
+          "firm_total_fee_cents": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Firm Total Fee Cents",
+            "default": 0
+          },
+          "dependency_pct_by_year": {
+            "additionalProperties": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "type": "object",
+            "title": "Dependency Pct By Year",
+            "default": {}
+          },
+          "overdue_cents": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Overdue Cents",
+            "default": 0
+          },
+          "overdue_days": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Overdue Days",
+            "default": 0
+          },
+          "contingent": {
+            "type": "boolean",
+            "title": "Contingent",
+            "default": false
+          },
+          "referral_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Referral Source"
+          },
+          "referral_source_fees_pct_by_year": {
+            "additionalProperties": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0
+            },
+            "type": "object",
+            "title": "Referral Source Fees Pct By Year",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Fees",
+        "description": "事务所对本客户的收费 (APES 110 R410 的收费依赖与欠费), 金额为分."
+      },
       "GateDecision": {
         "properties": {
           "id": {
@@ -5665,6 +6175,54 @@
         ],
         "title": "GateView",
         "description": "闸门页的数据: 当前闸门与要呈报的材料."
+      },
+      "Governance": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/GovernanceMember"
+            },
+            "type": "array",
+            "title": "Members",
+            "default": []
+          },
+          "all_in_management": {
+            "type": "boolean",
+            "title": "All In Management",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "title": "Governance",
+        "description": "治理层的构成 (ASA 260 识别治理层, ACC-09)."
+      },
+      "GovernanceMember": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "also_management": {
+            "type": "boolean",
+            "title": "Also Management"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "also_management"
+        ],
+        "title": "GovernanceMember",
+        "description": "治理层的一名成员."
       },
       "HTTPValidationError": {
         "properties": {
@@ -6188,6 +6746,37 @@
         ],
         "title": "JudgmentView",
         "description": "判断的输出视图: 字段同 Judgment, 盲判时可隐藏的字段可空, hidden_fields 列出被隐藏的字段 (未隐藏时为空).\n\n返回判断的接口与对话工具都经 BlindFilter.judgment 输出它, 不直接输出 Judgment (第 10 节). 不往 Judgment 里填占位值.\n可隐藏的: 结论, 置信度及其分项, 推理链, 反方论证, 建议动作, 错报草稿, 独立复核 (critic_) 的各字段."
+      },
+      "KeyPerson": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "role"
+        ],
+        "title": "KeyPerson",
+        "description": "客户画像中的关键人员 (规格书第 4.3 节 key_personnel)."
       },
       "LlmSettingsView": {
         "properties": {
@@ -6808,6 +7397,66 @@
         "title": "PlanningMaterial",
         "description": "PLN-01/03 闸门的呈报材料."
       },
+      "PriorEstimateOutcome": {
+        "properties": {
+          "engagement": {
+            "type": "string",
+            "title": "Engagement"
+          },
+          "estimate": {
+            "type": "string",
+            "title": "Estimate"
+          },
+          "estimated_cents": {
+            "type": "integer",
+            "title": "Estimated Cents"
+          },
+          "actual_cents": {
+            "type": "integer",
+            "title": "Actual Cents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engagement",
+          "estimate",
+          "estimated_cents",
+          "actual_cents"
+        ],
+        "title": "PriorEstimateOutcome",
+        "description": "以前年度会计估计的结果 (ASA 540 回顾性复核)."
+      },
+      "PriorMisstatement": {
+        "properties": {
+          "engagement": {
+            "type": "string",
+            "title": "Engagement"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "corrected": {
+            "type": "boolean",
+            "title": "Corrected"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "engagement",
+          "area",
+          "amount_cents",
+          "corrected"
+        ],
+        "title": "PriorMisstatement",
+        "description": "以前年度审计发现的错报."
+      },
       "Procedure": {
         "properties": {
           "id": {
@@ -7380,6 +8029,33 @@
         "title": "RerunIn",
         "description": "重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274)."
       },
+      "Retention": {
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date",
+            "title": "Created"
+          },
+          "review_by": {
+            "type": "string",
+            "format": "date",
+            "title": "Review By"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "created",
+          "review_by",
+          "basis"
+        ],
+        "title": "Retention",
+        "description": "客户资料的留存安排 (APP 11.2)."
+      },
       "ReviewRecord": {
         "properties": {
           "id": {
@@ -7848,6 +8524,52 @@
         ],
         "title": "RunTrigger",
         "description": "一次执行的起因."
+      },
+      "ServiceOrganisation": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "report_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "type1",
+                  "type2"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Type"
+          },
+          "report_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "service"
+        ],
+        "title": "ServiceOrganisation",
+        "description": "客户使用的服务机构 (ASA 402)."
       },
       "StandardFragment": {
         "properties": {

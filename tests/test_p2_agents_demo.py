@@ -147,7 +147,9 @@ async def run_p2() -> Demo:
             procedure = next(p for p in state["procedure_pack"] if p.id == pid)
             template = deps.library.load(pid)
             risk = highest_risk(state["audit_objectives"], procedure.objective_ids)
-            params = deps.library.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits())
+            params = deps.library.resolve_params(
+                template, ENGAGEMENT, state, risk, traits=DatasetTraits(), profile=None
+            )
             ctx = RunContext(ENGAGEMENT, procedure, template, make_run(pid, params=params), state)
             patches.append(await by_id[pid].run(ctx))
         for patch in patches:

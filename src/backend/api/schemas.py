@@ -10,12 +10,17 @@ from backend.contracts.models import (
     AuditReportVersion,
     ClientProfile,
     Decision,
+    DeclaredHolding,
+    DeclaredParty,
     DisputeResolution,
     DocumentType,
+    Fees,
     GateDecision,
     GateEdit,
     GateId,
     GateVerdict,
+    Governance,
+    KeyPerson,
     LlmProvider,
     ManualResult,
     MaterialityChoice,
@@ -25,11 +30,16 @@ from backend.contracts.models import (
     NeitherAction,
     OpinionType,
     Phase,
+    PriorEstimateOutcome,
+    PriorMisstatement,
     Procedure,
     ProcedureRun,
+    ReportingFramework,
+    Retention,
     ReviewRecord,
     ReviewTask,
     ReviewTier,
+    ServiceOrganisation,
     UncorrectedSchedule,
 )
 from backend.contracts.records import AccountCategory
@@ -125,7 +135,8 @@ class RerunIn(Model):
 
 
 class ClientProfileIn(Model):
-    """更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1."""
+    """更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)
+    都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile."""
 
     version: int
     legal_name: str
@@ -135,6 +146,23 @@ class ClientProfileIn(Model):
     listed: bool
     directors: list[str]
     notes: str = ""
+    financial_year_end: str | None = None
+    accounting_system: str | None = None
+    engagements: list[str] = []
+    approval_limit_cents: int | None = None
+    key_personnel: list[KeyPerson] = []
+    related_parties: list[DeclaredParty] = []
+    ownership: list[DeclaredHolding] = []
+    prior_risk_register: dict[str, list[str]] = {}
+    prior_misstatements: list[PriorMisstatement] = []
+    independence_flags: list[str] = []
+    applicable_framework: ReportingFramework | None = None
+    governance: Governance | None = None
+    fees: Fees | None = None
+    service_organisations: list[ServiceOrganisation] = []
+    prior_estimate_outcomes: list[PriorEstimateOutcome] = []
+    retention: Retention | None = None
+    prior_period_audited: bool | None = None
 
 
 class ClientProfileView(Model):

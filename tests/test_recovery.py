@@ -43,6 +43,7 @@ from tests.fakes import (
     finished,
     make_runner,
     preset_rerun,
+    profile_update,
     wait_idle,
 )
 from tests.test_decisions import (
@@ -363,7 +364,7 @@ async def test_profile_update_caught_up_then_reruns_acc04() -> None:
     s = await started(TYPO_PROFILE)
     lose_checkpoint_write(s)
     with pytest.raises(RuntimeError, match="检查点写入失败"):
-        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     await s.runner.resume(EID)
     await wait_idle(s.runner, EID)
@@ -445,7 +446,7 @@ async def test_profile_trail_failure_during_catch_up_is_retried() -> None:
 
     trail.record = crash  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="进程中断"):
-        await s.submit.update_client_profile(EID, FIXED_PROFILE, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
     runner = GraphRunner(s.runner.app, s.runner.deps)
     await runner.recover()  # 留痕仍写不了
     assert "进程中断" in (runner.run_error(EID) or "")

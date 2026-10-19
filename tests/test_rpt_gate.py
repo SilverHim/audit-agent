@@ -30,7 +30,7 @@ from backend.contracts.views import ReportMaterial
 from backend.orchestration.gates import rpt01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
-from tests.fakes import NOW, NUMBAT_PROFILE, EngagementWrite, FakeTrail, make_procedure, wait_idle
+from tests.fakes import NOW, NUMBAT_PROFILE, EngagementWrite, FakeTrail, make_procedure, profile_update, wait_idle
 from tests.test_decisions import CHOICE, Started, assert_rejected, edit, stop_after_submit
 from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import EID
@@ -272,7 +272,7 @@ async def test_signed_engagement_is_read_only() -> None:
     assert e.value.code == "ENGAGEMENT_LOCKED"
     profile = NUMBAT_PROFILE.model_copy(update={"version": NUMBAT_PROFILE.version + 1})
     with pytest.raises(DecisionRejected) as e:
-        await s.submit.update_client_profile(EID, profile, updated_by="U-1")
+        await s.submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1")
     assert e.value.code == "ENGAGEMENT_LOCKED"
     with pytest.raises(EngagementLocked):
         await s.output_store.put(EID, [rpt_decision(GateVerdict.approve, id="D-RAW")], actor="U-1")

@@ -917,11 +917,7 @@ class PostgresEngagementStore(Store):
                 .all()
             )
             number = max((int(r.rsplit("-", 1)[1]) for r in rows), default=0) + 1
-            existing = await self.client_profile(profile.id, profile.version)
-            if existing is None:
-                await self.save_profile(profile)
-            elif existing != profile:
-                raise VersionConflict(profile.id)
+            adopted = await self.adopt_profile(profile)
             item = Engagement(
                 id=f"ENG-{year}-{number:03d}",
                 client_id=profile.id,
@@ -929,13 +925,24 @@ class PostgresEngagementStore(Store):
                 period_end=period_end,
                 dataset=dataset,
                 owner_id=owner_id,
-                client_profile_version=profile.version,
+                client_profile_version=adopted.version,
                 phase=Phase.P0_Acceptance,
                 created_at=now(),
                 updated_at=now(),
             )
             await conn.execute(insert(m.engagements).values(**item.model_dump()))
             return item
+
+    async def adopt_profile(self, profile: ClientProfile) -> ClientProfile:
+        """建项目时采用的画像 (改一律出新版本, 旧版本不覆盖). profile 是数据集带的画像, 与该客户已存的各版比较内容
+        (不看版本号): 库里没有该客户时按 profile 写入; 有一版相同, 说明数据集没变, 沿用最新一版 (含审计师在 ACC-01
+        改过的); 都不同, 说明数据集本身改了 (如补造画像改了内容), 才写新一版 (最新版本 +1)."""
+        versions = await self._profile_versions(profile.id)
+        if not versions:
+            return await self.save_profile(profile)
+        if any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
+            return versions[-1]
+        return await self.save_profile(profile.model_copy(update={"version": versions[-1].version + 1}))
 
     async def get(self, eid: str) -> Engagement | None:
         rows = await self.rows(eid, select(m.engagements).where(m.engagements.c.id == eid))
@@ -982,6 +989,19 @@ class PostgresEngagementStore(Store):
             stmt = stmt.where(m.client_profiles.c.version == version)
         rows = await self.rows(eid, stmt)
         return ClientProfile.model_validate(rows[0]["data"]) if rows else None
+
+    async def _profile_versions(self, client_id: str) -> list[ClientProfile]:
+        """该客户画像的各版, 按版本号从低到高; 没有时为空列表. 与 client_profile 一样并入当前项目事务."""
+        from backend.persistence.db import _active
+
+        active = _active.get()
+        eid = active[1] if active and active[0] is self.engine and active[3] is asyncio.current_task() else ""
+        stmt = (
+            select(m.client_profiles.c.data)
+            .where(m.client_profiles.c.id == client_id)
+            .order_by(m.client_profiles.c.version)
+        )
+        return [ClientProfile.model_validate(row["data"]) for row in await self.rows(eid, stmt)]
 
     async def save_profile(self, profile: ClientProfile) -> ClientProfile:
         from backend.persistence.db import _active
