@@ -479,6 +479,10 @@ class Judgment(Versioned):
     critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
     critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
     critic_reasoning_chain: list[ReasoningStep] = []  # 第一轮的独立推理链, 无效时仲裁不提供 a7_upheld
+    # 第一轮的建议动作与错报草稿 (功能 collab 打开时写回, 需求 R150); 草稿没通过第一轮校验 (建议错报而缺, 金额对不上,
+    # 不建议错报却给了) 时为空. 仲裁 a7_upheld 时据此要求或不许带错报草稿, 前端预填
+    critic_proposed_action: ProposedAction | None = None
+    critic_misstatement_draft: MisstatementDraft | None = None
     critic_model: str | None = None  # 复核用的模型名 (响应里的)
     critic_trail_ref: str | None = None  # 第二轮 (比对) 调用的留痕 ID
 
@@ -877,6 +881,8 @@ class ReviewRecord(Versioned):
     neither_action: NeitherAction | None = (
         None  # 仲裁为 neither 时必填, 本版只有 human_conclusion (附 override_conclusion)
     )
+    consulted: bool = False  # 仲裁时是否在系统外咨询过 (ASQM 1); 已咨询本身不是处置, 裁决仍是三值之一 (需求 R150)
+    consultation_record: str | None = None  # 咨询对象与结论; consulted 为真时必填 (功能 collab 打开时校验)
     reviewed_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间
 

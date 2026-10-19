@@ -14,6 +14,7 @@ from backend.contracts.models import (
     AuditObjective,
     AuditReportVersion,
     Decision,
+    DisputeResolution,
     GateVerdict,
     Judgment,
     OpinionType,
@@ -21,6 +22,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     ProfileSource,
+    ProposedAction,
     ReportStatus,
     ReviewRecord,
     ReviewTask,
@@ -47,6 +49,7 @@ from tests.fakes import (
     profile_update,
     wait_idle,
 )
+from tests.test_collab import CASH_DRAFT, COLLAB, CONSULT, disputed
 from tests.test_decisions import (
     FIXED_PROFILE,
     Started,
@@ -57,6 +60,7 @@ from tests.test_decisions import (
     started,
     stop_after_submit,
 )
+from tests.test_dispute import JID, resolve
 from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import REVIEWS, approve_materiality, start_numbat
 from tests.test_rerun import CrashAfterCommit, FlakyRegistry, failed_at_p0
@@ -413,6 +417,35 @@ async def test_review_decision_at_await_events_resumed() -> None:
     await s.runner.recover()
     assert not s.runner.is_running(EID)
     assert (await s.runner.app.aget_state(CONFIG)).config == snapshot.config and s.output_store.rows == rows
+
+
+async def test_a7_upheld_with_draft_and_consultation_recovered() -> None:
+    """R150 验收 7 (collab 打开, 沿用 R31): 争议变体 a7_upheld 带错报草稿与咨询记录 (D-ARB) 写 Store 后, 进程在
+    恢复节点前中断 (检查点未写): recover 后由 await_events 读回 -H1 (建议 misstatement), M-D-ARB 与任务 v2, 流程
+    继续 (再停在等 REV-03 的复核); decision 留痕 1 行, 不重复."""
+    s, _ = await disputed(COLLAB)
+    launch = s.runner.launch
+    stop_after_submit(s)
+    decision = resolve(
+        DisputeResolution.a7_upheld, misstatement_draft=CASH_DRAFT, consulted=True, consultation_record=CONSULT
+    )
+    await s.submit.submit(EID, decision)
+    s.runner.launch = launch  # type: ignore[method-assign]
+    assert decision.id not in {r.id for r in (await s.runner.app.aget_state(CONFIG)).values["review_records"]}
+
+    await s.runner.recover()
+    await wait_idle(s.runner, EID)
+
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    values = snapshot.values
+    assert snapshot.next == ("await_events",) and s.runner.run_error(EID) is None
+    assert decision.id in {r.id for r in values["review_records"]}
+    [human] = [j for j in values["judgments"] if j.id == f"{JID}-H1"]
+    assert (human.proposed_action, human.misstatement_draft) == (ProposedAction.misstatement, CASH_DRAFT)
+    assert [m.judgment_id for m in values["misstatements"] if m.id == "M-D-ARB"] == [human.id]
+    [task] = [t for t in values["review_tasks"] if t.id == "T-J-CSH-02-1-BA-01-v1"]
+    assert (task.version, task.status) == (2, TaskStatus.decided)
+    assert decision_keys(s).count(decision.id) == 1
 
 
 async def test_rerun_decision_in_p0_node_resumed_with_trail_backfilled() -> None:

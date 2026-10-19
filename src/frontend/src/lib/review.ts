@@ -3,11 +3,13 @@ import type {
   AuditException,
   Decision,
   Direction,
+  DisputeResolution,
   EngagementOverview,
   JudgmentView,
   MisstatementDraft,
   MisstatementType,
   ProcedureRun,
+  ProposedAction,
   ReviewRecordIn,
   ReviewTaskView,
 } from '@/client/types.gen'
@@ -127,10 +129,9 @@ export function emptyDraft(): ReviewDraft {
   }
 }
 
-// 只有人点"复制建议数据"才填入, 不预填
-export function draftFromJudgment(draft: ReviewDraft, judgment: JudgmentView): ReviewDraft {
-  const proposed = judgment.misstatement_draft
-  if (!proposed) return draft
+// 错报草稿填进表单. 只有人点"复制建议数据"才填入, 不预填; 例外: 功能 collab 打开时仲裁采纳的一方建议错报,
+// 选中即按该方的草稿预填 (见 attachRule)
+export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
   return {
     ...draft,
     account: proposed.account,
@@ -139,6 +140,71 @@ export function draftFromJudgment(draft: ReviewDraft, judgment: JudgmentView): R
     direction: proposed.direction,
     kind: proposed.type,
   }
+}
+
+// 争议任务两方的建议 (后端 R150): a6 为原判断的建议动作与错报草稿, a7 为独立复核的 (critic_ 字段; 功能 collab
+// 之前的判断没有, 为 null)
+export type DisputeSide = 'a6' | 'a7'
+export type SideProposal = { action: ProposedAction | null; draft: MisstatementDraft | null }
+
+export function sideProposal(judgment: JudgmentView | null, side: DisputeSide): SideProposal {
+  if (!judgment) return { action: null, draft: null }
+  if (side === 'a6') return { action: judgment.proposed_action ?? null, draft: judgment.misstatement_draft ?? null }
+  return { action: judgment.critic_proposed_action ?? null, draft: judgment.critic_misstatement_draft ?? null }
+}
+
+// 仲裁时 "同时登记错报" 这一项 (功能 collab 打开时, 同后端 check_dispute_draft): 采纳的一方建议错报为 required
+// (自动勾选, 不能取消), 建议其他动作为 hidden (不显示, 不带草稿); 该方没给建议, 选 neither 或 collab 关闭时 optional
+export type AttachRule = 'required' | 'hidden' | 'optional'
+
+export function attachRule(
+  judgment: JudgmentView | null,
+  choice: DisputeResolution | null,
+  collab: boolean,
+): AttachRule {
+  if (!collab || (choice !== 'a6_upheld' && choice !== 'a7_upheld')) return 'optional'
+  const { action } = sideProposal(judgment, choice === 'a6_upheld' ? 'a6' : 'a7')
+  if (action == null) return 'optional'
+  return action === 'misstatement' ? 'required' : 'hidden'
+}
+
+export type DisputeInput = {
+  choice: DisputeResolution
+  attach: boolean // 审计师勾了 "同时登记错报" (attachRule 为 optional 时才看)
+  consulted: boolean
+  consultation: string
+  collab: boolean
+}
+
+// 仲裁的请求体; 缺必填时返回错误文案. collab 关闭时不带咨询字段, 错报草稿只看勾选 (同 collab 之前)
+export function buildDisputeRecord(
+  view: ReviewTaskView,
+  input: ReviewDraft,
+  dispute: DisputeInput,
+  t: Messages,
+): ReviewRecordIn | string {
+  const reason = input.reason.trim()
+  const conclusion = input.conclusion.trim()
+  if (!reason) return t.errors.reasonRequired
+  if (dispute.choice === 'neither' && !conclusion) return t.errors.conclusionRequired
+  const judgment = isJudgment(view.target) ? view.target : null
+  const rule = attachRule(judgment, dispute.choice, dispute.collab)
+  const attached = rule === 'required' || (rule === 'optional' && dispute.attach) ? misstatementDraft(input, t) : null
+  if (typeof attached === 'string') return attached
+  const consultation = dispute.consultation.trim()
+  if (dispute.collab && dispute.consulted && !consultation) return t.errors.consultationRequired
+  const body: ReviewRecordIn = {
+    task_id: view.task.id,
+    target_version: view.task.target_version,
+    decision: 'dispute_resolution',
+    reason,
+    dispute_resolution: dispute.choice,
+    neither_action: dispute.choice === 'neither' ? 'human_conclusion' : null,
+    override_conclusion: dispute.choice === 'neither' ? conclusion : null,
+    misstatement_draft: attached,
+  }
+  if (!dispute.collab) return body
+  return { ...body, consulted: dispute.consulted, consultation_record: dispute.consulted ? consultation : null }
 }
 
 export function reasonRequired(decision: Decision | null): boolean {

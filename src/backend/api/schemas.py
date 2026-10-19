@@ -130,6 +130,8 @@ class ReviewRecordIn(Model):
     manual_result: ManualResult | None = None
     dispute_resolution: DisputeResolution | None = None
     neither_action: NeitherAction | None = None
+    consulted: bool = False  # 仲裁时是否在系统外咨询过 (需求 R150)
+    consultation_record: str | None = None  # 咨询对象与结论, consulted 为真时必填 (功能 collab 打开时校验)
 
 
 class RerunIn(Model):

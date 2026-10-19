@@ -181,6 +181,8 @@ class JudgmentView(Model):
     critic_reason: str | None = None  # 理由
     critic_conclusion: str | None = None  # 独立结论
     critic_reasoning_chain: list[ReasoningStep] | None  # 独立推理链
+    critic_proposed_action: ProposedAction | None = None  # 独立复核的建议动作
+    critic_misstatement_draft: MisstatementDraft | None = None  # 独立复核的错报草稿
     critic_model: str | None = None  # 复核用的模型名
     critic_trail_ref: str | None = None  # 第二轮调用的留痕 ID
     hidden_fields: list[str] = []  # 被隐藏 (置空) 的字段名

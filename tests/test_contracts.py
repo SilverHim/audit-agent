@@ -7,21 +7,27 @@ from pydantic import ValidationError
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
+    Assertion,
     AuditException,
     AutonomyLevel,
     ClientProfile,
     CriticTrigger,
+    Decision,
+    Direction,
     DocumentRef,
     DocumentType,
     EvidencePointer,
     EvidenceType,
     GateId,
     Judgment,
+    MisstatementDraft,
+    MisstatementType,
     Phase,
     Procedure,
     ProcedureStatus,
     ProposedAction,
     Reliability,
+    ReviewRecord,
     ReviewStatus,
     TaskKind,
     TrailKind,
@@ -208,6 +214,45 @@ def test_procedure_in_dispute_survives_store_json_and_checkpoint() -> None:
     serde = checkpoint_serde()
     back = serde.loads_typed(serde.dumps_typed({"procedure_pack": [procedure]}))
     assert back["procedure_pack"] == [procedure] and back["procedure_pack"][0].status is ProcedureStatus.in_dispute
+
+
+def test_old_judgment_and_decision_json_read_without_r150_keys() -> None:
+    """R150 验收 3: 旧判断 J-CSH-02-1-BA-01 与旧决定 D-CSH02 的 JSON (没有新键) 读得出, 新字段为缺省; 含新字段的状态
+    经检查点存回读出不变."""
+    draft = MisstatementDraft(
+        type=MisstatementType.factual,
+        account="Cash",
+        assertion=Assertion.Cutoff,
+        amount_cents=5000000,
+        direction=Direction.overstated,
+    )
+    judgment = JUDGMENT.model_copy(update={"id": "J-CSH-02-1-BA-01", "procedure_id": "CSH-02"})
+    old = judgment.model_dump(mode="json")
+    del old["critic_proposed_action"], old["critic_misstatement_draft"]
+    back = Judgment.model_validate_json(json.dumps(old))
+    assert (back.critic_proposed_action, back.critic_misstatement_draft) == (None, None)
+    decision = ReviewRecord(
+        id="D-CSH02",
+        task_id="T-J-CSH-02-1-BA-01-v1",
+        target_version=1,
+        decision=Decision.confirm,
+        reviewed_by="U-1",
+        decided_at=datetime(2026, 7, 15, tzinfo=UTC),
+    )
+    stored = decision.model_dump(mode="json")
+    del stored["consulted"], stored["consultation_record"]
+    read = ReviewRecord.model_validate_json(json.dumps(stored))
+    assert (read.consulted, read.consultation_record) == (False, None)
+    serde = checkpoint_serde()
+    values = {
+        "judgments": [
+            judgment.model_copy(
+                update={"critic_proposed_action": ProposedAction.misstatement, "critic_misstatement_draft": draft}
+            )
+        ],
+        "review_records": [decision.model_copy(update={"consulted": True, "consultation_record": "技术合伙人"})],
+    }
+    assert serde.loads_typed(serde.dumps_typed(values)) == values
 
 
 # ── R127: 客户画像的扩展字段 ──

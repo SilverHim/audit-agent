@@ -52,6 +52,7 @@ from tests.fakes import (
     make_deps,
     make_procedure,
     make_run,
+    numbat_rev08_exception,
     xero_engagement,
     xero_financial_store,
     xero_snapshot,
@@ -363,6 +364,36 @@ async def test_collab_records_main_and_keeps_trigger_when_review_incomplete() ->
     assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.consistent, CriticTrigger.main)
     j = await x.agent(scripted(x.invoice.id, ["not json"] * 3, [verdict()])).review(x.ctx, x.judgment())
     assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.not_applicable, CriticTrigger.main)
+
+
+async def test_collab_critic_draft_amount_may_come_from_explained_exceptions() -> None:
+    """R150 验收 2: 复核方建议错报, 草稿金额只等于该判断解释的例外的金额 (不是给出的发票行, 分录行的金额,
+    也不是两行之差): 传入例外时写回草稿; 不传时草稿不写回, critic_proposed_action 照写. collab 关闭时两项都不写回."""
+    x = Xero(features=COLLAB)
+    amount = 1234567
+    explained = numbat_rev08_exception(make_run("REV-02")).model_copy(update={"amount_cents": -amount})
+    draft = {"type": "factual", "account": "Revenue", "assertion": "Cutoff", "amount_cents": amount}
+    first = json.loads(x.independent()) | {
+        "proposed_action": "misstatement",
+        "misstatement_draft": draft | {"direction": "overstated"},
+    }
+
+    def review() -> ScriptedLLM:
+        return scripted(x.invoice.id, [json.dumps(first)], [verdict("inconsistent", "different_conclusion")])
+
+    closing = x.judgment(proposed_action=ProposedAction.close)
+    j = await x.agent(review()).review(x.ctx, closing, [explained])
+    assert j.critic_proposed_action is ProposedAction.misstatement
+    assert j.critic_misstatement_draft is not None and j.critic_misstatement_draft.amount_cents == amount
+    j = await x.agent(review()).review(x.ctx, closing)
+    assert (j.critic_proposed_action, j.critic_misstatement_draft) == (ProposedAction.misstatement, None)
+    x.features = BASELINE
+    j = await x.agent(review()).review(x.ctx, closing, [explained])
+    assert (j.critic_verdict, j.critic_proposed_action, j.critic_misstatement_draft) == (
+        CriticVerdict.inconsistent,
+        None,
+        None,
+    )
 
 
 def test_trigger_order_and_sample() -> None:

@@ -19,6 +19,7 @@ from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import CriticIndependent, CriticVerdictOut
 from backend.contracts.models import (
     AgentId,
+    AuditException,
     AutonomyLevel,
     CriticTrigger,
     CriticVerdict,
@@ -113,8 +114,9 @@ class ReviewAgent(ProcedureAgent[None]):
     async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
         raise NotImplementedError("GEN-09 不单独派发, 由 A6 对每条判断调用 ReviewAgent.review")
 
-    async def review(self, ctx: RunContext, judgment: Judgment) -> Judgment:
+    async def review(self, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException] = ()) -> Judgment:
         """复核 A6 在 ctx 这次执行中生成的一条判断, 返回写好 critic 字段 (consistent 时含新置信度) 的同一版本.
+        findings: 该判断解释的例外 (A6 判断时同一组规则例外, 含本次执行刚建的), 第一轮校验错报草稿的金额用.
 
         跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
         未命中触发规则 (见 trigger); critic_reason 写明原因.
@@ -143,7 +145,7 @@ class ReviewAgent(ProcedureAgent[None]):
                 return skip(judgment, "未命中独立复核的触发规则")
             if collab:
                 judgment = judgment.model_copy(update={"critic_trigger": hit})
-            return await self.cross_check(ctx, template, judgment, given)
+            return await self.cross_check(ctx, template, judgment, given, findings)
         except Exception as e:
             return incomplete(judgment, str(e))
 
@@ -153,9 +155,12 @@ class ReviewAgent(ProcedureAgent[None]):
         template: ProcedureTemplate,
         judgment: Judgment,
         given: list[EvidencePointer] | None = None,
+        findings: Sequence[AuditException] = (),
     ) -> Judgment:
         """两轮调用复核模型 (见模块说明). 没有能给的证据, 或任一轮未通过校验时记 not_applicable.
-        given: review 判定触发规则时已取得的第一轮证据 (given_evidence), 为空时在这里取."""
+        given: review 判定触发规则时已取得的第一轮证据 (given_evidence), 为空时在这里取.
+        findings: 该判断解释的例外, 第一轮校验错报草稿的金额用 (口径同 A6 的错报草稿).
+        功能 collab 打开时另写回第一轮的建议动作与 (通过校验的) 错报草稿 (需求 R150)."""
         eid, subject = ctx.engagement.id, judgment.subject_id
         engine, llm = self.deps.judgments, self.deps.review_llm
         procedure = {
@@ -187,7 +192,7 @@ class ReviewAgent(ProcedureAgent[None]):
                 "items": items,
                 "standards": engine.standards(ctx.template),
             },
-            ValidationContext(allowed_evidence=allowed),
+            ValidationContext(allowed_evidence=allowed, rule_findings=list(findings)),
             self.agent_id,
             f"{subject}-r1",
             llm=llm,
@@ -236,6 +241,11 @@ class ReviewAgent(ProcedureAgent[None]):
             "critic_model": second.model,
             "critic_trail_ref": second.trail_ids[-1],
         }
+        if COLLAB in self.deps.features:
+            update |= {
+                "critic_proposed_action": independent.proposed_action,
+                "critic_misstatement_draft": independent.misstatement_draft,
+            }
         if verdict.critic_verdict == "consistent":
             if not critic_chain_ok(steps):  # 结论相同而依据站不住, 不算复核过; 推理链照存, 供人复核时看
                 detail = f"判为一致, 但独立推理链没有通过校验, 不计复核分项 ({brief(first.report.errors)})"

@@ -2529,6 +2529,8 @@ export type JudgmentView = {
      * Critic Reasoning Chain
      */
     critic_reasoning_chain: Array<ReasoningStep> | null;
+    critic_proposed_action?: ProposedAction | null;
+    critic_misstatement_draft?: MisstatementDraft | null;
     /**
      * Critic Model
      */
@@ -3466,6 +3468,14 @@ export type ReviewRecord = {
     dispute_resolution?: DisputeResolution | null;
     neither_action?: NeitherAction | null;
     /**
+     * Consulted
+     */
+    consulted?: boolean;
+    /**
+     * Consultation Record
+     */
+    consultation_record?: string | null;
+    /**
      * Reviewed By
      */
     reviewed_by: string;
@@ -3508,6 +3518,14 @@ export type ReviewRecordIn = {
     manual_result?: ManualResult | null;
     dispute_resolution?: DisputeResolution | null;
     neither_action?: NeitherAction | null;
+    /**
+     * Consulted
+     */
+    consulted?: boolean;
+    /**
+     * Consultation Record
+     */
+    consultation_record?: string | null;
 };
 
 /**

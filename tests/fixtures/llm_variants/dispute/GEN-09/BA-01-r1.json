@@ -104,5 +104,13 @@
         5
       ]
     }
-  ]
+  ],
+  "proposed_action": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Cash",
+    "assertion": "Cutoff",
+    "amount_cents": 5000000,
+    "direction": "overstated"
+  }
 }

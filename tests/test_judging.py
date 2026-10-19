@@ -1,7 +1,7 @@
 """判断公共流程 (agents/judging.py): 插入点顺序, 缺省步骤, 判断的自主度取程序运行时级别 (开发接口文档第 6 节)."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -69,9 +69,11 @@ class RecordingCritic:
 
     def __init__(self, calls: list[Call]) -> None:
         self.calls = calls
+        self.findings: list[tuple[str, list[str]]] = []  # (判断对象, 收到的例外 ID)
 
-    async def review(self, ctx: RunContext, judgment: Judgment) -> Judgment:
+    async def review(self, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException] = ()) -> Judgment:
         self.calls.append(("critic", judgment.subject_id))
+        self.findings.append((judgment.subject_id, [x.id for x in findings]))
         return judgment.model_copy(update={"critic_verdict": CriticVerdict.consistent, "critic_reason": "same"})
 
 
@@ -158,6 +160,17 @@ async def test_failed_subjects_skip_critic_downgrade_and_blind() -> None:
         ("classify", "-"),
         ("make_task", "unattributed"),
     ]
+
+
+async def test_critic_gets_the_subjects_rule_findings() -> None:
+    """R150: A7 收到该判断对象的规则例外 (A6 判断时的同一组), 第一轮校验复核方错报草稿的金额用."""
+    x1 = numbat_rev08_exception(make_run("REV-08"))
+    subjects = [Subject("A", {}, [x1]), Subject("B", {})]
+    level = AutonomyLevel.L3
+    agent, ctx, _ = recorded("REV-02", subjects, {"A": passed(autonomy_level=level), "B": passed(autonomy_level=level)})
+    ctx = RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, ctx.state | {"exceptions": [x1]})
+    await agent.run(ctx)
+    assert agent.reviewer.findings == [("A", [x1.id]), ("B", [])]
 
 
 @pytest.mark.parametrize(

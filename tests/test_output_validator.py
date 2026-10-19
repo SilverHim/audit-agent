@@ -587,6 +587,70 @@ async def test_misstatement_amount_from_rows_or_their_difference(amount: int, pa
     assert (report.level_failed is None) is passes
 
 
+# ── 独立复核第一轮的错报草稿 (R150, 只记不判失败) ──
+
+GEN09 = LIBRARY.load("GEN-09")
+CR0547 = row("journal_entry", "CR-SI-2026-0547-1")  # 借方 5000000
+BT0630 = row("bank_transaction", "BT-01-20260630-03")  # 金额 -1555000
+
+
+def critic_output(
+    action: ProposedAction | None, amount: int | None, cited: EvidencePointer = CR0547
+) -> CriticIndependent:
+    """第一轮输出: 推理链只引用 cited; 给了 amount 时带错报草稿 (Cash, Cutoff, overstated)."""
+    draft = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account": "Cash", "amount_cents": amount}) if amount else None
+    chain = [
+        ReasoningStep(kind=StepKind.fact, text="The receipt was debited on 30 June.", evidence=[cited]),
+        ReasoningStep(kind=StepKind.inference, text="So cash is overstated.", from_steps=[0]),
+    ]
+    return CriticIndependent(
+        conclusion="Cash is overstated.", reasoning_chain=chain, proposed_action=action, misstatement_draft=draft
+    )
+
+
+async def critic_check(output: CriticIndependent, findings: list[AuditException] = ()) -> Any:  # type: ignore[assignment]
+    validator, _ = make_validator()
+    ctx = ValidationContext(allowed_evidence=[CR0547, BT0630], rule_findings=list(findings))
+    return await validator.validate(EID, GEN09, respond(output), ctx)
+
+
+@pytest.mark.parametrize(
+    ("action", "amount", "findings", "kept", "error"),
+    [
+        (ProposedAction.misstatement, 5000000, [], True, None),  # 引用行的借方金额
+        (ProposedAction.misstatement, 1555000, [], True, None),  # 第一轮给出而推理链没引用的行也算, 按绝对值
+        (ProposedAction.misstatement, 3445000, [], True, None),  # 两行之差
+        (ProposedAction.misstatement, 777, [B01.model_copy(update={"amount_cents": -777})], True, None),  # 例外金额
+        (ProposedAction.misstatement, 4000000, [B01], False, "独立复核的错报金额 4000000 不等于"),
+        (ProposedAction.misstatement, None, [], False, "独立复核建议认定错报, 但没有错报草稿"),
+        (ProposedAction.close, 5000000, [], False, "独立复核建议 close, 却给了错报草稿"),
+        (ProposedAction.close, None, [], False, None),
+        (None, None, [], False, None),  # 旧输出: 没有这两项
+    ],
+)
+async def test_critic_draft_checked_only_noted(
+    action: ProposedAction | None, amount: int | None, findings: list[AuditException], kept: bool, error: str | None
+) -> None:
+    """建议 misstatement 而无草稿, 不建议却给了, 或金额 (口径同 A6 的草稿) 对不上第一轮给出的行与该判断解释的例外:
+    草稿不写回, 问题记进 errors; 都不判失败. 对上则保留."""
+    output = critic_output(action, amount)
+    report = await critic_check(output, findings)
+    assert report.level_failed is None
+    assert report.output.misstatement_draft == (output.misstatement_draft if kept else None)
+    assert report.output.proposed_action is action
+    draft_errors = [e for e in report.errors if "错报" in e]
+    assert draft_errors[0].startswith(error) if error else draft_errors == [], report.errors
+
+
+def test_old_critic_output_without_new_keys_parses() -> None:
+    """R150 验收 1: 现有 GEN-09/BA-01-r1 (没有 proposed_action 与 misstatement_draft) 照样通过结构校验, 两项为空;
+    输出模型的 JSON schema 可生成且含这两项."""
+    raw = (FIXTURES / "GEN-09" / "BA-01-r1.json").read_text(encoding="utf-8")
+    parsed = CriticIndependent.model_validate_json(raw)
+    assert (parsed.proposed_action, parsed.misstatement_draft) == (None, None)
+    assert {"proposed_action", "misstatement_draft"} <= set(CriticIndependent.model_json_schema()["properties"])
+
+
 def test_supported_amounts_skip_zero_and_bool() -> None:
     rows = [{"amount_cents": 100, "flag_cents": True}, {"amount_cents": -100, "zero_cents": 0}]
     assert supported_amounts(rows, []) == {100}

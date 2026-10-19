@@ -14,6 +14,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     Decision,
     Direction,
+    DisputeResolution,
     EvidencePointer,
     ExceptionDisposition,
     GateDecision,
@@ -34,7 +35,12 @@ from backend.contracts.models import (
     TaskStatus,
     TrailKind,
 )
-from backend.orchestration.decisions import human_judgment_id, recompute_procedure
+from backend.orchestration.decisions import (
+    check_consultation,
+    check_dispute_draft,
+    human_judgment_id,
+    recompute_procedure,
+)
 from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
 from backend.services.review_queue import attribute_exceptions
@@ -902,3 +908,86 @@ async def test_human_judgment_numbered_from_checkpoint() -> None:
 
     created = {o.id for o in s.output_store.commits[before] if isinstance(o, Judgment)}
     assert "J-REV-02-1-SI-2026-0618-H2" in created
+
+
+# ── R150: 仲裁的错报草稿与系统外咨询 (功能 collab 打开时的校验, 纯函数) ──
+
+DISPUTE = "T-J-CSH-02-1-BA-01-v1"
+
+
+def arbitration(resolution: DisputeResolution, draft: bool = False, **fields: Any) -> ReviewRecord:
+    extra: dict[str, Any] = {"misstatement_draft": DRAFT} if draft else {}
+    return record(DISPUTE, Decision.dispute_resolution, dispute_resolution=resolution, **extra, **fields)
+
+
+def disputed_judgment(a6: ProposedAction, a7: ProposedAction | None) -> Judgment:
+    return Judgment.model_construct(id="J-CSH-02-1-BA-01", proposed_action=a6, critic_proposed_action=a7)
+
+
+@pytest.mark.parametrize(
+    ("resolution", "a6", "a7", "draft", "code"),
+    [
+        # a6_upheld 看原判断: 建议错报须带, 不建议不能带
+        (DisputeResolution.a6_upheld, ProposedAction.misstatement, None, False, "MISSING_FIELD"),
+        (DisputeResolution.a6_upheld, ProposedAction.misstatement, None, True, None),
+        (DisputeResolution.a6_upheld, ProposedAction.close, ProposedAction.misstatement, True, "FIELD_NOT_ALLOWED"),
+        (DisputeResolution.a6_upheld, ProposedAction.close, ProposedAction.misstatement, False, None),
+        # a7_upheld 看独立复核的建议动作; 为空 (旧判断) 两可
+        (DisputeResolution.a7_upheld, ProposedAction.close, ProposedAction.misstatement, False, "MISSING_FIELD"),
+        (DisputeResolution.a7_upheld, ProposedAction.close, ProposedAction.misstatement, True, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.accept, True, "FIELD_NOT_ALLOWED"),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.close, True, "FIELD_NOT_ALLOWED"),
+        (
+            DisputeResolution.a7_upheld,
+            ProposedAction.misstatement,
+            ProposedAction.more_evidence,
+            True,
+            "FIELD_NOT_ALLOWED",
+        ),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, ProposedAction.more_evidence, False, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, None, True, None),
+        (DisputeResolution.a7_upheld, ProposedAction.misstatement, None, False, None),
+        # neither 两可
+        (DisputeResolution.neither, ProposedAction.misstatement, ProposedAction.misstatement, False, None),
+        (DisputeResolution.neither, ProposedAction.close, ProposedAction.close, True, None),
+    ],
+)
+def test_dispute_draft_follows_adopted_side(
+    resolution: DisputeResolution, a6: ProposedAction, a7: ProposedAction | None, draft: bool, code: str | None
+) -> None:
+    """R150 验收 4 (a)(b)(c): 采纳的一方建议错报时裁决必须带错报草稿, 不建议时不能带; neither 两可."""
+    decision = arbitration(resolution, draft)
+    if code is None:
+        check_dispute_draft(decision, disputed_judgment(a6, a7))
+        return
+    with pytest.raises(DecisionRejected) as e:
+        check_dispute_draft(decision, disputed_judgment(a6, a7))
+    assert e.value.code == code
+    if code == "MISSING_FIELD":
+        assert e.value.message == "misstatement_draft"
+
+
+@pytest.mark.parametrize(
+    ("decision", "code", "message"),
+    [
+        (arbitration(DisputeResolution.a6_upheld, consulted=True), "MISSING_FIELD", "consultation_record"),
+        (arbitration(DisputeResolution.a6_upheld, consulted=True, consultation_record="  "), "MISSING_FIELD", None),
+        (arbitration(DisputeResolution.a6_upheld, consultation_record="技术合伙人"), "FIELD_NOT_ALLOWED", None),
+        (record(consulted=True, consultation_record="技术合伙人"), "FIELD_NOT_ALLOWED", None),
+        (record(consulted=True), "FIELD_NOT_ALLOWED", "consulted, consultation_record"),
+        (arbitration(DisputeResolution.a6_upheld, consulted=True, consultation_record="技术合伙人"), None, None),
+        (arbitration(DisputeResolution.a6_upheld), None, None),
+        (record(), None, None),
+    ],
+)
+def test_consultation_fields(decision: ReviewRecord, code: str | None, message: str | None) -> None:
+    """R150 验收 4 (d): consulted 为真而咨询记录空 → MISSING_FIELD; 记录非空而 consulted 假 → FIELD_NOT_ALLOWED;
+    非仲裁的决定填这两项 → FIELD_NOT_ALLOWED."""
+    if code is None:
+        check_consultation(decision)
+        return
+    with pytest.raises(DecisionRejected) as e:
+        check_consultation(decision)
+    assert e.value.code == code
+    if message is not None:
+        assert e.value.message == message

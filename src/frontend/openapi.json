@@ -8632,6 +8632,26 @@
             ],
             "title": "Critic Reasoning Chain"
           },
+          "critic_proposed_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "critic_model": {
             "anyOf": [
               {
@@ -10245,6 +10265,22 @@
               }
             ]
           },
+          "consulted": {
+            "type": "boolean",
+            "title": "Consulted",
+            "default": false
+          },
+          "consultation_record": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consultation Record"
+          },
           "reviewed_by": {
             "type": "string",
             "title": "Reviewed By"
@@ -10354,6 +10390,22 @@
                 "type": "null"
               }
             ]
+          },
+          "consulted": {
+            "type": "boolean",
+            "title": "Consulted",
+            "default": false
+          },
+          "consultation_record": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consultation Record"
           }
         },
         "additionalProperties": false,

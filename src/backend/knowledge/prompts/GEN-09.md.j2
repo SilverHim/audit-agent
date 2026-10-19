@@ -8,6 +8,7 @@ GEN-09 判断独立复核第一轮 → CriticIndependent，A6 每生成一条命
   items           证据，每条：pointer（EvidencePointer：type、source_type、source_id、locator、page、reliability）
                   与 content（数据行、文件该页的文本、准则片段原文或留痕摘要）；推理链只能引用这些指针
   standards       该程序引用的 StandardFragment：id、standard、paragraph、text
+输出另有 proposed_action 与 misstatement_draft（建议 misstatement 时必给；需求 R150），只在功能 collab 打开时写回判断。
 #}
 You are an independent reviewer assisting a registered company auditor. Another analyst has already evaluated subject {{ subject_id }} under the procedure "{{ procedure.name }}" ({{ procedure.id }}, assertions: {{ procedure.assertions | join(", ") }}). You are not shown their conclusion. Reach your own conclusion from the evidence below only.
 
@@ -49,3 +50,5 @@ Standards (cite only these IDs):
   - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
   - `assumption`: a premise the evidence does not establish. `limitation`: a gap in the evidence that affects the conclusion.
   - Leave `status` unset. The last step is an inference that states the conclusion.
+- `proposed_action`: what you would do with this subject on this evidence: `accept` (no issue), `close` (the matter is resolved), `misstatement` (the evidence shows a misstatement), or `more_evidence` (the evidence is not enough to decide).
+- `misstatement_draft`: required when `proposed_action` is `misstatement`, otherwise null. `type` (factual, judgmental or projected), `account`, `assertion`, `amount_cents` (an amount in cents taken from the evidence above: a row amount or the difference between two rows) and `direction` (overstated or understated).

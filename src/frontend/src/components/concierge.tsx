@@ -9,6 +9,7 @@ import type {
   Decision,
   Direction,
   JudgmentView,
+  MisstatementDraft,
   MisstatementType,
   ReasoningStep,
   ReviewRecordIn,
@@ -24,18 +25,23 @@ import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import {
+  attachRule,
+  buildDisputeRecord,
   buildRecord,
-  draftFromJudgment,
+  type DisputeSide,
+  draftFromMisstatement,
   emptyDraft,
   isException,
   isJudgment,
   isRun,
-  misstatementDraft,
   procedureName,
   type RankedTask,
   type ReviewDraft,
   reasonRequired,
+  type SideProposal,
+  sideProposal,
 } from '@/lib/review'
+import { useOverview } from '@/lib/use-engagement'
 
 // 对话流的组成部件: 消息, 判断卡片, 人工决定卡片
 
@@ -387,6 +393,46 @@ const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 text-[14px]'
 
 type DisputeChoice = 'a6_upheld' | 'a7_upheld' | 'neither'
 const DISPUTE_CHOICES: DisputeChoice[] = ['a6_upheld', 'a7_upheld', 'neither']
+const SIDES: DisputeSide[] = ['a6', 'a7']
+
+// 错报框上 "复制建议数据" 的来源: 功能 collab 打开的仲裁按采纳的一方 (neither 时两方都给), 其余为原判断的草稿
+function copySources(
+  judgment: JudgmentView | null,
+  dispute: DisputeChoice | null,
+  collabDispute: boolean,
+): { side: DisputeSide; source: MisstatementDraft }[] {
+  const sides: DisputeSide[] = !collabDispute
+    ? ['a6']
+    : dispute === 'a6_upheld'
+      ? ['a6']
+      : dispute === 'a7_upheld'
+        ? ['a7']
+        : SIDES
+  return sides.flatMap((side) => {
+    const source = sideProposal(judgment, side).draft
+    return source ? [{ side, source }] : []
+  })
+}
+
+// 争议卡上一方的建议动作与错报草稿 (功能 collab)
+function SideCard({ side, proposal }: { side: DisputeSide; proposal: SideProposal }) {
+  const { t } = useI18n()
+  const { action, draft } = proposal
+  return (
+    <div className="flex flex-col gap-1 rounded-[10px] border px-3.5 py-3" data-testid={`dispute-side-${side}`}>
+      <span className="text-[12px] text-muted-foreground">{t.card.sides[side]}</span>
+      <span className={cn('font-semibold', action === 'misstatement' && 'text-risk')}>
+        {action ? t.proposed[action] : t.card.sides.none}
+      </span>
+      {draft ? (
+        <Code className="text-[12.5px] text-secondary-foreground">
+          {draft.account} · {t.assertions[draft.assertion]} · {formatAud(draft.amount_cents)} ·{' '}
+          {t.directions[draft.direction]}
+        </Code>
+      ) : null}
+    </div>
+  )
+}
 
 export function ReviewDecisionCard({
   eid,
@@ -414,10 +460,25 @@ export function ReviewDecisionCard({
   const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
   const [dispute, setDispute] = useState<DisputeChoice | null>(null)
   const [withMisstatement, setWithMisstatement] = useState(false)
+  const [consulted, setConsulted] = useState(false)
+  const [consultation, setConsultation] = useState('')
+  // 项目开了智能体协作 (功能 collab) 时仲裁表单按两方的建议给错报项, 另可记系统外咨询; 关闭时照原样
+  const collab = useOverview(eid)?.features?.includes('collab') ?? false
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
   const isDispute = (decision as string | null) === 'dispute_resolution'
+  const collabDispute = isDispute && collab
+  const rule = isDispute ? attachRule(judgment, dispute, collab) : 'optional'
+  const attaching = rule === 'required' || (rule === 'optional' && withMisstatement)
+
+  const choose = (choice: DisputeChoice) => {
+    setDispute(choice)
+    // 采纳的一方建议错报: 草稿框按该方的草稿预填, 可改
+    if (attachRule(judgment, choice, collab) !== 'required') return
+    const proposed = sideProposal(judgment, choice === 'a6_upheld' ? 'a6' : 'a7').draft
+    if (proposed) setDraft((current) => draftFromMisstatement(current, proposed))
+  }
 
   const submit = useMutation({
     ...reviewsSubmitReviewRecordMutation(),
@@ -431,20 +492,10 @@ export function ReviewDecisionCard({
   const record = () => {
     if (!decision) return
     if (isDispute) {
-      if (!draft.reason.trim()) return toast.error(t.errors.reasonRequired)
-      if (dispute === 'neither' && !draft.conclusion.trim()) return toast.error(t.errors.conclusionRequired)
-      const attached = withMisstatement ? misstatementDraft(draft, t) : null
-      if (typeof attached === 'string') return toast.error(attached)
-      const body: ReviewRecordIn = {
-        task_id: view.task.id,
-        target_version: view.task.target_version,
-        decision,
-        reason: draft.reason.trim(),
-        dispute_resolution: dispute,
-        neither_action: dispute === 'neither' ? 'human_conclusion' : null,
-        override_conclusion: dispute === 'neither' ? draft.conclusion.trim() : null,
-        misstatement_draft: attached,
-      }
+      if (!dispute) return
+      const input = { choice: dispute, attach: withMisstatement, consulted, consultation, collab }
+      const body: ReviewRecordIn | string = buildDisputeRecord(view, draft, input, t)
+      if (typeof body === 'string') return toast.error(body)
       submit.mutate({ path: { eid }, body })
       return
     }
@@ -454,7 +505,8 @@ export function ReviewDecisionCard({
   }
 
   const busy = disabled || submit.isPending
-  const showsMisstatement = decision === 'misstatement' || (isDispute && withMisstatement)
+  const showsMisstatement = decision === 'misstatement' || (isDispute && attaching)
+  const copies = showsMisstatement ? copySources(judgment, dispute, collabDispute) : []
   const needsConclusion =
     decision === 'override' || decision === 'manual_result' || (isDispute && dispute === 'neither')
   const ready =
@@ -462,7 +514,8 @@ export function ReviewDecisionCard({
     (!reasonRequired(decision) || draft.reason.trim().length > 0) &&
     (!isDispute || dispute != null) &&
     (!needsConclusion || draft.conclusion.trim().length > 0) &&
-    (!showsMisstatement || (draft.account.trim().length > 0 && draft.amount.trim().length > 0))
+    (!showsMisstatement || (draft.account.trim().length > 0 && draft.amount.trim().length > 0)) &&
+    (!collabDispute || !consulted || consultation.trim().length > 0)
 
   return (
     <DecisionFrame
@@ -499,6 +552,17 @@ export function ReviewDecisionCard({
         ))}
       </fieldset>
 
+      {collabDispute ? (
+        <div className="flex flex-col gap-1.5">
+          <SectionLabel>{t.card.sides.title}</SectionLabel>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-2.5">
+            {SIDES.map((side) => (
+              <SideCard key={side} side={side} proposal={sideProposal(judgment, side)} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {isDispute ? (
         <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
           <legend className="sr-only">{t.decisions.dispute_resolution}</legend>
@@ -508,7 +572,7 @@ export function ReviewDecisionCard({
               name={`dispute-${view.task.id}`}
               value={choice}
               checked={dispute === choice}
-              onSelect={() => setDispute(choice)}
+              onSelect={() => choose(choice)}
               label={t.card.dispute[choice]}
               hint={allowedResolutions.has(choice) ? undefined : t.card.disputeUnavailable}
               disabled={busy || !allowedResolutions.has(choice)}
@@ -517,17 +581,25 @@ export function ReviewDecisionCard({
         </fieldset>
       ) : null}
 
-      {isDispute ? (
-        <div className="flex items-center gap-2 text-[13.5px]">
-          <input
-            id={`attach-ms-${view.task.id}`}
-            type="checkbox"
-            className="size-4 accent-primary"
-            checked={withMisstatement}
-            disabled={busy}
-            onChange={(event) => setWithMisstatement(event.target.checked)}
-          />
-          <label htmlFor={`attach-ms-${view.task.id}`}>{t.card.attachMisstatement}</label>
+      {isDispute && rule !== 'hidden' ? (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-[13.5px]">
+            <input
+              id={`attach-ms-${view.task.id}`}
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={attaching}
+              disabled={busy || rule === 'required'}
+              aria-describedby={rule === 'required' ? `attach-ms-note-${view.task.id}` : undefined}
+              onChange={(event) => setWithMisstatement(event.target.checked)}
+            />
+            <label htmlFor={`attach-ms-${view.task.id}`}>{t.card.attachMisstatement}</label>
+          </div>
+          {rule === 'required' ? (
+            <span id={`attach-ms-note-${view.task.id}`} className="text-[12.5px] text-muted-foreground">
+              {t.card.attachRequired}
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -552,11 +624,18 @@ export function ReviewDecisionCard({
         <div className="flex flex-col gap-2.5 rounded-[10px] border p-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-semibold text-[13px]">{t.card.misstatement}</span>
-            {judgment?.misstatement_draft ? (
-              <Button type="button" variant="outline" onClick={() => setDraft(draftFromJudgment(draft, judgment))}>
-                {t.card.copyDraft}
-              </Button>
-            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {copies.map(({ side, source }) => (
+                <Button
+                  key={side}
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDraft((current) => draftFromMisstatement(current, source))}
+                >
+                  {collabDispute ? t.card.copyDraftFrom[side] : t.card.copyDraft}
+                </Button>
+              ))}
+            </div>
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
             <Field id={`ms-type-${view.task.id}`} label={t.card.msFields.type}>
@@ -633,6 +712,36 @@ export function ReviewDecisionCard({
             value={draft.params}
             onChange={(event) => set({ params: event.target.value })}
           />
+        </div>
+      ) : null}
+
+      {collabDispute ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2 text-[13.5px]">
+            <input
+              id={`consulted-${view.task.id}`}
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={consulted}
+              disabled={busy}
+              onChange={(event) => setConsulted(event.target.checked)}
+            />
+            <label htmlFor={`consulted-${view.task.id}`}>{t.card.consulted}</label>
+          </div>
+          {consulted ? (
+            <>
+              <label htmlFor={`consultation-${view.task.id}`} className="font-semibold text-[13px]">
+                {t.card.consultation}{' '}
+                <span className="font-normal text-muted-foreground">{t.card.consultationHint}</span>
+              </label>
+              <Textarea
+                id={`consultation-${view.task.id}`}
+                rows={3}
+                value={consultation}
+                onChange={(event) => setConsultation(event.target.value)}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
 
