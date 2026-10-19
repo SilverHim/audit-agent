@@ -687,6 +687,11 @@ class AuditTrail(Protocol):
         self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
     ) -> list[TrailEntry]: ...
 
+    async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:
+        """项目 eid 中 kind 类, payload.action 在 actions 之内的最近一条 (created_at, id 最大的); 没有为 None.
+        如数据概览取最近一次 Xero 同步的结果 (需求 R282), 不必读完全部留痕."""
+        ...
+
 
 class BlindFilter(Protocol):
     """盲判过滤 (第 4 节): 判断与留痕对外输出前一律经它转成视图, 盲判时隐藏 AI 的结论 (规格书第 9.5 节, 未作独立判断前

@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import shutil
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -254,6 +254,44 @@ async def test_versions_rollback_trail_and_lock(storage):
         await engagements.update(e.id, locked=False)
     with pytest.raises(EngagementLocked):
         await evidence.set_status(e.id, doc.id, "extracted")
+
+
+async def test_trail_last_of_filters_action_and_takes_latest(storage):
+    """AuditTrail.last_of (需求 R282): 按 kind 与 payload.action 过滤, 取写入时间最近的一条; 只看本项目 (行级安全);
+    没有为 None."""
+    engine, e, _, _ = storage
+    trail = PostgresAuditTrail(engine)
+    base = datetime(2026, 12, 15, 1, 0, tzinfo=UTC)
+
+    def entry(action: str, minute: int, kind: TrailKind = TrailKind.data, eid: str | None = None) -> TrailEntry:
+        return TrailEntry(
+            engagement_id=eid or e.id,
+            kind=kind,
+            actor="U-1",
+            summary=action,
+            payload={"action": action},
+            created_at=base + timedelta(minutes=minute),
+        )
+
+    for item in [
+        entry("xero_synced", 1),
+        entry("xero_sync_failed", 3),
+        entry("sync", 5),  # 不在 actions 里
+        entry("xero_synced", 4, TrailKind.transition),  # 不是 data
+        entry("xero_synced", 2),  # 后写入, 时间较早
+    ]:
+        await trail.record(item)
+    actions = ("xero_synced", "xero_sync_failed", "xero_disconnect")
+    found = await trail.last_of(e.id, TrailKind.data, actions)
+    assert found is not None and (found.payload["action"], found.created_at) == (
+        "xero_sync_failed",
+        base + timedelta(minutes=3),
+    )
+    synced = await trail.last_of(e.id, TrailKind.data, ("xero_synced",))
+    assert synced is not None and synced.created_at == base + timedelta(minutes=2)
+    assert await trail.last_of(e.id, TrailKind.data, ("xero_disconnect",)) is None
+    assert await trail.last_of(e.id, TrailKind.data, ()) is None
+    assert await trail.last_of("ENG-NOT-MINE", TrailKind.data, actions) is None
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

@@ -26,6 +26,10 @@ type TimelineEvent =
       document: string | null
       records: number | null
       file: string | null
+      organisation: string | null // Xero 连接, 选组织与断开的组织名
+      revoked: boolean | null // Xero 断开时 Xero 侧是否已撤销授权
+      reason: string | null // Xero 同步失败的原因代码 (expired, xero_error, forbidden, settings_key, mapping, write)
+      skipped: Record<string, string> | null // Xero 同步没写的表 → 原因代码 (paid_off, statements_forbidden)
     }
 
 // key: 列表渲染用的 key, 取条目来源留痕的 ID (合并的程序完成取第一条), 刷新前后不变. 同类条目的时间可能相同
@@ -38,6 +42,13 @@ const GATES: GateId[] = ['ACC-01', 'PLN-01/03', 'FIN-01', 'RPT-01']
 export function subjectOfTask(taskId: string): string {
   const match = taskId.match(/^T-[A-Z]+-([A-Z]+-\d+)-(\d+)-(.+)-v\d+$/)
   return match?.[3] ?? taskId
+}
+
+// Xero 同步完成留痕 (xero_synced) 的 skipped: 表种类 → 原因代码; 不是对象或为空时为 null
+function skippedTables(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  return entries.length ? Object.fromEntries(entries) : null
 }
 
 function str(value: unknown): string | null {
@@ -102,6 +113,10 @@ export function buildTimeline(entries: TrailEntryView[]): TimelineItem[] {
         document: str(payload.document_type),
         records: typeof payload.records === 'number' ? payload.records : null,
         file: str(payload.file_name),
+        organisation: str(payload.organisation),
+        revoked: typeof payload.revoked === 'boolean' ? payload.revoked : null,
+        reason: str(payload.reason),
+        skipped: skippedTables(payload.skipped),
       })
       continue
     }

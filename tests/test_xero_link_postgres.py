@@ -136,6 +136,10 @@ async def test_connect_sync_disconnect_on_real_stores(storage, tmp_path: Path) -
     assert await table_rows(engine, synced.id, "delivery_notes") == []
     source = await link.connections.source(synced.id)
     assert (source.status, source.organisation, source.scope) == ("connected", DEMO["tenantName"], list(XERO_TABLES))
+    # 最近一次同步的结果取真实留痕表里的 xero_synced; 作业已结束, syncing 为假
+    assert (source.tenant_id, source.syncing) == (DEMO["tenantId"], False)
+    assert source.last_sync is not None and (source.last_sync.ok, source.last_sync.tables) == (True, list(XERO_TABLES))
+    assert (source.last_sync.skipped, source.last_sync.reason) == ({}, None)
 
     clock[0] += timedelta(minutes=5)
     assert await link.disconnect(synced.id, user)

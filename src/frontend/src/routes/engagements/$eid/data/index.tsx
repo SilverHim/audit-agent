@@ -1,17 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
 import { AlertTriangle, CircleCheck, Clock3, FolderOpen, Link2, RefreshCw, Upload } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
-import type { DocumentRef, DocumentType } from '@/client/types.gen'
+import type { DocumentRef, DocumentType, XeroSource } from '@/client/types.gen'
 import { OpenBatches, useBatchUpload } from '@/components/batch-upload'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
 import { MarkedRequests } from '@/components/data-requests'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { useActorName } from '@/lib/actor'
 import {
@@ -21,20 +21,21 @@ import {
   useDataRequests,
   useDataSummary,
   useSetDocumentType,
+  useXeroChooseTenant,
   useXeroConnect,
   useXeroDisconnect,
   useXeroSync,
+  useXeroTenants,
 } from '@/lib/data-api'
 import { checkDetail } from '@/lib/data-checks'
+import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { NotAvailable } from '@/lib/new-api'
 import { useEngagement } from '@/lib/use-engagement'
-import type { Messages } from '@/locales/en'
+import { skippedByReason, syncFailureText, useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
 
 export const Route = createFileRoute('/engagements/$eid/data/')({
-  validateSearch: (search: Record<string, unknown>): { xero?: string } =>
-    typeof search.xero === 'string' ? { xero: search.xero } : {},
+  validateSearch: (search: Record<string, unknown>): XeroNotice => xeroNotice(search),
   component: DataPage,
 })
 
@@ -47,14 +48,9 @@ function finished(doc: DocumentRef): boolean {
   return doc.status === 'extracted' || (doc.status === 'classified' && !EXTRACTED_TYPES.has(doc.type))
 }
 
-// Xero 接口 (R12) 还没合入时为 NotAvailable
-function failMessage(error: unknown, t: Messages): string {
-  return error instanceof NotAvailable ? t.importDialog.unavailable : errorText(error, t)
-}
-
 function DataPage() {
   const { eid } = Route.useParams()
-  const { xero } = Route.useSearch()
+  const { xero, reason } = Route.useSearch()
   const navigate = useNavigate()
   const { t, formatDate } = useI18n()
   const overview = useEngagement(eid).data
@@ -68,13 +64,12 @@ function DataPage() {
   const uploader = useBatchUpload(eid)
   const requests = useDataRequests(eid)
 
-  // Xero 授权回调带回 ?xero=connected 或 ?xero=error, 提示一次后清掉
-  useEffect(() => {
-    if (!xero) return
-    if (xero === 'connected') toast.success(t.data.xero.status.connected)
-    else toast.error(t.data.xero.failed)
-    void navigate({ to: '/engagements/$eid/data', params: { eid }, search: {}, replace: true })
-  }, [xero, eid, navigate, t])
+  // Xero 授权回调带回 ?xero=connected 或 ?xero=error&reason=<原因代码>, 提示一次后清掉
+  const clearNotice = useCallback(
+    () => void navigate({ to: '/engagements/$eid/data', params: { eid }, search: {}, replace: true }),
+    [eid, navigate],
+  )
+  useXeroCallbackNotice({ xero, reason }, t, clearNotice)
 
   const docs = documents.data ?? []
   const importedTables = summary?.tables.filter((table) => table.source === 'import').length ?? 0
@@ -187,16 +182,96 @@ function SourceCard({
   )
 }
 
+const SELECT =
+  'h-9 min-w-0 flex-1 rounded-lg border border-input bg-card px-2.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50'
+
+// Xero 卡片 (后端 R279, R282): 状态一律取概览的 sources.xero, 不从表的来源与 converting 推断. 未连接时连接;
+// 已连接时同步与断开, 授权给到多个组织时先选组织 (按 tenant_id 匹配, 选定前同步置灰并说明); 授权失效 (expired)
+// 时说明原因并给重新连接, 也可以断开. 同步中 (syncing) 时同步, 组织下拉与断开都置灰, 卡片转圈. 上次同步的结果
+// (last_sync): 失败写原因, 有没写的表时逐项写原因.
+// 连接, 同步, 选组织, 断开共用一个提交中标记 (同步的 ref, 连点的第二下在重渲染之前就到, 不能只靠 isPending);
+// 断开在确认对话框里再点一次, 确认按钮不在原按钮的位置
 function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }) {
   const { t, lang, formatDateTime } = useI18n()
   const connect = useXeroConnect(eid)
   const sync = useXeroSync(eid)
   const disconnect = useXeroDisconnect(eid)
+  const choose = useXeroChooseTenant(eid)
   const [confirming, setConfirming] = useState(false)
-  const xero = summary?.sources.xero ?? { status: 'not_connected', organisation: null, last_synced_at: null, scope: [] }
+  const busy = useRef(false)
+  const [submitting, setSubmitting] = useState(false)
+  const queryClient = useQueryClient()
+  // 连接成功后保持提交中 (整页跳到 Xero). 审计师在 Xero 页按后退, 浏览器从往返缓存恢复本页时 JS 状态原样保留:
+  // 复位提交中标记, 并重取本项目数据
+  useEffect(() => {
+    const restored = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      busy.current = false
+      setSubmitting(false)
+      void invalidateEngagement(queryClient, eid)
+    }
+    window.addEventListener('pageshow', restored)
+    return () => window.removeEventListener('pageshow', restored)
+  }, [queryClient, eid])
+  const xero: XeroSource = summary?.sources.xero ?? { status: 'not_connected' }
   const connected = xero.status === 'connected'
-  const syncing = summary?.tables.some((table) => table.source === 'xero' && table.status === 'converting') ?? false
-  const onError = (error: unknown) => toast.error(failMessage(error, t))
+  const expired = xero.status === 'expired'
+  const linked = connected || expired // 有连接记录
+  const syncing = Boolean(xero.syncing)
+  const tenants = useXeroTenants(eid, connected).data ?? []
+  const chosen = tenants.find((tenant) => tenant.id === xero.tenant_id)
+  const unchosen = connected && !xero.tenant_id
+  const locked = syncing || submitting
+  const hintId = `xero-hint-${eid}`
+  const joiner = lang === 'zh' ? '、' : ', '
+  const last = xero.last_sync ?? null
+  const skipped = last?.ok ? skippedByReason(last.skipped, t, lang) : []
+
+  // 一次只提交一个; action 返回 true 时保持提交中 (连接成功后整页跳到 Xero)
+  const submit = async (action: () => Promise<boolean | undefined>) => {
+    if (busy.current) return
+    busy.current = true
+    setSubmitting(true)
+    let keep = false
+    try {
+      keep = (await action()) === true
+    } catch (error) {
+      toast.error(errorText(error, t))
+    } finally {
+      if (!keep) {
+        busy.current = false
+        setSubmitting(false)
+      }
+    }
+  }
+  const startConnect = () =>
+    submit(async () => {
+      await connect.mutateAsync()
+      return true
+    })
+  const startSync = () =>
+    submit(async () => {
+      await sync.mutateAsync()
+      toast.success(t.data.xero.syncStarted)
+      return undefined
+    })
+  const pick = (tenantId: string) =>
+    submit(async () => {
+      const source = await choose.mutateAsync(tenantId)
+      toast.success(t.data.xero.chosen(source.organisation ?? ''))
+      return undefined
+    })
+  const endLink = () =>
+    submit(async () => {
+      try {
+        const { revoked } = await disconnect.mutateAsync()
+        if (revoked) toast.success(t.data.xero.disconnected)
+        else toast.warning(t.data.xero.notRevoked, { duration: 12000 })
+      } finally {
+        setConfirming(false)
+      }
+      return undefined
+    })
   return (
     <SourceCard
       icon={<Link2 className="size-[18px]" aria-hidden="true" />}
@@ -204,57 +279,125 @@ function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }
       title={t.data.xero.name}
       kind={t.data.xero.kind}
       badge={
-        <StatusPill tone={connected ? 'ok' : xero.status === 'expired' ? 'warn' : 'neutral'}>
+        <StatusPill tone={connected ? 'ok' : expired ? 'warn' : 'neutral'}>
           {t.data.xero.status[xero.status]}
         </StatusPill>
       }
     >
-      {connected ? (
+      {linked ? (
         <dl className="m-0 grid grid-cols-[72px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[13px]">
           <dt className="text-muted-foreground">{t.data.xero.organisation}</dt>
-          <dd className="m-0">{xero.organisation}</dd>
+          <dd className="m-0">{xero.organisation ?? t.data.xero.notChosen}</dd>
           <dt className="text-muted-foreground">{t.data.xero.lastSynced}</dt>
           <dd className="m-0">{xero.last_synced_at ? formatDateTime(xero.last_synced_at) : '—'}</dd>
           <dt className="text-muted-foreground">{t.data.xero.scope}</dt>
-          <dd className="m-0">
-            {(xero.scope ?? []).map((kind) => t.data.tables[kind]).join(lang === 'zh' ? '、' : ', ')}
-          </dd>
+          <dd className="m-0">{(xero.scope ?? []).map((kind) => t.data.tables[kind]).join(joiner) || '—'}</dd>
+          {last ? (
+            <>
+              <dt className="text-muted-foreground">{t.data.xero.lastResult}</dt>
+              <dd className={cn('m-0', !last.ok && 'text-warn-strong')} data-testid="xero-last-sync">
+                {!last.ok ? (
+                  t.data.xero.lastFailed(syncFailureText(last.reason, t), formatDateTime(last.at))
+                ) : skipped.length ? (
+                  <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+                    {skipped.map((item) => (
+                      <li key={item.reason}>{t.data.xero.skippedLine(item.tables, item.reason)}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  t.data.xero.lastOk
+                )}
+              </dd>
+            </>
+          ) : null}
         </dl>
+      ) : null}
+      {connected && tenants.length > 1 ? (
+        <div className="flex items-center gap-2 text-[13px]">
+          <label htmlFor={`xero-tenant-${eid}`} className="shrink-0 text-muted-foreground">
+            {t.data.xero.chooseLabel}
+          </label>
+          <select
+            id={`xero-tenant-${eid}`}
+            className={SELECT}
+            value={chosen?.id ?? ''}
+            disabled={locked}
+            onChange={(event) => void pick(event.target.value)}
+          >
+            {chosen ? null : (
+              <option value="" disabled>
+                {t.data.xero.choosePlaceholder}
+              </option>
+            )}
+            {tenants.map((tenant) => (
+              <option key={tenant.id} value={tenant.id}>
+                {tenant.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+      {unchosen ? (
+        <p id={hintId} className="m-0 text-[13px] text-warn-strong">
+          {t.data.xero.chooseFirst}
+        </p>
+      ) : null}
+      {expired ? (
+        <p id={hintId} className="m-0 text-[13px] text-warn-strong">
+          {t.data.xero.expiredHint}
+        </p>
       ) : null}
       <div className="mt-auto flex flex-wrap gap-2 pt-1">
         {connected ? (
-          <>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={locked || unchosen}
+            aria-describedby={unchosen ? hintId : undefined}
+            onClick={() => void startSync()}
+          >
+            <RefreshCw className={cn('size-3.5', syncing && 'animate-spin')} aria-hidden="true" />
+            {syncing ? t.data.xero.syncing : t.data.xero.sync}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            disabled={locked}
+            aria-describedby={expired ? hintId : undefined}
+            onClick={() => void startConnect()}
+          >
+            {expired ? t.data.xero.reconnect : t.data.xero.connect}
+          </Button>
+        )}
+        {linked ? (
+          <Button type="button" variant="ghost" disabled={locked} onClick={() => setConfirming(true)}>
+            {t.data.xero.disconnect}
+          </Button>
+        ) : null}
+      </div>
+      {/* 点对话框外面不关闭: 双击 "断开连接" 的第二下落在遮罩上, 对话框照样留着 */}
+      <Dialog open={confirming} disablePointerDismissal onOpenChange={(open) => !busy.current && setConfirming(open)}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle className="font-semibold text-base">{t.data.xero.disconnectTitle}</DialogTitle>
+            <DialogDescription>{t.data.xero.disconnectIntro}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2.5">
+            <Button type="button" variant="outline" disabled={submitting} onClick={() => setConfirming(false)}>
+              {t.dataTable.cancel}
+            </Button>
             <Button
               type="button"
               variant="outline"
-              disabled={syncing || sync.isPending}
-              onClick={() => sync.mutate(undefined, { onError })}
+              className="border-risk text-risk"
+              disabled={locked}
+              onClick={() => void endLink()}
             >
-              <RefreshCw className={cn('size-3.5', syncing && 'animate-spin')} aria-hidden="true" />
-              {syncing ? t.data.xero.syncing : t.data.xero.sync}
+              {t.data.xero.confirmDisconnect}
             </Button>
-            {confirming ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="border-risk text-risk"
-                disabled={disconnect.isPending}
-                onClick={() => disconnect.mutate(undefined, { onError, onSettled: () => setConfirming(false) })}
-              >
-                {t.data.xero.confirmDisconnect}
-              </Button>
-            ) : (
-              <Button type="button" variant="ghost" onClick={() => setConfirming(true)}>
-                {t.data.xero.disconnect}
-              </Button>
-            )}
-          </>
-        ) : (
-          <Button type="button" disabled={connect.isPending} onClick={() => connect.mutate(undefined, { onError })}>
-            {xero.status === 'expired' ? t.data.xero.reconnect : t.data.xero.connect}
-          </Button>
-        )}
-      </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </SourceCard>
   )
 }
@@ -651,7 +794,7 @@ function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef | 
                     setReason('')
                     onClose()
                   },
-                  onError: (error) => toast.error(failMessage(error, t)),
+                  onError: (error) => toast.error(errorText(error, t)),
                 },
               )
             }

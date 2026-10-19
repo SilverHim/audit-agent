@@ -27,9 +27,10 @@ from backend.adapters.xero_dataset import build_tables
 from backend.api.routes.integrations import RedactCallbackQuery
 from backend.contracts.data import XERO_TABLES, TableKind
 from backend.contracts.errors import DataRejected
+from backend.contracts.models import TrailEntry, TrailKind
 from backend.core.config import Settings
 from backend.services.data_service import DataService
-from backend.services.xero_link import CALLBACK_PATH, XeroLink
+from backend.services.xero_link import CALLBACK_PATH, SYNC_JOB, XeroLink
 from tests.fakes import (
     XERO_SNAPSHOT,
     XERO_SNAPSHOTS,
@@ -365,13 +366,17 @@ async def test_callback_saves_connection_and_overview_connected(tmp_path: Path) 
         assert await xero_source(http, c) == {
             "status": "not_connected",
             "organisation": None,
+            "tenant_id": None,
             "last_synced_at": None,
             "scope": [],
+            "syncing": False,
+            "last_sync": None,
         }
         await connect(http, c)
         source = await xero_source(http, c)
         tenants = (await http.get(API.format(eid=c.eid) + "/tenants")).json()
     assert (source["status"], source["organisation"]) == ("connected", "Demo Company (AU)")
+    assert (source["tenant_id"], source["syncing"], source["last_sync"]) == (DEMO["tenantId"], False, None)
     assert tenants == [{"id": DEMO["tenantId"], "name": DEMO["tenantName"]}]
     connection, sealed = c.store.rows[c.eid]
     assert (connection.tenant_id, connection.connected_by, connection.scope) == (DEMO["tenantId"], "U-1", SCOPE)
@@ -449,6 +454,7 @@ async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
         summary = (await http.get(f"/api/v1/engagements/{c.eid}/data/summary")).json()
         converting = [t["kind"] for t in summary["tables"] if t["status"] == "converting"]
         assert (converting, summary["processing"]) == ([k.value for k in XERO_TABLES], 6)
+        assert summary["sources"]["xero"]["syncing"] is True  # 首次同步: 表的来源还不是 xero, 照样认得出
         again = await http.post(API.format(eid=c.eid) + "/sync")
         upload = await http.post(
             f"/api/v1/engagements/{c.eid}/data/imports", files={"files": ("accounts.csv", b"code,name\n1,Cash\n")}
@@ -466,6 +472,14 @@ async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
     assert (c.data.data_version, len(c.checkups)) == (before + 1, 1)
     assert "REQ-approval_log" in c.data.data_requests
     assert source["scope"] == [k.value for k in XERO_TABLES] and source["last_synced_at"] is not None
+    assert source["syncing"] is False
+    assert source["last_sync"] == {
+        "at": source["last_synced_at"],
+        "ok": True,
+        "reason": None,
+        "tables": [k.value for k in XERO_TABLES],
+        "skipped": {},
+    }
     assert [e.payload["table_kind"] for e in c.trail.entries if e.payload.get("action") == "sync"] == [
         k.value for k in XERO_TABLES
     ]
@@ -502,6 +516,7 @@ async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: 
         summary = (await http.get(f"/api/v1/engagements/{c.eid}/data/summary")).json()
         converting = [t["kind"] for t in summary["tables"] if t["status"] == "converting"]
         assert (converting, summary["processing"]) == ([k.value for k in NOT_BANK], 4)
+        assert summary["sources"]["xero"]["syncing"] is True
         c.fake.gate.set()
         await c.drain()
         source = await xero_source(http, c)
@@ -513,6 +528,9 @@ async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: 
     [done] = [e for e in c.trail.entries if e.payload.get("action") == "xero_synced"]
     assert done.payload["tables"] == [k.value for k in NOT_BANK]
     assert done.payload["skipped"] == {k.value: "paid_off" for k in BANK}
+    last = source["last_sync"]
+    assert (source["syncing"], last["ok"], last["tables"]) == (False, True, [k.value for k in NOT_BANK])
+    assert last["skipped"] == {k.value: "paid_off" for k in BANK}
 
 
 async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None:
@@ -537,6 +555,7 @@ async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None
     [done] = [e for e in c.trail.entries if e.payload.get("action") == "xero_synced"]
     assert done.payload["tables"] == [k.value for k in NOT_BANK]
     assert done.payload["skipped"] == {k.value: "statements_forbidden" for k in BANK}
+    assert source["last_sync"]["skipped"] == {k.value: "statements_forbidden" for k in BANK}
 
 
 async def test_live_journals_forbidden_rebuilds_ledger_from_documents(tmp_path: Path) -> None:
@@ -585,9 +604,20 @@ async def test_free_resource_forbidden_fails_sync(tmp_path: Path) -> None:
     c = case(tmp_path)
     async with client(c) as http:
         await connect(http, c)
+        assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202  # 先成功同步一次
+        await c.drain()
+        first = (await xero_source(http, c))["last_sync"]
+        c.advance(timedelta(minutes=5))
         c.fake.fail["Invoices"] = 403
         assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202
         await c.drain()
+        c.advance(timedelta(minutes=3))  # 读概览时已过了一会: 结果的时间取留痕写入时间, 不是现在
+        source = await xero_source(http, c)
+    # 概览给出最近一次 (失败的) 结果; 上一次成功写的表与时间不变
+    last = source["last_sync"]
+    assert datetime.fromisoformat(last.pop("at")) == START + timedelta(minutes=5)
+    assert last == {"ok": False, "reason": "forbidden", "tables": [], "skipped": {}}
+    assert (source["syncing"], source["last_synced_at"], first["ok"]) == (False, first["at"], True)
     [failed] = [e for e in c.trail.entries if e.payload.get("action") == "xero_sync_failed"]
     assert failed.payload == {
         "action": "xero_sync_failed",
@@ -595,7 +625,112 @@ async def test_free_resource_forbidden_fails_sync(tmp_path: Path) -> None:
         "status": None,
         "resources": ["invoices"],
     }
-    assert c.data.written == [] and not c.xero.data.runner.is_running(c.eid)
+    assert len(c.data.written) == 1 and not c.xero.data.runner.is_running(c.eid)
+
+
+async def test_last_sync_belongs_to_current_connection(tmp_path: Path) -> None:
+    """上次结果属于当前连接, 与连接行的最近同步, 接入范围同口径: 授权失效后直接重新连接保留; 断开再连接为空
+    (最近同步, 接入范围也为空), 之后的同步照常给出结果. 时间取留痕写入时间."""
+    c = case(tmp_path)
+    async with client(c) as http:
+        await connect(http, c)
+        assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202
+        await c.drain()
+        c.advance(timedelta(minutes=7))
+        synced = await xero_source(http, c)
+        assert datetime.fromisoformat(synced["last_sync"]["at"]) == START  # 留痕写入时间, 不是现在 (START + 7 分钟)
+        c.advance(timedelta(days=61))
+        assert (await xero_source(http, c))["status"] == "expired"
+        await connect(http, c)  # 失效后直接重新连接: 连接行保留最近同步, 上次结果也保留
+        again = await xero_source(http, c)
+        assert (again["last_sync"], again["last_synced_at"], again["scope"]) == (
+            synced["last_sync"],
+            synced["last_synced_at"],
+            synced["scope"],
+        )
+        assert (await http.delete(API.format(eid=c.eid))).status_code == 200
+        await connect(http, c)  # 断开再连接: 都为空
+        fresh = await xero_source(http, c)
+        assert (fresh["last_sync"], fresh["last_synced_at"], fresh["scope"]) == (None, None, [])
+        c.fake.fail["Invoices"] = 403
+        assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202
+        await c.drain()
+        failed = await xero_source(http, c)
+    assert (failed["last_sync"]["ok"], failed["last_sync"]["reason"], failed["last_synced_at"]) == (
+        False,
+        "forbidden",
+        None,
+    )
+
+
+async def test_unknown_codes_in_sync_trail_do_not_break_summary(tmp_path: Path) -> None:
+    """留痕里认不出的原因代码读成 unknown, 认不出的表跳过, 概览照常返回 (不 500)."""
+    c = case(tmp_path)
+    async with client(c) as http:
+        await connect(http, c)
+
+        async def note(payload: dict[str, Any]) -> dict[str, Any]:
+            c.advance(timedelta(minutes=1))
+            entry = TrailEntry(
+                engagement_id=c.eid,
+                kind=TrailKind.data,
+                actor="U-1",
+                summary="合成",
+                payload=payload,
+                created_at=c.now[0],
+            )
+            await c.trail.record(entry)
+            response = await http.get(f"/api/v1/engagements/{c.eid}/data/summary")
+            assert response.status_code == 200, response.text
+            result: dict[str, Any] = response.json()["sources"]["xero"]["last_sync"]
+            return result
+
+        failed = await note({"action": "xero_sync_failed", "reason": "rate_limited", "status": 429})
+        assert (failed["ok"], failed["reason"]) == (False, "unknown")
+        synced = await note(
+            {
+                "action": "xero_synced",
+                "tables": ["accounts", "not_a_table"],
+                "skipped": {"bank_accounts": "weird", "nowhere": "paid_off", "bank_transactions": "paid_off"},
+            }
+        )
+    assert (synced["ok"], synced["tables"]) == (True, ["accounts"])
+    assert synced["skipped"] == {"bank_accounts": "unknown", "bank_transactions": "paid_off"}
+
+
+async def test_syncing_and_last_sync_only_for_this_engagement(tmp_path: Path) -> None:
+    """另一个项目在同步 (登记着 Xero 同步作业) 并有更新的同步留痕时, 本项目的 syncing 与 last_sync 不受影响."""
+    c = case(tmp_path)
+    async with client(c) as http:
+        await connect(http, c)
+        assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202
+        await c.drain()
+        mine = (await xero_source(http, c))["last_sync"]
+        key = c.xero.data._register("ENG-OTHER", ["accounts"], SYNC_JOB)
+        c.advance(timedelta(minutes=1))
+        other = {"action": "xero_sync_failed", "reason": "xero_error", "status": 503}
+        await c.trail.record(
+            TrailEntry(engagement_id="ENG-OTHER", kind=TrailKind.data, actor="U-2", summary="合成", payload=other)
+        )
+        assert c.xero.data.running("ENG-OTHER", SYNC_JOB) is True
+        source = await xero_source(http, c)
+        c.xero.data._unregister("ENG-OTHER", key)
+    assert (source["syncing"], source["last_sync"]) == (False, mine) and mine["ok"] is True
+
+
+async def test_syncing_only_for_the_xero_job(tmp_path: Path) -> None:
+    """概览的 syncing 只认本项目的 Xero 同步作业: 别的数据作业 (如导入提交) 占着项目锁时为假; 同步起作业前当场
+    被拒 (连接已失效) 时也不留下."""
+    c = case(tmp_path)
+    async with client(c) as http:
+        await connect(http, c)
+        async with c.xero.data.holding(c.eid, ["accounts"]):
+            assert (await xero_source(http, c))["syncing"] is False
+            assert c.xero.data.processing(c.eid) == [frozenset({"accounts"})]
+        c.advance(timedelta(minutes=29, seconds=30))
+        c.fake.refresh_error = "invalid_grant"
+        assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 409
+        assert (await xero_source(http, c))["syncing"] is False and c.xero.data.kinds == {}
 
 
 async def test_unexpected_errors_in_sync_are_recorded(
@@ -753,6 +888,7 @@ async def test_two_organisations_require_choice_before_sync(tmp_path: Path) -> N
         assert (wrong.status_code, wrong.json()["detail"]["code"]) == (422, "INVALID_VALUE")
         chosen = await http.put(API.format(eid=c.eid) + "/tenant", json={"tenant_id": DEMO["tenantId"]})
         assert chosen.json()["organisation"] == DEMO["tenantName"]
+        assert (source["tenant_id"], chosen.json()["tenant_id"]) == (None, DEMO["tenantId"])
         assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 202
         await c.drain()
     assert {k: len(v) for k, v in c.data.written[-1][0].items()} == EXPECTED_ROWS

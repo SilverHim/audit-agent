@@ -431,6 +431,14 @@ export const en = {
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
       NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
+      XERO_NOT_CONNECTED: 'Xero is not connected yet.',
+      XERO_TENANT_REQUIRED: 'The authorisation covers more than one organisation. Choose the one to sync first.',
+      XERO_RECONNECT_REQUIRED: 'The Xero authorisation has expired. Reconnect Xero.',
+      XERO_NOT_CONFIGURED: 'The server has no Xero app configured (XERO_CLIENT_ID), so Xero cannot be connected.',
+      XERO_UNAVAILABLE: 'Xero cannot be reached right now. Try again shortly.',
+      SETTINGS_KEY_MISSING: 'SETTINGS_SECRET_KEY is not set, so encrypted keys and tokens cannot be saved or read.',
+      SETTINGS_KEY_INVALID:
+        'SETTINGS_SECRET_KEY is invalid or was changed, so stored keys and tokens cannot be decrypted.',
     } as Record<string, string>,
   },
   toasts: {
@@ -779,15 +787,51 @@ export const en = {
         string
       >,
       organisation: 'Organisation',
+      notChosen: 'Not chosen yet',
       lastSynced: 'Last synced',
       scope: 'Data pulled',
       connect: 'Connect Xero',
-      reconnect: 'Authorise again',
+      reconnect: 'Reconnect',
       sync: 'Sync again',
       syncing: 'Syncing…',
       disconnect: 'Disconnect',
       confirmDisconnect: 'Confirm disconnect',
+      disconnectTitle: 'Disconnect Xero?',
+      disconnectIntro:
+        "This engagement's Xero tokens are deleted and the authorisation is revoked in Xero. Data already synced and its versions are kept.",
+      lastResult: 'Last result',
+      lastOk: 'Succeeded',
+      lastFailed: (reason: string, time: string) => `Failed (${reason}), ${time}`,
+      skippedLine: (tables: string, reason: string) => `${tables} not written: ${reason}`,
+      syncFailedUnknown: 'unknown reason',
       failed: 'Xero authorisation was not completed',
+      chooseLabel: 'Organisation to sync',
+      choosePlaceholder: 'Choose an organisation…',
+      chooseFirst: 'The authorisation covers more than one organisation. Choose the one to sync before syncing.',
+      chosen: (name: string) => `${name} chosen for sync`,
+      expiredHint:
+        'The Xero authorisation has expired (the refresh token lapsed or was revoked in Xero). Reconnect before syncing again.',
+      syncStarted: 'Sync from Xero started',
+      disconnected: 'Xero disconnected',
+      notRevoked:
+        'The connection and its tokens were removed here, but Xero did not confirm the revocation. Remove this app under Connected apps in Xero.',
+      callback: {
+        connected: 'Xero connected',
+        reasons: {
+          denied: 'Authorisation was declined in Xero.',
+          state_invalid:
+            'The authorisation request was not recognised (it may have been started before a server restart). Connect again.',
+          state_used: 'This authorisation was already used. Connect again.',
+          state_expired: 'The authorisation was not completed within 10 minutes. Connect again.',
+          not_found: 'The engagement for this authorisation was not found.',
+          locked: 'The engagement is signed and read-only, so Xero cannot be connected.',
+          busy: 'The engagement was busy. Connect again shortly.',
+          exchange_failed: 'Xero did not issue tokens for this authorisation. Connect again.',
+          no_organisation: 'The authorisation did not include any Xero organisation.',
+          settings_key: 'SETTINGS_SECRET_KEY is missing or invalid, so the Xero tokens cannot be stored.',
+          internal_error: 'Something went wrong while connecting Xero. Try connecting again shortly.',
+        } as Record<string, string>,
+      },
     },
     offline: {
       title: 'Offline files',
@@ -911,7 +955,28 @@ export const en = {
     noDocuments: 'No documents yet.',
     events: {
       import: (table: string, n: number) => `Data management · ${table}: ${n} records imported`,
-      sync: 'Data management · synced from Xero',
+      sync: (table: string, n: number) => `Data management · ${table}: ${n} records synced from Xero`,
+      xero_connect: (organisation: string | null) =>
+        organisation
+          ? `Data management · Xero connected (${organisation})`
+          : 'Data management · Xero connected, organisation to be chosen',
+      xero_tenant: (organisation: string) => `Data management · Xero organisation ${organisation} chosen`,
+      xero_sync_failed: (reason: string) => `Data management · Xero sync failed (${reason})`,
+      xero_disconnect: (revoked: boolean): string =>
+        revoked ? 'Data management · Xero disconnected' : 'Data management · Xero disconnected (not revoked in Xero)',
+      syncFailure: {
+        expired: 'authorisation expired',
+        xero_error: 'Xero returned an error',
+        forbidden: 'Xero refused access to some of the data',
+        settings_key: 'the encryption key is unavailable',
+        mapping: 'the data could not be converted',
+        write: 'the data could not be saved',
+      } as Record<string, string>,
+      xero_synced: (tables: string, reason: string) => `Data management · Xero sync left out ${tables} (${reason})`,
+      syncSkipped: {
+        paid_off: 'paid Xero endpoints are switched off',
+        statements_forbidden: 'no access to bank statements',
+      } as Record<string, string>,
       upload: (file: string) => `Data management · ${file} uploaded`,
       not_imported: (files: string) => `Data management · not imported: ${files}`,
       edit: (table: string) => `Data management · ${table} edited`,
@@ -1048,7 +1113,6 @@ export const en = {
     import: 'Import',
     importing: 'Importing…',
     done: (kind: string, n: number) => `${kind}: ${n} records imported`,
-    unavailable: 'Importing is not available yet.',
     parseErrors:
       'These cells could not be read (up to 20 shown). Check the column matches and the date format, then import again.',
     parseCols: { row: 'Row', column: 'Column', value: 'Value' },

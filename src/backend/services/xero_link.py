@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import httpx
 
@@ -47,10 +47,19 @@ from backend.adapters.xero import (
 )
 from backend.adapters.xero_dataset import Period, Snapshot, build_tables
 from backend.agents.base import AgentDeps
-from backend.contracts.data import XERO_TABLES, TableKind, XeroConnection, XeroSource, XeroTenant
+from backend.contracts.data import (
+    XERO_TABLES,
+    TableKind,
+    XeroConnection,
+    XeroSkipReason,
+    XeroSource,
+    XeroSyncFailure,
+    XeroSyncResult,
+    XeroTenant,
+)
 from backend.contracts.errors import DataRejected, DecisionRejected
 from backend.contracts.models import TrailEntry, TrailKind
-from backend.contracts.ports import XeroConnectionStore
+from backend.contracts.ports import AuditTrail, XeroConnectionStore
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
 from backend.services.data_service import DataService
@@ -77,6 +86,12 @@ CALLBACK_REASONS = (
 # 银行这一对: 没取到银行对账单时一起不写 (见模块说明)
 BANK_TABLES = (TableKind.bank_accounts, TableKind.bank_transactions)
 PAID_RESOURCES = frozenset({"journals", "bank_statements"})  # 付费接口的资源名: 401, 403 时退回 (单据反推, 不写银行)
+SYNC_JOB = "xero_sync"  # 同步作业在 DataService 登记的种类 (概览的 syncing 按它)
+# 概览的 last_sync 取这几种 data 留痕中最近的一条: 同步结束时写的两种, 加上断开 (最近一条是断开时为空: 上次结果属于
+# 当前连接, 与连接行的最近同步, 接入范围同口径, 断开再连为空, 失效重连保留)
+SYNC_ACTIONS = ("xero_synced", "xero_sync_failed", "xero_disconnect")
+FAILURES: frozenset[str] = frozenset(get_args(XeroSyncFailure))  # 认得的失败原因代码
+SKIPS: frozenset[str] = frozenset(get_args(XeroSkipReason))  # 认得的没写原因代码
 
 
 class CallbackFailed(Exception):
@@ -200,11 +215,20 @@ class ConnectionTokens:
 
 class StoredXeroConnections:
     """数据概览的 sources.xero (端口 XeroConnections): 没有连接行为 not_connected; 有则 connected 或 expired (见
-    expired), 组织名为选定的组织 (多个组织未选时为空, 前端据此显示选组织), scope 为最近一次同步写的表."""
+    expired), 组织名与 tenant_id 为选定的组织 (多个组织未选时为空, 前端据此显示选组织), scope 为最近一次同步写的表,
+    syncing 为同步作业在跑 (syncing 回调, 即 DataService.running 的 SYNC_JOB), last_sync 为最近一次同步的结果."""
 
-    def __init__(self, store: XeroConnectionStore, now: Callable[[], datetime]) -> None:
+    def __init__(
+        self,
+        store: XeroConnectionStore,
+        now: Callable[[], datetime],
+        trail: AuditTrail | None = None,
+        syncing: Callable[[str], bool] = lambda eid: False,
+    ) -> None:
         self.store = store
         self.now = now
+        self.trail = trail  # 取 last_sync; 为空时 last_sync 一律为空
+        self.syncing = syncing
 
     async def source(self, eid: str) -> XeroSource:
         connection = await self.store.get(eid)
@@ -213,9 +237,44 @@ class StoredXeroConnections:
         return XeroSource(
             status="expired" if expired(connection, self.now()) else "connected",
             organisation=connection.tenant_name,
+            tenant_id=connection.tenant_id,
             last_synced_at=connection.last_synced_at,
             scope=list(connection.synced_tables),
+            syncing=self.syncing(eid),
+            last_sync=await self.last_sync(eid),
         )
+
+    async def last_sync(self, eid: str) -> XeroSyncResult | None:
+        """当前连接最近一次同步的结果: 本项目 SYNC_ACTIONS 中最近的一条 data 留痕 (AuditTrail.last_of, 不读完全部
+        留痕; 不另存, 表结构不变) 转成; 没有, 或最近一条是断开时为空. 时间取留痕写入时间.
+        留痕里认不出的原因代码读成 unknown, 认不出的表跳过 (记日志), 不让一条留痕拖垮概览."""
+        if self.trail is None:
+            return None
+        entry = await self.trail.last_of(eid, TrailKind.data, SYNC_ACTIONS)
+        if entry is None or entry.payload.get("action") == "xero_disconnect":
+            return None
+        return sync_result(entry, self.now())
+
+
+def sync_result(entry: TrailEntry, now: datetime) -> XeroSyncResult:
+    """一条 xero_synced 或 xero_sync_failed 留痕转成的同步结果 (见 StoredXeroConnections.last_sync)."""
+    payload = entry.payload
+    at = entry.created_at or now
+    if payload.get("action") == "xero_sync_failed":
+        reason = payload.get("reason")
+        if reason not in FAILURES:
+            logger.warning("Xero 同步失败留痕的原因代码认不出, 按 unknown 显示: %s %s", entry.engagement_id, reason)
+            reason = "unknown"
+        return XeroSyncResult(at=at, ok=False, reason=reason)
+    kinds = {k.value for k in TableKind}
+    tables = [TableKind(k) for k in payload.get("tables", []) if k in kinds]
+    skipped: dict[TableKind, XeroSkipReason | Literal["unknown"]] = {}
+    for kind, why in dict(payload.get("skipped", {})).items():
+        if kind in kinds:
+            skipped[TableKind(kind)] = why if why in SKIPS else "unknown"
+    if len(tables) != len(payload.get("tables", [])) or len(skipped) != len(payload.get("skipped", {})):
+        logger.warning("Xero 同步留痕里有认不出的表, 已跳过: %s", entry.engagement_id)
+    return XeroSyncResult(at=at, ok=True, tables=tables, skipped=skipped)
 
 
 class XeroLink:
@@ -240,7 +299,7 @@ class XeroLink:
         self.clock = clock  # 秒; 测试固定
         self.sleep = sleep
         self.states = AuthStates(self.now)
-        self.connections = StoredXeroConnections(store, self.now)
+        self.connections = StoredXeroConnections(store, self.now, deps.trail, lambda eid: data.running(eid, SYNC_JOB))
 
     def now(self) -> datetime:
         return datetime.fromtimestamp(self.clock(), UTC)
@@ -399,7 +458,7 @@ class XeroLink:
         对账单, 银行账户与银行流水都不写. live 下对账单接口 401, 403 时实际也不写这两张 (见 run_sync)."""
         return [k for k in XERO_TABLES if self.paid or k not in BANK_TABLES]
 
-    def skip_reason(self) -> str:
+    def skip_reason(self) -> XeroSkipReason:
         """没写银行这一对的原因代码: 付费接口没开 (off, mock) 为 paid_off, live 下对账单接口拒绝为
         statements_forbidden."""
         return "statements_forbidden" if self.paid else "paid_off"
@@ -442,7 +501,7 @@ class XeroLink:
 
         period = Period(engagement.period_start, engagement.period_end, engagement.period_start - timedelta(days=1))
         await self.data.launch(
-            eid, [k.value for k in labels], lambda: self.run_sync(eid, actor, client, period), prepare
+            eid, [k.value for k in labels], lambda: self.run_sync(eid, actor, client, period), prepare, SYNC_JOB
         )
         return labels
 
@@ -497,7 +556,7 @@ class XeroLink:
         await self.record(eid, actor, summary, payload)
 
     async def sync_failed(
-        self, eid: str, actor: str, reason: str, status: int | None, *, resources: list[str] | None = None
+        self, eid: str, actor: str, reason: XeroSyncFailure, status: int | None, *, resources: list[str] | None = None
     ) -> None:
         """同步失败的 data 留痕: 原因代码与状态码, forbidden 另带取不到的资源名."""
         payload: dict[str, object] = {"action": "xero_sync_failed", "reason": reason, "status": status}

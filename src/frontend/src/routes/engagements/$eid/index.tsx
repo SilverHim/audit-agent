@@ -33,6 +33,7 @@ import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferra
 import { type RankedTask, rankTasks } from '@/lib/review'
 import { buildTimeline, type TimelineItem } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
+import { skippedByReason } from '@/lib/xero'
 import type { Messages } from '@/locales/en'
 
 type Search = { focus?: string }
@@ -289,6 +290,53 @@ function formatYearEnd(overview: EngagementOverview, lang: 'zh' | 'en'): string 
   }).format(date)
 }
 
+type DataItem = Extract<TimelineItem, { kind: 'data' }>
+
+// Xero 同步没写的表, 同一原因的合成一句 (如 "银行账户、银行流水（对账单接口无权限）"); 分组同卡片的上次结果
+// (lib/xero.skippedByReason); 实际只有银行这一对
+function skippedText(skipped: Record<string, string>, t: Messages, lang: 'zh' | 'en'): string {
+  return skippedByReason(skipped, t, lang)
+    .map((item) => t.data.events.xero_synced(item.tables, item.reason))
+    .join(' · ')
+}
+
+// 数据管理留痕的一行文案; 不认识的 action 不显示
+function dataEventText(item: DataItem, t: Messages, lang: 'zh' | 'en'): string | null {
+  const table = item.table ? (t.data.tables[item.table] ?? item.table) : ''
+  const subject = table || (item.document ? (t.data.docTypes[item.document] ?? item.document) : (item.file ?? ''))
+  const events = t.data.events
+  switch (item.action) {
+    case 'import':
+      return events.import(table, item.records ?? 0)
+    case 'sync':
+      return events.sync(table, item.records ?? 0)
+    case 'xero_connect':
+      return events.xero_connect(item.organisation)
+    case 'xero_tenant':
+      return events.xero_tenant(item.organisation ?? '')
+    case 'xero_sync_failed':
+      return events.xero_sync_failed(events.syncFailure[item.reason ?? ''] ?? item.reason ?? '')
+    case 'xero_synced':
+      return item.skipped ? skippedText(item.skipped, t, lang) : null // 写了的表各有一条 sync, 这里只说没写的
+    case 'xero_disconnect':
+      return events.xero_disconnect(item.revoked !== false)
+    case 'upload':
+      return events.upload(item.file ?? '')
+    case 'edit':
+      return events.edit(subject)
+    case 'request_raised':
+      return events.request_raised(subject)
+    case 'request_received':
+      return events.request_received(subject)
+    case 'ready':
+      return events.ready
+    case 'not_imported':
+      return events.not_imported(item.file ?? '')
+    default:
+      return null
+  }
+}
+
 function HistoryItem({
   item,
   overview,
@@ -318,27 +366,7 @@ function HistoryItem({
     return <EventLine>{item.deferred ? t.workspace.deferredEvent(target) : t.workspace.resumedEvent(target)}</EventLine>
   }
   if (item.kind === 'data') {
-    const table = item.table ? (t.data.tables[item.table] ?? item.table) : ''
-    const subject = table || (item.document ? (t.data.docTypes[item.document] ?? item.document) : (item.file ?? ''))
-    const events = t.data.events
-    const text =
-      item.action === 'import'
-        ? events.import(table, item.records ?? 0)
-        : item.action === 'sync'
-          ? events.sync
-          : item.action === 'upload'
-            ? events.upload(item.file ?? '')
-            : item.action === 'edit'
-              ? events.edit(subject)
-              : item.action === 'request_raised'
-                ? events.request_raised(subject)
-                : item.action === 'request_received'
-                  ? events.request_received(subject)
-                  : item.action === 'ready'
-                    ? events.ready
-                    : item.action === 'not_imported'
-                      ? events.not_imported(item.file ?? '')
-                      : null
+    const text = dataEventText(item, t, lang)
     return text ? <EventLine>{text}</EventLine> : null
   }
   if (item.kind === 'decision') {
