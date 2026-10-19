@@ -281,12 +281,13 @@ async def test_accounts_by_code() -> None:
 async def trail_pages_hold(trail: AuditTrail, eid: str, other: str) -> None:
     """AuditTrail.list 的分页 (开发接口文档第 4 节), 假实现与真实实现 (tests/test_persistence_postgres.py) 共用:
     不带新参数时仍从最早一条起按写入顺序取; newest 取最近一页, 最新一条在内; 以上一页最早一条为 before 往前翻到
-    最早一条, 翻页途中写入新留痕也不重不漏; kind 与 offset 照常生效; before 是别的项目或不存在的 ID 时为空.
-    防时间线只取得到最早的若干条, 翻页重复或跳过, 游标串到别的项目."""
+    最早一条, 翻页途中写入新留痕也不重不漏; kind 可为一类或一组 (如时间线只取显示的几类), 与 offset, 游标同用,
+    游标可以是别类的留痕; before 是别的项目或不存在的 ID 时为空. 防时间线只取得到最早的若干条, 翻页重复或跳过,
+    游标串到别的项目."""
     base = datetime(2026, 12, 15, 1, 0, tzinfo=UTC)
 
     async def write(target: str, n: int, minute: int) -> str:
-        kind = TrailKind.llm_call if n % 2 else TrailKind.decision
+        kind = (TrailKind.llm_call, TrailKind.decision, TrailKind.deferral)[n % 3]
         at = base + timedelta(minutes=minute)
         return await trail.record(
             TrailEntry(engagement_id=target, kind=kind, actor="A6", summary=f"#{n}", created_at=at)
@@ -311,10 +312,18 @@ async def trail_pages_hold(trail: AuditTrail, eid: str, other: str) -> None:
     assert [e.summary for e in await trail.list(eid, limit=1, newest=True)] == ["#8"]
     assert await trail.list(eid, limit=2, before=full[4].id) == full[:2]  # before 不带 newest 时从最早一条起
 
-    calls = [e for e in await trail.list(eid) if e.kind is TrailKind.llm_call]  # #1, #3, #5, #7
-    assert await trail.list(eid, TrailKind.llm_call, limit=2, offset=1, newest=True) == calls[1:3]
-    sixth = next(e.id for e in full if e.summary == "#6")  # 游标可以是别的类型的留痕
-    assert await trail.list(eid, TrailKind.llm_call, newest=True, before=sixth) == calls[:3]
+    everything = await trail.list(eid)
+    assert await trail.list(eid, TrailKind.llm_call) == [e for e in everything if e.kind is TrailKind.llm_call]
+    shown = [TrailKind.decision, TrailKind.deferral]  # 一组: #1, #2, #4, #5, #7, #8
+    visible = [e for e in everything if e.kind in shown]
+    pages = [await trail.list(eid, shown, limit=2, newest=True)]
+    while len(pages[0]) == 2:
+        pages.insert(0, await trail.list(eid, shown, limit=2, newest=True, before=pages[0][0].id))
+    assert ([len(p) for p in pages], [e for p in pages for e in p]) == ([0, 2, 2, 2], visible)
+    assert await trail.list(eid, shown, limit=2, offset=1, newest=True) == visible[-3:-1]
+    sixth = next(e.id for e in full if e.summary == "#6")  # llm_call, 不在这一组里, 照样作游标
+    assert await trail.list(eid, shown, newest=True, before=sixth) == visible[:4]
+    assert await trail.list(eid, []) == []
     for newest in (False, True):
         assert await trail.list(eid, newest=newest, before=foreign) == []
         assert await trail.list(eid, newest=newest, before="TR-none") == []

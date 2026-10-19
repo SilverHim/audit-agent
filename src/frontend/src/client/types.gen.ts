@@ -6808,7 +6808,7 @@ export type ReportsListTrailData = {
         /**
          * Kind
          */
-        kind?: TrailKind | null;
+        kind?: Array<TrailKind> | null;
         /**
          * Limit
          */

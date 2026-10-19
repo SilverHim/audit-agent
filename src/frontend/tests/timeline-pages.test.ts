@@ -1,9 +1,10 @@
-// 工作台时间线按页取留痕 (lib/timeline 的 earlierCursor, trailInOrder 与 buildTimeline 的 complete) 的测试, bun test 运行.
+// 工作台时间线按页取留痕 (lib/timeline 的 earlierCursor, trailInOrder, newestTrailId, TIMELINE_KINDS 与 buildTimeline 的
+// complete) 的测试, bun test 运行.
 // 后端 GET /trail?newest=true&before= 的取法由后端测试守 (tests/test_fakes.py 的 trail_pages_hold), 这里用同样语义的
 // 内存列表代替, 只看前端怎样接页: 首页含最新一条, 往前翻到最早一条不重不漏, 取全之前不加 "项目已创建".
 import { describe, expect, test } from 'bun:test'
-import type { TrailEntry } from '../src/client/types.gen'
-import { buildTimeline, earlierCursor, trailInOrder } from '../src/lib/timeline'
+import type { TrailEntry, TrailKind } from '../src/client/types.gen'
+import { buildTimeline, earlierCursor, newestTrailId, TIMELINE_KINDS, trailInOrder } from '../src/lib/timeline'
 
 const SIZE = 3
 
@@ -51,5 +52,35 @@ describe('时间线按页取留痕', () => {
     expect(earlierCursor(newestPage(trail, 'TR-4'), SIZE)).toBe('TR-1')
     expect(earlierCursor(newestPage(trail, 'TR-1'), SIZE)).toBeUndefined()
     expect(earlierCursor([{ ...entry(1), id: null }, entry(2), entry(3)], SIZE)).toBeUndefined()
+  })
+
+  test('往前翻出更早一页时最新一条留痕的 ID 不变, 跨页的 "程序完成" 合并项的 key 却变了; 本页刚问的问答跳过', () => {
+    const done = (n: number) => ({ ...entry(n), payload: { object: 'procedure', id: `P-${n}`, to: 'completed' } })
+    const trail = [1, 2, 3, 4, 5, 6].map(done) // 一个合并项, 跨两页
+    const first = newestPage(trail)
+    const both = [first, newestPage(trail, earlierCursor(first, SIZE))]
+    const lastKey = (pages: TrailEntry[][]) => buildTimeline(trailInOrder(pages), false).at(-1)?.key
+    expect([lastKey([first]), lastKey(both)]).toEqual(['TR-4', 'TR-1'])
+    expect([newestTrailId([first]), newestTrailId(both)]).toEqual(['TR-6', 'TR-6'])
+    expect(newestTrailId([[...first, { ...entry(7), kind: 'conversation' }]], new Set(['TR-7']))).toBe('TR-6')
+  })
+
+  test('只取 TIMELINE_KINDS 的几类: 这几类之外的留痕不会变成时间线事件, 这几类会', () => {
+    const kinds: TrailKind[] = [
+      'llm_call',
+      'external_call',
+      'decision',
+      'transition',
+      'deferral',
+      'conversation',
+      'conversation_summary',
+      'data',
+      'presentation',
+    ]
+    const payload = { object: 'engagement', to: 'P1', action: 'import', question: 'q', target_id: 'ACC-01' }
+    const shown = kinds.filter(
+      (kind) => buildTimeline([{ ...entry(1), kind, payload, summary: 'ACC-01 approve' }], false).length > 0,
+    )
+    expect(shown.sort()).toEqual([...TIMELINE_KINDS].sort())
   })
 })

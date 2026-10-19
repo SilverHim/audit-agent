@@ -31,7 +31,7 @@ function Trail() {
   const trail = useQuery(
     reportsListTrailOptions({
       path: { eid },
-      query: { kind: kind === 'all' ? undefined : (kind as TrailKind), limit, offset },
+      query: { kind: kind === 'all' ? undefined : [kind as TrailKind], limit, offset },
     }),
   )
   const rows = trail.data ?? []

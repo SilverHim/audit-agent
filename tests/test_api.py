@@ -328,11 +328,12 @@ def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str
     assert response.json()["detail"]["code"] == code
 
 
-TRAIL_ROWS = [  # 依次为 TR-1 到 TR-4
+TRAIL_ROWS = [  # 依次为 TR-1 到 TR-5
     ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0612 第 1 次调用大模型: passed"),
     ("ENG-2026-001", TrailKind.decision, "ACC-01 approve"),
     ("ENG-2026-002", TrailKind.llm_call, "别的项目"),
     ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0618 第 1 次调用大模型: passed"),
+    ("ENG-2026-001", TrailKind.deferral, "PLN-01/03 稍后处理"),
 ]
 
 
@@ -363,18 +364,34 @@ def test_trail_list_and_detail(api: SimpleNamespace) -> None:
     ("params", "ids"),
     [
         ({"limit": 2}, ["TR-1", "TR-2"]),  # 原有调用: 从最早一条起
-        ({"limit": 2, "newest": "true"}, ["TR-2", "TR-4"]),
+        ({"limit": 2, "newest": "true"}, ["TR-4", "TR-5"]),
         ({"limit": 2, "newest": "true", "before": "TR-4"}, ["TR-1", "TR-2"]),
         ({"kind": "llm_call", "newest": "true", "before": "TR-4"}, ["TR-1"]),
+        ({"kind": ["decision", "deferral"], "newest": "true", "limit": 2}, ["TR-2", "TR-5"]),  # kind 可重复
     ],
 )
-def test_trail_list_pages(api: SimpleNamespace, params: dict[str, str | int], ids: list[str]) -> None:
-    """GET /trail 把 newest 与 before 传给 AuditTrail.list (分页语义由 test_fakes.trail_pages_hold 守), 仍按写入顺序
-    返回. 防路由丢掉新参数, 或不带新参数时改了原来的取法."""
+def test_trail_list_pages(api: SimpleNamespace, params: dict[str, Any], ids: list[str]) -> None:
+    """GET /trail 把 newest, before 与一组 kind 传给 AuditTrail.list (分页语义由 test_fakes.trail_pages_hold 守), 仍按
+    写入顺序返回. 防路由丢掉新参数, 或不带新参数时改了原来的取法."""
     _add_trail(api)
     listed = api.client.get("/api/v1/engagements/ENG-2026-001/trail", params=params, headers=_auth(api))
     assert listed.status_code == 200
     assert [e["id"] for e in listed.json()] == ids
+
+
+@pytest.mark.parametrize(
+    ("before", "status"),
+    [("TR-none", 404), ("TR-3", 404), ("", 422)],  # 不存在; 别的项目的; 空串
+)
+def test_trail_cursor_must_be_a_trail_of_this_engagement(api: SimpleNamespace, before: str, status: int) -> None:
+    """游标不是本项目的留痕 404 NOT_FOUND (同单条详情), 空串 422. 防无效游标被当成已到最早一条 (200 [], 前端据此
+    显示项目已创建)."""
+    _add_trail(api)
+    params = {"newest": "true", "before": before}
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/trail", params=params, headers=_auth(api))
+    assert response.status_code == status
+    if status == 404:
+        assert response.json()["detail"]["code"] == "NOT_FOUND"
 
 
 @pytest.mark.parametrize(

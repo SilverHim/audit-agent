@@ -43,7 +43,7 @@ class PostgresAuditTrail(Store):
     async def list(
         self,
         eid: str,
-        kind: TrailKind | None = None,
+        kind: TrailKind | Sequence[TrailKind] | None = None,
         limit: int = 100,
         offset: int = 0,
         *,
@@ -55,7 +55,8 @@ class PostgresAuditTrail(Store):
         order = (audit_trail.c.created_at, audit_trail.c.id)
         stmt = select(audit_trail)
         if kind is not None:
-            stmt = stmt.where(audit_trail.c.kind == kind)
+            kinds = [kind] if isinstance(kind, TrailKind) else list(kind)
+            stmt = stmt.where(audit_trail.c.kind.in_(kinds))
         if before is not None:
             # 游标: 排序键 (created_at, id) 小于游标那条的; 游标不是本项目的 (行级安全下查不到) 时比较为空, 一条不取
             at = select(audit_trail.c.created_at).where(audit_trail.c.id == before).scalar_subquery()

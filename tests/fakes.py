@@ -715,16 +715,17 @@ class FakeTrail:
     async def list(
         self,
         eid: str,
-        kind: TrailKind | None = None,
+        kind: TrailKind | Sequence[TrailKind] | None = None,
         limit: int = 100,
         offset: int = 0,
         *,
         newest: bool = False,
         before: str | None = None,
     ) -> list[TrailEntry]:
-        """同真实实现, 写入顺序即排序 (假实现不比写入时间); before 不是本项目的 ID 时为空."""
+        """同真实实现, 写入顺序即排序 (假实现不比写入时间); kind 为一类或一组; before 不是本项目的 ID 时为空."""
+        kinds = None if kind is None else {kind} if isinstance(kind, TrailKind) else set(kind)
         hits = [
-            (n, e) for n, e in enumerate(self.entries) if e.engagement_id == eid and (kind is None or e.kind is kind)
+            (n, e) for n, e in enumerate(self.entries) if e.engagement_id == eid and (kinds is None or e.kind in kinds)
         ]
         if before is not None:
             mark = next((n for n, e in enumerate(self.entries) if e.engagement_id == eid and e.id == before), -1)

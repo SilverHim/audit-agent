@@ -32,7 +32,15 @@ import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
 import { type RankedTask, rankTasks } from '@/lib/review'
-import { buildTimeline, earlierCursor, type TimelineItem, TRAIL_PAGE, trailInOrder } from '@/lib/timeline'
+import {
+  buildTimeline,
+  earlierCursor,
+  newestTrailId,
+  TIMELINE_KINDS,
+  type TimelineItem,
+  TRAIL_PAGE,
+  trailInOrder,
+} from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
 import { pickCurrent, workspaceReady } from '@/lib/workspace'
 import { skippedByReason } from '@/lib/xero'
@@ -82,7 +90,10 @@ function Workspace() {
   const exceptions = useQuery(reviewsListExceptionsOptions({ path: { eid } }))
   // 时间线先取最近的一页留痕, "更早" 往前翻 (见 lib/timeline 的 earlierCursor)
   const trail = useInfiniteQuery({
-    ...reportsListTrailInfiniteOptions({ path: { eid }, query: { newest: true, limit: TRAIL_PAGE } }),
+    ...reportsListTrailInfiniteOptions({
+      path: { eid },
+      query: { newest: true, limit: TRAIL_PAGE, kind: TIMELINE_KINDS },
+    }),
     initialPageParam: { path: { eid }, query: {} },
     getNextPageParam: (page) => {
       const before = earlierCursor(page)
@@ -139,16 +150,16 @@ function Workspace() {
     () => buildTimeline(trailInOrder(trail.data?.pages ?? []), !trail.hasNextPage),
     [trail.data, trail.hasNextPage],
   )
-  const localTrailIds = new Set(turns.map((turn) => turn.trailId).filter(Boolean))
+  const localTrailIds = new Set(turns.flatMap((turn) => (turn.trailId ? [turn.trailId] : [])))
   const history = timeline.filter((item) => item.kind !== 'qa' || !localTrailIds.has(item.id))
 
-  // 当前事项变化或历史末尾有新事件时把它的开头滚到顶部; 判断详情异步加载会往下撑高, 所以不滚到底.
-  // 看的是最后一条历史, 点 "更早" 加在前面的不触发, 不把人从刚翻出的记录拉走
-  const lastHistory = history.at(-1)?.key
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 当前事项或最后一条历史变化时重新定位
+  // 当前事项变化或有新事件时把它的开头滚到顶部; 判断详情异步加载会往下撑高, 所以不滚到底.
+  // 看的是最新一条留痕 (本页刚问的问答除外), 点 "更早" 加在前面的不触发, 不把人从刚翻出的记录拉走
+  const newest = newestTrailId(trail.data?.pages ?? [], localTrailIds)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 当前事项或最新一条留痕变化时重新定位
   useEffect(() => {
     currentRef.current?.scrollIntoView({ block: 'start' })
-  }, [current?.key, lastHistory])
+  }, [current?.key, newest])
 
   // 有新问答或回答在输出时滚到底部
   const lastAnswer = turns.at(-1)?.answer.length ?? 0

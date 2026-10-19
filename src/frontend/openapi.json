@@ -3625,7 +3625,7 @@
           "reports"
         ],
         "summary": "List Trail",
-        "description": "按写入顺序返回. 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条留痕之前的 (往前翻页的游标).",
+        "description": "按写入顺序返回. kind 可重复, 只取这几类; 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条\n留痕之前的 (往前翻页的游标), 不是本项目的留痕 404 NOT_FOUND.",
         "operationId": "reports-list_trail",
         "security": [
           {
@@ -3649,7 +3649,10 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/TrailKind"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrailKind"
+                  }
                 },
                 {
                   "type": "null"
@@ -3698,7 +3701,8 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
                 },
                 {
                   "type": "null"
