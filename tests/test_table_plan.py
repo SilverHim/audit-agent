@@ -11,24 +11,26 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from backend.adapters.xero_dataset import Snapshot, account_class, build_tables, trial_balance_cents
 from backend.contracts.data import FieldSource, ParseFailure, PeriodSource, TableKind, TablePlan
+from backend.contracts.llm_outputs import SheetRecognition
 from backend.contracts.records import Account, JournalEntry, SalesInvoice, TrialBalanceRow
 from backend.services import data_import as d
 from backend.services import table_plan as tp
 
 REPO = Path(__file__).resolve().parents[1]
 RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
-PLANS = Path(__file__).resolve().parent / "fixtures" / "table_plans"  # 方案样例: xero/<导出文件主干>, demo/<表>
+# 方案样例: 账表识别 (DOC-SHEET) 的固定输出, 键为导出文件或 Numbat 表的文件名主干, 方案取其 plan (R276 复用, 只存一份)
+PLANS = Path(__file__).resolve().parent / "fixtures" / "llm_variants" / "upload" / "DOC-SHEET"
 Q1 = Snapshot(REPO / "data" / "external" / "xero" / "api" / "20261017-q1")
 MOCK = Snapshot(REPO / "data" / "external" / "xero" / "api" / "20261017-mock")
 PRIVATE_COLUMN = "Posted By"  # 导出账号的姓名, 读出即遮蔽
 
 
-def plan_of(path: str) -> TablePlan:
-    return TablePlan.model_validate_json((PLANS / path).read_text(encoding="utf-8"))
+def plan_of(key: str) -> TablePlan:
+    return SheetRecognition.model_validate_json((PLANS / f"{key}.json").read_text(encoding="utf-8")).plan
 
 
 def masked(rows: d.RawRows) -> d.RawRows:
@@ -66,7 +68,7 @@ def q1_tables() -> dict[str, list[Any]]:
 
 
 def test_trial_balance_periods_from_columns() -> None:
-    rows, failures = apply(plan_of("xero/trial_balance_2026-06-30.json"), "trial_balance_2026-06-30.xlsx")
+    rows, failures = apply(plan_of("trial_balance_2026-06-30"), "trial_balance_2026-06-30.xlsx")
 
     assert failures == [] and all(isinstance(r, TrialBalanceRow) for r in rows)
     current = {r.account_code: r.balance_cents for r in rows if r.period == "current"}
@@ -79,7 +81,7 @@ def test_trial_balance_periods_from_columns() -> None:
 
 def test_trial_balance_plan_carries_over_to_another_period() -> None:
     """同一方案换上期列名 (30 June 2026) 套到 11-30 的试算表: 本期与上期都与快照一致, 上期有正负号的余额."""
-    plan = plan_of("xero/trial_balance_2026-06-30.json")
+    plan = plan_of("trial_balance_2026-06-30")
     prior = PeriodSource(period="prior", balance=FieldSource(column="30 June 2026"))
     rows, failures = apply(
         plan.model_copy(update={"periods": [plan.periods[0], prior]}), "trial_balance_2026-11-30.xlsx"
@@ -97,7 +99,7 @@ def test_trial_balance_plan_carries_over_to_another_period() -> None:
 
 
 def test_journal_report_groups_fill_down() -> None:
-    rows, failures = apply(plan_of("xero/journal_report.json"), "journal_report.xlsx")
+    rows, failures = apply(plan_of("journal_report"), "journal_report.xlsx")
 
     assert failures == [] and all(isinstance(r, JournalEntry) for r in rows)
     assert len(rows) == 1017 and len({r.entry_no for r in rows}) == 368
@@ -129,7 +131,7 @@ def test_journal_report_groups_fill_down() -> None:
 
 
 def test_chart_of_accounts_maps_xero_types() -> None:
-    rows, failures = apply(plan_of("xero/chart_of_accounts.json"), "chart_of_accounts.csv")
+    rows, failures = apply(plan_of("chart_of_accounts"), "chart_of_accounts.csv")
 
     assert all(isinstance(r, Account) for r in rows)
     # 文件 59 个科目: 58 个映射到五类; 803 Wage Payables 的 Type 为空, 记为失败处 (第 44 行), 不猜也不丢
@@ -143,7 +145,7 @@ def test_value_outside_the_map_is_a_failure() -> None:
     """映射表外的值算失败, 即使类型转换本身认得它 ("asset" 是合法的科目类别, 但不是 Xero 的类型名)."""
     name, rows = raw("chart_of_accounts.csv")
     changed = edited(rows, 2, 2, "asset")  # 090 的 Type
-    accounts, failures = tp.apply_plan(plan_of("xero/chart_of_accounts.json"), name, changed)
+    accounts, failures = tp.apply_plan(plan_of("chart_of_accounts"), name, changed)
 
     assert failures[0] == ParseFailure(row=2, column="*Type", value="asset") and len(accounts) == 57
     assert "090" not in {a.code for a in accounts}
@@ -171,7 +173,7 @@ def test_blank_value_with_a_map_is_empty() -> None:
 
 
 def test_receivable_invoice_detail_matches_snapshot() -> None:
-    rows, failures = apply(plan_of("xero/receivable_invoice_detail.json"), "receivable_invoice_detail.xlsx")
+    rows, failures = apply(plan_of("receivable_invoice_detail"), "receivable_invoice_detail.xlsx")
 
     assert failures == [] and all(isinstance(r, SalesInvoice) for r in rows)
     snapshot = q1_tables()["sales_invoices"]
@@ -188,7 +190,7 @@ def test_receivable_invoice_detail_matches_snapshot() -> None:
 def test_dedupe_keeps_identical_lines_only() -> None:
     """明细行的发票合计不同 (方案外的情形) 时仍算重复键失败; 不开 dedupe 时相同的明细行也算失败."""
     name, rows = raw("receivable_invoice_detail.xlsx")
-    plan = plan_of("xero/receivable_invoice_detail.json")
+    plan = plan_of("receivable_invoice_detail")
     title = next(n for n, cells in rows if d.cell_text(cells[0]) == "ORC1006")  # ORC1006 有三个明细行
     second, total = title + 2, 10  # 第二个明细行, Invoice Total 所在列
     _, failures = tp.apply_plan(plan, name, edited(rows, second, total, 1.0))
@@ -206,7 +208,7 @@ def test_numbat_identity_plans_equal_mapping(kind: TableKind) -> None:
     data = path.read_bytes()
     sheet = d.read_sheet(path.name, data)
     preview = d.preview("IMP-1", path.name, [kind.value], sheet)
-    plan = plan_of(f"demo/{kind}.json")
+    plan = plan_of(kind.value)
 
     assert plan == tp.mapping_plan(kind, preview.suggested_mapping, preview.suggested_date_format)
     rows, failures = tp.apply_plan(plan, *d.raw_rows(path.name, data))
@@ -218,7 +220,7 @@ def test_numbat_identity_plans_equal_mapping(kind: TableKind) -> None:
 
 
 def test_plan_mismatches_are_reported() -> None:
-    plan = plan_of("xero/trial_balance_2026-06-30.json")
+    plan = plan_of("trial_balance_2026-06-30")
     with pytest.raises(d.MappingError) as e:
         apply(plan.model_copy(update={"header_row": 99}), "trial_balance_2026-06-30.xlsx")
     assert (e.value.code, e.value.message) == ("INVALID_VALUE", "表头行 99 超出工作表 (共 12 行)")
@@ -228,7 +230,7 @@ def test_plan_mismatches_are_reported() -> None:
     with pytest.raises(d.MappingError) as e:
         apply(plan.model_copy(update={"header_row": 3}), "trial_balance_2026-06-30.xlsx")  # 标题行当表头: 列都对不上
     assert e.value.code == "INVALID_VALUE" and e.value.message.startswith("工作表没有列 30 June 2025, Account Code")
-    journal = plan_of("xero/journal_report.json")
+    journal = plan_of("journal_report")
     fields = {k: v for k, v in journal.fields.items() if k != "account_code"}
     with pytest.raises(d.MappingError) as e:
         apply(journal.model_copy(update={"fields": fields}), "journal_report.xlsx")
@@ -238,7 +240,7 @@ def test_plan_mismatches_are_reported() -> None:
 def test_failures_carry_file_line_numbers() -> None:
     name, rows = raw("trial_balance_2026-06-30.xlsx")
     changed = edited(edited(rows, 7, 3, "abc"), 9, 5, "n/a")  # 412 的本期借方, 461 的上期余额
-    result, failures = tp.apply_plan(plan_of("xero/trial_balance_2026-06-30.json"), name, changed)
+    result, failures = tp.apply_plan(plan_of("trial_balance_2026-06-30"), name, changed)
 
     assert failures == [
         ParseFailure(row=7, column="Debit - Year to date", value="abc"),
@@ -271,7 +273,7 @@ def test_failures_carry_file_line_numbers() -> None:
     ],
 )
 def test_plan_checks(update: dict[str, Any], code: str, message: str) -> None:
-    plan = plan_of("xero/trial_balance_2026-06-30.json").model_copy(update=update)
+    plan = plan_of("trial_balance_2026-06-30").model_copy(update=update)
     with pytest.raises(d.MappingError) as e:
         apply(plan, "trial_balance_2026-06-30.xlsx")
     assert (e.value.code, e.value.message) == (code, message)
@@ -286,7 +288,7 @@ def test_plan_checks(update: dict[str, Any], code: str, message: str) -> None:
 )
 def test_rule_columns_must_exist(update: dict[str, Any]) -> None:
     """跳过规则与分组标题用到的列不在表头里时报错, 不在逐行时崩溃."""
-    plan = TablePlan.model_validate({**plan_of("xero/trial_balance_2026-06-30.json").model_dump(), **update})
+    plan = TablePlan.model_validate({**plan_of("trial_balance_2026-06-30").model_dump(), **update})
     with pytest.raises(d.MappingError) as e:
         apply(plan, "trial_balance_2026-06-30.xlsx")
     assert (e.value.code, e.value.message) == ("INVALID_VALUE", "工作表没有列 Nope")
@@ -396,7 +398,7 @@ def test_failures_from_a_group_title_point_at_the_title_row() -> None:
 
 
 def test_periods_only_for_trial_balance() -> None:
-    plan = plan_of("xero/chart_of_accounts.json")
+    plan = plan_of("chart_of_accounts")
     period = PeriodSource(period="current", balance=FieldSource(column="*Code"))
     with pytest.raises(d.MappingError, match="只有试算表能按期分列, 不能用于 accounts"):
         apply(plan.model_copy(update={"periods": [period]}), "chart_of_accounts.csv")
@@ -533,19 +535,18 @@ def test_malformed_plans_are_rejected(value: dict[str, Any]) -> None:
 
 
 def test_plan_samples_parse() -> None:
-    """方案样例都合模型 (R276 的 mock fixture 复用这些文件)."""
-    samples = sorted(PLANS.rglob("*.json"))
-    assert [p.relative_to(PLANS).as_posix() for p in samples] == [
-        "demo/accounts.json",
-        "demo/bank_accounts.json",
-        "demo/bank_transactions.json",
-        "demo/delivery_notes.json",
-        "demo/journal_entries.json",
-        "demo/sales_invoices.json",
-        "demo/trial_balance.json",
-        "xero/chart_of_accounts.json",
-        "xero/journal_report.json",
-        "xero/receivable_invoice_detail.json",
-        "xero/trial_balance_2026-06-30.json",
+    """方案样例 (DOC-SHEET 的固定输出) 都合识别结果的模型, 4 份 Xero 导出与 Numbat 的 7 张表各一份."""
+    assert sorted(p.stem for p in PLANS.glob("*.json")) == [
+        "accounts",
+        "bank_accounts",
+        "bank_transactions",
+        "chart_of_accounts",
+        "delivery_notes",
+        "journal_entries",
+        "journal_report",
+        "receivable_invoice_detail",
+        "sales_invoices",
+        "trial_balance",
+        "trial_balance_2026-06-30",
     ]
-    assert all(isinstance(plan_of(p.relative_to(PLANS).as_posix()), BaseModel) for p in samples)
+    assert all(isinstance(plan_of(p.stem), TablePlan) for p in PLANS.glob("*.json"))

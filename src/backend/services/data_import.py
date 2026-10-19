@@ -464,6 +464,91 @@ def preview(import_id: str, file_name: str, sheets: list[str], sheet: Sheet) -> 
     )
 
 
+# ── 发给大模型的表格样本的遮蔽 (需求 R276) ──
+
+# 人名一类的列 (取值要遮蔽), 表头先规整 (小写, 只留字母与数字, 即去掉 *, 空格与标点; 末尾的序号不计). 宁可多遮:
+# Xero 日记账报表的 Posted By 是导出账号本人的姓名 (计划决定 12), 联系人导出的 *ContactName, FirstName, LastName,
+# PersonNFirstName, POAttentionTo, SkypeName 等是联系人的姓名或账号.
+# 两种认法: 恰为人名表头的单元格 (PERSONAL_HEADERS 之一, 或 "某某人" 列: 过去分词加 by, 如 postedby, createdby,
+# approvedby, signedby, reviewedby, 另有 paidby, madeby) 不论在哪一行都认 (年份或日期作列名, 只有一列, 首格为空的
+# 表头也认得); 只是含人名片段的 (PERSONAL_PARTS 之一, 或以 by 结尾) 要所在行像表头 (header_like), 免得数据行里的
+# 科目名 Telephone & Internet 把整列遮掉
+PERSONAL_HEADERS = frozenset(
+    {
+        "user",
+        "username",
+        "userid",
+        "email",
+        "emailaddress",
+        "contactname",
+        "contactperson",
+        "firstname",
+        "lastname",
+        "fullname",
+        "phone",
+        "mobile",
+        "attentionto",
+        "skypename",
+    }
+)
+BY_HEADER = re.compile(r"[a-z]*edby|paidby|madeby")  # "某某人" 列的完整写法
+PERSONAL_PARTS = (
+    "contactname",
+    "firstname",
+    "lastname",
+    "fullname",
+    "person",
+    "user",
+    "email",
+    "phone",
+    "mobile",
+    "attentionto",
+    "skype",
+)
+MASK = "[masked]"  # 遮蔽后的取值
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")  # 邮箱地址, 任何列里都遮蔽
+# 数值或 ISO 日期的单元格文本 (金额, 代码, 序号; Excel 日期单元格经 cell_text 写成 ISO 日期): 有这种单元格的行不像表头.
+# 文字写的日期 (如 30/06/2026) 不算, 只有文字的数据行因此会被当作表头, 方向是多遮
+VALUE_TEXT = re.compile(r"^\(?[-+]?\$?[\d,]*\.?\d+\)?%?$|^\d{4}-\d{2}-\d{2}")
+
+
+def header_key(header: str) -> str:
+    """表头规整: 小写, 只留字母与数字, 去掉末尾的序号."""
+    return normalize(header).rstrip("0123456789")
+
+
+def personal_header(header: str) -> bool:
+    """单元格是否恰为人名表头 (见 PERSONAL_HEADERS, BY_HEADER): 不论所在行的样子都认."""
+    key = header_key(header)
+    return key in PERSONAL_HEADERS or BY_HEADER.fullmatch(key) is not None
+
+
+def personal_column(header: str) -> bool:
+    """表头是否人名一类的列: 恰为人名表头, 或含人名片段 (PERSONAL_PARTS), 或以 by 结尾."""
+    key = header_key(header)
+    return bool(key) and (personal_header(header) or any(part in key for part in PERSONAL_PARTS) or key.endswith("by"))
+
+
+def header_like(texts: Sequence[str]) -> bool:
+    """一行是否像表头: 至少两个非空单元格, 且没有数值或 ISO 日期 (见 VALUE_TEXT). 只用来认含人名片段的表头."""
+    filled = [t for t in texts if t]
+    return len(filled) >= 2 and not any(VALUE_TEXT.match(t) for t in filled)
+
+
+def mask_sample(rows: Iterable[Sequence[str]]) -> list[list[str]]:
+    """表格样本的遮蔽, 发给大模型的表格文字 (DOC-SHEET 的样本行, DOC-CLASSIFY 的首页文字) 都先经它: rows 为依次各行的
+    单元格文本 (含标题行; 表头用原始文本, 不用加了 " (2)" 的显示名). 一行里有人名表头 (恰为人名表头的不论行的样子,
+    含人名片段的要行像表头, 见 PERSONAL_HEADERS 处的说明) 时, 之后各行该列的非空取值遮蔽为 MASK (表头本身照留, 大模型
+    据此知道有这一列); 任何单元格里的邮箱地址遮蔽为 MASK. 行与单元格的个数不变."""
+    personal: set[int] = set()
+    masked = []
+    for texts in rows:
+        masked.append([MASK if i in personal and t else EMAIL.sub(MASK, t) for i, t in enumerate(texts)])
+        like = header_like(texts)
+        personal |= {i for i, t in enumerate(texts) if personal_header(t) or (like and personal_column(t))}
+    return masked
+
+
 # ── 单元格转换 ──
 
 

@@ -1,0 +1,45 @@
+{
+  "plan": {
+    "kind": "accounts",
+    "header_row": 1,
+    "fields": {
+      "code": {
+        "column": "*Code"
+      },
+      "name": {
+        "column": "*Name"
+      },
+      "type": {
+        "column": "*Type",
+        "values": {
+          "Bank": "asset",
+          "Accounts Receivable": "asset",
+          "Inventory": "asset",
+          "Fixed Asset": "asset",
+          "Current Liability": "liability",
+          "Accounts Payable": "liability",
+          "GST": "liability",
+          "Unpaid Expense Claims": "liability",
+          "Historical": "liability",
+          "Rounding": "liability",
+          "Tracking": "liability",
+          "Equity": "equity",
+          "Retained Earnings": "equity",
+          "Revenue": "revenue",
+          "Other Income": "revenue",
+          "Direct Costs": "expense",
+          "Expense": "expense",
+          "Depreciation": "expense",
+          "Bank Revaluations": "expense",
+          "Unrealised Currency Gains": "expense",
+          "Realised Currency Gains": "expense"
+        }
+      }
+    }
+  },
+  "company": null,
+  "period_start": null,
+  "period_end": null,
+  "confidence": "high",
+  "reason": "Xero chart of accounts export: the *Code, *Name and *Type columns, with every Xero account type mapped to one of the five classes."
+}

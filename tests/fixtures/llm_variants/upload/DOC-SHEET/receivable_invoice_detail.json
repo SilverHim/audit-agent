@@ -1,0 +1,48 @@
+{
+  "plan": {
+    "kind": "sales_invoices",
+    "header_row": 5,
+    "skip": [
+      {
+        "column": "Invoice Date",
+        "pattern": "^Total\\b"
+      },
+      {
+        "column": "Source",
+        "pattern": "Credit Note"
+      },
+      {
+        "column": "Status",
+        "pattern": "^(Draft|Voided|Awaiting Approval)$"
+      }
+    ],
+    "group_title": {
+      "column": "Invoice Date",
+      "pattern": "^(?P<number>\\S+)$"
+    },
+    "fields": {
+      "invoice_no": {
+        "group": "number"
+      },
+      "customer": {
+        "column": "Contact"
+      },
+      "invoice_date": {
+        "column": "Invoice Date"
+      },
+      "posting_date": {
+        "column": "Invoice Date"
+      },
+      "amount_cents": {
+        "column": "Invoice Total"
+      }
+    },
+    "dedupe": true,
+    "amount_unit": "dollars"
+  },
+  "company": "Demo Company (AU)",
+  "period_start": "2024-01-01",
+  "period_end": "2027-12-31",
+  "confidence": "high",
+  "reason": "Xero receivable invoice detail: invoices are grouped under invoice-number title rows and the invoice total repeats on each line, so identical rows are kept once; totals, credit notes and draft, voided or unapproved invoices are skipped."
+}

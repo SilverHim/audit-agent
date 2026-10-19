@@ -404,6 +404,28 @@ class TablePlan(Model):
         return self
 
 
+Confidence = Literal["high", "low"]  # 识别的把握: 高或低
+
+
+class SheetReading(Model):
+    """A3 对上传的一个工作表的识别结果 (需求 R276): 大模型按开头的样本行给出 (DOC-SHEET), 大模型不可用时按列名匹配.
+
+    方案由 services/table_plan.apply_plan 套到全表; 识别只看样本行, 不出数据行. 公司名与期间是表头里读到的, 与项目
+    是否相符由确认单判断 (R277).
+    """
+
+    file_name: str  # 文件名
+    sheet: str  # 工作表名; CSV 为文件名主干
+    plan: TablePlan  # 规整方案; plan.kind 为空表示不是账表 (或按列名认不出)
+    company: str | None = None  # 标题里读到的公司名, 没有为空
+    period_start: date | None = None  # 读到的期间起日, 没有为空 (余额表只写截至日)
+    period_end: date | None = None  # 读到的期间止日或余额截至日, 没有为空
+    confidence: Confidence  # 把握; 按列名匹配时为低
+    reason: str  # 理由; 按列名匹配时以 "按列名匹配, 请核对" 开头并写明原因
+    method: Literal["llm", "column_names"]  # 识别方式: 大模型, 或退回按列名匹配
+    trail_ids: list[str] = []  # 本次调大模型的各次 llm_call 留痕 (退回时为失败的那几次, 调用出错为空)
+
+
 class ApprovalLogRow(Model):
     """审批日志的一行: 某张凭证的录入人, 审批人与审批时间. 只含导入时对应了的字段 (model_dump(exclude_unset=True)),
     补进总账分录时只改这些列."""

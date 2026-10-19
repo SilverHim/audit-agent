@@ -79,5 +79,5 @@ XERO = FixtureSet(
     manifest=XERO_DEMO / "manifest.json",
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]
-# 上传处理的固定输出中, 演示也用而须同步进运行副本的程序: 文件分类与回函抽取
-UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06")
+# 上传处理的固定输出中, 演示也用而须同步进运行副本的程序: 文件分类, 回函抽取与账表识别
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")

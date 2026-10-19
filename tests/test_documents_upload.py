@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -294,6 +295,48 @@ async def test_word_and_spreadsheet_first_pages_and_unreadable_files() -> None:
     assert document(financial, "draft-financial-statements.xlsx").type is DocumentType.financial_statements
     broken = document(financial, "broken.docx")
     assert (broken.status, broken.failed_step) == ("needs_manual", "read")
+
+
+POSTER, POSTER_EMAIL = "Quenda Testposter", "quenda.poster@example.test"  # 测试里编的姓名与邮箱, 不是真实账号
+SECOND_POSTER = "Wambenger Testsecond"  # 重名的第二个 Posted By 列里编的姓名
+
+
+def journal_workbook() -> bytes:
+    """合成的日记账导出: 第 1 行表头带两个同名的 Posted By 列 (显示名第二个为 "Posted By (2)"), 备注里有邮箱 (首页文字
+    取第一个非空行作表头, 各列都进首页). Xero 网页导出的报表第 1 行是标题, 首页文字只有第一列, 那时 Posted By 本就
+    不进; 这里测表头在第 1 行的情形."""
+    import openpyxl
+
+    book = openpyxl.Workbook()
+    sheet = book.active
+    assert sheet is not None
+    for row in (
+        ["Date", "Account Code", "Debit", "Credit", "Posted By", "Note", "Posted By"],
+        ["2025-07-01", "200", 10, None, POSTER, f"queried by {POSTER_EMAIL}", SECOND_POSTER],
+        ["2025-07-01", "090", None, 10, POSTER, None, SECOND_POSTER],
+    ):
+        sheet.append(row)
+    stream = io.BytesIO()
+    book.save(stream)
+    return stream.getvalue()
+
+
+async def test_spreadsheet_first_page_masks_personal_columns() -> None:
+    """经 "上传文件" 上传含 Posted By 列的表格: 分类 (DOC-CLASSIFY) 的首页文字经 data_import.mask_sample 遮蔽, 姓名与
+    邮箱不进提示词与留痕; Posted By 表头照留."""
+    runner, service, financial, _, _ = setup()
+    await service.upload_documents(EID, [("synthetic-journal.xlsx", journal_workbook())], actor="U-1")
+    await drain(service)
+
+    uploaded = document(financial, "synthetic-journal.xlsx")
+    assert (uploaded.status, uploaded.failed_step) == ("needs_manual", "classify")  # 读出了首页, 兜底输出判断不了
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [call] = [e for e in trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "DOC-CLASSIFY"]
+    prompt = call.payload["messages"][0]["content"]
+    assert "Date, Account Code, Debit, Credit, Posted By, Note, Posted By (2)" in prompt and data_import.MASK in prompt
+    dumped = json.dumps([e.model_dump(mode="json") for e in trail.entries], ensure_ascii=False)
+    assert POSTER not in dumped and POSTER_EMAIL not in dumped and SECOND_POSTER not in dumped
 
 
 def workbook_bytes() -> bytes:

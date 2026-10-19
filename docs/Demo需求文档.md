@@ -169,7 +169,8 @@ src/backend/
 │   ├── rule_engine.py             B  绑定参数执行 YAML 中的 SQL，结果包装为 Exception
 │   └── audit_trail.py             B  只追加写入
 ├── agents/                        A  base.py、client_intel.py（A2）、ingest.py（A3）、risk_assessor.py（A4）、
-│                                     evidence.py（A5）、fieldwork.py（A6）、qc.py（A9）、concierge.py（A10）
+│                                     sheets.py（A3，上传账表识别）、evidence.py（A5）、fieldwork.py（A6）、qc.py（A9）、
+│                                     concierge.py（A10）
 ├── orchestration/                 A  graph.py、nodes.py、scheduler.py、decisions.py、runner.py、query.py
 ├── persistence/                   B  表模型、五个 Store 与 DatasetLoader 的实现、行级安全、事务
 ├── adapters/

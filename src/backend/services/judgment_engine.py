@@ -21,6 +21,7 @@ from backend.contracts.llm_outputs import (
     DocumentClassification,
     JudgmentDraft,
     ReportDraft,
+    SheetRecognition,
 )
 from backend.contracts.models import (
     AgentId,
@@ -544,9 +545,11 @@ async def check_critic(
 async def structure_only(
     validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
 ) -> CheckResult:
-    """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification.
+    """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification; 上传账表识别
+    SheetRecognition.
 
-    文件分类的类型取值已由结构校验限定, 没有证据指针.
+    文件分类的类型取值已由结构校验限定, 没有证据指针. 账表识别的方案在结构校验里自洽 (TablePlan 的模型校验); 与工作表
+    对不对得上在套用时查 (table_plan.check_plan), 不算大模型输出失败.
     """
     return CheckResult(output)
 
@@ -559,6 +562,7 @@ for _model, _check in (
     (CriticIndependent, check_critic),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
+    (SheetRecognition, structure_only),
 ):
     OutputValidator.register(_model, _check)
 

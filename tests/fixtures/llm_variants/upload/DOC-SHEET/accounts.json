@@ -1,0 +1,23 @@
+{
+  "plan": {
+    "kind": "accounts",
+    "header_row": 1,
+    "fields": {
+      "code": {
+        "column": "code"
+      },
+      "name": {
+        "column": "name"
+      },
+      "type": {
+        "column": "type"
+      }
+    },
+    "date_format": "dmy"
+  },
+  "company": null,
+  "period_start": null,
+  "period_end": null,
+  "confidence": "high",
+  "reason": "The column headings are the standard accounts field names, one column per field."
+}

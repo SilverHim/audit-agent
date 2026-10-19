@@ -41,7 +41,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
-from backend.services.data_import import cell_text, read_sheet
+from backend.services.data_import import Sheet, cell_text, mask_sample, read_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -323,8 +323,9 @@ def upload_run(procedure_id: str, document: DocumentRef, job: str | None = None)
 
 
 async def first_page_text(deps: AgentDeps, eid: str, document: DocumentRef) -> str:
-    """分类用的首页文字: PDF 取文本层第 1 页; DOCX 取正文开头; XLSX, XLS, CSV 取第一个工作表的表头与前 20 行;
-    图片等读不出文字的为空串 (只按文件名分类). 截到 FIRST_PAGE_CHARS. 读不了 (文件损坏等) 抛出."""
+    """分类用的首页文字: PDF 取文本层第 1 页; DOCX 取正文开头; XLSX, XLS, CSV 取第一个工作表的表头与前 20 行, 人名列与
+    邮箱经 data_import.mask_sample 遮蔽 (同 DOC-SHEET 的样本行); 图片等读不出文字的为空串 (只按文件名分类).
+    截到 FIRST_PAGE_CHARS. 读不了 (文件损坏等) 抛出."""
     if document.media_type == "application/pdf":
         if document.page_count == 0:  # 存档时就数不出页数 (文件损坏)
             raise ValueError(f"{document.file_name} 读不出页")
@@ -340,8 +341,14 @@ async def first_page_text(deps: AgentDeps, eid: str, document: DocumentRef) -> s
             xml = archive.read("word/document.xml").decode("utf-8", errors="replace")
         return " ".join(WORD_XML.sub(" ", xml).split())[:FIRST_PAGE_CHARS]  # 去掉标签, 空白并成一个空格
     sheet = await asyncio.to_thread(read_sheet, document.file_name, data)
-    lines = [", ".join(sheet.columns)] + [", ".join(cell_text(c) for c in cells) for _, cells in sheet.rows[:20]]
-    return "\n".join(lines)[:FIRST_PAGE_CHARS]
+    return sheet_first_page(sheet)
+
+
+def sheet_first_page(sheet: Sheet) -> str:
+    """表格的首页文字: 表头 (显示名) 与前 20 行, 逗号分隔, 经 mask_sample 遮蔽 (按原始表头判定人名列, 重名的列也认得),
+    截到 FIRST_PAGE_CHARS."""
+    texts = mask_sample([sheet.headers, *([cell_text(c) for c in cells] for _, cells in sheet.rows[:20])])
+    return "\n".join(", ".join(row) for row in [sheet.columns, *texts[1:]])[:FIRST_PAGE_CHARS]
 
 
 EXTRACTED_TYPES = frozenset({DocumentType.contract, DocumentType.confirmation})  # 分类后还要抽取要素的类型

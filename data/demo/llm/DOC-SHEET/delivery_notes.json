@@ -1,0 +1,32 @@
+{
+  "plan": {
+    "kind": "delivery_notes",
+    "header_row": 1,
+    "fields": {
+      "id": {
+        "column": "id"
+      },
+      "delivery_no": {
+        "column": "delivery_no"
+      },
+      "invoice_id": {
+        "column": "invoice_id"
+      },
+      "shipped_date": {
+        "column": "shipped_date"
+      },
+      "signed_date": {
+        "column": "signed_date"
+      },
+      "signed_by": {
+        "column": "signed_by"
+      }
+    },
+    "date_format": "ymd"
+  },
+  "company": null,
+  "period_start": null,
+  "period_end": null,
+  "confidence": "high",
+  "reason": "The column headings are the standard delivery_notes field names, one column per field."
+}

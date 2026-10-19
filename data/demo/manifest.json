@@ -120,6 +120,50 @@
       "sha256": "f16623fde986fd7397019563e59a1fa9cb77643fb692a0eb2c2015ff5d4b46d8"
     },
     {
+      "path": "llm/DOC-SHEET/accounts.json",
+      "sha256": "9f5a57dc7d9872fa38a21ce5e1f6bc3959c11a065d84fa1cb509d2218a4a4ab7"
+    },
+    {
+      "path": "llm/DOC-SHEET/bank_accounts.json",
+      "sha256": "45c13c6202214f15bcc3442cd6cb5862726c5da81bcd027ef5462115f44b08bf"
+    },
+    {
+      "path": "llm/DOC-SHEET/bank_transactions.json",
+      "sha256": "dd5902ac2ccb59b59a1d76ca0c674fa69cc8800b244056269ae2feaa98e7f8fa"
+    },
+    {
+      "path": "llm/DOC-SHEET/chart_of_accounts.json",
+      "sha256": "627edf1fdc2d4e4eb26837d9069d93f63e1500d7f438a467cefedba1015019ed"
+    },
+    {
+      "path": "llm/DOC-SHEET/delivery_notes.json",
+      "sha256": "62054f1b398f35600828a9d7ab3b87d0d4e8a91f453096c58477e205e6d61d4d"
+    },
+    {
+      "path": "llm/DOC-SHEET/journal_entries.json",
+      "sha256": "1008709a2df943330ab96d86a0a3b7322a6104f5e9c769451bf1a590f3213003"
+    },
+    {
+      "path": "llm/DOC-SHEET/journal_report.json",
+      "sha256": "48bbaead568ccfc44c4c39a83ab73d61d9118dff020931e1cadfe794630a62cd"
+    },
+    {
+      "path": "llm/DOC-SHEET/receivable_invoice_detail.json",
+      "sha256": "08ad18858aa9c8916b90f970c5f1461725cee4b9c31d97ff9f8e3e3c70781a5a"
+    },
+    {
+      "path": "llm/DOC-SHEET/sales_invoices.json",
+      "sha256": "fd7e3a2ca9c032ccef093b9cda17cd9a8225ff9121f8ada34d32b776a1e0ac0c"
+    },
+    {
+      "path": "llm/DOC-SHEET/trial_balance.json",
+      "sha256": "540ad345195f39af8b3db871efeb612b360ca3c9a55a000e7f3a3910bff24aee"
+    },
+    {
+      "path": "llm/DOC-SHEET/trial_balance_2026-06-30.json",
+      "sha256": "f73d536364104c6c24a689d68e369fcca2df3eba96567e9551b306fe828ec3d4"
+    },
+    {
       "path": "llm/GEN-09/BA-01-r1.json",
       "sha256": "34e482ca95f6e6ea4c5a185ace5b3068b4bf281d4412778712f2e6762ef3e80e"
     },
