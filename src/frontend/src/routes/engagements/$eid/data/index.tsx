@@ -13,6 +13,7 @@ import { MarkedRequests } from '@/components/data-requests'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { XeroProfileCard } from '@/components/xero-profile'
 import { useActorName } from '@/lib/actor'
 import {
   type DataCheck,
@@ -33,6 +34,7 @@ import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useEngagement } from '@/lib/use-engagement'
 import { skippedByReason, syncFailureText, useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
+import { checkStatus, pendingCheck } from '@/lib/xero-profile'
 
 export const Route = createFileRoute('/engagements/$eid/data/')({
   validateSearch: (search: Record<string, unknown>): XeroNotice => xeroNotice(search),
@@ -73,6 +75,8 @@ function DataPage() {
 
   const docs = documents.data ?? []
   const importedTables = summary?.tables.filter((table) => table.source === 'import').length ?? 0
+  // Xero 组织信息与客户画像不一致且还没处理时, 在数据源下面列出核对卡 (锁定的项目不提示)
+  const profileCheck = pendingCheck(summary?.sources.xero, Boolean(overview?.engagement.locked))
 
   return (
     <>
@@ -130,6 +134,15 @@ function DataPage() {
             </SourceCard>
           </div>
         </section>
+
+        {profileCheck ? (
+          <XeroProfileCard
+            key={profileCheck.key}
+            eid={eid}
+            check={profileCheck}
+            disabled={Boolean(overview?.running || summary?.sources.xero?.syncing)}
+          />
+        ) : null}
 
         {summary ? (
           <>
@@ -226,6 +239,9 @@ function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }
   const joiner = lang === 'zh' ? '、' : ', '
   const last = xero.last_sync ?? null
   const skipped = last?.ok ? skippedByReason(last.skipped, t, lang) : []
+  // 锁定的项目不列核对卡 (状态行不写 "见下方")
+  const checked = checkStatus(xero.profile_check, t, Boolean(useEngagement(eid).data?.engagement.locked))
+  const differs = Boolean(xero.profile_check?.differences?.length && !xero.profile_check.resolution)
 
   // 一次只提交一个; action 返回 true 时保持提交中 (连接成功后整页跳到 Xero)
   const submit = async (action: () => Promise<boolean | undefined>) => {
@@ -307,6 +323,14 @@ function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }
                 ) : (
                   t.data.xero.lastOk
                 )}
+              </dd>
+            </>
+          ) : null}
+          {checked ? (
+            <>
+              <dt className="text-muted-foreground">{t.data.xero.profileCheck}</dt>
+              <dd className={cn('m-0', differs && 'text-warn-strong')} data-testid="xero-profile-check">
+                {checked}
               </dd>
             </>
           ) : null}

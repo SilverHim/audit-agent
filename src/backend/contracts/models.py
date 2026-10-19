@@ -678,6 +678,7 @@ class ProfileSource(StrEnum):
     manual = "manual"  # 新建客户时手工录入 (第 1 版)
     dataset = "dataset"  # 建项目时采用数据集带的画像
     update = "update"  # 审计师在 ACC-01 更新客户资料
+    xero = "xero"  # 按 Xero 组织信息更新 (需求 R291): 停在 ACC-01 时本项目采用, 其余时候只给客户写新版本
 
 
 class ProfileRecord(Model):

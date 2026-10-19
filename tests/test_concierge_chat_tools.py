@@ -9,7 +9,7 @@ import pytest
 from backend.agents.concierge_chat.citations import match_citations
 from backend.agents.concierge_chat.tools import NoArgs, ToolBox, ToolEnv, list_open_items, minimize, pseudonym
 from backend.contracts.conversation import ConciergeCitation, ToolCall
-from backend.contracts.data import DataRequest, TableKind
+from backend.contracts.data import DataRequest, TableKind, XeroProfileCheck, XeroSource
 from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
@@ -106,6 +106,7 @@ def env(
     max_chars: int = 6000,
     state: FixedState | None = None,
     data: FakeDataStore | None = None,
+    xero: Any = None,
 ) -> ToolEnv:
     deps = chat_deps(
         trail,
@@ -113,7 +114,7 @@ def env(
         financial_store=FakeFinancialStore(records=NUMBAT_RECORDS),
         data=data,
     )
-    return ToolEnv(EID, deps, state if state is not None else FixedState(), max_chars)
+    return ToolEnv(EID, deps, state if state is not None else FixedState(), max_chars, xero)
 
 
 def data_with_requests() -> FakeDataStore:
@@ -273,6 +274,47 @@ async def test_open_items_disputes_first_by_created_at(features: list[str], expe
     deps = chat_deps(output_store=FakeOutputStore([JUDGMENT, late, TASK, early]))
     found = await list_open_items(ToolEnv(EID, deps, FixedState(view=make_overview(features=features)), 6000), NoArgs())
     assert [i["task_id"] for i in found.data["items"] if i["type"] == "review_task"] == expected
+
+
+class PendingXero:
+    """Xero 连接记录的替身: 一次待处理的组织信息核对 (名称为合成值)."""
+
+    CHECK = XeroProfileCheck(
+        key="XP-0123456789ab",
+        xero_name="Numbat Electronics",
+        xero_legal_name="Numbat Electronics Ltd",
+        xero_abn=None,
+        profile_version=1,
+        profile_legal_name="Numbat Electronic Components Pty Ltd",
+        profile_abn="",
+        differences=["legal_name"],
+        checked_at=NOW,
+        next_version=2,
+        stage="after",
+    )
+
+    async def source(self, eid: str) -> XeroSource:
+        return XeroSource(status="connected", profile_check=self.CHECK)
+
+
+async def test_open_items_put_xero_check_after_requests_before_tasks() -> None:
+    """R291 Q7 a: Xero 组织信息核对排在补交资料之后, 复核任务之前 (同工作台), 带两边的名称与 ABN."""
+    state = FixedState(view=make_overview(current_gate=GateId.FIN_01))
+    tool_env = env(state=state, data=data_with_requests(), xero=PendingXero())
+    _, data = await call("list_open_items", tool_env=tool_env)
+    types = [i["type"] for i in data["items"]]
+    assert types == ["gate_decision", "data_request", "data_request", "xero_profile", "review_task"]
+    assert data["items"][3] == {
+        "type": "xero_profile",
+        "key": "XP-0123456789ab",
+        "differences": ["legal_name"],
+        "xero_legal_name": "Numbat Electronics Ltd",
+        "xero_abn": None,
+        "profile_version": 1,
+        "profile_legal_name": "Numbat Electronic Components Pty Ltd",
+        "profile_abn": "",
+        "deferred": False,
+    }
 
 
 async def test_contracts_list_and_terms_with_pages() -> None:

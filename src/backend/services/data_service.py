@@ -72,6 +72,7 @@ from backend.contracts.models import (
     DocumentRef,
     DocumentType,
     Engagement,
+    GateId,
     Reliability,
     TrailEntry,
     TrailKind,
@@ -361,6 +362,12 @@ class DataService:
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
         self.kinds: dict[object, str] = {}  # 作业 → 作业种类 (launch 的 kind, 如 Xero 同步), 没给的不在其中
         self.tasks: set[asyncio.Task[None]] = set()  # launch 起的后台作业; 保留引用, 防止完成前被回收
+
+    async def gate_now(self, eid: str) -> GateId | None:
+        """检查点当前停在哪道闸门前 (未启动, 在执行或停在节点内等待时为空). 只读, 不取项目锁; Xero 组织信息核对
+        (需求 R291) 据此判断按 Xero 更新时本项目是否采用新版本."""
+        snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
+        return current_gate(snapshot.next, fill_defaults(snapshot.values))
 
     async def unlocked(self, eid: str) -> Engagement:
         """项目 (未锁定); 不存在抛 LookupError, 已锁定 ENGAGEMENT_LOCKED. 供不取项目锁的写前检查 (如 Xero 授权地址)."""

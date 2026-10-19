@@ -3,7 +3,7 @@
 校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
 """
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -941,7 +941,14 @@ class GraphDecisionSubmit:
         return request
 
     async def update_client_profile(
-        self, eid: str, version: int, changes: Mapping[str, Any], *, updated_by: str
+        self,
+        eid: str,
+        version: int,
+        changes: Mapping[str, Any],
+        *,
+        updated_by: str,
+        source: ProfileSource = ProfileSource.update,
+        precheck: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.
 
@@ -951,9 +958,13 @@ class GraphDecisionSubmit:
         (去空白后比较) 时另查重: 与新建客户同一把锁, 同一范围 (库里其他客户的最新一版与数据集画像), 不含本客户自己,
         已是别的客户的报 ABN_TAKEN (带那个客户的 client_id 与 legal_name), 不写. 各项校验都在锁内, 按第 7 节的顺序,
         所以项目锁定, 不在闸门或版本过期时先报对应的错. 保存画像与改项目采用的版本在一个事务内, 提交后写 decision
-        留痕. updated_by 为操作用户 ID, 写入留痕.
+        留痕. updated_by 为操作用户 ID, 写入留痕. source 为新版本的来源: 客户资料页为 update, 按 Xero 组织信息更新为
+        xero (需求 R291, 留痕 payload 另带 source). precheck 为调用方要在同一把锁内先做的核对 (按 Xero 更新时重新
+        核对 key, 不过即抛错, 锁随之释放), 在其余校验之前.
         """
         async with self._deciding(eid) as (engagement, snapshot):
+            if precheck is not None:
+                await precheck()
             if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not GateId.ACC_01:
                 raise DecisionRejected("NOT_AT_GATE", "只能在 ACC-01 闸门更新客户资料")
             # 第 7 节校验顺序: VERSION_MISMATCH 先于 INVALID_VALUE. 版本号按项目客户的最新画像算, 不按 changes 的 id
@@ -980,7 +991,7 @@ class GraphDecisionSubmit:
             async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
                 try:
                     saved = await self.deps.engagement_store.save_profile(
-                        profile, source=ProfileSource.update, updated_by=updated_by, dataset_profiles=others
+                        profile, source=source, updated_by=updated_by, dataset_profiles=others
                     )
                 except AbnTaken as exc:
                     raise DataRejected(
@@ -995,7 +1006,8 @@ class GraphDecisionSubmit:
                     procedure_id="ACC-01",
                     summary=f"客户资料更新至第 {saved.version} 版",
                     idempotency_key=f"{saved.id}-v{saved.version}",
-                    payload={"client_id": saved.id, "version": saved.version},
+                    payload={"client_id": saved.id, "version": saved.version}
+                    | ({} if source is ProfileSource.update else {"source": source.value}),
                 )
             )
             # 只写新版本号: ACC-01 的路由发现评分卡依据的版本落后, 选 rerun 回 p0_intel

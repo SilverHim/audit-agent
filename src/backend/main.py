@@ -142,6 +142,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.data_service = DataService(deps, app.state.runner)
             app.state.xero = XeroLink(deps, app.state.data_service, xero_store, settings)
             app.state.data_service.xero = app.state.xero.connections
+            app.state.concierge.xero = app.state.xero.connections  # 对话待办的 Xero 组织信息核对 (需求 R291)
             try:
                 await recover(app.state.runner, app.state.data_service)
                 yield

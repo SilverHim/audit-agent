@@ -159,6 +159,7 @@ async def test_summary_endpoint() -> None:
         "scope": [],
         "syncing": False,
         "last_sync": None,
+        "profile_check": None,
     }
     assert [t["kind"] for t in body["tables"]] == [k.value for k in TableKind]
     assert missing.status_code == 404

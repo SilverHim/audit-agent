@@ -460,6 +460,7 @@ export const en = {
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
       NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
       XERO_NOT_CONNECTED: 'Xero is not connected yet.',
+      PROFILE_CHECK_STALE: 'The Xero organisation check has changed. Refresh and choose again.',
       XERO_TENANT_REQUIRED: 'The authorisation covers more than one organisation. Choose the one to sync first.',
       XERO_RECONNECT_REQUIRED: 'The Xero authorisation has expired. Reconnect Xero.',
       XERO_NOT_CONFIGURED: 'The server has no Xero app configured (XERO_CLIENT_ID), so Xero cannot be connected.',
@@ -569,7 +570,12 @@ export const en = {
       large_proprietary: 'Large proprietary company',
       public: 'Public company',
     } as Record<string, string>,
-    sources: { manual: 'Entered manually', dataset: 'From the dataset', update: 'Updated by the auditor' },
+    sources: {
+      manual: 'Entered manually',
+      dataset: 'From the dataset',
+      update: 'Updated by the auditor',
+      xero: 'From Xero',
+    },
     notRecorded: 'Not recorded',
   },
   projectsPage: {
@@ -886,6 +892,7 @@ export const en = {
       disconnectIntro:
         "This engagement's Xero tokens are deleted and the authorisation is revoked in Xero. Data already synced and its versions are kept.",
       lastResult: 'Last result',
+      profileCheck: 'Client details',
       lastOk: 'Succeeded',
       lastFailed: (reason: string, time: string) => `Failed (${reason}), ${time}`,
       skippedLine: (tables: string, reason: string) => `${tables} not written: ${reason}`,
@@ -1062,6 +1069,12 @@ export const en = {
         write: 'the data could not be saved',
       } as Record<string, string>,
       xero_synced: (tables: string, reason: string) => `Data management · Xero sync left out ${tables} (${reason})`,
+      xero_profile_kept: (version: number, reason: string) =>
+        `Data management · Xero organisation details differ; client profile version ${version} kept (${reason})`,
+      xero_profile_updated: (version: number, adopted: boolean): string =>
+        adopted
+          ? `Data management · Client profile updated to version ${version} from Xero and used by this engagement`
+          : `Data management · Client profile version ${version} saved from Xero; this engagement keeps its version`,
       syncSkipped: {
         paid_off: 'paid Xero endpoints are switched off',
         statements_forbidden: 'no access to bank statements',
@@ -1367,6 +1380,39 @@ export const en = {
       type: 'Document type',
       reason: 'Reason',
       save: 'Save',
+    },
+  },
+  xeroProfile: {
+    eyebrow: 'Xero organisation details',
+    title: "Xero's organisation details differ from the client profile",
+    intro: (time: string, version: number) =>
+      `Compared at the last Xero sync (${time}) with version ${version} of the client profile this engagement uses. Differences are highlighted.`,
+    xero: 'Xero',
+    profile: (version: number) => `Client profile (version ${version})`,
+    fields: { legal_name: 'Legal name', abn: 'ABN' },
+    noAbn: 'Not provided by Xero',
+    update: 'Update the client profile from Xero',
+    updateHere: (version: number) =>
+      `Saves version ${version} with the differing details taken from Xero. This engagement uses it, and the acceptance checks (ACC-04) run again before the acceptance decision is presented again.`,
+    updateBefore: (version: number, current: number) =>
+      `Saves version ${version} for the client with the differing details taken from Xero; this engagement keeps version ${current}. The engagement has not reached the acceptance decision yet: you can defer this and update when it is at the acceptance decision (ACC-01), and this engagement then uses the new version.`,
+    updateAfter: (version: number, current: number) =>
+      `Saves version ${version} for the client with the differing details taken from Xero (used by its next new engagement). This engagement is past the acceptance decision and keeps version ${current}, which the acceptance checks and the audit report use.`,
+    keep: 'Keep the client profile',
+    keepHint: 'Record why the profile stays as it is.',
+    kept: 'Kept the client profile',
+    updated: 'Client profile updated from Xero',
+    workspaceIntro:
+      'The organisation details from the last Xero sync differ from the client profile. Decide whether to update the profile from Xero or keep it.',
+    item: 'Xero organisation check',
+    status: {
+      consistent: 'Matches the client profile',
+      pending: 'Differs from the client profile; see below',
+      differs: 'Differs from the client profile',
+      kept: (reason: string) => `Profile kept: ${reason}`,
+      adopted: (version: number) => `Profile updated to version ${version} from Xero`,
+      clientOnly: (version: number, current: number) =>
+        `Version ${version} saved for the client from Xero; this engagement keeps version ${current}`,
     },
   },
   requests: {

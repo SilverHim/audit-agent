@@ -56,7 +56,12 @@ export async function orEmpty<T>(promise: Promise<T>, empty: T): Promise<T> {
 export type DeferralTarget = DeferralIn['target_type']
 
 // 对话与待决定页用同一个键标识事项: gate:ACC-01, task:{任务 ID} 或 request:{补交请求 ID}
-const DEFERRAL_PREFIX: Record<DeferralTarget, string> = { gate: 'gate', review_task: 'task', data_request: 'request' }
+const DEFERRAL_PREFIX: Record<DeferralTarget, string> = {
+  gate: 'gate',
+  review_task: 'task',
+  data_request: 'request',
+  xero_profile: 'xero',
+}
 
 export function deferralKey(item: Pick<DeferralView, 'target_type' | 'target_id'>): string {
   return `${DEFERRAL_PREFIX[item.target_type]}:${item.target_id}`

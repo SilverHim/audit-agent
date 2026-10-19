@@ -6,15 +6,23 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from backend.agents.base import AgentDeps
-from backend.api.deps import current_user, get_deps, get_query, owned_engagement
+from backend.api.deps import current_user, get_deps, get_query, get_xero, owned_engagement
 from backend.api.errors import api_error, catch_api
 from backend.api.schemas import DeferralIn, DeferralView, IdBody
 from backend.contracts.models import Engagement, GateDecision, ReviewTask, TaskStatus, TrailEntry, TrailKind, User
 from backend.orchestration.query import GraphStateQuery
 from backend.services.deferrals import active_deferrals, deferred_at, is_active, latest_entries, target_of
 from backend.services.trail_pages import all_of_kind
+from backend.services.xero_link import XeroLink
+from backend.services.xero_profile import pending
 
 router = APIRouter(prefix="/engagements/{eid}", tags=["deferrals"])
+
+
+async def pending_xero(xero: XeroLink, eid: str) -> str | None:
+    """待处理的 Xero 组织信息核对的 key (需求 R291); 没有为空."""
+    check = pending((await xero.connections.source(eid)).profile_check)
+    return check.key if check is not None else None
 
 
 @router.get("/deferrals")
@@ -22,8 +30,10 @@ async def list_deferrals(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
 ) -> list[DeferralView]:
-    """当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 或补交请求已收到的, 自动不在其中."""
+    """当前有效的标记, 按标记时间升序. 任务已决定, 闸门已作出决定, 补交请求已收到, 或 Xero 核对已处理 (或已变) 的,
+    自动不在其中."""
     eid = engagement.id
     async with catch_api():
         entries = await all_of_kind(deps.trail, eid, TrailKind.deferral)
@@ -31,8 +41,9 @@ async def list_deferrals(
         decisions = await deps.output_store.latest(eid, GateDecision)
         gate = (await query.overview(eid)).current_gate
         requests = {r.id: r for r in await deps.data.requests(eid)}
+        xero_check = await pending_xero(xero, eid)
     views = []
-    for entry in active_deferrals(entries, tasks, gate, decisions, requests):
+    for entry in active_deferrals(entries, tasks, gate, decisions, requests, xero_check):
         target_type, target_id = target_of(entry)
         views.append(
             DeferralView.model_validate(
@@ -54,12 +65,13 @@ async def set_deferral(
     user: Annotated[User, Depends(current_user)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
 ) -> IdBody:
     """标记 (deferred 为真) 或取消. 目标当前状态已与请求一致时不写新留痕, 返回最近一条的 ID.
 
     项目已锁定 423 ENGAGEMENT_LOCKED; 任务不存在 404 NOT_FOUND, 已决定 409 TASK_NOT_PENDING;
     闸门不是当前停留的 409 NOT_AT_GATE; 补交请求不存在 404 NOT_FOUND, 不是待补交 409 REQUEST_NOT_OPEN;
-    取消从未标记过的目标 404 NOT_FOUND.
+    Xero 核对不是当前待处理的那一次 409 PROFILE_CHECK_STALE; 取消从未标记过的目标 404 NOT_FOUND.
     """
     eid = engagement.id
     if engagement.locked:
@@ -69,6 +81,7 @@ async def set_deferral(
         decisions = await deps.output_store.latest(eid, GateDecision)
         gate = (await query.overview(eid)).current_gate
         requests = {r.id: r for r in await deps.data.requests(eid)}
+        xero_check = await pending_xero(xero, eid)
         if body.target_type == "review_task":
             task = tasks.get(body.target_id)
             if task is None:
@@ -81,12 +94,15 @@ async def set_deferral(
                 raise api_error("NOT_FOUND", body.target_id)
             if request.status != "open":
                 raise api_error("REQUEST_NOT_OPEN", f"{body.target_id} 不是待补交的请求")
+        elif body.target_type == "xero_profile":
+            if body.target_id != xero_check:
+                raise api_error("PROFILE_CHECK_STALE", f"{body.target_id} 不是待处理的 Xero 组织信息核对")
         elif gate is None or gate.value != body.target_id:
             raise api_error("NOT_AT_GATE", f"当前不在 {body.target_id} 闸门", status=409)
         latest = latest_entries(await all_of_kind(deps.trail, eid, TrailKind.deferral)).get(
             (body.target_type, body.target_id)
         )
-        active = latest is not None and is_active(latest, tasks, gate, decisions, requests)
+        active = latest is not None and is_active(latest, tasks, gate, decisions, requests, xero_check)
         if active == body.deferred:
             if latest is None:
                 raise api_error("NOT_FOUND", f"{body.target_id} 没有稍后处理标记")
