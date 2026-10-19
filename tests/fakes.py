@@ -713,10 +713,27 @@ class FakeTrail:
         return next((e for e in self.entries if e.engagement_id == eid and e.idempotency_key == idempotency_key), None)
 
     async def list(
-        self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
+        self,
+        eid: str,
+        kind: TrailKind | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        newest: bool = False,
+        before: str | None = None,
     ) -> list[TrailEntry]:
-        hits = [e for e in self.entries if e.engagement_id == eid and (kind is None or e.kind is kind)]
-        return hits[offset : offset + limit]
+        """同真实实现, 写入顺序即排序 (假实现不比写入时间); before 不是本项目的 ID 时为空."""
+        hits = [
+            (n, e) for n, e in enumerate(self.entries) if e.engagement_id == eid and (kind is None or e.kind is kind)
+        ]
+        if before is not None:
+            mark = next((n for n, e in enumerate(self.entries) if e.engagement_id == eid and e.id == before), -1)
+            hits = [(n, e) for n, e in hits if n < mark]
+        rows = [e for _, e in hits]
+        if newest:
+            end = max(len(rows) - offset, 0)
+            return rows[max(end - limit, 0) : end]
+        return rows[offset : offset + limit]
 
     async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:
         """最近一条: 同真实实现按写入时间与 ID 取最大的; 写入时间都没有 (多数测试) 时按写入顺序取最后一条."""

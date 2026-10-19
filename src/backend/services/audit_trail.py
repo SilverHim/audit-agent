@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from uuid import uuid4
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, literal, select, tuple_
 
 from backend.contracts.models import TrailEntry, TrailKind
 from backend.persistence.db import transaction
@@ -41,13 +41,29 @@ class PostgresAuditTrail(Store):
         return None
 
     async def list(
-        self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
+        self,
+        eid: str,
+        kind: TrailKind | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        newest: bool = False,
+        before: str | None = None,
     ) -> list[TrailEntry]:
         if limit < 0 or offset < 0:
             raise ValueError("Negative pagination")
-        stmt = select(audit_trail).order_by(audit_trail.c.created_at, audit_trail.c.id).limit(limit).offset(offset)
+        order = (audit_trail.c.created_at, audit_trail.c.id)
+        stmt = select(audit_trail)
         if kind is not None:
             stmt = stmt.where(audit_trail.c.kind == kind)
+        if before is not None:
+            # 游标: 排序键 (created_at, id) 小于游标那条的; 游标不是本项目的 (行级安全下查不到) 时比较为空, 一条不取
+            at = select(audit_trail.c.created_at).where(audit_trail.c.id == before).scalar_subquery()
+            stmt = stmt.where(tuple_(*order) < tuple_(at, literal(before)))
+        if newest:
+            stmt = stmt.order_by(*(c.desc() for c in order)).limit(limit).offset(offset)
+            return [TrailEntry.model_validate(r) for r in reversed(await self.rows(eid, stmt))]
+        stmt = stmt.order_by(*order).limit(limit).offset(offset)
         return [TrailEntry.model_validate(r) for r in await self.rows(eid, stmt)]
 
     async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:

@@ -61,9 +61,12 @@ async def list_trail(
     kind: TrailKind | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    newest: bool = False,
+    before: str | None = None,
 ) -> list[TrailEntry]:
+    """按写入顺序返回. 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条留痕之前的 (往前翻页的游标)."""
     async with catch_api():
-        return await deps.trail.list(engagement.id, kind, limit, offset)
+        return await deps.trail.list(engagement.id, kind, limit, offset, newest=newest, before=before)
 
 
 @router.get("/trail/{trail_id}")

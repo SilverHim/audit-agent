@@ -258,6 +258,7 @@ export const en = {
     openDecisions: 'Open pending decisions',
     decideNow: 'Decide now',
     deferredNote: 'Deferred · you can decide it here now',
+    earlier: 'Show earlier activity',
     gateIntro: {
       'ACC-01': (passed: number, total: number, exceptions: number, manual: number) =>
         manual

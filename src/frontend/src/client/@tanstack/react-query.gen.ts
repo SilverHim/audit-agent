@@ -1415,6 +1415,8 @@ export const reportsListTrailQueryKey = (options: Options<ReportsListTrailData>)
 
 /**
  * List Trail
+ *
+ * 按写入顺序返回. 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条留痕之前的 (往前翻页的游标).
  */
 export const reportsListTrailOptions = (options: Options<ReportsListTrailData>) => queryOptions<ReportsListTrailResponse, ReportsListTrailError, ReportsListTrailResponse, ReturnType<typeof reportsListTrailQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -1433,6 +1435,8 @@ export const reportsListTrailInfiniteQueryKey = (options: Options<ReportsListTra
 
 /**
  * List Trail
+ *
+ * 按写入顺序返回. 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条留痕之前的 (往前翻页的游标).
  */
 export const reportsListTrailInfiniteOptions = (options: Options<ReportsListTrailData>) => {
     const opts = infiniteQueryOptions<ReportsListTrailResponse, ReportsListTrailError, InfiniteData<ReportsListTrailResponse>, QueryKey<Options<ReportsListTrailData>>, number | Pick<QueryKey<Options<ReportsListTrailData>>[0], 'body' | 'headers' | 'path' | 'query'>>(

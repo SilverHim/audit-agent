@@ -251,6 +251,7 @@ export const zh: Messages = {
     openDecisions: '打开待决定队列',
     decideNow: '现在处理',
     deferredNote: '稍后处理中 · 可以在这里直接决定',
+    earlier: '显示更早的记录',
     gateIntro: {
       'ACC-01': (passed, total, exceptions, manual) =>
         manual

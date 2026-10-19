@@ -3625,6 +3625,7 @@
           "reports"
         ],
         "summary": "List Trail",
+        "description": "按写入顺序返回. 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条留痕之前的 (往前翻页的游标).",
         "operationId": "reports-list_trail",
         "security": [
           {
@@ -3678,6 +3679,32 @@
               "minimum": 0,
               "default": 0,
               "title": "Offset"
+            }
+          },
+          {
+            "name": "newest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Newest"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
             }
           }
         ],

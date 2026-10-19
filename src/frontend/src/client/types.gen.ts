@@ -6817,6 +6817,14 @@ export type ReportsListTrailData = {
          * Offset
          */
         offset?: number;
+        /**
+         * Newest
+         */
+        newest?: boolean;
+        /**
+         * Before
+         */
+        before?: string | null;
     };
     url: '/api/v1/engagements/{eid}/trail';
 };

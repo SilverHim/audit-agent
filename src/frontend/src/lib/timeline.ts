@@ -58,7 +58,21 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.length ? value : null
 }
 
-export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
+// 工作台按页取留痕: 先取最近的一页 (GET /trail?newest=true), "更早" 以已取到的最早一条为游标 (before) 往前翻一页
+export const TRAIL_PAGE = 100
+
+// 往前一页的游标: 本页取满时为本页最早一条的 ID; 不满说明已取到最早一条, 没有更早的了
+export function earlierCursor(page: TrailEntry[], size: number = TRAIL_PAGE): string | undefined {
+  return page.length >= size ? (page[0]?.id ?? undefined) : undefined
+}
+
+// 已取到的各页 (最近的一页在前, 每页内按写入顺序) 拼成按写入顺序的留痕
+export function trailInOrder(pages: TrailEntry[][]): TrailEntry[] {
+  return [...pages].reverse().flat()
+}
+
+// complete: 是否已取到最早一条留痕; 没取到时不加 "项目已创建" (它取自最早一条的时间)
+export function buildTimeline(entries: TrailEntry[], complete = true): TimelineItem[] {
   const sorted = [...entries].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
   const items: TimelineItem[] = []
   let completed: { at: string; key: string; ids: string[] } | null = null
@@ -67,7 +81,7 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
     completed = null
   }
 
-  if (sorted[0]?.created_at) items.push({ kind: 'created', key: 'created', at: sorted[0].created_at })
+  if (complete && sorted[0]?.created_at) items.push({ kind: 'created', key: 'created', at: sorted[0].created_at })
 
   for (const [index, entry] of sorted.entries()) {
     const at = entry.created_at ?? ''

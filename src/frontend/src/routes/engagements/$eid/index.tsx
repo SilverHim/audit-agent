@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowUp, LayoutList, Loader2 } from 'lucide-react'
+import { ArrowUp, ChevronUp, LayoutList, Loader2 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  reportsListTrailOptions,
+  reportsListTrailInfiniteOptions,
   reviewsListExceptionsOptions,
   reviewsListReviewTasksOptions,
 } from '@/client/@tanstack/react-query.gen'
@@ -32,7 +32,7 @@ import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
 import { type RankedTask, rankTasks } from '@/lib/review'
-import { buildTimeline, type TimelineItem } from '@/lib/timeline'
+import { buildTimeline, earlierCursor, type TimelineItem, TRAIL_PAGE, trailInOrder } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
 import { pickCurrent, workspaceReady } from '@/lib/workspace'
 import { skippedByReason } from '@/lib/xero'
@@ -80,7 +80,15 @@ function Workspace() {
   const gate = useGate(eid, Boolean(overview?.current_gate))
   const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid }, query: { status: 'pending' } }))
   const exceptions = useQuery(reviewsListExceptionsOptions({ path: { eid } }))
-  const trail = useQuery(reportsListTrailOptions({ path: { eid }, query: { limit: 500 } }))
+  // 时间线先取最近的一页留痕, "更早" 往前翻 (见 lib/timeline 的 earlierCursor)
+  const trail = useInfiniteQuery({
+    ...reportsListTrailInfiniteOptions({ path: { eid }, query: { newest: true, limit: TRAIL_PAGE } }),
+    initialPageParam: { path: { eid }, query: {} },
+    getNextPageParam: (page) => {
+      const before = earlierCursor(page)
+      return before ? { path: { eid }, query: { before } } : undefined
+    },
+  })
   const deferrals = useDeferrals(eid)
   const setDeferral = useSetDeferral(eid)
   const requests = useDataRequests(eid)
@@ -127,15 +135,20 @@ function Workspace() {
   const current = ready ? pickCurrent(candidates, focus) : null
   const deferredCount = candidates.filter((item) => item.deferred).length
 
-  const timeline = useMemo(() => buildTimeline(trail.data ?? []), [trail.data])
+  const timeline = useMemo(
+    () => buildTimeline(trailInOrder(trail.data?.pages ?? []), !trail.hasNextPage),
+    [trail.data, trail.hasNextPage],
+  )
   const localTrailIds = new Set(turns.map((turn) => turn.trailId).filter(Boolean))
   const history = timeline.filter((item) => item.kind !== 'qa' || !localTrailIds.has(item.id))
 
-  // 当前事项变化时把它的开头滚到顶部; 判断详情异步加载会往下撑高, 所以不滚到底
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 当前事项或历史条数变化时重新定位
+  // 当前事项变化或历史末尾有新事件时把它的开头滚到顶部; 判断详情异步加载会往下撑高, 所以不滚到底.
+  // 看的是最后一条历史, 点 "更早" 加在前面的不触发, 不把人从刚翻出的记录拉走
+  const lastHistory = history.at(-1)?.key
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 当前事项或最后一条历史变化时重新定位
   useEffect(() => {
     currentRef.current?.scrollIntoView({ block: 'start' })
-  }, [current?.key, history.length])
+  }, [current?.key, lastHistory])
 
   // 有新问答或回答在输出时滚到底部
   const lastAnswer = turns.at(-1)?.answer.length ?? 0
@@ -243,6 +256,23 @@ function Workspace() {
 
       <div className="flex-1 px-4 pt-7 pb-2 sm:px-7">
         <div className="mx-auto flex max-w-[780px] flex-col gap-5">
+          {trail.hasNextPage ? (
+            <div className="flex justify-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={trail.isFetchingNextPage}
+                onClick={() => void trail.fetchNextPage()}
+              >
+                {trail.isFetchingNextPage ? (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <ChevronUp aria-hidden="true" />
+                )}
+                {t.workspace.earlier}
+              </Button>
+            </div>
+          ) : null}
           {history.map((item) => (
             <HistoryItem key={item.key} item={item} overview={overview} eid={eid} />
           ))}

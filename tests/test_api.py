@@ -328,19 +328,25 @@ def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str
     assert response.json()["detail"]["code"] == code
 
 
+TRAIL_ROWS = [  # 依次为 TR-1 到 TR-4
+    ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0612 第 1 次调用大模型: passed"),
+    ("ENG-2026-001", TrailKind.decision, "ACC-01 approve"),
+    ("ENG-2026-002", TrailKind.llm_call, "别的项目"),
+    ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0618 第 1 次调用大模型: passed"),
+]
+
+
+def _add_trail(api: SimpleNamespace) -> None:
+    at = datetime(2026, 7, 1, tzinfo=UTC)
+    for n, (eid, kind, summary) in enumerate(TRAIL_ROWS, 1):
+        entry = TrailEntry(id=f"TR-{n}", engagement_id=eid, kind=kind, actor="A6", summary=summary, created_at=at)
+        api.trail.entries.append(entry)
+
+
 def test_trail_list_and_detail(api: SimpleNamespace) -> None:
     """留痕列表按类型筛出本项目的 TrailEntry (键恰为其字段, 不多带别的), 详情与列表中同一条相同; 不存在或别的项目的
     留痕 404 NOT_FOUND. 防列表恒空, 详情恒 404, 或输出多出视图层的键."""
-    at = datetime(2026, 7, 1, tzinfo=UTC)
-    rows = [
-        ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0612 第 1 次调用大模型: passed"),
-        ("ENG-2026-001", TrailKind.decision, "ACC-01 approve"),
-        ("ENG-2026-002", TrailKind.llm_call, "别的项目"),
-        ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0618 第 1 次调用大模型: passed"),
-    ]
-    for n, (eid, kind, summary) in enumerate(rows, 1):
-        entry = TrailEntry(id=f"TR-{n}", engagement_id=eid, kind=kind, actor="A6", summary=summary, created_at=at)
-        api.trail.entries.append(entry)
+    _add_trail(api)
     base = "/api/v1/engagements/ENG-2026-001/trail"
     listed = api.client.get(base, params={"kind": "llm_call"}, headers=_auth(api))
     assert listed.status_code == 200
@@ -351,6 +357,24 @@ def test_trail_list_and_detail(api: SimpleNamespace) -> None:
     for missing in ("TR-none", "TR-3"):  # TR-3 是别的项目的
         response = api.client.get(f"{base}/{missing}", headers=_auth(api))
         assert (response.status_code, response.json()["detail"]["code"]) == (404, "NOT_FOUND")
+
+
+@pytest.mark.parametrize(
+    ("params", "ids"),
+    [
+        ({"limit": 2}, ["TR-1", "TR-2"]),  # 原有调用: 从最早一条起
+        ({"limit": 2, "newest": "true"}, ["TR-2", "TR-4"]),
+        ({"limit": 2, "newest": "true", "before": "TR-4"}, ["TR-1", "TR-2"]),
+        ({"kind": "llm_call", "newest": "true", "before": "TR-4"}, ["TR-1"]),
+    ],
+)
+def test_trail_list_pages(api: SimpleNamespace, params: dict[str, str | int], ids: list[str]) -> None:
+    """GET /trail 把 newest 与 before 传给 AuditTrail.list (分页语义由 test_fakes.trail_pages_hold 守), 仍按写入顺序
+    返回. 防路由丢掉新参数, 或不带新参数时改了原来的取法."""
+    _add_trail(api)
+    listed = api.client.get("/api/v1/engagements/ENG-2026-001/trail", params=params, headers=_auth(api))
+    assert listed.status_code == 200
+    assert [e["id"] for e in listed.json()] == ids
 
 
 @pytest.mark.parametrize(
