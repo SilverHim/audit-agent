@@ -45,10 +45,8 @@ def test_rate_bounds() -> None:
 
 def test_known_points_and_counts() -> None:
     """R149 验收 1: A7 抽样的确切值 (防公式或键被改而抽中的对象悄悄变): 键只用判断 ID, critic 用途不加盐,
-    J-CSH-02-1-BA-091 0.1453, J-CSH-02-1-BA-01 0.2221, J-GEN-06-1-XJ-626-2 0.8845, 在 0.05 下都不中; 2000 个 ID 在
-    0.05 下抽中 98 个."""
-    points = {"J-CSH-02-1-BA-091": 0.1453, "J-CSH-02-1-BA-01": 0.2221, "J-GEN-06-1-XJ-626-2": 0.8845}
-    for key, point in points.items():
-        assert round(sample_point("critic", key), 4) == point
-        assert not sampled("critic", key, 0.05)
+    J-CSH-02-1-BA-01 0.2221, J-GEN-06-1-XJ-626-2 0.8845 (J-CSH-02-1-BA-091 的 0.1453 见上一条); 2000 个 ID 在 0.05 下
+    抽中 98 个."""
+    points = {"J-CSH-02-1-BA-01": 0.2221, "J-GEN-06-1-XJ-626-2": 0.8845}
+    assert {key: round(sample_point("critic", key), 4) for key in points} == points
     assert sum(sampled("critic", i, 0.05) for i in IDS) == 98

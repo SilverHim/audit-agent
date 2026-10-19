@@ -320,6 +320,62 @@ async def test_collab_triggers_internal_copy_and_unsupported_in_order() -> None:
     assert (j.critic_trigger, calls) == (CriticTrigger.unsupported, keys)
 
 
+def copy_with_assumption(x: Xero) -> Judgment:
+    """复印件判断的推理链再加一步 assumption: internal_copy 与 assumption 同时命中."""
+    base = copy_only(x)
+    step = ReasoningStep(kind=StepKind.assumption, text="The goods were delivered.")
+    return base.model_copy(update={"reasoning_chain": [*base.reasoning_chain, step]})
+
+
+# 没登记的文件页: 解析不了, 模型却填了内部原件
+GHOST = EvidencePointer(
+    type=EvidenceType.invoice,
+    source_type="document",
+    source_id="DOC-NOT-REGISTERED",
+    locator="amount",
+    page=1,
+    reliability=Reliability.internal_original,
+)
+
+
+def lying_row(x: Xero) -> Judgment:
+    """复印件之外另有发票行指针, 模型把它的可靠性填成 internal_copy (来源是 internal_original)."""
+    lying = invoice_pointer(x.invoice).model_copy(update={"reliability": Reliability.internal_copy})
+    return copy_only(x, evidence=[COPY_PAGE, lying])
+
+
+@pytest.mark.parametrize(
+    ("make", "expected"),
+    [
+        (copy_with_assumption, CriticTrigger.internal_copy),
+        (lambda x: copy_only(x, evidence=[COPY_PAGE, GHOST]), CriticTrigger.internal_copy),
+        (lying_row, None),
+        (lambda x: copy_only(x, keep_row=True, evidence=[COPY_PAGE]), None),
+    ],
+    ids=["with_assumption", "unresolved_not_counted", "model_reliability_ignored", "chain_pointer_counts"],
+)
+async def test_collab_internal_copy_reads_given_evidence(make: Any, expected: CriticTrigger | None) -> None:
+    """R149 验收 2 (第 1 轮审核 R149-01, 02), review 层, collab 打开: 复印件与 assumption 同在时按判定顺序记
+    internal_copy (防 review 只在旧三条都不中时才取证据); 解析不了的指针不算 (防按模型填的值算); 发票行按来源为
+    原件, 模型填的 internal_copy 不采信 (防模型填了就用); 结论只引用复印件而推理链另引用发票行时不中 (防只看结论的
+    指针)."""
+    x = Xero(features=COLLAB)
+    x.deps.financial_store.document_refs.append(COPY)  # type: ignore[attr-defined]
+    j = await x.agent(copy_review(x)).review(x.ctx, make(x))
+    assert j.critic_trigger is expected
+
+
+async def test_collab_review_hits_sample_with_gen09_rate() -> None:
+    """R149 验收 2 的 sample (第 1 轮审核 R149-05): 判断 ID 在 GEN-09 的 sample_rate (0.05) 下抽中, 没有其他触发,
+    collab 打开: critic_trigger 为 sample, 复核模型收到两轮请求 (防 review 不读 GEN-09 的 sample_rate)."""
+    hit = next(i for i in (f"J-REV-02-1-X{n}" for n in range(2000)) if sampled("critic", i, 0.05))
+    x = Xero(features=COLLAB)
+    review = scripted(x.invoice.id, [x.independent()], [verdict()])
+    j = await x.agent(review).review(x.ctx, x.judgment(id=hit, proposed_action=ProposedAction.misstatement))
+    assert j.critic_trigger is CriticTrigger.sample
+    assert [r.fixture_key for r in review.requests] == [f"{x.invoice.id}-r1", f"{x.invoice.id}-r2"]
+
+
 async def test_collab_l2_skips_before_any_trigger() -> None:
     """验收 3: 程序运行时自主度 L2 时, 复印件, unsupported 与主规则都不复核, critic_trigger 为空."""
     x = Xero(AutonomyLevel.L2, features=COLLAB)

@@ -56,21 +56,19 @@ EID = ENGAGEMENT.id
 COLLAB = BASELINE | {"collab"}
 
 
-@pytest.mark.parametrize(("features", "hit"), [(COLLAB, CriticTrigger.main), (BASELINE, None)], ids=["on", "off"])
-async def test_main_flow_keeps_results_and_records_triggers(
-    features: frozenset[str], hit: CriticTrigger | None
-) -> None:
-    """R149 验收 4, 5: collab 打开与关闭时 Numbat 全流程的最终结果相同 (assert_results); J-CSH-02-1-BA-01 (CSH-02 L3,
-    建议关闭) 置信度 0.65, critic_trigger 打开时为 main, 关闭时为空; REV-03, REV-02 的 5 条判断 (L2) skipped,
-    critic_trigger 为空; GEN-09 留痕都是 2 行 (BA-01-r1, BA-01-r2)."""
-    s = await start_demo(features=features)
+async def test_main_flow_keeps_results_and_records_triggers() -> None:
+    """R149 验收 4: collab 打开时 Numbat 全流程的最终结果与基线相同 (assert_results); J-CSH-02-1-BA-01 (CSH-02 L3,
+    建议关闭) 置信度 0.65, critic_trigger 为 main; REV-03, REV-02 的 5 条判断 (L2) skipped, critic_trigger 为空;
+    GEN-09 留痕 2 行 (BA-01-r1, BA-01-r2). collab 关闭的一遍即 test_e2e_mock 的全流程 (critic_trigger 为空的断言在
+    test_results_match_dataset), 不另跑."""
+    s = await start_demo(features=COLLAB)
     await finish_demo(s)
     await assert_results(s)
     judgments = {j.id: j for j in await s.output_store.latest(EID, Judgment)}
     ba01 = judgments.pop("J-CSH-02-1-BA-01")
     assert (ba01.critic_verdict, ba01.critic_trigger, ba01.confidence) == (
         CriticVerdict.consistent,
-        hit,
+        CriticTrigger.main,
         0.65,
     )
     assert sorted(judgments) == [

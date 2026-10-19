@@ -121,7 +121,7 @@ class ReviewAgent(ProcedureAgent[None]):
         跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
         未命中触发规则 (见 trigger); critic_reason 写明原因.
         功能 collab 打开时触发规则另判 internal_copy 与 unsupported, 命中的那条写进 critic_trigger (之后复核没做成也
-        保留); 关闭时 critic_trigger 为空.
+        保留; 取第一轮证据本身出错, 如存储读不了时, 记 not_applicable, critic_trigger 为空); 关闭时 critic_trigger 为空.
         复核没做成 (not_applicable): 判断没有能解析的证据; 任一轮校验重试后仍失败, 或调用出错 (CancelledError 除外);
         判为 consistent 而独立推理链无效. ReviewQueue 据此转人工.
         """
@@ -137,8 +137,8 @@ class ReviewAgent(ProcedureAgent[None]):
         collab = COLLAB in self.deps.features
         given: list[EvidencePointer] | None = None
         try:
-            # 第一轮要给的证据: collab 打开且主规则没命中时 internal_copy 要用, 先取, 复核时沿用
-            if collab and trigger(level, judgment, rate) is not CriticTrigger.main:
+            # 第一轮要给的证据: collab 打开时 internal_copy 要用, 先取, 复核时沿用 (主规则命中时复核本来也要取)
+            if collab:
                 given = await self.given_evidence(ctx.engagement.id, judgment)
             hit = trigger(level, judgment, rate, given or (), collab)
             if hit is None:

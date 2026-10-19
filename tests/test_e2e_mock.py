@@ -164,6 +164,8 @@ def trail_of(s: Started) -> FakeTrail:
 
 async def test_results_match_dataset(demo: Started) -> None:
     await assert_results(demo)
+    # 功能 collab 关闭 (R149 验收 5): A7 不记命中的触发规则
+    assert {j.critic_trigger for j in await demo.output_store.latest(EID, Judgment)} == {None}
 
 
 async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> None:
