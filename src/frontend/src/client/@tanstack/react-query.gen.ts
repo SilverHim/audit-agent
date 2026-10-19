@@ -768,6 +768,8 @@ export const evidenceListConfirmationsQueryKey = (options: Options<EvidenceListC
 
 /**
  * List Confirmations
+ *
+ * 各函证的最新版本, 另带 reply_extracted (当前回函经 DOC-06 成功抽取过).
  */
 export const evidenceListConfirmationsOptions = (options: Options<EvidenceListConfirmationsData>) => queryOptions<EvidenceListConfirmationsResponse, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, ReturnType<typeof evidenceListConfirmationsQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

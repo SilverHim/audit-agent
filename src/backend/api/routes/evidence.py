@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.agents.base import AgentDeps
+from backend.agents.ingest import extracted_from
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import DocumentDetailsIn, DocumentTypeIn
+from backend.api.schemas import ConfirmationView, DocumentDetailsIn, DocumentTypeIn
 from backend.contracts.data import ContractVersion, ExtractionEdit, ExtractionRecord
 from backend.contracts.models import Confirmation, Contract, DocumentRef, Engagement, SourceType, User
 from backend.services import data_import
@@ -172,9 +173,11 @@ async def get_record(
 async def list_confirmations(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
-) -> list[Confirmation]:
+) -> list[ConfirmationView]:
+    """各函证的最新版本, 另带 reply_extracted (当前回函经 DOC-06 成功抽取过)."""
     async with catch_api():
-        return await deps.output_store.latest(engagement.id, Confirmation)
+        found = await deps.output_store.latest(engagement.id, Confirmation)
+    return [ConfirmationView(**c.model_dump(), reply_extracted=extracted_from(c, c.reply_document_id)) for c in found]
 
 
 @router.put("/confirmations/{confirmation_id}")

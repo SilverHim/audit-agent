@@ -30,11 +30,6 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
 - `confirmed_balance_cents`: the balance the bank confirms, in integer cents (e.g. $2,500,000.00 → 250000000); funds held are positive, an overdrawn balance is negative.
 - `balance_date`: the date the balance is confirmed as at, YYYY-MM-DD.
 - `receipt_channel`: how the reply was sent, as stated in the reply; null if not stated.
-- `accrued_interest_cents`: interest the reply states has accrued up to the balance date but has not yet been credited or debited to the account, in integer cents.
-  - Positive when the bank owes it to the customer (credit interest); negative when the customer owes it to the bank (debit interest and fees).
-  - 0 when the reply states accrued interest as nil.
-  - null when the reply does not mention accrued interest.
-  - Do not take interest already credited or debited to the account, and do not take a full period's interest payable on a later date.
 
 | Value | Reply states it was |
 |---|---|
@@ -43,5 +38,10 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
 | portal_via_client | provided through the client or a portal the client can access |
 | oral | given orally |
 
+- `accrued_interest_cents`: interest the reply states has accrued up to the balance date but has not yet been credited or debited to the account, in integer cents.
+  - Positive when the bank owes it to the customer (credit interest); negative when the customer owes it to the bank (debit interest and fees).
+  - 0 when the reply states accrued interest as nil.
+  - null when the reply does not mention accrued interest.
+  - Do not take interest already credited or debited to the account, and do not take a full period's interest payable on a later date.
 - `evidence`: one pointer for each non-null field above, including `accrued_interest_cents` when it is not null:
   `{"type": "external", "source_type": "document", "source_id": "{{ document.id }}", "locator": "<field name>", "page": <page>, "reliability": "{{ document.reliability }}"}`
