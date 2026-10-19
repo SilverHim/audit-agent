@@ -21,6 +21,7 @@ from pydantic import BaseModel, ValidationError
 
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
+from backend.adapters.registry_mock import person_key
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -613,11 +614,8 @@ class FakeRegistry:
     async def asic_person(self, eid: str, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:
         self.eids.append(eid)
         self.queries.append(("person", f"{family_name} {given_name} {birth_date}"))
-        wanted = (family_name.casefold(), given_name.casefold(), birth_date)
-        return next(
-            (p for p in self.persons if (p.family_name.casefold(), p.given_name.casefold(), p.birth_date) == wanted),
-            None,
-        )
+        wanted = person_key(family_name, given_name, birth_date)  # 同登记 mock: 去首尾空白, 不分大小写
+        return next((p for p in self.persons if person_key(p.family_name, p.given_name, p.birth_date) == wanted), None)
 
 
 ABR_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "abr"  # 合成的 ABN Lookup 响应 (按官方 XSD 手写)

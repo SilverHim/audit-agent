@@ -22,9 +22,15 @@ M = TypeVar("M", bound=BaseModel)
 NAME_PART = re.compile(r"[A-Z][A-Z' -]*")  # 拼文件名的姓或名 (转大写后): 字母, 空格, 撇号与连字符, 不会串出目录
 
 
+def person_key(family_name: str, given_name: str, birth_date: date) -> tuple[str, str, date]:
+    """人员检索的比对口径: 姓与名去首尾空白转大写, 加出生日期 (mock 与测试的假登记共用)."""
+    return family_name.strip().upper(), given_name.strip().upper(), birth_date
+
+
 def person_stem(family_name: str, given_name: str, birth_date: date) -> str | None:
-    """人员检索的文件名主干 {姓}-{名}-{yyyymmdd} (姓与名去首尾空白转大写); 姓名含别的字符时为 None (查不到)."""
-    parts = [family_name.strip().upper(), given_name.strip().upper()]
+    """人员检索的文件名主干 {姓}-{名}-{yyyymmdd} (姓与名去首尾空白转大写); 姓名须以 ASCII 字母开头, 只含 ASCII 字母,
+    空格, 撇号与连字符, 否则为 None (查不到)."""
+    parts = list(person_key(family_name, given_name, birth_date)[:2])
     if not all(NAME_PART.fullmatch(p) for p in parts):
         return None
     return f"{parts[0]}-{parts[1]}-{birth_date:%Y%m%d}"
@@ -61,9 +67,15 @@ class MockRegistrySource:
 
     def person(self, family_name: str, given_name: str, birth_date: date) -> PersonSearch | None:
         """registry/persons/{姓}-{名}-{yyyymmdd}.json 与同名 PDF (姓名不分大小写); 没有文件 (姓名或出生日期不符) 时为
-        None."""
+        None. 文件名以连字符分隔而姓名也可含连字符 ((Smith, Jones-Ann) 与 (Smith-Jones, Ann) 拼出同一文件名), 所以
+        读到后再核对 JSON 里的姓, 名 (去首尾空白转大写) 与出生日期, 不符也为 None."""
         stem = person_stem(family_name, given_name, birth_date)
-        return self.read(PersonSearch, "persons", stem) if stem is not None else None
+        found = self.read(PersonSearch, "persons", stem) if stem is not None else None
+        if found is None or person_key(found.family_name, found.given_name, found.birth_date) != person_key(
+            family_name, given_name, birth_date
+        ):
+            return None
+        return found
 
     def read(self, model: type[M], folder: str, stem: str) -> M | None:
         """registry/{folder}/{stem}.json 加同名 PDF 原件 (file_bytes); 没有 JSON 时为 None, 有 JSON 而没有 PDF 抛

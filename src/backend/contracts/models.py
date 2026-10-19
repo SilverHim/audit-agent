@@ -1125,6 +1125,8 @@ class AsicExtract(Model):
     """ASIC 公司摘录 (需求 R129): 登记信息, 高管与股东, 回执带 PDF 原件 (登记 mock 读同名 PDF). 字段同补造目录
     registry/extracts/{acn}.json; JSON 键 class 是 Python 保留字, 模型字段为 company_class (别名 class)."""
 
+    # populate_by_name: 也认字段名 company_class. 检查点按字段名重建 Pydantic 对象 (cls(**字段)), 没有它时
+    # company_class 在往返中悄悄丢失; 按字段名 dump 的 payload 读回也要靠它
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     acn: str  # ACN

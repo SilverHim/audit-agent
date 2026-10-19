@@ -3,6 +3,7 @@ PDF; 按项目数据集定位 (DatasetRegistrySource) 同 ABN 与 ASIC 查询, �
 新建的客户没有来源. 不连库."""
 
 import json
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from tests.external import require_xero_supplements
 from tests.fakes import ENGAGEMENT, FakeAbr, FakeEngagementStore, FakeRegistry
 from tests.xero_fakes import XERO_DATASET
 
-pytestmark = pytest.mark.external
+EXTERNAL = pytest.mark.external  # 读补造目录的用例 (经 require_xero_supplements 定位); 纯函数用例不标
 DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"
 BIRTH = date(1979, 4, 12)
 DATASETS = (XERO_DATASET, "demo", "xero/20261017-mock", None)  # 项目 E-0 至 E-3 的数据集 (E-3 为新建的客户)
@@ -27,6 +28,13 @@ def root() -> Path:
     return require_xero_supplements("20261017-q1")
 
 
+@pytest.fixture
+def copy(root: Path, tmp_path: Path) -> Path:
+    """补造目录 registry/ 的临时副本 (只在副本里改)."""
+    shutil.copytree(root / "registry", tmp_path / "registry")
+    return tmp_path
+
+
 def by_dataset(root: Path) -> DatasetRegistrySource:
     """四个项目: Xero q1 (补造目录), Numbat (data/demo, 没有摘录与检索), 20261017-mock (没有补造目录), 没有数据集."""
     engagements = [ENGAGEMENT.model_copy(update={"id": f"E-{n}", "dataset": d}) for n, d in enumerate(DATASETS)]
@@ -34,9 +42,11 @@ def by_dataset(root: Path) -> DatasetRegistrySource:
     return DatasetRegistrySource(FakeEngagementStore([], engagements), lambda dataset: directories[dataset])
 
 
+@EXTERNAL
 async def test_extract_of_the_demo_company(root: Path) -> None:
-    """900043021 的摘录: 登记信息, 高管两项 (同一人任董事与秘书), 股东两名 (Sam Whitfield 没有出生日期), 原件 PDF."""
-    extract = await by_dataset(root).asic_extract("E-0", "900043021")
+    """900043021 的摘录 (按 PDF 上的写法 900 043 021 查, 去空白): 登记信息, 高管两项 (同一人任董事与秘书), 股东两名
+    (Sam Whitfield 没有出生日期), 原件 PDF."""
+    extract = await by_dataset(root).asic_extract("E-0", "900 043 021")
     assert extract is not None
     assert (extract.name, extract.type, extract.company_class, extract.subclass, extract.paid_up_cents) == (
         "Demo Company (AU) Pty Ltd",
@@ -58,6 +68,7 @@ async def test_extract_of_the_demo_company(root: Path) -> None:
     assert extract.model_dump(by_alias=True)["class"] == "LMSH"  # JSON 键 class 与模型字段 company_class 互通
 
 
+@EXTERNAL
 async def test_person_search_of_the_director(root: Path) -> None:
     """Morgan Alex 1979-04-12: 读 MORGAN-ALEX-19790412.json, 7 项身份按检索结果的顺序 (设计稿第 2.5 节)."""
     person = await by_dataset(root).asic_person("E-0", "Morgan", "Alex", BIRTH)
@@ -75,6 +86,7 @@ async def test_person_search_of_the_director(root: Path) -> None:
     assert (person.file_name, person.file_bytes) == (pdf.name, pdf.read_bytes())
 
 
+@EXTERNAL
 def test_every_registry_json_reads_into_the_models(root: Path) -> None:
     """补造目录的 4 份 JSON (3 份摘录, 1 份检索) 加同名 PDF 都能按模型读出."""
     mock = MockRegistrySource(root)
@@ -85,6 +97,7 @@ def test_every_registry_json_reads_into_the_models(root: Path) -> None:
     assert [type(p) for p in persons] == [PersonSearch]
 
 
+@EXTERNAL
 @pytest.mark.parametrize(
     ("eid", "query"),
     [
@@ -105,14 +118,39 @@ async def test_not_found_is_none(root: Path, eid: str, query: tuple[object, ...]
     assert found is None
 
 
+@EXTERNAL
+def test_missing_pdf_is_an_error(copy: Path) -> None:
+    """有 JSON 而缺同名 PDF 是数据不全, 抛 FileNotFoundError (不当作查不到)."""
+    (copy / "registry" / "extracts" / "900043021.pdf").unlink()
+    with pytest.raises(FileNotFoundError):
+        MockRegistrySource(copy).extract("900043021")
+
+
+@EXTERNAL
+def test_person_search_checks_the_names_in_the_file(copy: Path) -> None:
+    """文件名以连字符分隔, (Smith, Jones-Ann) 与 (Smith-Jones, Ann) 拼出同一文件名: 读到后核对 JSON 里的姓名, 只有
+    (Smith-Jones, Ann) 查得到."""
+    source = copy / "registry" / "persons" / "MORGAN-ALEX-19790412"
+    target = source.with_name("SMITH-JONES-ANN-19790412")
+    data = json.loads(source.with_suffix(".json").read_text(encoding="utf-8"))
+    data.update(family_name="Smith-Jones", given_name="Ann", file_name=f"{target.name}.pdf")
+    target.with_suffix(".json").write_text(json.dumps(data), encoding="utf-8")
+    shutil.copyfile(source.with_suffix(".pdf"), target.with_suffix(".pdf"))
+    mock = MockRegistrySource(copy)
+    assert mock.person("Smith", "Jones-Ann", BIRTH) is None
+    found = mock.person("Smith-Jones", "Ann", BIRTH)
+    assert found is not None and (found.family_name, found.given_name) == ("Smith-Jones", "Ann")
+
+
 def test_person_file_name() -> None:
     """人员检索的文件名: 姓与名去空白转大写, 出生日期 yyyymmdd; 姓名里有路径字符 (或别的字符) 时不拼文件名."""
     assert person_stem(" Morgan", "alex ", BIRTH) == "MORGAN-ALEX-19790412"
     assert person_stem("O'Neil-Smith", "Mary Ann", BIRTH) == "O'NEIL-SMITH-MARY ANN-19790412"
-    assert [person_stem(f, "Alex", BIRTH) for f in ("../Morgan", "Morgan/x", "")] == [None, None, None]
+    assert [person_stem(f, "Alex", BIRTH) for f in ("../Morgan", "Morgan/x", "", "'Morgan", "Zoë")] == [None] * 5
 
 
 @pytest.mark.parametrize("composite", [False, True], ids=["dataset", "composite"])
+@EXTERNAL
 async def test_unknown_engagement_and_new_client(root: Path, composite: bool) -> None:
     """项目不存在抛 LookupError; 没有数据集 (新建的客户, E-3) 抛 RegistryUnavailable (no_source: 新客户的摘录由审计师
     上传, R290). 组合实现对有数据集的项目转给数据集一侧, 都不发 ABR 请求."""
@@ -131,13 +169,21 @@ async def test_unknown_engagement_and_new_client(root: Path, composite: bool) ->
     assert abr.requests == []
 
 
+@EXTERNAL
 async def test_fake_registry_records_query_order(root: Path) -> None:
-    """FakeRegistry 按顺序记下 abn, extract, person 三类查询; 人员检索不分大小写."""
+    """FakeRegistry 按顺序记下 abn, extract, person 三类查询; 人员检索同登记 mock 去首尾空白, 不分大小写, 出生日期
+    不符查不到."""
     mock = MockRegistrySource(root)
     extract, person = mock.extract("900043021"), mock.person("Morgan", "Alex", BIRTH)
     assert extract is not None and person is not None
     registry = FakeRegistry(extracts={"900043021": extract}, persons=[person])
     await registry.abn("E", "25900043021")
     assert await registry.asic_extract("E", "900043021") == extract
-    assert await registry.asic_person("E", "MORGAN", "alex", BIRTH) == person
-    assert registry.queries == [("abn", "25900043021"), ("extract", "900043021"), ("person", "MORGAN alex 1979-04-12")]
+    assert await registry.asic_person("E", "MORGAN ", "alex", BIRTH) == person
+    assert await registry.asic_person("E", "Morgan", "Alex", date(1979, 4, 13)) is None
+    assert registry.queries == [
+        ("abn", "25900043021"),
+        ("extract", "900043021"),
+        ("person", "MORGAN  alex 1979-04-12"),
+        ("person", "Morgan Alex 1979-04-13"),
+    ]
