@@ -253,13 +253,14 @@ class XeroProfileCheck(Model):
 # 前三个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传
 DemoStage = Literal["acceptance", "fieldwork", "statements", "manual"]
 DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements")
-DemoImportStatus = Literal["started", "imported", "already_imported"]
+DemoImportStatus = Literal["started", "imported", "already_imported", "failed"]
 
 
 class DemoImportResult(Model):
     """演示数据导入一个阶段的结果 (需求 R269). 发起时返回 started, 内容为要写的表与要上传的文件; 做完时为 imported
     (有写入, 另记一条 data 留痕 demo_import, payload 即本对象) 或 already_imported (这一阶段都已导入过, 什么都没写,
-    不记留痕)."""
+    不记留痕); 作业中途出错为 failed (需求 R270: 同样记一条 demo_import 留痕, 只有阶段, 错误类别与数据版本, 已写的
+    保留, 再执行接着做)."""
 
     stage: DemoStage  # 阶段
     status: DemoImportStatus
@@ -268,6 +269,19 @@ class DemoImportResult(Model):
     retyped: list[str] = []  # 分类与清单不符, 按清单指定了类型的文件名
     needs_manual: list[str] = []  # 处理完仍待人工的文件名 (如抽取没通过)
     data_version: int | None = None  # 做完后的数据版本; started 时为空
+    error: str | None = None  # failed 时的错误类别 (异常类名, 不带原始错误文本)
+
+
+class DemoSummary(Model):
+    """数据管理页的演示数据导入入口 (需求 R270). available 只对带补造目录的 Xero 演示数据集为真 (只查目录在不在,
+    不核对哈希; 篡改由发起导入时的核对报出); 其余各项只在 available 时给."""
+
+    available: bool = False
+    stages_done: list[DemoStage] = []  # 已导入过的阶段 (有 imported 的 demo_import 留痕), 按 DEMO_IMPORT_STAGES 顺序
+    # 按流程停的位置该导入的阶段: 停在 ACC-01 闸门为 acceptance, 图在等数据就绪为 fieldwork,
+    # REQ-financial_statements 为 open 为 statements; 该阶段已导入过或不在这几个位置时为空
+    suggested: DemoStage | None = None
+    last: DemoImportResult | None = None  # 最近一次导入的结果 (最近一条 demo_import 留痕)
 
 
 class XeroSource(Model):
@@ -349,13 +363,14 @@ class TableSummary(Model):
 
 
 class DataSummary(Model):
-    """数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数与待补交请求数."""
+    """数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数, 待补交请求数与演示数据导入的入口."""
 
     sources: DataSources  # 外部数据源
     tables: list[TableSummary]  # 各账表, 按 TableKind 顺序
     checks: list[DataCheck]  # 最近一次体检的各项结果, 按 CheckId 顺序
     processing: int  # A3 正在处理的文件与导入数; 不为 0 时前端每 3 秒轮询
     open_requests: int  # 待补交的请求数
+    demo: DemoSummary  # 演示数据导入的入口 (需求 R270)
 
 
 class TableField(Model):

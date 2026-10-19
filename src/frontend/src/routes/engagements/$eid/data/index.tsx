@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
-import { AlertTriangle, CircleCheck, Clock3, FolderOpen, Link2, RefreshCw, Upload } from 'lucide-react'
+import { AlertTriangle, CircleCheck, Clock3, FlaskConical, FolderOpen, Link2, RefreshCw, Upload } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
@@ -21,6 +21,7 @@ import {
   type TableSummary,
   useDataRequests,
   useDataSummary,
+  useDemoImport,
   useSetDocumentType,
   useXeroChooseTenant,
   useXeroConnect,
@@ -29,6 +30,7 @@ import {
   useXeroTenants,
 } from '@/lib/data-api'
 import { checkDetail } from '@/lib/data-checks'
+import { demoButton, demoResultText } from '@/lib/demo-import'
 import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -112,6 +114,8 @@ function DataPage() {
           </section>
         ) : null}
 
+        <DemoCard eid={eid} summary={summary} />
+
         <OpenBatches eid={eid} onOpen={uploader.open} />
 
         <section aria-label={t.data.sources} className="flex flex-col gap-3">
@@ -162,6 +166,62 @@ function DataPage() {
         />
       </div>
     </>
+  )
+}
+
+// 导入演示资料 (后端 R269, R270): 只对带补造资料的 Xero 演示数据集显示; 按钮的阶段取概览的 demo.suggested (后端按流程
+// 停的位置给出), 不在要导入的位置时按钮在而不可点. 发起后在后台导入, 进度同其他作业看 processing; 下方一行是上次
+// 导入的结果 (demo.last)
+function DemoCard({ eid, summary }: { eid: string; summary: DataSummary | null }) {
+  const { t } = useI18n()
+  const run = useDemoImport(eid)
+  const button = demoButton(summary?.demo, t)
+  if (!button || !summary) return null
+  const last = summary.demo.last ?? null
+  const hintId = `demo-hint-${eid}`
+  const start = (stage: string) =>
+    run.mutate(stage, {
+      onSuccess: (result) =>
+        toast.success(t.data.demo.started(result.tables?.length ?? 0, result.uploaded?.length ?? 0)),
+      onError: (error) => toast.error(errorText(error, t)),
+    })
+  const disabled = button.stage === null || run.isPending || summary.processing > 0
+  return (
+    <section
+      aria-label={t.data.demo.title}
+      className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-dashed bg-card px-5 py-4"
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-primary">
+          <FlaskConical className="size-[18px]" aria-hidden="true" />
+        </span>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-semibold text-[15px]">{t.data.demo.title}</span>
+          <span className="text-[13px] text-muted-foreground">{t.data.demo.intro}</span>
+          {last ? (
+            <span className="text-[13px] text-[#4a5262]">{t.data.demo.last(demoResultText(last, t))}</span>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          aria-describedby={button.hint ? hintId : undefined}
+          onClick={() => {
+            if (button.stage) start(button.stage)
+          }}
+        >
+          {button.label}
+        </Button>
+        {button.hint ? (
+          <span id={hintId} className="text-[12.5px] text-muted-foreground">
+            {button.hint}
+          </span>
+        ) : null}
+      </div>
+    </section>
   )
 }
 

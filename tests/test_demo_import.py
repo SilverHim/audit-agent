@@ -23,6 +23,7 @@ from backend.contracts.data import (
     XERO_TABLES,
     DataInput,
     DemoImportResult,
+    DemoSummary,
     DocumentDetailsEdit,
     TableKind,
     TableVersion,
@@ -141,15 +142,20 @@ class Flow:
     after_ready: dict[str, Any]
     statements: DemoImportResult | None
     after_statements: dict[str, Any]
+    demos: dict[str, DemoSummary]  # 各停点概览的 demo 一项 (需求 R270)
 
 
 async def run_flow() -> Flow:
     e = env()
+    demos: dict[str, DemoSummary] = {}
     await to_acceptance_gate(e.runner, EID)
+    demos["gate"] = await e.service.demo_summary(EID)
     acceptance = await import_stage(e.service, EID, "acceptance", ACTOR)
+    demos["accepted"] = await e.service.demo_summary(EID)
     after_acceptance = snapshot(e)
     await approve_acceptance(e.runner, EID, ACTOR)
     assert (await e.runner.app.aget_state(GraphRunner.config(EID))).next == ("p1_await_data",)
+    demos["awaiting"] = await e.service.demo_summary(EID)
     fieldwork = await import_stage(e.service, EID, "fieldwork", ACTOR)
     after_fieldwork, store = snapshot(e), copy_store(e.financial)
     overview = await GraphStateQuery(e.runner.app, e.runner.deps, e.runner).overview(EID)
@@ -165,7 +171,9 @@ async def run_flow() -> Flow:
     doc04 = next(p.status for p in overview.procedures if p.id == "DOC-04")
     state_documents = list((await e.runner.app.aget_state(GraphRunner.config(EID))).values.get("documents", []))
     after_ready = snapshot(e)
+    demos["ready"] = await e.service.demo_summary(EID)
     statements = await import_stage(e.service, EID, "statements", ACTOR)
+    demos["statements"] = await e.service.demo_summary(EID)
     return Flow(
         acceptance,
         after_acceptance,
@@ -181,6 +189,7 @@ async def run_flow() -> Flow:
         after_ready,
         statements,
         snapshot(e),
+        demos,
     )
 
 
@@ -551,17 +560,20 @@ async def test_already_imported_still_redoes_a_stale_checkup() -> None:
 
 
 def outcome(e: Env) -> tuple[Any, ...]:
-    """比对用的最终状态: 账表版本, 文件登记 (上传时间不比), 合同, 数据版本, 各类 data 留痕的条数."""
+    """比对用的最终状态: 账表版本, 文件登记 (上传时间不比), 合同, 数据版本, 各类 data 留痕的条数 (demo_import 只数
+    status imported 的)."""
     versions = [(v.kind, v.source, v.file_name, v.records, v.data_version) for v in e.data.table_versions]
     documents = sorted(
         (d.model_copy(update={"uploaded_at": NOW}) for d in e.financial.document_refs), key=lambda d: d.id
     )
     contracts = {k: (c.version, c.document_id, c.terms) for k, c in e.financial.saved_contracts.items()}
-    return versions, documents, contracts, e.data.data_version, actions(e.trail.entries)
+    imported = [x for x in e.trail.entries if x.payload.get("status") != "failed"]
+    return versions, documents, contracts, e.data.data_version, actions(imported)
 
 
 async def test_failure_midway_then_again_ends_like_one_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """外勤阶段第 10 份上传抛错 (作业中断, 已写的保留, 锁释放) 后再执行: 最终状态与一次做完相同."""
+    """外勤阶段第 10 份上传抛错 (作业中断, 已写的保留, 锁释放) 后再执行: 最终状态与一次做完相同. 中断时记一条
+    status failed 的 demo_import (阶段与错误类别, 不带错误文本), 概览的 last 读得到, 这一阶段不算导入过 (需求 R270)."""
     once = env()
     await import_stage(once.service, EID, "fieldwork", ACTOR)
     broken = env()
@@ -575,7 +587,31 @@ async def test_failure_midway_then_again_ends_like_one_run(monkeypatch: pytest.M
         return await save(eid, file_name, data, **kwargs)
 
     monkeypatch.setattr(store, "save", failing)
-    assert await import_stage(broken.service, EID, "fieldwork", ACTOR) is None  # 中断, 没记 demo_import
+    failed = await import_stage(broken.service, EID, "fieldwork", ACTOR)
+    assert failed == DemoImportResult(stage="fieldwork", status="failed", error="OSError", data_version=5)
+    [entry] = [x for x in broken.trail.entries if x.payload.get("status") == "failed"]
+    assert "磁盘写满" not in str(entry.model_dump())
+    demo = await broken.service.demo_summary(EID)
+    assert (demo.stages_done, demo.last) == ([], failed)
     assert len(broken.financial.document_refs) == 9 and not broken.runner.is_running(EID)
     await import_stage(broken.service, EID, "fieldwork", ACTOR)
     assert outcome(broken) == outcome(once)
+
+
+# ── 数据管理页的入口 (需求 R270): 概览的 demo 一项随流程停的位置 ──
+
+
+def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
+    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后待审财报的请求仍 open,
+    建议 statements; 三段都导入后 stages_done 齐, 不再建议. last 为最近一次 (有写入的) 导入的结果."""
+    got = {
+        k: (d.available, d.stages_done, d.suggested, d.last.stage if d.last else None) for k, d in flow.demos.items()
+    }
+    assert got == {
+        "gate": (True, [], "acceptance", None),
+        "accepted": (True, ["acceptance"], None, "acceptance"),
+        "awaiting": (True, ["acceptance"], "fieldwork", "acceptance"),
+        "ready": (True, ["acceptance", "fieldwork"], "statements", "fieldwork"),
+        "statements": (True, ["acceptance", "fieldwork", "statements"], None, "statements"),
+    }
+    assert flow.demos["ready"].last == flow.fieldwork

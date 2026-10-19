@@ -94,6 +94,13 @@ class SupplementLoader(Protocol):
     def supplement(self, dataset: str) -> "Supplements | None": ...
 
 
+class DemoSource(SupplementLoader, Protocol):
+    """演示数据导入的清单来源 (组装根为 RoutingDatasetLoader, 需求 R269, R270): 另能不核对哈希地查数据集有没有补造
+    目录 (数据管理页的概览轮询时用)."""
+
+    def has_supplement(self, dataset: str) -> bool: ...
+
+
 def plan(loader: SupplementLoader, dataset: str) -> DemoPlan:
     """数据集的演示导入清单, 不连库. 先核对补造目录 (loader.supplement, 不符抛 SupplementMismatch); 没有补造目录抛
     FileNotFoundError. 清单内容不合规 (类型或登记途径不认识, index.csv 与 manifest 不符) 抛 ValueError, 见 uploads."""

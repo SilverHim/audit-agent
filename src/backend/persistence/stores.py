@@ -804,6 +804,18 @@ class XeroDatasetLoader(TableLoader):
         tables = build_tables(self.snapshot(dataset))
         return found.apply(tables) if found is not None else tables
 
+    def has_supplement(self, dataset: str) -> bool:
+        """数据集有没有补造目录 (需求 R270): 名称合法, 快照与同名补造目录都在; 不核对哈希 (概览轮询时用, 篡改由
+        supplement 的核对报出)."""
+        if self.supplements is None:
+            return False
+        try:
+            snapshot = self.directory(dataset)
+            directory = safe_child(self.supplements, dataset.removeprefix(self.PREFIX))
+        except ValueError:
+            return False
+        return snapshot.is_dir() and (directory / "manifest.json").is_file()
+
     def supplement_tables(self, dataset: str) -> list[DemoTable]:
         """补造覆盖的账表, 同演示导入清单 (xero_supplements.plan) 的 tables; 没有补造目录时为空."""
         found = self.supplement(dataset)
@@ -914,6 +926,11 @@ class RoutingDatasetLoader:
         载入器没有这个方法 (Numbat 的 CSV 载入器) 时为 None."""
         method: Callable[[str], Supplements | None] | None = getattr(self.pick(dataset), "supplement", None)
         return method(dataset) if method is not None else None
+
+    def has_supplement(self, dataset: str) -> bool:
+        """数据集有没有补造目录, 不核对哈希 (具体方法, 需求 R270); 载入器没有这个方法时为假."""
+        method: Callable[[str], bool] | None = getattr(self.pick(dataset), "has_supplement", None)
+        return method(dataset) if method is not None else False
 
     def supplement_dir(self, dataset: str) -> Path | None:
         """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有

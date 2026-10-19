@@ -1512,7 +1512,7 @@ export type DataSources = {
 /**
  * DataSummary
  *
- * 数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数与待补交请求数.
+ * 数据管理页的概览: 数据源, 各账表, 体检结果, 进行中的处理数, 待补交请求数与演示数据导入的入口.
  */
 export type DataSummary = {
     sources: DataSources;
@@ -1532,6 +1532,7 @@ export type DataSummary = {
      * Open Requests
      */
     open_requests: number;
+    demo: DemoSummary;
 };
 
 /**
@@ -1671,6 +1672,84 @@ export type DeferralView = {
      * Deferred At
      */
     deferred_at: string;
+};
+
+/**
+ * DemoImportIn
+ *
+ * 演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork, statements 之一; 用字符串, 不认识的由服务报
+ * 422 INVALID_VALUE (同其他数据接口的错误结构).
+ */
+export type DemoImportIn = {
+    /**
+     * Stage
+     */
+    stage: string;
+};
+
+/**
+ * DemoImportResult
+ *
+ * 演示数据导入一个阶段的结果 (需求 R269). 发起时返回 started, 内容为要写的表与要上传的文件; 做完时为 imported
+ * (有写入, 另记一条 data 留痕 demo_import, payload 即本对象) 或 already_imported (这一阶段都已导入过, 什么都没写,
+ * 不记留痕); 作业中途出错为 failed (需求 R270: 同样记一条 demo_import 留痕, 只有阶段, 错误类别与数据版本, 已写的
+ * 保留, 再执行接着做).
+ */
+export type DemoImportResult = {
+    /**
+     * Stage
+     */
+    stage: 'acceptance' | 'fieldwork' | 'statements' | 'manual';
+    /**
+     * Status
+     */
+    status: 'started' | 'imported' | 'already_imported' | 'failed';
+    /**
+     * Tables
+     */
+    tables?: Array<TableKind>;
+    /**
+     * Uploaded
+     */
+    uploaded?: Array<string>;
+    /**
+     * Retyped
+     */
+    retyped?: Array<string>;
+    /**
+     * Needs Manual
+     */
+    needs_manual?: Array<string>;
+    /**
+     * Data Version
+     */
+    data_version?: number | null;
+    /**
+     * Error
+     */
+    error?: string | null;
+};
+
+/**
+ * DemoSummary
+ *
+ * 数据管理页的演示数据导入入口 (需求 R270). available 只对带补造目录的 Xero 演示数据集为真 (只查目录在不在,
+ * 不核对哈希; 篡改由发起导入时的核对报出); 其余各项只在 available 时给.
+ */
+export type DemoSummary = {
+    /**
+     * Available
+     */
+    available?: boolean;
+    /**
+     * Stages Done
+     */
+    stages_done?: Array<'acceptance' | 'fieldwork' | 'statements' | 'manual'>;
+    /**
+     * Suggested
+     */
+    suggested?: 'acceptance' | 'fieldwork' | 'statements' | 'manual' | null;
+    last?: DemoImportResult | null;
 };
 
 /**
@@ -6442,6 +6521,36 @@ export type DataReadyResponses = {
 };
 
 export type DataReadyResponse = DataReadyResponses[keyof DataReadyResponses];
+
+export type DataDemoImportData = {
+    body: DemoImportIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/demo-import';
+};
+
+export type DataDemoImportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataDemoImportError = DataDemoImportErrors[keyof DataDemoImportErrors];
+
+export type DataDemoImportResponses = {
+    /**
+     * Successful Response
+     */
+    202: DemoImportResult;
+};
+
+export type DataDemoImportResponse = DataDemoImportResponses[keyof DataDemoImportResponses];
 
 export type DataXeroConnectData = {
     body?: never;

@@ -12,10 +12,12 @@
 - 文件: 同内容的文件存档时返回已有登记, upload 留痕同键只一条; 只处理没做完的 (ingest.unfinished).
 - 改类型: 只在类型与清单不符, 且最近一次类型决定是 A3 做的 (或还没有) 时改; 审计师改过的不动.
 - 补登记: 只给从没补登记过的文件补; 审计师补过的不动.
-有写入时记一条 data 留痕 demo_import (payload 为 DemoImportResult); 什么都没写为 already_imported, 不记留痕.
+有写入时记一条 data 留痕 demo_import (payload 为 DemoImportResult); 什么都没写为 already_imported, 不记留痕. 作业中途
+出错时 (DataService.demo_import 的作业) 记一条 status failed 的 demo_import, 只有阶段与错误类别 (需求 R270).
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -29,6 +31,7 @@ from backend.services.trail_pages import all_of_kind
 if TYPE_CHECKING:
     from backend.services.data_service import DataService
 
+logger = logging.getLogger(__name__)
 DEMO_JOB = "demo_import"  # 演示数据导入作业在 DataService 登记的种类
 NO_DEMO = "该数据集没有演示资料"
 RETYPE_REASON = "演示数据导入: 按补造清单指定类型"
@@ -118,6 +121,26 @@ class DemoImport:
             )
         )
         return result
+
+    async def record_failure(self, eid: str, stage: DemoStage, actor: str, error: BaseException) -> None:
+        """作业中途出错时记一条 data 留痕 demo_import (status failed, 需求 R270): 只写阶段, 错误类别 (异常类名) 与当前的
+        数据版本, 不写原始错误文本 (可能带文件内容或路径). 已写的保留, 再执行时接着做. 留痕写不成只记日志."""
+        deps = self.service.deps
+        try:
+            version = (await deps.data.readiness(eid)).data_version
+            result = DemoImportResult(stage=stage, status="failed", error=type(error).__name__, data_version=version)
+            await deps.trail.record(
+                TrailEntry(
+                    engagement_id=eid,
+                    kind=TrailKind.data,
+                    actor=actor,
+                    summary=f"演示数据导入 ({STAGE_NAMES[stage]}) 没做完 ({result.error}), 再导入一次接着做",
+                    payload={"action": DEMO_JOB, **result.model_dump(mode="json")},
+                    created_at=datetime.now(UTC),
+                )
+            )
+        except Exception:
+            logger.exception("演示数据导入失败的留痕没写成: %s %s", eid, stage)
 
     async def write_tables(self, eid: str, actor: str) -> list[TableKind]:
         """快照六张表一个版本 (source xero), 补造表各一个版本 (source import, 原文件名); 写过的表跳过. 返回写了的表."""

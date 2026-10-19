@@ -16,9 +16,9 @@ from typing import Any
 from uuid import uuid4
 
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from backend.adapters.xero_supplements import DemoPlan, SupplementLoader, plan
+from backend.adapters.xero_supplements import STAGE_REQUESTS, DemoPlan, DemoSource, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
 from backend.agents.ingest import (
@@ -50,6 +50,7 @@ from backend.contracts.data import (
     DataSummary,
     DemoImportResult,
     DemoStage,
+    DemoSummary,
     DocumentChange,
     DocumentDetailsEdit,
     ExtractionEdit,
@@ -378,7 +379,7 @@ class DataService:
         runner: GraphRunner,
         xero: XeroConnections | None = None,
         *,
-        demo: SupplementLoader | None = None,
+        demo: DemoSource | None = None,
     ) -> None:
         self.deps = deps  # 外部依赖
         self.runner = runner  # 项目锁与后台推进; 图取 runner.app
@@ -1234,7 +1235,44 @@ class DataService:
             checks=await data.checks(eid),
             processing=sum(len(job) for job in jobs),
             open_requests=await data.open_requests(eid),
+            demo=await self.demo_summary(eid),
         )
+
+    async def demo_summary(self, eid: str) -> DemoSummary:
+        """数据管理页的演示数据导入入口 (需求 R270, 见 DemoSummary). 不是带补造目录的数据集 (只查目录在不在, 不核对
+        哈希) 时只给 available 为假, 不读留痕与检查点. 已导入的阶段取全部 demo_import 留痕, 最近一次结果取
+        AuditTrail.last_of; 流程停的位置按 gate_now (闸门) 与 runner.awaiting_data (等数据就绪)."""
+        engagement = await self.deps.engagement_store.get(eid)
+        dataset = engagement.dataset if engagement is not None else None
+        if self.demo is None or dataset is None or not await asyncio.to_thread(self.demo.has_supplement, dataset):
+            return DemoSummary()
+        trail = self.deps.trail
+        imported = {
+            entry.payload.get("stage")
+            for entry in await all_of_kind(trail, eid, TrailKind.data)
+            if entry.payload.get("action") == DEMO_JOB and entry.payload.get("status") == "imported"
+        }
+        done = [stage for stage in DEMO_IMPORT_STAGES if stage in imported]
+        latest = await trail.last_of(eid, TrailKind.data, [DEMO_JOB])
+        last = None
+        if latest is not None:
+            try:
+                last = DemoImportResult.model_validate({k: v for k, v in latest.payload.items() if k != "action"})
+            except ValidationError:  # 认不出的旧留痕不让概览出错
+                last = None
+        suggested = await self._demo_stage_now(eid)
+        return DemoSummary(
+            available=True, stages_done=done, suggested=suggested if suggested not in done else None, last=last
+        )
+
+    async def _demo_stage_now(self, eid: str) -> DemoStage | None:
+        """按流程停的位置该导入的阶段 (不看做过没有): ACC-01 闸门, 等数据就绪, 待审财报请求 open."""
+        if await self.gate_now(eid) is GateId.ACC_01:
+            return "acceptance"
+        if awaiting_data(await self.runner.app.aget_state(GraphRunner.config(eid))):
+            return "fieldwork"
+        requests = {r.id: r.status for r in await self.deps.data.requests(eid)}
+        return "statements" if requests.get(STAGE_REQUESTS["statements"]) == "open" else None
 
     async def confirm_ready(self, eid: str, actor: str, reason: str | None = None) -> DataReadiness:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.
@@ -1324,7 +1362,11 @@ class DataService:
         importer = DemoImport(self, await self._demo_plan(engagement))
 
         async def job() -> None:
-            await importer.run(eid, chosen, actor)
+            try:
+                await importer.run(eid, chosen, actor)
+            except Exception as error:  # 记一条 failed 的留痕, 页面据此提示再导入一次; 异常照常交 _spawn 记日志
+                await importer.record_failure(eid, chosen, actor, error)
+                raise
 
         await self.launch(eid, importer.labels(chosen), job, kind=DEMO_JOB)
         return importer.started(chosen)

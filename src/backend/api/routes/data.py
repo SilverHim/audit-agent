@@ -1,6 +1,6 @@
 """数据管理接口 (需求 R10-R16, R277): /engagements/{eid}/data 下的概览, 导入, 智能导入的批次, 补交请求与就绪确认,
 Xero 的连接, 选组织, 同步与断开 (需求 R279; 授权回调在 integrations.py), Xero 组织信息与客户画像的核对 (需求 R291);
-/data/schemas."""
+/data/schemas. 另有演示数据导入 (需求 R270)."""
 
 from typing import Annotated
 
@@ -12,6 +12,7 @@ from backend.api.errors import api_error, catch_api
 from backend.api.schemas import (
     AccountCategoryIn,
     DataReadyIn,
+    DemoImportIn,
     ImportSheet,
     RequestUnavailableIn,
     XeroAuthorize,
@@ -26,6 +27,7 @@ from backend.contracts.data import (
     DataReadiness,
     DataRequest,
     DataSummary,
+    DemoImportResult,
     ImportBatch,
     ImportCommit,
     ImportPreview,
@@ -281,6 +283,21 @@ async def ready(
     项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进."""
     async with catch_api():
         return await service.confirm_ready(engagement.id, user.id, body.reason if body else None)
+
+
+@router.post("/demo-import", status_code=202)
+async def demo_import(
+    body: DemoImportIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> DemoImportResult:
+    """导入演示资料的一个阶段 (需求 R269, R270): 后台按补造清单写入账表, 上传文件交 A3 处理并补登记, 做完体检;
+    返回 status started 的结果 (要写的表与要上传的文件), 作业期间概览的 processing 计入. 结果看之后概览的
+    demo.last 与 stages_done. 阶段不认识或为 manual, 数据集没有演示资料 (Numbat, 没有补造目录的快照, 没有数据集的
+    新客户), 补造目录与快照不符 422 INVALID_VALUE; 锁定 423; 忙 409 ENGAGEMENT_BUSY."""
+    async with catch_api():
+        return await service.demo_import(engagement.id, body.stage, user.id)
 
 
 # ── Xero 网页连接 (需求 R279) ──
