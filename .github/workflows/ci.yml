@@ -17,5 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: curl -fsSL https://bun.sh/install | bash
-      - run: ~/.bun/bin/bun install --frozen-lockfile
-      - run: ~/.bun/bin/bun run lint && ~/.bun/bin/bun run test && ~/.bun/bin/bun run build
+      - run: echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run lint && bun run test && bun run build
