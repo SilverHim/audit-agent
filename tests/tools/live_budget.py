@@ -1,11 +1,14 @@
 """真实大模型测试的用量预算 (需求 R115): 按程序计调用次数与 token, 超过上限即停发, 并让测试失败 (不进入 rerun);
 结束时写用量汇总.
 
+- "一次调用" 指 BudgetedLLMClient 调一次内部客户端的 complete: 抛错的 (超时, 传输层重试耗尽, 连接失败) 也算;
+  内部客户端自己的重发 (传输层重试 adapters/llm.MAX_RETRIES, 参数不受支持时调整后的重发) 不另计; 校验不过后
+  判断引擎的重新尝试是另一次 complete, 另计.
 - Budget: 一次测试 (或整个会话) 的上限与已用量. 第 max_calls+1 次调用, 或累计输入, 输出 token 已超上限后的调用都
-  不再发出, 抛 BudgetExceeded 并置 exceeded; 此后每次调用都直接拒绝. 测试的预算挂在会话预算下 (parent), 记账一并
-  计入, 任一超限即拒绝.
-- BudgetedLLMClient: 包一层 LLMClient, 调用前查预算, 调用后记账. install_budget 用 SwitchableLLMClient.reload 把
-  项目依赖里的主模型, 判断引擎与复核模型 (A7) 的内部客户端都换成包装, 共用一个预算.
+  不再发出, 抛 BudgetExceeded 并置 exceeded; 此后每次调用都直接拒绝. 调用次数在发出前占位 (admit), 并发的调用
+  (gather_all, P2 并行) 也只放行 max_calls 次. 测试的预算挂在会话预算下 (parent), 记账一并计入, 任一超限即拒绝.
+- BudgetedLLMClient: 包一层 LLMClient, 调用前查预算并占位, 返回后记 token. install_budget 用
+  SwitchableLLMClient.reload 把项目依赖里的主模型, 判断引擎与复核模型 (A7) 的内部客户端都换成包装, 共用一个预算.
 - 超预算的调用在 Agent 里抛出, 由 run_agent 转成 failed 任务, 驱动测试的循环若照常提交 rerun 会反复超限; 所以各
   live 测试在每次提交决定前调 budget.check(), 已超限即 pytest.fail.
 - summary: 调用次数与 token 由包装计, 尝试次数分布与校验失败级别取该项目 llm_call 留痕; 只有设了
@@ -14,7 +17,9 @@
 - 上限: 各测试在 @pytest.mark.live(max_calls=..., max_input_tokens=..., max_output_tokens=...) 里写默认值,
   LIVE_MAX_CALLS, LIVE_MAX_INPUT_TOKENS, LIVE_MAX_OUTPUT_TOKENS 覆盖; 会话预算缺省为本次选中的各 live 测试上限之和,
   LIVE_SESSION_MAX_CALLS 等可调低. 上限按调用次数与 token 定, 不写单价; 不保证覆盖最坏情况 (一次调用的输出 token
-  只在调用之后才知道, 超 token 上限的那一次已经发出).
+  只在调用之后才知道, 超 token 上限的那一次已经发出; 并发时同时在途的几次也都已发出). 标了 live 却没写 max_calls
+  或没取 live_budget 夹具的测试在收集阶段即报错 (live_without_limits, conftest).
+- conftest 的两个夹具只调 session_budget, budget_for 与 finish.
 """
 
 import json
@@ -86,24 +91,32 @@ class Budget:
         return f"超出预算: 已用 {u.calls} 次调用, 输入 {u.input_tokens}, 输出 {u.output_tokens} token{where}"
 
     def admit(self, procedure_id: str) -> None:
-        """发出一次调用之前: 本预算或会话预算已超限 (exceeded), 或这一次会超出调用次数时, 置 exceeded 并抛
-        BudgetExceeded."""
-        for budget in self.chain():
+        """发出一次调用之前查预算并占位: 本预算或会话预算已超限 (exceeded), 或调用次数已用满时, 置它 exceeded 并抛
+        BudgetExceeded, 哪个预算都不计; 否则当场给链上每个预算的调用次数 (合计与该程序) 加一. 查与占之间没有
+        await, 并发的调用不会一起通过; 之后内部客户端抛错, 这次也已计入."""
+        chain = self.chain()
+        for budget in chain:
             if budget.exceeded or budget.over():
                 budget.exceeded = True
                 budget.rejected_procedure = budget.rejected_procedure or procedure_id
                 raise BudgetExceeded(budget.message())
+        for budget in chain:
+            for usage in budget.usages(procedure_id):
+                usage.calls += 1
 
     def record(self, procedure_id: str, input_tokens: int, output_tokens: int) -> None:
-        """一次调用发出之后记账 (本预算与会话预算); 累计 token 超过上限时即置 exceeded (调用次数用满不算超限,
-        下一次调用才被拒)."""
+        """一次调用返回之后记 token (本预算与会话预算; 调用次数已在 admit 计入); 累计 token 超过上限时即置
+        exceeded (调用次数用满不算超限, 下一次调用才被拒)."""
         for budget in self.chain():
-            for usage in (budget.used, budget.by_procedure.setdefault(procedure_id, Usage())):
-                usage.calls += 1
+            for usage in budget.usages(procedure_id):
                 usage.input_tokens += input_tokens
                 usage.output_tokens += output_tokens
             if budget.tokens_over():
                 budget.exceeded = True
+
+    def usages(self, procedure_id: str) -> tuple[Usage, Usage]:
+        """合计与该程序的用量."""
+        return self.used, self.by_procedure.setdefault(procedure_id, Usage())
 
     def tokens_over(self) -> bool:
         u = self.used
@@ -122,7 +135,7 @@ class Budget:
 
 
 class BudgetedLLMClient:
-    """LLMClient 的包装: 调用前查预算 (超限抛 BudgetExceeded, 不调 inner), 调用后按请求的程序记账."""
+    """LLMClient 的包装: 调用前查预算并占位 (超限抛 BudgetExceeded, 不调 inner), 返回后按请求的程序记 token."""
 
     def __init__(self, inner: LLMClient, budget: Budget) -> None:
         self.inner = inner
@@ -164,6 +177,17 @@ def declared_limits(declared: Mapping[str, Any]) -> dict[str, int | None]:
     return limits
 
 
+def live_without_limits(items: Iterable[Any]) -> list[str]:
+    """标了 live 却没在标记里写 max_calls, 或没取 live_budget 夹具的测试 (nodeid); conftest 在收集阶段据此报错, 免得
+    联网测试没有上限 (没取夹具就没包上预算, 写了上限也不起作用)."""
+    return [
+        i.nodeid
+        for i in items
+        if (m := i.get_closest_marker("live")) is not None
+        and (not m.kwargs.get("max_calls") or "live_budget" not in i.fixturenames)
+    ]
+
+
 def session_limits(items: Iterable[Any]) -> dict[str, int | None]:
     """会话预算的上限: 本次选中的各 live 测试上限 (declared_limits) 之和; token 上限有一个测试没写就不限.
     LIVE_SESSION_MAX_* 设了且更小时取它 (只能调低)."""
@@ -177,6 +201,33 @@ def session_limits(items: Iterable[Any]) -> dict[str, int | None]:
         if lower is not None and (limits[key] is None or lower < int(limits[key] or 0)):
             limits[key] = lower
     return limits
+
+
+def from_limits(limits: Mapping[str, int | None], parent: Budget | None = None) -> Budget:
+    return Budget(
+        max_calls=int(limits["max_calls"] or 0),
+        max_input_tokens=limits["max_input_tokens"],
+        max_output_tokens=limits["max_output_tokens"],
+        parent=parent,
+    )
+
+
+def session_budget(items: Iterable[Any]) -> Budget:
+    """会话夹具 live_session_budget 的预算: 上限取 session_limits (本次选中的各 live 测试之和)."""
+    return from_limits(session_limits(items))
+
+
+def budget_for(node: Any, session: Budget) -> Budget:
+    """测试夹具 live_budget 的预算: 上限取该测试 live 标记 (declared_limits, 没有标记即报错), 挂在会话预算下."""
+    marker = node.get_closest_marker("live")
+    return from_limits(declared_limits(marker.kwargs if marker is not None else {}), parent=session)
+
+
+def finish(name: str, budget: Budget, root: Path = EVAL_DIR) -> Path | None:
+    """夹具收尾: 有调用而测试自己没写过汇总 (reported) 时, 按包装记的账写一份 (没有留痕的尝试与失败级别)."""
+    if not budget.used.calls or budget.reported:
+        return None
+    return write_summary(name, summary([], budget), root)
 
 
 def summary(entries: Sequence[TrailEntry], budget: Budget) -> dict[str, Any]:

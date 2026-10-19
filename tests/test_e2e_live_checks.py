@@ -1,6 +1,7 @@
 """真实大模型验收 (test_e2e_live) 自身的离线检查 (Codex R59 探针): 存储换成假实现, 大模型换成在 fixture 上注入
 指定错误的客户端, 把整条验收测试离线跑一遍, 确认它对合理的格式差异放行, 对错误结果拒绝, 失败后恢复的路径不崩."""
 
+import asyncio
 import json
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -57,6 +58,7 @@ class InjectingLLM:
         key = (req.procedure_id, req.fixture_key)
         self.calls[key] += 1
         n = self.calls[key]
+        await asyncio.sleep(0)  # 像真实请求一样等响应时让出事件循环: 并发的调用 (gather_all, P2 并行) 此时也在查预算
         data = json.loads((await self.fixtures.complete(req, output_model)).raw)
         if self.mode == "name_case" and req.procedure_id == "DOC-04":
             data["counterparty"] = data["counterparty"].upper()
@@ -114,18 +116,20 @@ class InjectingLLM:
 
 def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, Any]:
     """把验收测试的配置读取与真实存储组装换成假实现; 返回的字典在运行后装着那次的 RealRun ("run") 与用量汇总
-    ("usage", 不写文件). 主模型与复核模型都包在 SwitchableLLMClient 里 (同组装根), 预算由 install_budget 装上."""
-    observed: dict[str, Any] = {}
+    ("usage", 不写文件), "fakes" 为主模型与复核模型两个假模型. 两者都包在 SwitchableLLMClient 里 (同组装根), 预算由
+    install_budget 装上."""
+    main, review_fake = InjectingLLM(mode), InjectingLLM(mode)
+    observed: dict[str, Any] = {"fakes": (main, review_fake)}
 
     def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
-        deps.judgments.llm = SwitchableLLMClient(InjectingLLM(mode), "probe-model")  # type: ignore[misc]
+        deps.judgments.llm = SwitchableLLMClient(main, "probe-model")  # type: ignore[misc]
         return real_agents(deps)
 
     @asynccontextmanager
     async def storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRun]:
         financial = FakeFinancialStore(replies(), dict(NUMBAT_RECORDS), trial_balance=NUMBAT_TRIAL_BALANCE)
         # 独立复核 (A7, GEN-09) 的复核模型也换成同样的假模型: 留痕同样记假模型名与 token
-        review = SwitchableLLMClient(InjectingLLM(mode), "probe-model")
+        review = SwitchableLLMClient(review_fake, "probe-model")
         runner, store = make_runner(financial_store=financial, agents=agents, review_llm=review)
         engagement_store = runner.deps.engagement_store
         run = RealRun(Started(runner, store, engagement_store), runner.deps, ENGAGEMENT.id, ENGAGEMENT.owner_id)  # type: ignore[arg-type]
@@ -144,6 +148,11 @@ def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, Any]:
     return observed
 
 
+def sent(observed: dict[str, Any]) -> int:
+    """两个假模型实际被调的次数 (含抛错的)."""
+    return sum(sum(fake.calls.values()) for fake in observed["fakes"])
+
+
 def roomy() -> Budget:
     """离线跑验收时的预算: 远大于一次流程的调用数, 不会超限."""
     return Budget(max_calls=500)
@@ -155,9 +164,11 @@ def roomy() -> Budget:
 async def test_acceptance_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> None:
     """fixture 原样通过; 公司名只差大小写也通过 (R59-05); 同一程序先整次失败, 再单对象失败, 重跑后成功,
     验收照常通过, 统计打印不因对象为空而崩 (R59-01); 高估换成名词说法也通过 (R59-08); 截止性判断失败后审计师对
-    例外认定错报, 报告引人工判断, 照样签字归档 (R59-06)."""
-    offline(monkeypatch, mode)
+    例外认定错报, 报告引人工判断, 照样签字归档 (R59-06). 汇总的调用次数等于假模型实际被调的次数 (含
+    run_then_subject 里抛错的那次)."""
+    observed = offline(monkeypatch, mode)
     await live.test_live_llm_full_flow(tmp_path, roomy())
+    assert observed["usage"]["calls"] == sent(observed)
 
 
 @pytest.mark.parametrize(

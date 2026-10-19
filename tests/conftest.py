@@ -38,35 +38,39 @@ def xero_case(tmp_path):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """调真实大模型的测试 (标 live) 须同时标 slow (需求 R114): 否则默认的 `-m 'not slow'` 也会收进来联网, 收集阶段
-    即报错. 排在按标记筛选之前, 被筛掉的也查."""
+    """调真实大模型的测试 (标 live) 须同时标 slow (需求 R114): 否则默认的 `-m 'not slow'` 也会收进来联网; 还须在
+    标记里写用量上限 max_calls 并取 live_budget 夹具 (需求 R115), 否则跑起来没有预算. 收集阶段即报错, 排在按标记
+    筛选之前, 被筛掉的也查."""
     from tests.external import live_without_slow
+    from tests.tools.live_budget import live_without_limits
 
     bad = live_without_slow(items)
     if bad:
         raise pytest.UsageError("标了 live 的测试须同时标 slow: " + ", ".join(bad))
+    unlimited = live_without_limits(items)
+    if unlimited:
+        raise pytest.UsageError(
+            "标了 live 的测试须写上限 @pytest.mark.live(max_calls=n) 并取 live_budget 夹具: " + ", ".join(unlimited)
+        )
 
 
 @pytest.fixture(scope="session")
 def live_session_budget(request):
     """整个会话的大模型用量预算 (需求 R115): 上限缺省为本次选中的各 live 测试上限之和, LIVE_SESSION_MAX_* 可调低;
-    各测试的预算挂在它下面, 记账一并计入. 会话结束时有调用就写一份汇总."""
-    from tests.tools.live_budget import Budget, session_limits, summary, write_summary
+    各测试的预算挂在它下面, 记账一并计入. 会话结束时有调用就写一份汇总. 主体在 tests/tools/live_budget."""
+    from tests.tools.live_budget import finish, session_budget
 
-    budget = Budget(**session_limits(request.session.items))  # type: ignore[arg-type]
+    budget = session_budget(request.session.items)
     yield budget
-    if budget.used.calls:
-        write_summary("live-session", summary([], budget))
+    finish("live-session", budget)
 
 
 @pytest.fixture
 def live_budget(request, live_session_budget):
     """一个 live 测试的大模型用量预算: 上限取 @pytest.mark.live(max_calls=...) 的默认值, LIVE_MAX_* 覆盖. 测试自己没
     写汇总 (reported) 而有调用时, 结束时按包装记的账写一份 (没有留痕的尝试与失败级别)."""
-    from tests.tools.live_budget import Budget, declared_limits, summary, write_summary
+    from tests.tools.live_budget import budget_for, finish
 
-    marker = request.node.get_closest_marker("live")
-    budget = Budget(**declared_limits(marker.kwargs if marker else {}), parent=live_session_budget)  # type: ignore[arg-type]
+    budget = budget_for(request.node, live_session_budget)
     yield budget
-    if budget.used.calls and not budget.reported:
-        write_summary(request.node.name, summary([], budget))
+    finish(request.node.name, budget)
