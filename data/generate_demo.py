@@ -15,6 +15,51 @@ from reportlab.pdfgen.canvas import Canvas
 
 SEED = 20260630
 ROOT = Path(__file__).resolve().parent
+# 上传处理的固定输出中, 演示也用而须同步进运行副本 (llm/) 的程序: 文件分类, 回函抽取与账表识别
+# (同 tests/fixture_sets.UPLOAD_RUNTIME)
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")
+# 各表的列, 与 data/demo 的表头逐字相同. 写成常量, 不取记录模型的字段: 契约后来给模型加的可选字段 (如
+# Account.category, JournalEntry.approved_at) 不进原始数据, 重生成结果与仓库里的逐字节相同 (需求 R284)
+COLUMNS = {
+    "accounts": ("code", "name", "type"),
+    "trial_balance": ("period", "account_code", "balance_cents"),
+    "journal_entries": (
+        "id",
+        "entry_no",
+        "posting_date",
+        "created_at",
+        "created_by",
+        "approved_by",
+        "account_code",
+        "debit_cents",
+        "credit_cents",
+        "description",
+        "source_doc",
+        "is_adjustment",
+    ),
+    "sales_invoices": (
+        "id",
+        "invoice_no",
+        "customer",
+        "customer_abn",
+        "contract_id",
+        "invoice_date",
+        "posting_date",
+        "amount_cents",
+        "journal_entry_id",
+    ),
+    "delivery_notes": ("id", "delivery_no", "invoice_id", "shipped_date", "signed_date", "signed_by"),
+    "bank_accounts": ("id", "bank_name", "bsb", "account_no", "gl_account_code"),
+    "bank_transactions": (
+        "id",
+        "bank_account_id",
+        "txn_date",
+        "amount_cents",
+        "balance_after_cents",
+        "description",
+        "reference",
+    ),
+}
 HOLIDAYS = {
     date.fromisoformat(d) for d in ("2025-12-25", "2025-12-26", "2026-01-01", "2026-01-26", "2026-04-03", "2026-04-06")
 }
@@ -369,20 +414,9 @@ def generate(destination=ROOT / "demo"):
     ]
     tables["bank_transactions"] = transactions
     tables["journal_entries"] = sorted(journals, key=lambda r: r["id"])
-    from backend.contracts import records
-
-    classes = {
-        "accounts": records.Account,
-        "trial_balance": records.TrialBalanceRow,
-        "journal_entries": records.JournalEntry,
-        "sales_invoices": records.SalesInvoice,
-        "delivery_notes": records.DeliveryNote,
-        "bank_accounts": records.BankAccount,
-        "bank_transactions": records.BankTransaction,
-    }
     for name, rows in tables.items():
         with (destination / (name + ".csv")).open("w", newline="", encoding="utf-8") as stream:
-            writer = csv.DictWriter(stream, fieldnames=list(classes[name].model_fields), lineterminator="\n")
+            writer = csv.DictWriter(stream, fieldnames=COLUMNS[name], lineterminator="\n")
             writer.writeheader()
             for row in rows:
                 writer.writerow({k: str(v).lower() if isinstance(v, bool) else v for k, v in row.items()})
@@ -481,11 +515,15 @@ def generate(destination=ROOT / "demo"):
     aliases.update({"DOC-RPLBA0100000": "confirmations/12345601.pdf", "DOC-RPLBA0200000": "confirmations/23456702.pdf"})
     document_ids = {d["path"]: d["document_id"] for d in documents}
     fixtures = ROOT.parent / "tests" / "fixtures" / "llm"
-    for source in sorted(fixtures.rglob("*.json")):
+    uploads = ROOT.parent / "tests" / "fixtures" / "llm_variants" / "upload"
+    # 运行副本 = 主固定输出, 加上上传处理中演示也用的那几条程序的固定输出 (同 tests/fixture_sets.UPLOAD_RUNTIME)
+    sources = [(fixtures, path) for path in sorted(fixtures.rglob("*.json"))]
+    sources += [(uploads, path) for pid in UPLOAD_RUNTIME for path in sorted((uploads / pid).glob("*.json"))]
+    for base, source in sources:
         raw = source.read_text(encoding="utf-8")
         for alias, name in aliases.items():
             raw = raw.replace(alias, document_ids[name])
-        target = destination / "llm" / source.relative_to(fixtures)
+        target = destination / "llm" / source.relative_to(base)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(raw, encoding="utf-8")
     # Include runtime fixtures in the manifest, without duplicate entries on regeneration.
