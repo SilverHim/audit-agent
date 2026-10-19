@@ -3100,6 +3100,100 @@ export type PlanningMaterial = {
 };
 
 /**
+ * PresentedEvidence
+ *
+ * 两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源).
+ */
+export type PresentedEvidence = {
+    pointer: EvidencePointer;
+    /**
+     * Origin
+     */
+    origin: 'generator' | 'reviewer' | 'both';
+};
+
+/**
+ * PresentedFailure
+ *
+ * 失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空.
+ */
+export type PresentedFailure = {
+    /**
+     * Source
+     */
+    source: 'run' | 'llm_call' | 'exception';
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Subject Id
+     */
+    subject_id?: string | null;
+    /**
+     * Level Failed
+     */
+    level_failed?: 'syntax' | 'structure' | 'reference' | 'semantic' | null;
+    /**
+     * Errors
+     */
+    errors?: Array<string>;
+    /**
+     * Attempts
+     */
+    attempts?: number | null;
+    /**
+     * Trail Id
+     */
+    trail_id?: string | null;
+    /**
+     * Rule Id
+     */
+    rule_id?: string | null;
+    /**
+     * Amount Cents
+     */
+    amount_cents?: number | null;
+    /**
+     * Detail
+     */
+    detail?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * PresentedSide
+ *
+ * 呈递中的一方: 结论, 推理链与建议. 只有两方各自的内容, 没有比较两方或推荐决定的字段.
+ */
+export type PresentedSide = {
+    /**
+     * Conclusion
+     */
+    conclusion: string | null;
+    /**
+     * Reasoning Chain
+     */
+    reasoning_chain: Array<ReasoningStep>;
+    proposed_action: ProposedAction | null;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Counter Argument
+     */
+    counter_argument?: string | null;
+    /**
+     * Confidence
+     */
+    confidence?: number | null;
+    reason_type?: CriticReasonType | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
  * PriorEstimateOutcome
  *
  * 以前年度会计估计的结果 (ASA 540 回顾性复核).
@@ -4116,6 +4210,58 @@ export type TargetType = 'Judgment' | 'AuditException' | 'ProcedureRun';
 export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute' | 'manual';
 
 /**
+ * TaskPresentation
+ *
+ * 判断呈递 (POST review-tasks/{task_id}/presentations): 审计师打开一条复核任务时按任务类型组装的视图.
+ *
+ * 任务, 程序名, 允许的决定, 仲裁结果, 金额与档位同复核队列 (ReviewTaskView) 的取法; 另给两方 (sides), 两方证据的
+ * 并集 (evidence) 与失败原因 (failure). 规则见 开发接口文档.md 第 10 节 "判断呈递".
+ */
+export type TaskPresentation = {
+    /**
+     * Presentation Id
+     */
+    presentation_id: string;
+    task: ReviewTask;
+    /**
+     * Procedure Name
+     */
+    procedure_name: string;
+    /**
+     * Target
+     */
+    target: Judgment | AuditException | ProcedureRun;
+    /**
+     * Allowed Decisions
+     */
+    allowed_decisions: Array<Decision>;
+    /**
+     * Allowed Resolutions
+     */
+    allowed_resolutions?: Array<DisputeResolution>;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number | null;
+    tier: ReviewTier;
+    /**
+     * Deferred
+     */
+    deferred: boolean;
+    /**
+     * Sides
+     */
+    sides?: {
+        [key: string]: PresentedSide;
+    };
+    /**
+     * Evidence
+     */
+    evidence?: Array<PresentedEvidence>;
+    failure?: PresentedFailure | null;
+};
+
+/**
  * TaskStatus
  *
  * 复核任务状态.
@@ -4978,6 +5124,40 @@ export type ReviewsListReviewTasksResponses = {
 };
 
 export type ReviewsListReviewTasksResponse = ReviewsListReviewTasksResponses[keyof ReviewsListReviewTasksResponses];
+
+export type ReviewsPresentReviewTaskData = {
+    body?: never;
+    path: {
+        /**
+         * Task Id
+         */
+        task_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/review-tasks/{task_id}/presentations';
+};
+
+export type ReviewsPresentReviewTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsPresentReviewTaskError = ReviewsPresentReviewTaskErrors[keyof ReviewsPresentReviewTaskErrors];
+
+export type ReviewsPresentReviewTaskResponses = {
+    /**
+     * Successful Response
+     */
+    200: TaskPresentation;
+};
+
+export type ReviewsPresentReviewTaskResponse = ReviewsPresentReviewTaskResponses[keyof ReviewsPresentReviewTaskResponses];
 
 export type ReviewsSubmitReviewRecordData = {
     body: ReviewRecordIn;

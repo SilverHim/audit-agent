@@ -392,6 +392,18 @@ export const en = {
       original: 'Original conclusion',
       independent: 'Independent review',
     },
+    // 判断呈递 (后端 R152): 争议两方并排, 两方证据的并集, 失败原因
+    presentation: {
+      generator: 'Original judgment',
+      reviewer: 'Independent review',
+      evidence: 'Evidence cited by either side',
+      origins: { both: 'Both sides', generator: 'Original only', reviewer: 'Review only' },
+      subjectFailed: (subject: string) => `The judgment on ${subject} could not be completed`,
+      attempts: (n: number, level: string) =>
+        `The model was called ${n} times; the last output failed the ${level} check`,
+      levels: { syntax: 'format', structure: 'structure', reference: 'citation', semantic: 'meaning' },
+      rule: (rule: string) => `Rule ${rule}`,
+    },
   },
   planning: {
     analytics: 'Preliminary analysis',

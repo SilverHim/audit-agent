@@ -121,6 +121,7 @@ async def seed_turns(trail: FakeTrail, n: int) -> None:
 
 
 async def test_compaction_writes_summary_and_keeps_recent_turns() -> None:
+    """另: 这一轮写的三种留痕 (摘要, 两次 llm_call, conversation) 都记程序 GEN-10 (R152 验收 7); 重建历史不看它."""
     trail = FakeTrail()
     await seed_turns(trail, 3)
     model = ScriptedChatModel(["审计师问过问题 0 与问题 1。", "好的。"])
@@ -137,6 +138,14 @@ async def test_compaction_writes_summary_and_keeps_recent_turns() -> None:
 
     [summary] = entries(trail, TrailKind.conversation_summary)
     assert summary.payload["covers_through"] == "TR-2"
+    written = trail.entries[3:]  # 前 3 条是预置的问答
+    assert [e.kind for e in written] == [
+        TrailKind.llm_call,
+        TrailKind.conversation_summary,
+        TrailKind.llm_call,
+        TrailKind.conversation,
+    ]
+    assert {e.procedure_id for e in written} == {"GEN-10"}
     rebuilt = await load_history(trail, EID)  # 新实例从留痕重建出同样的上下文
     assert rebuilt.summary is not None and rebuilt.summary.text == "审计师问过问题 0 与问题 1。"
     assert [t.question for t in rebuilt.turns] == ["问题 2", "继续"]
@@ -426,7 +435,7 @@ async def disconnect_after_first_delta(stall: Any) -> TrailEntry:
     await asyncio.gather(turn.task, return_exceptions=True)  # type: ignore[arg-type]
     await chat.settle()
     [entry] = entries(trail, TrailKind.conversation)
-    assert entry.payload["aborted"] is True
+    assert (entry.payload["aborted"], entry.procedure_id) == (True, "GEN-10")
     return entry
 
 

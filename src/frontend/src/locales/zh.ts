@@ -359,6 +359,16 @@ export const zh: Messages = {
       original: '原结论',
       independent: '独立复核',
     },
+    presentation: {
+      generator: '原判断',
+      reviewer: '独立复核',
+      evidence: '两方引用的证据',
+      origins: { both: '两方都引用', generator: '只有原判断引用', reviewer: '只有独立复核引用' },
+      subjectFailed: (subject) => `${subject} 的判断没有做成`,
+      attempts: (n, level) => `调用大模型 ${n} 次，最后一次没通过${level}校验`,
+      levels: { syntax: '格式', structure: '结构', reference: '引用', semantic: '语义' },
+      rule: (rule) => `命中规则 ${rule}`,
+    },
   },
   planning: {
     analytics: '初步分析',

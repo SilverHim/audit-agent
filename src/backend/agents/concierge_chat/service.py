@@ -10,6 +10,7 @@
 完成回调上 (_finish, 任务没开始执行就被取消也会做): 释放项目, 另起独立任务写 aborted 留痕 (已发出的部分回答,
 已执行的工具轨迹, 从部分回答匹配的引用), shutdown 等这些写入完成. 流式接口在响应结束时 (含发送失败) 也通知取消,
 不依赖 SSE 生成器被关闭. 还没开始读就断开而又没有发送失败的, 后台任务照常跑完并写留痕. 每次模型调用写 llm_call 留痕.
+三种留痕 (conversation, conversation_summary, llm_call) 的 procedure_id 都记 GEN-10 (PROCEDURE_ID).
 
 同一项目同时只答一个问题 (内存标记, 单 worker), 忙时 begin 抛 ConversationBusy; 与主图的项目锁无关,
 主图在执行时也能提问.
@@ -74,6 +75,7 @@ log = logging.getLogger(__name__)
 PING_SECONDS = 15.0  # 这么久没有事件就发一行 SSE 注释保活, 免得代理断开空闲连接
 LOGGED_TOOL_CHARS = 2000  # llm_call 留痕里每条工具结果最多保留的字符数
 SUMMARY_SYSTEM = "You keep the running summary of a conversation for an audit file. Never continue the conversation."
+PROCEDURE_ID = "GEN-10"  # 进度, 交付物与数据来源解释 (规格书 GEN-10); 不建程序文件, 只用作对话留痕的程序编号
 
 
 @dataclass(frozen=True)
@@ -501,6 +503,7 @@ class ConciergeChat:
             TrailEntry(
                 engagement_id=eid,
                 kind=TrailKind.conversation_summary,
+                procedure_id=PROCEDURE_ID,
                 actor=AgentId.A10,
                 summary=f"审计助理压缩对话历史: {len(old)} 轮问答并入摘要",
                 payload={
@@ -543,6 +546,7 @@ class ConciergeChat:
             TrailEntry(
                 engagement_id=eid,
                 kind=TrailKind.llm_call,
+                procedure_id=PROCEDURE_ID,
                 actor=AgentId.A10,
                 summary=f"审计助理{what}: 第 {step + 1} 次调用大模型",
                 model=result.model,
@@ -588,6 +592,7 @@ class ConciergeChat:
             TrailEntry(
                 engagement_id=eid,
                 kind=TrailKind.conversation,
+                procedure_id=PROCEDURE_ID,
                 actor=user_id,
                 summary=question.question[:80],
                 model=turn.model or None,

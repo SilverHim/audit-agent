@@ -368,7 +368,7 @@ class TrailKind(StrEnum):
     conversation = "conversation"  # 审计助理的一轮问答
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
-    presentation = "presentation"  # 判断呈递: 审计师打开一条复核任务 (尚未使用)
+    presentation = "presentation"  # 判断呈递 (GEN-11): 审计师打开一条复核任务, 每次一行 (services/presentation)
 
 
 class AgentId(StrEnum):
