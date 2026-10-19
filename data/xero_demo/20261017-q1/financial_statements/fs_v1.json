@@ -3,7 +3,7 @@
   "version": 1,
   "prepared_at": "2026-10-22",
   "directors_declaration_date": "2026-10-23",
-  "document_id": "DOC-015c6bb63db8",
+  "document_id": "DOC-e2670a8e43ac",
   "comparative_restatement_entry_nos": [
     "XJ-397"
   ],
@@ -287,6 +287,353 @@
       ],
       "subtotal": true,
       "prior_amount_cents": -791200
+    },
+    {
+      "code": "CE-OPEN",
+      "statement": "changes_in_equity",
+      "name": "Balance at the beginning of the period",
+      "amount_cents": -791200,
+      "sign": -1,
+      "account_codes": [
+        "960",
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CE-NP",
+      "statement": "changes_in_equity",
+      "name": "Loss for the period",
+      "amount_cents": -2213699,
+      "sign": -1,
+      "account_codes": [
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": -791200
+    },
+    {
+      "code": "CE-OCI",
+      "statement": "changes_in_equity",
+      "name": "Other comprehensive income",
+      "amount_cents": 0,
+      "sign": -1,
+      "account_codes": [],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CE-TCI",
+      "statement": "changes_in_equity",
+      "name": "Total comprehensive loss for the period",
+      "amount_cents": -2213699,
+      "sign": -1,
+      "account_codes": [
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493"
+      ],
+      "subtotal": true,
+      "prior_amount_cents": -791200
+    },
+    {
+      "code": "CE-CLOSE",
+      "statement": "changes_in_equity",
+      "name": "Balance at the end of the period",
+      "amount_cents": -3004899,
+      "sign": -1,
+      "account_codes": [
+        "960",
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493"
+      ],
+      "subtotal": true,
+      "prior_amount_cents": -791200
+    },
+    {
+      "code": "CF-NP",
+      "statement": "cash_flows",
+      "name": "Loss for the period",
+      "amount_cents": -2213699,
+      "sign": 1,
+      "account_codes": [
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": -791200
+    },
+    {
+      "code": "CF-REC",
+      "statement": "cash_flows",
+      "name": "Increase in trade receivables",
+      "amount_cents": -1019950,
+      "sign": 1,
+      "account_codes": [
+        "610"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-OREC",
+      "statement": "cash_flows",
+      "name": "Increase in other receivables",
+      "amount_cents": -4853,
+      "sign": 1,
+      "account_codes": [
+        "620"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-PAY",
+      "statement": "cash_flows",
+      "name": "Increase in trade and other payables",
+      "amount_cents": 400507,
+      "sign": 1,
+      "account_codes": [
+        "800",
+        "801",
+        "860"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-TAX",
+      "statement": "cash_flows",
+      "name": "Change in GST and PAYG withholding",
+      "amount_cents": 959317,
+      "sign": 1,
+      "account_codes": [
+        "820",
+        "825"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": -79120
+    },
+    {
+      "code": "CF-EMP",
+      "statement": "cash_flows",
+      "name": "Increase in employee benefit liabilities",
+      "amount_cents": 895856,
+      "sign": 1,
+      "account_codes": [
+        "804",
+        "805",
+        "826"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-OP",
+      "statement": "cash_flows",
+      "name": "Net cash used in operating activities",
+      "amount_cents": -982822,
+      "sign": 1,
+      "account_codes": [
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493",
+        "610",
+        "620",
+        "800",
+        "801",
+        "860",
+        "820",
+        "825",
+        "804",
+        "805",
+        "826"
+      ],
+      "subtotal": true,
+      "prior_amount_cents": -870320
+    },
+    {
+      "code": "CF-INV",
+      "statement": "cash_flows",
+      "name": "Net cash from investing activities",
+      "amount_cents": 0,
+      "sign": 1,
+      "account_codes": [
+        "710",
+        "711"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-FIN",
+      "statement": "cash_flows",
+      "name": "Net cash from financing activities",
+      "amount_cents": 0,
+      "sign": 1,
+      "account_codes": [
+        "840"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 0
+    },
+    {
+      "code": "CF-NET",
+      "statement": "cash_flows",
+      "name": "Net decrease in cash and cash equivalents",
+      "amount_cents": -982822,
+      "sign": 1,
+      "account_codes": [
+        "200",
+        "270",
+        "400",
+        "404",
+        "408",
+        "412",
+        "420",
+        "429",
+        "445",
+        "449",
+        "453",
+        "461",
+        "469",
+        "477",
+        "478",
+        "489",
+        "493",
+        "610",
+        "620",
+        "800",
+        "801",
+        "860",
+        "820",
+        "825",
+        "804",
+        "805",
+        "826",
+        "710",
+        "711",
+        "840"
+      ],
+      "subtotal": true,
+      "prior_amount_cents": -870320
+    },
+    {
+      "code": "CF-OPEN",
+      "statement": "cash_flows",
+      "name": "Cash and cash equivalents at 1 July",
+      "amount_cents": 1050901,
+      "sign": 1,
+      "account_codes": [
+        "090",
+        "091"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 1921221
+    },
+    {
+      "code": "CF-CLOSE",
+      "statement": "cash_flows",
+      "name": "Cash and cash equivalents at end of period",
+      "amount_cents": 68079,
+      "sign": 1,
+      "account_codes": [
+        "090",
+        "091"
+      ],
+      "subtotal": false,
+      "prior_amount_cents": 1050901
     }
   ]
 }

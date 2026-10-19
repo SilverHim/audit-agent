@@ -144,7 +144,7 @@ def test_key_figures_kept() -> None:
     assert "J-GEN-02-1-XJ-575-H1" in rows["判断"]
     assert "每条 2 次, 共 18 次, 全剧本 84 次" in s73
     s95 = section(text, "### 9.5 文件格式与载入端口 (实现时以此为准)")
-    assert "共 29 份 55 页" in s95
+    assert "共 29 份 57 页" in s95
     assert "CLIENT-XERO-3C1332BB-Q1" in section(text, "### 2.6 客户画像 (覆盖载入器产出)")
     assert "(24 行, 只覆盖本期生效发票" in section(text, "### 3.3 补造表的口径")
     assert "| adjustments |" in s31(text) and "5 笔 11 行" in s31(text)
@@ -336,7 +336,8 @@ INDEX_ROWS = [
     "| documents/evidence/jakaranda_quote.pdf | internal_record | internal_copy | 2026-10-08 | BT-090-0099 |",
     "| financial_statements/fs_v1.pdf | financial_statements | internal_original | 2026-10-22 | FS |",
 ]
-# 待审财报 18 行: (code, amount_cents, sign, account_codes, prior_amount_cents)
+# 待审财报 35 行 (与试算表勾稽的 18 行, 权益变动表 5 行, 现金流量表 12 行): (code, amount_cents, sign, account_codes,
+# prior_amount_cents)
 FS_ROWS = [
     ("SOFP-CASH", "1158123", "+1", "091", "1508123"),
     ("SOFP-REC", "1019950", "+1", "610", "0"),
@@ -356,6 +357,23 @@ FS_ROWS = [
     ("PL-OCC", "635600", "+1", "408, 445, 469", "0"),
     ("PL-OTH", "580196", "+1", "400, 404, 412, 420, 429, 449, 453, 461, 489, 493", "1211200"),
     ("PL-NP (小计)", "-2213699", "-1", "全部损益科目", "-791200"),
+    ("CE-OPEN", "-791200", "-1", "960 与全部损益科目", "0"),
+    ("CE-NP", "-2213699", "-1", "全部损益科目", "-791200"),
+    ("CE-OCI", "0", "-1", "无", "0"),
+    ("CE-TCI (小计)", "-2213699", "-1", "全部损益科目", "-791200"),
+    ("CE-CLOSE (小计)", "-3004899", "-1", "960 与全部损益科目", "-791200"),
+    ("CF-NP", "-2213699", "+1", "全部损益科目", "-791200"),
+    ("CF-REC", "-1019950", "+1", "610", "0"),
+    ("CF-OREC", "-4853", "+1", "620", "0"),
+    ("CF-PAY", "400507", "+1", "800, 801, 860", "0"),
+    ("CF-TAX", "959317", "+1", "820, 825", "-79120"),
+    ("CF-EMP", "895856", "+1", "804, 805, 826", "0"),
+    ("CF-OP (小计)", "-982822", "+1", "全部损益科目与 610, 620, 800, 801, 860, 820, 825, 804, 805, 826", "-870320"),
+    ("CF-INV", "0", "+1", "710, 711", "0"),
+    ("CF-FIN", "0", "+1", "840", "0"),
+    ("CF-NET (小计)", "-982822", "+1", "CF-OP 的科目与 710, 711, 840", "-870320"),
+    ("CF-OPEN", "1050901", "+1", "090, 091", "1921221"),
+    ("CF-CLOSE", "68079", "+1", "090, 091", "1050901"),
 ]
 
 
@@ -363,7 +381,7 @@ def test_formats_section() -> None:
     s95 = section(doc(), "### 9.5 文件格式与载入端口 (实现时以此为准)")
     lines = s95.splitlines()
     assert [ln for ln in lines if re.match(r"^\| (?:documents|financial_statements)/", ln)] == INDEX_ROWS
-    fs = [tuple(c.strip() for c in ln.strip("|").split("|")) for ln in lines if re.match(r"^\| (?:SOFP|PL)-", ln)]
+    fs = [tuple(c.strip() for c in ln.strip("|").split("|")) for ln in lines if re.match(r"^\| (?:SOFP|PL|CE|CF)-", ln)]
     assert fs == FS_ROWS
     assert (
         "E001 Oliver Gray 2026-07-20 full_time 14 240000; E002 Tracy Green 2026-07-20 full_time 14 180000; "
@@ -437,6 +455,7 @@ AASB1060_CITED: dict[str, list[tuple[str, str]]] = {
     "16(c)": [("16(c)", "are not entirely comparable")],
     "24": [("24", "shall not offset assets and liabilities or income and expenses, unless required or permitted")],
     "25": [("25", "A complete set of financial statements of an entity shall include all of the following")],
+    "25(c)": [("25(c)", "a statement of changes in equity for the reporting period")],
     "25(c)(d)": [
         ("25(c)", "a statement of changes in equity for the reporting period"),
         ("25(d)", "a statement of cash flows for the reporting period"),
@@ -455,6 +474,9 @@ AASB1060_CITED: dict[str, list[tuple[str, str]]] = {
         ("41", "An entity shall classify all other liabilities as non-current."),
     ],
     "40(d)": [("40(d)", "does not have the right at the reporting date to defer settlement of the liability")],
+    "20": [("20", "disclose comparative information in respect of the previous comparable period for all amounts")],
+    "61": [("61", "for each component of equity, a reconciliation between the carrying amount at the beginning")],
+    "61(a)": [("61(a)", "total comprehensive income for the period")],
     "63": [("63", "retained earnings at the beginning of the reporting period")],
     "64-89": [
         ("64", "information about the changes in cash and cash equivalents"),
@@ -462,6 +484,8 @@ AASB1060_CITED: dict[str, list[tuple[str, str]]] = {
     ],
     "65": [("65", "bank overdrafts are a component of cash and cash equivalents")],
     "66": [("66", "classified by operating activities, investing activities and financing activities")],
+    "70(a)": [("70(a)", "the indirect method, whereby profit or loss is adjusted for the effects of non-cash")],
+    "88": [("88", "a reconciliation of the amounts presented in the statement of cash flows to the equivalent items")],
     "95": [("95", "An entity shall disclose material accounting policy information")],
     "98": [("98", "An entity shall disclose fees to each auditor or reviewer")],
     "110": [("110", "the amount of the correction for each financial statement line item affected")],
@@ -1346,6 +1370,9 @@ def test_engagement_letter_pages() -> None:
     assert (
         "(ASA 510, paragraph 6)" in first and "(ASA 710, paragraph 14)" in first and "Other Matter paragraph" in first
     )
+    # 上期没有编制财报 (定稿第 2.4 节), 与财报附注 1 一致; 不说 "上期财报未经审计" (R293 第 1 轮审核 R293-02)
+    assert "No financial report was prepared for the year ended 30 June 2026." in first
+    assert "Because the comparative information will be unaudited" in first and "not audited" not in first
     assert "4. Responsibilities of the directors" in second and "5. Applicable financial reporting framework" in second
     for item in ("(i) for the preparation", "(ii) for such internal control", "(iii) to provide us with"):
         assert item in second, item  # 第 6(b)(i)-(iii) 段
@@ -2334,6 +2361,8 @@ def test_expense_claim_matches_xero_entry() -> None:
 
 PL_CODES = ["200", "270", "400", "404", "408", "412", "420", "429", "445", "449", "453", "461", "469", "477", "478"]
 PL_CODES += ["489", "493"]  # 17 个损益科目
+EQ_CODES = ["960", *PL_CODES]  # 累计亏损行的科目
+OP_CODES = [*PL_CODES, "610", "620", "800", "801", "860", "820", "825", "804", "805", "826"]  # 经营活动各行的科目
 FS_LINES = [  # 需求清单 R216 的 XERO_FS_V1 (待审财报唯一正本): 代码, 表, 名称, 科目, sign, 小计, 本期, 比较数
     ("SOFP-CASH", "financial_position", "Cash and cash equivalents", ["091"], 1, False, 1158123, 1508123),
     ("SOFP-REC", "financial_position", "Trade receivables", ["610"], 1, False, 1019950, 0),
@@ -2389,7 +2418,36 @@ FS_LINES = [  # 需求清单 R216 的 XERO_FS_V1 (待审财报唯一正本): 代
         -2213699,
         -791200,
     ),
+    # 权益变动表 (R293): 只有累计亏损一项, 2025-07-01 (过渡日) 为 0
+    ("CE-OPEN", "changes_in_equity", "Balance at the beginning of the period", EQ_CODES, -1, False, -791200, 0),
+    ("CE-NP", "changes_in_equity", "Loss for the period", PL_CODES, -1, False, -2213699, -791200),
+    ("CE-OCI", "changes_in_equity", "Other comprehensive income", [], -1, False, 0, 0),  # 第 61(a) 段, 两期都为 0
+    ("CE-TCI", "changes_in_equity", "Total comprehensive loss for the period", PL_CODES, -1, True, -2213699, -791200),
+    ("CE-CLOSE", "changes_in_equity", "Balance at the end of the period", EQ_CODES, -1, True, -3004899, -791200),
+    # 现金流量表 (R293, 间接法): 各变动行为财务状况表对应行的变动对现金的影响; 透支计入现金及现金等价物
+    ("CF-NP", "cash_flows", "Loss for the period", PL_CODES, 1, False, -2213699, -791200),
+    ("CF-REC", "cash_flows", "Increase in trade receivables", ["610"], 1, False, -1019950, 0),
+    ("CF-OREC", "cash_flows", "Increase in other receivables", ["620"], 1, False, -4853, 0),
+    ("CF-PAY", "cash_flows", "Increase in trade and other payables", ["800", "801", "860"], 1, False, 400507, 0),
+    ("CF-TAX", "cash_flows", "Change in GST and PAYG withholding", ["820", "825"], 1, False, 959317, -79120),
+    ("CF-EMP", "cash_flows", "Increase in employee benefit liabilities", ["804", "805", "826"], 1, False, 895856, 0),
+    ("CF-OP", "cash_flows", "Net cash used in operating activities", OP_CODES, 1, True, -982822, -870320),
+    ("CF-INV", "cash_flows", "Net cash from investing activities", ["710", "711"], 1, False, 0, 0),
+    ("CF-FIN", "cash_flows", "Net cash from financing activities", ["840"], 1, False, 0, 0),
+    (
+        "CF-NET",
+        "cash_flows",
+        "Net decrease in cash and cash equivalents",
+        [*OP_CODES, "710", "711", "840"],
+        1,
+        True,
+        -982822,
+        -870320,
+    ),
+    ("CF-OPEN", "cash_flows", "Cash and cash equivalents at 1 July", ["090", "091"], 1, False, 1050901, 1921221),
+    ("CF-CLOSE", "cash_flows", "Cash and cash equivalents at end of period", ["090", "091"], 1, False, 68079, 1050901),
 ]
+TB_LINES = [x for x in FS_LINES if x[1] in ("financial_position", "profit_or_loss")]  # 与试算表勾稽的 18 行
 
 
 def test_financial_statements_json() -> None:
@@ -2431,8 +2489,8 @@ def test_financial_statements_json() -> None:
 
 def test_financial_statements_pdf() -> None:
     pages = pdf_texts(SUPPLEMENTS / generator.FS_PDF)
-    assert len(pages) == 4
-    first, second, third, fourth = pages
+    assert len(pages) == 6
+    first, second, equity, cash, third, fourth = pages
     assert "FINANCIAL REPORT FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026" in first  # 第 6 批的期间写法
     assert "STATEMENT OF FINANCIAL POSITION AS AT 30 SEPTEMBER 2026" in first
     for row in (
@@ -2457,7 +2515,48 @@ def test_financial_statements_pdf() -> None:
         "Loss for the period (22,136.99) (7,912.00)",
     ):
         assert row in second
+    assert "restated" not in " ".join(pages)  # 上期没有编制财报, 比较数是首次按准则编制, 不是重述 (R293)
+    assert "The comparative figures are unaudited and include the opening bank balances" in first
+    assert "STATEMENT OF CHANGES IN EQUITY" in equity and "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026" in equity
+    for row in (
+        "Balance at the beginning of the period (7,912.00) -",
+        "Loss for the period (22,136.99) (7,912.00)",
+        "Other comprehensive income - -",  # 第 61(a) 段
+        "Total comprehensive loss for the period (22,136.99) (7,912.00)",
+        "Balance at the end of the period (30,048.99) (7,912.00)",
+    ):
+        assert row in equity, row
+    assert "no transactions with owners in their capacity as owners in either period" in equity
+    assert "STATEMENT OF CASH FLOWS" in cash and "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026" in cash
+    for heading in (  # 第 66 段的三类活动 (第 1 轮审核 R293-04)
+        "Cash flows from operating activities Loss for the period",
+        "Changes in operating assets and liabilities: Increase in trade receivables",
+        "Cash flows from investing activities Net cash from investing activities",
+        "Cash flows from financing activities Net cash from financing activities",
+    ):
+        assert heading in cash, heading
+    for row in (
+        "Loss for the period (22,136.99) (7,912.00)",
+        "Increase in trade receivables (10,199.50) -",
+        "Change in GST and PAYG withholding 9,593.17 (791.20)",
+        "Net cash used in operating activities (9,828.22) (8,703.20)",
+        "Net cash from investing activities - -",
+        "Net cash from financing activities - -",
+        "Net decrease in cash and cash equivalents (9,828.22) (8,703.20)",
+        "Cash and cash equivalents at 1 July 10,509.01 19,212.21",
+        "Cash and cash equivalents at end of period 680.79 10,509.01",
+        "Cash at bank 11,581.23 15,081.23",  # 第 88 段的调节
+        "Bank overdraft 3 (10,900.44) (4,572.22)",
+        "Total 680.79 10,509.01",
+    ):
+        assert row in cash, row
+    assert "repayable on demand and forms part of the Company's cash management" in cash  # 第 65 段
+    assert "indirect method" in cash
     assert "1. Basis of preparation" in third and "the 3 months from 1 July 2026 to 30 September 2026" in third
+    assert "did not present financial statements for previous periods" in third  # 第 212 段
+    assert "the date of transition is 1 July 2025" in third
+    assert "to meet the shareholders agreement of 15 June 2026" in third  # 第 16(b) 段: 缩短的原因
+    assert "Material accounting policies:" in third and "for each on-site day as it is provided" in third  # 第 95 段
     assert "section 323D(2A)" in third and "have not been audited" in third and "(journal #397)" in third
     assert "2. Going concern" in third and "loss of AUD 22,136.99 for the financial year ended" in third
     assert "current liabilities exceeded its current assets by AUD 30,048.99" in third
@@ -2474,6 +2573,10 @@ def test_financial_statements_pdf() -> None:
     assert "4. Events after the reporting period" in fourth and "Harbourview Nominees Pty Ltd" in fourth
     assert "office furniture for AUD 6,300.00" in fourth and "a laptop for AUD 1,969.99" in fourth
     assert "the director lent the Company a further AUD 2,500.00" in fourth
+    assert "authorised for issue by the sole director, Alex Morgan, on 23 October 2026" in fourth  # 第 186 段
+    assert "5. Auditor's remuneration" in fourth and "AUD 4,800 (excluding GST)" in fourth  # 第 98 段
+    assert "(year ended 30 June 2026: nil, as no financial report was prepared for that year)" in fourth  # 第 20 段
+    assert "The auditor provided no other services in either period." in fourth
     assert "DIRECTOR'S DECLARATION" in fourth and "Alex Morgan, Director 23 October 2026" in fourth
     assert "pay its debts as and when they become due and payable" in fourth  # s295(4)(c)
     assert "in accordance with a resolution of the director" in fourth  # s295(5)(a)
@@ -2533,11 +2636,11 @@ def test_r68_index_rows_and_counts() -> None:
     )
     assert not any(r.startswith("representation/") for r in rows)  # 声明书经上传接口登记, 不进 index.csv
     docs = manifest_documents()
-    assert docs[generator.FS_PDF][:5] == ("financial_statements", "internal_original", "2026-10-22", "statements", 4)
+    assert docs[generator.FS_PDF][:5] == ("financial_statements", "internal_original", "2026-10-22", "statements", 6)
     manifest = read("manifest.json")
     assert checker.check_document_counts(SUPPLEMENTS, manifest) == []  # type: ignore[arg-type]
     registrations = [d[3] for d in docs.values()]
-    assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 55  # type: ignore[call-overload]
+    assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 57  # type: ignore[call-overload]
     assert {r: registrations.count(r) for r in set(registrations)} == {
         "acceptance": 2,
         "fieldwork": 19,
@@ -2640,7 +2743,9 @@ def test_financial_statement_problems(tmp_path: Path) -> None:
     assert checker.check_financial_statements(copy, manifest) == [
         f"{where}: 与规格 financial_statements 段不一致",
         f"{where}: 小计 SOFP-TA 的 amount_cents 不等于所含各行之和",
+        f"{where}: CF-CLOSE 的 amount_cents 不等于 SOFP-CASH 减 SOFP-OD",  # 现金流量表期末与财务状况表对不上
         f"{pdf}: 第 1 页文本层没有 SOFP-CASH 的名称与本期, 比较数",
+        f"{pdf}: 第 4 页文本层没有调节行 Cash at bank",
     ]
     fs["lines"][0]["amount_cents"] -= 1
     fs["lines"][6]["account_codes"].append("091")  # SOFP-PAY 也映射 091
@@ -2664,19 +2769,32 @@ def test_financial_statement_problems(tmp_path: Path) -> None:
 
 
 def test_financial_statement_pages_swapped(tmp_path: Path) -> None:
-    """财务状况表与损益表互换页码时报出 (各行只在该表所在页找)."""
+    """财务状况表与损益表互换页码, 或权益变动表与现金流量表互换页码时报出 (各行只在该表所在页找)."""
     copy, _, fs = fs_copy(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
     pages = ["\n".join(p) for p in next(d for d in spec()["documents"] if d["path"] == generator.FS_PDF)["pages"]]
     pdf = copy / generator.FS_PDF
     generator.write_pdf(pdf, [pages[1], pages[0], *pages[2:]], "x", HEADER)
     got = checker.check_financial_statements(copy, manifest)
-    assert got == [
+    assert got == [  # 权益变动表与现金流量表在第 3, 4 页, 不受影响
         f"{pdf}: 第 {checker.FS_PAGES[x['statement']]} 页文本层没有 {x['code']} 的名称与本期, 比较数"
         for x in fs["lines"]
+        if x["statement"] in checker.TB_STATEMENTS
     ]
-    generator.write_pdf(pdf, pages[:1], "x", HEADER)
-    assert checker.check_financial_statements(copy, manifest) == [f"{pdf}: 文件不存在, 无法解析或不足 2 页"]
+    generator.write_pdf(pdf, [*pages[:2], pages[3], pages[2], *pages[4:]], "x", HEADER)
+    got = checker.check_financial_statements(copy, manifest)
+    assert got == [
+        *(
+            f"{pdf}: 第 {checker.FS_PAGES[x['statement']]} 页文本层没有 {x['code']} 的名称与本期, 比较数"
+            for x in fs["lines"]  # 两张表都有同名同数的 "Loss for the period" 行 (CE-NP, CF-NP), 换页也找得到
+            if x["statement"] not in checker.TB_STATEMENTS and x["code"] not in ("CE-NP", "CF-NP")
+        ),
+        f"{pdf}: 第 4 页文本层没有调节行 Cash at bank",
+        f"{pdf}: 第 4 页文本层没有调节行 Bank overdraft",
+        f"{pdf}: 第 4 页文本层没有调节行 Total",
+    ]
+    generator.write_pdf(pdf, pages[:3], "x", HEADER)
+    assert checker.check_financial_statements(copy, manifest) == [f"{pdf}: 文件不存在, 无法解析或不足 4 页"]
 
 
 def test_financial_statement_totals_problems(tmp_path: Path) -> None:
@@ -2699,8 +2817,63 @@ def test_financial_statement_totals_problems(tmp_path: Path) -> None:
         f"{where}: 小计 PL-NP 的科目不等于所含各行的科目",
         f"{where}: prior_amount_cents 资产 1508123 不等于负债 2299323 加权益 -791100",
         f"{where}: 期初 SOFP-EQ 加本期 PL-NP 不等于期末 SOFP-EQ",
+        f"{where}: CE-CLOSE 的 prior_amount_cents 不等于 SOFP-EQ",  # 权益变动表的上期末随之对不上
         f"{copy / generator.FS_PDF}: 第 1 页文本层没有 SOFP-EQ 的名称与本期, 比较数",
     ]
+
+
+def fs_items(**changes: dict) -> list:
+    """fs_v1.json 的各行 (FinancialStatementLine), 按行代码改字段; 值为 None 的行代码删去该行."""
+    items = []
+    for line in read(generator.FS_JSON)["lines"]:  # type: ignore[index]
+        update = changes.get(line["code"].replace("-", "_"), {})
+        if update is not None:
+            items.append(checker.FinancialStatementLine.model_validate({**line, **update}))
+    return items
+
+
+def test_equity_and_cash_flow_problems() -> None:
+    """权益变动表与现金流量表 (R293) 与财务状况表, 损益表对不上时报出; 正式目录的行全部一致 (10 组变异)."""
+    check = checker.equity_and_cash_flow_problems
+    assert check(fs_items()) == []
+    assert check(fs_items(CF_REC={"amount_cents": -1019951})) == [
+        "CF-REC 不等于 SOFP-REC 的变动对现金的影响",
+        "CF-OP 的 amount_cents 不等于经营各行之和",
+    ]
+    assert check(fs_items(CF_EMP=None)) == [  # 漏了员工薪酬负债的变动
+        "现金流量表没有 SOFP-EMP 的变动",
+        "CF-OP 的 amount_cents 不等于经营各行之和",
+    ]
+    assert check(fs_items(CF_PAY={"account_codes": ["800", "860"]})) == [
+        "CF-PAY 在财务状况表中没有科目相同的一行",
+        "现金流量表没有 SOFP-PAY 的变动",
+    ]
+    assert check(fs_items(CE_NP={"prior_amount_cents": -791100})) == [
+        "CE-TCI 的 prior_amount_cents 不等于 CE-NP 加 CE-OCI",
+        "CE-NP 或 CF-NP 的 prior_amount_cents 不等于 PL-NP",
+    ]
+    assert check(fs_items(CE_OCI={"amount_cents": 100})) == [  # 损益表没有其他综合收益, 权益变动表也只能为 0
+        "CE-TCI 的 amount_cents 不等于 CE-NP 加 CE-OCI",
+        "CE-OCI 的 amount_cents 应为 0 (损益表没有其他综合收益)",
+    ]
+    assert check(fs_items(CE_TCI={"amount_cents": -2213698})) == [
+        "CE-TCI 的 amount_cents 不等于 CE-NP 加 CE-OCI",
+        "CE-CLOSE 的 amount_cents 不等于 CE-OPEN 加 CE-TCI",
+    ]
+    assert check(fs_items(CE_OPEN={"amount_cents": 0}, CF_OPEN={"amount_cents": 1050900})) == [
+        "CE-CLOSE 的 amount_cents 不等于 CE-OPEN 加 CE-TCI",
+        "CE-OPEN 的本期数不等于上期的 CE-CLOSE",
+        "CF-CLOSE 的 amount_cents 不等于 CF-OPEN 加 CF-NET",
+        "CF-OPEN 的本期数不等于上期的 CF-CLOSE",
+    ]
+    assert check(fs_items(CF_NET={"prior_amount_cents": 0}, CF_CLOSE={"amount_cents": 68078})) == [
+        "CF-CLOSE 的 amount_cents 不等于 CF-OPEN 加 CF-NET",
+        "CF-CLOSE 的 amount_cents 不等于 SOFP-CASH 减 SOFP-OD",
+        "CF-NET 的 prior_amount_cents 不等于经营, 投资与筹资之和",
+        "CF-CLOSE 的 prior_amount_cents 不等于 CF-OPEN 加 CF-NET",
+    ]
+    assert check(fs_items(CE_OPEN=None, CF_FIN=None)) == ["缺行 CE-OPEN, CF-FIN"]
+    assert check(fs_items(PL_NP=None)) == []  # 缺合计行由 check_financial_statements 报出, 不重复
 
 
 @needs_snapshot
@@ -2716,7 +2889,7 @@ def test_financial_statements_tie_to_trial_balance(tmp_path: Path) -> None:
     for row in checker.adjustment_entries(SUPPLEMENTS) or []:
         tb[row.account_code] += row.debit_cents - row.credit_cents
     assert len(tb) == 33  # 27 行加 804, 805, 826, 478, 620, 270
-    for code, _, _, codes, sign, _, cents, _ in FS_LINES:
+    for code, _, _, codes, sign, _, cents, _ in TB_LINES:
         assert cents == sign * sum(tb[c] for c in codes), code
     copy, path, fs = fs_copy(tmp_path)
     where = path
@@ -2736,6 +2909,9 @@ def test_financial_statements_tie_to_trial_balance(tmp_path: Path) -> None:
         f"{where}: PL-OTH 不等于期末试算表加更正分录",
         f"{where}: 映射的科目应恰为期末试算表与更正分录的 33 个 (缺 ['801'], 多 [])",
         f"{where}: PL-OTH 的科目 960 类型与所在报表不符",
+        # 没有重述分录时过渡日余额全为 0: 董事借款与现金及现金等价物在比较期内 "凭空" 出现
+        f"{where}: CF-FIN 的比较数不等于 SOFP-DLOAN 自过渡日起的变动对现金的影响",
+        f"{where}: CF-OPEN 的比较数不等于过渡日的 SOFP-CASH 减 SOFP-OD",
     ]
     fs["comparative_restatement_entry_nos"] = ["XJ-9999"]
     path.write_text(json.dumps(fs), encoding="utf-8")

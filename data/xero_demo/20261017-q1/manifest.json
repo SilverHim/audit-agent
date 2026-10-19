@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "3234e2ca564ad2376109b42db99a38f612f5f8394812007ca64e8f0ce8c081b2",
+  "spec_sha256": "5739eea91612e99efa4b7477c3bacb4e9a003a18ed8a3621d8fce7b2d2363b3f",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -181,7 +181,7 @@
     },
     {
       "path": "documents/engagement/engagement_letter.pdf",
-      "sha256": "351f2ee6630740c4fce3515bde8bd0bd15440e9674937a6197a7e3eb6a8b8483",
+      "sha256": "a1d90b7c8a8c68de648fc1054fbc3855b4cde512d894debb6ca73ade256922c5",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -342,7 +342,7 @@
     },
     {
       "path": "financial_statements/fs_v1.json",
-      "sha256": "0aabf1490426aff6110434924741a6a43534b1a59a8b4b96fd6609801f9ff8c7",
+      "sha256": "df99f2978724105cf94b093c97dbfd5ef0c8794f015b908a0d9ae3bd2d596b23",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": [
@@ -351,7 +351,7 @@
     },
     {
       "path": "financial_statements/fs_v1.pdf",
-      "sha256": "015c6bb63db8a4d968a44691f5a9d277e3599e906a8afc2869f3819104e00581",
+      "sha256": "e2670a8e43ace7a668789d5f5fefa66fd35f85526101328d7600841f7a46fee7",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -565,8 +565,8 @@
     },
     {
       "path": "documents/engagement/engagement_letter.pdf",
-      "sha256": "351f2ee6630740c4fce3515bde8bd0bd15440e9674937a6197a7e3eb6a8b8483",
-      "document_id": "DOC-351f2ee66307",
+      "sha256": "a1d90b7c8a8c68de648fc1054fbc3855b4cde512d894debb6ca73ade256922c5",
+      "document_id": "DOC-a1d90b7c8a8c",
       "type": "engagement_letter",
       "reliability": "external_copy",
       "page_count": 3,
@@ -814,11 +814,11 @@
     },
     {
       "path": "financial_statements/fs_v1.pdf",
-      "sha256": "015c6bb63db8a4d968a44691f5a9d277e3599e906a8afc2869f3819104e00581",
-      "document_id": "DOC-015c6bb63db8",
+      "sha256": "e2670a8e43ace7a668789d5f5fefa66fd35f85526101328d7600841f7a46fee7",
+      "document_id": "DOC-e2670a8e43ac",
       "type": "financial_statements",
       "reliability": "internal_original",
-      "page_count": 4,
+      "page_count": 6,
       "document_date": "2026-10-22",
       "related_ids": [
         "FS"

@@ -763,7 +763,7 @@ class FinancialStatementLine(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     code: str
-    statement: Literal["financial_position", "profit_or_loss"]
+    statement: Literal["financial_position", "profit_or_loss", "changes_in_equity", "cash_flows"]
     name: str
     amount_cents: int
     sign: Literal[1, -1]
@@ -786,7 +786,14 @@ class FinancialStatements(BaseModel):
 
 
 FS_TOTALS = ("SOFP-TA", "SOFP-TL", "SOFP-EQ", "PL-NP")  # 资产合计, 负债合计, 累计亏损, 本期损益的行代码 (第 4.7 节)
-FS_PAGES = {"financial_position": 1, "profit_or_loss": 2}  # 两张表在 fs_v1.pdf 的页码 (R68 验收 2)
+# 四张表在 fs_v1.pdf 的页码 (R68 验收 2, R293)
+FS_PAGES = {"financial_position": 1, "profit_or_loss": 2, "changes_in_equity": 3, "cash_flows": 4}
+TB_STATEMENTS = ("financial_position", "profit_or_loss")  # 各行 = sign × Σ 试算表映射科目的两张表 (FIN-12 只勾稽这些行)
+# 权益变动表: 期初, 本期损益, 其他综合收益, 综合收益总额 (AASB 1060 第 61(a) 段), 期末
+EQUITY_LINES = ("CE-OPEN", "CE-NP", "CE-OCI", "CE-TCI", "CE-CLOSE")
+# 现金流量表 (间接法): 本期损益, 经营类资产负债的变动, 经营小计, 投资, 筹资, 净变动, 期初与期末现金及现金等价物
+CASH_FLOW_LINES = ("CF-NP", "CF-OP", "CF-INV", "CF-FIN", "CF-NET", "CF-OPEN", "CF-CLOSE")
+CASH_EQUIVALENTS = ("SOFP-CASH", "SOFP-OD")  # 现金及现金等价物 = 现金减透支 (透支随时可要求偿还, 第 2.4 节)
 
 
 def read_financial_statements(directory: Path) -> FinancialStatements | None:
@@ -811,10 +818,11 @@ def shown(line: FinancialStatementLine, cents: int | None) -> str:
 
 def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> list[str]:
     """待审财报 fs_v1.json (第 4.7, 9.5 节): 合模型, 与规格一致, 行代码不重复, document_id 是 fs_v1.pdf 的文件 ID;
-    同一张表的非小计行之间科目不重复, 小计 = sign × Σ (所含各行 sign × 金额), 所含各行的科目合起来等于小计的科目;
-    资产 = 负债 + 权益 (本期与比较数); 期初累计亏损加本期损益等于期末; 每行的名称, 本期与比较数在 PDF 中该表所在
-    页 (FS_PAGES) 的文本层.
-    各行金额与试算表的勾稽由快照核对 (snapshot_financial_statements)."""
+    财务状况表与损益表 (TB_STATEMENTS): 同一张表的非小计行之间科目不重复, 小计 = sign × Σ (所含各行 sign × 金额),
+    所含各行的科目合起来等于小计的科目; 资产 = 负债 + 权益 (本期与比较数); 期初累计亏损加本期损益等于期末;
+    权益变动表与现金流量表与这两张表一致 (equity_and_cash_flow_problems); 每行的名称, 本期与比较数在 PDF 中该表所在
+    页 (FS_PAGES) 的文本层, 现金流量表页另有现金, 透支到现金及现金等价物的调节.
+    各行金额与试算表的勾稽, 比较期现金流量与过渡日余额的核对由快照做 (snapshot_financial_statements)."""
     spec = gen.load_spec()["financial_statements"]
     where = rel(directory / gen.FS_JSON)
     try:
@@ -833,7 +841,7 @@ def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> lis
     if fs.document_id != documents.get(gen.FS_PDF, {}).get("document_id"):
         problems.append(f"{where}: document_id 不是 {gen.FS_PDF} 的文件 ID")
     lines = {x.code: x for x in fs.lines}
-    for statement in ("financial_position", "profit_or_loss"):
+    for statement in TB_STATEMENTS:
         items = [x for x in fs.lines if x.statement == statement and not x.subtotal]
         mapped = [c for x in items for c in x.account_codes]
         if len(set(mapped)) != len(mapped):
@@ -858,6 +866,7 @@ def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> lis
             problems.append(f"{where}: {equity.code} 未含 {profit.code} 的全部损益科目")
     else:
         problems.append(f"{where}: 缺行 {', '.join(c for c in FS_TOTALS if c not in lines)}")
+    problems += [f"{where}: {p}" for p in equity_and_cash_flow_problems(fs.lines)]
     texts = pdf_pages(directory / gen.FS_PDF)
     if texts is None or len(texts) < max(FS_PAGES.values()):
         problems.append(f"{rel(directory / gen.FS_PDF)}: 文件不存在, 无法解析或不足 {max(FS_PAGES.values())} 页")
@@ -869,6 +878,95 @@ def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> lis
                 row + re.escape(shown(x, x.prior_amount_cents)) + r"(?: |$)", normalize_case(texts[page - 1])
             ):
                 problems.append(f"{rel(directory / gen.FS_PDF)}: 第 {page} 页文本层没有 {x.code} 的名称与本期, 比较数")
+        if all(c in lines for c in (*CASH_EQUIVALENTS, "CF-CLOSE")):
+            cash, overdraft = (lines[c] for c in CASH_EQUIVALENTS)
+            reconciliation = [
+                ("Cash at bank", cash.amount_cents, cash.prior_amount_cents),
+                ("Bank overdraft", -overdraft.amount_cents, -(overdraft.prior_amount_cents or 0)),
+                ("Total", lines["CF-CLOSE"].amount_cents, lines["CF-CLOSE"].prior_amount_cents),
+            ]
+            page = FS_PAGES["cash_flows"]
+            for name, current, prior in reconciliation:
+                amounts = f"{re.escape(amount_text(current))} {re.escape(amount_text(prior))}"
+                row = rf"{re.escape(name)}(?: \d+)? {amounts}(?: |$)"
+                if not re.search(row, normalize_case(texts[page - 1])):
+                    problems.append(f"{rel(directory / gen.FS_PDF)}: 第 {page} 页文本层没有调节行 {name}")
+    return problems
+
+
+def amount_text(cents: int | None) -> str:
+    """报表 PDF 的金额写法同 shown, 不区分报表 (负数加括号, 0 写 "-")."""
+    if not cents:
+        return "-"
+    text = f"{abs(cents) // 100:,}.{abs(cents) % 100:02d}"
+    return f"({text})" if cents < 0 else text
+
+
+def cash_effect(line: FinancialStatementLine, field: str, opening: int = 0) -> int:
+    """财务状况表某行的变动对现金的影响 (间接法): 资产增加为流出, 负债增加为流入; field 为 amount_cents 时比
+    本期与上期末, 为 prior_amount_cents 时比上期末与 opening (过渡日余额, 由快照核对)."""
+    end = getattr(line, field) or 0
+    start = (line.prior_amount_cents or 0) if field == "amount_cents" else opening
+    return -line.sign * (end - start)
+
+
+def equity_and_cash_flow_problems(items: list[FinancialStatementLine]) -> list[str]:
+    """权益变动表 (EQUITY_LINES) 与现金流量表 (间接法) 与财务状况表, 损益表一致 (本期与比较数):
+    - 权益变动表: 综合收益总额等于本期损益加其他综合收益, 其他综合收益为 0 (损益表没有其他综合收益的行); 期初加
+      综合收益总额等于期末; 本期损益等于 PL-NP; 期末等于 SOFP-EQ; 本期的期初等于上期的期末.
+    - 现金流量表: CF-NP 等于 PL-NP; 其余经营行与投资, 筹资行各对应财务状况表中科目相同的一行, 本期金额为该行变动
+      对现金的影响 (cash_effect); 现金, 透支与累计亏损以外的财务状况表非小计行都有对应 (变动不漏); 经营小计等于经营
+      各行之和, 净变动等于经营, 投资与筹资之和; 期初加净变动等于期末; 期末等于现金减透支 (CASH_EQUIVALENTS);
+      本期的期初等于上期的期末. 比较期各变动行对过渡日余额的核对见 snapshot_financial_statements."""
+    lines = {x.code: x for x in items}
+    problems: list[str] = []
+    if any(c not in lines for c in FS_TOTALS):
+        return []  # 缺财务状况表或损益表的合计行, 已由 check_financial_statements 报出
+    needed = [*EQUITY_LINES, *CASH_FLOW_LINES, *CASH_EQUIVALENTS]
+    if any(c not in lines for c in needed):
+        return [f"缺行 {', '.join(c for c in needed if c not in lines)}"]
+    fields = ("amount_cents", "prior_amount_cents")
+    value = {(c, f): getattr(x, f) or 0 for c, x in lines.items() for f in fields}
+    opening, profit, other, total, closing = EQUITY_LINES
+    for f in fields:
+        if value[profit, f] + value[other, f] != value[total, f]:
+            problems.append(f"{total} 的 {f} 不等于 {profit} 加 {other}")
+        if value[other, f] != 0:
+            problems.append(f"{other} 的 {f} 应为 0 (损益表没有其他综合收益)")
+        if value[opening, f] + value[total, f] != value[closing, f]:
+            problems.append(f"{closing} 的 {f} 不等于 {opening} 加 {total}")
+        if value[profit, f] != value["PL-NP", f] or value["CF-NP", f] != value["PL-NP", f]:
+            problems.append(f"{profit} 或 CF-NP 的 {f} 不等于 PL-NP")
+        if value[closing, f] != value["SOFP-EQ", f]:
+            problems.append(f"{closing} 的 {f} 不等于 SOFP-EQ")
+    if value[opening, "amount_cents"] != value[closing, "prior_amount_cents"]:
+        problems.append(f"{opening} 的本期数不等于上期的 {closing}")
+    position = [x for x in items if x.statement == "financial_position" and not x.subtotal]
+    flows = [x for x in items if x.statement == "cash_flows" and not x.subtotal and x.code not in CASH_FLOW_LINES]
+    movements = [*flows, lines["CF-INV"], lines["CF-FIN"]]
+    for x in movements:
+        match = [p for p in position if p.account_codes == x.account_codes]
+        if len(match) != 1:
+            problems.append(f"{x.code} 在财务状况表中没有科目相同的一行")
+        elif x.amount_cents != cash_effect(match[0], "amount_cents"):
+            problems.append(f"{x.code} 不等于 {match[0].code} 的变动对现金的影响")
+    covered = {p.code for p in position for x in movements if p.account_codes == x.account_codes}
+    missing = [p.code for p in position if p.code not in covered and p.code not in (*CASH_EQUIVALENTS, "SOFP-EQ")]
+    if missing:
+        problems.append(f"现金流量表没有 {', '.join(missing)} 的变动")
+    cash, overdraft = CASH_EQUIVALENTS
+    for f in fields:
+        operating = value["CF-NP", f] + sum(getattr(x, f) or 0 for x in flows)
+        if value["CF-OP", f] != operating:
+            problems.append(f"CF-OP 的 {f} 不等于经营各行之和")
+        if value["CF-NET", f] != value["CF-OP", f] + value["CF-INV", f] + value["CF-FIN", f]:
+            problems.append(f"CF-NET 的 {f} 不等于经营, 投资与筹资之和")
+        if value["CF-OPEN", f] + value["CF-NET", f] != value["CF-CLOSE", f]:
+            problems.append(f"CF-CLOSE 的 {f} 不等于 CF-OPEN 加 CF-NET")
+        if value["CF-CLOSE", f] != value[cash, f] - value[overdraft, f]:
+            problems.append(f"CF-CLOSE 的 {f} 不等于 {cash} 减 {overdraft}")
+    if value["CF-OPEN", "amount_cents"] != value["CF-CLOSE", "prior_amount_cents"]:
+        problems.append("CF-OPEN 的本期数不等于上期的 CF-CLOSE")
     return problems
 
 
@@ -971,7 +1069,7 @@ def check_manual(directory: Path, manifest: dict[str, Any]) -> list[str]:
     return problems
 
 
-DOCUMENT_COUNTS = (29, 55)  # 补造 document 的份数与总页数 (第 9.5 节)
+DOCUMENT_COUNTS = (29, 57)  # 补造 document 的份数与总页数 (第 9.5 节)
 # 各登记途径的份数: 演示数据导入上传 (承接时停在 ACC-01 闸门, P1 开头停在等数据时, 完成阶段按补交请求), 人工任务上传,
 # 登记 mock 回执存档, 函证 mock 银行直达存档
 REGISTRATION_COUNTS = {"acceptance": 2, "fieldwork": 19, "statements": 1, "manual": 1, "registry": 4, "confirmation": 2}
@@ -1441,10 +1539,13 @@ def snapshot_adjustments(directory: Path, snapshot: gen.Snapshot) -> list[str]:
 
 
 def snapshot_financial_statements(directory: Path, snapshot: gen.Snapshot) -> list[str]:
-    """财报与快照 (第 4.7, 6.6 节): 每行 = sign × Σ (期末试算表加更正分录) 映射科目, 比较数 = sign × Σ (上期末
-    试算表加 comparative_restatement_entry_nos 的分录) 映射科目; 两张表的非小计行合起来恰好映射期末试算表与更正
-    分录的全部科目 (33 个), 上期末试算表与重述分录的科目也都有映射; 损益科目在损益表与累计亏损行, 其余只在
-    财务状况表."""
+    """财报与快照 (第 4.7, 6.6 节): 财务状况表与损益表 (TB_STATEMENTS) 每行 = sign × Σ (期末试算表加更正分录)
+    映射科目, 比较数 = sign × Σ (上期末试算表加 comparative_restatement_entry_nos 的分录) 映射科目; 两张表的非小计行
+    合起来恰好映射期末试算表与更正分录的全部科目 (33 个), 上期末试算表与重述分录的科目也都有映射; 损益科目在损益表
+    与累计亏损行, 其余只在财务状况表.
+    比较期的期初 (过渡日 2025-07-01, 第 2.4 节): 各行余额为 sign × Σ 重述分录 (XJ-397 的转换余额全年不变), 其余为 0;
+    现金流量表各变动行的比较数为财务状况表对应行从过渡日到上期末的变动对现金的影响, CF-OPEN 的比较数为过渡日的现金
+    减透支, CE-OPEN 的比较数为过渡日的累计亏损."""
     from backend.adapters.xero_dataset import journal_entries_from_api, journal_rows, map_accounts, trial_balance_cents
 
     try:
@@ -1468,12 +1569,13 @@ def snapshot_financial_statements(directory: Path, snapshot: gen.Snapshot) -> li
     restated = Counter(prior)
     for row in journal_rows(restating):
         restated[row.account_code] += row.debit_cents - row.credit_cents
-    for x in fs.lines:
+    tb_lines = [x for x in fs.lines if x.statement in TB_STATEMENTS]
+    for x in tb_lines:
         if x.amount_cents != x.sign * sum(current[c] for c in x.account_codes):
             problems.append(f"{where}: {x.code} 不等于期末试算表加更正分录")
         if (x.prior_amount_cents or 0) != x.sign * sum(restated[c] for c in x.account_codes):
             problems.append(f"{where}: {x.code} 的比较数不等于上期末试算表加重述分录")
-    mapped = {c for x in fs.lines if not x.subtotal for c in x.account_codes}
+    mapped = {c for x in tb_lines if not x.subtotal for c in x.account_codes}
     used = set(current)
     if mapped != used:
         lack, extra = sorted(used - mapped), sorted(mapped - used)
@@ -1482,11 +1584,30 @@ def snapshot_financial_statements(directory: Path, snapshot: gen.Snapshot) -> li
     if lack:
         problems.append(f"{where}: 比较数的科目没有映射: {', '.join(lack)}")
     types = {a.code: a.type for a in map_accounts(snapshot.load("accounts"))}
-    for x in (x for x in fs.lines if not x.subtotal):
+    for x in (x for x in tb_lines if not x.subtotal):
         for code in x.account_codes:
             pl = types.get(code) in ("revenue", "expense")
             if pl != (x.statement == "profit_or_loss") and not (pl and x.code == FS_TOTALS[2]):
                 problems.append(f"{where}: {x.code} 的科目 {code} 类型与所在报表不符")
+    converted = Counter[str]()
+    for row in journal_rows(restating):
+        converted[row.account_code] += row.debit_cents - row.credit_cents
+    position = [x for x in tb_lines if x.statement == "financial_position" and not x.subtotal]
+    transition = {x.code: x.sign * sum(converted[c] for c in x.account_codes) for x in position}
+    lines = {x.code: x for x in fs.lines}
+    for x in (x for x in fs.lines if x.statement == "cash_flows" and not x.subtotal):
+        match = [p for p in position if p.account_codes == x.account_codes]
+        if len(match) == 1 and x.prior_amount_cents != cash_effect(
+            match[0], "prior_amount_cents", transition[match[0].code]
+        ):
+            problems.append(f"{where}: {x.code} 的比较数不等于 {match[0].code} 自过渡日起的变动对现金的影响")
+    cash, overdraft = CASH_EQUIVALENTS
+    if "CF-OPEN" in lines and lines["CF-OPEN"].prior_amount_cents != transition.get(cash, 0) - transition.get(
+        overdraft, 0
+    ):
+        problems.append(f"{where}: CF-OPEN 的比较数不等于过渡日的 {cash} 减 {overdraft}")
+    if "CE-OPEN" in lines and lines["CE-OPEN"].prior_amount_cents != transition.get("SOFP-EQ", 0):
+        problems.append(f"{where}: CE-OPEN 的比较数不等于过渡日的累计亏损")
     return problems
 
 
