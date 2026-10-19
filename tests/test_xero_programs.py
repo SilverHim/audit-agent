@@ -36,7 +36,7 @@ from backend.orchestration.gates import gate_nodes
 from backend.orchestration.graph import build_graph
 from backend.orchestration.nodes import GraphNodes, build_run
 from backend.orchestration.runner import GraphRunner
-from tests.fakes import ENGAGEMENT, NOW, FakeFinancialStore, FakeRuleEngine, wait_idle
+from tests.fakes import ENGAGEMENT, NOW, FakeFinancialStore, FakeRuleEngine, make_run, wait_idle
 from tests.xero_fakes import (
     ORC1026,
     REPO,
@@ -253,3 +253,17 @@ def test_rev02_params_follow_the_gate(flow: Flow) -> None:
         "RUN-REV-02-1",
         {"window_days": 20, "threshold_cents": 16216, "period_end": PERIOD_END},
     )
+
+
+def test_csh02_candidate_rows_drop_the_voided_transfer() -> None:
+    """XERO_RULES 的 CSH-02 候选行由假存储的表按规则口径派生: D02 为 BA-090 期后 10 天的 21 笔 (BT-090-0073 至 0093);
+    D03 11 行, D04 33 行, 窗口 09-25 至 09-30 (闭区间), 储蓄户转账 XJ-599 与冲回它的 XJ-602 整张剔除, BA-091 的 D03
+    只剩 XJ-601-1 (Xero 演示数据集设计第 6.1 节); D04 里没有 4853 的行 (BA-091 回函的应计利息, D04 命中的前提)."""
+    rows = XERO_RULES["CSH-02"](make_run("CSH-02")).rows
+    assert [r["id"] for r in rows["D02"]] == [f"BT-090-{n:04d}" for n in range(73, 94)]
+    assert (len(rows["D03"]), len(rows["D04"])) == (11, 33)
+    assert [r["id"] for r in rows["D03"] if r["bank_account_id"] == "BA-091"] == ["XJ-601-1"]
+    assert {r["entry_no"] for r in [*rows["D03"], *rows["D04"]]} & {"XJ-599", "XJ-602"} == set()
+    dates = [r["posting_date"] for r in rows["D04"]]
+    assert (min(dates), max(dates)) == (date(2026, 9, 25), PERIOD_END)
+    assert all(4853 not in (r["debit_cents"], r["credit_cents"]) for r in rows["D04"])

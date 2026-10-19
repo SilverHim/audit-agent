@@ -2,20 +2,23 @@
 
 import asyncio
 import csv
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from backend.contracts.data import TableKind
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import Phase, ProfileSource, TrailEntry, TrailKind
 from backend.contracts.ports import AuditTrail
-from backend.contracts.records import Account, JournalEntry
+from backend.contracts.records import Account, BankAccount, JournalEntry
 from backend.services.account_mapping import with_category
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
+    NUMBAT_D03_ROWS,
+    NUMBAT_D04_ROWS,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     NUMBAT_ROWS,
@@ -27,7 +30,9 @@ from tests.fakes import (
     FakeOutputStore,
     FakeTrail,
     bind_stores,
+    csh02_window_rows,
     make_procedure,
+    numbat_tables,
 )
 
 EID = ENGAGEMENT.id
@@ -219,6 +224,44 @@ def test_numbat_sales_entries_and_accounts_match_dataset() -> None:
     assert sorted(r.id for r in fake_entries) == sorted(i for i, r in entries.items() if r.entry_no in numbers)
     assert sum(r.debit_cents for r in fake_entries) == sum(r.credit_cents for r in fake_entries)
     assert [accounts["1100"], accounts["4100"]] == NUMBAT_ACCOUNTS
+
+
+def test_csh02_window_rows_drop_whole_voided_entries() -> None:
+    """csh02_window_rows (Numbat 与 Xero 的假规则引擎共用) 剔除作废对的口径同 CSH-02 的 D03, D04 SQL (连库用例
+    test_csh02_d03_d04_drop_voided_pairs 同一组行): Numbat 的分录加 VX-1 (06-29, 1010 借 700000 / 4200 贷 700000),
+    冲回它的 VX-2 (只有 4200 一行说明为 "Reversal of ID 1", 1010 一行不匹配: 整张凭证剔除, 不按行) 与原凭证不存在的
+    VX-3; 给格式与模板时 D03, D04 与不加行时整行相同, 不给时都含 (D03 只有 1010 的两行)."""
+    added = [
+        JournalEntry(
+            id=line_id,
+            entry_no=line_id.rsplit("-", 1)[0],
+            posting_date=date(2026, 6, 29),
+            created_at=None,
+            created_by=None,
+            approved_by=None,
+            account_code=account,
+            debit_cents=debit,
+            credit_cents=credit,
+            description=description,
+            source_doc=None,
+        )
+        for line_id, account, debit, credit, description in (
+            ("VX-1-1", "1010", 700000, 0, "Accrued interest"),
+            ("VX-1-2", "4200", 0, 700000, "Accrued interest"),
+            ("VX-2-1", "4200", 700000, 0, "Reversal of ID 1"),
+            ("VX-2-2", "1010", 0, 700000, "Accrued interest reversal"),
+            ("VX-3-1", "4200", 100, 0, "Reversal of ID 9"),  # 模板拼出的 VX-9 不存在: 只剔除它自己
+        )
+    ]
+    lines = [*numbat_tables()[TableKind.journal_entries], *added]
+    banks = [r for r in NUMBAT_ROWS if isinstance(r, BankAccount)]
+    end = ENGAGEMENT.period_end
+    voids = csh02_window_rows(lines, banks, end, 5, r"Reversal of ID (\d+)", "VX-{1}")  # type: ignore[arg-type]
+    assert (voids["D03"], voids["D04"]) == (NUMBAT_D03_ROWS, NUMBAT_D04_ROWS)
+    plain = csh02_window_rows(lines, banks, end, 5)  # type: ignore[arg-type]
+    inserted = {line.id for line in added}
+    assert {r["id"] for r in plain["D03"]} & inserted == {"VX-1-1", "VX-2-2"}
+    assert {r["id"] for r in plain["D04"]} & inserted == inserted
 
 
 async def test_journal_entries_by_entry_no_or_source_doc() -> None:

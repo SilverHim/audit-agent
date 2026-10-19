@@ -64,6 +64,8 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    csh02_subsequent_rows,
+    csh02_window_rows,
     make_deps,
 )
 
@@ -420,10 +422,11 @@ def make_xero_deps(
 
 # ── 规则结果预置 (需求 R107) ──
 # 规则引擎对 Xero 演示项目 (演示数据导入 acceptance 与 fieldwork 之后) 的结果, 供 FakeRuleEngine(XERO_RULES).
-# 取自连库跑一次 SqlRuleEngine 的结果: 测试库, 期间 2026-07-01 至 09-30, 上期起始日 2025-07-01 (数据集声明);
-# 重要性取 {revenue, 0.01, 0.5, 0.05} 即 32431 / 16216 / 1622 分; REV-08, REV-02 关联的目标为 significant,
-# CSH-02 为 high; 作废对按声明的格式与模板. 值与类型同库: SUM 得 numeric (Decimal), 例外 detail 里的 numeric
-# 经 to_jsonable_python 成字符串, 证据指针的 locator 为 SqlRuleEngine 拼的列名. 连库结果与它们一致由 R112 断言.
+# PLN-07, PLN-01, REV-08, REV-02 S01 与 CSH-05 为常量, 取自连库跑一次 SqlRuleEngine 的结果: 测试库, 期间 2026-07-01
+# 至 09-30, 上期起始日 2025-07-01 (数据集声明); 重要性取 {revenue, 0.01, 0.5, 0.05} 即 32431 / 16216 / 1622 分;
+# REV-08, REV-02 关联的目标为 significant. 值与类型同库: SUM 得 numeric (Decimal), 例外 detail 里的 numeric 经
+# to_jsonable_python 成字符串, 证据指针的 locator 为 SqlRuleEngine 拼的列名. 连库结果与它们一致由 R112 断言.
+# CSH-02 的 D02, D03, D04 是对表的筛选, 由假存储的表按规则口径派生 (xero_csh02_rows), 不写常量.
 XERO_A01_LOCATOR = "amount_cents, account_name, basis, current_cents, prior_cents, opening_cents, change_pct"
 # PLN-07 A01 命中的 9 个资产负债类科目, 按代码: (代码, 名称, 本期, 上期, 期初, 变动比例); 上期没有余额的科目期初为 0,
 # 变动比例为空 (除数为 0)
@@ -478,129 +481,28 @@ XERO_S01_ROWS = [  # REV-02 S01: 期末前 20 天内不低于执行重要性 (16
         ("SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf", "ORC1023", None, 17, 55000),
     )
 ]
-XERO_D02_ROWS = [  # CSH-02 D02: 期后 10 天 (10-01 至 10-10) 的银行流水, 都在 BA-090 (BA-091 期后没有流水)
-    {
-        "source_type": "bank_transaction",
-        "id": tid,
-        "bank_account_id": "BA-090",
-        "txn_date": day,
-        "amount_cents": amount,
-        "description": description,
-        "reference": reference,
-    }
-    for tid, day, amount, description, reference in (
-        ("BT-090-0073", date(2026, 10, 1), -17050, "MCO Cleaning", None),
-        ("BT-090-0074", date(2026, 10, 1), -2190, "Melbourne Mags", "Eft"),
-        ("BT-090-0075", date(2026, 10, 1), -1200, "Passing Places Parking", None),
-        ("BT-090-0076", date(2026, 10, 1), -600, "7-Eleven", None),
-        ("BT-090-0077", date(2026, 10, 1), -4999, "Microsoft", "Microsoft 365 Business Basic monthly subscription"),
-        ("BT-090-0078", date(2026, 10, 5), -1250, "7-Eleven", None),
-        ("BT-090-0079", date(2026, 10, 5), -1200, "Passing Places Parking", None),
-        ("BT-090-0080", date(2026, 10, 6), 55000, "Rex Media", "Invoice 1023"),
-        ("BT-090-0081", date(2026, 10, 6), 55000, "YARRA Transport", "1021"),
-        ("BT-090-0082", date(2026, 10, 6), -1723, "Woolworths", "Eft"),
-        ("BT-090-0083", date(2026, 10, 6), -4980, "David Jones", "Eft"),
-        ("BT-090-0084", date(2026, 10, 6), 55000, "Port Philip", "1022"),
-        ("BT-090-0085", date(2026, 10, 6), 214500, "DIISR", "1028"),
-        ("BT-090-0086", date(2026, 10, 6), -1200, "Passing Places Parking", None),
-        ("BT-090-0087", date(2026, 10, 6), -550, "7-Eleven", None),
-        ("BT-090-0088", date(2026, 10, 6), -22000, "MCO Cleaning Services", "M000442"),
-        ("BT-090-0089", date(2026, 10, 8), -22000, "MCO Cleaning Services", "M000456"),
-        ("BT-090-0090", date(2026, 10, 9), -1200, "Passing Places Parking", None),
-        ("BT-090-0091", date(2026, 10, 9), -400, "7-Eleven", None),
-        ("BT-090-0092", date(2026, 10, 10), 618750, "Ridgeway University", "ORC01025"),
-        ("BT-090-0093", date(2026, 10, 10), -118125, "Truxton Property Management", "Rent"),
+CSH02_LOOKBACK_DAYS = 5  # CSH-02 D03, D04 的窗口与 D02 的期后天数, 同 CSH-02.yaml
+CSH02_SUBSEQUENT_DAYS = 10
+
+
+def xero_csh02_rows() -> dict[str, list[dict[str, Any]]]:
+    """CSH-02 D02, D03, D04 的行: 由演示数据导入之后的表 (xero_tables) 按规则的口径派生, 同 Numbat
+    (tests.fakes 的 csh02_subsequent_rows, csh02_window_rows); 期末取快照, 作废对按数据集声明的格式与模板剔除.
+    读快照, 规则引擎取 CSH-02 时才算, 每次新建. 结果: D02 为 BA-090 期后 21 行 (BA-091 期后没有流水), D03 中
+    BA-091 只剩 XJ-601-1, D04 里没有 4853 (BA-091 回函的应计利息) 的行."""
+    tables = xero_tables()
+    traits = xero_traits()
+    period = xero_loader().period(XERO_DATASET)
+    assert period is not None
+    window = csh02_window_rows(
+        tables["journal_entries"],
+        tables["bank_accounts"],
+        period[1],
+        CSH02_LOOKBACK_DAYS,
+        traits.reversal_reference_pattern,
+        traits.reversal_entry_no_template,
     )
-]
-XERO_D03_ROWS = [  # CSH-02 D03: 期末前 5 天 (09-25 至 09-30) 银行科目上的分录行, 作废对已剔除 (BA-091 只剩 XJ-601-1)
-    {
-        "source_type": "journal_entry",
-        "id": jid,
-        "bank_account_id": account,
-        "entry_no": jid.rsplit("-", 1)[0],
-        "posting_date": date(2026, 9, day),
-        "debit_cents": debit,
-        "credit_cents": credit,
-        "description": description,
-        "source_doc": source_doc,
-    }
-    for jid, account, day, debit, credit, description, source_doc in (
-        ("XJ-598-1", "BA-090", 25, 0, 1200, "Passing Places Parking", "Passing Places Parking"),
-        ("XJ-600-1", "BA-090", 26, 55000, 0, "Payment from Carruthers & Smale", "Payment from Carruthers & Smale"),
-        (
-            "XJ-601-2",
-            "BA-090",
-            26,
-            350000,
-            0,
-            "Bank Transfer from Business Savings Account to Business Bank Account",
-            "Bank Transfer from Business Savings Account to Business Bank Account",
-        ),
-        ("XJ-603-1", "BA-090", 26, 0, 1200, "Passing Places Parking", "Passing Places Parking"),
-        ("XJ-604-1", "BA-090", 27, 0, 186000, "Oliver Gray", "Oliver Gray"),
-        ("XJ-605-3", "BA-090", 27, 0, 193800, "Odette Garrison", "Odette Garrison"),
-        ("XJ-606-3", "BA-090", 27, 0, 139500, "Tracy Green", "Tracy Green"),
-        ("XJ-608-1", "BA-090", 27, 0, 1200, "Passing Places Parking", "Passing Places Parking"),
-        ("XJ-609-2", "BA-090", 28, 0, 22000, "Payment: MCO Cleaning Services", "Payment: MCO Cleaning Services"),
-        ("XJ-610-1", "BA-090", 29, 0, 1200, "Passing Places Parking", "Passing Places Parking"),
-        (
-            "XJ-601-1",
-            "BA-091",
-            26,
-            0,
-            350000,
-            "Bank Transfer from Business Savings Account to Business Bank Account",
-            "Bank Transfer from Business Savings Account to Business Bank Account",
-        ),
-    )
-]
-XERO_D04_ROWS = [  # CSH-02 D04: 同一窗口内全部科目的分录行, 作废对已剔除; 没有 4853 (BA-091 回函的应计利息) 的行
-    {
-        "source_type": "journal_entry",
-        "id": jid,
-        "entry_no": jid.rsplit("-", 1)[0],
-        "posting_date": date(2026, 9, day),
-        "account_code": account,
-        "debit_cents": debit,
-        "credit_cents": credit,
-        "description": description,
-    }
-    for jid, day, account, debit, credit, description in (
-        ("XJ-598-1", 25, "090", 0, 1200, "Passing Places Parking"),
-        ("XJ-598-2", 25, "493", 1091, 0, "Passing Places Parking"),
-        ("XJ-598-3", 25, "820", 109, 0, "Passing Places Parking"),
-        ("XJ-600-1", 26, "090", 55000, 0, "Payment from Carruthers & Smale"),
-        ("XJ-600-2", 26, "610", 0, 55000, "Payment from Carruthers & Smale"),
-        ("XJ-601-1", 26, "091", 0, 350000, "Bank Transfer from Business Savings Account to Business Bank Account"),
-        ("XJ-601-2", 26, "090", 350000, 0, "Bank Transfer from Business Savings Account to Business Bank Account"),
-        ("XJ-603-1", 26, "090", 0, 1200, "Passing Places Parking"),
-        ("XJ-603-2", 26, "493", 1091, 0, "Passing Places Parking"),
-        ("XJ-603-3", 26, "820", 109, 0, "Passing Places Parking"),
-        ("XJ-604-1", 27, "090", 0, 186000, "Oliver Gray"),
-        ("XJ-604-2", 27, "477", 240000, 0, "Oliver Gray"),
-        ("XJ-604-3", 27, "825", 0, 54000, "Oliver Gray"),
-        ("XJ-605-1", 27, "825", 0, 56200, "Odette Garrison"),
-        ("XJ-605-2", 27, "477", 250000, 0, "Odette Garrison"),
-        ("XJ-605-3", 27, "090", 0, 193800, "Odette Garrison"),
-        ("XJ-606-1", 27, "477", 180000, 0, "Tracy Green"),
-        ("XJ-606-2", 27, "825", 0, 40500, "Tracy Green"),
-        ("XJ-606-3", 27, "090", 0, 139500, "Tracy Green"),
-        ("XJ-607-1", 27, "800", 0, 22000, "MCO Cleaning Services"),
-        ("XJ-607-2", 27, "408", 20000, 0, "Office Cleaning - daily rate"),
-        ("XJ-607-3", 27, "820", 2000, 0, "MCO Cleaning Services"),
-        ("XJ-608-1", 27, "090", 0, 1200, "Passing Places Parking"),
-        ("XJ-608-2", 27, "493", 1091, 0, "Passing Places Parking"),
-        ("XJ-608-3", 27, "820", 109, 0, "Passing Places Parking"),
-        ("XJ-609-1", 28, "800", 22000, 0, "Payment: MCO Cleaning Services"),
-        ("XJ-609-2", 28, "090", 0, 22000, "Payment: MCO Cleaning Services"),
-        ("XJ-610-1", 29, "090", 0, 1200, "Passing Places Parking"),
-        ("XJ-610-2", 29, "493", 1091, 0, "Passing Places Parking"),
-        ("XJ-610-3", 29, "820", 109, 0, "Passing Places Parking"),
-        ("XJ-611-1", 30, "800", 0, 33110, "PowerDirect"),
-        ("XJ-611-2", 30, "820", 3010, 0, "PowerDirect"),
-        ("XJ-611-3", 30, "445", 30100, 0, "PowerDirect"),
-    )
-]
+    return {"D02": csh02_subsequent_rows(tables["bank_transactions"], period[1], CSH02_SUBSEQUENT_DAYS), **window}
 
 
 def xero_pln07_exceptions(run: ProcedureRun) -> list[AuditException]:
@@ -669,7 +571,5 @@ XERO_RULES: dict[
     "REV-08": lambda run: RuleResult(exceptions=[xero_rev08_exception(run)], rows={}),
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS}),
     "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
-    "CSH-02": lambda run: RuleResult(
-        exceptions=[], rows={"D02": XERO_D02_ROWS, "D03": XERO_D03_ROWS, "D04": XERO_D04_ROWS}
-    ),
+    "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
 }
