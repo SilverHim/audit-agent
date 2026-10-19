@@ -678,6 +678,78 @@
         "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
       ],
       "footer": "Contract No. CON-X01",
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "ClickstreamCorp_20200330_1-A_EX1A-6 MAT CTRCT_12089935_EX1A-6 MAT CTRCT_Development Agreement.pdf",
+        "txt": "ClickstreamCorp_20200330_1-A_EX1A-6 MAT CTRCT_12089935_EX1A-6 MAT CTRCT_Development Agreement.txt",
+        "sha256": "60e84c78b61cf379963d4ae8b7749ebd9c33dd7833b961fdd2c6cb9b2d0a07ed",
+        "excerpts": [
+          {
+            "clause": "Background",
+            "text": "WHEREAS, the Developer is engaged in the business of developing and designing application solutions"
+          },
+          {
+            "clause": "Background",
+            "text": "WHEREAS, the Developer wishes to design the Application and agrees to do so under the terms and conditions of this Agreement"
+          },
+          {
+            "clause": "1.2",
+            "text": "Perform the Services in a workmanlike manner and with professional diligence and skill, as a fully trained, skilled, competent, and experienced personnel."
+          },
+          {
+            "clause": "1.2",
+            "text": "Devote as much productive time, energy, and ability to the performance of its duties hereunder as may be necessary to provide the required Services in a timely and productive manner"
+          },
+          {
+            "clause": "1.3",
+            "text": "Communicate and show with the Client regarding progress it has made with respect to the milestones listed in this agreement."
+          },
+          {
+            "clause": "1.4",
+            "text": "Provide all assistance and cooperation to the Developer in order to complete the Application System timely and efficiently."
+          },
+          {
+            "clause": "1.4",
+            "text": "Provide initial information and supply all content for the Application System."
+          },
+          {
+            "clause": "3.2",
+            "text": "The Developer shall inform the Client immediately of any anticipated delays in the delivery schedule and of any remedial actions being taken to ensure completion of the Application System according to such schedule."
+          },
+          {
+            "clause": "3.3",
+            "text": "The Developer is responsible for paying all ordinary and necessary expenses of itself or its staff."
+          },
+          {
+            "clause": "8.1",
+            "text": "The Developer agrees, during the Term and thereafter, to hold in strictest confidence, and not to use, except for the benefit of the Client, or to disclose to any person, firm, or corporation without the prior written authorization of the Client, any Confidential Information of the Client."
+          },
+          {
+            "clause": "9.1",
+            "text": "A Party shall be not be considered in breach of or in default under this Agreement on account of, and shall not be liable to the other Party for, any delay or failure to perform its obligations hereunder by reason of fire, earthquake, flood, explosion, strike, riot, war, terrorism, or similar event beyond that Party's reasonable control"
+          },
+          {
+            "clause": "9.2",
+            "text": "use reasonable efforts to resolve any issues resulting from the Force Majeure Event and perform its obligations hereunder."
+          },
+          {
+            "clause": "10.1",
+            "text": "No amendment, change, or modification of this Agreement shall be valid unless in writing and signed by both Parties."
+          },
+          {
+            "clause": "10.2",
+            "text": "The Developer may not, without the written consent of the Client, assign, subcontract, or delegate its obligations under this Agreement"
+          },
+          {
+            "clause": "10.3",
+            "text": "The failure of either Party to insist on strict performance of any covenant or obligation under this Agreement, regardless of the length of time for which such failure continues, shall not be deemed a waiver of such Party's right to demand strict compliance in the future."
+          },
+          {
+            "clause": "10.4",
+            "text": "This Agreement shall be governed by the laws of the state of Florida."
+          }
+        ]
+      },
       "pages": [
         [
           "STATEMENT OF WORK No. 2 - PORTAL MODULE DEVELOPMENT",
@@ -690,12 +762,24 @@
           "          23 Main Street, Marineville NSW 2000",
           "Customer: DIISR - Small Business Services",
           "",
+          "Background",
+          "A. The Customer wishes to engage the Supplier to develop a further module for its Small",
+          "   Business Services portal. The Supplier develops and designs software applications.",
+          "B. The Supplier has agreed to carry out that development on the terms of this Statement of",
+          "   Work.",
+          "",
           "This Statement of Work No. 2 covers further development for the Customer's Small",
           "Business Services portal (Customer reference: Portal proj).",
           "",
           "1. Services",
           "1.1 The Supplier will develop a self-service enquiry module for the Customer's Small",
           "Business Services portal (the Module), as described in the Schedule.",
+          "1.2 The Supplier will perform the Services in a professional manner, with the diligence and",
+          "skill of an experienced software developer, and will devote the time needed to complete the",
+          "Services within the Development Period.",
+          "1.3 The Supplier will report its progress on the Module to the Customer at least once a week.",
+          "1.4 The Customer will give the Supplier the information, content and assistance the Supplier",
+          "reasonably asks for in order to develop the Module.",
           "",
           "Schedule",
           "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
@@ -713,6 +797,10 @@
           "3.1 The Supplier will carry out the development in its own development environment.",
           "When development is finished, the Supplier will deploy the Module to the Customer's",
           "environment.",
+          "3.2 The Supplier will tell the Customer promptly if it expects any delay in completing the",
+          "development within the Development Period, and of the steps it is taking to avoid the delay.",
+          "3.3 The Supplier is responsible for its own staff and equipment in carrying out the",
+          "development.",
           "",
           "4. Completion",
           "4.1 The Services are complete when the Supplier has deployed the Module to the",
@@ -735,15 +823,34 @@
           "7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is",
           "not entitled to payment for the Module.",
           "",
-          "8. General",
-          "8.1 This Statement of Work may be varied only in writing signed by both parties.",
-          "8.2 This Statement of Work is governed by the laws of New South Wales.",
+          "8. Confidentiality",
+          "8.1 The Supplier will keep confidential, and use only for the purposes of this Statement of",
+          "Work, any information about the Customer's business, systems, data or users that it receives",
+          "in connection with the Services.",
+          "",
+          "9. Events Beyond Control",
+          "9.1 Neither party is in breach of this Statement of Work for a delay or failure to perform",
+          "caused by fire, flood, industrial action or another event beyond its reasonable control.",
+          "9.2 The affected party must notify the other party promptly and use reasonable efforts to",
+          "resume performance.",
+          "",
+          "10. General",
+          "10.1 This Statement of Work may be varied only in writing signed by both parties.",
+          "10.2 The Supplier may not assign or subcontract its obligations under this Statement of Work",
+          "without the written consent of the Customer.",
+          "10.3 A failure or delay by either party in exercising a right under this Statement of Work is",
+          "not a waiver of that right.",
+          "10.4 This Statement of Work is governed by the laws of New South Wales.",
           "",
           "Signed for Demo Company (AU) Pty Ltd",
           "Alex Morgan, Director                     Date: 1 September 2026",
           "",
           "Signed for DIISR - Small Business Services",
-          "Priya Natarajan, Project Sponsor          Date: 1 September 2026"
+          "Priya Natarajan, Project Sponsor          Date: 1 September 2026",
+          "",
+          "General terms adapted from a contract in CUAD v1 (The Atticus Project, CC BY 4.0); modified",
+          "for this synthetic document.",
+          "Licence: https://creativecommons.org/licenses/by/4.0/"
         ]
       ]
     },
@@ -762,6 +869,70 @@
         "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9"
       ],
       "footer": "Contract No. CON-X02",
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "TRIZETTOGROUPINC_08_18_1999-EX-10.17-TECHNICAL INFRASTRUCTURE MAINTENANCE AGREEMENT.PDF",
+        "txt": "TRIZETTOGROUPINC_08_18_1999-EX-10.17-TECHNICAL INFRASTRUCTURE MAINTENANCE AGREEMENT.txt",
+        "sha256": "36724bd21fa87d101e0450b60f9265c5510d285cfb893f6a72fbe06ed765764b",
+        "excerpts": [
+          {
+            "clause": "1.2",
+            "text": "Technical Infrastructure Maintenance Agreement covers applicable items that make up the underlying technical infrastructure that is required to run an application."
+          },
+          {
+            "clause": "1.3",
+            "text": "MMMW will provide on-call service for the Technical Infrastructure during the term of this Agreement from 7:00am to 5:00pm CST"
+          },
+          {
+            "clause": "1.3",
+            "text": "Support to include 7X24 hour pager support for emergency services."
+          },
+          {
+            "clause": "8.1",
+            "text": "The Customer shall provide full, free, timely and safe access to the hardware for MMMW to provide the service."
+          },
+          {
+            "clause": "8.2",
+            "text": "The Customer shall provide a suitable environment for the Technical Infrastructure in accordance with MMMW specifications"
+          },
+          {
+            "clause": "8.2",
+            "text": "The Customer shall notify MMMW of any change in location"
+          },
+          {
+            "clause": "8.3",
+            "text": "The Customer is responsible to implement appropriate safeguards to protect and/or recreate the Customer's data, should it be destroyed through hardware malfunction or otherwise"
+          },
+          {
+            "clause": "9.1",
+            "text": "There could be an increase in service time caused by accident, misuse, disaster, abuse, alterations, attachments, parts, options, or repairs not provided by MMMW"
+          },
+          {
+            "clause": "10.1",
+            "text": "While this Agreement is in effect and thereafter, the Customer shall keep confidential and protect from disclosure to others any materials designated as containing information confidential or proprietary to MMMW and/or its licensor."
+          },
+          {
+            "clause": "11.1",
+            "text": "MMMW shall NOT be liable for INCIDENTAL or CONSEQUENTIAL DAMAGES, even if MMMW has been advised, knew or should have known of the possibility of such damages."
+          },
+          {
+            "clause": "12.1",
+            "text": "MMMW is not responsible for failure to provide services due to cases beyond its reasonable control."
+          },
+          {
+            "clause": "12.2",
+            "text": "The Customer shall not assign or transfer its rights or obligations under this Agreement except with MMMW's prior written consent; any prohibited assignment or transfer shall be void."
+          },
+          {
+            "clause": "12.3",
+            "text": "This Agreement may not be changed, released or discharged except by a written agreement entered into by duly authorized representatives of the parties."
+          },
+          {
+            "clause": "12.4",
+            "text": "This Agreement shall be interpreted in accordance with the laws of the State of Indiana."
+          }
+        ]
+      },
       "pages": [
         [
           "MANAGED SUPPORT AGREEMENT",
@@ -778,6 +949,11 @@
           "1.1 The Supplier will provide managed IT support services to the Customer: help desk",
           "support, remote monitoring of the Customer's computers and servers, and software",
           "updates (the Support Services).",
+          "1.2 The Support Services cover the computers, servers, operating systems and network",
+          "connections at the Customer's office that are needed to run the Customer's business",
+          "applications (the Covered Systems).",
+          "1.3 Help desk support is available from 8.30 am to 5.30 pm (Sydney time) on Business Days.",
+          "Remote monitoring of the Covered Systems operates at all times.",
           "",
           "2. Term",
           "2.1 This Agreement starts on 1 July 2026 and ends on 30 June 2027 (the Term), unless it",
@@ -808,15 +984,42 @@
           "7.1 Either party may terminate this Agreement by giving 30 days' written notice to the",
           "other party.",
           "",
-          "8. General",
-          "8.1 This Agreement may be varied only in writing signed by both parties.",
-          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "8. Customer Responsibilities",
+          "8.1 The Customer will give the Supplier remote and on-site access to the Covered Systems as",
+          "the Supplier reasonably needs to provide the Support Services.",
+          "8.2 The Customer will keep the Covered Systems in a suitable operating environment and will",
+          "tell the Supplier before moving any of them to another location.",
+          "8.3 The Customer is responsible for keeping back-up copies of its data.",
+          "",
+          "9. Exclusions",
+          "9.1 The Support Services do not cover faults caused by accident, misuse, or changes or repairs",
+          "not made by the Supplier.",
+          "",
+          "10. Confidentiality",
+          "10.1 Each party will keep confidential, and use only for the purposes of this Agreement, any",
+          "information that the other party identifies as confidential or proprietary.",
+          "",
+          "11. Liability",
+          "11.1 Neither party is liable to the other for any indirect or consequential loss, including",
+          "loss of profits or loss of data, arising out of this Agreement.",
+          "",
+          "12. General",
+          "12.1 Neither party is liable for a delay or failure to perform caused by an event beyond its",
+          "reasonable control.",
+          "12.2 The Customer may not assign its rights under this Agreement without the Supplier's",
+          "written consent.",
+          "12.3 This Agreement may be varied only in writing signed by both parties.",
+          "12.4 This Agreement is governed by the laws of New South Wales.",
           "",
           "Signed for Demo Company (AU) Pty Ltd",
           "Alex Morgan, Director                     Date: 24 June 2026",
           "",
           "Signed for Hamilton Smith Pty",
-          "Tom Reilly, Operations Manager            Date: 24 June 2026"
+          "Tom Reilly, Operations Manager            Date: 24 June 2026",
+          "",
+          "General terms adapted from a contract in CUAD v1 (The Atticus Project, CC BY 4.0); modified",
+          "for this synthetic document.",
+          "Licence: https://creativecommons.org/licenses/by/4.0/"
         ]
       ]
     },
@@ -832,6 +1035,78 @@
         "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
       ],
       "footer": "Contract No. CON-X03",
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "MERITLIFEINSURANCECO_06_19_2020-EX-10.(XIV)-MASTER SERVICES AGREEMENT.PDF",
+        "txt": "MERITLIFEINSURANCECO_06_19_2020-EX-10.(XIV)-MASTER SERVICES AGREEMENT.txt",
+        "sha256": "09eac9cb5a8cacc009776409a7206c71ac2817174426dc2009ec7e06c2fb7af9",
+        "excerpts": [
+          {
+            "clause": "Background",
+            "text": "WHEREAS, Company desires from time to time to retain Contractor to perform certain management consulting services for Company"
+          },
+          {
+            "clause": "1.2",
+            "text": "Contractor shall provide sufficient qualified personnel to perform the Services in a professional and workmanlike manner in accordance with industry standards."
+          },
+          {
+            "clause": "1.3",
+            "text": "unavailable to work on an engagement for reasons beyond Contractor's reasonable control, Contractor may provide the Services through other personnel with comparable training and experience."
+          },
+          {
+            "clause": "3.2",
+            "text": "When services are provided at a Company facility, Company shall provide workspace and other facilities such as computer support consistent with the requirements of the Services to be provided under the Statement of Work."
+          },
+          {
+            "clause": "3.3",
+            "text": "Contractor shall cause its personnel at Company's facility to comply with Company's (i) safety and security rules and other rules applicable to those working in the facility, and (ii) Company's policies concerning access to and security of any Company computer system to which Contractor may have access"
+          },
+          {
+            "clause": "3.4",
+            "text": "Company's failure to assign Company personnel having skills commensurate with their role with respect to such engagement could adversely affect Contractor's ability to provide the Services."
+          },
+          {
+            "clause": "8.1",
+            "text": "Contractor shall not use or disclose to any person, firm or entity any Confidential Information without Company's express, prior written permission"
+          },
+          {
+            "clause": "8.2",
+            "text": "Confidential Information does not include information which: (i) is or becomes publicly known through no wrongful act of Contractor; or (ii) is independently developed by Contractor without benefit of Company's"
+          },
+          {
+            "clause": "8.2",
+            "text": "Contractor may disclose Confidential Information to the extent that it is required to be disclosed pursuant to a statutory or regulatory provision or court order."
+          },
+          {
+            "clause": "9.1",
+            "text": "NEITHER PARTY SHALL HAVE ANY LIABILITY TO THE OTHER PARTY FOR ANY LOST PROFITS OR SPECIAL, INCIDENTAL, INDIRECT OR CONSEQUENTIAL DAMAGES, EVEN IF SUCH PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES."
+          },
+          {
+            "clause": "10.1",
+            "text": "Neither party shall assign, transfer, or subcontract this Agreement or any of its obligations hereunder without the other party's express, prior written consent, which will not be unreasonably withheld."
+          },
+          {
+            "clause": "10.2",
+            "text": "In the event that any term or provision of this Agreement shall be held to be invalid, void or unenforceable, then the remainder of this Agreement shall not be affected, impaired or invalidated"
+          },
+          {
+            "clause": "10.3",
+            "text": "This Agreement constitutes the complete and exclusive agreement between Company and Consultant concerning the work on this project, and it supersedes all other prior agreements, proposals, and representations, whether stated orally or in writing."
+          },
+          {
+            "clause": "10.4",
+            "text": "This Agreement may be signed in any number of counterparts, each of which shall be an original, with the same effect as if the signatures thereto and hereto were upon the same instrument."
+          },
+          {
+            "clause": "10.5",
+            "text": "Agreement may be modified only in writing and shall be enforceable in accordance with its terms when signed by each of the parties hereto."
+          },
+          {
+            "clause": "10.6",
+            "text": "This Agreement shall be governed by and construed in accordance with the laws of the Arizona, without regard to the conflict of laws provisions thereof."
+          }
+        ]
+      },
       "pages": [
         [
           "PROJECT MANAGEMENT SERVICES AGREEMENT",
@@ -845,9 +1120,19 @@
           "          23 Main Street, Marineville NSW 2000",
           "Customer: Maddox Publishing Group (ABN 21 900 043 067)",
           "",
+          "Background",
+          "The Customer wishes to retain the Supplier to provide project management services for its",
+          "CRM integration project, and the Supplier has agreed to provide them on the terms of this",
+          "Agreement.",
+          "",
           "1. Services",
           "1.1 The Supplier will provide an on-site project manager for the Customer's CRM",
           "integration project on 6 on-site days (the On-site Days).",
+          "1.2 The Supplier will provide a suitably qualified and experienced project manager, who will",
+          "perform the Services in a professional manner.",
+          "1.3 If the project manager assigned to the Customer becomes unavailable for reasons beyond",
+          "the Supplier's control, the Supplier may provide another project manager with comparable",
+          "experience.",
           "",
           "Schedule",
           "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
@@ -860,7 +1145,13 @@
           "",
           "3. Scheduling",
           "3.1 The On-site Days will be scheduled between 11 August 2026 and 26 August 2026 as",
-          "agreed with the Customer."
+          "agreed with the Customer.",
+          "3.2 On each On-site Day the Customer will provide the project manager with a workspace,",
+          "network access and the other facilities reasonably needed to perform the Services.",
+          "3.3 The Supplier will ensure that the project manager complies with the Customer's site",
+          "safety and security rules and its policies on access to its computer systems.",
+          "3.4 The Customer will make its project staff available to work with the project manager as",
+          "reasonably requested by the project manager."
         ],
         [
           "4. Acceptance",
@@ -879,15 +1170,37 @@
           "7.1 Either party may terminate this Agreement by giving 5 Business Days' written",
           "notice to the other party.",
           "",
-          "8. General",
-          "8.1 This Agreement may be varied only in writing signed by both parties.",
-          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "8. Confidentiality",
+          "8.1 The Supplier will not use or disclose any documents, data, records or other information",
+          "obtained from the Customer in performing the Services, except to perform the Services or",
+          "with the Customer's prior written consent.",
+          "8.2 Clause 8.1 does not apply to information that is or becomes publicly known other than",
+          "through the Supplier, that the Supplier develops independently, or that must be disclosed",
+          "by law.",
+          "",
+          "9. Liability",
+          "9.1 Neither party is liable to the other for any loss of profits or any indirect or",
+          "consequential loss arising out of this Agreement.",
+          "",
+          "10. General",
+          "10.1 Neither party may assign or subcontract this Agreement without the prior written",
+          "consent of the other party, which will not be unreasonably withheld.",
+          "10.2 If any provision of this Agreement is invalid or unenforceable, the rest of this",
+          "Agreement is not affected.",
+          "10.3 This Agreement is the entire agreement between the parties about its subject matter.",
+          "10.4 This Agreement may be signed in counterparts.",
+          "10.5 This Agreement may be varied only in writing signed by both parties.",
+          "10.6 This Agreement is governed by the laws of New South Wales.",
           "",
           "Signed for Demo Company (AU) Pty Ltd",
           "Alex Morgan, Director                     Date: 10 August 2026",
           "",
           "Signed for Maddox Publishing Group",
-          "Nora Fitzgerald, Production Director      Date: 10 August 2026"
+          "Nora Fitzgerald, Production Director      Date: 10 August 2026",
+          "",
+          "General terms adapted from a contract in CUAD v1 (The Atticus Project, CC BY 4.0); modified",
+          "for this synthetic document.",
+          "Licence: https://creativecommons.org/licenses/by/4.0/"
         ]
       ]
     },

@@ -38,8 +38,9 @@ data/
 │       ├── 20261017/                    免费接口快照
 │       ├── 20261017-mock/               期间 07-01 至 11-30, 留给慢测试, 不动
 │       └── 20261017-q1/                 新拉: 期间 07-01 至 09-30, 对账单取到 10-17 (第 9.2 节)
+├── external/cuad/                       CUAD v1, 收入合同的底稿; 不入库, 用 `uv run python -m tests.tools.cuad_fetch` 取
 └── xero_demo/
-    └── 20261017-q1/                     补造文件, 与快照目录同名; 全部合成, 入库 (第 9 节)
+    └── 20261017-q1/                     补造文件, 与快照目录同名; 全部合成, 入库 (第 9 节); README.md 写合同底稿的署名与许可
 ```
 
 **许可与去标识**
@@ -49,6 +50,7 @@ data/
 - 生成脚本与测试副本的读取白名单: 只读 api 快照的 accounts, invoices, credit_notes, journals, bank_statements, organisation, 试算表 (与 dataset.json); 一律不读 raw/ 目录, 不读 contacts.json. 测试副本与派生快照里的 contacts.json 只写过滤版 (去掉登录账号联系人, 第 8.1, 9.2 节). 校验脚本断言原值不出现在任何生成文件里 (第 9.4 节).
 - 客户, 供应商与 3 名员工 (Odette Garrison, Oliver Gray, Tracy Green) 是 Xero 预置的虚构名字, 保留.
 - DIISR 是已撤销的真实联邦部门名: 补造合同保留 Xero 原名, 不写 ABN, 每页页眉标明虚构 (决定 11).
+- 3 份收入合同各以 CUAD v1 的一份合同为底稿改写 (第 4.3 节, R286). 署名 "Contract Understanding Atticus Dataset (CUAD) v1, The Atticus Project, CC BY 4.0", 许可 https://creativecommons.org/licenses/by/4.0/, 来源 Zenodo 记录 4595826. CUAD 声明对底层 EDGAR 合同的许可状态不作保证. 署名, 许可, 免责句, Atticus 的使用条款 (隐私政策与免责声明链接) 与 "已改写" 写在补造目录的 README.md; 每份合同第 3 页签字后另有出处行与许可链接 (不写底稿公司名); manifest 的 files 段记底稿文件名. CUAD 本身不入库, 已入库的合同 PDF 不依赖它.
 - Numbat (`data/demo`) 保留为离线回归测试, 不改.
 
 ---
@@ -494,15 +496,28 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 
 签字人 (化名): 供方 Alex Morgan (Director); DIISR Priya Natarajan (Project Sponsor), Hamilton Smith Tom Reilly (Operations Manager), Maddox Nora Fitzgerald (Production Director). manifest 的 document_date 为签订日, xero_refs 为关联发票的 SI- ID.
 
-**CON-X02: Hamilton Smith Pty, "Managed Support Agreement"** (不变)
+**CON-X02: Hamilton Smith Pty, "Managed Support Agreement"** (要素不变, 以 CUAD 底稿改写)
 - 第 1 页: ABN 19 900 043 058 (ACN 900 043 058); 2026-06-24 签订; 期限 2026-07-01 至 2027-06-30; Monthly Fee $500.00 excl GST, 不写总价.
 - 第 2 页: 4.1 客户在每个自然月内随服务提供而取得利益; 5.1 每月 17 日前后开当月发票; 5.2 开票后 14 天内付款.
 - 第 3 页: 6.1 Priority 1 请求 4 个工作小时内未响应, 客户可索赔当月月费的 10%; 7.1 30 天通知终止.
 
-**CON-X03: Maddox Publishing Group, "Project Management Services Agreement"** (不变)
+**CON-X03: Maddox Publishing Group, "Project Management Services Agreement"** (要素不变, 以 CUAD 底稿改写)
 - 第 1 页: ABN 21 900 043 067 (ACN 900 043 067); 采购单号 H008-346; 2026-08-10; 6 个驻场日 × $700, 共 $4,200.
 - 第 2 页: 4.1 按客户签字的工时表在每个驻场日确认; 5.1 第六个驻场日后开票, 10 天付款.
 - 第 3 页: 6.1 项目经理缺席时每半日贷记 $350 (对上 CR1014); 7.1 5 个工作日通知终止.
+
+**CUAD 底稿 (R286)**: 以上要素, 原句与所在页都不变 (`test_contract_pages` 锁住). 每份合同另以 CUAD v1 的一份合同为底稿 (都不在 R246/R247 的 CUAD 评测样本里), 取其结构与一般条款, 删改后改写成 Demo Company (AU) 与其客户之间适用新南威尔士州法律的合同.
+
+| 合同 | 底稿 (CUAD master_clauses.csv 的文件名) | 取用 |
+|---|---|---|
+| CON-X01 | ClickstreamCorp_20200330_1-A_EX1A-6 MAT CTRCT_12089935_EX1A-6 MAT CTRCT_Development Agreement.pdf (开发方对客户的应用开发协议, 11 页) | Background; 1.2 专业尽职, 1.3 汇报进度, 1.4 客户提供资料与配合; 3.2 预计延误即告知, 3.3 自理人员与设备; 8 保密; 9 不可抗力 (只免责); 10 变更须书面, 转让须同意, 不弃权, 适用法律 |
+| CON-X02 | TRIZETTOGROUPINC_08_18_1999-EX-10.17-TECHNICAL INFRASTRUCTURE MAINTENANCE AGREEMENT.PDF (硬件, 系统与网络的维护, 4 页) | 1.2 覆盖范围, 1.3 服务时段; 8 客户义务 (访问, 运行环境, 自行备份); 9 除外情形; 10 保密; 11 不承担间接损失; 12 不可抗力, 转让, 变更, 适用法律 |
+| CON-X03 | MERITLIFEINSURANCECO_06_19_2020-EX-10.(XIV)-MASTER SERVICES AGREEMENT.PDF (管理咨询服务, 10 页) | Background; 1.2 合格人员, 1.3 同等人员替换; 3.2 客户提供工位, 3.3 遵守现场规定, 3.4 客户配合; 8 保密 (含例外); 9 不承担间接损失; 10 转让, 可分割, 完整协议, 副本签署, 变更, 适用法律 |
+
+- 新内容只放在第 1-3 节的新子条款, Background 段与第 7 节之后的新节; 原第 8 节 General 移到最后一节, 两句原文不变. 第 4-7 节一字不加: DOC-04 的条款 text 是子条款连号照抄 (第 6.1 节), 多一个子条款就会改变 11 条条款的 text. 测试把第 4-7 节逐行冻结, 其余各节不许出现付款, 风险与所有权, 验收与交付, 退货, 贷项与折扣, 报销, 逾期, 终止, 担保, 赔偿与关联方的字样 (原有两行除外).
+- 底稿中会动收入结论的条款一律不取: Clickstream 4(b) 终止时按已完成工作付款 (会使第 35(c) 段成立, CON-X01 由某一时点确认翻成随时间确认), 作品与知识产权归属 (第二条控制权转移), 质保与缺陷修复, 分期付款, 延误违约; TriZetto 续约与取消, 调价, 逾期费, 超时按小时计费, 质保, 换下部件归属; MeritLife 调价, 费用报销, 付款后成果归属, 终止与终止付款, 反贿赂终止, 保险金额, 独立承包人. 也不加金额, 日期, ABN 与人名.
+- 取用的底稿原句 (每条至多一句) 记在生成规格各合同的 base.excerpts, 有 CUAD 时由校验脚本核对 (第 9.4 节).
+- 改写后 3 份合同 PDF 的哈希即文件 ID 随之改变 (只有 manifest 记它), 页数, 份数与第 6 节各程序的预期都不变.
 
 ### 4.4 银行回函
 
@@ -1095,15 +1110,17 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 
 ```
 data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一套补造
-├── manifest.json                        每个文件: path, sha256, synthetic: true, generator, 对应的 Xero 记录;
-│                                        另记 snapshot "xero/20261017-q1" 与快照各文件的 sha256 (不含 contacts.json)
+├── README.md                            生成方式与收入合同的 CUAD 底稿, 署名, 许可, 免责与改写方式 (第 4.3 节)
+├── manifest.json                        每个文件: path, sha256, synthetic: true, generator, 对应的 Xero 记录; 3 份收入合同
+│                                        另记 base (CUAD 底稿的文件名); 另记 snapshot "xero/20261017-q1" 与快照各文件的
+│                                        sha256 (不含 contacts.json)
 ├── dataset_traits.json                  5.2 节
 ├── client_profile.json                  整份覆盖载入器画像 (2.6 节)
 ├── planning/audit_objectives.json, risk_register.json      覆盖通用模板 (2.7 节)
 ├── registry/abn.json, asic.json         ACC-04, GEN-08 的 mock (2.5 节)
 ├── registry/extracts/{acn}.json, .pdf   公司摘录 3 份: 900043021, 900043030, 900043049 (G2 格式)
 ├── registry/persons/{姓-名-生日}.json, .pdf  人员检索 1 份: MORGAN-ALEX-19790412
-├── contracts/CON-X01.pdf … CON-X03.pdf  只放收入合同 (DOC-04, REV-03 逐份分析)
+├── contracts/CON-X01.pdf … CON-X03.pdf  只放收入合同 (DOC-04, REV-03 逐份分析); 以 CUAD 合同为底稿改写, 第 3 页末有出处与许可链接
 ├── contract_links.csv                   invoice_no, contract_id
 ├── delivery_notes.csv                   id, delivery_no, invoice_no, shipped_date, signed_date, signed_by (3.3 节)
 ├── bank_accounts.csv                    表头同 data/demo; 只用 bank_name 覆盖 (按 gl_account_code)
@@ -1157,7 +1174,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - 入库: `data/xero_demo/` 与生成规格入库; .gitignore 在 `/data/*` 之后加 `!/data/xero_demo_spec.json` 与 `!/data/xero_demo/` (`!/data/*.py` 已覆盖脚本). 本仓库已带上 Xero 快照, 其他检出可能没有 (第 1 节).
 - 生成: `data/generate_xero_demo.py` 读 `data/xero_demo_spec.json` 与指定快照 (只读), 用 reportlab 写 PDF (同 generate_demo.py), 写 CSV/JSON 与 manifest; 参数 `--snapshot 20261017-q1`, `--out`, `--inject <场景>` (只在测试副本目录用).
   - 只读 accounts, invoices, credit_notes, journals, bank_statements, organisation, dataset.json 与试算表; 不读 contacts.json, 不读 raw/ 目录 (第 1 节白名单).
-  - 所有合成内容 (人名, 日期, 条款, 号码) 写在 spec 里, 脚本不现编.
+  - 所有合成内容 (人名, 日期, 条款, 号码) 写在 spec 里, 脚本不现编. 收入合同的底稿记录 (base) 也在 spec 里, 生成不读 CUAD, 结果与有无 CUAD 无关.
+  - 另写补造目录的 README.md: 生成方式与收入合同的 CUAD 底稿, 署名, 许可, 免责句, 改写方式.
 - 校验: `data/check_xero_demo.py`:
   - 重算 manifest 哈希; 核对快照哈希.
   - 合成标志: 领域对象模型 `extra="forbid"` (contracts/models.py), client_profile.json, registry 各行, planning JSON, delivery_notes.csv 等按模型严格校验, 不能加 synthetic 字段或列. 所以合成标志只放在 manifest (每个文件 `synthetic: true`) 与文本字段 (画像 notes, PDF 页眉, 分录摘要). 校验脚本核对: manifest 中每个文件都有 `synthetic: true`; 每份 PDF 每页含合成页眉; 画像 notes 以 "Synthetic – for demonstration only" 开头.
@@ -1168,13 +1186,14 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
   - 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对 (服务完成记录, 合同关联, 开户行, xero_refs, 回函余额与应计利息, 更正后试算表, 财报), 快照关键数复算, 新旧快照比对, 联系人扫描与确定性 (说明写 "没有本地 Xero 快照"), 补造文件的哈希, 合成标志与模型校验照常做. 快照缺 dataset, invoices, accounts, bank_statements, journals 任一文件时, 与快照的核对, 关键数复算与新旧快照比对都跳过并写说明. 问题全部收集后一次报出, 每行一项, 只写文件名.
   - 快照关键数 (第 3 节, 只用白名单文件): 分录 368 笔 1017 行, 作废对 65 (按 reversal_reference_pattern 识别; 本期 33, 指作废与原分录都在本期), 每笔借贷平衡; 本期分录 215 笔 582 行; 09-30 试算表 27 行, 合计 0, 主要余额 (第 3.2 节), 本期损益 -13,226.96, 流动资产 21,780.73 与流动负债 42,844.69 (按 Xero 科目类型, 透支列流动负债); 对账单 090 共 142 行 (期末前 72, 末行 BT-090-0072 余额 -10,900.44), 091 共 4 行 (期末前 1, BT-091-0001 余额 11,581.23); 月度收入 4,600.00 / 18,036.00 / 9,795.00 与重要性 324.31 / 162.16 / 16.22 (收入取标准分类 revenue 的科目, 同 PLN-01; 270 属 other_income); 录入日 (悉尼) 晚于 10-19 的 15 笔 (在全部分录中数: 本期 13 笔, 本期之后 2 笔即 XJ-690, XJ-755), 与 dataset_traits 的 entry_timestamps_note 一致 (说明中的 "up to 26 November 2026" 是 UTC 日期, 悉尼为 11-27). 按文件 (journals.json, 期末试算表, bank_statements.json, dataset_traits.json) 分步, 某步意外中断只报该文件; 不符时按文件报出项目名, 不写数值.
   - 新旧快照比对 (第 9.2 节): 20261017-mock 在快照同级目录时做, 不一致报 "快照与 20261017-mock 不一致 (Demo 可能已重置)" 并只列文件名; 没有时, 或快照本身就是 20261017-mock 时, 跳过并写说明; 0630 表读不出或缺 prior_end 也算不一致, 已得出的文件名照常列出.
+  - 合同底稿 (R286): README.md 等于按规格推出的全文, manifest files 段的 base 与规格一致, 规格的 base 键齐, 取用原句每条至多一句且对应条款在正文里, 合同末页最后是出处行与许可链接, 这些一律核对. 两个命令行入口另给 CUAD 目录 data/external/cuad/CUAD_v1: 在时核对 README 引的免责句与使用条款是 CUAD_v1_README.txt 的原句, 底稿 txt 的 sha256, 每条取用原句 (空白归一) 都在底稿里, 底稿 PDF 在 full_contract_pdf 下; 不在时写说明 "没有 CUAD (...): 跳过合同底稿的核对 ...; 合同 PDF 按规格生成, 不受影响. 取 CUAD: uv run python -m tests.tools.cuad_fetch", 不算失败.
   - 第 5 节规则命中与第 7 节计数不在校验脚本复算 (见 "本版不做"), 分别由各程序的连库测试与合并终验核对.
 
 ---
 
 ### 9.5 文件格式与载入端口 (实现时以此为准)
 
-**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件: path, sha256, synthetic true, generator, xero_refs), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
+**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件, 含 README.md: path, sha256, synthetic true, generator, xero_refs; 3 份收入合同另有 base {dataset "CUAD v1", file 底稿在 CUAD master_clauses.csv 中的文件名}), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
 
 **document 的登记途径 (registration)** 共 29 份 57 页: acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传), fieldwork 19 (3 份收入合同加 index.csv 中除承接文件与 fs_v1.pdf 外的 16 份, 停在等数据时由演示数据导入上传), statements 1 (fs_v1.pdf, 完成阶段按补交请求 REQ-financial_statements 上传), manual 1 (声明书, FIN-07 人工任务经上传接口上传), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时由函证 mock 按银行直达存档). 前四类经上传接口登记, A3 只认类型 (按文件名与首页分类, 合同随即抽取; 按补交请求上传的直接取请求的类型), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表, 收入合同与声明书只在 manifest).
 
@@ -1186,7 +1205,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - PDF 内容只取自同名 JSON (页眉取生成规格): 公司摘录两页都写名称, 带空格的 ACN (900 043 021) 与注册日; 人员检索写姓名, 出生日期与各公司 ACN. 测试副本改 JSON 后用 `render_registry_pdfs` 重绘.
 - 登记 PDF 的登记信息按目录规则推出 (registry/extracts 与 registry/persons 下的 PDF: registry_extract, external_original, registration registry, document_date 为检索日即 data_as_of 2026-10-17), 不在生成规格 documents 段逐份登记; 测试副本新增的摘录 (T6, 第 8.8 节) 也按此登记.
 
-**生成规格的 documents 段**: 每份 PDF 一项 {path, type, reliability, document_date, related_ids, registration, index, xero_refs}; index 为真的进 documents/index.csv. 正文写在规格里的 PDF (承接文件, 合同, 回函等) 另有 footer 与 pages (每页一组行); 登记 PDF 不在本段, 由登记 JSON 渲染. 校验脚本核对每页文本层按顺序含来源的每个非空行 (区分大小写, 空白归一).
+**生成规格的 documents 段**: 每份 PDF 一项 {path, type, reliability, document_date, related_ids, registration, index, xero_refs}; index 为真的进 documents/index.csv. 正文写在规格里的 PDF (承接文件, 合同, 回函等) 另有 footer 与 pages (每页一组行); 3 份收入合同在 pages 之前另有 base {dataset, file, txt (CUAD full_contract_txt 下的文件名), sha256 (该 txt), excerpts [{clause, text}]}; 登记 PDF 不在本段, 由登记 JSON 渲染. 校验脚本核对每页文本层按顺序含来源的每个非空行 (区分大小写, 空白归一).
 
 **delivery_notes.csv**: id 与 delivery_no 都是 `SR-{发票号}` (如 SR-ORC1026), 24 行, 日期见第 3.3 节; 载入器把 invoice_no 换成 SI- ID, 发票号找不到或重复即报错.
 

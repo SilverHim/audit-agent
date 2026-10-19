@@ -6,6 +6,8 @@
 - 全部合成内容 (人名, 日期, 条款, 号码, 正文) 写在规格里, 脚本不现编; 两次生成逐字节相同.
 - --inject 只用于仓库外的测试副本: 在副本目录内按副本的登记 JSON 重绘登记 PDF, 按副本快照重写 manifest 并标 injected.
 - 普通生成只许写 data/xero_demo/<快照名> 或仓库外的目录; 已有的输出目录里有符号链接或硬链接时拒绝写.
+- 收入合同以 CUAD v1 的合同为底稿改写, 正文与底稿记录 (base) 都在规格里; 生成不读 CUAD, 结果与有无 CUAD 无关.
+  生成后的校验在有 data/external/cuad/CUAD_v1 时核对底稿, 没有时打印提示与取数命令 (CUAD_FETCH).
 设计见 docs/Xero演示数据集设计.md 第 9 节.
 """
 
@@ -36,6 +38,24 @@ LLM_README = (
     "Runtime copy of tests/fixtures/llm_xero for LLM_MODE=mock (Xero datasets read llm/<procedure>/<key>.json here).\n"
     "Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures/llm_xero and regenerate.\n"
 )
+CUAD_DIR = ROOT / "external" / "cuad" / "CUAD_v1"  # CUAD v1 (不入库), 只在校验底稿时读
+CUAD_FETCH = "uv run python -m tests.tools.cuad_fetch"  # 取 CUAD 的命令 (R245)
+CUAD_ATTRIBUTION = "Contract Understanding Atticus Dataset (CUAD) v1, The Atticus Project, CC BY 4.0"
+CUAD_RECORD_URL = "https://zenodo.org/records/4595826"
+CUAD_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/"
+CUAD_DISCLAIMER = (  # CUAD_v1_README.txt 的 LICENSE 段原句; 以上四项与 tests/tools/cuad_fetch.py 的同名常量相同
+    "We make no representations or warranties regarding the license status of the underlying contracts, "
+    "which are publicly available and downloadable from EDGAR."
+)
+CUAD_TERMS = (  # CUAD_v1_README.txt 的使用条款原句 (Atticus 的隐私政策与免责声明链接)
+    "The use of CUAD is subject to our privacy policy https://www.atticusprojectai.org/privacy-policy "
+    "and disclaimer https://www.atticusprojectai.org/disclaimer."
+)
+CUAD_CREDIT = [  # 每份收入合同第 3 页签字之后的出处行 (不写底稿公司名)
+    "General terms adapted from a contract in CUAD v1 (The Atticus Project, CC BY 4.0); modified",
+    "for this synthetic document.",
+    f"Licence: {CUAD_LICENSE_URL}",
+]
 PAGE_LINES = 56  # 每页正文最多行数 (页眉与空行之外), 再多就压到页脚
 LINE_WIDTH = 95  # 每行最多字符数 (Courier 9pt 每字 5.4pt, 左右各留 40pt)
 
@@ -189,7 +209,8 @@ def profile_prefix(snapshot: Snapshot) -> str | None:
 def generate(snapshot_dir: Path, out: Path) -> Path:
     """按规格写全部补造文件与 manifest: 数据集声明, 客户画像, 计划预置, 登记 mock, 合同关联, 服务完成记录,
     开户行, 回函渠道, 工资册, 更正分录, 规格写有正文的 PDF (承接, 合同, 回函, 关联方与证据文件, 财报, 声明书),
-    登记 PDF, documents/index.csv, 财报 fs_v1.json, 人工队列提交物 (manual/) 与大模型 fixture 的运行副本 (llm/)."""
+    登记 PDF, documents/index.csv, 财报 fs_v1.json, 人工队列提交物 (manual/), 大模型 fixture 的运行副本 (llm/)
+    与 README.md (含合同底稿的署名与许可)."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
@@ -232,8 +253,41 @@ def generate(snapshot_dir: Path, out: Path) -> Path:
     for name, submission in spec["manual"].items():
         write_json(out, f"manual/{name}", submission)
     write_llm_fixtures(out)
+    (out / "README.md").write_text(readme_text(spec), encoding="utf-8")
     write_manifest(out, snapshot_dir)
     return out
+
+
+def readme_text(spec: dict[str, Any]) -> str:
+    """补造目录的 README.md: 生成方式, 以及收入合同的 CUAD 底稿, 署名, 许可与改写方式 (底稿取自规格的 base)."""
+    bases = "".join(f"  - {d['path']}: {d['base']['file']}\n" for d in spec["documents"] if "base" in d)
+    return (
+        "# Synthetic – for demonstration only\n\n"
+        f"本目录是 Xero 演示数据集 {spec['dataset']} 的补造文件, 全部合成, 由 {GENERATOR} 按 data/xero_demo_spec.json "
+        "生成, 不要手改. 各文件的哈希与合成标志见 manifest.json, 设计见 docs/Xero演示数据集设计.md.\n\n"
+        "## 收入合同的底稿 (contracts/)\n\n"
+        "3 份收入合同各以下面这个数据集中的一份合同为底稿, 已改写:\n\n"
+        f"{CUAD_ATTRIBUTION}.\n\n"
+        f"- 来源: Zenodo 记录 4595826, {CUAD_RECORD_URL}, 版本 v1.\n"
+        f"- 许可: Creative Commons Attribution 4.0, {CUAD_LICENSE_URL}\n"
+        f'- CUAD 的免责句: "{CUAD_DISCLAIMER}"\n'
+        f'- CUAD 的使用条款: "{CUAD_TERMS}"\n'
+        "- 改写方式: 当事方, 合同编号, 金额, 日期, 完工与控制权转移, 开票与付款, 贷项与终止条款按设计稿第 4.3 节"
+        "编写; 合同结构与一般条款 (服务方式, 双方配合, 保密, 责任限制, 不可抗力, 转让, 变更与适用法律等) 取自底稿, "
+        "删改后改写为 Demo Company (AU) 与其客户之间适用新南威尔士州法律的合同. "
+        "每份合同第 3 页末注明出处, 已修改与许可链接; 取用的底稿原句记在生成规格各合同的 base.excerpts.\n"
+        "- 底稿 (CUAD master_clauses.csv 的文件名, manifest 的 files 段同记):\n"
+        f"{bases}"
+        f"- 合同 PDF 已入库, 使用时不需要 CUAD. 核对底稿要先取 CUAD 到 data/external/cuad/ (不入库): `{CUAD_FETCH}`.\n"
+    )
+
+
+def file_base(spec: dict[str, Any], rel: str) -> dict[str, str] | None:
+    """manifest files 段的底稿来源: 规格 documents 段该文件有 base 时为 {dataset, file}, 否则为 None."""
+    for doc in spec["documents"]:
+        if doc["path"] == rel and "base" in doc:
+            return {"dataset": doc["base"]["dataset"], "file": doc["base"]["file"]}
+    return None
 
 
 def write_llm_fixtures(out: Path, source: Path = LLM_FIXTURES) -> None:
@@ -543,6 +597,9 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
             "generator": GENERATOR,
             "xero_refs": file_refs(spec, rel),
         }
+        base = file_base(spec, rel)
+        if base is not None:
+            item["base"] = base
         files.append(item)
         if path.suffix == ".pdf":
             doc = document_meta(spec, rel)
@@ -603,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
     from check_xero_demo import CheckError, check
 
     try:
-        for note in check(out, snapshot_dir):
+        for note in check(out, snapshot_dir, cuad=CUAD_DIR):
             print(note)
     except CheckError as error:
         print(error, file=sys.stderr)

@@ -30,6 +30,7 @@ from backend.contracts.data import (
     TableKind,
     TableStats,
     TableVersion,
+    XeroConnection,
     XeroSource,
 )
 from backend.contracts.knowledge import ProcedureTemplate
@@ -419,10 +420,41 @@ class DataStore(Protocol):
 
 
 class XeroConnections(Protocol):
-    """项目的 Xero 连接记录 (需求 R12 提供实现), 数据概览的 sources.xero 取它."""
+    """项目的 Xero 连接记录 (实现为 services.xero_link.StoredXeroConnections, 需求 R279), 数据概览的 sources.xero
+    取它."""
 
     async def source(self, eid: str) -> XeroSource:
         """连接状态, 组织名, 最近同步时间与同步覆盖的账表; 没连接过为 not_connected."""
+        ...
+
+
+class XeroConnectionStore(Protocol):
+    """项目的 Xero 网页连接与加密令牌 (表 xero_connections, 需求 R279, B 实现). 每个项目最多一行; 令牌只存取密文
+    (加解密在 services.xero_link), 连接对象里没有令牌. 不查项目锁定: 断开要能删掉锁定项目的令牌, 其余写入由服务层
+    先查锁定."""
+
+    async def get(self, eid: str) -> XeroConnection | None:
+        """该项目的连接; 没有为 None."""
+        ...
+
+    async def tokens(self, eid: str) -> str | None:
+        """令牌密文; 没有连接为 None."""
+        ...
+
+    async def put(self, eid: str, connection: XeroConnection, tokens_encrypted: str) -> None:
+        """新建或整行替换连接与令牌密文 (连接, 重新连接)."""
+        ...
+
+    async def update(self, eid: str, connection: XeroConnection) -> None:
+        """只改连接的字段 (选组织, 状态, 同步时间), 令牌不动; 没有连接抛 LookupError."""
+        ...
+
+    async def set_tokens(self, eid: str, tokens_encrypted: str, refreshed_at: datetime) -> None:
+        """刷新后的令牌密文与换得时间; 没有连接 (已断开) 抛 LookupError."""
+        ...
+
+    async def delete(self, eid: str) -> bool:
+        """删除连接与令牌; 返回是否删到了行."""
         ...
 
 

@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
+from backend.contracts.data import TableKind
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
@@ -279,6 +280,32 @@ class ImportSheet(Model):
     """导入时换工作表."""
 
     sheet: str  # 工作表名, 取解析结果的 sheets 之一
+
+
+class XeroAuthorize(Model):
+    """连接 Xero (GET /data/xero/connect): 前端跳去的授权地址."""
+
+    authorize_url: str  # Xero 授权页地址, 带本次的 state; 10 分钟内有效, 只能用一次
+
+
+class XeroTenantIn(Model):
+    """选定 Xero 组织 (PUT /data/xero/tenant)."""
+
+    tenant_id: str  # 组织 ID, 取 GET /data/xero/tenants 的 id
+
+
+class XeroSyncStarted(Model):
+    """开始同步 (POST /data/xero/sync, 202): 后台计划写的账表. 实际写了哪些表看完成后概览的 scope 与留痕
+    xero_synced (live 下银行对账单接口拒绝时银行账户与银行流水都不写)."""
+
+    # 计划写的表: 取付费接口 (live) 时六张, 不取时四张 (没有银行这一对); 期间概览里为 converting
+    tables: list[TableKind]
+
+
+class XeroDisconnected(Model):
+    """断开 Xero (DELETE /data/xero)."""
+
+    revoked: bool  # Xero 侧是否已撤销授权; 为 false 时本地令牌已删, 须到 Xero 后台的 Connected apps 手动移除
 
 
 class LlmSlotView(Model):

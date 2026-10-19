@@ -2451,6 +2451,260 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/data/xero/connect": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Connect",
+        "description": "Xero 授权地址, 前端跳过去; state 绑定本项目与当前用户, 10 分钟内有效, 只能用一次. 授权后 Xero 回调\n/integrations/xero/callback, 再 302 回数据管理页. 项目锁定 423; 未配 XERO_CLIENT_ID 503 XERO_NOT_CONFIGURED;\n加密主密钥不可用 503 SETTINGS_KEY_MISSING / SETTINGS_KEY_INVALID.",
+        "operationId": "data-xero_connect",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XeroAuthorize"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/xero/tenants": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Tenants",
+        "description": "授权给到的组织 [{id, name}] (连接时存下的, 不调 Xero). 没有连接 409 XERO_NOT_CONNECTED.",
+        "operationId": "data-xero_tenants",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/XeroTenant"
+                  },
+                  "title": "Response Data-Xero Tenants"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/xero/tenant": {
+      "put": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Tenant",
+        "description": "选定要同步的组织, 返回概览里的 Xero 连接. 不是授权给到的组织 422 INVALID_VALUE; 没有连接 409\nXERO_NOT_CONNECTED; 锁定 423; 忙 409.",
+        "operationId": "data-xero_tenant",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/XeroTenantIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XeroSource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/xero/sync": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Sync",
+        "description": "开始同步: 后台按项目审计期间与上期期末取数, 写成一个新数据版本 (来源 xero), 写完体检; 返回计划写的表, 期间\n概览里这些表为 converting, processing 计数; 实际写的表看完成后概览的 scope (没取到银行对账单时银行这一对不写).\n没有连接 409 XERO_NOT_CONNECTED; 多个组织未选 409 XERO_TENANT_REQUIRED; 授权失效 409 XERO_RECONNECT_REQUIRED;\nXero 连不上 502 XERO_UNAVAILABLE; 锁定 423; 忙 (含另一同步或导入) 409 ENGAGEMENT_BUSY.",
+        "operationId": "data-xero_sync",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XeroSyncStarted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/xero": {
+      "delete": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Xero Disconnect",
+        "description": "断开: 调 Xero 撤销接口, 删除本项目的连接与令牌; 撤销失败也删 (revoked 为 false, 须到 Xero 后台手动移除).\n已同步的数据与版本保留, 概览回到 not_connected. 锁定的项目也可以断开. 没有连接 409 XERO_NOT_CONNECTED; 忙 409.",
+        "operationId": "data-xero_disconnect",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XeroDisconnected"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/misstatements": {
       "get": {
         "tags": [
@@ -2878,6 +3132,81 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/xero/callback": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Xero Callback",
+        "description": "Xero 授权回调 (XERO_REDIRECT_URI 指向这里): 核对 state (10 分钟内, 只能用一次), 换令牌, 保存该项目的连接\n(令牌加密存库). 成功 302 到前端 /engagements/{eid}/data?xero=connected; 失败 302 到同一页 (认不出项目时为前端\n首页) 带 ?xero=error&reason=<原因代码>, 代码见 services.xero_link.CALLBACK_REASONS. 跳转地址不带 code 与 state.",
+        "operationId": "integrations-xero_callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -9249,6 +9578,36 @@
         ],
         "title": "ValidationError"
       },
+      "XeroAuthorize": {
+        "properties": {
+          "authorize_url": {
+            "type": "string",
+            "title": "Authorize Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "title": "XeroAuthorize",
+        "description": "连接 Xero (GET /data/xero/connect): 前端跳去的授权地址."
+      },
+      "XeroDisconnected": {
+        "properties": {
+          "revoked": {
+            "type": "boolean",
+            "title": "Revoked"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revoked"
+        ],
+        "title": "XeroDisconnected",
+        "description": "断开 Xero (DELETE /data/xero)."
+      },
       "XeroSource": {
         "properties": {
           "status": {
@@ -9299,6 +9658,59 @@
         ],
         "title": "XeroSource",
         "description": "数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections)."
+      },
+      "XeroSyncStarted": {
+        "properties": {
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableKind"
+            },
+            "type": "array",
+            "title": "Tables"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tables"
+        ],
+        "title": "XeroSyncStarted",
+        "description": "开始同步 (POST /data/xero/sync, 202): 后台计划写的账表. 实际写了哪些表看完成后概览的 scope 与留痕\nxero_synced (live 下银行对账单接口拒绝时银行账户与银行流水都不写)."
+      },
+      "XeroTenant": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "XeroTenant",
+        "description": "授权给到的一个 Xero 组织."
+      },
+      "XeroTenantIn": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tenant_id"
+        ],
+        "title": "XeroTenantIn",
+        "description": "选定 Xero 组织 (PUT /data/xero/tenant)."
       }
     },
     "securitySchemes": {

@@ -41,7 +41,7 @@ def token_reply(access: str = "at-2", refresh: str = "rt-2") -> dict[str, Any]:
 
 def make(tmp_path: Path, handler: Handler, *, expires_at: float = NOW + 1800, tenant: str = "T1") -> XeroClient:
     store = TokenStore(tmp_path / "token.json")
-    store.save(Tokens("at-1", "rt-1", expires_at, "offline_access", tenant, "Demo Company (AU)"))
+    store.write(Tokens("at-1", "rt-1", expires_at, "offline_access", tenant, "Demo Company (AU)"))
     slept: list[float] = []
 
     async def sleep(seconds: float) -> None:
@@ -94,11 +94,11 @@ async def test_web_app_exchange_uses_basic_auth(tmp_path: Path) -> None:
     assert "SECRET" not in repr(client)
 
 
-def test_token_file_is_private(tmp_path: Path) -> None:
+async def test_token_file_is_private(tmp_path: Path) -> None:
     store = TokenStore(tmp_path / "nested" / "token.json")
-    store.save(Tokens("a", "r", NOW))
+    await store.save(Tokens("a", "r", NOW))
     assert store.path.stat().st_mode & 0o777 == 0o600
-    assert store.load() == Tokens("a", "r", NOW)
+    assert await store.load() == Tokens("a", "r", NOW)
 
 
 async def test_exchange_posts_verifier_without_secret(tmp_path: Path) -> None:
@@ -114,7 +114,7 @@ async def test_exchange_posts_verifier_without_secret(tmp_path: Path) -> None:
     assert seen[0]["grant_type"] == ["authorization_code"] and seen[0]["code_verifier"] == ["VERIFIER"]
     assert seen[0]["client_id"] == ["CID"] and "client_secret" not in seen[0]
     assert tokens.access_token == "at-2" and tokens.expires_at == NOW + 1800
-    assert client.store.load() == tokens
+    assert await client.store.load() == tokens
 
 
 async def test_refreshes_before_expiry_and_keeps_tenant(tmp_path: Path) -> None:
@@ -128,7 +128,7 @@ async def test_refreshes_before_expiry_and_keeps_tenant(tmp_path: Path) -> None:
 
     client = make(tmp_path, handler, expires_at=NOW + 10)
     await client.get("Accounts")
-    saved = client.store.load()
+    saved = await client.store.load()
     assert saved is not None and saved.refresh_token == "rt-2" and saved.tenant_id == "T1"
 
 
@@ -308,7 +308,7 @@ def test_token_temp_file_private_while_written(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(os, "replace", replace)
     old = os.umask(0o022)
     try:
-        TokenStore(tmp_path / "token.json").save(Tokens("a", "r", NOW))
+        TokenStore(tmp_path / "token.json").write(Tokens("a", "r", NOW))
     finally:
         os.umask(old)
     assert seen == [0o600]
@@ -318,7 +318,7 @@ def test_token_temp_file_private_while_written(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr(os, "replace", broken)
     with pytest.raises(OSError):
-        TokenStore(tmp_path / "token.json").save(Tokens("b", "r", NOW))
+        TokenStore(tmp_path / "token.json").write(Tokens("b", "r", NOW))
     assert sorted(p.name for p in tmp_path.iterdir()) == ["token.json"]
 
 
@@ -369,7 +369,7 @@ async def test_long_tokens_redacted_before_truncation(tmp_path: Path) -> None:
         return fake_api(request)
 
     client = make(tmp_path, handler)
-    client.store.save(Tokens(token, "refresh-secret", NOW + 1800, "", "T1", "Demo"))
+    await client.store.save(Tokens(token, "refresh-secret", NOW + 1800, "", "T1", "Demo"))
     out = tmp_path / "snapshot"
     await pull(client, out, Period(date(2026, 7, 1), date(2026, 11, 30), date(2026, 6, 30)), paid="live")
     manifest = (out / "manifest.json").read_text()
@@ -386,3 +386,16 @@ async def test_token_errors_redact_basic_credentials(tmp_path: Path) -> None:
         with pytest.raises(XeroError) as error:
             await client.refresh(Tokens("at-1", "rt-1", NOW))
         assert echoed not in str(error.value) and "HTTP 400" in str(error.value)
+
+
+async def test_exchange_errors_redact_short_code(tmp_path: Path) -> None:
+    """令牌接口在错误标题里回显授权码: 授权码短到不像令牌 (不被长值规则丢掉) 时也换成 ***, 不进异常信息 (需求 R279)."""
+    code = "c0de-7q"  # 合成: 短授权码
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant", "Title": f"code {code} rejected"})
+
+    client = make(tmp_path, handler)
+    with pytest.raises(XeroError) as error:
+        await client.exchange(code, "", "http://localhost:8765/callback")
+    assert code not in str(error.value) and "code *** rejected" in str(error.value)

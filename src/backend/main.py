@@ -16,6 +16,7 @@ from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
 from backend.api.errors import validation_error
 from backend.api.routes import api_router
+from backend.api.routes.integrations import install_log_filter
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import open_checkpointer
 from backend.orchestration.decisions import GraphDecisionSubmit
@@ -36,6 +37,7 @@ from backend.persistence.stores import (
     RoutingDatasetLoader,
     XeroDatasetLoader,
 )
+from backend.persistence.xero_connections import PostgresXeroConnectionStore
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.blind import PassThroughBlindFilter
 from backend.services.data_service import DataService
@@ -44,6 +46,7 @@ from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from backend.services.rule_engine import SqlRuleEngine
+from backend.services.xero_link import XeroLink
 
 
 def build_deps(settings: Settings) -> AgentDeps:
@@ -126,7 +129,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.concierge = ConciergeChat(
                 deps, app.state.query, make_chat_source(settings, llm_settings), ChatLimits.from_settings(settings)
             )
+            # Xero 网页连接 (需求 R279): 概览的 sources.xero 读连接表, 连接, 同步与断开经 XeroLink
+            xero_store = PostgresXeroConnectionStore(engine)
             app.state.data_service = DataService(deps, app.state.runner)
+            app.state.xero = XeroLink(deps, app.state.data_service, xero_store, settings)
+            app.state.data_service.xero = app.state.xero.connections
             try:
                 await recover(app.state.runner, app.state.data_service)
                 yield
@@ -155,6 +162,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_exception_handler(RequestValidationError, validation_error)
+    install_log_filter()  # 授权回调的 code 与 state 不进访问日志
     app.include_router(api_router, prefix="/api/v1")
     return app
 

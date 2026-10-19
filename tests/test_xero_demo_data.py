@@ -805,6 +805,7 @@ def test_manifest_layout() -> None:
         ["llm/README.md", *(f"llm/{p.relative_to(fixtures).as_posix()}" for p in fixtures.glob("*/*.json"))]
     )
     assert [p for p in paths if not p.startswith("llm/")] == [
+        "README.md",  # 生成方式与合同底稿的署名, 许可 (R286)
         "adjustments/journal_entries.csv",
         "bank_accounts.csv",
         "client_profile.json",
@@ -857,8 +858,10 @@ def test_manifest_layout() -> None:
         "registry/persons/MORGAN-ALEX-19790412.pdf",
         "representation/representation_letter.pdf",
     ]
+    contracts = {f"contracts/CON-X0{n}.pdf" for n in (1, 2, 3)}
     for item in manifest["files"]:  # type: ignore[index]
-        assert list(item) == ["path", "sha256", "synthetic", "generator", "xero_refs"]
+        extra = ["base"] if item["path"] in contracts else []  # 只有收入合同记底稿来源 (R286)
+        assert list(item) == ["path", "sha256", "synthetic", "generator", "xero_refs", *extra]
         assert item["synthetic"] is True
     raw = (SUPPLEMENTS / "manifest.json").read_text(encoding="utf-8")
     assert str(REPO) not in raw and "/home/" not in raw and not re.search(r"\d{4}-\d{2}-\d{2}T\d", raw)
@@ -1737,6 +1740,284 @@ def test_contract_pages() -> None:
     assert "4.1 Each On-site Day is accepted when the Customer signs the timesheet" in x03[1]
     assert "within 10 days after the date of the invoice" in x03[1]
     assert "credit $350.00 for each half day of absence" in x03[2] and "5 Business Days' written" in x03[2]
+
+
+# ── 收入合同的 CUAD 底稿 (R286) ───────────────
+
+CUAD = generator.CUAD_DIR
+needs_cuad = pytest.mark.skipif(not CUAD.is_dir(), reason=f"本机没有 CUAD ({CUAD}); 取法: {generator.CUAD_FETCH}")
+CONTRACTS = ("CON-X01", "CON-X02", "CON-X03")
+CUAD_NOTE = (
+    "General terms adapted from a contract in CUAD v1 (The Atticus Project, CC BY 4.0); modified for this "
+    "synthetic document. Licence: https://creativecommons.org/licenses/by/4.0/"
+)
+KEY_LINES = {  # 第 4-7 节逐行冻结 (页 → 行, 同改写前): DOC-04 的条款 text 是子条款连号照抄 (设计稿 6.1), 改写不得增删
+    "CON-X01": {
+        2: [
+            "4. Completion",
+            "4.1 The Services are complete when the Supplier has deployed the Module to the",
+            "Customer's environment and the Customer's Project Sponsor has signed the Completion",
+            "Certificate (the Completion Date). Title to and control of the Module pass to the",
+            "Customer on the Completion Date.",
+            "",
+            "5. Invoicing and Payment",
+            "5.1 The Supplier may issue a tax invoice on or after the Completion Date.",
+            "5.2 The Customer must pay each tax invoice by its due date, which is no later than",
+            "30 days after the date of the invoice.",
+        ],
+        3: [
+            "6. Variations",
+            "6.1 Any change to the Contract Price must be agreed by both parties in writing.",
+            "",
+            "7. Termination",
+            "7.1 Either party may terminate this Statement of Work by giving 10 Business Days'",
+            "written notice to the other party.",
+            "7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is",
+            "not entitled to payment for the Module.",
+        ],
+    },
+    "CON-X02": {
+        2: [
+            "4. Provision of the Support Services",
+            "4.1 The Support Services are provided throughout each calendar month, and the Customer",
+            "simultaneously receives and consumes the benefit of the Support Services as the Supplier",
+            "provides them.",
+            "",
+            "5. Invoicing and Payment",
+            "5.1 The Supplier will issue a tax invoice for the Monthly Fee of each calendar month on",
+            "or about the 17th day of that month.",
+            "5.2 The Customer must pay each tax invoice within 14 days after the date of the",
+            "invoice.",
+        ],
+        3: [
+            "6. Service Levels",
+            "6.1 If the Supplier does not respond to a Priority 1 request within 4 business hours,",
+            "the Customer may claim a credit of 10% of the Monthly Fee for that month.",
+            "",
+            "7. Termination",
+            "7.1 Either party may terminate this Agreement by giving 30 days' written notice to the",
+            "other party.",
+        ],
+    },
+    "CON-X03": {
+        2: [
+            "4. Acceptance",
+            "4.1 Each On-site Day is accepted when the Customer signs the timesheet for that day.",
+            "",
+            "5. Invoicing and Payment",
+            "5.1 The Supplier will issue a tax invoice after the sixth On-site Day. The Customer",
+            "must pay the invoice within 10 days after the date of the invoice.",
+        ],
+        3: [
+            "6. Absence",
+            "6.1 If the project manager is absent for part of an On-site Day, the Supplier will",
+            "credit $350.00 for each half day of absence.",
+            "",
+            "7. Termination",
+            "7.1 Either party may terminate this Agreement by giving 5 Business Days' written",
+            "notice to the other party.",
+        ],
+    },
+}
+AMOUNTS = {"CON-X01": ["$6,500.00", "$650.00"], "CON-X02": ["$500.00"], "CON-X03": ["$350.00", "$4,200.00", "$700.00"]}
+DATES = {
+    "CON-X01": ["1 September 2026", "16 September 2026", "3 September 2026"],
+    "CON-X02": ["1 July 2026", "24 June 2026", "30 June 2027"],
+    "CON-X03": ["10 August 2026", "11 August 2026", "26 August 2026"],
+}
+# 第 4-7 节以外不得出现会动收入结论的措辞 (付款, 控制权与所有权, 退货, 贷项与折扣, 终止, 担保, 关联方)
+REVENUE_WORDS = re.compile(
+    r"warrant|guarantee|refund|return|rebate|discount|credit|title|owner|intellectual property|related|partner"
+    r"|terminat|invoice|payment|\bpaid\b|\bpay\b|interest|deposit|bonus|penalt|liquidated"
+    r"|risk|accept|deliver|reimburs|expense|overdue|\blate\b|indemn",
+    re.I,
+)
+ORIGINAL_HITS = {  # 改写前就有的行 (X02 的 2.1 期限与 3.1 月费)
+    "CON-X02": [
+        "is terminated earlier under clause 7.",
+        "3.1 The Customer will pay a Monthly Fee of $500.00 excluding GST for each calendar month",
+    ]
+}
+BASE_COMPANIES = (
+    "Clickstream",
+    "InfinixSoft",
+    "TriZetto",
+    "TRIZETTO",
+    "Medical Manager",
+    "MMMW",
+    "RadialSpark",
+    "Radial Spark",
+    "Clear Capital",
+    "MERITLIFE",
+    "MeritLife",
+)
+
+
+def contract_spec(name: str) -> dict:
+    return next(d for d in spec()["documents"] if d["path"] == f"contracts/{name}.pdf")
+
+
+def test_contract_rewrite_keeps_key_terms() -> None:
+    """改写只加一般条款: 第 4-7 节的子条款, 金额与日期同设计稿 4.3; 其余各节没有收入条款的措辞; 每份仍 3 页."""
+    for name in CONTRACTS:
+        pages = contract_spec(name)["pages"]
+        assert len(pages) == 3 and all(len(page) <= generator.PAGE_LINES for page in pages), name
+        lines = [line for page in pages for line in page]
+        section, frozen = 0, dict[int, list[str]]()
+        for n, page in enumerate(pages, 1):
+            for line in page:
+                if m := re.match(r"(\d+)\. [A-Z]", line):
+                    section = int(m.group(1))
+                if 4 <= section <= 7:
+                    frozen.setdefault(n, []).append(line)
+        assert {n: "\n".join(v).rstrip("\n").split("\n") for n, v in frozen.items()} == KEY_LINES[name], name
+        text = " ".join(lines)
+        assert sorted(set(re.findall(r"\$[\d,]+\.\d{2}", text))) == AMOUNTS[name], name
+        months = "January|February|March|April|May|June|July|August|September|October|November|December"
+        assert sorted(set(re.findall(rf"\b\d{{1,2}} (?:{months}) \d{{4}}\b", text))) == DATES[name], name
+        section, outside = 0, []
+        for line in lines:
+            if m := re.match(r"(\d+)\. [A-Z]", line):
+                section = int(m.group(1))
+            if not 4 <= section <= 7 and REVENUE_WORDS.search(line):
+                outside.append(line)
+        assert outside == ORIGINAL_HITS.get(name, []), name
+    assert not any("ABN" in line for page in contract_spec("CON-X01")["pages"] for line in page)  # 决定 11
+
+
+def test_contract_pdfs_credit_cuad_without_naming_the_base() -> None:
+    for name in CONTRACTS:
+        pages = pdf_texts(SUPPLEMENTS / "contracts" / f"{name}.pdf")
+        assert pages[2].rstrip().endswith(f"{CUAD_NOTE} Contract No. {name} | Page 3 of 3"), name  # 签字之后, 页脚之前
+        assert not [c for c in BASE_COMPANIES if any(c in page for page in pages)], name
+
+
+def test_contract_bases_in_spec_manifest_and_readme() -> None:
+    from tests.tools import cuad_fetch
+
+    files = {f["path"]: f for f in read("manifest.json")["files"]}  # type: ignore[index]
+    expected = {
+        "CON-X01": "ClickstreamCorp_20200330_1-A_EX1A-6 MAT CTRCT_12089935_EX1A-6 MAT CTRCT_Development Agreement.pdf",
+        "CON-X02": "TRIZETTOGROUPINC_08_18_1999-EX-10.17-TECHNICAL INFRASTRUCTURE MAINTENANCE AGREEMENT.PDF",
+        "CON-X03": "MERITLIFEINSURANCECO_06_19_2020-EX-10.(XIV)-MASTER SERVICES AGREEMENT.PDF",
+    }
+    readme = (SUPPLEMENTS / "README.md").read_text(encoding="utf-8")
+    s43 = section(doc(), "### 4.3 收入合同")
+    assert "第 4-7 节一字不加" in s43 and "(不变)" not in s43
+    assert "Contract Understanding Atticus Dataset (CUAD) v1, The Atticus Project, CC BY 4.0" in section(
+        doc(), "## 1 文件布局与来源"
+    )
+    for name, file in expected.items():
+        assert f"| {name} | {file} (" in s43  # 设计稿记同一份底稿
+        base = contract_spec(name)["base"]
+        assert list(base) == ["dataset", "file", "txt", "sha256", "excerpts"] and base["file"] == file
+        assert base["txt"] == file.rsplit(".", 1)[0] + ".txt" and re.fullmatch(r"[0-9a-f]{64}", base["sha256"])
+        assert all(not re.search(r"\.\s+[A-Z]", e["text"]) for e in base["excerpts"])  # 每条至多一句
+        assert files[f"contracts/{name}.pdf"]["base"] == {"dataset": "CUAD v1", "file": file}
+        assert f"contracts/{name}.pdf: {file}" in readme
+    assert [p for p, f in files.items() if "base" in f] == [f"contracts/{n}.pdf" for n in CONTRACTS]
+    assert "Contract Understanding Atticus Dataset (CUAD) v1, The Atticus Project, CC BY 4.0." in readme
+    assert "https://zenodo.org/records/4595826" in readme and "https://creativecommons.org/licenses/by/4.0/" in readme
+    assert (
+        "已改写" in readme and cuad_fetch.DISCLAIMER in readme and "uv run python -m tests.tools.cuad_fetch" in readme
+    )
+    assert generator.CUAD_TERMS in readme and "https://www.atticusprojectai.org/disclaimer" in readme
+    assert files["README.md"]["synthetic"] is True
+    for name in ("ATTRIBUTION", "RECORD_URL", "LICENSE_URL", "DISCLAIMER"):  # 生成脚本与下载脚本的常量一致
+        assert getattr(generator, f"CUAD_{name}") == getattr(cuad_fetch, name)
+    assert generator.CUAD_DIR == cuad_fetch.DEFAULT_DEST / cuad_fetch.TARGET
+
+
+def test_contract_base_records_are_checked(tmp_path: Path) -> None:
+    copy = copy_supplements(tmp_path)
+    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
+    assert checker.check_contract_bases(copy, manifest) == []
+    item = next(f for f in manifest["files"] if f["path"] == "contracts/CON-X02.pdf")
+    item["base"]["file"] = "other.pdf"
+    next(f for f in manifest["files"] if f["path"] == "bank_accounts.csv")["base"] = {"dataset": "CUAD v1", "file": "x"}
+    (copy / "README.md").write_text("edited", encoding="utf-8")
+    assert checker.check_contract_bases(copy, manifest) == [
+        f"{copy / 'README.md'}: 与规格推出的说明不符, 需重新生成",
+        f"{copy / 'bank_accounts.csv'}: manifest 的 base 与规格不符",
+        f"{copy / 'contracts' / 'CON-X02.pdf'}: manifest 的 base 与规格不符",
+    ]
+
+
+def test_spec_base_records_are_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = spec()
+    docs = {d["path"]: d for d in data["documents"]}
+    docs["contracts/CON-X01.pdf"]["base"]["excerpts"].append({"clause": "4.2", "text": "Not in the contract"})
+    docs["contracts/CON-X02.pdf"]["base"]["excerpts"][0]["text"] = "One sentence. Another sentence."
+    del docs["contracts/CON-X03.pdf"]["base"]["txt"]
+    docs["contracts/CON-X01.pdf"]["pages"][2] = docs["contracts/CON-X01.pdf"]["pages"][2][:-1]  # 去掉许可链接
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    manifest = read("manifest.json")
+    problems = checker.check_contract_bases(SUPPLEMENTS, manifest)  # type: ignore[arg-type]
+    where = f"{patched}"
+    assert [p for p in problems if p.startswith(where)] == [
+        f"{where} contracts/CON-X01.pdf: 取用原句对应的条款 4.2 不在正文里",
+        f"{where} contracts/CON-X01.pdf: 末页最后没有 CUAD 出处说明与许可链接",
+        f"{where} contracts/CON-X02.pdf: 取用原句 1.2 应为 clause 与 text, text 至多一句",
+        f"{where} contracts/CON-X03.pdf: base 应有 dataset, file, txt, sha256, excerpts, dataset 为 CUAD v1, "
+        "且至少一条取用原句",
+    ]
+
+
+def test_check_without_cuad_notes_the_fetch_command(tmp_path: Path) -> None:
+    notes = checker.check(SUPPLEMENTS, tmp_path / "absent", cuad=tmp_path / "no-cuad")
+    assert (
+        f"没有 CUAD ({tmp_path / 'no-cuad'}): 跳过合同底稿的核对 (底稿文件, sha256 与取用原句); 合同 PDF 按规格生成, "
+        "不受影响. 取 CUAD: uv run python -m tests.tools.cuad_fetch"
+    ) in notes
+    assert not [n for n in checker.check(SUPPLEMENTS, tmp_path / "absent") if "CUAD" in n]  # 不给 cuad 时不核对
+
+
+@needs_snapshot
+def test_generator_without_cuad_prints_the_hint_and_same_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(generator, "CUAD_DIR", tmp_path / "no-cuad")
+    out = tmp_path / "out"
+    assert generator.main(["--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert f"没有 CUAD ({tmp_path / 'no-cuad'})" in printed and "uv run python -m tests.tools.cuad_fetch" in printed
+    produced = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    expected = {p.relative_to(SUPPLEMENTS).as_posix(): p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
+    assert produced == expected  # 已入库的合同 PDF 与有无 CUAD 无关
+
+
+def test_cuad_source_problems_are_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data = spec()
+    docs = {d["path"]: d for d in data["documents"]}
+    fake = tmp_path / "CUAD_v1"
+    (fake / "full_contract_txt").mkdir(parents=True)
+    (fake / "full_contract_pdf" / "Part_I").mkdir(parents=True)
+    x01, x03 = docs["contracts/CON-X01.pdf"]["base"], docs["contracts/CON-X03.pdf"]["base"]
+    (fake / "full_contract_txt" / x01["txt"]).write_text("not the base contract", encoding="utf-8")
+    kept = x03["excerpts"][0]["text"]
+    (fake / "full_contract_txt" / x03["txt"]).write_text(f"Preamble.  {kept}\n", encoding="utf-8")
+    x03["sha256"] = generator.sha256(fake / "full_contract_txt" / x03["txt"])
+    (fake / "full_contract_pdf" / "Part_I" / x01["file"]).write_bytes(b"%PDF")
+    (fake / "CUAD_v1_README.txt").write_text(generator.CUAD_DISCLAIMER, encoding="utf-8")  # 缺使用条款一句
+    patched = tmp_path / "spec.json"
+    patched.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(generator, "SPEC", patched)
+    lacking = ", ".join(e["clause"] for e in x03["excerpts"][1:])
+    x02 = docs["contracts/CON-X02.pdf"]["base"]
+    assert checker.check_cuad_sources(fake) == [
+        f"{fake / 'CUAD_v1_README.txt'}: 没有补造 README 引用的免责句或使用条款原句",
+        f"{fake / 'full_contract_txt' / x01['txt']}: sha256 与规格记录的不符",
+        f"{fake / 'full_contract_txt' / x02['txt']}: contracts/CON-X02.pdf 的底稿不存在",
+        f"{fake / 'full_contract_txt' / x03['txt']}: 找不到 contracts/CON-X03.pdf 第 {lacking} 条的取用原句",
+        f"{fake / 'full_contract_pdf'}: 没有 contracts/CON-X03.pdf 的底稿 PDF",
+    ]
+
+
+@needs_cuad
+def test_cuad_sources_match() -> None:
+    assert checker.check_cuad_sources(CUAD) == []
 
 
 def table(name: str) -> list[dict[str, str]]:

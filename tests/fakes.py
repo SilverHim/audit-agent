@@ -43,6 +43,7 @@ from backend.contracts.data import (
     TableKind,
     TableStats,
     TableVersion,
+    XeroConnection,
     table_changes,
 )
 from backend.contracts.errors import EngagementLocked, VersionConflict
@@ -141,6 +142,7 @@ from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
+from backend.services.xero_link import XeroLink
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -1381,6 +1383,43 @@ class FakeRuleEngine:
         return make(run) if make is not None else RuleResult(exceptions=[], rows={})
 
 
+class FakeXeroConnectionStore:
+    """假 Xero 连接存储 (XeroConnectionStore): 项目 → (连接, 令牌密文). calls 记下各写方法的调用 (方法名, 项目)."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, tuple[XeroConnection, str]] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    async def get(self, eid: str) -> XeroConnection | None:
+        found = self.rows.get(eid)
+        return found[0] if found else None
+
+    async def tokens(self, eid: str) -> str | None:
+        found = self.rows.get(eid)
+        return found[1] if found else None
+
+    async def put(self, eid: str, connection: XeroConnection, tokens_encrypted: str) -> None:
+        self.calls.append(("put", eid))
+        self.rows[eid] = (connection, tokens_encrypted)
+
+    async def update(self, eid: str, connection: XeroConnection) -> None:
+        self.calls.append(("update", eid))
+        if eid not in self.rows:
+            raise LookupError(f"{eid} 没有 Xero 连接")
+        self.rows[eid] = (connection, self.rows[eid][1])
+
+    async def set_tokens(self, eid: str, tokens_encrypted: str, refreshed_at: datetime) -> None:
+        self.calls.append(("set_tokens", eid))
+        if eid not in self.rows:
+            raise LookupError(f"{eid} 没有 Xero 连接")
+        connection = self.rows[eid][0].model_copy(update={"refreshed_at": refreshed_at})
+        self.rows[eid] = (connection, tokens_encrypted)
+
+    async def delete(self, eid: str) -> bool:
+        self.calls.append(("delete", eid))
+        return self.rows.pop(eid, None) is not None
+
+
 class FakeLlmSettingsStore:
     """假模型设置存储: 按 slot 存最新一行. fail 为真时读写都抛 OSError (模拟库不可用)."""
 
@@ -2530,19 +2569,28 @@ async def api_client(
     deps: AgentDeps | None = None,
     llm_settings: LlmSettingsService | None = None,
     concierge: Any = None,
+    xero: XeroLink | None = None,
 ) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
     deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的. llm_settings: 设置页接口用的服务.
-    concierge: 对话接口用的审计助理 (ConciergeChat), 缺省不设.
+    concierge: 对话接口用的审计助理 (ConciergeChat), 缺省不设. xero: Xero 网页连接的服务 (需求 R279), 给了时数据接口
+    用它的 DataService, 概览的 sources.xero 读它的连接存储; 缺省为假连接存储上的一个 (一律未连接).
     """
     app = create_app()
     app.state.deps = deps if deps is not None else runner.deps
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
-    app.state.data_service = DataService(runner.deps, runner)
+    if xero is None:  # Xero 应用与主密钥一律置空, 不用开发者 .env 里的值 (connect 报 XERO_NOT_CONFIGURED)
+        blank = get_settings().model_copy(
+            update={"XERO_CLIENT_ID": "", "XERO_CLIENT_SECRET": "", "SETTINGS_SECRET_KEY": ""}
+        )
+        xero = XeroLink(runner.deps, DataService(runner.deps, runner), FakeXeroConnectionStore(), blank)
+    xero.data.xero = xero.connections
+    app.state.data_service = xero.data
+    app.state.xero = xero
     app.state.llm_settings = llm_settings
     app.state.concierge = concierge
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}

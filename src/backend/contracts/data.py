@@ -196,6 +196,41 @@ class XeroSource(Model):
     scope: list[TableKind] = []  # 同步覆盖的账表
 
 
+class XeroTenant(Model):
+    """授权给到的一个 Xero 组织."""
+
+    id: str  # 组织 ID (tenantId)
+    name: str  # 组织名称
+
+
+# 同步写的六张表 (需求 R279 Q7): Xero 没有发运单与审批日志, 不写, 已导入的保留; 没取到银行对账单时银行账户与
+# 银行流水这一对都不写 (services.xero_link)
+XERO_TABLES: tuple[TableKind, ...] = (
+    TableKind.accounts,
+    TableKind.trial_balance,
+    TableKind.journal_entries,
+    TableKind.sales_invoices,
+    TableKind.bank_accounts,
+    TableKind.bank_transactions,
+)
+
+
+class XeroConnection(Model):
+    """项目的 Xero 网页连接 (表 xero_connections 的一行, 需求 R279), 不含令牌: 令牌只以密文另存
+    (XeroConnectionStore.tokens), 不进这个对象. 一个项目最多一个连接, 断开即删除."""
+
+    tenants: list[XeroTenant] = []  # 授权给到的组织 (连接时取自 connections 接口)
+    tenant_id: str | None = None  # 选定的组织; 只有一个组织时连接即选定, 多个时为空, 等审计师选
+    tenant_name: str | None = None  # 选定的组织名称
+    scope: str = ""  # 授权实际给到的 scope, 空格分隔
+    status: Literal["connected", "expired"] = "connected"  # 刷新令牌失效 (invalid_grant) 后为 expired, 须重新连接
+    connected_by: str  # 连接人的用户 ID
+    connected_at: datetime  # 连接 (或重新连接) 时间
+    refreshed_at: datetime  # 最近一次换得刷新令牌的时间 (连接或刷新); 超过 60 天按过期
+    last_synced_at: datetime | None = None  # 最近一次同步成功的时间; 重新连接时保留
+    synced_tables: list[TableKind] = []  # 最近一次同步写入的表
+
+
 class DataSources(Model):
     """数据概览中的外部数据源."""
 
