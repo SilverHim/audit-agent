@@ -2,6 +2,7 @@
 (合成数据集设计第 7 节第 12, 13 行; 需求 R105); 提示词按余额差异与应计利息分写 (需求 R106)."""
 
 import json
+import re
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -373,10 +374,13 @@ def accrued_draft(amount: int) -> str:
 @pytest.mark.parametrize(("amount", "level"), [(700000, None), (650000, "reference")])
 async def test_accrued_interest_only_prompt_and_draft_amount(amount: int, level: str | None) -> None:
     """R106 验收 2: BA-01 余额相符, BA-02 余额相符而只有 D04 (应计利息 700000). 提示词渲染一次, 按节查口径: Task 写
-    余额相符, 应计利息与搜索区间与 D04 例外, 不写 "differs from the book balance"; Criteria 第 4 条讲应计利息未入账;
-    proposed_action 里 close 须没有 D04, 应计利息的错报写法 (Interest income 或 Interest expense, Completeness,
-    understated, 金额为 D04 去掉符号). 认定错报的输出引回函 accrued_interest_cents, 金额 700000 (等于归因例外的金额)
-    一次通过; 650000 引用级失败 (不重试)."""
+    余额相符, 应计利息, 搜索区间 (闭区间的起止日, 不写天数), 明显微小的门槛 (超过它才建 D04) 与 D04 例外, 不写
+    "differs from the book balance"; Criteria 第 4 条: 应计利息的定义 (截至期末已产生, 尚未记入账户), 全部科目的
+    相同金额搜索已由规则做完, 有 D04 即未入账; proposed_action: close 须没有 D04, 应计利息的错报写法 (factual, 银行欠
+    客户为 Interest income, 客户欠银行为 Interest expense, Completeness, understated, 金额为 D04 去掉符号), 同时有
+    D01 与 D04 时的取舍 (差异没被调节项解释时草稿记余额差异, 结论另说应计利息未入账; 否则草稿记应计利息). 认定错报
+    的输出引回函 accrued_interest_cents, 金额 700000 (按 Q12 绝对值等于归因例外的金额) 一次通过; 650000 引用级失败
+    (不重试)."""
     books = [
         TrialBalanceRow(period="current", account_code="1010", balance_cents=120840000),
         TrialBalanceRow(period="current", account_code="1020", balance_cents=40000000),
@@ -390,15 +394,27 @@ async def test_accrued_interest_only_prompt_and_draft_amount(amount: int, level:
     prompt = request.messages[0].content
     task = section(prompt, "Task")
     assert "agrees with the book balance" in task and "differs from the book balance" not in task
-    assert all(text in task for text in ("700000 cents", "2026-06-25", "2026-06-30", "X-CSH-02-1-D04-1"))
+    [d04] = [part for part in task.split("\n\n") if "X-CSH-02-1-D04-1" in part]
+    for text in ("700000 cents", "2026-06-25", "2026-06-30", "inclusive", "600000 cents", "clearly trivial", "exceeds"):
+        assert text in d04, text
+    assert "days" not in d04  # 区间写起止日, 不写天数 (闭区间含 6 个日历日)
     criteria = section(prompt, "Criteria")
-    assert "accrued_interest_cents" in criteria and "has not been accrued" in criteria
-    actions = section(prompt, "proposed_action")
-    close = next(line for line in actions.splitlines() if line.startswith("- `close`"))
-    assert "D04" in close
-    accrued = next(line for line in actions.splitlines() if "accrued interest" in line)
-    for text in ('"Interest income"', '"Interest expense"', "Completeness", "understated", "without its sign"):
+    [accrual] = [line for line in criteria.splitlines() if line.startswith("4.")]
+    for text in ("accrued_interest_cents", "not yet credited", "all accounts", "same amount", "not among the Inputs"):
+        assert text in accrual, text
+    assert "has not been accrued" in accrual
+    actions = section(prompt, "proposed_action").splitlines()
+    [close] = [line for line in actions if line.startswith("- `close`")]
+    assert re.search(r"\bno\b[^.]*D04", close)  # 没有 D04 才能 close
+    [accrued] = [line for line in actions if line.startswith("- `misstatement`") and "D04" in line]
+    income, expense = accrued.split('"Interest expense"')
+    assert '"Interest income"' in income and "bank owes the client" in income and "client owes the bank" in expense
+    for text in ("`type` factual", "Completeness", "understated", "without its sign"):
         assert text in accrued, text
+    [both] = [line for line in actions if "D01" in line and "D04" in line]
+    unexplained, explained = both.split("otherwise")
+    assert "do not explain" in unexplained and "balance difference" in unexplained
+    assert "accrued interest has not been recorded" in unexplained and "accrued interest" in explained
     [call] = [e for e in trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "CSH-02"]
     assert (call.payload["fixture_key"], call.payload["attempt"], call.payload["level_failed"]) == ("BA-02", 1, level)
     if level is None:
