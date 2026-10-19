@@ -1,35 +1,47 @@
 {#
-CSH-02 函证差异评价 → JudgmentDraft，每个 D01 命中的银行账户调用一次。
+CSH-02 函证差异评价 → JudgmentDraft，每个有 D01（回函与账面不符）或 D04（回函应计利息未入账）的银行账户调用一次。
 渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
 变量：
   subject_id                    银行账户 ID
-  task.params                   period_end、subsequent_days、lookback_days
+  task.params                   period_end、subsequent_days、lookback_days、clearly_trivial_cents（D04 的门槛）
+                                （另有作废对的格式，提示词不用）
   task.risks                    本程序覆盖的 RiskItem：id、assertion、level、fraud_related、description
   data.bank_account             bank_account 行：source_type、id、bank_name、bsb、account_no、gl_account_code
   data.confirmation             Confirmation：id、confirming_party、balance_date、confirmed_balance_cents、
+                                accrued_interest_cents（回函写明的截至期末尚未入账的应计利息，银行欠客户为正，没提为 null）、
                                 receipt_channel、reply_document_id、evidence
   data.reply_document           回函 PDF 的 DocumentRef：id、file_name、page_count、reliability
   data.book_balance_cents       gl_account_code 的本期期末试算表余额
-  data.difference_cents         回函余额减账面余额
+  data.difference_cents         回函余额减账面余额（余额相符而只有 D04 时为 0）
   data.subsequent_transactions  本账户的 D02 行：source_type、id、txn_date、amount_cents（存入为正）、description、reference
   data.period_end_entries       本账户的 D03 行：source_type、id、entry_no、posting_date、debit_cents、credit_cents、
                                 description、source_doc
-  rule_findings                 本账户的 AuditException（CSH-02 D01、CSH-05 B01）：id、procedure_id、rule_id、
-                                severity、amount_cents、detail
+  rule_findings                 本账户的 AuditException（CSH-05 B01、CSH-02 D01、D04）：id、procedure_id、rule_id、
+                                severity、amount_cents、detail（D04 的为 accrued_interest_cents、search_from、search_to、
+                                matched_line_ids）
   standards                     StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set ba = data.bank_account %}
 {% set conf = data.confirmation %}
 {% set period_end = task.params.period_end %}
-You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ period_end }}.
+{% set accrued = rule_findings | selectattr("rule_id", "equalto", "D04") | list %}
+You assist a registered company auditor with the audit of an Australian financial report for the financial year ended {{ period_end }}.
 
 ## Task
 
+{% if data.difference_cents != 0 %}
 The bank's confirmed balance for account {{ ba.account_no }} (ID {{ subject_id }}, {{ ba.bank_name }}) differs from the book balance. Investigate the difference and decide whether it indicates a misstatement (ASA505-P14).
+{% else %}
+The bank's confirmed balance for account {{ ba.account_no }} (ID {{ subject_id }}, {{ ba.bank_name }}) agrees with the book balance.
+{% endif %}
 
 - Confirmed balance: {{ conf.confirmed_balance_cents }} cents as at {{ conf.balance_date }}
 - Book balance (GL account {{ ba.gl_account_code }}) at {{ period_end }}: {{ data.book_balance_cents }} cents
 - Difference, confirmed minus book: {{ data.difference_cents }} cents
+{% for x in accrued %}
+
+The reply also confirms accrued interest of {{ conf.accrued_interest_cents }} cents earned up to {{ period_end }} and not yet credited or charged to the account (positive: the bank owes the client; negative: the client owes the bank). The GL entries on all accounts from {{ x.detail.search_from }} to {{ x.detail.search_to }} (both dates inclusive) contain no line of that amount (rule finding {{ x.id }}). The rule raises this finding only when the absolute amount exceeds the clearly trivial threshold of {{ task.params.clearly_trivial_cents }} cents. Decide whether the unrecorded interest is a misstatement (ASA505-P14; misstatements other than clearly trivial ones are accumulated, ASA450-P05).
+{% endfor %}
 
 ## Inputs
 
@@ -57,7 +69,7 @@ Bank transactions in the {{ task.params.subsequent_days }} days after {{ period_
 None.
 {% endif %}
 
-GL entries on the bank account in the {{ task.params.lookback_days }} days up to {{ period_end }}:
+GL entries on the bank account from {{ task.params.lookback_days }} days before {{ period_end }} to {{ period_end }} (both dates inclusive):
 {% if data.period_end_entries %}
 ```json
 {{ data.period_end_entries | tojson(indent=2) }}
@@ -89,11 +101,14 @@ Standards (cite only these IDs):
    - Unpresented payment: a payment credited to the bank GL account on or before {{ period_end }} and debited by the bank after it, for the same amount.
    - Book balance = bank balance + deposits in transit − unpresented payments. The difference they explain (confirmed minus book) = unpresented payments − deposits in transit.
 3. Match on amount first, then date and reference or description. A bank transaction after {{ period_end }} without a GL entry on or before {{ period_end }} is not a reconciling item.
+4. Accrued interest in the reply (`accrued_interest_cents`): interest the bank confirms was earned up to {{ period_end }} but not yet credited or charged to the account. Rule D04 has already searched the GL entries on all accounts in its search window for a debit or credit line of the same amount; those entries are not among the Inputs. A D04 finding means no such line exists: the interest has not been accrued in the books.
 
 ## proposed_action
 
-- `close`: criterion 1 holds and matched reconciling items explain the difference to the cent.
+- `close`: criterion 1 holds, matched reconciling items explain the difference to the cent, and there is no accrued-interest finding (rule D04) on this account.
 - `misstatement`: the inputs show a recording error in the book balance, such as a GL entry whose amount differs from the bank transaction with the same reference, or a duplicated GL entry. Fill `misstatement_draft`: `type` factual, `account` "Cash"; book balance too high → `assertion` Existence, `direction` overstated; too low → `assertion` Completeness, `direction` understated; `amount_cents` = the error, equal to a referenced row's amount or the difference between two referenced rows.
+- `misstatement` for unrecorded accrued interest (criterion 4, rule D04): `type` factual, `account` "Interest income" when the bank owes the client (positive) or "Interest expense" when the client owes the bank (negative), `assertion` Completeness, `direction` understated, `amount_cents` = the amount of the D04 finding without its sign. Cite the reply's `accrued_interest_cents` field.
+- An account with both a balance difference (rule D01) and a D04 finding gets one `misstatement_draft`: when matched reconciling items do not explain the difference, the draft is for the balance difference and `conclusion` also states that the accrued interest has not been recorded; otherwise the draft is for the accrued interest.
 - `more_evidence`: criterion 1 fails, or any part of the difference is unexplained and the inputs do not show an error.
 - Do not use `accept`.
 

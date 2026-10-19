@@ -902,6 +902,9 @@ export const reportsGetReports = <ThrowOnError extends boolean = false>(options:
 
 /**
  * List Trail
+ *
+ * 按写入顺序返回. kind 可重复, 只取这几类; 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条
+ * 留痕之前的 (往前翻页的游标), 不是本项目的留痕 404 NOT_FOUND.
  */
 export const reportsListTrail = <ThrowOnError extends boolean = false>(options: Options<ReportsListTrailData, ThrowOnError>): RequestResult<ReportsListTrailResponses, ReportsListTrailErrors, ThrowOnError> => (options.client ?? client).get<ReportsListTrailResponses, ReportsListTrailErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

@@ -1,4 +1,4 @@
-import type { ConciergeCitation, GateId, Phase, TrailEntry } from '@/client/types.gen'
+import type { ConciergeCitation, GateId, Phase, TrailEntry, TrailKind } from '@/client/types.gen'
 
 // 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
 
@@ -58,7 +58,33 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.length ? value : null
 }
 
-export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
+// 工作台按页取留痕: 先取最近的一页 (GET /trail?newest=true), "更早" 以已取到的最早一条为游标 (before) 往前翻一页.
+// 只取 buildTimeline 会变成事件的几类 (TIMELINE_KINDS), 呈递, 大模型调用等不显示的留痕不占每页的名额
+export const TRAIL_PAGE = 100
+export const TIMELINE_KINDS: TrailKind[] = ['transition', 'decision', 'deferral', 'data', 'conversation']
+
+// 往前一页的游标: 本页取满时为本页最早一条的 ID; 不满说明已取到最早一条, 没有更早的了
+export function earlierCursor(page: TrailEntry[], size: number = TRAIL_PAGE): string | undefined {
+  return page.length >= size ? (page[0]?.id ?? undefined) : undefined
+}
+
+// 已取到的各页 (最近的一页在前, 每页内按写入顺序) 拼成按写入顺序的留痕
+export function trailInOrder(pages: TrailEntry[][]): TrailEntry[] {
+  return [...pages].reverse().flat()
+}
+
+// 最新一条留痕的 ID (跳过 skip 中的, 如本页刚问的问答): 有新事件时才变, 往前翻页不变 (工作台据此滚到当前事项;
+// 不能看最后一项的 key: 跨页的 "程序完成" 合并项取第一条的 ID, 翻出更早一页时会变)
+export function newestTrailId(pages: TrailEntry[][], skip: ReadonlySet<string> = new Set()): string | undefined {
+  for (const page of pages) {
+    const found = page.findLast((entry) => entry.id && !skip.has(entry.id))
+    if (found?.id) return found.id
+  }
+  return undefined
+}
+
+// complete: 是否已取到最早一条留痕; 没取到时不加 "项目已创建" (它取自最早一条的时间)
+export function buildTimeline(entries: TrailEntry[], complete = true): TimelineItem[] {
   const sorted = [...entries].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
   const items: TimelineItem[] = []
   let completed: { at: string; key: string; ids: string[] } | null = null
@@ -67,7 +93,7 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
     completed = null
   }
 
-  if (sorted[0]?.created_at) items.push({ kind: 'created', key: 'created', at: sorted[0].created_at })
+  if (complete && sorted[0]?.created_at) items.push({ kind: 'created', key: 'created', at: sorted[0].created_at })
 
   for (const [index, entry] of sorted.entries()) {
     const at = entry.created_at ?? ''

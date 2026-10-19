@@ -6808,7 +6808,7 @@ export type ReportsListTrailData = {
         /**
          * Kind
          */
-        kind?: TrailKind | null;
+        kind?: Array<TrailKind> | null;
         /**
          * Limit
          */
@@ -6817,6 +6817,14 @@ export type ReportsListTrailData = {
          * Offset
          */
         offset?: number;
+        /**
+         * Newest
+         */
+        newest?: boolean;
+        /**
+         * Before
+         */
+        before?: string | null;
     };
     url: '/api/v1/engagements/{eid}/trail';
 };

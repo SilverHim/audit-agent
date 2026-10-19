@@ -9,7 +9,7 @@ fragments:
     topic: accumulate_misstatements
     text: |
       The auditor shall accumulate misstatements identified during the audit, other than those that are clearly trivial.
-    procedures: [PLN-01, FIN-04]
+    procedures: [PLN-01, FIN-04, CSH-02]
   - id: ASA450-P11
     paragraph: "11"
     topic: evaluate_uncorrected

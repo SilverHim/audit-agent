@@ -58,12 +58,18 @@ async def get_reports(
 async def list_trail(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
-    kind: TrailKind | None = None,
+    kind: Annotated[list[TrailKind] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    newest: bool = False,
+    before: Annotated[str | None, Query(min_length=1)] = None,
 ) -> list[TrailEntry]:
+    """按写入顺序返回. kind 可重复, 只取这几类; 缺省从最早一条起取; newest 取最近的 limit 条; before 只取写在这条
+    留痕之前的 (往前翻页的游标), 不是本项目的留痕 404 NOT_FOUND."""
     async with catch_api():
-        return await deps.trail.list(engagement.id, kind, limit, offset)
+        if before is not None and await deps.trail.get(engagement.id, before) is None:
+            raise api_error("NOT_FOUND", before)
+        return await deps.trail.list(engagement.id, kind, limit, offset, newest=newest, before=before)
 
 
 @router.get("/trail/{trail_id}")

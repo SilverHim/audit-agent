@@ -46,7 +46,7 @@ from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
-from tests.test_fakes import demo_rows
+from tests.test_fakes import demo_rows, trail_pages_hold
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -298,6 +298,20 @@ async def test_trail_last_of_filters_action_and_takes_latest(storage):
     assert await trail.last_of(e.id, TrailKind.data, ("xero_disconnect",)) is None
     assert await trail.last_of(e.id, TrailKind.data, ()) is None
     assert await trail.last_of("ENG-NOT-MINE", TrailKind.data, actions) is None
+
+
+async def test_trail_list_pages(storage):
+    """AuditTrail.list 的 newest 与 before (同假实现的契约, 场景见 trail_pages_hold); 别的项目的留痕与游标经行级安全
+    排除. 防真实实现与假实现的排序或游标不一致."""
+    engine, e, loader, _ = storage
+    other = await PostgresEngagementStore(engine).create(
+        owner_id=e.owner_id,
+        period_start=e.period_start,
+        period_end=e.period_end,
+        dataset="demo",
+        profile=loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex}),
+    )
+    await trail_pages_hold(PostgresAuditTrail(engine), e.id, other.id)
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

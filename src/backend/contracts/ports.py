@@ -766,8 +766,20 @@ class AuditTrail(Protocol):
     async def find_success(self, eid: str, idempotency_key: str) -> TrailEntry | None: ...
 
     async def list(
-        self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
-    ) -> list[TrailEntry]: ...
+        self,
+        eid: str,
+        kind: TrailKind | Sequence[TrailKind] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        newest: bool = False,
+        before: str | None = None,
+    ) -> list[TrailEntry]:
+        """项目 eid 的留痕, 按写入顺序 (created_at, id) 返回. kind 为一类或一组 (只取这几类; 空的一组取不到), 为空取
+        全部. 缺省从最早一条起跳过 offset 条取 limit 条. newest 为真时取最近的 limit 条 (从最新一条往前跳过 offset
+        条), 仍按写入顺序返回; before 给了时只取写在这条留痕之前的 (游标: 往前翻页时给上一页最早一条的 ID, 写入新
+        留痕也不重不漏; 游标可以是别类的留痕; 不是本项目的 ID 时为空, 接口先查游标在不在). 需求 R297."""
+        ...
 
     async def last_of(self, eid: str, kind: TrailKind, actions: Sequence[str]) -> TrailEntry | None:
         """项目 eid 中 kind 类, payload.action 在 actions 之内的最近一条 (created_at, id 最大的); 没有为 None.
