@@ -225,12 +225,7 @@ function Workspace() {
       <div className="flex-1 px-4 pt-7 pb-2 sm:px-7">
         <div className="mx-auto flex max-w-[780px] flex-col gap-5">
           {history.map((item) => (
-            <HistoryItem
-              key={`${item.kind}:${item.at}:${'id' in item ? item.id : ''}`}
-              item={item}
-              overview={overview}
-              eid={eid}
-            />
+            <HistoryItem key={item.key} item={item} overview={overview} eid={eid} />
           ))}
 
           <div ref={currentRef} className="flex scroll-mt-6 flex-col gap-5">
