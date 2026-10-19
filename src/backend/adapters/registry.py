@@ -13,6 +13,19 @@ from backend.contracts.models import AbnRecord, AsicCompanyRecord, AsicExtract, 
 from backend.contracts.ports import AbnLookup, DataStore, EngagementStore, EvidenceStore, FinancialDataStore
 
 
+async def latest_extractions(
+    financial: FinancialDataStore, data: DataStore, eid: str
+) -> list[tuple[DocumentRef, ExtractionRecord]]:
+    """各份 ASIC 摘录的当前抽取结果 (需求 R290): 现在登记为 registry_extract 的文件中有抽取版本的, 各取最新一版
+    (审计师修改出的新版本即取它), 按文件 ID. ACC-04 (UploadedExtracts) 与接口 (DataService.registry_extracts) 共用."""
+    documents = {d.id: d for d in await financial.documents(eid, DocumentType.registry_extract)}
+    latest: dict[str, ExtractionRecord] = {}
+    for record in await data.extraction_versions(eid, REGISTRY_TARGET):
+        if record.target_id in documents:
+            latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
+    return [(documents[k], latest[k]) for k in sorted(latest)]
+
+
 class UploadedExtracts:
     """新建的客户的 ASIC 摘录 (需求 R290): 现在登记为 registry_extract 且有抽取结果的上传文件, 各取抽取版本表里的
     最新一版 (A3 抽取通过即可用, 审计师修改出新版本, 不另经确认). 原件取证据存储; 证据指针的可靠性取文件现在的登记
@@ -24,13 +37,14 @@ class UploadedExtracts:
         self.evidence = evidence
 
     async def latest(self, eid: str) -> list[tuple[DocumentRef, RegistryExtraction]]:
-        """各份可用的摘录 (登记, 最新一版抽取结果), 按上传时间与文件 ID; 没有为空."""
-        documents = {d.id: d for d in await self.financial.documents(eid, DocumentType.registry_extract)}
-        latest: dict[str, ExtractionRecord] = {}
-        for record in await self.data.extraction_versions(eid, REGISTRY_TARGET):
-            if record.target_id in documents:
-                latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
-        found = [(documents[k], RegistryExtraction.model_validate(r.data)) for k, r in latest.items()]
+        """各份可用的摘录 (登记, 最新一版抽取结果, 见 latest_extractions), 按上传时间与文件 ID; 没有为空. 缺
+        REGISTRY_POINTED 中某字段指针的 (正常不会有: 抽取的引用级校验不放过, 修改不动指针) 按抽取没通过处理, 不可用,
+        ACC-04 不会因取不到指针而出错."""
+        found = [
+            (document, extraction)
+            for document, record in await latest_extractions(self.financial, self.data, eid)
+            if not (extraction := RegistryExtraction.model_validate(record.data)).unpointed()
+        ]
         return sorted(found, key=lambda item: (item[0].uploaded_at, item[0].id))
 
     async def extract(self, eid: str, acn: str) -> AsicExtract | None:
@@ -67,8 +81,9 @@ class UploadedExtracts:
 class CompositeRegistrySource:
     """RegistrySource 的组装根实现: 按项目有没有数据集分流. 有数据集 (Numbat, Xero) 照旧走 DatasetRegistrySource,
     不发 ABN Lookup 请求. 没有数据集时: abn 走 AbnLookup (查不了抛 RegistryUnavailable, reason 为类别); asic_extract
-    与 asic_company 取上传的摘录 (UploadedExtracts; acn 为空抛 not_company, 一份可用的摘录都没有抛 no_extract,
-    ACN 都对不上为 None); asic_person 抛 RegistryUnavailable (no_source). 项目不存在抛 LookupError."""
+    取上传的摘录 (UploadedExtracts; 一份可用的摘录都没有抛 no_extract, ACN 都对不上为 None); asic_company 与
+    asic_person 抛 RegistryUnavailable (no_source): 新客户的 ACC-04 只调 asic_extract, 不经这两个方法. 项目不存在抛
+    LookupError."""
 
     def __init__(
         self,
@@ -96,14 +111,7 @@ class CompositeRegistrySource:
     async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         if await self.has_dataset(eid):
             return await self.datasets.asic_company(eid, acn)
-        if acn is None:
-            raise RegistryUnavailable(f"项目 {eid} 的客户的 ABN 登记没有 ACN, 不是公司", reason="not_company")
-        found = await self.extracts.extract(eid, acn)
-        if found is None:
-            return None
-        return AsicCompanyRecord(
-            acn=found.acn, name=found.name, status=found.status, registered_date=found.registered_date
-        )
+        raise RegistryUnavailable(f"项目 {eid} 的客户没有数据集, 公司登记看上传的 ASIC 摘录", reason="no_source")
 
     async def asic_extract(self, eid: str, acn: str) -> AsicExtract | None:
         if await self.has_dataset(eid):

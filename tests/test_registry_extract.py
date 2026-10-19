@@ -23,8 +23,8 @@ from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.client_intel import Acc04Findings, ClientIntelAgent
 from backend.agents.ingest import REGISTRY, DocumentIntake, Requested
 from backend.contracts.data import REGISTRY_TARGET, DataInput, DocumentChange, ExtractionEdit, ImportBatch
-from backend.contracts.errors import DataRejected, RegistryReason, RegistryUnavailable
-from backend.contracts.llm_outputs import RegistryExtraction
+from backend.contracts.errors import DataRejected, DecisionRejected, RegistryReason, RegistryUnavailable
+from backend.contracts.llm_outputs import REGISTRY_POINTED, RegistryExtraction
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
@@ -174,7 +174,7 @@ async def test_new_company_waits_for_the_extract_then_checks_it() -> None:
     """是公司 (ABN 登记有 ACN) 而没有摘录: ACC-04 之前查一次 ABN, ACC-04 记等待数据, 不执行, A3 提出补交请求 "ASIC
     摘录". 按请求上传 R64 的合成摘录: A3 抽取 (第 1 版, 记数据变动), 请求转 received, 图自动继续, ACC-04 四项都按摘录
     通过, 公司两项的指针指向摘录文件; 共查 ABN 两次 (p0_inputs 与 ACC-04 各一次), 各一条留痕. 之后在 ACC-01 闸门处
-    经接口修改抽取结果: 出第 2 版, 写留痕, 记数据变动, 历史两版."""
+    经接口修改抽取结果: 出第 2 版, 写留痕, 记数据变动, 历史两版; 同一修改重试返回第 2 版, 不再写."""
     s = await started_new_client()
 
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
@@ -220,11 +220,18 @@ async def test_new_company_waits_for_the_extract_then_checks_it() -> None:
         same = await client.put(f"{BASE}/registry-extracts/{DOCUMENT}", json={**edit, "value": "Alex Morgan"})
         missing = await client.put(f"{BASE}/registry-extracts/DOC-000000000000", json=edit)
         changed = await client.put(f"{BASE}/registry-extracts/{DOCUMENT}", json=edit)
+        edits = [
+            e for e in s.runner.deps.trail.entries if e.kind is TrailKind.data and e.payload.get("action") == "edit"
+        ]
+        assert len(edits) == 1  # 修改提交后随即写留痕 (重试取锁时的补写不算)
+        again = await client.put(f"{BASE}/registry-extracts/{DOCUMENT}", json=edit)  # 同一修改的重试
         listed = (await client.get(f"{BASE}/registry-extracts")).json()
         history = (await client.get(f"{BASE}/registry-extracts/{DOCUMENT}/history")).json()
     assert (same.status_code, same.json()["detail"]["code"]) == (422, "INVALID_VALUE")
     assert missing.status_code == 404
     assert changed.status_code == 200, changed.text
+    kept = ("version", "extraction", "field", "changed_by")  # 时间取存下的, 假存储里是固定值
+    assert (again.status_code, {k: again.json()[k] for k in kept}) == (200, {k: changed.json()[k] for k in kept})
     assert [(v["version"], v["field"], v["changed_by"]) for v in history] == [
         (1, None, "A3"),
         (2, "officeholders[1].name", NUMBAT_AUDITOR.id),
@@ -253,7 +260,7 @@ async def test_new_company_without_an_extract_runs_acc04_with_manual_checks() ->
     assert (await s.acc04()).status is ProcedureStatus.completed
     [card] = await s.runner.deps.output_store.latest(EID, AcceptanceScorecard)
     assert [c.passed for c in card.registry_checks] == [True, True, None, None]
-    assert "marked it unavailable" in card.registry_checks[2].detail
+    assert card.registry_checks[2].detail.startswith(f"No uploaded ASIC extract could be used for ACN {ACN}")
     assert await s.runner.deps.output_store.latest(EID, AuditException) == []
     assert s.abn.queries == [ABN, ABN]
     assert s.external_calls()[-1].payload == {"acn": ACN, "available": False, "reason": "no_extract", "result": None}
@@ -301,7 +308,94 @@ async def test_acc04_does_not_wait_when_no_extract_is_needed(
     assert await deps.output_store.latest(EID, Procedure) == []
 
 
+@pytest.mark.parametrize(
+    ("in_store", "in_state", "queries"),
+    [
+        # 以 Store 为准: 上一次写完 Store (第 2 版 awaiting_data) 后留痕失败, 状态里仍是第 1 版; 取 Store 那一版, 不再
+        # 查 ABN, 同样提出补交请求 (上一次没走到体检)
+        ([ProcedureStatus.planned, ProcedureStatus.awaiting_data], ProcedureStatus.planned, 0),
+        # ACC-01 rerun 回来 (画像改了): 已完成的 ACC-04 同样重判, 是公司而没有摘录时转 awaiting_data
+        (
+            [ProcedureStatus.planned, ProcedureStatus.executing, ProcedureStatus.completed],
+            ProcedureStatus.completed,
+            1,
+        ),
+    ],
+    ids=["store_newer", "rerun_completed"],
+)
+async def test_p0_inputs_waits_and_raises_the_request(
+    in_store: list[ProcedureStatus], in_state: ProcedureStatus, queries: int
+) -> None:
+    """p0_inputs 返回 ACC-04 的 awaiting_data 一版 (data_request_ids [REQ-registry_extract]), A3 提出补交请求 "ASIC
+    摘录"; 查 ABN 的次数见参数."""
+    financial, data = FakeFinancialStore(), FakeDataStore(ready=False)
+    store = FakeEngagementStore([PROFILE], [NEW_CLIENT])
+    abn = StaticAbn({ABN: VICTORIA})
+    deps = make_deps(composite(store, abn, financial, data), FakeTrail(), store, financial_store=financial, data=data)
+    financial.document_refs.clear()
+    state = initial_state(NEW_CLIENT, fixed_procedures(deps.library), PROFILE.version)
+    [planned] = [p for p in state["procedure_pack"] if p.id == "ACC-04"]
+    for version, status in enumerate(in_store, 1):
+        update: dict[str, Any] = {"status": status, "version": version}
+        if status is ProcedureStatus.awaiting_data:
+            update["data_request_ids"] = [REQUEST]
+        await deps.output_store.put(EID, [planned.model_copy(update=update)], actor="A1")
+    current = planned.model_copy(
+        update={"status": in_state, "version": 1 if in_state is ProcedureStatus.planned else 3}
+    )
+    state = {**state, "procedure_pack": [current if p.id == "ACC-04" else p for p in state["procedure_pack"]]}
+
+    patch = await make_graph_nodes(deps).p0_inputs(state)
+
+    [acc04] = [p for p in patch["procedure_pack"] if p.id == "ACC-04"]
+    expected_version = len(in_store) if queries == 0 else len(in_store) + 1
+    assert (acc04.status, acc04.data_request_ids, acc04.version) == (
+        ProcedureStatus.awaiting_data,
+        [REQUEST],
+        expected_version,
+    )
+    assert [(r.title, r.used_for, r.status) for r in await data.requests(EID) if r.id == REQUEST] == [
+        ("ASIC 摘录", ["ACC-04"], "open")
+    ]
+    assert len(abn.queries) == queries
+
+
 # ── ACC-04 按摘录核对 (验收 2) ──
+
+
+async def checks_on(versions: list[RegistryExtraction]) -> tuple[ClientIntelAgent, Any]:
+    """新客户的 ACC-04 与执行上下文: 摘录 900043030.pdf 已上传 (补登记为 external_original), 抽取版本表依次存下
+    versions (第 1 版记 A3, 其后记审计师的修改)."""
+    financial, data = FakeFinancialStore(), FakeDataStore()
+    store = FakeEngagementStore([PROFILE], [NEW_CLIENT])
+    registry = composite(store, StaticAbn({ABN: VICTORIA}), financial, data)
+    deps = make_deps(registry, FakeTrail(), store, financial_store=financial, data=data)
+    evidence = deps.evidence_store
+    assert isinstance(evidence, FakeEvidenceStore)
+    registry.extracts.evidence = evidence
+    evidence.ids[f"{ACN}.pdf"] = DOCUMENT  # 与固定输出的指针同一文件 ID
+    await evidence.save(
+        EID,
+        f"{ACN}.pdf",
+        b"%PDF registry extract",
+        type=DocumentType.registry_extract,
+        reliability=Reliability.external_original,
+    )
+    for n, extraction in enumerate(versions, 1):
+        actor, field = ("A3", None) if n == 1 else (NUMBAT_AUDITOR.id, "status")
+        await data.save_extraction(
+            EID, REGISTRY_TARGET, DOCUMENT, n, extraction.model_dump(mode="json"), changed_by=actor, field=field
+        )
+    return ClientIntelAgent(deps), make_ctx(deps, engagement=NEW_CLIENT)
+
+
+async def test_acc04_reads_the_latest_version_of_an_edited_extract() -> None:
+    """裁定 6: 审计师修改出新版本后 ACC-04 取最新一版 (第 1 版 A3 抽出 Registered, 第 2 版审计师改为 Deregistered:
+    company_registered 按第 2 版不通过)."""
+    agent, ctx = await checks_on([fixture_extraction(), fixture_extraction(status="Deregistered")])
+    found = await agent.collect_checks(ctx, PROFILE)
+    assert (found[2].check, found[2].passed) == ("company_registered", False)
+    assert "status Deregistered" in found[2].detail
 
 
 @pytest.mark.parametrize(
@@ -327,36 +421,33 @@ async def test_acc04_does_not_wait_when_no_extract_is_needed(
         ({"name": "Victoria Property Holdings Pty Ltd"}, {}, [False, True], "name Victoria Property Holdings"),
         ({"status": "Deregistered"}, {}, [False, True], "status Deregistered"),
         ({"acn": "900043049"}, {}, [False, None], f"No uploaded ASIC extract for ACN {ACN}"),
+        # 存下的抽取结果缺 status 的指针 (正常不会有): 按抽取没通过处理, 不可用, 两项待人工确认, 不出错
+        (
+            {"evidence": [p for p in fixture_extraction().evidence if p.locator != "status"]},
+            {},
+            [None, None],
+            f"No uploaded ASIC extract could be used for ACN {ACN}",
+        ),
     ],
-    ids=["match", "secretary_and_spelling", "director_missing", "director_undeclared", "name", "deregistered", "acn"],
+    ids=[
+        "match",
+        "secretary_and_spelling",
+        "director_missing",
+        "director_undeclared",
+        "name",
+        "deregistered",
+        "acn",
+        "unpointed",
+    ],
 )
 async def test_acc04_checks_the_company_against_the_extract(
     changes: dict[str, Any], profile: dict[str, Any], passed: list[bool | None], detail: str | None
 ) -> None:
     """新客户的 company_registered (状态, 名称) 与 directors_match (画像董事对摘录董事) 按上传摘录的最新一版判; 不通过
     的各出一条例外 (rule_id 为检查名); 摘录的 ACN 对不上时 company_registered 不通过, 董事待人工确认. 按摘录判的两项
-    指针指向摘录文件, 可靠性取文件现在的登记 (这里审计师补登记成了 external_original, 抽取时的指针是 external_copy)."""
-    financial, data = FakeFinancialStore(), FakeDataStore()
-    store = FakeEngagementStore([PROFILE], [NEW_CLIENT])
-    registry = composite(store, StaticAbn({ABN: VICTORIA}), financial, data)
-    deps = make_deps(registry, FakeTrail(), store, financial_store=financial, data=data)
-    evidence = deps.evidence_store
-    assert isinstance(evidence, FakeEvidenceStore)
-    registry.extracts.evidence = evidence
-    evidence.ids[f"{ACN}.pdf"] = DOCUMENT  # 与固定输出的指针同一文件 ID
-    document = await evidence.save(
-        EID,
-        f"{ACN}.pdf",
-        b"%PDF registry extract",
-        type=DocumentType.registry_extract,
-        reliability=Reliability.external_original,
-    )
-    extraction = fixture_extraction(**changes)
-    await data.save_extraction(
-        EID, REGISTRY_TARGET, document.id, 1, extraction.model_dump(mode="json"), changed_by="A3"
-    )
-    agent = ClientIntelAgent(deps)
-    ctx = make_ctx(deps, engagement=NEW_CLIENT)
+    指针指向摘录文件 (名称不同时 company_registered 指向 name, 否则指向 status), 可靠性取文件现在的登记 (这里审计师
+    补登记成了 external_original, 抽取时的指针是 external_copy)."""
+    agent, ctx = await checks_on([fixture_extraction(**changes)])
     declared = PROFILE.model_copy(update=profile)
     found = await agent.collect_checks(ctx, declared)
 
@@ -364,9 +455,16 @@ async def test_acc04_checks_the_company_against_the_extract(
     if detail is not None:
         assert detail in next(c.detail for c in found[2:] if c.passed is not True)
     on_extract = [
-        (c.evidence.source_id, c.evidence.reliability) for c in found[2:] if c.evidence.source_type == "document"
+        (c.evidence.source_id, c.evidence.locator, c.evidence.reliability)
+        for c in found[2:]
+        if c.evidence.source_type == "document"
     ]
-    assert on_extract == ([] if "acn" in changes else [(DOCUMENT, Reliability.external_original)] * 2)
+    located = "name" if "name" in changes else "status"
+    expected = [
+        (DOCUMENT, located, Reliability.external_original),
+        (DOCUMENT, "officeholders", Reliability.external_original),
+    ]
+    assert on_extract == ([] if {"acn", "evidence"} & changes.keys() else expected)
     patch = await agent.interpret(ctx, Acc04Findings(profile=declared, checks=found))
     assert [x.rule_id for x in patch["exceptions"]] == [c.check for c in found if c.passed is False]
 
@@ -400,11 +498,10 @@ async def test_reuploaded_extract_of_the_same_company_wins() -> None:
     ("drop", "page", "error"),
     [
         (None, None, None),
-        ("officeholders", None, "摘录的 officeholders 没有 locator 为 officeholders 的指针"),
-        ("acn", None, "摘录的 acn 没有 locator 为 acn 的指针"),
+        *[(name, None, f"摘录的 {name} 没有 locator 为 {name} 的指针") for name in REGISTRY_POINTED],
         (None, 3, "页码 3 不在 1-2 之间"),
     ],
-    ids=["ok", "no_officeholders_pointer", "no_acn_pointer", "page_out_of_range"],
+    ids=["ok", *[f"no_{name}_pointer" for name in REGISTRY_POINTED], "page_out_of_range"],
 )
 async def test_extraction_needs_pointers_to_this_document(
     drop: str | None, page: int | None, error: str | None
@@ -437,7 +534,14 @@ async def test_extraction_needs_pointers_to_this_document(
         assert result.level == "reference" and any(error in e for e in result.errors)
 
 
-# DOC-REGISTRY 提示词的口径: 输出一节里须有一行同时含这几个词 (不分大小写), 不比逐字原文
+def test_extraction_strips_spaces_from_acn_and_abn() -> None:
+    """结构级: 大模型照摘录原样把 ACN, ABN 写成 3 位一组 (900 043 030) 时去掉空白再校验."""
+    data = {**fixture_extraction().model_dump(mode="json"), "acn": "900 043 030", "abn": "27 900 043 030"}
+    parsed = RegistryExtraction.model_validate(data)
+    assert (parsed.acn, parsed.abn) == (ACN, ABN)
+
+
+# DOC-REGISTRY 提示词的口径: 渲染结果里须有一行同时含这几个词 (不分大小写), 不比逐字原文
 REGISTRY_RULES = {
     "ACN 为 9 位不带空格": ("`acn`", "9 digits", "without spaces"),
     "没写 ABN 为 null": ("`abn`", "null", "does not state"),
@@ -447,6 +551,11 @@ REGISTRY_RULES = {
     "持股比例为小数": ("`pct`", "fraction"),
     "四个字段必须有指针": ("`acn`", "`name`", "`status`", "`officeholders`", "always need"),
     "原文当数据": ("data", "ignore", "instruction"),
+    "页码取 page 块的编号": ("page number", "`number`", "`<page>`"),
+    "职务只能是董事或秘书": ("`role`", "`director`", "`secretary`"),
+    "实缴股本为整数分": ("`paid_up_cents`", "integer cents"),
+    "姓名名在前姓在后, 不带逗号": ("given names first", "family name last", "without a comma", "swap"),
+    "中间名照抄": ("middle names", "as written"),
 }
 
 
@@ -497,6 +606,51 @@ def test_registry_edits(field: str, value: Any, expected: tuple[str, Any] | str)
     else:
         assert getattr(updated, name) == new
     assert updated.evidence == extraction.evidence  # 指针不变, 仍指向原文
+
+
+@pytest.mark.parametrize("case", ["busy", "locked", "retyped"])
+async def test_registry_edit_needs_the_lock_and_a_current_extract(case: str) -> None:
+    """修改持项目锁: 图在跑 (锁被占) 为 ENGAGEMENT_BUSY (接口 409), 项目锁定为 ENGAGEMENT_LOCKED (423). 文件改了类型
+    后不再是 ASIC 摘录: 列表不列, 历史与修改为 LookupError (接口 404). 都不写新版本."""
+    financial, data = FakeFinancialStore(), FakeDataStore()
+    store = FakeEngagementStore([PROFILE], [NEW_CLIENT])
+    runner, _ = make_runner(engagement_store=store, financial_store=financial, data=data)
+    financial.document_refs.clear()
+    evidence = runner.deps.evidence_store
+    assert isinstance(evidence, FakeEvidenceStore)
+    evidence.ids[f"{ACN}.pdf"] = DOCUMENT
+    await evidence.save(
+        EID, f"{ACN}.pdf", b"%PDF", type=DocumentType.registry_extract, reliability=Reliability.external_copy
+    )
+    await data.save_extraction(
+        EID, REGISTRY_TARGET, DOCUMENT, 1, fixture_extraction().model_dump(mode="json"), changed_by="A3"
+    )
+    service = DataService(runner.deps, runner)
+    edit = ExtractionEdit(field="status", value="Deregistered", reason="核对第 1 页")
+    rejected: type[Exception] = DataRejected
+    if case == "busy":
+        runner.acquire(EID)
+        rejected, code = DecisionRejected, "ENGAGEMENT_BUSY"
+    elif case == "locked":
+        await store.update(EID, locked=True)
+        code = "ENGAGEMENT_LOCKED"
+    else:
+        await evidence.update_document(
+            EID,
+            DOCUMENT,
+            type=DocumentType.other,
+            reliability=Reliability.internal_copy,
+            status="classified",
+            failed_step=None,
+        )
+        assert await service.registry_extracts(EID) == []
+        with pytest.raises(LookupError):
+            await service.registry_history(EID, DOCUMENT)
+        rejected, code = LookupError, ""
+    with pytest.raises(rejected) as raised:
+        await service.edit_registry_extract(EID, DOCUMENT, edit, NUMBAT_AUDITOR.id)
+    assert getattr(raised.value, "code", "") == code
+    assert [r.version for r in await data.extraction_versions(EID, REGISTRY_TARGET, DOCUMENT)] == [1]
 
 
 async def test_staged_import_extracts_the_registry_and_commit_writes_the_next_version() -> None:
@@ -580,8 +734,8 @@ async def test_reextraction_appends_after_the_existing_versions(since: datetime 
 async def test_registry_extract_on_real_store(tmp_path: Path) -> None:
     """真实存储与运行中应用的 mock 大模型 (组装根的 DatasetFixtureLLMClient, 固定输出目录取演示运行副本 data/demo/llm,
     同 .env.example; 新客户没有数据集读它): 上传的摘录分类判断不了, 人工指定类型后抽取 (第 1 版, 数据变动
-    registry_extracts), UploadedExtracts 读回带原件与指针 (可靠性取文件登记), 其他 ACN 为 None; 修改出第 2 版; 智能
-    导入确认时接在已有版本之后写第 3 版."""
+    registry_extracts), UploadedExtracts 读回带原件与指针 (可靠性取文件登记), 其他 ACN 为 None; 修改出第 2 版, 再读回
+    的是第 2 版; 智能导入确认时接在已有版本之后写第 3 版."""
     from sqlalchemy import insert
 
     from backend.core.config import Settings
@@ -627,6 +781,8 @@ async def test_registry_extract_on_real_store(tmp_path: Path) -> None:
 
     edit = ExtractionEdit(field="officeholders[0].name", value="Dana Jane Morgan", reason="核对第 1 页")
     await service.edit_registry_extract(eid, DOCUMENT, edit, user)
+    edited = await uploads.extract(eid, ACN)  # ACC-04 读到的是改后的第 2 版
+    assert edited is not None and edited.officeholders[0].name == "Dana Jane Morgan"
     batch = ImportBatch(id="BAT-" + uuid4().hex[:12], status="ready", created_by=user, created_at=now(), files=[])
     await data.save_batch(eid, batch)
     change = DocumentChange(

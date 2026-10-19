@@ -795,7 +795,7 @@ class GraphNodes:
         资料时 ACC-04 照常执行, 公司两项待人工确认, 不记 no_data: ACC-01 闸门要评分卡). 不是公司或 ABN 查不了时不等.
         ACC-01 的 rerun 出口也回到这里 (画像改了, ABN 可能变): 已完成的 ACC-04 同样重判.
         以 Store 为准: Store 里 ACC-04 的最新版本比状态里的新, 是本节点上一次没走完时写的 (写完后留痕失败, 节点出错),
-        取 Store 那一版, 补写它的留痕 (同键跳过), 返回片段.
+        取 Store 那一版, 补写它的留痕 (同键跳过); 那一版在等摘录时同样跑一次体检 (上一次没走到), 返回片段.
         单独成节点, 节点内只有这一个等待: p0_intel 里另有 "失败等人" 的 interrupt(), 恢复值不能交错 (见
         p1_await_data)."""
         eid = state["engagement_id"]
@@ -813,9 +813,17 @@ class GraphNodes:
         def replaced(updated: Procedure) -> StatePatch:
             return {"procedure_pack": [updated if p.id == ACC04 else p for p in pack]}
 
+        async def checkup() -> None:  # 开始等摘录时 A3 提出补交请求; 出错只记日志 (下次数据写操作再体检)
+            try:
+                await DataCheckup(self.deps).run(eid)
+            except Exception:
+                logger.exception("ACC-04 开始等 ASIC 摘录时体检失败: %s", eid)
+
         stored = await store.get(eid, Procedure, ACC04)
         if stored is not None and stored.version > procedure.version:
             await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [stored]))
+            if stored.status is ProcedureStatus.awaiting_data:
+                await checkup()
             return replaced(stored)
         waiting = procedure.status is ProcedureStatus.awaiting_data and EXTRACT_REQUEST in procedure.data_request_ids
         if waiting:
@@ -845,10 +853,7 @@ class GraphNodes:
                 written = cast(list[Procedure], await store.put(eid, [updated], actor=AgentId.A1))
             await record_transitions(self.deps.trail, await procedure_transitions(store, eid, written))
             if status is ProcedureStatus.awaiting_data:
-                try:
-                    await DataCheckup(self.deps).run(eid)
-                except Exception:
-                    logger.exception("ACC-04 开始等 ASIC 摘录时体检失败: %s", eid)
+                await checkup()
             return replaced(written[0])
         if wait:
             interrupt(inputs_payload([ACC04]))

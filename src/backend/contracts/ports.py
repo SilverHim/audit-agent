@@ -631,9 +631,9 @@ class LlmSettingsStore(Protocol):
 class RegistrySource(Protocol):
     """ABN 与 ASIC 登记查询, 首参为项目 ID. 组装根为组合实现 (adapters/registry.CompositeRegistrySource, 需求 R289):
     项目有数据集时读该数据集目录下的 registry/ (Numbat 为 data/demo, Xero 为补造目录; 没有目录时查不到); 项目没有
-    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 公司登记与摘录取审计师上传的 ASIC 摘录的最新抽取结果
-    (需求 R290: acn 为空抛 not_company, 一份可用的摘录都没有抛 no_extract, ACN 都对不上为 None), 人员检索抛
-    RegistryUnavailable (no_source). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
+    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 摘录取审计师上传的 ASIC 摘录的最新抽取结果 (需求 R290:
+    一份可用的摘录都没有抛 no_extract, ACN 都对不上为 None), 公司登记与人员检索抛 RegistryUnavailable (no_source;
+    新客户的 ACC-04 只用摘录). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 

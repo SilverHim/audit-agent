@@ -183,8 +183,9 @@ def composite(abr: FakeAbr, dataset: str | None, guid: str = FAKE_GUID) -> Compo
 
 
 async def test_composite_routes_by_dataset() -> None:
-    """有数据集 (Numbat, Xero) 照旧读数据集的登记, 不发 ABR 请求; 新建的客户 (没有数据集) ABN 实查, ASIC 取上传的
-    摘录 (R290, 这里一份都没有: no_extract); 项目不存在抛 LookupError."""
+    """有数据集 (Numbat, Xero) 照旧读数据集的登记, 不发 ABR 请求; 新建的客户 (没有数据集) ABN 实查, ASIC 摘录取上传的
+    (R290, 这里一份都没有: no_extract), 公司登记没有来源 (no_source, 新客户的 ACC-04 只看摘录); 项目不存在抛
+    LookupError."""
     abr = FakeAbr({WOMBAT.abn: "active"})
     with_dataset = composite(abr, "demo")
     assert await with_dataset.abn(ENGAGEMENT.id, NUMBAT_ABN.abn) == NUMBAT_ABN
@@ -193,8 +194,10 @@ async def test_composite_routes_by_dataset() -> None:
     new_client = composite(abr, None)
     assert await new_client.abn(ENGAGEMENT.id, WOMBAT.abn) == WOMBAT
     with pytest.raises(RegistryUnavailable) as e:
+        await new_client.asic_extract(ENGAGEMENT.id, "900043101")
+    with pytest.raises(RegistryUnavailable) as company:
         await new_client.asic_company(ENGAGEMENT.id, "900043101")
-    assert e.value.reason == "no_extract" and len(abr.requests) == 1
+    assert (e.value.reason, company.value.reason, len(abr.requests)) == ("no_extract", "no_source", 1)
     with pytest.raises(LookupError):
         await new_client.abn("ENG-NONE", WOMBAT.abn)
 

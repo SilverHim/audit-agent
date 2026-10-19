@@ -18,6 +18,7 @@ from uuid import uuid4
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from backend.adapters.registry import latest_extractions
 from backend.adapters.xero_supplements import STAGE_REQUESTS, DemoPlan, DemoSource, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
@@ -487,10 +488,10 @@ class DataService:
         await self.continue_waiting(eid)
 
     async def continue_waiting(self, eid: str) -> None:
-        """持项目锁的数据写操作结束时调用, 锁由此交出或释放, 调用方不再管锁: 图停在 await_data 等程序要的数据
-        (需求 R272) 时交给后台, 以 Command(resume=INPUTS_CHANGED) 恢复, 由节点按现有资料重查, 后台任务结束时释放;
-        否则释放. 读检查点出错只记日志, 释放; 读检查点时被取消 (请求取消, 应用退出) 也释放, 再照常抛出; 后台任务
-        建不起来时 runner.launch 已释放锁, 只记日志."""
+        """持项目锁的数据写操作结束时调用, 锁由此交出或释放, 调用方不再管锁: 图停在 await_data 或 p0_inputs 等程序
+        要的数据 (需求 R272, R290) 时交给后台, 以 Command(resume=INPUTS_CHANGED) 恢复, 由节点按现有资料重查, 后台
+        任务结束时释放; 否则释放. 读检查点出错只记日志, 释放; 读检查点时被取消 (请求取消, 应用退出) 也释放, 再照常
+        抛出; 后台任务建不起来时 runner.launch 已释放锁, 只记日志."""
         handed = False  # 锁已交给 runner.launch
         try:
             try:
@@ -1918,13 +1919,8 @@ class DataService:
 
     async def registry_extracts(self, eid: str) -> list[ExtractionRecord]:
         """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 现在登记为 registry_extract 的文件中有抽取版本的,
-        各取最新一版, 按文件 ID."""
-        current = await self._registry_documents(eid)
-        latest: dict[str, ExtractionRecord] = {}
-        for record in await self.deps.data.extraction_versions(eid, REGISTRY_TARGET):
-            if record.target_id in current:
-                latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
-        return [latest[k] for k in sorted(latest)]
+        各取最新一版, 按文件 ID; 与 ACC-04 读的同一份 (adapters.registry.latest_extractions)."""
+        return [record for _, record in await latest_extractions(self.deps.financial_store, self.deps.data, eid)]
 
     async def registry_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:
         """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是 ASIC

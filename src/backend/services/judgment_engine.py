@@ -15,7 +15,6 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
-    REGISTRY_POINTED,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
@@ -580,10 +579,7 @@ class OutputValidator:
         ):
             errors.append("应计利息 accrued_interest_cents 非空, 却没有 locator 为 accrued_interest_cents 的指针")
         if isinstance(output, RegistryExtraction):
-            pointed = {p.locator for p in output.evidence}
-            errors += [
-                f"摘录的 {name} 没有 locator 为 {name} 的指针" for name in REGISTRY_POINTED if name not in pointed
-            ]
+            errors += [f"摘录的 {name} 没有 locator 为 {name} 的指针" for name in output.unpointed()]
         return output.model_copy(update={"evidence": evidence}), errors
 
 

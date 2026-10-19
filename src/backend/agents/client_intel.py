@@ -162,7 +162,7 @@ UNAVAILABLE: dict[RegistryReason, str] = {
     "rejected": "ABN Lookup did not accept the authentication GUID; {subject} not queried",
     "service_error": "ABN Lookup returned an error; {subject} not queried",
     "not_company": "No ACN on the ABN record for {subject}: not a company, no ASIC extract required",
-    "no_extract": "No usable ASIC extract for {subject} (the auditor marked it unavailable, or it could not be read)",
+    "no_extract": "No uploaded ASIC extract could be used for {subject}",
 }
 
 

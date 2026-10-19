@@ -96,6 +96,11 @@ class RegistryExtraction(Model):
         """ACN 与 ABN 常按 3 位一组写 (900 043 030), 去掉空白再校验."""
         return "".join(value.split()) if isinstance(value, str) else value
 
+    def unpointed(self) -> list[str]:
+        """REGISTRY_POINTED 中没有 locator 为该字段的指针的字段 (引用级校验与 ACC-04 取摘录共用)."""
+        pointed = {p.locator for p in self.evidence}
+        return [name for name in REGISTRY_POINTED if name not in pointed]
+
 
 class DocumentClassification(Model):
     """A3 按文件名与首页文字给上传的文件分类."""
