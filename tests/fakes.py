@@ -49,7 +49,7 @@ from backend.contracts.data import (
     XeroConnection,
     table_changes,
 )
-from backend.contracts.errors import EngagementLocked, VersionConflict
+from backend.contracts.errors import AbnTaken, EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
@@ -62,6 +62,7 @@ from backend.contracts.models import (
     AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
+    ClientEntry,
     ClientProfile,
     Confirmation,
     ConfirmationResult,
@@ -90,6 +91,8 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProfileRecord,
+    ProfileSource,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
@@ -763,6 +766,8 @@ class FakeEngagementStore:
         self, profiles: list[ClientProfile] | None = None, engagements: list[Engagement] | None = None
     ) -> None:
         self.profiles = profiles or []  # 已生效的客户画像, 同一客户可有多个版本
+        # 画像各版的出处 (id, version) → (来源, 写入人, 写入时间); 构造时给的画像没有, 视同老版本 (未记录)
+        self.profile_meta: dict[tuple[str, int], tuple[ProfileSource | None, str | None, datetime]] = {}
         self.engagements = engagements or []  # 已生效的审计项目
         self.output_store: FakeOutputStore | None = None  # 共用事务的审计产出存储, bind 后才有
 
@@ -779,7 +784,7 @@ class FakeEngagementStore:
         owner_id: str,
         period_start: date,
         period_end: date,
-        dataset: str,
+        dataset: str | None,
         profile: ClientProfile,
     ) -> Engagement:
         raise NotImplementedError
@@ -830,8 +835,10 @@ class FakeEngagementStore:
         hits = [p for p in visible if p.id == client_id and (version is None or p.version == version)]
         return max(hits, key=lambda p: p.version, default=None)
 
-    async def save_profile(self, profile: ClientProfile) -> ClientProfile:
-        """version 须为已有最大值 +1."""
+    async def save_profile(
+        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+    ) -> ClientProfile:
+        """version 须为已有最大值 +1; 记下该版的出处."""
         latest = await self.client_profile(profile.id)
         expected = latest.version + 1 if latest is not None else 1
         if profile.version != expected:
@@ -842,7 +849,41 @@ class FakeEngagementStore:
             txn.log.append(EngagementWrite("save_profile", profile.id, {"version": profile.version}))
         else:
             self.profiles.append(profile)
+        self.profile_meta[(profile.id, profile.version)] = (source, updated_by, datetime.now(UTC))
         return profile
+
+    def record(self, profile: ClientProfile) -> ProfileRecord:
+        source, updated_by, updated_at = self.profile_meta.get((profile.id, profile.version), (None, None, NOW))
+        return ProfileRecord(profile=profile, source=source, updated_by=updated_by, updated_at=updated_at)
+
+    async def profile_history(self, client_id: str) -> list[ProfileRecord]:
+        """该客户画像的各版及出处, 按版本升序."""
+        txn = self._txn()
+        visible = self.profiles + (txn.profiles if txn is not None else [])
+        return [self.record(p) for p in sorted((p for p in visible if p.id == client_id), key=lambda p: p.version)]
+
+    async def clients(self) -> list[ClientEntry]:
+        """各客户 (按 id 排序) 的最新一版与第 1 版的来源."""
+        entries: list[ClientEntry] = []
+        for client_id in sorted({p.id for p in self.profiles}):
+            history = await self.profile_history(client_id)
+            latest = history[-1]
+            entries.append(ClientEntry(profile=latest.profile, first_source=history[0].source))
+        return entries
+
+    async def create_client(
+        self, profile: ClientProfile, *, created_by: str, dataset_profiles: Sequence[ClientProfile]
+    ) -> ClientProfile:
+        """同 PostgresEngagementStore.create_client: 版本须为 1, ABN 不得已是别的客户的 (库里最新一版与还没进库的
+        数据集画像)."""
+        if profile.version != 1:
+            raise VersionConflict(profile.id)
+        stored = [entry.profile for entry in await self.clients()]
+        known = {p.id for p in stored}
+        for other in [*stored, *(p for p in dataset_profiles if p.id not in known)]:
+            if other.abn == profile.abn:
+                raise AbnTaken(profile.abn, other.id, other.legal_name)
+        return await self.save_profile(profile, source=ProfileSource.manual, updated_by=created_by)
 
     def commit(self, txn: FakeTxn) -> None:
         """FakeOutputStore 提交事务时调用: 暂存的项目改动与画像生效."""

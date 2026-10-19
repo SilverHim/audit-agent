@@ -91,15 +91,18 @@ def summarize(
     )
 
 
-def source_label(version: TableVersion | None, dataset: str | None) -> str:
+def source_label(version: TableVersion | None, dataset: str | None) -> str | None:
     """体检与请求文案里总账的来源名: Xero 同步与 Xero 快照载入为 Xero; 导入为原文件名; 其他数据集载入为
-    journal_entries.csv (数据集的总账文件). version 为总账最新一版, 数据集载入的没有版本."""
+    journal_entries.csv (数据集的总账文件). version 为总账最新一版, 数据集载入的没有版本. 没有数据集 (新建的客户,
+    需求 R288) 而总账还没接入的为 None, 前端显示 "尚未导入"."""
     if version is not None:
         if version.source == "xero":
             return "Xero"
         if version.source == "import":
             return version.file_name or "import"
-    if dataset is not None and dataset.startswith("xero/"):
+    if dataset is None:
+        return None
+    if dataset.startswith("xero/"):
         return "Xero"
     return "journal_entries.csv"
 

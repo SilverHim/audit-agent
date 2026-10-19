@@ -31,3 +31,17 @@ class DataRejected(DecisionRejected):
     def __init__(self, code: str, message: str = "", **extra: object) -> None:
         super().__init__(code, message)
         self.extra = extra
+
+
+class AbnTaken(Exception):
+    """新建客户时 ABN 已被另一个客户使用; client_id 与 legal_name 为已有的那个客户 (供提示改选)."""
+
+    def __init__(self, abn: str, client_id: str, legal_name: str) -> None:
+        super().__init__(f"ABN {abn} 已是客户 {client_id} ({legal_name}) 的 ABN")
+        self.abn = abn
+        self.client_id = client_id
+        self.legal_name = legal_name
+
+
+class RegistryUnavailable(Exception):
+    """项目没有可查的登记来源 (如新建的客户没有数据集的登记 mock, ABR 与摘录未接入): ACC-04 转人工确认."""

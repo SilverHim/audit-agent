@@ -20,6 +20,7 @@ from backend.contracts.models import (
     Phase,
     ProcedureRun,
     ProcedureStatus,
+    ProfileSource,
     ReportStatus,
     ReviewRecord,
     ReviewTask,
@@ -380,7 +381,7 @@ async def test_profile_update_caught_up_then_reruns_acc04() -> None:
 async def test_other_engagement_profile_does_not_trigger_catch_up() -> None:
     """R31 验收 1: 同客户的另一项目把全局最新画像升到第 2 版, 本项目采用的仍是第 1 版: 不补做, 检查点不动."""
     s = await started(TYPO_PROFILE)
-    await s.engagement_store.save_profile(FIXED_PROFILE)
+    await s.engagement_store.save_profile(FIXED_PROFILE, source=ProfileSource.update, updated_by="U-1")
     before = (await s.runner.app.aget_state(CONFIG)).config
 
     await s.runner.recover()

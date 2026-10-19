@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -24,6 +25,7 @@ from backend.contracts.models import (
     OpinionType,
     Phase,
     ReportSection,
+    RiskItem,
     RiskLevel,
 )
 from backend.contracts.records import DatasetTraits
@@ -231,6 +233,14 @@ class ProcedureLibrary:
             else:
                 out[key] = copy.deepcopy(value)
         return out
+
+    def planning_templates(self) -> tuple[list[AuditObjective], list[RiskItem]]:
+        """planning/ 的通用审计目标与风险清单模板 (每次调用重新读文件): 没有数据集预置的项目用, 如新建的客户.
+        与没有补造目录的 Xero 快照所用的模板是同一份."""
+        directory = self.root / "planning"
+        objectives = json.loads((directory / "audit_objectives.json").read_text(encoding="utf-8"))
+        risks = json.loads((directory / "risk_register.json").read_text(encoding="utf-8"))
+        return [AuditObjective.model_validate(o) for o in objectives], [RiskItem.model_validate(r) for r in risks]
 
     def fragment(self, fragment_id: str) -> StandardFragment | None:
         return self._fragments.get(fragment_id)

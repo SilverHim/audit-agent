@@ -37,6 +37,15 @@ export function failedChecks(error: unknown): string[] {
   return detail.failed_checks.map(String)
 }
 
+// ABN_TAKEN (新建客户时 ABN 已是别的客户) 附带的已有客户
+export type TakenClient = { client_id: string; legal_name: string }
+
+export function abnTaken(error: unknown): TakenClient | null {
+  const detail = apiDetail(error)
+  if (detail?.code !== 'ABN_TAKEN' || typeof detail.client_id !== 'string') return null
+  return { client_id: detail.client_id, legal_name: typeof detail.legal_name === 'string' ? detail.legal_name : '' }
+}
+
 // IMPORT_PARSE_ERROR 附带的前 20 处解析失败
 export type ParseFailure = { row: number; column: string; value: string }
 

@@ -25,10 +25,11 @@ from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
 from backend.contracts.data import ContractVersion, DataInput
-from backend.contracts.errors import VersionConflict
+from backend.contracts.errors import AbnTaken, VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditObjective,
+    ClientEntry,
     ClientProfile,
     Contract,
     DocumentChannel,
@@ -40,6 +41,8 @@ from backend.contracts.models import (
     LlmSettings,
     LlmSlot,
     Phase,
+    ProfileRecord,
+    ProfileSource,
     Reliability,
     RiskItem,
     SourceType,
@@ -935,7 +938,7 @@ def read_planning(directory: Path) -> tuple[list[AuditObjective], list[RiskItem]
 
 class PostgresEngagementStore(Store):
     async def create(
-        self, *, owner_id: str, period_start: date, period_end: date, dataset: str, profile: ClientProfile
+        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
@@ -948,7 +951,7 @@ class PostgresEngagementStore(Store):
                 .all()
             )
             number = max((int(r.rsplit("-", 1)[1]) for r in rows), default=0) + 1
-            adopted = await self.adopt_profile(profile)
+            adopted = await self.adopt_profile(profile, updated_by=owner_id)
             item = Engagement(
                 id=f"ENG-{year}-{number:03d}",
                 client_id=profile.id,
@@ -964,16 +967,21 @@ class PostgresEngagementStore(Store):
             await conn.execute(insert(m.engagements).values(**item.model_dump()))
             return item
 
-    async def adopt_profile(self, profile: ClientProfile) -> ClientProfile:
-        """建项目时采用的画像 (改一律出新版本, 旧版本不覆盖). profile 是数据集带的画像, 与该客户已存的各版比较内容
-        (不看版本号): 库里没有该客户时按 profile 写入; 有一版相同, 说明数据集没变, 沿用最新一版 (含审计师在 ACC-01
-        改过的); 都不同, 说明数据集本身改了 (如补造画像改了内容), 才写新一版 (最新版本 +1)."""
-        versions = await self._profile_versions(profile.id)
+    async def adopt_profile(self, profile: ClientProfile, *, updated_by: str) -> ClientProfile:
+        """建项目时采用的画像 (改一律出新版本, 旧版本不覆盖). profile 是数据集带的画像 (新建的客户为其最新一版), 与
+        该客户已存的各版比较内容 (不看版本号): 库里没有该客户时按 profile 写入; 有一版相同, 说明数据集没变, 沿用最新
+        一版 (含审计师在 ACC-01 改过的); 都不同, 说明数据集本身改了 (如补造画像改了内容), 才写新一版 (最新版本 +1).
+        写入的版本 source 为 dataset, updated_by 为建项目的人."""
+        versions = [r.profile for r in await self.profile_history(profile.id)]
         if not versions:
-            return await self.save_profile(profile)
+            return await self.save_profile(profile, source=ProfileSource.dataset, updated_by=updated_by)
         if any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
             return versions[-1]
-        return await self.save_profile(profile.model_copy(update={"version": versions[-1].version + 1}))
+        return await self.save_profile(
+            profile.model_copy(update={"version": versions[-1].version + 1}),
+            source=ProfileSource.dataset,
+            updated_by=updated_by,
+        )
 
     async def get(self, eid: str) -> Engagement | None:
         rows = await self.rows(eid, select(m.engagements).where(m.engagements.c.id == eid))
@@ -1005,11 +1013,7 @@ class PostgresEngagementStore(Store):
             )
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:
-        # Global profiles join the current project transaction without changing its RLS scope.
-        from backend.persistence.db import _active
-
-        active = _active.get()
-        eid = active[1] if active and active[0] is self.engine and active[3] is asyncio.current_task() else ""
+        eid = self._joined_eid()  # 画像是跨项目表, 并入当前项目事务而不改其 RLS 范围
         stmt = (
             select(m.client_profiles.c.data)
             .where(m.client_profiles.c.id == client_id)
@@ -1021,24 +1025,62 @@ class PostgresEngagementStore(Store):
         rows = await self.rows(eid, stmt)
         return ClientProfile.model_validate(rows[0]["data"]) if rows else None
 
-    async def _profile_versions(self, client_id: str) -> list[ClientProfile]:
-        """该客户画像的各版, 按版本号从低到高; 没有时为空列表. 与 client_profile 一样并入当前项目事务."""
+    def _joined_eid(self) -> str:
+        """当前任务里已开的本引擎事务的项目 ID (画像是跨项目表, 读写都并入该事务而不改其 RLS 范围); 没有时为空."""
         from backend.persistence.db import _active
 
         active = _active.get()
-        eid = active[1] if active and active[0] is self.engine and active[3] is asyncio.current_task() else ""
+        return active[1] if active and active[0] is self.engine and active[3] is asyncio.current_task() else ""
+
+    async def profile_history(self, client_id: str) -> list[ProfileRecord]:
+        """该客户画像的各版及出处, 按版本号从低到高; 没有时为空列表. 与 client_profile 一样并入当前项目事务."""
+        t = m.client_profiles
         stmt = (
-            select(m.client_profiles.c.data)
-            .where(m.client_profiles.c.id == client_id)
-            .order_by(m.client_profiles.c.version)
+            select(t.c.data, t.c.source, t.c.updated_by, t.c.updated_at)
+            .where(t.c.id == client_id)
+            .order_by(t.c.version)
         )
-        return [ClientProfile.model_validate(row["data"]) for row in await self.rows(eid, stmt)]
+        return [
+            ProfileRecord(
+                profile=ClientProfile.model_validate(row["data"]),
+                source=row["source"],
+                updated_by=row["updated_by"],
+                updated_at=row["updated_at"],
+            )
+            for row in await self.rows(self._joined_eid(), stmt)
+        ]
 
-    async def save_profile(self, profile: ClientProfile) -> ClientProfile:
-        from backend.persistence.db import _active
+    async def clients(self) -> list[ClientEntry]:
+        """各客户 (按 id 排序) 的最新一版与第 1 版的来源."""
+        t = m.client_profiles
+        latest = select(t.c.id, t.c.data).distinct(t.c.id).order_by(t.c.id, t.c.version.desc())
+        first = select(t.c.id, t.c.source).distinct(t.c.id).order_by(t.c.id, t.c.version)
+        eid = self._joined_eid()
+        sources = {row["id"]: row["source"] for row in await self.rows(eid, first)}
+        return [
+            ClientEntry(profile=ClientProfile.model_validate(row["data"]), first_source=sources.get(row["id"]))
+            for row in await self.rows(eid, latest)
+        ]
 
-        active = _active.get()
-        eid = active[1] if active and active[0] is self.engine and active[3] is asyncio.current_task() else ""
+    async def create_client(
+        self, profile: ClientProfile, *, created_by: str, dataset_profiles: Sequence[ClientProfile]
+    ) -> ClientProfile:
+        """新建客户 (见 EngagementStore.create_client): 咨询锁 clients 内查 ABN 是否已被占用, 再写第 1 版."""
+        if profile.version != 1:
+            raise VersionConflict(profile.id)
+        async with transaction(self.engine, "") as conn:
+            await conn.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('clients', 0))"))
+            stored = [entry.profile for entry in await self.clients()]
+            known = {p.id for p in stored}
+            for other in [*stored, *(p for p in dataset_profiles if p.id not in known)]:
+                if "".join(other.abn.split()) == "".join(profile.abn.split()):
+                    raise AbnTaken(profile.abn, other.id, other.legal_name)
+            return await self.save_profile(profile, source=ProfileSource.manual, updated_by=created_by)
+
+    async def save_profile(
+        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+    ) -> ClientProfile:
+        eid = self._joined_eid()
         async with transaction(self.engine, eid) as conn:
             if eid:
                 await writable(conn, eid)
@@ -1050,7 +1092,12 @@ class PostgresEngagementStore(Store):
                 raise VersionConflict(profile.id)
             await conn.execute(
                 insert(m.client_profiles).values(
-                    id=profile.id, version=profile.version, data=profile.model_dump(mode="json"), updated_at=now()
+                    id=profile.id,
+                    version=profile.version,
+                    data=profile.model_dump(mode="json"),
+                    source=source.value,
+                    updated_by=updated_by,
+                    updated_at=now(),
                 )
             )
         return profile.model_copy(deep=True)

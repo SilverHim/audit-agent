@@ -10,17 +10,21 @@ export function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): s
     case 'debits_equal_credits':
       return t.data.checkDetail.debits(formatAud(num(p.debit_cents)), formatAud(num(p.credit_cents)))
     case 'journals_agree_tb':
+      if (check.status === 'missing_data') return t.data.checkDetail.notImportedYet // 还没有账表, 不说 "0 个科目一致"
       return t.data.checkDetail.journals(num(p.accounts), Array.isArray(p.differences) ? p.differences.length : 0)
     case 'count_agrees_source':
+      if (!p.source) return t.data.checkDetail.notImported // 新建的客户还没导入总账, 没有来源 (需求 R288)
       return t.data.checkDetail.count(
         String(p.source ?? ''),
         num(p.expected).toLocaleString('en-AU'),
         num(p.received).toLocaleString('en-AU'),
       )
     case 'mapping_complete':
+      if (check.status === 'missing_data') return t.data.checkDetail.notImportedYet // 科目表还没有, 不说 "已全部归入"
       return t.data.checkDetail.mapping(num(p.mapped), num(p.total))
     case 'preparer_approver_available': {
       if (check.status === 'passed') return ''
+      if (!p.source) return t.data.checkDetail.notImported
       const fields = (Array.isArray(p.missing_fields) ? p.missing_fields : []).map(
         (field) => t.data.fieldNames[String(field)] ?? String(field),
       )

@@ -116,7 +116,7 @@ class DatasetFixtureLLMClient(MockLLMClient):
     """mock 模式的客户端: 按请求所属项目 (LLMRequest.eid) 的数据集选 fixture 目录, 目录内读法同 MockLLMClient.
 
     数据集为 xero/<快照> 且 dataset_root/xero_demo/<快照>/llm 存在时, 读该目录 (生成脚本从 tests/fixtures/llm_xero
-    复制的运行副本); 其余 (demo, 没有补造 llm/ 的 Xero 快照, eid 为空, 查不到项目) 读 fixtures_root
+    复制的运行副本); 其余 (demo, 没有补造 llm/ 的 Xero 快照, 没有数据集的新客户, eid 为空, 查不到项目) 读 fixtures_root
     (LLM_FIXTURES_ROOT). engagements 为空时总读 fixtures_root.
     """
 
@@ -130,7 +130,7 @@ class DatasetFixtureLLMClient(MockLLMClient):
         if not eid or self.engagements is None:
             return self.root
         engagement = await self.engagements.get(eid)
-        if engagement is None or not engagement.dataset.startswith(XERO_PREFIX):
+        if engagement is None or engagement.dataset is None or not engagement.dataset.startswith(XERO_PREFIX):
             return self.root
         snapshot = engagement.dataset.removeprefix(XERO_PREFIX)
         if not snapshot or "/" in snapshot or snapshot in (".", ".."):  # 快照名只能是一段目录名

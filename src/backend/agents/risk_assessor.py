@@ -146,7 +146,12 @@ class RiskAssessorAgent(ProcedureAgent[RuleResult]):
         )
         patch: StatePatch = {"materiality_candidates": result}
         if not ctx.state["risk_register"]:
-            objectives, risks = self.deps.datasets.planning_presets(ctx.engagement.dataset)
+            dataset = ctx.engagement.dataset
+            objectives, risks = (  # 没有数据集的项目 (新建的客户) 取通用模板
+                self.deps.datasets.planning_presets(dataset)
+                if dataset is not None
+                else self.deps.library.planning_templates()
+            )
             patch["audit_objectives"] = objectives
             patch["risk_register"] = risks
         return patch

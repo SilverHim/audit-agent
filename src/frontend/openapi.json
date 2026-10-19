@@ -171,6 +171,82 @@
         ]
       }
     },
+    "/api/v1/clients": {
+      "get": {
+        "tags": [
+          "clients"
+        ],
+        "summary": "List Clients",
+        "description": "每个客户一行: 库里各客户的最新一版, 并上还没进库的数据集客户. origin 取第 1 版的来源, 老版本没记时数据集\n客户为 dataset. 排序: 有默认数据集的在前, 再按名称 (不分大小写) 与编号.",
+        "operationId": "clients-list_clients",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClientSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Clients-List Clients"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "clients"
+        ],
+        "summary": "Create Client",
+        "description": "新建客户, 写画像第 1 版 (来源 manual, 写入人为当前用户). 按顺序拒绝: 法定名称去空白后为空 422 MISSING_FIELD;\nABN 去空格后不是 11 位数字或校验位不对 (ABR 公布的算法) 422 INVALID_VALUE; 其余字段不合 ClientProfile 422\nINVALID_VALUE; 同一 ABN 已是别的客户 (库里各客户的最新一版与数据集画像) 409 ABN_TAKEN, detail 带已有的\nclient_id 与 legal_name. 编号为 CLIENT-M-{12 位十六进制}, 撞号时 409 VERSION_MISMATCH, 不覆盖.",
+        "operationId": "clients-create_client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientSummary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/engagements": {
       "get": {
         "tags": [
@@ -206,7 +282,7 @@
           "engagements"
         ],
         "summary": "Create Engagement",
-        "description": "客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件\n与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).",
+        "description": "建项目后启动流程, 返回时后台已在跑, running 为真. dataset 与 client_id 须给且只给一个, 否则 422.\n\n数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间\n而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).\n新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).",
         "operationId": "engagements-create_engagement",
         "requestBody": {
           "content": {
@@ -346,7 +422,7 @@
           "engagements"
         ],
         "summary": "Get Client Profile",
-        "description": "客户画像的最新版与第 1 版起的历史, 版本最高的承接评分卡及其例外.\n\neditable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.",
+        "description": "客户画像的最新版与第 1 版起的历史 (各版的出处: 谁, 何时, 来源), 版本最高的承接评分卡及其例外.\n\neditable 与 PUT /client-profile 的可用条件一致: 停在 ACC-01, 未锁定, 后台没在运行, 没有待恢复的错误.",
         "operationId": "engagements-get_client_profile",
         "security": [
           {
@@ -4653,6 +4729,263 @@
         "title": "CheckId",
         "description": "数据质量体检项. 前端按编号本地化文案, params 的键见各项注释."
       },
+      "ClientCreate": {
+        "properties": {
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          },
+          "industry_anzsic": {
+            "type": "string",
+            "title": "Industry Anzsic"
+          },
+          "listed": {
+            "type": "boolean",
+            "title": "Listed"
+          },
+          "directors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Directors"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes",
+            "default": ""
+          },
+          "financial_year_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Financial Year End"
+          },
+          "accounting_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounting System"
+          },
+          "engagements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Engagements",
+            "default": []
+          },
+          "approval_limit_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Limit Cents"
+          },
+          "key_personnel": {
+            "items": {
+              "$ref": "#/components/schemas/KeyPerson"
+            },
+            "type": "array",
+            "title": "Key Personnel",
+            "default": []
+          },
+          "related_parties": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredParty"
+            },
+            "type": "array",
+            "title": "Related Parties",
+            "default": []
+          },
+          "ownership": {
+            "items": {
+              "$ref": "#/components/schemas/DeclaredHolding"
+            },
+            "type": "array",
+            "title": "Ownership",
+            "default": []
+          },
+          "prior_risk_register": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Prior Risk Register",
+            "default": {}
+          },
+          "prior_misstatements": {
+            "items": {
+              "$ref": "#/components/schemas/PriorMisstatement"
+            },
+            "type": "array",
+            "title": "Prior Misstatements",
+            "default": []
+          },
+          "independence_flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Independence Flags",
+            "default": []
+          },
+          "applicable_framework": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tier1_gpfs",
+                  "tier2_gpfs",
+                  "spfr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable Framework"
+          },
+          "governance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Governance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fees": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Fees"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "service_organisations": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceOrganisation"
+            },
+            "type": "array",
+            "title": "Service Organisations",
+            "default": []
+          },
+          "prior_estimate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/PriorEstimateOutcome"
+            },
+            "type": "array",
+            "title": "Prior Estimate Outcomes",
+            "default": []
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Retention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prior_period_audited": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Period Audited"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "legal_name",
+          "abn",
+          "entity_type",
+          "industry_anzsic",
+          "listed",
+          "directors"
+        ],
+        "title": "ClientCreate",
+        "description": "新建客户 (POST /clients): id 由服务端生成 CLIENT-M-{12 位十六进制}, 版本为 1, 来源 manual. 省略的扩展字段取\nClientProfile 的默认值."
+      },
+      "ClientDataset": {
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "default": {
+            "type": "boolean",
+            "title": "Default",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset"
+        ],
+        "title": "ClientDataset",
+        "description": "数据集客户的一个数据集: 建项目时提交的数据集名与自带的审计期间."
+      },
       "ClientProfile": {
         "properties": {
           "id": {
@@ -4879,10 +5212,6 @@
       },
       "ClientProfileIn": {
         "properties": {
-          "version": {
-            "type": "integer",
-            "title": "Version"
-          },
           "legal_name": {
             "type": "string",
             "title": "Legal Name"
@@ -5079,18 +5408,22 @@
               }
             ],
             "title": "Prior Period Audited"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "version",
           "legal_name",
           "abn",
           "entity_type",
           "industry_anzsic",
           "listed",
-          "directors"
+          "directors",
+          "version"
         ],
         "title": "ClientProfileIn",
         "description": "更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)\n都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile."
@@ -5106,6 +5439,13 @@
             },
             "type": "array",
             "title": "History"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileVersionInfo"
+            },
+            "type": "array",
+            "title": "Versions"
           },
           "engagement_profile_version": {
             "type": "integer",
@@ -5138,6 +5478,7 @@
         "required": [
           "profile",
           "history",
+          "versions",
           "engagement_profile_version",
           "scorecard",
           "exceptions",
@@ -5145,6 +5486,62 @@
         ],
         "title": "ClientProfileView",
         "description": "客户资料页: 客户画像的最新版与历史, 承接评分卡及其例外, 能否编辑."
+      },
+      "ClientSummary": {
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "title": "Client Id"
+          },
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
+          },
+          "datasets": {
+            "items": {
+              "$ref": "#/components/schemas/ClientDataset"
+            },
+            "type": "array",
+            "title": "Datasets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "client_id",
+          "legal_name",
+          "abn",
+          "origin",
+          "latest_version",
+          "datasets"
+        ],
+        "title": "ClientSummary",
+        "description": "客户列表的一行 (GET /clients): 每个客户一行, 不按数据集."
       },
       "CompletionMaterial": {
         "properties": {
@@ -6461,7 +6858,14 @@
             "title": "Period End"
           },
           "dataset": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Dataset"
           },
           "owner_id": {
@@ -6529,19 +6933,36 @@
             "title": "Period End"
           },
           "dataset": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Dataset"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "period_start",
-          "period_end",
-          "dataset"
+          "period_end"
         ],
         "title": "EngagementCreate",
-        "description": "新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像."
+        "description": "新建项目. dataset 与 client_id 二选一: 数据集客户传数据集名, 取数据集里的客户画像 (行为同 R288 之前); 新建的\n客户传 client_id, 取该客户最新一版画像, 项目没有数据集. 客户名称与 ABN 不在此传."
       },
       "EngagementOverview": {
         "properties": {
@@ -9094,6 +9515,72 @@
         "title": "ProcedureSummary",
         "description": "项目总览中的一行程序状态."
       },
+      "ProfileSource": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "dataset",
+          "update"
+        ],
+        "title": "ProfileSource",
+        "description": "客户画像一版的来源 (client_profiles.source)."
+      },
+      "ProfileVersionInfo": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By"
+          },
+          "updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By Name"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "source",
+          "updated_by",
+          "updated_by_name",
+          "updated_at"
+        ],
+        "title": "ProfileVersionInfo",
+        "description": "客户资料页版本历史中一版的出处: 谁, 何时, 来源."
+      },
       "ProposedAction": {
         "type": "string",
         "enum": [
@@ -9212,7 +9699,14 @@
             "title": "Check"
           },
           "passed": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Passed"
           },
           "detail": {

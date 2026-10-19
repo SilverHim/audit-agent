@@ -23,6 +23,7 @@ from backend.contracts.models import (
     ClientProfile,
     DocumentType,
     LlmSettings,
+    ProfileSource,
     Reliability,
     TrailEntry,
     TrailKind,
@@ -228,7 +229,9 @@ async def test_versions_rollback_trail_and_lock(storage):
         async with store.transaction(e.id):
             await store.put(e.id, [obj.model_copy(update={"version": 2})], actor="B")
             await evidence.set_status(e.id, doc.id, "extracted")
-            await engagements.save_profile(profile.model_copy(update={"version": 2}))
+            await engagements.save_profile(
+                profile.model_copy(update={"version": 2}), source=ProfileSource.update, updated_by="U-1"
+            )
             await engagements.update(e.id, client_profile_version=2)
             await asyncio.wait_for(
                 trail.record(
@@ -959,7 +962,8 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
 
 async def test_create_adopts_latest_profile_or_writes_a_new_version():
     """R127: 建项目时数据集的画像与该客户的各版比较内容 (不看版本号): 有一版相同就沿用最新一版 (含审计师改过的),
-    都不同才写新一版 (版本 +1); 旧版本不改."""
+    都不同才写新一版 (版本 +1); 旧版本不改. R288 (审核 R288-02): 两处写入 (首版与数据集改了的新版) 都记来源 dataset
+    与建项目的人, 审计师那一版记 update 与审计师."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需要 TEST_DATABASE_URL")
@@ -996,7 +1000,9 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     assert await create(base) == 1
     assert await create(base) == 1  # 内容相同, 沿用
     edited = base.model_copy(update={"version": 2, "directors": ["A", "B"]})
-    await store.save_profile(edited)  # 审计师在项目的 ACC-01 改了画像 (第 2 版)
+    await store.save_profile(
+        edited, source=ProfileSource.update, updated_by="U-1"
+    )  # 审计师在项目的 ACC-01 改了画像 (第 2 版)
     assert await create(base) == 2  # 数据集没变 (同第 1 版): 沿用最新一版, 不把数据集原样盖回去
     assert (await latest()).version == 2 and (await latest()).directors == ["A", "B"]
     changed = base.model_copy(update={"approval_limit_cents": 500000})
@@ -1007,6 +1013,12 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     first, second = await store.client_profile(client, 1), await store.client_profile(client, 2)
     assert first is not None and first.approval_limit_cents is None and first.directors == ["A"]  # 旧版本不改
     assert second == edited
+    history = await store.profile_history(client)
+    assert [(r.profile.version, r.source, r.updated_by) for r in history] == [
+        (1, ProfileSource.dataset, user),
+        (2, ProfileSource.update, "U-1"),
+        (3, ProfileSource.dataset, user),
+    ]
     await engine.dispose()
 
 
@@ -1205,3 +1217,125 @@ async def test_load_adjustments_two_rounds(tmp_path):
         await xero.load_adjustments(locked.id, "xero/20261017-q1", ["AJE-X01"])
     assert await state(locked.id) == (1017, 1)
     await engine.dispose()
+
+
+def synthetic_abn() -> str:
+    """随机 9 位编号补上 ABR 算法的校验位 (测试库是共用的, 每次用不同的 ABN 免得撞上别的用例)."""
+    from backend.services.abn import abn_problem
+
+    while True:
+        body = f"{uuid4().int % 10**9:09d}"
+        hits = [f"{p}{body}" for p in range(10, 100) if abn_problem(f"{p}{body}") is None]
+        if hits:
+            return hits[0]
+
+
+async def test_new_clients_and_engagements_without_dataset(tmp_path):
+    """R288: create_client 写第 1 版 (来源 manual, 写入人); 同一 ABN (库里最新一版或还没进库的数据集画像) 抛
+    AbnTaken; 已有的编号抛 VersionConflict 不覆盖; clients 取最新一版与第 1 版的来源; 没有数据集的项目可建可读,
+    数据管理的 dataset_loads 行 dataset 为空; ACC-01 更新记来源 update."""
+    from backend.contracts.errors import AbnTaken
+    from backend.contracts.models import ProfileSource
+    from backend.persistence.data_store import PostgresDataStore
+
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="R288", password_hash="x", created_at=now()
+            )
+        )
+    store = PostgresEngagementStore(engine)
+    client = "CLIENT-M-" + uuid4().hex[:12]
+    abn, other_abn = synthetic_abn(), synthetic_abn()
+    profile = ClientProfile(
+        id=client,
+        legal_name="Wombat Analytics Pty Ltd",
+        abn=abn,
+        entity_type="small_proprietary",
+        industry_anzsic="6920",
+        listed=False,
+        directors=["Jane Citizen"],
+    )
+    saved = await store.create_client(profile, created_by=user, dataset_profiles=[])
+    assert saved == profile
+    [record] = await store.profile_history(client)
+    assert (record.profile, record.source, record.updated_by) == (profile, ProfileSource.manual, user)
+    [entry] = [e for e in await store.clients() if e.profile.id == client]
+    assert (entry.profile, entry.first_source) == (profile, ProfileSource.manual)
+
+    twin = profile.model_copy(update={"id": "CLIENT-M-" + uuid4().hex[:12], "legal_name": "Twin Pty Ltd"})
+    with pytest.raises(AbnTaken) as taken:
+        await store.create_client(twin, created_by=user, dataset_profiles=[])
+    assert (taken.value.client_id, taken.value.legal_name) == (client, "Wombat Analytics Pty Ltd")
+    from_dataset = profile.model_copy(update={"id": "CLIENT-DS-" + uuid4().hex[:8], "abn": other_abn})
+    with pytest.raises(AbnTaken):
+        await store.create_client(
+            twin.model_copy(update={"abn": other_abn}), created_by=user, dataset_profiles=[from_dataset]
+        )
+    with pytest.raises(VersionConflict):
+        await store.create_client(profile.model_copy(update={"abn": other_abn}), created_by=user, dataset_profiles=[])
+    assert [r.profile for r in await store.profile_history(client)] == [profile]  # 撞号不覆盖
+
+    engagement = await store.create(
+        owner_id=user, period_start=date(2026, 7, 1), period_end=date(2027, 6, 30), dataset=None, profile=saved
+    )
+    assert (engagement.dataset, engagement.client_profile_version) == (None, 1)
+    assert await store.get(engagement.id) == engagement
+    readiness = await PostgresDataStore(tmp_path, engine).confirm_ready(engagement.id, user, reason="R288")
+    assert readiness.ready_by == user
+    async with transaction(engine, engagement.id) as conn:
+        loaded = (await conn.execute(select(m.dataset_loads.c.dataset))).scalar_one()
+    assert loaded is None
+    await store.save_profile(
+        profile.model_copy(update={"version": 2, "directors": ["Jane Citizen", "Sam Example"]}),
+        source=ProfileSource.update,
+        updated_by=user,
+    )
+    assert [(r.profile.version, r.source) for r in await store.profile_history(client)] == [
+        (1, ProfileSource.manual),
+        (2, ProfileSource.update),
+    ]
+    [entry] = [e for e in await store.clients() if e.profile.id == client]
+    assert (entry.profile.version, entry.first_source) == (2, ProfileSource.manual)
+    await engine.dispose()
+
+
+async def test_concurrent_new_clients_with_one_abn_only_one_wins():
+    """R288 (审核 R288-03): 并发新建同一 ABN 的几个客户, 查重与写入在同一把咨询锁内, 每轮恰好一个成功, 其余抛
+    AbnTaken; 库里该 ABN 只有一个客户. ABN 为合成的 (随机 9 位编号, 校验位按算法补)."""
+    from backend.contracts.errors import AbnTaken
+
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"), pool_size=8)
+    store = PostgresEngagementStore(engine)
+    try:
+        for _ in range(3):
+            abn = synthetic_abn()
+            profiles = [
+                ClientProfile(
+                    id="CLIENT-M-" + uuid4().hex[:12],
+                    legal_name=f"Concurrent Wombat Pty Ltd {n}",
+                    abn=abn,
+                    entity_type="small_proprietary",
+                    industry_anzsic="6920",
+                    listed=False,
+                    directors=["Jane Citizen"],
+                )
+                for n in range(4)
+            ]
+            results = await asyncio.gather(
+                *(store.create_client(p, created_by="U-1", dataset_profiles=[]) for p in profiles),
+                return_exceptions=True,
+            )
+            won = [r for r in results if isinstance(r, ClientProfile)]
+            assert len(won) == 1 and all(isinstance(r, AbnTaken) for r in results if r not in won), results
+            assert [e.profile.id for e in await store.clients() if e.profile.abn == abn] == [won[0].id]
+    finally:
+        await engine.dispose()

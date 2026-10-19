@@ -10,6 +10,7 @@ import type {
   ConciergeQuestion,
   DeferralIn,
   DeferralView,
+  ProfileVersionInfo,
 } from '@/client/types.gen'
 import { getToken } from '@/lib/auth'
 import { invalidateEngagement } from '@/lib/engagement'
@@ -74,10 +75,11 @@ export function useSetDeferral(eid: string) {
   })
 }
 
-// R2 客户资料
+// R2 客户资料; versions 为各版的来源, 写入人与时间 (老版本来源与写入人为空)
 export type ClientProfileView = {
   profile: ClientProfile
   history: ClientProfile[]
+  versions: ProfileVersionInfo[]
   scorecard: AcceptanceScorecard | null
   exceptions: AuditException[]
   editable: boolean
@@ -88,24 +90,6 @@ export function useClientProfile(eid: string) {
     queryKey: [{ _id: 'engagementsGetClientProfile', path: { eid } }],
     queryFn: () =>
       orEmpty(call<ClientProfileView | null>('get', '/api/v1/engagements/{eid}/client-profile', { eid }), null),
-  })
-}
-
-// R5 可选客户
-export type DatasetSummary = {
-  dataset: string
-  legal_name: string
-  abn: string
-  // 数据集自带的审计期间, 建项目时须与之相同; 不自带 (如 Numbat) 为空
-  period_start: string | null
-  period_end: string | null
-  default: boolean // 配置项 DEMO_DATASET 指定的默认数据集
-}
-
-export function useDatasets() {
-  return useQuery({
-    queryKey: [{ _id: 'datasetsListDatasets' }],
-    queryFn: () => orEmpty(call<DatasetSummary[]>('get', '/api/v1/datasets', {}), []),
   })
 }
 

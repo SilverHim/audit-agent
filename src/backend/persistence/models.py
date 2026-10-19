@@ -46,7 +46,9 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "bank_transactions": {"description", "reference"},
             "contracts": {"counterparty_abn", "amount_cents", "sign_date"},
             "documents": {"uploaded_by", "failed_step"},
-            "dataset_loads": {"ready_at", "ready_by", "ready_reason"},
+            "engagements": {"dataset"},  # 新建的客户没有数据集 (R288)
+            "client_profiles": {"source", "updated_by"},  # R288 之前写入的版本没有出处
+            "dataset_loads": {"dataset", "ready_at", "ready_by", "ready_reason"},
             "data_imports": {
                 "kind",
                 "file_name",
@@ -102,7 +104,10 @@ engagements = table(
     scoped=False,
 )
 engagements.c.owner_id.append_foreign_key(ForeignKey("users.id"))
-client_profiles = table("client_profiles", "id:s version:i data:j updated_at:t", ("id", "version"), scoped=False)
+# 客户画像: 每个客户 (id) 一组版本, 跨项目; source 为该版的来源 (ProfileSource), updated_by 为写入的用户 (迁移 0011)
+client_profiles = table(
+    "client_profiles", "id:s version:i data:j source:s updated_by:s updated_at:t", ("id", "version"), scoped=False
+)
 # 设置页的模型配置: 系统级, 不按项目隔离, 每套 (slot) 只存最新一行; 密钥只存密文 (迁移 0003)
 llm_settings = table(
     "llm_settings",

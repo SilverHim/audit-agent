@@ -456,7 +456,8 @@ class GraphNodes:
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
-        traits = self.deps.datasets.dataset_traits(engagement.dataset)
+        dataset = engagement.dataset  # 没有数据集的项目 (新建的客户) 取缺省声明
+        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
         # 画像按本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用
         version = state["client_profile_version"]
         profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)

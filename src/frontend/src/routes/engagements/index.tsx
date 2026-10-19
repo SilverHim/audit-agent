@@ -5,19 +5,21 @@ import { ArrowRight, Plus } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  clientsListClientsOptions,
   engagementsCreateEngagementMutation,
   engagementsListEngagementsOptions,
 } from '@/client/@tanstack/react-query.gen'
 import type { EngagementSummary } from '@/client/types.gen'
 import { Code, StatusPill, TopBar } from '@/components/chrome'
+import { NewClientDialog } from '@/components/new-client-dialog'
 import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { formatAbn } from '@/lib/abn'
 import { getToken } from '@/lib/auth'
 import { invalidateEngagementList } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { useDatasets } from '@/lib/new-api'
 import { useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
 
 export const Route = createFileRoute('/engagements/')({
@@ -140,14 +142,16 @@ function EngagementCard({ item }: { item: Summary }) {
   )
 }
 
-const DEFAULT_PERIOD = { start: '2025-07-01', end: '2026-06-30' } // 不自带期间的数据集 (Numbat) 的缺省财年
+const DEFAULT_PERIOD = { start: '2025-07-01', end: '2026-06-30' } // 不自带期间的数据集 (Numbat) 与新建客户的缺省财年
+const NEW_CLIENT = '__new__' // 下拉末项 "新建客户"
 
 function CreateForm({ onCancel }: { onCancel: () => void }) {
   const { t } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const datasets = useDatasets()
-  const [dataset, setDataset] = useState('')
+  const clients = useQuery(clientsListClientsOptions())
+  const [clientId, setClientId] = useState('')
+  const [adding, setAdding] = useState(false)
   const [periodStart, setPeriodStart] = useState(DEFAULT_PERIOD.start)
   const [periodEnd, setPeriodEnd] = useState(DEFAULT_PERIOD.end)
   const create = useMutation({
@@ -159,18 +163,28 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
     },
     onError: (error) => toast.error(apiMessage(error)),
   })
-  const options = datasets.data ?? []
-  // 默认选 default 为真的数据集 (配置项 DEMO_DATASET), 没有时选第一个. 清单加载中, 取数失败或为空时不能创建,
-  // 免得在默认数据集出来之前建成别的项目
-  const chosen = dataset || options.find((item) => item.default)?.dataset || options[0]?.dataset || ''
-  const selected = options.find((item) => item.dataset === chosen)
-  const fixedStart = selected?.period_start ?? null
-  const fixedEnd = selected?.period_end ?? null
+  const options = clients.data ?? []
+  // 默认选带默认数据集 (配置项 DEMO_DATASET) 的客户, 没有时选第一个. 清单加载中, 取数失败或为空时不能创建,
+  // 免得在默认客户出来之前建成别的项目
+  const chosen =
+    (clientId && options.find((item) => item.client_id === clientId)?.client_id) ||
+    options.find((item) => item.datasets.some((d) => d.default))?.client_id ||
+    options[0]?.client_id ||
+    ''
+  const selected = options.find((item) => item.client_id === chosen)
+  // 数据集客户发数据集 (默认的或第一个; 现在每个客户只有一个, 有多个时再出数据集选择), 没有数据集的客户发 client_id
+  const dataset = selected?.datasets.find((d) => d.default) ?? selected?.datasets[0]
+  const fixedStart = dataset?.period_start ?? null
+  const fixedEnd = dataset?.period_end ?? null
   // 所选数据集自带期间时自动填起止日 (建项目时须与之相同); 不带时用 Numbat 的财年
   useEffect(() => {
     setPeriodStart(fixedStart ?? DEFAULT_PERIOD.start)
     setPeriodEnd(fixedEnd ?? DEFAULT_PERIOD.end)
   }, [fixedStart, fixedEnd])
+  const pick = (id: string) => {
+    setClientId(id)
+    setAdding(false)
+  }
   return (
     <section className="flex flex-col gap-4 rounded-[14px] border-[1.5px] border-primary bg-card px-6 py-5">
       <h2 className="m-0 font-semibold text-[17px]">{t.projectsPage.newEngagement}</h2>
@@ -178,11 +192,14 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
         className="flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault()
-          create.mutate({ body: { period_start: periodStart, period_end: periodEnd, dataset: chosen } })
+          const period = { period_start: periodStart, period_end: periodEnd }
+          create.mutate({
+            body: dataset ? { ...period, dataset: dataset.dataset } : { ...period, client_id: chosen },
+          })
         }}
       >
         <div className="flex flex-wrap gap-4">
-          {options.length ? (
+          {clients.isSuccess ? (
             <div className="flex flex-[2_1_320px] flex-col gap-1.5">
               <label htmlFor="new-client" className="font-semibold text-[13px]">
                 {t.projectsPage.client}
@@ -190,18 +207,30 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
               <select
                 id="new-client"
                 className="h-11 rounded-[10px] border border-input bg-card px-3 text-[14px]"
-                value={chosen}
-                onChange={(event) => setDataset(event.target.value)}
+                value={adding ? NEW_CLIENT : chosen}
+                aria-describedby={selected && !dataset ? 'new-client-note' : undefined}
+                onChange={(event) => (event.target.value === NEW_CLIENT ? setAdding(true) : pick(event.target.value))}
               >
+                {chosen ? null : (
+                  <option value="" disabled>
+                    —
+                  </option>
+                )}
                 {options.map((item) => (
-                  <option key={item.dataset} value={item.dataset}>
-                    {item.legal_name} · ABN {item.abn}
+                  <option key={item.client_id} value={item.client_id}>
+                    {item.legal_name} · ABN {formatAbn(item.abn)}
                   </option>
                 ))}
+                <option value={NEW_CLIENT}>{t.projectsPage.newClient}</option>
               </select>
+              {selected && !dataset ? (
+                <span id="new-client-note" className="text-[12.5px] text-muted-foreground">
+                  {t.projectsPage.noDataset}
+                </span>
+              ) : null}
             </div>
           ) : null}
-          {datasets.isError ? (
+          {clients.isError ? (
             <p role="alert" className="m-0 basis-full text-[13px] text-destructive">
               {t.projectsPage.datasetsFailed}
             </p>
@@ -237,11 +266,12 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
           <Button type="button" variant="outline" size="lg" onClick={onCancel}>
             {t.projectsPage.cancel}
           </Button>
-          <Button type="submit" size="lg" disabled={create.isPending || !chosen}>
+          <Button type="submit" size="lg" disabled={create.isPending || adding || !chosen}>
             {t.projectsPage.create}
           </Button>
         </div>
       </form>
+      <NewClientDialog open={adding} onClose={() => setAdding(false)} onCreated={pick} onPick={pick} />
     </section>
   )
 }

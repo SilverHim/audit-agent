@@ -1219,3 +1219,85 @@ async def test_import_batch_on_real_store(storage, tmp_path: Path) -> None:  # t
     assert again == done and len(await deps.data.versions(first.id)) == 2
     assert (await deps.data.readiness(first.id)).data_version == 1
     assert len(await deps.data.changes(first.id)) == 3
+
+
+async def test_migration_0011_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R288: 以属主角色在一个事务里走 0011 降级再升级, 最后回滚 (不动测试库的表结构与 alembic 版本). 降级时没有
+    数据集的项目 (engagements 与 dataset_loads 的 dataset 为空) 记为空字符串, 两列恢复非空, client_profiles 的 source,
+    updated_by 两列删掉; 再升级两列回来且为空, dataset 又可为空; 可重复执行; dataset_loads 的 FORCE 行级安全事后已恢复.
+    需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0011_client_registration")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def as_project(eid: str) -> None:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+
+                async def scalar(sql: str) -> Any:
+                    return (await conn.execute(text(sql), {"e": first.id, "c": first.client_id})).scalar()
+
+                async def nullable(table: str) -> str:
+                    return str(
+                        await scalar(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            f"WHERE table_name = '{table}' AND column_name = 'dataset'"
+                        )
+                    )
+
+                async def profile_columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'client_profiles'")
+                    )
+                    return {row[0] for row in found}
+
+                await conn.execute(text("UPDATE engagements SET dataset = NULL WHERE id = :e"), {"e": first.id})
+                await as_project(first.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=first.id, dataset=None, data_version=1, loaded_at=now()
+                    )
+                )
+                await conn.execute(
+                    text("UPDATE client_profiles SET source = 'manual', updated_by = 'U-1' WHERE id = :c"),
+                    {"c": first.client_id},
+                )
+                await as_project("")  # 迁移时不设 app.engagement_id (同 alembic 命令)
+                await conn.run_sync(run("downgrade"))
+                assert (await nullable("engagements"), await nullable("dataset_loads")) == ("NO", "NO")
+                assert not {"source", "updated_by"} & await profile_columns()
+                assert await scalar("SELECT dataset FROM engagements WHERE id = :e") == ""
+                await as_project(first.id)
+                assert await scalar("SELECT dataset FROM dataset_loads WHERE engagement_id = :e") == ""
+                assert await scalar("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'dataset_loads'") is True
+
+                await as_project("")
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert (await nullable("engagements"), await nullable("dataset_loads")) == ("YES", "YES")
+                assert {"source", "updated_by"} <= await profile_columns()
+                assert await scalar("SELECT count(*) FROM client_profiles WHERE id = :c AND source IS NULL") >= 1
+                await conn.execute(text("UPDATE engagements SET dataset = NULL WHERE id = :e"), {"e": first.id})
+                assert await scalar("SELECT dataset IS NULL FROM engagements WHERE id = :e") is True
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()

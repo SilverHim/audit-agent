@@ -35,6 +35,7 @@ from backend.contracts.models import (
     PriorMisstatement,
     Procedure,
     ProcedureRun,
+    ProfileSource,
     ReportingFramework,
     Retention,
     ReviewRecord,
@@ -63,11 +64,13 @@ class RegisterIn(Model):
 
 
 class EngagementCreate(Model):
-    """新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像."""
+    """新建项目. dataset 与 client_id 二选一: 数据集客户传数据集名, 取数据集里的客户画像 (行为同 R288 之前); 新建的
+    客户传 client_id, 取该客户最新一版画像, 项目没有数据集. 客户名称与 ABN 不在此传."""
 
     period_start: date
     period_end: date
-    dataset: str
+    dataset: str | None = None
+    client_id: str | None = None
 
 
 class DatasetSummary(Model):
@@ -135,11 +138,9 @@ class RerunIn(Model):
     procedure_ids: list[str] | None = None
 
 
-class ClientProfileIn(Model):
-    """更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)
-    都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile."""
+class ProfileFields(Model):
+    """画像的可填字段: ClientProfile 去掉 id 与 version. 原有 6 项必填; notes 与扩展字段 (R127) 都可省略."""
 
-    version: int
     legal_name: str
     abn: str
     entity_type: str
@@ -166,11 +167,54 @@ class ClientProfileIn(Model):
     prior_period_audited: bool | None = None
 
 
+class ClientProfileIn(ProfileFields):
+    """更新客户资料. id 由服务端取项目的 client_id; version 为当前版本 +1. 原有 6 项必填; notes 与扩展字段 (R127)
+    都可省略, 省略的沿用被替代的那一版画像 (第 version - 1 版), 给出 null 的可空字段即清空. 字段同 ClientProfile."""
+
+    version: int
+
+
+class ClientCreate(ProfileFields):
+    """新建客户 (POST /clients): id 由服务端生成 CLIENT-M-{12 位十六进制}, 版本为 1, 来源 manual. 省略的扩展字段取
+    ClientProfile 的默认值."""
+
+
+class ClientDataset(Model):
+    """数据集客户的一个数据集: 建项目时提交的数据集名与自带的审计期间."""
+
+    dataset: str  # 如 demo, xero/20261017-q1
+    period_start: date | None = None  # 数据集自带的审计期间; 不自带 (如 Numbat) 为空
+    period_end: date | None = None
+    default: bool = False  # 数据集名等于配置项 DEMO_DATASET
+
+
+class ClientSummary(Model):
+    """客户列表的一行 (GET /clients): 每个客户一行, 不按数据集."""
+
+    client_id: str
+    legal_name: str  # 库里有画像时取最新一版, 否则取数据集画像
+    abn: str
+    origin: ProfileSource | None  # 客户从哪里来: 第 1 版的来源 (manual, dataset); 老版本没记时按数据集画像判定
+    latest_version: int | None  # 库里最新版本号; 还没进库的数据集客户为空
+    datasets: list[ClientDataset]  # 该客户的数据集, 按数据集名排序; 新建的客户为空
+
+
+class ProfileVersionInfo(Model):
+    """客户资料页版本历史中一版的出处: 谁, 何时, 来源."""
+
+    version: int
+    source: ProfileSource | None  # 老版本为空 (未记录)
+    updated_by: str | None  # 写入的用户 ID; 老版本为空
+    updated_by_name: str | None  # 写入的用户姓名; 查不到或老版本为空
+    updated_at: datetime
+
+
 class ClientProfileView(Model):
     """客户资料页: 客户画像的最新版与历史, 承接评分卡及其例外, 能否编辑."""
 
     profile: ClientProfile  # 最新版, 口径同 ACC-01 闸门材料 (可能由同客户的其他项目更新)
     history: list[ClientProfile]  # 第 1 版到最新版, 按版本升序
+    versions: list[ProfileVersionInfo]  # 与 history 逐项对应的出处
     engagement_profile_version: int  # 本项目采用的画像版本 (Engagement.client_profile_version)
     scorecard: AcceptanceScorecard | None  # 版本最高的承接评分卡, ACC-04 还没跑过时为空
     exceptions: list[AuditException]  # 评分卡 exception_ids 引用的例外
