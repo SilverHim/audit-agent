@@ -25,7 +25,6 @@ from backend.contracts.models import (
     TaskStatus,
     User,
 )
-from backend.contracts.views import JudgmentView
 from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.services.features import COLLAB
@@ -40,9 +39,9 @@ def _allowed(task: ReviewTask, deps: AgentDeps) -> list[Decision]:
     return [item for item in Decision if item in permitted]
 
 
-async def subject_amount(deps: AgentDeps, eid: str, target: JudgmentView | AuditException | ProcedureRun) -> int | None:
+async def subject_amount(deps: AgentDeps, eid: str, target: Judgment | AuditException | ProcedureRun) -> int | None:
     """判断对象本身是交易行时该行的金额 (见 review_queue.subject_row), 否则或查不到该行为 None."""
-    pointer = subject_row(target) if isinstance(target, JudgmentView) else None
+    pointer = subject_row(target) if isinstance(target, Judgment) else None
     if pointer is None:
         return None
     row = await deps.financial_store.record(eid, cast(SourceType, pointer.source_type), pointer.source_id)
@@ -58,7 +57,6 @@ async def list_review_tasks(
 ) -> list[ReviewTaskView]:
     """status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
     amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
-    判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
     draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有."""
     filters: dict[str, TaskStatus] = {}
     if status is not None:
@@ -76,24 +74,23 @@ async def list_review_tasks(
             target = await deps.output_store.get(engagement.id, TARGET_MODELS[task.target_type], task.target_id)
             if not isinstance(target, Judgment | AuditException | ProcedureRun):
                 raise api_error("NOT_FOUND", task.target_id)
-            shown = await deps.blind_filter.judgment(engagement.id, target) if isinstance(target, Judgment) else target
-            amount = task_amount(shown, exceptions, await subject_amount(deps, engagement.id, shown))
+            amount = task_amount(target, exceptions, await subject_amount(deps, engagement.id, target))
             views.append(
                 ReviewTaskView(
                     task=task,
                     procedure_name=template.name,
-                    target=shown,
+                    target=target,
                     allowed_decisions=_allowed(task, deps),
                     amount_cents=amount,
                     tier=review_tier(
                         task,
-                        shown,
+                        target,
                         amount,
                         overview.performance_materiality_cents,
                         overview.clearly_trivial_cents,
                     ),
-                    allowed_resolutions=deps.queue.resolutions(task, shown),
-                    draft_rules=deps.queue.draft_rules(task, shown, COLLAB in overview.features),
+                    allowed_resolutions=deps.queue.resolutions(task, target),
+                    draft_rules=deps.queue.draft_rules(task, target, COLLAB in overview.features),
                 )
             )
     return views
@@ -131,7 +128,6 @@ async def get_procedure(
         runs = await deps.output_store.latest(engagement.id, ProcedureRun, procedure_id=pid)
         exceptions = await deps.output_store.latest(engagement.id, AuditException, procedure_id=pid)
         judgments = await deps.output_store.latest(engagement.id, Judgment, procedure_id=pid)
-        views = [await deps.blind_filter.judgment(engagement.id, j) for j in judgments]
         # 过期与可重跑同总览 (以 Store 为准); 被取代的执行取 Store 中的重跑请求
         pack = await deps.output_store.latest(engagement.id, Procedure)
         all_runs = await deps.output_store.latest(engagement.id, ProcedureRun)
@@ -144,7 +140,7 @@ async def get_procedure(
         standards=list(template.standards),
         runs=sorted(runs, key=lambda run: run.run_no),
         exceptions=exceptions,
-        judgments=views,
+        judgments=judgments,
         stale=pid in stale,
         rerunnable=pid in rerunnable(pack, stale),
         superseded_run_ids=sorted(r.id for r in runs if r.id in superseded),
@@ -172,7 +168,7 @@ async def get_judgment(
     deps: Annotated[AgentDeps, Depends(get_deps)],
     version: Annotated[int | None, Query()] = None,
 ) -> JudgmentDetail:
-    """version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出."""
+    """version 省略时取最新版. review_records 是指向这条判断的复核决定."""
     async with catch_api():
         judgment = await deps.output_store.get(engagement.id, Judgment, jid, version)
         if judgment is None:
@@ -184,9 +180,7 @@ async def get_judgment(
         records: list[ReviewRecord] = []
         for task in tasks:
             records.extend(await deps.output_store.latest(engagement.id, ReviewRecord, task_id=task.id))
-        shown = await deps.blind_filter.judgment(engagement.id, judgment)
-        shown_versions = [await deps.blind_filter.judgment(engagement.id, j) for j in versions]
-    return JudgmentDetail(judgment=shown, versions=shown_versions, review_records=records)
+    return JudgmentDetail(judgment=judgment, versions=versions, review_records=records)
 
 
 @router.get("/exceptions")

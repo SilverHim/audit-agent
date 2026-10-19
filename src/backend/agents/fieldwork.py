@@ -73,7 +73,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
         self.reviewer = ReviewAgent(deps)  # A7: 每生成一条模型类判断即同步调用其独立复核 (GEN-09)
-        self.steps: JudgingSteps = DEFAULT_STEPS  # 复核之后, 分类之前的判断级降级与盲测抽样, 缺省原样返回
+        self.steps: JudgingSteps = DEFAULT_STEPS  # 复核之后, 分类之前的判断级降级, 缺省原样返回
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,

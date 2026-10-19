@@ -66,10 +66,10 @@ def trigger(
     - internal_copy (collab 打开时): given 中非准则指针至少一个, 且可靠性全为 internal_copy (只靠内部复印件).
     - assumption: 推理链有 assumption 步骤.
     - unsupported (collab 打开时): 推理链有未获证据支撑 (status unsupported) 的步骤.
-    - sample: 抽中 (services/sampling 的 critic 用途, 键为判断 ID, 重放结果不变).
+    - sample: 抽中 (services/sampling.sampled, 键为判断 ID, 重放结果不变).
     given: 第一轮会给出的证据 (ReviewAgent.given_evidence: 按来源重新解析, 可靠性取数据行类型或文件登记, 不采信
     判断里填的值). collab 关闭时只判 main, assumption, sample (同 collab 之前).
-    本期不做: 提示词或配置刚改过 (procedure.changed_since_commit), 人机一致率低 (随盲测抽查删去, 不做).
+    本期不做: 提示词或配置刚改过 (procedure.changed_since_commit), 人机一致率低 (需求清单第 13 批定不做).
     """
     if level in REVIEWED_LEVELS and judgment.proposed_action in CLOSING_ACTIONS:
         return CriticTrigger.main
@@ -79,7 +79,7 @@ def trigger(
         return CriticTrigger.assumption
     if collab and any(step.status is StepStatus.unsupported for step in judgment.reasoning_chain):
         return CriticTrigger.unsupported
-    if sampled("critic", judgment.id, rate):
+    if sampled(judgment.id, rate):
         return CriticTrigger.sample
     return None
 

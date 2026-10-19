@@ -687,7 +687,7 @@
           "reviews"
         ],
         "summary": "List Review Tasks",
-        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.\n判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.\ndraft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.",
+        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.\ndraft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.",
         "operationId": "reviews-list_review_tasks",
         "security": [
           {
@@ -926,7 +926,7 @@
           "reviews"
         ],
         "summary": "Get Judgment",
-        "description": "version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出.",
+        "description": "version 省略时取最新版. review_records 是指向这条判断的复核决定.",
         "operationId": "reviews-get_judgment",
         "security": [
           {
@@ -3510,7 +3510,6 @@
           "reports"
         ],
         "summary": "List Trail",
-        "description": "留痕经盲判过滤 (BlindFilter) 输出.",
         "operationId": "reports-list_trail",
         "security": [
           {
@@ -3575,7 +3574,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/TrailEntryView"
+                    "$ref": "#/components/schemas/TrailEntry"
                   },
                   "title": "Response Reports-List Trail"
                 }
@@ -3601,7 +3600,6 @@
           "reports"
         ],
         "summary": "Get Trail",
-        "description": "留痕经盲判过滤 (BlindFilter) 输出.",
         "operationId": "reports-get_trail",
         "security": [
           {
@@ -3634,7 +3632,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TrailEntryView"
+                  "$ref": "#/components/schemas/TrailEntry"
                 }
               }
             }
@@ -8757,37 +8755,7 @@
         "title": "ImportSheet",
         "description": "导入时换工作表."
       },
-      "JudgmentDetail": {
-        "properties": {
-          "judgment": {
-            "$ref": "#/components/schemas/JudgmentView"
-          },
-          "versions": {
-            "items": {
-              "$ref": "#/components/schemas/JudgmentView"
-            },
-            "type": "array",
-            "title": "Versions"
-          },
-          "review_records": {
-            "items": {
-              "$ref": "#/components/schemas/ReviewRecord"
-            },
-            "type": "array",
-            "title": "Review Records"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "judgment",
-          "versions",
-          "review_records"
-        ],
-        "title": "JudgmentDetail",
-        "description": "一条判断的当前版本, 历史版本与相关复核决定."
-      },
-      "JudgmentRef": {
+      "Judgment": {
         "properties": {
           "id": {
             "type": "string",
@@ -8795,27 +8763,8 @@
           },
           "version": {
             "type": "integer",
-            "title": "Version"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "version"
-        ],
-        "title": "JudgmentRef",
-        "description": "报告中引用的一条判断."
-      },
-      "JudgmentView": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "version": {
-            "type": "integer",
-            "title": "Version"
+            "title": "Version",
+            "default": 1
           },
           "procedure_id": {
             "type": "string",
@@ -8830,53 +8779,25 @@
             "title": "Subject Id"
           },
           "conclusion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Conclusion"
           },
           "confidence": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "number",
             "title": "Confidence"
           },
           "confidence_parts": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "number"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
             "title": "Confidence Parts"
           },
           "reasoning_chain": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/ReasoningStep"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "items": {
+              "$ref": "#/components/schemas/ReasoningStep"
+            },
+            "type": "array",
             "title": "Reasoning Chain"
           },
           "evidence": {
@@ -8887,25 +8808,11 @@
             "title": "Evidence"
           },
           "counter_argument": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Counter Argument"
           },
           "proposed_action": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProposedAction"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/ProposedAction"
           },
           "misstatement_draft": {
             "anyOf": [
@@ -8929,7 +8836,8 @@
             "$ref": "#/components/schemas/AutonomyLevel"
           },
           "review_status": {
-            "$ref": "#/components/schemas/ReviewStatus"
+            "$ref": "#/components/schemas/ReviewStatus",
+            "default": "pending"
           },
           "superseded_by": {
             "anyOf": [
@@ -8963,14 +8871,8 @@
             "title": "Trail Ref"
           },
           "critic_verdict": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CriticVerdict"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CriticVerdict",
+            "default": "skipped"
           },
           "critic_trigger": {
             "anyOf": [
@@ -9015,18 +8917,12 @@
             "title": "Critic Conclusion"
           },
           "critic_reasoning_chain": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/ReasoningStep"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Critic Reasoning Chain"
+            "items": {
+              "$ref": "#/components/schemas/ReasoningStep"
+            },
+            "type": "array",
+            "title": "Critic Reasoning Chain",
+            "default": []
           },
           "critic_proposed_action": {
             "anyOf": [
@@ -9069,21 +8965,12 @@
               }
             ],
             "title": "Critic Trail Ref"
-          },
-          "hidden_fields": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Hidden Fields",
-            "default": []
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
-          "version",
           "procedure_id",
           "run_id",
           "subject_id",
@@ -9095,14 +8982,61 @@
           "counter_argument",
           "proposed_action",
           "autonomy_level",
-          "review_status",
           "performed_by",
-          "created_at",
-          "critic_verdict",
-          "critic_reasoning_chain"
+          "created_at"
         ],
-        "title": "JudgmentView",
-        "description": "判断的输出视图: 字段同 Judgment, 盲判时可隐藏的字段可空, hidden_fields 列出被隐藏的字段 (未隐藏时为空).\n\n返回判断的接口与对话工具都经 BlindFilter.judgment 输出它, 不直接输出 Judgment (第 10 节). 不往 Judgment 里填占位值.\n可隐藏的: 结论, 置信度及其分项, 推理链, 反方论证, 建议动作, 错报草稿, 独立复核 (critic_) 的各字段."
+        "title": "Judgment",
+        "description": "AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作."
+      },
+      "JudgmentDetail": {
+        "properties": {
+          "judgment": {
+            "$ref": "#/components/schemas/Judgment"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/Judgment"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "review_records": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRecord"
+            },
+            "type": "array",
+            "title": "Review Records"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "judgment",
+          "versions",
+          "review_records"
+        ],
+        "title": "JudgmentDetail",
+        "description": "一条判断的当前版本, 历史版本与相关复核决定."
+      },
+      "JudgmentRef": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "title": "JudgmentRef",
+        "description": "报告中引用的一条判断."
       },
       "KeyPerson": {
         "properties": {
@@ -9999,7 +9933,7 @@
           },
           "judgments": {
             "items": {
-              "$ref": "#/components/schemas/JudgmentView"
+              "$ref": "#/components/schemas/Judgment"
             },
             "type": "array",
             "title": "Judgments"
@@ -10907,7 +10841,7 @@
           "target": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/JudgmentView"
+                "$ref": "#/components/schemas/Judgment"
               },
               {
                 "$ref": "#/components/schemas/AuditException"
@@ -11657,7 +11591,6 @@
           "unattributed",
           "failed",
           "dispute",
-          "blind",
           "manual"
         ],
         "title": "TaskKind",
@@ -11706,7 +11639,7 @@
         "title": "Token",
         "description": "登录成功返回的访问令牌."
       },
-      "TrailEntryView": {
+      "TrailEntry": {
         "properties": {
           "id": {
             "anyOf": [
@@ -11812,16 +11745,10 @@
             "title": "Idempotency Key"
           },
           "payload": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payload"
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload",
+            "default": {}
           },
           "created_at": {
             "anyOf": [
@@ -11834,14 +11761,6 @@
               }
             ],
             "title": "Created At"
-          },
-          "hidden_fields": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Hidden Fields",
-            "default": []
           }
         },
         "additionalProperties": false,
@@ -11850,11 +11769,10 @@
           "engagement_id",
           "kind",
           "actor",
-          "summary",
-          "payload"
+          "summary"
         ],
-        "title": "TrailEntryView",
-        "description": "留痕的输出视图: 字段同 TrailEntry, payload 可空 (盲判时隐藏模型调用的原始输入输出), hidden_fields 列出被隐藏的\n字段. 返回留痕的接口与对话工具都经 BlindFilter.trail 输出它 (第 10 节)."
+        "title": "TrailEntry",
+        "description": "审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改."
       },
       "TrailKind": {
         "type": "string",

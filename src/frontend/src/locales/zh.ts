@@ -164,7 +164,6 @@ export const zh: Messages = {
     normal: '',
     unattributed: '未归属到具体对象的异常',
     failed: '程序未能完成',
-    blind: '盲判',
     manual: '人工程序',
   },
   stepKinds: {

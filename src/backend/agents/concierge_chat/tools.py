@@ -43,7 +43,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.ports import XeroConnections
-from backend.contracts.views import EngagementOverview, GateView, JudgmentView, TrailEntryView
+from backend.contracts.views import EngagementOverview, GateView
 from backend.services.deferrals import active_deferrals, target_of
 from backend.services.features import COLLAB
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, ROW_EVIDENCE
@@ -214,7 +214,7 @@ def cite_pointer(p: EvidencePointer) -> ConciergeCitation:
     return ConciergeCitation(kind="evidence", id=p.source_id, label=label, pointer=p)
 
 
-def cite_judgment(j: Judgment | JudgmentView) -> ConciergeCitation:
+def cite_judgment(j: Judgment) -> ConciergeCitation:
     return ConciergeCitation(kind="judgment", id=j.id, label=f"{j.procedure_id} {j.subject_id}")
 
 
@@ -222,7 +222,7 @@ def cite_procedure(procedure_id: str, name: str) -> ConciergeCitation:
     return ConciergeCitation(kind="procedure", id=procedure_id, label=f"{procedure_id} {name}")
 
 
-def cite_trail(entry: TrailEntry | TrailEntryView) -> ConciergeCitation:
+def cite_trail(entry: TrailEntry) -> ConciergeCitation:
     assert entry.id is not None  # 读回的留痕都有 ID
     return ConciergeCitation(kind="trail", id=entry.id, label=entry.summary[:60])
 
@@ -232,25 +232,23 @@ def add_pointers(cites: dict[str, ConciergeCitation], pointers: Sequence[Evidenc
         cites.setdefault(p.source_id, cite_pointer(p))
 
 
-def critic_fields(judgment: JudgmentView) -> dict[str, Any]:
-    """独立复核 (A7, GEN-09) 的字段: 判断视图上以 critic_ 开头的全部字段 (结论, 理由类型, 理由, 独立结论与推理链等);
-    按前缀取, 之后新增的复核字段自动带上. 盲判隐藏的为空."""
+def critic_fields(judgment: Judgment) -> dict[str, Any]:
+    """独立复核 (A7, GEN-09) 的字段: Judgment 上以 critic_ 开头的全部字段 (结论, 理由类型, 理由, 独立结论与推理链等);
+    按前缀取, 之后新增的复核字段自动带上."""
     dumped = judgment.model_dump(mode="json")
     return {k: v for k, v in dumped.items() if k.startswith("critic_")}
 
 
-def judgment_brief(j: JudgmentView) -> dict[str, Any]:
-    """判断的摘要 (经盲判过滤后的视图; 隐藏的字段为空, hidden_fields 列出)."""
+def judgment_brief(j: Judgment) -> dict[str, Any]:
     brief = {
         "id": j.id,
         "version": j.version,
         "procedure_id": j.procedure_id,
         "subject_id": j.subject_id,
-        "conclusion": j.conclusion[:300] if j.conclusion is not None else None,
+        "conclusion": j.conclusion[:300],
         "confidence": j.confidence,
-        "proposed_action": j.proposed_action.value if j.proposed_action is not None else None,
+        "proposed_action": j.proposed_action.value,
         "review_status": j.review_status.value,
-        "hidden_fields": j.hidden_fields,
     }
     verdict = critic_fields(j).get("critic_verdict")
     if verdict is not None:
@@ -401,11 +399,9 @@ async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
         }
         judgment = judgments.get(task.target_id)
         if judgment is not None:
-            view = await deps.blind_filter.judgment(eid, judgment)
-            item["subject_id"] = view.subject_id
-            item["conclusion"] = view.conclusion[:200] if view.conclusion is not None else None
-            item["hidden_fields"] = view.hidden_fields
-            cites[view.id] = cite_judgment(view)
+            item["subject_id"] = judgment.subject_id
+            item["conclusion"] = judgment.conclusion[:200]
+            cites[judgment.id] = cite_judgment(judgment)
         cites.setdefault(task.procedure_id, cite_procedure(task.procedure_id, item["procedure_name"]))
         items.append(item)
     return Found({"items": items, "count": len(items)}, cites)
@@ -415,18 +411,16 @@ async def list_judgments(env: ToolEnv, args: ByProcedure) -> Found:
     filters = {"procedure_id": args.procedure_id} if args.procedure_id else {}
     judgments = sorted(await env.deps.output_store.latest(env.eid, Judgment, **filters), key=lambda j: j.id)
     page, meta = paged(judgments, args)
-    views = [await env.deps.blind_filter.judgment(env.eid, j) for j in page]
-    return Found({"judgments": [judgment_brief(j) for j in views], **meta}, {j.id: cite_judgment(j) for j in views})
+    return Found({"judgments": [judgment_brief(j) for j in page], **meta}, {j.id: cite_judgment(j) for j in page})
 
 
 async def get_judgment(env: ToolEnv, args: JudgmentArgs) -> Found:
-    stored = await env.deps.output_store.get(env.eid, Judgment, args.judgment_id)
-    if stored is None:
+    judgment = await env.deps.output_store.get(env.eid, Judgment, args.judgment_id)
+    if judgment is None:
         raise ToolFailed(f"没有判断 {args.judgment_id}")
-    judgment = await env.deps.blind_filter.judgment(env.eid, stored)
     cites = {judgment.id: cite_judgment(judgment)}
     steps = []
-    for i, step in enumerate(judgment.reasoning_chain or []):
+    for i, step in enumerate(judgment.reasoning_chain):
         add_pointers(cites, step.evidence)
         steps.append(
             {
@@ -446,7 +440,7 @@ async def get_judgment(env: ToolEnv, args: JudgmentArgs) -> Found:
         "confidence_parts": judgment.confidence_parts,
         "autonomy_level": judgment.autonomy_level.value,
         "counter_argument": judgment.counter_argument,
-        "reasoning_chain": steps if judgment.reasoning_chain is not None else None,
+        "reasoning_chain": steps,
         "evidence": [pointer_brief(p) for p in judgment.evidence],
         "misstatement_draft": (
             {**draft.model_dump(mode="json"), "amount_aud": aud(draft.amount_cents)} if draft is not None else None
@@ -470,8 +464,7 @@ async def get_procedure(env: ToolEnv, args: ProcedureArgs) -> Found:
         raise ToolFailed(f"程序库没有 {pid}") from None
     runs = sorted(await deps.output_store.latest(eid, ProcedureRun, procedure_id=pid), key=lambda r: r.run_no)
     exceptions = await deps.output_store.latest(eid, AuditException, procedure_id=pid)
-    stored = await deps.output_store.latest(eid, Judgment, procedure_id=pid)
-    judgments = [await deps.blind_filter.judgment(eid, j) for j in stored]
+    judgments = await deps.output_store.latest(eid, Judgment, procedure_id=pid)
     data = {
         "id": pid,
         "name": template.name,
@@ -606,7 +599,7 @@ async def get_misstatements(env: ToolEnv, args: NoArgs) -> Found:
     items = sorted(await deps.output_store.latest(eid, Misstatement), key=lambda m: m.id)
     schedule = await deps.output_store.get(eid, UncorrectedSchedule, "SCHEDULE")
     overview = await env.state.overview(eid)
-    judgments = {j.id: await deps.blind_filter.judgment(eid, j) for j in await deps.output_store.latest(eid, Judgment)}
+    judgments = {j.id: j for j in await deps.output_store.latest(eid, Judgment)}
     cites = {m.judgment_id: cite_judgment(judgments[m.judgment_id]) for m in items if m.judgment_id in judgments}
     data = {
         "misstatements": [
@@ -635,7 +628,7 @@ async def get_report(env: ToolEnv, args: NoArgs) -> Found:
         return Found({"report": None, "note": "还没有报告草稿"})
     report = max(versions, key=lambda r: r.revision)
     decisions = await deps.output_store.latest(eid, GateDecision, gate=GateId.RPT_01)
-    judgments = {j.id: await deps.blind_filter.judgment(eid, j) for j in await deps.output_store.latest(eid, Judgment)}
+    judgments = {j.id: j for j in await deps.output_store.latest(eid, Judgment)}
     cites = {r.id: cite_judgment(judgments[r.id]) for r in report.judgment_refs if r.id in judgments}
     data = {
         "revision": report.revision,
@@ -689,8 +682,7 @@ async def search_trail(env: ToolEnv, args: TrailArgs) -> Found:
         if e.kind not in CONVERSATION_KINDS and (args.procedure_id is None or e.procedure_id == args.procedure_id)
     ]
     hits.reverse()
-    found, meta = paged(hits, args)
-    page_entries = [await env.deps.blind_filter.trail(env.eid, e) for e in found]
+    page_entries, meta = paged(hits, args)
     items = [
         {
             "id": e.id,
@@ -700,7 +692,6 @@ async def search_trail(env: ToolEnv, args: TrailArgs) -> Found:
             "summary": e.summary,
             "model": e.model,
             "created_at": e.created_at.isoformat() if e.created_at else None,
-            "hidden_fields": e.hidden_fields,
         }
         for e in page_entries
     ]

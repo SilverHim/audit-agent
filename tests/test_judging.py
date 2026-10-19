@@ -113,13 +113,13 @@ class RecordingQueue(ReviewQueue):
 
 
 def recorded(procedure_id: str, subjects: list[Subject], outcomes: dict[str, Any]) -> tuple[Any, Any, list[Call]]:
-    """test_fieldwork_judging.setup 的 A6, 判断引擎, A7, 两个步骤与 ReviewQueue 都换成记录调用的替身."""
+    """test_fieldwork_judging.setup 的 A6, 判断引擎, A7, 降级步骤与 ReviewQueue 都换成记录调用的替身."""
     calls: list[Call] = []
     agent, ctx, _ = setup(procedure_id, subjects, outcomes)
     engine = RecordingEngine(outcomes, calls)
     agent.deps = replace(agent.deps, judgments=engine, queue=RecordingQueue(agent.deps.queue, calls))
     agent.reviewer = RecordingCritic(calls)
-    agent.steps = JudgingSteps(downgrade=recording_step("downgrade", calls), blind=recording_step("blind", calls))
+    agent.steps = JudgingSteps(downgrade=recording_step("downgrade", calls))
     return agent, ctx, calls
 
 
@@ -127,21 +127,19 @@ def recorded(procedure_id: str, subjects: list[Subject], outcomes: dict[str, Any
 
 
 async def test_steps_run_in_fixed_order() -> None:
-    """一个 L3 accept 判断依次经过 judge, critic, downgrade, blind, classify, make_task; 降级与抽样收到的判断
-    已带 critic 字段."""
+    """一个 L3 accept 判断依次经过 judge, critic, downgrade, classify, make_task; 降级收到的判断已带 critic 字段."""
     agent, ctx, calls = recorded("REV-03", [Subject("A", {})], {"A": passed(autonomy_level=AutonomyLevel.L3)})
     await agent.run(ctx)
     assert calls == [
         ("judge", "A"),
         ("critic", "A"),
         ("downgrade", "A", "consistent"),
-        ("blind", "A", "consistent"),
         ("classify", "A"),
         ("make_task", "normal"),
     ]
 
 
-async def test_failed_subjects_skip_critic_downgrade_and_blind() -> None:
+async def test_failed_subjects_skip_critic_and_downgrade() -> None:
     """判断失败的对象 (failed, unattributed) 只经 judge, classify, make_task; 同一执行里成功的对象照常走全程."""
     x1 = numbat_rev08_exception(make_run("REV-08"))
     subjects = [Subject("A", {}), Subject("F", {}), Subject("U", {}, [x1])]
@@ -151,7 +149,7 @@ async def test_failed_subjects_skip_critic_downgrade_and_blind() -> None:
     await agent.run(ctx)
     for subject in ("F", "U"):
         assert [c[0] for c in calls if c[1:2] == (subject,)] == ["judge"], subject
-    assert [c[0] for c in calls if c[1:2] == ("A",)] == ["judge", "critic", "downgrade", "blind", "classify"]
+    assert [c[0] for c in calls if c[1:2] == ("A",)] == ["judge", "critic", "downgrade", "classify"]
     assert [c for c in calls if c[0] in ("classify", "make_task")] == [
         ("classify", "A"),
         ("make_task", "normal"),
@@ -179,7 +177,7 @@ async def test_critic_gets_the_subjects_rule_findings() -> None:
 async def test_rule_programs_do_not_enter_judging(
     procedure_id: str, make_exception: Callable[[ProcedureRun], AuditException]
 ) -> None:
-    """规则程序 (REV-08, CSH-05 的 B01) 只调规则引擎: 判断引擎, A7, 两个步骤与 classify 都不调用."""
+    """规则程序 (REV-08, CSH-05 的 B01) 只调规则引擎: 判断引擎, A7, 降级与 classify 都不调用."""
     calls: list[Call] = []
     x1 = make_exception(make_run(procedure_id))
     rules = FakeRuleEngine({procedure_id: lambda run: RuleResult(exceptions=[x1], rows={})})
@@ -187,7 +185,7 @@ async def test_rule_programs_do_not_enter_judging(
     deps = replace(deps, judgments=RecordingEngine({}, calls), queue=RecordingQueue(deps.queue, calls))
     agent = FieldworkAgent(deps)
     agent.reviewer = RecordingCritic(calls)
-    agent.steps = JudgingSteps(downgrade=recording_step("downgrade", calls), blind=recording_step("blind", calls))
+    agent.steps = JudgingSteps(downgrade=recording_step("downgrade", calls))
     patch = await agent.run(make_ctx(deps, procedure_id))
     assert patch["exceptions"] == [x1] and calls == []
 
@@ -196,12 +194,11 @@ async def test_rule_programs_do_not_enter_judging(
 
 
 async def test_default_steps_return_judgment_unchanged() -> None:
-    """缺省的降级与抽样原样返回 (同一对象); A6 缺省用它们."""
+    """缺省的降级原样返回 (同一对象); A6 缺省用它."""
     _, ctx, _ = setup("REV-03", [], {})
     judgment = passed()(JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A"), ctx.run).judgment
-    assert JudgingSteps(downgrade=unchanged, blind=unchanged) == DEFAULT_STEPS
+    assert JudgingSteps(downgrade=unchanged) == DEFAULT_STEPS
     assert await DEFAULT_STEPS.downgrade(ctx, judgment) is judgment
-    assert await DEFAULT_STEPS.blind(ctx, judgment) is judgment
     agent, _, _ = setup("REV-03", [], {})
     assert agent.steps is DEFAULT_STEPS
 

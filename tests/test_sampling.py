@@ -1,4 +1,4 @@
-"""确定性抽样 (services/sampling.py): 按用途加盐, critic 用途与加盐之前的公式逐值相同."""
+"""确定性抽样 (services/sampling.py): A7 独立复核的抽样, 与 R84 之前 agents/review.sampled 的公式逐值相同."""
 
 import hashlib
 import math
@@ -13,40 +13,21 @@ def old_sampled(judgment_id: str, rate: float) -> bool:
     return int(hashlib.sha256(judgment_id.encode()).hexdigest()[:8], 16) / 0x1_0000_0000 < rate
 
 
-def test_same_input_same_point_and_purposes_differ() -> None:
-    """同输入同值; 同一键在 critic 与 blind 两种用途下的抽样点不同."""
-    assert sample_point("critic", "J-REV-02-1-X1") == sample_point("critic", "J-REV-02-1-X1")
-    assert sample_point("critic", "J-REV-02-1-X1") != sample_point("blind", "J-REV-02-1-X1")
-    assert all(0 <= sample_point(p, i) < 1 for p in ("critic", "blind") for i in IDS)
-
-
-def test_rate_and_independence_between_purposes() -> None:
-    """2000 个判断 ID 在 rate 0.05 下各用途抽中 60-140 个; 两种用途抽中的集合交集不超过 20 个."""
-    critic = {i for i in IDS if sampled("critic", i, 0.05)}
-    blind = {i for i in IDS if sampled("blind", i, 0.05)}
-    assert 60 <= len(critic) <= 140 and 60 <= len(blind) <= 140
-    assert len(critic & blind) <= 20
-
-
-def test_critic_purpose_keeps_previous_formula() -> None:
-    """critic 用途不加盐: 已知值 0.1453; 2000 个判断 ID 逐个与旧公式相同; 其余用途加 "{用途}:" 前缀."""
-    assert round(sample_point("critic", "J-CSH-02-1-BA-091"), 4) == 0.1453
-    assert [sampled("critic", i, 0.05) for i in IDS] == [old_sampled(i, 0.05) for i in IDS]
-    salted = int(hashlib.sha256(b"blind:J-REV-02-1-X1").hexdigest()[:8], 16) / 0x1_0000_0000
-    assert sample_point("blind", "J-REV-02-1-X1") == salted
+def test_keeps_previous_formula() -> None:
+    """抽样点在 [0, 1) 内; 2000 个判断 ID 逐个与旧公式相同 (防删去用途参数时改了公式)."""
+    assert all(0 <= sample_point(i) < 1 for i in IDS)
+    assert [sampled(i, 0.05) for i in IDS] == [old_sampled(i, 0.05) for i in IDS]
 
 
 def test_rate_bounds() -> None:
-    """抽样点在 [0, 1) 内: rate 为 0 或负数时一个不中, 为 1 或大于 1 (含 inf) 时全中, NaN 一个不中."""
-    for purpose in ("critic", "blind"):
-        assert not any(sampled(purpose, i, rate) for i in IDS for rate in (0.0, -0.5, math.nan))
-        assert all(sampled(purpose, i, rate) for i in IDS for rate in (1.0, 1.5, math.inf))
+    """rate 为 0 或负数时一个不中, 为 1 或大于 1 (含 inf) 时全中, NaN 一个不中."""
+    assert not any(sampled(i, rate) for i in IDS for rate in (0.0, -0.5, math.nan))
+    assert all(sampled(i, rate) for i in IDS for rate in (1.0, 1.5, math.inf))
 
 
 def test_known_points_and_counts() -> None:
-    """R149 验收 1: A7 抽样的确切值 (防公式或键被改而抽中的对象悄悄变): 键只用判断 ID, critic 用途不加盐,
-    J-CSH-02-1-BA-01 0.2221, J-GEN-06-1-XJ-626-2 0.8845 (J-CSH-02-1-BA-091 的 0.1453 见上一条); 2000 个 ID 在 0.05 下
-    抽中 98 个."""
-    points = {"J-CSH-02-1-BA-01": 0.2221, "J-GEN-06-1-XJ-626-2": 0.8845}
-    assert {key: round(sample_point("critic", key), 4) for key in points} == points
-    assert sum(sampled("critic", i, 0.05) for i in IDS) == 98
+    """R149 验收 1 与 R295 验收 7: A7 抽样的确切值 (防公式或键被改而抽中的对象悄悄变): 键只用判断 ID,
+    J-CSH-02-1-BA-091 0.1453, J-CSH-02-1-BA-01 0.2221, J-GEN-06-1-XJ-626-2 0.8845; 2000 个 ID 在 0.05 下抽中 98 个."""
+    points = {"J-CSH-02-1-BA-091": 0.1453, "J-CSH-02-1-BA-01": 0.2221, "J-GEN-06-1-XJ-626-2": 0.8845}
+    assert {key: round(sample_point(key), 4) for key in points} == points
+    assert sum(sampled(i, 0.05) for i in IDS) == 98

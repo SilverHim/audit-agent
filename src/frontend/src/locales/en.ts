@@ -167,7 +167,6 @@ export const en = {
     normal: '',
     unattributed: 'Exception not linked to a subject',
     failed: 'Procedure did not complete',
-    blind: 'Blind review',
     manual: 'Manual procedure',
   } as Record<string, string>,
   stepKinds: {

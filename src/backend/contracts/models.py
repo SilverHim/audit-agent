@@ -166,7 +166,6 @@ class TaskKind(StrEnum):
     unattributed = "unattributed"  # 例外没有判断解释
     failed = "failed"  # 执行或校验失败
     dispute = "dispute"  # 独立复核 (A7) 与 A6 结论不一致, 由审计师仲裁
-    blind = "blind"  # 盲判: 审计师先提交独立结论, 比对 AI 结论后才作普通决定 (尚未使用)
     manual = "manual"  # 人工程序 (engine manual) 由人执行并提交结果 (尚未使用)
 
 

@@ -239,7 +239,7 @@ async def test_assumption_step_triggers_review_without_main_rule() -> None:
     assumption = ReasoningStep(kind=StepKind.assumption, text="The goods were delivered.")
     x = Xero()
     plain = x.judgment(proposed_action=ProposedAction.misstatement)
-    assert not sampled("critic", plain.id, 0.05)  # 这张发票的判断 ID 不在 5% 抽样里
+    assert not sampled(plain.id, 0.05)  # 这张发票的判断 ID 不在 5% 抽样里
     assert trigger(AutonomyLevel.L3, plain, 0.05) is None
     with_assumption = plain.model_copy(update={"reasoning_chain": [*plain.reasoning_chain, assumption]})
     assert trigger(AutonomyLevel.L3, with_assumption, 0.05) == "assumption"
@@ -292,7 +292,7 @@ async def test_collab_triggers_internal_copy_and_unsupported_in_order() -> None:
     x = Xero(features=COLLAB)
     x.deps.financial_store.document_refs.append(COPY)  # type: ignore[attr-defined]
     plain = x.judgment(proposed_action=ProposedAction.misstatement)
-    assert not sampled("critic", plain.id, 0.05)
+    assert not sampled(plain.id, 0.05)
     keys = [f"{x.invoice.id}-r1", f"{x.invoice.id}-r2"]
 
     async def run(judgment: Judgment) -> tuple[Judgment, list[str]]:
@@ -368,7 +368,7 @@ async def test_collab_internal_copy_reads_given_evidence(make: Any, expected: Cr
 async def test_collab_review_hits_sample_with_gen09_rate() -> None:
     """R149 验收 2 的 sample (第 1 轮审核 R149-05): 判断 ID 在 GEN-09 的 sample_rate (0.05) 下抽中, 没有其他触发,
     collab 打开: critic_trigger 为 sample, 复核模型收到两轮请求 (防 review 不读 GEN-09 的 sample_rate)."""
-    hit = next(i for i in (f"J-REV-02-1-X{n}" for n in range(2000)) if sampled("critic", i, 0.05))
+    hit = next(i for i in (f"J-REV-02-1-X{n}" for n in range(2000)) if sampled(i, 0.05))
     x = Xero(features=COLLAB)
     review = scripted(x.invoice.id, [x.independent()], [verdict()])
     j = await x.agent(review).review(x.ctx, x.judgment(id=hit, proposed_action=ProposedAction.misstatement))
@@ -506,8 +506,8 @@ def test_trigger_order_and_sample() -> None:
 def test_sampling_is_replayable() -> None:
     """抽样按判断 ID 的 sha256 (services/sampling 的 critic 用途): 同一 ID 每次结果相同; 约 5% 的 ID 抽中."""
     ids = [f"J-REV-02-1-X{n}" for n in range(2000)]
-    first = [sampled("critic", i, 0.05) for i in ids]
-    assert first == [sampled("critic", i, 0.05) for i in ids]
+    first = [sampled(i, 0.05) for i in ids]
+    assert first == [sampled(i, 0.05) for i in ids]
     assert 60 <= sum(first) <= 140
     hit = ids[first.index(True)]
     judgment = Judgment(

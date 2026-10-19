@@ -142,7 +142,7 @@ def test_new_enum_values() -> None:
         "internal_record",
         "other",
     ]
-    assert [k.value for k in TaskKind] == ["normal", "unattributed", "failed", "dispute", "blind", "manual"]
+    assert [k.value for k in TaskKind] == ["normal", "unattributed", "failed", "dispute", "manual"]
     assert [c.value for c in CriticTrigger] == ["main", "internal_copy", "assumption", "unsupported", "sample"]
     assert [k.value for k in TrailKind][-2:] == ["data", "presentation"]
     assert [s.value for s in ProcedureStatus] == [
@@ -210,7 +210,7 @@ def test_new_values_survive_checkpoint_serde() -> None:
     values = {
         "judgments": [judgment],
         "documents": [DOCUMENT.model_copy(update={"document_date": date(2026, 9, 22), "related_ids": ["XJ-613"]})],
-        "kinds": [TaskKind.blind, TaskKind.manual, ProcedureStatus.in_dispute, TrailKind.presentation],
+        "kinds": [TaskKind.manual, ProcedureStatus.in_dispute, TrailKind.presentation],
         "extracts": [EXTRACT],
     }
     back = serde.loads_typed(serde.dumps_typed(values))
@@ -219,7 +219,7 @@ def test_new_values_survive_checkpoint_serde() -> None:
     assert back["judgments"][0].review_status is ReviewStatus.superseded
     assert back["documents"][0].type is DocumentType.agreement
     assert back["documents"][0].document_date == date(2026, 9, 22)
-    assert [type(k) for k in back["kinds"]] == [TaskKind, TaskKind, ProcedureStatus, TrailKind]
+    assert [type(k) for k in back["kinds"]] == [TaskKind, ProcedureStatus, TrailKind]
 
 
 def test_procedure_in_dispute_survives_store_json_and_checkpoint() -> None:

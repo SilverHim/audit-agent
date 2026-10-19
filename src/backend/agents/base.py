@@ -3,7 +3,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, cast
 
@@ -13,7 +13,6 @@ from backend.contracts.ports import (
     AbnLookup,
     AuditOutputStore,
     AuditTrail,
-    BlindFilter,
     ConfirmationChannel,
     DatasetLoader,
     DataStore,
@@ -26,7 +25,6 @@ from backend.contracts.ports import (
     UserStore,
 )
 from backend.contracts.state import EngagementState, StatePatch
-from backend.services.blind import PassThroughBlindFilter
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
 from backend.services.procedure_library import ProcedureLibrary
@@ -59,9 +57,6 @@ class AgentDeps:
     review_llm: LLMClient | None = None
     # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES
     features: frozenset[str] = BASELINE
-    # 盲判过滤 (规格书第 9.5 节; 不是判断公共流程的盲测抽样 JudgingSteps.blind): 返回判断与模型留痕的接口和对话
-    # 工具都经它输出 (接口文档第 4, 10 节); 本版为空实现
-    blind_filter: BlindFilter = field(default_factory=PassThroughBlindFilter)
 
 
 @dataclass(frozen=True)
