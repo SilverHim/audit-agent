@@ -428,7 +428,7 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 
 **文件类型, 证据种类与可靠性**
 
-现状 (合并上游数据管理后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, other; `judgment_engine.DOCUMENT_EVIDENCE` 只映射 contract → contract, confirmation → external, 其他类型的文件指针在引用级被拒 ("{type} 类文件不作证据"). 各组草稿已加: registry_extract → external (G2); engagement_letter → contract, minutes → voucher, representation_letter → voucher, correspondence → voucher (G5); governance_communication (G6). 本数据集还要新增 2 类 (契约一次合并, 见需求清单 R89); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
+现状 (R89 合入后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record, other 共 14 类; `judgment_engine.DOCUMENT_EVIDENCE` 映射除 financial_statements 与 other 外的全部类型, 这两类的文件指针在引用级被拒 ("{type} 类文件不作证据"). 本数据集为此新增的是下表 2 类 (agreement, internal_record, R89 一次合并); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
 
 | 新增 DocumentType | 证据种类 | 用于 | 为什么不复用已有类型 |
 |---|---|---|---|

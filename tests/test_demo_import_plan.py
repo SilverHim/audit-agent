@@ -75,11 +75,29 @@ def manifest_documents(edit: Callable[[dict[str, object]], None], path: str) -> 
     return change
 
 
-def index_row(api: Path, demo: Path) -> None:
-    """index.csv 一行的关联对象与 manifest 不同, 重写副本 manifest 的哈希 (documents 段仍按规格)."""
-    index = demo / "20261017-q1" / "documents" / "index.csv"
-    index.write_text(index.read_text(encoding="utf-8").replace("XJ-548;BT-090-0097", "XJ-548"), encoding="utf-8")
-    rewrite_manifest(api, demo)
+def index_csv(old: str, new: str) -> Callable[[Path, Path], None]:
+    """改副本 index.csv 的一处 (old 换成 new), 再重写副本 manifest 的哈希 (documents 段仍按规格)."""
+
+    def change(api: Path, demo: Path) -> None:
+        index = demo / "20261017-q1" / "documents" / "index.csv"
+        text = index.read_text(encoding="utf-8")
+        assert old in text
+        index.write_text(text.replace(old, new, 1), encoding="utf-8")
+        rewrite_manifest(api, demo)
+
+    return change
+
+
+def manifest_list(edit: Callable[[list[dict[str, object]]], None]) -> Callable[[Path, Path], None]:
+    """改副本 manifest.documents 这个列表本身 (删项的 path, 重复一项)."""
+
+    def change(api: Path, demo: Path) -> None:
+        file = demo / "20261017-q1" / "manifest.json"
+        manifest = json.loads(file.read_text(encoding="utf-8"))
+        edit(manifest["documents"])
+        file.write_text(json.dumps(manifest), encoding="utf-8")
+
+    return change
 
 
 def tampered(api: Path, demo: Path) -> None:
@@ -87,6 +105,8 @@ def tampered(api: Path, demo: Path) -> None:
 
 
 SMART = "documents/evidence/smart_agency_invoice_SM0195-70135.pdf"
+EXTRA = "documents/evidence/extra.pdf"  # index.csv 多出的一行, manifest 里没有
+SMART_ROW = f"{SMART},invoice,external_copy,2026-09-05,XJ-548;BT-090-0097"
 
 
 @pytest.mark.parametrize(
@@ -95,9 +115,21 @@ SMART = "documents/evidence/smart_agency_invoice_SM0195-70135.pdf"
         (tampered, SupplementMismatch, "补造文件与快照不匹配: delivery_notes.csv"),
         (manifest_documents(lambda d: d.update(type="supplier_invoice"), SMART), ValueError, f"{SMART}: 类型"),
         (manifest_documents(lambda d: d.update(registration="upload"), SMART), ValueError, f"{SMART}: 登记途径"),
-        (index_row, ValueError, f"documents/index.csv 的 {SMART} 与 manifest.documents 不符"),
+        (
+            index_csv("XJ-548;BT-090-0097", "XJ-548"),
+            ValueError,
+            f"documents/index.csv 的 {SMART} 与 manifest.documents 不符",
+        ),
+        (index_csv("2026-09-05,XJ-548", "2026-09-06,XJ-548"), ValueError, f"documents/index.csv 的 {SMART} 与"),
+        (
+            index_csv(SMART_ROW, f"{SMART_ROW}\n{EXTRA},invoice,external_copy,2026-09-05,XJ-548"),
+            ValueError,
+            f"documents/index.csv 的 {EXTRA} 与 manifest.documents 不符",
+        ),
+        (manifest_list(lambda docs: docs[3].pop("path")), ValueError, "manifest.documents 第 4 项缺 path"),
+        (manifest_list(lambda docs: docs.append(dict(docs[3]))), ValueError, "重复"),
     ],
-    ids=["mismatch", "type", "registration", "index"],
+    ids=["mismatch", "type", "registration", "index-related", "index-date", "index-extra", "no-path", "duplicate"],
 )
 def test_plan_rejects_bad_supplements(
     tmp_path: Path, change: Callable[[Path, Path], None], error: type[Exception], message: str

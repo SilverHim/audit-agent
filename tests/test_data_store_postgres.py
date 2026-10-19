@@ -1547,3 +1547,60 @@ async def test_seed_load_after_a_version_row_still_loads(storage, tmp_path: Path
     after = await data.readiness(third.id)
     assert after.data_version == confirmed.data_version + 1
     assert (after.ready_at, after.ready_by, after.ready_reason) == (confirmed.ready_at, "U-1", "客户说数据已齐")
+
+
+async def partial_table(ctx: dict[str, Any]) -> None:
+    """只导入了一张账表 (银行账户, 不是科目表) 的项目再载入: 已有财务表行, 不写也不报错, 数据版本不变."""
+    data, loader, eid = ctx["data"], ctx["loader"], ctx["eid"]
+    row = FINANCIAL_ROWS["bank_accounts"].model_validate(csv_rows("bank_accounts")[0])
+    await data.write_tables(eid, {TableKind.bank_accounts: [row]}, source="import", actor="U-1")
+    await loader.load(eid, "demo")
+    assert [len(await table_rows(ctx["engine"], eid, n)) for n in ("bank_accounts", "accounts")] == [1, 0]
+    assert (await data.readiness(eid)).data_version == 1
+
+
+async def payroll_first(ctx: dict[str, Any]) -> None:
+    """先导入工资册 (不算数据集载入的财务表) 再载入: 照常载入, 版本 +1, loaded_at (第一次接入的时间) 不改."""
+    from tests.test_employees import EXPECTED
+
+    data, loader, eid = ctx["data"], ctx["loader"], ctx["eid"]
+    await data.write_tables(eid, {TableKind.employees: EXPECTED}, source="import", actor="U-1")
+    before = await data.readiness(eid)
+    await loader.load(eid, "demo")
+    after = await data.readiness(eid)
+    assert len(await table_rows(ctx["engine"], eid, "accounts")) == len(csv_rows("accounts"))
+    assert (after.data_version, after.loaded_at) == (before.data_version + 1, before.loaded_at)
+
+
+async def other_dataset(ctx: dict[str, Any]) -> None:
+    """已载入 demo 的项目以另一个数据集载入: 抛 ValueError, 不当作已载入静默返回."""
+    loader, eid = ctx["loader"], ctx["eid"]
+    await loader.load(eid, "demo")
+    other = CsvDatasetLoader(ROOT / "data", ctx["engine"], loader.evidence_store)
+    with pytest.raises(ValueError, match="different dataset"):
+        await other.load(eid, "other")
+
+
+async def adjustments_need_tables(ctx: dict[str, Any]) -> None:
+    """R268-01: 有版本行 (确认就绪) 而还没有财务表行时, 更正分录载入同样报尚未载入, 不写分录 (否则之后的种子载入
+    见分录有行, 会把整个项目判为已载入而跳过). 更正分录取 Xero 补造的一份, 放在 tmp 的 demo 数据集目录下."""
+    data, eid, tmp_path = ctx["data"], ctx["eid"], ctx["tmp_path"]
+    await data.confirm_ready(eid, "U-1", reason="先确认")
+    target = tmp_path / "datasets" / "demo" / "adjustments" / "journal_entries.csv"
+    target.parent.mkdir(parents=True)
+    target.write_bytes((ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv").read_bytes())
+    adjustments = CsvDatasetLoader(tmp_path / "datasets", ctx["engine"], ctx["loader"].evidence_store)
+    with pytest.raises(ValueError, match="尚未载入数据集"):
+        await adjustments.load_adjustments(eid, "demo", ["AJE-X01"])
+    assert await table_rows(ctx["engine"], eid, "journal_entries") == []
+
+
+@pytest.mark.parametrize(
+    "case", [partial_table, payroll_first, other_dataset, adjustments_need_tables], ids=lambda c: c.__name__
+)
+async def test_already_loaded_means_financial_rows(storage, tmp_path: Path, case: Any) -> None:  # type: ignore[no-untyped-def]
+    """R268 已载入的口径: 看数据集载入的七张财务表有没有行 (任一张有即已载入, 工资册不算), 种子载入与更正分录载入
+    同一判断; 各例构造到刚好能区分对错 (审核 R268-01, R268-02)."""
+    engine, (first, _second), loader, _ = storage
+    data = PostgresDataStore(tmp_path, engine)
+    await case({"engine": engine, "data": data, "loader": loader, "eid": first.id, "tmp_path": tmp_path})

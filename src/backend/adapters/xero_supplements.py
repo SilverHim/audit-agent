@@ -217,11 +217,17 @@ class Supplements:
 
     def uploads(self) -> list[DemoUpload]:
         """manifest.documents 中由演示导入上传的文件 (登记途径为 STAGES 之一), 按阶段再按文件名排序; 登记 mock 与
-        函证 mock 存档的 (ARCHIVED) 不在其中. 类型不是 DocumentType 取值, 登记途径不认识, 缺项或可靠性, 日期不合格式,
-        或 index.csv 的行与 manifest 不符 (没有这份文件, 或类型, 可靠性, 文件日期, 关联对象不同) 抛 ValueError,
-        消息含该文件的 path. 调用前须已 verify."""
+        函证 mock 存档的 (ARCHIVED) 不在其中. 某项缺 path (消息含第几项) 或同一 path 出现两次, 类型不是 DocumentType
+        取值, 登记途径不认识, 缺项或可靠性, 日期不合格式, 或 index.csv 的行与 manifest 不符 (没有这份文件, 或类型,
+        可靠性, 文件日期, 关联对象不同) 抛 ValueError, 消息含该文件的 path. 调用前须已 verify."""
         manifest = json.loads((self.root / "manifest.json").read_text(encoding="utf-8"))
-        documents = {str(d["path"]): d for d in manifest.get("documents", [])}
+        documents: dict[str, dict[str, Any]] = {}
+        for n, item in enumerate(manifest.get("documents", []), start=1):
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise ValueError(f"manifest.documents 第 {n} 项缺 path")
+            if item["path"] in documents:
+                raise ValueError(f"manifest.documents 的 {item['path']} 重复")
+            documents[item["path"]] = item
         for path, document in documents.items():
             if document.get("type") not in set(DocumentType):
                 raise ValueError(f"manifest.documents 的 {path}: 类型 {document.get('type')} 不是 DocumentType 取值")
@@ -229,12 +235,12 @@ class Supplements:
                 raise ValueError(f"manifest.documents 的 {path}: 登记途径 {document.get('registration')} 不认识")
         for row in self.rows("documents/index.csv"):
             path = row["path"]
-            document = documents.get(path)
+            entry = documents.get(path)
             listed = (row["document_type"], row["reliability"], row["document_date"] or None, row["related_ids"])
             recorded = None
-            if document is not None:
-                related = ";".join(document.get("related_ids", []))
-                recorded = (document.get("type"), document.get("reliability"), document.get("document_date"), related)
+            if entry is not None:
+                related = ";".join(entry.get("related_ids", []))
+                recorded = (entry.get("type"), entry.get("reliability"), entry.get("document_date"), related)
             if listed != recorded:
                 raise ValueError(f"documents/index.csv 的 {path} 与 manifest.documents 不符")
         found: list[DemoUpload] = []

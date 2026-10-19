@@ -601,10 +601,10 @@ class TableLoader(Store):
         journal = m.FINANCIAL["journal_entries"]
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            loads = await self.rows(eid, select(m.dataset_loads))
-            if not loads:
+            existing, loaded = await self.load_state(conn, eid)  # 已载入的口径同 insert (看财务表有没有行)
+            if existing is None or not loaded:
                 raise ValueError("尚未载入数据集")
-            if loads[0]["dataset"] != dataset:
+            if existing["dataset"] != dataset:
                 raise ValueError("Engagement already has a different dataset")
             stored = {
                 r["id"]: JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
