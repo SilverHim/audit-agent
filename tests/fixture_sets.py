@@ -16,8 +16,9 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[1]
 DEMO = REPO / "data" / "demo"  # Numbat 合成数据集 (合成数据集设计第 1 节)
 UPLOADS = REPO / "tests" / "fixtures" / "llm_variants" / "upload"  # 上传处理的固定输出, 各数据集共用一份
-# 上传处理的固定输出中, 演示也用而须同步进 Numbat 运行副本的程序: 文件分类, 回函抽取与账表识别
-UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")
+# 上传处理的固定输出中, 演示也用而须同步进 Numbat 运行副本的程序: 文件分类, 回函抽取, 账表识别与 ASIC 摘录抽取
+# (没有数据集的新客户也读 Numbat 的运行副本, 需求 R290)
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET", "DOC-REGISTRY")
 
 
 @dataclass(frozen=True)

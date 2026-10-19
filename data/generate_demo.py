@@ -15,9 +15,9 @@ from reportlab.pdfgen.canvas import Canvas
 
 SEED = 20260630
 ROOT = Path(__file__).resolve().parent
-# 上传处理的固定输出中, 演示也用而须同步进运行副本 (llm/) 的程序: 文件分类, 回函抽取与账表识别
-# (同 tests/fixture_sets.UPLOAD_RUNTIME)
-UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET")
+# 上传处理的固定输出中, 演示也用而须同步进运行副本 (llm/) 的程序: 文件分类, 回函抽取, 账表识别与 ASIC 摘录抽取
+# (新建的客户读这份运行副本, 需求 R290; 同 tests/fixture_sets.UPLOAD_RUNTIME)
+UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET", "DOC-REGISTRY")
 # 各表的列, 与 data/demo 的表头逐字相同. 写成常量, 不取记录模型的字段: 契约后来给模型加的可选字段 (如
 # Account.category, JournalEntry.approved_at) 不进原始数据, 重生成结果与仓库里的逐字节相同 (需求 R284)
 COLUMNS = {

@@ -2394,8 +2394,8 @@ def test_fake_documents_from_manifest() -> None:
 
 def check_runtime(fs: FixtureSet) -> None:
     """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过.
-    登记了上传处理的固定输出 (uploads) 时, 其中 uploads_in_runtime 列出的程序 (演示也用的分类, 回函副本与账表识别)
-    也须在运行副本中; 其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
+    登记了上传处理的固定输出 (uploads) 时, 其中 uploads_in_runtime 列出的程序 (演示也用的分类, 回函副本, 账表识别与
+    ASIC 摘录抽取) 也须在运行副本中; 其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
     if not fs.runtime.is_dir():
         raise AssertionError(f"{fs.name}: 运行副本未生成 ({fs.runtime})")
     test_files = {p.relative_to(fs.fixtures): p for p in fs.fixtures.rglob("*.json")}

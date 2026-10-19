@@ -1,0 +1,126 @@
+{
+  "acn": "900043021",
+  "abn": null,
+  "name": "Demo Company (AU) Pty Ltd",
+  "type": "APTY",
+  "company_class": "LMSH",
+  "subclass": "PROP",
+  "status": "Registered",
+  "registered_date": "2018-09-03",
+  "registered_address": null,
+  "officeholders": [
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "director",
+      "appointed": "2018-09-03"
+    },
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "secretary",
+      "appointed": "2018-09-03"
+    }
+  ],
+  "shareholders": [
+    {
+      "name": "Alex Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 85,
+      "pct": 0.85
+    },
+    {
+      "name": "Sam Whitfield",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 15,
+      "pct": 0.15
+    }
+  ],
+  "paid_up_cents": 100,
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "acn",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "name",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "type",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "company_class",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "subclass",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "status",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "registered_date",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "officeholders",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "shareholders",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "paid_up_cents",
+      "page": 2,
+      "reliability": "external_copy"
+    }
+  ]
+}

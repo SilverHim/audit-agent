@@ -578,27 +578,22 @@ async def test_reextraction_appends_after_the_existing_versions(since: datetime 
 @pytest.mark.slow
 @pytest.mark.external
 async def test_registry_extract_on_real_store(tmp_path: Path) -> None:
-    """真实存储: 上传的摘录按请求定类型并抽取 (第 1 版, 数据变动 registry_extracts), UploadedExtracts 读回带原件与
-    指针 (可靠性取文件登记), 其他 ACN 为 None; 修改出第 2 版; 智能导入确认时接在已有版本之后写第 3 版."""
-    from dataclasses import replace
-
+    """真实存储与运行中应用的 mock 大模型 (组装根的 DatasetFixtureLLMClient, 固定输出目录取演示运行副本 data/demo/llm,
+    同 .env.example; 新客户没有数据集读它): 上传的摘录分类判断不了, 人工指定类型后抽取 (第 1 版, 数据变动
+    registry_extracts), UploadedExtracts 读回带原件与指针 (可靠性取文件登记), 其他 ACN 为 None; 修改出第 2 版; 智能
+    导入确认时接在已有版本之后写第 3 版."""
     from sqlalchemy import insert
 
     from backend.core.config import Settings
     from backend.main import build_deps
     from backend.persistence import models as m
     from backend.persistence.stores import PostgresEngagementStore, now
-    from backend.services.judgment_engine import JudgmentEngine
 
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需要 TEST_DATABASE_URL")
-    deps = build_deps(Settings(DATABASE_URL=url, EVIDENCE_ROOT=tmp_path, LLM_MODE="mock"))
-    llm = LayeredMockLLM(UPLOAD_FIXTURES)
-    judgments = JudgmentEngine(
-        llm, OutputValidator(deps.financial_store, deps.library, deps.trail), deps.trail, deps.library
-    )
-    deps = replace(deps, llm=llm, judgments=judgments)
+    runtime = Path(__file__).resolve().parents[1] / "data" / "demo" / "llm"
+    deps = build_deps(Settings(DATABASE_URL=url, EVIDENCE_ROOT=tmp_path, LLM_MODE="mock", LLM_FIXTURES_ROOT=runtime))
     engine = cast(Any, deps.financial_store).engine
     user = "USR-" + uuid4().hex
     async with engine.begin() as conn:
