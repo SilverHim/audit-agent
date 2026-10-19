@@ -387,11 +387,22 @@ async def test_no_resolvable_pointer_is_reference_failure() -> None:
 
 
 async def test_trail_pointer_must_be_external_call() -> None:
+    """留痕指针只认本项目的外部调用; 可靠性按留痕记下的事实定 (需求 R289): 真查了登记的是外部原件, 记下 "没有查询"
+    (payload available false) 的是内部原件, 不采信模型填写的值."""
     trail = FakeTrail()
     lookup = await trail.record(TrailEntry(engagement_id=EID, kind=TrailKind.external_call, actor="A2", summary="ABN"))
     decision = await trail.record(TrailEntry(engagement_id=EID, kind=TrailKind.decision, actor="U-1", summary="决定"))
     other = await trail.record(
         TrailEntry(engagement_id="E-OTHER", kind=TrailKind.external_call, actor="A2", summary="x")
+    )
+    unqueried = await trail.record(
+        TrailEntry(
+            engagement_id=EID,
+            kind=TrailKind.external_call,
+            actor="A2",
+            summary="ABN Lookup: not_configured",
+            payload={"abn": "68900042015", "available": False, "reason": "not_configured", "result": None},
+        )
     )
 
     def at(trail_id: str) -> EvidencePointer:
@@ -400,10 +411,16 @@ async def test_trail_pointer_must_be_external_call() -> None:
     draft = with_step(cutoff_draft(), 0, evidence=[at(lookup)])
     draft = with_step(draft, 1, evidence=[at(decision)])
     draft = with_step(draft, 2, evidence=[at(other)])
+    unqueried_pointer = at(unqueried).model_copy(
+        update={"type": EvidenceType.external, "reliability": Reliability.external_original}  # 模型填的不采信
+    )
+    draft = with_step(draft, 3, evidence=[unqueried_pointer])
     report = await check(draft, trail=trail)
     assert report.unsupported_steps == [1, 2]
     [pointer] = report.output.reasoning_chain[0].evidence
     assert (pointer.type, pointer.reliability) == (EvidenceType.external, Reliability.external_original)
+    [pointer] = report.output.reasoning_chain[3].evidence
+    assert (pointer.type, pointer.reliability) == (EvidenceType.voucher, Reliability.internal_original)
     assert "不是外部调用" in report.errors[0] and "留痕不存在" in report.errors[1]
 
 

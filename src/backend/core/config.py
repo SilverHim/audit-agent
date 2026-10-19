@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     XERO_TENANT_ID: str = ""  # 要拉取的组织, 为空时取授权连接里唯一的组织
     XERO_PAID_ENDPOINTS: Literal["live", "mock", "off"] = "off"  # 付费接口: 真实, 网页导出模拟, 不取 (退回单据反推)
 
+    # ABR ABN Lookup web services (需求 R289): 注册后邮件发的 GUID, 只放 .env, 不进日志, 留痕与响应; 为空时新客户的
+    # ABN 核查转人工确认. URL 为 SearchByABNv202001 的 HTTP POST 端点 (官方文档 Documentation/WebServiceMethods)
+    ABN_LOOKUP_GUID: str = ""
+    ABN_LOOKUP_URL: str = "https://abr.business.gov.au/abrxmlsearch/AbrXmlSearch.asmx/SearchByABNv202001"
+
     # 设置页保存的模型密钥用它加密 (Fernet); 为空时不能保存密钥. 换了它, 已存的密钥就解不开, 须在设置页重填
     SETTINGS_SECRET_KEY: str = ""
 

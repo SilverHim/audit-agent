@@ -7,6 +7,8 @@ os.environ["LLM_MODE"] = "mock"
 os.environ["FEATURES"] = "critic"
 # 演示默认数据集固定为缺省值 (core/config.py), 不受 .env 的 DEMO_DATASET 影响; GET /datasets 的 default 行按它
 os.environ["DEMO_DATASET"] = "xero/20261017-q1"
+# ABN 实时核查 (需求 R289) 一律未配置: 测试不调真实的 ABR ABN Lookup, 不受 .env 里 GUID 的影响; 要查的用例注入假接口
+os.environ["ABN_LOOKUP_GUID"] = ""
 
 # 测试固定读 tests/fixtures/llm, 不受 .env 的 LLM_FIXTURES_ROOT (运行用 data/demo/llm) 影响; 两处文档 ID 都取 manifest.
 os.environ["LLM_FIXTURES_ROOT"] = str(Path(__file__).parent / "fixtures" / "llm")

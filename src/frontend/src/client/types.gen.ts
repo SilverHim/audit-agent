@@ -5,6 +5,55 @@ export type ClientOptions = {
 };
 
 /**
+ * AbnLookupView
+ *
+ * ABN 在线核对 (GET /clients/abn-lookup) 的结果: ABR ABN Lookup 的登记信息, 不写留痕.
+ */
+export type AbnLookupView = {
+    /**
+     * Status
+     */
+    status: 'found' | 'not_found' | 'unavailable';
+    record?: AbnRecord | null;
+    /**
+     * Reason
+     */
+    reason?: 'no_source' | 'not_configured' | 'unreachable' | 'rejected' | 'service_error' | null;
+    /**
+     * Name Matches
+     */
+    name_matches?: boolean | null;
+};
+
+/**
+ * AbnRecord
+ *
+ * ABN Lookup 按 ABN 查到的登记记录.
+ */
+export type AbnRecord = {
+    /**
+     * Abn
+     */
+    abn: string;
+    /**
+     * Acn
+     */
+    acn: string | null;
+    /**
+     * Entity Name
+     */
+    entity_name: string;
+    /**
+     * Status
+     */
+    status: 'Active' | 'Cancelled';
+    /**
+     * Entity Type
+     */
+    entity_type: string;
+};
+
+/**
  * AcceptanceMaterial
  *
  * ACC-01 闸门的呈报材料.
@@ -4471,6 +4520,40 @@ export type ClientsCreateClientResponses = {
 };
 
 export type ClientsCreateClientResponse = ClientsCreateClientResponses[keyof ClientsCreateClientResponses];
+
+export type ClientsAbnLookupData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Abn
+         */
+        abn: string;
+        /**
+         * Legal Name
+         */
+        legal_name?: string;
+    };
+    url: '/api/v1/clients/abn-lookup';
+};
+
+export type ClientsAbnLookupErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ClientsAbnLookupError = ClientsAbnLookupErrors[keyof ClientsAbnLookupErrors];
+
+export type ClientsAbnLookupResponses = {
+    /**
+     * Successful Response
+     */
+    200: AbnLookupView;
+};
+
+export type ClientsAbnLookupResponse = ClientsAbnLookupResponses[keyof ClientsAbnLookupResponses];
 
 export type EngagementsListEngagementsData = {
     body?: never;

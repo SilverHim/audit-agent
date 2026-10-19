@@ -7,6 +7,9 @@ ABN 为 11 位数字: 9 位编号前加 2 位校验位, 校验位按模 89 算�
 
 import re
 
+from backend.contracts.models import ClientProfile
+from backend.contracts.ports import DatasetLoader
+
 WEIGHTS = (10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19)  # ABR 公布的各位权重, 从左到右
 
 
@@ -25,3 +28,16 @@ def abn_problem(abn: str) -> str | None:
     if sum(v * w for v, w in zip(values, WEIGHTS, strict=True)) % 89 != 0:
         return f"ABN {digits} 的校验位不对 (按 ABR 公布的模 89 算法)"
     return None
+
+
+def dataset_profiles(datasets: DatasetLoader) -> list[ClientProfile]:
+    """各数据集的客户画像 (DatasetLoader 现算, 按数据集名排序): 查 ABN 是否已被占用时, 与库里各客户的最新一版一并
+    比较 (EngagementStore.create_client 与 save_profile 的 dataset_profiles; 新建客户与 ACC-01 改 ABN 同一范围).
+    画像读不了的数据集跳过 (同 GET /datasets)."""
+    found = []
+    for name in sorted(datasets.datasets()):
+        try:
+            found.append(datasets.client_profile(name))
+        except (OSError, ValueError):  # 文件缺失或不合格 (ValidationError 是 ValueError 的子类)
+            continue
+    return found

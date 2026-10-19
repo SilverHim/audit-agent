@@ -561,10 +561,17 @@ class EngagementStore(Protocol):
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...
 
     async def save_profile(
-        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+        self,
+        profile: ClientProfile,
+        *,
+        source: ProfileSource,
+        updated_by: str | None,
+        dataset_profiles: Sequence[ClientProfile] | None = None,
     ) -> ClientProfile:
         """客户画像出新版本, 记下来源与写入人, 返回存储中的画像. profile.version 须为已有最大值 +1, 不符抛
-        VersionConflict; 在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        VersionConflict; 在 AuditOutputStore.transaction 块内调用时加入该事务. 给了 dataset_profiles 时另查 ABN
+        (需求 R289, ACC-01 改了 ABN): 与 create_client 同一把锁, 同一比较范围, 只是不含本客户自己; 已是别的客户的
+        抛 AbnTaken, 不写."""
         ...
 
     async def create_client(
@@ -615,13 +622,22 @@ class LlmSettingsStore(Protocol):
 
 
 class RegistrySource(Protocol):
-    """ABN 与 ASIC 登记查询, 首参为项目 ID. mock 按项目的数据集读该数据集目录下的 registry/ (Numbat 为
-    data/demo, Xero 为补造目录; 没有目录时查不到). 项目没有数据集 (新建的客户) 时抛 RegistryUnavailable, ACC-04
-    转人工确认; ABR 实时查与 ASIC 摘录接入后 (R289, R290) 由组合实现替代."""
+    """ABN 与 ASIC 登记查询, 首参为项目 ID. 组装根为组合实现 (adapters/registry.CompositeRegistrySource, 需求 R289):
+    项目有数据集时读该数据集目录下的 registry/ (Numbat 为 data/demo, Xero 为补造目录; 没有目录时查不到); 项目没有
+    数据集 (新建的客户) 时 ABN 经 AbnLookup 实时查, ASIC 抛 RegistryUnavailable (no_source, ASIC 摘录接入前,
+    R290). 查不了时抛 RegistryUnavailable (reason 为类别), ACC-04 转人工确认."""
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
     async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None: ...
+
+
+class AbnLookup(Protocol):
+    """ABR ABN Lookup web services 的实时查询 (需求 R289, adapters/abn_lookup), 不按项目. 查到返回登记记录, 查不到
+    为 None; 没配 GUID, 不可达, GUID 不被认可, 服务出错时抛 RegistryUnavailable (reason 为类别). 原始响应会回显
+    GUID, 实现只返回解析出的字段, 不记日志, 不放进异常."""
+
+    async def abn(self, abn: str) -> AbnRecord | None: ...
 
 
 class ConfirmationRequest(Model):

@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
-from backend.contracts.errors import DecisionRejected, EngagementLocked, VersionConflict
+from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
@@ -317,6 +317,8 @@ async def test_update_profile_then_approve_reaches_p1() -> None:
         (TYPO_PROFILE.model_copy(update={"version": 1}), "VERSION_MISMATCH"),  # 不能覆盖已有版本
         (FIXED_PROFILE.model_copy(update={"id": "CLIENT-999"}), "INVALID_VALUE"),  # 不是本项目的客户
         (FIXED_PROFILE.model_copy(update={"id": "CLIENT-999", "version": 3}), "VERSION_MISMATCH"),  # 都错: 版本在前
+        (FIXED_PROFILE.model_copy(update={"abn": "68 900 042 016"}), "INVALID_VALUE"),  # ABN 校验位不对
+        (FIXED_PROFILE.model_copy(update={"abn": "6890004201"}), "INVALID_VALUE"),  # ABN 不是 11 位
     ],
 )
 async def test_update_profile_rejects_invalid(profile: ClientProfile, code: str) -> None:
@@ -340,6 +342,27 @@ async def test_update_profile_only_at_acc01() -> None:
         await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
     assert e.value.code == "NOT_AT_GATE"
+
+
+async def test_update_profile_checks_a_changed_abn_like_new_clients() -> None:
+    """ABN 改了时另查重 (同新建客户): 已是别的客户的报 ABN_TAKEN, 带那个客户的编号与名称, 不保存; ABN 只差空格不算改,
+    不查重 (库里本客户自己的 ABN 不算撞上), 照常保存."""
+    s = await started(TYPO_PROFILE)
+    wombat = NUMBAT_PROFILE.model_copy(update={"id": "CLIENT-M-0000000000aa", "legal_name": "Wombat Pty Ltd"})
+    await s.engagement_store.create_client(
+        wombat.model_copy(update={"abn": "44900043101"}), created_by="U-1", dataset_profiles=[]
+    )
+    taken = FIXED_PROFILE.model_copy(update={"abn": "44 900 043 101"})
+    with pytest.raises(DataRejected) as e:
+        await s.submit.update_client_profile(EID, *profile_update(taken), updated_by="U-1")
+    assert (e.value.code, e.value.extra) == ("ABN_TAKEN", {"client_id": wombat.id, "legal_name": "Wombat Pty Ltd"})
+    assert await s.engagement_store.client_profile(ENGAGEMENT.client_id) == TYPO_PROFILE
+    assert not s.runner.is_running(EID)
+
+    spaced = FIXED_PROFILE.model_copy(update={"abn": "68 900 042 015"})
+    await s.submit.update_client_profile(EID, *profile_update(spaced), updated_by="U-1")
+    await wait_idle(s.runner, EID)
+    assert await s.engagement_store.client_profile(ENGAGEMENT.client_id) == spaced
 
 
 BAD_YEAR_END = {"financial_year_end": "13-01"}  # 合并后不合 ClientProfile

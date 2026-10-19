@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CircleCheck } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { clientsCreateClientMutation, clientsListClientsQueryKey } from '@/client/@tanstack/react-query.gen'
 import type { ClientCreate } from '@/client/types.gen'
+import { AbnLookupNote } from '@/components/abn-lookup-note'
 import {
   draftFields,
   LabeledField,
@@ -17,7 +17,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { abnProblem, formatAbn, normalizeAbn } from '@/lib/abn'
+import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { abnTaken, errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import type { Messages } from '@/locales/en'
@@ -111,18 +111,8 @@ export function NewClientDialog({
     shown.abn = undefined
   }
   const abnOk = draft.abn.trim() !== '' && found.abn === undefined
-  // R289 接上 ABN Lookup 后, 在线核对的结果也显示在这里
-  const abnHint = abnOk ? (
-    <span className="flex flex-col gap-0.5">
-      <span className="inline-flex items-center gap-1">
-        <CircleCheck className="size-3.5 shrink-0 text-ok" aria-hidden="true" />
-        {t.newClient.abnChecksumOk(formatAbn(draft.abn))}
-      </span>
-      <span>{t.newClient.abnLookupLater}</span>
-    </span>
-  ) : (
-    t.newClient.abnHint
-  )
+  // 校验位通过后在线核对 (ABN Lookup 的登记名称, 状态, 主体类型与 ACN), 不一致只警示不拦提交
+  const abnHint = abnOk ? <AbnLookupNote abn={draft.abn} legalName={draft.legalName} /> : t.newClient.abnHint
   // 已登记的提示只对发出请求时的 ABN: 请求返回时表单里的 ABN 已改, 就不显示 (审核 R288-09)
   const rejected = abnTaken(create.error)
   const taken = rejected && create.variables?.body.abn === normalizeAbn(draft.abn) ? rejected : null

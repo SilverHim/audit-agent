@@ -4,7 +4,9 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from backend.contracts.data import DocumentDetailsEdit, TableKind
+from backend.contracts.errors import RegistryReason
 from backend.contracts.models import (
+    AbnRecord,
     AcceptanceScorecard,
     Annotation,
     AuditException,
@@ -200,6 +202,16 @@ class ClientSummary(Model):
     origin: ProfileSource | None  # 客户从哪里来: 第 1 版的来源 (manual, dataset); 老版本没记时按数据集画像判定
     latest_version: int | None  # 库里最新版本号; 还没进库的数据集客户为空
     datasets: list[ClientDataset]  # 该客户的数据集, 按数据集名排序; 新建的客户为空
+
+
+class AbnLookupView(Model):
+    """ABN 在线核对 (GET /clients/abn-lookup) 的结果: ABR ABN Lookup 的登记信息, 不写留痕."""
+
+    status: Literal["found", "not_found", "unavailable"]  # 查到, 查不到, 查不了
+    record: AbnRecord | None = None  # 查到时的登记信息 (名称不公开时 entity_name 为空串)
+    reason: RegistryReason | None = None  # 查不了的原因类别 (not_configured, unreachable, rejected, service_error)
+    # 给了 legal_name 且查到, 登记名称公开时: 与 ACC-04 同一规则 (client_intel.normalize_name) 比较是否一致; 否则为空
+    name_matches: bool | None = None
 
 
 class ProfileVersionInfo(Model):

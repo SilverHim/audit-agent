@@ -1,4 +1,5 @@
-"""GET /clients: 新建项目时可选的客户 (每个客户一行, 不按数据集); POST /clients: 新建客户 (需求 R288)."""
+"""GET /clients: 新建项目时可选的客户 (每个客户一行, 不按数据集); POST /clients: 新建客户 (需求 R288);
+GET /clients/abn-lookup: 表单里的 ABN 在线核对 (需求 R289)."""
 
 from typing import Annotated
 from uuid import uuid4
@@ -7,13 +8,14 @@ from fastapi import APIRouter, Depends
 from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps
+from backend.agents.client_intel import normalize_name
 from backend.api.deps import current_user, get_deps
 from backend.api.errors import api_error
-from backend.api.schemas import ClientCreate, ClientDataset, ClientSummary
-from backend.contracts.errors import AbnTaken, VersionConflict
+from backend.api.schemas import AbnLookupView, ClientCreate, ClientDataset, ClientSummary
+from backend.contracts.errors import AbnTaken, RegistryUnavailable, VersionConflict
 from backend.contracts.models import ClientProfile, ProfileSource, User
 from backend.core.config import get_settings
-from backend.services.abn import abn_problem, normalize_abn
+from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -65,6 +67,33 @@ async def list_clients(
     return rows
 
 
+@router.get("/abn-lookup")
+async def abn_lookup(
+    abn: str,
+    _user: Annotated[User, Depends(current_user)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+    legal_name: str = "",
+) -> AbnLookupView:
+    """新建客户与改画像的表单里的 ABN 在线核对: ABN 去空格后不是 11 位数字或校验位不对 422 INVALID_VALUE (同
+    POST /clients, 不发请求); 否则经 ABR ABN Lookup 查 (同一 ABN 短时内取缓存), 返回 found 与登记信息, 或
+    not_found; 没配 GUID, 不可达, GUID 不被认可, 服务出错时为 unavailable 与原因类别 (不报错, 建项目后 ACC-04 转人工
+    确认). 给了 legal_name 且登记名称公开时, 按 ACC-04 的规则比较是否一致. 不写留痕 (还没有项目; 建项目后 ACC-04
+    照常查并留痕)."""
+    problem = abn_problem(abn)
+    if problem is not None:
+        raise api_error("INVALID_VALUE", problem)
+    try:
+        record = await deps.abn_lookup.abn(normalize_abn(abn))
+    except RegistryUnavailable as exc:
+        return AbnLookupView(status="unavailable", reason=exc.reason)
+    if record is None:
+        return AbnLookupView(status="not_found")
+    matches = None
+    if legal_name.strip() and record.entity_name:
+        matches = normalize_name(record.entity_name) == normalize_name(legal_name)
+    return AbnLookupView(status="found", record=record, name_matches=matches)
+
+
 @router.post("", status_code=201)
 async def create_client(
     body: ClientCreate,
@@ -94,7 +123,7 @@ async def create_client(
         )
     except ValidationError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
-    known = [profile for profile, _ in dataset_clients(deps).values()]
+    known = dataset_profiles(deps.datasets)
     try:
         saved = await deps.engagement_store.create_client(profile, created_by=user.id, dataset_profiles=known)
     except AbnTaken as exc:

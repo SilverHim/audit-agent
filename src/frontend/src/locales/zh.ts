@@ -254,7 +254,7 @@ export const zh: Messages = {
     gateIntro: {
       'ACC-01': (passed, total, exceptions, manual) =>
         manual
-          ? `可以作出承接决定了。该客户没有可查的登记来源，ACC-04 未能与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查中 ${manual} 项待你对照 ABN Lookup 与 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
+          ? `可以作出承接决定了。ACC-04 有登记未能查询：${total} 项检查中 ${passed} 项通过，${manual} 项待你对照 ABN Lookup 或 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
           : `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
       'FIN-01': (count, total, skipped) =>
@@ -540,6 +540,23 @@ export const zh: Messages = {
     newClient: '新建客户…',
     noDataset: '该客户没有演示数据集：ACC-04 的登记核查留待你人工确认，客户数据在项目里导入。',
   },
+  abnLookup: {
+    checksumOk: (abn) => `${abn}：校验位正确`,
+    checking: '正在查询 ABN Lookup…',
+    registered: (facts) => `ABN Lookup：${facts}`,
+    nameNotPublic: '名称不公开',
+    status: { Active: '有效', Cancelled: '已注销' },
+    cancelled: '该 ABN 已注销，承接时 ACC-04 会提出例外。',
+    notFound: 'ABN Lookup 查无此 ABN，承接时 ACC-04 会提出例外。',
+    nameMismatch: '登记名称与填写的法定名称不一致。',
+    unavailable: {
+      no_source: '没有可查的登记来源，承接时 ACC-04 的 ABN 核查留待你人工确认。',
+      not_configured: '未配置 ABN Lookup，承接时 ACC-04 的 ABN 核查留待你人工确认。',
+      unreachable: '暂时连不上 ABN Lookup；承接时 ACC-04 会再查，仍查不了即留待你人工确认。',
+      rejected: 'ABN Lookup 不认可所配的 GUID，承接时 ACC-04 的 ABN 核查留待你人工确认。',
+      service_error: 'ABN Lookup 出错；承接时 ACC-04 会再查，仍查不了即留待你人工确认。',
+    },
+  },
   newClient: {
     title: '新建客户',
     intro: '登记一个没有演示数据集的客户。画像存为第 1 版，来源为你的手工录入。',
@@ -555,9 +572,7 @@ export const zh: Messages = {
       spfr: '特殊目的财报',
     },
     abnHint: '11 位数字，可带空格',
-    abnChecksumOk: (abn) => `${abn}：校验位正确`,
-    abnLookupLater: 'ABN Lookup 在线核对尚未接入',
-    registryNote: '新建的客户暂无可查的登记来源，承接时 ACC-04 的 ABN 与 ASIC 核查留待你人工确认。',
+    registryNote: '新建的客户暂未接入 ASIC 公司摘录，承接时 ACC-04 的 ASIC 核查留待你人工确认。',
     save: '保存客户',
     created: (name) => `客户 ${name} 已保存`,
     taken: (name, id) => `该 ABN 已登记为 ${name}（${id}）。`,

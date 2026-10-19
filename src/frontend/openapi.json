@@ -247,6 +247,64 @@
         ]
       }
     },
+    "/api/v1/clients/abn-lookup": {
+      "get": {
+        "tags": [
+          "clients"
+        ],
+        "summary": "Abn Lookup",
+        "description": "新建客户与改画像的表单里的 ABN 在线核对: ABN 去空格后不是 11 位数字或校验位不对 422 INVALID_VALUE (同\nPOST /clients, 不发请求); 否则经 ABR ABN Lookup 查 (同一 ABN 短时内取缓存), 返回 found 与登记信息, 或\nnot_found; 没配 GUID, 不可达, GUID 不被认可, 服务出错时为 unavailable 与原因类别 (不报错, 建项目后 ACC-04 转人工\n确认). 给了 legal_name 且登记名称公开时, 按 ACC-04 的规则比较是否一致. 不写留痕 (还没有项目; 建项目后 ACC-04\n照常查并留痕).",
+        "operationId": "clients-abn_lookup",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "abn",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Abn"
+            }
+          },
+          {
+            "name": "legal_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Legal Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbnLookupView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements": {
       "get": {
         "tags": [
@@ -3833,6 +3891,111 @@
   },
   "components": {
     "schemas": {
+      "AbnLookupView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "found",
+              "not_found",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "record": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AbnRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "no_source",
+                  "not_configured",
+                  "unreachable",
+                  "rejected",
+                  "service_error"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "name_matches": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Matches"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "AbnLookupView",
+        "description": "ABN 在线核对 (GET /clients/abn-lookup) 的结果: ABR ABN Lookup 的登记信息, 不写留痕."
+      },
+      "AbnRecord": {
+        "properties": {
+          "abn": {
+            "type": "string",
+            "title": "Abn"
+          },
+          "acn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acn"
+          },
+          "entity_name": {
+            "type": "string",
+            "title": "Entity Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Active",
+              "Cancelled"
+            ],
+            "title": "Status"
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "abn",
+          "acn",
+          "entity_name",
+          "status",
+          "entity_type"
+        ],
+        "title": "AbnRecord",
+        "description": "ABN Lookup 按 ABN 查到的登记记录."
+      },
       "AcceptanceMaterial": {
         "properties": {
           "kind": {

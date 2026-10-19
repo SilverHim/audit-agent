@@ -65,6 +65,7 @@ from backend.contracts.records import (
 from backend.core.config import get_settings
 from backend.persistence import models as m
 from backend.persistence.db import default_engine, transaction, writable
+from backend.services.abn import normalize_abn
 from backend.services.account_mapping import classify_by_name, with_category
 from backend.services.extraction_edits import term_position
 from backend.services.ledger import PROFIT_AND_LOSS, opening_balances
@@ -1146,22 +1147,34 @@ class PostgresEngagementStore(Store):
         """新建客户 (见 EngagementStore.create_client): 咨询锁 clients 内查 ABN 是否已被占用, 再写第 1 版."""
         if profile.version != 1:
             raise VersionConflict(profile.id)
-        async with transaction(self.engine, "") as conn:
-            await conn.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('clients', 0))"))
-            stored = [entry.profile for entry in await self.clients()]
-            known = {p.id for p in stored}
-            for other in [*stored, *(p for p in dataset_profiles if p.id not in known)]:
-                if "".join(other.abn.split()) == "".join(profile.abn.split()):
-                    raise AbnTaken(profile.abn, other.id, other.legal_name)
-            return await self.save_profile(profile, source=ProfileSource.manual, updated_by=created_by)
+        return await self.save_profile(
+            profile, source=ProfileSource.manual, updated_by=created_by, dataset_profiles=dataset_profiles
+        )
+
+    async def _check_abn(self, conn: AsyncConnection, profile: ClientProfile, others: Sequence[ClientProfile]) -> None:
+        """在已开的事务里取咨询锁 clients (新建客户与改 ABN 共用, 查重与写入不交错), 查 profile 的 ABN 是否已是别的
+        客户的: 库里其他客户的最新一版, 加上 others 中还没进库的数据集画像; 撞上抛 AbnTaken."""
+        await conn.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('clients', 0))"))
+        stored = [entry.profile for entry in await self.clients()]
+        known = {p.id for p in stored}
+        for other in [*stored, *(p for p in others if p.id not in known)]:
+            if other.id != profile.id and normalize_abn(other.abn) == normalize_abn(profile.abn):
+                raise AbnTaken(profile.abn, other.id, other.legal_name)
 
     async def save_profile(
-        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+        self,
+        profile: ClientProfile,
+        *,
+        source: ProfileSource,
+        updated_by: str | None,
+        dataset_profiles: Sequence[ClientProfile] | None = None,
     ) -> ClientProfile:
         eid = self._joined_eid()
         async with transaction(self.engine, eid) as conn:
             if eid:
                 await writable(conn, eid)
+            if dataset_profiles is not None:
+                await self._check_abn(conn, profile, dataset_profiles)
             await conn.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": "profile:" + profile.id}
             )

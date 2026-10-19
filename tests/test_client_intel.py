@@ -16,8 +16,11 @@ from backend.agents.client_intel import (
     normalize_name,
     trail_pointer,
 )
+from backend.contracts.errors import RegistryReason, RegistryUnavailable
 from backend.contracts.models import (
+    AbnRecord,
     AcceptanceScorecard,
+    AsicCompanyRecord,
     EvidencePointer,
     EvidenceType,
     ExceptionDisposition,
@@ -430,3 +433,71 @@ async def test_run_raises_when_profile_missing() -> None:
         await agent.run(make_ctx(agent.deps))
 
     assert trail.entries == []  # 没有画像就不查登记
+
+
+# ── 查不了登记 (需求 R288, R289): 待人工确认, 原因只写类别 ──
+
+
+class Unavailable(FakeRegistry):
+    """查不了登记的假登记: ABN 查询 (asic_only 时只有 ASIC 查询) 抛 RegistryUnavailable(reason); ABN 照常查 Numbat."""
+
+    def __init__(self, reason: RegistryReason, *, asic_only: bool = False) -> None:
+        super().__init__({"68900042015": NUMBAT_ABN})
+        self.reason, self.asic_only = reason, asic_only
+
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
+        if not self.asic_only:
+            raise RegistryUnavailable("x", reason=self.reason)
+        return await super().abn(eid, abn)
+
+    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+        raise RegistryUnavailable("x", reason=self.reason)
+
+
+REASONS: list[RegistryReason] = ["no_source", "not_configured", "unreachable", "rejected", "service_error"]
+NOT_QUERIED = (EvidenceType.voucher, Reliability.internal_original)  # 没有查询的留痕只作定位, 是内部原件
+QUERIED = (EvidenceType.external, Reliability.external_original)
+
+
+async def test_abn_unavailable_leaves_all_three_checks_for_manual_confirmation() -> None:
+    """ABN 查不了时三项都待人工确认 (passed None), 不出例外; 记一条留痕 (available false, 原因类别, 无结果), 三项的
+    证据都指向它 (内部原件); 原因不同 detail 也不同."""
+    details = set()
+    for reason in REASONS:
+        agent, trail = make_agent(Unavailable(reason))
+        patch = await agent.run(make_ctx(agent.deps))
+        checks = patch["acceptance_scorecard"].registry_checks
+        [entry] = trail.entries
+        assert entry.payload == {"abn": "68900042015", "available": False, "reason": reason, "result": None}
+        assert [(c.passed, c.evidence.source_id) for c in checks] == [(None, entry.id)] * 3
+        assert {(c.evidence.type, c.evidence.reliability) for c in checks} == {NOT_QUERIED}
+        assert patch["exceptions"] == []
+        details |= {c.detail for c in checks}
+    assert len(details) == len(REASONS)
+
+
+async def test_asic_unavailable_leaves_only_company_registered() -> None:
+    """ABN 查到 (外部原件), ASIC 查不了 (新建的客户, 摘录未接入): 前两项照常判, 只有 company_registered 待人工确认,
+    证据指向另记的 ASIC "未查询" 留痕."""
+    agent, trail = make_agent(Unavailable("no_source", asic_only=True))
+    patch = await agent.run(make_ctx(agent.deps))
+    checks = patch["acceptance_scorecard"].registry_checks
+    abn_entry, asic_entry = trail.entries
+    assert asic_entry.payload == {"acn": "900042015", "available": False, "reason": "no_source", "result": None}
+    assert [(c.passed, c.evidence.source_id) for c in checks] == [
+        (True, abn_entry.id),
+        (True, abn_entry.id),
+        (None, asic_entry.id),
+    ]
+    assert [(c.evidence.type, c.evidence.reliability) for c in checks] == [QUERIED, QUERIED, NOT_QUERIED]
+    assert patch["exceptions"] == []
+
+
+async def test_name_not_public_is_left_for_manual_confirmation() -> None:
+    """ABN 受限 (登记名称不公开, entity_name 为空): name_match 待人工确认, 不出 "名称不一致" 例外."""
+    agent, _ = make_agent(
+        FakeRegistry({"68900042015": NUMBAT_ABN.model_copy(update={"entity_name": ""})}, {"900042015": NUMBAT_ASIC})
+    )
+    patch = await agent.run(make_ctx(agent.deps))
+    assert [c.passed for c in patch["acceptance_scorecard"].registry_checks] == [True, None, True]
+    assert patch["exceptions"] == []

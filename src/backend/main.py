@@ -9,8 +9,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
+from backend.adapters.abn_lookup import AbnLookupClient, CachedAbnLookup
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel
 from backend.adapters.llm import SwitchableLLMClient, llm_version, make_llm_client
+from backend.adapters.registry import CompositeRegistrySource
 from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
@@ -74,6 +76,9 @@ def build_deps(settings: Settings) -> AgentDeps:
             )
         },
     )
+    # ABN 实时核查 (需求 R289): GUID 只在配置里, 建客户端时登记进 HTTP 日志的脱敏; 新客户的 ACC-04 经组合实现实查,
+    # 表单的在线核对另包一层短时缓存
+    abn_lookup = AbnLookupClient(settings.ABN_LOOKUP_GUID, settings.ABN_LOOKUP_URL)
     return AgentDeps(
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(engine),
@@ -86,12 +91,15 @@ def build_deps(settings: Settings) -> AgentDeps:
         queue=ReviewQueue(library),
         library=library,
         trail=trail,
-        registry=DatasetRegistrySource(engagement_store, datasets.supplement_dir),
+        registry=CompositeRegistrySource(
+            engagement_store, DatasetRegistrySource(engagement_store, datasets.supplement_dir), abn_lookup
+        ),
         confirmations=DatasetConfirmationChannel(
             engagement_store, datasets.supplement_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"
         ),
         users=PostgresUserStore(engine),
         data=PostgresDataStore(settings.EVIDENCE_ROOT, engine),
+        abn_lookup=CachedAbnLookup(abn_lookup),
         review_llm=review_llm,
         features=features,
         blind_filter=PassThroughBlindFilter(),
