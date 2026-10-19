@@ -761,8 +761,7 @@ export const en = {
     title: 'Data management',
     period: (start: string, end: string) => `Audit period ${start} to ${end}`,
     agentBusy: (n: number) => `Data agent · ${n} in progress`,
-    importLedger: 'Import a ledger file',
-    uploadDocuments: 'Upload documents',
+    upload: 'Upload files',
     ready: 'Data complete, continue planning',
     readyCheck: {
       title: 'Some data checks did not pass',
@@ -867,11 +866,13 @@ export const en = {
     handleInConcierge: 'Handle in Concierge',
     reviewMapping: 'View and edit',
     documents: 'Documents',
-    docCounts: (total: number, done: number, busy: number, manual: number) =>
-      `${total} files · ${done} done · ${busy} in progress · ${manual} pending auditor action`,
+    docCounts: (total: number, done: number, busy: number, manual: number, staged: number, dropped: number) =>
+      `${total} files · ${done} done · ${busy} in progress · ${manual} pending auditor action` +
+      (staged ? ` · ${staged} awaiting import review` : '') +
+      (dropped ? ` · ${dropped} not imported` : ''),
     dropHere: 'Drag files here, or',
     chooseFiles: 'Choose files',
-    fileLimits: 'PDF, Word, Excel or images, up to 50 MB each',
+    fileLimits: 'Excel, CSV, PDF, Word or images, up to 50 MB each',
     docCols: { file: 'File', type: 'Type', progress: 'Processing', reliability: 'Reliability', received: 'Received' },
     docTypes: {
       contract: 'Revenue contract',
@@ -895,6 +896,8 @@ export const en = {
       classified: 'Classified',
       extracted: 'Done',
       needs_manual: 'Pending auditor action',
+      staged: 'Awaiting import review',
+      not_imported: 'Not imported',
     } as Record<string, string>,
     steps: ['Received', 'Classified', 'Text read', 'Details extracted', 'Linked', 'Done'],
     setType: 'Set the type',
@@ -905,12 +908,12 @@ export const en = {
       internal_original: 'Internal original',
       internal_copy: 'Internal copy',
     } as Record<string, string>,
-    uploaded: (n: number) => `${n} file${n === 1 ? '' : 's'} uploaded`,
     noDocuments: 'No documents yet.',
     events: {
       import: (table: string, n: number) => `Data management · ${table}: ${n} records imported`,
       sync: 'Data management · synced from Xero',
       upload: (file: string) => `Data management · ${file} uploaded`,
+      not_imported: (files: string) => `Data management · not imported: ${files}`,
       edit: (table: string) => `Data management · ${table} edited`,
       request_raised: (item: string) => `Data management · ${item} requested from the client`,
       request_received: (item: string) => `Data management · ${item} received`,
@@ -1090,6 +1093,123 @@ export const en = {
       signed_date: 'Signed date',
       signed_by: 'Signed by',
     } as Record<string, string>,
+  },
+  batch: {
+    title: 'Review the upload',
+    processing: (done: number, total: number) => `The data agent is reading the files… ${done} of ${total} done`,
+    intro: (items: number, selected: number) =>
+      `${items} item${items === 1 ? '' : 's'} · ${selected} selected. Items flagged in red are not selected by default; check or adjust them before selecting. Files with nothing selected are recorded as not imported; upload them again to import them later.`,
+    cols: {
+      select: 'Import',
+      file: 'File and sheet',
+      recognised: 'Recognised as',
+      records: 'Rows to write',
+      companyPeriod: 'Company and period',
+      confidence: 'Confidence',
+      issues: 'Issues',
+      actions: 'Actions',
+    },
+    selectItem: (name: string) => `Import ${name}`,
+    cannotSelect: 'Adjust this item before importing it',
+    notATable: 'Not a ledger table',
+    unknownType: 'Not determined',
+    confidence: { high: 'High', low: 'Low' } as Record<string, string>,
+    columnNames: 'Matched by column names',
+    rows: (n: number) => `${n.toLocaleString('en-AU')} rows`,
+    asAt: (date: string) => `as at ${date}`,
+    contract: (counterparty: string, terms: number) =>
+      `${counterparty} · ${terms} term${terms === 1 ? '' : 's'} extracted`,
+    reply: (party: string, balance: string) => `${party} · confirmed balance ${balance}`,
+    issues: {
+      low_confidence: 'Low confidence, please check',
+      not_a_table: 'Not a ledger table',
+      plan_invalid: (message: string) => `The plan does not fit the sheet: ${message}`,
+      parse_failed: (n: number) => `${n} cell${n === 1 ? '' : 's'} could not be parsed`,
+      company_mismatch: (company: string, expected: string) =>
+        `Company does not match the engagement: read ${company}, expected ${expected}`,
+      period_mismatch: (read: string, expected: string) =>
+        `Period does not match: read ${read}, audit period ${expected}`,
+      duplicate_table: (table: string, items: string) => `${table} appears more than once in this upload (${items})`,
+      replaces_data: (table: string, n: number) =>
+        `${table}: will replace the existing ${n.toLocaleString('en-AU')} rows`,
+      unclassified: { classify: 'Type not determined, set it', read: 'No text could be read, set the type' } as Record<
+        string,
+        string
+      >,
+      extraction_failed: 'Extraction did not pass validation; it will need manual handling after import',
+      already_registered: 'Already registered earlier; it will not be registered again',
+    },
+    itemNo: (n: string) => `item ${n}`,
+    showFailures: 'Show the cells (first 20)',
+    adjust: 'Adjust',
+    later: 'Review later',
+    confirm: (n: number) => `Import ${n} item${n === 1 ? '' : 's'}`,
+    confirming: 'Importing…',
+    closeWithout: 'Import nothing and close this upload',
+    discardWarning:
+      'The files in this upload will be recorded as not imported (files registered earlier stay as they are). To import them later, upload them again.',
+    discardConfirm: 'Close without importing',
+    doneNothing: (dropped: number) =>
+      `Nothing was imported from this upload; ${dropped} file${dropped === 1 ? '' : 's'} recorded as not imported`,
+    stopped: (done: number, total: number) =>
+      `Reading stopped with ${done} of ${total} files done. Read the remaining files again to continue.`,
+    done: (tables: number, documents: number, dropped: number) =>
+      `Imported ${tables} table${tables === 1 ? '' : 's'} and registered ${documents} document${documents === 1 ? '' : 's'}` +
+      (dropped ? `; ${dropped} file${dropped === 1 ? '' : 's'} not imported` : ''),
+    confirmFailures: 'These cells could not be parsed (first 20). Adjust the item or deselect it, then import again.',
+    failed: (reason: string) =>
+      `The data agent stopped while reading this upload (${reason}). Read the remaining files again.`,
+    retry: 'Read again',
+    retrying: 'Starting…',
+    itemProcessing: 'Reading again…',
+    open: {
+      title: 'Uploads awaiting review',
+      files: (n: number, at: string) => `${n} file${n === 1 ? '' : 's'} · uploaded ${at}`,
+      status: {
+        processing: 'Reading',
+        ready: 'Ready to review',
+        failed: 'Reading stopped',
+        committed: 'Imported',
+      } as Record<string, string>,
+      review: 'Review',
+    },
+    table: {
+      title: (name: string) => `Adjust ${name}`,
+      kind: 'Data type',
+      notATable: 'Not a ledger table',
+      headerRow: 'Header row',
+      reread: (n: number) => `Read columns from row ${n}`,
+      rereadHint: 'The header row changed. Read the column names from the new row before matching.',
+      amountUnit: 'Amount unit',
+      amountUnits: { auto: 'From the column header', dollars: 'Dollars', cents: 'Cents' },
+      rules: 'Other rules in the plan',
+      ruleColumn: 'Column the rule reads',
+      skipMatches: (pattern: string) => `rows matching ${pattern} are skipped`,
+      groupMatches: (pattern: string) => `rows matching ${pattern} are group titles, filled down`,
+      removeRule: 'Remove',
+      missingColumn: 'This column is not in the current header row. Pick another column or remove the rule.',
+      missingField: 'The column is not in the current header row. Pick another column, or change the header row back.',
+      dedupe: 'Identical rows with the same key are kept once',
+      reason: 'Data agent',
+      sample: 'Example',
+      save: 'Save',
+    },
+    sources: {
+      rule: (text: string) => `Plan rule: ${text}`,
+      debitCredit: (debit: string, credit: string) => `${debit} minus ${credit}`,
+      group: (name: string) => `“${name}” from the group title`,
+      positive: (column: string) => `positive amounts in ${column}`,
+      negative: (column: string) => `negative amounts in ${column}, as positive`,
+      values: (column: string, n: number) => `${column}, ${n} value${n === 1 ? '' : 's'} mapped`,
+      periods: (text: string) => `By period: ${text}`,
+      period: { current: 'current', prior: 'prior' } as Record<string, string>,
+    },
+    document: {
+      title: (name: string) => `Set the type of ${name}`,
+      type: 'Document type',
+      reason: 'Reason',
+      save: 'Save',
+    },
   },
   requests: {
     eyebrow: 'Files to provide',

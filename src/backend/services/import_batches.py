@@ -28,7 +28,18 @@ from backend.contracts.data import (
     TableKind,
 )
 from backend.contracts.models import DocumentRef, Engagement
-from backend.services.data_import import EXTENSIONS, MAX_FAILURES, MappingError, RawRows, UnreadableFile, raw_rows
+from backend.services.data_import import (
+    EXTENSIONS,
+    MAX_FAILURES,
+    MappingError,
+    RawRows,
+    UnreadableFile,
+    cell_text,
+    mask_sample,
+    raw_rows,
+    sheet_from_rows,
+    unique_columns,
+)
 from backend.services.table_plan import apply_plan
 
 TABLE_EXTENSIONS = EXTENSIONS  # 按工作表识别的文件: CSV, XLSX, XLSM, XLS
@@ -44,6 +55,10 @@ PLAN_ISSUES = frozenset(
         BatchIssueCode.duplicate_table,
     }
 )
+
+
+SAMPLE_SCAN = 200  # 取列的样例时看表头之后的前几个数据行
+SAMPLE_CHARS = 80  # 样例截断到的字数
 
 
 @dataclass(frozen=True)
@@ -92,9 +107,56 @@ def iso(day: date | None) -> str | None:
     return day.isoformat() if day is not None else None
 
 
+def column_sample(rows: RawRows, header_row: int) -> tuple[list[str], dict[str, str]]:
+    """列对应界面用的列与样例: 表头行 header_row 的各列显示名, 每列取表头之后第一个非空值作样例 (只看前 SAMPLE_SCAN
+    个数据行, 截断到 SAMPLE_CHARS 字). 遮蔽同发给大模型的样本: 从第 1 行起到最后一个取样的行, 原样的各行整体经
+    mask_sample 遮蔽一次 (表头行之上出现过的人名表头照样生效, 邮箱在任何行都换掉), 再切出表头行与之后的数据行;
+    列名也取遮蔽后的文本 (表头行若是数据行, 人名与邮箱同样换掉). 表头行不在表里或是空行时都为空."""
+    try:
+        sheet = sheet_from_rows("", rows, header_row)
+    except MappingError:
+        return [], {}
+    sampled = sheet.rows[:SAMPLE_SCAN]
+    last = sampled[-1][0] if sampled else sheet.header_row
+    kept = [(number, cells) for number, cells in rows if number <= last]
+    masked = dict(
+        zip((n for n, _ in kept), mask_sample([[cell_text(c) for c in cells] for _, cells in kept]), strict=True)
+    )
+    width = len(sheet.headers)
+
+    def texts(number: int) -> list[str]:
+        values = masked[number][:width]
+        return values + [""] * (width - len(values))
+
+    columns = unique_columns(texts(sheet.header_row))
+    data = [texts(number) for number, _ in sampled]
+    sample = {column: next((row[i] for row in data if row[i]), "")[:SAMPLE_CHARS] for i, column in enumerate(columns)}
+    return columns, sample
+
+
+def masked_failures(rows: RawRows, failures: Sequence[ParseFailure]) -> list[ParseFailure]:
+    """解析失败处的取值也遮蔽, 口径同 column_sample: 原样的各行从第 1 行起整体经 mask_sample 遮蔽一次, 失败所在行里
+    被遮蔽的单元格, 其原文在取值里出现的换成遮蔽后的文本 (取值多是一格的原文; 唯一键重复时是几格用 / 连起来的;
+    取自分组标题的记在标题所在行). 行号与列名不变."""
+    if not failures:
+        return []
+    last = max(f.row for f in failures)
+    kept = [(number, [cell_text(c) for c in cells]) for number, cells in rows if number <= last]
+    masked = dict(zip((n for n, _ in kept), mask_sample([texts for _, texts in kept]), strict=True))
+    original = dict(kept)
+    result = []
+    for failure in failures:
+        value = failure.value
+        for before, after in zip(original.get(failure.row, []), masked.get(failure.row, []), strict=True):
+            if before and before != after:
+                value = value.replace(before, after)
+        result.append(failure if value == failure.value else failure.model_copy(update={"value": value}))
+    return result
+
+
 def evaluate_table(item: BatchItem, rows: RawRows, ctx: Context) -> BatchItem:
-    """表格项按当前方案重算: 将写入的行数, 解析失败 (前 MAX_FAILURES 处), 现有行数与问题 (重复的表由 finalize 另算).
-    rows 为该工作表原样读出的全部行."""
+    """表格项按当前方案重算: 列与样例 (column_sample), 将写入的行数, 解析失败 (前 MAX_FAILURES 处), 现有行数与问题
+    (重复的表由 finalize 另算). rows 为该工作表原样读出的全部行."""
     assert item.plan is not None and item.sheet is not None
     plan, reading = item.plan, item.reading
     issues: list[BatchIssue] = []
@@ -132,11 +194,14 @@ def evaluate_table(item: BatchItem, rows: RawRows, ctx: Context) -> BatchItem:
         )
     if reading is not None and (period := period_issue(reading, ctx.engagement)) is not None:
         issues.append(period)
+    columns, sample = column_sample(rows, plan.header_row)
     return item.model_copy(
         update={
+            "columns": columns,
+            "sample": sample,
             "records": records,
             "failure_count": failure_count,
-            "failures": failures[:MAX_FAILURES],
+            "failures": masked_failures(rows, failures[:MAX_FAILURES]),
             "existing_records": existing,
             "issues": issues,
         }

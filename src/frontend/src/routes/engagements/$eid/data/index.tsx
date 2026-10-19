@@ -1,15 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
-import { AlertTriangle, CircleCheck, Clock3, FolderOpen, Link2, RefreshCw, Table2, Upload } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, CircleCheck, Clock3, FolderOpen, Link2, RefreshCw, Upload } from 'lucide-react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
 import type { DocumentRef, DocumentType } from '@/client/types.gen'
+import { OpenBatches, useBatchUpload } from '@/components/batch-upload'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
 import { MarkedRequests } from '@/components/data-requests'
-import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,12 +17,10 @@ import { useActorName } from '@/lib/actor'
 import {
   type DataCheck,
   type DataSummary,
-  type TableKind,
   type TableSummary,
   useDataRequests,
   useDataSummary,
   useSetDocumentType,
-  useUploadDocuments,
   useXeroConnect,
   useXeroDisconnect,
   useXeroSync,
@@ -40,7 +38,6 @@ export const Route = createFileRoute('/engagements/$eid/data/')({
   component: DataPage,
 })
 
-const DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'
 const STEP_DONE: Record<string, number> = { received: 1, classified: 2, extracted: 6 }
 const FAILED_AT: Record<string, number> = { classify: 1, read: 2, extract: 3, link: 4 }
 // 合同与回函分类后还要抽取, 其他类型分类后即处理完 (后端停在 classified)
@@ -67,10 +64,9 @@ function DataPage() {
     ...evidenceListDocumentsOptions({ path: { eid } }),
     refetchInterval: summary?.processing ? 3000 : false,
   })
-  const upload = useUploadDocuments(eid)
+  // "上传资料": 账表与其他文件一起交给数据管理智能体识别, 看确认单后导入
+  const uploader = useBatchUpload(eid)
   const requests = useDataRequests(eid)
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [importing, setImporting] = useState<{ kind?: TableKind } | null>(null)
 
   // Xero 授权回调带回 ?xero=connected 或 ?xero=error, 提示一次后清掉
   useEffect(() => {
@@ -79,19 +75,6 @@ function DataPage() {
     else toast.error(t.data.xero.failed)
     void navigate({ to: '/engagements/$eid/data', params: { eid }, search: {}, replace: true })
   }, [xero, eid, navigate, t])
-
-  const send = (files: FileList | File[] | null) => {
-    const list = Array.from(files ?? [])
-    if (!list.length) return
-    upload.mutate(
-      { files: list },
-      {
-        onSuccess: (docs) => toast.success(t.data.uploaded(docs.length)),
-        onError: (error) => toast.error(failMessage(error, t)),
-      },
-    )
-    if (fileInput.current) fileInput.current.value = ''
-  }
 
   const docs = documents.data ?? []
   const importedTables = summary?.tables.filter((table) => table.source === 'import').length ?? 0
@@ -113,26 +96,14 @@ function DataPage() {
                 {t.data.agentBusy(summary.processing)}
               </StatusPill>
             ) : null}
-            <Button type="button" variant="outline" size="lg" onClick={() => setImporting({})}>
-              <Table2 className="size-4" aria-hidden="true" />
-              {t.data.importLedger}
-            </Button>
-            <Button type="button" size="lg" disabled={upload.isPending} onClick={() => fileInput.current?.click()}>
+            <Button type="button" size="lg" disabled={uploader.pending} onClick={() => uploader.choose()}>
               <Upload className="size-4" aria-hidden="true" />
-              {t.data.uploadDocuments}
+              {t.data.upload}
             </Button>
           </>
         }
       />
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        accept={DOC_ACCEPT}
-        className="sr-only"
-        tabIndex={-1}
-        onChange={(event) => send(event.target.files)}
-      />
+      {uploader.element}
 
       <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-[22px] px-4 py-6 sm:px-7">
         {overview?.awaiting_data ? (
@@ -141,6 +112,8 @@ function DataPage() {
             <DataReadyButton eid={eid} size="lg" />
           </section>
         ) : null}
+
+        <OpenBatches eid={eid} onOpen={uploader.open} />
 
         <section aria-label={t.data.sources} className="flex flex-col gap-3">
           <h2 className="m-0 font-semibold text-[13px] text-muted-foreground tracking-wide">{t.data.sources}</h2>
@@ -155,11 +128,8 @@ function DataPage() {
               <p className="m-0 text-[13px] text-[#2d3443]">{t.data.offline.accepts}</p>
               <span className="text-[13px] text-[#4a5262]">{t.data.offline.counts(importedTables, docs.length)}</span>
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <Button type="button" variant="outline" onClick={() => setImporting({})}>
-                  {t.data.importLedger}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>
-                  {t.data.uploadDocuments}
+                <Button type="button" variant="outline" disabled={uploader.pending} onClick={() => uploader.choose()}>
+                  {t.data.upload}
                 </Button>
               </div>
             </SourceCard>
@@ -168,7 +138,7 @@ function DataPage() {
 
         {summary ? (
           <>
-            <FinancialTables eid={eid} tables={summary.tables} onImport={(kind) => setImporting({ kind })} />
+            <FinancialTables eid={eid} tables={summary.tables} onImport={() => uploader.choose()} />
             <Checks eid={eid} checks={summary.checks} />
           </>
         ) : null}
@@ -179,19 +149,10 @@ function DataPage() {
           eid={eid}
           docs={docs}
           loading={documents.isPending}
-          onFiles={send}
-          onChoose={() => fileInput.current?.click()}
+          onFiles={(files) => uploader.send(files)}
+          onChoose={() => uploader.choose()}
         />
       </div>
-
-      <ImportDialog
-        eid={eid}
-        open={importing !== null}
-        kind={importing?.kind}
-        onOpenChange={(open) => {
-          if (!open) setImporting(null)
-        }}
-      />
     </>
   )
 }
@@ -298,15 +259,7 @@ function XeroCard({ eid, summary }: { eid: string; summary: DataSummary | null }
   )
 }
 
-function FinancialTables({
-  eid,
-  tables,
-  onImport,
-}: {
-  eid: string
-  tables: TableSummary[]
-  onImport: (kind: TableKind) => void
-}) {
+function FinancialTables({ eid, tables, onImport }: { eid: string; tables: TableSummary[]; onImport: () => void }) {
   const { t, formatDate } = useI18n()
   const received = tables.filter((table) => table.status !== 'not_received').length
   const cell = 'border-line-soft border-b px-3 py-[11px]'
@@ -379,11 +332,7 @@ function FinancialTables({
                   </td>
                   <td className={cn(cell, 'px-5 text-right')}>
                     {missing ? (
-                      <button
-                        type="button"
-                        className="text-[13px] text-accent-foreground"
-                        onClick={() => onImport(table.kind)}
-                      >
+                      <button type="button" className="text-[13px] text-accent-foreground" onClick={onImport}>
                         {t.data.import}
                       </button>
                     ) : (
@@ -464,20 +413,28 @@ function Checks({ eid, checks }: { eid: string; checks: DataCheck[] }) {
   )
 }
 
+// 智能导入里暂存 (还没确认) 或确认时没勾选而未导入的文件不算开始处理, 进度全灰
+const HELD = new Set(['staged', 'not_imported'])
+
 function Progress({ doc }: { doc: DocumentRef }) {
   const { t } = useI18n()
   const manual = doc.status === 'needs_manual'
+  const staged = HELD.has(doc.status)
   const complete = finished(doc)
-  const done = manual
-    ? (FAILED_AT[doc.failed_step ?? 'classify'] ?? 1)
-    : complete
-      ? t.data.steps.length
-      : (STEP_DONE[doc.status] ?? 1)
-  const label = manual
-    ? t.data.docStatus.needs_manual
-    : complete
-      ? t.data.docStatus.extracted
-      : t.data.steps[Math.min(done, 5)]
+  const done = staged
+    ? 0
+    : manual
+      ? (FAILED_AT[doc.failed_step ?? 'classify'] ?? 1)
+      : complete
+        ? t.data.steps.length
+        : (STEP_DONE[doc.status] ?? 1)
+  const label = staged
+    ? t.data.docStatus[doc.status]
+    : manual
+      ? t.data.docStatus.needs_manual
+      : complete
+        ? t.data.docStatus.extracted
+        : t.data.steps[Math.min(done, 5)]
   return (
     <span className="flex flex-col gap-[5px]">
       <span className="flex gap-[3px]" aria-hidden="true">
@@ -491,7 +448,7 @@ function Progress({ doc }: { doc: DocumentRef }) {
                 ? 'bg-ok'
                 : index === done && manual
                   ? 'bg-warn-strong'
-                  : index === done
+                  : index === done && !staged
                     ? 'bg-primary'
                     : 'bg-border',
             )}
@@ -501,7 +458,7 @@ function Progress({ doc }: { doc: DocumentRef }) {
       <span
         className={cn(
           'font-medium text-[12.5px]',
-          manual ? 'text-warn' : complete ? 'text-ok' : 'text-accent-foreground',
+          manual ? 'text-warn' : complete ? 'text-ok' : staged ? 'text-muted-foreground' : 'text-accent-foreground',
         )}
       >
         {label}
@@ -528,6 +485,8 @@ function Documents({
   const [typing, setTyping] = useState<DocumentRef | null>(null)
   const done = docs.filter(finished).length
   const manual = docs.filter((doc) => doc.status === 'needs_manual').length
+  const staged = docs.filter((doc) => doc.status === 'staged').length
+  const dropped = docs.filter((doc) => doc.status === 'not_imported').length
   const cell = 'border-line-soft border-b px-3 py-[11px]'
   return (
     <section aria-label={t.data.documents} className="overflow-hidden rounded-[14px] border bg-card">
@@ -535,7 +494,14 @@ function Documents({
         <h2 className="m-0 font-semibold text-base">{t.data.documents}</h2>
         {docs.length ? (
           <span className="text-[12.5px] text-muted-foreground">
-            {t.data.docCounts(docs.length, done, docs.length - done - manual, manual)}
+            {t.data.docCounts(
+              docs.length,
+              done,
+              docs.length - done - manual - staged - dropped,
+              manual,
+              staged,
+              dropped,
+            )}
           </span>
         ) : null}
       </div>
@@ -580,6 +546,8 @@ function Documents({
             <tbody>
               {docs.map((doc) => {
                 const untyped = doc.status === 'needs_manual' && (doc.failed_step ?? 'classify') === 'classify'
+                // 暂存与未导入的文件登记为 other, 类型在确认单上定
+                const unsettled = untyped || HELD.has(doc.status)
                 return (
                   <tr key={doc.id}>
                     <td className={cn(cell, 'px-5')}>
@@ -596,8 +564,8 @@ function Documents({
                         </span>
                       </span>
                     </td>
-                    <td className={cn(cell, untyped && 'text-muted-foreground')}>
-                      {untyped ? t.data.unknownType : (t.data.docTypes[doc.type] ?? doc.type)}
+                    <td className={cn(cell, unsettled && 'text-muted-foreground')}>
+                      {unsettled ? t.data.unknownType : (t.data.docTypes[doc.type] ?? doc.type)}
                     </td>
                     <td className={cell}>
                       <span className="flex flex-wrap items-end gap-2">

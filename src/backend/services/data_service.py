@@ -89,6 +89,7 @@ from backend.services.import_batches import (
     chosen_of,
     finalize,
     item_number,
+    masked_failures,
     staged_of,
     unreadable_item,
 )
@@ -852,6 +853,11 @@ class DataService:
             raise LookupError(f"批次 {batch_id} 不存在")
         return found
 
+    async def open_batches(self, eid: str) -> list[ImportBatch]:
+        """还没写入的智能导入 (GET /data/batches): 识别中, 待确认与识别出错的, 按上传时间升序. 审计师关掉确认单后从
+        这里回到确认单; 文件在确认前一直暂存."""
+        return [b for b in await self.deps.data.batches(eid) if b.status != "committed"]
+
     async def edit_batch_item(
         self, eid: str, batch_id: str, item_id: str, edit: BatchItemEdit, actor: str
     ) -> ImportBatch:
@@ -1009,11 +1015,11 @@ class DataService:
                 raise DataRejected("INVALID_VALUE", str(exc)) from exc
             except MappingError as exc:
                 raise DataRejected(exc.code, f"{item.file_name} {item.sheet}: {exc.message}") from exc
-            if failures:
+            if failures:  # 失败处的取值同确认单上的一样遮蔽
                 raise DataRejected(
                     "IMPORT_PARSE_ERROR",
                     f"{item.file_name} {item.sheet}: {len(failures)} 处解析失败",
-                    errors=[f.model_dump() for f in failures[:MAX_FAILURES]],
+                    errors=[f.model_dump() for f in masked_failures(rows, failures[:MAX_FAILURES])],
                 )
             kind = item.plan.kind
             if kind is TableKind.accounts:

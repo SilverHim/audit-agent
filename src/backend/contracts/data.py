@@ -554,6 +554,11 @@ class BatchItem(Model):
     sheet: str | None = None  # 表格: 工作表名 (CSV 为文件名主干); 文件为空
     reading: SheetReading | None = None  # 表格: A3 的识别结果原样 (R276)
     plan: TablePlan | None = None  # 表格: 当前的规整方案, 识别所得或审计师调整后的; plan.kind 即识别为哪张表
+    # 表格: 方案表头行的各列 (显示名, 同 Sheet.columns, 取遮蔽后的文本), 调整时列对应界面的可选列; 表头行不在表里或
+    # 是空行时为空
+    columns: list[str] = []
+    # 表格: 各列的样例, 取表头之后该列第一个非空值. 列名与样例都从第 1 行起整体遮蔽 (mask_sample, 人名列与邮箱) 后再切
+    sample: dict[str, str] = {}
     records: int | None = None  # 表格: 将写入的行数; 方案套不上或有解析失败时为空
     failure_count: int = 0  # 表格: 解析失败的处数
     failures: list[ParseFailure] = []  # 表格: 解析失败的前 20 处

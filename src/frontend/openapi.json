@@ -2052,6 +2052,56 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "List Batches",
+        "description": "还没写入的智能导入 (识别中, 待确认与识别出错的), 按上传时间升序; 关掉确认单后从这里回到确认单.",
+        "operationId": "data-list_batches",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImportBatch"
+                  },
+                  "title": "Response Data-List Batches"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/engagements/{eid}/data/batches/{batch_id}": {
@@ -4138,6 +4188,22 @@
                 "type": "null"
               }
             ]
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns",
+            "default": []
+          },
+          "sample": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Sample",
+            "default": {}
           },
           "records": {
             "anyOf": [

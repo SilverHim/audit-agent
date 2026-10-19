@@ -336,7 +336,9 @@ function HistoryItem({
                   ? events.request_received(subject)
                   : item.action === 'ready'
                     ? events.ready
-                    : null
+                    : item.action === 'not_imported'
+                      ? events.not_imported(item.file ?? '')
+                      : null
     return text ? <EventLine>{text}</EventLine> : null
   }
   if (item.kind === 'decision') {

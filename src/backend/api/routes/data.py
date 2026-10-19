@@ -121,6 +121,16 @@ async def start_batch(
         return await service.start_batch(engagement.id, contents, actor=user.id, request_id=request_id)
 
 
+@router.get("/batches")
+async def list_batches(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> list[ImportBatch]:
+    """还没写入的智能导入 (识别中, 待确认与识别出错的), 按上传时间升序; 关掉确认单后从这里回到确认单."""
+    async with catch_api():
+        return await service.open_batches(engagement.id)
+
+
 @router.get("/batches/{batch_id}")
 async def get_batch(
     batch_id: str,

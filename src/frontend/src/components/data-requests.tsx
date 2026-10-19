@@ -1,21 +1,20 @@
 import { Link } from '@tanstack/react-router'
 import { Database, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
+import { useBatchUpload } from '@/components/batch-upload'
 import { StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
-import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { useActorName } from '@/lib/actor'
-import { type DataRequest, requestTitle, useMarkUnavailable, useUploadDocuments } from '@/lib/data-api'
+import { type DataRequest, requestTitle, useMarkUnavailable } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { procedureName } from '@/lib/review'
 import type { Messages } from '@/locales/en'
 
-const DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'
 // 就绪必需的表由 P1 等数据保证, 不能标客户无此类资料 (后端同样拒绝)
 const REQUIRED = new Set(['accounts', 'trial_balance', 'journal_entries'])
 
@@ -104,8 +103,8 @@ export function MarkedRequests({ requests }: { requests: DataRequest[] }) {
   )
 }
 
-// 数据管理智能体提出, 审计助理转达的补交资料清单; 每项可直接上传, 账表走导入, 其他走文件上传.
-// marked 为标了客户无此类资料的, 列在后面, 只读
+// 数据管理智能体提出, 审计助理转达的补交资料清单; 每项可直接上传, 账表与文件都走 "上传资料" (带 request_id,
+// 看确认单后导入). marked 为标了客户无此类资料的, 列在后面, 只读
 export function DataRequestCard({
   eid,
   requests,
@@ -126,22 +125,14 @@ export function DataRequestCard({
   deferring: boolean
 }) {
   const { t } = useI18n()
-  const upload = useUploadDocuments(eid)
-  const fileInput = useRef<HTMLInputElement>(null)
-  const [target, setTarget] = useState<DataRequest | null>(null)
-  const [importing, setImporting] = useState<DataRequest | null>(null)
+  const uploader = useBatchUpload(eid)
+  const [target, setTarget] = useState<string | null>(null)
   const [marking, setMarking] = useState<DataRequest | null>(null)
 
   const start = (request: DataRequest) => {
-    if (request.kind === 'table') {
-      setImporting(request)
-      return
-    }
-    setTarget(request)
-    fileInput.current?.click()
+    setTarget(request.id)
+    uploader.choose(request.id)
   }
-
-  const onError = (error: unknown) => toast.error(errorText(error, t))
 
   return (
     <section
@@ -158,24 +149,7 @@ export function DataRequestCard({
           {t.requests.raisedBy}
         </span>
       </div>
-      <input
-        ref={fileInput}
-        type="file"
-        multiple
-        accept={DOC_ACCEPT}
-        className="sr-only"
-        tabIndex={-1}
-        onChange={(event) => {
-          const files = Array.from(event.target.files ?? [])
-          if (files.length && target) {
-            upload.mutate(
-              { files, requestId: target.id },
-              { onSuccess: (docs) => toast.success(t.data.uploaded(docs.length)), onError },
-            )
-          }
-          event.target.value = ''
-        }}
-      />
+      {uploader.element}
       <ul className="m-0 list-none p-0">
         {[...requests, ...marked].map((request) => {
           const open = request.status === 'open'
@@ -192,13 +166,9 @@ export function DataRequestCard({
                       {t.requests.unavailable.action}
                     </Button>
                   )}
-                  <Button
-                    type="button"
-                    disabled={disabled || (upload.isPending && target?.id === request.id)}
-                    onClick={() => start(request)}
-                  >
+                  <Button type="button" disabled={disabled || uploader.pending} onClick={() => start(request)}>
                     <Upload className="size-4" aria-hidden="true" />
-                    {upload.isPending && target?.id === request.id ? t.requests.uploading : t.requests.upload}
+                    {uploader.pending && target === request.id ? t.requests.uploading : t.requests.upload}
                   </Button>
                 </div>
               ) : (
@@ -221,15 +191,6 @@ export function DataRequestCard({
           {t.requests.open}
         </Link>
       </div>
-      <ImportDialog
-        eid={eid}
-        open={importing !== null}
-        kind={importing?.table_kind ?? undefined}
-        requestId={importing?.id}
-        onOpenChange={(next) => {
-          if (!next) setImporting(null)
-        }}
-      />
       <UnavailableDialog eid={eid} request={marking} onClose={() => setMarking(null)} />
     </section>
   )

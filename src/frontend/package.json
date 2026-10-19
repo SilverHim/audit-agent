@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint": "biome check .",
+    "test": "bun test tests",
     "format": "biome check --write .",
     "generate-client": "uv run --project ../.. python -m backend.export_openapi openapi.json && openapi-ts"
   },

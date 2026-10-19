@@ -21,6 +21,7 @@ from backend.contracts.data import (
     DataChange,
     DataInput,
     DataRequest,
+    FieldSource,
     ImportBatch,
     SheetReading,
     TableKind,
@@ -31,8 +32,9 @@ from backend.contracts.errors import DataRejected, DecisionRejected
 from backend.contracts.models import DocumentRef, DocumentType, Engagement, Reliability, TrailEntry, TrailKind
 from backend.core.config import get_settings
 from backend.services import data_import, data_service
+from backend.services.data_import import MASK, cell_text, raw_rows
 from backend.services.data_service import DataService
-from backend.services.import_batches import BatchIntake, period_issue, same_company
+from backend.services.import_batches import BatchIntake, column_sample, period_issue, same_company
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from tests.fakes import (
     ENGAGEMENT,
@@ -51,6 +53,7 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.test_documents_upload import workbook_bytes
+from tests.test_sheet_intake import personal_values
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
@@ -223,6 +226,54 @@ def test_migrations_have_a_single_head() -> None:
     assert revision is not None and revision.down_revision == "0009"
 
 
+async def test_issue_samples_one_to_five_on_the_confirmation_sheet() -> None:
+    """issue 的样例 1 至 5 经批次 (前端 "上传资料" 走的路径) 在 mock 下的确认单: 识别为哪张表, 将写入的行数, 把握,
+    读到的公司与截至日, 问题与缺省勾选. 截至 2026-06-30 的项目, 画像名同 Xero 演示公司. 样例 3 的科目表有一处
+    解析失败 (803 的 Type 为空, 第 44 行), 标红不勾."""
+    env = Batch(profile=XERO_PROFILE)
+    expected = {
+        "trial_balance_2026-06-30.xlsx": (TableKind.trial_balance, 12, "Demo Company (AU)", date(2026, 6, 30), []),
+        "journal_report.xlsx": (TableKind.journal_entries, 1017, "Demo Company (AU)", None, []),
+        "chart_of_accounts.csv": (TableKind.accounts, None, None, None, [BatchIssueCode.parse_failed]),
+        "receivable_invoice_detail.xlsx": (TableKind.sales_invoices, 42, "Demo Company (AU)", None, []),
+    }
+    for name, (kind, records, company, end, issues) in expected.items():
+        [item] = (await env.upload([raw_file(name)])).items
+        assert item.reading is not None and item.plan is not None
+        assert (item.plan.kind, item.records, item.reading.confidence, item.reading.company) == (
+            kind,
+            records,
+            "high",
+            company,
+        ), name
+        assert end is None or item.reading.period_end == end
+        assert (codes(item), item.selected) == (issues, not issues), name
+    numbat = await Batch().upload(
+        [
+            demo_csv(n)
+            for n in (
+                "accounts",
+                "trial_balance",
+                "journal_entries",
+                "sales_invoices",
+                "bank_accounts",
+                "bank_transactions",
+                "delivery_notes",
+            )
+        ]
+    )
+    assert [(i.plan.kind.value if i.plan and i.plan.kind else None, i.records) for i in numbat.items] == [
+        ("accounts", 23),
+        ("trial_balance", 46),
+        ("journal_entries", 2686),
+        ("sales_invoices", 624),
+        ("bank_accounts", 2),
+        ("bank_transactions", 696),
+        ("delivery_notes", 624),
+    ]
+    assert all(i.reading and i.reading.confidence == "high" and i.selected and not i.issues for i in numbat.items)
+
+
 # ── 样例 7 与确认单的问题 ──
 
 
@@ -296,6 +347,109 @@ def test_period_rules_for_balances_and_period_reports() -> None:
     assert period_issue(reading(date(2026, 1, 1), e.period_end), e) is not None  # 只覆盖下半年
     assert period_issue(reading(e.period_start, date(2025, 12, 31)), e) is not None  # 只覆盖上半年
     assert period_issue(reading(None, None), e) is None
+
+
+async def test_table_items_carry_columns_and_a_masked_sample() -> None:
+    """表格项带方案表头行的各列与每列的样例 (调整时列对应界面用): 日记账报表表头在第 5 行, Posted By 是导出账号本人的
+    姓名, 样例已遮蔽; 换了表头行的方案按新表头重算列. 断言只比遮蔽与否, 不把取值写进测试输出."""
+    env = Batch(profile=XERO_PROFILE)
+    batch = await env.upload([raw_file("journal_report.xlsx")])
+    [item] = batch.items
+    assert item.plan is not None and item.plan.header_row == 5
+    assert item.columns == [
+        "Date",
+        "Journal ID",
+        "Account Code",
+        "Account",
+        "Debit",
+        "Credit",
+        "Posted Date",
+        "Posted By",
+    ]
+    assert (item.sample["Account Code"], item.sample["Account"]) == ("630", "Inventory")
+    assert item.sample["Posted By"] == MASK
+    assert not any("@" in value for value in item.sample.values())
+
+    plan = item.plan.model_copy(update={"header_row": 1, "fields": {}, "skip": [], "group_title": None})
+    edited = await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(plan=plan), "U-1")
+    assert len(edited.items[0].columns) == 1 and BatchIssueCode.plan_invalid in codes(edited.items[0])
+    beyond = plan.model_copy(update={"header_row": 99999})
+    edited = await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(plan=beyond), "U-1")
+    assert (edited.items[0].columns, edited.items[0].sample) == ([], {})
+
+
+async def test_columns_and_sample_stay_masked_whatever_the_header_row() -> None:
+    """列与样例的遮蔽同发给大模型的样本: 从第 1 行起整体遮蔽后再按表头行切. 日记账报表的表头行改到原表头之下
+    (第 6 至 12 行) 时, 列名与样例里也没有导出账号本人的姓名与邮箱; 经调整单项返回的与存下的批次同样没有.
+    只比计数, 名单只在内存里."""
+    secrets = personal_values()
+
+    def hits(columns: list[str], sample: dict[str, str]) -> int:
+        texts = " ".join([*columns, *sample.values()]).lower()
+        return sum(v in texts for v in secrets)
+
+    _, rows = raw_rows("journal_report.xlsx", (RAW / "journal_report.xlsx").read_bytes())
+    raw = " ".join(cell_text(c) for _, cells in rows for c in cells).lower()
+    assert sum(v in raw for v in secrets) > 0  # 原表里确有 (守卫有意义)
+    for header_row in range(5, 13):
+        assert hits(*column_sample(rows, header_row)) == 0, header_row
+    columns, sample = column_sample(rows, 8)  # 表头行是一个数据行: Posted By 那一列的 "列名" 与样例都遮蔽
+    assert (len(columns), columns[7], sample[columns[7]]) == (8, MASK, MASK)
+
+    env = Batch(profile=XERO_PROFILE)
+    batch = await env.upload([raw_file("journal_report.xlsx")])
+    [item] = batch.items
+    assert item.plan is not None
+    for header_row in (6, 8, 10):
+        plan = item.plan.model_copy(update={"header_row": header_row})
+        edited = await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(plan=plan), "U-1")
+        got = edited.items[0]
+        assert hits(got.columns, got.sample) == 0, header_row
+        stored = env.data.import_batches[batch.id].model_dump_json().lower()
+        assert sum(v in stored for v in secrets) == 0, header_row
+
+
+async def test_email_headers_are_masked_in_columns() -> None:
+    """列名本身是邮箱 (合成表格: Numbat 科目表的列再加一列邮箱表头, 按列名认作科目表): 表格项的列名换成 [masked],
+    列与样例里都没有 "@"; 存下的批次同样没有."""
+    data = b"code,name,type,finance@example.com\n1010,Cash at bank,asset,ok\n1100,Trade receivables,asset,ok\n"
+    _, rows = raw_rows("ledger-accounts.csv", data)
+    assert column_sample(rows, 1)[0] == ["code", "name", "type", MASK]
+    env = Batch()
+    batch = await env.upload([("ledger-accounts.csv", data)])
+    [item] = batch.items
+    assert (item.item_kind, item.plan.kind if item.plan else None) == ("table", TableKind.accounts)
+    assert item.columns == ["code", "name", "type", MASK]
+    assert not any("@" in v for v in [*item.columns, *item.sample.values()])
+    assert "@" not in env.data.import_batches[batch.id].model_dump_json()
+
+
+async def test_failure_values_are_masked_like_the_sample() -> None:
+    """解析失败处的取值也遮蔽 (从已遮蔽的行里取): 把借方金额对应到 Posted By 列, 每行都解析失败; 确认单项的前 20 处,
+    存下的批次与勾上后确认报的 IMPORT_PARSE_ERROR 里都没有导出账号本人的姓名与邮箱. 只比计数."""
+    secrets = personal_values()
+    env = Batch(profile=XERO_PROFILE)
+    batch = await env.upload([raw_file("journal_report.xlsx")])
+    [item] = batch.items
+    assert item.plan is not None
+    fields = {**item.plan.fields, "debit_cents": FieldSource(column="Posted By")}
+    edited = await env.service.edit_batch_item(
+        EID, batch.id, item.id, BatchItemEdit(plan=item.plan.model_copy(update={"fields": fields})), "U-1"
+    )
+    failed = edited.items[0]
+    assert failed.failure_count > 0 and {f.column for f in failed.failures} == {"Posted By"}
+    assert {f.value for f in failed.failures} == {MASK}
+
+    def hits(text: str) -> int:
+        return sum(v in text.lower() for v in secrets)
+
+    assert hits(" ".join(f.value for f in failed.failures)) == 0
+    assert hits(env.data.import_batches[batch.id].model_dump_json()) == 0
+    await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(selected=True), "U-1")
+    with pytest.raises(DataRejected) as e:
+        await env.service.confirm_batch(EID, batch.id, "U-1")
+    assert e.value.code == "IMPORT_PARSE_ERROR" and len(e.value.extra["errors"]) == 20
+    assert hits(str(e.value.extra["errors"])) == 0
 
 
 def test_company_names_compare_without_company_type_words() -> None:
@@ -594,6 +748,33 @@ async def test_unselected_files_are_not_imported_and_can_be_uploaded_again(monke
     assert env.document(first.files[0].document_id).status == "extracted"
 
 
+async def test_unselected_ledger_export_is_not_left_awaiting_review() -> None:
+    """R278 审核的实例: 确认时没勾 journal_report.xlsx (另一张表照常导入): 确认后它是未导入, 不再算待确认导入,
+    也不在任何还没写入的批次里."""
+    env = Batch(profile=XERO_PROFILE)
+    batch = await env.upload([raw_file("journal_report.xlsx"), raw_file("trial_balance_2026-06-30.xlsx")])
+    journal, balances = batch.items
+    await env.service.edit_batch_item(EID, batch.id, journal.id, BatchItemEdit(selected=False), "U-1")
+    done = await env.service.confirm_batch(EID, batch.id, "U-1")
+    assert [f.not_imported for f in done.files] == [True, False]
+    assert env.document(journal.document_id).status == "not_imported"
+    assert env.document(balances.document_id).status == "extracted"
+    assert await env.service.open_batches(EID) == []
+
+
+async def test_confirming_with_nothing_selected_closes_the_batch() -> None:
+    """一项都不勾也能确认 (前端 "都不导入, 关闭这批"): 不写表, 文件都转为未导入, 批次不再列在待确认的上传里."""
+    env = Batch()
+    batch = await env.upload([demo_csv("accounts"), contract_pdf(1)])
+    for item in batch.items:
+        await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(selected=False), "U-1")
+    done = await env.service.confirm_batch(EID, batch.id, "U-1")
+    assert (done.status, done.data_version, env.data.written) == ("committed", None, [])
+    assert [f.not_imported for f in done.files] == [True, True]
+    assert {env.document(f.document_id).status for f in done.files} == {"not_imported"}
+    assert await env.service.open_batches(EID) == []
+
+
 async def test_staged_file_type_is_changed_on_the_confirmation_sheet_only() -> None:
     """文件列表里改暂存文件的类型被拒 (INVALID_VALUE, 文件还在导入确认单里), 文件仍暂存."""
     env = Batch()
@@ -853,15 +1034,18 @@ async def test_xero_demo_runtime_has_the_sheet_fixtures() -> None:
 
 
 async def test_batch_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
-    """POST /data/batches 202 返回 processing 的批次; GET 取确认单 (不存在 404); PUT 调整单项; POST confirm 202 写入;
-    已写入的批次重新识别 422. 单个超过上限 (50 MB, 这里调小) 413; 类型不支持 422."""
+    """POST /data/batches 202 返回 processing 的批次; GET 列出还没写入的批次; GET 取确认单 (不存在 404); PUT 调整单项;
+    POST confirm 202 写入; 已写入的批次重新识别 422. 单个超过上限 (50 MB, 这里调小) 413; 类型不支持 422."""
     env = Batch()
     async with api_client(env.runner) as client:
         client._transport.app.state.data_service = env.service  # type: ignore[attr-defined]
+        assert (await client.get(BASE)).json() == []
         started = await client.post(BASE, files=[("files", ("accounts.csv", demo_csv("accounts")[1], "text/csv"))])
         assert started.status_code == 202 and started.json()["status"] == "processing"
         batch_id = started.json()["id"]
         await asyncio.gather(*list(env.service.tasks))
+        listed = await client.get(BASE)
+        assert listed.status_code == 200 and [b["id"] for b in listed.json()] == [batch_id]
         got = await client.get(f"{BASE}/{batch_id}")
         assert got.status_code == 200 and got.json()["status"] == "ready"
         item_id = got.json()["items"][0]["id"]
@@ -870,6 +1054,7 @@ async def test_batch_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
         await client.put(f"{BASE}/{batch_id}/items/{item_id}", json={"selected": True})
         confirmed = await client.post(f"{BASE}/{batch_id}/confirm")
         assert confirmed.status_code == 202 and confirmed.json()["status"] == "committed"
+        assert (await client.get(BASE)).json() == []  # 写入后不再列出
         assert (await client.get(f"{BASE}/BAT-none")).status_code == 404
         bad = await client.post(BASE, files=[("files", ("x.exe", b"MZ", "application/octet-stream"))])
         assert (bad.status_code, bad.json()["detail"]["code"]) == (422, "INVALID_VALUE")

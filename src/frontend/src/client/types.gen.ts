@@ -334,6 +334,16 @@ export type BatchItem = {
     reading?: SheetReading | null;
     plan?: TablePlan | null;
     /**
+     * Columns
+     */
+    columns?: Array<string>;
+    /**
+     * Sample
+     */
+    sample?: {
+        [key: string]: string;
+    };
+    /**
      * Records
      */
     records?: number | null;
@@ -5084,6 +5094,38 @@ export type DataCommitImportResponses = {
 };
 
 export type DataCommitImportResponse = DataCommitImportResponses[keyof DataCommitImportResponses];
+
+export type DataListBatchesData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches';
+};
+
+export type DataListBatchesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataListBatchesError = DataListBatchesErrors[keyof DataListBatchesErrors];
+
+export type DataListBatchesResponses = {
+    /**
+     * Response Data-List Batches
+     *
+     * Successful Response
+     */
+    200: Array<ImportBatch>;
+};
+
+export type DataListBatchesResponse = DataListBatchesResponses[keyof DataListBatchesResponses];
 
 export type DataStartBatchData = {
     body: BodyDataStartBatch;
