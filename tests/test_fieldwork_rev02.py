@@ -1,5 +1,6 @@
 """A6 REV-02 收入截止性判断: 判断对象与上下文 (合成数据集设计第 5.1 节, 第 7 节第 9 行; Q13 纳入 REV-08 全部例外)."""
 
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
@@ -262,6 +263,8 @@ async def test_invoice_without_contract_has_null_contract_fields() -> None:
     data = contexts(engine)["SI-2026-0547"].data
     assert data["invoice"] == invoice_json("SI-2026-0547")
     assert (data["contract"], data["document"], data["contract_judgment"]) == (None, None, None)
+    # 只取该发票过账分录 (按凭证号) 的行: 收款分录 CR-SI-2026-0547 的单据号同为该发票, 不是它的过账分录
+    assert [x["id"] for x in data["journal_lines"]] == ["SJ-2026-0547-1", "SJ-2026-0547-2"]
 
 
 @pytest.mark.parametrize(
@@ -299,27 +302,38 @@ async def test_contract_judgment_choice(judgments: list[Judgment], expected: str
     assert (chosen and chosen["id"]) == expected
 
 
+def setup_missing(change: str) -> tuple[FieldworkAgent, RunContext, FakeJudgmentEngine]:
+    """同 setup, 但判断对象要用的数据缺一样: invoice 缺发票 SI-2026-0618, contract 缺合同 CON-002, document 缺合同
+    CON-002 的文件 (状态与存储里都没有; 只在存储里的会补查, 需求 R14), journal 缺发票 SI-2026-0618 指向的分录行
+    SJ-2026-0618-2 (需求 R100)."""
+    records = dict(NUMBAT_RECORDS)
+    documents = list(EXTRACTED)
+    if change == "invoice":
+        del records[("sales_invoice", "SI-2026-0618")]
+    if change == "journal":
+        del records[("journal_entry", "SJ-2026-0618-2")]
+    if change == "document":
+        documents = [EXTRACTED[0], EXTRACTED[2]]
+    agent, ctx, engine = setup(records=records, documents=documents)
+    if change == "document":
+        financial = agent.deps.financial_store
+        financial.document_refs[:] = [d for d in financial.document_refs if d.file_name != "CON-002.pdf"]  # type: ignore[attr-defined]
+    if change == "contract":
+        agent.deps.financial_store.saved_contracts.pop("CON-002")  # type: ignore[attr-defined]
+    return agent, ctx, engine
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
         ("invoice", "发票不在财务数据中: SI-2026-0618"),
         ("contract", "合同 CON-002 不在财务数据中"),
         ("document", "合同 CON-002 的文件"),
+        ("journal", "发票 SI-2026-0618 的分录行 SJ-2026-0618-2 不在财务数据中"),
     ],
 )
 async def test_missing_data_raises(change: str, message: str) -> None:
-    records = dict(NUMBAT_RECORDS)
-    documents = list(EXTRACTED)
-    if change == "invoice":
-        del records[("sales_invoice", "SI-2026-0618")]
-    if change == "document":
-        documents = [EXTRACTED[0], EXTRACTED[2]]
-    agent, ctx, _ = setup(records=records, documents=documents)
-    if change == "document":  # 状态与存储里都没有 (只在存储里的会补查, 需求 R14)
-        financial = agent.deps.financial_store
-        financial.document_refs[:] = [d for d in financial.document_refs if d.file_name != "CON-002.pdf"]  # type: ignore[attr-defined]
-    if change == "contract":
-        agent.deps.financial_store.saved_contracts.pop("CON-002")  # type: ignore[attr-defined]
+    agent, ctx, _ = setup_missing(change)
     with pytest.raises(LookupError, match=message):
         await agent.execute(ctx)
 
@@ -375,25 +389,15 @@ async def test_invoice_without_journal_entry_has_no_journal_lines() -> None:
     assert len(found["SI-2026-0612"].data["journal_lines"]) == 2  # 别的发票照常
 
 
-async def test_missing_journal_line_fails_whole_run_by_a1() -> None:
-    """需求 R100 验收 2: 发票指向的分录行不在财务数据中: 整次执行失败, 由 A1 建失败任务 T-RUN-REV-02-1-v1, 不调判断
-    引擎."""
-    records = dict(NUMBAT_RECORDS)
-    del records[("journal_entry", "SJ-2026-0618-2")]
-    agent, ctx, engine = setup(records=records)
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
-    assert writer is AgentId.A1 and engine.calls == []
-    assert patch["procedure_runs"][0].status is RunStatus.failed
-    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [("T-RUN-REV-02-1-v1", TaskKind.failed)]
-
-
-async def test_missing_linked_contract_fails_whole_run_by_a1() -> None:
-    """发票关联的合同不在财务数据中: 整次执行失败, 由 A1 建失败任务, 不调判断引擎."""
-    agent, ctx, engine = setup()
-    agent.deps.financial_store.saved_contracts.pop("CON-002")  # type: ignore[attr-defined]
+@pytest.mark.parametrize("change", ["contract", "journal"])
+async def test_missing_data_fails_whole_run_by_a1(change: str) -> None:
+    """发票关联的合同, 或发票指向的分录行 (需求 R100 验收 2) 不在财务数据中: 整次执行失败, 由 A1 建失败任务
+    T-RUN-REV-02-1-v1, 不调判断引擎. 抛的错见 test_missing_data_raises."""
+    agent, ctx, engine = setup_missing(change)
     patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and engine.calls == [] and set(patch) == {"procedure_runs", "review_tasks"}
     assert patch["procedure_runs"][0].status is RunStatus.failed
+    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [("T-RUN-REV-02-1-v1", TaskKind.failed)]
 
 
 # ── 提示词 (需求 R100) ─────────────────────────────────────────
@@ -415,20 +419,62 @@ async def rendered_prompt(invoice_id: str, **options: Any) -> str:
     return real.render(ctx.template, variables)
 
 
-@pytest.mark.parametrize(
-    "fragment",
-    [
-        "Journal lines of the invoice's posting",
-        '"id": "SJ-2026-0612-2"',
-        "- AASB15-P35 (",  # Standards 段的一行 (程序 YAML 的 standards), 不是正文里的引用
-        "goods or services",
-        # 没有合同时的转移事件 (Criterion 1); more_evidence 里也有这个词, 只查它会放过 Criterion 1 漏写
-        "Where no contract is linked, take the event from the shipping or service-completion record",
-    ],
-)
-async def test_prompt_carries_journal_lines_and_service_rules(fragment: str) -> None:
-    """验收 4: SI-2026-0612 的提示词带分录行块与收入行, Standards 段有 AASB15-P35, 按商品或服务与服务完成记录判断."""
-    assert fragment in await rendered_prompt("SI-2026-0612")
+def prompt_sections(prompt: str) -> dict[str, list[str]]:
+    """提示词按节切开, 每节为它的各句 (按句号切, 不分大小写): opening 开头一句, task 任务一节, criterion 1-4 各条
+    判断标准, misstatement 与 more_evidence 两种处理, evidence table 证据表的各行 (每行一项)."""
+    lines = prompt.splitlines()
+
+    def between(start: str, end: str) -> list[str]:
+        first = next(i for i, x in enumerate(lines) if x.startswith(start))
+        return lines[first + 1 : next(i for i in range(first + 1, len(lines)) if lines[i].startswith(end))]
+
+    def sentences(chosen: list[str]) -> list[str]:
+        return [c.casefold() for line in chosen for c in re.split(r"(?<=\.)\s+", line) if c]
+
+    criteria = between("## Criteria", "## proposed_action")
+    actions = between("## proposed_action", "## Output")
+    sections = {
+        "opening": sentences(lines[:1]),
+        "task": sentences(between("## Task", "## Inputs")),
+        "misstatement": sentences([x for x in actions if x.startswith("- `misstatement`")]),
+        "more_evidence": sentences([x for x in actions if x.startswith("- `more_evidence`")]),
+        "evidence table": [x.casefold() for x in lines if x.startswith("| ")],
+    }
+    for n in range(1, 5):
+        sections[f"criterion {n}"] = sentences([x for x in criteria if x.startswith(f"{n}. ")])
+    return sections
+
+
+# REV-02 提示词口径的关键词 (需求 R100): 所在节里须有一句同时含这几个词 (不分大小写), 不比逐字原文
+REV02_RULES = {
+    "期间为财务年度": ("opening", ("financial year ended",)),
+    "商品或服务": ("task", ("goods or services",)),
+    "列举转移事件": ("criterion 1", ("signature", "acceptance", "completion", "over time")),
+    "时点转移引 P38": ("criterion 1", ("point in time", "aasb15-p38")),
+    "随时间转移引 P35": ("criterion 1", ("over time", "aasb15-p35")),
+    "没有合同取发运或服务完成记录": ("criterion 1", ("no contract", "service-completion")),
+    "服务业务两列的含义": ("criterion 2", ("service", "shipped_date", "start", "signed_date", "complete")),
+    "随时间转移按服务期间": ("criterion 3", ("over time", "service period", "aasb15-p35")),
+    "R03 类例外不单独构成截止错报": ("criterion 4", ("r03", "not", "cutoff misstatement")),
+    "错报金额取不含 GST 的收入行": ("misstatement", ("amount_cents", "journal line", "revenue", "gst")),
+    "缺发运或服务完成记录才要更多证据": ("more_evidence", ("shipping", "service-completion record")),
+    "证据表的分录行": ("evidence table", ("journal_entry", "internal_original")),
+    "证据表的银行流水": ("evidence table", ("bank_transaction", "external_copy")),
+}
+
+
+async def test_prompt_carries_journal_lines_and_service_rules() -> None:
+    """验收 4: SI-2026-0612 的提示词渲染一次, 按节查各条口径的关键词 (REV02_RULES); 另查数据: 分录行块带收入行
+    SJ-2026-0612-2, Standards 段有 AASB15-P35 一行 (程序 YAML 的 standards, 不是正文里的引用)."""
+    prompt = await rendered_prompt("SI-2026-0612")
+    sections = prompt_sections(prompt)
+    missing = [
+        rule
+        for rule, (name, words) in REV02_RULES.items()
+        if not any(all(w in c for w in words) for c in sections[name])
+    ]
+    assert missing == []
+    assert '"id": "SJ-2026-0612-2"' in prompt and "\n- AASB15-P35 (" in prompt
 
 
 async def test_prompt_without_contract_does_not_ask_for_one() -> None:
