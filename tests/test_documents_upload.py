@@ -909,21 +909,24 @@ async def test_reupload_resumes_contract_cancelled_after_classification(monkeypa
 
 
 async def test_startup_recover_resumes_unfinished_documents(monkeypatch: pytest.MonkeyPatch) -> None:
-    """重启: 新的 DataService.recover 补做没做完的文件; 项目锁被占用或已处理完的不动."""
+    """重启: 新的 DataService.recover 补做没做完的文件, 做完锁交给 runner.proceed 按 recover 规则带动图 (这里没有
+    检查点, 以初始状态推进, 需求 R272); 项目锁被占用或已处理完的不动."""
     runner, service, financial, _ = await cancelled_after_classification(monkeypatch)
     restarted = DataService(service.deps, runner)
 
-    runner.acquire(EID)  # 图正在继续执行: 这次跳过
-    await restarted.recover()
+    runner.acquire(EID)  # 项目锁被占用: 这次跳过
+    assert await restarted.recover() == set()
     assert not restarted.tasks
     runner.release(EID)
 
-    await restarted.recover()
+    assert await restarted.recover() == {EID}  # 交给 runner.recover(skip=...) 跳过
     assert restarted.processing(EID) == [frozenset({document(financial, "CON-001.pdf").id})]
     await drain(restarted)
+    await wait_idle(runner, EID)
 
     assert document(financial, "CON-001.pdf").status == "extracted"
     assert "CON-001" in financial.saved_contracts and not runner.is_running(EID)
+    assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)  # 图由补做的作业带动
     await restarted.recover()  # 都处理完了: 不再起作业
     assert not restarted.tasks
 
@@ -1056,6 +1059,7 @@ async def test_recover_and_reupload_backfill_missing_upload_trail(monkeypatch: p
     restarted = DataService(service.deps, runner)
     await restarted.recover()
     await drain(restarted)
+    await wait_idle(runner, EID)  # 补做完由 runner.proceed 带动图 (没有检查点, 以初始状态推进到 ACC-01 闸门)
     await restarted.upload_documents(EID, [("CON-001.pdf", b"%PDF CON-001")], actor="U-2")
     await drain(restarted)
 

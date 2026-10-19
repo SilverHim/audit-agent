@@ -30,6 +30,8 @@ const STATUS_TONE: Record<ProcedureStatus, Tone> = {
   awaiting_human: 'warn',
   in_dispute: 'warn',
   completed: 'ok',
+  awaiting_data: 'accent',
+  no_data: 'neutral',
 }
 
 function Procedures() {

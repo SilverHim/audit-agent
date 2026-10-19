@@ -1,6 +1,7 @@
 """数据管理的服务 (需求 R10-R16): 数据管理接口的写操作都经这里, 取项目锁, 写存储, 记 data 留痕.
 
 项目锁与编排共用 (GraphRunner.acquire): 同一项目同时只有一个写者, 图在后台推进时写数据报 ENGAGEMENT_BUSY.
+数据写操作 (holding, launch) 结束时图若停在执行阶段等程序要的数据 (await_data), 锁交给后台恢复, 由节点重查 (需求 R272).
 "新数据版本写入" 的入口是 DataService.write_tables (导入与 Xero 同步共用), 须在 holding 块内或 launch 的作业里调用.
 """
 
@@ -56,8 +57,8 @@ from backend.contracts.ports import XeroConnections
 from backend.contracts.records import Account, AccountCategory
 from backend.contracts.state import fill_defaults
 from backend.orchestration.gates import current_gate
-from backend.orchestration.nodes import DATA_READY
-from backend.orchestration.runner import GraphRunner, awaiting_data, review_waits
+from backend.orchestration.nodes import DATA_READY, INPUTS_CHANGED
+from backend.orchestration.runner import GraphRunner, awaiting_data, awaiting_inputs, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.account_mapping import CATEGORY_GROUPS, with_category
 from backend.services.data_import import (
@@ -263,22 +264,48 @@ class DataService:
     @asynccontextmanager
     async def holding(self, eid: str, labels: Iterable[str]) -> AsyncIterator[None]:
         """在块内做一件数据写操作: 进入时查锁定 (ENGAGEMENT_LOCKED), 取项目锁 (取不到 ENGAGEMENT_BUSY), 把 labels
-        (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时 (成败)
-        注销并释放锁. 数据提交在注销之前, 概览据此判断."""
+        (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时注销,
+        成功时锁交给 continue_waiting (图在等程序要的数据就交给后台恢复, 否则释放), 出错时释放. 数据提交在注销之前,
+        概览据此判断."""
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, labels)
         try:
             await self.backfill_trails(eid)
             yield
-        finally:
+        except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
+            raise
+        self._unregister(eid, key)
+        await self.continue_waiting(eid)
+
+    async def continue_waiting(self, eid: str) -> None:
+        """持项目锁的数据写操作结束时调用, 锁由此交出或释放, 调用方不再管锁: 图停在 await_data 等程序要的数据
+        (需求 R272) 时交给后台, 以 Command(resume=INPUTS_CHANGED) 恢复, 由节点按现有资料重查, 后台任务结束时释放;
+        否则释放. 读检查点出错只记日志, 释放; 读检查点时被取消 (请求取消, 应用退出) 也释放, 再照常抛出; 后台任务
+        建不起来时 runner.launch 已释放锁, 只记日志."""
+        handed = False  # 锁已交给 runner.launch
+        try:
+            try:
+                waiting = awaiting_inputs(await self.runner.app.aget_state(GraphRunner.config(eid)))
+            except Exception:
+                logger.exception("数据写入后读检查点失败: %s", eid)
+                return
+            if waiting:
+                handed = True
+                try:
+                    self.runner.launch(eid, Command(resume=INPUTS_CHANGED))
+                except Exception:
+                    logger.exception("数据写入后恢复等数据的程序失败: %s", eid)
+        finally:
+            if not handed:
+                self.runner.release(eid)
 
     async def launch(self, eid: str, labels: Iterable[str], job: Callable[[], Awaitable[None]]) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
-        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销并释放锁. job 自己处理业务失败
-        (如把文件置 needs_manual); 漏出的异常只记日志."""
+        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job
+        自己处理业务失败 (如把文件置 needs_manual); 漏出的异常只记日志."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
@@ -290,23 +317,36 @@ class DataService:
 
         self._spawn(eid, key, run)
 
-    def _spawn(self, eid: str, key: object, job: Callable[[], Awaitable[None]]) -> None:
-        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 结束 (成败, 含还没开始就被取消) 时由任务的完成回调
-        注销并释放锁, 只做一次; 漏出的异常只记日志."""
+    def _spawn(
+        self,
+        eid: str,
+        key: object,
+        job: Callable[[], Awaitable[None]],
+        then: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 漏出的异常只记日志. 作业结束 (成败) 后注销, 锁交给
+        then (缺省 continue_waiting: 图在等程序要的数据就交给后台恢复, 否则释放), 由它交出或释放, 完成回调不再释放;
+        作业没跑完就被取消 (含还没开始) 时由任务的完成回调注销并释放锁, 只做一次. then 须保证锁交出或释放 (含取消)."""
         done = False
+        handed = False  # 锁已交给 then
 
         def finish(_: object = None) -> None:
             nonlocal done
             if not done:
                 done = True
                 self._unregister(eid, key)
-                self.runner.release(eid)
+                if not handed:
+                    self.runner.release(eid)
 
         async def run() -> None:
+            nonlocal handed
             try:
                 await job()
             except Exception:
                 logger.exception("数据作业失败: %s %s", eid, sorted(self.jobs.get(eid, {}).get(key, ())))
+            self._unregister(eid, key)
+            handed = True  # 从这里到 then 内部第一次等待之间不会被取消打断
+            await (then or self.continue_waiting)(eid)
 
         try:
             task = asyncio.create_task(run())
@@ -809,12 +849,15 @@ class DataService:
         }
         return jobs, requested
 
-    async def recover(self) -> None:
-        """应用启动时 (runner.recover 之后) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
+    async def recover(self) -> set[str]:
+        """应用启动时 (runner.recover 之前) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
         上次作业被取消或进程退出时留下; 另含按请求定类型没落到登记上的, 见 _resume_info), 处理前补写缺的上传留痕
         (upload_entry), 按请求定类型, 做完体检; 没有要补做的文件时, 体检结果已不对应当前数据的补做体检 (上次体检
-        失败). 项目已锁定的跳过; 项目锁正被占用 (如图在继续执行) 的这次跳过, 等下次上传或指定类型时补做.
-        一个项目出错只记日志, 不影响其他项目."""
+        失败). 项目已锁定的跳过; 项目锁正被占用的这次跳过, 等下次上传或指定类型时补做.
+        补做的文件处理在后台进行, 做完后锁交给 runner.proceed, 按 recover 规则带动图继续 (需求 R272: 图在等程序要的
+        数据时, 文件处理完才重查); 返回这些项目的编号, 由调用方交给 runner.recover(skip=...), 同一项目不重复拉起.
+        一个项目出错只记日志, 不影响其他项目 (不在返回值中, 由 runner.recover 照常处理)."""
+        taken: set[str] = set()
         for engagement in await self.deps.engagement_store.list():
             eid = engagement.id
             if engagement.locked or self.runner.is_running(eid):
@@ -846,9 +889,11 @@ class DataService:
                     self._unregister(eid, key)
                     self.runner.release(eid)
                     raise
-                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested))
+                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested), self.runner.proceed)
+                taken.add(eid)
             except Exception:
                 logger.exception("补做文件处理失败: %s", eid)
+        return taken
 
     async def set_document_type(
         self, eid: str, document_id: str, kind: DocumentType, reason: str, actor: str

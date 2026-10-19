@@ -133,7 +133,15 @@ def test_new_enum_values() -> None:
     assert [k.value for k in TaskKind] == ["normal", "unattributed", "failed", "dispute", "blind", "manual"]
     assert [c.value for c in CriticTrigger] == ["main", "internal_copy", "assumption", "unsupported", "sample"]
     assert [k.value for k in TrailKind][-2:] == ["data", "presentation"]
-    assert [s.value for s in ProcedureStatus] == ["planned", "executing", "awaiting_human", "in_dispute", "completed"]
+    assert [s.value for s in ProcedureStatus] == [
+        "planned",
+        "executing",
+        "awaiting_human",
+        "in_dispute",
+        "completed",
+        "awaiting_data",  # 需求 R272: 程序等数据
+        "no_data",  # 需求 R272, R280: 未执行 (无数据)
+    ]
     assert [s.value for s in ReviewStatus] == ["pending", "confirmed", "overridden", "superseded"]
 
 

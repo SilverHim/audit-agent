@@ -6,6 +6,7 @@ import functools
 import hashlib
 import json
 import tempfile
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -1539,6 +1540,8 @@ class FakeDataStore:
         self.ready_reason: str | None = None  # 确认时的理由
         self.ready_failed_checks: list[CheckId] = []  # 确认时最近一次体检不通过的项
         self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
+        # 证据文件按它数 (document_counts, 同真实实现数 documents 表); make_deps 连上项目用的假财务数据存储
+        self.financial: FakeFinancialStore | None = None
         self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
         self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
         self.check_results: list[DataCheck] = []  # 最近一次体检的结果
@@ -1578,6 +1581,10 @@ class FakeDataStore:
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:
         return {kind: self.table_stats.get(kind, TableStats(records=0)) for kind in TableKind}
+
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        documents = self.financial.document_refs if self.financial is not None else []
+        return dict(Counter(d.type for d in documents))
 
     async def versions(self, eid: str) -> list[TableVersion]:
         return list(self.table_versions)
@@ -1857,6 +1864,10 @@ def make_deps(
     bind_stores(engagement_store, output_store)
     if financial_store is None:
         financial_store = FakeFinancialStore()
+    if data is None:
+        data = FakeDataStore()
+    if data.financial is None:  # 证据文件数取同一个财务数据存储 (同真实实现共用 documents 表)
+        data.financial = financial_store
     settings = get_settings()
     deps = build_deps(settings)
 
@@ -1888,7 +1899,7 @@ def make_deps(
         financial_store=financial_store,
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
-        data=data if data is not None else FakeDataStore(),
+        data=data,
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),

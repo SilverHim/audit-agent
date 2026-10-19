@@ -348,13 +348,15 @@ def test_route_schedule_goes_to_fan_in_when_all_done() -> None:
     assert route_schedule(nodes)(state) == "fan_in"
 
 
-def test_route_schedule_raises_when_unfinished_but_none_ready() -> None:
-    """REV-08 等人处理却没有任务, REV-02 永远等不到前置: 报错, 不返回 fan_in 空转."""
+def test_stuck_is_reported_after_fan_in_when_unfinished_but_none_ready() -> None:
+    """REV-08 等人处理却没有任务, REV-02 永远等不到前置: route_schedule 回 fan_in, 由 after_fan_in 报错, 不空转
+    (需求 R272 起卡住只在 after_fan_in 一处判断)."""
     nodes = _p2_nodes()
     state = _p2_state(nodes, {"REV-08": AWAITING, "REV-03": DONE, "REV-02": PLANNED})
 
+    assert route_schedule(nodes)(state) == "fan_in"
     with pytest.raises(ScheduleStuck, match=r"REV-02 等 REV-08 \(awaiting_human\)"):
-        route_schedule(nodes)(state)
+        after_fan_in(nodes)(state)
 
 
 def test_after_fan_in_dispatches_before_waiting() -> None:
@@ -449,6 +451,7 @@ BASELINE_NODES = {
     "fieldwork",
     "fan_in",
     "await_events",
+    "await_data",
     "completion",
     "gate_fin",
     "report_draft",
@@ -462,11 +465,14 @@ BASELINE_EDGES = [
     ("__start__", "p0_intel", False, None),
     ("archive", "__end__", False, None),
     ("assemble_pack", "schedule", False, None),
+    ("await_data", "fan_in", False, None),
     ("await_events", "fan_in", False, None),
     ("completion", "gate_fin", False, None),
     ("declined", "__end__", False, None),
+    ("fan_in", "await_data", True, None),
     ("fan_in", "await_events", True, None),
     ("fan_in", "completion", True, None),
+    ("fan_in", "p1_ingest", True, None),
     ("fan_in", "schedule", True, None),
     ("fieldwork", "fan_in", False, None),
     ("gate_acc01", "declined", True, "reject"),
@@ -485,7 +491,8 @@ BASELINE_EDGES = [
     ("p0_intel", "gate_acc01", False, None),
     ("p1_analytics", "gate_p1_risk", False, None),
     ("p1_await_data", "p1_ingest", False, None),
-    ("p1_ingest", "p1_analytics", False, None),
+    ("p1_ingest", "fan_in", True, None),
+    ("p1_ingest", "p1_analytics", True, None),
     ("report_draft", "gate_rpt01", False, None),
     ("schedule", "fan_in", True, None),
     ("schedule", "fieldwork", True, None),
@@ -497,7 +504,7 @@ def test_baseline_graph_structure() -> None:
     deps = make_deps(FakeRegistry(), FakeTrail(), features=NUMBAT_FEATURES)
     app = compile_graph(make_graph_nodes(deps), InMemorySaver())
     graph = app.get_graph()
-    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 19
+    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 20
     edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
     assert edges == BASELINE_EDGES
     assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]

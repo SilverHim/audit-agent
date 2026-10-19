@@ -3,6 +3,7 @@ name: 收入截止性判断
 phase: P2_Executing
 cycle: Revenue
 owner: A6
+inputs: {tables: [sales_invoices]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [judgments, exceptions, review_tasks]
 engine: hybrid
 autonomy_level: L2

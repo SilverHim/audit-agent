@@ -31,7 +31,7 @@ from backend.contracts.data import (
     TableStats,
     TableVersion,
 )
-from backend.contracts.models import AgentId
+from backend.contracts.models import AgentId, DocumentType
 from backend.contracts.records import Account, AccountCategory
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
@@ -196,6 +196,11 @@ class PostgresDataStore(Store):
                 ).one()
                 result[kind] = TableStats(records=int(row[0]), period_from=row[1], period_to=row[2])
         return result
+
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        t = m.documents
+        rows = await self.rows(eid, select(t.c.type, func.count().label("n")).group_by(t.c.type))
+        return {DocumentType(r["type"]): int(r["n"]) for r in rows}
 
     async def approval_records(self, conn: AsyncConnection, eid: str) -> int:
         """最新一版审批日志的行数; 没有为 0."""

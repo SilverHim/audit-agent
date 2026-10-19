@@ -138,6 +138,8 @@ export const en = {
     awaiting_human: 'Pending auditor review',
     in_dispute: 'In dispute',
     completed: 'Completed',
+    awaiting_data: 'Waiting for data',
+    no_data: 'Not performed (no data)',
   },
   decisions: {
     confirm: 'Confirm',
@@ -277,6 +279,13 @@ export const en = {
     answers: {
       where: (phase: string, done: number, total: number) =>
         `We are in ${phase}. ${done} of ${total} procedures are completed.`,
+      notRun: (waiting: number, noData: number) =>
+        [
+          waiting ? `${waiting} waiting for data from the client.` : null,
+          noData ? `${noData} not performed (no data).` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
       materiality: (overall: string, performance: string) =>
         `Materiality is ${overall}; performance materiality ${performance}.`,
       what: (gate: string | null, reviews: number, deferred: number) =>

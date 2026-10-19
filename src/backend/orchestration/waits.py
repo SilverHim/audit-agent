@@ -1,8 +1,9 @@
 """节点内等待的载荷 (interrupt 的值, 接口文档第 7 节恢复机制): 种类登记, 载荷构造, 以及等待能否接受对某个任务的决定.
 
 载荷存在检查点里, 字符串值与已有检查点一致: P2 的等复核 {awaiting: review, phase}, P2 以外节点等人
-{awaiting: human, procedure_id, run_id, records}, P1 开始前等数据就绪 {awaiting: data}. 种类只在这里登记:
-runner 按 kind_of 区分等数据与等复核, DecisionSubmit 按 accepts 判断决定能否送进当前的等待.
+{awaiting: human, procedure_id, run_id, records}, P1 开始前等数据就绪 {awaiting: data}, 执行阶段程序等数据
+{awaiting: inputs, procedure_ids}. 种类只在这里登记: runner 按 kind_of 区分等数据与等复核, DecisionSubmit 按 accepts
+判断决定能否送进当前的等待.
 """
 
 from collections.abc import Sequence
@@ -19,6 +20,11 @@ class WaitKind(StrEnum):
     human = "human"  # P2 以外的节点等人: 只收本程序任务的决定 (失败后 rerun, 或对其判断与例外的复核)
     correction = "correction"  # 等待更正 (错报段 MD-8 用); 本条只登记, 不收复核决定
     data = "data"  # P1 开始前等财务数据就绪 (p1_await_data): 不收复核决定, 确认数据已齐后以 DATA_READY 恢复
+    # 执行阶段程序等数据 (await_data, 需求 R272): 不收复核决定; 数据写操作结束时以 INPUTS_CHANGED 恢复, 节点重查
+    inputs = "inputs"
+
+
+DATA_WAITS = frozenset({WaitKind.data, WaitKind.inputs})  # 等数据的种类 (不是等人)
 
 
 def kind_of(payload: object) -> WaitKind | None:
@@ -42,11 +48,16 @@ def data_payload() -> dict[str, Any]:
     return {"awaiting": WaitKind.data.value}
 
 
+def inputs_payload(procedure_ids: Sequence[str]) -> dict[str, Any]:
+    """执行阶段程序等数据的载荷 (await_data): 等待数据的程序."""
+    return {"awaiting": WaitKind.inputs.value, "procedure_ids": list(procedure_ids)}
+
+
 def accepts(payload: object, task: ReviewTask, pack: Sequence[Procedure]) -> bool:
     """该等待能否接受对 task 的决定.
 
     review: 任务的程序所在阶段须为载荷的 phase (旧检查点不带 phase, 按 P2); human: 任务须属于载荷的程序;
-    correction, data 与认不出的载荷一律不收. pack 为检查点中的程序包, 用来查任务所属程序的阶段.
+    correction, data, inputs 与认不出的载荷一律不收. pack 为检查点中的程序包, 用来查任务所属程序的阶段.
     """
     if not isinstance(payload, dict):
         return False

@@ -2,6 +2,7 @@
 
 from typing import Any, Literal
 
+from backend.contracts.data import TableKind
 from backend.contracts.models import (
     AgentId,
     Assertion,
@@ -22,6 +23,17 @@ class Trigger(Model):
     account: str  # 科目
     assertions: list[Assertion]  # 认定
     level: list[RiskLevel]  # 触发装配的风险等级
+
+
+class ProcedureInputs(Model):
+    """程序执行前必须有的客户资料 (需求 R272): 缺了程序不执行, 记等待数据, 由 A3 提补交请求.
+
+    就绪必需的三张表 (科目表, 试算表, 总账) 由 P1 等数据保证, 不写在这里; 前置程序的结果 (合同抽取, 回函) 由
+    depends_on 表达. 写法在程序库加载时校验 (services.procedure_library.inputs_problems), 只有 P2 以外的程序能否
+    补跑在 GraphNodes 构造时查 (orchestration.inputs.input_problems)."""
+
+    tables: list[TableKind] = []  # 账表: 有任意一行即算有
+    documents: list[DocumentType] = []  # 文件类型: 有一份该类型的文件即算有
 
 
 class RuleSpec(Model):
@@ -66,6 +78,7 @@ class ProcedureTemplate(Model):
     fixed: bool = False
     params: dict[str, Any] = {}  # 参数: 字面量, {by_risk: ...} 或 {ref: 名称}
     depends_on: list[str] = []  # 前置程序
+    inputs: ProcedureInputs = ProcedureInputs()  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
     standards: list[str] = []  # 引用的准则片段 ID
     evidence_required: list[EvidenceType] = []  # 需要取得的证据种类, 用于算证据覆盖率
     rules: list[RuleSpec] = []  # 规则 SQL, 规则与混合程序用

@@ -75,6 +75,8 @@ class ProcedureStatus(StrEnum):
     awaiting_human = "awaiting_human"  # 等人处理: 有待决复核任务
     in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (尚未使用)
     completed = "completed"  # 已完成
+    awaiting_data = "awaiting_data"  # 等待数据: 模板 inputs 声明的客户资料还没有, 没执行 (需求 R272)
+    no_data = "no_data"  # 未执行 (无数据): 客户无此类资料, 或前置程序未执行 (无数据); 终态, 没有执行记录
 
 
 class RunTrigger(StrEnum):
@@ -556,6 +558,9 @@ class Procedure(Versioned):
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus = ProcedureStatus.planned  # 程序状态
     rerun_subject_ids: list[str] = []  # 重跑时只重判的对象 (rerun 关闭的那组失败任务的), 为空则整条重跑; 重跑后清空
+    # 缺的资料对应的补交请求 ID (REQ-{表种类或文件类型}): awaiting_data 时为还缺的, no_data 时为客户无此类资料的;
+    # 其余状态为空 (需求 R272)
+    data_request_ids: list[str] = []
 
 
 class ProcedureRun(Versioned):

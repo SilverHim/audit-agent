@@ -273,6 +273,10 @@ class DataStore(Protocol):
         """各账表当前的行数与日期范围, 每种账表一项."""
         ...
 
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        """各类型已登记的证据文件数, 没有的类型不列 (上传的文件分完类前记 other). 程序等数据按它判断文件有没有."""
+        ...
+
     async def versions(self, eid: str) -> list[TableVersion]:
         """全部已写入的账表版本 (不含行快照), 按数据版本升序."""
         ...

@@ -544,8 +544,13 @@ function localAnswer(
 ): string | null {
   if (!overview) return null
   if (quick === 'where') {
-    const done = overview.procedures.filter((item) => item.status === 'completed').length
-    const head = t.workspace.answers.where(t.phases[overview.engagement.phase], done, overview.procedures.length)
+    const count = (status: string) => overview.procedures.filter((item) => item.status === status).length
+    const head = [
+      t.workspace.answers.where(t.phases[overview.engagement.phase], count('completed'), overview.procedures.length),
+      t.workspace.answers.notRun(count('awaiting_data'), count('no_data')),
+    ]
+      .filter(Boolean)
+      .join(' ')
     const materiality =
       overview.materiality_cents != null
         ? ` ${t.workspace.answers.materiality(formatAud(overview.materiality_cents), formatAud(overview.performance_materiality_cents))}`

@@ -696,7 +696,7 @@ def test_accepts_by_payload_kind() -> None:
     assert not accepts({"awaiting": "correction"}, tst, pack)
     assert data_payload() == {"awaiting": "data"} and not accepts(data_payload(), p2, pack)
     assert not accepts({"awaiting": "unknown"}, p2, pack) and not accepts("review", p2, pack)
-    assert {k.value for k in WaitKind} == {"review", "human", "correction", "data"}
+    assert {k.value for k in WaitKind} == {"review", "human", "correction", "data", "inputs"}  # inputs 见 R272
     payloads = [review_payload(), human_payload(TST, f"RUN-{TST}-1", []), {"awaiting": "correction"}, data_payload()]
     assert [kind_of(p) for p in payloads] == [WaitKind.review, WaitKind.human, WaitKind.correction, WaitKind.data]
     assert [kind_of(p) for p in ({"awaiting": "unknown"}, {}, "data", None)] == [None, None, None, None]

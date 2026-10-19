@@ -40,11 +40,12 @@ def build_schedule(pack: list[Procedure], library: ProcedureLibrary, cap: int) -
 
 
 def ready_procedures(pack: list[Procedure], library: ProcedureLibrary) -> list[str]:
-    """待执行 (planned 或 executing) 且 P2 内的前置都已 completed 的程序. P2 以外的前置在此之前已完成."""
-    p2 = {p.id: p for p in p2_procedures(pack)}
+    """待执行 (planned 或 executing) 且程序包中的前置都已 completed 的 P2 程序. 前置看整个程序包: P2 以外的前置
+    (REV-03 的 DOC-04) 等数据时也不派发 (需求 R272)."""
+    status = {p.id: p.status for p in pack}
     return [
-        pid
-        for pid, p in p2.items()
+        p.id
+        for p in p2_procedures(pack)
         if p.status in (ProcedureStatus.planned, ProcedureStatus.executing)
-        and all(p2[d].status is ProcedureStatus.completed for d in library.load(pid).depends_on if d in p2)
+        and all(status[d] is ProcedureStatus.completed for d in library.load(p.id).depends_on if d in status)
     ]

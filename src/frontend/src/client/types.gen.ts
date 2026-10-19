@@ -2120,6 +2120,10 @@ export type Procedure = {
      * Rerun Subject Ids
      */
     rerun_subject_ids?: Array<string>;
+    /**
+     * Data Request Ids
+     */
+    data_request_ids?: Array<string>;
 };
 
 /**
@@ -2212,7 +2216,7 @@ export type ProcedureRun = {
  *
  * 程序状态.
  */
-export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'in_dispute' | 'completed';
+export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'in_dispute' | 'completed' | 'awaiting_data' | 'no_data';
 
 /**
  * ProcedureSummary

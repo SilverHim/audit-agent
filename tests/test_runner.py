@@ -542,22 +542,23 @@ async def test_advance_writes_checkpoints_synchronously(monkeypatch: pytest.Monk
 
 
 async def test_lifespan_calls_recover(monkeypatch: pytest.MonkeyPatch) -> None:
-    """应用启动时调 recover; 项目清单为空时不启动后台任务."""
+    """应用启动时调 recover (先补做上传文件, 没有接手的项目, 需求 R272); 项目清单为空时不启动后台任务."""
+    from collections.abc import Collection
     from unittest.mock import AsyncMock
 
     monkeypatch.setattr("backend.persistence.stores.PostgresEngagementStore.list", AsyncMock(return_value=[]))
-    called: list[bool] = []
+    called: list[Collection[str]] = []
     original = GraphRunner.recover
 
-    async def recover(self: GraphRunner) -> None:
-        called.append(True)
-        await original(self)
+    async def recover(self: GraphRunner, skip: Collection[str] = ()) -> None:
+        called.append(skip)
+        await original(self, skip)
 
     monkeypatch.setattr(GraphRunner, "recover", recover)
     async with lifespan(FastAPI()):
         pass
 
-    assert called == [True]
+    assert called == [set()]
 
 
 # ── R32: version_snapshot 冻结 ──

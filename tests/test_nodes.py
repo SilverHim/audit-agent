@@ -130,11 +130,15 @@ def p0_pack() -> list[Procedure]:
 def make_nodes(
     engagement_store: FakeEngagementStore | None = None, output_store: FakeOutputStore | None = None
 ) -> GraphNodes:
-    """审计产出存储缺省预置 p0_pack, 同 runner.start 把固定集第 1 版写进 Store."""
+    """审计产出存储缺省预置 p0_pack, 同 runner.start 把固定集第 1 版写进 Store. 同 make_graph_nodes 按种子已载入
+    Numbat 登记 3 份合同: DOC-04 每次执行前查有没有合同 (需求 R272)."""
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
     if output_store is None:
         output_store = FakeOutputStore(list(p0_pack()))
-    return GraphNodes(make_deps(registry, FakeTrail(), engagement_store, output_store), parallel_cap=2)
+    deps = make_deps(registry, FakeTrail(), engagement_store, output_store)
+    assert isinstance(deps.datasets, FakeDatasetLoader)
+    deps.datasets.seed()
+    return GraphNodes(deps, parallel_cap=2)
 
 
 def p0_state() -> EngagementState:

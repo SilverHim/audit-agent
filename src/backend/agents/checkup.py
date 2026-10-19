@@ -1,8 +1,8 @@
-"""A3 的数据体检与补交请求 (需求 R15).
+"""A3 的数据体检与补交请求 (需求 R15, R272).
 
-每次账表写入 (导入, Xero 同步), 上传文件处理完, 人工指定类型后, 以及 P1 等数据时, A3 跑一次体检: 结果存库
-(data_checks 只留最近一次) 并写 data 留痕; 按结果提出补交请求, 资料补齐的请求转 received. 规则在
-services.data_quality, 这里只读汇总, 写存储与留痕.
+每次账表写入 (导入, Xero 同步), 上传文件处理完, 人工指定类型后, P1 等数据时, 以及有程序开始等数据时, A3 跑一次
+体检: 结果存库 (data_checks 只留最近一次) 并写 data 留痕; 按体检结果与程序要的资料提出补交请求, 资料补齐的请求
+转 received. 规则在 services.data_quality, 这里只读汇总, 写存储与留痕.
 """
 
 from collections.abc import Sequence
@@ -10,11 +10,19 @@ from datetime import UTC, datetime
 
 from backend.agents.base import AgentDeps
 from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
-from backend.contracts.models import AgentId, DocumentType, TrailEntry, TrailKind
+from backend.contracts.models import AgentId, DocumentType, Procedure, ProcedureStatus, TrailEntry, TrailKind
 from backend.orchestration.trail import record_transitions
-from backend.services.data_quality import reconcile, run_checks
+from backend.services.data_quality import OnHand, merge_requests, on_hand, program_requests, reconcile, run_checks
 
 STATEMENT_READY = frozenset({"classified", "extracted"})  # 财务报表文件算已提供的状态 (分类完成)
+# 还没执行完的程序状态: 这些程序 inputs 中还没有的资料才去要 (需求 R272)
+UNDONE = frozenset({ProcedureStatus.planned, ProcedureStatus.executing, ProcedureStatus.awaiting_data})
+
+
+async def resources(deps: AgentDeps, eid: str) -> OnHand:
+    """项目现有的资料 (DataStore.stats 与 document_counts, 口径见 data_quality.on_hand); 程序等数据的判断与
+    程序要的补交请求共用."""
+    return on_hand(await deps.data.stats(eid), await deps.data.document_counts(eid))
 
 
 def stamp(moment: datetime) -> str:
@@ -83,9 +91,9 @@ class DataCheckup:
         self.deps = deps  # 外部依赖
 
     async def run(self, eid: str) -> CheckRun:
-        """体检 (services.data_quality.run_checks), 对照已有请求 (reconcile), 一个事务内存下体检结果与请求的变化,
-        提交后写留痕: 体检一条, 每个新提出 (或重新打开) 与转 received 的请求各一条. 留痕没写成的由下次取锁时的
-        DataService.backfill_trails 补写. 项目不存在抛 LookupError."""
+        """体检 (services.data_quality.run_checks), 并上程序要的请求 (program_requests), 对照已有请求 (reconcile),
+        一个事务内存下体检结果与请求的变化, 提交后写留痕: 体检一条, 每个新提出 (或重新打开) 与转 received 的请求
+        各一条. 留痕没写成的由下次取锁时的 DataService.backfill_trails 补写. 项目不存在抛 LookupError."""
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
@@ -95,7 +103,8 @@ class DataCheckup:
         statements = await self.statements(eid)
         now = datetime.now(UTC)
         result = run_checks(inputs, statements=statements, journal_version=journals[-1] if journals else None, now=now)
-        changes = reconcile(await self.deps.data.requests(eid), result.requests, now)
+        wanted = merge_requests(result.requests, await self.program_requests(eid, now))
+        changes = reconcile(await self.deps.data.requests(eid), wanted, now)
         run = CheckRun(data_version=readiness.data_version, checked_at=now, checks=result.checks)
         await self.deps.data.save_check_run(eid, run, changes.saved)
         entries = [check_entry(eid, run)]
@@ -103,6 +112,14 @@ class DataCheckup:
         entries += [request_entry(eid, r, "request_received") for r in changes.received]
         await record_transitions(self.deps.trail, entries)
         return run
+
+    async def program_requests(self, eid: str, now: datetime) -> list[DataRequest]:
+        """程序要的补交请求 (需求 R272): 程序包 (Store 最新版本) 中还没执行完的程序声明而现在还没有的资料
+        (data_quality.program_requests)."""
+        procedures = await self.deps.output_store.latest(eid, Procedure)
+        library = self.deps.library
+        needs = {p.id: library.load(p.id).inputs for p in procedures if p.status in UNDONE}
+        return program_requests(needs, await resources(self.deps, eid), now)
 
     async def statements(self, eid: str) -> int:
         """已提供的财务报表文件数 (类型 financial_statements, 分类完成)."""

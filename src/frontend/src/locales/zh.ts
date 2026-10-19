@@ -135,6 +135,8 @@ export const zh: Messages = {
     awaiting_human: '待人工处理',
     in_dispute: '争议中',
     completed: '已完成',
+    awaiting_data: '等待数据',
+    no_data: '未执行（无数据）',
   },
   decisions: {
     confirm: '确认',
@@ -266,6 +268,10 @@ export const zh: Messages = {
     },
     answers: {
       where: (phase, done, total) => `现在处于 ${phase}。${total} 项程序已完成 ${done} 项。`,
+      notRun: (waiting, noData) =>
+        [waiting ? `${waiting} 项等待客户补交数据。` : null, noData ? `${noData} 项未执行（无数据）。` : null]
+          .filter(Boolean)
+          .join(''),
       materiality: (overall, performance) => `重要性水平 ${overall}，实际执行的重要性 ${performance}。`,
       what: (gate, reviews, deferred) =>
         [

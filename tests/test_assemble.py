@@ -60,7 +60,11 @@ def after_pln_approve(
     store = FakeOutputStore()
     engagements = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT.model_copy(update={"phase": Phase.P1_Planning})])
     deps = make_deps(FakeRegistry(), FakeTrail(), engagements, store, library=library, features=features)
-    pack = fixed_procedures(deps.library)
+    # DOC-04 已在 P1 执行完 (REV-03 的前置; 需求 R272 起派发要看 P2 以外的前置)
+    pack = [
+        p.model_copy(update={"status": ProcedureStatus.completed}) if p.id == "DOC-04" else p
+        for p in fixed_procedures(deps.library)
+    ]
     store.rows.extend(pack)
     state = initial_state(ENGAGEMENT, pack, 1)
     state.update(  # type: ignore[typeddict-item]

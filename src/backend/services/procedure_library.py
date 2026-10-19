@@ -10,12 +10,21 @@ from pathlib import Path
 from typing import Any, TypeGuard, Union, get_args, get_origin
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
-from backend.contracts.models import AuditObjective, Engagement, OpinionType, Phase, ReportSection, RiskLevel
+from backend.contracts.models import (
+    AuditObjective,
+    DocumentType,
+    Engagement,
+    OpinionType,
+    Phase,
+    ReportSection,
+    RiskLevel,
+)
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
+from backend.services.data_quality import REQUIRED_TABLES
 from backend.services.features import BASELINE, FEATURES, check_features
 
 # 参数 {ref: 名称} 可用的名称. 不带前缀的: 图状态的重要性 (为 None 时不执行) 与项目期间
@@ -54,10 +63,7 @@ class ProcedureLibrary:
     def __init__(self, root: Path, features: Iterable[str] = BASELINE) -> None:
         self.root = root  # knowledge 目录
         self.features = check_features(features)  # 启用的功能
-        templates = [
-            ProcedureTemplate.model_validate(yaml.safe_load(p.read_text(encoding="utf-8")))
-            for p in sorted((root / "procedures").glob("*.yaml"))
-        ]
+        templates = [load_template(p) for p in sorted((root / "procedures").glob("*.yaml"))]
         unknown = [f"{t.id}: {t.feature}" for t in templates if t.feature is not None and t.feature not in FEATURES]
         if unknown:
             raise ValueError(f"程序模板的功能未登记: {', '.join(unknown)}")
@@ -77,6 +83,9 @@ class ProcedureLibrary:
         ]
         if refs:
             raise ValueError(f"程序参数的 ref 写错: {'; '.join(refs)}")
+        wrong = inputs_problems(templates)
+        if wrong:
+            raise ValueError(f"程序模板的 inputs 不对: {'; '.join(wrong)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -254,6 +263,30 @@ def namespace_value(sources: dict[str, BaseModel], ref: str) -> Any:
             return None
         value = getattr(value, name)
     return value.model_dump() if isinstance(value, BaseModel) else copy.deepcopy(value)
+
+
+def load_template(path: Path) -> ProcedureTemplate:
+    """读一个程序 YAML. 字段校验不过时抛 ValueError, 消息带程序编号 (YAML 的 id, 没有时取文件名) 与文件名."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        return ProcedureTemplate.model_validate(raw)
+    except ValidationError as e:
+        pid = raw.get("id") if isinstance(raw, dict) else None
+        raise ValueError(f"程序模板 {pid or path.stem} ({path.name}) 写法不对: {e}") from e
+
+
+def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """模板 inputs 的写法问题 (需求 R272, 消息含程序编号, 含未启用的模板): 不能写就绪必需的表 (由 P1 等数据保证),
+    不能写文件类型 other (分类前的类型). 取值须为 TableKind 与 DocumentType 由字段校验保证 (见 load_template).
+    P2 以外的程序写了 inputs 须在执行阶段能补跑, 要看图节点, 在 GraphNodes 构造时查 (orchestration.inputs)."""
+    problems: list[str] = []
+    for t in templates:
+        required = [k.value for k in t.inputs.tables if k in REQUIRED_TABLES]
+        if required:
+            problems.append(f"{t.id}: inputs 不能写就绪必需的表 {', '.join(required)} (由 P1 等数据保证)")
+        if DocumentType.other in t.inputs.documents:
+            problems.append(f"{t.id}: inputs 不能写文件类型 other")
+    return problems
 
 
 def fixed_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:

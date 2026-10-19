@@ -3,6 +3,7 @@ name: 凭证三单匹配
 phase: P2_Executing
 cycle: Revenue
 owner: A6
+inputs: {tables: [sales_invoices, delivery_notes, bank_transactions]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [exceptions]
 engine: rule
 autonomy_level: L3

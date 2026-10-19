@@ -36,7 +36,8 @@ def phase_transition(eid: str, before: Phase, after: Phase, procedure_id: str | 
 
 
 async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iterable[object]) -> list[TrailEntry]:
-    """written 中各程序新版本相对其上一版的状态变化留痕. 上一版读 Store, 首版与状态未变的不写.
+    """written 中各程序新版本相对其上一版的状态变化留痕. 上一版读 Store, 首版与状态未变的不写. 新版本带
+    data_request_ids (等待数据, 未执行 (无数据), 需求 R272) 时 payload 另带它.
 
     在业务事务提交后调用, written 为 put 返回的对象 (重放时为 Store 已存的那一版, 键与首次相同).
     """
@@ -46,18 +47,12 @@ async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iter
             continue
         previous = await store.get(eid, Procedure, obj.id, obj.version - 1)
         if previous is not None and previous.status != obj.status:
-            entries.append(
-                transition(
-                    eid,
-                    "procedure",
-                    obj.id,
-                    previous.status.value,
-                    obj.status.value,
-                    f"v{obj.version}",
-                    obj.version,
-                    obj.id,
-                )
-            )
+            before, after = previous.status.value, obj.status.value
+            entry = transition(eid, "procedure", obj.id, before, after, f"v{obj.version}", obj.version, obj.id)
+            if obj.data_request_ids:
+                payload = {**entry.payload, "data_request_ids": obj.data_request_ids}
+                entry = entry.model_copy(update={"payload": payload})
+            entries.append(entry)
     return entries
 
 

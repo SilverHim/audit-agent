@@ -3,6 +3,7 @@ name: 流水账面核对
 phase: P2_Executing
 cycle: Cash
 owner: A6
+inputs: {tables: [bank_accounts, bank_transactions]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [exceptions]
 engine: rule
 autonomy_level: L4

@@ -6646,6 +6646,14 @@
             "type": "array",
             "title": "Rerun Subject Ids",
             "default": []
+          },
+          "data_request_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Data Request Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -6820,7 +6828,9 @@
           "executing",
           "awaiting_human",
           "in_dispute",
-          "completed"
+          "completed",
+          "awaiting_data",
+          "no_data"
         ],
         "title": "ProcedureStatus",
         "description": "程序状态."

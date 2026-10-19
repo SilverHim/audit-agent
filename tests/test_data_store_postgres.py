@@ -70,7 +70,7 @@ def csv_rows(name: str) -> list[dict[str, str]]:
 
 
 async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    engine, (first, _), loader, _ = storage
+    engine, (first, second), loader, _ = storage
     store = PostgresDataStore(tmp_path, engine)
     before = await store.readiness(first.id)
     assert (before.data_version, before.ready_at, before.ready_by) == (0, None, None)
@@ -98,6 +98,9 @@ async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_pat
     # documents 表的新列 (媒体类型, 来源渠道) 有缺省值, 读取不受影响
     financial = PostgresFinancialDataStore(engine)
     assert len(await financial.documents(first.id)) == 3
+    # 程序等数据按各类型的文件数判断 (需求 R272): 数据集载入登记 3 份合同; 没载入的项目为空
+    assert await store.document_counts(first.id) == {DocumentType.contract: 3}
+    assert await store.document_counts(second.id) == {}
     assert await financial.data_version(first.id) == 1
 
 

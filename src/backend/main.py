@@ -95,6 +95,14 @@ def build_deps(settings: Settings) -> AgentDeps:
     )
 
 
+async def recover(runner: GraphRunner, data_service: DataService) -> None:
+    """启动恢复: 先补做各项目没处理完的上传文件 (DataService.recover), 做完由它带动图继续; 其余项目再按 recover 规则
+    处理 (GraphRunner.recover), 同一项目不重复拉起. 先处理文件: 图在等程序要的数据时 (需求 R272), 先拉起图会占着
+    项目锁, 文件补做就被跳过."""
+    taken = await data_service.recover()
+    await runner.recover(skip=taken)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -120,8 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app.state.data_service = DataService(deps, app.state.runner)
             try:
-                await app.state.runner.recover()
-                await app.state.data_service.recover()
+                await recover(app.state.runner, app.state.data_service)
                 yield
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.

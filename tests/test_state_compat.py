@@ -232,7 +232,7 @@ def test_every_node_and_route_is_wrapped() -> None:
         unwrapped = [name for name, spec in graph.nodes.items() if spec.runnable.afunc.__code__ not in node_code]
         assert unwrapped == [], features
         routes = [b.path.func for branches in graph.branches.values() for b in branches.values()]
-        assert len(routes) == 6 and all(r.__code__ is route_code for r in routes), features
+        assert len(routes) == 7 and all(r.__code__ is route_code for r in routes), features
 
 
 # ── 验收 2: 模拟旧检查点 ──

@@ -14,7 +14,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
-from backend.agents.checkup import DataCheckup
+from backend.agents.checkup import DataCheckup, resources
 from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
@@ -44,6 +44,7 @@ from backend.contracts.models import (
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState, StagedResult, StatePatch
+from backend.orchestration.inputs import check_inputs, declared, input_versions
 from backend.orchestration.merge import (
     FIELD_REPLAY,
     LATER_RUNS,
@@ -56,14 +57,15 @@ from backend.orchestration.merge import (
     check_refs,
     field_type,
 )
-from backend.orchestration.scheduler import build_schedule
+from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
-from backend.orchestration.waits import data_payload, human_payload, review_payload
+from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.procedure_library import ProcedureLibrary, highest_risk
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
+INPUTS_CHANGED = "inputs_changed"  # 数据写操作结束后交给 await_data 的恢复值; 节点不读它, 重查现有资料 (需求 R272)
 
 
 class FieldworkInput(TypedDict):
@@ -74,16 +76,22 @@ class FieldworkInput(TypedDict):
     state: EngagementState  # 派发时的状态快照, 只读
 
 
-def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
-    """生成某条程序的下一次执行记录, 状态为 running. run_no 为状态中该程序已有执行记录数 +1."""
-    run_no = 1
-    for run in runs:
-        if run.procedure_id == procedure_id:
-            run_no += 1
+def next_run_no(procedure_id: str, runs: list[ProcedureRun]) -> int:
+    """某条程序下一次执行的 run_no: 状态中该程序已有执行记录数 +1."""
+    return 1 + sum(1 for run in runs if run.procedure_id == procedure_id)
 
+
+def run_id_of(procedure_id: str, run_no: int) -> str:
+    """执行记录的 ID (接口文档第 0 节)."""
+    return f"RUN-{procedure_id}-{run_no}"
+
+
+def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
+    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no."""
+    run_no = next_run_no(procedure_id, runs)
     return ProcedureRun(
         run_no=run_no,
-        id=f"RUN-{procedure_id}-{run_no}",
+        id=run_id_of(procedure_id, run_no),
         procedure_id=procedure_id,
         trigger=RunTrigger.initial if run_no == 1 else RunTrigger.rerun,
         params_snapshot=params,
@@ -395,6 +403,7 @@ class GraphNodes:
         self.parallel_cap = parallel_cap  # fieldwork 实例并行上限
         self.agents: dict[str, ProcedureAgent[Any]] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
         check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
+        check_inputs(deps.library, NODE_PROCEDURES["p1_ingest"])  # 模板 inputs 的写法 (需求 R272)
 
     async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
         """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
@@ -593,6 +602,8 @@ class GraphNodes:
     ) -> StatePatch:
         """执行一条 P2 以外的程序, 本程序有待决任务时在节点内等人, 直到不再有 (接口文档第 7 节恢复机制).
 
+        每次执行 (首次与 rerun) 前查本程序要的资料 (inputs_before_run, 需求 R272): 缺了不执行, 程序记 awaiting_data,
+        本程序到此结束 (rerun 之前的执行与读回的决定照常返回); 资料到了由执行阶段补跑 (after_fan_in 转去 p1_ingest).
         每次执行见 attempt. 每轮执行之后与每读回一个决定之后都按 Store 判断还要不要等 (见 still_waiting: 本程序仍有
         待决任务, 失败留下的 failed 任务或判断与例外的 normal, unattributed, dispute 等任务, 或有针对本程序任务而尚未
         读回的决定); 要等时 interrupt() 暂停, 审计师对本程序的任务提交决定后以 Command(resume=决定 ID) 恢复, 节点从头
@@ -626,6 +637,18 @@ class GraphNodes:
             return {**result, "procedure_pack": pack, **({"phase": phase} if phase is not None else {})}
 
         while True:
+            checked = await self.inputs_before_run(current, procedure_id)
+            if checked:
+                merge_patch(result, checked)
+                current = apply_patch(current, checked)
+            if (
+                next(p for p in current["procedure_pack"] if p.id == procedure_id).status
+                is ProcedureStatus.awaiting_data
+            ):
+                # 资料不齐, 不执行. 还没执行过时不带阶段 (阶段随执行写入 engagements 表)
+                if "procedure_runs" in result:
+                    return finish(current["procedure_pack"])
+                return {**result, "procedure_pack": current["procedure_pack"]}
             patch, pack = await self.attempt(current, engagement, procedure_id, phase)
             merge_patch(result, patch)
             waiting = next(p for p in pack if p.id == procedure_id)
@@ -689,7 +712,9 @@ class GraphNodes:
     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
         """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的
         合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕).
-        先执行的程序读回的决定传给后面的 (execute 的 earlier)."""
+        先执行的程序读回的决定传给后面的 (execute 的 earlier).
+        模板 inputs 的资料还缺的程序不执行, 记 awaiting_data (execute 每次执行前查, 需求 R272), 节点照常往下 (P1 的
+        DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
         result: StatePatch = {}
         for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
             earlier = [r.id for r in result.get("review_records", [])]
@@ -697,6 +722,18 @@ class GraphNodes:
             merge_patch(result, patch)
             state = apply_patch(state, patch)
         return result
+
+    async def inputs_before_run(self, state: EngagementState, procedure_id: str) -> StatePatch:
+        """执行一条 P2 以外的程序前查它要的资料 (需求 R272), 首次执行与 rerun 都经过这里 (execute): 按现有资料重定
+        状态 (refresh_inputs; 要求重跑的 executing 同样查), 返回片段, 没有变化为 {}.
+        节点重放 (节点内等人后恢复) 时, 按状态这次要执行的那次执行已在 Store 中 (同 attempt 判断重放的口径) 的,
+        照当时的判断 (资料齐了) 不重查 (见 input_versions 的 replayed), 由 attempt 按重放规则取回: 两次之间资料变了
+        (如合同改了类型) 时, 新算的版本会撞上 Store 中执行写出的版本. 没写 inputs 的不读 Store."""
+        if not declared(self.deps.library.load(procedure_id).inputs):
+            return {}
+        run_id = run_id_of(procedure_id, next_run_no(procedure_id, state["procedure_runs"]))
+        replayed = await self.deps.output_store.get(state["engagement_id"], ProcedureRun, run_id) is not None
+        return await self.refresh_inputs(state, [procedure_id], [procedure_id] if replayed else [])
 
     # ── P0 ──
     async def p0_intel(self, state: EngagementState) -> StatePatch:
@@ -782,7 +819,56 @@ class GraphNodes:
 
     # ── P2 ──
     async def schedule(self, state: EngagementState) -> StatePatch:
-        return {"schedule_table": build_schedule(state["procedure_pack"], self.deps.library, self.parallel_cap)}
+        """排 P2 调度表. 先按现有资料重定 P2 程序的状态 (refresh_inputs, 需求 R272): PLN-01/03 通过后第一轮就把
+        资料不齐的程序记为 awaiting_data (不论前置是否完成), 之后每轮再查一次."""
+        patch = await self.refresh_inputs(state, [p.id for p in p2_procedures(state["procedure_pack"])])
+        pack = apply_patch(state, patch)["procedure_pack"]
+        return {**patch, "schedule_table": build_schedule(pack, self.deps.library, self.parallel_cap)}
+
+    async def refresh_inputs(
+        self, state: EngagementState, ids: Sequence[str], replayed: Sequence[str] = ()
+    ) -> StatePatch:
+        """ids 中的程序按现有资料重定状态 (orchestration.inputs.input_versions): 还缺资料的 awaiting_data, 资料到了的
+        回到 planned. 有变化的出新版本, 一个事务内写入 Store, 提交后写 transition 留痕; 返回 {procedure_pack}
+        (换成新版本), 没有变化返回 {}. 有程序新进入 awaiting_data 时随后由 A3 体检 (提补交请求; 出错只记日志).
+        版本号由状态推出. 以 Store 为准: 程序包中 (replayed 以外) Store 里的最新版本比状态里的新的, 是本节点上一次
+        没走完时写的 (只有图持锁时写这些版本; 如写完后留痕失败, 节点出错, 期间补了资料再恢复), 取 Store 那一版照
+        当时的判断, 不按现在的资料重查, 照样补写它的留痕 (同键跳过); 否则新算的版本会撞上 Store 已有的那一版.
+        replayed 见 input_versions (inputs_before_run 在节点重放时传, 那时 Store 中更新的版本由 attempt 按重放规则
+        取回)."""
+        eid = state["engagement_id"]
+        pack = state["procedure_pack"]
+        if not any(declared(self.deps.library.load(pid).inputs) for pid in ids):
+            return {}  # 都没写 inputs (如 P1 的 PLN-07), 不必读现有资料
+        store = self.deps.output_store
+        stored_latest = {p.id: p for p in cast(list[Procedure], await store.latest(eid, Procedure))}
+        held = {p.id: p.version for p in pack}
+        adopted = [
+            stored_latest[pid]
+            for pid in held
+            if pid not in replayed and pid in stored_latest and stored_latest[pid].version > held[pid]
+        ]
+        if adopted:
+            taken = {p.id: p for p in adopted}
+            pack = [taken.get(p.id, p) for p in pack]
+            ids = [pid for pid in ids if pid not in taken]
+        changed = input_versions(pack, self.deps.library, await resources(self.deps, eid), ids, replayed)
+        changed = [p for p in changed if p.id not in {a.id for a in adopted}]
+        if not changed and not adopted:
+            return {}
+        stored: list[Procedure] = []
+        if changed:
+            async with store.transaction(eid):
+                stored = cast(list[Procedure], await store.put(eid, changed, actor=AgentId.A1))
+        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [*adopted, *stored]))
+        before = {p.id: p.status for p in state["procedure_pack"]}
+        if any(p.status is ProcedureStatus.awaiting_data and before[p.id] is not p.status for p in [*adopted, *stored]):
+            try:
+                await DataCheckup(self.deps).run(eid)
+            except Exception:
+                logger.exception("程序开始等数据时体检失败: %s", eid)
+        versions = {p.id: p for p in stored}
+        return {"procedure_pack": [versions.get(p.id, p) for p in pack]}
 
     async def fieldwork(self, payload: FieldworkInput) -> StatePatch:
         """一个 fieldwork 实例: 依次执行派给它的程序各一次, 结果放进 staged_results, 不写 Store (接口文档第 3 节).
@@ -845,6 +931,21 @@ class GraphNodes:
         saved_versions = {p.id: cast(Procedure, p) for p in stored}
         pack = [saved_versions.get(p.id, p) for p in pack]
         return {**result, "procedure_pack": pack, "staged_results": None}
+
+    async def await_data(self, state: EngagementState) -> StatePatch:
+        """执行阶段等程序要的数据 (需求 R272): 先按现有资料重定 awaiting_data 程序的状态 (refresh_inputs), 有变化就
+        返回, 回 fan_in 重新判断去向; 没有变化时 interrupt() 等待, 载荷 {awaiting: inputs, procedure_ids}
+        (waits.inputs_payload). 数据写操作结束时 (导入提交, 同步, 文件处理完等) DataService 以
+        Command(resume=INPUTS_CHANGED) 恢复, 节点从头执行, 先重查; recover 也这样补.
+        恢复后仍没有变化 (空恢复): 这次 interrupt() 取回恢复值后返回 {}, 经 fan_in 回到本节点新的一次执行再停下.
+        单独成节点, 节点内只有这一个等待: 恢复值没被消费时会交给同一节点的下一个 interrupt() (见 p1_await_data).
+        P2 以外的程序 (DOC-04) 等到数据后回到 planned, 由 after_fan_in 转去 p1_ingest 补跑, 不在这里执行."""
+        waiting = [p.id for p in state["procedure_pack"] if p.status is ProcedureStatus.awaiting_data]
+        patch = await self.refresh_inputs(state, waiting)
+        if patch:
+            return patch
+        interrupt(inputs_payload(waiting))
+        return {}
 
     async def await_events(self, state: EngagementState) -> StatePatch:
         """等审计师处理 P2 的复核任务: interrupt() 暂停, 决定写入 Store 后以 Command(resume=决定 ID) 恢复.

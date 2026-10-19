@@ -463,10 +463,11 @@ class RealRun:
 
 
 @asynccontextmanager
-async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRun]:
+async def real_storage(tmp_path: Path, *, load_dataset: bool = True, **overrides: Any) -> AsyncIterator[RealRun]:
     """组装真实依赖 (Postgres 各存储与检查点, 规则 SQL, 数据集载入 data/demo, 证据文件库 tmp_path, mock 函证与登记查询),
     新建用户 Jordan Ellis (报告签字块取项目负责人姓名, 第 7 节第 17 行) 与项目, 退出时停后台任务并释放连接.
-    overrides 覆盖配置 (缺省大模型为 mock). 未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
+    load_dataset 为假时不载入数据集 (财务数据由测试自己接入). overrides 覆盖配置 (缺省大模型为 mock).
+    未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需设 TEST_DATABASE_URL: 已迁移并建好检查点表的独立测试库")
@@ -494,7 +495,8 @@ async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRu
         owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
     )
     # 建项目不载入财务数据 (需求 R10): 同种子脚本的 load 载入数据集, 视同已确认数据已齐, P1 不停下等数据
-    await deps.datasets.load(engagement.id, "demo")
+    if load_dataset:
+        await deps.datasets.load(engagement.id, "demo")
     async with AsyncExitStack() as stack:
         saver = await stack.enter_async_context(open_checkpointer(settings))
         runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))

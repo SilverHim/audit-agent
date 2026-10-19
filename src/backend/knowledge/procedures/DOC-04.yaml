@@ -3,6 +3,7 @@ name: 合同要素抽取
 phase: P1_Planning
 cycle: Revenue
 owner: A3
+inputs: {documents: [contract]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [documents, review_tasks]
 document_types: [contract]
 engine: llm
