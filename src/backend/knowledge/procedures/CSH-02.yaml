@@ -25,7 +25,7 @@ params:
   reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}
   reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
 depends_on: [CSH-05, DOC-06]
-standards: [ASA505-P14]
+standards: [ASA505-P14, ASA450-P05]   # 应计利息未入账按 ASA 450 第 5 段累计 (需求 R106)
 evidence_required: [external, bank]
 # D01 回函与账面差额由 A6 在代码中生成, 不写 SQL (回函余额在 AuditOutputStore, 不经 FinancialDataStore.query 跨表读取):
 #   对每个 Confirmation, book = FinancialDataStore.trial_balance(current) 中 gl_account_code 的余额;

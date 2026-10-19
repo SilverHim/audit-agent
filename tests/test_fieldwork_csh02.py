@@ -1,6 +1,7 @@
 """A6 CSH-02 函证差异评价: 规则部分 D01 比较回函与账面余额, D04 查回函应计利息是否已入账, 有 D01 或 D04 的账户交判断
-(合成数据集设计第 7 节第 12, 13 行; 需求 R105)."""
+(合成数据集设计第 7 节第 12, 13 行; 需求 R105); 提示词按余额差异与应计利息分写 (需求 R106)."""
 
+import json
 from dataclasses import replace
 from datetime import date
 from typing import Any
@@ -48,6 +49,7 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    ScriptedLLM,
     finished,
     legacy_sends,
     make_ctx,
@@ -326,6 +328,87 @@ async def test_d04_numbered_by_account_and_judged_once_with_d01() -> None:
     }
 
 
+def accrued_draft(amount: int) -> str:
+    """BA-02 只有 D04 时的一份判断输出 (合成): 认定应计利息未入账为错报, 引回函 accrued_interest_cents 与 ASA450-P05."""
+    reply = NUMBAT_REPLIES[1]
+    field = {
+        "type": "external",
+        "source_type": "document",
+        "source_id": reply.id,
+        "locator": "accrued_interest_cents",
+        "page": 1,
+        "reliability": reply.reliability.value,
+    }
+    standard = {"type": "standard", "source_type": "standard", "source_id": "ASA450-P05", "locator": "para 5"}
+    draft = {
+        "conclusion": "The bank confirms AUD 7,000.00 of interest earned to 30 June 2026 that is not recorded.",
+        "reasoning_chain": [
+            {"kind": "fact", "text": "The reply confirms accrued interest of 700000 cents.", "evidence": [field]},
+            {
+                "kind": "standard",
+                "text": "Misstatements other than clearly trivial are accumulated.",
+                "evidence": [standard],
+            },
+            {
+                "kind": "inference",
+                "text": "Interest income is understated by the accrued interest.",
+                "from_steps": [0, 1],
+            },
+        ],
+        "evidence": [field, standard],
+        "counter_argument": "A GL entry outside the search window recording this interest would show it was accrued.",
+        "proposed_action": "misstatement",
+        "misstatement_draft": {
+            "type": "factual",
+            "account": "Interest income",
+            "assertion": "Completeness",
+            "amount_cents": amount,
+            "direction": "understated",
+        },
+        "self_confidence": 0.8,
+    }
+    return json.dumps(draft)
+
+
+@pytest.mark.parametrize(("amount", "level"), [(700000, None), (650000, "reference")])
+async def test_accrued_interest_only_prompt_and_draft_amount(amount: int, level: str | None) -> None:
+    """R106 验收 2: BA-01 余额相符, BA-02 余额相符而只有 D04 (应计利息 700000). 提示词渲染一次, 按节查口径: Task 写
+    余额相符, 应计利息与搜索区间与 D04 例外, 不写 "differs from the book balance"; Criteria 第 4 条讲应计利息未入账;
+    proposed_action 里 close 须没有 D04, 应计利息的错报写法 (Interest income 或 Interest expense, Completeness,
+    understated, 金额为 D04 去掉符号). 认定错报的输出引回函 accrued_interest_cents, 金额 700000 (等于归因例外的金额)
+    一次通过; 650000 引用级失败 (不重试)."""
+    books = [
+        TrialBalanceRow(period="current", account_code="1010", balance_cents=120840000),
+        TrialBalanceRow(period="current", account_code="1020", balance_cents=40000000),
+    ]
+    confirmations = [extracted("BA-01", 120840000, 0), extracted("BA-02", 40000000, 1, 700000)]
+    agent, ctx, trail = setup(confirmations, books=books, real_engine=True)
+    llm = ScriptedLLM({"BA-02": [accrued_draft(amount)]})
+    agent.deps.judgments.llm = llm  # type: ignore[attr-defined]
+    patch = await agent.run(ctx)
+    [request] = [r for r in llm.requests if r.procedure_id == "CSH-02"]
+    prompt = request.messages[0].content
+    task = section(prompt, "Task")
+    assert "agrees with the book balance" in task and "differs from the book balance" not in task
+    assert all(text in task for text in ("700000 cents", "2026-06-25", "2026-06-30", "X-CSH-02-1-D04-1"))
+    criteria = section(prompt, "Criteria")
+    assert "accrued_interest_cents" in criteria and "has not been accrued" in criteria
+    actions = section(prompt, "proposed_action")
+    close = next(line for line in actions.splitlines() if line.startswith("- `close`"))
+    assert "D04" in close
+    accrued = next(line for line in actions.splitlines() if "accrued interest" in line)
+    for text in ('"Interest income"', '"Interest expense"', "Completeness", "understated", "without its sign"):
+        assert text in accrued, text
+    [call] = [e for e in trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "CSH-02"]
+    assert (call.payload["fixture_key"], call.payload["attempt"], call.payload["level_failed"]) == ("BA-02", 1, level)
+    if level is None:
+        [judgment] = patch["judgments"]
+        assert judgment.misstatement_draft is not None and judgment.misstatement_draft.amount_cents == 700000
+        assert judgment.exception_ids == ["X-CSH-02-1-D04-1"]
+    else:
+        assert patch["judgments"] == []
+
+
 # ── 判断部分 ─────────────────────────────────────────
 
 
@@ -428,10 +511,23 @@ async def test_patch_summary_and_merge_check() -> None:
 # ── 模拟输出 ─────────────────────────────────────────
 
 
+def section(prompt: str, heading: str) -> str:
+    """提示词中 "## heading" 一节 (到下一个 "## " 为止)."""
+    return prompt.split(f"## {heading}\n", 1)[1].split("\n## ", 1)[0]
+
+
 async def test_ba01_fixture_passes_real_engine() -> None:
+    """BA-01 (余额差异, 没有应计利息) 的固定输出经真实判断引擎一次通过 (R48 验收 5); 提示词 (R106 验收 1) 的 Task 按
+    余额差异写, 没有应计利息一段; Standards 列出 ASA505-P14 与 ASA450-P05."""
     agent, ctx, trail = setup(real_engine=True)
     patch = await agent.run(ctx)
     calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    prompt = calls[0].payload["messages"][0]["content"]
+    task = section(prompt, "Task")
+    assert "differs from the book balance" in task and "Difference, confirmed minus book: -5000000 cents" in task
+    assert "accrued interest" not in task
+    standards = [line for line in section(prompt, "Inputs").splitlines() if line.startswith("- ASA")]
+    assert [line.split(" ", 2)[1] for line in standards] == ["ASA505-P14", "ASA450-P05"]
     # A6 一次, 再由 A7 (L3, 建议关闭, 命中主规则) 用复核模型做两轮独立复核
     assert [(e.procedure_id, e.actor, e.payload["fixture_key"]) for e in calls] == [
         ("CSH-02", "A6", "BA-01"),
