@@ -1,6 +1,7 @@
 """Xero 演示数据集: 补造文件 (data/xero_demo/) 的内容, 生成与校验脚本; 补造数据与定稿 docs/Xero演示数据集设计.md 所列
 数值一致 (断言数据, 不断言文档措辞)."""
 
+import functools
 import json
 import re
 import shutil
@@ -351,9 +352,18 @@ def test_snapshot_mismatch_is_reported(tmp_path: Path) -> None:
 
 
 @needs_snapshot
-def test_reads_only_whitelisted_snapshot_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reads_only_whitelisted_files_and_output_does_not_depend_on_contacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """快照去掉 contacts.json 后生成一次: 只经白名单读快照, 不调用会读 contacts.json 的映射, 生成的文件与入库目录逐字节
+    相同 (生成若绕过白名单直接读 contacts.json, 在这里也会失败)."""
     from backend.adapters import xero_dataset
 
+    snapshot = tmp_path / "snapshot" / "20261017-q1"
+    snapshot.mkdir(parents=True)
+    for path in SNAPSHOT.iterdir():
+        if path.is_file() and path.name != "contacts.json":
+            shutil.copy2(path, snapshot / path.name)
     parsed: list[str] = []
 
     class Recording(generator.Snapshot):
@@ -367,25 +377,15 @@ def test_reads_only_whitelisted_snapshot_files(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(generator, "Snapshot", Recording)
     monkeypatch.setattr(xero_dataset, "build_tables", forbidden)
     monkeypatch.setattr(xero_dataset, "map_sales_invoices", forbidden)
-    generator.generate(SNAPSHOT, tmp_path / "out")
+    out = generator.generate(snapshot, tmp_path / "out")
+    produced = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
+    expected = {p.relative_to(SUPPLEMENTS).as_posix(): p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
+    assert produced == expected
     index = generator.RefIndex(Recording(SNAPSHOT))
     assert index.missing(["SI-77b338ef-ecc0-4b95-a0d7-2617b0054611", "XJ-580", "XJ-580-3", "BT-090-0081"]) == []
     assert parsed and set(parsed) <= generator.READABLE | {"trial_balance_2026-06-30", "trial_balance_2026-09-30"}
     with pytest.raises(ValueError, match="不在读取白名单内"):
         Recording(SNAPSHOT).load("contacts")
-
-
-@needs_snapshot
-def test_output_does_not_depend_on_contacts(tmp_path: Path) -> None:
-    snapshot = tmp_path / "snapshot" / "20261017-q1"
-    snapshot.mkdir(parents=True)
-    for path in SNAPSHOT.iterdir():
-        if path.is_file() and path.name != "contacts.json":
-            shutil.copy2(path, snapshot / path.name)
-    out = generator.generate(snapshot, tmp_path / "out")
-    produced = {p.relative_to(out).as_posix(): p.read_bytes() for p in out.rglob("*") if p.is_file()}
-    expected = {p.relative_to(SUPPLEMENTS).as_posix(): p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
-    assert produced == expected
 
 
 @needs_snapshot
@@ -410,7 +410,7 @@ def test_xero_refs_must_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 @needs_snapshot
 def test_generator_exits_nonzero_when_check_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert generator.main(["--out", str(tmp_path / "ok")]) == 0
+    """生成后校验不过时退出码为 1 (校验通过退出 0 见 test_generator_without_cuad_prints_the_hint_and_same_files)."""
     data = spec()
     data["profile"]["notes"] = "Not flagged."
     patched = tmp_path / "spec.json"
@@ -684,8 +684,18 @@ def test_manifest_file_items_take_no_extra_keys(tmp_path: Path) -> None:
 
 
 def pdf_texts(path: Path) -> list[str]:
+    """PDF 各页的文本层 (空白归一). 入库补造目录里的原件会话中不变 (conftest 逐文件核对哈希), 只解析一次;
+    副本每次重读."""
+    if path.resolve().is_relative_to(SUPPLEMENTS.resolve()):
+        return list(original_pdf_texts(path))
     with pdfplumber.open(path) as pdf:
         return [re.sub(r"\s+", " ", page.extract_text() or "") for page in pdf.pages]
+
+
+@functools.cache
+def original_pdf_texts(path: Path) -> tuple[str, ...]:
+    with pdfplumber.open(path) as pdf:
+        return tuple(re.sub(r"\s+", " ", page.extract_text() or "") for page in pdf.pages)
 
 
 def test_appointment_pages() -> None:

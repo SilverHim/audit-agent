@@ -1,5 +1,6 @@
 """登录、项目归属与决定错误码. 不启动数据库或编排图."""
 
+import functools
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
@@ -17,6 +18,13 @@ from backend.core.security import create_access_token, decode_access_token, hash
 from backend.main import create_app
 from backend.persistence.stores import PostgresUserStore
 from tests.fakes import FakeTrail
+
+
+@functools.cache
+def hashed(password: str) -> str:
+    """口令的哈希, 每个口令只算一次: argon2 一次约 0.25 秒, 原先每个用例建用户表都重算 (盐是随机的, 同一份哈希
+    照样验得过)."""
+    return hash_password(password)
 
 
 def _engagement(eid: str, owner: str) -> Engagement:
@@ -40,7 +48,7 @@ class _Users:
 
     def __init__(self) -> None:
         self.user = User(id="USR-1", email="rca@example.com", full_name="Jordan Ellis")
-        self.rows: dict[str, tuple[User, str]] = {self.user.email: (self.user, hash_password("secret"))}
+        self.rows: dict[str, tuple[User, str]] = {self.user.email: (self.user, hashed("secret"))}
 
     async def by_email(self, email: str) -> tuple[User, str] | None:
         # 同 PostgresUserStore: 不区分大小写; 多个只差大小写的账号时只认完全相同的那个
@@ -197,7 +205,7 @@ class _StoredUsers(PostgresUserStore):
                 "id": f"USR-{index}",
                 "email": email,
                 "full_name": f"Auditor {index}",
-                "password_hash": hash_password(f"password-{index}"),
+                "password_hash": hashed(f"password-{index}"),
             }
             for index, email in enumerate(emails)
         ]
@@ -240,9 +248,8 @@ def test_legacy_uppercase_account_still_logs_in_and_blocks_case_variant(api: Sim
 
 
 def test_register_blocked_when_only_case_variants_exist(api: SimpleNamespace) -> None:
-    hashed = hash_password("secret")
     api.users.rows = {
-        key: (User(id=f"USR-{index}", email=key, full_name="Legacy"), hashed)
+        key: (User(id=f"USR-{index}", email=key, full_name="Legacy"), hashed("secret"))
         for index, key in enumerate(["Rca@Example.com", "RCA@Example.com"])
     }
     taken = api.client.post(

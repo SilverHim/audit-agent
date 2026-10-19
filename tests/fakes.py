@@ -1,6 +1,7 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
+import copy
 import csv
 import functools
 import hashlib
@@ -9,18 +10,20 @@ import shutil
 import tempfile
 import weakref
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
+from unittest import mock
 
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
+import backend.main
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.registry_mock import person_key
@@ -2218,6 +2221,23 @@ def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputS
 # ── 组装 ──
 
 
+KNOWLEDGE = Path(__file__).resolve().parents[1] / "src" / "backend" / "knowledge"  # 仓库的 knowledge 目录
+
+
+@functools.cache
+def _knowledge_library(root: Path, features: frozenset[str]) -> ProcedureLibrary:
+    return ProcedureLibrary(root, features)
+
+
+def knowledge_library(root: Path, features: Iterable[str] = BASELINE) -> ProcedureLibrary:
+    """程序库, 同 ProcedureLibrary(root, features), 但仓库的 knowledge 目录 (会话中不改; 要改的用例先复制到临时目录)
+    每个功能集只加载一次: 每个用例建依赖都重新解析全部 YAML 约 0.1 秒, 是默认测试最大的一项重复开销. 返回浅拷贝,
+    用例改它的属性 (如 commit, 或把 load 换成补了声明的) 不影响别的用例; 别的目录照常新建."""
+    if Path(root).resolve() != KNOWLEDGE:
+        return ProcedureLibrary(root, features)
+    return copy.copy(_knowledge_library(Path(root), frozenset(features)))
+
+
 def make_deps(
     registry: FakeRegistry,
     trail: FakeTrail,
@@ -2256,7 +2276,8 @@ def make_deps(
     if data.financial is None:  # 证据文件数取同一个财务数据存储 (同真实实现共用 documents 表)
         data.financial = financial_store
     settings = get_settings()
-    deps = build_deps(settings)
+    with mock.patch.object(backend.main, "ProcedureLibrary", knowledge_library):  # 组装根的程序库取会话缓存
+        deps = build_deps(settings)
 
     def mock_client() -> SwitchableLLMClient:
         """同组装根的 mock 客户端, 但按假项目存储取项目数据集 (组装根的绑定在 Postgres 项目存储上)."""
@@ -2267,7 +2288,7 @@ def make_deps(
     llm = llm if llm is not None else mock_client()
     if library is None:
         features = BASELINE if features is None else features
-        library = deps.library if deps.library.features == features else ProcedureLibrary(deps.library.root, features)
+        library = deps.library if deps.library.features == features else knowledge_library(deps.library.root, features)
     elif features is None:
         features = library.features
     elif features != library.features:
