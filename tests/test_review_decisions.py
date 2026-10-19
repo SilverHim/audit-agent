@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 from langgraph.types import Command
 
 from backend.contracts.errors import DecisionRejected, RuleError, VersionConflict
@@ -163,6 +164,13 @@ async def assert_passes(s: Started, decision: ReviewRecord) -> None:
     assert not s.runner.is_running(EID)
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def review_wait() -> Started:
+    """停在 await_events 等复核的一次运行 (同 waiting_with_failure), 由只提交被拒复核决定的用例共用: assert_rejected
+    逐次核对存储与检查点都没动."""
+    return await waiting_with_failure()
+
+
 async def put(store: FakeOutputStore, *objs: Any) -> None:
     async with store.transaction(EID):
         await store.put(EID, list(objs), actor="U-1")
@@ -192,10 +200,11 @@ async def put(store: FakeOutputStore, *objs: Any) -> None:
         ),
     ],
 )
-async def test_invalid_review_record_rejected(decision: ReviewRecord, code: str, detail: str | None) -> None:
-    s = await waiting_with_failure()
-
-    await assert_rejected(s, decision, code, detail)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_invalid_review_record_rejected(
+    review_wait: Started, decision: ReviewRecord, code: str, detail: str | None
+) -> None:
+    await assert_rejected(review_wait, decision, code, detail)
 
 
 async def test_decided_task_rejected() -> None:

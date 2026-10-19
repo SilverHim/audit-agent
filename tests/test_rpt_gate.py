@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from backend.contracts.errors import DecisionRejected, EngagementLocked
 from backend.contracts.models import (
@@ -50,6 +51,12 @@ async def at_rpt_gate() -> Started:
     await wait_idle(s.runner, EID)
     assert await s.next_nodes() == ("gate_rpt01",)
     return s
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def rpt_gate() -> Started:
+    """停在 RPT-01 闸门前的一次运行, 由只提交被拒决定的用例共用: assert_rejected 逐次核对存储与图都没动."""
+    return await at_rpt_gate()
 
 
 def rpt_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
@@ -152,11 +159,12 @@ async def test_gate_view_before_and_after_reject() -> None:
         (rpt_decision(GateVerdict.approve, edits=[edit()]), "FIELD_NOT_ALLOWED", "edits"),
     ],
 )
-async def test_invalid_rpt01_decision_rejected(decision: GateDecision, code: str, detail: str) -> None:
+@pytest.mark.asyncio(loop_scope="module")
+async def test_invalid_rpt01_decision_rejected(
+    rpt_gate: Started, decision: GateDecision, code: str, detail: str
+) -> None:
     """验收 3: 不合规的 RPT-01 决定被拒, Store 与检查点不变, 锁释放."""
-    s = await at_rpt_gate()
-
-    await assert_rejected(s, decision, code, detail)
+    await assert_rejected(rpt_gate, decision, code, detail)
 
 
 async def test_decision_on_superseded_report_rejected() -> None:

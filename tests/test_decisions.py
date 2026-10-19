@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked, VersionConflict
@@ -137,6 +138,8 @@ class Started:
 
 
 Agents = Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]]  # make_runner 的 agents
+# 用模块共用的运行 (acc_gate, typo_gate, pln_gate) 的用例与它在同一个事件循环里
+shared_loop = pytest.mark.asyncio(loop_scope="module")
 
 
 async def started(
@@ -147,6 +150,12 @@ async def started(
     await runner.start(EID)
     await wait_idle(runner, EID)
     return Started(runner, output_store, engagement_store)
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def acc_gate() -> Started:
+    """停在 ACC-01 闸门前的一次运行, 由只提交被拒决定的用例共用 (每次核对存储与图都没动)."""
+    return await started()
 
 
 async def test_submit_approve_moves_to_p1() -> None:
@@ -206,8 +215,9 @@ async def test_submit_insufficient_info_stays_at_gate() -> None:
         (acc01_decision(GateVerdict.approve, disposition=OpinionType.unqualified), "FIELD_NOT_ALLOWED"),
     ],
 )
-async def test_submit_rejects_invalid_decision(decision: GateDecision, code: str) -> None:
-    s = await started()
+@shared_loop
+async def test_submit_rejects_invalid_decision(acc_gate: Started, decision: GateDecision, code: str) -> None:
+    s = acc_gate
     rows_before = list(s.output_store.rows)
 
     with pytest.raises(DecisionRejected) as e:
@@ -296,6 +306,12 @@ async def test_update_profile_then_approve_reaches_p1() -> None:
     assert engagement.phase is Phase.P1_Planning
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def typo_gate() -> Started:
+    """客户画像有错字, 停在 ACC-01 闸门前的一次运行, 由只提交被拒画像更新的用例共用 (每次核对画像与图都没动)."""
+    return await started(TYPO_PROFILE)
+
+
 @pytest.mark.parametrize(
     ("profile", "code"),
     [
@@ -307,8 +323,9 @@ async def test_update_profile_then_approve_reaches_p1() -> None:
         (FIXED_PROFILE.model_copy(update={"abn": "6890004201"}), "INVALID_VALUE"),  # ABN 不是 11 位
     ],
 )
-async def test_update_profile_rejects_invalid(profile: ClientProfile, code: str) -> None:
-    s = await started(TYPO_PROFILE)
+@shared_loop
+async def test_update_profile_rejects_invalid(typo_gate: Started, profile: ClientProfile, code: str) -> None:
+    s = typo_gate
 
     with pytest.raises(DecisionRejected) as e:
         await s.submit.update_client_profile(EID, *profile_update(profile), updated_by="U-1")
@@ -722,6 +739,12 @@ async def at_pln_gate(agents: Agents | None = None, library: ProcedureLibrary | 
     return s
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def pln_gate() -> Started:
+    """停在 PLN-01/03 闸门前的一次运行, 由只提交被拒决定的用例共用: assert_rejected 逐次核对存储与图都没动."""
+    return await at_pln_gate()
+
+
 def stop_after_submit(s: Started) -> None:
     """submit 写入并越过闸门后不在后台继续执行, 释放项目锁: 只看这一步的结果. fan_in 尚未并入暂存结果,
     PLN-01/03 通过后若继续执行会反复派发同一批程序, 直到递归上限."""
@@ -806,10 +829,9 @@ async def assert_rejected(s: Started, decision: GateDecision, code: str, detail:
         "reused_decision_id",
     ],
 )
-async def test_pln_decision_rejected(decision: GateDecision, code: str, detail: str | None) -> None:
-    s = await at_pln_gate()
-
-    await assert_rejected(s, decision, code, detail)
+@shared_loop
+async def test_pln_decision_rejected(pln_gate: Started, decision: GateDecision, code: str, detail: str | None) -> None:
+    await assert_rejected(pln_gate, decision, code, detail)
 
 
 @pytest.mark.parametrize(
@@ -843,11 +865,12 @@ async def test_pln_decision_rejected(decision: GateDecision, code: str, detail: 
         "repeated_edit_before_reused_id",
     ],
 )
-async def test_pln_errors_reported_in_section_7_order(decision: GateDecision, code: str, detail: str | None) -> None:
+@shared_loop
+async def test_pln_errors_reported_in_section_7_order(
+    pln_gate: Started, decision: GateDecision, code: str, detail: str | None
+) -> None:
     """同时有几处错时按第 7 节顺序报第一处: 版本 → 字段 → 取值 → 决定 ID (Codex R09-01)."""
-    s = await at_pln_gate()
-
-    await assert_rejected(s, decision, code, detail)
+    await assert_rejected(pln_gate, decision, code, detail)
 
 
 @pytest.mark.parametrize("kind", ["materiality", "risk"])

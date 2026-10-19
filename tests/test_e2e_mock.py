@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -88,6 +89,7 @@ from tests.test_p2_agents_demo import replies
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
+shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的演示 (demo_run) 的用例与它同一个事件循环
 
 
 def real_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
@@ -151,9 +153,43 @@ async def run_demo() -> Started:
     return s
 
 
+@dataclass
+class Demo:
+    """模块共用的一次演示: 流程入口 s; 每次执行程序的 (程序, Agent 类名, 是否脚本 Agent); 每次四级校验的 (判断所属程序,
+    失败级别, 错误数, 无支撑步骤数)."""
+
+    s: Started
+    agents: list[tuple[str, str, bool]]
+    validations: list[tuple[str, int | None, int, int]]
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def demo_run() -> Demo:
+    """整个模块只跑一次演示, 同时记下每次执行的 Agent 与每次四级校验的结果. 用例只读存储, 留痕与图状态; 签字后再提交
+    的决定在写入前就被拒绝, 也不改状态."""
+    agents: list[tuple[str, str, bool]] = []
+    validations: list[tuple[str, int | None, int, int]] = []
+    run_agent, validate = GraphNodes.run_agent, OutputValidator.validate
+
+    async def record_agent(self: GraphNodes, agent: ProcedureAgent[Any], ctx: RunContext) -> Any:
+        agents.append((ctx.procedure.id, type(agent).__name__, isinstance(agent, ScriptAgent)))
+        return await run_agent(self, agent, ctx)
+
+    async def record_validate(self: OutputValidator, *args: Any) -> Any:
+        report = await validate(self, *args)
+        validations.append((args[1].id, report.level_failed, len(report.errors), len(report.unsupported_steps)))
+        return report
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(GraphNodes, "run_agent", record_agent)
+        patch.setattr(OutputValidator, "validate", record_validate)
+        s = await run_demo()
+    return Demo(s, agents, validations)
+
+
 @pytest.fixture
-async def demo() -> Started:
-    return await run_demo()
+def demo(demo_run: Demo) -> Started:
+    return demo_run.s
 
 
 def trail_of(s: Started) -> FakeTrail:
@@ -162,6 +198,7 @@ def trail_of(s: Started) -> FakeTrail:
     return trail
 
 
+@shared_loop
 async def test_results_match_dataset(demo: Started) -> None:
     await assert_results(demo)
     # 功能 collab 关闭 (R149 验收 5): A7 不记命中的触发规则
@@ -280,6 +317,7 @@ async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> N
     ]
 
 
+@shared_loop
 async def test_trail_counts(demo: Started) -> None:
     assert_trail_counts(trail_of(demo).entries)
 
@@ -295,6 +333,7 @@ def assert_trail_counts(entries: Sequence[TrailEntry]) -> None:
     assert external == {"ACC-04": 2, "CSH-04": 2}
 
 
+@shared_loop
 async def test_every_evidence_pointer_resolves(demo: Started) -> None:
     await assert_pointers_resolve(demo)
 
@@ -332,6 +371,7 @@ async def assert_pointers_resolve(s: Started, eid: str = EID, *, everything: boo
     return pointers
 
 
+@shared_loop
 async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -> None:
     """(Codex R56 探针) everything 时在判断, 合同, 函证之外另收例外与承接评分卡的全部指针, 一条不漏."""
     base = await evidence_pointers(demo)
@@ -348,6 +388,7 @@ async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -
 FIXTURE_COUNTS = {"CSH-02": 1, "DOC-04": 3, "DOC-06": 2, "GEN-09": 2, "REV-02": 2, "REV-03": 3, "RPT-03": 2}
 
 
+@shared_loop
 async def test_every_fixture_used_once_and_passes(demo: Started) -> None:
     files = assert_fixtures_used_once(trail_of(demo).entries, enabled_programs(demo.runner.deps))
     assert Counter(pid for pid, _ in files) == FIXTURE_COUNTS
@@ -400,6 +441,7 @@ def test_fixture_guard_compares_enabled_programs_only(tmp_path: Path) -> None:
         assert_fixtures_used_once(entries, enabled, root)
 
 
+@shared_loop
 async def test_locked_after_signing(demo: Started) -> None:
     """验收 6: 签字后提交任一决定报 ENGAGEMENT_LOCKED."""
     with pytest.raises(DecisionRejected) as e:
@@ -407,28 +449,11 @@ async def test_locked_after_signing(demo: Started) -> None:
     assert e.value.code == "ENGAGEMENT_LOCKED"
 
 
-async def test_every_program_runs_with_a_real_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+@shared_loop
+async def test_every_program_runs_with_a_real_agent(demo_run: Demo) -> None:
     """(Codex R55 探针) 流程中每条程序都由真实 Agent 执行 (没有脚本 Agent), 各一次 (RPT-03 两稿两次);
     大模型请求的输出模型与次数, 每次校验都无错误也无无支撑步骤."""
-    calls: list[tuple[str, str]] = []
-    validations: list[str] = []
-    run_agent, validate = GraphNodes.run_agent, OutputValidator.validate
-
-    async def record_agent(self: GraphNodes, agent: ProcedureAgent[Any], ctx: RunContext) -> Any:
-        assert not isinstance(agent, ScriptAgent), ctx.procedure.id
-        calls.append((ctx.procedure.id, type(agent).__name__))
-        return await run_agent(self, agent, ctx)
-
-    async def record_validate(self: OutputValidator, *args: Any) -> Any:
-        report = await validate(self, *args)
-        assert report.level_failed is None and not report.errors and not report.unsupported_steps
-        validations.append(args[1].id)
-        return report
-
-    monkeypatch.setattr(GraphNodes, "run_agent", record_agent)
-    monkeypatch.setattr(OutputValidator, "validate", record_validate)
-    await run_demo()
-
+    assert [(pid, name) for pid, name, script in demo_run.agents if script] == []
     agents = {
         "ACC-04": "ClientIntelAgent",
         "DOC-04": "IngestAgent",
@@ -444,9 +469,10 @@ async def test_every_program_runs_with_a_real_agent(monkeypatch: pytest.MonkeyPa
         "FIN-04": "QCAgent",
         "RPT-03": "ConciergeAgent",
     }
-    assert dict(calls) == agents
-    assert Counter(pid for pid, _ in calls) == {pid: 2 if pid == "RPT-03" else 1 for pid in agents}
-    assert Counter(validations) == {
+    assert {pid: name for pid, name, _ in demo_run.agents} == agents
+    assert Counter(pid for pid, _, _ in demo_run.agents) == {pid: 2 if pid == "RPT-03" else 1 for pid in agents}
+    assert [v for v in demo_run.validations if v[1:] != (None, 0, 0)] == []
+    assert Counter(pid for pid, *_ in demo_run.validations) == {
         "DOC-04": 3,
         "DOC-06": 2,
         "REV-03": 3,

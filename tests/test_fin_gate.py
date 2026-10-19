@@ -4,6 +4,7 @@ approve 写意见类型并进 P4, reject 回 completion 重做, 信息不足重�
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from backend.contracts.models import (
     Annotation,
@@ -42,6 +43,12 @@ async def at_fin_gate() -> Started:
     await review_all(s)
     assert await s.next_nodes() == ("gate_fin",)
     return s
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def fin_gate() -> Started:
+    """停在 FIN-01 闸门前的一次运行, 由只提交被拒决定的用例共用: assert_rejected 逐次核对存储与图都没动."""
+    return await at_fin_gate()
 
 
 def fin_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
@@ -133,11 +140,12 @@ ANNOTATION = Annotation(section=ReportSection.basis_for_opinion, comment="x")
         (fin_decision(GateVerdict.approve, target_version=2), "VERSION_MISMATCH", None),
     ],
 )
-async def test_invalid_fin01_decision_rejected(decision: GateDecision, code: str, detail: str | None) -> None:
+@pytest.mark.asyncio(loop_scope="module")
+async def test_invalid_fin01_decision_rejected(
+    fin_gate: Started, decision: GateDecision, code: str, detail: str | None
+) -> None:
     """验收 4: 不合规的 FIN-01 决定被拒, Store 与检查点不变, 锁释放."""
-    s = await at_fin_gate()
-
-    await assert_rejected(s, decision, code, detail)
+    await assert_rejected(fin_gate, decision, code, detail)
 
 
 async def test_fin01_decision_not_at_gate_rejected() -> None:
