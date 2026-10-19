@@ -3,6 +3,7 @@ name: 收入合同条款评价
 phase: P2_Executing
 cycle: Revenue
 owner: A6
+outputs: [judgments, exceptions, review_tasks]
 engine: llm
 autonomy_level: L2
 manual_result_allowed: true
@@ -12,7 +13,7 @@ triggers:
 params:
   period_end: {ref: period_end}
 depends_on: [DOC-04]
-standards: [AASB15-P31, AASB15-P38]
+standards: [AASB15-P31, AASB15-P35, AASB15-P38]
 evidence_required: [contract]
 llm:
   prompt: REV-03.md.j2

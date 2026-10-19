@@ -1,7 +1,7 @@
 """EngagementRunner (A 负责, M2 实现): 项目锁, 后台推进, recover 规则见 开发接口文档.md 第 7 节."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,16 +13,19 @@ from backend.adapters.llm import llm_version
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import AgentId, Engagement, GateDecision, GateId, Phase, Procedure, ReviewRecord
-from backend.contracts.state import EngagementState, initial_state
+from backend.contracts.state import EngagementState, fill_defaults, initial_state
 from backend.core.config import get_settings
-from backend.orchestration.graph import GATE_NODES
-from backend.orchestration.nodes import AWAITING_DATA, DATA_READY
+from backend.orchestration import gates
+from backend.orchestration.nodes import DATA_READY, INPUTS_CHANGED
 from backend.orchestration.trail import data_ready_entry, record_transitions
+from backend.orchestration.waits import DATA_WAITS, WaitKind, kind_of
+from backend.services.features import LEGACY_FEATURES, features_text
 from backend.services.procedure_library import ProcedureLibrary
 
 
 def fixed_procedures(library: ProcedureLibrary) -> list[Procedure]:
-    """固定集: P2 以外的程序在项目启动时实例化; P2 程序由 assemble_pack 按风险加入."""
+    """项目启动时实例化的程序: P2 以外的全部程序. P2 程序由 assemble_pack 加入: 按审计目标匹配 trigger 的, 模板标
+    fixed 的 (P2 固定集), 及其依赖闭包."""
     return [
         Procedure(id=t.id, phase=t.phase, template_commit=library.commit, autonomy_level=t.autonomy_level)
         for t in library.all()
@@ -31,31 +34,36 @@ def fixed_procedures(library: ProcedureLibrary) -> list[Procedure]:
 
 
 def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
-    """图停在节点内 interrupt() 时各等待的载荷 (await_events 为 {"awaiting": "review"}; P2 以外程序失败后的等待为
-    {"awaiting": "human", "procedure_id", "run_id", "records"}); 不在节点内等待时为空.
+    """图停在节点内 interrupt() 时各等待的载荷, 不在节点内等待时为空.
+
+    种类与写法见 waits.py (WaitKind 五种): await_events 为 {"awaiting": "review", "phase"}, P2 以外节点等人为
+    {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, await_data 为
+    {"awaiting": "inputs", "procedure_ids"}, 等待更正 (correction) 由错报段使用.
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
 
 
-def is_data_wait(payload: Any) -> bool:
-    """等待载荷是不是等数据就绪 (不是等复核或等人决定)."""
-    return isinstance(payload, dict) and payload.get("awaiting") == AWAITING_DATA
-
-
 def awaiting_data(snapshot: StateSnapshot) -> bool:
-    """图停在 p1_await_data 等数据就绪."""
-    return any(is_data_wait(waiting) for waiting in waiting_payloads(snapshot))
+    """图停在 p1_await_data 等数据就绪 (载荷种类 WaitKind.data)."""
+    return any(kind_of(waiting) is WaitKind.data for waiting in waiting_payloads(snapshot))
+
+
+def awaiting_inputs(snapshot: StateSnapshot) -> bool:
+    """图停在 await_data 等程序要的数据 (载荷种类 WaitKind.inputs, 需求 R272)."""
+    return any(kind_of(waiting) is WaitKind.inputs for waiting in waiting_payloads(snapshot))
 
 
 def review_waits(snapshot: StateSnapshot) -> list[Any]:
-    """节点内等审计师复核决定的等待载荷 (await_events 与 P2 以外程序失败后的等待), 不含等数据就绪."""
-    return [waiting for waiting in waiting_payloads(snapshot) if not is_data_wait(waiting)]
+    """节点内等审计师决定的等待载荷 (await_events, P2 以外节点等人, 以及之后的等待更正), 不含等数据 (就绪与程序
+    等数据, waits.DATA_WAITS). 哪些等待收哪个任务的决定再由 waits.accepts 判断."""
+    return [waiting for waiting in waiting_payloads(snapshot) if kind_of(waiting) not in DATA_WAITS]
 
 
 def waiting_for_human(snapshot: StateSnapshot) -> bool:
-    """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点)."""
-    gates = set(GATE_NODES.values())
-    return any(node in gates for node in snapshot.next) or any(task.interrupts for task in snapshot.tasks)
+    """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点).
+    闸门节点按项目冻结的功能集取 (登记表, gates.node_gates)."""
+    nodes = gates.node_gates(gates.project_features(fill_defaults(snapshot.values)))
+    return any(node in nodes for node in snapshot.next) or any(task.interrupts for task in snapshot.tasks)
 
 
 async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> str | None:
@@ -67,10 +75,10 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     第一个 rerun 决定已用过), 也算检查点里有.
     """
     eid = engagement.id
-    values = snapshot.values
+    values = fill_defaults(snapshot.values)
     stored = {d.id for d in await deps.output_store.latest(eid, GateDecision)}
     stored |= {r.id for r in await deps.output_store.latest(eid, ReviewRecord)}
-    in_state = {d.id for d in values.get("gate_decisions", [])} | {r.id for r in values.get("review_records", [])}
+    in_state = {d.id for d in values["gate_decisions"]} | {r.id for r in values["review_records"]}
     for waiting in waiting_payloads(snapshot):
         if isinstance(waiting, dict):
             in_state.update(waiting.get("records", []))
@@ -81,6 +89,19 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     if version_in_state is not None and engagement.client_profile_version > version_in_state:
         return f"本项目采用的客户画像第 {engagement.client_profile_version} 版未写入检查点"
     return None
+
+
+def features_mismatch(deps: AgentDeps, engagement: Engagement) -> str | None:
+    """当前进程的功能集与项目冻结的不同时返回说明, 如 "项目冻结 critic, 当前 critic,journals"; 相同, 或项目还没有
+    版本快照 (尚未启动) 时为 None. 不同时 recover 与 resume 不推进, 决定提交被拒 (FEATURES_MISMATCH): 在另一套
+    程序包与主图上恢复, 在途项目会走到不同的节点, 新闸门也可能出现在已走过的位置."""
+    if not engagement.version_snapshot:
+        return None
+    frozen = engagement.version_snapshot.get("features", LEGACY_FEATURES)
+    current = features_text(deps.features)
+    if frozen == current:
+        return None
+    return f"项目冻结 {frozen or '(空)'}, 当前 {current or '(空)'}"
 
 
 class GraphRunner:
@@ -187,11 +208,13 @@ class GraphRunner:
             self._forget(eid, task)
 
     def freeze_versions(self) -> dict[str, str]:
-        """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 冻结时刻 (UTC, ISO 8601)."""
+        """项目启动时冻结的版本快照: 程序库 commit, LLM 模式与模型名, prompt 摘要, 功能集 (见 features_text),
+        冻结时刻 (UTC, ISO 8601)."""
         return {
             "procedure_library_commit": self.deps.library.commit,
             **(self.llm() if callable(self.llm) else self.llm),
             "prompts_sha256": self.deps.library.prompts_sha256(),
+            "features": features_text(self.deps.features),
             "frozen_at": datetime.now(UTC).isoformat(),
         }
 
@@ -240,12 +263,15 @@ class GraphRunner:
         只看检查点, 不看项目阶段 (已归档的项目若检查点仍停在闸门, 照样处理):
         - 没有检查点 (start 写了固定集, 第一步还没落盘就中断): 以初始状态重新推进.
         - 已结束 (next 与待执行任务都为空): 不动.
+        - 当前功能集与项目冻结的不同 (见 features_mismatch): 不补做也不推进, run_error 记 FEATURES_MISMATCH.
         - Store 有检查点里没有的决定或画像版本: 先补做 (见 _catch_up), 再按补做后的检查点往下判断.
         - 停在闸门前或节点内等人 (任一待执行任务带 interrupts, 含等待中出错的节点): 不动, 等人时没有新决定可交.
           例外: 停在 p1_await_data 等数据, 而 Store 中已记审计师确认数据已齐 (确认写入后, 恢复前中断), 先补写
           确认的 data 留痕 (同键已有的跳过; 写不成则报错, 留在等待), 再以 Command(resume=DATA_READY) 继续.
+          停在 await_data 等程序要的数据时以 Command(resume=INPUTS_CHANGED) 继续, 由节点重查 (数据写入后, 交给后台
+          恢复前中断的, 由此补上; 没有变化时节点再停下).
         - 升级前的旧检查点 (需求 R10 之前 ACC-01 通过后直接到 p1_ingest, 由它载入数据集): 待执行 p1_ingest 而数据
-          未确认就绪时, 以 gate_acc01 身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
+          未确认就绪时, 以 ACC-01 闸门节点的身份重写检查点, 按新拓扑转入 p1_await_data 等数据 (见 _legacy_ingest).
         - 其余 (进程中途被杀, 节点出错): 从检查点继续 ainvoke(None).
         出错时释放锁后抛出.
         """
@@ -253,18 +279,25 @@ class GraphRunner:
             snapshot = await self.app.aget_state(self.config(eid))
             engagement = await self._engagement(eid)
             graph_input: EngagementState | Command[Any] | None = None
+            if snapshot.metadata is not None and not snapshot.next and not snapshot.tasks:
+                self.release(eid)
+                return
+            mismatch = features_mismatch(self.deps, engagement)
+            if mismatch is not None:
+                self.errors[eid] = f"FEATURES_MISMATCH: {mismatch}"
+                self.release(eid)
+                return
             if snapshot.metadata is None:
                 graph_input = await self._initial_input(engagement)
             else:
-                if not snapshot.next and not snapshot.tasks:
-                    self.release(eid)
-                    return
                 if await resume_required(self.deps, engagement, snapshot) is not None:
                     snapshot, graph_input = await self._catch_up(engagement)
                 if graph_input is None and await self._legacy_ingest(eid, snapshot):
                     snapshot = await self._reroute_to_data_wait(eid)
                 if graph_input is None and await self._data_confirmed(eid, snapshot):
                     graph_input = Command(resume=DATA_READY)
+                elif graph_input is None and awaiting_inputs(snapshot):
+                    graph_input = Command(resume=INPUTS_CHANGED)
                 elif graph_input is None and waiting_for_human(snapshot):
                     self.release(eid)
                     return
@@ -288,7 +321,8 @@ class GraphRunner:
         """升级前的旧检查点: 待执行 p1_ingest (不在节点内等待) 而数据未确认就绪.
 
         新拓扑里 p1_ingest 只能经 p1_await_data 到达, 那时已确认; 未确认却排着 p1_ingest, 只能是旧拓扑在 ACC-01 通过
-        之后, p1_ingest 载入数据集之前中断留下的 (已载入的项目迁移时已补确认)."""
+        之后, p1_ingest 载入数据集之前中断留下的. 已用数据集载入的项目视同确认: 0004 本想在迁移时补记, 但在 FORCE
+        行级安全下没生效, 由回填迁移 0007 补上 (需求 R283); 没跑到 0007 的库上, 这样的项目会在这里转去等确认."""
         return (
             snapshot.next == ("p1_ingest",)
             and not any(task.interrupts for task in snapshot.tasks)
@@ -296,8 +330,9 @@ class GraphRunner:
         )
 
     async def _reroute_to_data_wait(self, eid: str) -> StateSnapshot:
-        """以 gate_acc01 身份重写检查点 (不改状态): ACC-01 的路由按已有的通过决定重新选出口, 新拓扑为 p1_await_data."""
-        await self.app.aupdate_state(self.config(eid), {}, as_node=GATE_NODES[GateId.ACC_01])
+        """以 ACC-01 闸门节点 (登记表) 的身份重写检查点 (不改状态): 闸门路由按已有的通过决定重新选出口, 新拓扑为
+        p1_await_data."""
+        await self.app.aupdate_state(self.config(eid), {}, as_node=gates.spec_of(GateId.ACC_01).node)
         return await self.app.aget_state(self.config(eid))
 
     async def _catch_up(self, engagement: Engagement) -> tuple[StateSnapshot, Command[Any] | None]:
@@ -322,12 +357,23 @@ class GraphRunner:
         self.acquire(eid)
         await self._proceed(eid)
 
-    async def recover(self) -> None:
+    async def proceed(self, eid: str) -> None:
+        """已持项目锁时按 recover 规则处理一个项目 (见 _proceed), 锁随之交出或释放; 出错记入 run_error, 不抛出 (取消
+        照常抛出, 锁已释放). DataService.recover 补做完上传文件后经此带动图继续."""
+        try:
+            await self._proceed(eid)
+        except Exception as e:
+            self.errors[eid] = f"{type(e).__name__}: {e}"
+
+    async def recover(self, skip: Collection[str] = ()) -> None:
         """应用启动时对全部项目按 recover 规则处理 (见 _proceed). 要继续执行的项目返回时 is_running 为真.
 
+        skip: 已由 DataService.recover 接手的项目 (补做文件处理, 做完经 proceed 处理), 这里跳过, 不重复拉起.
         一个项目出错记入其 run_error, 不影响其他项目.
         """
         for engagement in await self.deps.engagement_store.list():
+            if engagement.id in skip:
+                continue
             try:
                 self.acquire(engagement.id)
                 await self._proceed(engagement.id)

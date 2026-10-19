@@ -11,12 +11,12 @@ REV-03 收入合同条款评价 → JudgmentDraft，每份合同调用一次。
   standards      StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set doc_id = data.contract.document_id %}
-You assist a registered company auditor with the audit of an Australian financial report for the year ended {{ task.params.period_end }}, prepared under Australian Accounting Standards.
+You assist a registered company auditor with the audit of an Australian financial report for the financial year ended {{ task.params.period_end }}, prepared under Australian Accounting Standards.
 
 ## Task
 
 Evaluate sales contract {{ subject_id }}:
-1. Identify when control of the goods passes to the customer, and the term that sets it.
+1. Identify when control of the goods or services passes to the customer, and the term that sets it. The event may be the customer signing for delivery, the customer's acceptance, completion of the service, or transfer over time as the company performs.
 2. Identify other terms that bear on revenue recognition: return rights, rebates, acceptance conditions, bill-and-hold, consignment, guarantees, related-party terms.
 
 REV-02 relies on your conclusion to test whether invoices under this contract near {{ task.params.period_end }} are recorded in the correct period.
@@ -45,20 +45,21 @@ Standards (cite only these IDs):
 
 ## Criteria
 
-- AASB15-P31: revenue is recognised when the performance obligation is satisfied, that is, when the customer obtains control of the goods.
-- AASB15-P38: for an obligation satisfied at a point in time, identify that point from the indicators of control transfer: present right to payment, legal title, physical possession, significant risks and rewards of ownership, customer acceptance.
+- AASB15-P31: revenue is recognised when (or as) the performance obligation is satisfied, that is, when (or as) the customer obtains control of the goods or services.
+- AASB15-P35: control transfers over time if any one of criteria (a) to (c) in paragraph 35 is met; describe how the terms make it transfer over time.
+- AASB15-P38: otherwise the obligation is satisfied at a point in time; identify that point from the indicators of control transfer: present right to payment, legal title, physical possession, significant risks and rewards of ownership, customer acceptance.
 - A term that names the event on which control, title or risk passes (e.g. the customer signing the delivery note) sets the transfer point, unless another term contradicts it.
 - Use only the terms in the input. Record any term you would need but cannot find as a limitation.
 
 ## proposed_action
 
-- `accept`: the transfer point can be determined from the terms.
-- `more_evidence`: the transfer point cannot be determined, or terms conflict on it.
+- `accept`: the transfer point, or how control transfers over time, can be determined from the terms.
+- `more_evidence`: neither the transfer point nor how control transfers over time can be determined from the terms, or terms conflict on them.
 - Do not use `close` or `misstatement`. Return rights, rebates and similar terms do not change proposed_action; name them with their term IDs in the conclusion.
 
 ## Output (JudgmentDraft)
 
-- `conclusion`: one to three sentences: the transfer event and the term ID that sets it, then any other relevant terms with their term IDs.
+- `conclusion`: one to three sentences: the transfer event (or how control transfers over time) and the term ID that sets it, then any other relevant terms with their term IDs.
 - `reasoning_chain`: ordered steps, indexed from 0.
   - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
   - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.

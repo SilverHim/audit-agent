@@ -36,7 +36,8 @@ def phase_transition(eid: str, before: Phase, after: Phase, procedure_id: str | 
 
 
 async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iterable[object]) -> list[TrailEntry]:
-    """written 中各程序新版本相对其上一版的状态变化留痕. 上一版读 Store, 首版与状态未变的不写.
+    """written 中各程序新版本相对其上一版的状态变化留痕. 上一版读 Store, 首版与状态未变的不写. 新版本带
+    data_request_ids (等待数据, 未执行 (无数据), 需求 R272) 时 payload 另带它.
 
     在业务事务提交后调用, written 为 put 返回的对象 (重放时为 Store 已存的那一版, 键与首次相同).
     """
@@ -46,33 +47,41 @@ async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iter
             continue
         previous = await store.get(eid, Procedure, obj.id, obj.version - 1)
         if previous is not None and previous.status != obj.status:
-            entries.append(
-                transition(
-                    eid,
-                    "procedure",
-                    obj.id,
-                    previous.status.value,
-                    obj.status.value,
-                    f"v{obj.version}",
-                    obj.version,
-                    obj.id,
-                )
-            )
+            before, after = previous.status.value, obj.status.value
+            entry = transition(eid, "procedure", obj.id, before, after, f"v{obj.version}", obj.version, obj.id)
+            if obj.data_request_ids:
+                payload = {**entry.payload, "data_request_ids": obj.data_request_ids}
+                entry = entry.model_copy(update={"payload": payload})
+            entries.append(entry)
     return entries
 
 
 def data_ready_entry(eid: str, readiness: DataReadiness) -> TrailEntry:
-    """确认数据已齐的 data 留痕 (需求 R10): actor 为确认人 (数据集载入为 "dataset"), 防重复键 {eid}:data:ready.
+    """确认数据已齐的 data 留痕 (需求 R10): actor 为确认人 (数据集载入为 "dataset"). payload 为 {action: ready},
+    确认记了理由时另带 reason, 有未通过项时另带 failed_checks (需求 R273). 防重复键 {eid}:data:ready, 有未通过项时为
+    {eid}:data:ready:checks_failed: 第一次确认时体检全过, 之后补记了理由与未通过项 (DataStore.confirm_ready) 的,
+    补记的另成一条, 不因第一条已写而跳过.
 
     确认接口写, 恢复补做 (确认已写入, 留痕或恢复没跟上) 时也写; 同键已有的跳过 (record_transitions)."""
-    by_dataset = readiness.ready_by == "dataset"
+    failed = [check.value for check in readiness.ready_failed_checks]
+    payload: dict[str, object] = {"action": "ready"}
+    if readiness.ready_reason is not None:
+        payload["reason"] = readiness.ready_reason
+    if failed:
+        payload["failed_checks"] = failed
+    if readiness.ready_by == "dataset":
+        summary = "数据集已载入, 视同确认数据已齐"
+    elif failed:
+        summary = f"体检 {len(failed)} 项不通过, 写明理由后确认数据已齐, 开始计划阶段分析"
+    else:
+        summary = "确认数据已齐, 开始计划阶段分析"
     return TrailEntry(
         engagement_id=eid,
         kind=TrailKind.data,
         actor=readiness.ready_by or AgentId.A1,
-        summary="数据集已载入, 视同确认数据已齐" if by_dataset else "确认数据已齐, 开始计划阶段分析",
-        idempotency_key=f"{eid}:data:ready",
-        payload={"action": "ready"},
+        summary=summary,
+        idempotency_key=f"{eid}:data:ready:checks_failed" if failed else f"{eid}:data:ready",
+        payload=payload,
     )
 
 

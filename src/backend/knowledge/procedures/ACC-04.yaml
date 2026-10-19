@@ -3,6 +3,7 @@ name: ASIC / ABN 核查
 phase: P0_Acceptance
 cycle: Acceptance
 owner: A2
+outputs: [acceptance_scorecard, exceptions]
 engine: rule
 autonomy_level: L3
 # 无 SQL, A2 调 RegistrySource:

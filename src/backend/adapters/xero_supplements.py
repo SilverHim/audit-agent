@@ -1,0 +1,209 @@
+"""Xero 演示数据集的补造目录 (data/xero_demo/<快照目录名>/, 由 data/generate_xero_demo.py 生成): 读 manifest, 核对
+补造文件与快照, 读客户画像与计划预置. 格式见 docs/Xero演示数据集设计.md 第 9.2, 9.5 节.
+
+补造目录与快照目录同名. 读任何补造文件之前先 verify:
+- manifest 的 dataset 与 snapshot.name 都等于数据集名;
+- manifest.files 的每个文件都在, sha256 相符, 目录里没有清单外的文件 (manifest.json 除外);
+- 快照目录的文件去掉 contacts.json (测试副本与派生快照里它是过滤版, 不记哈希) 恰为 snapshot.files, sha256 相符;
+- 测试副本 (manifest 带 injected) 只在 allow_injected 下放行.
+不符抛 SupplementMismatch, 消息只列文件名, 不带文件内容.
+
+载入时 (apply) 把补造表并入快照映射出的财务表 (设计第 3.1, 3.3 节, 第 9.3 节第 6-9 项): 合同关联填
+sales_invoices.contract_id, 服务完成记录写成 delivery_notes (发票号换成 SI- ID), 开户行覆盖 bank_accounts.bank_name;
+合同 PDF 由 contracts() 列出, 载入时登记为合同. 发票号在快照中找不到或不唯一, 或开户行表的账号与快照不符,
+抛 SupplementMismatch (消息含发票号或账户 ID), 不载入.
+"""
+
+import csv
+import hashlib
+import json
+from collections import Counter
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from backend.contracts.models import AuditObjective, ClientProfile, RiskItem
+from backend.contracts.records import BankAccount, DeliveryNote, SalesInvoice
+
+MISMATCH = "补造文件与快照不匹配"
+UNHASHED = frozenset({"contacts.json"})  # 快照中不记哈希的文件
+
+
+class SupplementMismatch(ValueError):
+    """补造文件与快照不匹配, 或测试副本未经允许载入. 建项目接口按 INVALID_VALUE 返回."""
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@dataclass(frozen=True)
+class Supplements:
+    """一个快照的补造目录: root 为补造目录, snapshot 为同名快照目录, dataset 为数据集名 "xero/<快照目录名>"."""
+
+    root: Path
+    snapshot: Path
+    dataset: str
+    allow_injected: bool = False
+
+    def verify(self) -> dict[str, Any]:
+        """核对补造目录与快照 (见模块说明), 通过时返回 manifest."""
+        try:
+            manifest: dict[str, Any] = json.loads((self.root / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise SupplementMismatch(f"{MISMATCH}: manifest.json") from exc
+        if not isinstance(manifest, dict):
+            raise SupplementMismatch(f"{MISMATCH}: manifest.json")
+        injected = manifest.get("injected")
+        if injected is not None and not self.allow_injected:
+            raise SupplementMismatch(f"测试副本 (injected={injected}) 只能在 allow_injected 下载入")
+        section = manifest.get("snapshot")
+        section = section if isinstance(section, dict) else {}
+        problems: list[str] = []
+        if manifest.get("dataset") != self.dataset or section.get("name") != self.dataset:
+            problems.append("manifest.json")
+        listed = hashes(manifest.get("files"))
+        present = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()} - {"manifest.json"}
+        problems += sorted(present ^ listed.keys())
+        problems += [name for name in sorted(present & listed.keys()) if sha256(self.root / name) != listed[name]]
+        recorded = hashes(section.get("files"))
+        actual = {p.name for p in self.snapshot.iterdir() if p.is_file()} - UNHASHED
+        changed = sorted(actual ^ recorded.keys()) + [
+            name for name in sorted(actual & recorded.keys()) if sha256(self.snapshot / name) != recorded[name]
+        ]
+        problems += [f"快照 {name}" for name in changed]
+        if problems:
+            raise SupplementMismatch(f"{MISMATCH}: {', '.join(problems)}")
+        return manifest
+
+    def client_profile(self, prefix: str) -> ClientProfile | None:
+        """补造的客户画像 (client_profile.json); 没有时为 None. id 须以 prefix (快照组织 ID 推出的
+        "CLIENT-XERO-{短 ID}-") 开头, 免得与快照画像或别的客户同 ID 同版本而内容不同. 调用前须已 verify."""
+        path = self.root / "client_profile.json"
+        if not path.is_file():
+            return None
+        try:
+            profile = ClientProfile.model_validate_json(path.read_bytes())
+        except ValidationError as exc:  # 不带出校验器的原文 (含文件里的值)
+            raise SupplementMismatch(f"{MISMATCH}: client_profile.json 不合模型") from exc
+        if not profile.id.startswith(prefix):
+            raise SupplementMismatch(f"{MISMATCH}: client_profile.json 的 id 应以 {prefix} 开头")
+        return profile
+
+    def planning_presets(self) -> tuple[list[AuditObjective], list[RiskItem]] | None:
+        """补造的计划预置 (planning/ 下的 audit_objectives.json 与 risk_register.json); 没有 planning/ 时为 None.
+        调用前须已 verify."""
+        directory = self.root / "planning"
+        if not directory.is_dir():
+            return None
+        try:
+            objectives = json.loads((directory / "audit_objectives.json").read_text(encoding="utf-8"))
+            risks = json.loads((directory / "risk_register.json").read_text(encoding="utf-8"))
+            return (
+                [AuditObjective.model_validate(r) for r in objectives],
+                [RiskItem.model_validate(r) for r in risks],
+            )
+        except (OSError, ValueError, TypeError) as exc:  # 缺文件或不合模型; 不带出文件内容
+            raise SupplementMismatch(f"{MISMATCH}: planning/ 缺文件或不合模型") from exc
+
+    def contracts(self) -> list[Path]:
+        """补造的合同 PDF (contracts/*.pdf), 按文件名排序; 合同编号取文件名主干 (CON-X01 等)."""
+        return sorted((self.root / "contracts").glob("*.pdf"))
+
+    def rows(self, name: str) -> list[dict[str, str]]:
+        """补造 CSV 的行; 文件不存在时为空."""
+        path = self.root / name
+        if not path.is_file():
+            return []
+        with path.open(newline="", encoding="utf-8") as stream:
+            return list(csv.DictReader(stream))
+
+    def apply(self, tables: Mapping[str, Sequence[Any]]) -> dict[str, list[Any]]:
+        """补造表并入财务表 (见模块说明), 返回新的各表; 其余表原样. 调用前须已 verify. 补造 CSV 缺列, 日期格式不对,
+        行重复, 合同关联指向没有 PDF 的合同, 也抛 SupplementMismatch, 消息只列文件名与编号, 不带出文件内容."""
+        invoices: list[SalesInvoice] = list(tables["sales_invoices"])
+        counts = Counter(i.invoice_no for i in invoices)
+        ids = {i.invoice_no: i.id for i in invoices}
+
+        def invoice_id(name: str, number: str) -> str:
+            if counts[number] != 1:
+                raise SupplementMismatch(f"{MISMATCH}: {name} 的发票号 {number} 在快照中找不到或不唯一")
+            return ids[number]
+
+        contracts = {p.stem for p in self.contracts()}
+        links: dict[str, str] = {}
+        with malformed("contract_links.csv"):
+            for row in self.rows("contract_links.csv"):
+                number, contract = row["invoice_no"], row["contract_id"]
+                if invoice_id("contract_links.csv", number) in links:
+                    raise SupplementMismatch(f"{MISMATCH}: contract_links.csv 的发票号 {number} 重复")
+                if contract not in contracts:
+                    raise SupplementMismatch(f"{MISMATCH}: contract_links.csv 的合同 {contract} 没有 PDF")
+                links[ids[number]] = contract
+        notes: list[DeliveryNote] = []
+        with malformed("delivery_notes.csv"):
+            for row in self.rows("delivery_notes.csv"):
+                notes.append(
+                    DeliveryNote(
+                        id=row["id"],
+                        delivery_no=row["delivery_no"],
+                        invoice_id=invoice_id("delivery_notes.csv", row["invoice_no"]),
+                        shipped_date=iso_date(row["shipped_date"]),
+                        signed_date=iso_date(row["signed_date"]),
+                        signed_by=row["signed_by"] or None,
+                    )
+                )
+        repeated = [key for key, n in Counter(x.id for x in notes).items() if n > 1]
+        repeated += [key for key, n in Counter(x.invoice_id for x in notes).items() if n > 1]
+        if repeated:
+            raise SupplementMismatch(f"{MISMATCH}: delivery_notes.csv 的 {', '.join(repeated)} 重复")
+        banks: dict[str, BankAccount] = {a.id: a for a in tables["bank_accounts"]}
+        names: dict[str, str] = {}
+        with malformed("bank_accounts.csv"):
+            for row in self.rows("bank_accounts.csv"):
+                account = banks.get(row["id"])
+                if row["id"] in names:
+                    raise SupplementMismatch(f"{MISMATCH}: bank_accounts.csv 的 {row['id']} 重复")
+                if account is None or (row["bsb"], row["account_no"], row["gl_account_code"]) != (
+                    account.bsb,
+                    account.account_no,
+                    account.gl_account_code,
+                ):
+                    raise SupplementMismatch(f"{MISMATCH}: bank_accounts.csv 的 {row['id']} 与快照的银行账户不符")
+                names[row["id"]] = row["bank_name"]
+        return {
+            **{name: list(rows) for name, rows in tables.items()},
+            "sales_invoices": [i.model_copy(update={"contract_id": links.get(i.id, i.contract_id)}) for i in invoices],
+            "delivery_notes": notes if notes else list(tables["delivery_notes"]),
+            "bank_accounts": [
+                a.model_copy(update={"bank_name": names[a.id]}) if a.id in names else a for a in banks.values()
+            ],
+        }
+
+
+def iso_date(value: str) -> date | None:
+    return date.fromisoformat(value) if value else None
+
+
+@contextmanager
+def malformed(name: str) -> Iterator[None]:
+    """补造 CSV 的缺列与格式错误 (KeyError, 日期或模型校验失败) 改抛 SupplementMismatch, 只写文件名;
+    已是 SupplementMismatch 的照原样抛出."""
+    try:
+        yield
+    except SupplementMismatch:
+        raise
+    except (KeyError, ValueError, TypeError) as exc:
+        raise SupplementMismatch(f"{MISMATCH}: {name} 缺列或格式不对") from exc
+
+
+def hashes(items: Any) -> dict[str, Any]:
+    """manifest 的 files 段 → 路径: sha256; 结构不对的项按缺失处理 (由 verify 报出文件名)."""
+    if not isinstance(items, list):
+        return {}
+    return {str(item["path"]): item.get("sha256") for item in items if isinstance(item, dict) and "path" in item}

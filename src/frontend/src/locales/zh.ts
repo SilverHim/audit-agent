@@ -10,6 +10,7 @@ export const zh: Messages = {
     failed: '加载失败，请重试。',
     resume: '继续执行',
     runError: '上次执行因错误中止',
+    featuresMismatch: '功能开关与本项目启动时不同，项目已暂停推进。请把 FEATURES 改回项目启动时的设置并重启应用。',
     readOnly: '本项目已签字归档，只读。',
   },
   lang: { label: '语言', en: 'EN', zh: '中文' },
@@ -132,7 +133,10 @@ export const zh: Messages = {
     planned: '未开始',
     executing: '执行中',
     awaiting_human: '待人工处理',
+    in_dispute: '争议中',
     completed: '已完成',
+    awaiting_data: '等待数据',
+    no_data: '未执行（无数据）',
   },
   decisions: {
     confirm: '确认',
@@ -160,6 +164,8 @@ export const zh: Messages = {
     normal: '',
     unattributed: '未归属到具体对象的异常',
     failed: '程序未能完成',
+    blind: '盲判',
+    manual: '人工程序',
   },
   stepKinds: {
     fact: '事实',
@@ -220,6 +226,7 @@ export const zh: Messages = {
     transition: '状态变化',
     external_call: '外部调用',
     deferral: '稍后处理',
+    presentation: '判断呈递',
   },
   workspace: {
     title: '审计助理',
@@ -248,7 +255,8 @@ export const zh: Messages = {
       'ACC-01': (passed, total, exceptions) =>
         `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
-      'FIN-01': (count, total) => `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。请确认审计意见类型。`,
+      'FIN-01': (count, total, skipped) =>
+        `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。${skipped ? `另有 ${skipped} 项程序因客户无此类资料未执行。` : ''}请确认审计意见类型。`,
       'RPT-01': (revision) => `第 ${revision} 稿审计报告已生成。请签字，或附批注退回修订。`,
     },
     reviewIntro: (total, tier) => `有 ${total} 项需要你复核。这一项属于"${tier}"档。`,
@@ -261,6 +269,10 @@ export const zh: Messages = {
     },
     answers: {
       where: (phase, done, total) => `现在处于 ${phase}。${total} 项程序已完成 ${done} 项。`,
+      notRun: (waiting, noData) =>
+        [waiting ? `${waiting} 项等待客户补交数据。` : null, noData ? `${noData} 项未执行（无数据）。` : null]
+          .filter(Boolean)
+          .join(''),
       materiality: (overall, performance) => `重要性水平 ${overall}，实际执行的重要性 ${performance}。`,
       what: (gate, reviews, deferred) =>
         [
@@ -313,6 +325,7 @@ export const zh: Messages = {
     runFailed: (run) => `第 ${run} 次执行失败`,
     noReason: '没有记录失败原因。',
     exception: '规则发现',
+    reviewStatus: { pending: '待复核', confirmed: '已确认', overridden: '已推翻', superseded: '已被取代' },
     critic: {
       title: '独立复核',
       verdicts: {
@@ -325,6 +338,13 @@ export const zh: Messages = {
         insufficient_evidence: '证据不足',
         different_conclusion: '得出不同结论',
         reasoning_error: '推理有误',
+      },
+      triggers: {
+        main: '自主执行且建议接受或关闭',
+        internal_copy: '证据全为内部副本',
+        assumption: '推理含假设',
+        unsupported: '推理有未获证据支撑的步骤',
+        sample: '随机抽查',
       },
       ownConclusion: '只根据证据独立得出的结论',
       original: '原结论',
@@ -351,6 +371,8 @@ export const zh: Messages = {
     materiality: '重要性水平',
     opinion: '意见类型',
     count: (n) => `共记录 ${n} 项错报`,
+    notExecuted: (n) => `${n} 项程序未执行（无数据）`,
+    via: (ids) => `前置程序 ${ids} 未执行`,
   },
   reportCard: {
     revision: (n, opinion) => `第 ${n} 稿 · ${opinion}`,
@@ -486,6 +508,7 @@ export const zh: Messages = {
     yearEnded: (date) => `截至 ${date}止年度`,
     pending: (n) => `${n} 项复核待人工处理`,
     gate: (gate) => `${gate} 待人工处理`,
+    datasetsFailed: '客户清单读取失败，暂不能新建项目。',
   },
   login: {
     title: '登录',
@@ -597,7 +620,22 @@ export const zh: Messages = {
     openReply: '打开回函',
     noReply: '尚未收到回函',
     signedOn: (date) => `${date} 签订`,
-    docTypes: { contract: '合同', confirmation: '函证回函', other: '其他' },
+    docTypes: {
+      contract: '收入合同',
+      invoice: '发票',
+      confirmation: '函证回函',
+      bank_statement: '银行对账单',
+      minutes: '会议纪要',
+      financial_statements: '财务报表',
+      registry_extract: '登记机构摘录',
+      engagement_letter: '审计业务约定书',
+      representation_letter: '管理层声明书',
+      correspondence: '往来函件',
+      governance_communication: '与治理层的沟通',
+      agreement: '协议',
+      internal_record: '内部记录',
+      other: '其他',
+    },
     results: { pending: '等待回函', agreed: '相符', difference: '存在差异' },
     termTypes: {
       control_transfer: '控制权转移',
@@ -641,6 +679,12 @@ export const zh: Messages = {
     importLedger: '导入账表',
     uploadDocuments: '上传文件',
     ready: '数据已齐，继续审计计划',
+    readyCheck: {
+      title: '数据体检有未通过的项',
+      intro: '确认后，审计计划将按现有数据继续。请写明仍要确认的理由。',
+      reason: '理由',
+      confirm: '确认数据已齐',
+    },
     awaiting: '审计计划等待数据接入',
     sources: '数据来源',
     xero: {
@@ -722,12 +766,19 @@ export const zh: Messages = {
     fileLimits: 'PDF、Word、Excel、图片；单个不超过 50 MB',
     docCols: { file: '文件', type: '类型', progress: '处理进度', reliability: '可靠性', received: '上传' },
     docTypes: {
-      contract: '合同',
+      contract: '收入合同',
       invoice: '发票',
       confirmation: '函证回函',
       bank_statement: '银行对账单',
       minutes: '会议纪要',
       financial_statements: '财务报表',
+      registry_extract: '登记机构摘录',
+      engagement_letter: '审计业务约定书',
+      representation_letter: '管理层声明书',
+      correspondence: '往来函件',
+      governance_communication: '与治理层的沟通',
+      agreement: '协议',
+      internal_record: '内部记录',
       other: '其他',
     },
     unknownType: '未确定',
@@ -930,6 +981,20 @@ export const zh: Messages = {
     upload: '上传',
     uploading: '上传中…',
     received: '已收到',
+    statuses: { received: '已收到', withdrawn: '不再需要', unavailable: '客户无此类资料' },
+    unavailable: {
+      action: '客户无此类资料',
+      title: (item) => `客户没有${item}`,
+      intro: '等这项资料的程序将记为未执行，并列入完成阶段的材料。',
+      reason: '理由',
+      confirm: '确认',
+      done: '已记下：客户无此类资料',
+      markedBy: '标记人',
+    },
+    marked: {
+      title: '客户无此类资料',
+      intro: '这些资料客户没有，等它们的程序记为未执行，列入完成阶段的材料。',
+    },
     open: '打开数据管理',
     reasons: {
       missing_table: '尚未接入',

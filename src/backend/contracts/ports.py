@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from backend.contracts.conversation import ChatEvent, ChatMessage, ToolSpec
 from backend.contracts.data import (
     CategoryVersion,
+    CheckId,
     CheckInputs,
     CheckRun,
     ContractVersion,
@@ -43,6 +44,7 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    Judgment,
     LlmSettings,
     LlmSlot,
     Model,
@@ -60,13 +62,17 @@ from backend.contracts.models import (
 from backend.contracts.records import (
     Account,
     AccountCategory,
+    AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
+    DatasetTraits,
     DeliveryNote,
+    JournalEntry,
     SalesInvoice,
     TrialBalanceRow,
 )
 from backend.contracts.services import RuleResult
+from backend.contracts.views import JudgmentView, TrailEntryView
 
 T = TypeVar("T", bound=Versioned)
 T_out = TypeVar("T_out", bound=BaseModel)
@@ -85,6 +91,18 @@ class FinancialDataStore(Protocol):
 
     async def record(self, eid: str, source_type: SourceType, source_id: str) -> dict[str, Any] | None:
         """取一行明细; trial_balance 的 source_id 为 account_code."""
+        ...
+
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """凭证号在 entry_nos 内或原始单据号在 source_docs 内的分录行 (满足任一即取, 不重复), 按行 ID 升序.
+
+        None 为不按该条件取, 空列表为该条件取不到行; 两个都为 None 抛 ValueError (不取全表)."""
+        ...
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        """代码在 codes 内的科目 (含标准分类, 按载入时所存), 按代码升序; codes 为 None 取全部."""
         ...
 
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]: ...
@@ -203,8 +221,35 @@ class DatasetLoader(Protocol):
 
     def client_profile(self, dataset: str) -> ClientProfile: ...
 
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """按凭证号把数据集的更正分录 (adjustments/journal_entries.csv) 载入 journal_entries, 返回所请求分录的全部行,
+        按 id 排序; entry_nos 为 None 时载入文件中全部, 为空列表时不载入, 返回 [] (要全部须传 None). 幂等: 已有的
+        同 id 同内容行跳过, 有新行时 data_version 加一;
+        试算表不动. 凭证号不在文件中抛 LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛
+        ValueError; 项目锁定抛 EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""
+        ...
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        """可载入的更正分录摘要, 按凭证号自然序; 没有更正分录文件时为空."""
+        ...
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        """可载入的更正分录凭证号, 顺序同 adjustment_entries (更正通知提交时校验用)."""
+        ...
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """数据集声明 (程序参数 {ref: dataset.<键>} 的取值); 没有声明的数据集为缺省值 DatasetTraits()."""
+        ...
+
     def datasets(self) -> list[str]:
         """可以建项目的数据集名, 按名称排序; 新建项目时列给审计师选客户."""
+        ...
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """数据集自带的审计期间 (起始日, 截止日), 建项目时期间须与之相同; 不自带时为 None (由审计师填).
+        Xero 取快照的 dataset.json; CSV 数据集 (如 Numbat) 为 None."""
         ...
 
 
@@ -215,14 +260,21 @@ class DataStore(Protocol):
         """数据版本与就绪确认; 没接入过数据时版本为 0, 未确认."""
         ...
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
-        """记审计师确认数据已齐 (已确认的不改, 保留第一次的人与时间), 返回确认后的状态.
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
+        """记审计师确认数据已齐, 连同理由与当时最近一次体检不通过的项, 返回确认后的状态. 已确认的保留第一次的人与
+        时间; 已记的未通过项为空而本次有时, 补记本次的理由与未通过项 (要求写的理由不丢), 否则理由与未通过项也不改.
 
         项目 locked 抛 EngagementLocked."""
         ...
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:
         """各账表当前的行数与日期范围, 每种账表一项."""
+        ...
+
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        """各类型已登记的证据文件数, 没有的类型不列 (上传的文件分完类前记 other). 程序等数据按它判断文件有没有."""
         ...
 
     async def versions(self, eid: str) -> list[TableVersion]:
@@ -279,6 +331,14 @@ class DataStore(Protocol):
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         """一个事务内记下一次体检: data_checks 换成这次的各项结果, 并按 ID 写入 (新建或覆盖) 给出的补交请求.
         项目 locked 抛 EngagementLocked."""
+        ...
+
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        """审计师标客户无此类资料 (需求 R280): 一个事务内只改仍为 open 的这一个请求 (带条件的 UPDATE, 行锁随之取得,
+        并发时只有一方改成), 转 unavailable, 记理由, 标记人与时间 (resolved_at), 返回改后的请求; 请求不存在或不是
+        open 时不改, 返回 None (由调用方报 REQUEST_NOT_OPEN). 项目 locked 抛 EngagementLocked."""
         ...
 
     async def extraction_versions(
@@ -426,11 +486,12 @@ class LlmSettingsStore(Protocol):
 
 
 class RegistrySource(Protocol):
-    """ABN 与 ASIC 登记查询. mock 读数据集目录下的 registry/, 目录在构造时注入."""
+    """ABN 与 ASIC 登记查询, 首参为项目 ID. mock 按项目的数据集读该数据集目录下的 registry/ (Numbat 为
+    data/demo, Xero 为补造目录; 没有目录时查不到)."""
 
-    async def abn(self, abn: str) -> AbnRecord | None: ...
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 
-    async def asic_company(self, acn: str) -> AsicCompanyRecord | None: ...
+    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None: ...
 
 
 class ConfirmationRequest(Model):
@@ -454,7 +515,8 @@ class ConfirmationReceipt(Model):
 
 
 class ConfirmationChannel(Protocol):
-    """函证平台: 发询证函, 收回函. mock 读数据集目录下的 confirmations/{account_no}.pdf."""
+    """函证平台: 发询证函, 收回函. mock 按项目的数据集读该数据集目录下的 confirmations/{account_no}.pdf
+    (没有目录或没有该账号的回函时为未回函)."""
 
     async def submit(self, eid: str, req: ConfirmationRequest, idempotency_key: str) -> ConfirmationReceipt:
         """同一幂等键重复调用返回同一回执."""
@@ -478,6 +540,9 @@ class LLMRequest(Model):
     max_tokens: int  # 最多输出的 token 数
     temperature: float = 0  # 采样温度, 默认 0 求稳定
     fixture_key: str = "default"  # mock 模式下取固定输出用的键
+    eid: str = (
+        ""  # 所属项目; mock 模式按其数据集定 fixture 目录 (DatasetFixtureLLMClient), live 模式不用, 不进 prompt_hash
+    )
 
 
 class LLMResponse(Model, Generic[T_out]):
@@ -540,3 +605,13 @@ class AuditTrail(Protocol):
     async def list(
         self, eid: str, kind: TrailKind | None = None, limit: int = 100, offset: int = 0
     ) -> list[TrailEntry]: ...
+
+
+class BlindFilter(Protocol):
+    """盲判过滤 (第 4 节): 判断与留痕对外输出前一律经它转成视图, 盲判时隐藏 AI 的结论 (规格书第 9.5 节, 未作独立判断前
+    不得显示 AI 结论). 返回判断或模型留痕的视图接口与对话工具都调用它 (第 10 节). 隐藏的字段置空并列入 hidden_fields,
+    不往 Judgment 里填占位值. 本版为空实现 (services/blind.py), 判定与遮盖规则由降级段实现."""
+
+    async def judgment(self, eid: str, j: Judgment) -> JudgmentView: ...
+
+    async def trail(self, eid: str, entry: TrailEntry) -> TrailEntryView: ...

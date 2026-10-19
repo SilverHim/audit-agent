@@ -3,6 +3,7 @@ name: 未更正错报评价
 phase: P3_Completion
 cycle: Completion
 owner: A9
+outputs: []
 engine: manual
 autonomy_level: L1
 gate: FIN-01

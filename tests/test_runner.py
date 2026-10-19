@@ -60,7 +60,7 @@ EID = ENGAGEMENT.id
 class BrokenRegistry(FakeRegistry):
     """ABN Lookup 不可用: 查询即抛错. ACC-04 执行失败, 节点转成失败执行与 failed 任务后等人处理."""
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         raise RuntimeError("ABN Lookup 不可用")
 
 
@@ -80,7 +80,7 @@ class HangingRegistry(FakeRegistry):
         super().__init__()
         self.entered = asyncio.Event()
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.entered.set()
         await asyncio.Event().wait()
         return None
@@ -276,12 +276,12 @@ class HangOnceRegistry(FakeRegistry):
         self.entered = asyncio.Event()
         self.calls = 0
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
         self.calls += 1
         if self.calls == 1:
             self.entered.set()
             await asyncio.Event().wait()
-        return await super().abn(abn)
+        return await super().abn(eid, abn)
 
 
 class FailOnceOutputStore(FakeOutputStore):
@@ -542,22 +542,23 @@ async def test_advance_writes_checkpoints_synchronously(monkeypatch: pytest.Monk
 
 
 async def test_lifespan_calls_recover(monkeypatch: pytest.MonkeyPatch) -> None:
-    """应用启动时调 recover; 项目清单为空时不启动后台任务."""
+    """应用启动时调 recover (先补做上传文件, 没有接手的项目, 需求 R272); 项目清单为空时不启动后台任务."""
+    from collections.abc import Collection
     from unittest.mock import AsyncMock
 
     monkeypatch.setattr("backend.persistence.stores.PostgresEngagementStore.list", AsyncMock(return_value=[]))
-    called: list[bool] = []
+    called: list[Collection[str]] = []
     original = GraphRunner.recover
 
-    async def recover(self: GraphRunner) -> None:
-        called.append(True)
-        await original(self)
+    async def recover(self: GraphRunner, skip: Collection[str] = ()) -> None:
+        called.append(skip)
+        await original(self, skip)
 
     monkeypatch.setattr(GraphRunner, "recover", recover)
     async with lifespan(FastAPI()):
         pass
 
-    assert called == [True]
+    assert called == [set()]
 
 
 # ── R32: version_snapshot 冻结 ──
@@ -568,6 +569,7 @@ SNAPSHOT_KEYS = {
     "model",
     "critic_model_version",
     "prompts_sha256",
+    "features",
     "frozen_at",
 }
 
@@ -591,6 +593,7 @@ async def test_start_freezes_version_snapshot() -> None:
         library.prompts_sha256(),
     )
     assert (snapshot["llm_mode"], snapshot["model"], snapshot["critic_model_version"]) == ("mock", "mock", "mock")
+    assert snapshot["features"] == "critic"  # R76: 功能集, 基线
     assert datetime.fromisoformat(snapshot["frozen_at"]).tzinfo is not None
     engagement = await runner.deps.engagement_store.get(EID)
     assert engagement is not None and engagement.version_snapshot == snapshot

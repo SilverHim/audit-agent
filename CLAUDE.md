@@ -17,6 +17,7 @@ ELEC5620 Group 16：基于大语言模型的多智能体审计支持系统，按
 | `docs/开发接口文档.md` | 接口契约。第 0 节约定与 ID 规则，第 1 节接口归属，第 3 节编排状态，第 4–5 节 ports 与服务，第 6 节 Agent，第 7 节 runner、recover 规则、DecisionSubmit，第 8 节程序 YAML 格式，第 9 节数据库表，第 10 节 HTTP API，第 11 节配置项 |
 | `docs/Demo需求文档.md` | Demo 范围。第 4.1 节主图流程，第 5 节逐文件分工，第 6 节本版不做，第 9 节里程碑 |
 | `docs/合成数据集设计.md` | 合成公司 Numbat 的数据与各程序预期结果；测试样例数据出自这里 |
+| `docs/Xero演示数据集设计.md` | Xero 演示公司的补造数据与各程序预期结果 |
 | `docs/ELEC5620_设计规格说明书.md` | Stage 1 完整设计，范围大于 Demo |
 | `docs/协作规范.md` | 提交流程与分工边界 |
 | `docs/参考资料/` | ASA、AASB 准则原文 PDF，准则段落号以此为准 |

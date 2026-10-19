@@ -1,0 +1,3440 @@
+{
+  "dataset": "xero/20261017-q1",
+  "snapshot": "20261017-q1",
+  "header": "Synthetic – for demonstration only. Fictitious document based on Xero Demo Company (AU) data.",
+  "traits": {
+    "dataset": "xero/20261017-q1",
+    "data_as_of": "2026-10-17",
+    "prior_period_start": "2025-07-01",
+    "entry_timestamps_reliable": false,
+    "entry_timestamps_note": "Created timestamps are regenerated when the Xero demo company is reset; 15 journals carry created times after 19 October 2026 and up to 26 November 2026.",
+    "reversal_reference_pattern": "Reversal of ID (\\d+)",
+    "reversal_entry_no_template": "XJ-{1}",
+    "counterparty_prefixes": [
+      "payment to",
+      "payment from",
+      "payment:"
+    ],
+    "audit_adjustment_entry_prefix": "AJE-",
+    "payroll_accounts": {
+      "wages_expense": [
+        "477"
+      ],
+      "super_expense": [
+        "478"
+      ],
+      "super_payable": [
+        "826"
+      ],
+      "wages_payable": [
+        "804"
+      ],
+      "leave_provision": [
+        "805"
+      ]
+    },
+    "payroll_register": "payroll/employees.csv"
+  },
+  "profile": {
+    "id": "CLIENT-XERO-3C1332BB-Q1",
+    "version": 1,
+    "legal_name": "Demo Company (AU) Pty Ltd",
+    "abn": "25900043021",
+    "entity_type": "small_proprietary",
+    "industry_anzsic": "7000",
+    "listed": false,
+    "directors": [
+      "Alex Morgan"
+    ],
+    "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."
+  },
+  "planning": {
+    "audit_objectives": [
+      {
+        "id": "OBJ-REV-OCC",
+        "version": 1,
+        "account": "Revenue",
+        "assertion": "Occurrence",
+        "risk_level": "significant",
+        "is_material": true
+      },
+      {
+        "id": "OBJ-REV-CUT",
+        "version": 1,
+        "account": "Revenue",
+        "assertion": "Cutoff",
+        "risk_level": "significant",
+        "is_material": true
+      },
+      {
+        "id": "OBJ-CASH-EXI",
+        "version": 1,
+        "account": "Cash",
+        "assertion": "Existence",
+        "risk_level": "high",
+        "is_material": true
+      }
+    ],
+    "risk_register": [
+      {
+        "id": "RISK-REV-OCC",
+        "version": 1,
+        "objective_id": "OBJ-REV-OCC",
+        "assertion": "Occurrence",
+        "level": "significant",
+        "fraud_related": true,
+        "description": "Presumed fraud risk (ASA 240 para 27). Revenue of AUD 32,431 for the three months is 7.7 times the AUD 4,200 recorded for the whole of FY2026; 26 invoices to 14 customers, DIISR 24%; all journals are entered by the sole director.",
+        "revision_reason": null,
+        "approved_by": null
+      },
+      {
+        "id": "RISK-REV-CUT",
+        "version": 1,
+        "objective_id": "OBJ-REV-CUT",
+        "assertion": "Cutoff",
+        "level": "significant",
+        "fraud_related": true,
+        "description": "Six invoices totalling AUD 9,000 (excl. GST) were raised on 16-17 September 2026, including a AUD 6,500 development invoice to DIISR (ORC1026) whose service completion falls close to the period end.",
+        "revision_reason": null,
+        "approved_by": null
+      },
+      {
+        "id": "RISK-CASH-EXI",
+        "version": 1,
+        "objective_id": "OBJ-CASH-EXI",
+        "assertion": "Existence",
+        "level": "high",
+        "fraud_related": false,
+        "description": "The Business Bank Account was overdrawn throughout the quarter (AUD 10,900.44 at 30 September 2026) and the Savings account held AUD 11,581.23; opening bank balances were keyed on 16 July 2026 as a conversion balance of AUD 19,212.21 credited to 840 Historical Adjustment, and the 30 June 2026 comparative omits them.",
+        "revision_reason": null,
+        "approved_by": null
+      }
+    ]
+  },
+  "registry": {
+    "abn": {
+      "25900043021": {
+        "abn": "25900043021",
+        "acn": "900043021",
+        "entity_name": "Demo Company (AU) Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      },
+      "27900043030": {
+        "abn": "27900043030",
+        "acn": "900043030",
+        "entity_name": "Victoria Property Agency Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      },
+      "17900043049": {
+        "abn": "17900043049",
+        "acn": "900043049",
+        "entity_name": "Morgan Advisory Pty Ltd",
+        "status": "Active",
+        "entity_type": "Australian Private Company"
+      }
+    },
+    "asic": {
+      "900043021": {
+        "acn": "900043021",
+        "name": "Demo Company (AU) Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2018-09-03"
+      },
+      "900043030": {
+        "acn": "900043030",
+        "name": "Victoria Property Agency Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2014-03-03"
+      },
+      "900043049": {
+        "acn": "900043049",
+        "name": "Morgan Advisory Pty Ltd",
+        "status": "Registered",
+        "registered_date": "2019-07-01"
+      }
+    },
+    "extracts": [
+      {
+        "acn": "900043021",
+        "name": "Demo Company (AU) Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2018-09-03",
+        "officeholders": [
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2018-09-03"
+          },
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "secretary",
+            "appointed": "2018-09-03"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 85,
+            "pct": 0.85
+          },
+          {
+            "name": "Sam Whitfield",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 15,
+            "pct": 0.15
+          }
+        ],
+        "paid_up_cents": 100,
+        "file_name": "900043021.pdf"
+      },
+      {
+        "acn": "900043030",
+        "name": "Victoria Property Agency Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2014-03-03",
+        "officeholders": [
+          {
+            "name": "Dana Morgan",
+            "birth_date": "1981-11-03",
+            "role": "director",
+            "appointed": "2014-03-03"
+          },
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2014-03-03"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Dana Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 50,
+            "pct": 0.5
+          },
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 50,
+            "pct": 0.5
+          }
+        ],
+        "paid_up_cents": null,
+        "file_name": "900043030.pdf"
+      },
+      {
+        "acn": "900043049",
+        "name": "Morgan Advisory Pty Ltd",
+        "type": "APTY",
+        "class": "LMSH",
+        "subclass": "PROP",
+        "status": "Registered",
+        "registered_date": "2019-07-01",
+        "officeholders": [
+          {
+            "name": "Alex Morgan",
+            "birth_date": "1979-04-12",
+            "role": "director",
+            "appointed": "2019-07-01"
+          }
+        ],
+        "shareholders": [
+          {
+            "name": "Alex Morgan",
+            "kind": "person",
+            "acn": null,
+            "share_class": "ORD",
+            "shares": 100,
+            "pct": 1.0
+          }
+        ],
+        "paid_up_cents": null,
+        "file_name": "900043049.pdf"
+      }
+    ],
+    "persons": [
+      {
+        "family_name": "Morgan",
+        "given_name": "Alex",
+        "birth_date": "1979-04-12",
+        "roles": [
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "director",
+            "appointed": "2018-09-03",
+            "shares": null
+          },
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "secretary",
+            "appointed": "2018-09-03",
+            "shares": null
+          },
+          {
+            "acn": "900043021",
+            "company_name": "Demo Company (AU) Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 85
+          },
+          {
+            "acn": "900043030",
+            "company_name": "Victoria Property Agency Pty Ltd",
+            "role": "director",
+            "appointed": "2014-03-03",
+            "shares": null
+          },
+          {
+            "acn": "900043030",
+            "company_name": "Victoria Property Agency Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 50
+          },
+          {
+            "acn": "900043049",
+            "company_name": "Morgan Advisory Pty Ltd",
+            "role": "director",
+            "appointed": "2019-07-01",
+            "shares": null
+          },
+          {
+            "acn": "900043049",
+            "company_name": "Morgan Advisory Pty Ltd",
+            "role": "shareholder",
+            "appointed": null,
+            "shares": 100
+          }
+        ],
+        "file_name": "MORGAN-ALEX-19790412.pdf"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "path": "documents/engagement/appointment.pdf",
+      "type": "minutes",
+      "reliability": "internal_copy",
+      "document_date": "2026-08-27",
+      "related_ids": [],
+      "registration": "acceptance",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Appointment of auditor",
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "RESOLUTION OF THE SOLE DIRECTOR",
+          "Passed under section 248B(1) of the Corporations Act 2001 (Cth)",
+          "",
+          "Date: 14 August 2026",
+          "",
+          "Change of financial year",
+          "",
+          "The Company has only one director. The director passes the following resolution by",
+          "recording it and signing the record.",
+          "",
+          "1. Under section 323D(2A) of the Corporations Act 2001, the financial year of the Company",
+          "   that started on 1 July 2026 is to end on 30 September 2026. Each later financial year",
+          "   is to start on 1 October and end on 30 September.",
+          "",
+          "2. The director confirms that:",
+          "   (a) the shortened financial year starts at the end of the previous financial year,",
+          "       which ended on 30 June 2026;",
+          "   (b) each of the previous 5 financial years (FY2022 to FY2026) was 12 months long, and",
+          "       no financial year was shortened in reliance on section 323D(2A); and",
+          "   (c) the change is made in good faith in the best interests of the Company: it meets",
+          "       the shareholders agreement of 15 June 2026, which calls for audited financial",
+          "       reports for years ending 30 September, and aligns the reporting year with the",
+          "       October renewal cycle of the Company's customer contracts.",
+          "",
+          "3. The accounting records are to be closed at 30 September 2026, and a financial report",
+          "   is to be prepared for the period 1 July 2026 to 30 September 2026.",
+          "",
+          "Recorded and signed by the sole director:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Sole Director",
+          "14 August 2026"
+        ],
+        [
+          "DIRECTION BY A SHAREHOLDER",
+          "Section 293 of the Corporations Act 2001 (Cth)",
+          "",
+          "To:   The Directors",
+          "      Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "      23 Main Street, Marineville NSW 2000",
+          "From: Sam Whitfield",
+          "Date: 20 August 2026",
+          "",
+          "1. I hold 15 of the 100 ordinary shares in Demo Company (AU) Pty Ltd. My shares carry 15%",
+          "   of the votes in the Company, which is a small proprietary company.",
+          "",
+          "2. Under section 293(1) of the Corporations Act 2001, I direct the Company to:",
+          "   (a) prepare a financial report and directors' report for the financial year ending",
+          "       30 September 2026; and",
+          "   (b) send them to all shareholders.",
+          "",
+          "3. Under section 293(3) I specify that the financial report is to be audited",
+          "   (section 293(3)(c)). I do not specify that the financial report need not comply with",
+          "   the accounting standards, and a complete directors' report is to be prepared.",
+          "",
+          "4. This direction is signed by the shareholder giving it (section 293(2)(a)) and is made",
+          "   no later than 12 months after the end of the financial year concerned",
+          "   (section 293(2)(b)).",
+          "",
+          "",
+          "______________________________",
+          "Sam Whitfield",
+          "Shareholder (15 ordinary shares)",
+          "20 August 2026"
+        ],
+        [
+          "TESSELLATE AUDIT PARTNERS",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "25 August 2026",
+          "",
+          "The Directors",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "CONSENT TO ACT AS AUDITOR",
+          "Section 328A of the Corporations Act 2001 (Cth)",
+          "",
+          "Tessellate Audit Partners consents to act as auditor of Demo Company (AU) Pty Ltd for the",
+          "financial year ending 30 September 2026. This consent is given before the appointment is",
+          "made.",
+          "",
+          "The partner responsible for the audit is Jordan Ellis, a member of the firm and a",
+          "registered company auditor (Registered Company Auditor No. 300471). As section 328A(2)",
+          "requires for a notice given by a firm, this notice is signed by that member both in the",
+          "firm name and in the member's own name.",
+          "",
+          "Signed in the firm name:",
+          "",
+          "______________________________",
+          "Tessellate Audit Partners",
+          "by Jordan Ellis, Partner",
+          "",
+          "Signed in the member's own name:",
+          "",
+          "______________________________",
+          "Jordan Ellis, Registered Company Auditor No. 300471",
+          "25 August 2026"
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "RESOLUTION OF THE SOLE DIRECTOR",
+          "Passed under section 248B(1) of the Corporations Act 2001 (Cth)",
+          "",
+          "Date: 27 August 2026",
+          "",
+          "Appointment of auditor",
+          "",
+          "1. No auditor has been appointed by the Company in general meeting.",
+          "",
+          "2. Tessellate Audit Partners has consented in writing, before this appointment, to act as",
+          "   auditor of the Company (notice dated 25 August 2026 under section 328A).",
+          "",
+          "3. Under section 325(1) of the Corporations Act 2001, the director appoints Tessellate",
+          "   Audit Partners as auditor of the Company with effect from 27 August 2026, to audit the",
+          "   financial report for the financial year ending 30 September 2026 as required by the",
+          "   shareholder direction of 20 August 2026 (section 293(3)(c)).",
+          "",
+          "4. The director is to sign the audit engagement letter on behalf of the Company.",
+          "",
+          "Recorded and signed by the sole director:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Sole Director",
+          "27 August 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/engagement/engagement_letter.pdf",
+      "type": "engagement_letter",
+      "reliability": "external_copy",
+      "document_date": "2026-08-28",
+      "related_ids": [],
+      "registration": "acceptance",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Tessellate Audit Partners | Audit engagement letter | Demo Company (AU) Pty Ltd",
+      "pages": [
+        [
+          "TESSELLATE AUDIT PARTNERS",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "28 August 2026",
+          "",
+          "Alex Morgan, Director",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "Dear Director",
+          "",
+          "AUDIT ENGAGEMENT - FINANCIAL YEAR ENDING 30 SEPTEMBER 2026",
+          "",
+          "1. Objective and scope of the audit",
+          "You have requested that we audit the financial report of Demo Company (AU) Pty Ltd, which",
+          "comprises the statement of financial position as at 30 September 2026, the statement of",
+          "profit or loss and other comprehensive income, the statement of changes in equity and the",
+          "statement of cash flows for the period from 1 July 2026 to 30 September 2026, notes to the",
+          "financial statements and the directors' declaration. The audit is required by the",
+          "shareholder direction of 20 August 2026 under section 293 of the Corporations Act 2001.",
+          "",
+          "The objective of our audit is to obtain reasonable assurance about whether the financial",
+          "report as a whole is free from material misstatement, whether due to fraud or error, and",
+          "to issue an auditor's report that includes our opinion. Reasonable assurance is a high",
+          "level of assurance, but is not a guarantee that an audit will always detect a material",
+          "misstatement when it exists.",
+          "",
+          "2. Our responsibilities",
+          "We will conduct our audit in accordance with Australian Auditing Standards, which require",
+          "us to comply with ethical requirements. We will identify and assess the risks of material",
+          "misstatement, design and perform procedures responsive to those risks, obtain an",
+          "understanding of internal control relevant to the audit, evaluate the accounting policies",
+          "and estimates used, and conclude on the use of the going concern basis of accounting. We",
+          "will communicate in writing any significant deficiencies in internal control that we",
+          "identify. Because of the inherent limitations of an audit, there is an unavoidable risk",
+          "that some material misstatements may not be detected.",
+          "",
+          "3. Initial audit engagement",
+          "This is our first audit of the Company. No financial report was prepared for the year",
+          "ended 30 June 2026. We will obtain sufficient appropriate audit evidence about",
+          "whether the opening balances at 1 July 2026 contain misstatements that materially affect",
+          "the current period's financial report (ASA 510, paragraph 6): we will determine whether",
+          "the closing balances at 30 June 2026 have been correctly brought forward, whether they",
+          "reflect appropriate accounting policies, and we will perform specific procedures on them.",
+          "Because the comparative information will be unaudited, our auditor's report will",
+          "include an Other Matter paragraph stating that the corresponding figures are unaudited",
+          "(ASA 710, paragraph 14)."
+        ],
+        [
+          "4. Responsibilities of the directors",
+          "Our audit will be conducted on the basis that the directors acknowledge and understand",
+          "that they have responsibility:",
+          "(i)   for the preparation of the financial report that gives a true and fair view in",
+          "      accordance with the Corporations Act 2001 and the applicable financial reporting",
+          "      framework set out in section 5;",
+          "(ii)  for such internal control as the directors determine is necessary to enable the",
+          "      preparation of a financial report that is free from material misstatement, whether",
+          "      due to fraud or error; and",
+          "(iii) to provide us with:",
+          "      a. access to all information of which the directors are aware that is relevant to",
+          "         the preparation of the financial report, such as records, documentation and",
+          "         other matters;",
+          "      b. additional information that we may request from the directors for the purpose",
+          "         of the audit; and",
+          "      c. unrestricted access to persons within the Company from whom we determine it",
+          "         necessary to obtain audit evidence.",
+          "",
+          "As part of our audit process we will request from the directors written confirmation",
+          "concerning representations made to us in connection with the audit.",
+          "",
+          "5. Applicable financial reporting framework",
+          "The financial report is to be prepared in accordance with the Corporations Act 2001 and",
+          "Australian Accounting Standards - Simplified Disclosures.",
+          "",
+          "The current period covers the 3 months from 1 July 2026 to 30 September 2026, while the",
+          "comparative figures cover the 12 months ended 30 June 2026. The amounts presented are",
+          "therefore not entirely comparable, and the financial report is to disclose this."
+        ],
+        [
+          "6. Form and content of our report",
+          "We expect to issue a written auditor's report on the financial report, addressed to the",
+          "members of the Company, expressing our opinion and including the Other Matter paragraph",
+          "described in section 3. There may be circumstances in which our report differs from its",
+          "expected form and content, depending on the findings of the audit.",
+          "",
+          "7. Fees",
+          "Our fee for the audit is AUD 4,800, excluding GST. We will issue our invoice when the",
+          "auditor's report is signed. We provide no other services to the Company.",
+          "",
+          "8. Agreement of terms",
+          "Please sign and return a copy of this letter to confirm that it is in accordance with",
+          "your understanding of the arrangements for our audit of the financial report.",
+          "",
+          "Yours faithfully",
+          "",
+          "",
+          "______________________________",
+          "Tessellate Audit Partners",
+          "Jordan Ellis, Partner (Registered Company Auditor No. 300471)",
+          "",
+          "",
+          "Acknowledged and agreed on behalf of Demo Company (AU) Pty Ltd:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "Date: 2 September 2026"
+        ]
+      ]
+    },
+    {
+      "path": "contracts/CON-X01.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-09-01",
+      "related_ids": [],
+      "registration": "fieldwork",
+      "index": false,
+      "xero_refs": [
+        "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
+      ],
+      "footer": "Contract No. CON-X01",
+      "pages": [
+        [
+          "STATEMENT OF WORK No. 2 - PORTAL MODULE DEVELOPMENT",
+          "Contract No. CON-X01",
+          "",
+          "Date: 1 September 2026",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: DIISR - Small Business Services",
+          "",
+          "This Statement of Work No. 2 covers further development for the Customer's Small",
+          "Business Services portal (Customer reference: Portal proj).",
+          "",
+          "1. Services",
+          "1.1 The Supplier will develop a self-service enquiry module for the Customer's Small",
+          "Business Services portal (the Module), as described in the Schedule.",
+          "",
+          "Schedule",
+          "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
+          "1     Portal module development, developer days       10      650.00      6,500.00",
+          "      Contract Price (excluding GST)                                      6,500.00",
+          "",
+          "2. Price and Development Period",
+          "2.1 The Contract Price is $6,500.00 excluding GST (10 developer days at $650.00). GST",
+          "is payable in addition.",
+          "2.2 The Supplier will carry out the development from 3 September 2026 to",
+          "16 September 2026 (the Development Period)."
+        ],
+        [
+          "3. Development and Deployment",
+          "3.1 The Supplier will carry out the development in its own development environment.",
+          "When development is finished, the Supplier will deploy the Module to the Customer's",
+          "environment.",
+          "",
+          "4. Completion",
+          "4.1 The Services are complete when the Supplier has deployed the Module to the",
+          "Customer's environment and the Customer's Project Sponsor has signed the Completion",
+          "Certificate (the Completion Date). Title to and control of the Module pass to the",
+          "Customer on the Completion Date.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier may issue a tax invoice on or after the Completion Date.",
+          "5.2 The Customer must pay each tax invoice by its due date, which is no later than",
+          "30 days after the date of the invoice."
+        ],
+        [
+          "6. Variations",
+          "6.1 Any change to the Contract Price must be agreed by both parties in writing.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Statement of Work by giving 10 Business Days'",
+          "written notice to the other party.",
+          "7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is",
+          "not entitled to payment for the Module.",
+          "",
+          "8. General",
+          "8.1 This Statement of Work may be varied only in writing signed by both parties.",
+          "8.2 This Statement of Work is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 1 September 2026",
+          "",
+          "Signed for DIISR - Small Business Services",
+          "Priya Natarajan, Project Sponsor          Date: 1 September 2026"
+        ]
+      ]
+    },
+    {
+      "path": "contracts/CON-X02.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-06-24",
+      "related_ids": [],
+      "registration": "fieldwork",
+      "index": false,
+      "xero_refs": [
+        "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+        "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+        "SI-b2c02d0b-41a8-4d4d-97d7-014c78b3547d",
+        "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9"
+      ],
+      "footer": "Contract No. CON-X02",
+      "pages": [
+        [
+          "MANAGED SUPPORT AGREEMENT",
+          "Contract No. CON-X02",
+          "",
+          "Date: 24 June 2026",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: Hamilton Smith Pty (ABN 19 900 043 058)",
+          "",
+          "1. Services",
+          "1.1 The Supplier will provide managed IT support services to the Customer: help desk",
+          "support, remote monitoring of the Customer's computers and servers, and software",
+          "updates (the Support Services).",
+          "",
+          "2. Term",
+          "2.1 This Agreement starts on 1 July 2026 and ends on 30 June 2027 (the Term), unless it",
+          "is terminated earlier under clause 7.",
+          "",
+          "3. Monthly Fee",
+          "3.1 The Customer will pay a Monthly Fee of $500.00 excluding GST for each calendar month",
+          "of the Term. GST is payable in addition."
+        ],
+        [
+          "4. Provision of the Support Services",
+          "4.1 The Support Services are provided throughout each calendar month, and the Customer",
+          "simultaneously receives and consumes the benefit of the Support Services as the Supplier",
+          "provides them.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier will issue a tax invoice for the Monthly Fee of each calendar month on",
+          "or about the 17th day of that month.",
+          "5.2 The Customer must pay each tax invoice within 14 days after the date of the",
+          "invoice."
+        ],
+        [
+          "6. Service Levels",
+          "6.1 If the Supplier does not respond to a Priority 1 request within 4 business hours,",
+          "the Customer may claim a credit of 10% of the Monthly Fee for that month.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Agreement by giving 30 days' written notice to the",
+          "other party.",
+          "",
+          "8. General",
+          "8.1 This Agreement may be varied only in writing signed by both parties.",
+          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 24 June 2026",
+          "",
+          "Signed for Hamilton Smith Pty",
+          "Tom Reilly, Operations Manager            Date: 24 June 2026"
+        ]
+      ]
+    },
+    {
+      "path": "contracts/CON-X03.pdf",
+      "type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-08-10",
+      "related_ids": [],
+      "registration": "fieldwork",
+      "index": false,
+      "xero_refs": [
+        "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
+      ],
+      "footer": "Contract No. CON-X03",
+      "pages": [
+        [
+          "PROJECT MANAGEMENT SERVICES AGREEMENT",
+          "Contract No. CON-X03",
+          "",
+          "Date: 10 August 2026",
+          "Customer purchase order: H008-346",
+          "",
+          "Parties",
+          "Supplier: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "          23 Main Street, Marineville NSW 2000",
+          "Customer: Maddox Publishing Group (ABN 21 900 043 067)",
+          "",
+          "1. Services",
+          "1.1 The Supplier will provide an on-site project manager for the Customer's CRM",
+          "integration project on 6 on-site days (the On-site Days).",
+          "",
+          "Schedule",
+          "Item  Description                               Quantity  Rate (AUD)  Amount (AUD)",
+          "1     On-site project management, days                 6      700.00      4,200.00",
+          "      Total price (excluding GST)                                         4,200.00",
+          "",
+          "2. Price",
+          "2.1 The price is 6 On-site Days at $700.00 per day, a total of $4,200.00 excluding GST.",
+          "GST is payable in addition.",
+          "",
+          "3. Scheduling",
+          "3.1 The On-site Days will be scheduled between 11 August 2026 and 26 August 2026 as",
+          "agreed with the Customer."
+        ],
+        [
+          "4. Acceptance",
+          "4.1 Each On-site Day is accepted when the Customer signs the timesheet for that day.",
+          "",
+          "5. Invoicing and Payment",
+          "5.1 The Supplier will issue a tax invoice after the sixth On-site Day. The Customer",
+          "must pay the invoice within 10 days after the date of the invoice."
+        ],
+        [
+          "6. Absence",
+          "6.1 If the project manager is absent for part of an On-site Day, the Supplier will",
+          "credit $350.00 for each half day of absence.",
+          "",
+          "7. Termination",
+          "7.1 Either party may terminate this Agreement by giving 5 Business Days' written",
+          "notice to the other party.",
+          "",
+          "8. General",
+          "8.1 This Agreement may be varied only in writing signed by both parties.",
+          "8.2 This Agreement is governed by the laws of New South Wales.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 10 August 2026",
+          "",
+          "Signed for Maddox Publishing Group",
+          "Nora Fitzgerald, Production Director      Date: 10 August 2026"
+        ]
+      ]
+    },
+    {
+      "path": "confirmations/12345678.pdf",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "index": false,
+      "xero_refs": [
+        "BA-090",
+        "BT-090-0072"
+      ],
+      "confirmation": {
+        "bank_account_id": "BA-090",
+        "balance_cents": -1090044,
+        "accrued_interest_cents": 0
+      },
+      "footer": "Wattlebrook Bank Limited | Ref WBL-AC-2026-093001",
+      "pages": [
+        [
+          "WATTLEBROOK BANK LIMITED",
+          "ABN 82 938 074 116",
+          "Audit Confirmations Unit, Level 5, 200 Example Street, Sydney NSW 2000",
+          "",
+          "BANK CONFIRMATION - AUDIT REPLY",
+          "Our reference: WBL-AC-2026-093001",
+          "",
+          "To: The Auditor",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "confirmations@tessellate-audit.example",
+          "",
+          "Customer: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "Confirmation date: 30 September 2026",
+          "",
+          "In reply to your request, we confirm the following information recorded in our books",
+          "for the customer at close of business on 30 September 2026.",
+          "",
+          "Section 1 - Accounts",
+          "Account name:    Demo Company (AU) Pty Ltd - Business Bank Account",
+          "Account type:    Business Transaction Account",
+          "BSB:             306-234",
+          "Account number:  12345678",
+          "Currency:        AUD",
+          "Balance at 30 September 2026: AUD 10,900.44 (debit - account overdrawn)",
+          "Accrued interest and fees not yet debited: nil"
+        ],
+        [
+          "Section 2 - Facilities, guarantees and security",
+          "Facility:        Business overdraft on account 12345678",
+          "Limit:           AUD 15,000.00",
+          "Repayment:       Repayable on demand",
+          "Review:          Annual review due 31 March 2027",
+          "Security:        Personal guarantee given by Alex Morgan",
+          "Set-off:         There are no set-off arrangements between the customer's accounts.",
+          "",
+          "Section 3 - Other accounts",
+          "Account 12345679 (Business Savings Account): AUD 11,581.23 (credit) at 30 September 2026.",
+          "",
+          "Section 4 - Delivery of this reply",
+          "This reply is sent by email directly to the auditor named on page 1. It has not been",
+          "sent to the customer.",
+          "",
+          "This information is given without liability on the part of the bank or its officers.",
+          "",
+          "Authorised officer: Helen Marsh, Audit Confirmations Unit",
+          "Wattlebrook Bank Limited"
+        ]
+      ]
+    },
+    {
+      "path": "confirmations/12345679.pdf",
+      "type": "confirmation",
+      "reliability": "external_original",
+      "document_date": "2026-09-30",
+      "related_ids": [],
+      "registration": "confirmation",
+      "index": false,
+      "xero_refs": [
+        "BA-091",
+        "BT-091-0001",
+        "BT-091-0002"
+      ],
+      "confirmation": {
+        "bank_account_id": "BA-091",
+        "balance_cents": 1158123,
+        "accrued_interest_cents": 4853
+      },
+      "footer": "Wattlebrook Bank Limited | Ref WBL-AC-2026-093002",
+      "pages": [
+        [
+          "WATTLEBROOK BANK LIMITED",
+          "ABN 82 938 074 116",
+          "Audit Confirmations Unit, Level 5, 200 Example Street, Sydney NSW 2000",
+          "",
+          "BANK CONFIRMATION - AUDIT REPLY",
+          "Our reference: WBL-AC-2026-093002",
+          "",
+          "To: The Auditor",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "confirmations@tessellate-audit.example",
+          "",
+          "Customer: Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "Confirmation date: 30 September 2026",
+          "",
+          "In reply to your request, we confirm the following information recorded in our books",
+          "for the customer at close of business on 30 September 2026.",
+          "",
+          "Section 1 - Accounts",
+          "Account name:    Demo Company (AU) Pty Ltd - Business Savings Account",
+          "Account type:    Business Savings Account",
+          "BSB:             306-234",
+          "Account number:  12345679",
+          "Currency:        AUD",
+          "Balance at 30 September 2026: AUD 11,581.23 (credit)",
+          "No interest was credited to this account between 1 July 2026 and 30 September 2026.",
+          "Accrued interest at 30 September 2026, not yet credited to the account: AUD 48.53",
+          "(in the customer's favour; interest period 16 September to 15 October 2026, payable on",
+          "16 October 2026)"
+        ],
+        [
+          "Section 2 - Facilities, guarantees and security",
+          "Facilities: none",
+          "",
+          "Section 3 - Other accounts",
+          "See our separate reply for account 12345678.",
+          "",
+          "Section 4 - Delivery of this reply",
+          "This reply is sent by email directly to the auditor named on page 1. It has not been",
+          "sent to the customer.",
+          "",
+          "This information is given without liability on the part of the bank or its officers.",
+          "",
+          "Authorised officer: Helen Marsh, Audit Confirmations Unit",
+          "Wattlebrook Bank Limited"
+        ]
+      ]
+    },
+    {
+      "path": "documents/related_party/vpa_rent_letter.pdf",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "document_date": "2026-06-25",
+      "related_ids": [
+        "ACN-900043030",
+        "XJ-420",
+        "XJ-518",
+        "XJ-593"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-420",
+        "XJ-518",
+        "XJ-593"
+      ],
+      "footer": "Victoria Property Agency Pty Ltd | 23 Main Street",
+      "keywords": [
+        "1,500.00 per calendar month plus GST",
+        "21st day",
+        "one month's"
+      ],
+      "pages": [
+        [
+          "VICTORIA PROPERTY AGENCY PTY LTD",
+          "ACN 900 043 030",
+          "14 Harbour Road, Marineville NSW 2000",
+          "",
+          "25 June 2026",
+          "",
+          "Alex Morgan, Director",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "Dear Alex",
+          "",
+          "Occupation of 23 Main Street, Marineville from 1 July 2026",
+          "",
+          "This letter records the terms on which Demo Company (AU) Pty Ltd may occupy the",
+          "office at 23 Main Street, Marineville NSW 2000 (the Premises) from 1 July 2026.",
+          "",
+          "1. Term: month to month, starting on 1 July 2026.",
+          "2. Rent: AUD 1,500.00 per calendar month plus GST.",
+          "3. Payment: the rent for each month is payable on the 21st day of that month.",
+          "4. No written lease will be entered into. This letter is the whole arrangement.",
+          "5. Ending the arrangement: either party may end it by giving at least one month's",
+          "   written notice to the other.",
+          "",
+          "Yours sincerely",
+          "",
+          "",
+          "______________________________",
+          "Dana Morgan",
+          "Director, Victoria Property Agency Pty Ltd",
+          "",
+          "",
+          "Received and agreed for Demo Company (AU) Pty Ltd:",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director                     Date: 25 June 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/related_party/vpa_sale_termination_notice.pdf",
+      "type": "correspondence",
+      "reliability": "external_copy",
+      "document_date": "2026-08-28",
+      "related_ids": [
+        "ACN-900043030"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Victoria Property Agency Pty Ltd | 23 Main Street",
+      "keywords": [
+        "Harbourview Nominees",
+        "30 September 2026",
+        "Truxton Property Management"
+      ],
+      "pages": [
+        [
+          "VICTORIA PROPERTY AGENCY PTY LTD",
+          "ACN 900 043 030",
+          "14 Harbour Road, Marineville NSW 2000",
+          "",
+          "28 August 2026",
+          "",
+          "Alex Morgan, Director",
+          "Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "Dear Alex",
+          "",
+          "Sale of 23 Main Street and end of the monthly arrangement",
+          "",
+          "We have contracted to sell 23 Main Street, Marineville NSW 2000 to Harbourview Nominees",
+          "Pty Ltd. Settlement is due on 30 September 2026.",
+          "",
+          "Under our letter of 25 June 2026 either party may end the monthly arrangement by giving",
+          "at least one month's written notice. We give notice that the arrangement for the office",
+          "will end on 30 September 2026.",
+          "",
+          "From 1 October 2026 the property will be managed for the new owner by Truxton Property",
+          "Management. Please contact Truxton about a lease from that date.",
+          "",
+          "Yours sincerely",
+          "",
+          "",
+          "______________________________",
+          "Dana Morgan",
+          "Director, Victoria Property Agency Pty Ltd"
+        ]
+      ]
+    },
+    {
+      "path": "documents/related_party/harbourview_lease.pdf",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "document_date": "2026-09-22",
+      "related_ids": [
+        "ACN-900043030",
+        "XJ-613"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-613"
+      ],
+      "footer": "Lease | 23 Main Street, Marineville",
+      "keywords": [
+        "12,886.32 plus GST",
+        "1,073.86 plus GST",
+        "1 October 2026",
+        "30 September 2028",
+        "sublet"
+      ],
+      "pages": [
+        [
+          "COMMERCIAL LEASE - 23 MAIN STREET, MARINEVILLE NSW 2000",
+          "",
+          "Date: 22 September 2026",
+          "",
+          "Landlord: Harbourview Nominees Pty Ltd",
+          "          c/- Truxton Property Management (managing agent)",
+          "Tenant:   Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "          23 Main Street, Marineville NSW 2000",
+          "",
+          "Premises: ground floor office, 23 Main Street, Marineville NSW 2000, including",
+          "room RM2031.",
+          "",
+          "1. Term",
+          "1.1 The lease starts on 1 October 2026 and ends on 30 September 2028.",
+          "",
+          "2. Rent",
+          "2.1 The annual rent is AUD 12,886.32 plus GST.",
+          "2.2 The Tenant must pay the rent monthly in advance, AUD 1,073.86 plus GST, on the first",
+          "day of each month, to the managing agent's trust account.",
+          "2.3 The rent is fixed for the term.",
+          "",
+          "3. Use",
+          "3.1 The Tenant may use the Premises as offices for its information technology business.",
+          "",
+          "4. Subletting",
+          "4.1 The Tenant may sublet part of the Premises with the Landlord's prior written",
+          "consent, which the Landlord will not unreasonably withhold."
+        ],
+        [
+          "5. Outgoings and repairs",
+          "5.1 The Landlord pays council rates and building insurance. The Tenant pays electricity,",
+          "telephone and internet charges for the Premises.",
+          "5.2 The Tenant must keep the Premises clean and in good repair, fair wear and tear",
+          "excepted.",
+          "",
+          "6. Security",
+          "6.1 No bond or bank guarantee is required.",
+          "",
+          "7. Ending the lease",
+          "7.1 At the end of the term the Tenant must vacate the Premises and return all keys.",
+          "",
+          "8. General",
+          "8.1 This lease is governed by the laws of New South Wales.",
+          "",
+          "Signed for the Landlord by its managing agent",
+          "Truxton Property Management",
+          "Mia Truscott, Property Manager            Date: 22 September 2026",
+          "",
+          "Signed for the Tenant",
+          "Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 22 September 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/related_party/rm2031_sublease.pdf",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "document_date": "2026-10-15",
+      "related_ids": [
+        "BT-090-0131"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "BT-090-0131"
+      ],
+      "footer": "Sublease | Room RM2031",
+      "keywords": [
+        "Majestic Contracting",
+        "450.00 per month"
+      ],
+      "pages": [
+        [
+          "SUBLEASE - ROOM RM2031, 23 MAIN STREET, MARINEVILLE NSW 2000",
+          "",
+          "Date: 15 October 2026",
+          "",
+          "Sublessor:  Demo Company (AU) Pty Ltd (ABN 25 900 043 021)",
+          "Subtenant:  Majestic Contracting",
+          "",
+          "1. The Sublessor sublets room RM2031 at 23 Main Street, Marineville NSW 2000 (the Room)",
+          "   to the Subtenant from 15 October 2026, month to month.",
+          "2. Rent: AUD 450.00 per month, GST inclusive, payable monthly in advance. The first",
+          "   month's rent was paid on 15 October 2026.",
+          "3. Either party may end this sublease by giving one month's written notice.",
+          "4. The head lease dated 22 September 2026 permits subletting with the landlord's",
+          "   consent. Truxton Property Management, for the landlord, consented by email on",
+          "   14 October 2026.",
+          "5. The Subtenant must comply with the terms of the head lease that apply to the Room.",
+          "",
+          "Signed for Demo Company (AU) Pty Ltd",
+          "Alex Morgan, Director                     Date: 15 October 2026",
+          "",
+          "Signed for Majestic Contracting",
+          "Lewis Pham, Proprietor                    Date: 15 October 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/director_loan_agreement.pdf",
+      "type": "agreement",
+      "reliability": "internal_original",
+      "document_date": "2018-09-10",
+      "related_ids": [
+        "XJ-397"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-397"
+      ],
+      "footer": "Director loan agreement | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "interest-free",
+        "unsecured",
+        "repayable on demand",
+        "working capital"
+      ],
+      "pages": [
+        [
+          "DIRECTOR LOAN AGREEMENT",
+          "",
+          "Date: 10 September 2018",
+          "",
+          "Parties",
+          "Lender:   Alex Morgan",
+          "Borrower: Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "Background",
+          "The Borrower was registered on 3 September 2018. The Lender is the sole director of the",
+          "Borrower and will fund its working capital while the business is established.",
+          "",
+          "1. Advances",
+          "1.1 The Lender may advance money to the Borrower from time to time for its working",
+          "capital. The Lender is not obliged to make any advance.",
+          "",
+          "2. Interest and security",
+          "2.1 The loan is interest-free.",
+          "2.2 The loan is unsecured.",
+          "",
+          "3. Repayment",
+          "3.1 The loan is repayable on demand by the Lender. There is no fixed term.",
+          "3.2 The Borrower may repay all or part of the loan at any time without penalty."
+        ],
+        [
+          "4. Balance of the loan",
+          "4.1 The balance of the loan at any time is the total of the advances made by the Lender,",
+          "less repayments, as shown by the Borrower's bank accounts and the Lender's records of",
+          "amounts paid on behalf of the Borrower.",
+          "",
+          "5. General",
+          "5.1 This agreement may be varied only in writing signed by both parties.",
+          "5.2 This agreement is governed by the laws of New South Wales.",
+          "",
+          "Signed by the Lender",
+          "",
+          "______________________________",
+          "Alex Morgan                               Date: 10 September 2018",
+          "",
+          "Signed for the Borrower by its sole director",
+          "",
+          "______________________________",
+          "Alex Morgan, Director                     Date: 10 September 2018"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/director_loan_confirmation.pdf",
+      "type": "correspondence",
+      "reliability": "internal_original",
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "XJ-397",
+        "CLIENT-XERO-3C1332BB-Q1"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-397"
+      ],
+      "footer": "Director loan confirmation | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "19,212.21",
+        "AUD 1.00",
+        "Loan from director",
+        "current liabilities"
+      ],
+      "pages": [
+        [
+          "Alex Morgan",
+          "c/- Demo Company (AU) Pty Ltd, 23 Main Street, Marineville NSW 2000",
+          "",
+          "16 October 2026",
+          "",
+          "The Directors, Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "cc: Tessellate Audit Partners",
+          "",
+          "Confirmation of director loan balance",
+          "",
+          "I confirm that:",
+          "",
+          "1. The balance of AUD 19,212.21 recorded in account 840 Historical Adjustment at",
+          "   30 September 2026 is the total of the interest-free loans I have made to the Company",
+          "   since 2018 under our agreement of 10 September 2018. It includes the AUD 1.00 I paid",
+          "   for the Company's 100 ordinary shares.",
+          "2. When the Company's accounts were set up in Xero, the opening bank balances were",
+          "   brought in against account 840.",
+          "3. The loan is unsecured, interest-free and repayable on demand.",
+          "4. In the financial report for the period ended 30 September 2026 the balance is to be",
+          "   presented as \"Loan from director\" within current liabilities and disclosed as a",
+          "   related party balance.",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Director and shareholder"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/going_concern_memo_forecast.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "CLIENT-XERO-3C1332BB-Q1"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Going concern assessment | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "7,535.00",
+        "4,261.20",
+        "2,166.99",
+        "14,500",
+        "15,000",
+        "4,099.56",
+        "19,212.21",
+        "Oct 2027"
+      ],
+      "pages": [
+        [
+          "GOING CONCERN ASSESSMENT AND CASH FLOW FORECAST",
+          "Demo Company (AU) Pty Ltd",
+          "",
+          "Prepared by: Alex Morgan, Director",
+          "Date: 16 October 2026",
+          "",
+          "1. Purpose and period",
+          "This memo supports the directors' assessment that the Company can continue as a going",
+          "concern. The forecast covers the 13 months from October 2026 to October 2027. The",
+          "relevant period runs to about late October 2027, the expected date of the auditor's",
+          "report for the year ending 30 September 2027.",
+          "",
+          "2. Position at 30 September 2026",
+          "Business Bank Account (overdrawn)          (10,900.44)",
+          "Business Savings Account                     11,581.23",
+          "Net cash                                        680.79",
+          "Overdraft limit                              15,000.00",
+          "Unused overdraft at 30 September 2026         4,099.56",
+          "The Company made a loss for the period and its current liabilities exceed its current",
+          "assets. Account 840 (AUD 19,212.21) is a loan from the director.",
+          "",
+          "3. Receipts realised in October (bank statements 1-16 October 2026)",
+          "06 Oct  Rex Media Group                         550.00",
+          "06 Oct  Yarra Transport                         550.00",
+          "06 Oct  Port Phillip Freight                    550.00",
+          "06 Oct  DIISR - Small Business Services       2,145.00",
+          "10 Oct  Ridgeway University                   6,187.50",
+          "11 Oct  City Limousines                         100.00",
+          "11 Oct  City Agency                             105.60",
+          "12 Oct  Bank West                               330.00",
+          "14 Oct  Hamilton Smith Pty                      550.00",
+          "14 Oct  DIISR - Small Business Services       3,850.00",
+          "15 Oct  Boom FM                               3,960.00",
+          "15 Oct  Boom FM                                 550.00",
+          "16 Oct  Petrie McLoud Watson & Associates     2,277.00",
+          "        Customer receipts                    21,705.10",
+          "11 Oct  Jakaranda Maple Systems (deposit)     2,000.00",
+          "15 Oct  Majestic Contracting (sublease)         450.00",
+          "        Interest and other receipts             336.55",
+          "        Director deposits 12 and 15 October   2,500.00",
+          "        Total receipts 1-16 October          26,991.65",
+          "        Payments 1-16 October                14,318.72",
+          "        Net cash at 16 October 2026          13,353.72"
+        ],
+        [
+          "4. Monthly cash flow forecast (AUD)",
+          "Month       Receipts   Payments  Before fund   Director     Closing  Available",
+          "                                                funding  net cash (incl. limit)",
+          "Oct 2026    28,341.65  37,013.89  (7,991.45)   2,500.00  (5,491.45)   9,508.55",
+          "Nov 2026     6,150.00  20,848.24 (20,189.69)   6,000.00 (14,189.69)     810.31  *",
+          "Dec 2026    19,450.00  18,681.25 (13,420.94)       0.00 (13,420.94)   1,579.06",
+          "Jan 2027     9,000.00  23,901.25 (28,322.19)  14,000.00 (14,322.19)     677.81  *",
+          "Feb 2027    22,000.00  21,181.25 (13,503.44)       0.00 (13,503.44)   1,496.56",
+          "Mar 2027    21,500.00  18,681.25 (10,684.69)       0.00 (10,684.69)   4,315.31",
+          "Apr 2027    22,500.00  26,401.25 (14,585.94)       0.00 (14,585.94)     414.06",
+          "May 2027    22,500.00  18,681.25 (10,767.19)       0.00 (10,767.19)   4,232.81",
+          "Jun 2027    23,000.00  18,681.25  (6,448.44)       0.00  (6,448.44)   8,551.56",
+          "Jul 2027    23,000.00  26,401.25  (9,849.69)       0.00  (9,849.69)   5,150.31",
+          "Aug 2027    23,500.00  18,681.25  (5,030.94)       0.00  (5,030.94)   9,969.06",
+          "Sep 2027    24,000.00  18,681.25      287.81       0.00      287.81  15,287.81",
+          "Oct 2027    24,000.00  26,401.25  (2,113.44)       0.00  (2,113.44)  12,886.56",
+          "",
+          "Receipts exclude director funding. Available = closing net cash plus the overdraft limit",
+          "of AUD 15,000. * The month needs director funding to stay within the overdraft limit.",
+          "October 2026 combines the actual receipts and payments for 1-16 October with the",
+          "forecast for 17-31 October."
+        ],
+        [
+          "5. Main assumptions and obligations",
+          "- 28 October 2026: PAYG withholding of AUD 7,535.00 and GST of AUD 1,191.97 for",
+          "  July-September, and superannuation guarantee of AUD 4,261.20.",
+          "- 5 November 2026: laptop payable to PC Complete, AUD 2,166.99.",
+          "- Wages: about AUD 14,500 per month gross for 3 employees (paid fortnightly), including",
+          "  PAYG withheld. October also includes AUD 3,014.00 of PAYG withheld from the 11 and",
+          "  25 October pay runs.",
+          "- Rent: AUD 1,181.25 per month including GST under the lease from 1 October 2026;",
+          "  sublease income AUD 450.00 per month from Majestic Contracting.",
+          "- Superannuation guarantee and GST are paid quarterly, by the 28th day of the month after",
+          "  each quarter (GST for October-December by 28 February); amounts are estimates.",
+          "- Receipts: monthly support fees of AUD 2,200 plus project and training work, rising",
+          "  from about AUD 3,500 in November 2026 to about AUD 21,350 in September 2027.",
+          "",
+          "6. Funding gaps and director support",
+          "The forecast shows funding gaps in November 2026 and January 2027. The director will",
+          "fund them (AUD 6,000 and AUD 14,000) under the letter of support dated 16 October 2026,",
+          "which also defers repayment of the director loan of AUD 19,212.21. The overdraft is",
+          "repayable on demand and is next reviewed by the bank on 31 March 2027.",
+          "",
+          "7. Directors' conclusion",
+          "With the director's support, the directors expect the Company to pay its debts as and",
+          "when they fall due for the relevant period, and the financial report is prepared on a",
+          "going concern basis.",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/director_support_letter.pdf",
+      "type": "correspondence",
+      "reliability": "internal_original",
+      "document_date": "2026-10-16",
+      "related_ids": [
+        "CLIENT-XERO-3C1332BB-Q1",
+        "BT-090-0107",
+        "BT-090-0130"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "BT-090-0107",
+        "BT-090-0130"
+      ],
+      "footer": "Letter of financial support | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "19,212.21",
+        "40,000",
+        "1,000.00 on 12 October 2026",
+        "1,500.00 on"
+      ],
+      "pages": [
+        [
+          "Alex Morgan",
+          "c/- Demo Company (AU) Pty Ltd, 23 Main Street, Marineville NSW 2000",
+          "",
+          "16 October 2026",
+          "",
+          "The Directors, Demo Company (AU) Pty Ltd (ACN 900 043 021)",
+          "cc: Tessellate Audit Partners",
+          "",
+          "Letter of financial support",
+          "",
+          "I am the sole director of Demo Company (AU) Pty Ltd and hold 85 of its 100 shares.",
+          "To support the Company's ability to pay its debts as and when they fall due, I undertake",
+          "that, for 12 months from the date of the auditor's report on the financial report for the",
+          "period ended 30 September 2026:",
+          "",
+          "1. I will not demand repayment of my loan to the Company of AUD 19,212.21, or of any",
+          "   further amounts I advance; and",
+          "2. I will provide further funds to the Company of up to AUD 40,000, if and when the",
+          "   Company needs them to meet its obligations.",
+          "",
+          "I have already deposited AUD 1,000.00 on 12 October 2026 and AUD 1,500.00 on",
+          "15 October 2026 into the Company's Business Bank Account. These amounts are additional",
+          "loans on the same terms.",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan",
+          "Director and shareholder"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/fixed_asset_register.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-499",
+        "XJ-626",
+        "XJ-676"
+      ],
+      "footer": "Fixed asset register | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "Nil",
+        "Additions after the reporting date (for information)",
+        "6,300.00",
+        "1,969.99"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "FIXED ASSET REGISTER",
+          "As at 30 September 2026",
+          "Prepared by: Alex Morgan, Director, 16 October 2026",
+          "",
+          "Assets held at 30 September 2026",
+          "",
+          "Asset     Description                          Account  Cost (AUD)  Carrying amount (AUD)",
+          "Nil       The Company held no capitalised office equipment, furniture or computer",
+          "          equipment at 30 September 2026. Items below the capitalisation threshold",
+          "          (accounting policy 1.1) are expensed and are not recorded in this register.",
+          "",
+          "Total cost at 30 September 2026:                                Nil",
+          "Total carrying amount at 30 September 2026:                     Nil",
+          "",
+          "Additions after the reporting date (for information)",
+          "",
+          "Date         Supplier       Description                        Account  Cost excl GST (AUD)",
+          "04 Oct 2026  ABC Furniture  Desks, chairs, reception furniture   710             6,300.00",
+          "11 Oct 2026  PC Complete    Laptop for Tracy Green               720             1,969.99",
+          "",
+          "These items were bought after 30 September 2026 and are not assets at that date."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/expense_claim_E003.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-08-14",
+      "related_ids": [
+        "E003"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Expense claim E003 | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "Odette Garrison",
+        "E003",
+        "296.95"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "EMPLOYEE EXPENSE CLAIM",
+          "",
+          "Employee name:    Odette Garrison",
+          "Employee number:  E003",
+          "Date of claim:    14 August 2026",
+          "Purpose:          Travel to client sites and a client meeting, August 2026",
+          "",
+          "Receipts attached (see page 2)",
+          "",
+          "No.  Date         Supplier                Description               Amount incl GST (AUD)",
+          "1    03 Aug 2026  Coastline Coaches       Return coach fare, Sydney               179.00",
+          "2    05 Aug 2026  Marineville Taxis       Taxi to client site                      30.45",
+          "3    10 Aug 2026  Central City Parking    Parking at client site, 2 days           80.00",
+          "4    12 Aug 2026  Harbour Cafe            Morning tea, client meeting               7.50",
+          "                                          Total claimed                           296.95",
+          "                                          GST included                             26.31",
+          "",
+          "Declaration: I incurred these expenses for the Company's business and have not claimed",
+          "them elsewhere.",
+          "",
+          "Signed: Odette Garrison                   Date: 14 August 2026",
+          "",
+          "Approved for payment: Alex Morgan, Director    Date: 16 August 2026",
+          "Payment method: electronic funds transfer to the employee's nominated account"
+        ],
+        [
+          "RECEIPTS - EXPENSE CLAIM OF ODETTE GARRISON (E003), 14 AUGUST 2026",
+          "",
+          "Receipt 1 - Coastline Coaches, 03 Aug 2026",
+          "  Return coach fare, Marineville to Sydney        AUD 179.00 (GST AUD 16.27 included)",
+          "",
+          "Receipt 2 - Marineville Taxis, 05 Aug 2026",
+          "  Fare, 23 Main Street to client site             AUD 30.45 (GST AUD 2.77 included)",
+          "",
+          "Receipt 3 - Central City Parking, 10 Aug 2026",
+          "  Parking at client site, 2 days                  AUD 80.00 (GST AUD 7.27 included)",
+          "",
+          "Receipt 4 - Harbour Cafe, 12 Aug 2026",
+          "  Morning tea for client meeting                  AUD 7.50 (entertainment, no GST claimed)",
+          "",
+          "Total of receipts                                 AUD 296.95 (GST AUD 26.31)"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/payroll_register_terms.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-09-30",
+      "related_ids": [
+        "804",
+        "805",
+        "826"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "804",
+        "805",
+        "826"
+      ],
+      "footer": "Payroll register and terms | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "2,500.00",
+        "2,400.00",
+        "1,800.00",
+        "20 Jul 2026",
+        "National Employment Standards"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "PAYROLL REGISTER - 1 JULY 2026 TO 30 SEPTEMBER 2026",
+          "Prepared by: Alex Morgan, Director, 30 September 2026",
+          "",
+          "Employees",
+          "ID    Name             Start date   Employment  Pay frequency  Gross per period (AUD)",
+          "E001  Oliver Gray      20 Jul 2026  Full-time   Fortnightly                  2,400.00",
+          "E002  Tracy Green      20 Jul 2026  Full-time   Fortnightly                  1,800.00",
+          "E003  Odette Garrison  20 Jul 2026  Full-time   Fortnightly                  2,500.00",
+          "                                                Total per pay period         6,700.00",
+          "",
+          "Each pay period is 14 days and ends on the pay day, a Sunday. The first pay period ran",
+          "from 20 July 2026 to 2 August 2026.",
+          "",
+          "Pay runs",
+          "Pay day      Period                    Gross (AUD)  PAYG withheld (AUD)  Net paid (AUD)",
+          "02 Aug 2026  20 Jul - 02 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "16 Aug 2026  03 Aug - 16 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "30 Aug 2026  17 Aug - 30 Aug 2026         6,700.00             1,507.00        5,193.00",
+          "13 Sep 2026  31 Aug - 13 Sep 2026         6,700.00             1,507.00        5,193.00",
+          "27 Sep 2026  14 Sep - 27 Sep 2026         6,700.00             1,507.00        5,193.00",
+          "Total                                    33,500.00             7,535.00       25,965.00",
+          "",
+          "The next pay day is 11 October 2026 for the period 28 September to 11 October 2026."
+        ],
+        [
+          "TERMS OF EMPLOYMENT (SUMMARY) - ALL EMPLOYEES",
+          "",
+          "1. Employment type: full-time, 38 hours per week, Monday to Friday.",
+          "2. Pay: fortnightly in arrears, on the Sunday that ends each 14-day pay period, by",
+          "   electronic funds transfer.",
+          "3. Annual leave: 4 weeks of paid annual leave for each year of service under the",
+          "   National Employment Standards, accruing progressively from the start date.",
+          "4. Superannuation: the Company pays superannuation guarantee contributions for each",
+          "   employee each quarter.",
+          "5. Tax: the Company withholds PAYG from each pay and remits it to the Australian",
+          "   Taxation Office.",
+          "",
+          "Acknowledged by each employee on their start date, 20 July 2026:",
+          "Oliver Gray (E001), Tracy Green (E002), Odette Garrison (E003)"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/accounting_policies_extract.pdf",
+      "type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-07-01",
+      "related_ids": [
+        "XJ-499"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-499"
+      ],
+      "footer": "Accounting policies | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "net of any trade discount or supplier credit, is AUD 1,000 or more"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "ACCOUNTING POLICIES (EXTRACT)",
+          "Approved by the director, 1 July 2026",
+          "",
+          "1. Property, plant and equipment",
+          "1.1 Items of office equipment, furniture and computer equipment are capitalised when",
+          "their cost, net of any trade discount or supplier credit, is AUD 1,000 or more,",
+          "excluding GST. Items costing less are expensed when bought.",
+          "1.2 Capitalised items are depreciated on a straight-line basis from the date they are",
+          "ready for use: office equipment over 5 years, furniture over 10 years and computer",
+          "equipment over 3 years.",
+          "",
+          "2. Revenue",
+          "2.1 Revenue is recognised as each contract's performance obligations are satisfied:",
+          "monthly support fees in the month in which the support is provided; development work",
+          "when it is complete and accepted under the contract; training when it is delivered;",
+          "and on-site project management for each on-site day as it is provided.",
+          "",
+          "3. Expenses",
+          "3.1 Expenses are recorded when incurred, on the basis of the supplier's tax invoice or",
+          "the employee's approved expense claim."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/diisr_email.pdf",
+      "type": "correspondence",
+      "reliability": "external_copy",
+      "document_date": "2026-10-13",
+      "related_ids": [
+        "XJ-720"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-720"
+      ],
+      "footer": "Email | DIISR - Small Business Services",
+      "keywords": [
+        "13 October 2026",
+        "1,050.00"
+      ],
+      "pages": [
+        [
+          "EMAIL",
+          "",
+          "From:     Priya Natarajan, Project Sponsor, DIISR - Small Business Services",
+          "          <priya.natarajan@diisr.example>",
+          "To:       Alex Morgan <alex.morgan@demo-company.example>",
+          "Date:     13 October 2026, 2:15 pm",
+          "Subject:  Portal programme - price concession on ORC1026",
+          "",
+          "Hi Alex,",
+          "",
+          "Thanks for meeting with us this morning about the next stage of the portal programme.",
+          "",
+          "As agreed, the Department will accept a price concession of AUD 1,050.00 plus GST on",
+          "invoice ORC1026 for the portal module, as part of our agreement to continue with you for",
+          "the next stage. The concession is a commercial arrangement agreed today. The module was",
+          "deployed and the completion certificate was signed on 17 September 2026, and we have no",
+          "issues with the work delivered.",
+          "",
+          "Please send us a credit note for AUD 1,155.00 including GST. We will pay the balance of",
+          "ORC1026 net of the credit.",
+          "",
+          "Regards,",
+          "Priya Natarajan",
+          "Project Sponsor",
+          "DIISR - Small Business Services"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+      "type": "invoice",
+      "reliability": "external_copy",
+      "document_date": "2026-09-05",
+      "related_ids": [
+        "XJ-548",
+        "BT-090-0097"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-548",
+        "BT-090-0097"
+      ],
+      "footer": "SMART Agency Pty Ltd | Tax invoice SM0195-70135",
+      "keywords": [
+        "Design concepts for advertising material",
+        "2,000.00",
+        "4 September 2026"
+      ],
+      "pages": [
+        [
+          "SMART AGENCY PTY LTD",
+          "ABN 23 900 043 076",
+          "",
+          "TAX INVOICE",
+          "",
+          "Invoice number:  SM0195-70135",
+          "Invoice date:    5 September 2026",
+          "Due date:        19 September 2026",
+          "",
+          "To: Demo Company (AU) Pty Ltd",
+          "    23 Main Street, Marineville NSW 2000",
+          "",
+          "Description                                        Service delivered   Amount (AUD)",
+          "Design concepts for advertising material           4 September 2026        1,818.18",
+          "                                                   GST                       181.82",
+          "                                                   Total (GST inclusive)   2,000.00",
+          "",
+          "Payment terms: 14 days. Please quote the invoice number with your payment."
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/ridgeway_order_CRM08-12.pdf",
+      "type": "agreement",
+      "reliability": "external_copy",
+      "document_date": "2026-10-02",
+      "related_ids": [
+        "XJ-647",
+        "BT-090-0092"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "XJ-647",
+        "BT-090-0092"
+      ],
+      "footer": "Ridgeway University | Purchase order CRM08-12",
+      "keywords": [
+        "3 days per week",
+        "5 October 2026",
+        "in advance"
+      ],
+      "pages": [
+        [
+          "RIDGEWAY UNIVERSITY",
+          "Procurement Office",
+          "",
+          "PURCHASE ORDER CRM08-12",
+          "",
+          "Date:      2 October 2026",
+          "Supplier:  Demo Company (AU) Pty Ltd, 23 Main Street, Marineville NSW 2000",
+          "",
+          "Description",
+          "Onsite project management for the CRM Project, 3 days per week on site at the",
+          "University, starting on 5 October 2026 and continuing to 18 December 2026.",
+          "",
+          "Fees",
+          "AUD 5,625.00 plus GST per calendar month. The supplier will invoice each month in",
+          "advance at the start of the month. Payment within 10 days of the invoice date.",
+          "",
+          "Authorised by: Hannah Okoro, Procurement Officer        Date: 2 October 2026"
+        ]
+      ]
+    },
+    {
+      "path": "documents/evidence/jakaranda_quote.pdf",
+      "type": "internal_record",
+      "reliability": "internal_copy",
+      "document_date": "2026-10-08",
+      "related_ids": [
+        "BT-090-0099"
+      ],
+      "registration": "fieldwork",
+      "index": true,
+      "xero_refs": [
+        "BT-090-0099"
+      ],
+      "footer": "Quotation Q-2026-014 | Demo Company (AU) Pty Ltd",
+      "keywords": [
+        "8 October 2026",
+        "deposit of AUD 2,000.00"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "QUOTATION Q-2026-014 (file copy)",
+          "",
+          "Date:      8 October 2026",
+          "Customer:  Jakaranda Maple Systems",
+          "Project:   Inventory system integration (new project)",
+          "",
+          "Description                                   Quantity   Rate (AUD)   Amount (AUD)",
+          "Integration development, developer days             16       650.00      10,400.00",
+          "                                              Total (excluding GST)      10,400.00",
+          "",
+          "Terms",
+          "- A deposit of AUD 2,000.00 is payable on acceptance of this quotation. Work starts",
+          "  when the deposit is received.",
+          "- The balance is invoiced on completion of the project.",
+          "- This quotation is valid for 30 days.",
+          "",
+          "Prepared by: Alex Morgan, Director"
+        ]
+      ]
+    },
+    {
+      "path": "financial_statements/fs_v1.pdf",
+      "type": "financial_statements",
+      "reliability": "internal_original",
+      "document_date": "2026-10-22",
+      "related_ids": [
+        "FS"
+      ],
+      "registration": "statements",
+      "index": true,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Financial report for the financial year ended 30 September 2026",
+      "keywords": [
+        "22,136.99",
+        "30,048.99",
+        "15,000",
+        "19,212.21",
+        "40,000",
+        "2,500.00",
+        "4,500.00",
+        "6,300.00",
+        "1,969.99",
+        "12,886.32",
+        "23 October 2026",
+        "material uncertainty",
+        "680.79",
+        "9,828.22",
+        "4,800",
+        "1 July 2025"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "FINANCIAL REPORT FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "STATEMENT OF FINANCIAL POSITION AS AT 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Assets",
+          "Cash and cash equivalents                         11,581.23       15,081.23",
+          "Trade receivables                                 10,199.50               -",
+          "Other receivables (accrued interest)                  48.53               -",
+          "Office equipment                                          -               -",
+          "Total assets                                      21,829.26       15,081.23",
+          "",
+          "Liabilities",
+          "Bank overdraft                            3       10,900.44        4,572.22",
+          "Trade and other payables                           4,005.07               -",
+          "GST and PAYG withholding                           8,801.97        (791.20)",
+          "Employee benefit liabilities                       8,958.56               -",
+          "Loan from director                        3       19,212.21       19,212.21",
+          "Total liabilities                                 51,878.25       22,993.23",
+          "",
+          "Net liabilities                                 (30,048.99)      (7,912.00)",
+          "",
+          "Equity",
+          "Accumulated losses                              (30,048.99)      (7,912.00)",
+          "Total equity (deficiency)                       (30,048.99)      (7,912.00)",
+          "",
+          "All assets and liabilities are current. The comparative figures are unaudited and include",
+          "the opening bank balances and the loan from the director (note 1)."
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "",
+          "STATEMENT OF PROFIT OR LOSS AND OTHER COMPREHENSIVE INCOME",
+          "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     3 months to         Year to",
+          "                                                30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Revenue                                           32,431.00        4,200.00",
+          "Interest income                                       48.53               -",
+          "Employee benefits expense                       (42,458.56)               -",
+          "Occupancy expenses                               (6,356.00)               -",
+          "Other expenses                                   (5,801.96)     (12,112.00)",
+          "Loss for the period                             (22,136.99)      (7,912.00)",
+          "Other comprehensive income                                -               -",
+          "Total comprehensive loss                        (22,136.99)      (7,912.00)",
+          "",
+          "The current period is 3 months and the comparative period is 12 months, so the amounts",
+          "are not entirely comparable (note 1)."
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "",
+          "STATEMENT OF CHANGES IN EQUITY",
+          "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     3 months to         Year to",
+          "                                                30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Accumulated losses",
+          "Balance at the beginning of the period           (7,912.00)               -",
+          "Loss for the period                             (22,136.99)      (7,912.00)",
+          "Other comprehensive income                                -               -",
+          "Total comprehensive loss for the period         (22,136.99)      (7,912.00)",
+          "Balance at the end of the period                (30,048.99)      (7,912.00)",
+          "",
+          "Equity consists of accumulated losses only: the AUD 1.00 paid for the Company's 100",
+          "ordinary shares is included in the loan from the director (note 3). There were no",
+          "transactions with owners in their capacity as owners in either period."
+        ],
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "",
+          "STATEMENT OF CASH FLOWS",
+          "FOR THE FINANCIAL YEAR ENDED 30 SEPTEMBER 2026",
+          "",
+          "                                       Note     3 months to         Year to",
+          "                                                30 Sep 2026     30 Jun 2026",
+          "                                                        AUD             AUD",
+          "                                                                (unaudited)",
+          "Cash flows from operating activities",
+          "Loss for the period                             (22,136.99)      (7,912.00)",
+          "Changes in operating assets and liabilities:",
+          "Increase in trade receivables                   (10,199.50)               -",
+          "Increase in other receivables                       (48.53)               -",
+          "Increase in trade and other payables               4,005.07               -",
+          "Change in GST and PAYG withholding                 9,593.17        (791.20)",
+          "Increase in employee benefit liabilities           8,958.56               -",
+          "Net cash used in operating activities            (9,828.22)      (8,703.20)",
+          "",
+          "Cash flows from investing activities",
+          "Net cash from investing activities                        -               -",
+          "",
+          "Cash flows from financing activities",
+          "Net cash from financing activities                        -               -",
+          "",
+          "Net decrease in cash and cash equivalents        (9,828.22)      (8,703.20)",
+          "Cash and cash equivalents at 1 July               10,509.01       19,212.21",
+          "Cash and cash equivalents at end of period           680.79       10,509.01",
+          "",
+          "Cash and cash equivalents at end of period comprise:",
+          "Cash at bank                                      11,581.23       15,081.23",
+          "Bank overdraft                            3     (10,900.44)      (4,572.22)",
+          "Total                                                680.79       10,509.01",
+          "",
+          "Cash at bank is shown as cash and cash equivalents in the statement of financial position.",
+          "The bank overdraft is repayable on demand and forms part of the Company's cash management,",
+          "so it is included in cash and cash equivalents in this statement. No interest or income",
+          "tax was received or paid in either period, and there were no non-cash investing or",
+          "financing transactions. Cash flows from operating activities are presented using the",
+          "indirect method."
+        ],
+        [
+          "NOTES TO THE FINANCIAL STATEMENTS",
+          "",
+          "1. Basis of preparation",
+          "These are general purpose financial statements prepared in accordance with the",
+          "Corporations Act 2001 and Australian Accounting Standards - Simplified Disclosures.",
+          "The Company is a for-profit proprietary company. Amounts are in Australian dollars.",
+          "The Company did not present financial statements for previous periods: these are its",
+          "first financial statements prepared in accordance with Australian Accounting Standards,",
+          "and the date of transition is 1 July 2025. No financial statements were prepared under",
+          "a previous financial reporting framework, so there are no reconciliations to present.",
+          "By a resolution of 14 August 2026 under section 323D(2A) of the Corporations Act 2001,",
+          "the sole director shortened the financial year that started on 1 July 2026 to end on",
+          "30 September 2026, to meet the shareholders agreement of 15 June 2026 and to align the",
+          "reporting year with the October renewal cycle of the Company's customer contracts; later",
+          "financial years end on 30 September. This financial report therefore covers the 3 months",
+          "from 1 July 2026 to 30 September 2026. The comparative figures cover the 12 months ended",
+          "30 June 2026 and have not been audited. They include the opening bank balances and the",
+          "loan from the director, which were entered in the accounting records on 16 July 2026",
+          "(journal #397). The amounts are therefore not entirely comparable.",
+          "Material accounting policies:",
+          "- Revenue is recognised as each contract's performance obligations are satisfied:",
+          "  monthly support fees in the month the support is provided; development work when it",
+          "  is complete and accepted under the contract; training when it is delivered; and",
+          "  on-site project management for each on-site day as it is provided.",
+          "- Office equipment, furniture and computer equipment costing AUD 1,000 or more",
+          "  (excluding GST) are capitalised and depreciated on a straight-line basis over 3 to",
+          "  10 years; items costing less are expensed when bought.",
+          "- Liabilities for wages, annual leave and superannuation are expected to be settled",
+          "  within 12 months and are measured at the amounts expected to be paid.",
+          "- Revenue and expenses are shown net of GST; receivables and payables include GST.",
+          "",
+          "2. Going concern",
+          "The Company incurred a loss of AUD 22,136.99 for the financial year ended 30 September",
+          "2026 and, at that date, its current liabilities exceeded its current assets by",
+          "AUD 30,048.99. The Company's bank overdraft facility of AUD 15,000 is repayable on",
+          "demand.",
+          "The Company depends on the continued financial support of its director and on the",
+          "continued availability of the overdraft facility. The director has undertaken, for",
+          "12 months from the date of the auditor's report, not to demand repayment of the loan of",
+          "AUD 19,212.21 or of further advances, and to provide further funds of up to AUD 40,000",
+          "if the Company needs them to meet its obligations. The director's cash flow forecast to",
+          "October 2027 shows funding gaps in November 2026 and January 2027, which the director",
+          "plans to fund under that undertaking.",
+          "These events and conditions indicate that there is a material uncertainty related to",
+          "events or conditions that may cast significant doubt on the Company's ability to",
+          "continue as a going concern and, therefore, that it may be unable to realise its assets",
+          "and discharge its liabilities in the normal course of business. The financial",
+          "statements have been prepared on a going concern basis and do not include any",
+          "adjustments that might be needed if the Company could not continue as a going concern."
+        ],
+        [
+          "3. Related parties",
+          "Director: Alex Morgan is the sole director and holds 85 of the 100 shares.",
+          "Loan from director: AUD 19,212.21 at 30 September 2026 (30 June 2026: AUD 19,212.21),",
+          "interest-free, unsecured and repayable on demand; it includes the AUD 1.00 paid for",
+          "the Company's 100 ordinary shares. The director lent a further AUD 2,500.00 in October",
+          "2026 (AUD 1,000.00 on 12 October and AUD 1,500.00 on 15 October) on the same terms.",
+          "Guarantee: the director has personally guaranteed the Company's bank overdraft.",
+          "Victoria Property Agency Pty Ltd, a company of which the director and the director's",
+          "spouse are the directors and each hold 50% of the shares, owned the Company's premises",
+          "until 30 September 2026. The Company paid it rent of AUD 4,500.00 (excluding GST) for",
+          "the period, at AUD 1,500.00 per month on a month-to-month arrangement without a written",
+          "lease, ended on 30 September 2026.",
+          "Morgan Advisory Pty Ltd, controlled by the director, had no transactions with the",
+          "Company. The director received no remuneration.",
+          "",
+          "4. Events after the reporting period",
+          "- From 1 October 2026 the Company leases its premises from the new owner, Harbourview",
+          "  Nominees Pty Ltd, for two years at AUD 12,886.32 per year plus GST, and from",
+          "  15 October 2026 it sublets room RM2031.",
+          "- In October 2026 the Company bought office furniture for AUD 6,300.00 to fit out the",
+          "  premises under the new lease, and a laptop for AUD 1,969.99 (both excluding GST).",
+          "- In October 2026 the director lent the Company a further AUD 2,500.00.",
+          "The financial statements were authorised for issue by the sole director, Alex Morgan,",
+          "on 23 October 2026.",
+          "",
+          "5. Auditor's remuneration",
+          "Fees of Tessellate Audit Partners for the audit of this financial report: AUD 4,800",
+          "(excluding GST) (year ended 30 June 2026: nil, as no financial report was prepared for",
+          "that year). The auditor provided no other services in either period.",
+          "",
+          "DIRECTOR'S DECLARATION",
+          "In the opinion of the sole director of Demo Company (AU) Pty Ltd:",
+          "(a) there are reasonable grounds to believe that the Company will be able to pay its",
+          "    debts as and when they become due and payable, having regard to note 2; and",
+          "(b) the financial statements and notes are in accordance with the Corporations Act 2001,",
+          "    including complying with Australian Accounting Standards - Simplified Disclosures",
+          "    and giving a true and fair view of the Company's financial position as at",
+          "    30 September 2026 and of its performance for the financial year ended on that date.",
+          "This declaration is made in accordance with a resolution of the director.",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "23 October 2026"
+        ]
+      ]
+    },
+    {
+      "path": "representation/representation_letter.pdf",
+      "type": "representation_letter",
+      "reliability": "internal_original",
+      "document_date": "2026-10-23",
+      "related_ids": [],
+      "registration": "manual",
+      "index": false,
+      "xero_refs": [],
+      "footer": "Demo Company (AU) Pty Ltd | Management representation letter",
+      "keywords": [
+        "for the financial year ended 30 September 2026",
+        "All misstatements communicated have been corrected; there are no uncorrected misstatements",
+        "Alex Morgan, Director",
+        "23 October 2026",
+        "Tessellate Audit Partners"
+      ],
+      "pages": [
+        [
+          "DEMO COMPANY (AU) PTY LTD",
+          "ACN 900 043 021   ABN 25 900 043 021",
+          "23 Main Street, Marineville NSW 2000",
+          "",
+          "23 October 2026",
+          "",
+          "Tessellate Audit Partners",
+          "Level 9, 1 Illustration Place, Sydney NSW 2000",
+          "",
+          "Dear Partners",
+          "",
+          "Management representation letter",
+          "",
+          "This representation letter is provided in connection with your audit of the financial",
+          "report of Demo Company (AU) Pty Ltd for the financial year ended 30 September 2026 for",
+          "the purpose of expressing an opinion as to whether the financial report gives a true and",
+          "fair view in accordance with Australian Accounting Standards - Simplified Disclosures",
+          "and the Corporations Act 2001.",
+          "",
+          "We confirm that (to the best of our knowledge and belief, having made such enquiries as",
+          "we considered necessary for the purpose of appropriately informing ourselves):",
+          "",
+          "Financial report",
+          "1. We have fulfilled our responsibilities, as set out in the terms of the audit",
+          "   engagement dated 28 August 2026, for the preparation of the financial report in",
+          "   accordance with Australian Accounting Standards - Simplified Disclosures and the",
+          "   Corporations Act 2001; in particular the financial report gives a true and fair view",
+          "   in accordance therewith.",
+          "",
+          "Information provided",
+          "2. We have provided you with:",
+          "   (a) access to all information of which we are aware that is relevant to the",
+          "       preparation of the financial report such as records, documentation and other",
+          "       matters;",
+          "   (b) additional information that you have requested from us for the purpose of the",
+          "       audit; and",
+          "   (c) unrestricted access to persons within the Company from whom you determined it",
+          "       necessary to obtain audit evidence.",
+          "3. All transactions have been recorded in the accounting records and are reflected in",
+          "   the financial report.",
+          "",
+          "Fraud",
+          "4. We acknowledge our responsibility for the design, implementation and maintenance of",
+          "   internal control to prevent and detect fraud.",
+          "5. We have disclosed to you the results of our assessment of the risk that the financial",
+          "   report may be materially misstated as a result of fraud.",
+          "6. We have disclosed to you all information in relation to fraud or suspected fraud that",
+          "   we are aware of and that affects the Company and involves:",
+          "   (a) management;",
+          "   (b) employees who have significant roles in internal control; or",
+          "   (c) others where the fraud could have a material effect on the financial report.",
+          "7. We have disclosed to you all information in relation to allegations of fraud, or",
+          "   suspected fraud, affecting the Company's financial report communicated by employees,",
+          "   former employees, analysts, regulators or others."
+        ],
+        [
+          "Laws and regulations",
+          "8. We have disclosed to you all known instances of non-compliance or suspected",
+          "   non-compliance with laws and regulations whose effects should be considered when",
+          "   preparing the financial report.",
+          "",
+          "Related parties",
+          "9. We have disclosed to you the identity of the Company's related parties and all the",
+          "   related party relationships and transactions of which we are aware.",
+          "10. Related party relationships and transactions have been appropriately accounted for",
+          "    and disclosed in accordance with the requirements of Australian Accounting",
+          "    Standards - Simplified Disclosures (note 3 to the financial report).",
+          "",
+          "Subsequent events",
+          "11. All events subsequent to the date of the financial report and for which Australian",
+          "    Accounting Standards - Simplified Disclosures require adjustment or disclosure have",
+          "    been adjusted or disclosed.",
+          "",
+          "Going concern",
+          "12. Our plans for future actions, as described in note 2 to the financial report and in",
+          "    the going concern memo and cash flow forecast dated 16 October 2026, including the",
+          "    director's financial support, are feasible, and we intend to carry them out.",
+          "",
+          "Misstatements",
+          "13. All misstatements communicated have been corrected; there are no uncorrected",
+          "    misstatements. The schedule of uncorrected misstatements attached to this letter is",
+          "    therefore empty.",
+          "",
+          "Schedule of uncorrected misstatements: none.",
+          "",
+          "Yours faithfully",
+          "",
+          "",
+          "______________________________",
+          "Alex Morgan, Director",
+          "23 October 2026"
+        ]
+      ]
+    }
+  ],
+  "contract_links": [
+    {
+      "invoice_no": "ORC1026",
+      "contract_id": "CON-X01"
+    },
+    {
+      "invoice_no": "ORC1003",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1008",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1016",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1020",
+      "contract_id": "CON-X02"
+    },
+    {
+      "invoice_no": "ORC1014",
+      "contract_id": "CON-X03"
+    }
+  ],
+  "delivery_notes": [
+    {
+      "id": "SR-ORC1000",
+      "delivery_no": "SR-ORC1000",
+      "invoice_no": "ORC1000",
+      "shipped_date": "2026-07-27",
+      "signed_date": "2026-07-31",
+      "signed_by": "Harriet Lowe"
+    },
+    {
+      "id": "SR-ORC1001",
+      "delivery_no": "SR-ORC1001",
+      "invoice_no": "ORC1001",
+      "shipped_date": "2026-07-20",
+      "signed_date": "2026-07-31",
+      "signed_by": "Priya Natarajan"
+    },
+    {
+      "id": "SR-ORC1002",
+      "delivery_no": "SR-ORC1002",
+      "invoice_no": "ORC1002",
+      "shipped_date": "2026-07-20",
+      "signed_date": "2026-07-24",
+      "signed_by": "Marco Bellini"
+    },
+    {
+      "id": "SR-ORC1004",
+      "delivery_no": "SR-ORC1004",
+      "invoice_no": "ORC1004",
+      "shipped_date": "2026-07-29",
+      "signed_date": "2026-07-29",
+      "signed_by": "Grace Holloway"
+    },
+    {
+      "id": "SR-ORC1006",
+      "delivery_no": "SR-ORC1006",
+      "invoice_no": "ORC1006",
+      "shipped_date": "2026-07-21",
+      "signed_date": "2026-07-23",
+      "signed_by": "Owen Fraser"
+    },
+    {
+      "id": "SR-ORC1007",
+      "delivery_no": "SR-ORC1007",
+      "invoice_no": "ORC1007",
+      "shipped_date": "2026-07-06",
+      "signed_date": "2026-07-31",
+      "signed_by": "Lena Sorensen"
+    },
+    {
+      "id": "SR-ORC1008",
+      "delivery_no": "SR-ORC1008",
+      "invoice_no": "ORC1008",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1009",
+      "delivery_no": "SR-ORC1009",
+      "invoice_no": "ORC1009",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1010",
+      "delivery_no": "SR-ORC1010",
+      "invoice_no": "ORC1010",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1011",
+      "delivery_no": "SR-ORC1011",
+      "invoice_no": "ORC1011",
+      "shipped_date": "2026-07-01",
+      "signed_date": "2026-07-31",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1012",
+      "delivery_no": "SR-ORC1012",
+      "invoice_no": "ORC1012",
+      "shipped_date": "2026-08-13",
+      "signed_date": "2026-08-14",
+      "signed_by": "Marco Bellini"
+    },
+    {
+      "id": "SR-ORC1013",
+      "delivery_no": "SR-ORC1013",
+      "invoice_no": "ORC1013",
+      "shipped_date": "2026-08-14",
+      "signed_date": "2026-08-20",
+      "signed_by": "Samir Haddad"
+    },
+    {
+      "id": "SR-ORC1014",
+      "delivery_no": "SR-ORC1014",
+      "invoice_no": "ORC1014",
+      "shipped_date": "2026-08-11",
+      "signed_date": "2026-08-26",
+      "signed_by": "Nora Fitzgerald"
+    },
+    {
+      "id": "SR-ORC1015",
+      "delivery_no": "SR-ORC1015",
+      "invoice_no": "ORC1015",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-04",
+      "signed_by": "Ben Archer"
+    },
+    {
+      "id": "SR-ORC1016",
+      "delivery_no": "SR-ORC1016",
+      "invoice_no": "ORC1016",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1017",
+      "delivery_no": "SR-ORC1017",
+      "invoice_no": "ORC1017",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1018",
+      "delivery_no": "SR-ORC1018",
+      "invoice_no": "ORC1018",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1019",
+      "delivery_no": "SR-ORC1019",
+      "invoice_no": "ORC1019",
+      "shipped_date": "2026-08-01",
+      "signed_date": "2026-08-31",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1020",
+      "delivery_no": "SR-ORC1020",
+      "invoice_no": "ORC1020",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Tom Reilly"
+    },
+    {
+      "id": "SR-ORC1021",
+      "delivery_no": "SR-ORC1021",
+      "invoice_no": "ORC1021",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Ava Chen"
+    },
+    {
+      "id": "SR-ORC1022",
+      "delivery_no": "SR-ORC1022",
+      "invoice_no": "ORC1022",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Daniel Kowalski"
+    },
+    {
+      "id": "SR-ORC1023",
+      "delivery_no": "SR-ORC1023",
+      "invoice_no": "ORC1023",
+      "shipped_date": "2026-09-01",
+      "signed_date": "2026-09-30",
+      "signed_by": "Isla Brennan"
+    },
+    {
+      "id": "SR-ORC1024",
+      "delivery_no": "SR-ORC1024",
+      "invoice_no": "ORC1024",
+      "shipped_date": "2026-08-19",
+      "signed_date": "2026-08-19",
+      "signed_by": "Ruth Carmody"
+    },
+    {
+      "id": "SR-ORC1026",
+      "delivery_no": "SR-ORC1026",
+      "invoice_no": "ORC1026",
+      "shipped_date": "2026-09-03",
+      "signed_date": "2026-09-17",
+      "signed_by": "Priya Natarajan"
+    }
+  ],
+  "bank_accounts": [
+    {
+      "id": "BA-090",
+      "bank_name": "Wattlebrook Bank Limited",
+      "bsb": "306234",
+      "account_no": "12345678",
+      "gl_account_code": "090"
+    },
+    {
+      "id": "BA-091",
+      "bank_name": "Wattlebrook Bank Limited",
+      "bsb": "306234",
+      "account_no": "12345679",
+      "gl_account_code": "091"
+    }
+  ],
+  "receipts": {
+    "12345678": {
+      "receipt_channel": "direct_email"
+    },
+    "12345679": {
+      "receipt_channel": "direct_email"
+    }
+  },
+  "payroll": [
+    {
+      "employee_id": "E001",
+      "name": "Oliver Gray",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 240000
+    },
+    {
+      "employee_id": "E002",
+      "name": "Tracy Green",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 180000
+    },
+    {
+      "employee_id": "E003",
+      "name": "Odette Garrison",
+      "start_date": "2026-07-20",
+      "employment_type": "full_time",
+      "pay_period_days": 14,
+      "gross_per_period_cents": 250000
+    }
+  ],
+  "adjustments": [
+    {
+      "id": "AJE-X01-1",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "711",
+      "debit_cents": 82500,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X01-2",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "710",
+      "debit_cents": 0,
+      "credit_cents": 75000,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X01-3",
+      "entry_no": "AJE-X01",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "820",
+      "debit_cents": 0,
+      "credit_cents": 7500,
+      "description": "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026",
+      "source_doc": "XJ-499",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X02-1",
+      "entry_no": "AJE-X02",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "478",
+      "debit_cents": 426120,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+      "source_doc": "826",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X02-2",
+      "entry_no": "AJE-X02",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "826",
+      "debit_cents": 0,
+      "credit_cents": 426120,
+      "description": "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+      "source_doc": "826",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X03-1",
+      "entry_no": "AJE-X03",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "477",
+      "debit_cents": 201000,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026",
+      "source_doc": "804",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X03-2",
+      "entry_no": "AJE-X03",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "804",
+      "debit_cents": 0,
+      "credit_cents": 201000,
+      "description": "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026",
+      "source_doc": "804",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X04-1",
+      "entry_no": "AJE-X04",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "477",
+      "debit_cents": 268736,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026",
+      "source_doc": "805",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X04-2",
+      "entry_no": "AJE-X04",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-21T23:30:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "805",
+      "debit_cents": 0,
+      "credit_cents": 268736,
+      "description": "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026",
+      "source_doc": "805",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X05-1",
+      "entry_no": "AJE-X05",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "620",
+      "debit_cents": 4853,
+      "credit_cents": 0,
+      "description": "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",
+      "source_doc": "BA-091",
+      "is_adjustment": true
+    },
+    {
+      "id": "AJE-X05-2",
+      "entry_no": "AJE-X05",
+      "posting_date": "2026-09-30",
+      "created_at": "2026-10-20T03:00:00Z",
+      "created_by": "xero",
+      "approved_by": null,
+      "account_code": "270",
+      "debit_cents": 0,
+      "credit_cents": 4853,
+      "description": "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, as confirmed by the bank",
+      "source_doc": "BA-091",
+      "is_adjustment": true
+    }
+  ],
+  "financial_statements": {
+    "id": "FS",
+    "version": 1,
+    "prepared_at": "2026-10-22",
+    "directors_declaration_date": "2026-10-23",
+    "comparative_restatement_entry_nos": [
+      "XJ-397"
+    ],
+    "lines": [
+      {
+        "code": "SOFP-CASH",
+        "statement": "financial_position",
+        "name": "Cash and cash equivalents",
+        "amount_cents": 1158123,
+        "sign": 1,
+        "account_codes": [
+          "091"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1508123
+      },
+      {
+        "code": "SOFP-REC",
+        "statement": "financial_position",
+        "name": "Trade receivables",
+        "amount_cents": 1019950,
+        "sign": 1,
+        "account_codes": [
+          "610"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-OREC",
+        "statement": "financial_position",
+        "name": "Other receivables (accrued interest)",
+        "amount_cents": 4853,
+        "sign": 1,
+        "account_codes": [
+          "620"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-PPE",
+        "statement": "financial_position",
+        "name": "Office equipment",
+        "amount_cents": 0,
+        "sign": 1,
+        "account_codes": [
+          "710",
+          "711"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-TA",
+        "statement": "financial_position",
+        "name": "Total assets",
+        "amount_cents": 2182926,
+        "sign": 1,
+        "account_codes": [
+          "091",
+          "610",
+          "620",
+          "710",
+          "711"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": 1508123
+      },
+      {
+        "code": "SOFP-OD",
+        "statement": "financial_position",
+        "name": "Bank overdraft",
+        "amount_cents": 1090044,
+        "sign": -1,
+        "account_codes": [
+          "090"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 457222
+      },
+      {
+        "code": "SOFP-PAY",
+        "statement": "financial_position",
+        "name": "Trade and other payables",
+        "amount_cents": 400507,
+        "sign": -1,
+        "account_codes": [
+          "800",
+          "801",
+          "860"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-TAX",
+        "statement": "financial_position",
+        "name": "GST and PAYG withholding",
+        "amount_cents": 880197,
+        "sign": -1,
+        "account_codes": [
+          "820",
+          "825"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -79120
+      },
+      {
+        "code": "SOFP-EMP",
+        "statement": "financial_position",
+        "name": "Employee benefit liabilities",
+        "amount_cents": 895856,
+        "sign": -1,
+        "account_codes": [
+          "804",
+          "805",
+          "826"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "SOFP-DLOAN",
+        "statement": "financial_position",
+        "name": "Loan from director",
+        "amount_cents": 1921221,
+        "sign": -1,
+        "account_codes": [
+          "840"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1921221
+      },
+      {
+        "code": "SOFP-TL",
+        "statement": "financial_position",
+        "name": "Total liabilities",
+        "amount_cents": 5187825,
+        "sign": -1,
+        "account_codes": [
+          "090",
+          "800",
+          "801",
+          "860",
+          "820",
+          "825",
+          "804",
+          "805",
+          "826",
+          "840"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": 2299323
+      },
+      {
+        "code": "SOFP-EQ",
+        "statement": "financial_position",
+        "name": "Accumulated losses",
+        "amount_cents": -3004899,
+        "sign": -1,
+        "account_codes": [
+          "960",
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "PL-REV",
+        "statement": "profit_or_loss",
+        "name": "Revenue",
+        "amount_cents": 3243100,
+        "sign": -1,
+        "account_codes": [
+          "200"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 420000
+      },
+      {
+        "code": "PL-OI",
+        "statement": "profit_or_loss",
+        "name": "Interest income",
+        "amount_cents": 4853,
+        "sign": -1,
+        "account_codes": [
+          "270"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-EMP",
+        "statement": "profit_or_loss",
+        "name": "Employee benefits expense",
+        "amount_cents": 4245856,
+        "sign": 1,
+        "account_codes": [
+          "477",
+          "478"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-OCC",
+        "statement": "profit_or_loss",
+        "name": "Occupancy expenses",
+        "amount_cents": 635600,
+        "sign": 1,
+        "account_codes": [
+          "408",
+          "445",
+          "469"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "PL-OTH",
+        "statement": "profit_or_loss",
+        "name": "Other expenses",
+        "amount_cents": 580196,
+        "sign": 1,
+        "account_codes": [
+          "400",
+          "404",
+          "412",
+          "420",
+          "429",
+          "449",
+          "453",
+          "461",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1211200
+      },
+      {
+        "code": "PL-NP",
+        "statement": "profit_or_loss",
+        "name": "Loss for the period",
+        "amount_cents": -2213699,
+        "sign": -1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "CE-OPEN",
+        "statement": "changes_in_equity",
+        "name": "Balance at the beginning of the period",
+        "amount_cents": -791200,
+        "sign": -1,
+        "account_codes": [
+          "960",
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CE-NP",
+        "statement": "changes_in_equity",
+        "name": "Loss for the period",
+        "amount_cents": -2213699,
+        "sign": -1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "CE-OCI",
+        "statement": "changes_in_equity",
+        "name": "Other comprehensive income",
+        "amount_cents": 0,
+        "sign": -1,
+        "account_codes": [],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CE-TCI",
+        "statement": "changes_in_equity",
+        "name": "Total comprehensive loss for the period",
+        "amount_cents": -2213699,
+        "sign": -1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "CE-CLOSE",
+        "statement": "changes_in_equity",
+        "name": "Balance at the end of the period",
+        "amount_cents": -3004899,
+        "sign": -1,
+        "account_codes": [
+          "960",
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "CF-NP",
+        "statement": "cash_flows",
+        "name": "Loss for the period",
+        "amount_cents": -2213699,
+        "sign": 1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -791200
+      },
+      {
+        "code": "CF-REC",
+        "statement": "cash_flows",
+        "name": "Increase in trade receivables",
+        "amount_cents": -1019950,
+        "sign": 1,
+        "account_codes": [
+          "610"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-OREC",
+        "statement": "cash_flows",
+        "name": "Increase in other receivables",
+        "amount_cents": -4853,
+        "sign": 1,
+        "account_codes": [
+          "620"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-PAY",
+        "statement": "cash_flows",
+        "name": "Increase in trade and other payables",
+        "amount_cents": 400507,
+        "sign": 1,
+        "account_codes": [
+          "800",
+          "801",
+          "860"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-TAX",
+        "statement": "cash_flows",
+        "name": "Change in GST and PAYG withholding",
+        "amount_cents": 959317,
+        "sign": 1,
+        "account_codes": [
+          "820",
+          "825"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": -79120
+      },
+      {
+        "code": "CF-EMP",
+        "statement": "cash_flows",
+        "name": "Increase in employee benefit liabilities",
+        "amount_cents": 895856,
+        "sign": 1,
+        "account_codes": [
+          "804",
+          "805",
+          "826"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-OP",
+        "statement": "cash_flows",
+        "name": "Net cash used in operating activities",
+        "amount_cents": -982822,
+        "sign": 1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493",
+          "610",
+          "620",
+          "800",
+          "801",
+          "860",
+          "820",
+          "825",
+          "804",
+          "805",
+          "826"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -870320
+      },
+      {
+        "code": "CF-INV",
+        "statement": "cash_flows",
+        "name": "Net cash from investing activities",
+        "amount_cents": 0,
+        "sign": 1,
+        "account_codes": [
+          "710",
+          "711"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-FIN",
+        "statement": "cash_flows",
+        "name": "Net cash from financing activities",
+        "amount_cents": 0,
+        "sign": 1,
+        "account_codes": [
+          "840"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 0
+      },
+      {
+        "code": "CF-NET",
+        "statement": "cash_flows",
+        "name": "Net decrease in cash and cash equivalents",
+        "amount_cents": -982822,
+        "sign": 1,
+        "account_codes": [
+          "200",
+          "270",
+          "400",
+          "404",
+          "408",
+          "412",
+          "420",
+          "429",
+          "445",
+          "449",
+          "453",
+          "461",
+          "469",
+          "477",
+          "478",
+          "489",
+          "493",
+          "610",
+          "620",
+          "800",
+          "801",
+          "860",
+          "820",
+          "825",
+          "804",
+          "805",
+          "826",
+          "710",
+          "711",
+          "840"
+        ],
+        "subtotal": true,
+        "prior_amount_cents": -870320
+      },
+      {
+        "code": "CF-OPEN",
+        "statement": "cash_flows",
+        "name": "Cash and cash equivalents at 1 July",
+        "amount_cents": 1050901,
+        "sign": 1,
+        "account_codes": [
+          "090",
+          "091"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1921221
+      },
+      {
+        "code": "CF-CLOSE",
+        "statement": "cash_flows",
+        "name": "Cash and cash equivalents at end of period",
+        "amount_cents": 68079,
+        "sign": 1,
+        "account_codes": [
+          "090",
+          "091"
+        ],
+        "subtotal": false,
+        "prior_amount_cents": 1050901
+      }
+    ]
+  },
+  "manual": {
+    "fin08_round1.json": {
+      "procedure_id": "FIN-08",
+      "round": 1,
+      "communicated_at": "2026-10-19T04:00:00Z",
+      "recipient": "Alex Morgan, Director",
+      "form": "written",
+      "misstatement_sources": [
+        "J-GEN-02-1-XJ-499",
+        "J-CSH-02-1-BA-091"
+      ],
+      "responded_at": "2026-10-19T22:00:00Z",
+      "response": "We agree with both items. Journal AJE-X01 dated 30 September 2026 removes journal #499, as no office equipment was held at that date. Journal AJE-X05 dated 30 September 2026 accrues interest of AUD 48.53 on the Business Savings Account, as confirmed by the bank.",
+      "adjustment_entry_nos": [
+        "AJE-X01",
+        "AJE-X05"
+      ]
+    },
+    "fin08_round2.json": {
+      "procedure_id": "FIN-08",
+      "round": 2,
+      "communicated_at": "2026-10-21T04:00:00Z",
+      "recipient": "Alex Morgan, Director",
+      "form": "written",
+      "misstatement_sources": [
+        "J-FIN-15-1-826",
+        "J-FIN-15-1-804",
+        "J-FIN-15-1-805"
+      ],
+      "responded_at": "2026-10-21T22:00:00Z",
+      "response": "We agree with all three items. Journals AJE-X02 to AJE-X04 dated 30 September 2026 record superannuation guarantee of AUD 4,261.20, wages accrued for 28-30 September of AUD 2,010.00 and annual leave of AUD 2,687.36.",
+      "adjustment_entry_nos": [
+        "AJE-X02",
+        "AJE-X03",
+        "AJE-X04"
+      ]
+    },
+    "representation.json": {
+      "procedure_id": "FIN-07",
+      "status": "obtained",
+      "dated_at": "2026-10-23",
+      "signed_by": [
+        "Alex Morgan"
+      ],
+      "period_end": "2026-09-30",
+      "document": "representation/representation_letter.pdf",
+      "standards": [
+        "ASA580-P10",
+        "ASA580-P11",
+        "ASA560-P09",
+        "ASA570-P16",
+        "ASA550-P26",
+        "ASA240-P40",
+        "ASA250-P17"
+      ],
+      "uncorrected_schedule": []
+    },
+    "rpt07_reply.json": {
+      "procedure_id": "RPT-07",
+      "communicated_on": "2026-10-22",
+      "form": "written",
+      "recipients": [
+        "Alex Morgan"
+      ],
+      "matters": [
+        "SIG_PRACTICES",
+        "DIFFICULTIES",
+        "REPORT_FORM",
+        "INDEPENDENCE"
+      ],
+      "corrected_misstatements": 5,
+      "uncorrected_misstatements": 0,
+      "responded_on": "2026-10-22",
+      "response": "Thank you for your letter of 22 October 2026. We have read the matters you communicated: the significant qualitative aspects of our accounting practices, the significant difficulties encountered during the audit, the expected form and content of your auditor's report, including the material uncertainty related to going concern, and your statement of independence. We confirm that the five misstatements you communicated have been corrected and that we have no further matters to raise."
+    }
+  },
+  "notes": "Synthetic – for demonstration only. Supplements for the Xero Demo Company (AU) snapshot 20261017-q1; the snapshot itself is never modified. Bank names NAB, National Australia Bank, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data: both bank accounts are held with Wattlebrook Bank Limited (fictitious). People are pseudonyms; the Xero login contact is never copied: only the check script reads it, in memory, to confirm it appears in no file."
+}

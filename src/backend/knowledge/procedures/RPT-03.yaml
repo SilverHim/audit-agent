@@ -3,6 +3,7 @@ name: 报告文本生成
 phase: P4_Reporting
 cycle: Reporting
 owner: A10
+outputs: [report_versions, review_tasks]
 engine: llm
 autonomy_level: L2
 params:

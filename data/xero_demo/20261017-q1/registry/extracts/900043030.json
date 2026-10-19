@@ -1,0 +1,43 @@
+{
+  "acn": "900043030",
+  "name": "Victoria Property Agency Pty Ltd",
+  "type": "APTY",
+  "class": "LMSH",
+  "subclass": "PROP",
+  "status": "Registered",
+  "registered_date": "2014-03-03",
+  "officeholders": [
+    {
+      "name": "Dana Morgan",
+      "birth_date": "1981-11-03",
+      "role": "director",
+      "appointed": "2014-03-03"
+    },
+    {
+      "name": "Alex Morgan",
+      "birth_date": "1979-04-12",
+      "role": "director",
+      "appointed": "2014-03-03"
+    }
+  ],
+  "shareholders": [
+    {
+      "name": "Dana Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 50,
+      "pct": 0.5
+    },
+    {
+      "name": "Alex Morgan",
+      "kind": "person",
+      "acn": null,
+      "share_class": "ORD",
+      "shares": 50,
+      "pct": 0.5
+    }
+  ],
+  "paid_up_cents": null,
+  "file_name": "900043030.pdf"
+}

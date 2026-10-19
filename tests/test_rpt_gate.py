@@ -27,7 +27,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.views import ReportMaterial
-from backend.orchestration.decisions import rpt01_effects
+from backend.orchestration.gates import rpt01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import NOW, NUMBAT_PROFILE, EngagementWrite, FakeTrail, make_procedure, wait_idle

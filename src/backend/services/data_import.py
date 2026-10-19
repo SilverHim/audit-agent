@@ -1,7 +1,9 @@
-"""账表导入的解析 (需求 R13): 读 CSV, XLSX, XLS, 建议表种类与列对应, 按对应把各行转成财务表的行模型.
+"""账表导入的解析 (需求 R13): 读 CSV, XLSX, XLS, 建议表种类与列对应, 各账表的导入字段与单元格的类型转换.
+按列对应或规整方案把各行转成财务表的行模型在 services/table_plan.
 
 只做解析与类型转换, 不做业务校验 (借贷平衡, 与试算表一致等由 A3 体检负责). 规则:
-- 表头取第一个非空行, 之后的非空行为数据行; 行号是文件中的实际行号 (表头所在行起算, 第 1 行为 1).
+- 原样读行 (raw_rows) 保留标题行与空行; 表头缺省取第一个非空行 (规整方案可指定表头行), 之后的非空行为数据行;
+  行号是文件中的实际行号 (第 1 行为 1).
 - 金额一律存整数分: 源列的原始表头以 cents 结尾 (忽略大小写与符号) 时按整数分读, 否则按元读, 可带 $, AUD,
   千分位, 括号负数, 末尾负号, 四舍五入到分; 超出 BIGINT 算失败. Excel 的数值单元格同样按此处理.
 - 日期: Excel 日期单元格直接取; 文本年在前的总按年月日, 三段数字按 date_format, 也认 "1 Jul 2025" 这类月份名;
@@ -21,14 +23,13 @@ from pathlib import PurePath
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from backend.contracts.data import (
     ApprovalLogRow,
     DateFormat,
     FieldType,
     ImportPreview,
-    ParseFailure,
     TableField,
     TableKind,
     TableSchema,
@@ -199,6 +200,7 @@ class Sheet:
     """一个工作表: 表头与数据行 (行号, 各列的值, 与表头对齐; 短行补空)."""
 
     name: str  # 工作表名
+    header_row: int  # 表头所在行号; 工作表全空时为 0
     columns: list[str]  # 各列的显示名, 全表唯一 (同名的依次加 " (2)", " (3)" 等, 避开已有的列名)
     headers: list[str]  # 各列的原始表头文本 (空表头为空串), 金额按分还是按元读看它, 不看显示名
     rows: list[tuple[int, list[Cell]]]  # (文件中的行号, 各列的值)
@@ -206,6 +208,16 @@ class Sheet:
 
 class UnreadableFile(ValueError):
     """文件格式不支持或读不了, 接口报 INVALID_VALUE."""
+
+
+class MappingError(ValueError):
+    """列对应或规整方案与工作表对不上 (表头行, 字段, 列, 必须字段); code 为接口错误码 (INVALID_VALUE 或
+    MISSING_FIELD)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def extension(file_name: str) -> str:
@@ -230,38 +242,57 @@ def sheet_names(file_name: str, data: bytes) -> list[str]:
         workbook.close()
 
 
-def read_sheet(file_name: str, data: bytes, sheet: str | None = None) -> Sheet:
-    """读一个工作表, sheet 为空取第一个; 工作表不存在或文件读不了抛 UnreadableFile."""
+RawRows = list[tuple[int, list[Cell]]]  # 原样读出的行: (文件中的行号, 各单元格的值), 含标题行与空行
+
+
+def raw_rows(file_name: str, data: bytes, sheet: str | None = None) -> tuple[str, RawRows]:
+    """原样读一个工作表的全部行, 返回 (工作表名, 行); sheet 为空取第一个. 工作表不存在或文件读不了抛 UnreadableFile."""
     names = sheet_names(file_name, data)
     name = sheet if sheet is not None else names[0]
     if name not in names:
         raise UnreadableFile(f"没有工作表 {name}")
     ext = extension(file_name)
     if ext == ".csv":
-        raw = list(_csv_rows(data))
-    elif ext == ".xls":
-        raw = list(_xls_rows(data, name))
-    else:
-        raw = list(_xlsx_rows(data, name))
-    return _sheet(name, raw)
+        return name, list(_csv_rows(data))
+    if ext == ".xls":
+        return name, list(_xls_rows(data, name))
+    return name, list(_xlsx_rows(data, name))
 
 
-def _sheet(name: str, raw: Iterable[tuple[int, Sequence[Cell]]]) -> Sheet:
-    """原始行 → 表头与数据行: 跳过全空行, 第一个非空行为表头; 表头末尾的空单元格不算列."""
+def read_sheet(file_name: str, data: bytes, sheet: str | None = None) -> Sheet:
+    """读一个工作表, 表头取第一个非空行; sheet 为空取第一个. 工作表不存在或文件读不了抛 UnreadableFile."""
+    return sheet_from_rows(*raw_rows(file_name, data, sheet))
+
+
+def sheet_from_rows(name: str, raw: Iterable[tuple[int, Sequence[Cell]]], header_row: int | None = None) -> Sheet:
+    """原样的行 → 表头与数据行: 表头取行号为 header_row 的行, 为空时取第一个非空行; 表头之前的行不读, 之后跳过全空行;
+    表头末尾的空单元格不算列. 指定的表头行不在工作表里或是空行时抛 MappingError (INVALID_VALUE)."""
     headers: list[str] | None = None
+    found = 0
     rows: list[tuple[int, list[Cell]]] = []
+    last = 0
     for number, cells in raw:
-        if all(_blank(c) for c in cells):
-            continue
+        last = number
         if headers is None:
+            if header_row is not None and number != header_row:
+                continue
+            if all(is_blank(c) for c in cells):
+                if header_row is not None:
+                    raise MappingError("INVALID_VALUE", f"表头行 {header_row} 是空行")
+                continue
             headers = [cell_text(c) for c in cells]
             while headers and not headers[-1]:
                 headers.pop()
+            found = number
+            continue
+        if all(is_blank(c) for c in cells):
             continue
         values = list(cells[: len(headers)])
         rows.append((number, values + [None] * (len(headers) - len(values))))
+    if header_row is not None and headers is None:
+        raise MappingError("INVALID_VALUE", f"表头行 {header_row} 超出工作表 (共 {last} 行)")
     headers = headers or []
-    return Sheet(name=name, columns=unique_columns(headers), headers=headers, rows=rows)
+    return Sheet(name=name, header_row=found, columns=unique_columns(headers), headers=headers, rows=rows)
 
 
 def unique_columns(headers: Sequence[str]) -> list[str]:
@@ -280,7 +311,8 @@ def unique_columns(headers: Sequence[str]) -> list[str]:
     return columns
 
 
-def _blank(cell: Cell) -> bool:
+def is_blank(cell: Cell) -> bool:
+    """空单元格: 没有值或只有空白."""
     return cell is None or (isinstance(cell, str) and not cell.strip())
 
 
@@ -430,6 +462,91 @@ def preview(import_id: str, file_name: str, sheets: list[str], sheet: Sheet) -> 
         suggested_mapping=mapping,
         suggested_date_format=suggest_date_format(values),
     )
+
+
+# ── 发给大模型的表格样本的遮蔽 (需求 R276) ──
+
+# 人名一类的列 (取值要遮蔽), 表头先规整 (小写, 只留字母与数字, 即去掉 *, 空格与标点; 末尾的序号不计). 宁可多遮:
+# Xero 日记账报表的 Posted By 是导出账号本人的姓名 (计划决定 12), 联系人导出的 *ContactName, FirstName, LastName,
+# PersonNFirstName, POAttentionTo, SkypeName 等是联系人的姓名或账号.
+# 两种认法: 恰为人名表头的单元格 (PERSONAL_HEADERS 之一, 或 "某某人" 列: 过去分词加 by, 如 postedby, createdby,
+# approvedby, signedby, reviewedby, 另有 paidby, madeby) 不论在哪一行都认 (年份或日期作列名, 只有一列, 首格为空的
+# 表头也认得); 只是含人名片段的 (PERSONAL_PARTS 之一, 或以 by 结尾) 要所在行像表头 (header_like), 免得数据行里的
+# 科目名 Telephone & Internet 把整列遮掉
+PERSONAL_HEADERS = frozenset(
+    {
+        "user",
+        "username",
+        "userid",
+        "email",
+        "emailaddress",
+        "contactname",
+        "contactperson",
+        "firstname",
+        "lastname",
+        "fullname",
+        "phone",
+        "mobile",
+        "attentionto",
+        "skypename",
+    }
+)
+BY_HEADER = re.compile(r"[a-z]*edby|paidby|madeby")  # "某某人" 列的完整写法
+PERSONAL_PARTS = (
+    "contactname",
+    "firstname",
+    "lastname",
+    "fullname",
+    "person",
+    "user",
+    "email",
+    "phone",
+    "mobile",
+    "attentionto",
+    "skype",
+)
+MASK = "[masked]"  # 遮蔽后的取值
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")  # 邮箱地址, 任何列里都遮蔽
+# 数值或 ISO 日期的单元格文本 (金额, 代码, 序号; Excel 日期单元格经 cell_text 写成 ISO 日期): 有这种单元格的行不像表头.
+# 文字写的日期 (如 30/06/2026) 不算, 只有文字的数据行因此会被当作表头, 方向是多遮
+VALUE_TEXT = re.compile(r"^\(?[-+]?\$?[\d,]*\.?\d+\)?%?$|^\d{4}-\d{2}-\d{2}")
+
+
+def header_key(header: str) -> str:
+    """表头规整: 小写, 只留字母与数字, 去掉末尾的序号."""
+    return normalize(header).rstrip("0123456789")
+
+
+def personal_header(header: str) -> bool:
+    """单元格是否恰为人名表头 (见 PERSONAL_HEADERS, BY_HEADER): 不论所在行的样子都认."""
+    key = header_key(header)
+    return key in PERSONAL_HEADERS or BY_HEADER.fullmatch(key) is not None
+
+
+def personal_column(header: str) -> bool:
+    """表头是否人名一类的列: 恰为人名表头, 或含人名片段 (PERSONAL_PARTS), 或以 by 结尾."""
+    key = header_key(header)
+    return bool(key) and (personal_header(header) or any(part in key for part in PERSONAL_PARTS) or key.endswith("by"))
+
+
+def header_like(texts: Sequence[str]) -> bool:
+    """一行是否像表头: 至少两个非空单元格, 且没有数值或 ISO 日期 (见 VALUE_TEXT). 只用来认含人名片段的表头."""
+    filled = [t for t in texts if t]
+    return len(filled) >= 2 and not any(VALUE_TEXT.match(t) for t in filled)
+
+
+def mask_sample(rows: Iterable[Sequence[str]]) -> list[list[str]]:
+    """表格样本的遮蔽, 发给大模型的表格文字 (DOC-SHEET 的样本行, DOC-CLASSIFY 的首页文字) 都先经它: rows 为依次各行的
+    单元格文本 (含标题行; 表头用原始文本, 不用加了 " (2)" 的显示名). 一行里有人名表头 (恰为人名表头的不论行的样子,
+    含人名片段的要行像表头, 见 PERSONAL_HEADERS 处的说明) 时, 之后各行该列的非空取值遮蔽为 MASK (表头本身照留, 大模型
+    据此知道有这一列); 任何单元格里的邮箱地址遮蔽为 MASK. 行与单元格的个数不变."""
+    personal: set[int] = set()
+    masked = []
+    for texts in rows:
+        masked.append([MASK if i in personal and t else EMAIL.sub(MASK, t) for i, t in enumerate(texts)])
+        like = header_like(texts)
+        personal |= {i for i, t in enumerate(texts) if personal_header(t) or (like and personal_column(t))}
+    return masked
 
 
 # ── 单元格转换 ──
@@ -693,102 +810,17 @@ SPECIAL: dict[tuple[TableKind, str], Callable[[Cell], str | None]] = {
 }
 
 
-# ── 整表转换 ──
+# ── 整表转换 (按列对应或规整方案套用, 见 services/table_plan) ──
 
 
-def check_mapping(kind: TableKind, columns: Sequence[str], mapping: Mapping[str, str | None]) -> None:
-    """对应是否可用: 字段都属于该表, 列都在表头里, 必须字段与 ONE_OF 组都对应了. 不过抛 MappingError."""
-    names = {f.name for f in SCHEMAS[kind].fields}
-    unknown = sorted(set(mapping) - names)
-    if unknown:
-        raise MappingError("INVALID_VALUE", f"{kind} 没有字段 {', '.join(unknown)}")
-    missing_columns = sorted({c for c in mapping.values() if c is not None and c not in columns})
-    if missing_columns:
-        raise MappingError("INVALID_VALUE", f"工作表没有列 {', '.join(missing_columns)}")
-    required = [f.name for f in SCHEMAS[kind].fields if f.required and mapping.get(f.name) is None]
-    if required:
-        raise MappingError("MISSING_FIELD", f"必须对应的字段没有对应: {', '.join(required)}")
-    group = ONE_OF.get(kind)
-    if group and all(mapping.get(name) is None for name in group):
-        raise MappingError("MISSING_FIELD", f"至少要对应其中一个字段: {', '.join(group)}")
-
-
-class MappingError(ValueError):
-    """列对应不可用; code 为接口错误码 (INVALID_VALUE 或 MISSING_FIELD)."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-def convert(
-    kind: TableKind, sheet: Sheet, mapping: Mapping[str, str | None], date_format: DateFormat
-) -> tuple[list[BaseModel], list[ParseFailure]]:
-    """按对应把各行转成行模型, 返回 (行, 失败处); 有失败时行不可用. 先查 check_mapping.
-
-    失败处按行号顺序, 一行多处都记; 调用方取前 MAX_FAILURES 处. 编号列未对应时按 GENERATED_IDS 生成.
-    同一文件里唯一键重复也算失败 (写不进表), 记在第二次出现的行上.
-    """
-    check_mapping(kind, sheet.columns, mapping)
-    fields = {f.name: f for f in SCHEMAS[kind].fields}
-    index = {name: sheet.columns.index(column) for name, column in mapping.items() if column is not None}
-    model = ROW_MODELS[kind]
-    rows: list[BaseModel] = []
-    failures: list[ParseFailure] = []
-    seen: dict[tuple[Any, ...], int] = {}
-    generate = GENERATED_IDS.get(kind)
-    counters: dict[str, int] = {}
-    for number, cells in sheet.rows:
-        values: dict[str, Any] = {}
-        bad = False
-        for name, position in index.items():
-            cell = cells[position]
-            try:
-                values[name] = _convert_cell(kind, fields[name], cell, sheet.headers[position], date_format)
-            except CellError:
-                failures.append(ParseFailure(row=number, column=mapping[name] or name, value=cell_text(cell)))
-                bad = True
-        if bad:
-            continue
-        if kind is not TableKind.approval_log:  # 没对应的可选字段为空 (行模型里可空而没有缺省值的也得给)
-            for name in fields:
-                values.setdefault(name, None)
-        if kind is TableKind.journal_entries:
-            values["debit_cents"] = values.get("debit_cents") or 0
-            values["credit_cents"] = values.get("credit_cents") or 0
-            values["is_adjustment"] = bool(values.get("is_adjustment"))
-        if generate is not None and not values.get("id"):
-            values["id"] = generate(values, counters)
-        if kind is TableKind.approval_log:
-            values = {k: v for k, v in values.items() if k == "entry_no" or k in index}
-        try:
-            row = model.model_validate(values)
-        except ValidationError as exc:
-            for error in exc.errors():
-                name = str(error["loc"][0]) if error["loc"] else ""
-                column = mapping.get(name) or name
-                where = index.get(name)
-                value = cell_text(cells[where]) if where is not None else ""
-                failures.append(ParseFailure(row=number, column=column, value=value))
-            continue
-        key = tuple(getattr(row, k) for k in KEYS[kind])
-        if key in seen:
-            name = KEYS[kind][-1]
-            failures.append(ParseFailure(row=number, column=mapping.get(name) or name, value="/".join(map(str, key))))
-            continue
-        seen[key] = number
-        rows.append(row)
-    return rows, failures
-
-
-def _convert_cell(kind: TableKind, field: TableField, cell: Cell, header: str, date_format: DateFormat) -> Any:
-    """一个单元格按字段类型转换; header 为该列的原始表头, 金额列以 cents 结尾时按整数分读."""
+def convert_cell(kind: TableKind, field: TableField, cell: Cell, cents: bool, date_format: DateFormat) -> Any:
+    """一个单元格按字段类型转换: 金额在 cents 为真时按整数分读, 否则按元; 科目类别与试算表期间按 SPECIAL 的写法.
+    转换不了抛 CellError."""
     special = SPECIAL.get((kind, field.name))
     if special is not None:
         return special(cell)
     if field.type == "amount":
-        return parse_amount(cell, cents=normalize(header).endswith("cents"))
+        return parse_amount(cell, cents=cents)
     if field.type == "date":
         return parse_date(cell, date_format)
     if field.type == "datetime":

@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
@@ -15,12 +16,13 @@ from zoneinfo import ZoneInfo
 
 import pdfplumber
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from backend.adapters.xero_dataset import Snapshot, build_tables
+from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
+from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
 from backend.contracts.data import ContractVersion
 from backend.contracts.errors import VersionConflict
@@ -45,7 +47,17 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.ports import DatasetLoader
-from backend.contracts.records import BankAccount, BankTransaction, DeliveryNote, SalesInvoice, TrialBalanceRow
+from backend.contracts.records import (
+    Account,
+    AdjustmentEntrySummary,
+    BankAccount,
+    BankTransaction,
+    DatasetTraits,
+    DeliveryNote,
+    JournalEntry,
+    SalesInvoice,
+    TrialBalanceRow,
+)
 from backend.core.config import get_settings
 from backend.persistence import models as m
 from backend.persistence.db import default_engine, transaction, writable
@@ -150,6 +162,32 @@ class PostgresFinancialDataStore(Store):
         )
         rows = await self.rows(eid, stmt)
         return {k: v for k, v in rows[0].items() if k != "engagement_id"} if rows else None
+
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        if entry_nos is None and source_docs is None:
+            raise ValueError("journal_entries 须给 entry_nos 或 source_docs, 不取全表")
+        t = m.FINANCIAL["journal_entries"]
+        conditions = []
+        if entry_nos is not None:
+            conditions.append(t.c.entry_no.in_(list(entry_nos)))
+        if source_docs is not None:
+            conditions.append(t.c.source_doc.in_(list(source_docs)))
+        return [
+            JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, select(t).where(or_(*conditions)).order_by(t.c.id))
+        ]
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        t = m.FINANCIAL["accounts"]
+        stmt = select(t).order_by(t.c.code)
+        if codes is not None:
+            stmt = stmt.where(t.c.code.in_(list(codes)))
+        return [
+            Account.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, stmt)
+        ]
 
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]:
         t = m.FINANCIAL["sales_invoices"]
@@ -391,7 +429,9 @@ class FileEvidenceStore(Store):
                 temporary.unlink()
             if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError("Evidence hash mismatch")
-            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **doc.model_dump()))
+            # documents 表还没有文件日期与关联对象两列 (存取另做), 这两个字段先不写, 读回为缺省值
+            row = doc.model_dump(exclude={"document_date", "related_ids"})
+            await conn.execute(insert(m.documents).values(engagement_id=eid, file_path=str(path), **row))
             return doc
 
     async def path(self, eid: str, document_id: str) -> Path:
@@ -508,6 +548,88 @@ class TableLoader(Store):
                 )
             )
 
+    async def insert_adjustments(
+        self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None
+    ) -> list[JournalEntry]:
+        """更正分录载入的公共部分 (DatasetLoader.load_adjustments): 读 path, 取所请求的凭证, 在一个事务内写入
+        journal_entries (同 id 同内容的跳过), 有新行时 data_version 加一; 试算表不动. 拒绝的情况见协议说明, 都不写入."""
+        if isinstance(entry_nos, str):
+            raise TypeError("entry_nos 须为凭证号列表, 不能是单个字符串")
+        lines = read_adjustments(path)
+        wanted = (
+            list(dict.fromkeys(entry_nos)) if entry_nos is not None else list(dict.fromkeys(x.entry_no for x in lines))
+        )
+        missing = [no for no in wanted if no not in {x.entry_no for x in lines}]
+        if missing:
+            raise LookupError(f"更正分录中没有 {', '.join(missing)}")
+        chosen = sorted((x for x in lines if x.entry_no in wanted), key=lambda x: x.id)
+        unbalanced = [no for no in wanted if sum(x.debit_cents - x.credit_cents for x in chosen if x.entry_no == no)]
+        if unbalanced:
+            raise ValueError(f"更正分录借贷不平衡: {', '.join(unbalanced)}")
+        journal = m.FINANCIAL["journal_entries"]
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            loads = await self.rows(eid, select(m.dataset_loads))
+            if not loads:
+                raise ValueError("尚未载入数据集")
+            if loads[0]["dataset"] != dataset:
+                raise ValueError("Engagement already has a different dataset")
+            stored = {
+                r["id"]: JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+                for r in await self.rows(eid, select(journal).where(journal.c.id.in_([x.id for x in chosen])))
+            }
+            changed = [x.id for x in chosen if x.id in stored and stored[x.id] != x]
+            if changed:
+                raise ValueError(f"更正分录与已载入的同 ID 行内容不同: {', '.join(changed)}")
+            new = [x for x in chosen if x.id not in stored]
+            if new:
+                await conn.execute(insert(journal), [dict(engagement_id=eid, **x.model_dump()) for x in new])
+                await conn.execute(
+                    update(m.dataset_loads)
+                    .where(m.dataset_loads.c.engagement_id == eid)
+                    .values(data_version=m.dataset_loads.c.data_version + 1)
+                )
+        return chosen
+
+
+ADJUSTMENTS = Path("adjustments") / "journal_entries.csv"  # 数据集目录下的更正分录 (表头同 journal_entries.csv)
+
+
+def read_adjustments(path: Path) -> list[JournalEntry]:
+    """读更正分录 CSV (空串按 None); 文件不存在抛 FileNotFoundError, 消息含路径. created_at 须带时区 (时间存 UTC),
+    否则抛 ValueError 并列出行 ID: 无时区的值写库后读回带时区, 再次载入时会被误判为内容不同."""
+    if not path.is_file():
+        raise FileNotFoundError(f"没有更正分录文件 {path}")
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = [
+            JournalEntry.model_validate({k: (v if v != "" else None) for k, v in r.items()})
+            for r in csv.DictReader(stream)
+        ]
+    # created_at 可空 (导入的总账可能没有); 有值时须带时区
+    naive = [x.id for x in rows if x.created_at is not None and x.created_at.tzinfo is None]
+    if naive:
+        raise ValueError(f"更正分录的 created_at 没有时区: {', '.join(naive)}")
+    return rows
+
+
+def adjustment_summaries(path: Path | None) -> list[AdjustmentEntrySummary]:
+    """更正分录的凭证摘要, 按凭证号自然序 (AJE-X2 在 AJE-X10 之前); 文件不存在为空."""
+    if path is None or not path.is_file():
+        return []
+    groups: dict[str, list[JournalEntry]] = {}
+    for line in read_adjustments(path):
+        groups.setdefault(line.entry_no, []).append(line)
+    return [
+        AdjustmentEntrySummary(
+            entry_no=no, posting_date=lines[0].posting_date, description=lines[0].description, line_count=len(lines)
+        )
+        for no, lines in sorted(groups.items(), key=lambda item: natural_key(item[0]))
+    ]
+
+
+def natural_key(text: str) -> list[Any]:
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text)]
+
 
 class CsvDatasetLoader(TableLoader):
     """CSV 数据集 (如 Numbat): 每张财务表一个 CSV; 科目没有 category 列时按名称映射标准分类."""
@@ -540,15 +662,42 @@ class CsvDatasetLoader(TableLoader):
     def client_profile(self, dataset: str) -> ClientProfile:
         return ClientProfile.model_validate_json((safe_child(self.root, dataset) / "client_profile.json").read_text())
 
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录: 数据集目录本身 (如 data/demo); 不存在时为 None."""
+        directory = safe_child(self.root, dataset)
+        return directory if directory.is_dir() else None
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.insert_adjustments(eid, dataset, safe_child(self.root, dataset) / ADJUSTMENTS, entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        return adjustment_summaries(safe_child(self.root, dataset) / ADJUSTMENTS)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """CSV 数据集 (如 Numbat) 没有数据集声明, 取缺省值."""
+        return DatasetTraits()
+
     def datasets(self) -> list[str]:
         """root 下带 client_profile.json 的子目录 (如 demo); external 这类没有画像的目录不在其中."""
         return subdirectories(self.root, "client_profile.json")
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """CSV 数据集不自带期间 (Numbat 由审计师填)."""
+        return None
 
 
 class XeroDatasetLoader(TableLoader):
     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
 
-    规划预设取通用模板 (planning 目录), 客户画像取快照的组织信息. 映射见 adapters.xero_dataset.
+    补造目录 {supplements}/{快照目录名} (Xero 演示数据集, 见 adapters.xero_supplements) 存在时, 载入与取数前先核对
+    它与快照; 有补造画像与计划预置时以它们为准. supplements 为空或该目录不存在时: 规划预设取通用模板 (planning
+    目录), 客户画像取快照的组织信息. 测试副本 (manifest 带 injected) 只在 allow_injected 下载入. 映射见
+    adapters.xero_dataset.
     """
 
     PREFIX = "xero/"
@@ -559,10 +708,15 @@ class XeroDatasetLoader(TableLoader):
         planning: Path,
         engine: AsyncEngine | None = None,
         evidence_store: FileEvidenceStore | None = None,
+        *,
+        supplements: Path | None = None,
+        allow_injected: bool = False,
     ) -> None:
         super().__init__(engine, evidence_store)
         self.root = root  # 快照目录的上级, 如 data/external/xero/api
         self.planning = planning  # 通用规划预设目录
+        self.supplements = supplements  # 补造目录的上级, 如 data/xero_demo
+        self.allow_injected = allow_injected
 
     def directory(self, dataset: str) -> Path:
         """数据集名 → 快照目录 (不查是否存在); 名称不合法抛 ValueError."""
@@ -577,19 +731,83 @@ class XeroDatasetLoader(TableLoader):
             raise FileNotFoundError(f"没有 Xero 快照 {dataset}")
         return Snapshot(directory)
 
+    def supplement(self, dataset: str) -> Supplements | None:
+        """数据集的补造目录, 已核对; 没有配置或该目录不存在时为 None. 不匹配抛 SupplementMismatch."""
+        snapshot = self.snapshot(dataset)
+        if self.supplements is None:
+            return None
+        directory = safe_child(self.supplements, dataset.removeprefix(self.PREFIX))
+        if not directory.is_dir():
+            return None
+        found = Supplements(directory, snapshot.root, dataset, self.allow_injected)
+        found.verify()
+        return found
+
+    def tables(self, dataset: str) -> Tables:
+        """载入的财务表与合同 PDF (不连库的纯函数, load 与测试共用): 快照映射出七张表 (adapters.xero_dataset); 有补造
+        目录时先核对, 再并入合同关联, 服务完成记录与开户行, 合同 PDF 取补造目录的 contracts/
+        (adapters.xero_supplements). 没有补造目录时与纯快照相同, 不登记合同."""
+        found = self.supplement(dataset)
+        tables = build_tables(self.snapshot(dataset))
+        if found is None:
+            return tables, ()
+        return found.apply(tables), found.contracts()
+
     async def load(self, eid: str, dataset: str) -> None:
-        self.directory(dataset)  # 名称先校验; 快照是否存在等确认未载入后再查
-        await self.insert(eid, dataset, lambda: (build_tables(self.snapshot(dataset)), ()))
+        self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
+        await self.insert(eid, dataset, lambda: self.tables(dataset))
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
-        return read_planning(self.planning)
+        found = self.supplement(dataset)
+        presets = found.planning_presets() if found else None
+        return presets if presets is not None else read_planning(self.planning)
+
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录: 已核对的补造目录; 没有时为 None (快照里没有登记与回函数据)."""
+        found = self.supplement(dataset)
+        return found.root if found else None
+
+    def adjustments_path(self, dataset: str) -> Path:
+        """补造目录的更正分录文件 (已核对); 没有补造目录时抛 FileNotFoundError, 消息含应有的路径."""
+        found = self.supplement(dataset)
+        if found is None:
+            base = (
+                self.supplements / dataset.removeprefix(self.PREFIX) if self.supplements else Path("<未配置补造目录>")
+            )
+            raise FileNotFoundError(f"没有更正分录文件 {base / ADJUSTMENTS}")
+        return found.root / ADJUSTMENTS
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.insert_adjustments(eid, dataset, self.adjustments_path(dataset), entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        found = self.supplement(dataset)
+        return adjustment_summaries(found.root / ADJUSTMENTS if found else None)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        """数据集声明; 读补造目录的 dataset_traits.json 由后续需求做, 现在取缺省值."""
+        return DatasetTraits()
 
     def client_profile(self, dataset: str) -> ClientProfile:
-        return xero_client_profile(self.snapshot(dataset))
+        found = self.supplement(dataset)  # 先核对: organisation.json 被改坏时报不匹配, 不报数据集不存在
+        profile = xero_client_profile(self.snapshot(dataset))
+        supplied = found.client_profile(f"{profile.id}-") if found else None
+        return supplied or profile
 
     def datasets(self) -> list[str]:
         """root 下能载入的快照 (有组织信息与期间 dataset.json), 名为 xero/{快照目录}; 拉取中的临时目录不算."""
         return [self.PREFIX + name for name in subdirectories(self.root, "organisation.json", "dataset.json")]
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        """快照 dataset.json 的本期起止 (载入器按它取试算表, 项目期间须与之相同); 快照不存在或没有 dataset.json 时抛
+        FileNotFoundError, dataset.json 不是 JSON, 缺键, 不是对象或日期写错时抛 ValueError (消息不带路径与文件内容)."""
+        period = snapshot_period(self.snapshot(dataset))
+        return period.start, period.end
 
 
 class RoutingDatasetLoader:
@@ -610,6 +828,29 @@ class RoutingDatasetLoader:
 
     def client_profile(self, dataset: str) -> ClientProfile:
         return self.pick(dataset).client_profile(dataset)
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        return await self.pick(dataset).load_adjustments(eid, dataset, entry_nos)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        return self.pick(dataset).adjustment_entries(dataset)
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return self.pick(dataset).adjustment_entry_nos(dataset)
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        return self.pick(dataset).dataset_traits(dataset)
+
+    def supplement_dir(self, dataset: str) -> Path | None:
+        """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有
+        这个方法时为 None."""
+        method: Callable[[str], Path | None] | None = getattr(self.pick(dataset), "supplement_dir", None)
+        return method(dataset) if method is not None else None
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        return self.pick(dataset).period(dataset)
 
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""

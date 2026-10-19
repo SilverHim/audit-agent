@@ -38,7 +38,7 @@ class _Users:
     """内存用户表: 预置 rca@example.com (密码 secret). 与 UserStore 契约一致, 查找与判重不区分大小写."""
 
     def __init__(self) -> None:
-        self.user = User(id="USR-1", email="rca@example.com", full_name="Demo Auditor")
+        self.user = User(id="USR-1", email="rca@example.com", full_name="Jordan Ellis")
         self.rows: dict[str, tuple[User, str]] = {self.user.email: (self.user, hash_password("secret"))}
 
     async def by_email(self, email: str) -> tuple[User, str] | None:
@@ -328,6 +328,7 @@ def test_get_gate_when_absent(api: SimpleNamespace) -> None:
         ("VERSION_MISMATCH", 409),
         ("ENGAGEMENT_BUSY", 409),
         ("RESUME_REQUIRED", 409),
+        ("FEATURES_MISMATCH", 409),
         ("NOT_AT_GATE", 409),
         ("DECISION_NOT_ALLOWED", 422),
         ("MISSING_FIELD", 422),

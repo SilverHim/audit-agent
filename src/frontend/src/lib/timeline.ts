@@ -1,8 +1,8 @@
-import type { ConciergeCitation, GateId, Phase, TrailEntry } from '@/client/types.gen'
+import type { ConciergeCitation, GateId, Phase, TrailEntryView } from '@/client/types.gen'
 
 // 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
 
-export type TimelineItem =
+type TimelineEvent =
   | { kind: 'created'; at: string }
   | { kind: 'phase'; at: string; phase: Phase }
   | { kind: 'completed'; at: string; ids: string[] }
@@ -28,6 +28,10 @@ export type TimelineItem =
       file: string | null
     }
 
+// key: 列表渲染用的 key, 取条目来源留痕的 ID (合并的程序完成取第一条), 刷新前后不变. 同类条目的时间可能相同
+// (同一事务写入) 或为空, 不能用时间拼 key. 留痕缺 ID 时退回它在按时间排序后的序号.
+export type TimelineItem = TimelineEvent & { key: string }
+
 const GATES: GateId[] = ['ACC-01', 'PLN-01/03', 'FIN-01', 'RPT-01']
 
 // 任务 ID 形如 T-J-REV-02-1-SI-2026-0612-v1, 取判断对象 SI-2026-0612
@@ -40,27 +44,28 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.length ? value : null
 }
 
-export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
+export function buildTimeline(entries: TrailEntryView[]): TimelineItem[] {
   const sorted = [...entries].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
   const items: TimelineItem[] = []
-  let completed: { at: string; ids: string[] } | null = null
+  let completed: { at: string; key: string; ids: string[] } | null = null
   const flush = () => {
     if (completed?.ids.length) items.push({ kind: 'completed', ...completed })
     completed = null
   }
 
-  if (sorted[0]?.created_at) items.push({ kind: 'created', at: sorted[0].created_at })
+  if (sorted[0]?.created_at) items.push({ kind: 'created', key: 'created', at: sorted[0].created_at })
 
-  for (const entry of sorted) {
+  for (const [index, entry] of sorted.entries()) {
     const at = entry.created_at ?? ''
+    const key = entry.id ?? `#${index}`
     const payload = (entry.payload ?? {}) as Record<string, unknown>
     const kind = entry.kind as string
     if (kind === 'transition') {
       if (payload.object === 'engagement' && str(payload.to)) {
         flush()
-        items.push({ kind: 'phase', at, phase: payload.to as Phase })
+        items.push({ kind: 'phase', key, at, phase: payload.to as Phase })
       } else if (payload.object === 'procedure' && payload.to === 'completed' && str(payload.id)) {
-        if (!completed) completed = { at, ids: [] }
+        if (!completed) completed = { at, key, ids: [] }
         const id = payload.id as string
         if (!completed.ids.includes(id)) completed.ids.push(id)
       }
@@ -73,7 +78,7 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
       const head = parts.slice(0, -1).join(' ')
       const gate = GATES.find((item) => item === head) ?? null
       const target = gate ?? (str(payload.task_id) ? subjectOfTask(payload.task_id as string) : head)
-      items.push({ kind: 'decision', at, target, gate, verdict, reason: str(payload.reason) })
+      items.push({ kind: 'decision', key, at, target, gate, verdict, reason: str(payload.reason) })
       continue
     }
     if (kind === 'deferral') {
@@ -82,13 +87,14 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
       const target = payload.target_type === 'review_task' ? subjectOfTask(id) : id
       // 补交请求 ID 固定为 REQ-{表种类或文件类型}, 显示时换成资料名
       const request = payload.target_type === 'data_request' ? id.replace(/^REQ-/, '') : null
-      items.push({ kind: 'deferral', at, target, deferred: payload.deferred === true, request })
+      items.push({ kind: 'deferral', key, at, target, deferred: payload.deferred === true, request })
       continue
     }
     if (kind === 'data') {
       flush()
       items.push({
         kind: 'data',
+        key,
         at,
         id: entry.id ?? at,
         action: str(payload.action) ?? '',
@@ -103,6 +109,7 @@ export function buildTimeline(entries: TrailEntry[]): TimelineItem[] {
       flush()
       items.push({
         kind: 'qa',
+        key,
         at,
         id: entry.id ?? at,
         question: str(payload.question) ?? entry.summary,

@@ -30,7 +30,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.orchestration.decisions import acc01_effects
+from backend.orchestration.gates import acc01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from tests.fakes import (

@@ -1,0 +1,13 @@
+{
+  "id": "CLIENT-XERO-3C1332BB-Q1",
+  "version": 1,
+  "legal_name": "Demo Company (AU) Pty Ltd",
+  "abn": "25900043021",
+  "entity_type": "small_proprietary",
+  "industry_anzsic": "7000",
+  "listed": false,
+  "directors": [
+    "Alex Morgan"
+  ],
+  "notes": "Synthetic – for demonstration only. Profile built on the Xero Demo Company (AU) data. IT support, training and project services, Marineville NSW; 3 employees from 20 July 2026. Shortened financial year 1 Jul-30 Sep 2026 under s323D(2A); future years end 30 September (the Xero organisation setting still shows 30 June). Audit required by a s293 direction from a 15% shareholder (Sam Whitfield). First audit; FY2026 unaudited. Owner A in the Xero chart of accounts is Alex Morgan (sole director, 85%), who also keeps the books. Both bank accounts are held with Wattlebrook Bank Limited; bank names such as NAB, Ridgeway Savings and Business Savings Bank in the Xero statement lines and narrations are placeholders of the demo data. Related parties declared by management: Alex Morgan (director loan, overdraft guarantee); Morgan Advisory Pty Ltd. Payment approval limit AUD 5,000. No director remuneration in the period."
+}

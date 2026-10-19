@@ -486,6 +486,10 @@ export type CompletionMaterial = {
      * Misstatements
      */
     misstatements: Array<Misstatement>;
+    /**
+     * Not Executed
+     */
+    not_executed?: Array<NotExecuted>;
 };
 
 /**
@@ -764,6 +768,13 @@ export type ConversationTurn = {
 export type CriticReasonType = 'insufficient_evidence' | 'different_conclusion' | 'reasoning_error';
 
 /**
+ * CriticTrigger
+ *
+ * 独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用).
+ */
+export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupported' | 'sample';
+
+/**
  * CriticVerdict
  *
  * 独立复核 (A7, GEN-09) 的结论.
@@ -796,7 +807,8 @@ export type DataCheck = {
 /**
  * DataReadiness
  *
- * 项目财务数据的版本与就绪确认 (表 dataset_loads).
+ * 项目财务数据的版本与就绪确认 (表 dataset_loads). 确认的人与时间记下后不改; 理由与未通过项随第一次确认记下,
+ * 那时没有未通过项而再次确认时有, 补记那次的 (DataStore.confirm_ready).
  */
 export type DataReadiness = {
     /**
@@ -815,6 +827,26 @@ export type DataReadiness = {
      * Ready By
      */
     ready_by?: string | null;
+    /**
+     * Ready Reason
+     */
+    ready_reason?: string | null;
+    /**
+     * Ready Failed Checks
+     */
+    ready_failed_checks?: Array<CheckId>;
+};
+
+/**
+ * DataReadyIn
+ *
+ * 确认数据已齐 (POST /data/ready) 的请求体, 可不带.
+ */
+export type DataReadyIn = {
+    /**
+     * Reason
+     */
+    reason?: string | null;
 };
 
 /**
@@ -859,7 +891,7 @@ export type DataRequest = {
     /**
      * Status
      */
-    status?: 'open' | 'received' | 'withdrawn';
+    status?: 'open' | 'received' | 'withdrawn' | 'unavailable';
     /**
      * Raised By
      */
@@ -872,6 +904,14 @@ export type DataRequest = {
      * Resolved At
      */
     resolved_at?: string | null;
+    /**
+     * Resolved By
+     */
+    resolved_by?: string | null;
+    /**
+     * Unavailable Reason
+     */
+    unavailable_reason?: string | null;
 };
 
 /**
@@ -911,7 +951,7 @@ export type DataSummary = {
 /**
  * DatasetSummary
  *
- * 新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN.
+ * 新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中.
  */
 export type DatasetSummary = {
     /**
@@ -926,6 +966,18 @@ export type DatasetSummary = {
      * Abn
      */
     abn: string;
+    /**
+     * Period Start
+     */
+    period_start?: string | null;
+    /**
+     * Period End
+     */
+    period_end?: string | null;
+    /**
+     * Default
+     */
+    default?: boolean;
 };
 
 /**
@@ -1041,14 +1093,22 @@ export type DocumentRef = {
      * Failed Step
      */
     failed_step?: 'classify' | 'read' | 'extract' | 'link' | null;
+    /**
+     * Document Date
+     */
+    document_date?: string | null;
+    /**
+     * Related Ids
+     */
+    related_ids?: Array<string>;
 };
 
 /**
  * DocumentType
  *
- * 证据文件类型. 审计师上传的文件由 A3 分类.
+ * 证据文件类型. 审计师上传的文件由 A3 分类; 证据种类见 judgment_engine.DOCUMENT_EVIDENCE.
  */
-export type DocumentType = 'contract' | 'invoice' | 'confirmation' | 'bank_statement' | 'minutes' | 'financial_statements' | 'other';
+export type DocumentType = 'contract' | 'invoice' | 'confirmation' | 'bank_statement' | 'minutes' | 'financial_statements' | 'registry_extract' | 'engagement_letter' | 'representation_letter' | 'correspondence' | 'governance_communication' | 'agreement' | 'internal_record' | 'other';
 
 /**
  * DocumentTypeIn
@@ -1562,116 +1622,16 @@ export type ImportSheet = {
 };
 
 /**
- * Judgment
- *
- * AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作.
- */
-export type Judgment = {
-    /**
-     * Id
-     */
-    id: string;
-    /**
-     * Version
-     */
-    version?: number;
-    /**
-     * Procedure Id
-     */
-    procedure_id: string;
-    /**
-     * Run Id
-     */
-    run_id: string;
-    /**
-     * Subject Id
-     */
-    subject_id: string;
-    /**
-     * Conclusion
-     */
-    conclusion: string;
-    /**
-     * Confidence
-     */
-    confidence: number;
-    /**
-     * Confidence Parts
-     */
-    confidence_parts: {
-        [key: string]: number;
-    };
-    /**
-     * Reasoning Chain
-     */
-    reasoning_chain: Array<ReasoningStep>;
-    /**
-     * Evidence
-     */
-    evidence: Array<EvidencePointer>;
-    /**
-     * Counter Argument
-     */
-    counter_argument: string;
-    proposed_action: ProposedAction;
-    misstatement_draft?: MisstatementDraft | null;
-    /**
-     * Exception Ids
-     */
-    exception_ids?: Array<string>;
-    autonomy_level: AutonomyLevel;
-    review_status?: ReviewStatus;
-    /**
-     * Superseded By
-     */
-    superseded_by?: string | null;
-    /**
-     * Performed By
-     */
-    performed_by: string;
-    /**
-     * Created At
-     */
-    created_at: string;
-    /**
-     * Trail Ref
-     */
-    trail_ref?: string | null;
-    critic_verdict?: CriticVerdict;
-    critic_reason_type?: CriticReasonType | null;
-    /**
-     * Critic Reason
-     */
-    critic_reason?: string | null;
-    /**
-     * Critic Conclusion
-     */
-    critic_conclusion?: string | null;
-    /**
-     * Critic Reasoning Chain
-     */
-    critic_reasoning_chain?: Array<ReasoningStep>;
-    /**
-     * Critic Model
-     */
-    critic_model?: string | null;
-    /**
-     * Critic Trail Ref
-     */
-    critic_trail_ref?: string | null;
-};
-
-/**
  * JudgmentDetail
  *
  * 一条判断的当前版本, 历史版本与相关复核决定.
  */
 export type JudgmentDetail = {
-    judgment: Judgment;
+    judgment: JudgmentView;
     /**
      * Versions
      */
-    versions: Array<Judgment>;
+    versions: Array<JudgmentView>;
     /**
      * Review Records
      */
@@ -1692,6 +1652,114 @@ export type JudgmentRef = {
      * Version
      */
     version: number;
+};
+
+/**
+ * JudgmentView
+ *
+ * 判断的输出视图: 字段同 Judgment, 盲判时可隐藏的字段可空, hidden_fields 列出被隐藏的字段 (未隐藏时为空).
+ *
+ * 返回判断的接口与对话工具都经 BlindFilter.judgment 输出它, 不直接输出 Judgment (第 10 节). 不往 Judgment 里填占位值.
+ * 可隐藏的: 结论, 置信度及其分项, 推理链, 反方论证, 建议动作, 错报草稿, 独立复核 (critic_) 的各字段.
+ */
+export type JudgmentView = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    /**
+     * Conclusion
+     */
+    conclusion: string | null;
+    /**
+     * Confidence
+     */
+    confidence: number | null;
+    /**
+     * Confidence Parts
+     */
+    confidence_parts: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Reasoning Chain
+     */
+    reasoning_chain: Array<ReasoningStep> | null;
+    /**
+     * Evidence
+     */
+    evidence: Array<EvidencePointer>;
+    /**
+     * Counter Argument
+     */
+    counter_argument: string | null;
+    proposed_action: ProposedAction | null;
+    misstatement_draft?: MisstatementDraft | null;
+    /**
+     * Exception Ids
+     */
+    exception_ids?: Array<string>;
+    autonomy_level: AutonomyLevel;
+    review_status: ReviewStatus;
+    /**
+     * Superseded By
+     */
+    superseded_by?: string | null;
+    /**
+     * Performed By
+     */
+    performed_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Trail Ref
+     */
+    trail_ref?: string | null;
+    critic_verdict: CriticVerdict | null;
+    critic_trigger?: CriticTrigger | null;
+    critic_reason_type?: CriticReasonType | null;
+    /**
+     * Critic Reason
+     */
+    critic_reason?: string | null;
+    /**
+     * Critic Conclusion
+     */
+    critic_conclusion?: string | null;
+    /**
+     * Critic Reasoning Chain
+     */
+    critic_reasoning_chain: Array<ReasoningStep> | null;
+    /**
+     * Critic Model
+     */
+    critic_model?: string | null;
+    /**
+     * Critic Trail Ref
+     */
+    critic_trail_ref?: string | null;
+    /**
+     * Hidden Fields
+     */
+    hidden_fields?: Array<string>;
 };
 
 /**
@@ -1986,6 +2054,26 @@ export type MisstatementType = 'factual' | 'judgmental' | 'projected';
 export type NeitherAction = 'human_conclusion';
 
 /**
+ * NotExecuted
+ *
+ * 因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料.
+ */
+export type NotExecuted = {
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Via
+     */
+    via?: Array<string>;
+    /**
+     * Requests
+     */
+    requests: Array<DataRequest>;
+};
+
+/**
  * OpinionType
  *
  * 审计意见类型.
@@ -2064,6 +2152,10 @@ export type Procedure = {
      * Rerun Subject Ids
      */
     rerun_subject_ids?: Array<string>;
+    /**
+     * Data Request Ids
+     */
+    data_request_ids?: Array<string>;
 };
 
 /**
@@ -2096,7 +2188,7 @@ export type ProcedureDetail = {
     /**
      * Judgments
      */
-    judgments: Array<Judgment>;
+    judgments: Array<JudgmentView>;
 };
 
 /**
@@ -2156,7 +2248,7 @@ export type ProcedureRun = {
  *
  * 程序状态.
  */
-export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'completed';
+export type ProcedureStatus = 'planned' | 'executing' | 'awaiting_human' | 'in_dispute' | 'completed' | 'awaiting_data' | 'no_data';
 
 /**
  * ProcedureSummary
@@ -2335,6 +2427,18 @@ export type ReportSection = 'opinion' | 'basis_for_opinion' | 'directors_respons
 export type ReportStatus = 'draft' | 'signed';
 
 /**
+ * RequestUnavailableIn
+ *
+ * 补交请求标 "客户无此类资料" (需求 R280).
+ */
+export type RequestUnavailableIn = {
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
  * ReviewRecord
  *
  * 审计师对一个复核任务作出的决定及理由.
@@ -2425,7 +2529,7 @@ export type ReviewRecordIn = {
  *
  * 判断的复核状态.
  */
-export type ReviewStatus = 'pending' | 'confirmed' | 'overridden';
+export type ReviewStatus = 'pending' | 'confirmed' | 'overridden' | 'superseded';
 
 /**
  * ReviewTask
@@ -2484,7 +2588,7 @@ export type ReviewTaskView = {
     /**
      * Target
      */
-    target: Judgment | AuditException | ProcedureRun;
+    target: JudgmentView | AuditException | ProcedureRun;
     /**
      * Allowed Decisions
      */
@@ -2584,6 +2688,10 @@ export type StandardFragment = {
      * Paragraph
      */
     paragraph: string;
+    /**
+     * Subitems
+     */
+    subitems?: Array<string>;
     /**
      * Topic
      */
@@ -2740,7 +2848,7 @@ export type TargetType = 'Judgment' | 'AuditException' | 'ProcedureRun';
  *
  * 复核任务类型.
  */
-export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute';
+export type TaskKind = 'normal' | 'unattributed' | 'failed' | 'dispute' | 'blind' | 'manual';
 
 /**
  * TaskStatus
@@ -2773,11 +2881,12 @@ export type Token = {
 };
 
 /**
- * TrailEntry
+ * TrailEntryView
  *
- * 审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改.
+ * 留痕的输出视图: 字段同 TrailEntry, payload 可空 (盲判时隐藏模型调用的原始输入输出), hidden_fields 列出被隐藏的
+ * 字段. 返回留痕的接口与对话工具都经 BlindFilter.trail 输出它 (第 10 节).
  */
-export type TrailEntry = {
+export type TrailEntryView = {
     /**
      * Id
      */
@@ -2826,13 +2935,17 @@ export type TrailEntry = {
     /**
      * Payload
      */
-    payload?: {
+    payload: {
         [key: string]: unknown;
-    };
+    } | null;
     /**
      * Created At
      */
     created_at?: string | null;
+    /**
+     * Hidden Fields
+     */
+    hidden_fields?: Array<string>;
 };
 
 /**
@@ -2840,7 +2953,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation';
 
 /**
  * UncorrectedItem
@@ -4232,8 +4345,45 @@ export type DataDataRequestsResponses = {
 
 export type DataDataRequestsResponse = DataDataRequestsResponses[keyof DataDataRequestsResponses];
 
+export type DataMarkRequestUnavailableData = {
+    body: RequestUnavailableIn;
+    path: {
+        /**
+         * Request Id
+         */
+        request_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/requests/{request_id}/unavailable';
+};
+
+export type DataMarkRequestUnavailableErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataMarkRequestUnavailableError = DataMarkRequestUnavailableErrors[keyof DataMarkRequestUnavailableErrors];
+
+export type DataMarkRequestUnavailableResponses = {
+    /**
+     * Successful Response
+     */
+    200: DataRequest;
+};
+
+export type DataMarkRequestUnavailableResponse = DataMarkRequestUnavailableResponses[keyof DataMarkRequestUnavailableResponses];
+
 export type DataReadyData = {
-    body?: never;
+    /**
+     * Body
+     */
+    body?: DataReadyIn | null;
     path: {
         /**
          * Eid
@@ -4362,7 +4512,7 @@ export type ReportsListTrailResponses = {
      *
      * Successful Response
      */
-    200: Array<TrailEntry>;
+    200: Array<TrailEntryView>;
 };
 
 export type ReportsListTrailResponse = ReportsListTrailResponses[keyof ReportsListTrailResponses];
@@ -4396,7 +4546,7 @@ export type ReportsGetTrailResponses = {
     /**
      * Successful Response
      */
-    200: TrailEntry;
+    200: TrailEntryView;
 };
 
 export type ReportsGetTrailResponse = ReportsGetTrailResponses[keyof ReportsGetTrailResponses];

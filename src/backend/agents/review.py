@@ -9,7 +9,6 @@ consistent 且独立推理链有效时置信度计入复核分项 (8.4, 权重�
 记 not_applicable 转人工. inconsistent 由 ReviewQueue 建争议任务, 不计分.
 """
 
-import hashlib
 from collections.abc import Sequence
 from typing import Any, ClassVar, cast
 
@@ -32,8 +31,10 @@ from backend.contracts.models import (
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import PointerResolver, critic_chain_ok
+from backend.services.sampling import sampled
 
 GEN09 = "GEN-09"
+CRITIC = "critic"  # 功能名 (services/features.FEATURES), 关闭时不做独立复核
 # 独立的系统提示词 (5.5: 与生成者至少不同的系统提示词); {schema} 为输出模型的 JSON schema, JSON 模式要求出现 "JSON"
 CRITIC_SYSTEM = """You are an independent reviewer. Judge only from the inputs given in this conversation, \
 not from any earlier analysis you may have seen. Reply with a single JSON object that conforms to the JSON schema \
@@ -47,18 +48,14 @@ CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: �
 SKIPPED_LEVELS = (AutonomyLevel.L1, AutonomyLevel.L2)  # 跳过规则: 审计师逐条复核
 
 
-def sampled(judgment_id: str, rate: float) -> bool:
-    """确定性抽样: 判断 ID 的 sha256 前 8 位折成 [0, 1), 小于 rate 即抽中. 判断 ID 确定, 重放结果不变."""
-    return int(hashlib.sha256(judgment_id.encode()).hexdigest()[:8], 16) / 0x1_0000_0000 < rate
-
-
 def trigger(level: AutonomyLevel, judgment: Judgment, rate: float) -> str | None:
-    """命中的触发规则 (任一即复核), 没命中为 None: main 主规则; assumption 推理链含假设步骤; sample 抽样."""
+    """命中的触发规则 (任一即复核), 没命中为 None: main 主规则; assumption 推理链含假设步骤; sample 抽样
+    (services/sampling 的 critic 用途, 键为判断 ID, 重放结果不变)."""
     if level in REVIEWED_LEVELS and judgment.proposed_action in CLOSING_ACTIONS:
         return "main"
     if any(step.kind is StepKind.assumption for step in judgment.reasoning_chain):
         return "assumption"
-    if sampled(judgment.id, rate):
+    if sampled("critic", judgment.id, rate):
         return "sample"
     return None
 
@@ -90,11 +87,14 @@ class ReviewAgent(ProcedureAgent[None]):
     async def review(self, ctx: RunContext, judgment: Judgment) -> Judgment:
         """复核 A6 在 ctx 这次执行中生成的一条判断, 返回写好 critic 字段 (consistent 时含新置信度) 的同一版本.
 
-        跳过 (skipped): 没有复核模型 (只在测试), 程序运行时自主度 L1, L2, 未命中触发规则; critic_reason 写明原因.
+        跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
+        未命中触发规则; critic_reason 写明原因.
         复核没做成 (not_applicable): 判断没有能解析的证据; 任一轮校验重试后仍失败, 或调用出错 (CancelledError 除外);
         判为 consistent 而独立推理链无效. ReviewQueue 据此转人工.
         """
         level = ctx.procedure.autonomy_level
+        if CRITIC not in self.deps.features:
+            return skip(judgment, "功能开关 critic 关闭, 不做独立复核")
         if self.deps.review_llm is None:
             return skip(judgment, "未配置复核模型, 不做独立复核")
         if level in SKIPPED_LEVELS:

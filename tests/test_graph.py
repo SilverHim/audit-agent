@@ -30,9 +30,10 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import checkpoint_serde, open_checkpointer
-from backend.orchestration.decisions import acc01_effects
+from backend.orchestration.gates import acc01_effects
 from backend.orchestration.graph import (
     GATE_NODES,
+    GATES,
     ScheduleStuck,
     after_fan_in,
     compile_graph,
@@ -46,6 +47,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_ABN,
     NUMBAT_ASIC,
+    NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     TYPO_PROFILE,
     FakeEngagementStore,
@@ -129,7 +131,7 @@ def _fake_deps(engagement: Engagement, store: FakeEngagementStore | None = None)
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
     output_store = FakeOutputStore()
     deps = make_deps(registry, FakeTrail(), store or FakeEngagementStore([NUMBAT_PROFILE], [engagement]), output_store)
-    output_store.rows.extend(fixed_procedures(deps.library))
+    output_store.rows_of(engagement.id).extend(fixed_procedures(deps.library))  # 按项目写入, 连库测试的项目编号是随机的
     return deps
 
 
@@ -346,13 +348,15 @@ def test_route_schedule_goes_to_fan_in_when_all_done() -> None:
     assert route_schedule(nodes)(state) == "fan_in"
 
 
-def test_route_schedule_raises_when_unfinished_but_none_ready() -> None:
-    """REV-08 等人处理却没有任务, REV-02 永远等不到前置: 报错, 不返回 fan_in 空转."""
+def test_stuck_is_reported_after_fan_in_when_unfinished_but_none_ready() -> None:
+    """REV-08 等人处理却没有任务, REV-02 永远等不到前置: route_schedule 回 fan_in, 由 after_fan_in 报错, 不空转
+    (需求 R272 起卡住只在 after_fan_in 一处判断)."""
     nodes = _p2_nodes()
     state = _p2_state(nodes, {"REV-08": AWAITING, "REV-03": DONE, "REV-02": PLANNED})
 
+    assert route_schedule(nodes)(state) == "fan_in"
     with pytest.raises(ScheduleStuck, match=r"REV-02 等 REV-08 \(awaiting_human\)"):
-        route_schedule(nodes)(state)
+        after_fan_in(nodes)(state)
 
 
 def test_after_fan_in_dispatches_before_waiting() -> None:
@@ -431,3 +435,76 @@ def test_gate_route_rpt01_after_signing(status: ReportStatus, version: int, verd
     state["report_versions"] = [report.model_copy(update={"version": version, "status": status})]
 
     assert gate_route(GateId.RPT_01)(state) == route
+
+
+# 基线功能集下的主图 (R75 验收 8): 写死现状. 各功能组加节点与闸门时这张表不变, 新节点只在功能开启时出现
+BASELINE_NODES = {
+    "__start__",
+    "p0_intel",
+    "gate_acc01",
+    "p1_await_data",
+    "p1_ingest",
+    "p1_analytics",
+    "gate_p1_risk",
+    "assemble_pack",
+    "schedule",
+    "fieldwork",
+    "fan_in",
+    "await_events",
+    "await_data",
+    "completion",
+    "gate_fin",
+    "report_draft",
+    "gate_rpt01",
+    "archive",
+    "declined",
+    "__end__",
+}
+# (起点, 终点, 是否条件边, 闸门出口名)
+BASELINE_EDGES = [
+    ("__start__", "p0_intel", False, None),
+    ("archive", "__end__", False, None),
+    ("assemble_pack", "schedule", False, None),
+    ("await_data", "fan_in", False, None),
+    ("await_events", "fan_in", False, None),
+    ("completion", "gate_fin", False, None),
+    ("declined", "__end__", False, None),
+    ("fan_in", "await_data", True, None),
+    ("fan_in", "await_events", True, None),
+    ("fan_in", "completion", True, None),
+    ("fan_in", "p1_ingest", True, None),
+    ("fan_in", "schedule", True, None),
+    ("fieldwork", "fan_in", False, None),
+    ("gate_acc01", "declined", True, "reject"),
+    ("gate_acc01", "gate_acc01", True, "represent"),
+    ("gate_acc01", "p0_intel", True, "rerun"),
+    ("gate_acc01", "p1_await_data", True, "approve"),
+    ("gate_fin", "completion", True, "reject"),
+    ("gate_fin", "gate_fin", True, "represent"),
+    ("gate_fin", "report_draft", True, "approve"),
+    ("gate_p1_risk", "assemble_pack", True, "approve"),
+    ("gate_p1_risk", "gate_p1_risk", True, "represent"),
+    ("gate_p1_risk", "p1_analytics", True, "reject"),
+    ("gate_rpt01", "archive", True, "approve"),
+    ("gate_rpt01", "gate_rpt01", True, "represent"),
+    ("gate_rpt01", "report_draft", True, "reject"),
+    ("p0_intel", "gate_acc01", False, None),
+    ("p1_analytics", "gate_p1_risk", False, None),
+    ("p1_await_data", "p1_ingest", False, None),
+    ("p1_ingest", "fan_in", True, None),
+    ("p1_ingest", "p1_analytics", True, None),
+    ("report_draft", "gate_rpt01", False, None),
+    ("schedule", "fan_in", True, None),
+    ("schedule", "fieldwork", True, None),
+]
+
+
+def test_baseline_graph_structure() -> None:
+    """R75 验收 8: 基线功能集下 compile_graph 的节点集合, 边与条件边去向逐一同现状, 静态中断为 4 个闸门节点."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=NUMBAT_FEATURES)
+    app = compile_graph(make_graph_nodes(deps), InMemorySaver())
+    graph = app.get_graph()
+    assert set(graph.nodes) == BASELINE_NODES and len(graph.nodes) == 20
+    edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
+    assert edges == BASELINE_EDGES
+    assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]

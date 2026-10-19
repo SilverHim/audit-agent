@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from backend.contracts.data import ApprovalLogRow, ImportCommit, ImportSession, TableKind
+from backend.contracts.data import ApprovalLogRow, CheckId, ImportCommit, ImportSession, TableKind
 from backend.contracts.errors import EngagementLocked
 from backend.contracts.models import DocumentType, Reliability
 from backend.contracts.records import Account, JournalEntry
@@ -70,7 +70,7 @@ def csv_rows(name: str) -> list[dict[str, str]]:
 
 
 async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    engine, (first, _), loader, _ = storage
+    engine, (first, second), loader, _ = storage
     store = PostgresDataStore(tmp_path, engine)
     before = await store.readiness(first.id)
     assert (before.data_version, before.ready_at, before.ready_by) == (0, None, None)
@@ -80,6 +80,7 @@ async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_pat
 
     readiness = await store.readiness(first.id)
     assert (readiness.data_version, readiness.ready_by) == (1, "dataset")
+    assert (readiness.ready_reason, readiness.ready_failed_checks) == (None, [])  # 迁移 0005 的列取缺省值
     assert readiness.ready_at == readiness.loaded_at is not None
     stats = await store.stats(first.id)
     tb = csv_rows("trial_balance")
@@ -97,18 +98,37 @@ async def test_dataset_load_counts_as_ready_and_stats_match_csv(storage, tmp_pat
     # documents 表的新列 (媒体类型, 来源渠道) 有缺省值, 读取不受影响
     financial = PostgresFinancialDataStore(engine)
     assert len(await financial.documents(first.id)) == 3
+    # 程序等数据按各类型的文件数判断 (需求 R272): 数据集载入登记 3 份合同; 没载入的项目为空
+    assert await store.document_counts(first.id) == {DocumentType.contract: 3}
+    assert await store.document_counts(second.id) == {}
     assert await financial.data_version(first.id) == 1
 
 
 async def test_confirm_ready_keeps_first_confirmation_and_respects_lock(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
-    engine, (_, second), _, engagements = storage
+    engine, (clean, second), _, engagements = storage
     store = PostgresDataStore(tmp_path, engine)
 
-    first = await store.confirm_ready(second.id, "U-1")
-    again = await store.confirm_ready(second.id, "U-2")
+    # 第一次确认时没有未通过项, 再确认时有: 补记那次的理由与未通过项, 人与时间不改 (审核 R273-02)
+    plain = await store.confirm_ready(clean.id, "U-1")
+    supplemented = await store.confirm_ready(
+        clean.id, "U-2", reason="差额待客户更正", failed_checks=[CheckId.debits_equal_credits]
+    )
+    assert (supplemented.ready_at, supplemented.ready_by) == (plain.ready_at, "U-1")
+    assert (supplemented.ready_reason, supplemented.ready_failed_checks) == (
+        "差额待客户更正",
+        [CheckId.debits_equal_credits],
+    )
+    assert await store.confirm_ready(clean.id, "U-3", reason="x", failed_checks=[CheckId.journals_agree_tb]) == (
+        supplemented
+    )
+
+    failed = [CheckId.debits_equal_credits, CheckId.journals_agree_tb]
+    first = await store.confirm_ready(second.id, "U-1", reason="差额待客户更正", failed_checks=failed)
+    again = await store.confirm_ready(second.id, "U-2", reason="另一个理由", failed_checks=[])
 
     assert (first.data_version, first.ready_by) == (0, "U-1")
-    assert again == first  # 已确认的不改
+    assert (first.ready_reason, first.ready_failed_checks) == ("差额待客户更正", failed)
+    assert again == first  # 已确认的不改: 人, 时间, 理由与未通过项都是第一次的
     await engagements.update(second.id, locked=True)
     with pytest.raises(EngagementLocked):
         await store.confirm_ready(second.id, "U-3")
@@ -199,6 +219,32 @@ async def test_versions_checks_and_open_requests(storage, tmp_path: Path) -> Non
     assert [c.id.value for c in await store.checks(first.id)] == ["debits_equal_credits", "mapping_complete"]
     assert await store.open_requests(first.id) == 2
     assert await store.versions(second.id) == []  # 行级安全: 别的项目看不到
+    # 标客户无此类资料 (需求 R280): 迁移 0006 的两列往返, 只改仍为 open 的这一个请求; 并发标同一条只有一方改成
+    [request_a] = [r for r in await store.requests(first.id) if r.id == "REQ-a"]
+    assert (request_a.resolved_by, request_a.unavailable_reason) == (None, None)
+    results = await asyncio.gather(
+        *(store.mark_unavailable(first.id, "REQ-a", reason=f"客户没有 {n}", actor=f"U-{n}", at=at) for n in (1, 2))
+    )
+    [marked] = [r for r in results if r is not None]
+    n = 1 if results[0] is not None else 2
+    assert marked == request_a.model_copy(
+        update={
+            "status": "unavailable",
+            "resolved_at": at,
+            "resolved_by": f"U-{n}",
+            "unavailable_reason": f"客户没有 {n}",
+        }
+    )
+    assert {r.id: r for r in await store.requests(first.id)}["REQ-a"] == marked
+    assert await store.open_requests(first.id) == 1
+    for eid, rid in ((first.id, "REQ-a"), (first.id, "REQ-b"), (first.id, "REQ-none"), (second.id, "REQ-c")):
+        # 已标的, 已收到的, 不存在的, 别的项目的 (行级安全) 都不改
+        assert await store.mark_unavailable(eid, rid, reason="再标", actor="U-3", at=at) is None
+    assert {r.id: r.status for r in await store.requests(first.id)} == {
+        "REQ-a": "unavailable",
+        "REQ-b": "received",
+        "REQ-c": "open",
+    }
 
 
 # ── 需求 R13: 账表导入与新数据版本写入 ──
@@ -696,3 +742,265 @@ async def test_table_pages_do_not_repeat_or_skip_rows_with_duplicate_numbers(sto
         pages = [await service.table_page(eid, kind, None, offset, 1) for offset in range(5)]
         ids = [row["id"] for page in pages for row in page.rows]
         assert ids == sorted(ids) and len(set(ids)) == 5 and all(p.total == 5 for p in pages), kind
+
+
+# ── 迁移 0006 往返 (需求 R280, 审核 R280-04) ──
+
+
+def migration(name: str) -> Any:
+    """按文件名载入一个迁移模块 (文件名以数字开头, 不能直接 import)."""
+    import importlib.util
+
+    path = ROOT / "src" / "backend" / "migrations" / "versions" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"migration_{name}", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_migration_0006_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """以属主角色在一个事务里走 0006 降级再升级, 最后回滚 (不动测试库的表结构与 alembic 版本): 降级后标了客户无此类
+    资料的请求改回 open (0005 的代码只认 open, received, withdrawn), 理由与标记人随两列删掉; 再升级两列回来, 为空.
+    需另设 TEST_DATABASE_OWNER_URL (测试库的属主角色)."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0006_request_unavailable")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    at = now()
+    base = {
+        "engagement_id": first.id,
+        "kind": "table",
+        "title": "t",
+        "used_for": [],
+        "reason_code": "missing_table",
+        "reason_params": {},
+        "raised_by": "A3",
+        "created_at": at,
+    }
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+                await conn.execute(text("SELECT set_config('app.engagement_id', :eid, true)"), {"eid": first.id})
+                marked = {"resolved_at": at, "resolved_by": "U-1", "unavailable_reason": "客户没有"}
+                for row in (
+                    {**base, "id": "REQ-open", "status": "open"},
+                    {**base, "id": "REQ-got", "status": "received", "resolved_at": at},
+                    {**base, "id": "REQ-none", "status": "unavailable", **marked},
+                ):  # 各行的列不同, 逐行插入
+                    await conn.execute(insert(m.data_requests).values(**row))
+                found = await conn.execute(
+                    text("SELECT resolved_by, unavailable_reason FROM data_requests WHERE id = 'REQ-none'")
+                )
+                assert found.one() == ("U-1", "客户没有")
+
+                async def columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_requests'")
+                    )
+                    return {row[0] for row in found}
+
+                async def rows() -> dict[str, tuple[Any, ...]]:
+                    found = await conn.execute(
+                        text("SELECT id, status, resolved_at IS NOT NULL FROM data_requests WHERE engagement_id = :e"),
+                        {"e": first.id},
+                    )
+                    return {row[0]: tuple(row[1:]) for row in found}
+
+                # 迁移时不设 app.engagement_id (同 alembic upgrade 命令), 降级要改全部项目的行
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("downgrade"))
+                await conn.execute(text("SELECT set_config('app.engagement_id', :eid, true)"), {"eid": first.id})
+
+                async def row_security() -> tuple[Any, ...]:
+                    found = await conn.execute(
+                        text(
+                            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                            "WHERE oid = 'data_requests'::regclass"
+                        )
+                    )
+                    return tuple(found.one())
+
+                assert await row_security() == (True, True)  # 降级时暂时关掉的 FORCE 已恢复 (审核 R280-09)
+                assert not {"resolved_by", "unavailable_reason"} & await columns()
+                assert await rows() == {
+                    "REQ-open": ("open", False),
+                    "REQ-got": ("received", True),
+                    "REQ-none": ("open", False),
+                }
+                await conn.run_sync(run("upgrade"))
+                assert {"resolved_by", "unavailable_reason"} <= await columns()
+                found = await conn.execute(
+                    text("SELECT id, resolved_by, unavailable_reason FROM data_requests WHERE engagement_id = :e"),
+                    {"e": first.id},
+                )
+                assert {row[0]: (row[1], row[2]) for row in found} == {
+                    "REQ-open": (None, None),
+                    "REQ-got": (None, None),
+                    "REQ-none": (None, None),
+                }
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert await row_security() == (True, True)
+            finally:
+                await outer.rollback()
+        async with engine.connect() as conn:
+            assert {"resolved_by", "unavailable_reason"} <= await columns_of(conn)
+            version = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            assert version.scalar_one() >= "0006"
+    finally:
+        await engine.dispose()
+
+
+async def columns_of(conn: Any) -> set[str]:
+    from sqlalchemy import text
+
+    found = await conn.execute(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_requests'")
+    )
+    return {row[0] for row in found}
+
+
+# ── 迁移在 FORCE 行级安全下改数据: 共用工具与 0007 回填 (需求 R283) ──
+
+
+async def test_backfill_0007_fixes_only_rows_0004_missed(storage) -> None:  # type: ignore[no-untyped-def]
+    """以属主角色在一个事务里跑 0007 的 upgrade (两次) 后回滚, 不动测试库的表结构与 alembic 版本. 第一个项目放
+    "当年漏改的行" (0004 之前的数据集载入: ready_at 为空且没有 data_version 1 的已提交导入; CSH-04 存档的回函: channel
+    仍为 auditor_upload, 没有上传人), 第二个项目放 "之后正常产生的行" (经导入接入而未确认就绪的项目, 审计师上传的
+    回函, 银行直达回函, 数据集载入的合同). 回填只改前者, 第二次是空操作, 三张表的 FORCE 行级安全都已恢复. 去掉
+    "关掉 FORCE 行级安全" 时属主看不到任何行, 前者不会被改, 这条失败. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (old, new), _, _ = storage
+    module = migration("0007_backfill_force_rls")
+
+    def upgrade(sync_conn: Any) -> None:
+        with Operations.context(MigrationContext.configure(sync_conn)):
+            module.upgrade()
+
+    loaded = datetime(2026, 1, 5, tzinfo=UTC)
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def as_project(eid: str | None) -> None:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid or ""})
+
+                async def document(eid: str, doc_id: str, kind: str, channel: str, uploader: str | None) -> None:
+                    await as_project(eid)
+                    row = {
+                        "engagement_id": eid,
+                        "id": doc_id,
+                        "type": kind,
+                        "file_name": f"{doc_id}.pdf",
+                        "file_path": f"{doc_id}.pdf",
+                        "sha256": doc_id,
+                        "page_count": 1,
+                        "reliability": "external_copy",
+                        "status": "extracted",
+                        "uploaded_at": loaded,
+                        "media_type": "application/pdf",
+                        "channel": channel,
+                        "uploaded_by": uploader,
+                    }
+                    await conn.execute(insert(m.documents).values(**row))
+
+                await as_project(old.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=old.id, dataset="demo", data_version=2, loaded_at=loaded
+                    )
+                )
+                await document(old.id, "DOC-OLD-REPLY", "confirmation", "auditor_upload", None)
+                await as_project(new.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=new.id, dataset="demo", data_version=1, loaded_at=loaded
+                    )
+                )
+                for version, status in ((1, "committed"), (None, "parsed")):
+                    await conn.execute(
+                        insert(m.data_imports).values(
+                            engagement_id=new.id,
+                            id=f"IMP-{status}",
+                            kind="accounts",
+                            source="import",
+                            status=status,
+                            data_version=version,
+                            created_by="U-1",
+                            created_at=loaded,
+                        )
+                    )
+                await document(new.id, "DOC-UP-REPLY", "confirmation", "auditor_upload", "U-1")
+                await document(new.id, "DOC-BANK-REPLY", "confirmation", "bank_direct", None)
+                await document(new.id, "DOC-SEED-CONTRACT", "contract", "auditor_upload", None)
+
+                async def state() -> dict[str, Any]:
+                    found: dict[str, Any] = {}
+                    for eid in (old.id, new.id):
+                        await as_project(eid)
+                        [load] = (await conn.execute(text("SELECT ready_at, ready_by FROM dataset_loads"))).all()
+                        found[eid] = tuple(load)
+                        for doc_id, channel in await conn.execute(text("SELECT id, channel FROM documents")):
+                            found[doc_id] = channel
+                    return found
+
+                async def forced() -> set[tuple[Any, ...]]:
+                    found = await conn.execute(
+                        text(
+                            "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+                            "WHERE relname IN ('dataset_loads', 'data_imports', 'documents')"
+                        )
+                    )
+                    return {tuple(row) for row in found}
+
+                await as_project(None)  # 同真实迁移: 不设项目
+                await conn.run_sync(upgrade)
+                after = await state()
+                assert after == {
+                    old.id: (loaded, "dataset"),  # 0004 之前的数据集载入: 视同已确认
+                    "DOC-OLD-REPLY": "bank_direct",  # CSH-04 存档的银行直达回函
+                    new.id: (None, None),  # 经导入接入, 审计师还没确认: 不动
+                    "DOC-UP-REPLY": "auditor_upload",
+                    "DOC-BANK-REPLY": "bank_direct",
+                    "DOC-SEED-CONTRACT": "auditor_upload",
+                }
+                assert await forced() == {(name, True, True) for name in ("dataset_loads", "data_imports", "documents")}
+                await as_project(None)
+                await conn.run_sync(upgrade)  # 重复执行无副作用
+                assert await state() == after
+                assert await forced() == {(name, True, True) for name in ("dataset_loads", "data_imports", "documents")}
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
+def test_all_projects_rejects_tables_without_project_isolation() -> None:
+    """工具只收按项目隔离的表, 写错表名在执行任何语句之前报错."""
+    from backend.persistence.migration_tools import all_projects
+
+    with pytest.raises(ValueError, match="users, dataset_load"), all_projects("data_requests", "users", "dataset_load"):
+        pass

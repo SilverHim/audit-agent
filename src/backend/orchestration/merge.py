@@ -4,6 +4,8 @@ P2 以外的节点在写 Store 之前对 Agent.run 的返回调用 check_patch, 
 不过时抛 MergeRejected, 由调用方把本次执行标 failed, 片段不写 Store 也不并入状态.
 """
 
+from collections.abc import Collection
+from enum import StrEnum
 from typing import Any, get_args, get_origin, get_type_hints
 
 from backend.contracts.models import (
@@ -20,6 +22,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch
+from backend.services.procedure_library import ProcedureLibrary
 
 # 各 Agent 可写的状态字段, 即第 6 节返回字段表; 另外都可写 procedure_runs (本次执行的终态)
 AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
@@ -32,6 +35,67 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A9: frozenset({"uncorrected_schedule"}),
     AgentId.A10: frozenset({"report_versions", "review_tasks"}),
 }
+
+
+class Replay(StrEnum):
+    """重放时一个状态字段从 Store 取回的方式 (接口文档第 3 节重放规则)."""
+
+    by_run = "by_run"  # 该 run_id 下各 ID 的最新版本 (对象带 run_id)
+    latest_all = "latest_all"  # 全部对象的最新版本
+    documents = "documents"  # FinancialDataStore.documents 中本程序声明类型 (document_types) 的文件
+    singleton = "singleton"  # 固定 ID 的最新版本, 并取回本程序之后的执行; 模型带 run_id 时核对它属于本程序
+    by_procedure = "by_procedure"  # 各 ID 最新版本中 run_id 属于本程序的, 并取回本程序之后的执行
+
+
+# 可由 Agent 写的状态字段 → 重放取回方式. 新字段在此登记 (第 3 节新增状态字段的登记清单)
+FIELD_REPLAY: dict[str, Replay] = {
+    "exceptions": Replay.by_run,
+    "judgments": Replay.by_run,
+    "review_tasks": Replay.by_run,
+    "confirmations": Replay.latest_all,
+    "audit_objectives": Replay.latest_all,
+    "risk_register": Replay.latest_all,
+    "report_versions": Replay.latest_all,
+    "misstatements": Replay.latest_all,
+    "documents": Replay.documents,
+    "acceptance_scorecard": Replay.singleton,
+    "analytics": Replay.singleton,
+    "materiality_candidates": Replay.singleton,
+    "uncorrected_schedule": Replay.singleton,
+}
+SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
+LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式
+
+
+def output_problems(library: ProcedureLibrary) -> list[str]:
+    """程序模板 outputs 声明的问题 (含未启用的模板), 每条含程序编号与字段: 字段不在 owner 的写入范围内, 没有登记
+    取回方式, 或两条以上程序声明同一字段而其取回方式为 singleton (项目里只有一份, 分不清是谁写的);
+    声明了 documents 而没写 document_types (重放取不回文件), 或写了 document_types 而没声明 documents."""
+    problems: list[str] = []
+    declared: dict[str, list[str]] = {}
+    for t in library.all(include_disabled=True):
+        if "documents" in t.outputs and not t.document_types:
+            problems.append(f"{t.id}: 声明产出 documents 而没写 document_types")
+        if t.document_types and "documents" not in t.outputs:
+            problems.append(f"{t.id}: 写了 document_types 而没声明产出 documents")
+        for field in t.outputs:
+            declared.setdefault(field, []).append(t.id)
+            if field not in AGENT_FIELDS.get(t.owner, frozenset()):
+                problems.append(f"{t.id}: {field} 不在 {t.owner} 的写入范围内")
+            if field not in FIELD_REPLAY:
+                problems.append(f"{t.id}: {field} 没有登记重放取回方式 (merge.FIELD_REPLAY)")
+    for field, ids in declared.items():
+        if len(ids) > 1 and FIELD_REPLAY.get(field) is Replay.singleton:
+            problems.append(f"{', '.join(ids)}: 都声明 {field}, 而其取回方式为 singleton")
+    return problems
+
+
+def check_outputs(library: ProcedureLibrary) -> None:
+    """启动校验 (GraphNodes 构造时): output_problems 非空时抛 ValueError."""
+    problems = output_problems(library)
+    if problems:
+        raise ValueError("程序模板的 outputs 不对: " + "; ".join(problems))
+
 
 # 复核任务指向的对象存在状态的哪个字段
 TARGET_FIELDS: dict[TargetType, str] = {
@@ -79,13 +143,21 @@ def known(patch: StatePatch, state: EngagementState, field: str) -> dict[str, An
     return found
 
 
-def check_fields(patch: StatePatch, writer: AgentId) -> list[str]:
-    """字段归属与类型: 每个字段都在该 Agent 的写入范围内, 值的类型与状态注解一致 (列表逐项查)."""
+def check_fields(
+    patch: StatePatch, writer: AgentId, procedure_id: str = "", outputs: Collection[str] | None = None
+) -> list[str]:
+    """字段归属与类型: 每个字段都在该 Agent 的写入范围内, 且在本程序声明的产出 (outputs) 之内;
+    值的类型与状态注解一致 (列表逐项查). outputs 为 None 时不查声明 (A1 代写的失败片段).
+    文件的类型不查 (document_types 只管重放): CSH-04 存档按哈希去重, 可能取回审计师先上传的同内容文件, 其类型
+    不一定是 confirmation, 合并时不因此判失败."""
     allowed = AGENT_FIELDS.get(writer, frozenset()) | {"procedure_runs"}
     reasons = []
     for field, value in patch.items():
         if field not in allowed:
             reasons.append(f"{writer} 不能写字段 {field}")
+            continue
+        if outputs is not None and field != "procedure_runs" and field not in outputs:
+            reasons.append(f"{procedure_id} 未声明产出 {field}")
             continue
         model, is_list = field_type(field)
         if not is_list:
@@ -209,17 +281,27 @@ def check_run(patch: StatePatch, procedure_id: str, run_id: str) -> list[str]:
     return reasons
 
 
-def check_patch(patch: StatePatch, *, writer: AgentId, procedure_id: str, run_id: str, state: EngagementState) -> None:
+def check_patch(
+    patch: StatePatch,
+    *,
+    writer: AgentId,
+    procedure_id: str,
+    run_id: str,
+    state: EngagementState,
+    outputs: Collection[str],
+) -> None:
     """校验一个 Agent 片段能否合并, 不过抛 MergeRejected (含全部原因).
 
     patch: Agent.run 的返回; fan_in 时为暂存结果中的片段.
     writer: 产出片段的 Agent, 决定可写哪些字段, 如 AgentId.A2.
     procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id.
     state: 执行时的编排状态, 只读, 用来查外键与已有版本.
-    先查字段归属与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键与本次执行的终态.
-    例: check_patch(patch, writer=agent.agent_id, procedure_id=ctx.run.procedure_id, run_id=ctx.run.id, state=ctx.state)
+    outputs: 本程序模板声明的产出字段 (template.outputs); 片段只能含这些与 procedure_runs.
+    先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键与本次执行的终态.
+    例: check_patch(patch, writer=agent.agent_id, procedure_id=ctx.run.procedure_id, run_id=ctx.run.id,
+    state=ctx.state, outputs=ctx.template.outputs)
     """
-    reasons = check_fields(patch, writer)
+    reasons = check_fields(patch, writer, procedure_id, outputs)
     if not reasons:
         reasons = [*check_ids(patch, state), *check_refs(patch, state), *check_run(patch, procedure_id, run_id)]
     if reasons:

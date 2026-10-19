@@ -156,7 +156,7 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
 
     async def lookup_abn(self, ctx: RunContext, abn: str) -> tuple[AbnRecord | None, str]:
         """查 ABN 登记并记一条留痕, 返回 (查询结果, 留痕 ID). 查不到也要记留痕."""
-        record = await self.deps.registry.abn(abn)
+        record = await self.deps.registry.abn(ctx.engagement.id, abn)
         trail_id = await self.record_query(
             ctx=ctx,
             summary=f"ABN Lookup {abn}",
@@ -167,7 +167,7 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
 
     async def lookup_asic(self, ctx: RunContext, acn: str) -> tuple[AsicCompanyRecord | None, str]:
         """按 ACN 查 ASIC 公司登记并记一条留痕, 返回 (查询结果, 留痕 ID)."""
-        record = await self.deps.registry.asic_company(acn)
+        record = await self.deps.registry.asic_company(ctx.engagement.id, acn)
         trail_id = await self.record_query(
             ctx=ctx,
             summary=f"ASIC company search {acn}",

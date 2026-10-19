@@ -1,6 +1,7 @@
 """数据管理的服务 (需求 R10-R16): 数据管理接口的写操作都经这里, 取项目锁, 写存储, 记 data 留痕.
 
 项目锁与编排共用 (GraphRunner.acquire): 同一项目同时只有一个写者, 图在后台推进时写数据报 ENGAGEMENT_BUSY.
+数据写操作 (holding, launch) 结束时图若停在执行阶段等程序要的数据 (await_data), 锁交给后台恢复, 由节点重查 (需求 R272).
 "新数据版本写入" 的入口是 DataService.write_tables (导入与 Xero 同步共用), 须在 holding 块内或 launch 的作业里调用.
 """
 
@@ -16,12 +17,13 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
-from backend.agents.checkup import DataCheckup, checkup_entries
+from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
 from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
 from backend.contracts.data import (
     CategoryVersion,
     ContractVersion,
     DataReadiness,
+    DataRequest,
     DataSource,
     DataSources,
     DataSummary,
@@ -54,9 +56,10 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import XeroConnections
 from backend.contracts.records import Account, AccountCategory
-from backend.orchestration.nodes import DATA_READY
-from backend.orchestration.query import current_gate
-from backend.orchestration.runner import GraphRunner, awaiting_data, review_waits
+from backend.contracts.state import fill_defaults
+from backend.orchestration.gates import current_gate
+from backend.orchestration.nodes import DATA_READY, INPUTS_CHANGED
+from backend.orchestration.runner import GraphRunner, awaiting_data, awaiting_inputs, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.account_mapping import CATEGORY_GROUPS, with_category
 from backend.services.data_import import (
@@ -64,14 +67,14 @@ from backend.services.data_import import (
     SCHEMAS,
     MappingError,
     UnreadableFile,
-    convert,
     media_type,
     preview,
     read_sheet,
     sheet_names,
 )
-from backend.services.data_quality import missing_tables
+from backend.services.data_quality import REQUIRED_TABLES, missing_tables
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
+from backend.services.table_plan import convert
 from backend.services.trail_pages import all_of_kind
 
 logger = logging.getLogger(__name__)
@@ -262,22 +265,48 @@ class DataService:
     @asynccontextmanager
     async def holding(self, eid: str, labels: Iterable[str]) -> AsyncIterator[None]:
         """在块内做一件数据写操作: 进入时查锁定 (ENGAGEMENT_LOCKED), 取项目锁 (取不到 ENGAGEMENT_BUSY), 把 labels
-        (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时 (成败)
-        注销并释放锁. 数据提交在注销之前, 概览据此判断."""
+        (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时注销,
+        成功时锁交给 continue_waiting (图在等程序要的数据就交给后台恢复, 否则释放), 出错时释放. 数据提交在注销之前,
+        概览据此判断."""
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, labels)
         try:
             await self.backfill_trails(eid)
             yield
-        finally:
+        except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
+            raise
+        self._unregister(eid, key)
+        await self.continue_waiting(eid)
+
+    async def continue_waiting(self, eid: str) -> None:
+        """持项目锁的数据写操作结束时调用, 锁由此交出或释放, 调用方不再管锁: 图停在 await_data 等程序要的数据
+        (需求 R272) 时交给后台, 以 Command(resume=INPUTS_CHANGED) 恢复, 由节点按现有资料重查, 后台任务结束时释放;
+        否则释放. 读检查点出错只记日志, 释放; 读检查点时被取消 (请求取消, 应用退出) 也释放, 再照常抛出; 后台任务
+        建不起来时 runner.launch 已释放锁, 只记日志."""
+        handed = False  # 锁已交给 runner.launch
+        try:
+            try:
+                waiting = awaiting_inputs(await self.runner.app.aget_state(GraphRunner.config(eid)))
+            except Exception:
+                logger.exception("数据写入后读检查点失败: %s", eid)
+                return
+            if waiting:
+                handed = True
+                try:
+                    self.runner.launch(eid, Command(resume=INPUTS_CHANGED))
+                except Exception:
+                    logger.exception("数据写入后恢复等数据的程序失败: %s", eid)
+        finally:
+            if not handed:
+                self.runner.release(eid)
 
     async def launch(self, eid: str, labels: Iterable[str], job: Callable[[], Awaitable[None]]) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
-        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销并释放锁. job 自己处理业务失败
-        (如把文件置 needs_manual); 漏出的异常只记日志."""
+        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job
+        自己处理业务失败 (如把文件置 needs_manual); 漏出的异常只记日志."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
@@ -289,23 +318,36 @@ class DataService:
 
         self._spawn(eid, key, run)
 
-    def _spawn(self, eid: str, key: object, job: Callable[[], Awaitable[None]]) -> None:
-        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 结束 (成败, 含还没开始就被取消) 时由任务的完成回调
-        注销并释放锁, 只做一次; 漏出的异常只记日志."""
+    def _spawn(
+        self,
+        eid: str,
+        key: object,
+        job: Callable[[], Awaitable[None]],
+        then: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 漏出的异常只记日志. 作业结束 (成败) 后注销, 锁交给
+        then (缺省 continue_waiting: 图在等程序要的数据就交给后台恢复, 否则释放), 由它交出或释放, 完成回调不再释放;
+        作业没跑完就被取消 (含还没开始) 时由任务的完成回调注销并释放锁, 只做一次. then 须保证锁交出或释放 (含取消)."""
         done = False
+        handed = False  # 锁已交给 then
 
         def finish(_: object = None) -> None:
             nonlocal done
             if not done:
                 done = True
                 self._unregister(eid, key)
-                self.runner.release(eid)
+                if not handed:
+                    self.runner.release(eid)
 
         async def run() -> None:
+            nonlocal handed
             try:
                 await job()
             except Exception:
                 logger.exception("数据作业失败: %s %s", eid, sorted(self.jobs.get(eid, {}).get(key, ())))
+            self._unregister(eid, key)
+            handed = True  # 从这里到 then 内部第一次等待之间不会被取消打断
+            await (then or self.continue_waiting)(eid)
 
         try:
             task = asyncio.create_task(run())
@@ -522,7 +564,7 @@ class DataService:
         持项目锁做完 (holding, 作业涉及该表). 已提交的会话以相同的表种类, 工作表, 日期写法与列对应再提交 (重试) 时
         不再写入, 返回上次的结果 (上次没写成的留痕已在取锁时补写). 按顺序拒绝: 锁定 423, 忙 409, 会话不存在 404,
         已提交而选择不同 INVALID_VALUE,
-        工作表不存在 INVALID_VALUE, 对应不可用 INVALID_VALUE 或 MISSING_FIELD (见 data_import.check_mapping),
+        工作表不存在 INVALID_VALUE, 对应不可用 INVALID_VALUE 或 MISSING_FIELD (见 table_plan.check_plan),
         有解析失败 IMPORT_PARSE_ERROR (detail.errors 为前 20 处 {row, column, value}). 科目表按名称归类,
         记 category_basis (services.account_mapping).
         """
@@ -631,14 +673,17 @@ class DataService:
             open_requests=await data.open_requests(eid),
         )
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(self, eid: str, actor: str, reason: str | None = None) -> DataReadiness:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.
 
         按顺序校验, 第一条不过即拒绝 (DataRejected): 项目锁定 ENGAGEMENT_LOCKED; 取项目锁失败 ENGAGEMENT_BUSY;
-        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables).
-        通过后记确认 (已确认的保留第一次的人与时间), 写 data 留痕 (action ready, 同键已有的跳过), 以
-        Command(resume=DATA_READY) 在后台恢复; 项目锁交给后台任务. 确认已记而图仍在等 (上次留痕或恢复没成) 时
-        再确认一次照常补写留痕并恢复; recover 与 resume 也会补做 (GraphRunner._proceed).
+        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables); 最近一次体检有不通过
+        (failed) 的项而理由为空 (去首尾空白后) DATA_CHECKS_FAILED (附 failed_checks, 需求 R273). 判断体检前先补做
+        已不对应当前数据的体检 (checkup_if_stale; 补做出错只记日志, 按已有的最近一次结果判断).
+        通过后记确认, 连同理由与这些未通过项 (规则见 DataStore.confirm_ready: 人与时间保留第一次的, 第一次没有未通过项
+        而本次有时补记本次的), 写 data 留痕 (action ready, 同键已有的跳过), 以 Command(resume=DATA_READY) 在后台恢复;
+        项目锁交给后台任务. 确认已记而图仍在等 (上次留痕或恢复没成) 时再确认一次照常校验, 补写留痕并恢复; recover 与
+        resume 也会补做 (GraphRunner._proceed).
         """
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
@@ -655,13 +700,49 @@ class DataService:
                 raise DataRejected(
                     "DATA_NOT_READY", f"还缺: {', '.join(missing)}", missing_tables=[k.value for k in missing]
                 )
-            readiness = await self.deps.data.confirm_ready(eid, actor)
+            await self.checkup_if_stale(eid)  # 写入后的体检出错时, data_checks 还是上一版数据的结果
+            failed = [check.id for check in await self.deps.data.checks(eid) if check.status == "failed"]
+            reason = (reason or "").strip() or None
+            if failed and reason is None:
+                raise DataRejected(
+                    "DATA_CHECKS_FAILED",
+                    f"体检不通过: {', '.join(failed)}; 须写明理由才能确认",
+                    failed_checks=[c.value for c in failed],
+                )
+            readiness = await self.deps.data.confirm_ready(eid, actor, reason=reason, failed_checks=failed)
             await record_transitions(self.deps.trail, [data_ready_entry(eid, readiness)])
         except BaseException:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
             raise
         self.runner.launch(eid, Command(resume=DATA_READY))
         return readiness
+
+    async def mark_unavailable(self, eid: str, request_id: str, reason: str, actor: str) -> DataRequest:
+        """审计师在补交卡片上标 "客户无此类资料" (POST /data/requests/{id}/unavailable, 需求 R280): 请求转 unavailable,
+        记理由, 标记人与时间, 写 data 留痕 (action request_unavailable, 带理由与 used_for). 在 holding 内做 (不计进
+        处理中的作业), 结束时图若在等程序要的数据就交锁恢复: await_data 重查, 等这项资料的程序与其下游记 no_data.
+        标记是定论, 之后的体检不重开也不改 (data_quality.reconcile).
+
+        按顺序拒绝: 锁定 423, 忙 409; 请求不存在 404; 理由去首尾空白后为空 MISSING_FIELD; 不是 open
+        REQUEST_NOT_OPEN; 就绪必需的表 (P1 等数据已保证有) INVALID_VALUE."""
+        async with self.holding(eid, []):
+            request = next((r for r in await self.deps.data.requests(eid) if r.id == request_id), None)
+            if request is None:
+                raise LookupError(f"补交请求 {request_id} 不存在")
+            reason = reason.strip()
+            if not reason:
+                raise DataRejected("MISSING_FIELD", "须写明客户没有这类资料的理由")
+            if request.status != "open":
+                raise DataRejected("REQUEST_NOT_OPEN", f"{request_id} 已是 {request.status}")
+            if request.table_kind in REQUIRED_TABLES:
+                raise DataRejected("INVALID_VALUE", f"{request.title}是就绪必需的表, 不能标客户无此类资料")
+            marked = await self.deps.data.mark_unavailable(
+                eid, request_id, reason=reason, actor=actor, at=datetime.now(UTC)
+            )
+            if marked is None:  # 读过之后被改了 (存储层只改仍为 open 的)
+                raise DataRejected("REQUEST_NOT_OPEN", f"{request_id} 已不是 open")
+            await record_transitions(self.deps.trail, [request_entry(eid, marked, "request_unavailable")])
+        return marked
 
     # ── 文件上传, 分类与抽取结果修改 (需求 R14) ──
 
@@ -796,12 +877,15 @@ class DataService:
         }
         return jobs, requested
 
-    async def recover(self) -> None:
-        """应用启动时 (runner.recover 之后) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
+    async def recover(self) -> set[str]:
+        """应用启动时 (runner.recover 之前) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
         上次作业被取消或进程退出时留下; 另含按请求定类型没落到登记上的, 见 _resume_info), 处理前补写缺的上传留痕
         (upload_entry), 按请求定类型, 做完体检; 没有要补做的文件时, 体检结果已不对应当前数据的补做体检 (上次体检
-        失败). 项目已锁定的跳过; 项目锁正被占用 (如图在继续执行) 的这次跳过, 等下次上传或指定类型时补做.
-        一个项目出错只记日志, 不影响其他项目."""
+        失败). 项目已锁定的跳过; 项目锁正被占用的这次跳过, 等下次上传或指定类型时补做.
+        补做的文件处理在后台进行, 做完后锁交给 runner.proceed, 按 recover 规则带动图继续 (需求 R272: 图在等程序要的
+        数据时, 文件处理完才重查); 返回这些项目的编号, 由调用方交给 runner.recover(skip=...), 同一项目不重复拉起.
+        一个项目出错只记日志, 不影响其他项目 (不在返回值中, 由 runner.recover 照常处理)."""
+        taken: set[str] = set()
         for engagement in await self.deps.engagement_store.list():
             eid = engagement.id
             if engagement.locked or self.runner.is_running(eid):
@@ -833,9 +917,11 @@ class DataService:
                     self._unregister(eid, key)
                     self.runner.release(eid)
                     raise
-                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested))
+                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested), self.runner.proceed)
+                taken.add(eid)
             except Exception:
                 logger.exception("补做文件处理失败: %s", eid)
+        return taken
 
     async def set_document_type(
         self, eid: str, document_id: str, kind: DocumentType, reason: str, actor: str
@@ -934,9 +1020,11 @@ class DataService:
         字段与理由, 数据版本 +1, 三者在一个事务内; 提交后写 data 留痕 (同 edit_contract). 字段: confirming_party,
         balance_date, confirmed_balance_cents.
 
-        函证在编排状态里, 只在图停在闸门或等复核 (且没有出错的节点) 时可改, 否则 409 NOT_EDITABLE: 停在这两处时之后
-        写函证的节点 (DOC-06 重跑, CSH-02) 都要经过等复核恢复, 那时从库读回最新版本 (nodes.await_events); 闸门之后
-        不再有写函证的节点. CSH-02 已比对过的差额与结果不随之重算, 由数据版本标出过期 (需求 R16).
+        函证在编排状态里, 只在图停在闸门或等复核 (P2 的等复核, 或 P2 以外节点等人; 且没有出错的节点) 时可改,
+        否则 409 NOT_EDITABLE. 停在 P2 的等复核时, 之后写函证的节点 (DOC-06 重跑, CSH-02) 都要经过等复核恢复,
+        那时从库读回最新版本 (nodes.await_events). P2 以外节点等人时不读函证, 状态中的函证比库里旧; 但函证只在
+        P2 产生, 之后不再有写函证或按状态函证计算的节点, 不影响结果; 闸门之后同理. CSH-02 已比对过的差额与结果
+        不随之重算, 由数据版本标出过期 (需求 R16).
         持项目锁 (锁定 423, 忙 409); 函证不存在 404; 理由为空 MISSING_FIELD; 字段或值不合法, 与当前相同
         INVALID_VALUE; 同一修改的重试返回当前版本 (同 edit_contract)."""
         reason = self._reason(edit)
@@ -947,7 +1035,8 @@ class DataService:
                 raise LookupError(f"函证 {confirmation_id} 不存在")
             snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
             broken = any(task.error for task in snapshot.tasks)
-            if broken or (current_gate(snapshot.next) is None and not review_waits(snapshot)):
+            at_gate = current_gate(snapshot.next, fill_defaults(snapshot.values)) is not None
+            if broken or not (at_gate or review_waits(snapshot)):
                 raise DataRejected("NOT_EDITABLE", "只能在图停在闸门或等复核时修改回函抽取结果")
             try:
                 updated = apply_confirmation_edit(confirmation, edit.field, edit.value)

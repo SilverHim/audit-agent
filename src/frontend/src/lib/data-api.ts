@@ -10,6 +10,7 @@ import {
 import {
   dataChangeImportSheet,
   dataCommitImport,
+  dataMarkRequestUnavailable,
   dataReady,
   dataSetAccountCategory,
   dataStartImport,
@@ -21,6 +22,7 @@ import {
 import type {
   AccountCategoryIn,
   CategoryVersion,
+  DataRequest,
   DocumentType,
   ExtractionEdit,
   ImportCommit,
@@ -28,6 +30,7 @@ import type {
 } from '@/client/types.gen'
 import { invalidateEngagement } from '@/lib/engagement'
 import { call } from '@/lib/new-api'
+import type { Messages } from '@/locales/en'
 
 // 数据管理接口 (后端需求 R10-R16) 用生成的客户端; 查询键都带 path.eid, 写操作后按项目整体失效.
 // Xero 接口 (R12) 还没合入, 暂用过渡调用
@@ -184,10 +187,30 @@ export function useDataRequests(eid: string) {
   return useQuery(dataDataRequestsOptions({ path: { eid } }))
 }
 
+// 补交请求的资料名称, 按表种类或文件类型本地化
+export function requestTitle(request: DataRequest, t: Messages): string {
+  if (request.table_kind) return t.data.tables[request.table_kind] ?? request.title
+  if (request.document_type) return t.data.docTypes[request.document_type] ?? request.title
+  return request.title
+}
+
+// R280 客户无此类资料 (理由必填)
+export function useMarkUnavailable(eid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ requestId, reason }: { requestId: string; reason: string }) =>
+      (await dataMarkRequestUnavailable({ path: { eid, request_id: requestId }, body: { reason }, throwOnError: true }))
+        .data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+// 最近一次体检有不通过的项时须带理由 (否则 409 DATA_CHECKS_FAILED)
 export function useDataReady(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async () => (await dataReady({ path: { eid }, throwOnError: true })).data,
+    mutationFn: async (reason?: string) =>
+      (await dataReady({ path: { eid }, body: reason ? { reason } : undefined, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
 import type { DocumentRef, DocumentType } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
+import { DataReadyButton } from '@/components/data-ready'
+import { MarkedRequests } from '@/components/data-requests'
 import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -17,7 +19,7 @@ import {
   type DataSummary,
   type TableKind,
   type TableSummary,
-  useDataReady,
+  useDataRequests,
   useDataSummary,
   useSetDocumentType,
   useUploadDocuments,
@@ -25,9 +27,9 @@ import {
   useXeroDisconnect,
   useXeroSync,
 } from '@/lib/data-api'
+import { checkDetail } from '@/lib/data-checks'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import { NotAvailable } from '@/lib/new-api'
 import { useEngagement } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
@@ -66,7 +68,7 @@ function DataPage() {
     refetchInterval: summary?.processing ? 3000 : false,
   })
   const upload = useUploadDocuments(eid)
-  const ready = useDataReady(eid)
+  const requests = useDataRequests(eid)
   const fileInput = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState<{ kind?: TableKind } | null>(null)
 
@@ -136,14 +138,7 @@ function DataPage() {
         {overview?.awaiting_data ? (
           <section className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border-[1.5px] border-primary bg-card px-5 py-4">
             <span className="font-semibold text-[15px]">{t.data.awaiting}</span>
-            <Button
-              type="button"
-              size="lg"
-              disabled={ready.isPending}
-              onClick={() => ready.mutate(undefined, { onError: (error) => toast.error(failMessage(error, t)) })}
-            >
-              {t.data.ready}
-            </Button>
+            <DataReadyButton eid={eid} size="lg" />
           </section>
         ) : null}
 
@@ -177,6 +172,8 @@ function DataPage() {
             <Checks eid={eid} checks={summary.checks} />
           </>
         ) : null}
+
+        <MarkedRequests requests={(requests.data ?? []).filter((item) => item.status === 'unavailable')} />
 
         <Documents
           eid={eid}
@@ -408,40 +405,6 @@ function FinancialTables({
       </div>
     </section>
   )
-}
-
-function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): string {
-  const p = check.params ?? {}
-  const num = (value: unknown) => Number(value ?? 0)
-  switch (check.id) {
-    case 'debits_equal_credits':
-      return t.data.checkDetail.debits(formatAud(num(p.debit_cents)), formatAud(num(p.credit_cents)))
-    case 'journals_agree_tb':
-      return t.data.checkDetail.journals(num(p.accounts), Array.isArray(p.differences) ? p.differences.length : 0)
-    case 'count_agrees_source':
-      return t.data.checkDetail.count(
-        String(p.source ?? ''),
-        num(p.expected).toLocaleString('en-AU'),
-        num(p.received).toLocaleString('en-AU'),
-      )
-    case 'mapping_complete':
-      return t.data.checkDetail.mapping(num(p.mapped), num(p.total))
-    case 'preparer_approver_available': {
-      if (check.status === 'passed') return ''
-      const fields = (Array.isArray(p.missing_fields) ? p.missing_fields : []).map(
-        (field) => t.data.fieldNames[String(field)] ?? String(field),
-      )
-      return t.data.checkDetail.fields(fields.join(lang === 'zh' ? '与' : ' and '), String(p.source ?? 'Xero'))
-    }
-    case 'tb_agrees_statements':
-      if (check.status === 'missing_data')
-        return num(p.statements) ? t.data.checkDetail.statementsNoTb : t.data.checkDetail.statementsMissing
-      // 报表数字的勾稽归 FIN-12, 还没执行时为 pending
-      if (check.status === 'pending') return t.data.checkDetail.statementsPending(num(p.statements))
-      return p.difference_cents ? t.data.checkDetail.statementsDiff(formatAud(num(p.difference_cents))) : ''
-    default:
-      return ''
-  }
 }
 
 function CheckIcon({ status, label }: { status: string; label: string }) {

@@ -1,4 +1,5 @@
-"""数据管理智能体 (A3) 的数据规则: 就绪条件 (需求 R10), 数据体检与补交请求 (需求 R15). 纯函数, 不读写存储.
+"""数据管理智能体 (A3) 的数据规则: 就绪条件 (需求 R10), 数据体检与补交请求 (需求 R15), 程序要的资料与补交请求
+(需求 R272). 纯函数, 不读写存储.
 
 体检各项的口径见 开发接口文档.md 第 6 节 "数据体检"; 汇总 (CheckInputs) 由 DataStore.check_inputs 按 SQL 算,
 summarize 是同一口径的 Python 版本 (假存储与对照测试用).
@@ -21,6 +22,7 @@ from backend.contracts.data import (
     TableStats,
     TableVersion,
 )
+from backend.contracts.knowledge import ProcedureInputs
 from backend.contracts.models import DocumentType
 from backend.contracts.records import Account, JournalEntry, TrialBalanceRow
 from backend.services.ledger import PROFIT_AND_LOSS, opening_balances
@@ -108,11 +110,30 @@ TABLE_TITLES = {
     TableKind.accounts: "科目表",
     TableKind.trial_balance: "试算表 (本期与上期)",
     TableKind.journal_entries: "总账分录",
+    TableKind.sales_invoices: "销售发票",
+    TableKind.bank_accounts: "银行账户",
+    TableKind.bank_transactions: "银行流水",
+    TableKind.delivery_notes: "发运单",
     TableKind.approval_log: "分录审批日志",
 }
-DOCUMENT_TITLES = {DocumentType.financial_statements: "财务报表草稿"}
-# 要用各项资料的程序 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描 (GEN-05) 判断录入与审批,
-# 报表草稿供财报与会计记录勾稽 (FIN-12)
+DOCUMENT_TITLES = {
+    DocumentType.contract: "合同",
+    DocumentType.invoice: "发票",
+    DocumentType.confirmation: "回函",
+    DocumentType.bank_statement: "银行对账单",
+    DocumentType.minutes: "会议纪要",
+    DocumentType.financial_statements: "财务报表草稿",
+    DocumentType.registry_extract: "登记机构摘录",
+    DocumentType.engagement_letter: "审计业务约定书",
+    DocumentType.representation_letter: "管理层声明书",
+    DocumentType.correspondence: "往来函件",
+    DocumentType.governance_communication: "与治理层的沟通",
+    DocumentType.agreement: "协议",
+    DocumentType.internal_record: "内部记录",
+}  # other 以外的文件类型都有标题 (模板 inputs 可写任一种, 见 test_procedure_inputs)
+# 体检请求 (就绪必需的表, 审批日志, 报表草稿) 的用途 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描
+# (GEN-05) 判断录入与审批, 报表草稿供财报与会计记录勾稽 (FIN-12). 程序要的资料的用途取模板 inputs (program_requests);
+# inputs 不能写就绪必需的表, 两类请求的资料不重叠. GEN-05, FIN-12 实现时改为在其 YAML 写 inputs, 再删这里的对应项
 USED_FOR: dict[TableKind | DocumentType, list[str]] = {
     TableKind.accounts: ["PLN-07", "PLN-01"],
     TableKind.trial_balance: ["PLN-07", "PLN-01", "CSH-05", "CSH-02"],
@@ -138,8 +159,8 @@ def request_id(subject: TableKind | DocumentType) -> str:
     return f"REQ-{subject.value}"
 
 
-# 同一时间提出的请求的先后: 科目表, 试算表, 总账, 审批日志, 报表草稿 (认不出的排最后, 按 ID)
-REQUEST_ORDER = [request_id(subject) for subject in USED_FOR]
+# 同一时间提出的请求的先后: 账表按 TableKind 顺序, 再是文件按 DocumentType 顺序 (认不出的排最后, 按 ID)
+REQUEST_ORDER = [request_id(subject) for subject in [*TableKind, *DocumentType]]
 
 
 def request_order(request: DataRequest) -> tuple[datetime, int, str]:
@@ -148,13 +169,20 @@ def request_order(request: DataRequest) -> tuple[datetime, int, str]:
     return (request.created_at, rank, request.id)
 
 
-def table_request(kind: TableKind, reason: RequestReason, params: Mapping[str, Any], now: datetime) -> DataRequest:
+def table_request(
+    kind: TableKind,
+    reason: RequestReason,
+    params: Mapping[str, Any],
+    now: datetime,
+    used_for: Sequence[str] | None = None,
+) -> DataRequest:
+    """账表的补交请求; used_for 缺省取 USED_FOR (体检请求)."""
     return DataRequest(
         id=request_id(kind),
         kind="table",
         table_kind=kind,
         title=TABLE_TITLES[kind],
-        used_for=USED_FOR[kind],
+        used_for=list(USED_FOR[kind] if used_for is None else used_for),
         reason_code=reason,
         reason_params=dict(params),
         format_hint=TABLE_FORMATS,
@@ -162,17 +190,92 @@ def table_request(kind: TableKind, reason: RequestReason, params: Mapping[str, A
     )
 
 
-def document_request(kind: DocumentType, reason: RequestReason, now: datetime) -> DataRequest:
+def document_request(
+    kind: DocumentType, reason: RequestReason, now: datetime, used_for: Sequence[str] | None = None
+) -> DataRequest:
+    """文件的补交请求; used_for 缺省取 USED_FOR (体检请求)."""
     return DataRequest(
         id=request_id(kind),
         kind="document",
         document_type=kind,
         title=DOCUMENT_TITLES[kind],
-        used_for=USED_FOR[kind],
+        used_for=list(USED_FOR[kind] if used_for is None else used_for),
         reason_code=reason,
         format_hint=DOCUMENT_FORMATS,
         created_at=now,
     )
+
+
+# ── 程序要的资料 (需求 R272) ──
+
+Subject = TableKind | DocumentType  # 一项资料: 账表或文件类型
+
+
+@dataclass(frozen=True)
+class OnHand:
+    """项目现有的资料: 有行的账表与有文件的类型 (口径同就绪判断: 账表有任意一行即算有, 含审计期间外的), 以及
+    审计师标了客户无此类资料的 (需求 R280)."""
+
+    tables: frozenset[TableKind] = frozenset()
+    documents: frozenset[DocumentType] = frozenset()
+    unavailable: frozenset[Subject] = frozenset()
+
+    def has(self, subject: Subject) -> bool:
+        return subject in self.tables if isinstance(subject, TableKind) else subject in self.documents
+
+
+def subject_of(request: DataRequest) -> Subject | None:
+    """请求要的资料: 账表种类或文件类型."""
+    return request.table_kind if request.table_kind is not None else request.document_type
+
+
+def on_hand(
+    stats: Mapping[TableKind, TableStats], documents: Mapping[DocumentType, int], requests: Iterable[DataRequest] = ()
+) -> OnHand:
+    """由 DataStore.stats, DataStore.document_counts 与补交请求 (标了 unavailable 的) 算现有的资料."""
+    return OnHand(
+        tables=frozenset(kind for kind, item in stats.items() if item.records > 0),
+        documents=frozenset(kind for kind, n in documents.items() if n > 0),
+        unavailable=frozenset(
+            subject for r in requests if r.status == "unavailable" and (subject := subject_of(r)) is not None
+        ),
+    )
+
+
+def missing_inputs(inputs: ProcedureInputs, have: OnHand) -> list[Subject]:
+    """模板 inputs 中现在还没有的资料, 按声明顺序 (先账表后文件)."""
+    tables: list[Subject] = [kind for kind in inputs.tables if kind not in have.tables]
+    return tables + [kind for kind in inputs.documents if kind not in have.documents]
+
+
+def program_requests(needs: Mapping[str, ProcedureInputs], have: OnHand, now: datetime) -> list[DataRequest]:
+    """程序要的补交请求: needs 为还没执行完的程序 → 其 inputs; 现在还没有的资料每项一个请求 (标了客户无此类资料的
+    不算), used_for 为要它的程序 (按编号). 账表的原因为 missing_table, 文件为 not_provided. 按 REQUEST_ORDER 排."""
+    users: dict[Subject, list[str]] = {}
+    for procedure_id in sorted(needs):
+        for subject in missing_inputs(needs[procedure_id], have):
+            if subject not in have.unavailable:
+                users.setdefault(subject, []).append(procedure_id)
+    requests = [
+        table_request(subject, "missing_table", {}, now, used_for)
+        if isinstance(subject, TableKind)
+        else document_request(subject, "not_provided", now, used_for)
+        for subject, used_for in users.items()
+    ]
+    return sorted(requests, key=request_order)
+
+
+def merge_requests(*groups: Iterable[DataRequest]) -> list[DataRequest]:
+    """几组请求合成一组: 同 ID 的取先出现的, used_for 取并集 (保持先后). 按 REQUEST_ORDER 排."""
+    merged: dict[str, DataRequest] = {}
+    for request in (r for group in groups for r in group):
+        first = merged.get(request.id)
+        if first is None:
+            merged[request.id] = request
+        else:
+            used_for = list(dict.fromkeys([*first.used_for, *request.used_for]))
+            merged[request.id] = first.model_copy(update={"used_for": used_for})
+    return sorted(merged.values(), key=request_order)
 
 
 # ── 体检 ──
@@ -300,20 +403,28 @@ def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVe
 
 @dataclass(frozen=True)
 class RequestChanges:
-    """补交请求的变化: saved 为要写入的 (新提出, 重新打开, 参数变了, 转 received 的), raised 与 received 为要留痕的."""
+    """补交请求的变化: saved 为要写入的 (新提出, 重新打开, 参数变了, 转 received 或 withdrawn 的), raised, received
+    与 withdrawn 为要留痕的."""
 
     saved: list[DataRequest] = field(default_factory=list)
     raised: list[DataRequest] = field(default_factory=list)
     received: list[DataRequest] = field(default_factory=list)
+    withdrawn: list[DataRequest] = field(default_factory=list)
 
 
-def reconcile(existing: Sequence[DataRequest], wanted: Sequence[DataRequest], now: datetime) -> RequestChanges:
+def reconcile(
+    existing: Sequence[DataRequest], wanted: Sequence[DataRequest], now: datetime, have: OnHand | None = None
+) -> RequestChanges:
     """对照已有请求与这次体检需要的请求: 没有的新提出; 已收到 (或撤回) 的重新打开 (created_at 为 now, resolved_at
-    清空); 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再需要的 (资料已补齐) 转 received."""
+    清空); 标了客户无此类资料的是定论, 不重开也不改; 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再
+    需要的转 received (资料已补齐), 但程序要的资料现在仍没有 (have 中没有, 要它的程序都不再执行, 需求 R280) 时转
+    withdrawn. 体检请求的资料 (USED_FOR 的) 不再需要即算收到 (如审批人随总账一并补上); have 为空时一律按收到."""
     changes = RequestChanges()
     current = {r.id: r for r in existing}
     for request in wanted:
         old = current.get(request.id)
+        if old is not None and old.status == "unavailable":
+            continue
         if old is None or old.status != "open":
             changes.saved.append(request)
             changes.raised.append(request)
@@ -322,7 +433,9 @@ def reconcile(existing: Sequence[DataRequest], wanted: Sequence[DataRequest], no
     needed = {r.id for r in wanted}
     for old in existing:
         if old.status == "open" and old.id not in needed:
-            received = old.model_copy(update={"status": "received", "resolved_at": now})
-            changes.saved.append(received)
-            changes.received.append(received)
+            subject = subject_of(old)
+            gone = have is not None and subject is not None and subject not in USED_FOR and not have.has(subject)
+            resolved = old.model_copy(update={"status": "withdrawn" if gone else "received", "resolved_at": now})
+            changes.saved.append(resolved)
+            (changes.withdrawn if gone else changes.received).append(resolved)
     return changes

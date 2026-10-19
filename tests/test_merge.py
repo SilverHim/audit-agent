@@ -1,5 +1,8 @@
 """Agent 片段合并前的校验 (orchestration/merge.py). 场景: A6 执行 REV-03 (第 1 次), 程序包含 REV-08 与 REV-03."""
 
+import shutil
+from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,12 +15,15 @@ from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     AutonomyLevel,
+    DocumentRef,
+    DocumentType,
     ExceptionDisposition,
     Judgment,
     OpinionType,
     Phase,
     ProcedureRun,
     ProposedAction,
+    Reliability,
     ReviewStatus,
     ReviewTask,
     RunStatus,
@@ -26,7 +32,19 @@ from backend.contracts.models import (
     TaskStatus,
 )
 from backend.contracts.state import EngagementState, StatePatch, initial_state
-from backend.orchestration.merge import AGENT_FIELDS, MergeRejected, check_patch, field_type
+from backend.core.config import get_settings
+from backend.orchestration.merge import (
+    AGENT_FIELDS,
+    FIELD_REPLAY,
+    SHAREABLE,
+    STATE_HINTS,
+    MergeRejected,
+    check_patch,
+    field_type,
+    output_problems,
+)
+from backend.orchestration.nodes import GraphNodes
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -34,6 +52,7 @@ from tests.fakes import (
     NUMBAT_ASIC,
     FakeRegistry,
     FakeTrail,
+    ScriptA6,
     make_ctx,
     make_deps,
     make_procedure,
@@ -111,12 +130,27 @@ def a6_patch(**fields: Any) -> StatePatch:
     return {"judgments": [judgment()], "review_tasks": [task()], "procedure_runs": [finished(RUN)], **fields}
 
 
+LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+
+
+def declared(procedure_id: str) -> list[str]:
+    """程序模板声明的产出字段 (check_patch 的 outputs)."""
+    return LIBRARY.load(procedure_id).outputs
+
+
 def reasons_of(
     patch: StatePatch, writer: AgentId = AgentId.A6, state: EngagementState | None = None, run: ProcedureRun = RUN
 ) -> list[str]:
     """按本次执行 run 校验片段: 不过时返回原因, 通过时返回空列表."""
     try:
-        check_patch(patch, writer=writer, procedure_id=run.procedure_id, run_id=run.id, state=state or make_state())
+        check_patch(
+            patch,
+            writer=writer,
+            procedure_id=run.procedure_id,
+            run_id=run.id,
+            state=state or make_state(),
+            outputs=declared(run.procedure_id),
+        )
     except MergeRejected as e:
         return e.reasons
     return []
@@ -194,7 +228,8 @@ def test_list_field_given_single_object_rejected() -> None:
 def test_single_field_given_wrong_type_rejected() -> None:
     patch = {"acceptance_scorecard": [], "procedure_runs": [finished(RUN)]}
 
-    assert reasons_of(patch, writer=AgentId.A2) == ["acceptance_scorecard 应为 AcceptanceScorecard, 实为 list"]
+    reasons = reasons_of(patch, writer=AgentId.A2, run=make_run("ACC-04"))  # ACC-04 声明了评分卡
+    assert reasons == ["acceptance_scorecard 应为 AcceptanceScorecard, 实为 list"]
 
 
 def test_duplicate_judgment_ids_rejected() -> None:
@@ -385,7 +420,9 @@ def test_scorecard_exception_ids_must_exist() -> None:
     state = initial_state(ENGAGEMENT, [make_procedure("ACC-04")], 1)
 
     with pytest.raises(MergeRejected) as info:
-        check_patch(patch, writer=AgentId.A2, procedure_id="ACC-04", run_id=acc04.id, state=state)
+        check_patch(
+            patch, writer=AgentId.A2, procedure_id="ACC-04", run_id=acc04.id, state=state, outputs=declared("ACC-04")
+        )
 
     assert info.value.reasons == ["AcceptanceScorecard SCORECARD 引用的例外 X-ACC-04-1-abn_active-1 不存在"]
 
@@ -435,7 +472,14 @@ def test_other_runs_in_patch_rejected() -> None:
 def test_current_run_of_other_procedure_rejected() -> None:
     """片段里的本次执行属于别的程序: 节点按 ctx.run 校验, 报 procedure_id 不符."""
     with pytest.raises(MergeRejected) as info:
-        check_patch(a6_patch(), writer=AgentId.A6, procedure_id="REV-08", run_id=RUN.id, state=make_state())
+        check_patch(
+            a6_patch(),
+            writer=AgentId.A6,
+            procedure_id="REV-08",
+            run_id=RUN.id,
+            state=make_state(),
+            outputs=declared("REV-03"),
+        )
 
     assert info.value.reasons == [f"本次执行 {RUN.id} 的 procedure_id 为 REV-03, 应为 REV-08"]
 
@@ -447,7 +491,14 @@ def test_all_reasons_collected_and_message_prefixed() -> None:
     patch = a6_patch(judgments=[judgment(), judgment()], procedure_runs=[RUN])
 
     with pytest.raises(MergeRejected) as info:
-        check_patch(patch, writer=AgentId.A6, procedure_id=RUN.procedure_id, run_id=RUN.id, state=make_state())
+        check_patch(
+            patch,
+            writer=AgentId.A6,
+            procedure_id=RUN.procedure_id,
+            run_id=RUN.id,
+            state=make_state(),
+            outputs=declared(RUN.procedure_id),
+        )
 
     assert info.value.reasons == [
         f"judgments 中 ID {J1} 重复",
@@ -480,7 +531,14 @@ async def test_acc04_patch_passes(abn_status: str, exception_count: int) -> None
     patch = await agent.run(ctx)
 
     assert len(patch["exceptions"]) == exception_count
-    check_patch(patch, writer=agent.agent_id, procedure_id=ctx.run.procedure_id, run_id=ctx.run.id, state=ctx.state)
+    check_patch(
+        patch,
+        writer=agent.agent_id,
+        procedure_id=ctx.run.procedure_id,
+        run_id=ctx.run.id,
+        state=ctx.state,
+        outputs=ctx.template.outputs,
+    )
 
 
 # ── 后续需求的合法片段 (Codex R02 审核探针) ──
@@ -539,3 +597,136 @@ def test_report_revision_is_a_new_id_not_a_lower_version() -> None:
     state["report_versions"] = [old]
 
     assert reasons_of({"report_versions": [revised], "procedure_runs": [run]}, AgentId.A10, state, run) == []
+
+
+# ── R85: 程序声明的产出 (outputs) 与重放取回方式 ──
+
+X_BASE = "name: 自测\nphase: P2_Executing\ncycle: Journals\nengine: rule\nautonomy_level: L3\n"
+
+
+def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
+    """knowledge 目录的副本另加程序 YAML (文件名主干 → 内容)."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    for name, text in extra.items():
+        (root / "procedures" / f"{name}.yaml").write_text(f"id: {name}\n{X_BASE}{text}", encoding="utf-8")
+    return ProcedureLibrary(root)
+
+
+def test_outputs_match_agent_fields_and_replay_registry() -> None:
+    """R85 验收 1-3: 18 条模板的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了
+    取回方式, 登记的都是状态字段; 两条以上程序声明的共享字段都不是 singleton."""
+    assert output_problems(LIBRARY) == []
+    assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
+        "ACC-01": [],
+        "ACC-04": ["acceptance_scorecard", "exceptions"],
+        "CSH-02": ["judgments", "exceptions", "review_tasks", "confirmations"],
+        "CSH-04": ["confirmations", "documents"],
+        "CSH-05": ["exceptions"],
+        "DOC-04": ["documents", "review_tasks"],
+        "DOC-06": ["documents", "confirmations", "review_tasks"],
+        "FIN-01": [],
+        "FIN-04": ["uncorrected_schedule"],
+        "GEN-09": [],
+        "PLN-01": ["materiality_candidates", "audit_objectives", "risk_register"],
+        "PLN-03": [],
+        "PLN-07": ["analytics", "exceptions"],
+        "REV-02": ["judgments", "exceptions", "review_tasks"],
+        "REV-03": ["judgments", "exceptions", "review_tasks"],
+        "REV-08": ["exceptions"],
+        "RPT-01": [],
+        "RPT-03": ["report_versions", "review_tasks"],
+    }
+    assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
+        "CSH-04": [DocumentType.confirmation],
+        "DOC-04": [DocumentType.contract],
+        "DOC-06": [DocumentType.confirmation],
+    }
+    assert set().union(*AGENT_FIELDS.values()) <= set(FIELD_REPLAY) <= set(STATE_HINTS)
+    declared = Counter(f for t in LIBRARY.all(include_disabled=True) for f in t.outputs)
+    shared = {f for f, n in declared.items() if n > 1}
+    assert shared == {"exceptions", "judgments", "review_tasks", "confirmations", "documents"}
+    assert all(FIELD_REPLAY[f] in SHAREABLE for f in shared)
+
+
+def test_outputs_problems_rejected_when_nodes_are_built(tmp_path: Path) -> None:
+    """R85 验收 3: 临时模板 outputs [ownership_graph] 而 owner A6: GraphNodes 构造时抛 ValueError, 含程序与字段;
+    两条程序都声明 singleton 字段 (评分卡) 也报出."""
+    library = library_with(tmp_path, **{"X-OG": "owner: A6\noutputs: [ownership_graph]\n"})
+    assert output_problems(library) == [
+        "X-OG: ownership_graph 不在 A6 的写入范围内",
+        "X-OG: ownership_graph 没有登记重放取回方式 (merge.FIELD_REPLAY)",
+    ]
+    with pytest.raises(ValueError, match="X-OG: ownership_graph"):
+        GraphNodes(make_deps(FakeRegistry(), FakeTrail(), library=library), 2)
+    twice = library_with(tmp_path / "twice", **{"X-SC": "owner: A2\noutputs: [acceptance_scorecard]\n"})
+    assert output_problems(twice) == ["ACC-04, X-SC: 都声明 acceptance_scorecard, 而其取回方式为 singleton"]
+    types = library_with(
+        tmp_path / "types",
+        **{
+            "X-DN": "owner: A3\noutputs: [documents]\n",
+            "X-DT": "owner: A3\noutputs: [review_tasks]\ndocument_types: [contract]\n",
+        },
+    )
+    assert output_problems(types) == [
+        "X-DN: 声明产出 documents 而没写 document_types",
+        "X-DT: 写了 document_types 而没声明产出 documents",
+    ]
+
+
+def test_document_types_not_checked_when_merging() -> None:
+    """合并时不查文件类型 (document_types 只管重放): CSH-04 存档按哈希去重, 取回的可能是审计师先上传的同内容文件,
+    其类型不一定是 confirmation (如分类失败仍为 other); 片段照常通过, 在线行为与改造前相同."""
+    csh04 = make_run("CSH-04")
+    uploaded = DocumentRef(
+        id="DOC-1",
+        type=DocumentType.other,
+        file_name="BA-01-reply.pdf",
+        sha256="1" * 64,
+        page_count=1,
+        reliability=Reliability.internal_copy,
+        status="needs_manual",
+        uploaded_at=NOW,
+    )
+    patch: StatePatch = {"confirmations": [], "documents": [uploaded], "procedure_runs": [finished(csh04)]}
+    assert reasons_of(patch, writer=AgentId.A5, run=csh04) == []
+
+
+def test_undeclared_output_rejected() -> None:
+    """R85 验收 4: A6 可写函证, 但 REV-02 不声明: 片段含函证即拒绝, 原因写明程序与字段."""
+    rev02 = make_run("REV-02")
+    patch = {"confirmations": [], "procedure_runs": [finished(rev02)]}
+    assert reasons_of(patch, run=rev02) == ["REV-02 未声明产出 confirmations"]
+    assert reasons_of({"procedure_runs": [finished(rev02)]}, run=rev02) == []  # 只有本次执行时不受声明限制
+
+
+async def test_run_agent_checks_template_outputs() -> None:
+    """节点层接线: run_agent 把本程序模板的 outputs 交给合并校验. REV-02 的 Agent 片段多带函证 (A6 可写, REV-02
+    不声明) 时片段整体丢弃, 返回 A1 代写的失败片段, 原因为 merge_rejected."""
+    deps = make_deps(FakeRegistry(), FakeTrail())
+    nodes = GraphNodes(deps, 2)
+
+    def with_confirmations(ctx: Any) -> StatePatch:
+        return {"confirmations": [], "procedure_runs": [finished(ctx.run)]}
+
+    patch, writer = await nodes.run_agent(ScriptA6(deps, with_confirmations), make_ctx(deps, "REV-02"))
+    assert writer is AgentId.A1 and "confirmations" not in patch
+    [run] = patch["procedure_runs"]
+    assert (run.status, run.failure_reason) == (RunStatus.failed, "merge_rejected: REV-02 未声明产出 confirmations")
+
+
+async def test_a1_failure_patch_not_limited_by_outputs() -> None:
+    """R85 验收 4: Agent 抛异常时 A1 代写的失败片段 (执行记录与 failed 任务) 不受声明限制: REV-08 不声明任务,
+    失败时照样带 failed 任务, 写入者为 A1."""
+    deps = make_deps(FakeRegistry(), FakeTrail())
+    nodes = GraphNodes(deps, 2)
+
+    def broken(ctx: Any) -> StatePatch:
+        raise RuntimeError("boom")
+
+    ctx = make_ctx(deps, "REV-08")
+    assert "review_tasks" not in ctx.template.outputs
+    patch, writer = await nodes.run_agent(ScriptA6(deps, broken), ctx)
+    assert writer is AgentId.A1
+    [failed] = patch["review_tasks"]
+    assert (failed.kind, failed.procedure_id) == (TaskKind.failed, "REV-08")

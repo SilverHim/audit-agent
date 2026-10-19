@@ -58,8 +58,8 @@ async def test_rule_invalid_provenance_is_rule_error(rows):
 
 async def test_registry_and_durable_confirmation(tmp_path):
     registry = MockRegistrySource(ROOT / "data/demo")
-    assert (await registry.asic_company("900 042 015")).name == "Numbat Electronic Components Pty Ltd"
-    assert await registry.asic_company("000000000") is None
+    assert (await registry.asic_company("E", "900 042 015")).name == "Numbat Electronic Components Pty Ltd"
+    assert await registry.asic_company("E", "000000000") is None
     request = ConfirmationRequest(
         bank_account_id="BA-01",
         bank_name="Harbourline Bank Limited",

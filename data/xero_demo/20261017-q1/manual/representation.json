@@ -1,0 +1,20 @@
+{
+  "procedure_id": "FIN-07",
+  "status": "obtained",
+  "dated_at": "2026-10-23",
+  "signed_by": [
+    "Alex Morgan"
+  ],
+  "period_end": "2026-09-30",
+  "document": "representation/representation_letter.pdf",
+  "standards": [
+    "ASA580-P10",
+    "ASA580-P11",
+    "ASA560-P09",
+    "ASA570-P16",
+    "ASA550-P26",
+    "ASA240-P40",
+    "ASA250-P17"
+  ],
+  "uncorrected_schedule": []
+}

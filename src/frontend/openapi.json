@@ -146,7 +146,7 @@
           "datasets"
         ],
         "summary": "List Datasets",
-        "description": "DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.",
+        "description": "DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像, 期间取 DatasetLoader.period; 画像或期间读不了\n的跳过. 数据集名等于配置项 DEMO_DATASET 的一行 default 为真 (不在清单时都为假). 按数据集名排序.",
         "operationId": "datasets-list_datasets",
         "responses": {
           "200": {
@@ -206,7 +206,7 @@
           "engagements"
         ],
         "summary": "Create Engagement",
-        "description": "客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真.",
+        "description": "客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件\n与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).",
         "operationId": "engagements-create_engagement",
         "requestBody": {
           "content": {
@@ -553,7 +553,7 @@
           "reviews"
         ],
         "summary": "List Review Tasks",
-        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.",
+        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.\n判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.",
         "operationId": "reviews-list_review_tasks",
         "security": [
           {
@@ -734,7 +734,7 @@
           "reviews"
         ],
         "summary": "Get Judgment",
-        "description": "version 省略时取最新版. review_records 是指向这条判断的复核决定.",
+        "description": "version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出.",
         "operationId": "reviews-get_judgment",
         "security": [
           {
@@ -2261,13 +2261,80 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/data/requests/{request_id}/unavailable": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Mark Request Unavailable",
+        "description": "标 \"客户无此类资料\" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.\n请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;\n锁定 423; 忙 409 ENGAGEMENT_BUSY.",
+        "operationId": "data-mark_request_unavailable",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestUnavailableIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/data/ready": {
       "post": {
         "tags": [
           "data"
         ],
         "summary": "Ready",
-        "description": "确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY\n(detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.",
+        "description": "确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY\n(detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);\n项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.",
         "operationId": "data-ready",
         "security": [
           {
@@ -2285,6 +2352,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DataReadyIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -2411,6 +2495,7 @@
           "reports"
         ],
         "summary": "List Trail",
+        "description": "留痕经盲判过滤 (BlindFilter) 输出.",
         "operationId": "reports-list_trail",
         "security": [
           {
@@ -2475,7 +2560,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/TrailEntry"
+                    "$ref": "#/components/schemas/TrailEntryView"
                   },
                   "title": "Response Reports-List Trail"
                 }
@@ -2501,6 +2586,7 @@
           "reports"
         ],
         "summary": "Get Trail",
+        "description": "留痕经盲判过滤 (BlindFilter) 输出.",
         "operationId": "reports-get_trail",
         "security": [
           {
@@ -2533,7 +2619,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TrailEntry"
+                  "$ref": "#/components/schemas/TrailEntryView"
                 }
               }
             }
@@ -3644,6 +3730,14 @@
             },
             "type": "array",
             "title": "Misstatements"
+          },
+          "not_executed": {
+            "items": {
+              "$ref": "#/components/schemas/NotExecuted"
+            },
+            "type": "array",
+            "title": "Not Executed",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4141,6 +4235,18 @@
         "title": "CriticReasonType",
         "description": "独立复核判不一致的理由类型."
       },
+      "CriticTrigger": {
+        "type": "string",
+        "enum": [
+          "main",
+          "internal_copy",
+          "assumption",
+          "unsupported",
+          "sample"
+        ],
+        "title": "CriticTrigger",
+        "description": "独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."
+      },
       "CriticVerdict": {
         "type": "string",
         "enum": [
@@ -4234,6 +4340,25 @@
               }
             ],
             "title": "Ready By"
+          },
+          "ready_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready Reason"
+          },
+          "ready_failed_checks": {
+            "items": {
+              "$ref": "#/components/schemas/CheckId"
+            },
+            "type": "array",
+            "title": "Ready Failed Checks",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4242,7 +4367,26 @@
           "data_version"
         ],
         "title": "DataReadiness",
-        "description": "项目财务数据的版本与就绪确认 (表 dataset_loads)."
+        "description": "项目财务数据的版本与就绪确认 (表 dataset_loads). 确认的人与时间记下后不改; 理由与未通过项随第一次确认记下,\n那时没有未通过项而再次确认时有, 补记那次的 (DataStore.confirm_ready)."
+      },
+      "DataReadyIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DataReadyIn",
+        "description": "确认数据已齐 (POST /data/ready) 的请求体, 可不带."
       },
       "DataRequest": {
         "properties": {
@@ -4321,7 +4465,8 @@
             "enum": [
               "open",
               "received",
-              "withdrawn"
+              "withdrawn",
+              "unavailable"
             ],
             "title": "Status",
             "default": "open"
@@ -4347,6 +4492,28 @@
               }
             ],
             "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
           }
         },
         "additionalProperties": false,
@@ -4428,6 +4595,35 @@
           "abn": {
             "type": "string",
             "title": "Abn"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "default": {
+            "type": "boolean",
+            "title": "Default",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -4438,7 +4634,7 @@
           "abn"
         ],
         "title": "DatasetSummary",
-        "description": "新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN."
+        "description": "新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中."
       },
       "Decision": {
         "type": "string",
@@ -4619,6 +4815,26 @@
               }
             ],
             "title": "Failed Step"
+          },
+          "document_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Date"
+          },
+          "related_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4645,10 +4861,17 @@
           "bank_statement",
           "minutes",
           "financial_statements",
+          "registry_extract",
+          "engagement_letter",
+          "representation_letter",
+          "correspondence",
+          "governance_communication",
+          "agreement",
+          "internal_record",
           "other"
         ],
         "title": "DocumentType",
-        "description": "证据文件类型. 审计师上传的文件由 A3 分类."
+        "description": "证据文件类型. 审计师上传的文件由 A3 分类; 证据种类见 judgment_engine.DOCUMENT_EVIDENCE."
       },
       "DocumentTypeIn": {
         "properties": {
@@ -5560,217 +5783,14 @@
         "title": "ImportSheet",
         "description": "导入时换工作表."
       },
-      "Judgment": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "version": {
-            "type": "integer",
-            "title": "Version",
-            "default": 1
-          },
-          "procedure_id": {
-            "type": "string",
-            "title": "Procedure Id"
-          },
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          },
-          "subject_id": {
-            "type": "string",
-            "title": "Subject Id"
-          },
-          "conclusion": {
-            "type": "string",
-            "title": "Conclusion"
-          },
-          "confidence": {
-            "type": "number",
-            "title": "Confidence"
-          },
-          "confidence_parts": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Confidence Parts"
-          },
-          "reasoning_chain": {
-            "items": {
-              "$ref": "#/components/schemas/ReasoningStep"
-            },
-            "type": "array",
-            "title": "Reasoning Chain"
-          },
-          "evidence": {
-            "items": {
-              "$ref": "#/components/schemas/EvidencePointer"
-            },
-            "type": "array",
-            "title": "Evidence"
-          },
-          "counter_argument": {
-            "type": "string",
-            "title": "Counter Argument"
-          },
-          "proposed_action": {
-            "$ref": "#/components/schemas/ProposedAction"
-          },
-          "misstatement_draft": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MisstatementDraft"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "exception_ids": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Exception Ids",
-            "default": []
-          },
-          "autonomy_level": {
-            "$ref": "#/components/schemas/AutonomyLevel"
-          },
-          "review_status": {
-            "$ref": "#/components/schemas/ReviewStatus",
-            "default": "pending"
-          },
-          "superseded_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Superseded By"
-          },
-          "performed_by": {
-            "type": "string",
-            "title": "Performed By"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "trail_ref": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trail Ref"
-          },
-          "critic_verdict": {
-            "$ref": "#/components/schemas/CriticVerdict",
-            "default": "skipped"
-          },
-          "critic_reason_type": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CriticReasonType"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "critic_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Critic Reason"
-          },
-          "critic_conclusion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Critic Conclusion"
-          },
-          "critic_reasoning_chain": {
-            "items": {
-              "$ref": "#/components/schemas/ReasoningStep"
-            },
-            "type": "array",
-            "title": "Critic Reasoning Chain",
-            "default": []
-          },
-          "critic_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Critic Model"
-          },
-          "critic_trail_ref": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Critic Trail Ref"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "procedure_id",
-          "run_id",
-          "subject_id",
-          "conclusion",
-          "confidence",
-          "confidence_parts",
-          "reasoning_chain",
-          "evidence",
-          "counter_argument",
-          "proposed_action",
-          "autonomy_level",
-          "performed_by",
-          "created_at"
-        ],
-        "title": "Judgment",
-        "description": "AI 或人对一个对象作出的判断: 结论, 推理链, 证据, 反方论证, 置信度, 建议动作."
-      },
       "JudgmentDetail": {
         "properties": {
           "judgment": {
-            "$ref": "#/components/schemas/Judgment"
+            "$ref": "#/components/schemas/JudgmentView"
           },
           "versions": {
             "items": {
-              "$ref": "#/components/schemas/Judgment"
+              "$ref": "#/components/schemas/JudgmentView"
             },
             "type": "array",
             "title": "Versions"
@@ -5812,6 +5832,283 @@
         ],
         "title": "JudgmentRef",
         "description": "报告中引用的一条判断."
+      },
+      "JudgmentView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "confidence_parts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Parts"
+          },
+          "reasoning_chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ReasoningStep"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Chain"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "counter_argument": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counter Argument"
+          },
+          "proposed_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exception_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exception Ids",
+            "default": []
+          },
+          "autonomy_level": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/ReviewStatus"
+          },
+          "superseded_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superseded By"
+          },
+          "performed_by": {
+            "type": "string",
+            "title": "Performed By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "trail_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trail Ref"
+          },
+          "critic_verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_trigger": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticTrigger"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_reason_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticReasonType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Reason"
+          },
+          "critic_conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Conclusion"
+          },
+          "critic_reasoning_chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ReasoningStep"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Reasoning Chain"
+          },
+          "critic_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Model"
+          },
+          "critic_trail_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Trail Ref"
+          },
+          "hidden_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden Fields",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "procedure_id",
+          "run_id",
+          "subject_id",
+          "conclusion",
+          "confidence",
+          "confidence_parts",
+          "reasoning_chain",
+          "evidence",
+          "counter_argument",
+          "proposed_action",
+          "autonomy_level",
+          "review_status",
+          "performed_by",
+          "created_at",
+          "critic_verdict",
+          "critic_reasoning_chain"
+        ],
+        "title": "JudgmentView",
+        "description": "判断的输出视图: 字段同 Judgment, 盲判时可隐藏的字段可空, hidden_fields 列出被隐藏的字段 (未隐藏时为空).\n\n返回判断的接口与对话工具都经 BlindFilter.judgment 输出它, 不直接输出 Judgment (第 10 节). 不往 Judgment 里填占位值.\n可隐藏的: 结论, 置信度及其分项, 推理链, 反方论证, 建议动作, 错报草稿, 独立复核 (critic_) 的各字段."
       },
       "LlmSettingsView": {
         "properties": {
@@ -6320,6 +6617,37 @@
         "title": "NeitherAction",
         "description": "仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做."
       },
+      "NotExecuted": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "via": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Via",
+            "default": []
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/DataRequest"
+            },
+            "type": "array",
+            "title": "Requests"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "requests"
+        ],
+        "title": "NotExecuted",
+        "description": "因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."
+      },
       "OpinionType": {
         "type": "string",
         "enum": [
@@ -6447,6 +6775,14 @@
             "type": "array",
             "title": "Rerun Subject Ids",
             "default": []
+          },
+          "data_request_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Data Request Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -6499,7 +6835,7 @@
           },
           "judgments": {
             "items": {
-              "$ref": "#/components/schemas/Judgment"
+              "$ref": "#/components/schemas/JudgmentView"
             },
             "type": "array",
             "title": "Judgments"
@@ -6620,7 +6956,10 @@
           "planned",
           "executing",
           "awaiting_human",
-          "completed"
+          "in_dispute",
+          "completed",
+          "awaiting_data",
+          "no_data"
         ],
         "title": "ProcedureStatus",
         "description": "程序状态."
@@ -6902,6 +7241,21 @@
         "title": "ReportStatus",
         "description": "报告版本状态."
       },
+      "RequestUnavailableIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "RequestUnavailableIn",
+        "description": "补交请求标 \"客户无此类资料\" (需求 R280)."
+      },
       "ReviewRecord": {
         "properties": {
           "id": {
@@ -7124,7 +7478,8 @@
         "enum": [
           "pending",
           "confirmed",
-          "overridden"
+          "overridden",
+          "superseded"
         ],
         "title": "ReviewStatus",
         "description": "判断的复核状态."
@@ -7210,7 +7565,7 @@
           "target": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Judgment"
+                "$ref": "#/components/schemas/JudgmentView"
               },
               {
                 "$ref": "#/components/schemas/AuditException"
@@ -7383,6 +7738,14 @@
           "paragraph": {
             "type": "string",
             "title": "Paragraph"
+          },
+          "subitems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subitems",
+            "default": []
           },
           "topic": {
             "type": "string",
@@ -7685,7 +8048,9 @@
           "normal",
           "unattributed",
           "failed",
-          "dispute"
+          "dispute",
+          "blind",
+          "manual"
         ],
         "title": "TaskKind",
         "description": "复核任务类型."
@@ -7733,7 +8098,7 @@
         "title": "Token",
         "description": "登录成功返回的访问令牌."
       },
-      "TrailEntry": {
+      "TrailEntryView": {
         "properties": {
           "id": {
             "anyOf": [
@@ -7839,10 +8204,16 @@
             "title": "Idempotency Key"
           },
           "payload": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Payload",
-            "default": {}
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
           },
           "created_at": {
             "anyOf": [
@@ -7855,6 +8226,14 @@
               }
             ],
             "title": "Created At"
+          },
+          "hidden_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden Fields",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -7863,10 +8242,11 @@
           "engagement_id",
           "kind",
           "actor",
-          "summary"
+          "summary",
+          "payload"
         ],
-        "title": "TrailEntry",
-        "description": "审计留痕的一行: 一次大模型调用, 外部调用, 人的决定或状态迁移. 只追加不修改."
+        "title": "TrailEntryView",
+        "description": "留痕的输出视图: 字段同 TrailEntry, payload 可空 (盲判时隐藏模型调用的原始输入输出), hidden_fields 列出被隐藏的\n字段. 返回留痕的接口与对话工具都经 BlindFilter.trail 输出它 (第 10 节)."
       },
       "TrailKind": {
         "type": "string",
@@ -7878,7 +8258,8 @@
           "deferral",
           "conversation",
           "conversation_summary",
-          "data"
+          "data",
+          "presentation"
         ],
         "title": "TrailKind",
         "description": "留痕类型."

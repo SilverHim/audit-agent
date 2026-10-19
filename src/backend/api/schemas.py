@@ -16,7 +16,6 @@ from backend.contracts.models import (
     GateEdit,
     GateId,
     GateVerdict,
-    Judgment,
     LlmProvider,
     ManualResult,
     MaterialityChoice,
@@ -34,6 +33,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.records import AccountCategory
+from backend.contracts.views import JudgmentView
 
 
 class Token(Model):
@@ -60,11 +60,14 @@ class EngagementCreate(Model):
 
 
 class DatasetSummary(Model):
-    """新建项目时可选的一个客户: 数据集名与其客户画像的名称, ABN."""
+    """新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中."""
 
-    dataset: str  # 建项目时提交的数据集名, 如 demo, xero/20261017-mock
+    dataset: str  # 建项目时提交的数据集名, 如 demo, xero/20261017-q1
     legal_name: str
     abn: str
+    period_start: date | None = None  # 数据集自带的审计期间, 建项目时须与之相同; 不自带 (如 Numbat) 为空
+    period_end: date | None = None
+    default: bool = False  # 数据集名等于配置项 DEMO_DATASET, 新建项目表单默认选它
 
 
 class EngagementSummary(Model):
@@ -144,7 +147,7 @@ class ReviewTaskView(Model):
 
     task: ReviewTask
     procedure_name: str
-    target: Judgment | AuditException | ProcedureRun
+    target: JudgmentView | AuditException | ProcedureRun  # 判断经盲判过滤 (BlindFilter) 输出
     allowed_decisions: list[Decision]
     amount_cents: int | None  # 涉及金额, 保留正负号; 取值顺序见 services.review_queue.task_amount
     tier: ReviewTier  # 复核档位, 按金额绝对值与置信度判定 (services.review_queue.review_tier)
@@ -161,14 +164,14 @@ class ProcedureDetail(Model):
     standards: list[str]
     runs: list[ProcedureRun]
     exceptions: list[AuditException]
-    judgments: list[Judgment]
+    judgments: list[JudgmentView]  # 经盲判过滤
 
 
 class JudgmentDetail(Model):
     """一条判断的当前版本, 历史版本与相关复核决定."""
 
-    judgment: Judgment
-    versions: list[Judgment]
+    judgment: JudgmentView  # 经盲判过滤
+    versions: list[JudgmentView]  # 各版本, 经盲判过滤
     review_records: list[ReviewRecord]
 
 
@@ -221,6 +224,18 @@ class AccountCategoryIn(Model):
 
     category: AccountCategory  # 新的标准分类, 须属于该科目的类别
     reason: str  # 理由, 必填
+
+
+class DataReadyIn(Model):
+    """确认数据已齐 (POST /data/ready) 的请求体, 可不带."""
+
+    reason: str | None = None  # 理由; 最近一次体检有不通过的项时必填
+
+
+class RequestUnavailableIn(Model):
+    """补交请求标 "客户无此类资料" (需求 R280)."""
+
+    reason: str  # 理由, 必填 (去首尾空白后不能为空)
 
 
 class ImportSheet(Model):

@@ -25,8 +25,9 @@ AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
 
 
 def build_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
-    """每个 Agent 从程序库中选出自己负责的程序; 声明了却没有模板的程序视为配置错误."""
-    templates = deps.library.all()
+    """每个 Agent 从程序库中选出自己负责的程序, 只映射启用的程序 (功能开关, services/features.py).
+    声明了却没有模板的程序视为配置错误, 按全部模板 (含未启用的) 检查."""
+    templates = deps.library.all(include_disabled=True)
     agents: dict[str, ProcedureAgent[Any]] = {}
     for cls in AGENT_CLASSES:
         instance = cls(deps)
@@ -35,5 +36,6 @@ def build_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
         if missing:
             raise LookupError(f"{cls.__name__} 负责的程序没有模板: {sorted(missing)}")
         for template in selected:
-            agents[template.id] = instance
+            if deps.library.enabled(template.id):
+                agents[template.id] = instance
     return agents

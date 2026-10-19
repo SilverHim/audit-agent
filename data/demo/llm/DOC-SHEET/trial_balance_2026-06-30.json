@@ -1,0 +1,38 @@
+{
+  "plan": {
+    "kind": "trial_balance",
+    "header_row": 5,
+    "skip": [
+      {
+        "column": "Account Code",
+        "pattern": "^Total$"
+      }
+    ],
+    "fields": {
+      "account_code": {
+        "column": "Account Code"
+      }
+    },
+    "periods": [
+      {
+        "period": "current",
+        "balance": {
+          "debit": "Debit - Year to date",
+          "credit": "Credit - Year to date"
+        }
+      },
+      {
+        "period": "prior",
+        "balance": {
+          "column": "30 June 2025"
+        }
+      }
+    ],
+    "amount_unit": "dollars"
+  },
+  "company": "Demo Company (AU)",
+  "period_start": null,
+  "period_end": "2026-06-30",
+  "confidence": "high",
+  "reason": "Xero trial balance: the title rows give the company and the balance date, the headings are on row 5; the current year is the debit and credit year-to-date columns and the prior year the 30 June 2025 column; the Total row is skipped."
+}

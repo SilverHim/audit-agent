@@ -16,6 +16,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailKind,
 )
+from backend.contracts.records import DatasetTraits
 from backend.contracts.services import JudgmentOutcome
 from tests.fakes import (
     NUMBAT_CONTRACTS,
@@ -53,7 +54,7 @@ def setup(
     procedure = ctx.procedure.model_copy(
         update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}
     )
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None)
+    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
     state = ctx.state | {
         "procedure_pack": [procedure],
         "audit_objectives": NUMBAT_OBJECTIVES,
@@ -103,14 +104,60 @@ async def test_fixtures_pass_real_engine_in_one_attempt() -> None:
     assert all(e.payload["level_failed"] is None for e in calls)
     for entry in calls:
         prompt = entry.payload["messages"][0]["content"]
-        assert "- AASB15-P31 (AASB 15 para 31): An entity shall recognise revenue when (or as)" in prompt
-        assert "- AASB15-P38 (AASB 15 para 38): If a performance obligation is not satisfied over time" in prompt
+        cited = [
+            "- AASB15-P31 (AASB 15 para 31): An entity shall recognise revenue when (or as)",
+            "- AASB15-P35 (AASB 15 para 35): An entity transfers control of a good or service over time",
+            "- AASB15-P38 (AASB 15 para 38): If a performance obligation is not satisfied over time",
+        ]
+        positions = [prompt.index(line) for line in cited]  # 依次列出, 带原文
+        assert positions == sorted(positions)
+        assert "(c) the entity’s performance does not create an asset with an alternative use" in prompt
     judgments = {j.subject_id: j for j in patch["judgments"]}
     assert sorted(judgments) == CONTRACT_IDS
     for j in judgments.values():
         assert j.proposed_action is ProposedAction.accept and j.misstatement_draft is None
         assert j.review_status is ReviewStatus.pending and j.exception_ids == []
     assert [t.id for t in patch["review_tasks"]] == [f"T-J-REV-03-1-{c}-v1" for c in CONTRACT_IDS]
+
+
+async def test_prompt_covers_goods_or_services_and_transfer_over_time() -> None:
+    """条款评价不再假定货物: 任务列出签收, 验收, 服务完成与随履约转移四种事件; 标准写明第 35 段 (a)-(c) 任一成立即随时间
+    转移, 否则按第 38 段定时点; accept 的条件含随时间转移的方式."""
+    agent, ctx, trail = setup()
+    await agent.run(ctx)
+    prompt = next(e for e in trail.entries if e.kind is TrailKind.llm_call).payload["messages"][0]["content"]
+    assert "for the financial year ended 2026-06-30" in prompt
+    first = prompt[prompt.index("1. Identify when control") : prompt.index("2. Identify other terms")]  # 只看第 1 项
+    assert first.startswith("1. Identify when control of the goods or services passes to the customer")
+    for event in (
+        "signing for delivery",
+        "the customer's acceptance",
+        "completion of the service",
+        "transfer over time",
+    ):
+        assert event in first, event
+    criteria = prompt[prompt.index("## Criteria") : prompt.index("## proposed_action")]
+    assert (
+        "AASB15-P31: revenue is recognised when (or as) the performance obligation is satisfied, that is, when (or as)"
+        " the customer obtains control of the goods or services." in criteria
+    )
+    assert (
+        "AASB15-P35: control transfers over time if any one of criteria (a) to (c) in paragraph 35 is met" in criteria
+    )
+    assert "AASB15-P38: otherwise the obligation is satisfied at a point in time" in criteria
+    assert (
+        "- `accept`: the transfer point, or how control transfers over time, can be determined from the terms."
+        in prompt
+    )
+    assert (  # 偏离 2: 与 accept 互补
+        "- `more_evidence`: neither the transfer point nor how control transfers over time can be determined from the"
+        " terms, or terms conflict on them." in prompt
+    )
+    assert (  # 偏离 1: 结论说明与 accept 条件一致
+        "- `conclusion`: one to three sentences: the transfer event (or how control transfers over time) and the"
+        " term ID that sets it" in prompt
+    )
+    assert "control of the goods passes" not in prompt and "control of the goods." not in prompt
 
 
 @pytest.mark.parametrize("cid", ["CON-001", "CON-002"])

@@ -1,7 +1,9 @@
 """Real PostgreSQL acceptance tests. Set TEST_DATABASE_URL to a migrated disposable database."""
 
 import asyncio
+import json
 import os
+import shutil
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -11,11 +13,14 @@ from sqlalchemy import delete, insert, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from backend.adapters.confirmation_mock import MockConfirmationChannel
-from backend.adapters.registry_mock import MockRegistrySource
+from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
+from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
+from backend.adapters.xero_supplements import SupplementMismatch
+from backend.agents.ingest import contract_id
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import ConfirmationRequest
+from backend.contracts.records import Account, JournalEntry
 from backend.persistence import models as m
 from backend.persistence.db import transaction
 from backend.persistence.stores import (
@@ -30,8 +35,11 @@ from backend.persistence.stores import (
     XeroDatasetLoader,
     now,
 )
+from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
+from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
+from tests.test_fakes import demo_rows
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,6 +134,68 @@ async def test_load_rules_and_project_isolation(storage):
         await financial.query(e.id, "SELECT 1; DELETE FROM sales_invoices", {})
 
 
+async def test_journal_entries_and_accounts(storage):
+    """分录行按凭证号或原始单据号取, 科目按代码取 (开发接口文档第 4 节), 与假存储同样的行; 按项目隔离."""
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+
+    sale = await financial.journal_entries(e.id, entry_nos=["SJ-2026-0612"])
+    assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in sale] == [
+        ("SJ-2026-0612-1", "1100", 14200000, 0),
+        ("SJ-2026-0612-2", "4100", 0, 14200000),
+    ]
+    assert sale == [r for r in NUMBAT_ROWS if isinstance(r, JournalEntry) and r.entry_no == "SJ-2026-0612"]
+    assert await financial.journal_entries(e.id, source_docs=["SI-2026-0612"]) == sale
+    assert await financial.journal_entries(e.id, entry_nos=["SJ-2026-0612"], source_docs=["SI-2026-0612"]) == sale
+    union = await financial.journal_entries(e.id, entry_nos=["SJ-2026-0618"], source_docs=["SI-2026-0612"])
+    assert [r.id for r in union] == ["SJ-2026-0612-1", "SJ-2026-0612-2", "SJ-2026-0618-1", "SJ-2026-0618-2"]
+    assert await financial.journal_entries(e.id, entry_nos=["SI-2026-0612"]) == []
+    assert await financial.journal_entries(e.id, entry_nos=[]) == []  # 空列表的条件取不到行, 不取全表
+    assert await financial.journal_entries(e.id, source_docs=[]) == []
+    assert await financial.journal_entries(e.id, entry_nos=[], source_docs=[]) == []
+    assert await financial.journal_entries(e.id, entry_nos="SJ-2026-0612") == []  # 单个字符串逐字符拆开, 同假存储
+    assert (
+        await financial.journal_entries("other-project", entry_nos=["SJ-2026-0612"], source_docs=["SI-2026-0612"]) == []
+    )
+    with pytest.raises(ValueError, match="不取全表"):
+        await financial.journal_entries(e.id)
+
+    picked = await financial.accounts(e.id, ["4100", "1100"])
+    assert [(a.code, a.name, a.type, a.category) for a in picked] == [
+        ("1100", "Trade receivables", "asset", "receivables"),
+        ("4100", "Sales revenue", "revenue", "revenue"),
+    ]
+    assert picked == NUMBAT_ACCOUNTS
+    everything = await financial.accounts(e.id)
+    assert len(everything) == 23
+    assert [a.code for a in everything] == sorted(a.code for a in everything)
+    assert await financial.accounts(e.id, []) == []
+    assert await financial.accounts("other-project") == []
+
+
+async def test_journal_entries_and_accounts_sort_rows_inserted_in_reverse(storage):
+    """新项目 (不载入 demo) 把 data/demo 的科目与几笔分录行倒序写入: 物理顺序与键序相反, accounts 仍按代码升序,
+    journal_entries 仍按行 ID 升序 (载入 demo 后物理顺序本就是键序, 测不出排序)."""
+    engine, e, _loader, _evidence = storage
+    accounts = [with_category(Account.model_validate(r)) for r in demo_rows("accounts")]
+    wanted = {"SJ-2026-0612", "SJ-2026-0618", "SJ-2026-0547", "CR-SI-2026-0547"}
+    entries = [JournalEntry.model_validate(r) for r in demo_rows("journal_entries") if r["entry_no"] in wanted]
+    async with transaction(engine, e.id) as conn:
+        for a in sorted(accounts, key=lambda a: a.code, reverse=True):
+            await conn.execute(insert(m.FINANCIAL["accounts"]).values(engagement_id=e.id, **a.model_dump()))
+        for j in sorted(entries, key=lambda j: j.id, reverse=True):
+            await conn.execute(insert(m.FINANCIAL["journal_entries"]).values(engagement_id=e.id, **j.model_dump()))
+    financial = PostgresFinancialDataStore(engine)
+
+    everything = await financial.accounts(e.id)
+    assert len(everything) == 23 and [a.code for a in everything] == sorted(a.code for a in everything)
+    union = await financial.journal_entries(
+        e.id, entry_nos=["SJ-2026-0618"], source_docs=["SI-2026-0612", "SI-2026-0547"]
+    )
+    assert [r.id for r in union] == sorted(j.id for j in entries) and len(union) == 8
+
+
 async def test_versions_rollback_trail_and_lock(storage):
     engine, e, loader, evidence = storage
     await loader.load(e.id, "demo")
@@ -195,8 +265,13 @@ async def test_evidence_and_adapters(storage, tmp_path):
     with pytest.raises(FileNotFoundError):
         await evidence.path("other-project", doc.id)
     registry = MockRegistrySource(ROOT / "data/demo")
-    assert (await registry.abn("68 900 042 015")).status == "Active"
-    assert await registry.abn("missing") is None
+    assert (await registry.abn(e.id, "68 900 042 015")).status == "Active"
+    assert await registry.abn(e.id, "missing") is None
+    routing = RoutingDatasetLoader(CsvDatasetLoader(ROOT / "data", engine, evidence), {})
+    by_dataset = DatasetRegistrySource(PostgresEngagementStore(engine), routing.supplement_dir)  # 按项目数据集 (demo)
+    assert (await by_dataset.asic_company(e.id, "900042015")).name == "Numbat Electronic Components Pty Ltd"
+    with pytest.raises(LookupError):
+        await by_dataset.abn("ENG-missing", "68900042015")
     req = ConfirmationRequest(
         bank_account_id="BA-01", bank_name="Harbourline", bsb="999-101", account_no="12345601", as_of=date(2026, 6, 30)
     )
@@ -205,7 +280,57 @@ async def test_evidence_and_adapters(storage, tmp_path):
     assert first == await MockConfirmationChannel(ROOT / "data/demo", tmp_path / "receipts").submit(e.id, req, "key")
     with pytest.raises(ValueError):
         await channel.submit(e.id, req.model_copy(update={"account_no": "23456702"}), "key")
+    routed = DatasetConfirmationChannel(PostgresEngagementStore(engine), routing.supplement_dir, tmp_path / "receipts")
+    assert await routed.submit(e.id, req, "key") == first  # 同一回执目录与幂等键
     assert await PostgresUserStore(engine).get(e.owner_id)
+
+
+# 文件类型的 7 个新取值各存一份 (Xero 补造目录的 PDF, 各不相同以免按哈希去重); 补造目录没有 governance_communication
+# 类文件, 借一份 PDF 只核对类型往返
+NEW_TYPES = {
+    DocumentType.registry_extract: "registry/extracts/900043030.pdf",
+    DocumentType.engagement_letter: "documents/engagement/engagement_letter.pdf",
+    DocumentType.representation_letter: "representation/representation_letter.pdf",
+    DocumentType.correspondence: "documents/evidence/diisr_email.pdf",
+    DocumentType.governance_communication: "contracts/CON-X02.pdf",
+    DocumentType.agreement: "documents/evidence/director_loan_agreement.pdf",
+    DocumentType.internal_record: "documents/evidence/fixed_asset_register.pdf",
+}
+
+
+async def test_new_document_types_round_trip(storage):
+    """documents.type 是 text 列 (迁移 0001 无约束, 0004 也未加), 新取值不需迁移: 各存一份后按类型取回, 读回仍是枚举;
+    文件日期与关联对象两列还没有, 读回为缺省值."""
+    engine, e, _loader, evidence = storage
+    supplements = ROOT / "data/xero_demo/20261017-q1"
+    upstream = {
+        DocumentType.contract,
+        DocumentType.invoice,
+        DocumentType.confirmation,
+        DocumentType.bank_statement,
+        DocumentType.minutes,
+        DocumentType.financial_statements,
+        DocumentType.other,
+    }
+    assert set(NEW_TYPES) == set(DocumentType) - upstream
+    saved = {
+        kind: await evidence.save(
+            e.id, Path(path).name, (supplements / path).read_bytes(), type=kind, reliability=Reliability.external_copy
+        )
+        for kind, path in NEW_TYPES.items()
+    }
+    financial = PostgresFinancialDataStore(engine)
+    for kind, doc in saved.items():
+        [back] = await financial.documents(e.id, kind)
+        assert back == doc and back.type is kind
+    assert len(await financial.documents(e.id)) == len(NEW_TYPES)
+    [loan] = await financial.documents(e.id, DocumentType.agreement)
+    assert (loan.file_name, loan.page_count, loan.document_date, loan.related_ids) == (
+        "director_loan_agreement.pdf",
+        2,
+        None,
+        [],
+    )
 
 
 @pytest.mark.parametrize("checkpoint_backend", ["memory", "postgres"])
@@ -218,6 +343,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         GateVerdict,
         Judgment,
         Misstatement,
+        OpinionType,
         Phase,
         ReviewTask,
         TaskStatus,
@@ -229,6 +355,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
     from backend.orchestration.graph import compile_graph
     from backend.orchestration.nodes import GraphNodes
     from backend.orchestration.runner import GraphRunner
+    from tests.fakes import NUMBAT_FEATURES
     from tests.test_decisions import acc01_decision, pln_decision
     from tests.test_flow import FIN_APPROVE, REVIEWS, RPT_APPROVE, RPT_REJECT
 
@@ -239,6 +366,7 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         LLM_MODE="mock",
         LLM_FIXTURES_ROOT=ROOT / "data/demo/llm",
         CHECKPOINT_BACKEND=checkpoint_backend,
+        FEATURES=",".join(sorted(NUMBAT_FEATURES)),  # Numbat 回归: 只开基线功能
     )
     deps = build_deps(settings)
     stack = AsyncExitStack()
@@ -288,6 +416,9 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         await settle()
         final = await deps.engagement_store.get(e.id)
         assert final.phase == Phase.Archived and final.locked
+        # 检查点读回的顶层枚举字段 (checkpoint.TOP_LEVEL_ENUMS) 是枚举而不是字符串; Postgres 由 AuditPostgresSaver 转回
+        values = (await graph.aget_state(runner.config(e.id))).values
+        assert values["phase"] is Phase.Archived and values["opinion_route"] is OpinionType.qualified
         assert len(await deps.output_store.latest(e.id, AuditException)) == 4
         assert len(await deps.output_store.latest(e.id, Judgment)) == 6
         assert all(t.status == TaskStatus.decided for t in await deps.output_store.latest(e.id, ReviewTask))
@@ -372,6 +503,71 @@ async def test_rule_edge_cases(storage):
 
 
 XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 不入库; 没有时跳过
+
+
+async def test_rev08_r03_matches_invoice_number_digits_as_a_whole_word(storage):
+    """REV-08 R03: 发票号为字母前缀加纯数字 (ORC1026) 时, 参考号里出现该数字串且前后都不是数字的流水也算它的收款
+    ("1026", "Invoice 1026"); "1028", "10261", "21026" 不算; 参考号含发票号的照原条件算. 带连字符的发票号
+    (Numbat 的 SI-2026-0612) 只按包含发票号, 参考号 "0612" 不算. Numbat 临时项目内插入行, 期末 2026-06-30, 窗口 20."""
+    import yaml
+
+    from backend.contracts.knowledge import ProcedureTemplate
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    template = ProcedureTemplate.model_validate(
+        yaml.safe_load((ROOT / "src/backend/knowledge/procedures/REV-08.yaml").read_text())
+    )
+    r03 = next(r.sql for r in template.rules if r.id == "R03")
+    params = dict(period_end="2026-06-30", window_days=20)
+    invoices, bank = m.FINANCIAL["sales_invoices"], m.FINANCIAL["bank_transactions"]
+
+    async def receipts(*rows: tuple[str, str, int]) -> None:
+        async with transaction(engine, e.id) as conn:
+            for txn_id, reference, amount in rows:
+                await conn.execute(
+                    insert(bank).values(
+                        engagement_id=e.id,
+                        id=txn_id,
+                        bank_account_id="BA-01",
+                        txn_date=date(2026, 7, 2),
+                        amount_cents=amount,
+                        balance_after_cents=0,
+                        description="receipt",
+                        reference=reference,
+                    )
+                )
+
+    async def hits() -> dict[str, tuple[int, int, str]]:
+        rows = await financial.query(e.id, r03, params)
+        return {r["source_id"]: (r["amount_cents"], r["received_cents"], r["bank_transaction_ids"]) for r in rows}
+
+    assert await hits() == {}
+    async with transaction(engine, e.id) as conn:
+        await conn.execute(
+            insert(invoices).values(
+                engagement_id=e.id,
+                id="SI-ORC1026",
+                invoice_no="ORC1026",
+                customer="Test Customer Pty Ltd",
+                customer_abn=None,
+                contract_id=None,
+                invoice_date=date(2026, 6, 25),
+                posting_date=date(2026, 6, 25),
+                amount_cents=715000,
+                journal_entry_id=None,
+            )
+        )
+    await receipts(("BT-1026", "1026", 385000))
+    assert await hits() == {"SI-ORC1026": (330000, 385000, "BT-1026")}
+
+    await receipts(("BT-X-1", "1028", 100000), ("BT-X-2", "10261", 100000), ("BT-X-3", "21026", 100000))
+    await receipts(("BT-0612", "0612", 100000))  # SI-2026-0612 带连字符, 只按包含发票号
+    assert await hits() == {"SI-ORC1026": (330000, 385000, "BT-1026")}
+
+    await receipts(("BT-INV-1026", "Invoice 1026", 100000), ("BT-ORC1026", "ORC1026", 100000))
+    assert await hits() == {"SI-ORC1026": (130000, 585000, "BT-1026,BT-INV-1026,BT-ORC1026")}
 
 
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
@@ -491,3 +687,232 @@ async def test_user_store_create_keeps_existing_account():
         async with engine.begin() as conn:  # 只删本测试建的账号
             await conn.execute(delete(m.users).where(m.users.c.email.in_([name, other, other.upper(), legacy])))
         await engine.dispose()
+
+
+async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
+    """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB v1 与
+    补造画像 CLIENT-XERO-3C1332BB-Q1 v1 并存, 不报 VersionConflict; 再建一次 (画像已在库中, 内容相同) 也照常."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-mock").exists() or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-mock, 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    loader = XeroDatasetLoader(
+        api,
+        ROOT / "src/backend/knowledge/planning",
+        engine,
+        FileEvidenceStore(tmp_path, engine),
+        supplements=ROOT / "data/xero_demo",
+    )
+    store = PostgresEngagementStore(engine)
+    periods = {"xero/20261017-mock": date(2026, 11, 30), "xero/20261017-q1": date(2026, 9, 30)}
+    for _ in range(2):
+        for dataset, end in periods.items():
+            await store.create(
+                owner_id=user,
+                period_start=date(2026, 7, 1),
+                period_end=end,
+                dataset=dataset,
+                profile=loader.client_profile(dataset),
+            )
+    mock = await store.client_profile("CLIENT-XERO-3C1332BB", 1)
+    q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1", 1)
+    assert mock is not None and mock.legal_name == "Demo Company (AU)"
+    assert q1 is not None and q1.legal_name == "Demo Company (AU) Pty Ltd" and q1.abn == "25900043021"
+    await engine.dispose()
+
+
+async def test_xero_q1_loads_supplements(tmp_path):
+    """R72: 真实库载入 xero/20261017-q1: 行数同验收 2; 每个科目 gl_balance 等于本期试算表; 3 份合同登记为证据文件;
+    服务完成记录与带合同关联的发票可按行取."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    loader = XeroDatasetLoader(
+        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
+    )
+    e = await PostgresEngagementStore(engine).create(
+        owner_id=user,
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 9, 30),
+        dataset="xero/20261017-q1",
+        profile=loader.client_profile("xero/20261017-q1"),
+    )
+    await loader.load(e.id, "xero/20261017-q1")
+    financial = PostgresFinancialDataStore(engine)
+    counts = {t: (await financial.query(e.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] for t in m.FINANCIAL}
+    assert counts == {
+        "accounts": 62,
+        "trial_balance": 33,
+        "journal_entries": 1017,
+        "sales_invoices": 42,
+        "delivery_notes": 24,
+        "bank_accounts": 2,
+        "bank_transactions": 146,
+    }
+    current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
+    assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
+    documents = await financial.documents(e.id)
+    assert sorted((d.file_name, d.type, d.reliability) for d in documents) == [
+        (f"CON-X0{n}.pdf", DocumentType.contract, Reliability.external_copy) for n in (1, 2, 3)
+    ]
+    manifest = json.loads((ROOT / "data/xero_demo/20261017-q1/manifest.json").read_text(encoding="utf-8"))
+    ids = {d["path"]: d["document_id"] for d in manifest["documents"]}
+    assert {d.id for d in documents} == {ids[f"contracts/CON-X0{n}.pdf"] for n in (1, 2, 3)}
+    assert sorted(contract_id(d) for d in documents) == ["CON-X01", "CON-X02", "CON-X03"]
+    note = await financial.record(e.id, "delivery_note", "SR-ORC1026")
+    assert note is not None and note["invoice_id"] == "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
+    invoice = await financial.record(e.id, "sales_invoice", "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611")
+    assert invoice is not None and invoice["contract_id"] == "CON-X01"
+    # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入
+    demo = tmp_path / "xero_demo"
+    shutil.copytree(ROOT / "data/xero_demo/20261017-q1", demo / "20261017-q1")
+    links = demo / "20261017-q1" / "contract_links.csv"
+    links.write_bytes(links.read_bytes() + b" ")
+    planning = ROOT / "src/backend/knowledge/planning"
+    broken = XeroDatasetLoader(api, planning, engine, FileEvidenceStore(tmp_path / "ev", engine), supplements=demo)
+    other = await PostgresEngagementStore(engine).create(
+        owner_id=user,
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 9, 30),
+        dataset="xero/20261017-q1",
+        profile=loader.client_profile("xero/20261017-q1"),
+    )
+    with pytest.raises(SupplementMismatch, match=r"contract_links\.csv"):
+        await broken.load(other.id, "xero/20261017-q1")
+    for t in m.FINANCIAL:
+        assert (await financial.query(other.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] == 0
+    assert await financial.documents(other.id) == []
+    assert not (tmp_path / "ev").exists() or not any((tmp_path / "ev").rglob("*.pdf"))
+    await engine.dispose()
+
+
+async def test_load_adjustments_two_rounds(tmp_path):
+    """R73: 真实库载入 xero/20261017-q1 后按两轮载入更正分录: 行数, data_version, 幂等, gl_balance, 试算表不变;
+    尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写."""
+    url = os.getenv("TEST_DATABASE_URL")
+    api = ROOT / "data/external/xero/api"
+    if not url or not (api / "20261017-q1").exists():
+        pytest.skip("需要 TEST_DATABASE_URL 与本地 Xero 快照 20261017-q1")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    xero = XeroDatasetLoader(
+        api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=ROOT / "data/xero_demo"
+    )
+    store = PostgresEngagementStore(engine)
+    profile = xero.client_profile("xero/20261017-q1")
+
+    async def engagement(dataset: str = "xero/20261017-q1"):
+        chosen = profile if dataset.startswith("xero/") else CsvDatasetLoader(ROOT / "data").client_profile(dataset)
+        return await store.create(
+            owner_id=user, period_start=date(2026, 7, 1), period_end=date(2026, 9, 30), dataset=dataset, profile=chosen
+        )
+
+    financial = PostgresFinancialDataStore(engine)
+
+    async def state(eid):
+        journal = (await financial.query(eid, "SELECT count(*) AS n FROM journal_entries", {}))[0]["n"]
+        version = (await financial.query(eid, "SELECT data_version FROM dataset_loads", {}))[0]["data_version"]
+        return journal, version
+
+    e = await engagement()
+    with pytest.raises(ValueError, match="尚未载入数据集"):
+        await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01"])
+    await xero.load(e.id, "xero/20261017-q1")
+    trial = await financial.trial_balance(e.id, "current")
+    assert await state(e.id) == (1017, 1)
+    first = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01", "AJE-X05"])
+    assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in first] == [
+        ("AJE-X01-1", "711", 82500, 0),
+        ("AJE-X01-2", "710", 0, 75000),
+        ("AJE-X01-3", "820", 0, 7500),
+        ("AJE-X05-1", "620", 4853, 0),
+        ("AJE-X05-2", "270", 0, 4853),
+    ]
+    assert await state(e.id) == (1022, 2)
+    assert await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01", "AJE-X05"]) == first  # 幂等
+    assert await state(e.id) == (1022, 2)
+    second = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X02", "AJE-X03", "AJE-X04"])
+    assert len(second) == 6 and await state(e.id) == (1028, 3)
+    assert len(await xero.load_adjustments(e.id, "xero/20261017-q1")) == 11  # 全部: 已有的跳过
+    assert await state(e.id) == (1028, 3)
+    assert await xero.load_adjustments(e.id, "xero/20261017-q1", []) == []  # 空列表不载入
+    assert await state(e.id) == (1028, 3)
+    as_of = date(2026, 9, 30)
+    assert [await financial.gl_balance(e.id, code, as_of) for code in ("620", "270", "710", "820")] == [
+        4853,
+        -4853,
+        0,
+        -126697,
+    ]
+    assert await financial.trial_balance(e.id, "current") == trial  # 试算表不动
+
+    # 同 ID 内容不同: 更正分录文件换成摘要改过的副本 (只替换文件位置, 走同一套写入)
+    source = ROOT / "data/xero_demo/20261017-q1/adjustments/journal_entries.csv"
+    edited_csv = tmp_path / "edited.csv"
+    edited_csv.write_text(
+        source.read_text(encoding="utf-8").replace("Audit adjustment AJE-X01:", "Audit adjustment AJE-X01 (edited):"),
+        encoding="utf-8",
+    )
+
+    class Edited(XeroDatasetLoader):
+        def adjustments_path(self, dataset: str) -> Path:
+            return edited_csv
+
+    edited = Edited(api, ROOT / "src/backend/knowledge/planning", engine, evidence)
+    with pytest.raises(ValueError, match="AJE-X01-1"):
+        await edited.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(e.id) == (1028, 3)
+
+    # 数据集不同: 项目载入的是 demo
+    demo = await engagement("demo")
+    await CsvDatasetLoader(ROOT / "data", engine, evidence).load(demo.id, "demo")
+    before = await state(demo.id)
+    with pytest.raises(ValueError, match="different dataset"):
+        await xero.load_adjustments(demo.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(demo.id) == before
+
+    # 新项目一次载入全部: 11 行, 版本只加一
+    fresh = await engagement()
+    await xero.load(fresh.id, "xero/20261017-q1")
+    assert len(await xero.load_adjustments(fresh.id, "xero/20261017-q1")) == 11
+    assert await state(fresh.id) == (1028, 2)
+    assert [await financial.gl_balance(fresh.id, code, as_of) for code in ("620", "270", "710", "820")] == [
+        4853,
+        -4853,
+        0,
+        -126697,
+    ]
+
+    # 项目锁定
+    locked = await engagement()
+    await xero.load(locked.id, "xero/20261017-q1")
+    await store.update(locked.id, locked=True)
+    with pytest.raises(EngagementLocked):
+        await xero.load_adjustments(locked.id, "xero/20261017-q1", ["AJE-X01"])
+    assert await state(locked.id) == (1017, 1)
+    await engine.dispose()

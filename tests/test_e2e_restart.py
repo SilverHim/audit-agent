@@ -17,13 +17,14 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
-from tests.fakes import ENGAGEMENT, FakeConfirmationChannel, FakeTrail, make_graph_nodes, wait_idle
+from tests.fakes import ENGAGEMENT, NUMBAT_FEATURES, FakeConfirmationChannel, FakeTrail, make_graph_nodes, wait_idle
 from tests.test_decisions import Started
 from tests.test_e2e_mock import (
     assert_fixtures_used_once,
     assert_pointers_resolve,
     assert_results,
     assert_trail_counts,
+    enabled_programs,
     finish_demo,
     real_agents,
     start_demo,
@@ -57,7 +58,7 @@ async def assert_same_as_uninterrupted(s: Started, channel: FakeConfirmationChan
     await assert_results(s)
     assert_trail_counts(trail_of(s).entries)  # 含 CSH-04 的 external_call 2 行, llm_call 15 行 (含 GEN-09 两轮)
     await assert_pointers_resolve(s)
-    assert_fixtures_used_once(trail_of(s).entries)
+    assert_fixtures_used_once(trail_of(s).entries, enabled_programs(s.runner.deps))
     assert len(channel.submits) == 2
     values = (await s.runner.app.aget_state(CONFIG)).values
     runs = sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0)
@@ -97,7 +98,7 @@ async def test_killed_during_doc06_recovers_without_resending() -> None:
         return {**real_agents(deps), "DOC-06": holder["DOC-06"]}
 
     channel = FakeConfirmationChannel()
-    s = await start_demo(agents, confirmations=channel)
+    s = await start_demo(agents, confirmations=channel, features=NUMBAT_FEATURES)
     await asyncio.wait_for(holder["DOC-06"].entered.wait(), timeout=5)
     values = (await s.runner.app.aget_state(CONFIG)).values
     assert sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0) == sorted(
@@ -129,7 +130,7 @@ async def test_fan_in_fails_after_store_write_then_recovers(monkeypatch: pytest.
 
     monkeypatch.setattr(GraphNodes, "fan_in", fan_in)
     channel = FakeConfirmationChannel()
-    s = await start_demo(confirmations=channel)
+    s = await start_demo(confirmations=channel, features=NUMBAT_FEATURES)
     await wait_idle(s.runner, EID)
     assert failed and "写检查点前中断" in (s.runner.run_error(EID) or "")
     assert (await s.runner.app.aget_state(CONFIG)).next == ("fan_in",)  # 检查点停在汇合之前
@@ -162,7 +163,7 @@ async def test_killed_after_confirmation_sent_does_not_resend() -> None:
     """验收 4: BA-01 发函并留痕后被杀; recover 后 CSH-04 重新执行, BA-01 按留痕的幂等键命中, 不再发函;
     函证共发 2 次, CSH-04 的 external_call 共 2 行."""
     trail, channel = HangAfterFirstConfirmation(), FakeConfirmationChannel()
-    s = await start_demo(trail=trail, confirmations=channel)
+    s = await start_demo(trail=trail, confirmations=channel, features=NUMBAT_FEATURES)
     await asyncio.wait_for(trail.entered.wait(), timeout=5)
 
     async def revenue_instance_saved() -> bool:  # 另一个实例 (收入线) 已存进检查点, 被杀时不在执行中

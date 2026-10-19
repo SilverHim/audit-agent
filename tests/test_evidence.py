@@ -21,6 +21,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import ConfirmationReceipt, ConfirmationRequest
+from backend.contracts.records import DatasetTraits
 from backend.orchestration.nodes import GraphNodes, apply_patch
 from tests.fakes import (
     ENGAGEMENT,
@@ -49,7 +50,7 @@ def setup(
     records = dict(reversed(list(NUMBAT_RECORDS.items())))  # 存储返回的顺序没有约定, 倒过来检查 A5 自己排序
     deps = make_deps(FakeRegistry(), trail, financial_store=FakeFinancialStore(records=records), confirmations=channel)
     ctx = make_ctx(deps, "CSH-04")
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None)
+    params = deps.library.resolve_params(ctx.template, ctx.engagement, ctx.state, None, traits=DatasetTraits())
     if as_of is not None:
         params["as_of"] = as_of
     run = ctx.run.model_copy(update={"params_snapshot": params})

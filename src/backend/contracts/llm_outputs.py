@@ -5,6 +5,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
+from backend.contracts.data import Confidence, TablePlan
 from backend.contracts.models import (
     CriticReasonType,
     DocumentType,
@@ -66,6 +67,23 @@ class DocumentClassification(Model):
 
     document_type: DocumentType | None  # 文件类型; 判断不了为空, 文件转人工指定类型
     reason: str  # 一句话依据
+
+
+class SheetRecognition(Model):
+    """A3 按工作表开头的样本行识别账表 (DOC-SHEET): 规整方案, 标题里读到的公司名与期间, 把握与理由. 不输出数据行."""
+
+    plan: TablePlan  # 规整方案; kind 为空表示不是账表
+    company: str | None  # 标题里的公司名, 没有为空
+    period_start: date | None  # 标题里的期间起日, 没有为空
+    period_end: date | None  # 标题里的期间止日或余额截至日, 没有为空
+    confidence: Confidence  # high: 表种类与各字段的来源都清楚; low: 有拿不准的
+    reason: str  # 一两句理由
+
+    @model_validator(mode="after")
+    def period_in_order(self) -> Self:
+        if self.period_start is not None and self.period_end is not None and self.period_start > self.period_end:
+            raise ValueError("period_start is after period_end")
+        return self
 
 
 class ReportDraft(Model):

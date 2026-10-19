@@ -3,8 +3,9 @@
 
 import json
 import os
+import shutil
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -66,14 +67,17 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
     NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     NUMBAT_TRIAL_BALANCE,
     FakeConfirmationChannel,
     FakeEngagementStore,
     FakeFinancialStore,
+    FakeRegistry,
     FakeTrail,
     ScriptAgent,
+    make_deps,
     make_runner,
     wait_idle,
 )
@@ -96,6 +100,7 @@ async def start_demo(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] = NUMBAT_FEATURES,
 ) -> Started:
     """启动 → ACC-01 approve → PLN-01/03 approve (收入 1%, 75%, 5%); 返回时后台正在执行 P2 (不等待).
     财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障."""
@@ -108,6 +113,7 @@ async def start_demo(
         trail=trail,
         confirmations=confirmations,
         review_llm=review_llm,
+        features=features,
     )
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
@@ -330,18 +336,60 @@ async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -
     assert all(p in full for p in [*base, *extra])
 
 
+# R55 读到的 15 个 fixture 文件, 按程序计数
+FIXTURE_COUNTS = {"CSH-02": 1, "DOC-04": 3, "DOC-06": 2, "GEN-09": 2, "REV-02": 2, "REV-03": 3, "RPT-03": 2}
+
+
 async def test_every_fixture_used_once_and_passes(demo: Started) -> None:
-    assert_fixtures_used_once(trail_of(demo).entries)
+    files = assert_fixtures_used_once(trail_of(demo).entries, enabled_programs(demo.runner.deps))
+    assert Counter(pid for pid, _ in files) == FIXTURE_COUNTS
 
 
-def assert_fixtures_used_once(entries: Sequence[TrailEntry]) -> None:
-    """验收 5: tests/fixtures/llm 下每个文件都在流程中被读到一次, 一次通过四级校验 (attempt 1, 无失败级别).
-    entries 为该项目的全部留痕."""
-    root = get_settings().LLM_FIXTURES_ROOT
-    files = sorted((p.parent.name, p.stem) for p in root.glob("*/*.json"))
+def enabled_programs(deps: AgentDeps) -> set[str]:
+    """本次启用的程序 (程序库的启用视图)."""
+    return {t.id for t in deps.library.all()}
+
+
+def assert_fixtures_used_once(
+    entries: Sequence[TrailEntry], enabled: Iterable[str], root: Path | None = None
+) -> list[tuple[str, str]]:
+    """验收 5: fixture 根 (缺省为 LLM_FIXTURES_ROOT, 即 tests/fixtures/llm) 下, 启用程序的每个文件都在流程中被读到
+    一次, 一次通过四级校验 (attempt 1, 无失败级别). 未启用程序的目录不比对 (后接入的程序可以先放 fixture).
+    entries 为该项目的全部留痕; enabled 为本次启用的程序编号 (见 enabled_programs). 返回比对的 (程序, fixture_key)."""
+    ids = set(enabled)
+    root = root if root is not None else get_settings().LLM_FIXTURES_ROOT
+    files = sorted((p.parent.name, p.stem) for p in root.glob("*/*.json") if p.parent.name in ids)
     calls = [e for e in entries if e.kind is TrailKind.llm_call]
     assert sorted((e.procedure_id, e.payload["fixture_key"]) for e in calls) == files
     assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
+    return files
+
+
+def test_fixture_guard_compares_enabled_programs_only(tmp_path: Path) -> None:
+    """assert_fixtures_used_once 只比对启用程序的目录: 临时 fixture 根多放未启用程序的 FIN-03/default.json 仍过;
+    启用的 REV-03 多一个文件 (CON-999.json) 时失败."""
+    root = tmp_path / "llm"
+    shutil.copytree(get_settings().LLM_FIXTURES_ROOT, root)
+    enabled = enabled_programs(make_deps(FakeRegistry(), FakeTrail()))
+    entries = [
+        TrailEntry(
+            engagement_id=EID,
+            kind=TrailKind.llm_call,
+            actor="A6",
+            procedure_id=p.parent.name,
+            summary="synthetic",
+            payload={"fixture_key": p.stem, "attempt": 1, "level_failed": None},
+        )
+        for p in sorted(root.glob("*/*.json"))
+        if p.parent.name in enabled  # 流程只调启用的程序; 真实根里先放的未启用程序 fixture 不会被读到
+    ]
+    assert Counter(pid for pid, _ in assert_fixtures_used_once(entries, enabled, root)) == FIXTURE_COUNTS
+    (root / "FIN-03").mkdir(exist_ok=True)
+    (root / "FIN-03" / "default.json").write_text("{}", encoding="utf-8")
+    assert len(assert_fixtures_used_once(entries, enabled, root)) == 15
+    (root / "REV-03" / "CON-999.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        assert_fixtures_used_once(entries, enabled, root)
 
 
 async def test_locked_after_signing(demo: Started) -> None:
@@ -415,10 +463,11 @@ class RealRun:
 
 
 @asynccontextmanager
-async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRun]:
+async def real_storage(tmp_path: Path, *, load_dataset: bool = True, **overrides: Any) -> AsyncIterator[RealRun]:
     """组装真实依赖 (Postgres 各存储与检查点, 规则 SQL, 数据集载入 data/demo, 证据文件库 tmp_path, mock 函证与登记查询),
     新建用户 Jordan Ellis (报告签字块取项目负责人姓名, 第 7 节第 17 行) 与项目, 退出时停后台任务并释放连接.
-    overrides 覆盖配置 (缺省大模型为 mock). 未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
+    load_dataset 为假时不载入数据集 (财务数据由测试自己接入). overrides 覆盖配置 (缺省大模型为 mock).
+    未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需设 TEST_DATABASE_URL: 已迁移并建好检查点表的独立测试库")
@@ -428,6 +477,7 @@ async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRu
         "DATASET_ROOT": REPO / "data",
         "EVIDENCE_ROOT": tmp_path,
         "LLM_MODE": "mock",
+        "FEATURES": ",".join(sorted(NUMBAT_FEATURES)),  # Numbat 回归: 只开基线功能, 不受 .env 影响
     }
     settings = Settings(**(config | overrides))
     owner = "USR-" + uuid4().hex
@@ -445,7 +495,8 @@ async def real_storage(tmp_path: Path, **overrides: Any) -> AsyncIterator[RealRu
         owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
     )
     # 建项目不载入财务数据 (需求 R10): 同种子脚本的 load 载入数据集, 视同已确认数据已齐, P1 不停下等数据
-    await deps.datasets.load(engagement.id, "demo")
+    if load_dataset:
+        await deps.datasets.load(engagement.id, "demo")
     async with AsyncExitStack() as stack:
         saver = await stack.enter_async_context(open_checkpointer(settings))
         runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))
@@ -482,7 +533,8 @@ async def test_real_storage_variant(tmp_path: Path) -> None:
         await assert_results(s, eid, approver=owner)
         entries = await deps.trail.list(eid, limit=10_000)
         assert_trail_counts(entries)
-        assert_fixtures_used_once(entries)
+        files = assert_fixtures_used_once(entries, enabled_programs(deps))
+        assert Counter(pid for pid, _ in files) == FIXTURE_COUNTS
         pointers = await assert_pointers_resolve(s, eid, everything=True)
         assert {"trail", "bank_account"} <= {p.source_type for p in pointers}  # 评分卡的登记留痕, CSH-05 例外的账户
         manifest = json.loads((REPO / "data" / "demo" / "manifest.json").read_text(encoding="utf-8"))

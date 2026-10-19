@@ -169,7 +169,8 @@ src/backend/
 │   ├── rule_engine.py             B  绑定参数执行 YAML 中的 SQL，结果包装为 Exception
 │   └── audit_trail.py             B  只追加写入
 ├── agents/                        A  base.py、client_intel.py（A2）、ingest.py（A3）、risk_assessor.py（A4）、
-│                                     evidence.py（A5）、fieldwork.py（A6）、qc.py（A9）、concierge.py（A10）
+│                                     sheets.py（A3，上传账表识别）、evidence.py（A5）、fieldwork.py（A6）、qc.py（A9）、
+│                                     concierge.py（A10）
 ├── orchestration/                 A  graph.py、nodes.py、scheduler.py、decisions.py、runner.py、query.py
 ├── persistence/                   B  表模型、五个 Store 与 DatasetLoader 的实现、行级安全、事务
 ├── adapters/
@@ -192,14 +193,19 @@ compose.yml                        B
 - ACC-08、PLN-15 两个闸门步骤，EQR
 - 原型替身与 not_implemented 注册：程序库只放本版 17 条
 - 向量索引、文档分类与 OCR：数据集自带文档类型，只读 PDF 文本层
+- Xero 收款与发票对应表（payments.json 的分配记录），因而期后监控 GEN-07 S04 “期末应收到截止日仍未收回” 暂缓
+- 分录表加 reverses_entry_no 列：作废对仍由规则按数据集声明的冲回说明格式识别
 
 ## 7. 准则片段
 
 段落号已对照 `参考资料/` 中的现行编译版核对。原文摘录由 A 从 `参考资料/` 的 PDF 填入 `knowledge/standards/`。
 
+片段 ID 写作 `{YAML 文件名}-{段码}`（如 ASA450-P05，编号段补足两位），段码规则见开发接口文档第 8.2 节；`tests/test_knowledge.py` 按该规则核对全部片段的 ID。
+
 | 片段 ID | 内容 | 程序 |
 |---|---|---|
 | AASB15-P31 | 履约义务满足时确认收入 | REV-03、REV-02 |
+| AASB15-P35 | 随时间转移控制权的三项条件（任一成立即在一段时间内确认收入） | REV-03、REV-02 |
 | AASB15-P38 | 时点履约义务的控制权转移迹象 | REV-03、REV-02 |
 | ASA320-P10、ASA320-P11 | 整体重要性、执行重要性 | PLN-01 |
 | ASA450-P05 | 明显微小的错报不累计 | PLN-01、FIN-04 |

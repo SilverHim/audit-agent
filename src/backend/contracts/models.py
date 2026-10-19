@@ -73,7 +73,10 @@ class ProcedureStatus(StrEnum):
     planned = "planned"  # 计划中
     executing = "executing"  # 执行中
     awaiting_human = "awaiting_human"  # 等人处理: 有待决复核任务
+    in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (尚未使用)
     completed = "completed"  # 已完成
+    awaiting_data = "awaiting_data"  # 等待数据: 模板 inputs 声明的客户资料还没有, 没执行 (需求 R272)
+    no_data = "no_data"  # 未执行 (无数据): 客户无此类资料, 或前置程序未执行 (无数据); 终态, 没有执行记录
 
 
 class RunTrigger(StrEnum):
@@ -144,6 +147,7 @@ class ReviewStatus(StrEnum):
     pending = "pending"  # 待复核
     confirmed = "confirmed"  # 已确认
     overridden = "overridden"  # 被推翻, 人另出结论
+    superseded = "superseded"  # 被取代: 重跑后旧的建议判断由新判断取代 (尚未使用)
 
 
 class ExceptionDisposition(StrEnum):
@@ -161,6 +165,8 @@ class TaskKind(StrEnum):
     unattributed = "unattributed"  # 例外没有判断解释
     failed = "failed"  # 执行或校验失败
     dispute = "dispute"  # 独立复核 (A7) 与 A6 结论不一致, 由审计师仲裁
+    blind = "blind"  # 盲判: 审计师先提交独立结论, 比对 AI 结论后才作普通决定 (尚未使用)
+    manual = "manual"  # 人工程序 (engine manual) 由人执行并提交结果 (尚未使用)
 
 
 class CriticVerdict(StrEnum):
@@ -170,6 +176,16 @@ class CriticVerdict(StrEnum):
     inconsistent = "inconsistent"  # 不一致: 建争议任务, 由审计师仲裁
     not_applicable = "not_applicable"  # 命中触发规则, 但复核没有完成 (如复核模型输出不合格), 转人工复核
     skipped = "skipped"  # 不复核: 自主度 L1, L2 由审计师逐条复核, 或未命中触发规则
+
+
+class CriticTrigger(StrEnum):
+    """独立复核 (A7, GEN-09) 命中的触发规则, 按判定顺序 (尚未使用)."""
+
+    main = "main"  # 自主度 L3, L4 且建议 accept 或 close
+    internal_copy = "internal_copy"  # 引用的非准则证据全为内部副本
+    assumption = "assumption"  # 推理链有 assumption 步骤
+    unsupported = "unsupported"  # 推理链有未获证据支撑的步骤
+    sample = "sample"  # 按抽样比例抽中
 
 
 class CriticReasonType(StrEnum):
@@ -288,15 +304,22 @@ class ReceiptChannel(StrEnum):
 
 
 class DocumentType(StrEnum):
-    """证据文件类型. 审计师上传的文件由 A3 分类."""
+    """证据文件类型. 审计师上传的文件由 A3 分类; 证据种类见 judgment_engine.DOCUMENT_EVIDENCE."""
 
-    contract = "contract"  # 合同
-    invoice = "invoice"  # 发票
+    contract = "contract"  # 与客户的收入合同, DOC-04 逐份抽取 (上传后由 A3 抽取)
+    invoice = "invoice"  # 发票, 含供应商税务发票
     confirmation = "confirmation"  # 询证函回函
     bank_statement = "bank_statement"  # 银行对账单
-    minutes = "minutes"  # 会议纪要 (董事会, 股东会)
-    financial_statements = "financial_statements"  # 财务报表 (含报表草稿)
-    other = "other"  # 其他
+    minutes = "minutes"  # 会议纪要与决议 (董事会, 股东会), 如委任审计师
+    financial_statements = "financial_statements"  # 财务报表 (含报表草稿); 不作证据, 判断引报表行
+    registry_extract = "registry_extract"  # 登记机构摘录, 如 ASIC 公司摘录与人员检索
+    engagement_letter = "engagement_letter"  # 审计业务约定书
+    representation_letter = "representation_letter"  # 管理层声明书
+    correspondence = "correspondence"  # 往来函件与邮件, 含董事函
+    governance_communication = "governance_communication"  # 与治理层的沟通
+    agreement = "agreement"  # 收入合同以外的协议: 租约, 借款协议, 采购协议, 客户订单; 不进 DOC-04
+    internal_record = "internal_record"  # 公司内部记录: 登记表, 报销单, 工资册, 政策, 备忘录与预测, 报价单
+    other = "other"  # 其他, 不作证据
 
 
 class TermType(StrEnum):
@@ -340,6 +363,7 @@ class TrailKind(StrEnum):
     conversation = "conversation"  # 审计助理的一轮问答
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
+    presentation = "presentation"  # 判断呈递: 审计师打开一条复核任务 (尚未使用)
 
 
 class AgentId(StrEnum):
@@ -447,6 +471,7 @@ class Judgment(Versioned):
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
     # 独立复核 (A7, GEN-09) 的结果, 由 A6 在判断第 1 版写入前同步调用 A7 填写; 人工建的判断不经复核
     critic_verdict: CriticVerdict = CriticVerdict.skipped  # 复核结论
+    critic_trigger: CriticTrigger | None = None  # 命中的触发规则, 跳过时为空 (尚未填写)
     critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型, 其余为空
     critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
     critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
@@ -497,7 +522,7 @@ class Engagement(Model):
     client_profile_version: int  # 本项目采用的客户画像版本: 建项目时的版本, 本项目更新客户资料后为新版本
     phase: Phase  # 当前阶段
     locked: bool = False  # 签字或拒绝承接后锁定, 拒绝一切写入
-    version_snapshot: dict[str, str] = {}  # 启动时冻结: 程序库 commit, LLM 模式与模型, prompt 摘要, 冻结时刻
+    version_snapshot: dict[str, str] = {}  # 启动时冻结: 程序库 commit, LLM 模式与模型, prompt 摘要, 功能集, 冻结时刻
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
 
@@ -533,6 +558,9 @@ class Procedure(Versioned):
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus = ProcedureStatus.planned  # 程序状态
     rerun_subject_ids: list[str] = []  # 重跑时只重判的对象 (rerun 关闭的那组失败任务的), 为空则整条重跑; 重跑后清空
+    # 缺的资料对应的补交请求 ID (REQ-{表种类或文件类型}): awaiting_data 时为还缺的, no_data 时为客户无此类资料的;
+    # 其余状态为空 (需求 R272)
+    data_request_ids: list[str] = []
 
 
 class ProcedureRun(Versioned):
@@ -760,6 +788,8 @@ class DocumentRef(Model):
     channel: DocumentChannel = "auditor_upload"  # 来源渠道
     uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
     failed_step: DocumentFailedStep | None = None  # 需人工处理时卡在哪一步, 其余状态为空
+    document_date: date | None = None  # 文件日期, 如签署或发出日 (尚未存取)
+    related_ids: list[str] = []  # 关联对象 ID, 如公司 ACN, 分录号, 银行流水 (尚未存取)
 
 
 class ContractTerm(Model):

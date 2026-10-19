@@ -1,8 +1,8 @@
-"""A3 的数据体检与补交请求 (需求 R15).
+"""A3 的数据体检与补交请求 (需求 R15, R272).
 
-每次账表写入 (导入, Xero 同步), 上传文件处理完, 人工指定类型后, 以及 P1 等数据时, A3 跑一次体检: 结果存库
-(data_checks 只留最近一次) 并写 data 留痕; 按结果提出补交请求, 资料补齐的请求转 received. 规则在
-services.data_quality, 这里只读汇总, 写存储与留痕.
+每次账表写入 (导入, Xero 同步), 上传文件处理完, 人工指定类型后, P1 等数据时, 以及有程序开始等数据时, A3 跑一次
+体检: 结果存库 (data_checks 只留最近一次) 并写 data 留痕; 按体检结果与程序要的资料提出补交请求, 资料补齐的请求
+转 received. 规则在 services.data_quality, 这里只读汇总, 写存储与留痕.
 """
 
 from collections.abc import Sequence
@@ -10,11 +10,19 @@ from datetime import UTC, datetime
 
 from backend.agents.base import AgentDeps
 from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
-from backend.contracts.models import AgentId, DocumentType, TrailEntry, TrailKind
+from backend.contracts.models import AgentId, DocumentType, Procedure, ProcedureStatus, TrailEntry, TrailKind
 from backend.orchestration.trail import record_transitions
-from backend.services.data_quality import reconcile, run_checks
+from backend.services.data_quality import OnHand, merge_requests, on_hand, program_requests, reconcile, run_checks
 
 STATEMENT_READY = frozenset({"classified", "extracted"})  # 财务报表文件算已提供的状态 (分类完成)
+# 还没执行完的程序状态: 这些程序 inputs 中还没有的资料才去要 (需求 R272)
+UNDONE = frozenset({ProcedureStatus.planned, ProcedureStatus.executing, ProcedureStatus.awaiting_data})
+
+
+async def resources(deps: AgentDeps, eid: str) -> OnHand:
+    """项目现有的资料 (DataStore.stats 与 document_counts) 与标了客户无此类资料的 (DataStore.requests), 口径见
+    data_quality.on_hand; 程序等数据的判断, 程序要的补交请求与请求的对照共用."""
+    return on_hand(await deps.data.stats(eid), await deps.data.document_counts(eid), await deps.data.requests(eid))
 
 
 def stamp(moment: datetime) -> str:
@@ -40,13 +48,22 @@ def check_entry(eid: str, run: CheckRun) -> TrailEntry:
     )
 
 
+# 补交请求留痕的动作 → 摘要的写法 (请求的标题接在后面)
+REQUEST_ACTIONS = {
+    "request_raised": "需要客户补交",  # 提出或重新打开
+    "request_received": "已收到",  # 资料补齐
+    "request_withdrawn": "不再需要",  # 要它的程序都不再执行, 资料又没到 (需求 R280)
+    "request_unavailable": "客户无此类资料: ",  # 审计师标记 (需求 R280)
+}
+
+
 def request_entry(eid: str, request: DataRequest, action: str) -> TrailEntry:
-    """补交请求的 data 留痕: action 为 request_raised (提出或重新打开) 或 request_received (资料补齐);
-    payload 带 request_id 与 table_kind 或 document_type, 提出时另带 reason_code, reason_params.
-    防重复键 {eid}:data:{action}:{请求 ID}:{提出或收到的时间}."""
+    """补交请求的 data 留痕, action 见 REQUEST_ACTIONS; payload 带 request_id 与 table_kind 或 document_type, 提出时
+    另带 reason_code, reason_params; 客户无此类资料时另带 reason 与 used_for, actor 为标记的审计师 (其余为 A3).
+    防重复键 {eid}:data:{action}:{请求 ID}:{提出或转出的时间}."""
     raised = action == "request_raised"
     moment = request.created_at if raised else request.resolved_at
-    assert moment is not None  # 已收到的请求都有 resolved_at
+    assert moment is not None  # 已转出的请求都有 resolved_at
     subject = (
         {"table_kind": request.table_kind.value}
         if request.table_kind is not None
@@ -55,11 +72,14 @@ def request_entry(eid: str, request: DataRequest, action: str) -> TrailEntry:
     payload: dict[str, object] = {"action": action, "request_id": request.id, **subject}
     if raised:
         payload |= {"reason_code": request.reason_code, "reason_params": request.reason_params}
+    unavailable = action == "request_unavailable"
+    if unavailable:
+        payload |= {"reason": request.unavailable_reason, "used_for": request.used_for}
     return TrailEntry(
         engagement_id=eid,
         kind=TrailKind.data,
-        actor=AgentId.A3,
-        summary=f"需要客户补交{request.title}" if raised else f"已收到{request.title}",
+        actor=(request.resolved_by or AgentId.A3) if unavailable else AgentId.A3,
+        summary=f"{REQUEST_ACTIONS[action]}{request.title}",
         idempotency_key=f"{eid}:data:{action}:{request.id}:{stamp(moment)}",
         payload=payload,
         created_at=moment,
@@ -67,12 +87,12 @@ def request_entry(eid: str, request: DataRequest, action: str) -> TrailEntry:
 
 
 def checkup_entries(eid: str, run: CheckRun | None, requests: Sequence[DataRequest]) -> list[TrailEntry]:
-    """补写用: 最近一次体检, 各请求最近一次提出, 已收到的最近一次收到. 按时间排."""
+    """补写用: 最近一次体检, 各请求最近一次提出, 已收到, 已撤回与客户无此类资料的最近一次转出. 按时间排."""
     entries = [check_entry(eid, run)] if run is not None else []
     for request in requests:
         entries.append(request_entry(eid, request, "request_raised"))
-        if request.status == "received":
-            entries.append(request_entry(eid, request, "request_received"))
+        if request.status != "open":
+            entries.append(request_entry(eid, request, f"request_{request.status}"))
     return sorted(entries, key=lambda e: e.created_at or datetime.min.replace(tzinfo=UTC))
 
 
@@ -83,9 +103,10 @@ class DataCheckup:
         self.deps = deps  # 外部依赖
 
     async def run(self, eid: str) -> CheckRun:
-        """体检 (services.data_quality.run_checks), 对照已有请求 (reconcile), 一个事务内存下体检结果与请求的变化,
-        提交后写留痕: 体检一条, 每个新提出 (或重新打开) 与转 received 的请求各一条. 留痕没写成的由下次取锁时的
-        DataService.backfill_trails 补写. 项目不存在抛 LookupError."""
+        """体检 (services.data_quality.run_checks), 并上程序要的请求 (program_requests), 对照已有请求 (reconcile),
+        一个事务内存下体检结果与请求的变化, 提交后写留痕: 体检一条, 每个新提出 (或重新打开), 转 received 与
+        转 withdrawn 的请求各一条. 留痕没写成的由下次取锁时的 DataService.backfill_trails 补写.
+        项目不存在抛 LookupError."""
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
@@ -95,14 +116,25 @@ class DataCheckup:
         statements = await self.statements(eid)
         now = datetime.now(UTC)
         result = run_checks(inputs, statements=statements, journal_version=journals[-1] if journals else None, now=now)
-        changes = reconcile(await self.deps.data.requests(eid), result.requests, now)
+        have = await resources(self.deps, eid)
+        wanted = merge_requests(result.requests, await self.program_requests(eid, have, now))
+        changes = reconcile(await self.deps.data.requests(eid), wanted, now, have)
         run = CheckRun(data_version=readiness.data_version, checked_at=now, checks=result.checks)
         await self.deps.data.save_check_run(eid, run, changes.saved)
         entries = [check_entry(eid, run)]
         entries += [request_entry(eid, r, "request_raised") for r in changes.raised]
         entries += [request_entry(eid, r, "request_received") for r in changes.received]
+        entries += [request_entry(eid, r, "request_withdrawn") for r in changes.withdrawn]
         await record_transitions(self.deps.trail, entries)
         return run
+
+    async def program_requests(self, eid: str, have: OnHand, now: datetime) -> list[DataRequest]:
+        """程序要的补交请求 (需求 R272): 程序包 (Store 最新版本) 中还没执行完的程序声明而现在还没有的资料
+        (data_quality.program_requests); have 为现有的资料 (resources)."""
+        procedures = await self.deps.output_store.latest(eid, Procedure)
+        library = self.deps.library
+        needs = {p.id: library.load(p.id).inputs for p in procedures if p.status in UNDONE}
+        return program_requests(needs, have, now)
 
     async def statements(self, eid: str) -> int:
         """已提供的财务报表文件数 (类型 financial_statements, 分类完成)."""

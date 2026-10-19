@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link, redirect, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
 import { ArrowRight, Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   engagementsCreateEngagementMutation,
@@ -133,14 +133,16 @@ function EngagementCard({ item }: { item: Summary }) {
   )
 }
 
+const DEFAULT_PERIOD = { start: '2025-07-01', end: '2026-06-30' } // 不自带期间的数据集 (Numbat) 的缺省财年
+
 function CreateForm({ onCancel }: { onCancel: () => void }) {
   const { t } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const datasets = useDatasets()
   const [dataset, setDataset] = useState('')
-  const [periodStart, setPeriodStart] = useState('2025-07-01')
-  const [periodEnd, setPeriodEnd] = useState('2026-06-30')
+  const [periodStart, setPeriodStart] = useState(DEFAULT_PERIOD.start)
+  const [periodEnd, setPeriodEnd] = useState(DEFAULT_PERIOD.end)
   const create = useMutation({
     ...engagementsCreateEngagementMutation(),
     onSuccess: async (overview) => {
@@ -151,7 +153,17 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
     onError: (error) => toast.error(apiMessage(error)),
   })
   const options = datasets.data ?? []
-  const chosen = dataset || options[0]?.dataset || 'demo'
+  // 默认选 default 为真的数据集 (配置项 DEMO_DATASET), 没有时选第一个. 清单加载中, 取数失败或为空时不能创建,
+  // 免得在默认数据集出来之前建成别的项目
+  const chosen = dataset || options.find((item) => item.default)?.dataset || options[0]?.dataset || ''
+  const selected = options.find((item) => item.dataset === chosen)
+  const fixedStart = selected?.period_start ?? null
+  const fixedEnd = selected?.period_end ?? null
+  // 所选数据集自带期间时自动填起止日 (建项目时须与之相同); 不带时用 Numbat 的财年
+  useEffect(() => {
+    setPeriodStart(fixedStart ?? DEFAULT_PERIOD.start)
+    setPeriodEnd(fixedEnd ?? DEFAULT_PERIOD.end)
+  }, [fixedStart, fixedEnd])
   return (
     <section className="flex flex-col gap-4 rounded-[14px] border-[1.5px] border-primary bg-card px-6 py-5">
       <h2 className="m-0 font-semibold text-[17px]">{t.projectsPage.newEngagement}</h2>
@@ -181,6 +193,11 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
                 ))}
               </select>
             </div>
+          ) : null}
+          {datasets.isError ? (
+            <p role="alert" className="m-0 basis-full text-[13px] text-destructive">
+              {t.projectsPage.datasetsFailed}
+            </p>
           ) : null}
           <div className="flex flex-[1_1_160px] flex-col gap-1.5">
             <label htmlFor="new-start" className="font-semibold text-[13px]">
@@ -213,7 +230,7 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
           <Button type="button" variant="outline" size="lg" onClick={onCancel}>
             {t.projectsPage.cancel}
           </Button>
-          <Button type="submit" size="lg" disabled={create.isPending}>
+          <Button type="submit" size="lg" disabled={create.isPending || !chosen}>
             {t.projectsPage.create}
           </Button>
         </div>

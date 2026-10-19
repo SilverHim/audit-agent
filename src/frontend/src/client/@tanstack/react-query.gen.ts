@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataDataRequests, dataReady, dataSetAccountCategory, datasetsListDatasets, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceContractHistory, evidenceEditConfirmation, evidenceEditContract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataReadyData, DataReadyError, DataReadyResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataDataRequests, dataMarkRequestUnavailable, dataReady, dataSetAccountCategory, datasetsListDatasets, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceContractHistory, evidenceEditConfirmation, evidenceEditContract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -119,7 +119,8 @@ export const datasetsListDatasetsQueryKey = (options?: Options<DatasetsListDatas
 /**
  * List Datasets
  *
- * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像; 画像读不了的跳过. 按数据集名排序.
+ * DatasetLoader.datasets 列出的数据集, 名称与 ABN 取各自的客户画像, 期间取 DatasetLoader.period; 画像或期间读不了
+ * 的跳过. 数据集名等于配置项 DEMO_DATASET 的一行 default 为真 (不在清单时都为假). 按数据集名排序.
  */
 export const datasetsListDatasetsOptions = (options?: Options<DatasetsListDatasetsData>) => queryOptions<DatasetsListDatasetsResponse, DefaultError, DatasetsListDatasetsResponse, ReturnType<typeof datasetsListDatasetsQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -157,7 +158,8 @@ export const engagementsListEngagementsOptions = (options?: Options<EngagementsL
 /**
  * Create Engagement
  *
- * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真.
+ * 客户取数据集画像, 建项目后启动流程. 返回时后台已在跑, running 为真. 数据集不存在 404; 画像不合格, 补造文件
+ * 与快照不匹配, 或数据集自带期间而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
  */
 export const engagementsCreateEngagementMutation = (options?: Partial<Options<EngagementsCreateEngagementData>>): UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> => {
     const mutationOptions: UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> = {
@@ -295,6 +297,7 @@ export const reviewsListReviewTasksQueryKey = (options: Options<ReviewsListRevie
  *
  * status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
  * amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
+ * 判断经盲判过滤后输出, amount_cents, tier 与 allowed_resolutions 也按过滤后的视图算, 被隐藏的字段不经它们漏出.
  */
 export const reviewsListReviewTasksOptions = (options: Options<ReviewsListReviewTasksData>) => queryOptions<ReviewsListReviewTasksResponse, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReturnType<typeof reviewsListReviewTasksQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -349,7 +352,7 @@ export const reviewsGetJudgmentQueryKey = (options: Options<ReviewsGetJudgmentDa
 /**
  * Get Judgment
  *
- * version 省略时取最新版. review_records 是指向这条判断的复核决定.
+ * version 省略时取最新版. review_records 是指向这条判断的复核决定. 判断与各版本经盲判过滤 (BlindFilter) 输出.
  */
 export const reviewsGetJudgmentOptions = (options: Options<ReviewsGetJudgmentData>) => queryOptions<ReviewsGetJudgmentResponse, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReturnType<typeof reviewsGetJudgmentQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -887,10 +890,32 @@ export const dataDataRequestsOptions = (options: Options<DataDataRequestsData>) 
 });
 
 /**
+ * Mark Request Unavailable
+ *
+ * 标 "客户无此类资料" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.
+ * 请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;
+ * 锁定 423; 忙 409 ENGAGEMENT_BUSY.
+ */
+export const dataMarkRequestUnavailableMutation = (options?: Partial<Options<DataMarkRequestUnavailableData>>): UseMutationOptions<DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableError, Options<DataMarkRequestUnavailableData>> => {
+    const mutationOptions: UseMutationOptions<DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableError, Options<DataMarkRequestUnavailableData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataMarkRequestUnavailable({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
  * Ready
  *
  * 确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
- * (detail.missing_tables); 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态, 后台已在推进.
+ * (detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);
+ * 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.
  */
 export const dataReadyMutation = (options?: Partial<Options<DataReadyData>>): UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> => {
     const mutationOptions: UseMutationOptions<DataReadyResponse, DataReadyError, Options<DataReadyData>> = {
@@ -950,6 +975,8 @@ export const reportsListTrailQueryKey = (options: Options<ReportsListTrailData>)
 
 /**
  * List Trail
+ *
+ * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsListTrailOptions = (options: Options<ReportsListTrailData>) => queryOptions<ReportsListTrailResponse, ReportsListTrailError, ReportsListTrailResponse, ReturnType<typeof reportsListTrailQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -968,6 +995,8 @@ export const reportsListTrailInfiniteQueryKey = (options: Options<ReportsListTra
 
 /**
  * List Trail
+ *
+ * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsListTrailInfiniteOptions = (options: Options<ReportsListTrailData>) => {
     const opts = infiniteQueryOptions<ReportsListTrailResponse, ReportsListTrailError, InfiniteData<ReportsListTrailResponse>, QueryKey<Options<ReportsListTrailData>>, number | Pick<QueryKey<Options<ReportsListTrailData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
@@ -998,6 +1027,8 @@ export const reportsGetTrailQueryKey = (options: Options<ReportsGetTrailData>) =
 
 /**
  * Get Trail
+ *
+ * 留痕经盲判过滤 (BlindFilter) 输出.
  */
 export const reportsGetTrailOptions = (options: Options<ReportsGetTrailData>) => queryOptions<ReportsGetTrailResponse, ReportsGetTrailError, ReportsGetTrailResponse, ReturnType<typeof reportsGetTrailQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

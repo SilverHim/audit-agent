@@ -25,7 +25,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailKind,
 )
-from backend.contracts.records import DeliveryNote, SalesInvoice
+from backend.contracts.records import DatasetTraits, DeliveryNote, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
@@ -112,7 +112,9 @@ def setup(
         "judgments": [rev03("CON-001"), rev03("CON-002")] if judgments is None else judgments,
         "performance_materiality_cents": 9000000,
     }
-    params = deps.library.resolve_params(ctx.template, ctx.engagement, state, RiskLevel.significant)
+    params = deps.library.resolve_params(
+        ctx.template, ctx.engagement, state, RiskLevel.significant, traits=DatasetTraits()
+    )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, procedure, ctx.template, run, state), engine  # type: ignore[arg-type]
 

@@ -1,0 +1,35 @@
+[
+  {
+    "id": "RISK-REV-OCC",
+    "version": 1,
+    "objective_id": "OBJ-REV-OCC",
+    "assertion": "Occurrence",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Presumed fraud risk (ASA 240 para 27). Revenue of AUD 32,431 for the three months is 7.7 times the AUD 4,200 recorded for the whole of FY2026; 26 invoices to 14 customers, DIISR 24%; all journals are entered by the sole director.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-REV-CUT",
+    "version": 1,
+    "objective_id": "OBJ-REV-CUT",
+    "assertion": "Cutoff",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Six invoices totalling AUD 9,000 (excl. GST) were raised on 16-17 September 2026, including a AUD 6,500 development invoice to DIISR (ORC1026) whose service completion falls close to the period end.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-CASH-EXI",
+    "version": 1,
+    "objective_id": "OBJ-CASH-EXI",
+    "assertion": "Existence",
+    "level": "high",
+    "fraud_related": false,
+    "description": "The Business Bank Account was overdrawn throughout the quarter (AUD 10,900.44 at 30 September 2026) and the Savings account held AUD 11,581.23; opening bank balances were keyed on 16 July 2026 as a conversion balance of AUD 19,212.21 credited to 840 Historical Adjustment, and the 30 June 2026 comparative omits them.",
+    "revision_reason": null,
+    "approved_by": null
+  }
+]

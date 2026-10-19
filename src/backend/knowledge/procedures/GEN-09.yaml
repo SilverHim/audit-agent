@@ -5,8 +5,11 @@ name: 判断独立复核
 phase: P2_Executing
 cycle: Pervasive
 owner: A7
+outputs: []
 engine: llm
 autonomy_level: L4
+# 功能开关 critic (services/features.py), 基线功能: 关闭时 A7 对每条判断记 skipped, 不做独立复核
+feature: critic
 # 触发规则 (任一命中即复核, agents/review.py 的 triggers): 程序运行时自主度 L3/L4 且建议 accept 或 close;
 #   推理链含 assumption 步骤; 按判断 ID 的 sha256 抽样 (sample_rate, 重放结果不变).
 # 跳过规则: 运行时自主度 L1, L2 记 skipped (审计师逐条复核). 本期不做: 提示词或配置刚改过, 人机一致率低 (无一致率统计).

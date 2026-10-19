@@ -211,11 +211,13 @@ async def test_collect_checks_all_pass() -> None:
     registry = FakeRegistry({"68900042015": NUMBAT_ABN}, {"900042015": NUMBAT_ASIC})
     agent, trail = make_agent(registry)
 
-    checks = await agent.collect_checks(make_ctx(agent.deps), NUMBAT_PROFILE)
+    ctx = make_ctx(agent.deps)
+    checks = await agent.collect_checks(ctx, NUMBAT_PROFILE)
 
     assert [c.check for c in checks] == ["abn_active", "name_match", "company_registered"]
     assert all(c.passed for c in checks)
     assert registry.asic_queries == ["900042015"]  # ACN 取自 ABN 登记记录
+    assert registry.eids == [ctx.engagement.id, ctx.engagement.id]  # 登记按项目的数据集定位, 须传本项目 ID
     assert [c.evidence.source_id for c in checks] == ["TR-1", "TR-1", "TR-2"]
     assert len(trail.entries) == 2
 

@@ -3,6 +3,7 @@ name: 审计报告批准与签字
 phase: P4_Reporting
 cycle: Reporting
 owner: A10
+outputs: []
 engine: manual
 autonomy_level: L1
 gate: RPT-01

@@ -11,12 +11,12 @@ from typing import Any
 import pytest
 from jinja2 import UndefinedError
 
-from backend.adapters.llm import MockLLMClient
+from backend.adapters.llm import DatasetFixtureLLMClient, MockLLMClient, SwitchableLLMClient, make_llm_client
 from backend.agents.base import RunContext
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction, JudgmentDraft
 from backend.contracts.models import AgentId, DocumentRef, Reliability, RunStatus, TaskKind, TrailEntry, TrailKind
-from backend.contracts.ports import LLMMessage
+from backend.contracts.ports import LLMMessage, LLMRequest
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
 from backend.main import build_deps
@@ -33,6 +33,7 @@ from tests.fakes import (
     NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
+    FakeEngagementStore,
     FakeFinancialStore,
     FakeRegistry,
     FakeTrail,
@@ -179,6 +180,7 @@ async def test_request_fields() -> None:
     result = await call(engine)
     [req] = llm.requests
     assert (req.procedure_id, req.run_id, req.fixture_key) == ("DOC-04", "RUN-DOC-04-1", "CON-001")
+    assert req.eid == EID  # R78: mock 按它选 fixture 目录
     assert req.temperature == 0 and req.max_tokens == 4096
     assert json.dumps(ContractExtraction.model_json_schema(), indent=2) in req.system
     assert req.messages == [LLMMessage(role="user", content=engine.render(doc04(), variables()))]
@@ -384,7 +386,8 @@ async def test_concurrent_calls_keep_separate_conversations() -> None:
 
 
 async def test_mock_client_with_doc04_fixture_passes() -> None:
-    engine, _ = setup(build_deps(SETTINGS).llm)
+    # 组装根的客户端绑着 Postgres 项目存储 (按项目数据集选目录要查项目), 这里用不带项目存储的同一种客户端, 不连库
+    engine, _ = setup(make_llm_client(SETTINGS))
     result = await call(engine)
     assert result.attempts == 1 and result.report.level_failed is None
     assert {p.reliability for p in result.report.output.evidence} == {Reliability.external_copy}
@@ -398,3 +401,83 @@ def test_build_deps_and_make_deps_wire_engine() -> None:
     deps = make_deps(FakeRegistry(), trail, financial_store=financial)
     assert deps.judgments.trail is trail and deps.judgments.llm is deps.llm
     assert deps.judgments.validator.financial is financial and deps.judgments.validator.trail is trail
+
+
+# ── R78: mock 按项目数据集选 fixture 目录 ──
+
+
+def request(eid: str, key: str = "CON-001") -> LLMRequest:
+    return LLMRequest(
+        procedure_id="DOC-04", run_id="RUN-DOC-04-1", system="s", messages=[], max_tokens=10, fixture_key=key, eid=eid
+    )
+
+
+async def test_dataset_fixture_client_picks_directory_by_engagement(tmp_path: Path) -> None:
+    """验收 2: demo 项目读 LLM_FIXTURES_ROOT; xero/20261017-q1 且补造目录有 llm/ 时读它 (同一客户端两个项目各调一次,
+    各读到自己目录的文件); 没有补造 llm/ 的 Xero 快照, eid 为空, 查不到项目都读 LLM_FIXTURES_ROOT. 目录内读法同
+    MockLLMClient: 退回 default.json, 都没有为 fixture_not_found."""
+    root, datasets = tmp_path / "llm", tmp_path / "data"
+    xero = datasets / "xero_demo" / "20261017-q1" / "llm" / "DOC-04"
+    for folder, contract in ((root / "DOC-04", "CON-001"), (xero, "CON-002")):
+        folder.mkdir(parents=True)
+        (folder / "CON-001.json").write_text(raw(contract), encoding="utf-8")
+    (xero / "default.json").write_text(raw("CON-003"), encoding="utf-8")
+    engagements = FakeEngagementStore(
+        [NUMBAT_PROFILE],
+        [
+            ENGAGEMENT,
+            ENGAGEMENT.model_copy(update={"id": "ENG-X", "dataset": "xero/20261017-q1"}),
+            ENGAGEMENT.model_copy(update={"id": "ENG-M", "dataset": "xero/20261017-mock"}),
+        ],
+    )
+    client = DatasetFixtureLLMClient(root, datasets, engagements)
+
+    async def read(eid: str, key: str = "CON-001") -> str | None:
+        response = await client.complete(request(eid, key), ContractExtraction)
+        return response.raw if response.error is None else response.error
+
+    assert (await read(EID), await read("ENG-X")) == (raw("CON-001"), raw("CON-002"))
+    assert await read("ENG-X", "CON-999") == raw("CON-003")  # 退回 default.json
+    for eid in ("ENG-M", "", "ENG-NONE"):
+        assert await read(eid) == raw("CON-001"), eid
+    assert await read(EID, "CON-999") == "fixture_not_found"
+    assert await DatasetFixtureLLMClient(root, datasets).directory("ENG-X") == root  # 没有项目存储时总读根目录
+    # 快照名只能是一段目录名: 不校验时会指向的目录都先建好, 校验去掉任一条这里就会读到它们
+    for dataset, would_be in (
+        ("xero/..", datasets / "llm"),  # xero_demo/../llm, 跳出补造目录
+        ("xero/.", datasets / "xero_demo" / "llm"),  # xero_demo/./llm
+        ("xero/20261017-q1/llm", xero.parent / "llm"),  # 多段
+        ("xero/", datasets / "xero_demo" / "llm"),  # 空快照名
+    ):
+        would_be.mkdir(parents=True, exist_ok=True)
+        eid = f"ENG-{len(engagements.engagements)}"
+        engagements.engagements.append(ENGAGEMENT.model_copy(update={"id": eid, "dataset": dataset}))
+        assert await client.directory(eid) == root, dataset
+    assert await client.directory("ENG-X") == xero.parent
+
+
+def test_mock_mode_builds_dataset_fixture_client() -> None:
+    """验收 2: mock 模式下 make_llm_client 构造 DatasetFixtureLLMClient (根目录为 LLM_FIXTURES_ROOT); 组装根与
+    make_deps 的主模型与复核模型都包着它, make_deps 的绑定在假项目存储上."""
+    client = make_llm_client(SETTINGS)
+    assert isinstance(client, DatasetFixtureLLMClient) and client.root == SETTINGS.LLM_FIXTURES_ROOT
+    assert client.dataset_root == SETTINGS.DATASET_ROOT and client.engagements is None
+    assembled = build_deps(SETTINGS)  # 只构造, 不连库
+    for switchable in (assembled.llm, assembled.review_llm):
+        assert isinstance(switchable, SwitchableLLMClient) and isinstance(switchable.inner, DatasetFixtureLLMClient)
+        assert switchable.inner.engagements is assembled.engagement_store  # 组装根绑定项目存储, Xero 项目才读补造目录
+    engagements = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+    deps = make_deps(FakeRegistry(), FakeTrail(), engagement_store=engagements)
+    for switchable in (deps.llm, deps.review_llm):
+        assert isinstance(switchable, SwitchableLLMClient)
+        assert isinstance(switchable.inner, DatasetFixtureLLMClient) and switchable.inner.engagements is engagements
+
+
+async def test_prompt_hash_ignores_eid() -> None:
+    """验收 1: prompt_hash 只算 system 与 messages, 加了 eid 后留痕的 prompt_hash 不变."""
+    llm = ScriptedLLM({"CON-001": [raw("CON-001")]})
+    engine, trail = setup(llm)
+    await call(engine)
+    [req], [entry] = llm.requests, trail.entries
+    assert entry.prompt_hash == prompt_hash(req.system, req.messages)
+    assert "eid" not in entry.payload

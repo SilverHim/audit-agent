@@ -30,10 +30,12 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { requestTitle } from '@/lib/data-api'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud, formatPct } from '@/lib/money'
+import { procedureName } from '@/lib/review'
 import type { Messages } from '@/locales/en'
 
 // 阶段决定 (闸门) 的材料与决定卡片. 对话工作台和表单视图共用
@@ -249,6 +251,31 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
             </li>
           ))}
         </ul>
+        {material.not_executed?.length ? (
+          <>
+            <span className="text-[13px] text-muted-foreground">
+              {t.completion.notExecuted(material.not_executed.length)}
+            </span>
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-[14px]">
+              {material.not_executed.map((item) => (
+                <li key={item.procedure_id} className="flex flex-col gap-1 rounded-lg border px-3 py-2">
+                  <span className="flex flex-wrap gap-2">
+                    <Code className="font-semibold">{item.procedure_id}</Code>
+                    <span>{procedureName(t, item.procedure_id)}</span>
+                  </span>
+                  {item.via?.length ? (
+                    <span className="text-[13px] text-muted-foreground">{t.completion.via(item.via.join(', '))}</span>
+                  ) : null}
+                  {item.requests.map((request) => (
+                    <span key={request.id} className="text-[13px] text-[#4a5262]">
+                      {requestTitle(request, t)}: {request.unavailable_reason}
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
       </Panel>
     )
   }

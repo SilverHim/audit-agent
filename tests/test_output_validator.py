@@ -7,13 +7,18 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from backend.agents import ingest, review
+from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import (
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
+    CriticVerdictOut,
+    DocumentClassification,
     ExtractedTerm,
     JudgmentDraft,
     ReportDraft,
+    SheetRecognition,
 )
 from backend.contracts.models import (
     AuditException,
@@ -42,7 +47,14 @@ from backend.contracts.ports import LLMResponse
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
-from backend.services.judgment_engine import OutputValidator, output_model, supported_amounts
+from backend.services.judgment_engine import (
+    DOCUMENT_EVIDENCE,
+    CheckResult,
+    OutputValidator,
+    output_model,
+    structure_only,
+    supported_amounts,
+)
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
@@ -54,6 +66,7 @@ from tests.fakes import (
     NUMBAT_REPLIES,
     FakeFinancialStore,
     FakeTrail,
+    xero_document,
 )
 
 EID = ENGAGEMENT.id
@@ -167,6 +180,84 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
         output_model(bad)
     with pytest.raises(ValueError, match="llm"):
         output_model(LIBRARY.load("REV-08"))
+
+
+# ── 引用与语义的分派表 (R83) ─────────────────────────────────────────
+
+
+def test_every_referenced_output_model_is_registered() -> None:
+    """引用方用到的输出模型都已登记引用与语义校验: 程序库全部模板 (含未启用的) 的 llm.output_model, 加上代码里的两份
+    规格 (上传文件分类 ingest.CLASSIFY, 独立复核第二轮 review.VERDICT_SPEC). 新加输出模型而漏登记时在此报出,
+    不至于在运行时被兜底转人工 (如上传分类转 needs_manual)."""
+    referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
+    referenced |= {output_model(ingest.CLASSIFY), getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
+    assert sorted(m.__name__ for m in referenced if m not in OutputValidator.CHECKS) == []
+
+
+def test_dispatch_table_covers_existing_models() -> None:
+    """现有 8 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做语法与
+    结构)."""
+    assert set(OutputValidator.CHECKS) == {
+        JudgmentDraft,
+        ContractExtraction,
+        ConfirmationExtraction,
+        ReportDraft,
+        CriticIndependent,
+        CriticVerdictOut,
+        DocumentClassification,
+        SheetRecognition,
+    }
+    assert OutputValidator.CHECKS[DocumentClassification] is structure_only
+    assert OutputValidator.CHECKS[SheetRecognition] is structure_only
+
+
+class ProbeOut(BaseModel):
+    """测试用的临时输出模型."""
+
+    value: int
+
+
+def probe_template() -> Any:
+    return REV02.model_copy(update={"llm": REV02.llm.model_copy(update={"output_model": "ProbeOut"})})  # type: ignore[union-attr]
+
+
+async def test_unregistered_model_is_not_implemented(monkeypatch: pytest.MonkeyPatch) -> None:
+    """输出模型没有登记校验时, 通过结构校验后抛 NotImplementedError (消息含模型名)."""
+    monkeypatch.setattr(llm_outputs, "ProbeOut", ProbeOut, raising=False)
+    validator, _ = make_validator()
+    with pytest.raises(NotImplementedError, match="ProbeOut"):
+        await validator.validate(EID, probe_template(), respond(ProbeOut(value=1)), ValidationContext())
+
+
+async def test_registered_check_decides_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """register 登记临时模型的校验后, validate 调用它, 按其返回的级别, 错误, 提示与输出出报告; 语法与结构仍在前,
+    结构不过时不调用."""
+    monkeypatch.setattr(llm_outputs, "ProbeOut", ProbeOut, raising=False)
+    monkeypatch.setattr(OutputValidator, "CHECKS", dict(OutputValidator.CHECKS))  # 登记只在本用例内有效
+    seen: list[tuple[Any, ...]] = []
+
+    async def check_probe(validator: OutputValidator, eid: str, output: ProbeOut, ctx: ValidationContext) -> Any:
+        seen.append((validator, eid, output.value, ctx))
+        if output.value % 2:
+            return CheckResult(output, "semantic", errors=["value 须为偶数"], notes=["奇数"])
+        return CheckResult(output.model_copy(update={"value": output.value // 2}))
+
+    OutputValidator.register(ProbeOut, check_probe)
+    validator, _ = make_validator()
+    ctx = ValidationContext()
+    odd = await validator.validate(EID, probe_template(), respond(ProbeOut(value=3)), ctx)
+    assert (odd.level_failed, odd.retryable, odd.errors, odd.notes, odd.unsupported_steps) == (
+        "semantic",
+        False,
+        ["value 须为偶数"],
+        ["奇数"],
+        [],
+    )
+    even = await validator.validate(EID, probe_template(), respond(ProbeOut(value=4)), ctx)
+    assert (even.level_failed, even.output) == (None, ProbeOut(value=2))
+    assert seen == [(validator, EID, 3, ctx), (validator, EID, 4, ctx)]
+    bad = await validator.validate(EID, probe_template(), respond(None, raw='{"value": "x"}'), ctx)
+    assert (bad.level_failed, bad.retryable, len(seen)) == ("structure", True, 2)
 
 
 # ── 语法与结构 ─────────────────────────────────────────
@@ -323,6 +414,89 @@ async def test_reply_document_pointer_is_external_and_other_document_is_not_evid
     [pointer] = report.output.reasoning_chain[2].evidence
     assert (pointer.type, pointer.reliability) == (EvidenceType.external, Reliability.external_original)
     assert report.unsupported_steps == [1] and "other 类文件不作证据" in report.errors[0]
+
+
+def test_document_evidence_mapping() -> None:
+    """文件类型 → 证据种类 (第 5 节文件指针映射表, 12 类); 待审财报与 other 不作证据, 不在表中."""
+    assert {
+        DocumentType.contract: EvidenceType.contract,
+        DocumentType.invoice: EvidenceType.invoice,
+        DocumentType.confirmation: EvidenceType.external,
+        DocumentType.bank_statement: EvidenceType.bank,
+        DocumentType.minutes: EvidenceType.voucher,
+        DocumentType.registry_extract: EvidenceType.external,
+        DocumentType.engagement_letter: EvidenceType.contract,
+        DocumentType.representation_letter: EvidenceType.voucher,
+        DocumentType.correspondence: EvidenceType.voucher,
+        DocumentType.governance_communication: EvidenceType.voucher,
+        DocumentType.agreement: EvidenceType.contract,
+        DocumentType.internal_record: EvidenceType.voucher,
+    } == DOCUMENT_EVIDENCE
+    assert set(DocumentType) - set(DOCUMENT_EVIDENCE) == {DocumentType.financial_statements, DocumentType.other}
+
+
+# 设计稿第 4 节 29 份文件表逐类各取一份 (Xero 补造目录 manifest 的登记): 文件, 所引页, 改写后的证据种类与可靠性
+XERO_TYPES = [
+    ("documents/evidence/director_loan_agreement.pdf", 2, EvidenceType.contract, Reliability.internal_original),  # 20
+    (  # 25
+        "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+        1,
+        EvidenceType.invoice,
+        Reliability.external_copy,
+    ),
+    ("documents/evidence/fixed_asset_register.pdf", 1, EvidenceType.voucher, Reliability.internal_original),  # 16
+    ("documents/evidence/diisr_email.pdf", 1, EvidenceType.voucher, Reliability.external_copy),  # 24
+    ("registry/extracts/900043030.pdf", 2, EvidenceType.external, Reliability.external_original),  # 3
+    ("documents/engagement/engagement_letter.pdf", 3, EvidenceType.contract, Reliability.external_copy),  # 2
+    ("documents/engagement/appointment.pdf", 4, EvidenceType.voucher, Reliability.internal_copy),  # 1
+    ("representation/representation_letter.pdf", 1, EvidenceType.voucher, Reliability.internal_original),  # 29
+]
+
+
+@pytest.mark.parametrize(("path", "page", "evidence_type", "reliability"), XERO_TYPES)
+async def test_xero_document_pointer_takes_type_and_reliability_from_registration(
+    path: str, page: int, evidence_type: EvidenceType, reliability: Reliability
+) -> None:
+    document = xero_document(path)
+    draft = with_step(cutoff_draft(), 2, evidence=[CLAUSE.model_copy(update={"source_id": document.id, "page": page})])
+    report = await check(draft, documents=[document])
+    assert report.unsupported_steps == [] and report.errors == []
+    [pointer] = report.output.reasoning_chain[2].evidence
+    assert (pointer.type, pointer.reliability) == (evidence_type, reliability)
+
+
+async def test_bank_statement_pointer_is_bank() -> None:
+    """补造目录没有对账单 PDF, 用一份合成登记 (bank_statement, external_copy)."""
+    statement = CON001.model_copy(
+        update={"id": "DOC-STATEMENT", "type": DocumentType.bank_statement, "reliability": Reliability.external_copy}
+    )
+    draft = with_step(cutoff_draft(), 2, evidence=[CLAUSE.model_copy(update={"source_id": statement.id, "page": 1})])
+    report = await check(draft, documents=[statement])
+    assert report.errors == []
+    [pointer] = report.output.reasoning_chain[2].evidence
+    assert (pointer.type, pointer.reliability) == (EvidenceType.bank, Reliability.external_copy)
+
+
+def test_xero_types_cover_every_evidence_document_type() -> None:
+    """逐类样例, 加上另有用例的收入合同与回函, 没有补造文件的治理层沟通与用合成登记的对账单, 覆盖可作证据的类型."""
+    covered = {xero_document(path).type for path, *_ in XERO_TYPES}
+    rest = {DocumentType.contract, DocumentType.confirmation, DocumentType.governance_communication}
+    assert covered | rest | {DocumentType.bank_statement} == set(DOCUMENT_EVIDENCE)
+
+
+async def test_xero_agreement_page_outside_and_statements_not_evidence() -> None:
+    loan = xero_document("documents/evidence/director_loan_agreement.pdf")  # 20, 2 页
+    statements = xero_document("financial_statements/fs_v1.pdf")  # 28
+    assert (loan.type, loan.page_count, statements.type) == (
+        DocumentType.agreement,
+        2,
+        DocumentType.financial_statements,
+    )
+    draft = with_step(cutoff_draft(), 2, evidence=[CLAUSE.model_copy(update={"source_id": loan.id, "page": 3})])
+    draft = with_step(draft, 1, evidence=[CLAUSE.model_copy(update={"source_id": statements.id, "page": 1})])
+    report = await check(draft, documents=[loan, statements])
+    assert report.unsupported_steps == [1, 2]
+    assert "financial_statements 类文件不作证据" in report.errors[0] and "页码 3 不在 1-2 之间" in report.errors[1]
 
 
 @pytest.mark.parametrize(

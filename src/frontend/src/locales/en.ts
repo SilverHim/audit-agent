@@ -8,6 +8,8 @@ export const en = {
     failed: 'Could not load this. Try again.',
     resume: 'Resume',
     runError: 'The last run stopped with an error',
+    featuresMismatch:
+      'Feature switches differ from those this engagement started with, so it is paused. Set FEATURES back to its original value and restart the app.',
     readOnly: 'This engagement is signed and read-only.',
   },
   lang: { label: 'Language', en: 'EN', zh: '中文' },
@@ -134,7 +136,10 @@ export const en = {
     planned: 'Not started',
     executing: 'Running',
     awaiting_human: 'Pending auditor review',
+    in_dispute: 'In dispute',
     completed: 'Completed',
+    awaiting_data: 'Waiting for data',
+    no_data: 'Not performed (no data)',
   },
   decisions: {
     confirm: 'Confirm',
@@ -162,6 +167,8 @@ export const en = {
     normal: '',
     unattributed: 'Exception not linked to a subject',
     failed: 'Procedure did not complete',
+    blind: 'Blind review',
+    manual: 'Manual procedure',
   } as Record<string, string>,
   stepKinds: {
     fact: 'Fact',
@@ -225,6 +232,7 @@ export const en = {
     transition: 'State changes',
     external_call: 'External calls',
     deferral: 'Deferrals',
+    presentation: 'Presentations',
   } as Record<string, string>,
   workspace: {
     title: 'Concierge',
@@ -255,8 +263,8 @@ export const en = {
         `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
       'PLN-01/03':
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',
-      'FIN-01': (count: number, total: string) =>
-        `Fieldwork is complete. ${count} misstatement${count === 1 ? '' : 's'} recorded, ${total} uncorrected in total. Confirm the opinion type.`,
+      'FIN-01': (count: number, total: string, skipped: number) =>
+        `Fieldwork is complete. ${count} misstatement${count === 1 ? '' : 's'} recorded, ${total} uncorrected in total.${skipped ? ` ${skipped} procedure${skipped === 1 ? ' was' : 's were'} not performed because the client has no such data.` : ''} Confirm the opinion type.`,
       'RPT-01': (revision: number) => `Report revision ${revision} is ready. Sign it, or return it with comments.`,
     },
     reviewIntro: (total: number, tier: string) =>
@@ -271,6 +279,13 @@ export const en = {
     answers: {
       where: (phase: string, done: number, total: number) =>
         `We are in ${phase}. ${done} of ${total} procedures are completed.`,
+      notRun: (waiting: number, noData: number) =>
+        [
+          waiting ? `${waiting} waiting for data from the client.` : null,
+          noData ? `${noData} not performed (no data).` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
       materiality: (overall: string, performance: string) =>
         `Materiality is ${overall}; performance materiality ${performance}.`,
       what: (gate: string | null, reviews: number, deferred: number) =>
@@ -328,6 +343,12 @@ export const en = {
     runFailed: (run: number) => `Run ${run} failed`,
     noReason: 'No failure reason recorded.',
     exception: 'Rule finding',
+    reviewStatus: {
+      pending: 'Pending review',
+      confirmed: 'Confirmed',
+      overridden: 'Overridden',
+      superseded: 'Superseded',
+    } as Record<string, string>,
     critic: {
       title: 'Independent review',
       verdicts: {
@@ -340,6 +361,13 @@ export const en = {
         insufficient_evidence: 'Evidence is insufficient',
         different_conclusion: 'Reaches a different conclusion',
         reasoning_error: 'Finds an error in the reasoning',
+      } as Record<string, string>,
+      triggers: {
+        main: 'Autonomous and proposed to accept or close',
+        internal_copy: 'All evidence is internal copies',
+        assumption: 'The reasoning relies on an assumption',
+        unsupported: 'A reasoning step lacks evidence',
+        sample: 'Random sample',
       } as Record<string, string>,
       ownConclusion: 'Its own conclusion, from the evidence alone',
       original: 'Original conclusion',
@@ -367,6 +395,8 @@ export const en = {
     materiality: 'Overall materiality',
     opinion: 'Opinion type',
     count: (n: number) => `${n} misstatement${n === 1 ? '' : 's'} recorded`,
+    notExecuted: (n: number) => `${n} procedure${n === 1 ? '' : 's'} not performed (no data)`,
+    via: (ids: string) => `Its prerequisite ${ids} was not performed`,
   },
   reportCard: {
     revision: (n: number, opinion: string) => `Revision ${n} · ${opinion}`,
@@ -514,6 +544,7 @@ export const en = {
     yearEnded: (date: string) => `year ended ${date}`,
     pending: (n: number) => `${n} item${n === 1 ? '' : 's'} pending review`,
     gate: (gate: string) => `${gate} pending auditor review`,
+    datasetsFailed: 'Could not load the client list, so a new engagement cannot be created yet.',
   },
   login: {
     title: 'Sign in',
@@ -627,7 +658,22 @@ export const en = {
     openReply: 'Open the reply',
     noReply: 'No reply received yet',
     signedOn: (date: string) => `signed ${date}`,
-    docTypes: { contract: 'Contract', confirmation: 'Confirmation reply', other: 'Other' } as Record<string, string>,
+    docTypes: {
+      contract: 'Revenue contract',
+      invoice: 'Invoice',
+      confirmation: 'Confirmation reply',
+      bank_statement: 'Bank statement',
+      minutes: 'Minutes',
+      financial_statements: 'Financial statements',
+      registry_extract: 'Registry extract',
+      engagement_letter: 'Engagement letter',
+      representation_letter: 'Representation letter',
+      correspondence: 'Correspondence',
+      governance_communication: 'Communication with those charged with governance',
+      agreement: 'Agreement',
+      internal_record: 'Internal record',
+      other: 'Other',
+    } as Record<string, string>,
     results: { pending: 'Awaiting reply', agreed: 'Agreed', difference: 'Difference' } as Record<string, string>,
     termTypes: {
       control_transfer: 'Transfer of control',
@@ -671,6 +717,12 @@ export const en = {
     importLedger: 'Import a ledger file',
     uploadDocuments: 'Upload documents',
     ready: 'Data complete, continue planning',
+    readyCheck: {
+      title: 'Some data checks did not pass',
+      intro: 'Planning will continue on the data as it stands. Record why you are confirming it anyway.',
+      reason: 'Reason',
+      confirm: 'Confirm data complete',
+    },
     awaiting: 'Planning is waiting for the data',
     sources: 'Data sources',
     xero: {
@@ -775,12 +827,19 @@ export const en = {
     fileLimits: 'PDF, Word, Excel or images, up to 50 MB each',
     docCols: { file: 'File', type: 'Type', progress: 'Processing', reliability: 'Reliability', received: 'Received' },
     docTypes: {
-      contract: 'Contract',
+      contract: 'Revenue contract',
       invoice: 'Invoice',
       confirmation: 'Confirmation reply',
       bank_statement: 'Bank statement',
       minutes: 'Minutes',
       financial_statements: 'Financial statements',
+      registry_extract: 'Registry extract',
+      engagement_letter: 'Engagement letter',
+      representation_letter: 'Representation letter',
+      correspondence: 'Correspondence',
+      governance_communication: 'Communication with those charged with governance',
+      agreement: 'Agreement',
+      internal_record: 'Internal record',
       other: 'Other',
     } as Record<string, string>,
     unknownType: 'Unknown',
@@ -997,6 +1056,25 @@ export const en = {
     upload: 'Upload',
     uploading: 'Uploading…',
     received: 'Received',
+    statuses: {
+      received: 'Received',
+      withdrawn: 'No longer needed',
+      unavailable: 'Client has none',
+    } as Record<string, string>,
+    unavailable: {
+      action: 'Client has none',
+      title: (item: string) => `The client has no ${item}`,
+      intro: 'Procedures waiting for it will be recorded as not performed and listed in the completion material.',
+      reason: 'Reason',
+      confirm: 'Confirm',
+      done: 'Recorded: the client has none',
+      markedBy: 'Marked by',
+    },
+    marked: {
+      title: 'Client has none',
+      intro:
+        'The client does not have these. Procedures waiting for them are recorded as not performed and listed in the completion material.',
+    },
     open: 'Open data management',
     reasons: {
       missing_table: 'Not received yet',

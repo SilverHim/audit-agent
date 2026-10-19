@@ -6,6 +6,7 @@ import functools
 import hashlib
 import json
 import tempfile
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -19,13 +20,14 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
-from backend.adapters.llm import MockLLMClient
+from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.ingest import build_contract
 from backend.contracts.data import (
     ApprovalLogRow,
+    CheckId,
     CheckInputs,
     CheckRun,
     ContractVersion,
@@ -107,8 +109,11 @@ from backend.contracts.ports import (
     T_out,
 )
 from backend.contracts.records import (
+    Account,
+    AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
+    DatasetTraits,
     DeliveryNote,
     JournalEntry,
     SalesInvoice,
@@ -125,15 +130,19 @@ from backend.orchestration.graph import GATES, build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.persistence.stores import natural_key
 from backend.services.data_service import DataService
+from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
+from backend.services.review_queue import ReviewQueue
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
 # ── 样例数据: 合成数据集的 Numbat 公司 (合成数据集设计.md 2.1, 2.2 节) ──
 
+NUMBAT_FEATURES = BASELINE  # Numbat 回归测试的功能集: 新功能全关, 保留基线的 critic (services/features.py)
 NUMBAT_ABN = AbnRecord(
     abn="68900042015",
     acn="900042015",
@@ -223,6 +232,29 @@ def manifest_document(path: str, reliability: Reliability) -> DocumentRef:
         reliability=reliability,
         status="received",
         uploaded_at=NOW,
+    )
+
+
+XERO_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "manifest.json"
+XERO_DOCUMENTS: dict[str, dict[str, Any]] = {  # Xero 补造目录登记的 PDF, 相对补造目录的路径 -> 条目 (设计第 4 节类型表)
+    d["path"]: d for d in json.loads(XERO_MANIFEST.read_text(encoding="utf-8"))["documents"]
+}
+
+
+def xero_document(path: str) -> DocumentRef:
+    """Xero 补造目录下 path 那份 PDF 的登记: ID, 类型, 可靠性, 页数, 文件日期与关联对象取 manifest, 状态 received."""
+    entry = XERO_DOCUMENTS[path]
+    return DocumentRef(
+        id=entry["document_id"],
+        type=DocumentType(entry["type"]),
+        file_name=Path(path).name,
+        sha256=entry["sha256"],
+        page_count=entry["page_count"],
+        reliability=Reliability(entry["reliability"]),
+        status="received",
+        uploaded_at=NOW,
+        document_date=date.fromisoformat(entry["document_date"]),
+        related_ids=entry["related_ids"],
     )
 
 
@@ -371,7 +403,50 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
             ("0547", date(2026, 5, 29), date(2026, 6, 1), "Tom Nguyen"),
         )
     ),
-    # 第 5.2 节: SI-2026-0547 的收款分录 (借 1010)
+    # 第 5.2 节: 两张跨期发票与 SI-2026-0547 的销售分录 (借 1100 贷 4100), 同 data/demo/journal_entries.csv
+    *(
+        JournalEntry(
+            id=f"SJ-2026-{n}-{line}",
+            entry_no=f"SJ-2026-{n}",
+            posting_date=day,
+            created_at=created_at,
+            created_by=created_by,
+            approved_by="fin.controller",
+            account_code=account,
+            debit_cents=amount if line == 1 else 0,
+            credit_cents=amount if line == 2 else 0,
+            description=f"Sales invoice SI-2026-{n} - {customer}",
+            source_doc=f"SI-2026-{n}",
+        )
+        for n, customer, day, created_at, created_by, amount in (
+            (
+                "0612",
+                "Bilby Robotics Pty Ltd",
+                date(2026, 6, 28),
+                datetime(2026, 6, 28, 11, 14, tzinfo=UTC),
+                "fin.controller",
+                14200000,
+            ),
+            (
+                "0618",
+                "Quoll Automation Pty Ltd",
+                date(2026, 6, 29),
+                datetime(2026, 6, 29, tzinfo=UTC),
+                "ar.clerk",
+                9500000,
+            ),
+            (
+                "0547",
+                "Echidna Controls Pty Ltd",
+                date(2026, 5, 29),
+                datetime(2026, 5, 29, tzinfo=UTC),
+                "ar.clerk",
+                5000000,
+            ),
+        )
+        for line, account in ((1, "1100"), (2, "4100"))
+    ),
+    # 第 5.2 节: SI-2026-0547 的收款分录 (借 1010 贷 1100)
     JournalEntry(
         id="CR-SI-2026-0547-1",
         entry_no="CR-SI-2026-0547",
@@ -381,6 +456,18 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
         approved_by="fin.controller",
         account_code="1010",
         debit_cents=5000000,
+        description="Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+        source_doc="SI-2026-0547",
+    ),
+    JournalEntry(
+        id="CR-SI-2026-0547-2",
+        entry_no="CR-SI-2026-0547",
+        posting_date=date(2026, 6, 30),
+        created_at=datetime(2026, 6, 30, 6, 40, tzinfo=UTC),
+        created_by="ar.clerk",
+        approved_by="fin.controller",
+        account_code="1100",
+        credit_cents=5000000,
         description="Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
         source_doc="SI-2026-0547",
     ),
@@ -413,6 +500,10 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
         description="EFT CREDIT ECHIDNA CONTROLS PTY LTD",
         reference="SI-2026-0547",
     ),
+]
+NUMBAT_ACCOUNTS = [  # 销售分录行的两个科目 (第 3 节, data/demo/accounts.csv; 分类按名称补, 同载入); 其余用到时再补
+    Account(code="1100", name="Trade receivables", type="asset", category="receivables", category_basis="name"),
+    Account(code="4100", name="Sales revenue", type="revenue", category="revenue", category_basis="name"),
 ]
 NUMBAT_TRIAL_BALANCE = [  # 本期试算表中两个银行账户的总账科目 (合成数据集设计第 3.1 节); 其余科目用到时再补
     TrialBalanceRow(period="current", account_code="1010", balance_cents=125840000),
@@ -466,7 +557,7 @@ NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
 
 
 class FakeRegistry:
-    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN."""
+    """假登记系统: 从字典里查, 查不到返回 None. asic_queries 记下查过哪些 ACN, eids 记下每次查询传的项目 ID."""
 
     def __init__(
         self,
@@ -476,11 +567,14 @@ class FakeRegistry:
         self.abn_records = abn_records or {}  # ABN -> 登记记录
         self.asic_records = asic_records or {}  # ACN -> 公司登记记录
         self.asic_queries: list[str] = []  # 查过的 ACN, 按查询顺序
+        self.eids: list[str] = []  # 每次查询 (ABN 与 ASIC) 传的项目 ID, 按查询顺序
 
-    async def abn(self, abn: str) -> AbnRecord | None:
+    async def abn(self, eid: str, abn: str) -> AbnRecord | None:
+        self.eids.append(eid)
         return self.abn_records.get(abn)
 
-    async def asic_company(self, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+        self.eids.append(eid)
         self.asic_queries.append(acn)
         return self.asic_records.get(acn)
 
@@ -511,8 +605,8 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes) 与试算表 (trial_balance),
-    其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts)
+    与试算表 (trial_balance), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -520,8 +614,10 @@ class FakeFinancialStore:
         records: dict[tuple[str, str], dict[str, Any]] | None = None,
         contracts: list[Contract] | None = None,
         trial_balance: list[TrialBalanceRow] | None = None,
+        accounts: list[Account] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+        self.account_rows = list(accounts or [])  # 科目表, 各项目共用
         self.trial_balance_rows = list(trial_balance or [])  # 试算表的行, 两期混在一起, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
@@ -536,6 +632,23 @@ class FakeFinancialStore:
 
     async def trial_balance(self, eid: str, period: Literal["current", "prior"]) -> list[TrialBalanceRow]:
         return [r for r in self.trial_balance_rows if r.period == period]
+
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """records 中凭证号在 entry_nos 内或单据号在 source_docs 内的 journal_entry 行, 按行 ID 升序, 同真实实现."""
+        if entry_nos is None and source_docs is None:
+            raise ValueError("journal_entries 须给 entry_nos 或 source_docs, 不取全表")
+        # 先转集合, 同真实实现逐项拆开 (误传单个字符串时两边都按字符拆, 不做子串判断)
+        numbers = set(entry_nos) if entry_nos is not None else set()
+        documents = set(source_docs) if source_docs is not None else set()
+        rows = [JournalEntry.model_validate(row) for (kind, _), row in self.records.items() if kind == "journal_entry"]
+        return sorted((r for r in rows if r.entry_no in numbers or r.source_doc in documents), key=lambda r: r.id)
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        """科目表中代码在 codes 内的科目 (None 取全部), 按代码升序, 同真实实现."""
+        wanted = set(codes) if codes is not None else None  # 先转集合, 同 journal_entries
+        return sorted((a for a in self.account_rows if wanted is None or a.code in wanted), key=lambda a: a.code)
 
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
@@ -1286,12 +1399,55 @@ class FakeLlmSettingsStore:
 class FakeDatasetLoader:
     """假数据集载入: load 记下调用, 把 Numbat 的 3 份合同登记为证据文件 (received); make_deps 建好即 seed 一次.
 
-    预置计划数据取 Numbat 的.
+    预置计划数据取 Numbat 的. 更正分录取构造时预置的 adjustments: load_adjustments 记下调用, 返回所请求凭证的行
+    (按 id 排序, 凭证号不在预置中抛 LookupError), 不写假财务存储; 没有预置 (None, 同数据集没有更正分录文件) 时抛
+    FileNotFoundError. adjustment_entries 与 adjustment_entry_nos 按预置行, 凭证号自然序, 同真实实现.
+    数据集声明取构造时预置的 traits (数据集名 → 声明), 没预置的数据集为缺省值; dataset_traits 记下调用的数据集名.
     """
 
-    def __init__(self, financial_store: FakeFinancialStore) -> None:
+    def __init__(
+        self,
+        financial_store: FakeFinancialStore,
+        adjustments: list[JournalEntry] | None = None,
+        traits: dict[str, DatasetTraits] | None = None,
+    ) -> None:
         self.financial_store = financial_store  # 合同登记到这里
         self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
+        self.adjustments = adjustments  # 预置的更正分录行; None 表示数据集没有更正分录文件
+        self.adjustment_loads: list[tuple[str, str, list[str] | None]] = []  # (项目编号, 数据集名, 凭证号)
+        self.traits = dict(traits or {})  # 数据集名 → 声明, 可在测试中改
+        self.traits_calls: list[str] = []  # dataset_traits 收到的数据集名, 按调用顺序
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        self.adjustment_loads.append((eid, dataset, list(entry_nos) if entry_nos is not None else None))
+        if self.adjustments is None:
+            raise FileNotFoundError(f"没有更正分录文件 ({dataset})")
+        known = {x.entry_no for x in self.adjustments}
+        missing = [no for no in entry_nos or () if no not in known]
+        if missing:
+            raise LookupError(f"更正分录中没有 {', '.join(missing)}")
+        wanted = set(entry_nos) if entry_nos is not None else known
+        return sorted((x for x in self.adjustments if x.entry_no in wanted), key=lambda x: x.id)
+
+    def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
+        groups: dict[str, list[JournalEntry]] = {}
+        for line in self.adjustments or []:
+            groups.setdefault(line.entry_no, []).append(line)
+        return [
+            AdjustmentEntrySummary(
+                entry_no=no, posting_date=rows[0].posting_date, description=rows[0].description, line_count=len(rows)
+            )
+            for no, rows in sorted(groups.items(), key=lambda item: natural_key(item[0]))
+        ]
+
+    def adjustment_entry_nos(self, dataset: str) -> list[str]:
+        return [x.entry_no for x in self.adjustment_entries(dataset)]
+
+    def dataset_traits(self, dataset: str) -> DatasetTraits:
+        self.traits_calls.append(dataset)
+        return self.traits.get(dataset, DatasetTraits())
 
     async def load(self, eid: str, dataset: str) -> None:
         self.loads.append((eid, dataset))
@@ -1312,6 +1468,9 @@ class FakeDatasetLoader:
 
     def datasets(self) -> list[str]:
         return ["demo"]
+
+    def period(self, dataset: str) -> tuple[date, date] | None:
+        return None  # 同 Numbat 的 CSV 数据集, 期间由审计师填
 
 
 # 种子已载入整套数据集时各账表的行数 (Numbat 的量级, 只用于就绪判断与概览)
@@ -1378,7 +1537,11 @@ class FakeDataStore:
         self.data_version = 1 if ready else 0  # 数据版本
         self.ready_at: datetime | None = datetime(2026, 1, 1, tzinfo=UTC) if ready else None  # 确认就绪的时间
         self.ready_by: str | None = "dataset" if ready else None  # 确认人
+        self.ready_reason: str | None = None  # 确认时的理由
+        self.ready_failed_checks: list[CheckId] = []  # 确认时最近一次体检不通过的项
         self.table_stats: dict[TableKind, TableStats] = dict(SEEDED_STATS if stats is None and ready else stats or {})
+        # 证据文件按它数 (document_counts, 同真实实现数 documents 表); make_deps 连上项目用的假财务数据存储
+        self.financial: FakeFinancialStore | None = None
         self.confirm_calls: list[tuple[str, str]] = []  # confirm_ready 的每次调用 (项目编号, 确认人)
         self.table_versions: list[TableVersion] = []  # 已写入的账表版本, 按数据版本升序
         self.check_results: list[DataCheck] = []  # 最近一次体检的结果
@@ -1397,17 +1560,31 @@ class FakeDataStore:
 
     async def readiness(self, eid: str) -> DataReadiness:
         return DataReadiness(
-            data_version=self.data_version, ready_at=self.ready_at, ready_by=self.ready_by, loaded_at=self.ready_at
+            data_version=self.data_version,
+            ready_at=self.ready_at,
+            ready_by=self.ready_by,
+            loaded_at=self.ready_at,
+            ready_reason=self.ready_reason,
+            ready_failed_checks=self.ready_failed_checks,
         )
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
         self.confirm_calls.append((eid, actor))
         if self.ready_at is None:
             self.ready_at, self.ready_by = datetime.now(UTC), actor
+            self.ready_reason, self.ready_failed_checks = reason, list(failed_checks)
+        elif failed_checks and not self.ready_failed_checks:  # 同真实实现: 补记本次的理由与未通过项
+            self.ready_reason, self.ready_failed_checks = reason, list(failed_checks)
         return await self.readiness(eid)
 
     async def stats(self, eid: str) -> dict[TableKind, TableStats]:
         return {kind: self.table_stats.get(kind, TableStats(records=0)) for kind in TableKind}
+
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        documents = self.financial.document_refs if self.financial is not None else []
+        return dict(Counter(d.type for d in documents))
 
     async def versions(self, eid: str) -> list[TableVersion]:
         return list(self.table_versions)
@@ -1521,6 +1698,17 @@ class FakeDataStore:
         self.tables[TableKind.accounts] = [a.model_copy(update=update) if a.code == code else a for a in accounts]
         self.data_version += 1
         return changed
+
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        request = self.data_requests.get(request_id)
+        if request is None or request.status != "open":
+            return None
+        update = {"status": "unavailable", "unavailable_reason": reason, "resolved_by": actor, "resolved_at": at}
+        marked = request.model_copy(update=update)
+        self.data_requests[request_id] = marked
+        return marked
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         self.last_run = run
@@ -1665,15 +1853,19 @@ def make_deps(
     confirmations: FakeConfirmationChannel | None = None,
     library: ProcedureLibrary | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] | None = None,
     data: FakeDataStore | None = None,
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
-    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建.
+    features: 启用的功能, 写入 AgentDeps.features. 没给 library 时缺省为基线, 按它建 knowledge 目录的程序库 (同
+    组装根); 给了 library 时不重建, 缺省取 library.features, 给了而与之不同时抛 ValueError (两处功能集须一致).
+    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建, 复核队列按替换后的程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
-    大模型缺省为 mock 模式的固定输出客户端; 复核模型缺省同样, 但给了 llm 而没给 review_llm 时为空 (A7 不复核,
-    免得注入的假大模型之外又读固定输出); 函证平台缺省为假平台 (直达邮件回函).
+    大模型缺省为 mock 模式的固定输出客户端 (按假项目存储中项目的数据集选 fixture 目录); 复核模型缺省同样,
+    但给了 llm 而没给 review_llm 时为空 (A7 不复核, 免得注入的假大模型之外又读固定输出);
+    函证平台缺省为假平台 (直达邮件回函).
     项目存储与证据文件存储的写入加入审计产出存储的事务.
     """
     if engagement_store is None:
@@ -1683,15 +1875,32 @@ def make_deps(
     bind_stores(engagement_store, output_store)
     if financial_store is None:
         financial_store = FakeFinancialStore()
-    deps = build_deps(get_settings())
+    if data is None:
+        data = FakeDataStore()
+    if data.financial is None:  # 证据文件数取同一个财务数据存储 (同真实实现共用 documents 表)
+        data.financial = financial_store
+    settings = get_settings()
+    deps = build_deps(settings)
+
+    def mock_client() -> SwitchableLLMClient:
+        """同组装根的 mock 客户端, 但按假项目存储取项目数据集 (组装根的绑定在 Postgres 项目存储上)."""
+        return SwitchableLLMClient(make_llm_client(settings, engagement_store), llm_version(settings)["model"])
+
     if review_llm is None and llm is None:
-        review_llm = deps.review_llm
-    llm = llm if llm is not None else deps.llm
-    library = library if library is not None else deps.library
+        review_llm = mock_client()
+    llm = llm if llm is not None else mock_client()
+    if library is None:
+        features = BASELINE if features is None else features
+        library = deps.library if deps.library.features == features else ProcedureLibrary(deps.library.root, features)
+    elif features is None:
+        features = library.features
+    elif features != library.features:
+        raise ValueError(f"features {sorted(features)} 与程序库的 {sorted(library.features)} 不一致")
     judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
     return replace(
         deps,
         library=library,
+        queue=ReviewQueue(library),
         llm=llm,
         judgments=judgments,
         registry=registry,
@@ -1701,11 +1910,12 @@ def make_deps(
         financial_store=financial_store,
         evidence_store=FakeEvidenceStore(financial_store, output_store),
         datasets=FakeDatasetLoader(financial_store),
-        data=data if data is not None else FakeDataStore(),
+        data=data,
         rules=rules if rules is not None else FakeRuleEngine(),
         confirmations=confirmations if confirmations is not None else FakeConfirmationChannel(),
         users=FakeUserStore(),
         review_llm=review_llm,
+        features=features,
     )
 
 
@@ -2210,6 +2420,7 @@ def make_runner(
     trail: FakeTrail | None = None,
     confirmations: FakeConfirmationChannel | None = None,
     review_llm: LLMClient | None = None,
+    features: frozenset[str] | None = None,
     data: FakeDataStore | None = None,
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
@@ -2220,6 +2431,7 @@ def make_runner(
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
+    features: 启用的功能, 缺省为基线, 给了 library 时缺省取它的 (见 make_deps).
     data: 数据管理存储, 缺省为种子已载入 (视同已确认就绪, P1 前不等数据).
     """
     if registry is None:
@@ -2235,6 +2447,7 @@ def make_runner(
         confirmations=confirmations,
         library=library,
         review_llm=review_llm,
+        features=features,
         data=data,
     )
     nodes = make_graph_nodes(deps)
@@ -2264,11 +2477,13 @@ async def api_client(
     user_id: str = NUMBAT_AUDITOR.id,
     deps: AgentDeps | None = None,
     llm_settings: LlmSettingsService | None = None,
+    concierge: Any = None,
 ) -> AsyncIterator[httpx.AsyncClient]:
     """在测试的事件循环里直接调 ASGI 应用 (不触发 lifespan), app.state 换成 runner 的依赖, 带 user_id 的登录令牌.
 
     与 runner 同一个事件循环, 后台推进与请求可以交替 await (TestClient 另开线程, 两边的锁与任务会分属两个循环).
     deps: 给了时接口取它 (如换掉数据集载入), 编排仍用 runner 的. llm_settings: 设置页接口用的服务.
+    concierge: 对话接口用的审计助理 (ConciergeChat), 缺省不设.
     """
     app = create_app()
     app.state.deps = deps if deps is not None else runner.deps
@@ -2277,6 +2492,7 @@ async def api_client(
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
     app.state.data_service = DataService(runner.deps, runner)
     app.state.llm_settings = llm_settings
+    app.state.concierge = concierge
     headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
@@ -2314,7 +2530,7 @@ def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:
 
 
 def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
-    """Xero 快照映射出的财务数据装进假财务存储: 发票, 分录与银行流水按行可取 (record), 另有试算表."""
+    """Xero 快照映射出的财务数据装进假财务存储: 发票, 分录与银行流水按行可取 (record), 另有试算表与科目表."""
     tables = build_tables(snapshot)
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for source, rows in (
@@ -2323,7 +2539,9 @@ def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
         ("bank_transaction", tables["bank_transactions"]),
     ):
         records |= {(source, row.id): row.model_dump() for row in rows}
-    return FakeFinancialStore(records=records, trial_balance=list(tables["trial_balance"]))
+    return FakeFinancialStore(
+        records=records, trial_balance=list(tables["trial_balance"]), accounts=list(tables["accounts"])
+    )
 
 
 # ── 上传文件处理 (需求 R14) 用的大模型: 先读变体目录, 再读主固定输出 ──

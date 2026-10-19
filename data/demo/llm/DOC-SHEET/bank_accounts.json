@@ -1,0 +1,29 @@
+{
+  "plan": {
+    "kind": "bank_accounts",
+    "header_row": 1,
+    "fields": {
+      "id": {
+        "column": "id"
+      },
+      "bank_name": {
+        "column": "bank_name"
+      },
+      "bsb": {
+        "column": "bsb"
+      },
+      "account_no": {
+        "column": "account_no"
+      },
+      "gl_account_code": {
+        "column": "gl_account_code"
+      }
+    },
+    "date_format": "dmy"
+  },
+  "company": null,
+  "period_start": null,
+  "period_end": null,
+  "confidence": "high",
+  "reason": "The column headings are the standard bank_accounts field names, one column per field."
+}

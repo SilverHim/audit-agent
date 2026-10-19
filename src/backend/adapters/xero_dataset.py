@@ -608,11 +608,17 @@ def snapshot_period(snapshot: Snapshot) -> Period:
         raise FileNotFoundError(
             f"{snapshot.root} 没有 dataset.json, 用 pull --period-start/--period-end/--prior-end 重新拉取"
         )
-    return Period(
-        date.fromisoformat(meta["period_start"]),
-        date.fromisoformat(meta["period_end"]),
-        date.fromisoformat(meta["prior_end"]),
-    )
+    try:
+        return Period(
+            date.fromisoformat(meta["period_start"]),
+            date.fromisoformat(meta["period_end"]),
+            date.fromisoformat(meta["prior_end"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:  # 缺键, 不是对象, 日期不是字符串或写错
+        # 消息只写快照名, 不带服务器路径与文件内容 (POST /engagements 原样返回给前端)
+        raise ValueError(
+            f"快照 {snapshot.root.name} 的 dataset.json 须为含 period_start, period_end, prior_end (YYYY-MM-DD) 的对象"
+        ) from exc
 
 
 def build_tables(snapshot: Snapshot) -> dict[str, list[Any]]:

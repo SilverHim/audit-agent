@@ -3,6 +3,7 @@ name: 初步分析程序
 phase: P1_Planning
 cycle: Planning
 owner: A4
+outputs: [analytics, exceptions]
 engine: rule
 autonomy_level: L3
 params:

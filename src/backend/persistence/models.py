@@ -46,7 +46,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "bank_transactions": {"description", "reference"},
             "contracts": {"counterparty_abn", "amount_cents", "sign_date"},
             "documents": {"uploaded_by", "failed_step"},
-            "dataset_loads": {"ready_at", "ready_by"},
+            "dataset_loads": {"ready_at", "ready_by", "ready_reason"},
             "data_imports": {
                 "kind",
                 "file_name",
@@ -62,7 +62,14 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
                 "request_id",
                 "committed_at",
             },
-            "data_requests": {"table_kind", "document_type", "format_hint", "resolved_at"},
+            "data_requests": {
+                "table_kind",
+                "document_type",
+                "format_hint",
+                "resolved_at",
+                "resolved_by",
+                "unavailable_reason",
+            },
             "data_checks": {"request_id"},
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
@@ -143,8 +150,14 @@ contracts = table(
 )
 contract_terms = table("contract_terms", "id:s contract_id:s term_type:s text:s page:i", ("id",))
 contracts.c.version.server_default = DefaultClause("1")
-# 项目的数据版本与就绪确认: 每次写入账表 data_version +1; ready_at 为审计师确认数据已齐 (数据集载入视同确认)
-dataset_loads = table("dataset_loads", "dataset:s data_version:i loaded_at:t ready_at:t ready_by:s", ())
+# 项目的数据版本与就绪确认: 每次写入账表 data_version +1; ready_at 为审计师确认数据已齐 (数据集载入视同确认),
+# ready_reason 与 ready_failed_checks 为确认时的理由与最近一次体检不通过的项 (迁移 0005)
+dataset_loads = table(
+    "dataset_loads",
+    "dataset:s data_version:i loaded_at:t ready_at:t ready_by:s ready_reason:s ready_failed_checks:j",
+    (),
+)
+dataset_loads.c.ready_failed_checks.server_default = DefaultClause("[]")
 # 账表导入会话与各表的版本: 上传解析后 status parsed; 写入后 committed, 记数据版本与行快照 (rows), 旧版本不删
 data_imports = table(
     "data_imports",
@@ -156,7 +169,7 @@ data_imports = table(
 data_requests = table(
     "data_requests",
     "id:s kind:s table_kind:s document_type:s title:s used_for:j reason_code:s reason_params:j format_hint:s "
-    "status:s raised_by:s created_at:t resolved_at:t",
+    "status:s raised_by:s created_at:t resolved_at:t resolved_by:s unavailable_reason:s",
     ("id",),
 )
 # 数据质量体检: 每项只存最近一次的结果, 历次结果在 data 留痕里

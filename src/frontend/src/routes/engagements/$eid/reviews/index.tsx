@@ -192,10 +192,10 @@ function ReviewQueue() {
                                 judgment?.proposed_action === 'misstatement' && 'font-semibold text-risk',
                               )}
                             >
-                              {judgment ? t.proposed[judgment.proposed_action] : '—'}
+                              {judgment?.proposed_action ? t.proposed[judgment.proposed_action] : '—'}
                             </span>
                             <Code className="text-right text-[13px]">
-                              {judgment ? judgment.confidence.toFixed(2) : '—'}
+                              {judgment?.confidence != null ? judgment.confidence.toFixed(2) : '—'}
                             </Code>
                             <span>
                               <StatusPill tone={pending ? 'warn' : 'ok'}>

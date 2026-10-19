@@ -45,7 +45,14 @@ export const Route = createFileRoute('/engagements/$eid/')({
 
 type Current =
   | { kind: 'gate'; key: string; view: GateView; deferred: boolean }
-  | { kind: 'requests'; key: string; requests: DataRequest[]; awaiting: boolean; deferred: boolean }
+  | {
+      kind: 'requests'
+      key: string
+      requests: DataRequest[]
+      marked: DataRequest[]
+      awaiting: boolean
+      deferred: boolean
+    }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
 
 type Turn = {
@@ -87,12 +94,13 @@ function Workspace() {
       const key = `gate:${gate.data.gate}`
       list.push({ kind: 'gate', key, view: gate.data, deferred: deferredKeys.has(key) })
     }
-    // 补交资料合成一项, 排在阶段决定之后, 复核任务之前
+    // 补交资料合成一项, 排在阶段决定之后, 复核任务之前; 标了客户无此类资料的一并列出 (只读)
     const open = (requests.data ?? []).filter((item) => item.status === 'open')
+    const marked = (requests.data ?? []).filter((item) => item.status === 'unavailable')
     const awaiting = Boolean(overview?.awaiting_data)
     if (open.length || awaiting) {
       const deferred = open.length > 0 && open.every((item) => deferredKeys.has(`request:${item.id}`))
-      list.push({ kind: 'requests', key: 'requests', requests: open, awaiting, deferred })
+      list.push({ kind: 'requests', key: 'requests', requests: open, marked, awaiting, deferred })
     }
     for (const item of ranked) {
       const key = `task:${item.view.task.id}`
@@ -217,12 +225,7 @@ function Workspace() {
       <div className="flex-1 px-4 pt-7 pb-2 sm:px-7">
         <div className="mx-auto flex max-w-[780px] flex-col gap-5">
           {history.map((item) => (
-            <HistoryItem
-              key={`${item.kind}:${item.at}:${'id' in item ? item.id : ''}`}
-              item={item}
-              overview={overview}
-              eid={eid}
-            />
+            <HistoryItem key={item.key} item={item} overview={overview} eid={eid} />
           ))}
 
           <div ref={currentRef} className="flex scroll-mt-6 flex-col gap-5">
@@ -465,6 +468,7 @@ function CurrentItem({
         <DataRequestCard
           eid={eid}
           requests={current.requests}
+          marked={current.marked}
           awaiting={current.awaiting}
           disabled={disabled}
           deferred={current.deferred}
@@ -530,7 +534,11 @@ function gateIntro(t: Messages, view: GateView): ReactNode {
   }
   if (material.kind === 'PLN-01/03') return t.workspace.gateIntro['PLN-01/03']
   if (material.kind === 'FIN-01') {
-    return t.workspace.gateIntro['FIN-01'](material.misstatements.length, formatAud(material.schedule.total_cents))
+    return t.workspace.gateIntro['FIN-01'](
+      material.misstatements.length,
+      formatAud(material.schedule.total_cents),
+      material.not_executed?.length ?? 0,
+    )
   }
   return t.workspace.gateIntro['RPT-01'](material.report.revision)
 }
@@ -544,8 +552,13 @@ function localAnswer(
 ): string | null {
   if (!overview) return null
   if (quick === 'where') {
-    const done = overview.procedures.filter((item) => item.status === 'completed').length
-    const head = t.workspace.answers.where(t.phases[overview.engagement.phase], done, overview.procedures.length)
+    const count = (status: string) => overview.procedures.filter((item) => item.status === status).length
+    const head = [
+      t.workspace.answers.where(t.phases[overview.engagement.phase], count('completed'), overview.procedures.length),
+      t.workspace.answers.notRun(count('awaiting_data'), count('no_data')),
+    ]
+      .filter(Boolean)
+      .join(' ')
     const materiality =
       overview.materiality_cents != null
         ? ` ${t.workspace.answers.materiality(formatAud(overview.materiality_cents), formatAud(overview.performance_materiality_cents))}`

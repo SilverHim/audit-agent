@@ -9,9 +9,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
-from backend.adapters.confirmation_mock import MockConfirmationChannel
+from backend.adapters.confirmation_mock import DatasetConfirmationChannel
 from backend.adapters.llm import SwitchableLLMClient, llm_version, make_llm_client
-from backend.adapters.registry_mock import MockRegistrySource
+from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
 from backend.api.errors import validation_error
@@ -37,6 +37,7 @@ from backend.persistence.stores import (
     XeroDatasetLoader,
 )
 from backend.services.audit_trail import PostgresAuditTrail
+from backend.services.blind import PassThroughBlindFilter
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
@@ -49,41 +50,57 @@ def build_deps(settings: Settings) -> AgentDeps:
     engine = make_engine(settings)
     financial_store = PostgresFinancialDataStore(engine)
     evidence_store = FileEvidenceStore(settings.EVIDENCE_ROOT, engine)
-    library = ProcedureLibrary(settings.KNOWLEDGE_ROOT)
-    dataset_dir = settings.DATASET_ROOT / "demo"
-    # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置
-    model_name = llm_version(settings)["model"]
-    llm = SwitchableLLMClient(make_llm_client(settings), model_name)
-    review_llm = SwitchableLLMClient(make_llm_client(settings), model_name)
+    features = settings.features  # 功能开关; 有未登记的名字或依赖不满足时在这里抛 ValueError
+    library = ProcedureLibrary(settings.KNOWLEDGE_ROOT, features)
     trail = PostgresAuditTrail(engine)
+    engagement_store = PostgresEngagementStore(engine)
+    # 主模型与复核模型各一个可切换客户端, 先按 .env 建; lifespan 里 LlmSettingsService.load 再换成设置页保存的配置.
+    # mock 模式按项目数据集选 fixture 目录 (Xero 读补造目录的 llm/), 所以要项目存储
+    model_name = llm_version(settings)["model"]
+    llm = SwitchableLLMClient(make_llm_client(settings, engagement_store), model_name)
+    review_llm = SwitchableLLMClient(make_llm_client(settings, engagement_store), model_name)
+    datasets = RoutingDatasetLoader(
+        CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
+        {
+            XeroDatasetLoader.PREFIX: XeroDatasetLoader(
+                settings.DATASET_ROOT / "external" / "xero" / "api",
+                settings.KNOWLEDGE_ROOT / "planning",
+                engine,
+                evidence_store,
+                supplements=settings.DATASET_ROOT / "xero_demo",
+            )
+        },
+    )
     return AgentDeps(
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(engine),
         evidence_store=evidence_store,
-        datasets=RoutingDatasetLoader(
-            CsvDatasetLoader(settings.DATASET_ROOT, engine, evidence_store),
-            {
-                XeroDatasetLoader.PREFIX: XeroDatasetLoader(
-                    settings.DATASET_ROOT / "external" / "xero" / "api",
-                    settings.KNOWLEDGE_ROOT / "planning",
-                    engine,
-                    evidence_store,
-                )
-            },
-        ),
-        engagement_store=PostgresEngagementStore(engine),
+        datasets=datasets,
+        engagement_store=engagement_store,
         llm=llm,
         rules=SqlRuleEngine(financial_store),
         judgments=JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library),
         queue=ReviewQueue(library),
         library=library,
         trail=trail,
-        registry=MockRegistrySource(dataset_dir),
-        confirmations=MockConfirmationChannel(dataset_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"),
+        registry=DatasetRegistrySource(engagement_store, datasets.supplement_dir),
+        confirmations=DatasetConfirmationChannel(
+            engagement_store, datasets.supplement_dir, settings.EVIDENCE_ROOT / ".confirmation_receipts"
+        ),
         users=PostgresUserStore(engine),
         data=PostgresDataStore(settings.EVIDENCE_ROOT, engine),
         review_llm=review_llm,
+        features=features,
+        blind_filter=PassThroughBlindFilter(),
     )
+
+
+async def recover(runner: GraphRunner, data_service: DataService) -> None:
+    """启动恢复: 先补做各项目没处理完的上传文件 (DataService.recover), 做完由它带动图继续; 其余项目再按 recover 规则
+    处理 (GraphRunner.recover), 同一项目不重复拉起. 先处理文件: 图在等程序要的数据时 (需求 R272), 先拉起图会占着
+    项目锁, 文件补做就被跳过."""
+    taken = await data_service.recover()
+    await runner.recover(skip=taken)
 
 
 @asynccontextmanager
@@ -111,8 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app.state.data_service = DataService(deps, app.state.runner)
             try:
-                await app.state.runner.recover()
-                await app.state.data_service.recover()
+                await recover(app.state.runner, app.state.data_service)
                 yield
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.

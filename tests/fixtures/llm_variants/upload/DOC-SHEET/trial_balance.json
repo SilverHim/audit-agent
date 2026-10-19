@@ -1,0 +1,23 @@
+{
+  "plan": {
+    "kind": "trial_balance",
+    "header_row": 1,
+    "fields": {
+      "period": {
+        "column": "period"
+      },
+      "account_code": {
+        "column": "account_code"
+      },
+      "balance_cents": {
+        "column": "balance_cents"
+      }
+    },
+    "date_format": "dmy"
+  },
+  "company": null,
+  "period_start": null,
+  "period_end": null,
+  "confidence": "high",
+  "reason": "The column headings are the standard trial_balance field names, one column per field."
+}

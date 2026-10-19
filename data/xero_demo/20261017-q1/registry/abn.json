@@ -1,0 +1,23 @@
+{
+  "25900043021": {
+    "abn": "25900043021",
+    "acn": "900043021",
+    "entity_name": "Demo Company (AU) Pty Ltd",
+    "status": "Active",
+    "entity_type": "Australian Private Company"
+  },
+  "27900043030": {
+    "abn": "27900043030",
+    "acn": "900043030",
+    "entity_name": "Victoria Property Agency Pty Ltd",
+    "status": "Active",
+    "entity_type": "Australian Private Company"
+  },
+  "17900043049": {
+    "abn": "17900043049",
+    "acn": "900043049",
+    "entity_name": "Morgan Advisory Pty Ltd",
+    "status": "Active",
+    "entity_type": "Australian Private Company"
+  }
+}

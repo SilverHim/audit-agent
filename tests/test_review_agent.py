@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from backend.agents.base import RunContext
-from backend.agents.review import CRITIC_SYSTEM, ReviewAgent, sampled, trigger
+from backend.agents.review import CRITIC_SYSTEM, ReviewAgent, trigger
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
@@ -34,6 +34,7 @@ from backend.contracts.records import JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentOutcome
 from backend.contracts.state import initial_state
 from backend.services.judgment_engine import critic_chain_ok
+from backend.services.sampling import sampled
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -208,7 +209,7 @@ async def test_assumption_step_triggers_review_without_main_rule() -> None:
     assumption = ReasoningStep(kind=StepKind.assumption, text="The goods were delivered.")
     x = Xero()
     plain = x.judgment(proposed_action=ProposedAction.misstatement)
-    assert not sampled(plain.id, 0.05)  # 这张发票的判断 ID 不在 5% 抽样里
+    assert not sampled("critic", plain.id, 0.05)  # 这张发票的判断 ID 不在 5% 抽样里
     assert trigger(AutonomyLevel.L3, plain, 0.05) is None
     with_assumption = plain.model_copy(update={"reasoning_chain": [*plain.reasoning_chain, assumption]})
     assert trigger(AutonomyLevel.L3, with_assumption, 0.05) == "assumption"
@@ -217,10 +218,10 @@ async def test_assumption_step_triggers_review_without_main_rule() -> None:
 
 
 def test_sampling_is_replayable() -> None:
-    """抽样按判断 ID 的 sha256: 同一 ID 每次结果相同; 约 5% 的 ID 抽中."""
+    """抽样按判断 ID 的 sha256 (services/sampling 的 critic 用途): 同一 ID 每次结果相同; 约 5% 的 ID 抽中."""
     ids = [f"J-REV-02-1-X{n}" for n in range(2000)]
-    first = [sampled(i, 0.05) for i in ids]
-    assert first == [sampled(i, 0.05) for i in ids]
+    first = [sampled("critic", i, 0.05) for i in ids]
+    assert first == [sampled("critic", i, 0.05) for i in ids]
     assert 60 <= sum(first) <= 140
     hit = ids[first.index(True)]
     judgment = Judgment(

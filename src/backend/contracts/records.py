@@ -1,7 +1,10 @@
-"""财务数据的行模型, 与 开发接口文档.md 第 9 节财务表逐列对应 (去掉 engagement_id)."""
+"""财务数据的行模型, 与 开发接口文档.md 第 9 节财务表逐列对应 (去掉 engagement_id); 另有数据集声明 DatasetTraits."""
 
+import re
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, Self
+
+from pydantic import model_validator
 
 from backend.contracts.models import Model
 
@@ -80,6 +83,15 @@ class JournalEntry(Model):
     is_adjustment: bool = False  # 是否调整分录
 
 
+class AdjustmentEntrySummary(Model):
+    """数据集中一笔可载入的更正分录的摘要 (DatasetLoader.adjustment_entries): 取该凭证首行的日期与摘要."""
+
+    entry_no: str  # 凭证号, 如 AJE-X01
+    posting_date: date  # 入账日期
+    description: str | None  # 摘要
+    line_count: int  # 行数
+
+
 class SalesInvoice(Model):
     """销售发票."""
 
@@ -125,3 +137,47 @@ class BankTransaction(Model):
     balance_after_cents: int  # 交易后余额, 单位分
     description: str | None  # 摘要
     reference: str | None  # 参考号, 含发票号
+
+
+class PayrollAccounts(Model):
+    """数据集声明的薪酬科目对照, 各为科目代码列表 (FIN-15 F03 至 F05 用)."""
+
+    wages_expense: list[str]  # 工资费用
+    super_expense: list[str]  # 养老金费用
+    super_payable: list[str]  # 应付养老金
+    wages_payable: list[str]  # 应付工资
+    leave_provision: list[str]  # 年假准备
+
+
+class DatasetTraits(Model):
+    """数据集声明: 跟数据来源有关的事实 (Xero 演示数据集设计第 5.2 节), 程序参数以 {ref: dataset.<键>} 引用.
+    没有声明文件的数据集 (Numbat) 取缺省值."""
+
+    dataset: str | None = None  # 声明所属的数据集名
+    data_as_of: date | None = None  # 数据截止日; 为空不设上限
+    prior_period_start: date | None = None  # 上期起始日; 为空视为与本期等长
+    entry_timestamps_reliable: bool = True  # 分录的录入时间是否可信
+    entry_timestamps_note: str | None = None  # 录入时间不可信的说明
+    reversal_reference_pattern: str | None = None  # 作废冲回的说明格式, 恰好一个捕获组取出原凭证的编号
+    reversal_entry_no_template: str | None = None  # 由编号拼出原凭证号的模板, 含 "{1}"
+    counterparty_prefixes: list[str] = ["payment to", "payment from", "payment:"]  # 对方名称前的说明前缀
+    audit_adjustment_entry_prefix: str = "AJE-"  # 审计更正分录的凭证号前缀
+    payroll_accounts: PayrollAccounts | None = None  # 薪酬科目对照; 为空时薪酬程序不适用
+    payroll_register: str | None = None  # 工资册文件 (相对补造目录)
+
+    @model_validator(mode="after")
+    def reversal_format(self) -> Self:
+        """作废冲回的格式与模板同给或同空; 格式须能编译且恰好一个捕获组, 模板须含 "{1}"."""
+        pattern, template = self.reversal_reference_pattern, self.reversal_entry_no_template
+        if (pattern is None) != (template is None):
+            raise ValueError("reversal_reference_pattern 与 reversal_entry_no_template 须同给或同空")
+        if pattern is not None:
+            try:
+                groups = re.compile(pattern).groups
+            except re.error as exc:
+                raise ValueError(f"reversal_reference_pattern 不能编译: {exc}") from exc
+            if groups != 1:
+                raise ValueError(f"reversal_reference_pattern 须恰好一个捕获组, 现有 {groups} 个")
+        if template is not None and "{1}" not in template:
+            raise ValueError('reversal_entry_no_template 须含 "{1}"')
+        return self

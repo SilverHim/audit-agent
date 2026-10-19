@@ -6,7 +6,7 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ from backend.contracts.data import (
     TableStats,
     TableVersion,
 )
-from backend.contracts.models import AgentId
+from backend.contracts.models import AgentId, DocumentType
 from backend.contracts.records import Account, AccountCategory
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
@@ -135,17 +135,29 @@ class PostgresDataStore(Store):
 
     async def readiness(self, eid: str) -> DataReadiness:
         t = m.dataset_loads
-        rows = await self.rows(eid, select(t.c.data_version, t.c.loaded_at, t.c.ready_at, t.c.ready_by))
+        rows = await self.rows(eid, select(*(t.c[name] for name in DataReadiness.model_fields)))
         return DataReadiness.model_validate(rows[0]) if rows else DataReadiness(data_version=0)
 
-    async def confirm_ready(self, eid: str, actor: str) -> DataReadiness:
+    async def confirm_ready(
+        self, eid: str, actor: str, *, reason: str | None = None, failed_checks: Sequence[CheckId] = ()
+    ) -> DataReadiness:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             await self.loads_row(conn, eid)
             t = m.dataset_loads
+            failed = [check.value for check in failed_checks]
             await conn.execute(
-                update(t).where(t.c.engagement_id == eid, t.c.ready_at.is_(None)).values(ready_at=now(), ready_by=actor)
+                update(t)
+                .where(t.c.engagement_id == eid, t.c.ready_at.is_(None))
+                .values(ready_at=now(), ready_by=actor, ready_reason=reason, ready_failed_checks=failed)
             )
+            if failed:  # 第一次确认时没有未通过项: 补记本次的理由与未通过项, 人与时间不改
+                empty = func.jsonb_array_length(t.c.ready_failed_checks) == 0
+                await conn.execute(
+                    update(t)
+                    .where(t.c.engagement_id == eid, empty)
+                    .values(ready_reason=reason, ready_failed_checks=failed)
+                )
         return await self.readiness(eid)
 
     async def loads_row(self, conn: AsyncConnection, eid: str) -> dict[str, Any]:
@@ -184,6 +196,11 @@ class PostgresDataStore(Store):
                 ).one()
                 result[kind] = TableStats(records=int(row[0]), period_from=row[1], period_to=row[2])
         return result
+
+    async def document_counts(self, eid: str) -> dict[DocumentType, int]:
+        t = m.documents
+        rows = await self.rows(eid, select(t.c.type, func.count().label("n")).group_by(t.c.type))
+        return {DocumentType(r["type"]): int(r["n"]) for r in rows}
 
     async def approval_records(self, conn: AsyncConnection, eid: str) -> int:
         """最新一版审批日志的行数; 没有为 0."""
@@ -378,6 +395,27 @@ class PostgresDataStore(Store):
                 update(t).where(t.c.engagement_id == eid).values(data_version=int(loads["data_version"]) + 1)
             )
         return changed
+
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        t = m.data_requests
+        values = {"status": "unavailable", "unavailable_reason": reason, "resolved_by": actor, "resolved_at": at}
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            row = (
+                (
+                    await conn.execute(
+                        update(t)
+                        .where(t.c.engagement_id == eid, t.c.id == request_id, t.c.status == "open")
+                        .values(values)
+                        .returning(*t.c)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return None if row is None else DataRequest.model_validate({k: row[k] for k in DataRequest.model_fields})
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         checks, table = m.data_checks, m.data_requests

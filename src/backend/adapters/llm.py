@@ -17,7 +17,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from backend.contracts.models import LlmProvider
-from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
+from backend.contracts.ports import EngagementStore, LLMClient, LLMRequest, LLMResponse, T_out
 from backend.core.config import Settings
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"  # 未配置 LLM_BASE_URL 时的接口地址
@@ -107,6 +107,42 @@ class MockLLMClient:
         return LLMResponse[output_model](  # type: ignore[valid-type]
             output=output, raw=raw, model="mock", input_tokens=0, output_tokens=0, error=error
         )
+
+
+XERO_PREFIX = "xero/"  # Xero 数据集名的前缀 (同 XeroDatasetLoader.PREFIX), 其后为快照名
+
+
+class DatasetFixtureLLMClient(MockLLMClient):
+    """mock 模式的客户端: 按请求所属项目 (LLMRequest.eid) 的数据集选 fixture 目录, 目录内读法同 MockLLMClient.
+
+    数据集为 xero/<快照> 且 dataset_root/xero_demo/<快照>/llm 存在时, 读该目录 (生成脚本从 tests/fixtures/llm_xero
+    复制的运行副本); 其余 (demo, 没有补造 llm/ 的 Xero 快照, eid 为空, 查不到项目) 读 fixtures_root
+    (LLM_FIXTURES_ROOT). engagements 为空时总读 fixtures_root.
+    """
+
+    def __init__(self, fixtures_root: Path, dataset_root: Path, engagements: EngagementStore | None = None) -> None:
+        super().__init__(fixtures_root)  # root: 非 Xero 数据集的 fixture 目录
+        self.dataset_root = dataset_root  # 合成数据集目录 (DATASET_ROOT), Xero 的补造目录在其 xero_demo/ 下
+        self.engagements = engagements  # 按 eid 取项目的数据集
+
+    async def directory(self, eid: str) -> Path:
+        """该项目读的 fixture 目录 (见类说明)."""
+        if not eid or self.engagements is None:
+            return self.root
+        engagement = await self.engagements.get(eid)
+        if engagement is None or not engagement.dataset.startswith(XERO_PREFIX):
+            return self.root
+        snapshot = engagement.dataset.removeprefix(XERO_PREFIX)
+        if not snapshot or "/" in snapshot or snapshot in (".", ".."):  # 快照名只能是一段目录名
+            return self.root
+        llm = self.dataset_root / "xero_demo" / snapshot / "llm"
+        return llm if llm.is_dir() else self.root
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        directory = await self.directory(req.eid)
+        if directory == self.root:
+            return await super().complete(req, output_model)
+        return await MockLLMClient(directory).complete(req, output_model)
 
 
 class LLMTransportError(RuntimeError):
@@ -405,9 +441,10 @@ def env_provider(settings: Settings) -> LlmProvider:
     return "custom" if settings.LLM_BASE_URL else "openai"
 
 
-def make_llm_client(settings: Settings) -> LLMClient:
-    """按 LLM_MODE 建 .env 配置的客户端. live 模式缺密钥或模型名时为 UnconfiguredLLMClient (应用照常启动,
+def make_llm_client(settings: Settings, engagements: EngagementStore | None = None) -> LLMClient:
+    """按 LLM_MODE 建 .env 配置的客户端. mock 模式为 DatasetFixtureLLMClient (engagements 用来按项目数据集选 fixture
+    目录, 为空时总读 LLM_FIXTURES_ROOT). live 模式缺密钥或模型名时为 UnconfiguredLLMClient (应用照常启动,
     可在设置页配置); 接口地址取 LLM_BASE_URL, 为空时为 DEFAULT_BASE_URL."""
     if settings.LLM_MODE == "mock":
-        return MockLLMClient(settings.LLM_FIXTURES_ROOT)
+        return DatasetFixtureLLMClient(settings.LLM_FIXTURES_ROOT, settings.DATASET_ROOT, engagements)
     return make_live_client(env_provider(settings), settings.LLM_BASE_URL, settings.LLM_MODEL, settings.LLM_API_KEY)

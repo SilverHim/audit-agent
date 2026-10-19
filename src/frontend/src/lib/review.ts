@@ -4,7 +4,7 @@ import type {
   Decision,
   Direction,
   EngagementOverview,
-  Judgment,
+  JudgmentView,
   MisstatementDraft,
   MisstatementType,
   ProcedureRun,
@@ -22,7 +22,7 @@ export const TIER_ORDER: ReviewTier[] = ['full_review', 'check_evidence', 'read_
 // 后端 R3 上线后 ReviewTaskView 自带 amount_cents 与 tier; 之前按同一规则在前端计算
 type WithTier = ReviewTaskView & { amount_cents?: number | null; tier?: ReviewTier }
 
-export function isJudgment(target: ReviewTaskView['target']): target is Judgment {
+export function isJudgment(target: ReviewTaskView['target']): target is JudgmentView {
   return 'conclusion' in target
 }
 
@@ -67,7 +67,8 @@ export function taskTier(
   if (!isJudgment(target)) return 'check_evidence'
   const performance = overview?.performance_materiality_cents
   if (performance != null && amount != null && amount > performance) return 'full_review'
-  if (target.confidence < 0.7) return 'check_evidence'
+  // 盲判隐藏了置信度时按须核对证据
+  if (target.confidence == null || target.confidence < 0.7) return 'check_evidence'
   if (target.confidence <= 0.9) return 'read_reasoning'
   if (target.autonomy_level === 'L1' || view.task.kind !== 'normal') return 'read_reasoning'
   const trivial = overview?.clearly_trivial_cents
@@ -121,7 +122,7 @@ export function emptyDraft(): ReviewDraft {
 }
 
 // 只有人点"复制建议数据"才填入, 不预填
-export function draftFromJudgment(draft: ReviewDraft, judgment: Judgment): ReviewDraft {
+export function draftFromJudgment(draft: ReviewDraft, judgment: JudgmentView): ReviewDraft {
   const proposed = judgment.misstatement_draft
   if (!proposed) return draft
   return {
