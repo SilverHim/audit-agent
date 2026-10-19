@@ -12,12 +12,15 @@
 - 文件: 同内容的文件存档时返回已有登记, upload 留痕同键只一条; 只处理没做完的 (ingest.unfinished).
 - 改类型: 只在类型与清单不符, 且最近一次类型决定是 A3 做的 (或还没有) 时改; 审计师改过的不动.
 - 补登记: 只给从没补登记过的文件补; 审计师补过的不动.
-有写入时记一条 data 留痕 demo_import (payload 为 DemoImportResult); 什么都没写为 already_imported, 不记留痕. 作业中途
-出错时 (DataService.demo_import 的作业) 记一条 status failed 的 demo_import, 只有阶段与错误类别 (需求 R270).
+有写入时记一条 data 留痕 demo_import (payload 为 DemoImportResult); 什么都没写为 already_imported, 不记留痕, 但这一
+阶段最近一条 demo_import 是 failed 时 (上次在写完之后才出错) 仍记一条 imported, 表示接着做完了. 作业 (含之前的补写
+留痕) 出错时 (DataService.demo_import) 记一条 status failed 的 demo_import, 只有阶段与错误类别 (需求 R270). 阶段算
+导入过, 当且仅当它最近一条 demo_import 是 imported (stage_statuses).
 """
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -37,6 +40,15 @@ NO_DEMO = "该数据集没有演示资料"
 RETYPE_REASON = "演示数据导入: 按补造清单指定类型"
 DETAILS_REASON = "演示数据导入: 按补造清单补登记"
 STAGE_NAMES: dict[DemoStage, str] = {"acceptance": "承接", "fieldwork": "外勤", "statements": "财报", "manual": "人工"}
+
+
+def stage_statuses(entries: Iterable[TrailEntry]) -> dict[str, str]:
+    """各阶段最近一条 demo_import 留痕的 status (imported 或 failed); entries 按写入顺序, 其余留痕不看."""
+    found: dict[str, str] = {}
+    for entry in entries:
+        if entry.payload.get("action") == DEMO_JOB:
+            found[str(entry.payload.get("stage"))] = str(entry.payload.get("status"))
+    return found
 
 
 @dataclass(frozen=True)
@@ -86,30 +98,34 @@ class DemoImport:
         engagement = await deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
+        resumed = stage_statuses(await all_of_kind(deps.trail, eid, TrailKind.data)).get(stage) == "failed"
         tables = await self.write_tables(eid, actor) if stage == "fieldwork" else []
         uploads = await self.upload(eid, engagement, self.uploads(stage), actor)
         retyped = await self.retype(eid, engagement, uploads.pairs, actor)
         detailed = await self.details(eid, uploads.pairs, actor)
         current = {d.id: d for d in await deps.financial_store.documents(eid)}
+        wrote = bool(tables or uploads.fresh_names or uploads.processed or retyped or detailed)
         result = DemoImportResult(
             stage=stage,
-            status="imported"
-            if tables or uploads.fresh_names or uploads.processed or retyped or detailed
-            else "already_imported",
+            status="imported" if wrote or resumed else "already_imported",
             tables=tables,
             uploaded=uploads.fresh_names,
             retyped=retyped,
             needs_manual=[u.file_name for u, d in uploads.pairs if current[d.id].status == "needs_manual"],
             data_version=(await deps.data.readiness(eid)).data_version,
         )
-        if result.status == "already_imported":
+        if wrote:
+            await self.service.checkup(eid)
+        else:
             await self.service.checkup_if_stale(eid)  # 上次在体检之前中断时补做
-            return result
-        await self.service.checkup(eid)
-        written = f"写入 {len(set(tables))} 张表的 {len(tables)} 个版本, " if tables else ""
-        summary = f"演示数据导入 ({STAGE_NAMES[stage]}): {written}上传 {len(result.uploaded)} 份文件" + (
-            f", 按清单指定类型 {len(retyped)} 份" if retyped else ""
-        )
+            if not resumed:
+                return result
+        summary = f"演示数据导入 ({STAGE_NAMES[stage]}): 上次没做完的已做完, 没有新的写入"
+        if wrote:
+            written = f"写入 {len(set(tables))} 张表的 {len(tables)} 个版本, " if tables else ""
+            summary = f"演示数据导入 ({STAGE_NAMES[stage]}): {written}上传 {len(result.uploaded)} 份文件" + (
+                f", 按清单指定类型 {len(retyped)} 份" if retyped else ""
+            )
         await deps.trail.record(
             TrailEntry(
                 engagement_id=eid,
@@ -123,8 +139,9 @@ class DemoImport:
         return result
 
     async def record_failure(self, eid: str, stage: DemoStage, actor: str, error: BaseException) -> None:
-        """作业中途出错时记一条 data 留痕 demo_import (status failed, 需求 R270): 只写阶段, 错误类别 (异常类名) 与当前的
-        数据版本, 不写原始错误文本 (可能带文件内容或路径). 已写的保留, 再执行时接着做. 留痕写不成只记日志."""
+        """作业 (含之前的补写留痕) 出错时记一条 data 留痕 demo_import (status failed, 需求 R270): 只写阶段, 错误类别
+        (异常类名) 与当前的数据版本, 不写原始错误文本 (可能带文件内容或路径). 已写的保留, 再执行时接着做, 做完记
+        imported (什么都没写也记). 留痕写不成只记日志."""
         deps = self.service.deps
         try:
             version = (await deps.data.readiness(eid)).data_version

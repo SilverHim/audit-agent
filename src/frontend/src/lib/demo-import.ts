@@ -21,12 +21,16 @@ export function demoButton(demo: DemoSummary | undefined, t: Messages): DemoButt
 }
 
 // 上次导入的一行: 阶段, 写了几张表, 上传几份, 按清单改了类型的与待人工的文件; 什么都没写的为 "已导入过"; 作业中途
-// 出错的写错误类别并提示再导入一次 (已写的保留, 接着做)
+// 出错的写错误类别并提示再导入一次 (已写的保留, 接着做); 出错后再导入而没有新写的表与文件 (只补做了处理, 补登记或
+// 什么都不缺) 说上次没做完的已做完
 export function demoResultText(result: DemoImportResult, t: Messages): string {
   const stage = t.data.demo.stages[result.stage]
   if (result.status === 'already_imported') return t.data.demo.already(stage)
   if (result.status === 'failed') return t.data.demo.failed(stage, result.error ?? '')
-  const parts = [t.data.demo.done(stage, result.tables?.length ?? 0, result.uploaded?.length ?? 0)]
+  const tables = result.tables?.length ?? 0
+  const uploaded = result.uploaded?.length ?? 0
+  const resumed = !tables && !uploaded && !result.retyped?.length
+  const parts = [resumed ? t.data.demo.resumed(stage) : t.data.demo.done(stage, tables, uploaded)]
   if (result.retyped?.length) parts.push(t.data.demo.retyped(result.retyped.join(', ')))
   if (result.needs_manual?.length) parts.push(t.data.demo.needsManual(result.needs_manual.join(', ')))
   return parts.join(t.data.demo.separator)

@@ -900,6 +900,7 @@ export const en = {
       done: (stage: string, tables: number, files: number) =>
         `${stage}: ${tables ? `${tables} ledger version${tables === 1 ? '' : 's'} written, ` : ''}${files} file${files === 1 ? '' : 's'} uploaded`,
       already: (stage: string) => `${stage}: already loaded, nothing written`,
+      resumed: (stage: string) => `${stage}: finished what the last load left undone`,
       failed: (stage: string, error: string) =>
         `${stage}: stopped before finishing${error ? ` (${error})` : ''}; load again to continue`,
       retyped: (names: string) => `type set from the demo list for ${names}`,
@@ -1229,7 +1230,7 @@ export const en = {
       reliability: 'Reliability',
       documentDate: 'Document date',
       relatedIds: 'Related records',
-      relatedHint: 'Separate IDs with commas, e.g. XJ-397, BT-090-0107',
+      relatedHint: 'Separate IDs with commas or new lines, e.g. XJ-397, BT-090-0107',
       noDate: 'Not recorded',
       noRelated: 'None',
       edit: 'Update registration',
@@ -1253,6 +1254,7 @@ export const en = {
       errors: {
         missing: 'Enter a reason for the update.',
         invalid: 'The values could not be saved',
+        invalidWith: (message: string) => `The values could not be saved (${message})`,
       },
     },
   },

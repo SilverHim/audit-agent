@@ -633,9 +633,10 @@ function DetailsDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef; o
         </div>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
           <label htmlFor="details-related">{t.docView.details.relatedIds}</label>
-          <Input
+          <Textarea
             id="details-related"
-            className="h-10 font-mono font-normal"
+            rows={2}
+            className="font-mono font-normal"
             aria-describedby="details-related-hint"
             value={form.relatedIds}
             onChange={(event) => set({ relatedIds: event.target.value })}

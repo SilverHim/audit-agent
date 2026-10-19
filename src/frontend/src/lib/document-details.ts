@@ -49,7 +49,7 @@ export function detailsErrorText(error: unknown, t: Messages): string {
   if (code === 'MISSING_FIELD') return t.docView.details.errors.missing
   if (code === 'INVALID_VALUE') {
     const message = (error as { detail?: { message?: string } }).detail?.message
-    return message ? `${t.docView.details.errors.invalid} (${message})` : t.docView.details.errors.invalid
+    return message ? t.docView.details.errors.invalidWith(message) : t.docView.details.errors.invalid
   }
   return errorText(error, t)
 }

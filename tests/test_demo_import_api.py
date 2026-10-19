@@ -1,27 +1,23 @@
-"""需求 R270: 演示数据导入的接口 (POST /data/demo-import) 与概览的 demo 一项. 在 R269 的 Xero 假存储与离线主图上,
-经 HTTP 调接口; 不连库. 读快照与补造目录, 标 external."""
+"""需求 R270: 演示数据导入的接口 (POST /data/demo-import) 的拒绝与概览的 demo 一项. 在 R269 的 Xero 假存储上, 经 HTTP
+调接口; 不连库. 读快照与补造目录, 标 external. 停在 ACC-01 闸门经接口导入承接与各停点的 demo 在 test_demo_import 的
+模块流程里."""
 
-import asyncio
+from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import pytest
-from httpx import AsyncClient
 
-from backend.contracts.models import Engagement
-from backend.services.demo_import import DemoImport
-from tests.fakes import api_client
-from tests.test_demo_import import ACTOR, EID, Env, env
-from tests.xero_fakes import XERO_DATASET, xero_engagement
-from tests.xero_flow import approve_acceptance, drain, to_acceptance_gate
+from backend.adapters.xero_supplements import STAGE_REQUESTS
+from backend.contracts.data import DataRequest, RequestStatus
+from backend.contracts.models import DocumentType, Engagement
+from backend.persistence.stores import XeroDatasetLoader
+from tests.fakes import NOW, api_client
+from tests.test_demo_import import EID, Env, env
+from tests.xero_fakes import PLANNING, SNAPSHOT_REPO, SUPPLEMENTS, XERO_DATASET, snapshot_root, xero_engagement
 
 pytestmark = pytest.mark.external
 BASE = f"/api/v1/engagements/{EID}/data"
-
-
-async def demo(client: AsyncClient) -> dict[str, Any]:
-    response = await client.get(f"{BASE}/summary")
-    assert response.status_code == 200
-    return dict(response.json()["demo"])
 
 
 async def call(e: Env, *requests: tuple[str, dict[str, Any] | None]) -> list[Any]:
@@ -32,42 +28,6 @@ async def call(e: Env, *requests: tuple[str, dict[str, Any] | None]) -> list[Any
         for path, body in requests:
             found.append(await (client.post(path, json=body) if body is not None else client.get(path)))
         return found
-
-
-async def test_import_from_the_data_page_follows_the_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Xero 演示项目: 停在 ACC-01 闸门时概览建议 acceptance; 发起导入 202 (started, 要上传的文件), 作业期间
-    processing 不为 0; 做完后 stages_done 记下 acceptance, 不再建议 (仍在闸门), last 为这次的结果; 过了 ACC-01 等数据
-    时建议 fieldwork."""
-    e = env()
-    await to_acceptance_gate(e.runner, EID)
-    gate, run = asyncio.Event(), DemoImport.run
-
-    async def held(self: DemoImport, *args: Any) -> Any:  # 作业先停住, 好在作业期间读概览 (不靠时序)
-        await gate.wait()
-        return await run(self, *args)
-
-    monkeypatch.setattr(DemoImport, "run", held)
-    async with api_client(e.runner) as client:
-        client._transport.app.state.data_service = e.service  # type: ignore[attr-defined]
-        assert await demo(client) == {"available": True, "stages_done": [], "suggested": "acceptance", "last": None}
-        started = await client.post(f"{BASE}/demo-import", json={"stage": "acceptance"})
-        assert started.status_code == 202
-        assert (started.json()["status"], started.json()["uploaded"]) == (
-            "started",
-            ["appointment.pdf", "engagement_letter.pdf"],
-        )
-        assert (await client.get(f"{BASE}/summary")).json()["processing"] == 2  # 两份承接文件
-        gate.set()
-        await drain(e.service)
-        after = await demo(client)
-        assert (after["stages_done"], after["suggested"]) == (["acceptance"], None)
-        assert (after["last"]["stage"], after["last"]["status"], after["last"]["data_version"]) == (
-            "acceptance",
-            "imported",
-            1,
-        )
-        await approve_acceptance(e.runner, EID, ACTOR)
-        assert (await demo(client))["suggested"] == "fieldwork"
 
 
 @pytest.mark.parametrize(
@@ -81,11 +41,19 @@ async def test_import_from_the_data_page_follows_the_flow(monkeypatch: pytest.Mo
     ],
 )
 async def test_rejected_requests_and_unavailable_summary(
-    update: dict[str, Any], stage: str, status: int, code: str
+    update: dict[str, Any], stage: str, status: int, code: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """其余数据集 422 且概览 available 为假 (不显示按钮); 阶段不认识 422; 锁定 423."""
+    """其余数据集 422 且概览 available 为假 (不显示按钮), 不读检查点; 阶段不认识 422; 锁定 423. 演示数据集的概览只读
+    一次检查点. 防每次轮询概览都为没有演示资料的项目读检查点, 或一次概览读两次."""
     engagement: Engagement = xero_engagement().model_copy(update=update)
     e = env(engagement=engagement)
+    reads, state = Counter[str](), e.runner.app.aget_state
+
+    async def counted(*args: Any, **kwargs: Any) -> Any:
+        reads["state"] += 1
+        return await state(*args, **kwargs)
+
+    monkeypatch.setattr(e.runner.app, "aget_state", counted)
     posted, summary = await call(e, (f"{BASE}/demo-import", {"stage": stage}), (f"{BASE}/summary", None))
     assert (posted.status_code, posted.json()["detail"]["code"]) == (status, code)
     available = engagement.dataset == XERO_DATASET
@@ -95,6 +63,45 @@ async def test_rejected_requests_and_unavailable_summary(
         "suggested": None,  # 项目还没启动: 不在任何一个导入的位置
         "last": None,
     }
+    assert reads["state"] == (1 if available else 0)
+
+
+@pytest.mark.parametrize(
+    ("status", "busy", "suggested"),
+    [
+        ("open", False, "statements"),
+        ("received", False, None),  # 审计师已在补交卡片上交了报表草稿
+        ("unavailable", False, None),  # 标了客户无此类资料
+        ("open", True, None),  # 图在后台跑 (持项目锁, 不是数据作业): 流程没停在任何位置, 这时导入报 409
+    ],
+)
+async def test_statements_are_suggested_only_for_an_open_request_while_idle(
+    status: RequestStatus, busy: bool, suggested: str | None
+) -> None:
+    """待审财报的补交请求为 open 且图没在后台跑时才建议 statements. 防请求已收到或标了没有时仍建议, 或图在跑时按钮可点
+    却 409."""
+    e = env()
+    request_id = STAGE_REQUESTS["statements"]
+    e.data.data_requests[request_id] = DataRequest(
+        id=request_id,
+        kind="document",
+        document_type=DocumentType.financial_statements,
+        title="待审财务报表",
+        reason_code="not_provided",
+        status=status,
+        created_at=NOW,
+    )
+    if busy:
+        e.runner.acquire(EID)
+    assert (await e.service.demo_summary(EID)).suggested == suggested
+
+
+def test_supplement_needs_the_snapshot_too(tmp_path: Path) -> None:
+    """有没有演示资料看快照目录与补造目录是否都在 (不核对哈希): 快照不在时为假. 防只看补造目录, 显示了按钮而导入时
+    才报错."""
+    found = XeroDatasetLoader(snapshot_root(SNAPSHOT_REPO).parent, PLANNING, supplements=SUPPLEMENTS)
+    missing = XeroDatasetLoader(tmp_path, PLANNING, supplements=SUPPLEMENTS)
+    assert (found.has_supplement(XERO_DATASET), missing.has_supplement(XERO_DATASET)) == (True, False)
 
 
 async def test_busy_is_409() -> None:

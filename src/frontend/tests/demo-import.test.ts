@@ -72,4 +72,10 @@ describe('demoResultText', () => {
   test('什么都没写的一次说明已导入过', () => {
     expect(demoResultText({ stage: 'acceptance', status: 'already_imported' }, zh)).toBe('承接文件：已导入过，没有写入')
   })
+
+  test('出错后再导入, 没有新写的表与文件: 说上次没做完的已做完, 不说上传了 0 份', () => {
+    const resumed: DemoImportResult = { stage: 'acceptance', status: 'imported', tables: [], uploaded: [], retyped: [] }
+    expect(demoResultText(resumed, zh)).toBe('承接文件：上次没做完的已做完')
+    expect(demoResultText(resumed, en)).toBe('acceptance files: finished what the last load left undone')
+  })
 })

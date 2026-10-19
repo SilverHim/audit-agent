@@ -103,7 +103,7 @@ from backend.services.data_import import (
     sheet_names,
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
-from backend.services.demo_import import DEMO_JOB, NO_DEMO, DemoImport
+from backend.services.demo_import import DEMO_JOB, NO_DEMO, DemoImport, stage_statuses
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
 from backend.services.import_batches import (
     TABLE_EXTENSIONS,
@@ -499,11 +499,13 @@ class DataService:
         job: Callable[[], Awaitable[None]],
         prepare: Callable[[], Awaitable[None]] | None = None,
         kind: str | None = None,
+        failed: Callable[[BaseException], Awaitable[None]] | None = None,
     ) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
         同 holding), 再执行 prepare (有时; 起作业前要当场报错的检查, 如 Xero 连接是否可用), 它抛错时注销, 释放锁并
         上抛; 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job 自己处理
-        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志. kind: 作业种类, 登记期间 running(eid, kind) 为真."""
+        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志. kind: 作业种类, 登记期间 running(eid, kind) 为真.
+        failed: 补写留痕或 job 出错时以异常调用 (如记一条失败留痕, 仍在锁内), 之后异常照常交 _spawn 记日志."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
@@ -517,8 +519,13 @@ class DataService:
                 raise
 
         async def run() -> None:
-            await self.backfill_trails(eid)
-            await job()
+            try:
+                await self.backfill_trails(eid)
+                await job()
+            except Exception as error:
+                if failed is not None:
+                    await failed(error)
+                raise
 
         self._spawn(eid, key, run)
 
@@ -1240,19 +1247,15 @@ class DataService:
 
     async def demo_summary(self, eid: str) -> DemoSummary:
         """数据管理页的演示数据导入入口 (需求 R270, 见 DemoSummary). 不是带补造目录的数据集 (只查目录在不在, 不核对
-        哈希) 时只给 available 为假, 不读留痕与检查点. 已导入的阶段取全部 demo_import 留痕, 最近一次结果取
-        AuditTrail.last_of; 流程停的位置按 gate_now (闸门) 与 runner.awaiting_data (等数据就绪)."""
+        哈希) 时只给 available 为假, 不读留痕与检查点. 已导入的阶段取全部 demo_import 留痕 (各阶段最近一条为
+        imported 的, stage_statuses), 最近一次结果取 AuditTrail.last_of; 流程停的位置见 _demo_stage_now."""
         engagement = await self.deps.engagement_store.get(eid)
         dataset = engagement.dataset if engagement is not None else None
         if self.demo is None or dataset is None or not await asyncio.to_thread(self.demo.has_supplement, dataset):
             return DemoSummary()
         trail = self.deps.trail
-        imported = {
-            entry.payload.get("stage")
-            for entry in await all_of_kind(trail, eid, TrailKind.data)
-            if entry.payload.get("action") == DEMO_JOB and entry.payload.get("status") == "imported"
-        }
-        done = [stage for stage in DEMO_IMPORT_STAGES if stage in imported]
+        statuses = stage_statuses(await all_of_kind(trail, eid, TrailKind.data))
+        done = [stage for stage in DEMO_IMPORT_STAGES if statuses.get(stage) == "imported"]
         latest = await trail.last_of(eid, TrailKind.data, [DEMO_JOB])
         last = None
         if latest is not None:
@@ -1266,10 +1269,15 @@ class DataService:
         )
 
     async def _demo_stage_now(self, eid: str) -> DemoStage | None:
-        """按流程停的位置该导入的阶段 (不看做过没有): ACC-01 闸门, 等数据就绪, 待审财报请求 open."""
-        if await self.gate_now(eid) is GateId.ACC_01:
+        """按流程停的位置该导入的阶段 (不看做过没有): ACC-01 闸门, 等数据就绪, 待审财报请求 open; 检查点只读一次.
+        图在后台跑 (持项目锁而本服务没有登记着的数据作业) 时流程没停在任何位置, 为空 (这时导入报 ENGAGEMENT_BUSY);
+        数据作业 (如这次导入本身) 持锁时照常判断, 页面按 processing 不让再点."""
+        if self.runner.is_running(eid) and not self.jobs.get(eid):
+            return None
+        snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
+        if current_gate(snapshot.next, fill_defaults(snapshot.values)) is GateId.ACC_01:
             return "acceptance"
-        if awaiting_data(await self.runner.app.aget_state(GraphRunner.config(eid))):
+        if awaiting_data(snapshot):
             return "fieldwork"
         requests = {r.id: r.status for r in await self.deps.data.requests(eid)}
         return "statements" if requests.get(STAGE_REQUESTS["statements"]) == "open" else None
@@ -1362,13 +1370,12 @@ class DataService:
         importer = DemoImport(self, await self._demo_plan(engagement))
 
         async def job() -> None:
-            try:
-                await importer.run(eid, chosen, actor)
-            except Exception as error:  # 记一条 failed 的留痕, 页面据此提示再导入一次; 异常照常交 _spawn 记日志
-                await importer.record_failure(eid, chosen, actor, error)
-                raise
+            await importer.run(eid, chosen, actor)
 
-        await self.launch(eid, importer.labels(chosen), job, kind=DEMO_JOB)
+        async def failed(error: BaseException) -> None:  # 记一条 failed 的留痕, 页面据此提示再导入一次
+            await importer.record_failure(eid, chosen, actor, error)
+
+        await self.launch(eid, importer.labels(chosen), job, kind=DEMO_JOB, failed=failed)
         return importer.started(chosen)
 
     async def _demo_plan(self, engagement: Engagement) -> DemoPlan:
