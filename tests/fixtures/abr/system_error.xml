@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic – for demonstration only. 按 ABR ABN Lookup SearchByABNv202001 的响应结构 (官方 AbnLookupSchema.zip 的 XSD) 手写, 主体, 编号与名称都是合成的. __GUID__ 与 __ABN__ 由测试的假接口换成请求里的值, 模拟 ABR 原样回显请求 (含 GUID). -->
+<ABRPayloadSearchResults xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://abr.business.gov.au/ABRXMLSearch/">
+  <request>
+    <identifierSearchRequest>
+      <authenticationGUID>__GUID__</authenticationGUID>
+      <identifierType>ABN</identifierType>
+      <identifierValue>__ABN__</identifierValue>
+      <history>N</history>
+    </identifierSearchRequest>
+  </request>
+  <response>
+    <usageStatement>Synthetic usage statement.</usageStatement>
+    <dateRegisterLastUpdated>2026-10-19</dateRegisterLastUpdated>
+    <dateTimeRetrieved>2026-10-19T10:00:00+11:00</dateTimeRetrieved>
+    <exception>
+      <exceptionDescription>Unexpected system failure. Please try again later.</exceptionDescription>
+      <exceptionCode>WEBSERVICES</exceptionCode>
+    </exception>
+  </response>
+</ABRPayloadSearchResults>

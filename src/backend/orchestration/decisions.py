@@ -14,7 +14,7 @@ from langgraph.types import Command, StateSnapshot
 from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps
-from backend.contracts.errors import DecisionRejected, VersionConflict
+from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -63,6 +63,7 @@ from backend.orchestration.nodes import (
 from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
+from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.data_quality import OnHand
 from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary
@@ -946,9 +947,11 @@ class GraphDecisionSubmit:
 
         version 须为该客户画像的最新版本 +1 (画像跨项目共用, 版本号全局递增). changes 为请求给出的字段 (可含 id,
         须为项目 client_id): 在锁内以通过版本校验的最新一版为底合并, 没给的字段沿用, 给 None 的可空字段清空; 合并后
-        不合 ClientProfile 的报 INVALID_VALUE. 各项校验都在锁内, 按第 7 节的顺序, 所以项目锁定, 不在闸门或版本
-        过期时先报对应的错. 保存画像与改项目采用的版本在一个事务内, 提交后写 decision 留痕. updated_by 为操作用户
-        ID, 写入留痕.
+        不合 ClientProfile 的, 或合并后的 ABN 位数, 校验位不对的 (每次都查, 同新建客户) 报 INVALID_VALUE. ABN 变了
+        (去空白后比较) 时另查重: 与新建客户同一把锁, 同一范围 (库里其他客户的最新一版与数据集画像), 不含本客户自己,
+        已是别的客户的报 ABN_TAKEN (带那个客户的 client_id 与 legal_name), 不写. 各项校验都在锁内, 按第 7 节的顺序,
+        所以项目锁定, 不在闸门或版本过期时先报对应的错. 保存画像与改项目采用的版本在一个事务内, 提交后写 decision
+        留痕. updated_by 为操作用户 ID, 写入留痕.
         """
         async with self._deciding(eid) as (engagement, snapshot):
             if current_gate(snapshot.next, fill_defaults(snapshot.values)) is not GateId.ACC_01:
@@ -967,11 +970,22 @@ class GraphDecisionSubmit:
                 )
             except ValidationError as exc:
                 raise DecisionRejected("INVALID_VALUE", f"合并后的客户画像不合格: {exc}") from None
+            problem = abn_problem(profile.abn)
+            if problem is not None:
+                raise DecisionRejected("INVALID_VALUE", problem)
+            changed = latest is None or normalize_abn(latest.abn) != normalize_abn(profile.abn)
+            # ABN 没变不查重: 本客户自己本就不算撞上, 查了结果相同, 只省一次全表读与 clients 咨询锁
+            others = dataset_profiles(self.deps.datasets) if changed else None
 
             async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
-                saved = await self.deps.engagement_store.save_profile(
-                    profile, source=ProfileSource.update, updated_by=updated_by
-                )
+                try:
+                    saved = await self.deps.engagement_store.save_profile(
+                        profile, source=ProfileSource.update, updated_by=updated_by, dataset_profiles=others
+                    )
+                except AbnTaken as exc:
+                    raise DataRejected(
+                        "ABN_TAKEN", str(exc), client_id=exc.client_id, legal_name=exc.legal_name
+                    ) from None
                 await self.deps.engagement_store.update(eid, client_profile_version=saved.version)
             await self.deps.trail.record(  # 提交后写, 理由同 _write_acc01
                 TrailEntry(

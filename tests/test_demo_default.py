@@ -1,8 +1,10 @@
 """演示默认数据集 (R79): 配置项 DEMO_DATASET 缺省为 xero/20261017-q1, 用它建项目 (不连库: 假存储, 真实载入器读文件,
 按项目数据集定位的登记 mock) 跑到 ACC-01; 种子审计师名为 Jordan Ellis. 需要本地 Xero 快照的用例在没有时跳过."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -69,8 +71,9 @@ class CreatingEngagementStore(FakeEngagementStore):
         return engagement
 
 
-def demo_runner() -> GraphRunner:
-    """与组装根相同的数据集载入器 (CSV 加带补造目录的 Xero 快照) 与按项目数据集定位的登记 mock; 其余为假实现."""
+def demo_runner(registry: Callable[[Any, Callable[[str], Path | None]], Any] | None = None) -> GraphRunner:
+    """与组装根相同的数据集载入器 (CSV 加带补造目录的 Xero 快照) 与按项目数据集定位的登记 mock; 其余为假实现.
+    registry 给出时以 (项目存储, 数据集目录的定位函数) 建登记来源 (如组合实现), 替代登记 mock."""
     datasets = RoutingDatasetLoader(
         CsvDatasetLoader(SETTINGS.DATASET_ROOT, NO_DB, NO_DB),
         {
@@ -85,7 +88,8 @@ def demo_runner() -> GraphRunner:
     )
     engagements = CreatingEngagementStore()
     deps = make_deps(FakeRegistry(), FakeTrail(), engagements, FakeOutputStore())
-    deps = replace(deps, datasets=datasets, registry=DatasetRegistrySource(engagements, datasets.supplement_dir))
+    build = registry if registry is not None else DatasetRegistrySource
+    deps = replace(deps, datasets=datasets, registry=build(engagements, datasets.supplement_dir))
     app = compile_graph(make_graph_nodes(deps), InMemorySaver(serde=checkpoint_serde()))
     return GraphRunner(app, deps)
 

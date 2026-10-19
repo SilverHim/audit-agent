@@ -6,7 +6,8 @@
 - manifest.files 的每个文件都在, sha256 相符, 目录里没有清单外的文件 (manifest.json 除外);
 - 快照目录的文件去掉 contacts.json (测试副本与派生快照里它是过滤版, 不记哈希) 恰为 snapshot.files, sha256 相符;
 - 测试副本 (manifest 带 injected) 只在 allow_injected 下放行.
-不符抛 SupplementMismatch, 消息只列文件名, 不带文件内容.
+不符抛 SupplementMismatch, 消息只列文件名, 不带文件内容. 快照不在时 (如测试的假存储) 可只调 verify_files, 只核补造
+目录自身, 各读取方法 "调用前须已 verify" 指两者之一.
 
 apply 把补造表并入快照映射出的财务表 (设计第 3.1, 3.3 节, 第 9.3 节第 6-9 项): 合同关联填
 sales_invoices.contract_id, 服务完成记录写成 delivery_notes (发票号换成 SI- ID), 开户行覆盖 bank_accounts.bank_name;
@@ -114,7 +115,32 @@ class Supplements:
     allow_injected: bool = False
 
     def verify(self) -> dict[str, Any]:
-        """核对补造目录与快照 (见模块说明), 通过时返回 manifest."""
+        """核对补造目录与快照 (见模块说明), 通过时返回 manifest. 补造文件一侧同 verify_files, 再核快照各文件的哈希;
+        两侧的问题一并报出."""
+        manifest, problems = self.file_problems()
+        section = manifest.get("snapshot")
+        recorded = hashes(section.get("files") if isinstance(section, dict) else None)
+        actual = {p.name for p in self.snapshot.iterdir() if p.is_file()} - UNHASHED
+        changed = sorted(actual ^ recorded.keys()) + [
+            name for name in sorted(actual & recorded.keys()) if sha256(self.snapshot / name) != recorded[name]
+        ]
+        problems += [f"快照 {name}" for name in changed]
+        if problems:
+            raise SupplementMismatch(f"{MISMATCH}: {', '.join(problems)}")
+        return manifest
+
+    def verify_files(self) -> dict[str, Any]:
+        """只核对补造目录自身 (不读快照, 快照不在时用, 如测试的假存储): manifest 的 dataset 与 snapshot.name, 清单内
+        各文件存在且哈希相符, 没有清单外的文件, injected 只在 allow_injected 下放行. 通过时返回 manifest, 不符抛
+        SupplementMismatch."""
+        manifest, problems = self.file_problems()
+        if problems:
+            raise SupplementMismatch(f"{MISMATCH}: {', '.join(problems)}")
+        return manifest
+
+    def file_problems(self) -> tuple[dict[str, Any], list[str]]:
+        """补造目录自身的核对 (verify 与 verify_files 共用): 返回 manifest 与不符的文件名; manifest 读不出或测试副本
+        未经允许时直接抛 SupplementMismatch."""
         try:
             manifest: dict[str, Any] = json.loads((self.root / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -133,15 +159,7 @@ class Supplements:
         present = {p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file()} - {"manifest.json"}
         problems += sorted(present ^ listed.keys())
         problems += [name for name in sorted(present & listed.keys()) if sha256(self.root / name) != listed[name]]
-        recorded = hashes(section.get("files"))
-        actual = {p.name for p in self.snapshot.iterdir() if p.is_file()} - UNHASHED
-        changed = sorted(actual ^ recorded.keys()) + [
-            name for name in sorted(actual & recorded.keys()) if sha256(self.snapshot / name) != recorded[name]
-        ]
-        problems += [f"快照 {name}" for name in changed]
-        if problems:
-            raise SupplementMismatch(f"{MISMATCH}: {', '.join(problems)}")
-        return manifest
+        return manifest, problems
 
     def client_profile(self, prefix: str) -> ClientProfile | None:
         """补造的客户画像 (client_profile.json); 没有时为 None. id 须以 prefix (快照组织 ID 推出的

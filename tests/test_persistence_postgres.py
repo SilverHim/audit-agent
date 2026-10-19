@@ -1303,6 +1303,26 @@ async def test_new_clients_and_engagements_without_dataset(tmp_path):
     ]
     [entry] = [e for e in await store.clients() if e.profile.id == client]
     assert (entry.profile.version, entry.first_source) == (2, ProfileSource.manual)
+
+    # R289: ACC-01 改了 ABN 时 save_profile 带 dataset_profiles 另查重, 在项目事务里 (同 update_client_profile), 与
+    # create_client 同一把锁, 同一范围, 不含本客户自己: 撞上别的客户或数据集画像抛 AbnTaken, 不写
+    neighbour_abn = synthetic_abn()
+    neighbour = profile.model_copy(update={"id": "CLIENT-M-" + uuid4().hex[:12], "abn": neighbour_abn})
+    await store.create_client(neighbour, created_by=user, dataset_profiles=[])
+    v3 = profile.model_copy(update={"version": 3})
+    for abn, others in ((neighbour_abn, []), (other_abn, [from_dataset])):
+        with pytest.raises(AbnTaken):
+            async with transaction(engine, engagement.id):
+                await store.save_profile(
+                    v3.model_copy(update={"abn": abn}),
+                    source=ProfileSource.update,
+                    updated_by=user,
+                    dataset_profiles=others,
+                )
+    assert [r.profile.version for r in await store.profile_history(client)] == [1, 2]
+    async with transaction(engine, engagement.id):  # ABN 是本客户自己的 (库里最新一版), 不算撞上
+        await store.save_profile(v3, source=ProfileSource.update, updated_by=user, dataset_profiles=[from_dataset])
+    assert [r.profile.version for r in await store.profile_history(client)] == [1, 2, 3]
     await engine.dispose()
 
 

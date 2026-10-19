@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
-from backend.contracts.errors import RegistryUnavailable
+from backend.contracts.errors import RegistryReason, RegistryUnavailable
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
@@ -14,14 +14,13 @@ from backend.contracts.models import (
     AuditException,
     ClientProfile,
     EvidencePointer,
-    EvidenceType,
     ProcedureRun,
     RegistryCheck,
-    Reliability,
     TrailEntry,
     TrailKind,
 )
 from backend.contracts.state import StatePatch
+from backend.services.judgment_engine import trail_evidence
 
 
 def normalize_name(name: str) -> str:
@@ -34,16 +33,17 @@ def normalize_name(name: str) -> str:
     return result
 
 
-def trail_pointer(trail_id: str, locator: str) -> EvidencePointer:
-    """指向一次登记查询留痕的证据指针: locator 写结论依据的是查询结果里的哪个字段."""
+# 没有查询的留痕 (payload available 为 false): trail_evidence 据此定为内部原件
+NOT_QUERIED: dict[str, Any] = {"available": False}
 
-    # 审计师直接向官方登记系统查询取得, 属外部原件 (ASA 500 A31)
+
+def trail_pointer(trail_id: str, locator: str, payload: dict[str, Any] | None = None) -> EvidencePointer:
+    """指向一条登记查询留痕的证据指针: locator 写结论依据的是查询结果里的哪个字段. type 与可靠性按留痕的 payload
+    定 (judgment_engine.trail_evidence, 与判断引擎同一处解释): 真查了登记的 (缺省) 是审计师直接向官方登记系统查得,
+    属外部原件; 没有查询的 (NOT_QUERIED) 只是系统自己的记录, 为内部原件 (type voucher), 只作定位."""
+    evidence_type, reliability = trail_evidence(payload or {})
     return EvidencePointer(
-        type=EvidenceType.external,
-        source_type="trail",
-        source_id=trail_id,
-        locator=locator,
-        reliability=Reliability.external_original,
+        type=evidence_type, source_type="trail", source_id=trail_id, locator=locator, reliability=reliability
     )
 
 
@@ -62,15 +62,20 @@ def check_abn_active(abn: str, record: AbnRecord | None, trail_id: str) -> Regis
 
 
 def check_name_match(record: AbnRecord | None, legal_name: str, trail_id: str) -> RegistryCheck:
-    """名称一致: 登记名称与客户申报的法定名称规范化后相等."""
+    """名称一致: 登记名称与客户申报的法定名称规范化后相等. 登记名称不公开 (ABN Lookup 对受限的 ABN 只给 ABN 与
+    状态, 名称为空) 时待人工确认 (passed None), 不当作不一致."""
     evidence = trail_pointer(trail_id=trail_id, locator="entity_name")
 
-    if record is not None:
-        passed = normalize_name(record.entity_name) == normalize_name(legal_name)
-        detail = f"Registered name: {record.entity_name}; declared name: {legal_name}"
-    else:
+    passed: bool | None
+    if record is None:
         passed = False
         detail = "ABN record not found, names cannot be compared"
+    elif not record.entity_name:
+        passed = None
+        detail = f"Registered name not public for ABN {record.abn}; confirm manually against the declared name"
+    else:
+        passed = normalize_name(record.entity_name) == normalize_name(legal_name)
+        detail = f"Registered name: {record.entity_name}; declared name: {legal_name}"
 
     return RegistryCheck(check="name_match", passed=passed, detail=detail, evidence=evidence)
 
@@ -98,28 +103,26 @@ def check_company_registered(acn: str | None, record: AsicCompanyRecord | None, 
 MANUAL_CHECKS = ("abn_active", "name_match", "company_registered")  # 三项检查, 顺序同 collect_checks
 
 
-def unavailable_pointer(trail_id: str) -> EvidencePointer:
-    """指向记下 "登记未接入, 没有查询" 的那条留痕: 没有取得外部证据, 只是系统自己的记录, 故为内部原件 (type voucher,
-    同内部记录), 不标外部原件; 只作定位."""
-    return EvidencePointer(
-        type=EvidenceType.voucher,
-        source_type="trail",
-        source_id=trail_id,
-        locator="available",
-        reliability=Reliability.internal_original,
-    )
+# 查不了登记的原因 (RegistryUnavailable.reason) 写进待人工确认的 detail; 只写类别, 不带原始响应
+UNAVAILABLE: dict[RegistryReason, str] = {
+    "no_source": "No registry source for {subject} (client without a dataset)",
+    "not_configured": "ABN Lookup is not configured; {subject} not queried",
+    "unreachable": "ABN Lookup could not be reached; {subject} not queried",
+    "rejected": "ABN Lookup did not accept the authentication GUID; {subject} not queried",
+    "service_error": "ABN Lookup returned an error; {subject} not queried",
+}
 
 
-def manual_checks(abn: str, trail_id: str) -> list[RegistryCheck]:
-    """没有可查的登记来源 (新建的客户, ABR 与 ASIC 摘录未接入) 时的三项检查: passed 为 None, 待审计师人工确认,
-    不出例外; 证据指向记下 "未接登记" 的那条留痕 (unavailable_pointer, 不是外部证据)."""
-    detail = (
-        f"No registry source for ABN {abn} (client without a dataset); confirm manually against ABN Lookup and ASIC"
-    )
-    return [
-        RegistryCheck(check=check, passed=None, detail=detail, evidence=unavailable_pointer(trail_id))
-        for check in MANUAL_CHECKS
-    ]
+def manual_detail(subject: str, reason: RegistryReason, against: str) -> str:
+    return f"{UNAVAILABLE[reason].format(subject=subject)}; confirm manually against {against}"
+
+
+def manual_checks(abn: str, trail_id: str, reason: RegistryReason) -> list[RegistryCheck]:
+    """ABN 查不了 (没有登记来源, ABN Lookup 未配置, 不可达, 不认可 GUID 或出错) 时的三项检查: passed 为 None,
+    待审计师人工确认, 不出例外; detail 写原因的类别; 证据指向记下 "没有查询" 的那条留痕 (内部原件, 只作定位)."""
+    detail = manual_detail(f"ABN {abn}", reason, "ABN Lookup and ASIC")
+    evidence = trail_pointer(trail_id, "available", NOT_QUERIED)
+    return [RegistryCheck(check=check, passed=None, detail=detail, evidence=evidence) for check in MANUAL_CHECKS]
 
 
 def build_exception(check: RegistryCheck, run: ProcedureRun, abn: str) -> AuditException:
@@ -204,27 +207,46 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
 
         return (record, trail_id)
 
+    async def record_unavailable(
+        self, ctx: RunContext, kind: str, key: str, value: str | None, reason: RegistryReason
+    ) -> str:
+        """查不了登记时写一行 external_call 留痕 (payload 记 available false 与原因类别, result 为空), 返回留痕 ID.
+        value 为空 (ABN 记录没有 ACN) 时摘要写 "no ACN"."""
+        return await self.record_query(
+            ctx=ctx,
+            summary=f"{kind} {value or '(no ACN)'}: {reason}, manual confirmation",
+            payload={key: value, **NOT_QUERIED, "reason": reason, "result": None},
+        )
+
     async def collect_checks(self, ctx: RunContext, profile: ClientProfile) -> list[RegistryCheck]:
-        """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered. 没有可查的登记来源
-        (RegistryUnavailable) 时记一条留痕, 三项都待人工确认."""
+        """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered. ABN 查不了
+        (RegistryUnavailable) 时记一条 "没有查询" 的留痕, 三项都待人工确认. company_registered 只由 ASIC 来源判定:
+        没有 ASIC 来源 (新建的客户, ASIC 摘录接入前) 时另记一条 "没有查询" 的 ASIC 留痕, 这一项待人工确认, 不因 ABN
+        记录没有 ACN (查不到 ABN, 个人独资, 信托等) 判不通过; 有来源而 ABN 记录没有 ACN 时照旧不通过 (ASIC 无从查)."""
         try:
             abn_record, abn_trail_id = await self.lookup_abn(ctx=ctx, abn=profile.abn)
-        except RegistryUnavailable:
-            trail_id = await self.record_query(
-                ctx=ctx,
-                summary=f"ABN Lookup {profile.abn}: no registry source, manual confirmation",
-                payload={"abn": profile.abn, "available": False, "result": None},
-            )
-            return manual_checks(abn=profile.abn, trail_id=trail_id)
+        except RegistryUnavailable as exc:
+            trail_id = await self.record_unavailable(ctx, "ABN Lookup", "abn", profile.abn, exc.reason)
+            return manual_checks(abn=profile.abn, trail_id=trail_id, reason=exc.reason)
         check_list = []
         check_list.append(check_abn_active(abn=profile.abn, record=abn_record, trail_id=abn_trail_id))
         check_list.append(check_name_match(record=abn_record, legal_name=profile.legal_name, trail_id=abn_trail_id))
 
         acn = abn_record.acn if abn_record is not None else None
-        if acn is not None:
-            asic_record, asic_trail_id = await self.lookup_asic(ctx=ctx, acn=acn)
-        else:
-            asic_record, asic_trail_id = None, abn_trail_id
+        try:
+            if acn is None:  # 不查, 只确认有没有 ASIC 来源 (没有时抛 RegistryUnavailable)
+                await self.deps.registry.asic_company(ctx.engagement.id, None)
+                asic_record, asic_trail_id = None, abn_trail_id
+            else:
+                asic_record, asic_trail_id = await self.lookup_asic(ctx=ctx, acn=acn)
+        except RegistryUnavailable as exc:
+            trail_id = await self.record_unavailable(ctx, "ASIC company search", "acn", acn, exc.reason)
+            subject = f"ACN {acn}" if acn is not None else "the company (no ACN on the ABN record)"
+            detail = manual_detail(subject, exc.reason, "ASIC")
+            evidence = trail_pointer(trail_id, "available", NOT_QUERIED)
+            manual = RegistryCheck(check="company_registered", passed=None, detail=detail, evidence=evidence)
+            check_list.append(manual)
+            return check_list
 
         check_list.append(check_company_registered(acn=acn, record=asic_record, trail_id=asic_trail_id))
 

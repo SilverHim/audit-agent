@@ -1,0 +1,46 @@
+{
+  "counterparty": "DIISR - Small Business Services",
+  "counterparty_abn": null,
+  "amount_cents": 650000,
+  "sign_date": "2026-09-01",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "counterparty",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "amount_cents",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "sign_date",
+      "page": 1
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "text": "4.1 The Services are complete when the Supplier has deployed the Module to the Customer's environment and the Customer's Project Sponsor has signed the Completion Certificate (the Completion Date). Title to and control of the Module pass to the Customer on the Completion Date.",
+      "page": 2
+    },
+    {
+      "term_type": "payment",
+      "text": "5.1 The Supplier may issue a tax invoice on or after the Completion Date.\n5.2 The Customer must pay each tax invoice by its due date, which is no later than 30 days after the date of the invoice.",
+      "page": 2
+    },
+    {
+      "term_type": "termination",
+      "text": "7.1 Either party may terminate this Statement of Work by giving 10 Business Days' written notice to the other party.\n7.2 If this Statement of Work is terminated before the Completion Date, the Supplier is not entitled to payment for the Module.",
+      "page": 3
+    }
+  ]
+}

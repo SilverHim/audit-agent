@@ -984,6 +984,9 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 - 需要快照的部分 (副本生成, `build_tables` 的表层断言, 哈希守护, 连库与实时跑法): 没有 `data/external/xero/api/20261017-q1/` 时 `pytest.skip("没有本地 Xero 快照")`, 哈希守护同样跳过.
 - 不需要快照的部分 (FakeRuleEngine 预置例外, FakeLLM 读 fixture, 走 Agent, 判断引擎, 四级校验与 Q12 金额校验): 只读入库的 fixture 与补造目录, 默认跑, CI 可跑.
 - 从快照裁出最小 fixture 入库本版不做 (见文末 "本版不做").
+- Agent 层测试用的假存储与样例 `tests/xero_fakes.py` (R97) 按同一分法, 预置演示数据导入之后的状态:
+  - 只需补造目录的样例 (画像, 计划预置, 声明, 清单, 各阶段上传后的登记, 文本层, 更正分录, 工资册, 登记与函证的假实现, 合同) 有快照时连快照一起核对, 没有快照时只核补造文件 (`Supplements.verify_files`), 照常跑.
+  - 需要快照的 (七张表, 假财务存储, 项目, 假数据集载入与数据管理存储, `make_xero_deps`) 按 `tests.external.require_xero_snapshot` 定位: 仓库跟踪了却找不到时失败, 没有时跳过.
 
 **三种跑法与各自能证明什么**
 - 离线 mock (默认跑): 不连库. 有快照时对副本调 `build_tables` 与补造表的读入, 断言表层事实 (改动的行确实变了, 其余表逐行不变); 再用 FakeRuleEngine 预置该场景的例外, FakeLLM 读 `tests/fixtures/llm_injected/<场景>/<程序>/<对象>.json`, 走 Agent 与判断引擎, 断言判断, 错报草稿, 四级校验与 Q12 金额校验. 检的是编排与校验链路; 判断结论是预写的 fixture, **不证明系统能识别错报**.
@@ -1164,7 +1167,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 ### 9.3 载入器需要新增的读取点
 
 1. XeroDatasetLoader 增加构造参数 `supplements: Path | None` (补造目录的上级; main.py 传 `data/xero_demo`, 测试传 `tmp_path/xero_demo`). 数据集 "xero/<快照>" 对应 `{root}/<快照>` 与 `{supplements}/<快照>`; 补造目录不存在或参数为空时照现状运行 (纯快照). 两个根目录显式传入, 不靠层级推算.
-2. 核对补造 manifest 与快照哈希 (9.2 节); 测试副本带 injected 标志时只在 `allow_injected=True` 下放行. 已实现 (R70, `adapters/xero_supplements.py`): load (确认未载入之后), client_profile 与 planning_presets 都先核对; 核对项为 manifest 的 dataset 与 snapshot.name 等于数据集名, files 每个文件存在且 sha256 相符, 补造目录内没有清单外文件 (manifest.json 除外), 快照目录去掉 contacts.json 后恰为 snapshot.files 且 sha256 相符. 不符抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头并只列文件名 (快照的文件前加 "快照"); 带 injected 时为 "测试副本 (injected=<场景>) 只能在 allow_injected 下载入". GET /datasets 跳过不匹配的数据集, POST /engagements 返回 422 INVALID_VALUE.
+2. 核对补造 manifest 与快照哈希 (9.2 节); 测试副本带 injected 标志时只在 `allow_injected=True` 下放行. 已实现 (R70, `adapters/xero_supplements.py`): load (确认未载入之后), client_profile 与 planning_presets 都先核对; 核对项为 manifest 的 dataset 与 snapshot.name 等于数据集名, files 每个文件存在且 sha256 相符, 补造目录内没有清单外文件 (manifest.json 除外), 快照目录去掉 contacts.json 后恰为 snapshot.files 且 sha256 相符. 不符抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头并只列文件名 (快照的文件前加 "快照"); `verify_files()` 只做其中补造目录自身的几项, 不读快照 (快照不在时用, 如测试的假存储, R97); 带 injected 时为 "测试副本 (injected=<场景>) 只能在 allow_injected 下载入". GET /datasets 跳过不匹配的数据集, POST /engagements 返回 422 INVALID_VALUE.
 3. `client_profile()`: 有 client_profile.json 时整份取它, 校验 id 以快照组织 ID 推出的 `CLIENT-XERO-{短 ID}-` 开头 (本数据集 CLIENT-XERO-3C1332BB-Q1), 不符抛 SupplementMismatch, 消息含该前缀. 带后缀是为了与 20261017-mock 的载入器画像 CLIENT-XERO-3C1332BB v1 区分, 避免同库建项目时 VersionConflict (2.6 节).
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.

@@ -22,6 +22,7 @@ import type {
   RiskItem,
   RiskLevel,
 } from '@/client/types.gen'
+import { AbnLookupNote } from '@/components/abn-lookup-note'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
@@ -40,12 +41,14 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud, formatPct } from '@/lib/money'
 import { procedureName } from '@/lib/review'
+import { useOverview } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
 
 // 阶段决定 (闸门) 的材料与决定卡片. 对话工作台和表单视图共用
@@ -843,6 +846,16 @@ export function ProfileForm({
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState(() => profileDraft(profile))
+  // 新建的客户 (项目没有数据集) 的 ACC-04 经 ABN Lookup 实查, 这里同样在线核对; 有数据集的读数据集的登记, 不查
+  const live = useOverview(eid)?.engagement.dataset === null
+  // ABN 的位数与校验位同新建客户 (保存时后端照查): 填满 11 位前不提示位数
+  const problem = abnProblem(draft.abn)
+  const abnError =
+    problem === 'checksum'
+      ? t.newClient.errors.abnChecksum
+      : problem === 'format' && normalizeAbn(draft.abn).length >= 11
+        ? t.newClient.errors.abnFormat
+        : undefined
   const save = useMutation({
     ...gatesUpdateClientProfileMutation(),
     onSuccess: async () => {
@@ -855,7 +868,13 @@ export function ProfileForm({
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-5">
       <span className="font-semibold">{t.formView.profile}</span>
-      <ProfileFields idPrefix="pf" draft={draft} onChange={setDraft} />
+      <ProfileFields
+        idPrefix="pf"
+        draft={draft}
+        onChange={setDraft}
+        errors={{ abn: abnError }}
+        abnHint={live && !problem ? <AbnLookupNote abn={draft.abn} legalName={draft.legalName} /> : undefined}
+      />
       <span className="text-[13px] text-muted-foreground">{t.clientPage.rerunNote}</span>
       <div className="flex flex-wrap gap-2">
         <Button

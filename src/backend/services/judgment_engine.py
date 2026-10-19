@@ -164,6 +164,16 @@ def supported_amounts(rows: Sequence[dict[str, Any]], findings: Iterable[AuditEx
     return amounts
 
 
+def trail_evidence(payload: Mapping[str, Any]) -> tuple[EvidenceType, Reliability]:
+    """external_call 留痕作证据时的 type 与可靠性, 按留痕记下的事实定 (需求 R289; 判断引擎解析指针与 ACC-04 写指针
+    都用它, 只此一处解释): payload 的 available 为 false 是系统记下的 "没有查询" (查不了登记, 需求 R288, R289), 没有
+    取得外部证据, 为内部原件 (type voucher, 同内部记录); 其余 (真查了登记, 函证收发) 是审计师直接向外部系统取得,
+    属外部原件 (ASA 500 A31)."""
+    if payload.get("available") is False:
+        return EvidenceType.voucher, Reliability.internal_original
+    return EvidenceType.external, Reliability.external_original
+
+
 def document_pointer(p: EvidencePointer, doc: DocumentRef) -> tuple[EvidencePointer | None, str]:
     """按文件登记改写指针的 type 与 reliability; 页码须在 1 到 page_count 之间. 不成立时返回 (None, 原因)."""
     if p.page is None or not 1 <= p.page <= doc.page_count:
@@ -348,8 +358,9 @@ class PointerResolver:
             return p.model_copy(update={"type": EvidenceType.standard, "reliability": None}), ""
         if p.source_type == "document":
             return document_pointer(p, found)
-        # 留痕只认外部调用, 如登记查询: 审计师直接向官方系统查得, 属外部原件 (同 ACC-04)
-        return p.model_copy(update={"type": EvidenceType.external, "reliability": Reliability.external_original}), ""
+        # 留痕只认外部调用, 如登记查询; 可靠性按留痕记下的事实 (trail_evidence, 同 ACC-04)
+        evidence_type, reliability = trail_evidence(found.payload)
+        return p.model_copy(update={"type": evidence_type, "reliability": reliability}), ""
 
 
 @dataclass(frozen=True)

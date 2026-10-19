@@ -1,0 +1,51 @@
+{
+  "counterparty": "Hamilton Smith Pty",
+  "counterparty_abn": "19900043058",
+  "amount_cents": null,
+  "sign_date": "2026-06-24",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "counterparty",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "counterparty_abn",
+      "page": 1
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "sign_date",
+      "page": 1
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "text": "4.1 The Support Services are provided throughout each calendar month, and the Customer simultaneously receives and consumes the benefit of the Support Services as the Supplier provides them.",
+      "page": 2
+    },
+    {
+      "term_type": "payment",
+      "text": "5.1 The Supplier will issue a tax invoice for the Monthly Fee of each calendar month on or about the 17th day of that month.\n5.2 The Customer must pay each tax invoice within 14 days after the date of the invoice.",
+      "page": 2
+    },
+    {
+      "term_type": "rebate",
+      "text": "6.1 If the Supplier does not respond to a Priority 1 request within 4 business hours, the Customer may claim a credit of 10% of the Monthly Fee for that month.",
+      "page": 3
+    },
+    {
+      "term_type": "termination",
+      "text": "7.1 Either party may terminate this Agreement by giving 30 days' written notice to the other party.",
+      "page": 3
+    }
+  ]
+}

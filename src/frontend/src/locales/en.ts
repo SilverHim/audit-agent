@@ -261,7 +261,7 @@ export const en = {
     gateIntro: {
       'ACC-01': (passed: number, total: number, exceptions: number, manual: number) =>
         manual
-          ? `The client is ready for your acceptance decision. This client has no registry source, so ACC-04 could not check the ABN register or the ASIC company register: ${manual} of ${total} checks need your manual confirmation against ABN Lookup and ASIC${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ''}.`
+          ? `The client is ready for your acceptance decision. Of ACC-04's ${total} checks, ${passed} passed and ${manual} need your manual confirmation against ABN Lookup or ASIC${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ''}.`
           : `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
       'PLN-01/03':
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',
@@ -594,6 +594,27 @@ export const en = {
     noDataset:
       'This client has no demo dataset. ACC-04 leaves the register checks for you to confirm manually, and the client data is imported in the engagement.',
   },
+  abnLookup: {
+    checksumOk: (abn: string) => `${abn}: check digits are valid`,
+    checking: 'Checking ABN Lookup…',
+    registered: (facts: string) => `ABN Lookup: ${facts}`,
+    nameNotPublic: 'name not public',
+    status: { Active: 'Active', Cancelled: 'Cancelled' },
+    cancelled: 'This ABN is cancelled. ACC-04 will flag it at acceptance.',
+    notFound: 'ABN Lookup has no record of this ABN. ACC-04 will flag it at acceptance.',
+    nameMismatch: 'The registered name differs from the legal name you entered.',
+    unavailable: {
+      no_source:
+        'There is no registry source to check against. ACC-04 will leave the ABN checks for you to confirm manually.',
+      not_configured: 'ABN Lookup is not configured. ACC-04 will leave the ABN checks for you to confirm manually.',
+      unreachable:
+        'ABN Lookup cannot be reached right now. ACC-04 checks again at acceptance and leaves the ABN checks for you if it still cannot.',
+      rejected:
+        'ABN Lookup did not accept the authentication GUID. ACC-04 will leave the ABN checks for you to confirm manually.',
+      service_error:
+        'ABN Lookup returned an error. ACC-04 checks again at acceptance and leaves the ABN checks for you if it still cannot.',
+    },
+  },
   newClient: {
     title: 'New client',
     intro: 'Register a client that has no demo dataset. The profile is saved as version 1, entered manually by you.',
@@ -609,10 +630,8 @@ export const en = {
       spfr: 'Special purpose',
     },
     abnHint: '11 digits; spaces are fine',
-    abnChecksumOk: (abn: string) => `${abn}: check digits are valid`,
-    abnLookupLater: 'ABN Lookup is not connected yet',
     registryNote:
-      'No registry source is connected for new clients yet, so at acceptance ACC-04 leaves the ABN and ASIC checks for you to confirm manually.',
+      'ASIC company extracts are not connected for new clients yet, so at acceptance ACC-04 leaves the ASIC check for you to confirm manually.',
     save: 'Save client',
     created: (name: string) => `Client ${name} saved`,
     taken: (name: string, id: string) => `This ABN is already registered to ${name} (${id}).`,

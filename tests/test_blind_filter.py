@@ -86,9 +86,10 @@ CONTENT_TOOLS = {"list_open_items", "list_judgments", "get_judgment", "get_proce
 SKIPPED_ROUTES = {"/api/v1/engagements/{eid}/evidence/{document_id}", "/api/v1/settings/llm"}
 # 调了而不是 200 的接口 (场景决定): 图停在 await_events, 不在闸门, gate 为 404 NOT_AT_GATE; 没配 Xero 应用, connect 为
 # 503 XERO_NOT_CONFIGURED; 没连接 Xero, tenants 为 409 XERO_NOT_CONNECTED; 授权回调不带 state, 302 回前端 (需求 R279);
-# 场景里没有智能导入的批次, 批次为 404 (需求 R277)
+# 场景里没有智能导入的批次, 批次为 404 (需求 R277); ABN 在线核对的 abn 是必填的查询参数, 不给为 422 (需求 R289)
 NOT_OK_ROUTES = {
     "/api/v1/engagements/{eid}/gate": 404,
+    "/api/v1/clients/abn-lookup": 422,
     "/api/v1/engagements/{eid}/data/xero/connect": 503,
     "/api/v1/engagements/{eid}/data/xero/tenants": 409,
     "/api/v1/integrations/xero/callback": 302,

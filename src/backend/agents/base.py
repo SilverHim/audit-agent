@@ -10,6 +10,7 @@ from typing import ClassVar, cast
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RunStatus
 from backend.contracts.ports import (
+    AbnLookup,
     AuditOutputStore,
     AuditTrail,
     BlindFilter,
@@ -51,6 +52,9 @@ class AgentDeps:
     confirmations: ConfirmationChannel  # 函证平台: 发询证函, 收回函
     users: UserStore  # 用户; 只读, RPT-03 取项目负责人姓名作签名
     data: DataStore  # 数据管理: 数据版本与就绪确认, 账表统计
+    # ABR ABN Lookup 的在线核对 (需求 R289), 给新建客户与改画像的表单用, 带短时缓存; Agent 不用 (ACC-04 经 registry
+    # 查, 每次实查)
+    abn_lookup: AbnLookup
     # 复核模型的客户端, 给独立复核智能体 (A7) 用, 与 llm 是两套配置; 组装根总会注入, 只有测试为空 (A7 记 skipped)
     review_llm: LLMClient | None = None
     # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES

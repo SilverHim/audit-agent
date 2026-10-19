@@ -19,6 +19,7 @@ import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
+from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
@@ -142,6 +143,7 @@ from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
+from backend.services.abn import normalize_abn
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
@@ -586,10 +588,64 @@ class FakeRegistry:
         self.eids.append(eid)
         return self.abn_records.get(abn)
 
-    async def asic_company(self, eid: str, acn: str) -> AsicCompanyRecord | None:
+    async def asic_company(self, eid: str, acn: str | None) -> AsicCompanyRecord | None:
         self.eids.append(eid)
+        if acn is None:  # 没有 ACN 不查, 只确认有来源 (同真实实现)
+            return None
         self.asic_queries.append(acn)
         return self.asic_records.get(acn)
+
+
+ABR_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "abr"  # 合成的 ABN Lookup 响应 (按官方 XSD 手写)
+FAKE_GUID = "fake-guid-7f3c9e21-not-real"  # 假 GUID: 测试里全文检索它, 确认不出现在日志, 留痕, 响应与异常里
+ABR_URL = "https://abr.test/abrxmlsearch/AbrXmlSearch.asmx/SearchByABNv202001"  # 假端点 (不联网)
+
+
+class FakeAbr:
+    """假的 ABR ABN Lookup (httpx.MockTransport): 按请求表单里的 searchString 回放 tests/fixtures/abr/ 下的响应,
+    把 __GUID__ 与 __ABN__ 换成请求里的值 (同真实接口回显请求, 含 GUID). replies: ABN → 响应文件名 (不带 .xml),
+    或 HTTP 状态码 (正文也回显 GUID; 3xx 另带 Location 指向别的主机), "unreachable" (连接失败) 或 "bad_gzip" (声称
+    gzip 而正文不是, 读响应时 httpx 抛 DecodingError); 没列的 ABN 回 not_found. requests 记下每次请求."""
+
+    def __init__(self, replies: Mapping[str, str | int] | None = None) -> None:
+        self.replies = dict(replies or {})
+        self.requests: list[httpx.Request] = []
+        self.transport = httpx.MockTransport(self.handle)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        form = dict(httpx.QueryParams(request.content.decode()))
+        guid, abn = form.get("authenticationGuid", ""), form.get("searchString", "")
+        reply = self.replies.get(abn, "not_found")
+        if reply == "unreachable":
+            raise httpx.ConnectError(f"connection refused ({guid})", request=request)
+        status, headers, body = self.reply_parts(reply, guid, abn)
+        return httpx.Response(status, headers=headers, content=body)
+
+    def reply_parts(self, reply: str | int, guid: str, abn: str) -> tuple[int, dict[str, str], bytes]:
+        """一种回复的 (HTTP 状态, 响应头, 原始正文); 正文都回显 GUID."""
+        if reply == "bad_gzip":
+            return 200, {"Content-Encoding": "gzip"}, f"not gzip {guid}".encode()
+        if isinstance(reply, int):
+            moved = {"Location": "https://elsewhere.test/abr"} if 300 <= reply < 400 else {}
+            return reply, moved, f"<error>server error for {guid}</error>".encode()
+        return 200, {}, self.fixture(reply).replace(b"__GUID__", guid.encode()).replace(b"__ABN__", abn.encode())
+
+    def echoed(self, abn: str, guid: str = FAKE_GUID) -> bytes:
+        """这个 ABN 的回放内容 (原始正文, 连接失败时为异常文本), 不发请求: 测试据此确认假接口回显了 GUID."""
+        reply = self.replies.get(abn, "not_found")
+        if reply == "unreachable":
+            return f"connection refused ({guid})".encode()
+        return self.reply_parts(reply, guid, abn)[2]
+
+    @staticmethod
+    def fixture(name: str) -> bytes:
+        """tests/fixtures/abr/ 下的响应模板 (未替换 __GUID__ 与 __ABN__)."""
+        return (ABR_FIXTURES / f"{name}.xml").read_bytes()
+
+    def client(self, guid: str = FAKE_GUID) -> AbnLookupClient:
+        """接这个假接口的 AbnLookupClient (组装根同一个类)."""
+        return AbnLookupClient(guid, ABR_URL, transport=self.transport)
 
 
 class FakeTrail:
@@ -850,9 +906,17 @@ class FakeEngagementStore:
         return max(hits, key=lambda p: p.version, default=None)
 
     async def save_profile(
-        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+        self,
+        profile: ClientProfile,
+        *,
+        source: ProfileSource,
+        updated_by: str | None,
+        dataset_profiles: Sequence[ClientProfile] | None = None,
     ) -> ClientProfile:
-        """version 须为已有最大值 +1; 记下该版的出处."""
+        """version 须为已有最大值 +1; 记下该版的出处. 给了 dataset_profiles 时另查 ABN 是否已是别的客户的 (同真实
+        实现: 库里其他客户的最新一版加还没进库的数据集画像)."""
+        if dataset_profiles is not None:
+            await self.check_abn(profile, dataset_profiles)
         latest = await self.client_profile(profile.id)
         expected = latest.version + 1 if latest is not None else 1
         if profile.version != expected:
@@ -892,12 +956,17 @@ class FakeEngagementStore:
         数据集画像)."""
         if profile.version != 1:
             raise VersionConflict(profile.id)
+        return await self.save_profile(
+            profile, source=ProfileSource.manual, updated_by=created_by, dataset_profiles=dataset_profiles
+        )
+
+    async def check_abn(self, profile: ClientProfile, others: Sequence[ClientProfile]) -> None:
+        """同真实实现: 其他客户的最新一版加还没进库的 others, ABN 去空白后比较, 不含本客户自己; 撞上抛 AbnTaken."""
         stored = [entry.profile for entry in await self.clients()]
         known = {p.id for p in stored}
-        for other in [*stored, *(p for p in dataset_profiles if p.id not in known)]:
-            if other.abn == profile.abn:
+        for other in [*stored, *(p for p in others if p.id not in known)]:
+            if other.id != profile.id and normalize_abn(other.abn) == normalize_abn(profile.abn):
                 raise AbnTaken(profile.abn, other.id, other.legal_name)
-        return await self.save_profile(profile, source=ProfileSource.manual, updated_by=created_by)
 
     def commit(self, txn: FakeTxn) -> None:
         """FakeOutputStore 提交事务时调用: 暂存的项目改动与画像生效."""
@@ -1445,15 +1514,21 @@ class FakeJudgmentEngine:
 class FakeConfirmationChannel:
     """假函证平台: 按账户返回预置回执 (回函内容为 "{账号} reply"), 同一幂等键返回第一次的同一回执; submits 记下每次调用.
 
-    channel 为回函渠道; replies 为假时回执没有回函; body 非空时各账户的回函内容都取它 (可为 b"").
+    channel 为回函渠道; replies 为假时回执没有回函; body 非空时各账户的回函内容都取它 (可为 b""); bodies 按账号给
+    各账户的回函内容 (如 Xero 演示的回函 PDF), 没给的账户照前两条.
     """
 
     def __init__(
-        self, channel: ReceiptChannel = ReceiptChannel.direct_email, replies: bool = True, body: bytes | None = None
+        self,
+        channel: ReceiptChannel = ReceiptChannel.direct_email,
+        replies: bool = True,
+        body: bytes | None = None,
+        bodies: Mapping[str, bytes] | None = None,
     ) -> None:
         self.channel = channel  # 回函渠道
         self.replies = replies  # 是否回函
         self.body = body  # 统一的回函内容, 为空时按账号生成
+        self.bodies = dict(bodies or {})  # 账号 → 回函内容, 优先于 body
         self.receipts: dict[str, ConfirmationReceipt] = {}  # 幂等键 -> 第一次的回执
         self.submits: list[tuple[str, ConfirmationRequest]] = []  # (幂等键, 请求), 按调用顺序
 
@@ -1464,12 +1539,16 @@ class FakeConfirmationChannel:
                 sent_at=datetime(2026, 7, 1, 9, len(self.receipts), tzinfo=UTC),
                 replied_at=date(2026, 7, 8) if self.replies else None,
                 reply_file_name=f"{req.account_no}.pdf" if self.replies else None,
-                reply_bytes=(self.body if self.body is not None else f"{req.account_no} reply".encode())
-                if self.replies
-                else None,
+                reply_bytes=self.reply_body(req.account_no) if self.replies else None,
                 receipt_channel=self.channel if self.replies else None,
             )
         return self.receipts[idempotency_key]
+
+    def reply_body(self, account_no: str) -> bytes:
+        """回函内容: bodies 中的, 否则 body, 否则 "{账号} reply"."""
+        if account_no in self.bodies:
+            return self.bodies[account_no]
+        return self.body if self.body is not None else f"{account_no} reply".encode()
 
 
 class FakeUserStore:
