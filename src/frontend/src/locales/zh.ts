@@ -364,6 +364,11 @@ export const zh: Messages = {
     levelReason: '调整等级的理由',
     uncovered: (ids) => `按当前风险等级，以下审计目标没有程序覆盖：${ids}。请调整等级或退回。`,
     giveReason: (id) => `请填写调整 ${id} 等级的理由`,
+    fluctuation: {
+      basis: { balance_sheet: '资产负债类，期初', profit_or_loss: '损益类，上期' },
+      current: '本期',
+      zeroBase: { balance_sheet: '期初为 0', profit_or_loss: '上期为 0' },
+    },
   },
   completion: {
     candidate: '候选意见',

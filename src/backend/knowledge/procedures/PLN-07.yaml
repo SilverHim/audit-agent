@@ -8,26 +8,59 @@ reads: [accounts, trial_balance]
 engine: rule
 autonomy_level: L3
 params:
-  change_pct: 0.2               # 变动率绝对值下限
-  min_change_cents: 10000000    # 变动额绝对值下限 100,000.00
-  revenue_categories: [revenue]              # 毛利率, 收入增长率的收入取这些标准分类 (accounts.category)
+  change_pct: 0.2                 # 变动不小于期初 (比较基数) 绝对值的这一比例
+  min_change_revenue_pct: 0.005   # 变动不小于本期收入乘以这一比例 (Numbat 收入 12,000,000.00 时为 60,000.00)
+  revenue_categories: [revenue]              # 收入取这些标准分类 (accounts.category): A01 的门槛, 毛利率, 收入增长率
   cost_of_sales_categories: [cost_of_sales]  # 毛利率的成本取这些标准分类
+  period_start: {ref: period_start}
+  period_end: {ref: period_end}
+  prior_period_start: {ref: dataset.prior_period_start}  # 上期起始日 (数据集声明); 为空视为与本期等长
 rules:
+  # A01 (设计稿 v2.1 第 5.1 节, 决定 9): 两期试算表出现过的科目逐个比较本期末与比较基数.
+  # - 资产负债类 (asset, liability, equity) 对期初: 期初 = 上期末余额; 上期损益结转进留存收益, 所以 category 为
+  #   retained_earnings 的代码最小科目的期初再加上期全部损益类 (revenue, expense) 余额之和.
+  # - 损益类只在本期与上期等长时比较, 基数为上期余额. 上期截止日 = 本期起始日前一天; 等长按整月数判定 (上期起始日
+  #   加本期的整月数等于本期起始日), 避免闰年 365/366 天把 12 个月的两期误判为不等长; 上期起始日为空视为等长.
+  # - 命中: 变动不为 0, |变动| ≥ min_change_revenue_pct × 本期收入 (取正), 且 |变动| ≥ change_pct × |基数|.
   - id: A01
-    name: 科目本期与上期变动超阈值
+    name: 科目本期末与期初变动超阈值
     severity: medium
     sql: |
       WITH balances AS (
-       SELECT COALESCE(c.account_code,p.account_code) AS code, c.balance_cents AS current_cents,
-              p.balance_cents AS prior_cents, COALESCE(c.balance_cents,0)-COALESCE(p.balance_cents,0) AS change_cents
-       FROM (SELECT * FROM trial_balance WHERE engagement_id=:eid AND period='current') c
-       FULL JOIN (SELECT * FROM trial_balance WHERE engagement_id=:eid AND period='prior') p ON c.account_code=p.account_code)
-      SELECT 'trial_balance' AS source_type, b.code AS source_id, b.change_cents AS amount_cents,
-             a.name AS account_name, b.current_cents, b.prior_cents,
-             CAST(b.change_cents AS numeric)/NULLIF(ABS(b.prior_cents),0) AS change_pct
-      FROM balances b JOIN accounts a ON a.engagement_id=:eid AND a.code=b.code
-      WHERE ABS(b.change_cents)>=:min_change_cents
-       AND (COALESCE(b.prior_cents,0)=0 OR ABS(b.change_cents)>=:change_pct*ABS(b.prior_cents))
+       SELECT a.code, a.name, a.type, a.category,
+              SUM(t.balance_cents) FILTER (WHERE t.period='current') AS current_cents,
+              SUM(t.balance_cents) FILTER (WHERE t.period='prior') AS prior_cents
+       FROM trial_balance t JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
+       WHERE t.engagement_id=:eid
+       GROUP BY a.code, a.name, a.type, a.category),
+      revenue AS (
+       SELECT ABS(COALESCE(SUM(current_cents) FILTER (WHERE category=ANY(:revenue_categories)),0)) AS cents
+       FROM balances),
+      carried AS (
+       SELECT (SELECT MIN(code) FROM balances WHERE category='retained_earnings') AS code,
+              COALESCE((SELECT SUM(prior_cents) FROM balances WHERE type IN ('revenue','expense')),0) AS cents),
+      span AS (
+       SELECT age(CAST(:period_end AS date)+1, CAST(:period_start AS date)) AS length),
+      same_length AS (
+       SELECT CAST(:prior_period_start AS date) IS NULL
+              OR CAST(:prior_period_start AS date)
+                 + make_interval(months => CAST(EXTRACT(YEAR FROM length)*12+EXTRACT(MONTH FROM length) AS int))
+                 = CAST(:period_start AS date) AS ok
+       FROM span),
+      compared AS (
+       SELECT b.code, b.name, b.current_cents, b.prior_cents,
+              CASE WHEN b.type IN ('revenue','expense') THEN 'profit_or_loss' ELSE 'balance_sheet' END AS basis,
+              COALESCE(b.prior_cents,0)+CASE WHEN b.code=c.code THEN c.cents ELSE 0 END AS opening_cents
+       FROM balances b, carried c, same_length s
+       WHERE b.type IN ('asset','liability','equity') OR (b.type IN ('revenue','expense') AND s.ok))
+      SELECT 'trial_balance' AS source_type, x.code AS source_id,
+             COALESCE(x.current_cents,0)-x.opening_cents AS amount_cents,
+             x.name AS account_name, x.basis, x.current_cents, x.prior_cents, x.opening_cents,
+             CAST(COALESCE(x.current_cents,0)-x.opening_cents AS numeric)/NULLIF(ABS(x.opening_cents),0) AS change_pct
+      FROM compared x, revenue r
+      WHERE COALESCE(x.current_cents,0)-x.opening_cents<>0
+       AND ABS(COALESCE(x.current_cents,0)-x.opening_cents)>=:min_change_revenue_pct*r.cents
+       AND ABS(COALESCE(x.current_cents,0)-x.opening_cents)>=:change_pct*ABS(x.opening_cents)
       ORDER BY source_id
   - id: A02
     name: 比率计算取数

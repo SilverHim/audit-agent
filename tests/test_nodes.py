@@ -286,7 +286,8 @@ def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str,
     assert run.status == RunStatus.running
 
 
-def test_build_run_literal_params_equal_yaml() -> None:
+def test_build_run_pln07_params_snapshot() -> None:
+    """PLN-07 的参数快照: 字面量同 YAML, ref 取项目期间与数据集声明 (Numbat 没声明上期起始日, 为 None)."""
     lib = library()
 
     run = build_run(
@@ -300,7 +301,15 @@ def test_build_run_literal_params_equal_yaml() -> None:
         profile=None,
     )
 
-    assert run.params_snapshot == lib.load("PLN-07").params
+    assert run.params_snapshot == {
+        "change_pct": 0.2,
+        "min_change_revenue_pct": 0.005,
+        "revenue_categories": ["revenue"],
+        "cost_of_sales_categories": ["cost_of_sales"],
+        "period_start": date(2025, 7, 1),
+        "period_end": date(2026, 6, 30),
+        "prior_period_start": None,
+    }
 
 
 def test_build_run_uses_highest_linked_risk() -> None:
@@ -886,17 +895,23 @@ async def test_profile_ref_without_value_does_not_build_a_run(tmp_path: Any) -> 
 
 
 def test_numbat_params_do_not_depend_on_traits() -> None:
-    """Numbat 的 18 条程序都不引 dataset., 用第 5.2 节的声明或缺省声明建执行记录, 参数相同 (验收 7 的守卫)."""
-    from tests.test_knowledge import design_traits
+    """Numbat 的 18 条程序用第 5.2 节的声明或缺省声明建执行记录: 只有 test_knowledge.DATASET_REFS 登记的引
+    dataset. 的参数取各自声明的值, 其余参数都相同 (验收 7 的守卫)."""
+    from tests.test_knowledge import DATASET_REFS, design_traits
 
     lib = library()
     assert len(lib.all()) == 18
+    traits = design_traits()
     for template in lib.all():
         procedure = assembled(lib, template.id)
         default = build_run(
             lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=DatasetTraits(), profile=None
         )
-        declared = build_run(
-            lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=design_traits(), profile=None
-        )
-        assert declared.params_snapshot == default.params_snapshot, template.id
+        declared = build_run(lib, template, procedure, ENGAGEMENT, numbat_state(), NOW, traits=traits, profile=None)
+        default_params, declared_params = dict(default.params_snapshot), dict(declared.params_snapshot)
+        for key, field in DATASET_REFS.get(template.id, {}).items():
+            assert (default_params.pop(key), declared_params.pop(key)) == (
+                getattr(DatasetTraits(), field),
+                getattr(traits, field),
+            ), (template.id, key)
+        assert declared_params == default_params, template.id

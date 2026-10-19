@@ -1127,8 +1127,10 @@ def numbat_pln07_exception(run: ProcedureRun) -> AuditException:
         amount_cents=52500000,
         detail={
             "account_name": "Trade receivables",
+            "basis": "balance_sheet",
             "current_cents": 202500000,
             "prior_cents": 150000000,
+            "opening_cents": 150000000,
             "change_pct": 0.35,
         },
         evidence=[

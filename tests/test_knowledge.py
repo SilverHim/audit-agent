@@ -2013,17 +2013,27 @@ def test_resolve_params_rejects_bad_refs_of_direct_templates(tmp_path: Path, ref
     assert "X-REF.bad" in str(e.value) and ref in str(e.value)
 
 
+# 引了 dataset. 的模板参数 (程序编号 → 参数名 → ref): 声明不同时只有这些参数随之不同
+DATASET_REFS = {"PLN-07": {"prior_period_start": "prior_period_start"}}  # 上期起始日 (需求 R102)
+
+
 def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:
-    """现有模板都过加载校验 (含未启用的); 都不引 dataset., 所以声明不同时解析结果相同."""
+    """现有模板都过加载校验 (含未启用的); 只有 DATASET_REFS 里的参数引 dataset., 声明不同时只有它们随之不同 (取各自
+    声明的值), 其余解析结果相同."""
     lib = ProcedureLibrary(ROOT)
     state = initial_state(ENGAGEMENT, [], 1)
     state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"] = 3, 2, 1
+    traits = design_traits()
     for template in lib.all(include_disabled=True):
+        refs = {k: v["ref"] for k, v in template.params.items() if isinstance(v, dict) and "ref" in v}
+        expected = DATASET_REFS.get(template.id, {})
+        assert {k: r.removeprefix("dataset.") for k, r in refs.items() if r.startswith("dataset.")} == expected
         risk = RiskLevel.significant if any("by_risk" in str(v) for v in template.params.values()) else None
         default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits(), profile=None)
-        assert lib.resolve_params(template, ENGAGEMENT, state, risk, traits=design_traits(), profile=None) == default, (
-            template.id
-        )
+        declared = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=traits, profile=None)
+        for key, field in expected.items():
+            assert (default.pop(key), declared.pop(key)) == (getattr(DatasetTraits(), field), getattr(traits, field))
+        assert declared == default, template.id
 
 
 # ── R127: profile. 参数引用 (本项目采用版本的客户画像) ──

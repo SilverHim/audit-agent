@@ -112,7 +112,9 @@ async def test_load_rules_and_project_isolation(storage):
         period_end="2026-06-30",
         window_days=20,
         change_pct=0.2,
-        min_change_cents=10000000,
+        min_change_revenue_pct=0.005,
+        period_start="2025-07-01",
+        prior_period_start=None,
         revenue_categories=["revenue"],
         cost_of_sales_categories=["cost_of_sales"],
         income_tax_categories=["income_tax"],
@@ -506,8 +508,16 @@ async def test_rule_edge_cases(storage):
         )
     cash = await financial.query(e.id, sql("CSH-05", "B01"), params)
     assert next(r for r in cash if r["source_id"] == "BA-02")["amount_cents"] is None
-    analytics = await financial.query(e.id, sql("PLN-07", "A01"), dict(change_pct=0.2, min_change_cents=10000000))
-    assert analytics[0]["change_pct"] is None
+    pln07 = dict(
+        change_pct=0.2,
+        min_change_revenue_pct=0.005,
+        revenue_categories=["revenue"],
+        period_start="2025-07-01",
+        period_end="2026-06-30",
+        prior_period_start=None,
+    )
+    analytics = await financial.query(e.id, sql("PLN-07", "A01"), pln07)
+    assert analytics[0]["source_id"] == "1100" and analytics[0]["change_pct"] is None
 
 
 XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 不入库; 没有时跳过
@@ -576,6 +586,110 @@ async def test_rev08_r03_matches_invoice_number_digits_as_a_whole_word(storage):
 
     await receipts(("BT-INV-1026", "Invoice 1026", 100000), ("BT-ORC1026", "ORC1026", 100000))
     assert await hits() == {"SI-ORC1026": (130000, 585000, "BT-1026,BT-INV-1026,BT-ORC1026")}
+
+
+async def test_pln07_a01_compares_balance_sheet_with_opening(storage):
+    """PLN-07 A01: 资产负债类本期末对期初 (上期损益结转进留存收益), 损益类只在两期等长时对上期; 门槛为本期收入的
+    0.5% 且不小于基数绝对值的 20%. 参数由程序库按项目与缺省数据集声明解析. Numbat 只命中 1100; 在临时项目里改行
+    (或删行) 看结转, 等长 (含闰年), 门槛, 只在一期出现的科目与变动为 0 几处的区分力."""
+    from sqlalchemy import delete, update
+
+    from backend.contracts.records import DatasetTraits
+    from backend.contracts.state import initial_state
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    library = ProcedureLibrary(ROOT / "src/backend/knowledge")
+    template = library.load("PLN-07")
+    a01 = next(r.sql for r in template.rules if r.id == "A01")
+    params = library.resolve_params(template, e, initial_state(e, [], 1), None, traits=DatasetTraits(), profile=None)
+    assert (params["period_start"], params["period_end"], params["prior_period_start"]) == (
+        date(2025, 7, 1),
+        date(2026, 6, 30),
+        None,
+    )
+    tb = m.FINANCIAL["trial_balance"]
+
+    async def hits(**override: object) -> dict[str, dict[str, object]]:
+        return {r["source_id"]: r for r in await financial.query(e.id, a01, {**params, **override})}
+
+    async def balance(period: str, code: str, cents: int | None) -> None:
+        """改一行试算表余额; None 删掉这一行 (该科目这一期没有)."""
+        async with transaction(engine, e.id) as conn:
+            where = (tb.c.engagement_id == e.id, tb.c.period == period, tb.c.account_code == code)
+            if cents is None:
+                await conn.execute(delete(tb).where(*where))
+            else:
+                await conn.execute(update(tb).where(*where).values(balance_cents=cents))
+
+    found = await hits()
+    assert list(found) == ["1100"]  # 8100 变动 6780000 过收入门槛 6000000, 但不足基数的 20% (7644000)
+    row = found["1100"]
+    assert (row["amount_cents"], row["current_cents"], row["prior_cents"], row["opening_cents"], row["basis"]) == (
+        52500000,
+        202500000,
+        150000000,
+        150000000,
+        "balance_sheet",
+    )
+    assert float(row["change_pct"]) == 0.35 and row["account_name"] == "Trade receivables"
+
+    # 结转: 本期留存收益恰为上期 (-326920000) 加上期损益 (-89180000) 时没有变动, 不命中. 比例门槛与变动率按期初
+    # -416100000, 不按上期表原值: 对期初变动 +70000000 不足期初的 20% (却超过上期原值的 20%), 不命中; +100000000 命中
+    await balance("current", "3200", -416100000)
+    assert "3200" not in await hits()
+    await balance("current", "3200", -346100000)
+    assert "3200" not in await hits()
+    await balance("current", "3200", -316100000)
+    row = (await hits())["3200"]
+    assert (row["amount_cents"], row["prior_cents"], row["opening_cents"], row["basis"]) == (
+        100000000,
+        -326920000,
+        -416100000,
+        "balance_sheet",
+    )
+    assert round(float(row["change_pct"]), 4) == 0.2403  # 100000000 / 416100000
+    await balance("current", "3200", -376100000)
+
+    # 等长: 本期工资改为 200000000 (变动 95000000); 上期起始日为空或 2024-07-01 时命中, 上期只有 3 个月时不比
+    await balance("current", "6100", 200000000)
+    for prior_start, expected in ((None, True), (date(2024, 7, 1), True), (date(2025, 4, 1), False)):
+        result = await hits(prior_period_start=prior_start)
+        assert ("6100" in result) is expected, prior_start
+        if expected:
+            assert (result["6100"]["basis"], result["6100"]["opening_cents"]) == ("profit_or_loss", 105000000)
+    # 闰年: 本期 2024-07-01 至 2025-06-30 (365 天), 上期从 2023-07-01 起 (366 天, 含 2024-02-29), 整月数相等, 要比;
+    # 按天数判定会把它当作不等长
+    leap = {"period_start": date(2024, 7, 1), "period_end": date(2025, 6, 30), "prior_period_start": date(2023, 7, 1)}
+    assert "6100" in await hits(**leap)
+    await balance("current", "6100", 118000000)
+
+    # 门槛: 期初为 0 的预付款, 变动 5999999 不到本期收入的 0.5% (6000000), 6000000 命中, 变动率为空
+    await balance("prior", "1300", 0)
+    await balance("current", "1300", 5999999)
+    assert "1300" not in await hits()
+    await balance("current", "1300", 6000000)
+    row = (await hits())["1300"]
+    assert (row["amount_cents"], row["opening_cents"], row["change_pct"]) == (6000000, 0, None)
+
+    # 只在一期出现的科目也比: 上期没有 1300 这一行, 本期 6000000 照样命中 (上期为空, 期初 0, 变动率为空); 本期没有
+    # 1500 这一行, 变动为上期余额取负
+    await balance("prior", "1300", None)
+    row = (await hits())["1300"]
+    assert (row["amount_cents"], row["prior_cents"], row["opening_cents"], row["change_pct"]) == (
+        6000000,
+        None,
+        0,
+        None,
+    )
+    await balance("current", "1500", None)
+    row = (await hits())["1500"]
+    assert (row["current_cents"], row["amount_cents"], row["opening_cents"]) == (None, -235000000, 235000000)
+
+    # 变动为 0 的不出: 收入门槛取 0 时, 两期都为 0 的科目 (1300 上期没有, 本期改为 0) 也不出行
+    await balance("current", "1300", 0)
+    assert "1300" not in await hits(min_change_revenue_pct=0)
 
 
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
