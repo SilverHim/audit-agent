@@ -56,6 +56,7 @@ from tests.fakes import (
     NoTaskAsyncio,
     ScriptA4,
     ScriptAgent,
+    acc01_decision,
     assert_pack_synced,
     make_procedure,
     make_runner,
@@ -67,21 +68,6 @@ from tests.fakes import (
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 ANNOTATION = Annotation(section=ReportSection.opinion, comment="x")
-
-
-def acc01_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
-    """绑定评分卡第 1 版的 ACC-01 决定; reject 与 insufficient_info 带理由. changes 覆盖任意字段."""
-    decision = GateDecision(
-        id="D-1",
-        gate=GateId.ACC_01,
-        target_id="SCORECARD",
-        target_version=1,
-        decision=verdict,
-        reason=None if verdict is GateVerdict.approve else "test",
-        decided_by="U-1",
-        decided_at=NOW,
-    )
-    return decision.model_copy(update=changes)
 
 
 # ── 4a ACC-01 闸门决定的效果 ──

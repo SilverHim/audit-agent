@@ -23,8 +23,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
 from backend.services.demo_import import DEMO_JOB
-from tests.fakes import wait_idle
-from tests.test_decisions import acc01_decision
+from tests.fakes import acc01_decision, wait_idle
 from tests.xero_fakes import PLANNING, SNAPSHOT_REPO, SUPPLEMENTS, snapshot_root
 
 READY_REASON = "演示数据已导入"  # 确认数据已齐时的理由 (Xero 录入人为连接器占位值, 审批日志一项待补交)

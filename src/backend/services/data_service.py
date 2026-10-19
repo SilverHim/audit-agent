@@ -397,6 +397,12 @@ class DataService:
         snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
         return current_gate(snapshot.next, fill_defaults(snapshot.values))
 
+    def require_lock(self, eid: str, what: str) -> None:
+        """持锁内函数 (write_tables, register_uploads, process_uploads, assign_type, save_details, 演示数据导入) 的守卫:
+        没持项目锁时抛 RuntimeError, 不让锁外的调用与图或别的作业并发写."""
+        if not self.runner.is_running(eid):
+            raise RuntimeError(f"{eid} {what}须先取项目锁 (DataService.holding, locked 或 launch)")
+
     async def unlocked(self, eid: str) -> Engagement:
         """项目 (未锁定); 不存在抛 LookupError, 已锁定 ENGAGEMENT_LOCKED. 供不取项目锁的写前检查 (如 Xero 授权地址)."""
         return await self._check_unlocked(eid)
@@ -610,8 +616,7 @@ class DataService:
         调用 (持项目锁), 否则抛 RuntimeError. 写入规则见 DataStore.write_tables (origins 为各表的出处); 提交后每张表
         写一条 data 留痕 (见 version_entry). 留痕写失败时数据已提交: 下次取项目锁做数据写操作时补写 (见
         backfill_trails). checkup 为假时写完不体检 (演示数据导入写完各步后只体检一次)."""
-        if not self.runner.is_running(eid):
-            raise RuntimeError(f"{eid} 写入账表须先取项目锁 (DataService.holding 或 launch)")
+        self.require_lock(eid, "写入账表")
         version = await self.deps.data.write_tables(
             eid,
             tables,
@@ -1375,7 +1380,8 @@ class DataService:
     ) -> "Uploaded":
         """上传的登记部分 (持项目锁时调用, upload_documents 与演示数据导入共用): 逐份存档 (先记 other, 内部副本,
         received, 来源 auditor_upload, 上传人 actor), 写 upload 留痕; 算出要处理或补做的文件与补做要接上的信息; 对着
-        待补交的文件请求上传时按请求定类型先落库. 不处理文件, 不体检."""
+        待补交的文件请求上传时按请求定类型先落库. 不处理文件, 不体检. 未持项目锁抛 RuntimeError."""
+        self.require_lock(eid, "上传文件")
         requested = await self._requested(eid, request_id)
         documents: list[DocumentRef] = []
         fresh: list[DocumentRef] = []
@@ -1434,7 +1440,9 @@ class DataService:
         jobs: Mapping[str, Job],
         requested: Mapping[str, Requested],
     ) -> None:
-        """逐份处理或补做文件 (DocumentIntake.resume; 持项目锁时调用), 不体检; 参数同 _intake."""
+        """逐份处理或补做文件 (DocumentIntake.resume; 持项目锁时调用), 不体检; 参数同 _intake. 未持项目锁抛
+        RuntimeError."""
+        self.require_lock(eid, "处理文件")
         intake = DocumentIntake(self.deps)
         for document in documents:
             await intake.resume(eid, document, engagement, jobs.get(document.id), requested.get(document.id))
@@ -1599,7 +1607,8 @@ class DataService:
     ) -> tuple[DocumentRef, str]:
         """人工指定类型的登记部分 (持项目锁时调用, set_document_type 与演示数据导入共用): 写 classify 留痕 (actor
         与理由), 改类型与可靠性 (ingest.registered_reliability), 置 classified, 补登记过的文件另记一版; 返回改后的登记与
-        作业号 (那条留痕的 ID). 不抽取, 不体检."""
+        作业号 (那条留痕的 ID). 不抽取, 不体检. 未持项目锁抛 RuntimeError."""
+        self.require_lock(eid, "指定文件类型")
         job = await intake.record(eid, actor, document, kind, reason)
         reliability = await registered_reliability(self.deps, eid, document, kind)
         updated = await self.deps.evidence_store.update_document(
@@ -1625,7 +1634,9 @@ class DataService:
             return await self.save_details(eid, edits, actor)
 
     async def save_details(self, eid: str, edits: Mapping[str, DocumentDetailsEdit], actor: str) -> list[DocumentRef]:
-        """补登记的校验与写入 (持项目锁时调用, set_document_details 与演示数据导入共用), 规则同 set_document_details."""
+        """补登记的校验与写入 (持项目锁时调用, set_document_details 与演示数据导入共用), 规则同 set_document_details.
+        未持项目锁抛 RuntimeError."""
+        self.require_lock(eid, "补登记")
         documents = {d.id: d for d in await self.deps.financial_store.documents(eid)}
         results: dict[str, DocumentRef] = {}
         planned: list[tuple[DocumentRef, dict[str, Any], str, list[ExtractionRecord]]] = []

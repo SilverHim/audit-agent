@@ -18,7 +18,15 @@ import pytest
 
 from backend.adapters.llm import MockLLMClient
 from backend.adapters.xero_supplements import plan
-from backend.contracts.data import XERO_TABLES, DemoImportResult, DocumentDetailsEdit, TableKind, TableVersion
+from backend.agents.ingest import DocumentIntake
+from backend.contracts.data import (
+    XERO_TABLES,
+    DataInput,
+    DemoImportResult,
+    DocumentDetailsEdit,
+    TableKind,
+    TableVersion,
+)
 from backend.contracts.errors import DataRejected, DecisionRejected
 from backend.contracts.models import (
     Contract,
@@ -34,7 +42,7 @@ from backend.contracts.ports import LLMClient
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
-from backend.services.demo_import import NO_DEMO, RETYPE_REASON, DemoImport
+from backend.services.demo_import import DETAILS_REASON, NO_DEMO, RETYPE_REASON, DemoImport
 from tests.fakes import ENGAGEMENT, NOW, FakeEngagementStore, FakeFinancialStore, FakeTrail, LayeredMockLLM, wait_idle
 from tests.xero_fakes import (
     REPO,
@@ -44,6 +52,7 @@ from tests.xero_fakes import (
     xero_engagement,
     xero_financial_store,
     xero_profile,
+    xero_tables,
     xero_uploads,
 )
 from tests.xero_flow import (
@@ -128,6 +137,7 @@ class Flow:
     again: DemoImportResult  # 直接调 DemoImport.run 再执行一次的结果
     after_again: dict[str, Any]
     doc04: ProcedureStatus
+    state_documents: list[DocumentRef]  # 确认就绪, 图继续之后编排状态里的文件登记 (DOC-04 交回)
     after_ready: dict[str, Any]
     statements: DemoImportResult | None
     after_statements: dict[str, Any]
@@ -153,6 +163,7 @@ async def run_flow() -> Flow:
     await confirm_ready(e.service, EID, ACTOR)
     overview = await GraphStateQuery(e.runner.app, e.runner.deps, e.runner).overview(EID)
     doc04 = next(p.status for p in overview.procedures if p.id == "DOC-04")
+    state_documents = list((await e.runner.app.aget_state(GraphRunner.config(EID))).values.get("documents", []))
     after_ready = snapshot(e)
     statements = await import_stage(e.service, EID, "statements", ACTOR)
     return Flow(
@@ -166,6 +177,7 @@ async def run_flow() -> Flow:
         again,
         after_again,
         doc04,
+        state_documents,
         after_ready,
         statements,
         snapshot(e),
@@ -223,6 +235,28 @@ async def test_busy_and_tampered_supplements_are_rejected(tmp_path: Path) -> Non
     assert (tampered.data.table_versions, tampered.financial.document_refs) == ([], [])
 
 
+@pytest.mark.parametrize("call", ["run", "register_uploads", "process_uploads", "assign_type", "save_details"])
+async def test_locked_steps_refuse_to_run_without_the_lock(call: str) -> None:
+    """演示导入与拆出的持锁内函数没持项目锁时抛 RuntimeError, 什么都不写 (免得与图或别的作业并发写)."""
+    e = env()
+    service = e.service
+    document = DocumentRef.model_validate(
+        {**xero_financial_store().document_refs[0].model_dump(), "status": "received"}
+    )
+    calls = {
+        "run": lambda: DemoImport(service, plan(demo_source(), XERO_DATASET)).run(EID, "acceptance", ACTOR),
+        "register_uploads": lambda: service.register_uploads(EID, ["a.pdf"], [b"%PDF-1.4"], ACTOR, None),
+        "process_uploads": lambda: service.process_uploads(EID, xero_engagement(), [document], {}, {}),
+        "assign_type": lambda: service.assign_type(
+            DocumentIntake(service.deps), EID, document, DocumentType.minutes, "x", ACTOR
+        ),
+        "save_details": lambda: service.save_details(EID, {document.id: DocumentDetailsEdit(reason="x")}, ACTOR),
+    }
+    with pytest.raises(RuntimeError, match="须先取项目锁"):
+        await calls[call]()
+    assert (e.financial.document_refs, e.trail.entries, e.data.data_version) == ([], [], 0)
+
+
 # ── 承接 (验收 2) ──
 
 
@@ -245,6 +279,8 @@ def test_acceptance_uploads_the_engagement_documents(flow: Flow) -> None:
         ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries", "REQ-contract", "REQ-financial_statements"], "open"
     )
     assert [e.procedure_id for e in state["trail"] if e.kind is TrailKind.llm_call] == ["DOC-CLASSIFY"] * 2
+    edits = [e for e in state["trail"] if e.payload.get("action") == "edit"]  # 补登记: 记发起人与清单的理由
+    assert [(e.actor, e.payload["reason"]) for e in edits] == [(ACTOR, DETAILS_REASON)] * 2
 
 
 # ── 外勤 (验收 3) ──
@@ -367,8 +403,10 @@ def test_running_again_writes_nothing(flow: Flow) -> None:
 
 
 def test_doc04_reuses_the_uploaded_contracts_after_ready(flow: Flow) -> None:
-    """确认数据已齐后图继续: DOC-04 完成, 不调大模型, 3 份合同沿用第 1 版."""
+    """确认数据已齐后图继续: DOC-04 完成, 不调大模型, 3 份合同沿用第 1 版, 文件登记交回状态 (extracted)."""
     assert flow.doc04 is ProcedureStatus.completed
+    contracts = sorted((d.file_name, d.status) for d in flow.state_documents if d.type is DocumentType.contract)
+    assert contracts == [(f"CON-X0{n}.pdf", "extracted") for n in (1, 2, 3)]
     new = added(flow.after_again, flow.after_ready)
     assert [e.procedure_id for e in new if e.kind is TrailKind.llm_call] == []
     assert flow.after_ready["contracts"] == flow.after_fieldwork["contracts"]
@@ -415,16 +453,40 @@ async def test_statements_without_an_open_request_are_classified() -> None:
 
 
 async def test_wrong_classification_is_retyped_by_the_plan(tmp_path: Path) -> None:
-    """覆盖层把 ridgeway_order_CRM08-12 分为 contract: 导入按清单指定类型 agreement (理由 RETYPE_REASON, 记发起人),
-    结果的 retyped 列出它; 它当合同抽取时没有固定输出而转了人工, 改类型后不再待人工, 合同仍只有 3 份."""
-    overlay = tmp_path / "overlay" / "DOC-CLASSIFY"
-    overlay.mkdir(parents=True)
-    (overlay / "ridgeway_order_CRM08-12.json").write_text(
-        '{"document_type": "contract", "reason": "Overlay: classified as a contract."}', encoding="utf-8"
-    )
-    e = env(llm=LayeredMockLLM(tmp_path / "overlay", LLM_XERO))
+    """覆盖层改三处: ridgeway_order_CRM08-12 分为 contract, CON-X02 分为 agreement, CON-X03 的合同抽取不合格.
+    - 导入按清单指定类型 (理由 RETYPE_REASON, 记发起人), retyped 列出前两份: ridgeway 改回 agreement (当合同抽取时
+      没有固定输出而转了人工, 改类型后不再待人工); CON-X02 改回 contract 后随即抽取, 作业号为改类型那条留痕.
+    - CON-X03 抽取不合格, needs_manual 列出它, 没有合同.
+    - 之后审计师另导入一版 bank_accounts, 再执行不盖掉, 也什么都不写."""
+    overlay = tmp_path / "overlay"
+    (overlay / "DOC-CLASSIFY").mkdir(parents=True)
+    (overlay / "DOC-04").mkdir()
+    for stem, kind in (("ridgeway_order_CRM08-12", "contract"), ("CON-X02", "agreement")):
+        reason = f"Overlay: classified as {kind}."
+        (overlay / "DOC-CLASSIFY" / f"{stem}.json").write_text(
+            f'{{"document_type": "{kind}", "reason": "{reason}"}}', encoding="utf-8"
+        )
+    (overlay / "DOC-04" / "CON-X03.json").write_text('{"counterparty": "Overlay"}', encoding="utf-8")
+    e = env(llm=LayeredMockLLM(overlay, LLM_XERO))
     result = await import_stage(e.service, EID, "fieldwork", ACTOR)
-    assert result is not None and (result.retyped, result.needs_manual) == (["ridgeway_order_CRM08-12.pdf"], [])
+    assert result is not None
+    assert (result.retyped, result.needs_manual) == (
+        ["CON-X02.pdf", "ridgeway_order_CRM08-12.pdf"],
+        ["CON-X03.pdf"],
+    )
+    con2 = by_name(e.financial.document_refs)["CON-X02.pdf"]
+    [retype] = [
+        x for x in e.trail.entries if x.payload.get("action") == "classify" and x.payload["document_id"] == con2.id
+    ][1:]
+    assert (retype.actor, retype.payload["document_type"]) == (ACTOR, "contract")
+    contract = e.financial.saved_contracts["CON-X02"]
+    assert (con2.status, contract.version, contract.extracted_by_run) == (
+        "extracted",
+        1,
+        f"UPLOAD-{con2.id}-{retype.id}",
+    )
+    assert by_name(e.financial.document_refs)["CON-X03.pdf"].status == "needs_manual"
+    assert "CON-X03" not in e.financial.saved_contracts
     order = by_name(e.financial.document_refs)["ridgeway_order_CRM08-12.pdf"]
     assert (order.type, order.status, order.reliability) == (
         DocumentType.agreement,
@@ -437,10 +499,19 @@ async def test_wrong_classification_is_retyped_by_the_plan(tmp_path: Path) -> No
         if x.payload.get("action") == "classify" and x.payload["document_id"] == order.id
     ]
     assert [(x["actor"], x["document_type"], x["reason"]) for x in decisions] == [
-        ("A3", "contract", "Overlay: classified as a contract."),
+        ("A3", "contract", "Overlay: classified as contract."),
         (ACTOR, "agreement", RETYPE_REASON),
     ]
-    assert sorted(e.financial.saved_contracts) == ["CON-X01", "CON-X02", "CON-X03"]
+    assert sorted(e.financial.saved_contracts) == ["CON-X01", "CON-X02"]
+    banks = [b.model_copy(update={"bank_name": "Auditor-confirmed bank"}) for b in xero_tables()["bank_accounts"]]
+    async with e.service.holding(EID, ["bank_accounts"]):
+        await e.service.write_tables(
+            EID, {TableKind.bank_accounts: banks}, source="import", actor="U-AUDITOR", file_name="bank_confirmed.csv"
+        )
+    await wait_idle(e.runner, EID)
+    versions = list(e.data.table_versions)
+    assert await import_stage(e.service, EID, "fieldwork", ACTOR) is None
+    assert e.data.table_versions == versions and versions[-1].file_name == "bank_confirmed.csv"
 
 
 async def test_later_changes_by_the_auditor_are_kept() -> None:
@@ -463,6 +534,17 @@ async def test_later_changes_by_the_auditor_are_kept() -> None:
         DocumentType.correspondence,
     )
     assert e.trail.entries == before
+
+
+async def test_already_imported_still_redoes_a_stale_checkup() -> None:
+    """这一阶段都已导入过 (不记留痕), 但最近一次体检已不对应当前数据 (如上次在体检之前中断) 时补做体检."""
+    e = env()
+    await import_stage(e.service, EID, "acceptance", ACTOR)
+    e.data.record(DataInput.documents)  # 数据版本变了而没体检
+    stale = e.data.last_run
+    assert await import_stage(e.service, EID, "acceptance", ACTOR) is None
+    assert e.data.last_run is not stale and e.data.last_run is not None
+    assert e.data.last_run.data_version == e.data.data_version
 
 
 # ── 中途失败后再执行 (验收 7) ──

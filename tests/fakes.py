@@ -78,6 +78,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    GateDecision,
     GateId,
     GateVerdict,
     Judgment,
@@ -572,6 +573,25 @@ NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
 
 
 # ── 假工具 ──
+
+
+DECIDED_AT = datetime(2026, 10, 1, tzinfo=UTC)  # 测试里闸门决定的时间
+
+
+def acc01_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
+    """绑定评分卡第 1 版的 ACC-01 决定; reject 与 insufficient_info 带理由. changes 覆盖任意字段. 各流程测试与共用的流程
+    辅助 (tests/xero_flow) 都从这里取."""
+    decision = GateDecision(
+        id="D-1",
+        gate=GateId.ACC_01,
+        target_id="SCORECARD",
+        target_version=1,
+        decision=verdict,
+        reason=None if verdict is GateVerdict.approve else "test",
+        decided_by="U-1",
+        decided_at=DECIDED_AT,
+    )
+    return decision.model_copy(update=changes)
 
 
 class FakeRegistry:

@@ -76,7 +76,9 @@ class DemoImport:
         )
 
     async def run(self, eid: str, stage: DemoStage, actor: str) -> DemoImportResult:
-        """做一个阶段 (见模块说明), 返回结果. 持项目锁时调用; 中途出错照常上抛 (已写的保留, 再执行时接着做)."""
+        """做一个阶段 (见模块说明), 返回结果. 持项目锁时调用 (未持锁抛 RuntimeError); 中途出错照常上抛 (已写的保留,
+        再执行时接着做)."""
+        self.service.require_lock(eid, "演示数据导入")
         deps = self.service.deps
         engagement = await deps.engagement_store.get(eid)
         if engagement is None:
@@ -101,9 +103,9 @@ class DemoImport:
             await self.service.checkup_if_stale(eid)  # 上次在体检之前中断时补做
             return result
         await self.service.checkup(eid)
-        summary = (
-            f"演示数据导入 ({STAGE_NAMES[stage]}): 写入 {len(tables)} 张表, 上传 {len(result.uploaded)} 份文件"
-            + (f", 按清单指定类型 {len(retyped)} 份" if retyped else "")
+        written = f"写入 {len(set(tables))} 张表的 {len(tables)} 个版本, " if tables else ""
+        summary = f"演示数据导入 ({STAGE_NAMES[stage]}): {written}上传 {len(result.uploaded)} 份文件" + (
+            f", 按清单指定类型 {len(retyped)} 份" if retyped else ""
         )
         await deps.trail.record(
             TrailEntry(
