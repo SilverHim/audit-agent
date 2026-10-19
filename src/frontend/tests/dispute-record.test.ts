@@ -1,6 +1,6 @@
 // 仲裁表单的换算 (lib/review 的 sideProposal, attachRule, buildDisputeRecord) 的测试, bun test 运行
 // (不在 tsconfig 的 src 里, 不经 tsc). 数据是合成的, 照 Numbat 争议变体的 CSH-02 判断: 原判断建议关闭,
-// 独立复核建议认定错报.
+// 独立复核建议认定错报. 错报草稿的规则由后端给 (draft_rules), 这里照后端对这两种判断给的值写.
 import { describe, expect, test } from 'bun:test'
 import type { MisstatementDraft, ReviewRecordIn, ReviewTaskView } from '../src/client/types.gen'
 import {
@@ -22,7 +22,12 @@ const CASH: MisstatementDraft = {
   direction: 'overstated',
 }
 
-function view(a6: string, a7: string | null, a7Draft: MisstatementDraft | null = null): ReviewTaskView {
+function view(
+  a6: string,
+  a7: string | null,
+  a7Draft: MisstatementDraft | null,
+  rules: ReviewTaskView['draft_rules'],
+): ReviewTaskView {
   return {
     task: {
       id: 'T-J-CSH-02-1-BA-01-v1-dispute',
@@ -46,11 +51,16 @@ function view(a6: string, a7: string | null, a7Draft: MisstatementDraft | null =
       exception_ids: [],
     },
     allowed_decisions: ['dispute_resolution'],
+    draft_rules: rules,
   } as unknown as ReviewTaskView
 }
 
-const DISPUTE = view('close', 'misstatement', CASH)
-const OLD = view('close', null) // collab 之前的判断: 独立复核没有建议动作
+// collab 打开时后端给的规则: 采纳建议错报的一方必填, 建议其他动作的一方不带, neither 与没给建议的一方两可
+const DISPUTE = view('close', 'misstatement', CASH, { a6_upheld: 'hidden', a7_upheld: 'required', neither: 'optional' })
+// collab 之前的判断: 独立复核没有建议动作
+const OLD = view('close', null, null, { a6_upheld: 'hidden', a7_upheld: 'optional', neither: 'optional' })
+// collab 关闭时后端不给规则
+const OFF = { ...DISPUTE, draft_rules: {} }
 
 function form(patch: Partial<ReviewDraft> = {}): ReviewDraft {
   return { ...emptyDraft(), reason: '  the bank confirmation shows the cut-off error  ', ...patch }
@@ -74,21 +84,15 @@ describe('sideProposal 与 attachRule', () => {
     expect(sideProposal(null, 'a6')).toEqual({ action: null, draft: null })
   })
 
-  test('collab 打开: 采纳的一方建议错报为必填, 建议其他动作为不显示, 没给建议与 neither 两可', () => {
-    const judgment = DISPUTE.target as never
-    expect(attachRule(judgment, 'a7_upheld', true)).toBe('required')
-    expect(attachRule(judgment, 'a6_upheld', true)).toBe('hidden')
-    expect(attachRule(judgment, 'neither', true)).toBe('optional')
-    expect(attachRule(judgment, null, true)).toBe('optional')
-    expect(attachRule(OLD.target as never, 'a7_upheld', true)).toBe('optional')
-    expect(attachRule(view('misstatement', 'accept').target as never, 'a6_upheld', true)).toBe('required')
-    expect(attachRule(view('misstatement', 'accept').target as never, 'a7_upheld', true)).toBe('hidden')
-  })
-
-  test('collab 关闭: 一律两可 (同原来)', () => {
-    for (const choice of ['a6_upheld', 'a7_upheld', 'neither'] as const) {
-      expect(attachRule(DISPUTE.target as never, choice, false)).toBe('optional')
-    }
+  test('attachRule 只读后端给的规则; 没给规则或还没选时两可', () => {
+    expect(attachRule(DISPUTE, 'a7_upheld')).toBe('required')
+    expect(attachRule(DISPUTE, 'a6_upheld')).toBe('hidden')
+    expect(attachRule(DISPUTE, 'neither')).toBe('optional')
+    expect(attachRule(DISPUTE, null)).toBe('optional')
+    expect(attachRule(OFF, 'a7_upheld')).toBe('optional')
+    expect(attachRule({ ...DISPUTE, draft_rules: undefined }, 'a7_upheld')).toBe('optional')
+    // 防止前端按两方的建议自己推: 规则与建议不符时照规则
+    expect(attachRule({ ...DISPUTE, draft_rules: { a6_upheld: 'required' } }, 'a6_upheld')).toBe('required')
   })
 })
 
@@ -149,10 +153,10 @@ describe('buildDisputeRecord', () => {
   test('collab 关闭: 不带咨询字段, 草稿只看勾选 (同原来)', () => {
     const filled = draftFromMisstatement(form(), CASH)
     const off = input({ collab: false, consulted: true, consultation: 'ignored' })
-    const record = body(buildDisputeRecord(DISPUTE, filled, off, zh))
+    const record = body(buildDisputeRecord(OFF, filled, off, zh))
     expect('consulted' in record || 'consultation_record' in record).toBe(false)
     expect(record.misstatement_draft).toBeNull()
-    expect(body(buildDisputeRecord(DISPUTE, filled, { ...off, choice: 'a6_upheld', attach: true }, zh))).toMatchObject({
+    expect(body(buildDisputeRecord(OFF, filled, { ...off, choice: 'a6_upheld', attach: true }, zh))).toMatchObject({
       misstatement_draft: CASH,
     })
   })

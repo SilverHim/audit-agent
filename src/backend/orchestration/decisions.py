@@ -66,7 +66,7 @@ from backend.orchestration.waits import accepts
 from backend.services.data_quality import OnHand
 from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import attribute_exceptions
+from backend.services.review_queue import attribute_exceptions, draft_rule
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
@@ -173,24 +173,26 @@ def check_consultation(record: ReviewRecord) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", "consultation_record (consulted 为假)")
 
 
+def kept_consultation(record: ReviewRecord) -> ReviewRecord:
+    """存下的咨询记录 (需求 R150): consulted 为真时去掉首尾空白, 为假时不存 (全空白的也不存; collab 打开时非空的已被
+    check_consultation 拒绝). 校验之后, 写入之前用; 留痕 (review_trail) 只在 consulted 为真时带这两项. 纯函数."""
+    text = (record.consultation_record or "").strip()
+    kept = text if record.consulted and text else None
+    return record if kept == record.consultation_record else record.model_copy(update={"consultation_record": kept})
+
+
 def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
-    """仲裁的错报草稿 (功能 collab, 需求 R150, T11 推荐项 1): 采纳的一方 (a6_upheld 看原判断的 proposed_action,
-    a7_upheld 看 critic_proposed_action) 建议认定错报时必须带 misstatement_draft, 不建议时不能带; 独立复核没有给建议
-    动作 (collab 之前的判断) 时两可; neither 两可 (审计师可自行认定). 不过抛 DecisionRejected."""
-    proposed: ProposedAction | None
-    if record.dispute_resolution is DisputeResolution.a6_upheld:
-        proposed = target.proposed_action
-    elif record.dispute_resolution is DisputeResolution.a7_upheld:
-        proposed = target.critic_proposed_action
-    else:
+    """仲裁的错报草稿 (功能 collab, 需求 R150, T11 推荐项 1), 规则见 review_queue.draft_rule (复核队列的 draft_rules
+    同一个函数): required 而没带 misstatement_draft 报 MISSING_FIELD, hidden 而带了报 FIELD_NOT_ALLOWED, optional
+    两可. 不过抛 DecisionRejected."""
+    if record.dispute_resolution is None:
         return
-    if proposed is None:
-        return
+    rule = draft_rule(target, record.dispute_resolution)
     attached = record.misstatement_draft is not None
-    if proposed is ProposedAction.misstatement and not attached:
+    if rule == "required" and not attached:
         raise DecisionRejected("MISSING_FIELD", "misstatement_draft")
-    if proposed is not ProposedAction.misstatement and attached:
-        detail = f"{record.dispute_resolution} 采纳的一方建议 {proposed}, 不带 misstatement_draft"
+    if rule == "hidden" and attached:
+        detail = f"{record.dispute_resolution} 采纳的一方没有建议认定错报, 不带 misstatement_draft"
         raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
@@ -523,8 +525,8 @@ def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[
     payload: dict[str, Any] = {"decision_id": record.id, "task_id": task.id, "reason": record.reason}
     if record.dispute_resolution is not None:
         payload["dispute_resolution"] = record.dispute_resolution.value
-    if record.consulted or record.consultation_record:  # 系统外咨询 (需求 R150): 对象与结论随决定留痕
-        payload["consulted"] = record.consulted
+    if record.consulted:  # 系统外咨询 (需求 R150): 咨询过才随决定留痕对象与结论
+        payload["consulted"] = True
         payload["consultation_record"] = record.consultation_record
     if closed:
         payload["closed_task_ids"] = closed
@@ -737,7 +739,7 @@ class GraphDecisionSubmit:
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task = await self.check_review_record(eid, decision, snapshot)
-                await self._apply_review(eid, decision, task, snapshot)
+                await self._apply_review(eid, kept_consultation(decision), task, snapshot)
             return
         async with self._deciding(eid) as (_, snapshot):
             values = fill_defaults(snapshot.values)

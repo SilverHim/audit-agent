@@ -1,6 +1,7 @@
 """OutputValidator 四级校验: 语法, 结构, 引用, 语义 (开发接口文档第 5 节)."""
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -608,9 +609,10 @@ def critic_output(
     )
 
 
-async def critic_check(output: CriticIndependent, findings: list[AuditException] = ()) -> Any:  # type: ignore[assignment]
+async def critic_check(output: CriticIndependent, findings: Sequence[AuditException] = (), drafts: bool = True) -> Any:
+    """第一轮的校验: 给出 CR0547 与 BT0630 两行; drafts 为真 (功能 collab 打开) 时核对草稿."""
     validator, _ = make_validator()
-    ctx = ValidationContext(allowed_evidence=[CR0547, BT0630], rule_findings=list(findings))
+    ctx = ValidationContext(allowed_evidence=[CR0547, BT0630], rule_findings=list(findings), critic_drafts=drafts)
     return await validator.validate(EID, GEN09, respond(output), ctx)
 
 
@@ -618,12 +620,14 @@ async def critic_check(output: CriticIndependent, findings: list[AuditException]
     ("action", "amount", "findings", "kept", "error"),
     [
         (ProposedAction.misstatement, 5000000, [], True, None),  # 引用行的借方金额
+        (ProposedAction.misstatement, -5000000, [], True, None),  # 草稿金额为负数时按绝对值核对
         (ProposedAction.misstatement, 1555000, [], True, None),  # 第一轮给出而推理链没引用的行也算, 按绝对值
         (ProposedAction.misstatement, 3445000, [], True, None),  # 两行之差
         (ProposedAction.misstatement, 777, [B01.model_copy(update={"amount_cents": -777})], True, None),  # 例外金额
         (ProposedAction.misstatement, 4000000, [B01], False, "独立复核的错报金额 4000000 不等于"),
         (ProposedAction.misstatement, None, [], False, "独立复核建议认定错报, 但没有错报草稿"),
         (ProposedAction.close, 5000000, [], False, "独立复核建议 close, 却给了错报草稿"),
+        (None, 5000000, [], False, "独立复核没有给建议动作, 却给了错报草稿"),
         (ProposedAction.close, None, [], False, None),
         (None, None, [], False, None),  # 旧输出: 没有这两项
     ],
@@ -631,15 +635,22 @@ async def critic_check(output: CriticIndependent, findings: list[AuditException]
 async def test_critic_draft_checked_only_noted(
     action: ProposedAction | None, amount: int | None, findings: list[AuditException], kept: bool, error: str | None
 ) -> None:
-    """建议 misstatement 而无草稿, 不建议却给了, 或金额 (口径同 A6 的草稿) 对不上第一轮给出的行与该判断解释的例外:
-    草稿不写回, 问题记进 errors; 都不判失败. 对上则保留."""
+    """建议 misstatement 而无草稿, 不建议 (或没给建议动作) 却给了, 或金额 (口径同 A6 的草稿, 按绝对值) 对不上第一轮
+    给出的行与该判断解释的例外: 草稿不写回, 问题记进 notes, 不进推理链的 errors; 都不判失败. 对上则保留."""
     output = critic_output(action, amount)
     report = await critic_check(output, findings)
     assert report.level_failed is None
     assert report.output.misstatement_draft == (output.misstatement_draft if kept else None)
     assert report.output.proposed_action is action
-    draft_errors = [e for e in report.errors if "错报" in e]
-    assert draft_errors[0].startswith(error) if error else draft_errors == [], report.errors
+    assert [n for n in report.notes if n.startswith(error)] if error else report.notes == [], report.notes
+    assert not [e for e in report.errors if "草稿" in e], report.errors
+
+
+async def test_critic_draft_not_checked_when_collab_off() -> None:
+    """功能 collab 关闭时不核对草稿 (第 1 轮审核 R150-04): 对不上的金额与不该给的草稿都不记问题."""
+    for output in (critic_output(ProposedAction.misstatement, 4000000), critic_output(ProposedAction.close, 5000000)):
+        report = await critic_check(output, drafts=False)
+        assert (report.level_failed, report.notes) == (None, [])
 
 
 def test_old_critic_output_without_new_keys_parses() -> None:

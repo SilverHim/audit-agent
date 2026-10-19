@@ -120,13 +120,13 @@ async def open_review_tasks(s: Started, query: GraphStateQuery) -> list[Any]:
     return [item["task_id"] for item in found.data["items"] if item["type"] == "review_task"]
 
 
-def r1_errors(s: Started, subject: str = "BA-01") -> list[str]:
-    """该判断对象独立复核第一轮的 llm_call 留痕记下的问题."""
+def r1_notes(s: Started, subject: str = "BA-01") -> list[str]:
+    """该判断对象独立复核第一轮的 llm_call 留痕记下的草稿问题 (notes, 与推理链的 errors 分开)."""
     [call] = [
         e for e in trail_of(s).entries if e.kind is TrailKind.llm_call and e.payload["fixture_key"] == f"{subject}-r1"
     ]
-    errors: list[str] = call.payload["errors"]
-    return errors
+    notes: list[str] = call.payload["notes"]
+    return notes
 
 
 async def assert_not_written(s: Started, decision: Any, code: str, detail: str | None = None) -> None:
@@ -166,7 +166,8 @@ async def proposal_and_checks(on: Started, before: Judgment) -> None:
 
     验收 2: 争议变体第一轮建议 misstatement, 草稿 {factual, Cash, Cutoff, 5000000, overstated} (等于 CR-SI-2026-0547-1
     的借方, 也等于 X-CSH-05-1-B01-1 的绝对值) 写回判断, 第一轮留痕没有草稿的问题.
-    验收 3, 4 经接口: review-tasks 的争议目标带这两项 (前端争议卡与预填用); POST review-records 咨询过而没写记录报 422
+    验收 3, 4 经接口: review-tasks 的争议目标带这两项 (前端争议卡与预填用), 争议任务带各仲裁的草稿规则 draft_rules;
+    POST review-records 咨询过而没写记录报 422
     MISSING_FIELD. 验收 4 (a)(b) 用写回的真实数据: A6 建议 close 时 a6_upheld 带草稿被拒, A7 建议错报时 a7_upheld
     不带草稿被拒. 各条的取值组合见 test_review_decisions 的纯函数测试.
     验收 6, 9 的效果 (纯函数 dispute_effects, 带草稿的 a7_upheld 由仲裁实际走): a7_upheld 不带草稿时 -H1 的建议动作取
@@ -176,15 +177,22 @@ async def proposal_and_checks(on: Started, before: Judgment) -> None:
         ProposedAction.misstatement,
         CASH_DRAFT,
     )
-    assert not [e for e in r1_errors(on) if "错报" in e]
+    assert r1_notes(on) == []
 
     draft = CASH_DRAFT.model_dump(mode="json")
     url = f"/api/v1/engagements/{EID}"
     rows = list(on.output_store.rows)
     async with api_client(on.runner) as client:
         tasks = (await client.get(f"{url}/review-tasks", params={"status": "pending"})).json()
-        [target] = [view["target"] for view in tasks if view["task"]["id"] == TASK]
+        [dispute] = [view for view in tasks if view["task"]["id"] == TASK]
+        target = dispute["target"]
         assert (target["critic_proposed_action"], target["critic_misstatement_draft"]) == ("misstatement", draft)
+        # 前端按它显示 "同时登记错报" 一项 (与校验同一规则; 第 1 轮审核 R150-01)
+        assert dispute["draft_rules"] == {"a6_upheld": "hidden", "a7_upheld": "required", "neither": "optional"}
+        # 只有争议任务给 (第 2 轮审核 R150-06): REV-03 的普通复核任务为空, 防对全部仲裁取规则
+        assert {view["task"]["id"]: view["draft_rules"] for view in tasks if view["task"]["id"] != TASK} == {
+            task_id: {} for task_id in REV03
+        }
         body = {
             "task_id": TASK,
             "target_version": 1,
@@ -231,7 +239,7 @@ async def proposal_and_checks(on: Started, before: Judgment) -> None:
 async def a7_adopted(on: Started, before: Judgment) -> None:
     """R150 验收 6 (a7_upheld 带草稿与咨询 D-ARB 之后): 建 -H1 (建议 misstatement, 草稿为记录的, 结论, 推理链与留痕
     取复核的, critic_verdict not_applicable, confirmed), M-D-ARB 记 -H1, 原判断 v2 overridden, decision 留痕与存下的
-    记录带咨询两项."""
+    记录带咨询两项 (记录去首尾空白)."""
     new = await on.output_store.get(EID, Judgment, f"{JID}-H1")
     assert (new.proposed_action, new.misstatement_draft) == (ProposedAction.misstatement, CASH_DRAFT)
     assert (new.conclusion, new.reasoning_chain, new.trail_ref) == (
@@ -270,9 +278,9 @@ async def test_dispute_on_and_off() -> None:
     await in_dispute_and_listed_first(on, query)
     before = await on.output_store.get(EID, Judgment, JID)
     await proposal_and_checks(on, before)
-    a7 = resolve(
-        DisputeResolution.a7_upheld, misstatement_draft=CASH_DRAFT, consulted=True, consultation_record=CONSULT
-    )
+    # 记录带首尾空白: 存与留痕时去掉 (a7_adopted 按 CONSULT 核对)
+    record = f"  {CONSULT}\n"
+    a7 = resolve(DisputeResolution.a7_upheld, misstatement_draft=CASH_DRAFT, consulted=True, consultation_record=record)
     await on.submit.submit(EID, a7)
     await wait_idle(on.runner, EID)
     assert on.runner.run_error(EID) is None
@@ -286,6 +294,9 @@ async def test_dispute_on_and_off() -> None:
     assert await open_review_tasks(off, query) == [*REV03, TASK]
     j = await off.output_store.get(EID, Judgment, JID)
     assert (j.critic_proposed_action, j.critic_misstatement_draft) == (None, None)
+    async with api_client(off.runner) as client:
+        tasks = (await client.get(f"/api/v1/engagements/{EID}/review-tasks", params={"status": "pending"})).json()
+    assert [view["draft_rules"] for view in tasks if view["task"]["id"] == TASK] == [{}]  # 关闭时不给, 草稿两可
     await off.submit.submit(EID, resolve(DisputeResolution.a6_upheld, misstatement_draft=CASH_DRAFT, consulted=True))
     await wait_idle(off.runner, EID)
     assert off.runner.run_error(EID) is None
@@ -301,7 +312,8 @@ async def test_drafts_with_rev02_at_l3_and_untraceable_critic_amount(tmp_path: P
     覆盖 R150 两个要另造数据的场景.
 
     验收 2: BA-01 复核方的草稿金额对不上 (不是给出的行, 两行之差或该判断解释的例外的金额): critic_misstatement_draft
-    为空, critic_proposed_action 仍为 misstatement, 问题写进第一轮 llm_call 留痕的 errors; 不判失败, 仍为争议.
+    为空, critic_proposed_action 仍为 misstatement, 问题写进第一轮 llm_call 留痕的 notes (与推理链的 errors 分开);
+    不判失败, 仍为争议.
     验收 4 (a), 5: A6 对 SI-2026-0612 建议 misstatement, 草稿 {factual, Revenue, Cutoff, 14200000, overstated}, 推理链
     另有一步 assumption 而命中复核, A7 判 inconsistent, 建争议任务 T-J-REV-02-1-SI-2026-0612-v1. a6_upheld 不带草稿被拒
     (MISSING_FIELD); 带该草稿 (D-ARB-A6): 原判断 v2 confirmed, 建 M-D-ARB-A6 (judgment_id 原判断, review_record_id
@@ -328,7 +340,7 @@ async def test_drafts_with_rev02_at_l3_and_untraceable_critic_amount(tmp_path: P
         ProposedAction.misstatement,
         None,
     )
-    assert [e for e in r1_errors(s) if e.startswith("独立复核的错报金额 4000000")]
+    assert [e for e in r1_notes(s) if e.startswith("独立复核的错报金额 4000000")]
 
     for decision in REVIEWS[:3]:  # REV-03 确认后 REV-02 才派发
         await s.submit.submit(EID, decision)

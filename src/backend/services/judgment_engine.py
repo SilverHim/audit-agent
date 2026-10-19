@@ -476,9 +476,10 @@ class OutputValidator:
 
     async def _critic(
         self, eid: str, output: CriticIndependent, ctx: ValidationContext
-    ) -> tuple[CriticIndependent, list[int], list[str]]:
+    ) -> tuple[CriticIndependent, list[int], list[str], list[str]]:
         """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页),
-        否则该步不受支持. 返回 (改写指针后的输出, 不受支持的步骤, 错误)."""
+        否则该步不受支持. ctx.critic_drafts 为真 (功能 collab) 时另核对错报草稿 (_critic_draft), 其问题与推理链的
+        分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题)."""
         resolver = PointerResolver(self, eid)
         allowed = {evidence_key(p) for p in ctx.allowed_evidence or []}
         errors: list[str] = []
@@ -495,24 +496,28 @@ class OutputValidator:
             steps.append(step.model_copy(update={"evidence": pointers}))
             if not ok:
                 unsupported.append(i)
-        draft, draft_errors = await self._critic_draft(resolver, output, ctx)
+        draft, draft_notes = output.misstatement_draft, list[str]()
+        if ctx.critic_drafts:
+            draft, draft_notes = await self._critic_draft(resolver, output, ctx)
         checked = output.model_copy(update={"reasoning_chain": steps, "misstatement_draft": draft})
-        return checked, unsupported, errors + chain_semantics(steps) + draft_errors
+        return checked, unsupported, errors + chain_semantics(steps), draft_notes
 
     async def _critic_draft(
         self, resolver: PointerResolver, output: CriticIndependent, ctx: ValidationContext
     ) -> tuple[MisstatementDraft | None, list[str]]:
         """独立复核第一轮的错报草稿 (需求 R150, 只记不判失败): 建议 misstatement 而没有草稿, 不建议 misstatement 却给了
         草稿, 或草稿金额 (绝对值) 不在 A6 草稿的同一口径内 (supported_amounts: 第一轮给出的数据行, 即
-        ctx.allowed_evidence 中的行指针的金额, 两行之差, 该判断解释的例外 ctx.rule_findings 的金额) 时记错误,
-        草稿不写回. 返回 (写回的草稿, 错误)."""
+        ctx.allowed_evidence 中的行指针的金额, 两行之差, 该判断解释的例外 ctx.rule_findings 的金额) 时记问题,
+        草稿不写回. 返回 (写回的草稿, 问题)."""
         md = output.misstatement_draft
         if output.proposed_action is ProposedAction.misstatement and md is None:
             return None, ["独立复核建议认定错报, 但没有错报草稿"]
         if md is None:
             return None, []
+        if output.proposed_action is None:
+            return None, ["独立复核没有给建议动作, 却给了错报草稿, 草稿不采用"]
         if output.proposed_action is not ProposedAction.misstatement:
-            return None, [f"独立复核建议 {output.proposed_action}, 却给了错报草稿, 草稿不采用"]
+            return None, [f"独立复核建议 {output.proposed_action.value}, 却给了错报草稿, 草稿不采用"]
         rows = []
         for p in ctx.allowed_evidence or []:
             if p.source_type in ROW_EVIDENCE:
@@ -590,10 +595,10 @@ async def check_report(
 async def check_critic(
     validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
 ) -> CheckResult:
-    """独立复核第一轮: 引用与语义问题只记下, 不判失败; 推理链照存, 仲裁时 critic_chain_ok 据此不提供 a7_upheld.
-    错报草稿的问题同样只记下, 草稿不写回 (见 _critic_draft)."""
-    checked, unsupported, errors = await validator._critic(eid, output, ctx)
-    return CheckResult(checked, None, unsupported, errors)
+    """独立复核第一轮: 引用与语义问题只记进 errors, 不判失败; 推理链照存, 仲裁时 critic_chain_ok 据此不提供
+    a7_upheld. 错报草稿的问题 (功能 collab 打开时才核对) 记进 notes, 与推理链的分开, 草稿不写回 (见 _critic_draft)."""
+    checked, unsupported, errors, notes = await validator._critic(eid, output, ctx)
+    return CheckResult(checked, None, unsupported, errors, notes)
 
 
 async def structure_only(

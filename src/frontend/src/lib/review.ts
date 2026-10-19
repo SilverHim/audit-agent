@@ -153,19 +153,12 @@ export function sideProposal(judgment: JudgmentView | null, side: DisputeSide): 
   return { action: judgment.critic_proposed_action ?? null, draft: judgment.critic_misstatement_draft ?? null }
 }
 
-// 仲裁时 "同时登记错报" 这一项 (功能 collab 打开时, 同后端 check_dispute_draft): 采纳的一方建议错报为 required
-// (自动勾选, 不能取消), 建议其他动作为 hidden (不显示, 不带草稿); 该方没给建议, 选 neither 或 collab 关闭时 optional
+// 仲裁时 "同时登记错报" 这一项只按后端给的规则 (ReviewTaskView.draft_rules, 与后端校验 check_dispute_draft
+// 同一函数): required 自动勾选, 不能取消; hidden 不显示, 不带草稿; optional 与没给规则 (如 collab 关闭) 两可
 export type AttachRule = 'required' | 'hidden' | 'optional'
 
-export function attachRule(
-  judgment: JudgmentView | null,
-  choice: DisputeResolution | null,
-  collab: boolean,
-): AttachRule {
-  if (!collab || (choice !== 'a6_upheld' && choice !== 'a7_upheld')) return 'optional'
-  const { action } = sideProposal(judgment, choice === 'a6_upheld' ? 'a6' : 'a7')
-  if (action == null) return 'optional'
-  return action === 'misstatement' ? 'required' : 'hidden'
+export function attachRule(view: ReviewTaskView, choice: DisputeResolution | null): AttachRule {
+  return (choice ? view.draft_rules?.[choice] : undefined) ?? 'optional'
 }
 
 export type DisputeInput = {
@@ -173,10 +166,10 @@ export type DisputeInput = {
   attach: boolean // 审计师勾了 "同时登记错报" (attachRule 为 optional 时才看)
   consulted: boolean
   consultation: string
-  collab: boolean
+  collab: boolean // 项目开了 collab: 才有咨询两项
 }
 
-// 仲裁的请求体; 缺必填时返回错误文案. collab 关闭时不带咨询字段, 错报草稿只看勾选 (同 collab 之前)
+// 仲裁的请求体; 缺必填时返回错误文案. 错报草稿按 attachRule; collab 关闭时不带咨询字段
 export function buildDisputeRecord(
   view: ReviewTaskView,
   input: ReviewDraft,
@@ -187,8 +180,7 @@ export function buildDisputeRecord(
   const conclusion = input.conclusion.trim()
   if (!reason) return t.errors.reasonRequired
   if (dispute.choice === 'neither' && !conclusion) return t.errors.conclusionRequired
-  const judgment = isJudgment(view.target) ? view.target : null
-  const rule = attachRule(judgment, dispute.choice, dispute.collab)
+  const rule = attachRule(view, dispute.choice)
   const attached = rule === 'required' || (rule === 'optional' && dispute.attach) ? misstatementDraft(input, t) : null
   if (typeof attached === 'string') return attached
   const consultation = dispute.consultation.trim()

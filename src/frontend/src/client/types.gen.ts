@@ -3606,6 +3606,12 @@ export type ReviewTaskView = {
      * Allowed Resolutions
      */
     allowed_resolutions?: Array<DisputeResolution>;
+    /**
+     * Draft Rules
+     */
+    draft_rules?: {
+        [key in DisputeResolution]?: 'required' | 'hidden' | 'optional';
+    };
 };
 
 /**

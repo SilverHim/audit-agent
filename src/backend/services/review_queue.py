@@ -11,6 +11,7 @@ from backend.contracts.models import (
     CriticVerdict,
     Decision,
     DisputeResolution,
+    DraftRule,
     EvidencePointer,
     ExceptionDisposition,
     Judgment,
@@ -158,6 +159,22 @@ def review_tier(
     return ReviewTier.read_reasoning
 
 
+def draft_rule(target: Judgment | JudgmentView, resolution: DisputeResolution) -> DraftRule:
+    """仲裁 resolution 时错报草稿的规则 (功能 collab, 需求 R150): a6_upheld 看原判断的 proposed_action, a7_upheld 看
+    critic_proposed_action; 该方建议 misstatement 为 required, 建议其他动作为 hidden, 没给建议动作 (collab 之前的
+    判断) 为 optional; neither 为 optional (审计师可自行认定). 校验 (decisions.check_dispute_draft) 与复核队列
+    (ReviewQueue.draft_rules) 共用. 纯函数."""
+    if resolution is DisputeResolution.a6_upheld:
+        proposed = target.proposed_action
+    elif resolution is DisputeResolution.a7_upheld:
+        proposed = target.critic_proposed_action
+    else:
+        return "optional"
+    if proposed is None:
+        return "optional"
+    return "required" if proposed is ProposedAction.misstatement else "hidden"
+
+
 class ReviewQueue:
     """复核队列: 判定哪些结果需要人, 建复核任务, 给出每类任务允许的决定.
 
@@ -207,6 +224,16 @@ class ReviewQueue:
         chain = target.critic_reasoning_chain
         a7 = [DisputeResolution.a7_upheld] if chain is not None and critic_chain_ok(chain) else []
         return [DisputeResolution.a6_upheld, *a7, DisputeResolution.neither]
+
+    @staticmethod
+    def draft_rules(
+        task: ReviewTask, target: Shown | AuditException | ProcedureRun, collab: bool
+    ) -> dict[DisputeResolution, DraftRule]:
+        """争议任务每种可选仲裁的错报草稿规则 (draft_rule), 功能 collab 打开时才给 (关闭时草稿两可, 同 collab 之前);
+        不是争议任务为空. 复核队列给前端, 前端据此显示 "同时登记错报" 一项, 不自己推."""
+        if not collab or not isinstance(target, Judgment | JudgmentView):
+            return {}
+        return {r: draft_rule(target, r) for r in ReviewQueue.resolutions(task, target)}
 
     def make_task(
         self,

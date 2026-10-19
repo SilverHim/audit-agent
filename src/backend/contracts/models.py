@@ -205,6 +205,11 @@ class DisputeResolution(StrEnum):
     neither = "neither"  # 都不采用, 由 neither_action 决定怎么办
 
 
+# 仲裁时错报草稿随采纳的一方 (功能 collab, 需求 R150): 该方建议错报须带 (required), 建议其他动作不能带 (hidden),
+# 该方没给建议动作与 neither 两可 (optional). services.review_queue.draft_rule 定, 校验与复核队列共用
+DraftRule = Literal["required", "hidden", "optional"]
+
+
 class NeitherAction(StrEnum):
     """仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做."""
 

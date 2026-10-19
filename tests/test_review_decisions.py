@@ -39,7 +39,9 @@ from backend.orchestration.decisions import (
     check_consultation,
     check_dispute_draft,
     human_judgment_id,
+    kept_consultation,
     recompute_procedure,
+    review_trail,
 )
 from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
@@ -991,3 +993,27 @@ def test_consultation_fields(decision: ReviewRecord, code: str | None, message: 
     assert e.value.code == code
     if message is not None:
         assert e.value.message == message
+
+
+@pytest.mark.parametrize(
+    ("consulted", "text", "kept", "trailed"),
+    [
+        (True, "  技术合伙人: 同意  ", "技术合伙人: 同意", True),  # 去首尾空白
+        (True, None, None, True),  # collab 关闭时咨询过而没写记录也收 (不校验), 留痕照记咨询过
+        (False, "技术合伙人", None, False),  # collab 关闭时没咨询却写了记录: 不存, 不进留痕
+        (False, "   ", None, False),  # 全空白的也不存 (collab 打开时 check_consultation 照收)
+    ],
+)
+def test_consultation_kept_and_trailed_only_when_consulted(
+    consulted: bool, text: str | None, kept: str | None, trailed: bool
+) -> None:
+    """第 1 轮审核 R150-03: 存下的咨询记录 consulted 为真时去首尾空白, 为假时不存; decision 留痕只在 consulted 为真
+    时带这两项, 未经 kept_consultation 的记录也一样 (防留痕只看有没有记录)."""
+    raw = arbitration(DisputeResolution.a6_upheld, consulted=consulted, consultation_record=text)
+    decision = kept_consultation(raw)
+    assert (decision.consulted, decision.consultation_record) == (consulted, kept)
+    task = ReviewTask.model_construct(id=DISPUTE, procedure_id="CSH-02")
+    assert ("consultation_record" in review_trail(EID, raw, task, []).payload) is trailed
+    payload = review_trail(EID, decision, task, []).payload
+    expected = {"consulted": True, "consultation_record": kept} if trailed else {}
+    assert {k: payload[k] for k in ("consulted", "consultation_record") if k in payload} == expected

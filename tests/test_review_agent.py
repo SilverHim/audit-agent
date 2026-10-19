@@ -422,9 +422,15 @@ async def test_collab_records_main_and_keeps_trigger_when_review_incomplete() ->
     assert (j.critic_verdict, j.critic_trigger) == (CriticVerdict.not_applicable, CriticTrigger.main)
 
 
+def first_round(x: Xero) -> Any:
+    """最近一次独立复核第一轮的 llm_call 留痕."""
+    return [e for e in x.trail.entries if e.kind is TrailKind.llm_call and e.payload["fixture_key"].endswith("-r1")][-1]
+
+
 async def test_collab_critic_draft_amount_may_come_from_explained_exceptions() -> None:
     """R150 验收 2: 复核方建议错报, 草稿金额只等于该判断解释的例外的金额 (不是给出的发票行, 分录行的金额,
-    也不是两行之差): 传入例外时写回草稿; 不传时草稿不写回, critic_proposed_action 照写. collab 关闭时两项都不写回."""
+    也不是两行之差): 传入例外时写回草稿; 不传时草稿不写回, critic_proposed_action 照写, 问题记进第一轮留痕的
+    notes. collab 关闭时两项都不写回, 也不核对草稿, 留痕不记 "草稿不采用" (第 1 轮审核 R150-04)."""
     x = Xero(features=COLLAB)
     amount = 1234567
     explained = numbat_rev08_exception(make_run("REV-02")).model_copy(update={"amount_cents": -amount})
@@ -443,13 +449,36 @@ async def test_collab_critic_draft_amount_may_come_from_explained_exceptions() -
     assert j.critic_misstatement_draft is not None and j.critic_misstatement_draft.amount_cents == amount
     j = await x.agent(review()).review(x.ctx, closing)
     assert (j.critic_proposed_action, j.critic_misstatement_draft) == (ProposedAction.misstatement, None)
+    [note] = first_round(x).payload["notes"]
+    assert note.startswith("独立复核的错报金额 1234567 不等于"), note
     x.features = BASELINE
-    j = await x.agent(review()).review(x.ctx, closing, [explained])
+    j = await x.agent(review()).review(x.ctx, closing)
     assert (j.critic_verdict, j.critic_proposed_action, j.critic_misstatement_draft) == (
         CriticVerdict.inconsistent,
         None,
         None,
     )
+    assert first_round(x).payload["notes"] == []
+
+
+async def test_consistent_with_invalid_chain_reason_leaves_out_draft_problems() -> None:
+    """第 1 轮审核 R150-04: 判一致而独立推理链无效 (not_applicable) 时, critic_reason 只写推理链的问题, 不混进草稿的
+    问题 (草稿金额对不上, 记在 notes)."""
+    x = Xero(features=COLLAB)
+    chain = [{"kind": "inference", "text": "So it is fine.", "evidence": [], "from_steps": [3]}]
+    draft = {
+        "type": "factual",
+        "account": "Revenue",
+        "assertion": "Cutoff",
+        "amount_cents": 4321,
+        "direction": "overstated",
+    }
+    first = json.loads(x.independent(chain)) | {"proposed_action": "misstatement", "misstatement_draft": draft}
+    review = scripted(x.invoice.id, [json.dumps(first)], [verdict("consistent")])
+    j = await x.agent(review).review(x.ctx, x.judgment())
+    assert j.critic_verdict is CriticVerdict.not_applicable
+    assert "推理链" in (j.critic_reason or "") and "草稿" not in (j.critic_reason or "")
+    assert [n for n in first_round(x).payload["notes"] if "草稿不采用" in n]
 
 
 def test_trigger_order_and_sample() -> None:

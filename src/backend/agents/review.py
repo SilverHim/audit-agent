@@ -192,7 +192,9 @@ class ReviewAgent(ProcedureAgent[None]):
                 "items": items,
                 "standards": engine.standards(ctx.template),
             },
-            ValidationContext(allowed_evidence=allowed, rule_findings=list(findings)),
+            ValidationContext(
+                allowed_evidence=allowed, rule_findings=list(findings), critic_drafts=COLLAB in self.deps.features
+            ),
             self.agent_id,
             f"{subject}-r1",
             llm=llm,

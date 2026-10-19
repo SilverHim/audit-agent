@@ -462,20 +462,21 @@ export function ReviewDecisionCard({
   const [withMisstatement, setWithMisstatement] = useState(false)
   const [consulted, setConsulted] = useState(false)
   const [consultation, setConsultation] = useState('')
-  // 项目开了智能体协作 (功能 collab) 时仲裁表单按两方的建议给错报项, 另可记系统外咨询; 关闭时照原样
+  // 项目开了智能体协作 (功能 collab) 时争议卡并排显示两方的建议, 另可记系统外咨询; 关闭时照原样.
+  // "同时登记错报" 一项只按后端给的 draft_rules (attachRule), 不看 collab
   const collab = useOverview(eid)?.features?.includes('collab') ?? false
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
   const isDispute = (decision as string | null) === 'dispute_resolution'
   const collabDispute = isDispute && collab
-  const rule = isDispute ? attachRule(judgment, dispute, collab) : 'optional'
+  const rule = isDispute ? attachRule(view, dispute) : 'optional'
   const attaching = rule === 'required' || (rule === 'optional' && withMisstatement)
 
   const choose = (choice: DisputeChoice) => {
     setDispute(choice)
     // 采纳的一方建议错报: 草稿框按该方的草稿预填, 可改
-    if (attachRule(judgment, choice, collab) !== 'required') return
+    if (attachRule(view, choice) !== 'required') return
     const proposed = sideProposal(judgment, choice === 'a6_upheld' ? 'a6' : 'a7').draft
     if (proposed) setDraft((current) => draftFromMisstatement(current, proposed))
   }

@@ -15,6 +15,7 @@ from backend.contracts.models import (
     DeclaredParty,
     DisputeResolution,
     DocumentType,
+    DraftRule,
     Fees,
     GateDecision,
     GateEdit,
@@ -234,6 +235,8 @@ class ReviewTaskView(Model):
     tier: ReviewTier  # 复核档位, 按金额绝对值与置信度判定 (services.review_queue.review_tier)
     # 争议任务可选的仲裁结果 (独立复核的推理链无效时没有 a7_upheld); 其余任务为空
     allowed_resolutions: list[DisputeResolution] = []
+    # 各可选仲裁的错报草稿规则 (功能 collab 打开时的争议任务, ReviewQueue.draft_rules, 与校验同一规则); 其余为空
+    draft_rules: dict[DisputeResolution, DraftRule] = {}
 
 
 class ProcedureDetail(Model):
