@@ -143,17 +143,50 @@ function PercentInput({
   )
 }
 
+type FluctuationBasis = 'balance_sheet' | 'profit_or_loss'
+
+// PLN-07 A01 的波动 (输出列见 PLN-07.yaml): 比较基数 opening 为资产负债类的期初 (含留存收益的结转) 或损益类的上期,
+// 变动率 change 相对它, 基数为 0 时为空; 只在一期出现的科目, 另一期的余额为空 (显示 "—")
+function FluctuationDetail({
+  account,
+  basis,
+  opening,
+  current,
+  change,
+}: {
+  account: string
+  basis: FluctuationBasis
+  opening: number
+  current: number | null
+  change: number | null
+}) {
+  const { t } = useI18n()
+  const labels = t.planning.fluctuation
+  return (
+    <span className="text-secondary-foreground">
+      <span lang="en">{account}</span> · {labels.basis[basis]}: <Code>{formatAud(opening)}</Code> → {labels.current}:{' '}
+      <Code>{formatAud(current)}</Code> (
+      {change === null ? labels.zeroBase[basis] : `${change > 0 ? '+' : ''}${(change * 100).toFixed(1)}%`})
+    </span>
+  )
+}
+
 function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
-  const account = detail.account_name
-  const current = detail.current_cents
-  const prior = detail.prior_cents
-  const change = Number(detail.change_pct)
-  if (typeof account === 'string' && typeof current === 'number' && typeof prior === 'number') {
+  const { account_name: account, basis, opening_cents: opening, current_cents: current, change_pct: change } = detail
+  if (
+    typeof account === 'string' &&
+    typeof opening === 'number' &&
+    (basis === 'balance_sheet' || basis === 'profit_or_loss')
+  ) {
+    const ratio = change == null ? Number.NaN : Number(change) // numeric 列可能序列化为字符串
     return (
-      <span className="text-secondary-foreground" lang="en">
-        {account}: <Code>{formatAud(prior)}</Code> → <Code>{formatAud(current)}</Code>
-        {Number.isFinite(change) ? ` (${change > 0 ? '+' : ''}${(change * 100).toFixed(1)}%)` : ''}
-      </span>
+      <FluctuationDetail
+        account={account}
+        basis={basis}
+        opening={opening}
+        current={typeof current === 'number' ? current : null}
+        change={Number.isFinite(ratio) ? ratio : null}
+      />
     )
   }
   // 有的规则 (如 ACC-04) 例外没有明细, 空的不显示

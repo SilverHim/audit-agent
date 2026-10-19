@@ -614,7 +614,7 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 | REV-02 提示词 | 判断 "控制权按合同约定的转移事件 (签收, 验收或服务完成) 转移的期间"; 没有挂合同时按发运或服务完成记录判断; 说明 delivery_notes 两个日期在服务业务中的含义 | mock 不变; live 回归待跑 |
 | REV-02 上下文 | data 加 `journal_lines`: 发票 journal_entry_id 所在分录的全部行, 每行带 source_type journal_entry, 进入 supported_amounts; 这样不含税的收入行金额可作错报金额 | Numbat 的 SJ-2026-0612 分录行可被引用, 原 fixture 金额 14200000 仍有依据 |
 | REV-08 R03 | 匹配条件在原 "参考号包含发票号" 之外, 只对 "字母前缀加纯数字" 的发票号 (正则 `^[A-Za-z]+[0-9]+$`) 补一条: 参考号里出现该发票号的数字串, 且前后都不是数字 (SQL 写法见表下) | Numbat 发票号带连字符, 不触发新条件, 变化为 0 |
-| PLN-07 A01 | 只比资产负债类 (asset, liability, equity), 本期末对期初; 期初 = 上期末余额, 上期损益按 retained_earnings 分类结转. 门槛改为参数 `min_change_revenue_pct: 0.005` (本期收入乘以它) 且变动不小于期初绝对值的 `change_pct` 20%; 本期与上期长度相同时损益类照旧比较, 长度不同时不比. 上期长度 = prior_end 减 `dataset.prior_period_start` (5.2 节); 表里只有 prior_end, 没有上期起始日, 所以由数据集声明给出, 缺省视为与本期等长 | Numbat 收入 12,014,000, 门槛 60,070, 仍只命中 1100 (52500000) |
+| PLN-07 A01 | 只比资产负债类 (asset, liability, equity), 本期末对期初; 期初 = 上期末余额, 上期损益按 retained_earnings 分类结转. 门槛改为参数 `min_change_revenue_pct: 0.005` (本期收入乘以它) 且变动不小于期初绝对值的 `change_pct` 20%; 本期与上期长度相同时损益类照旧比较, 长度不同时不比. 上期长度 = prior_end 减 `dataset.prior_period_start` (5.2 节); 表里只有 prior_end, 没有上期起始日, 所以由数据集声明给出, 缺省视为与本期等长 | Numbat 收入只算 revenue 分类 (4200 利息按名称归为 other_income, 不计入) 12,000,000.00, 门槛 60,000.00, 仍只命中 1100 (52500000) |
 | PLN-07 新增 A03 | 月度趋势, emit rows: 本期内按月的收入类, 费用类合计与员工费用类, 来自 journal_entries; 不出例外 | Numbat 多 12 行数据, NUMBAT 预置 rows 要补 |
 
 REV-08 R03 的匹配条件 (Postgres):

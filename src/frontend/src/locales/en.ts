@@ -388,6 +388,11 @@ export const en = {
     uncovered: (ids: string) =>
       `No procedure covers these objectives at the current levels: ${ids}. Change a level or send the plan back.`,
     giveReason: (id: string) => `Give a reason for changing ${id}`,
+    fluctuation: {
+      basis: { balance_sheet: 'Balance sheet, opening', profit_or_loss: 'Profit or loss, prior period' },
+      current: 'current',
+      zeroBase: { balance_sheet: 'opening is 0', profit_or_loss: 'prior period is 0' },
+    },
   },
   completion: {
     candidate: 'Candidate opinion',

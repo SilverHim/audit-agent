@@ -55,8 +55,16 @@ def check(root=ROOT / "demo", *, determinism=True):
             -sum(v for c, v in values.items() if kinds[c] in {"revenue", "expense"}),
         ) == expected
     current, prior = balances["current"], balances["prior"]
+    # PLN-07 A01: 资产负债类对期初 (留存收益加上期损益结转), 损益类 (两期等长) 对上期; 门槛为本期收入的 0.5%
+    # 且不小于基数绝对值的 20%. 标准分类按名称归类 (导入时补): 3200 Retained earnings 为 retained_earnings,
+    # 收入类只有 4100 Sales revenue 为 revenue (4200 Interest income 为 other_income)
+    carried = sum(v for c, v in prior.items() if kinds[c] in {"revenue", "expense"})
+    opening = {c: prior[c] + (carried if c == "3200" else 0) for c in current}
+    threshold = 0.005 * -current["4100"]
     assert {
-        c for c, v in current.items() if abs(v - prior[c]) >= 10000000 and abs(v - prior[c]) >= abs(prior[c]) * 0.2
+        c
+        for c, v in current.items()
+        if v != opening[c] and abs(v - opening[c]) >= threshold and abs(v - opening[c]) >= abs(opening[c]) * 0.2
     } == {"1100"}
     entries = defaultdict(list)
     movement = Counter()
