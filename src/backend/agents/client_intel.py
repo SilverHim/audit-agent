@@ -166,8 +166,10 @@ UNAVAILABLE: dict[RegistryReason, str] = {
 }
 
 
-def manual_detail(subject: str, reason: RegistryReason, against: str) -> str:
-    return f"{UNAVAILABLE[reason].format(subject=subject)}; confirm manually against {against}"
+def manual_detail(subject: str, reason: RegistryReason, against: str, unread: int = 0) -> str:
+    """待人工确认的说明: 原因的类别; unread 为已上传而没能读出的 ASIC 摘录份数 (no_extract 时), 不为 0 时写明."""
+    note = f" ({unread} uploaded ASIC extract{'s' if unread > 1 else ''} could not be read)" if unread else ""
+    return f"{UNAVAILABLE[reason].format(subject=subject)}{note}; confirm manually against {against}"
 
 
 def manual_checks(
@@ -359,9 +361,10 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
     ) -> list[RegistryCheck]:
         """新建的客户的 company_registered 与 directors_match (需求 R290), 用 ABN 登记的 ACN 取上传的 ASIC 摘录:
         - ABN 查不到或没有 ACN (不是公司): 不要求摘录, 两项待人工确认, 指针指向 ABN 查询 (locator acn).
-        - 一份可用的摘录都没有 (标了客户无此类资料, 或抽取没成; RegistryUnavailable no_extract): 记一条 "没有查询"
-          的 ASIC 留痕, 两项待人工确认.
-        - 有摘录而 ACN 都对不上: company_registered 不通过, directors_match 待人工确认, 指针指向 ABN 查询.
+        - 没有对得上的可用摘录, 而一份可用的都没有 (标了客户无此类资料, 或抽取没成) 或另有已上传而没能读出的
+          (RegistryUnavailable no_extract, 对得上的那份可能正是没读出的): 记一条 "没有查询" 的 ASIC 留痕, 两项待人工
+          确认, 说明写明没能读出的份数.
+        - 摘录都读出了而 ACN 都对不上: company_registered 不通过, directors_match 待人工确认, 指针指向 ABN 查询.
         - 有该 ACN 的摘录: 两项按摘录判 (check_extract_registered, check_directors), 指针指向摘录文件."""
         acn = abn_record.acn if abn_record is not None else None
         if acn is None:
@@ -377,7 +380,8 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
         except RegistryUnavailable as exc:
             trail_id = await self.record_unavailable(ctx, "ASIC extract", "acn", acn, exc.reason)
             evidence = trail_pointer(trail_id, "available", NOT_QUERIED)
-            return company_pending(manual_detail(f"ACN {acn}", exc.reason, "the ASIC register"), evidence)
+            detail = manual_detail(f"ACN {acn}", exc.reason, "the ASIC register", exc.unread)
+            return company_pending(detail, evidence)
         if extract is None:
             evidence = trail_pointer(abn_trail_id, "acn")
             detail = f"No uploaded ASIC extract for ACN {acn} (from the ABN record)"

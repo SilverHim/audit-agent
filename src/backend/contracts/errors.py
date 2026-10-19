@@ -56,6 +56,7 @@ class RegistryUnavailable(Exception):
     """查不了登记 (没有登记来源, ABN Lookup 未配置, 不可达, 不认可 GUID 或出错): ACC-04 转人工确认. reason 为类别;
     消息只写类别的说明, 不带原始响应 (ABN Lookup 的响应会回显 GUID)."""
 
-    def __init__(self, message: str = "", reason: RegistryReason = "no_source") -> None:
+    def __init__(self, message: str = "", reason: RegistryReason = "no_source", unread: int = 0) -> None:
         super().__init__(message or reason)
         self.reason: RegistryReason = reason
+        self.unread = unread  # no_extract 时: 已上传为 ASIC 摘录而没能读出 (抽取没成) 的份数 (需求 R290)

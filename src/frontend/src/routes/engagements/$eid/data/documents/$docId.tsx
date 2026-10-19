@@ -213,6 +213,15 @@ function registryItems(view: RegistryExtractView, t: Messages, formatDate: (iso:
     candidates,
     edit: { ...base, field, kind, raw, choices },
   })
+  // 只读的登记项 (类别, 子类): 点选跳页, 不能改
+  const readOnly = (field: string, value: string): Item => ({
+    id: field,
+    group: 'fact',
+    label: t.docView.fields[field] ?? field,
+    value,
+    page: pageOf(x.evidence, field),
+    candidates: [value],
+  })
   const missing = t.docView.notStated
   const statusLabel = (value: string) => t.docView.statuses[value] ?? value
   const roleLabel = (value: string) => t.docView.roles[value] ?? value
@@ -229,6 +238,8 @@ function registryItems(view: RegistryExtractView, t: Messages, formatDate: (iso:
       choicesOf(['Registered', 'Deregistered'], x.status, statusLabel),
     ),
     { ...fact('type', x.type, [x.type], x.type), label: t.docView.fields.company_type },
+    readOnly('company_class', x.company_class),
+    readOnly('subclass', x.subclass),
     fact('registered_date', formatDate(x.registered_date), dateForms(x.registered_date), x.registered_date, 'date'),
     x.registered_address
       ? fact('registered_address', x.registered_address, [x.registered_address], x.registered_address)
@@ -268,7 +279,11 @@ function registryItems(view: RegistryExtractView, t: Messages, formatDate: (iso:
     id: `shareholders-${index}`,
     group: 'holder',
     label: t.docView.shareholderKinds[holder.kind] ?? holder.kind,
-    value: `${holder.name} — ${t.docView.holding(holder.shares.toLocaleString('en-AU'), holder.share_class, `${Math.round(holder.pct * 10000) / 100}%`)}`,
+    value: `${holder.name} — ${t.docView.holding(
+      holder.shares.toLocaleString('en-AU'),
+      t.docView.shareClasses[holder.share_class] ?? holder.share_class,
+      `${Math.round(holder.pct * 10000) / 100}%`,
+    )}`,
     page: pageOf(x.evidence, 'shareholders'),
     candidates: [holder.name],
   }))

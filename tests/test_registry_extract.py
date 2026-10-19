@@ -363,9 +363,9 @@ async def test_p0_inputs_waits_and_raises_the_request(
 # ── ACC-04 按摘录核对 (验收 2) ──
 
 
-async def checks_on(versions: list[RegistryExtraction]) -> tuple[ClientIntelAgent, Any]:
+async def checks_on(versions: list[RegistryExtraction], unread: int = 0) -> tuple[ClientIntelAgent, Any]:
     """新客户的 ACC-04 与执行上下文: 摘录 900043030.pdf 已上传 (补登记为 external_original), 抽取版本表依次存下
-    versions (第 1 版记 A3, 其后记审计师的修改)."""
+    versions (第 1 版记 A3, 其后记审计师的修改); 另有 unread 份登记为 ASIC 摘录而没有抽取结果的文件 (没能读出)."""
     financial, data = FakeFinancialStore(), FakeDataStore()
     store = FakeEngagementStore([PROFILE], [NEW_CLIENT])
     registry = composite(store, StaticAbn({ABN: VICTORIA}), financial, data)
@@ -386,7 +386,32 @@ async def checks_on(versions: list[RegistryExtraction]) -> tuple[ClientIntelAgen
         await data.save_extraction(
             EID, REGISTRY_TARGET, DOCUMENT, n, extraction.model_dump(mode="json"), changed_by=actor, field=field
         )
+    for n in range(unread):
+        await evidence.save(
+            EID,
+            f"unread-{n}.pdf",
+            f"%PDF {n}".encode(),
+            type=DocumentType.registry_extract,
+            reliability=Reliability.external_copy,
+        )
     return ClientIntelAgent(deps), make_ctx(deps, engagement=NEW_CLIENT)
+
+
+@pytest.mark.parametrize("unread", [1, 2])
+async def test_unread_extract_turns_the_company_checks_to_manual(unread: int) -> None:
+    """读出的那份摘录是别的公司的 (ACN 900043049), 另有已上传而没能读出的摘录 (对得上的那份可能正是它): 不判
+    "没有这个 ACN 的摘录" 不通过, 公司两项都待人工确认, 不出例外, 说明写明没能读出的份数; 记一条 no_extract 的
+    "没有查询" 留痕."""
+    agent, ctx = await checks_on([fixture_extraction(acn="900043049")], unread=unread)
+    found = await agent.collect_checks(ctx, PROFILE)
+    assert [c.passed for c in found[2:]] == [None, None]
+    plural = "s" if unread > 1 else ""
+    assert f"({unread} uploaded ASIC extract{plural} could not be read)" in found[2].detail
+    patch = await agent.interpret(ctx, Acc04Findings(profile=PROFILE, checks=found))
+    assert patch["exceptions"] == []
+    trail = agent.deps.trail
+    assert isinstance(trail, FakeTrail)
+    assert trail.entries[-1].payload == {"acn": ACN, "available": False, "reason": "no_extract", "result": None}
 
 
 async def test_acc04_reads_the_latest_version_of_an_edited_extract() -> None:

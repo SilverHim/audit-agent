@@ -48,12 +48,17 @@ class UploadedExtracts:
         return sorted(found, key=lambda item: (item[0].uploaded_at, item[0].id))
 
     async def extract(self, eid: str, acn: str) -> AsicExtract | None:
-        """ACN 为 acn 的摘录 (有几份时取最后上传的), 带原件; 有可用的摘录而 ACN 都对不上为 None; 一份可用的都没有
-        抛 RegistryUnavailable (no_extract)."""
+        """ACN 为 acn 的摘录 (有几份时取最后上传的), 带原件. 没有对得上的可用摘录时: 另有已上传而没能读出的摘录
+        (登记为 registry_extract 而没有可用的抽取结果) 或一份可用的都没有, 抛 RegistryUnavailable (no_extract,
+        unread 为没能读出的份数; 对得上的那份可能正是没读出的, ACC-04 两项待人工确认); 都读出了而 ACN 都对不上为
+        None."""
         found = await self.latest(eid)
-        if not found:
-            raise RegistryUnavailable(f"项目 {eid} 没有可用的 ASIC 摘录", reason="no_extract")
+        unread = len(await self.financial.documents(eid, DocumentType.registry_extract)) - len(found)
         matched = [item for item in found if item[1].acn == acn]
+        if not matched and (unread or not found):
+            raise RegistryUnavailable(
+                f"项目 {eid} 没有可用的 ACN {acn} 的 ASIC 摘录", reason="no_extract", unread=unread
+            )
         if not matched:
             return None
         document, extraction = matched[-1]
@@ -81,7 +86,8 @@ class UploadedExtracts:
 class CompositeRegistrySource:
     """RegistrySource 的组装根实现: 按项目有没有数据集分流. 有数据集 (Numbat, Xero) 照旧走 DatasetRegistrySource,
     不发 ABN Lookup 请求. 没有数据集时: abn 走 AbnLookup (查不了抛 RegistryUnavailable, reason 为类别); asic_extract
-    取上传的摘录 (UploadedExtracts; 一份可用的摘录都没有抛 no_extract, ACN 都对不上为 None); asic_company 与
+    取上传的摘录 (UploadedExtracts; 没有对得上的可用摘录而另有没读出的, 或一份可用的都没有, 抛 no_extract; 都读出
+    了而 ACN 都对不上为 None); asic_company 与
     asic_person 抛 RegistryUnavailable (no_source): 新客户的 ACC-04 只调 asic_extract, 不经这两个方法. 项目不存在抛
     LookupError."""
 
