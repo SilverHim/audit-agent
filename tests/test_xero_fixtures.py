@@ -1,9 +1,11 @@
 """Xero 演示的大模型 fixture 守卫 (R78 验收 4 (b) 至 (d)): tests/fixtures/llm_xero/<程序>/<对象>.json. 上传分类
 (DOC-CLASSIFY, 需求 R267) 的 fixture 按文件名主干取, 补造的每份要上传的 PDF 一份, 另有 mock 下 Xero 项目上传的分类.
-document 指针按程序指向对应的补造 PDF (需求 R108, xero_expected_document).
+登记了对应的程序 (fixture_sets.expected_documents), document 指针还须指向对应的补造 PDF (需求 R108,
+xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记.
 
 正本与运行副本 (data/xero_demo/20261017-q1/llm) 相同由 tests/test_knowledge.py 按 FIXTURE_SETS 核对. 这里按集合包含
-断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里. 自测用 tmp 目录造不合格的 fixture.
+断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里 (要核对文件对应的在
+fixture_sets.expected_documents 登记). 自测用 tmp 目录造不合格的 fixture.
 """
 
 import asyncio
@@ -12,7 +14,7 @@ import functools
 import hashlib
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path, PurePath
 from typing import Any
@@ -38,7 +40,7 @@ from tests.fakes import (
     FakeTrail,
     make_runner,
 )
-from tests.fixture_sets import XERO, XERO_DEMO, FixtureSet
+from tests.fixture_sets import XERO, XERO_DEMO, ExpectedDocuments, FixtureSet, expected_documents
 from tests.test_knowledge import document_pointers
 from tests.xero_fakes import xero_tables, xero_uploads
 
@@ -59,32 +61,18 @@ def invoice_contracts() -> dict[str, str]:
     return {r.id: r.contract_id for r in xero_tables()["sales_invoices"] if r.contract_id}
 
 
-def xero_expected_document(procedure_id: str, fixture_key: str) -> str:
-    """Xero fixture 的 document 指针应指向的补造 PDF (相对补造目录, 需求 R108), 同 Numbat 的
-    fixture_sets.numbat_expected_document: DOC-04, REV-03 为该合同; REV-02 为该发票在 contract_links.csv 关联的合同;
-    DOC-06, CSH-02 为该银行账户的回函, 以补造 bank_accounts.csv 的账号命名 (BA-090 → 12345678, BA-091 → 12345679);
-    GEN-09 (A7 复核, 键为 {判断对象}-r1, -r2) 同被复核判断的程序. 别的程序, 或发票没有关联合同时抛 LookupError
-    (这样的 fixture 不应有 document 指针; 新程序的 fixture 要引文件时在这里加上对应)."""
-    if procedure_id == "GEN-09":
-        subject = fixture_key.rsplit("-r", 1)[0]
-        judged_by = {"BA": "CSH-02", "CON": "REV-03", "SI": "REV-02"}.get(subject.split("-")[0])
-        if judged_by is None:
-            raise LookupError(f"GEN-09 的 {fixture_key} 不是复核银行账户, 合同或发票的判断")
-        return xero_expected_document(judged_by, subject)
-    if procedure_id in ("DOC-04", "REV-03"):
-        return f"contracts/{fixture_key}.pdf"
-    if procedure_id == "REV-02":
-        contract = invoice_contracts().get(fixture_key)
-        if contract is None:
-            raise LookupError(f"发票 {fixture_key} 没有关联合同")
-        return f"contracts/{contract}.pdf"
-    if procedure_id in ("DOC-06", "CSH-02"):
-        with (XERO_DEMO / "bank_accounts.csv").open(encoding="utf-8", newline="") as f:
-            accounts = {row["id"]: row["account_no"] for row in csv.DictReader(f)}
-        if fixture_key not in accounts:
-            raise LookupError(f"银行账户 {fixture_key} 不在补造的 bank_accounts.csv 中")
-        return f"confirmations/{accounts[fixture_key]}.pdf"
-    raise LookupError(f"没有登记 {procedure_id} 的 fixture 应指向的文件")
+@functools.cache
+def account_numbers() -> dict[str, str]:
+    """银行账户 ID → 账号 (补造的 bank_accounts.csv; BA-090 → 12345678, BA-091 → 12345679)."""
+    with (XERO_DEMO / "bank_accounts.csv").open(encoding="utf-8", newline="") as f:
+        return {row["id"]: row["account_no"] for row in csv.DictReader(f)}
+
+
+# Xero fixture 的 document 指针应指向的补造 PDF (需求 R108): 同 Numbat 的登记 (fixture_sets.expected_documents), 发票的
+# 合同与账户的账号查补造与快照. 不登记进 FIXTURE_SETS, 只在这里核对
+xero_expected_document = expected_documents(
+    lambda key: invoice_contracts().get(key), lambda key: account_numbers().get(key)
+)
 
 
 def document_id_of(path: Path) -> str:
@@ -120,12 +108,13 @@ def fixture_model(library: ProcedureLibrary, procedure_id: str, fixture_key: str
 def fixture_problems(
     fs: FixtureSet,
     library: ProcedureLibrary = LIBRARY,
-    expected: Callable[[str, str], str] = xero_expected_document,
+    expected: ExpectedDocuments = xero_expected_document,
 ) -> list[str]:
     """不合格的 fixture (只写文件, 程序与指针 ID, 不写内容):
     (b) document 指针的 source_id 须在 manifest.documents 中, 1 ≤ page ≤ page_count, 所指文件类型能作证据
-    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如 financial_statements 不作证据, 判断引报表行); 还须是该程序该对象
-    应指向的文件 (expected 给出补造目录下的路径, 文件 ID 由文件内容算; 抛 LookupError 的不应有 document 指针);
+    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如 financial_statements 不作证据, 判断引报表行); 登记了对应的程序,
+    指针还须指向 expected 给出的文件之一 (补造目录下的路径, 文件 ID 由文件内容算; 每个指错的指针各报一条; 对象没有
+    对应文件, 即抛 LookupError 的, 不应有 document 指针); 没登记的程序只做以上核对;
     (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序或上传分类 (DOC-CLASSIFY), 文件须能按该程序的输出模型解析;
     上传分类的文件名主干 (default 除外) 须是 manifest.documents 中的文件 (按文件名取, 别的名字永远用不上);
     不含邮箱地址. fixture 根不存在或为空时没有问题."""
@@ -152,15 +141,19 @@ def fixture_problems(
             pointers = document_pointers(json.loads(raw))
             if pointers:
                 try:
-                    target = expected(folder.name, path.stem)
+                    targets = expected(folder.name, path.stem)
                 except LookupError as e:
                     problems.append(f"{name}: 不应有 document 指针 ({e})")
                 else:
-                    found = fs.manifest.parent / target
-                    want = document_id_of(found) if found.is_file() else None
-                    problems += [
-                        f"{name}: {p['source_id']} 不是应指向的 {target}" for p in pointers if p["source_id"] != want
-                    ]
+                    if targets is not None:
+                        files = [fs.manifest.parent / t for t in sorted(targets)]
+                        allowed = {document_id_of(f) for f in files if f.is_file()}
+                        wanted = ", ".join(sorted(targets))
+                        problems += [
+                            f"{name}: {p['source_id']} 不是应指向的 {wanted}"
+                            for p in pointers
+                            if p["source_id"] not in allowed
+                        ]
             for pointer in pointers:
                 entry = documents.get(pointer["source_id"])
                 if entry is None:
@@ -195,8 +188,8 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     statements = next(d for d in documents.values() if d["type"] == "financial_statements")
     good = json.loads((get_settings().LLM_FIXTURES_ROOT / "CSH-02" / "BA-01.json").read_text(encoding="utf-8"))
 
-    def to_reply(procedure_id: str, fixture_key: str) -> str:
-        return str(reply["path"])
+    def to_reply(procedure_id: str, fixture_key: str) -> frozenset[str]:
+        return frozenset({str(reply["path"])})
 
     def with_pointer(document_id: str, page: int | None) -> dict[str, Any]:
         """Numbat 的 CSH-02 fixture, 其中每个 document 指针都改成指向 document_id 的第 page 页."""
@@ -254,6 +247,7 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
         ("DOC-06/BA-999", "confirmations/12345678.pdf", "不应有 document 指针"),  # 补造里没有这个账户
         ("GEN-09/BA-091-r1", "confirmations/12345679.pdf", None),  # 复核 CSH-02 的判断, 同 CSH-02
         ("GEN-09/CON-X03-r1", "contracts/CON-X01.pdf", "不是应指向的 contracts/CON-X03.pdf"),
+        ("GEN-09/BT-090-0092-r1", "contracts/CON-X01.pdf", None),  # 前缀没登记对应: 只做通用核对
         pytest.param(  # ORC1026, contract_links.csv 关联 CON-X01
             "REV-02/SI-77b338ef-ecc0-4b95-a0d7-2617b0054611", "contracts/CON-X01.pdf", None, marks=pytest.mark.external
         ),
@@ -273,9 +267,9 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
 )
 def test_documents_follow_the_program(tmp_path: Path, fixture: str, target: str, problem: str | None) -> None:
     """按程序的文档对应 (需求 R108): 取该程序的一份 Numbat fixture, 把 document 指针都改指补造目录的 target (第 1 页,
-    文件 ID 取 manifest): 是该程序该对象应指向的文件时不报, 否则每个指针报一条; 没有对应文件的对象 (账户不在补造里,
-    发票没有关联合同) 报不应有 document 指针. 防 fixture 引了别的合同或别的账户的回函 (页码与类型都合格, 只有这里
-    查得出)."""
+    文件 ID 取 manifest): 是该程序该对象应指向的文件, 或没登记对应时不报, 否则每个指针报一条; 登记了而对象没有对应
+    文件 (账户不在补造里, 发票没有关联合同) 报一条不应有 document 指针. 防 fixture 引了别的合同或别的账户的回函
+    (页码与类型都合格, 只有这里查得出)."""
     procedure_id, key = fixture.split("/")
     template = sorted(
         (get_settings().LLM_FIXTURES_ROOT / procedure_id).glob("*-r1.json" if key.endswith("-r1") else "*.json")
@@ -290,7 +284,32 @@ def test_documents_follow_the_program(tmp_path: Path, fixture: str, target: str,
     if problem is None:
         assert problems == []
     else:
-        assert problems and all(p.startswith(f"{fixture}: ") and problem in p for p in problems), problems
+        count = 1 if problem == "不应有 document 指针" else len(document_pointers(value))
+        assert len(problems) == count and all(p.startswith(f"{fixture}: ") and problem in p for p in problems)
+
+
+def test_unregistered_programs_are_not_checked() -> None:
+    """没登记对应的程序 (如以后的 GEN-04, GEN-06) 与前缀没登记的 GEN-09 对象, 期望文件为 None, 只做通用核对. 防守卫
+    变成封闭的, 后续需求的 fixture 引了文件就不过."""
+    keys = [("GEN-04", "CLIENT-XERO-3C1332BB-Q1"), ("GEN-06", "BT-090-0092"), ("GEN-09", "XJ-580-r1")]
+    assert [xero_expected_document(p, k) for p, k in keys] == [None, None, None]
+
+
+def test_only_the_wrong_pointers_are_reported(tmp_path: Path) -> None:
+    """一份 fixture 里第一个指针指对 (REV-03/CON-X02 指 CON-X02.pdf), 其余指向 CON-X01.pdf: 只报其余的, 各一条.
+    防只核对第一个指针."""
+    template = sorted((get_settings().LLM_FIXTURES_ROOT / "REV-03").glob("*.json"))[0]
+    value: dict[str, Any] = json.loads(template.read_text(encoding="utf-8"))
+    ids = {d["path"]: i for i, d in XERO.documents().items()}
+    pointers = document_pointers(value)
+    for n, pointer in enumerate(pointers):
+        pointer.update(source_id=ids["contracts/CON-X02.pdf" if n == 0 else "contracts/CON-X01.pdf"], page=1)
+    assert len(pointers) > 1
+    write(tmp_path / "llm_xero", "REV-03/CON-X02.json", value)
+    problems = fixture_problems(replace(XERO, fixtures=tmp_path / "llm_xero"))
+    assert problems == [f"REV-03/CON-X02: {ids['contracts/CON-X01.pdf']} 不是应指向的 contracts/CON-X02.pdf"] * (
+        len(pointers) - 1
+    )
 
 
 def test_gen09_second_round_uses_verdict_model() -> None:

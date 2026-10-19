@@ -178,10 +178,15 @@ def test_doc04_fixture_files() -> None:
 
 
 async def test_doc04_in_the_graph_extracts_what_the_upload_would(deps: Any) -> None:
-    """图里的 DOC-04 (IngestAgent) 在只登记了文件而没有合同时 (不经上传, 同数据集载入后的情形) 调 3 次大模型 (mock 读
-    Xero 的运行副本, 文本层取 XeroFakeEvidenceStore), 各一次通过; 抽出的合同即上传时抽的 xero_contracts(), 只差执行
-    ID (RUN-DOC-04-1); 3 份文件交回 extracted (需求 R108 验收 2 的对照). 防上传与图里两条路抽出的合同不一样."""
+    """图里的 DOC-04 (IngestAgent) 在只登记了文件 (合同文件 received) 而没有合同时 (不经上传, 同数据集载入后的情形)
+    调 3 次大模型 (mock 读 Xero 的运行副本, 文本层取 XeroFakeEvidenceStore), 各一次通过, 各 save_contract 一次; 抽出的
+    合同即上传时抽的 xero_contracts(), 只差执行 ID (RUN-DOC-04-1); 3 份文件交回 extracted (需求 R108 验收 2 的对照).
+    防上传与图里两条路抽出的合同不一样."""
     financial = x.xero_financial_store("fieldwork", contracts=False)
+    financial.document_refs = [
+        d.model_copy(update={"status": "received"}) if d.type is DocumentType.contract else d
+        for d in financial.document_refs
+    ]
     trail = FakeTrail()
     graph = x.make_xero_deps(trail=trail, financial_store=financial)
     patch = await IngestAgent(graph).run(make_ctx(graph, "DOC-04", engagement=x.xero_engagement()))
@@ -189,6 +194,7 @@ async def test_doc04_in_the_graph_extracts_what_the_upload_would(deps: Any) -> N
     assert sorted((e.procedure_id, e.payload["fixture_key"], e.payload["attempt"]) for e in calls) == [
         ("DOC-04", cid, 1) for cid in ("CON-X01", "CON-X02", "CON-X03")
     ]
+    assert sorted(financial.save_calls) == ["CON-X01", "CON-X02", "CON-X03"]
     assert sorted(financial.saved_contracts.values(), key=lambda c: c.id) == [
         c.model_copy(update={"extracted_by_run": "RUN-DOC-04-1"}) for c in x.xero_contracts()
     ]

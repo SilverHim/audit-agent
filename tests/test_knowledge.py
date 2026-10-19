@@ -2289,7 +2289,7 @@ def document_pointers(node: Any) -> list[dict[str, Any]]:
 
 def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[str, str, str, int]]]:
     """该数据集测试 fixture 中的 document 指针: 返回 (各 fixture 的指针数, 不合格的指针). 合格: source_id 在 manifest
-    中, 页码在 1 到该 PDF 页数之间; 登记了期望 PDF 函数时还须指向它给出的 PDF."""
+    中, 页码在 1 到该 PDF 页数之间; 登记了期望 PDF 函数且它给出对应时还须指向其中一份."""
     documents = fs.documents()
     checked: dict[str, int] = {}
     wrong = []
@@ -2304,7 +2304,7 @@ def check_document_pointers(fs: FixtureSet) -> tuple[dict[str, int], list[tuple[
             entry = documents.get(p["source_id"])
             if (
                 entry is None
-                or (expected is not None and entry["path"] != expected)
+                or (expected is not None and entry["path"] not in expected)
                 or not isinstance(p.get("page"), int)
                 or not 1 <= p["page"] <= entry["page_count"]
             ):

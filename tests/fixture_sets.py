@@ -21,6 +21,12 @@ UPLOADS = REPO / "tests" / "fixtures" / "llm_variants" / "upload"  # 上传处�
 UPLOAD_RUNTIME = ("DOC-CLASSIFY", "DOC-06", "DOC-SHEET", "DOC-REGISTRY")
 
 
+# 按程序给出 fixture 的 document 指针应指向的文件: (程序, fixture_key) → 允许的 PDF (manifest 中的 path, 一组); 程序没有
+# 登记对应时为 None (只核对指针在 manifest 中且页码不超过页数); 登记了而对象没有对应文件时抛 LookupError (这样的
+# fixture 不应有 document 指针)
+ExpectedDocuments = Callable[[str, str], frozenset[str] | None]
+
+
 @dataclass(frozen=True)
 class FixtureSet:
     """一个数据集的大模型 fixture."""
@@ -30,9 +36,8 @@ class FixtureSet:
     fixtures: Path  # 测试 fixture 根: {程序}/{fixture_key}.json
     runtime: Path  # 运行副本根: 生成脚本从 fixtures 同步, 内容须相同; 不存在时守卫报 "运行副本未生成"
     manifest: Path  # 登记 PDF 的 manifest (documents 段), document 指针须指向其中的文件
-    # (程序, fixture_key) -> document 指针应指向的 PDF (manifest 中的 path);
-    # 为空时只核对指针在 manifest 中且页码不超过页数
-    expected_document: Callable[[str, str], str] | None = None
+    # document 指针应指向的 PDF (见 ExpectedDocuments); 为空时只核对指针在 manifest 中且页码不超过页数
+    expected_document: ExpectedDocuments | None = None
     # 上传文件处理用的固定输出根 ({程序}/{键}.json), 不进主固定输出 (主流程要求主固定输出各用一次); 没有为 None
     uploads: Path | None = None
     uploads_in_runtime: tuple[str, ...] = ()  # uploads 中也须在运行副本里的程序
@@ -50,20 +55,45 @@ def demo_rows(table: str) -> dict[str, dict[str, str]]:
         return {row["id"]: row for row in csv.DictReader(f)}
 
 
-def numbat_expected_document(procedure_id: str, fixture_key: str) -> str:
-    """Numbat fixture 的 document 指针应指向的 PDF (相对 data/demo): DOC-04, REV-03 为该合同; REV-02 为发票关联的合同;
-    DOC-06, CSH-02 为该银行账户的回函, 以账号命名; GEN-09 (A7 复核, 键为 {判断对象}-r1, -r2) 同被复核判断的程序."""
-    if procedure_id == "GEN-09":
-        subject = fixture_key.rsplit("-r", 1)[0]
-        judged_by = {"BA": "CSH-02", "CON": "REV-03", "SI": "REV-02"}[subject.split("-")[0]]
-        return numbat_expected_document(judged_by, subject)
-    if procedure_id in ("DOC-04", "REV-03"):
-        return f"contracts/{fixture_key}.pdf"
-    if procedure_id == "REV-02":
-        return f"contracts/{demo_rows('sales_invoices')[fixture_key]['contract_id']}.pdf"
-    if procedure_id in ("DOC-06", "CSH-02"):
-        return f"confirmations/{demo_rows('bank_accounts')[fixture_key]['account_no']}.pdf"
-    raise LookupError(f"{procedure_id} 的 fixture 不应有 document 指针")
+# GEN-09 (A7 复核, 键为 {判断对象}-r1, -r2) 按判断对象的前缀找被复核判断的程序; 前缀没登记的不核对
+JUDGED_BY = {"BA": "CSH-02", "CON": "REV-03", "SI": "REV-02"}
+
+
+def expected_documents(
+    invoice_contract: Callable[[str], str | None], account_no: Callable[[str], str | None]
+) -> ExpectedDocuments:
+    """数据集的期望 PDF 函数, 各数据集只在两处查表不同: invoice_contract 为销售发票 ID → 关联的合同编号, account_no
+    为银行账户 ID → 账号 (没有时都为 None). 登记的对应: DOC-04, REV-03 为该合同 contracts/{对象}.pdf; REV-02 为发票
+    关联的合同; DOC-06, CSH-02 为该账户的回函 confirmations/{账号}.pdf; GEN-09 同被复核判断的程序 (JUDGED_BY).
+    新程序的 fixture 要核对应时在这里登记 (可给多份文件)."""
+
+    def expected(procedure_id: str, fixture_key: str) -> frozenset[str] | None:
+        if procedure_id == "GEN-09":
+            subject = fixture_key.rsplit("-r", 1)[0]
+            judged_by = JUDGED_BY.get(subject.split("-")[0])
+            return expected(judged_by, subject) if judged_by is not None else None
+        if procedure_id in ("DOC-04", "REV-03"):
+            return frozenset({f"contracts/{fixture_key}.pdf"})
+        if procedure_id == "REV-02":
+            contract = invoice_contract(fixture_key)
+            if contract is None:
+                raise LookupError(f"发票 {fixture_key} 没有关联合同")
+            return frozenset({f"contracts/{contract}.pdf"})
+        if procedure_id in ("DOC-06", "CSH-02"):
+            number = account_no(fixture_key)
+            if number is None:
+                raise LookupError(f"银行账户 {fixture_key} 不在账户表中")
+            return frozenset({f"confirmations/{number}.pdf"})
+        return None
+
+    return expected
+
+
+# Numbat: 发票的合同与账户的账号取 data/demo 的 sales_invoices.csv, bank_accounts.csv
+numbat_expected_document = expected_documents(
+    lambda key: demo_rows("sales_invoices").get(key, {}).get("contract_id") or None,
+    lambda key: demo_rows("bank_accounts").get(key, {}).get("account_no") or None,
+)
 
 
 NUMBAT = FixtureSet(
