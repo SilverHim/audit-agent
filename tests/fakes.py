@@ -108,6 +108,7 @@ from backend.contracts.ports import (
     T_out,
 )
 from backend.contracts.records import (
+    Account,
     AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
@@ -401,7 +402,50 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
             ("0547", date(2026, 5, 29), date(2026, 6, 1), "Tom Nguyen"),
         )
     ),
-    # 第 5.2 节: SI-2026-0547 的收款分录 (借 1010)
+    # 第 5.2 节: 两张跨期发票与 SI-2026-0547 的销售分录 (借 1100 贷 4100), 同 data/demo/journal_entries.csv
+    *(
+        JournalEntry(
+            id=f"SJ-2026-{n}-{line}",
+            entry_no=f"SJ-2026-{n}",
+            posting_date=day,
+            created_at=created_at,
+            created_by=created_by,
+            approved_by="fin.controller",
+            account_code=account,
+            debit_cents=amount if line == 1 else 0,
+            credit_cents=amount if line == 2 else 0,
+            description=f"Sales invoice SI-2026-{n} - {customer}",
+            source_doc=f"SI-2026-{n}",
+        )
+        for n, customer, day, created_at, created_by, amount in (
+            (
+                "0612",
+                "Bilby Robotics Pty Ltd",
+                date(2026, 6, 28),
+                datetime(2026, 6, 28, 11, 14, tzinfo=UTC),
+                "fin.controller",
+                14200000,
+            ),
+            (
+                "0618",
+                "Quoll Automation Pty Ltd",
+                date(2026, 6, 29),
+                datetime(2026, 6, 29, tzinfo=UTC),
+                "ar.clerk",
+                9500000,
+            ),
+            (
+                "0547",
+                "Echidna Controls Pty Ltd",
+                date(2026, 5, 29),
+                datetime(2026, 5, 29, tzinfo=UTC),
+                "ar.clerk",
+                5000000,
+            ),
+        )
+        for line, account in ((1, "1100"), (2, "4100"))
+    ),
+    # 第 5.2 节: SI-2026-0547 的收款分录 (借 1010 贷 1100)
     JournalEntry(
         id="CR-SI-2026-0547-1",
         entry_no="CR-SI-2026-0547",
@@ -411,6 +455,18 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
         approved_by="fin.controller",
         account_code="1010",
         debit_cents=5000000,
+        description="Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
+        source_doc="SI-2026-0547",
+    ),
+    JournalEntry(
+        id="CR-SI-2026-0547-2",
+        entry_no="CR-SI-2026-0547",
+        posting_date=date(2026, 6, 30),
+        created_at=datetime(2026, 6, 30, 6, 40, tzinfo=UTC),
+        created_by="ar.clerk",
+        approved_by="fin.controller",
+        account_code="1100",
+        credit_cents=5000000,
         description="Receipt SI-2026-0547 - Echidna Controls Pty Ltd (remittance advice 30 June 2026)",
         source_doc="SI-2026-0547",
     ),
@@ -443,6 +499,10 @@ NUMBAT_ROWS: list[SalesInvoice | DeliveryNote | JournalEntry | BankAccount | Ban
         description="EFT CREDIT ECHIDNA CONTROLS PTY LTD",
         reference="SI-2026-0547",
     ),
+]
+NUMBAT_ACCOUNTS = [  # 销售分录行的两个科目 (第 3 节, data/demo/accounts.csv; 分类按名称补, 同载入); 其余用到时再补
+    Account(code="1100", name="Trade receivables", type="asset", category="receivables", category_basis="name"),
+    Account(code="4100", name="Sales revenue", type="revenue", category="revenue", category_basis="name"),
 ]
 NUMBAT_TRIAL_BALANCE = [  # 本期试算表中两个银行账户的总账科目 (合成数据集设计第 3.1 节); 其余科目用到时再补
     TrialBalanceRow(period="current", account_code="1010", balance_cents=125840000),
@@ -544,8 +604,8 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes) 与试算表 (trial_balance),
-    其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts)
+    与试算表 (trial_balance), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -553,8 +613,10 @@ class FakeFinancialStore:
         records: dict[tuple[str, str], dict[str, Any]] | None = None,
         contracts: list[Contract] | None = None,
         trial_balance: list[TrialBalanceRow] | None = None,
+        accounts: list[Account] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
+        self.account_rows = list(accounts or [])  # 科目表, 各项目共用
         self.trial_balance_rows = list(trial_balance or [])  # 试算表的行, 两期混在一起, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
@@ -569,6 +631,23 @@ class FakeFinancialStore:
 
     async def trial_balance(self, eid: str, period: Literal["current", "prior"]) -> list[TrialBalanceRow]:
         return [r for r in self.trial_balance_rows if r.period == period]
+
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """records 中凭证号在 entry_nos 内或单据号在 source_docs 内的 journal_entry 行, 按行 ID 升序, 同真实实现."""
+        if entry_nos is None and source_docs is None:
+            raise ValueError("journal_entries 须给 entry_nos 或 source_docs, 不取全表")
+        # 先转集合, 同真实实现逐项拆开 (误传单个字符串时两边都按字符拆, 不做子串判断)
+        numbers = set(entry_nos) if entry_nos is not None else set()
+        documents = set(source_docs) if source_docs is not None else set()
+        rows = [JournalEntry.model_validate(row) for (kind, _), row in self.records.items() if kind == "journal_entry"]
+        return sorted((r for r in rows if r.entry_no in numbers or r.source_doc in documents), key=lambda r: r.id)
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        """科目表中代码在 codes 内的科目 (None 取全部), 按代码升序, 同真实实现."""
+        wanted = set(codes) if codes is not None else None  # 先转集合, 同 journal_entries
+        return sorted((a for a in self.account_rows if wanted is None or a.code in wanted), key=lambda a: a.code)
 
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
@@ -2429,7 +2508,7 @@ def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:
 
 
 def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
-    """Xero 快照映射出的财务数据装进假财务存储: 发票, 分录与银行流水按行可取 (record), 另有试算表."""
+    """Xero 快照映射出的财务数据装进假财务存储: 发票, 分录与银行流水按行可取 (record), 另有试算表与科目表."""
     tables = build_tables(snapshot)
     records: dict[tuple[str, str], dict[str, Any]] = {}
     for source, rows in (
@@ -2438,7 +2517,9 @@ def xero_financial_store(snapshot: Snapshot) -> FakeFinancialStore:
         ("bank_transaction", tables["bank_transactions"]),
     ):
         records |= {(source, row.id): row.model_dump() for row in rows}
-    return FakeFinancialStore(records=records, trial_balance=list(tables["trial_balance"]))
+    return FakeFinancialStore(
+        records=records, trial_balance=list(tables["trial_balance"]), accounts=list(tables["accounts"])
+    )
 
 
 # ── 上传文件处理 (需求 R14) 用的大模型: 先读变体目录, 再读主固定输出 ──

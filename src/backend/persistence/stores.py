@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 import pdfplumber
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -48,6 +48,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import DatasetLoader
 from backend.contracts.records import (
+    Account,
     AdjustmentEntrySummary,
     BankAccount,
     BankTransaction,
@@ -161,6 +162,32 @@ class PostgresFinancialDataStore(Store):
         )
         rows = await self.rows(eid, stmt)
         return {k: v for k, v in rows[0].items() if k != "engagement_id"} if rows else None
+
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        if entry_nos is None and source_docs is None:
+            raise ValueError("journal_entries 须给 entry_nos 或 source_docs, 不取全表")
+        t = m.FINANCIAL["journal_entries"]
+        conditions = []
+        if entry_nos is not None:
+            conditions.append(t.c.entry_no.in_(list(entry_nos)))
+        if source_docs is not None:
+            conditions.append(t.c.source_doc.in_(list(source_docs)))
+        return [
+            JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, select(t).where(or_(*conditions)).order_by(t.c.id))
+        ]
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        t = m.FINANCIAL["accounts"]
+        stmt = select(t).order_by(t.c.code)
+        if codes is not None:
+            stmt = stmt.where(t.c.code.in_(list(codes)))
+        return [
+            Account.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+            for r in await self.rows(eid, stmt)
+        ]
 
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]:
         t = m.FINANCIAL["sales_invoices"]

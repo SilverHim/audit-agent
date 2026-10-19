@@ -93,6 +93,18 @@ class FinancialDataStore(Protocol):
         """取一行明细; trial_balance 的 source_id 为 account_code."""
         ...
 
+    async def journal_entries(
+        self, eid: str, *, entry_nos: Sequence[str] | None = None, source_docs: Sequence[str] | None = None
+    ) -> list[JournalEntry]:
+        """凭证号在 entry_nos 内或原始单据号在 source_docs 内的分录行 (满足任一即取, 不重复), 按行 ID 升序.
+
+        None 为不按该条件取, 空列表为该条件取不到行; 两个都为 None 抛 ValueError (不取全表)."""
+        ...
+
+    async def accounts(self, eid: str, codes: Sequence[str] | None = None) -> list[Account]:
+        """代码在 codes 内的科目 (含标准分类, 按载入时所存), 按代码升序; codes 为 None 取全部."""
+        ...
+
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]: ...
 
     async def delivery_notes(self, eid: str, invoice_ids: Sequence[str]) -> list[DeliveryNote]: ...

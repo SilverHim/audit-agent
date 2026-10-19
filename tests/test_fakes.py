@@ -1,15 +1,22 @@
 """测试替身自身的契约: 假存储须忠实于开发接口文档第 4 节, 否则依赖它们的测试会掩盖真实 Store 下的错误."""
 
 import asyncio
+import csv
+from pathlib import Path
 
 import pytest
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import Phase
+from backend.contracts.records import Account, JournalEntry
+from backend.services.account_mapping import with_category
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
+    NUMBAT_RECORDS,
+    NUMBAT_ROWS,
     DocumentWrite,
     EngagementWrite,
     FakeEngagementStore,
@@ -21,6 +28,7 @@ from tests.fakes import (
 )
 
 EID = ENGAGEMENT.id
+DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"
 CLIENT = NUMBAT_PROFILE.id
 PROFILE_V2 = NUMBAT_PROFILE.model_copy(update={"version": 2, "legal_name": "Numbat Electronics Pty Ltd"})
 
@@ -178,3 +186,90 @@ async def test_document_status_joins_transaction() -> None:
     assert (await financial.documents(EID))[0].status == "extracted"
     assert output_store.commits == [[DocumentWrite(doc, "extracted")]]
     assert evidence.calls == [(doc, "extracted", True), (doc, "extracted", True)]
+
+
+def demo_rows(name: str) -> list[dict[str, str | None]]:
+    """data/demo 下一张表的行, 空单元格为 None (同 CsvDatasetLoader 的解析)."""
+    with (DEMO / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
+        return [{k: (v if v != "" else None) for k, v in r.items()} for r in csv.DictReader(stream)]
+
+
+def test_numbat_sales_entries_and_accounts_match_dataset() -> None:
+    """假存储里的 Numbat 分录行与科目同 data/demo 载入所得, 默认测试与连库测试 (Postgres) 取到同样的行."""
+    entries = {r["id"]: JournalEntry.model_validate(r) for r in demo_rows("journal_entries")}
+    accounts = {r["code"]: with_category(Account.model_validate(r)) for r in demo_rows("accounts")}
+    fake_entries = [r for r in NUMBAT_ROWS if isinstance(r, JournalEntry)]
+
+    assert [r.id for r in fake_entries] == [
+        "SJ-2026-0612-1",
+        "SJ-2026-0612-2",
+        "SJ-2026-0618-1",
+        "SJ-2026-0618-2",
+        "SJ-2026-0547-1",
+        "SJ-2026-0547-2",
+        "CR-SI-2026-0547-1",
+        "CR-SI-2026-0547-2",
+    ]
+    assert [entries[r.id] for r in fake_entries] == fake_entries
+    # 每笔都是整笔: data/demo 中同凭证号的行都在, 借贷平衡
+    numbers = {r.entry_no for r in fake_entries}
+    assert sorted(r.id for r in fake_entries) == sorted(i for i, r in entries.items() if r.entry_no in numbers)
+    assert sum(r.debit_cents for r in fake_entries) == sum(r.credit_cents for r in fake_entries)
+    assert [accounts["1100"], accounts["4100"]] == NUMBAT_ACCOUNTS
+
+
+async def test_journal_entries_by_entry_no_or_source_doc() -> None:
+    """分录行按凭证号或原始单据号取 (开发接口文档第 4 节): 满足任一即取, 不重复, 按行 ID 升序; 两个都不给抛错."""
+    financial = FakeFinancialStore(records=dict(reversed(list(NUMBAT_RECORDS.items()))))  # 存入顺序不影响结果
+
+    sale = await financial.journal_entries(EID, entry_nos=["SJ-2026-0612"])
+    assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in sale] == [
+        ("SJ-2026-0612-1", "1100", 14200000, 0),
+        ("SJ-2026-0612-2", "4100", 0, 14200000),
+    ]
+    assert await financial.journal_entries(EID, source_docs=["SI-2026-0612"]) == sale
+    assert await financial.journal_entries(EID, entry_nos=["SJ-2026-0612"], source_docs=["SI-2026-0612"]) == sale
+    union = await financial.journal_entries(
+        EID, entry_nos=["SJ-2026-0618", "SJ-2026-0612"], source_docs=["SI-2026-0547", "SI-2026-0612"]
+    )
+    assert [r.id for r in union] == [
+        "CR-SI-2026-0547-1",
+        "CR-SI-2026-0547-2",
+        "SJ-2026-0547-1",
+        "SJ-2026-0547-2",
+        "SJ-2026-0612-1",
+        "SJ-2026-0612-2",
+        "SJ-2026-0618-1",
+        "SJ-2026-0618-2",
+    ]
+    receipt = await financial.journal_entries(EID, entry_nos=["CR-SI-2026-0547"])  # 整笔收款分录: 借 1010 贷 1100
+    assert [(r.account_code, r.debit_cents, r.credit_cents) for r in receipt] == [
+        ("1010", 5000000, 0),
+        ("1100", 0, 5000000),
+    ]
+    # 两个条件各管各的列: 单据号不当凭证号查, 反之亦然; 给了空列表就取不到行
+    assert await financial.journal_entries(EID, entry_nos=["SI-2026-0612"]) == []
+    assert await financial.journal_entries(EID, source_docs=["SJ-2026-0612"]) == []
+    assert await financial.journal_entries(EID, entry_nos=[]) == []
+    assert await financial.journal_entries(EID, source_docs=[]) == []
+    assert await financial.journal_entries(EID, entry_nos=[], source_docs=[]) == []
+    # 误传单个字符串时同真实实现逐字符拆开, 取不到行 (不做子串判断)
+    assert await financial.journal_entries(EID, entry_nos="SJ-2026-0612") == []
+    with pytest.raises(ValueError, match="不取全表"):
+        await financial.journal_entries(EID)
+
+
+async def test_accounts_by_code() -> None:
+    """科目按代码取 (开发接口文档第 4 节): 按代码升序, 带标准分类; codes 为 None 取全部, 空列表取不到."""
+    financial = FakeFinancialStore(accounts=list(reversed(NUMBAT_ACCOUNTS)))
+
+    picked = await financial.accounts(EID, ["4100", "1100"])
+    assert [(a.code, a.name, a.type, a.category) for a in picked] == [
+        ("1100", "Trade receivables", "asset", "receivables"),
+        ("4100", "Sales revenue", "revenue", "revenue"),
+    ]
+    assert await financial.accounts(EID) == picked
+    assert await financial.accounts(EID, ["4100"]) == picked[1:]
+    assert await financial.accounts(EID, []) == []
+    assert await financial.accounts(EID, ["9999"]) == []
+    assert await financial.accounts(EID, "1100") == []  # 单个字符串逐字符拆开, 同真实实现

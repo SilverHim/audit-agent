@@ -20,6 +20,7 @@ from backend.agents.ingest import contract_id
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import AuditObjective, DocumentType, LlmSettings, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import ConfirmationRequest
+from backend.contracts.records import Account, JournalEntry
 from backend.persistence import models as m
 from backend.persistence.db import transaction
 from backend.persistence.stores import (
@@ -34,8 +35,11 @@ from backend.persistence.stores import (
     XeroDatasetLoader,
     now,
 )
+from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
+from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
+from tests.test_fakes import demo_rows
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,6 +132,68 @@ async def test_load_rules_and_project_isolation(storage):
         await financial.query(e.id, "DELETE FROM sales_invoices", {})
     with pytest.raises(DBAPIError):
         await financial.query(e.id, "SELECT 1; DELETE FROM sales_invoices", {})
+
+
+async def test_journal_entries_and_accounts(storage):
+    """分录行按凭证号或原始单据号取, 科目按代码取 (开发接口文档第 4 节), 与假存储同样的行; 按项目隔离."""
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+
+    sale = await financial.journal_entries(e.id, entry_nos=["SJ-2026-0612"])
+    assert [(r.id, r.account_code, r.debit_cents, r.credit_cents) for r in sale] == [
+        ("SJ-2026-0612-1", "1100", 14200000, 0),
+        ("SJ-2026-0612-2", "4100", 0, 14200000),
+    ]
+    assert sale == [r for r in NUMBAT_ROWS if isinstance(r, JournalEntry) and r.entry_no == "SJ-2026-0612"]
+    assert await financial.journal_entries(e.id, source_docs=["SI-2026-0612"]) == sale
+    assert await financial.journal_entries(e.id, entry_nos=["SJ-2026-0612"], source_docs=["SI-2026-0612"]) == sale
+    union = await financial.journal_entries(e.id, entry_nos=["SJ-2026-0618"], source_docs=["SI-2026-0612"])
+    assert [r.id for r in union] == ["SJ-2026-0612-1", "SJ-2026-0612-2", "SJ-2026-0618-1", "SJ-2026-0618-2"]
+    assert await financial.journal_entries(e.id, entry_nos=["SI-2026-0612"]) == []
+    assert await financial.journal_entries(e.id, entry_nos=[]) == []  # 空列表的条件取不到行, 不取全表
+    assert await financial.journal_entries(e.id, source_docs=[]) == []
+    assert await financial.journal_entries(e.id, entry_nos=[], source_docs=[]) == []
+    assert await financial.journal_entries(e.id, entry_nos="SJ-2026-0612") == []  # 单个字符串逐字符拆开, 同假存储
+    assert (
+        await financial.journal_entries("other-project", entry_nos=["SJ-2026-0612"], source_docs=["SI-2026-0612"]) == []
+    )
+    with pytest.raises(ValueError, match="不取全表"):
+        await financial.journal_entries(e.id)
+
+    picked = await financial.accounts(e.id, ["4100", "1100"])
+    assert [(a.code, a.name, a.type, a.category) for a in picked] == [
+        ("1100", "Trade receivables", "asset", "receivables"),
+        ("4100", "Sales revenue", "revenue", "revenue"),
+    ]
+    assert picked == NUMBAT_ACCOUNTS
+    everything = await financial.accounts(e.id)
+    assert len(everything) == 23
+    assert [a.code for a in everything] == sorted(a.code for a in everything)
+    assert await financial.accounts(e.id, []) == []
+    assert await financial.accounts("other-project") == []
+
+
+async def test_journal_entries_and_accounts_sort_rows_inserted_in_reverse(storage):
+    """新项目 (不载入 demo) 把 data/demo 的科目与几笔分录行倒序写入: 物理顺序与键序相反, accounts 仍按代码升序,
+    journal_entries 仍按行 ID 升序 (载入 demo 后物理顺序本就是键序, 测不出排序)."""
+    engine, e, _loader, _evidence = storage
+    accounts = [with_category(Account.model_validate(r)) for r in demo_rows("accounts")]
+    wanted = {"SJ-2026-0612", "SJ-2026-0618", "SJ-2026-0547", "CR-SI-2026-0547"}
+    entries = [JournalEntry.model_validate(r) for r in demo_rows("journal_entries") if r["entry_no"] in wanted]
+    async with transaction(engine, e.id) as conn:
+        for a in sorted(accounts, key=lambda a: a.code, reverse=True):
+            await conn.execute(insert(m.FINANCIAL["accounts"]).values(engagement_id=e.id, **a.model_dump()))
+        for j in sorted(entries, key=lambda j: j.id, reverse=True):
+            await conn.execute(insert(m.FINANCIAL["journal_entries"]).values(engagement_id=e.id, **j.model_dump()))
+    financial = PostgresFinancialDataStore(engine)
+
+    everything = await financial.accounts(e.id)
+    assert len(everything) == 23 and [a.code for a in everything] == sorted(a.code for a in everything)
+    union = await financial.journal_entries(
+        e.id, entry_nos=["SJ-2026-0618"], source_docs=["SI-2026-0612", "SI-2026-0547"]
+    )
+    assert [r.id for r in union] == sorted(j.id for j in entries) and len(union) == 8
 
 
 async def test_versions_rollback_trail_and_lock(storage):
