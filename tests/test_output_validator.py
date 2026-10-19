@@ -836,6 +836,43 @@ async def check_reply(output: ConfirmationExtraction, confirmation: Confirmation
     return await validator.validate(EID, LIBRARY.load("DOC-06"), respond(output), ctx)
 
 
+def accrued_pointer(page: int = 1) -> EvidencePointer:
+    """回函应计利息的指针 (本文档)."""
+    reply = NUMBAT_REPLIES[0]
+    return EvidencePointer(
+        type=EvidenceType.external,
+        source_type="document",
+        source_id=reply.id,
+        locator="accrued_interest_cents",
+        page=page,
+    )
+
+
+@pytest.mark.parametrize(
+    ("accrued", "pointers", "passed"),
+    [
+        (None, [], True),  # 回函没提: 不要指针
+        (0, [accrued_pointer()], True),  # 写 nil 为 0, 同样要指针
+        (4853, [accrued_pointer()], True),
+        (4853, [], False),  # 非空却没有该 locator 的指针
+        (0, [], False),
+        (4853, [accrued_pointer(page=3)], False),  # 页码超出页数 (2 页)
+    ],
+)
+async def test_reply_accrued_interest_needs_its_own_pointer(
+    accrued: int | None, pointers: list[EvidencePointer], passed: bool
+) -> None:
+    """需求 R104: 回函应计利息非空时须有 locator 为 accrued_interest_cents 的本文档指针 (页码在页数内), 不成立为
+    引用失败 (不重试)."""
+    base = reply_extraction()
+    output = base.model_copy(update={"accrued_interest_cents": accrued, "evidence": [*base.evidence, *pointers]})
+    report = await check_reply(output, sent_confirmation())
+    if passed:
+        assert report.level_failed is None and report.output.accrued_interest_cents == accrued
+    else:
+        assert (report.level_failed, report.retryable) == ("reference", False)
+
+
 async def test_reply_account_must_match_confirmed_account() -> None:
     assert (await check_reply(reply_extraction(), sent_confirmation())).level_failed is None
     report = await check_reply(reply_extraction(account_no="23456702"), sent_confirmation())

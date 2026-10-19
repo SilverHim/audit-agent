@@ -978,6 +978,9 @@ class Confirmation(Versioned):
     replied_at: date | None = None  # 回函日期, A5 按回执写入
     balance_date: date | None = None  # 回函余额的截至日, DOC-06 抽取
     confirmed_balance_cents: int | None = None  # 回函余额, 单位分, DOC-06 抽取
+    # 回函写明的截至余额日尚未入账的应计利息, 单位分 (银行欠客户为正, 客户欠银行为负, nil 为 0), DOC-06 抽取; 回函
+    # 没提到, 还没抽取或旧版本为空 (需求 R104)
+    accrued_interest_cents: int | None = None
     book_balance_cents: int | None = None  # 账面余额, 单位分, CSH-02 写入
     difference_cents: int | None = None  # 回函减账面, 单位分, CSH-02 写入
     result: ConfirmationResult = ConfirmationResult.pending  # 函证结果

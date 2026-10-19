@@ -274,6 +274,7 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
                     "version": confirmation.version + 1,
                     "confirmed_balance_cents": extraction.confirmed_balance_cents,
                     "balance_date": extraction.balance_date,
+                    "accrued_interest_cents": extraction.accrued_interest_cents,
                     "evidence": extraction.evidence,
                 }
             )

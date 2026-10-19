@@ -79,6 +79,13 @@ function Evidence() {
                   <dd className="m-0 font-mono">{formatAud(item.confirmed_balance_cents)}</dd>
                   <dt className="text-muted-foreground">{t.evidencePage.difference}</dt>
                   <dd className="m-0 font-mono">{formatAud(item.difference_cents)}</dd>
+                  <dt className="text-muted-foreground">{t.evidencePage.accruedInterest}</dt>
+                  <dd className="m-0 font-mono">
+                    {/* 抽取过 (有回函余额) 而回函没提应计利息时写明 "未提及"; 还没抽取的同其他各项为 — */}
+                    {item.accrued_interest_cents == null && item.confirmed_balance_cents != null
+                      ? t.evidencePage.accruedNotStated
+                      : formatAud(item.accrued_interest_cents)}
+                  </dd>
                 </dl>
                 {item.reply_document_id ? (
                   <span>

@@ -1107,6 +1107,10 @@ export type Confirmation = {
      */
     confirmed_balance_cents?: number | null;
     /**
+     * Accrued Interest Cents
+     */
+    accrued_interest_cents?: number | null;
+    /**
      * Book Balance Cents
      */
     book_balance_cents?: number | null;

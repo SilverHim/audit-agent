@@ -546,7 +546,8 @@ class OutputValidator:
     ) -> tuple[ContractExtraction | ConfirmationExtraction, list[str]]:
         """抽取输出的引用级, 返回 (改写指针后的输出, 错误).
 
-        指针只能指向本文档且页码在页数内, 条款页码同样; 有一处不成立即整条失败.
+        指针只能指向本文档且页码在页数内, 条款页码同样; 回函的应计利息非空时须有 locator 为 accrued_interest_cents
+        的本文档指针 (需求 R104); 有一处不成立即整条失败.
         """
         if document is None:
             raise ValueError("抽取类输出的校验须给出本次抽取的文件 (ValidationContext.document)")
@@ -568,6 +569,12 @@ class OutputValidator:
                 for t in output.terms
                 if not 1 <= t.page <= document.page_count
             ]
+        if (
+            isinstance(output, ConfirmationExtraction)
+            and output.accrued_interest_cents is not None
+            and not any(p.locator == "accrued_interest_cents" for p in output.evidence)
+        ):
+            errors.append("应计利息 accrued_interest_cents 非空, 却没有 locator 为 accrued_interest_cents 的指针")
         return output.model_copy(update={"evidence": evidence}), errors
 
 

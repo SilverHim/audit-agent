@@ -6081,6 +6081,17 @@
             ],
             "title": "Confirmed Balance Cents"
           },
+          "accrued_interest_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Interest Cents"
+          },
           "book_balance_cents": {
             "anyOf": [
               {

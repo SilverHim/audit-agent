@@ -159,6 +159,10 @@ async def test_mock_extraction_updates_confirmations() -> None:
     calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
     assert len(calls) == 2 and {e.procedure_id for e in calls} == {"DOC-06"}
     assert all(e.payload["notes"] == [] for e in calls)
+    # 需求 R104: fixture 没写应计利息的键, 按空处理, 一次通过 (不算结构失败); 指针仍 5 条
+    assert all(e.payload["level_failed"] is None for e in calls)
+    assert (c1.accrued_interest_cents, c2.accrued_interest_cents) == (None, None)
+    assert (len(c1.evidence), len(c2.evidence)) == (5, 5)
 
 
 # ── 失败与提示 ─────────────────────────────────────────
@@ -207,6 +211,61 @@ async def test_pointer_page_beyond_document_fails_that_account() -> None:
     bad["evidence"][0]["page"] = 3
     agent, ctx, _ = setup(scripted(BA_01=[json.dumps(bad)]))
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
+
+
+# ── 回函应计利息 (需求 R104) ─────────────────────────────────────────
+
+
+def with_accrued(account: str, cents: int | None, page: int | None = 1) -> str:
+    """该账户 fixture 的输出加上应计利息 (测试内联, fixture 不改); page 为空时不加它的指针."""
+    data = json.loads(raw(account))
+    data["accrued_interest_cents"] = cents
+    if page is not None:
+        pointer = {**data["evidence"][0], "locator": "accrued_interest_cents", "page": page}
+        data["evidence"].append(pointer)
+    return json.dumps(data)
+
+
+@pytest.mark.parametrize("cents", [0, 4853])  # 0: 回函写 nil
+async def test_accrued_interest_is_written_to_the_confirmation(cents: int) -> None:
+    """抽出的应计利息 (带第 1 页的指针) 写入函证; 回函余额与截至日同 mock, 另一账户仍为空."""
+    agent, ctx, _ = setup(scripted(BA_01=[with_accrued("BA-01", cents)]))
+    c1, c2 = (await agent.run(ctx))["confirmations"]
+    assert (c1.accrued_interest_cents, c1.confirmed_balance_cents, c1.balance_date) == (
+        cents,
+        120840000,
+        date(2026, 6, 30),
+    )
+    assert (c2.accrued_interest_cents, c2.confirmed_balance_cents) == (None, 40000000)
+
+
+@pytest.mark.parametrize("page", [None, 3])  # 没有该指针; 指针页码超出页数 (2 页)
+async def test_accrued_interest_without_a_valid_pointer_fails_that_account(page: int | None) -> None:
+    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败不重试 (只调 1 次), BA-01 交人,
+    函证不更新, 另一账户照常."""
+    llm = scripted(BA_01=[with_accrued("BA-01", 4853, page), raw("BA-01")])
+    agent, ctx, _ = setup(llm)
+    assert_ba01_handed_to_human(agent, await agent.run(ctx))
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == 1
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "Positive when the bank owes it to the customer",
+        "negative when the customer owes it to the bank",
+        "0 when the reply states accrued interest as nil",
+        "null when the reply does not mention accrued interest",
+        "do not take a full period's interest payable on a later date",
+    ],
+)
+async def test_prompt_states_how_to_read_accrued_interest(rule: str) -> None:
+    """渲染出的 DOC-06 提示词写明应计利息的口径: 正负, nil 为 0, 未提及为 null, 不取以后应付的整期利息."""
+    llm = scripted()
+    agent, ctx, _ = setup(llm, confirmations=CONFIRMATIONS[:1])
+    await agent.run(ctx)
+    [request] = llm.requests
+    assert rule in request.messages[0].content
 
 
 async def test_reply_missing_from_state_raises() -> None:

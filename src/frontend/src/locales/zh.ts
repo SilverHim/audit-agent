@@ -692,6 +692,8 @@ export const zh: Messages = {
     book: '账面余额',
     confirmed: '函证确认余额',
     difference: '差异',
+    accruedInterest: '回函应计利息',
+    accruedNotStated: '未提及',
     openReply: '打开回函',
     noReply: '尚未收到回函',
     signedOn: (date) => `${date} 签订`,
