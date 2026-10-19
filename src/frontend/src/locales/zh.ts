@@ -400,6 +400,7 @@ export const zh: Messages = {
       FILE_TOO_LARGE: '单个文件不能超过 50 MB。',
       ENGAGEMENT_BUSY: '项目正在处理中，请稍后再试。',
       ENGAGEMENT_LOCKED: '项目已签字，只能查看。',
+      NOT_RERUNNABLE: '只能在等待复核、FIN-01 或 RPT-01 阶段决定时重跑。',
     },
   },
   toasts: {
@@ -671,6 +672,42 @@ export const zh: Messages = {
     exceptions: '规则发现',
     judgments: '判断',
     none: '无',
+  },
+  rerun: {
+    stale: '数据已更新，结果已过期',
+    staleShort: '已过期',
+    staleHint: '本程序读的数据在上次执行之后有改动，或它依赖的程序重跑过。用新数据重跑后以新结果为准，旧结果留作历史。',
+    one: '用新数据重跑',
+    all: (n) => `全部重跑（${n}）`,
+    started: '已开始重跑，新结果会交给你复核。',
+    notice: (n) => `数据已更新，${n} 条程序的结果已过期：`,
+    groups: {
+      rerunnable: (n, ids) => `${n} 条可用新数据重跑：${ids}。`,
+      queued: (ids) => `已在等待重跑：${ids}。`,
+      marked: (ids) => `计划阶段的 ${ids} 只作标记，不能在这里重跑；要重做，须在 PLN-01/03 阶段决定时驳回。`,
+    },
+    openProcedures: '查看程序',
+    finStale: (n, ids) =>
+      `${n} 条执行阶段程序在数据更新后尚未重跑，结论可能已不成立：${ids}。可以照常通过，也可以先到程序页重跑。`,
+    finMarked: (ids) =>
+      `计划阶段的 ${ids} 也已过期，只作标记，不能在程序页重跑（计划阶段的结论只在 PLN-01/03 阶段决定时驳回重做）。通过前请判断它们是否仍然适用。`,
+    superseded: '已被重跑取代',
+    history: '历史结果 · 已被重跑取代',
+    blocked: {
+      locked: '项目已签字，只能查看。',
+      planning: '计划阶段的程序过期只作标记；要重做，须在 PLN-01/03 阶段决定时驳回。',
+      queued: '已在等待重跑。',
+      running: '程序正在执行，停下后再试。',
+      featuresMismatch: '功能开关与本项目启动时不同，项目已暂停推进，不能重跑。',
+      runError: '上次执行因错误中止，请先继续执行。',
+      position: '只能在等待复核、FIN-01 或 RPT-01 阶段决定时重跑。',
+      none: '没有可重跑的过期程序。',
+    },
+    errors: {
+      outdated: '所选程序已不是可重跑的过期程序（可能已在重跑或已重跑过），页面已刷新。',
+      failed: (code) =>
+        code ? `重跑没有提交成功（${code}），页面已刷新，请按最新状态再试。` : '重跑没有提交成功，请检查网络后再试。',
+    },
   },
   data: {
     title: '数据管理',

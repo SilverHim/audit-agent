@@ -3,9 +3,10 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
 import { useMemo, useState } from 'react'
 import { reviewsGetProcedureOptions } from '@/client/@tanstack/react-query.gen'
-import type { Engine, ProcedureStatus, ProcedureSummary } from '@/client/types.gen'
+import type { EngagementOverview, Engine, ProcedureStatus, ProcedureSummary } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
 import { standardLabel } from '@/components/evidence-link'
+import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/lib/i18n'
@@ -75,6 +76,9 @@ function Procedures() {
         }
         actions={
           <>
+            {overview?.stale_procedure_ids?.length ? (
+              <RerunButton eid={eid} overview={overview} reasonAs="title" />
+            ) : null}
             <label htmlFor="proc-search" className="sr-only">
               {t.proceduresPage.search}
             </label>
@@ -154,7 +158,7 @@ function Procedures() {
             </div>
           </div>
         </section>
-        {current ? <ProcedureAside eid={eid} item={current} lang={lang} onSelect={select} /> : null}
+        {current ? <ProcedureAside eid={eid} item={current} overview={overview} lang={lang} onSelect={select} /> : null}
       </div>
     </>
   )
@@ -179,8 +183,9 @@ function ProcedureRow({ item, on, onSelect }: { item: ProcedureSummary; on: bool
       <span className="text-[13px]">
         <Code className="font-semibold">{item.autonomy_level}</Code> · {t.levels[item.autonomy_level]}
       </span>
-      <span>
+      <span className="flex flex-wrap items-center gap-1.5">
         <StatusPill tone={STATUS_TONE[item.status]}>{t.procStatus[item.status]}</StatusPill>
+        {item.stale ? <StaleBadge short /> : null}
       </span>
     </button>
   )
@@ -189,11 +194,13 @@ function ProcedureRow({ item, on, onSelect }: { item: ProcedureSummary; on: bool
 function ProcedureAside({
   eid,
   item,
+  overview,
   lang,
   onSelect,
 }: {
   eid: string
   item: ProcedureSummary
+  overview: EngagementOverview | undefined
   lang: 'zh' | 'en'
   onSelect: (id: string) => void
 }) {
@@ -206,10 +213,17 @@ function ProcedureAside({
       <div className="flex flex-col gap-1">
         <Code className="text-[13px] text-muted-foreground">{item.id}</Code>
         <h2 className="m-0 font-semibold text-lg">{procedureName(t, item.id, item.name)}</h2>
-        <span>
+        <span className="flex flex-wrap items-center gap-1.5">
           <StatusPill tone={STATUS_TONE[item.status]}>{t.procStatus[item.status]}</StatusPill>
+          {item.stale ? <StaleBadge /> : null}
         </span>
       </div>
+      {item.stale ? (
+        <div className="flex flex-col gap-2 rounded-[10px] bg-warn-soft p-3">
+          <p className="m-0 text-[13px]">{t.rerun.staleHint}</p>
+          <RerunButton eid={eid} overview={overview} procedure={item} size="default" />
+        </div>
+      ) : null}
       <dl className="m-0 grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-[13.5px]">
         <dt className="text-muted-foreground">{t.proceduresPage.stage}</dt>
         <dd className="m-0">{t.phases[item.phase]}</dd>
