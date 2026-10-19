@@ -199,6 +199,24 @@ async def test_replay_with_task_decided_but_no_decision_is_a_node_error() -> Non
     assert store.rows == rows
 
 
+async def test_replay_with_dispute_version_but_no_task_is_a_node_error() -> None:
+    """同上, 程序最新版本为争议中 (in_dispute, R151): P2 以外节点同样把它当作 "当时在等", 取 Store 最新版本时认出
+    对不上, 报错不前进."""
+    deps = make_deps(FakeRegistry(), FakeTrail())
+    failure = fail_run(deps.queue, make_run(), "RuntimeError: boom", NOW)
+    task = failure["review_tasks"][0]
+    decided = task.model_copy(update={"version": 2, "status": TaskStatus.decided})
+    waiting = update_procedure(p0_pack(), "ACC-04", status=ProcedureStatus.in_dispute)[0]
+    store = FakeOutputStore([*p0_pack(), *failure["procedure_runs"], task, decided, waiting])
+    nodes, registry, _ = counted_nodes(store)
+    app = single_node(nodes, "ACC-04")
+
+    mismatch = "ACC-04 没有待决任务和未读回的决定, Store 中最新版本 v2 却是 in_dispute"
+    with pytest.raises(RuntimeError, match=mismatch):
+        await app.ainvoke(p0_state(), GraphRunner.config(EID))
+    assert registry.abn_calls == 0
+
+
 # ── 验收 5: 各类产出的取回规则 ──
 
 

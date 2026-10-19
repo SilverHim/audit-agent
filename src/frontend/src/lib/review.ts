@@ -78,23 +78,29 @@ export function taskTier(
 
 export type RankedTask = { view: ReviewTaskView; amount: number | null; tier: ReviewTier; subject: string }
 
-// 先按档位, 同档按金额从大到小, 再按创建时间
+// 先按档位, 同档按金额从大到小, 再按创建时间. 项目开了智能体协作 (功能 collab, 后端 R151) 时待决的争议任务单列
+// 在最前, 争议之间按创建时间, 不按置信度或金额; 其余顺序不变
 export function rankTasks(
   views: ReviewTaskView[],
   exceptions: Map<string, AuditException>,
   overview: EngagementOverview | undefined,
 ): RankedTask[] {
+  const disputesFirst = overview?.features?.includes('collab') ?? false
+  const dispute = (item: RankedTask) =>
+    disputesFirst && item.view.task.kind === 'dispute' && item.view.task.status === 'pending'
+  const created = (a: RankedTask, b: RankedTask) => a.view.task.created_at.localeCompare(b.view.task.created_at)
   return views
     .map((view) => {
       const amount = taskAmount(view, exceptions)
       return { view, amount, tier: taskTier(view, amount, overview), subject: taskSubject(view) }
     })
-    .sort(
-      (a, b) =>
-        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) ||
-        (b.amount ?? -1) - (a.amount ?? -1) ||
-        a.view.task.created_at.localeCompare(b.view.task.created_at),
-    )
+    .sort((a, b) => {
+      const first = Number(dispute(b)) - Number(dispute(a))
+      if (first || (dispute(a) && dispute(b))) return first || created(a, b)
+      return (
+        TIER_ORDER.indexOf(a.tier) - TIER_ORDER.indexOf(b.tier) || (b.amount ?? -1) - (a.amount ?? -1) || created(a, b)
+      )
+    })
 }
 
 export type ReviewDraft = {

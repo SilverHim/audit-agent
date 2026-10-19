@@ -35,6 +35,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.orchestration.decisions import human_judgment_id, recompute_procedure
+from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
 from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
@@ -556,6 +557,47 @@ def test_recompute_procedure(status: ProcedureStatus, pending: int, expected: Pr
         assert updated is None
     else:
         assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)
+
+
+def task_of(kind: TaskKind, n: int = 0) -> ReviewTask:
+    return ReviewTask.model_construct(id=f"T-{kind}-{n}", kind=kind)
+
+
+@pytest.mark.parametrize(
+    ("status", "kinds", "collab", "expected"),
+    [
+        (ProcedureStatus.awaiting_human, [TaskKind.dispute, TaskKind.normal], True, ProcedureStatus.in_dispute),
+        (ProcedureStatus.in_dispute, [TaskKind.dispute], True, None),
+        (ProcedureStatus.in_dispute, [TaskKind.normal], True, ProcedureStatus.awaiting_human),
+        (ProcedureStatus.in_dispute, [], True, ProcedureStatus.completed),
+        (ProcedureStatus.executing, [TaskKind.dispute], True, None),
+        (ProcedureStatus.awaiting_human, [TaskKind.dispute], False, None),
+        (ProcedureStatus.planned, [TaskKind.dispute], False, ProcedureStatus.awaiting_human),
+    ],
+)
+def test_recompute_procedure_with_disputes(
+    status: ProcedureStatus, kinds: list[TaskKind], collab: bool, expected: ProcedureStatus | None
+) -> None:
+    """R151 验收 3: collab 打开时仍有待决 dispute 任务为 in_dispute, 只有其他待决任务为 awaiting_human, 都没有为
+    completed; executing 不改; collab 关闭时照现状 (有待决任务即 awaiting_human)."""
+    procedure = make_procedure("CSH-02", status=status)
+    tasks = [task_of(kind, n) for n, kind in enumerate(kinds)]
+
+    updated = recompute_procedure(procedure, tasks, collab=collab)
+
+    if expected is None:
+        assert updated is None
+    else:
+        assert updated is not None and (updated.version, updated.status) == (procedure.version + 1, expected)
+
+
+def test_waiting_status_prefers_dispute_only_with_collab() -> None:
+    """有待决任务时的状态: collab 打开且有 dispute 为 in_dispute (先于其他任务), 否则 awaiting_human; 没有为 None."""
+    mixed = [task_of(TaskKind.normal), task_of(TaskKind.failed, 1), task_of(TaskKind.dispute, 2)]
+    assert waiting_status(mixed, True) is ProcedureStatus.in_dispute
+    assert waiting_status(mixed, False) is ProcedureStatus.awaiting_human
+    assert waiting_status(mixed[:2], True) is ProcedureStatus.awaiting_human
+    assert waiting_status([], True) is None and waiting_status(iter(mixed), True) is ProcedureStatus.in_dispute
 
 
 # ── R19 misstatement 决定 ──

@@ -20,6 +20,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     Decision,
+    DisputeResolution,
     GateVerdict,
     Judgment,
     Misstatement,
@@ -46,6 +47,7 @@ from backend.orchestration.nodes import NODE_PROCEDURES, GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.orchestration.waits import WaitKind, accepts, data_payload, human_payload, kind_of, review_payload
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -69,6 +71,7 @@ from tests.test_review_decisions import DRAFT, assert_rejected, record
 
 EID = ENGAGEMENT.id
 CONFIG = GraphRunner.config(EID)
+COLLAB = BASELINE | {"collab"}
 TST = "TST-J01"
 TST_YAML = (
     f"id: {TST}\nname: 自测判断\nphase: P3_Completion\ncycle: Completion\nowner: A6\n"
@@ -89,11 +92,14 @@ def completion_runs_tst(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def tst_library(root: Path, extra: str = "", outputs: str = TST_OUTPUTS) -> ProcedureLibrary:
-    """knowledge 目录的副本另加 TST-J01; extra 为追加到其 YAML 的行 (如 gate: FIN-01), outputs 为其产出声明一行."""
+def tst_library(
+    root: Path, extra: str = "", outputs: str = TST_OUTPUTS, features: frozenset[str] | None = None
+) -> ProcedureLibrary:
+    """knowledge 目录的副本另加 TST-J01; extra 为追加到其 YAML 的行 (如 gate: FIN-01), outputs 为其产出声明一行;
+    features 为程序库按的功能集 (缺省为基线)."""
     shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
     (root / "procedures" / f"{TST}.yaml").write_text(TST_YAML + outputs + extra, encoding="utf-8")
-    return ProcedureLibrary(root)
+    return ProcedureLibrary(root) if features is None else ProcedureLibrary(root, features)
 
 
 def tst_exception(run: ProcedureRun, subject: str) -> AuditException:
@@ -172,6 +178,7 @@ async def at_tst(
     yaml: str = "",
     explains: str | None = None,
     outputs: str = TST_OUTPUTS,
+    features: frozenset[str] | None = None,
 ) -> Case:
     """见 Case. output_store 可换成会在某次提交后出错的存储 (如 CrashAfterCommit). cited 中的对象另出一条规则例外,
     由其判断引用; explains 为各判断另外解释的已有例外 (别的程序的); yaml, outputs 见 tst_library."""
@@ -207,7 +214,8 @@ async def at_tst(
         engagement_store=engagement_store,
         output_store=output_store,
         agents=agents,
-        library=tst_library(tmp_path / "knowledge", yaml, outputs),
+        library=tst_library(tmp_path / "knowledge", yaml, outputs, features),
+        features=features,
     )
     case = Case(runner, store, engagement_store)
     case.agent, case.seen = holder["agent"], seen
@@ -285,6 +293,50 @@ async def test_normal_task_waits_in_node(tmp_path: Path) -> None:
     assert case.latest(ReviewTask, f"T-J-{TST}-1-S1-v1").kind is TaskKind.normal
     assert case.latest(Procedure, TST).status is ProcedureStatus.awaiting_human
     assert case.transitions(TST) == [("planned", "awaiting_human")]
+
+
+@pytest.mark.parametrize(("features", "waiting"), [(COLLAB, "in_dispute"), (None, "awaiting_human")])
+async def test_dispute_task_in_node_is_in_dispute_with_collab(
+    tmp_path: Path, features: frozenset[str] | None, waiting: str
+) -> None:
+    """R151 验收 8: P2 以外节点的通用等待同样认争议中. TST-J01 出一条判断与 dispute 任务: collab 打开时程序为
+    in_dispute (关闭时照现状为 awaiting_human), 节点内等待; 仲裁 a6_upheld 读回后程序 completed, 继续到 FIN-01 闸门."""
+    case = await at_tst(tmp_path, {1: [("S1", TaskKind.dispute)]}, features=features)
+
+    assert await case.waits() == [tst_payload([])]
+    assert case.latest(Procedure, TST).status == waiting
+    task = await case.task("S1")
+    await submit(
+        case,
+        record(task.id, Decision.dispute_resolution, id="D-ARB", dispute_resolution=DisputeResolution.a6_upheld),
+    )
+    snapshot = await case.runner.app.aget_state(CONFIG)
+    assert snapshot.next == ("gate_fin",)
+    procedure = case.latest(Procedure, TST)
+    assert procedure.status is ProcedureStatus.completed
+    assert next(p for p in snapshot.values["procedure_pack"] if p.id == TST) == procedure  # 取 Store 最新版本
+    assert case.transitions(TST) == [("planned", waiting), (waiting, "completed")]
+
+
+async def test_dispute_left_after_other_task_decided_stays_in_dispute(tmp_path: Path) -> None:
+    """R151 验收 3: collab 打开, TST-J01 出一条 normal 与一条 dispute 任务, 程序为 in_dispute; 先确认 normal 的,
+    仍有待决争议, 程序不出新版本 (仍为 in_dispute); 再仲裁, 程序 completed."""
+    case = await at_tst(tmp_path, {1: [("S1", TaskKind.normal), ("S2", TaskKind.dispute)]}, features=COLLAB)
+    assert case.latest(Procedure, TST).status is ProcedureStatus.in_dispute
+    before = case.latest(Procedure, TST).version
+
+    await submit(case, confirm(await case.task("S1"), "D-1"))
+    assert (case.latest(Procedure, TST).version, case.latest(Procedure, TST).status) == (
+        before,
+        ProcedureStatus.in_dispute,
+    )
+    task = await case.task("S2")
+    await submit(
+        case,
+        record(task.id, Decision.dispute_resolution, id="D-ARB", dispute_resolution=DisputeResolution.a6_upheld),
+    )
+    assert (await case.runner.app.aget_state(CONFIG)).next == ("gate_fin",)
+    assert case.transitions(TST) == [("planned", "in_dispute"), ("in_dispute", "completed")]
 
 
 # ── 验收 3: confirm 后节点整体读回并继续 ──

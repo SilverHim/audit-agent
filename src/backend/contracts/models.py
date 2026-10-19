@@ -74,7 +74,7 @@ class ProcedureStatus(StrEnum):
     planned = "planned"  # 计划中
     executing = "executing"  # 执行中
     awaiting_human = "awaiting_human"  # 等人处理: 有待决复核任务
-    in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (尚未使用)
+    in_dispute = "in_dispute"  # 争议中: 有待决的争议任务 (功能 collab 打开时; 关闭时仍记 awaiting_human)
     completed = "completed"  # 已完成
     awaiting_data = "awaiting_data"  # 等待数据: 模板 inputs 声明的客户资料还没有, 没执行 (需求 R272)
     no_data = "no_data"  # 未执行 (无数据): 客户无此类资料, 或前置程序未执行 (无数据); 终态, 没有执行记录

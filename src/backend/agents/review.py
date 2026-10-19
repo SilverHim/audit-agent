@@ -32,12 +32,12 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
+from backend.services.features import COLLAB
 from backend.services.judgment_engine import PointerResolver, critic_chain_ok
 from backend.services.sampling import sampled
 
 GEN09 = "GEN-09"
 CRITIC = "critic"  # 功能名 (services/features.FEATURES), 关闭时不做独立复核
-COLLAB = "collab"  # 功能名: 智能体协作增量, 打开时触发规则补上 internal_copy 与 unsupported, 并记下命中的是哪条
 # 独立的系统提示词 (5.5: 与生成者至少不同的系统提示词); {schema} 为输出模型的 JSON schema, JSON 模式要求出现 "JSON"
 CRITIC_SYSTEM = """You are an independent reviewer. Judge only from the inputs given in this conversation, \
 not from any earlier analysis you may have seen. Reply with a single JSON object that conforms to the JSON schema \

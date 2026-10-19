@@ -18,6 +18,7 @@ from backend.contracts.models import (
     GateId,
     Judgment,
     Phase,
+    Procedure,
     ProcedureStatus,
     ProposedAction,
     Reliability,
@@ -192,6 +193,21 @@ def test_new_values_survive_checkpoint_serde() -> None:
     assert back["documents"][0].type is DocumentType.agreement
     assert back["documents"][0].document_date == date(2026, 9, 22)
     assert [type(k) for k in back["kinds"]] == [TaskKind, TaskKind, ProcedureStatus, TrailKind]
+
+
+def test_procedure_in_dispute_survives_store_json_and_checkpoint() -> None:
+    """R151 验收 1: 争议中的程序存回读出 (审计产出以 JSON 存) 与经检查点序列化读回, status 仍是枚举 in_dispute."""
+    procedure = Procedure(
+        id="CSH-02",
+        phase=Phase.P2_Executing,
+        template_commit="abc123",
+        autonomy_level=AutonomyLevel.L3,
+        status=ProcedureStatus.in_dispute,
+    )
+    assert Procedure.model_validate_json(procedure.model_dump_json()).status is ProcedureStatus.in_dispute
+    serde = checkpoint_serde()
+    back = serde.loads_typed(serde.dumps_typed({"procedure_pack": [procedure]}))
+    assert back["procedure_pack"] == [procedure] and back["procedure_pack"][0].status is ProcedureStatus.in_dispute
 
 
 # ── R127: 客户画像的扩展字段 ──

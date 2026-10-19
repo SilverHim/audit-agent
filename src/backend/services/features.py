@@ -4,7 +4,7 @@
 通用化改动与人工处理队列机制不设开关: 前者要求 Numbat 结果不变, 后者在没有启用的人工程序时不起作用.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 
@@ -34,6 +34,7 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
 }
 BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回归测试显式用它 (tests/fakes.NUMBAT_FEATURES)
+COLLAB = "collab"  # 智能体协作增量的功能名 (A7 触发规则, 争议中状态与单列, 仲裁补全等按它开关)
 
 
 def features_text(features: Iterable[str]) -> str:
@@ -42,6 +43,13 @@ def features_text(features: Iterable[str]) -> str:
 
 
 LEGACY_FEATURES = features_text(BASELINE)  # 冻结功能集之前建的项目 (version_snapshot 没有 features 键) 按基线处理
+
+
+def frozen_features(version_snapshot: Mapping[str, str], current: Iterable[str]) -> frozenset[str]:
+    """项目的功能集: 已启动 (有版本快照) 取冻结的 (没有 features 键的旧项目按基线), 还没启动取当前进程的 current."""
+    if not version_snapshot:
+        return frozenset(current)
+    return parse_features(version_snapshot.get("features", LEGACY_FEATURES))
 
 
 def parse_features(text: str) -> frozenset[str]:

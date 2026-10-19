@@ -53,11 +53,18 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.gates import check_fields, current_gate, current_spec, latest_in_order, spec_of
 from backend.orchestration.inputs import input_versions
-from backend.orchestration.nodes import confirmations_from_store, done_status, rerun_subjects, save_outputs
+from backend.orchestration.nodes import (
+    confirmations_from_store,
+    done_status,
+    rerun_subjects,
+    save_outputs,
+    waiting_status,
+)
 from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
 from backend.services.data_quality import OnHand
+from backend.services.features import COLLAB
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import attribute_exceptions
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
@@ -401,9 +408,13 @@ def review_effects(
 
 
 def recompute_procedure(
-    procedure: Procedure, pending: list[ReviewTask], done: ProcedureStatus = ProcedureStatus.completed
+    procedure: Procedure,
+    pending: list[ReviewTask],
+    done: ProcedureStatus = ProcedureStatus.completed,
+    collab: bool = False,
 ) -> Procedure | None:
-    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human, 没有为 done.
+    """rerun 以外的复核决定写入后目标程序的新版本 (第 7 节): 仍有待决任务为 awaiting_human (collab 打开且其中有
+    dispute 任务时为 in_dispute, 见 nodes.waiting_status), 没有为 done.
     程序已是 executing (之前的 rerun 决定已置, 尚待派发) 时保持不变, 否则会把待重跑的程序置为完成.
     状态不变时返回 None, 不出新版本.
 
@@ -412,7 +423,7 @@ def recompute_procedure(
     """
     if procedure.status is ProcedureStatus.executing:
         return None
-    status = ProcedureStatus.awaiting_human if pending else done
+    status = waiting_status(pending, collab) or done
     if status is procedure.status:
         return None
     return procedure.model_copy(update={"version": procedure.version + 1, "status": status})
@@ -708,7 +719,8 @@ class GraphDecisionSubmit:
         else:
             group = [task]
             done = done_status(self.deps.library.load(task.procedure_id))
-            updated = recompute_procedure(procedure, [t for t in pending if t.id != task.id], done)
+            rest = [t for t in pending if t.id != task.id]
+            updated = recompute_procedure(procedure, rest, done, COLLAB in self.deps.features)
         decided = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in group]
         created = [*effects, *decided, *([updated] if updated else [])]
         async with store.transaction(eid):

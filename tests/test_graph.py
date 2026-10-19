@@ -391,6 +391,25 @@ def test_after_fan_in_raises_when_awaiting_without_task() -> None:
         after_fan_in(nodes)(state)
 
 
+def test_after_fan_in_with_program_in_dispute() -> None:
+    """R151 验收 4: 争议中 (in_dispute) 的 REV-08 有待决任务时等复核, 以它为前置的 REV-02 不派发 (只认 completed);
+    没有待决任务时报 ScheduleStuck, 消息写明程序与 in_dispute; 前置卡在它上面时也写明."""
+    nodes = _p2_nodes()
+    disputed = ProcedureStatus.in_dispute
+    state = _p2_state(nodes, {"REV-08": disputed, "REV-03": DONE, "REV-02": PLANNED}, pending_tasks=1)
+    assert after_fan_in(nodes)(state) == "await_events"
+    assert route_schedule(nodes)(state) == "fan_in"  # REV-02 派不出
+    state = _p2_state(nodes, {"REV-08": disputed, "REV-03": DONE, "REV-02": DONE})
+    with pytest.raises(ScheduleStuck, match="REV-08 为 in_dispute, 却没有待决的复核任务"):
+        after_fan_in(nodes)(state)
+    state = _p2_state(nodes, {"REV-08": disputed, "REV-03": AWAITING, "REV-02": DONE})
+    with pytest.raises(ScheduleStuck, match="REV-08 为 in_dispute, REV-03 为 awaiting_human"):
+        after_fan_in(nodes)(state)
+    state = _p2_state(nodes, {"REV-08": disputed, "REV-03": DONE, "REV-02": PLANNED})
+    with pytest.raises(ScheduleStuck, match=r"REV-02 等 REV-08 \(in_dispute\)"):
+        after_fan_in(nodes)(state)
+
+
 def test_after_fan_in_raises_when_planned_cannot_be_dispatched() -> None:
     """REV-02 等的 REV-08 在等人却没有待决任务: 永远派不出, 报错并说明卡在哪."""
     nodes = _p2_nodes()

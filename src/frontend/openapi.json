@@ -7277,6 +7277,14 @@
                 "type": "null"
               }
             ]
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Features",
+            "default": []
           }
         },
         "additionalProperties": false,

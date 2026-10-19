@@ -32,7 +32,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration import gates
-from backend.orchestration.nodes import NODE_PROCEDURES, FieldworkInput, GraphNodes
+from backend.orchestration.nodes import NODE_PROCEDURES, WAITING, FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
 from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
@@ -159,8 +159,8 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     有待决的复核任务 → await_events 等审计师;
     P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion;
     有程序在等数据 (awaiting_data, 任何阶段) → await_data 等数据到达 (需求 R272).
-    都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 而没有待决任务),
-    或 awaiting_human 却没有待决任务, 进 await_events 会永远等不到决定.
+    都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 或 in_dispute 而没有待决任务),
+    或等人处理 (awaiting_human, in_dispute) 却没有待决任务, 进 await_events 会永远等不到决定; 消息逐个列出程序与状态.
     外层传 nodes 是为了拿程序库 (闭包, 同 route_schedule).
     """
 
@@ -181,8 +181,8 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
         unfinished = [p for p in p2 if p.status in UNFINISHED]
         if unfinished:
             raise ScheduleStuck(_stuck_detail(pack, unfinished, nodes.deps.library))
-        waiting = [p.id for p in p2 if p.status is ProcedureStatus.awaiting_human]
-        raise ScheduleStuck(f"P2 调度卡住: {', '.join(waiting)} 为 awaiting_human, 却没有待决的复核任务")
+        waiting = ", ".join(f"{p.id} 为 {p.status.value}" for p in p2 if p.status in WAITING)
+        raise ScheduleStuck(f"P2 调度卡住: {waiting}, 却没有待决的复核任务")
 
     return route
 

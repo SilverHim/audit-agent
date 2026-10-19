@@ -78,6 +78,9 @@ class EngagementOverview(Model):
     performance_materiality_cents: int | None  # 执行重要性, 单位分
     clearly_trivial_cents: int | None  # 明显微小门槛, 单位分
     opinion_route: OpinionType | None  # FIN-01 确认的意见类型
+    # 项目的功能集 (services/features.frozen_features: 已启动取冻结的, 未启动取当前进程的), 按名称排序; 前端据此
+    # 决定按哪个功能的规则显示 (如 collab 打开时复核队列争议在前)
+    features: list[str] = []
 
 
 class AcceptanceMaterial(Model):

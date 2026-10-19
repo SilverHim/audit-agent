@@ -1798,6 +1798,10 @@ export type EngagementOverview = {
      */
     clearly_trivial_cents: number | null;
     opinion_route: OpinionType | null;
+    /**
+     * Features
+     */
+    features?: Array<string>;
 };
 
 /**
