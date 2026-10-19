@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { cn } from 'cn'
 import { MessageCircle } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { reviewsSubmitReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
+import { reviewsPresentReviewTaskMutation, reviewsSubmitReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
 import type {
   Assertion,
   Decision,
@@ -11,12 +11,15 @@ import type {
   Judgment,
   MisstatementDraft,
   MisstatementType,
+  PresentedFailure,
+  PresentedSide,
   ReasoningStep,
   ReviewRecordIn,
   ReviewTaskView,
+  TaskPresentation,
 } from '@/client/types.gen'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
-import { PointerList } from '@/components/evidence-link'
+import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -24,6 +27,7 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
+import { cardLayout, needsPresentation, presentationFor, presentationKey, showSideProposals } from '@/lib/presentation'
 import {
   attachRule,
   buildDisputeRecord,
@@ -188,9 +192,179 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
   )
 }
 
+// 判断呈递 (后端 R152, GEN-11): 卡片挂载或换一条任务即呈递, 同一条在同一次挂载里不再调 (lib/presentation 的
+// needsPresentation: StrictMode 的第二次 effect, 轮询刷新与重新渲染都不算). 工作台在相关查询都返回后才确定当前事项
+// (lib/workspace.workspaceReady), 不会先闪过一条复核任务. 返回这条任务的呈递视图; 还没回来或失败时为 undefined, 卡片照
+// 复核队列的数据显示. 卡片的头部, 金额, 档位与决定卡取复核队列, 呈递只补争议两方, 证据并集与失败原因, 同一字段只取一处
+function usePresentation(eid: string, taskId: string): TaskPresentation | undefined {
+  const { mutate, data } = useMutation({
+    ...reviewsPresentReviewTaskMutation(),
+    onError: (error) => toast.error(apiMessage(error)),
+  })
+  const presented = useRef<string | null>(null)
+  useEffect(() => {
+    if (!needsPresentation(presented.current, eid, taskId)) return
+    presented.current = presentationKey(eid, taskId)
+    mutate({ path: { eid, task_id: taskId } })
+  }, [eid, taskId, mutate])
+  return presentationFor(data, taskId)
+}
+
+// 失败原因 (呈递的 failure): 带对象的失败给调用次数, 没通过的校验与错误; 无归因的例外给规则与明细.
+// 整次执行失败的原因 (failure_reason) 已在目标上, 不重复
+function FailureDetail({ failure }: { failure: PresentedFailure | null | undefined }) {
+  const { t } = useI18n()
+  const p = t.judgment.presentation
+  if (failure?.source === 'llm_call') {
+    return (
+      <div className="flex flex-col gap-1.5" data-testid="presented-failure">
+        {failure.attempts != null && failure.level_failed ? (
+          <span>{p.attempts(failure.attempts, p.levels[failure.level_failed])}</span>
+        ) : null}
+        {failure.errors?.length ? (
+          <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] text-secondary-foreground" lang="en">
+            {failure.errors.map((error) => (
+              <li key={error}>{error}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    )
+  }
+  if (failure?.source === 'exception') {
+    const detail = Object.entries(failure.detail ?? {})
+    return (
+      <div className="flex flex-col gap-1" data-testid="presented-failure">
+        {failure.rule_id ? <span>{p.rule(failure.rule_id)}</span> : null}
+        {detail.length ? (
+          <Code className="text-[12.5px] text-secondary-foreground">
+            {detail.map(([key, value]) => `${key}: ${String(value)}`).join(' · ')}
+          </Code>
+        ) : null}
+      </div>
+    )
+  }
+  return null
+}
+
+// 争议两方的一栏: 两栏同一样式, 不标哪方更有理. proposals 为真时另显示本方的建议动作与错报草稿 (见
+// lib/presentation.showSideProposals: collab 打开且任务待决时决定卡已并排显示, 这里不重复)
+function SideColumn({
+  eid,
+  side,
+  which,
+  proposals,
+}: {
+  eid: string
+  side: PresentedSide
+  which: 'generator' | 'reviewer'
+  proposals: boolean
+}) {
+  const { t } = useI18n()
+  const p = t.judgment.presentation
+  const draft = side.misstatement_draft
+  return (
+    <section className="flex min-w-0 flex-col gap-3 p-4" data-testid={`presented-${which}`}>
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <SectionLabel>{p[which]}</SectionLabel>
+        {side.confidence != null ? (
+          <Code className="text-[12.5px] text-muted-foreground">
+            {t.judgment.confidence} {side.confidence.toFixed(2)}
+          </Code>
+        ) : null}
+      </div>
+      {proposals ? (
+        <div className="flex flex-col gap-1" data-testid={`presented-${which}-proposal`}>
+          <span className={cn('font-semibold', side.proposed_action === 'misstatement' && 'text-risk')}>
+            {side.proposed_action ? t.proposed[side.proposed_action] : t.card.sides.none}
+          </span>
+          {draft ? (
+            <Code className="text-[12.5px] text-secondary-foreground">
+              {draft.account} · {t.assertions[draft.assertion]} · {formatAud(draft.amount_cents)} ·{' '}
+              {t.directions[draft.direction]}
+            </Code>
+          ) : null}
+        </div>
+      ) : null}
+      {side.conclusion ? (
+        <p className="m-0 text-[15px] leading-[1.65]" lang="en">
+          {side.conclusion}
+        </p>
+      ) : null}
+      <div className="flex flex-col gap-2.5">
+        <SectionLabel>{t.judgment.reasoning(side.reasoning_chain.length)}</SectionLabel>
+        <ReasoningChain eid={eid} steps={side.reasoning_chain} />
+      </div>
+      {side.counter_argument ? (
+        <div className="flex flex-col gap-1.5 rounded-[10px] bg-counter p-3">
+          <SectionLabel className="text-warn">{t.judgment.counter}</SectionLabel>
+          <p className="m-0 text-[14px] leading-[1.6]" lang="en">
+            {side.counter_argument}
+          </p>
+        </div>
+      ) : null}
+      {side.reason_type || side.reason ? (
+        <div className="flex flex-col gap-1.5 rounded-[10px] bg-muted p-3">
+          {side.reason_type ? (
+            <span className="font-semibold text-[13px]">
+              {t.judgment.critic.reasonTypes[side.reason_type] ?? side.reason_type}
+            </span>
+          ) : null}
+          {side.reason ? (
+            <p className="m-0 text-[14px] leading-[1.6]" lang="en">
+              {side.reason}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+// 争议任务: 两方左右并排 (窄屏依次堆叠), 两方证据的并集在下方居中, 每项标出由哪一方引用
+function DisputeBody({
+  eid,
+  presentation,
+  proposals,
+}: {
+  eid: string
+  presentation: TaskPresentation
+  proposals: boolean
+}) {
+  const { t } = useI18n()
+  const p = t.judgment.presentation
+  const { generator, reviewer } = presentation.sides ?? {}
+  if (!generator || !reviewer) return null
+  return (
+    <>
+      <div className="grid grid-cols-1 divide-y divide-line-soft border-line-soft border-b sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+        <SideColumn eid={eid} side={generator} which="generator" proposals={proposals} />
+        <SideColumn eid={eid} side={reviewer} which="reviewer" proposals={proposals} />
+      </div>
+      <div className="flex flex-col items-center gap-2.5 px-4 py-4 text-center" data-testid="presented-evidence">
+        <SectionLabel>{p.evidence}</SectionLabel>
+        <ul className="m-0 flex list-none flex-wrap justify-center gap-2 p-0">
+          {(presentation.evidence ?? []).map(({ pointer, origin }) => (
+            <li
+              key={`${pointer.source_type}:${pointer.source_id}:${pointer.page ?? ''}`}
+              className="flex items-center gap-1.5 rounded-[10px] border px-2 py-1"
+            >
+              <EvidenceLink eid={eid} pointer={pointer} />
+              <span className="text-[12px] text-muted-foreground">{p.origins[origin]}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
+  )
+}
+
 export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask }) {
   const { t } = useI18n()
   const { view, amount, tier, subject } = ranked
+  const presentation = usePresentation(eid, view.task.id)
+  const collab = useOverview(eid)?.features?.includes('collab') ?? false
+  const layout = cardLayout(view, presentation)
   const target = view.target
   const proc = procedureName(t, view.task.procedure_id, view.procedure_name)
   const header = (
@@ -207,16 +381,23 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
     </div>
   )
 
-  if (!isJudgment(target)) {
+  if (layout === 'target' || !isJudgment(target)) {
+    const failure = presentation?.failure
+    // 带对象的失败: 执行记录本身是成功终态, 说的是这个对象没做成
+    const subjectFailed = isRun(target) && view.task.subject_id
     return (
       <article className="overflow-hidden rounded-[14px] border bg-card">
         {header}
         <div className="flex flex-col gap-2 p-4 text-[14px]">
           {isRun(target) ? (
-            <>
-              <span className="font-semibold">{t.judgment.runFailed(target.run_no)}</span>
-              <span lang="en">{target.failure_reason || t.judgment.noReason}</span>
-            </>
+            subjectFailed ? (
+              <span className="font-semibold">{t.judgment.presentation.subjectFailed(subject)}</span>
+            ) : (
+              <>
+                <span className="font-semibold">{t.judgment.runFailed(target.run_no)}</span>
+                <span lang="en">{target.failure_reason || t.judgment.noReason}</span>
+              </>
+            )
           ) : isException(target) ? (
             <>
               <span className="font-semibold">
@@ -225,7 +406,39 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
               <PointerList eid={eid} pointers={target.evidence} />
             </>
           ) : null}
+          <FailureDetail failure={failure} />
         </div>
+      </article>
+    )
+  }
+
+  const facts = (
+    <>
+      <div className="flex flex-1 basis-[200px] flex-col gap-0.5">
+        <span className="text-[12px] text-muted-foreground">{t.judgment.subject}</span>
+        <Code className="font-semibold">{subject}</Code>
+      </div>
+      <div className="flex basis-[170px] flex-col gap-0.5">
+        <span className="text-[12px] text-muted-foreground">{t.judgment.amount}</span>
+        <Code className="font-semibold text-[16px]">{formatAud(amount)}</Code>
+      </div>
+    </>
+  )
+  const proposed = (
+    <div className="flex basis-[140px] flex-col gap-0.5">
+      <span className="text-[12px] text-muted-foreground">{t.judgment.proposed}</span>
+      <span className={cn('font-semibold', target.proposed_action === 'misstatement' && 'text-risk')}>
+        {t.proposed[target.proposed_action]}
+      </span>
+    </div>
+  )
+  // 争议任务的呈递回来后两方并排: 结论, 推理链, 置信度与 (须时) 建议都从呈递取, 不再从队列的判断上重复显示
+  if (layout === 'dispute' && presentation) {
+    return (
+      <article className="overflow-hidden rounded-[14px] border bg-card" data-testid="dispute-presentation">
+        {header}
+        <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">{facts}</div>
+        <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} />
       </article>
     )
   }
@@ -237,20 +450,8 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
     <article className="overflow-hidden rounded-[14px] border bg-card">
       {header}
       <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">
-        <div className="flex flex-1 basis-[200px] flex-col gap-0.5">
-          <span className="text-[12px] text-muted-foreground">{t.judgment.subject}</span>
-          <Code className="font-semibold">{subject}</Code>
-        </div>
-        <div className="flex basis-[170px] flex-col gap-0.5">
-          <span className="text-[12px] text-muted-foreground">{t.judgment.amount}</span>
-          <Code className="font-semibold text-[16px]">{formatAud(amount)}</Code>
-        </div>
-        <div className="flex basis-[140px] flex-col gap-0.5">
-          <span className="text-[12px] text-muted-foreground">{t.judgment.proposed}</span>
-          <span className={cn('font-semibold', target.proposed_action === 'misstatement' && 'text-risk')}>
-            {t.proposed[target.proposed_action]}
-          </span>
-        </div>
+        {facts}
+        {proposed}
         <div className="flex flex-1 basis-[200px] flex-col gap-1.5">
           <span className="text-[12px] text-muted-foreground">{t.judgment.confidence}</span>
           <div className="flex items-center gap-2.5">

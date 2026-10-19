@@ -1,6 +1,6 @@
-"""StateQuery 返回的视图模型, 定义见 开发接口文档.md 第 7 节."""
+"""StateQuery 与判断呈递 (services/presentation) 返回的视图模型, 定义见 开发接口文档.md 第 7 节."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -14,16 +14,27 @@ from backend.contracts.models import (
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
+    CriticReasonType,
+    Decision,
+    DisputeResolution,
     Engagement,
     Engine,
+    EvidencePointer,
     GateDecision,
     GateId,
+    Judgment,
     MaterialityCandidates,
     Misstatement,
+    MisstatementDraft,
     Model,
     OpinionType,
     Phase,
+    ProcedureRun,
     ProcedureStatus,
+    ProposedAction,
+    ReasoningStep,
+    ReviewTask,
+    ReviewTier,
     RiskItem,
     UncorrectedSchedule,
 )
@@ -136,3 +147,68 @@ class GateView(Model):
     target_id: str  # 材料 ID, 决定须绑定它
     target_version: int  # 材料当前版本, 决定须绑定它
     material: GateMaterial  # 呈报材料
+
+
+# ── 判断呈递 (GEN-11, 需求 R152) ─────────────────────────────
+
+SideRole = Literal["generator", "reviewer"]  # 生成方 (产出判断的智能体, 如 A6) 与独立复核方 (A7)
+EvidenceOrigin = Literal["generator", "reviewer", "both"]  # 证据由哪一方引用: 只有生成方, 只有复核方, 两方都引用
+FailureSource = Literal["run", "llm_call", "exception"]  # 失败原因的出处: 整次执行, 某个对象的大模型调用, 无归因的例外
+ValidationLevel = Literal["syntax", "structure", "reference", "semantic"]  # 输出校验的级别, 同 ValidationReport
+
+
+class PresentedSide(Model):
+    """呈递中的一方: 结论, 推理链与建议. 只有两方各自的内容, 没有比较两方或推荐决定的字段."""
+
+    conclusion: str | None  # 结论; 复核方为第一轮只看证据得出的独立结论 (critic_conclusion)
+    reasoning_chain: list[ReasoningStep]  # 推理链; 复核方为 critic_reasoning_chain
+    proposed_action: ProposedAction | None  # 建议动作; 复核方为 critic_proposed_action (collab 之前的判断为空)
+    misstatement_draft: MisstatementDraft | None = None  # 错报草稿; 复核方为 critic_misstatement_draft
+    counter_argument: str | None = None  # 反方论证, 只有生成方
+    confidence: float | None = None  # 置信度, 只有生成方
+    reason_type: CriticReasonType | None = None  # 不一致的理由类型 (critic_reason_type), 只有复核方
+    reason: str | None = None  # 复核的理由 (critic_reason), 只有复核方
+
+
+class PresentedEvidence(Model):
+    """两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源)."""
+
+    pointer: EvidencePointer  # 同一比对键先出现的那个指针 (生成方在前: 结论证据, 再推理链各步; 复核方按推理链)
+    origin: EvidenceOrigin  # 哪一方引用了它
+
+
+class PresentedFailure(Model):
+    """失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空."""
+
+    source: FailureSource  # 出处
+    reason: str | None = None  # run: 执行记录的 failure_reason
+    subject_id: str | None = None  # llm_call: 失败的判断对象 (任务的 subject_id)
+    level_failed: ValidationLevel | None = None  # llm_call: 最后一次没通过的校验级别
+    errors: list[str] = []  # llm_call: 最后一次的校验错误
+    attempts: int | None = None  # llm_call: 调用次数 (最后一次的 attempt)
+    trail_id: str | None = None  # llm_call: 取的那行 llm_call 留痕
+    rule_id: str | None = None  # exception: 命中的规则
+    amount_cents: int | None = None  # exception: 例外金额, 单位分
+    detail: dict[str, Any] = {}  # exception: 规则输出的明细
+
+
+class TaskPresentation(Model):
+    """判断呈递 (POST review-tasks/{task_id}/presentations): 审计师打开一条复核任务时按任务类型组装的视图.
+
+    任务, 程序名, 允许的决定, 仲裁结果, 金额与档位同复核队列 (ReviewTaskView) 的取法; 另给两方 (sides), 两方证据的
+    并集 (evidence) 与失败原因 (failure). 规则见 开发接口文档.md 第 10 节 "判断呈递".
+    """
+
+    presentation_id: str  # 这次呈递写的 presentation 留痕 ID
+    task: ReviewTask  # 任务的最新版
+    procedure_name: str  # 程序名称
+    target: Judgment | AuditException | ProcedureRun  # 任务绑定的那一版 (task.target_version)
+    allowed_decisions: list[Decision]  # 同复核队列
+    allowed_resolutions: list[DisputeResolution] = []  # 争议任务可选的仲裁结果, 其余为空
+    amount_cents: int | None  # 涉及金额, 同复核队列
+    tier: ReviewTier  # 复核档位, 同复核队列
+    deferred: bool  # 是否标了稍后处理 (已决定的任务为假)
+    # 两方: 目标是判断时有 generator; dispute 任务另有 reviewer. 目标是例外或执行记录时为空
+    sides: dict[SideRole, PresentedSide] = {}
+    evidence: list[PresentedEvidence] = []  # 两方证据的并集; 没有 sides 时为空 (例外的证据在 target.evidence)
+    failure: PresentedFailure | None = None  # failed 与 unattributed 任务的失败原因, 其余为空

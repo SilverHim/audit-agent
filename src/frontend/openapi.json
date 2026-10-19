@@ -749,6 +749,63 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/review-tasks/{task_id}/presentations": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Present Review Task",
+        "description": "判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务\n绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在\n404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.\ndeferred 按稍后处理的留痕 (已决定的任务为假); 只有带 subject_id 的 failed 任务读 llm_call 留痕取失败原因.",
+        "operationId": "reviews-present_review_task",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskPresentation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/review-records": {
       "post": {
         "tags": [
@@ -9767,6 +9824,241 @@
         "title": "PlanningMaterial",
         "description": "PLN-01/03 闸门的呈报材料."
       },
+      "PresentedEvidence": {
+        "properties": {
+          "pointer": {
+            "$ref": "#/components/schemas/EvidencePointer"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "generator",
+              "reviewer",
+              "both"
+            ],
+            "title": "Origin"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pointer",
+          "origin"
+        ],
+        "title": "PresentedEvidence",
+        "description": "两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源)."
+      },
+      "PresentedFailure": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "run",
+              "llm_call",
+              "exception"
+            ],
+            "title": "Source"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "level_failed": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "syntax",
+                  "structure",
+                  "reference",
+                  "semantic"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level Failed"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors",
+            "default": []
+          },
+          "attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          },
+          "trail_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trail Id"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "title": "PresentedFailure",
+        "description": "失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空."
+      },
+      "PresentedSide": {
+        "properties": {
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "reasoning_chain": {
+            "items": {
+              "$ref": "#/components/schemas/ReasoningStep"
+            },
+            "type": "array",
+            "title": "Reasoning Chain"
+          },
+          "proposed_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposedAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "misstatement_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counter_argument": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counter Argument"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "reason_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticReasonType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "conclusion",
+          "reasoning_chain",
+          "proposed_action"
+        ],
+        "title": "PresentedSide",
+        "description": "呈递中的一方: 结论, 推理链与建议. 只有两方各自的内容, 没有比较两方或推荐决定的字段."
+      },
       "PriorEstimateOutcome": {
         "properties": {
           "engagement": {
@@ -11595,6 +11887,114 @@
         ],
         "title": "TaskKind",
         "description": "复核任务类型."
+      },
+      "TaskPresentation": {
+        "properties": {
+          "presentation_id": {
+            "type": "string",
+            "title": "Presentation Id"
+          },
+          "task": {
+            "$ref": "#/components/schemas/ReviewTask"
+          },
+          "procedure_name": {
+            "type": "string",
+            "title": "Procedure Name"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgment"
+              },
+              {
+                "$ref": "#/components/schemas/AuditException"
+              },
+              {
+                "$ref": "#/components/schemas/ProcedureRun"
+              }
+            ],
+            "title": "Target"
+          },
+          "allowed_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "type": "array",
+            "title": "Allowed Decisions"
+          },
+          "allowed_resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/DisputeResolution"
+            },
+            "type": "array",
+            "title": "Allowed Resolutions",
+            "default": []
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/ReviewTier"
+          },
+          "deferred": {
+            "type": "boolean",
+            "title": "Deferred"
+          },
+          "sides": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PresentedSide"
+            },
+            "propertyNames": {
+              "enum": [
+                "generator",
+                "reviewer"
+              ]
+            },
+            "type": "object",
+            "title": "Sides",
+            "default": {}
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/PresentedEvidence"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "presentation_id",
+          "task",
+          "procedure_name",
+          "target",
+          "allowed_decisions",
+          "amount_cents",
+          "tier",
+          "deferred"
+        ],
+        "title": "TaskPresentation",
+        "description": "判断呈递 (POST review-tasks/{task_id}/presentations): 审计师打开一条复核任务时按任务类型组装的视图.\n\n任务, 程序名, 允许的决定, 仲裁结果, 金额与档位同复核队列 (ReviewTaskView) 的取法; 另给两方 (sides), 两方证据的\n并集 (evidence) 与失败原因 (failure). 规则见 开发接口文档.md 第 10 节 \"判断呈递\"."
       },
       "TaskStatus": {
         "type": "string",
