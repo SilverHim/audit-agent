@@ -62,7 +62,14 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
                 "request_id",
                 "committed_at",
             },
-            "data_requests": {"table_kind", "document_type", "format_hint", "resolved_at"},
+            "data_requests": {
+                "table_kind",
+                "document_type",
+                "format_hint",
+                "resolved_at",
+                "resolved_by",
+                "unavailable_reason",
+            },
             "data_checks": {"request_id"},
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
@@ -162,7 +169,7 @@ data_imports = table(
 data_requests = table(
     "data_requests",
     "id:s kind:s table_kind:s document_type:s title:s used_for:j reason_code:s reason_params:j format_hint:s "
-    "status:s raised_by:s created_at:t resolved_at:t",
+    "status:s raised_by:s created_at:t resolved_at:t resolved_by:s unavailable_reason:s",
     ("id",),
 )
 # 数据质量体检: 每项只存最近一次的结果, 历次结果在 data 留痕里

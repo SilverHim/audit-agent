@@ -1699,6 +1699,17 @@ class FakeDataStore:
         self.data_version += 1
         return changed
 
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        request = self.data_requests.get(request_id)
+        if request is None or request.status != "open":
+            return None
+        update = {"status": "unavailable", "unavailable_reason": reason, "resolved_by": actor, "resolved_at": at}
+        marked = request.model_copy(update=update)
+        self.data_requests[request_id] = marked
+        return marked
+
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         self.last_run = run
         self.check_results = list(run.checks)

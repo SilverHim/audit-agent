@@ -65,6 +65,7 @@ from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
+STOPPED = frozenset({ProcedureStatus.awaiting_data, ProcedureStatus.no_data})  # 因资料不执行的程序状态
 INPUTS_CHANGED = "inputs_changed"  # 数据写操作结束后交给 await_data 的恢复值; 节点不读它, 重查现有资料 (需求 R272)
 
 
@@ -602,8 +603,9 @@ class GraphNodes:
     ) -> StatePatch:
         """执行一条 P2 以外的程序, 本程序有待决任务时在节点内等人, 直到不再有 (接口文档第 7 节恢复机制).
 
-        每次执行 (首次与 rerun) 前查本程序要的资料 (inputs_before_run, 需求 R272): 缺了不执行, 程序记 awaiting_data,
-        本程序到此结束 (rerun 之前的执行与读回的决定照常返回); 资料到了由执行阶段补跑 (after_fan_in 转去 p1_ingest).
+        每次执行 (首次与 rerun) 前查本程序要的资料 (inputs_before_run, 需求 R272): 缺了不执行, 程序记 awaiting_data
+        (缺的里有客户无此类资料的记 no_data, 需求 R280), 本程序到此结束 (rerun 之前的执行与读回的决定照常返回);
+        资料到了由执行阶段补跑 (after_fan_in 转去 p1_ingest).
         每次执行见 attempt. 每轮执行之后与每读回一个决定之后都按 Store 判断还要不要等 (见 still_waiting: 本程序仍有
         待决任务, 失败留下的 failed 任务或判断与例外的 normal, unattributed, dispute 等任务, 或有针对本程序任务而尚未
         读回的决定); 要等时 interrupt() 暂停, 审计师对本程序的任务提交决定后以 Command(resume=决定 ID) 恢复, 节点从头
@@ -641,11 +643,8 @@ class GraphNodes:
             if checked:
                 merge_patch(result, checked)
                 current = apply_patch(current, checked)
-            if (
-                next(p for p in current["procedure_pack"] if p.id == procedure_id).status
-                is ProcedureStatus.awaiting_data
-            ):
-                # 资料不齐, 不执行. 还没执行过时不带阶段 (阶段随执行写入 engagements 表)
+            if next(p for p in current["procedure_pack"] if p.id == procedure_id).status in STOPPED:
+                # 资料不齐 (等数据或客户无此类资料), 不执行. 还没执行过时不带阶段 (阶段随执行写入 engagements 表)
                 if "procedure_runs" in result:
                     return finish(current["procedure_pack"])
                 return {**result, "procedure_pack": current["procedure_pack"]}
@@ -713,8 +712,8 @@ class GraphNodes:
         """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的
         合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕).
         先执行的程序读回的决定传给后面的 (execute 的 earlier).
-        模板 inputs 的资料还缺的程序不执行, 记 awaiting_data (execute 每次执行前查, 需求 R272), 节点照常往下 (P1 的
-        DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
+        模板 inputs 的资料还缺的程序不执行, 记 awaiting_data 或 no_data (execute 每次执行前查, 需求 R272, R280), 节点
+        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
         result: StatePatch = {}
         for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
             earlier = [r.id for r in result.get("review_records", [])]
@@ -830,7 +829,8 @@ class GraphNodes:
     ) -> StatePatch:
         """ids 中的程序按现有资料重定状态 (orchestration.inputs.input_versions): 还缺资料的 awaiting_data, 资料到了的
         回到 planned. 有变化的出新版本, 一个事务内写入 Store, 提交后写 transition 留痕; 返回 {procedure_pack}
-        (换成新版本), 没有变化返回 {}. 有程序新进入 awaiting_data 时随后由 A3 体检 (提补交请求; 出错只记日志).
+        (换成新版本), 没有变化返回 {}. 有程序新进入 awaiting_data 或 no_data 时随后由 A3 体检 (提或撤回补交请求;
+        出错只记日志).
         版本号由状态推出. 以 Store 为准: 程序包中 (replayed 以外) Store 里的最新版本比状态里的新的, 是本节点上一次
         没走完时写的 (只有图持锁时写这些版本; 如写完后留痕失败, 节点出错, 期间补了资料再恢复), 取 Store 那一版照
         当时的判断, 不按现在的资料重查, 照样补写它的留痕 (同键跳过); 否则新算的版本会撞上 Store 已有的那一版.
@@ -838,8 +838,10 @@ class GraphNodes:
         取回)."""
         eid = state["engagement_id"]
         pack = state["procedure_pack"]
-        if not any(declared(self.deps.library.load(pid).inputs) for pid in ids):
-            return {}  # 都没写 inputs (如 P1 的 PLN-07), 不必读现有资料
+        if not any(declared(self.deps.library.load(pid).inputs) for pid in ids) and not any(
+            p.status is ProcedureStatus.no_data for p in pack
+        ):
+            return {}  # 都没写 inputs (如 P1 的 PLN-07), 程序包里也没有要往下游传播的 no_data, 不必读现有资料
         store = self.deps.output_store
         stored_latest = {p.id: p for p in cast(list[Procedure], await store.latest(eid, Procedure))}
         held = {p.id: p.version for p in pack}
@@ -862,7 +864,7 @@ class GraphNodes:
                 stored = cast(list[Procedure], await store.put(eid, changed, actor=AgentId.A1))
         await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [*adopted, *stored]))
         before = {p.id: p.status for p in state["procedure_pack"]}
-        if any(p.status is ProcedureStatus.awaiting_data and before[p.id] is not p.status for p in [*adopted, *stored]):
+        if any(p.status in STOPPED and before[p.id] is not p.status for p in [*adopted, *stored]):
             try:
                 await DataCheckup(self.deps).run(eid)
             except Exception:

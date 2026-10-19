@@ -333,6 +333,14 @@ class DataStore(Protocol):
         项目 locked 抛 EngagementLocked."""
         ...
 
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        """审计师标客户无此类资料 (需求 R280): 一个事务内只改仍为 open 的这一个请求 (带条件的 UPDATE, 行锁随之取得,
+        并发时只有一方改成), 转 unavailable, 记理由, 标记人与时间 (resolved_at), 返回改后的请求; 请求不存在或不是
+        open 时不改, 返回 None (由调用方报 REQUEST_NOT_OPEN). 项目 locked 抛 EngagementLocked."""
+        ...
+
     async def extraction_versions(
         self, eid: str, target_type: str | None = None, target_id: str | None = None
     ) -> list[ExtractionRecord]:

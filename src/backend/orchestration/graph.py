@@ -42,6 +42,7 @@ GATE_NODES: dict[GateId, str] = {spec.gate: spec.node for spec in gates.register
 GATES = gates.gate_nodes(BASELINE)  # 基线功能集下的闸门节点名 (测试与工具用); 编译按功能集取 gates.gate_nodes
 
 UNFINISHED = (ProcedureStatus.planned, ProcedureStatus.executing)  # 还要派发执行的程序状态
+SETTLED = (ProcedureStatus.completed, ProcedureStatus.no_data)  # P2 结清: 已完成, 或未执行 (无数据, 需求 R280)
 LATE = NODE_PROCEDURES["p1_ingest"]  # 执行阶段等到数据后经 p1_ingest 补跑的 P2 以外程序 (需求 R272)
 
 
@@ -156,7 +157,7 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     P2 以外等到了数据的程序 (LATE 中回到 planned 的, 即 DOC-04) → p1_ingest 补跑 (需求 R272);
     有可派发的 P2 程序 (待执行且前置都已完成) → schedule, 不因别的程序等复核或等数据而停下;
     有待决的复核任务 → await_events 等审计师;
-    P2 程序全部完成且没有程序在等数据 → completion;
+    P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion;
     有程序在等数据 (awaiting_data, 任何阶段) → await_data 等数据到达 (需求 R272).
     都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 而没有待决任务),
     或 awaiting_human 却没有待决任务, 进 await_events 会永远等不到决定.
@@ -173,7 +174,7 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
             return "await_events"
         p2 = p2_procedures(pack)
         waiting_data = any(p.status is ProcedureStatus.awaiting_data for p in pack)
-        if all(p.status is ProcedureStatus.completed for p in p2) and not waiting_data:
+        if all(p.status in SETTLED for p in p2) and not waiting_data:
             return "completion"
         if waiting_data:
             return "await_data"

@@ -43,6 +43,7 @@ from backend.contracts.views import (
     AcceptanceMaterial,
     CompletionMaterial,
     GateMaterial,
+    NotExecuted,
     PlanningMaterial,
     ReportMaterial,
 )
@@ -588,7 +589,35 @@ async def fin01_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
     schedule = values["uncorrected_schedule"]
     if schedule is None:
         raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
-    return schedule, CompletionMaterial(schedule=schedule, misstatements=values["misstatements"])
+    return schedule, CompletionMaterial(
+        schedule=schedule, misstatements=values["misstatements"], not_executed=await not_executed(deps, eid, values)
+    )
+
+
+async def not_executed(deps: AgentDeps, eid: str, values: EngagementState) -> list[NotExecuted]:
+    """程序包中未执行 (无数据) 的程序 (需求 R280), 按编号: requests 为记 no_data 时存下的 data_request_ids 对应的
+    请求 (取 DataStore.requests); via 为传来这些理由的前置: 模板 depends_on 中同为 no_data, 且 data_request_ids 与
+    本程序的有交集的 (按 depends_on 顺序). 只按存下的理由列, 不列后来才 no_data 的前置 (no_data 定下后不再改)."""
+    pack = values["procedure_pack"]
+    skipped = {p.id: p for p in pack if p.status is ProcedureStatus.no_data}
+    if not skipped:
+        return []
+    requests = {r.id: r for r in await deps.data.requests(eid)}
+
+    def via(pid: str) -> list[str]:
+        reasons = set(skipped[pid].data_request_ids)
+        return [
+            d for d in deps.library.load(pid).depends_on if d in skipped and reasons & set(skipped[d].data_request_ids)
+        ]
+
+    return [
+        NotExecuted(
+            procedure_id=pid,
+            via=via(pid),
+            requests=[requests[i] for i in skipped[pid].data_request_ids if i in requests],
+        )
+        for pid in sorted(skipped)
+    ]
 
 
 # ── RPT-01 ──

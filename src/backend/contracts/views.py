@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from backend.contracts.data import TableKind
+from backend.contracts.data import DataRequest, TableKind
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
@@ -98,12 +98,21 @@ class PlanningMaterial(Model):
     uncovered_objective_ids: list[str]  # 按当前风险等级没有程序覆盖的审计目标; 非空时不能通过, 须驳回或改风险等级
 
 
+class NotExecuted(Model):
+    """因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."""
+
+    procedure_id: str  # 程序编号
+    via: list[str] = []  # 因前置未执行而未执行时, 传来理由的前置: 同为 no_data 且请求有交集 (按 depends_on 顺序)
+    requests: list[DataRequest]  # 客户无此类资料的补交请求 (Procedure.data_request_ids), 含理由, 标记人与时间
+
+
 class CompletionMaterial(Model):
     """FIN-01 闸门的呈报材料."""
 
     kind: Literal["FIN-01"] = "FIN-01"  # 材料类型标记
     schedule: UncorrectedSchedule  # 未更正错报汇总表
     misstatements: list[Misstatement]  # 全部错报
+    not_executed: list[NotExecuted] = []  # 未执行 (无数据) 的程序, 按程序编号 (需求 R280)
 
 
 class ReportMaterial(Model):

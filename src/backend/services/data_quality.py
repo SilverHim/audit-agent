@@ -213,17 +213,32 @@ Subject = TableKind | DocumentType  # 一项资料: 账表或文件类型
 
 @dataclass(frozen=True)
 class OnHand:
-    """项目现有的资料: 有行的账表与有文件的类型 (口径同就绪判断: 账表有任意一行即算有, 含审计期间外的)."""
+    """项目现有的资料: 有行的账表与有文件的类型 (口径同就绪判断: 账表有任意一行即算有, 含审计期间外的), 以及
+    审计师标了客户无此类资料的 (需求 R280)."""
 
     tables: frozenset[TableKind] = frozenset()
     documents: frozenset[DocumentType] = frozenset()
+    unavailable: frozenset[Subject] = frozenset()
+
+    def has(self, subject: Subject) -> bool:
+        return subject in self.tables if isinstance(subject, TableKind) else subject in self.documents
 
 
-def on_hand(stats: Mapping[TableKind, TableStats], documents: Mapping[DocumentType, int]) -> OnHand:
-    """由 DataStore.stats 与 DataStore.document_counts 算现有的资料."""
+def subject_of(request: DataRequest) -> Subject | None:
+    """请求要的资料: 账表种类或文件类型."""
+    return request.table_kind if request.table_kind is not None else request.document_type
+
+
+def on_hand(
+    stats: Mapping[TableKind, TableStats], documents: Mapping[DocumentType, int], requests: Iterable[DataRequest] = ()
+) -> OnHand:
+    """由 DataStore.stats, DataStore.document_counts 与补交请求 (标了 unavailable 的) 算现有的资料."""
     return OnHand(
         tables=frozenset(kind for kind, item in stats.items() if item.records > 0),
         documents=frozenset(kind for kind, n in documents.items() if n > 0),
+        unavailable=frozenset(
+            subject for r in requests if r.status == "unavailable" and (subject := subject_of(r)) is not None
+        ),
     )
 
 
@@ -234,12 +249,13 @@ def missing_inputs(inputs: ProcedureInputs, have: OnHand) -> list[Subject]:
 
 
 def program_requests(needs: Mapping[str, ProcedureInputs], have: OnHand, now: datetime) -> list[DataRequest]:
-    """程序要的补交请求: needs 为还没执行完的程序 → 其 inputs; 现在还没有的资料每项一个请求, used_for 为要它的程序
-    (按编号). 账表的原因为 missing_table, 文件为 not_provided. 按 REQUEST_ORDER 排."""
+    """程序要的补交请求: needs 为还没执行完的程序 → 其 inputs; 现在还没有的资料每项一个请求 (标了客户无此类资料的
+    不算), used_for 为要它的程序 (按编号). 账表的原因为 missing_table, 文件为 not_provided. 按 REQUEST_ORDER 排."""
     users: dict[Subject, list[str]] = {}
     for procedure_id in sorted(needs):
         for subject in missing_inputs(needs[procedure_id], have):
-            users.setdefault(subject, []).append(procedure_id)
+            if subject not in have.unavailable:
+                users.setdefault(subject, []).append(procedure_id)
     requests = [
         table_request(subject, "missing_table", {}, now, used_for)
         if isinstance(subject, TableKind)
@@ -387,20 +403,28 @@ def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVe
 
 @dataclass(frozen=True)
 class RequestChanges:
-    """补交请求的变化: saved 为要写入的 (新提出, 重新打开, 参数变了, 转 received 的), raised 与 received 为要留痕的."""
+    """补交请求的变化: saved 为要写入的 (新提出, 重新打开, 参数变了, 转 received 或 withdrawn 的), raised, received
+    与 withdrawn 为要留痕的."""
 
     saved: list[DataRequest] = field(default_factory=list)
     raised: list[DataRequest] = field(default_factory=list)
     received: list[DataRequest] = field(default_factory=list)
+    withdrawn: list[DataRequest] = field(default_factory=list)
 
 
-def reconcile(existing: Sequence[DataRequest], wanted: Sequence[DataRequest], now: datetime) -> RequestChanges:
+def reconcile(
+    existing: Sequence[DataRequest], wanted: Sequence[DataRequest], now: datetime, have: OnHand | None = None
+) -> RequestChanges:
     """对照已有请求与这次体检需要的请求: 没有的新提出; 已收到 (或撤回) 的重新打开 (created_at 为 now, resolved_at
-    清空); 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再需要的 (资料已补齐) 转 received."""
+    清空); 标了客户无此类资料的是定论, 不重开也不改; 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再
+    需要的转 received (资料已补齐), 但程序要的资料现在仍没有 (have 中没有, 要它的程序都不再执行, 需求 R280) 时转
+    withdrawn. 体检请求的资料 (USED_FOR 的) 不再需要即算收到 (如审批人随总账一并补上); have 为空时一律按收到."""
     changes = RequestChanges()
     current = {r.id: r for r in existing}
     for request in wanted:
         old = current.get(request.id)
+        if old is not None and old.status == "unavailable":
+            continue
         if old is None or old.status != "open":
             changes.saved.append(request)
             changes.raised.append(request)
@@ -409,7 +433,9 @@ def reconcile(existing: Sequence[DataRequest], wanted: Sequence[DataRequest], no
     needed = {r.id for r in wanted}
     for old in existing:
         if old.status == "open" and old.id not in needed:
-            received = old.model_copy(update={"status": "received", "resolved_at": now})
-            changes.saved.append(received)
-            changes.received.append(received)
+            subject = subject_of(old)
+            gone = have is not None and subject is not None and subject not in USED_FOR and not have.has(subject)
+            resolved = old.model_copy(update={"status": "withdrawn" if gone else "received", "resolved_at": now})
+            changes.saved.append(resolved)
+            (changes.withdrawn if gone else changes.received).append(resolved)
     return changes

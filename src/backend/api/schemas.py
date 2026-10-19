@@ -232,6 +232,12 @@ class DataReadyIn(Model):
     reason: str | None = None  # 理由; 最近一次体检有不通过的项时必填
 
 
+class RequestUnavailableIn(Model):
+    """补交请求标 "客户无此类资料" (需求 R280)."""
+
+    reason: str  # 理由, 必填 (去首尾空白后不能为空)
+
+
 class ImportSheet(Model):
     """导入时换工作表."""
 

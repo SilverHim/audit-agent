@@ -45,7 +45,14 @@ export const Route = createFileRoute('/engagements/$eid/')({
 
 type Current =
   | { kind: 'gate'; key: string; view: GateView; deferred: boolean }
-  | { kind: 'requests'; key: string; requests: DataRequest[]; awaiting: boolean; deferred: boolean }
+  | {
+      kind: 'requests'
+      key: string
+      requests: DataRequest[]
+      marked: DataRequest[]
+      awaiting: boolean
+      deferred: boolean
+    }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
 
 type Turn = {
@@ -87,12 +94,13 @@ function Workspace() {
       const key = `gate:${gate.data.gate}`
       list.push({ kind: 'gate', key, view: gate.data, deferred: deferredKeys.has(key) })
     }
-    // 补交资料合成一项, 排在阶段决定之后, 复核任务之前
+    // 补交资料合成一项, 排在阶段决定之后, 复核任务之前; 标了客户无此类资料的一并列出 (只读)
     const open = (requests.data ?? []).filter((item) => item.status === 'open')
+    const marked = (requests.data ?? []).filter((item) => item.status === 'unavailable')
     const awaiting = Boolean(overview?.awaiting_data)
     if (open.length || awaiting) {
       const deferred = open.length > 0 && open.every((item) => deferredKeys.has(`request:${item.id}`))
-      list.push({ kind: 'requests', key: 'requests', requests: open, awaiting, deferred })
+      list.push({ kind: 'requests', key: 'requests', requests: open, marked, awaiting, deferred })
     }
     for (const item of ranked) {
       const key = `task:${item.view.task.id}`
@@ -465,6 +473,7 @@ function CurrentItem({
         <DataRequestCard
           eid={eid}
           requests={current.requests}
+          marked={current.marked}
           awaiting={current.awaiting}
           disabled={disabled}
           deferred={current.deferred}
@@ -530,7 +539,11 @@ function gateIntro(t: Messages, view: GateView): ReactNode {
   }
   if (material.kind === 'PLN-01/03') return t.workspace.gateIntro['PLN-01/03']
   if (material.kind === 'FIN-01') {
-    return t.workspace.gateIntro['FIN-01'](material.misstatements.length, formatAud(material.schedule.total_cents))
+    return t.workspace.gateIntro['FIN-01'](
+      material.misstatements.length,
+      formatAud(material.schedule.total_cents),
+      material.not_executed?.length ?? 0,
+    )
   }
   return t.workspace.gateIntro['RPT-01'](material.report.revision)
 }

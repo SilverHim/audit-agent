@@ -255,7 +255,8 @@ export const zh: Messages = {
       'ACC-01': (passed, total, exceptions) =>
         `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
-      'FIN-01': (count, total) => `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。请确认审计意见类型。`,
+      'FIN-01': (count, total, skipped) =>
+        `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。${skipped ? `另有 ${skipped} 项程序因客户无此类资料未执行。` : ''}请确认审计意见类型。`,
       'RPT-01': (revision) => `第 ${revision} 稿审计报告已生成。请签字，或附批注退回修订。`,
     },
     reviewIntro: (total, tier) => `有 ${total} 项需要你复核。这一项属于"${tier}"档。`,
@@ -370,6 +371,8 @@ export const zh: Messages = {
     materiality: '重要性水平',
     opinion: '意见类型',
     count: (n) => `共记录 ${n} 项错报`,
+    notExecuted: (n) => `${n} 项程序未执行（无数据）`,
+    via: (ids) => `前置程序 ${ids} 未执行`,
   },
   reportCard: {
     revision: (n, opinion) => `第 ${n} 稿 · ${opinion}`,
@@ -978,6 +981,20 @@ export const zh: Messages = {
     upload: '上传',
     uploading: '上传中…',
     received: '已收到',
+    statuses: { received: '已收到', withdrawn: '不再需要', unavailable: '客户无此类资料' },
+    unavailable: {
+      action: '客户无此类资料',
+      title: (item) => `客户没有${item}`,
+      intro: '等这项资料的程序将记为未执行，并列入完成阶段的材料。',
+      reason: '理由',
+      confirm: '确认',
+      done: '已记下：客户无此类资料',
+      markedBy: '标记人',
+    },
+    marked: {
+      title: '客户无此类资料',
+      intro: '这些资料客户没有，等它们的程序记为未执行，列入完成阶段的材料。',
+    },
     open: '打开数据管理',
     reasons: {
       missing_table: '尚未接入',

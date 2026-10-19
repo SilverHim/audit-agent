@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import AccountCategoryIn, DataReadyIn, ImportSheet
+from backend.api.schemas import AccountCategoryIn, DataReadyIn, ImportSheet, RequestUnavailableIn
 from backend.contracts.data import (
     CategoryVersion,
     DataReadiness,
@@ -142,6 +142,21 @@ async def data_requests(
     (POST /data/imports), 文件走上传 (POST /documents), 都带 request_id."""
     async with catch_api():
         return await deps.data.requests(engagement.id)
+
+
+@router.post("/requests/{request_id}/unavailable")
+async def mark_request_unavailable(
+    request_id: str,
+    body: RequestUnavailableIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> DataRequest:
+    """标 "客户无此类资料" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.
+    请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;
+    锁定 423; 忙 409 ENGAGEMENT_BUSY."""
+    async with catch_api():
+        return await service.mark_unavailable(engagement.id, request_id, body.reason, user.id)
 
 
 @router.post("/ready", status_code=202)

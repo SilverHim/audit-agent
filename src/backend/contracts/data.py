@@ -127,7 +127,8 @@ class CheckInputs(Model):
 RequestKind = Literal["table", "document"]  # 补交的是账表 (走导入) 还是文件 (走上传)
 # 提出的原因: 就绪必需的表缺失, 来源不提供某些字段, 客户没提供
 RequestReason = Literal["missing_table", "field_unavailable", "not_provided"]
-RequestStatus = Literal["open", "received", "withdrawn"]  # 待补交, 已收到, 已撤回 (暂无自动撤回)
+# 待补交, 已收到, 已撤回 (要它的程序都不再执行, 资料又没到), 客户无此类资料 (审计师标记, 需求 R280; 定论, 不再重开)
+RequestStatus = Literal["open", "received", "withdrawn", "unavailable"]
 
 
 class DataRequest(Model):
@@ -146,7 +147,9 @@ class DataRequest(Model):
     status: RequestStatus = "open"  # 状态
     raised_by: str = "A3"  # 提出者
     created_at: datetime  # 提出 (或重新打开) 的时间
-    resolved_at: datetime | None = None  # 转为 received 的时间
+    resolved_at: datetime | None = None  # 转为 received, withdrawn 或 unavailable 的时间
+    resolved_by: str | None = None  # 标记客户无此类资料的审计师 (用户 ID); A3 自动转的为空
+    unavailable_reason: str | None = None  # 客户无此类资料的理由 (标记时必填)
 
 
 XeroStatus = Literal["connected", "not_connected", "expired"]  # Xero 连接状态: 已连接, 未连接, 授权过期

@@ -2261,6 +2261,73 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/data/requests/{request_id}/unavailable": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Mark Request Unavailable",
+        "description": "标 \"客户无此类资料\" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.\n请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;\n锁定 423; 忙 409 ENGAGEMENT_BUSY.",
+        "operationId": "data-mark_request_unavailable",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestUnavailableIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/data/ready": {
       "post": {
         "tags": [
@@ -3663,6 +3730,14 @@
             },
             "type": "array",
             "title": "Misstatements"
+          },
+          "not_executed": {
+            "items": {
+              "$ref": "#/components/schemas/NotExecuted"
+            },
+            "type": "array",
+            "title": "Not Executed",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -4390,7 +4465,8 @@
             "enum": [
               "open",
               "received",
-              "withdrawn"
+              "withdrawn",
+              "unavailable"
             ],
             "title": "Status",
             "default": "open"
@@ -4416,6 +4492,28 @@
               }
             ],
             "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
           }
         },
         "additionalProperties": false,
@@ -6519,6 +6617,37 @@
         "title": "NeitherAction",
         "description": "仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做."
       },
+      "NotExecuted": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "via": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Via",
+            "default": []
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/DataRequest"
+            },
+            "type": "array",
+            "title": "Requests"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "requests"
+        ],
+        "title": "NotExecuted",
+        "description": "因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."
+      },
       "OpinionType": {
         "type": "string",
         "enum": [
@@ -7111,6 +7240,21 @@
         ],
         "title": "ReportStatus",
         "description": "报告版本状态."
+      },
+      "RequestUnavailableIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "RequestUnavailableIn",
+        "description": "补交请求标 \"客户无此类资料\" (需求 R280)."
       },
       "ReviewRecord": {
         "properties": {

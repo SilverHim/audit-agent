@@ -8,6 +8,7 @@ import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen
 import type { DocumentRef, DocumentType } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
+import { MarkedRequests } from '@/components/data-requests'
 import { ImportDialog } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -18,6 +19,7 @@ import {
   type DataSummary,
   type TableKind,
   type TableSummary,
+  useDataRequests,
   useDataSummary,
   useSetDocumentType,
   useUploadDocuments,
@@ -66,6 +68,7 @@ function DataPage() {
     refetchInterval: summary?.processing ? 3000 : false,
   })
   const upload = useUploadDocuments(eid)
+  const requests = useDataRequests(eid)
   const fileInput = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState<{ kind?: TableKind } | null>(null)
 
@@ -169,6 +172,8 @@ function DataPage() {
             <Checks eid={eid} checks={summary.checks} />
           </>
         ) : null}
+
+        <MarkedRequests requests={(requests.data ?? []).filter((item) => item.status === 'unavailable')} />
 
         <Documents
           eid={eid}

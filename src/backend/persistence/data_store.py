@@ -6,7 +6,7 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -395,6 +395,27 @@ class PostgresDataStore(Store):
                 update(t).where(t.c.engagement_id == eid).values(data_version=int(loads["data_version"]) + 1)
             )
         return changed
+
+    async def mark_unavailable(
+        self, eid: str, request_id: str, *, reason: str, actor: str, at: datetime
+    ) -> DataRequest | None:
+        t = m.data_requests
+        values = {"status": "unavailable", "unavailable_reason": reason, "resolved_by": actor, "resolved_at": at}
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            row = (
+                (
+                    await conn.execute(
+                        update(t)
+                        .where(t.c.engagement_id == eid, t.c.id == request_id, t.c.status == "open")
+                        .values(values)
+                        .returning(*t.c)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return None if row is None else DataRequest.model_validate({k: row[k] for k in DataRequest.model_fields})
 
     async def save_check_run(self, eid: str, run: CheckRun, requests: Sequence[DataRequest]) -> None:
         checks, table = m.data_checks, m.data_requests

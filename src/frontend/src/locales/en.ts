@@ -263,8 +263,8 @@ export const en = {
         `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
       'PLN-01/03':
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',
-      'FIN-01': (count: number, total: string) =>
-        `Fieldwork is complete. ${count} misstatement${count === 1 ? '' : 's'} recorded, ${total} uncorrected in total. Confirm the opinion type.`,
+      'FIN-01': (count: number, total: string, skipped: number) =>
+        `Fieldwork is complete. ${count} misstatement${count === 1 ? '' : 's'} recorded, ${total} uncorrected in total.${skipped ? ` ${skipped} procedure${skipped === 1 ? ' was' : 's were'} not performed because the client has no such data.` : ''} Confirm the opinion type.`,
       'RPT-01': (revision: number) => `Report revision ${revision} is ready. Sign it, or return it with comments.`,
     },
     reviewIntro: (total: number, tier: string) =>
@@ -395,6 +395,8 @@ export const en = {
     materiality: 'Overall materiality',
     opinion: 'Opinion type',
     count: (n: number) => `${n} misstatement${n === 1 ? '' : 's'} recorded`,
+    notExecuted: (n: number) => `${n} procedure${n === 1 ? '' : 's'} not performed (no data)`,
+    via: (ids: string) => `Its prerequisite ${ids} was not performed`,
   },
   reportCard: {
     revision: (n: number, opinion: string) => `Revision ${n} · ${opinion}`,
@@ -1054,6 +1056,25 @@ export const en = {
     upload: 'Upload',
     uploading: 'Uploading…',
     received: 'Received',
+    statuses: {
+      received: 'Received',
+      withdrawn: 'No longer needed',
+      unavailable: 'Client has none',
+    } as Record<string, string>,
+    unavailable: {
+      action: 'Client has none',
+      title: (item: string) => `The client has no ${item}`,
+      intro: 'Procedures waiting for it will be recorded as not performed and listed in the completion material.',
+      reason: 'Reason',
+      confirm: 'Confirm',
+      done: 'Recorded: the client has none',
+      markedBy: 'Marked by',
+    },
+    marked: {
+      title: 'Client has none',
+      intro:
+        'The client does not have these. Procedures waiting for them are recorded as not performed and listed in the completion material.',
+    },
     open: 'Open data management',
     reasons: {
       missing_table: 'Not received yet',

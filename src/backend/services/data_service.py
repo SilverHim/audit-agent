@@ -17,12 +17,13 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
-from backend.agents.checkup import DataCheckup, checkup_entries
+from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
 from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
 from backend.contracts.data import (
     CategoryVersion,
     ContractVersion,
     DataReadiness,
+    DataRequest,
     DataSource,
     DataSources,
     DataSummary,
@@ -71,7 +72,7 @@ from backend.services.data_import import (
     read_sheet,
     sheet_names,
 )
-from backend.services.data_quality import missing_tables
+from backend.services.data_quality import REQUIRED_TABLES, missing_tables
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
 from backend.services.table_plan import convert
 from backend.services.trail_pages import all_of_kind
@@ -715,6 +716,33 @@ class DataService:
             raise
         self.runner.launch(eid, Command(resume=DATA_READY))
         return readiness
+
+    async def mark_unavailable(self, eid: str, request_id: str, reason: str, actor: str) -> DataRequest:
+        """审计师在补交卡片上标 "客户无此类资料" (POST /data/requests/{id}/unavailable, 需求 R280): 请求转 unavailable,
+        记理由, 标记人与时间, 写 data 留痕 (action request_unavailable, 带理由与 used_for). 在 holding 内做 (不计进
+        处理中的作业), 结束时图若在等程序要的数据就交锁恢复: await_data 重查, 等这项资料的程序与其下游记 no_data.
+        标记是定论, 之后的体检不重开也不改 (data_quality.reconcile).
+
+        按顺序拒绝: 锁定 423, 忙 409; 请求不存在 404; 理由去首尾空白后为空 MISSING_FIELD; 不是 open
+        REQUEST_NOT_OPEN; 就绪必需的表 (P1 等数据已保证有) INVALID_VALUE."""
+        async with self.holding(eid, []):
+            request = next((r for r in await self.deps.data.requests(eid) if r.id == request_id), None)
+            if request is None:
+                raise LookupError(f"补交请求 {request_id} 不存在")
+            reason = reason.strip()
+            if not reason:
+                raise DataRejected("MISSING_FIELD", "须写明客户没有这类资料的理由")
+            if request.status != "open":
+                raise DataRejected("REQUEST_NOT_OPEN", f"{request_id} 已是 {request.status}")
+            if request.table_kind in REQUIRED_TABLES:
+                raise DataRejected("INVALID_VALUE", f"{request.title}是就绪必需的表, 不能标客户无此类资料")
+            marked = await self.deps.data.mark_unavailable(
+                eid, request_id, reason=reason, actor=actor, at=datetime.now(UTC)
+            )
+            if marked is None:  # 读过之后被改了 (存储层只改仍为 open 的)
+                raise DataRejected("REQUEST_NOT_OPEN", f"{request_id} 已不是 open")
+            await record_transitions(self.deps.trail, [request_entry(eid, marked, "request_unavailable")])
+        return marked
 
     # ── 文件上传, 分类与抽取结果修改 (需求 R14) ──
 

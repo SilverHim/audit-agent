@@ -219,6 +219,32 @@ async def test_versions_checks_and_open_requests(storage, tmp_path: Path) -> Non
     assert [c.id.value for c in await store.checks(first.id)] == ["debits_equal_credits", "mapping_complete"]
     assert await store.open_requests(first.id) == 2
     assert await store.versions(second.id) == []  # 行级安全: 别的项目看不到
+    # 标客户无此类资料 (需求 R280): 迁移 0006 的两列往返, 只改仍为 open 的这一个请求; 并发标同一条只有一方改成
+    [request_a] = [r for r in await store.requests(first.id) if r.id == "REQ-a"]
+    assert (request_a.resolved_by, request_a.unavailable_reason) == (None, None)
+    results = await asyncio.gather(
+        *(store.mark_unavailable(first.id, "REQ-a", reason=f"客户没有 {n}", actor=f"U-{n}", at=at) for n in (1, 2))
+    )
+    [marked] = [r for r in results if r is not None]
+    n = 1 if results[0] is not None else 2
+    assert marked == request_a.model_copy(
+        update={
+            "status": "unavailable",
+            "resolved_at": at,
+            "resolved_by": f"U-{n}",
+            "unavailable_reason": f"客户没有 {n}",
+        }
+    )
+    assert {r.id: r for r in await store.requests(first.id)}["REQ-a"] == marked
+    assert await store.open_requests(first.id) == 1
+    for eid, rid in ((first.id, "REQ-a"), (first.id, "REQ-b"), (first.id, "REQ-none"), (second.id, "REQ-c")):
+        # 已标的, 已收到的, 不存在的, 别的项目的 (行级安全) 都不改
+        assert await store.mark_unavailable(eid, rid, reason="再标", actor="U-3", at=at) is None
+    assert {r.id: r.status for r in await store.requests(first.id)} == {
+        "REQ-a": "unavailable",
+        "REQ-b": "received",
+        "REQ-c": "open",
+    }
 
 
 # ── 需求 R13: 账表导入与新数据版本写入 ──
@@ -716,3 +742,134 @@ async def test_table_pages_do_not_repeat_or_skip_rows_with_duplicate_numbers(sto
         pages = [await service.table_page(eid, kind, None, offset, 1) for offset in range(5)]
         ids = [row["id"] for page in pages for row in page.rows]
         assert ids == sorted(ids) and len(set(ids)) == 5 and all(p.total == 5 for p in pages), kind
+
+
+# ── 迁移 0006 往返 (需求 R280, 审核 R280-04) ──
+
+
+def migration(name: str) -> Any:
+    """按文件名载入一个迁移模块 (文件名以数字开头, 不能直接 import)."""
+    import importlib.util
+
+    path = ROOT / "src" / "backend" / "migrations" / "versions" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"migration_{name}", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_migration_0006_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """以属主角色在一个事务里走 0006 降级再升级, 最后回滚 (不动测试库的表结构与 alembic 版本): 降级后标了客户无此类
+    资料的请求改回 open (0005 的代码只认 open, received, withdrawn), 理由与标记人随两列删掉; 再升级两列回来, 为空.
+    需另设 TEST_DATABASE_OWNER_URL (测试库的属主角色)."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0006_request_unavailable")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    at = now()
+    base = {
+        "engagement_id": first.id,
+        "kind": "table",
+        "title": "t",
+        "used_for": [],
+        "reason_code": "missing_table",
+        "reason_params": {},
+        "raised_by": "A3",
+        "created_at": at,
+    }
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+                await conn.execute(text("SELECT set_config('app.engagement_id', :eid, true)"), {"eid": first.id})
+                marked = {"resolved_at": at, "resolved_by": "U-1", "unavailable_reason": "客户没有"}
+                for row in (
+                    {**base, "id": "REQ-open", "status": "open"},
+                    {**base, "id": "REQ-got", "status": "received", "resolved_at": at},
+                    {**base, "id": "REQ-none", "status": "unavailable", **marked},
+                ):  # 各行的列不同, 逐行插入
+                    await conn.execute(insert(m.data_requests).values(**row))
+                found = await conn.execute(
+                    text("SELECT resolved_by, unavailable_reason FROM data_requests WHERE id = 'REQ-none'")
+                )
+                assert found.one() == ("U-1", "客户没有")
+
+                async def columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_requests'")
+                    )
+                    return {row[0] for row in found}
+
+                async def rows() -> dict[str, tuple[Any, ...]]:
+                    found = await conn.execute(
+                        text("SELECT id, status, resolved_at IS NOT NULL FROM data_requests WHERE engagement_id = :e"),
+                        {"e": first.id},
+                    )
+                    return {row[0]: tuple(row[1:]) for row in found}
+
+                # 迁移时不设 app.engagement_id (同 alembic upgrade 命令), 降级要改全部项目的行
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("downgrade"))
+                await conn.execute(text("SELECT set_config('app.engagement_id', :eid, true)"), {"eid": first.id})
+
+                async def row_security() -> tuple[Any, ...]:
+                    found = await conn.execute(
+                        text(
+                            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                            "WHERE oid = 'data_requests'::regclass"
+                        )
+                    )
+                    return tuple(found.one())
+
+                assert await row_security() == (True, True)  # 降级时暂时关掉的 FORCE 已恢复 (审核 R280-09)
+                assert not {"resolved_by", "unavailable_reason"} & await columns()
+                assert await rows() == {
+                    "REQ-open": ("open", False),
+                    "REQ-got": ("received", True),
+                    "REQ-none": ("open", False),
+                }
+                await conn.run_sync(run("upgrade"))
+                assert {"resolved_by", "unavailable_reason"} <= await columns()
+                found = await conn.execute(
+                    text("SELECT id, resolved_by, unavailable_reason FROM data_requests WHERE engagement_id = :e"),
+                    {"e": first.id},
+                )
+                assert {row[0]: (row[1], row[2]) for row in found} == {
+                    "REQ-open": (None, None),
+                    "REQ-got": (None, None),
+                    "REQ-none": (None, None),
+                }
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert await row_security() == (True, True)
+            finally:
+                await outer.rollback()
+        async with engine.connect() as conn:
+            assert {"resolved_by", "unavailable_reason"} <= await columns_of(conn)
+            version = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            assert version.scalar_one() >= "0006"
+    finally:
+        await engine.dispose()
+
+
+async def columns_of(conn: Any) -> set[str]:
+    from sqlalchemy import text
+
+    found = await conn.execute(
+        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_requests'")
+    )
+    return {row[0] for row in found}

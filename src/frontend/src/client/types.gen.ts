@@ -486,6 +486,10 @@ export type CompletionMaterial = {
      * Misstatements
      */
     misstatements: Array<Misstatement>;
+    /**
+     * Not Executed
+     */
+    not_executed?: Array<NotExecuted>;
 };
 
 /**
@@ -887,7 +891,7 @@ export type DataRequest = {
     /**
      * Status
      */
-    status?: 'open' | 'received' | 'withdrawn';
+    status?: 'open' | 'received' | 'withdrawn' | 'unavailable';
     /**
      * Raised By
      */
@@ -900,6 +904,14 @@ export type DataRequest = {
      * Resolved At
      */
     resolved_at?: string | null;
+    /**
+     * Resolved By
+     */
+    resolved_by?: string | null;
+    /**
+     * Unavailable Reason
+     */
+    unavailable_reason?: string | null;
 };
 
 /**
@@ -2042,6 +2054,26 @@ export type MisstatementType = 'factual' | 'judgmental' | 'projected';
 export type NeitherAction = 'human_conclusion';
 
 /**
+ * NotExecuted
+ *
+ * 因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料.
+ */
+export type NotExecuted = {
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Via
+     */
+    via?: Array<string>;
+    /**
+     * Requests
+     */
+    requests: Array<DataRequest>;
+};
+
+/**
  * OpinionType
  *
  * 审计意见类型.
@@ -2393,6 +2425,18 @@ export type ReportSection = 'opinion' | 'basis_for_opinion' | 'directors_respons
  * 报告版本状态.
  */
 export type ReportStatus = 'draft' | 'signed';
+
+/**
+ * RequestUnavailableIn
+ *
+ * 补交请求标 "客户无此类资料" (需求 R280).
+ */
+export type RequestUnavailableIn = {
+    /**
+     * Reason
+     */
+    reason: string;
+};
 
 /**
  * ReviewRecord
@@ -4300,6 +4344,40 @@ export type DataDataRequestsResponses = {
 };
 
 export type DataDataRequestsResponse = DataDataRequestsResponses[keyof DataDataRequestsResponses];
+
+export type DataMarkRequestUnavailableData = {
+    body: RequestUnavailableIn;
+    path: {
+        /**
+         * Request Id
+         */
+        request_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/requests/{request_id}/unavailable';
+};
+
+export type DataMarkRequestUnavailableErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataMarkRequestUnavailableError = DataMarkRequestUnavailableErrors[keyof DataMarkRequestUnavailableErrors];
+
+export type DataMarkRequestUnavailableResponses = {
+    /**
+     * Successful Response
+     */
+    200: DataRequest;
+};
+
+export type DataMarkRequestUnavailableResponse = DataMarkRequestUnavailableResponses[keyof DataMarkRequestUnavailableResponses];
 
 export type DataReadyData = {
     /**
