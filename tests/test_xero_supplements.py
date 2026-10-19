@@ -188,12 +188,12 @@ async def test_load_verifies_before_building(tmp_path: Path, monkeypatch: pytest
     async def writable(conn: Any, eid: str) -> None:
         return None
 
-    async def rows(eid: str, statement: Any) -> list[dict[str, Any]]:
-        return []
+    async def load_state(conn: Any, eid: str) -> tuple[None, bool]:
+        return None, False
 
     monkeypatch.setattr(stores, "transaction", no_transaction)
     monkeypatch.setattr(stores, "writable", writable)
-    monkeypatch.setattr(target, "rows", rows)
+    monkeypatch.setattr(target, "load_state", load_state)
     monkeypatch.setattr(stores, "build_tables", lambda snapshot: built.append("built"))
     with pytest.raises(SupplementMismatch, match=r"client_profile\.json"):
         await target.load("E", DATASET)
@@ -207,12 +207,12 @@ async def test_already_loaded_does_not_read_supplements(tmp_path: Path, monkeypa
     async def writable(conn: Any, eid: str) -> None:
         return None
 
-    async def rows(eid: str, statement: Any) -> list[dict[str, Any]]:
-        return [{"dataset": DATASET, "data_version": 1}]
+    async def load_state(conn: Any, eid: str) -> tuple[dict[str, Any], bool]:
+        return {"dataset": DATASET, "data_version": 1}, True
 
     monkeypatch.setattr(stores, "transaction", no_transaction)
     monkeypatch.setattr(stores, "writable", writable)
-    monkeypatch.setattr(target, "rows", rows)
+    monkeypatch.setattr(target, "load_state", load_state)
     await target.load("E", DATASET)
 
 
@@ -263,12 +263,15 @@ LINKED = {
 
 
 def test_tables_merge_supplements() -> None:
-    """R72: 行数, 服务完成记录, 合同关联, 开户行与合同 PDF; 其余各表与纯快照逐行相同."""
+    """R72: 行数, 服务完成记录, 合同关联, 开户行与 (载入时登记的) 合同 PDF; 其余各表与纯快照逐行相同."""
     from datetime import date
 
     from backend.adapters.xero_dataset import Snapshot, build_tables
 
-    tables, contracts = loader().tables(DATASET)
+    tables = loader().tables(DATASET)
+    found = loader().supplement(DATASET)
+    assert found is not None
+    contracts = found.contracts()
     assert {name: len(rows) for name, rows in tables.items()} == {
         "accounts": 62,
         "trial_balance": 33,

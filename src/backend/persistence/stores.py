@@ -16,13 +16,13 @@ from zoneinfo import ZoneInfo
 
 import pdfplumber
 from pydantic import BaseModel
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
-from backend.adapters.xero_supplements import Supplements
+from backend.adapters.xero_supplements import DemoTable, Supplements
 from backend.contracts import records
 from backend.contracts.data import ContractVersion, DataInput
 from backend.contracts.errors import AbnTaken, VersionConflict
@@ -518,9 +518,14 @@ DATASET_READY_BY = "dataset"  # 数据集载入视同确认就绪时, dataset_lo
 
 
 class TableLoader(Store):
-    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 记 dataset_loads (数据版本 1, 视同已确认就绪);
-    已载入则跳过.
+    """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 数据版本 +1 并视同已确认就绪; 已载入则跳过.
 
+    已载入看该项目有没有财务表行 (数据集载入的七张表, 需求 R268), 不看 dataset_loads 有没有行: 导入, 确认就绪, 抽取
+    结果修改与补登记都会先建版本 0 的 dataset_loads 行, 之前按 "有行" 判断时种子载入会被静默跳过.
+    - 没有 dataset_loads 行: 建行, 数据版本 1, 视同就绪.
+    - 有行而还没有财务表行: 在该行上数据版本 +1; 还没确认就绪的视同就绪, 已由审计师确认的保留原记录 (确认的人,
+      时间, 理由与未通过项都不改); loaded_at (第一次接入数据的时间) 不改.
+    - 已有财务表行: 不写 (幂等). 行上的数据集与要载入的不同时抛 ValueError.
     源数据在确认尚未载入之后才读取与转换 (build), 已载入的项目不再依赖源文件.
     """
 
@@ -531,12 +536,13 @@ class TableLoader(Store):
     async def insert(self, eid: str, dataset: str, build: Callable[[], Tables]) -> None:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            existing = await self.rows(eid, select(m.dataset_loads))
-            if existing:
-                if existing[0]["dataset"] != dataset:
-                    raise ValueError("Engagement already has a different dataset")
+            existing, loaded = await self.load_state(conn, eid)
+            if existing is not None and existing["dataset"] != dataset:
+                raise ValueError("Engagement already has a different dataset")
+            if loaded:
                 return
             tables, contracts = build()
+            t = m.dataset_loads
             for name, table in m.FINANCIAL.items():
                 rows = [dict(engagement_id=eid, **row.model_dump()) for row in tables.get(name, ())]
                 if rows:
@@ -547,17 +553,32 @@ class TableLoader(Store):
                 )
             # 数据集是整套预置数据 (种子, 测试与演示项目), 载入即视同审计师已确认数据已齐, P1 不再等待
             loaded_at = now()
-            await conn.execute(
-                insert(m.dataset_loads).values(
-                    engagement_id=eid,
-                    dataset=dataset,
-                    data_version=1,
-                    loaded_at=loaded_at,
-                    ready_at=loaded_at,
-                    ready_by=DATASET_READY_BY,
+            version = 1
+            if existing is None:
+                await conn.execute(
+                    insert(t).values(
+                        engagement_id=eid,
+                        dataset=dataset,
+                        data_version=version,
+                        loaded_at=loaded_at,
+                        ready_at=loaded_at,
+                        ready_by=DATASET_READY_BY,
+                    )
                 )
-            )
-            await record_changes(conn, eid, 1, DataInput)  # 整套载入: 版本 1 变了全部各类数据
+            else:
+                values: dict[str, Any] = {"data_version": t.c.data_version + 1}
+                if existing["ready_at"] is None:
+                    values |= {"ready_at": loaded_at, "ready_by": DATASET_READY_BY}
+                bumped = update(t).where(t.c.engagement_id == eid).values(**values).returning(t.c.data_version)
+                version = (await conn.execute(bumped)).scalar_one()
+            await record_changes(conn, eid, version, DataInput)  # 整套载入: 这一版变了全部各类数据
+
+    async def load_state(self, conn: AsyncConnection, eid: str) -> tuple[Mapping[str, Any] | None, bool]:
+        """项目的 dataset_loads 行 (没有为 None) 与是否已有数据集载入的财务表行 (已载入的判断, 见类说明)."""
+        t = m.dataset_loads
+        row = (await conn.execute(select(t).where(t.c.engagement_id == eid))).mappings().first()
+        tables = [exists().where(m.FINANCIAL[name].c.engagement_id == eid) for name in FINANCIAL_ROWS]
+        return (dict(row) if row is not None else None), bool((await conn.execute(select(or_(*tables)))).scalar_one())
 
     async def insert_adjustments(
         self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None
@@ -753,19 +774,31 @@ class XeroDatasetLoader(TableLoader):
         found.verify()
         return found
 
-    def tables(self, dataset: str) -> Tables:
-        """载入的财务表与合同 PDF (不连库的纯函数, load 与测试共用): 快照映射出七张表 (adapters.xero_dataset); 有补造
-        目录时先核对, 再并入合同关联, 服务完成记录与开户行, 合同 PDF 取补造目录的 contracts/
-        (adapters.xero_supplements). 没有补造目录时与纯快照相同, 不登记合同."""
-        found = self.supplement(dataset)
+    def tables(self, dataset: str) -> dict[str, list[Any]]:
+        """演示数据导入之后的七张财务表 (不连库的纯函数, load 与测试共用, 需求 R268 起不再带合同路径): 快照映射出
+        七张表 (adapters.xero_dataset); 有补造目录时先核对, 再并入合同关联, 服务完成记录与开户行
+        (Supplements.apply). 没有补造目录时与纯快照相同."""
+        return self.merged(dataset, self.supplement(dataset))
+
+    def merged(self, dataset: str, found: Supplements | None) -> dict[str, list[Any]]:
+        """快照映射出的七张表, 有 (已核对的) 补造目录 found 时并入补造表."""
         tables = build_tables(self.snapshot(dataset))
-        if found is None:
-            return tables, ()
-        return found.apply(tables), found.contracts()
+        return found.apply(tables) if found is not None else tables
+
+    def supplement_tables(self, dataset: str) -> list[DemoTable]:
+        """补造覆盖的账表, 同演示导入清单 (xero_supplements.plan) 的 tables; 没有补造目录时为空."""
+        found = self.supplement(dataset)
+        return found.demo_tables() if found is not None else []
 
     async def load(self, eid: str, dataset: str) -> None:
+        """载入七张表 (tables) 并登记补造目录的合同 PDF. 演示数据导入 (R269) 接手补造部分后改为只载快照."""
         self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
-        await self.insert(eid, dataset, lambda: self.tables(dataset))
+
+        def build() -> Tables:
+            found = self.supplement(dataset)
+            return self.merged(dataset, found), found.contracts() if found is not None else ()
+
+        await self.insert(eid, dataset, build)
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
         found = self.supplement(dataset)

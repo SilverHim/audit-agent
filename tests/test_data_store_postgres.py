@@ -1492,3 +1492,58 @@ async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-un
                 await outer.rollback()
     finally:
         await engine.dispose()
+
+
+# ── 需求 R268: 先有版本行再载入 ──
+
+
+async def test_seed_load_after_a_version_row_still_loads(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """R268 验收 5, 6: 先补登记一份上传文件 (建了数据版本 1 的 dataset_loads 行, 还没有财务表行) 再载入, 照常载入,
+    不静默跳过: 各表与直接载入的项目逐行相同, 数据版本 2 且这一版记全部各类数据, 视同就绪; 再载入不变. 已由审计师确认
+    就绪的项目载入后保留原确认记录, 只把数据版本 +1."""
+    engine, (first, second), loader, engagements = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    data = service.deps.data
+    pdf = ROOT / "data/xero_demo/20261017-q1/documents/evidence/fixed_asset_register.pdf"
+    saved = await service.deps.evidence_store.save(
+        first.id,
+        pdf.name,
+        pdf.read_bytes(),
+        type=DocumentType.internal_record,
+        reliability=Reliability.internal_copy,
+        uploaded_by="U-1",
+        status="classified",
+    )
+    edit = DocumentDetailsEdit(document_date=date(2026, 6, 30), reason="按客户提供的登记表")
+    await service.set_document_details(first.id, {saved.id: edit}, "U-1")
+    assert ((await data.readiness(first.id)).data_version, (await data.readiness(first.id)).ready_at) == (1, None)
+
+    await loader.load(first.id, "demo")
+    await loader.load(second.id, "demo")  # 对照: 没有版本行时直接载入
+
+    for name in FINANCIAL_ROWS:
+        assert await table_rows(engine, first.id, name) == await table_rows(engine, second.id, name), name
+    loaded = await data.readiness(first.id)
+    assert (loaded.data_version, loaded.ready_by, loaded.ready_at is not None) == (2, "dataset", True)
+    assert [c.input for c in await data.changes(first.id) if c.data_version == 2] == list(DataInput)
+    docs = await PostgresFinancialDataStore(engine).documents(first.id)
+    assert (
+        saved.id in {d.id for d in docs}
+        and len(docs) == len(await PostgresFinancialDataStore(engine).documents(second.id)) + 1
+    )
+    await loader.load(first.id, "demo")  # 已有财务表行: 不写
+    assert await data.readiness(first.id) == loaded
+    assert len(await table_rows(engine, first.id, "journal_entries")) == len(csv_rows("journal_entries"))
+
+    third = await engagements.create(
+        owner_id=first.owner_id,
+        period_start=date(2025, 7, 1),
+        period_end=date(2026, 6, 30),
+        dataset="demo",
+        profile=loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex}),
+    )
+    confirmed = await data.confirm_ready(third.id, "U-1", reason="客户说数据已齐")
+    await loader.load(third.id, "demo")
+    after = await data.readiness(third.id)
+    assert after.data_version == confirmed.data_version + 1
+    assert (after.ready_at, after.ready_by, after.ready_reason) == (confirmed.ready_at, "U-1", "客户说数据已齐")
