@@ -1911,7 +1911,8 @@ def test_dataset_traits_from_design() -> None:
     assert traits.payroll_accounts is not None
     assert (traits.payroll_accounts.wages_expense, traits.payroll_accounts.leave_provision) == (["477"], ["805"])
     assert DatasetTraits.model_validate(json.loads(DESIGN_TRAITS)) == traits
-    supplements = optional(supplements_dir, "20261017-q1")  # 补造目录的声明同第 5.2 节 (没带补造目录的检出不比)
+    # 补造目录的声明同第 5.2 节 (没带补造目录的检出不比); 只比补造与设计, 不核对快照哈希
+    supplements = optional(supplements_dir, "20261017-q1", False)
     if supplements is not None:
         declared = json.loads((supplements / "dataset_traits.json").read_text(encoding="utf-8"))
         assert declared == json.loads(DESIGN_TRAITS)

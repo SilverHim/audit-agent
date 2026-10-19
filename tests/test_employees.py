@@ -14,7 +14,7 @@ from backend.services import data_import as d
 from backend.services import table_plan as tp
 from backend.services.data_quality import REQUIRED_TABLES, TABLE_TITLES
 from backend.services.data_service import TABLE_NAMES
-from tests.external import require_xero_supplements
+from tests.external import supplements_dir
 from tests.fakes import ENGAGEMENT, FakeDataStore, FakeFinancialStore
 
 EID = ENGAGEMENT.id
@@ -81,7 +81,7 @@ def test_payroll_sheet_is_suggested_and_converts(
 ) -> None:
     """data 为空时取 Xero 演示补造目录的工资册 (列名即字段名)."""
     if data is None:
-        data = (require_xero_supplements("20261017-q1") / "payroll" / file_name).read_bytes()
+        data = (supplements_dir("20261017-q1") / "payroll" / file_name).read_bytes()
     sheet = d.read_sheet(file_name, data)
     preview = d.preview("IMP-1", file_name, d.sheet_names(file_name, data), sheet)
     assert (preview.suggested_kind, preview.suggested_mapping) == (TableKind.employees, mapping)

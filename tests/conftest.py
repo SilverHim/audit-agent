@@ -57,31 +57,6 @@ def q1_supplements():
 
 
 @pytest.fixture
-def q1_snapshot_if_any():
-    """快照 20261017-q1 的目录, 没带快照的检出为 None (不跳过); 仓库跟踪了却找不到时同样失败. 给没有快照时另有
-    走法的用例用."""
-    from tests.external import optional, snapshot_dir
-
-    return optional(snapshot_dir, "20261017-q1")
-
-
-@pytest.fixture
-def mock_snapshot_if_any():
-    """快照 20261017-mock 的目录, 没带快照的检出为 None (不跳过); 仓库跟踪了却找不到时同样失败."""
-    from tests.external import optional, snapshot_dir
-
-    return optional(snapshot_dir, "20261017-mock")
-
-
-@pytest.fixture
-def xero_raw():
-    """Xero 网页导出 data/external/xero/raw 的目录."""
-    from tests.external import raw_dir
-
-    return raw_dir()
-
-
-@pytest.fixture
 def xero_case(tmp_path):
     """注入场景的副本: xero_case(场景名或补丁, base=None, **选项) → XeroCase (见 tests/xero_injection.py).
     一个目录只能建一个副本; 同一用例要建多个 (如基线 T0 与注入场景成对断言) 时给不同的 base 子目录名."""

@@ -28,7 +28,7 @@ from tests.fakes import XERO_SNAPSHOT, xero_engagement, xero_snapshot, xero_snap
 from tests.test_data_store_postgres import table_rows
 from tests.test_xero_link import ACCESS, CODE, DEMO, REFRESH, SECRETS, START, FakeXero, settings
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.external]
 ROOT = Path(__file__).resolve().parents[1]
 
 

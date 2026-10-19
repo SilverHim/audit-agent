@@ -128,7 +128,7 @@ XERO = FixtureSet(
     manifest=XERO_DEMO / "manifest.json",
     uploads=UPLOADS,
     uploads_in_runtime=("DOC-SHEET",),  # 账表识别按上传的文件名取, Xero 演示项目里上传网页导出时用 (生成脚本复制)
-    locate=lambda: supplements_dir("20261017-q1"),
+    locate=lambda: supplements_dir("20261017-q1", hashes=False),  # 只比固定输出与补造, 不核对快照哈希
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]
 # 按登记表参数化用: 读外部数据定位之下目录的那一行标 external

@@ -284,11 +284,10 @@ def test_dataset_traits_read_from_supplements() -> None:
     """R96 验收 2: 没有补造目录的快照 (20261017-mock) 取缺省值; xero/20261017-q1 读已核对的补造目录的
     dataset_traits.json (各值同设计第 5.2 节, 见 test_knowledge.test_dataset_traits_from_design)."""
     from backend.contracts.records import DatasetTraits
-    from tests.external import require_xero_snapshot, require_xero_supplements
 
-    require_xero_snapshot("20261017-mock")
-    require_xero_snapshot("20261017-q1")
-    declared = require_xero_supplements("20261017-q1") / "dataset_traits.json"
+    snapshot_dir("20261017-mock")
+    snapshot_dir("20261017-q1")
+    declared = supplements_dir("20261017-q1") / "dataset_traits.json"
     loaders = routing()
     assert loaders.dataset_traits("xero/20261017-mock") == DatasetTraits()
     q1 = loaders.dataset_traits("xero/20261017-q1")

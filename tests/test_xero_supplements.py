@@ -17,15 +17,16 @@ import pytest
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.contracts.models import ClientProfile
 from backend.persistence import stores
-from tests.external import optional, snapshot_dir, snapshot_location, supplements_path
+from tests.external import needs, optional, snapshot_dir, snapshot_location, supplements_path
 
 REPO = Path(__file__).resolve().parents[1]
-SNAPSHOTS = snapshot_location("20261017-q1").parent  # 快照的上级; 只给路径, 用例经 pytestmark 的 fixture 核对
+SNAPSHOTS = snapshot_location("20261017-q1").parent  # 快照的上级; 只给路径, 用例经 needs_q1 核对
 SUPPLEMENTS = supplements_path("20261017-q1").parent  # 补造目录的上级
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"
 DATASET = "xero/20261017-q1"
 NO_DB: Any = object()  # 本文件不连库
-pytestmark = [pytest.mark.external, pytest.mark.usefixtures("q1_snapshot", "q1_supplements")]
+# 读快照与补造的用例经 needs_q1 先核对 (没带时跳过, 仓库跟踪了却找不到时失败, 哈希不符时跳过)
+needs_q1 = needs("q1_snapshot", "q1_supplements")
 
 
 def loader(api: Path = SNAPSHOTS, supplements: Path | None = SUPPLEMENTS, **options: Any) -> stores.XeroDatasetLoader:
@@ -56,6 +57,7 @@ def mismatch(target: stores.XeroDatasetLoader) -> str:
     return str(raised.value)
 
 
+@needs_q1
 def test_profile_extension_fields_from_supplements() -> None:
     """R127 验收 2: 载入器读出的补造画像带规格书第 4.3 节的扩展字段; 审批限额与申报的关联方不再写在 notes."""
     profile = loader().client_profile(DATASET)
@@ -95,6 +97,7 @@ def test_profile_extension_fields_from_supplements() -> None:
     assert "approval limit" not in profile.notes and "Related parties declared" not in profile.notes
 
 
+@needs_q1
 def test_profile_and_planning_from_supplements() -> None:
     profile = loader().client_profile(DATASET)
     supplied = ClientProfile.model_validate_json((SUPPLEMENTS / "20261017-q1" / "client_profile.json").read_bytes())
@@ -111,6 +114,7 @@ def test_profile_and_planning_from_supplements() -> None:
     assert occurrence.description.startswith("Presumed fraud risk (ASA 240 para 27). Revenue of AUD 32,431")
 
 
+@needs_q1
 def test_without_supplements_falls_back_to_snapshot() -> None:
     """supplements 为空, 或补造目录下没有该快照 (如 20261017-mock) 时照现状: 快照画像与通用模板."""
     generic = stores.read_planning(PLANNING)
@@ -124,6 +128,7 @@ def test_without_supplements_falls_back_to_snapshot() -> None:
         assert target.planning_presets(dataset) == generic
 
 
+@needs_q1
 def test_tampered_files_are_rejected(tmp_path: Path) -> None:
     api, demo = copies(tmp_path)
     target = loader(api, demo)
@@ -149,6 +154,7 @@ def test_tampered_files_are_rejected(tmp_path: Path) -> None:
     assert mismatch(target) == "补造文件与快照不匹配: manual/rpt07_reply.json, 快照 payments.json"
 
 
+@needs_q1
 def test_manifest_must_name_this_dataset(tmp_path: Path) -> None:
     api, demo = copies(tmp_path)
     manifest = demo / "20261017-q1" / "manifest.json"
@@ -159,6 +165,7 @@ def test_manifest_must_name_this_dataset(tmp_path: Path) -> None:
     assert mismatch(loader(api, demo)) == "补造文件与快照不匹配: manifest.json"
 
 
+@needs_q1
 def test_injected_copy_needs_allow_injected(tmp_path: Path) -> None:
     api, demo = copies(tmp_path)
     rewrite_manifest(api, demo, injected="T1")
@@ -166,6 +173,7 @@ def test_injected_copy_needs_allow_injected(tmp_path: Path) -> None:
     assert loader(api, demo, allow_injected=True).client_profile(DATASET).id == "CLIENT-XERO-3C1332BB-Q1"
 
 
+@needs_q1
 @pytest.mark.parametrize("bad_id", ["CLIENT-XERO-3C1332BB", "CLIENT-001"])
 def test_profile_id_must_carry_snapshot_prefix(tmp_path: Path, bad_id: str) -> None:
     """补造画像 ID 须以快照组织 ID 推出的前缀开头, 免得与快照画像 CLIENT-XERO-3C1332BB v1 同 ID 而内容不同."""
@@ -182,6 +190,7 @@ async def no_transaction(*args: Any, **kwargs: Any) -> Any:
     yield None
 
 
+@needs_q1
 async def test_load_verifies_before_building(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """未载入时先核对再读快照建表; 不匹配时抛 SupplementMismatch, 不写任何表."""
     api, demo = copies(tmp_path)
@@ -220,6 +229,7 @@ async def test_already_loaded_does_not_read_supplements(tmp_path: Path, monkeypa
     await target.load("E", DATASET)
 
 
+@needs_q1
 def test_supplements_without_profile_or_planning(tmp_path: Path) -> None:
     """补造目录没有 client_profile.json 或 planning/ 时, 分别取快照画像与通用模板 (其余补造文件照常核对)."""
     api, demo = copies(tmp_path)
@@ -231,6 +241,7 @@ def test_supplements_without_profile_or_planning(tmp_path: Path) -> None:
     assert target.planning_presets(DATASET) == stores.read_planning(PLANNING)
 
 
+@needs_q1
 def test_tampered_organisation_is_a_mismatch(tmp_path: Path) -> None:
     """快照 organisation.json 被改坏时先报不匹配 (不报数据集不存在或 JSON 解析错误)."""
     api, demo = copies(tmp_path)
@@ -241,6 +252,7 @@ def test_tampered_organisation_is_a_mismatch(tmp_path: Path) -> None:
     assert mismatch(loader(api, demo)) == "补造文件与快照不匹配: 快照 organisation.json"
 
 
+@needs_q1
 def test_invalid_supplied_models_do_not_echo_content(tmp_path: Path) -> None:
     """补造画像或计划哈希相符而不合模型时, 消息只列文件名, 不带出文件里的值."""
     api, demo = copies(tmp_path)
@@ -266,6 +278,7 @@ LINKED = {
 }  # 需求清单 R72 验收 4
 
 
+@needs_q1
 def test_tables_merge_supplements() -> None:
     """R72: 行数, 服务完成记录, 合同关联, 开户行与 (载入时登记的) 合同 PDF; 其余各表与纯快照逐行相同."""
     from datetime import date
@@ -337,6 +350,7 @@ def tables_error(api: Path, demo: Path) -> str:
     return str(raised.value)
 
 
+@needs_q1
 @pytest.mark.parametrize(
     ("name", "old", "new", "expected"),
     [
@@ -363,6 +377,7 @@ def test_tables_reject_inconsistent_supplements(tmp_path: Path, name: str, old: 
     assert tables_error(api, demo) == f"补造文件与快照不匹配: {expected}"
 
 
+@needs_q1
 @pytest.mark.parametrize(
     ("name", "row", "expected"),
     [
@@ -383,6 +398,7 @@ def test_tables_reject_repeated_rows(tmp_path: Path, name: str, row: str, expect
     assert tables_error(api, demo) == f"补造文件与快照不匹配: {expected}"
 
 
+@needs_q1
 def test_tables_reject_repeated_invoice_number_in_snapshot(tmp_path: Path) -> None:
     """快照中两张已生效的销售发票同号时, 引用该号的补造行报不唯一."""
     api, demo = copies(tmp_path)
@@ -395,6 +411,7 @@ def test_tables_reject_repeated_invoice_number_in_snapshot(tmp_path: Path) -> No
     assert tables_error(api, demo) == "补造文件与快照不匹配: delivery_notes.csv 的发票号 ORC1024 在快照中找不到或不唯一"
 
 
+@needs_q1
 def test_verify_files_checks_the_supplements_without_the_snapshot(tmp_path: Path) -> None:
     """R97: verify_files 只核补造目录自身, 快照不在也能核 (测试假存储用); 补造文件被改照样报不匹配."""
     from backend.adapters.xero_supplements import Supplements
@@ -410,6 +427,7 @@ def test_verify_files_checks_the_supplements_without_the_snapshot(tmp_path: Path
 # ── 需求 R96: 数据集声明与工资册 ──
 
 
+@needs_q1
 def test_payroll_register_from_supplements() -> None:
     """工资册按数据集声明的 payroll_register 读出 3 行, 按文件中的顺序 (声明各值见 test_dataset_loaders)."""
     from tests.test_employees import EXPECTED
@@ -419,6 +437,7 @@ def test_payroll_register_from_supplements() -> None:
     assert found.employees() == EXPECTED
 
 
+@needs_q1
 @pytest.mark.parametrize(
     ("change", "expected"),
     [
@@ -439,6 +458,7 @@ def test_bad_dataset_traits_are_rejected(tmp_path: Path, change: dict[str, Any],
     assert "sometimes" not in str(raised.value) and "typo_key" not in str(raised.value)
 
 
+@needs_q1
 def test_missing_traits_default_and_payroll_register_errors(tmp_path: Path) -> None:
     """声明先经补造核对: 改了声明而没重写 manifest 时报不匹配 (合模型的改动也不读进来). 没有声明文件时取缺省值
     (工资册无从读起, FileNotFoundError); 声明的工资册文件不存在 FileNotFoundError; 指到补造目录外的

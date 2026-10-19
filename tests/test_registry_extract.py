@@ -44,7 +44,7 @@ from backend.orchestration.runner import GraphRunner, awaiting_inputs, fixed_pro
 from backend.services.data_service import DataService
 from backend.services.extraction_edits import apply_registry_edit
 from backend.services.judgment_engine import OutputValidator, check_extraction
-from tests.external import require_xero_supplements
+from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -93,7 +93,7 @@ BASE = f"/api/v1/engagements/{EID}"
 
 def extract_pdf() -> bytes:
     """R64 补造的合成摘录 900043030.pdf (2 页)."""
-    return (require_xero_supplements("20261017-q1") / "registry" / "extracts" / f"{ACN}.pdf").read_bytes()
+    return (supplements_dir("20261017-q1") / "registry" / "extracts" / f"{ACN}.pdf").read_bytes()
 
 
 def fixture_extraction(**changes: Any) -> RegistryExtraction:
@@ -829,12 +829,13 @@ async def test_registry_extract_on_real_store(tmp_path: Path) -> None:
     await engine.dispose()
 
 
+@pytest.mark.external
 def test_fixtures_are_the_r64_extracts() -> None:
     """守卫: DOC-REGISTRY 的固定输出由 R64 的合成摘录 JSON 写成, 登记字段, 高管与股东逐项相同 (改了补造数据而没
-    同步固定输出时报出); 文件 ID 为同名 PDF 的 sha256 前 12 位."""
+    同步固定输出时报出); 文件 ID 为同名 PDF 的 sha256 前 12 位. 只比补造与固定输出, 不核对快照哈希."""
     import hashlib
 
-    root = require_xero_supplements("20261017-q1") / "registry" / "extracts"
+    root = supplements_dir("20261017-q1", hashes=False) / "registry" / "extracts"
     for path in sorted((UPLOAD_FIXTURES / "DOC-REGISTRY").glob("*.json")):
         fixture = RegistryExtraction.model_validate_json(path.read_text(encoding="utf-8"))
         source = json.loads((root / path.name).read_text(encoding="utf-8"))

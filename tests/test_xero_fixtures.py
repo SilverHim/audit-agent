@@ -307,6 +307,7 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
         ),
     ],
 )
+@pytest.mark.external  # 文件 ID 取补造的 manifest (XERO.documents)
 def test_documents_follow_the_program(tmp_path: Path, fixture: str, target: str, problem: str | None) -> None:
     """按程序的文档对应 (需求 R108): 取该程序的一份 Numbat fixture, 把 document 指针都改指补造目录的 target (第 1 页,
     文件 ID 取 manifest): 是该程序该对象应指向的文件, 或没登记对应时不报, 否则每个指针报一条; 登记了而对象没有对应
@@ -337,6 +338,7 @@ def test_unregistered_programs_are_not_checked() -> None:
     assert [xero_expected_document(p, k) for p, k in keys] == [None, None, None]
 
 
+@pytest.mark.external  # 文件 ID 取补造的 manifest
 def test_only_the_wrong_pointers_are_reported(tmp_path: Path) -> None:
     """一份 fixture 里第一个指针指对 (REV-03/CON-X02 指 CON-X02.pdf), 其余指向 CON-X01.pdf: 只报其余的, 各一条.
     防只核对第一个指针."""
