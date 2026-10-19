@@ -1,5 +1,6 @@
 """Xero 演示数据集: 定稿文档 docs/Xero演示数据集设计.md 的内容守卫, 补造文件 (data/xero_demo/) 与生成, 校验脚本."""
 
+import functools
 import json
 import re
 import shutil
@@ -8,6 +9,8 @@ from pathlib import Path
 
 import pdfplumber
 import pytest
+
+from tests.test_knowledge import Text, normalise, parent, pdf_text, unit_end
 
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
@@ -238,7 +241,8 @@ GOLDEN_LINES = [
         (
             "**第 2 层下各准则的适用范围** (原文已核): AASB 101 (第 AusB1 段), AASB 107 (第"
             " AusA1 段), AASB 124 (第 AusB1 段) 不适用于采用 AASB 1060 的主体, 相应列报与披"
-            "露依据改引 AASB 1060 (段号暂缓, 待 AASB 1060 正本); AASB 110 只有第 13, 16,"
+            "露依据改引 AASB 1060 (完整财报的组成 AASB 1060 第 25 段, 现金流量表 AASB 1060 第 64-89 段,"
+            " 关联方 AASB 1060 第 189-203 段; 各节脚注写明对应的 AASB 101, 107, 124); AASB 110 只有第 13, 16,"
             " 17-22 段不适用 (第 AusA1 段); AASB 15 只有第 110-129 段与 B87-B89 不适用 "
             "(第 AusE1 段). 所以 GEN-06 引 AASB 110 第 3(b), 10 段与 AASB 15 第 88"
             " 段, GEN-03 引 AASB 124 只作参照."
@@ -410,16 +414,250 @@ def test_out_of_scope_listed() -> None:
     assert "reverses_entry_no" in demo
 
 
-def test_aasb1060_paragraphs_deferred() -> None:
+# ── AASB 1060 等准则的段号 (R292): 定稿引用的段号须在 docs/参考资料 的正本里, 且该段 (子项) 含登记的一句原文 ──
+
+AASB1060 = "03_会计准则_AASB/AASB_1060.pdf"
+AASB1060_PAGES = (5, 52)  # 正文第 1-213 段 (第 5-43 页) 与附录 A 的定义 (第 52 页); 引用其后的段时放宽
+# 附录 A 的定义没有段号, 按定义首句定位; 其下的子项按版面逐级取
+DEFINITIONS = {
+    "related party": "A related party is a person or entity",
+    "close members of the family": "Close members of the family of a person are",
+}
+# 定稿中 "AASB 1060 第 X 段" 的每一项 X (逗号分隔) 与 "AASB 1060 附录 A {用语} 定义 {子项} 项" → 要核对的 (段号或定义加
+# 子项, 该段或子项中的一句原文). 范围 a-b 核对两端; 同级子项连写 (25(c)(d)) 逐项核对
+AASB1060_CITED: dict[str, list[tuple[str, str]]] = {
+    "1": [("1", "elect to apply the Tier 2 reporting requirements under AASB 1053")],
+    "4": [("4", "apply this Standard in relation to disclosure requirements only")],
+    "10": [("10", "explicit and unreserved statement of such compliance in the notes")],
+    "11": [("11", "it is a for-profit or not-for-profit entity")],
+    "14": [("14", "at least, but is not limited to, twelve months from the reporting date")],
+    "15": [("15", "the entity shall disclose those uncertainties")],
+    "16": [("16", "presented for a period longer or shorter than one year")],
+    "16(b)": [("16(b)", "the reason for using a longer or shorter period")],
+    "16(c)": [("16(c)", "are not entirely comparable")],
+    "24": [("24", "shall not offset assets and liabilities or income and expenses, unless required or permitted")],
+    "25": [("25", "A complete set of financial statements of an entity shall include all of the following")],
+    "25(c)(d)": [
+        ("25(c)", "a statement of changes in equity for the reporting period"),
+        ("25(d)", "a statement of cash flows for the reporting period"),
+    ],
+    "26": [
+        (
+            "26",
+            "may present a single statement of income and retained earnings in place of the statement of comprehensive"
+            " income and statement of changes in equity",
+        )
+    ],
+    "27": [("27", "it may present only a statement of profit or loss")],
+    "28": [("28", "two of each of the required financial statements and related notes")],
+    "37-41": [
+        ("37", "as separate classifications in its statement of financial position"),
+        ("41", "An entity shall classify all other liabilities as non-current."),
+    ],
+    "40(d)": [("40(d)", "does not have the right at the reporting date to defer settlement of the liability")],
+    "63": [("63", "retained earnings at the beginning of the reporting period")],
+    "64-89": [
+        ("64", "information about the changes in cash and cash equivalents"),
+        ("89", "cash and cash equivalent balances held by the entity that are not available for use"),
+    ],
+    "65": [("65", "bank overdrafts are a component of cash and cash equivalents")],
+    "66": [("66", "classified by operating activities, investing activities and financing activities")],
+    "95": [("95", "An entity shall disclose material accounting policy information")],
+    "98": [("98", "An entity shall disclose fees to each auditor or reviewer")],
+    "110": [("110", "the amount of the correction for each financial statement line item affected")],
+    "185": [("185", "to reflect adjusting events after the end of the reporting period")],
+    "186": [("186", "the date when the financial statements were authorised for issue and who gave that")],
+    "187": [("187", "an estimate of its financial effect or a statement that such an estimate cannot be made")],
+    "189-203": [
+        ("189", "affected by the existence of related parties"),
+        ("203", "may disclose items of a similar nature in the aggregate"),
+    ],
+    "192": [("192", "the name of its parent and, if different, the ultimate controlling party")],
+    "194": [("194", "An entity shall disclose key management personnel compensation in total.")],
+    "198": [("198", "the amount of outstanding balances")],
+    "199": [("199", "separately for each of the following categories")],
+    "206": [("206", "sets out the requirements for which Standard may be applied upon first-time adoption")],
+    "206-213": [
+        ("206", "applies the requirements of AASB 1 First-time Adoption of Australian Accounting Standards"),
+        ("213", "information deficiencies"),
+    ],
+    "208": [("208", "affected its reported financial position, financial performance and cash flows")],
+    "210": [("210", "reconciliations of its equity determined in accordance with its previous financial reporting")],
+    "212": [("212", "did not present financial statements for previous periods, it shall disclose that fact")],
+    "related party (a)": [("related party (a)", "is related to a reporting entity if that person")],
+    "related party (b)": [("related party (b)", "an entity is related to a reporting entity if any of the following")],
+    "related party (b)(vi)": [
+        ("related party (b)(vi)", "the entity is controlled or jointly controlled by a person identified in (a)")
+    ],
+    "related party (b)(viii)": [
+        (
+            "related party (b)(viii)",
+            "a person identified in (a)(ii) has significant influence over the entity or is a member of the key"
+            " management personnel of the entity",
+        )
+    ],
+    "close members of the family (a)": [("close members of the family (a)", "children and spouse or domestic partner")],
+}
+# R292 新引的其他准则段: 定稿中的写法 → (PDF, 页范围, 段号, 该段或子项中的一句原文)
+OTHER_CITED: dict[str, tuple[str, tuple[int, int], str, str]] = {
+    "AASB 1053 第 17 段": (
+        "03_会计准则_AASB/AASB_1053.pdf",
+        (6, 7),
+        "17",
+        "Entities adopting Tier 2 reporting requirements for the first time that apply AASB 1",
+    ),
+    "AASB 1053 第 18A(a) 段": (
+        "03_会计准则_AASB/AASB_1053.pdf",
+        (6, 7),
+        "18A(a)",
+        "Tier 2 reporting requirements directly using the requirements in AASB 108",
+    ),
+    "AASB 1053 第 18A(c) 段": ("03_会计准则_AASB/AASB_1053.pdf", (6, 7), "18A(c)", "shall not apply AASB 1."),
+    "AASB 1 第 3(d) 段": (
+        "03_会计准则_AASB/AASB_1.pdf",
+        (6, 7),
+        "3(d)",
+        "did not present financial statements for previous periods.",
+    ),
+    "AASB 1 第 AusF1 段": (
+        "03_会计准则_AASB/AASB_1.pdf",
+        (31, 31),
+        "AusF1",
+        "do not apply to entities preparing general purpose financial statements that apply AASB 1060",
+    ),
+    "AASB 1 第 20-33 段": ("03_会计准则_AASB/AASB_1.pdf", (31, 31), "AusF1", "paragraphs Aus3.2 and 20"),  # AusF1(a)
+    "AASB 132 第 42 段": (
+        "03_会计准则_AASB/AASB_132.pdf",
+        (15, 15),
+        "42",
+        "currently has a legally enforceable right to set off the recognised amounts",
+    ),
+    "AASB 128 第 5 段": (
+        "03_会计准则_AASB/AASB_128.pdf",
+        (6, 6),
+        "5",
+        "less than 20 per cent of the voting power of the investee, it is presumed that the entity does not have"
+        " significant influence",
+    ),
+}
+
+
+@functools.cache
+def reference_text(path: str, first: int, last: int) -> Text:
+    return pdf_text(path, first, last)
+
+
+def child_line(source: Text, k: int, group: str) -> int | None:
+    """第 k 行记号的单元内, 以它为上级的子项 (group) 的记号行."""
+    end = unit_end(source, k)
+    for j in range(k + 1, len(source.lines)):
+        start = source.starts[j]
+        if start is None:
+            continue
+        if start >= end:
+            return None
+        if source.lines[j].mark == f"({group})" and parent(source, j) == k:
+            return j
+    return None
+
+
+def definition_item(source: Text, term: str, group: str) -> list[int]:
+    """附录 A 定义 (首句见 DEFINITIONS) 之下第一级子项的记号行: 在定义首句之后, 下一条定义之前, 与首句同 x."""
+    found = []
+    for k, line in enumerate(source.lines):
+        if source.starts[k] is None or not line.text.startswith(DEFINITIONS[term]):
+            continue
+        for j in range(k + 1, len(source.lines)):
+            other = source.lines[j]
+            if source.starts[j] is None:
+                continue
+            if other.mark is None and abs(other.x - line.x) <= 2 and source[: source.starts[j]].rstrip().endswith("."):
+                break  # 下一条定义
+            if other.mark == f"({group})" and abs(other.x - line.x) <= 2:
+                found.append(j)
+                break
+    return found
+
+
+def cited_units(source: Text, ref: str) -> list[str]:
+    """段号 ("25", "16(b)", "18A(a)", "AusF1") 或附录 A 定义加子项 ("related party (b)(viii)") 在原文中的单元正文
+    (从记号起到单元结束, 见 test_knowledge.unit_end). 段号须为顶层的记号行 (没有上级); 版面认不出记号的段
+    (如 "AusF1") 退而取以 "段号 " 开头的行. 子项逐级取, 上级须为前一级."""
+    term = next((t for t in DEFINITIONS if ref.startswith(f"{t} ")), None)
+    head = term or re.match(r"[0-9A-Za-z]+", ref)[0]  # type: ignore[index]
+    groups = re.findall(r"\(([0-9a-z]+)\)", ref[len(head) :])
+    if term:
+        starts = definition_item(source, term, groups.pop(0))
+    else:
+        starts = [
+            k
+            for k, line in enumerate(source.lines)
+            if source.starts[k] is not None and line.mark in (head, f"{head}.") and parent(source, k) is None
+        ] or [
+            k
+            for k, line in enumerate(source.lines)
+            if source.starts[k] is not None and line.mark is None and line.text.startswith(f"{head} ")
+        ]
+    units = []
+    for k in starts:
+        j: int | None = k
+        for group in groups:
+            j = child_line(source, j, group) if j is not None else None
+        if j is not None:
+            units.append(source[source.starts[j] : unit_end(source, j)])  # type: ignore[misc]
+    return units
+
+
+def aasb1060_citations(text: str) -> set[str]:
+    """定稿中 AASB 1060 的段号引用: "AASB 1060 第 X, Y 段" 的各项与 "AASB 1060 附录 A {用语} 定义 {子项} 项"."""
+    cited = {item for m in re.finditer(r"AASB 1060 第 ([0-9A-Za-z(), -]+?) 段", text) for item in m[1].split(", ")}
+    terms = "|".join(DEFINITIONS)
+    cited |= {f"{m[1]} {m[2]}" for m in re.finditer(rf"AASB 1060 附录 A ({terms}) 定义 ((?:\([0-9a-z]+\))+) 项", text)}
+    return cited
+
+
+def test_aasb1060_paragraphs_filled_in() -> None:
+    """R292: 段号不再暂缓; 定稿里的 AASB 1060 段号引用都已登记 (登记的都在用), 写法只有两种, 不会漏核."""
     text = doc()
-    lines = [ln for ln in text.splitlines() if "AASB 1060" in ln]
-    assert lines
-    assert all("暂缓" in ln for ln in lines)
-    assert not re.search(r"AASB 1060 (?:第 ?|para(?:graph)? ?)\d", text)
-    rest = text
-    for allowed in ("待 AASB 1060 正本", "## 待核与待正本", "待正本的段号"):
-        rest = rest.replace(allowed, "")
-    assert "待正本" not in rest  # 不许有 "(待正本)" 一类不规范写法
+    assert "段号暂缓" not in text and "待 AASB 1060 正本" not in text
+    assert "待正本" not in text.replace("## 待核与待正本", "")  # 不许有 "(待正本)" 一类不规范写法
+    assert aasb1060_citations(text) == set(AASB1060_CITED)
+    assert not re.search(r"AASB 1060 ?(?:para|\d)", text)  # 段号只用上面两种写法
+    for citation in OTHER_CITED:
+        assert citation in text, citation
+
+
+@pytest.mark.parametrize("citation", sorted(AASB1060_CITED))
+def test_aasb1060_cited_paragraphs_are_in_the_original(citation: str) -> None:
+    """定稿引用的 AASB 1060 段号在正本 (第 7 次汇编) 中有, 且含登记原文的该段 (子项) 恰有一处 (第 214 段的表里也有以
+    段号开头的行, 如 "213 Transition", 不算)."""
+    source = reference_text(AASB1060, *AASB1060_PAGES)
+    for ref, phrase in AASB1060_CITED[citation]:
+        hits = [unit for unit in cited_units(source, ref) if normalise(phrase) in unit]
+        assert len(hits) == 1, f"{ref}: 正本中含 {phrase!r} 的该段有 {len(hits)} 处"
+
+
+@pytest.mark.parametrize("citation", sorted(OTHER_CITED))
+def test_other_cited_paragraphs_are_in_the_original(citation: str) -> None:
+    path, (first, last), ref, phrase = OTHER_CITED[citation]
+    hits = [unit for unit in cited_units(reference_text(path, first, last), ref) if normalise(phrase) in unit]
+    assert len(hits) == 1, f"{citation}: 原文中含 {phrase!r} 的该段有 {len(hits)} 处"
+
+
+def test_citation_check_rejects_wrong_numbers() -> None:
+    """反例: 段号标错, 子项标错上级, 定义子项标错, 都找不到或不含原文."""
+    source = reference_text(AASB1060, *AASB1060_PAGES)
+    assert normalise("not entirely comparable") not in cited_units(source, "16(b)")[0]
+    assert cited_units(source, "17(c)") == []  # 第 17 段没有 (c) 项
+    assert "the reason for using" not in cited_units(source, "15")[0]
+    iii = cited_units(source, "related party (a)(iii)")
+    assert len(iii) == 1 and "significant influence over the reporting entity" in iii[0]
+    assert cited_units(source, "related party (a)(iv)") == []
+    assert aasb1060_citations("见 AASB 1060 第 25(c)(d), 26 段与 AASB 1060 附录 A related party 定义 (b)(vi) 项") == {
+        "25(c)(d)",
+        "26",
+        "related party (b)(vi)",
+    }
 
 
 def test_pointers_from_other_docs() -> None:
@@ -1115,7 +1353,7 @@ def test_engagement_letter_pages() -> None:
     assert "6. Form and content of our report" in third and "differs from its expected form and content" in third
     assert "AUD 4,800, excluding GST" in third and "Date: 2 September 2026" in third
     text = " ".join(pages)
-    assert "AASB 1060" not in text and "paragraph" not in second  # 简化披露框架不写 AASB 1060 段号
+    assert "AASB 1060" not in text and "paragraph" not in second  # 委托书只写简化披露框架的名称, 不写准则段号
 
 
 def registry_blocks() -> tuple[object, object]:
@@ -2239,7 +2477,7 @@ def test_financial_statements_pdf() -> None:
     assert "DIRECTOR'S DECLARATION" in fourth and "Alex Morgan, Director 23 October 2026" in fourth
     assert "pay its debts as and when they become due and payable" in fourth  # s295(4)(c)
     assert "in accordance with a resolution of the director" in fourth  # s295(5)(a)
-    assert not any("AASB 1060" in p for p in pages)  # AASB 1060 段号暂缓 (待正本), 不写准则编号
+    assert not any("AASB 1060" in p for p in pages)  # 财报正文不引准则编号与段号 (所依段号见定稿第 4.7 节)
 
 
 def test_representation_letter() -> None:
