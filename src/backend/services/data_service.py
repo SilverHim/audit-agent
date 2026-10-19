@@ -9,6 +9,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import Any
@@ -17,6 +18,7 @@ from uuid import uuid4
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from backend.adapters.xero_supplements import DemoPlan, SupplementLoader, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
 from backend.agents.ingest import (
@@ -34,6 +36,7 @@ from backend.agents.ingest import (
     unfinished,
 )
 from backend.contracts.data import (
+    DEMO_IMPORT_STAGES,
     BatchFile,
     BatchItem,
     BatchItemEdit,
@@ -45,6 +48,8 @@ from backend.contracts.data import (
     DataSource,
     DataSources,
     DataSummary,
+    DemoImportResult,
+    DemoStage,
     DocumentChange,
     DocumentDetailsEdit,
     ExtractionEdit,
@@ -97,6 +102,7 @@ from backend.services.data_import import (
     sheet_names,
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
+from backend.services.demo_import import DEMO_JOB, NO_DEMO, DemoImport
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
 from backend.services.import_batches import (
     TABLE_EXTENSIONS,
@@ -344,6 +350,18 @@ def schemas() -> list[TableSchema]:
     return [SCHEMAS[kind] for kind in TableKind]
 
 
+@dataclass(frozen=True)
+class Uploaded:
+    """上传的登记结果 (DataService.register_uploads): 各文件的登记 (按上传顺序; 按请求定了类型的为改后的), 要处理或
+    补做的文件, 补做要接上的作业与各文件对应的待补交请求 (见 _resume_info), 上传带的待补交文件请求 (不是为空)."""
+
+    documents: list[DocumentRef]
+    fresh: list[DocumentRef]
+    jobs: dict[str, Job]
+    wanted: dict[str, Requested]
+    requested: Requested | None
+
+
 class NoXeroConnections:
     """没有接 Xero 连接存储时的缺省实现 (测试与只读场景): 一律未连接. 组装根用 services.xero_link 的实现."""
 
@@ -354,10 +372,20 @@ class NoXeroConnections:
 class DataService:
     """数据管理的写操作与查询. 组装根建一个, 挂在 app.state.data_service."""
 
-    def __init__(self, deps: AgentDeps, runner: GraphRunner, xero: XeroConnections | None = None) -> None:
+    def __init__(
+        self,
+        deps: AgentDeps,
+        runner: GraphRunner,
+        xero: XeroConnections | None = None,
+        *,
+        demo: SupplementLoader | None = None,
+    ) -> None:
         self.deps = deps  # 外部依赖
         self.runner = runner  # 项目锁与后台推进; 图取 runner.app
         self.xero: XeroConnections = xero if xero is not None else NoXeroConnections()  # Xero 连接记录
+        # 演示数据导入的清单来源 (需求 R269; 组装根为 RoutingDatasetLoader): 按数据集取已核对的补造目录; 为空时都没有
+        # 演示资料
+        self.demo = demo
         # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
         self.kinds: dict[object, str] = {}  # 作业 → 作业种类 (launch 的 kind, 如 Xero 同步), 没给的不在其中
@@ -575,12 +603,13 @@ class DataService:
         import_id: str | None = None,
         request_id: str | None = None,
         origins: Mapping[TableKind, TableOrigin] | None = None,
+        checkup: bool = True,
     ) -> int:
         """新数据版本写入 (导入与 Xero 同步共用; 智能导入的确认另经 DataStore.commit_batch, 写法相同), 返回写入后的数据
         版本. 须在 holding 块内或 launch 的作业里
         调用 (持项目锁), 否则抛 RuntimeError. 写入规则见 DataStore.write_tables (origins 为各表的出处); 提交后每张表
         写一条 data 留痕 (见 version_entry). 留痕写失败时数据已提交: 下次取项目锁做数据写操作时补写 (见
-        backfill_trails)."""
+        backfill_trails). checkup 为假时写完不体检 (演示数据导入写完各步后只体检一次)."""
         if not self.runner.is_running(eid):
             raise RuntimeError(f"{eid} 写入账表须先取项目锁 (DataService.holding 或 launch)")
         version = await self.deps.data.write_tables(
@@ -599,7 +628,8 @@ class DataService:
         try:
             await record_transitions(self.deps.trail, [version_entry(eid, item) for item in written])
         finally:  # 留痕写失败 (数据已提交) 也照常体检
-            await self.checkup(eid)
+            if checkup:
+                await self.checkup(eid)
         return version
 
     # ── 账表查看与科目分类修改 (需求 R16) ──
@@ -1272,6 +1302,39 @@ class DataService:
             await record_transitions(self.deps.trail, [request_entry(eid, marked, "request_unavailable")])
         return marked
 
+    # ── 演示数据导入 (需求 R269) ──
+
+    async def demo_import(self, eid: str, stage: str, actor: str) -> DemoImportResult:
+        """导入演示资料的一个阶段 (DEMO_IMPORT_STAGES): 当场核对后在后台做 (DemoImport.run, 持项目锁一次做完, 做完体检
+        一次), 返回 status started 的结果 (要写的表与要上传的文件). 阶段不认识, 或为 manual (管理层声明书由审计师在
+        FIN-07 的人工任务页上传) INVALID_VALUE; 项目不存在 LookupError; 数据集没有补造目录 (Numbat, 20261017-mock,
+        没有数据集的新客户) INVALID_VALUE "该数据集没有演示资料", 补造目录与快照不符 INVALID_VALUE (消息只列文件名);
+        锁定 423; 忙 409. 作业期间概览的 processing 计入, 涉及这一阶段的账表与文件."""
+        if stage == "manual":
+            raise DataRejected("INVALID_VALUE", "管理层声明书由审计师在 FIN-07 的人工任务页上传, 不经演示数据导入")
+        if stage not in DEMO_IMPORT_STAGES:
+            raise DataRejected("INVALID_VALUE", f"演示数据导入没有阶段 {stage}, 可选 {', '.join(DEMO_IMPORT_STAGES)}")
+        chosen: DemoStage = stage
+        engagement = await self._check_unlocked(eid)
+        importer = DemoImport(self, await self._demo_plan(engagement))
+
+        async def job() -> None:
+            await importer.run(eid, chosen, actor)
+
+        await self.launch(eid, importer.labels(chosen), job, kind=DEMO_JOB)
+        return importer.started(chosen)
+
+    async def _demo_plan(self, engagement: Engagement) -> DemoPlan:
+        """项目数据集的演示导入清单 (xero_supplements.plan, 在线程里核对与读补造目录); 没有时 INVALID_VALUE."""
+        if self.demo is None or engagement.dataset is None:
+            raise DataRejected("INVALID_VALUE", NO_DEMO)
+        try:
+            return await asyncio.to_thread(plan, self.demo, engagement.dataset)
+        except FileNotFoundError:
+            raise DataRejected("INVALID_VALUE", NO_DEMO) from None
+        except ValueError as e:  # 补造与快照不符 (SupplementMismatch), 清单不合规
+            raise DataRejected("INVALID_VALUE", str(e)) from None
+
     # ── 文件上传, 分类与抽取结果修改 (需求 R14) ──
 
     async def upload_documents(
@@ -1294,48 +1357,57 @@ class DataService:
         key = self._register(eid, ())
         try:
             await self.backfill_trails(eid)
-            requested = await self._requested(eid, request_id)
-            documents: list[DocumentRef] = []
-            fresh: list[DocumentRef] = []
-            for name, (_, data) in zip(names, files, strict=True):
-                document = await self.deps.evidence_store.save(
-                    eid,
-                    name,
-                    data,
-                    type=DocumentType.other,
-                    reliability=Reliability.internal_copy,
-                    media_type=media_type(name),
-                    uploaded_by=actor,
-                )
-                documents.append(document)
-                await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
-            jobs, wanted = await self._resume_info(eid, documents)
-            for document in documents:
-                pending = (
-                    unfinished(document)
-                    or document.status in HELD  # 批次里暂存或未导入的同一文件经这里重传: 照新上传处理
-                    or any(r is not None and retype(document, r) for r in (requested, wanted.get(document.id)))
-                )
-                if pending and all(d.id != document.id for d in fresh):
-                    fresh.append(document)
-            if requested is not None:  # 按请求定类型先落库, 作业开始前中断也不丢 (补做按已定类型接着做)
-                intake = DocumentIntake(self.deps)
-                for index, document in enumerate(fresh):
-                    if retype(document, requested):
-                        fresh[index], jobs[document.id] = await intake.mark(eid, document, requested)
-                        documents = [fresh[index] if d.id == document.id else d for d in documents]
-                wanted = {}
-            self.jobs[eid][key] = frozenset(d.id for d in fresh)
+            saved = await self.register_uploads(eid, names, [data for _, data in files], actor, request_id)
+            self.jobs[eid][key] = frozenset(d.id for d in saved.fresh)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
             raise
-        if not fresh and requested is None:  # 都是已处理完的文件: 不再处理
+        if not saved.fresh and saved.requested is None:  # 都是已处理完的文件: 不再处理
             self._unregister(eid, key)
             self.runner.release(eid)
-            return documents
-        self._spawn(eid, key, self._intake(eid, engagement, fresh, jobs, wanted))
-        return documents
+            return saved.documents
+        self._spawn(eid, key, self._intake(eid, engagement, saved.fresh, saved.jobs, saved.wanted))
+        return saved.documents
+
+    async def register_uploads(
+        self, eid: str, names: Sequence[str], contents: Sequence[bytes], actor: str, request_id: str | None
+    ) -> "Uploaded":
+        """上传的登记部分 (持项目锁时调用, upload_documents 与演示数据导入共用): 逐份存档 (先记 other, 内部副本,
+        received, 来源 auditor_upload, 上传人 actor), 写 upload 留痕; 算出要处理或补做的文件与补做要接上的信息; 对着
+        待补交的文件请求上传时按请求定类型先落库. 不处理文件, 不体检."""
+        requested = await self._requested(eid, request_id)
+        documents: list[DocumentRef] = []
+        fresh: list[DocumentRef] = []
+        for name, data in zip(names, contents, strict=True):
+            document = await self.deps.evidence_store.save(
+                eid,
+                name,
+                data,
+                type=DocumentType.other,
+                reliability=Reliability.internal_copy,
+                media_type=media_type(name),
+                uploaded_by=actor,
+            )
+            documents.append(document)
+            await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
+        jobs, wanted = await self._resume_info(eid, documents)
+        for document in documents:
+            pending = (
+                unfinished(document)
+                or document.status in HELD  # 批次里暂存或未导入的同一文件经这里重传: 照新上传处理
+                or any(r is not None and retype(document, r) for r in (requested, wanted.get(document.id)))
+            )
+            if pending and all(d.id != document.id for d in fresh):
+                fresh.append(document)
+        if requested is not None:  # 按请求定类型先落库, 作业开始前中断也不丢 (补做按已定类型接着做)
+            intake = DocumentIntake(self.deps)
+            for index, document in enumerate(fresh):
+                if retype(document, requested):
+                    fresh[index], jobs[document.id] = await intake.mark(eid, document, requested)
+                    documents = [fresh[index] if d.id == document.id else d for d in documents]
+            wanted = {}
+        return Uploaded(documents, fresh, jobs, wanted, requested)
 
     def _intake(
         self,
@@ -1349,12 +1421,23 @@ class DataService:
         上传时对应的待补交文件请求 (见 _resume_info, DocumentIntake.resume)."""
 
         async def process() -> None:
-            intake = DocumentIntake(self.deps)
-            for document in documents:
-                await intake.resume(eid, document, engagement, jobs.get(document.id), requested.get(document.id))
+            await self.process_uploads(eid, engagement, documents, jobs, requested)
             await self.checkup(eid)
 
         return process
+
+    async def process_uploads(
+        self,
+        eid: str,
+        engagement: Engagement,
+        documents: Sequence[DocumentRef],
+        jobs: Mapping[str, Job],
+        requested: Mapping[str, Requested],
+    ) -> None:
+        """逐份处理或补做文件 (DocumentIntake.resume; 持项目锁时调用), 不体检; 参数同 _intake."""
+        intake = DocumentIntake(self.deps)
+        for document in documents:
+            await intake.resume(eid, document, engagement, jobs.get(document.id), requested.get(document.id))
 
     def _resumed(
         self, eid: str, intake: Callable[[], Awaitable[None]] | None, batch_ids: Sequence[str]
@@ -1498,12 +1581,7 @@ class DataService:
         intake = DocumentIntake(self.deps)
         try:
             await self.backfill_trails(eid)
-            job = await intake.record(eid, actor, document, kind, reason.strip())
-            reliability = await registered_reliability(self.deps, eid, document, kind)
-            updated = await self.deps.evidence_store.update_document(
-                eid, document_id, type=kind, reliability=reliability, status="classified", failed_step=None
-            )
-            await record_registration(self.deps, eid, document, updated, actor, reason.strip())
+            updated, job = await self.assign_type(intake, eid, document, kind, reason.strip(), actor)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
@@ -1515,6 +1593,20 @@ class DataService:
 
         self._spawn(eid, key, extract)
         return updated
+
+    async def assign_type(
+        self, intake: DocumentIntake, eid: str, document: DocumentRef, kind: DocumentType, reason: str, actor: str
+    ) -> tuple[DocumentRef, str]:
+        """人工指定类型的登记部分 (持项目锁时调用, set_document_type 与演示数据导入共用): 写 classify 留痕 (actor
+        与理由), 改类型与可靠性 (ingest.registered_reliability), 置 classified, 补登记过的文件另记一版; 返回改后的登记与
+        作业号 (那条留痕的 ID). 不抽取, 不体检."""
+        job = await intake.record(eid, actor, document, kind, reason)
+        reliability = await registered_reliability(self.deps, eid, document, kind)
+        updated = await self.deps.evidence_store.update_document(
+            eid, document.id, type=kind, reliability=reliability, status="classified", failed_step=None
+        )
+        await record_registration(self.deps, eid, document, updated, actor, reason)
+        return updated, job
 
     async def set_document_details(
         self, eid: str, edits: Mapping[str, DocumentDetailsEdit], actor: str
@@ -1530,68 +1622,72 @@ class DataService:
         留痕 (edit_entry; 没写成的下次取锁时补写). 关联对象不校验是否存在."""
         async with self.locked(eid):
             await self.backfill_trails(eid)
-            documents = {d.id: d for d in await self.deps.financial_store.documents(eid)}
-            results: dict[str, DocumentRef] = {}
-            planned: list[tuple[DocumentRef, dict[str, Any], str, list[ExtractionRecord]]] = []
-            for document_id, edit in edits.items():
-                document = documents.get(document_id)
-                if document is None:
-                    raise LookupError(f"文件 {document_id} 不存在")
-                reason = edit.reason.strip()
-                if not reason:
-                    raise DataRejected("MISSING_FIELD", "须填写补登记的理由")
-                if document.status in HELD_NOTES:
-                    raise DataRejected("INVALID_VALUE", HELD_NOTES[document.status].format(document.file_name))
-                given = details_given(edit, document.file_name)
-                if not given:
-                    raise DataRejected("MISSING_FIELD", f"文件 {document.file_name} 的补登记没有给出任何一项")
-                changes = {k: v for k, v in given.items() if getattr(document, k) != v}
-                history = await self.deps.data.extraction_versions(eid, DETAILS, document_id)
-                if changes:
-                    planned.append((document, changes, reason, history))
-                elif details_retry(history, document, actor, reason):
-                    results[document_id] = document
-                else:
-                    raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 给出的各项都与当前相同")
-            written: list[ExtractionRecord] = []
-            if planned:
-                async with self.deps.output_store.transaction(eid):
-                    for document, changes, reason, history in planned:
-                        if not history:  # 第一次补登记: 先补记修改前的一版
-                            await self.deps.data.save_extraction(
-                                eid, DETAILS, document.id, 1, details_data(document), changed_by=AgentId.A3
-                            )
-                        updated = await self.deps.evidence_store.update_details(
-                            eid,
-                            document.id,
-                            reliability=changes.get("reliability"),
-                            document_date=changes.get("document_date"),
-                            related_ids=changes.get("related_ids"),
-                        )
-                        record = ExtractionRecord(
-                            target_type=DETAILS,
-                            target_id=document.id,
-                            version=(history[-1].version if history else 1) + 1,
-                            data=details_data(updated),
-                            field=",".join(k for k in DETAIL_FIELDS if k in changes),
-                            reason=reason,
-                            changed_by=actor,
-                            changed_at=datetime.now(UTC),
-                        )
+            return await self.save_details(eid, edits, actor)
+
+    async def save_details(self, eid: str, edits: Mapping[str, DocumentDetailsEdit], actor: str) -> list[DocumentRef]:
+        """补登记的校验与写入 (持项目锁时调用, set_document_details 与演示数据导入共用), 规则同 set_document_details."""
+        documents = {d.id: d for d in await self.deps.financial_store.documents(eid)}
+        results: dict[str, DocumentRef] = {}
+        planned: list[tuple[DocumentRef, dict[str, Any], str, list[ExtractionRecord]]] = []
+        for document_id, edit in edits.items():
+            document = documents.get(document_id)
+            if document is None:
+                raise LookupError(f"文件 {document_id} 不存在")
+            reason = edit.reason.strip()
+            if not reason:
+                raise DataRejected("MISSING_FIELD", "须填写补登记的理由")
+            if document.status in HELD_NOTES:
+                raise DataRejected("INVALID_VALUE", HELD_NOTES[document.status].format(document.file_name))
+            given = details_given(edit, document.file_name)
+            if not given:
+                raise DataRejected("MISSING_FIELD", f"文件 {document.file_name} 的补登记没有给出任何一项")
+            changes = {k: v for k, v in given.items() if getattr(document, k) != v}
+            history = await self.deps.data.extraction_versions(eid, DETAILS, document_id)
+            if changes:
+                planned.append((document, changes, reason, history))
+            elif details_retry(history, document, actor, reason):
+                results[document_id] = document
+            else:
+                raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 给出的各项都与当前相同")
+        written: list[ExtractionRecord] = []
+        if planned:
+            async with self.deps.output_store.transaction(eid):
+                for document, changes, reason, history in planned:
+                    if not history:  # 第一次补登记: 先补记修改前的一版
                         await self.deps.data.save_extraction(
-                            eid,
-                            DETAILS,
-                            document.id,
-                            record.version,
-                            record.data,
-                            changed_by=actor,
-                            field=record.field,
-                            reason=reason,
+                            eid, DETAILS, document.id, 1, details_data(document), changed_by=AgentId.A3
                         )
-                        results[document.id] = updated
-                        written.append(record)
-                    await self.deps.data.bump_version(eid, DataInput.documents)
-                await record_transitions(self.deps.trail, [edit_entry(eid, r) for r in written])
+                    updated = await self.deps.evidence_store.update_details(
+                        eid,
+                        document.id,
+                        reliability=changes.get("reliability"),
+                        document_date=changes.get("document_date"),
+                        related_ids=changes.get("related_ids"),
+                    )
+                    record = ExtractionRecord(
+                        target_type=DETAILS,
+                        target_id=document.id,
+                        version=(history[-1].version if history else 1) + 1,
+                        data=details_data(updated),
+                        field=",".join(k for k in DETAIL_FIELDS if k in changes),
+                        reason=reason,
+                        changed_by=actor,
+                        changed_at=datetime.now(UTC),
+                    )
+                    await self.deps.data.save_extraction(
+                        eid,
+                        DETAILS,
+                        document.id,
+                        record.version,
+                        record.data,
+                        changed_by=actor,
+                        field=record.field,
+                        reason=reason,
+                    )
+                    results[document.id] = updated
+                    written.append(record)
+                await self.deps.data.bump_version(eid, DataInput.documents)
+            await record_transitions(self.deps.trail, [edit_entry(eid, r) for r in written])
         return [results[document_id] for document_id in edits]
 
     async def document_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:

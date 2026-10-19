@@ -1,7 +1,6 @@
 """Real PostgreSQL acceptance tests. Set TEST_DATABASE_URL to a migrated disposable database."""
 
 import asyncio
-import json
 import os
 import shutil
 from datetime import UTC, date, datetime, timedelta
@@ -16,7 +15,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
 from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
 from backend.adapters.xero_supplements import SupplementMismatch
-from backend.agents.ingest import contract_id
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AuditObjective,
@@ -1022,9 +1020,10 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     await engine.dispose()
 
 
-async def test_xero_q1_loads_supplements(tmp_path):
-    """R72: 真实库载入 xero/20261017-q1: 行数同验收 2; 每个科目 gl_balance 等于本期试算表; 3 份合同登记为证据文件;
-    服务完成记录与带合同关联的发票可按行取."""
+async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
+    """R269 验收 11: 真实库载入 xero/20261017-q1 只载快照: 服务完成记录与工资册为 0 行, 发票的合同关联为空, 开户行取
+    快照的科目名, 不登记文件 (补造部分由演示数据导入写入, 见 test_demo_import_db); 每个科目 gl_balance 等于本期试算表.
+    补造与快照不匹配时不载入."""
     url = os.getenv("TEST_DATABASE_URL")
     api = ROOT / "data/external/xero/api"
     if not url or not (api / "20261017-q1").exists():
@@ -1056,25 +1055,19 @@ async def test_xero_q1_loads_supplements(tmp_path):
         "trial_balance": 33,
         "journal_entries": 1017,
         "sales_invoices": 42,
-        "delivery_notes": 24,
+        "delivery_notes": 0,
         "bank_accounts": 2,
         "bank_transactions": 146,
         "employees": 0,  # 工资册不随数据集载入 (需求 R96)
     }
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
-    documents = await financial.documents(e.id)
-    assert sorted((d.file_name, d.type, d.reliability) for d in documents) == [
-        (f"CON-X0{n}.pdf", DocumentType.contract, Reliability.external_copy) for n in (1, 2, 3)
-    ]
-    manifest = json.loads((ROOT / "data/xero_demo/20261017-q1/manifest.json").read_text(encoding="utf-8"))
-    ids = {d["path"]: d["document_id"] for d in manifest["documents"]}
-    assert {d.id for d in documents} == {ids[f"contracts/CON-X0{n}.pdf"] for n in (1, 2, 3)}
-    assert sorted(contract_id(d) for d in documents) == ["CON-X01", "CON-X02", "CON-X03"]
-    note = await financial.record(e.id, "delivery_note", "SR-ORC1026")
-    assert note is not None and note["invoice_id"] == "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
-    invoice = await financial.record(e.id, "sales_invoice", "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611")
-    assert invoice is not None and invoice["contract_id"] == "CON-X01"
+    assert await financial.documents(e.id) == [] and await financial.contracts(e.id) == []
+    linked = await financial.query(e.id, "SELECT count(*) AS n FROM sales_invoices WHERE contract_id IS NOT NULL", {})
+    assert linked[0]["n"] == 0
+    snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的七张表, 不并补造表
+    banks = await financial.query(e.id, "SELECT id, bank_name FROM bank_accounts ORDER BY id", {})
+    assert [(b["id"], b["bank_name"]) for b in banks] == sorted((b.id, b.bank_name) for b in snapshot["bank_accounts"])
     # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入
     demo = tmp_path / "xero_demo"
     shutil.copytree(ROOT / "data/xero_demo/20261017-q1", demo / "20261017-q1")

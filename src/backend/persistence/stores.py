@@ -794,7 +794,7 @@ class XeroDatasetLoader(TableLoader):
         return found
 
     def tables(self, dataset: str) -> dict[str, list[Any]]:
-        """演示数据导入之后的七张财务表 (不连库的纯函数, load 与测试共用, 需求 R268 起不再带合同路径): 快照映射出
+        """演示数据导入之后的七张财务表 (不连库的纯函数, 测试用; load 只载快照, 需求 R269): 快照映射出
         七张表 (adapters.xero_dataset); 有补造目录时先核对, 再并入合同关联, 服务完成记录与开户行
         (Supplements.apply). 没有补造目录时与纯快照相同."""
         return self.merged(dataset, self.supplement(dataset))
@@ -810,12 +810,13 @@ class XeroDatasetLoader(TableLoader):
         return found.demo_tables() if found is not None else []
 
     async def load(self, eid: str, dataset: str) -> None:
-        """载入七张表 (tables) 并登记补造目录的合同 PDF. 演示数据导入 (R269) 接手补造部分后改为只载快照."""
+        """只载快照映射出的七张表 (需求 R269): 不并补造账表, 不登记文件; 补造部分 (账表与文件) 由演示数据导入
+        (services.demo_import) 分阶段写入与上传. 有补造目录时仍先核对 (与快照不符抛 SupplementMismatch, 不写)."""
         self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
 
         def build() -> Tables:
-            found = self.supplement(dataset)
-            return self.merged(dataset, found), found.contracts() if found is not None else ()
+            self.supplement(dataset)
+            return self.merged(dataset, None), ()
 
         await self.insert(eid, dataset, build)
 
@@ -907,6 +908,12 @@ class RoutingDatasetLoader:
 
     def dataset_traits(self, dataset: str) -> DatasetTraits:
         return self.pick(dataset).dataset_traits(dataset)
+
+    def supplement(self, dataset: str) -> Supplements | None:
+        """演示数据导入的清单来源 (具体方法, 不在 DatasetLoader 协议里, 需求 R269): 所选载入器已核对的补造目录;
+        载入器没有这个方法 (Numbat 的 CSV 载入器) 时为 None."""
+        method: Callable[[str], Supplements | None] | None = getattr(self.pick(dataset), "supplement", None)
+        return method(dataset) if method is not None else None
 
     def supplement_dir(self, dataset: str) -> Path | None:
         """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有

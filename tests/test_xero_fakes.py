@@ -236,7 +236,7 @@ async def test_data_store_counts_and_writes_through() -> None:
 
 
 async def test_dataset_loader_reads_the_supplements() -> None:
-    """XeroFakeDatasetLoader: load 只记调用, 不登记文件 (演示导入之后的状态, 真实载入器在 R269 之前仍登记合同);
+    """XeroFakeDatasetLoader: load 只记调用, 不登记文件 (同真实载入器只载快照, 文件由演示数据导入上传);
     计划预置, 画像, 声明, 期间与更正分录取补造与快照."""
     store = x.xero_financial_store()
     loader = x.XeroFakeDatasetLoader(store)

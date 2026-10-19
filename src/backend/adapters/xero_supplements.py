@@ -12,10 +12,10 @@
 apply 把补造表并入快照映射出的财务表 (设计第 3.1, 3.3 节, 第 9.3 节第 6-9 项): 合同关联填
 sales_invoices.contract_id, 服务完成记录写成 delivery_notes (发票号换成 SI- ID), 开户行覆盖 bank_accounts.bank_name;
 合同 PDF 由 contracts() 列出. 发票号在快照中找不到或不唯一, 或开户行表的账号与快照不符, 抛 SupplementMismatch
-(消息含发票号或账户 ID), 不载入. 现在数据集载入仍并入补造表并登记合同; 演示数据导入 (R269) 接手后改为只载快照.
+(消息含发票号或账户 ID). 数据集载入只载快照 (需求 R269), apply 供演示导入清单与测试算导入后的表.
 
-演示导入清单 (plan, 需求 R268): 不连库列出演示数据导入要写的补造账表 (demo_tables) 与要上传的文件 (uploads),
-供 R269 按阶段写入与上传.
+演示导入清单 (plan, 需求 R268): 不连库列出演示数据导入 (services.demo_import, 需求 R269) 要写的快照六张表, 补造账表
+(demo_tables) 与要上传的文件 (uploads).
 """
 
 import csv
@@ -27,18 +27,17 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
 from backend.adapters.xero_dataset import Snapshot, build_tables
-from backend.contracts.data import TableKind
+from backend.contracts.data import XERO_TABLES, DemoStage, TableKind
 from backend.contracts.models import AuditObjective, ClientProfile, DocumentType, Model, Reliability, RiskItem
 from backend.contracts.records import BankAccount, DatasetTraits, DeliveryNote, Employee, SalesInvoice
 
 MISMATCH = "补造文件与快照不匹配"
 UNHASHED = frozenset({"contacts.json"})  # 快照中不记哈希的文件
-DemoStage = Literal["acceptance", "fieldwork", "statements", "manual"]  # 演示数据导入的阶段 (设计第 9.5 节)
 STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements", "manual")  # 清单按此顺序
 ARCHIVED = frozenset({"registry", "confirmation"})  # 程序执行时由登记 mock 与函证 mock 存档, 不在清单里
 STAGE_REQUESTS: dict[str, str] = {"statements": "REQ-financial_statements"}  # 按补交请求上传的阶段 → 请求 ID
@@ -79,11 +78,14 @@ class DemoUpload(Model):
 
 @dataclass(frozen=True)
 class DemoPlan:
-    """演示导入清单: 补造账表 (按 TableKind 顺序) 与上传文件 (按阶段, 再按文件名)."""
+    """演示导入清单: 补造账表 (按 TableKind 顺序) 与上传文件 (按阶段, 再按文件名); 另带补造目录 (上传文件的 path
+    相对于它) 与快照映射出的六张表 (XERO_TABLES, 演示导入当成从 Xero 同步一次写入, 需求 R269)."""
 
     dataset: str
     tables: list[DemoTable]
     uploads: list[DemoUpload]
+    root: Path  # 已核对的补造目录
+    snapshot: dict[TableKind, list[BaseModel]]  # 快照的六张表, 按 XERO_TABLES 顺序
 
 
 class SupplementLoader(Protocol):
@@ -98,7 +100,14 @@ def plan(loader: SupplementLoader, dataset: str) -> DemoPlan:
     found = loader.supplement(dataset)
     if found is None:
         raise FileNotFoundError(f"{dataset} 没有补造目录")
-    return DemoPlan(dataset=dataset, tables=found.demo_tables(), uploads=found.uploads())
+    tables = build_tables(Snapshot(found.snapshot))
+    return DemoPlan(
+        dataset=dataset,
+        tables=found.demo_tables(),
+        uploads=found.uploads(),
+        root=found.root,
+        snapshot={kind: list(tables[kind]) for kind in XERO_TABLES},
+    )
 
 
 def sha256(path: Path) -> str:
