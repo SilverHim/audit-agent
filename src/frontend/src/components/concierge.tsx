@@ -27,6 +27,7 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
+import { cardLayout, needsPresentation, presentationFor, presentationKey, showSideProposals } from '@/lib/presentation'
 import {
   attachRule,
   buildDisputeRecord,
@@ -191,12 +192,10 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
   )
 }
 
-// 判断呈递 (后端 R152, GEN-11): 卡片每换显示一条任务调一次, 同一条在同一次挂载里不再调 (StrictMode 的第二次 effect,
-// 轮询刷新与重新渲染都不算). 显示满 PRESENT_AFTER_MS 才调: 工作台在各查询陆续返回时当前事项会先闪过一条复核任务
-// (补交资料等还没读到), 那一下不算审计师打开了它. 返回这条任务的呈递视图; 还没回来或失败时为 undefined, 卡片照复核队列
-// 的数据显示. 卡片的头部, 金额, 档位与决定卡取复核队列, 呈递只补争议两方, 证据并集与失败原因, 同一字段只取一处
-const PRESENT_AFTER_MS = 800
-
+// 判断呈递 (后端 R152, GEN-11): 卡片挂载或换一条任务即呈递, 同一条在同一次挂载里不再调 (lib/presentation 的
+// needsPresentation: StrictMode 的第二次 effect, 轮询刷新与重新渲染都不算). 工作台在相关查询都返回后才确定当前事项
+// (lib/workspace.workspaceReady), 不会先闪过一条复核任务. 返回这条任务的呈递视图; 还没回来或失败时为 undefined, 卡片照
+// 复核队列的数据显示. 卡片的头部, 金额, 档位与决定卡取复核队列, 呈递只补争议两方, 证据并集与失败原因, 同一字段只取一处
 function usePresentation(eid: string, taskId: string): TaskPresentation | undefined {
   const { mutate, data } = useMutation({
     ...reviewsPresentReviewTaskMutation(),
@@ -204,15 +203,11 @@ function usePresentation(eid: string, taskId: string): TaskPresentation | undefi
   })
   const presented = useRef<string | null>(null)
   useEffect(() => {
-    const key = `${eid}:${taskId}`
-    if (presented.current === key) return
-    const timer = setTimeout(() => {
-      presented.current = key
-      mutate({ path: { eid, task_id: taskId } })
-    }, PRESENT_AFTER_MS)
-    return () => clearTimeout(timer)
+    if (!needsPresentation(presented.current, eid, taskId)) return
+    presented.current = presentationKey(eid, taskId)
+    mutate({ path: { eid, task_id: taskId } })
   }, [eid, taskId, mutate])
-  return data?.task.id === taskId ? data : undefined
+  return presentationFor(data, taskId)
 }
 
 // 失败原因 (呈递的 failure): 带对象的失败给调用次数, 没通过的校验与错误; 无归因的例外给规则与明细.
@@ -252,11 +247,22 @@ function FailureDetail({ failure }: { failure: PresentedFailure | null | undefin
   return null
 }
 
-// 争议两方的一栏: 两栏同一样式, 不标哪方更有理. 两方的建议动作与错报草稿由决定卡的 "两方的建议" 并排显示 (R150,
-// 取复核队列), 这里不重复
-function SideColumn({ eid, side, which }: { eid: string; side: PresentedSide; which: 'generator' | 'reviewer' }) {
+// 争议两方的一栏: 两栏同一样式, 不标哪方更有理. proposals 为真时另显示本方的建议动作与错报草稿 (见
+// lib/presentation.showSideProposals: collab 打开且任务待决时决定卡已并排显示, 这里不重复)
+function SideColumn({
+  eid,
+  side,
+  which,
+  proposals,
+}: {
+  eid: string
+  side: PresentedSide
+  which: 'generator' | 'reviewer'
+  proposals: boolean
+}) {
   const { t } = useI18n()
   const p = t.judgment.presentation
+  const draft = side.misstatement_draft
   return (
     <section className="flex min-w-0 flex-col gap-3 p-4" data-testid={`presented-${which}`}>
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -267,6 +273,19 @@ function SideColumn({ eid, side, which }: { eid: string; side: PresentedSide; wh
           </Code>
         ) : null}
       </div>
+      {proposals ? (
+        <div className="flex flex-col gap-1" data-testid={`presented-${which}-proposal`}>
+          <span className={cn('font-semibold', side.proposed_action === 'misstatement' && 'text-risk')}>
+            {side.proposed_action ? t.proposed[side.proposed_action] : t.card.sides.none}
+          </span>
+          {draft ? (
+            <Code className="text-[12.5px] text-secondary-foreground">
+              {draft.account} · {t.assertions[draft.assertion]} · {formatAud(draft.amount_cents)} ·{' '}
+              {t.directions[draft.direction]}
+            </Code>
+          ) : null}
+        </div>
+      ) : null}
       {side.conclusion ? (
         <p className="m-0 text-[15px] leading-[1.65]" lang="en">
           {side.conclusion}
@@ -303,7 +322,15 @@ function SideColumn({ eid, side, which }: { eid: string; side: PresentedSide; wh
 }
 
 // 争议任务: 两方左右并排 (窄屏依次堆叠), 两方证据的并集在下方居中, 每项标出由哪一方引用
-function DisputeBody({ eid, presentation }: { eid: string; presentation: TaskPresentation }) {
+function DisputeBody({
+  eid,
+  presentation,
+  proposals,
+}: {
+  eid: string
+  presentation: TaskPresentation
+  proposals: boolean
+}) {
   const { t } = useI18n()
   const p = t.judgment.presentation
   const { generator, reviewer } = presentation.sides ?? {}
@@ -311,8 +338,8 @@ function DisputeBody({ eid, presentation }: { eid: string; presentation: TaskPre
   return (
     <>
       <div className="grid grid-cols-1 divide-y divide-line-soft border-line-soft border-b sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-        <SideColumn eid={eid} side={generator} which="generator" />
-        <SideColumn eid={eid} side={reviewer} which="reviewer" />
+        <SideColumn eid={eid} side={generator} which="generator" proposals={proposals} />
+        <SideColumn eid={eid} side={reviewer} which="reviewer" proposals={proposals} />
       </div>
       <div className="flex flex-col items-center gap-2.5 px-4 py-4 text-center" data-testid="presented-evidence">
         <SectionLabel>{p.evidence}</SectionLabel>
@@ -336,8 +363,8 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
   const { t } = useI18n()
   const { view, amount, tier, subject } = ranked
   const presentation = usePresentation(eid, view.task.id)
-  // 功能 collab 打开时决定卡并排显示两方的建议 (R150); 关闭时争议卡照旧在这里显示原判断的建议动作
   const collab = useOverview(eid)?.features?.includes('collab') ?? false
+  const layout = cardLayout(view, presentation)
   const target = view.target
   const proc = procedureName(t, view.task.procedure_id, view.procedure_name)
   const header = (
@@ -354,7 +381,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
     </div>
   )
 
-  if (!isJudgment(target)) {
+  if (layout === 'target' || !isJudgment(target)) {
     const failure = presentation?.failure
     // 带对象的失败: 执行记录本身是成功终态, 说的是这个对象没做成
     const subjectFailed = isRun(target) && view.task.subject_id
@@ -405,16 +432,13 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       </span>
     </div>
   )
-  // 争议任务的呈递回来后两方并排: 结论, 推理链, 建议与置信度都从呈递取, 不再从队列的判断上重复显示
-  if (presentation?.sides?.reviewer) {
+  // 争议任务的呈递回来后两方并排: 结论, 推理链, 置信度与 (须时) 建议都从呈递取, 不再从队列的判断上重复显示
+  if (layout === 'dispute' && presentation) {
     return (
       <article className="overflow-hidden rounded-[14px] border bg-card" data-testid="dispute-presentation">
         {header}
-        <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">
-          {facts}
-          {collab ? null : proposed}
-        </div>
-        <DisputeBody eid={eid} presentation={presentation} />
+        <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">{facts}</div>
+        <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} />
       </article>
     )
   }

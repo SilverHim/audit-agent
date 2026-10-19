@@ -34,6 +34,7 @@ import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferra
 import { type RankedTask, rankTasks } from '@/lib/review'
 import { buildTimeline, type TimelineItem } from '@/lib/timeline'
 import { useEngagement } from '@/lib/use-engagement'
+import { pickCurrent, workspaceReady } from '@/lib/workspace'
 import { skippedByReason } from '@/lib/xero'
 import { pendingCheck } from '@/lib/xero-profile'
 import type { Messages } from '@/locales/en'
@@ -121,10 +122,9 @@ function Workspace() {
     return list
   }, [overview, gate.data, ranked, deferredKeys, requests.data, summary.data])
 
-  const current =
-    candidates.find((item) => item.key === focus || (item.kind === 'requests' && focus?.startsWith('request:'))) ??
-    candidates.find((item) => !item.deferred) ??
-    null
+  // 相关查询都返回之后才确定当前事项 (后端 R152: 免得先闪过一条复核任务, 给审计师并没打开的任务记一次呈递)
+  const ready = workspaceReady(overview, { gate, tasks, exceptions, deferrals, requests, summary })
+  const current = ready ? pickCurrent(candidates, focus) : null
   const deferredCount = candidates.filter((item) => item.deferred).length
 
   const timeline = useMemo(() => buildTimeline(trail.data ?? []), [trail.data])
@@ -252,6 +252,7 @@ function Workspace() {
             <CurrentItem
               eid={eid}
               overview={overview}
+              ready={ready}
               current={current}
               reviewTotal={candidates.filter((item) => item.kind === 'task').length}
               deferredCount={deferredCount}
@@ -453,6 +454,7 @@ function Citations({ eid, citations }: { eid: string; citations: ConciergeCitati
 function CurrentItem({
   eid,
   overview,
+  ready,
   current,
   reviewTotal,
   deferredCount,
@@ -463,6 +465,7 @@ function CurrentItem({
 }: {
   eid: string
   overview: EngagementOverview | undefined
+  ready: boolean
   current: Current | null
   reviewTotal: number
   deferredCount: number
@@ -473,6 +476,16 @@ function CurrentItem({
 }) {
   const { t } = useI18n()
   if (!overview) return null
+  if (!ready) {
+    return (
+      <ConciergeMessage>
+        <span className="inline-flex items-center gap-2 text-[15px]" data-testid="workspace-loading">
+          <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
+          {t.workspace.loadingItems}
+        </span>
+      </ConciergeMessage>
+    )
+  }
   if (overview.running && !current) {
     return (
       <ConciergeMessage>

@@ -244,6 +244,7 @@ export const zh: Messages = {
     noReason: '未填写理由。',
     running: '程序正在执行，完成后会把下一项交给你。',
     nothingPending: '目前没有待人工处理的事项。',
+    loadingItems: '正在读取待处理的事项…',
     deferredWaiting: (n) => `目前没有新的事项。待决定队列里有 ${n} 项稍后处理。`,
     archived: '报告已签字，项目已归档。',
     declined: '本项目不承接。',

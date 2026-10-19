@@ -249,6 +249,7 @@ export const en = {
     decisionRecorded: (target: string) => `Decision recorded · ${target}`,
     noReason: 'No reason given.',
     running: 'Procedures are running. The next item comes to you when they finish.',
+    loadingItems: 'Loading the items that need you…',
     nothingPending: 'Nothing needs you right now.',
     deferredWaiting: (n: number) =>
       `Nothing new needs you. ${n} item${n === 1 ? ' is' : 's are'} deferred in pending decisions.`,

@@ -1,7 +1,7 @@
 """判断呈递 (GEN-11, R152): POST review-tasks/{task_id}/presentations 按任务类型组装的视图与 presentation 留痕.
 
-Numbat 争议变体 (功能 collab) 与主流程各跑一次到首次等复核, 一次运行多处断言; 证据并集与失败原因的取法用纯函数
-参数化, 带对象的失败用真实判断引擎跑一次 REV-02 (不跑全流程).
+Numbat 争议变体 (功能 collab) 只跑一次, 依次呈递争议, normal, 带对象的失败与已决定的任务, 一次运行多处断言; 证据
+并集与失败原因的取法用纯函数参数化, 带对象的失败另用真实判断引擎跑一次 REV-02 (不跑全流程).
 """
 
 import json
@@ -23,6 +23,7 @@ from backend.contracts.models import (
     Judgment,
     ProcedureRun,
     ReviewTask,
+    ReviewTier,
     TaskKind,
     TrailEntry,
     TrailKind,
@@ -31,7 +32,7 @@ from backend.contracts.views import PresentedSide, TaskPresentation
 from backend.core.config import get_settings
 from backend.orchestration.nodes import fail_run
 from backend.orchestration.runner import GraphRunner
-from backend.services.presentation import evidence_union, failure_of, presentation_entry
+from backend.services.presentation import assemble, evidence_union, failure_of, presentation_entry
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
@@ -39,14 +40,16 @@ from tests.fakes import (
     NOW,
     NUMBAT_AUDITOR,
     FakeTrail,
+    LayeredMockLLM,
     api_client,
     make_run,
     numbat_rev08_exception,
     wait_idle,
 )
-from tests.test_collab import CASH_DRAFT, COLLAB, disputed
+from tests.test_collab import CASH_DRAFT, COLLAB
+from tests.test_concierge_chat_tools import JUDGMENT
 from tests.test_decisions import Started
-from tests.test_dispute import JID, TASK, resolve
+from tests.test_dispute import JID, TASK, VARIANTS, resolve
 from tests.test_e2e_mock import start_demo, trail_of
 from tests.test_fieldwork_rev02 import setup
 from tests.test_flow import REVIEWS
@@ -55,6 +58,7 @@ EID = ENGAGEMENT.id
 PRESENT = f"/api/v1/engagements/{EID}/review-tasks/{{task}}/presentations"
 QUEUE = ReviewQueue(ProcedureLibrary(get_settings().KNOWLEDGE_ROOT))
 REV02_TASK = "T-J-REV-02-1-SI-2026-0612-v1"
+FAILED_TASK = "T-RUN-REV-02-1-SI-2026-0618-v1"
 
 
 async def present(http: httpx.AsyncClient, task_id: str) -> httpx.Response:
@@ -69,14 +73,27 @@ async def checkpoint_id(s: Started) -> Any:
     return (await s.runner.app.aget_state(GraphRunner.config(EID))).config["configurable"]["checkpoint_id"]
 
 
-async def test_dispute_shows_both_sides_evidence_union_and_records_each_opening() -> None:
-    """验收 1-3: 争议变体 (collab) 首次等复核时呈递 T-J-CSH-02-1-BA-01-v1 两次.
+async def test_presentations_through_one_dispute_run(tmp_path: Path) -> None:
+    """Numbat 争议变体 (功能 collab) 跑一次, 依次呈递各类任务. REV-02 SI-2026-0618 的主模型输出在测试临时目录里换成
+    结构不合的 (SI-2026-0612 不受影响).
 
-    两方并排: 生成方为 A6 的结论, 7 步推理链, 反方论证, 置信度 0.5625, close, 无草稿; 复核方为 A7 的独立结论, 7 步
-    推理链, different_conclusion 与理由, misstatement 与草稿. 证据为两方指针按比对键去重的并集 5 项 (回函第 1 页两个
-    locator 算一项), 都为两方引用. 每次呈递一行留痕 (不带幂等键, 两次两行), 不写 Store, 不动检查点. 仲裁 (a7_upheld)
-    后已决定的任务照样可呈递: 任务第 2 版, 目标仍是任务绑定的第 1 版 (原判断已出 v2 overridden)."""
-    s, _ = await disputed(COLLAB)
+    1. 验收 1-3: 首次等复核时呈递 T-J-CSH-02-1-BA-01-v1 两次. 两方并排: 生成方为 A6 的结论, 7 步推理链, 反方论证,
+       置信度 0.5625, close, 无草稿; 复核方为 A7 的独立结论, 7 步推理链, different_conclusion 与理由, misstatement
+       与草稿. 证据为两方指针按比对键去重的并集 5 项 (回函第 1 页两个 locator 算一项), 都为两方引用. 每次呈递一行留痕
+       (不带幂等键, 两次两行), 不写 Store, 不动检查点.
+    2. 验收 4: 确认 REV-03 三条 (第 7 节的前三条决定) 后呈递 T-J-REV-02-1-SI-2026-0612-v1: 只有生成方 (反方论证,
+       草稿 14200000 overstated), 目标的独立复核为 skipped, 金额 14200000, 档位 full_review, 证据只有生成方的; 标稍后
+       处理后 deferred 为真, 这条任务决定之后再呈递为假 (已决定的不算稍后处理). 任务不存在 404 NOT_FOUND 且不写留痕.
+    3. 验收 5 (经接口): 带对象的失败任务 T-RUN-REV-02-1-SI-2026-0618-v1 的失败原因读本次执行的 llm_call 留痕:
+       structure, 尝试 3 次.
+    4. 仲裁 (a7_upheld) 后已决定的争议任务照样可呈递: 任务第 2 版, 目标仍是任务绑定的第 1 版 (原判断已出 v2
+       overridden). 项目锁被占 (主图在执行) 与项目已锁定时照常呈递并写留痕."""
+    broken = tmp_path / "llm"
+    (broken / "REV-02").mkdir(parents=True)
+    (broken / "REV-02" / "SI-2026-0618.json").write_text(json.dumps({"conclusion": "Synthetic malformed output"}))
+    llm = LayeredMockLLM(broken, get_settings().LLM_FIXTURES_ROOT)
+    s = await start_demo(llm=llm, review_llm=MockLLMClient(VARIANTS / "dispute"), features=COLLAB)
+    await wait_idle(s.runner, EID)
     rows, commits, checkpoint = list(s.output_store.rows), len(s.output_store.commits), await checkpoint_id(s)
     async with api_client(s.runner) as http:
         first, second = await present(http, TASK), await present(http, TASK)
@@ -139,7 +156,6 @@ async def test_dispute_shows_both_sides_evidence_union_and_records_each_opening(
         "reason_type",
         "reason",
     }
-
     entries = presentations(s)
     assert [e.id for e in entries] == [first.json()["presentation_id"], second.json()["presentation_id"]]
     assert entries[0].id != entries[1].id
@@ -162,25 +178,6 @@ async def test_dispute_shows_both_sides_evidence_union_and_records_each_opening(
     assert (list(s.output_store.rows), len(s.output_store.commits)) == (rows, commits)
     assert await checkpoint_id(s) == checkpoint
 
-    await s.submit.submit(EID, resolve(DisputeResolution.a7_upheld, misstatement_draft=CASH_DRAFT))
-    await wait_idle(s.runner, EID)
-    assert (await s.output_store.get(EID, Judgment, JID)).version == 2
-    async with api_client(s.runner) as http:
-        decided = await present(http, TASK)
-    assert decided.status_code == 200, decided.text
-    body = decided.json()
-    assert (body["task"]["version"], body["task"]["status"]) == (2, "decided")
-    assert (body["target"]["version"], body["target"]["review_status"]) == (1, "pending")
-    assert presentations(s)[-1].payload == {**entry.payload, "task_version": 2}
-
-
-async def test_normal_task_deferral_missing_busy_and_locked() -> None:
-    """验收 1, 2, 4: 主流程确认 REV-03 三条 (第 7 节的前三条决定) 后呈递 T-J-REV-02-1-SI-2026-0612-v1: 只有生成方
-    (反方论证, 草稿 14200000 overstated), 目标的独立复核为 skipped, 金额 14200000, 档位 full_review (超过执行重要性
-    9000000), 证据只有生成方的; 标稍后处理后 deferred 为真. 任务不存在 404 NOT_FOUND 且不写留痕; 项目锁被占
-    (主图在执行) 与项目已锁定时照常呈递并写留痕."""
-    s = await start_demo()
-    await wait_idle(s.runner, EID)
     for decision in REVIEWS[:3]:  # REV-02 判断要等 REV-03 的三条合同判断确认
         await s.submit.submit(EID, decision)
         await wait_idle(s.runner, EID)
@@ -188,33 +185,59 @@ async def test_normal_task_deferral_missing_busy_and_locked() -> None:
     async with api_client(s.runner) as http:
         opened = await present(http, REV02_TASK)
         assert opened.status_code == 200, opened.text
-        view = opened.json()
+        normal = opened.json()
         mark = {"target_type": "review_task", "target_id": REV02_TASK, "deferred": True}
         assert (await http.post(deferrals, json=mark)).status_code == 202
         deferred = (await present(http, REV02_TASK)).json()
         missing = await present(http, "T-none")
-        s.runner.acquire(EID)
-        try:
-            busy = await present(http, REV02_TASK)
-        finally:
-            s.runner.release(EID)
-        await s.engagement_store.update(EID, locked=True)
-        locked = await present(http, REV02_TASK)
-    assert list(view["sides"]) == ["generator"]
-    side = view["sides"]["generator"]
+        failed = (await present(http, FAILED_TASK)).json()
+    assert list(normal["sides"]) == ["generator"]
+    side = normal["sides"]["generator"]
     assert side["counter_argument"] and side["reason_type"] is None
     draft = side["misstatement_draft"]
     assert (draft["amount_cents"], draft["direction"]) == (14200000, "overstated")
-    assert (view["target"]["critic_verdict"], view["amount_cents"], view["tier"]) == (
+    assert (normal["target"]["critic_verdict"], normal["amount_cents"], normal["tier"]) == (
         "skipped",
         14200000,
         "full_review",
     )
-    assert view["evidence"] and {e["origin"] for e in view["evidence"]} == {"generator"}
-    assert (view["deferred"], deferred["deferred"], view["failure"]) == (False, True, None)
+    assert normal["evidence"] and {e["origin"] for e in normal["evidence"]} == {"generator"}
+    assert (normal["deferred"], deferred["deferred"], normal["failure"]) == (False, True, None)
     assert (missing.status_code, missing.json()["detail"]["code"]) == (404, "NOT_FOUND")
+    failure = failed["failure"]
+    assert (failure["source"], failure["subject_id"], failure["level_failed"], failure["attempts"]) == (
+        "llm_call",
+        "SI-2026-0618",
+        "structure",
+        3,
+    )
+    assert failure["errors"] and failed["sides"] == {} and failed["evidence"] == []
+
+    await s.submit.submit(EID, REVIEWS[3])  # SI-2026-0612 认定错报: 稍后处理的标记随之失效
+    await wait_idle(s.runner, EID)
+    await s.submit.submit(EID, resolve(DisputeResolution.a7_upheld, misstatement_draft=CASH_DRAFT))
+    await wait_idle(s.runner, EID)
+    assert (await s.output_store.get(EID, Judgment, JID)).version == 2
+    async with api_client(s.runner) as http:
+        after = (await present(http, REV02_TASK)).json()
+        decided = await present(http, TASK)
+        s.runner.acquire(EID)
+        try:
+            busy = await present(http, TASK)
+        finally:
+            s.runner.release(EID)
+        await s.engagement_store.update(EID, locked=True)
+        locked = await present(http, TASK)
+    assert (after["task"]["status"], after["deferred"]) == ("decided", False)
+    assert decided.status_code == 200, decided.text
+    body = decided.json()
+    assert (body["task"]["version"], body["task"]["status"]) == (2, "decided")
+    assert (body["target"]["version"], body["target"]["review_status"]) == (1, "pending")
     assert (busy.status_code, locked.status_code) == (200, 200), busy.text
-    assert [e.payload["task_id"] for e in presentations(s)] == [REV02_TASK] * 4  # 404 那次不写
+    last = presentations(s)[-1]
+    assert last.payload == {**entry.payload, "task_version": 2}
+    opened_tasks = [e.payload["task_id"] for e in presentations(s)]  # 404 那次不写
+    assert opened_tasks == [TASK, TASK, REV02_TASK, REV02_TASK, FAILED_TASK, REV02_TASK, TASK, TASK, TASK]
 
 
 def pointer(
@@ -248,6 +271,31 @@ def test_evidence_union(
     generator: list[EvidencePointer], reviewer: list[EvidencePointer], expected: list[tuple[EvidencePointer, str]]
 ) -> None:
     assert [(e.pointer, e.origin) for e in evidence_union(generator, reviewer)] == expected
+
+
+def test_generator_evidence_includes_conclusion_pointers() -> None:
+    """生成方的证据含结论引用的证据, 不只推理链各步的: 只在结论里引用的指针 (这里是另一张发票的行) 也进并集; 发票与
+    发运单在结论与推理链里都有, 各算一项; 准则只在推理链里. normal 任务只有生成方."""
+    extra = pointer("sales_invoice", "SI-2026-0618", locator="amount_cents")
+    judgment = JUDGMENT.model_copy(update={"evidence": [*JUDGMENT.evidence, extra]})
+    task = QUEUE.make_task(TaskKind.normal, judgment, "REV-02", "RUN-REV-02-1", NOW)
+    view = assemble(
+        task,
+        judgment,
+        presentation_id="TR-1",
+        procedure_name="收入截止性判断",
+        allowed_decisions=[],
+        allowed_resolutions=[],
+        amount_cents=None,
+        tier=ReviewTier.read_reasoning,
+        deferred=False,
+    )
+    assert [(e.pointer.source_id, e.origin) for e in view.evidence] == [
+        ("SI-2026-0612", "generator"),
+        ("DN-2026-0612", "generator"),
+        ("SI-2026-0618", "generator"),
+        ("AASB15-P38", "generator"),
+    ]
 
 
 def whole_run_failure() -> tuple[ReviewTask, ProcedureRun]:
