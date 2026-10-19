@@ -504,7 +504,7 @@ def test_trigger_order_and_sample() -> None:
 
 
 def test_sampling_is_replayable() -> None:
-    """抽样按判断 ID 的 sha256 (services/sampling 的 critic 用途): 同一 ID 每次结果相同; 约 5% 的 ID 抽中."""
+    """抽样按判断 ID 的 sha256 (services/sampling.sampled, 键为判断 ID): 同一 ID 每次结果相同; 约 5% 的 ID 抽中."""
     ids = [f"J-REV-02-1-X{n}" for n in range(2000)]
     first = [sampled(i, 0.05) for i in ids]
     assert first == [sampled(i, 0.05) for i in ids]

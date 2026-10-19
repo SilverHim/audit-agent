@@ -148,7 +148,7 @@ export type SideProposal = { action: ProposedAction | null; draft: MisstatementD
 
 export function sideProposal(judgment: Judgment | null, side: DisputeSide): SideProposal {
   if (!judgment) return { action: null, draft: null }
-  if (side === 'a6') return { action: judgment.proposed_action ?? null, draft: judgment.misstatement_draft ?? null }
+  if (side === 'a6') return { action: judgment.proposed_action, draft: judgment.misstatement_draft ?? null }
   return { action: judgment.critic_proposed_action ?? null, draft: judgment.critic_misstatement_draft ?? null }
 }
 
