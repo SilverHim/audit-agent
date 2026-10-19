@@ -505,6 +505,71 @@ async def test_rule_edge_cases(storage):
 XERO_SNAPSHOT = "xero/20261017-mock"  # 本地 xero pull --paid mock 的快照, 不入库; 没有时跳过
 
 
+async def test_rev08_r03_matches_invoice_number_digits_as_a_whole_word(storage):
+    """REV-08 R03: 发票号为字母前缀加纯数字 (ORC1026) 时, 参考号里出现该数字串且前后都不是数字的流水也算它的收款
+    ("1026", "Invoice 1026"); "1028", "10261", "21026" 不算; 参考号含发票号的照原条件算. 带连字符的发票号
+    (Numbat 的 SI-2026-0612) 只按包含发票号, 参考号 "0612" 不算. Numbat 临时项目内插入行, 期末 2026-06-30, 窗口 20."""
+    import yaml
+
+    from backend.contracts.knowledge import ProcedureTemplate
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    template = ProcedureTemplate.model_validate(
+        yaml.safe_load((ROOT / "src/backend/knowledge/procedures/REV-08.yaml").read_text())
+    )
+    r03 = next(r.sql for r in template.rules if r.id == "R03")
+    params = dict(period_end="2026-06-30", window_days=20)
+    invoices, bank = m.FINANCIAL["sales_invoices"], m.FINANCIAL["bank_transactions"]
+
+    async def receipts(*rows: tuple[str, str, int]) -> None:
+        async with transaction(engine, e.id) as conn:
+            for txn_id, reference, amount in rows:
+                await conn.execute(
+                    insert(bank).values(
+                        engagement_id=e.id,
+                        id=txn_id,
+                        bank_account_id="BA-01",
+                        txn_date=date(2026, 7, 2),
+                        amount_cents=amount,
+                        balance_after_cents=0,
+                        description="receipt",
+                        reference=reference,
+                    )
+                )
+
+    async def hits() -> dict[str, tuple[int, int, str]]:
+        rows = await financial.query(e.id, r03, params)
+        return {r["source_id"]: (r["amount_cents"], r["received_cents"], r["bank_transaction_ids"]) for r in rows}
+
+    assert await hits() == {}
+    async with transaction(engine, e.id) as conn:
+        await conn.execute(
+            insert(invoices).values(
+                engagement_id=e.id,
+                id="SI-ORC1026",
+                invoice_no="ORC1026",
+                customer="Test Customer Pty Ltd",
+                customer_abn=None,
+                contract_id=None,
+                invoice_date=date(2026, 6, 25),
+                posting_date=date(2026, 6, 25),
+                amount_cents=715000,
+                journal_entry_id=None,
+            )
+        )
+    await receipts(("BT-1026", "1026", 385000))
+    assert await hits() == {"SI-ORC1026": (330000, 385000, "BT-1026")}
+
+    await receipts(("BT-X-1", "1028", 100000), ("BT-X-2", "10261", 100000), ("BT-X-3", "21026", 100000))
+    await receipts(("BT-0612", "0612", 100000))  # SI-2026-0612 带连字符, 只按包含发票号
+    assert await hits() == {"SI-ORC1026": (330000, 385000, "BT-1026")}
+
+    await receipts(("BT-INV-1026", "Invoice 1026", 100000), ("BT-ORC1026", "ORC1026", 100000))
+    assert await hits() == {"SI-ORC1026": (130000, 585000, "BT-1026,BT-INV-1026,BT-ORC1026")}
+
+
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
     """Xero 快照经 XeroDatasetLoader 载入真实库: 各表有数, 科目带标准分类,
     生产的 gl_balance 对每个科目等于本期试算表."""

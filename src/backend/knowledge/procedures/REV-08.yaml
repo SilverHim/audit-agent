@@ -37,6 +37,9 @@ rules:
         AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
         AND (d.id IS NULL OR d.signed_date IS NULL)
       ORDER BY i.id, d.id
+  # R03 的收款与发票对应: 流水参考号包含发票号; 发票号为 "字母前缀加纯数字" (如 Xero 的 ORC1026) 时另认参考号里
+  # 出现该数字串且前后都不是数字的 (客户付款时常只写数字: "1026", "Invoice 1026"; "10261", "21026" 不算).
+  # 带连字符等其他写法的发票号 (Numbat 的 SI-2026-0612) 只按包含发票号对应 (设计稿 v2.1 第 5.1 节, 决定 9)
   - id: R03
     name: 收款金额与发票不符
     severity: medium
@@ -45,7 +48,10 @@ rules:
              i.amount_cents-SUM(t.amount_cents) AS amount_cents, i.amount_cents AS invoice_amount_cents,
              SUM(t.amount_cents) AS received_cents, string_agg(t.id, ',' ORDER BY t.id) AS bank_transaction_ids
       FROM sales_invoices i JOIN bank_transactions t ON t.engagement_id=i.engagement_id
-        AND t.amount_cents>0 AND position(i.invoice_no IN t.reference)>0
+        AND t.amount_cents>0
+        AND (position(i.invoice_no IN t.reference)>0
+             OR (i.invoice_no ~ '^[A-Za-z]+[0-9]+$'
+                 AND t.reference ~ ('(^|[^0-9])' || substring(i.invoice_no from '[0-9]+$') || '([^0-9]|$)')))
       WHERE i.engagement_id=:eid
         AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
       GROUP BY i.id, i.amount_cents
