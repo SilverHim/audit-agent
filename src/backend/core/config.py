@@ -41,7 +41,9 @@ class Settings(BaseSettings):
 
     XERO_CLIENT_ID: str = ""  # Xero 应用的 Client ID (不是密钥), 为空时不能接 Xero
     XERO_CLIENT_SECRET: str = ""  # Web app 类型的 client secret, 只放 .env; 为空时按 PKCE 授权
-    XERO_REDIRECT_URI: str = "http://localhost:8765/callback"  # 授权回调地址, 须与 Xero 应用登记的一致
+    # 网页连接的授权回调地址 (后端 GET /api/v1/integrations/xero/callback), 须在 Xero 应用里登记
+    XERO_REDIRECT_URI: str = "http://localhost:8000/api/v1/integrations/xero/callback"
+    XERO_CLI_REDIRECT_URI: str = "http://localhost:8765/callback"  # 命令行 login 的本机回调地址, 也须在 Xero 应用登记
     XERO_TOKEN_PATH: Path = ROOT / "var" / "xero" / "token.json"  # 令牌文件, 含刷新令牌, 不入库
     XERO_TENANT_ID: str = ""  # 要拉取的组织, 为空时取授权连接里唯一的组织
     XERO_PAID_ENDPOINTS: Literal["live", "mock", "off"] = "off"  # 付费接口: 真实, 网页导出模拟, 不取 (退回单据反推)
@@ -54,11 +56,17 @@ class Settings(BaseSettings):
     SEED_USER_EMAIL: str = "rca@example.com"  # seed 脚本建的审计师账号
     SEED_USER_PASSWORD: str = "change-me"  # seed 账号的密码
     FRONTEND_ORIGIN: str = "http://localhost:5173"  # 允许跨域访问的前端地址
+    FRONTEND_URL: str = ""  # 前端页面地址, Xero 授权回调后跳回这里; 为空时取 FRONTEND_ORIGIN
 
     @property
     def features(self) -> frozenset[str]:
         """FEATURES 拆成功能名集合; 有未登记的名字或依赖不满足时抛 ValueError (build_deps 因此启动即报错)."""
         return check_features(parse_features(self.FEATURES))
+
+    @property
+    def frontend_url(self) -> str:
+        """前端页面地址 (不带末尾的 /): FRONTEND_URL, 为空时取 FRONTEND_ORIGIN."""
+        return (self.FRONTEND_URL or self.FRONTEND_ORIGIN).rstrip("/")
 
     @property
     def sqlalchemy_url(self) -> str:

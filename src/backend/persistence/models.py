@@ -73,6 +73,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "data_checks": {"request_id"},
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
+            "xero_connections": {"tenant_id", "tenant_name", "last_synced_at"},
             "llm_settings": {"api_key_encrypted", "key_last4"},
             "audit_trail": {
                 "procedure_id",
@@ -188,6 +189,14 @@ extraction_versions = table(
 )
 # 数据变动: 哪个数据版本变了哪类数据 (DataInput); 过期判断只读这里 (需求 R274, 迁移 0008)
 data_changes = table("data_changes", "data_version:i input:s", ("data_version", "input"))
+# 项目的 Xero 网页连接 (需求 R279, 迁移 0009): 每个项目最多一行, 断开即删; 令牌只存 Fernet 密文 (tokens_encrypted,
+# 主密钥 SETTINGS_SECRET_KEY), 明文不落库; tenants 为授权给到的组织 [{id, name}], synced_tables 为最近一次同步写的表
+xero_connections = table(
+    "xero_connections",
+    "tenants:j tenant_id:s tenant_name:s scope:s status:s connected_by:s connected_at:t refreshed_at:t "
+    "last_synced_at:t synced_tables:j tokens_encrypted:s",
+    (),
+)
 OUTPUT_KINDS = {
     "audit_objectives": ["AuditObjective"],
     "risk_register": ["RiskItem"],

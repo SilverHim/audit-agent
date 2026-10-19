@@ -84,8 +84,14 @@ CONTENT_TOOLS = {"list_open_items", "list_judgments", "get_judgment", "get_proce
 # 不调的 GET 接口 (不含判断与留痕): 证据原件返回原件文件 (EvidenceFile, 假证据存储不出文件); 大模型设置页与项目无关.
 # 只能登记返回文件 (非 JSON) 或不属于项目的接口 (test_skipped_routes_are_files_or_outside_engagements)
 SKIPPED_ROUTES = {"/api/v1/engagements/{eid}/evidence/{document_id}", "/api/v1/settings/llm"}
-# 调了而不是 200 的接口 (场景决定): 图停在 await_events, 不在闸门, gate 为 404 NOT_AT_GATE
-NOT_OK_ROUTES = {"/api/v1/engagements/{eid}/gate": 404}
+# 调了而不是 200 的接口 (场景决定): 图停在 await_events, 不在闸门, gate 为 404 NOT_AT_GATE; 没配 Xero 应用, connect 为
+# 503 XERO_NOT_CONFIGURED; 没连接 Xero, tenants 为 409 XERO_NOT_CONNECTED; 授权回调不带 state, 302 回前端 (需求 R279)
+NOT_OK_ROUTES = {
+    "/api/v1/engagements/{eid}/gate": 404,
+    "/api/v1/engagements/{eid}/data/xero/connect": 503,
+    "/api/v1/engagements/{eid}/data/xero/tenants": 409,
+    "/api/v1/integrations/xero/callback": 302,
+}
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "list_judgments": {"procedure_id": "REV-02"},
     "get_judgment": {"judgment_id": HIDDEN},

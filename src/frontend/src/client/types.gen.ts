@@ -3471,6 +3471,30 @@ export type ValidationError = {
 };
 
 /**
+ * XeroAuthorize
+ *
+ * 连接 Xero (GET /data/xero/connect): 前端跳去的授权地址.
+ */
+export type XeroAuthorize = {
+    /**
+     * Authorize Url
+     */
+    authorize_url: string;
+};
+
+/**
+ * XeroDisconnected
+ *
+ * 断开 Xero (DELETE /data/xero).
+ */
+export type XeroDisconnected = {
+    /**
+     * Revoked
+     */
+    revoked: boolean;
+};
+
+/**
  * XeroSource
  *
  * 数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections).
@@ -3492,6 +3516,47 @@ export type XeroSource = {
      * Scope
      */
     scope?: Array<TableKind>;
+};
+
+/**
+ * XeroSyncStarted
+ *
+ * 开始同步 (POST /data/xero/sync, 202): 后台计划写的账表. 实际写了哪些表看完成后概览的 scope 与留痕
+ * xero_synced (live 下银行对账单接口拒绝时银行账户与银行流水都不写).
+ */
+export type XeroSyncStarted = {
+    /**
+     * Tables
+     */
+    tables: Array<TableKind>;
+};
+
+/**
+ * XeroTenant
+ *
+ * 授权给到的一个 Xero 组织.
+ */
+export type XeroTenant = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
+ * XeroTenantIn
+ *
+ * 选定 Xero 组织 (PUT /data/xero/tenant).
+ */
+export type XeroTenantIn = {
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
 };
 
 export type HealthHealthData = {
@@ -4859,6 +4924,158 @@ export type DataReadyResponses = {
 
 export type DataReadyResponse = DataReadyResponses[keyof DataReadyResponses];
 
+export type DataXeroConnectData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero/connect';
+};
+
+export type DataXeroConnectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroConnectError = DataXeroConnectErrors[keyof DataXeroConnectErrors];
+
+export type DataXeroConnectResponses = {
+    /**
+     * Successful Response
+     */
+    200: XeroAuthorize;
+};
+
+export type DataXeroConnectResponse = DataXeroConnectResponses[keyof DataXeroConnectResponses];
+
+export type DataXeroTenantsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero/tenants';
+};
+
+export type DataXeroTenantsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroTenantsError = DataXeroTenantsErrors[keyof DataXeroTenantsErrors];
+
+export type DataXeroTenantsResponses = {
+    /**
+     * Response Data-Xero Tenants
+     *
+     * Successful Response
+     */
+    200: Array<XeroTenant>;
+};
+
+export type DataXeroTenantsResponse = DataXeroTenantsResponses[keyof DataXeroTenantsResponses];
+
+export type DataXeroTenantData = {
+    body: XeroTenantIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero/tenant';
+};
+
+export type DataXeroTenantErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroTenantError = DataXeroTenantErrors[keyof DataXeroTenantErrors];
+
+export type DataXeroTenantResponses = {
+    /**
+     * Successful Response
+     */
+    200: XeroSource;
+};
+
+export type DataXeroTenantResponse = DataXeroTenantResponses[keyof DataXeroTenantResponses];
+
+export type DataXeroSyncData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero/sync';
+};
+
+export type DataXeroSyncErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroSyncError = DataXeroSyncErrors[keyof DataXeroSyncErrors];
+
+export type DataXeroSyncResponses = {
+    /**
+     * Successful Response
+     */
+    202: XeroSyncStarted;
+};
+
+export type DataXeroSyncResponse = DataXeroSyncResponses[keyof DataXeroSyncResponses];
+
+export type DataXeroDisconnectData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/xero';
+};
+
+export type DataXeroDisconnectErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataXeroDisconnectError = DataXeroDisconnectErrors[keyof DataXeroDisconnectErrors];
+
+export type DataXeroDisconnectResponses = {
+    /**
+     * Successful Response
+     */
+    200: XeroDisconnected;
+};
+
+export type DataXeroDisconnectResponse = DataXeroDisconnectResponses[keyof DataXeroDisconnectResponses];
+
 export type ReportsGetMisstatementsData = {
     body?: never;
     path: {
@@ -5103,6 +5320,35 @@ export type SettingsTestLlmSlotResponses = {
 };
 
 export type SettingsTestLlmSlotResponse = SettingsTestLlmSlotResponses[keyof SettingsTestLlmSlotResponses];
+
+export type IntegrationsXeroCallbackData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Code
+         */
+        code?: string | null;
+        /**
+         * State
+         */
+        state?: string | null;
+        /**
+         * Error
+         */
+        error?: string | null;
+    };
+    url: '/api/v1/integrations/xero/callback';
+};
+
+export type IntegrationsXeroCallbackErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type IntegrationsXeroCallbackError = IntegrationsXeroCallbackErrors[keyof IntegrationsXeroCallbackErrors];
 
 export type DataTableSchemasData = {
     body?: never;

@@ -1,9 +1,11 @@
-"""Xero 会计系统接入: OAuth2 授权码授权, 只读拉取 Accounting API, 存成快照.
+"""Xero 会计系统接入: OAuth2 授权码授权, 只读拉取 Accounting API, 存成快照 (命令行) 或只在内存中取数 (网页同步).
 
 两种应用类型都支持 (按 Xero 官方指南): 配了 XERO_CLIENT_SECRET 时按 Web app 的标准授权码流程, 换令牌用
 Basic base64(client_id:client_secret) 请求头; 没配时按 PKCE (Mobile or desktop app), 用 code verifier 代替 secret.
 回调地址须为 https, 测试可用 http://localhost (不能写 127.0.0.1).
-访问令牌 30 分钟, 刷新令牌 60 天; 令牌存 XERO_TOKEN_PATH (默认 var/xero/token.json, var/ 不入库), 文件权限 0600.
+访问令牌 30 分钟, 刷新令牌 60 天 (每次刷新轮换). 令牌经 TokenSource 读写: 命令行存 XERO_TOKEN_PATH (TokenStore,
+默认 var/xero/token.json, var/ 不入库, 文件权限 0600, 登录回调用 XERO_CLI_REDIRECT_URI); 网页连接按项目加密存库
+(services.xero_link.ConnectionTokens, 需求 R279), 两者互不读写.
 付费接口 (Journals 只在开发者 Advanced 档开放, Bank Statements Plus 需另外申请) 按 XERO_PAID_ENDPOINTS 取:
 live 调真实接口, 失败 (401, 403) 记入快照的 unavailable 不中断拉取; mock 用网页导出模拟 (见 xero_mock); off 不取.
 
@@ -32,7 +34,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
@@ -41,6 +43,7 @@ from backend.core.config import get_settings
 
 AUTHORIZE_URL = "https://login.xero.com/identity/connect/authorize"  # 授权页
 TOKEN_URL = "https://identity.xero.com/connect/token"  # 换取与刷新令牌
+REVOKE_URL = "https://identity.xero.com/connect/revocation"  # 撤销刷新令牌 (断开连接)
 CONNECTIONS_URL = "https://api.xero.com/connections"  # 已授权的组织
 API_URL = "https://api.xero.com/api.xro/2.0"  # Accounting API
 FINANCE_URL = "https://api.xero.com/finance.xro/1.0"  # Finance API (Bank Statements Plus, 需另外申请)
@@ -90,6 +93,16 @@ def error_text(response: httpx.Response, secrets_: tuple[str, ...]) -> str:
     return " ".join(parts)
 
 
+def token_error(response: httpx.Response) -> str | None:
+    """令牌接口错误响应的 error 字段 (OAuth2 的错误码, 如 invalid_grant); 没有或不像错误码时为空."""
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    value = data.get("error") if isinstance(data, dict) else None
+    return value if isinstance(value, str) and re.fullmatch(r"[a-z_]{1,40}", value) else None
+
+
 PAGE_SIZE = 100  # Accounting API 分页接口每页条数, 返回不足一页即为最后一页
 MAX_RETRIES = 3  # 429, 5xx 与超时最多重试次数
 REFRESH_MARGIN = 60  # 访问令牌剩余不足这么多秒就先刷新
@@ -115,9 +128,14 @@ SINGLE = (
 class XeroError(RuntimeError):
     """Xero 调用失败: 未授权, 不可重试的状态码, 重试耗尽或响应格式不对. 消息不含令牌."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, error: str | None = None) -> None:
         super().__init__(message)
         self.status = status  # HTTP 状态码, 连接失败等为空
+        self.error = error  # 令牌接口返回的 error 字段 (如 invalid_grant), 其余为空
+
+
+class XeroAuthExpired(XeroError):
+    """刷新令牌已失效 (令牌接口对刷新返回 invalid_grant: 超过 60 天, 已被撤销或已轮换): 须重新授权."""
 
 
 def code_verifier() -> str:
@@ -173,18 +191,36 @@ class Tokens:
         )
 
 
+class TokenSource(Protocol):
+    """XeroClient 读写令牌的地方. 刷新令牌会轮换, save 须在刷新后立即持久化 (晚存或丢失就只能重新授权)."""
+
+    async def load(self) -> Tokens | None:
+        """当前的令牌; 没有为 None."""
+        ...
+
+    async def save(self, tokens: Tokens) -> None:
+        """换得或刷新得到的新令牌."""
+        ...
+
+
 @dataclass
 class TokenStore:
-    """令牌文件: JSON, 写入时权限 0600, 父目录不存在就建."""
+    """命令行的令牌文件: JSON, 写入时权限 0600, 父目录不存在就建."""
 
     path: Path
 
-    def load(self) -> Tokens | None:
+    async def load(self) -> Tokens | None:
+        return self.read()
+
+    async def save(self, tokens: Tokens) -> None:
+        self.write(tokens)
+
+    def read(self) -> Tokens | None:
         if not self.path.exists():
             return None
         return Tokens(**json.loads(self.path.read_text(encoding="utf-8")))
 
-    def save(self, tokens: Tokens) -> None:
+    def write(self, tokens: Tokens) -> None:
         """先写同目录下新建即为 0600 的临时文件 (mkstemp), 再原子替换; 出错时删掉临时文件."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=".token-", suffix=".tmp")
@@ -198,11 +234,24 @@ class TokenStore:
 
 
 @dataclass
+class MemoryTokens:
+    """只在内存中的令牌 (网页授权回调换令牌时先放这里, 加密存库由调用方做)."""
+
+    tokens: Tokens | None = field(default=None, repr=False)
+
+    async def load(self) -> Tokens | None:
+        return self.tokens
+
+    async def save(self, tokens: Tokens) -> None:
+        self.tokens = tokens
+
+
+@dataclass
 class XeroClient:
     """只读的 Xero 客户端: 自动刷新访问令牌, 429 按 Retry-After 等待, 5xx 与超时指数退避, 401 刷新后重试一次."""
 
     client_id: str
-    store: TokenStore
+    store: TokenSource
     client_secret: str = field(default="", repr=False)  # Web app 的 secret, 为空时按 PKCE; 不进 repr
     timeout: float = 60.0  # 单次请求超时, 秒
     backoff: float = 1.0  # 第 n 次重试前等待 backoff × 2^(n-1) 秒 (429 有 Retry-After 时按它)
@@ -210,6 +259,8 @@ class XeroClient:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # 测试替换为不真等待
     clock: Callable[[], float] = time.time  # 测试替换为固定时间
     calls: int = field(default=0, init=False)  # 已发出的 HTTP 请求数 (含重试), 供核对限流用量
+    seen: list[Tokens] = field(default_factory=list, init=False, repr=False)  # 用过的令牌, 错误消息里据此去掉凭据
+    redact: list[str] = field(default_factory=list, init=False, repr=False)  # 另要去掉的值 (授权码, verifier)
 
     def __post_init__(self) -> None:
         if not self.client_id:
@@ -217,41 +268,70 @@ class XeroClient:
 
     async def exchange(self, code: str, verifier: str, redirect_uri: str) -> Tokens:
         """授权码换令牌并保存. PKCE 时带 verifier; Web app 时 verifier 传空串, 改用 secret."""
+        self.redact += [code, verifier]
         form = {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
         if verifier:
             form["code_verifier"] = verifier
         tokens = Tokens.from_response(await self._token_request(form), self.clock())
-        self.store.save(tokens)
+        self.seen.append(tokens)
+        await self.store.save(tokens)
         return tokens
 
     async def refresh(self, tokens: Tokens) -> Tokens:
-        """用刷新令牌换新的一对令牌并保存 (刷新令牌会轮换, 旧的随即失效)."""
+        """用刷新令牌换新的一对令牌并立即保存 (刷新令牌会轮换, 旧的随即失效). 刷新令牌失效 (invalid_grant) 抛
+        XeroAuthExpired."""
+        self.seen.append(tokens)
         form = {"grant_type": "refresh_token", "refresh_token": tokens.refresh_token}
-        fresh = Tokens.from_response(await self._token_request(form), self.clock(), tokens)
-        self.store.save(fresh)
+        try:
+            data = await self._token_request(form)
+        except XeroError as e:
+            if e.error == "invalid_grant":
+                raise XeroAuthExpired("刷新令牌已失效 (invalid_grant), 须重新授权", e.status, e.error) from None
+            raise
+        fresh = Tokens.from_response(data, self.clock(), tokens)
+        self.seen.append(fresh)
+        await self.store.save(fresh)
         return fresh
 
-    async def _token_request(self, form: dict[str, str]) -> dict[str, Any]:
-        """令牌接口: Web app 用 Basic 认证带 secret, PKCE 在表单里带 client_id.
-        失败时只报状态码与 error 字段, 不带响应原文 (可能含令牌)."""
+    async def revoke(self, tokens: Tokens) -> None:
+        """撤销刷新令牌 (断开连接): Xero 随之移除该应用对各组织的授权. 失败抛 XeroError (不重试)."""
+        self.seen.append(tokens)
+        form = {"token": tokens.refresh_token}
+        await self._token_request(form, REVOKE_URL)
+
+    async def _token_request(self, form: dict[str, str], url: str = TOKEN_URL) -> dict[str, Any]:
+        """令牌与撤销接口: Web app 用 Basic 认证带 secret, PKCE 在表单里带 client_id.
+        失败时只报状态码与 error 字段, 不带响应原文 (可能含令牌); 连接失败只报异常类型."""
         self.calls += 1
         headers = {}
         if self.client_secret:
             headers["Authorization"] = f"Basic {self._basic()}"
         else:
             form = {**form, "client_id": self.client_id}
-        async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
-            response = await client.post(TOKEN_URL, data=form, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, transport=self.transport) as client:
+                response = await client.post(url, data=form, headers=headers)
+        except httpx.TransportError as e:
+            raise XeroError(f"连接失败: {type(e).__name__}") from None
+        name = "撤销接口" if url == REVOKE_URL else "令牌接口"
         if response.status_code != 200:
-            raise XeroError(f"令牌接口 {error_text(response, self._secrets())}", response.status_code)
-        data: dict[str, Any] = response.json()
+            raise XeroError(
+                f"{name} {error_text(response, self._secrets())}", response.status_code, token_error(response)
+            )
+        if url == REVOKE_URL:
+            return {}
+        try:
+            data: dict[str, Any] = response.json()
+        except ValueError:
+            raise XeroError(f"{name}响应不是 JSON", response.status_code) from None
         return data
 
-    async def _tokens(self) -> Tokens:
-        """当前可用的令牌, 快到期就先刷新. 没有令牌文件时提示先 login."""
-        tokens = self.store.load()
+    async def access(self) -> Tokens:
+        """当前可用的令牌, 快到期就先刷新. 没有令牌时抛 XeroError (命令行先 login, 网页先连接)."""
+        tokens = await self.store.load()
         if tokens is None:
-            raise XeroError(f"没有 Xero 令牌, 先运行 login ({self.store.path})")
+            raise XeroError("没有 Xero 令牌: 命令行先运行 login, 网页先在数据管理页连接 Xero")
+        self.seen.append(tokens)
         if tokens.expires_at - self.clock() < REFRESH_MARGIN:
             tokens = await self.refresh(tokens)
         return tokens
@@ -316,7 +396,7 @@ class XeroClient:
         return report
 
     async def _get(self, url: str, params: dict[str, Any] | None, *, tenant: bool) -> Any:
-        tokens = await self._tokens()
+        tokens = await self.access()
         if tenant and not tokens.tenant_id:
             raise XeroError("还没选定组织, 先运行 tenants 或在 login 时选定")
         refreshed = False
@@ -355,9 +435,10 @@ class XeroClient:
         raise XeroError(f"重试 {MAX_RETRIES} 次后仍失败: {failure}")
 
     def _secrets(self, tokens: Tokens | None = None) -> tuple[str, ...]:
-        """错误信息里要去掉的凭据: secret, 实际发送的 Basic 凭据, 当前 (及文件中最新) 的访问令牌与刷新令牌."""
-        found = [self.client_secret, self._basic()]
-        for item in (tokens, self.store.load()):
+        """错误信息里要去掉的凭据: secret, 实际发送的 Basic 凭据, 授权码与 verifier, 当前及本客户端用过的访问令牌与
+        刷新令牌."""
+        found = [self.client_secret, self._basic(), *self.redact]
+        for item in (tokens, *self.seen):
             if item is not None:
                 found += [item.access_token, item.refresh_token]
         return tuple(found)
@@ -385,22 +466,52 @@ async def pull(
     statements_end: date | None = None,
 ) -> dict[str, Any]:
     """拉取全部只读资源写入 out/{名称}.json, 另写 manifest.json (条数, 不可用的资源与原因) 与 dataset.json (期间).
-
-    试算表取本期截止日, 上期截止日与 extra_dates 各一份. paid 为 live 或 mock 时再取付费接口:
-    journals.json 与 bank_statements.json (银行科目 → 本期起始日至 statements_end 的对账单; statements_end 缺省为
-    本期截止日, 晚于它时多取期后流水, 供期后事项与函证差异调节用, 写进 dataset.json); mock 时 client.transport 应为
-    MockPaidTransport (快照目录用 staging(out)). 付费接口返回 401, 403 时记入 unavailable, 其余资源照常拉取.
+    取数见 fetch; mock 时 client.transport 应为 MockPaidTransport (快照目录用 staging(out), 它读已写出的资源).
     out 已存在时报错, 不覆盖旧快照; 先写到 staging(out), 全部成功后改名为 out, 失败不留下可载入的半成品.
     """
     if out.exists():
         raise XeroError(f"快照目录已存在, 换一个目录: {out}")
-    statements_end = statements_end or period.end
-    if statements_end < period.end:
-        raise XeroError(f"对账单截止日 {statements_end} 早于本期截止日 {period.end}")
+    check_statements_end(period, statements_end)
     final, out = out, staging(out)
     shutil.rmtree(out, ignore_errors=True)  # 上次失败留下的半成品
     out.mkdir(parents=True)
-    tokens = client.store.load()
+
+    def write(name: str, data: Any) -> None:
+        (out / f"{name}.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    manifest = await fetch(client, period, write, paid=paid, extra_dates=extra_dates, statements_end=statements_end)
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    out.rename(final)
+    return manifest
+
+
+def check_statements_end(period: Period, statements_end: date | None) -> date:
+    """对账单截止日: 缺省为本期截止日; 早于本期截止日抛 XeroError."""
+    end = statements_end or period.end
+    if end < period.end:
+        raise XeroError(f"对账单截止日 {end} 早于本期截止日 {period.end}")
+    return end
+
+
+async def fetch(
+    client: XeroClient,
+    period: Period,
+    keep: Callable[[str, Any], None],
+    *,
+    paid: str = "off",
+    extra_dates: list[date] | None = None,
+    statements_end: date | None = None,
+) -> dict[str, Any]:
+    """依次取全部只读资源, 每取到一个交给 keep(名称, 响应数据) (命令行 pull 写成文件, 网页同步只留在内存), 最后交
+    dataset (期间, 日期为 ISO 字符串); 返回 manifest (时间, 组织, scope, 条数, 不可用的资源与原因, 调用次数).
+
+    试算表取本期截止日, 上期截止日与 extra_dates 各一份. paid 为 live 或 mock 时再取付费接口: journals 与
+    bank_statements (银行科目 → 本期起始日至 statements_end 的对账单; statements_end 缺省为本期截止日, 晚于它时
+    多取期后流水, 供期后事项与函证差异调节用). 资源返回 401, 403 时记入 unavailable, 其余资源照常拉取; 刷新令牌失效
+    (XeroAuthExpired) 不算不可用, 照常上抛.
+    """
+    statements_end = check_statements_end(period, statements_end)
+    tokens = await client.store.load()
     manifest: dict[str, Any] = {
         "pulled_at": datetime.now(UTC).isoformat(),
         "tenant_id": tokens.tenant_id if tokens else "",
@@ -411,15 +522,16 @@ async def pull(
         "unavailable": {},
     }
 
-    async def save(name: str, fetch: Callable[[], Awaitable[Any]]) -> Any:
+    async def save(name: str, get: Callable[[], Awaitable[Any]]) -> Any:
         try:
-            data = await fetch()
+            data = await get()
         except XeroError as e:
-            if e.status in (401, 403):
+            # 资源本身的 401, 403 记为不可用; 刷新令牌失效 (XeroAuthExpired, 状态码取自令牌接口) 照常上抛
+            if e.status in (401, 403) and not isinstance(e, XeroAuthExpired):
                 manifest["unavailable"][name] = str(e)
                 return None
             raise
-        (out / f"{name}.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        keep(name, data)
         manifest["counts"][name] = len(data) if isinstance(data, list) else 1
         return data
 
@@ -437,15 +549,13 @@ async def pull(
         await save("bank_statements", partial(_statements, client, banks, period.start, statements_end))
     meta = {
         "source": "xero",
-        "period_start": period.start,
-        "period_end": period.end,
-        "prior_end": period.prior_end,
-        "statements_end": statements_end,
+        "period_start": period.start.isoformat(),
+        "period_end": period.end.isoformat(),
+        "prior_end": period.prior_end.isoformat(),
+        "statements_end": statements_end.isoformat(),
     }
-    (out / "dataset.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+    keep("dataset", meta)
     manifest["calls"] = client.calls
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    out.rename(final)
     return manifest
 
 
@@ -508,11 +618,11 @@ async def choose_tenant(client: XeroClient, tenant_id: str = "") -> Tokens:
     if not chosen:
         names = ", ".join(f"{c['tenantName']} ({c['tenantId']})" for c in organisations) or "无"
         raise XeroError(f"无法确定组织, 请在 .env 设 XERO_TENANT_ID. 已授权的组织: {names}")
-    tokens = client.store.load()
+    tokens = await client.store.load()
     if tokens is None:
-        raise XeroError(f"没有 Xero 令牌, 先运行 login ({client.store.path})")
+        raise XeroError("没有 Xero 令牌, 先运行 login")
     tokens.tenant_id, tokens.tenant_name = chosen[0]["tenantId"], chosen[0]["tenantName"]
-    client.store.save(tokens)
+    await client.store.save(tokens)
     return tokens
 
 
@@ -555,12 +665,13 @@ async def _main(argv: list[str] | None = None) -> None:
         verifier = "" if client.client_secret else code_verifier()  # Web app 不用 PKCE
         state = secrets.token_urlsafe(16)
         challenge = code_challenge(verifier) if verifier else ""
-        url = authorize_url(client.client_id, settings.XERO_REDIRECT_URI, challenge, state, scopes)
+        redirect = settings.XERO_CLI_REDIRECT_URI  # 网页连接用 XERO_REDIRECT_URI (后端回调), 两个都要在 Xero 应用登记
+        url = authorize_url(client.client_id, redirect, challenge, state, scopes)
         print(f"在浏览器打开并授权 (5 分钟内有效):\n{url}", flush=True)
         if not args.no_browser:
             webbrowser.open(url)
-        code = await asyncio.to_thread(wait_for_code, settings.XERO_REDIRECT_URI, state)
-        tokens = await client.exchange(code, verifier, settings.XERO_REDIRECT_URI)
+        code = await asyncio.to_thread(wait_for_code, redirect, state)
+        tokens = await client.exchange(code, verifier, redirect)
         print(f"已保存令牌, 授权 scope: {tokens.scope}")
     if args.command in ("login", "tenants"):
         tokens = await choose_tenant(client, settings.XERO_TENANT_ID)

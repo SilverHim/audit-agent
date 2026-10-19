@@ -22,8 +22,8 @@ API 不提供录入人与审批人: created_by 记 "xero", approved_by 为空; c
 
 import json
 import re
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -110,11 +110,15 @@ MS_DATE = re.compile(r"/Date\((-?\d+)([+-]\d{4})?\)/")  # Xero 的 /Date(毫秒+
 
 @dataclass(frozen=True)
 class Snapshot:
-    """pull 写出的快照目录: 每个资源一个 JSON 文件."""
+    """pull 写出的快照目录: 每个资源一个 JSON 文件. files 不为空时是只在内存中的快照 (网页同步, 需求 R279 Q3:
+    原始响应不落盘), 资源按名称取自 files, root 只作名称; files 不进 repr 与比较 (含联系人等原始数据)."""
 
     root: Path
+    files: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
 
     def load(self, name: str) -> Any:
+        if self.files is not None:
+            return self.files.get(name, [])
         path = self.root / f"{name}.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 

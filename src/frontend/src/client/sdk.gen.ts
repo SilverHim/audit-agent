@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -593,6 +593,72 @@ export const dataReady = <ThrowOnError extends boolean = false>(options: Options
 });
 
 /**
+ * Xero Connect
+ *
+ * Xero 授权地址, 前端跳过去; state 绑定本项目与当前用户, 10 分钟内有效, 只能用一次. 授权后 Xero 回调
+ * /integrations/xero/callback, 再 302 回数据管理页. 项目锁定 423; 未配 XERO_CLIENT_ID 503 XERO_NOT_CONFIGURED;
+ * 加密主密钥不可用 503 SETTINGS_KEY_MISSING / SETTINGS_KEY_INVALID.
+ */
+export const dataXeroConnect = <ThrowOnError extends boolean = false>(options: Options<DataXeroConnectData, ThrowOnError>): RequestResult<DataXeroConnectResponses, DataXeroConnectErrors, ThrowOnError> => (options.client ?? client).get<DataXeroConnectResponses, DataXeroConnectErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/xero/connect',
+    ...options
+});
+
+/**
+ * Xero Tenants
+ *
+ * 授权给到的组织 [{id, name}] (连接时存下的, 不调 Xero). 没有连接 409 XERO_NOT_CONNECTED.
+ */
+export const dataXeroTenants = <ThrowOnError extends boolean = false>(options: Options<DataXeroTenantsData, ThrowOnError>): RequestResult<DataXeroTenantsResponses, DataXeroTenantsErrors, ThrowOnError> => (options.client ?? client).get<DataXeroTenantsResponses, DataXeroTenantsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/xero/tenants',
+    ...options
+});
+
+/**
+ * Xero Tenant
+ *
+ * 选定要同步的组织, 返回概览里的 Xero 连接. 不是授权给到的组织 422 INVALID_VALUE; 没有连接 409
+ * XERO_NOT_CONNECTED; 锁定 423; 忙 409.
+ */
+export const dataXeroTenant = <ThrowOnError extends boolean = false>(options: Options<DataXeroTenantData, ThrowOnError>): RequestResult<DataXeroTenantResponses, DataXeroTenantErrors, ThrowOnError> => (options.client ?? client).put<DataXeroTenantResponses, DataXeroTenantErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/xero/tenant',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Xero Sync
+ *
+ * 开始同步: 后台按项目审计期间与上期期末取数, 写成一个新数据版本 (来源 xero), 写完体检; 返回计划写的表, 期间
+ * 概览里这些表为 converting, processing 计数; 实际写的表看完成后概览的 scope (没取到银行对账单时银行这一对不写).
+ * 没有连接 409 XERO_NOT_CONNECTED; 多个组织未选 409 XERO_TENANT_REQUIRED; 授权失效 409 XERO_RECONNECT_REQUIRED;
+ * Xero 连不上 502 XERO_UNAVAILABLE; 锁定 423; 忙 (含另一同步或导入) 409 ENGAGEMENT_BUSY.
+ */
+export const dataXeroSync = <ThrowOnError extends boolean = false>(options: Options<DataXeroSyncData, ThrowOnError>): RequestResult<DataXeroSyncResponses, DataXeroSyncErrors, ThrowOnError> => (options.client ?? client).post<DataXeroSyncResponses, DataXeroSyncErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/xero/sync',
+    ...options
+});
+
+/**
+ * Xero Disconnect
+ *
+ * 断开: 调 Xero 撤销接口, 删除本项目的连接与令牌; 撤销失败也删 (revoked 为 false, 须到 Xero 后台手动移除).
+ * 已同步的数据与版本保留, 概览回到 not_connected. 锁定的项目也可以断开. 没有连接 409 XERO_NOT_CONNECTED; 忙 409.
+ */
+export const dataXeroDisconnect = <ThrowOnError extends boolean = false>(options: Options<DataXeroDisconnectData, ThrowOnError>): RequestResult<DataXeroDisconnectResponses, DataXeroDisconnectErrors, ThrowOnError> => (options.client ?? client).delete<DataXeroDisconnectResponses, DataXeroDisconnectErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/xero',
+    ...options
+});
+
+/**
  * Get Misstatements
  *
  * 汇总表取 SCHEDULE; 重要性与意见类型取项目总览.
@@ -683,6 +749,15 @@ export const settingsTestLlmSlot = <ThrowOnError extends boolean = false>(option
         ...options.headers
     }
 });
+
+/**
+ * Xero Callback
+ *
+ * Xero 授权回调 (XERO_REDIRECT_URI 指向这里): 核对 state (10 分钟内, 只能用一次), 换令牌, 保存该项目的连接
+ * (令牌加密存库). 成功 302 到前端 /engagements/{eid}/data?xero=connected; 失败 302 到同一页 (认不出项目时为前端
+ * 首页) 带 ?xero=error&reason=<原因代码>, 代码见 services.xero_link.CALLBACK_REASONS. 跳转地址不带 code 与 state.
+ */
+export const integrationsXeroCallback = <ThrowOnError extends boolean = false>(options?: Options<IntegrationsXeroCallbackData, ThrowOnError>): RequestResult<unknown, IntegrationsXeroCallbackErrors, ThrowOnError> => (options?.client ?? client).get<unknown, IntegrationsXeroCallbackErrors, ThrowOnError>({ url: '/api/v1/integrations/xero/callback', ...options });
 
 /**
  * Table Schemas

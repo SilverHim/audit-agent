@@ -215,7 +215,7 @@ def schemas() -> list[TableSchema]:
 
 
 class NoXeroConnections:
-    """还没有 Xero 连接记录时的缺省实现 (需求 R12 前): 一律未连接."""
+    """没有接 Xero 连接存储时的缺省实现 (测试与只读场景): 一律未连接. 组装根用 services.xero_link 的实现."""
 
     async def source(self, eid: str) -> XeroSource:
         return XeroSource(status="not_connected")
@@ -231,6 +231,10 @@ class DataService:
         # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
         self.tasks: set[asyncio.Task[None]] = set()  # launch 起的后台作业; 保留引用, 防止完成前被回收
+
+    async def unlocked(self, eid: str) -> Engagement:
+        """项目 (未锁定); 不存在抛 LookupError, 已锁定 ENGAGEMENT_LOCKED. 供不取项目锁的写前检查 (如 Xero 授权地址)."""
+        return await self._check_unlocked(eid)
 
     async def _check_unlocked(self, eid: str) -> Engagement:
         """项目 (未锁定); 不存在抛 LookupError, 已锁定 ENGAGEMENT_LOCKED."""
@@ -304,14 +308,28 @@ class DataService:
             if not handed:
                 self.runner.release(eid)
 
-    async def launch(self, eid: str, labels: Iterable[str], job: Callable[[], Awaitable[None]]) -> None:
+    async def launch(
+        self,
+        eid: str,
+        labels: Iterable[str],
+        job: Callable[[], Awaitable[None]],
+        prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
-        同 holding), 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job
-        自己处理业务失败 (如把文件置 needs_manual); 漏出的异常只记日志."""
+        同 holding), 再执行 prepare (有时; 起作业前要当场报错的检查, 如 Xero 连接是否可用), 它抛错时注销, 释放锁并
+        上抛; 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job 自己处理
+        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, names)
+        if prepare is not None:
+            try:
+                await prepare()
+            except BaseException:
+                self._unregister(eid, key)
+                self.runner.release(eid)
+                raise
 
         async def run() -> None:
             await self.backfill_trails(eid)

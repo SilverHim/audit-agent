@@ -120,7 +120,7 @@ def test_statements_response_balances() -> None:
 async def test_mock_transport_serves_paid_endpoints_to_client(tmp_path: Path) -> None:
     folder, snapshot = exports(tmp_path)
     store = TokenStore(tmp_path / "token.json")
-    store.save(Tokens("at", "rt", 9e9, "", "T1", "Demo"))
+    store.write(Tokens("at", "rt", 9e9, "", "T1", "Demo"))
     today = dt.date(2026, 10, 17)
     transport = MockPaidTransport(folder, snapshot.root, today)
     client = XeroClient("CID", store, transport=transport, clock=lambda: D(2026, 10, 17, tzinfo=dt.UTC).timestamp())

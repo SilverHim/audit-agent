@@ -10,6 +10,7 @@ from backend.api.routes import (
     evidence,
     gates,
     health,
+    integrations,
     reports,
     reviews,
     settings,
@@ -33,6 +34,7 @@ for module in (
     reports,
     standards,
     settings,
+    integrations,
 ):
     api_router.include_router(module.router)
 api_router.include_router(data.schemas_router)

@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataDataRequests, dataMarkRequestUnavailable, dataReady, dataSetAccountCategory, datasetsListDatasets, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceContractHistory, evidenceEditConfirmation, evidenceEditContract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+import { authLogin, authRegister, conversationAskConcierge, conversationListConversation, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataDataRequests, dataMarkRequestUnavailable, dataReady, dataSetAccountCategory, datasetsListDatasets, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsListEngagements, engagementsResumeEngagement, evidenceContractHistory, evidenceEditConfirmation, evidenceEditContract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -955,6 +955,110 @@ export const dataReadyMutation = (options?: Partial<Options<DataReadyData>>): Us
     return mutationOptions;
 };
 
+export const dataXeroConnectQueryKey = (options: Options<DataXeroConnectData>) => createQueryKey('dataXeroConnect', options);
+
+/**
+ * Xero Connect
+ *
+ * Xero 授权地址, 前端跳过去; state 绑定本项目与当前用户, 10 分钟内有效, 只能用一次. 授权后 Xero 回调
+ * /integrations/xero/callback, 再 302 回数据管理页. 项目锁定 423; 未配 XERO_CLIENT_ID 503 XERO_NOT_CONFIGURED;
+ * 加密主密钥不可用 503 SETTINGS_KEY_MISSING / SETTINGS_KEY_INVALID.
+ */
+export const dataXeroConnectOptions = (options: Options<DataXeroConnectData>) => queryOptions<DataXeroConnectResponse, DataXeroConnectError, DataXeroConnectResponse, ReturnType<typeof dataXeroConnectQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataXeroConnect({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataXeroConnectQueryKey(options)
+});
+
+export const dataXeroTenantsQueryKey = (options: Options<DataXeroTenantsData>) => createQueryKey('dataXeroTenants', options);
+
+/**
+ * Xero Tenants
+ *
+ * 授权给到的组织 [{id, name}] (连接时存下的, 不调 Xero). 没有连接 409 XERO_NOT_CONNECTED.
+ */
+export const dataXeroTenantsOptions = (options: Options<DataXeroTenantsData>) => queryOptions<DataXeroTenantsResponse, DataXeroTenantsError, DataXeroTenantsResponse, ReturnType<typeof dataXeroTenantsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await dataXeroTenants({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: dataXeroTenantsQueryKey(options)
+});
+
+/**
+ * Xero Tenant
+ *
+ * 选定要同步的组织, 返回概览里的 Xero 连接. 不是授权给到的组织 422 INVALID_VALUE; 没有连接 409
+ * XERO_NOT_CONNECTED; 锁定 423; 忙 409.
+ */
+export const dataXeroTenantMutation = (options?: Partial<Options<DataXeroTenantData>>): UseMutationOptions<DataXeroTenantResponse, DataXeroTenantError, Options<DataXeroTenantData>> => {
+    const mutationOptions: UseMutationOptions<DataXeroTenantResponse, DataXeroTenantError, Options<DataXeroTenantData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataXeroTenant({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Xero Sync
+ *
+ * 开始同步: 后台按项目审计期间与上期期末取数, 写成一个新数据版本 (来源 xero), 写完体检; 返回计划写的表, 期间
+ * 概览里这些表为 converting, processing 计数; 实际写的表看完成后概览的 scope (没取到银行对账单时银行这一对不写).
+ * 没有连接 409 XERO_NOT_CONNECTED; 多个组织未选 409 XERO_TENANT_REQUIRED; 授权失效 409 XERO_RECONNECT_REQUIRED;
+ * Xero 连不上 502 XERO_UNAVAILABLE; 锁定 423; 忙 (含另一同步或导入) 409 ENGAGEMENT_BUSY.
+ */
+export const dataXeroSyncMutation = (options?: Partial<Options<DataXeroSyncData>>): UseMutationOptions<DataXeroSyncResponse, DataXeroSyncError, Options<DataXeroSyncData>> => {
+    const mutationOptions: UseMutationOptions<DataXeroSyncResponse, DataXeroSyncError, Options<DataXeroSyncData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataXeroSync({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Xero Disconnect
+ *
+ * 断开: 调 Xero 撤销接口, 删除本项目的连接与令牌; 撤销失败也删 (revoked 为 false, 须到 Xero 后台手动移除).
+ * 已同步的数据与版本保留, 概览回到 not_connected. 锁定的项目也可以断开. 没有连接 409 XERO_NOT_CONNECTED; 忙 409.
+ */
+export const dataXeroDisconnectMutation = (options?: Partial<Options<DataXeroDisconnectData>>): UseMutationOptions<DataXeroDisconnectResponse, DataXeroDisconnectError, Options<DataXeroDisconnectData>> => {
+    const mutationOptions: UseMutationOptions<DataXeroDisconnectResponse, DataXeroDisconnectError, Options<DataXeroDisconnectData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await dataXeroDisconnect({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const reportsGetMisstatementsQueryKey = (options: Options<ReportsGetMisstatementsData>) => createQueryKey('reportsGetMisstatements', options);
 
 /**
@@ -1140,6 +1244,28 @@ export const settingsTestLlmSlotMutation = (options?: Partial<Options<SettingsTe
     };
     return mutationOptions;
 };
+
+export const integrationsXeroCallbackQueryKey = (options?: Options<IntegrationsXeroCallbackData>) => createQueryKey('integrationsXeroCallback', options);
+
+/**
+ * Xero Callback
+ *
+ * Xero 授权回调 (XERO_REDIRECT_URI 指向这里): 核对 state (10 分钟内, 只能用一次), 换令牌, 保存该项目的连接
+ * (令牌加密存库). 成功 302 到前端 /engagements/{eid}/data?xero=connected; 失败 302 到同一页 (认不出项目时为前端
+ * 首页) 带 ?xero=error&reason=<原因代码>, 代码见 services.xero_link.CALLBACK_REASONS. 跳转地址不带 code 与 state.
+ */
+export const integrationsXeroCallbackOptions = (options?: Options<IntegrationsXeroCallbackData>) => queryOptions<unknown, IntegrationsXeroCallbackError, unknown, ReturnType<typeof integrationsXeroCallbackQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await integrationsXeroCallback({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: integrationsXeroCallbackQueryKey(options)
+});
 
 export const dataTableSchemasQueryKey = (options?: Options<DataTableSchemasData>) => createQueryKey('dataTableSchemas', options);
 

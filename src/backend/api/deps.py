@@ -15,6 +15,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
 from backend.services.llm_settings import LlmSettingsService
+from backend.services.xero_link import XeroLink
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -42,6 +43,11 @@ def get_decisions(request: Request) -> GraphDecisionSubmit:
 def get_data_service(request: Request) -> DataService:
     service: DataService = request.app.state.data_service
     return service
+
+
+def get_xero(request: Request) -> XeroLink:
+    xero: XeroLink = request.app.state.xero
+    return xero
 
 
 def get_settings_service(request: Request) -> LlmSettingsService:

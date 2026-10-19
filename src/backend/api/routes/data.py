@@ -1,13 +1,23 @@
-"""数据管理接口 (需求 R10-R16): /engagements/{eid}/data 下的概览, 导入, 补交请求与就绪确认; /data/schemas."""
+"""数据管理接口 (需求 R10-R16): /engagements/{eid}/data 下的概览, 导入, 补交请求与就绪确认, Xero 的连接, 选组织,
+同步与断开 (需求 R279; 授权回调在 integrations.py); /data/schemas."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from backend.agents.base import AgentDeps
-from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
+from backend.api.deps import current_user, get_data_service, get_deps, get_xero, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import AccountCategoryIn, DataReadyIn, ImportSheet, RequestUnavailableIn
+from backend.api.schemas import (
+    AccountCategoryIn,
+    DataReadyIn,
+    ImportSheet,
+    RequestUnavailableIn,
+    XeroAuthorize,
+    XeroDisconnected,
+    XeroSyncStarted,
+    XeroTenantIn,
+)
 from backend.contracts.data import (
     CategoryVersion,
     DataReadiness,
@@ -19,10 +29,13 @@ from backend.contracts.data import (
     TableKind,
     TablePage,
     TableSchema,
+    XeroSource,
+    XeroTenant,
 )
 from backend.contracts.models import Engagement, User
 from backend.services import data_import
 from backend.services.data_service import DataService, schemas
+from backend.services.xero_link import XeroLink
 
 router = APIRouter(prefix="/engagements/{eid}/data", tags=["data"])
 schemas_router = APIRouter(prefix="/data", tags=["data"])  # 不按项目的数据管理接口
@@ -171,3 +184,68 @@ async def ready(
     项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进."""
     async with catch_api():
         return await service.confirm_ready(engagement.id, user.id, body.reason if body else None)
+
+
+# ── Xero 网页连接 (需求 R279) ──
+
+
+@router.get("/xero/connect")
+async def xero_connect(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+) -> XeroAuthorize:
+    """Xero 授权地址, 前端跳过去; state 绑定本项目与当前用户, 10 分钟内有效, 只能用一次. 授权后 Xero 回调
+    /integrations/xero/callback, 再 302 回数据管理页. 项目锁定 423; 未配 XERO_CLIENT_ID 503 XERO_NOT_CONFIGURED;
+    加密主密钥不可用 503 SETTINGS_KEY_MISSING / SETTINGS_KEY_INVALID."""
+    async with catch_api():
+        return XeroAuthorize(authorize_url=await xero.authorize(engagement.id, user.id))
+
+
+@router.get("/xero/tenants")
+async def xero_tenants(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+) -> list[XeroTenant]:
+    """授权给到的组织 [{id, name}] (连接时存下的, 不调 Xero). 没有连接 409 XERO_NOT_CONNECTED."""
+    async with catch_api():
+        return await xero.tenants(engagement.id)
+
+
+@router.put("/xero/tenant")
+async def xero_tenant(
+    body: XeroTenantIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+) -> XeroSource:
+    """选定要同步的组织, 返回概览里的 Xero 连接. 不是授权给到的组织 422 INVALID_VALUE; 没有连接 409
+    XERO_NOT_CONNECTED; 锁定 423; 忙 409."""
+    async with catch_api():
+        return await xero.choose_tenant(engagement.id, body.tenant_id, user.id)
+
+
+@router.post("/xero/sync", status_code=202)
+async def xero_sync(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+) -> XeroSyncStarted:
+    """开始同步: 后台按项目审计期间与上期期末取数, 写成一个新数据版本 (来源 xero), 写完体检; 返回计划写的表, 期间
+    概览里这些表为 converting, processing 计数; 实际写的表看完成后概览的 scope (没取到银行对账单时银行这一对不写).
+    没有连接 409 XERO_NOT_CONNECTED; 多个组织未选 409 XERO_TENANT_REQUIRED; 授权失效 409 XERO_RECONNECT_REQUIRED;
+    Xero 连不上 502 XERO_UNAVAILABLE; 锁定 423; 忙 (含另一同步或导入) 409 ENGAGEMENT_BUSY."""
+    async with catch_api():
+        return XeroSyncStarted(tables=await xero.sync(engagement.id, user.id))
+
+
+@router.delete("/xero")
+async def xero_disconnect(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    xero: Annotated[XeroLink, Depends(get_xero)],
+) -> XeroDisconnected:
+    """断开: 调 Xero 撤销接口, 删除本项目的连接与令牌; 撤销失败也删 (revoked 为 false, 须到 Xero 后台手动移除).
+    已同步的数据与版本保留, 概览回到 not_connected. 锁定的项目也可以断开. 没有连接 409 XERO_NOT_CONNECTED; 忙 409."""
+    async with catch_api():
+        return XeroDisconnected(revoked=await xero.disconnect(engagement.id, user.id))
