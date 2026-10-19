@@ -534,7 +534,8 @@ def section(prompt: str, heading: str) -> str:
 
 async def test_ba01_fixture_passes_real_engine() -> None:
     """BA-01 (余额差异, 没有应计利息) 的固定输出经真实判断引擎一次通过 (R48 验收 5); 提示词 (R106 验收 1) 的 Task 按
-    余额差异写, 没有应计利息一段; Standards 列出 ASA505-P14 与 ASA450-P05."""
+    余额差异写, 没有应计利息一段; Inputs 里期末前分录的小标题写闭区间的起止; Standards 列出 ASA505-P14 与
+    ASA450-P05."""
     agent, ctx, trail = setup(real_engine=True)
     patch = await agent.run(ctx)
     calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
@@ -542,7 +543,11 @@ async def test_ba01_fixture_passes_real_engine() -> None:
     task = section(prompt, "Task")
     assert "differs from the book balance" in task and "Difference, confirmed minus book: -5000000 cents" in task
     assert "accrued interest" not in task
-    standards = [line for line in section(prompt, "Inputs").splitlines() if line.startswith("- ASA")]
+    inputs = section(prompt, "Inputs").splitlines()
+    # D03 的窗口为闭区间 [期末 - lookback_days, 期末], 写起止与 "both dates inclusive", 不写 "N days up to"
+    [entries] = [line for line in inputs if line.startswith("GL entries on the bank account")]
+    assert "5 days before 2026-06-30 to 2026-06-30" in entries and "both dates inclusive" in entries
+    standards = [line for line in inputs if line.startswith("- ASA")]
     assert [line.split(" ", 2)[1] for line in standards] == ["ASA505-P14", "ASA450-P05"]
     # A6 一次, 再由 A7 (L3, 建议关闭, 命中主规则) 用复核模型做两轮独立复核
     assert [(e.procedure_id, e.actor, e.payload["fixture_key"]) for e in calls] == [

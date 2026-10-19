@@ -69,7 +69,7 @@ Bank transactions in the {{ task.params.subsequent_days }} days after {{ period_
 None.
 {% endif %}
 
-GL entries on the bank account in the {{ task.params.lookback_days }} days up to {{ period_end }}:
+GL entries on the bank account from {{ task.params.lookback_days }} days before {{ period_end }} to {{ period_end }} (both dates inclusive):
 {% if data.period_end_entries %}
 ```json
 {{ data.period_end_entries | tojson(indent=2) }}
