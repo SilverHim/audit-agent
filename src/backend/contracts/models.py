@@ -400,8 +400,10 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
-# 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理
-DocumentStatus = Literal["received", "classified", "extracted", "needs_manual"]
+# 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理; staged 为智能导入的批次里上传而
+# 尚未确认 (需求 R277): 类型为 other, 不被程序使用, 启动时也不补做, 确认时按确认单改为对应的类型与状态;
+# not_imported 为确认时没勾选的文件 (未导入, 终态): 类型仍为 other, 不被程序与体检使用, 要导入就重新上传
+DocumentStatus = Literal["received", "classified", "extracted", "needs_manual", "staged", "not_imported"]
 # 需人工处理时卡在哪一步: 分类 (判断不了类型), 读取 (读不出文字), 抽取 (抽取校验不过), 关联 (对不上业务对象)
 DocumentFailedStep = Literal["classify", "read", "extract", "link"]
 # 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件

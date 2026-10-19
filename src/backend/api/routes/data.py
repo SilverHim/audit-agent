@@ -1,5 +1,5 @@
-"""数据管理接口 (需求 R10-R16): /engagements/{eid}/data 下的概览, 导入, 补交请求与就绪确认, Xero 的连接, 选组织,
-同步与断开 (需求 R279; 授权回调在 integrations.py); /data/schemas."""
+"""数据管理接口 (需求 R10-R16, R277): /engagements/{eid}/data 下的概览, 导入, 智能导入的批次, 补交请求与就绪确认,
+Xero 的连接, 选组织, 同步与断开 (需求 R279; 授权回调在 integrations.py); /data/schemas."""
 
 from typing import Annotated
 
@@ -19,10 +19,12 @@ from backend.api.schemas import (
     XeroTenantIn,
 )
 from backend.contracts.data import (
+    BatchItemEdit,
     CategoryVersion,
     DataReadiness,
     DataRequest,
     DataSummary,
+    ImportBatch,
     ImportCommit,
     ImportPreview,
     ImportResult,
@@ -93,6 +95,87 @@ async def commit_import(
     20 处 {row, column, value}); 对应不可用 422 INVALID_VALUE 或 MISSING_FIELD; 忙 409; 锁定 423; 导入不存在 404."""
     async with catch_api():
         return await service.commit_import(engagement.id, import_id, body, user.id)
+
+
+@router.post("/batches", status_code=202)
+async def start_batch(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+    files: Annotated[
+        list[UploadFile], File(description="一批文件: CSV, XLSX, XLS, PDF, DOCX, PNG, JPG 等, 单个不超过 50 MB")
+    ],
+    request_id: Annotated[str | None, Form()] = None,
+) -> ImportBatch:
+    """智能导入: 上传一批文件 (表格与其他文件混着), A3 在后台逐项识别, 生成确认单. 返回批次 (processing), 前端轮询
+    GET /data/batches/{batch_id} 直到 ready. 补交卡片上的上传带 request_id. 确认前不写任何财务表, 文件暂存
+    (status staged) 不被程序使用. 类型不支持 422 INVALID_VALUE; 单个超过 50 MB 413 FILE_TOO_LARGE; 锁定 423;
+    忙 409."""
+    contents = []
+    for upload in files:
+        data = await upload.read(data_import.MAX_BYTES + 1)
+        if len(data) > data_import.MAX_BYTES:
+            raise api_error("FILE_TOO_LARGE", f"{upload.filename} 超过 50 MB")
+        contents.append((upload.filename or "upload", data))
+    async with catch_api():
+        return await service.start_batch(engagement.id, contents, actor=user.id, request_id=request_id)
+
+
+@router.get("/batches/{batch_id}")
+async def get_batch(
+    batch_id: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> ImportBatch:
+    """批次与确认单: 每项的文件名与工作表, 识别为什么, 将写入的行数, 读到的公司与期间, 把握, 问题 (issues, 标红)
+    与是否勾选. processing 时前端轮询; failed 时 error 为原因, 停止轮询, 可重新识别. 不存在 404."""
+    async with catch_api():
+        return await service.batch(engagement.id, batch_id)
+
+
+@router.put("/batches/{batch_id}/items/{item_id}")
+async def edit_batch_item(
+    batch_id: str,
+    item_id: str,
+    body: BatchItemEdit,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> ImportBatch:
+    """调整确认单的一项 (换规整方案, 改文件类型并写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
+    processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁);
+    批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE; 改类型没写理由 422 MISSING_FIELD."""
+    async with catch_api():
+        return await service.edit_batch_item(engagement.id, batch_id, item_id, body, user.id)
+
+
+@router.post("/batches/{batch_id}/retry", status_code=202)
+async def retry_batch(
+    batch_id: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> ImportBatch:
+    """重新识别: 识别作业出错 (failed) 或进程退出后停在识别中的批次, 由 A3 在后台从没做完的文件接着做; 返回置回
+    processing 的批次, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 待确认或已写入
+    422 INVALID_VALUE."""
+    async with catch_api():
+        return await service.retry_batch(engagement.id, batch_id)
+
+
+@router.post("/batches/{batch_id}/confirm", status_code=202)
+async def confirm_batch(
+    batch_id: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> ImportBatch:
+    """确认导入: 一个事务里写入所勾选的全部 (账表一个新数据版本, 文件按确认的类型登记, 合同与回函的抽取结果, 批次
+    置 committed; 没勾选的文件转为未导入, files 里记 not_imported), 之后写留痕并体检一次; 返回写入后的批次
+    (committed, 再确认返回原结果). 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 不在待确认, 勾选
+    了不是账表的项或同一张表两项 422 INVALID_VALUE; 勾选的文件没有类型 422 MISSING_FIELD; 方案套不上 422
+    INVALID_VALUE 或 MISSING_FIELD; 解析失败 422 IMPORT_PARSE_ERROR (detail.errors 为前 20 处)."""
+    async with catch_api():
+        return await service.confirm_batch(engagement.id, batch_id, user.id)
 
 
 @router.get("/summary")

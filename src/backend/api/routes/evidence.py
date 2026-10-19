@@ -71,7 +71,8 @@ async def set_document_type(
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> DocumentRef:
     """人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空
-    422 MISSING_FIELD; 锁定 423; 忙 409."""
+    422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;
+    忙 409."""
     async with catch_api():
         return await service.set_document_type(engagement.id, document_id, body.type, body.reason, user.id)
 

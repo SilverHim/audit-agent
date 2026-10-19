@@ -13,11 +13,11 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePath
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
 from backend.agents.evidence import current_confirmations, legacy_accounts
-from backend.contracts.data import DataInput
+from backend.contracts.data import DataInput, DocumentChange
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, DocumentClassification
 from backend.contracts.models import (
@@ -29,6 +29,7 @@ from backend.contracts.models import (
     ContractTerm,
     DocumentFailedStep,
     DocumentRef,
+    DocumentStatus,
     DocumentType,
     Engagement,
     Engine,
@@ -102,20 +103,18 @@ async def extract_contract(
     return build_contract(cid, document, cast(ContractExtraction, result.report.output), run.id)
 
 
-async def save_new_contract(deps: AgentDeps, eid: str, contract: Contract) -> Contract:
-    """写入一次新抽取出的合同 (DOC-04 与上传后的 A3 共用), 返回写入的版本.
+async def contract_writes(deps: AgentDeps, eid: str, contract: Contract) -> list[Contract]:
+    """写入一次新抽取出的合同要依次写的各版 (只读, 不写), 最后一项为新合同定好版本号的那一版.
 
     版本: 没有同编号的合同为第 1 版; 已有时接在其后 (+1), 不覆盖审计师的修改与已有历史; 但已有的当前版本正是
     这一次执行抽取的 (同一 extracted_by_run, 历史最新一版记 A3, 即执行中断后重做) 时覆盖这一版, 不多出版本.
-    已有合同没有版本记录 (迁移 0004 之前抽取的) 时先补记它, 再写新版本."""
+    已有合同没有版本记录 (迁移 0004 之前抽取的) 时先补记它 (排在前面), 再写新版本."""
     found = await deps.financial_store.contracts(eid, [contract.id])
     if not found:
-        await deps.financial_store.save_contract(eid, contract)
-        return contract
+        return [contract]
     current = found[0]
     history = await deps.financial_store.contract_history(eid, contract.id)
-    if not history:
-        await deps.financial_store.save_contract(eid, current)  # 补记修改前的一版
+    backfill = [] if history else [current]  # 补记修改前的一版
     latest = history[-1] if history else None
     redo = (
         latest is not None
@@ -123,9 +122,16 @@ async def save_new_contract(deps: AgentDeps, eid: str, contract: Contract) -> Co
         and latest.changed_by == AgentId.A3
         and current.extracted_by_run == contract.extracted_by_run
     )
-    contract = contract.model_copy(update={"version": current.version if redo else current.version + 1})
-    await deps.financial_store.save_contract(eid, contract)
-    return contract
+    return [*backfill, contract.model_copy(update={"version": current.version if redo else current.version + 1})]
+
+
+async def save_new_contract(deps: AgentDeps, eid: str, contract: Contract) -> Contract:
+    """写入一次新抽取出的合同 (DOC-04 与上传后的 A3 共用), 返回写入的版本; 版本规则见 contract_writes. 智能导入的
+    确认不经它, 由 DataStore.commit_batch 在写表的同一事务里写 contract_writes 的各版."""
+    writes = await contract_writes(deps, eid, contract)
+    for version in writes:
+        await deps.financial_store.save_contract(eid, version)
+    return writes[-1]
 
 
 def contract_sources(documents: Iterable[DocumentRef], contracts: Mapping[str, Contract]) -> list[DocumentRef]:
@@ -411,10 +417,20 @@ EXTRACTED_TYPES = frozenset({DocumentType.contract, DocumentType.confirmation}) 
 def unfinished(document: DocumentRef) -> bool:
     """审计师上传的文件 (渠道 auditor_upload 且有上传人), A3 处理是否没做完: 还没分类 (received), 或已分类为合同,
     回函而没抽取完 (classified; 作业在两步之间被取消或进程退出). extracted, needs_manual 与其他类型的 classified
-    都算做完. 系统存档的文件 (数据集载入的合同, CSH-04 存档的银行直达回函等, 没有上传人) 由编排处理, 不在其中."""
+    都算做完. 系统存档的文件 (数据集载入的合同, CSH-04 存档的银行直达回函等, 没有上传人) 由编排处理, 不在其中.
+    智能导入批次里暂存的文件 (staged) 等确认, 不在其中 (需求 R277)."""
     if document.channel != "auditor_upload" or document.uploaded_by is None:
         return False
     return document.status == "received" or (document.status == "classified" and document.type in EXTRACTED_TYPES)
+
+
+@dataclass(frozen=True)
+class Chosen:
+    """审计师在智能导入的确认单上改定的文件类型 (需求 R277): 重新识别时按它, 不再分类."""
+
+    document_type: DocumentType  # 改定的类型
+    reason: str  # 理由
+    actor: str  # 审计师的用户 ID
 
 
 @dataclass(frozen=True)
@@ -425,12 +441,32 @@ class Requested:
     document_type: DocumentType  # 请求的文件类型
 
 
+# 智能导入里不按上传后流程处理的文件 (需求 R277): 暂存等确认的, 确认时没勾选而未导入的; 经 "上传文件" 重传时照新上传处理
+HELD: tuple[DocumentStatus, ...] = ("staged", "not_imported")
+
+
 def retype(document: DocumentRef, requested: Requested) -> bool:
     """对着待补交的文件请求上传 (或补做这样上传的) 的审计师上传文件是否要按请求定类型: 还没分类, 分不了类 (转了人工),
-    或已分类的类型与请求的不同. 已按请求类型处理过的不再处理 (重复上传幂等). 系统存档的文件不改."""
-    if document.channel != "auditor_upload" or document.uploaded_by is None:
+    或已分类的类型与请求的不同. 已按请求类型处理过的不再处理 (重复上传幂等). 系统存档的文件不改; 批次里暂存的
+    (staged) 等确认, 确认时没勾选的 (not_imported) 是终态, 也不改 (同一文件经 "上传文件" 重传时由
+    DataService.upload_documents 另行处理)."""
+    if document.channel != "auditor_upload" or document.uploaded_by is None or document.status in HELD:
         return False
     return document.status in ("received", "needs_manual") or document.type is not requested.document_type
+
+
+@dataclass(frozen=True)
+class Staged:
+    """智能导入批次里的一份文件 (需求 R277) 由 A3 分类与抽取的结果, 还没落到登记, 合同表与抽取版本表上; 确认时由
+    DocumentIntake.staged_change 换算成要写的登记与抽取结果, DataStore.commit_batch 写入. 分类已写 classify 留痕
+    (job 为它的 ID, 抽取的作业号)."""
+
+    document_type: DocumentType | None  # 类型; 判断不了 (或读不出) 为空
+    reason: str | None  # 分类理由; 按请求定类型的注明请求
+    job: str | None  # classify 留痕 ID; 读不出时没有分类, 为空
+    failed_step: DocumentFailedStep | None = None  # 卡住的步骤: read, classify, extract; 都通过为空
+    contract: Contract | None = None  # 合同的抽取要素 (第 1 版, 未写入)
+    reply: dict[str, Any] | None = None  # 回函副本的抽取结果 (ConfirmationExtraction 的 JSON, 未写入)
 
 
 @dataclass(frozen=True)
@@ -474,11 +510,23 @@ class DocumentIntake:
 
     async def process(self, eid: str, document: DocumentRef, engagement: Engagement) -> DocumentRef:
         """从头处理一份文件 (读首页, 大模型分类, 按类型抽取), 返回处理后的登记."""
+        decided = await self.classify(eid, document)
+        if decided is None:
+            return await self.manual(eid, document, "read")
+        kind, reason = decided
+        job = await self.record(eid, AgentId.A3, document, kind, reason)
+        if kind is None:
+            return await self.manual(eid, document, "classify")
+        return await self.classified(eid, document, kind, engagement, job)
+
+    async def classify(self, eid: str, document: DocumentRef) -> tuple[DocumentType | None, str | None] | None:
+        """读首页文字, 按文件名与首页文字调大模型分类 (DOC-CLASSIFY), 返回 (类型, 理由); 判断不了 (含调用出错) 类型为
+        空, 读不出为 None. 不写留痕, 不改登记."""
         try:
             text = await first_page_text(self.deps, eid, document)
         except Exception:
             logger.exception("读不出 %s %s", eid, document.id)
-            return await self.manual(eid, document, "read")
+            return None
         variables = {"file_name": document.file_name, "media_type": document.media_type, "first_page": text}
         stem = PurePath(document.file_name).stem
         try:
@@ -491,10 +539,70 @@ class DocumentIntake:
         except Exception:
             logger.exception("分类出错 %s %s", eid, document.id)
             kind, reason = None, None
-        job = await self.record(eid, AgentId.A3, document, kind, reason)
+        return kind, reason
+
+    async def stage(
+        self,
+        eid: str,
+        document: DocumentRef,
+        engagement: Engagement,
+        requested: Requested | None = None,
+        chosen: Chosen | None = None,
+    ) -> Staged:
+        """智能导入批次里的一份文件 (需求 R277): 分类与抽取, 结果不落到登记与合同上, 等确认 (staged_change).
+
+        审计师在确认单上改定了类型 (chosen) 时取它 (不调大模型, 留痕记审计师与理由); 对应了待补交的文件请求时取请求
+        的 (理由注明请求); 否则调 DOC-CLASSIFY. 三者都写 classify 留痕 (同上传后的处理, 留痕 ID 为抽取的作业号, 改定
+        类型的是新的作业). 合同按 DOC-04 抽出合同, 回函按 DOC-06 抽出余额与截至日, 都不写入; 抽取没通过的记
+        failed_step extract. 读不出, 判断不了类型的记 read, classify."""
+        if chosen is not None:
+            kind: DocumentType | None = chosen.document_type
+            reason: str | None = chosen.reason
+            job = await self.record(eid, chosen.actor, document, kind, reason)
+        elif requested is not None:
+            kind = requested.document_type
+            reason = f"按补交请求 {requested.request_id} 上传"
+            actor = document.uploaded_by or self.agent
+            job = await self.record(eid, actor, document, kind, reason, requested.request_id)
+        else:
+            decided = await self.classify(eid, document)
+            if decided is None:
+                return Staged(None, None, None, "read")
+            kind, reason = decided
+            job = await self.record(eid, AgentId.A3, document, kind, reason)
         if kind is None:
-            return await self.manual(eid, document, "classify")
-        return await self.classified(eid, document, kind, engagement, job)
+            return Staged(None, reason, job, "classify")
+        contract: Contract | None = None
+        reply: dict[str, Any] | None = None
+        # 抽取按定下的类型看这份文件 (同上传后的处理先改登记再抽取; 这里登记不改, 只给抽取与校验用的副本)
+        typed = document.model_copy(update={"type": kind, "reliability": RELIABILITY[kind], "status": "classified"})
+        try:
+            if kind is DocumentType.contract:
+                profile = await client_profile(self.deps, engagement, engagement.client_profile_version)
+                run = upload_run("DOC-04", typed, job)
+                contract = await extract_contract(self.deps, eid, self.deps.library.load("DOC-04"), run, typed, profile)
+            elif kind is DocumentType.confirmation:
+                extraction = await self.extract_reply(eid, typed)
+                reply = extraction.model_dump(mode="json") if extraction is not None else None
+        except Exception:
+            logger.exception("抽取出错 %s %s", eid, document.id)
+        failed = kind in EXTRACTED_TYPES and contract is None and reply is None
+        return Staged(kind, reason, job, "extract" if failed else None, contract, reply)
+
+    async def staged_change(self, eid: str, document: DocumentRef, staged: Staged) -> DocumentChange:
+        """确认单上的一份文件 (需求 R277) 确认时要写的, 由 DataStore.commit_batch 在写表的同一事务里写入; 只读, 不调
+        大模型. 类型为 staged 的 (审计师改了类型时已按新类型重新识别与抽取): 合同 (版本规则见 contract_writes) 或回函
+        抽取结果 (reply, 第 1 版) 置 extracted, 抽取没通过的置 needs_manual (extract); 其余类型置 classified."""
+        kind = staged.document_type
+        if kind is None:
+            raise ValueError(f"{document.id} 没有类型, 不能确认")
+        change = DocumentChange(document_id=document.id, type=kind, reliability=RELIABILITY[kind], status="classified")
+        if kind not in EXTRACTED_TYPES:
+            return change
+        if staged.contract is None and staged.reply is None:
+            return change.model_copy(update={"status": "needs_manual", "failed_step": "extract"})
+        contracts = await contract_writes(self.deps, eid, staged.contract) if staged.contract is not None else []
+        return change.model_copy(update={"status": "extracted", "contracts": contracts, "reply": staged.reply})
 
     async def resume(
         self,
@@ -507,9 +615,10 @@ class DocumentIntake:
         """处理或补做一份文件: 对应了待补交的文件请求且需要按它定类型的 (见 retype) 按请求定类型 (assign); 否则
         received 的从头处理; classified 的按已定类型接着抽取, job 为定下这次类型的 classify 留痕 (找不到为空, 按新的
         作业抽取). 合同的补做规则见 contract."""
-        if requested is not None and retype(document, requested):
+        if requested is not None and (document.status in HELD or retype(document, requested)):
             return await self.assign(eid, document, engagement, requested)
-        if document.status == "received":
+        # 暂存或未导入的文件经 "上传文件" 重传: 照新上传处理
+        if document.status == "received" or document.status in HELD:
             return await self.process(eid, document, engagement)
         if job is None:
             return await self.classified(eid, document, document.type, engagement)
@@ -583,6 +692,15 @@ class DocumentIntake:
 
         不关联到函证 (函证由 CSH-04 发出, 回函经函证平台直达, 在编排里抽取); 这里只留副本的抽取结果供查看, 不能修改,
         所以不留历史."""
+        extraction = await self.extract_reply(eid, document)
+        if extraction is None:
+            return False
+        data = extraction.model_dump(mode="json")
+        await self.deps.data.save_extraction(eid, "reply", document.id, 1, data, changed_by=AgentId.A3)
+        return True
+
+    async def extract_reply(self, eid: str, document: DocumentRef) -> ConfirmationExtraction | None:
+        """DOC-06 抽取回函副本 (不写入); 校验不过为 None."""
         template = self.deps.library.load("DOC-06")
         pages = await self.deps.evidence_store.pages(eid, document.id)
         variables = {"document": document.model_dump(mode="json"), "pages": pages}
@@ -596,10 +714,8 @@ class DocumentIntake:
             PurePath(document.file_name).stem,
         )
         if result.report.level_failed is not None or result.report.output is None:
-            return False
-        data = cast(ConfirmationExtraction, result.report.output).model_dump(mode="json")
-        await self.deps.data.save_extraction(eid, "reply", document.id, 1, data, changed_by=AgentId.A3)
-        return True
+            return None
+        return cast(ConfirmationExtraction, result.report.output)
 
     async def manual(self, eid: str, document: DocumentRef, step: DocumentFailedStep) -> DocumentRef:
         """置 needs_manual, 记卡住的步骤; 类型与可靠性不变."""

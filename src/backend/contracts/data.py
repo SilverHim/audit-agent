@@ -11,7 +11,14 @@ from typing import Any, Literal, Self
 
 from pydantic import Field, StrictInt, StrictStr, field_validator, model_validator
 
-from backend.contracts.models import Contract, DocumentType, Model
+from backend.contracts.models import (
+    Contract,
+    DocumentFailedStep,
+    DocumentStatus,
+    DocumentType,
+    Model,
+    Reliability,
+)
 from backend.contracts.records import AccountCategory, CategoryBasis
 
 
@@ -491,6 +498,119 @@ class SheetReading(Model):
     reason: str  # 理由; 按列名匹配时以 "按列名匹配, 请核对" 开头并写明原因
     method: Literal["llm", "column_names"]  # 识别方式: 大模型, 或退回按列名匹配
     trail_ids: list[str] = []  # 本次调大模型的各次 llm_call 留痕 (退回时为失败的那几次, 调用出错为空)
+
+
+class TableOrigin(Model):
+    """一张表这次写入的出处 (DataStore.write_tables 的 origins, 智能导入一次写入几个文件的表时逐表给)."""
+
+    file_name: str | None = None  # 原文件名
+    document_id: str | None = None  # 原文件登记成的证据文件 ID
+    request_id: str | None = None  # 对应的补交请求
+
+
+# ── 智能导入的批次与确认单 (需求 R277): 上传一批, A3 逐项识别, 审计师看确认单调整后一次写入 ──
+
+
+class BatchIssueCode(StrEnum):
+    """确认单一项的问题 (标红; 有任一项时缺省不勾). 前端按编号本地化文案, params 的键见各项注释."""
+
+    low_confidence = "low_confidence"  # 识别把握低 (含大模型不可用而按列名匹配); 无参数
+    not_a_table = "not_a_table"  # 工作表不是账表 (或按列名认不出); 无参数
+    plan_invalid = "plan_invalid"  # 方案套不到工作表: {code: INVALID_VALUE 或 MISSING_FIELD, message}
+    parse_failed = "parse_failed"  # 解析失败: {count: 失败处数}; 前 20 处见 BatchItem.failures
+    company_mismatch = "company_mismatch"  # 读到的公司名与项目不符: {company, expected}
+    # 读到的期间与项目不符: {period_start, period_end, expected_start, expected_end} (日期为 ISO 文本, 没读到为空)
+    period_mismatch = "period_mismatch"
+    duplicate_table = "duplicate_table"  # 同一批里同一张表出现两次: {kind, items: [同表其他项的 ID]}
+    replaces_data = "replaces_data"  # 将替换已有数据: {kind, existing: 现有行数}
+    unclassified = "unclassified"  # 文件判断不了类型: {step: classify 或 read (读不出文字)}
+    extraction_failed = "extraction_failed"  # 合同或回函的抽取没通过校验; 无参数
+    already_registered = "already_registered"  # 同一文件之前已登记 (内容相同): {document_id, type, status}
+
+
+class BatchIssue(Model):
+    """确认单一项的一个问题."""
+
+    code: BatchIssueCode  # 问题
+    params: dict[str, Any] = {}  # 参数, 见 BatchIssueCode 各项
+
+
+class BatchFile(Model):
+    """批次里的一个文件: 上传时登记为暂存的证据文件 (status staged), A3 处理完一个文件记 done (重启后接着做)."""
+
+    name: str  # 文件名
+    document_id: str  # 登记的证据文件 ID; 同一文件之前已登记时为已有的那份
+    done: bool = False  # A3 是否已处理完 (确认单里有它的各项)
+    not_imported: bool = False  # 确认时没勾选, 这份文件转为未导入 (文件状态 not_imported)
+
+
+class BatchItem(Model):
+    """确认单的一项: 表格文件的一个工作表, 或一份非表格文件 (含没有一个工作表是账表的表格文件)."""
+
+    id: str  # {批次 ID}-{n}, n 从 1 起, 按文件与工作表的顺序
+    file_name: str  # 文件名
+    document_id: str  # 文件的登记 ID
+    item_kind: Literal["table", "document"]  # 工作表或文件
+    sheet: str | None = None  # 表格: 工作表名 (CSV 为文件名主干); 文件为空
+    reading: SheetReading | None = None  # 表格: A3 的识别结果原样 (R276)
+    plan: TablePlan | None = None  # 表格: 当前的规整方案, 识别所得或审计师调整后的; plan.kind 即识别为哪张表
+    records: int | None = None  # 表格: 将写入的行数; 方案套不上或有解析失败时为空
+    failure_count: int = 0  # 表格: 解析失败的处数
+    failures: list[ParseFailure] = []  # 表格: 解析失败的前 20 处
+    existing_records: int | None = None  # 表格: 该表现有的行数 (将被替换), 没有为空
+    document_type: DocumentType | None = None  # 文件: 识别为哪类文件; 判断不了为空
+    type_reason: str | None = None  # 文件: 分类理由 (A3), 按请求定类型的 "按补交请求 X 上传", 或审计师调整的理由
+    job: str | None = None  # 文件: 定下类型的那条 classify 留痕 ID, 确认时抽取结果按它的作业写入
+    contract: Contract | None = None  # 文件: 合同的抽取要素 (尚未写入)
+    reply: dict[str, Any] | None = None  # 文件: 回函副本的抽取结果 (ConfirmationExtraction 的 JSON, 尚未写入)
+    issues: list[BatchIssue] = []  # 问题 (标红)
+    selected: bool = False  # 是否勾选写入
+    chosen_by: str | None = None  # 审计师手动勾选或取消时的用户 ID; 为空时勾选随问题 (没有问题即勾)
+    adjusted_by: str | None = None  # 审计师调整过方案或类型时的用户 ID
+
+
+# 批次状态: A3 识别中, 待确认, 识别作业出错 (见 ImportBatch.error, 可重新识别没做完的文件), 已写入
+BatchStatus = Literal["processing", "ready", "failed", "committed"]
+
+
+class ImportBatch(Model):
+    """一次智能导入 (表 import_batches): 上传的文件, A3 识别出的确认单与写入结果."""
+
+    id: str  # BAT-{uuid4 前 12 位}
+    status: BatchStatus  # 状态
+    request_id: str | None = None  # 上传时带的补交请求 (补交卡片上的上传)
+    created_by: str  # 上传人的用户 ID
+    created_at: datetime  # 上传时间
+    files: list[BatchFile]  # 上传的文件, 按上传顺序
+    items: list[BatchItem] = []  # 确认单, 按文件与工作表的顺序
+    committed_at: datetime | None = None  # 写入时间
+    committed_by: str | None = None  # 确认人的用户 ID
+    data_version: int | None = None  # 确认后的数据版本 (写了账表或合同时 +1); 都没写为空
+    error: str | None = None  # 识别作业出错 (failed) 时的原因; 重新识别时清空
+
+
+class DocumentChange(Model):
+    """确认导入时一份文件要写的 (DataStore.commit_batch 在写表的同一事务里写): 登记改成的类型, 可靠性, 状态与卡住的
+    步骤; 合同要依次写的各版 (版本规则见 ingest.contract_writes: 已有合同没有版本记录时先补记它) 与回函副本的抽取结果
+    (reply, 第 1 版)."""
+
+    document_id: str  # 证据文件 ID
+    type: DocumentType  # 确认的类型
+    reliability: Reliability  # 可靠性, 按类型
+    status: DocumentStatus  # 写入后的状态: extracted, classified, 抽取没通过为 needs_manual
+    failed_step: DocumentFailedStep | None = None  # 卡住的步骤 (needs_manual 时为 extract)
+    contracts: list[Contract] = []  # 合同: 依次写入的各版 (save_contract 的写法, 记 A3)
+    reply: dict[str, Any] | None = None  # 回函副本的抽取结果 (ConfirmationExtraction 的 JSON)
+
+
+class BatchItemEdit(Model):
+    """调整确认单的一项: 只给要改的. 改了方案或类型时按新结果重新判断问题; 同时给了 selected 的以它为准, 没给的
+    按有没有问题重定勾选."""
+
+    selected: bool | None = None  # 勾选或不勾
+    plan: TablePlan | None = None  # 表格: 新的规整方案 (前端沿用列对应界面, 预填当前方案)
+    document_type: DocumentType | None = None  # 文件: 改为哪类文件
+    reason: str | None = None  # 改文件类型的理由, 改类型时必填
 
 
 class ApprovalLogRow(Model):

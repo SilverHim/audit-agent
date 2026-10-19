@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from backend.contracts.data import (
     ApprovalLogRow,
+    BatchItemEdit,
     CheckId,
     DataChange,
     DataInput,
+    DocumentChange,
     ImportCommit,
     ImportSession,
     TableKind,
@@ -1127,3 +1129,93 @@ async def test_migration_0008_backfills_data_changes_under_force_rls(storage) ->
                 await outer.rollback()
     finally:
         await engine.dispose()
+
+
+# ── 需求 R277: 智能导入的批次 ──
+
+
+async def test_import_batch_on_real_store(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """真实存储上的一批 (两张 Numbat CSV, 演示 CON-001.pdf 与两份回函副本): 文件暂存 (staged), 批次按 ID 存取且按
+    项目隔离; 确认前财务表, 合同与抽取结果不变; 确认的提交一个事务写成, 其中一步出错 (一份不存在的文件) 时账表, 合同,
+    文件登记与批次都不变; 确认后两张表一次写入 (一个数据版本, 各表版本行的原文件名与证据文件取各自的文件), 合同写入,
+    回函记 reply 抽取结果, 文件按类型登记, 取消勾选的回函转为未导入, 这一版的数据变动记两张表与合同 (需求 R274);
+    已 committed 的批次再提交什么都不写."""
+    from dataclasses import replace
+
+    from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+    from tests.fakes import LayeredMockLLM
+
+    _, (first, second), _, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    llm = LayeredMockLLM(ROOT / "data" / "demo" / "llm")  # 演示运行副本: 账表识别, 文件分类与合同抽取
+    deps = service.deps
+    judgments = JudgmentEngine(
+        llm, OutputValidator(deps.financial_store, deps.library, deps.trail), deps.trail, deps.library
+    )
+    service = DataService(replace(deps, llm=llm, judgments=judgments), service.runner)
+    files = [
+        ("accounts.csv", (DEMO / "accounts.csv").read_bytes()),
+        ("bank_accounts.csv", (DEMO / "bank_accounts.csv").read_bytes()),
+        ("CON-001.pdf", (DEMO / "contracts" / "CON-001.pdf").read_bytes()),
+        ("12345601.pdf", (DEMO / "confirmations" / "12345601.pdf").read_bytes()),  # 回函副本
+        ("23456702.pdf", (DEMO / "confirmations" / "23456702.pdf").read_bytes()),  # 取消勾选, 未导入
+    ]
+
+    started = await service.start_batch(first.id, files, actor="U-1")
+    await asyncio.gather(*list(service.tasks))
+    batch = await deps.data.batch(first.id, started.id)
+    assert batch is not None and batch.status == "ready" and len(batch.items) == 5
+    assert [i.selected for i in batch.items] == [True] * 5
+    assert batch.items[2].contract is not None and batch.items[2].contract.id == "CON-001"
+    assert batch.items[3].document_type is DocumentType.confirmation and batch.items[3].reply is not None
+    batch = await service.edit_batch_item(first.id, started.id, batch.items[4].id, BatchItemEdit(selected=False), "U-1")
+    assert await deps.data.batch(second.id, started.id) is None  # 行级安全
+    assert [b.id for b in await deps.data.batches(first.id)] == [started.id]
+    documents = await deps.financial_store.documents(first.id)
+    assert {d.status for d in documents} == {"staged"}
+    assert await deps.financial_store.contracts(first.id) == []
+    assert await deps.data.versions(first.id) == [] and await deps.data.extraction_versions(first.id, "reply") == []
+
+    tables, origins = await service._batch_tables(first.id, batch, batch.items[:2])
+    changes = await service._batch_documents(first.id, batch, batch.items[:2], batch.items[2:4])
+    assert [c.status for c in changes] == ["extracted"] * 4 + ["not_imported"] and changes[2].contracts
+    missing = DocumentChange(
+        document_id="DOC-missing", type=DocumentType.other, reliability=Reliability.internal_copy, status="classified"
+    )
+    committed = batch.model_copy(
+        update={"status": "committed", "committed_by": "U-1", "committed_at": datetime.now(UTC)}
+    )
+    with pytest.raises(FileNotFoundError):
+        await deps.data.commit_batch(
+            first.id, committed, tables, actor="U-1", origins=origins, documents=[*changes, missing]
+        )
+    assert await deps.data.versions(first.id) == [] and await deps.financial_store.contracts(first.id) == []
+    assert {d.status for d in await deps.financial_store.documents(first.id)} == {"staged"}
+    assert (await deps.data.batch(first.id, started.id)) == batch
+    assert (await deps.data.readiness(first.id)).data_version == 0
+    assert (await deps.data.stats(first.id))[TableKind.accounts].records == 0
+
+    done = await service.confirm_batch(first.id, started.id, "U-1")
+
+    assert (done.status, done.data_version) == ("committed", 1)
+    assert await deps.data.batch(first.id, started.id) == done
+    by_name = {d.file_name: d for d in await deps.financial_store.documents(first.id)}
+    assert [(v.kind, v.file_name, v.document_id, v.data_version) for v in await deps.data.versions(first.id)] == [
+        (TableKind.accounts, "accounts.csv", by_name["accounts.csv"].id, 1),
+        (TableKind.bank_accounts, "bank_accounts.csv", by_name["bank_accounts.csv"].id, 1),
+    ]
+    assert (by_name["CON-001.pdf"].type, by_name["CON-001.pdf"].status) == (DocumentType.contract, "extracted")
+    assert by_name["accounts.csv"].status == "extracted"
+    assert [c.id for c in await deps.financial_store.contracts(first.id)] == ["CON-001"]
+    assert (by_name["12345601.pdf"].type, by_name["12345601.pdf"].status) == (DocumentType.confirmation, "extracted")
+    [reply] = await deps.data.extraction_versions(first.id, "reply")
+    assert (reply.target_id, reply.version, reply.data) == (by_name["12345601.pdf"].id, 1, batch.items[3].reply)
+    assert (by_name["23456702.pdf"].type, by_name["23456702.pdf"].status) == (DocumentType.other, "not_imported")
+    assert [f.not_imported for f in done.files] == [False, False, False, False, True]
+    assert (await deps.data.stats(first.id))[TableKind.accounts].records == 23
+    changed = [DataInput.accounts, DataInput.bank_accounts, DataInput.contracts]
+    assert await deps.data.changes(first.id) == [DataChange(data_version=1, input=i) for i in changed]
+    again = await deps.data.commit_batch(first.id, committed, tables, actor="U-1", origins=origins, documents=changes)
+    assert again == done and len(await deps.data.versions(first.id)) == 2
+    assert (await deps.data.readiness(first.id)).data_version == 1
+    assert len(await deps.data.changes(first.id)) == 3

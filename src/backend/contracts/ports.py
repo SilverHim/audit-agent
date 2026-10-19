@@ -25,9 +25,12 @@ from backend.contracts.data import (
     DataReadiness,
     DataRequest,
     DataSource,
+    DocumentChange,
     ExtractionRecord,
+    ImportBatch,
     ImportSession,
     TableKind,
+    TableOrigin,
     TableStats,
     TableVersion,
     XeroConnection,
@@ -389,12 +392,15 @@ class DataStore(Protocol):
         document_id: str | None = None,
         import_id: str | None = None,
         request_id: str | None = None,
+        origins: Mapping[TableKind, TableOrigin] | None = None,
     ) -> int:
-        """新数据版本写入 (导入与 Xero 同步共用), 返回写入后的数据版本. 一个事务内: 数据版本 +1; 各表按 TableKind 顺序
-        整表替换 (审批日志不成表, 按凭证号补进总账的录入人, 审批人与审批时间, 只改对应了的列; 写总账时再套用最新一版
-        审批日志); 科目表对照分类历史 (审计师改过的沿用审计师的分类, 系统归类有变化的记一版); 每张表在 data_imports
-        记一行版本 (含行快照), 并记一条数据变动 (该表); 有 import_id 时把该导入会话置 committed. 行模型: 科目表 Account,
-        审批日志 ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
+        """新数据版本写入 (导入与 Xero 同步共用; 智能导入的确认经 commit_batch 在同一事务里照此写表), 返回写入后的
+        数据版本. 一个事务内: 数据版本 +1; 各表按 TableKind 顺序整表替换 (审批日志不成表, 按凭证号补进总账的录入人,
+        审批人与审批时间, 只改对应了的列; 写总账时再套用最新一版审批日志); 科目表对照分类历史 (审计师改过的沿用审计师
+        的分类, 系统归类有变化的记一版); 每张表在 data_imports 记一行版本 (含行快照), 并记一条数据变动 (该表); 有
+        import_id 时把该导入会话置 committed. origins 给了某表时, 该表版本行的原文件名, 证据文件与补交请求取它 (智能
+        导入一次写几个文件的表), 其余取 file_name, document_id, request_id. 行模型: 科目表 Account, 审批日志
+        ApprovalLogRow, 其余同 FINANCIAL 各表. 项目 locked 抛 EngagementLocked."""
         ...
 
     async def create_import(self, eid: str, session: ImportSession, data: bytes) -> None:
@@ -416,6 +422,37 @@ class DataStore(Protocol):
         row_count: int | None = None,
     ) -> None:
         """记导入会话当前的工作表; 提交时另记日期写法, 列对应与数据行数 (为空的不改). 只改未提交 (parsed) 的会话."""
+        ...
+
+    async def save_batch(self, eid: str, batch: ImportBatch) -> None:
+        """登记或覆盖一次智能导入 (表 import_batches, 按 ID; 需求 R277)."""
+        ...
+
+    async def batch(self, eid: str, batch_id: str) -> ImportBatch | None:
+        """一次智能导入; 没有为 None."""
+        ...
+
+    async def batches(self, eid: str) -> list[ImportBatch]:
+        """该项目的全部智能导入, 按上传时间升序."""
+        ...
+
+    async def commit_batch(
+        self,
+        eid: str,
+        batch: ImportBatch,
+        tables: Mapping[TableKind, Sequence[BaseModel]],
+        *,
+        actor: str,
+        origins: Mapping[TableKind, TableOrigin],
+        documents: Sequence[DocumentChange],
+    ) -> ImportBatch:
+        """确认一次智能导入 (需求 R277), 一个事务内全部写成或全不写: 有表时同 write_tables 写一个新数据版本 (source
+        import, 出处取 origins); 各文件按 DocumentChange 改登记, 依次写合同的各版 (同 FinancialDataStore.save_contract,
+        记 A3) 与回函副本的抽取结果 (reply, 第 1 版); 写了合同时数据变动另记 contracts (需求 R274; 有表时记在写表的
+        版本上, 没有表时数据版本 +1 只记 contracts, 同 bump_version); 再把批次覆盖为 batch (调用方已置 committed), 记
+        写入后的数据版本 (没写表也没写合同为空). 批次 ID 是幂等键: 库里的批次已是 committed 时什么都不写, 返回库里的
+        批次. 返回写入后的批次. 批次不存在抛 LookupError, 文件不存在抛 FileNotFoundError (都整体回滚); 项目 locked
+        抛 EngagementLocked."""
         ...
 
 

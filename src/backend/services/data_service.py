@@ -18,8 +18,11 @@ from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
-from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
+from backend.agents.ingest import HELD, RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
 from backend.contracts.data import (
+    BatchFile,
+    BatchItem,
+    BatchItemEdit,
     CategoryVersion,
     ContractVersion,
     DataInput,
@@ -28,8 +31,10 @@ from backend.contracts.data import (
     DataSource,
     DataSources,
     DataSummary,
+    DocumentChange,
     ExtractionEdit,
     ExtractionRecord,
+    ImportBatch,
     ImportCommit,
     ImportPreview,
     ImportResult,
@@ -37,6 +42,7 @@ from backend.contracts.data import (
     RecordsDetail,
     TableColumn,
     TableKind,
+    TableOrigin,
     TablePage,
     TableSchema,
     TableSummary,
@@ -70,12 +76,23 @@ from backend.services.data_import import (
     UnreadableFile,
     media_type,
     preview,
+    raw_rows,
     read_sheet,
     sheet_names,
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
 from backend.services.extraction_edits import apply_confirmation_edit, apply_contract_edit, ordered_terms
-from backend.services.table_plan import convert
+from backend.services.import_batches import (
+    TABLE_EXTENSIONS,
+    BatchIntake,
+    carried,
+    chosen_of,
+    finalize,
+    item_number,
+    staged_of,
+    unreadable_item,
+)
+from backend.services.table_plan import apply_plan, convert
 from backend.services.trail_pages import all_of_kind
 
 logger = logging.getLogger(__name__)
@@ -155,6 +172,30 @@ def upload_entry(
     )
 
 
+def not_imported_entry(eid: str, batch: ImportBatch) -> TrailEntry | None:
+    """确认时没勾选而转为未导入的文件的 data 留痕 (一批一条): action not_imported, payload 带 batch_id, document_ids
+    与 file_name (各文件名, 逗号分隔), actor 为确认人; 防重复键 {eid}:data:not_imported:{批次 ID}, 确认与补写共用.
+    这批没有未导入的文件为 None."""
+    files = [f for f in batch.files if f.not_imported]
+    if not files:
+        return None
+    names = ", ".join(f.name for f in files)
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.data,
+        actor=batch.committed_by or AgentId.A3,
+        summary=f"智能导入 {batch.id} 确认时没勾选, 未导入 {len(files)} 个文件: {names}",
+        idempotency_key=f"{eid}:data:not_imported:{batch.id}",
+        payload={
+            "action": "not_imported",
+            "batch_id": batch.id,
+            "document_ids": [f.document_id for f in files],
+            "file_name": names,
+        },
+        created_at=batch.committed_at or datetime.now(UTC),
+    )
+
+
 def same_edit(
     record: ExtractionRecord | ContractVersion, version: int, edit: ExtractionEdit, actor: str, reason: str
 ) -> bool:
@@ -193,6 +234,44 @@ def category_entry(eid: str, code: str, version: CategoryVersion) -> TrailEntry:
         },
         created_at=version.changed_at,
     )
+
+
+def written_versions(
+    tables: Mapping[TableKind, Sequence[BaseModel]],
+    version: int,
+    source: DataSource,
+    actor: str,
+    origins: Mapping[TableKind, TableOrigin],
+    default: TableOrigin,
+    version_id: str = "",
+) -> list[TableVersion]:
+    """一次写入的各表版本 (按 TableKind 顺序), 写版本留痕用 (见 version_entry); 出处取 origins, 没给的取 default."""
+    return [
+        TableVersion(
+            id=version_id,
+            kind=kind,
+            source=source,
+            file_name=origin.file_name,
+            document_id=origin.document_id,
+            records=len(tables[kind]),
+            data_version=version,
+            request_id=origin.request_id,
+            created_by=actor,
+            created_at=datetime.now(UTC),
+        )
+        for kind in sorted(tables, key=list(TableKind).index)
+        for origin in [origins.get(kind) or default]
+    ]
+
+
+# 批次不在待确认时调整与确认的拒绝说明, 待确认或已写入时重新识别的拒绝说明
+BATCH_NOT_READY: dict[str, str] = {"processing": "还在识别", "failed": "识别出错, 先重新识别", "committed": "已写入"}
+BATCH_DONE: dict[str, str] = {"ready": "已识别完", "committed": "已写入"}
+
+
+def failure_reason(exc: BaseException) -> str:
+    """识别作业出错的原因 (ImportBatch.error): 异常类型与消息, 截断到 300 字."""
+    return f"{type(exc).__name__}: {exc}"[:300]
 
 
 def table_columns(kind: TableKind) -> list[TableColumn]:
@@ -250,6 +329,10 @@ class DataService:
         self.jobs.setdefault(eid, {})[key] = frozenset(labels)
         return key
 
+    def _relabel(self, eid: str, key: object, labels: Iterable[str]) -> None:
+        """改已登记作业涉及的账表或文件 (持项目锁时)."""
+        self.jobs[eid][key] = frozenset(labels)
+
     def _unregister(self, eid: str, key: object) -> None:
         jobs = self.jobs.get(eid, {})
         jobs.pop(key, None)
@@ -268,17 +351,17 @@ class DataService:
             self.runner.release(eid)
 
     @asynccontextmanager
-    async def holding(self, eid: str, labels: Iterable[str]) -> AsyncIterator[None]:
+    async def holding(self, eid: str, labels: Iterable[str]) -> AsyncIterator[object]:
         """在块内做一件数据写操作: 进入时查锁定 (ENGAGEMENT_LOCKED), 取项目锁 (取不到 ENGAGEMENT_BUSY), 把 labels
         (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时注销,
         成功时锁交给 continue_waiting (图在等程序要的数据就交给后台恢复, 否则释放), 出错时释放. 数据提交在注销之前,
-        概览据此判断."""
+        概览据此判断. 块内得到作业的登记键, 取锁后才知道涉及什么的 (如确认导入) 用 _relabel 改登记."""
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, labels)
         try:
             await self.backfill_trails(eid)
-            yield
+            yield key
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
@@ -378,14 +461,17 @@ class DataService:
         task.add_done_callback(finish)
 
     async def backfill_trails(self, eid: str) -> None:
-        """补写已提交而 data 留痕没写成的账表版本, 抽取结果修改, 最近一次体检与补交请求的提出和收到 (写入后留痕
-        失败, 或进程在两者之间中断); 同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁之后调用."""
+        """补写已提交而 data 留痕没写成的账表版本, 抽取结果修改, 最近一次体检与补交请求的提出和收到, 智能导入确认时
+        未导入的文件 (写入后留痕失败, 或进程在两者之间中断); 同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁
+        之后调用."""
         versions = [v for v in await self.deps.data.versions(eid) if v.source != "dataset"]
         edits = [r for r in await self.deps.data.extraction_versions(eid) if r.field is not None]
         entries = [version_entry(eid, v) for v in versions] + [edit_entry(eid, r) for r in edits]
         entries += checkup_entries(eid, await self.deps.data.check_run(eid), await self.deps.data.requests(eid))
         for code, history in (await self.deps.data.category_history(eid)).items():
             entries += [category_entry(eid, code, v) for v in history if v.basis == "auditor"]
+        committed = [b for b in await self.deps.data.batches(eid) if b.status == "committed"]
+        entries += [e for b in committed if (e := not_imported_entry(eid, b)) is not None]
         await record_transitions(self.deps.trail, entries)
 
     async def checkup_if_stale(self, eid: str) -> None:
@@ -421,10 +507,13 @@ class DataService:
         document_id: str | None = None,
         import_id: str | None = None,
         request_id: str | None = None,
+        origins: Mapping[TableKind, TableOrigin] | None = None,
     ) -> int:
-        """新数据版本写入 (导入与 Xero 同步共用), 返回写入后的数据版本. 须在 holding 块内或 launch 的作业里调用
-        (持项目锁), 否则抛 RuntimeError. 写入规则见 DataStore.write_tables; 提交后每张表写一条 data 留痕
-        (见 version_entry). 留痕写失败时数据已提交: 下次取项目锁做数据写操作时补写 (见 backfill_trails)."""
+        """新数据版本写入 (导入与 Xero 同步共用; 智能导入的确认另经 DataStore.commit_batch, 写法相同), 返回写入后的数据
+        版本. 须在 holding 块内或 launch 的作业里
+        调用 (持项目锁), 否则抛 RuntimeError. 写入规则见 DataStore.write_tables (origins 为各表的出处); 提交后每张表
+        写一条 data 留痕 (见 version_entry). 留痕写失败时数据已提交: 下次取项目锁做数据写操作时补写 (见
+        backfill_trails)."""
         if not self.runner.is_running(eid):
             raise RuntimeError(f"{eid} 写入账表须先取项目锁 (DataService.holding 或 launch)")
         version = await self.deps.data.write_tables(
@@ -436,22 +525,10 @@ class DataService:
             document_id=document_id,
             import_id=import_id,
             request_id=request_id,
+            **({"origins": origins} if origins is not None else {}),
         )
-        written = [
-            TableVersion(
-                id=import_id or "",
-                kind=kind,
-                source=source,
-                file_name=file_name,
-                document_id=document_id,
-                records=len(tables[kind]),
-                data_version=version,
-                request_id=request_id,
-                created_by=actor,
-                created_at=datetime.now(UTC),
-            )
-            for kind in sorted(tables, key=list(TableKind).index)
-        ]
+        default = TableOrigin(file_name=file_name, document_id=document_id, request_id=request_id)
+        written = written_versions(tables, version, source, actor, origins or {}, default, import_id or "")
         try:
             await record_transitions(self.deps.trail, [version_entry(eid, item) for item in written])
         finally:  # 留痕写失败 (数据已提交) 也照常体检
@@ -641,6 +718,366 @@ class DataService:
             )
         return ImportResult(kind=body.kind, records=len(rows))
 
+    # ── 智能导入的批次 (需求 R277) ──
+
+    async def start_batch(
+        self, eid: str, files: Sequence[tuple[str, bytes]], *, actor: str, request_id: str | None = None
+    ) -> ImportBatch:
+        """上传一批文件 (POST /data/batches): 每个文件登记为暂存的证据文件 (类型 other, 内部副本, status staged, 来源
+        auditor_upload; 确认前不被程序使用, 启动时也不补做), 写上传留痕 (upload_entry), 登记批次 (processing), 由 A3
+        在后台逐个文件识别 (process_batch, 持项目锁, 作业涉及这些文件), 返回刚登记的批次. 内容相同的文件只算一份;
+        之前已登记的同一文件沿用已有的登记 (表格照常识别, 其他文件记 already_registered). 文件类型不支持
+        INVALID_VALUE; 锁定 423; 忙 409."""
+        names = [PurePath(name.replace("\\", "/")).name or "upload" for name, _ in files]
+        supported = DOCUMENT_EXTENSIONS | TABLE_EXTENSIONS
+        unsupported = [n for n in names if PurePath(n).suffix.lower() not in supported]
+        if not files or unsupported:
+            raise DataRejected(
+                "INVALID_VALUE", f"只支持 CSV, Excel, PDF, Word, PNG, JPG 文件: {', '.join(unsupported)}"
+            )
+        await self._check_unlocked(eid)
+        self.runner.acquire(eid)
+        key = self._register(eid, ())
+        try:
+            await self.backfill_trails(eid)
+            batch_files: list[BatchFile] = []
+            for name, (_, data) in zip(names, files, strict=True):
+                document = await self.deps.evidence_store.save(
+                    eid,
+                    name,
+                    data,
+                    type=DocumentType.other,
+                    reliability=Reliability.internal_copy,
+                    media_type=media_type(name),
+                    uploaded_by=actor,
+                    status="staged",
+                )
+                if document.status == "not_imported":  # 之前确认时没勾选的同一文件: 重新上传即回到暂存, 再识别
+                    document = await self.deps.evidence_store.update_document(
+                        eid,
+                        document.id,
+                        type=DocumentType.other,
+                        reliability=Reliability.internal_copy,
+                        status="staged",
+                        failed_step=None,
+                    )
+                await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
+                if all(f.document_id != document.id for f in batch_files):
+                    batch_files.append(BatchFile(name=name, document_id=document.id))
+            batch = ImportBatch(
+                id=f"BAT-{uuid4().hex[:12]}",
+                status="processing",
+                request_id=request_id,
+                created_by=actor,
+                created_at=datetime.now(UTC),
+                files=batch_files,
+            )
+            await self.deps.data.save_batch(eid, batch)
+            self.jobs[eid][key] = frozenset(f.document_id for f in batch_files)
+        except BaseException:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            raise
+        self._spawn(eid, key, lambda: self.process_batch(eid, batch.id))
+        return batch
+
+    async def process_batch(self, eid: str, batch_id: str) -> None:
+        """A3 处理批次里还没处理完的文件 (持项目锁, 在上传, 改文件类型, 重新识别或启动补做的作业里调用): 每处理完
+        一个文件存一次 (该文件的各项, done), 重启后从没做完的文件接着做. 文件已有的项 (改了类型的, 或中途退出留下的)
+        先去掉, 新项沿用它们的序号与手动勾选, 审计师改定的类型照用 (chosen_of). 全部做完后整张确认单收尾 (finalize),
+        置 ready. 表格项的问题按项目当时的数据与期间判断. 一个文件出错只记该文件读不出; 逐文件之外出错 (查项目, 画像,
+        补交请求, 存批次) 时批次置 failed 并记原因, 由审计师重新识别 (retry_batch)."""
+        batch = await self.deps.data.batch(eid, batch_id)
+        if batch is None or batch.status != "processing":
+            return
+        try:
+            engagement = await self.deps.engagement_store.get(eid)
+            if engagement is None:
+                raise LookupError(f"Engagement {eid} not found")
+            intake = BatchIntake(self.deps)
+            ctx = await intake.context(eid, engagement)
+            requested = await self._requested(eid, batch.request_id)
+            for index, file in enumerate(batch.files):
+                if file.done:
+                    continue
+                previous = [i for i in batch.items if i.document_id == file.document_id]
+                items = [i for i in batch.items if i.document_id != file.document_id]
+                after = max((item_number(i.id) for i in items), default=0) + 1
+                first = min((item_number(i.id) for i in previous), default=after)
+                try:
+                    new = await intake.process_file(
+                        eid, file, first, batch.id, engagement, ctx, requested, chosen_of(previous)
+                    )
+                except Exception:  # 一个文件出错 (如原件读不了) 不卡住整批: 记为读不出, 留给审计师处理
+                    logger.exception("识别批次文件出错: %s %s %s", eid, batch_id, file.document_id)
+                    new = [unreadable_item(f"{batch.id}-{first}", file)]
+                files = [f.model_copy(update={"done": True}) if n == index else f for n, f in enumerate(batch.files)]
+                merged = sorted([*items, *carried(previous, new)], key=lambda i: item_number(i.id))
+                batch = batch.model_copy(update={"items": merged, "files": files})
+                await self.deps.data.save_batch(eid, batch)
+            batch = batch.model_copy(update={"status": "ready", "items": finalize(batch.items)})
+            await self.deps.data.save_batch(eid, batch)
+        except Exception as exc:
+            logger.exception("识别批次出错: %s %s", eid, batch_id)
+            failed = batch.model_copy(update={"status": "failed", "error": failure_reason(exc)})
+            await self.deps.data.save_batch(eid, failed)
+
+    async def retry_batch(self, eid: str, batch_id: str) -> ImportBatch:
+        """重新识别 (POST /data/batches/{id}/retry): 识别作业出错 (failed) 或进程退出后停在识别中的批次, 清掉原因,
+        置回 processing, 由 A3 在后台从没做完的文件接着做 (process_batch, 与启动补做同一段代码), 返回置回的批次.
+        按顺序拒绝: 锁定 423; 忙 409 (识别中的批次由识别作业持锁, 也是 409); 批次不存在 404; 待确认或已写入
+        INVALID_VALUE."""
+        await self._check_unlocked(eid)
+        self.runner.acquire(eid)
+        key = self._register(eid, ())
+        try:
+            batch = await self.batch(eid, batch_id)
+            if batch.status not in ("failed", "processing"):
+                raise DataRejected("INVALID_VALUE", f"批次 {batch_id} {BATCH_DONE[batch.status]}, 不用重新识别")
+            batch = batch.model_copy(update={"status": "processing", "error": None})
+            await self.deps.data.save_batch(eid, batch)
+            self._relabel(eid, key, (f.document_id for f in batch.files if not f.done))
+        except BaseException:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            raise
+        self._spawn(eid, key, lambda: self.process_batch(eid, batch_id))
+        return batch
+
+    async def batch(self, eid: str, batch_id: str) -> ImportBatch:
+        """一次智能导入与它的确认单 (GET /data/batches/{id}); 不存在 404. processing 时前端轮询, failed 时停止轮询并
+        给重新识别的入口."""
+        found = await self.deps.data.batch(eid, batch_id)
+        if found is None:
+            raise LookupError(f"批次 {batch_id} 不存在")
+        return found
+
+    async def edit_batch_item(
+        self, eid: str, batch_id: str, item_id: str, edit: BatchItemEdit, actor: str
+    ) -> ImportBatch:
+        """调整确认单的一项 (PUT /data/batches/{id}/items/{item_id}), 返回整张确认单.
+
+        表格项给 plan: 换方案 (记调整人), 按新方案重算行数, 解析失败与问题 (调整后不再标把握低). 文件项给
+        document_type: 改类型, 须给理由 (MISSING_FIELD); 之前已登记的文件不能改. 改了类型的文件回到识别中: 批次置
+        processing, 该文件记没做完, 由 A3 在后台按新类型重新识别与抽取 (process_batch; 写审计师的 classify 留痕, 是新的
+        作业), 抽取要素随之出现在确认单上, 做完置 ready. 给 selected: 手动勾选或取消 (记勾选人, 之后不再随问题变).
+        没有改类型时整张确认单收尾 (重复的表等问题跨项重算). 先取项目锁再读批次: 锁定 423; 忙 409 (识别中的批次由识别
+        作业持锁, 调整得到 409); 批次或该项不存在 404; 批次不在待确认 (进程退出后遗留的识别中, 识别出错, 已写入), 给的
+        字段不适用于该项 INVALID_VALUE."""
+        engagement = await self._check_unlocked(eid)
+        self.runner.acquire(eid)
+        key = self._register(eid, ())
+        try:
+            batch = await self.batch(eid, batch_id)
+            if batch.status != "ready":
+                raise DataRejected("INVALID_VALUE", f"批次 {batch_id} {BATCH_NOT_READY[batch.status]}")
+            item = next((i for i in batch.items if i.id == item_id), None)
+            if item is None:
+                raise LookupError(f"批次 {batch_id} 没有 {item_id}")
+            item, restage = await self._edited(eid, engagement, item, edit, actor)
+            items = [item if i.id == item_id else i for i in batch.items]
+            if restage:
+                files = [
+                    f.model_copy(update={"done": False}) if f.document_id == item.document_id else f
+                    for f in batch.files
+                ]
+                batch = batch.model_copy(update={"status": "processing", "items": items, "files": files})
+            else:
+                batch = batch.model_copy(update={"items": finalize(items)})
+            await self.deps.data.save_batch(eid, batch)
+        except BaseException:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+            raise
+        if restage:
+            self._relabel(eid, key, {item.document_id})
+            self._spawn(eid, key, lambda: self.process_batch(eid, batch_id))
+        else:
+            self._unregister(eid, key)
+            self.runner.release(eid)
+        return batch
+
+    async def _edited(
+        self, eid: str, engagement: Engagement, item: BatchItem, edit: BatchItemEdit, actor: str
+    ) -> tuple[BatchItem, bool]:
+        """按 edit 改好的一项 (见 edit_batch_item), 与是否要按新类型重新识别."""
+        restage = False
+        if edit.plan is not None:
+            if item.item_kind != "table":
+                raise DataRejected("INVALID_VALUE", f"{item.id} 是文件, 没有规整方案")
+            intake = BatchIntake(self.deps)
+            ctx = await intake.context(eid, engagement)
+            item = await intake.reevaluate(eid, item.model_copy(update={"plan": edit.plan, "adjusted_by": actor}), ctx)
+        if edit.document_type is not None and edit.document_type is not item.document_type:
+            if item.item_kind != "document":
+                raise DataRejected("INVALID_VALUE", f"{item.id} 是工作表, 不能改文件类型")
+            if any(i.code == "already_registered" for i in item.issues):
+                raise DataRejected("INVALID_VALUE", f"{item.file_name} 之前已登记, 在文件列表里改类型")
+            reason = (edit.reason or "").strip()
+            if not reason:
+                raise DataRejected("MISSING_FIELD", "须填写改文件类型的理由")
+            # 新类型的识别结果由 process_batch 填回; 在那之前确认单上显示新类型, 没有抽取要素
+            item = item.model_copy(
+                update={
+                    "document_type": edit.document_type,
+                    "type_reason": reason,
+                    "adjusted_by": actor,
+                    "job": None,
+                    "contract": None,
+                    "reply": None,
+                    "issues": [],
+                }
+            )
+            restage = True
+        if edit.selected is not None:
+            item = item.model_copy(update={"selected": edit.selected, "chosen_by": actor})
+        return item, restage
+
+    async def confirm_batch(self, eid: str, batch_id: str, actor: str) -> ImportBatch:
+        """确认导入 (POST /data/batches/{id}/confirm): 一次写入所勾选的全部, 返回写入后的批次 (committed).
+
+        持项目锁做 (holding, 取锁后作业登记为勾选的表). 勾选的表按方案重新套用全表; 文件按确认单换算成要写的登记与
+        抽取结果 (写入表的原件为类型 other 置 extracted, 同账表导入; 文件项按 DocumentIntake.staged_change, 合同与回函
+        用确认单上的抽取要素, 不再调大模型; 这批里一项都没勾的暂存文件转为未导入, 批次的 files 里记 not_imported);
+        再由 DataStore.commit_batch 在一个事务里写表 (有表时一个新数据版本, 每张表一个版本行, 出处取各自的文件, 补交
+        请求为账表请求且同表时记上), 改文件登记, 写合同与回函, 置批次 committed: 全部写成或全不写. 事务提交之后写各表
+        的版本留痕与未导入文件的留痕 (写失败只记日志, 下次取项目锁时补写, 见 backfill_trails), 再体检一次 (没有表也
+        体检). 批次 ID 是幂等键: 已写入的批次再确认 (如上次提交后进程退出) 不再写, 补做过期的体检后返回原结果. 已不是
+        暂存的文件 (之前已登记, 或之后经 "上传文件" 重传处理了) 不改. 先取项目锁再读批次, 按顺序拒绝: 锁定 423; 忙
+        409 (识别中的批次由识别作业持锁, 确认得到 409); 批次不存在 404; 不在待确认 (进程退出后遗留的识别中, 识别出错)
+        INVALID_VALUE; 勾选了不是账表的项, 同一张表勾了两项 INVALID_VALUE; 勾选的文件没有类型 MISSING_FIELD; 方案套
+        不上 INVALID_VALUE 或 MISSING_FIELD; 解析失败 IMPORT_PARSE_ERROR (detail.errors 为前 20 处)."""
+        async with self.holding(eid, ()) as key:  # 进入时补写以前没写成的 data 留痕
+            batch = await self.batch(eid, batch_id)
+            if batch.status == "committed":
+                await self.checkup_if_stale(eid)  # 上次提交后的体检失败或没做时补做
+                return batch
+            if batch.status != "ready":
+                raise DataRejected("INVALID_VALUE", f"批次 {batch_id} {BATCH_NOT_READY[batch.status]}")
+            selected = [i for i in batch.items if i.selected]
+            sheets = [i for i in selected if i.item_kind == "table"]
+            documents = [i for i in selected if i.item_kind == "document"]
+            not_tables = [i.id for i in sheets if i.plan is None or i.plan.kind is None]
+            if not_tables:
+                raise DataRejected("INVALID_VALUE", f"勾选的工作表不是账表: {', '.join(not_tables)}")
+            chosen = [i.plan.kind for i in sheets if i.plan is not None and i.plan.kind is not None]
+            doubled = sorted({k.value for k in chosen if chosen.count(k) > 1})
+            if doubled:
+                raise DataRejected("INVALID_VALUE", f"同一张表勾了两项: {', '.join(doubled)}")
+            untyped = [i.file_name for i in documents if i.document_type is None]
+            if untyped:
+                raise DataRejected("MISSING_FIELD", f"须指定文件类型: {', '.join(untyped)}")
+            self._relabel(eid, key, (k.value for k in chosen))  # 概览: 这些表转换中
+            tables, origins = await self._batch_tables(eid, batch, sheets)
+            changes = await self._batch_documents(eid, batch, sheets, documents)
+            dropped = {c.document_id for c in changes if c.status == "not_imported"}
+            files = [f.model_copy(update={"not_imported": f.document_id in dropped}) for f in batch.files]
+            committed = batch.model_copy(
+                update={"status": "committed", "committed_at": datetime.now(UTC), "committed_by": actor, "files": files}
+            )
+            stored = await self.deps.data.commit_batch(
+                eid, committed, tables, actor=actor, origins=origins, documents=changes
+            )
+            entries: list[TrailEntry] = []
+            if stored.data_version is not None and tables:
+                written = written_versions(tables, stored.data_version, "import", actor, origins, TableOrigin())
+                entries = [version_entry(eid, v) for v in written]
+            dropped_entry = not_imported_entry(eid, stored)
+            try:
+                await record_transitions(self.deps.trail, [*entries, *([dropped_entry] if dropped_entry else [])])
+            except Exception:  # 数据已提交: 下次取项目锁时补写 (backfill_trails)
+                logger.exception("智能导入的留痕写失败: %s %s", eid, batch_id)
+            await self.checkup(eid)
+        return stored
+
+    async def _batch_tables(
+        self, eid: str, batch: ImportBatch, sheets: Sequence[BatchItem]
+    ) -> tuple[dict[TableKind, Sequence[BaseModel]], dict[TableKind, TableOrigin]]:
+        """勾选的工作表按方案重新套用全表 (不用确认单上记的行数), 返回各表的行与出处; 科目表按名称归类.
+        方案套不上 INVALID_VALUE 或 MISSING_FIELD, 解析失败 IMPORT_PARSE_ERROR (前 20 处)."""
+        request = next((r for r in await self.deps.data.requests(eid) if r.id == batch.request_id), None)
+        intake = BatchIntake(self.deps)
+        tables: dict[TableKind, Sequence[BaseModel]] = {}
+        origins: dict[TableKind, TableOrigin] = {}
+        for item in sheets:
+            assert item.plan is not None and item.plan.kind is not None and item.sheet is not None
+            data = await intake.content(eid, item.document_id)
+            try:
+                name, rows = await asyncio.to_thread(raw_rows, item.file_name, data, item.sheet)
+                converted, failures = await asyncio.to_thread(apply_plan, item.plan, name, rows)
+            except UnreadableFile as exc:
+                raise DataRejected("INVALID_VALUE", str(exc)) from exc
+            except MappingError as exc:
+                raise DataRejected(exc.code, f"{item.file_name} {item.sheet}: {exc.message}") from exc
+            if failures:
+                raise DataRejected(
+                    "IMPORT_PARSE_ERROR",
+                    f"{item.file_name} {item.sheet}: {len(failures)} 处解析失败",
+                    errors=[f.model_dump() for f in failures[:MAX_FAILURES]],
+                )
+            kind = item.plan.kind
+            if kind is TableKind.accounts:
+                converted = [with_category(r) if isinstance(r, Account) else r for r in converted]
+            tables[kind] = converted
+            for_request = request is not None and request.table_kind is kind
+            origins[kind] = TableOrigin(
+                file_name=item.file_name,
+                document_id=item.document_id,
+                request_id=batch.request_id if for_request else None,
+            )
+        return tables, origins
+
+    async def _batch_documents(
+        self, eid: str, batch: ImportBatch, sheets: Sequence[BatchItem], documents: Sequence[BatchItem]
+    ) -> list[DocumentChange]:
+        """按确认单换算各文件要写的登记与抽取结果 (只读): 写入表的原件为类型 other, 内部副本, 置 extracted (同账表
+        导入); 勾选的文件项按确认单上的结果 (DocumentIntake.staged_change); 这批里一项都没勾的暂存文件转为未导入
+        (not_imported, 类型 other; 同一文件还在别的没写入的批次里时不动, 留给那一批). 已不是暂存的文件 (之前已登记,
+        或之后经 "上传文件" 重传处理了) 不改. 同一批里两份文件抽出同一编号的合同时, 后一份接在前一份之后 (版本 +1)."""
+        current = {d.id: d for d in await self.deps.financial_store.documents(eid)}
+        changes = [
+            DocumentChange(
+                document_id=document_id,
+                type=DocumentType.other,
+                reliability=Reliability.internal_copy,
+                status="extracted",
+            )
+            for document_id in dict.fromkeys(i.document_id for i in sheets)
+            if current[document_id].status == "staged"
+        ]
+        intake = DocumentIntake(self.deps)
+        written: dict[str, int] = {}  # 本批已排定的合同编号 → 版本
+        for item in documents:
+            document = current[item.document_id]
+            if document.status != "staged" or item.document_type is None:
+                continue
+            change = await intake.staged_change(eid, document, staged_of(item))
+            if change.contracts:
+                last = change.contracts[-1]
+                if last.id in written:
+                    last = last.model_copy(update={"version": written[last.id] + 1})
+                    change = change.model_copy(update={"contracts": [last]})
+                written[last.id] = last.version
+            changes.append(change)
+        chosen = {i.document_id for i in [*sheets, *documents]}
+        elsewhere = {
+            f.document_id
+            for b in await self.deps.data.batches(eid)
+            if b.status != "committed" and b.id != batch.id
+            for f in b.files
+        }
+        changes += [
+            DocumentChange(
+                document_id=f.document_id,
+                type=DocumentType.other,
+                reliability=Reliability.internal_copy,
+                status="not_imported",
+            )
+            for f in batch.files
+            if f.document_id not in chosen | elsewhere and current[f.document_id].status == "staged"
+        ]
+        return changes
+
     def processing(self, eid: str) -> list[frozenset[str]]:
         """该项目进行中的作业, 各作业涉及的账表种类或文件 ID."""
         return list(self.jobs.get(eid, {}).values())
@@ -802,8 +1239,10 @@ class DataService:
                 await record_transitions(self.deps.trail, [upload_entry(eid, document, request_id, actor)])
             jobs, wanted = await self._resume_info(eid, documents)
             for document in documents:
-                pending = unfinished(document) or any(
-                    r is not None and retype(document, r) for r in (requested, wanted.get(document.id))
+                pending = (
+                    unfinished(document)
+                    or document.status in HELD  # 批次里暂存或未导入的同一文件经这里重传: 照新上传处理
+                    or any(r is not None and retype(document, r) for r in (requested, wanted.get(document.id)))
                 )
                 if pending and all(d.id != document.id for d in fresh):
                     fresh.append(document)
@@ -844,6 +1283,19 @@ class DataService:
             await self.checkup(eid)
 
         return process
+
+    def _resumed(
+        self, eid: str, intake: Callable[[], Awaitable[None]] | None, batch_ids: Sequence[str]
+    ) -> Callable[[], Awaitable[None]]:
+        """启动补做的作业: 先补做文件处理 (intake, 没有为空), 再接着识别停在 processing 的批次."""
+
+        async def job() -> None:
+            if intake is not None:
+                await intake()
+            for batch_id in batch_ids:
+                await self.process_batch(eid, batch_id)
+
+        return job
 
     async def _requested(self, eid: str, request_id: str | None) -> Requested | None:
         """上传带的 request_id 是待补交的文件请求时, 返回它的 ID 与文件类型; 不是 (没给, 不存在, 已收到, 是账表请求)
@@ -900,8 +1352,9 @@ class DataService:
         """应用启动时 (runner.recover 之前) 补做各项目没做完的文件处理 (见 ingest.unfinished: 只含审计师上传的文件;
         上次作业被取消或进程退出时留下; 另含按请求定类型没落到登记上的, 见 _resume_info), 处理前补写缺的上传留痕
         (upload_entry), 按请求定类型, 做完体检; 没有要补做的文件时, 体检结果已不对应当前数据的补做体检 (上次体检
-        失败). 项目已锁定的跳过; 项目锁正被占用的这次跳过, 等下次上传或指定类型时补做.
-        补做的文件处理在后台进行, 做完后锁交给 runner.proceed, 按 recover 规则带动图继续 (需求 R272: 图在等程序要的
+        失败). 停在识别中 (processing) 的智能导入批次接着识别 (process_batch; 有要补做的文件时在同一个作业里, 排在
+        其后). 项目已锁定的跳过; 项目锁正被占用的这次跳过, 等下次上传或指定类型时补做.
+        补做的作业在后台进行, 做完后锁交给 runner.proceed, 按 recover 规则带动图继续 (需求 R272: 图在等程序要的
         数据时, 文件处理完才重查); 返回这些项目的编号, 由调用方交给 runner.recover(skip=...), 同一项目不重复拉起.
         一个项目出错只记日志, 不影响其他项目 (不在返回值中, 由 runner.recover 照常处理)."""
         taken: set[str] = set()
@@ -922,13 +1375,19 @@ class DataService:
                     self.runner.release(eid)
                     raise
                 documents = [d for d in uploads if unfinished(d) or (d.id in decided and retype(d, decided[d.id]))]
-                if not documents:
+                try:
+                    batches = [b for b in await self.deps.data.batches(eid) if b.status == "processing"]
+                except BaseException:
+                    self.runner.release(eid)
+                    raise
+                if not documents and not batches:
                     try:
                         await self.checkup_if_stale(eid)
                     finally:
                         self.runner.release(eid)
                     continue
-                key = self._register(eid, (d.id for d in documents))
+                labels = {d.id for d in documents} | {f.document_id for b in batches for f in b.files}
+                key = self._register(eid, labels)
                 try:
                     await record_transitions(self.deps.trail, [upload_entry(eid, d) for d in documents])
                     jobs, requested = await self._resume_info(eid, documents)
@@ -936,7 +1395,8 @@ class DataService:
                     self._unregister(eid, key)
                     self.runner.release(eid)
                     raise
-                self._spawn(eid, key, self._intake(eid, engagement, documents, jobs, requested), self.runner.proceed)
+                intake = self._intake(eid, engagement, documents, jobs, requested) if documents else None
+                self._spawn(eid, key, self._resumed(eid, intake, [b.id for b in batches]), self.runner.proceed)
                 taken.add(eid)
             except Exception:
                 logger.exception("补做文件处理失败: %s", eid)
@@ -948,12 +1408,17 @@ class DataService:
         """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性, 置 classified, 写 data 留痕 (action classify,
         actor 为审计师, 带理由), 返回改后的登记; 合同与回函随即由 A3 在后台抽取 (同上传后的处理), 是一次新的作业
         (作业号为这条留痕的 ID): 合同重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空 MISSING_FIELD;
-        文件不存在 404; 锁定 423; 忙 409."""
+        文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时没勾选而未导入 (要导入就重新
+        上传) INVALID_VALUE; 锁定 423; 忙 409."""
         if not reason.strip():
             raise DataRejected("MISSING_FIELD", "须填写指定类型的理由")
         document = next((d for d in await self.deps.financial_store.documents(eid) if d.id == document_id), None)
         if document is None:
             raise LookupError(f"文件 {document_id} 不存在")
+        if document.status == "staged":
+            raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 还在导入确认单里, 在确认单上改类型")
+        if document.status == "not_imported":
+            raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 没有导入, 需要时重新上传")
         engagement = await self._check_unlocked(eid)
         self.runner.acquire(eid)
         key = self._register(eid, {document_id})

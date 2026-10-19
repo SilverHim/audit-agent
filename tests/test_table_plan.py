@@ -535,7 +535,8 @@ def test_malformed_plans_are_rejected(value: dict[str, Any]) -> None:
 
 
 def test_plan_samples_parse() -> None:
-    """方案样例 (DOC-SHEET 的固定输出) 都合识别结果的模型, 4 份 Xero 导出与 Numbat 的 7 张表各一份."""
+    """方案样例 (DOC-SHEET 的固定输出) 都合识别结果的模型: 5 份 Xero 导出 (含期间不符一例用的 11-30 试算表) 与 Numbat
+    的 7 张表各一份."""
     assert sorted(p.stem for p in PLANS.glob("*.json")) == [
         "accounts",
         "bank_accounts",
@@ -548,5 +549,6 @@ def test_plan_samples_parse() -> None:
         "sales_invoices",
         "trial_balance",
         "trial_balance_2026-06-30",
+        "trial_balance_2026-11-30",
     ]
     assert all(isinstance(plan_of(p.stem), TablePlan) for p in PLANS.glob("*.json"))

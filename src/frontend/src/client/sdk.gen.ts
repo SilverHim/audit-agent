@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -358,7 +358,8 @@ export const evidenceListContracts = <ThrowOnError extends boolean = false>(opti
  * Set Document Type
  *
  * 人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空
- * 422 MISSING_FIELD; 锁定 423; 忙 409.
+ * 422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;
+ * 忙 409.
  */
 export const evidenceSetDocumentType = <ThrowOnError extends boolean = false>(options: Options<EvidenceSetDocumentTypeData, ThrowOnError>): RequestResult<EvidenceSetDocumentTypeResponses, EvidenceSetDocumentTypeErrors, ThrowOnError> => (options.client ?? client).put<EvidenceSetDocumentTypeResponses, EvidenceSetDocumentTypeErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -493,6 +494,82 @@ export const dataCommitImport = <ThrowOnError extends boolean = false>(options: 
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+/**
+ * Start Batch
+ *
+ * 智能导入: 上传一批文件 (表格与其他文件混着), A3 在后台逐项识别, 生成确认单. 返回批次 (processing), 前端轮询
+ * GET /data/batches/{batch_id} 直到 ready. 补交卡片上的上传带 request_id. 确认前不写任何财务表, 文件暂存
+ * (status staged) 不被程序使用. 类型不支持 422 INVALID_VALUE; 单个超过 50 MB 413 FILE_TOO_LARGE; 锁定 423;
+ * 忙 409.
+ */
+export const dataStartBatch = <ThrowOnError extends boolean = false>(options: Options<DataStartBatchData, ThrowOnError>): RequestResult<DataStartBatchResponses, DataStartBatchErrors, ThrowOnError> => (options.client ?? client).post<DataStartBatchResponses, DataStartBatchErrors, ThrowOnError>({
+    ...formDataBodySerializer,
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/batches',
+    ...options,
+    headers: {
+        'Content-Type': null,
+        ...options.headers
+    }
+});
+
+/**
+ * Get Batch
+ *
+ * 批次与确认单: 每项的文件名与工作表, 识别为什么, 将写入的行数, 读到的公司与期间, 把握, 问题 (issues, 标红)
+ * 与是否勾选. processing 时前端轮询; failed 时 error 为原因, 停止轮询, 可重新识别. 不存在 404.
+ */
+export const dataGetBatch = <ThrowOnError extends boolean = false>(options: Options<DataGetBatchData, ThrowOnError>): RequestResult<DataGetBatchResponses, DataGetBatchErrors, ThrowOnError> => (options.client ?? client).get<DataGetBatchResponses, DataGetBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}',
+    ...options
+});
+
+/**
+ * Edit Batch Item
+ *
+ * 调整确认单的一项 (换规整方案, 改文件类型并写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
+ * processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁);
+ * 批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE; 改类型没写理由 422 MISSING_FIELD.
+ */
+export const dataEditBatchItem = <ThrowOnError extends boolean = false>(options: Options<DataEditBatchItemData, ThrowOnError>): RequestResult<DataEditBatchItemResponses, DataEditBatchItemErrors, ThrowOnError> => (options.client ?? client).put<DataEditBatchItemResponses, DataEditBatchItemErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/items/{item_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Retry Batch
+ *
+ * 重新识别: 识别作业出错 (failed) 或进程退出后停在识别中的批次, 由 A3 在后台从没做完的文件接着做; 返回置回
+ * processing 的批次, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 待确认或已写入
+ * 422 INVALID_VALUE.
+ */
+export const dataRetryBatch = <ThrowOnError extends boolean = false>(options: Options<DataRetryBatchData, ThrowOnError>): RequestResult<DataRetryBatchResponses, DataRetryBatchErrors, ThrowOnError> => (options.client ?? client).post<DataRetryBatchResponses, DataRetryBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/retry',
+    ...options
+});
+
+/**
+ * Confirm Batch
+ *
+ * 确认导入: 一个事务里写入所勾选的全部 (账表一个新数据版本, 文件按确认的类型登记, 合同与回函的抽取结果, 批次
+ * 置 committed; 没勾选的文件转为未导入, files 里记 not_imported), 之后写留痕并体检一次; 返回写入后的批次
+ * (committed, 再确认返回原结果). 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 不在待确认, 勾选
+ * 了不是账表的项或同一张表两项 422 INVALID_VALUE; 勾选的文件没有类型 422 MISSING_FIELD; 方案套不上 422
+ * INVALID_VALUE 或 MISSING_FIELD; 解析失败 422 IMPORT_PARSE_ERROR (detail.errors 为前 20 处).
+ */
+export const dataConfirmBatch = <ThrowOnError extends boolean = false>(options: Options<DataConfirmBatchData, ThrowOnError>): RequestResult<DataConfirmBatchResponses, DataConfirmBatchErrors, ThrowOnError> => (options.client ?? client).post<DataConfirmBatchResponses, DataConfirmBatchErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/confirm',
+    ...options
 });
 
 /**

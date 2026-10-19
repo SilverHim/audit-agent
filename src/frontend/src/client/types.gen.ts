@@ -260,6 +260,149 @@ export type AuditReportVersion = {
 export type AutonomyLevel = 'L1' | 'L2' | 'L3' | 'L4';
 
 /**
+ * BatchFile
+ *
+ * 批次里的一个文件: 上传时登记为暂存的证据文件 (status staged), A3 处理完一个文件记 done (重启后接着做).
+ */
+export type BatchFile = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Document Id
+     */
+    document_id: string;
+    /**
+     * Done
+     */
+    done?: boolean;
+    /**
+     * Not Imported
+     */
+    not_imported?: boolean;
+};
+
+/**
+ * BatchIssue
+ *
+ * 确认单一项的一个问题.
+ */
+export type BatchIssue = {
+    code: BatchIssueCode;
+    /**
+     * Params
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * BatchIssueCode
+ *
+ * 确认单一项的问题 (标红; 有任一项时缺省不勾). 前端按编号本地化文案, params 的键见各项注释.
+ */
+export type BatchIssueCode = 'low_confidence' | 'not_a_table' | 'plan_invalid' | 'parse_failed' | 'company_mismatch' | 'period_mismatch' | 'duplicate_table' | 'replaces_data' | 'unclassified' | 'extraction_failed' | 'already_registered';
+
+/**
+ * BatchItem
+ *
+ * 确认单的一项: 表格文件的一个工作表, 或一份非表格文件 (含没有一个工作表是账表的表格文件).
+ */
+export type BatchItem = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Document Id
+     */
+    document_id: string;
+    /**
+     * Item Kind
+     */
+    item_kind: 'table' | 'document';
+    /**
+     * Sheet
+     */
+    sheet?: string | null;
+    reading?: SheetReading | null;
+    plan?: TablePlan | null;
+    /**
+     * Records
+     */
+    records?: number | null;
+    /**
+     * Failure Count
+     */
+    failure_count?: number;
+    /**
+     * Failures
+     */
+    failures?: Array<ParseFailure>;
+    /**
+     * Existing Records
+     */
+    existing_records?: number | null;
+    document_type?: DocumentType | null;
+    /**
+     * Type Reason
+     */
+    type_reason?: string | null;
+    /**
+     * Job
+     */
+    job?: string | null;
+    contract?: Contract | null;
+    /**
+     * Reply
+     */
+    reply?: {
+        [key: string]: unknown;
+    } | null;
+    /**
+     * Issues
+     */
+    issues?: Array<BatchIssue>;
+    /**
+     * Selected
+     */
+    selected?: boolean;
+    /**
+     * Chosen By
+     */
+    chosen_by?: string | null;
+    /**
+     * Adjusted By
+     */
+    adjusted_by?: string | null;
+};
+
+/**
+ * BatchItemEdit
+ *
+ * 调整确认单的一项: 只给要改的. 改了方案或类型时按新结果重新判断问题; 同时给了 selected 的以它为准, 没给的
+ * 按有没有问题重定勾选.
+ */
+export type BatchItemEdit = {
+    /**
+     * Selected
+     */
+    selected?: boolean | null;
+    plan?: TablePlan | null;
+    document_type?: DocumentType | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
  * Body_auth-login
  */
 export type BodyAuthLogin = {
@@ -287,6 +430,22 @@ export type BodyAuthLogin = {
      * Client Secret
      */
     client_secret?: string | null;
+};
+
+/**
+ * Body_data-start_batch
+ */
+export type BodyDataStartBatch = {
+    /**
+     * Files
+     *
+     * 一批文件: CSV, XLSX, XLS, PDF, DOCX, PNG, JPG 等, 单个不超过 50 MB
+     */
+    files: Array<Blob | File>;
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
 };
 
 /**
@@ -1257,7 +1416,7 @@ export type DocumentRef = {
     /**
      * Status
      */
-    status: 'received' | 'classified' | 'extracted' | 'needs_manual';
+    status: 'received' | 'classified' | 'extracted' | 'needs_manual' | 'staged' | 'not_imported';
     /**
      * Uploaded At
      */
@@ -1596,6 +1755,41 @@ export type Fees = {
 };
 
 /**
+ * FieldSource
+ *
+ * 一个字段的取值, 三选一: 一列 (column); 借贷两列之差 (debit 减 credit, 两列都空为 0, 只用于金额字段); 分组标题的
+ * 命名捕获组 (group).
+ */
+export type FieldSource = {
+    /**
+     * Column
+     */
+    column?: string | null;
+    /**
+     * Debit
+     */
+    debit?: string | null;
+    /**
+     * Credit
+     */
+    credit?: string | null;
+    /**
+     * Group
+     */
+    group?: string | null;
+    /**
+     * Part
+     */
+    part?: 'positive' | 'negative' | null;
+    /**
+     * Values
+     */
+    values?: {
+        [key: string]: string;
+    };
+};
+
+/**
  * GateDecision
  *
  * 审计师在闸门作出的决定, 附该闸门特有的内容 (重要性, 意见类型, 批注等).
@@ -1780,6 +1974,23 @@ export type GovernanceMember = {
 };
 
 /**
+ * GroupTitle
+ *
+ * 分组标题行: 只有 column 一列有值, 且其文本匹配 pattern 的行. pattern 的命名捕获组是标题里的值, 向下填充到之后的
+ * 数据行, 直到下一个分组标题 (没匹配上的可选组为空); 字段经 FieldSource.group 取用. 标题行本身不出行.
+ */
+export type GroupTitle = {
+    /**
+     * Column
+     */
+    column: string;
+    /**
+     * Pattern
+     */
+    pattern: string;
+};
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -1799,6 +2010,58 @@ export type IdBody = {
      * Id
      */
     id: string;
+};
+
+/**
+ * ImportBatch
+ *
+ * 一次智能导入 (表 import_batches): 上传的文件, A3 识别出的确认单与写入结果.
+ */
+export type ImportBatch = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Status
+     */
+    status: 'processing' | 'ready' | 'failed' | 'committed';
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
+    /**
+     * Created By
+     */
+    created_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Files
+     */
+    files: Array<BatchFile>;
+    /**
+     * Items
+     */
+    items?: Array<BatchItem>;
+    /**
+     * Committed At
+     */
+    committed_at?: string | null;
+    /**
+     * Committed By
+     */
+    committed_by?: string | null;
+    /**
+     * Data Version
+     */
+    data_version?: number | null;
+    /**
+     * Error
+     */
+    error?: string | null;
 };
 
 /**
@@ -2376,6 +2639,39 @@ export type NotExecuted = {
  * 审计意见类型.
  */
 export type OpinionType = 'unqualified' | 'qualified' | 'adverse' | 'disclaimer';
+
+/**
+ * ParseFailure
+ *
+ * 一处解析失败; IMPORT_PARSE_ERROR 附带前 20 处.
+ */
+export type ParseFailure = {
+    /**
+     * Row
+     */
+    row: number;
+    /**
+     * Column
+     */
+    column: string;
+    /**
+     * Value
+     */
+    value: string;
+};
+
+/**
+ * PeriodSource
+ *
+ * 试算表的一期: 本期与上期分列的报表, 每个数据行出一行该期的余额.
+ */
+export type PeriodSource = {
+    /**
+     * Period
+     */
+    period: 'current' | 'prior';
+    balance: FieldSource;
+};
 
 /**
  * Phase
@@ -3050,6 +3346,23 @@ export type RiskItem = {
 export type RiskLevel = 'low' | 'medium' | 'high' | 'significant';
 
 /**
+ * RowRule
+ *
+ * 按一列的文本认出一类行: 该列单元格的文本 (去首尾空白; 数值, 日期按导入的写法转成文本) 中有匹配 pattern 的部分
+ * (re.search, 要整格匹配就写 ^ 与 $).
+ */
+export type RowRule = {
+    /**
+     * Column
+     */
+    column: string;
+    /**
+     * Pattern
+     */
+    pattern: string;
+};
+
+/**
  * RunStatus
  *
  * 一次执行的状态.
@@ -3085,6 +3398,54 @@ export type ServiceOrganisation = {
      * Report Ref
      */
     report_ref?: string | null;
+};
+
+/**
+ * SheetReading
+ *
+ * A3 对上传的一个工作表的识别结果 (需求 R276): 大模型按开头的样本行给出 (DOC-SHEET), 大模型不可用时按列名匹配.
+ *
+ * 方案由 services/table_plan.apply_plan 套到全表; 识别只看样本行, 不出数据行. 公司名与期间是表头里读到的, 与项目
+ * 是否相符由确认单判断 (R277).
+ */
+export type SheetReading = {
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Sheet
+     */
+    sheet: string;
+    plan: TablePlan;
+    /**
+     * Company
+     */
+    company?: string | null;
+    /**
+     * Period Start
+     */
+    period_start?: string | null;
+    /**
+     * Period End
+     */
+    period_end?: string | null;
+    /**
+     * Confidence
+     */
+    confidence: 'high' | 'low';
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Method
+     */
+    method: 'llm' | 'column_names';
+    /**
+     * Trail Ids
+     */
+    trail_ids?: Array<string>;
 };
 
 /**
@@ -3200,6 +3561,49 @@ export type TablePage = {
     rows: Array<{
         [key: string]: unknown;
     }>;
+};
+
+/**
+ * TablePlan
+ *
+ * 规整方案: 表种类, 表头行, 要跳过的行, 分组标题, 字段与取值, 试算表分期, 去重, 日期写法与金额单位.
+ *
+ * 方案只说怎么读, 不含数据行; 由 services/table_plan.apply_plan 确定性地套到全表. 账表导入的按列对应
+ * (ImportCommit.mapping) 是只有列来源的方案. 读到的公司名, 期间, 把握与理由不在方案里.
+ */
+export type TablePlan = {
+    kind: TableKind | null;
+    /**
+     * Header Row
+     */
+    header_row?: number;
+    /**
+     * Skip
+     */
+    skip?: Array<RowRule>;
+    group_title?: GroupTitle | null;
+    /**
+     * Fields
+     */
+    fields?: {
+        [key: string]: FieldSource;
+    };
+    /**
+     * Periods
+     */
+    periods?: Array<PeriodSource>;
+    /**
+     * Dedupe
+     */
+    dedupe?: boolean;
+    /**
+     * Date Format
+     */
+    date_format?: 'dmy' | 'ymd' | 'mdy';
+    /**
+     * Amount Unit
+     */
+    amount_unit?: 'dollars' | 'cents' | null;
 };
 
 /**
@@ -4680,6 +5084,176 @@ export type DataCommitImportResponses = {
 };
 
 export type DataCommitImportResponse = DataCommitImportResponses[keyof DataCommitImportResponses];
+
+export type DataStartBatchData = {
+    body: BodyDataStartBatch;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches';
+};
+
+export type DataStartBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataStartBatchError = DataStartBatchErrors[keyof DataStartBatchErrors];
+
+export type DataStartBatchResponses = {
+    /**
+     * Successful Response
+     */
+    202: ImportBatch;
+};
+
+export type DataStartBatchResponse = DataStartBatchResponses[keyof DataStartBatchResponses];
+
+export type DataGetBatchData = {
+    body?: never;
+    path: {
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}';
+};
+
+export type DataGetBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataGetBatchError = DataGetBatchErrors[keyof DataGetBatchErrors];
+
+export type DataGetBatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImportBatch;
+};
+
+export type DataGetBatchResponse = DataGetBatchResponses[keyof DataGetBatchResponses];
+
+export type DataEditBatchItemData = {
+    body: BatchItemEdit;
+    path: {
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+        /**
+         * Item Id
+         */
+        item_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/items/{item_id}';
+};
+
+export type DataEditBatchItemErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataEditBatchItemError = DataEditBatchItemErrors[keyof DataEditBatchItemErrors];
+
+export type DataEditBatchItemResponses = {
+    /**
+     * Successful Response
+     */
+    200: ImportBatch;
+};
+
+export type DataEditBatchItemResponse = DataEditBatchItemResponses[keyof DataEditBatchItemResponses];
+
+export type DataRetryBatchData = {
+    body?: never;
+    path: {
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/retry';
+};
+
+export type DataRetryBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataRetryBatchError = DataRetryBatchErrors[keyof DataRetryBatchErrors];
+
+export type DataRetryBatchResponses = {
+    /**
+     * Successful Response
+     */
+    202: ImportBatch;
+};
+
+export type DataRetryBatchResponse = DataRetryBatchResponses[keyof DataRetryBatchResponses];
+
+export type DataConfirmBatchData = {
+    body?: never;
+    path: {
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/data/batches/{batch_id}/confirm';
+};
+
+export type DataConfirmBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DataConfirmBatchError = DataConfirmBatchErrors[keyof DataConfirmBatchErrors];
+
+export type DataConfirmBatchResponses = {
+    /**
+     * Successful Response
+     */
+    202: ImportBatch;
+};
+
+export type DataConfirmBatchResponse = DataConfirmBatchResponses[keyof DataConfirmBatchResponses];
 
 export type DataSummaryData = {
     body?: never;

@@ -74,6 +74,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
             "xero_connections": {"tenant_id", "tenant_name", "last_synced_at"},
+            "import_batches": {"request_id", "committed_at", "committed_by", "data_version", "error"},
             "llm_settings": {"api_key_encrypted", "key_last4"},
             "audit_trail": {
                 "procedure_id",
@@ -196,6 +197,13 @@ xero_connections = table(
     "tenants:j tenant_id:s tenant_name:s scope:s status:s connected_by:s connected_at:t refreshed_at:t "
     "last_synced_at:t synced_tables:j tokens_encrypted:s",
     (),
+)
+# 智能导入的批次 (需求 R277, 迁移 0010): 上传的文件, A3 识别出的确认单 (items) 与写入结果; 整批按 ID 覆盖
+import_batches = table(
+    "import_batches",
+    "id:s status:s request_id:s created_by:s created_at:t files:j items:j committed_at:t committed_by:s data_version:i "
+    "error:s",
+    ("id",),
 )
 OUTPUT_KINDS = {
     "audit_objectives": ["AuditObjective"],

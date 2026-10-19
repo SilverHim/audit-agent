@@ -85,12 +85,14 @@ CONTENT_TOOLS = {"list_open_items", "list_judgments", "get_judgment", "get_proce
 # 只能登记返回文件 (非 JSON) 或不属于项目的接口 (test_skipped_routes_are_files_or_outside_engagements)
 SKIPPED_ROUTES = {"/api/v1/engagements/{eid}/evidence/{document_id}", "/api/v1/settings/llm"}
 # 调了而不是 200 的接口 (场景决定): 图停在 await_events, 不在闸门, gate 为 404 NOT_AT_GATE; 没配 Xero 应用, connect 为
-# 503 XERO_NOT_CONFIGURED; 没连接 Xero, tenants 为 409 XERO_NOT_CONNECTED; 授权回调不带 state, 302 回前端 (需求 R279)
+# 503 XERO_NOT_CONFIGURED; 没连接 Xero, tenants 为 409 XERO_NOT_CONNECTED; 授权回调不带 state, 302 回前端 (需求 R279);
+# 场景里没有智能导入的批次, 批次为 404 (需求 R277)
 NOT_OK_ROUTES = {
     "/api/v1/engagements/{eid}/gate": 404,
     "/api/v1/engagements/{eid}/data/xero/connect": 503,
     "/api/v1/engagements/{eid}/data/xero/tenants": 409,
     "/api/v1/integrations/xero/callback": 302,
+    "/api/v1/engagements/{eid}/data/batches/{batch_id}": 404,
 }
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "list_judgments": {"procedure_id": "REV-02"},
@@ -204,6 +206,7 @@ async def get_paths(s: Started) -> dict[str, str]:
         "kind": TableKind.journal_entries.value,
         "code": NUMBAT_TRIAL_BALANCE[0].account_code,
         "contract_id": numbat_contracts()[0].id,  # 合同 ID (CON-001), 不是合同文件的登记 ID
+        "batch_id": "BAT-none",  # 智能导入的批次 (确认单不含判断与留痕)
     }
     paths = {}
     for template, operations in create_app().openapi()["paths"].items():

@@ -799,10 +799,16 @@ def test_manifest_layout() -> None:
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
     paths = [f["path"] for f in manifest["files"]]  # type: ignore[index]
     # llm/ 是大模型 fixture 的运行副本 (R78): 各程序段加 fixture 后随之变, 只与正本推出的集合比 (集合包含口径)
+    # 另有上传处理的固定输出中复制进来的账表识别 (DOC-SHEET, 按上传的文件名取, 与数据集无关)
     llm = [p for p in paths if p.startswith("llm/")]
     fixtures = REPO / "tests" / "fixtures" / "llm_xero"
+    uploads = REPO / "tests" / "fixtures" / "llm_variants" / "upload"
     assert llm == sorted(
-        ["llm/README.md", *(f"llm/{p.relative_to(fixtures).as_posix()}" for p in fixtures.glob("*/*.json"))]
+        [
+            "llm/README.md",
+            *(f"llm/{p.relative_to(fixtures).as_posix()}" for p in fixtures.glob("*/*.json")),
+            *(f"llm/{p.relative_to(uploads).as_posix()}" for p in uploads.glob("DOC-SHEET/*.json")),
+        ]
     )
     assert [p for p in paths if not p.startswith("llm/")] == [
         "README.md",  # 生成方式与合同底稿的署名, 许可 (R286)
@@ -3442,13 +3448,21 @@ def test_snapshot_is_the_mock(tmp_path: Path) -> None:
 def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> None:
     """R78: 运行副本 llm/ 先清空再原样复制正本的 <程序>/<对象>.json, 另写 README; 正本删掉的文件不留副本; 正本根目录,
     程序目录或文件是符号链接时拒绝, 且在清空之前拒绝 (llm/ 保持原样); 正本不存在时只写 README."""
-    source, out = tmp_path / "llm_xero", tmp_path / "out"
+    source, out, uploads = tmp_path / "llm_xero", tmp_path / "out", tmp_path / "upload"
     (source / "CSH-02").mkdir(parents=True)
     (source / "CSH-02" / "BA-01.json").write_bytes(b'{"a": 1}\n')
     (source / "notes.md").write_text("not copied", encoding="utf-8")
     (out / "llm" / "OLD").mkdir(parents=True)
     (out / "llm" / "OLD" / "stale.json").write_text("{}", encoding="utf-8")
-    generator.write_llm_fixtures(out, source)
+    for program in ("DOC-SHEET", "DOC-CLASSIFY"):  # 上传固定输出只复制 programs 列出的
+        (uploads / program).mkdir(parents=True)
+        (uploads / program / "tb.json").write_bytes(b'{"b": 2}\n')
+    generator.write_llm_fixtures(out, source, uploads)
+    copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*") if p.is_file())
+    assert copied == ["CSH-02/BA-01.json", "DOC-SHEET/tb.json", "README.md"]
+    assert (out / "llm" / "DOC-SHEET" / "tb.json").read_bytes() == b'{"b": 2}\n'
+    missing = tmp_path / "missing"
+    generator.write_llm_fixtures(out, source, missing)
     copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*") if p.is_file())
     assert copied == ["CSH-02/BA-01.json", "README.md"]
     assert (out / "llm" / "CSH-02" / "BA-01.json").read_bytes() == b'{"a": 1}\n'
@@ -3456,7 +3470,7 @@ def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> N
 
     (source / "CSH-02" / "LINK.json").symlink_to(source / "CSH-02" / "BA-01.json")
     with pytest.raises(SystemExit, match=r"CSH-02/LINK\.json"):
-        generator.write_llm_fixtures(out, source)
+        generator.write_llm_fixtures(out, source, missing)
     (source / "CSH-02" / "LINK.json").unlink()
     (source / "REV-02").symlink_to(source / "CSH-02", target_is_directory=True)  # 程序目录是符号链接
     with pytest.raises(SystemExit, match=r"REV-02/BA-01\.json"):
@@ -3468,5 +3482,5 @@ def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> N
         generator.write_llm_fixtures(out, linked)
     assert (out / "llm" / "CSH-02" / "BA-01.json").exists()  # 被拒时 llm/ 保持原样
 
-    generator.write_llm_fixtures(out, tmp_path / "missing")
+    generator.write_llm_fixtures(out, tmp_path / "missing", tmp_path / "missing")
     assert [p.name for p in (out / "llm").rglob("*") if p.is_file()] == ["README.md"]

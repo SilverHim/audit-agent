@@ -1364,7 +1364,7 @@
           "evidence"
         ],
         "summary": "Set Document Type",
-        "description": "人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空\n422 MISSING_FIELD; 锁定 423; 忙 409.",
+        "description": "人工指定文件类型, 返回改后的登记 (classified); 合同与回函随即在后台抽取. 文件不存在 404; 理由为空\n422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;\n忙 409.",
         "operationId": "evidence-set_document_type",
         "security": [
           {
@@ -1979,6 +1979,311 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/batches": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Start Batch",
+        "description": "智能导入: 上传一批文件 (表格与其他文件混着), A3 在后台逐项识别, 生成确认单. 返回批次 (processing), 前端轮询\nGET /data/batches/{batch_id} 直到 ready. 补交卡片上的上传带 request_id. 确认前不写任何财务表, 文件暂存\n(status staged) 不被程序使用. 类型不支持 422 INVALID_VALUE; 单个超过 50 MB 413 FILE_TOO_LARGE; 锁定 423;\n忙 409.",
+        "operationId": "data-start_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_data-start_batch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Get Batch",
+        "description": "批次与确认单: 每项的文件名与工作表, 识别为什么, 将写入的行数, 读到的公司与期间, 把握, 问题 (issues, 标红)\n与是否勾选. processing 时前端轮询; failed 时 error 为原因, 停止轮询, 可重新识别. 不存在 404.",
+        "operationId": "data-get_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/batches/{batch_id}/items/{item_id}": {
+      "put": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Edit Batch Item",
+        "description": "调整确认单的一项 (换规整方案, 改文件类型并写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到\nprocessing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁);\n批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE; 改类型没写理由 422 MISSING_FIELD.",
+        "operationId": "data-edit_batch_item",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchItemEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/batches/{batch_id}/retry": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Retry Batch",
+        "description": "重新识别: 识别作业出错 (failed) 或进程退出后停在识别中的批次, 由 A3 在后台从没做完的文件接着做; 返回置回\nprocessing 的批次, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 待确认或已写入\n422 INVALID_VALUE.",
+        "operationId": "data-retry_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/data/batches/{batch_id}/confirm": {
+      "post": {
+        "tags": [
+          "data"
+        ],
+        "summary": "Confirm Batch",
+        "description": "确认导入: 一个事务里写入所勾选的全部 (账表一个新数据版本, 文件按确认的类型登记, 合同与回函的抽取结果, 批次\n置 committed; 没勾选的文件转为未导入, files 里记 not_imported), 之后写留痕并体检一次; 返回写入后的批次\n(committed, 再确认返回原结果). 锁定 423; 忙 409 (识别中的批次由识别作业持锁); 批次不存在 404; 不在待确认, 勾选\n了不是账表的项或同一张表两项 422 INVALID_VALUE; 勾选的文件没有类型 422 MISSING_FIELD; 方案套不上 422\nINVALID_VALUE 或 MISSING_FIELD; 解析失败 422 IMPORT_PARSE_ERROR (detail.errors 为前 20 处).",
+        "operationId": "data-confirm_batch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Batch Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportBatch"
                 }
               }
             }
@@ -3713,6 +4018,313 @@
         "title": "AutonomyLevel",
         "description": "AI 自主度."
       },
+      "BatchFile": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done",
+            "default": false
+          },
+          "not_imported": {
+            "type": "boolean",
+            "title": "Not Imported",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "document_id"
+        ],
+        "title": "BatchFile",
+        "description": "批次里的一个文件: 上传时登记为暂存的证据文件 (status staged), A3 处理完一个文件记 done (重启后接着做)."
+      },
+      "BatchIssue": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/BatchIssueCode"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "BatchIssue",
+        "description": "确认单一项的一个问题."
+      },
+      "BatchIssueCode": {
+        "type": "string",
+        "enum": [
+          "low_confidence",
+          "not_a_table",
+          "plan_invalid",
+          "parse_failed",
+          "company_mismatch",
+          "period_mismatch",
+          "duplicate_table",
+          "replaces_data",
+          "unclassified",
+          "extraction_failed",
+          "already_registered"
+        ],
+        "title": "BatchIssueCode",
+        "description": "确认单一项的问题 (标红; 有任一项时缺省不勾). 前端按编号本地化文案, params 的键见各项注释."
+      },
+      "BatchItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "item_kind": {
+            "type": "string",
+            "enum": [
+              "table",
+              "document"
+            ],
+            "title": "Item Kind"
+          },
+          "sheet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sheet"
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SheetReading"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TablePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Records"
+          },
+          "failure_count": {
+            "type": "integer",
+            "title": "Failure Count",
+            "default": 0
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/ParseFailure"
+            },
+            "type": "array",
+            "title": "Failures",
+            "default": []
+          },
+          "existing_records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Records"
+          },
+          "document_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Reason"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job"
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Contract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reply": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/BatchIssue"
+            },
+            "type": "array",
+            "title": "Issues",
+            "default": []
+          },
+          "selected": {
+            "type": "boolean",
+            "title": "Selected",
+            "default": false
+          },
+          "chosen_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen By"
+          },
+          "adjusted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjusted By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "file_name",
+          "document_id",
+          "item_kind"
+        ],
+        "title": "BatchItem",
+        "description": "确认单的一项: 表格文件的一个工作表, 或一份非表格文件 (含没有一个工作表是账表的表格文件)."
+      },
+      "BatchItemEdit": {
+        "properties": {
+          "selected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TablePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "document_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DocumentType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BatchItemEdit",
+        "description": "调整确认单的一项: 只给要改的. 改了方案或类型时按新结果重新判断问题; 同时给了 selected 的以它为准, 没给的\n按有没有问题重定勾选."
+      },
       "Body_auth-login": {
         "properties": {
           "grant_type": {
@@ -3771,6 +4383,35 @@
           "password"
         ],
         "title": "Body_auth-login"
+      },
+      "Body_data-start_batch": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Files",
+            "description": "一批文件: CSV, XLSX, XLS, PDF, DOCX, PNG, JPG 等, 单个不超过 50 MB"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_data-start_batch"
       },
       "Body_data-start_import": {
         "properties": {
@@ -5595,7 +6236,9 @@
               "received",
               "classified",
               "extracted",
-              "needs_manual"
+              "needs_manual",
+              "staged",
+              "not_imported"
             ],
             "title": "Status"
           },
@@ -6227,6 +6870,81 @@
         "title": "Fees",
         "description": "事务所对本客户的收费 (APES 110 R410 的收费依赖与欠费), 金额为分."
       },
+      "FieldSource": {
+        "properties": {
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "debit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Debit"
+          },
+          "credit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "part": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "positive",
+                  "negative"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part"
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Values",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FieldSource",
+        "description": "一个字段的取值, 三选一: 一列 (column); 借贷两列之差 (debit 减 credit, 两列都空为 0, 只用于金额字段); 分组标题的\n命名捕获组 (group)."
+      },
       "GateDecision": {
         "properties": {
           "id": {
@@ -6553,6 +7271,26 @@
         "title": "GovernanceMember",
         "description": "治理层的一名成员."
       },
+      "GroupTitle": {
+        "properties": {
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "pattern": {
+            "type": "string",
+            "title": "Pattern"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "pattern"
+        ],
+        "title": "GroupTitle",
+        "description": "分组标题行: 只有 column 一列有值, 且其文本匹配 pattern 的行. pattern 的命名捕获组是标题里的值, 向下填充到之后的\n数据行, 直到下一个分组标题 (没匹配上的可选组为空); 字段经 FieldSource.group 取用. 标题行本身不出行."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -6580,6 +7318,115 @@
         ],
         "title": "IdBody",
         "description": "202 响应: 刚写入的决定 ID."
+      },
+      "ImportBatch": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "processing",
+              "ready",
+              "failed",
+              "committed"
+            ],
+            "title": "Status"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/BatchFile"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BatchItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "default": []
+          },
+          "committed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed At"
+          },
+          "committed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Committed By"
+          },
+          "data_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Version"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_by",
+          "created_at",
+          "files"
+        ],
+        "title": "ImportBatch",
+        "description": "一次智能导入 (表 import_batches): 上传的文件, A3 识别出的确认单与写入结果."
       },
       "ImportCommit": {
         "properties": {
@@ -7655,6 +8502,54 @@
         ],
         "title": "OpinionType",
         "description": "审计意见类型."
+      },
+      "ParseFailure": {
+        "properties": {
+          "row": {
+            "type": "integer",
+            "title": "Row"
+          },
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "row",
+          "column",
+          "value"
+        ],
+        "title": "ParseFailure",
+        "description": "一处解析失败; IMPORT_PARSE_ERROR 附带前 20 处."
+      },
+      "PeriodSource": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "current",
+              "prior"
+            ],
+            "title": "Period"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/FieldSource"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "period",
+          "balance"
+        ],
+        "title": "PeriodSource",
+        "description": "试算表的一期: 本期与上期分列的报表, 每个数据行出一行该期的余额."
       },
       "Phase": {
         "type": "string",
@@ -8835,6 +9730,26 @@
         "title": "RiskLevel",
         "description": "风险等级."
       },
+      "RowRule": {
+        "properties": {
+          "column": {
+            "type": "string",
+            "title": "Column"
+          },
+          "pattern": {
+            "type": "string",
+            "title": "Pattern"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "column",
+          "pattern"
+        ],
+        "title": "RowRule",
+        "description": "按一列的文本认出一类行: 该列单元格的文本 (去首尾空白; 数值, 日期按导入的写法转成文本) 中有匹配 pattern 的部分\n(re.search, 要整格匹配就写 ^ 与 $)."
+      },
       "RunStatus": {
         "type": "string",
         "enum": [
@@ -8899,6 +9814,96 @@
         ],
         "title": "ServiceOrganisation",
         "description": "客户使用的服务机构 (ASA 402)."
+      },
+      "SheetReading": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "sheet": {
+            "type": "string",
+            "title": "Sheet"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/TablePlan"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "low"
+            ],
+            "title": "Confidence"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "column_names"
+            ],
+            "title": "Method"
+          },
+          "trail_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Trail Ids",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_name",
+          "sheet",
+          "plan",
+          "confidence",
+          "reason",
+          "method"
+        ],
+        "title": "SheetReading",
+        "description": "A3 对上传的一个工作表的识别结果 (需求 R276): 大模型按开头的样本行给出 (DOC-SHEET), 大模型不可用时按列名匹配.\n\n方案由 services/table_plan.apply_plan 套到全表; 识别只看样本行, 不出数据行. 公司名与期间是表头里读到的, 与项目\n是否相符由确认单判断 (R277)."
       },
       "StandardFragment": {
         "properties": {
@@ -9077,6 +10082,97 @@
         ],
         "title": "TablePage",
         "description": "账表查看的一页 (GET /data/tables/{kind}): 符合搜索条件的总行数, 各列与这一页的行."
+      },
+      "TablePlan": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "header_row": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Header Row",
+            "default": 1
+          },
+          "skip": {
+            "items": {
+              "$ref": "#/components/schemas/RowRule"
+            },
+            "type": "array",
+            "title": "Skip",
+            "default": []
+          },
+          "group_title": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupTitle"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldSource"
+            },
+            "type": "object",
+            "title": "Fields",
+            "default": {}
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/PeriodSource"
+            },
+            "type": "array",
+            "title": "Periods",
+            "default": []
+          },
+          "dedupe": {
+            "type": "boolean",
+            "title": "Dedupe",
+            "default": false
+          },
+          "date_format": {
+            "type": "string",
+            "enum": [
+              "dmy",
+              "ymd",
+              "mdy"
+            ],
+            "title": "Date Format",
+            "default": "dmy"
+          },
+          "amount_unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dollars",
+                  "cents"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "TablePlan",
+        "description": "规整方案: 表种类, 表头行, 要跳过的行, 分组标题, 字段与取值, 试算表分期, 去重, 日期写法与金额单位.\n\n方案只说怎么读, 不含数据行; 由 services/table_plan.apply_plan 确定性地套到全表. 账表导入的按列对应\n(ImportCommit.mapping) 是只有列来源的方案. 读到的公司名, 期间, 把握与理由不在方案里."
       },
       "TableSchema": {
         "properties": {
