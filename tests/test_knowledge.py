@@ -429,13 +429,35 @@ def join_texts(*texts: Text) -> Text:
 
 
 @cache
+def reference_pdf(path: str) -> Any:
+    """docs/参考资料 下的 PDF, 每卷只打开一次, 随进程关闭: 公司法一卷 800 多页, 打开一次约 0.4 秒, 原先每取一段原文都
+    重新打开."""
+    return pdfplumber.open(REFERENCE / path)
+
+
+@cache
+def reference_page(path: str, index: int, title: str | None, body: float) -> tuple[Line, ...]:
+    """该卷第 index 页 (从 0 起) 的正文行 (见 page_layout), 同一页只解析一次 (逐字测试与正例, 反例常取同一页);
+    解析后清掉该页的字符缓存, 不占内存."""
+    page = reference_pdf(path).pages[index]
+    try:
+        return tuple(page_layout(page, title, body))
+    finally:
+        page.close()
+
+
+@cache
 def body_size(path: str, pages: tuple[int, int] | None = None) -> float:
     """docs/参考资料 下 PDF (页范围内, None 为全卷) 正文的字号: 在中段均匀抽 4 页 (避开封面, 目录与附录), 取最常见的
     字号. 按整卷取, 不按单页: 以表格或注释为主的页上最常见的是小字号, 按单页取会把章节页眉与注释当成正文."""
-    with pdfplumber.open(REFERENCE / path) as pdf:
-        first, last = pages if pages else (1, len(pdf.pages))
-        picked = sorted({first - 1 + round((last - first) * q) for q in (0.3, 0.45, 0.6, 0.75)})
-        sizes = Counter(round(c["size"], 1) for i in picked for c in pdf.pages[i].chars if c["text"].strip())
+    pdf = reference_pdf(path)
+    first, last = pages if pages else (1, len(pdf.pages))
+    picked = sorted({first - 1 + round((last - first) * q) for q in (0.3, 0.45, 0.6, 0.75)})
+    sizes: Counter[float] = Counter()
+    for i in picked:
+        page = pdf.pages[i]
+        sizes.update(round(c["size"], 1) for c in page.chars if c["text"].strip())
+        page.close()
     return sizes.most_common(1)[0][0]
 
 
@@ -444,8 +466,7 @@ def pdf_text(path: str, first: int, last: int, title: str | None = None) -> Text
     """docs/参考资料 下 PDF 第 first 至 last 页 (从 1 起, 含两端) 的正文 (见 page_layout, 字号按整卷), 带版面; 测试里的
     正例与反例用."""
     body = body_size(path)
-    with pdfplumber.open(REFERENCE / path) as pdf:
-        return layout_text([line for i in range(first - 1, last) for line in page_layout(pdf.pages[i], title, body)])
+    return layout_text([line for i in range(first - 1, last) for line in reference_page(path, i, title, body)])
 
 
 def standard_doc(name: str) -> dict[str, Any]:
@@ -474,13 +495,12 @@ def standard_text(name: str) -> Text:
     found = False
     for path, pages in SOURCES[name].volumes:
         body = body_size(path, pages)
-        with pdfplumber.open(REFERENCE / path) as pdf:
-            indexes = range(pages[0] - 1, pages[1]) if pages else range(len(pdf.pages))
-            for i in indexes:
-                lines += page_layout(pdf.pages[i], doc["title"], body)
-                if found:
-                    break
-                found = all(w in normalise("\n".join(line.text for line in lines)) for w in wanted)
+        indexes = range(pages[0] - 1, pages[1]) if pages else range(len(reference_pdf(path).pages))
+        for i in indexes:
+            lines += reference_page(path, i, doc["title"], body)
+            if found:
+                break
+            found = all(w in normalise("\n".join(line.text for line in lines)) for w in wanted)
         if found:
             break
     return layout_text(lines)
@@ -1620,8 +1640,7 @@ def cover_date(text: str, cover: str) -> str | None:
 def test_compiled_date_matches_pdf(name: str) -> None:
     """SOURCES 每行: 第一卷封面的编译日期等于 YAML 的 compiled (还没有 YAML 时等于登记的 compiled)."""
     source = SOURCES[name]
-    with pdfplumber.open(REFERENCE / source.volumes[0][0]) as pdf:
-        found = cover_date(pdf.pages[0].extract_text() or "", source.cover)
+    found = cover_date(reference_pdf(source.volumes[0][0]).pages[0].extract_text() or "", source.cover)
     path = ROOT / "standards" / f"{name}.yaml"
     expected = [v for v in (standard_doc(name)["compiled"] if path.exists() else None, source.compiled) if v]
     assert expected and all(found == v for v in expected), (found, expected)

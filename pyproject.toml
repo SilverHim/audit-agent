@@ -37,6 +37,7 @@ dev = [
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-xdist>=3.8.0",
     "reportlab>=5.0.1",
     "ruff>=0.16.8",
     "types-openpyxl>=3.1.5.20261017",

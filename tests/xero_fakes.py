@@ -9,8 +9,8 @@
   make_xero_deps. 快照按 tests.external.require_xero_snapshot 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
 读快照, 核对与文本层的结果按路径缓存, 一次测试运行里只算一次; 返回的列表与假存储每次新建, 测试可以改.
 
-与真实载入器的不同 (由 R269 消除): XeroFakeDatasetLoader.load 只记调用, 不登记文件; 真实载入器在演示数据导入
-接手之前仍并入补造表并登记 3 份合同.
+XeroFakeDatasetLoader.load 只记调用, 不登记文件, 与真实载入器只载快照 (R269) 的口径一致: 补造账表与文件都由演示
+数据导入写入; 从空项目做演示导入的测试用 XeroFakeDataStore(ready=False) 与空的假财务存储 (tests/test_demo_import).
 """
 
 import functools
@@ -340,18 +340,21 @@ def table_stats(tables: Mapping[str, Sequence[Any]]) -> dict[TableKind, TableSta
 class XeroFakeDataStore(FakeDataStore):
     """Xero 演示的假数据管理存储: 数据已就绪, 行数与体检汇总按 Xero 的七张表 (数据集 xero/20261017-q1), 工资册的
     行数按假财务存储里预置的;
-    write_tables 照 FakeDataStore 记版本, 并把行转交给同一个假财务存储 (put_rows)."""
+    write_tables 照 FakeDataStore 记版本, 并把行转交给同一个假财务存储 (put_rows). ready 为假时是还没有数据的新项目
+    (数据版本 0, 未确认就绪), 供演示数据导入 (需求 R269) 从空写起; tables 随之给空表."""
 
-    def __init__(self, financial: FakeFinancialStore, tables: Mapping[str, Sequence[Any]]) -> None:
+    def __init__(self, financial: FakeFinancialStore, tables: Mapping[str, Sequence[Any]], ready: bool = True) -> None:
         stats = table_stats(tables) | {TableKind.employees: TableStats(records=len(financial.employee_rows))}
-        super().__init__(ready=True, stats=stats)
+        super().__init__(ready=ready, stats=stats)
         self.seeded = False  # 不以 Numbat 为底
         self.financial = financial
         kinds = (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries)
         self.tables = {kind: list(tables[kind]) for kind in kinds}  # 体检汇总读这三张
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
-        inputs = await super().check_inputs(eid, period_start, period_end)
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
+        inputs = await super().check_inputs(eid, period_start, period_end, adjustment_prefix=adjustment_prefix)
         return inputs.model_copy(update={"dataset": XERO_DATASET})
 
     async def write_tables(self, eid: str, tables: Mapping[TableKind, Sequence[BaseModel]], **kwargs: Any) -> int:
@@ -364,7 +367,12 @@ class XeroFakeDataStore(FakeDataStore):
 
 
 class XeroFakeEvidenceStore(FakeEvidenceStore):
-    """pages 对 manifest 登记的 Xero 文件返回真实文本层 (xero_pages), 其余同 FakeEvidenceStore."""
+    """pages 对 manifest 登记的 Xero 文件返回真实文本层 (xero_pages); 上传 (save) 补造文件时页数取 manifest (同真实
+    存储数 PDF 的页数, 抽取的页码校验要用); 其余同 FakeEvidenceStore."""
+
+    def __init__(self, financial_store: FakeFinancialStore, output_store: FakeOutputStore | None = None) -> None:
+        super().__init__(financial_store, output_store)
+        self.page_counts.update({Path(d["path"]).name: d["page_count"] for d in manifest_documents().values()})
 
     async def pages(self, eid: str, document_id: str) -> list[str]:
         if document_id in manifest_documents() and any(d.id == document_id for d in self.financial_store.document_refs):

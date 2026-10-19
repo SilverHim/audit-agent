@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from backend.agents.base import AgentDeps
 from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
 from backend.contracts.models import AgentId, DocumentType, Procedure, ProcedureStatus, TrailEntry, TrailKind
+from backend.contracts.records import DatasetTraits
 from backend.orchestration.trail import record_transitions
 from backend.services.data_quality import OnHand, merge_requests, on_hand, program_requests, reconcile, run_checks
 
@@ -105,13 +106,18 @@ class DataCheckup:
     async def run(self, eid: str) -> CheckRun:
         """体检 (services.data_quality.run_checks), 并上程序要的请求 (program_requests), 对照已有请求 (reconcile),
         一个事务内存下体检结果与请求的变化, 提交后写留痕: 体检一条, 每个新提出 (或重新打开), 转 received 与
-        转 withdrawn 的请求各一条. 留痕没写成的由下次取锁时的 DataService.backfill_trails 补写.
+        转 withdrawn 的请求各一条. 留痕没写成的由下次取锁时的 DataService.backfill_trails 补写. 分录与试算表一项不计
+        审计更正分录 (凭证号前缀取数据集声明 audit_adjustment_entry_prefix, 没有数据集取缺省, 需求 R271).
         项目不存在抛 LookupError."""
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
         readiness = await self.deps.data.readiness(eid)
-        inputs = await self.deps.data.check_inputs(eid, engagement.period_start, engagement.period_end)
+        dataset = engagement.dataset
+        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
+        inputs = await self.deps.data.check_inputs(
+            eid, engagement.period_start, engagement.period_end, adjustment_prefix=traits.audit_adjustment_entry_prefix
+        )
         journals = [v for v in await self.deps.data.versions(eid) if v.kind is TableKind.journal_entries]
         statements = await self.statements(eid)
         now = datetime.now(UTC)

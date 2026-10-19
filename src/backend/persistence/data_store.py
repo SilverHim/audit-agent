@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Text, delete, false, func, insert, or_, select, true, update
+from sqlalchemy import ColumnElement, Text, delete, false, func, insert, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -38,7 +38,7 @@ from backend.contracts.data import (
     table_changes,
 )
 from backend.contracts.models import AgentId, DocumentType
-from backend.contracts.records import Account, AccountCategory
+from backend.contracts.records import Account, AccountCategory, JournalEntry
 from backend.persistence import models as m
 from backend.persistence.db import transaction, writable
 from backend.persistence.stores import (
@@ -130,15 +130,32 @@ async def record_categories(conn: AsyncConnection, eid: str, accounts: Sequence[
     return result
 
 
+def approval_values(raw: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """审批日志一行 (行快照) 要补进总账分录的: (凭证号, 导入时对应了的列: 录入人, 审批人, 审批时间). apply_approvals
+    与 with_approvals 共用, 库里与内存中按同一口径补."""
+    row = ApprovalLogRow.model_validate(raw)
+    return row.entry_no, row.model_dump(exclude_unset=True, exclude={"entry_no"})
+
+
 async def apply_approvals(conn: AsyncConnection, eid: str, rows: Sequence[Mapping[str, Any]]) -> None:
     """审批日志按凭证号补进总账分录: 每行只改导入时对应了的列 (录入人, 审批人, 审批时间); 总账里没有的凭证号忽略."""
     j = m.FINANCIAL["journal_entries"]
     for raw in rows:
-        row = ApprovalLogRow.model_validate(raw)
-        values = row.model_dump(exclude_unset=True, exclude={"entry_no"})
+        entry_no, values = approval_values(raw)
         if values:
-            statement = update(j).where(j.c.engagement_id == eid, j.c.entry_no == row.entry_no).values(**values)
+            statement = update(j).where(j.c.engagement_id == eid, j.c.entry_no == entry_no).values(**values)
             await conn.execute(statement)
+
+
+def with_approvals(lines: Sequence[JournalEntry], rows: Sequence[Mapping[str, Any]]) -> list[JournalEntry]:
+    """总账分录行按审批日志 (行快照, 按日志顺序, 同 apply_approvals) 补上录入人, 审批人与审批时间后的样子, 不读写库.
+    更正分录载入比较 "同 id 同内容" 时用: 写入总账时会套用最新一版审批日志 (需求 R271 审核 R271-01)."""
+    result = list(lines)
+    for raw in rows:
+        entry_no, values = approval_values(raw)
+        if values:
+            result = [x.model_copy(update=values) if x.entry_no == entry_no else x for x in result]
+    return result
 
 
 class PostgresDataStore(Store):
@@ -251,7 +268,9 @@ class PostgresDataStore(Store):
 
     # ── 体检与补交请求 (需求 R15) ──
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
         j = m.FINANCIAL[TableKind.journal_entries]
         tb = m.FINANCIAL[TableKind.trial_balance]
         a = m.FINANCIAL[TableKind.accounts]
@@ -262,9 +281,12 @@ class PostgresDataStore(Store):
             func.count().filter(j.c.created_by.is_not(None), j.c.created_by.not_in(sorted(PLACEHOLDER_PREPARERS))),
             func.count().filter(j.c.approved_by.is_not(None), j.c.approved_by != ""),
         )
+        counted: list[ColumnElement[bool]] = [j.c.posting_date.between(period_start, period_end)]
+        if adjustment_prefix:  # 审计更正分录不计发生额 (见 DataStore.check_inputs)
+            counted.append(~j.c.entry_no.startswith(adjustment_prefix, autoescape=True))
         movements = (
             select(j.c.account_code, func.sum(j.c.debit_cents - j.c.credit_cents))
-            .where(j.c.posting_date.between(period_start, period_end))
+            .where(*counted)
             .group_by(j.c.account_code)
         )
         balances = select(tb.c.period, tb.c.account_code, func.sum(tb.c.balance_cents)).group_by(

@@ -137,7 +137,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             # Xero 网页连接 (需求 R279): 概览的 sources.xero 读连接表, 连接, 同步与断开经 XeroLink
             xero_store = PostgresXeroConnectionStore(engine)
-            app.state.data_service = DataService(deps, app.state.runner)
+            # 演示数据导入 (需求 R269) 的清单按数据集取补造目录
+            app.state.data_service = DataService(deps, app.state.runner, demo=cast(RoutingDatasetLoader, deps.datasets))
             app.state.xero = XeroLink(deps, app.state.data_service, xero_store, settings)
             app.state.data_service.xero = app.state.xero.connections
             app.state.concierge.xero = app.state.xero.connections  # 对话待办的 Xero 组织信息核对 (需求 R291)

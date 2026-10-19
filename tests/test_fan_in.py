@@ -364,7 +364,7 @@ XID = "X-CSH-05-1-B01-1"  # 第 0 层 CSH-05 的例外, 下面几个测试里由
 
 def declare(nodes: GraphNodes, procedure_id: str, *fields: str) -> None:
     """测试脚本让程序写它本不声明的字段 (如 REV-08 建任务) 时, 给本用例的程序库补上声明: R85 起片段只能含模板
-    outputs 声明的字段. 程序库每个用例新建 (make_deps), 不影响别的用例."""
+    outputs 声明的字段. make_deps 每次给程序库的一份浅拷贝, 换实例属性 (这里换 load) 不影响别的用例."""
     library = nodes.deps.library
     original = library.load
     template = original(procedure_id)

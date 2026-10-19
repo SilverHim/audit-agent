@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 from langgraph.types import Command
 
 from backend.contracts.errors import DecisionRejected, RuleError, VersionConflict
@@ -69,7 +70,7 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.test_await_events import confirm, waiting_for_review
-from tests.test_decisions import Started, acc01_decision, pln_decision, started
+from tests.test_decisions import Started, acc01_decision, assert_rejected, pln_decision, started
 from tests.test_fieldwork import p2_agents
 from tests.test_rerun import failed_at_p0, pending_task
 
@@ -125,25 +126,6 @@ def record(task_id: str = NORMAL, decision: Decision = Decision.confirm, **field
     return base.model_copy(update=fields)
 
 
-async def assert_rejected(s: Started, decision: ReviewRecord, code: str, detail: str | None = None) -> None:
-    """提交被拒: 错误码对, Store 无新写入, 项目锁已释放, 图不动."""
-    rows, snapshot = list(s.output_store.rows), await s.runner.app.aget_state(CONFIG)
-
-    with pytest.raises(DecisionRejected) as e:
-        await s.submit.submit(EID, decision)
-
-    assert e.value.code == code, e.value
-    if detail is not None:
-        assert detail in str(e.value)
-    assert s.output_store.rows == rows
-    assert not s.runner.is_running(EID)
-    after = await s.runner.app.aget_state(CONFIG)
-    assert (after.values, [t.interrupts for t in after.tasks]) == (
-        snapshot.values,
-        [t.interrupts for t in snapshot.tasks],
-    )
-
-
 class Passed(Exception):
     """校验通过, 到了写入那一步 (测试里替换 _apply_review 抛出它, 只看校验, 不写)."""
 
@@ -161,6 +143,13 @@ async def assert_passes(s: Started, decision: ReviewRecord) -> None:
 
     assert s.output_store.rows == rows
     assert not s.runner.is_running(EID)
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def review_wait() -> Started:
+    """停在 await_events 等复核的一次运行 (同 waiting_with_failure), 由只提交被拒复核决定的用例共用: assert_rejected
+    逐次核对存储与检查点都没动."""
+    return await waiting_with_failure()
 
 
 async def put(store: FakeOutputStore, *objs: Any) -> None:
@@ -192,10 +181,11 @@ async def put(store: FakeOutputStore, *objs: Any) -> None:
         ),
     ],
 )
-async def test_invalid_review_record_rejected(decision: ReviewRecord, code: str, detail: str | None) -> None:
-    s = await waiting_with_failure()
-
-    await assert_rejected(s, decision, code, detail)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_invalid_review_record_rejected(
+    review_wait: Started, decision: ReviewRecord, code: str, detail: str | None
+) -> None:
+    await assert_rejected(review_wait, decision, code, detail)
 
 
 async def test_decided_task_rejected() -> None:

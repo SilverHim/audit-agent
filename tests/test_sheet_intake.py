@@ -5,6 +5,7 @@ journal_report.xlsx 的 Posted By 列是导出账号的姓名 (计划决定 12):
 断言只比较计数, 不把值写进任何文件与断言消息; 套用方案前先在内存里遮蔽该列 (同 R275 的测试).
 """
 
+import functools
 import hashlib
 import json
 from collections import Counter
@@ -97,8 +98,9 @@ def apply(reading: SheetReading, path: Path) -> tuple[list[Any], list[ParseFailu
     return tp.apply_plan(reading.plan, name, masked(rows))
 
 
-def posted_by_values() -> set[str]:
-    """journal_report.xlsx 的 Posted By 取值 (只在内存里用)."""
+@functools.cache
+def posted_by_values() -> frozenset[str]:
+    """journal_report.xlsx 的 Posted By 取值 (只在内存里用). 这份导出 1000 多行, 解析约 0.5 秒, 几个用例共用一次."""
     _, rows = d.raw_rows("journal_report.xlsx", (RAW / "journal_report.xlsx").read_bytes())
     values: set[str] = set()
     column: int | None = None
@@ -108,7 +110,7 @@ def posted_by_values() -> set[str]:
             column = texts.index("Posted By") if "Posted By" in texts else None
         elif column < len(texts) and texts[column]:
             values.add(texts[column])
-    return values
+    return frozenset(values)
 
 
 # ── 验收 4: 测试样例在 mock 下的识别结果 ──

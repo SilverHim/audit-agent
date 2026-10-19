@@ -8,7 +8,7 @@ jobs:
       - run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - run: ~/.local/bin/uv sync --frozen
       - run: ~/.local/bin/uv run ruff check . && ~/.local/bin/uv run mypy src/backend
-      - run: ~/.local/bin/uv run pytest -m "not slow" -q
+      - run: ~/.local/bin/uv run pytest -m "not slow" -q -n auto
   frontend:
     runs-on: ubuntu-latest
     defaults:

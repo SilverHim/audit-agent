@@ -24,7 +24,7 @@ from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_perio
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import DemoTable, Supplements
 from backend.contracts import records
-from backend.contracts.data import ContractVersion, DataInput
+from backend.contracts.data import ContractVersion, DataInput, TableKind
 from backend.contracts.errors import AbnTaken, VersionConflict
 from backend.contracts.models import (
     AgentId,
@@ -582,10 +582,14 @@ class TableLoader(Store):
         return (dict(row) if row is not None else None), bool((await conn.execute(select(or_(*tables)))).scalar_one())
 
     async def insert_adjustments(
-        self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None
+        self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None, actor: str
     ) -> list[JournalEntry]:
-        """更正分录载入的公共部分 (DatasetLoader.load_adjustments): 读 path, 取所请求的凭证, 在一个事务内写入
-        journal_entries (同 id 同内容的跳过), 有新行时 data_version 加一; 试算表不动. 拒绝的情况见协议说明, 都不写入."""
+        """更正分录载入的公共部分 (DatasetLoader.load_adjustments): 读 path, 取所请求的凭证 (同 id 同内容的已有行
+        跳过); 有新行时在同一事务里经 DataStore.write_tables 把总账整表换一版 (现有行加新行): 来源 xero (客户在 Xero
+        过账更正, 等同重新同步总账), 原文件名 adjustments/journal_entries.csv, 写入人 actor; 数据版本加一, 记版本行
+        与数据变动. data 留痕由调用方在提交后随即写 (见协议说明). 试算表不动. 写入总账时会套用最新一版审批日志, 所以
+        "同 id 同内容" 比的是请求的行按同一版审批日志补过之后的样子 (data_store.with_approvals), 返回的也是它, 即
+        库里的行. 拒绝的情况见协议说明, 都不写入."""
         if isinstance(entry_nos, str):
             raise TypeError("entry_nos 须为凭证号列表, 不能是单个字符串")
         lines = read_adjustments(path)
@@ -599,7 +603,11 @@ class TableLoader(Store):
         unbalanced = [no for no in wanted if sum(x.debit_cents - x.credit_cents for x in chosen if x.entry_no == no)]
         if unbalanced:
             raise ValueError(f"更正分录借贷不平衡: {', '.join(unbalanced)}")
+        # data_store 引用本模块, 用时再导入
+        from backend.persistence.data_store import PostgresDataStore, with_approvals
+
         journal = m.FINANCIAL["journal_entries"]
+        writer = PostgresDataStore(self.evidence_store.root, self.engine)  # 同一引擎, 并入本事务
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
             existing, loaded = await self.load_state(conn, eid)  # 已载入的口径同 insert (看财务表有没有行)
@@ -607,21 +615,30 @@ class TableLoader(Store):
                 raise ValueError("尚未载入数据集")
             if existing["dataset"] != dataset:
                 raise ValueError("Engagement already has a different dataset")
+            approvals = await writer.latest_rows(conn, eid, TableKind.approval_log)
+            expected = with_approvals(chosen, approvals)  # 写进总账后的样子
             stored = {
                 r["id"]: JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
                 for r in await self.rows(eid, select(journal).where(journal.c.id.in_([x.id for x in chosen])))
             }
-            changed = [x.id for x in chosen if x.id in stored and stored[x.id] != x]
+            changed = [x.id for x in expected if x.id in stored and stored[x.id] != x]
             if changed:
                 raise ValueError(f"更正分录与已载入的同 ID 行内容不同: {', '.join(changed)}")
             new = [x for x in chosen if x.id not in stored]
             if new:
-                await conn.execute(insert(journal), [dict(engagement_id=eid, **x.model_dump()) for x in new])
-                t = m.dataset_loads
-                bumped = update(t).where(t.c.engagement_id == eid).values(data_version=t.c.data_version + 1)
-                version = (await conn.execute(bumped.returning(t.c.data_version))).scalar_one()
-                await record_changes(conn, eid, version, [DataInput.journal_entries])
-        return chosen
+                current = [
+                    JournalEntry.model_validate({k: v for k, v in r.items() if k != "engagement_id"})
+                    for r in await self.rows(eid, select(journal))
+                ]
+                rows = sorted([*current, *new], key=lambda x: x.id)
+                await writer.write_tables(  # 写总账后套用最新一版审批日志 (新行同 expected)
+                    eid,
+                    {TableKind.journal_entries: rows},
+                    source="xero",
+                    actor=actor,
+                    file_name=ADJUSTMENTS.as_posix(),
+                )
+        return expected
 
 
 ADJUSTMENTS = Path("adjustments") / "journal_entries.csv"  # 数据集目录下的更正分录 (表头同 journal_entries.csv)
@@ -700,9 +717,10 @@ class CsvDatasetLoader(TableLoader):
         return directory if directory.is_dir() else None
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
-        return await self.insert_adjustments(eid, dataset, safe_child(self.root, dataset) / ADJUSTMENTS, entry_nos)
+        path = safe_child(self.root, dataset) / ADJUSTMENTS
+        return await self.insert_adjustments(eid, dataset, path, entry_nos, actor)
 
     def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
         return adjustment_summaries(safe_child(self.root, dataset) / ADJUSTMENTS)
@@ -776,7 +794,7 @@ class XeroDatasetLoader(TableLoader):
         return found
 
     def tables(self, dataset: str) -> dict[str, list[Any]]:
-        """演示数据导入之后的七张财务表 (不连库的纯函数, load 与测试共用, 需求 R268 起不再带合同路径): 快照映射出
+        """演示数据导入之后的七张财务表 (不连库的纯函数, 测试用; load 只载快照, 需求 R269): 快照映射出
         七张表 (adapters.xero_dataset); 有补造目录时先核对, 再并入合同关联, 服务完成记录与开户行
         (Supplements.apply). 没有补造目录时与纯快照相同."""
         return self.merged(dataset, self.supplement(dataset))
@@ -792,12 +810,13 @@ class XeroDatasetLoader(TableLoader):
         return found.demo_tables() if found is not None else []
 
     async def load(self, eid: str, dataset: str) -> None:
-        """载入七张表 (tables) 并登记补造目录的合同 PDF. 演示数据导入 (R269) 接手补造部分后改为只载快照."""
+        """只载快照映射出的七张表 (需求 R269): 不并补造账表, 不登记文件; 补造部分 (账表与文件) 由演示数据导入
+        (services.demo_import) 分阶段写入与上传. 有补造目录时仍先核对 (与快照不符抛 SupplementMismatch, 不写)."""
         self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
 
         def build() -> Tables:
-            found = self.supplement(dataset)
-            return self.merged(dataset, found), found.contracts() if found is not None else ()
+            self.supplement(dataset)
+            return self.merged(dataset, None), ()
 
         await self.insert(eid, dataset, build)
 
@@ -822,9 +841,9 @@ class XeroDatasetLoader(TableLoader):
         return found.root / ADJUSTMENTS
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
-        return await self.insert_adjustments(eid, dataset, self.adjustments_path(dataset), entry_nos)
+        return await self.insert_adjustments(eid, dataset, self.adjustments_path(dataset), entry_nos, actor)
 
     def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
         found = self.supplement(dataset)
@@ -877,9 +896,9 @@ class RoutingDatasetLoader:
         return self.pick(dataset).client_profile(dataset)
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
-        return await self.pick(dataset).load_adjustments(eid, dataset, entry_nos)
+        return await self.pick(dataset).load_adjustments(eid, dataset, entry_nos, actor=actor)
 
     def adjustment_entries(self, dataset: str) -> list[AdjustmentEntrySummary]:
         return self.pick(dataset).adjustment_entries(dataset)
@@ -889,6 +908,12 @@ class RoutingDatasetLoader:
 
     def dataset_traits(self, dataset: str) -> DatasetTraits:
         return self.pick(dataset).dataset_traits(dataset)
+
+    def supplement(self, dataset: str) -> Supplements | None:
+        """演示数据导入的清单来源 (具体方法, 不在 DatasetLoader 协议里, 需求 R269): 所选载入器已核对的补造目录;
+        载入器没有这个方法 (Numbat 的 CSV 载入器) 时为 None."""
+        method: Callable[[str], Supplements | None] | None = getattr(self.pick(dataset), "supplement", None)
+        return method(dataset) if method is not None else None
 
     def supplement_dir(self, dataset: str) -> Path | None:
         """登记与回函 mock 读的目录 (具体方法, 不在 DatasetLoader 协议里): 所选载入器的 supplement_dir; 载入器没有

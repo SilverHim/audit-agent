@@ -249,6 +249,27 @@ class XeroProfileCheck(Model):
     adopted: bool | None = None  # 更新时本项目是否采用了新版本 (只在停在 ACC-01 闸门时采用)
 
 
+# 演示数据导入 (需求 R269): 补造清单的阶段 (Xero演示数据集设计第 9.5 节, adapters.xero_supplements.plan); 导入只收
+# 前三个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传
+DemoStage = Literal["acceptance", "fieldwork", "statements", "manual"]
+DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements")
+DemoImportStatus = Literal["started", "imported", "already_imported"]
+
+
+class DemoImportResult(Model):
+    """演示数据导入一个阶段的结果 (需求 R269). 发起时返回 started, 内容为要写的表与要上传的文件; 做完时为 imported
+    (有写入, 另记一条 data 留痕 demo_import, payload 即本对象) 或 already_imported (这一阶段都已导入过, 什么都没写,
+    不记留痕)."""
+
+    stage: DemoStage  # 阶段
+    status: DemoImportStatus
+    tables: list[TableKind] = []  # 写了的表, 按写入顺序 (快照的同一版里按 TableKind 顺序); started 时为要写的
+    uploaded: list[str] = []  # 新登记的上传文件名; started 时为要上传的
+    retyped: list[str] = []  # 分类与清单不符, 按清单指定了类型的文件名
+    needs_manual: list[str] = []  # 处理完仍待人工的文件名 (如抽取没通过)
+    data_version: int | None = None  # 做完后的数据版本; started 时为空
+
+
 class XeroSource(Model):
     """数据概览中的 Xero 连接, 由 Xero 连接记录提供 (端口 XeroConnections)."""
 

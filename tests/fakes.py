@@ -1,24 +1,29 @@
 """测试用假实现与样例数据. B 的真实实现就绪前, Agent 与节点测试都注入这里的假工具."""
 
 import asyncio
+import copy
 import csv
 import functools
 import hashlib
 import json
+import shutil
 import tempfile
+import weakref
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
+from unittest import mock
 
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
+import backend.main
 from backend.adapters.abn_lookup import AbnLookupClient
 from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version, make_llm_client
 from backend.adapters.registry_mock import person_key
@@ -78,6 +83,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    GateDecision,
     GateId,
     GateVerdict,
     Judgment,
@@ -572,6 +578,25 @@ NUMBAT_CANDIDATES = [  # 合成数据集设计第 3.2 节重要性候选
 
 
 # ── 假工具 ──
+
+
+DECIDED_AT = datetime(2026, 10, 1, tzinfo=UTC)  # 测试里闸门决定的时间
+
+
+def acc01_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
+    """绑定评分卡第 1 版的 ACC-01 决定; reject 与 insufficient_info 带理由. changes 覆盖任意字段. 各流程测试与共用的流程
+    辅助 (tests/xero_flow) 都从这里取."""
+    decision = GateDecision(
+        id="D-1",
+        gate=GateId.ACC_01,
+        target_id="SCORECARD",
+        target_version=1,
+        decision=verdict,
+        reason=None if verdict is GateVerdict.approve else "test",
+        decided_by="U-1",
+        decided_at=DECIDED_AT,
+    )
+    return decision.model_copy(update=changes)
 
 
 class FakeRegistry:
@@ -1267,11 +1292,13 @@ class FakeEvidenceStore:
         return updated
 
     async def path(self, eid: str, document_id: str) -> Path:
-        """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""
+        """save 收到的原件写到临时目录 (每个实例一个, 实例回收或进程退出时删掉) 后返回路径; 没有内容 (预置的登记)
+        抛 FileNotFoundError."""
         if document_id not in self.contents:
             raise FileNotFoundError(document_id)
         if self.directory is None:
             self.directory = Path(tempfile.mkdtemp(prefix="fake-evidence-"))
+            weakref.finalize(self, shutil.rmtree, self.directory, ignore_errors=True)
         doc = next(d for d in self.financial_store.document_refs if d.id == document_id)
         path = self.directory / f"{document_id}{Path(doc.file_name).suffix.lower()}"
         path.write_bytes(self.contents[document_id])
@@ -1682,13 +1709,15 @@ class FakeDatasetLoader:
         self.loads: list[tuple[str, str]] = []  # (项目编号, 数据集名), 按调用顺序
         self.adjustments = adjustments  # 预置的更正分录行; None 表示数据集没有更正分录文件
         self.adjustment_loads: list[tuple[str, str, list[str] | None]] = []  # (项目编号, 数据集名, 凭证号)
+        self.adjustment_actors: list[str] = []  # 每次 load_adjustments 收到的写入人 actor, 顺序同 adjustment_loads
         self.traits = dict(traits or {})  # 数据集名 → 声明, 可在测试中改
         self.traits_calls: list[str] = []  # dataset_traits 收到的数据集名, 按调用顺序
 
     async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
     ) -> list[JournalEntry]:
         self.adjustment_loads.append((eid, dataset, list(entry_nos) if entry_nos is not None else None))
+        self.adjustment_actors.append(actor)
         if self.adjustments is None:
             raise FileNotFoundError(f"没有更正分录文件 ({dataset})")
         known = {x.entry_no for x in self.adjustments}
@@ -1874,7 +1903,9 @@ class FakeDataStore:
     async def open_requests(self, eid: str) -> int:
         return self.open_count + sum(r.status == "open" for r in self.data_requests.values())
 
-    async def check_inputs(self, eid: str, period_start: date, period_end: date) -> CheckInputs:
+    async def check_inputs(
+        self, eid: str, period_start: date, period_end: date, *, adjustment_prefix: str | None = None
+    ) -> CheckInputs:
         from backend.services.data_quality import summarize
 
         if self.seeded and not self.tables and not self.approvals:
@@ -1892,6 +1923,7 @@ class FakeDataStore:
             period_start,
             period_end,
             dataset="demo" if self.seeded else None,
+            adjustment_prefix=adjustment_prefix,
         )
 
     async def check_run(self, eid: str) -> CheckRun | None:
@@ -2189,6 +2221,24 @@ def bind_stores(engagement_store: FakeEngagementStore, output_store: FakeOutputS
 # ── 组装 ──
 
 
+KNOWLEDGE = Path(__file__).resolve().parents[1] / "src" / "backend" / "knowledge"  # 仓库的 knowledge 目录
+
+
+@functools.cache
+def _knowledge_library(root: Path, features: frozenset[str]) -> ProcedureLibrary:
+    return ProcedureLibrary(root, features)
+
+
+def knowledge_library(root: Path, features: Iterable[str] = BASELINE) -> ProcedureLibrary:
+    """程序库, 同 ProcedureLibrary(root, features), 但仓库的 knowledge 目录 (会话中不改; 要改的用例先复制到临时目录)
+    每个功能集只加载一次: 每个用例建依赖都重新解析全部 YAML 约 0.1 秒, 是默认测试最大的一项重复开销. 返回浅拷贝,
+    用例换它的属性 (如 commit, 或把 load 换成补了声明的) 不影响别的用例; 内部字典 (_templates, _all, _fragments,
+    _report) 与模板对象各拷贝共用, 只可换属性, 不可原地改. 别的目录照常新建."""
+    if Path(root).resolve() != KNOWLEDGE:
+        return ProcedureLibrary(root, features)
+    return copy.copy(_knowledge_library(Path(root), frozenset(features)))
+
+
 def make_deps(
     registry: FakeRegistry,
     trail: FakeTrail,
@@ -2227,7 +2277,8 @@ def make_deps(
     if data.financial is None:  # 证据文件数取同一个财务数据存储 (同真实实现共用 documents 表)
         data.financial = financial_store
     settings = get_settings()
-    deps = build_deps(settings)
+    with mock.patch.object(backend.main, "ProcedureLibrary", knowledge_library):  # 组装根的程序库取会话缓存
+        deps = build_deps(settings)
 
     def mock_client() -> SwitchableLLMClient:
         """同组装根的 mock 客户端, 但按假项目存储取项目数据集 (组装根的绑定在 Postgres 项目存储上)."""
@@ -2238,7 +2289,7 @@ def make_deps(
     llm = llm if llm is not None else mock_client()
     if library is None:
         features = BASELINE if features is None else features
-        library = deps.library if deps.library.features == features else ProcedureLibrary(deps.library.root, features)
+        library = deps.library if deps.library.features == features else knowledge_library(deps.library.root, features)
     elif features is None:
         features = library.features
     elif features != library.features:
