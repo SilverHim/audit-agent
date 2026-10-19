@@ -4,6 +4,8 @@
 用法: uv run python data/check_xero_demo.py [--snapshot 20261017-q1 或快照目录] [--dir 补造目录]
 
 - 问题全部收集后一次抛 CheckError, 每行一项, 只写文件名; 登录账号联系人的姓名与邮箱只在内存里比对, 不打印, 不写文件.
+- 收入合同的底稿: README.md, manifest 的 base 与规格的 base 记录一律核对; 底稿本身 (CUAD 的文件, sha256 与取用原句)
+  只在调用方给出 CUAD 目录时核对 (两个命令行入口给 data/external/cuad/CUAD_v1), 目录不在时写说明与取数命令.
 - 没有本地快照时跳过快照哈希, 画像 ID 前缀, 补造表与快照的核对, 快照关键数复算, 新旧快照比对, 联系人扫描与确定性,
   补造文件本身照常核对; 快照缺文件或没有 20261017-mock 时, 跳过的项目写在说明里; 快照在而 contacts.json 缺失或
   无法解析时报错, 不静默跳过联系人扫描.
@@ -44,6 +46,8 @@ REPO = gen.ROOT.parent
 CHANNELS = frozenset(c.value for c in ReceiptChannel)
 NO_SNAPSHOT = "没有本地 Xero 快照"
 NOT_OFFICIAL = "不是正式补造目录"
+NO_CUAD = "没有 CUAD"
+BASE_KEYS = ["dataset", "file", "txt", "sha256", "excerpts"]
 PROFILE_NOTES_PREFIX = "Synthetic – for demonstration only"
 TRAIT_KEYS = frozenset(
     {
@@ -81,9 +85,15 @@ class CheckError(Exception):
 
 
 def check(
-    directory: Path, snapshot_dir: Path, *, determinism: bool = True, scan: Iterable[Path] = SCAN_PATHS
+    directory: Path,
+    snapshot_dir: Path,
+    *,
+    determinism: bool = True,
+    scan: Iterable[Path] = SCAN_PATHS,
+    cuad: Path | None = None,
 ) -> list[str]:
-    """校验一套补造文件, 返回说明 (如跳过了哪些检查); 任一项不过抛 CheckError. scan 为补造目录之外要扫描联系人的位置.
+    """校验一套补造文件, 返回说明 (如跳过了哪些检查); 任一项不过抛 CheckError. scan 为补造目录之外要扫描联系人的位置;
+    cuad 为 CUAD 目录时核对合同底稿, 目录不在时写说明, 为 None 时不核对 (不写说明).
     manifest 缺失或结构不符时只报这一项; 其余各项互不影响, 某项意外中断时记一行 (只写异常类名) 后继续."""
     manifest_path = directory / "manifest.json"
     manifest = read_json(manifest_path)
@@ -111,8 +121,16 @@ def check(
         *guarded(directory, check_pdf_content, directory, manifest),
         *guarded(directory / gen.FS_JSON, check_financial_statements, directory, manifest),
         *guarded(directory / "manual", check_manual, directory, manifest),
+        *guarded(directory / "README.md", check_contract_bases, directory, manifest),
     ]
     notes: list[str] = []
+    if cuad is not None and cuad.is_dir():
+        problems += guarded(cuad, check_cuad_sources, cuad)
+    elif cuad is not None:
+        notes.append(
+            f"{NO_CUAD} ({rel(cuad)}): 跳过合同底稿的核对 (底稿文件, sha256 与取用原句); 合同 PDF 按规格生成, "
+            f"不受影响. 取 CUAD: {gen.CUAD_FETCH}"
+        )
     if gen.inside(directory, gen.OUT_ROOT):  # 测试副本会增删 PDF (如注入 T6 新增摘录), 份数只核正式目录
         problems += guarded(manifest_path, check_document_counts, directory, manifest)
     else:
@@ -147,8 +165,16 @@ def check(
     return notes
 
 
+class BaseSource(BaseModel):
+    """manifest files 段中收入合同的底稿来源."""
+
+    model_config = ConfigDict(extra="forbid")
+    dataset: str
+    file: str
+
+
 class FileItem(BaseModel):
-    """manifest files 段的一项."""
+    """manifest files 段的一项; base 只在以 CUAD 合同为底稿的收入合同上出现."""
 
     model_config = ConfigDict(extra="forbid")
     path: str
@@ -156,6 +182,7 @@ class FileItem(BaseModel):
     synthetic: bool
     generator: str
     xero_refs: list[str]
+    base: BaseSource | None = None
 
 
 class DocumentItem(BaseModel):
@@ -237,6 +264,68 @@ def pdf_pages(path: Path) -> list[str] | None:
 
 def files_of(directory: Path) -> Iterator[Path]:
     return (p for p in sorted(directory.rglob("*")) if p.is_file())
+
+
+def check_contract_bases(directory: Path, manifest: dict[str, Any]) -> list[str]:
+    """不需要 CUAD 的底稿核对: README.md 等于按规格推出的全文; manifest files 段的 base 与规格一致 (只有规格写了
+    base 的文件才有); 规格的 base 键齐, 每条取用原句至多一句且对应的条款在正文里; 这些合同第 3 页最后是出处说明
+    与许可链接 (CUAD_CREDIT)."""
+    spec = gen.load_spec()
+    problems: list[str] = []
+    readme = directory / "README.md"
+    if not readme.is_file() or readme.read_text(encoding="utf-8") != gen.readme_text(spec):
+        problems.append(f"{rel(readme)}: 与规格推出的说明不符, 需重新生成")
+    for item in manifest["files"]:
+        if item.get("base") != gen.file_base(spec, item["path"]):
+            problems.append(f"{rel(directory / item['path'])}: manifest 的 base 与规格不符")
+    for doc in spec["documents"]:
+        base = doc.get("base")
+        if base is None:
+            continue
+        where = f"{rel(gen.SPEC)} {doc['path']}"
+        if list(base) != BASE_KEYS or base["dataset"] != "CUAD v1" or not base["excerpts"]:
+            problems.append(f"{where}: base 应有 {', '.join(BASE_KEYS)}, dataset 为 CUAD v1, 且至少一条取用原句")
+            continue
+        lines = [line.strip() for page in doc["pages"] for line in page]
+        for excerpt in base["excerpts"]:
+            clause, text = excerpt.get("clause", ""), excerpt.get("text", "")
+            if list(excerpt) != ["clause", "text"] or re.search(r"\.\s+[A-Z]", text):
+                problems.append(f"{where}: 取用原句 {clause} 应为 clause 与 text, text 至多一句")
+            elif not any(line == clause or line.startswith(f"{clause} ") for line in lines):
+                problems.append(f"{where}: 取用原句对应的条款 {clause} 不在正文里")
+        if doc["pages"][-1][-len(gen.CUAD_CREDIT) :] != gen.CUAD_CREDIT:
+            problems.append(f"{where}: 末页最后没有 CUAD 出处说明与许可链接")
+    return problems
+
+
+def check_cuad_sources(cuad: Path) -> list[str]:
+    """合同底稿 (只读 CUAD 的文本, 当数据读): README.md 引的 CUAD 免责句与使用条款是 CUAD_v1_README.txt 的原句;
+    底稿 txt 在且 sha256 等于规格记录, 每条取用原句 (空白归一) 都在其中, 底稿 PDF (master_clauses.csv 的文件名) 在
+    full_contract_pdf 下."""
+    problems: list[str] = []
+    notice = cuad / "CUAD_v1_README.txt"
+    text = normalize_case(notice.read_text(encoding="utf-8")) if notice.is_file() else ""
+    if not all(normalize_case(s) in text for s in (gen.CUAD_DISCLAIMER, gen.CUAD_TERMS)):
+        problems.append(f"{rel(notice)}: 没有补造 README 引用的免责句或使用条款原句")
+    pdfs = {p.name for p in (cuad / "full_contract_pdf").rglob("*") if p.is_file()}
+    for doc in gen.load_spec()["documents"]:
+        base = doc.get("base")
+        if base is None:
+            continue
+        txt = cuad / "full_contract_txt" / base["txt"]
+        if not txt.is_file():
+            problems.append(f"{rel(txt)}: {doc['path']} 的底稿不存在")
+            continue
+        if gen.sha256(txt) != base["sha256"]:
+            problems.append(f"{rel(txt)}: sha256 与规格记录的不符")
+            continue
+        text = normalize_case(txt.read_text(encoding="utf-8"))
+        lack = [e["clause"] for e in base["excerpts"] if normalize_case(e["text"]).strip() not in text]
+        if lack:
+            problems.append(f"{rel(txt)}: 找不到 {doc['path']} 第 {', '.join(lack)} 条的取用原句")
+        if base["file"] not in pdfs:
+            problems.append(f"{rel(cuad / 'full_contract_pdf')}: 没有 {doc['path']} 的底稿 PDF")
+    return problems
 
 
 def check_manifest(directory: Path, manifest: dict[str, Any]) -> list[str]:
@@ -1749,7 +1838,7 @@ def main(argv: list[str] | None = None) -> int:
     snapshot_dir = gen.resolve_snapshot(args.snapshot)
     directory: Path = args.dir or gen.OUT_ROOT / snapshot_dir.name
     try:
-        for note in check(directory, snapshot_dir):
+        for note in check(directory, snapshot_dir, cuad=gen.CUAD_DIR):
             print(note)
     except CheckError as error:
         print(error, file=sys.stderr)

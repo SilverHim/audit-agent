@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "e128a6d99d8e491a553061299950a105a47946034db9a04f32b38f2ea642324d",
+  "spec_sha256": "0685667a74813ce2777a8a662497b0951246977f9cddfb6d663538dede19be97",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -73,6 +73,13 @@
   },
   "files": [
     {
+      "path": "README.md",
+      "sha256": "3d99b86a3af39578fc3b9d811e60643a43054881e4613f989d877b4eb5280842",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "adjustments/journal_entries.csv",
       "sha256": "0414ffae23f53046e898faee9874b8a6ad39ca4d3e6b5f9a31e7a36d9765d46b",
       "synthetic": true,
@@ -130,16 +137,20 @@
     },
     {
       "path": "contracts/CON-X01.pdf",
-      "sha256": "00d1f7a96285ad3ef246fc6d94ce393e5c8f9dcc6fbd8735d974631876725eff",
+      "sha256": "7795e9312e9f5b2a77e62f28d978c11f94242d4e852a83885d1e05c14fc2a9f5",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": [
         "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611"
-      ]
+      ],
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "ClickstreamCorp_20200330_1-A_EX1A-6 MAT CTRCT_12089935_EX1A-6 MAT CTRCT_Development Agreement.pdf"
+      }
     },
     {
       "path": "contracts/CON-X02.pdf",
-      "sha256": "079cffb50819715068dc0e97cb3e5dfe40663f583d74daab23f13aea92c6f173",
+      "sha256": "02c5c90d4ffb03bb54f5abca1229c93a55c19a38ff4761ef9c51b07e9f9b4742",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": [
@@ -147,16 +158,24 @@
         "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
         "SI-b2c02d0b-41a8-4d4d-97d7-014c78b3547d",
         "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9"
-      ]
+      ],
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "TRIZETTOGROUPINC_08_18_1999-EX-10.17-TECHNICAL INFRASTRUCTURE MAINTENANCE AGREEMENT.PDF"
+      }
     },
     {
       "path": "contracts/CON-X03.pdf",
-      "sha256": "3e9f7e6da6519cc43d29fd7f2cead41ba779da8c3b526c473612f96b7a8d0d8c",
+      "sha256": "c90b3e398274c62f6e4078f1fe92cbaf36d5453acc53ce52fb258e6fd3ddf4c5",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": [
         "SI-aa0173af-8707-4e7f-8dde-4c7a357bd312"
-      ]
+      ],
+      "base": {
+        "dataset": "CUAD v1",
+        "file": "MERITLIFEINSURANCECO_06_19_2020-EX-10.(XIV)-MASTER SERVICES AGREEMENT.PDF"
+      }
     },
     {
       "path": "dataset_traits.json",
@@ -517,8 +536,8 @@
     },
     {
       "path": "contracts/CON-X01.pdf",
-      "sha256": "00d1f7a96285ad3ef246fc6d94ce393e5c8f9dcc6fbd8735d974631876725eff",
-      "document_id": "DOC-00d1f7a96285",
+      "sha256": "7795e9312e9f5b2a77e62f28d978c11f94242d4e852a83885d1e05c14fc2a9f5",
+      "document_id": "DOC-7795e9312e9f",
       "type": "contract",
       "reliability": "external_copy",
       "page_count": 3,
@@ -529,8 +548,8 @@
     },
     {
       "path": "contracts/CON-X02.pdf",
-      "sha256": "079cffb50819715068dc0e97cb3e5dfe40663f583d74daab23f13aea92c6f173",
-      "document_id": "DOC-079cffb50819",
+      "sha256": "02c5c90d4ffb03bb54f5abca1229c93a55c19a38ff4761ef9c51b07e9f9b4742",
+      "document_id": "DOC-02c5c90d4ffb",
       "type": "contract",
       "reliability": "external_copy",
       "page_count": 3,
@@ -541,8 +560,8 @@
     },
     {
       "path": "contracts/CON-X03.pdf",
-      "sha256": "3e9f7e6da6519cc43d29fd7f2cead41ba779da8c3b526c473612f96b7a8d0d8c",
-      "document_id": "DOC-3e9f7e6da651",
+      "sha256": "c90b3e398274c62f6e4078f1fe92cbaf36d5453acc53ce52fb258e6fd3ddf4c5",
+      "document_id": "DOC-c90b3e398274",
       "type": "contract",
       "reliability": "external_copy",
       "page_count": 3,
