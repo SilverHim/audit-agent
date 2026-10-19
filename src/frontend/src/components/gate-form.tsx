@@ -17,6 +17,7 @@ import type {
   GateView,
   MaterialityCandidates,
   MaterialityChoice,
+  MonthlyFigures,
   OpinionType,
   ReportSection,
   RiskItem,
@@ -196,6 +197,48 @@ function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
   )
 }
 
+// PLN-07 A03 的月度趋势 (本期按月的收入, 费用与员工费用); 没有月度数 (旧结果或没有总账) 时不显示
+function MonthlyTable({ rows }: { rows: MonthlyFigures[] }) {
+  const { t } = useI18n()
+  if (rows.length === 0) return null
+  const labels = t.planning.monthly
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <SectionLabel>{labels.title}</SectionLabel>
+      <div className="overflow-x-auto rounded-[10px] border">
+        <table className="w-full min-w-[520px] border-collapse text-[13.5px]">
+          <thead>
+            <tr className="text-left text-[12px] text-muted-foreground">
+              <th scope="col" className="border-b px-3 py-2 font-semibold">
+                {labels.month}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.revenue}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.expense}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.employee}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.month}>
+                <td className="border-b px-3 py-1.5 font-mono">{row.month.slice(0, 7)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.revenue_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.expense_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.employee_expense_cents)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
   const { t } = useI18n()
   const material = view.material
@@ -256,6 +299,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
               </div>
             ))}
           </dl>
+          <MonthlyTable rows={material.analytics.monthly ?? []} />
         </Panel>
         <ExceptionList eid={eid} items={material.analytics_exceptions} />
       </div>

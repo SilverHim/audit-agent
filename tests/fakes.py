@@ -1122,6 +1122,25 @@ NUMBAT_A02_ROWS = [  # PLN-07 A02 的取数 (合成数据集设计第 3.2 节): 
     {"period": "current", "revenue_cents": 1200000000, "cost_of_sales_cents": 840000000},
     {"period": "prior", "revenue_cents": 1040000000, "cost_of_sales_cents": 722800000},
 ]
+# PLN-07 A03 的取数 (合成数据集设计第 3.2 节月度趋势): 本期按月的收入, 费用与员工费用, 各列合计同本期试算表
+# (收入 1200000000, 费用 1096400000, 员工费用 118000000)
+NUMBAT_A03_ROWS = [
+    {"month": month, "revenue_cents": revenue, "expense_cents": expense, "employee_expense_cents": employee}
+    for month, revenue, expense, employee in [
+        (date(2025, 7, 1), 88000000, 77321600, 9566600),
+        (date(2025, 8, 1), 90000000, 78721600, 9566600),
+        (date(2025, 9, 1), 94000000, 81521600, 9566600),
+        (date(2025, 10, 1), 98000000, 84321600, 9566600),
+        (date(2025, 11, 1), 104000000, 88521600, 9566600),
+        (date(2025, 12, 1), 86000000, 75921600, 9566600),
+        (date(2026, 1, 1), 80000000, 71721600, 9566600),
+        (date(2026, 2, 1), 94000000, 81521600, 9566600),
+        (date(2026, 3, 1), 111000000, 93421600, 9566600),
+        (date(2026, 4, 1), 97500000, 83971600, 9566600),
+        (date(2026, 5, 1), 107500000, 90971600, 9566600),
+        (date(2026, 6, 1), 150000000, 188462400, 12767400),
+    ]
+]
 NUMBAT_M01_ROWS = [  # PLN-01 M01 的取数 (第 3.2 节), 按 basis 排序
     {"basis": "profit_before_tax", "base_amount_cents": 150000000},
     {"basis": "revenue", "base_amount_cents": 1200000000},
@@ -1279,7 +1298,9 @@ NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计�
     )
 ]
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
-    "PLN-07": lambda run: RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS}),
+    "PLN-07": lambda run: RuleResult(
+        exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}
+    ),
     "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),

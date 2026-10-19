@@ -76,7 +76,7 @@ export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A
 /**
  * AnalyticsResult
  *
- * PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外.
+ * PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
  */
 export type AnalyticsResult = {
     /**
@@ -97,6 +97,10 @@ export type AnalyticsResult = {
      * Exception Ids
      */
     exception_ids: Array<string>;
+    /**
+     * Monthly
+     */
+    monthly?: Array<MonthlyFigures>;
 };
 
 /**
@@ -2615,6 +2619,30 @@ export type MisstatementReport = {
  * 错报类型.
  */
 export type MisstatementType = 'factual' | 'judgmental' | 'projected';
+
+/**
+ * MonthlyFigures
+ *
+ * PLN-07 A03 的一个月: 本期内该月总账分录的收入类, 费用类合计与员工费用 (需求 R103).
+ */
+export type MonthlyFigures = {
+    /**
+     * Month
+     */
+    month: string;
+    /**
+     * Revenue Cents
+     */
+    revenue_cents: number;
+    /**
+     * Expense Cents
+     */
+    expense_cents: number;
+    /**
+     * Employee Expense Cents
+     */
+    employee_expense_cents: number;
+};
 
 /**
  * NeitherAction

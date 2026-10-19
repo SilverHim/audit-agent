@@ -369,6 +369,7 @@ export const zh: Messages = {
       current: '本期',
       zeroBase: { balance_sheet: '期初为 0', profit_or_loss: '上期为 0' },
     },
+    monthly: { title: '月度趋势（本期）', month: '月份', revenue: '收入', expense: '费用', employee: '其中员工费用' },
   },
   completion: {
     candidate: '候选意见',

@@ -9,7 +9,13 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, ClassVar
 
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
-from backend.contracts.models import AgentId, AnalyticsResult, MaterialityCandidate, MaterialityCandidates
+from backend.contracts.models import (
+    AgentId,
+    AnalyticsResult,
+    MaterialityCandidate,
+    MaterialityCandidates,
+    MonthlyFigures,
+)
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
 
@@ -44,6 +50,21 @@ def analytics_ratios(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
     if current is not None and prior:
         ratios["revenue_growth"] = ratio(current - prior, prior)
     return ratios
+
+
+def monthly_figures(rows: Sequence[Mapping[str, Any]]) -> list[MonthlyFigures]:
+    """按 PLN-07 A03 的行 (month, revenue_cents, expense_cents, employee_expense_cents) 出月度表, 按月升序;
+    金额为空记 0."""
+    figures = [
+        MonthlyFigures(
+            month=r["month"],
+            revenue_cents=to_cents(r.get("revenue_cents")) or 0,
+            expense_cents=to_cents(r.get("expense_cents")) or 0,
+            employee_expense_cents=to_cents(r.get("employee_expense_cents")) or 0,
+        )
+        for r in rows
+    ]
+    return sorted(figures, key=lambda f: f.month)
 
 
 def scaled(base_cents: int, pct: float) -> int:
@@ -98,13 +119,14 @@ class RiskAssessorAgent(ProcedureAgent[RuleResult]):
         return patch | {"procedure_runs": [finish_run(ctx.run, datetime.now(UTC))]}
 
     def analytics(self, ctx: RunContext, findings: RuleResult) -> StatePatch:
-        """PLN-07: A01 的变动例外原样返回, 由 A02 的取数算比率, 出分析结果下一版."""
+        """PLN-07: A01 的变动例外原样返回, 由 A02 的取数算比率, A03 的取数出月度表, 出分析结果下一版."""
         previous = ctx.state["analytics"]
         result = AnalyticsResult(
             id="ANALYTICS",
             version=previous.version + 1 if previous is not None else 1,
             ratios=analytics_ratios(findings.rows.get("A02", [])),
             exception_ids=[x.id for x in findings.exceptions],
+            monthly=monthly_figures(findings.rows.get("A03", [])),
         )
         return {"analytics": result, "exceptions": list(findings.exceptions)}
 

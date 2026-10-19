@@ -137,7 +137,7 @@ DOCUMENT_TITLES = {
 USED_FOR: dict[TableKind | DocumentType, list[str]] = {
     TableKind.accounts: ["PLN-07", "PLN-01"],
     TableKind.trial_balance: ["PLN-07", "PLN-01", "CSH-05", "CSH-02"],
-    TableKind.journal_entries: ["CSH-02", "GEN-05"],
+    TableKind.journal_entries: ["PLN-07", "CSH-02", "GEN-05"],
     TableKind.approval_log: ["GEN-05"],
     DocumentType.financial_statements: ["FIN-12"],
 }

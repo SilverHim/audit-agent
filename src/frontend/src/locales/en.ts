@@ -393,6 +393,13 @@ export const en = {
       current: 'current',
       zeroBase: { balance_sheet: 'opening is 0', profit_or_loss: 'prior period is 0' },
     },
+    monthly: {
+      title: 'Monthly trend (current period)',
+      month: 'Month',
+      revenue: 'Revenue',
+      expense: 'Expenses',
+      employee: 'of which employee expenses',
+    },
   },
   completion: {
     candidate: 'Candidate opinion',

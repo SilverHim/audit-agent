@@ -136,7 +136,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
     [
         (DataInput.accounts, {"PLN-07", "PLN-01"}),
         (DataInput.trial_balance, {"PLN-07", "PLN-01", "CSH-05", "CSH-02"}),
-        (DataInput.journal_entries, {"CSH-02"}),
+        (DataInput.journal_entries, {"PLN-07", "CSH-02"}),  # PLN-07 的 A03 月度数读总账 (需求 R103)
         (DataInput.sales_invoices, {"REV-08", "REV-02"}),
         (DataInput.bank_accounts, {"CSH-04", "DOC-06", "CSH-05", "CSH-02"}),  # DOC-06 依赖 CSH-04
         (DataInput.bank_transactions, {"REV-08", "REV-02", "CSH-05", "CSH-02"}),  # REV-02 依赖 REV-08
@@ -185,14 +185,15 @@ def test_latest_run_decides() -> None:
 
 
 def test_table_changes_adds_journal_for_approval_log() -> None:
-    """写审批日志会改总账分录的审批列, 另记 journal_entries; 其余账表只记自己, 按 DataInput 顺序."""
+    """写审批日志会改总账分录的审批列, 另记 journal_entries; 其余账表只记自己, 按 DataInput 顺序. 读总账的程序
+    (CSH-02, PLN-07 的 A03) 随之过期: 过期按表判断, 不细到列."""
     assert table_changes([TableKind.sales_invoices, TableKind.accounts]) == [
         DataInput.accounts,
         DataInput.sales_invoices,
     ]
     assert table_changes([TableKind.approval_log]) == [DataInput.journal_entries, DataInput.approval_log]
     stale = stale_procedures(PACK, RUNS, changed(*table_changes([TableKind.approval_log])), LIBRARY)
-    assert stale == ["CSH-02"]
+    assert stale == ["CSH-02", "PLN-07"]
 
 
 def test_rerunnable_only_execution_phase_not_waiting_for_rerun() -> None:

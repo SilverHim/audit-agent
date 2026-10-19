@@ -4,7 +4,7 @@ phase: P1_Planning
 cycle: Planning
 owner: A4
 outputs: [analytics, exceptions]
-reads: [accounts, trial_balance]
+reads: [accounts, trial_balance, journal_entries]
 engine: rule
 autonomy_level: L3
 params:
@@ -12,6 +12,7 @@ params:
   min_change_revenue_pct: 0.005   # 变动不小于本期收入乘以这一比例 (Numbat 收入 12,000,000.00 时为 60,000.00)
   revenue_categories: [revenue]              # 收入取这些标准分类 (accounts.category): A01 的门槛, 毛利率, 收入增长率
   cost_of_sales_categories: [cost_of_sales]  # 毛利率的成本取这些标准分类
+  employee_expense_categories: [employee_expenses]  # A03 月度员工费用取这些标准分类
   period_start: {ref: period_start}
   period_end: {ref: period_end}
   prior_period_start: {ref: dataset.prior_period_start}  # 上期起始日 (数据集声明); 为空视为与本期等长
@@ -72,3 +73,30 @@ rules:
        COALESCE(SUM(t.balance_cents) FILTER (WHERE a.category=ANY(:cost_of_sales_categories)),0) AS cost_of_sales_cents
       FROM trial_balance t JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
       WHERE t.engagement_id=:eid GROUP BY t.period ORDER BY t.period
+  # A03 (设计稿 v2.1 第 5.1 节 PLN-07 新增行, 决定 9): 本期内按月汇总总账分录 (入账日期在审计期间内), 供闸门查看,
+  # 也供后续程序读月度数; 不出例外. 收入 = revenue_categories 的贷减借; 费用 = 类型 expense 的借减贷; 员工费用 =
+  # employee_expense_categories 的借减贷 (含在费用里). month 为月初日期, 审计期间的每个月都出一行, 按月升序; 没有
+  # 分录的月份三项为 0 (整月缺分录要看得出来). 月份按不带时区的 timestamp 算, 与会话时区无关.
+  - id: A03
+    name: 月度趋势取数
+    severity: low
+    emit: rows
+    sql: |
+      WITH months AS (
+       SELECT CAST(m AS date) AS month
+       FROM generate_series(date_trunc('month', CAST(:period_start AS timestamp)), CAST(:period_end AS timestamp),
+                            interval '1 month') AS m),
+      sums AS (
+       SELECT CAST(date_trunc('month', CAST(j.posting_date AS timestamp)) AS date) AS month,
+              SUM(j.credit_cents-j.debit_cents) FILTER (WHERE a.category=ANY(:revenue_categories)) AS revenue_cents,
+              SUM(j.debit_cents-j.credit_cents) FILTER (WHERE a.type='expense') AS expense_cents,
+              SUM(j.debit_cents-j.credit_cents) FILTER (WHERE a.category=ANY(:employee_expense_categories))
+               AS employee_expense_cents
+       FROM journal_entries j JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+       WHERE j.engagement_id=:eid
+        AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+       GROUP BY 1)
+      SELECT m.month, COALESCE(s.revenue_cents,0) AS revenue_cents, COALESCE(s.expense_cents,0) AS expense_cents,
+             COALESCE(s.employee_expense_cents,0) AS employee_expense_cents
+      FROM months m LEFT JOIN sums s ON s.month=m.month
+      ORDER BY m.month

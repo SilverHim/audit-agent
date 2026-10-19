@@ -3772,6 +3772,14 @@
             },
             "type": "array",
             "title": "Exception Ids"
+          },
+          "monthly": {
+            "items": {
+              "$ref": "#/components/schemas/MonthlyFigures"
+            },
+            "type": "array",
+            "title": "Monthly",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -3782,7 +3790,7 @@
           "exception_ids"
         ],
         "title": "AnalyticsResult",
-        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外."
+        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."
       },
       "Annotation": {
         "properties": {
@@ -8518,6 +8526,37 @@
         ],
         "title": "MisstatementType",
         "description": "错报类型."
+      },
+      "MonthlyFigures": {
+        "properties": {
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
+          "revenue_cents": {
+            "type": "integer",
+            "title": "Revenue Cents"
+          },
+          "expense_cents": {
+            "type": "integer",
+            "title": "Expense Cents"
+          },
+          "employee_expense_cents": {
+            "type": "integer",
+            "title": "Employee Expense Cents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "month",
+          "revenue_cents",
+          "expense_cents",
+          "employee_expense_cents"
+        ],
+        "title": "MonthlyFigures",
+        "description": "PLN-07 A03 的一个月: 本期内该月总账分录的收入类, 费用类合计与员工费用 (需求 R103)."
       },
       "NeitherAction": {
         "type": "string",

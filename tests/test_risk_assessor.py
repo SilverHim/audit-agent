@@ -1,18 +1,21 @@
 """A4 RiskAssessorAgent: PLN-07 初步分析与 PLN-01 重要性候选 (合成数据集设计第 3.2 节, 第 7 节第 4, 5 行)."""
 
+import json
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from backend.agents.base import RunContext
-from backend.agents.risk_assessor import RiskAssessorAgent, analytics_ratios, scaled
+from backend.agents.risk_assessor import RiskAssessorAgent, analytics_ratios, monthly_figures, scaled
 from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     ExceptionDisposition,
     GateVerdict,
     MaterialityCandidates,
+    MonthlyFigures,
     ProcedureStatus,
     RiskItem,
     RiskLevel,
@@ -23,6 +26,7 @@ from backend.orchestration.nodes import apply_patch
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_A03_ROWS,
     NUMBAT_ABN,
     NUMBAT_ASIC,
     NUMBAT_CANDIDATES,
@@ -76,7 +80,10 @@ async def test_pln07_analytics_and_exception() -> None:
     agent, ctx, _ = setup("PLN-07")
     patch = await agent.run(ctx)
     assert patch["analytics"] == AnalyticsResult(
-        id="ANALYTICS", ratios=NUMBAT_RATIOS, exception_ids=["X-PLN-07-1-A01-1"]
+        id="ANALYTICS",
+        ratios=NUMBAT_RATIOS,
+        exception_ids=["X-PLN-07-1-A01-1"],
+        monthly=[MonthlyFigures.model_validate(row) for row in NUMBAT_A03_ROWS],
     )
     [exception] = patch["exceptions"]
     assert exception == numbat_pln07_exception(ctx.run)
@@ -130,6 +137,67 @@ def test_ratios_accept_sql_decimals_and_round_half_up() -> None:
         "gross_margin_current": 0.0001  # 0.00005 四舍五入进位
     }
     assert analytics_ratios([]) == {}
+
+
+async def test_pln07_monthly_table_from_a03_rows() -> None:
+    """需求 R103 验收 1: Numbat 的 ANALYTICS v1.monthly 为 12 行, 首月 2025-07 88000000 / 77321600 / 9566600, 末月
+    2026-06 150000000 / 188462400 / 12767400; 各列合计同本期试算表. A03 只出取数, 不出例外."""
+    agent, ctx, _ = setup("PLN-07")
+    monthly = (await agent.run(ctx))["analytics"].monthly
+    assert len(monthly) == 12
+    assert monthly[0] == MonthlyFigures(
+        month=date(2025, 7, 1), revenue_cents=88000000, expense_cents=77321600, employee_expense_cents=9566600
+    )
+    assert monthly[-1] == MonthlyFigures(
+        month=date(2026, 6, 1), revenue_cents=150000000, expense_cents=188462400, employee_expense_cents=12767400
+    )
+    assert [m.month for m in monthly] == [date(2025 + (6 + n) // 12, (6 + n) % 12 + 1, 1) for n in range(12)]
+    totals = (sum(m.revenue_cents for m in monthly), sum(m.expense_cents for m in monthly))
+    assert totals == (1200000000, 1096400000) and sum(m.employee_expense_cents for m in monthly) == 118000000
+
+
+async def test_pln07_without_a03_rows_has_no_monthly_table() -> None:
+    """需求 R103 验收 3: 没有 A03 行时 monthly 为空, 比率与例外照常."""
+    result = RuleResult(
+        exceptions=[], rows={"A02": [{"period": "current", "revenue_cents": 10, "cost_of_sales_cents": 7}]}
+    )
+    agent, ctx, _ = setup("PLN-07", only("PLN-07", result))
+    analytics = (await agent.run(ctx))["analytics"]
+    assert analytics.monthly == [] and analytics.ratios == {"gross_margin_current": 0.3}
+
+
+def test_monthly_figures_sort_by_month_and_count_nulls_as_zero() -> None:
+    """需求 R103 验收 3: 行按月升序 (SQL 已排序, 这里不依赖), 某列为空 (那个月没有该类分录) 记 0; SQL 的 SUM 是
+    Decimal, 转成整数分."""
+    rows = [
+        {"month": date(2026, 2, 1), "revenue_cents": Decimal(500), "expense_cents": None, "employee_expense_cents": 0},
+        {
+            "month": date(2026, 1, 1),
+            "revenue_cents": None,
+            "expense_cents": Decimal(300),
+            "employee_expense_cents": None,
+        },
+    ]
+    assert monthly_figures(rows) == [
+        MonthlyFigures(month=date(2026, 1, 1), revenue_cents=0, expense_cents=300, employee_expense_cents=0),
+        MonthlyFigures(month=date(2026, 2, 1), revenue_cents=500, expense_cents=0, employee_expense_cents=0),
+    ]
+    assert monthly_figures([]) == []
+
+
+def test_old_analytics_json_reads_empty_monthly() -> None:
+    """需求 R103 验收 3: 不含 monthly 键的旧 AnalyticsResult JSON (检查点, gate_materials 表) 读回为空; 新结果经 JSON
+    与检查点序列化读回相等."""
+    from backend.orchestration.checkpoint import checkpoint_serde
+
+    old = {"id": "ANALYTICS", "version": 1, "ratios": NUMBAT_RATIOS, "exception_ids": ["X-PLN-07-1-A01-1"]}
+    assert AnalyticsResult.model_validate_json(json.dumps(old)).monthly == []
+    new = AnalyticsResult(
+        id="ANALYTICS", ratios={}, exception_ids=[], monthly=[MonthlyFigures.model_validate(NUMBAT_A03_ROWS[0])]
+    )
+    assert AnalyticsResult.model_validate_json(new.model_dump_json()) == new
+    serde = checkpoint_serde()
+    assert serde.loads_typed(serde.dumps_typed({"analytics": new}))["analytics"] == new
 
 
 # ── PLN-01 ─────────────────────────────────────────

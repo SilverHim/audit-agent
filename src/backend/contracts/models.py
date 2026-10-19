@@ -760,11 +760,21 @@ class AcceptanceScorecard(Versioned):
     client_profile_version: int  # 核查时用的客户画像版本
 
 
+class MonthlyFigures(Model):
+    """PLN-07 A03 的一个月: 本期内该月总账分录的收入类, 费用类合计与员工费用 (需求 R103)."""
+
+    month: date  # 月初日期
+    revenue_cents: int  # 收入: revenue_categories 的贷减借
+    expense_cents: int  # 费用: 类型 expense 的借减贷
+    employee_expense_cents: int  # 员工费用: employee_expense_categories 的借减贷 (含在 expense_cents 里)
+
+
 class AnalyticsResult(Versioned):
-    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外."""
+    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."""
 
     ratios: dict[str, float]  # 比率: gross_margin_current, gross_margin_prior, revenue_growth, 四位小数
     exception_ids: list[str]  # 变动超阈值的例外
+    monthly: list[MonthlyFigures] = []  # A03 的月度数, 审计期间每月一行 (没有分录的月份为 0), 按月升序; 没有 A03 行为空
 
 
 class MaterialityCandidate(Model):

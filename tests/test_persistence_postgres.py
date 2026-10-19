@@ -117,6 +117,7 @@ async def test_load_rules_and_project_isolation(storage):
         prior_period_start=None,
         revenue_categories=["revenue"],
         cost_of_sales_categories=["cost_of_sales"],
+        employee_expense_categories=["employee_expenses"],
         income_tax_categories=["income_tax"],
         subsequent_days=10,
         lookback_days=5,
@@ -138,6 +139,8 @@ async def test_load_rules_and_project_isolation(storage):
                 )
             if rule["id"] == "D02":
                 assert len(rows) == 8
+            if (template["id"], rule["id"]) == ("PLN-07", "A03"):
+                assert len(rows) == 12
     with pytest.raises(DBAPIError, match="read-only"):
         await financial.query(e.id, "DELETE FROM sales_invoices", {})
     with pytest.raises(DBAPIError):
@@ -728,6 +731,62 @@ async def test_pln07_a01_compares_balance_sheet_with_opening(storage):
     # 变动为 0 的不出: 收入门槛取 0 时, 两期都为 0 的科目 (1300 上期没有, 本期改为 0) 也不出行
     await balance("current", "1300", 0)
     assert "1300" not in await hits(min_change_revenue_pct=0)
+
+
+async def test_pln07_a03_monthly_figures_from_journal(storage):
+    """PLN-07 A03 (需求 R103 验收 2): data/demo 的总账在审计期间内按月汇总, 得 12 行, 同 NUMBAT_A03_ROWS (各列合计
+    同本期试算表: 收入取 revenue 分类, 费用取类型 expense, 员工费用取 employee_expenses). 入账日期不在审计期间内的
+    分录不计: 期间缩到 2025-08-01 至 2026-05-31 时首尾两个月不出, 其余月份不变; 期间从月中起止时首尾两个月只计期间
+    内的. 收入与员工费用的分类取参数. 审计
+    期间的每个月都出一行: 期间多出没有分录的 2025-06, 或删掉 2026-02 的全部分录时, 那个月三项为 0 (第 1 轮审核
+    R103-01)."""
+    from sqlalchemy import delete
+
+    from backend.contracts.records import DatasetTraits
+    from backend.contracts.state import initial_state
+    from tests.fakes import NUMBAT_A03_ROWS
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    library = ProcedureLibrary(ROOT / "src/backend/knowledge")
+    template = library.load("PLN-07")
+    a03 = next(r.sql for r in template.rules if r.id == "A03")
+    params = library.resolve_params(template, e, initial_state(e, [], 1), None, traits=DatasetTraits(), profile=None)
+    assert params["employee_expense_categories"] == ["employee_expenses"]
+
+    rows = [dict(r) for r in await financial.query(e.id, a03, params)]
+    assert rows == NUMBAT_A03_ROWS
+    shorter = {**params, "period_start": date(2025, 8, 1), "period_end": date(2026, 5, 31)}
+    assert [dict(r) for r in await financial.query(e.id, a03, shorter)] == NUMBAT_A03_ROWS[1:-1]
+    # 期间首尾不在月初月末时, 首尾两个月只计期间内的分录 (7 月 16 日之前, 6 月 15 日之后的不计)
+    inside = {**params, "period_start": date(2025, 7, 16), "period_end": date(2026, 6, 15)}
+    partial = [dict(r) for r in await financial.query(e.id, a03, inside)]
+    assert [r["month"] for r in partial] == [r["month"] for r in NUMBAT_A03_ROWS]
+    assert partial[1:-1] == NUMBAT_A03_ROWS[1:-1]
+    assert partial[0]["revenue_cents"] < NUMBAT_A03_ROWS[0]["revenue_cents"]
+    assert partial[-1]["expense_cents"] < NUMBAT_A03_ROWS[-1]["expense_cents"]
+    # 员工费用按参数取分类: 不给分类时这一列都为 0, 其余列不变
+    none = [dict(r) for r in await financial.query(e.id, a03, {**params, "employee_expense_categories": []})]
+    assert none == [{**row, "employee_expense_cents": 0} for row in NUMBAT_A03_ROWS]
+    # 收入按参数取分类: 加上 other_income 时每月并入 4200 储蓄利息 (合成数据集设计第 4.4 节), 其余两列不变
+    interest = [115000, 116000, 116000, 117000, 116000, 117000, 117000, 116000, 117000, 116000, 118000, 119000]
+    wider = {**params, "revenue_categories": ["revenue", "other_income"]}
+    assert [dict(r) for r in await financial.query(e.id, a03, wider)] == [
+        {**row, "revenue_cents": row["revenue_cents"] + cents}
+        for row, cents in zip(NUMBAT_A03_ROWS, interest, strict=True)
+    ]
+
+    # 没有分录的月份也出一行, 三项为 0
+    empty = {"revenue_cents": 0, "expense_cents": 0, "employee_expense_cents": 0}
+    longer = [dict(r) for r in await financial.query(e.id, a03, {**params, "period_start": date(2025, 6, 1)})]
+    assert longer == [{"month": date(2025, 6, 1), **empty}, *NUMBAT_A03_ROWS]
+    journal = m.FINANCIAL["journal_entries"]
+    async with transaction(engine, e.id) as conn:
+        february = (journal.c.posting_date >= date(2026, 2, 1)) & (journal.c.posting_date <= date(2026, 2, 28))
+        await conn.execute(delete(journal).where(journal.c.engagement_id == e.id, february))
+    rows = [dict(r) for r in await financial.query(e.id, a03, params)]
+    assert rows == [{**row, **empty} if row["month"] == date(2026, 2, 1) else row for row in NUMBAT_A03_ROWS]
 
 
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):

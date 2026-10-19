@@ -306,6 +306,7 @@ def test_build_run_pln07_params_snapshot() -> None:
         "min_change_revenue_pct": 0.005,
         "revenue_categories": ["revenue"],
         "cost_of_sales_categories": ["cost_of_sales"],
+        "employee_expense_categories": ["employee_expenses"],
         "period_start": date(2025, 7, 1),
         "period_end": date(2026, 6, 30),
         "prior_period_start": None,
