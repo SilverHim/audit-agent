@@ -5,7 +5,9 @@ import csv
 import functools
 import hashlib
 import json
+import shutil
 import tempfile
+import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -1287,11 +1289,13 @@ class FakeEvidenceStore:
         return updated
 
     async def path(self, eid: str, document_id: str) -> Path:
-        """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""
+        """save 收到的原件写到临时目录 (每个实例一个, 实例回收或进程退出时删掉) 后返回路径; 没有内容 (预置的登记)
+        抛 FileNotFoundError."""
         if document_id not in self.contents:
             raise FileNotFoundError(document_id)
         if self.directory is None:
             self.directory = Path(tempfile.mkdtemp(prefix="fake-evidence-"))
+            weakref.finalize(self, shutil.rmtree, self.directory, ignore_errors=True)
         doc = next(d for d in self.financial_store.document_refs if d.id == document_id)
         path = self.directory / f"{document_id}{Path(doc.file_name).suffix.lower()}"
         path.write_bytes(self.contents[document_id])
