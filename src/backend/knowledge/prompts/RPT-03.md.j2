@@ -9,9 +9,9 @@ RPT-03 报告文本生成 → ReportDraft，每个 revision 调用一次；只�
   fin01_reason   FIN-01 GateDecision.reason
   schedule       UncorrectedSchedule：items[misstatement_id、amount_cents、direction]、total_cents、materiality_cents
   misstatements  schedule.items 对应的 Misstatement：id、judgment_id、type、account、assertion、amount_cents、direction
-  judgments      上述错报关联的已确认 Judgment：id、version、procedure_id、subject_id、conclusion、evidence
+  judgments      上述错报所依据的已确认 Judgment（当前结果）：key（引用键，程序:对象，人工判断另加 :H{n}）、id、version、procedure_id、subject_id、conclusion、evidence
   previous       上一 revision 的 {opinion, basis_for_opinion}，首稿为 null
-  annotations    RPT-01 对上一 revision 的批注：section、quote、comment；首稿为空
+  annotations    RPT-01 对上一 revision 的批注：section、quote、comment；首稿为空；过期程序重跑后的重拟（不是退回引起的）也为空
   standards      StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set period_end = task.params.period_end %}
@@ -32,9 +32,9 @@ Uncorrected misstatements:
 
 Total uncorrected misstatements: {{ schedule.total_cents }} cents.
 
-Confirmed judgments behind them:
+Confirmed judgments behind them (cite them by key):
 {% for j in judgments %}
-- {{ j.id }} (version {{ j.version }}, {{ j.procedure_id }}, subject {{ j.subject_id }}): {{ j.conclusion }}
+- key `{{ j.key }}` ({{ j.procedure_id }}, subject {{ j.subject_id }}): {{ j.conclusion }}
   Evidence: {% for e in j.evidence %}{{ e.type }} {{ e.source_id }} ({{ e.locator }}{% if e.page %}, p.{{ e.page }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}
 {% endfor %}
 {% endif %}
@@ -55,12 +55,16 @@ Opinion:
 Basis for Opinion:
 {{ previous.basis_for_opinion }}
 
+{% if annotations %}
 Reviewer annotations to address:
 {% for a in annotations %}
 - [{{ a.section }}]{% if a.quote %} on "{{ a.quote }}"{% endif %}: {{ a.comment }}
 {% endfor %}
 
 Revise the previous text so that every annotation is addressed. Keep all other wording unchanged.
+{% else %}
+The previous draft was not rejected: procedures were rerun on updated data and the auditor confirmed the results again at FIN-01. Redraft both sections from the inputs above. Where the inputs support the previous wording, keep it unchanged.
+{% endif %}
 {% endif %}
 
 ## Opinion section (ASA700-P23{% if qualified %}, ASA705-P16{% endif %})
@@ -95,4 +99,4 @@ Revise the previous text so that every annotation is addressed. Keep all other w
 
 - `opinion`: the full Opinion section, heading first.
 - `basis_for_opinion`: the full Basis section, heading first.
-- `judgment_refs`: `{"id", "version"}` for every judgment whose facts appear in the text; empty for an unqualified opinion.
+- `judgment_keys`: the key of every judgment above whose facts appear in the text, copied exactly (e.g. `{{ judgments[0].key if judgments else "REV-02:SI-2026-0001" }}`); only keys listed above; empty for an unqualified opinion.

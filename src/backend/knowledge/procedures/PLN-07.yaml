@@ -4,6 +4,7 @@ phase: P1_Planning
 cycle: Planning
 owner: A4
 outputs: [analytics, exceptions]
+reads: [accounts, trial_balance]
 engine: rule
 autonomy_level: L3
 params:

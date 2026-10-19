@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
-from backend.agents.evidence import EvidenceAgent
+from backend.agents.evidence import EvidenceAgent, confirmation_key
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import IngestAgent
 from backend.contracts.models import (
@@ -26,7 +26,7 @@ from backend.contracts.models import (
     TaskStatus,
     TrailKind,
 )
-from backend.contracts.records import DatasetTraits
+from backend.contracts.records import BankAccount, DatasetTraits
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import apply_patch
 from backend.services.procedure_library import highest_risk
@@ -249,13 +249,18 @@ async def test_exceptions_sources_and_amounts() -> None:
     assert {x.disposition for x in exceptions.values()} == {ExceptionDisposition.open}
 
 
+def key(account_id: str) -> str:
+    """发函的幂等键 (含账户识别信息的摘要, 见 evidence.confirmation_key)."""
+    return confirmation_key(EID, BankAccount.model_validate(NUMBAT_RECORDS[("bank_account", account_id)]))
+
+
 async def test_confirmations_balances_dates_and_receipts() -> None:
     """第 10, 11, 13 行: 逐账户的回函余额与截至日, 账面余额与差额, 回函文件, 幂等键与回函渠道."""
     demo = await run_p2()
     confirmations = {c.id: c for c in demo.state["confirmations"]}
     expected = {
-        "C-BA-01": (120840000, date(2026, 6, 30), 125840000, -5000000, NUMBAT_REPLIES[0].id, f"{EID}:CSH-04:BA-01"),
-        "C-BA-02": (40000000, date(2026, 6, 30), 40000000, 0, NUMBAT_REPLIES[1].id, f"{EID}:CSH-04:BA-02"),
+        "C-BA-01": (120840000, date(2026, 6, 30), 125840000, -5000000, NUMBAT_REPLIES[0].id, key("BA-01")),
+        "C-BA-02": (40000000, date(2026, 6, 30), 40000000, 0, NUMBAT_REPLIES[1].id, key("BA-02")),
     }
     assert {
         cid: (

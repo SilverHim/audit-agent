@@ -4,6 +4,7 @@ phase: P2_Executing
 cycle: Revenue
 owner: A6
 outputs: [judgments, exceptions, review_tasks]
+reads: [contracts]
 engine: llm
 autonomy_level: L2
 manual_result_allowed: true

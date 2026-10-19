@@ -16,6 +16,8 @@ from pathlib import PurePath
 from typing import ClassVar, cast
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, gather_all
+from backend.agents.evidence import current_confirmations, legacy_accounts
+from backend.contracts.data import DataInput
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ConfirmationExtraction, ContractExtraction, DocumentClassification
 from backend.contracts.models import (
@@ -41,6 +43,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
+from backend.orchestration.trail import record_transitions
 from backend.services.data_import import Sheet, cell_text, mask_sample, read_sheet
 
 logger = logging.getLogger(__name__)
@@ -223,17 +226,21 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
         return {"documents": documents, "review_tasks": tasks, "procedure_runs": [run]}
 
     async def extract_replies(self, ctx: RunContext) -> list[Extracted]:
-        """DOC-06: 对状态中已有回函的函证 (rerun 只处理 rerun_subject_ids 中的账户) 并发调大模型抽取回函余额与截至日.
+        """DOC-06: 对状态中当前的 (账户仍在银行账户表中且识别信息没变, evidence.current_confirmations) 已有回函的函证
+        (rerun 只处理 rerun_subject_ids 中的账户) 并发调大模型抽取回函余额与截至日.
 
         回函取状态 documents 中 reply_document_id 对应的记录, 不在状态中抛 LookupError. 校验上下文带上该函证,
         抽出的账号与账户不符即判失败; 回函渠道以 CSH-04 的回执为准, 不符只记提示. 通过的出函证新版本.
+        审计师改过且回函原件没变的函证不重新抽取, 沿用 Store 中的版本 (见 kept_edit), 留痕写明沿用审计师修改.
         """
         eid = ctx.engagement.id
         only = set(ctx.procedure.rerun_subject_ids)
+        accounts = await self.deps.financial_store.bank_accounts(eid)
+        legacy = await legacy_accounts(self.deps, eid, accounts)
         confirmations = sorted(
             (
                 c
-                for c in ctx.state["confirmations"]
+                for c in current_confirmations(ctx.state["confirmations"], eid, accounts, legacy)
                 if c.reply_document_id is not None and (not only or c.bank_account_id in only)
             ),
             key=lambda c: c.bank_account_id,
@@ -244,6 +251,9 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
             document = documents.get(cast(str, confirmation.reply_document_id))
             if document is None:
                 raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 不在状态中")
+            kept = await self.kept_edit(ctx, confirmation)
+            if kept is not None:
+                return Extracted(document, confirmation.bank_account_id, kept)
             pages = await self.deps.evidence_store.pages(eid, document.id)
             variables = {"document": document.model_dump(mode="json"), "pages": pages}
             vctx = ValidationContext(document=document, confirmation=confirmation)
@@ -264,6 +274,50 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
             return Extracted(document, confirmation.bank_account_id, updated)
 
         return await gather_all(extract(c) for c in confirmations)
+
+    async def kept_edit(self, ctx: RunContext, confirmation: Confirmation) -> Confirmation | None:
+        """DOC-06 沿用的审计师修改 (以 Store 为准: 审计师改过的回函是人对机器结果的更正, 不被机器用同一份原件再抽一次
+        覆盖). 三条都满足时返回 Store 中的最新版本: 抽取版本表有该函证的修改记录; 最近一次修改之前, 对同一原件有过
+        一次成功抽取 (该版之前有 evidence 指向这份回函的版本, 只有 DOC-06 抽取写 evidence); 从这次修改的那版起
+        Store 中各版的回函原件 (reply_document_id) 都与当前函证的相同 (没有换成新回函). 沿用时不调大模型, 不出新
+        版本, 写一条 data 留痕 (action keep_edit, 防重复键 {eid}:{执行 ID}:keep_edit:{函证 ID}). 其余为空, 照常
+        抽取: 没改过; 修改前从没成功抽取过 (如第一次抽取失败后审计师手改, R21 重跑时照常抽取); 修改之后换了原件
+        (银行或客户给了新回函), 新版本取代审计师那一版."""
+        eid = ctx.engagement.id
+        edits = [
+            r
+            for r in await self.deps.data.extraction_versions(eid, "confirmation", confirmation.id)
+            if r.field is not None
+        ]
+        if not edits:
+            return None
+        edited = edits[-1].version
+        history = await self.deps.output_store.history(eid, Confirmation, confirmation.id)
+        reply = confirmation.reply_document_id
+        since = [c for c in history if c.version >= edited]
+        extracted = any(c.version < edited and any(p.source_id == reply for p in c.evidence) for c in history)
+        if not since or not extracted or any(c.reply_document_id != reply for c in since):
+            return None
+        kept = max(since, key=lambda c: c.version)
+        entry = TrailEntry(
+            engagement_id=eid,
+            kind=TrailKind.data,
+            actor=self.agent_id,
+            procedure_id=ctx.procedure.id,
+            run_id=ctx.run.id,
+            summary=f"{kept.id} 沿用审计师修改 (第 {kept.version} 版), 回函原件未变, 不重新抽取",
+            idempotency_key=f"{eid}:{ctx.run.id}:keep_edit:{kept.id}",
+            payload={
+                "action": "keep_edit",
+                "confirmation_id": kept.id,
+                "version": kept.version,
+                "document_id": kept.reply_document_id,
+                "edited_by": edits[-1].changed_by,
+            },
+            created_at=datetime.now(UTC),
+        )
+        await record_transitions(self.deps.trail, [entry])
+        return kept
 
     def replies_patch(self, ctx: RunContext, findings: list[Extracted]) -> StatePatch:
         """DOC-06: 同 DOC-04 处理文件状态与失败任务, 另交回通过的函证新版本 (失败的函证不更新)."""
@@ -496,7 +550,8 @@ class DocumentIntake:
     async def contract(
         self, eid: str, document: DocumentRef, engagement: Engagement, job: str | None, since: datetime | None
     ) -> bool:
-        """DOC-04 抽取并写入合同, 版本规则见 save_new_contract: 重新上传或改类型后重抽 (新的作业) 接在已有版本之后.
+        """DOC-04 抽取并写入合同, 版本规则见 save_new_contract: 重新上传或改类型后重抽 (新的作业) 接在已有版本之后;
+        同一事务内数据版本 +1, 记数据变动 contracts.
 
         补做 (since 为作业开始的时间) 时先看已有的同编号合同: 正是这个作业写入的 (同 extracted_by_run; 中断在置
         extracted 之前, 之后可能还经审计师修改) 不重抽, 算做完; 作业开始之后被改动过 (之后的作业或审计师修改) 的也不
@@ -516,7 +571,11 @@ class DocumentIntake:
         contract = await extract_contract(self.deps, eid, template, run, document, profile)
         if contract is None:
             return False
-        await save_new_contract(self.deps, eid, contract)
+        # 程序执行之外写进的合同新版本, 同审计师修改合同: 一个事务内记数据变动 contracts, 读合同的程序 (REV-03,
+        # REV-02) 据此标过期 (需求 R274). DOC-04 执行写的合同不记, 靠 "依赖的程序在其后重跑过" 传播
+        async with self.deps.output_store.transaction(eid):
+            await save_new_contract(self.deps, eid, contract)
+            await self.deps.data.bump_version(eid, DataInput.contracts)
         return True
 
     async def reply(self, eid: str, document: DocumentRef) -> bool:

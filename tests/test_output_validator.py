@@ -29,7 +29,6 @@ from backend.contracts.models import (
     EvidencePointer,
     EvidenceType,
     Judgment,
-    JudgmentRef,
     OpinionType,
     ProposedAction,
     ReasoningStep,
@@ -51,6 +50,8 @@ from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
     CheckResult,
     OutputValidator,
+    citation_keys,
+    judgment_key,
     output_model,
     structure_only,
     supported_amounts,
@@ -767,7 +768,7 @@ async def test_reply_channel_mismatch_is_only_a_note() -> None:
 QUALIFIED_DRAFT = ReportDraft(
     opinion="Qualified Opinion\n\nWe have audited ...",
     basis_for_opinion="Basis for Qualified Opinion\n\nRevenue is overstated by $142,000 ...",
-    judgment_refs=[JudgmentRef(id="J-REV-02-1-SI-2026-0612", version=2)],
+    judgment_keys=["REV-02:SI-2026-0612"],
 )
 
 
@@ -803,16 +804,22 @@ async def check_report(
 async def test_report_draft_passes() -> None:
     report = await check_report(QUALIFIED_DRAFT, [confirmed_judgment()])
     assert report.level_failed is None and report.errors == [] and report.output == QUALIFIED_DRAFT
-    clean = ReportDraft(opinion="Opinion\n\n...", basis_for_opinion="Basis for Opinion\n\n...", judgment_refs=[])
+    clean = ReportDraft(opinion="Opinion\n\n...", basis_for_opinion="Basis for Opinion\n\n...", judgment_keys=[])
     assert (await check_report(clean, [], OpinionType.unqualified)).level_failed is None
 
 
 @pytest.mark.parametrize(
     ("judgments", "error"),
     [
-        ([], "引用的判断 J-REV-02-1-SI-2026-0612 不在状态中"),
-        ([confirmed_judgment(version=3)], "引用的判断 J-REV-02-1-SI-2026-0612 v2 不是当前版本 v3"),
-        ([confirmed_judgment(status=ReviewStatus.pending)], "引用的判断 J-REV-02-1-SI-2026-0612 尚未确认 (pending)"),
+        ([], "引用键 REV-02:SI-2026-0612 不是可引用的判断 (可用: 无)"),
+        (
+            [confirmed_judgment().model_copy(update={"id": "J-REV-02-1-SI-2026-0618", "subject_id": "SI-2026-0618"})],
+            "引用键 REV-02:SI-2026-0612 不是可引用的判断 (可用: REV-02:SI-2026-0618)",
+        ),
+        (
+            [confirmed_judgment(status=ReviewStatus.pending)],
+            "引用键 REV-02:SI-2026-0612 的判断 J-REV-02-1-SI-2026-0612 尚未确认 (pending)",
+        ),
     ],
 )
 async def test_report_reference_failures(judgments: list[Judgment], error: str) -> None:
@@ -829,7 +836,7 @@ async def test_report_reference_failures(judgments: list[Judgment], error: str) 
             OpinionType.qualified,
             "基础段首行应为 Basis for Qualified Opinion",
         ),
-        ({"judgment_refs": []}, OpinionType.qualified, "保留意见须引用形成错报的已确认判断"),
+        ({"judgment_keys": []}, OpinionType.qualified, "保留意见须引用形成错报的已确认判断"),
         ({}, OpinionType.unqualified, "意见段首行应为 Opinion"),
     ],
 )
@@ -862,7 +869,7 @@ async def test_report_headings_tolerate_surrounding_whitespace_and_crlf() -> Non
 async def test_report_reference_failure_reported_before_headings() -> None:
     report = await check_report(QUALIFIED_DRAFT.model_copy(update={"opinion": "wrong"}), [])
     assert report.level_failed == "reference"
-    assert report.errors == ["引用的判断 J-REV-02-1-SI-2026-0612 不在状态中"]
+    assert report.errors == ["引用键 REV-02:SI-2026-0612 不是可引用的判断 (可用: 无)"]
 
 
 async def test_report_may_cite_human_replacement_but_not_overridden_original() -> None:
@@ -881,10 +888,19 @@ async def test_report_may_cite_human_replacement_but_not_overridden_original() -
     )
     old, human = override_effects(record, task, original, [], {original.id})
     assert isinstance(old, Judgment) and isinstance(human, Judgment) and human.id.endswith("-H1")
-    cites_human = QUALIFIED_DRAFT.model_copy(
-        update={"judgment_refs": [JudgmentRef(id=human.id, version=human.version)]}
-    )
+    assert judgment_key(human) == "REV-02:SI-2026-0612:H1" and judgment_key(old) == "REV-02:SI-2026-0612"
+    cites_human = QUALIFIED_DRAFT.model_copy(update={"judgment_keys": ["REV-02:SI-2026-0612:H1"]})
     assert (await check_report(cites_human, [old, human])).level_failed is None
-    cites_original = QUALIFIED_DRAFT.model_copy(update={"judgment_refs": [JudgmentRef(id=old.id, version=old.version)]})
-    report = await check_report(cites_original, [old, human])
+    report = await check_report(QUALIFIED_DRAFT, [old, human])
     assert report.level_failed == "reference" and "尚未确认 (overridden)" in report.errors[0]
+
+
+def test_citation_keys_must_be_unique() -> None:
+    """引用键的不变式: 可引用的判断里键不能重复 (同一程序同一对象两次执行的 AI 判断); 撞键时抛错, 写明键与判断."""
+    first = confirmed_judgment()
+    second = first.model_copy(update={"id": "J-REV-02-2-SI-2026-0612", "run_id": "RUN-REV-02-2", "version": 1})
+    assert list(citation_keys([first])) == ["REV-02:SI-2026-0612"]
+    with pytest.raises(ValueError, match="REV-02:SI-2026-0612: J-REV-02-1-SI-2026-0612, J-REV-02-2-SI-2026-0612"):
+        citation_keys([first, second])
+    odd = first.model_copy(update={"id": "J-CUSTOM"})
+    assert judgment_key(odd) == "REV-02:SI-2026-0612:J-CUSTOM"

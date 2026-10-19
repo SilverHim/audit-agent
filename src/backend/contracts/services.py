@@ -48,7 +48,7 @@ class ValidationContext(Model):
 
     rule_findings: list[AuditException] = []  # 该判断对象的规则例外, 即判断归因的例外; 错报金额可等于其金额
     document: DocumentRef | None = None  # 抽取类程序 (DOC-04, DOC-06) 本次抽取的文件, 指针只能指向它
-    judgments: list[Judgment] = []  # 状态中的判断, 供 RPT-03 校验 judgment_refs
+    judgments: list[Judgment] = []  # RPT-03 可引用的判断 (当前结果中错报所依据的已确认判断), 引用键据此生成
     confirmation: Confirmation | None = None  # DOC-06 本次抽取的函证 (CSH-04 所建), 核对回函账号与回函渠道
     opinion: OpinionType | None = None  # RPT-03 应出的意见类型 (FIN-01 选定), 核对两段的标题
     # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页), 否则该步 unsupported

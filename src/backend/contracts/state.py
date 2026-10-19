@@ -23,6 +23,7 @@ from backend.contracts.models import (
     Phase,
     Procedure,
     ProcedureRun,
+    RerunRequest,
     ReviewRecord,
     ReviewTask,
     RiskItem,
@@ -120,6 +121,7 @@ class EngagementState(TypedDict):
     review_records: Annotated[list[ReviewRecord], append_unique]  # 复核决定, 只追加
     gate_decisions: Annotated[list[GateDecision], append_unique]  # 闸门决定, 只追加
     misstatements: Annotated[list[Misstatement], append_unique]  # 错报, 只追加
+    rerun_requests: Annotated[list[RerunRequest], append_unique]  # 过期程序的重跑请求, 只追加 (DecisionSubmit 写)
     uncorrected_schedule: UncorrectedSchedule | None  # 未更正错报汇总表, A9 写
     opinion_route: OpinionType | None  # FIN-01 确认的意见类型; 只在图状态中
 
@@ -150,6 +152,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "review_records": [],
     "gate_decisions": [],
     "misstatements": [],
+    "rerun_requests": [],
     "uncorrected_schedule": None,
     "opinion_route": None,
 }

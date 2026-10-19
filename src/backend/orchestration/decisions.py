@@ -3,7 +3,7 @@
 校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,6 +17,7 @@ from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
     CriticVerdict,
@@ -35,6 +36,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     ProposedAction,
+    RerunRequest,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
@@ -47,12 +49,16 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.gates import check_fields, current_gate, current_spec, spec_of
-from backend.orchestration.nodes import done_status, rerun_subjects, save_outputs
-from backend.orchestration.runner import GraphRunner, features_mismatch, resume_required, review_waits
+from backend.orchestration.gates import check_fields, current_gate, current_spec, latest_in_order, spec_of
+from backend.orchestration.inputs import input_versions
+from backend.orchestration.nodes import confirmations_from_store, done_status, rerun_subjects, save_outputs
+from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
+from backend.services.data_quality import OnHand
+from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import attribute_exceptions
+from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
 # 效果中会出新版本的对象列表
@@ -456,6 +462,43 @@ def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[
     )
 
 
+def settle_blocked(
+    pack: Sequence[Procedure], latest: Mapping[str, Procedure], updated: Sequence[Procedure], library: ProcedureLibrary
+) -> list[Procedure]:
+    """过期重跑要写的程序新版本 (updated, 都是 executing) 中, 前置 (程序包中的, 不在本次重跑里) 已记未执行 (无数据)
+    的, 重跑也只会随前置记未执行: 这一版直接记 no_data, data_request_ids 为前置的并集 (同需求 R280 的传播,
+    inputs.input_versions, 沿链算到不动点), 不派发; 否则 after_fan_in 派不出又等不到, 抛 ScheduleStuck. 其余照旧.
+    其余程序的状态以 Store 为准 (latest)."""
+    trial = {p.id: latest.get(p.id, p) for p in pack} | {u.id: u for u in updated}
+    spread = {p.id: p for p in input_versions([trial[p.id] for p in pack], library, OnHand(), [])}
+    return [
+        spread[u.id].model_copy(update={"version": u.version})
+        if u.id in spread and spread[u.id].status is ProcedureStatus.no_data
+        else u
+        for u in updated
+    ]
+
+
+def rerun_trail(eid: str, request: RerunRequest) -> TrailEntry:
+    """过期重跑的 decision 留痕 (防重复键为请求 ID): 重跑的程序, 被取代的执行与一并关闭的待决任务.
+    提交与恢复补做共用."""
+    closed = f", 一并关闭 {len(request.closed_task_ids)} 个待决任务" if request.closed_task_ids else ""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=request.requested_by,
+        summary=f"用新数据重跑过期程序 {', '.join(request.procedure_ids)}{closed}",
+        idempotency_key=request.id,
+        payload={
+            "request_id": request.id,
+            "procedure_ids": request.procedure_ids,
+            "superseded_run_ids": request.superseded_run_ids,
+            "closed_task_ids": request.closed_task_ids,
+            "data_version": request.data_version,
+        },
+    )
+
+
 class GraphDecisionSubmit:
     """DecisionSubmit 的实现: 审计师所有决定的唯一写入口.
 
@@ -492,12 +535,14 @@ class GraphDecisionSubmit:
 
     @asynccontextmanager
     async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
-        """submit 与 update_client_profile 共用的外壳, 用法: async with self._deciding(eid) as (engagement, snapshot).
+        """submit, update_client_profile 与 rerun_stale 共用的外壳,
+        用法: async with self._deciding(eid) as (engagement, snapshot).
 
         进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 查功能集 (FEATURES_MISMATCH), 读检查点, 查 RESUME_REQUIRED.
         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
         块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放. resume 为复核决定 ID 时以
-        Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定与更新客户资料为 None (已越过闸门).
+        Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定, 更新客户资料与过期重跑为 None (已越过闸门
+        或已以 fan_in 身份写入).
         """
         engagement = await self._engagement(eid)
         if engagement.locked:  # 第 7 节校验顺序: 锁定先于项目锁 (ENGAGEMENT_BUSY)
@@ -528,8 +573,9 @@ class GraphDecisionSubmit:
         同一 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算.
         """
         store = self.deps.output_store
-        if await store.get(eid, GateDecision, decision_id) or await store.get(eid, ReviewRecord, decision_id):
-            raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
+        for kind in (GateDecision, ReviewRecord, RerunRequest):  # 三类同在 decisions 表, ID 不能重
+            if await store.get(eid, kind, decision_id) is not None:
+                raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
 
     async def check_gate_decision(self, eid: str, decision: GateDecision) -> Versioned:
         """第 7 节校验顺序中 NOT_AT_GATE 之后的部分: 材料与修改项的版本, 字段 (登记表的 fields), 取值 (登记表的
@@ -622,7 +668,8 @@ class GraphDecisionSubmit:
             pack = values["procedure_pack"]
             effects, sources = await spec.effects(self.deps, eid, decision, target, pack, self.now())
             created = new_versions(effects, sources)
-            written = await self._write_gate(eid, decision, effects, created, values["phase"])
+            reruns = len(values["rerun_requests"])
+            written = await self._write_gate(eid, decision, effects, created, values["phase"], reruns)
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
             # 效果已出材料的新版本时 (RPT-01 签字) 只写新版本, 路由另行放行 (spec.passed)
             if spec.material_field not in written:
@@ -637,16 +684,18 @@ class GraphDecisionSubmit:
         效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
         (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回 (await_events, 第 7 节恢复机制).
-        snapshot: 当前检查点, 人工判断按其中已有的判断取号 (-H{n}).
+        snapshot: 当前检查点, 人工判断按其中已有的判断取号 (-H{n}); 其中的过期重跑请求定出哪些归因已失效.
         """
         store = self.deps.output_store
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
         assert target is not None  # 校验时已按任务目标取到
+        values = fill_defaults(snapshot.values)
         exceptions: list[AuditException] = []
         if isinstance(target, Judgment):
             found = [await store.get(eid, AuditException, x) for x in target.exception_ids]
-            exceptions = [x for x in found if x is not None]
-        taken = {j.id for j in fill_defaults(snapshot.values)["judgments"]}
+            # 由被过期重跑取代的判断做的归因已失效, 按未归因处理, 新判断确认时重新归因 (同 current_results)
+            exceptions = released([x for x in found if x is not None], superseded_judgments(values))
+        taken = {j.id for j in values["judgments"]}
         effects = review_effects(record, task, target, exceptions, taken)
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
@@ -671,10 +720,17 @@ class GraphDecisionSubmit:
         await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
 
     async def _write_gate(
-        self, eid: str, decision: GateDecision, effects: StatePatch, created: list[Versioned], phase: Phase
+        self,
+        eid: str,
+        decision: GateDecision,
+        effects: StatePatch,
+        created: list[Versioned],
+        phase: Phase,
+        reruns: int,
     ) -> StatePatch:
         """在一个事务内写入闸门决定及其效果, 提交后写 decision 留痕与 transition 留痕 (程序状态, 阶段由 phase 变为
-        效果中的阶段). 返回要写入状态的片段 (决定换成 Store 返回的).
+        效果中的阶段; reruns 为检查点中的过期重跑请求数, 见 trail.phase_transition). 返回要写入状态的片段
+        (决定换成 Store 返回的).
 
         决定的写入者为决定人; created 为效果新出的版本 (见 new_versions), 写入者为 A1. Store 若已有其中某个
         (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
@@ -708,9 +764,96 @@ class GraphDecisionSubmit:
         )
         entries = await procedure_transitions(output_store, eid, saved)
         if "phase" in effects:
-            entries += phase_transition(eid, phase, effects["phase"], procedure_id)
+            entries += phase_transition(eid, phase, effects["phase"], procedure_id, reruns=reruns)
         await record_transitions(self.deps.trail, entries)
         return {**effects, **stored}
+
+    async def rerun_stale(
+        self, eid: str, request_id: str, procedure_ids: list[str] | None, *, requested_by: str
+    ) -> RerunRequest:
+        """用新数据重跑过期的 P2 程序 (需求 R274, 第 7 节). procedure_ids 为空时取全部可重跑的过期程序.
+
+        校验顺序: ENGAGEMENT_LOCKED, ENGAGEMENT_BUSY, FEATURES_MISMATCH, RESUME_REQUIRED (同其他决定); 图不在等复核,
+        FIN-01 或 RPT-01 闸门前 → NOT_RERUNNABLE; 所列程序不是过期的执行阶段程序, 或没有可重跑的 → INVALID_VALUE;
+        请求 ID 用过 → INVALID_VALUE.
+        通过后一个事务内写: 重跑请求; 各程序新版本 (executing, 整条重跑); 它们的待决任务 decided (由重跑关闭); 已过
+        执行阶段时阶段回 P2_Executing. 提交后写 decision 留痕与 transition 留痕, 再以 fan_in 身份写检查点: 之后由
+        after_fan_in 按现有规则派发这些程序 (新执行 run_no + 1), 执行完回完成阶段, FIN-04 重做汇总表, 此前的 FIN-01
+        决定绑的是旧版本, 闸门重新呈报. 新结果为准: 这些程序此前各次执行的结果不再计入 (services.staleness).
+        """
+        async with self._deciding(eid) as (_, snapshot):
+            if not at_rerun_point(snapshot):
+                raise DecisionRejected("NOT_RERUNNABLE", "只能在等复核, FIN-01 或 RPT-01 闸门处重跑过期程序")
+            values = fill_defaults(snapshot.values)
+            store = self.deps.output_store
+            pack = values["procedure_pack"]
+            runs = await store.latest(eid, ProcedureRun)
+            superseded = superseded_runs(await store.latest(eid, RerunRequest))
+            stale = stale_procedures(pack, runs, await self.deps.data.changes(eid), self.deps.library, superseded)
+            allowed = rerunnable(pack, stale)
+            if procedure_ids is not None:
+                wrong = [pid for pid in procedure_ids if pid not in allowed]
+                if wrong:
+                    raise DecisionRejected(
+                        "INVALID_VALUE", f"{', '.join(wrong)} 不是可重跑的过期程序 (执行阶段, 已过期, 不在等重跑)"
+                    )
+            chosen = [pid for pid in allowed if procedure_ids is None or pid in procedure_ids]
+            if not chosen:
+                raise DecisionRejected("INVALID_VALUE", "没有可重跑的过期程序")
+            await self._check_decision_id(eid, request_id)
+            latest = {p.id: p for p in await store.latest(eid, Procedure)}
+            updated = [
+                latest[pid].model_copy(
+                    update={
+                        "version": latest[pid].version + 1,
+                        "status": ProcedureStatus.executing,
+                        "rerun_subject_ids": [],
+                    }
+                )
+                for pid in chosen
+            ]
+            updated = settle_blocked(pack, latest, updated, self.deps.library)
+            pending = await store.latest(eid, ReviewTask, status=TaskStatus.pending)
+            closing = sorted((t for t in pending if t.procedure_id in chosen), key=lambda t: t.id)
+            closed = [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in closing]
+            reports = await store.latest(eid, AuditReportVersion)
+            request = RerunRequest(
+                id=request_id,
+                procedure_ids=chosen,
+                superseded_run_ids=sorted(r.id for r in runs if r.procedure_id in chosen),
+                closed_task_ids=[t.id for t in closing],
+                data_version=(await self.deps.data.readiness(eid)).data_version,
+                report_revision=max((r.revision for r in reports), default=None),
+                requested_by=requested_by,
+                requested_at=self.now(),
+            )
+            phase = values["phase"]
+            created: list[Versioned] = [*updated, *closed]
+            async with store.transaction(eid):
+                await store.put(eid, [request], actor=requested_by)
+                saved = await store.put(eid, created, actor=AgentId.A1)
+                if saved != created:
+                    clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                    raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+                if phase is not Phase.P2_Executing:
+                    await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+            # 留痕在业务事务提交后写, 防重复键为请求 ID; 写失败时再提交报 RESUME_REQUIRED, 由恢复补做补写
+            await self.deps.trail.record(rerun_trail(eid, request))
+            entries = await procedure_transitions(store, eid, saved)
+            reruns = len(values["rerun_requests"]) + 1  # 回退计入本请求 (见 trail.phase_transition)
+            entries += phase_transition(eid, phase, Phase.P2_Executing, None, reruns=reruns)
+            await record_transitions(self.deps.trail, entries)
+            # 以 fan_in 身份写入 (恢复补做写同样的字段, recovery.catch_up_rerun): 检查点从等复核或闸门处转到
+            # after_fan_in, 由它派发 executing 的程序
+            patch: StatePatch = {
+                "rerun_requests": [request],
+                "procedure_pack": latest_in_order(pack, await store.latest(eid, Procedure)),
+                "review_tasks": closed,
+                "confirmations": await confirmations_from_store(store, eid),  # 审计师停着时改过的回函
+                "phase": Phase.P2_Executing,
+            }
+            await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
+        return request
 
     async def update_client_profile(self, eid: str, profile: ClientProfile, *, updated_by: str) -> None:
         """更新客户资料: 只在停在 ACC-01 闸门时可用. 保存新版本画像后, 路由回 p0_intel 重跑 ACC-04 再重新呈报.

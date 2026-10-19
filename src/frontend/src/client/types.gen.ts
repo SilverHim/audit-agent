@@ -490,6 +490,10 @@ export type CompletionMaterial = {
      * Not Executed
      */
     not_executed?: Array<NotExecuted>;
+    /**
+     * Stale Procedure Ids
+     */
+    stale_procedure_ids?: Array<string>;
 };
 
 /**
@@ -1234,6 +1238,14 @@ export type EngagementOverview = {
      * Procedures
      */
     procedures: Array<ProcedureSummary>;
+    /**
+     * Stale Procedure Ids
+     */
+    stale_procedure_ids?: Array<string>;
+    /**
+     * Can Rerun
+     */
+    can_rerun?: boolean;
     /**
      * Pending Tasks
      */
@@ -2189,6 +2201,18 @@ export type ProcedureDetail = {
      * Judgments
      */
     judgments: Array<JudgmentView>;
+    /**
+     * Stale
+     */
+    stale?: boolean;
+    /**
+     * Rerunnable
+     */
+    rerunnable?: boolean;
+    /**
+     * Superseded Run Ids
+     */
+    superseded_run_ids?: Array<string>;
 };
 
 /**
@@ -2277,6 +2301,10 @@ export type ProcedureSummary = {
      * Stale
      */
     stale?: boolean;
+    /**
+     * Rerunnable
+     */
+    rerunnable?: boolean;
 };
 
 /**
@@ -2436,6 +2464,18 @@ export type RequestUnavailableIn = {
      * Reason
      */
     reason: string;
+};
+
+/**
+ * RerunIn
+ *
+ * 重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274).
+ */
+export type RerunIn = {
+    /**
+     * Procedure Ids
+     */
+    procedure_ids?: Array<string> | null;
 };
 
 /**
@@ -3500,6 +3540,36 @@ export type ReviewsGetProcedureResponses = {
 };
 
 export type ReviewsGetProcedureResponse = ReviewsGetProcedureResponses[keyof ReviewsGetProcedureResponses];
+
+export type ReviewsRerunProceduresData = {
+    body: RerunIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/procedures/rerun';
+};
+
+export type ReviewsRerunProceduresErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsRerunProceduresError = ReviewsRerunProceduresErrors[keyof ReviewsRerunProceduresErrors];
+
+export type ReviewsRerunProceduresResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type ReviewsRerunProceduresResponse = ReviewsRerunProceduresResponses[keyof ReviewsRerunProceduresResponses];
 
 export type ReviewsGetJudgmentData = {
     body?: never;

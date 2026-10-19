@@ -10,12 +10,16 @@ from backend.contracts.models import (
     AuditReportVersion,
     GateId,
     GateVerdict,
+    Judgment,
+    JudgmentRef,
     OpinionType,
     ReportSection,
     ReviewStatus,
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
+from backend.services.judgment_engine import citation_keys
+from backend.services.staleness import current_results
 
 
 def report_date_text(day: date) -> str:
@@ -36,7 +40,9 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
         """起草下一修订 REPORT-{revision} (revision 为状态中最大修订号 + 1), 草稿第 1 版; 修订时带上一稿与退回批注.
 
         意见类型取 FIN-01 选定的 opinion_route; 模型输入见 RPT-03.md.j2 头注释, fixture_key 为 r{revision}.
-        校验不通过时抛 ValueError (含最后一次的错误), 由 A1 按执行失败处理.
+        模型按提示词列出的引用键引用判断 (judgment_keys), 校验只认这些键 (当前结果中错报所依据的已确认判断, 过期重跑
+        取代的不算), 通过后换成当前判断的 ID 与版本记进报告的 judgment_refs. 校验不通过时抛 ValueError (含最后一次
+        的错误), 由 A1 按执行失败处理.
         """
         state = ctx.state
         opinion = state["opinion_route"]
@@ -63,12 +69,14 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             "standards": self.deps.judgments.standards(ctx.template),
             **self.misstatement_inputs(ctx),
         }
+        citable = self.citable(ctx)
         result = await self.deps.judgments.call_llm(
             engagement.id,
             ctx.template,
             ctx.run,
             variables,
-            ValidationContext(judgments=state["judgments"], opinion=opinion),
+            # 引用只认提示词列出的键: 当前结果的判断 (过期重跑取代的不算, 同汇总表与 FIN-01 材料)
+            ValidationContext(judgments=citable, opinion=opinion),
             self.agent_id,
             f"r{revision}",
         )
@@ -76,6 +84,8 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
         if report.level_failed is not None:
             raise ValueError(f"RPT-03 第 {revision} 稿未通过 {report.level_failed} 校验: {'; '.join(report.errors)}")
         draft = cast(ReportDraft, report.output)
+        keys = citation_keys(citable)
+        refs = [JudgmentRef(id=keys[key].id, version=keys[key].version) for key in draft.judgment_keys]
         values = {
             "entity_name": profile.legal_name,
             "period_end": report_date_text(engagement.period_end),
@@ -91,7 +101,7 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
                 ReportSection.basis_for_opinion: draft.basis_for_opinion,
                 **fixed,
             },
-            judgment_refs=draft.judgment_refs,
+            judgment_refs=refs,
             addresses_decision_id=addresses,
         )
 
@@ -103,7 +113,9 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
         首稿为 (None, [], None).
 
         上一稿取状态中修订号为 revision - 1 的报告的当前版本; 退回决定须针对上一稿 (target_id), 信息不足的决定不算退回.
-        修订时找不到上一稿或针对它的退回决定抛 LookupError.
+        不是退回引起的重拟 (需求 R274: 上一稿之后有过期重跑, 请求的 report_revision 为上一稿的修订号, 重跑完重新经过
+        FIN-01) 时为 (上一稿的两段, [], None). 修订时找不到上一稿, 或既没有针对它的退回决定也没有这样的重跑请求,
+        抛 LookupError.
         """
         if revision == 1:
             return None, [], None
@@ -117,14 +129,16 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             for d in state["gate_decisions"]
             if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject and d.target_id == last.id
         ]
-        if not rejects:
-            raise LookupError(f"RPT-03 第 {revision} 稿找不到 RPT-01 对 {last.id} 的退回决定")
-        reject = rejects[-1]
         previous = {
             "opinion": last.sections[ReportSection.opinion],
             "basis_for_opinion": last.sections[ReportSection.basis_for_opinion],
         }
-        return previous, [a.model_dump(mode="json") for a in reject.annotations], reject.id
+        if rejects:
+            reject = rejects[-1]
+            return previous, [a.model_dump(mode="json") for a in reject.annotations], reject.id
+        if any(r.report_revision == last.revision for r in state["rerun_requests"]):
+            return previous, [], None  # 重跑后重拟: 没有批注, 不针对哪个退回决定
+        raise LookupError(f"RPT-03 第 {revision} 稿找不到 RPT-01 对 {last.id} 的退回决定, 也没有其后的过期重跑")
 
     @staticmethod
     def fin01_reason(ctx: RunContext) -> str:
@@ -137,8 +151,26 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
         return approvals[-1].reason or ""
 
     @staticmethod
-    def misstatement_inputs(ctx: RunContext) -> dict[str, Any]:
-        """保留意见的输入: 汇总表, 表中各错报 (按表中顺序) 与其来源的已确认判断 (各取状态中的当前版本).
+    def citable(ctx: RunContext) -> list[Judgment]:
+        """可引用的判断: 汇总表中各错报 (按表中顺序) 所依据的已确认判断, 取当前结果 (过期重跑取代的不算) 中的当前
+        版本, 去重. 无保留意见时为空 (报告不引用判断)."""
+        state = ctx.state
+        schedule = state["uncorrected_schedule"]
+        if schedule is None or state["opinion_route"] is not OpinionType.qualified:
+            return []
+        misstatements = {m.id: m for m in state["misstatements"]}
+        judgments = {j.id: j for j in current_results(state).judgments}
+        found: dict[str, Judgment] = {}
+        for item in schedule.items:
+            source = misstatements[item.misstatement_id].judgment_id
+            judgment = judgments.get(source) if source is not None else None
+            if judgment is not None and judgment.review_status is ReviewStatus.confirmed:
+                found.setdefault(judgment.id, judgment)
+        return list(found.values())
+
+    @classmethod
+    def misstatement_inputs(cls, ctx: RunContext) -> dict[str, Any]:
+        """保留意见的输入: 汇总表, 表中各错报 (按表中顺序) 与可引用的判断 (citable, 各带引用键 key).
 
         无保留意见时汇总表照给, 错报与判断为空 (提示词只在保留意见时列出).
         """
@@ -150,22 +182,13 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             return {"schedule": schedule.model_dump(mode="json"), "misstatements": [], "judgments": []}
         misstatements = {m.id: m for m in state["misstatements"]}
         listed = [misstatements[item.misstatement_id] for item in schedule.items]
-        judgments = {j.id: j for j in state["judgments"]}
-        sources = [
-            judgments[m.judgment_id]
-            for m in listed
-            if m.judgment_id is not None
-            and m.judgment_id in judgments
-            and judgments[m.judgment_id].review_status is ReviewStatus.confirmed
-        ]
+        include = {"id", "version", "procedure_id", "subject_id", "conclusion", "evidence"}
         return {
             "schedule": schedule.model_dump(mode="json"),
             "misstatements": [m.model_dump(mode="json") for m in listed],
             "judgments": [
-                j.model_dump(
-                    mode="json", include={"id", "version", "procedure_id", "subject_id", "conclusion", "evidence"}
-                )
-                for j in sources
+                {"key": key, **j.model_dump(mode="json", include=include)}
+                for key, j in citation_keys(cls.citable(ctx)).items()
             ],
         }
 

@@ -213,14 +213,14 @@ async def test_request_and_trail() -> None:
     assert entry.payload["fixture_key"] == "r1"
     prompt = entry.payload["messages"][0]["content"]
     assert "Opinion type: **qualified**" in prompt
-    assert f"{CUTOFF.id} (version 2" in prompt and REASON in prompt
+    assert "key `REV-02:SI-2026-0612` (REV-02, subject SI-2026-0612)" in prompt and REASON in prompt
     assert "Total uncorrected misstatements: 14200000 cents." in prompt
     assert "- ASA705-P21 (ASA 705 para 21): If there is a material misstatement" in prompt
     assert "## Revision" not in prompt
 
 
 async def test_unqualified_uses_unqualified_template_and_no_misstatements() -> None:
-    draft = ReportDraft(opinion="Opinion\n\nclean.", basis_for_opinion="Basis for Opinion\n\nok.", judgment_refs=[])
+    draft = ReportDraft(opinion="Opinion\n\nclean.", basis_for_opinion="Basis for Opinion\n\nok.", judgment_keys=[])
     llm = ScriptedLLM({"r1": [draft.model_dump_json()]})
     agent, ctx, _ = setup(OpinionType.unqualified, llm)
     [report] = (await agent.run(ctx))["report_versions"]
@@ -390,7 +390,7 @@ async def test_three_syntax_failures_fail_the_run() -> None:
 @pytest.mark.parametrize(
     ("changes", "level"),
     [
-        ({"judgment_refs": [JudgmentRef(id=CUTOFF.id, version=1)]}, "reference"),
+        ({"judgment_keys": ["REV-02:SI-2026-0618"]}, "reference"),
         ({"opinion": "Opinion\n\nclean"}, "semantic"),
     ],
 )
@@ -407,7 +407,7 @@ async def test_reference_or_semantic_failure_fails_after_one_call(changes: dict[
     [
         ["{}", "{}", "{}"],
         [r1_raw(opinion="## Qualified Opinion\n\nbody")],
-        [r1_raw(judgment_refs=[JudgmentRef(id=CUTOFF.id, version=1)])],
+        [r1_raw(judgment_keys=["REV-02:SI-2026-0618"])],
     ],
     ids=["structure", "semantic", "reference"],
 )
@@ -500,7 +500,7 @@ async def test_node_replay_returns_stored_report_without_llm_or_user_lookup() ->
 
 
 def test_misstatement_inputs_follow_schedule_order_and_confirmed_sources() -> None:
-    """错报按汇总表顺序; 来源判断只取已确认且在状态中的 (各取当前版本), 字段只留提示词要的六个."""
+    """错报按汇总表顺序; 来源判断只取已确认且在状态中的 (各取当前版本), 字段为引用键加提示词要的六个."""
     agent, ctx, _ = setup()
     second_j = CUTOFF.model_copy(update={"id": "J-SECOND", "version": 7, "conclusion": "second"})
     pending_j = CUTOFF.model_copy(update={"id": "J-PENDING", "review_status": ReviewStatus.pending})
@@ -519,8 +519,11 @@ def test_misstatement_inputs_follow_schedule_order_and_confirmed_sources() -> No
     values = agent.misstatement_inputs(replace(ctx, state=state))
 
     assert [m["id"] for m in values["misstatements"]] == [m.id for m in ordered]
-    assert [(j["id"], j["version"]) for j in values["judgments"]] == [(second_j.id, 7), (CUTOFF.id, 2)]
-    fields = {"id", "version", "procedure_id", "subject_id", "conclusion", "evidence"}
+    assert [(j["key"], j["id"], j["version"]) for j in values["judgments"]] == [
+        ("REV-02:SI-2026-0612:J-SECOND", second_j.id, 7),
+        ("REV-02:SI-2026-0612", CUTOFF.id, 2),
+    ]
+    fields = {"key", "id", "version", "procedure_id", "subject_id", "conclusion", "evidence"}
     assert all(set(j) == fields for j in values["judgments"])
 
 
@@ -664,5 +667,5 @@ def test_r2_fixture_only_adds_contract_clause() -> None:
         "Clause 5.1 of contract CON-001 with Bilby Robotics Pty Ltd provides that title to and risk in the goods pass "
         "to the customer when its authorised representative signs the delivery note. "
     )
-    assert second["opinion"] == first["opinion"] and second["judgment_refs"] == first["judgment_refs"]
+    assert second["opinion"] == first["opinion"] and second["judgment_keys"] == first["judgment_keys"]
     assert second["basis_for_opinion"].replace(insertion, "") == first["basis_for_opinion"]

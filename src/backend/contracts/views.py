@@ -50,9 +50,12 @@ class ProcedureSummary(Model):
     autonomy_level: AutonomyLevel  # 自主度
     status: ProcedureStatus  # 按 AuditOutputStore 中 Procedure 的最新版本
     pending_tasks: int  # 按 AuditOutputStore 中 pending 任务计
-    # 最近一次执行基于的数据版本比当前旧 (之后账表, 抽取结果或科目分类有改动, 需求 R16);
-    # 没执行过或执行时没记版本为 false
+    # 过期 (需求 R274): 本程序读的数据 (模板 reads) 在最近一次执行之后变过, 或依赖的程序过期, 在它之后又执行过或
+    # 已被重跑取代; 没执行过, 执行时没记数据版本 (承接阶段), 没有当前结果 (已被重跑取代而还没有新执行, 或在等数据,
+    # 未执行) 为 false. 见 services.staleness
     stale: bool = False
+    # 过期且能重跑: 执行阶段的程序, 不在等重跑, 不在等数据或未执行 (计划阶段的程序过期只标记)
+    rerunnable: bool = False
 
 
 class EngagementOverview(Model):
@@ -68,6 +71,8 @@ class EngagementOverview(Model):
     awaiting_data: bool  # 是否停在 P1 开始前等财务数据就绪 (p1_await_data), 审计师确认数据已齐后继续
     missing_tables: list[TableKind]  # 等数据就绪时还缺的必需表 (科目表, 本期与上期试算表, 总账分录), 现查; 不在等时为空
     procedures: list[ProcedureSummary]  # 各程序状态
+    stale_procedure_ids: list[str] = []  # 过期的程序, 按 procedures 的顺序 (含不能重跑的)
+    can_rerun: bool = False  # 现在能否重跑过期程序: 图停在等复核, FIN-01 或 RPT-01 闸门, 项目未锁定, 不在执行
     pending_tasks: int  # 待决复核任务数
     materiality_cents: int | None  # 整体重要性, 单位分
     performance_materiality_cents: int | None  # 执行重要性, 单位分
@@ -111,8 +116,9 @@ class CompletionMaterial(Model):
 
     kind: Literal["FIN-01"] = "FIN-01"  # 材料类型标记
     schedule: UncorrectedSchedule  # 未更正错报汇总表
-    misstatements: list[Misstatement]  # 全部错报
+    misstatements: list[Misstatement]  # 当前结果的错报 (过期重跑取代的执行引出的不在其中, services.staleness)
     not_executed: list[NotExecuted] = []  # 未执行 (无数据) 的程序, 按程序编号 (需求 R280)
+    stale_procedure_ids: list[str] = []  # 过期而未重跑的程序 (提示审计师, 不拦截 FIN-01, Q5)
 
 
 class ReportMaterial(Model):

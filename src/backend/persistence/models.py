@@ -186,6 +186,8 @@ extraction_versions = table(
     "target_type:s target_id:s version:i data:j field:s reason:s changed_by:s changed_at:t",
     ("target_type", "target_id", "version"),
 )
+# 数据变动: 哪个数据版本变了哪类数据 (DataInput); 过期判断只读这里 (需求 R274, 迁移 0008)
+data_changes = table("data_changes", "data_version:i input:s", ("data_version", "input"))
 OUTPUT_KINDS = {
     "audit_objectives": ["AuditObjective"],
     "risk_register": ["RiskItem"],
@@ -193,7 +195,7 @@ OUTPUT_KINDS = {
     "exceptions": ["AuditException"],
     "judgments": ["Judgment"],
     "review_tasks": ["ReviewTask"],
-    "decisions": ["ReviewRecord", "GateDecision"],
+    "decisions": ["ReviewRecord", "GateDecision", "RerunRequest"],
     "confirmations": ["Confirmation"],
     "misstatements": ["Misstatement"],
     "report_versions": ["AuditReportVersion"],

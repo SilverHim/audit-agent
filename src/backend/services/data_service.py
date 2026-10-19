@@ -22,6 +22,7 @@ from backend.agents.ingest import RELIABILITY, DocumentIntake, Job, Requested, r
 from backend.contracts.data import (
     CategoryVersion,
     ContractVersion,
+    DataInput,
     DataReadiness,
     DataRequest,
     DataSource,
@@ -1001,7 +1002,7 @@ class DataService:
                 await self.deps.financial_store.save_contract(
                     eid, updated, changed_by=actor, field=edit.field, reason=reason
                 )
-                await self.deps.data.bump_version(eid)
+                await self.deps.data.bump_version(eid, DataInput.contracts)
             record = ExtractionRecord(
                 target_type="contract",
                 target_id=updated.id,
@@ -1021,10 +1022,11 @@ class DataService:
         balance_date, confirmed_balance_cents.
 
         函证在编排状态里, 只在图停在闸门或等复核 (P2 的等复核, 或 P2 以外节点等人; 且没有出错的节点) 时可改,
-        否则 409 NOT_EDITABLE. 停在 P2 的等复核时, 之后写函证的节点 (DOC-06 重跑, CSH-02) 都要经过等复核恢复,
-        那时从库读回最新版本 (nodes.await_events). P2 以外节点等人时不读函证, 状态中的函证比库里旧; 但函证只在
-        P2 产生, 之后不再有写函证或按状态函证计算的节点, 不影响结果; 闸门之后同理. CSH-02 已比对过的差额与结果
-        不随之重算, 由数据版本标出过期 (需求 R16).
+        否则 409 NOT_EDITABLE. 改后只写 Store; 从停着的位置回到写函证的节点 (DOC-06 重跑, CSH-02) 之前都从库读回
+        最新版本 (nodes.confirmations_from_store): 等复核恢复 (await_events), 过期重跑写检查点 (rerun_stale) 与其恢复
+        补做; DOC-06 重跑时回函原件没换的沿用这一版, 不重抽 (IngestAgent.kept_edit). P2 以外节点等人或停在闸门而不
+        重跑时, 状态中的函证比库里旧; 但之后不再有写函证或按状态函证计算的节点, 不影响结果. CSH-02 已比对过的差额与
+        结果不随之重算, 记数据变动 confirmations 标出过期 (需求 R274), 审计师可在等复核, FIN-01 或 RPT-01 处重跑它.
         持项目锁 (锁定 423, 忙 409); 函证不存在 404; 理由为空 MISSING_FIELD; 字段或值不合法, 与当前相同
         INVALID_VALUE; 同一修改的重试返回当前版本 (同 edit_contract)."""
         reason = self._reason(edit)
@@ -1066,7 +1068,7 @@ class DataService:
                     field=edit.field,
                     reason=reason,
                 )
-                await self.deps.data.bump_version(eid)
+                await self.deps.data.bump_version(eid, DataInput.confirmations)
             await record_transitions(self.deps.trail, [edit_entry(eid, record)])
         return updated
 

@@ -6,7 +6,7 @@ import hashlib
 import io
 import json
 import re
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePath
@@ -24,7 +24,7 @@ from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_perio
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import Supplements
 from backend.contracts import records
-from backend.contracts.data import ContractVersion
+from backend.contracts.data import ContractVersion, DataInput
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
@@ -547,6 +547,7 @@ class TableLoader(Store):
                     ready_by=DATASET_READY_BY,
                 )
             )
+            await record_changes(conn, eid, 1, DataInput)  # 整套载入: 版本 1 变了全部各类数据
 
     async def insert_adjustments(
         self, eid: str, dataset: str, path: Path, entry_nos: Sequence[str] | None
@@ -584,11 +585,10 @@ class TableLoader(Store):
             new = [x for x in chosen if x.id not in stored]
             if new:
                 await conn.execute(insert(journal), [dict(engagement_id=eid, **x.model_dump()) for x in new])
-                await conn.execute(
-                    update(m.dataset_loads)
-                    .where(m.dataset_loads.c.engagement_id == eid)
-                    .values(data_version=m.dataset_loads.c.data_version + 1)
-                )
+                t = m.dataset_loads
+                bumped = update(t).where(t.c.engagement_id == eid).values(data_version=t.c.data_version + 1)
+                version = (await conn.execute(bumped.returning(t.c.data_version))).scalar_one()
+                await record_changes(conn, eid, version, [DataInput.journal_entries])
         return chosen
 
 
@@ -855,6 +855,13 @@ class RoutingDatasetLoader:
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""
         return sorted(name for loader in (self.default, *self.by_prefix.values()) for name in loader.datasets())
+
+
+async def record_changes(conn: AsyncConnection, eid: str, version: int, inputs: Iterable[DataInput]) -> None:
+    """在当前事务里记下数据版本 version 变了哪些数据 (表 data_changes); 已记的跳过."""
+    rows = [{"engagement_id": eid, "data_version": version, "input": i.value} for i in dict.fromkeys(inputs)]
+    if rows:
+        await conn.execute(insert(m.data_changes).values(rows).on_conflict_do_nothing())
 
 
 async def upsert_extraction(

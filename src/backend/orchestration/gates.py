@@ -30,8 +30,10 @@ from backend.contracts.models import (
     OpinionType,
     Phase,
     Procedure,
+    ProcedureRun,
     ProcedureStatus,
     ReportStatus,
+    RerunRequest,
     RiskItem,
     RiskLevel,
     UncorrectedSchedule,
@@ -49,6 +51,7 @@ from backend.contracts.views import (
 )
 from backend.orchestration.nodes import uncovered_objectives, update_procedure
 from backend.services.features import FEATURES, LEGACY_FEATURES, parse_features
+from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations")  # 只在某道闸门的某种决定下可填的字段
 REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
@@ -586,11 +589,20 @@ async def fin01_rebuild(deps: AgentDeps, eid: str, decision: GateDecision, value
 
 
 async def fin01_view(deps: AgentDeps, eid: str, values: EngagementState) -> tuple[Versioned, GateMaterial]:
+    """汇总表, 当前结果的错报 (过期重跑取代的执行引出的不列, 同 FIN-04) 与过期而未重跑的程序 (需求 R274; 重跑后
+    转为未执行 (无数据) 的没有当前结果, 不算过期, 只列在未执行一节)."""
     schedule = values["uncorrected_schedule"]
     if schedule is None:
         raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
+    misstatements = current_results(values).misstatements
+    runs = await deps.output_store.latest(eid, ProcedureRun)
+    superseded = superseded_runs(await deps.output_store.latest(eid, RerunRequest))
+    stale = stale_procedures(values["procedure_pack"], runs, await deps.data.changes(eid), deps.library, superseded)
     return schedule, CompletionMaterial(
-        schedule=schedule, misstatements=values["misstatements"], not_executed=await not_executed(deps, eid, values)
+        schedule=schedule,
+        misstatements=misstatements,
+        not_executed=await not_executed(deps, eid, values),
+        stale_procedure_ids=stale,
     )
 
 

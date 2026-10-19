@@ -737,6 +737,19 @@ class GateDecision(Versioned):
     decided_at: datetime  # 决定时间
 
 
+class RerunRequest(Versioned):
+    """审计师要求用新数据重跑过期的 P2 程序 (需求 R274, 第 7 节). 重跑以新结果为准: superseded_run_ids 中各次执行的
+    判断, 例外与错报留作历史, 不再计入 (services.staleness); 这些程序当时的待决任务一并关闭."""
+
+    procedure_ids: list[str]  # 重跑的程序, 按程序包顺序
+    superseded_run_ids: list[str]  # 被取代的执行: 这些程序在请求时已有的全部执行
+    closed_task_ids: list[str] = []  # 一并关闭的待决任务
+    data_version: int  # 请求时的项目数据版本
+    report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿
+    requested_by: str  # 请求人的用户 ID
+    requested_at: datetime  # 请求时间
+
+
 class Misstatement(Versioned):
     """已认定的错报, 来自某条判断或例外. 本版一律按未更正处理."""
 
@@ -760,7 +773,7 @@ class Confirmation(Versioned):
     type: Literal["bank"] = "bank"  # 本版只有银行函证
     bank_account_id: str  # 函证的银行账户
     confirming_party: str  # 回函方, 即开户银行
-    idempotency_key: str  # 防重复发函: {eid}:CSH-04:{bank_account_id}
+    idempotency_key: str  # 防重复发函: {eid}:CSH-04:{bank_account_id}:{识别信息摘要} (evidence.confirmation_key)
     sent_at: datetime  # 发函时间
     reply_document_id: str | None = None  # 回函 PDF 的文件 ID, A5 存档后写入
     receipt_channel: ReceiptChannel | None = None  # 回函渠道, A5 按回执写入

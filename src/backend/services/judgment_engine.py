@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -241,24 +242,48 @@ REPORT_HEADINGS = {
 }
 
 
+def judgment_key(judgment: Judgment) -> str:
+    """判断的引用键 (RPT-03): {程序}:{对象}; 人工判断 (ID 为 AI 判断的 ID 加 -H{n}, 第 0 节) 另加 :H{n}, 与同一对象的
+    AI 判断及其他人工判断区分. 不含执行次数, 重跑后同一对象的新判断键不变. ID 不合这两种写法的另加 :{判断 ID}."""
+    base = f"J-{judgment.procedure_id}-{judgment.run_id.rsplit('-', 1)[-1]}-{judgment.subject_id}"
+    key = f"{judgment.procedure_id}:{judgment.subject_id}"
+    if judgment.id == base:
+        return key
+    suffix = judgment.id.removeprefix(f"{base}-")
+    return f"{key}:{suffix}" if suffix != judgment.id and re.fullmatch(r"H\d+", suffix) else f"{key}:{judgment.id}"
+
+
+def citation_keys(judgments: Sequence[Judgment]) -> dict[str, Judgment]:
+    """可引用的判断 (RPT-03 的 ValidationContext.judgments, 当前结果中错报所依据的已确认判断) → 引用键 (见
+    judgment_key). 提示词按它列出可引用的键, 校验与把键换成判断 ID 也按它, 三处一致. 键须唯一: 同一程序同一对象
+    有两条键相同的判断 (现有流程里出现不了, 如两次执行的 AI 判断都是错报依据) 时抛 ValueError, 写明键与这几条判断,
+    不悄悄引错."""
+    found: dict[str, list[Judgment]] = {}
+    for judgment in judgments:
+        found.setdefault(judgment_key(judgment), []).append(judgment)
+    clashes = {key: items for key, items in found.items() if len(items) > 1}
+    if clashes:
+        detail = "; ".join(f"{key}: {', '.join(j.id for j in items)}" for key, items in clashes.items())
+        raise ValueError(f"可引用的判断引用键重复: {detail}")
+    return {key: items[0] for key, items in found.items()}
+
+
 def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | None, list[str]]:
     """报告草稿的引用与语义两级. 返回 (未通过的级别, 错误).
 
-    引用: judgment_refs 的每条须是状态中的判断 (ctx.judgments), 版本为当前版本且已确认.
+    引用: judgment_keys 的每个键须是可引用的判断 (ctx.judgments 的 citation_keys) 之一, 且该判断已确认.
     语义: 意见段与基础段首行为该意见类型的标题; 保留意见须引用至少一条判断. ctx.opinion 为空时抛 ValueError.
     """
     if ctx.opinion is None:
         raise ValueError("报告草稿的校验须给出意见类型 (ValidationContext.opinion)")
-    current = {j.id: j for j in ctx.judgments}
+    citable = citation_keys(ctx.judgments)
     errors = []
-    for ref in draft.judgment_refs:
-        judgment = current.get(ref.id)
+    for key in draft.judgment_keys:
+        judgment = citable.get(key)
         if judgment is None:
-            errors.append(f"引用的判断 {ref.id} 不在状态中")
-        elif ref.version != judgment.version:
-            errors.append(f"引用的判断 {ref.id} v{ref.version} 不是当前版本 v{judgment.version}")
+            errors.append(f"引用键 {key} 不是可引用的判断 (可用: {', '.join(citable) or '无'})")
         elif judgment.review_status is not ReviewStatus.confirmed:
-            errors.append(f"引用的判断 {ref.id} 尚未确认 ({judgment.review_status})")
+            errors.append(f"引用键 {key} 的判断 {judgment.id} 尚未确认 ({judgment.review_status})")
     if errors:
         return "reference", errors
     opinion_heading, basis_heading = REPORT_HEADINGS[ctx.opinion]
@@ -266,7 +291,7 @@ def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | N
         errors.append(f"意见段首行应为 {opinion_heading}")
     if draft.basis_for_opinion.strip().splitlines()[:1] != [basis_heading]:
         errors.append(f"基础段首行应为 {basis_heading}")
-    if ctx.opinion is OpinionType.qualified and not draft.judgment_refs:
+    if ctx.opinion is OpinionType.qualified and not draft.judgment_keys:
         errors.append("保留意见须引用形成错报的已确认判断")
     return ("semantic" if errors else None), errors
 

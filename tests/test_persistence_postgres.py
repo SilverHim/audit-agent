@@ -858,6 +858,14 @@ async def test_load_adjustments_two_rounds(tmp_path):
     assert await state(e.id) == (1022, 2)
     second = await xero.load_adjustments(e.id, "xero/20261017-q1", ["AJE-X02", "AJE-X03", "AJE-X04"])
     assert len(second) == 6 and await state(e.id) == (1028, 3)
+    # 需求 R274: 每轮更正分录载入在 data_changes 记总账分录 (过期判断按它), 幂等的那次不记
+    from backend.persistence.data_store import PostgresDataStore
+
+    recorded = await PostgresDataStore(tmp_path, engine).changes(e.id)
+    assert [(c.data_version, c.input.value) for c in recorded if c.data_version > 1] == [
+        (2, "journal_entries"),
+        (3, "journal_entries"),
+    ]
     assert len(await xero.load_adjustments(e.id, "xero/20261017-q1")) == 11  # 全部: 已有的跳过
     assert await state(e.id) == (1028, 3)
     assert await xero.load_adjustments(e.id, "xero/20261017-q1", []) == []  # 空列表不载入

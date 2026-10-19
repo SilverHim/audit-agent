@@ -728,6 +728,64 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/procedures/rerun": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Rerun Procedures",
+        "description": "用新数据重跑过期的执行阶段程序 (单条或全部, 需求 R274); 返回重跑请求 ID. 只能在等复核, FIN-01 或 RPT-01\n闸门处 (409 NOT_RERUNNABLE); 所列程序不是可重跑的过期程序 422 INVALID_VALUE; 锁定 423, 执行中 409.",
+        "operationId": "reviews-rerun_procedures",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/judgments/{jid}": {
       "get": {
         "tags": [
@@ -3738,6 +3796,14 @@
             "type": "array",
             "title": "Not Executed",
             "default": []
+          },
+          "stale_procedure_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stale Procedure Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -5050,6 +5116,19 @@
             },
             "type": "array",
             "title": "Procedures"
+          },
+          "stale_procedure_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stale Procedure Ids",
+            "default": []
+          },
+          "can_rerun": {
+            "type": "boolean",
+            "title": "Can Rerun",
+            "default": false
           },
           "pending_tasks": {
             "type": "integer",
@@ -6839,6 +6918,24 @@
             },
             "type": "array",
             "title": "Judgments"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
+          },
+          "rerunnable": {
+            "type": "boolean",
+            "title": "Rerunnable",
+            "default": false
+          },
+          "superseded_run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Superseded Run Ids",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -6996,6 +7093,11 @@
           "stale": {
             "type": "boolean",
             "title": "Stale",
+            "default": false
+          },
+          "rerunnable": {
+            "type": "boolean",
+            "title": "Rerunnable",
             "default": false
           }
         },
@@ -7255,6 +7357,28 @@
         ],
         "title": "RequestUnavailableIn",
         "description": "补交请求标 \"客户无此类资料\" (需求 R280)."
+      },
+      "RerunIn": {
+        "properties": {
+          "procedure_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RerunIn",
+        "description": "重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274)."
       },
       "ReviewRecord": {
         "properties": {

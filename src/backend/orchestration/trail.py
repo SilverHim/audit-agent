@@ -2,7 +2,8 @@
 
 防重复键 (idempotency_key):
 - 程序状态: {eid}:transition:procedure:{程序编号}:v{新版本号}
-- 项目阶段: {eid}:transition:engagement:{eid}:{新阶段}
+- 项目阶段: {eid}:transition:engagement:{eid}:{新阶段}; 过期重跑使阶段回到执行阶段后 (第 n 次重跑请求起) 再经过
+  各阶段时为 {eid}:transition:engagement:{eid}:{新阶段}:{n}, n 为当时状态中的重跑请求数 (需求 R274)
 已有同键的留痕即跳过, 节点重放与恢复补做时不重复写. 首版与状态未变的新版本不写.
 """
 
@@ -28,11 +29,16 @@ def transition(
     )
 
 
-def phase_transition(eid: str, before: Phase, after: Phase, procedure_id: str | None = None) -> list[TrailEntry]:
-    """项目阶段从 before 变为 after 的留痕; 没变时为空. procedure_id: 引起变化的程序 (如闸门决定的程序)."""
+def phase_transition(
+    eid: str, before: Phase, after: Phase, procedure_id: str | None = None, reruns: int = 0
+) -> list[TrailEntry]:
+    """项目阶段从 before 变为 after 的留痕; 没变时为空. procedure_id: 引起变化的程序 (如闸门决定的程序).
+    reruns: 当时状态中的过期重跑请求数 (重跑请求写出的回退计入它自己), 不为 0 时并入防重复键: 重跑后再次经过
+    同一阶段也留痕, 重放与补做时同键跳过."""
     if before is after:
         return []
-    return [transition(eid, "engagement", eid, before.value, after.value, after.value, None, procedure_id)]
+    suffix = after.value if reruns == 0 else f"{after.value}:{reruns}"
+    return [transition(eid, "engagement", eid, before.value, after.value, suffix, None, procedure_id)]
 
 
 async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iterable[object]) -> list[TrailEntry]:

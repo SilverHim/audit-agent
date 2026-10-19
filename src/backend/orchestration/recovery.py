@@ -1,5 +1,5 @@
-"""恢复补做 (A 负责): Store 已提交而检查点没跟上的闸门决定, 客户画像更新与复核决定, 在 recover 与 resume 时补进检查点
-(接口文档第 7 节 recover 规则第 2 条, 恢复机制).
+"""恢复补做 (A 负责): Store 已提交而检查点没跟上的闸门决定, 客户画像更新, 过期重跑请求与复核决定, 在 recover 与 resume
+时补进检查点 (接口文档第 7 节 recover 规则第 2 条, 恢复机制).
 
 决定提交时先在一个事务内写 Store, 再写留痕, 最后以闸门节点身份写检查点. 进程在两者之间中断, 或检查点写入失败,
 Store 就领先检查点. 补做不重算效果, 只把 Store 中已写成的对象搬进检查点: 程序, 风险清单, 审计目标与报告取 Store
@@ -22,6 +22,7 @@ from backend.contracts.models import (
     GateVerdict,
     Procedure,
     ProcedureRun,
+    RerunRequest,
     ReviewRecord,
     ReviewTask,
     TaskKind,
@@ -30,10 +31,10 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.decisions import review_trail
+from backend.orchestration.decisions import rerun_trail, review_trail
 from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
-from backend.orchestration.nodes import NODE_PROCEDURES
-from backend.orchestration.runner import GraphRunner, waiting_payloads
+from backend.orchestration.nodes import NODE_PROCEDURES, confirmations_from_store
+from backend.orchestration.runner import GraphRunner, at_rerun_point, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 
 
@@ -72,15 +73,17 @@ async def record_once(deps: AgentDeps, entry: TrailEntry) -> None:
 
 
 async def backfill_transitions(
-    deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot, procedure_id: str | None
+    deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot, procedure_id: str | None, reruns: int = 0
 ) -> None:
-    """补写决定写出的状态迁移留痕 (同键跳过): Store 中不在检查点程序包里的程序版本, 以及从检查点阶段到项目表阶段."""
+    """补写决定写出的状态迁移留痕 (同键跳过): Store 中不在检查点程序包里的程序版本, 以及从检查点阶段到项目表阶段.
+    reruns: 加在检查点重跑请求数上的个数 (补做重跑请求时为 1, 同提交时的键, 见 trail.phase_transition)."""
     eid = engagement.id
     values = fill_defaults(snapshot.values)
     before = {(p.id, p.version) for p in values["procedure_pack"]}
     changed = [p for p in await deps.output_store.latest(eid, Procedure) if (p.id, p.version) not in before]
     entries = await procedure_transitions(deps.output_store, eid, changed)
-    entries += phase_transition(eid, values["phase"], engagement.phase, procedure_id)
+    count = len(values["rerun_requests"]) + reruns
+    entries += phase_transition(eid, values["phase"], engagement.phase, procedure_id, reruns=count)
     await record_transitions(deps.trail, entries)
 
 
@@ -147,6 +150,43 @@ async def catch_up_profile(
     config = GraphRunner.config(engagement.id)
     await app.aupdate_state(config, {"client_profile_version": version}, as_node=spec_of(GateId.ACC_01).node)
     return await app.aget_state(config)
+
+
+async def catch_up_rerun(
+    app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot
+) -> StateSnapshot:
+    """Store 中有检查点里没有的过期重跑请求 (DecisionSubmit.rerun_stale 已提交, 检查点没跟上) 时逐个补进检查点 (按请求
+    时间): 先补写 decision 留痕与状态迁移留痕, 再以 fan_in 身份写入请求, 程序包 (Store 最新版), 请求关闭的任务
+    (Store 最新版), Store 中函证的最新版本与阶段 (engagements 表), 同提交时写的字段; 之后由 after_fan_in 派发重跑的
+    程序.
+    图不在可重跑的位置 (等复核, FIN-01 或 RPT-01 闸门) 时抛 RuntimeError. 返回补做后的检查点."""
+    eid = engagement.id
+    store = deps.output_store
+    config = GraphRunner.config(eid)
+    known = {r.id for r in fill_defaults(snapshot.values)["rerun_requests"]}
+    missing = [r for r in await store.latest(eid, RerunRequest) if r.id not in known]
+    for request in sorted(missing, key=lambda r: r.requested_at):
+        if not at_rerun_point(snapshot):
+            at = snapshot.next
+            raise RuntimeError(f"过期重跑请求 {request.id} 未进检查点, 图却不在可重跑的位置 ({at}), 无法补做")
+        values = fill_defaults(snapshot.values)
+        tasks = {t.id: t for t in await store.latest(eid, ReviewTask)}
+        closed = [tasks[task_id] for task_id in request.closed_task_ids if task_id in tasks]
+        if len(closed) != len(request.closed_task_ids):
+            raise RuntimeError(f"过期重跑请求 {request.id} 关闭的任务不全在 Store 中, 无法补做")
+        # 先补留痕再写检查点 (理由同 catch_up_gates)
+        await record_once(deps, rerun_trail(eid, request))
+        await backfill_transitions(deps, engagement, snapshot, None, reruns=1)
+        patch: StatePatch = {
+            "rerun_requests": [request],
+            "procedure_pack": latest_in_order(values["procedure_pack"], await store.latest(eid, Procedure)),
+            "review_tasks": closed,
+            "confirmations": await confirmations_from_store(store, eid),
+            "phase": engagement.phase,
+        }
+        await app.aupdate_state(config, patch, as_node="fan_in")
+        snapshot = await app.aget_state(config)
+    return snapshot
 
 
 def closed_by(
@@ -242,10 +282,11 @@ async def catch_up_review(
 async def catch_up(
     app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement
 ) -> Command[Any] | None:
-    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 复核决定. 前两者直接写进检查点;
-    复核决定由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回 None (从检查点继续).
+    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定. 前三者直接写进
+    检查点; 复核决定由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回 None (从检查点继续).
     补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
     snapshot = await app.aget_state(GraphRunner.config(engagement.id))
     snapshot = await catch_up_gates(app, deps, engagement, snapshot)
     snapshot = await catch_up_profile(app, deps, engagement, snapshot)
+    snapshot = await catch_up_rerun(app, deps, engagement, snapshot)
     return await catch_up_review(app, deps, engagement, snapshot)
