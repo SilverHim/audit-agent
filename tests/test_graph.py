@@ -21,6 +21,7 @@ from backend.contracts.models import (
     OpinionType,
     Phase,
     ProcedureStatus,
+    ProfileSource,
     ReportStatus,
     ReviewTask,
     TargetType,
@@ -156,7 +157,7 @@ async def _decide_acc01(app: Graph, config: RunnableConfig, d: GateDecision) -> 
 
 async def _update_profile(app: Graph, config: RunnableConfig, store: FakeEngagementStore, p: ClientProfile) -> None:
     """模拟 DecisionSubmit.update_client_profile: 保存新版本画像, 再以闸门节点的身份写入最新版本号."""
-    saved = await store.save_profile(p)
+    saved = await store.save_profile(p, source=ProfileSource.update, updated_by="U-1")
     await app.aupdate_state(config, {"client_profile_version": saved.version}, as_node="gate_acc01")
 
 

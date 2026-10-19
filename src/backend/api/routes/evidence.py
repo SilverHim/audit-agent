@@ -2,14 +2,14 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import DocumentTypeIn
-from backend.contracts.data import ContractVersion, ExtractionEdit
+from backend.api.schemas import DocumentDetailsIn, DocumentTypeIn
+from backend.contracts.data import ContractVersion, ExtractionEdit, ExtractionRecord
 from backend.contracts.models import Confirmation, Contract, DocumentRef, Engagement, SourceType, User
 from backend.services import data_import
 from backend.services.data_service import DataService
@@ -28,9 +28,11 @@ class EvidenceFile(FileResponse):
 async def list_documents(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
+    related_id: Annotated[str | None, Query(description="只列关联对象含此 ID 的文件 (需求 R90)")] = None,
 ) -> list[DocumentRef]:
+    """已登记的文件, 按文件名排序; 给 related_id 时只列关联对象含它的."""
     async with catch_api():
-        return await deps.financial_store.documents(engagement.id)
+        return await deps.financial_store.documents(engagement.id, related_id=related_id)
 
 
 @router.get("/contracts")
@@ -75,6 +77,33 @@ async def set_document_type(
     忙 409."""
     async with catch_api():
         return await service.set_document_type(engagement.id, document_id, body.type, body.reason, user.id)
+
+
+@router.put("/documents/{document_id}/details")
+async def set_document_details(
+    document_id: str,
+    body: DocumentDetailsIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> DocumentRef:
+    """补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 文件不存在
+    404; 理由为空 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或重复 422 INVALID_VALUE;
+    锁定 423; 忙 409. 同一修改的重试返回当前登记."""
+    async with catch_api():
+        [updated] = await service.set_document_details(engagement.id, {document_id: body}, user.id)
+        return updated
+
+
+@router.get("/documents/{document_id}/history")
+async def document_history(
+    document_id: str,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    service: Annotated[DataService, Depends(get_data_service)],
+) -> list[ExtractionRecord]:
+    """文件登记的各版 (补登记), 按版本升序; 没补登记过的以当前登记作唯一一版. 文件不存在 404."""
+    async with catch_api():
+        return await service.document_history(engagement.id, document_id)
 
 
 @router.get("/evidence/{document_id}", response_class=EvidenceFile)

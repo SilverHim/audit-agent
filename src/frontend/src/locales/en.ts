@@ -259,8 +259,10 @@ export const en = {
     decideNow: 'Decide now',
     deferredNote: 'Deferred · you can decide it here now',
     gateIntro: {
-      'ACC-01': (passed: number, total: number, exceptions: number) =>
-        `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
+      'ACC-01': (passed: number, total: number, exceptions: number, manual: number) =>
+        manual
+          ? `The client is ready for your acceptance decision. This client has no registry source, so ACC-04 could not check the ABN register or the ASIC company register: ${manual} of ${total} checks need your manual confirmation against ABN Lookup and ASIC${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ''}.`
+          : `The client is ready for your acceptance decision. ACC-04 checked the company against the ABN register and the ASIC company register: ${passed} of ${total} checks passed${exceptions ? `, ${exceptions} exception${exceptions === 1 ? '' : 's'} raised` : ', no exceptions raised'}.`,
       'PLN-01/03':
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',
       'FIN-01': (count: number, total: string, skipped: number) =>
@@ -316,6 +318,9 @@ export const en = {
     rerunParams: 'Parameters to change (JSON, optional)',
     reviewQuestion: (subject: string) => `What do you conclude on ${subject}?`,
     checks: (passed: number, total: number) => `${passed} of ${total} passed`,
+    checksManual: (passed: number, manual: number, total: number) =>
+      `${passed} of ${total} passed · ${manual} to confirm manually`,
+    manualCheck: 'Confirm manually',
     exceptions: 'Exceptions',
     noExceptions: 'No exceptions',
     registers: {
@@ -393,6 +398,13 @@ export const en = {
       current: 'current',
       zeroBase: { balance_sheet: 'opening is 0', profit_or_loss: 'prior period is 0' },
     },
+    monthly: {
+      title: 'Monthly trend (current period)',
+      month: 'Month',
+      revenue: 'Revenue',
+      expense: 'Expenses',
+      employee: 'of which employee expenses',
+    },
   },
   completion: {
     candidate: 'Candidate opinion',
@@ -439,6 +451,7 @@ export const en = {
       SETTINGS_KEY_MISSING: 'SETTINGS_SECRET_KEY is not set, so encrypted keys and tokens cannot be saved or read.',
       SETTINGS_KEY_INVALID:
         'SETTINGS_SECRET_KEY is invalid or was changed, so stored keys and tokens cannot be decrypted.',
+      ABN_TAKEN: 'This ABN is already registered to another client.',
     } as Record<string, string>,
   },
   toasts: {
@@ -540,6 +553,8 @@ export const en = {
       large_proprietary: 'Large proprietary company',
       public: 'Public company',
     } as Record<string, string>,
+    sources: { manual: 'Entered manually', dataset: 'From the dataset', update: 'Updated by the auditor' },
+    notRecorded: 'Not recorded',
   },
   projectsPage: {
     title: 'Engagements',
@@ -559,6 +574,40 @@ export const en = {
     pending: (n: number) => `${n} item${n === 1 ? '' : 's'} pending review`,
     gate: (gate: string) => `${gate} pending auditor review`,
     datasetsFailed: 'Could not load the client list, so a new engagement cannot be created yet.',
+    newClient: 'New client…',
+    noDataset:
+      'This client has no demo dataset. ACC-04 leaves the register checks for you to confirm manually, and the client data is imported in the engagement.',
+  },
+  newClient: {
+    title: 'New client',
+    intro: 'Register a client that has no demo dataset. The profile is saved as version 1, entered manually by you.',
+    optional: 'Optional · leave blank if the client has not declared it',
+    yearEnd: 'Financial year end (MM-DD)',
+    approvalLimit: 'Payment approval limit (AUD)',
+    framework: 'Financial reporting framework',
+    priorAudited: 'Prior period audited',
+    notDeclared: 'Not declared',
+    frameworks: {
+      tier1_gpfs: 'Tier 1 general purpose',
+      tier2_gpfs: 'Tier 2 general purpose (Simplified Disclosures)',
+      spfr: 'Special purpose',
+    },
+    abnHint: '11 digits; spaces are fine',
+    abnChecksumOk: (abn: string) => `${abn}: check digits are valid`,
+    abnLookupLater: 'ABN Lookup is not connected yet',
+    registryNote:
+      'No registry source is connected for new clients yet, so at acceptance ACC-04 leaves the ABN and ASIC checks for you to confirm manually.',
+    save: 'Save client',
+    created: (name: string) => `Client ${name} saved`,
+    taken: (name: string, id: string) => `This ABN is already registered to ${name} (${id}).`,
+    pickExisting: 'Choose that client',
+    errors: {
+      legalName: 'Enter the legal name',
+      abnFormat: 'An ABN has 11 digits',
+      abnChecksum: 'The check digits do not match. Look for a typo in the ABN.',
+      yearEnd: 'Enter a valid month and day as MM-DD, such as 06-30',
+      limit: 'Enter an amount in dollars, with at most 2 decimal places',
+    },
   },
   login: {
     title: 'Sign in',
@@ -895,6 +944,8 @@ export const en = {
           : `For all ${accounts} accounts, the year's movements equal the change in the trial balance`,
       count: (source: string, expected: string, received: string) =>
         `${source} reported ${expected} journal entries; ${received} received`,
+      notImported: 'Journal entries not imported yet',
+      notImportedYet: 'Not imported yet',
       mapping: (mapped: number, total: number) =>
         mapped === total
           ? `All ${total} accounts are assigned to a standard category`

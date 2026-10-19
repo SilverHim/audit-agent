@@ -76,7 +76,7 @@ export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A
 /**
  * AnalyticsResult
  *
- * PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外.
+ * PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
  */
 export type AnalyticsResult = {
     /**
@@ -97,6 +97,10 @@ export type AnalyticsResult = {
      * Exception Ids
      */
     exception_ids: Array<string>;
+    /**
+     * Monthly
+     */
+    monthly?: Array<MonthlyFigures>;
 };
 
 /**
@@ -531,6 +535,128 @@ export type CategoryVersion = {
 export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available' | 'tb_agrees_statements';
 
 /**
+ * ClientCreate
+ *
+ * 新建客户 (POST /clients): id 由服务端生成 CLIENT-M-{12 位十六进制}, 版本为 1, 来源 manual. 省略的扩展字段取
+ * ClientProfile 的默认值.
+ */
+export type ClientCreate = {
+    /**
+     * Legal Name
+     */
+    legal_name: string;
+    /**
+     * Abn
+     */
+    abn: string;
+    /**
+     * Entity Type
+     */
+    entity_type: string;
+    /**
+     * Industry Anzsic
+     */
+    industry_anzsic: string;
+    /**
+     * Listed
+     */
+    listed: boolean;
+    /**
+     * Directors
+     */
+    directors: Array<string>;
+    /**
+     * Notes
+     */
+    notes?: string;
+    /**
+     * Financial Year End
+     */
+    financial_year_end?: string | null;
+    /**
+     * Accounting System
+     */
+    accounting_system?: string | null;
+    /**
+     * Engagements
+     */
+    engagements?: Array<string>;
+    /**
+     * Approval Limit Cents
+     */
+    approval_limit_cents?: number | null;
+    /**
+     * Key Personnel
+     */
+    key_personnel?: Array<KeyPerson>;
+    /**
+     * Related Parties
+     */
+    related_parties?: Array<DeclaredParty>;
+    /**
+     * Ownership
+     */
+    ownership?: Array<DeclaredHolding>;
+    /**
+     * Prior Risk Register
+     */
+    prior_risk_register?: {
+        [key: string]: Array<string>;
+    };
+    /**
+     * Prior Misstatements
+     */
+    prior_misstatements?: Array<PriorMisstatement>;
+    /**
+     * Independence Flags
+     */
+    independence_flags?: Array<string>;
+    /**
+     * Applicable Framework
+     */
+    applicable_framework?: 'tier1_gpfs' | 'tier2_gpfs' | 'spfr' | null;
+    governance?: Governance | null;
+    fees?: Fees | null;
+    /**
+     * Service Organisations
+     */
+    service_organisations?: Array<ServiceOrganisation>;
+    /**
+     * Prior Estimate Outcomes
+     */
+    prior_estimate_outcomes?: Array<PriorEstimateOutcome>;
+    retention?: Retention | null;
+    /**
+     * Prior Period Audited
+     */
+    prior_period_audited?: boolean | null;
+};
+
+/**
+ * ClientDataset
+ *
+ * 数据集客户的一个数据集: 建项目时提交的数据集名与自带的审计期间.
+ */
+export type ClientDataset = {
+    /**
+     * Dataset
+     */
+    dataset: string;
+    /**
+     * Period Start
+     */
+    period_start?: string | null;
+    /**
+     * Period End
+     */
+    period_end?: string | null;
+    /**
+     * Default
+     */
+    default?: boolean;
+};
+
+/**
  * ClientProfile
  *
  * 客户画像: 客户申报的资料, 如法定名称, ABN, 主体类型, 行业, 董事. ACN 从 ABN 登记记录取. id 即 client_id.
@@ -645,10 +771,6 @@ export type ClientProfile = {
  */
 export type ClientProfileIn = {
     /**
-     * Version
-     */
-    version: number;
-    /**
      * Legal Name
      */
     legal_name: string;
@@ -737,6 +859,10 @@ export type ClientProfileIn = {
      * Prior Period Audited
      */
     prior_period_audited?: boolean | null;
+    /**
+     * Version
+     */
+    version: number;
 };
 
 /**
@@ -751,6 +877,10 @@ export type ClientProfileView = {
      */
     history: Array<ClientProfile>;
     /**
+     * Versions
+     */
+    versions: Array<ProfileVersionInfo>;
+    /**
      * Engagement Profile Version
      */
     engagement_profile_version: number;
@@ -763,6 +893,35 @@ export type ClientProfileView = {
      * Editable
      */
     editable: boolean;
+};
+
+/**
+ * ClientSummary
+ *
+ * 客户列表的一行 (GET /clients): 每个客户一行, 不按数据集.
+ */
+export type ClientSummary = {
+    /**
+     * Client Id
+     */
+    client_id: string;
+    /**
+     * Legal Name
+     */
+    legal_name: string;
+    /**
+     * Abn
+     */
+    abn: string;
+    origin: ProfileSource | null;
+    /**
+     * Latest Version
+     */
+    latest_version: number | null;
+    /**
+     * Datasets
+     */
+    datasets: Array<ClientDataset>;
 };
 
 /**
@@ -1400,6 +1559,27 @@ export type Direction = 'overstated' | 'understated';
 export type DisputeResolution = 'a6_upheld' | 'a7_upheld' | 'neither';
 
 /**
+ * DocumentDetailsIn
+ *
+ * 补登记一份文件 (PUT /documents/{id}/details, 需求 R90): 字段同 DocumentDetailsEdit, 只给要改的.
+ */
+export type DocumentDetailsIn = {
+    reliability?: Reliability | null;
+    /**
+     * Document Date
+     */
+    document_date?: string | null;
+    /**
+     * Related Ids
+     */
+    related_ids?: Array<string> | null;
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
  * DocumentRef
  *
  * 已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息.
@@ -1502,7 +1682,7 @@ export type Engagement = {
     /**
      * Dataset
      */
-    dataset: string;
+    dataset: string | null;
     /**
      * Owner Id
      */
@@ -1535,7 +1715,8 @@ export type Engagement = {
 /**
  * EngagementCreate
  *
- * 新建项目. 客户名称与 ABN 不在此传, 取数据集里的客户画像.
+ * 新建项目. dataset 与 client_id 二选一: 数据集客户传数据集名, 取数据集里的客户画像 (行为同 R288 之前); 新建的
+ * 客户传 client_id, 取该客户最新一版画像, 项目没有数据集. 客户名称与 ABN 不在此传.
  */
 export type EngagementCreate = {
     /**
@@ -1549,7 +1730,11 @@ export type EngagementCreate = {
     /**
      * Dataset
      */
-    dataset: string;
+    dataset?: string | null;
+    /**
+     * Client Id
+     */
+    client_id?: string | null;
 };
 
 /**
@@ -1714,6 +1899,48 @@ export type ExtractionEdit = {
      * Reason
      */
     reason: string;
+};
+
+/**
+ * ExtractionRecord
+ *
+ * 抽取结果的一版 (表 extraction_versions 的一行).
+ */
+export type ExtractionRecord = {
+    /**
+     * Target Type
+     */
+    target_type: string;
+    /**
+     * Target Id
+     */
+    target_id: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Data
+     */
+    data: {
+        [key: string]: unknown;
+    };
+    /**
+     * Field
+     */
+    field?: string | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Changed By
+     */
+    changed_by: string;
+    /**
+     * Changed At
+     */
+    changed_at: string;
 };
 
 /**
@@ -2617,6 +2844,30 @@ export type MisstatementReport = {
 export type MisstatementType = 'factual' | 'judgmental' | 'projected';
 
 /**
+ * MonthlyFigures
+ *
+ * PLN-07 A03 的一个月: 本期内该月总账分录的收入类, 费用类合计与员工费用 (需求 R103).
+ */
+export type MonthlyFigures = {
+    /**
+     * Month
+     */
+    month: string;
+    /**
+     * Revenue Cents
+     */
+    revenue_cents: number;
+    /**
+     * Expense Cents
+     */
+    expense_cents: number;
+    /**
+     * Employee Expense Cents
+     */
+    employee_expense_cents: number;
+};
+
+/**
  * NeitherAction
  *
  * 仲裁为 neither 时的处理. 追加程序 (环 2) 本版不做.
@@ -2947,6 +3198,38 @@ export type ProcedureSummary = {
 };
 
 /**
+ * ProfileSource
+ *
+ * 客户画像一版的来源 (client_profiles.source).
+ */
+export type ProfileSource = 'manual' | 'dataset' | 'update';
+
+/**
+ * ProfileVersionInfo
+ *
+ * 客户资料页版本历史中一版的出处: 谁, 何时, 来源.
+ */
+export type ProfileVersionInfo = {
+    /**
+     * Version
+     */
+    version: number;
+    source: ProfileSource | null;
+    /**
+     * Updated By
+     */
+    updated_by: string | null;
+    /**
+     * Updated By Name
+     */
+    updated_by_name: string | null;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
  * ProposedAction
  *
  * 判断的建议动作.
@@ -3031,7 +3314,7 @@ export type RegistryCheck = {
     /**
      * Passed
      */
-    passed: boolean;
+    passed: boolean | null;
     /**
      * Detail
      */
@@ -4117,6 +4400,49 @@ export type DatasetsListDatasetsResponses = {
 
 export type DatasetsListDatasetsResponse = DatasetsListDatasetsResponses[keyof DatasetsListDatasetsResponses];
 
+export type ClientsListClientsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/clients';
+};
+
+export type ClientsListClientsResponses = {
+    /**
+     * Response Clients-List Clients
+     *
+     * Successful Response
+     */
+    200: Array<ClientSummary>;
+};
+
+export type ClientsListClientsResponse = ClientsListClientsResponses[keyof ClientsListClientsResponses];
+
+export type ClientsCreateClientData = {
+    body: ClientCreate;
+    path?: never;
+    query?: never;
+    url: '/api/v1/clients';
+};
+
+export type ClientsCreateClientErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ClientsCreateClientError = ClientsCreateClientErrors[keyof ClientsCreateClientErrors];
+
+export type ClientsCreateClientResponses = {
+    /**
+     * Successful Response
+     */
+    201: ClientSummary;
+};
+
+export type ClientsCreateClientResponse = ClientsCreateClientResponses[keyof ClientsCreateClientResponses];
+
 export type EngagementsListEngagementsData = {
     body?: never;
     path?: never;
@@ -4703,7 +5029,14 @@ export type EvidenceListDocumentsData = {
          */
         eid: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Related Id
+         *
+         * 只列关联对象含此 ID 的文件 (需求 R90)
+         */
+        related_id?: string | null;
+    };
     url: '/api/v1/engagements/{eid}/documents';
 };
 
@@ -4824,6 +5157,76 @@ export type EvidenceSetDocumentTypeResponses = {
 };
 
 export type EvidenceSetDocumentTypeResponse = EvidenceSetDocumentTypeResponses[keyof EvidenceSetDocumentTypeResponses];
+
+export type EvidenceSetDocumentDetailsData = {
+    body: DocumentDetailsIn;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents/{document_id}/details';
+};
+
+export type EvidenceSetDocumentDetailsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceSetDocumentDetailsError = EvidenceSetDocumentDetailsErrors[keyof EvidenceSetDocumentDetailsErrors];
+
+export type EvidenceSetDocumentDetailsResponses = {
+    /**
+     * Successful Response
+     */
+    200: DocumentRef;
+};
+
+export type EvidenceSetDocumentDetailsResponse = EvidenceSetDocumentDetailsResponses[keyof EvidenceSetDocumentDetailsResponses];
+
+export type EvidenceDocumentHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Document Id
+         */
+        document_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/documents/{document_id}/history';
+};
+
+export type EvidenceDocumentHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceDocumentHistoryError = EvidenceDocumentHistoryErrors[keyof EvidenceDocumentHistoryErrors];
+
+export type EvidenceDocumentHistoryResponses = {
+    /**
+     * Response Evidence-Document History
+     *
+     * Successful Response
+     */
+    200: Array<ExtractionRecord>;
+};
+
+export type EvidenceDocumentHistoryResponse = EvidenceDocumentHistoryResponses[keyof EvidenceDocumentHistoryResponses];
 
 export type EvidenceGetEvidenceData = {
     body?: never;

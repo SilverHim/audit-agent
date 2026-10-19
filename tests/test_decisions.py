@@ -28,6 +28,7 @@ from backend.contracts.models import (
     Phase,
     Procedure,
     ProcedureStatus,
+    ProfileSource,
     ReportSection,
     RiskItem,
     RiskLevel,
@@ -382,7 +383,7 @@ async def test_update_profile_checks_lock_gate_and_version_before_merging() -> N
 async def test_submit_requires_resume_when_profile_ahead_of_checkpoint() -> None:
     """本项目已采用画像新版本 (Store 已提交), 检查点的 client_profile_version 还是旧的: 须先 resume."""
     s = await started(TYPO_PROFILE)
-    await s.engagement_store.save_profile(FIXED_PROFILE)
+    await s.engagement_store.save_profile(FIXED_PROFILE, source=ProfileSource.update, updated_by="U-1")
     await s.engagement_store.update(EID, client_profile_version=2)
 
     with pytest.raises(DecisionRejected) as e:
@@ -475,9 +476,9 @@ async def test_update_profile_version_conflict_releases_lock(monkeypatch: pytest
     s = await started(TYPO_PROFILE)
     real_save = s.engagement_store.save_profile
 
-    async def raced_save(profile: ClientProfile) -> ClientProfile:
+    async def raced_save(profile: ClientProfile, **meta: Any) -> ClientProfile:
         s.engagement_store.profiles.append(FIXED_PROFILE)  # 另一个项目刚存的第 2 版
-        return await real_save(profile)
+        return await real_save(profile, **meta)
 
     monkeypatch.setattr(s.engagement_store, "save_profile", raced_save)
 

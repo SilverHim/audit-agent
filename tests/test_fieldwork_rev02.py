@@ -90,8 +90,8 @@ def setup(
     rows 替换规则 S01 选中的行 (缺省为 Numbat 的两张). real 为真时用真实判断引擎 (大模型为 mock 模式,
     读 tests/fixtures/llm/REV-02), 返回的假引擎不被调用."""
     engine = FakeJudgmentEngine(outcomes if outcomes is not None else {i: passed() for i in INVOICES})
-    financial = FakeFinancialStore(
-        list(NUMBAT_CONTRACTS), records=NUMBAT_RECORDS if records is None else records, contracts=numbat_contracts()
+    financial = FakeFinancialStore(  # 存储里的文件登记为 DOC-04 抽取后的 (状态写回存储), 与状态里的相同
+        list(EXTRACTED), records=NUMBAT_RECORDS if records is None else records, contracts=numbat_contracts()
     )
     rules = FakeRuleEngine()
     if rows is not None:

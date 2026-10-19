@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.contracts.errors import VersionConflict
-from backend.contracts.models import Phase
+from backend.contracts.models import Phase, ProfileSource
 from backend.contracts.records import Account, JournalEntry
 from backend.services.account_mapping import with_category
 from tests.fakes import (
@@ -48,7 +48,7 @@ async def test_engagement_writes_staged_then_rolled_back() -> None:
         async with output_store.transaction(EID):
             await output_store.put(EID, [make_procedure("ACC-04")], actor="A1")
             await engagement_store.update(EID, phase=Phase.P1_Planning, locked=True)
-            await engagement_store.save_profile(PROFILE_V2)
+            await engagement_store.save_profile(PROFILE_V2, source=ProfileSource.update, updated_by="U-1")
             staged = await engagement_store.get(EID)
             assert staged is not None and staged.phase is Phase.P1_Planning and staged.locked
             assert await engagement_store.client_profile(CLIENT) == PROFILE_V2
@@ -68,7 +68,7 @@ async def test_engagement_writes_committed_with_outputs() -> None:
 
     async with output_store.transaction(EID):
         await output_store.put(EID, [procedure], actor="A1")
-        await engagement_store.save_profile(PROFILE_V2)
+        await engagement_store.save_profile(PROFILE_V2, source=ProfileSource.update, updated_by="U-1")
         await engagement_store.update(EID, phase=Phase.P1_Planning)
 
     engagement = await engagement_store.get(EID)
@@ -104,7 +104,7 @@ async def test_child_task_is_not_in_parent_transaction() -> None:
 
     async with output_store.transaction(EID):
         await output_store.put(EID, [make_procedure("ACC-04")], actor="A1")
-        await engagement_store.save_profile(PROFILE_V2)
+        await engagement_store.save_profile(PROFILE_V2, source=ProfileSource.update, updated_by="U-1")
         await asyncio.create_task(child())
         assert [p.id for p in output_store.rows] == ["ACC-01"]  # 子任务的写入已提交, 父任务的还在暂存
 

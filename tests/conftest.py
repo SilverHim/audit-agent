@@ -34,3 +34,14 @@ def xero_case(tmp_path):
     from tests.xero_injection import xero_case as build
 
     return lambda scenario, base=None, **options: build(tmp_path / base if base else tmp_path, scenario, **options)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """调真实大模型的测试 (标 live) 须同时标 slow (需求 R114): 否则默认的 `-m 'not slow'` 也会收进来联网, 收集阶段
+    即报错. 排在按标记筛选之前, 被筛掉的也查."""
+    from tests.external import live_without_slow
+
+    bad = live_without_slow(items)
+    if bad:
+        raise pytest.UsageError("标了 live 的测试须同时标 slow: " + ", ".join(bad))

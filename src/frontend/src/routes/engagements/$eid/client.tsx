@@ -1,10 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CircleCheck, CircleX, Pencil } from 'lucide-react'
+import { Pencil } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { EvidenceLink } from '@/components/evidence-link'
 import { ProfileForm, useGate } from '@/components/gate-form'
+import { CheckIcon, checkTone } from '@/components/profile-fields'
 import { Button } from '@/components/ui/button'
+import { formatAbn } from '@/lib/abn'
 import { decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
 import { type ClientProfileView, useClientProfile } from '@/lib/new-api'
@@ -14,16 +16,9 @@ export const Route = createFileRoute('/engagements/$eid/client')({
   component: Client,
 })
 
-function formatAbn(abn: string): string {
-  const digits = abn.replaceAll(' ', '')
-  return digits.length === 11
-    ? `${digits.slice(0, 2)} ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`
-    : abn
-}
-
 function Client() {
   const { eid } = Route.useParams()
-  const { t } = useI18n()
+  const { t, formatDateTime } = useI18n()
   const overview = useEngagement(eid).data
   const remote = useClientProfile(eid)
   const atAcceptance = overview?.current_gate === 'ACC-01'
@@ -36,6 +31,7 @@ function Client() {
       ? {
           profile: gate.data.material.client_profile,
           history: [gate.data.material.client_profile],
+          versions: [],
           scorecard: gate.data.material.scorecard,
           exceptions: gate.data.material.exceptions,
           editable: true,
@@ -117,15 +113,14 @@ function Client() {
                     <article key={check.check} className="flex flex-col gap-1.5 rounded-[10px] border p-3.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex items-center gap-2 font-semibold">
-                          {check.passed ? (
-                            <CircleCheck className="size-4 text-ok" aria-hidden="true" />
-                          ) : (
-                            <CircleX className="size-4 text-risk" aria-hidden="true" />
-                          )}
+                          <CheckIcon passed={check.passed} className="size-4" />
                           {t.checks[check.check]}
                         </span>
-                        <StatusPill tone={check.passed ? 'ok' : 'risk'}>{t.card.registers[check.check]}</StatusPill>
+                        <StatusPill tone={checkTone(check.passed)}>{t.card.registers[check.check]}</StatusPill>
                       </div>
+                      {check.passed === null ? (
+                        <span className="font-medium text-[12.5px] text-warn">{t.card.manualCheck}</span>
+                      ) : null}
                       <span className="text-[13px] text-[#4a5262]" lang="en">
                         {check.detail}
                       </span>
@@ -138,14 +133,28 @@ function Client() {
               ) : null}
               <section className="flex flex-col gap-3 rounded-[14px] border bg-card px-5 py-5">
                 <h2 className="m-0 font-semibold text-base">{t.clientPage.history}</h2>
-                {[...view.history].reverse().map((item) => (
-                  <div key={item.version ?? 1} className="flex items-baseline justify-between gap-2.5 text-[13.5px]">
-                    <span className="font-semibold">{t.clientPage.version(item.version ?? 1)}</span>
-                    {item.version === view.profile.version ? (
-                      <StatusPill tone="accent">{t.clientPage.current}</StatusPill>
-                    ) : null}
-                  </div>
-                ))}
+                {[...view.history].reverse().map((item) => {
+                  const info = view.versions.find((entry) => entry.version === (item.version ?? 1))
+                  return (
+                    <div key={item.version ?? 1} className="flex flex-col gap-0.5 text-[13.5px]">
+                      <div className="flex items-baseline justify-between gap-2.5">
+                        <span className="font-semibold">{t.clientPage.version(item.version ?? 1)}</span>
+                        {item.version === view.profile.version ? (
+                          <StatusPill tone="accent">{t.clientPage.current}</StatusPill>
+                        ) : null}
+                      </div>
+                      {info ? (
+                        <span className="text-[12.5px] text-muted-foreground">
+                          {info.source ? t.clientPage.sources[info.source] : t.clientPage.notRecorded}
+                          {' · '}
+                          {info.updated_by_name ?? info.updated_by ?? t.clientPage.notRecorded}
+                          {' · '}
+                          {formatDateTime(info.updated_at)}
+                        </span>
+                      ) : null}
+                    </div>
+                  )
+                })}
               </section>
             </div>
           </>

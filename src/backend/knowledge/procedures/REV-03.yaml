@@ -4,7 +4,7 @@ phase: P2_Executing
 cycle: Revenue
 owner: A6
 outputs: [judgments, exceptions, review_tasks]
-reads: [contracts]
+reads: [contracts, documents]  # documents: 判断引用合同页, 证据可靠性取自文件登记 (需求 R90)
 engine: llm
 autonomy_level: L2
 manual_result_allowed: true

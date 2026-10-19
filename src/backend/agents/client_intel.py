@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
+from backend.contracts.errors import RegistryUnavailable
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
@@ -94,6 +95,33 @@ def check_company_registered(acn: str | None, record: AsicCompanyRecord | None, 
     return RegistryCheck(check="company_registered", passed=passed, detail=detail, evidence=evidence)
 
 
+MANUAL_CHECKS = ("abn_active", "name_match", "company_registered")  # 三项检查, 顺序同 collect_checks
+
+
+def unavailable_pointer(trail_id: str) -> EvidencePointer:
+    """指向记下 "登记未接入, 没有查询" 的那条留痕: 没有取得外部证据, 只是系统自己的记录, 故为内部原件 (type voucher,
+    同内部记录), 不标外部原件; 只作定位."""
+    return EvidencePointer(
+        type=EvidenceType.voucher,
+        source_type="trail",
+        source_id=trail_id,
+        locator="available",
+        reliability=Reliability.internal_original,
+    )
+
+
+def manual_checks(abn: str, trail_id: str) -> list[RegistryCheck]:
+    """没有可查的登记来源 (新建的客户, ABR 与 ASIC 摘录未接入) 时的三项检查: passed 为 None, 待审计师人工确认,
+    不出例外; 证据指向记下 "未接登记" 的那条留痕 (unavailable_pointer, 不是外部证据)."""
+    detail = (
+        f"No registry source for ABN {abn} (client without a dataset); confirm manually against ABN Lookup and ASIC"
+    )
+    return [
+        RegistryCheck(check=check, passed=None, detail=detail, evidence=unavailable_pointer(trail_id))
+        for check in MANUAL_CHECKS
+    ]
+
+
 def build_exception(check: RegistryCheck, run: ProcedureRun, abn: str) -> AuditException:
     """未通过的检查生成一条例外: rule_id 取检查名, severity 为 high, 涉及对象为客户 ABN."""
     return AuditException(
@@ -177,8 +205,17 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
         return (record, trail_id)
 
     async def collect_checks(self, ctx: RunContext, profile: ClientProfile) -> list[RegistryCheck]:
-        """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered."""
-        abn_record, abn_trail_id = await self.lookup_abn(ctx=ctx, abn=profile.abn)
+        """查 ABN 与 ASIC, 返回三项检查结果, 顺序为 abn_active, name_match, company_registered. 没有可查的登记来源
+        (RegistryUnavailable) 时记一条留痕, 三项都待人工确认."""
+        try:
+            abn_record, abn_trail_id = await self.lookup_abn(ctx=ctx, abn=profile.abn)
+        except RegistryUnavailable:
+            trail_id = await self.record_query(
+                ctx=ctx,
+                summary=f"ABN Lookup {profile.abn}: no registry source, manual confirmation",
+                payload={"abn": profile.abn, "available": False, "result": None},
+            )
+            return manual_checks(abn=profile.abn, trail_id=trail_id)
         check_list = []
         check_list.append(check_abn_active(abn=profile.abn, record=abn_record, trail_id=abn_trail_id))
         check_list.append(check_name_match(record=abn_record, legal_name=profile.legal_name, trail_id=abn_trail_id))
@@ -209,10 +246,10 @@ class ClientIntelAgent(ProcedureAgent[Acc04Findings]):
         return Acc04Findings(profile=profile, checks=check_list)
 
     async def interpret(self, ctx: RunContext, findings: Acc04Findings) -> StatePatch:
-        """未通过的检查出例外, 汇总评分卡, 执行记录置成功终态."""
+        """未通过的检查出例外 (待人工确认的不出), 汇总评分卡, 执行记录置成功终态."""
         exceptions = []
         for check in findings.checks:
-            if not check.passed:
+            if check.passed is False:
                 exceptions.append(build_exception(check=check, run=ctx.run, abn=findings.profile.abn))
 
         scorecard = build_scorecard(

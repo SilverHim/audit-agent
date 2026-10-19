@@ -10,6 +10,7 @@ from backend.contracts.models import (
     GateId,
     GateVerdict,
     ProcedureStatus,
+    ProfileSource,
     ReviewTask,
     TargetType,
     TaskKind,
@@ -97,7 +98,9 @@ async def test_gate_after_profile_update_shows_only_current_exceptions() -> None
     """名称改对后 ACC-04 重跑: 状态里仍留着第 1 次的例外, 材料只列评分卡第 2 版引用的 (没有)."""
     runner, query, _ = await started(TYPO_PROFILE)
     config = GraphRunner.config(EID)
-    saved = await runner.deps.engagement_store.save_profile(NUMBAT_PROFILE.model_copy(update={"version": 2}))
+    saved = await runner.deps.engagement_store.save_profile(
+        NUMBAT_PROFILE.model_copy(update={"version": 2}), source=ProfileSource.update, updated_by="U-1"
+    )
     await runner.app.aupdate_state(config, {"client_profile_version": saved.version}, as_node="gate_acc01")
     await runner.app.ainvoke(None, config)
 

@@ -23,6 +23,7 @@ from backend.contracts.models import (
     ClientProfile,
     DocumentType,
     LlmSettings,
+    ProfileSource,
     Reliability,
     TrailEntry,
     TrailKind,
@@ -117,6 +118,7 @@ async def test_load_rules_and_project_isolation(storage):
         prior_period_start=None,
         revenue_categories=["revenue"],
         cost_of_sales_categories=["cost_of_sales"],
+        employee_expense_categories=["employee_expenses"],
         income_tax_categories=["income_tax"],
         subsequent_days=10,
         lookback_days=5,
@@ -138,6 +140,8 @@ async def test_load_rules_and_project_isolation(storage):
                 )
             if rule["id"] == "D02":
                 assert len(rows) == 8
+            if (template["id"], rule["id"]) == ("PLN-07", "A03"):
+                assert len(rows) == 12
     with pytest.raises(DBAPIError, match="read-only"):
         await financial.query(e.id, "DELETE FROM sales_invoices", {})
     with pytest.raises(DBAPIError):
@@ -225,7 +229,9 @@ async def test_versions_rollback_trail_and_lock(storage):
         async with store.transaction(e.id):
             await store.put(e.id, [obj.model_copy(update={"version": 2})], actor="B")
             await evidence.set_status(e.id, doc.id, "extracted")
-            await engagements.save_profile(profile.model_copy(update={"version": 2}))
+            await engagements.save_profile(
+                profile.model_copy(update={"version": 2}), source=ProfileSource.update, updated_by="U-1"
+            )
             await engagements.update(e.id, client_profile_version=2)
             await asyncio.wait_for(
                 trail.record(
@@ -348,7 +354,7 @@ NEW_TYPES = {
 
 async def test_new_document_types_round_trip(storage):
     """documents.type 是 text 列 (迁移 0001 无约束, 0004 也未加), 新取值不需迁移: 各存一份后按类型取回, 读回仍是枚举;
-    文件日期与关联对象两列还没有, 读回为缺省值."""
+    没补登记的文件读回文件日期为空, 关联对象为 [] (补登记见 test_data_store_postgres)."""
     engine, e, _loader, evidence = storage
     supplements = ROOT / "data/xero_demo/20261017-q1"
     upstream = {
@@ -730,6 +736,62 @@ async def test_pln07_a01_compares_balance_sheet_with_opening(storage):
     assert "1300" not in await hits(min_change_revenue_pct=0)
 
 
+async def test_pln07_a03_monthly_figures_from_journal(storage):
+    """PLN-07 A03 (需求 R103 验收 2): data/demo 的总账在审计期间内按月汇总, 得 12 行, 同 NUMBAT_A03_ROWS (各列合计
+    同本期试算表: 收入取 revenue 分类, 费用取类型 expense, 员工费用取 employee_expenses). 入账日期不在审计期间内的
+    分录不计: 期间缩到 2025-08-01 至 2026-05-31 时首尾两个月不出, 其余月份不变; 期间从月中起止时首尾两个月只计期间
+    内的. 收入与员工费用的分类取参数. 审计
+    期间的每个月都出一行: 期间多出没有分录的 2025-06, 或删掉 2026-02 的全部分录时, 那个月三项为 0 (第 1 轮审核
+    R103-01)."""
+    from sqlalchemy import delete
+
+    from backend.contracts.records import DatasetTraits
+    from backend.contracts.state import initial_state
+    from tests.fakes import NUMBAT_A03_ROWS
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    financial = PostgresFinancialDataStore(engine)
+    library = ProcedureLibrary(ROOT / "src/backend/knowledge")
+    template = library.load("PLN-07")
+    a03 = next(r.sql for r in template.rules if r.id == "A03")
+    params = library.resolve_params(template, e, initial_state(e, [], 1), None, traits=DatasetTraits(), profile=None)
+    assert params["employee_expense_categories"] == ["employee_expenses"]
+
+    rows = [dict(r) for r in await financial.query(e.id, a03, params)]
+    assert rows == NUMBAT_A03_ROWS
+    shorter = {**params, "period_start": date(2025, 8, 1), "period_end": date(2026, 5, 31)}
+    assert [dict(r) for r in await financial.query(e.id, a03, shorter)] == NUMBAT_A03_ROWS[1:-1]
+    # 期间首尾不在月初月末时, 首尾两个月只计期间内的分录 (7 月 16 日之前, 6 月 15 日之后的不计)
+    inside = {**params, "period_start": date(2025, 7, 16), "period_end": date(2026, 6, 15)}
+    partial = [dict(r) for r in await financial.query(e.id, a03, inside)]
+    assert [r["month"] for r in partial] == [r["month"] for r in NUMBAT_A03_ROWS]
+    assert partial[1:-1] == NUMBAT_A03_ROWS[1:-1]
+    assert partial[0]["revenue_cents"] < NUMBAT_A03_ROWS[0]["revenue_cents"]
+    assert partial[-1]["expense_cents"] < NUMBAT_A03_ROWS[-1]["expense_cents"]
+    # 员工费用按参数取分类: 不给分类时这一列都为 0, 其余列不变
+    none = [dict(r) for r in await financial.query(e.id, a03, {**params, "employee_expense_categories": []})]
+    assert none == [{**row, "employee_expense_cents": 0} for row in NUMBAT_A03_ROWS]
+    # 收入按参数取分类: 加上 other_income 时每月并入 4200 储蓄利息 (合成数据集设计第 4.4 节), 其余两列不变
+    interest = [115000, 116000, 116000, 117000, 116000, 117000, 117000, 116000, 117000, 116000, 118000, 119000]
+    wider = {**params, "revenue_categories": ["revenue", "other_income"]}
+    assert [dict(r) for r in await financial.query(e.id, a03, wider)] == [
+        {**row, "revenue_cents": row["revenue_cents"] + cents}
+        for row, cents in zip(NUMBAT_A03_ROWS, interest, strict=True)
+    ]
+
+    # 没有分录的月份也出一行, 三项为 0
+    empty = {"revenue_cents": 0, "expense_cents": 0, "employee_expense_cents": 0}
+    longer = [dict(r) for r in await financial.query(e.id, a03, {**params, "period_start": date(2025, 6, 1)})]
+    assert longer == [{"month": date(2025, 6, 1), **empty}, *NUMBAT_A03_ROWS]
+    journal = m.FINANCIAL["journal_entries"]
+    async with transaction(engine, e.id) as conn:
+        february = (journal.c.posting_date >= date(2026, 2, 1)) & (journal.c.posting_date <= date(2026, 2, 28))
+        await conn.execute(delete(journal).where(journal.c.engagement_id == e.id, february))
+    rows = [dict(r) for r in await financial.query(e.id, a03, params)]
+    assert rows == [{**row, **empty} if row["month"] == date(2026, 2, 1) else row for row in NUMBAT_A03_ROWS]
+
+
 async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
     """Xero 快照经 XeroDatasetLoader 载入真实库: 各表有数, 科目带标准分类,
     生产的 gl_balance 对每个科目等于本期试算表."""
@@ -900,7 +962,8 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
 
 async def test_create_adopts_latest_profile_or_writes_a_new_version():
     """R127: 建项目时数据集的画像与该客户的各版比较内容 (不看版本号): 有一版相同就沿用最新一版 (含审计师改过的),
-    都不同才写新一版 (版本 +1); 旧版本不改."""
+    都不同才写新一版 (版本 +1); 旧版本不改. R288 (审核 R288-02): 两处写入 (首版与数据集改了的新版) 都记来源 dataset
+    与建项目的人, 审计师那一版记 update 与审计师."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("需要 TEST_DATABASE_URL")
@@ -937,7 +1000,9 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     assert await create(base) == 1
     assert await create(base) == 1  # 内容相同, 沿用
     edited = base.model_copy(update={"version": 2, "directors": ["A", "B"]})
-    await store.save_profile(edited)  # 审计师在项目的 ACC-01 改了画像 (第 2 版)
+    await store.save_profile(
+        edited, source=ProfileSource.update, updated_by="U-1"
+    )  # 审计师在项目的 ACC-01 改了画像 (第 2 版)
     assert await create(base) == 2  # 数据集没变 (同第 1 版): 沿用最新一版, 不把数据集原样盖回去
     assert (await latest()).version == 2 and (await latest()).directors == ["A", "B"]
     changed = base.model_copy(update={"approval_limit_cents": 500000})
@@ -948,6 +1013,12 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
     first, second = await store.client_profile(client, 1), await store.client_profile(client, 2)
     assert first is not None and first.approval_limit_cents is None and first.directors == ["A"]  # 旧版本不改
     assert second == edited
+    history = await store.profile_history(client)
+    assert [(r.profile.version, r.source, r.updated_by) for r in history] == [
+        (1, ProfileSource.dataset, user),
+        (2, ProfileSource.update, "U-1"),
+        (3, ProfileSource.dataset, user),
+    ]
     await engine.dispose()
 
 
@@ -1146,3 +1217,125 @@ async def test_load_adjustments_two_rounds(tmp_path):
         await xero.load_adjustments(locked.id, "xero/20261017-q1", ["AJE-X01"])
     assert await state(locked.id) == (1017, 1)
     await engine.dispose()
+
+
+def synthetic_abn() -> str:
+    """随机 9 位编号补上 ABR 算法的校验位 (测试库是共用的, 每次用不同的 ABN 免得撞上别的用例)."""
+    from backend.services.abn import abn_problem
+
+    while True:
+        body = f"{uuid4().int % 10**9:09d}"
+        hits = [f"{p}{body}" for p in range(10, 100) if abn_problem(f"{p}{body}") is None]
+        if hits:
+            return hits[0]
+
+
+async def test_new_clients_and_engagements_without_dataset(tmp_path):
+    """R288: create_client 写第 1 版 (来源 manual, 写入人); 同一 ABN (库里最新一版或还没进库的数据集画像) 抛
+    AbnTaken; 已有的编号抛 VersionConflict 不覆盖; clients 取最新一版与第 1 版的来源; 没有数据集的项目可建可读,
+    数据管理的 dataset_loads 行 dataset 为空; ACC-01 更新记来源 update."""
+    from backend.contracts.errors import AbnTaken
+    from backend.contracts.models import ProfileSource
+    from backend.persistence.data_store import PostgresDataStore
+
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="R288", password_hash="x", created_at=now()
+            )
+        )
+    store = PostgresEngagementStore(engine)
+    client = "CLIENT-M-" + uuid4().hex[:12]
+    abn, other_abn = synthetic_abn(), synthetic_abn()
+    profile = ClientProfile(
+        id=client,
+        legal_name="Wombat Analytics Pty Ltd",
+        abn=abn,
+        entity_type="small_proprietary",
+        industry_anzsic="6920",
+        listed=False,
+        directors=["Jane Citizen"],
+    )
+    saved = await store.create_client(profile, created_by=user, dataset_profiles=[])
+    assert saved == profile
+    [record] = await store.profile_history(client)
+    assert (record.profile, record.source, record.updated_by) == (profile, ProfileSource.manual, user)
+    [entry] = [e for e in await store.clients() if e.profile.id == client]
+    assert (entry.profile, entry.first_source) == (profile, ProfileSource.manual)
+
+    twin = profile.model_copy(update={"id": "CLIENT-M-" + uuid4().hex[:12], "legal_name": "Twin Pty Ltd"})
+    with pytest.raises(AbnTaken) as taken:
+        await store.create_client(twin, created_by=user, dataset_profiles=[])
+    assert (taken.value.client_id, taken.value.legal_name) == (client, "Wombat Analytics Pty Ltd")
+    from_dataset = profile.model_copy(update={"id": "CLIENT-DS-" + uuid4().hex[:8], "abn": other_abn})
+    with pytest.raises(AbnTaken):
+        await store.create_client(
+            twin.model_copy(update={"abn": other_abn}), created_by=user, dataset_profiles=[from_dataset]
+        )
+    with pytest.raises(VersionConflict):
+        await store.create_client(profile.model_copy(update={"abn": other_abn}), created_by=user, dataset_profiles=[])
+    assert [r.profile for r in await store.profile_history(client)] == [profile]  # 撞号不覆盖
+
+    engagement = await store.create(
+        owner_id=user, period_start=date(2026, 7, 1), period_end=date(2027, 6, 30), dataset=None, profile=saved
+    )
+    assert (engagement.dataset, engagement.client_profile_version) == (None, 1)
+    assert await store.get(engagement.id) == engagement
+    readiness = await PostgresDataStore(tmp_path, engine).confirm_ready(engagement.id, user, reason="R288")
+    assert readiness.ready_by == user
+    async with transaction(engine, engagement.id) as conn:
+        loaded = (await conn.execute(select(m.dataset_loads.c.dataset))).scalar_one()
+    assert loaded is None
+    await store.save_profile(
+        profile.model_copy(update={"version": 2, "directors": ["Jane Citizen", "Sam Example"]}),
+        source=ProfileSource.update,
+        updated_by=user,
+    )
+    assert [(r.profile.version, r.source) for r in await store.profile_history(client)] == [
+        (1, ProfileSource.manual),
+        (2, ProfileSource.update),
+    ]
+    [entry] = [e for e in await store.clients() if e.profile.id == client]
+    assert (entry.profile.version, entry.first_source) == (2, ProfileSource.manual)
+    await engine.dispose()
+
+
+async def test_concurrent_new_clients_with_one_abn_only_one_wins():
+    """R288 (审核 R288-03): 并发新建同一 ABN 的几个客户, 查重与写入在同一把咨询锁内, 每轮恰好一个成功, 其余抛
+    AbnTaken; 库里该 ABN 只有一个客户. ABN 为合成的 (随机 9 位编号, 校验位按算法补)."""
+    from backend.contracts.errors import AbnTaken
+
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"), pool_size=8)
+    store = PostgresEngagementStore(engine)
+    try:
+        for _ in range(3):
+            abn = synthetic_abn()
+            profiles = [
+                ClientProfile(
+                    id="CLIENT-M-" + uuid4().hex[:12],
+                    legal_name=f"Concurrent Wombat Pty Ltd {n}",
+                    abn=abn,
+                    entity_type="small_proprietary",
+                    industry_anzsic="6920",
+                    listed=False,
+                    directors=["Jane Citizen"],
+                )
+                for n in range(4)
+            ]
+            results = await asyncio.gather(
+                *(store.create_client(p, created_by="U-1", dataset_profiles=[]) for p in profiles),
+                return_exceptions=True,
+            )
+            won = [r for r in results if isinstance(r, ClientProfile)]
+            assert len(won) == 1 and all(isinstance(r, AbnTaken) for r in results if r not in won), results
+            assert [e.profile.id for e in await store.clients() if e.profile.abn == abn] == [won[0].id]
+    finally:
+        await engine.dispose()

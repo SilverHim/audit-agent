@@ -67,7 +67,8 @@ class MockConfirmationChannel:
 
 class DatasetConfirmationChannel:
     """按项目的数据集定位回函 mock: Numbat (demo) 读 data/demo/confirmations/, Xero 读补造目录的 confirmations/
-    (补造与快照不匹配时抛 SupplementMismatch); 没有目录时出未回函回执. 回执持久化同 MockConfirmationChannel.
+    (补造与快照不匹配时抛 SupplementMismatch); 没有目录 (含没有数据集的新客户) 时出未回函回执. 回执持久化同
+    MockConfirmationChannel.
     项目不存在抛 LookupError; 同键已有回执时直接取回, 不再解析目录 (已发出的函证不因补造或快照后来的变化而取不回)."""
 
     def __init__(
@@ -84,5 +85,5 @@ class DatasetConfirmationChannel:
         stored = MockConfirmationChannel(None, self.receipt_root)
         if stored.receipt_path(eid, idempotency_key).exists():
             return await stored.submit(eid, req, idempotency_key)  # 已有回执: 不读数据集目录
-        found = self.directory(engagement.dataset)
+        found = self.directory(engagement.dataset) if engagement.dataset is not None else None  # 新建的客户没有目录
         return await MockConfirmationChannel(found, self.receipt_root).submit(eid, req, idempotency_key)

@@ -1,5 +1,6 @@
 """LiveLLMClient: OpenAI 兼容接口. 单元测试用假 HTTP 传输 (httpx.MockTransport), 不联网;
-联网测试标 slow, 需在 .env 配好 LLM_MODE=live, LLM_MODEL, LLM_API_KEY (只发合成或公开数据)."""
+联网测试标 slow 与 live, 需配好 LLM_MODEL, LLM_API_KEY (环境变量或 .env, 见 tests.external.live_llm_settings; 只发合成
+或公开数据)."""
 
 import json
 import logging
@@ -27,8 +28,9 @@ from backend.adapters.llm import (
 from backend.contracts.llm_outputs import ConfirmationExtraction
 from backend.contracts.models import TrailKind
 from backend.contracts.ports import LLMMessage, LLMRequest
-from backend.core.config import Settings, get_settings
+from backend.core.config import Settings
 from backend.orchestration.nodes import GraphNodes
+from tests.external import live_llm_settings
 from tests.test_ingest_doc06 import raw, setup
 
 KEY = "sk-test-0123456789"
@@ -522,12 +524,12 @@ async def test_doc06_through_judgment_engine_with_fake_http() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.live
 async def test_live_doc06_extracts_ba01_reply() -> None:
-    """验收 4 (联网): .env 配好的真实接口读 BA-01 回函, 得回函余额 120840000, 截至 2026-06-30."""
-    settings = get_settings()
-    if not settings.LLM_API_KEY or not settings.LLM_MODEL:
-        pytest.skip("未配置 LLM_MODEL 与 LLM_API_KEY")
-    agent, ctx, trail = setup(llm=make_llm_client(settings.model_copy(update={"LLM_MODE": "live"})))
+    """验收 4 (联网): 配好的真实接口 (环境变量或 .env, tests.external.live_llm_settings) 读 BA-01 回函, 得回函余额
+    120840000, 截至 2026-06-30."""
+    settings = live_llm_settings()
+    agent, ctx, trail = setup(llm=make_llm_client(settings))
     patch = await agent.run(ctx)
     ba01 = next(c for c in patch["confirmations"] if c.bank_account_id == "BA-01")
     assert (ba01.confirmed_balance_cents, ba01.balance_date) == (120840000, date(2026, 6, 30))

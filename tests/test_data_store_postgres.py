@@ -19,6 +19,7 @@ from backend.contracts.data import (
     DataChange,
     DataInput,
     DocumentChange,
+    DocumentDetailsEdit,
     ImportCommit,
     ImportSession,
     TableKind,
@@ -1219,3 +1220,205 @@ async def test_import_batch_on_real_store(storage, tmp_path: Path) -> None:  # t
     assert again == done and len(await deps.data.versions(first.id)) == 2
     assert (await deps.data.readiness(first.id)).data_version == 1
     assert len(await deps.data.changes(first.id)) == 3
+
+
+async def test_migration_0011_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R288: 以属主角色在一个事务里走 0011 降级再升级, 最后回滚 (不动测试库的表结构与 alembic 版本). 降级时没有
+    数据集的项目 (engagements 与 dataset_loads 的 dataset 为空) 记为空字符串, 两列恢复非空, client_profiles 的 source,
+    updated_by 两列删掉; 再升级两列回来且为空, dataset 又可为空; 可重复执行; dataset_loads 的 FORCE 行级安全事后已恢复.
+    需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0011_client_registration")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def as_project(eid: str) -> None:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+
+                async def scalar(sql: str) -> Any:
+                    return (await conn.execute(text(sql), {"e": first.id, "c": first.client_id})).scalar()
+
+                async def nullable(table: str) -> str:
+                    return str(
+                        await scalar(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            f"WHERE table_name = '{table}' AND column_name = 'dataset'"
+                        )
+                    )
+
+                async def profile_columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'client_profiles'")
+                    )
+                    return {row[0] for row in found}
+
+                await conn.execute(text("UPDATE engagements SET dataset = NULL WHERE id = :e"), {"e": first.id})
+                await as_project(first.id)
+                await conn.execute(
+                    insert(m.dataset_loads).values(
+                        engagement_id=first.id, dataset=None, data_version=1, loaded_at=now()
+                    )
+                )
+                await conn.execute(
+                    text("UPDATE client_profiles SET source = 'manual', updated_by = 'U-1' WHERE id = :c"),
+                    {"c": first.client_id},
+                )
+                await as_project("")  # 迁移时不设 app.engagement_id (同 alembic 命令)
+                await conn.run_sync(run("downgrade"))
+                assert (await nullable("engagements"), await nullable("dataset_loads")) == ("NO", "NO")
+                assert not {"source", "updated_by"} & await profile_columns()
+                assert await scalar("SELECT dataset FROM engagements WHERE id = :e") == ""
+                await as_project(first.id)
+                assert await scalar("SELECT dataset FROM dataset_loads WHERE engagement_id = :e") == ""
+                assert await scalar("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'dataset_loads'") is True
+
+                await as_project("")
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert (await nullable("engagements"), await nullable("dataset_loads")) == ("YES", "YES")
+                assert {"source", "updated_by"} <= await profile_columns()
+                assert await scalar("SELECT count(*) FROM client_profiles WHERE id = :c AND source IS NULL") >= 1
+                await conn.execute(text("UPDATE engagements SET dataset = NULL WHERE id = :e"), {"e": first.id})
+                assert await scalar("SELECT dataset IS NULL FROM engagements WHERE id = :e") is True
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
+# ── 需求 R90: 文件的补登记 ──
+
+
+async def test_document_details_round_trip(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """真实库上传 (FileEvidenceStore.save) 一份 PDF, 读回文件日期为空, 关联对象为 []; 补登记后读回两字段与可靠性;
+    抽取版本表两版 (A3 补记的修改前一版, 审计师的一版); 按关联对象过滤 (与类型同时给时都须满足); 数据版本 +1 并记
+    documents; 写了留痕; 另一项目读不到 (行级安全)."""
+    engine, (first, second), _, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    pdf = ROOT / "data/xero_demo/20261017-q1/documents/evidence/fixed_asset_register.pdf"
+    saved = await service.deps.evidence_store.save(
+        first.id,
+        pdf.name,
+        pdf.read_bytes(),
+        type=DocumentType.internal_record,
+        reliability=Reliability.internal_copy,
+        uploaded_by="U-1",
+        status="classified",
+    )
+    financial = PostgresFinancialDataStore(engine)
+    assert await financial.documents(first.id) == [saved]
+    assert (saved.document_date, saved.related_ids) == (None, [])
+
+    edit = DocumentDetailsEdit(
+        reliability=Reliability.internal_original,
+        document_date=date(2026, 9, 30),
+        related_ids=["XJ-499", "XJ-626", "XJ-676"],
+        reason="按补造清单",
+    )
+    [updated] = await service.set_document_details(first.id, {saved.id: edit}, "U-1")
+
+    assert (updated.reliability, updated.document_date, updated.related_ids) == (
+        Reliability.internal_original,
+        date(2026, 9, 30),
+        ["XJ-499", "XJ-626", "XJ-676"],
+    )
+    assert await financial.documents(first.id, related_id="XJ-626") == [updated]
+    assert await financial.documents(first.id, DocumentType.internal_record, "XJ-499") == [updated]
+    assert await financial.documents(first.id, DocumentType.contract, "XJ-499") == []
+    assert await financial.documents(first.id, related_id="XJ-6") == []  # 整个 ID 相同才算
+    history = await service.deps.data.extraction_versions(first.id, "document", saved.id)
+    assert [(r.version, r.changed_by, r.field, r.reason) for r in history] == [
+        (1, "A3", None, None),
+        (2, "U-1", "reliability,document_date,related_ids", "按补造清单"),
+    ]
+    assert history[1].data == {
+        "type": "internal_record",
+        "reliability": "internal_original",
+        "document_date": "2026-09-30",
+        "related_ids": ["XJ-499", "XJ-626", "XJ-676"],
+    }
+    changes = await service.deps.data.changes(first.id)
+    assert changes[-1] == DataChange(data_version=changes[-1].data_version, input=DataInput.documents)
+    key = f"{first.id}:data:edit:document:{saved.id}:v2"
+    assert await service.deps.trail.find_success(first.id, key) is not None
+    assert await financial.documents(second.id) == []
+    assert await financial.documents(second.id, related_id="XJ-499") == []
+    assert await service.deps.data.extraction_versions(second.id, "document") == []
+    with pytest.raises(LookupError):  # 别的项目的文件当作不存在
+        await service.set_document_details(second.id, {saved.id: edit}, "U-1")
+
+
+async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R90: 以属主角色在一个事务里走 0012 降级再升级 (两次), 最后回滚. 降级后 documents 没有两列; 降级时已有的行
+    升级后读回文件日期为空, 关联对象为 []. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0012_document_details")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'documents'")
+                    )
+                    return {row[0] for row in found}
+
+                await conn.run_sync(run("downgrade"))
+                assert not {"document_date", "related_ids"} & await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                await conn.execute(
+                    text(
+                        "INSERT INTO documents (engagement_id, id, type, file_name, file_path, sha256, page_count, "
+                        "reliability, status, uploaded_at) VALUES (:e, 'DOC-old000000000', 'minutes', 'old.pdf', "
+                        "'/x/old.pdf', 'old', 1, 'internal_copy', 'classified', now())"
+                    ),
+                    {"e": first.id},
+                )
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert {"document_date", "related_ids"} <= await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                found = await conn.execute(
+                    text("SELECT document_date, related_ids FROM documents WHERE id = 'DOC-old000000000'")
+                )
+                assert found.one() == (None, [])
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()

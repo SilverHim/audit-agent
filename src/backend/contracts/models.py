@@ -663,6 +663,30 @@ class ClientProfile(Versioned):
         return self
 
 
+class ProfileSource(StrEnum):
+    """客户画像一版的来源 (client_profiles.source)."""
+
+    manual = "manual"  # 新建客户时手工录入 (第 1 版)
+    dataset = "dataset"  # 建项目时采用数据集带的画像
+    update = "update"  # 审计师在 ACC-01 更新客户资料
+
+
+class ProfileRecord(Model):
+    """存储中的一版客户画像及其出处: 谁, 何时, 来源. R288 之前写入的版本 source 与 updated_by 为空."""
+
+    profile: ClientProfile  # 画像
+    source: ProfileSource | None  # 来源; 老版本为空 (未记录)
+    updated_by: str | None  # 写入这一版的用户 ID; 老版本为空
+    updated_at: datetime  # 写入时间
+
+
+class ClientEntry(Model):
+    """存储中的一个客户: 最新一版画像与第 1 版的来源 (客户从哪里来)."""
+
+    profile: ClientProfile  # 最新一版
+    first_source: ProfileSource | None  # 第 1 版的来源; 老版本为空
+
+
 class Engagement(Model):
     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
 
@@ -670,7 +694,7 @@ class Engagement(Model):
     client_id: str  # 引用的客户画像 ClientProfile.id
     period_start: date  # 财年起始日
     period_end: date  # 财年截止日
-    dataset: str  # 载入的合成数据集名, demo 为 "demo"
+    dataset: str | None  # 客户来自数据集时为数据集名 (Numbat 为 "demo"); 新建的客户为 None (不读任何数据集)
     owner_id: str  # 项目负责人的用户 ID
     client_profile_version: int  # 本项目采用的客户画像版本: 建项目时的版本, 本项目更新客户资料后为新版本
     phase: Phase  # 当前阶段
@@ -747,7 +771,7 @@ class RegistryCheck(Model):
     """ACC-04 的一项登记检查结果."""
 
     check: Literal["abn_active", "name_match", "company_registered"]  # 检查项
-    passed: bool  # 是否通过
+    passed: bool | None  # 是否通过; None 为没有可查的登记来源 (新建的客户), 待审计师人工确认, 不出例外
     detail: str  # 给审计师看的说明
     evidence: EvidencePointer  # 指向那次登记查询的留痕
 
@@ -760,11 +784,21 @@ class AcceptanceScorecard(Versioned):
     client_profile_version: int  # 核查时用的客户画像版本
 
 
+class MonthlyFigures(Model):
+    """PLN-07 A03 的一个月: 本期内该月总账分录的收入类, 费用类合计与员工费用 (需求 R103)."""
+
+    month: date  # 月初日期
+    revenue_cents: int  # 收入: revenue_categories 的贷减借
+    expense_cents: int  # 费用: 类型 expense 的借减贷
+    employee_expense_cents: int  # 员工费用: employee_expense_categories 的借减贷 (含在 expense_cents 里)
+
+
 class AnalyticsResult(Versioned):
-    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率及超阈值例外."""
+    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."""
 
     ratios: dict[str, float]  # 比率: gross_margin_current, gross_margin_prior, revenue_growth, 四位小数
     exception_ids: list[str]  # 变动超阈值的例外
+    monthly: list[MonthlyFigures] = []  # A03 的月度数, 审计期间每月一行 (没有分录的月份为 0), 按月升序; 没有 A03 行为空
 
 
 class MaterialityCandidate(Model):
@@ -954,8 +988,8 @@ class DocumentRef(Model):
     channel: DocumentChannel = "auditor_upload"  # 来源渠道
     uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
     failed_step: DocumentFailedStep | None = None  # 需人工处理时卡在哪一步, 其余状态为空
-    document_date: date | None = None  # 文件日期, 如签署或发出日 (尚未存取)
-    related_ids: list[str] = []  # 关联对象 ID, 如公司 ACN, 分录号, 银行流水 (尚未存取)
+    document_date: date | None = None  # 文件日期, 如签署或发出日; 审计师补登记 (需求 R90), 没登记为空
+    related_ids: list[str] = []  # 关联对象 ID, 如公司 ACN, 分录号, 银行流水; 审计师补登记, 没登记为空
 
 
 class ContractTerm(Model):

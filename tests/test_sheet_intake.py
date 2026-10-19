@@ -32,10 +32,10 @@ from backend.contracts.llm_outputs import SheetRecognition
 from backend.contracts.models import DocumentRef, DocumentType, Reliability, TrailEntry, TrailKind
 from backend.contracts.ports import LLMClient
 from backend.contracts.records import Account, JournalEntry, SalesInvoice, TrialBalanceRow
-from backend.core.config import get_settings
 from backend.services import data_import as d
 from backend.services import table_plan as tp
 from backend.services.judgment_engine import OutputValidator, structure_only
+from tests.external import live_llm_settings
 from tests.fakes import ENGAGEMENT, UPLOAD_FIXTURES, FakeRegistry, FakeTrail, LayeredMockLLM, ScriptedLLM, make_deps
 from tests.test_table_plan import masked
 
@@ -441,7 +441,7 @@ def test_fixtures_cover_the_samples() -> None:
     assert not (FIXTURES / "default.json").exists()  # 没有 fixture 的文件退回按列名匹配, 不读兜底
 
 
-# ── 验收 5: live 下各样例跑一次 (联网, 需 .env 配好 LLM_MODEL 与 LLM_API_KEY; 只发公开的 Xero 演示与合成数据) ──
+# ── 验收 5: live 下各样例跑一次 (联网, 需配好 LLM_MODEL 与 LLM_API_KEY; 只发公开的 Xero 演示与合成数据) ──
 
 LIVE_SAMPLES = [
     (RAW / "trial_balance_2026-06-30.xlsx", TableKind.trial_balance),
@@ -453,13 +453,13 @@ LIVE_SAMPLES = [
 
 
 @pytest.mark.slow
+@pytest.mark.live
 @pytest.mark.parametrize(("path", "kind"), LIVE_SAMPLES, ids=lambda v: v.name if isinstance(v, Path) else None)
 async def test_live_recognizes_samples(path: Path, kind: TableKind) -> None:
-    """真实大模型识别各样例: 走大模型 (不退回), 认对表种类; 方案能套到全表 (失败处由确认单标红, 这里只记个数)."""
-    settings = get_settings()
-    if not settings.LLM_API_KEY or not settings.LLM_MODEL:
-        pytest.skip("未配置 LLM_MODEL 与 LLM_API_KEY")
-    [reading], trail = await recognize(path, llm=make_llm_client(settings.model_copy(update={"LLM_MODE": "live"})))
+    """真实大模型识别各样例: 走大模型 (不退回), 认对表种类; 方案能套到全表 (失败处由确认单标红, 这里只记个数).
+    配置取环境变量或 .env (tests.external.live_llm_settings)."""
+    settings = live_llm_settings()
+    [reading], trail = await recognize(path, llm=make_llm_client(settings))
 
     assert (reading.method, reading.plan.kind) == ("llm", kind)
     assert all(settings.LLM_API_KEY not in json.dumps(e.model_dump(mode="json")) for e in trail.entries)

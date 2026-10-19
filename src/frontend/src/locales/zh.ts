@@ -252,8 +252,10 @@ export const zh: Messages = {
     decideNow: '现在处理',
     deferredNote: '稍后处理中 · 可以在这里直接决定',
     gateIntro: {
-      'ACC-01': (passed, total, exceptions) =>
-        `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
+      'ACC-01': (passed, total, exceptions, manual) =>
+        manual
+          ? `可以作出承接决定了。该客户没有可查的登记来源，ACC-04 未能与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查中 ${manual} 项待你对照 ABN Lookup 与 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
+          : `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
       'FIN-01': (count, total, skipped) =>
         `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。${skipped ? `另有 ${skipped} 项程序因客户无此类资料未执行。` : ''}请确认审计意见类型。`,
@@ -302,6 +304,8 @@ export const zh: Messages = {
     rerunParams: '要调整的参数（JSON，选填）',
     reviewQuestion: (subject) => `你对 ${subject} 的结论是？`,
     checks: (passed, total) => `${total} 项通过 ${passed} 项`,
+    checksManual: (passed, manual, total) => `${total} 项通过 ${passed} 项 · ${manual} 项待人工确认`,
+    manualCheck: '待人工确认',
     exceptions: '例外事项',
     noExceptions: '没有例外事项',
     registers: { abn_active: 'ABN 登记册', name_match: 'ASIC 登记册', company_registered: 'ASIC 登记册' },
@@ -369,6 +373,7 @@ export const zh: Messages = {
       current: '本期',
       zeroBase: { balance_sheet: '期初为 0', profit_or_loss: '上期为 0' },
     },
+    monthly: { title: '月度趋势（本期）', month: '月份', revenue: '收入', expense: '费用', employee: '其中员工费用' },
   },
   completion: {
     candidate: '候选意见',
@@ -413,6 +418,7 @@ export const zh: Messages = {
       XERO_UNAVAILABLE: '暂时连不上 Xero，请稍后再试。',
       SETTINGS_KEY_MISSING: '没有配置 SETTINGS_SECRET_KEY，不能保存或读取加密的密钥与令牌。',
       SETTINGS_KEY_INVALID: 'SETTINGS_SECRET_KEY 不对（格式不对或已更换），已存的密钥与令牌解不开。',
+      ABN_TAKEN: '该 ABN 已登记为另一个客户。',
     },
   },
   toasts: {
@@ -503,6 +509,8 @@ export const zh: Messages = {
     history: '版本记录',
     viewTrail: '在审计留痕中查看',
     entityTypes: { small_proprietary: '小型私人公司', large_proprietary: '大型私人公司', public: '公众公司' },
+    sources: { manual: '手工录入', dataset: '数据集', update: '审计师更新' },
+    notRecorded: '未记录',
   },
   projectsPage: {
     title: '审计项目',
@@ -522,6 +530,38 @@ export const zh: Messages = {
     pending: (n) => `${n} 项复核待人工处理`,
     gate: (gate) => `${gate} 待人工处理`,
     datasetsFailed: '客户清单读取失败，暂不能新建项目。',
+    newClient: '新建客户…',
+    noDataset: '该客户没有演示数据集：ACC-04 的登记核查留待你人工确认，客户数据在项目里导入。',
+  },
+  newClient: {
+    title: '新建客户',
+    intro: '登记一个没有演示数据集的客户。画像存为第 1 版，来源为你的手工录入。',
+    optional: '选填 · 客户没有申报的留空',
+    yearEnd: '财年末（MM-DD）',
+    approvalLimit: '付款审批限额（澳元）',
+    framework: '适用的财务报告框架',
+    priorAudited: '上期财报是否经审计',
+    notDeclared: '未申报',
+    frameworks: {
+      tier1_gpfs: '第 1 层通用目的财报',
+      tier2_gpfs: '第 2 层通用目的财报（简化披露）',
+      spfr: '特殊目的财报',
+    },
+    abnHint: '11 位数字，可带空格',
+    abnChecksumOk: (abn) => `${abn}：校验位正确`,
+    abnLookupLater: 'ABN Lookup 在线核对尚未接入',
+    registryNote: '新建的客户暂无可查的登记来源，承接时 ACC-04 的 ABN 与 ASIC 核查留待你人工确认。',
+    save: '保存客户',
+    created: (name) => `客户 ${name} 已保存`,
+    taken: (name, id) => `该 ABN 已登记为 ${name}（${id}）。`,
+    pickExisting: '改选已有客户',
+    errors: {
+      legalName: '请填写法定名称',
+      abnFormat: 'ABN 为 11 位数字',
+      abnChecksum: '校验位不符，请检查 ABN 是否填错。',
+      yearEnd: '请按 MM-DD 填写合法的月日，如 06-30',
+      limit: '请填写澳元金额，至多两位小数',
+    },
   },
   login: {
     title: '登录',
@@ -827,6 +867,8 @@ export const zh: Messages = {
           ? `${accounts} 个科目中 ${differing} 个与试算表变动不一致`
           : `${accounts} 个科目的本期发生额与试算表变动一致`,
       count: (source, expected, received) => `${source} 返回 ${expected} 笔分录，已接入 ${received} 笔`,
+      notImported: '总账分录尚未导入',
+      notImportedYet: '尚未导入',
       mapping: (mapped, total) =>
         mapped === total ? `${total} 个科目已全部归入标准分类` : `${total} 个科目中 ${mapped} 个已归入标准分类`,
       fields: (fields, source) => `${source} 接口不提供${fields}。`,

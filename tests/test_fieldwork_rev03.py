@@ -10,6 +10,7 @@ from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.models import (
     Phase,
     ProposedAction,
+    Reliability,
     ReviewStatus,
     RunStatus,
     StepKind,
@@ -39,14 +40,13 @@ EXTRACTED = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRA
 def setup(
     engine: Any = None, contracts: list[Any] | None = None, documents: list[Any] | None = None
 ) -> tuple[FieldworkAgent, RunContext, FakeTrail]:
-    """A6 与 REV-03 第 1 次执行: 财务数据存储有 DOC-04 抽出的合同 (缺省为 Numbat 的 3 份), 状态有抽取过的文件.
+    """A6 与 REV-03 第 1 次执行: 财务数据存储有 DOC-04 抽出的合同 (缺省为 Numbat 的 3 份) 与抽取过的文件登记
+    (DOC-04 把状态写回存储), 状态有同样的文件.
 
     engine 缺省为真实判断引擎 (大模型为 mock 模式, 读 tests/fixtures/llm/REV-03).
     """
     trail = FakeTrail()
-    financial = FakeFinancialStore(
-        list(NUMBAT_CONTRACTS), contracts=numbat_contracts() if contracts is None else contracts
-    )
+    financial = FakeFinancialStore(list(EXTRACTED), contracts=numbat_contracts() if contracts is None else contracts)
     deps = make_deps(FakeRegistry(), trail, financial_store=financial)
     if engine is not None:
         deps = replace(deps, judgments=engine, review_llm=None)
@@ -194,6 +194,20 @@ async def test_document_missing_everywhere_raises() -> None:
     financial.document_refs[:] = [d for d in financial.document_refs if d.file_name != "CON-003.pdf"]
     with pytest.raises(LookupError, match="CON-003"):
         await agent.run(ctx)
+
+
+async def test_store_registration_wins_over_state_copy() -> None:
+    """状态里的文件登记是 DOC-04 当时的副本; 存储里的当前登记 (如审计师补登记了可靠性, 需求 R90) 与之不同时
+    以存储为准."""
+    engine = fake_engine()
+    agent, ctx, _ = setup(engine)
+    financial = agent.deps.financial_store
+    assert isinstance(financial, FakeFinancialStore)
+    registered = EXTRACTED[0].model_copy(update={"reliability": Reliability.external_original})
+    financial.document_refs[0] = registered
+    await agent.run(ctx)
+    [data] = [jctx.data for _, jctx, _ in engine.calls if jctx.subject_id == "CON-001"]
+    assert data["document"] == registered.model_dump(mode="json")
 
 
 async def test_document_only_in_store_is_used() -> None:

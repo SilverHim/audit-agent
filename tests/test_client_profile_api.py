@@ -173,12 +173,16 @@ async def test_update_rejects_invalid_merged_profile() -> None:
 
 
 def test_client_profile_in_has_every_profile_field() -> None:
-    """ClientProfileIn 与 ClientProfile 的字段 (去掉 id) 一一对应, 类型相同; 原有 6 个字段之外都可省略."""
-    from backend.api.schemas import ClientProfileIn
+    """ClientProfileIn 与 ClientProfile 的字段 (去掉 id) 一一对应, 类型相同; 原有 6 个字段之外都可省略.
+    新建客户的 ClientCreate (R288) 同为这些字段, 只是没有 version."""
+    from backend.api.schemas import ClientCreate, ClientProfileIn
 
     model = {k: f for k, f in ClientProfile.model_fields.items() if k != "id"}
-    assert list(ClientProfileIn.model_fields) == list(model)
-    for name, field in ClientProfileIn.model_fields.items():
-        assert field.annotation == model[name].annotation, name
+    assert sorted(ClientProfileIn.model_fields) == sorted(model)
+    assert list(ClientCreate.model_fields) == [k for k in model if k != "version"]
+    for schema in (ClientProfileIn, ClientCreate):
+        for name, field in schema.model_fields.items():
+            assert field.annotation == model[name].annotation, name
     required = {k for k, f in ClientProfileIn.model_fields.items() if f.is_required()}
     assert required == {"version", *ORIGINAL} - {"notes"}
+    assert {k for k, f in ClientCreate.model_fields.items() if f.is_required()} == set(ORIGINAL) - {"notes"}

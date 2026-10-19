@@ -559,9 +559,10 @@ function gateIntro(t: Messages, view: GateView): ReactNode {
   if (material.kind === 'ACC-01') {
     const checks = material.scorecard.registry_checks
     return t.workspace.gateIntro['ACC-01'](
-      checks.filter((check) => check.passed).length,
+      checks.filter((check) => check.passed === true).length,
       checks.length,
       material.exceptions.length,
+      checks.filter((check) => check.passed === null).length,
     )
   }
   if (material.kind === 'PLN-01/03') return t.workspace.gateIntro['PLN-01/03']

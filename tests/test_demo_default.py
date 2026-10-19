@@ -9,7 +9,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.contracts.models import AcceptanceScorecard, ClientProfile, Engagement, Phase, TrailKind
+from backend.contracts.models import AcceptanceScorecard, ClientProfile, Engagement, Phase, ProfileSource, TrailKind
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.graph import compile_graph
@@ -41,18 +41,18 @@ class CreatingEngagementStore(FakeEngagementStore):
     才出新版本 (同 PostgresEngagementStore.create 的效果)."""
 
     async def create(
-        self, *, owner_id: str, period_start: date, period_end: date, dataset: str, profile: ClientProfile
+        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
         versions = sorted((p for p in self.profiles if p.id == profile.id), key=lambda p: p.version)
         if not versions:
-            self.profiles.append(profile)
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
         elif any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
             profile = versions[-1]
         else:
             profile = profile.model_copy(update={"version": versions[-1].version + 1})
-            self.profiles.append(profile)
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
         engagement = Engagement(
             id=f"ENG-2026-{len(self.engagements) + 1:03d}",
             client_id=profile.id,

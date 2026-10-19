@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mappin
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import PurePath
+from typing import Any
 from uuid import uuid4
 
 from langgraph.types import Command
@@ -18,7 +19,20 @@ from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
-from backend.agents.ingest import HELD, RELIABILITY, DocumentIntake, Job, Requested, retype, unfinished
+from backend.agents.ingest import (
+    DETAIL_FIELDS,
+    DETAILS,
+    HELD,
+    DocumentIntake,
+    Job,
+    Requested,
+    details_data,
+    details_entry,
+    record_registration,
+    registered_reliability,
+    retype,
+    unfinished,
+)
 from backend.contracts.data import (
     BatchFile,
     BatchItem,
@@ -32,6 +46,7 @@ from backend.contracts.data import (
     DataSources,
     DataSummary,
     DocumentChange,
+    DocumentDetailsEdit,
     ExtractionEdit,
     ExtractionRecord,
     ImportBatch,
@@ -132,8 +147,11 @@ def version_entry(eid: str, version: TableVersion) -> TrailEntry:
 
 
 def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
-    """一次抽取结果修改的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同取
-    document_id, 函证取 reply_document_id); 防重复键 {eid}:data:edit:{类型}:{对象}:v{版本}, 写入与补写共用."""
+    """一次抽取结果修改或文件补登记的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同取
+    document_id, 函证取 reply_document_id, 补登记即该文件, 类型取该版登记的); 防重复键
+    {eid}:data:edit:{类型}:{对象}:v{版本}, 写入与补写共用."""
+    if record.target_type == DETAILS:
+        return details_entry(eid, record)
     kind = DocumentType.contract if record.target_type == "contract" else DocumentType.confirmation
     payload: dict[str, object] = {
         "action": "edit",
@@ -144,11 +162,12 @@ def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
     document_id = record.data.get("document_id" if kind is DocumentType.contract else "reply_document_id")
     if document_id:
         payload["document_id"] = document_id
+    summary = f"修改{TARGET_NAMES[kind]} {record.target_id} 的抽取结果 {record.field}, 第 {record.version} 版"
     return TrailEntry(
         engagement_id=eid,
         kind=TrailKind.data,
         actor=record.changed_by,
-        summary=f"修改{TARGET_NAMES[kind]} {record.target_id} 的抽取结果 {record.field}, 第 {record.version} 版",
+        summary=summary,
         idempotency_key=f"{eid}:data:edit:{record.target_type}:{record.target_id}:v{record.version}",
         payload=payload,
         created_at=datetime.now(UTC),
@@ -214,6 +233,35 @@ def contract_retry(
         return apply_contract_edit(history[-2].contract, edit.field, edit.value) == ordered_terms(current)
     except DataRejected:
         return False
+
+
+HELD_NOTES = {  # 暂存与未导入的文件不能补登记 (需求 R90): 确认导入时按确认单改类型与可靠性, 补的会被盖掉
+    "staged": "文件 {} 还在导入确认单里, 确认导入后再补登记",
+    "not_imported": "文件 {} 没有导入, 需要时重新上传",
+}
+
+
+def details_given(edit: DocumentDetailsEdit, file_name: str) -> dict[str, Any]:
+    """补登记给了的各项 (None 为不改), 按 DETAIL_FIELDS 顺序; 关联对象各 ID 去首尾空白, 有空串或重复
+    INVALID_VALUE."""
+    given: dict[str, Any] = {k: getattr(edit, k) for k in DETAIL_FIELDS if getattr(edit, k) is not None}
+    if edit.related_ids is not None:
+        ids = [i.strip() for i in edit.related_ids]
+        if any(not i for i in ids):
+            raise DataRejected("INVALID_VALUE", f"文件 {file_name} 的关联对象有空的 ID")
+        repeated = sorted({i for i in ids if ids.count(i) > 1})
+        if repeated:
+            raise DataRejected("INVALID_VALUE", f"文件 {file_name} 的关联对象重复: {', '.join(repeated)}")
+        given["related_ids"] = ids
+    return given
+
+
+def details_retry(history: Sequence[ExtractionRecord], document: DocumentRef, actor: str, reason: str) -> bool:
+    """没有要改的一次补登记是否就是上次的重试: 最新一版是同一人以同一理由补登记的, 且当前登记的三项正是那一版的."""
+    if not history or (history[-1].changed_by, history[-1].reason) != (actor, reason) or history[-1].field is None:
+        return False
+    current = details_data(document)
+    return all(history[-1].data.get(k) == current[k] for k in DETAIL_FIELDS)
 
 
 def category_entry(eid: str, code: str, version: CategoryVersion) -> TrailEntry:
@@ -1421,7 +1469,8 @@ class DataService:
     async def set_document_type(
         self, eid: str, document_id: str, kind: DocumentType, reason: str, actor: str
     ) -> DocumentRef:
-        """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性, 置 classified, 写 data 留痕 (action classify,
+        """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性 (补登记过可靠性的保留, 否则取新类型的缺省,
+        见 ingest.registered_reliability), 置 classified, 写 data 留痕 (action classify,
         actor 为审计师, 带理由), 返回改后的登记; 合同与回函随即由 A3 在后台抽取 (同上传后的处理), 是一次新的作业
         (作业号为这条留痕的 ID): 合同重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空 MISSING_FIELD;
         文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时没勾选而未导入 (要导入就重新
@@ -1442,9 +1491,11 @@ class DataService:
         try:
             await self.backfill_trails(eid)
             job = await intake.record(eid, actor, document, kind, reason.strip())
+            reliability = await registered_reliability(self.deps, eid, document, kind)
             updated = await self.deps.evidence_store.update_document(
-                eid, document_id, type=kind, reliability=RELIABILITY[kind], status="classified", failed_step=None
+                eid, document_id, type=kind, reliability=reliability, status="classified", failed_step=None
             )
+            await record_registration(self.deps, eid, document, updated, actor, reason.strip())
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
@@ -1456,6 +1507,104 @@ class DataService:
 
         self._spawn(eid, key, extract)
         return updated
+
+    async def set_document_details(
+        self, eid: str, edits: Mapping[str, DocumentDetailsEdit], actor: str
+    ) -> list[DocumentRef]:
+        """补登记文件的可靠性, 文件日期与关联对象 (PUT /documents/{id}/details, 需求 R90), 返回改后的登记 (按 edits 的
+        顺序). 持项目锁 (锁定 423, 忙 409), 先逐份校验, 有一份不过就都不写: 文件不存在 LookupError (404); 理由去空白后
+        为空, 或三项都没给 MISSING_FIELD; 暂存或未导入的文件, 给出的都与当前相同, 关联对象有空串或重复 INVALID_VALUE.
+        给出的都与当前相同而当前登记正是同一人以同一理由补登记出的 (重试), 返回当前登记, 不再写.
+
+        一个事务内: 各文件改登记 (EvidenceStore.update_details), 抽取版本表记一版 (target_type document, data 为
+        details_data, field 为改了的字段按 DETAIL_FIELDS 顺序以逗号连接; 该文件第一次补登记先补记修改前的一版, 记 A3,
+        field 为空), 数据版本 +1 (一批一次, 记数据变动 documents: 读文件登记的程序随之过期). 提交后每份写一条 data
+        留痕 (edit_entry; 没写成的下次取锁时补写). 关联对象不校验是否存在."""
+        async with self.locked(eid):
+            await self.backfill_trails(eid)
+            documents = {d.id: d for d in await self.deps.financial_store.documents(eid)}
+            results: dict[str, DocumentRef] = {}
+            planned: list[tuple[DocumentRef, dict[str, Any], str, list[ExtractionRecord]]] = []
+            for document_id, edit in edits.items():
+                document = documents.get(document_id)
+                if document is None:
+                    raise LookupError(f"文件 {document_id} 不存在")
+                reason = edit.reason.strip()
+                if not reason:
+                    raise DataRejected("MISSING_FIELD", "须填写补登记的理由")
+                if document.status in HELD_NOTES:
+                    raise DataRejected("INVALID_VALUE", HELD_NOTES[document.status].format(document.file_name))
+                given = details_given(edit, document.file_name)
+                if not given:
+                    raise DataRejected("MISSING_FIELD", f"文件 {document.file_name} 的补登记没有给出任何一项")
+                changes = {k: v for k, v in given.items() if getattr(document, k) != v}
+                history = await self.deps.data.extraction_versions(eid, DETAILS, document_id)
+                if changes:
+                    planned.append((document, changes, reason, history))
+                elif details_retry(history, document, actor, reason):
+                    results[document_id] = document
+                else:
+                    raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 给出的各项都与当前相同")
+            written: list[ExtractionRecord] = []
+            if planned:
+                async with self.deps.output_store.transaction(eid):
+                    for document, changes, reason, history in planned:
+                        if not history:  # 第一次补登记: 先补记修改前的一版
+                            await self.deps.data.save_extraction(
+                                eid, DETAILS, document.id, 1, details_data(document), changed_by=AgentId.A3
+                            )
+                        updated = await self.deps.evidence_store.update_details(
+                            eid,
+                            document.id,
+                            reliability=changes.get("reliability"),
+                            document_date=changes.get("document_date"),
+                            related_ids=changes.get("related_ids"),
+                        )
+                        record = ExtractionRecord(
+                            target_type=DETAILS,
+                            target_id=document.id,
+                            version=(history[-1].version if history else 1) + 1,
+                            data=details_data(updated),
+                            field=",".join(k for k in DETAIL_FIELDS if k in changes),
+                            reason=reason,
+                            changed_by=actor,
+                            changed_at=datetime.now(UTC),
+                        )
+                        await self.deps.data.save_extraction(
+                            eid,
+                            DETAILS,
+                            document.id,
+                            record.version,
+                            record.data,
+                            changed_by=actor,
+                            field=record.field,
+                            reason=reason,
+                        )
+                        results[document.id] = updated
+                        written.append(record)
+                    await self.deps.data.bump_version(eid, DataInput.documents)
+                await record_transitions(self.deps.trail, [edit_entry(eid, r) for r in written])
+        return [results[document_id] for document_id in edits]
+
+    async def document_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:
+        """文件登记的各版 (GET /documents/{id}/history, 需求 R90), 按版本升序; 文件不存在 404. 没补登记过的以当前登记
+        作唯一一版返回 (记 A3, 时间取存档时间)."""
+        document = next((d for d in await self.deps.financial_store.documents(eid) if d.id == document_id), None)
+        if document is None:
+            raise LookupError(f"文件 {document_id} 不存在")
+        records = await self.deps.data.extraction_versions(eid, DETAILS, document_id)
+        if records:
+            return records
+        return [
+            ExtractionRecord(
+                target_type=DETAILS,
+                target_id=document.id,
+                version=1,
+                data=details_data(document),
+                changed_by=AgentId.A3,
+                changed_at=document.uploaded_at,
+            )
+        ]
 
     async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
         """合同的各版本 (GET /contracts/{id}/history), 按版本升序; 合同不存在 404. 迁移 0004 之前抽取而没改过的

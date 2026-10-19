@@ -36,6 +36,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProfileSource,
     ProposedAction,
     RerunRequest,
     ReviewRecord,
@@ -886,7 +887,9 @@ class GraphDecisionSubmit:
                 raise DecisionRejected("INVALID_VALUE", f"合并后的客户画像不合格: {exc}") from None
 
             async with self.deps.output_store.transaction(eid):  # 画像新版本与本项目采用的版本一起提交
-                saved = await self.deps.engagement_store.save_profile(profile)
+                saved = await self.deps.engagement_store.save_profile(
+                    profile, source=ProfileSource.update, updated_by=updated_by
+                )
                 await self.deps.engagement_store.update(eid, client_profile_version=saved.version)
             await self.deps.trail.record(  # 提交后写, 理由同 _write_acc01
                 TrailEntry(

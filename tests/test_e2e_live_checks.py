@@ -132,8 +132,8 @@ def offline(monkeypatch: pytest.MonkeyPatch, mode: str) -> dict[str, RealRun]:
         finally:
             await runner.shutdown()
 
-    monkeypatch.setattr(live, "live_env_file", lambda: Path("/nonexistent/probe.env"))
-    monkeypatch.setattr(live, "Settings", lambda **_: SimpleNamespace(LLM_MODEL="probe-model", LLM_API_KEY="probe"))
+    probe = SimpleNamespace(LLM_MODEL="probe-model", LLM_API_KEY="probe", LLM_BASE_URL="")
+    monkeypatch.setattr(live, "live_llm_settings", lambda: probe)
     monkeypatch.setattr(live, "real_storage", storage)
     if mode == "cutoff_unattributed_bare":
         monkeypatch.setattr(live, "CUTOFF_REASON", "跨期")  # 审计师认定错报时理由不写事实

@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleCheck, CircleX } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -17,6 +16,7 @@ import type {
   GateView,
   MaterialityCandidates,
   MaterialityChoice,
+  MonthlyFigures,
   OpinionType,
   ReportSection,
   RiskItem,
@@ -25,6 +25,15 @@ import type {
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import {
+  CheckIcon,
+  checkTone,
+  draftFields,
+  LabeledField,
+  ProfileFields,
+  profileDraft,
+  SELECT,
+} from '@/components/profile-fields'
 import { QueryState } from '@/components/query-state'
 import { FinStaleAlert } from '@/components/rerun'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -57,8 +66,6 @@ export const REPORT_SECTIONS: ReportSection[] = [
 const FIN_OPINIONS: OpinionType[] = ['unqualified', 'qualified', 'adverse', 'disclaimer']
 const RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high', 'significant']
 const VERDICTS: GateVerdict[] = ['approve', 'reject', 'insufficient_info']
-const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 text-[14px]'
-
 export function useGate(eid: string, enabled = true) {
   return useQuery({
     ...gatesGetGateOptions({ path: { eid } }),
@@ -196,12 +203,57 @@ function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
   )
 }
 
+// PLN-07 A03 的月度趋势 (本期按月的收入, 费用与员工费用); 没有月度数 (旧结果或没有总账) 时不显示
+function MonthlyTable({ rows }: { rows: MonthlyFigures[] }) {
+  const { t } = useI18n()
+  if (rows.length === 0) return null
+  const labels = t.planning.monthly
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <SectionLabel>{labels.title}</SectionLabel>
+      <div className="overflow-x-auto rounded-[10px] border">
+        <table className="w-full min-w-[520px] border-collapse text-[13.5px]">
+          <thead>
+            <tr className="text-left text-[12px] text-muted-foreground">
+              <th scope="col" className="border-b px-3 py-2 font-semibold">
+                {labels.month}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.revenue}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.expense}
+              </th>
+              <th scope="col" className="border-b px-3 py-2 text-right font-semibold">
+                {labels.employee}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.month}>
+                <td className="border-b px-3 py-1.5 font-mono">{row.month.slice(0, 7)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.revenue_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.expense_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.employee_expense_cents)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
   const { t } = useI18n()
   const material = view.material
   if (material.kind === 'ACC-01') {
     const checks = material.scorecard.registry_checks
-    const passed = checks.filter((check) => check.passed).length
+    const passed = checks.filter((check) => check.passed === true).length
+    const manual = checks.filter((check) => checkTone(check.passed) === 'warn').length
+    const tone =
+      passed === checks.length ? 'text-ok' : manual > 0 && passed + manual === checks.length ? 'text-warn' : 'text-risk'
     return (
       <div className="flex flex-col gap-3">
         <Panel
@@ -212,25 +264,22 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
             </>
           }
           aside={
-            <span
-              className={
-                passed === checks.length ? 'font-medium text-[12.5px] text-ok' : 'font-medium text-[12.5px] text-risk'
-              }
-            >
-              {t.card.checks(passed, checks.length)}
+            <span className={`font-medium text-[12.5px] ${tone}`}>
+              {manual > 0 ? t.card.checksManual(passed, manual, checks.length) : t.card.checks(passed, checks.length)}
             </span>
           }
         >
           <ul className="m-0 flex list-none flex-col gap-1 p-0">
             {checks.map((check) => (
               <li key={check.check} className="flex flex-wrap items-center gap-3 py-1.5">
-                {check.passed ? (
-                  <CircleCheck className="size-[18px] text-ok" aria-hidden="true" />
-                ) : (
-                  <CircleX className="size-[18px] text-risk" aria-hidden="true" />
-                )}
+                <CheckIcon passed={check.passed} className="size-[18px]" />
                 <span className="flex min-w-[200px] flex-1 flex-col">
-                  <span>{t.checks[check.check]}</span>
+                  <span>
+                    {t.checks[check.check]}
+                    {check.passed === null ? (
+                      <span className="ml-2 text-[12.5px] text-warn">{t.card.manualCheck}</span>
+                    ) : null}
+                  </span>
                   <span className="text-[12.5px] text-muted-foreground" lang="en">
                     {check.detail}
                   </span>
@@ -256,6 +305,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
               </div>
             ))}
           </dl>
+          <MonthlyTable rows={material.analytics.monthly ?? []} />
         </Panel>
         <ExceptionList eid={eid} items={material.analytics_exceptions} />
       </div>
@@ -684,17 +734,6 @@ function AnnotationFields({ notes, onChange }: { notes: NoteDraft[]; onChange: (
   )
 }
 
-function LabeledField({ id, label, children }: { id: string; label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-[12.5px] text-[#4a5262]">
-        {label}
-      </label>
-      {children}
-    </div>
-  )
-}
-
 function buildDecision(
   view: GateView,
   decision: GateVerdict,
@@ -803,13 +842,7 @@ export function ProfileForm({
 }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
-  const [legalName, setLegalName] = useState(profile.legal_name)
-  const [abn, setAbn] = useState(profile.abn)
-  const [entityType, setEntityType] = useState(profile.entity_type)
-  const [industry, setIndustry] = useState(profile.industry_anzsic)
-  const [listed, setListed] = useState(profile.listed)
-  const [directors, setDirectors] = useState(profile.directors.join('\n'))
-  const [notes, setNotes] = useState(profile.notes ?? '')
+  const [draft, setDraft] = useState(() => profileDraft(profile))
   const save = useMutation({
     ...gatesUpdateClientProfileMutation(),
     onSuccess: async () => {
@@ -819,65 +852,10 @@ export function ProfileForm({
     },
     onError: (error) => toast.error(apiMessage(error)),
   })
-  const field = 'h-10'
   return (
     <section className="flex flex-col gap-3 rounded-xl border bg-card p-5">
       <span className="font-semibold">{t.formView.profile}</span>
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3">
-        <LabeledField id="pf-name" label={t.clientPage.legalName}>
-          <Input
-            id="pf-name"
-            className={field}
-            value={legalName}
-            onChange={(event) => setLegalName(event.target.value)}
-          />
-        </LabeledField>
-        <LabeledField id="pf-abn" label={t.clientPage.abn}>
-          <Input
-            id="pf-abn"
-            className={`${field} font-mono`}
-            value={abn}
-            onChange={(event) => setAbn(event.target.value)}
-          />
-        </LabeledField>
-        <LabeledField id="pf-type" label={t.clientPage.entityType}>
-          <select
-            id="pf-type"
-            className={SELECT}
-            value={entityType}
-            onChange={(event) => setEntityType(event.target.value)}
-          >
-            {Object.entries(t.clientPage.entityTypes).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </LabeledField>
-        <LabeledField id="pf-industry" label={t.clientPage.industry}>
-          <Input
-            id="pf-industry"
-            className={`${field} font-mono`}
-            value={industry}
-            onChange={(event) => setIndustry(event.target.value)}
-          />
-        </LabeledField>
-      </div>
-      <label className="flex items-center gap-2 text-[14px]">
-        <input
-          type="checkbox"
-          className="size-4 accent-primary"
-          checked={listed}
-          onChange={(event) => setListed(event.target.checked)}
-        />
-        {t.clientPage.listed}
-      </label>
-      <LabeledField id="pf-directors" label={`${t.clientPage.directors} · ${t.clientPage.directorsHint}`}>
-        <Textarea id="pf-directors" value={directors} onChange={(event) => setDirectors(event.target.value)} />
-      </LabeledField>
-      <LabeledField id="pf-notes" label={t.clientPage.notes}>
-        <Textarea id="pf-notes" value={notes} onChange={(event) => setNotes(event.target.value)} />
-      </LabeledField>
+      <ProfileFields idPrefix="pf" draft={draft} onChange={setDraft} />
       <span className="text-[13px] text-muted-foreground">{t.clientPage.rerunNote}</span>
       <div className="flex flex-wrap gap-2">
         <Button
@@ -886,19 +864,7 @@ export function ProfileForm({
           onClick={() =>
             save.mutate({
               path: { eid },
-              body: {
-                version: (profile.version ?? 1) + 1,
-                legal_name: legalName.trim(),
-                abn: abn.replaceAll(' ', ''),
-                entity_type: entityType,
-                industry_anzsic: industry.trim(),
-                listed,
-                directors: directors
-                  .split('\n')
-                  .map((line) => line.trim())
-                  .filter(Boolean),
-                notes,
-              },
+              body: { version: (profile.version ?? 1) + 1, ...draftFields(draft) },
             })
           }
         >

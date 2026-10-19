@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar, cast
 
 import httpx
-import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
@@ -49,7 +48,7 @@ from backend.contracts.data import (
     XeroConnection,
     table_changes,
 )
-from backend.contracts.errors import EngagementLocked, VersionConflict
+from backend.contracts.errors import AbnTaken, EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
@@ -62,6 +61,7 @@ from backend.contracts.models import (
     AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
+    ClientEntry,
     ClientProfile,
     Confirmation,
     ConfirmationResult,
@@ -90,6 +90,8 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ProfileRecord,
+    ProfileSource,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
@@ -146,6 +148,7 @@ from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from backend.services.xero_link import XeroLink
+from tests.external import require_xero_snapshot
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -717,8 +720,15 @@ class FakeFinancialStore:
     async def contract_history(self, eid: str, contract_id: str) -> list[ContractVersion]:
         return list(self.contract_versions.get(contract_id, []))
 
-    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]:
-        return [d for d in self.document_refs if type is None or d.type is type]
+    async def documents(
+        self, eid: str, type: DocumentType | None = None, related_id: str | None = None
+    ) -> list[DocumentRef]:
+        """登记的文件 (按登记顺序); type 与 related_id 同真实实现, 都给时都须满足."""
+        return [
+            d
+            for d in self.document_refs
+            if (type is None or d.type is type) and (related_id is None or related_id in d.related_ids)
+        ]
 
 
 @dataclass(frozen=True)
@@ -763,6 +773,8 @@ class FakeEngagementStore:
         self, profiles: list[ClientProfile] | None = None, engagements: list[Engagement] | None = None
     ) -> None:
         self.profiles = profiles or []  # 已生效的客户画像, 同一客户可有多个版本
+        # 画像各版的出处 (id, version) → (来源, 写入人, 写入时间); 构造时给的画像没有, 视同老版本 (未记录)
+        self.profile_meta: dict[tuple[str, int], tuple[ProfileSource | None, str | None, datetime]] = {}
         self.engagements = engagements or []  # 已生效的审计项目
         self.output_store: FakeOutputStore | None = None  # 共用事务的审计产出存储, bind 后才有
 
@@ -779,7 +791,7 @@ class FakeEngagementStore:
         owner_id: str,
         period_start: date,
         period_end: date,
-        dataset: str,
+        dataset: str | None,
         profile: ClientProfile,
     ) -> Engagement:
         raise NotImplementedError
@@ -830,8 +842,10 @@ class FakeEngagementStore:
         hits = [p for p in visible if p.id == client_id and (version is None or p.version == version)]
         return max(hits, key=lambda p: p.version, default=None)
 
-    async def save_profile(self, profile: ClientProfile) -> ClientProfile:
-        """version 须为已有最大值 +1."""
+    async def save_profile(
+        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+    ) -> ClientProfile:
+        """version 须为已有最大值 +1; 记下该版的出处."""
         latest = await self.client_profile(profile.id)
         expected = latest.version + 1 if latest is not None else 1
         if profile.version != expected:
@@ -842,7 +856,41 @@ class FakeEngagementStore:
             txn.log.append(EngagementWrite("save_profile", profile.id, {"version": profile.version}))
         else:
             self.profiles.append(profile)
+        self.profile_meta[(profile.id, profile.version)] = (source, updated_by, datetime.now(UTC))
         return profile
+
+    def record(self, profile: ClientProfile) -> ProfileRecord:
+        source, updated_by, updated_at = self.profile_meta.get((profile.id, profile.version), (None, None, NOW))
+        return ProfileRecord(profile=profile, source=source, updated_by=updated_by, updated_at=updated_at)
+
+    async def profile_history(self, client_id: str) -> list[ProfileRecord]:
+        """该客户画像的各版及出处, 按版本升序."""
+        txn = self._txn()
+        visible = self.profiles + (txn.profiles if txn is not None else [])
+        return [self.record(p) for p in sorted((p for p in visible if p.id == client_id), key=lambda p: p.version)]
+
+    async def clients(self) -> list[ClientEntry]:
+        """各客户 (按 id 排序) 的最新一版与第 1 版的来源."""
+        entries: list[ClientEntry] = []
+        for client_id in sorted({p.id for p in self.profiles}):
+            history = await self.profile_history(client_id)
+            latest = history[-1]
+            entries.append(ClientEntry(profile=latest.profile, first_source=history[0].source))
+        return entries
+
+    async def create_client(
+        self, profile: ClientProfile, *, created_by: str, dataset_profiles: Sequence[ClientProfile]
+    ) -> ClientProfile:
+        """同 PostgresEngagementStore.create_client: 版本须为 1, ABN 不得已是别的客户的 (库里最新一版与还没进库的
+        数据集画像)."""
+        if profile.version != 1:
+            raise VersionConflict(profile.id)
+        stored = [entry.profile for entry in await self.clients()]
+        known = {p.id for p in stored}
+        for other in [*stored, *(p for p in dataset_profiles if p.id not in known)]:
+            if other.abn == profile.abn:
+                raise AbnTaken(profile.abn, other.id, other.legal_name)
+        return await self.save_profile(profile, source=ProfileSource.manual, updated_by=created_by)
 
     def commit(self, txn: FakeTxn) -> None:
         """FakeOutputStore 提交事务时调用: 暂存的项目改动与画像生效."""
@@ -1010,6 +1058,7 @@ class FakeEvidenceStore:
         self.ids: dict[str, str] = {}
         self.directory: Path | None = None  # path 写原件的临时目录
         self.updates: list[tuple[str, DocumentType, str, str | None]] = []  # update_document 的每次调用
+        self.detail_updates: list[tuple[str, bool]] = []  # update_details 的每次调用 (文件 ID, 是否在事务内)
 
     async def save(
         self,
@@ -1089,6 +1138,36 @@ class FakeEvidenceStore:
         self.updates.append((document_id, type, status, failed_step))
         return refs[i]
 
+    async def update_details(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        reliability: Reliability | None,
+        document_date: date | None,
+        related_ids: Sequence[str] | None,
+    ) -> DocumentRef:
+        """补登记: 只改给了的项, 返回改后的登记; 在审计产出事务块内调用时加入该事务 (提交才生效, 同 set_status),
+        记进 detail_updates. 没有该文件抛 FileNotFoundError."""
+        refs = self.financial_store.document_refs
+        i = next((i for i, d in enumerate(refs) if d.id == document_id), None)
+        if i is None:
+            raise FileNotFoundError(document_id)
+        given = {"reliability": reliability, "document_date": document_date, "related_ids": related_ids}
+        changes = {k: list(v) if k == "related_ids" else v for k, v in given.items() if v is not None}
+        updated = refs[i].model_copy(update=changes)
+
+        def apply() -> None:
+            refs[i] = refs[i].model_copy(update=changes)
+
+        txn = self.output_store.active_txn() if self.output_store is not None else None
+        self.detail_updates.append((document_id, txn is not None))
+        if txn is None:
+            apply()
+        else:
+            txn.on_commit.append(apply)
+        return updated
+
     async def path(self, eid: str, document_id: str) -> Path:
         """save 收到的原件写到临时目录 (每个实例一个) 后返回路径; 没有内容 (预置的登记) 抛 FileNotFoundError."""
         if document_id not in self.contents:
@@ -1121,6 +1200,25 @@ class FakeEvidenceStore:
 NUMBAT_A02_ROWS = [  # PLN-07 A02 的取数 (合成数据集设计第 3.2 节): 收入与销售成本, 本期与上期
     {"period": "current", "revenue_cents": 1200000000, "cost_of_sales_cents": 840000000},
     {"period": "prior", "revenue_cents": 1040000000, "cost_of_sales_cents": 722800000},
+]
+# PLN-07 A03 的取数 (合成数据集设计第 3.2 节月度趋势): 本期按月的收入, 费用与员工费用, 各列合计同本期试算表
+# (收入 1200000000, 费用 1096400000, 员工费用 118000000)
+NUMBAT_A03_ROWS = [
+    {"month": month, "revenue_cents": revenue, "expense_cents": expense, "employee_expense_cents": employee}
+    for month, revenue, expense, employee in [
+        (date(2025, 7, 1), 88000000, 77321600, 9566600),
+        (date(2025, 8, 1), 90000000, 78721600, 9566600),
+        (date(2025, 9, 1), 94000000, 81521600, 9566600),
+        (date(2025, 10, 1), 98000000, 84321600, 9566600),
+        (date(2025, 11, 1), 104000000, 88521600, 9566600),
+        (date(2025, 12, 1), 86000000, 75921600, 9566600),
+        (date(2026, 1, 1), 80000000, 71721600, 9566600),
+        (date(2026, 2, 1), 94000000, 81521600, 9566600),
+        (date(2026, 3, 1), 111000000, 93421600, 9566600),
+        (date(2026, 4, 1), 97500000, 83971600, 9566600),
+        (date(2026, 5, 1), 107500000, 90971600, 9566600),
+        (date(2026, 6, 1), 150000000, 188462400, 12767400),
+    ]
 ]
 NUMBAT_M01_ROWS = [  # PLN-01 M01 的取数 (第 3.2 节), 按 basis 排序
     {"basis": "profit_before_tax", "base_amount_cents": 150000000},
@@ -1279,7 +1377,9 @@ NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计�
     )
 ]
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
-    "PLN-07": lambda run: RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS}),
+    "PLN-07": lambda run: RuleResult(
+        exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}
+    ),
     "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
     "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
@@ -2682,18 +2782,15 @@ async def api_client(
         yield client
 
 
-# ── Xero Demo Company 快照: 本地 xero pull 的输出, 不入库; 本机没有时跳过用到它的测试 ──
+# ── Xero Demo Company 快照: xero pull 的输出 (本仓库已带); 找不到时跳过用到它的测试, 仓库跟踪了却找不到时失败 ──
 
 XERO_SNAPSHOTS = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"  # 快照目录的上级
 XERO_SNAPSHOT = "20261017-mock"  # 带付费接口模拟 (总账分录, 银行对账单) 的快照, 数据集名 xero/20261017-mock
 
 
 def xero_snapshot() -> Snapshot:
-    """本机的 Xero 快照; 没有时 pytest.skip."""
-    root = XERO_SNAPSHOTS / XERO_SNAPSHOT
-    if not (root / "organisation.json").exists():
-        pytest.skip(f"本机没有 Xero 快照 {root} (不入库, 见 data/external/xero/README.md)")
-    return Snapshot(root)
+    """Xero 快照 20261017-mock, 按 tests.external.require_xero_snapshot 定位与核对 (需求 R114)."""
+    return Snapshot(require_xero_snapshot(XERO_SNAPSHOT))
 
 
 def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:

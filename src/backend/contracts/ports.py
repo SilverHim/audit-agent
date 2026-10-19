@@ -42,6 +42,7 @@ from backend.contracts.models import (
     AgentId,
     AsicCompanyRecord,
     AuditObjective,
+    ClientEntry,
     ClientProfile,
     Contract,
     DocumentChannel,
@@ -56,6 +57,8 @@ from backend.contracts.models import (
     Model,
     Phase,
     ProcedureRun,
+    ProfileRecord,
+    ProfileSource,
     ReceiptChannel,
     Reliability,
     RiskItem,
@@ -140,7 +143,12 @@ class FinancialDataStore(Protocol):
         """合同的各版本, 按版本升序; 没有记录 (迁移 0004 之前抽取的) 为空."""
         ...
 
-    async def documents(self, eid: str, type: DocumentType | None = None) -> list[DocumentRef]: ...
+    async def documents(
+        self, eid: str, type: DocumentType | None = None, related_id: str | None = None
+    ) -> list[DocumentRef]:
+        """已登记的文件, 按文件名与 ID 排序. type 只取该类型; related_id 只取关联对象 (related_ids) 含它的 (需求 R90);
+        两者同时给时都须满足."""
+        ...
 
     async def data_version(self, eid: str) -> int: ...
 
@@ -213,6 +221,19 @@ class EvidenceStore(Protocol):
         failed_step: DocumentFailedStep | None,
     ) -> DocumentRef:
         """A3 处理上传文件时改登记的类型, 可靠性, 状态与卡住的步骤, 返回改后的登记; 没有该文件抛 FileNotFoundError."""
+        ...
+
+    async def update_details(
+        self,
+        eid: str,
+        document_id: str,
+        *,
+        reliability: Reliability | None,
+        document_date: date | None,
+        related_ids: Sequence[str] | None,
+    ) -> DocumentRef:
+        """补登记 (需求 R90): 只改给了的项 (None 不改), 返回改后的登记; 没有该文件抛 FileNotFoundError. 在
+        AuditOutputStore.transaction 块内调用时加入该事务."""
         ...
 
 
@@ -504,13 +525,14 @@ class EngagementStore(Protocol):
         owner_id: str,
         period_start: date,
         period_end: date,
-        dataset: str,
+        dataset: str | None,
         profile: ClientProfile,
     ) -> Engagement:
-        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance. profile (数据集带的画像) 与
-        client_profiles 中该客户的各版比较内容 (不看版本号): 没有该客户时按 profile 写入; 有一版相同 (数据集没变)
-        沿用最新一版, 含审计师在 ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版 (最新版本 +1). 旧版本不改.
-        client_profile_version 为写入或沿用的那一版."""
+        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance. profile (数据集带的画像; 新建的客户
+        为其最新一版, dataset 为 None) 与 client_profiles 中该客户的各版比较内容 (不看版本号): 没有该客户时按 profile
+        写入; 有一版相同 (数据集没变) 沿用最新一版, 含审计师在 ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版
+        (最新版本 +1). 旧版本不改. 写入的版本 source 为 dataset, updated_by 为 owner_id. client_profile_version 为
+        写入或沿用的那一版."""
         ...
 
     async def get(self, eid: str) -> Engagement | None: ...
@@ -530,9 +552,27 @@ class EngagementStore(Protocol):
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...
 
-    async def save_profile(self, profile: ClientProfile) -> ClientProfile:
-        """客户画像出新版本, 返回存储中的画像. profile.version 须为已有最大值 +1, 不符抛 VersionConflict;
-        在 AuditOutputStore.transaction 块内调用时加入该事务."""
+    async def save_profile(
+        self, profile: ClientProfile, *, source: ProfileSource, updated_by: str | None
+    ) -> ClientProfile:
+        """客户画像出新版本, 记下来源与写入人, 返回存储中的画像. profile.version 须为已有最大值 +1, 不符抛
+        VersionConflict; 在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        ...
+
+    async def create_client(
+        self, profile: ClientProfile, *, created_by: str, dataset_profiles: Sequence[ClientProfile]
+    ) -> ClientProfile:
+        """新建客户: 写画像第 1 版 (source manual, updated_by 为 created_by). profile.version 须为 1, 该 id 已有画像
+        抛 VersionConflict (撞号不覆盖). 同一 ABN 已是别的客户的抛 AbnTaken: 比较范围是库里各客户的最新一版, 加上
+        dataset_profiles 中还没进库的数据集画像; 查重与写入在同一把锁内."""
+        ...
+
+    async def clients(self) -> list[ClientEntry]:
+        """库里的各客户 (每个 id 一项, 按 id 排序): 最新一版与第 1 版的来源."""
+        ...
+
+    async def profile_history(self, client_id: str) -> list[ProfileRecord]:
+        """该客户画像的各版及出处, 按版本升序; 没有时为空列表."""
         ...
 
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
@@ -568,7 +608,8 @@ class LlmSettingsStore(Protocol):
 
 class RegistrySource(Protocol):
     """ABN 与 ASIC 登记查询, 首参为项目 ID. mock 按项目的数据集读该数据集目录下的 registry/ (Numbat 为
-    data/demo, Xero 为补造目录; 没有目录时查不到)."""
+    data/demo, Xero 为补造目录; 没有目录时查不到). 项目没有数据集 (新建的客户) 时抛 RegistryUnavailable, ACC-04
+    转人工确认; ABR 实时查与 ASIC 摘录接入后 (R289, R290) 由组合实现替代."""
 
     async def abn(self, eid: str, abn: str) -> AbnRecord | None: ...
 

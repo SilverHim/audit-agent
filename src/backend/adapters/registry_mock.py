@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from backend.contracts.errors import RegistryUnavailable
 from backend.contracts.models import AbnRecord, AsicCompanyRecord
 from backend.contracts.ports import EngagementStore
 
@@ -29,16 +30,20 @@ class MockRegistrySource:
 async def dataset_directory(
     engagements: EngagementStore, directory: Callable[[str], Path | None], eid: str
 ) -> Path | None:
-    """项目数据集的目录 (directory 即 RoutingDatasetLoader.supplement_dir); 项目不存在抛 LookupError."""
+    """项目数据集的目录 (directory 即 RoutingDatasetLoader.supplement_dir); 项目不存在抛 LookupError, 项目没有数据集
+    (新建的客户) 抛 RegistryUnavailable (不读任何数据集的 mock)."""
     engagement = await engagements.get(eid)
     if engagement is None:
         raise LookupError(f"没有项目 {eid}")
+    if engagement.dataset is None:
+        raise RegistryUnavailable(f"项目 {eid} 的客户没有数据集, 没有可查的登记来源")
     return directory(engagement.dataset)
 
 
 class DatasetRegistrySource:
     """按项目的数据集定位登记 mock: Numbat (demo) 读 data/demo/registry/, Xero 读补造目录的 registry/
-    (补造与快照不匹配时抛 SupplementMismatch); 没有目录或没有 registry/ 时查不到 (None)."""
+    (补造与快照不匹配时抛 SupplementMismatch); 没有目录或没有 registry/ 时查不到 (None); 项目没有数据集 (新建的
+    客户) 时抛 RegistryUnavailable."""
 
     def __init__(self, engagements: EngagementStore, directory: Callable[[str], Path | None]) -> None:
         self.engagements = engagements
