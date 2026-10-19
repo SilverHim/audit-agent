@@ -1,11 +1,13 @@
 """审计助理的只读工具 (tools.py) 与引用匹配 (citations.py)."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
+
 from backend.agents.concierge_chat.citations import match_citations
-from backend.agents.concierge_chat.tools import ToolBox, ToolEnv, minimize, pseudonym
+from backend.agents.concierge_chat.tools import NoArgs, ToolBox, ToolEnv, list_open_items, minimize, pseudonym
 from backend.contracts.conversation import ConciergeCitation, ToolCall
 from backend.contracts.data import DataRequest, TableKind
 from backend.contracts.models import (
@@ -254,6 +256,23 @@ async def test_open_items_put_open_data_requests_between_gate_and_tasks() -> Non
     assert approvals["deferred"] is True
     assert "REQ-accounts" not in outcome.content  # 已收到的不列
     assert {"REV-08", "CSH-05"} <= set(outcome.cites)
+
+
+@pytest.mark.parametrize(
+    ("features", "expected"),
+    [(["collab", "critic"], ["T-Z", "T-A", TASK.id]), (["critic"], [TASK.id, "T-Z", "T-A"])],
+    ids=["collab", "baseline"],
+)
+async def test_open_items_disputes_first_by_created_at(features: list[str], expected: list[str]) -> None:
+    """R151 验收 5 (第 1 轮审核 R151-01): 两条待决争议, 晚建的 T-A 任务 ID 在前, 早建的 T-Z 在后, 普通任务最早.
+    项目开了 collab 时争议排在其余复核任务之前, 争议之间按创建时间 (防按任务 ID 或存储顺序); 没开时全按创建时间."""
+    late = TASK.model_copy(update={"id": "T-A", "kind": TaskKind.dispute, "created_at": TASK.created_at + timedelta(2)})
+    early = TASK.model_copy(
+        update={"id": "T-Z", "kind": TaskKind.dispute, "created_at": TASK.created_at + timedelta(1)}
+    )
+    deps = chat_deps(output_store=FakeOutputStore([JUDGMENT, late, TASK, early]))
+    found = await list_open_items(ToolEnv(EID, deps, FixedState(view=make_overview(features=features)), 6000), NoArgs())
+    assert [i["task_id"] for i in found.data["items"] if i["type"] == "review_task"] == expected
 
 
 async def test_contracts_list_and_terms_with_pages() -> None:

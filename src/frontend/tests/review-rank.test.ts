@@ -42,12 +42,13 @@ function view(
   } as unknown as ReviewTaskView
 }
 
-// 一条金额很大的待决争议, 一条置信度 0.95 的待决争议, 一条已决定的争议, 两条普通任务
+// 两条待决争议: 晚建的 D-late 金额很大 (档位最高) 且置信度 0.95, 早建的 D-early 金额很小; 一条已决定的争议, 两条普通
+// 任务. 按档位或金额排时 D-late 在前, 按创建时间时 D-early 在前, 两者分得开 (第 1 轮审核 R151-01)
 const VIEWS = [
   view('N-big', 'normal', '2026-01-01T00:00:01Z', 0.5, 9_000_000),
-  view('D-late', 'dispute', '2026-01-01T00:00:05Z', 0.95, null),
+  view('D-late', 'dispute', '2026-01-01T00:00:05Z', 0.95, 99_999_999),
   view('N-small', 'normal', '2026-01-01T00:00:02Z', 0.5, 100),
-  view('D-early', 'dispute', '2026-01-01T00:00:04Z', 0.5, 99_999_999),
+  view('D-early', 'dispute', '2026-01-01T00:00:04Z', 0.5, 10),
   view('D-done', 'dispute', '2026-01-01T00:00:00Z', 0.5, 1, 'decided'),
 ]
 
@@ -58,11 +59,11 @@ function order(features: string[] | undefined): string[] {
 
 describe('rankTasks', () => {
   test('没开 collab 时按档位, 金额, 创建时间 (同原来)', () => {
-    expect(order(['critic'])).toEqual(['D-early', 'N-big', 'N-small', 'D-done', 'D-late'])
+    expect(order(['critic'])).toEqual(['D-late', 'N-big', 'N-small', 'D-early', 'D-done'])
     expect(order(undefined)).toEqual(order(['critic']))
   })
 
-  test('开了 collab 时待决争议按创建时间排最前, 其余相对顺序不变', () => {
+  test('开了 collab 时待决争议按创建时间 (不按档位或金额) 排最前, 其余相对顺序不变', () => {
     const on = order(['collab', 'critic'])
     expect(on.slice(0, 2)).toEqual(['D-early', 'D-late'])
     const rest = order(['critic']).filter((id) => id !== 'D-early' && id !== 'D-late')
