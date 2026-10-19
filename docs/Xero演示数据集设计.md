@@ -791,7 +791,7 @@ GEN-07 合计 9 条. 对 Numbat 的影响: S02 改写后 G3 的 GJ-202607-ECL-2 
 
 ### 6.3 分录与关联方 (GEN-02, GEN-03, GEN-01)
 
-**GEN-02**: 7 条判断. G2 草稿 "分录例外归因不能建议认定错报" 的限制, 对没有科目程序覆盖的分录放开 (XJ-499 要用).
+**GEN-02**: 7 条判断. 建议动作不受限制 (T12 选不限制, 需求清单第 13 批; G2 草稿 "分录例外归因不能建议认定错报" 不做).
 
 | 判断 | 建议 | 要点 |
 |---|---|---|
@@ -886,7 +886,7 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 ### 7.1 审计师的选择与降级
 
 - ACC-01 approve; ACC-08 approve (G5: 单独闸门, 依赖 ACC-01, 批准后进 P1); PLN-01/03 approve, materiality = {revenue, 0.01, 0.5, 0.05}; PLN-15 approve; 两次 PLN-19 approve 不修订; FIN-02 approve material_uncertainty_disclosed; FIN-01 approve unqualified; RPT-01 先退回一次再批准; 签字注入时间 2026-10-23T05:00Z.
-- 动态降级 (需求清单 R168 的降级规则; 首次服务该客户不降级, 按决定 2 本版不做): 收入特别风险 -2, 现金 high -1; REV-02, REV-03 触到 L1 下限并开盲判. 执行重要性只有 162.16, 带金额的判断几乎都按 "单项金额超过执行重要性" 降到 L1.
+- 动态降级 (需求清单 R168 的降级规则; 首次服务该客户不降级, 按决定 2 本版不做): 收入特别风险 -2, 现金 high -1; REV-02, REV-03 降到 L1 下限 (越过下限截在 L1, 不另作处理; 盲判与盲测抽查已删去, 需求清单第 13 批). 执行重要性只有 162.16, 带金额的判断几乎都按 "单项金额超过执行重要性" 降到 L1.
 
 ### 7.2 剧本 (顺序按规格书 1425 行: 更正验证 → PLN-19 → FIN-04 → FIN-15)
 
@@ -902,8 +902,8 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 | 6 | — | PLN-01/03 | MATERIALITY v1; 风险清单 3 条 | — | approve → 32431 / 16216 / 1622 |
 | 7 | — | PLN-15 | PLAN-1 v1 → v2 | — | approve → 装配 P2 |
 | 8 | — | REV-08 | 窗口 09-10 至 09-30 | R03-1 | 无; 由 REV-02 归因 |
-| 9 | — | REV-03 | 3 条判断 accept | 无 | 3 条 (盲判), 全部 confirm |
-| 10 | — | REV-02 | 6 条判断 accept | — | 6 条 (盲判), 全部 confirm; R03-1 → attributed |
+| 9 | — | REV-03 | 3 条判断 accept | 无 | 3 条, 全部 confirm |
+| 10 | — | REV-02 | 6 条判断 accept | — | 6 条, 全部 confirm; R03-1 → attributed |
 | 11 | — | CSH-04, DOC-06, CSH-05, CSH-02 | C-BA-090, C-BA-091 余额 agreed; C-BA-091 回函应计利息 4853 | D04-1 (决定 15) | 1 条 (always_review), J-CSH-02-1-BA-091 决定 misstatement → **M-5** (48.53) |
 | 12 | — | GEN-05 | RUN-GEN-05-1; 4 类时间规则 skipped, R04/R07 not_executable | 7 条 | 无 |
 | 13 | — | GEN-02 | 7 条判断 | 归因上述 7 条 | XJ-499 决定 misstatement → **M-1**; XJ-575 审计师调阅报销单 E003 后 override 为 accept (录名错误); 其余 5 条 confirm |
@@ -941,7 +941,7 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 |---|---|
 | 例外 | **41 条**: PLN-07 9 (open, 闸门材料); REV-08 1, CSH-02 1 (D04, 决定 15), GEN-05 7, GEN-08 1, GEN-07 9, FIN-15 13 (第 1 轮 10, 第 2 轮 3), 均 attributed; 增量扫描 0; PLN-19 0 |
 | 判断 | **56 条**: ACC-08 1, REV-03 3, REV-02 6, CSH-02 1, GEN-02 7, GEN-03 2, GEN-01 1, GEN-04 1, GEN-06 9, FIN-03 5, FIN-09 5, FIN-15 13, PLN-19 2. FIN-02 的建议是闸门材料 GOING_CONCERN v1, 不建判断 (设计稿 v2.1 计为 57 条, 含 "FIN-02 1"); 另有人工判断 1 条 (J-GEN-02-1-XJ-575-H1, 审计师 override XJ-575 产生) |
-| 复核任务 | **53 条**, 都已决定: REV-03 3, REV-02 6, CSH-02 1, GEN-02 7, GEN-03 2, GEN-01 1, GEN-04 1, GEN-06 9, FIN-03 5, FIN-09 5, FIN-15 13 (盲判恰为 9 条: REV-03 3, REV-02 6) |
+| 复核任务 | **53 条**, 都已决定: REV-03 3, REV-02 6, CSH-02 1, GEN-02 7, GEN-03 2, GEN-01 1, GEN-04 1, GEN-06 9, FIN-03 5, FIN-09 5, FIN-15 13 |
 | 闸门决定 | **10 次**: ACC-01, ACC-08, PLN-01/03, PLN-15, PLN-19 两次, FIN-02, FIN-01, RPT-01 两次. ACC-08 单列一次 (G5 AP-1: GateDecision.gate 单列 ACC-08, 一次闸门一条决定; 验收顺序 ACC-01 approve → ACC-08 approve) |
 | 人工队列 | 4 项: FIN-08 两项, FIN-07, RPT-07 |
 | 更正通知 | 2 次 (AJE-X01 与 AJE-X05; AJE-X02 至 X04) |
