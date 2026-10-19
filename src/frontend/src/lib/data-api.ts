@@ -8,8 +8,11 @@ import {
   dataListBatchesOptions,
   dataListBatchesQueryKey,
   dataSummaryOptions,
+  dataSummaryQueryKey,
   dataTablePageOptions,
   dataTableSchemasOptions,
+  dataXeroTenantsOptions,
+  dataXeroTenantsQueryKey,
 } from '@/client/@tanstack/react-query.gen'
 import {
   dataChangeImportSheet,
@@ -22,6 +25,10 @@ import {
   dataSetAccountCategory,
   dataStartBatch,
   dataStartImport,
+  dataXeroConnect,
+  dataXeroDisconnect,
+  dataXeroSync,
+  dataXeroTenant,
   evidenceEditConfirmation,
   evidenceEditContract,
   evidenceSetDocumentType,
@@ -31,17 +38,16 @@ import type {
   BatchItemEdit,
   CategoryVersion,
   DataRequest,
+  DataSummary,
   DocumentType,
   ExtractionEdit,
   ImportCommit,
   TableKind,
 } from '@/client/types.gen'
 import { invalidateEngagement } from '@/lib/engagement'
-import { call } from '@/lib/new-api'
 import type { Messages } from '@/locales/en'
 
-// 数据管理接口 (后端需求 R10-R16) 用生成的客户端; 查询键都带 path.eid, 写操作后按项目整体失效.
-// Xero 接口 (R12) 还没合入, 暂用过渡调用
+// 数据管理接口 (后端需求 R10-R16, Xero 网页连接 R279) 用生成的客户端; 查询键都带 path.eid, 写操作后按项目整体失效.
 
 export type {
   BatchIssue,
@@ -94,26 +100,49 @@ export function useDataSummary(eid: string) {
   return query
 }
 
-// R12 Xero
+// Xero 网页连接 (后端 R279). 连接: 取授权地址后整页跳到 Xero, 授权后由后端回调 302 回数据管理页 (?xero=...)
 export function useXeroConnect(eid: string) {
   return useMutation({
-    mutationFn: () => call<{ authorize_url: string }>('get', '/api/v1/engagements/{eid}/data/xero/connect', { eid }),
+    mutationFn: async () => (await dataXeroConnect({ path: { eid }, throwOnError: true })).data,
     onSuccess: ({ authorize_url }) => window.location.assign(authorize_url),
   })
 }
 
-export function useXeroSync(eid: string) {
+// 授权给到的组织 (连接时存下的, 后端不调 Xero); 只在已连接时取. 没有连接时后端报 409, 不重试
+export function useXeroTenants(eid: string, enabled: boolean) {
+  return useQuery({ ...dataXeroTenantsOptions({ path: { eid } }), enabled, retry: false })
+}
+
+export function useXeroChooseTenant(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => call<unknown>('post', '/api/v1/engagements/{eid}/data/xero/sync', { eid }),
+    mutationFn: async (tenantId: string) =>
+      (await dataXeroTenant({ path: { eid }, body: { tenant_id: tenantId }, throwOnError: true })).data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }
 
+// 同步在后台进行: 202 返回要写的表, 进度看概览 (这些表为 converting, processing 计数)
+export function useXeroSync(eid: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => (await dataXeroSync({ path: { eid }, throwOnError: true })).data,
+    onSettled: () => invalidateEngagement(queryClient, eid),
+  })
+}
+
+// 断开: revoked 为 false 时 Xero 侧没撤销成功 (本地令牌已删), 要提示到 Xero 后台手动移除.
+// 成功后先把概览里的连接置为未连接 (组织列表随之停用) 并丢掉组织列表, 再整体失效, 不再去取已删连接的组织
 export function useXeroDisconnect(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => call<unknown>('delete', '/api/v1/engagements/{eid}/data/xero', { eid }),
+    mutationFn: async () => (await dataXeroDisconnect({ path: { eid }, throwOnError: true })).data,
+    onSuccess: () => {
+      queryClient.setQueryData<DataSummary>(dataSummaryQueryKey({ path: { eid } }), (summary) =>
+        summary ? { ...summary, sources: { ...summary.sources, xero: { status: 'not_connected' } } } : summary,
+      )
+      queryClient.removeQueries({ queryKey: dataXeroTenantsQueryKey({ path: { eid } }) })
+    },
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

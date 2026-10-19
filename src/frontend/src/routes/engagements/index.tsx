@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link, redirect, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
 import { ArrowRight, Plus } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   engagementsCreateEngagementMutation,
@@ -18,8 +18,10 @@ import { invalidateEngagementList } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useDatasets } from '@/lib/new-api'
+import { useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
 
 export const Route = createFileRoute('/engagements/')({
+  validateSearch: (search: Record<string, unknown>): XeroNotice => xeroNotice(search),
   beforeLoad: () => {
     if (!getToken()) throw redirect({ to: '/login' })
   },
@@ -34,6 +36,11 @@ type Summary = EngagementSummary & { period_start?: string; period_end?: string 
 
 function Engagements() {
   const { t } = useI18n()
+  const { xero, reason } = Route.useSearch()
+  const navigate = useNavigate()
+  // Xero 授权回调认不出项目 (state 不认识等) 时经首页回到这里, 提示一次后清掉
+  const clearNotice = useCallback(() => void navigate({ to: '/engagements', search: {}, replace: true }), [navigate])
+  useXeroCallbackNotice({ xero, reason }, t, clearNotice)
   const list = useQuery(engagementsListEngagementsOptions())
   const [creating, setCreating] = useState(false)
   const rows = (list.data ?? []) as Summary[]
