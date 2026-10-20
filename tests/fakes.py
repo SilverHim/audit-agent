@@ -75,6 +75,7 @@ from backend.contracts.models import (
     AuditObjective,
     AuditorAppointment,
     AuditorConsent,
+    AuditPlan,
     AuditReportVersion,
     AutonomyLevel,
     CheckItem,
@@ -98,6 +99,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EngagementTerms,
+    EqrRecommendation,
     EvidencePointer,
     EvidenceType,
     FinancialStatementLine,
@@ -114,6 +116,8 @@ from backend.contracts.models import (
     LlmSlot,
     MaterialityCandidate,
     MaterialityCandidates,
+    MaterialityChoice,
+    Milestone,
     MisstatementDraft,
     MisstatementType,
     ObjectRef,
@@ -123,7 +127,12 @@ from backend.contracts.models import (
     PartyNode,
     PersonSearch,
     Phase,
+    PlanConfirmation,
+    PlanItem,
+    PlanSection,
+    PlanStatus,
     Procedure,
+    ProcedureNote,
     ProcedureRun,
     ProcedureStatus,
     ProfileRecord,
@@ -787,9 +796,9 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts),
-    试算表 (trial_balance), 工资册 (employees) 与待审财报 (financial_statements, save_financial_statements,
-    statements_history; 需求 R217), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户与流水 (bank_accounts, bank_transactions), 发票与发运单 (sales_invoices, delivery_notes), 分录行
+    (journal_entries), 科目 (accounts), 试算表 (trial_balance), 工资册 (employees) 与待审财报 (financial_statements,
+    save_financial_statements, statements_history; 需求 R217), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -891,6 +900,17 @@ class FakeFinancialStore:
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
         return [BankAccount.model_validate(row) for (kind, _), row in self.records.items() if kind == "bank_account"]
+
+    async def bank_transactions(
+        self, eid: str, bank_account_id: str, date_from: date, date_to: date
+    ) -> list[BankTransaction]:
+        """records 中该账户交易日期在 [date_from, date_to] 内 (含两端) 的 bank_transaction 行, 按 (交易日期, ID) 排序,
+        同真实实现."""
+        rows = [
+            BankTransaction.model_validate(r) for (kind, _), r in self.records.items() if kind == "bank_transaction"
+        ]
+        found = [r for r in rows if r.bank_account_id == bank_account_id and date_from <= r.txn_date <= date_to]
+        return sorted(found, key=lambda r: (r.txn_date, r.id))
 
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]:
         """records 中 ID 在 ids 内的 sales_invoice 行, 按写入顺序 (真实实现的顺序没有约定, 调用方自行排序)."""
@@ -2875,6 +2895,76 @@ def independence_declaration(run_id: str = "RUN-RPT-08-1", version: int = 1) -> 
         declarant_id=NUMBAT_AUDITOR.id,
         directors_report_copy_required=True,
         run_id=run_id,
+    )
+
+
+PLAN_REJECT_ID = "D-P15R"  # 合成计划第 2 修订起回应的 PLN-15 驳回决定
+PLAN_EQR_BASIS = (
+    "Not a listed entity; no engagement quality review is required by law or regulation, and the firm has not "
+    "determined one is needed (ASQM 1 para 34(f))"
+)
+# PLN-15 通过时的确认 (需求 R203): 不需要项目质量复核, 不需要审计师的专家
+PLAN_CONFIRMATION = PlanConfirmation(eqr_required=False, eqr_basis=PLAN_EQR_BASIS, auditor_expert_not_required=True)
+
+
+def audit_plan(
+    revision: int = 1, version: int = 1, status: PlanStatus = PlanStatus.draft, run_id: str | None = None
+) -> AuditPlan:
+    """合成的总体审计计划 PLAN-{revision} (需求 R203, 只填契约用到的): Numbat 期间, 收入基准 1% 的重要性三项, 两条
+    程序 (REV-08 关联两个收入目标, DOC-06 为只经依赖加入的), 叙述与时间表各两项. 执行缺省为 RUN-PLN-15-{revision};
+    已批准的带三项确认与批准人 (U-1, NOW), 已取代的按驳回前的草稿 (都为空); 第 2 修订起回应驳回决定 D-P15R."""
+    confirmed = status is PlanStatus.approved
+    return AuditPlan(
+        id=f"PLAN-{revision}",
+        version=version,
+        revision=revision,
+        status=status,
+        run_id=run_id or f"RUN-PLN-15-{revision}",
+        period_start=ENGAGEMENT.period_start,
+        period_end=ENGAGEMENT.period_end,
+        applicable_framework="tier2_gpfs",
+        engagement_letter_document_id="DOC-EL",
+        materiality_choice=MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.75, clearly_trivial_pct=0.05),
+        materiality_cents=12_000_000,
+        performance_materiality_cents=9_000_000,
+        clearly_trivial_cents=600_000,
+        significant_risk_objective_ids=["OBJ-REV-OCC", "OBJ-REV-CUT"],
+        items=[
+            PlanItem(
+                procedure_id="DOC-06", name="银行回函要素抽取", template_commit="test", objective_ids=[], params={}
+            ),
+            PlanItem(
+                procedure_id="REV-08",
+                name="三单匹配",
+                template_commit="test",
+                objective_ids=["OBJ-REV-OCC", "OBJ-REV-CUT"],
+                params={"window_days": 20, "period_end": "2026-06-30"},
+            ),
+        ],
+        narrative=[
+            PlanSection(section="overall_strategy", text="Substantive audit of revenue and cash."),
+            PlanSection(section="scope", text="Year ended 30 June 2026."),
+            PlanSection(section="significant_risks", text="Presumed fraud risk in revenue recognition."),
+            PlanSection(section="materiality", text="1% of revenue."),
+        ],
+        procedure_notes=[
+            ProcedureNote(procedure_id="DOC-06", nature_timing_extent="Extract every bank confirmation reply."),
+            ProcedureNote(procedure_id="REV-08", nature_timing_extent="Match all invoices in the last 20 days."),
+        ],
+        timetable=[
+            Milestone(milestone="Fieldwork complete", due=date(2026, 8, 14)),
+            Milestone(milestone="Auditor's report signed", due=date(2026, 8, 28)),
+        ],
+        eqr_recommendation=EqrRecommendation(required=False, basis=PLAN_EQR_BASIS),
+        expert_assessment="No auditor's expert is needed: no specialised valuations.",
+        standards_cited=["ASA300-P07", "ASQM1-P34f"],
+        eqr_required=False if confirmed else None,
+        eqr_basis=PLAN_EQR_BASIS if confirmed else None,
+        auditor_expert_not_required=True if confirmed else None,
+        addresses_decision_id=PLAN_REJECT_ID if revision > 1 else None,
+        revision_reason="Add the planned timing of bank confirmations" if revision > 1 else None,
+        approved_by=NUMBAT_AUDITOR.id if confirmed else None,
+        approved_at=NOW if confirmed else None,
     )
 
 

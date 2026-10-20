@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from backend.api.schemas import GateDecisionIn
 from backend.contracts.errors import VersionConflict
-from backend.contracts.llm_outputs import EngagementTermsExtraction
+from backend.contracts.llm_outputs import AuditPlanDraft, EngagementTermsExtraction
 from backend.contracts.models import (
     AsicExtract,
     Assertion,
     AuditException,
+    AuditPlan,
     AutonomyLevel,
     CheckItem,
     CheckItemStatus,
@@ -33,7 +35,9 @@ from backend.contracts.models import (
     EvidenceType,
     FinancialStatementLine,
     FinancialStatements,
+    GateDecision,
     GateId,
+    GateVerdict,
     GovernanceCommunication,
     IndependenceDeclaration,
     Judgment,
@@ -44,6 +48,8 @@ from backend.contracts.models import (
     PartyLink,
     PartyNode,
     Phase,
+    PlanConfirmation,
+    PlanStatus,
     Procedure,
     ProcedureStatus,
     ProposedAction,
@@ -67,7 +73,10 @@ from backend.contracts.state import staged, upsert_by_id
 from backend.contracts.views import GateView
 from backend.orchestration.checkpoint import checkpoint_serde
 from tests.fakes import (
+    PLAN_CONFIRMATION,
+    PLAN_EQR_BASIS,
     XERO_FS_V1,
+    audit_plan,
     compliance_check,
     engagement_terms,
     governance_communication,
@@ -712,3 +721,166 @@ def test_engagement_terms_contract() -> None:
     assert facts == list(EngagementTerms.model_fields)[2:14] and (facts[0], facts[-1]) == ("framework", "year_change")
     extraction = EngagementTermsExtraction.model_validate(terms.model_dump(include=set(facts)))
     assert extraction.model_dump() == terms.model_dump(include=set(facts))
+
+
+# ── R203: 总体审计计划 ──
+
+
+def test_audit_plan_fields_and_defaults() -> None:
+    """验收 1: AuditPlan 的字段恰为验收所列 (另有 id, version); 草稿的三项确认, 批准人与批准时间为空, 第 1 修订不回应
+    决定; 冻结且不收多余键; JSON 往返不变 (materiality_choice 是后文定义的 MaterialityChoice, 经 model_rebuild)."""
+    assert list(AuditPlan.model_fields) == [
+        "id",
+        "version",
+        "revision",
+        "status",
+        "run_id",
+        "period_start",
+        "period_end",
+        "applicable_framework",
+        "engagement_letter_document_id",
+        "materiality_choice",
+        "materiality_cents",
+        "performance_materiality_cents",
+        "clearly_trivial_cents",
+        "significant_risk_objective_ids",
+        "items",
+        "narrative",
+        "procedure_notes",
+        "timetable",
+        "eqr_recommendation",
+        "expert_assessment",
+        "standards_cited",
+        "eqr_required",
+        "eqr_basis",
+        "auditor_expert_not_required",
+        "addresses_decision_id",
+        "revision_reason",
+        "approved_by",
+        "approved_at",
+    ]
+    plan = audit_plan()
+    assert (plan.id, plan.version, plan.revision, plan.status, plan.run_id) == (
+        "PLAN-1",
+        1,
+        1,
+        PlanStatus.draft,
+        "RUN-PLN-15-1",
+    )
+    assert (plan.eqr_required, plan.eqr_basis, plan.auditor_expert_not_required) == (None, None, None)
+    assert (plan.addresses_decision_id, plan.revision_reason, plan.approved_by, plan.approved_at) == (None,) * 4
+    assert plan.materiality_choice.basis == "revenue" and plan.timetable[0].due == date(2026, 8, 14)
+    assert [x.section for x in plan.narrative] == ["overall_strategy", "scope", "significant_risks", "materiality"]
+    dumped = plan.model_dump()
+    minimal = {
+        k: v for k, v in dumped.items() if k not in {"status", "applicable_framework", "engagement_letter_document_id"}
+    }
+    assert AuditPlan.model_validate(minimal).status is PlanStatus.draft  # 状态缺省 draft, TERMS 两项缺省为空
+    with pytest.raises(ValidationError):
+        AuditPlan.model_validate({**dumped, "extra": 1})
+    with pytest.raises(ValidationError):
+        plan.revision = 2  # type: ignore[misc]
+    assert AuditPlan.model_validate_json(plan.model_dump_json()) == plan
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"id": "PLAN-2"}, "须为 PLAN-1"),
+        ({"revision": 0, "id": "PLAN-0"}, "greater than or equal to 1"),
+        ({"approved_by": "U-1"}, "草稿的批准确认与批准人须为空"),
+        ({"eqr_required": False}, "草稿的批准确认与批准人须为空"),
+        ({"status": "approved"}, "已批准的计划须有三项确认, 批准人与批准时间"),
+        ({"narrative": [{"section": "scope", "text": "a"}, {"section": "scope", "text": "b"}]}, "段名重复"),
+        ({"applicable_framework": "unknown"}, "applicable_framework"),
+        ({"applicable_framework": "special_purpose"}, "applicable_framework"),  # 特殊目的写作 spfr (ReportingFramework)
+    ],
+)
+def test_audit_plan_rejects_inconsistent_fields(change: dict, message: str) -> None:
+    """验收 1, 2: ID 与修订号不符, 修订号小于 1, 草稿带批准的项, 已批准缺批准的项, 叙述段名重复, 框架不是
+    ReportingFramework 的取值 (同 TERMS) 时抛错. 改版须经 model_validate (model_copy 不跑这些校验)."""
+    with pytest.raises(ValidationError, match=message):
+        AuditPlan.model_validate({**audit_plan().model_dump(), **change})
+
+
+def test_audit_plan_status_versions_within_a_revision() -> None:
+    """验收 2: 同一修订内只有状态变化出新版本: draft v1 → approved v2 (三项确认, 批准人, 批准时间都填) → superseded v3
+    沿用; 驳回后的草稿置 superseded 时确认项都为空也通过. 第 2 修订回应驳回决定."""
+    approved = audit_plan(version=2, status=PlanStatus.approved)
+    assert (approved.eqr_required, approved.eqr_basis, approved.auditor_expert_not_required) == (
+        False,
+        PLAN_EQR_BASIS,
+        True,
+    )
+    assert approved.approved_by == "U-1" and approved.approved_at is not None
+    for field in ("eqr_basis", "approved_at"):
+        with pytest.raises(ValidationError, match="已批准的计划须有"):
+            AuditPlan.model_validate({**approved.model_dump(), field: None})
+    retired = approved.model_copy(update={"version": 3, "status": PlanStatus.superseded})
+    assert AuditPlan.model_validate(retired.model_dump()) == retired
+    assert audit_plan(version=2, status=PlanStatus.superseded).approved_by is None
+    second = audit_plan(revision=2)
+    assert (second.id, second.addresses_decision_id, second.run_id) == ("PLAN-2", "D-P15R", "RUN-PLN-15-2")
+
+
+def test_plan_confirmation_on_gate_decision_and_request_body() -> None:
+    """验收 4: GateId.PLN_15; GateDecision.plan_confirmation 缺省为空, 旧决定的 JSON (没有该键) 读得出; 带确认的往返
+    不变; PlanConfirmation 三项都必填. 请求体 GateDecisionIn 的字段与 GateDecision 去掉服务端填的四项相同."""
+    assert GateId.PLN_15.value == "PLN-15"
+    confirmation = PLAN_CONFIRMATION
+    decision = GateDecision(
+        id="D-PLAN",
+        gate=GateId.PLN_15,
+        target_id="PLAN-1",
+        target_version=1,
+        decision=GateVerdict.approve,
+        decided_by="U-1",
+        decided_at=datetime(2026, 9, 30, tzinfo=UTC),
+    )
+    assert decision.plan_confirmation is None
+    old = decision.model_dump(mode="json")
+    del old["plan_confirmation"]
+    assert GateDecision.model_validate_json(json.dumps(old)) == decision
+    confirmed = decision.model_copy(update={"plan_confirmation": confirmation})
+    assert GateDecision.model_validate_json(confirmed.model_dump_json()) == confirmed
+    for field in PlanConfirmation.model_fields:
+        with pytest.raises(ValidationError, match=field):
+            PlanConfirmation.model_validate({k: v for k, v in confirmation.model_dump().items() if k != field})
+    server_side = {"id", "version", "decided_by", "decided_at"}
+    assert list(GateDecisionIn.model_fields) == [f for f in GateDecision.model_fields if f not in server_side]
+    request = {k: v for k, v in old.items() if k not in server_side}
+    body = GateDecisionIn.model_validate({**request, "plan_confirmation": confirmation.model_dump()})
+    assert body.plan_confirmation == confirmation
+
+
+def test_audit_plan_draft_contract() -> None:
+    """验收 3: AuditPlanDraft 的字段恰为验收所列; 从模型输出的 JSON 读出, 时间表日期为 date; 不收多余键, 缺键报错."""
+    assert list(AuditPlanDraft.model_fields) == [
+        "overall_strategy",
+        "sections",
+        "procedure_notes",
+        "timetable",
+        "eqr_recommendation",
+        "expert_assessment",
+        "standards_cited",
+    ]
+    text = json.dumps(
+        {
+            "overall_strategy": "Substantive audit.",
+            "sections": {"scope": "Year ended 30 June 2026.", "timing": "Fieldwork in August."},
+            "procedure_notes": [
+                {"procedure_id": "REV-08", "nature_timing_extent": "Match all invoices in the last 20 days."}
+            ],
+            "timetable": [{"milestone": "Report signed", "due": "2026-08-28"}],
+            "eqr_recommendation": {"required": False, "basis": PLAN_EQR_BASIS},
+            "expert_assessment": "Not needed.",
+            "standards_cited": ["ASA300-P07"],
+        }
+    )
+    draft = AuditPlanDraft.model_validate_json(text)
+    assert draft.timetable[0].due == date(2026, 8, 28) and draft.eqr_recommendation.required is False
+    assert draft.procedure_notes == audit_plan().procedure_notes[1:]  # 与合成计划的 REV-08 一项相同
+    with pytest.raises(ValidationError):
+        AuditPlanDraft.model_validate({**json.loads(text), "extra": 1})
+    with pytest.raises(ValidationError, match="expert_assessment"):
+        AuditPlanDraft.model_validate({k: v for k, v in json.loads(text).items() if k != "expert_assessment"})

@@ -1,0 +1,119 @@
+{#
+PLN-15 总体审计计划 → AuditPlanDraft，每个修订调用一次（需求 R203；执行由 R204 做）。计划骨架（程序与参数、重要性、特别风险目标、适用框架）由 A4 确定性组装，模型只写叙述。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
+变量：
+  entity           ClientProfile：legal_name、abn、entity_type、listed、directors、financial_year_end、accounting_system、engagements（为空即首次服务）、key_personnel、related_parties、ownership、governance、prior_period_audited、notes
+  period_start     审计期间起，ISO 日期
+  period_end       审计期间止，ISO 日期
+  period_months    审计期间的整月数，如 3
+  terms            约定书核对结果 EngagementTerms（TERMS）：framework、direction、appointment、consent、year_change、letter_dated_on；功能 acceptance 关闭或没有时为 null
+  analytics        初步分析结果 AnalyticsResult：ratios、exception_ids、monthly[month、revenue_cents、expense_cents、employee_expense_cents]
+  materiality      {choice: MaterialityChoice（basis、pct、performance_pct、clearly_trivial_pct）, materiality_cents, performance_materiality_cents, clearly_trivial_cents}
+  objectives       AuditObjective 列表：id、account、assertion、risk_level、is_material
+  risks            RiskItem 列表：id、objective_id、assertion、level、fraud_related、description
+  items            计划骨架的程序 PlanItem 列表（按程序编号排序）：procedure_id、objective_ids、params（name 为中文，不渲染）
+  trial_balance    本期试算表各科目：code、name、category、balance_cents（借方为正，贷方为负）
+  revision         本次起草的修订号，第 1 修订为 1
+  revision_reason  修订的理由（PLN-15 驳回理由，或 PLN-19 修订重要性的理由）；第 1 修订为 null
+  standards        StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set first_service = not entity.engagements %}
+You assist a registered company auditor with planning the audit of the financial report of {{ entity.legal_name }} (ABN {{ entity.abn }}) for the period {{ period_start }} to {{ period_end }} ({{ period_months }} month{{ "" if period_months == 1 else "s" }}), under Australian Auditing Standards and the Corporations Act 2001.
+
+## Task
+
+Write the narrative of the overall audit strategy and the audit plan (ASA 300 paragraphs 7 and 9). The scope, the procedures and their parameters, materiality and the significant risks below are already decided. Do not add, drop or change any of them; describe them and explain how the audit responds.
+
+## Inputs
+
+Entity:
+- Type: {{ entity.entity_type }}{{ ", listed" if entity.listed else ", not listed" }}
+- Directors: {{ entity.directors | join(", ") if entity.directors else "none recorded" }}
+- Financial year end: {{ entity.financial_year_end or "not recorded" }}; accounting system: {{ entity.accounting_system or "not recorded" }}
+- {{ "First engagement for this client" if first_service else "Previous engagements: " ~ (entity.engagements | join(", ")) }}; prior period audited: {{ "unknown" if entity.prior_period_audited is none else ("yes" if entity.prior_period_audited else "no") }}
+{% if entity.notes %}
+- Notes: {{ entity.notes }}
+{% endif %}
+{% if entity.key_personnel or entity.related_parties or entity.ownership or entity.governance %}
+```json
+{{ {"key_personnel": entity.key_personnel, "related_parties": entity.related_parties, "ownership": entity.ownership, "governance": entity.governance} | tojson(indent=2) }}
+```
+{% endif %}
+
+{% if terms %}
+Engagement terms and appointment (checked at ACC-08):
+```json
+{{ {"framework": terms.framework, "letter_dated_on": terms.letter_dated_on, "direction": terms.direction, "appointment": terms.appointment, "consent": terms.consent, "year_change": terms.year_change} | tojson(indent=2) }}
+```
+{% else %}
+Engagement terms: not checked in this engagement. Do not state the applicable financial reporting framework or the date of the engagement letter.
+{% endif %}
+
+Materiality (decided at PLN-01/03): basis {{ materiality.choice.basis }} at {{ materiality.choice.pct }}; overall materiality {{ materiality.materiality_cents }} cents, performance materiality {{ materiality.performance_materiality_cents }} cents ({{ materiality.choice.performance_pct }} of overall), clearly trivial threshold {{ materiality.clearly_trivial_cents }} cents ({{ materiality.choice.clearly_trivial_pct }} of overall).
+
+Audit objectives:
+{% for o in objectives %}
+- {{ o.id }}: {{ o.account }} / {{ o.assertion }}, risk {{ o.risk_level }}{{ ", material" if o.is_material else "" }}
+{% endfor %}
+
+Risks:
+{% for r in risks %}
+- {{ r.id }} ({{ r.objective_id }}, {{ r.assertion }}, {{ r.level }}{{ ", fraud-related" if r.fraud_related else "" }}): {{ r.description }}
+{% endfor %}
+
+Planned procedures (write one note for each, using these IDs exactly):
+{% for item in items %}
+- {{ item.procedure_id }}: objectives: {{ item.objective_ids | join(", ") if item.objective_ids else "none (performed on every audit)" }}; parameters: {{ item.params | tojson }}
+{% endfor %}
+
+Trial balance at {{ period_end }} (cents; debit positive, credit negative):
+{% for a in trial_balance %}
+- {{ a.code }} {{ a.name }} ({{ a.category or "uncategorised" }}): {{ a.balance_cents }}
+{% endfor %}
+
+{% if analytics %}
+Preliminary analytical procedures (PLN-07): ratios {{ analytics.ratios | tojson }}; {{ analytics.exception_ids | length }} account movement(s) above threshold.
+{% if analytics.monthly %}
+Monthly totals (cents):
+{% for m in analytics.monthly %}
+- {{ m.month }}: revenue {{ m.revenue_cents }}, expenses {{ m.expense_cents }}, of which employee expenses {{ m.employee_expense_cents }}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+{% if revision > 1 %}
+## Revision {{ revision }}
+
+This replaces revision {{ revision - 1 }} of the plan. Reason given by the auditor: {{ revision_reason }}
+
+Address the reason in the affected sections and procedure notes. Keep the rest consistent with the inputs above.
+
+{% endif %}
+## Output (AuditPlanDraft)
+
+- `overall_strategy`: the scope, timing and direction of the audit in one or two paragraphs (ASA 300 para 7).
+- `sections`: section name → text. Always include `scope`, `significant_risks`, `materiality` and `timing`. Add these where the inputs support them:
+  - `scope`: the entity, the financial report and the period; the basis of the audit (for example a shareholder direction or an appointment under the Corporations Act 2001) and any change of financial year, from the engagement terms.
+  - `initial_audit`: for a first engagement, opening balances (ASA 510 para 6), comparative information not audited (ASA 710 para 14) and the activities before starting an initial audit (ASA 300 para 13).
+  - `significant_risks`: each significant risk and the planned response; presumed fraud risks and management override of controls (ASA 240 paras 32 and 33).
+  - `going_concern`: events or conditions that may cast significant doubt on the entity's ability to continue as a going concern, from the trial balance and analytics (ASA 570 para 10).
+  - `other_significant_balances`: material accounts in the trial balance that no objective covers, and how the audit addresses them.
+  - `materiality`: the basis, percentages and the three amounts, with the reason for the basis.
+  - `timing`: when fieldwork, the report and the other milestones happen.
+  - `reporting`: the report to be issued and the deadline for giving it to members, where the inputs give one.
+- `procedure_notes`: one entry per planned procedure above, `procedure_id` copied exactly; `nature_timing_extent` says what is done, when, and on what population or sample (ASA 300 para 9).
+- `timetable`: milestones in date order, each with `milestone` and `due` (ISO date, YYYY-MM-DD), none before {{ period_end }}.
+- `eqr_recommendation`: `required` and `basis`. An engagement quality review is required for a listed entity, where law or regulation requires one, or where the firm decides one is needed to address a quality risk (ASQM 1 para 34(f)). The auditor confirms this when approving the plan.
+- `expert_assessment`: whether the audit needs an auditor's expert (ASA 620), and why.
+- `standards_cited`: the IDs from the Standards list that the plan relies on; no other IDs.
+
+## Rules
+
+- Every fact must come from the inputs. Do not invent dates, people, amounts or documents.
+- Amounts in Australian dollars, e.g. "$1,250,000" (cents divided by 100; drop ".00", keep cents otherwise). Dates in text as "1 July 2025".
+- Australian English; plain text inside each field; no Markdown.

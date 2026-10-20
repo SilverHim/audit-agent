@@ -14,7 +14,7 @@ fragments:
       When performing risk assessment procedures as required by ASA 315 the auditor shall consider whether events or conditions exist that may cast significant doubt on the entity’s ability to continue as a going concern. In so doing, the auditor shall determine whether management has already performed a preliminary assessment of the entity’s ability to continue as a going concern, and:
       (a) If such an assessment has been performed, the auditor shall discuss the assessment with management and determine whether management has identified events or conditions that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern and, if so, management’s plans to address them; or
       (b) If such an assessment has not yet been performed, the auditor shall discuss with management the basis for the intended use of the going concern basis of accounting, and enquire of management whether events or conditions exist that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern.
-    procedures: [GEN-04]
+    procedures: [GEN-04, PLN-15]
   - id: ASA570-Aus13.2
     paragraph: "Aus 13.2"
     topic: relevant_period

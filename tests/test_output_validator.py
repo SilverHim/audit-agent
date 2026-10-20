@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.agents import ingest, review
 from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
@@ -195,19 +196,33 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
 # ── 引用与语义的分派表 (R83) ─────────────────────────────────────────
 
 
+# 模板已引用而引用与语义校验还没实现的输出模型 → 实现它的需求. 这些模型的程序还没有 Agent 执行 (不在启用集与
+# 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着)
+PENDING_CHECKS: dict[type[BaseModel], str] = {AuditPlanDraft: "R204"}
+
+
 def test_every_referenced_output_model_is_registered() -> None:
     """引用方用到的输出模型都已登记引用与语义校验: 程序库全部模板 (含未启用的) 的 llm.output_model, 加上代码里的两份
     规格 (上传文件分类 ingest.CLASSIFY, 独立复核第二轮 review.VERDICT_SPEC). 新加输出模型而漏登记时在此报出,
-    不至于在运行时被兜底转人工 (如上传分类转 needs_manual)."""
+    不至于在运行时被兜底转人工 (如上传分类转 needs_manual). 待实现表 PENDING_CHECKS 中的是已知例外."""
     referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
     referenced |= {output_model(ingest.CLASSIFY), output_model(ingest.STATEMENTS)}
     referenced |= {getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
-    assert sorted(m.__name__ for m in referenced if m not in OutputValidator.CHECKS) == []
+    missing = [m for m in referenced if m not in OutputValidator.CHECKS and m not in PENDING_CHECKS]
+    assert sorted(m.__name__ for m in missing) == []
+
+
+def test_pending_checks_are_not_registered() -> None:
+    """待实现表只放还没登记的模型: 登记了 (需求实现了) 就得从表里删掉, 不留过期的例外; 表里的模型都有模板引用."""
+    assert not set(PENDING_CHECKS) & set(OutputValidator.CHECKS)
+    referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
+    assert set(PENDING_CHECKS) <= referenced
 
 
 def test_dispatch_table_covers_existing_models() -> None:
     """现有 10 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
-    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290)."""
+    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290). AuditPlanDraft 在
+    待实现表中 (R204)."""
     assert set(OutputValidator.CHECKS) == {
         JudgmentDraft,
         ContractExtraction,

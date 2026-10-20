@@ -1,0 +1,38 @@
+id: PLN-15
+name: 总体审计计划
+# 规格书 6.1.2 PLN-15, 12.2 AuditPlan; 设计稿 v2.1 第 6.6 节. PLN-01/03 通过并装配程序包后, A4 按程序包与状态
+# 确定性组装计划骨架 (期间, 适用框架, 重要性, 特别风险目标, 程序与参数), 由大模型写叙述 (AuditPlanDraft: 总体
+# 策略, 各段, 各程序的性质时间范围, 时间表, 项目质量复核建议, 专家评估), 合成 PLAN-{revision} (status draft);
+# PLN-15 闸门批准后置 approved, 驳回按理由出下一修订 (接口文档第 0 节). 执行 (A4) 由 R204 做, 节点与闸门由 R205 做.
+phase: P1_Planning
+cycle: Planning
+owner: A4
+feature: planning                 # 功能开关 (services/features.py): 计划; 关闭时不在程序库与主图中
+outputs: [audit_plans]
+reads: [accounts, trial_balance]  # 提示词带本期试算表; 账表在计划之后变过即过期
+engine: llm
+autonomy_level: L1
+gate: PLN-15
+params:
+  period_start: {ref: period_start}
+  period_end: {ref: period_end}
+# PLN-09 (不可预见性候选) 由 assemble_pack 承担, PLN-16 (总体应对) 未实现, 都不列为前置. 约定书核对结果 TERMS
+# (适用框架, 约定书) 来自 ACC-08, 不是程序依赖; 功能 acceptance 关闭时没有 TERMS, 计划的这两项为空
+depends_on: [PLN-01, PLN-03]
+# ASQM 1 第 34 段只摘 (f) 项, 片段 ID 按子项规则写 ASQM1-P34f (knowledge/standards/ASQM1.yaml)
+standards:
+  - ASA300-P07
+  - ASA300-P09
+  - ASA300-P13
+  - ASA510-P06
+  - ASA710-P14
+  - ASA240-P32
+  - ASA240-P33
+  - ASA570-P10
+  - ASQM1-P34f
+  - CA2001-S293
+  - CA2001-S315-4
+  - CA2001-S323D-2A
+llm:
+  prompt: PLN-15.md.j2
+  output_model: AuditPlanDraft

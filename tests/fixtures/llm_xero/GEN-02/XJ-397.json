@@ -1,0 +1,316 @@
+{
+  "conclusion": "Journal entry XJ-397 (16 July 2026) is the conversion balance brought into Xero: it debits the Business Bank Account (090) AUD 4,130.98 and the Business Savings Account (091) AUD 15,081.23 and credits Historical Adjustment (840) AUD 19,212.21. Both bank accounts then agree with the statements: 090 opens at AUD -8,703.20 + 4,130.98 = -4,572.22, the balance before the first statement line BT-090-0001, and 091 opens at AUD 15,081.23, the balance before BT-091-0001. The 840 credit is the director's interest-free loan, supported by the loan agreement of 10 September 2018 and the director's confirmation of 16 October 2026, so the entry is appropriate; the 30 June 2026 comparative trial balance has no balance for 091 or 840, which is referred to the comparative information check (FIN-12).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-397, posted on 16 July 2026 with the description Conversion Balance, debits 091 AUD 15,081.23 (XJ-397-1) and 090 AUD 4,130.98 (XJ-397-2) and credits 840 Historical Adjustment AUD 19,212.21 (XJ-397-3).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-397-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-397-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-397-3",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "In the prior period trial balance 090 has a balance of AUD -8,703.20; 091 and 840 have no balance.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "090",
+          "locator": "prior_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "091",
+          "locator": "prior_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "840",
+          "locator": "prior_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The first statement line of account BA-090 in the period, BT-090-0001 on 17 July 2026, is AUD -10.50 with a balance after it of AUD -4,582.72, so the account stood at AUD -4,572.22 before it.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0001",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0001",
+          "locator": "balance_after_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The first statement line of account BA-091 in the period, BT-091-0001 on 26 September 2026, is AUD -3,500.00 with a balance after it of AUD 11,581.23, so the account stood at AUD 15,081.23 before it.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-091-0001",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-091-0001",
+          "locator": "balance_after_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The director loan agreement of 10 September 2018 provides that the sole director advances working capital to the company; the loan is interest-free, unsecured and repayable on demand.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-1f4bc9aec6b3",
+          "locator": "1. Advances; 2. Interest and security; 3. Repayment",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The director confirms on 16 October 2026 that the AUD 19,212.21 in account 840 at 30 September 2026 is the total of the loans made since 2018, and that the opening bank balances were brought in against 840.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-3738f404ca43",
+          "locator": "Confirmation of director loan balance, items 1 and 2",
+          "page": 1,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "840",
+          "locator": "current_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Journal entries processed outside the normal course of business, and entries with little or no explanation, call for examination of their underlying support (ASA 240 para A44).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The conversion amounts bring 090 to AUD -8,703.20 + 4,130.98 = -4,572.22 and 091 to AUD 15,081.23, equal to the bank balances before the first statement lines, so both bank sides agree.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The 840 credit equals the director loan balance the director confirms under the 2018 agreement, so the non-standard conversion entry is supported.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "XJ-397 is an appropriate conversion entry; the absence of 091 and 840 from the 30 June 2026 comparative trial balance is a question for the comparative information check (FIN-12), not a misstatement of this period.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        7,
+        8
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-397-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-397-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-397-3",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "090",
+      "locator": "prior_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "091",
+      "locator": "prior_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "840",
+      "locator": "prior_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0001",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0001",
+      "locator": "balance_after_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-091-0001",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-091-0001",
+      "locator": "balance_after_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-1f4bc9aec6b3",
+      "locator": "1. Advances; 2. Interest and security; 3. Repayment",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-3738f404ca43",
+      "locator": "Confirmation of director loan balance, items 1 and 2",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "840",
+      "locator": "current_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Bank statements showing different balances on 16 July 2026, or a director's statement that part of the 840 balance is not a loan, would show the conversion entry is wrong.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.8
+}

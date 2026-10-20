@@ -16,6 +16,7 @@ from backend.agents.base import AgentDeps
 from backend.agents.ingest import unfinished
 from backend.agents.sheets import SheetIntake
 from backend.contracts.data import (
+    REGISTRY_TARGET,
     BatchIssueCode,
     BatchItemEdit,
     DataChange,
@@ -33,8 +34,9 @@ from backend.contracts.models import DocumentRef, DocumentType, Engagement, Reli
 from backend.core.config import get_settings
 from backend.services import data_import, data_service
 from backend.services.data_import import MASK, cell_text, raw_rows
+from backend.services.data_quality import document_request
 from backend.services.data_service import DataService
-from backend.services.import_batches import BatchIntake, column_sample, period_issue, same_company
+from backend.services.import_batches import BatchIntake, column_sample, period_issue, same_company, staged_of
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from tests.external import needs, raw_dir
 from tests.fakes import (
@@ -54,6 +56,9 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.test_documents_upload import workbook_bytes
+from tests.test_registry_extract import DOCUMENT as REGISTRY_DOCUMENT
+from tests.test_registry_extract import REQUEST as REGISTRY_REQUEST
+from tests.test_registry_extract import fixture_extraction as registry_fixture
 from tests.test_sheet_intake import personal_values
 
 EID = ENGAGEMENT.id
@@ -1073,3 +1078,83 @@ async def test_batch_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
         big = await client.post(BASE, files=[("files", ("accounts.csv", demo_csv("accounts")[1], "text/csv"))])
         assert (big.status_code, big.json()["detail"]["code"]) == (413, "FILE_TOO_LARGE")
     assert {k for k in env.data.written[0][0]} == {TableKind.accounts}
+
+
+# ── 批次里的 ASIC 摘录 (需求 R308): 确认时保留识别时的抽取结果, 与单份上传相同 ──
+
+REGISTRY_PDF = "900043030.pdf"  # R64 的合成摘录 (Victoria Property Agency), 固定输出在上传固定输出的 DOC-REGISTRY
+
+
+def registry_env(*overlays: Path) -> Batch:
+    """批次环境: 摘录取固定输出里的文件 ID 与页数, REQ-registry_extract 为 open (按请求定类型, 不调分类); 大模型先读
+    overlays."""
+    env = Batch()
+    env.evidence.ids[REGISTRY_PDF], env.evidence.page_counts[REGISTRY_PDF] = REGISTRY_DOCUMENT, 2
+    env.data.data_requests[REGISTRY_REQUEST] = document_request(
+        DocumentType.registry_extract, "not_provided", NOW, used_for=["ACC-04"]
+    )
+    if overlays:
+        deps = env.service.deps
+        llm = LayeredMockLLM(*overlays, UPLOAD_FIXTURES, MAIN_FIXTURES)
+        validator = OutputValidator(deps.financial_store, deps.library, deps.trail)
+        env.service.deps = replace(deps, llm=llm, judgments=JudgmentEngine(llm, validator, deps.trail, deps.library))
+    return env
+
+
+def registry_outcome(env: Batch) -> tuple[Any, ...]:
+    """处理后可比的结果: 整份文件登记, 摘录的全部抽取记录 (版本, 内容, 写入人, 字段, 理由), 数据变动 (数据版本,
+    种类)."""
+    records = {k: v for k, v in env.data.extractions.items() if k[:2] == (REGISTRY_TARGET, REGISTRY_DOCUMENT)}
+    changes = [(c.data_version, c.input) for c in env.data.data_changes]
+    return env.document(REGISTRY_DOCUMENT), records, changes
+
+
+async def test_batch_keeps_the_registry_extraction_like_a_single_upload() -> None:
+    """验收 1, 3 (R217 审核 R217-03 的探针): 批次里按请求上传的 ASIC 摘录, 识别时抽取的结果随确认单的文件项带到确认
+    (staged_of 还原得出); 确认后文件 extracted, 摘录记第 1 版 (A3), 数据版本 +1 记 registry_extracts, 与单份上传
+    (DataService.upload_documents 按请求) 逐字段相同."""
+    env = registry_env()
+    batch = await env.upload([(REGISTRY_PDF, b"%PDF registry extract")], request_id=REGISTRY_REQUEST)
+    [item] = batch.items
+    assert item.registry is not None and item.issues == [] and item.selected
+    assert staged_of(item).registry == item.registry
+    before = env.data.data_version
+
+    await env.service.confirm_batch(EID, batch.id, "U-1")
+    await asyncio.gather(*list(env.service.tasks))
+
+    assert env.data.data_version == before + 1
+    single = registry_env()
+    await single.service.upload_documents(
+        EID, [(REGISTRY_PDF, b"%PDF registry extract")], actor="U-1", request_id=REGISTRY_REQUEST
+    )
+    await asyncio.gather(*list(single.service.tasks))
+    document, records, changes = batched = registry_outcome(env)
+    assert batched == registry_outcome(single)
+    assert document.status == "extracted" and [key[2] for key in records] == [1]
+    assert next(iter(records.values()))["data"] == registry_fixture().model_dump(mode="json")
+    assert DataInput.registry_extracts in [kind for _, kind in changes]
+
+
+async def test_batch_registry_extraction_that_fails_still_needs_manual(tmp_path: Path) -> None:
+    """验收 2: 识别时摘录抽取不通过 (固定输出缺必填字段): 文件项标 extraction_failed, 不勾选; 审计师勾选后确认,
+    文件照旧 needs_manual (extract), 不写摘录, 不记 registry_extracts."""
+    (tmp_path / "DOC-REGISTRY").mkdir()
+    (tmp_path / "DOC-REGISTRY" / "900043030.json").write_text('{"acn": "900043030"}', encoding="utf-8")
+    env = registry_env(tmp_path)
+    batch = await env.upload([(REGISTRY_PDF, b"%PDF registry extract")], request_id=REGISTRY_REQUEST)
+    [item] = batch.items
+    assert item.registry is None and [i.code for i in item.issues] == [BatchIssueCode.extraction_failed]
+    await env.service.edit_batch_item(EID, batch.id, item.id, BatchItemEdit(selected=True), "U-1")
+
+    await env.service.confirm_batch(EID, batch.id, "U-1")
+    await asyncio.gather(*list(env.service.tasks))
+
+    document, records, changes = registry_outcome(env)
+    assert (document.type, document.status, document.failed_step, records) == (
+        DocumentType.registry_extract,
+        "needs_manual",
+        "extract",
+        {},
+    )
+    assert DataInput.registry_extracts not in [kind for _, kind in changes]

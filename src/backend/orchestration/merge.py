@@ -33,7 +33,9 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     # A2: ACC-04 的评分卡与例外; ACC-08 (功能 acceptance) 另写约定条款, 建议判断与读过的约定文件, 不建复核任务
     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions", "engagement_terms", "judgments", "documents"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
-    AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
+    AgentId.A4: frozenset(
+        {"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions", "audit_plans"}
+    ),
     AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph", "representation_letter"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
     AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
@@ -75,6 +77,7 @@ FIELD_REPLAY: dict[str, Replay] = {
     "governance_communications": Replay.by_run,
     "compliance_checks": Replay.by_procedure,
     "engagement_terms": Replay.singleton,
+    "audit_plans": Replay.by_procedure,
 }
 SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
 LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式

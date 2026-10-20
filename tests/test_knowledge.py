@@ -14,17 +14,22 @@ from typing import Any, Literal, get_args
 import pdfplumber
 import pytest
 import yaml
-from jinja2 import Environment, FileSystemLoader, UndefinedError
+from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
-from backend.contracts.llm_outputs import ContractExtraction, EngagementTermsExtraction
+from backend.contracts.knowledge import LLMSpec
+from backend.contracts.llm_outputs import AuditPlanDraft, ContractExtraction, EngagementTermsExtraction
 from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
+    AgentId,
     AuditObjective,
+    AutonomyLevel,
     ClientProfile,
+    Engine,
     EvidencePointer,
     EvidenceType,
+    GateId,
     Model,
     Phase,
     Procedure,
@@ -39,10 +44,10 @@ from backend.core.config import get_settings
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
-from backend.services.judgment_engine import prompt_env
+from backend.services.judgment_engine import output_model, prompt_env
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.external import optional, supplements_dir
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES, engagement_terms
+from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES, audit_plan, engagement_terms
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
 
@@ -98,12 +103,12 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-05 (功能 journals) 与 GEN-08 (功能 related_parties, 需求
-    R137), 基线下都不启用; 非 P2 模板写 fixed,
-    fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
-    ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131) 与 GEN-08 (功能
+    related_parties, 需求 R137), 基线下都不启用; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的
+    P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals
+    不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05", "GEN-08"]
+    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-02", "GEN-05", "GEN-08"]
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature
@@ -128,7 +133,7 @@ def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> No
         path.unlink()
     (root / "procedures" / "X-OK.yaml").write_text("id: X-OK\nphase: P2_Executing\n" + base, encoding="utf-8")
     enabled = ProcedureLibrary(root, frozenset({"critic", "journals"}))
-    assert [t.id for t in enabled.fixed()] == ["GEN-05", "X-OK"]
+    assert [t.id for t in enabled.fixed()] == ["GEN-02", "GEN-05", "X-OK"]
     assert [t.id for t in ProcedureLibrary(root).fixed()] == ([] if feature else ["X-OK"])
 
 
@@ -1990,6 +1995,112 @@ def test_acc08_prompt_missing_variable_raises(prompt: str, missing: str) -> None
     variables = {k: v for k, v in acc08_variables(prompt).items() if k != missing}
     with pytest.raises(UndefinedError):
         prompt_env(ROOT / "prompts").get_template(prompt).render(variables)
+
+
+# ── R203: PLN-15 程序模板与提示词 ──
+
+PLN15_STANDARDS = [
+    "ASA300-P07",
+    "ASA300-P09",
+    "ASA300-P13",
+    "ASA510-P06",
+    "ASA710-P14",
+    "ASA240-P32",
+    "ASA240-P33",
+    "ASA570-P10",
+    "ASQM1-P34f",  # 需求写 ASQM1-P34F; 片段 ID 按子项规则用小写 (knowledge/standards/ASQM1.yaml)
+    "CA2001-S293",
+    "CA2001-S315-4",
+    "CA2001-S323D-2A",
+]
+
+
+def test_pln15_template() -> None:
+    """R203 验收 5, 9: PLN-15 的各项; 挂功能 planning, 基线下不启用 (不在启用集与固定集), 打开 planning (须带
+    misstatement) 时为 P1 固定集的一条; 准则片段都已登记且各自的 procedures 列了 PLN-15; 输出模型为 AuditPlanDraft."""
+    lib = ProcedureLibrary(ROOT)
+    t = lib.load("PLN-15")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.gate, t.feature) == (
+        "总体审计计划",
+        Phase.P1_Planning,
+        "Planning",
+        AgentId.A4,
+        Engine.llm,
+        AutonomyLevel.L1,
+        GateId.PLN_15,
+        "planning",
+    )
+    assert (t.depends_on, t.outputs, t.triggers, t.fixed) == (["PLN-01", "PLN-03"], ["audit_plans"], [], False)
+    assert t.standards == PLN15_STANDARDS
+    assert t.llm == LLMSpec(prompt="PLN-15.md.j2", output_model="AuditPlanDraft")
+    assert output_model(t) is AuditPlanDraft
+    assert "PLN-15" not in {x.id for x in lib.all()} | {p.id for p in fixed_procedures(lib)}
+    planning = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement", "planning"}))
+    assert planning.enabled("PLN-15") and "PLN-15" in {p.id for p in fixed_procedures(planning)}
+    for fragment_id in t.standards:
+        fragment = lib.fragment(fragment_id)
+        assert fragment is not None and "PLN-15" in fragment.procedures, fragment_id
+
+
+PLN15_VARIABLES = [
+    "entity",
+    "period_start",
+    "period_end",
+    "period_months",
+    "terms",
+    "analytics",
+    "materiality",
+    "objectives",
+    "risks",
+    "items",
+    "trial_balance",
+    "revision",
+    "revision_reason",
+    "standards",
+]
+
+
+def pln15_context(revision: int, terms: dict[str, Any] | None) -> dict[str, Any]:
+    """按头注释的变量造一份最小上下文 (Numbat 画像与合成计划的程序), 只用于检查提示词能渲染."""
+    plan = audit_plan(revision)
+    return {
+        "entity": NUMBAT_PROFILE.model_dump(mode="json"),
+        "period_start": "2025-07-01",
+        "period_end": "2026-06-30",
+        "period_months": 12,
+        "terms": terms,
+        "analytics": {"ratios": {"revenue_growth": 0.1}, "exception_ids": [], "monthly": []},
+        "materiality": {
+            "choice": plan.materiality_choice.model_dump(mode="json"),
+            "materiality_cents": plan.materiality_cents,
+            "performance_materiality_cents": plan.performance_materiality_cents,
+            "clearly_trivial_cents": plan.clearly_trivial_cents,
+        },
+        "objectives": [o.model_dump(mode="json") for o in OBJECTIVES],
+        "risks": [],
+        "items": [i.model_dump(mode="json") for i in plan.items],
+        "trial_balance": [{"code": "4000", "name": "Sales", "category": "revenue", "balance_cents": -1_200_000_000}],
+        "revision": revision,
+        "revision_reason": plan.revision_reason,
+        "standards": [ProcedureLibrary(ROOT).fragment("ASA300-P07").model_dump(mode="json")],  # type: ignore[union-attr]
+    }
+
+
+def test_pln15_prompt_header_lists_its_variables() -> None:
+    """R203 验收 7: 头注释按顺序列出的变量恰为模板用到的变量; 按它们渲染 (缺变量即报错): 第 1 修订没有
+    "## Revision" 段, terms 为空时写明未核对约定条款; 第 2 修订有 "## Revision 2" 与理由, 带 TERMS 时列出框架."""
+    source = (ROOT / "prompts" / "PLN-15.md.j2").read_text(encoding="utf-8")
+    header = source.split("#}", 1)[0]
+    assert re.findall(r"^  (\w+)\s", header, re.MULTILINE) == PLN15_VARIABLES
+    assert meta.find_undeclared_variables(Environment().parse(source)) == set(PLN15_VARIABLES)
+    template = prompt_env(ROOT / "prompts").get_template("PLN-15.md.j2")
+    first = template.render(pln15_context(1, None))
+    assert "## Revision" not in first and "Engagement terms: not checked" in first
+    assert all(f"- {item.procedure_id}:" in first for item in audit_plan().items)
+    terms = engagement_terms()  # R198 的 TERMS 样例, 按 JSON 渲染 (第 2 修订的上下文带它)
+    second = template.render(pln15_context(2, terms.model_dump(mode="json")))
+    assert "## Revision 2" in second and "Add the planned timing of bank confirmations" in second
+    assert f'"framework": "{terms.framework}"' in second and "Engagement terms: not checked" not in second
 
 
 # ── R01 参数解析: 风险等级取最高, by_risk 与 ref 取不到值时报错 ──

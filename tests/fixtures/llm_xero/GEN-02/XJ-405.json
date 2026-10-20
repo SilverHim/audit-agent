@@ -1,0 +1,250 @@
+{
+  "conclusion": "Invoices ORC1003 (journal entry XJ-405) and ORC1008 (XJ-408) were both raised to Hamilton Smith Pty on 17 July 2026 for AUD 550.00, while CON-X02 provides for one invoice for the Monthly Fee of each calendar month, so ORC1003 duplicates ORC1008. ORC1003 has no service-completion record, whereas ORC1008 has the July service record SR-ORC1008. The duplicate was cancelled in full by credit note CR1003 (XJ-430) on 26 July 2026, so the entry has no net effect and the July fee is recorded once.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-405 records invoice ORC1003 to Hamilton Smith Pty on 17 July 2026: revenue AUD 500.00 (XJ-405-1), GST AUD 50.00 (XJ-405-3) and a receivable of AUD 550.00 (XJ-405-2).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "invoice_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "XJ-408 records invoice ORC1008 to the same customer on the same day for the same AUD 550.00.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-408-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+          "locator": "invoice_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Under CON-X02 the supplier issues a tax invoice for the Monthly Fee of each calendar month, on or about the 17th day of that month.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "ORC1008 has the service record SR-ORC1008 for 1 to 31 July 2026; ORC1003 has no service-completion record.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1008",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "id",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Credit note CR1003 (XJ-430) on 26 July 2026 reverses AUD 500.00 of revenue, AUD 50.00 of GST and the AUD 550.00 receivable for Hamilton Smith Pty.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-430-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-430-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Journal entries processed outside the normal course of business, and entries with little or no explanation, call for examination of their underlying support (ASA 240 para A44).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Two July invoices for the one monthly fee, only one of which has a service record, show that ORC1003 duplicates ORC1008.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The duplicate ORC1003 is cancelled in full by CR1003, so XJ-405 has no net effect on revenue, GST or receivables and no misstatement arises.",
+      "evidence": [],
+      "from_steps": [
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "invoice_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-408-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+      "locator": "invoice_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1008",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "id",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-430-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-430-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A second service record for July, or a contract variation providing for two monthly fees, would show ORC1003 is a valid invoice wrongly credited.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

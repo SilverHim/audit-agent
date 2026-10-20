@@ -58,6 +58,7 @@ export const en = {
     'ACC-01': 'Engagement acceptance',
     'ACC-08': 'Engagement terms and appointment',
     'PLN-01/03': 'Materiality and risk register',
+    'PLN-15': 'Overall audit plan',
     'FIN-01': 'Uncorrected misstatements and opinion',
     'RPT-01': 'Report approval and sign-off',
   },
@@ -65,6 +66,7 @@ export const en = {
     'ACC-01': 'Accept this engagement?',
     'ACC-08': 'Are the engagement terms and the appointment in order?',
     'PLN-01/03': 'Approve materiality and the risk register?',
+    'PLN-15': 'Approve the overall audit plan?',
     'FIN-01': 'Confirm the opinion type?',
     'RPT-01': 'Sign the audit report?',
   },
@@ -72,6 +74,7 @@ export const en = {
     'ACC-01': { approve: 'Accept', reject: 'Decline', insufficient_info: 'Need more information' },
     'ACC-08': { approve: 'Approve', reject: 'Decline', insufficient_info: 'Need more information' },
     'PLN-01/03': { approve: 'Approve', reject: 'Send back', insufficient_info: 'Need more information' },
+    'PLN-15': { approve: 'Approve plan', reject: 'Send back', insufficient_info: 'Need more information' },
     'FIN-01': { approve: 'Confirm opinion', reject: 'Send back', insufficient_info: 'Need more information' },
     'RPT-01': {
       approve: 'Sign and archive',
@@ -95,6 +98,11 @@ export const en = {
       reject: 'Rerun preliminary analysis with your comments',
       insufficient_info: 'Keep this decision open',
     },
+    'PLN-15': {
+      approve: 'Approve the plan and start fieldwork',
+      reject: 'Redraft the plan as the next revision with your comments',
+      insufficient_info: 'Keep this decision open',
+    },
     'FIN-01': {
       approve: 'Draft the report with this opinion',
       reject: 'Return to completion work',
@@ -113,6 +121,7 @@ export const en = {
     'PLN-07': 'Preliminary analytical procedures',
     'PLN-01': 'Materiality',
     'PLN-03': 'Risk register sign-off',
+    'PLN-15': 'Overall audit plan',
     'REV-08': 'Three-way match',
     'REV-03': 'Revenue contract terms',
     'REV-02': 'Revenue cut-off',

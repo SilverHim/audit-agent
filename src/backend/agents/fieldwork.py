@@ -1,9 +1,10 @@
-"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05.
+"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02.
 
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
 
-from collections.abc import Awaitable, Callable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar, cast
@@ -38,7 +39,7 @@ from backend.contracts.models import (
     ReviewStatus,
     RuleOutcome,
 )
-from backend.contracts.records import BankAccount, SalesInvoice
+from backend.contracts.records import BankAccount, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import document_pointer
@@ -69,6 +70,38 @@ def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[s
     return not any(abs(interest) in (line.get("debit_cents"), line.get("credit_cents")) for line in lines)
 
 
+CASH_CATEGORY = "cash"  # 货币资金的标准分类: GEN-02 的凭证涉及它时另取银行账户与对账单行
+
+
+def entry_order(entry_no: str) -> tuple[tuple[tuple[str, int], ...], str]:
+    """凭证号的自然序: 按 "非数字段, 数字段" 依次比较, 数字段按数值 (XJ-9 在 XJ-10 之前); 自然序相等时按原文."""
+    parts = tuple((text, int(number) if number else -1) for text, number in re.findall(r"(\D*)(\d*)", entry_no))
+    return tuple(p for p in parts if p != ("", -1)), entry_no
+
+
+def detail_entries(detail: Mapping[str, Any]) -> list[str]:
+    """GEN-05 例外 detail 直接写出的其他凭证号: original_entry_no, reversal_entry_no (R11) 与 full_credits (R12).
+    按键取, 不按规则编号; paired_invoices 写的是分录行, 见 detail_lines."""
+    found = [detail.get("original_entry_no"), detail.get("reversal_entry_no"), *(detail.get("full_credits") or [])]
+    return [str(no) for no in found if no]
+
+
+def detail_lines(detail: Mapping[str, Any]) -> list[str]:
+    """GEN-05 例外 detail 所指的其他发票的分录行: paired_invoices 的 journal_entry_id (R12; 为空的不算)."""
+    return [str(p["journal_entry_id"]) for p in detail.get("paired_invoices") or [] if p.get("journal_entry_id")]
+
+
+def detail_invoices(detail: Mapping[str, Any]) -> list[str]:
+    """GEN-05 例外 detail 所指的发票: matched_invoices (R10), invoice_id 与 paired_invoices 的 invoice_id (R12)."""
+    paired = [p.get("invoice_id") for p in detail.get("paired_invoices") or []]
+    return [str(i) for i in [*(detail.get("matched_invoices") or []), detail.get("invoice_id"), *paired] if i]
+
+
+def journal_rows(lines: Sequence[JournalEntry]) -> list[dict[str, Any]]:
+    """分录行转带 source_type 的 JSON 形式, 顺序不变."""
+    return [{"source_type": "journal_entry", **line.model_dump(mode="json")} for line in lines]
+
+
 Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返回原始发现
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
 SubjectSource = Callable[[RunContext], Awaitable[Subjects]]  # 判断程序取全部判断对象, 带取对象时没有执行的规则
@@ -78,15 +111,16 @@ __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "i
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
-    """A6: 执行收入与货币资金的实质性程序与全量分录扫描 (GEN-05), 产出例外与判断.
+    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05) 与分录例外归因 (GEN-02), 产出例外与判断.
 
-    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02) 共用判断公共流程 (agents/judging.py),
+    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02) 共用判断公共流程 (agents/judging.py),
     各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
-    procedures: ClassVar[frozenset[str]] = frozenset(  # 负责的程序 (GEN-05 属功能 journals, 未启用时注册表不映射)
-        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05"}
+    # 负责的程序 (GEN-05, GEN-02 属功能 journals, 未启用时注册表不映射)
+    procedures: ClassVar[frozenset[str]] = frozenset(
+        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02"}
     )
 
     def __init__(self, deps: AgentDeps) -> None:
@@ -96,6 +130,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         self.subject_sources: dict[str, SubjectSource] = {  # 判断程序编号 -> 取判断对象, 各判断程序接入时登记
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,
+            "GEN-02": self.gen02_subjects,
         }
 
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
@@ -175,14 +210,13 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         都算; 只看当前结果, 过期重跑取代的执行的例外不算, services.staleness), 去重后按发票 ID 排序; 先按 in_scope
         筛选, 再取数据.
 
-        data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice 与 delivery_notes (按 ID 排序) 带 source_type;
-        journal_lines 为该发票过账分录的全部行 (见 invoice_journal_lines), 发票没有 journal_entry_id 时为 [];
-        contract, document (该合同的文件登记, 见 contract_documents), contract_judgment (该合同当前有效的 REV-03 判断,
-        见 contract_judgment) 在发票没有合同时为 null. 规则例外为该发票上前置程序尚未归因的例外 (按 ID 排序).
+        data 字段按 REV-02.md.j2 头注释 (均为 JSON 形式): invoice, delivery_notes, contract 与 document 见
+        invoice_records; journal_lines 为该发票过账分录的全部行 (见 invoice_journal_lines), 发票没有 journal_entry_id 时
+        为 []; contract_judgment 为该合同当前有效的 REV-03 判断 (见 contract_judgment), 发票没有合同时与 contract,
+        document 同为 null. 规则例外为该发票上前置程序尚未归因的例外 (按 ID 排序).
         发票, 发票指向的分录行, 合同或合同文件查不到抛 LookupError.
         """
         eid = ctx.engagement.id
-        store = self.deps.financial_store
         rules = await self.run_rules(ctx)
         earlier = set(ctx.template.depends_on)
         open_findings = sorted(
@@ -197,6 +231,26 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         ids = sorted(i for i in selected | {i for x in open_findings for i in x.source_ids} if in_scope(ctx, i))
         if not ids:
             return Subjects((), rules.outcomes)
+        invoices = await self.invoice_records(ctx, ids)
+        journal_lines = await self.invoice_journal_lines(eid, [invoices[i][0] for i in ids])
+        subjects = []
+        for invoice_id in ids:
+            invoice, record = invoices[invoice_id]
+            judgment = self.contract_judgment(ctx, invoice.contract_id) if invoice.contract_id is not None else None
+            data = record | {"journal_lines": journal_lines[invoice_id], "contract_judgment": judgment}
+            subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
+        return Subjects(subjects, rules.outcomes)
+
+    async def invoice_records(
+        self, ctx: RunContext, ids: Sequence[str]
+    ) -> dict[str, tuple[SalesInvoice, dict[str, Any]]]:
+        """发票与它的单据 (REV-02 与 GEN-02 共用): 发票 ID -> (发票, {invoice, delivery_notes, contract, document}).
+
+        invoice 与 delivery_notes (按 ID 排序) 为带 source_type 的行, contract 为 DOC-04 抽取的合同, document 为该合同的
+        文件登记 (见 registered_documents), 均为 JSON 形式; 发票没有合同时后两项为 None. 发票, 合同或合同文件查不到抛
+        LookupError."""
+        eid = ctx.engagement.id
+        store = self.deps.financial_store
         invoices = {i.id: i for i in await store.sales_invoices(eid, ids)}
         missing = [i for i in ids if i not in invoices]
         if missing:
@@ -204,33 +258,29 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         notes: dict[str, list[dict[str, Any]]] = {i: [] for i in ids}
         for note in sorted(await store.delivery_notes(eid, ids), key=lambda n: n.id):
             notes[note.invoice_id].append({"source_type": "delivery_note", **note.model_dump(mode="json")})
-        journal_lines = await self.invoice_journal_lines(eid, [invoices[i] for i in ids])
         contract_ids = sorted({cast(str, invoices[i].contract_id) for i in ids if invoices[i].contract_id})
         contracts = {c.id: c for c in await store.contracts(eid, contract_ids)} if contract_ids else {}
         documents = await self.registered_documents(ctx) if contracts else {}
-        subjects = []
+        found: dict[str, tuple[SalesInvoice, dict[str, Any]]] = {}
         for invoice_id in ids:
             invoice = invoices[invoice_id]
-            contract, document, judgment = None, None, None
+            contract, document = None, None
             if invoice.contract_id is not None:
-                found = contracts.get(invoice.contract_id)
-                if found is None:
+                matched = contracts.get(invoice.contract_id)
+                if matched is None:
                     raise LookupError(f"发票 {invoice_id} 的合同 {invoice.contract_id} 不在财务数据中")
-                doc = documents.get(found.document_id)
+                doc = documents.get(matched.document_id)
                 if doc is None:
-                    raise LookupError(f"合同 {found.id} 的文件 {found.document_id} 未登记")
-                contract, document = found.model_dump(mode="json"), doc.model_dump(mode="json")
-                judgment = self.contract_judgment(ctx, found.id)
-            data = {
+                    raise LookupError(f"合同 {matched.id} 的文件 {matched.document_id} 未登记")
+                contract, document = matched.model_dump(mode="json"), doc.model_dump(mode="json")
+            record = {
                 "invoice": {"source_type": "sales_invoice", **invoice.model_dump(mode="json")},
                 "delivery_notes": notes[invoice_id],
-                "journal_lines": journal_lines[invoice_id],
                 "contract": contract,
                 "document": document,
-                "contract_judgment": judgment,
             }
-            subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
-        return Subjects(subjects, rules.outcomes)
+            found[invoice_id] = (invoice, record)
+        return found
 
     async def invoice_journal_lines(
         self, eid: str, invoices: Sequence[SalesInvoice]
@@ -282,6 +332,147 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             return None
         latest = max(candidates, key=lambda j: (j.created_at, j.id))
         return latest.model_dump(mode="json", include={"id", "conclusion", "review_status"})
+
+    async def gen02_subjects(self, ctx: RunContext) -> Subjects:
+        """GEN-02 的判断对象: 前置程序 (GEN-05) 尚未归因的例外按 detail 的 entry_no 分组, 每笔凭证一个对象, 按凭证号
+        自然序 (entry_order); 先按 in_scope 筛选, 再取数据. 规则例外为该凭证上尚未归因的例外 (按 ID 排序), fixture_key
+        为凭证号. 只看当前结果 (services.staleness); GEN-05 的例外 detail 缺 entry_no 时抛 ValueError.
+
+        data 字段按 GEN-02.md.j2 头注释 (均为 JSON 形式, 行带 source_type): entry_lines 为本凭证的全部分录行;
+        account_balances 为本凭证各科目的科目表信息与两期试算表余额; bank 见 voucher_bank; related_entries 为相关凭证
+        的全部分录行: 本凭证例外 detail 所指的凭证 (detail_entries, detail_lines 所在凭证) 与 detail 指向本凭证的其他
+        GEN-05 例外所在的凭证 (不含本凭证, 按自然序与行 ID); related_invoices 为本凭证例外 detail 所指的发票
+        (detail_invoices, 按 ID), 每张为 invoice_records 的 invoice 与 delivery_notes; contracts 为这些发票所挂的合同
+        与其文件登记 (invoice_records 的 contract 与 document), 按文件 ID 去重, 按合同编号排序, 同一份合同只送一次,
+        发票以 contract_id 引用; related_findings 为 detail 指向本凭证的其他 GEN-05 例外 (按 ID; 已归因的也算);
+        documents 为关联对象含本凭证号的文件登记与各页文字 (EvidenceStore.pages, 整份送出, 暂不设页数上限);
+        fraud_risks 为风险清单中 fraud_related 为真的全部风险. 本凭证, 相关凭证或 detail 所指的分录行查不到抛
+        LookupError, 发票与合同同 invoice_records. 没有规则 SQL, 不经规则引擎.
+        """
+        eid = ctx.engagement.id
+        store = self.deps.financial_store
+        earlier = set(ctx.template.depends_on)
+        scan = sorted(
+            (x for x in current_results(ctx.state).exceptions if x.procedure_id in earlier), key=lambda x: x.id
+        )
+        entry_of: dict[str, str] = {}
+        for x in scan:
+            entry_no = x.detail.get("entry_no")
+            if not isinstance(entry_no, str) or not entry_no:
+                raise ValueError(f"{x.id} 的 detail 没有 entry_no")
+            entry_of[x.id] = entry_no
+        groups: dict[str, list[AuditException]] = {}
+        for x in scan:
+            if x.disposition is not ExceptionDisposition.attributed and in_scope(ctx, entry_of[x.id]):
+                groups.setdefault(entry_of[x.id], []).append(x)
+        if not groups:
+            return Subjects()
+        refers = await self.referenced_entries(eid, scan)  # 例外 ID -> detail 所指的其他凭证号
+        vouchers = sorted(groups, key=entry_order)
+        related: dict[str, list[str]] = {}
+        referencing: dict[str, list[AuditException]] = {}
+        for no in vouchers:
+            referencing[no] = [x for x in scan if entry_of[x.id] != no and no in refers[x.id]]
+            cited = {r for x in groups[no] for r in refers[x.id]} | {entry_of[x.id] for x in referencing[no]}
+            related[no] = sorted(cited - {no}, key=entry_order)
+        wanted = sorted({*vouchers, *(r for no in vouchers for r in related[no])}, key=entry_order)
+        lines: dict[str, list[JournalEntry]] = {no: [] for no in wanted}
+        for line in await store.journal_entries(eid, entry_nos=wanted):
+            lines[line.entry_no].append(line)
+        missing = [no for no in wanted if not lines[no]]
+        if missing:
+            raise LookupError(f"凭证不在财务数据中: {', '.join(missing)}")
+        codes = sorted({line.account_code for no in vouchers for line in lines[no]})
+        chart = {a.code: a for a in await store.accounts(eid, codes)}
+        current = {r.account_code: r.balance_cents for r in await store.trial_balance(eid, "current")}
+        prior = {r.account_code: r.balance_cents for r in await store.trial_balance(eid, "prior")}
+        invoice_ids = sorted({i for no in vouchers for x in groups[no] for i in detail_invoices(x.detail)})
+        invoices = await self.invoice_records(ctx, invoice_ids) if invoice_ids else {}
+        cash = {code for code in codes if code in chart and chart[code].category == CASH_CATEGORY}
+        bank_accounts = sorted(await store.bank_accounts(eid), key=lambda a: a.id) if cash else []
+        fraud_risks = [r.model_dump(mode="json") for r in ctx.state["risk_register"] if r.fraud_related]
+        subjects = []
+        for no in vouchers:
+            own = lines[no]
+            balances = []
+            for code in sorted({line.account_code for line in own}):
+                account = chart.get(code)
+                balances.append(
+                    {
+                        "source_type": "trial_balance",
+                        "code": code,
+                        "name": account.name if account is not None else None,
+                        "category": account.category if account is not None else None,
+                        "current_cents": current.get(code),
+                        "prior_cents": prior.get(code),
+                    }
+                )
+            touched = {line.account_code for line in own} & cash
+            linked = [a for a in bank_accounts if a.gl_account_code in touched]
+            documents = [
+                {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
+                for d in await store.documents(eid, related_id=no)
+            ]
+            records = [invoices[i][1] for i in sorted({i for x in groups[no] for i in detail_invoices(x.detail)})]
+            contracts: dict[str, dict[str, Any]] = {}  # 文件 ID -> {contract, document}, 同一份合同只送一次
+            for record in records:
+                if record["document"] is not None:
+                    contracts.setdefault(
+                        record["document"]["id"], {"contract": record["contract"], "document": record["document"]}
+                    )
+            data = {
+                "entry_lines": journal_rows(own),
+                "account_balances": balances,
+                "bank": await self.voucher_bank(ctx, own, linked) if touched else None,
+                "related_entries": journal_rows([line for r in related[no] for line in lines[r]]),
+                "related_invoices": [{"invoice": r["invoice"], "delivery_notes": r["delivery_notes"]} for r in records],
+                "contracts": sorted(contracts.values(), key=lambda c: str(c["contract"]["id"])),
+                "related_findings": [x.model_dump(mode="json") for x in referencing[no]],
+                "documents": documents,
+                "fraud_risks": fraud_risks,
+            }
+            subjects.append(Subject(no, data, groups[no]))
+        return Subjects(subjects)
+
+    async def referenced_entries(self, eid: str, findings: Sequence[AuditException]) -> dict[str, set[str]]:
+        """各 GEN-05 例外 detail 所指的凭证号: detail_entries 直接写出的, 加 detail_lines 的分录行经 record 取得的凭证号
+        (同一行只查一次). 分录行查不到抛 LookupError."""
+        entry_of_line: dict[str, str] = {}
+        found: dict[str, set[str]] = {}
+        for x in findings:
+            refs = set(detail_entries(x.detail))
+            for line_id in detail_lines(x.detail):
+                if line_id not in entry_of_line:
+                    row = await self.deps.financial_store.record(eid, "journal_entry", line_id)
+                    if row is None:
+                        raise LookupError(f"{x.id} 所指的分录行 {line_id} 不在财务数据中")
+                    entry_of_line[line_id] = str(row["entry_no"])
+                refs.add(entry_of_line[line_id])
+            found[x.id] = refs
+        return found
+
+    async def voucher_bank(
+        self, ctx: RunContext, lines: Sequence[JournalEntry], accounts: Sequence[BankAccount]
+    ) -> dict[str, Any]:
+        """凭证涉及货币资金科目时的银行上下文: accounts 为这些科目对应的银行账户 (按 ID, 带 source_type); lines 为各账户
+        的对账单行中, 交易日期在凭证日 (分录行的 posting_date, 有多个时取最早与最晚) 前后 bank_window_days 天内 (含
+        两端) 的行, 加该账户本期 (项目期间) 的第一行, 去重后按 (账户, 日期, ID) 排序, 带 source_type."""
+        window = timedelta(days=int(ctx.run.params_snapshot["bank_window_days"]))
+        start, end = ctx.engagement.period_start, ctx.engagement.period_end
+        low, high = min(x.posting_date for x in lines) - window, max(x.posting_date for x in lines) + window
+        found: list[dict[str, Any]] = []
+        for account in accounts:
+            rows = await self.deps.financial_store.bank_transactions(
+                ctx.engagement.id, account.id, min(start, low), max(end, high)
+            )
+            first = next((r for r in rows if start <= r.txn_date <= end), None)
+            chosen = {r.id: r for r in rows if low <= r.txn_date <= high} | ({first.id: first} if first else {})
+            for row in sorted(chosen.values(), key=lambda r: (r.txn_date, r.id)):
+                found.append({"source_type": "bank_transaction", **row.model_dump(mode="json")})
+        return {
+            "accounts": [{"source_type": "bank_account", **a.model_dump(mode="json")} for a in accounts],
+            "lines": found,
+        }
 
     async def assess_confirmations(self, ctx: RunContext) -> CashFindings:
         """CSH-02 的执行: 先做规则部分 (D01, D04, 在代码中做), 再对有例外的账户组装上下文交判断引擎.

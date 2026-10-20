@@ -5313,6 +5313,18 @@
             ],
             "title": "Reply"
           },
+          "registry": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry"
+          },
           "statements": {
             "anyOf": [
               {
@@ -9039,6 +9051,16 @@
             "title": "Annotations",
             "default": []
           },
+          "plan_confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanConfirmation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reason": {
             "anyOf": [
               {
@@ -9126,6 +9148,16 @@
             "title": "Annotations",
             "default": []
           },
+          "plan_confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanConfirmation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reason": {
             "anyOf": [
               {
@@ -9190,11 +9222,12 @@
           "ACC-01",
           "ACC-08",
           "PLN-01/03",
+          "PLN-15",
           "FIN-01",
           "RPT-01"
         ],
         "title": "GateId",
-        "description": "闸门. 基线四道; ACC-08 属功能 acceptance, 登记表 (orchestration/gates.GATES) 的行由需求 R201 加."
+        "description": "闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行\n分别由需求 R201, R205 加."
       },
       "GateVerdict": {
         "type": "string",
@@ -10741,6 +10774,31 @@
         ],
         "title": "Phase",
         "description": "项目阶段."
+      },
+      "PlanConfirmation": {
+        "properties": {
+          "eqr_required": {
+            "type": "boolean",
+            "title": "Eqr Required"
+          },
+          "eqr_basis": {
+            "type": "string",
+            "title": "Eqr Basis"
+          },
+          "auditor_expert_not_required": {
+            "type": "boolean",
+            "title": "Auditor Expert Not Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "eqr_required",
+          "eqr_basis",
+          "auditor_expert_not_required"
+        ],
+        "title": "PlanConfirmation",
+        "description": "审计师在 PLN-15 批准时的确认 (需求 R203), 写进所批准的计划: 是否需要项目质量复核及依据 (ASQM 1 第 34(f) 段),\n以及确认不需要审计师的专家 (ASA 620)."
       },
       "PlanningMaterial": {
         "properties": {

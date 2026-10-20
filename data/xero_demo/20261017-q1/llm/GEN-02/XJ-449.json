@@ -1,0 +1,218 @@
+{
+  "conclusion": "Credit note CR1005 (journal entry XJ-449, 31 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Bank West. Of the six AUD 550.00 invoices it matches by amount, ORC1005 is the only one to Bank West: it was raised the same day, 31 July 2026, and has no service-completion record, while the other five are to other customers. CR1005 cancels ORC1005 in full, so net revenue from the invoice and the credit note is nil and revenue is not affected; no misstatement arises.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-449 (CR1005) on 31 July 2026 debits revenue AUD 500.00 and GST AUD 50.00 and credits the receivable AUD 550.00, with the description Bank West.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-449-3",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-449-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "ORC1005 is an invoice of AUD 550.00 to Bank West raised on 31 July 2026, with no service-completion record.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-b75b3928-ab72-4424-8b93-9cdbbde4cd72",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-b75b3928-ab72-4424-8b93-9cdbbde4cd72",
+          "locator": "invoice_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The other five invoices matched by amount were raised on 17 July 2026 to Hamilton Smith Pty, Yarra Transport, Port Phillip Freight and Rex Media Group.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-76e3f056-479f-417c-a72b-f3d767899b87",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-5613938b-9e27-472e-92ae-3b038b669d10",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-33e4123e-7cdd-4f05-9a0a-eb8adeb2b868",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Journal entries processed outside the normal course of business, and entries with little or no explanation, call for examination of their underlying support (ASA 240 para A44).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Same customer, same day and same amount identify ORC1005 as the invoice CR1005 cancels.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The invoice and the credit note offset, so net revenue is nil, revenue is not affected and no misstatement arises.",
+      "evidence": [],
+      "from_steps": [
+        3,
+        4
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-449-3",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-449-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-b75b3928-ab72-4424-8b93-9cdbbde4cd72",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-b75b3928-ab72-4424-8b93-9cdbbde4cd72",
+      "locator": "invoice_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-76e3f056-479f-417c-a72b-f3d767899b87",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-5613938b-9e27-472e-92ae-3b038b669d10",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-33e4123e-7cdd-4f05-9a0a-eb8adeb2b868",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A service record for ORC1005, or evidence that CR1005 was issued for a different Bank West invoice, would show revenue is understated.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.8
+}

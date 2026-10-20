@@ -9,19 +9,26 @@ from typing import Any
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AcceptanceScorecard,
+    Annotation,
     GateDecision,
     GateId,
     GateVerdict,
     MaterialityCandidates,
+    MaterialityChoice,
+    OpinionType,
+    ReportSection,
 )
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration import gates
 from backend.orchestration.gates import (
+    GATE_SPECIFIC,
     GATES,
     FieldRule,
     allowed_fields,
+    check_fields,
     check_registry,
     current_gate,
     gate_at,
@@ -33,7 +40,7 @@ from backend.orchestration.gates import (
 from backend.orchestration.graph import build_graph, compile_graph
 from backend.orchestration.runner import waiting_for_human
 from backend.services.features import BASELINE
-from tests.fakes import ENGAGEMENT, FakeRegistry, FakeTrail, make_deps, make_graph_nodes
+from tests.fakes import ENGAGEMENT, PLAN_CONFIRMATION, FakeRegistry, FakeTrail, make_deps, make_graph_nodes
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
 JOURNALS = frozenset({"critic", "journals"})
@@ -195,6 +202,30 @@ def test_field_rules_equal_previous(gate: GateId, verdict: GateVerdict) -> None:
     d = decision(gate, verdict, "X")
     assert required_fields(spec_of(gate), d) == previous_required(gate, verdict)
     assert allowed_fields(spec_of(gate), d) == previous_allowed(gate, verdict)
+
+
+# 必填字段的一个合法取值, 只用来补齐必填以便看别的字段
+FILLED = {
+    "reason": "test",
+    "materiality": MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.75, clearly_trivial_pct=0.05),
+    "disposition": OpinionType.unqualified,
+    "annotations": [Annotation(section=ReportSection.opinion, comment="test")],
+}
+
+
+@pytest.mark.parametrize("gate", [spec.gate for spec in GATES])
+@pytest.mark.parametrize("verdict", list(GateVerdict))
+def test_plan_confirmation_not_allowed_before_pln15(gate: GateId, verdict: GateVerdict) -> None:
+    """需求 R203: plan_confirmation 是闸门专属字段, 已登记的闸门都不允许, 带它报 FIELD_NOT_ALLOWED (PLN-15 的登记行由
+    R205 加). 必填字段照各闸门的规则补齐, 只看这一项."""
+    assert "plan_confirmation" in GATE_SPECIFIC and GateId.PLN_15 not in {spec.gate for spec in GATES}
+    spec = spec_of(gate)
+    filled = {name: FILLED[name] for name in required_fields(spec, decision(gate, verdict, "X"))}
+    d = decision(gate, verdict, "X").model_copy(update={**filled, "plan_confirmation": PLAN_CONFIRMATION})
+    assert "plan_confirmation" not in allowed_fields(spec, d)
+    with pytest.raises(DecisionRejected, match="plan_confirmation") as e:
+        check_fields(spec, d)
+    assert e.value.code == "FIELD_NOT_ALLOWED"
 
 
 # ── 验收 5: 挂功能名的闸门 ──

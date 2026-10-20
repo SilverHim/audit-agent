@@ -1,0 +1,210 @@
+{
+  "conclusion": "Journal entry XJ-601 (26 September 2026) records a transfer of AUD 3,500.00 from the Business Savings Account (091) to the Business Bank Account (090). It reposts XJ-599, which recorded the same accounts and amounts under placeholder bank names and was voided by XJ-602 the same day; the accounts and amounts did not change, only the description now uses the account names. The statement lines BT-090-0065 (AUD +3,500.00) and BT-091-0001 (AUD -3,500.00) on 26 September 2026 match the transfer, and both accounts are held with Wattlebrook Bank Limited, so the entry is supported and no misstatement arises.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-601 on 26 September 2026 credits 091 AUD 3,500.00 (XJ-601-1) and debits 090 AUD 3,500.00 (XJ-601-2), described as Bank Transfer from Business Savings Account to Business Bank Account.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-601-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-601-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "XJ-599 on the same day recorded the same amounts on the same accounts, described as Bank Transfer from Ridgeway Savings to NAB Business Account, and XJ-602 reverses it in full.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-599-1",
+          "locator": "description",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-602-1",
+          "locator": "description",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "BT-090-0065 on 26 September 2026 is a deposit of AUD 3,500.00 to account BA-090, and BT-091-0001 the same day a withdrawal of AUD 3,500.00 from account BA-091.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0065",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-091-0001",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Accounts BA-090 (GL 090) and BA-091 (GL 091) are both held with Wattlebrook Bank Limited.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_account",
+          "source_id": "BA-090",
+          "locator": "bank_name",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_account",
+          "source_id": "BA-091",
+          "locator": "bank_name",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Journal entries processed outside the normal course of business, and entries with little or no explanation, call for examination of their underlying support (ASA 240 para A44).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The repost changes only the description from placeholder bank names to the account names; the accounts and amounts are those of the voided entry.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Both statement lines match the transfer, so XJ-601 is supported by external evidence and no misstatement arises.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-601-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-601-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-599-1",
+      "locator": "description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-602-1",
+      "locator": "description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0065",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-091-0001",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_account",
+      "source_id": "BA-090",
+      "locator": "bank_name",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_account",
+      "source_id": "BA-091",
+      "locator": "bank_name",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A statement line showing the AUD 3,500.00 came from an account outside the company, or a second transfer on the statements, would show the entry records the wrong source.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}
