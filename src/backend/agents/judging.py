@@ -150,7 +150,8 @@ def subjects_awaiting_review(ctx: RunContext) -> set[str]:
     """本程序仍有待决复核任务的判断对象: 带 subject_id 的任务 (unattributed), 或以该对象的判断为目标的 normal 任务.
 
     这些对象已交人处理, 结论由审计师的决定给出, 整条重跑时不再重判: 重判会让其例外升版, 旧任务随之过期,
-    整次结果被合并校验拒绝; 也会多出一份待复核的判断. failed 任务在 rerun 时已整组关闭, 不在其中.
+    整次结果被合并校验拒绝; 也会多出一份待复核的判断. 可重跑任务 (failed, unattributed, 需求 R347) 在 rerun 时已
+    整组关闭, 重跑的对象不在其中.
     """
     judgments = {j.id: j for j in ctx.state["judgments"]}
     waiting: set[str] = set()

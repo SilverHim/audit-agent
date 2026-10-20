@@ -36,13 +36,15 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    failed,
     make_ctx,
     make_deps,
     make_run,
     numbat_gen05_result,
+    passed,
 )
 from tests.fixture_sets import XERO
-from tests.test_fieldwork_judging import failed, passed, pending_task
+from tests.test_fieldwork_judging import pending_task
 from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
 from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement
 

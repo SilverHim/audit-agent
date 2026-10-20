@@ -54,6 +54,7 @@ from tests.fakes import (
     FakeRuleEngine,
     FakeTrail,
     ScriptedLLM,
+    failed,
     finished,
     legacy_sends,
     make_ctx,
@@ -62,8 +63,8 @@ from tests.fakes import (
     make_run,
     numbat_confirmation_key,
     numbat_csh05_exception,
+    passed,
 )
-from tests.test_fieldwork_judging import failed, passed
 from tests.xero_harness import FlakyLLM, LayeredMockLLMClient, Ran, offline_deps, run_programs
 from tests.xero_injection import XeroCase
 
@@ -658,3 +659,42 @@ async def test_ba01_fixture_passes_real_engine() -> None:
     reply = next(p for p in j.evidence if p.locator == "confirmed_balance_cents")
     assert reply.page == 1
     assert [t.id for t in patch["review_tasks"]] == ["T-J-CSH-02-1-BA-01-v1"]
+
+
+@pytest.mark.parametrize(
+    ("second", "expected"),
+    [
+        (passed(autonomy_level=AutonomyLevel.L3), ExceptionDisposition.attributed),
+        (failed("unattributed"), ExceptionDisposition.unattributed),
+    ],
+    ids=["closed", "failed_again"],
+)
+async def test_partial_rerun_reuses_earlier_d01(second: Any, expected: ExceptionDisposition) -> None:
+    """需求 R347 (第 1 轮审核 R347-02): 部分重跑是重判. 第 1 次执行 BA-01 判断失败, 本次的 X-CSH-02-1-D01-1 v1 置
+    unattributed; 对其任务 rerun (rerun_subject_ids [BA-01]) 的第 2 次执行沿用它作规则例外, 不新建 X-CSH-02-2-D01-1,
+    只比对 BA-01 (函证照样出新版本). 第 2 次自动关闭 (模板去掉 always_review, L3) 时它出 v2 attributed; 再失败时出 v2
+    unattributed, 任务以 v2 为目标."""
+    agent, ctx, engine = setup(outcomes={"BA-01": failed("unattributed")}, exceptions=[])
+    template = ctx.template.model_copy(update={"always_review": False})
+    first = await agent.run(RunContext(ctx.engagement, ctx.procedure, template, ctx.run, ctx.state))
+    [d01] = first["exceptions"]
+    assert (d01.id, d01.version, d01.disposition) == ("X-CSH-02-1-D01-1", 1, ExceptionDisposition.unattributed)
+
+    engine.outcomes["BA-01"] = second
+    procedure = ctx.procedure.model_copy(update={"rerun_subject_ids": ["BA-01"]})
+    run = ctx.run.model_copy(update={"id": "RUN-CSH-02-2", "run_no": 2})
+    state = ctx.state | {
+        "exceptions": [d01],
+        "procedure_runs": first["procedure_runs"],
+        "confirmations": first["confirmations"],
+    }
+    patch = await agent.run(RunContext(ctx.engagement, procedure, template, run, state))
+
+    assert engine.calls[-1][1].rule_findings == [d01]
+    assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [("X-CSH-02-1-D01-1", 2, expected)]
+    [before] = [c for c in first["confirmations"] if c.bank_account_id == "BA-01"]
+    assert [(c.bank_account_id, c.version) for c in patch["confirmations"]] == [("BA-01", before.version + 1)]
+    unattributed = [(t.id, t.subject_id) for t in patch["review_tasks"] if t.kind is TaskKind.unattributed]
+    assert unattributed == (
+        [("T-X-CSH-02-1-D01-1-v2", "BA-01")] if expected is ExceptionDisposition.unattributed else []
+    )

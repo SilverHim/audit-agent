@@ -23,6 +23,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     Decision,
     DisputeResolution,
+    ExceptionDisposition,
     GateVerdict,
     Judgment,
     ManualResult,
@@ -82,7 +83,9 @@ TST_YAML = (
     "engine: hybrid\nautonomy_level: L2\n"
 )
 TST_OUTPUTS = "outputs: [judgments, exceptions, review_tasks]\n"
-# 每轮执行的脚本: run_no → [(对象, 任务种类)]; normal 出判断与 normal 任务, failed 只出 failed 任务, None 只出判断
+# 每轮执行的脚本: run_no → [(对象, 任务种类)]; normal 出判断与 normal 任务, failed 只出 failed 任务, unattributed 只出
+# 该对象的规则例外 (第 1 版即 unattributed) 与以它为目标, 带对象的 unattributed 任务 (带规则例外的对象判断失败),
+# None 只出判断
 Plan = dict[int, list[tuple[str, TaskKind | None]]]
 ONE: Plan = {1: [("S1", TaskKind.normal)]}
 TWO: Plan = {1: [("S1", TaskKind.normal), ("S2", TaskKind.normal)]}
@@ -173,6 +176,13 @@ class Case(Started):
             if e.kind is TrailKind.transition and e.payload["id"] == oid
         ]
 
+    def decision_payload(self, key: str) -> dict[str, Any]:
+        """决定 key 的 decision 留痕的 payload (只有一行)."""
+        trail = self.runner.deps.trail
+        assert isinstance(trail, FakeTrail)
+        [entry] = [e for e in trail.entries if e.kind is TrailKind.decision and e.idempotency_key == key]
+        return entry.payload
+
     def decision_keys(self) -> list[str | None]:
         trail = self.runner.deps.trail
         assert isinstance(trail, FakeTrail)
@@ -204,6 +214,11 @@ async def at_tst(
             for subject, kind in plan.get(ctx.run.run_no, []):
                 if kind is TaskKind.failed:
                     tasks.append(deps.queue.make_task(kind, run, TST, run.id, NOW, subject_id=subject))
+                    continue
+                if kind is TaskKind.unattributed:
+                    found = tst_exception(run, subject)
+                    exceptions.append(found.model_copy(update={"disposition": ExceptionDisposition.unattributed}))
+                    tasks.append(deps.queue.make_task(kind, exceptions[-1], TST, run.id, NOW, subject_id=subject))
                     continue
                 judgment = tst_judgment(run, subject)
                 if subject in cited:
@@ -739,6 +754,75 @@ async def test_manual_result_and_rerun_recovered(tmp_path: Path, monkeypatch: py
     assert case.seen == [(1, []), (2, ["S2"])]
     assert store_state(case.output_store) == store_state(online.output_store)
     assert await graph_state(case) == await graph_state(online)
+
+
+# ── 需求 R347: unattributed 任务可以重跑, 与 failed 任务同属一轮的组 ──
+
+U, F = TaskKind.unattributed, TaskKind.failed
+Step = tuple[str, int, Any, str]  # 一个决定: (对象, 任务所属的轮次, 决定, 决定 ID)
+# 场景: (每轮的脚本, 依次提交的决定, 第 2 轮起各轮重判的对象); 最后一个决定都是 rerun D-r
+UNATTRIBUTED_ROUNDS: dict[str, tuple[Plan, list[Step], list[list[str]]]] = {
+    "unattributed": ({1: [("S1", U)], 2: [("S1", None)]}, [("S1", 1, rerun, "D-r")], [["S1"]]),
+    "with_failed": (
+        {1: [("S1", F), ("S2", U)], 2: [("S1", None), ("S2", None)]},
+        [("S1", 1, rerun, "D-r")],
+        [["S1", "S2"]],
+    ),
+    "override_first": (
+        {1: [("S1", U), ("S2", U)], 2: [("S2", None)]},
+        [("S1", 1, override, "D-o"), ("S2", 1, rerun, "D-r")],
+        [["S2"]],
+    ),
+    "second_round": (
+        {1: [("S1", F), ("S2", U)], 2: [("S1", F), ("S2", None)], 3: [("S1", None)]},
+        [("S1", 1, rerun, "D-r1"), ("S1", 2, rerun, "D-r")],
+        [["S1", "S2"], ["S1"]],
+    ),
+}
+
+
+@pytest.mark.parametrize("scenario", list(UNATTRIBUTED_ROUNDS))
+async def test_unattributed_tasks_rerun_with_their_round(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str
+) -> None:
+    """R347 (第 1 轮审核 R347-01): P2 以外的节点内等待, 带规则例外的对象判断失败留下的 unattributed 任务允许 rerun,
+    与同一轮的 failed 任务同属一组. unattributed: 对它 rerun, 第 2 轮重判它; with_failed: S1 failed 与 S2 unattributed
+    同轮, 对 S1 rerun 即整组关闭, 第 2 轮一起重判; override_first: S1, S2 都 unattributed, 先推翻 S1 (节点读回后 S1
+    出组), 再对 S2 rerun, 第 2 轮只重判 S2; second_round: 同 with_failed, 第 2 轮 S1 又失败, 再对它 rerun, 第 3 轮只
+    重判 S1. 各场景程序 completed, 走到 FIN-01 闸门. 最后一轮的决定都写了 Store 而检查点停在那一轮的第一次等待 (rerun
+    的留痕也没写成) 时, recover 按 rerun 以外的在前交回, 补写的 rerun 留痕 (含一并关闭的同组任务, 只取同一次执行的)
+    与提交时相同, 结果与在线相同."""
+    plan, steps, rejudged = UNATTRIBUTED_ROUNDS[scenario]
+    last = steps[-1][1]  # 最后一轮的决定在恢复变体里只写 Store
+    online = await at_tst(tmp_path / "online", plan)
+    for subject, run_no, decide, decision_id in steps:
+        task = await online.task(subject, run_no)
+        assert Decision.rerun in online.runner.deps.queue.allowed(task)
+        await submit(online, decide(task, decision_id))
+    assert (await online.runner.app.aget_state(CONFIG)).next == ("gate_fin",)
+    assert online.seen == [(1, []), *enumerate(rejudged, 2)]
+    assert online.latest(Procedure, TST).status is ProcedureStatus.completed
+    tasks = await online.output_store.latest(EID, ReviewTask, procedure_id=TST)
+    assert {t.kind for t in tasks} <= {U, F} and all(t.status is TaskStatus.decided for t in tasks)
+
+    case = await at_tst(tmp_path / "lost", plan)
+    for subject, run_no, decide, decision_id in steps:
+        record = decide(await case.task(subject, run_no), decision_id)
+        if run_no < last:
+            await submit(case, record)
+        else:  # rerun 的留痕也没写成, 由 recover 补写
+            await submit_unread(case, record, monkeypatch, decide is rerun)
+    assert await case.waits() == [tst_payload([r for _, n, _, r in steps if n < last], run_no=last)]
+    order = delivered(case, monkeypatch)
+    await case.runner.recover()
+    await wait_idle(case.runner, EID)
+
+    assert case.runner.run_error(EID) is None
+    assert order == [decision_id for _, run_no, _, decision_id in steps if run_no == last]
+    assert case.seen == online.seen
+    assert store_state(case.output_store) == store_state(online.output_store)
+    assert await graph_state(case) == await graph_state(online)
+    assert case.decision_payload("D-r") == online.decision_payload("D-r")  # 补写的同组任务与提交时相同
 
 
 async def test_rerun_on_normal_task_delivered_to_node_is_a_node_error(tmp_path: Path) -> None:

@@ -3,7 +3,8 @@
 
 - 演示决定表 (decision_table) 与一条待决任务的决定 (review_body, dispute_fields): 按决定表期望的结论, 不看模型的
   建议动作; failed 与 unattributed 任务 (判断失败, 后者为带规则例外的对象, 需求 R347) 每个对象至多重跑一次, 计划与
-  报告整条失败按修订计 (REVISED_BY); unattributed 重跑后仍失败才按决定表推翻或认定错报.
+  报告整条失败按修订计 (REVISED_BY); unattributed 重跑后仍失败才按决定表推翻或认定错报. 一轮失败算一组: 对一条
+  rerun 时同程序其余待决的可重跑任务随之重跑, 一并计数.
 - drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk.
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑);
   assert_hard 与 warn_soft 为两级检查.
@@ -13,7 +14,7 @@
 import json
 import warnings
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -98,7 +99,7 @@ class LiveWalk:
     gates: list[str] = field(default_factory=list)  # 依次决定过的闸门
     fin: str | None = None  # FIN-01 选定的意见类型
     candidate: str | None = None  # 汇总表的候选意见
-    # (程序, 对象) → 重跑过的次数 (failed 与 unattributed 任务)
+    # (程序, 对象) → 重跑过的次数 (failed 与 unattributed 任务; 下 rerun 时同组随之重跑的也计, 第 1 轮审核 R347-03)
     failures: Counter[tuple[str, str]] = field(default_factory=Counter)
     troubled: dict[str, tuple[str, str, str]] = field(default_factory=dict)  # 任务 ID → (程序, 对象, 类型), 非 normal
     decisions: list[tuple[str, str]] = field(default_factory=list)  # (任务 ID, 决定)
@@ -121,12 +122,26 @@ def subject_of(view: dict[str, Any]) -> str:
 REVISED_BY = {"PLN-15": "PLN-15", "RPT-03": "RPT-01"}
 
 
-def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk) -> dict[str, Any]:
-    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明)."""
+RERUNNABLE = ("failed", "unattributed")  # 可重跑的任务类型 (review_queue.RERUNNABLE)
+
+
+def rerun_key(view: dict[str, Any], walk: LiveWalk) -> tuple[str, str]:
+    """重跑计数的键 (程序, 对象): 对象见 subject_of; 计划与报告整条失败的按修订 (REVISED_BY)."""
     task = view["task"]
-    kind, pid, subject = task["kind"], task["procedure_id"], subject_of(view)
-    if kind == "failed" and not subject and pid in REVISED_BY:
+    pid, subject = task["procedure_id"], subject_of(view)
+    if task["kind"] == "failed" and not subject and pid in REVISED_BY:
         subject = f"r{walk.gates.count(REVISED_BY[pid]) + 1}"
+    return pid, subject
+
+
+def review_body(
+    view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk, pending: Sequence[dict[str, Any]] = ()
+) -> dict[str, Any]:
+    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明). pending 为当时全部
+    待决任务 (复核队列各项): 下 rerun 时同程序其余可重跑的任务随之重跑 (一轮失败算一组), 一并计数."""
+    task = view["task"]
+    kind = task["kind"]
+    pid, subject = rerun_key(view, walk)
     body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
     if kind != "normal":
         walk.troubled[task["id"]] = (pid, subject, kind)
@@ -137,6 +152,15 @@ def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk
         walk.failures[pid, subject] += 1
         if walk.failures[pid, subject] > 1:
             pytest.fail(f"{pid} {subject or '(整条)'} 重跑后又失败: {task['id']}")
+        group = [  # 同组随之重跑的 (DecisionSubmit 一并关闭), 也算重跑过一次
+            other
+            for other in pending
+            if other["task"]["procedure_id"] == pid
+            and other["task"]["kind"] in RERUNNABLE
+            and other["task"]["id"] != task["id"]
+        ]
+        for other in group:
+            walk.failures[rerun_key(other, walk)] += 1
         return body | {"decision": "rerun", "reason": RERUN_REASON}
     if kind in ("normal", "unattributed"):  # 无解释的例外: 认定错报或推翻, 不能确认
         if expected.decision == "misstatement":
@@ -214,7 +238,7 @@ async def drive(
             return walk
         pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
         if pending:
-            body = review_body(pending[0], table, walk)
+            body = review_body(pending[0], table, walk, pending)
             walk.decisions.append((body["task_id"], body["decision"]))
             await post("review-records", body)
             continue

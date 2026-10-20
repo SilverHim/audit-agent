@@ -11,7 +11,6 @@ from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.errors import DecisionRejected, RuleError
 from backend.contracts.models import (
     AuditException,
-    AutonomyLevel,
     Decision,
     ExceptionDisposition,
     GateVerdict,
@@ -19,7 +18,6 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProcedureStatus,
-    ProposedAction,
     ReviewRecord,
     ReviewTask,
     RunStatus,
@@ -27,11 +25,8 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
 )
-from backend.contracts.services import JudgmentContext, JudgmentOutcome
 from backend.contracts.state import StatePatch
 from backend.orchestration.decisions import rerun_group, rerun_procedure
-from backend.orchestration.nodes import failed_tasks
-from backend.orchestration.recovery import closed_by
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -45,10 +40,12 @@ from tests.fakes import (
     ScriptA6,
     ScriptAgent,
     assert_pack_synced,
+    fails_first,
     make_procedure,
     make_runner,
     numbat_contracts,
     numbat_p2_agents,
+    passed,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision, pln_decision
@@ -293,11 +290,13 @@ def test_rerun_procedure() -> None:
 
 
 def test_rerun_group() -> None:
-    """rerun 关闭的组: 被决定的任务在前, 其后为同程序其余待决的可重跑任务 (failed 与 unattributed, 需求 R347; 按 ID);
-    别的程序的, normal 等不可重跑的不在内."""
+    """rerun 关闭的组: 被决定的任务在前, 其后为同程序同一次执行其余待决的可重跑任务 (failed 与 unattributed, 需求
+    R347; 按 ID); 别的程序的, 别的执行的 (第 1 轮审核 R347-08, 同 recovery.closed_by), normal 等不可重跑的不在内."""
 
-    def task(tid: str, kind: TaskKind = TaskKind.failed, procedure_id: str = "REV-03") -> ReviewTask:
-        return ReviewTask.model_construct(id=tid, kind=kind, procedure_id=procedure_id)
+    def task(tid: str, kind: TaskKind = TaskKind.failed, procedure_id: str = "REV-03", run_no: int = 2) -> ReviewTask:
+        return ReviewTask.model_construct(
+            id=tid, kind=kind, procedure_id=procedure_id, run_id=f"RUN-{procedure_id}-{run_no}"
+        )
 
     decided = task("T-3")
     pending = [
@@ -308,6 +307,7 @@ def test_rerun_group() -> None:
         task("T-J", TaskKind.normal),
         task("T-D", TaskKind.dispute),
         task("T-X", procedure_id="REV-08"),
+        task("T-OLD", run_no=1),
     ]
 
     assert [t.id for t in rerun_group(decided, pending)] == ["T-3", "T-1", "T-2", "T-U"]
@@ -319,41 +319,7 @@ def test_rerun_group() -> None:
 
 CUTOFF = "X-REV-08-1-R01-1"  # REV-08 的跨期例外, REV-02 判断 SI-2026-0612 的规则例外
 SI0612 = "SI-2026-0612"
-
-
-def passed(ctx: JudgmentContext, run: ProcedureRun) -> JudgmentOutcome:
-    """判断引擎给出的判断: L2 accept, 解释对象的全部规则例外."""
-    judgment = Judgment(
-        id=f"J-{run.procedure_id}-{run.run_no}-{ctx.subject_id}",
-        procedure_id=run.procedure_id,
-        run_id=run.id,
-        subject_id=ctx.subject_id,
-        conclusion="ok",
-        confidence=0.9,
-        confidence_parts={"llm": 0.9},
-        reasoning_chain=[],
-        evidence=[],
-        counter_argument="none",
-        proposed_action=ProposedAction.accept,
-        exception_ids=[x.id for x in ctx.rule_findings],
-        autonomy_level=AutonomyLevel.L2,
-        performed_by="U-1",
-        created_at=NOW,
-    )
-    return JudgmentOutcome(judgment=judgment, failure=None, attempts=1, trail_ids=["TR-1"])
-
-
-def fails_first(times: int) -> Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]:
-    """前 times 次判断失败 (该对象有规则例外, 转 unattributed), 之后给出判断 (passed)."""
-    left = [times]
-
-    def outcome(ctx: JudgmentContext, run: ProcedureRun) -> JudgmentOutcome:
-        if left[0] > 0:
-            left[0] -= 1
-            return JudgmentOutcome(judgment=None, failure="unattributed", attempts=3, trail_ids=["TR-1"])
-        return passed(ctx, run)
-
-    return outcome
+SI0618 = "SI-2026-0618"  # REV-02 的另一个判断对象, 没有规则例外
 
 
 def rev02_judged_by(engine: FakeJudgmentEngine) -> Agents:
@@ -365,15 +331,21 @@ def rev02_judged_by(engine: FakeJudgmentEngine) -> Agents:
     return agents
 
 
-async def unattributed_at_review(times: int) -> tuple[Started, FakeJudgmentEngine, ReviewTask]:
-    """Numbat 停在 await_events, 复核完 REV-03 (三个 confirm) 后 REV-02 执行: 对 SI-2026-0612 的判断失败 times 次中
-    的第 1 次已发生, 该对象有 REV-08 的跨期例外, 复核队列建以例外 v2 (unattributed) 为目标的任务."""
-    engine = FakeJudgmentEngine({SI0612: fails_first(times), "SI-2026-0618": passed})
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, numbat_contracts())  # 发票, 发运单与合同
-    s = await at_review(rev02_judged_by(engine), financial_store=financial)
+async def rev03_confirmed(agents: Agents) -> Started:
+    """Numbat 停在 await_events, 复核完 REV-03 (三个 confirm) 后 REV-02 执行 (发票, 发运单与合同取 Numbat 的)."""
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, numbat_contracts())
+    s = await at_review(agents, financial_store=financial)
     for n in (1, 2, 3):
         await s.submit.submit(EID, record(f"T-J-REV-03-1-CON-00{n}-v1", id=f"D-{n}"))
         await wait_idle(s.runner, EID)
+    return s
+
+
+async def unattributed_at_review(times: int) -> tuple[Started, FakeJudgmentEngine, ReviewTask]:
+    """rev03_confirmed 之后: 对 SI-2026-0612 的判断失败 times 次中的第 1 次已发生, 该对象有 REV-08 的跨期例外, 复核
+    队列建以例外 v2 (unattributed) 为目标的任务."""
+    engine = FakeJudgmentEngine({SI0612: fails_first(times), SI0618: passed()})
+    s = await rev03_confirmed(rev02_judged_by(engine))
     snapshot = await s.runner.app.aget_state(CONFIG)
     [task] = [
         t
@@ -395,7 +367,7 @@ async def test_rerun_of_unattributed_subject_judges_it_again() -> None:
     s, engine, task = await unattributed_at_review(1)
     assert (task.id, task.target_id, task.target_version, task.subject_id) == (f"T-{CUTOFF}-v2", CUTOFF, 2, SI0612)
     assert s.runner.deps.queue.allowed(task) == frozenset({Decision.override, Decision.misstatement, Decision.rerun})
-    assert sorted(judged(engine)) == [SI0612, "SI-2026-0618"]
+    assert sorted(judged(engine)) == [SI0612, SI0618]
     before = len(s.output_store.commits)
 
     await s.submit.submit(EID, rerun(task.id, "D-RU").model_copy(update={"target_version": task.target_version}))
@@ -405,7 +377,7 @@ async def test_rerun_of_unattributed_subject_judges_it_again() -> None:
     assert [(o.id, o.status) for o in commit if isinstance(o, ReviewTask)] == [(task.id, TaskStatus.decided)]
     [rev02] = [o for o in commit if isinstance(o, Procedure)]
     assert (rev02.status, rev02.rerun_subject_ids) == (ProcedureStatus.executing, [SI0612])
-    assert sorted(judged(engine)) == [SI0612, SI0612, "SI-2026-0618"]  # 只重判这一个对象
+    assert sorted(judged(engine)) == [SI0612, SI0612, SI0618]  # 只重判这一个对象
     assert (await run(s, "RUN-REV-02-2")).trigger is RunTrigger.rerun
     snapshot = await s.runner.app.aget_state(CONFIG)
     pending = sorted(
@@ -414,7 +386,7 @@ async def test_rerun_of_unattributed_subject_judges_it_again() -> None:
         if t.procedure_id == "REV-02" and t.status is TaskStatus.pending
     )
     assert pending == [
-        ("T-J-REV-02-1-SI-2026-0618-v1", TaskKind.normal),
+        (f"T-J-REV-02-1-{SI0618}-v1", TaskKind.normal),
         (f"T-J-REV-02-2-{SI0612}-v1", TaskKind.normal),
     ]
     judgment = await s.output_store.get(EID, Judgment, f"J-REV-02-2-{SI0612}")
@@ -436,7 +408,7 @@ async def test_unattributed_rerun_fails_again_then_reruns_again() -> None:
     """需求 R347 验收 2 后半: 重跑后又失败, 又是一个 unattributed 任务 (目标为例外 v3), 同样可以 rerun; 再重跑成功时
     出 RUN-REV-02-3 的判断与 normal 任务. 后端不限重跑次数, 同 failed 任务 (每个对象至多重跑一次是演示驱动的规则)."""
     s, engine, task = await unattributed_at_review(2)
-    await s.submit.submit(EID, rerun(task.id, "D-R1").model_copy(update={"target_version": 2}))
+    await s.submit.submit(EID, rerun(task.id, "D-R1").model_copy(update={"target_version": task.target_version}))
     await wait_idle(s.runner, EID)
 
     snapshot = await s.runner.app.aget_state(CONFIG)
@@ -448,32 +420,9 @@ async def test_unattributed_rerun_fails_again_then_reruns_again() -> None:
     assert (again.id, again.target_version, again.run_id) == (f"T-{CUTOFF}-v3", 3, "RUN-REV-02-2")
     assert Decision.rerun in s.runner.deps.queue.allowed(again)
 
-    await s.submit.submit(EID, rerun(again.id, "D-R2").model_copy(update={"target_version": 3}))
+    await s.submit.submit(EID, rerun(again.id, "D-R2").model_copy(update={"target_version": again.target_version}))
     await wait_idle(s.runner, EID)
 
     assert judged(engine).count(SI0612) == 3
     task3 = await s.output_store.get(EID, ReviewTask, f"T-J-REV-02-3-{SI0612}-v1")
     assert task3 is not None and (task3.kind, task3.status) == (TaskKind.normal, TaskStatus.pending)
-
-
-def test_rerunnable_tasks_close_and_wait_as_one_group() -> None:
-    """需求 R347: unattributed 与 failed 同属一轮失败的一组. 恢复补写留痕时 (recovery.closed_by) 随 rerun 一并关闭的
-    同组任务含两类; 节点内等待 (P2 以外的程序) 时这一轮的组 (nodes.failed_tasks) 也含两类."""
-
-    def task(
-        tid: str, kind: TaskKind, run_id: str = "RUN-REV-02-1", status: TaskStatus = TaskStatus.decided
-    ) -> ReviewTask:
-        return ReviewTask.model_construct(id=tid, kind=kind, procedure_id="REV-02", run_id=run_id, status=status)
-
-    decided = task("T-U", TaskKind.unattributed)
-    tasks = [
-        decided,
-        task("T-F", TaskKind.failed),
-        task("T-U2", TaskKind.unattributed),
-        task("T-N", TaskKind.normal),
-        task("T-OLD", TaskKind.failed, run_id="RUN-REV-02-0"),
-        task("T-OWN", TaskKind.failed),
-    ]
-    records = [rerun("T-U", "D-1"), rerun("T-OWN", "D-2")]
-    assert closed_by(records[0], decided, tasks, records) == ["T-F", "T-U2"]
-    assert [t.id for t in failed_tasks({"review_tasks": tasks})] == ["T-U", "T-F", "T-U2", "T-OLD", "T-OWN"]

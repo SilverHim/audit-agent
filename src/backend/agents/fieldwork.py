@@ -61,7 +61,7 @@ class CashFindings:
     引擎没有执行的规则 (D02, D03 的执行前检查命中时, 需求 R130)."""
 
     confirmations: list[Confirmation]  # 写入账面余额, 差额与结果的函证新版本
-    exceptions: list[AuditException]  # 回函与账面不符的 D01 例外, 回函应计利息未入账的 D04 例外
+    exceptions: list[AuditException]  # 本次新建的 D01 (回函与账面不符), D04 (回函应计利息未入账); 部分重跑时为空
     judged: list[Judged] = field(default_factory=list)  # 有 D01 或 D04 的账户的判断结果
     outcomes: list[RuleOutcome] = field(default_factory=list)  # 规则引擎没有执行的规则
 
@@ -610,6 +610,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         (见 accrued_interest_exception, 在 D04 内同样按账户编号), 函证结果不变 (余额相符的仍为 agreed).
         函证还没有回函余额时抛 ValueError. 账户的筛选同判断对象 (in_scope).
         判断对象为有 D01 或 D04 的账户 (按账户 ID, 每个账户一次), 候选调节项取规则 D02, D03 的行 (按账户切分).
+        部分重跑 (rerun_subject_ids 非空, 可重跑任务的 rerun) 是重判, 不重建例外 (需求 R347, 第 1 轮审核 R347-02):
+        重判的账户沿用此前执行自己出的 D01, D04 (previous_findings), 有才判断, 判断确认时给同一 ID 出 attributed 新版本;
+        若照常新建 (ID 带 run_no), 上一轮已置 unattributed 的那条就没有任务再指向它. 整条重跑 (过期重跑取代旧执行,
+        整次失败后的重跑) 照常新建.
         """
         eid = ctx.engagement.id
         rules = await run_rules(self.deps, ctx)
@@ -632,6 +636,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         differences: list[AuditException] = []  # D01, 按账户编号
         accrued: list[AuditException] = []  # D04, 按账户编号
         subjects: list[Subject] = []
+        rejudge = bool(ctx.procedure.rerun_subject_ids)  # 部分重跑: 沿用此前的 D01, D04, 不新建
         for c in confirmations:
             if c.confirmed_balance_cents is None:
                 raise ValueError(f"{c.id} 还没有回函余额 (DOC-06 未抽取)")
@@ -653,23 +658,42 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             unbooked = accrued_interest_unbooked(
                 confirmation, rules.rows.get("D04", []), params["clearly_trivial_cents"]
             )
-            if not difference and not unbooked:
+            # 部分重跑: 有此前的 D01, D04 才判断; 否则按本次比对新建
+            found = self.previous_findings(ctx, account.id) if rejudge else []
+            if not found and (rejudge or not (difference or unbooked)):
                 continue
             reply = documents.get(cast(str, confirmation.reply_document_id))
             if reply is None:
                 raise LookupError(f"{confirmation.id} 的回函 {confirmation.reply_document_id} 未登记")
-            found: list[AuditException] = []
-            if difference:
-                differences.append(self.difference_exception(ctx, confirmation, account, reply, len(differences) + 1))
-                found.append(differences[-1])
-            if unbooked:
-                accrued.append(
-                    self.accrued_interest_exception(ctx, confirmation, account, reply, window, len(accrued) + 1)
-                )
-                found.append(accrued[-1])
+            if not rejudge:
+                if difference:
+                    n = len(differences) + 1
+                    differences.append(self.difference_exception(ctx, confirmation, account, reply, n))
+                    found.append(differences[-1])
+                if unbooked:
+                    n = len(accrued) + 1
+                    accrued.append(self.accrued_interest_exception(ctx, confirmation, account, reply, window, n))
+                    found.append(accrued[-1])
             subjects.append(self.cash_subject(ctx, confirmation, account, reply, found, rules))
         judged = await self.judge_all(ctx, subjects)
         return CashFindings(updated, [*differences, *accrued], judged, rules.outcomes)
+
+    @staticmethod
+    def previous_findings(ctx: RunContext, account_id: str) -> list[AuditException]:
+        """部分重跑时重判账户沿用的规则例外: 当前结果中本程序此前执行在该账户上出的 D01, D04 里尚未归因的 (第 1 版
+        open, 或判断失败时置的 unattributed 版本), 按规则 (D01 在前) 与 ID 排序. 例: Xero BA-091 第 1 轮判断失败,
+        对其 unattributed 任务 rerun → 第 2 轮沿用 X-CSH-02-1-D04-1 v1 (unattributed), 不建 X-CSH-02-2-D04-1."""
+        return sorted(
+            (
+                x
+                for x in current_results(ctx.state).exceptions
+                if x.procedure_id == ctx.procedure.id
+                and x.rule_id in ("D01", "D04")
+                and account_id in x.source_ids
+                and x.disposition is not ExceptionDisposition.attributed
+            ),
+            key=lambda x: (x.rule_id, x.id),
+        )
 
     @staticmethod
     def difference_exception(
@@ -751,8 +775,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     ) -> Subject:
         """有 D01 或 D04 的账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
 
-        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加本次在该账户上
-        的 D01, D04 (found, 依次). reply 为回函当前的文件登记 (调用方按 registered_documents 取, 未登记抛 LookupError).
+        规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加该账户上本程序
+        的 D01, D04 (found, 依次: 本次新建的, 部分重跑时为沿用的 previous_findings). reply 为回函当前的文件登记
+        (调用方按 registered_documents 取, 未登记抛 LookupError).
         """
         earlier = set(ctx.template.depends_on)
         findings = sorted(
@@ -784,8 +809,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """CSH-02 的解读: 函证新版本与 D01, D04 例外, 加上要判断的账户的判断片段 (judgments_patch).
 
-        D01, D04 是本次刚建的 (fresh): 判断失败时第一条规则例外可能就是它们, 置 unattributed 写在第 1 版上, 取代刚建的
-        那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict); 顺序同 findings.exceptions.
+        本次新建的 D01, D04 (findings.exceptions) 是 fresh: 判断失败时第一条规则例外可能就是它们, 置 unattributed 写在
+        第 1 版上, 取代刚建的那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict); 顺序同
+        findings.exceptions. 部分重跑沿用的不是 fresh, 归因或再置 unattributed 时照常出新版本 (需求 R347).
         """
         assert isinstance(findings, CashFindings)
         fresh = {x.id: x.version for x in findings.exceptions}

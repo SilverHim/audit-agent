@@ -204,7 +204,7 @@ from backend.services.abn import normalize_abn
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
-from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from backend.services.judgment_engine import MAX_ATTEMPTS, JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
@@ -1721,6 +1721,60 @@ class FakeJudgmentEngine:
     ) -> JudgmentOutcome:
         self.calls.append((template.id, ctx, performed_by))
         return self.outcomes[ctx.subject_id](ctx, run)
+
+
+Outcome = Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]  # FakeJudgmentEngine 对一个对象的预置结果
+
+
+def judgment(ctx: JudgmentContext, run: ProcedureRun, **changes: Any) -> Judgment:
+    """判断引擎会给出的判断: 缺省 accept, L2, 解释对象的全部规则例外; changes 改其中的字段."""
+    base = Judgment(
+        id=f"J-{run.procedure_id}-{run.run_no}-{ctx.subject_id}",
+        procedure_id=run.procedure_id,
+        run_id=run.id,
+        subject_id=ctx.subject_id,
+        conclusion="ok",
+        confidence=0.9,
+        confidence_parts={"llm": 0.9},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="none",
+        proposed_action=ProposedAction.accept,
+        exception_ids=[x.id for x in ctx.rule_findings],
+        autonomy_level=AutonomyLevel.L2,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    return base.model_copy(update=changes)
+
+
+def passed(**changes: Any) -> Outcome:
+    """判断成功 (judgment, 一次调用)."""
+    return lambda ctx, run: JudgmentOutcome(
+        judgment=judgment(ctx, run, **changes), failure=None, attempts=1, trail_ids=["TR-1"]
+    )
+
+
+FailureKind = Literal["failed", "unattributed"]
+
+
+def failed(kind: FailureKind) -> Outcome:
+    """判断失败 (failure 为 kind), 用满 MAX_ATTEMPTS 次调用."""
+    trail = [f"TR-{n}" for n in range(1, MAX_ATTEMPTS + 1)]
+    return lambda ctx, run: JudgmentOutcome(judgment=None, failure=kind, attempts=MAX_ATTEMPTS, trail_ids=trail)
+
+
+def fails_first(times: int, kind: FailureKind = "unattributed") -> Outcome:
+    """前 times 次判断失败 (failed(kind)), 之后成功 (passed())."""
+    left = [times]
+
+    def outcome(ctx: JudgmentContext, run: ProcedureRun) -> JudgmentOutcome:
+        if left[0] > 0:
+            left[0] -= 1
+            return failed(kind)(ctx, run)
+        return passed()(ctx, run)
+
+    return outcome
 
 
 class FakeConfirmationChannel:
@@ -3427,10 +3481,10 @@ async def preset_rerun(
     rerun_params: dict[str, Any] | None = None,
     eid: str = ENGAGEMENT.id,
 ) -> ReviewRecord:
-    """模拟审计师对 failed 任务提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节决定的效果 rerun 行),
-    在一个事务内: 决定, 同程序全部待决的 failed 任务 decided 新版本 (一轮失败算一组, Q17), 程序 executing 新版本
-    (params 合并 rerun_params, rerun_subject_ids 取整组对象). 组与程序新版本用 DecisionSubmit 的同一套函数算.
-    返回写入的决定.
+    """模拟审计师对可重跑任务 (failed, unattributed) 提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节
+    决定的效果 rerun 行), 在一个事务内: 决定, 同程序同一次执行全部待决的可重跑任务 decided 新版本 (一轮失败算一组,
+    Q17), 程序 executing 新版本 (params 合并 rerun_params, rerun_subject_ids 取整组对象). 组与程序新版本用
+    DecisionSubmit 的同一套函数算. 返回写入的决定.
     """
     record = ReviewRecord(
         id=record_id,

@@ -41,13 +41,15 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    failed,
     make_ctx,
     make_deps,
     make_run,
     numbat_contracts,
     numbat_rev08_exception,
+    passed,
 )
-from tests.test_fieldwork_judging import failed, passed, pending_task
+from tests.test_fieldwork_judging import pending_task
 
 INVOICES = ["SI-2026-0612", "SI-2026-0618"]
 EXTRACTED = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS]

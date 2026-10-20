@@ -29,7 +29,7 @@ import pytest
 
 from backend.adapters.llm import SwitchableLLMClient
 from backend.api.schemas import ReviewRecordIn
-from backend.contracts.models import OpinionType, TrailEntry, TrailKind
+from backend.contracts.models import AuditException, ExceptionDisposition, OpinionType, TrailEntry, TrailKind
 from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import LLM_KEYS, live_llm_settings
 from tests.fakes import api_client
@@ -132,10 +132,13 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
     assert (data["usage"]["calls"], len(calls), walk.gates) == (FIXED_CALLS, FIXED_CALLS, GATES)
 
 
-async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> tuple[LiveWalk, dict[str, Any]]:
+async def offline_walk(
+    tmp_path: Path, failing: dict[tuple[str, str], int]
+) -> tuple[LiveWalk, dict[str, Any], list[AuditException]]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
     离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
-    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录."""
+    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录.
+    返回走法记录, 汇总与走到归档时存储中各例外的最新版本."""
     XERO.ready()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
     budget = Budget(max_calls=MAX_CALLS)
@@ -145,7 +148,12 @@ async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> t
         await drive(client, runner, service, walk, fin=lambda material: OpinionType.unqualified.value, budget=budget)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
-    return walk, data
+    return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException)
+
+
+def stranded(exceptions: list[AuditException]) -> list[str]:
+    """走到归档时仍为 unattributed 的例外: 没有待决任务再指向它们 (归档时已没有待决任务), 也没有判断解释它们."""
+    return sorted(x.id for x in exceptions if x.disposition is ExceptionDisposition.unattributed)
 
 
 @pytest.mark.external
@@ -153,8 +161,9 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     """不联网的自测 (offline_walk): 走到归档, 硬性检查都过, 没有软性差异 (固定输出与自己比), 没有重跑与非 normal 任务;
     闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 FIXED_CALLS 次 (同 R287 的离线走法), 17 个
     判断对象, 决定同演示决定表."""
-    walk, data = await offline_walk(tmp_path, {})
+    walk, data, exceptions = await offline_walk(tmp_path, {})
     assert_hard(data)
+    assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
     assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
     actions = {(r["procedure_id"], r["subject_id"]): r["proposed_action"] for r in data["judgments"]}
@@ -169,40 +178,40 @@ ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一�
 
 
 @pytest.mark.parametrize(
-    "failing",
+    ("failing", "kind"),
     [
-        [("REV-02", ORC1021)],
+        ([("REV-02", ORC1021)], "failed"),
+        # 带 REV-08 的 R03-1, 判断失败转 unattributed 任务, 驱动同 failed 先重跑一次 (需求 R347 验收 3)
+        ([("REV-02", ORC1026)], "unattributed"),
+        # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
+        ([("CSH-02", "BA-091")], "unattributed"),
         # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
-        [("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")],
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed"),
     ],
-    ids=["rev02", "revisions"],
+    ids=["rev02", "rev02_findings", "csh02", "revisions"],
 )
 @pytest.mark.external
-async def test_live_driver_reruns_a_failed_object_once(tmp_path: Path, failing: list[tuple[str, str]]) -> None:
-    """自测重跑一路: 各对象 (ORC1021 的 REV-02 判断, 计划或报告的每个修订) 前 MAX_ATTEMPTS 次调用输出不是 JSON, 成为
-    failed 任务; 驱动对每个各重跑一次, 第 2 次执行给出结果, 照常走到归档, 硬性检查都过; 汇总记各重跑一次与这几条
-    failed 任务, 每个多调 MAX_ATTEMPTS 次. 重跑出的判断与固定输出的建议动作相同."""
-    _, data = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
+async def test_live_driver_reruns_a_failed_object_once(
+    tmp_path: Path, failing: list[tuple[str, str]], kind: str
+) -> None:
+    """自测重跑一路: 各对象 (REV-02 的 ORC1021 与带规则例外的 ORC1026, CSH-02 的 BA-091, 计划或报告的每个修订) 前
+    MAX_ATTEMPTS 次调用输出不是 JSON, 成为 kind 类任务 (failed; 带规则例外的为 unattributed); 驱动对每个各重跑一次,
+    第 2 次执行给出结果, 照常走到归档, 硬性检查都过 (没有缺结论的对象); 汇总记各重跑一次与这几条任务, 每个多调
+    MAX_ATTEMPTS 次. 重跑出的判断与固定输出的建议动作相同; 走到归档时没有仍为 unattributed 的例外 (重跑前置的那一版
+    由重跑的判断解释, 随复核决定归因)."""
+    _, data, exceptions = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
     assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in failing}
-    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, "failed"] for pid, subject in failing)
+    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in failing)
+    assert data["missing_subjects"] == []
     assert data["usage"]["calls"] == FIXED_CALLS + MAX_ATTEMPTS * len(failing)
     assert data["decisions"]["rerun"] == len(failing)
     rows = {(r["procedure_id"], r["subject_id"]): r for r in data["judgments"]}
-    for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (ORC1021 的固定输出为 accept)
+    for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (与固定输出的建议动作相同)
         assert rows[key]["same"], rows[key]
-
-
-@pytest.mark.external
-async def test_failed_object_with_rule_findings_is_rerun_once(tmp_path: Path) -> None:
-    """需求 R347 验收 3: 有规则例外的对象 (ORC1026 带 REV-08 的 R03-1) 前 MAX_ATTEMPTS 次调用输出不是 JSON, 判断失败转
-    unattributed 任务; 驱动同 failed 先重跑一次, 第 2 次执行给出结论, 照常走到归档, 硬性检查都过 (没有缺结论的对象);
-    汇总记重跑一次, troubled 记这条 unattributed 任务 (同 failed 的一路), 多调 MAX_ATTEMPTS 次."""
-    _, data = await offline_walk(tmp_path, {("REV-02", ORC1026): MAX_ATTEMPTS})
-    assert_hard(data)
-    assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1026}": 1}, [["REV-02", ORC1026, "unattributed"]])
-    assert data["missing_subjects"] == []
-    assert (data["usage"]["calls"], data["decisions"]["rerun"]) == (FIXED_CALLS + MAX_ATTEMPTS, 1)
+    assert stranded(exceptions) == []
+    if failing == [("CSH-02", "BA-091")]:  # 重跑沿用第 1 次执行的 D04, 没有另建第 2 次的
+        assert [x.id for x in exceptions if x.procedure_id == "CSH-02"] == ["X-CSH-02-1-D04-1"]
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
@@ -246,3 +255,23 @@ def test_review_bodies_follow_the_decision_table() -> None:
     assert ReviewRecordIn.model_validate(review_body(failed, table, walk)).decision == "rerun"
     with pytest.raises(pytest.fail.Exception, match="重跑后又失败"):
         review_body(failed, table, walk)
+
+
+def test_rerun_counts_the_whole_group() -> None:
+    """一轮失败算一组 (第 1 轮审核 R347-03): 对一条可重跑任务下 rerun 时, 同程序其余待决的可重跑任务随之重跑
+    (DecisionSubmit 一并关闭), 驱动一并计数. 同轮 XJ-430 failed 与 XJ-601 unattributed, 对 XJ-430 rerun 后两者各记
+    一次; 同程序的 normal 任务与别的程序的失败任务不计. XJ-601 第 2 轮仍是 unattributed 时已重跑过, 按决定表推翻."""
+    table, walk = decision_table("USR-1"), LiveWalk()
+    failed, unattributed, normal = (
+        view_of("failed", "XJ-430"),
+        view_of("unattributed", "XJ-601"),
+        view_of("normal", "XJ-397"),
+    )
+    failed["task"]["subject_id"] = "XJ-430"
+    elsewhere = view_of("failed", "BA-091")
+    elsewhere["task"] |= {"procedure_id": "CSH-02", "subject_id": "BA-091"}
+
+    assert review_body(failed, table, walk, [failed, unattributed, normal, elsewhere])["decision"] == "rerun"
+    assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}
+    assert review_body(unattributed, table, walk, [unattributed])["decision"] == "override"
+    assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}

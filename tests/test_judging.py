@@ -54,15 +54,17 @@ from tests.fakes import (
     FakeRuleEngine,
     FakeTrail,
     ScriptedLLM,
+    failed,
     make_ctx,
     make_deps,
     make_run,
     numbat_contracts,
     numbat_csh05_exception,
     numbat_rev08_exception,
+    passed,
 )
 from tests.test_fieldwork_csh02 import setup as csh02_setup
-from tests.test_fieldwork_judging import X1, failed, passed, setup
+from tests.test_fieldwork_judging import X1, setup
 from tests.test_fieldwork_rev03 import EXTRACTED
 from tests.test_review_agent import step, verdict
 

@@ -767,18 +767,22 @@ def recompute_procedure(
 
 
 def rerun_group(task: ReviewTask, pending: list[ReviewTask]) -> list[ReviewTask]:
-    """rerun 决定关闭的一组失败任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序其余待决的
-    可重跑任务 (review_queue.RERUNNABLE: failed 与带规则例外的对象判断失败留下的 unattributed, 需求 R347; 都来自该
-    程序最近一次执行), 按 ID 排序. pending 为该程序当前全部待决任务; normal, dispute 等任务不在组内. 整组一并关闭,
-    程序置 executing 后就没有待决的可重跑任务, 不会再来第二个 rerun 盖掉这一版的重判对象."""
-    siblings = [t for t in pending if t.kind in RERUNNABLE and t.procedure_id == task.procedure_id and t.id != task.id]
+    """rerun 决定关闭的一组可重跑任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序同一次执行
+    (run_id 相同, 同 recovery.closed_by) 其余待决的可重跑任务 (review_queue.RERUNNABLE: failed 与带规则例外的对象
+    判断失败留下的 unattributed, 需求 R347), 按 ID 排序. pending 为该程序当前全部待决任务; normal, dispute 等任务
+    不在组内. 整组一并关闭, 程序置 executing 后就没有待决的可重跑任务, 不会再来第二个 rerun 盖掉这一版的重判对象."""
+    siblings = [
+        t
+        for t in pending
+        if t.kind in RERUNNABLE and t.procedure_id == task.procedure_id and t.run_id == task.run_id and t.id != task.id
+    ]
     return [task, *sorted(siblings, key=lambda t: t.id)]
 
 
 def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[ReviewTask]) -> Procedure:
     """rerun 决定写出的程序新版本 (第 7 节): 置 executing (不论还有无别的待决任务), params 合并 rerun_params,
     rerun_subject_ids 取整组任务的对象 (见 nodes.rerun_subjects; 组内有整次失败的任务时为空, 整条重跑).
-    整组在同一事务里关闭, 程序处于 executing 时已没有待决的 failed 任务, 不会再来第二个 rerun.
+    整组在同一事务里关闭, 程序处于 executing 时已没有待决的可重跑任务 (failed, unattributed), 不会再来第二个 rerun.
     P2 程序由下一轮派发重跑, P2 以外的程序由所在节点读回这一版后重跑 (nodes.read_rerun 取等待版本 + 1).
     例: REV-03 第 1 次 CON-002, CON-003 失败, 对其中任一个 rerun → REV-03 新版本 executing,
     rerun_subject_ids [CON-002, CON-003].

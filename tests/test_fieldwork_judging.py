@@ -16,12 +16,10 @@ from backend.contracts.models import (
     AutonomyLevel,
     Decision,
     ExceptionDisposition,
-    Judgment,
     Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
-    ProposedAction,
     ReviewStatus,
     ReviewTask,
     RunStatus,
@@ -37,13 +35,16 @@ from tests.fakes import (
     FakeJudgmentEngine,
     FakeRegistry,
     FakeTrail,
+    failed,
     finished,
+    judgment,
     make_ctx,
     make_deps,
     make_procedure,
     make_run,
     numbat_p2_agents,
     numbat_rev08_exception,
+    passed,
     wait_idle,
 )
 from tests.test_fieldwork import p2_agents
@@ -53,38 +54,6 @@ from tests.test_review_decisions import record
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 X1 = numbat_rev08_exception(make_run("REV-08"))  # X-REV-08-1-R01-1
 X2 = X1.model_copy(update={"id": "X-REV-08-1-R02-1", "rule_id": "R02"})
-
-
-def judgment(ctx: JudgmentContext, run: ProcedureRun, **changes: Any) -> Judgment:
-    """判断引擎会给出的判断: 缺省 accept, L2, 解释对象的全部规则例外."""
-    base = Judgment(
-        id=f"J-{run.procedure_id}-{run.run_no}-{ctx.subject_id}",
-        procedure_id=run.procedure_id,
-        run_id=run.id,
-        subject_id=ctx.subject_id,
-        conclusion="ok",
-        confidence=0.9,
-        confidence_parts={"llm": 0.9},
-        reasoning_chain=[],
-        evidence=[],
-        counter_argument="none",
-        proposed_action=ProposedAction.accept,
-        exception_ids=[x.id for x in ctx.rule_findings],
-        autonomy_level=AutonomyLevel.L2,
-        performed_by="U-1",
-        created_at=NOW,
-    )
-    return base.model_copy(update=changes)
-
-
-def passed(**changes: Any) -> Any:
-    return lambda ctx, run: JudgmentOutcome(
-        judgment=judgment(ctx, run, **changes), failure=None, attempts=1, trail_ids=["TR-1"]
-    )
-
-
-def failed(kind: str) -> Any:
-    return lambda ctx, run: JudgmentOutcome(judgment=None, failure=kind, attempts=3, trail_ids=["TR-1", "TR-2", "TR-3"])
 
 
 def setup(

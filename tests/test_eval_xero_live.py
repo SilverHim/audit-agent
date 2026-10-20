@@ -8,8 +8,8 @@
 
 预期在 tests/fixtures/xero/expected_existing.json: hard 不符即失败, soft 只告警; 对象为两段之并 (三份合同, 两户回函,
 三份合同的收入评价, 六张发票, BA-091 的函证判断, 共 15 个), 按 (程序, 对象) 取观察值 (observe) 逐字段比 (not_cited
-列不得引用的来源). 硬性另有: 每个对象都有通过四级校验的结果 (failed 后重跑一次仍没有, 或带规则例外的对象失败转为
-unattributed 任务, 都算不过); 每个对象都真的交给了模型; 没有失败的执行 (Agent 抛出的异常由节点转成失败的执行); 全部
+列不得引用的来源). 硬性另有: 每个对象都有通过四级校验的结果 (failed 或 unattributed (带规则例外的对象判断失败, 需求
+R347) 后重跑一次仍没有, 算不过); 每个对象都真的交给了模型; 没有失败的执行 (Agent 抛出的异常由节点转成失败的执行); 全部
 证据指针经真实存储解析通过. 汇总写 var/eval/xero-existing-<UTC>.json.
 
 配置经 tests.external.live_llm_settings 取, 没配时跳过. 不联网的自测把 "真实模型" 换成运行副本的固定输出: 连库一遍
@@ -38,6 +38,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMClient
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.live_walk import latest_model_judgments, unresolved_pointers
 from tests.test_xero_injections import Build, offline_build
 from tests.test_xero_injections_db import db_build, live_client
@@ -208,3 +209,18 @@ async def test_eval_reruns_once_and_catches_a_wrong_extraction(xero_case: Any, t
     assert data["observed"]["REV-03 CON-X02"]["judgment_id"] == "J-REV-03-2-CON-X02"
     with pytest.raises(AssertionError, match="BA-090"):
         assert_hard(data)
+
+
+async def test_eval_reruns_an_unattributed_object_once(xero_case: Any, tmp_path: Path) -> None:
+    """离线自测 rerun_failed 的 unattributed 一路 (需求 R347, 第 1 轮审核 R347-06): CSH-02 对 BA-091 的前 MAX_ATTEMPTS
+    次调用输出不是 JSON, 该账户带本次新建的 D04, 判断失败转 unattributed 任务; 测试台照 rerun 决定重跑一次, 第 2 次
+    执行得出判断 (沿用第 1 次的 D04), 不再有待决的非 normal 任务; hard 只报出判断 ID 是第 2 次执行的 (预期按不重跑写),
+    soft 没有不符."""
+    case = xero_case("T0")
+    live = FlakyLLM(LayeredMockLLMClient([case.supplements / "llm"]), {("CSH-02", "BA-091"): MAX_ATTEMPTS})
+    data = await evaluated(offline_build(XERO_RULES), case, live, Budget(max_calls=MAX_CALLS), tmp_path)
+    assert data["reruns"] == {"CSH-02": ["BA-091"]} and data["live_calls"]["CSH-02 BA-091"] == MAX_ATTEMPTS + 1
+    assert data["observed"]["CSH-02 BA-091"]["judgment_id"] == "J-CSH-02-2-BA-091"
+    assert (data["missing"], data["failed_runs"], data["open_tasks"]) == ([], [], [])
+    assert data["hard"] == ["CSH-02 BA-091 judgment_id: 'J-CSH-02-2-BA-091', 预期 'J-CSH-02-1-BA-091'"]
+    assert data["soft"] == []

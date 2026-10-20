@@ -27,11 +27,11 @@ from tests.fakes import (
     FakeJudgmentEngine,
     FakeRegistry,
     FakeTrail,
+    judgment,
     make_ctx,
     make_deps,
     numbat_contracts,
 )
-from tests.test_fieldwork_judging import judgment
 
 CONTRACT_IDS = ["CON-001", "CON-002", "CON-003"]
 EXTRACTED = [d.model_copy(update={"status": "extracted"}) for d in NUMBAT_CONTRACTS]

@@ -42,10 +42,9 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import apply_patch
 from tests.external import needs
-from tests.fakes import FakeJudgmentEngine, FakeRegistry, FakeRuleEngine, FakeTrail, make_deps
+from tests.fakes import FakeJudgmentEngine, FakeRegistry, FakeRuleEngine, FakeTrail, failed, make_deps, passed
 from tests.fixture_sets import XERO
 from tests.test_evidence_gen08 import ADVISORY, ALEX, DEMO, SMART, VPA, run_gen08
-from tests.test_fieldwork_judging import failed, passed
 from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
 from tests.xero_fakes import (
     XERO_RULES,

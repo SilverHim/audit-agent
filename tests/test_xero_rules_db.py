@@ -47,9 +47,8 @@ from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader, now
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import FakeJudgmentEngine, make_ctx
+from tests.fakes import FakeJudgmentEngine, make_ctx, passed
 from tests.test_data_store_postgres import table_rows
-from tests.test_fieldwork_judging import passed
 from tests.xero_fakes import SNAPSHOT_NAME, XERO_DATASET, XERO_RULES, XERO_S01_ROWS
 from tests.xero_injection import file_hashes
 

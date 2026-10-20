@@ -38,6 +38,8 @@ evidence_required: [external, bank]
 #   等于其绝对值的行时, 建 AuditException: id X-CSH-02-{run_no}-D04-{n} (n 在 D04 内按 bank_account_id 排序), rule_id D04,
 #   severity medium, source_ids [bank_account_id], amount_cents = accrued_interest_cents (带符号); 函证结果不变.
 # 判断对象 = 有 D01 或 D04 例外的账户; D02, D03 的行按 bank_account_id 切给对应账户
+# 部分重跑 (rerun_subject_ids 非空, 可重跑任务的 rerun) 是重判, 不新建 D01, D04: 重判的账户沿用此前执行在该账户上出的
+#   尚未归因的 D01, D04 (需求 R347, 接口文档第 6 节); 整条重跑照常新建
 # D03, D04 剔除作废对: 冲回凭证 = 任一行 description 匹配 reversal_reference_pattern 的凭证, 原凭证 = 模板填入第一个捕获组;
 #   两者的行都不要. 两条规则的 WITH 段写在 "作废对共用段" 起止标记之间, 与 GEN-05 各规则的同一段逐字相同
 #   (tests/test_knowledge.py 守住), 改口径时几处一起改
