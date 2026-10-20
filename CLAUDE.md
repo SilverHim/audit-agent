@@ -92,6 +92,7 @@ docs/diagrams/render.sh [file.puml]       # 需要 ~/.local/lib/plantuml.jar 与
 - 连数据库或调真实 LLM 的测试标 `@pytest.mark.slow`。
 - 调真实大模型的测试另标 `@pytest.mark.live(max_calls=n)`（须同时标 slow、写调用上限并取 `live_budget` 夹具，否则收集阶段报错；超出上限即停发并让测试失败），配置用 `tests.external.live_llm_settings()` 取：环境变量、LLM_ENV_FILE（显式指定的文件）、本仓库 .env 中第一个 LLM_MODEL 与 LLM_API_KEY 都配了的来源（LLM_BASE_URL 可选，来源之间不合并）；都没配全时跳过。worktree 里用 LLM_ENV_FILE 指向配置。
 - 依赖外部数据的测试用 `tests.external`，并标 `@pytest.mark.external`：`require_external`（data/external/<名称>，EXTERNAL_DATA_ROOT 可另指目录，缺失时跳过）；`require_xero_snapshot`、`require_xero_supplements`（Xero 快照与 data/xero_demo 补造；缺失时跳过，仓库跟踪了却找不到时失败，快照与补造的哈希不符时跳过，EXTERNAL_STRICT=1 时失败）。
+- 取本仓库 Xero 数据的测试经 `tests.external` 的 `snapshot_dir`、`supplements_dir`、`raw_dir`（会话缓存，缺失与哈希不符的规则同上；网页导出 `data/external/xero/raw` 也是跟踪了却找不到时失败；`hashes=False` 只查跟踪的文件在不在，给校验数据本身的用例）；有数据才多断言时用 `optional(...)`（没带数据得 None，哈希不符照常跳过）；收集阶段的常量用 `snapshot_location`、`supplements_path`，用例经 `needs(...)` 或 conftest 的 `q1_snapshot` 等 fixture 核对，不自己拼 `data/external`、`data/xero_demo` 路径。
 
 ## 约定
 
