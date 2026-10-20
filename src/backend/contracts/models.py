@@ -1585,7 +1585,7 @@ class DocumentRef(Model):
     uploaded_at: datetime  # 存档时间
     media_type: str = "application/pdf"  # 媒体类型, 如 text/csv
     channel: DocumentChannel = "auditor_upload"  # 来源渠道
-    uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
+    uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函, GEN-08 的登记存档) 为空
     failed_step: DocumentFailedStep | None = None  # 需人工处理时卡在哪一步, 其余状态为空
     document_date: date | None = None  # 文件日期, 如签署或发出日; 审计师补登记 (需求 R90), 没登记为空
     related_ids: list[str] = []  # 关联对象 ID, 如公司 ACN, 分录号, 银行流水; 审计师补登记, 没登记为空

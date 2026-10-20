@@ -796,8 +796,8 @@ export const evidenceListRegistryExtractsQueryKey = (options: Options<EvidenceLi
 /**
  * List Registry Extracts
  *
- * 上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的
- * 不列.
+ * 审计师上传的各份 ASIC 摘录的当前抽取结果 (需求 R290, R306: 渠道 auditor_upload), 按文件 ID; 现在登记为
+ * registry_extract 而还没有抽取结果的不列.
  */
 export const evidenceListRegistryExtractsOptions = (options: Options<EvidenceListRegistryExtractsData>) => queryOptions<EvidenceListRegistryExtractsResponse, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, ReturnType<typeof evidenceListRegistryExtractsQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {
@@ -817,7 +817,7 @@ export const evidenceListRegistryExtractsOptions = (options: Options<EvidenceLis
  *
  * 修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
  * registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
- * 文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+ * 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
  * INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditRegistryExtractMutation = (options?: Partial<Options<EvidenceEditRegistryExtractData>>): UseMutationOptions<EvidenceEditRegistryExtractResponse, EvidenceEditRegistryExtractError, Options<EvidenceEditRegistryExtractData>> => {
@@ -839,7 +839,7 @@ export const evidenceRegistryExtractHistoryQueryKey = (options: Options<Evidence
 /**
  * Registry Extract History
  *
- * ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404.
+ * ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404.
  */
 export const evidenceRegistryExtractHistoryOptions = (options: Options<EvidenceRegistryExtractHistoryData>) => queryOptions<EvidenceRegistryExtractHistoryResponse, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, ReturnType<typeof evidenceRegistryExtractHistoryQueryKey>>({
     queryFn: async ({ queryKey, signal }) => {

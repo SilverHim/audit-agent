@@ -417,10 +417,10 @@ async def test_unread_extract_turns_the_company_checks_to_manual(unread: int) ->
 async def test_program_archived_extracts_are_not_uploaded_extracts() -> None:
     """需求 R306 验收 2: ACC-04 只认审计师上传的摘录 (渠道 auditor_upload). 程序向登记机构查询后存档的 (渠道 registry,
     如 GEN-08, 没有抽取版本) 不算 "没能读出的摘录": 读出的那份是别的公司的时, 照常判没有这个 ACN 的摘录 (不通过),
-    不因存档转人工; 摘录列表与修改也只认上传的."""
+    不因存档转人工. 摘录列表, 修改与历史共用 uploaded_extracts, 由对它的直接断言与这里的份数断言覆盖."""
     agent, ctx = await checks_on([fixture_extraction(acn="900043049")])
     evidence = agent.deps.evidence_store
-    archived = await evidence.save(
+    await evidence.save(
         EID,
         "900043021.pdf",
         b"%PDF archived by GEN-08",
@@ -433,10 +433,6 @@ async def test_program_archived_extracts_are_not_uploaded_extracts() -> None:
     # 同没有存档时: 公司已注册不通过, 名称与董事无从核对; 存档若算作没能读出的摘录, 两项都会转人工 ([None, None])
     assert [c.passed for c in found[2:]] == [False, None]
     assert [d.id for d in await uploaded_extracts(agent.deps.financial_store, EID)] == [DOCUMENT]
-    service = DataService(agent.deps, cast(Any, object()))
-    assert [r.target_id for r in await service.registry_extracts(EID)] == [DOCUMENT]
-    with pytest.raises(LookupError):
-        await service.registry_history(EID, archived.id)
 
 
 async def test_acc04_reads_the_latest_version_of_an_edited_extract() -> None:

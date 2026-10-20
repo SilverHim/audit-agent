@@ -811,7 +811,11 @@ function Documents({
                     <td className={cell}>{t.data.reliabilities[doc.reliability] ?? doc.reliability}</td>
                     <td className={cn(cell, 'px-5 text-[#4a5262] text-[13px]')}>
                       {[
-                        doc.uploaded_by ? actorName(doc.uploaded_by) : t.data.channels[doc.channel ?? 'auditor_upload'],
+                        doc.uploaded_by
+                          ? actorName(doc.uploaded_by)
+                          : t.data.channels[
+                              !doc.channel || doc.channel === 'auditor_upload' ? 'systemArchive' : doc.channel
+                            ],
                         formatDate(doc.uploaded_at),
                       ]
                         .filter(Boolean)

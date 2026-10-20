@@ -1938,13 +1938,14 @@ class DataService:
     # ── ASIC 摘录的抽取结果 (需求 R290) ──
 
     async def registry_extracts(self, eid: str) -> list[ExtractionRecord]:
-        """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 现在登记为 registry_extract 的文件中有抽取版本的,
-        各取最新一版, 按文件 ID; 与 ACC-04 读的同一份 (adapters.registry.latest_extractions)."""
+        """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 审计师上传 (渠道 auditor_upload, 需求 R306) 而现在
+        登记为 registry_extract 的文件中有抽取版本的, 各取最新一版, 按文件 ID; 与 ACC-04 读的同一份
+        (adapters.registry.latest_extractions)."""
         return [record for _, record in await latest_extractions(self.deps.financial_store, self.deps.data, eid)]
 
     async def registry_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:
-        """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是 ASIC
-        摘录或还没有抽取结果 404."""
+        """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是审计师
+        上传的 ASIC 摘录或还没有抽取结果 404."""
         return await self._registry_records(eid, document_id)
 
     async def edit_registry_extract(

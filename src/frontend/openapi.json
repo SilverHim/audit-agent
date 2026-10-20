@@ -2022,7 +2022,7 @@
           "evidence"
         ],
         "summary": "List Registry Extracts",
-        "description": "上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的\n不列.",
+        "description": "审计师上传的各份 ASIC 摘录的当前抽取结果 (需求 R290, R306: 渠道 auditor_upload), 按文件 ID; 现在登记为\nregistry_extract 而还没有抽取结果的不列.",
         "operationId": "evidence-list_registry_extracts",
         "security": [
           {
@@ -2074,7 +2074,7 @@
           "evidence"
         ],
         "summary": "Edit Registry Extract",
-        "description": "修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,\nregistered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).\n文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422\nINVALID_VALUE; 锁定 423; 忙 409.",
+        "description": "修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,\nregistered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).\n文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422\nINVALID_VALUE; 锁定 423; 忙 409.",
         "operationId": "evidence-edit_registry_extract",
         "security": [
           {
@@ -2141,7 +2141,7 @@
           "evidence"
         ],
         "summary": "Registry Extract History",
-        "description": "ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404.",
+        "description": "ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404.",
         "operationId": "evidence-registry_extract_history",
         "security": [
           {

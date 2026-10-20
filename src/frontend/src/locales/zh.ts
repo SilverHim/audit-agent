@@ -1062,9 +1062,9 @@ export const zh: Messages = {
       internal_original: '内部原件',
       internal_copy: '内部副本',
     },
-    // 系统存档的文件 (没有上传人) 在上传人一栏显示的来源渠道 (需求 R306); 审计师上传的显示上传人
+    // 没有上传人的文件在上传人一栏显示的来源 (需求 R306, 键见 en.ts 的 DocumentSource); 审计师上传的显示上传人
     channels: {
-      auditor_upload: '系统存档',
+      systemArchive: '系统存档',
       bank_direct: '银行直达回函',
       xero: 'Xero 附件',
       registry: '登记机构查询存档',

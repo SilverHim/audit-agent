@@ -523,8 +523,8 @@ export const evidenceContractHistory = <ThrowOnError extends boolean = false>(op
 /**
  * List Registry Extracts
  *
- * 上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的
- * 不列.
+ * 审计师上传的各份 ASIC 摘录的当前抽取结果 (需求 R290, R306: 渠道 auditor_upload), 按文件 ID; 现在登记为
+ * registry_extract 而还没有抽取结果的不列.
  */
 export const evidenceListRegistryExtracts = <ThrowOnError extends boolean = false>(options: Options<EvidenceListRegistryExtractsData, ThrowOnError>): RequestResult<EvidenceListRegistryExtractsResponses, EvidenceListRegistryExtractsErrors, ThrowOnError> => (options.client ?? client).get<EvidenceListRegistryExtractsResponses, EvidenceListRegistryExtractsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -537,7 +537,7 @@ export const evidenceListRegistryExtracts = <ThrowOnError extends boolean = fals
  *
  * 修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
  * registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
- * 文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+ * 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
  * INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditRegistryExtract = <ThrowOnError extends boolean = false>(options: Options<EvidenceEditRegistryExtractData, ThrowOnError>): RequestResult<EvidenceEditRegistryExtractResponses, EvidenceEditRegistryExtractErrors, ThrowOnError> => (options.client ?? client).put<EvidenceEditRegistryExtractResponses, EvidenceEditRegistryExtractErrors, ThrowOnError>({
@@ -553,7 +553,7 @@ export const evidenceEditRegistryExtract = <ThrowOnError extends boolean = false
 /**
  * Registry Extract History
  *
- * ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404.
+ * ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404.
  */
 export const evidenceRegistryExtractHistory = <ThrowOnError extends boolean = false>(options: Options<EvidenceRegistryExtractHistoryData, ThrowOnError>): RequestResult<EvidenceRegistryExtractHistoryResponses, EvidenceRegistryExtractHistoryErrors, ThrowOnError> => (options.client ?? client).get<EvidenceRegistryExtractHistoryResponses, EvidenceRegistryExtractHistoryErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
