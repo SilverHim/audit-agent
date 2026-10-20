@@ -223,6 +223,24 @@ def test_a5_may_write_ownership_graph_and_a6_may_not() -> None:
         )
 
 
+def test_ownership_graph_must_come_from_this_run() -> None:
+    """R136 审核意见 05: 关系图 (带 run_id, 不带 procedure_id) 的 run_id 须为本次执行: 指向 CSH-04 的执行 (在状态中)
+    或不存在的执行, 都被拒, 原因含对象 ID 与两个 run_id."""
+    gen08, csh04 = make_run("GEN-08"), finished(make_run("CSH-04"))
+    state = make_state(procedure_pack=[*PACK, make_procedure("GEN-08", Phase.P2_Executing)], procedure_runs=[csh04])
+    for wrong in (csh04.id, "RUN-GEN-08-9"):
+        reason = f"ownership_graph 中 OWNERSHIP 的 run_id {wrong} 不是本次执行 {gen08.id}"
+        with pytest.raises(MergeRejected, match=reason):
+            check_patch(
+                {"ownership_graph": ownership_graph(wrong), "procedure_runs": [finished(gen08)]},
+                writer=AgentId.A5,
+                procedure_id="GEN-08",
+                run_id=gen08.id,
+                state=state,
+                outputs=["ownership_graph", "exceptions", "documents"],
+            )
+
+
 def test_every_registered_agent_has_field_table() -> None:
     assert {cls.agent_id for cls in AGENT_CLASSES} == set(AGENT_FIELDS)
 

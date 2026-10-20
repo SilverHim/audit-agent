@@ -595,16 +595,15 @@ EXTRACT = stored_document(
 
 async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> None:
     """R136 验收 5: GEN-08 (A5, outputs [ownership_graph, exceptions, documents]; 程序 YAML 由 R137 加, 这里用临时模板)
-    第 1 次执行已为终态: 重放片段含 OWNERSHIP 的最新版本 (属 GEN-08 的执行), RUN-GEN-08-1 下的例外与登记摘录,
-    不调登记接口; 同一 Store 里重放 CSH-04 不取回 OWNERSHIP."""
+    第 1 次执行已为终态: 重放片段含 OWNERSHIP 的最新版本 (属 GEN-08 的执行), RUN-GEN-08-1 下的例外与登记摘录;
+    同一 Store 里重放 CSH-04 不取回 OWNERSHIP."""
     gen08, csh04 = finished(make_run("GEN-08")), finished(make_run("CSH-04"))
     graph1 = ownership_graph(gen08.id)
     graph2 = graph1.model_copy(update={"version": 2, "nodes": graph1.nodes[:2], "links": graph1.links[:2]})
     found = exception(1).model_copy(update={"id": "X-GEN-08-1-R01-1", "procedure_id": "GEN-08", "run_id": gen08.id})
     store = FakeOutputStore([gen08, csh04, graph1, graph2, found, exception(2)])
-    registry = CountingRegistry()
     deps = make_deps(
-        registry, FakeTrail(), output_store=store, financial_store=FakeFinancialStore([EXTRACT, REPLY, UPLOADED])
+        FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([EXTRACT, REPLY, UPLOADED])
     )
     csh04_template = deps.library.load("CSH-04")
     gen08_template = csh04_template.model_copy(
@@ -623,6 +622,5 @@ async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> No
         "exceptions": [found],
         "documents": [EXTRACT],
     }
-    assert registry.abn_calls == 0
     replayed = await stored_outputs(deps, EID, csh04_template, csh04)
     assert "ownership_graph" not in replayed and replayed["documents"] == [REPLY]

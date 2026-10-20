@@ -477,11 +477,8 @@ async def test_migration_0015_round_trip(storage) -> None:
 
 async def test_ownership_graph_versions_on_postgres(storage) -> None:
     """R136 验收 6: OWNERSHIP v1, v2 写进 ownership_graphs 表, 按版本读回仍是 OwnershipGraph (节点与关系不丢); 最新为
-    v2, 历史两版; 别的项目读不到 (行级安全). 迁移链只有一个头, 含 0016 (迁移的往返与授权见 test_data_store_postgres
-    的新表用例)."""
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
+    v2, 历史两版; 别的项目读不到 (行级安全). 迁移的往返与授权见 test_data_store_postgres 的新表用例, 迁移链只有一个头
+    由缺省组的单头用例守."""
     engine, e, _, _ = storage
     store = PostgresAuditOutputStore(engine)
     v1 = ownership_graph()
@@ -495,9 +492,6 @@ async def test_ownership_graph_versions_on_postgres(storage) -> None:
     assert await store.history(e.id, OwnershipGraph, "OWNERSHIP") == [v1, v2]
     assert await store.latest(e.id, OwnershipGraph) == [v2]
     assert await store.get("ENG-OTHER", OwnershipGraph, "OWNERSHIP") is None
-    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    [head] = script.get_heads()
-    assert "0016" in {r.revision for r in script.walk_revisions("base", head)}
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

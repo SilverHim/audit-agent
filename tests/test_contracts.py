@@ -400,23 +400,39 @@ def test_confirmation_accrued_interest_reads_old_json_and_survives_checkpoint_se
 
 def test_ownership_graph_is_frozen_and_strict() -> None:
     """验收 1: OwnershipGraph, PartyNode, PartyLink 都不可改 (frozen), 不收多余字段; 关系的比例须在 0 至 1, 股数不为负,
-    种类只收三种; 存储 JSON 与检查点序列化往返不变, 读回仍是这些类."""
+    种类只收三种; 节点的 ACN, ABN 须为 9, 11 位数字; searched 缺省为假; 存储 JSON 往返不变 (检查点往返见
+    test_state_compat)."""
     graph = ownership_graph()
     with pytest.raises(ValidationError):
         graph.nodes[0].name = "x"  # type: ignore[misc]
     node = graph.nodes[0].model_dump()
-    with pytest.raises(ValidationError):
-        PartyNode.model_validate({**node, "extra": 1})
+    for change in ({"extra": 1}, {"acn": "900 043 021"}, {"acn": "90004302"}, {"abn": "2590004302"}):
+        with pytest.raises(ValidationError):
+            PartyNode.model_validate({**node, **change})
     link = graph.links[1].model_dump()
     for change in ({"pct": 1.5}, {"shares": -1}, {"relation": "auditor"}, {"extra": 1}):
         with pytest.raises(ValidationError):
             PartyLink.model_validate({**link, **change})
     with pytest.raises(ValidationError):
         OwnershipGraph.model_validate({**graph.model_dump(), "edges": []})
+    sam = graph.nodes[2]
+    assert sam.id == "PER-WHITFIELD-SAM-NODOB" and sam.searched is False and "searched" not in sam.model_fields_set
     assert OwnershipGraph.model_validate_json(graph.model_dump_json()) == graph
-    serde = checkpoint_serde()
-    back = serde.loads_typed(serde.dumps_typed({"ownership_graph": graph}))["ownership_graph"]
-    assert back == graph and isinstance(back, OwnershipGraph) and isinstance(back.links[0], PartyLink)
+
+
+def test_ownership_graph_is_closed_over_its_nodes() -> None:
+    """R136 审核意见 04: 节点 ID 重复, 关系的一端不在 nodes 中, 报告主体不在 nodes 中, 都抛 ValidationError,
+    消息写明 ID."""
+    graph = ownership_graph().model_dump()
+    dangling = {**graph["links"][0], "to_id": "ACN-999999999"}
+    cases = [
+        ({"nodes": [*graph["nodes"], graph["nodes"][1]]}, "节点 ID 重复: PER-MORGAN-ALEX-19790412"),
+        ({"links": [*graph["links"], dangling]}, "不在 nodes 中的节点: ACN-999999999"),
+        ({"reporting_entity_id": "ACN-000000000"}, "不在 nodes 中的节点: ACN-000000000"),
+    ]
+    for change, message in cases:
+        with pytest.raises(ValidationError, match=message):
+            OwnershipGraph.model_validate({**graph, **change})
 
 
 @pytest.mark.parametrize(
@@ -426,17 +442,35 @@ def test_ownership_graph_is_frozen_and_strict() -> None:
         ("Whitfield", "Sam", None, "PER-WHITFIELD-SAM-NODOB"),  # 只持股不任职, 摘录股东栏没有出生日期
         ("O'Connor", "Mary-Kate", date(1990, 1, 2), "PER-OCONNOR-MARYKATE-19900102"),  # 撇号, 连字符去掉
         ("van der Berg", "Jo Ann", None, "PER-VANDERBERG-JOANN-NODOB"),  # 空格去掉
+        ("Smith2", "Zoë", None, "PER-SMITH2-ZOE-NODOB"),  # 数字保留; 先做 Unicode 分解, 附加符去掉而字母留下
+        ("Núñez", "José", date(1985, 6, 30), "PER-NUNEZ-JOSE-19850630"),  # 同上, 与不带重音的拼法得同一 ID
+        ("Cher", "", None, "PER-CHER--NODOB"),  # 单名: 名为空
     ],
 )
 def test_person_node_id(family: str, given: str, born: date | None, expected: str) -> None:
-    """验收 2: 个人节点 PER-{姓}-{名}-{yyyymmdd 或 NODOB}, 姓与名各自转大写并只留 A-Z 与 0-9."""
+    """验收 2: 个人节点 PER-{姓}-{名}-{yyyymmdd 或 NODOB}, 姓与名各自经 Unicode 分解, 转大写并只留 A-Z 与 0-9."""
     assert person_node_id(family, given, born) == expected
 
 
+def test_person_node_id_rejects_empty_family_name() -> None:
+    """R136 审核意见 03: 姓规范化后为空 (只有非拉丁字母, 或空串) 时抛 ValueError, 不同的人不并成 PER---NODOB."""
+    for family in ("王", "", " - "):
+        with pytest.raises(ValueError, match="姓规范化后为空"):
+            person_node_id(family, "小明", None)
+
+
 def test_full_name_split_and_company_node_id() -> None:
-    """验收 2: 摘录中只有全名时姓取最后一个词, 名取其余词; 公司节点 ACN-{acn}."""
+    """验收 2: 摘录中只有全名时姓取最后一个词, 名取其余词; 含逗号时按 "姓, 名" 拆 (R136 审核意见 03); 公司节点
+    ACN-{acn}, ACN 先去掉空白, 之后不是 9 位数字抛 ValueError (审核意见 04)."""
     assert split_full_name("Sam Whitfield") == ("Whitfield", "Sam")
     assert split_full_name("  Mary Ann  O'Connor ") == ("O'Connor", "Mary Ann")
     assert person_node_id(*split_full_name("Mary Ann O'Connor"), None) == "PER-OCONNOR-MARYANN-NODOB"
     assert split_full_name("Cher") == ("Cher", "")
-    assert company_node_id("900043021") == "ACN-900043021"
+    assert split_full_name("MORGAN, Alex") == ("MORGAN", "Alex")
+    assert split_full_name(" Morgan ,  Alex ") == ("Morgan", "Alex")
+    assert person_node_id(*split_full_name("MORGAN, Alex"), None) == "PER-MORGAN-ALEX-NODOB"
+    assert split_full_name("van der Berg, Jo Ann") == ("van der Berg", "Jo Ann")
+    assert company_node_id("900043021") == company_node_id(" 900 043 021 ") == "ACN-900043021"
+    for acn in ("", "90004302", "9000430211", "900-043-021"):
+        with pytest.raises(ValueError, match="acn 须为 9 位数字"):
+            company_node_id(acn)

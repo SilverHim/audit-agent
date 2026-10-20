@@ -1,6 +1,7 @@
 """领域对象, 定义见 开发接口文档.md 第 2 节. 其他包只引用, 不另行定义."""
 
 import re
+import unicodedata
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
@@ -1053,6 +1054,14 @@ class PartyNode(Model):
     birth_date: date | None = None  # 出生日期 (个人, 摘录高管栏有); 只持股不任职的没有
     searched: bool = False  # 是否做过人员检索 (个人) 或取过公司摘录 (公司)
 
+    @model_validator(mode="after")
+    def numbers(self) -> Self:
+        """ACN, ABN 只查位数, 同 DeclaredParty."""
+        problem = digits_problem(self.acn, 9, "acn") or digits_problem(self.abn, 11, "abn")
+        if problem:
+            raise ValueError(problem)
+        return self
+
 
 class PartyLink(Model):
     """关系图中的一条关系: from_id 对 to_id (公司) 的任职或持股, 证据为登记摘录中对应的那一行."""
@@ -1071,31 +1080,57 @@ class OwnershipGraph(Versioned):
     """股权与任职关系图 (A5 GEN-08 建, 需求 R136): 报告主体向上穿透的法人股东, 控制或关键人员, 以及他们任职或持股的
     其他公司. 项目里只有一份, ID 固定为 OWNERSHIP; 重建出新版本."""
 
-    run_id: str  # 建它的那次执行
-    reporting_entity_id: str  # 报告主体的节点 ID (ACN-{acn})
+    run_id: str  # 建它的那次执行; 合并时须为本次执行 (merge.check_own_run)
+    reporting_entity_id: str  # 报告主体的节点 ID (ACN-{acn}), 须在 nodes 中
     nodes: list[PartyNode]  # 节点, ID 不重复
     links: list[PartyLink]  # 关系, 端点都在 nodes 中
 
+    @model_validator(mode="after")
+    def closed(self) -> Self:
+        """节点 ID 不重复; 报告主体与每条关系的两端都在 nodes 中."""
+        ids = [node.id for node in self.nodes]
+        duplicated = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicated:
+            raise ValueError(f"节点 ID 重复: {', '.join(duplicated)}")
+        ends = {self.reporting_entity_id, *(end for link in self.links for end in (link.from_id, link.to_id))}
+        missing = sorted(ends - set(ids))
+        if missing:
+            raise ValueError(f"不在 nodes 中的节点: {', '.join(missing)}")
+        return self
+
 
 def node_name_part(text: str) -> str:
-    """节点 ID 中的姓或名: 转大写, 去掉 A-Z 与 0-9 以外的字符 (空格, 撇号, 连字符等). 例 "O'Connor" → OCONNOR."""
-    return re.sub(r"[^A-Z0-9]", "", text.upper())
+    """节点 ID 中的姓或名: 先做 Unicode 分解 (NFKD, 带附加符的字母拆成字母与附加符), 转大写, 再去掉 A-Z 与 0-9
+    以外的字符 (附加符, 空格, 撇号, 连字符, 非拉丁字母等). 例 "O'Connor" → OCONNOR, "José" → JOSE."""
+    return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", text).upper())
 
 
 def company_node_id(acn: str) -> str:
-    """公司节点的 ID: ACN-{acn}."""
-    return f"ACN-{acn}"
+    """公司节点的 ID: ACN-{acn}. ACN 先去掉空白 ("900 043 021" 同 "900043021"), 之后不是 9 位数字时抛 ValueError."""
+    digits = "".join(acn.split())
+    problem = digits_problem(digits, 9, "acn")
+    if problem:
+        raise ValueError(problem)
+    return f"ACN-{digits}"
 
 
 def person_node_id(family_name: str, given_names: str, birth_date: date | None) -> str:
     """个人节点的 ID: PER-{姓}-{名}-{yyyymmdd}; 没有出生日期 (只持股不任职, 摘录股东栏没有) 时末段为 NODOB.
-    姓与名各自经 node_name_part. 例: PER-MORGAN-ALEX-19790412, PER-WHITFIELD-SAM-NODOB."""
+    姓与名各自经 node_name_part; 姓规范化后为空 (如只有非拉丁字母) 时抛 ValueError, 不同的人不并成一个 ID.
+    名可以为空 (单名). 例: PER-MORGAN-ALEX-19790412, PER-WHITFIELD-SAM-NODOB."""
+    family = node_name_part(family_name)
+    if not family:
+        raise ValueError(f"姓规范化后为空, 建不出节点 ID: {family_name!r}")
     born = birth_date.strftime("%Y%m%d") if birth_date is not None else "NODOB"
-    return f"PER-{node_name_part(family_name)}-{node_name_part(given_names)}-{born}"
+    return f"PER-{family}-{node_name_part(given_names)}-{born}"
 
 
 def split_full_name(full_name: str) -> tuple[str, str]:
-    """摘录中只有全名时拆成 (姓, 名): 姓取最后一个词, 名取其余词 (以空格连接, 只有一个词时为空)."""
+    """摘录中只有全名时拆成 (姓, 名). 含逗号时按 "姓, 名" 在第一个逗号处拆 ("MORGAN, Alex" → MORGAN, Alex); 否则
+    姓取最后一个词, 名取其余词 (只有一个词时为空). 各段多余的空白合成一个空格."""
+    if "," in full_name:
+        family, given = full_name.split(",", 1)
+        return " ".join(family.split()), " ".join(given.split())
     words = full_name.split()
     return (words[-1], " ".join(words[:-1])) if words else ("", "")
 
