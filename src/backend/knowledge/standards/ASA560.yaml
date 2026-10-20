@@ -1,0 +1,35 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_560.pdf (现行编译版, Compilation 4) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 上标脚注号由抽取去掉 (第 9 段
+# "ASA 5804" 写作 "ASA 580").
+standard: ASA 560
+title: Subsequent Events
+compiled: "2021-12-14"   # Compilation Number 4
+fragments:
+  - id: ASA560-P06
+    paragraph: "6"
+    topic: subsequent_events_procedures
+    text: |
+      The auditor shall perform audit procedures designed to obtain sufficient appropriate audit evidence that all events occurring between the date of the financial report and the date of the auditor’s report that require adjustment of, or disclosure in, the financial report have been identified. The auditor is not, however, expected to perform additional audit procedures on matters to which previously applied audit procedures have provided satisfactory conclusions.
+    procedures: [GEN-07, GEN-06]
+  - id: ASA560-P07
+    paragraph: "7"
+    topic: subsequent_events_period_and_procedures
+    text: |
+      The auditor shall perform the procedures required by paragraph 6 of this Auditing Standard so that they cover the period from the date of the financial report to the date of the auditor’s report, or as near as practicable thereto. The auditor shall take into account the auditor’s risk assessment in determining the nature and extent of such audit procedures, which shall include the following:
+      (a) Obtaining an understanding of any procedures management has established to ensure that subsequent events are identified.
+      (b) Enquiring of management and, where appropriate, those charged with governance, as to whether any subsequent events have occurred which might affect the financial report.
+      (c) Reading minutes, if any, of the meetings, of the entity’s owners, management and those charged with governance, that have been held after the date of the financial report and enquiring about matters discussed at any such meetings for which minutes are not yet available.
+      (d) Reading the entity’s latest subsequent interim financial report, if any.
+    procedures: [GEN-07, FIN-02]
+  - id: ASA560-P08
+    paragraph: "8"
+    topic: identified_subsequent_events
+    text: |
+      If, as a result of the procedures performed as required by paragraphs 6 and 7 of this Auditing Standard, the auditor identifies events that require adjustment of, or disclosure in, the financial report, the auditor shall determine whether each such event is appropriately reflected in that financial report in accordance with the applicable financial reporting framework.
+    procedures: [GEN-06]
+  - id: ASA560-P09
+    paragraph: "9"
+    topic: written_representations
+    text: |
+      The auditor shall request management and, where appropriate, those charged with governance, to provide a written representation in accordance with ASA 580 that all events occurring subsequent to the date of the financial report and for which the applicable financial reporting framework requires adjustment or disclosure have been adjusted or disclosed.
+    procedures: [FIN-02]

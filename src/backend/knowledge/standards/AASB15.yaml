@@ -30,3 +30,9 @@ fragments:
       (d) The customer has the significant risks and rewards of ownership of the asset—the transfer of the significant risks and rewards of ownership of an asset to the customer may indicate that the customer has obtained the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset. However, when evaluating the risks and rewards of ownership of a promised asset, an entity shall exclude any risks that give rise to a separate performance obligation in addition to the performance obligation to transfer the asset. For example, an entity may have transferred control of an asset to a customer but not yet satisfied an additional performance obligation to provide maintenance services related to the transferred asset.
       (e) The customer has accepted the asset—the customer’s acceptance of an asset may indicate that it has obtained the ability to direct the use of, and obtain substantially all of the remaining benefits from, the asset. To evaluate the effect of a contractual customer acceptance clause on when control of an asset is transferred, an entity shall consider the guidance in paragraphs B83–B86.
     procedures: [REV-03, REV-02]
+  - id: AASB15-P88
+    paragraph: "88"
+    topic: transaction_price_changes_allocation
+    text: |
+      An entity shall allocate to the performance obligations in the contract any subsequent changes in the transaction price on the same basis as at contract inception. Consequently, an entity shall not reallocate the transaction price to reflect changes in stand-alone selling prices after contract inception. Amounts allocated to a satisfied performance obligation shall be recognised as revenue, or as a reduction of revenue, in the period in which the transaction price changes.
+    procedures: [GEN-06]

@@ -1,0 +1,41 @@
+# 段落号与正文已对照 docs/参考资料/03_会计准则_AASB/AASB_110.pdf (Compilation date 30 June 2021) 核对
+# (tests/test_knowledge.py 自动比对); text 为该段原文, 去掉段号, 列举项各占一行.
+# 第 2 层主体 (Tier 2) 不适用第 13, 16 与 17-22 段 (AusA1); 本文件按设计稿不收第 12, 13, 21 段.
+standard: AASB 110
+title: Events after the Reporting Period
+compiled: "2021-06-30"
+fragments:
+  - id: AASB110-P03
+    paragraph: "3"
+    topic: definition_adjusting_and_non_adjusting
+    text: |
+      The following terms are used in this Standard with the meanings specified:
+      Events after the reporting period are those events, favourable and unfavourable, that occur between the end of the reporting period and the date when the financial statements are authorised for issue. Two types of events can be identified:
+      (a) those that provide evidence of conditions that existed at the end of the reporting period (adjusting events after the reporting period); and
+      (b) those that are indicative of conditions that arose after the reporting period (non-adjusting events after the reporting period).
+    procedures: [GEN-06]
+  - id: AASB110-P08
+    paragraph: "8"
+    topic: adjusting_events_recognised
+    text: |
+      An entity shall adjust the amounts recognised in its financial statements to reflect adjusting events after the reporting period.
+    procedures: [GEN-06]
+  - id: AASB110-P09
+    paragraph: "9"
+    topic: adjusting_event_examples
+    text: |
+      The following are examples of adjusting events after the reporting period that require an entity to adjust the amounts recognised in its financial statements, or to recognise items that were not previously recognised:
+      (a) the settlement after the reporting period of a court case that confirms that the entity had a present obligation at the end of the reporting period. The entity adjusts any previously recognised provision related to this court case in accordance with AASB 137 Provisions, Contingent Liabilities and Contingent Assets or recognises a new provision. The entity does not merely disclose a contingent liability because the settlement provides additional evidence that would be considered in accordance with paragraph 16 of AASB 137.
+      (b) the receipt of information after the reporting period indicating that an asset was impaired at the end of the reporting period, or that the amount of a previously recognised impairment loss for that asset needs to be adjusted. For example:
+      (i) the bankruptcy of a customer that occurs after the reporting period usually confirms that the customer was credit-impaired at the end of the reporting period; and
+      (ii) the sale of inventories after the reporting period may give evidence about their net realisable value at the end of the reporting period.
+      (c) the determination after the reporting period of the cost of assets purchased, or the proceeds from assets sold, before the end of the reporting period.
+      (d) the determination after the reporting period of the amount of profit-sharing or bonus payments, if the entity had a present legal or constructive obligation at the end of the reporting period to make such payments as a result of events before that date (see AASB 119 Employee Benefits).
+      (e) the discovery of fraud or errors that show that the financial statements are incorrect.
+    procedures: [GEN-06]
+  - id: AASB110-P10
+    paragraph: "10"
+    topic: non_adjusting_events_not_recognised
+    text: |
+      An entity shall not adjust the amounts recognised in its financial statements to reflect non-adjusting events after the reporting period.
+    procedures: [GEN-06]
