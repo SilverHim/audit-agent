@@ -3159,11 +3159,14 @@ class LayeredMockLLM:
     def __init__(self, *roots: Path) -> None:
         self.clients = [MockLLMClient(root) for root in roots]
 
+    def locate(self, req: LLMRequest) -> tuple[MockLLMClient, str] | None:
+        """要读的固定输出: (所在根的客户端, 相对根的文件); 都没有为 None."""
+        for name in (f"{req.procedure_id}/{req.fixture_key}.json", f"{req.procedure_id}/default.json"):
+            for client in self.clients:
+                if (client.root / name).exists():
+                    return client, name
+        return None
+
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
-        for client in self.clients:
-            if (client.root / req.procedure_id / f"{req.fixture_key}.json").exists():
-                return await client.complete(req, output_model)
-        for client in self.clients:
-            if (client.root / req.procedure_id / "default.json").exists():
-                return await client.complete(req, output_model)
-        return await self.clients[0].complete(req, output_model)
+        found = self.locate(req)  # 选中的根里 {fixture_key}.json 要么就是它, 要么不存在, MockLLMClient 读的即它
+        return await (found[0] if found is not None else self.clients[0]).complete(req, output_model)

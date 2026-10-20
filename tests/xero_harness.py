@@ -15,7 +15,7 @@
 
 import os
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel
 
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel
-from backend.adapters.llm import MockLLMClient, SwitchableLLMClient, llm_version
+from backend.adapters.llm import SwitchableLLMClient, llm_version
 from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import AgentDeps
 from backend.contracts.data import TableKind
@@ -47,7 +47,7 @@ from backend.orchestration.runner import GraphRunner, fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
-from tests.fakes import FakeRuleEngine, FakeTrail
+from tests.fakes import FakeRuleEngine, FakeTrail, LayeredMockLLM
 from tests.tools.live_budget import Budget, BudgetedLLMClient
 from tests.xero_fakes import (
     PLANNING,
@@ -271,23 +271,21 @@ class FixtureRead:
     file: str | None  # 相对根, 如 REV-02/SI-....json 或 REV-02/default.json
 
 
-@dataclass
-class LayeredMockLLMClient:
-    """按 roots 顺序找 {程序}/{fixture_key}.json, 都没有时再按顺序找 {程序}/default.json; 读法与解析同 MockLLMClient
-    (都找不到时为 fixture_not_found). 记下每次的请求全文 (requests, 含 system 与 messages) 与读了哪个文件 (reads)."""
+class LayeredMockLLMClient(LayeredMockLLM):
+    """tests.fakes.LayeredMockLLM (按 roots 顺序找 {程序}/{fixture_key}.json, 都没有再按顺序找 default.json, 读法同
+    MockLLMClient), 另记下每次的请求全文 (requests, 含 system 与 messages) 与读了哪个文件 (reads)."""
 
-    roots: Sequence[Path]
-    requests: list[LLMRequest] = field(default_factory=list)
-    reads: list[FixtureRead] = field(default_factory=list)
+    def __init__(self, roots: Sequence[Path]) -> None:
+        super().__init__(*roots)
+        self.requests: list[LLMRequest] = []
+        self.reads: list[FixtureRead] = []
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         self.requests.append(req)
-        names = [f"{req.procedure_id}/{req.fixture_key}.json", f"{req.procedure_id}/default.json"]
-        found = next(((root, name) for name in names for root in self.roots if (root / name).is_file()), None)
-        root, name = found if found is not None else (None, None)
+        found = self.locate(req)
+        root, name = (found[0].root, found[1]) if found is not None else (None, None)
         self.reads.append(FixtureRead(req.procedure_id, req.fixture_key, root, name))
-        # 选中的根里 {fixture_key}.json 要么就是选中的文件, 要么不存在 (否则第一轮已选中), MockLLMClient 读的即它
-        return await MockLLMClient(root if root is not None else self.roots[0]).complete(req, output_model)
+        return await super().complete(req, output_model)
 
 
 class RoutedLLMClient:
