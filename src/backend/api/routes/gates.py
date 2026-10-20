@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Response
 
 from backend.api.deps import current_user, get_decisions, get_query, owned_engagement
-from backend.api.errors import api_error, catch_api
+from backend.api.errors import catch_api
 from backend.api.schemas import ClientProfileIn, GateDecisionIn, IdBody
 from backend.contracts.models import Engagement, GateDecision, User
 from backend.contracts.views import GateView
@@ -21,13 +21,11 @@ router = APIRouter(prefix="/engagements/{eid}", tags=["gates"])
 async def get_gate(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
-) -> GateView:
-    """不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND."""
+) -> GateView | None:
+    """当前闸门的材料; 不在闸门是常态, 回 200, 响应体 null (需求 R346, 待拍板 Q30). 停在闸门但材料缺失时
+    404 NOT_FOUND."""
     async with catch_api():
-        view = await query.gate(engagement.id)
-    if view is None:
-        raise api_error("NOT_AT_GATE", "当前不在闸门", status=404)
-    return view
+        return await query.gate(engagement.id)
 
 
 @router.post("/gate-decisions", status_code=202)

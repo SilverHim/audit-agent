@@ -218,7 +218,8 @@ export const gatesUpdateClientProfile = <ThrowOnError extends boolean = false>(o
 /**
  * Get Gate
  *
- * 不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND.
+ * 当前闸门的材料; 不在闸门是常态, 回 200, 响应体 null (需求 R346, 待拍板 Q30). 停在闸门但材料缺失时
+ * 404 NOT_FOUND.
  */
 export const gatesGetGate = <ThrowOnError extends boolean = false>(options: Options<GatesGetGateData, ThrowOnError>): RequestResult<GatesGetGateResponses, GatesGetGateErrors, ThrowOnError> => (options.client ?? client).get<GatesGetGateResponses, GatesGetGateErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

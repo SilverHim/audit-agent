@@ -145,10 +145,11 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
 
     async def decide(decision: str, **fields: Any) -> dict[str, Any]:
         """对当前闸门的材料 (GET /gate 给的对象与版本) 提交决定, 返回 GET /gate 的视图. 不在闸门 (如某条程序失败,
-        流程停下等人) 时报出 GET /gate 的响应."""
+        流程停下等人) 时 GET /gate 为 null, 报出来."""
         got = await client.get(f"{base}/gate")
         assert got.status_code == 200, got.text
         view = got.json()
+        assert view is not None, "不在闸门 (GET /gate 为 null)"
         body = {k: view[k] for k in ("gate", "target_id", "target_version")}
         posted = await client.post(f"{base}/gate-decisions", json={**body, "decision": decision, **fields})
         assert posted.status_code == 202, posted.text

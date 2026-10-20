@@ -319,13 +319,18 @@ def test_missing_token(api: SimpleNamespace) -> None:
     [
         ("ENG-2026-002", "NOT_FOUND"),  # 别人的项目
         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
-        ("ENG-2026-001/gate", "NOT_AT_GATE"),  # 自己的项目, 不在闸门
     ],
 )
 def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
     response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == code
+
+
+def test_gate_not_at_gate_returns_null(api: SimpleNamespace) -> None:
+    """需求 R346: 自己的项目不在闸门是常态, GET /gate 回 200, 响应体 null (不再是 404 NOT_AT_GATE)."""
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/gate", headers=_auth(api))
+    assert (response.status_code, response.json()) == (200, None)
 
 
 TRAIL_ROWS = [  # 依次为 TR-1 到 TR-5

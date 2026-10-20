@@ -73,11 +73,12 @@ export const REPORT_SECTIONS: ReportSection[] = [
 const FIN_OPINIONS: OpinionType[] = ['unqualified', 'qualified', 'adverse', 'disclaimer']
 const RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high', 'significant']
 const VERDICTS: GateVerdict[] = ['approve', 'reject', 'insufficient_info']
+// 当前闸门的材料; 不在闸门时 GET /gate 回 null (需求 R346)
 export function useGate(eid: string, enabled = true) {
   return useQuery({
     ...gatesGetGateOptions({ path: { eid } }),
     enabled,
-    retry: (count, error) => !isApiCode(error, 'NOT_AT_GATE') && !isApiCode(error, 'NOT_FOUND') && count < 1,
+    retry: (count, error) => !isApiCode(error, 'NOT_FOUND') && count < 1,
   })
 }
 
@@ -944,7 +945,7 @@ function initialChoice(candidates: MaterialityCandidates): MaterialityChoice {
 export function GatePanel({ eid, disabled }: { eid: string; disabled: boolean }) {
   const { t } = useI18n()
   const gate = useGate(eid)
-  if (gate.error && isApiCode(gate.error, 'NOT_AT_GATE')) {
+  if (gate.data === null) {
     return <p className="text-muted-foreground text-sm">{t.formView.notAtGate}</p>
   }
   return (

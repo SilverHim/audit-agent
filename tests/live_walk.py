@@ -226,7 +226,7 @@ async def drive(
         gate = overview["current_gate"]
         assert gate is not None, f"没有待决任务, 不等数据也不在闸门, 流程停住: {overview['procedures']}"
         got = await client.get(f"{base}/gate")
-        assert got.status_code == 200, got.text
+        assert got.status_code == 200 and got.json() is not None, got.text  # 不在闸门为 200 null (需求 R346)
         view = got.json()
         body = {k: view[k] for k in ("gate", "target_id", "target_version")}
         if gate == "PLN-01/03":

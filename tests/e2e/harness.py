@@ -184,7 +184,7 @@ def write_report(out: Path, mode: str, results: Mapping[str, Any], data: Mapping
         f"- 项目: {results.get('eid')}; 走到归档: {'是' if results.get('reached_archive') else '否'}",
         f"- 闸门: {gates}; FIN-01: {results.get('fin')} (候选 {results.get('candidate')})",
         f"- 复核决定: {dict(Counter(d for _, d in results.get('decisions', [])))}; 重跑: {data.get('reruns', {})}",
-        f"- 步数: {len(results['steps'])}; 问题: {len(issues)}; 不算问题的已知情况: {results.get('known') or '—'}",
+        f"- 步数: {len(results['steps'])}; 问题: {len(issues)}",
         "",
         "## 问题",
         "",

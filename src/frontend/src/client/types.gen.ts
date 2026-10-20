@@ -6200,9 +6200,11 @@ export type GatesGetGateError = GatesGetGateErrors[keyof GatesGetGateErrors];
 
 export type GatesGetGateResponses = {
     /**
+     * Response Gates-Get Gate
+     *
      * Successful Response
      */
-    200: GateView;
+    200: GateView | null;
 };
 
 export type GatesGetGateResponse = GatesGetGateResponses[keyof GatesGetGateResponses];

@@ -30,7 +30,6 @@ const result = {
   decisions: [], // [任务 ID, 决定]
   steps: [], // {no, name, url, shot, console, failed, ms}
   issues: [], // {step, page, symptom, shot, expected}
-  known: {}, // 不算问题的已知情况 → 次数 (见下面的 response 监听)
 }
 const failures = new Map()
 let token = null
@@ -84,13 +83,6 @@ page.on('response', async (response) => {
   if (response.status() < 400 || !target) return
   const body = await response.text().catch(() => '')
   const code = body.match(/"code"\s*:\s*"([A-Z_]+)"/)?.[1] ?? ''
-  // 停在闸门以外时页面也会问 GET /gate (useGate), 提交闸门决定后的刷新也会问一次 (R346); 404 NOT_AT_GATE 不算失败,
-  // 只计次数
-  if (response.status() === 404 && code === 'NOT_AT_GATE') {
-    const key = 'GET /gate 404 NOT_AT_GATE'
-    result.known[key] = (result.known[key] ?? 0) + 1
-    return
-  }
   target.failed.push(`${response.request().method()} ${new URL(response.url()).pathname} ${response.status()} ${code}`)
 })
 

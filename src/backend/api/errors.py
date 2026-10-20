@@ -11,12 +11,12 @@ from fastapi.responses import JSONResponse, Response
 
 from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked
 
-# 写入时的 NOT_AT_GATE 是 409; GET 闸门由路由单独返回 404, 不走这张表
 _STATUS: dict[str, int] = {
     "BAD_CREDENTIALS": 401,
     "NOT_FOUND": 404,
     "TASK_NOT_FOUND": 404,
     "ENGAGEMENT_BUSY": 409,
+    "NOT_AT_GATE": 409,
     "RESUME_REQUIRED": 409,
     "FEATURES_MISMATCH": 409,
     "NOT_AWAITING_DATA": 409,
@@ -55,9 +55,9 @@ def api_error(code: str, message: str = "", *, status: int | None = None, **extr
 
 
 def http_for_decision(exc: DecisionRejected) -> HTTPException:
-    """DecisionRejected 按错误码表映射; 写入路径上的 NOT_AT_GATE 为 409. DataRejected 的 extra 并入 detail."""
-    status = 409 if exc.code == "NOT_AT_GATE" else None
-    return api_error(exc.code, exc.message, status=status, **(exc.extra if isinstance(exc, DataRejected) else {}))
+    """DecisionRejected 按错误码表映射. DataRejected 的 extra 并入 detail."""
+    extra = exc.extra if isinstance(exc, DataRejected) else {}
+    return api_error(exc.code, exc.message, status=None, **extra)
 
 
 @asynccontextmanager
