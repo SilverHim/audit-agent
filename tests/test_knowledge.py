@@ -103,12 +103,12 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131) 与 GEN-08 (功能
-    related_parties, 需求 R137), 基线下都不启用; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的
-    P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals
-    不在基线中) 的模板同样校验."""
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131) 与 GEN-03, GEN-08
+    (功能 related_parties, 需求 R139, R137), 基线下都不启用; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其
+    依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能
+    (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-02", "GEN-05", "GEN-08"]
+    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-02", "GEN-03", "GEN-05", "GEN-08"]
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature
@@ -2291,16 +2291,21 @@ def voided_cte(sql: str) -> str | None:
 
 def test_voided_pair_cte_is_one_text_everywhere() -> None:
     """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
-    之间逐字相同 (CSH-02 D03, D04 与 GEN-05 的 R02, R09-R12). 防只改一处使两个程序认的作废对不同."""
+    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12 与 GEN-03 的 C01, C02, 需求 R139). 防只改一处使几个程序认的
+    作废对不同."""
     marked = {
         (t.id, rule.id): voided_cte(rule.sql)
         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
         for rule in t.rules
         if "reversal AS (" in rule.sql
     }
-    assert {("CSH-02", "D03"), ("CSH-02", "D04"), *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12"))} <= set(
-        marked
-    )
+    assert {
+        ("CSH-02", "D03"),
+        ("CSH-02", "D04"),
+        *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12")),
+        ("GEN-03", "C01"),
+        ("GEN-03", "C02"),
+    } <= set(marked)
     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
     assert text is not None and text.startswith("WITH reversal AS (") and "), voided AS (" in text
 
@@ -2420,6 +2425,11 @@ DATASET_REFS = {
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
         "audit_adjustment_entry_prefix": "audit_adjustment_entry_prefix",
+        "counterparty_prefixes": "counterparty_prefixes",
+    },
+    "GEN-03": {  # 作废对与对方名称的前缀, 同 GEN-05 (需求 R139)
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
         "counterparty_prefixes": "counterparty_prefixes",
     },
 }

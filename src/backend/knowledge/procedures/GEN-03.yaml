@@ -1,0 +1,158 @@
+id: GEN-03
+name: 关联方图谱研判
+# 规格书 6.1.2 GEN-03 (← DOC-04, GEN-08), 7.2 节 (L2), 8.5 节 (个人信息边界); ASA 550 第 10(b), 21, 22, 23 段. 对关系图
+# (GEN-08) 中报告主体以外的每个公司节点出一条判断: 是否关联方, 是否已申报, 本期与期后的交易及条款 (需求 R139). 取数用
+# 通用写法 (名称规范化, 标准分类), 不写死任何公司的科目或 ABN; 判断对象与 data 见接口文档第 6 节与 GEN-03.md.j2 头注释.
+#
+# 规则只出行 (rows), 不出例外. 名称与 ACN 不在参数快照里: A6 调规则时由关系图推出 party_names, party_acns (对象节点的
+# 名称与 ACN, 按节点 ID 排序, 两个数组一一对应, 没有 ACN 为空) 合并进参数, 不写回快照.
+# - 窗口: [period_start, period_end + subsequent_days] (本期与期后).
+# - 名称键: party_name_key(名称, {}, entity_suffixes), 去公司后缀 (同 GEN-08 R01 的名称比对); 拿来比的分录说明, 单据号,
+#   银行流水摘要 (收款人) 与发票客户经 party_name_key(原文, counterparty_prefixes, ...) 去开头的说明前缀 (同 GEN-05 R11).
+#   "整词含": 两边都是空格分隔的词, ' ' || 原文的键 || ' ' LIKE '% ' || 名称键 || ' %'. 键为 NULL (规范化后为空) 的名称
+#   不参与名称匹配.
+# - C01 与关联方候选的往来: (1) 分录: 窗口内未作废的凭证中任一行 description 或 source_doc 整词含名称键的, 取整笔凭证的
+#   全部行 (费用行的说明常是物品描述, 不含对方名称); (2) 银行流水: 窗口内 description 整词含名称键的; (3) 销售发票: 开票日
+#   在窗口内, customer 的键 (同样去后缀) 等于名称键, 或 customer_abn 去掉非数字后的末 9 位等于该方 ACN (ABN 只作附加
+#   条件). 每行为 {source_type, party_key (名称键), record (该来源的列, jsonb; 不带录入时间与交易后余额)}, 同一行对同一方
+#   只出一次; 按 (party_key, source_type, 日期, ID 自然序) 排序.
+# - C02 权益科目的分录: 窗口内 equity_categories 分类科目的分录行, 剔除作废对; 列同 C01 分录的 record. A6 只交给持有
+#   报告主体股份的节点.
+# - 作废对 (C01 的分录与 C02 剔除): 同 CSH-02 的注释; WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02,
+#   GEN-05 逐字相同 (tests/test_knowledge.py 守住), 改口径时几处一起改.
+phase: P2_Executing
+cycle: Pervasive
+owner: A6
+feature: related_parties          # 功能开关 (services/features.py): 关联方
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [judgments, exceptions, review_tasks]
+# contracts, documents: 上下文带对方的合同与关联文件, 证据可靠性取自文件登记 (登记摘录的页在关系图的证据指针里).
+# 读哪几类文件的登记 (需求 R304): 关联文件按 related_ids 取, 类型不定, 同 GEN-02 列出全部可作证据的类型, 即
+# judgment_engine.DOCUMENT_EVIDENCE 的键; 不作证据的 financial_statements 与 other 的登记变动不让本程序过期. 代价是
+# 补登记任何证据类文件 (不论关联谁) 都让本程序过期
+reads: [journal_entries, accounts, bank_transactions, sales_invoices, contracts, documents]
+document_reads: [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter,
+                 representation_letter, correspondence, governance_communication, agreement, internal_record]
+engine: llm
+autonomy_level: L2
+manual_result_allowed: true
+assertions: [Completeness]
+params:
+  period_start: {ref: period_start}
+  period_end: {ref: period_end}
+  subsequent_days: 30             # 期后窗口的天数
+  reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}   # 写法要求见 CSH-02.yaml 的注释
+  reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
+  counterparty_prefixes: {ref: dataset.counterparty_prefixes}   # 对方名称前的说明前缀 (如 "payment to"), 比较时去掉
+  entity_suffixes: [pty ltd, pty limited, pty, ltd, limited]   # 公司后缀, 名称比较时去掉 (同 GEN-08)
+  equity_categories: [share_capital, retained_earnings, other_equity]
+depends_on: [DOC-04, GEN-08]
+standards: [ASA550-P10, ASA550-P21, ASA550-P22, ASA550-P23]
+evidence_required: [external, contract]
+rules:
+  - id: C01
+    name: 与关联方候选的往来
+    severity: low
+    emit: rows
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), parties AS (
+        SELECT party_name_key(p.name, CAST('{}' AS text[]), CAST(:entity_suffixes AS text[])) AS party_key, p.acn
+        FROM unnest(CAST(:party_names AS text[]), CAST(:party_acns AS text[])) AS p(name, acn)
+      ), lines AS (
+        SELECT j.id, j.entry_no, j.posting_date, j.account_code, a.name AS account_name, a.category AS account_category,
+               j.debit_cents, j.credit_cents, j.description, j.source_doc,
+               party_name_key(j.description, CAST(:counterparty_prefixes AS text[]), CAST('{}' AS text[]))
+                 AS description_key,
+               party_name_key(j.source_doc, CAST(:counterparty_prefixes AS text[]), CAST('{}' AS text[]))
+                 AS source_doc_key
+        FROM journal_entries j LEFT JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date)
+                                 AND CAST(:period_end AS date)+CAST(:subsequent_days AS int)
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ), vouchers AS (
+        SELECT DISTINCT p.party_key, l.entry_no
+        FROM parties p JOIN lines l
+          ON ' '||l.description_key||' ' LIKE '% '||p.party_key||' %'
+          OR ' '||l.source_doc_key||' ' LIKE '% '||p.party_key||' %'
+      ), found AS (
+        SELECT 'journal_entry' AS source_type, v.party_key, l.posting_date AS on_date, l.id,
+               jsonb_build_object('id', l.id, 'entry_no', l.entry_no, 'posting_date', l.posting_date,
+                                  'account_code', l.account_code, 'account_name', l.account_name,
+                                  'account_category', l.account_category, 'debit_cents', l.debit_cents,
+                                  'credit_cents', l.credit_cents, 'description', l.description,
+                                  'source_doc', l.source_doc) AS record
+        FROM vouchers v JOIN lines l ON l.entry_no=v.entry_no
+        UNION
+        SELECT 'bank_transaction', p.party_key, t.txn_date, t.id,
+               jsonb_build_object('id', t.id, 'bank_account_id', t.bank_account_id, 'txn_date', t.txn_date,
+                                  'amount_cents', t.amount_cents, 'description', t.description,
+                                  'reference', t.reference)
+        FROM parties p JOIN bank_transactions t
+          ON t.engagement_id=:eid
+         AND t.txn_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)+CAST(:subsequent_days AS int)
+         AND ' '||party_name_key(t.description, CAST(:counterparty_prefixes AS text[]), CAST('{}' AS text[]))||' '
+               LIKE '% '||p.party_key||' %'
+        UNION
+        SELECT 'sales_invoice', p.party_key, i.invoice_date, i.id,
+               jsonb_build_object('id', i.id, 'invoice_no', i.invoice_no, 'customer', i.customer,
+                                  'customer_abn', i.customer_abn, 'contract_id', i.contract_id,
+                                  'invoice_date', i.invoice_date, 'posting_date', i.posting_date,
+                                  'amount_cents', i.amount_cents, 'journal_entry_id', i.journal_entry_id)
+        FROM parties p JOIN sales_invoices i
+          ON i.engagement_id=:eid
+         AND i.invoice_date BETWEEN CAST(:period_start AS date)
+                                AND CAST(:period_end AS date)+CAST(:subsequent_days AS int)
+         AND (party_name_key(i.customer, CAST(:counterparty_prefixes AS text[]), CAST(:entity_suffixes AS text[]))
+                =p.party_key
+              OR right(regexp_replace(i.customer_abn, '[^0-9]', '', 'g'), 9)=p.acn)
+      )
+      SELECT source_type, party_key, record
+      FROM found
+      ORDER BY party_key COLLATE "C", source_type COLLATE "C", on_date,
+               regexp_replace(regexp_replace(id, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               id COLLATE "C"
+  - id: C02
+    name: 权益科目的分录
+    severity: low
+    emit: rows
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      )
+      SELECT 'journal_entry' AS source_type, j.id, j.entry_no, j.posting_date, j.account_code, a.name AS account_name,
+             a.category AS account_category, j.debit_cents, j.credit_cents, j.description, j.source_doc
+      FROM journal_entries j JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+      WHERE j.engagement_id=:eid
+        AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)+CAST(:subsequent_days AS int)
+        AND a.category=ANY(CAST(:equity_categories AS text[]))
+        AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ORDER BY j.posting_date,
+               regexp_replace(regexp_replace(j.id, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               j.id COLLATE "C"
+llm:
+  prompt: GEN-03.md.j2
+  output_model: JudgmentDraft
+  context_budget: 8000

@@ -1,0 +1,180 @@
+{#
+GEN-03 关联方图谱研判 → JudgmentDraft，关系图（GEN-08）中报告主体以外的每个公司节点调用一次（需求 R139）。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。人员节点 ID 在渲染前已去掉
+出生日期一段（JudgmentEngine.call_llm 经 mask_person_node_ids），人员不带出生日期字段。
+变量：
+  subject_id              公司节点 ID（ACN-{acn}，没有 ACN 的为 ORG-{名称}）
+  task.params             period_start、period_end、subsequent_days、entity_suffixes、equity_categories 等（GEN-03.yaml）
+  task.risks              本程序覆盖的 RiskItem（固定集程序不关联审计目标，通常为空列表）
+  data.entity             本节点：name、acn（没有为 null）
+  data.reporting_entity   报告主体节点：id、name
+  data.client_profile     本项目采用版本的客户画像：id（client_profile 指针的 source_id）、applicable_framework
+  data.links              与本节点相连的关系（PartyLink）：from_id、to_id、relation（director、secretary、shareholder）、
+                          shares、pct、appointed、ceased、evidence（登记摘录中那一行的 document 指针）
+  data.persons            与本节点相连的人员，按 ID：id、name、relations_with_entity（该人与报告主体的关系，如
+                          director、shareholder 0.85；没有为空列表）
+  data.declared           画像申报清单中与本节点匹配的一项（DeclaredParty：name、kind、relationship、abn、acn、notes，
+                          或 DeclaredHolding：holder、kind、shares、pct）；没有为 null
+  data.transactions       规则 C01 中本节点的行，均带 source_type：
+                            entries     提到本节点名称的凭证的全部分录行：id、entry_no、posting_date、account_code、
+                                        account_name、account_category、debit_cents、credit_cents、description、source_doc
+                            bank_lines  摘要含本节点名称的银行流水：id、bank_account_id、txn_date、amount_cents（存入为正）、
+                                        description、reference
+                            invoices    客户为本节点的销售发票：id、invoice_no、customer、customer_abn、contract_id、
+                                        invoice_date、posting_date、amount_cents、journal_entry_id
+  data.equity_entries     本节点持有报告主体股份时为规则 C02 的权益科目分录行（列同 entries），否则为空列表
+  data.contracts          对方为本节点的 DOC-04 合同：contract（Contract）、document（合同 PDF 的 DocumentRef）
+  data.documents          关联对象含本节点的文件（登记摘录除外：摘录页印有出生日期，内容已在 links 里）：document
+                          （DocumentRef：id、type、file_name、document_date、reliability 等）、pages（各页文字，下标 0 为第 1 页）
+  rule_findings           本节点上 GEN-08 尚未归因的 AuditException（R01 关联候选未申报）：id、rule_id、severity、detail
+  standards               StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set p = task.params %}
+{% set framework = data.client_profile.applicable_framework %}
+You assist a registered company auditor with the audit of an Australian financial report for the period {{ p.period_start }} to {{ p.period_end }} of {{ data.reporting_entity.name }} (the reporting entity, node {{ data.reporting_entity.id }}).
+
+## Task
+
+Decide whether {{ data.entity.name }} (node {{ subject_id }}{% if data.entity.acn %}, ACN {{ data.entity.acn }}{% endif %}) is a related party of the reporting entity, whether management has declared it, and what transactions with it occurred in the period and in the {{ p.subsequent_days }} days after the period end, and on what terms.
+
+## Inputs
+
+Applicable financial reporting framework (client profile `applicable_framework`): {{ framework if framework else "not recorded" }}.
+
+Ownership and office links of this company, from the registry extracts:
+{% if data.links %}
+```json
+{{ data.links | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+People linked to this company and their relations with the reporting entity (person IDs are shown without dates of birth; two people with the same name may show the same ID, so tell them apart by their links and evidence):
+{% if data.persons %}
+```json
+{{ data.persons | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Management's declaration matching this company (client profile `related_parties` or `ownership`):
+{% if data.declared %}
+```json
+{{ data.declared | tojson(indent=2) }}
+```
+{% else %}
+None: management has not declared this company.
+{% endif %}
+
+Journal entries that mention this company (every line of each such entry):
+{% if data.transactions.entries %}
+```json
+{{ data.transactions.entries | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Bank transactions that mention this company:
+{% if data.transactions.bank_lines %}
+```json
+{{ data.transactions.bank_lines | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Sales invoices to this company:
+{% if data.transactions.invoices %}
+```json
+{{ data.transactions.invoices | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Equity entries (given only when this company holds shares in the reporting entity):
+{% if data.equity_entries %}
+```json
+{{ data.equity_entries | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Contracts with this company:
+{% for c in data.contracts %}
+```json
+{{ c | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endfor %}
+
+Documents relating to this company:
+{% for d in data.documents %}
+Document {{ d.document.id }} ({{ d.document.type }}, {{ d.document.file_name }}, dated {{ d.document.document_date or "unknown" }}, reliability {{ d.document.reliability }}):
+{% for text in d.pages %}
+--- page {{ loop.index }} ---
+{{ text }}
+{% endfor %}
+
+{% else %}
+None.
+{% endfor %}
+
+Rule findings on this company:
+{% for x in rule_findings %}
+- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, detail {{ x.detail | tojson }}
+{% else %}
+None.
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. Related party definition: ASA550-P10 defers to the applicable financial reporting framework. Take the framework from the client profile field `applicable_framework` above. For `tier2_gpfs` (Australian Accounting Standards – Simplified Disclosures) the definition is in AASB 1060; its paragraph numbers are not available here, so do not cite any AASB 1060 paragraph, and record a `limitation` step that the basis under AASB 1060 awaits its authoritative text. AASB 124 does not apply to such an entity: you may name the corresponding AASB 124 paragraph only as a reference in that limitation, never as the basis of the conclusion. If no framework is recorded, record that as a limitation and apply ASA550-P10(b)(ii).
+2. Relationship: establish control, joint control or significant influence, and key management personnel in common, from the links and the people's relations with the reporting entity. Cite the registry extract lines (each link's `evidence`).
+3. Declaration: compare with management's declaration. A related party that management did not declare is newly identified: the follow-up is ASA550-P22 (communicate to the team, ask management to identify all transactions with it, enquire why controls failed, reconsider whether other undisclosed related parties exist, and evaluate whether the non-disclosure appears intentional). Where ASA550-P21 applies (arrangements or information suggesting an undisclosed relationship), state whether the circumstances confirm it.
+4. Transactions: describe the transactions in the period and after it, with amounts, dates and terms, from the journal lines, bank transactions, invoices, contracts and documents. Compare the terms with any other agreement for the same goods, services or property in the documents. State whether they are in the normal course of business; for significant ones outside it, ASA550-P23 applies.
+5. Address every rule finding in the reasoning chain. If you conclude `accept` despite a finding, state why it does not call for further work.
+
+## proposed_action
+
+- `accept`: the company is not a related party, or it is a declared related party and the transactions (if any) are consistent with the declaration and need no further evidence.
+- `more_evidence`: the company is a related party that management has not declared, the relationship cannot be established from the inputs, or the transactions or their terms need further evidence (such as a written agreement or approval).
+- Do not use `misstatement` or `close`: the accounting for and disclosure of related parties are evaluated after this procedure.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to four sentences: whether the company is a related party and why, whether it was declared, the transactions in the period and after it with amounts, and the follow-up required.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: null.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Registry extract line (a link's or rule finding's `evidence`) | external | document | as given | as given | as given | as given |
+| Document page | contract for agreements and contracts, external for registry extracts, invoice for invoices, voucher otherwise | document | document `id` | what the page shows, e.g. monthly rent | page number, from 1 | the document's `reliability` |
+| Contract term | contract | document | the contract's `document_id` | term ID | the term's `page` | the document's `reliability` |
+| Management's declaration | voucher | client_profile | {{ data.client_profile.id }} | profile field, e.g. related_parties | null | internal_copy |
+| Journal line | voucher | journal_entry | line `id` | column name, e.g. debit_cents | null | internal_original |
+| Bank transaction | bank | bank_transaction | transaction `id` | column name, e.g. amount_cents | null | external_copy |
+| Sales invoice | invoice | sales_invoice | invoice `id` | column name, e.g. amount_cents | null | internal_original |
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

@@ -49,6 +49,7 @@ from backend.contracts.models import (
     StepStatus,
     TrailEntry,
     TrailKind,
+    mask_person_node_ids,
 )
 from backend.contracts.ports import (
     AuditTrail,
@@ -760,7 +761,8 @@ class JudgmentEngine:
     ) -> LLMCallResult[Any]:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
-        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json")),
+        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
+        渲染前经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
@@ -769,7 +771,8 @@ class JudgmentEngine:
         assert template.llm is not None  # output_model 已确认
         client = llm if llm is not None else self.llm
         system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
-        messages = [LLMMessage(role="user", content=self.render(template, variables))]
+        # 人员节点 ID 先去掉出生日期再渲染 (接口文档第 0 节 "个人信息"): 关系图的端点, 例外的 detail 都可能带它
+        messages = [LLMMessage(role="user", content=self.render(template, mask_person_node_ids(dict(variables))))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
             request = LLMRequest(

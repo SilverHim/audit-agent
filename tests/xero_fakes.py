@@ -757,6 +757,62 @@ def xero_gen05_result(run: ProcedureRun) -> RuleResult:
     )
 
 
+# GEN-03 C01 对 Xero 演示的命中 (需求 R139, 取自连库跑一次 SqlRuleEngine 的结果, 期间同上, 期后 30 天): 名称键 →
+# (凭证号, 银行流水 ID); 没有发票命中. VPA 的作废对 XJ-415/417 已剔除. SMART Agency 只在 T6 同构用例的关系图里
+# (tests/test_fieldwork_gen03.py), 缺省关系图的 Morgan Advisory 没有命中. C02 没有行 (窗口内没有权益科目的分录).
+XERO_GEN03_HITS = {
+    "smart agency": (("XJ-548", "XJ-641"), ("BT-090-0097",)),
+    "victoria property agency": (("XJ-420", "XJ-518", "XJ-593"), ("BT-090-0004", "BT-090-0033", "BT-090-0058")),
+}
+GEN03_ENTRY_COLUMNS = {  # C01 分录行 record 的列 (另加科目名称与分类), 同 C02 的列
+    "id",
+    "entry_no",
+    "posting_date",
+    "account_code",
+    "debit_cents",
+    "credit_cents",
+    "description",
+    "source_doc",
+}
+GEN03_BANK_COLUMNS = {"id", "bank_account_id", "txn_date", "amount_cents", "description", "reference"}
+
+
+def xero_gen03_rows(keys: Sequence[str], loader: XeroDatasetLoader | None = None) -> list[dict[str, Any]]:
+    """GEN-03 C01 对这些名称键的行, 列与顺序同 GEN-03.yaml 的 SQL ({source_type, party_key, record}, 按名称键, 来源,
+    日期与 ID): 由演示数据导入之后的表 (xero_tables) 按 XERO_GEN03_HITS 组装, 凭证取全部行, 科目名称与分类取科目表.
+    读快照, 每次新建."""
+    tables = xero_tables(loader)
+    accounts = {a.code: a.model_dump(mode="json") for a in tables["accounts"]}
+    rows: list[dict[str, Any]] = []
+    for key in sorted(keys):
+        entry_nos, bank_ids = XERO_GEN03_HITS[key]
+        bank = sorted((b for b in tables["bank_transactions"] if b.id in bank_ids), key=lambda b: (b.txn_date, b.id))
+        rows += [
+            {
+                "source_type": "bank_transaction",
+                "party_key": key,
+                "record": b.model_dump(mode="json", include=GEN03_BANK_COLUMNS),
+            }
+            for b in bank
+        ]
+        lines = sorted(
+            (j for j in tables["journal_entries"] if j.entry_no in entry_nos), key=lambda j: (j.posting_date, j.id)
+        )
+        rows += [
+            {
+                "source_type": "journal_entry",
+                "party_key": key,
+                "record": {
+                    **j.model_dump(mode="json", include=GEN03_ENTRY_COLUMNS),
+                    "account_name": accounts[j.account_code]["name"],
+                    "account_category": accounts[j.account_code]["category"],
+                },
+            }
+            for j in lines
+        ]
+    return rows
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES)
@@ -769,6 +825,10 @@ XERO_RULES: dict[
     "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
     "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
     "GEN-05": xero_gen05_result,  # 功能 journals 打开时才执行
+    # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
+    "GEN-03": lambda run: RuleResult(
+        exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []}
+    ),
 }
 
 
