@@ -89,16 +89,17 @@ async def at_communicate(
     runs: list[ProcedureRun] | None = None,
     store: Any = None,
     history: dict[str, list[Any]] | None = None,
+    stops: Sequence[str] = STOPS,
 ) -> Started:
-    """见模块 docstring: 推进到 communicate 停下 (等 FIN-08 的登记) 或之后的停点. misstatements 缺省为第 1 轮的两条;
-    runs 为之前各轮的执行记录 (定下本轮的 run_no), history 为之前各轮的登记 (fakes.fin08_registered, 只进状态).
-    Store 另有错报的各个版本."""
+    """见模块 docstring: 推进到 communicate 停下 (等 FIN-08 的登记) 或之后的停点 (stops 之前). misstatements 缺省为
+    第 1 轮的两条; runs 为之前各轮的执行记录 (定下本轮的 run_no), history 为之前各轮的登记 (fakes.fin08_registered,
+    只进状态). Store 另有错报的各个版本."""
     deps = fin03_deps(FakeTrail(), features=FEATURES, output_store=store)
     misstatements = round1_misstatements() if misstatements is None else misstatements
     pack = [make_ctx(deps, pid, engagement=xero_engagement()).procedure for pid in ("FIN-03", FIN08)]
     versions = [m.model_copy(update={"version": v}) for m in misstatements for v in range(1, m.version)]
     state = fin03_state(misstatements=misstatements, procedure_runs=runs or [], **(history or {}))
-    runner = await start_at_fan_in(deps, state, pack, STOPS, [*versions, *misstatements, *(runs or [])])
+    runner = await start_at_fan_in(deps, state, pack, stops, [*versions, *misstatements, *(runs or [])])
     return Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
 
 

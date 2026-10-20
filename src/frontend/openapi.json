@@ -8624,6 +8624,19 @@
             "type": "boolean",
             "title": "Awaiting Data"
           },
+          "awaiting_correction": {
+            "type": "boolean",
+            "title": "Awaiting Correction",
+            "default": false
+          },
+          "awaiting_correction_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Awaiting Correction Ids",
+            "default": []
+          },
           "missing_tables": {
             "items": {
               "$ref": "#/components/schemas/TableKind"

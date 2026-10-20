@@ -15,6 +15,7 @@ from langgraph.types import Command, StateSnapshot
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
     AgentId,
+    CorrectionNotice,
     Decision,
     Engagement,
     GateDecision,
@@ -31,10 +32,10 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.decisions import rerun_trail, review_trail
+from backend.orchestration.decisions import notice_trail, rerun_trail, review_trail
 from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
 from backend.orchestration.nodes import confirmations_from_store, node_table
-from backend.orchestration.runner import GraphRunner, at_rerun_point, waiting_payloads
+from backend.orchestration.runner import GraphRunner, at_rerun_point, correction_wait, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 
 
@@ -284,14 +285,35 @@ async def catch_up_review(
     return Command(resume=sequence[-1].id)
 
 
+async def catch_up_correction(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> Command[Any] | None:
+    """Store 中有检查点里没有的更正通知 (需求 R162) 时, 补写它的 decision 留痕, 返回 Command(resume=通知 ID) 交给
+    等待更正的节点 (节点读回后载入更正分录并写错报, 见 nodes.apply_notice); 没有返回 None. 等待载荷的 records 恒为空
+    (通知读回即生效), 不必看. 一次只会缺一份 (缺着时 DecisionSubmit 报 RESUME_REQUIRED, 不收新的通知); 缺的多于
+    一份, 或图不在等待更正时抛 RuntimeError."""
+    eid = engagement.id
+    waiting = correction_wait(snapshot)
+    known = {n.id for n in fill_defaults(snapshot.values)["correction_notices"]}
+    known |= set(waiting.get("records", [])) if waiting is not None else set()
+    missing = [n for n in await deps.output_store.latest(eid, CorrectionNotice) if n.id not in known]
+    if not missing:
+        return None
+    ids = ", ".join(sorted(n.id for n in missing))
+    if waiting is None or len(missing) > 1:
+        raise RuntimeError(f"更正通知 {ids} 未进检查点, 图却不在等待更正或缺的不止一份 ({snapshot.next}), 无法补做")
+    [notice] = missing
+    await record_once(deps, notice_trail(eid, notice))
+    return Command(resume=notice.id)
+
+
 async def catch_up(
     app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement
 ) -> Command[Any] | None:
-    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定. 前三者直接写进
-    检查点; 复核决定由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回 None (从检查点继续).
-    补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
+    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定, 更正通知. 前三者
+    直接写进检查点; 复核决定与更正通知由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回
+    None (从检查点继续). 补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
     snapshot = await app.aget_state(GraphRunner.config(engagement.id))
     snapshot = await catch_up_gates(app, deps, engagement, snapshot)
     snapshot = await catch_up_profile(app, deps, engagement, snapshot)
     snapshot = await catch_up_rerun(app, deps, engagement, snapshot)
-    return await catch_up_review(app, deps, engagement, snapshot)
+    command = await catch_up_review(app, deps, engagement, snapshot)
+    return command if command is not None else await catch_up_correction(deps, engagement, snapshot)

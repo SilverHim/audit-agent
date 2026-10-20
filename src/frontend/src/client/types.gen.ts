@@ -2184,6 +2184,14 @@ export type EngagementOverview = {
      */
     awaiting_data: boolean;
     /**
+     * Awaiting Correction
+     */
+    awaiting_correction?: boolean;
+    /**
+     * Awaiting Correction Ids
+     */
+    awaiting_correction_ids?: Array<string>;
+    /**
      * Missing Tables
      */
     missing_tables: Array<TableKind>;

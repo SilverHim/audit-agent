@@ -250,7 +250,12 @@ OUTPUT_KINDS = {
     "exceptions": ["AuditException"],
     "judgments": ["Judgment"],
     "review_tasks": ["ReviewTask"],
-    "decisions": ["ReviewRecord", "GateDecision", "RerunRequest"],
+    "decisions": [
+        "ReviewRecord",
+        "GateDecision",
+        "RerunRequest",
+        "CorrectionNotice",
+    ],  # 更正通知需求 R162, kind 为文本列
     "confirmations": ["Confirmation"],
     "misstatements": ["Misstatement"],
     "report_versions": ["AuditReportVersion"],

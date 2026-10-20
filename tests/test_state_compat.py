@@ -208,6 +208,7 @@ def test_initial_state_equals_previous_literal() -> None:
         gate_decisions=[],
         misstatements=[],
         rerun_requests=[],  # 需求 R274 加
+        correction_notices=[],  # 需求 R162 加
         uncorrected_schedule=None,
         representation_letter=None,  # 以下四项需求 R215 加
         compliance_checks=[],
@@ -287,7 +288,7 @@ def test_every_node_and_route_is_wrapped() -> None:
 
 # ── 验收 2: 模拟旧检查点 ──
 
-# 加字段之前的检查点没有的通道: 原有三个, 加需求 R215 的四个 (签字前提的产出)
+# 加字段之前的检查点没有的通道: 原有三个, 加需求 R215 的四个 (签字前提的产出), 需求 R162 的更正通知
 DROPPED = (
     "misstatements",
     "uncorrected_schedule",
@@ -296,6 +297,7 @@ DROPPED = (
     "compliance_checks",
     "governance_communications",
     "independence_declaration",
+    "correction_notices",
 )
 
 

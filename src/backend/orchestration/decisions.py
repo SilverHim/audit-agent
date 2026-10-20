@@ -25,6 +25,7 @@ from backend.contracts.models import (
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
+    CorrectionNotice,
     CriticVerdict,
     Decision,
     DisputeResolution,
@@ -77,7 +78,14 @@ from backend.orchestration.nodes import (
     save_outputs,
     waiting_status,
 )
-from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
+from backend.orchestration.runner import (
+    GraphRunner,
+    at_rerun_point,
+    correction_wait,
+    features_mismatch,
+    resume_required,
+    review_waits,
+)
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
@@ -776,6 +784,36 @@ def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[Revi
     )
 
 
+def check_notice_fields(notice: CorrectionNotice) -> None:
+    """更正通知的字段 (需求 R162), 不过抛 DecisionRejected: stop_waiting 须有理由 (去首尾空白后非空, 否则
+    MISSING_FIELD), 不能带凭证号 (FIELD_NOT_ALLOWED); adjustments_posted 的理由可写可不写, 凭证号为空表示载入全部未
+    载入的更正分录. 纯函数."""
+    if notice.kind == "stop_waiting":
+        if not (notice.reason or "").strip():
+            raise DecisionRejected("MISSING_FIELD", "reason")
+        if notice.adjustment_entry_nos:
+            raise DecisionRejected("FIELD_NOT_ALLOWED", "adjustment_entry_nos")
+
+
+def notice_trail(eid: str, notice: CorrectionNotice) -> TrailEntry:
+    """更正通知的 decision 留痕, 提交与恢复补写共用: 记在 FIN-08 下 (沟通之后的更正), 防重复键为通知 ID."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=notice.decided_by,
+        procedure_id="FIN-08",
+        summary=f"更正通知 {notice.kind}: {', '.join(notice.misstatement_ids)}",
+        idempotency_key=notice.id,
+        payload={
+            "decision_id": notice.id,
+            "kind": notice.kind,
+            "misstatement_ids": notice.misstatement_ids,
+            "adjustment_entry_nos": notice.adjustment_entry_nos,
+            "reason": notice.reason,
+        },
+    )
+
+
 def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[str]) -> TrailEntry:
     """复核决定的 decision 留痕, 决定提交与恢复补写共用. closed: rerun 时随同关闭的同组任务 ID (不含 task)."""
     payload: dict[str, Any] = {"decision_id": record.id, "task_id": task.id, "reason": record.reason}
@@ -906,12 +944,13 @@ class GraphDecisionSubmit:
         self.runner.launch(eid, None if resume is None else Command(resume=resume))
 
     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
-        """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定与复核决定共用一张 decisions 表 (第 9 节), 两类都查.
+        """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定, 复核决定, 过期重跑请求与更正通知共用一张 decisions 表
+        (第 9 节), 各类都查.
 
         同一 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算.
         """
         store = self.deps.output_store
-        for kind in (GateDecision, ReviewRecord, RerunRequest):  # 三类同在 decisions 表, ID 不能重
+        for kind in (GateDecision, ReviewRecord, RerunRequest, CorrectionNotice):  # 同在 decisions 表, ID 不能重
             if await store.get(eid, kind, decision_id) is not None:
                 raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
 
@@ -993,8 +1032,15 @@ class GraphDecisionSubmit:
         if problems:
             raise DecisionRejected("INVALID_VALUE", "; ".join(problems))
 
-    async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
-        """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
+    async def submit(self, eid: str, decision: ReviewRecord | GateDecision | CorrectionNotice) -> None:
+        """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写.
+        三种决定: 闸门决定, 复核决定与更正通知 (需求 R162: 外部数据到达同样须由人确认, 经唯一写入口才能统一校验,
+        留痕与恢复)."""
+        if isinstance(decision, CorrectionNotice):
+            async with self._deciding(eid, resume=decision.id) as (engagement, snapshot):
+                await self.check_correction_notice(engagement, decision, snapshot)
+                await self._write_notice(eid, decision)
+            return
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task, checked = await self.check_review_record(eid, decision, snapshot)
@@ -1019,6 +1065,43 @@ class GraphDecisionSubmit:
                 written[spec.material_field] = [target] if spec.is_list else target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由节点的路由按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=spec.node)
+
+    async def check_correction_notice(
+        self, engagement: Engagement, notice: CorrectionNotice, snapshot: StateSnapshot
+    ) -> None:
+        """更正通知的校验 (第 7 节校验顺序中 RESUME_REQUIRED 之后, 需求 R162), 不过抛 DecisionRejected: 图停在
+        await_correction 等更正通知, 否则 NOT_AWAITING_CORRECTION; 字段 (check_notice_fields); 所列错报非空, 不重复,
+        都在等待载荷中 (载荷只列不须重新沟通的 communicated 错报), 否则 INVALID_VALUE; adjustments_posted 的凭证号都在
+        数据集可载入的更正分录中 (DatasetLoader.adjustment_entry_nos), 项目没有数据集或数据集没有更正分录也是
+        INVALID_VALUE; 决定 ID 未用过. 读回通知后出错的节点不必另查: 通知已在 Store 而不在检查点, 先报
+        RESUME_REQUIRED."""
+        waiting = correction_wait(snapshot)
+        if waiting is None:
+            raise DecisionRejected("NOT_AWAITING_CORRECTION", "当前不在等待更正")
+        check_notice_fields(notice)
+        ids = notice.misstatement_ids
+        if not ids or len(set(ids)) < len(ids):
+            raise DecisionRejected("INVALID_VALUE", f"更正通知须列出不重复的错报, 现为 {ids}")
+        others = [mid for mid in ids if mid not in waiting["misstatement_ids"]]
+        if others:
+            raise DecisionRejected("INVALID_VALUE", f"{', '.join(others)} 不在等更正的错报中")
+        if notice.kind == "adjustments_posted":
+            dataset = engagement.dataset
+            available = self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
+            if not available:
+                raise DecisionRejected("INVALID_VALUE", f"项目的数据集 {dataset} 没有可载入的更正分录")
+            unknown = [no for no in notice.adjustment_entry_nos if no not in available]
+            if unknown:
+                raise DecisionRejected("INVALID_VALUE", f"更正分录中没有 {', '.join(unknown)}")
+        await self._check_decision_id(engagement.id, notice.id)
+
+    async def _write_notice(self, eid: str, notice: CorrectionNotice) -> None:
+        """写入已通过校验的更正通知 (写入者为提交的审计师), 提交后写 decision 留痕; 效果由等待更正的节点读回后完成
+        (nodes.apply_notice). 不写检查点."""
+        store = self.deps.output_store
+        async with store.transaction(eid):
+            await store.put(eid, [notice], actor=notice.decided_by)
+        await self.deps.trail.record(notice_trail(eid, notice))
 
     async def timed(self, eid: str, record: ReviewRecord) -> ReviewRecord:
         """填上复核停留时长 (需求 R153): 功能 collab 打开时按项目的全部 presentation 留痕 (逐页读完) 算 dwell_seconds

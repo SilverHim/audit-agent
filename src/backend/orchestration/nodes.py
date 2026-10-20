@@ -24,11 +24,13 @@ from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
     Confirmation,
+    CorrectionNotice,
     Decision,
     DocumentType,
     Engagement,
     Judgment,
     Misstatement,
+    MisstatementStatus,
     Phase,
     Procedure,
     ProcedureRun,
@@ -64,12 +66,13 @@ from backend.orchestration.merge import (
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
-from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
+from backend.orchestration.waits import correction_payload, data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
 from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
+from backend.services.staleness import current_results
 
 logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
@@ -506,6 +509,65 @@ def merge_patch(result: StatePatch, patch: StatePatch) -> None:
     其余字段后者覆盖, 包括每次都传完整列表的 procedure_pack, audit_objectives, risk_register."""
     for key, value in patch.items():
         result[key] = [*result.get(key, []), *value] if key in REDUCERS else value
+
+
+def awaiting_correction(state: EngagementState) -> list[str]:
+    """等管理层更正的错报 (需求 R162): 当前结果中 communicated 且不须重新沟通的, 按 ID 排序 (等待载荷的
+    misstatement_ids). 纯函数."""
+    return sorted(
+        m.id
+        for m in current_results(state).misstatements
+        if m.status is MisstatementStatus.communicated and not m.needs_recommunication
+    )
+
+
+def after_notice(misstatement: Misstatement, notice: CorrectionNotice) -> Misstatement:
+    """按更正通知写出的错报新版本 (接口文档第 2.5 节迁移表): adjustments_posted 转 verifying, stop_waiting 记
+    uncorrected (stopped_waiting); 都记 correction_notice_id, needs_recommunication 置假. 经 model_validate 重建.
+    纯函数."""
+    posted = notice.kind == "adjustments_posted"
+    changes = {
+        "status": MisstatementStatus.verifying if posted else MisstatementStatus.uncorrected,
+        "uncorrected_basis": None if posted else "stopped_waiting",
+        "correction_notice_id": notice.id,
+        "needs_recommunication": False,
+        "version": misstatement.version + 1,
+    }
+    return Misstatement.model_validate({**misstatement.model_dump(), **changes})
+
+
+async def apply_notice(
+    deps: AgentDeps, engagement: Engagement, misstatements: Sequence[Misstatement], notice: CorrectionNotice
+) -> list[Misstatement]:
+    """读回的更正通知生效 (需求 R162, 一次审计师动作一个事务): adjustments_posted 时载入更正分录
+    (DatasetLoader.load_adjustments, 凭证号为空时传 None 即载入全部未载入的, 写入人为提交通知的审计师) 与所列错报的
+    新版本 (after_notice, 写入者 A1) 在同一事务内写入 (Postgres 下载入的事务并入外层); stop_waiting 只写错报. 提交后
+    为这次载入写出的数据新版本 (只有总账) 随即写 data 留痕 (data_service.version_entry, sync, 写入人同上; 没写成的由
+    DataService.backfill_trails 兜底). misstatements: 状态中的错报, 所列的取这里的版本. 返回写入后的错报 (重放时为
+    Store 已存的那一版); Store 已有内容不同的同版本抛 VersionConflict 整体回滚."""
+    # data_service 引用 orchestration (nodes, runner), 用时再导入
+    from backend.services.data_service import version_entry
+
+    eid, store = engagement.id, deps.output_store
+    by_id = {m.id: m for m in misstatements}
+    updated = [after_notice(by_id[mid], notice) for mid in notice.misstatement_ids]
+    posted = notice.kind == "adjustments_posted"
+    before = max((v.data_version for v in await deps.data.versions(eid)), default=0) if posted else 0
+    async with store.transaction(eid):
+        if posted:
+            assert engagement.dataset is not None  # DecisionSubmit 已查数据集有可载入的更正分录
+            entry_nos = notice.adjustment_entry_nos or None
+            await deps.datasets.load_adjustments(eid, engagement.dataset, entry_nos, actor=notice.decided_by)
+        written = cast(list[Misstatement], await store.put(eid, updated, actor=AgentId.A1))
+        clashes = [f"{m.id} v{m.version}" for m, w in zip(updated, written, strict=True) if m != w]
+        if clashes:
+            raise VersionConflict(
+                f"更正通知 {notice.id} 写出的错报与 Store 中已有的同版本内容不同: {', '.join(clashes)}"
+            )
+    if posted:
+        loaded = [v for v in await deps.data.versions(eid) if v.data_version > before]
+        await record_transitions(deps.trail, [version_entry(eid, v) for v in loaded])
+    return written
 
 
 class GraphNodes:
@@ -1271,8 +1333,20 @@ class GraphNodes:
         return await self.run_node(state, "communicate")
 
     async def await_correction(self, state: EngagementState) -> StatePatch:
-        """等待管理层更正 (节点内 interrupt, 由 R162 实现). 路由只在有 communicated 错报时进入, R161 之前走不到."""
-        raise NotImplementedError("await_correction: 等待更正由需求 R162 实现")
+        """等待管理层更正 (需求 R162, 规格书 12.3 AwaitingCorrection): 在节点内 interrupt() 等审计师提交更正通知, 载荷
+        为等更正的错报 (awaiting_correction, 路由只在有 communicated 错报时进入). DecisionSubmit 校验并写入通知后以
+        Command(resume=通知 ID) 恢复, 节点从头执行, 读回通知 (Store) 并生效 (apply_notice). 一次执行只收一份通知:
+        只列了部分错报时, 经 verify_correction 后 after_verify 再回到这里, 载荷只列其余的. 返回错报新版本与该通知."""
+        eid = state["engagement_id"]
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None:
+            raise LookupError(f"Engagement {eid} not found")
+        notice_id = interrupt(correction_payload(awaiting_correction(state), []))
+        notice = await self.deps.output_store.get(eid, CorrectionNotice, notice_id)
+        if notice is None:
+            raise LookupError(f"CorrectionNotice {notice_id} not found")
+        written = await apply_notice(self.deps, engagement, state["misstatements"], notice)
+        return {"misstatements": written, "correction_notices": [notice]}
 
     async def verify_correction(self, state: EngagementState) -> StatePatch:
         """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""

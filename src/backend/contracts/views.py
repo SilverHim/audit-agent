@@ -72,6 +72,9 @@ class EngagementOverview(Model):
     current_gate: GateId | None  # 正停在哪道闸门, 不在闸门为空
     awaiting_review: bool  # 是否停在节点内等复核决定 (不含等数据就绪)
     awaiting_data: bool  # 是否停在 P1 开始前等财务数据就绪 (p1_await_data), 审计师确认数据已齐后继续
+    # 是否停在 await_correction 等更正通知 (需求 R162), 与等更正的错报 (等待载荷的 misstatement_ids, 按 ID 排序)
+    awaiting_correction: bool = False
+    awaiting_correction_ids: list[str] = []
     missing_tables: list[TableKind]  # 等数据就绪时还缺的必需表 (科目表, 本期与上期试算表, 总账分录), 现查; 不在等时为空
     procedures: list[ProcedureSummary]  # 各程序状态
     stale_procedure_ids: list[str] = []  # 过期的程序, 按 procedures 的顺序 (含不能重跑的)

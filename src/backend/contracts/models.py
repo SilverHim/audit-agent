@@ -368,6 +368,8 @@ class MisstatementStatus(StrEnum):
 # 错报来源: 本期发现, 或上期未更正的结转 (ASA 450 第 13 段)
 MisstatementOrigin = Literal["current_period", "prior_period_uncorrected"]
 UncorrectedBasis = Literal["refused", "stopped_waiting"]  # 未更正的依据: 管理层拒绝更正, 或审计师决定停止等待
+# 更正通知的两种 (需求 R162): 管理层的更正分录已入账 (载入分录, 所列错报转 verifying), 或不再等 (所列错报记未更正)
+CorrectionNoticeKind = Literal["adjustments_posted", "stop_waiting"]
 
 
 class Direction(StrEnum):
@@ -1496,6 +1498,20 @@ class RerunRequest(Versioned):
     report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿
     requested_by: str  # 请求人的用户 ID
     requested_at: datetime  # 请求时间
+
+
+class CorrectionNotice(Versioned):
+    """更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
+    第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入
+    更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写
+    理由, 不带凭证号."""
+
+    kind: CorrectionNoticeKind  # 通知的种类
+    misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
+    adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted)
+    reason: str | None = None  # 理由, stop_waiting 必填
+    decided_by: str  # 提交通知的审计师 (用户 ID); 更正分录的写入人
+    decided_at: datetime  # 提交时间
 
 
 class Misstatement(Versioned):
