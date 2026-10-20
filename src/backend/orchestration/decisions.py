@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
+from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -24,6 +25,7 @@ from backend.contracts.models import (
     CriticVerdict,
     Decision,
     DisputeResolution,
+    DocumentRef,
     Engagement,
     EvidencePointer,
     GateDecision,
@@ -51,7 +53,14 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.gates import check_fields, current_gate, current_spec, latest_in_order, spec_of
+from backend.orchestration.gates import (
+    REPORT_TZ,
+    check_fields,
+    current_gate,
+    current_spec,
+    latest_in_order,
+    spec_of,
+)
 from backend.orchestration.inputs import input_versions
 from backend.orchestration.nodes import (
     confirmations_from_store,
@@ -66,6 +75,7 @@ from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.data_quality import OnHand
 from backend.services.features import COLLAB
+from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import attribute_exceptions, draft_rule
@@ -116,6 +126,10 @@ REVIEW_FIELDS: dict[tuple[TaskKind | None, Decision], ReviewFields] = {
     (None, Decision.misstatement): ReviewFields(("reason", "misstatement_draft"), frozenset({"misstatement_draft"})),
     (None, Decision.rerun): ReviewFields(("reason",), frozenset({"rerun_params"})),
     (None, Decision.manual_result): ReviewFields(("reason", "manual_result"), frozenset({"manual_result"})),
+    # manual 任务 (人工程序, 需求 R92) 的结果另须写执行日期; 其余按任务请求的核对见 check_manual_result
+    (TaskKind.manual, Decision.manual_result): ReviewFields(
+        ("reason", "manual_result", "manual_result.performed_on"), frozenset({"manual_result"})
+    ),
     # 仲裁可附错报草稿: 采用的结论认定为错报时一并登记; neither_action 与 override_conclusion 只用于 neither
     (None, Decision.dispute_resolution): ReviewFields(
         ("reason", "dispute_resolution"),
@@ -137,15 +151,23 @@ TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类
 }
 
 
+def has_value(record: ReviewRecord, name: str) -> bool:
+    """决定的字段已填 (不为 None 也不为空). name 可写成点路径取嵌套字段, 如 manual_result.performed_on."""
+    value: Any = record
+    for part in name.split("."):
+        value = getattr(value, part, None)
+    return bool(value)
+
+
 def check_review_fields(record: ReviewRecord, kind: TaskKind) -> None:
     """复核决定的字段校验, 规则按 (任务类型, 决定) 取 (见 review_fields): 必填的缺了报 MISSING_FIELD, 不该填的填了报
-    FIELD_NOT_ALLOWED. None 与空值都视为未填.
+    FIELD_NOT_ALLOWED. None 与空值都视为未填; 必填可写点路径 (见 has_value).
 
     仲裁另按结果: neither 须填 neither_action (本版只有 human_conclusion) 与 override_conclusion; a6_upheld,
     a7_upheld 不能填这两项.
     """
     rules = review_fields(kind, record.decision)
-    missing = [name for name in rules.required if not getattr(record, name)]
+    missing = [name for name in rules.required if not has_value(record, name)]
     if missing:
         raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
     filled = [name for name in REVIEW_SPECIFIC if getattr(record, name) and name not in rules.allowed]
@@ -199,14 +221,60 @@ def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
-def check_review_values(deps: AgentDeps, record: ReviewRecord, task: ReviewTask, target: Versioned | None) -> None:
+def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> None:
+    """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
+    min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
+    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results), 没有结果模型时为空.
+    必填 (reason, manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    例: 页数 2 的文件引第 3 页 → INVALID_VALUE "DOC-0a1b2c3d4e5f: 页码 3 不在 1-2 之间".
+    """
+    request, result = task.manual_request, record.manual_result
+    assert request is not None, f"manual 任务 {task.id} 没有请求"  # make_task 建 manual 任务时一并带上
+    assert result is not None and result.performed_on is not None  # check_review_fields 已查必填
+    if len(result.evidence) < request.min_evidence:
+        detail = f"manual_result.evidence 至少 {request.min_evidence} 条, 只有 {len(result.evidence)} 条"
+        raise DecisionRejected("INVALID_VALUE", detail)
+    registered = {d.id: d for d in documents}
+    for pointer in result.evidence:
+        doc = registered.get(pointer.source_id) if pointer.source_type == "document" else None
+        if doc is None:
+            detail = f"证据须为本项目已登记的文件, {pointer.source_type} {pointer.source_id} 不是"
+            raise DecisionRejected("INVALID_VALUE", detail)
+        resolved, reason = document_pointer(pointer, doc)
+        if resolved is None:
+            raise DecisionRejected("INVALID_VALUE", f"{doc.id}: {reason}")
+    decided_on = record.decided_at.astimezone(REPORT_TZ).date()
+    if result.performed_on > decided_on:
+        detail = f"manual_result.performed_on {result.performed_on} 晚于决定当天 {decided_on} (悉尼日期)"
+        raise DecisionRejected("INVALID_VALUE", detail)
+    if request.result_model is None:
+        if result.details:
+            raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有结果模型, manual_result.details 须为空")
+        return
+    try:
+        result_model(request.result_model).model_validate(result.details)
+    except ValidationError as e:
+        fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in e.errors())
+        detail = f"manual_result.details 不合 {request.result_model}: {fields}"
+        raise DecisionRejected("INVALID_VALUE", detail) from e
+
+
+def check_review_values(
+    deps: AgentDeps,
+    record: ReviewRecord,
+    task: ReviewTask,
+    target: Versioned | None,
+    documents: Sequence[DocumentRef] = (),
+) -> None:
     """复核决定与图无关的校验 (第 7 节校验顺序中图的等待之后, 决定 ID 之前): 决定须绑定任务记的目标版本, 且目标此后
     没有出新版本 (审计师看材料期间可能被别的决定改过); 决定是该任务允许的 (复核队列); 字段 (check_review_fields);
-    功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须独立复核的推理链有效; rerun_params 只能改模板已有的参数.
+    manual 任务的结果按任务请求 (check_manual_result); 功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须
+    独立复核的推理链有效; rerun_params 只能改模板已有的参数.
 
-    target: 任务目标在 Store 中的最新版本, 没有时为 None. 只用 deps 的复核队列, 程序库与功能开关, 不读存储, 不看
-    检查点; 不过抛 DecisionRejected. 任务存在且待决, 图在等待, 决定 ID 未用过由 GraphDecisionSubmit.check_review_record
-    另查 (待决在图的检查之前, 先报 TASK_NOT_PENDING). 例: 决定绑定第 1 版而目标已有第 2 版 → VERSION_MISMATCH.
+    target: 任务目标在 Store 中的最新版本, 没有时为 None. documents: 本项目已登记的文件, manual 任务核对证据用
+    (其余任务不用). 只用 deps 的复核队列, 程序库与功能开关, 不读存储, 不看检查点; 不过抛 DecisionRejected.
+    任务存在且待决, 图在等待, 决定 ID 未用过由 GraphDecisionSubmit.check_review_record 另查 (待决在图的检查之前,
+    先报 TASK_NOT_PENDING). 例: 决定绑定第 1 版而目标已有第 2 版 → VERSION_MISMATCH.
     """
     if record.target_version != task.target_version or target is None or target.version != task.target_version:
         current = target.version if target is not None else None
@@ -217,6 +285,8 @@ def check_review_values(deps: AgentDeps, record: ReviewRecord, task: ReviewTask,
     if record.decision not in deps.queue.allowed(task):
         raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
     check_review_fields(record, task.kind)
+    if task.kind is TaskKind.manual:
+        check_manual_result(record, task, documents)
     if COLLAB in deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
         check_consultation(record)
         if record.decision is Decision.dispute_resolution and isinstance(target, Judgment):
@@ -379,7 +449,8 @@ def override_effects(
 
 
 def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str]) -> list[Versioned]:
-    """manual_result 的效果 (第 7 节): 失败任务的判断对象由人给出结论与证据, 建人工判断 -H{n}, 置 confirmed. 纯函数."""
+    """manual_result 的效果 (第 7 节): 失败任务的判断对象由人给出结论与证据, 建人工判断 -H{n}, 置 confirmed.
+    manual 任务 (人工程序) 不建人工判断, 结果只记在决定里 (见 review_effects). 纯函数."""
     result = record.manual_result
     assert result is not None and task.subject_id is not None  # 校验: 必填; allowed 只对带 subject_id 的任务开放
     jid = human_judgment_id(task, task.subject_id, taken)
@@ -501,7 +572,8 @@ def review_effects(
     if record.decision is Decision.override:
         return override_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.manual_result:
-        return manual_result_effects(record, task, taken)
+        # manual 任务 (人工程序, 需求 R92): 只写决定, 结果由程序 owner 在节点读回后整理成领域对象 (需求 R93)
+        return [] if task.kind is TaskKind.manual else manual_result_effects(record, task, taken)
     if record.decision is Decision.dispute_resolution:
         return dispute_effects(record, task, target, exceptions, taken, collab)
     assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
@@ -748,7 +820,9 @@ class GraphDecisionSubmit:
         if not any(accepts(w, task, pack) for w in waits):
             raise DecisionRejected("NOT_AWAITING_REVIEW", f"当前不在等 {task.procedure_id} 的决定")
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
-        check_review_values(self.deps, record, task, target)
+        manual = task.kind is TaskKind.manual  # 人工程序的结果引用的文件须已在本项目登记
+        documents = await self.deps.financial_store.documents(eid) if manual else []
+        check_review_values(self.deps, record, task, target, documents)
         await self._check_decision_id(eid, record.id)
         return task
 

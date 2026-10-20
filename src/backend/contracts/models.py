@@ -166,7 +166,7 @@ class TaskKind(StrEnum):
     unattributed = "unattributed"  # 例外没有判断解释
     failed = "failed"  # 执行或校验失败
     dispute = "dispute"  # 独立复核 (A7) 与 A6 结论不一致, 由审计师仲裁
-    manual = "manual"  # 人工程序 (engine manual) 由人执行并提交结果 (尚未使用)
+    manual = "manual"  # 人工程序 (engine manual 且不是闸门) 由人执行并提交结果 (需求 R92)
 
 
 class CriticVerdict(StrEnum):
@@ -874,6 +874,16 @@ class UncorrectedSchedule(Versioned):
 # ── 2.5 复核与决定 ─────────────────────────────────────────
 
 
+class ManualRequest(Model):
+    """manual 任务交给人的请求 (需求 R92): 派发时抄自程序模板的 manual 段, 加上派发时生成的材料. 提交 manual_result
+    时按它核对证据数与结构化结果 (decisions.check_manual_result)."""
+
+    instructions: str  # 给执行人的说明
+    result_model: str | None  # 结构化结果的模型名 (contracts/manual_results 登记), 为空时 details 须为空
+    min_evidence: int  # 至少要附的证据文件指针数
+    material: dict[str, Any]  # 派发时生成的材料 (需求 R93 由程序 owner 的 prepare 生成), 原样给人看
+
+
 class ReviewTask(Versioned):
     """复核任务: 需要人处理的一件事, 进复核队列."""
 
@@ -883,16 +893,21 @@ class ReviewTask(Versioned):
     target_id: str  # 要处理的对象 ID
     target_version: int  # 建任务时对象的版本, 提交决定时校验
     run_id: str  # 发现问题的那次执行
-    subject_id: str | None = None  # failed, unattributed 任务的判断对象; 整次执行失败时为空
+    subject_id: str | None = (
+        None  # failed, unattributed 任务的判断对象, manual 任务为模板 manual.subject; 整次执行失败时为空
+    )
     status: TaskStatus = TaskStatus.pending  # 待决或已决定
     created_at: datetime  # 创建时间
+    manual_request: ManualRequest | None = None  # manual 任务的请求, 其余类型为空
 
 
 class ManualResult(Model):
-    """人工直接给出的结果, 用于 manual_result 决定."""
+    """人工直接给出的结果, 用于 manual_result 决定 (failed 任务的人工执行, manual 任务的人工程序结果)."""
 
     conclusion: str  # 人给出的结论
     evidence: list[EvidencePointer] = []  # 人给出的证据
+    performed_on: date | None = None  # 人执行的日期, manual 任务必填 (不晚于决定当天的悉尼日期)
+    details: dict[str, Any] = {}  # 按任务请求的结果模型给的结构化结果, 原样存下; 没有结果模型时为空
 
 
 class ReviewRecord(Versioned):

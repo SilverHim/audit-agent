@@ -17,11 +17,13 @@ from pydantic_core import to_jsonable_python
 
 from backend.contracts.data import DataInput
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
+from backend.contracts.manual_results import RESULT_MODELS
 from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
     DocumentType,
     Engagement,
+    Engine,
     OpinionType,
     Phase,
     ReportSection,
@@ -101,6 +103,9 @@ class ProcedureLibrary:
         wrong = inputs_problems(templates)
         if wrong:
             raise ValueError(f"程序模板的 inputs 不对: {'; '.join(wrong)}")
+        wrong = manual_problems(templates)
+        if wrong:
+            raise ValueError(f"人工程序写法不对: {'; '.join(wrong)}")
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
@@ -335,6 +340,28 @@ def load_template(path: Path) -> ProcedureTemplate:
     except ValidationError as e:
         pid = raw.get("id") if isinstance(raw, dict) else None
         raise ValueError(f"程序模板 {pid or path.stem} ({path.name}) 写法不对: {e}") from e
+
+
+def manual_program(template: ProcedureTemplate) -> bool:
+    """人工程序 (需求 R92): engine manual 且不是闸门程序, 由 A10 派 manual 任务给人执行. 闸门程序 (ACC-01, PLN-01/03,
+    FIN-01, RPT-01) 也是 engine manual, 但由闸门节点处理, 不算."""
+    return template.engine is Engine.manual and template.gate is None
+
+
+def manual_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """人工程序的写法问题, 每条含程序编号: 在 P2 (本级不做 P2 人工程序), 没写 manual 段, 或 manual.result_model 没在
+    contracts/manual_results.RESULT_MODELS 登记. 闸门程序不查."""
+    problems: list[str] = []
+    for t in templates:
+        if not manual_program(t):
+            continue
+        if t.phase is Phase.P2_Executing:
+            problems.append(f"{t.id}: 本级不做 P2 的人工程序")
+        if t.manual is None:
+            problems.append(f"{t.id}: engine manual 且不是闸门程序, 须有 manual 段")
+        elif t.manual.result_model is not None and t.manual.result_model not in RESULT_MODELS:
+            problems.append(f"{t.id}: 结果模型 {t.manual.result_model} 没有登记 (contracts/manual_results)")
+    return problems
 
 
 def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:

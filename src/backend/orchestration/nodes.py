@@ -65,7 +65,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.data_quality import request_id
 from backend.services.features import COLLAB
-from backend.services.procedure_library import ProcedureLibrary, highest_risk
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
@@ -167,6 +167,15 @@ def done_status(template: ProcedureTemplate) -> ProcedureStatus:
     """程序执行成功且没有待决任务时的状态: 闸门程序 (模板 gate 不为空, 如 PLN-01) 保持 planned, 由 DecisionSubmit 在
     闸门 approve 时置 completed (Q5); 其余为 completed. 节点执行 (attempt) 与复核决定后的重算 (DecisionSubmit) 共用."""
     return ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
+
+
+DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发) 可写的字段, 另有本次执行记录
+
+
+def writer_of(template: ProcedureTemplate, agent: ProcedureAgent[Any]) -> AgentId:
+    """执行片段的写入者: 人工程序 (需求 R92, procedure_library.manual_program) 的执行即派发, 写入者为 A10; 其余为执行
+    它的 Agent."""
+    return AgentId.A10 if manual_program(template) else agent.agent_id
 
 
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
@@ -447,15 +456,19 @@ class GraphNodes:
         校验不过为 "merge_rejected: 原因".
         LangGraph 的中断等控制流信号 (GraphBubbleUp) 不算失败, 照常抛出.
         """
+        # 人工程序 (需求 R92) 的执行片段是派发片段: 由 A10 写, 只含执行记录与 manual 任务; 其模板 outputs 列的是人交回
+        # 结果后整理出的字段 (需求 R93), 这里不按它查
+        writer = writer_of(ctx.template, agent)
+        outputs = DISPATCH_FIELDS if manual_program(ctx.template) else ctx.template.outputs
         try:
             patch = await agent.run(ctx)
             check_patch(
                 patch,
-                writer=agent.agent_id,
+                writer=writer,
                 procedure_id=ctx.run.procedure_id,
                 run_id=ctx.run.id,
                 state=ctx.state,
-                outputs=ctx.template.outputs,
+                outputs=outputs,
             )
         except GraphBubbleUp:
             raise
@@ -464,7 +477,7 @@ class GraphNodes:
         except Exception as e:
             reason = f"{type(e).__name__}: {e}"
         else:
-            return patch, agent.agent_id
+            return patch, writer
         return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
 
     async def perform(
@@ -513,7 +526,7 @@ class GraphNodes:
             problems = check_refs(patch, state)
             if problems:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
-            writer = AgentId.A1 if stored_run.status is RunStatus.failed else agent.agent_id
+            writer = AgentId.A1 if stored_run.status is RunStatus.failed else writer_of(template, agent)
         return StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
 
     async def attempt(
