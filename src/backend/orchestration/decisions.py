@@ -94,7 +94,7 @@ from backend.services.features import COLLAB, MISSTATEMENT
 from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import attribute_exceptions, draft_rule, misstatement_updates
+from backend.services.review_queue import RERUNNABLE, attribute_exceptions, draft_rule, misstatement_updates
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 from backend.services.trail_pages import all_of_kind
 
@@ -767,12 +767,11 @@ def recompute_procedure(
 
 
 def rerun_group(task: ReviewTask, pending: list[ReviewTask]) -> list[ReviewTask]:
-    """rerun 决定关闭的一组 failed 任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序其余待决的
-    failed 任务 (都来自该程序最近一次执行), 按 ID 排序. pending 为该程序当前全部待决任务; normal, unattributed
-    任务不在组内."""
-    siblings = [
-        t for t in pending if t.kind is TaskKind.failed and t.procedure_id == task.procedure_id and t.id != task.id
-    ]
+    """rerun 决定关闭的一组失败任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序其余待决的
+    可重跑任务 (review_queue.RERUNNABLE: failed 与带规则例外的对象判断失败留下的 unattributed, 需求 R347; 都来自该
+    程序最近一次执行), 按 ID 排序. pending 为该程序当前全部待决任务; normal, dispute 等任务不在组内. 整组一并关闭,
+    程序置 executing 后就没有待决的可重跑任务, 不会再来第二个 rerun 盖掉这一版的重判对象."""
+    siblings = [t for t in pending if t.kind in RERUNNABLE and t.procedure_id == task.procedure_id and t.id != task.id]
     return [task, *sorted(siblings, key=lambda t: t.id)]
 
 
@@ -1126,7 +1125,7 @@ class GraphDecisionSubmit:
 
     async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
-        rerun 时连同同程序其余待决的 failed 任务一并置 decided (一轮失败算一组, 见 rerun_group).
+        rerun 时连同同程序其余待决的可重跑任务 (failed, unattributed) 一并置 decided (一轮失败算一组, 见 rerun_group).
 
         效果按 Store 当前版本计算 (与校验读的一致), 错报更新载荷所指的错报也取 Store 当前版本: 载荷依据的不是它
         (判断之后错报已出新版本) 抛 VersionConflict, 写出的新版本不合格报 INVALID_VALUE, 都不写 (需求 R159). 人给的

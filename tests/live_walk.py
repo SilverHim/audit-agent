@@ -2,7 +2,8 @@
 变体 (tests/test_demo_walkthrough_live) 与浏览器走查 (tests/e2e/test_browser_walk) 共用.
 
 - 演示决定表 (decision_table) 与一条待决任务的决定 (review_body, dispute_fields): 按决定表期望的结论, 不看模型的
-  建议动作; failed 任务每个对象至多重跑一次, 计划与报告整条失败按修订计 (REVISED_BY).
+  建议动作; failed 与 unattributed 任务 (判断失败, 后者为带规则例外的对象, 需求 R347) 每个对象至多重跑一次, 计划与
+  报告整条失败按修订计 (REVISED_BY); unattributed 重跑后仍失败才按决定表推翻或认定错报.
 - drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk.
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑);
   assert_hard 与 warn_soft 为两级检查.
@@ -97,7 +98,8 @@ class LiveWalk:
     gates: list[str] = field(default_factory=list)  # 依次决定过的闸门
     fin: str | None = None  # FIN-01 选定的意见类型
     candidate: str | None = None  # 汇总表的候选意见
-    failures: Counter[tuple[str, str]] = field(default_factory=Counter)  # (程序, 对象) → 出过的 failed 任务数
+    # (程序, 对象) → 重跑过的次数 (failed 与 unattributed 任务)
+    failures: Counter[tuple[str, str]] = field(default_factory=Counter)
     troubled: dict[str, tuple[str, str, str]] = field(default_factory=dict)  # 任务 ID → (程序, 对象, 类型), 非 normal
     decisions: list[tuple[str, str]] = field(default_factory=list)  # (任务 ID, 决定)
 
@@ -129,7 +131,9 @@ def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk
     if kind != "normal":
         walk.troubled[task["id"]] = (pid, subject, kind)
     expected = table.get(subject, Expected("confirm"))
-    if kind == "failed":
+    # 判断或执行失败先重跑一次 (每个对象至多一次): failed 重跑后又失败即判失败; unattributed (带规则例外的对象, 需求
+    # R347) 重跑后仍失败时按下面的决定表处理
+    if kind == "failed" or (kind == "unattributed" and not walk.failures[pid, subject]):
         walk.failures[pid, subject] += 1
         if walk.failures[pid, subject] > 1:
             pytest.fail(f"{pid} {subject or '(整条)'} 重跑后又失败: {task['id']}")

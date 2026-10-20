@@ -71,7 +71,7 @@ from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
 from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
-from backend.services.review_queue import ReviewQueue
+from backend.services.review_queue import RERUNNABLE, ReviewQueue
 from backend.services.staleness import current_results
 
 logger = logging.getLogger(__name__)
@@ -204,8 +204,9 @@ def check_collected(
 
 
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
-    """片段里的 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务), 不论是否已决定."""
-    return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
+    """片段里可重跑的失败任务 (review_queue.RERUNNABLE: 整次失败时 A1 建的, Agent 建的单对象 failed 任务, 带规则例外
+    的对象判断失败留下的 unattributed 任务, 需求 R347), 不论是否已决定. 节点内等待时它们同属一组 (Q17)."""
+    return [task for task in patch.get("review_tasks", []) if task.kind in RERUNNABLE]
 
 
 def rerun_subjects(group: list[ReviewTask]) -> list[str]:
@@ -756,11 +757,11 @@ class GraphNodes:
     async def read_rerun(
         self, eid: str, record_id: str, failed: dict[str, ReviewTask], waiting: Procedure
     ) -> tuple[ReviewRecord, Procedure]:
-        """读回审计师对某个 failed 任务的决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
+        """读回审计师对某个失败任务 (failed, unattributed) 的 rerun 决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
 
-        failed: 正在等待的这一轮执行建的 failed 任务, 同属一组 (Q17; 已由 manual_result 关闭的已移出, 需求 R158), 决定
-        须针对其中之一: 第 k 次等待只接受针对第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph 沿用上次的恢复值)
-        时, execute 在调用前就跳过, 不到这里.
+        failed: 正在等待的这一轮执行建的可重跑任务 (failed_tasks), 同属一组 (Q17; 已由 manual_result 关闭的已移出,
+        需求 R158), 决定须针对其中之一: 第 k 次等待只接受针对第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph
+        沿用上次的恢复值) 时, execute 在调用前就跳过, 不到这里.
         waiting: 等待时写出的 awaiting_human 程序版本. 程序版本取 waiting.version + 1, 即 rerun 决定在同一事务里写出的
         那一版 (executing, 含合并后的 params 与 rerun_subject_ids), 不取最新版本: 节点重放时会依次经过多次等待,
         最新版本可能是之后的决定写出的. 这一版的 rerun_subject_ids 须覆盖整组 (见 rerun_subjects), 否则决定没有
@@ -843,7 +844,8 @@ class GraphNodes:
             merge_patch(result, patch)
             waiting = next(p for p in pack if p.id == procedure_id)
             run_id = patch["procedure_runs"][0].id
-            # 这一轮执行建的 failed 任务, 同属一组 (Q17); 重放时取回的是最新版本 (可能已 decided), 也算在内.
+            # 这一轮执行建的可重跑任务 (failed, unattributed), 同属一组 (Q17); 重放时取回的是最新版本 (可能已
+            # decided), 也算在内.
             # 按 run_id 过滤作防御: 单份产出程序的成功执行重放时, stored_outputs 会把之后各轮的执行与任务一并取回
             failed = {task.id: task for task in failed_tasks(patch) if task.run_id == run_id}
             while await self.still_waiting(eid, procedure_id, [*in_checkpoint, *earlier, *delivered]):
@@ -865,9 +867,10 @@ class GraphNodes:
                     raise LookupError(f"ReviewRecord {record_id} not found")
                 delivered.append(record_id)
                 task = await store.get(eid, ReviewTask, record.task_id)
-                # 针对 failed 任务的决定 (或找不到任务的) 走 rerun 的读回, 由 read_rerun 查它须为 rerun 且针对本轮;
-                # 复核队列允许的 failed 任务的 manual_result (带对象且模板 manual_result_allowed, 需求 R158) 除外, 同
-                # 其余决定整体读回. 整次失败的任务 (没有对象) 收到 manual_result 仍按 read_rerun 报错
+                # 针对 failed 任务的决定 (或找不到任务的) 与任何 rerun (含 unattributed 任务的, 需求 R347) 走 rerun 的
+                # 读回, 由 read_rerun 查它须为 rerun 且针对本轮; 复核队列允许的 failed 任务的 manual_result (带对象且
+                # 模板 manual_result_allowed, 需求 R158) 除外, 同其余决定 (含 unattributed 的推翻与认定错报) 整体读回.
+                # 整次失败的任务 (没有对象) 收到 manual_result 仍按 read_rerun 报错
                 failed_result = (
                     task is not None
                     and task.kind is TaskKind.failed

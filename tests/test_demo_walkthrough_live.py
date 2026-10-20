@@ -7,12 +7,13 @@
 固定顺序走, 每次停下按当时的状态办: 有待决任务先逐条决定, 概览建议导入就导入, 等数据就绪就确认数据已齐, 停在闸门
 就按闸门决定. 审计师的决定以演示决定表为准, 按决定表期望的结论下,
 不看模型的建议动作 (decision_table): BA-091 与 XJ-499 认定错报 (草稿同 R287), XJ-575 推翻为接受, 其余确认; 争议任务能
-维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 任务重跑, 每个对象
-至多一次. FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
+维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 与 unattributed
+任务 (判断失败, 后者带规则例外, 需求 R347) 重跑, 每个对象至多一次, unattributed 重跑后仍失败才按决定表处理.
+FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
 
-断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed 后重跑一次;
-带规则例外的对象判断失败时复核队列建的是 unattributed 任务, 不能重跑, 驱动按决定表推翻后照常走完, 但该对象缺模型
-结论, 硬性检查不过); 全部证据指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
+断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed, unattributed
+后重跑一次; 重跑后仍是 unattributed 的, 驱动按决定表推翻后照常走完, 但该对象缺模型结论, 硬性检查不过); 全部证据
+指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
 软性 (只告警): 判断的建议动作与固定输出 (演示运行副本) 不同的逐条列出. 汇总写 var/eval/demo-live-<UTC>.json.
 
 配置经 tests.external.live_llm_settings 取 (环境变量, LLM_ENV_FILE 或仓库 .env), 不写进任何文件; 没配时跳过. 不联网的
@@ -164,7 +165,7 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     assert len(list(tmp_path.glob("demo-live-selftest-*.json"))) == 1
 
 
-ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed, 不能重跑)
+ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed)
 
 
 @pytest.mark.parametrize(
@@ -193,14 +194,15 @@ async def test_live_driver_reruns_a_failed_object_once(tmp_path: Path, failing: 
 
 
 @pytest.mark.external
-async def test_failed_object_with_rule_findings_is_a_hard_failure(tmp_path: Path) -> None:
-    """有规则例外的对象 (ORC1026 带 REV-08 的 R03-1) 判断失败时转为 unattributed 任务 (复核队列的规则, 不能重跑):
-    驱动按决定表推翻, 照常走到归档; 该对象没有模型结论, 硬性检查记为缺结论而不过 (需求 R311 验收 2)."""
-    _, data = await offline_walk(tmp_path, {("REV-02", ORC1026): 3})
-    assert (data["reruns"], data["troubled_tasks"]) == ({}, [["REV-02", ORC1026, "unattributed"]])
-    assert data["missing_subjects"] == [f"REV-02 {ORC1026}"]
-    with pytest.raises(AssertionError, match=ORC1026):
-        assert_hard(data)
+async def test_failed_object_with_rule_findings_is_rerun_once(tmp_path: Path) -> None:
+    """需求 R347 验收 3: 有规则例外的对象 (ORC1026 带 REV-08 的 R03-1) 前 MAX_ATTEMPTS 次调用输出不是 JSON, 判断失败转
+    unattributed 任务; 驱动同 failed 先重跑一次, 第 2 次执行给出结论, 照常走到归档, 硬性检查都过 (没有缺结论的对象);
+    汇总记重跑一次, troubled 记这条 unattributed 任务 (同 failed 的一路), 多调 MAX_ATTEMPTS 次."""
+    _, data = await offline_walk(tmp_path, {("REV-02", ORC1026): MAX_ATTEMPTS})
+    assert_hard(data)
+    assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1026}": 1}, [["REV-02", ORC1026, "unattributed"]])
+    assert data["missing_subjects"] == []
+    assert (data["usage"]["calls"], data["decisions"]["rerun"]) == (FIXED_CALLS + MAX_ATTEMPTS, 1)
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
@@ -212,7 +214,8 @@ def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
 
 def test_review_bodies_follow_the_decision_table() -> None:
     """各类任务的决定都合复核接口的请求体 (ReviewRecordIn), 且按演示决定表: 争议任务原判断与期望一致时维持, 否则
-    "两者都不采用" 给出期望的结论, 期望错报时附草稿; 无解释的例外认定错报或推翻; 同一对象第二次失败即判失败."""
+    "两者都不采用" 给出期望的结论, 期望错报时附草稿; 无解释的例外先重跑一次, 仍失败再认定错报或推翻; failed 同一
+    对象第二次失败即判失败."""
     table, walk = decision_table("USR-1"), LiveWalk()
     both = {"allowed_resolutions": ["a6_upheld", "a7_upheld", "neither"]}
     cases = {
@@ -233,14 +236,13 @@ def test_review_bodies_follow_the_decision_table() -> None:
         record = ReviewRecordIn.model_validate(body)
         assert record.dispute_resolution == resolution, name
         assert (record.misstatement_draft is not None) == ("期望错报" in name), name
-    assert ReviewRecordIn.model_validate(review_body(view_of("unattributed", "XJ-499"), table, walk)).decision == (
-        "misstatement"
-    )
-    assert ReviewRecordIn.model_validate(review_body(view_of("unattributed", "XJ-601"), table, walk)).decision == (
-        "override"
-    )
-    failed = view_of("failed", "XJ-601")
-    failed["task"]["subject_id"] = "XJ-601"
+    # unattributed (需求 R347): 第一次先重跑, 重跑后仍失败才按决定表认定错报或推翻
+    for subject, then in (("XJ-499", "misstatement"), ("XJ-601", "override")):
+        unattributed = view_of("unattributed", subject)
+        assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == "rerun", subject
+        assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == then, subject
+    failed = view_of("failed", "XJ-430")
+    failed["task"]["subject_id"] = "XJ-430"
     assert ReviewRecordIn.model_validate(review_body(failed, table, walk)).decision == "rerun"
     with pytest.raises(pytest.fail.Exception, match="重跑后又失败"):
         review_body(failed, table, walk)

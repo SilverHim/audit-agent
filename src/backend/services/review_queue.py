@@ -115,14 +115,17 @@ TRANSACTION_SOURCES = ("sales_invoice", "journal_entry", "bank_transaction")
 CHECK_EVIDENCE_BELOW = 0.70  # 置信度低于它: 查验证据
 BATCH_ABOVE = 0.90  # 置信度高于它才可能批量确认; 不超过它 (且不低于上一档): 阅读推理链
 # 各类任务允许的决定 (第 7 节允许决定矩阵), 每种任务类型一行. dispute 任务只能仲裁 (确认会绕过仲裁); failed 任务带判断
-# 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). manual 任务 (人工程序) 只能提交结果
+# 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). manual 任务 (人工程序) 只能提交结果.
+# unattributed 任务 (带规则例外的对象判断失败) 与 failed 一样可以重跑, 也可以由审计师自己下结论 (需求 R347)
 ALLOWED: dict[TaskKind, frozenset[Decision]] = {
     TaskKind.normal: frozenset({Decision.confirm, Decision.override, Decision.misstatement}),
-    TaskKind.unattributed: frozenset({Decision.override, Decision.misstatement}),
+    TaskKind.unattributed: frozenset({Decision.override, Decision.misstatement, Decision.rerun}),
     TaskKind.failed: frozenset({Decision.rerun}),
     TaskKind.dispute: frozenset({Decision.dispute_resolution}),
     TaskKind.manual: frozenset({Decision.manual_result}),
 }
+# 可以重跑的任务类型 (ALLOWED 中含 rerun 的): 判断或执行失败留下的, 一轮失败算一组 (Q17, decisions.rerun_group)
+RERUNNABLE: frozenset[TaskKind] = frozenset(kind for kind, decisions in ALLOWED.items() if Decision.rerun in decisions)
 
 
 def subject_row(judgment: Judgment) -> EvidencePointer | None:

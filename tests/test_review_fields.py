@@ -68,7 +68,7 @@ def test_allowed_has_one_row_per_task_kind() -> None:
     assert set(ALLOWED) == set(TaskKind)
     assert {
         TaskKind.normal: {Decision.confirm, Decision.override, Decision.misstatement},
-        TaskKind.unattributed: {Decision.override, Decision.misstatement},
+        TaskKind.unattributed: {Decision.override, Decision.misstatement, Decision.rerun},  # 需求 R347
         TaskKind.failed: {Decision.rerun},
         TaskKind.dispute: {Decision.dispute_resolution},
         TaskKind.manual: {Decision.manual_result},  # 需求 R92: 人工程序的任务只能提交结果

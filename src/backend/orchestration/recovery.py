@@ -37,6 +37,7 @@ from backend.orchestration.gates import current_gate, current_spec, latest_in_or
 from backend.orchestration.nodes import confirmations_from_store, node_table
 from backend.orchestration.runner import GraphRunner, at_rerun_point, correction_wait, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.services.review_queue import RERUNNABLE
 
 
 async def gate_values(
@@ -194,14 +195,15 @@ def closed_by(
     record: ReviewRecord, task: ReviewTask, tasks: list[ReviewTask], records: list[ReviewRecord]
 ) -> list[str]:
     """rerun 决定随同关闭的同组任务 ID (决定提交时写进留痕, 补写时从 Store 推回): 与被决定任务同程序, 同一次执行
-    的 failed 任务中, 已 decided 而没有自己的复核决定的. tasks 与 records 为 Store 中各自的最新版本."""
+    的可重跑任务 (review_queue.RERUNNABLE: failed, unattributed) 中, 已 decided 而没有自己的复核决定的. tasks 与
+    records 为 Store 中各自的最新版本."""
     if record.decision is not Decision.rerun:
         return []
     targeted = {r.task_id for r in records}
     return sorted(
         t.id
         for t in tasks
-        if t.kind is TaskKind.failed
+        if t.kind in RERUNNABLE
         and t.procedure_id == task.procedure_id
         and t.run_id == task.run_id
         and t.id != task.id

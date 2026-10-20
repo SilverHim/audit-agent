@@ -1,6 +1,7 @@
 """A6 判断程序的公共流程: 取判断对象, 逐个交判断引擎, 按需要人表产出判断, 任务与例外新版本 (接口文档第 5 节)."""
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -13,9 +14,11 @@ from backend.contracts.models import (
     AgentId,
     AuditException,
     AutonomyLevel,
+    Decision,
     ExceptionDisposition,
     Judgment,
     Phase,
+    Procedure,
     ProcedureRun,
     ProcedureStatus,
     ProposedAction,
@@ -45,6 +48,7 @@ from tests.fakes import (
 )
 from tests.test_fieldwork import p2_agents
 from tests.test_rerun_decision import EID, at_review, rerun, run
+from tests.test_review_decisions import record
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 X1 = numbat_rev08_exception(make_run("REV-08"))  # X-REV-08-1-R01-1
@@ -286,12 +290,10 @@ async def test_subjects_awaiting_review_are_not_judged_again() -> None:
     assert [jctx.subject_id for _, jctx, _ in engine.calls] == ["C"]
 
 
-@pytest.mark.parametrize("third", ["unattributed", "auto_close", "normal"])
-async def test_full_rerun_keeps_subject_in_human_hands(third: str) -> None:
-    """实际图三轮: A 失败交人 (X v2 unattributed, 任务 T-X-v2), B 失败; 只重跑 B 时引擎抛错, 整次失败;
-    再整条重跑: A 仍待人处理, 不再重判, 只判 B, 第 3 次执行成功, A 的任务仍待决 (R41 审核第 1 轮)."""
-    a, b = "SI-2026-0612", "SI-2026-0618"
-    engines: list[FakeJudgmentEngine] = []
+def two_failures(third: str, engines: list[FakeJudgmentEngine], a: str, b: str) -> Callable[[Any], dict[str, Any]]:
+    """REV-02 判 a, b 两个对象 (a 带 X1, 由真实 A6 与假引擎): 第 1 次执行 a 失败转 unattributed, b 失败为 failed;
+    第 2 次执行判 b 时引擎抛错 (整次失败); 之后 b 成功, a 按 third (unattributed 仍失败, auto_close 为 L3 自动关闭,
+    normal 为 L2 待复核)."""
 
     def agents(deps: Any) -> dict[str, Any]:
         def for_a(jctx: JudgmentContext, current: ProcedureRun) -> JudgmentOutcome:
@@ -318,13 +320,26 @@ async def test_full_rerun_keeps_subject_in_human_hands(third: str) -> None:
         agent.subject_sources["REV-02"] = source
         return {**p2_agents(deps), "REV-08": numbat_p2_agents(deps)["REV-08"], "REV-02": agent}
 
-    s = await at_review(agents)
+    return agents
+
+
+@pytest.mark.parametrize("third", ["unattributed", "auto_close", "normal"])
+async def test_rerun_takes_the_failed_round_together(third: str) -> None:
+    """实际图三轮 (需求 R347, Q17 一轮失败算一组): A 失败交人 (X v2 unattributed, 任务 T-X-v2), B 失败 (failed). 对 B
+    rerun: 同一轮的失败对象一并重跑, A 的 unattributed 任务也 decided, 重判对象为 A, B; 第 2 次执行判 B 时引擎抛错,
+    整次失败; 再整条重跑, 第 3 次执行 A, B 都判, 成功. A 的结果按 third: 仍失败时又是 unattributed (目标 X v3),
+    自动关闭时 X 随判断归因 (v3 attributed), 待复核时为 normal 任务."""
+    a, b = "SI-2026-0612", "SI-2026-0618"
+    engines: list[FakeJudgmentEngine] = []
+    s = await at_review(two_failures(third, engines, a, b))
     first = await s.output_store.latest(EID, ReviewTask, procedure_id="REV-02", status=TaskStatus.pending)
     old = next(t for t in first if t.kind is TaskKind.unattributed)
     retry_b = next(t for t in first if t.kind is TaskKind.failed)
     assert (old.subject_id, old.target_version, retry_b.subject_id) == (a, 2, b)
     await s.submit.submit(EID, rerun(retry_b.id, "D-RETRY-B"))
     await wait_idle(s.runner, EID)
+    closed = await s.output_store.get(EID, ReviewTask, old.id)
+    assert closed is not None and closed.status is TaskStatus.decided  # 同一轮, 随 B 一并关闭
     second = await run(s, "RUN-REV-02-2")
     assert second.status is RunStatus.failed
     await s.submit.submit(EID, rerun("T-RUN-REV-02-2-v1", "D-RETRY-ALL"))
@@ -332,9 +347,47 @@ async def test_full_rerun_keeps_subject_in_human_hands(third: str) -> None:
     third_run = await run(s, "RUN-REV-02-3")
     assert s.runner.run_error(EID) is None
     assert third_run.status is RunStatus.succeeded, third_run.failure_reason
-    assert [jctx.subject_id for _, jctx, _ in engines[0].calls] == [a, b, b, b]
-    still = await s.output_store.get(EID, ReviewTask, old.id)
-    assert still is not None and still.status is TaskStatus.pending
+    assert sorted(jctx.subject_id for _, jctx, _ in engines[0].calls) == [a, a, a, b, b, b]
+    x = await s.output_store.get(EID, AuditException, X1.id)
+    assert x is not None
+    pending = await s.output_store.latest(EID, ReviewTask, procedure_id="REV-02", status=TaskStatus.pending)
+    of_a = sorted((t.id, t.kind) for t in pending if t.subject_id == a or t.target_id in (X1.id, f"J-REV-02-3-{a}"))
+    if third == "unattributed":
+        assert (x.version, x.disposition) == (3, ExceptionDisposition.unattributed)
+        assert of_a == [(f"T-{X1.id}-v3", TaskKind.unattributed)]
+    elif third == "auto_close":
+        assert (x.version, x.disposition, x.attributed_by) == (3, ExceptionDisposition.attributed, f"J-REV-02-3-{a}")
+        assert of_a == []
+    else:
+        assert (x.version, x.disposition) == (2, ExceptionDisposition.unattributed)  # 确认判断时才归因
+        assert of_a == [(f"T-J-REV-02-3-{a}-v1", TaskKind.normal)]
+
+
+async def test_subject_decided_by_auditor_is_not_rerun() -> None:
+    """需求 R347: 审计师想自己定 A, 先对 A 的 unattributed 任务作出决定 (推翻) 即可; 之后对 B rerun 只带还待决的,
+    A 不重判 (判断引擎只多判 B)."""
+    a, b = "SI-2026-0612", "SI-2026-0618"
+    engines: list[FakeJudgmentEngine] = []
+    s = await at_review(two_failures("normal", engines, a, b))
+    first = await s.output_store.latest(EID, ReviewTask, procedure_id="REV-02", status=TaskStatus.pending)
+    old = next(t for t in first if t.kind is TaskKind.unattributed)
+    retry_b = next(t for t in first if t.kind is TaskKind.failed)
+    override = record(
+        old.id,
+        Decision.override,
+        id="D-OVERRIDE-A",
+        target_version=old.target_version,
+        override_conclusion="The invoice was recorded in the correct period.",
+    )
+    await s.submit.submit(EID, override)
+    await wait_idle(s.runner, EID)
+    before = len(s.output_store.commits)
+    await s.submit.submit(EID, rerun(retry_b.id, "D-RETRY-B"))
+    await wait_idle(s.runner, EID)
+    [procedure] = [o for o in s.output_store.commits[before] if isinstance(o, Procedure)]
+    assert procedure.rerun_subject_ids == [b]
+    assert [jctx.subject_id for _, jctx, _ in engines[0].calls].count(a) == 1
+    assert [jctx.subject_id for _, jctx, _ in engines[0].calls].count(b) == 2
 
 
 @pytest.mark.parametrize("auto_close", [True, False])
