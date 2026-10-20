@@ -740,6 +740,13 @@
       "xero_refs": []
     },
     {
+      "path": "llm/PLN-15/r1.json",
+      "sha256": "c3416d0652af4fded8d72b4a52cc9ea9cd04c7ce7cd216a3c0f2dc6976dd70f2",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/README.md",
       "sha256": "9820dae006d740339bc6a8f82cd58adb863d566e8843daac1d8acc4f6b61b77d",
       "synthetic": true,

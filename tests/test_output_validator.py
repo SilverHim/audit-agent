@@ -30,10 +30,13 @@ from backend.contracts.models import (
     Decision,
     DocumentRef,
     DocumentType,
+    EqrRecommendation,
     EvidencePointer,
     EvidenceType,
     Judgment,
+    Milestone,
     OpinionType,
+    ProcedureNote,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
@@ -53,9 +56,11 @@ from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
+    PLAN_REQUIRED_SECTIONS,
     CheckResult,
     JudgmentEngine,
     OutputValidator,
+    check_plan,
     citation_keys,
     judgment_key,
     output_model,
@@ -78,6 +83,7 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
+from tests.fixture_sets import XERO
 from tests.xero_fakes import xero_profile
 
 EID = ENGAGEMENT.id
@@ -197,8 +203,8 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
 
 
 # 模板已引用而引用与语义校验还没实现的输出模型 → 实现它的需求. 这些模型的程序还没有 Agent 执行 (不在启用集与
-# 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着)
-PENDING_CHECKS: dict[type[BaseModel], str] = {AuditPlanDraft: "R204"}
+# 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着). AuditPlanDraft 已由需求 R204 登记
+PENDING_CHECKS: dict[type[BaseModel], str] = {}
 
 
 def test_every_referenced_output_model_is_registered() -> None:
@@ -220,10 +226,11 @@ def test_pending_checks_are_not_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 10 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
-    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290). AuditPlanDraft 在
-    待实现表中 (R204)."""
+    """现有 11 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
+    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
+    check_plan 校验, 需求 R204)."""
     assert set(OutputValidator.CHECKS) == {
+        AuditPlanDraft,
         JudgmentDraft,
         ContractExtraction,
         ConfirmationExtraction,
@@ -238,6 +245,7 @@ def test_dispatch_table_covers_existing_models() -> None:
     assert OutputValidator.CHECKS[DocumentClassification] is structure_only
     assert OutputValidator.CHECKS[SheetRecognition] is structure_only
     assert OutputValidator.CHECKS[StatementsExtraction] is structure_only
+    assert OutputValidator.CHECKS[AuditPlanDraft] is check_plan
 
 
 class ProbeOut(BaseModel):
@@ -1242,6 +1250,116 @@ def test_citation_keys_must_be_unique() -> None:
         citation_keys([first, second])
     odd = first.model_copy(update={"id": "J-CUSTOM"})
     assert judgment_key(odd) == "REV-02:SI-2026-0612:J-CUSTOM"
+
+
+# ── 计划叙述 (PLN-15, 需求 R204) ─────────────────────────────────────────
+
+PLN15 = LIBRARY.load("PLN-15")  # 功能 planning, 程序库缺省不启用; load 照样取得
+PLAN_PROCEDURES = ["CSH-02", "CSH-04", "CSH-05", "DOC-06", "REV-02", "REV-03", "REV-08"]  # Xero 装配后的 P2 程序
+PLAN_END = date(2026, 9, 30)
+PLAN_SECTIONS = {name: f"The {name} of the audit." for name in PLAN_REQUIRED_SECTIONS}
+
+
+def plan_notes(*ids: str) -> list[ProcedureNote]:
+    return [ProcedureNote(procedure_id=p, nature_timing_extent=f"{p} at fieldwork.") for p in ids]
+
+
+def plan_draft(**changes: Any) -> AuditPlanDraft:
+    """合格的计划叙述: 四个必备段, 7 条程序各一条说明, 时间表最早一项恰为期末 (不早于期末即可)."""
+    draft = AuditPlanDraft(
+        overall_strategy="A substantive audit of the shortened financial year.",
+        sections=PLAN_SECTIONS,
+        procedure_notes=plan_notes(*PLAN_PROCEDURES),
+        timetable=[
+            Milestone(milestone="Period end", due=PLAN_END),
+            Milestone(milestone="Auditor's report dated", due=date(2026, 10, 23)),
+        ],
+        eqr_recommendation=EqrRecommendation(required=False, basis="Not listed and not required by law."),
+        expert_assessment="No auditor's expert is needed.",
+        standards_cited=["ASA300-P07", "ASQM1-P34f"],
+    )
+    return draft.model_copy(update=changes)
+
+
+async def check_plan_draft(draft: AuditPlanDraft, ctx: ValidationContext | None = None) -> Any:
+    validator, _ = make_validator()
+    context = ctx or ValidationContext(
+        standards_of="PLN-15", expected_procedure_ids=PLAN_PROCEDURES, period_end=PLAN_END
+    )
+    return await validator.validate(EID, PLN15, respond(draft), context)
+
+
+async def test_plan_draft_passes() -> None:
+    """合格的叙述通过 (时间表等于期末的一项不算早于期末); Xero 的固定输出正本 (llm_xero/PLN-15/r1.json, 验收 3) 也
+    一次通过, 它引用的准则片段都在模板 standards 内."""
+    report = await check_plan_draft(plan_draft())
+    assert (report.level_failed, report.errors, report.output) == (None, [], plan_draft())
+    xero = AuditPlanDraft.model_validate_json((XERO.fixtures / "PLN-15" / "r1.json").read_text(encoding="utf-8"))
+    assert (await check_plan_draft(xero)).level_failed is None
+    assert set(xero.standards_cited) <= set(PLN15.standards)
+
+
+@pytest.mark.parametrize(
+    ("changes", "level", "error"),
+    [
+        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES[1:])}, "semantic", "procedure_notes 缺计划的程序: CSH-02"),
+        (
+            {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-05")},
+            "semantic",
+            "procedure_notes 有计划以外的程序: REV-05",
+        ),
+        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-02")}, "semantic", "procedure_notes 的程序重复: REV-02"),
+        (
+            {"standards_cited": ["ASA300-P07", "ASA315-P12"]},
+            "reference",
+            "standards_cited 含模板 standards 以外的片段: ASA315-P12",
+        ),
+        (
+            {"timetable": [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]},
+            "semantic",
+            "时间表早于期末 2026-09-30: Planning meeting (2026-09-29)",
+        ),
+        *[
+            (
+                {"sections": {k: v for k, v in PLAN_SECTIONS.items() if k != name}},
+                "semantic",
+                f"sections 缺必备的段: {name}",
+            )
+            for name in PLAN_REQUIRED_SECTIONS
+        ],
+        ({"sections": PLAN_SECTIONS | {"timing": "  "}}, "semantic", "sections 缺必备的段: timing"),
+        (
+            {"sections": PLAN_SECTIONS | {"overall_strategy": "again"}},
+            "semantic",
+            "sections 不能含 overall_strategy (总体策略另有字段)",
+        ),
+        (
+            {"eqr_recommendation": EqrRecommendation(required=False, basis=" ")},
+            "semantic",
+            "eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)",
+        ),
+    ],
+)
+async def test_plan_draft_failures(changes: dict[str, Any], level: str, error: str) -> None:
+    """验收 4: 程序说明与计划的程序不等 (缺, 多, 重复), 时间表早于期末, 缺必备段 (或只有空白), 段里重复总体策略,
+    项目质量复核建议没写依据 → semantic; 引用模板 standards 以外的片段 → reference (不再查语义). 都不可重试."""
+    report = await check_plan_draft(plan_draft(**changes))
+    assert (report.level_failed, report.errors, report.retryable) == (level, [error], False)
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        ValidationContext(standards_of="PLN-15"),
+        ValidationContext(standards_of="PLN-15", expected_procedure_ids=PLAN_PROCEDURES),
+        ValidationContext(standards_of=None, expected_procedure_ids=PLAN_PROCEDURES, period_end=PLAN_END),
+    ],
+)
+async def test_plan_check_requires_its_context(ctx: ValidationContext) -> None:
+    """验收 7: 计划叙述的校验须有模板 (standards_of), 计划的程序 (expected_procedure_ids) 与期末 (period_end), 缺一
+    即 ValueError, 不静默放过."""
+    with pytest.raises(ValueError):
+        await check_plan_draft(plan_draft(), ctx)
 
 
 # ── R216: 待审财报的行作证据. 端口与真实取行由 R217 实现, 这里用预置 XERO_FS_V1 各行的最小假存储 ──

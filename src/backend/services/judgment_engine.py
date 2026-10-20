@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
@@ -288,6 +289,49 @@ def citation_keys(judgments: Sequence[Judgment]) -> dict[str, Judgment]:
         detail = "; ".join(f"{key}: {', '.join(j.id for j in items)}" for key, items in clashes.items())
         raise ValueError(f"可引用的判断引用键重复: {detail}")
     return {key: items[0] for key, items in found.items()}
+
+
+PLAN_REQUIRED_SECTIONS = ("scope", "significant_risks", "materiality", "timing")  # 计划叙述必备的段 (需求 R204)
+
+
+def plan_checks(
+    draft: AuditPlanDraft, ctx: ValidationContext, standards: Sequence[str]
+) -> tuple[Level | None, list[str]]:
+    """计划叙述 (PLN-15) 的引用与语义两级. 返回 (未通过的级别, 错误). standards 为模板 standards.
+
+    引用: standards_cited 只能取模板 standards 中的片段.
+    语义: procedure_notes 的程序编号集合恰为 ctx.expected_procedure_ids (计划 items 的, 不缺不多, 不重复); 时间表各项
+    不早于 ctx.period_end; sections 含 scope, significant_risks, materiality, timing, 不含 overall_strategy (另有字段,
+    合成计划叙述时排在首段); 项目质量复核建议写了依据. ctx 缺 expected_procedure_ids 或 period_end 时抛 ValueError.
+    """
+    if ctx.expected_procedure_ids is None or ctx.period_end is None:
+        raise ValueError("计划叙述的校验须给出计划的程序与期末 (ValidationContext.expected_procedure_ids, period_end)")
+    outside = [f for f in draft.standards_cited if f not in standards]
+    if outside:
+        return "reference", [f"standards_cited 含模板 standards 以外的片段: {', '.join(outside)}"]
+    errors = []
+    noted = [n.procedure_id for n in draft.procedure_notes]
+    expected = set(ctx.expected_procedure_ids)
+    missing = sorted(expected - set(noted))
+    extra = sorted(set(noted) - expected)
+    repeated = sorted({p for p in noted if noted.count(p) > 1})
+    if missing:
+        errors.append(f"procedure_notes 缺计划的程序: {', '.join(missing)}")
+    if extra:
+        errors.append(f"procedure_notes 有计划以外的程序: {', '.join(extra)}")
+    if repeated:
+        errors.append(f"procedure_notes 的程序重复: {', '.join(repeated)}")
+    early = [f"{m.milestone} ({m.due})" for m in draft.timetable if m.due < ctx.period_end]
+    if early:
+        errors.append(f"时间表早于期末 {ctx.period_end}: {'; '.join(early)}")
+    absent = [name for name in PLAN_REQUIRED_SECTIONS if not draft.sections.get(name, "").strip()]
+    if absent:
+        errors.append(f"sections 缺必备的段: {', '.join(absent)}")
+    if "overall_strategy" in draft.sections:
+        errors.append("sections 不能含 overall_strategy (总体策略另有字段)")
+    if not draft.eqr_recommendation.basis.strip():
+        errors.append("eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)")
+    return ("semantic" if errors else None), errors
 
 
 def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | None, list[str]]:
@@ -655,6 +699,17 @@ async def check_report(
     return CheckResult(output, level, errors=errors)
 
 
+async def check_plan(
+    validator: OutputValidator, eid: str, output: AuditPlanDraft, ctx: ValidationContext
+) -> CheckResult:
+    """计划叙述 (PLN-15, 需求 R204): 引用的片段须在模板 standards 内, 程序说明覆盖计划的程序, 时间表与必备段 (见
+    plan_checks). 模板取 ctx.standards_of (PLN-15); 为空时抛 ValueError."""
+    if ctx.standards_of is None:
+        raise ValueError("计划叙述的校验须给出模板 (ValidationContext.standards_of)")
+    level, errors = plan_checks(output, ctx, validator.library.load(ctx.standards_of).standards)
+    return CheckResult(output, level, errors=errors)
+
+
 async def check_critic(
     validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
 ) -> CheckResult:
@@ -684,6 +739,7 @@ for _model, _check in (
     (RegistryExtraction, check_extraction),
     (ReportDraft, check_report),
     (CriticIndependent, check_critic),
+    (AuditPlanDraft, check_plan),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),

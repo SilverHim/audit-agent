@@ -1,5 +1,5 @@
 {#
-PLN-15 总体审计计划 → AuditPlanDraft，每个修订调用一次（需求 R203；执行由 R204 做）。计划骨架（程序与参数、重要性、特别风险目标、适用框架）由 A4 确定性组装，模型只写叙述。
+PLN-15 总体审计计划 → AuditPlanDraft，每个修订调用一次（需求 R203；执行见 agents/audit_plan，需求 R204）。计划骨架（程序与参数、重要性、特别风险目标、适用框架）由 A4 确定性组装，模型只写叙述。
 渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
 变量：
   entity           ClientProfile：legal_name、abn、entity_type、listed、directors、financial_year_end、accounting_system、engagements（为空即首次服务）、key_personnel、related_parties、ownership、governance、prior_period_audited、notes
