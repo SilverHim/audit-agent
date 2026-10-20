@@ -8,6 +8,8 @@
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
   make_xero_deps. 快照按 tests.external.snapshot_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
 读快照, 核对与文本层的结果按路径缓存, 一次测试运行里只算一次; 返回的列表与假存储每次新建, 测试可以改.
+两组函数都可传 loader (不连库的 XeroDatasetLoader, 如注入副本 XeroCase.loader, 需求 R118): 数据改取它指向的快照与
+补造目录 (经 loader.supplement 核对, 不缓存); 缺省为原目录.
 另有规则引擎结果的预置 XERO_RULES (需求 R107, 同 tests.fakes 的 NUMBAT_RULES), 取自连库跑一次的结果, 不读快照.
 
 XeroFakeDatasetLoader.load 只记调用, 不登记文件, 与真实载入器只载快照 (R269) 的口径一致: 补造账表与文件都由演示
@@ -107,46 +109,52 @@ def verified(repo: Path) -> tuple[Supplements, dict[str, Any]]:
     return found, found.verify() if snapshot is not None else found.verify_files()
 
 
-def supplement() -> Supplements:
-    return verified(SNAPSHOT_REPO)[0]
+def supplement(loader: XeroDatasetLoader | None = None) -> Supplements:
+    """已核对的补造目录: 缺省为原补造目录; 给了 loader 时取它的 (副本带 injected, 由 loader 的 allow_injected 放行)."""
+    if loader is None:
+        return verified(SNAPSHOT_REPO)[0]
+    found = loader.supplement(XERO_DATASET)
+    assert found is not None, "loader 没有补造目录"
+    return found
 
 
-def manifest_documents() -> dict[str, dict[str, Any]]:
+def manifest_documents(loader: XeroDatasetLoader | None = None) -> dict[str, dict[str, Any]]:
     """manifest.documents: 文件 ID → 条目."""
-    return {d["document_id"]: d for d in verified(SNAPSHOT_REPO)[1]["documents"]}
+    manifest = verified(SNAPSHOT_REPO)[1] if loader is None else supplement(loader).verify_files()
+    return {d["document_id"]: d for d in manifest["documents"]}
 
 
-def xero_profile() -> ClientProfile:
+def xero_profile(loader: XeroDatasetLoader | None = None) -> ClientProfile:
     """补造的客户画像 CLIENT-XERO-3C1332BB-Q1 v1."""
-    profile = supplement().client_profile(CLIENT_PREFIX)
+    profile = supplement(loader).client_profile(CLIENT_PREFIX)
     assert profile is not None
     return profile
 
 
-def xero_presets() -> tuple[list[AuditObjective], list[RiskItem]]:
+def xero_presets(loader: XeroDatasetLoader | None = None) -> tuple[list[AuditObjective], list[RiskItem]]:
     """补造的计划预置: 3 个审计目标, 3 项风险."""
-    presets = supplement().planning_presets()
+    presets = supplement(loader).planning_presets()
     assert presets is not None
     return presets
 
 
-def xero_traits() -> DatasetTraits:
-    traits = supplement().dataset_traits()
+def xero_traits(loader: XeroDatasetLoader | None = None) -> DatasetTraits:
+    traits = supplement(loader).dataset_traits()
     assert traits is not None
     return traits
 
 
-def xero_uploads(stage: DemoStage | None = None) -> list[DemoUpload]:
+def xero_uploads(stage: DemoStage | None = None, loader: XeroDatasetLoader | None = None) -> list[DemoUpload]:
     """演示导入清单的上传文件 (Supplements.uploads, 同 plan): stage 为空取全部 23 份, 否则只取该阶段的."""
-    return [u for u in supplement().uploads() if stage is None or u.stage == stage]
+    return [u for u in supplement(loader).uploads() if stage is None or u.stage == stage]
 
 
-def xero_documents(stage: DemoStage) -> list[DocumentRef]:
+def xero_documents(stage: DemoStage, loader: XeroDatasetLoader | None = None) -> list[DocumentRef]:
     """到 stage 为止 (含) 各阶段上传并补登记后的文件登记, 按清单顺序: 渠道 auditor_upload, 上传人为项目负责人,
     类型, 可靠性, 文件日期与关联对象同清单, 哈希与页数取 manifest; 合同已抽取 (extracted), 其余 classified.
     份数: acceptance 2, fieldwork 21, statements 22, manual 23."""
     done = STAGES[: STAGES.index(stage) + 1]
-    entries = manifest_documents()
+    entries = manifest_documents(loader)
     return [
         DocumentRef(
             id=u.document_id,
@@ -162,7 +170,7 @@ def xero_documents(stage: DemoStage) -> list[DocumentRef]:
             document_date=u.document_date,
             related_ids=u.related_ids,
         )
-        for u in xero_uploads()
+        for u in xero_uploads(loader=loader)
         if u.stage in done
     ]
 
@@ -176,32 +184,34 @@ def pdf_pages(path: Path, sha256: str) -> tuple[str, ...]:
         return tuple(page.extract_text() or "" for page in pdf.pages)
 
 
-def xero_pages(document_id: str) -> list[str]:
+def xero_pages(document_id: str, loader: XeroDatasetLoader | None = None) -> list[str]:
     """manifest 登记的一份 PDF 的文本层; 不在 manifest 抛 LookupError."""
-    entry = manifest_documents().get(document_id)
+    entry = manifest_documents(loader).get(document_id)
     if entry is None:
         raise LookupError(f"document {document_id} 不在 Xero 补造目录的 manifest 中")
-    return list(pdf_pages(supplement().root / entry["path"], entry["sha256"]))
+    return list(pdf_pages(supplement(loader).root / entry["path"], entry["sha256"]))
 
 
-def xero_adjustments(entry_nos: Sequence[str] | None = None) -> list[JournalEntry]:
+def xero_adjustments(
+    entry_nos: Sequence[str] | None = None, loader: XeroDatasetLoader | None = None
+) -> list[JournalEntry]:
     """补造的更正分录 (11 行), 按行 ID; entry_nos 给了时只取这些凭证."""
-    rows = read_adjustments(supplement().root / ADJUSTMENTS)
+    rows = read_adjustments(supplement(loader).root / ADJUSTMENTS)
     return sorted((r for r in rows if entry_nos is None or r.entry_no in entry_nos), key=lambda r: r.id)
 
 
-def xero_employees() -> list[Employee]:
+def xero_employees(loader: XeroDatasetLoader | None = None) -> list[Employee]:
     """补造的工资册 (3 行)."""
-    return supplement().employees()
+    return supplement(loader).employees()
 
 
-def xero_registry() -> FakeRegistry:
+def xero_registry(loader: XeroDatasetLoader | None = None) -> FakeRegistry:
     """登记 mock 的记录装进假登记系统: 补造目录 registry/ 的 ABN 与 ASIC 登记 (各 3 条), 公司摘录 (3 份) 与人员检索
     (1 份, 需求 R129); 摘录与检索经 MockRegistrySource 读出 (带 PDF 原件)."""
-    root = supplement().root / "registry"
+    root = supplement(loader).root / "registry"
     abn = json.loads((root / "abn.json").read_text(encoding="utf-8"))
     asic = json.loads((root / "asic.json").read_text(encoding="utf-8"))
-    mock = MockRegistrySource(supplement().root)
+    mock = MockRegistrySource(supplement(loader).root)
     extracts = {p.stem: mock.extract(p.stem) for p in sorted((root / "extracts").glob("*.json"))}
     persons = []
     for path in sorted((root / "persons").glob("*.json")):
@@ -215,11 +225,11 @@ def xero_registry() -> FakeRegistry:
     )
 
 
-def xero_confirmations() -> FakeConfirmationChannel:
+def xero_confirmations(loader: XeroDatasetLoader | None = None) -> FakeConfirmationChannel:
     """假函证平台: 两个银行账户 (12345678, 12345679) 回函, 内容为补造的回函 PDF, 渠道取补造目录的
     confirmations/receipts.json (同回函 mock). 假平台只有一个渠道, 各账户的渠道不同时抛 ValueError."""
-    root = supplement().root
-    replies = [Path(d["path"]) for d in manifest_documents().values() if d["registration"] == "confirmation"]
+    root = supplement(loader).root
+    replies = [Path(d["path"]) for d in manifest_documents(loader).values() if d["registration"] == "confirmation"]
     receipts = json.loads((root / "confirmations" / "receipts.json").read_text(encoding="utf-8"))
     channels = {receipts[p.stem]["receipt_channel"] for p in replies}
     if len(channels) != 1:
@@ -229,11 +239,13 @@ def xero_confirmations() -> FakeConfirmationChannel:
     )
 
 
-def xero_contracts() -> list[Contract]:
+def xero_contracts(loader: XeroDatasetLoader | None = None) -> list[Contract]:
     """3 份收入合同第 1 版: 按 DOC-04 的 fixture (tests/fixtures/llm_xero/DOC-04) 组装, 同上传后 A3 的抽取 (指针的证据
     种类与可靠性按文件登记改写, 同输出校验的 document_pointer); 执行 ID 为 UPLOAD-{文件 ID}-JOB. 按合同编号."""
     contracts = []
-    for d in sorted((d for d in xero_documents("fieldwork") if d.type is DocumentType.contract), key=contract_id):
+    for d in sorted(
+        (d for d in xero_documents("fieldwork", loader) if d.type is DocumentType.contract), key=contract_id
+    ):
         extraction = ContractExtraction.model_validate_json((DOC04_FIXTURES / f"{contract_id(d)}.json").read_bytes())
         evidence = [document_pointer(p, d)[0] or p for p in extraction.evidence]
         validated = extraction.model_copy(update={"evidence": evidence})
@@ -263,8 +275,10 @@ def loaded_tables(api: Path) -> dict[str, tuple[Any, ...]]:
     return {name: tuple(rows) for name, rows in loader.tables(XERO_DATASET).items()}
 
 
-def xero_tables() -> dict[str, list[Any]]:
+def xero_tables(loader: XeroDatasetLoader | None = None) -> dict[str, list[Any]]:
     """演示数据导入之后的八张表 (XeroDatasetLoader.tables, 含应付账单)."""
+    if loader is not None:
+        return loader.tables(XERO_DATASET)
     return {name: list(rows) for name, rows in loaded_tables(snapshot_root(SNAPSHOT_REPO).parent).items()}
 
 
@@ -287,23 +301,27 @@ def put_rows(store: FakeFinancialStore, kind: TableKind, rows: Sequence[BaseMode
         store.records |= {(source, cast(Any, r).id): r.model_dump() for r in rows}
 
 
-def xero_financial_store(stage: DemoStage = "fieldwork", contracts: bool = True) -> FakeFinancialStore:
+def xero_financial_store(
+    stage: DemoStage = "fieldwork", contracts: bool = True, loader: XeroDatasetLoader | None = None
+) -> FakeFinancialStore:
     """装好演示数据的假财务存储: 八张表 (put_rows) 与工资册, 到 stage 为止上传的文件; contracts 为真时预置
     xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError)."""
     if contracts and stage == "acceptance":
         raise ValueError("合同在 fieldwork 阶段才上传, acceptance 阶段不能预置合同")
-    store = FakeFinancialStore(documents=xero_documents(stage), contracts=xero_contracts() if contracts else None)
-    for name, rows in xero_tables().items():
+    store = FakeFinancialStore(
+        documents=xero_documents(stage, loader), contracts=xero_contracts(loader) if contracts else None
+    )
+    for name, rows in xero_tables(loader).items():
         put_rows(store, TableKind(name), rows)
-    put_rows(store, TableKind.employees, xero_employees())
+    put_rows(store, TableKind.employees, xero_employees(loader))
     return store
 
 
-def xero_engagement() -> Engagement:
+def xero_engagement(loader: XeroDatasetLoader | None = None) -> Engagement:
     """以补造画像为客户的项目: 编号与负责人同 ENGAGEMENT, 期间取快照 (2026-07-01 至 2026-09-30)."""
-    period = xero_loader().period(XERO_DATASET)
+    period = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
     assert period is not None
-    profile = xero_profile()
+    profile = xero_profile(loader)
     return ENGAGEMENT.model_copy(
         update={
             "client_id": profile.id,
@@ -319,18 +337,20 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
     """Xero 演示的假数据集载入: load 只记调用, 不登记文件 (演示数据导入之后的状态); 更正分录, 计划预置, 客户画像与
     数据集声明取补造目录."""
 
-    def __init__(self, financial_store: FakeFinancialStore) -> None:
-        super().__init__(financial_store, adjustments=xero_adjustments(), traits={XERO_DATASET: xero_traits()})
-        self.span = xero_loader().period(XERO_DATASET)
+    def __init__(self, financial_store: FakeFinancialStore, loader: XeroDatasetLoader | None = None) -> None:
+        traits = {XERO_DATASET: xero_traits(loader)}
+        super().__init__(financial_store, adjustments=xero_adjustments(loader=loader), traits=traits)
+        self.loader = loader
+        self.span = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
 
     def seed(self) -> "XeroFakeDatasetLoader":
         return self  # 文件由演示数据导入上传, 不由载入登记
 
     def planning_presets(self, dataset: str) -> tuple[list[AuditObjective], list[RiskItem]]:
-        return xero_presets()
+        return xero_presets(self.loader)
 
     def client_profile(self, dataset: str) -> ClientProfile:
-        return xero_profile()
+        return xero_profile(self.loader)
 
     def datasets(self) -> list[str]:
         return [XERO_DATASET]
@@ -380,13 +400,20 @@ class XeroFakeEvidenceStore(FakeEvidenceStore):
     """pages 对 manifest 登记的 Xero 文件返回真实文本层 (xero_pages); 上传 (save) 补造文件时页数取 manifest (同真实
     存储数 PDF 的页数, 抽取的页码校验要用); 其余同 FakeEvidenceStore."""
 
-    def __init__(self, financial_store: FakeFinancialStore, output_store: FakeOutputStore | None = None) -> None:
+    def __init__(
+        self,
+        financial_store: FakeFinancialStore,
+        output_store: FakeOutputStore | None = None,
+        loader: XeroDatasetLoader | None = None,
+    ) -> None:
         super().__init__(financial_store, output_store)
-        self.page_counts.update({Path(d["path"]).name: d["page_count"] for d in manifest_documents().values()})
+        self.loader = loader
+        self.page_counts.update({Path(d["path"]).name: d["page_count"] for d in manifest_documents(loader).values()})
 
     async def pages(self, eid: str, document_id: str) -> list[str]:
-        if document_id in manifest_documents() and any(d.id == document_id for d in self.financial_store.document_refs):
-            return xero_pages(document_id)
+        registered = any(d.id == document_id for d in self.financial_store.document_refs)
+        if registered and document_id in manifest_documents(self.loader):
+            return xero_pages(document_id, self.loader)
         return await super().pages(eid, document_id)
 
 
@@ -396,29 +423,32 @@ def make_xero_deps(
     engagement_store: FakeEngagementStore | None = None,
     output_store: FakeOutputStore | None = None,
     financial_store: FakeFinancialStore | None = None,
+    loader: XeroDatasetLoader | None = None,
     **kwargs: Any,
 ) -> AgentDeps:
     """同 make_deps (其余参数原样转交), 缺省换成 Xero 演示的假实现: 登记 xero_registry(), 项目存储只有 Xero 画像与
     xero_engagement(), 财务存储 xero_financial_store(), 函证 xero_confirmations(), 数据管理 XeroFakeDataStore;
     证据文件存储与数据集载入换成 XeroFakeEvidenceStore 与 XeroFakeDatasetLoader. 规则引擎缺省没有预置结果 (各程序返回
-    空结果, 不沿用 make_deps 缺省的 Numbat 例外), 要例外的测试自己给 rules."""
-    financial = financial_store if financial_store is not None else xero_financial_store()
+    空结果, 不沿用 make_deps 缺省的 Numbat 例外), 要例外的测试自己给 rules. 给了 loader 时以上数据都取它指向的目录."""
+    financial = financial_store if financial_store is not None else xero_financial_store(loader=loader)
     outputs = output_store if output_store is not None else FakeOutputStore()
-    kwargs.setdefault("confirmations", xero_confirmations())
+    kwargs.setdefault("confirmations", xero_confirmations(loader))
     kwargs.setdefault("rules", FakeRuleEngine({}))
-    kwargs.setdefault("data", XeroFakeDataStore(financial, xero_tables()))
+    kwargs.setdefault("data", XeroFakeDataStore(financial, xero_tables(loader)))
     deps = make_deps(
-        registry if registry is not None else xero_registry(),
+        registry if registry is not None else xero_registry(loader),
         trail if trail is not None else FakeTrail(),
         engagement_store
         if engagement_store is not None
-        else FakeEngagementStore([xero_profile()], [xero_engagement()]),
+        else FakeEngagementStore([xero_profile(loader)], [xero_engagement(loader)]),
         outputs,
         financial,
         **kwargs,
     )
     return replace(
-        deps, evidence_store=XeroFakeEvidenceStore(financial, outputs), datasets=XeroFakeDatasetLoader(financial)
+        deps,
+        evidence_store=XeroFakeEvidenceStore(financial, outputs, loader),
+        datasets=XeroFakeDatasetLoader(financial, loader),
     )
 
 
