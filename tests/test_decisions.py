@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import BaseModel
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -43,6 +44,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
+from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.contracts.views import PlanMaterial
 from backend.core.config import get_settings
@@ -63,6 +65,8 @@ from tests.fakes import (
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
     PLAN_CONFIRMATION,
+    PLAN_REJECT_ID,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     EngagementWrite,
     FakeEngagementStore,
@@ -82,7 +86,7 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_financial_store
+from tests.xero_fakes import XERO17_MATERIALITY, XERO_RULES, make_xero_deps, xero_financial_store
 from tests.xero_flow import approve_acceptance, to_acceptance_gate
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
@@ -1449,8 +1453,6 @@ async def test_pln_other_basis_approves_when_loss_making() -> None:
 # ── R205: PLN-15 闸门与最小通过路径 (功能 planning, Xero 演示) ──
 
 # acceptance 不开: 没有 TERMS (ACC-08 的执行由 R200 做), 材料的 terms 为空; 带 TERMS 的材料见 test_query
-PLAN_FEATURES = frozenset({"critic", "misstatement", "planning"})
-XERO_REVENUE = MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.5, clearly_trivial_pct=0.05)
 XERO_P2 = ["CSH-02", "CSH-04", "CSH-05", "DOC-06", "REV-02", "REV-03", "REV-08"]
 PLAN_APPROVE = GateDecision(
     id="D-PLAN",
@@ -1464,16 +1466,25 @@ PLAN_APPROVE = GateDecision(
 )
 
 
-async def at_plan_gate() -> Started:
+class SecondPlanAsFirst(MockLLMClient):
+    """PLN-15 第 2 修订起借用第 1 修订的固定输出 (llm_xero 只有 r1), 驳回出口的用例用."""
+
+    async def complete[T: BaseModel](self, req: LLMRequest, output_model: type[T]) -> LLMResponse[T]:
+        if req.procedure_id == "PLN-15" and req.fixture_key != "r1":
+            req = req.model_copy(update={"fixture_key": "r1"})
+        return await super().complete(req, output_model)
+
+
+async def at_plan_gate(llm: LLMClient | None = None) -> Started:
     """Xero 演示项目 (数据已导入, 功能 critic, misstatement, planning) 跑到 PLN-15 闸门: ACC-01 approve → P1 (真实
-    Agent; 规则引擎为 XERO_RULES, 大模型读 llm_xero) → PLN-01/03 approve (收入 1%, 50%, 5%) → assemble_pack →
+    Agent; 规则引擎为 XERO_RULES, 大模型缺省读 llm_xero) → PLN-01/03 approve (收入 1%, 50%, 5%) → assemble_pack →
     plan_draft (A4 起草 PLAN-1) → 停在 gate_p1_plan. 闸门之外另停在 fieldwork 前, 看批准后派发什么 (越过闸门后的第一个
     节点不会再静态中断, 去哪看检查点历史)."""
     deps = make_xero_deps(
         financial_store=xero_financial_store(),
         rules=FakeRuleEngine(XERO_RULES),
-        llm=MockLLMClient(XERO.fixtures),
-        features=PLAN_FEATURES,
+        llm=llm or MockLLMClient(XERO.fixtures),
+        features=PLANNING_FEATURES,
     )
     app = build_graph(GraphNodes(deps, 2), deps.features).compile(
         checkpointer=InMemorySaver(serde=checkpoint_serde()),
@@ -1484,17 +1495,7 @@ async def at_plan_gate() -> Started:
     await approve_acceptance(runner, EID, ENGAGEMENT.owner_id)
     assert isinstance(deps.output_store, FakeOutputStore) and isinstance(deps.engagement_store, FakeEngagementStore)
     s = Started(runner, deps.output_store, deps.engagement_store)
-    pln = GateDecision(
-        id="D-PLN",
-        gate=GateId.PLN_01_03,
-        target_id="MATERIALITY",
-        target_version=1,
-        decision=GateVerdict.approve,
-        materiality=XERO_REVENUE,
-        decided_by="U-1",
-        decided_at=NOW,
-    )
-    await s.submit.submit(EID, pln)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, materiality=XERO17_MATERIALITY))
     await wait_idle(runner, EID)
     assert await s.next_nodes() == ("gate_p1_plan",), runner.run_error(EID)
     return s
@@ -1570,12 +1571,20 @@ async def test_plan_gate_view_and_overview(plan_gate: Started) -> None:
     assert (await query.overview(EID)).current_gate is GateId.PLN_15
 
 
+@pytest.mark.parametrize(
+    ("changes", "code"),
+    [
+        ({"plan_confirmation": None}, "MISSING_FIELD"),  # 验收 5: 效果要用它, 属最小路径
+        ({"target_version": 2}, "VERSION_MISMATCH"),  # 绑定的不是当前计划的当前版本
+        ({"target_id": "PLAN-2"}, "VERSION_MISMATCH"),
+    ],
+)
 @shared_loop
 @needs("q1_snapshot", "q1_supplements")
-async def test_plan_approve_without_confirmation_is_rejected(plan_gate: Started) -> None:
-    """验收 5: approve 不带 plan_confirmation 报 MISSING_FIELD, 什么都不写 (效果要用它, 属最小路径)."""
-    missing = PLAN_APPROVE.model_copy(update={"plan_confirmation": None})
-    await assert_rejected(plan_gate, missing, "MISSING_FIELD", "plan_confirmation")
+async def test_plan_approve_rejected_without_writing(plan_gate: Started, changes: dict[str, Any], code: str) -> None:
+    """验收 5: approve 不带 plan_confirmation 报 MISSING_FIELD; 绑定 PLAN-1 v2 (还没有) 或别的计划报 VERSION_MISMATCH;
+    都什么都不写."""
+    await assert_rejected(plan_gate, PLAN_APPROVE.model_copy(update=changes), code)
 
 
 @needs("q1_snapshot", "q1_supplements")
@@ -1633,3 +1642,100 @@ async def test_plan_approve_enters_p2_in_one_commit() -> None:
     sends = route_schedule(GraphNodes(s.runner.deps, 2))(values)  # schedule 之后的派发
     assert isinstance(sends, list)
     assert sorted(p for send in sends for p in send.arg["procedure_ids"]) == ["CSH-04", "CSH-05", "REV-03", "REV-08"]
+
+
+def pln15_runs(s: Started) -> list[str]:
+    return sorted(r.id for r in s.output_store.rows if isinstance(r, ProcedureRun) and r.procedure_id == "PLN-15")
+
+
+def plan_versions(s: Started) -> list[tuple[str, int, PlanStatus]]:
+    return [(p.id, p.version, p.status) for p in stored_plans(s)]
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_gate_restart_info_reject_and_revise() -> None:
+    """审核意见 R205-02 (原探针): 停在 gate_p1_plan 时进程重启 (新 runner, 同一检查点), recover 不推进, 不重跑 PLN-15;
+    信息不足只记决定, 仍停闸门, 计划, PLN-15 与阶段都不变; 驳回回 plan_draft, 真实 A4 以 rerun 起草 PLAN-2 v1 并把
+    PLAN-1 置 superseded, 再停闸门, 阶段仍 P1_Planning; 之后批准 PLAN-2 进 P2."""
+    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
+    rows = len(s.output_store.rows)
+    restarted = GraphRunner(s.runner.app, s.runner.deps)
+    await restarted.recover()
+    await wait_idle(restarted, EID)
+    s = Started(restarted, s.output_store, s.engagement_store)
+    assert restarted.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
+    assert len(s.output_store.rows) == rows and pln15_runs(s) == ["RUN-PLN-15-1"]
+
+    async def decide(decision: GateDecision) -> EngagementState:
+        await s.submit.submit(EID, decision)
+        await wait_idle(restarted, EID)
+        assert restarted.run_error(EID) is None, restarted.run_error(EID)
+        return await checkpoint_values(s)
+
+    asked = PLAN_APPROVE.model_copy(
+        update={"id": "D-P15I", "decision": GateVerdict.insufficient_info, "plan_confirmation": None, "reason": "r"}
+    )
+    values = await decide(asked)
+    assert await s.next_nodes() == ("gate_p1_plan",) and plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)]
+    assert values["phase"] is Phase.P1_Planning and s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+
+    reject = asked.model_copy(update={"id": PLAN_REJECT_ID, "decision": GateVerdict.reject, "reason": "Add timing"})
+    values = await decide(reject)
+    assert await s.next_nodes() == ("gate_p1_plan",) and values["phase"] is Phase.P1_Planning
+    assert plan_versions(s) == [
+        ("PLAN-1", 1, PlanStatus.draft),
+        ("PLAN-2", 1, PlanStatus.draft),
+        ("PLAN-1", 2, PlanStatus.superseded),
+    ]
+    assert pln15_runs(s) == ["RUN-PLN-15-1", "RUN-PLN-15-2"]
+    [plan2] = [p for p in values["audit_plans"] if p.id == "PLAN-2"]
+    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, "Add timing")
+
+    values = await decide(PLAN_APPROVE.model_copy(update={"id": "D-PLAN2", "target_id": "PLAN-2"}))
+    assert await s.next_nodes() == ("fieldwork", "fieldwork") and values["phase"] is Phase.P2_Executing
+    assert ("PLAN-2", 2, PlanStatus.approved) in plan_versions(s)
+
+
+class LostCheckpoint:
+    """写完 Store 与留痕之后, 写检查点 (aupdate_state) 时进程中断."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.app, name)
+
+    async def aupdate_state(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("crash before checkpoint")
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_approve_caught_up_after_lost_checkpoint() -> None:
+    """审核意见 R205-02 (原探针): 批准写完 Store 后检查点没跟上: 新决定报 RESUME_REQUIRED; resume 补做 (登记行的
+    rebuild) 后检查点里是 Store 的批准版 PLAN-1 v2, 阶段 P2_Executing, PLN-15 completed, 越过闸门到 fieldwork 前;
+    decision 留痕与 P1 → P2 的阶段迁移各一行, 不重复."""
+    s = await at_plan_gate()
+    broken = GraphDecisionSubmit(LostCheckpoint(s.runner.app), s.runner.deps, s.runner)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="crash before checkpoint"):
+        await broken.submit(EID, PLAN_APPROVE)
+    assert await s.next_nodes() == ("gate_p1_plan",)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, PLAN_APPROVE.model_copy(update={"id": "D-PLAN-2"}))
+    assert e.value.code == "RESUME_REQUIRED"
+
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+
+    assert s.runner.run_error(EID) is None and await s.next_nodes() == ("fieldwork", "fieldwork")
+    values = await checkpoint_values(s)
+    approved = stored_plans(s)[-1]
+    assert (approved.id, approved.version, approved.status) == ("PLAN-1", 2, PlanStatus.approved)
+    assert values["audit_plans"] == [approved] and values["phase"] is Phase.P2_Executing
+    assert next(p for p in values["procedure_pack"] if p.id == "PLN-15").status is ProcedureStatus.completed
+    assert [e.idempotency_key for e in trail_of(s, TrailKind.decision)].count("D-PLAN") == 1
+    moves = [
+        (e.payload["from"], e.payload["to"])
+        for e in trail_of(s, TrailKind.transition)
+        if e.payload["object"] == "engagement"
+    ]
+    assert moves.count(("P1_Planning", "P2_Executing")) == 1

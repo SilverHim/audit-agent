@@ -615,7 +615,7 @@ def pln15_effects(pack: list[Procedure], decision: GateDecision, plan: AuditPlan
     }
 
 
-def approved_by(state: EngagementState, decision: GateDecision) -> bool:
+def plan_approved_by(state: EngagementState, decision: GateDecision) -> bool:
     """当前计划是这条 PLN-15 通过决定批准的: 已 approved, 正是决定绑定的那份计划的下一版 (同 RPT-01 的 signed_by)."""
     if decision.decision is not GateVerdict.approve:
         return False
@@ -816,7 +816,7 @@ GATES: list[GateSpec] = [
         effects=pln15_apply,
         view=pln15_view,
         rebuild=pln15_rebuild,
-        passed=approved_by,
+        passed=plan_approved_by,
         feature=PLANNING,
     ),
     GateSpec(

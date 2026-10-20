@@ -28,6 +28,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
@@ -358,7 +359,7 @@ async def test_plan_material_takes_current_terms_and_rejections() -> None:
     """需求 R205 验收 3: PLN-15 的材料取当前计划 (PLAN-1 已取代, 为 PLAN-2), TERMS 的当前版本 (功能 acceptance 打开
     时状态中有它), 状态中的重要性三项, 此前的 PLN-15 驳回决定 (信息不足的与别的闸门的驳回不列). 缺当前计划或重要性
     时抛 LookupError (停在闸门而材料缺失, 状态与流程不符)."""
-    deps = make_deps(FakeRegistry(), FakeTrail(), features=frozenset({"critic", "misstatement", "planning"}))
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=PLANNING_FEATURES)
     reject = plan_gate_decision(1, GateId.PLN_15, GateVerdict.reject, "PLAN-1")
     state = initial_state(ENGAGEMENT, [], 1)
     state.update(  # type: ignore[typeddict-item]

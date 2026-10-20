@@ -53,6 +53,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_RISKS,
     PLAN_REJECT_ID,
+    PLANNING_FEATURES,
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
@@ -341,7 +342,7 @@ async def test_rerun_keeps_revised_risks_and_recomputes_candidates() -> None:
 
 # ── PLN-15 总体审计计划 (需求 R204, 功能 planning) ──
 
-PLAN_FEATURES = frozenset({"critic", "misstatement", "acceptance", "planning"})
+PLAN_FEATURES = PLANNING_FEATURES | {"acceptance"}  # PLN-15 的骨架另看 TERMS
 XERO_PLAN = XERO.fixtures / "PLN-15" / "r1.json"  # Xero 的固定输出正本 (验收 3)
 CASH, REVENUE = ["OBJ-CASH-EXI"], ["OBJ-REV-OCC", "OBJ-REV-CUT"]
 # 验收 1: Xero 装配后的 P2 程序 (PLAN_PROCEDURES, 按程序编号) → 关联目标

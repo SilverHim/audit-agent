@@ -39,7 +39,6 @@ from backend.core.config import get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.nodes import GraphNodes, build_run, fail_run, next_run, save_outputs, update_procedure
 from backend.orchestration.runner import GraphRunner, fixed_procedures
-from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -48,6 +47,7 @@ from tests.fakes import (
     NUMBAT_ASIC,
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     FakeDatasetLoader,
     FakeEngagementStore,
@@ -939,7 +939,7 @@ async def test_plan_draft_runs_pln15_and_leaves_it_planned() -> None:
     与执行 RUN-PLN-15-1 (succeeded) 写入 Store, 进片段; PLN-15 出新版本仍为 planned (闸门程序, 由 PLN-15 闸门批准时
     完成, Q5)."""
     store = FakeOutputStore()
-    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, features=BASELINE | {"misstatement", "planning"})
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, features=PLANNING_FEATURES)
     pack = fixed_procedures(deps.library)
     store.rows.extend(pack)
     nodes = make_graph_nodes(deps)

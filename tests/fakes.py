@@ -191,7 +191,8 @@ from backend.core.security import create_access_token
 from backend.main import build_deps, create_app
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import GraphDecisionSubmit, rerun_group, rerun_procedure
-from backend.orchestration.graph import GATES, build_graph, compile_graph
+from backend.orchestration.gates import gate_nodes
+from backend.orchestration.graph import build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
@@ -211,6 +212,8 @@ NOW = datetime(2026, 9, 30, tzinfo=UTC)
 # ── 样例数据: 合成数据集的 Numbat 公司 (合成数据集设计.md 2.1, 2.2 节) ──
 
 NUMBAT_FEATURES = BASELINE  # Numbat 回归测试的功能集: 新功能全关, 保留基线的 critic (services/features.py)
+# 打开计划 (需求 R204, R205) 的功能集: 基线加 planning 与它依赖的 misstatement; 各测试共用这一处
+PLANNING_FEATURES = NUMBAT_FEATURES | {"misstatement", "planning"}
 NUMBAT_ABN = AbnRecord(
     abn="68900042015",
     acn="900042015",
@@ -3511,7 +3514,7 @@ def make_runner(
 
     agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)};
     其余程序同 make_graph_nodes.
-    interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
+    interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果; 主图与闸门同样按功能集取.
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
@@ -3540,8 +3543,10 @@ def make_runner(
     if agents is not None:
         nodes.agents.update(agents(deps))
     saver = InMemorySaver(serde=checkpoint_serde())
-    if interrupt_before:
-        app = build_graph(nodes).compile(checkpointer=saver, interrupt_before=[*GATES, *interrupt_before])
+    if interrupt_before:  # 主图与闸门按 deps 的功能集取, 同 compile_graph (planning 打开时有 PLN-15 的节点)
+        app = build_graph(nodes, deps.features).compile(
+            checkpointer=saver, interrupt_before=[*gate_nodes(deps.features), *interrupt_before]
+        )
     else:
         app = compile_graph(nodes, saver)
     return GraphRunner(app, deps), output_store

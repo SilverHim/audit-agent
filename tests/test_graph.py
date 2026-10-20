@@ -51,6 +51,7 @@ from tests.fakes import (
     NUMBAT_ASIC,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
@@ -60,6 +61,7 @@ from tests.fakes import (
     make_deps,
     make_graph_nodes,
     make_procedure,
+    make_runner,
 )
 
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
@@ -485,7 +487,6 @@ def test_gate_route_pln15_after_approval(status: PlanStatus, version: int, verdi
     assert gate_route(GateId.PLN_15)(state) == route
 
 
-PLANNING_FEATURES = NUMBAT_FEATURES | {"misstatement", "planning"}
 # 功能 planning 打开时 (需求 R205 验收 1) 比基线多的边; 基线的 assemble_pack → schedule 改为 → plan_draft
 PLANNING_EDGES = [
     ("assemble_pack", "plan_draft", False, None),
@@ -584,3 +585,21 @@ def test_planning_graph_structure() -> None:
     baseline = [e for e in BASELINE_EDGES if e[:2] != ("assemble_pack", "schedule")]
     assert edges == sorted([*baseline, *PLANNING_EDGES])
     assert list(app.interrupt_before_nodes) == ["gate_acc01", "gate_p1_risk", "gate_p1_plan", "gate_fin", "gate_rpt01"]
+
+
+def test_make_runner_compiles_by_features() -> None:
+    """审核意见 R205-03: make_runner 另给 interrupt_before 时, 主图与闸门照样按功能集取 (同 compile_graph): 打开
+    planning 时有 plan_draft 与 gate_p1_plan (静态中断), 另加的节点排在闸门之后; 基线下同现状."""
+    runner, _ = make_runner(features=PLANNING_FEATURES, interrupt_before=["fieldwork"])
+    assert {"plan_draft", "gate_p1_plan"} <= set(runner.app.get_graph().nodes)
+    assert list(runner.app.interrupt_before_nodes) == [
+        "gate_acc01",
+        "gate_p1_risk",
+        "gate_p1_plan",
+        "gate_fin",
+        "gate_rpt01",
+        "fieldwork",
+    ]
+    baseline, _ = make_runner(interrupt_before=["fieldwork"])
+    assert list(baseline.app.interrupt_before_nodes) == [*GATES, "fieldwork"]
+    assert "plan_draft" not in baseline.app.get_graph().nodes

@@ -46,6 +46,7 @@ from backend.services.features import BASELINE
 from tests.fakes import (
     ENGAGEMENT,
     PLAN_CONFIRMATION,
+    PLANNING_FEATURES,
     FakeRegistry,
     FakeTrail,
     audit_plan,
@@ -55,7 +56,6 @@ from tests.fakes import (
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
 JOURNALS = frozenset({"critic", "journals"})
-PLANNING_FEATURES = frozenset({"critic", "misstatement", "planning"})
 
 
 def decision(gate: GateId, verdict: GateVerdict, target_id: str, version: int = 1, n: int = 1) -> GateDecision:
