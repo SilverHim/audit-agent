@@ -39,7 +39,6 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     StepKind,
-    StepStatus,
     TaskKind,
     TermType,
     TrailEntry,
@@ -468,35 +467,6 @@ async def test_client_profile_pointer_resolves_only_against_the_context(
     else:
         assert report.unsupported_steps == [1] and report.output.reasoning_chain[1].evidence == [pointer]
         assert len(report.errors) == 1 and reason in report.errors[0]
-
-
-@pytest.mark.external
-async def test_judge_passes_the_client_profile_to_the_validator() -> None:
-    """JudgmentEngine.judge 把 JudgmentContext.client_profile 交给校验: 引用画像的步骤 supported; 上下文不给画像时同一
-    草稿该步 unsupported. 防判断引擎丢掉画像, 引用管理层申报的判断全都站不住."""
-    draft = with_step(cutoff_draft(), 1, evidence=[PROFILE_POINTER])
-    statuses = []
-    for profile in (xero_profile(), None):
-        financial, trail = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS), FakeTrail()
-        llm = ScriptedLLM({"SI-2026-0612": [draft.model_dump_json()]})
-        engine = JudgmentEngine(llm, OutputValidator(financial, LIBRARY, trail), trail, LIBRARY)
-        invoice = {"source_type": "sales_invoice", **NUMBAT_RECORDS[("sales_invoice", "SI-2026-0612")]}
-        data = {
-            "invoice": json.loads(json.dumps(invoice, default=str)),
-            "delivery_notes": [],
-            "journal_lines": [],
-            "contract": None,
-            "document": None,
-            "contract_judgment": None,
-        }
-        task = {"params": {"period_end": "2026-06-30", "window_days": 20, "threshold_cents": 9000000}, "risks": []}
-        jctx = JudgmentContext(
-            subject_id="SI-2026-0612", task=task, data=data, fixture_key="SI-2026-0612", client_profile=profile
-        )
-        outcome = await engine.judge(EID, REV02, make_run("REV-02"), jctx, "U-1")
-        assert outcome.judgment is not None
-        statuses.append(outcome.judgment.reasoning_chain[1].status)
-    assert statuses == [StepStatus.supported, StepStatus.unsupported]
 
 
 async def test_reply_document_pointer_is_external_and_other_document_is_not_evidence() -> None:

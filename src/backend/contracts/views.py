@@ -171,7 +171,8 @@ class PresentedSide(Model):
 
 
 class PresentedEvidence(Model):
-    """两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源)."""
+    """两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 客户画像按来源与字段,
+    其余按来源)."""
 
     pointer: EvidencePointer  # 同一比对键先出现的那个指针 (生成方在前: 结论证据, 再推理链各步; 复核方按推理链)
     origin: EvidenceOrigin  # 哪一方引用了它

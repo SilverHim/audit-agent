@@ -706,38 +706,39 @@ async def test_no_resolvable_evidence_is_not_applicable_without_calling_model() 
     assert review.requests == [] and j.confidence == 0.8625
 
 
-async def test_cited_client_profile_is_given_from_the_adopted_version() -> None:
-    """判断引用了客户画像 (client_profile 指针, 需求 R128): 第一轮给出的证据含该指针, 内容为本项目采用那一版 (状态中
-    v1) 该字段的 JSON, 画像之后改出的 v2 不进来; 复核方引用同一指针的步骤 supported. 防第一轮读最新版画像, 或复核方
-    引用管理层申报的步骤全都站不住."""
-    party = DeclaredParty(name="Wombat Holdings Pty Ltd", kind="company", relationship="parent entity")
-    later = DeclaredParty(name="Quoll Trading Pty Ltd", kind="company", relationship="sister company")
-    v1 = NUMBAT_PROFILE.model_copy(update={"related_parties": [party]})
-    v2 = v1.model_copy(update={"version": 2, "related_parties": [party, later]})
-    cited = EvidencePointer(
-        type=EvidenceType.voucher,
-        source_type="client_profile",
-        source_id=NUMBAT_PROFILE.id,
-        locator="related_parties",
-        reliability=Reliability.internal_copy,
-    )
-    independent = {
-        "conclusion": "Management declared one related party.",
-        "reasoning_chain": [step("fact", "One party is declared.", [cited]), step("inference", "So.", from_steps=[0])],
-    }
-    review = ScriptedLLM({"BA-01-r1": [json.dumps(independent)], "BA-01-r2": [verdict()]})
+PARTY = DeclaredParty(name="Wombat Holdings Pty Ltd", kind="company", relationship="parent entity")
+PROFILE_V1 = NUMBAT_PROFILE.model_copy(update={"related_parties": [PARTY]})  # 本项目采用的那一版 (状态中 v1)
+CITED_PROFILE = EvidencePointer(
+    type=EvidenceType.voucher,
+    source_type="client_profile",
+    source_id=NUMBAT_PROFILE.id,
+    locator="related_parties",
+    reliability=Reliability.internal_copy,
+)
+
+
+def profile_case(
+    review: ScriptedLLM, profiles: list[Any], features: frozenset[str] = BASELINE
+) -> tuple[ReviewAgent, RunContext]:
+    """引用客户画像的复核场景 (需求 R128): Numbat 项目的 CSH-02, 项目存储里放 profiles."""
     deps = make_deps(
         FakeRegistry(),
         FakeTrail(),
-        engagement_store=FakeEngagementStore([v1, v2], [ENGAGEMENT]),
+        engagement_store=FakeEngagementStore(profiles, [ENGAGEMENT]),
         llm=ScriptedLLM({}),
         review_llm=review,
+        features=features,
     )
     procedure = make_procedure("CSH-02", phase=Phase.P2_Executing)
     ctx = RunContext(
         ENGAGEMENT, procedure, deps.library.load("CSH-02"), make_run("CSH-02"), initial_state(ENGAGEMENT, [], 1)
     )
-    judgment = Judgment(
+    return ReviewAgent(deps), ctx
+
+
+def profile_judgment(ctx: RunContext, action: ProposedAction = ProposedAction.close) -> Judgment:
+    """只在推理链步骤里引用画像 (结论证据为空) 的 BA-01 判断; BA-01 的判断 ID 不在 5% 抽样里."""
+    return Judgment(
         id="J-CSH-02-1-BA-01",
         procedure_id="CSH-02",
         run_id=ctx.run.id,
@@ -745,20 +746,80 @@ async def test_cited_client_profile_is_given_from_the_adopted_version() -> None:
         conclusion=CONCLUSION,
         confidence=0.5625,
         confidence_parts={"evidence": 0.9, "rule": 0.0, "llm": 0.9},
-        reasoning_chain=[ReasoningStep(kind=StepKind.fact, text=CHAIN_TEXT, evidence=[cited])],
-        evidence=[cited],
+        reasoning_chain=[ReasoningStep(kind=StepKind.fact, text=CHAIN_TEXT, evidence=[CITED_PROFILE])],
+        evidence=[],
         counter_argument=COUNTER,
-        proposed_action=ProposedAction.close,
+        proposed_action=action,
         autonomy_level=AutonomyLevel.L3,
         performed_by="U-1",
         created_at=NOW,
     )
-    j = await ReviewAgent(deps).review(ctx, judgment)
+
+
+@pytest.mark.parametrize(
+    ("features", "action", "hit"),
+    [(BASELINE, ProposedAction.close, None), (COLLAB, ProposedAction.more_evidence, CriticTrigger.internal_copy)],
+    ids=["baseline", "collab"],
+)
+async def test_cited_client_profile_is_given_from_the_adopted_version(
+    features: frozenset[str], action: ProposedAction, hit: CriticTrigger | None
+) -> None:
+    """判断只在推理链步骤里引用客户画像 (client_profile 指针, 需求 R128): 第一轮给出的证据含该指针, 内容为本项目采用
+    那一版 (状态中 v1) 该字段的 JSON, 画像之后改出的 v2 不进来; 复核方引用同一指针的步骤 supported. collab 打开时
+    触发判定先取第一轮证据, 只靠画像 (internal_copy) 的判断即使不关闭也命中 internal_copy. 防第一轮读最新版画像, 只看
+    结论证据而漏了推理链里的画像, collab 分支取证据时漏传画像, 或复核方引用管理层申报的步骤全都站不住."""
+    later = DeclaredParty(name="Quoll Trading Pty Ltd", kind="company", relationship="sister company")
+    v2 = PROFILE_V1.model_copy(update={"version": 2, "related_parties": [PARTY, later]})
+    independent = {
+        "conclusion": "Management declared one related party.",
+        "reasoning_chain": [
+            step("fact", "One party is declared.", [CITED_PROFILE]),
+            step("inference", "So.", from_steps=[0]),
+        ],
+    }
+    review = ScriptedLLM({"BA-01-r1": [json.dumps(independent)], "BA-01-r2": [verdict()]})
+    agent, ctx = profile_case(review, [PROFILE_V1, v2], features)
+    j = await agent.review(ctx, profile_judgment(ctx, action))
     prompt = review.requests[0].messages[0].content
-    assert party.name in prompt and later.name not in prompt
-    assert json.dumps(to_jsonable_python(v1.related_parties), indent=2, sort_keys=True) in prompt  # 同 tojson
-    assert j.critic_verdict is CriticVerdict.consistent
+    assert PARTY.name in prompt and later.name not in prompt
+    assert json.dumps(to_jsonable_python(PROFILE_V1.related_parties), indent=2, sort_keys=True) in prompt  # 同 tojson
+    assert (j.critic_trigger, j.critic_verdict) == (hit, CriticVerdict.consistent)
     assert [s.status for s in j.critic_reasoning_chain] == [StepStatus.supported, StepStatus.supported]
+
+
+async def test_critic_citing_a_profile_field_not_given_is_unsupported() -> None:
+    """第一轮只给判断所引画像字段 (related_parties) 的 JSON; 复核方引用同一画像的另一字段 (directors) 的步骤不受支持
+    (evidence_key 对画像比字段, 同文件比页), 判为一致也不计复核分项. 防复核方凭没给过的内容得到支撑."""
+    directors = CITED_PROFILE.model_copy(update={"locator": "directors"})
+    independent = {
+        "conclusion": "The directors are listed.",
+        "reasoning_chain": [
+            step("fact", "One party is declared.", [CITED_PROFILE]),
+            step("fact", "The directors are listed.", [directors]),
+            step("inference", "So.", from_steps=[0, 1]),
+        ],
+    }
+    review = ScriptedLLM({"BA-01-r1": [json.dumps(independent)], "BA-01-r2": [verdict()]})
+    agent, ctx = profile_case(review, [PROFILE_V1])
+    j = await agent.review(ctx, profile_judgment(ctx))
+    prompt = review.requests[0].messages[0].content
+    assert NUMBAT_PROFILE.directors[0] not in prompt  # 第一轮确实没给 directors
+    assert [s.status for s in j.critic_reasoning_chain] == [
+        StepStatus.supported,
+        StepStatus.unsupported,
+        StepStatus.supported,
+    ]
+    assert j.critic_verdict is CriticVerdict.not_applicable and "critic" not in j.confidence_parts
+
+
+async def test_collab_off_trigger_miss_does_not_read_the_profile() -> None:
+    """collab 关闭时触发判定用不到证据: 引用画像但不命中触发规则的判断记 skipped, 不读项目存储 (存储里没有画像,
+    读了就会记 not_applicable). 防触发判定之前就读画像."""
+    review = ScriptedLLM({})
+    agent, ctx = profile_case(review, [])
+    j = await agent.review(ctx, profile_judgment(ctx, ProposedAction.more_evidence))
+    assert (j.critic_verdict, j.critic_reason) == (CriticVerdict.skipped, "未命中独立复核的触发规则")
+    assert review.requests == []
 
 
 async def test_document_page_not_given_is_unsupported() -> None:

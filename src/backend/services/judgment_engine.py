@@ -212,9 +212,14 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     return errors
 
 
-def evidence_key(p: EvidencePointer) -> tuple[str, str, int | None]:
-    """独立复核证据白名单的比对键: 文件按 (来源, 页), 第一轮只给了所引页的文字; 其余按来源, 页为空."""
-    return p.source_type, p.source_id, p.page if p.source_type == "document" else None
+def evidence_key(p: EvidencePointer) -> tuple[str, str, int | str | None]:
+    """独立复核证据白名单的比对键: 文件按 (来源, 页), 第一轮只给了所引页的文字; 客户画像按 (来源, 字段), 第一轮只给了
+    所引字段的 JSON; 其余按来源, 第三项为空."""
+    if p.source_type == "document":
+        return p.source_type, p.source_id, p.page
+    if p.source_type == "client_profile":
+        return p.source_type, p.source_id, p.locator
+    return p.source_type, p.source_id, None
 
 
 def critic_chain_ok(steps: Sequence[ReasoningStep]) -> bool:
@@ -506,9 +511,9 @@ class OutputValidator:
     async def _critic(
         self, eid: str, output: CriticIndependent, ctx: ValidationContext
     ) -> tuple[CriticIndependent, list[int], list[str], list[str]]:
-        """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页),
-        否则该步不受支持. ctx.critic_drafts 为真 (功能 collab) 时另核对错报草稿 (_critic_draft), 其问题与推理链的
-        分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题)."""
+        """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页,
+        画像须同字段), 否则该步不受支持. ctx.critic_drafts 为真 (功能 collab) 时另核对错报草稿 (_critic_draft),
+        其问题与推理链的分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题)."""
         resolver = PointerResolver(self, eid, ctx.client_profile)
         allowed = {evidence_key(p) for p in ctx.allowed_evidence or []}
         errors: list[str] = []

@@ -3205,7 +3205,8 @@ export type PlanningMaterial = {
 /**
  * PresentedEvidence
  *
- * 两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源).
+ * 两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 客户画像按来源与字段,
+ * 其余按来源).
  */
 export type PresentedEvidence = {
     pointer: EvidencePointer;

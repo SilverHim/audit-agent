@@ -10318,7 +10318,7 @@
           "origin"
         ],
         "title": "PresentedEvidence",
-        "description": "两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 其余按来源)."
+        "description": "两方证据的并集中的一项: 按 judgment_engine.evidence_key 去重 (文件按来源与页, 客户画像按来源与字段,\n其余按来源)."
       },
       "PresentedFailure": {
         "properties": {

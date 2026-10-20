@@ -84,11 +84,11 @@ def reviewer_pointers(judgment: Judgment) -> list[EvidencePointer]:
 def evidence_union(
     generator: Sequence[EvidencePointer], reviewer: Sequence[EvidencePointer]
 ) -> list[PresentedEvidence]:
-    """两方证据的并集: 按 evidence_key 去重 (文件按来源与页, 其余按来源; 同一页的不同 locator 算一项), 保留先出现的
-    指针; 生成方的在前, 只有复核方引用的接在后面; origin 为两方都引用 (both) 或只有一方. 纯函数.
+    """两方证据的并集: 按 evidence_key 去重 (文件按来源与页, 同一页的不同 locator 算一项; 客户画像按来源与字段; 其余
+    按来源), 保留先出现的指针; 生成方的在前, 只有复核方引用的接在后面; origin 为两方都引用 (both) 或只有一方. 纯函数.
     例: BA-01 两方各 6 个指针 (回函第 1 页两个 locator) → 5 项, 都为 both."""
-    first: dict[tuple[str, str, int | None], EvidencePointer] = {}
-    roles: dict[tuple[str, str, int | None], set[SideRole]] = {}
+    first: dict[tuple[str, str, int | str | None], EvidencePointer] = {}
+    roles: dict[tuple[str, str, int | str | None], set[SideRole]] = {}
     sources: tuple[tuple[SideRole, Sequence[EvidencePointer]], ...] = (("generator", generator), ("reviewer", reviewer))
     for role, pointers in sources:
         for pointer in pointers:

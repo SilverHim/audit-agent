@@ -138,10 +138,12 @@ class ReviewAgent(ProcedureAgent[None]):
         rate = float(template.params.get("sample_rate", 0))
         collab = COLLAB in self.deps.features
         given: list[EvidencePointer] | None = None
+        profile: ClientProfile | None = None
         try:
-            profile = await self.cited_profile(ctx, judgment)
-            # 第一轮要给的证据: collab 打开时 internal_copy 要用, 先取, 复核时沿用 (主规则命中时复核本来也要取)
+            # 第一轮要给的证据 (连同所引画像): collab 打开时 internal_copy 要用, 先取, 复核时沿用 (主规则命中时复核本来
+            # 也要取); collab 关闭时触发判定用不到, 不读存储, 命中后由 cross_check 取
             if collab:
+                profile = await self.cited_profile(ctx, judgment)
                 given = await self.given_evidence(ctx.engagement.id, judgment, profile)
             hit = trigger(level, judgment, rate, given or (), collab)
             if hit is None:
