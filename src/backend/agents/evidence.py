@@ -11,13 +11,14 @@ ownership.ownership_patch.
 没变, 仍按它重建, 仍是当前的; 变过的不再是当前的, CSH-04 按新键重新发函一次, 之后按新键去重.
 """
 
+import functools
 import hashlib
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import ClassVar
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run, rule_patch, run_rules
 from backend.agents.ownership import Penetration, Penetrator, ownership_patch
 from backend.contracts.data import DataInput
 from backend.contracts.models import (
@@ -124,7 +125,7 @@ class EvidenceAgent(ProcedureAgent[Findings]):
         """程序编号对应的 (执行, 解读). 没有登记的程序抛 NotImplementedError."""
         handlers: dict[str, tuple[Execute, Interpret]] = {
             "CSH-04": (self.confirm_all, self.confirmations_patch),
-            "GEN-07": (self.run_rules, self.rule_exceptions),
+            "GEN-07": (functools.partial(run_rules, self.deps), rule_patch),  # 纯规则程序, 同 A6 的
             "GEN-08": (self.penetrate, self.ownership),
         }
         if procedure_id not in handlers:
@@ -147,18 +148,6 @@ class EvidenceAgent(ProcedureAgent[Findings]):
         """GEN-08 的片段, 见 ownership.ownership_patch."""
         assert isinstance(findings, Penetration)
         return ownership_patch(ctx, findings)
-
-    async def run_rules(self, ctx: RunContext) -> RuleResult:
-        """GEN-07: 执行程序 YAML 中的规则 S01-S03, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败
-        处理."""
-        return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
-
-    def rule_exceptions(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """GEN-07: 例外原样返回 (期后事项候选), 不作判断, 不建复核任务; 没有执行的规则记进执行记录终态的
-        rule_outcomes (同 A6 的纯规则程序)."""
-        assert isinstance(findings, RuleResult)
-        run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
-        return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}
 
     async def confirm_all(self, ctx: RunContext) -> list[Confirmed]:
         """CSH-04: 对每个银行账户 (按账户 ID 排序) 依次函证."""

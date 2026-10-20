@@ -3,15 +3,16 @@
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
 
+import functools
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, ClassVar, cast
 
 from pydantic import TypeAdapter
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, rule_patch, run_rules
 from backend.agents.evidence import current_confirmations, legacy_accounts
 from backend.agents.ingest import client_profile
 from backend.agents.judging import (
@@ -146,9 +147,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
         """程序编号对应的 (执行, 解读). 没有登记的程序抛 NotImplementedError."""
         handlers: dict[str, tuple[Execute, Interpret]] = {
-            "REV-08": (self.run_rules, self.rule_exceptions),
-            "CSH-05": (self.run_rules, self.rule_exceptions),
-            "GEN-05": (self.run_rules, self.rule_exceptions),
+            "REV-08": (functools.partial(run_rules, self.deps), rule_patch),  # 纯规则程序 (同 A5 的 GEN-07)
+            "CSH-05": (functools.partial(run_rules, self.deps), rule_patch),
+            "GEN-05": (functools.partial(run_rules, self.deps), rule_patch),
             "CSH-02": (self.assess_confirmations, self.cash_patch),
         }
         handlers |= {pid: (self.judge_subjects, self.judgments_patch) for pid in self.subject_sources}
@@ -163,17 +164,6 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     async def interpret(self, ctx: RunContext, findings: Findings) -> StatePatch:
         _, interpret = self.handler(ctx.procedure.id)
         return interpret(ctx, findings)
-
-    async def run_rules(self, ctx: RunContext) -> RuleResult:
-        """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理."""
-        return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
-
-    def rule_exceptions(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """纯规则程序 (REV-08, CSH-05, GEN-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因. 没有
-        执行的规则 (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes."""
-        assert isinstance(findings, RuleResult)
-        run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
-        return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}
 
     async def judge_subjects(self, ctx: RunContext) -> JudgedRun:
         """判断程序的执行: 取判断对象 (rerun 时只留 rerun_subject_ids 中的, 已交人处理的不再重判), 并发逐个交判断引擎.
@@ -227,7 +217,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         发票, 发票指向的分录行, 合同或合同文件查不到抛 LookupError.
         """
         eid = ctx.engagement.id
-        rules = await self.run_rules(ctx)
+        rules = await run_rules(self.deps, ctx)
         earlier = set(ctx.template.depends_on)
         open_findings = sorted(
             (
@@ -619,7 +609,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         判断对象为有 D01 或 D04 的账户 (按账户 ID, 每个账户一次), 候选调节项取规则 D02, D03 的行 (按账户切分).
         """
         eid = ctx.engagement.id
-        rules = await self.run_rules(ctx)
+        rules = await run_rules(self.deps, ctx)
         accounts = {a.id: a for a in await self.deps.financial_store.bank_accounts(eid)}
         books = {r.account_code: r.balance_cents for r in await self.deps.financial_store.trial_balance(eid, "current")}
         legacy = await legacy_accounts(self.deps, eid, accounts.values())

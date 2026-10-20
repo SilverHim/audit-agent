@@ -102,40 +102,13 @@ async def numbat(tmp_path_factory: pytest.TempPathFactory) -> Gen07Project:
 
 @pytest.mark.external
 async def test_xero_gen07_on_postgres(xero: Gen07Project) -> None:
-    """验收 2, 5: Xero q1 上恰好 9 条例外, 与离线预置逐字段相同 (ID, 金额, detail, 证据指针). 窗口为 10-01 至 10-17
-    (期末加 31 天截到数据截止日), 各行带 window_end."""
+    """验收 2, 5: Xero q1 上恰好 9 条例外, 与离线预置 (xero_fakes.xero_gen07_exceptions, 各条的编号, 行与金额由离线用例
+    逐条核对) 逐字段相同 (ID, 金额, detail, 证据指针). 窗口为 10-01 至 10-17 (期末加 31 天截到数据截止日), 各行带
+    window_end."""
     assert (xero.run.id, xero.run.params_snapshot["data_as_of"]) == ("RUN-GEN-07-1", date(2026, 10, 17))
     result = await gen07(xero)
     assert (result.rows, result.outcomes) == ({}, [])
     assert result.exceptions == XERO_RULES["GEN-07"](xero.run).exceptions
-    assert [(x.id, x.source_ids[0], x.amount_cents) for x in result.exceptions] == [
-        ("X-GEN-07-1-S01-1", "BT-090-0092", 618750),
-        ("X-GEN-07-1-S01-2", "BT-090-0097", -450000),
-        ("X-GEN-07-1-S01-3", "BT-090-0099", 200000),
-        ("X-GEN-07-1-S01-4", "BT-090-0107", 100000),
-        ("X-GEN-07-1-S01-5", "BT-090-0130", 150000),
-        ("X-GEN-07-1-S01-6", "BT-090-0131", 45000),
-        ("X-GEN-07-1-S02-1", "XJ-720-2", 115500),
-        ("X-GEN-07-1-S03-1", "XJ-626-2", 630000),
-        ("X-GEN-07-1-S03-2", "XJ-676-2", 196999),
-    ]
-    s01 = [(x.detail["txn_date"], x.detail["description"], x.detail["reference"]) for x in result.exceptions[:6]]
-    assert s01 == [
-        ("2026-10-10", "Ridgeway University", "ORC01025"),
-        ("2026-10-11", "SMART Agency", "70135 70209"),
-        ("2026-10-11", "Jakaranda Maple Systems", "DEPOSIT ADV"),
-        ("2026-10-12", "e-Bank dep", None),
-        ("2026-10-15", "e-Bank dep", None),
-        ("2026-10-15", "Majestic Contracting", "Sublet RM2031"),
-    ]
-    journal = [
-        (x.detail["posting_date"], x.detail["account_code"], x.detail["source_doc"]) for x in result.exceptions[6:]
-    ]
-    assert journal == [
-        ("2026-10-16", "610", "1026C"),
-        ("2026-10-04", "710", "MKT-08123"),
-        ("2026-10-11", "720", "PC Complete"),
-    ]
     assert {x.detail["window_end"] for x in result.exceptions} == {"2026-10-17"}
 
 

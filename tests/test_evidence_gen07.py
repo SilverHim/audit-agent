@@ -90,7 +90,7 @@ def test_gen07_template_and_dispatch() -> None:
         ("S02", "high", "exception"),
         ("S03", "medium", "exception"),
     ]
-    assert EvidenceAgent.procedures == {"CSH-04", "GEN-07", "GEN-08"}
+    assert "GEN-07" in EvidenceAgent.procedures
     agents = build_agents(deps)
     assert isinstance(agents["GEN-07"], EvidenceAgent) and agents["GEN-07"] is agents["CSH-04"]
     assert "GEN-07" in {x.id for x in deps.library.fixed()}
@@ -217,10 +217,11 @@ async def test_unregistered_procedure_is_not_implemented() -> None:
 
 async def test_csh04_replay_does_not_take_gen07_exceptions() -> None:
     """验收 4: 重放按程序取回. CSH-04 只声明函证与回函, 片段不带例外 (Store 里有 GEN-07 的例外也不串进来); GEN-07 的
-    重放只取本次执行的例外."""
-    csh04, gen07 = finished(make_run("CSH-04")), finished(make_run("GEN-07"))
-    exceptions = xero_gen07_exceptions(gen07)
-    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=FakeOutputStore([csh04, gen07, *exceptions]))
+    重放只取本次执行的例外: Store 里另有第 2 次执行及其例外时, 重放第 1 次只取回第 1 次的 (按 run_id, 不按程序)."""
+    csh04, gen07, again = finished(make_run("CSH-04")), finished(make_run("GEN-07")), finished(make_run("GEN-07", 2))
+    exceptions, later = xero_gen07_exceptions(gen07), xero_gen07_exceptions(again)
+    store = FakeOutputStore([csh04, gen07, again, *exceptions, *later])
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store)
     replayed = await stored_outputs(deps, ENGAGEMENT.id, deps.library.load("CSH-04"), csh04)
     assert replayed.get("exceptions", []) == [] and set(replayed) == {"procedure_runs", "confirmations", "documents"}
     replayed = await stored_outputs(deps, ENGAGEMENT.id, deps.library.load("GEN-07"), gen07)

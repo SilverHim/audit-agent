@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from backend.contracts.knowledge import ProcedureTemplate
@@ -34,6 +34,7 @@ from backend.contracts.ports import (
     RuleEngine,
     UserStore,
 )
+from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, StatePatch
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
@@ -131,6 +132,20 @@ def finish_run(run: ProcedureRun, ended_at: datetime, outcomes: Sequence[RuleOut
     执行的规则 (RuleResult.outcomes, 需求 R130), 经规则引擎的程序传入, 记进 rule_outcomes; 全部执行或不经规则引擎
     为空."""
     return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at, "rule_outcomes": list(outcomes)})
+
+
+async def run_rules(deps: AgentDeps, ctx: RunContext) -> RuleResult:
+    """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A5
+    的 GEN-07, A6 的 REV-08, CSH-05, GEN-05) 登记它作执行, A6 的混合程序取规则部分也用它."""
+    return await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
+
+
+def rule_patch(ctx: RunContext, findings: object) -> StatePatch:
+    """纯规则程序的解读: 例外原样返回, 不作判断, 不建复核任务 (由之后的判断程序归因, GEN-07 的作期后事项候选). 没有
+    执行的规则 (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes. findings 须为 run_rules 的结果."""
+    assert isinstance(findings, RuleResult)
+    run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
+    return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}
 
 
 class ProcedureAgent[F](ABC):
