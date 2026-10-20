@@ -106,9 +106,9 @@ def evidence_union(
 
 def last_llm_call(llm_calls: Sequence[TrailEntry], task: ReviewTask) -> TrailEntry | None:
     """带对象的失败任务对应的最后一次大模型调用: 本次执行 (run_id), 本程序, payload 的 subject_id 为任务的 subject_id
-    的 llm_call 留痕中最后一行 (按写入顺序). 没记 subject_id 的行 (判断引擎以外的调用方, 与需求 R158 之前的旧行) 按
-    fixture_key 比: 那时 fixture_key 就是对象. FIN-03 的 fixture_key 是来源判断的对象, 不是任务的对象 (错报), 只能按
-    subject_id 找. 同一执行里别的对象与独立复核 (GEN-09, 程序不同) 的行不算."""
+    的 llm_call 留痕中最后一行 (按写入顺序). 没记 subject_id (没有这个键或为空) 的行 (判断引擎以外的调用方, 与需求
+    R158 之前的旧行) 按 fixture_key 比: 那时 fixture_key 就是对象. FIN-03 的 fixture_key 是来源判断的对象, 不是任务的
+    对象 (错报), 只能按 subject_id 找. 同一执行里别的对象与独立复核 (GEN-09, 程序不同) 的行不算."""
     return next(
         (
             entry
@@ -116,7 +116,7 @@ def last_llm_call(llm_calls: Sequence[TrailEntry], task: ReviewTask) -> TrailEnt
             if entry.kind is TrailKind.llm_call
             and entry.run_id == task.run_id
             and entry.procedure_id == task.procedure_id
-            and entry.payload.get("subject_id", entry.payload.get("fixture_key")) == task.subject_id
+            and (entry.payload.get("subject_id") or entry.payload.get("fixture_key")) == task.subject_id
         ),
         None,
     )

@@ -41,7 +41,7 @@ from backend.orchestration.gates import fin01_view
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import build_run
 from backend.services.presentation import failure_of
-from tests.fakes import NOW, FakeTrail, ScriptedLLM, make_ctx, xero_document
+from tests.fakes import NOW, FakeTrail, ScriptedLLM, finished, make_ctx, make_run, xero_document
 from tests.fixture_sets import XERO
 from tests.test_xero_fixtures import RecordingJudgments, xero_state
 from tests.xero_fakes import make_xero_deps, xero_engagement, xero_identified_misstatements, xero_profile, xero_traits
@@ -343,32 +343,48 @@ SUPERSEDED = RerunRequest(  # 过期重跑取代了 XJ-499 来源判断的那次
     requested_by="U-1",
     requested_at=NOW,
 )
-WAITING = ReviewTask(  # M-D-XJ499 已交人处理 (带对象的待决任务)
-    id="T-RUN-FIN-03-1-M-D-XJ499-v1",
-    kind=TaskKind.failed,
-    procedure_id=FIN03,
-    target_type=TargetType.ProcedureRun,
-    target_id="RUN-FIN-03-1",
-    target_version=1,
-    run_id="RUN-FIN-03-1",
-    subject_id="M-D-XJ499",
-    created_at=NOW,
-)
+
+
+def awaiting_review(state: EngagementState) -> dict[str, Any]:
+    """M-D-XJ499 已交人处理: FIN-03 第 1 次执行对它的判断仍待复核 (normal 任务待决), 本次为第 2 次执行."""
+    source = next(j for j in state["judgments"] if j.id == "J-GEN-02-1-XJ-499")
+    judged = source.model_copy(
+        update={
+            "id": "J-FIN-03-1-M-D-XJ499",
+            "version": 1,
+            "procedure_id": FIN03,
+            "run_id": "RUN-FIN-03-1",
+            "subject_id": "M-D-XJ499",
+            "review_status": ReviewStatus.pending,
+        }
+    )
+    task = ReviewTask(
+        id="T-J-FIN-03-1-M-D-XJ499-v1",
+        kind=TaskKind.normal,
+        procedure_id=FIN03,
+        target_type=TargetType.Judgment,
+        target_id=judged.id,
+        target_version=1,
+        run_id="RUN-FIN-03-1",
+        created_at=NOW,
+    )
+    first = finished(make_run(FIN03))
+    return {"judgments": [*state["judgments"], judged], "review_tasks": [task], "procedure_runs": [first]}
 
 
 @pytest.mark.external
 @pytest.mark.parametrize(
     ("changes", "rerun_subjects"),
     [
-        ({"rerun_requests": [SUPERSEDED]}, []),  # 来源判断不在当前结果中 (同 FIN-04)
-        ({}, ["M-D-CSH02-091"]),  # 只重判 BA-091 那条
-        ({"review_tasks": [WAITING]}, []),
+        (lambda state: {"rerun_requests": [SUPERSEDED]}, []),  # 来源判断不在当前结果中 (同 FIN-04)
+        (lambda state: {}, ["M-D-CSH02-091"]),  # 只重判 BA-091 那条
+        (awaiting_review, []),
     ],
     ids=["superseded", "rerun_subjects", "awaiting_review"],
 )
-async def test_subjects_filtered_before_fetching(changes: dict[str, Any], rerun_subjects: list[str]) -> None:
+async def test_subjects_filtered_before_fetching(changes: Any, rerun_subjects: list[str]) -> None:
     """判断对象只取当前结果, 并先按 rerun_subject_ids 与已交人处理的对象筛选再取数 (同 A6 各程序, 第 1 轮审核
-    R158-04, R158-06): 三种情形都只判 M-D-CSH02-091, 分录行也只为 BA-091 取."""
+    R158-04, R158-06, 第 2 轮 R158-12): 三种情形都只判 M-D-CSH02-091, 分录行也只为 BA-091 取."""
     trail = FakeTrail()
     deps = fin03_deps(trail)
     calls: list[dict[str, Any]] = []
@@ -379,7 +395,8 @@ async def test_subjects_filtered_before_fetching(changes: dict[str, Any], rerun_
         return await original(eid, **kwargs)
 
     deps.financial_store.journal_entries = journal_entries  # type: ignore[method-assign]
-    ctx = fin03_context(deps, fin03_state(**changes))
+    state = fin03_state()
+    ctx = fin03_context(deps, state | changes(state))
     ctx = replace(ctx, procedure=ctx.procedure.model_copy(update={"rerun_subject_ids": rerun_subjects}))
     patch = await WorkpaperAgent(deps).run(ctx)
 
