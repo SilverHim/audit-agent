@@ -34,6 +34,7 @@ from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.evidence import confirmation_key, legacy_key
 from backend.agents.ingest import build_contract
+from backend.agents.registry import with_manual_owners
 from backend.contracts.data import (
     ApprovalLogRow,
     CheckId,
@@ -71,12 +72,19 @@ from backend.contracts.models import (
     AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
+    CheckItem,
+    CheckItemStatus,
+    ClauseStatus,
     ClientEntry,
     ClientProfile,
+    CommunicationForm,
+    CommunicationMatter,
+    ComplianceCheck,
     Confirmation,
     ConfirmationResult,
     Contract,
     Decision,
+    DeclarationForm,
     Direction,
     DocumentChannel,
     DocumentFailedStep,
@@ -91,6 +99,8 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     GateVerdict,
+    GovernanceCommunication,
+    IndependenceDeclaration,
     Judgment,
     JudgmentRef,
     LlmSettings,
@@ -99,6 +109,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     MisstatementDraft,
     MisstatementType,
+    ObjectRef,
     OpinionType,
     OwnershipGraph,
     PartyLink,
@@ -115,6 +126,8 @@ from backend.contracts.models import (
     ReceiptChannel,
     Reliability,
     ReportSection,
+    RepresentationClause,
+    RepresentationStatus,
     ReviewRecord,
     ReviewTask,
     RiskItem,
@@ -126,8 +139,10 @@ from backend.contracts.models import (
     TaskStatus,
     TrailEntry,
     TrailKind,
+    UncorrectedItem,
     User,
     Versioned,
+    WrittenRepresentationLetter,
 )
 from backend.contracts.ports import (
     ConfirmationReceipt,
@@ -2455,7 +2470,7 @@ def make_deps(
     elif features != library.features:
         raise ValueError(f"features {sorted(features)} 与程序库的 {sorted(library.features)} 不一致")
     judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
-    return replace(
+    deps = replace(
         deps,
         library=library,
         queue=ReviewQueue(library),
@@ -2475,6 +2490,7 @@ def make_deps(
         review_llm=review_llm,
         features=features,
     )
+    return with_manual_owners(deps)  # 同组装根: 按换好的程序库与假实现重找人工程序的 owner
 
 
 def profile_update(profile: ClientProfile) -> tuple[int, dict[str, Any]]:
@@ -2567,6 +2583,134 @@ def ownership_graph(run_id: str = "RUN-GEN-08-1", version: int = 1) -> Ownership
                 evidence=row(2, "shareholders[1]"),
             ),
         ],
+    )
+
+
+# ── 签字前提的四类审计产出 (需求 R215): 合成的 Numbat 样例, 只填契约用到的 ──
+
+NUMBAT_DIRECTORS = NUMBAT_PROFILE.directors  # 声明书签署人与沟通对象 (合成数据集设计第 2.1 节)
+
+
+def representation_letter(run_id: str = "RUN-FIN-07-1", version: int = 1) -> WrittenRepresentationLetter:
+    """REPLETTER: 已取得, 两位董事签署; 两条核心声明都写了, 诉讼声明不提供而审计师接受; 附表一项未更正错报."""
+    return WrittenRepresentationLetter(
+        id="REPLETTER",
+        version=version,
+        status=RepresentationStatus.obtained,
+        representations=[
+            RepresentationClause(
+                code="FR_PREPARATION", kind="core", standard_ref="ASA 580.10", status=ClauseStatus.present
+            ),
+            RepresentationClause(
+                code="INFORMATION_ACCESS", kind="core", standard_ref="ASA 580.11", status=ClauseStatus.present
+            ),
+            RepresentationClause(
+                code="LITIGATION",
+                kind="specific",
+                standard_ref="ASA 501.12",
+                status=ClauseStatus.refused_accepted,
+                acceptance_reason="No litigation is recorded; legal expense ledger reviewed and confirmed nil.",
+                opinion_effect="None; the matter is covered by other audit evidence.",
+            ),
+        ],
+        attached_schedule=[
+            UncorrectedItem(misstatement_id="M-D-1", amount_cents=1_500_000, direction=Direction.overstated)
+        ],
+        schedule_ref=ObjectRef(kind="UncorrectedSchedule", id="SCHEDULE", version=1),
+        signed_by=list(NUMBAT_DIRECTORS),
+        dated_at=date(2026, 8, 20),
+        period_end=ENGAGEMENT.period_end,
+        document_id="DOC-5e1f00c0ffee",
+        run_id=run_id,
+    )
+
+
+def compliance_check(
+    procedure_id: str = "FIN-10", run_no: int = 1, version: int = 1, exception_ids: list[str] | None = None
+) -> ComplianceCheck:
+    """CHECK-{procedure_id}: E01 独立性标记通过, E02 或有收费不通过 (exception_ids 为它的例外), E05 待关注;
+    依据画像第 1 版."""
+    return ComplianceCheck(
+        id=f"CHECK-{procedure_id}",
+        version=version,
+        procedure_id=procedure_id,
+        run_id=f"RUN-{procedure_id}-{run_no}",
+        items=[
+            CheckItem(
+                code="E01",
+                description="No independence flags",
+                status=CheckItemStatus.passed,
+                standard_ref="APES 110 R400",
+            ),
+            CheckItem(
+                code="E02",
+                description="Contingent fee",
+                status=CheckItemStatus.failed,
+                standard_ref="APES 110 R410.9",
+                detail={"contingent": True},
+                requires_disposition=True,
+            ),
+            CheckItem(
+                code="E05",
+                description="Ongoing monitoring records",
+                status=CheckItemStatus.attention,
+                standard_ref="ASA 220.17",
+            ),
+        ],
+        exception_ids=exception_ids or [],
+        basis={"client_profile_version": 1},
+    )
+
+
+def governance_communication(run_no: int = 1, version: int = 1) -> GovernanceCommunication:
+    """GC-RPT-07-{run_no}: 书面, 致两位董事; 重大会计实务已沟通, 未更正错报一项, 声明书事项豁免 (治理层都参与管理)."""
+    return GovernanceCommunication(
+        id=f"GC-RPT-07-{run_no}",
+        version=version,
+        form=CommunicationForm.written,
+        communicated_at=date(2026, 8, 21),
+        recipients=list(NUMBAT_DIRECTORS),
+        matters=[
+            CommunicationMatter(
+                code="SIG_PRACTICES",
+                standard_ref="ASA 260.16(a)",
+                required=True,
+                covered=True,
+                text="Revenue recognition policy for distributor sales.",
+            ),
+            CommunicationMatter(
+                code="UNCORRECTED",
+                standard_ref="ASA 450.12",
+                required=True,
+                covered=True,
+                text="One uncorrected misstatement: revenue overstated by AUD 15,000.00.",
+            ),
+            CommunicationMatter(
+                code="REPRESENTATIONS",
+                standard_ref="ASA 260.16(c)(ii)",
+                required=False,
+                exempt_reason="All those charged with governance are involved in managing the entity.",
+                covered=False,
+                text="",
+            ),
+        ],
+        uncorrected_misstatement_ids=["M-D-1"],
+        letter_text="Dear Directors, ...",
+        run_id=f"RUN-RPT-07-{run_no}",
+    )
+
+
+def independence_declaration(run_id: str = "RUN-RPT-08-1", version: int = 1) -> IndependenceDeclaration:
+    """S307C 草稿: 无违规, 依据 CHECK-FIN-10 v1, 项目负责人 U-1 声明, 须附入董事报告."""
+    return IndependenceDeclaration(
+        id="S307C",
+        version=version,
+        form=DeclarationForm.no_contraventions,
+        based_on=ObjectRef(kind="ComplianceCheck", id="CHECK-FIN-10", version=1),
+        text="I declare that, to the best of my knowledge and belief, there have been no contraventions ...",
+        declarant_id=NUMBAT_AUDITOR.id,
+        directors_report_copy_required=True,
+        run_id=run_id,
     )
 
 

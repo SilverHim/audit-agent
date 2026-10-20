@@ -1,0 +1,56 @@
+{
+  "counterparty": "Ingram Micro",
+  "counterparty_abn": null,
+  "amount_cents": null,
+  "sign_date": "1996-11-05",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "CUAD-01",
+      "locator": "counterparty",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "CUAD-01",
+      "locator": "sign_date",
+      "page": 1,
+      "reliability": "external_copy"
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "page": 2,
+      "text": "A. PRICES. Prices for Produce are those set out in NETGEAR's Price List, less the applicable discount specified in Exhibit 1. All Product prices are F.O.B. NETGEAR's point of shipment, except as specified in Section 5 D."
+    },
+    {
+      "term_type": "rebate",
+      "page": 2,
+      "text": "C. INVENTORY PRICE PROTECTION. In the event of a list price decrease on any of the Products, Distributor may apply for a credit on those units of Product: a) which were shipped by NETGEAR to Distributor no more than [*] prior to the effective date of the list price decrease and remain unsold in Distributor's inventory or are being returned under open RMA's or are in the inventories of certain mutually agreed to Distributor retail accounts (\"CMD Named Accounts\") as listed in Exhibit 3 to this Agreement on the effective date of the list price decrease or b) which were in transit between NETGEAR and Distributor on the effective date of the list price decrease."
+    },
+    {
+      "term_type": "payment",
+      "page": 2,
+      "text": "E. PAYMENT. Except as may be specifically authorized in writing by NETGEAR, and subject to NETGEAR's continuing approval of Distributor's credit status and financial condition, Distributor will pay NETGEAR for all Products ordered by Distributor within [*] of the date the corresponding invoice is issued by NETGEAR. The foregoing notwithstanding, the parties agree that payment for the initial order placed by Distributor under this Agreement shall be due and payable within [*] of the date the corresponding invoice is issued by NETGEAR. NETGEAR, in its sole discretion, reserves the right to specify, and to change from time to time, Distributor's credit line and payment terms."
+    },
+    {
+      "term_type": "return_right",
+      "page": 3,
+      "text": "C. RETURNS. Products received by Distributor as a result of an error by NETGEAR in shipment may be returned for credit. Such credit will include an amount equal to the purchase price of the Product shipped in error as well as the cost of return freight paid by Distributor to return the Product to NETGEAR. Products with defects covered by the warranty may be returned for remedy under the warranty. Prior to returning any Product, whether for exchange or warranty or non-warranty action, Distributor must obtain a Return Materials Authorization (RMA) number from NETGEAR. Distributor should return the Product to NETGEAR, with shipping charges prepaid. NETGEAR will not accept collect shipments. Any Product returned to NETGEAR, which is not returned in accordance with the terms of this Agreement, may be refused."
+    },
+    {
+      "term_type": "control_transfer",
+      "page": 3,
+      "text": "D. TITLE, RISK OF LOSS, SECURITY INTEREST. For all shipments to locations within the United States, title to the Hardware passes to Distributor when presented by NETGEAR or its agent to the carrier, from which point Distributor is responsible for risk of all loss, damage to, or theft of all Products. For shipments to locations outside of the United States, (i) risk of loss of all Products passes from NETGEAR to Distributor upon arrival at the point of entry in the destination country specified in Distributor's order."
+    },
+    {
+      "term_type": "termination",
+      "page": 6,
+      "text": "B. TERMINATION. This Agreement may be canceled at any time without cause, by either party upon ninety (90) days written notice to the other party. Either party may terminate this Agreement immediately if (i) the other party becomes insolvent, files or has filed against it a petition in bankruptcy, or ceases doing business; or (ii) the other party fails to cure a material breach of the Agreement within thirty (30) days after receipt of written notice of such breach from the party not in default. Upon termination of the Agreement by NETGEAR for Distributor's breach, NETGEAR may cancel all of Distributor's unfulfilled orders without further obligation. This Agreement may be terminated at any time without cause by either party upon ninety (90) days written notice to the other party."
+    }
+  ]
+}

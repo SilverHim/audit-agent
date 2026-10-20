@@ -687,7 +687,7 @@
           "reviews"
         ],
         "summary": "List Review Tasks",
-        "description": "status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;\namount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.\ndraft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.",
+        "description": "status, kind 省略时不按它过滤 (都省略为全部), 按创建时间升序; 人工队列另见 GET /manual-tasks (需求 R94).\nallowed_decisions 取 ReviewQueue.allowed; amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与\n队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.",
         "operationId": "reviews-list_review_tasks",
         "security": [
           {
@@ -718,6 +718,22 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
             }
           }
         ],
@@ -1100,6 +1116,58 @@
                     "$ref": "#/components/schemas/AuditException"
                   },
                   "title": "Response Reviews-List Exceptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/manual-tasks": {
+      "get": {
+        "tags": [
+          "manual"
+        ],
+        "summary": "List Manual Tasks",
+        "description": "只列 manual 任务 (各取最新版), 待决的在前, 两组各按创建时间升序. result_schema 为任务请求的结果模型的 JSON\nschema (contracts/manual_results), 没有结果模型或模型名已不在登记里 (派发后改了名, 提交时拒绝) 时为空; documents\n为本项目已登记且可作证据的文件 (类型在判断引擎的文件指针映射内, 同提交时的核对), evidence_types 为它们各自作证据\n时的指针类型. 项目不存在 404.",
+        "operationId": "manual-list_manual_tasks",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ManualTaskView"
+                  },
+                  "title": "Response Manual-List Manual Tasks"
                 }
               }
             }
@@ -9812,6 +9880,62 @@
         ],
         "title": "ManualResult",
         "description": "人工直接给出的结果, 用于 manual_result 决定 (failed 任务的人工执行, manual 任务的人工程序结果)."
+      },
+      "ManualTaskView": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/ReviewTask"
+          },
+          "procedure_name": {
+            "type": "string",
+            "title": "Procedure Name"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AgentId"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ManualRequest"
+          },
+          "result_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Schema"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentRef"
+            },
+            "type": "array",
+            "title": "Documents"
+          },
+          "evidence_types": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EvidenceType"
+            },
+            "type": "object",
+            "title": "Evidence Types"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task",
+          "procedure_name",
+          "owner",
+          "request",
+          "result_schema",
+          "documents",
+          "evidence_types"
+        ],
+        "title": "ManualTaskView",
+        "description": "人工队列中的一项 (需求 R94): manual 任务, 程序名与模板 owner, 交给人的请求, 结果模型的 JSON schema (没有结果\n模型时为空), 本项目可作证据的已登记文件 (选证据用, 每项相同) 与各文件作证据时的指针类型 (按文件 ID, 判断引擎的\n文件指针映射). EvidencePointer.type 必填, 前端据此交真实的种类, 不填等后端改写的占位值, 也不另抄一份映射;\n写入时后端照旧按文件登记改写 type 与 reliability (decisions.check_manual_result), 以后端为准."
       },
       "MaterialityCandidate": {
         "properties": {

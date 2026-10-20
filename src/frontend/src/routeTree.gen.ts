@@ -26,6 +26,8 @@ import { Route as EngagementsEidReportRouteImport } from './routes/engagements/$
 import { Route as EngagementsEidTrailRouteImport } from './routes/engagements/$eid/trail'
 import { Route as EngagementsEidDataIndexRouteImport } from './routes/engagements/$eid/data/index'
 import { Route as EngagementsEidDataKindRouteImport } from './routes/engagements/$eid/data/$kind'
+import { Route as EngagementsEidManualIndexRouteImport } from './routes/engagements/$eid/manual/index'
+import { Route as EngagementsEidManualTaskIdRouteImport } from './routes/engagements/$eid/manual/$taskId'
 import { Route as EngagementsEidProceduresIndexRouteImport } from './routes/engagements/$eid/procedures/index'
 import { Route as EngagementsEidProceduresPidRouteImport } from './routes/engagements/$eid/procedures/$pid'
 import { Route as EngagementsEidReviewsIndexRouteImport } from './routes/engagements/$eid/reviews/index'
@@ -118,6 +120,18 @@ const EngagementsEidDataKindRoute = EngagementsEidDataKindRouteImport.update({
   path: '/data/$kind',
   getParentRoute: () => EngagementsEidRouteRoute,
 } as any)
+const EngagementsEidManualIndexRoute =
+  EngagementsEidManualIndexRouteImport.update({
+    id: '/manual/',
+    path: '/manual/',
+    getParentRoute: () => EngagementsEidRouteRoute,
+  } as any)
+const EngagementsEidManualTaskIdRoute =
+  EngagementsEidManualTaskIdRouteImport.update({
+    id: '/manual/$taskId',
+    path: '/manual/$taskId',
+    getParentRoute: () => EngagementsEidRouteRoute,
+  } as any)
 const EngagementsEidProceduresIndexRoute =
   EngagementsEidProceduresIndexRouteImport.update({
     id: '/procedures/',
@@ -166,9 +180,11 @@ export interface FileRoutesByFullPath {
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
   '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
+  '/engagements/$eid/manual/$taskId': typeof EngagementsEidManualTaskIdRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
   '/engagements/$eid/data/': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/manual/': typeof EngagementsEidManualIndexRoute
   '/engagements/$eid/procedures/': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews/': typeof EngagementsEidReviewsIndexRoute
   '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
@@ -189,9 +205,11 @@ export interface FileRoutesByTo {
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid': typeof EngagementsEidIndexRoute
   '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
+  '/engagements/$eid/manual/$taskId': typeof EngagementsEidManualTaskIdRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
   '/engagements/$eid/data': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/manual': typeof EngagementsEidManualIndexRoute
   '/engagements/$eid/procedures': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews': typeof EngagementsEidReviewsIndexRoute
   '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
@@ -214,9 +232,11 @@ export interface FileRoutesById {
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
   '/engagements/$eid/data/$kind': typeof EngagementsEidDataKindRoute
+  '/engagements/$eid/manual/$taskId': typeof EngagementsEidManualTaskIdRoute
   '/engagements/$eid/procedures/$pid': typeof EngagementsEidProceduresPidRoute
   '/engagements/$eid/reviews/$taskId': typeof EngagementsEidReviewsTaskIdRoute
   '/engagements/$eid/data/': typeof EngagementsEidDataIndexRoute
+  '/engagements/$eid/manual/': typeof EngagementsEidManualIndexRoute
   '/engagements/$eid/procedures/': typeof EngagementsEidProceduresIndexRoute
   '/engagements/$eid/reviews/': typeof EngagementsEidReviewsIndexRoute
   '/engagements/$eid/data/documents/$docId': typeof EngagementsEidDataDocumentsDocIdRoute
@@ -240,9 +260,11 @@ export interface FileRouteTypes {
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
     | '/engagements/$eid/data/$kind'
+    | '/engagements/$eid/manual/$taskId'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
     | '/engagements/$eid/data/'
+    | '/engagements/$eid/manual/'
     | '/engagements/$eid/procedures/'
     | '/engagements/$eid/reviews/'
     | '/engagements/$eid/data/documents/$docId'
@@ -263,9 +285,11 @@ export interface FileRouteTypes {
     | '/engagements/$eid/trail'
     | '/engagements/$eid'
     | '/engagements/$eid/data/$kind'
+    | '/engagements/$eid/manual/$taskId'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
     | '/engagements/$eid/data'
+    | '/engagements/$eid/manual'
     | '/engagements/$eid/procedures'
     | '/engagements/$eid/reviews'
     | '/engagements/$eid/data/documents/$docId'
@@ -287,9 +311,11 @@ export interface FileRouteTypes {
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
     | '/engagements/$eid/data/$kind'
+    | '/engagements/$eid/manual/$taskId'
     | '/engagements/$eid/procedures/$pid'
     | '/engagements/$eid/reviews/$taskId'
     | '/engagements/$eid/data/'
+    | '/engagements/$eid/manual/'
     | '/engagements/$eid/procedures/'
     | '/engagements/$eid/reviews/'
     | '/engagements/$eid/data/documents/$docId'
@@ -425,6 +451,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EngagementsEidDataKindRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
+    '/engagements/$eid/manual/': {
+      id: '/engagements/$eid/manual/'
+      path: '/manual'
+      fullPath: '/engagements/$eid/manual/'
+      preLoaderRoute: typeof EngagementsEidManualIndexRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
+    '/engagements/$eid/manual/$taskId': {
+      id: '/engagements/$eid/manual/$taskId'
+      path: '/manual/$taskId'
+      fullPath: '/engagements/$eid/manual/$taskId'
+      preLoaderRoute: typeof EngagementsEidManualTaskIdRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
     '/engagements/$eid/procedures/': {
       id: '/engagements/$eid/procedures/'
       path: '/procedures'
@@ -474,9 +514,11 @@ interface EngagementsEidRouteRouteChildren {
   EngagementsEidTrailRoute: typeof EngagementsEidTrailRoute
   EngagementsEidIndexRoute: typeof EngagementsEidIndexRoute
   EngagementsEidDataKindRoute: typeof EngagementsEidDataKindRoute
+  EngagementsEidManualTaskIdRoute: typeof EngagementsEidManualTaskIdRoute
   EngagementsEidProceduresPidRoute: typeof EngagementsEidProceduresPidRoute
   EngagementsEidReviewsTaskIdRoute: typeof EngagementsEidReviewsTaskIdRoute
   EngagementsEidDataIndexRoute: typeof EngagementsEidDataIndexRoute
+  EngagementsEidManualIndexRoute: typeof EngagementsEidManualIndexRoute
   EngagementsEidProceduresIndexRoute: typeof EngagementsEidProceduresIndexRoute
   EngagementsEidReviewsIndexRoute: typeof EngagementsEidReviewsIndexRoute
   EngagementsEidDataDocumentsDocIdRoute: typeof EngagementsEidDataDocumentsDocIdRoute
@@ -493,9 +535,11 @@ const EngagementsEidRouteRouteChildren: EngagementsEidRouteRouteChildren = {
   EngagementsEidTrailRoute: EngagementsEidTrailRoute,
   EngagementsEidIndexRoute: EngagementsEidIndexRoute,
   EngagementsEidDataKindRoute: EngagementsEidDataKindRoute,
+  EngagementsEidManualTaskIdRoute: EngagementsEidManualTaskIdRoute,
   EngagementsEidProceduresPidRoute: EngagementsEidProceduresPidRoute,
   EngagementsEidReviewsTaskIdRoute: EngagementsEidReviewsTaskIdRoute,
   EngagementsEidDataIndexRoute: EngagementsEidDataIndexRoute,
+  EngagementsEidManualIndexRoute: EngagementsEidManualIndexRoute,
   EngagementsEidProceduresIndexRoute: EngagementsEidProceduresIndexRoute,
   EngagementsEidReviewsIndexRoute: EngagementsEidReviewsIndexRoute,
   EngagementsEidDataDocumentsDocIdRoute: EngagementsEidDataDocumentsDocIdRoute,

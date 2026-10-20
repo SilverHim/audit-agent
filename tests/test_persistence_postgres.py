@@ -5,6 +5,7 @@ import os
 import shutil
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -21,13 +22,20 @@ from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
+    ComplianceCheck,
     DocumentType,
+    GovernanceCommunication,
+    IndependenceDeclaration,
     LlmSettings,
     OwnershipGraph,
     ProfileSource,
     Reliability,
+    ReportStatus,
+    RepresentationStatus,
     TrailEntry,
     TrailKind,
+    Versioned,
+    WrittenRepresentationLetter,
 )
 from backend.contracts.ports import ConfirmationRequest
 from backend.contracts.records import Account, JournalEntry, SupplierBill
@@ -49,7 +57,15 @@ from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS, ownership_graph
+from tests.fakes import (
+    NUMBAT_ACCOUNTS,
+    NUMBAT_ROWS,
+    compliance_check,
+    governance_communication,
+    independence_declaration,
+    ownership_graph,
+    representation_letter,
+)
 from tests.test_data_store_postgres import migration as migration_module
 from tests.test_fakes import demo_rows, trail_pages_hold
 from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
@@ -511,6 +527,38 @@ async def test_ownership_graph_versions_on_postgres(storage) -> None:
     assert await store.history(e.id, OwnershipGraph, "OWNERSHIP") == [v1, v2]
     assert await store.latest(e.id, OwnershipGraph) == [v2]
     assert await store.get("ENG-OTHER", OwnershipGraph, "OWNERSHIP") is None
+
+
+@pytest.mark.parametrize(
+    ("v1", "change"),
+    [
+        (representation_letter(), {"status": RepresentationStatus.unreliable, "inconsistencies": ["Debtor list"]}),
+        (compliance_check(), {"run_id": "RUN-FIN-10-2", "must_disclaim": True}),
+        (governance_communication(), {"response": "Noted by the directors."}),
+        (independence_declaration(), {"status": ReportStatus.signed, "report_id": "REPORT-1", "signed_by": "U-1"}),
+    ],
+    ids=["representation_letter", "compliance_check", "governance_communication", "independence_declaration"],
+)
+async def test_completion_records_versions_on_postgres(storage, v1: Versioned, change: dict[str, Any]) -> None:  # type: ignore[no-untyped-def]
+    """R215 验收 7: 四类产出各写 v1, v2 进 completion_records 表; 按版本 get, 最新 get 与 latest 都与写入的相等 (读回
+    仍是各自的类, 枚举字段仍是枚举); 同表四类按 kind 分开, 别的项目读不到 (行级安全). 迁移的往返与授权见
+    test_data_store_postgres 的新表用例."""
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    kind = type(v1)
+    v2 = v1.model_copy(update={"version": 2, **change})
+    await store.put(e.id, [v1], actor="A9")
+    await store.put(e.id, [v2], actor="A9")
+
+    assert m.OUTPUTS[kind.__name__].name == "completion_records"
+    assert await store.get(e.id, kind, v1.id, 1) == v1
+    back = await store.get(e.id, kind, v1.id)
+    assert back == v2 and type(back) is kind
+    assert all(getattr(back, field) is value for field, value in change.items() if isinstance(value, StrEnum))
+    assert await store.latest(e.id, kind) == [v2]
+    kinds = (WrittenRepresentationLetter, ComplianceCheck, GovernanceCommunication, IndependenceDeclaration)
+    assert [await store.latest(e.id, k) for k in kinds if k is not kind] == [[], [], []]
+    assert await store.get("ENG-OTHER", kind, v1.id) is None
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

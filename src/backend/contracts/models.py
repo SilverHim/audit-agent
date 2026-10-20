@@ -351,11 +351,51 @@ class ReportSection(StrEnum):
     signature = "signature"  # 签名块: 审计师姓名, 事务所, 地址
 
 
+# IndependenceDeclaration.status (S307C, 随报告签字) 也用它 (需求 R215): 给报告加只属于报告的状态时另起枚举
 class ReportStatus(StrEnum):
     """报告版本状态."""
 
     draft = "draft"  # 草稿
     signed = "signed"  # 已签字
+
+
+class RepresentationStatus(StrEnum):
+    """管理层书面声明书的状态 (ASA 580, 需求 R215)."""
+
+    requested = "requested"  # 已请求, 还没取得
+    obtained = "obtained"  # 已取得
+    refused = "refused"  # 管理层不提供 (第 19, 20 段)
+    unreliable = "unreliable"  # 取得了, 但审计师认为不可靠 (第 16 至 18 段)
+
+
+class ClauseStatus(StrEnum):
+    """声明书中一项声明的状态."""
+
+    present = "present"  # 声明书写了
+    refused_accepted = "refused_accepted"  # 管理层不提供, 审计师接受, 写明理由与对意见的影响
+    missing = "missing"  # 声明书没写
+
+
+class CheckItemStatus(StrEnum):
+    """合规检查一项的结果 (FIN-10, FIN-12, FIN-18)."""
+
+    passed = "passed"  # 通过
+    failed = "failed"  # 不通过
+    attention = "attention"  # 不判不通过, 须审计师关注
+
+
+class CommunicationForm(StrEnum):
+    """与治理层沟通的形式 (ASA 260 第 24 段)."""
+
+    written = "written"  # 书面, 底稿留副本
+    oral = "oral"  # 口头, 底稿记下内容, 时间与对象
+
+
+class DeclarationForm(StrEnum):
+    """s307C 独立性声明的写法."""
+
+    no_contraventions = "no_contraventions"  # 没有违反独立性要求与职业守则 (s307C(3)(c))
+    contraventions = "contraventions"  # 只有声明中列明的违规 (s307C(3)(d))
 
 
 class TrailKind(StrEnum):
@@ -874,6 +914,47 @@ class UncorrectedSchedule(Versioned):
     candidate_opinion: OpinionType  # 合计不低于整体重要性为保留, 否则无保留
 
 
+class ObjectRef(Model):
+    """对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查."""
+
+    kind: str  # 对象的类名, 如 UncorrectedSchedule, ComplianceCheck, FinancialStatements
+    id: str  # 对象 ID, 如 SCHEDULE, CHECK-FIN-10, FS
+    version: int = Field(ge=1)  # 引用时的版本
+
+
+class CheckItem(Model):
+    """合规检查的一项."""
+
+    code: str  # 检查项代号, 如 K01, E03; 逐行核对的检查 (如 FIN-12 的 K01) 每行一项, 同一代号有多项
+    description: str  # 检查什么
+    status: CheckItemStatus  # 结果
+    standard_ref: str  # 依据的准则或法条, 如 ASA 580.14, s307C(3)
+    detail: dict[str, Any] = {}  # 明细, 如勾稽的两边金额 (分), 不一致的行代码
+    requires_disposition: bool = False  # 是否须审计师处置后才能签字
+    evidence: list[EvidencePointer] = []  # 证据指针
+
+
+class ComplianceCheck(Versioned):
+    """签字前提的合规检查: FIN-10 职业道德与独立性, FIN-12 财报与会计记录勾稽, FIN-18 声明书校验共用 (A9 写,
+    需求 R215). 每条程序一份, ID 为 CHECK-{procedure_id}; 再执行出新版本."""
+
+    procedure_id: str  # 做检查的程序
+    run_id: str  # 做检查的那次执行
+    items: list[CheckItem]  # 各项结果
+    exception_ids: list[str] = []  # 不通过的项生成的例外
+    must_disclaim: bool = False  # 检查结果要求出具无法表示意见, 如管理层不提供第 10, 11 段的声明 (ASA 580 第 20 段)
+    subject_ref: ObjectRef | None = None  # 被检查的对象, 如财报 FS 或声明书 REPLETTER 的版本; 没有单一对象时为空
+    # 所依据的输入及其版本, 如 {fs_version: 1, adjustment_entry_nos: [...]}, {client_profile_version: 3}; 节点再入时
+    # 与当前输入比对, 判断检查是否过期. 只放 JSON 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组
+    # 等经 Store 读回会变成字符串与列表, 与检查点读回的不相等
+    basis: dict[str, Any] = {}
+
+    @property
+    def failed_codes(self) -> list[str]:
+        """不通过 (failed) 的项的代号, 按 items 中首次出现的顺序, 同一代号只列一次."""
+        return list(dict.fromkeys(item.code for item in self.items if item.status is CheckItemStatus.failed))
+
+
 # ── 2.5 复核与决定 ─────────────────────────────────────────
 
 
@@ -1246,6 +1327,102 @@ class AuditReportVersion(Versioned):
     report_date: date | None = None  # 报告日, 签字当天
     approved_by: str | None = None  # 签字人的用户 ID
     approved_at: datetime | None = None  # 签字时间
+
+
+class RepresentationClause(Model):
+    """声明书中的一项声明."""
+
+    code: str  # 声明的代号, 如 FR_PREPARATION
+    kind: Literal["core", "specific"]  # core: ASA 580 第 10, 11 段要求的; specific: 其他准则或审计师另要的 (第 13 段)
+    standard_ref: str  # 要求这项声明的准则段落, 如 ASA 580.10, ASA 450.14
+    status: ClauseStatus  # 写了, 不提供而审计师接受, 或没写
+    acceptance_reason: str | None = None  # refused_accepted 时必填: 审计师接受的理由
+    opinion_effect: str | None = None  # refused_accepted 时必填: 对审计意见的影响
+
+    @model_validator(mode="after")
+    def accepted_refusal(self) -> Self:
+        """refused_accepted 须写明接受的理由与对意见的影响."""
+        if self.status is ClauseStatus.refused_accepted and not (self.acceptance_reason and self.opinion_effect):
+            raise ValueError(f"{self.code}: refused_accepted 须填 acceptance_reason 与 opinion_effect")
+        return self
+
+
+class WrittenRepresentationLetter(Versioned):
+    """管理层书面声明书 (ASA 580; A5 FIN-07 收取, FIN-18 校验, 需求 R215). 项目里只有一份, ID 固定为 REPLETTER;
+    状态或内容变化出新版本."""
+
+    status: RepresentationStatus  # 已请求, 已取得, 拒绝提供, 不可靠
+    representations: list[RepresentationClause]  # 各项声明
+    attached_schedule: list[UncorrectedItem] = []  # 声明书所附的未更正错报汇总 (ASA 450 第 14 段), 没有未更正错报为空
+    schedule_ref: ObjectRef | None = None  # 附表对应的未更正错报汇总表 (SCHEDULE) 版本
+    signed_by: list[str] = []  # 签署人姓名, 按声明书原样 (ASA 580 第 9 段: 对财报负责且了解情况的管理层)
+    dated_at: date | None = None  # 声明书日期, 须尽量接近而不晚于报告日 (第 14 段); 未取得为空
+    period_end: date  # 声明涵盖的期间截至日, 须涵盖报告所涉的全部期间 (第 14 段)
+    document_id: str | None = None  # 声明书原件的文件 ID (DocumentType.representation_letter)
+    inconsistencies: list[str] = []  # 与其他审计证据不一致之处 (第 17 段)
+    run_id: str  # 写出这一版的那次执行
+
+
+class CommunicationMatter(Model):
+    """与治理层沟通的一个事项."""
+
+    code: str  # 事项代号, 如 SIG_PRACTICES, DIFFICULTIES, UNCORRECTED
+    standard_ref: str  # 要求沟通的准则段落, 如 ASA 260.16(a)
+    required: bool  # 准则是否要求沟通
+    exempt_reason: str | None = None  # 要求沟通而不适用时的理由, 如没有未更正错报
+    covered: bool  # 这次沟通是否已涵盖
+    text: str  # 沟通的内容
+
+
+class GovernanceCommunication(Versioned):
+    """与治理层的一次沟通 (ASA 260; A10 RPT-07 收取, 需求 R215). ID 为 GC-{procedure_id}-{run_no}, 如 GC-RPT-07-1;
+    本版只有完成阶段的沟通."""
+
+    kind: Literal["completion"] = "completion"  # 沟通的阶段, 本版只有完成阶段
+    form: CommunicationForm  # 书面或口头
+    communicated_at: date  # 沟通日期
+    recipients: list[str]  # 沟通对象, 如董事姓名
+    matters: list[CommunicationMatter]  # 各事项
+    corrected_misstatement_ids: list[str] = []  # 沟通到的已更正错报
+    uncorrected_misstatement_ids: list[str] = []  # 沟通到的未更正错报
+    letter_text: str | None = None  # 书面沟通的副本全文 (ASA 260 第 24 段); 口头沟通为空
+    document_id: str | None = None  # 沟通函原件的文件 ID (DocumentType.governance_communication)
+    response: str | None = None  # 治理层的回复, 没有为空
+    run_id: str  # 写出它的那次执行
+
+
+class Contravention(Model):
+    """s307C 独立性声明中列明的一项违规."""
+
+    item_code: str  # 对应的检查项代号 (CHECK-FIN-10 的 CheckItem.code)
+    text: str  # 违规的说明
+
+
+class IndependenceDeclaration(Versioned):
+    """审计师独立性声明 (公司法 s307C; A10 RPT-08 起草, RPT-01 签字时由 A1 置 signed, 需求 R215). 项目里只有一份,
+    ID 固定为 S307C."""
+
+    form: DeclarationForm  # 无违规, 或列明违规
+    contraventions: list[Contravention] = []  # 列明的违规; form 为 contraventions 时非空, 否则为空
+    based_on: ObjectRef  # 所依据的独立性检查 (CHECK-FIN-10) 的版本
+    text: str  # 声明全文
+    declarant_id: str  # 作出声明的审计师 (项目负责人) 的用户 ID
+    directors_report_copy_required: bool  # 是否须附入董事报告 (s298(1AA)(c))
+    status: ReportStatus = ReportStatus.draft  # 草稿或已签字, 取值同报告版本; 随报告签字 (s307C(5)(b))
+    declaration_date: date | None = None  # 声明日期, 签字当天; 草稿为空
+    report_id: str | None = None  # 随之交给董事的报告 (s307C(5)(a)(i)), 如 REPORT-1; 草稿为空
+    signed_by: str | None = None  # 签字人的用户 ID; 草稿为空
+    run_id: str  # 起草它的那次执行
+
+    @model_validator(mode="after")
+    def form_matches_list(self) -> Self:
+        """form 与列明的违规一致: contraventions 时须列明, no_contraventions 时不能有."""
+        listed = bool(self.contraventions)
+        if self.form is DeclarationForm.contraventions and not listed:
+            raise ValueError("form 为 contraventions 时须列明违规")
+        if self.form is DeclarationForm.no_contraventions and listed:
+            raise ValueError("form 为 no_contraventions 时不能列明违规")
+        return self
 
 
 # ── 2.7 其他 ───────────────────────────────────────────────

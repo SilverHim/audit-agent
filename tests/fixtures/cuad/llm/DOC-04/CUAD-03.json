@@ -1,0 +1,46 @@
+{
+  "counterparty": "Electric City of Illinois LLC",
+  "counterparty_abn": null,
+  "amount_cents": null,
+  "sign_date": "1999-09-07",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "CUAD-03",
+      "locator": "counterparty",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "CUAD-03",
+      "locator": "sign_date",
+      "page": 1,
+      "reliability": "external_copy"
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "page": 3,
+      "text": "2.3 Delivery. Other than \"drop ship\" deliveries, all deliveries made pursuant to this Agreement shall be FOB the Company's facilities located within the continental United States by a carrier authorized by the Distributor."
+    },
+    {
+      "term_type": "return_right",
+      "page": 4,
+      "text": "2.6 Product Returns. Page -5- (A) Non-defective Products. Unless the Company has first authorized or permitted the return of any non-defective Products and except as otherwise permitted or required herein, the Company shall not be obligated to accept the return from the Distributor of any non-defective Products, nor to make any exchanges therefor, nor to credit the Distributor therefor. If Company does not give Annual Notice pursuant to Section 3.1 hereof, Distributor may, within 90 days of modification, improvement or alteration, return the Products to the Company. The Company shall not have any obligation with respect to Products after 365 days following delivery to Distributor, except as provided herein."
+    },
+    {
+      "term_type": "payment",
+      "page": 4,
+      "text": "2.7 Payment Terms. Distributor shall pay Company within thirty (30) days of Distributor's or, as the case may be, the end-user's receipt of Products."
+    },
+    {
+      "term_type": "termination",
+      "page": 6,
+      "text": "4.2 Termination for Cause. Either party may terminate this Agreement upon 30 days Page -8- prior written notice to the other upon the occurrence of any of the following events: (A) the Distributor's failure to make full and prompt payment to the Company of all sums due and owing to it; (b) either party's default in the performance of any of the material, terms, conditions, obligations, undertakings, covenants or liabilities set forth herein and such default is not cured within a commercially reasonable time after the defaulting party has been notified of the default by the other party and (c) as otherwise expressly provided herein. In the event either party (a) becomes adjudicated insolvent, (b) discontinues its business, (c) has voluntary of involuntary bankruptcy proceedings instituted against it, or (d) makes an assignment for the benefit of creditors, the other party shall be entitled to terminate this Agreement effective immediately upon written notice."
+    }
+  ]
+}

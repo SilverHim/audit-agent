@@ -219,7 +219,9 @@ async def catch_up_review(
     (nodes.NODE_PROCEDURES), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等, 读回后从 Store
     整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
     (次序, 1, 所针对任务所属执行的 run_no) 排 rerun 决定 (Q17 一轮失败算一组, 整组重跑: 同一程序每轮只对应一个 rerun
-    决定, 下一轮由它触发). 同一程序同一轮有两个 rerun 决定说明不变式被破坏, 抛 RuntimeError.
+    决定, 下一轮由它触发). 同一程序同一轮有两个 rerun 决定说明不变式被破坏, 抛 RuntimeError. manual 任务 (人工程序,
+    需求 R93) 的决定按 (次序, 1, 任务所属执行的 run_no, 任务 ID) 排: 节点读回它时即调 owner 整理结果, 要看到它所属
+    的那次派发, 故排在触发该次派发的 rerun (上一轮的 run_no) 之后.
 
     等待中的节点带着错误 (读回某个决定后出错, 如重跑的执行提交后写检查点前中断) 时, 检查点里留着那次运行的错误与
     恢复值, 节点之后再停下等待时错误仍在, DecisionSubmit 会把它当成卡住的等待, 拒绝后续决定. 此时先复制检查点
@@ -263,6 +265,8 @@ async def catch_up_review(
             raise RuntimeError(f"复核决定 {record.id} 针对的任务 {task.id} 不属于节点 {node} 的执行, 无法补做")
         if record.decision is Decision.rerun:
             return order.index(task.procedure_id), 1, run.run_no, ""
+        if task.kind is TaskKind.manual:  # 排在触发该次派发的 rerun (上一轮的 run_no) 之后 (需求 R93)
+            return order.index(task.procedure_id), 1, run.run_no, task.id
         return order.index(task.procedure_id), 0, 0, task.id
 
     keys = {r.id: await key(r) for r in records}

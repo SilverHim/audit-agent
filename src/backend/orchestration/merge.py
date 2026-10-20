@@ -13,6 +13,7 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     AuditException,
+    ComplianceCheck,
     Judgment,
     ProcedureRun,
     ReviewTask,
@@ -25,15 +26,19 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.services.procedure_library import ProcedureLibrary
 
 # 各 Agent 可写的状态字段, 即第 6 节返回字段表; 另外都可写 procedure_runs (本次执行的终态)
+DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发, 需求 R92) 可写的字段, 另有本次执行记录
+
 AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
     AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
-    AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph"}),
+    AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph", "representation_letter"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
     AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
-    AgentId.A9: frozenset({"uncorrected_schedule"}),
-    AgentId.A10: frozenset({"report_versions", "review_tasks"}),
+    AgentId.A9: frozenset({"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}),
+    AgentId.A10: frozenset(
+        {"report_versions", "review_tasks", "governance_communications", "independence_declaration"}
+    ),
 }
 
 
@@ -63,6 +68,10 @@ FIELD_REPLAY: dict[str, Replay] = {
     "materiality_candidates": Replay.singleton,
     "uncorrected_schedule": Replay.singleton,
     "ownership_graph": Replay.singleton,
+    "representation_letter": Replay.singleton,
+    "independence_declaration": Replay.singleton,
+    "governance_communications": Replay.by_run,
+    "compliance_checks": Replay.by_procedure,
 }
 SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
 LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式
@@ -104,6 +113,9 @@ TARGET_FIELDS: dict[TargetType, str] = {
     TargetType.AuditException: "exceptions",
     TargetType.ProcedureRun: "procedure_runs",
 }
+
+# 带 exception_ids 的对象: 合并时查所指的例外都在 (check_refs), 重放时补齐所指的例外 (nodes.add_referenced_exceptions)
+EXCEPTION_REFERRERS = (Judgment, AcceptanceScorecard, AnalyticsResult, ComplianceCheck)
 
 STATE_HINTS = get_type_hints(EngagementState)  # 状态各字段的类型注解, 已去掉 reducer (Annotated)
 
@@ -201,9 +213,9 @@ def check_ids(patch: StatePatch, state: EngagementState) -> list[str]:
 def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
     """外键: 引用的程序, 执行记录, 例外与复核目标都在程序包, 片段或状态中.
 
-    - Judgment, AuditException, ReviewTask: procedure_id 在程序包中; run_id 在片段或状态的执行记录中,
+    - Judgment, AuditException, ReviewTask, ComplianceCheck: procedure_id 在程序包中; run_id 在片段或状态的执行记录中,
       且该记录属于同一程序.
-    - Judgment, AcceptanceScorecard, AnalyticsResult: exception_ids 的每一项在片段或状态的例外中.
+    - EXCEPTION_REFERRERS (判断, 评分卡, 分析结果, 合规检查): exception_ids 的每一项在片段或状态的例外中.
     - ReviewTask: target_type 对应字段中有 target_id. 待决任务的 target_version 须等于目标当前版本 (否则提交决定时
       必报版本不符); 已决定任务 (重放取回的) 记的是复核时的版本, 目标之后可能被决定改出新版本, 只须不高于当前版本.
     - 反向: 片段把某对象改出新版本, 而状态中有以它的原版本为目标的待决任务 (片段没有一并更新该任务), 任务随之过期.
@@ -215,7 +227,7 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
     for value in patch.values():
         for item in objects(value):
             name = f"{type(item).__name__} {item.id}"
-            if isinstance(item, Judgment | AuditException | ReviewTask):
+            if isinstance(item, Judgment | AuditException | ReviewTask | ComplianceCheck):
                 if item.procedure_id not in pack:
                     reasons.append(f"{name} 的 procedure_id {item.procedure_id} 不在程序包中")
                 run = runs.get(item.run_id)
@@ -223,7 +235,7 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
                     reasons.append(f"{name} 的 run_id {item.run_id} 不在执行记录中")
                 elif run.procedure_id != item.procedure_id:
                     reasons.append(f"{name} 的 run_id {item.run_id} 属于 {run.procedure_id}, 与 procedure_id 不符")
-            if isinstance(item, Judgment | AcceptanceScorecard | AnalyticsResult):
+            if isinstance(item, EXCEPTION_REFERRERS):
                 for exception_id in item.exception_ids:
                     if exception_id not in exceptions:
                         reasons.append(f"{name} 引用的例外 {exception_id} 不存在")
@@ -301,7 +313,7 @@ def check_patch(
     *,
     writer: AgentId,
     procedure_id: str,
-    run_id: str,
+    run_id: str | None,
     state: EngagementState,
     outputs: Collection[str],
 ) -> None:
@@ -309,7 +321,9 @@ def check_patch(
 
     patch: Agent.run 的返回; fan_in 时为暂存结果中的片段.
     writer: 产出片段的 Agent, 决定可写哪些字段, 如 AgentId.A2.
-    procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id.
+    procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id. run_id 为 None 时为人工
+    程序 owner 整理结果的片段 (需求 R93): 不能带派发片段的字段 (执行记录 procedure_runs 与 DISPATCH_FIELDS), 不查终态,
+    ID 与外键照查; check_own_run 由调用方按派发的那次执行查 (nodes.check_collected).
     state: 执行时的编排状态, 只读, 用来查外键与已有版本.
     outputs: 本程序模板声明的产出字段 (template.outputs); 片段只能含这些与 procedure_runs.
     先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键, 本次执行的终态
@@ -318,12 +332,12 @@ def check_patch(
     state=ctx.state, outputs=ctx.template.outputs)
     """
     reasons = check_fields(patch, writer, procedure_id, outputs)
+    if run_id is None:
+        dispatched = [f for f in ("procedure_runs", *DISPATCH_FIELDS) if f in patch]
+        reasons += [f"整理结果的片段不能带派发片段的字段 {f}" for f in dispatched]
     if not reasons:
-        reasons = [
-            *check_ids(patch, state),
-            *check_refs(patch, state),
-            *check_run(patch, procedure_id, run_id),
-            *check_own_run(patch, run_id),
-        ]
+        reasons = [*check_ids(patch, state), *check_refs(patch, state)]
+        if run_id is not None:
+            reasons += [*check_run(patch, procedure_id, run_id), *check_own_run(patch, run_id)]
     if reasons:
         raise MergeRejected(reasons)

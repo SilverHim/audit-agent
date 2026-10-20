@@ -9,6 +9,7 @@ from backend.contracts.llm_outputs import RegistryExtraction
 from backend.contracts.models import (
     AbnRecord,
     AcceptanceScorecard,
+    AgentId,
     Annotation,
     AuditException,
     AuditReportVersion,
@@ -18,8 +19,10 @@ from backend.contracts.models import (
     DeclaredHolding,
     DeclaredParty,
     DisputeResolution,
+    DocumentRef,
     DocumentType,
     DraftRule,
+    EvidenceType,
     Fees,
     GateDecision,
     GateEdit,
@@ -29,6 +32,7 @@ from backend.contracts.models import (
     Judgment,
     KeyPerson,
     LlmProvider,
+    ManualRequest,
     ManualResult,
     MaterialityChoice,
     Misstatement,
@@ -285,6 +289,21 @@ class ReviewTaskView(Model):
     allowed_resolutions: list[DisputeResolution] = []
     # 各可选仲裁的错报草稿规则 (功能 collab 打开时的争议任务, ReviewQueue.draft_rules, 与校验同一规则); 其余为空
     draft_rules: dict[DisputeResolution, DraftRule] = {}
+
+
+class ManualTaskView(Model):
+    """人工队列中的一项 (需求 R94): manual 任务, 程序名与模板 owner, 交给人的请求, 结果模型的 JSON schema (没有结果
+    模型时为空), 本项目可作证据的已登记文件 (选证据用, 每项相同) 与各文件作证据时的指针类型 (按文件 ID, 判断引擎的
+    文件指针映射). EvidencePointer.type 必填, 前端据此交真实的种类, 不填等后端改写的占位值, 也不另抄一份映射;
+    写入时后端照旧按文件登记改写 type 与 reliability (decisions.check_manual_result), 以后端为准."""
+
+    task: ReviewTask
+    procedure_name: str
+    owner: AgentId
+    request: ManualRequest
+    result_schema: dict[str, Any] | None
+    documents: list[DocumentRef]
+    evidence_types: dict[str, EvidenceType]  # documents 中每份文件都有, 前端缺了即报错, 不兜底
 
 
 class ProcedureDetail(Model):

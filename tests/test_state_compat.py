@@ -14,21 +14,33 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
+from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
+    CheckItemStatus,
+    ClauseStatus,
+    CommunicationForm,
+    ComplianceCheck,
+    DeclarationForm,
     GateDecision,
     GateId,
     GateVerdict,
+    GovernanceCommunication,
+    IndependenceDeclaration,
     Judgment,
     Misstatement,
+    ObjectRef,
     OpinionType,
     OwnershipGraph,
     Phase,
+    ReportStatus,
+    RepresentationStatus,
     ReviewRecord,
     ReviewStatus,
     TrailKind,
     UncorrectedSchedule,
     Versioned,
+    WrittenRepresentationLetter,
 )
 from backend.contracts.state import REQUIRED_KEYS, STATE_DEFAULTS, EngagementState, fill_defaults, initial_state
 from backend.contracts.views import CompletionMaterial
@@ -46,7 +58,7 @@ from backend.orchestration.graph import (
     node_with_defaults,
     route_with_defaults,
 )
-from backend.orchestration.nodes import FieldworkInput
+from backend.orchestration.nodes import FieldworkInput, apply_patch
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.recovery import catch_up_review
 from backend.orchestration.runner import GraphRunner, resume_required
@@ -59,12 +71,16 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    compliance_check,
+    governance_communication,
+    independence_declaration,
     make_deps,
     make_graph_nodes,
     make_procedure,
     make_runner,
     numbat_all_p2_agents,
     ownership_graph,
+    representation_letter,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision
@@ -176,6 +192,10 @@ def test_initial_state_equals_previous_literal() -> None:
         misstatements=[],
         rerun_requests=[],  # 需求 R274 加
         uncorrected_schedule=None,
+        representation_letter=None,  # 以下四项需求 R215 加
+        compliance_checks=[],
+        governance_communications=[],
+        independence_declaration=None,
         opinion_route=None,
     )
     assert dict(state) == previous
@@ -247,7 +267,16 @@ def test_every_node_and_route_is_wrapped() -> None:
 
 # ── 验收 2: 模拟旧检查点 ──
 
-DROPPED = ("misstatements", "uncorrected_schedule", "opinion_route")
+# 加字段之前的检查点没有的通道: 原有三个, 加需求 R215 的四个 (签字前提的产出)
+DROPPED = (
+    "misstatements",
+    "uncorrected_schedule",
+    "opinion_route",
+    "representation_letter",
+    "compliance_checks",
+    "governance_communications",
+    "independence_declaration",
+)
 
 
 def drop_channels(saver: object, thread_id: str, channels: Iterable[str]) -> None:
@@ -263,7 +292,7 @@ def drop_channels(saver: object, thread_id: str, channels: Iterable[str]) -> Non
 
 
 async def numbat_to_fin(drop: bool) -> Started:
-    """Numbat 脚本 Agent 跑到 ACC-01 闸门; drop 时删去三个通道; 再按 test_flow 的决定走到 FIN-01 闸门前."""
+    """Numbat 脚本 Agent 跑到 ACC-01 闸门; drop 时删去 DROPPED 的通道; 再按 test_flow 的决定走到 FIN-01 闸门前."""
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     runner, store = make_runner(engagement_store=engagement_store, agents=numbat_all_p2_agents)
     s = Started(runner, store, engagement_store)
@@ -276,6 +305,11 @@ async def numbat_to_fin(drop: bool) -> Started:
         values = (await runner.app.aget_state(CONFIG)).values
         # 没有 reducer 的两个通道确实缺键; misstatements 带 reducer, LangGraph 读回时可能自行补空列表
         assert "uncorrected_schedule" not in values and "opinion_route" not in values
+        assert "representation_letter" not in values and "independence_declaration" not in values
+        assert values.get("compliance_checks", []) == values.get("governance_communications", []) == []
+        filled = fill_defaults(values)
+        assert (filled["representation_letter"], filled["independence_declaration"]) == (None, None)
+        assert filled["compliance_checks"] == filled["governance_communications"] == []
         assert values.get("misstatements", []) == []
         assert values["phase"] is Phase.P0_Acceptance
         overview = await query.overview(EID)
@@ -304,8 +338,9 @@ def trail_rows(s: Started) -> list[dict[str, Any]]:
 
 
 async def test_old_checkpoint_without_new_channels_runs_to_fin() -> None:
-    """验收 2: ACC-01 闸门处的检查点删去三个通道后照常走到 FIN-01: 查询与决定提交不抛错, FIN-04 出 SCHEDULE;
-    程序包, SCHEDULE 与留痕与不删通道时相同. 之后 FIN-01 决定写入 opinion_route, 走到 RPT-01."""
+    """验收 2: ACC-01 闸门处的检查点删去 DROPPED 的通道 (R215 起含签字前提的四个) 后照常走到 FIN-01: 查询与决定
+    提交不抛错, FIN-04 出 SCHEDULE; 程序包, SCHEDULE 与留痕与不删通道时相同. 之后 FIN-01 决定写入 opinion_route,
+    走到 RPT-01."""
     dropped = await numbat_to_fin(drop=True)
     baseline = await numbat_to_fin(drop=False)
 
@@ -386,6 +421,23 @@ class StateWithLocalTypes(EngagementState):
     plan_kind: LocalKind | None
 
 
+async def checkpoint_round_trip(state_type: Any, values: dict[str, Any]) -> dict[str, Any]:
+    """一个节点写出 values, 存进用检查点白名单 serde 的 InMemorySaver, 读回状态. state_type 为只含这些键 (无 reducer)
+    的 TypedDict, 输入各键为 None."""
+
+    async def write(state: Any) -> dict[str, Any]:
+        return values
+
+    graph = StateGraph(state_type)
+    graph.add_node("a", write)
+    graph.add_edge(START, "a")
+    graph.add_edge("a", END)
+    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
+    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
+    await app.ainvoke(dict.fromkeys(values), config)
+    return dict((await app.aget_state(config)).values)
+
+
 class GraphOnly(TypedDict):
     ownership_graph: OwnershipGraph | None
 
@@ -394,19 +446,52 @@ async def test_ownership_graph_survives_checkpoint_and_defaults_to_none() -> Non
     """R136 验收 3, 4: 旧检查点没有 ownership_graph 键时读到 None; 经检查点白名单序列化的 InMemorySaver 存取一轮后
     仍是 OwnershipGraph 实例 (不退化为 dict), 内容不变."""
     assert fill_defaults({})["ownership_graph"] is None
-
-    async def write(state: GraphOnly) -> dict[str, Any]:
-        return {"ownership_graph": ownership_graph()}
-
-    graph = StateGraph(GraphOnly)
-    graph.add_node("a", write)
-    graph.add_edge(START, "a")
-    graph.add_edge("a", END)
-    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
-    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
-    await app.ainvoke({"ownership_graph": None}, config)
-    back = (await app.aget_state(config)).values["ownership_graph"]
+    back = (await checkpoint_round_trip(GraphOnly, {"ownership_graph": ownership_graph()}))["ownership_graph"]
     assert isinstance(back, OwnershipGraph) and back == ownership_graph()
+
+
+class CompletionOnly(TypedDict):
+    representation_letter: WrittenRepresentationLetter | None
+    compliance_checks: list[ComplianceCheck]
+    governance_communications: list[GovernanceCommunication]
+    independence_declaration: IndependenceDeclaration | None
+
+
+async def test_completion_records_survive_checkpoint_as_enums() -> None:
+    """R215 验收 5: 四类产出经检查点白名单序列化的 InMemorySaver 存取一轮后仍是各自的类, 内容不变; 状态等枚举字段仍是
+    枚举 (is 比较为真, 不退化为字符串), 嵌套在列表里的声明, 检查项也一样."""
+    written = {
+        "representation_letter": representation_letter(),
+        "compliance_checks": [compliance_check()],
+        "governance_communications": [governance_communication()],
+        "independence_declaration": independence_declaration(),
+    }
+    back = await checkpoint_round_trip(CompletionOnly, written)
+    assert back == written
+    letter, [check], [communication], declaration = (back[k] for k in written)
+    assert isinstance(letter, WrittenRepresentationLetter) and letter.status is RepresentationStatus.obtained
+    assert [c.status for c in letter.representations][-1] is ClauseStatus.refused_accepted
+    assert isinstance(check, ComplianceCheck) and check.items[1].status is CheckItemStatus.failed
+    assert check.failed_codes == ["E02"]
+    assert isinstance(communication, GovernanceCommunication) and communication.form is CommunicationForm.written
+    assert isinstance(declaration, IndependenceDeclaration) and declaration.form is DeclarationForm.no_contraventions
+    assert declaration.status is ReportStatus.draft and isinstance(declaration.based_on, ObjectRef)
+
+
+def test_completion_list_fields_merge_by_id_and_version() -> None:
+    """R215 验收 5 (审核意见 01): compliance_checks 与 governance_communications 按 upsert_by_id 并入状态: 另一程序
+    (另一次执行) 的写入与已有的并存, 不整体替换; 同 ID 版本更低的抛 VersionConflict."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state = apply_patch(state, {"compliance_checks": [compliance_check(version=2)]})
+    state = apply_patch(state, {"compliance_checks": [compliance_check("FIN-12")]})
+    assert [(c.id, c.version) for c in state["compliance_checks"]] == [("CHECK-FIN-10", 2), ("CHECK-FIN-12", 1)]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"compliance_checks": [compliance_check()]})
+    state = apply_patch(state, {"governance_communications": [governance_communication(version=2)]})
+    state = apply_patch(state, {"governance_communications": [governance_communication(run_no=2)]})
+    assert [c.id for c in state["governance_communications"]] == ["GC-RPT-07-1", "GC-RPT-07-2"]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"governance_communications": [governance_communication()]})
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:
@@ -453,7 +538,8 @@ def unregistered_outputs(state: Any) -> list[str]:
 
 
 def test_versioned_state_fields_have_output_tables() -> None:
-    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 17 种全部在, R136 加 OwnershipGraph)."""
+    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 21 种全部在, R136 加 OwnershipGraph,
+    R215 加签字前提的四种)."""
     names = {t.__name__ for t in versioned_fields(EngagementState).values()}
     assert names >= {
         "AcceptanceScorecard",
@@ -473,6 +559,10 @@ def test_versioned_state_fields_have_output_tables() -> None:
         "Misstatement",
         "AuditReportVersion",
         "OwnershipGraph",
+        "WrittenRepresentationLetter",  # 以下四种需求 R215 加
+        "ComplianceCheck",
+        "GovernanceCommunication",
+        "IndependenceDeclaration",
     }
     assert unregistered_outputs(EngagementState) == []
 

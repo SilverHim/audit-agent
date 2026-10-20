@@ -15,6 +15,9 @@ from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     AutonomyLevel,
+    CheckItem,
+    CheckItemStatus,
+    ComplianceCheck,
     DocumentRef,
     DocumentType,
     ExceptionDisposition,
@@ -40,6 +43,7 @@ from backend.orchestration.merge import (
     STATE_HINTS,
     MergeRejected,
     check_patch,
+    check_refs,
     field_type,
     output_problems,
 )
@@ -53,11 +57,15 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     ScriptA6,
+    compliance_check,
+    governance_communication,
+    independence_declaration,
     make_ctx,
     make_deps,
     make_procedure,
     make_run,
     ownership_graph,
+    representation_letter,
 )
 
 PACK = [make_procedure("REV-08", Phase.P2_Executing), make_procedure("REV-03", Phase.P2_Executing)]
@@ -197,10 +205,22 @@ def test_agent_fields_match_section_6_table() -> None:
         "risk_register",
         "exceptions",
     }
-    assert AGENT_FIELDS[AgentId.A5] == {"confirmations", "documents", "exceptions", "ownership_graph"}
+    assert AGENT_FIELDS[AgentId.A5] == {
+        "confirmations",
+        "documents",
+        "exceptions",
+        "ownership_graph",
+        "representation_letter",  # 需求 R215
+    }
     assert AGENT_FIELDS[AgentId.A6] == {"exceptions", "judgments", "review_tasks", "confirmations"}
-    assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule"}
-    assert AGENT_FIELDS[AgentId.A10] == {"report_versions", "review_tasks"}
+    # 需求 R215: A9 加合规检查与其例外, 任务; A10 加治理层沟通与独立性声明
+    assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}
+    assert AGENT_FIELDS[AgentId.A10] == {
+        "report_versions",
+        "review_tasks",
+        "governance_communications",
+        "independence_declaration",
+    }
 
 
 def test_a5_may_write_ownership_graph_and_a6_may_not() -> None:
@@ -239,6 +259,123 @@ def test_ownership_graph_must_come_from_this_run() -> None:
                 state=state,
                 outputs=["ownership_graph", "exceptions", "documents"],
             )
+
+
+# ── R215: 签字前提的四类审计产出 ──
+
+COMPLETION_PACK = [*PACK, *(make_procedure(p, Phase.P3_Completion) for p in ("FIN-07", "FIN-10", "FIN-12"))]
+COMPLETION_PACK += [make_procedure(p, Phase.P4_Reporting) for p in ("RPT-07", "RPT-08")]
+
+
+def fs_check(exception_ids: list[str]) -> ComplianceCheck:
+    """CHECK-FIN-12 第 1 次: K01 一行 (SOFP-REC) 与调整后试算表不符, 不通过."""
+    item = CheckItem(
+        code="K01",
+        description="Line agrees to adjusted trial balance",
+        status=CheckItemStatus.failed,
+        standard_ref="ASA 330.20(a)",
+        detail={"line": "SOFP-REC"},
+    )
+    return ComplianceCheck(
+        id="CHECK-FIN-12", procedure_id="FIN-12", run_id="RUN-FIN-12-1", items=[item], exception_ids=exception_ids
+    )
+
+
+def fin12_patch(**fields: Any) -> tuple[StatePatch, ProcedureRun]:
+    """A9 执行 FIN-12 的合法片段: CHECK-FIN-12 (K01 不通过), K01 的例外与它的 unattributed 任务 (R224 验收 3),
+    本次执行成功."""
+    run = make_run("FIN-12")
+    found = exception("X-FIN-12-1-K01-1", "FIN-12", run.id)
+    pending = ReviewTask(
+        id=f"T-{found.id}-v1",
+        kind=TaskKind.unattributed,
+        procedure_id="FIN-12",
+        target_type=TargetType.AuditException,
+        target_id=found.id,
+        target_version=1,
+        run_id=run.id,
+        subject_id="SOFP-REC",
+        created_at=NOW,
+    )
+    patch: StatePatch = {
+        "compliance_checks": [fs_check([found.id])],
+        "exceptions": [found],
+        "review_tasks": [pending],
+        "procedure_runs": [finished(run)],
+    }
+    return {**patch, **fields}, run
+
+
+def check_a9(patch: StatePatch, run: ProcedureRun, state: EngagementState | None = None) -> None:
+    outputs = ["compliance_checks", "exceptions", "review_tasks"]
+    state = state or make_state(procedure_pack=COMPLETION_PACK)
+    check_patch(patch, writer=AgentId.A9, procedure_id=run.procedure_id, run_id=run.id, state=state, outputs=outputs)
+
+
+def test_a9_writes_compliance_check_with_its_exceptions_and_tasks() -> None:
+    """R215 验收 6: A9 执行 FIN-12 的片段 (合规检查, 例外, unattributed 任务) 通过 check_patch."""
+    check_a9(*fin12_patch())
+
+
+def test_a9_may_not_write_governance_communications() -> None:
+    """R215 验收 6: A9 片段含 governance_communications 时 check_patch 抛 MergeRejected, 原因含字段名; 在 outputs 里
+    声明了也一样 (不在 A9 的写入范围)."""
+    patch, run = fin12_patch(governance_communications=[governance_communication()])
+    with pytest.raises(MergeRejected, match="merge_rejected: A9 不能写字段 governance_communications") as caught:
+        check_patch(
+            patch,
+            writer=AgentId.A9,
+            procedure_id=run.procedure_id,
+            run_id=run.id,
+            state=make_state(procedure_pack=COMPLETION_PACK),
+            outputs=["compliance_checks", "exceptions", "review_tasks", "governance_communications"],
+        )
+    assert caught.value.reasons == ["A9 不能写字段 governance_communications"]
+
+
+def test_compliance_check_references_are_checked() -> None:
+    """R215 验收 6: ComplianceCheck.exception_ids 指向状态与片段中都没有的例外时 check_refs 报错; 例外只在状态中
+    (之前的执行查出) 时通过. procedure_id 不在程序包, run_id 属于别的程序时也报错 (同判断与例外)."""
+    patch, _ = fin12_patch(compliance_checks=[fs_check(["X-FIN-12-1-K01-1", "X-NONE"])])
+    state = make_state(procedure_pack=COMPLETION_PACK)
+    assert check_refs(patch, state) == ["ComplianceCheck CHECK-FIN-12 引用的例外 X-NONE 不存在"]
+    earlier = exception("X-NONE", "FIN-12", "RUN-FIN-12-0")
+    assert check_refs(patch, make_state(procedure_pack=COMPLETION_PACK, exceptions=[earlier])) == []
+
+    foreign = compliance_check().model_copy(update={"run_id": "RUN-REV-08-1"})
+    reasons = check_refs({"compliance_checks": [foreign]}, make_state(procedure_runs=[finished(make_run("REV-08"))]))
+    assert reasons == [
+        "ComplianceCheck CHECK-FIN-10 的 procedure_id FIN-10 不在程序包中",
+        "ComplianceCheck CHECK-FIN-10 的 run_id RUN-REV-08-1 属于 REV-08, 与 procedure_id 不符",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("writer", "procedure_id", "field", "record"),
+    [  # 样例的 run_id 都是该程序的第 1 次执行
+        (AgentId.A5, "FIN-07", "representation_letter", representation_letter()),
+        (AgentId.A10, "RPT-07", "governance_communications", governance_communication()),
+        (AgentId.A10, "RPT-08", "independence_declaration", independence_declaration()),
+    ],
+    ids=["representation_letter", "governance_communications", "independence_declaration"],
+)
+def test_completion_records_come_from_their_writer_and_this_run(
+    writer: AgentId, procedure_id: str, field: str, record: Any
+) -> None:
+    """R215 验收 6: 声明书 (A5), 治理层沟通与独立性声明 (A10) 由各自的写入者在本次执行写出时通过; 三者带 run_id 而
+    不带 procedure_id, run_id 不是本次执行时被拒 (check_own_run, R136 审核意见 05 的规则)."""
+    run = make_run(procedure_id)
+    is_list = field == "governance_communications"
+
+    def patch(value: Any) -> StatePatch:
+        return {field: [value] if is_list else value, "procedure_runs": [finished(run)]}
+
+    state = make_state(procedure_pack=COMPLETION_PACK)
+    common: dict[str, Any] = {"writer": writer, "procedure_id": run.procedure_id, "run_id": run.id, "state": state}
+    check_patch(patch(record), outputs=[field], **common)
+    stale = record.model_copy(update={"run_id": "RUN-X-9"})
+    with pytest.raises(MergeRejected, match=f"{field} 中 {record.id} 的 run_id RUN-X-9 不是本次执行 {run.id}"):
+        check_patch(patch(stale), outputs=[field], **common)
 
 
 def test_every_registered_agent_has_field_table() -> None:
@@ -521,6 +658,50 @@ def test_current_run_of_other_procedure_rejected() -> None:
         )
 
     assert info.value.reasons == [f"本次执行 {RUN.id} 的 procedure_id 为 REV-03, 应为 REV-08"]
+
+
+# ── 人工程序 owner 整理结果的片段 (run_id 为 None, 需求 R93) ──
+
+COLLECTED = exception("X-REV-03-1-MAN-1", "REV-03", RUN.id)  # owner A6 整理出的例外, 挂在派发的那次执行下
+
+
+@pytest.mark.parametrize(
+    ("patch", "existing", "reasons"),
+    [
+        ({"exceptions": [COLLECTED]}, [], []),
+        (
+            {"exceptions": [COLLECTED], "procedure_runs": [finished(RUN)]},
+            [],
+            ["整理结果的片段不能带派发片段的字段 procedure_runs"],
+        ),
+        ({"review_tasks": [task()]}, [], ["整理结果的片段不能带派发片段的字段 review_tasks"]),
+        (
+            {"exceptions": [COLLECTED.model_copy(update={"run_id": "RUN-REV-03-9"})]},
+            [],
+            [f"AuditException {COLLECTED.id} 的 run_id RUN-REV-03-9 不在执行记录中"],
+        ),
+        (
+            {"exceptions": [COLLECTED]},
+            [COLLECTED.model_copy(update={"version": 2})],
+            [f"exceptions 中 {COLLECTED.id} v1 低于状态中已有的 v2"],
+        ),
+    ],
+    ids=["passes", "with_runs", "with_tasks", "unknown_run", "lower_version"],
+)
+def test_collected_patch_checked_without_a_run(
+    patch: StatePatch, existing: list[AuditException], reasons: list[str]
+) -> None:
+    """run_id 为 None (owner 整理结果的片段): 不能带派发片段的字段 (执行记录, 任务; 后者即使模板 outputs 声明了也不行),
+    不查终态, ID (版本不低于状态中的) 与外键 (run_id 在执行记录中) 照查. 状态里已有派发的那次执行."""
+    state = make_state(procedure_runs=[finished(RUN)], exceptions=existing)
+    try:
+        check_patch(
+            patch, writer=AgentId.A6, procedure_id="REV-03", run_id=None, state=state, outputs=declared("REV-03")
+        )
+    except MergeRejected as e:
+        assert e.reasons == reasons
+    else:
+        assert reasons == []
 
 
 # ── 原因汇总与异常文本 ──

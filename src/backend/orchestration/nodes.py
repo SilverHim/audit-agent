@@ -17,11 +17,10 @@ from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.checkup import DataCheckup, resources
 from backend.agents.client_intel import company_check
 from backend.agents.registry import build_agents
+from backend.contracts.errors import VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
-    AcceptanceScorecard,
     AgentId,
-    AnalyticsResult,
     AuditException,
     AuditObjective,
     ClientProfile,
@@ -49,6 +48,8 @@ from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState, StagedResult, StatePatch
 from backend.orchestration.inputs import check_inputs, declared, input_versions
 from backend.orchestration.merge import (
+    DISPATCH_FIELDS,
+    EXCEPTION_REFERRERS,
     FIELD_REPLAY,
     LATER_RUNS,
     TARGET_FIELDS,
@@ -56,9 +57,11 @@ from backend.orchestration.merge import (
     Replay,
     check_ids,
     check_outputs,
+    check_own_run,
     check_patch,
     check_refs,
     field_type,
+    objects,
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
@@ -169,9 +172,6 @@ def done_status(template: ProcedureTemplate) -> ProcedureStatus:
     return ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
 
 
-DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发) 可写的字段, 另有本次执行记录
-
-
 def writer_of(template: ProcedureTemplate, agent: ProcedureAgent[Any]) -> AgentId:
     """执行片段的写入者: 人工程序 (需求 R92, procedure_library.manual_program) 的执行即派发, 写入者为 A10; 其余为执行
     它的 Agent."""
@@ -188,6 +188,18 @@ def check_dispatch(
     other = [t.id for t in patch.get("review_tasks", []) if t.kind is not TaskKind.manual]
     if other:
         raise MergeRejected([f"派发片段只能建 manual 任务, {', '.join(other)} 不是"])
+
+
+def check_collected(
+    patch: StatePatch, *, writer: AgentId, procedure_id: str, run_id: str, state: EngagementState, outputs: list[str]
+) -> None:
+    """人工程序 owner 整理结果的片段 (需求 R93) 的合并校验, 不过抛 MergeRejected: 同 check_patch 的 run_id 为 None
+    (不能带派发片段的字段, 不查终态, ID 与外键照查), 另按派发的那次执行 run_id 查只能由它写的对象 (check_own_run,
+    如关系图: 整理出的对象写在派发的那次执行下)."""
+    check_patch(patch, writer=writer, procedure_id=procedure_id, run_id=None, state=state, outputs=outputs)
+    reasons = check_own_run(patch, run_id)
+    if reasons:
+        raise MergeRejected(reasons)
 
 
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
@@ -230,20 +242,20 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
 
     节点写 Store 之后, 写检查点之前中断, 恢复时会重跑; 本次执行已在 Store 中且为终态时, 用它代替调 Agent.
     run: Store 中该执行的终态记录; template: 该程序的模板, 只取其 outputs 声明的字段, 各按 merge.FIELD_REPLAY 取回:
-    - by_run (例外, 判断, 任务): 该 run_id 下各对象的最新版本;
+    - by_run (例外, 判断, 任务, 治理层沟通): 该 run_id 下各对象的最新版本;
     - latest_all (函证, 审计目标, 风险清单, 报告, 错报): 全部对象的最新版本;
     - documents: FinancialDataStore.documents 中本程序声明类型 (template.document_types) 的文件, 与第一次执行交回的
       同类 (上传的其他类文件与导入账表的原件不取). 只到类型粒度: CSH-04 存档按哈希取回审计师先上传的别类文件时,
       重放不带回它; 上传后分类为 confirmation 的副本不在 CSH-04, DOC-06 的在线片段里, 重放会带回;
-    - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图): 固定 ID 的最新版本; 模型带 run_id (关系图) 时须
-      属于本程序, 否则节点错误;
-    - by_procedure (新字段用): 各对象最新版本中 run_id 属于本程序的.
+    - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图, 声明书, 独立性声明): 固定 ID 的最新版本; 模型带 run_id
+      (关系图, 声明书, 独立性声明) 时须属于本程序, 否则节点错误;
+    - by_procedure (合规检查): 各对象最新版本中 run_id 属于本程序的.
     本次执行的复核任务 (含 A1 代写的 failed 任务) 总按 run_id 取回.
-    再补齐引用, 使片段自成一体: 片段中对象 (判断, 评分卡, 分析结果) 的 exception_ids 与任务的例外目标所指的例外,
-    取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id 仍是 REV-08 那次); 以片段中对象为目标的
-    复核任务也取最新版本 (取回的例外是决定改出的新版本时, 以其旧版本为目标的任务在同一事务里已置 decided, 要一并取回,
-    否则状态中的旧任务看上去过期); 片段中对象所属的其他执行记录也取回 (如回退检查点后重放第 1 次, 最新评分卡来自
-    第 2 次, 其例外属于第 2 次执行).
+    再补齐引用, 使片段自成一体: 片段中对象 (merge.EXCEPTION_REFERRERS: 判断, 评分卡, 分析结果, 合规检查) 的
+    exception_ids 与任务的例外目标所指的例外, 取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id
+    仍是 REV-08 那次); 以片段中对象为目标的复核任务也取最新版本 (取回的例外是决定改出的新版本时, 以其旧版本为目标的
+    任务在同一事务里已置 decided, 要一并取回, 否则状态中的旧任务看上去过期); 片段中对象所属的其他执行记录也取回
+    (如回退检查点后重放第 1 次, 最新评分卡来自第 2 次, 其例外属于第 2 次执行).
     执行失败时 Agent 的片段当初已丢弃, 只取执行记录与任务. execute 与 fieldwork 共用.
     """
     store = deps.output_store
@@ -290,8 +302,10 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
 
     # 项目里只有一份 (singleton) 或按程序取 (by_procedure) 的产出取的是最新版本, 回退到较早的检查点重放时可能来自
     # 本程序之后的执行 (如 FIN-01 驳回后 FIN-04 的第 2 次); 把之后的执行一并取回, 下一次执行才会接着取号,
-    # 不再撞上已有的执行而重放出同一版. 写这类产出的程序 (ACC-04, PLN-07, PLN-01, FIN-04) 不建单对象 failed 任务,
-    # 成功的执行不会在节点内等待, 之后的执行只可能来自之后的节点执行, 正常重放时没有.
+    # 不再撞上已有的执行而重放出同一版. 前提: 模板 outputs 含这类字段 (取回方式在 LATER_RUNS 中) 的程序, 成功的执行
+    # 不建单对象 failed 任务; 节点内 rerun 只由这种任务触发, 所以之后的执行只可能来自之后的节点执行, 正常重放时没有
+    # (成功后建别的任务并在节点内等人不影响). 否则 "第 1 次成功并留 failed 任务 → 节点内 rerun 出第 2 次 → 第 2 次
+    # 等人" 后恢复, 从头重放第 1 次会取回仍在等人的第 2 次, 报下面的错.
     # 之后的执行还有待决任务 (那次节点正在等人) 时, 重放恢复不了那次等待, 报错要求从最新的检查点恢复
     if any(field in patch and FIELD_REPLAY[field] in LATER_RUNS for field in fields):
         later = await store.latest(eid, ProcedureRun, procedure_id=run.procedure_id)
@@ -321,7 +335,7 @@ async def add_referenced_exceptions(store: AuditOutputStore, eid: str, patch: St
     referenced: list[str] = []
     for value in patch.values():
         for item in value if isinstance(value, list) else [value]:
-            if isinstance(item, Judgment | AcceptanceScorecard | AnalyticsResult):
+            if isinstance(item, EXCEPTION_REFERRERS):
                 referenced += item.exception_ids
             elif isinstance(item, ReviewTask) and item.target_type is TargetType.AuditException:
                 referenced.append(item.target_id)
@@ -761,6 +775,12 @@ class GraphNodes:
                 if task.procedure_id != procedure_id:
                     raise ValueError(f"{record_id} 处理的任务 {task.id} 不属于正在等待的 {procedure_id}")
                 merge_patch(result, await self.read_review(eid, procedure_id))
+                if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
+                    # 只并入派发的执行记录与任务 (整理出的对象可引用它们), 不并入重放按 outputs 取回的对象: 写 Store
+                    # 后被杀再重放时, 那里已有 collect 自己上次写的, owner 看到它们会算出不同的结果
+                    dispatched: StatePatch = {f: patch[f] for f in ("procedure_runs", *DISPATCH_FIELDS) if f in patch}
+                    seen = apply_patch(current, dispatched)
+                    merge_patch(result, await self.collect(engagement, seen, procedure_id, record, task))
             else:
                 # 不再等: 这一轮的程序版本当时就不等人 (新执行, 或重放取回的 completed, planned) 时用它; 当时在等
                 # (读回过决定, 或重放时决定都已读回) 时取 Store 最新版本, 即最后一个决定由 DecisionSubmit 重算出的那版.
@@ -777,6 +797,37 @@ class GraphNodes:
                         )
                     pack = [latest if p.id == procedure_id else p for p in pack]
                 return finish(pack)
+
+    async def collect(
+        self, engagement: Engagement, state: EngagementState, procedure_id: str, record: ReviewRecord, task: ReviewTask
+    ) -> StatePatch:
+        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段经
+        check_collected 校验, 以 owner 为写入者在一个事务内写入 Store, 返回写入后的片段.
+
+        state: 本次执行前的状态只并入派发片段的执行记录与任务 (在线与重放相同); ctx.run 为派发的那次执行 (任务的
+        run_id, 失败再 rerun 后为最新一次). collect 是纯函数, 节点重放时重算得同一对象, 再写 Store 不新增. 片段
+        校验不过抛 MergeRejected, 写入时 Store 已有内容不同的同版本 (图停着时 Store 里被改出了这一版, 如等待时审计师
+        改了回函抽取结果; 整理结果会被静默丢掉) 抛 VersionConflict 整体回滚: 都是节点错误, 记入 run_error, 什么都不写.
+        """
+        template = self.deps.library.load(procedure_id)
+        procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
+        run = next(r for r in state["procedure_runs"] if r.id == task.run_id)
+        ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
+        patch = self.deps.manual_owners[procedure_id].collect(ctx, record)
+        owner, outputs = template.owner, template.outputs
+        check_collected(patch, writer=owner, procedure_id=procedure_id, run_id=run.id, state=state, outputs=outputs)
+        async with self.deps.output_store.transaction(engagement.id):
+            written = await save_outputs(self.deps.output_store, engagement.id, patch, actor=owner)
+            clashes = [
+                f"{mine.id} v{mine.version}"
+                for field, value in patch.items()
+                for mine, stored in zip(objects(value), objects(written[field]), strict=True)
+                if mine != stored
+            ]
+            if clashes:
+                detail = ", ".join(clashes)
+                raise VersionConflict(f"{procedure_id} 整理出的对象与 Store 中已有的同版本内容不同: {detail}")
+        return written
 
     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
         """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的

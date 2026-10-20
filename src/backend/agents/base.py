@@ -2,13 +2,23 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RuleOutcome, RunStatus
+from backend.contracts.models import (
+    AgentId,
+    Engagement,
+    ManualResult,
+    Procedure,
+    ProcedureRun,
+    ReviewRecord,
+    ReviewTask,
+    RuleOutcome,
+    RunStatus,
+)
 from backend.contracts.ports import (
     AbnLookup,
     AuditOutputStore,
@@ -57,6 +67,10 @@ class AgentDeps:
     review_llm: LLMClient | None = None
     # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES
     features: frozenset[str] = BASELINE
+    # 启用的人工程序 → 模板 owner 的 ManualHandler (需求 R93): 组装的最后一步由 registry.with_manual_owners 按 library
+    # 找好, 只找一次, owner 以组装好的这个 deps 构造; A10 派发, 节点整理结果与 DecisionSubmit 核对都取这同一套实例.
+    # 换了 library 或端口 (dataclasses.replace) 须重新组装
+    manual_owners: Mapping[str, "ManualHandler"] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,6 +86,31 @@ class RunContext:
     template: ProcedureTemplate  # 该程序的模板, 来自程序 YAML
     run: ProcedureRun  # 本次执行记录, 状态为 running
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
+
+
+@runtime_checkable
+class ManualHandler(Protocol):
+    """人工程序 (engine manual 且不是闸门, 需求 R93) 的模板 owner 为它实现的三步, 由 Agent 声明在 manual_procedures
+    (agents/registry.manual_owners 按模板 owner 找). 派发与写入由编排完成, 三步都不写存储.
+
+    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material). ctx 同其他程序的执行
+      (run 为本次执行, state 为执行前的状态).
+    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后, 收到的结果
+      证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文). ctx.run 为派发的那次执行
+      (任务目标), ctx.state 为检查点里的状态: 节点停在等待, 派发的执行记录与任务只在 Store, 不在其中.
+    - collect: 节点读回 manual_result 后调, 把结果整理成领域对象, 返回的片段只能含 owner 写入范围 (merge.AGENT_FIELDS)
+      内, 模板 outputs 声明的字段, 不能含执行记录与任务 (procedure_runs, review_tasks, 派发片段的字段), 只能由本次
+      执行写的对象 (如关系图) run_id 须为派发的那次执行 (nodes.check_collected), 以 owner 为写入者写入; Store 已有
+      内容不同的同版本时节点报错, 不覆盖. ctx.run 为派发的那次执行 (任务的 run_id), ctx.state 为本次执行前的状态
+      只并入派发片段的执行记录与任务, 不含按 outputs 取回的对象 (重放时也一样, 见 nodes.GraphNodes.collect). 须为
+      纯函数: 不取当前时间, 不调大模型, 只看 ctx 与决定, 重放时重算得同一结果.
+    """
+
+    def prepare(self, ctx: RunContext) -> dict[str, Any]: ...
+
+    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]: ...
+
+    def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch: ...
 
 
 async def gather_all[T](aws: Iterable[Awaitable[T]]) -> list[T]:
@@ -103,6 +142,8 @@ class ProcedureAgent[F](ABC):
 
     agent_id: ClassVar[AgentId]  # 智能体编号, 子类给值
     procedures: ClassVar[frozenset[str]]  # 负责的程序编号, 子类给值
+    # 作为模板 owner 的人工程序 (需求 R93): 本 Agent 为它们实现 ManualHandler (prepare, check, collect), 由 A10 派发
+    manual_procedures: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, deps: AgentDeps) -> None:
         self.deps = deps  # 外部依赖工具箱

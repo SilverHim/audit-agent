@@ -44,7 +44,9 @@ function ReviewQueue() {
 
   const ranked = useMemo(() => {
     const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
-    return rankTasks(tasks.data ?? [], byId, overview)
+    // 人工程序的任务 (manual) 在人工队列里办 (后端需求 R94), 不进复核队列
+    const reviewable = (tasks.data ?? []).filter((view) => view.task.kind !== 'manual')
+    return rankTasks(reviewable, byId, overview)
   }, [tasks.data, exceptions.data, overview])
   const isPending = (item: RankedTask) => item.view.task.status === 'pending'
   const shown = ranked.filter((item) => filter === 'all' || (filter === 'pending' ? isPending(item) : !isPending(item)))

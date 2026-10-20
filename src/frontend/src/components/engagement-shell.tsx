@@ -10,6 +10,7 @@ import {
   Inbox,
   ListChecks,
   MessageCircle,
+  PenLine,
   ScrollText,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -17,6 +18,7 @@ import type { EngagementOverview, Phase } from '@/client/types.gen'
 import { BrandMark, CurrentUser, LanguageToggle } from '@/components/chrome'
 import { useDataSummary } from '@/lib/data-api'
 import { useI18n } from '@/lib/i18n'
+import { useManualTasks } from '@/lib/manual-api'
 import { formatAudShort } from '@/lib/money'
 
 const STAGES = ['P0_Acceptance', 'P1_Planning', 'P2_Executing', 'P3_Completion', 'P4_Reporting'] as const
@@ -125,6 +127,7 @@ type NavItem = {
     | '/engagements/$eid'
     | '/engagements/$eid/decisions'
     | '/engagements/$eid/reviews'
+    | '/engagements/$eid/manual'
     | '/engagements/$eid/procedures'
     | '/engagements/$eid/client'
     | '/engagements/$eid/data'
@@ -178,6 +181,8 @@ export function EngagementShell({
   const dataSummary = useDataSummary(eid).data
   const icon = 'size-[17px] shrink-0'
   const pendingDecisions = (overview?.current_gate ? 1 : 0) + (overview?.pending_tasks ?? 0)
+  // 人工程序的任务在人工队列里办 (后端需求 R94), 复核队列的数字不算它们
+  const manualPending = (useManualTasks(eid).data ?? []).filter((view) => view.task.status === 'pending').length
   const items: NavItem[] = [
     {
       to: '/engagements/$eid',
@@ -196,7 +201,14 @@ export function EngagementShell({
       to: '/engagements/$eid/reviews',
       label: t.nav.reviews,
       icon: <Inbox className={icon} aria-hidden="true" />,
-      count: overview?.pending_tasks ?? 0,
+      count: Math.max(0, (overview?.pending_tasks ?? 0) - manualPending),
+      urgent: true,
+    },
+    {
+      to: '/engagements/$eid/manual',
+      label: t.nav.manual,
+      icon: <PenLine className={icon} aria-hidden="true" />,
+      count: manualPending,
       urgent: true,
     },
     {

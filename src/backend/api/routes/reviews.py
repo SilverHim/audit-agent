@@ -108,10 +108,11 @@ async def list_review_tasks(
     deps: Annotated[AgentDeps, Depends(get_deps)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
     status: TaskStatus | None = None,
+    kind: TaskKind | None = None,
 ) -> list[ReviewTaskView]:
-    """status 省略时返回全部, 按创建时间升序. allowed_decisions 取 ReviewQueue.allowed;
-    amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与队列共用同一口径.
-    draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有."""
+    """status, kind 省略时不按它过滤 (都省略为全部), 按创建时间升序; 人工队列另见 GET /manual-tasks (需求 R94).
+    allowed_decisions 取 ReviewQueue.allowed; amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与
+    队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有."""
     filters: dict[str, TaskStatus] = {}
     if status is not None:
         filters["status"] = status
@@ -121,6 +122,8 @@ async def list_review_tasks(
         overview = await query.overview(engagement.id)
         views: list[ReviewTaskView] = []
         for task in sorted(tasks, key=lambda item: item.created_at):
+            if kind is not None and task.kind is not kind:
+                continue
             parts = await task_parts(deps, engagement.id, task, exceptions, overview)
             views.append(
                 ReviewTaskView(
