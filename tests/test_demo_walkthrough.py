@@ -53,7 +53,7 @@ from backend.services.xero_link import XeroLink
 from tests.external import supplements_dir
 from tests.fakes import (
     NUMBAT_AUDITOR,
-    PLAN_CONFIRMATION,
+    PLAN_REJECT_REASON,
     FakeRuleEngine,
     FakeTrail,
     FakeXeroConnectionStore,
@@ -61,23 +61,25 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.test_decisions import PLAN_REJECT_REASON, XERO_PLAN_ROWS
 from tests.test_demo_default import CreatingEngagementStore, demo_runner
 from tests.test_e2e_mock import real_storage
 from tests.test_e2e_xero17 import XERO_PERIOD, Xero17, assert_materiality, assert_report, assert_results
 from tests.xero_fakes import (
     DEMO_FEATURES,
+    FIXTURE_READS,
+    PLAN_DECISIONS,
     SNAPSHOT_NAME,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,
     XERO17_MATERIALITY,
     XERO_DATASET,
+    XERO_PLAN_ROWS,
     XERO_RULES,
     new_xero_deps,
     xero17_gates,
     xero_journal_reviews,
 )
-from tests.xero_flow import READY_REASON, demo_source, drain, offline_runner
+from tests.xero_flow import READY_REASON, demo_source, drain, entered_p2_by, offline_runner
 from tests.xero_harness import LayeredMockLLMClient
 
 pytestmark = pytest.mark.external
@@ -149,14 +151,14 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
             overview = await settle()
         return overview
 
-    async def decide(verdict: str, **fields: Any) -> dict[str, Any]:
+    async def decide(decision: str, **fields: Any) -> dict[str, Any]:
         """对当前闸门的材料 (GET /gate 给的对象与版本) 提交决定, 返回 GET /gate 的视图. 不在闸门 (如某条程序失败,
         流程停下等人) 时报出 GET /gate 的响应."""
         got = await client.get(f"{base}/gate")
         assert got.status_code == 200, got.text
         view = got.json()
         body = {k: view[k] for k in ("gate", "target_id", "target_version")}
-        posted = await client.post(f"{base}/gate-decisions", json={**body, "decision": verdict, **fields})
+        posted = await client.post(f"{base}/gate-decisions", json={**body, "decision": decision, **fields})
         assert posted.status_code == 202, posted.text
         return cast(dict[str, Any], view)
 
@@ -167,14 +169,17 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
     assert ready.status_code == 202, ready.text
     await stop()
     pln = await decide("approve", materiality=XERO17_MATERIALITY.model_dump())
+
+    async def plan_page() -> dict[str, Any]:
+        got = await client.get(f"{base}/plan")
+        assert got.status_code == 200, got.text
+        return cast(dict[str, Any], got.json())
+
     plan_gates, plan_pages = [], []
-    for verdict, fields in (
-        ("reject", {"reason": PLAN_REJECT_REASON}),
-        ("approve", {"plan_confirmation": PLAN_CONFIRMATION.model_dump()}),
-    ):
+    for plan_decision in PLAN_DECISIONS:  # 先退回, 再批准
         await stop()
-        plan_pages.append((await client.get(f"{base}/plan")).json())
-        plan_gates.append(await decide(verdict, **fields))
+        plan_pages.append(await plan_page())
+        plan_gates.append(await decide(**plan_decision))
     overview = await stop()
     journal_reviews = {r.task_id: r for r in xero_journal_reviews(owner)}
     for _ in range(REVIEW_ROUNDS):
@@ -211,7 +216,7 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
     [reject_id] = [d.id for d in gates if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject]
     x = Xero17(runner, eid, owner, llm, False, GateView.model_validate(pln), [], [])
     summary = (await client.get(f"{base}/data/summary")).json()
-    final_plan = (await client.get(f"{base}/plan")).json()
+    final_plan = await plan_page()
     return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan)
 
 
@@ -337,9 +342,8 @@ async def test_demo_client_first_even_when_not_the_default(monkeypatch: pytest.M
 @shared_loop
 async def test_each_stop_suggests_its_stage(walked: Walk) -> None:
     """停的位置依次为 ACC-01, 等数据就绪, PLN-01/03, PLN-15 两次 (退回再批准, R317), 等复核, FIN-01, RPT-01 两次, 归档;
-    前两处建议的阶段依次为
-    acceptance, fieldwork, 其余不建议 (不再要报表草稿, Issue #46). 两个阶段都已导入; 补交请求只剩审批日志 open
-    (Xero 不给录入人)."""
+    前两处建议的阶段依次为 acceptance, fieldwork, 其余不建议 (不再要报表草稿, Issue #46). 两个阶段都已导入; 补交请求
+    只剩审批日志 open (Xero 不给录入人)."""
     assert walked.stops == STOPS
     demo = walked.summary["demo"]
     assert (demo["stages_done"], demo["suggested"]) == (["acceptance", "fieldwork"], None)
@@ -421,10 +425,13 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
         GateVerdict.reject,
         GateVerdict.approve,
     ]
+    reject, approve = sorted(decisions, key=lambda d: d.decided_at)
     trail = entries(walked)
-    assert sorted(e.idempotency_key for e in trail if e.kind is TrailKind.decision and e.procedure_id == "PLN-15") == (
-        sorted(d.id for d in decisions)
-    )
+    decided = [e for e in trail if e.kind is TrailKind.decision and e.procedure_id == "PLN-15"]
+    assert [(e.summary, e.payload["reason"], e.idempotency_key) for e in decided] == [
+        ("PLN-15 reject", PLAN_REJECT_REASON, reject.id),
+        ("PLN-15 approve", None, approve.id),
+    ]
     calls = [e for e in trail if e.kind is TrailKind.llm_call and e.procedure_id == "PLN-15"]
     assert [(e.actor, e.run_id, e.payload["attempt"], e.payload["level_failed"]) for e in calls] == [
         (AgentId.A4, "RUN-PLN-15-1", 1, None),
@@ -433,10 +440,7 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
     moves = [e for e in trail if e.kind is TrailKind.transition]
     pln15 = [(e.payload["from"], e.payload["to"]) for e in moves if e.payload["id"] == "PLN-15"]
     assert pln15 == [("planned", "completed")]
-    entered = [
-        e.procedure_id for e in moves if (e.payload["object"], e.payload["to"]) == ("engagement", "P2_Executing")
-    ]
-    assert entered == ["PLN-15"]
+    assert entered_p2_by(trail) == ["PLN-15"]
     plans = {(p.id, p.version): p for p in await deps.output_store.latest(eid, AuditPlan)}
     assert {k: p.status for k, p in plans.items()} == {
         ("PLAN-1", 2): PlanStatus.superseded,
@@ -452,24 +456,13 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
 
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
-    """大模型 47 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; GEN-02 七笔凭证各一次, 需求 R146; PLN-15
-    两个修订 r1, r2 各一次, 需求 R317;
-    没有回落到 default.json 或找不到), 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本
-    (应用里按项目数据集选目录)."""
+    """大模型 FIXED_CALLS 次都读运行副本里各自的 fixture (各程序的次数见 FIXTURE_READS: RPT-03 两稿 r1, r2 与 PLN-15
+    两个修订 r1, r2 也在里面), 没有回落到 default.json 或找不到, 各文件一次, attempt 1 无失败级别; 组装根的 mock
+    客户端对这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
     llm = walked.x.client
     reads = [(r.procedure_id, r.fixture_key, r.root) for r in llm.reads]
     assert [r for r in llm.reads if r.file != f"{r.procedure_id}/{r.fixture_key}.json"] == []
-    assert Counter(pid for pid, *_ in reads) == {
-        "DOC-CLASSIFY": 21,
-        "DOC-04": 3,
-        "DOC-06": 2,
-        "REV-03": 3,
-        "REV-02": 6,
-        "CSH-02": 1,
-        "GEN-02": 7,
-        "RPT-03": 2,
-        "PLN-15": 2,
-    }
+    assert Counter(pid for pid, *_ in reads) == FIXTURE_READS
     assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["r1", "r2"]
     assert sorted(key for pid, key, _ in reads if pid == "PLN-15") == ["r1", "r2"]
     assert len(set(reads)) == len(reads)

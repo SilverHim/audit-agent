@@ -2862,6 +2862,7 @@ def independence_declaration(run_id: str = "RUN-RPT-08-1", version: int = 1) -> 
 
 
 PLAN_REJECT_ID = "D-P15R"  # 合成计划第 2 修订起回应的 PLN-15 驳回决定
+PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # 演示的驳回理由 (需求 R206 验收 3, R317)
 PLAN_EQR_BASIS = (
     "Not a listed entity; no engagement quality review is required by law or regulation, and the firm has not "
     "determined one is needed (ASQM 1 para 34(f))"
@@ -2925,7 +2926,7 @@ def audit_plan(
         eqr_basis=PLAN_EQR_BASIS if confirmed else None,
         auditor_expert_not_required=True if confirmed else None,
         addresses_decision_id=PLAN_REJECT_ID if revision > 1 else None,
-        revision_reason="Add the planned timing of bank confirmations" if revision > 1 else None,
+        revision_reason=PLAN_REJECT_REASON if revision > 1 else None,
         approved_by=NUMBAT_AUDITOR.id if confirmed else None,
         approved_at=NOW if confirmed else None,
     )

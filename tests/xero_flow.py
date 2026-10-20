@@ -6,6 +6,7 @@ start → 停在 ACC-01 闸门 → 演示导入 acceptance → ACC-01 approve �
 """
 
 import asyncio
+from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
 
@@ -13,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.agents.base import AgentDeps
 from backend.contracts.data import DemoImportResult, DemoStage
-from backend.contracts.models import GateVerdict, TrailKind
+from backend.contracts.models import GateVerdict, TrailEntry, TrailKind
 from backend.contracts.ports import DatasetLoader
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import GraphDecisionSubmit
@@ -91,3 +92,13 @@ async def to_ready(service: DataService, eid: str, actor: str) -> None:
     await approve_acceptance(service.runner, eid, actor)
     await import_stage(service, eid, "fieldwork", actor)
     await confirm_ready(service, eid, actor)
+
+
+def entered_p2_by(entries: Iterable[TrailEntry]) -> list[str | None]:
+    """项目进入执行阶段 (到 P2_Executing) 的 transition 留痕各记在哪条程序下: 打开 planning 时为 PLN-15 (计划批准推进,
+    需求 R317), 关闭时为装配处 (procedure_id 为空). 走通用例与真实模型变体的汇总共用."""
+    return [
+        e.procedure_id
+        for e in entries
+        if e.kind is TrailKind.transition and (e.payload["object"], e.payload["to"]) == ("engagement", "P2_Executing")
+    ]

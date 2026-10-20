@@ -15,8 +15,9 @@
 软性 (只告警): 判断的建议动作与固定输出 (演示运行副本) 不同的逐条列出. 汇总写 var/eval/demo-live-<UTC>.json.
 
 配置经 tests.external.live_llm_settings 取 (环境变量, LLM_ENV_FILE 或仓库 .env), 不写进任何文件; 没配时跳过. 不联网的
-自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有一对象先失败再重跑, 与带规则例外的对象失败两种),
-连库一遍 (同真实模型用例的路径, 只把大模型换成组装根的 mock); 决定的请求体另有合成数据的单元用例.
+自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有先失败再重跑的几种: 一个判断对象, 计划的两个
+修订, 报告的两稿; 与带规则例外的对象失败一种), 连库一遍 (同真实模型用例的路径, 只把大模型换成组装根的 mock);
+决定的请求体另有合成数据的单元用例.
 """
 
 import json
@@ -45,11 +46,11 @@ from backend.contracts.models import (
 )
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
-from backend.services.judgment_engine import REPORT_HEADINGS, PointerResolver
+from backend.services.judgment_engine import MAX_ATTEMPTS, REPORT_HEADINGS, PointerResolver
 from tests.external import LLM_KEYS, live_llm_settings
-from tests.fakes import NUMBAT_AUDITOR, PLAN_CONFIRMATION, FakeRuleEngine, FakeTrail, api_client, wait_idle
+from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, api_client, wait_idle
 from tests.fixture_sets import XERO
-from tests.test_decisions import PLAN_REJECT_REASON, Started
+from tests.test_decisions import Started
 from tests.test_demo_default import CreatingEngagementStore
 from tests.test_demo_walkthrough import API, xero_link
 from tests.test_e2e_mock import evidence_pointers, real_storage
@@ -57,7 +58,10 @@ from tests.test_e2e_xero17 import XERO_PERIOD
 from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, summary, write_summary
 from tests.xero_fakes import (
     DEMO_FEATURES,
+    FIXED_CALLS,
+    FIXTURE_READS,
     ORC1026,
+    PLAN_DECISIONS,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,
     XERO17_INVOICES,
@@ -67,14 +71,16 @@ from tests.xero_fakes import (
     new_xero_deps,
     xero_journal_reviews,
 )
-from tests.xero_flow import READY_REASON, demo_source, drain, offline_runner
+from tests.xero_flow import READY_REASON, demo_source, drain, entered_p2_by, offline_runner
 from tests.xero_harness import FlakyLLM, LayeredMockLLMClient
 
-# 用量上限: 固定输出走一遍 47 次 (含总体审计计划两个修订, 需求 R317; 另有 A7 两轮复核, 随模型输出触发), 留出校验
-# 重试与重跑的余量
-MAX_CALLS = 152
-MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
 JUDGING = ("REV-03", "REV-02", "CSH-02", "GEN-02")  # 演示配置下出判断的大模型程序, 各对象的固定输出在运行副本里
+JUDGED = sum(FIXTURE_READS[pid] for pid in JUDGING)  # 判断对象数 (17)
+# 真实模型的用量余量: 每次调用都可能再回传重试 MAX_ATTEMPTS - 1 次 (需求 R34, R348), 另有 A7 两轮复核 (随模型输出
+# 触发, 每个判断对象至多一次). 重跑另算: 驱动每个对象至多重跑一次, 一般落在重试的余量里
+LIVE_MARGIN = (MAX_ATTEMPTS - 1) * FIXED_CALLS + 2 * JUDGED
+MAX_CALLS = FIXED_CALLS + LIVE_MARGIN  # 用量上限
+MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
 GATES = ["ACC-01", "PLN-01/03", "PLN-15", "PLN-15", "FIN-01", "RPT-01", "RPT-01"]  # 依次决定的闸门
 RERUN_REASON = "The model output did not pass validation; rerun."
 CONFIRM_CONCLUSION = "The original conclusion stands: no misstatement is identified for this item."
@@ -136,12 +142,17 @@ def subject_of(view: dict[str, Any]) -> str:
     return cast(str, detail.get("entry_no") or (target.get("source_ids") or [""])[0])
 
 
+# 按闸门出修订的程序 → 它的闸门: 计划与报告退回一次就出下一修订 (r1, r2). 整条失败的任务没有对象, 按修订计重跑
+# 次数 (修订号为该闸门已决定的次数加一), 不然两个修订各失败一次会被误判为 "重跑后又失败" (需求 R317)
+REVISED_BY = {"PLN-15": "PLN-15", "RPT-03": "RPT-01"}
+
+
 def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk) -> dict[str, Any]:
     """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明)."""
     task = view["task"]
     kind, pid, subject = task["kind"], task["procedure_id"], subject_of(view)
-    if kind == "failed" and pid == "PLN-15":  # 整条失败没有对象, 按修订计: 每个修订各至多重跑一次 (需求 R317)
-        subject = f"r{walk.gates.count('PLN-15') + 1}"
+    if kind == "failed" and not subject and pid in REVISED_BY:
+        subject = f"r{walk.gates.count(REVISED_BY[pid]) + 1}"
     body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
     if kind != "normal":
         walk.troubled[task["id"]] = (pid, subject, kind)
@@ -253,10 +264,8 @@ async def drive(
             walk.fin = fin(view["material"])
             reason = f"Opinion follows the schedule of uncorrected misstatements (candidate {walk.candidate})."
             body |= {"decision": "approve", "disposition": walk.fin, "reason": reason}
-        elif gate == "PLN-15" and "PLN-15" not in walk.gates:  # 计划先退回一次, 同 R317 的离线走法
-            body |= {"decision": "reject", "reason": PLAN_REJECT_REASON}
-        elif gate == "PLN-15":
-            body |= {"decision": "approve", "plan_confirmation": PLAN_CONFIRMATION.model_dump()}
+        elif gate == "PLN-15":  # 计划先退回一次再批准, 同 R317 的离线走法
+            body |= PLAN_DECISIONS[min(walk.gates.count("PLN-15"), 1)]
         elif gate == "RPT-01" and "RPT-01" not in walk.gates:  # 先退回一次, 同 R287
             reason = "The basis for opinion paragraph must name the financial reporting framework."
             body |= {"decision": "reject", "annotations": [XERO17_ANNOTATION.model_dump()], "reason": reason}
@@ -313,10 +322,7 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
     out["confirmations"] = len(await store.latest(eid, Confirmation))
     out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
     out["plans"] = sorted([p.id, p.status.value] for p in await store.latest(eid, AuditPlan))
-    moves = await deps.trail.list(eid, TrailKind.transition, limit=10_000)
-    out["entered_p2_by"] = [
-        e.procedure_id for e in moves if (e.payload["object"], e.payload["to"]) == ("engagement", "P2_Executing")
-    ]
+    out["entered_p2_by"] = entered_p2_by(await deps.trail.list(eid, TrailKind.transition, limit=10_000))
     return out
 
 
@@ -419,8 +425,8 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
 @pytest.mark.external
 async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
     """连库自测: 真实模型用例的同一条路径 (real_walk), 大模型换成组装根的 mock (按项目数据集读演示运行副本); FIN-01 选
-    无保留意见 (固定输出的报告两稿按它写). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用 47 次 (同 R287 的离线
-    走法)."""
+    无保留意见 (固定输出的报告两稿按它写). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用 FIXED_CALLS 次 (同 R287
+    的离线走法)."""
     XERO.ready()
     budget = Budget(max_calls=MAX_CALLS)
     walk, data, calls = await real_walk(
@@ -432,8 +438,8 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
         LLM_MODE="mock",
     )
     assert_hard(data)
-    assert (data["differences"], data["reruns"], data["troubled_tasks"], data["usage"]["calls"]) == ([], {}, [], 47)
-    assert walk.gates == GATES and len(calls) == 47
+    assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
+    assert (data["usage"]["calls"], len(calls), walk.gates) == (FIXED_CALLS, FIXED_CALLS, GATES)
 
 
 async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> tuple[LiveWalk, dict[str, Any]]:
@@ -468,14 +474,16 @@ async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> t
 @pytest.mark.external
 async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     """不联网的自测 (offline_walk): 走到归档, 硬性检查都过, 没有软性差异 (固定输出与自己比), 没有重跑与非 normal 任务;
-    闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 47 次 (同 R287 的离线走法), 17 个判断对象,
-    决定同演示决定表."""
+    闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 FIXED_CALLS 次 (同 R287 的离线走法), 17 个
+    判断对象, 决定同演示决定表."""
     walk, data = await offline_walk(tmp_path, {})
     assert_hard(data)
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
-    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", 47)
+    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
     actions = {(r["procedure_id"], r["subject_id"]): r["proposed_action"] for r in data["judgments"]}
-    assert len(actions) == 17 and (actions["CSH-02", "BA-091"], actions["GEN-02", "XJ-499"]) == ("misstatement",) * 2
+    assert (
+        len(actions) == JUDGED and (actions["CSH-02", "BA-091"], actions["GEN-02", "XJ-499"]) == ("misstatement",) * 2
+    )
     assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}
     assert len(list(tmp_path.glob("demo-live-selftest-*.json"))) == 1
 
@@ -484,26 +492,28 @@ ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一�
 
 
 @pytest.mark.parametrize(
-    ("failing", "rerun", "troubled"),
+    "failing",
     [
-        (("REV-02", ORC1021), f"REV-02 {ORC1021}", ["REV-02", ORC1021, "failed"]),
-        (("PLN-15", "r2"), "PLN-15 r2", ["PLN-15", "r2", "failed"]),  # 第 2 修订整条失败 (需求 R317)
+        [("REV-02", ORC1021)],
+        [("PLN-15", "r1"), ("PLN-15", "r2")],  # 计划两个修订各整条失败一次 (需求 R317)
+        [("RPT-03", "r1"), ("RPT-03", "r2")],  # 报告两稿各整条失败一次
     ],
-    ids=["rev02", "pln15"],
+    ids=["rev02", "pln15", "rpt03"],
 )
 @pytest.mark.external
-async def test_live_driver_reruns_a_failed_object_once(
-    tmp_path: Path, failing: tuple[str, str], rerun: str, troubled: list[str]
-) -> None:
-    """自测重跑一路: 该对象 (ORC1021 的 REV-02 判断, 或 PLN-15 第 2 修订的计划叙述) 前 3 次调用输出不是 JSON, 成为
-    failed 任务; 驱动重跑一次, 第 2 次执行给出结果, 照常走到归档, 硬性检查都过; 汇总记重跑一次与这条 failed 任务,
-    调用多 3 次. ORC1021 的结论仍为固定输出的 accept."""
-    _, data = await offline_walk(tmp_path, {failing: 3})
+async def test_live_driver_reruns_a_failed_object_once(tmp_path: Path, failing: list[tuple[str, str]]) -> None:
+    """自测重跑一路: 各对象 (ORC1021 的 REV-02 判断, 计划或报告的每个修订) 前 MAX_ATTEMPTS 次调用输出不是 JSON, 成为
+    failed 任务; 驱动对每个各重跑一次, 第 2 次执行给出结果, 照常走到归档, 硬性检查都过; 汇总记各重跑一次与这几条
+    failed 任务, 每个多调 MAX_ATTEMPTS 次. 重跑出的判断与固定输出的建议动作相同."""
+    _, data = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
-    assert (data["reruns"], data["troubled_tasks"]) == ({rerun: 1}, [troubled])
-    assert (data["usage"]["calls"], data["decisions"]["rerun"]) == (50, 1)
-    [row] = [r for r in data["judgments"] if r["subject_id"] == ORC1021]
-    assert (row["proposed_action"], row["same"]) == ("accept", True)
+    assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in failing}
+    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, "failed"] for pid, subject in failing)
+    assert data["usage"]["calls"] == FIXED_CALLS + MAX_ATTEMPTS * len(failing)
+    assert data["decisions"]["rerun"] == len(failing)
+    rows = {(r["procedure_id"], r["subject_id"]): r for r in data["judgments"]}
+    for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (ORC1021 的固定输出为 accept)
+        assert rows[key]["same"], rows[key]
 
 
 @pytest.mark.external

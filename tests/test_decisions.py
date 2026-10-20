@@ -67,6 +67,7 @@ from tests.fakes import (
     NUMBAT_RISKS,
     PLAN_CONFIRMATION,
     PLAN_REJECT_ID,
+    PLAN_REJECT_REASON,
     PLANNING_FEATURES,
     TYPO_PROFILE,
     EngagementWrite,
@@ -88,7 +89,7 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.xero_fakes import XERO17_MATERIALITY, XERO_RULES, make_xero_deps, xero_financial_store
+from tests.xero_fakes import XERO17_MATERIALITY, XERO_PLAN_ROWS, XERO_RULES, make_xero_deps, xero_financial_store
 from tests.xero_flow import approve_acceptance, to_acceptance_gate
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
@@ -1466,7 +1467,6 @@ PLAN_APPROVE = GateDecision(
     decided_by="U-1",
     decided_at=NOW,
 )
-PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # 演示的驳回理由 (需求 R206 验收 3)
 # 需要项目质量复核, 也不确认不需要审计师的专家 (需求 R206 验收 2): 只作记录, 不拦截
 FIRST_YEAR_EQR = PlanConfirmation(
     eqr_required=True, eqr_basis="Firm policy for first-year audits", auditor_expert_not_required=False
@@ -1592,20 +1592,6 @@ OTHER_GATE_FIELDS = {
     "disposition": OpinionType.qualified,
     "annotations": [ANNOTATION],
 }
-
-
-# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
-XERO_PLAN_ROWS = [
-    ("OBJ-REV-OCC", "REV-03"),
-    ("OBJ-REV-OCC", "REV-08"),
-    ("OBJ-REV-CUT", "REV-02"),
-    ("OBJ-REV-CUT", "REV-03"),
-    ("OBJ-REV-CUT", "REV-08"),
-    ("OBJ-CASH-EXI", "CSH-02"),
-    ("OBJ-CASH-EXI", "CSH-04"),
-    ("OBJ-CASH-EXI", "CSH-05"),
-    (None, "DOC-06"),
-]
 
 
 async def plan_page(s: Started) -> PlanView:

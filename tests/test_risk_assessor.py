@@ -55,6 +55,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_RISKS,
     PLAN_REJECT_ID,
+    PLAN_REJECT_REASON,
     PLANNING_FEATURES,
     FakeRegistry,
     FakeRuleEngine,
@@ -367,10 +368,9 @@ PLAN_PARAMS = {  # 验收 1 列出的参数 (其余参数取建 Run 时的解析
     "REV-03": {"period_end": "2026-09-30"},
     "REV-08": {"window_days": 20, "period_end": "2026-09-30"},
 }
-REJECT_REASON = "Add the planned timing of bank confirmations"
 
 
-def plan_reject(target_id: str, reason: str = REJECT_REASON, decision_id: str = PLAN_REJECT_ID) -> GateDecision:
+def plan_reject(target_id: str, reason: str = PLAN_REJECT_REASON, decision_id: str = PLAN_REJECT_ID) -> GateDecision:
     """PLN-15 对 target_id 第 1 版的驳回."""
     return GateDecision(
         id=decision_id,
@@ -666,7 +666,7 @@ async def test_pln15_revision_answers_the_rejection() -> None:
         2,
         "RUN-PLN-15-2",
     )
-    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, REJECT_REASON)
+    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, PLAN_REJECT_REASON)
     assert (retired.id, retired.version, retired.status, retired.run_id) == (
         "PLAN-1",
         2,
@@ -677,7 +677,7 @@ async def test_pln15_revision_answers_the_rejection() -> None:
     assert retired.model_dump(exclude=unchanged) == plan1.model_dump(exclude=unchanged)
     [request] = llm.requests
     prompt = "\n".join(m.content for m in request.messages)
-    assert request.fixture_key == "r2" and "## Revision 2" in prompt and REJECT_REASON in prompt
+    assert request.fixture_key == "r2" and "## Revision 2" in prompt and PLAN_REJECT_REASON in prompt
 
     ctx, deps, _ = await plan_context(llm, audit_plans=[retired], procedure_runs=[run1], gate_decisions=gates)
     assert [p.id for p in (await drafted(ctx, deps))["audit_plans"]] == ["PLAN-2"]

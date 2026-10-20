@@ -286,7 +286,9 @@ async function decideGate(gate) {
 function subjectOf(view) {
   const { task, target } = view
   if (task.kind === 'failed') {
-    if (task.procedure_id === 'PLN-15') return `r${result.gates.filter((g) => g === 'PLN-15').length + 1}`
+    // 整条失败的计划与报告按修订计 (修订号为其闸门已决定的次数加一, 同 R311 驱动的 REVISED_BY)
+    const gate = config.revised_by[task.procedure_id]
+    if (!task.subject_id && gate) return `r${result.gates.filter((g) => g === gate).length + 1}`
     return task.subject_id ?? ''
   }
   if (target.subject_id) return target.subject_id

@@ -20,10 +20,13 @@ import pytest
 
 from tests.e2e.harness import backend, frontend, out_dir, require_tools, run_walk, write_report
 from tests.external import LLM_KEYS, live_llm_settings
+from tests.fakes import PLAN_REJECT_REASON
 from tests.fixture_sets import XERO
 from tests.test_demo_walkthrough_live import (
     CONFIRM_CONCLUSION,
+    MAX_CALLS,
     RERUN_REASON,
+    REVISED_BY,
     LiveWalk,
     assert_hard,
     decision_table,
@@ -35,7 +38,6 @@ from tests.xero_fakes import DEMO_FEATURES, REPO, XERO17_ANNOTATION, XERO17_MATE
 from tests.xero_flow import READY_REASON
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
-MAX_CALLS = 160  # 用量上限: 同 R311 的驱动 (固定输出走一遍 45 次, 打开 planning 时 47 次), 留出重试与重跑的余量
 # 各段的超时 (毫秒): 页面上的一个操作, 打开页面 (开发服务首次打开要预构建依赖), 后台一段执行 (live 时模型调用多,
 # 放宽); 驱动整体 (秒)
 TIMEOUTS = {
@@ -43,7 +45,6 @@ TIMEOUTS = {
     "live": {"action_ms": 60_000, "nav_ms": 120_000, "idle_ms": 1_800_000},
 }
 WALK_TIMEOUT_S = {"mock": 1_800, "live": 7_200}
-PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # PLN-15 退回的理由 (同 R206, R317)
 # 驱动认的页面文字 (英文界面, src/frontend/src/locales/en.ts)
 LABELS = {
     "register": "Create account",
@@ -97,6 +98,7 @@ def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, A
         "plan_reject_reason": PLAN_REJECT_REASON,
         "ready_reason": READY_REASON,
         "rerun_reason": RERUN_REASON,
+        "revised_by": REVISED_BY,
         "confirm_conclusion": CONFIRM_CONCLUSION,
         "timeouts": TIMEOUTS[mode],
         "max_steps": 200,

@@ -74,6 +74,8 @@ from tests.external import external_dir, require_xero_snapshot, snapshot_dir, su
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    PLAN_CONFIRMATION,
+    PLAN_REJECT_REASON,
     FakeConfirmationChannel,
     FakeDatasetLoader,
     FakeDataStore,
@@ -102,6 +104,25 @@ DEMO_FEATURES = parse_features(
         for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
         if line.startswith("FEATURES=")
     ).split("=", 1)[1]
+)
+# 演示配置走一遍各程序读固定输出 (演示运行副本) 的次数: 合同分类 21 份, 合同 3, 回函 2, REV-03 三份合同, REV-02 六张
+# 发票, CSH-02 一户, GEN-02 七笔凭证 (需求 R146), RPT-03 两稿, PLN-15 两个修订 (需求 R317); 每次都一次通过
+FIXTURE_READS = {
+    "DOC-CLASSIFY": 21,
+    "DOC-04": 3,
+    "DOC-06": 2,
+    "REV-03": 3,
+    "REV-02": 6,
+    "CSH-02": 1,
+    "GEN-02": 7,
+    "RPT-03": 2,
+    "PLN-15": 2,
+}
+FIXED_CALLS = sum(FIXTURE_READS.values())  # 固定输出走一遍的大模型调用数
+# 演示的两次 PLN-15 决定的请求体: 先退回 (要求写明银行函证的时间), 再批准 (确认同 R205; 需求 R317)
+PLAN_DECISIONS = (
+    {"decision": "reject", "reason": PLAN_REJECT_REASON},
+    {"decision": "approve", "plan_confirmation": PLAN_CONFIRMATION.model_dump(mode="json")},
 )
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"  # 通用计划模板 (载入器的构造参数)
 DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_contracts 的来源
@@ -940,6 +961,18 @@ XERO17_ANNOTATION = Annotation(
     ),
 )
 XERO17_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]  # REV-03 的判断对象, 按编号
+# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
+XERO_PLAN_ROWS = [
+    ("OBJ-REV-OCC", "REV-03"),
+    ("OBJ-REV-OCC", "REV-08"),
+    ("OBJ-REV-CUT", "REV-02"),
+    ("OBJ-REV-CUT", "REV-03"),
+    ("OBJ-REV-CUT", "REV-08"),
+    ("OBJ-CASH-EXI", "CSH-02"),
+    ("OBJ-CASH-EXI", "CSH-04"),
+    ("OBJ-CASH-EXI", "CSH-05"),
+    (None, "DOC-06"),
+]
 XERO17_INVOICES = [str(row["id"]) for row in XERO_S01_ROWS]  # REV-02 的判断对象 (S01 六张), 按发票 ID
 
 # ── 打开功能 journals 的增量 (需求 R146; 设计稿第 7.2 节第 12, 13 步): GEN-05 七条例外, GEN-02 七条判断与其决定 ──
