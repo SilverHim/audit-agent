@@ -132,7 +132,7 @@ Evidence pointers. Every pointer must include `source_type`.
 | Source | type | source_type | source_id | locator | page | reliability |
 |---|---|---|---|---|---|---|
 | Confirmation reply field | external | document | {{ conf.reply_document_id }} | field name, e.g. confirmed_balance_cents | page in `confirmation.evidence` | {{ data.reply_document.reliability }} |
-| Book balance | voucher | trial_balance | {{ ba.gl_account_code }} | current_cents | null | internal_original |
+| Book balance | voucher | trial_balance | {{ ba.gl_account_code }} | balance_cents | null | internal_original |
 | Bank transaction row | bank | bank_transaction | row `id` | column name, e.g. txn_date | null | external_copy |
 | GL entry row | voucher | journal_entry | row `id` | column name, e.g. posting_date | null | internal_original |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

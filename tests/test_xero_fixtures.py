@@ -33,7 +33,7 @@ from backend.agents.ingest import CLASSIFY, IngestAgent
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.llm_outputs import DocumentClassification
+from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassification
 from backend.contracts.models import (
     ConfirmationResult,
     CriticVerdict,
@@ -617,24 +617,44 @@ def cash() -> Cash:
 @pytest.mark.external
 def test_doc06_fixtures_extract_both_replies(cash: Cash) -> None:
     """验收 1, 2: CSH-04 建 C-BA-090, C-BA-091 第 1 版并存回函; DOC-06 读回函抽出第 2 版 (BA-090 透支为负, 回函写 nil
-    的应计利息为 0; BA-091 应计利息 4853, 在客户一方为正), 两份回函 extracted; 两次调用一次通过 (含账号的语义校验);
-    指针指向各自的回函, 渠道在第 2 页, 应计利息在第 1 页."""
+    的应计利息为 0; BA-091 应计利息 4853, 在客户一方为正), 两份回函 extracted; 两次调用一次通过 (含账号的语义校验),
+    没有提示 (回函写明的渠道与回执相符). 抽取结果按 fixture 的输出 (留痕的 raw) 整组比对: 六个字段的值与各自的页
+    (渠道在第 2 页, 其余第 1 页), 都指向本户回函; 函证第 2 版只并入余额, 余额日, 应计利息与指针 (银行名与渠道是
+    CSH-04 写下的)."""
     assert [(c.id, c.version, c.reply_document_id) for c in cash.sent["confirmations"]] == [
         ("C-BA-090", 1, REPLY_IDS["BA-090"]),
         ("C-BA-091", 1, REPLY_IDS["BA-091"]),
     ]
     extracted = {c.id: c for c in cash.extracted["confirmations"]}
     assert {
-        c.id: (c.version, c.confirming_party, c.confirmed_balance_cents, c.balance_date, c.accrued_interest_cents)
+        c.id: (c.version, c.confirmed_balance_cents, c.balance_date, c.accrued_interest_cents)
         for c in extracted.values()
     } == {
-        "C-BA-090": (2, "Wattlebrook Bank Limited", -1090044, date(2026, 9, 30), 0),
-        "C-BA-091": (2, "Wattlebrook Bank Limited", 1158123, date(2026, 9, 30), 4853),
+        "C-BA-090": (2, -1090044, date(2026, 9, 30), 0),
+        "C-BA-091": (2, 1158123, date(2026, 9, 30), 4853),
     }
-    for account in ("BA-090", "BA-091"):
-        pages = {p.locator: (p.source_id, p.page) for p in extracted[f"C-{account}"].evidence}
+    doc06 = {e.payload["fixture_key"]: e.payload for e in cash.calls if e.procedure_id == "DOC-06"}
+    expected = {
+        "BA-090": ("12345678", -1090044, 0),
+        "BA-091": ("12345679", 1158123, 4853),
+    }
+    for account, (account_no, balance, accrued) in expected.items():
+        output = ConfirmationExtraction.model_validate_json(doc06[account]["raw"])
+        fields = output.model_dump(mode="json", exclude={"evidence"})
+        assert fields == {
+            "confirming_party": "Wattlebrook Bank Limited",
+            "account_no": account_no,
+            "confirmed_balance_cents": balance,
+            "balance_date": "2026-09-30",
+            "receipt_channel": "direct_email",
+            "accrued_interest_cents": accrued,
+        }, account
         reply = REPLY_IDS[account]
-        assert (pages["receipt_channel"], pages["accrued_interest_cents"]) == ((reply, 2), (reply, 1)), account
+        assert {p.locator: (p.source_id, p.page) for p in output.evidence} == {
+            name: (reply, 2 if name == "receipt_channel" else 1) for name in fields
+        }, account
+        assert doc06[account]["notes"] == [], account
+        assert [p.page for p in extracted[f"C-{account}"].evidence] == [p.page for p in output.evidence]
     assert sorted((d.id, d.status) for d in cash.extracted["documents"]) == sorted(
         (reply, "extracted") for reply in REPLY_IDS.values()
     )
@@ -672,19 +692,13 @@ def test_csh02_judges_only_the_unaccrued_interest(cash: Cash) -> None:
     assert [x.id for x in jctx.rule_findings] == ["X-CSH-02-1-D04-1"]
 
 
-def sentence_with_text(text: str, needle: str) -> str:
-    """结论中含 needle 的那一句."""
-    [found] = [s for s in re.split(r"(?<=\.)\s+", text) if needle in s]
-    return found
-
-
 @pytest.mark.external
 def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
     """验收 4, 5: BA-091 的固定输出经真实判断引擎一次通过 (草稿金额 4853 等于归因例外的金额): misstatement, 草稿
     {factual, Interest income, Completeness, 4853, understated}; 结论写明 09-30 已产生而尚未入账的利息 48.53, 窗口内
     总账没有同额计提, 利息收入与应收少记, 高于明显微小 16.22 须累计; 证据为回函两处 (第 1 页), 试算表 091, XJ-601-1
-    与两段准则. 判断 pending, 解释该 D04; 因 always_review 建 normal 任务. A7 未命中触发规则 (建议 misstatement 不中
-    主规则, 没有 assumption 步骤, 抽样点不小于 0.05), 记 skipped."""
+    与两段准则, 恰为推理链各步指针去重后的并集. 判断 pending, 解释该 D04; 因 always_review 建 normal 任务. A7 未命中
+    触发规则 (建议 misstatement 不中主规则, 没有 assumption 步骤, 抽样点不小于 0.05), 记 skipped."""
     [call] = [e for e in cash.calls if e.procedure_id == "CSH-02"]
     assert (call.payload["attempt"], call.payload["level_failed"]) == (1, None)
     [j] = cash.judged["judgments"]
@@ -697,11 +711,11 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
     assert j.misstatement_draft == MisstatementDraft(
         type="factual", account="Interest income", assertion="Completeness", amount_cents=4853, direction="understated"
     )
-    unaccrued = sentence_with_text(j.conclusion, "48.53 earned")
+    unaccrued = sentence_with(j.conclusion, "48.53 earned")
     assert all(text in unaccrued for text in ("30 September 2026", "not yet credited")), unaccrued
-    understated = sentence_with_text(j.conclusion, "understated")
+    understated = sentence_with(j.conclusion, "understated")
     assert all(text in understated for text in ("25 to 30 September 2026", "interest income", "receivable"))
-    trivial = sentence_with_text(j.conclusion, "clearly trivial")
+    trivial = sentence_with(j.conclusion, "clearly trivial")
     assert all(text in trivial for text in ("16.22", "accumulated", "ASA 450 para 5")), trivial
     reply = REPLY_IDS["BA-091"]
     assert {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence} == {
@@ -712,6 +726,9 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
         ("standard", "ASA505-P14", "para 14", None),
         ("standard", "ASA450-P05", "para 5", None),
     }
+    chain = [(p.source_type, p.source_id, p.locator, p.page) for s in j.reasoning_chain for p in s.evidence]
+    keys = [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence]
+    assert len(keys) == len(set(keys)) and set(keys) == set(chain)  # evidence 为推理链指针去重后的并集
     assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}
     assert [(t.id, t.kind) for t in cash.judged["review_tasks"]] == [("T-J-CSH-02-1-BA-091-v1", TaskKind.normal)]
     assert (j.critic_verdict, j.critic_reason) == (CriticVerdict.skipped, "未命中独立复核的触发规则")

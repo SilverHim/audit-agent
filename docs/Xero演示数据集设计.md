@@ -774,7 +774,7 @@ GEN-07 合计 9 条. 对 Numbat 的影响: S02 改写后 G3 的 GJ-202607-ECL-2 
 **CSH-02 判断** (决定 15): 1 条, J-CSH-02-1-BA-091, misstatement.
 - 上下文: bank_account BA-091, confirmation C-BA-091 (余额 agreed, accrued_interest_cents 4853), 回函 document, book_balance_cents 1158123, difference_cents 0, subsequent_transactions 为空 (D02 窗口 10-01 至 10-10 没有 091 的流水; 10-16 的 BT-091-0002 在窗口外), period_end_entries 为 BA-091 的 D03 行 (09-25 至 09-30 只有 XJ-601 的 091 行), rule_findings [X-CSH-02-1-D04-1].
 - 结论: 银行确认 09-30 已产生, 尚未记入账户的利息 48.53, 期末前 5 天内总账没有同额的计提, 利息收入与应收少记; 48.53 高于明显微小 16.22, 依 ASA 450 第 5 段须累计 (原文已核). 草稿 {factual, Interest income (270), Completeness, 4853, understated}; 4853 等于归因例外金额 (Q12 口径).
-- 证据: 回函 document (accrued_interest_cents, 第 1 页), trial_balance 091, 例外 X-CSH-02-1-D04-1.
+- 证据: 回函 document (accrued_interest_cents 与 confirmed_balance_cents, 第 1 页), trial_balance 091 (balance_cents), journal_entry XJ-601-1, ASA505-P14, ASA450-P05. 例外 X-CSH-02-1-D04-1 由判断的 exception_ids 关联, 不写成证据指针 (PointerResolver 不解析例外; 需求 R111).
 - 审计师决定 misstatement → **M-5**. 因 always_review 建复核任务 T-J-CSH-02-1-BA-091-v1.
 
 ### 6.2 收入程序 (REV-03, REV-02)
