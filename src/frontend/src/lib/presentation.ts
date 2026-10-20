@@ -1,4 +1,4 @@
-import type { ReviewTaskView, TaskPresentation } from '@/client/types.gen'
+import type { EvidencePointer, ReviewTaskView, TaskPresentation } from '@/client/types.gen'
 import { isJudgment } from '@/lib/review'
 
 // 判断呈递 (后端 R152, GEN-11) 在前端的几条判断: 何时呈递, 视图属于哪条任务, 判断卡用哪种版式, 何时省掉两方的建议
@@ -31,4 +31,15 @@ export function cardLayout(view: ReviewTaskView, presentation: TaskPresentation 
 // 显示, 这里不重复; 已决定的任务不出决定卡, collab 关闭时决定卡没有这一栏, 都在两栏里显示. 纯函数
 export function showSideProposals(collab: boolean, view: ReviewTaskView): boolean {
   return !(collab && view.task.status === 'pending')
+}
+
+// 证据指针列表的 React key: 来源, ID, locator 与页. 后端去重键 (judgment_engine.evidence_key) 不同的指针 key 都不同:
+// 同一文件的不同页, 同一画像的不同字段 (需求 R128) 各算一项; 同一页的不同 locator 也分开 (PointerList 本来如此). 纯函数
+export function pointerKey(pointer: Pick<EvidencePointer, 'source_type' | 'source_id' | 'locator' | 'page'>): string {
+  return `${pointer.source_type}:${pointer.source_id}:${pointer.locator}:${pointer.page ?? ''}`
+}
+
+// 证据弹窗里字段名的显示: 去掉 _cents 后缀, 下划线换空格 (数据行与客户画像的字段共用). 纯函数
+export function humanize(key: string): string {
+  return key.replace(/_cents$/, '').replaceAll('_', ' ')
 }

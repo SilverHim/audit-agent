@@ -376,7 +376,7 @@ async def evidence_pointers(s: Started, eid: str = EID, *, everything: bool = Fa
 async def assert_pointers_resolve(s: Started, eid: str = EID, *, everything: bool = False) -> list[EvidencePointer]:
     """验收 4: 判断 (推理链与证据), 合同与函证的证据指针都能解析 (行存在, 页码不超过页数, 准则已注册, 留痕存在);
     everything 同 evidence_pointers. 返回检查过的指针."""
-    resolver = PointerResolver(s.runner.deps.judgments.validator, eid)
+    resolver = PointerResolver(s.runner.deps.judgments.validator, eid, None)
     pointers = await evidence_pointers(s, eid, everything=everything)
     assert len(pointers) > 30
     for p in pointers:

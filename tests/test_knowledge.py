@@ -156,10 +156,16 @@ CA_VOLUME = "04_法律_CorporationsAct/CorporationsAct2001_Compilation_C148_2026
 APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pdf"
 # knowledge/standards 下每个 YAML 一行; 其余 ASA, AASB 由各组首建该文件时加行
 SOURCES: dict[str, Source] = {
-    "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", None),)),
+    "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
+    "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", (12, 21)),)),  # 第 31 段至第 88 段
+    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
+    "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
     "ASA320": Source((("01_审计准则_ASA/ASA_320.pdf", None),)),
     "ASA450": Source((("01_审计准则_ASA/ASA_450.pdf", None),)),
     "ASA505": Source((("01_审计准则_ASA/ASA_505.pdf", None),)),
+    "ASA550": Source((("01_审计准则_ASA/ASA_550.pdf", (10, 16)),)),  # 第 10 段至 Aus 27.2
+    "ASA560": Source((("01_审计准则_ASA/ASA_560.pdf", (9, 11)),)),  # 第 6 段至第 9 段
+    "ASA570": Source((("01_审计准则_ASA/ASA_570.pdf", (10, 20)),)),  # 第 10 段至 A19
     "ASA700": Source((("01_审计准则_ASA/ASA_700.pdf", None),)),
     "ASA705": Source((("01_审计准则_ASA/ASA_705.pdf", None),)),
     "CA2001": Source(((CA_VOLUME.format(1), (505, 515)), (CA_VOLUME.format(2), (80, 260))), compiled="2026-08-27"),
@@ -214,12 +220,17 @@ class Line:
     heading: bool = False
 
 
+# 其前的空白归一时去掉的标点: 脚注上标贴在词后又接标点时 ("ASA 7055; and"), 上标去掉后版面留下的空格不进比对,
+# 片段写原文的正常写法 ("ASA 705; and"); 片段与原文两边同样处理
+CLOSING = ";,.:)"
+
+
 def normalise(text: str) -> str:
     """去掉 (Ref: Para. ...) 交叉引用 (与正文同字号的; 小字的由 page_layout 去掉), 行尾连字符直接接下一行
-    (bill-and-hold), 空白归一为单个空格."""
+    (bill-and-hold), 空白归一为单个空格, 标点 CLOSING 之前的空白去掉."""
     text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text)
     text = re.sub(r"-\n", "-", text)
-    return " ".join(text.split())
+    return re.sub(rf" (?=[{re.escape(CLOSING)}])", "", " ".join(text.split()))
 
 
 def char_key(c: dict[str, Any]) -> tuple[float, float, str]:
@@ -412,10 +423,10 @@ def layout_text(lines: Sequence[Line]) -> Text:
         elif m[0].isspace():
             space = length > 0
         else:
-            if space:
+            if space and m[0][0] not in CLOSING:
                 out.append(" ")
                 length += 1
-                space = False
+            space = False
             for k in pending:
                 starts[k] = length
             pending.clear()
@@ -793,11 +804,85 @@ def boundary_problems(source: Text, fragment: dict[str, Any]) -> list[str]:
     return problems
 
 
+# 人工核过的部分摘录: 只摘一段中的一组圆点列举项, 列举项没有 "(a)" 记号, subitems 写不出 (以后同类的圆点组摘录也登记
+# 在这里, 不另开机制). 片段 ID → (原因, 片段之后紧接的原文的起首). 逐字与段首照常核对; 段尾不按整段, 改为核对片段之后
+# 紧接的原文以所记的文字起首 (即摘到该组为止, 没多摘也没少摘该组的列举项).
+PARTIAL_EXCERPTS: dict[str, tuple[str, str]] = {
+    "ASA570-A3": ("A3 分 Financial, Operating, Other 三组列举, 只摘引语与 Financial 一组", "Operating •"),
+}
+NOT_WHOLE = "正文之后还有本段的内容 (不是整段)"
+
+
+def partial_excerpt_problems(source: Text, fragment: dict[str, Any], after: str) -> list[str]:
+    """部分摘录 (PARTIAL_EXCERPTS) 的核对: 逐字与段首同 boundary_problems, 只是不到段尾; 片段之后紧接的原文须以 after
+    起首. 不符时报出片段之后实际接着的前 40 个字."""
+    problems = boundary_problems(source, fragment)
+    if not problems:
+        return ["是整段, 不是部分摘录"]
+    if problems != [NOT_WHOLE]:
+        return [p for p in problems if p != NOT_WHOLE]
+    [piece] = fragment_pieces(fragment)
+    following = source[source.index(piece) + len(piece) :].lstrip()
+    if not following.startswith(after):
+        return [f"片段之后接的是 {following[:40]!r}, 不是登记的 {after!r}"]
+    return []
+
+
 @pytest.mark.parametrize("fragment_id", [f["id"] for _, f in standard_fragments() if (f.get("text") or "").strip()])
 def test_fragment_text_is_verbatim_from_pdf(fragment_id: str) -> None:
-    """knowledge/standards 下全部有正文的片段: 正文 (各部分) 逐字出现在 SOURCES 登记的原文中, 且为整段或所列子项完整."""
+    """knowledge/standards 下全部有正文的片段: 正文 (各部分) 逐字出现在 SOURCES 登记的原文中, 且为整段或所列子项完整;
+    PARTIAL_EXCERPTS 登记的部分摘录段首照常, 段尾为所记的下文 (见 partial_excerpt_problems)."""
     stem, fragment = next((s, f) for s, f in standard_fragments() if f["id"] == fragment_id)
-    assert boundary_problems(standard_text(stem), fragment) == []
+    source = standard_text(stem)
+    if fragment_id in PARTIAL_EXCERPTS:
+        assert partial_excerpt_problems(source, fragment, PARTIAL_EXCERPTS[fragment_id][1]) == []
+    else:
+        assert boundary_problems(source, fragment) == []
+
+
+def a3_variant(change: str) -> dict[str, Any]:
+    """ASA570-A3 的改写副本: drop_last 删去 Financial 组最后一条; with_operating 多摘 Operating 小标题与其第一条
+    (取自原文, 逐字仍对)."""
+    stem, fragment = next((s, f) for s, f in standard_fragments() if f["id"] == "ASA570-A3")
+    lines = fragment["text"].rstrip("\n").split("\n")
+    if change == "drop_last":
+        return {**fragment, "text": "\n".join(lines[:-1])}
+    source = standard_text(stem)
+    [piece] = fragment_pieces(fragment)
+    following = source[source.index(piece) + len(piece) :].lstrip()
+    heading, rest = following.split(" ", 1)  # "Operating", "• 第一条 • 第二条 ..."
+    return {**fragment, "text": "\n".join([*lines, heading, rest[: rest.index(" •")]])}
+
+
+@pytest.mark.parametrize(
+    ("change", "reported"),
+    [("drop_last", "• Inability to obtain financing"), ("with_operating", "• Loss of key management")],
+)
+def test_partial_excerpt_must_end_at_its_group(change: str, reported: str) -> None:
+    """部分摘录少摘 (删去 Financial 组最后一条) 或多摘 (多带 Operating 小标题与其第一条) 都报出, 消息带上片段之后
+    实际接着的原文."""
+    fragment = a3_variant(change)
+    problems = partial_excerpt_problems(standard_text("ASA570"), fragment, PARTIAL_EXCERPTS["ASA570-A3"][1])
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"片段之后接的是 '{reported}"), problems
+
+
+def test_fragment_text_has_no_space_before_closing() -> None:
+    """片段正文写原文的正常写法: CLOSING 标点 (; , . : )) 之前不留空白. 版面留下的空格 (如脚注上标去掉之后) 只在原文
+    一侧由 normalise 吸收, 不写进片段."""
+    found = [
+        f"{f['id']}: {m.group(0)!r}"
+        for _, f in standard_fragments()
+        for m in re.finditer(rf"\S{{0,12}}\s+[{re.escape(CLOSING)}]", f.get("text") or "")
+    ]
+    assert found == []
+
+
+def test_partial_excerpts_name_existing_fragments() -> None:
+    """PARTIAL_EXCERPTS 的每一行都是有正文的片段: 删了片段或改了 ID 而登记表没跟着改时报出 (登记了却其实是整段的,
+    由逐字测试的 problems 断言报出)."""
+    fragments = {f["id"] for _, f in standard_fragments() if (f.get("text") or "").strip()}
+    assert set(PARTIAL_EXCERPTS) <= fragments
 
 
 def test_aasb15_p35_is_the_whole_paragraph() -> None:
@@ -1658,6 +1743,8 @@ def test_cover_date_formats() -> None:
 
 def test_normalise_joins_hyphen_and_drops_refs() -> None:
     assert normalise("bill-and-\nhold (Ref: Para. A3-A6)\n  next") == "bill-and-hold next"
+    # 标点前的空白去掉: 脚注上标去掉后留下的空格 (ASA 570 第 23(a) 段 "ASA 7055; and"), 与原文的正常写法相同
+    assert normalise("ASA 705 ; and (a , b ) x .") == normalise("ASA 705; and (a, b) x.") == "ASA 705; and (a, b) x."
 
 
 @pytest.mark.parametrize(

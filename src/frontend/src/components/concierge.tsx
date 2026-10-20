@@ -27,7 +27,14 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
-import { cardLayout, needsPresentation, presentationFor, presentationKey, showSideProposals } from '@/lib/presentation'
+import {
+  cardLayout,
+  needsPresentation,
+  pointerKey,
+  presentationFor,
+  presentationKey,
+  showSideProposals,
+} from '@/lib/presentation'
 import {
   attachRule,
   buildDisputeRecord,
@@ -345,10 +352,7 @@ function DisputeBody({
         <SectionLabel>{p.evidence}</SectionLabel>
         <ul className="m-0 flex list-none flex-wrap justify-center gap-2 p-0">
           {(presentation.evidence ?? []).map(({ pointer, origin }) => (
-            <li
-              key={`${pointer.source_type}:${pointer.source_id}:${pointer.page ?? ''}`}
-              className="flex items-center gap-1.5 rounded-[10px] border px-2 py-1"
-            >
+            <li key={pointerKey(pointer)} className="flex items-center gap-1.5 rounded-[10px] border px-2 py-1">
               <EvidenceLink eid={eid} pointer={pointer} />
               <span className="text-[12px] text-muted-foreground">{p.origins[origin]}</span>
             </li>

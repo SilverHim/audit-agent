@@ -17,6 +17,7 @@ from backend.contracts.models import (
     ReviewStatus,
     StepKind,
     StepStatus,
+    TrailKind,
 )
 from backend.contracts.services import JudgmentContext
 from backend.core.config import get_settings
@@ -225,6 +226,37 @@ async def test_judge_passes_the_client_profile_to_the_validator(given: bool, sta
     ctx = rev02_context(findings=False).model_copy(update={"client_profile": NUMBAT_PROFILE if given else None})
     outcome, _ = await judge("REV-02", ctx, [with_step(cutoff_draft(), 1, evidence=[pointer]).model_dump_json()])
     assert outcome.judgment.reasoning_chain[1].status is status
+
+
+OUTSIDE = "准则片段 ASA450-P05 不在 REV-03 的 standards 内"  # 校验写明片段与本程序
+
+
+@pytest.mark.parametrize(
+    ("cited", "status", "errors"),
+    [
+        pytest.param(STANDARD, StepStatus.supported, [], id="own"),
+        pytest.param(
+            STANDARD.model_copy(update={"source_id": "ASA450-P05", "locator": "para 5"}),
+            StepStatus.unsupported,
+            [f"第 1 步指针 standard ASA450-P05: {OUTSIDE}", f"evidence 中指针 standard ASA450-P05: {OUTSIDE}"],
+            id="outside",
+        ),
+    ],
+)
+async def test_standard_outside_the_program_marks_its_step(
+    cited: EvidencePointer, status: StepStatus, errors: list[str]
+) -> None:
+    """需求 R301: judge 按本程序的 standards 核对准则片段: REV-03 的草稿另引已登记而不在 REV-03 standards 里的
+    ASA450-P05 时该步 unsupported (同引用未登记的片段), 判断照常出; 只引本程序片段的照常 supported. 留痕的 errors
+    写明片段与程序 REV-03: REV-03 与 REV-02 的 standards 相同, 只看步骤状态分不出 judge 把 standards_of 填成了别的
+    程序."""
+    draft = with_step(rev03_draft(), 1, evidence=[cited]).model_copy(update={"evidence": [CLAUSE, cited]})
+    engine, _ = setup({rev03_context().fixture_key: [draft.model_dump_json()]})
+    template = engine.library.load("REV-03")
+    outcome = await engine.judge(EID, template, make_run("REV-03"), rev03_context(), performed_by="U-1")
+    assert [s.status for s in outcome.judgment.reasoning_chain] == [StepStatus.supported, status, StepStatus.supported]
+    [call] = [e for e in engine.trail.entries if e.kind is TrailKind.llm_call]  # type: ignore[attr-defined]
+    assert call.payload["errors"] == errors
 
 
 def test_evidence_coverage_takes_best_reliability_per_type() -> None:

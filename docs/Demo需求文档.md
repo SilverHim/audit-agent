@@ -173,7 +173,7 @@ src/backend/
 │   └── audit_trail.py             B  只追加写入
 ├── agents/                        A  base.py、client_intel.py（A2）、ingest.py（A3）、risk_assessor.py（A4）、
 │                                     sheets.py（A3，上传账表识别）、evidence.py（A5）、fieldwork.py（A6）、qc.py（A9）、
-│                                     concierge.py（A10）
+│                                     concierge/（A10：agent.py 按程序分派，report.py 为 RPT-03）
 ├── orchestration/                 A  graph.py、nodes.py、scheduler.py、decisions.py、runner.py、query.py
 ├── persistence/                   B  表模型、五个 Store 与 DatasetLoader 的实现、行级安全、事务
 ├── adapters/

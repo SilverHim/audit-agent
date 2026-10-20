@@ -1,0 +1,112 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_570.pdf (现行编译版, Compilation 3) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 上标脚注号由抽取去掉 (第 10 段
+# "ASA 3153" 写作 "ASA 315", 第 23(a) 段 "ASA 7055; and" 写作 "ASA 705; and").
+# A3 只摘引语与 Financial 一组列举项 (Operating, Other 两组与段末结语不收), 由逐字测试的部分摘录登记表 (PARTIAL_EXCERPTS)
+# 核对到 Operating 之前为止.
+standard: ASA 570
+title: Going Concern
+compiled: "2023-03-22"   # Compilation Number 3
+fragments:
+  - id: ASA570-P10
+    paragraph: "10"
+    topic: risk_assessment_going_concern
+    text: |
+      When performing risk assessment procedures as required by ASA 315 the auditor shall consider whether events or conditions exist that may cast significant doubt on the entity’s ability to continue as a going concern. In so doing, the auditor shall determine whether management has already performed a preliminary assessment of the entity’s ability to continue as a going concern, and:
+      (a) If such an assessment has been performed, the auditor shall discuss the assessment with management and determine whether management has identified events or conditions that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern and, if so, management’s plans to address them; or
+      (b) If such an assessment has not yet been performed, the auditor shall discuss with management the basis for the intended use of the going concern basis of accounting, and enquire of management whether events or conditions exist that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern.
+    procedures: [GEN-04]
+  - id: ASA570-Aus13.2
+    paragraph: "Aus 13.2"
+    topic: relevant_period
+    text: |
+      Relevant period means the period of approximately twelve months from the date of the auditor’s current report to the expected date of the auditor’s report for:
+      (a) the next annual reporting date in the case of an annual financial report; or
+      (b) the corresponding reporting period for the following year in the case of an interim financial reporting period.
+    procedures: [GEN-04]
+  - id: ASA570-P16
+    paragraph: "16"
+    topic: additional_procedures_when_doubt
+    text: |
+      If events or conditions have been identified that may cast significant doubt on the entity’s ability to continue as a going concern, the auditor shall obtain sufficient appropriate audit evidence to determine whether or not a material uncertainty exists related to events or conditions that may cast significant doubt on the entity’s ability to continue as a going concern (hereinafter referred to as “material uncertainty”) through performing additional audit procedures, including consideration of mitigating factors. These procedures shall include:
+      (a) Where management has not yet performed an assessment of the entity’s ability to continue as a going concern, requesting management to make its assessment.
+      (b) Evaluating management’s plans for future actions in relation to its going concern assessment, whether the outcome of these plans is likely to improve the situation and whether management’s plans are feasible in the circumstances.
+      (c) Where the entity has prepared a cash flow forecast, and analysis of the forecast is a significant factor in considering the future outcome of events or conditions in the evaluation of management’s plans for future actions:
+      (i) Evaluating the reliability of the underlying data generated to prepare the forecast; and
+      (ii) Determining whether there is adequate support for the assumptions underlying the forecast.
+      (d) Considering whether any additional facts or information have become available since the date on which management made its assessment.
+      (e) Requesting written representations from management and, where appropriate, those charged with governance, regarding their plans for future actions and the feasibility of these plans.
+    procedures: [GEN-04]
+  - id: ASA570-P17
+    paragraph: "17"
+    topic: conclusion_on_going_concern_basis
+    text: |
+      The auditor shall evaluate whether sufficient appropriate audit evidence has been obtained regarding, and shall conclude on, the appropriateness of management’s use of the going concern basis of accounting in the preparation of the financial report.
+    procedures: [FIN-02]
+  - id: ASA570-P18
+    paragraph: "18"
+    topic: conclusion_on_material_uncertainty
+    text: |
+      Based on the audit evidence obtained, the auditor shall conclude whether, in the auditor’s judgement, a material uncertainty exists related to events or conditions that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern. A material uncertainty exists when the magnitude of its potential impact and likelihood of occurrence is such that, in the auditor’s judgement, appropriate disclosure of the nature and implications of the uncertainty is necessary for:
+      (a) In the case of a fair presentation financial reporting framework, the fair presentation of the financial report, or
+      (b) In the case of a compliance framework, the financial report not to be misleading.
+    procedures: [FIN-02]
+  - id: ASA570-P19
+    paragraph: "19"
+    topic: adequacy_of_disclosures
+    text: |
+      If the auditor concludes that management’s use of the going concern basis of accounting is appropriate in the circumstances but a material uncertainty exists, the auditor shall determine whether the financial report:
+      (a) Adequately discloses the principal events or conditions that may cast significant doubt on the entity’s ability to continue as a going concern and management’s plans to deal with these events or conditions; and
+      (b) Discloses clearly that there is a material uncertainty related to events or conditions that may cast significant doubt on the entity’s ability to continue as a going concern and, therefore, that it may be unable to realise its assets and discharge its liabilities in the normal course of business.
+    procedures: [FIN-02]
+  - id: ASA570-P21
+    paragraph: "21"
+    topic: inappropriate_going_concern_basis
+    text: |
+      If the financial report has been prepared using the going concern basis of accounting but, in the auditor’s judgement, management’s use of the going concern basis of accounting in the preparation of the financial report is inappropriate, the auditor shall express an adverse opinion.
+    procedures: [FIN-02]
+  - id: ASA570-P22
+    paragraph: "22"
+    topic: material_uncertainty_section
+    text: |
+      If adequate disclosure about the material uncertainty is made in the financial report, the auditor shall express an unmodified opinion and the auditor’s report shall include a separate section under the heading “Material Uncertainty Related to Going Concern” to:
+      (a) Draw attention to the note in the financial report that discloses the matters set out in paragraph 19 of this Auditing Standard; and
+      (b) State that these events or conditions indicate that a material uncertainty exists that may cast significant doubt on the entity’s ability to continue as a going concern and that the auditor’s opinion is not modified in respect of the matter.
+    procedures: [FIN-02, RPT-03]
+  - id: ASA570-P23
+    paragraph: "23"
+    topic: inadequate_disclosure_modified_opinion
+    text: |
+      If adequate disclosure about the material uncertainty is not made in the financial report, the auditor shall:
+      (a) Express a qualified opinion or adverse opinion, as appropriate, in accordance with ASA 705; and
+      (b) In the Basis for Qualified (Adverse) Opinion section of the auditor’s report, state that a material uncertainty exists that may cast significant doubt on the entity’s ability to continue as a going concern and that the financial report does not adequately disclose this matter.
+    procedures: [FIN-02, RPT-03]
+  - id: ASA570-A3
+    paragraph: "A3"
+    topic: financial_indicators_of_doubt
+    text: |
+      The following are examples of events or conditions that, individually or collectively, may cast significant doubt on the entity’s ability to continue as a going concern. This listing is not all-inclusive nor does the existence of one or more of the items always signify that a material uncertainty exists.
+      Financial
+      • Net liability or net current liability position.
+      • Fixed-term borrowings approaching maturity without realistic prospects of renewal or repayment; or excessive reliance on short-term borrowings to finance long-term assets.
+      • Indications of withdrawal of financial support by creditors.
+      • Negative operating cash flows indicated by historical or prospective financial report.
+      • Adverse key financial ratios.
+      • Substantial operating losses or significant deterioration in the value of assets used to generate cash flows.
+      • Arrears or discontinuance of dividends.
+      • Inability to pay creditors on due dates.
+      • Inability to comply with the terms of loan agreements.
+      • Change from credit to cash-on-delivery transactions with suppliers.
+      • Inability to obtain financing for essential new product development or other essential investments.
+    procedures: [GEN-04]
+  - id: ASA570-A13
+    paragraph: "A13"
+    topic: owner_manager_support
+    text: |
+      Continued support by owner-managers is often important to smaller entities’ ability to continue as a going concern. Where a small entity is largely financed by a loan from the owner-manager, it may be important that these funds are not withdrawn. For example, the continuance of a small entity in financial difficulty may be dependent on the owner-manager subordinating a loan to the entity in favour of banks or other creditors, or the owner-manager supporting a loan for the entity by providing a guarantee with his or her personal assets as collateral. In such circumstances, the auditor may obtain appropriate documentary evidence of the subordination of the owner-manager’s loan or of the guarantee. Where an entity is dependent on additional support from the owner-manager, the auditor may evaluate the owner-manager’s ability to meet the obligation under the support arrangement. In addition, the auditor may request written confirmation of the terms and conditions attaching to such support and the owner-manager’s intention or understanding.
+    procedures: [GEN-04, FIN-02]
+  - id: ASA570-A19
+    paragraph: "A19"
+    topic: third_party_support
+    text: |
+      Where management’s assumptions include continued support by third parties, whether through the subordination of loans, commitments to maintain or provide additional funding, or guarantees, and such support is important to an entity’s ability to continue as a going concern, the auditor may need to consider requesting written confirmation (including of terms and conditions) from those third parties and to obtain evidence of their ability to provide such support.
+    procedures: [FIN-02]

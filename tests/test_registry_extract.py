@@ -550,7 +550,7 @@ async def test_extraction_needs_pointers_to_this_document(
     deps = make_deps(FakeRegistry(), FakeTrail())
     validator = OutputValidator(deps.financial_store, deps.library, deps.trail)
     output = extraction.model_copy(update={"evidence": evidence})
-    result = await check_extraction(validator, EID, output, ValidationContext(document=document))
+    result = await check_extraction(validator, EID, output, ValidationContext(document=document, standards_of=None))
     if error is None:
         assert result.level is None and {p.reliability for p in result.output.evidence} == {
             Reliability.external_original

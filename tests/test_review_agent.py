@@ -614,6 +614,54 @@ async def test_chain_citing_evidence_not_given_is_unsupported() -> None:
     assert j.critic_verdict is CriticVerdict.inconsistent and not critic_chain_ok(j.critic_reasoning_chain)
 
 
+@pytest.mark.external
+async def test_fragment_outside_the_reviewed_program_is_not_given() -> None:
+    """需求 R301: A6 的判断引了已登记而不在被复核程序 (REV-02) standards 里的 ASA450-P05 (A6 校验时该步 unsupported,
+    指针原样留在判断里). given_evidence 同 A6 校验按 REV-02 的 standards 核对: 第一轮提示词不列它 (Evidence 段与
+    Standards 段都没有), 也不进可引证据; 复核方仍引它的一步不受支持, 判一致也因此记 not_applicable 转人工. 判断引的
+    REV-02 自己的片段照样作为证据给出, 复核方引它照常. 防第一轮把校验会拒绝的片段列为 "Cite only these pointers"
+    里的证据."""
+    x = Xero()
+    own = EvidencePointer.model_validate(standard_pointer(x.standard))
+    outside = EvidencePointer.model_validate(standard_pointer("ASA450-P05") | {"locator": "para 5"})
+    base = x.judgment()
+    judgment = x.judgment(
+        reasoning_chain=[
+            *base.reasoning_chain,
+            ReasoningStep(kind=StepKind.standard, text="AASB 15.", evidence=[own]),
+            ReasoningStep(kind=StepKind.standard, text="ASA 450.", evidence=[outside]),
+        ],
+        evidence=[*base.evidence, own, outside],
+    )
+    chain = [
+        step("fact", "The invoice is dated in the period.", [invoice_pointer(x.invoice)]),
+        step("standard", "Revenue is recognised when control transfers.", [standard_pointer(x.standard)]),
+        step("standard", "Misstatements are accumulated.", [outside]),
+        step("inference", "The invoice is revenue of the period.", from_steps=[0, 1, 2]),
+    ]
+    review = scripted(x.invoice.id, [x.independent(chain)], [verdict()])
+    agent = x.agent(review)
+    given = await agent.given_evidence(x.ctx.engagement.id, judgment)
+    assert [(p.source_type, p.source_id) for p in given][2:] == [("standard", x.standard)]  # 本程序的片段照给
+    assert [p.source_type for p in given[:2]] == ["sales_invoice", "journal_entry"]
+    j = await agent.review(x.ctx, judgment)
+    prompt = review.requests[0].messages[0].content
+    evidence = prompt.split("## Evidence", 1)[1].split("Standards (cite only these IDs)", 1)[0]
+    assert x.invoice.invoice_no in evidence and f'"source_id": "{x.standard}"' in evidence
+    assert "ASA450-P05" not in prompt
+    assert [s.status for s in j.critic_reasoning_chain] == [
+        StepStatus.supported,
+        StepStatus.supported,
+        StepStatus.unsupported,
+        StepStatus.supported,
+    ]
+    assert j.critic_verdict is CriticVerdict.not_applicable
+    # 第一轮校验也按 REV-02 核对 (兜底: 可引证据已不含它, 这里看错误写明的是片段不在被复核程序的 standards 内)
+    assert first_round(x).payload["errors"] == [
+        "第 2 步指针 standard ASA450-P05: 准则片段 ASA450-P05 不在 REV-02 的 standards 内"
+    ]
+
+
 # ── 复核没做成: not_applicable, 转人工 ──
 
 

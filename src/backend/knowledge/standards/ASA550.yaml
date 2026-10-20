@@ -1,0 +1,102 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_550.pdf (现行编译版, Compilation 4) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 第 10(b)(i) 项 "framework" 后是上标
+# 脚注号 * (页底脚注 "See, for example, section 228 of the Corporations Act 2001."), 按抽取规则去掉, 原文为 "framework; or".
+standard: ASA 550
+title: Related Parties
+compiled: "2023-12-14"   # Compilation Number 4
+fragments:
+  - id: ASA550-P10
+    paragraph: "10"
+    subitems: [b]
+    topic: related_party_definition
+    text: |
+      For the purposes of this Auditing Standard, the following terms have the meanings attributed below:
+      (b) Related party means a party that is either:
+      (i) A related party as defined in the applicable financial reporting framework; or
+      (ii) Where the applicable financial reporting framework establishes minimal or no related party requirements:
+      a. A person or other entity that has control or significant influence, directly or indirectly through one or more intermediaries, over the reporting entity;
+      b. Another entity over which the reporting entity has control or significant influence, directly or indirectly through one or more intermediaries; or
+      c. Another entity that is under common control with the reporting entity through having:
+      i. Common controlling ownership;
+      ii. Owners who are close family members; or
+      iii. Common key management.
+      However, entities that are under common control by a state (that is, a national, regional or local government) are not considered related unless they engage in significant transactions or share resources to a significant extent with one another.
+    procedures: [GEN-03]
+  - id: ASA550-P13
+    paragraph: "13"
+    topic: enquiries_of_management
+    text: |
+      The auditor shall enquire of management regarding:
+      (a) The identity of the entity’s related parties, including changes from the prior period;
+      (b) The nature of the relationships between the entity and these related parties; and
+      (c) Whether the entity entered into any transactions with these related parties during the period and, if so, the type and purpose of the transactions.
+    procedures: [GEN-01]
+  - id: ASA550-P15
+    paragraph: "15"
+    topic: records_inspection
+    text: |
+      During the audit, the auditor shall remain alert, when inspecting records or documents, for arrangements or other information that may indicate the existence of related party relationships or transactions that management has not previously identified or disclosed to the auditor. In particular, the auditor shall inspect the following for indications of the existence of related party relationships or transactions that management has not previously identified or disclosed to the auditor:
+      (a) Bank and legal confirmations obtained as part of the auditor’s procedures;
+      (b) Minutes of meetings of shareholders and of those charged with governance; and
+      (c) Such other records or documents as the auditor considers necessary in the circumstances of the entity.
+    procedures: [GEN-08]
+  - id: ASA550-P21
+    paragraph: "21"
+    topic: undisclosed_relationships
+    text: |
+      If the auditor identifies arrangements or information that suggests the existence of related party relationships or transactions that management has not previously identified or disclosed to the auditor, the auditor shall determine whether the underlying circumstances confirm the existence of those relationships or transactions.
+    procedures: [GEN-03]
+  - id: ASA550-P22
+    paragraph: "22"
+    topic: newly_identified_related_parties
+    text: |
+      If the auditor identifies related parties or significant related party transactions that management has not previously identified or disclosed to the auditor, the auditor shall:
+      (a) Promptly communicate the relevant information to the other members of the engagement team;
+      (b) Where the applicable financial reporting framework establishes related party requirements:
+      (i) Request management to identify all transactions with the newly identified related parties for the auditor’s further evaluation; and
+      (ii) Enquire as to why the entity’s controls over related party relationships and transactions failed to enable the identification or disclosure of the related party relationships or transactions;
+      (c) Perform appropriate substantive audit procedures relating to such newly identified related parties or significant related party transactions;
+      (d) Reconsider the risk that other related parties or significant related party transactions may exist that management has not previously identified or disclosed to the auditor, and perform additional audit procedures as necessary; and
+      (e) If the non-disclosure by management appears intentional (and therefore indicative of a risk of material misstatement due to fraud), evaluate the implications for the audit.
+    procedures: [GEN-03, GEN-01]
+  - id: ASA550-P23
+    paragraph: "23"
+    topic: transactions_outside_normal_course
+    text: |
+      For identified significant related party transactions outside the entity’s normal course of business, the auditor shall:
+      (a) Inspect the underlying contracts or agreements, if any, and evaluate whether:
+      (i) The business rationale (or lack thereof) of the transactions suggests that they may have been entered into to engage in fraudulent financial reporting or to conceal misappropriation of assets;
+      (ii) The terms of the transactions are consistent with management’s explanations; and
+      (iii) The transactions have been appropriately accounted for and disclosed in accordance with the applicable financial reporting framework; and
+      (b) Obtain audit evidence that the transactions have been appropriately authorised and approved.
+    procedures: [GEN-03]
+  - id: ASA550-P25
+    paragraph: "25"
+    topic: evaluation_of_accounting_and_disclosure
+    text: |
+      In forming an opinion on the financial report in accordance with ASA 700, the auditor shall evaluate:
+      (a) Whether the identified related party relationships and transactions have been appropriately accounted for and disclosed in accordance with the applicable financial reporting framework; and
+      (b) Whether the effects of the related party relationships and transactions:
+      (i) Prevent the financial report from achieving fair presentation (for fair presentation frameworks); or
+      (ii) Cause the financial report to be misleading (for compliance frameworks).
+    procedures: [GEN-01]
+  - id: ASA550-P26
+    paragraph: "26"
+    topic: written_representations
+    text: |
+      Where the applicable financial reporting framework establishes related party requirements, the auditor shall obtain written representations from management and, where appropriate, those charged with governance that:
+      (a) They have disclosed to the auditor the identity of the entity’s related parties and all the related party relationships and transactions of which they are aware; and
+      (b) They have appropriately accounted for and disclosed such relationships and transactions in accordance with the requirements of the framework.
+    procedures: [GEN-01]
+  - id: ASA550-P27
+    paragraph: "27"
+    topic: communication_with_those_charged_with_governance
+    text: |
+      Unless all of those charged with governance are involved in managing the entity, the auditor shall communicate with those charged with governance significant matters arising during the audit in connection with the entity’s related parties.
+    procedures: [GEN-01]
+  - id: ASA550-Aus27.2
+    paragraph: "Aus 27.2"
+    topic: modified_opinion_on_disclosures
+    text: |
+      If the auditor concludes that the related party disclosures in the financial report do not satisfy the requirements of the applicable financial reporting framework, the auditor shall modify the auditor’s opinion in accordance with ASA 705.
+    procedures: [GEN-01]

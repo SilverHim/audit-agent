@@ -197,6 +197,41 @@ def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
+def check_review_values(deps: AgentDeps, record: ReviewRecord, task: ReviewTask, target: Versioned | None) -> None:
+    """复核决定与图无关的校验 (第 7 节校验顺序中图的等待之后, 决定 ID 之前): 决定须绑定任务记的目标版本, 且目标此后
+    没有出新版本 (审计师看材料期间可能被别的决定改过); 决定是该任务允许的 (复核队列); 字段 (check_review_fields);
+    功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须独立复核的推理链有效; rerun_params 只能改模板已有的参数.
+
+    target: 任务目标在 Store 中的最新版本, 没有时为 None. 只用 deps 的复核队列, 程序库与功能开关, 不读存储, 不看
+    检查点; 不过抛 DecisionRejected. 任务存在且待决, 图在等待, 决定 ID 未用过由 GraphDecisionSubmit.check_review_record
+    另查 (待决在图的检查之前, 先报 TASK_NOT_PENDING). 例: 决定绑定第 1 版而目标已有第 2 版 → VERSION_MISMATCH.
+    """
+    if record.target_version != task.target_version or target is None or target.version != task.target_version:
+        current = target.version if target is not None else None
+        raise DecisionRejected(
+            "VERSION_MISMATCH",
+            f"{task.target_id} 当前为第 {current} 版, 任务与决定绑定的是第 {record.target_version} 版",
+        )
+    if record.decision not in deps.queue.allowed(task):
+        raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
+    check_review_fields(record, task.kind)
+    if COLLAB in deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
+        check_consultation(record)
+        if record.decision is Decision.dispute_resolution and isinstance(target, Judgment):
+            check_dispute_draft(record, target)
+    if (
+        record.dispute_resolution is DisputeResolution.a7_upheld
+        and isinstance(target, Judgment)
+        and DisputeResolution.a7_upheld not in deps.queue.resolutions(task, target)
+    ):
+        raise DecisionRejected("INVALID_VALUE", "独立复核的推理链没有通过校验, 不能采用其结论 (a7_upheld)")
+    # rerun_params 只能改模板已有的参数: build_run 把它叠加到解析结果上, 不查键名, 拼错的键会悄悄无效
+    params = deps.library.load(task.procedure_id).params
+    unknown = sorted(set(record.rerun_params or {}) - set(params))
+    if unknown:
+        raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有参数 {', '.join(unknown)}")
+
+
 def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
     """confirm 的效果: 判断出新版本置 confirmed, 它解释的例外置 attributed (见 attribute_exceptions).
 
@@ -682,7 +717,8 @@ class GraphDecisionSubmit:
 
     async def check_review_record(self, eid: str, record: ReviewRecord, snapshot: StateSnapshot) -> ReviewTask:
         """第 7 节校验顺序中 RESUME_REQUIRED 之后的部分, 对复核决定: 任务存在且待决, 图在节点内等待, 版本,
-        允许的决定, 字段, 取值. 任务与目标对象读 Store 的最新版本. 返回所处理的任务. 不过抛 DecisionRejected.
+        允许的决定, 字段, 取值 (版本至取值与图无关, 见 check_review_values), 决定 ID 未用过. 任务与目标对象读 Store
+        的最新版本. 返回所处理的任务. 不过抛 DecisionRejected.
         """
         store = self.deps.output_store
         task = await store.get(eid, ReviewTask, record.task_id)
@@ -706,32 +742,8 @@ class GraphDecisionSubmit:
         pack = fill_defaults(snapshot.values)["procedure_pack"]
         if not any(accepts(w, task, pack) for w in waits):
             raise DecisionRejected("NOT_AWAITING_REVIEW", f"当前不在等 {task.procedure_id} 的决定")
-        # 决定须绑定任务记的目标版本, 且目标此后没有出新版本 (审计师看材料期间可能被别的决定改过)
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
-        if record.target_version != task.target_version or target is None or target.version != task.target_version:
-            current = target.version if target is not None else None
-            raise DecisionRejected(
-                "VERSION_MISMATCH",
-                f"{task.target_id} 当前为第 {current} 版, 任务与决定绑定的是第 {record.target_version} 版",
-            )
-        if record.decision not in self.deps.queue.allowed(task):
-            raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
-        check_review_fields(record, task.kind)
-        if COLLAB in self.deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
-            check_consultation(record)
-            if record.decision is Decision.dispute_resolution and isinstance(target, Judgment):
-                check_dispute_draft(record, target)
-        if (
-            record.dispute_resolution is DisputeResolution.a7_upheld
-            and isinstance(target, Judgment)
-            and DisputeResolution.a7_upheld not in self.deps.queue.resolutions(task, target)
-        ):
-            raise DecisionRejected("INVALID_VALUE", "独立复核的推理链没有通过校验, 不能采用其结论 (a7_upheld)")
-        # rerun_params 只能改模板已有的参数: build_run 把它叠加到解析结果上, 不查键名, 拼错的键会悄悄无效
-        params = self.deps.library.load(task.procedure_id).params
-        unknown = sorted(set(record.rerun_params or {}) - set(params))
-        if unknown:
-            raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有参数 {', '.join(unknown)}")
+        check_review_values(self.deps, record, task, target)
         await self._check_decision_id(eid, record.id)
         return task
 

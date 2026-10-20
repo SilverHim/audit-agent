@@ -317,11 +317,22 @@ def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | N
 
 class PointerResolver:
     """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次. client_profile 指针不查存储, 只认
-    profile (校验上下文中本项目采用的那一版客户画像, 需求 R128)."""
+    profile (校验上下文中本项目采用的那一版客户画像, 需求 R128).
 
-    def __init__(self, validator: "OutputValidator", eid: str, profile: ClientProfile | None = None) -> None:
+    standards_of 不为 None 时, 准则片段还须在该程序 YAML 的 standards 内 (需求 R301: 提示词只列这些片段), 否则同未
+    登记的片段一样解析不了, 原因写明片段与程序. 判断取本程序, GEN-09 第一轮的校验与给出的证据 (given_evidence) 取被
+    复核的程序; 必填 (None 不核对), 新调用方漏传时类型检查即报."""
+
+    def __init__(
+        self,
+        validator: "OutputValidator",
+        eid: str,
+        standards_of: str | None,
+        profile: ClientProfile | None = None,
+    ) -> None:
         self.validator = validator
         self.eid = eid
+        self.standards_of = standards_of  # 准则片段须在其 standards 内的程序, 为空不核对
         self.profile = profile
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}  # 解析得了的行, (行类型, 行 ID) -> 行
         # (source_type, source_id) -> (查得的对象, 查不到的原因)
@@ -342,7 +353,11 @@ class PointerResolver:
             return row, "" if row is not None else "查无此行"
         if source_type == "standard":
             fragment = v.library.fragment(source_id)
-            return fragment, "" if fragment is not None else "准则片段未注册"
+            if fragment is None:
+                return None, "准则片段未注册"
+            if self.standards_of is not None and source_id not in v.library.load(self.standards_of).standards:
+                return None, f"准则片段 {source_id} 不在 {self.standards_of} 的 standards 内"
+            return fragment, ""
         if source_type == "document":
             if self._documents is None:
                 self._documents = {d.id: d for d in await v.financial.documents(self.eid)}
@@ -469,8 +484,9 @@ class OutputValidator:
     async def _judgment(
         self, eid: str, draft: JudgmentDraft, ctx: ValidationContext
     ) -> tuple[JudgmentDraft, Level | None, list[int], list[str]]:
-        """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误)."""
-        resolver = PointerResolver(self, eid, ctx.client_profile)
+        """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误).
+        准则片段按 ctx.standards_of 核对 (见 PointerResolver)."""
+        resolver = PointerResolver(self, eid, ctx.standards_of, ctx.client_profile)
         errors: list[str] = []
         valid = 0
 
@@ -514,8 +530,9 @@ class OutputValidator:
     ) -> tuple[CriticIndependent, list[int], list[str], list[str]]:
         """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页,
         画像须同字段), 否则该步不受支持. ctx.critic_drafts 为真 (功能 collab) 时另核对错报草稿 (_critic_draft),
-        其问题与推理链的分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题)."""
-        resolver = PointerResolver(self, eid, ctx.client_profile)
+        其问题与推理链的分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题). 准则片段另按
+        ctx.standards_of (被复核的程序) 核对 (见 PointerResolver)."""
+        resolver = PointerResolver(self, eid, ctx.standards_of, ctx.client_profile)
         allowed = {evidence_key(p) for p in ctx.allowed_evidence or []}
         errors: list[str] = []
         steps: list[ReasoningStep] = []
@@ -838,7 +855,9 @@ class JudgmentEngine:
             template,
             run,
             variables,
-            ValidationContext(rule_findings=ctx.rule_findings, client_profile=ctx.client_profile),
+            ValidationContext(
+                rule_findings=ctx.rule_findings, client_profile=ctx.client_profile, standards_of=template.id
+            ),
             template.owner,
             ctx.fixture_key,
         )

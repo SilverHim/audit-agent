@@ -82,7 +82,7 @@ async def call(engine: JudgmentEngine, contract: DocumentRef = CON001, key: str 
         template,
         RUN,
         kw.pop("variables", variables(contract)),
-        ValidationContext(document=contract),
+        ValidationContext(document=contract, standards_of=None),
         AgentId.A3,
         key,
     )
@@ -149,7 +149,9 @@ async def test_missing_variable_through_tojson_raises_undefined(
     engine, trail = setup(llm)
     template = make_deps(FakeRegistry(), FakeTrail()).library.load(procedure_id)
     with pytest.raises(UndefinedError):
-        await engine.call_llm(EID, template, make_run(procedure_id), variables, ValidationContext(), actor)
+        await engine.call_llm(
+            EID, template, make_run(procedure_id), variables, ValidationContext(standards_of=None), actor
+        )
     assert llm.requests == [] and trail.entries == []
 
 
@@ -259,7 +261,13 @@ async def test_semantic_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch) 
     engine = deps.judgments
     monkeypatch.setattr(engine, "render", lambda template, variables: "REV-02 prompt")
     result = await engine.call_llm(
-        EID, deps.library.load("REV-02"), make_run("REV-02"), {}, ValidationContext(), AgentId.A6, "SI-2026-0612"
+        EID,
+        deps.library.load("REV-02"),
+        make_run("REV-02"),
+        {},
+        ValidationContext(standards_of=None),
+        AgentId.A6,
+        "SI-2026-0612",
     )
     assert result.attempts == 1 and result.report.level_failed == "semantic"
     assert isinstance(result.report.output, JudgmentDraft)
@@ -335,7 +343,13 @@ async def test_trail_failure_becomes_failed_run() -> None:
     class CallingAgent(ScriptA3):
         async def execute(self, ctx: RunContext) -> None:
             await self.deps.judgments.call_llm(
-                EID, ctx.template, ctx.run, variables(), ValidationContext(document=CON001), self.agent_id, "CON-001"
+                EID,
+                ctx.template,
+                ctx.run,
+                variables(),
+                ValidationContext(document=CON001, standards_of=None),
+                self.agent_id,
+                "CON-001",
             )
 
     patch, writer = await GraphNodes(deps, parallel_cap=2).run_agent(

@@ -19,6 +19,7 @@ from langgraph.types import Command
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents import evidence
+from backend.agents.concierge.report import revision_inputs
 from backend.agents.evidence import confirmation_key, legacy_key
 from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.data import DataChange, DataInput, ExtractionEdit, TableKind, table_changes
@@ -807,7 +808,7 @@ async def test_redraft_after_rerun_has_no_annotations() -> None:
         "rerun_requests": [request(report_revision=1, procedure_ids=["CSH-02"], superseded_run_ids=["RUN-CSH-02-1"])],
     }
     agent, ctx, trail = revising(state, run_no=2)
-    previous, annotations, addresses = agent.revision_inputs(ctx, 2)
+    previous, annotations, addresses = revision_inputs(ctx, 2)
     assert previous == {
         "opinion": first.sections[ReportSection.opinion],
         "basis_for_opinion": first.sections[ReportSection.basis_for_opinion],
@@ -824,13 +825,13 @@ async def test_redraft_after_rerun_has_no_annotations() -> None:
 async def test_reject_wins_and_rerun_of_other_report_does_not_count() -> None:
     """有针对上一稿的退回决定时按退回; 重跑请求的 report_revision 不是上一稿时不算, 照旧报错."""
     first = report(1)
-    agent, ctx, _ = revising(
+    _, ctx, _ = revising(
         {"report_versions": [first], "gate_decisions": [REJECT], "rerun_requests": [request(report_revision=1)]}, 2
     )
-    assert agent.revision_inputs(ctx, 2)[2] == REJECT.id
-    agent, ctx, _ = revising({"report_versions": [first], "rerun_requests": [request(report_revision=None)]}, 2)
+    assert revision_inputs(ctx, 2)[2] == REJECT.id
+    _, ctx, _ = revising({"report_versions": [first], "rerun_requests": [request(report_revision=None)]}, 2)
     with pytest.raises(LookupError, match="也没有其后的过期重跑"):
-        agent.revision_inputs(ctx, 2)
+        revision_inputs(ctx, 2)
 
 
 def test_phase_transition_key_counts_reruns() -> None:

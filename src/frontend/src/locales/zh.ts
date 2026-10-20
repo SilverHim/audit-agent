@@ -767,6 +767,14 @@ export const zh: Messages = {
     exceptions: '规则发现',
     judgments: '判断',
     none: '无',
+    notRun: {
+      title: '未执行的规则',
+      status: { not_executable: '无法执行', skipped: '跳过' },
+      meaning: {
+        not_executable: '无法执行：该规则本应执行，但缺少所需的数据或参数，补齐后重跑。',
+        skipped: '跳过：按程序设计，该规则不适用于本项目。',
+      },
+    },
   },
   rerun: {
     stale: '数据已更新，结果已过期',
@@ -1424,5 +1432,13 @@ export const zh: Messages = {
     loadingRecord: '正在加载记录…',
     cannotOpen: '这类来源无法在此打开。',
     page: (n) => `第 ${n} 页`,
+    profile: {
+      declared: '管理层申报',
+      version: (n) => `客户画像第 ${n} 版（本项目采用）`,
+      note: '管理层申报的资料，未经审计组核实。',
+      not_adopted: '找不到本项目采用的客户画像版本。',
+      other_profile: '该指针指向的不是本项目客户的画像。',
+      unknown_field: '客户画像没有这个字段。',
+    },
   },
 }

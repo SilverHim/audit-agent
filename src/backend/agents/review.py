@@ -206,6 +206,7 @@ class ReviewAgent(ProcedureAgent[None]):
                 rule_findings=list(findings),
                 critic_drafts=COLLAB in self.deps.features,
                 client_profile=profile,
+                standards_of=ctx.template.id,  # 被复核程序的 standards (需求 R301)
             ),
             self.agent_id,
             f"{subject}-r1",
@@ -235,7 +236,7 @@ class ReviewAgent(ProcedureAgent[None]):
                 },
                 "generator": {"conclusion": judgment.conclusion, "proposed_action": judgment.proposed_action.value},
             },
-            ValidationContext(),
+            ValidationContext(standards_of=None),
             self.agent_id,
             f"{subject}-r2",
             llm=llm,
@@ -280,11 +281,12 @@ class ReviewAgent(ProcedureAgent[None]):
     ) -> list[EvidencePointer]:
         """第一轮给出的证据: 判断引用的指针 (evidence_pointers) 中按 OutputValidator 引用级解析得了的, 改写后的指针.
         profile: 本项目采用的客户画像 (cited_profile), client_profile 指针按它解析, 规则同 OutputValidator.
+        准则片段同 A6 校验, 按被复核程序 (judgment.procedure_id) 的 standards 核对 (需求 R301).
 
-        A6 校验时解析不了的指针原样留在判断里 (只要还有别的有效指针), 如指向 llm_call 的留痕, 其明细含旧输出的结论;
-        这些既不给模型, 也不进推理链可引用的证据.
+        A6 校验时解析不了的指针原样留在判断里 (只要还有别的有效指针), 如指向 llm_call 的留痕 (其明细含旧输出的结论),
+        或不在该程序 standards 内的准则片段; 这些既不给模型, 也不进推理链可引用的证据.
         """
-        resolver = PointerResolver(self.deps.judgments.validator, eid, profile)
+        resolver = PointerResolver(self.deps.judgments.validator, eid, judgment.procedure_id, profile)
         given = []
         for p in evidence_pointers(judgment):
             resolved, _ = await resolver.resolve(p)

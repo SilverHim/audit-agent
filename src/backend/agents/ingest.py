@@ -102,7 +102,7 @@ async def extract_contract(
     pages = await deps.evidence_store.pages(eid, document.id)
     variables = {"client_name": profile.legal_name, "document": document.model_dump(mode="json"), "pages": pages}
     result = await deps.judgments.call_llm(
-        eid, template, run, variables, ValidationContext(document=document), AgentId.A3, cid
+        eid, template, run, variables, ValidationContext(document=document, standards_of=None), AgentId.A3, cid
     )
     if result.report.level_failed is not None:
         return None
@@ -275,7 +275,7 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
                 return Extracted(document, confirmation.bank_account_id, kept)
             pages = await self.deps.evidence_store.pages(eid, document.id)
             variables = {"document": document.model_dump(mode="json"), "pages": pages}
-            vctx = ValidationContext(document=document, confirmation=confirmation)
+            vctx = ValidationContext(document=document, confirmation=confirmation, standards_of=None)
             result = await self.deps.judgments.call_llm(
                 eid, ctx.template, ctx.run, variables, vctx, self.agent_id, confirmation.bank_account_id
             )
@@ -629,7 +629,13 @@ class DocumentIntake:
         stem = PurePath(document.file_name).stem
         try:
             result = await self.deps.judgments.call_llm(
-                eid, CLASSIFY, upload_run(CLASSIFY.id, document), variables, ValidationContext(), self.agent, stem
+                eid,
+                CLASSIFY,
+                upload_run(CLASSIFY.id, document),
+                variables,
+                ValidationContext(standards_of=None),
+                self.agent,
+                stem,
             )
             output = cast(DocumentClassification | None, result.report.output)
             kind = output.document_type if result.report.level_failed is None and output is not None else None
@@ -819,7 +825,7 @@ class DocumentIntake:
             template,
             upload_run("DOC-06", document),
             variables,
-            ValidationContext(document=document),
+            ValidationContext(document=document, standards_of=None),
             self.agent,
             PurePath(document.file_name).stem,
         )
@@ -855,7 +861,7 @@ class DocumentIntake:
             REGISTRY,
             upload_run(REGISTRY.id, document),
             variables,
-            ValidationContext(document=document),
+            ValidationContext(document=document, standards_of=None),
             self.agent,
             PurePath(document.file_name).stem,
         )

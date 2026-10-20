@@ -2,12 +2,21 @@ import { useQuery } from '@tanstack/react-query'
 import { cn } from 'cn'
 import { FileText } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { reportsGetTrailOptions, standardsGetStandardOptions } from '@/client/@tanstack/react-query.gen'
+import {
+  engagementsGetClientProfileOptions,
+  reportsGetTrailOptions,
+  standardsGetStandardOptions,
+} from '@/client/@tanstack/react-query.gen'
 import { evidenceGetEvidence, evidenceGetRecord } from '@/client/sdk.gen'
 import type { EvidencePointer } from '@/client/types.gen'
+import { StatusPill } from '@/components/chrome'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { formatAbn } from '@/lib/abn'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { formatAud } from '@/lib/money'
+import { humanize, pointerKey } from '@/lib/presentation'
+import { type ProfileField, type ProfilePair, type ProfileWords, profileEvidence } from '@/lib/profile-evidence'
 import type { Messages } from '@/locales/en'
 
 // 能点开行明细的行指针来源 (同后端 SourceType); tests/table-kinds.test.ts 核对与接口一致
@@ -35,10 +44,6 @@ export function standardLabel(code: string, lang: 'zh' | 'en'): string {
   return lang === 'zh' ? `${body} ${number} 第 ${Number(para)} 段` : `${body} ${number} para ${Number(para)}`
 }
 
-function humanize(locator: string): string {
-  return locator.replace(/_cents$/, '').replaceAll('_', ' ')
-}
-
 export function pointerLabel(pointer: EvidencePointer, t: Messages, lang: 'zh' | 'en'): string {
   if (pointer.source_type === 'standard') return standardLabel(pointer.source_id, lang)
   if (pointer.source_type === 'document') {
@@ -54,11 +59,7 @@ export function PointerList({ eid, pointers }: { eid: string; pointers: Evidence
   return (
     <div className="flex flex-wrap gap-1.5">
       {pointers.map((pointer) => (
-        <EvidenceLink
-          key={`${pointer.source_type}:${pointer.source_id}:${pointer.locator}:${pointer.page ?? ''}`}
-          eid={eid}
-          pointer={pointer}
-        />
+        <EvidenceLink key={pointerKey(pointer)} eid={eid} pointer={pointer} />
       ))}
     </div>
   )
@@ -110,6 +111,7 @@ function EvidenceBody({ eid, pointer }: { eid: string; pointer: EvidencePointer 
   }
   if (pointer.source_type === 'standard') return <StandardBody fragmentId={pointer.source_id} />
   if (pointer.source_type === 'trail') return <TrailBody eid={eid} trailId={pointer.source_id} />
+  if (pointer.source_type === 'client_profile') return <ProfileBody eid={eid} pointer={pointer} />
   if (isRowSource(pointer.source_type)) {
     return (
       <RecordBody eid={eid} sourceType={pointer.source_type} sourceId={pointer.source_id} highlight={pointer.locator} />
@@ -218,6 +220,67 @@ function TrailBody({ eid, trailId }: { eid: string; trailId: string }) {
   )
 }
 
+// 客户画像的一个字段 (需求 R302): 本项目采用版本中该字段的内容, 注明版本与管理层申报
+function ProfileBody({ eid, pointer }: { eid: string; pointer: EvidencePointer }) {
+  const { t } = useI18n()
+  const query = useQuery(engagementsGetClientProfileOptions({ path: { eid } }))
+  if (query.isPending) return <p className="text-muted-foreground text-sm">{t.app.loading}</p>
+  if (query.error) return <p className="text-destructive text-sm">{apiMessage(query.error)}</p>
+  // 字段的显示沿用客户资料页 (主体类型, ABN) 与新建客户表单 (报告框架) 的标签与格式
+  const frameworks: Record<string, string> = t.newClient.frameworks
+  const words: ProfileWords = {
+    yes: t.clientPage.yes,
+    no: t.clientPage.no,
+    display: {
+      entity_type: (value) => t.clientPage.entityTypes[value] ?? value,
+      applicable_framework: (value) => frameworks[value] ?? value,
+      abn: formatAbn,
+    },
+  }
+  const shown = profileEvidence(query.data, pointer, words)
+  if (shown.kind !== 'shown') return <p className="text-muted-foreground text-sm">{t.evidence.profile[shown.kind]}</p>
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="flex flex-wrap items-center gap-2">
+        <StatusPill tone="warn">{t.evidence.profile.declared}</StatusPill>
+        <span className="text-muted-foreground">{t.evidence.profile.version(shown.version)}</span>
+      </p>
+      <ProfileContent field={shown.field} />
+      <p className="text-[12.5px] text-muted-foreground">{t.evidence.profile.note}</p>
+    </div>
+  )
+}
+
+function ProfileContent({ field }: { field: ProfileField }) {
+  const { t } = useI18n()
+  if (field.kind === 'undeclared') return <p className="text-muted-foreground">{t.newClient.notDeclared}</p>
+  if (field.kind === 'text') return <p className="break-all font-mono">{field.text}</p>
+  if (field.kind === 'pairs') return <PairList pairs={field.pairs} />
+  return (
+    <ol className="flex list-none flex-col gap-2 p-0">
+      {field.rows.map((row, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: 申报的列表没有 ID, 只读不重排, 行号即位置
+        <li key={index} className="rounded-md border px-3 py-2">
+          {'text' in row ? <span className="break-all font-mono">{row.text}</span> : <PairList pairs={row.pairs} />}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function PairList({ pairs }: { pairs: ProfilePair[] }) {
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
+      {pairs.map(({ key, value }) => (
+        <div key={key} className="contents">
+          <dt className="text-muted-foreground">{key}</dt>
+          <dd className="break-all font-mono">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
 export function RecordTable({ row, highlight }: { row: Record<string, unknown>; highlight?: string }) {
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-sm">
@@ -235,9 +298,7 @@ export function RecordTable({ row, highlight }: { row: Record<string, unknown>; 
 
 function formatCell(key: string, value: unknown): string {
   if (value == null) return '—'
-  if (key.endsWith('_cents') && typeof value === 'number') {
-    return `AUD ${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2 }).format(value / 100)}`
-  }
+  if (key.endsWith('_cents') && typeof value === 'number') return formatAud(value)
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }

@@ -831,6 +831,15 @@ export const en = {
     exceptions: 'Rule findings',
     judgments: 'Judgments',
     none: 'None',
+    notRun: {
+      title: 'Rules not run',
+      status: { not_executable: 'Not executable', skipped: 'Skipped' },
+      meaning: {
+        not_executable:
+          'Not executable: the rule should have run, but data or a parameter it needs is missing. Supply it and re-run.',
+        skipped: 'Skipped: by design the rule does not apply to this engagement.',
+      },
+    },
   },
   rerun: {
     stale: 'Data updated · results out of date',
@@ -1561,6 +1570,14 @@ export const en = {
     loadingRecord: 'Loading the record…',
     cannotOpen: 'This source cannot be opened here.',
     page: (n: number) => `p.${n}`,
+    profile: {
+      declared: 'Declared by management',
+      version: (n: number) => `Client profile version ${n}, as adopted for this engagement`,
+      note: 'Declared by management and not verified by the audit team.',
+      not_adopted: 'The client profile version adopted for this engagement was not found.',
+      other_profile: "This pointer refers to a profile other than this engagement's client.",
+      unknown_field: 'This field is not part of the client profile.',
+    },
   },
 }
 
