@@ -57,6 +57,7 @@ from backend.contracts.models import (
     ReportSection,
     ReviewRecord,
     RiskItem,
+    RuleOutcome,
 )
 from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
@@ -607,6 +608,25 @@ def xero_rev08_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+def xero_gen05_result(run: ProcedureRun) -> RuleResult:
+    """GEN-05 对 Xero 演示的结果 (需求 R131 验收 5, 7, 取自连库跑一次的结果): 9 条规则 0 条例外; 录入时间不可靠, 看录入
+    时间的 R01, R06, R08, R13 不执行 (理由为数据集声明的说明); 分录都没有审批人, R04 不可执行; 录入人只有一个, R07 不可
+    执行. R02, R03 (审批限额 500000), R05 执行而没有命中."""
+    note = xero_traits().entry_timestamps_note or ""
+    return RuleResult(
+        exceptions=[],
+        rows={},
+        outcomes=[
+            RuleOutcome(rule_id="R01", status="skipped", reason=note),
+            RuleOutcome(rule_id="R04", status="not_executable", reason="本期分录都没有审批人 (approved_by 全为空)"),
+            RuleOutcome(rule_id="R06", status="skipped", reason=note),
+            RuleOutcome(rule_id="R07", status="not_executable", reason="本期分录的录入人少于 2 个, 无从比较"),
+            RuleOutcome(rule_id="R08", status="skipped", reason=note),
+            RuleOutcome(rule_id="R13", status="skipped", reason=note),
+        ],
+    )
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES)
@@ -618,6 +638,7 @@ XERO_RULES: dict[
     "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS}),
     "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
     "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
+    "GEN-05": xero_gen05_result,  # 功能 journals 打开时才执行
 }
 
 
