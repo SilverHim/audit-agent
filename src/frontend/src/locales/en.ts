@@ -1561,6 +1561,15 @@ export const en = {
     loadingRecord: 'Loading the record…',
     cannotOpen: 'This source cannot be opened here.',
     page: (n: number) => `p.${n}`,
+    profile: {
+      declared: 'Management representation',
+      version: (n: number) => `Client profile version ${n}, as adopted for this engagement`,
+      undeclared: 'Not declared',
+      note: 'Declared by management and not verified by the audit team.',
+      not_adopted: 'The client profile version adopted for this engagement was not found.',
+      other_profile: "This pointer refers to a profile other than this engagement's client.",
+      unknown_field: 'This field is not part of the client profile.',
+    },
   },
 }
 
