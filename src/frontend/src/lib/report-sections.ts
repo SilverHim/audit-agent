@@ -1,14 +1,16 @@
 import type { ReportSection } from '@/client/types.gen'
 
 // 审计报告各段的段名只显示一次 (需求 R352). 意见段与形成意见的基础段的正文首行是段名 (RPT-03 校验首行为该意见类型
-// 的标题, 后端 REPORT_HEADINGS), 董事与审计师责任两段取报告模板 (knowledge/templates/report.yaml), 首行也是段名:
-// 这几段取正文首行作段名, 不另显示界面的段名. 其余段 (签名块, 其他法律法规要求) 正文不带段名, 用界面的段名
+// 的标题, 后端 REPORT_HEADINGS); 报告模板 (knowledge/templates/report.yaml) 的各段按接口文档第 8 节的约定首行为标题,
+// 签名块除外. 这几段取正文首行作段名, 不另显示界面的段名; 签名块正文不带段名, 用界面的段名. 正文为空的段 (如现在
+// 模板里留空的其他法律法规要求) 也用界面的段名
 
 const HEADED: ReadonlySet<ReportSection> = new Set([
   'opinion',
   'basis_for_opinion',
   'directors_responsibilities',
   'auditor_responsibilities',
+  'other_legal_and_regulatory',
 ])
 
 export type ReportPart = { heading: string; body: string }

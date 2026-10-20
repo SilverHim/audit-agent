@@ -26,6 +26,19 @@ describe('报告段名', () => {
     })
   })
 
+  test('其他法律法规要求按模板约定首行为标题: 有正文时同样取首行', () => {
+    const text =
+      'Report on Other Legal and Regulatory Requirements\n\nIn our opinion, the Company has kept proper records.'
+    expect(reportPart('other_legal_and_regulatory', text, en.reportSections.other_legal_and_regulatory)).toEqual({
+      heading: 'Report on Other Legal and Regulatory Requirements',
+      body: 'In our opinion, the Company has kept proper records.',
+    })
+  })
+
+  test('自带段名的段只有标题行: 正文为 "—"', () => {
+    expect(reportPart('opinion', 'Opinion\n', en.reportSections.opinion)).toEqual({ heading: 'Opinion', body: '—' })
+  })
+
   test('正文为空: 用界面的段名, 正文为 "—" (自带段名的段也一样)', () => {
     expect(reportPart('other_legal_and_regulatory', '', en.reportSections.other_legal_and_regulatory)).toEqual({
       heading: 'Other legal and regulatory requirements',
