@@ -3,15 +3,16 @@
 模块流程里."""
 
 from collections import Counter
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from backend.adapters.xero_supplements import STAGE_REQUESTS
-from backend.contracts.data import DataRequest, RequestStatus
-from backend.contracts.models import DocumentType, Engagement
+from backend.contracts.data import DataRequest, DemoImportResult
+from backend.contracts.models import DocumentType, Engagement, TrailEntry, TrailKind
 from backend.persistence.stores import XeroDatasetLoader
+from backend.services.demo_import import DEMO_JOB
 from tests.external import supplements_dir
 from tests.fakes import NOW, api_client
 from tests.test_demo_import import EID, Env, env
@@ -67,34 +68,40 @@ async def test_rejected_requests_and_unavailable_summary(
     assert reads["state"] == (1 if available else 0)
 
 
-@pytest.mark.parametrize(
-    ("status", "busy", "suggested"),
-    [
-        ("open", False, "statements"),
-        ("received", False, None),  # 审计师已在补交卡片上交了报表草稿
-        ("unavailable", False, None),  # 标了客户无此类资料
-        ("open", True, None),  # 图在后台跑 (持项目锁, 不是数据作业): 流程没停在任何位置, 这时导入报 409
-    ],
-)
-async def test_statements_are_suggested_only_for_an_open_request_while_idle(
-    status: RequestStatus, busy: bool, suggested: str | None
-) -> None:
-    """待审财报的补交请求为 open 且图没在后台跑时才建议 statements. 防请求已收到或标了没有时仍建议, 或图在跑时按钮可点
-    却 409."""
+async def test_old_statements_trail_and_request_are_left_out() -> None:
+    """Issue #46 前的项目: 留痕在承接之后还有 statements 阶段的 demo_import, 报表草稿请求仍 open. 概览不报错,
+    stages_done 不列 statements, last 跳过那条取承接的结果, 也不因那条请求建议导入. 防删去阶段后读旧留痕报错, last
+    变空, 或仍建议已没有的阶段."""
     e = env()
-    request_id = STAGE_REQUESTS["statements"]
-    e.data.data_requests[request_id] = DataRequest(
-        id=request_id,
+    acceptance = DemoImportResult(stage="acceptance", status="imported", uploaded=["appointment.pdf"], data_version=1)
+    old = {"stage": "statements", "status": "imported", "uploaded": ["fs_v1.pdf"], "data_version": 11}
+    for n, result in enumerate([acceptance.model_dump(mode="json"), old]):
+        entry = TrailEntry(
+            engagement_id=EID,
+            kind=TrailKind.data,
+            actor="U-1",
+            summary="演示数据导入",
+            payload={"action": DEMO_JOB, **result},
+            created_at=NOW + timedelta(seconds=n),
+        )
+        await e.trail.record(entry)
+    e.data.data_requests["REQ-financial_statements"] = DataRequest(
+        id="REQ-financial_statements",
         kind="document",
         document_type=DocumentType.financial_statements,
-        title="待审财务报表",
+        title="财务报表草稿",
         reason_code="not_provided",
-        status=status,
         created_at=NOW,
     )
-    if busy:
-        e.runner.acquire(EID)
-    assert (await e.service.demo_summary(EID)).suggested == suggested
+
+    summary = await e.service.demo_summary(EID)
+
+    assert (summary.available, summary.stages_done, summary.suggested, summary.last) == (
+        True,
+        ["acceptance"],
+        None,
+        acceptance,
+    )
 
 
 def test_supplement_needs_the_snapshot_too(tmp_path: Path) -> None:

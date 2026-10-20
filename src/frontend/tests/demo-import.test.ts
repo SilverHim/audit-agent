@@ -16,7 +16,6 @@ describe('demoButton', () => {
   test.each([
     ['acceptance', '导入演示资料：承接文件'],
     ['fieldwork', '导入演示资料：外勤账表与文件'],
-    ['statements', '导入演示资料：待审财报'],
   ] as const)('按后端给的阶段 %s 一键导入', (stage, label) => {
     expect(demoButton({ ...SUMMARY, suggested: stage }, zh)).toEqual({ stage, label, hint: null })
   })

@@ -62,7 +62,6 @@ from tests.xero_fakes import (
     XeroFakeDataStore,
     make_xero_deps,
     xero_engagement,
-    xero_financial_statements,
     xero_financial_store,
     xero_profile,
     xero_tables,
@@ -110,12 +109,11 @@ def env(llm: LLMClient | None = None, engagement: Engagement | None = None, demo
 
 
 def snapshot(e: Env) -> dict[str, Any]:
-    """一个停点的状态 (副本): 文件登记, 合同, save_contract 的调用 (合同编号), 待审财报的各版, 账表版本, 数据版本,
-    数据变动, 就绪, 补交请求, 留痕."""
+    """一个停点的状态 (副本): 文件登记, 合同, save_contract 的调用 (合同编号), 账表版本, 数据版本, 数据变动, 就绪,
+    补交请求, 留痕."""
     return {
         "documents": list(e.financial.document_refs),
         "contracts": dict(e.financial.saved_contracts),
-        "statements": list(e.financial.statement_versions),
         "changes": list(e.data.data_changes),
         "save_calls": list(e.financial.save_calls),
         "versions": list(e.data.table_versions),
@@ -184,8 +182,6 @@ class Flow:
     doc04: ProcedureStatus
     state_documents: list[DocumentRef]  # 确认就绪, 图继续之后编排状态里的文件登记 (DOC-04 交回)
     after_ready: dict[str, Any]
-    statements: DemoImportResult | None
-    after_statements: dict[str, Any]
     demos: dict[str, DemoSummary]  # 各停点概览的 demo 一项 (需求 R270)
 
 
@@ -216,8 +212,6 @@ async def run_flow() -> Flow:
     state_documents = list((await e.runner.app.aget_state(GraphRunner.config(EID))).values.get("documents", []))
     after_ready = snapshot(e)
     demos["ready"] = await e.service.demo_summary(EID)
-    statements = await import_stage(e.service, EID, "statements", ACTOR)
-    demos["statements"] = await e.service.demo_summary(EID)
     return Flow(
         http,
         acceptance,
@@ -232,8 +226,6 @@ async def run_flow() -> Flow:
         doc04,
         state_documents,
         after_ready,
-        statements,
-        snapshot(e),
         demos,
     )
 
@@ -258,6 +250,7 @@ def added(before: dict[str, Any], after: dict[str, Any]) -> list[TrailEntry]:
         ("xero/20261017-mock", "acceptance", False, "INVALID_VALUE", NO_DEMO),
         (None, "acceptance", False, "INVALID_VALUE", NO_DEMO),  # 新建的客户, 没有数据集
         (XERO_DATASET, "planning", False, "INVALID_VALUE", "没有阶段 planning"),
+        (XERO_DATASET, "statements", False, "INVALID_VALUE", "没有阶段 statements"),  # Issue #46 删去的报表一批
         (XERO_DATASET, "manual", False, "INVALID_VALUE", "人工任务页上传"),  # 管理层声明书不经演示导入
         (XERO_DATASET, "acceptance", True, "ENGAGEMENT_LOCKED", ""),
     ],
@@ -493,27 +486,6 @@ def test_doc04_reuses_the_uploaded_contracts_after_ready(flow: Flow) -> None:
     assert [e.payload.get("reason") for e in new if e.payload.get("action") == "ready"] == [READY_REASON]
 
 
-# ── 财报 (验收 6) ──
-
-
-async def test_statements_without_an_open_request_are_classified() -> None:
-    """请求不在 open (项目没有体检过, 没有这项请求) 时照常由 A3 分类为 financial_statements 并抽取 (需求 R217),
-    再补登记."""
-    e = env()
-    result = await import_stage(e.service, EID, "statements", ACTOR)
-    assert result is not None and result.uploaded == ["fs_v1.pdf"]
-    [fs] = e.financial.document_refs
-    assert (fs.type, fs.status, fs.reliability, fs.document_date) == (
-        DocumentType.financial_statements,
-        "extracted",
-        Reliability.internal_original,
-        date(2026, 10, 22),
-    )
-    calls = [x.procedure_id for x in e.trail.entries if x.kind is TrailKind.llm_call]
-    assert calls == ["DOC-CLASSIFY", "DOC-STATEMENTS"]
-    assert await e.financial.financial_statements(EID) == xero_financial_statements()
-
-
 # ── 分类与清单不符 (验收 5), 之后的改动不盖掉 ──
 
 
@@ -719,8 +691,8 @@ async def test_backfill_error_is_recorded_as_failed(
 
 
 def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
-    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后不再建议 (不再要报表
-    草稿, Issue #46); 三段都导入后 stages_done 齐. last 为最近一次 (有写入的) 导入的结果."""
+    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后两段都已导入, 不再建议
+    (没有报表一批, Issue #46). last 为最近一次 (有写入的) 导入的结果."""
     got = {
         k: (d.available, d.stages_done, d.suggested, d.last.stage if d.last else None) for k, d in flow.demos.items()
     }
@@ -729,7 +701,6 @@ def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
         "accepted": (True, ["acceptance"], None, "acceptance"),
         "awaiting": (True, ["acceptance"], "fieldwork", "acceptance"),
         "ready": (True, ["acceptance", "fieldwork"], None, "fieldwork"),
-        "statements": (True, ["acceptance", "fieldwork", "statements"], None, "statements"),
     }
     assert (flow.demos["accepted"].last, flow.demos["ready"].last) == (flow.acceptance, flow.fieldwork)
 

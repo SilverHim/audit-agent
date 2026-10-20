@@ -103,7 +103,7 @@ DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_con
 SNAPSHOT_REPO = REPO
 # 补造画像 id 须带的前缀 (快照组织 ID 推出, 见 Supplements.client_profile); 写成常量, 没有快照时也能读画像
 CLIENT_PREFIX = "CLIENT-XERO-3C1332BB-"
-EXTRACTED = {DocumentType.contract, DocumentType.financial_statements}  # 演示导入后已抽取的文件类型
+EXTRACTED = {DocumentType.contract}  # 演示导入后已抽取的文件类型
 # 行类型 (FinancialDataStore.record 的 source_type) ← 账表; 试算表另按科目代码取本期行, 同真实实现
 RECORD_TYPES: dict[TableKind, str] = {
     TableKind.journal_entries: "journal_entry",
@@ -169,14 +169,14 @@ def xero_traits(loader: XeroDatasetLoader | None = None) -> DatasetTraits:
 
 
 def xero_uploads(stage: DemoStage | None = None, loader: XeroDatasetLoader | None = None) -> list[DemoUpload]:
-    """演示导入清单的上传文件 (Supplements.uploads, 同 plan): stage 为空取全部 23 份, 否则只取该阶段的."""
+    """演示导入清单的上传文件 (Supplements.uploads, 同 plan): stage 为空取全部 22 份, 否则只取该阶段的."""
     return [u for u in supplement(loader).uploads() if stage is None or u.stage == stage]
 
 
 def xero_documents(stage: DemoStage, loader: XeroDatasetLoader | None = None) -> list[DocumentRef]:
     """到 stage 为止 (含) 各阶段上传并补登记后的文件登记, 按清单顺序: 渠道 auditor_upload, 上传人为项目负责人,
-    类型, 可靠性, 文件日期与关联对象同清单, 哈希与页数取 manifest; 合同与财务报表已抽取 (extracted, 需求 R217), 其余
-    classified. 份数: acceptance 2, fieldwork 21, statements 22, manual 23."""
+    类型, 可靠性, 文件日期与关联对象同清单, 哈希与页数取 manifest; 合同已抽取 (extracted), 其余 classified.
+    份数: acceptance 2, fieldwork 21, manual 22."""
     done = STAGES[: STAGES.index(stage) + 1]
     entries = manifest_documents(loader)
     return [
@@ -264,8 +264,8 @@ def xero_confirmations(loader: XeroDatasetLoader | None = None) -> FakeConfirmat
 
 
 def xero_financial_statements(loader: XeroDatasetLoader | None = None) -> FinancialStatements:
-    """待审财报第 1 版: 补造的 financial_statements/fs_v1.json (document_id 为 fs_v1.pdf), 同 statements 阶段上传后
-    A3 的抽取 (需求 R217)."""
+    """待审财报第 1 版: 补造的 financial_statements/fs_v1.json (document_id 为 fs_v1.pdf), 同上传 fs_v1.pdf 后 A3 的
+    抽取 (需求 R217)."""
     path = supplement(loader).root / "financial_statements" / "fs_v1.json"
     return FinancialStatements.model_validate_json(path.read_bytes())
 
@@ -336,15 +336,11 @@ def xero_financial_store(
     stage: DemoStage = "fieldwork", contracts: bool = True, loader: XeroDatasetLoader | None = None
 ) -> FakeFinancialStore:
     """装好演示数据的假财务存储: 八张表 (put_rows) 与工资册, 到 stage 为止上传的文件; contracts 为真时预置
-    xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError); stage 到 statements 时另预置
-    xero_financial_statements() (需求 R217)."""
+    xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError)."""
     if contracts and stage == "acceptance":
         raise ValueError("合同在 fieldwork 阶段才上传, acceptance 阶段不能预置合同")
-    statements = [xero_financial_statements(loader)] if STAGES.index(stage) >= STAGES.index("statements") else []
     store = FakeFinancialStore(
-        documents=xero_documents(stage, loader),
-        contracts=xero_contracts(loader) if contracts else None,
-        statements=statements,
+        documents=xero_documents(stage, loader), contracts=xero_contracts(loader) if contracts else None
     )
     for name, rows in xero_tables(loader).items():
         put_rows(store, TableKind(name), rows)

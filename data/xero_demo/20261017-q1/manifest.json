@@ -1,7 +1,7 @@
 {
   "dataset": "xero/20261017-q1",
   "generator": "data/generate_xero_demo.py",
-  "spec_sha256": "0685667a74813ce2777a8a662497b0951246977f9cddfb6d663538dede19be97",
+  "spec_sha256": "9d775646bbffe5a65c96ac33919685d36bab5ea8d123b3ce8ed2fe543939f488",
   "snapshot": {
     "name": "xero/20261017-q1",
     "files": [
@@ -318,7 +318,7 @@
     },
     {
       "path": "documents/index.csv",
-      "sha256": "7f384d4faed0dfbeaf384738efd14b74f5bd55fbdcac26aa649f4ca85b385511",
+      "sha256": "2d4d13c2172871c79c4a73991706ed8347d61608ed4d86b3c162d6da56bf064c",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -1347,20 +1347,6 @@
         "ACN-900043030"
       ],
       "registration": "fieldwork",
-      "synthetic": true
-    },
-    {
-      "path": "financial_statements/fs_v1.pdf",
-      "sha256": "e2670a8e43ace7a668789d5f5fefa66fd35f85526101328d7600841f7a46fee7",
-      "document_id": "DOC-e2670a8e43ac",
-      "type": "financial_statements",
-      "reliability": "internal_original",
-      "page_count": 6,
-      "document_date": "2026-10-22",
-      "related_ids": [
-        "FS"
-      ],
-      "registration": "statements",
       "synthetic": true
     },
     {

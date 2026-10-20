@@ -316,7 +316,8 @@ def check_cuad_sources(cuad: Path) -> list[str]:
 
 
 def check_manifest(directory: Path, manifest: dict[str, Any]) -> list[str]:
-    """重算各文件哈希; 目录里有而清单没有, 或清单有而目录没有的文件都报错; spec_sha256 须等于当前规格."""
+    """重算各文件哈希; 目录里有而清单没有, 或清单有而目录没有的文件都报错; PDF 除规格写明不登记的 (fs_v1.pdf) 外
+    都要在 documents 段; spec_sha256 须等于当前规格."""
     problems: list[str] = []
     listed = {item["path"]: item for item in manifest["files"]}
     present = {p.relative_to(directory).as_posix() for p in files_of(directory)} - {"manifest.json"}
@@ -328,7 +329,7 @@ def check_manifest(directory: Path, manifest: dict[str, Any]) -> list[str]:
     for doc in manifest["documents"]:
         if doc["path"] in listed and doc["sha256"] != listed[doc["path"]]["sha256"]:
             problems.append(f"{rel(directory / doc['path'])}: documents 段的 sha256 与 files 段不符")
-    pdfs = {name for name in listed if name.endswith(".pdf")}
+    pdfs = {name for name in listed if name.endswith(".pdf")} - gen.unregistered(gen.load_spec())
     documented = {doc["path"] for doc in manifest["documents"]}
     problems += [f"{rel(directory / name)}: PDF 在 manifest documents 段没有登记" for name in sorted(pdfs - documented)]
     if manifest["spec_sha256"] != gen.sha256(gen.SPEC):
@@ -577,16 +578,17 @@ def expected_roles(person: Person, extracts: Iterable[Extract]) -> list[RoleRow]
 
 
 def check_pdf_content(directory: Path, manifest: dict[str, Any]) -> list[str]:
-    """PDF 的页数与内容: manifest 的 page_count 等于实际页数; 规格写有正文的 PDF 与按登记 JSON 渲染的 PDF,
-    每页每个非空行都出现在该页文本层 (空白归一); 登记 PDF 每页含名称, ACN 与日期."""
+    """PDF 的页数与内容: manifest 的 page_count 等于实际页数; 规格写有正文的 PDF (含不登记的, 见 gen.unregistered)
+    与按登记 JSON 渲染的 PDF, 每页每个非空行都出现在该页文本层 (空白归一); 登记 PDF 每页含名称, ACN 与日期."""
     problems: list[str] = []
     expected = gen.pdf_sources(directory)
-    for doc in manifest["documents"]:
+    unregistered = [({"path": name}, False) for name in sorted(gen.unregistered(gen.load_spec()))]
+    for doc, registered in [*((d, True) for d in manifest["documents"]), *unregistered]:
         path = directory / doc["path"]
         texts = pdf_pages(path) if path.is_file() else None
         if texts is None:
             continue  # 缺失或无法解析由 check_manifest 与 check_synthetic 报
-        if doc.get("page_count") != len(texts):
+        if registered and doc.get("page_count") != len(texts):
             problems.append(f"{rel(path)}: manifest 的 page_count 与实际页数 {len(texts)} 不符")
         pages = expected.get(doc["path"])
         if pages is None:
@@ -769,7 +771,6 @@ def check_confirmation_text(directory: Path) -> list[str]:
 
 
 XERO_REF = re.compile(r"(?:XJ|BT|SI|BA)-|\d+$")  # 由快照核对的关联对象: 分录, 流水, 发票, 银行账户, 科目代码
-FS_REF = "FS"  # 关联待审财报的写法, 等于 fs_v1.json 的 id
 EMPLOYEE = re.compile(r"E\d{3}$")  # 员工号, 对照 payroll/employees.csv
 
 
@@ -779,8 +780,8 @@ def related(row: Mapping[str, str | None]) -> list[str]:
 
 def check_index(directory: Path, manifest: dict[str, Any]) -> list[str]:
     """documents/index.csv: 每行的文件在 manifest documents 段, 类型, 可靠性, 日期与关联对象一致, 且是规格中
-    index 为真的全部文件; 关联对象中的 ACN- 在 registry/asic.json, CLIENT- 等于画像 ID, 员工号在工资册, FS 等于
-    fs_v1.json 的 id (Xero 对象由快照核对)."""
+    index 为真的全部文件; 关联对象中的 ACN- 在 registry/asic.json, CLIENT- 等于画像 ID, 员工号在工资册 (Xero 对象
+    由快照核对)."""
     wanted = [d["path"] for d in gen.load_spec()["documents"] if d.get("index")]
     rows = read_table(directory, "documents/index.csv")
     where = rel(directory / "documents" / "index.csv")
@@ -805,14 +806,9 @@ def check_index(directory: Path, manifest: dict[str, Any]) -> list[str]:
     clients = {str(profile.get("id"))} if isinstance(profile, dict) else set()
     staff = read_table(directory, "payroll/employees.csv", quiet=True) or []
     employees = {r["employee_id"] for r in staff}
-    fs = read_json(directory / gen.FS_JSON)
-    statements = {str(fs.get("id"))} if isinstance(fs, dict) else set()
     for row in rows:
         for ref in related(row):
-            if ref == FS_REF:
-                if ref not in statements:
-                    problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不是 {gen.FS_JSON} 的 id")
-            elif ref.startswith("ACN-") and ref not in companies:
+            if ref.startswith("ACN-") and ref not in companies:
                 problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不在 registry/asic.json")
             elif ref.startswith("CLIENT-") and ref not in clients:
                 problems.append(f"{where}: {row['path']} 的关联对象 {ref} 不是画像 ID")
@@ -915,8 +911,8 @@ def check_financial_statements(directory: Path, manifest: dict[str, Any]) -> lis
     codes = [x.code for x in fs.lines]
     if len(set(codes)) != len(codes):
         problems.append(f"{where}: 行代码重复")
-    documents = {d["path"]: d for d in manifest["documents"]}
-    if fs.document_id != documents.get(gen.FS_PDF, {}).get("document_id"):
+    files = {item["path"]: item["sha256"] for item in manifest["files"]}
+    if gen.FS_PDF not in files or fs.document_id != "DOC-" + files[gen.FS_PDF][:12]:
         problems.append(f"{where}: document_id 不是 {gen.FS_PDF} 的文件 ID")
     lines = {x.code: x for x in fs.lines}
     for statement in TB_STATEMENTS:
@@ -1147,10 +1143,10 @@ def check_manual(directory: Path, manifest: dict[str, Any]) -> list[str]:
     return problems
 
 
-DOCUMENT_COUNTS = (29, 57)  # 补造 document 的份数与总页数 (第 9.5 节)
-# 各登记途径的份数: 演示数据导入上传 (承接时停在 ACC-01 闸门, P1 开头停在等数据时, 完成阶段按补交请求), 人工任务上传,
-# 登记 mock 回执存档, 函证 mock 银行直达存档
-REGISTRATION_COUNTS = {"acceptance": 2, "fieldwork": 19, "statements": 1, "manual": 1, "registry": 4, "confirmation": 2}
+DOCUMENT_COUNTS = (28, 51)  # 补造 document 的份数与总页数 (第 9.5 节; fs_v1.pdf 不登记, Issue #46)
+# 各登记途径的份数: 演示数据导入上传 (承接时停在 ACC-01 闸门, P1 开头停在等数据时), 人工任务上传, 登记 mock 回执存档,
+# 函证 mock 银行直达存档
+REGISTRATION_COUNTS = {"acceptance": 2, "fieldwork": 19, "manual": 1, "registry": 4, "confirmation": 2}
 
 
 def check_document_counts(directory: Path, manifest: dict[str, Any]) -> list[str]:

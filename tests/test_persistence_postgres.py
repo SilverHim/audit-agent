@@ -2008,25 +2008,27 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
 
 @pytest.mark.external
 async def test_statements_extracted_and_edited_on_real_store(xero_case) -> None:  # type: ignore[no-untyped-def]
-    """验收 6: 真实库上的 Xero 项目 (承接与外勤已导入, 数据已齐; 不再有报表草稿请求, Issue #46), 演示导入 statements
-    阶段上传 fs_v1.pdf: A3 分类后 1 行 llm_call DOC-STATEMENTS (run_id 以 UPLOAD-{文件 ID}- 开头); 待审财报第 1 版
+    """验收 6: 真实库上的 Xero 项目 (承接与外勤已导入, 数据已齐; 不再有报表草稿请求与报表一批, Issue #46), 审计师
+    上传补造的 fs_v1.pdf: A3 分类后 1 行 llm_call DOC-STATEMENTS (run_id 以 UPLOAD-{文件 ID}- 开头); 待审财报第 1 版
     同 fs_v1.json (document_id 为该文件), 35 行按列示顺序读回; record 取 SOFP-OREC; 抽取版本一版; 文件 extracted.
     审计师改一行出第 2 版, 当前版本读它. 另一项目读不到 (行级安全)."""
     from backend.services.data_service import DataService
     from backend.services.trail_pages import all_of_kind
     from tests.fakes import XERO_FS_V1
     from tests.xero_fakes import xero_profile
-    from tests.xero_flow import import_stage, offline_runner
+    from tests.xero_flow import drain, offline_runner
     from tests.xero_harness import db_deps
 
-    h = await db_deps(xero_case("T0"))
+    case = xero_case("T0")
+    h = await db_deps(case)
     eid, financial = h.engagement.id, h.deps.financial_store
     service = DataService(h.deps, offline_runner(h.deps), demo=cast(Any, h.deps.datasets))
     assert "REQ-financial_statements" not in {r.id for r in await h.deps.data.requests(eid)}
 
-    result = await import_stage(service, eid, "statements", h.actor)
+    pdf = (case.supplements / "financial_statements" / "fs_v1.pdf").read_bytes()
+    await service.upload_documents(eid, [("fs_v1.pdf", pdf)], actor=h.actor)
+    await drain(service)
 
-    assert result is not None and result.status == "imported"
     [fs_doc] = await financial.documents(eid, DocumentType.financial_statements)
     assert (fs_doc.id, fs_doc.file_name, fs_doc.status) == ("DOC-e2670a8e43ac", "fs_v1.pdf", "extracted")
     calls = [(e.procedure_id, e.run_id) for e in await all_of_kind(h.deps.trail, eid, TrailKind.llm_call)]

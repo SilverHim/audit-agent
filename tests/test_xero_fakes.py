@@ -50,15 +50,9 @@ def test_supplement_samples() -> None:
     assert (profile.id, profile.version) == ("CLIENT-XERO-3C1332BB-Q1", 1)
     assert [len(p) for p in x.xero_presets()] == [3, 3]
     assert x.xero_traits().dataset == x.XERO_DATASET
-    assert Counter(u.stage for u in x.xero_uploads()) == {
-        "acceptance": 2,
-        "fieldwork": 19,
-        "statements": 1,
-        "manual": 1,
-    }
-    assert [u.stage for u in x.xero_uploads("statements")] == ["statements"]
+    assert Counter(u.stage for u in x.xero_uploads()) == {"acceptance": 2, "fieldwork": 19, "manual": 1}
     fieldwork = x.xero_documents("fieldwork")
-    assert [len(x.xero_documents(s)) for s in ("acceptance", "fieldwork", "statements", "manual")] == [2, 21, 22, 23]
+    assert [len(x.xero_documents(s)) for s in ("acceptance", "fieldwork", "manual")] == [2, 21, 22]
     assert {d.id for d in fieldwork} <= set(x.manifest_documents())
     assert Counter(d.type for d in fieldwork) == {
         DocumentType.contract: 3,

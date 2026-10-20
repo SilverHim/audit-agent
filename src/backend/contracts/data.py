@@ -258,9 +258,9 @@ class XeroProfileCheck(Model):
 
 
 # 演示数据导入 (需求 R269): 补造清单的阶段 (Xero演示数据集设计第 9.5 节, adapters.xero_supplements.plan); 导入只收
-# 前三个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传
-DemoStage = Literal["acceptance", "fieldwork", "statements", "manual"]
-DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements")
+# 前两个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传. Issue #46 起财务报表以账套为准, 没有报表一批
+DemoStage = Literal["acceptance", "fieldwork", "manual"]
+DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork")
 DemoImportStatus = Literal["started", "imported", "already_imported", "failed"]
 
 
@@ -286,10 +286,10 @@ class DemoSummary(Model):
 
     available: bool = False
     stages_done: list[DemoStage] = []  # 已导入过的阶段 (有 imported 的 demo_import 留痕), 按 DEMO_IMPORT_STAGES 顺序
-    # 按流程停的位置该导入的阶段: 停在 ACC-01 闸门为 acceptance, 图在等数据就绪为 fieldwork,
-    # REQ-financial_statements 为 open 为 statements; 该阶段已导入过或不在这几个位置时为空
+    # 按流程停的位置该导入的阶段: 停在 ACC-01 闸门为 acceptance, 图在等数据就绪为 fieldwork; 该阶段已导入过或不在
+    # 这两个位置时为空
     suggested: DemoStage | None = None
-    last: DemoImportResult | None = None  # 最近一次导入的结果 (最近一条 demo_import 留痕)
+    last: DemoImportResult | None = None  # 最近一次导入的结果 (最近一条认得出的 demo_import 留痕)
 
 
 class XeroSource(Model):

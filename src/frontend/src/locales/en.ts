@@ -983,7 +983,6 @@ export const en = {
       stages: {
         acceptance: 'acceptance files',
         fieldwork: 'fieldwork ledgers and files',
-        statements: 'draft financial statements',
         manual: 'representation letter',
       } as Record<string, string>,
       started: (tables: number, files: number) =>

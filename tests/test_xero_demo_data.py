@@ -2114,8 +2114,8 @@ def test_financial_statements_json() -> None:
         == ["code", "statement", "name", "amount_cents", "sign", "account_codes", "subtotal", "prior_amount_cents"]
         for line in fs["lines"]  # type: ignore[index]
     )
-    docs = {d["path"]: d for d in read("manifest.json")["documents"]}  # type: ignore[index]
-    assert fs["document_id"] == docs[generator.FS_PDF]["document_id"]  # type: ignore[index]
+    files = {f["path"]: f["sha256"] for f in read("manifest.json")["files"]}  # type: ignore[index]
+    assert fs["document_id"] == "DOC-" + files[generator.FS_PDF][:12]  # type: ignore[index]
     by = {c: (a, p) for c, *_, a, p in FS_V1_LINES}
     assert by["SOFP-TA"][0] == by["SOFP-TL"][0] + by["SOFP-EQ"][0]  # 21,829.26 = 51,878.25 + (30,048.99)
     assert by["SOFP-EQ"][1] + by["PL-NP"][0] == by["SOFP-EQ"][0]  # 期初 (7,912.00) 加本期 (22,136.99)
@@ -2280,20 +2280,17 @@ def test_representation_letter() -> None:
 @needs_supplements
 def test_r68_index_rows_and_counts() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 20 and rows[19] == (
-        "financial_statements/fs_v1.pdf,financial_statements,internal_original,2026-10-22,FS"
-    )
+    assert len(rows) == 19 and not any(r.startswith("financial_statements/") for r in rows)  # 报表不登记 (Issue #46)
     assert not any(r.startswith("representation/") for r in rows)  # 声明书经上传接口登记, 不进 index.csv
     docs = manifest_documents()
-    assert docs[generator.FS_PDF][:5] == ("financial_statements", "internal_original", "2026-10-22", "statements", 6)
+    assert generator.FS_PDF not in docs
     manifest = read("manifest.json")
     assert checker.check_document_counts(SUPPLEMENTS, manifest) == []  # type: ignore[arg-type]
     registrations = [d[3] for d in docs.values()]
-    assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 57  # type: ignore[call-overload]
+    assert len(docs) == 28 and sum(int(d[4]) for d in docs.values()) == 51  # type: ignore[call-overload]
     assert {r: registrations.count(r) for r in set(registrations)} == {
         "acceptance": 2,
         "fieldwork": 19,
-        "statements": 1,
         "manual": 1,
         "registry": 4,
         "confirmation": 2,
@@ -2635,18 +2632,6 @@ def test_manual_problems(tmp_path: Path) -> None:
     assert f"{folder / 'representation.json'}: document 不是 manifest 中类型 representation_letter 的文件" in (
         checker.check_manual(copy, other)
     )
-
-
-@needs_supplements
-def test_index_fs_reference(tmp_path: Path) -> None:
-    copy, path, fs = fs_copy(tmp_path)
-    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
-    assert checker.check_index(copy, manifest) == []
-    path.write_text(json.dumps({**fs, "id": "FS-2"}), encoding="utf-8")
-    where = copy / "documents" / "index.csv"
-    assert checker.check_index(copy, manifest) == [
-        f"{where}: {generator.FS_PDF} 的关联对象 FS 不是 {generator.FS_JSON} 的 id"
-    ]
 
 
 @needs_supplements

@@ -2311,8 +2311,8 @@
       "related_ids": [
         "FS"
       ],
-      "registration": "statements",
-      "index": true,
+      "registration": null,
+      "index": false,
       "xero_refs": [],
       "footer": "Demo Company (AU) Pty Ltd | Financial report for the financial year ended 30 September 2026",
       "keywords": [

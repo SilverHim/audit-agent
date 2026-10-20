@@ -1878,8 +1878,8 @@ export type DeferralView = {
 /**
  * DemoImportIn
  *
- * 演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork, statements 之一; 用字符串, 不认识的由服务报
- * 422 INVALID_VALUE (同其他数据接口的错误结构).
+ * 演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork 之一; 用字符串, 不认识的 (含 Issue #46 删去的
+ * statements) 由服务报 422 INVALID_VALUE (同其他数据接口的错误结构).
  */
 export type DemoImportIn = {
     /**
@@ -1900,7 +1900,7 @@ export type DemoImportResult = {
     /**
      * Stage
      */
-    stage: 'acceptance' | 'fieldwork' | 'statements' | 'manual';
+    stage: 'acceptance' | 'fieldwork' | 'manual';
     /**
      * Status
      */
@@ -1945,11 +1945,11 @@ export type DemoSummary = {
     /**
      * Stages Done
      */
-    stages_done?: Array<'acceptance' | 'fieldwork' | 'statements' | 'manual'>;
+    stages_done?: Array<'acceptance' | 'fieldwork' | 'manual'>;
     /**
      * Suggested
      */
-    suggested?: 'acceptance' | 'fieldwork' | 'statements' | 'manual' | null;
+    suggested?: 'acceptance' | 'fieldwork' | 'manual' | null;
     last?: DemoImportResult | null;
 };
 

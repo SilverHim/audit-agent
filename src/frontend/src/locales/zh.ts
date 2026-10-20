@@ -902,7 +902,6 @@ export const zh: Messages = {
       stages: {
         acceptance: '承接文件',
         fieldwork: '外勤账表与文件',
-        statements: '待审财报',
         manual: '管理层声明书',
       },
       started: (tables, files) => `正在导入演示资料：${tables ? `账表 ${tables} 版，` : ''}文件 ${files} 份`,

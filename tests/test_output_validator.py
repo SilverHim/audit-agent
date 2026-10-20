@@ -628,12 +628,11 @@ def test_xero_types_cover_every_evidence_document_type() -> None:
 @pytest.mark.external
 async def test_xero_agreement_page_outside_and_statements_not_evidence() -> None:
     loan = xero_document("documents/evidence/director_loan_agreement.pdf")  # 20, 2 页
-    statements = xero_document("financial_statements/fs_v1.pdf")  # 28
-    assert (loan.type, loan.page_count, statements.type) == (
-        DocumentType.agreement,
-        2,
-        DocumentType.financial_statements,
+    # 审计师自己上传的报表 (fs_v1.pdf 不在补造清单的登记里, Issue #46): 登记为 financial_statements
+    statements = loan.model_copy(
+        update={"id": "DOC-e2670a8e43ac", "type": DocumentType.financial_statements, "file_name": "fs_v1.pdf"}
     )
+    assert (loan.type, loan.page_count) == (DocumentType.agreement, 2)
     draft = with_step(cutoff_draft(), 2, evidence=[CLAUSE.model_copy(update={"source_id": loan.id, "page": 3})])
     draft = with_step(draft, 1, evidence=[CLAUSE.model_copy(update={"source_id": statements.id, "page": 1})])
     report = await check(draft, documents=[loan, statements])
