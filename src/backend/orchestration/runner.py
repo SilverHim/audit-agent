@@ -48,7 +48,8 @@ def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
 
     种类与写法见 waits.py (WaitKind 五种): await_events 为 {"awaiting": "review", "phase"}, P2 以外节点等人为
     {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, await_data 与
-    p0_inputs (需求 R290) 为 {"awaiting": "inputs", "procedure_ids"}, 等待更正 (correction) 由错报段使用.
+    p0_inputs (需求 R290) 为 {"awaiting": "inputs", "procedure_ids"}, await_correction 为 {"awaiting": "correction",
+    "misstatement_ids", "records"} (需求 R162).
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
 

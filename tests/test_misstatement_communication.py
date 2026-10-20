@@ -2,8 +2,8 @@
 
 Xero 演示上把主图放在 P2 结清处: 检查点以 fan_in 身份写入 test_workpaper.fin03_state 的两条错报的已分类版本 (v2,
 同 R159 确认后) 或给定的错报, 程序包为 FIN-03 与 FIN-08. 分诊节点执行 FIN-03 (没有未分类的错报, 空执行), 之后进
-communicate: A10 派发 FIN-08, 材料由 A8 的 prepare 生成, 节点内等审计师提交 manual_result. 主图在 await_correction 与
-verify_correction 之前停下 (等待更正由 R162 实现).
+communicate: A10 派发 FIN-08, 材料由 A8 的 prepare 生成, 节点内等审计师提交 manual_result. 主图缺省在
+await_correction 与 verify_correction 之前停下 (本文件只看沟通; 等待更正见 test_correction_notice).
 登记取补造的中性格式 manual/fin08_round1.json, fin08_round2.json, 由 xero_fakes.registration 映射成 ManagementResponses.
 收集阶段不读快照与补造 (参数化只放描述, 数据在用例内取).
 """

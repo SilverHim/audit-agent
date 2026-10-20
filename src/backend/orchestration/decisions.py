@@ -1087,7 +1087,9 @@ class GraphDecisionSubmit:
             raise DecisionRejected("INVALID_VALUE", f"{', '.join(others)} 不在等更正的错报中")
         if notice.kind == "adjustments_posted":
             dataset = engagement.dataset
-            available = self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
+            if dataset is None:
+                raise DecisionRejected("INVALID_VALUE", "项目没有数据集, 没有可载入的更正分录")
+            available = self.deps.datasets.adjustment_entry_nos(dataset)
             if not available:
                 raise DecisionRejected("INVALID_VALUE", f"项目的数据集 {dataset} 没有可载入的更正分录")
             unknown = [no for no in notice.adjustment_entry_nos if no not in available]

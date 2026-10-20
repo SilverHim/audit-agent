@@ -260,7 +260,9 @@ class DatasetLoader(Protocol):
         按 id 排序 (按最新一版审批日志补过录入人与审批人, 即库里的行); entry_nos 为 None 时载入文件中全部, 为空列表时
         不载入, 返回 [] (要全部须传 None). 幂等: 已有的同 id 同内容行跳过 (比的是按同一版审批日志补过之后的样子);
         有新行时总账整表换一版 (现有行加新行, 同 DataStore.write_tables: 来源 xero, 原文件名
-        adjustments/journal_entries.csv, 写入人 actor), data_version 加一, 记版本行; 试算表不动. 调用方须在提交后随即
+        adjustments/journal_entries.csv, 写入人 actor), data_version 加一, 记版本行; 试算表不动. 在
+        AuditOutputStore.transaction 块内调用时加入该事务 (写总账与版本行与块内其他写入一起提交或回滚, 需求 R162 的更正
+        通知生效即如此). 调用方须在提交后随即
         用 data_service.version_entry 为这一版写 data 留痕 (DataService.backfill_trails 只兜底). 凭证号不在文件中抛
         LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛 ValueError; 项目锁定抛
         EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""

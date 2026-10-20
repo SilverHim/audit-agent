@@ -10,6 +10,7 @@ import pytest
 from backend.contracts.data import TableKind
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import AgentId, Misstatement, MisstatementStatus, TrailKind
+from backend.orchestration import nodes
 from backend.orchestration.nodes import apply_notice
 from backend.services.trail_pages import all_of_kind
 from tests.external import snapshot_dir, supplements_dir
@@ -45,6 +46,7 @@ async def test_notice_loads_entries_with_misstatements_and_writes_data_trail(
     project, misstatements = await communicated_project(tmp_path_factory.mktemp("xero"))
     eid, owner = project.engagement.id, project.owner
     before = await data_version(project)
+    keys = {e.idempotency_key for e in await all_of_kind(project.deps.trail, eid, TrailKind.data)}
 
     written = await apply_notice(project.deps, project.engagement, misstatements, notice(decided_by=owner))
 
@@ -62,9 +64,13 @@ async def test_notice_loads_entries_with_misstatements_and_writes_data_trail(
     )
     lines = await project.deps.financial_store.journal_entries(eid, entry_nos=["AJE-X01", "AJE-X05"])
     assert [x.id for x in lines] == AJE_LINES
-    entries = await all_of_kind(project.deps.trail, eid, TrailKind.data)
-    synced = [e for e in entries if e.idempotency_key == f"{eid}:data:v{before + 1}:journal_entries"]
-    assert [(e.actor, e.payload["action"]) for e in synced] == [(owner, "sync")]
+    added = {
+        e.idempotency_key: e
+        for e in await all_of_kind(project.deps.trail, eid, TrailKind.data)
+        if e.idempotency_key not in keys
+    }
+    synced = added[f"{eid}:data:v{before + 1}:journal_entries"]
+    assert (synced.actor, synced.payload["action"]) == (owner, "sync")
 
 
 async def test_misstatement_clash_rolls_back_the_load(tmp_path_factory: pytest.TempPathFactory) -> None:
@@ -83,3 +89,27 @@ async def test_misstatement_clash_rolls_back_the_load(tmp_path_factory: pytest.T
     assert await data_version(project) == before
     assert await project.deps.financial_store.journal_entries(eid, entry_nos=["AJE-X01", "AJE-X05"]) == []
     assert (await project.deps.output_store.get(eid, Misstatement, CSH02)).version == 3  # type: ignore[union-attr]
+
+
+async def test_data_trail_written_on_replay_after_crash(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """第 1 轮审核 R162-01: 提交后写 data 留痕前被杀, 节点重放 (再调 apply_notice) 时补写这一版总账的 sync 留痕 (写入人
+    为提交人); 载入幂等, 不再出新版本."""
+    project, misstatements = await communicated_project(tmp_path_factory.mktemp("xero"))
+    eid, owner = project.engagement.id, project.owner
+    before = await data_version(project)
+
+    async def killed(trail: object, entries: object) -> None:
+        raise RuntimeError("被杀")
+
+    with monkeypatch.context() as m:
+        m.setattr(nodes, "record_transitions", killed)
+        with pytest.raises(RuntimeError, match="被杀"):
+            await apply_notice(project.deps, project.engagement, misstatements, notice(decided_by=owner))
+    await apply_notice(project.deps, project.engagement, misstatements, notice(decided_by=owner))
+
+    assert await data_version(project) == before + 1
+    key = f"{eid}:data:v{before + 1}:journal_entries"
+    synced = [e for e in await all_of_kind(project.deps.trail, eid, TrailKind.data) if e.idempotency_key == key]
+    assert [(e.actor, e.payload["action"]) for e in synced] == [(owner, "sync")]

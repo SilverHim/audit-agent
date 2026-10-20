@@ -87,7 +87,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.ports import XeroConnections
+from backend.contracts.ports import DataStore, XeroConnections
 from backend.contracts.records import Account, AccountCategory
 from backend.contracts.state import fill_defaults
 from backend.orchestration.gates import current_gate
@@ -174,6 +174,12 @@ def version_entry(eid: str, version: TableVersion) -> TrailEntry:
         payload=payload,
         created_at=datetime.now(UTC),
     )
+
+
+async def version_entries(data: DataStore, eid: str) -> list[TrailEntry]:
+    """本项目各账表版本的 data 留痕 (version_entry; 数据集载入的版本不记), 补写 (DataService.backfill_trails) 与更正
+    通知生效 (nodes.apply_notice, 需求 R162) 共用; 写入方同键已有的跳过."""
+    return [version_entry(eid, v) for v in await data.versions(eid) if v.source != "dataset"]
 
 
 def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
@@ -597,9 +603,8 @@ class DataService:
         """补写已提交而 data 留痕没写成的账表版本, 抽取结果修改, 最近一次体检与补交请求的提出和收到, 智能导入确认时
         未导入的文件 (写入后留痕失败, 或进程在两者之间中断); 同键已有的跳过. 数据集载入的版本不记留痕. 在取得项目锁
         之后调用."""
-        versions = [v for v in await self.deps.data.versions(eid) if v.source != "dataset"]
         edits = [r for r in await self.deps.data.extraction_versions(eid) if r.field is not None]
-        entries = [version_entry(eid, v) for v in versions] + [edit_entry(eid, r) for r in edits]
+        entries = await version_entries(self.deps.data, eid) + [edit_entry(eid, r) for r in edits]
         entries += checkup_entries(eid, await self.deps.data.check_run(eid), await self.deps.data.requests(eid))
         for code, history in (await self.deps.data.category_history(eid)).items():
             entries += [category_entry(eid, code, v) for v in history if v.basis == "auditor"]

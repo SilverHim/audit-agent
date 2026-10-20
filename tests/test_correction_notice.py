@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
@@ -25,6 +26,7 @@ from backend.contracts.models import (
 from backend.orchestration.decisions import check_notice_fields
 from backend.orchestration.nodes import after_notice, awaiting_correction
 from backend.orchestration.query import GraphStateQuery
+from backend.orchestration.recovery import catch_up_correction
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from tests.fakes import (
     FakeDatasetLoader,
@@ -37,7 +39,7 @@ from tests.fakes import (
     submit_and_wait,
     wait_idle,
 )
-from tests.test_decisions import Started, assert_no_effect, assert_rejected, started
+from tests.test_decisions import Started, assert_no_effect, assert_rejected, shared_loop, started
 from tests.test_misstatement_communication import (
     CONFIG,
     CSH02,
@@ -45,6 +47,7 @@ from tests.test_misstatement_communication import (
     XJ499,
     at_communicate,
     fin03_state,
+    round1,
     round1_communicated,
 )
 from tests.test_review_decisions import record
@@ -109,19 +112,29 @@ async def test_waits_for_correction_notice() -> None:
 
 async def test_adjustments_posted_loads_entries_and_moves_to_verifying(monkeypatch: pytest.MonkeyPatch) -> None:
     """验收 2: 提交 D-CN1 (两条, AJE-X01 与 AJE-X05): 写通知 (写入者为提交人) 与 1 行 decision 留痕 (FIN-08, 防重复键
-    D-CN1); 恢复后节点按凭证号调 load_adjustments 一次, 写入人为提交人; 同一提交写出两条 v4 verifying
-    (correction_notice_id D-CN1, 写入者 A1); 状态 correction_notices 为 [D-CN1]; 下一节点 verify_correction."""
+    D-CN1); 恢复后节点按凭证号调 load_adjustments 一次, 写入人为提交人, 调用时在写错报的事务内; 同一提交写出两条
+    v4 verifying (correction_notice_id D-CN1, 写入者 A1); 状态 correction_notices 为 [D-CN1]; 下一节点
+    verify_correction."""
     s = await awaiting()
     writers = record_writers(monkeypatch, s.output_store)
+    datasets, inside = loader(s), []
+    load = datasets.load_adjustments
+
+    async def checking(*args: Any, **kwargs: Any) -> Any:
+        inside.append(s.output_store.active_txn() is not None)
+        return await load(*args, **kwargs)
+
+    monkeypatch.setattr(datasets, "load_adjustments", checking)
     await submit_and_wait(s, notice())
 
     assert writers[("D-CN1", 1)] == "U-1"
     assert [(e.idempotency_key, e.procedure_id, e.actor) for e in entries(s, TrailKind.decision)] == [
         ("D-CN1", "FIN-08", "U-1")
     ]
-    assert (loader(s).adjustment_loads, loader(s).adjustment_actors) == (
+    assert (loader(s).adjustment_loads, loader(s).adjustment_actors, inside) == (
         [(EID, DATASET, ["AJE-X01", "AJE-X05"])],
         ["U-1"],
+        [True],
     )
     [commit] = [c for c in s.output_store.commits if any(getattr(o, "id", None) == XJ499 and o.version == 4 for o in c)]
     assert sorted((o.id, o.version, o.status, o.correction_notice_id) for o in commit) == [
@@ -197,19 +210,42 @@ REJECTED = [  # (说明, 通知, 错误码, 消息含)
 ]
 
 
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def waiting_once() -> Started:
+    """停在 await_correction 的一次运行, 由只提交被拒通知的用例共用 (每次核对存储与图都没动)."""
+    return await awaiting()
+
+
+@shared_loop
 @pytest.mark.parametrize(("decided", "code", "detail"), [r[1:] for r in REJECTED], ids=[r[0] for r in REJECTED])
-async def test_notice_checked_before_writing(decided: CorrectionNotice, code: str, detail: str) -> None:
-    """验收 5: 校验不过时 Store, 留痕与检查点不变, 锁释放 (assert_no_effect)."""
-    s = await awaiting()
-    await assert_no_effect(s, lambda: s.submit.submit(EID, decided), code, detail)
+async def test_notice_checked_before_writing(
+    waiting_once: Started, decided: CorrectionNotice, code: str, detail: str
+) -> None:
+    """验收 5: 校验不过时 Store, 留痕与检查点不变, 锁释放 (assert_no_effect). 带重新沟通标记的错报不进等待载荷
+    (awaiting_correction), 由 "不在等更正的错报中" 这一条拒绝; 主图上停在等待更正时构造不出带标记的错报 (after_verify
+    先去 communicate), 由载荷保证."""
+    await assert_no_effect(waiting_once, lambda: waiting_once.submit.submit(EID, decided), code, detail)
 
 
 async def test_dataset_without_adjustments_rejected() -> None:
-    """验收 5: 数据集没有可载入的更正分录 (同 Numbat, 预置为 None) → INVALID_VALUE; 停止等待照常收."""
+    """验收 5: 数据集没有可载入的更正分录 (同 Numbat, 预置为 None) → INVALID_VALUE; 项目没有数据集时同样 (另一句消息,
+    直接调校验); 停止等待照常收."""
     s = await awaiting()
     loader(s).adjustments = None
-    await assert_no_effect(s, lambda: s.submit.submit(EID, notice()), "INVALID_VALUE", "没有可载入的更正分录")
+    await assert_no_effect(s, lambda: s.submit.submit(EID, notice()), "INVALID_VALUE", f"数据集 {DATASET} 没有可载入")
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    with pytest.raises(DecisionRejected, match="项目没有数据集"):
+        await s.submit.check_correction_notice(engagement.model_copy(update={"dataset": None}), notice(), snapshot)
     await submit_and_wait(s, stop())
+
+
+async def test_review_record_id_rejected_as_notice_id() -> None:
+    """验收 5: 决定 ID 已被复核决定用过 (第 1 轮的登记 D-M1, 之后停在等待更正) → INVALID_VALUE."""
+    s = await at_communicate(stops=("verify_correction",))
+    await submit_and_wait(s, round1())
+    await assert_no_effect(s, lambda: s.submit.submit(EID, notice("D-M1")), "INVALID_VALUE", "D-M1 已用过")
 
 
 async def test_used_notice_id_rejected() -> None:
@@ -242,10 +278,11 @@ async def test_notice_rejected_while_busy() -> None:
 
 
 async def test_notice_rejected_when_not_awaiting_correction() -> None:
-    """验收 5, 9: 图不在 await_correction (停在 communicate 等 FIN-08 的登记) → NOT_AWAITING_CORRECTION; 功能
-    misstatement 关闭 (基线, 停在 ACC-01 闸门) 时同样."""
+    """验收 5, 9: 图不在 await_correction (停在 communicate 等 FIN-08 的登记) → NOT_AWAITING_CORRECTION, 先于字段
+    校验 (没有理由的停止等待也报它); 功能 misstatement 关闭 (基线, 停在 ACC-01 闸门) 时同样."""
     s = await at_communicate()
     await assert_no_effect(s, lambda: s.submit.submit(EID, notice()), "NOT_AWAITING_CORRECTION")
+    await assert_no_effect(s, lambda: s.submit.submit(EID, stop(reason=None)), "NOT_AWAITING_CORRECTION")
     baseline = await started()
     await assert_no_effect(baseline, lambda: baseline.submit.submit(EID, notice()), "NOT_AWAITING_CORRECTION")
 
@@ -296,6 +333,27 @@ async def test_notice_recovered_after_restart(monkeypatch: pytest.MonkeyPatch) -
     await wait_idle(restarted, EID)
     assert list(s.output_store.rows) == rows
     assert (await s.runner.app.aget_state(CONFIG)).values == values
+
+
+async def put_notices(s: Started, *notices: CorrectionNotice) -> None:
+    """通知直接写进 Store (不经 DecisionSubmit, 检查点不知道)."""
+    async with s.output_store.transaction(EID):
+        await s.output_store.put(EID, list(notices), actor="U-1")
+
+
+async def test_catch_up_refuses_unrecoverable_notices() -> None:
+    """恢复补做的两个防御分支: Store 有检查点里没有的通知, 而图不在等待更正 (停在 communicate), 或缺的不止一份 →
+    RuntimeError (由 recover 记入 run_error), 不交给节点."""
+    s = await at_communicate()
+    await put_notices(s, notice())
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None
+    with pytest.raises(RuntimeError, match="D-CN1 未进检查点"):
+        await catch_up_correction(s.runner.deps, engagement, await s.runner.app.aget_state(CONFIG))
+    s = await awaiting()
+    await put_notices(s, notice(), stop())
+    with pytest.raises(RuntimeError, match="D-CN1, D-STOP 未进检查点"):
+        await catch_up_correction(s.runner.deps, engagement, await s.runner.app.aget_state(CONFIG))
 
 
 # ── 纯函数 ──

@@ -117,7 +117,7 @@ p3_reassess → summarize → final_review → { misstatement_triage | completio
 completion → gate_fin → { report_draft | summarize }
 ```
 
-- 各节点依次执行 FIN-03（分类）、FIN-08（沟通）、FIN-09（更正验证）、PLN-19（重评）、FIN-04（累计，每轮一次）、FIN-15（最终复核）、FIN-02（持续经营）；程序库还没有的程序（由错报闭环、计划、签字前、持续经营各需求加入）节点为空操作，await_correction 由 R162 实现。阶段 P3_Completion 在 misstatement_triage 写入。完成阶段新认定的错报都回 misstatement_triage 先分类再沟通。
+- 各节点依次执行 FIN-03（分类）、FIN-08（沟通）、FIN-09（更正验证）、PLN-19（重评）、FIN-04（累计，每轮一次）、FIN-15（最终复核）、FIN-02（持续经营）；程序库还没有的程序（由错报闭环、计划、签字前、持续经营各需求加入）节点为空操作；await_correction 在节点内等审计师提交更正通知（需求 R162）。阶段 P3_Completion 在 misstatement_triage 写入。完成阶段新认定的错报都回 misstatement_triage 先分类再沟通。
 
 - p0_inputs：新客户（项目没有数据集）先经 ABN Lookup 查是不是公司，是公司而没有上传 ASIC 摘录时把 ACC-04 置等资料（awaiting_data，A3 提出补交请求 REQ-registry_extract），在节点内 `interrupt()` 等审计师上传；上传后 A3 抽取，数据变动带动图回到 p0_inputs 再判一次，有摘录或请求标为客户无此类资料后进 p0_intel（需求 R290）。有数据集的项目、不是公司或查不到 ABN 的不等，直接进 p0_intel。
 - p1_await_data：建项目不载入财务数据，ACC-01 通过后在节点内 `interrupt()` 等审计师在数据管理页接入数据并确认已齐（数据集载入视同确认，不等）。

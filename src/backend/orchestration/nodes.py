@@ -542,17 +542,17 @@ async def apply_notice(
     """读回的更正通知生效 (需求 R162, 一次审计师动作一个事务): adjustments_posted 时载入更正分录
     (DatasetLoader.load_adjustments, 凭证号为空时传 None 即载入全部未载入的, 写入人为提交通知的审计师) 与所列错报的
     新版本 (after_notice, 写入者 A1) 在同一事务内写入 (Postgres 下载入的事务并入外层); stop_waiting 只写错报. 提交后
-    为这次载入写出的数据新版本 (只有总账) 随即写 data 留痕 (data_service.version_entry, sync, 写入人同上; 没写成的由
-    DataService.backfill_trails 兜底). misstatements: 状态中的错报, 所列的取这里的版本. 返回写入后的错报 (重放时为
-    Store 已存的那一版); Store 已有内容不同的同版本抛 VersionConflict 整体回滚."""
+    补写本项目数据版本的 data 留痕 (data_service.version_entries, 同 DataService.backfill_trails; 同键已有的跳过):
+    这次载入写出的总账新版本随即有 sync 留痕, 写入人同上; 写 Store 后写留痕前被杀的, 节点重放时补上 (第 1 轮审核
+    R162-01). misstatements: 状态中的错报, 所列的取这里的版本. 返回写入后的
+    错报 (重放时为 Store 已存的那一版); Store 已有内容不同的同版本抛 VersionConflict 整体回滚."""
     # data_service 引用 orchestration (nodes, runner), 用时再导入
-    from backend.services.data_service import version_entry
+    from backend.services.data_service import version_entries
 
     eid, store = engagement.id, deps.output_store
     by_id = {m.id: m for m in misstatements}
     updated = [after_notice(by_id[mid], notice) for mid in notice.misstatement_ids]
     posted = notice.kind == "adjustments_posted"
-    before = max((v.data_version for v in await deps.data.versions(eid)), default=0) if posted else 0
     async with store.transaction(eid):
         if posted:
             assert engagement.dataset is not None  # DecisionSubmit 已查数据集有可载入的更正分录
@@ -565,8 +565,7 @@ async def apply_notice(
                 f"更正通知 {notice.id} 写出的错报与 Store 中已有的同版本内容不同: {', '.join(clashes)}"
             )
     if posted:
-        loaded = [v for v in await deps.data.versions(eid) if v.data_version > before]
-        await record_transitions(deps.trail, [version_entry(eid, v) for v in loaded])
+        await record_transitions(deps.trail, await version_entries(deps.data, eid))
     return written
 
 
