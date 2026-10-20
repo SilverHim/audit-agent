@@ -333,6 +333,13 @@ def test_gate_not_at_gate_returns_null(api: SimpleNamespace) -> None:
     assert (response.status_code, response.json()) == (200, None)
 
 
+def test_gate_material_missing_is_404_not_found(api: SimpleNamespace) -> None:
+    """停在闸门而材料缺失 (query.gate 抛 LookupError) 时 GET /gate 仍为 404 NOT_FOUND."""
+    api.client.app.state.query.gate.side_effect = LookupError("停在 PLN-15 闸门, 缺材料")
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/gate", headers=_auth(api))
+    assert (response.status_code, response.json()["detail"]["code"]) == (404, "NOT_FOUND")
+
+
 TRAIL_ROWS = [  # 依次为 TR-1 到 TR-5
     ("ENG-2026-001", TrailKind.llm_call, "REV-02 SI-2026-0612 第 1 次调用大模型: passed"),
     ("ENG-2026-001", TrailKind.decision, "ACC-01 approve"),
@@ -415,15 +422,32 @@ def test_trail_cursor_must_be_a_trail_of_this_engagement(api: SimpleNamespace, b
         ("TASK_NOT_FOUND", 404),
     ],
 )
-def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: int) -> None:
-    api.decisions.submit.side_effect = DecisionRejected(code, "目标对象已更新到 version 3")
-    response = api.client.post(
-        "/api/v1/engagements/ENG-2026-001/gate-decisions",
-        headers=_auth(api),
-        json={"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"},
-    )
+@pytest.mark.parametrize("route", ["gate-decisions", "client-profile"])
+def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: int, route: str) -> None:
+    """DecisionRejected 按错误码表映射, 闸门的两条写入路由 (提交决定, 更新客户资料) 同一张表: NOT_AT_GATE 为 409
+    (需求 R346: 不再按方法区分)."""
+    rejected = DecisionRejected(code, "目标对象已更新到 version 3")
+    url = f"/api/v1/engagements/ENG-2026-001/{route}"
+    if route == "gate-decisions":
+        api.decisions.submit.side_effect = rejected
+        body = {"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"}
+        response = api.client.post(url, headers=_auth(api), json=body)
+    else:
+        api.decisions.update_client_profile.side_effect = rejected
+        response = api.client.put(url, headers=_auth(api), json=CLIENT_PROFILE_BODY)
     assert response.status_code == status
     assert response.json()["detail"] == {"code": code, "message": "目标对象已更新到 version 3"}
+
+
+CLIENT_PROFILE_BODY = {  # PUT /client-profile 的一份合规请求体
+    "version": 2,
+    "legal_name": "X Pty Ltd",
+    "abn": "51824753556",
+    "entity_type": "company",
+    "industry_anzsic": "4512",
+    "listed": False,
+    "directors": ["A"],
+}
 
 
 def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None:

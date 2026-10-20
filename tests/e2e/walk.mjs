@@ -69,7 +69,7 @@ page.setDefaultTimeout(timeouts.action_ms)
 page.setDefaultNavigationTimeout(timeouts.nav_ms)
 const goto = (url) => page.goto(url, { waitUntil: 'domcontentloaded' })
 page.on('console', (message) => {
-  // 请求失败另由下面两个监听按地址与错误码记 (含预期的 404 NOT_AT_GATE 的筛除), 控制台的同一条不重复记
+  // 请求失败另由下面两个监听按地址与错误码记, 控制台的同一条不重复记
   if (message.type() !== 'error' || !current || message.text().startsWith('Failed to load resource')) return
   current.console.push(message.text().slice(0, 500))
 })

@@ -57,6 +57,7 @@ def api_error(code: str, message: str = "", *, status: int | None = None, **extr
 def http_for_decision(exc: DecisionRejected) -> HTTPException:
     """DecisionRejected 按错误码表映射. DataRejected 的 extra 并入 detail."""
     extra = exc.extra if isinstance(exc, DataRejected) else {}
+    # status 照错误码表取; 显式写 None 是因为 extra 为 dict[str, object], 不写时 mypy 认为它可能带 status
     return api_error(exc.code, exc.message, status=None, **extra)
 
 
