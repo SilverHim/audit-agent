@@ -3162,7 +3162,7 @@ export type JudgmentDetail = {
 /**
  * JudgmentRef
  *
- * 报告中引用的一条判断.
+ * 引用的一条判断 (ID 与引用时的版本): 审计报告, 持续经营结论建议.
  */
 export type JudgmentRef = {
     /**

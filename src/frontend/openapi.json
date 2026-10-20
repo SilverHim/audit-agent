@@ -10682,7 +10682,7 @@
           "version"
         ],
         "title": "JudgmentRef",
-        "description": "报告中引用的一条判断."
+        "description": "引用的一条判断 (ID 与引用时的版本): 审计报告, 持续经营结论建议."
       },
       "KeyPerson": {
         "properties": {
