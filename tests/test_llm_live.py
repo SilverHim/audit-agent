@@ -14,6 +14,7 @@ from backend.adapters.llm import (
     DEFAULT_BASE_URL,
     ERROR_TEXT_LIMIT,
     HTTP_LOGGERS,
+    TRUNCATED,
     LiveLLMClient,
     LLMTransportError,
     MockLLMClient,
@@ -137,6 +138,48 @@ async def test_unparsable_output_keeps_raw_and_error(content: str) -> None:
 def test_strip_fences() -> None:
     assert strip_fences('```\n{"a": 1}\n```') == '{"a": 1}'
     assert strip_fences('{"a": 1}') == '{"a": 1}'
+
+
+# 服务端因输出达到上限回的 400 (R312 实测 gpt-6-luna, JSON 模式下输出不完整时不给半截内容)
+OUTPUT_LIMIT = (
+    400,
+    {
+        "error": {
+            "message": "Could not finish the message because max_tokens or model output limit was reached. "
+            "Please try again with higher max_tokens.",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": None,
+        }
+    },
+)
+
+
+def finished(content: str, finish_reason: str | None) -> dict[str, Any]:
+    """带 finish_reason 的响应 (为空时不带这个字段)."""
+    data = completion(content)
+    if finish_reason is not None:
+        data["choices"][0]["finish_reason"] = finish_reason
+    return data
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "stop", None])
+async def test_truncated_output_says_so(finish_reason: str | None) -> None:
+    """R312 验收 2: 同一段半截输出, finish_reason 为 length 时 error 写明在上限 (请求的 4096) 处被截断, 其余 (stop,
+    缺失) 照旧为解析错误; raw 都照常保留."""
+    partial = raw("BA-01")[:40]
+    response = await client(Server((200, finished(partial, finish_reason)))).complete(REQUEST, ConfirmationExtraction)
+    assert (response.output, response.raw) == (None, partial)
+    assert (response.error == TRUNCATED.format(limit=4096)) == (finish_reason == "length"), response.error
+
+
+async def test_output_limit_400_is_a_truncated_reply() -> None:
+    """R312 验收 2, 5: 服务端因输出达到上限回 400 时不抛错 (此前整次执行因此失败), 返回 raw 为空, token 数记 0, error
+    同截断; 不算传输层重试, 只发一次."""
+    server = Server(OUTPUT_LIMIT)
+    response = await client(server).complete(REQUEST, ConfirmationExtraction)
+    assert (response.output, response.raw, response.input_tokens, response.output_tokens) == (None, "", 0, 0)
+    assert response.error == TRUNCATED.format(limit=4096) and len(server.requests) == 1
 
 
 async def test_malformed_completion_raises() -> None:

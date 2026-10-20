@@ -216,6 +216,22 @@ async def test_unsupported_step_marked_and_excluded_from_coverage() -> None:
     assert j.confidence_parts["evidence"] == 0.5
 
 
+async def test_finding_cited_as_a_pointer_marks_its_step() -> None:
+    """R312 验收 4: 判断 (A6) 这条路径收到把规则例外 ID 当留痕引用的指针 (R311 真实模型首跑: trail X-CSH-02-1-D04-1)
+    时照引用级的规则处理: 解析不了, 所在步骤 unsupported, 指针原样留在判断里, 判断照常得出. 根因在提示词没说例外怎么
+    引: 判断的系统提示词写明规则例外不是证据来源, 不把例外 ID 写进指针, 改引例外所指的行."""
+    finding = EvidencePointer(
+        type=EvidenceType.external, source_type="trail", source_id=X_REV08.id, locator="matched_line_ids"
+    )
+    draft = with_step(cutoff_draft(), 1, evidence=[DELIVERY, finding])
+    outcome, llm = await judge("REV-02", rev02_context(), [draft.model_dump_json()])
+    j = outcome.judgment
+    assert j is not None and j.reasoning_chain[1].status is StepStatus.unsupported
+    assert finding in j.reasoning_chain[1].evidence
+    system = llm.requests[0].system
+    assert all(text in system for text in ("not evidence sources", "finding ID", "Cite the rows"))
+
+
 @pytest.mark.parametrize(("given", "status"), [(True, StepStatus.supported), (False, StepStatus.unsupported)])
 async def test_judge_passes_the_client_profile_to_the_validator(given: bool, status: StepStatus) -> None:
     """judge 把 JudgmentContext.client_profile 交给校验 (需求 R128): 引用本项目画像的步骤 supported; 上下文不给画像时

@@ -116,6 +116,13 @@ SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON sch
 Write nothing before or after the object.
 
 {schema}"""
+# 判断 (judge) 的系统提示词: 另写明规则例外不是证据来源. 规则例外没有对应的指针类型, 模型曾用 source_type trail
+# 引 D04 例外的 ID, 解析不了, 照引用级的规则原样留在判断里 (需求 R312)
+JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
+    "{schema}",
+    "Rule findings are not evidence sources: never put a finding ID in an evidence pointer. "
+    "Cite the rows, document pages or fields that the finding is about.\n\n{schema}",
+)
 # 语法或结构失败后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:
 
@@ -1072,7 +1079,7 @@ class JudgmentEngine:
         """对一个判断对象调大模型, 把通过校验的草稿补全为 Judgment (review_status pending, 由调用方分类).
 
         失败 (重试耗尽, 引用或语义失败) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
-        调用方 Agent 取模板 owner; performed_by 为项目负责人.
+        调用方 Agent 取模板 owner; performed_by 为项目负责人. 系统提示词为 JUDGMENT_SYSTEM.
         """
         variables = {
             "subject_id": ctx.subject_id,
@@ -1096,6 +1103,7 @@ class JudgmentEngine:
             template.owner,
             ctx.fixture_key,
             subject_id=ctx.subject_id,
+            system=JUDGMENT_SYSTEM,
         )
         report = result.report
         if report.level_failed is not None:

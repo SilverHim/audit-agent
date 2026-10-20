@@ -22,7 +22,18 @@ from backend.core.config import Settings
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"  # 未配置 LLM_BASE_URL 时的接口地址
 MAX_RETRIES = 3  # 传输层最多重试次数, 不占校验重试 (JudgmentEngine.call_llm)
+# 单次请求的超时, 秒. 不是流式请求, 模型写完之前收不到字节, 读超时即整次生成的时间; 按缺省输出上限 32768 token
+# 放宽 (原为 120 秒), 每秒不到约 55 token 才会超时 (需求 R312)
+TIMEOUT = 600.0
 ERROR_TEXT_LIMIT = 500  # 异常信息中服务端错误正文的最大长度 (先脱敏再截断)
+# 输出在上限处被截断时 LLMResponse.error 的写法 (需求 R312): 经语法级错误回传给模型重试, 用英文
+TRUNCATED = (
+    "The reply was cut off at the output token limit ({limit} tokens) before the JSON object was complete. "
+    "Reply again with a complete JSON object and keep it concise."
+)
+# 服务端因输出达到上限回 400 时 error.message 里的字样, 按小写比 (OpenAI 在 JSON 模式下输出不完整时不给半截内容,
+# 回 400, param 与 code 都为空; 需求 R312)
+OUTPUT_LIMIT_MESSAGE = "output limit was reached"
 # 可能写出服务端回显内容 (如 reason phrase, 响应头) 的日志器, 挂脱敏过滤
 HTTP_LOGGERS = ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2", "httpcore.proxy")
 
@@ -149,6 +160,10 @@ class LLMTransportError(RuntimeError):
     """传输层失败: 不可重试的状态码, 重试耗尽, 响应不是 Chat Completions 的格式, 或响应回显了密钥. 消息不含密钥."""
 
 
+class OutputLimitReached(LLMTransportError):
+    """HTTP 400 且错误体说输出达到上限 (见 OUTPUT_LIMIT_MESSAGE). LiveLLMClient.complete 转成截断的响应, 不外抛."""
+
+
 class UnsupportedParameter(LLMTransportError):
     """HTTP 400 且错误体指明某个请求参数不受该模型支持 (OpenAI 错误体的 error.param 与 error.code)."""
 
@@ -190,6 +205,8 @@ class LiveLLMClient:
     见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens 与非默认 temperature: 收到
     400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature 取值不受支持时不再发送
     temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
+    输出在上限处被截断 (finish_reason 为 length, 或服务端因输出达到上限回 400) 时不抛错, error 为 TRUNCATED, 交给
+    校验按语法失败回传给模型重试 (需求 R312); finish_reason 为 length 时 raw 照常保留, 400 时为空.
     408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码 (如 400, 401) 与连接失败不重试.
     不可重试或重试耗尽时抛 LLMTransportError.
 
@@ -205,7 +222,7 @@ class LiveLLMClient:
         base_url: str = DEFAULT_BASE_URL,
         *,
         provider: LlmProvider = "openai",
-        timeout: float = 120.0,
+        timeout: float = TIMEOUT,
         backoff: float = 1.0,
         max_retries: int = MAX_RETRIES,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -234,7 +251,8 @@ class LiveLLMClient:
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         """调用一次 (含传输层重试). 输出按 output_model 解析: 失败时 output 为空, raw 保留原文, error 为解析错误;
-        model 与 token 数取响应."""
+        model 与 token 数取响应. 输出被截断时 error 为 TRUNCATED (见类说明), 服务端回 400 的那种 token 数记 0."""
+        truncated = TRUNCATED.format(limit=req.max_tokens)
         while True:
             body = self._body(req)
             try:
@@ -244,7 +262,11 @@ class LiveLLMClient:
                 # 按本次实际发出的请求判断: 并发调用可能已先一步调整过, 这时照样按新方式重发
                 if e.param not in body or not self._adapt(e.param):
                     raise
-        raw, model, input_tokens, output_tokens = self._envelope(data)
+            except OutputLimitReached:
+                return LLMResponse[output_model](  # type: ignore[valid-type]
+                    output=None, raw="", model=self.model, input_tokens=0, output_tokens=0, error=truncated
+                )
+        raw, model, input_tokens, output_tokens, finish = self._envelope(data)
         try:
             decoded = json.loads(strip_fences(raw))
         except ValueError:
@@ -256,6 +278,8 @@ class LiveLLMClient:
             error = None
         except ValidationError as e:
             output, error = None, str(e)
+        if finish == "length":
+            error = truncated
         return LLMResponse[output_model](  # type: ignore[valid-type]
             output=output, raw=raw, model=model, input_tokens=input_tokens, output_tokens=output_tokens, error=error
         )
@@ -289,15 +313,16 @@ class LiveLLMClient:
             return True
         return False
 
-    def _envelope(self, data: Any) -> tuple[str, str, int, int]:
-        """Chat Completions 响应的 (content, model, prompt_tokens, completion_tokens).
+    def _envelope(self, data: Any) -> tuple[str, str, int, int, Any]:
+        """Chat Completions 响应的 (content, model, prompt_tokens, completion_tokens, finish_reason).
 
         只对缺失或 null 用默认值: content 取空串, model 取请求的模型名 (空串同样), usage 与 token 数取 0;
         给了值就须类型正确 (content, model 为字符串, usage 为对象, token 数为非负整数, 不接受 bool, 浮点),
         否则抛 LLMTransportError (信息只含类型名, 不含字段值).
         """
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise LLMTransportError("响应不是 Chat Completions 格式: 缺 choices[0].message.content") from None
         if content is None:
@@ -320,7 +345,7 @@ class LiveLLMClient:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise LLMTransportError(f"响应的 usage.{name} 不是非负整数 ({type(value).__name__})")
             tokens.append(value)
-        return content, model or self.model, tokens[0], tokens[1]
+        return content, model or self.model, tokens[0], tokens[1], choice.get("finish_reason")
 
     async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         """发请求, 可重试的失败按指数退避重试. 返回响应 JSON."""
@@ -354,6 +379,8 @@ class LiveLLMClient:
             param = unsupported_param(response)
             if param is not None:
                 raise UnsupportedParameter(failure, param)
+            if output_limit_reached(response):
+                raise OutputLimitReached(failure)
             if not retryable(response.status_code):
                 raise LLMTransportError(failure)
         if not self.max_retries:
@@ -378,6 +405,20 @@ def unsupported_param(response: httpx.Response) -> str | None:
         return None
     param = error.get("param")
     return param if isinstance(param, str) else None
+
+
+def output_limit_reached(response: httpx.Response) -> bool:
+    """400 响应的错误体 error.message 是否说输出达到上限 (含 OUTPUT_LIMIT_MESSAGE, 不分大小写); 错误体不是这种
+    格式为假."""
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    return isinstance(message, str) and OUTPUT_LIMIT_MESSAGE in message.lower()
 
 
 class UnconfiguredLLMClient:

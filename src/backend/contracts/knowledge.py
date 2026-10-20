@@ -100,7 +100,9 @@ class LLMSpec(Model):
     prompt: str  # knowledge/prompts/ 下的 Jinja2 模板文件名
     output_model: str  # contracts/llm_outputs.py 中的输出模型类名
     context_budget: int = 8000  # 上下文 token 预算
-    max_tokens: int = 4096  # 单次调用最多输出的 token 数, 程序 YAML 可覆盖
+    # 单次调用最多输出的 token 数, 程序 YAML 可覆盖. 推理类模型 (如 gpt-6 系列) 的上限含推理 token: 4096 时 GEN-02
+    # 的推理就用光了上限, 正文为空; 32768 留足余量, 只封顶, 不增加实际用量 (需求 R312)
+    max_tokens: int = 32768
 
 
 class ManualSpec(Model):
