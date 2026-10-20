@@ -8,7 +8,7 @@ import { en } from '../src/locales/en'
 import { zh } from '../src/locales/zh'
 
 const schemas = openapi.components.schemas
-const NOT_ROWS = ['document', 'standard', 'trail'] // 文件页, 准则片段与留痕, 不是账表的行
+const NOT_ROWS = ['document', 'standard', 'trail', 'client_profile'] // 文件页, 准则片段, 留痕与客户画像, 不是账表的行
 
 test('every table kind is listed and named in both languages', () => {
   const kinds = schemas.TableKind.enum
