@@ -35,6 +35,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
+    PLANNING_FEATURES,
     FakeEngagementStore,
     FakeRegistry,
     FakeTrail,
@@ -97,7 +98,8 @@ def knowledge(tmp_path: Path, **extra: str) -> Path:
 
 
 def test_registry_and_parsing() -> None:
-    """验收 1, 2: 10 个功能名与建议的 requires; 逗号分隔解析; 未登记的名字与依赖不满足都报出名字."""
+    """验收 1, 2: 11 个功能名与 requires (R313: planning 只含 PLN-15 且不依赖其他功能, PLN-19 另立 reassessment);
+    逗号分隔解析; 未登记的名字与依赖不满足都报出名字."""
     assert list(FEATURES) == [
         "critic",
         "collab",
@@ -108,13 +110,21 @@ def test_registry_and_parsing() -> None:
         "autonomy",
         "acceptance",
         "planning",
+        "reassessment",
         "presign",
     ]
     assert {name: set(spec.requires) for name, spec in FEATURES.items() if spec.requires} == {
         "collab": {"critic"},
-        "planning": {"misstatement"},
+        "reassessment": {"misstatement", "planning"},
         "presign": {"misstatement"},
     }
+    assert "PLN-15" in FEATURES["planning"].description and "PLN-19" not in FEATURES["planning"].description
+    assert "PLN-19" in FEATURES["reassessment"].description
+    assert check_features(["critic", "planning"]) == {"critic", "planning"}
+    with pytest.raises(ValueError, match="reassessment 需要 misstatement, planning"):
+        check_features(["critic", "reassessment"])
+    with pytest.raises(ValueError, match=r"reassessment 需要 planning$"):
+        check_features(["critic", "misstatement", "reassessment"])
     assert BASELINE == NUMBAT_FEATURES == {"critic"}
     assert parse_features("critic, journals,,") == {"critic", "journals"} and parse_features("") == frozenset()
     assert check_features(["critic", "journals"]) == {"critic", "journals"}
@@ -387,6 +397,38 @@ async def test_legacy_snapshot_counts_as_baseline() -> None:
     await wait_idle(runner, EID)
     assert runner.run_error(EID) is None
     assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)
+
+
+OLD_PLANNING = frozenset({"critic", "misstatement", "planning"})  # R313 之前 planning 须带 misstatement
+
+
+@pytest.mark.parametrize(
+    ("started_with", "restarted_with", "error"),
+    [
+        (
+            PLANNING_FEATURES,
+            OLD_PLANNING,
+            "FEATURES_MISMATCH: 项目冻结 critic,planning, 当前 critic,misstatement,planning",
+        ),
+        (OLD_PLANNING, OLD_PLANNING, None),
+    ],
+)
+async def test_planning_split_keeps_frozen_features(
+    started_with: frozenset[str], restarted_with: frozenset[str], error: str | None
+) -> None:
+    """R313 验收 4: 拆分后 planning 不带 misstatement 也能启动, 冻结为 "critic,planning"; 换成拆分前常用的
+    {critic, misstatement, planning} 重启即 FEATURES_MISMATCH, 不推进. 拆分前按 "critic,misstatement,planning"
+    冻结的项目在同一功能集下照常恢复 (功能名没改). 防的是拆分改了名字或冻结写法, 让在途项目误判或误推进."""
+    runner, _ = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]), features=started_with)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    engagement = await runner.deps.engagement_store.get(EID)
+    assert engagement is not None and engagement.version_snapshot["features"] == features_text(started_with)
+    other = rebuilt(runner, restarted_with)
+    await other.recover()
+    await wait_idle(other, EID)
+    assert other.run_error(EID) == error and not other.is_running(EID)
+    assert (await other.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)
 
 
 async def test_check_order_around_features_mismatch() -> None:

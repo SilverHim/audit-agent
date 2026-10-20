@@ -28,9 +28,11 @@ FEATURES: dict[str, FeatureSpec] = {
     "misstatement": FeatureSpec("错报闭环: FIN-03, FIN-08, FIN-09, 等待更正, FIN-04 按状态累计, P3 骨架节点"),
     "autonomy": FeatureSpec("自主度: 动态降级"),
     "acceptance": FeatureSpec("承接: ACC-08 与其闸门"),
-    "planning": FeatureSpec("计划: PLN-15, PLN-19 与其闸门", frozenset({"misstatement"})),
+    "planning": FeatureSpec("总体审计计划: PLN-15 与其闸门"),
+    # 修订重要性要出计划的新修订, 有计划才说得通; 重估在错报闭环之后
+    "reassessment": FeatureSpec("重要性重估: PLN-19 与其闸门", frozenset({"misstatement", "planning"})),
     "presign": FeatureSpec(
-        "签字前: FIN-12, FIN-15, FIN-07, FIN-18, FIN-10, RPT-08, RPT-07, 签字前清单", frozenset({"misstatement"})
+        "签字前: FIN-15, FIN-07, FIN-18, FIN-10, RPT-08, RPT-07, 签字前清单", frozenset({"misstatement"})
     ),
 }
 BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回归测试显式用它 (tests/fakes.NUMBAT_FEATURES)

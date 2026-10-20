@@ -8,7 +8,7 @@ name: 总体审计计划
 phase: P1_Planning
 cycle: Planning
 owner: A4
-feature: planning                 # 功能开关 (services/features.py): 计划; 关闭时不在程序库与主图中
+feature: planning                 # 功能开关 (services/features.py): 总体审计计划, 不依赖其他功能; 关闭时不在程序库与主图中
 outputs: [audit_plans]
 reads: [accounts, trial_balance]  # 提示词带本期试算表; 账表在计划之后变过即过期
 engine: llm

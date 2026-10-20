@@ -2027,8 +2027,8 @@ PLN15_STANDARDS = [
 
 
 def test_pln15_template() -> None:
-    """R203 验收 5, 9: PLN-15 的各项; 挂功能 planning, 基线下不启用 (不在启用集与固定集), 打开 planning (须带
-    misstatement) 时为 P1 固定集的一条; 准则片段都已登记且各自的 procedures 列了 PLN-15; 输出模型为 AuditPlanDraft."""
+    """R203 验收 5, 9: PLN-15 的各项; 挂功能 planning, 基线下不启用 (不在启用集与固定集), 打开 planning (不须带
+    其他功能, R313) 时为 P1 固定集的一条; 准则片段都已登记且各自的 procedures 列了 PLN-15; 输出模型为 AuditPlanDraft."""
     lib = ProcedureLibrary(ROOT)
     t = lib.load("PLN-15")
     assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.gate, t.feature) == (
@@ -2046,7 +2046,7 @@ def test_pln15_template() -> None:
     assert t.llm == LLMSpec(prompt="PLN-15.md.j2", output_model="AuditPlanDraft")
     assert output_model(t) is AuditPlanDraft
     assert "PLN-15" not in {x.id for x in lib.all()} | {p.id for p in fixed_procedures(lib)}
-    planning = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement", "planning"}))
+    planning = ProcedureLibrary(ROOT, frozenset({"critic", "planning"}))
     assert planning.enabled("PLN-15") and "PLN-15" in {p.id for p in fixed_procedures(planning)}
     for fragment_id in t.standards:
         fragment = lib.fragment(fragment_id)

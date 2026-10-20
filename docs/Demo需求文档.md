@@ -97,7 +97,7 @@ p0_inputs → p0_intel → gate_acc01 → p1_await_data → p1_ingest → p1_ana
 completion → gate_fin → report_draft → gate_rpt01 → { report_draft | archive }
 ```
 
-功能 planning 打开时（需求 R205），装配之后先起草总体审计计划，批准才进入执行阶段：
+功能 planning 打开时（需求 R205），装配之后先起草总体审计计划，批准才进入执行阶段。planning 只含 PLN-15 与其闸门，不依赖其他功能；重要性重估（PLN-19 与其闸门）另为功能 reassessment，依赖 misstatement 与 planning（需求 R313）：
 
 ```
 gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
