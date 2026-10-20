@@ -356,13 +356,13 @@ TRAIL_READS = [
 
 @pytest.mark.parametrize(("read", "index", "ordered"), TRAIL_READS)
 async def test_trail_reads_use_the_indexes(storage, read: TrailRead, index: Index, ordered: bool) -> None:
-    """验收 2: 截下 PostgresAuditTrail 这次读取发出的 SQL, 在本项目的事务里 (项目条件同真实查询, 来自行级安全)
-    EXPLAIN, 计划中出现该索引名 (不断言代价).
+    """验收 2: 截下 PostgresAuditTrail 这次读取发出的 SQL, 断言目标索引能直接服务这种读法 (不断言代价).
 
-    EXPLAIN 前关掉顺序扫描; 要索引给出顺序的读法 (ordered) 另关掉排序. 项目条件是 current_setting(...), 规划时不知道
-    是哪个项目, 按 "每个项目的平均行数" 估计; 测试库里项目多而每个项目留痕少, 估出来先取全再排序更便宜. 关掉排序后看的
-    是索引能否直接按 (created_at, id) 的顺序取到 limit 条. 按键取的 find_success 一个键至多几条, 排序不贵, 不关; 关了
-    规划器反而改用按时间的索引逐条比键. 没有对应索引时计划里就没有这个索引名."""
+    EXPLAIN 在属主角色的回滚事务里做: 设 app.engagement_id (行级安全的项目条件同真实查询), 删掉同表另两个新索引只留
+    目标索引, 关掉顺序扫描, 要顺序的读法 (ordered) 另关排序, 最后回滚. 断言: 计划里有目标索引, 它那一行的 Index Cond
+    含 engagement_id; 要顺序的读法计划里没有 Sort (索引直接给出 (created_at, id) 的顺序, 不是取出再排).
+    不删别的索引时选哪个随库里的统计而变: 规划器估选择率时代入 current_setting 的当前值, 用例的项目是新建的, 不在统计
+    里, 估约 1 行, 几个索引代价几乎相同 (第 1 轮审核意见 01). 按键取的 find_success 一个键至多几条, 排序留着."""
     engine, e, _, _ = storage
     trail = PostgresAuditTrail(engine)
     ids = [
@@ -390,12 +390,33 @@ async def test_trail_reads_use_the_indexes(storage, read: TrailRead, index: Inde
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", capture)
     [(statement, parameters)] = sent
-    async with transaction(engine, e.id) as conn:
-        await conn.execute(text("SET LOCAL enable_seqscan = off"))
-        if ordered:
-            await conn.execute(text("SET LOCAL enable_sort = off"))
-        plan = "\n".join((await conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)).scalars())
-    assert index.name in plan, plan
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 在属主角色的回滚事务里只留目标索引")
+    owner = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with owner.connect() as conn:
+            outer = await conn.begin()
+            try:
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": e.id})
+                for other in (m.TRAIL_BY_TIME, m.TRAIL_BY_KIND, m.TRAIL_BY_KEY):
+                    if other is not index:
+                        await conn.execute(text(f"DROP INDEX {other.name}"))
+                await conn.execute(text("SET LOCAL enable_seqscan = off"))
+                if ordered:
+                    await conn.execute(text("SET LOCAL enable_sort = off"))
+                plan = list((await conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)).scalars())
+            finally:
+                await outer.rollback()
+    finally:
+        await owner.dispose()
+    shown = "\n".join(plan)
+    # 用到目标索引的扫描 (游标那一条的 created_at 有时也经它取, 计划里出现两次), 各自的 Index Cond 都含 engagement_id
+    scans = [n for n, line in enumerate(plan) if index.name in line]
+    assert scans, shown
+    for scan in scans:
+        assert "engagement_id" in next(line for line in plan[scan + 1 :] if "Index Cond" in line), shown
+    assert not ordered or "Sort" not in shown, shown
 
 
 # pg_indexes 的写法 (USING btree 之后): 列, 部分索引另有条件
@@ -408,8 +429,8 @@ TRAIL_INDEXES = {
 
 async def test_migration_0015_round_trip(storage) -> None:
     """验收 3: 以属主角色在一个事务里走 0015 降级再升级 (两次), 最后回滚. 测试库的留痕表已有数据; 降级后三个索引
-    都没了, 升级后定义同 TRAIL_INDEXES, 再升级一次不报错; 模型声明的列与部分索引的条件与之相同. 新库 0001 按当前模型
-    建表时已带这三个索引, 0015 跳过. 需另设 TEST_DATABASE_OWNER_URL."""
+    都没了, 升级后定义同 TRAIL_INDEXES (列与部分索引的条件; 迁移与 0001 都直接用模型里的 Index 对象建), 再升级一次
+    不报错. 新库 0001 按当前模型建表时已带这三个索引, 0015 跳过. 需另设 TEST_DATABASE_OWNER_URL."""
     from alembic.operations import Operations
     from alembic.runtime.migration import MigrationContext
 
@@ -451,9 +472,6 @@ async def test_migration_0015_round_trip(storage) -> None:
                 await outer.rollback()
     finally:
         await owner.dispose()
-    declared = {i.name: "(" + ", ".join(c.name for c in i.columns) + ")" for i in m.audit_trail.indexes}
-    assert declared == {name: definition.split(" WHERE ")[0] for name, definition in TRAIL_INDEXES.items()}
-    assert str(m.TRAIL_BY_KEY.dialect_options["postgresql"]["where"]) == "audit_trail.idempotency_key IS NOT NULL"
 
 
 async def test_evidence_and_adapters(storage, tmp_path):
