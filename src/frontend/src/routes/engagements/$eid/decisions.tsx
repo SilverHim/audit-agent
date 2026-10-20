@@ -10,7 +10,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, useDeferrals } from '@/lib/new-api'
-import { isJudgment, procedureName, rankTasks } from '@/lib/review'
+import { isJudgment, procedureName, rankTasks, splitManual } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/decisions')({
@@ -31,24 +31,27 @@ function Decisions() {
   const [filter, setFilter] = useState<Filter>('all')
 
   const deferred = useMemo(() => new Set((deferrals.data ?? []).map(deferralKey)), [deferrals.data])
+  // 人工程序的任务不是复核决定, 单列一组, 指向人工程序页 (需求 R303)
+  const [reviewViews, manualViews] = useMemo(() => splitManual(tasks.data ?? []), [tasks.data])
   const ranked = useMemo(() => {
     const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
-    return rankTasks(tasks.data ?? [], byId, overview)
-  }, [tasks.data, exceptions.data, overview])
+    return rankTasks(reviewViews, byId, overview)
+  }, [reviewViews, exceptions.data, overview])
 
   const gateKey = overview?.current_gate ? `gate:${overview.current_gate}` : null
   const gateState = gateKey ? (deferred.has(gateKey) ? 'deferred' : 'pending') : null
-  const rows = ranked.map((item) => ({
-    item,
-    state: deferred.has(`task:${item.view.task.id}`) ? 'deferred' : 'pending',
-  }))
+  const taskState = (id: string) => (deferred.has(`task:${id}`) ? 'deferred' : 'pending')
+  const rows = ranked.map((item) => ({ item, state: taskState(item.view.task.id) }))
+  const manualRows = manualViews.map((view) => ({ view, state: taskState(view.task.id) }))
   const visible = (state: string) => filter === 'all' || filter === state
+  const states = [...rows, ...manualRows].map((row) => row.state)
   const counts = {
-    all: rows.length + (gateState ? 1 : 0),
-    pending: rows.filter((row) => row.state === 'pending').length + (gateState === 'pending' ? 1 : 0),
-    deferred: rows.filter((row) => row.state === 'deferred').length + (gateState === 'deferred' ? 1 : 0),
+    all: states.length + (gateState ? 1 : 0),
+    pending: states.filter((state) => state === 'pending').length + (gateState === 'pending' ? 1 : 0),
+    deferred: states.filter((state) => state === 'deferred').length + (gateState === 'deferred' ? 1 : 0),
   }
   const shownRows = rows.filter((row) => visible(row.state))
+  const shownManual = manualRows.filter((row) => visible(row.state))
   const statusPill = (state: string) => (
     <StatusPill tone={state === 'deferred' ? 'neutral' : 'warn'}>
       {state === 'deferred' ? t.status.deferred : t.status.pending}
@@ -162,6 +165,44 @@ function Decisions() {
               ) : (
                 <EmptyRow text={t.decisionsPage.none} />
               )}
+
+              {manualRows.length ? (
+                <>
+                  <GroupHeader title={t.decisionsPage.manual} count={shownManual.length} />
+                  {shownManual.length ? (
+                    shownManual.map(({ view, state }) => (
+                      <div
+                        key={view.task.id}
+                        className={cn(COLS, 'min-h-14 items-center border-line-soft border-b px-4 py-3')}
+                      >
+                        <span className="flex min-w-0 flex-col">
+                          <span className="font-semibold text-[13.5px]">{t.taskKinds.manual}</span>
+                          <span className="truncate text-[12.5px] text-[#4a5262]" lang="en">
+                            {view.task.manual_request?.instructions}
+                          </span>
+                        </span>
+                        <span className="text-[13px]">
+                          <Code>{view.task.procedure_id}</Code>{' '}
+                          {procedureName(t, view.task.procedure_id, view.procedure_name)}
+                        </span>
+                        <span className="text-right">—</span>
+                        <span>—</span>
+                        <span>—</span>
+                        <span>{statusPill(state)}</span>
+                        <Link
+                          to="/engagements/$eid/manual/$taskId"
+                          params={{ eid, taskId: view.task.id }}
+                          className="inline-flex min-h-9 items-center justify-self-end rounded-lg border border-input px-3 text-[13px] hover:bg-muted"
+                        >
+                          {t.decisionsPage.perform}
+                        </Link>
+                      </div>
+                    ))
+                  ) : (
+                    <EmptyRow text={t.decisionsPage.none} />
+                  )}
+                </>
+              ) : null}
             </div>
           </div>
         </QueryState>

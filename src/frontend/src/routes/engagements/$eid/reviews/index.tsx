@@ -14,7 +14,15 @@ import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
-import { isJudgment, procedureName, type RankedTask, type ReviewTier, rankTasks, TIER_ORDER } from '@/lib/review'
+import {
+  isJudgment,
+  procedureName,
+  type RankedTask,
+  type ReviewTier,
+  rankTasks,
+  splitManual,
+  TIER_ORDER,
+} from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/reviews/')({
@@ -45,7 +53,7 @@ function ReviewQueue() {
   const ranked = useMemo(() => {
     const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
     // 人工程序的任务 (manual) 在人工队列里办 (后端需求 R94), 不进复核队列
-    const reviewable = (tasks.data ?? []).filter((view) => view.task.kind !== 'manual')
+    const [reviewable] = splitManual(tasks.data ?? [])
     return rankTasks(reviewable, byId, overview)
   }, [tasks.data, exceptions.data, overview])
   const isPending = (item: RankedTask) => item.view.task.status === 'pending'

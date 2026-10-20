@@ -275,6 +275,9 @@ export const en = {
     reviewIntro: (total: number, tier: string) =>
       `${total} item${total === 1 ? '' : 's'} need${total === 1 ? 's' : ''} your review. This one is in the ${tier} tier.`,
     deferredIntro: (n: number) => `${n} item${n === 1 ? '' : 's'} deferred.`,
+    manualIntro: (procedure: string) =>
+      `This procedure is yours to perform: ${procedure}. Attach the evidence and record the result on the manual procedure page.`,
+    performManual: 'Perform',
     afterDefer: 'Moved to pending decisions.',
     quick: {
       where: 'Where are we?',
@@ -501,6 +504,7 @@ export const en = {
     deferred: 'Deferred',
     stage: 'Stage decisions',
     review: 'Review decisions',
+    manual: 'Manual procedures',
     noStage: 'No stage decision is pending.',
     none: 'Nothing matches this filter.',
     cols: {
@@ -512,6 +516,7 @@ export const en = {
       status: 'Status',
     },
     open: 'Open',
+    perform: 'Perform',
   },
   queuePage: {
     title: 'Review queue',
