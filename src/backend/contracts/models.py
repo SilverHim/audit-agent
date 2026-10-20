@@ -1150,9 +1150,15 @@ class FinancialStatementLine(Model):
     name: str  # 列示的名称
     amount_cents: int  # 本期金额, 单位分, 按列示的符号
     prior_amount_cents: int | None = None  # 比较数, 单位分; 没有比较期为空
-    sign: Literal[1, -1]  # 科目余额 (借正贷负) 转列示金额的符号
-    account_codes: list[str]  # 映射的科目代码
-    subtotal: bool = False  # 是否为小计或合计行
+    # 符号. 财务状况表与损益表的行: 金额 = sign × Σ 映射科目的余额 (借正贷负), 资产与费用行为 1, 负债, 权益与收入行为 -1
+    # (合计行同, 如 SOFP-TL, PL-NP). 权益变动表的行一律 -1 (同权益, 贷方为正), 金额是期初, 本期变动或期末, 不是期末余额;
+    # 现金流量表的行一律 1, 金额以现金流入为正 (如 CF-NP 为本期亏损 -2213699, CF-REC 为应收增加 -1019950). 后两张表的行
+    # 不按上式勾稽
+    sign: Literal[1, -1]
+    account_codes: list[str]  # 映射的科目代码; 权益变动表与现金流量表的行只写出取自哪些科目
+    # 是否为小计或合计行. 财务状况表与损益表: 金额同样 = sign × Σ 所列科目的余额, 所列科目与本表的明细行重叠, 勾稽时
+    # 不重复计入; 权益变动表与现金流量表: 按需求表标出 (CE-TCI, CE-CLOSE, CF-OP, CF-NET), 不参与小计勾稽
+    subtotal: bool = False
 
 
 class FinancialStatements(Model):

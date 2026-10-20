@@ -160,7 +160,8 @@ class PostgresFinancialDataStore(Store):
             "bank_account": "bank_accounts",
             "bank_transaction": "bank_transactions",
         }
-        if source_type not in names:  # financial_statement_line: 待审财报的表由需求 R217 加, 之前一律查不到
+        # 待审财报的表由需求 R217 加, 之前一律查不到; 其余没登记的行类型照旧报 KeyError
+        if source_type == "financial_statement_line":
             return None
         t = m.FINANCIAL[names[source_type]]
         stmt = (

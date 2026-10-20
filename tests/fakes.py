@@ -3101,7 +3101,9 @@ async def api_client(
         yield client
 
 
-# ── Xero 演示公司的待审财报 fs_v1 (需求 R216 的表, 待审财报的唯一正本; R217 生成 fs_v1.json 照此) ──
+# ── Xero 演示公司的待审财报 fs_v1 (需求 R216 的表; 测试里只此一份) ──
+# data/xero_demo 的 financial_statements/fs_v1.json 由补造脚本生成并入库, R217 载入它; test_xero_demo_data 核对
+# 它与本表逐行相同, 并经 FinancialStatements 读入后 (去掉 document_id) 等于 XERO_FS_V1
 
 # 17 个损益科目
 PL_ACCOUNTS = [
