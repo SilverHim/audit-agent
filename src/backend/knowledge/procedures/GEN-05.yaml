@@ -1,0 +1,321 @@
+id: GEN-05
+name: 全量分录扫描
+# 规格书 6.3 GEN-05; ASA 240 第 32, 33(a) 段, A44 段. 对本期全部分录按规则取例外, 原样返回, 不作判断, 不建复核
+# 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08 与期末后补记 R13 (需求 R131); R09-R12 由 R132 加,
+# 更正分录接入后的增量实例由 JR-6c 改 (entry_nos, audit_adjustment_start).
+#
+# 通用口径 (各规则的 SQL 都这样写):
+# - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行.
+# - 每条规则每笔凭证 (entry_no) 至多一条例外: source_id 取该凭证命中行中金额 (借贷两侧绝对值之和) 最大的行, 并列取
+#   ID 最小的行 (按字节序); amount_cents 取这一行的金额. 例外按 (posting_date, entry_no 自然序, entry_no) 编号: 自然序
+#   把凭证号中的每段数字补足到 10 位再按字节序比较 (XJ-9 在 XJ-10 之前), 数字段以 10 位为限 (更长的段不保证按数值排);
+#   自然序相等而凭证号不同 (XJ-09 与 XJ-9) 时按凭证号原文的字节序, 编号总是确定的.
+# - 输出列: source_type journal_entry, source_id, amount_cents, entry_no, posting_date, 其后为各规则特有的列 (进例外的
+#   detail).
+# - 摘要与单据号的匹配用 ILIKE; 录入时间 created_at 按 timezone 换成当地时间后再取星期, 时刻与日期; created_at 为空的
+#   行不命中看录入时间的规则.
+# - 作废对 (R02 剔除): 冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证, 原凭证为模板填入第一个
+#   捕获组; 两者都算作废对. WITH reversal, voided 两段与 CSH-02 的 D03, D04 逐字相同, 改口径时几处一起改.
+# - 分录是否手工 (调整分录) 以数据给出的 is_adjustment 为准, 不按凭证号推断; R07 不分凭证类型.
+# - 金额门槛的比较: 超过 (>) 或不低于 (>=) 按各规则所写.
+#
+# 执行前检查 (需求 R130; 命中的规则不执行, 执行记录记 skipped 或 not_executable 与理由):
+# - 看录入时间的 R01, R06, R08, R13: 数据集声明录入时间不可靠 (entry_timestamps_reliable 为假) 时 skipped, 理由取
+#   entry_timestamps_note (Xero 演示数据的录入时间在重置演示公司时重新生成, 设计稿第 5.3 节; 真实数据照常执行).
+# - R06 另在 audit_adjustment_start 为空 (还没发出错报沟通) 时 skipped: 本规则只在增量实例执行.
+# - R03 在客户画像没有审批限额时 not_executable; R04 在本期分录都没有审批人时 not_executable; R07 在本期分录的录入人
+#   少于 2 个时 not_executable (无从比较谁不常录入).
+phase: P2_Executing
+cycle: Pervasive
+owner: A6
+feature: journals                 # 功能开关 (services/features.py): 分录测试
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [exceptions]
+reads: [journal_entries, accounts]
+engine: rule
+autonomy_level: L3
+assertions: [Occurrence, Completeness, Accuracy]
+params:
+  period_start: {ref: period_start}
+  period_end: {ref: period_end}
+  performance_materiality_cents: {ref: performance_materiality_cents}
+  clearly_trivial_cents: {ref: clearly_trivial_cents}
+  approval_limit_cents: {ref: profile.approval_limit_cents, optional: true}   # 付款审批限额, 画像没有时为空
+  entry_timestamps_reliable: {ref: dataset.entry_timestamps_reliable}
+  entry_timestamps_note: {ref: dataset.entry_timestamps_note}
+  reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}   # 写法要求见 CSH-02.yaml 的注释
+  reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
+  audit_adjustment_entry_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录, 由 FIN-09 验证
+  timezone: Australia/Sydney      # 录入时间换算的时区
+  business_hours: [7, 20]         # 工作时间 [起, 止) 的整点, 当地时间
+  rare_user_max: 2                # 录入人本期凭证数不超过它即为非常规录入人
+  round_unit_cents: 1000000       # 整数金额的单位 (10,000.00)
+  revenue_categories: [revenue]   # 分类参数须被规则 SQL 用到; R10 的 receivables_categories 由 R132 加
+  cash_categories: [cash]
+  entry_nos: null                 # 增量实例的凭证号 (JR-6c); 初始实例为空, 本文件的 SQL 不用
+  audit_adjustment_start: null    # 首次发出错报沟通的时间 (JR-6c 改为派生引用); 为空时 R06 不执行
+standards: [ASA240-P32, ASA240-P33]
+rules:
+  - id: R01
+    name: 周末录入的重大收入
+    severity: high
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:entry_timestamps_note AS text) AS reason WHERE NOT CAST(:entry_timestamps_reliable AS boolean)
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_at AT TIME ZONE CAST(:timezone AS text) AS created_at_local
+        FROM journal_entries j JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND a.category=ANY(CAST(:revenue_categories AS text[]))
+          AND j.credit_cents>CAST(:performance_materiality_cents AS bigint)
+          AND extract(isodow FROM j.created_at AT TIME ZONE CAST(:timezone AS text)) IN (6, 7)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_at_local
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R02
+    name: 整数金额的调整分录
+    severity: medium
+    sql: |
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      ), hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND j.is_adjustment
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+          AND ((j.debit_cents<>0 AND j.debit_cents%CAST(:round_unit_cents AS bigint)=0
+                AND j.debit_cents>=CAST(:performance_materiality_cents AS bigint))
+            OR (j.credit_cents<>0 AND j.credit_cents%CAST(:round_unit_cents AS bigint)=0
+                AND j.credit_cents>=CAST(:performance_materiality_cents AS bigint)))
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R03
+    name: 恰低于审批限额的付款
+    severity: high
+    checks:
+      - status: not_executable
+        sql: SELECT '客户画像没有审批限额' AS reason WHERE CAST(:approval_limit_cents AS bigint) IS NULL
+    # 付款 = 贷记 cash 分类科目的凭证; 取其中非 cash 科目的借方行, 金额在 [0.95 L, L) 内 (等于限额不算)
+    sql: |
+      WITH payments AS (
+        SELECT DISTINCT j.entry_no
+        FROM journal_entries j JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND a.category=ANY(CAST(:cash_categories AS text[])) AND j.credit_cents>0
+      ), hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents
+        FROM journal_entries j JOIN payments p ON p.entry_no=j.entry_no
+          LEFT JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND (a.category IS NULL OR NOT a.category=ANY(CAST(:cash_categories AS text[])))
+          AND j.debit_cents>=0.95*CAST(:approval_limit_cents AS bigint)
+          AND j.debit_cents<CAST(:approval_limit_cents AS bigint)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             CAST(:approval_limit_cents AS bigint) AS approval_limit_cents
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R04
+    name: 审批缺失或自审自批
+    severity: high
+    checks:
+      - status: not_executable
+        sql: |
+          SELECT '本期分录都没有审批人 (approved_by 全为空)' AS reason
+          WHERE NOT EXISTS (
+            SELECT 1 FROM journal_entries j WHERE j.engagement_id=:eid AND j.approved_by IS NOT NULL
+              AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date))
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_by, j.approved_by
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND (j.approved_by IS NULL OR j.approved_by=j.created_by)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_by, approved_by
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R05
+    name: 期末前三日冲销
+    severity: high
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.description, j.source_doc
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_end AS date)-3 AND CAST(:period_end AS date)
+          AND j.posting_date>=CAST(:period_start AS date)
+          AND (j.description ILIKE '%revers%' OR j.source_doc ILIKE '%revers%'
+               OR j.description ILIKE '%冲销%' OR j.source_doc ILIKE '%冲销%')
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             description, source_doc
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R06
+    name: 审计调整期间的其他分录
+    severity: high
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:entry_timestamps_note AS text) AS reason WHERE NOT CAST(:entry_timestamps_reliable AS boolean)
+      - status: skipped
+        sql: >-
+          SELECT '尚未发出错报沟通, 本规则只在增量实例执行' AS reason
+          WHERE CAST(:audit_adjustment_start AS timestamptz) IS NULL
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_at AT TIME ZONE CAST(:timezone AS text) AS created_at_local
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND j.created_at>CAST(:audit_adjustment_start AS timestamptz)
+          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
+              <>CAST(:audit_adjustment_entry_prefix AS text)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_at_local
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R07
+    name: 非常规录入人
+    severity: medium
+    checks:
+      - status: not_executable
+        sql: |
+          SELECT '本期分录的录入人少于 2 个, 无从比较' AS reason
+          FROM journal_entries j
+          WHERE j.engagement_id=:eid
+            AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          HAVING count(DISTINCT j.created_by)<2
+    sql: |
+      WITH preparers AS MATERIALIZED (  -- 先算好各录入人的凭证数: 刚载入还没统计时规划器会把分组聚合放进嵌套循环反复执行
+        SELECT j.created_by, count(DISTINCT j.entry_no) AS preparer_entries
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND j.created_by IS NOT NULL
+        GROUP BY j.created_by
+      ), hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_by, p.preparer_entries
+        FROM journal_entries j JOIN preparers p ON p.created_by=j.created_by
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND p.preparer_entries<=CAST(:rare_user_max AS int)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_by, preparer_entries
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R08
+    name: 非工作时间录入
+    severity: medium
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:entry_timestamps_note AS text) AS reason WHERE NOT CAST(:entry_timestamps_reliable AS boolean)
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_at AT TIME ZONE CAST(:timezone AS text) AS created_at_local
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND (extract(hour FROM j.created_at AT TIME ZONE CAST(:timezone AS text))
+                 <(CAST(:business_hours AS int[]))[1]
+               OR extract(hour FROM j.created_at AT TIME ZONE CAST(:timezone AS text))
+                 >=(CAST(:business_hours AS int[]))[2])
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_at_local
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R13
+    name: 期末后补记
+    severity: medium
+    # 当地录入日晚于期末而业务日期在期内; 审计更正分录 (按凭证号前缀) 由 FIN-09 验证, 不算
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:entry_timestamps_note AS text) AS reason WHERE NOT CAST(:entry_timestamps_reliable AS boolean)
+    sql: |
+      WITH hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.created_at AT TIME ZONE CAST(:timezone AS text) AS created_at_local
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND CAST(j.created_at AT TIME ZONE CAST(:timezone AS text) AS date)>CAST(:period_end AS date)
+          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
+              <>CAST(:audit_adjustment_entry_prefix AS text)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             created_at_local
+      FROM picked
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"

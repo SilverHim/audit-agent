@@ -1,0 +1,16 @@
+{
+  "scenario": "T4",
+  "title": "Deposit in transit: the 10-06 receipt for ORC1021 is booked on 09-30 while the bank credits it on 10-06",
+  "ops": [
+    {
+      "op": "set",
+      "file": "api/journals.json",
+      "match": {"JournalNumber": 637},
+      "field": "JournalDate",
+      "before": "/Date(1791244800000+0000)/",
+      "after": "/Date(1790726400000+0000)/"
+    },
+    {"op": "tb_shift", "code": "090", "delta_cents": 55000},
+    {"op": "tb_shift", "code": "610", "delta_cents": -55000}
+  ]
+}

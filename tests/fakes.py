@@ -118,6 +118,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     RiskItem,
+    RuleOutcome,
     RunStatus,
     RunTrigger,
     StepKind,
@@ -1460,6 +1461,64 @@ def numbat_csh05_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+def gen05_exception(
+    run: ProcedureRun,
+    rule_id: str,
+    severity: Literal["low", "medium", "high"],
+    source_id: str,
+    amount_cents: int,
+    detail: dict[str, Any],
+) -> AuditException:
+    """GEN-05 一条规则的第 1 条例外, 字段同 SqlRuleEngine 按 GEN-05.yaml 的输出列组装: detail 为 source_type,
+    source_id, amount_cents 之外的列 (entry_no, posting_date 与规则特有的列), 证据指针指向该分录行."""
+    return AuditException(
+        id=f"X-GEN-05-{run.run_no}-{rule_id}-1",
+        version=1,
+        procedure_id="GEN-05",
+        run_id=run.id,
+        rule_id=rule_id,
+        severity=severity,
+        source_ids=[source_id],
+        amount_cents=amount_cents,
+        detail=detail,
+        evidence=[
+            EvidencePointer(
+                type="voucher",
+                source_type="journal_entry",
+                source_id=source_id,
+                locator=", ".join(["amount_cents", *detail]),
+                reliability="internal_original",
+            )
+        ],
+    )
+
+
+def numbat_gen05_result(run: ProcedureRun) -> RuleResult:
+    """GEN-05 对 Numbat 的结果 (需求 R131 验收 8, 取自连库跑一次的结果): SJ-2026-0612 悉尼周日 21:14 录入, 自审自批,
+    命中 R01 (收入行), R04 与 R08 (两行同额取 ID 小的); 画像没有审批限额, R03 不执行; 还没发出错报沟通, R06 不执行."""
+    entry = {"entry_no": "SJ-2026-0612", "posting_date": "2026-06-28"}
+    local = {"created_at_local": "2026-06-28T21:14:00"}
+    return RuleResult(
+        exceptions=[
+            gen05_exception(run, "R01", "high", "SJ-2026-0612-2", 14200000, entry | local),
+            gen05_exception(
+                run,
+                "R04",
+                "high",
+                "SJ-2026-0612-1",
+                14200000,
+                entry | {"created_by": "fin.controller", "approved_by": "fin.controller"},
+            ),
+            gen05_exception(run, "R08", "medium", "SJ-2026-0612-1", 14200000, entry | local),
+        ],
+        rows={},
+        outcomes=[
+            RuleOutcome(rule_id="R03", status="not_executable", reason="客户画像没有审批限额"),
+            RuleOutcome(rule_id="R06", status="skipped", reason="尚未发出错报沟通, 本规则只在增量实例执行"),
+        ],
+    )
+
+
 NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计第 7 节第 9 行), 列按 REV-02.yaml
     {
         "id": f"SI-2026-{n}",
@@ -1484,6 +1543,7 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "CSH-02": lambda run: RuleResult(
         exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
     ),
+    "GEN-05": numbat_gen05_result,  # 功能 journals 打开时才执行
 }
 
 

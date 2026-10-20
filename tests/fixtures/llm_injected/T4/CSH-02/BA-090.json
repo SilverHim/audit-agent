@@ -1,0 +1,162 @@
+{
+  "conclusion": "The bank confirms an overdrawn balance of AUD 10,900.44 at 30 September 2026 against a book balance of AUD 10,350.44 overdrawn. The AUD 550.00 difference is a deposit in transit: receipt XJ-637 from Yarra Transport was recorded in the ledger on 30 September 2026 and the bank credited it on 6 October 2026 (BT-090-0081, reference 1021). It is a timing difference, not a misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The bank confirms an overdrawn balance of AUD 10,900.44 for account 12345678 as at 30 September 2026.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d111883a3741",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d111883a3741",
+          "locator": "balance_date",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "GL account 090 shows an overdrawn balance of AUD 10,350.44 at 30 September 2026, so confirmed minus book is -AUD 550.00.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "090",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Receipt XJ-637 of AUD 550.00 from Yarra Transport was debited to account 090 on 30 September 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-637-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank credited AUD 550.00 from Yarra Transport, reference 1021, on 6 October 2026.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0081",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "The auditor investigates exceptions to determine whether they indicate misstatements (ASA 505 para 14).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The receipt was recorded before the period end and credited by the bank after it for the same amount and reference, so it is a deposit in transit.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The deposit in transit explains the whole difference to the cent, so the exception is a timing difference and not a misstatement.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-d111883a3741",
+      "locator": "confirmed_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-d111883a3741",
+      "locator": "balance_date",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "090",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-637-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0081",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA505-P14",
+      "locator": "para 14",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "If the 6 October credit related to a different receipt, or the bank had no record of the September remittance, the difference would be unexplained.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

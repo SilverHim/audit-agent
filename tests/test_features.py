@@ -141,7 +141,8 @@ def test_build_deps_reads_features() -> None:
 
 async def test_library_filters_fixed_set_and_pack(tmp_path: Path) -> None:
     """验收 3: X-NEW (P3, misstatement) 与 X-P2 (P2, journals) 在基线下不启用: all() 不含, all(include_disabled)
-    含, 固定集为原 10 条, 装配新增原 7 条; 开 journals 时装配多 X-P2, 开 misstatement 时固定集多 X-NEW."""
+    含, 固定集为原 10 条, 装配新增原 7 条; 开 journals 时装配多 X-P2 与同属 journals 的固定集 GEN-05 (需求 R131), 开
+    misstatement 时固定集多 X-NEW."""
     root = knowledge(tmp_path, **{"X-NEW": X_NEW, "X-P2": X_P2})
     base = ProcedureLibrary(root)
     assert {"X-NEW", "X-P2"}.isdisjoint(t.id for t in base.all())
@@ -157,7 +158,7 @@ async def test_library_filters_fixed_set_and_pack(tmp_path: Path) -> None:
     journals = ProcedureLibrary(root, {"critic", "journals"})
     nodes, _, _, state = after_pln_approve(library=journals, features=journals.features)
     added = added_programs((await nodes.assemble_pack(state))["procedure_pack"])
-    assert len(added) == 8 and [p.id for p in added if p.id not in P2] == ["X-P2"]
+    assert len(added) == 9 and [p.id for p in added if p.id not in P2] == ["GEN-05", "X-P2"]
     assert next(p for p in added if p.id == "X-P2").objective_ids == ["OBJ-REV-CUT"]
 
     fixed = fixed_procedures(ProcedureLibrary(root, {"critic", "misstatement"}))

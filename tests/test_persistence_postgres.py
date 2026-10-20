@@ -114,6 +114,9 @@ async def test_load_rules_and_project_isolation(storage):
         ("REV-08", "R03"): [],
         ("CSH-05", "B01"): ["BA-01"],
         ("PLN-07", "A01"): ["1100"],
+        ("GEN-05", "R01"): ["SJ-2026-0612-2"],  # 需求 R131: 悉尼周日 21:14 录入的收入, 自审自批
+        ("GEN-05", "R04"): ["SJ-2026-0612-1"],
+        ("GEN-05", "R08"): ["SJ-2026-0612-1"],
     }
     params = dict(
         period_end="2026-06-30",
@@ -131,6 +134,20 @@ async def test_load_rules_and_project_isolation(storage):
         threshold_cents=9000000,
         reversal_reference_pattern=None,  # Numbat 没有数据集声明
         reversal_entry_no_template=None,
+        # GEN-05 (需求 R131): 本循环只跑规则 SQL, 不跑执行前检查; 审批限额与错报沟通时间为空时 R03, R06 取不到行
+        performance_materiality_cents=9000000,
+        clearly_trivial_cents=600000,
+        approval_limit_cents=None,
+        entry_timestamps_reliable=True,
+        entry_timestamps_note=None,
+        audit_adjustment_entry_prefix="AJE-",
+        timezone="Australia/Sydney",
+        business_hours=[7, 20],
+        rare_user_max=2,
+        round_unit_cents=1000000,
+        cash_categories=["cash"],
+        entry_nos=None,
+        audit_adjustment_start=None,
     )
     for path in (
         (library.root / "procedures").glob("*.yaml")

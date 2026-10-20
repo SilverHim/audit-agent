@@ -38,7 +38,7 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.external import optional, supplements_dir
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
+from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
 
@@ -94,10 +94,11 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下没有 fixed 模板; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其
-    依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能
-    (journals 不在基线中) 的模板同样校验."""
-    assert ProcedureLibrary(ROOT).fixed() == [] and not any(t.fixed for t in ProcedureLibrary(ROOT).all(True))
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板只有 GEN-05 (功能 journals, 基线下不启用); 非 P2 模板写 fixed,
+    fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
+    ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
+    assert ProcedureLibrary(ROOT).fixed() == []
+    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05"]
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature
@@ -122,7 +123,7 @@ def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> No
         path.unlink()
     (root / "procedures" / "X-OK.yaml").write_text("id: X-OK\nphase: P2_Executing\n" + base, encoding="utf-8")
     enabled = ProcedureLibrary(root, frozenset({"critic", "journals"}))
-    assert [t.id for t in enabled.fixed()] == ["X-OK"]
+    assert [t.id for t in enabled.fixed()] == ["GEN-05", "X-OK"]
     assert [t.id for t in ProcedureLibrary(root).fixed()] == ([] if feature else ["X-OK"])
 
 
@@ -2138,12 +2139,19 @@ DATASET_REFS = {
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
     },
+    "GEN-05": {  # 录入时间是否可信, 作废对, 审计更正分录的前缀 (需求 R131)
+        "entry_timestamps_reliable": "entry_timestamps_reliable",
+        "entry_timestamps_note": "entry_timestamps_note",
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
+        "audit_adjustment_entry_prefix": "audit_adjustment_entry_prefix",
+    },
 }
 
 
 def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:
     """现有模板都过加载校验 (含未启用的); 只有 DATASET_REFS 里的参数引 dataset., 声明不同时只有它们随之不同 (取各自
-    声明的值), 其余解析结果相同."""
+    声明的值), 其余解析结果相同. 画像取 Numbat 的 (GEN-05 引画像的审批限额)."""
     lib = ProcedureLibrary(ROOT)
     state = initial_state(ENGAGEMENT, [], 1)
     state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"] = 3, 2, 1
@@ -2153,8 +2161,8 @@ def test_existing_templates_pass_ref_checks_and_ignore_traits() -> None:
         expected = DATASET_REFS.get(template.id, {})
         assert {k: r.removeprefix("dataset.") for k, r in refs.items() if r.startswith("dataset.")} == expected
         risk = RiskLevel.significant if any("by_risk" in str(v) for v in template.params.values()) else None
-        default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits(), profile=None)
-        declared = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=traits, profile=None)
+        default = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=DatasetTraits(), profile=NUMBAT_PROFILE)
+        declared = lib.resolve_params(template, ENGAGEMENT, state, risk, traits=traits, profile=NUMBAT_PROFILE)
         for key, field in expected.items():
             assert (default.pop(key), declared.pop(key)) == (getattr(DatasetTraits(), field), getattr(traits, field))
         assert declared == default, template.id

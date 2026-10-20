@@ -1,0 +1,108 @@
+{
+  "conclusion": "The AUD 550.00 by which the confirmed overdraft exceeds the book overdraft is receipt XJ-637, recorded on 30 September 2026 and credited by the bank on 6 October 2026. It is a deposit in transit that reconciles the difference in full, not a misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The bank's reply confirms AUD 10,900.44 overdrawn in account 12345678 at 30 September 2026.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d111883a3741",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d111883a3741",
+          "locator": "balance_date",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The trial balance shows AUD 10,350.44 overdrawn in GL account 090 at 30 September 2026, AUD 550.00 less overdrawn than the bank.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "090",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "A receipt of AUD 550.00 (XJ-637) was debited to GL account 090 on 30 September 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-637-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank credited AUD 550.00 with reference 1021 to the account on 6 October 2026.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0081",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Differences between the confirmation and the records are investigated to see whether they indicate misstatements.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The receipt recorded before the period end and the bank credit after it are the same AUD 550.00 item in transit.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The deposit in transit explains the whole difference between the bank and the ledger, so the confirmation exception is a timing difference and not a misstatement.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        4,
+        5
+      ]
+    }
+  ]
+}

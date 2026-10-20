@@ -1,0 +1,14 @@
+{
+  "scenario": "T1",
+  "title": "Revenue cutoff: the ORC1026 service completion record is signed after the period end",
+  "ops": [
+    {
+      "op": "set",
+      "file": "xero_demo/delivery_notes.csv",
+      "row": "SR-ORC1026",
+      "field": "signed_date",
+      "before": "2026-09-17",
+      "after": "2026-10-02"
+    }
+  ]
+}

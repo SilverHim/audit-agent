@@ -1,4 +1,4 @@
-"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02.
+"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05.
 
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
@@ -78,14 +78,16 @@ __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "i
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
-    """A6: 执行收入与货币资金的实质性程序, 产出例外与判断.
+    """A6: 执行收入与货币资金的实质性程序与全量分录扫描 (GEN-05), 产出例外与判断.
 
     按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02) 共用判断公共流程 (agents/judging.py),
     各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
-    procedures: ClassVar[frozenset[str]] = frozenset({"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02"})  # 负责的程序
+    procedures: ClassVar[frozenset[str]] = frozenset(  # 负责的程序 (GEN-05 属功能 journals, 未启用时注册表不映射)
+        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05"}
+    )
 
     def __init__(self, deps: AgentDeps) -> None:
         super().__init__(deps)
@@ -101,6 +103,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         handlers: dict[str, tuple[Execute, Interpret]] = {
             "REV-08": (self.run_rules, self.rule_exceptions),
             "CSH-05": (self.run_rules, self.rule_exceptions),
+            "GEN-05": (self.run_rules, self.rule_exceptions),
             "CSH-02": (self.assess_confirmations, self.cash_patch),
         }
         handlers |= {pid: (self.judge_subjects, self.judgments_patch) for pid in self.subject_sources}
@@ -121,8 +124,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
     def rule_exceptions(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """纯规则程序 (REV-08, CSH-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因. 没有执行的规则
-        (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes."""
+        """纯规则程序 (REV-08, CSH-05, GEN-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因. 没有
+        执行的规则 (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes."""
         assert isinstance(findings, RuleResult)
         run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
         return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}

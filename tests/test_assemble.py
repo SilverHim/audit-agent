@@ -41,6 +41,7 @@ from tests.test_decisions import Started, acc01_decision, assert_rejected, at_pl
 EID = ENGAGEMENT.id
 # 装配结果的顺序: 匹配到的程序按编号排序后补依赖
 P2 = ["CSH-05", "CSH-04", "DOC-06", "CSH-02", "REV-03", "REV-08", "REV-02"]
+P2_JOURNALS = [*P2[:4], "GEN-05", *P2[4:]]  # 开 journals 时多固定集 GEN-05 (需求 R131), 按编号排在 REV 之前
 # 基线固定集 (P2 以外的程序): 新程序挂功能名, 基线下不进固定集, 所以这里是精确集合
 FIXED = {"ACC-04", "ACC-01", "DOC-04", "PLN-07", "PLN-01", "PLN-03", "FIN-04", "FIN-01", "RPT-03", "RPT-01"}
 
@@ -232,11 +233,12 @@ def fixed_library(tmp_path: Path, features: frozenset[str] = JOURNALS, **extra: 
 
 async def test_fixed_program_is_assembled_regardless_of_objectives(tmp_path: Path) -> None:
     """R81 验收 3: journals 开启时 X-FIX 不经 trigger 也加入, 排在按编号排序的末尾; v1 planned, objective_ids 为空,
-    自主度取模板; 8 条第 1 版与阶段 P2_Executing 同一次提交. journals 关闭时仍为原 7 条."""
+    自主度取模板; 9 条第 1 版 (含同属 journals 的固定集 GEN-05) 与阶段 P2_Executing 同一次提交. journals 关闭时仍为原
+    7 条."""
     nodes, store, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"X-FIX": X_FIX}))
     patch = await nodes.assemble_pack(state)
     added = added_programs(patch["procedure_pack"])
-    assert [p.id for p in added] == [*P2, "X-FIX"]
+    assert [p.id for p in added] == [*P2_JOURNALS, "X-FIX"]
     fix = added[-1]
     assert (fix.version, fix.status, fix.objective_ids, fix.autonomy_level.value) == (
         1,
@@ -245,7 +247,7 @@ async def test_fixed_program_is_assembled_regardless_of_objectives(tmp_path: Pat
         "L3",
     )
     [commit] = store.commits
-    assert sorted(o.id for o in commit if isinstance(o, Procedure)) == sorted([*P2, "X-FIX"])
+    assert sorted(o.id for o in commit if isinstance(o, Procedure)) == sorted([*P2_JOURNALS, "X-FIX"])
     assert EngagementWrite("update", EID, {"phase": Phase.P2_Executing}) in commit
 
     base = fixed_library(tmp_path / "base", BASELINE, **{"X-FIX": X_FIX})
@@ -293,7 +295,10 @@ async def test_fixed_programs_are_sorted_with_matched(tmp_path: Path) -> None:
     """固定集与匹配集一并按编号排序后补依赖闭包, 不追加在末尾: 编号靠前的 B-FIX 排在最前 (审核 R81-04)."""
     early = X_FIX.replace("X-FIX", "B-FIX")
     nodes, _, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"B-FIX": early}))
-    assert [p.id for p in added_programs((await nodes.assemble_pack(state))["procedure_pack"])] == ["B-FIX", *P2]
+    assert [p.id for p in added_programs((await nodes.assemble_pack(state))["procedure_pack"])] == [
+        "B-FIX",
+        *P2_JOURNALS,
+    ]
 
 
 async def test_fixed_program_added_once_after_reject_then_approve(tmp_path: Path) -> None:
