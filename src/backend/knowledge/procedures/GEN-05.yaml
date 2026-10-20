@@ -21,7 +21,8 @@ name: 全量分录扫描
 #   守住), 改口径时几处一起改.
 # - 新规则 R09-R12 只出金额 (amount_cents) 超过明显微小的例外 (设计稿第 5.3 节的通用约定); 原有规则的门槛按各规则所写.
 # - 往来名称的比较 (R11, R12) 用 SQL 函数 party_name_key(名称, 前缀, 后缀) (迁移 0018, 步骤与 services/party_names.py
-#   相同): 转小写, 去开头的 counterparty_prefixes, 非字母数字换空格, 去首尾空格, 再去末尾的 entity_suffixes.
+#   相同): 分解并去掉附加符, 转小写, 去开头的 counterparty_prefixes, 非字母数字换空格, 去首尾空格, 再去末尾的
+#   entity_suffixes; 没有可比的名称本身 (空串) 时为 NULL, 不与任何名称相等.
 # - 贷项凭证 (R10, R12 的 credits 段, 口径相同): 同一凭证借记 revenue 分类且贷记 receivables 分类, 不涉 cash 分类, 不是
 #   作废对; 应收净贷方 credited_cents = 该凭证 receivables 分类行的贷方减借方之和.
 # - 分录是否手工 (调整分录) 以数据给出的 is_adjustment 为准, 不按凭证号推断; R07 不分凭证类型.
@@ -446,7 +447,7 @@ rules:
         SELECT DISTINCT ON (original_entry_no) *
         FROM reposts r
         WHERE NOT EXISTS (SELECT 1 FROM reposts s WHERE s.original_entry_no=r.original_entry_no AND s.same_name)
-        ORDER BY original_entry_no, distance NULLS LAST, entry_no COLLATE "C"
+        ORDER BY original_entry_no, distance NULLS LAST, entry_no COLLATE "C", reversal_entry_no COLLATE "C"
       ), hits AS (
         SELECT j.id, n.entry_no, n.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
                n.original_entry_no, n.reversal_entry_no, n.original_name, n.repost_name, n.distance
@@ -474,10 +475,11 @@ rules:
             SELECT 1 FROM sales_invoices i JOIN delivery_notes d ON d.engagement_id=i.engagement_id AND d.invoice_id=i.id
             WHERE i.engagement_id=:eid
               AND i.invoice_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date))
-    # 同一客户 (customer 原文相同), 同一开票日, 同一含税金额的本期发票不少于 2 张, 其中没有发运或服务完成记录的每张出
-    # 一条例外 (按发票, 不按凭证合并), 指向其 journal_entry_id 的分录行 (发票没挂分录时指向发票). paired_invoices 为同组
-    # 其余发票 (按 ID); full_credits 为该发票开票日至期末之间的贷项凭证 (通用口径) 中应收净贷方等于该发票全额, 且有一行
-    # description 与客户名按 party_name_key (去前缀与后缀) 相等的凭证号, 供 GEN-02 取行
+    # 同一客户 (customer 原文相同), 同一开票日, 同一含税金额的本期发票不少于 2 张 (paired_invoices 非空, 分组条件只写在
+    # 这一处), 其中没有发运或服务完成记录的每张出一条例外 (按发票, 不按凭证合并), 指向其 journal_entry_id 的分录行;
+    # 没挂分录的发票不出例外, 也不报错 (GEN-05 的例外都指向分录, GEN-02 按 detail.entry_no 取行). paired_invoices 为
+    # 同组其余发票 (按 ID); full_credits 为该发票开票日至期末之间的贷项凭证 (通用口径) 中应收净贷方等于该发票全额, 且有
+    # 一行 description 与客户名按 party_name_key (去前缀与后缀) 相等的凭证号, 供 GEN-02 取行
     sql: |
       -- 作废对共用段 起
       WITH reversal AS (
@@ -493,8 +495,7 @@ rules:
       ), invoices AS (
         SELECT i.id, i.invoice_no, i.customer, i.invoice_date, i.posting_date, i.amount_cents, i.journal_entry_id,
                EXISTS (SELECT 1 FROM delivery_notes d WHERE d.engagement_id=i.engagement_id AND d.invoice_id=i.id)
-                 AS recorded,
-               count(*) OVER (PARTITION BY i.customer, i.invoice_date, i.amount_cents) AS group_size
+                 AS recorded
         FROM sales_invoices i
         WHERE i.engagement_id=:eid
           AND i.invoice_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
@@ -516,11 +517,8 @@ rules:
            AND bool_or(category=ANY(CAST(:receivables_categories AS text[])) AND credit_cents>0)
            AND NOT coalesce(bool_or(category=ANY(CAST(:cash_categories AS text[]))), false)
       ), hits AS (
-        SELECT CASE WHEN j.id IS NULL THEN 'sales_invoice' ELSE 'journal_entry' END AS source_type,
-               coalesce(j.id, i.id) AS source_id,
-               coalesce(abs(j.debit_cents)+abs(j.credit_cents), abs(i.amount_cents)) AS amount_cents,
-               j.entry_no, coalesce(j.posting_date, i.posting_date) AS posting_date,
-               i.id AS invoice_id, i.invoice_no, i.customer,
+        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
+               j.entry_no, j.posting_date, i.id AS invoice_id, i.invoice_no, i.customer,
                (SELECT json_agg(json_build_object('invoice_id', p.id, 'invoice_no', p.invoice_no,
                                                   'journal_entry_id', p.journal_entry_id) ORDER BY p.id COLLATE "C")
                 FROM invoices p
@@ -534,11 +532,11 @@ rules:
                   AND c.credited_cents=i.amount_cents
                   AND party_name_key(i.customer, CAST(:counterparty_prefixes AS text[]),
                                      CAST(:entity_suffixes AS text[]))=ANY(c.names)) AS full_credits
-        FROM invoices i LEFT JOIN journal_entries j ON j.engagement_id=:eid AND j.id=i.journal_entry_id
-        WHERE i.group_size>=2 AND NOT i.recorded
+        FROM invoices i JOIN journal_entries j ON j.engagement_id=:eid AND j.id=i.journal_entry_id
+        WHERE NOT i.recorded
       )
       SELECT * FROM hits
-      WHERE amount_cents>CAST(:clearly_trivial_cents AS bigint)
+      WHERE paired_invoices IS NOT NULL AND amount_cents>CAST(:clearly_trivial_cents AS bigint)
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",

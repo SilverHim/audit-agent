@@ -1,8 +1,10 @@
 """需求 R132: 往来名称规范化 party_name_key. Python 实现 (services/party_names.py) 与迁移 0018 的 SQL 函数逐步相同,
-同一组名称 (CASES) 两侧结果相同且等于预期; 迁移在已有数据的库上可执行, 可重复执行, 接在 0017 之后. 连库的用例标
-slow, 没有 TEST_DATABASE_URL (迁移往返另要 TEST_DATABASE_OWNER_URL) 时跳过."""
+同一组名称 (CASES) 两侧结果相同且等于预期, 随机名称 (含带重音与非拉丁字符的) 上两侧也逐个相同; 迁移在已有数据的
+库上可执行, 可重复执行, 接在 0017 之后. 连库的用例标 slow, 没有 TEST_DATABASE_URL (迁移往返另要
+TEST_DATABASE_OWNER_URL) 时跳过."""
 
 import os
+import random
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +25,16 @@ CASES: list[tuple[str | None, list[str] | None, list[str] | None, str | None]] =
     ("Payment to Odette Garrison", PREFIXES, [], "odette garrison"),
     ("Payment Tools Pty. Limited", PREFIXES, SUFFIXES, "payment tools"),  # 前缀须整词; 后缀先规范化, 取最长的
     (" PAYMENT FROM  Yarra--Transport ", PREFIXES, None, "yarra transport"),  # 大写, 连续分隔符, 首尾空格; 后缀为空
-    ("Limited", None, SUFFIXES, "limited"),  # 只剩后缀时不去
-    ("Café Ltd", PREFIXES, SUFFIXES, "caf"),  # 只认 ASCII 字母数字, 两侧不随区域设置变化
-    ("payment:", PREFIXES, SUFFIXES, ""),
+    ("Payment to Odette", ["payment", "payment to"], None, "odette"),  # 前缀取最长的, 不取列表中第一个匹配的
+    ("Foo Pty Ltd", None, ["ltd", "pty ltd"], "foo"),  # 后缀同样取最长的
+    ("Café Ltd", PREFIXES, SUFFIXES, "cafe"),  # NFKD 分解后去掉附加符, 同 "Cafe Ltd"
+    ("Société Générale", None, None, "societe generale"),  # 附加符在词中间也不拆词
+    ("Straße Pty", None, SUFFIXES, "stra e"),  # 分解后仍不是 ASCII 的字母当分隔符
+    # 没有可比的名称本身时为 None (SQL 为 NULL), 不与任何名称相等 (审核 R132-05)
+    ("王小明有限公司", PREFIXES, SUFFIXES, None),  # 全是非拉丁字符
+    ("王小明 Pty Ltd", PREFIXES, SUFFIXES, None),  # 只剩公司后缀
+    ("Limited", None, SUFFIXES, None),
+    ("payment:", PREFIXES, SUFFIXES, None),  # 只剩前缀
     (None, PREFIXES, SUFFIXES, None),
 ]
 
@@ -72,6 +81,47 @@ async def test_sql_function_matches_python() -> None:
     finally:
         await engine.dispose()
     assert found == [party_name_key(n, p, s) for n, p, s, _ in CASES] == [expected for *_, expected in CASES]
+
+
+def random_names(count: int) -> list[str | None]:
+    """固定种子的随机名称: 公司名用词, 前缀与后缀词, 标点与空白, 带重音与组合附加符的拉丁字母, 非拉丁字母 (中文,
+    西里尔, 希腊), 全角字母与不分解的 ß."""
+    rng = random.Random(132)
+    words = ["Payment", "to", "from", "payment:", "Pty", "Ltd", "Limited", "PTY.", "ltd.", "Hamilton", "Smith", "Co"]
+    letters = [*"abcXYZ019", "é", "É", "ñ", "Ş", "İ", "ø", "ß", "e\u0301", "中", "王", "Ж", "Ω", "Ａ", "ﬁ"]
+    separators = [" ", "", "  ", "-", ": ", ".", "/", "&", "\t"]
+    names: list[str | None] = [None]
+    for _ in range(count):
+        parts = []
+        for _ in range(rng.randint(1, 6)):
+            word = rng.choice(words) if rng.random() < 0.5 else "".join(rng.choices(letters, k=rng.randint(1, 5)))
+            parts += [word, rng.choice(separators)]
+        names.append("".join(parts))
+    return names
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("prefixes", "suffixes"),
+    [(PREFIXES, SUFFIXES), (["payment", "Payment to", "pay:"], ["ltd", "Pty Ltd", "co"]), (None, [])],
+)
+async def test_sql_function_matches_python_on_random_names(prefixes: list[str] | None, suffixes: list[str]) -> None:
+    """审核 R132-05: 400 个随机名称 (random_names) 上 SQL 函数与 Python 逐个相同; 前缀与后缀各一组短的排在前面,
+    一组不去."""
+    names = random_names(400)
+    query = text(
+        "SELECT party_name_key(n, CAST(:prefixes AS text[]), CAST(:suffixes AS text[])) "
+        "FROM unnest(CAST(:names AS text[])) WITH ORDINALITY AS u(n, i) ORDER BY i"
+    )
+    engine = create_async_engine(database_url("TEST_DATABASE_URL"))
+    try:
+        async with engine.connect() as conn:
+            rows = await conn.execute(query, {"names": names, "prefixes": prefixes, "suffixes": suffixes})
+            found = [row[0] for row in rows]
+    finally:
+        await engine.dispose()
+    expected = [party_name_key(name, prefixes, suffixes) for name in names]
+    assert [(n, f) for n, f, e in zip(names, found, expected, strict=True) if f != e] == []
 
 
 @pytest.mark.slow

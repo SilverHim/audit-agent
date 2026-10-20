@@ -90,7 +90,8 @@ async def voided_counts(project: Gen05Project) -> dict[str, object]:
 @asynccontextmanager
 async def without_rows(project: Gen05Project, table_name: str, column: str, value: str) -> AsyncIterator[int]:
     """在测试库的项目中暂时删去一张账表里某列等于 value 的行 (测试库是副本, 原文件不改), 给出删去的行数; 退出时原样
-    写回, 共用项目的其余用例不受影响."""
+    写回, 共用项目的其余用例不受影响. 一行都没删到时不写回 (空列表的 insert 会变成 INSERT DEFAULT VALUES 而报错,
+    盖住 with 体内断言的失败信息)."""
     engine = project.deps.data.engine  # type: ignore[attr-defined]
     table = m.FINANCIAL[table_name]
     where = (table.c.engagement_id == project.eid) & (table.c[column] == value)
@@ -101,9 +102,10 @@ async def without_rows(project: Gen05Project, table_name: str, column: str, valu
     try:
         yield len(rows)
     finally:
-        async with engine.begin() as conn:
-            await bind_engagement(conn, project.eid)
-            await conn.execute(insert(table), rows)
+        if rows:
+            async with engine.begin() as conn:
+                await bind_engagement(conn, project.eid)
+                await conn.execute(insert(table), rows)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -168,13 +170,44 @@ async def test_xero_gen05_on_postgres(xero: Gen05Project) -> None:
     assert (r12.source_ids, r12.detail["full_credits"]) == (["XJ-405-2"], [])
 
 
+ORC1009, ORC1016 = "SI-76e3f056-479f-417c-a72b-f3d767899b87", "SI-b2c02d0b-41a8-4d4d-97d7-014c78b3547d"
+
+
 @pytest.mark.external
-async def test_xero_r12_groups_invoices_by_customer(xero: Gen05Project) -> None:
-    """需求 R132 验收 6 的 "同一客户": 去掉 ORC1009 (Yarra Transport, 07-17 的 550.00) 的服务完成记录后, 它与 ORC1003,
-    ORC1008 同日同额而客户不同, 不算重复开票; R12 仍只有 ORC1003. 防分组漏掉客户."""
-    async with without_rows(xero, "delivery_notes", "invoice_id", "SI-76e3f056-479f-417c-a72b-f3d767899b87") as removed:
+@pytest.mark.parametrize(
+    "invoice",
+    [
+        ORC1009,  # "同一客户": Yarra Transport 07-17 的 550.00, 与 ORC1003, ORC1008 同日同额而客户不同
+        ORC1016,  # "同一开票日" (审核 R132-02): Hamilton Smith 08-17 的 550.00, 与 ORC1003, ORC1008 同客户同额而不同日
+    ],
+    ids=["other-customer", "other-date"],
+)
+async def test_xero_r12_groups_by_customer_and_date(xero: Gen05Project, invoice: str) -> None:
+    """需求 R132 验收 6: 去掉一张发票的服务完成记录后, 它没有同组的发票, 不算重复开票; R12 仍只有 ORC1003. 防分组
+    漏掉客户或开票日 ("同一金额" 在现有数据里造不出反例)."""
+    async with without_rows(xero, "delivery_notes", "invoice_id", invoice) as removed:
         assert removed == 1
         assert hits(await gen05(xero), "R12") == ["XJ-405-2"]
+
+
+@pytest.mark.external
+async def test_xero_r12_skips_an_invoice_without_journal_lines(xero: Gen05Project) -> None:
+    """审核 R132-03 的裁定: R12 只对挂了分录的发票出例外. 删去 ORC1003 所挂的分录 XJ-405 后, 程序照常完成 (不抛
+    RuleError), R12 执行而不出 ORC1003 的例外 (GEN-05 的例外都指向分录, GEN-02 按 detail.entry_no 取行)."""
+    async with without_rows(xero, "journal_entries", "entry_no", "XJ-405") as removed:
+        assert removed == 3
+        result = await gen05(xero)
+    assert hits(result, "R12") == [] and "R12" not in [o.rule_id for o in result.outcomes]
+
+
+@pytest.mark.external
+async def test_xero_r10_and_r12_share_the_credit_definition(xero: Gen05Project) -> None:
+    """R10 与 R12 的贷项凭证口径相同 (审核 R132-07): 把 GST 科目也当作银行科目时, 两笔贷项凭证都涉及银行科目, R10 不再
+    命中, R12 的 full_credits 也为空."""
+    result = await gen05(xero, cash_categories=["cash", "tax_payable"])
+    assert hits(result, "R10") == []
+    [r12] = [x for x in result.exceptions if x.rule_id == "R12"]
+    assert (r12.source_ids, r12.detail["full_credits"]) == (["XJ-405-2"], [])
 
 
 async def test_numbat_gen05_on_postgres(numbat: Gen05Project) -> None:
@@ -238,17 +271,17 @@ async def test_numbat_overrides_make_rules_hit(
         ({"round_unit_cents": 100, "performance_materiality_cents": 0}, "R02", ["XJ-499-2"], None),
         # R05: 期末改为 07-17, 前三日内的三笔作废冲回, 摘要以大写 "Reversed" 开头 (ILIKE)
         ({"period_end": "2026-07-17"}, "R05", ["XJ-399-1", "XJ-400-1", "XJ-409-1"], None),
-        # R10 (需求 R132): 把 GST 科目也当作银行科目, 两笔贷项凭证就涉及银行科目, 不再算全额冲减
-        ({"cash_categories": ["cash", "tax_payable"]}, "R10", [], None),
+        # R09 (审核 R132-01): 审计更正分录的前缀改为 XJ-39, 转换余额 XJ-397 按审计更正剔除, 只剩 XJ-499
+        ({"audit_adjustment_entry_prefix": "XJ-39"}, "R09", ["XJ-499-2"], None),
         # R12 (需求 R132): 期间只取 07-31, 期内只有没有服务完成记录的 ORC1005, 无从区分, 不执行
         ({"period_start": "2026-07-31", "period_end": "2026-07-31"}, "R12", [], "not_executable"),
     ],
-    ids=["R02-round-unit", "R05-period-end", "R10-touches-cash", "R12-no-records"],
+    ids=["R02-round-unit", "R05-period-end", "R09-audit-prefix", "R12-no-records"],
 )
 async def test_xero_overrides_make_rules_hit(
     xero: Gen05Project, overrides: dict[str, object], rule_id: str, expected: list[str], outcome: str | None
 ) -> None:
-    """审核 R131-01: Xero 上缺省 0 条的 R02, R05 以参数覆盖造出命中, 断言全部命中行; R10 的贷项凭证不涉银行科目; R12
+    """审核 R131-01: Xero 上缺省 0 条的 R02, R05 以参数覆盖造出命中, 断言全部命中行; R09 剔除审计更正分录的前缀; R12
     的执行前检查在期内发票都没有记录时命中 (outcome 为该规则的执行记录状态, None 为执行了)."""
     result = await gen05(xero, **overrides)
     assert hits(result, rule_id) == expected
