@@ -10,19 +10,22 @@ import fixture from './fixtures/manual-tst-m01.json'
 
 const VIEW = fixture as ManualTaskView
 const LETTER = 'DOC-0a1b2c3d4e5f' // 声明书, 2 页, internal_original, 作证据为 voucher
+const CONTRACT = 'DOC-3e7fb18af92a' // 合同 CON-001.pdf, 3 页, external_copy, 作证据为 contract
 
-// 按 Pydantic 的 model_json_schema 写法: 枚举在 $defs 里经 $ref 引用, Optional 为 anyOf 带 null
+// 按 Pydantic 的 model_json_schema 写法: 枚举在 $defs 里经 $ref 引用, Optional 为 anyOf 带 null; $ref 与
+// Optional[$ref] 的字段 Pydantic 不生成 title
 const MIXED = {
   $defs: { Basis: { enum: ['cash', 'accrual'], title: 'Basis', type: 'string' } },
   properties: {
     count: { title: 'Count', type: 'integer' },
     rate: { title: 'Rate', type: 'number' },
     agreed: { title: 'Agreed', type: 'boolean' },
-    basis: { $ref: '#/$defs/Basis' },
+    audit_basis: { $ref: '#/$defs/Basis' },
+    prior_basis: { anyOf: [{ $ref: '#/$defs/Basis' }, { type: 'null' }], default: null },
     note: { anyOf: [{ type: 'string' }, { type: 'null' }], default: null, title: 'Note' },
     items: { items: { type: 'string' }, title: 'Items', type: 'array' },
   },
-  required: ['count', 'rate', 'agreed', 'basis', 'items'],
+  required: ['count', 'rate', 'agreed', 'audit_basis', 'items'],
   title: 'Mixed',
   type: 'object',
 }
@@ -35,14 +38,27 @@ describe('resultFields', () => {
     ])
   })
 
-  test('整数, 小数, 勾选, 引用的枚举, 可空的文字各得对应的输入, 其余 (列表) 为 JSON', () => {
+  test('整数, 小数, 勾选, 引用的枚举 (含可空的), 可空的文字各得对应的输入, 其余 (列表) 为 JSON', () => {
     expect(resultFields(MIXED).map((field) => [field.name, field.kind, field.required, field.options])).toEqual([
       ['count', 'integer', true, []],
       ['rate', 'number', true, []],
       ['agreed', 'boolean', true, []],
-      ['basis', 'enum', true, ['cash', 'accrual']],
+      ['audit_basis', 'enum', true, ['cash', 'accrual']],
+      ['prior_basis', 'enum', false, ['cash', 'accrual']],
       ['note', 'string', false, []],
       ['items', 'json', true, []],
+    ])
+  })
+
+  test('没有 title 的 $ref 与 Optional[$ref] 字段一样按字段名起标题, 不取枚举类名', () => {
+    expect(resultFields(MIXED).map((field) => field.title)).toEqual([
+      'Count',
+      'Rate',
+      'Agreed',
+      'Audit Basis',
+      'Prior Basis',
+      'Note',
+      'Items',
     ])
   })
 
@@ -53,20 +69,20 @@ describe('resultFields', () => {
 
 describe('parseDetails', () => {
   const fields = resultFields(MIXED)
-  const values = { count: '3', rate: '0.5', agreed: false, basis: 'cash', note: '  ', items: '["a", "b"]' }
+  const values = { count: '3', rate: '0.5', agreed: false, audit_basis: 'cash', note: '  ', items: '["a", "b"]' }
 
   test('按类型换成 details: 数字转数, JSON 解析, 勾选总带, 没填的选填字段不带', () => {
     expect(parseDetails(fields, values, zh)).toEqual({
       count: 3,
       rate: 0.5,
       agreed: false,
-      basis: 'cash',
+      audit_basis: 'cash',
       items: ['a', 'b'],
     })
   })
 
   test('必填没填, 整数写成小数, JSON 写错各报对应的错误', () => {
-    expect(parseDetails(fields, { ...values, basis: '' }, zh)).toBe(zh.manualPage.errors.required('Basis'))
+    expect(parseDetails(fields, { ...values, audit_basis: '' }, zh)).toBe(zh.manualPage.errors.required('Audit Basis'))
     expect(parseDetails(fields, { ...values, count: '2.5' }, zh)).toBe(zh.manualPage.errors.number('Count'))
     expect(parseDetails(fields, { ...values, rate: 'abc' }, zh)).toBe(zh.manualPage.errors.number('Rate'))
     expect(parseDetails(fields, { ...values, items: '[a' }, zh)).toBe(zh.manualPage.errors.json('Items'))
@@ -80,21 +96,29 @@ describe('manualRecordBody', () => {
     reason: 'Letter received from the CFO',
     performedOn: '2026-10-23',
     evidence: [
-      { documentId: LETTER, page: 1 },
       { documentId: LETTER, page: 2 },
+      { documentId: CONTRACT, page: 3 },
     ],
     values: { signed_on: '2026-10-23', signatory: 'Alex Morgan' },
   }
 
-  test('TST-M01: manual_result 带执行日期, 两页证据 (种类取 evidence_types, 可靠性取文件登记) 与 details', () => {
-    const pointer = (page: number) => ({
+  test('TST-M01: manual_result 带执行日期, 两条证据 (种类按文件取 evidence_types, 可靠性取文件登记) 与 details', () => {
+    const letter = {
       type: 'voucher',
       source_type: 'document',
       source_id: LETTER,
       locator: 'representation_letter.pdf',
-      page,
+      page: 2,
       reliability: 'internal_original',
-    })
+    }
+    const contract = {
+      type: 'contract',
+      source_type: 'document',
+      source_id: CONTRACT,
+      locator: 'CON-001.pdf',
+      page: 3,
+      reliability: 'external_copy',
+    }
     expect(manualRecordBody(VIEW, draft, zh)).toEqual({
       task_id: 'T-RUN-TST-M01-1-v1',
       target_version: 1,
@@ -103,7 +127,7 @@ describe('manualRecordBody', () => {
       manual_result: {
         conclusion: 'Signed letter obtained, dated 23 October 2026',
         performed_on: '2026-10-23',
-        evidence: [pointer(1), pointer(2)],
+        evidence: [letter, contract],
         details: { signed_on: '2026-10-23', signatory: 'Alex Morgan' },
       },
     })
@@ -117,5 +141,10 @@ describe('manualRecordBody', () => {
     expect(manualRecordBody(VIEW, { ...draft, evidence: one }, zh)).toBe(zh.manualPage.errors.evidence(2))
     const partial = { signed_on: '2026-10-23', signatory: '' }
     expect(manualRecordBody(VIEW, { ...draft, values: partial }, zh)).toBe(zh.manualPage.errors.required('Signatory'))
+  })
+
+  test('列出的文件没有证据种类时报错, 不兜底成别的种类', () => {
+    const { [CONTRACT]: _, ...types } = VIEW.evidence_types
+    expect(() => manualRecordBody({ ...VIEW, evidence_types: types }, draft, zh)).toThrow(`${CONTRACT} 没有证据种类`)
   })
 })

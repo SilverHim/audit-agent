@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from fastapi.routing import APIRoute
+
+from backend.api.routes import manual
 from backend.contracts.models import DocumentRef, DocumentType, ReviewTask, TaskStatus
-from backend.main import create_app
+from backend.main import operation_id
 from backend.orchestration.gates import REPORT_TZ
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE
 from tests.fakes import ENGAGEMENT, api_client, wait_idle
@@ -36,16 +39,20 @@ DRAFT_FS = DocumentRef(  # 待审财报, 不作证据 (DOCUMENT_EVIDENCE 没有�
 
 
 async def test_manual_tasks_list_request_schema_and_evidence_documents(tmp_path: Path) -> None:
-    """验收 1, 3: 只列 manual 任务, 待决在前, 各按创建时间升序 (另放两条: 较早的已决定, 较晚的待决); 每项带程序名,
-    owner, 请求, TstLetter 的 JSON schema, 本项目可作证据的文件 (待审财报不列) 与其指针类型. review-tasks 按 kind
-    过滤: normal 不含 manual 任务, manual 只有它们, 不带 kind 时同现状含全部. 项目不存在 404."""
+    """验收 1, 3: 只列 manual 任务, 待决在前, 两组各按创建时间升序, 不按写入顺序 (另放四条, 在 TASK 之后依次写入:
+    已决定的 T-OLDER, 晚 1 分钟的待决 T-LATER, 早 1 分钟的待决 T-EARLIER 与早 1 分钟的已决定 T-DONE-EARLIER); 每项
+    带程序名, owner, 请求, TstLetter 的 JSON schema, 本项目可作证据的文件 (待审财报不列) 与其指针类型. review-tasks
+    按 kind 过滤: normal 只有 normal 任务, manual 只有它们, 不带 kind 时同现状含全部. 项目不存在 404."""
     s = await at_manual(tmp_path)
     s.runner.deps.financial_store.document_refs.append(DRAFT_FS)  # type: ignore[attr-defined]
     [task] = [t for t in await s.output_store.latest(EID, ReviewTask) if t.id == TASK]
+    minute = timedelta(minutes=1)
     older = task.model_copy(update={"id": "T-OLDER-v1", "status": TaskStatus.decided})
-    later = task.model_copy(update={"id": "T-LATER-v1", "created_at": task.created_at + timedelta(minutes=1)})
+    later = task.model_copy(update={"id": "T-LATER-v1", "created_at": task.created_at + minute})
+    earlier = task.model_copy(update={"id": "T-EARLIER-v1", "created_at": task.created_at - minute})
+    done = older.model_copy(update={"id": "T-DONE-EARLIER-v1", "created_at": task.created_at - minute})
     async with s.output_store.transaction(EID):
-        await s.output_store.put(EID, [older, later], actor="A10")
+        await s.output_store.put(EID, [older, later, earlier, done], actor="A10")
     evidence = [
         d.id
         for d in await s.runner.deps.financial_store.documents(EID)
@@ -60,11 +67,13 @@ async def test_manual_tasks_list_request_schema_and_evidence_documents(tmp_path:
         missing = await client.get("/api/v1/engagements/ENG-NOPE/manual-tasks")
 
     assert [(v["task"]["id"], v["task"]["status"]) for v in listed] == [
+        ("T-EARLIER-v1", "pending"),
         (TASK, "pending"),
         ("T-LATER-v1", "pending"),
+        ("T-DONE-EARLIER-v1", "decided"),
         ("T-OLDER-v1", "decided"),
     ]
-    view = listed[0]
+    [view] = [v for v in listed if v["task"]["id"] == TASK]
     assert (view["procedure_name"], view["owner"]) == ("自测人工程序", "A10")
     assert view["request"] == {
         "instructions": INSTRUCTIONS,
@@ -83,7 +92,7 @@ async def test_manual_tasks_list_request_schema_and_evidence_documents(tmp_path:
     assert view["evidence_types"][LETTER.id] == "voucher"  # 声明书作证据为内部凭证 (DOCUMENT_EVIDENCE)
     assert set(view["evidence_types"]) == set(ids)
     assert {t["task"]["kind"] for t in normal} == {"normal"}
-    assert sorted(t["task"]["id"] for t in manual) == sorted([TASK, "T-LATER-v1", "T-OLDER-v1"])
+    assert sorted(t["task"]["id"] for t in manual) == sorted(v["task"]["id"] for v in listed)
     assert {t["task"]["id"] for t in manual} | {t["task"]["id"] for t in normal} <= {
         t["task"]["id"] for t in everything
     }
@@ -91,9 +100,10 @@ async def test_manual_tasks_list_request_schema_and_evidence_documents(tmp_path:
 
 
 def test_operation_id_gives_the_frontend_function_name() -> None:
-    """验收 1: tag manual, 函数名 list_manual_tasks, 生成的前端函数为 manualListManualTasks."""
-    operation = create_app().openapi()["paths"]["/api/v1/engagements/{eid}/manual-tasks"]["get"]
-    assert operation["operationId"] == "manual-list_manual_tasks"
+    """验收 1: tag manual, 函数名 list_manual_tasks, 生成的前端函数为 manualListManualTasks (main.operation_id 即
+    FastAPI 的 generate_unique_id_function, 不必生成整份 OpenAPI)."""
+    [route] = manual.router.routes
+    assert isinstance(route, APIRoute) and operation_id(route) == "manual-list_manual_tasks"
 
 
 async def test_submit_manual_result_through_review_records(tmp_path: Path) -> None:

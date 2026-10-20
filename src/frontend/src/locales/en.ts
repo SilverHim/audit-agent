@@ -553,6 +553,7 @@ export const en = {
     upload: 'Upload documents',
     uploading: 'Uploading…',
     classifying: 'Being classified. It can be chosen once classified as a type that can serve as evidence.',
+    unclassified: 'Could not be classified automatically. Set its type under Data management.',
     notEvidence: (type: string) =>
       `Classified as ${type}, which cannot serve as evidence. Change its type under Data management.`,
     document: 'Document',
@@ -561,7 +562,6 @@ export const en = {
     remove: 'Remove',
     noDocuments: 'No registered document can serve as evidence yet. Upload one first.',
     result: 'Result',
-    yes: 'Yes',
     json: 'JSON',
     performedOn: 'Date performed',
     conclusion: 'Conclusion',

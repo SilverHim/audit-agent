@@ -52,12 +52,20 @@ type Schema = {
   $defs?: Record<string, Schema>
 }
 
-// $ref 指向 $defs (Pydantic 的枚举); anyOf 去掉 null 后只剩一种的按那一种 (Optional 字段)
+// 字段的类型: $ref 指向 $defs (Pydantic 的枚举); anyOf 去掉 null 后只剩一种的按那一种 (Optional 字段). 标题不从这里取
 function resolve(schema: Schema, root: Schema): Schema {
   if (schema.$ref) return resolve(root.$defs?.[schema.$ref.split('/').pop() ?? ''] ?? {}, root)
   const variants = (schema.anyOf ?? []).filter((item) => item.type !== 'null')
-  if (schema.anyOf && variants.length === 1) return { ...resolve(variants[0], root), title: schema.title }
+  if (schema.anyOf && variants.length === 1) return resolve(variants[0], root)
   return schema
+}
+
+// 没有 title 的字段 ($ref 与 Optional[$ref], Pydantic 不生成) 按字段名起标题, 同 Pydantic 的写法: audit_basis → Audit Basis
+function titleOf(name: string): string {
+  return name
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
 }
 
 function kindOf(schema: Schema): FieldKind {
@@ -75,7 +83,7 @@ export function resultFields(schema: ManualTaskView['result_schema']): ResultFie
     const field = resolve(raw, root)
     return {
       name,
-      title: raw.title ?? field.title ?? name,
+      title: raw.title ?? titleOf(name),
       kind: kindOf(field),
       required: required.has(name),
       options: field.enum?.map(String) ?? [],
@@ -132,12 +140,15 @@ export function emptyManualDraft(): ManualDraft {
   return { conclusion: '', reason: '', performedOn: '', evidence: [], values: {} }
 }
 
-// 选的文件与页 → 证据指针: type 取后端给的该文件作证据时的种类 (evidence_types), 可靠性取文件登记
+// 选的文件与页 → 证据指针: type 取后端给的该文件作证据时的种类 (evidence_types; 必填, 交真实的种类而不是占位值),
+// 可靠性取文件登记; 写入时后端照旧按文件登记改写, 以后端为准. 已不在可选文件里的不算; 列出的文件没有种类是接口出错,
+// 直接报错, 不兜底
 export function evidencePointers(view: ManualTaskView, evidence: EvidenceChoice[]): EvidencePointer[] {
   return evidence.flatMap(({ documentId, page }) => {
     const document = view.documents.find((item) => item.id === documentId)
+    if (!document) return []
     const type = view.evidence_types[documentId]
-    if (!document || !type) return []
+    if (!type) throw new Error(`${documentId} 没有证据种类 (evidence_types)`)
     return [
       {
         type,

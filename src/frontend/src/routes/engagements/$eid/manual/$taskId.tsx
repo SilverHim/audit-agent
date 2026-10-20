@@ -286,7 +286,9 @@ function EvidenceCard({
                 <span className="text-muted-foreground">
                   {current.status === 'received'
                     ? t.manualPage.classifying
-                    : t.manualPage.notEvidence(t.evidencePage.docTypes[current.type] ?? current.type)}
+                    : current.status === 'needs_manual'
+                      ? t.manualPage.unclassified
+                      : t.manualPage.notEvidence(t.evidencePage.docTypes[current.type] ?? current.type)}
                 </span>
               </li>
             )
@@ -341,7 +343,7 @@ function EvidenceCard({
                       eid={eid}
                       label={t.evidencePage.open}
                       pointer={{
-                        type: view.evidence_types[document.id] ?? 'voucher',
+                        type: view.evidence_types[document.id],
                         source_type: 'document',
                         source_id: document.id,
                         locator: document.file_name,
