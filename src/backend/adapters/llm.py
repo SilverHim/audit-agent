@@ -214,13 +214,13 @@ def strip_fences(raw: str) -> str:
 class LiveLLMClient:
     """OpenAI 兼容的 Chat Completions 接口: POST {base_url}/chat/completions.
 
-    system 作首条 system 消息, 其后为 req.messages; max_tokens 透传; temperature 与 JSON 模式 (response_format
-    json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON schema 由调用方写在 system 中,
-    见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens 与非默认 temperature: 收到
-    400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature 取值不受支持时不再发送
-    temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
+    system 作首条 system 消息, 其后为 req.messages; max_tokens 透传 (得知模型允许的输出上限后以它封顶, 见下);
+    temperature 与 JSON 模式 (response_format json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON
+    schema 由调用方写在 system 中, 见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens
+    与非默认 temperature: 收到 400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature
+    取值不受支持时不再发送 temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
     输出上限超出模型所允许 (400 的错误体给出允许的上限 N, 见 output_cap) 时, 本客户端此后的调用以 N 封顶, 随即重发,
-    不计传输重试; 取不出 N 照常抛错.
+    不计传输重试; 取不出 N 或 N 小于 1 时照常抛错.
     输出在上限处被截断 (解析失败且 finish_reason 为 length, 或服务端因输出达到上限回 400) 时不抛错, error 为
     TRUNCATED (写实际发出的上限), 交给校验按语法失败回传给模型重试 (需求 R312); length 时 raw 照常保留, 400 时为空.
     408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码 (如 400, 401) 与连接失败不重试.
@@ -314,7 +314,7 @@ class LiveLLMClient:
                 {"role": "system", "content": req.system},
                 *({"role": m.role, "content": m.content} for m in req.messages),
             ],
-            self.token_param: min(req.max_tokens, self.output_cap or req.max_tokens),
+            self.token_param: req.max_tokens if self.output_cap is None else min(req.max_tokens, self.output_cap),
         }
         if traits.temperature and self.send_temperature:
             body["temperature"] = req.temperature
@@ -335,8 +335,9 @@ class LiveLLMClient:
 
     def _cap(self, cap: int, body: dict[str, Any]) -> bool:
         """模型允许的输出上限为 cap: 本次发出的上限 (body) 比它大时记下封顶 (并发调用取最小的), 返回真, 调用方重发;
-        已不大于它 (封顶后仍被拒) 时返回假, 调用方照常抛错. 每次重发的上限都更小, 不会循环."""
-        if body[self.token_param] <= cap:
+        已不大于它 (封顶后仍被拒), 或 cap 小于 1 (没有可发的上限) 时返回假, 调用方照常抛错. 每次重发的上限都更小,
+        不会循环."""
+        if cap < 1 or body[self.token_param] <= cap:
             return False
         self.output_cap = cap if self.output_cap is None else min(self.output_cap, cap)
         return True

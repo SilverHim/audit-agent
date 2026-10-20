@@ -215,13 +215,20 @@ async def test_output_cap_from_the_error_caps_later_calls(reply: tuple[int, Any]
     "reply",
     [
         api_error("max_tokens is too large", "max_tokens", "invalid_value"),  # 取不出数
+        api_error(  # 允许的上限小于 1, 没有可发的上限 (R312-08: 曾当作没封顶, 以同一上限一直重发)
+            "max_tokens is too large: 4096. This model supports at most 0 completion tokens, "
+            "whereas you provided 4096.",
+            "max_tokens",
+            "invalid_value",
+        ),
         api_error("Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"),  # 已不大于允许的上限
         api_error("temperature must be in [0, 2]", "temperature", "invalid_value"),  # 不是输出上限的参数
     ],
-    ids=["no_number", "not_lower", "other_param"],
+    ids=["no_number", "zero", "not_lower", "other_param"],
 )
 async def test_output_cap_unusable_raises(reply: tuple[int, Any]) -> None:
-    """R312-01: 取不出允许的上限, 给出的上限不比发出的小 (封顶也没用), 或说的不是输出上限时, 照常抛错, 只发一次."""
+    """R312-01: 取不出允许的上限, 给出的上限小于 1 或不比发出的小 (封顶也没用), 或说的不是输出上限时, 照常抛错,
+    只发一次."""
     server = Server(reply)
     with pytest.raises(LLMTransportError, match="HTTP 400"):
         await client(server).complete(REQUEST, ConfirmationExtraction)
