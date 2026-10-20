@@ -41,6 +41,7 @@ from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassi
 from backend.contracts.models import (
     AuditException,
     ConfirmationResult,
+    CriticReasonCode,
     CriticVerdict,
     DocumentType,
     ExceptionDisposition,
@@ -783,6 +784,23 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
     assert sample_point(j.id) >= 0.05  # GEN-09 的 sample_rate
     [run] = cash.judged["procedure_runs"]
     assert run.status is RunStatus.succeeded
+
+
+@pytest.mark.external
+def test_xero_skip_reasons_carry_codes(cash: Cash, revenue: Revenue) -> None:
+    """R309 验收 1 的后端部分: J-CSH-02-1-BA-091 未命中触发规则, REV-03 三条与 REV-02 六条按 L2 跳过, 都带原因代码
+    (前端按界面语言显示), 中文原句照旧, 没有技术细节."""
+    [j] = cash.judged["judgments"]
+    assert (j.id, j.critic_reason_code, j.critic_reason_detail) == (
+        "J-CSH-02-1-BA-091",
+        CriticReasonCode.not_triggered,
+        None,
+    )
+    skipped = [*revenue.rev03["judgments"], *revenue.rev02["judgments"]]
+    assert len(skipped) == 9
+    assert {(j.critic_verdict, j.critic_reason, j.critic_reason_code, j.critic_reason_detail) for j in skipped} == {
+        (CriticVerdict.skipped, "L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)", CriticReasonCode.level_l2, None)
+    }
 
 
 # ── REV-02 (需求 R110): S01 选中的六张发票的截止性判断, 经 REV-08 → REV-03 → REV-02 一次执行 ──

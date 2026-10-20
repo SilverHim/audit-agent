@@ -23,6 +23,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     ClientProfile,
+    CriticReasonCode,
     CriticTrigger,
     CriticVerdict,
     EvidencePointer,
@@ -33,7 +34,7 @@ from backend.contracts.models import (
     StepKind,
     StepStatus,
 )
-from backend.contracts.services import ValidationContext
+from backend.contracts.services import ValidationContext, ValidationReport
 from backend.contracts.state import StatePatch
 from backend.services.features import COLLAB
 from backend.services.judgment_engine import PointerResolver, critic_chain_ok
@@ -52,6 +53,7 @@ VERDICT_SPEC = LLMSpec(prompt="GEN-09-verdict.md.j2", output_model="CriticVerdic
 REVIEWED_LEVELS = (AutonomyLevel.L3, AutonomyLevel.L4)  # 主规则: 人只看异常或事后抽查, 会自动关闭的判断必复核
 CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: 会关闭事项的建议动作
 SKIPPED_LEVELS = (AutonomyLevel.L1, AutonomyLevel.L2)  # 跳过规则: 审计师逐条复核
+LEVEL_CODES = {AutonomyLevel.L1: CriticReasonCode.level_l1, AutonomyLevel.L2: CriticReasonCode.level_l2}
 
 
 def trigger(
@@ -121,19 +123,21 @@ class ReviewAgent(ProcedureAgent[None]):
         findings: 该判断解释的例外 (A6 判断时同一组规则例外, 含本次执行刚建的), 第一轮校验错报草稿的金额用.
 
         跳过 (skipped): 功能开关 critic 关闭 (AgentDeps.features), 没有复核模型 (只在测试), 程序运行时自主度 L1, L2,
-        未命中触发规则 (见 trigger); critic_reason 写明原因.
+        未命中触发规则 (见 trigger); critic_reason 写明原因, critic_reason_code 为其代码 (需求 R309, 前端按界面语言
+        显示).
         功能 collab 打开时触发规则另判 internal_copy 与 unsupported, 命中的那条写进 critic_trigger (之后复核没做成也
         保留; 取第一轮证据本身出错, 如存储读不了时, 记 not_applicable, critic_trigger 为空); 关闭时 critic_trigger 为空.
         复核没做成 (not_applicable): 判断没有能解析的证据; 任一轮校验重试后仍失败, 或调用出错 (CancelledError 除外);
-        判为 consistent 而独立推理链无效. ReviewQueue 据此转人工.
+        判为 consistent 而独立推理链无效. ReviewQueue 据此转人工. 同样写代码, 技术细节另记 critic_reason_detail.
         """
         level = ctx.procedure.autonomy_level
         if CRITIC not in self.deps.features:
-            return skip(judgment, "功能开关 critic 关闭, 不做独立复核")
+            return skip(judgment, CriticReasonCode.critic_off, "功能开关 critic 关闭, 不做独立复核")
         if self.deps.review_llm is None:
-            return skip(judgment, "未配置复核模型, 不做独立复核")
+            return skip(judgment, CriticReasonCode.no_review_model, "未配置复核模型, 不做独立复核")
         if level in SKIPPED_LEVELS:
-            return skip(judgment, f"{level.value}: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)")
+            reason = f"{level.value}: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"
+            return skip(judgment, LEVEL_CODES[level], reason)
         template = self.deps.library.load(GEN09)
         rate = float(template.params.get("sample_rate", 0))
         collab = COLLAB in self.deps.features
@@ -147,12 +151,12 @@ class ReviewAgent(ProcedureAgent[None]):
                 given = await self.given_evidence(ctx.engagement.id, judgment, profile)
             hit = trigger(level, judgment, rate, given or (), collab)
             if hit is None:
-                return skip(judgment, "未命中独立复核的触发规则")
+                return skip(judgment, CriticReasonCode.not_triggered, "未命中独立复核的触发规则")
             if collab:
                 judgment = judgment.model_copy(update={"critic_trigger": hit})
             return await self.cross_check(ctx, template, judgment, given, findings, profile)
         except Exception as e:
-            return incomplete(judgment, str(e))
+            return incomplete(judgment, CriticReasonCode.review_error, str(e), detail=str(e))
 
     async def cross_check(
         self,
@@ -178,7 +182,7 @@ class ReviewAgent(ProcedureAgent[None]):
         profile = profile if profile is not None else await self.cited_profile(ctx, judgment)
         pointers = given if given is not None else await self.given_evidence(eid, judgment, profile)
         if not pointers:
-            return incomplete(judgment, "判断没有能解析的证据指针")
+            return incomplete(judgment, CriticReasonCode.no_evidence, "判断没有能解析的证据指针")
         # 推理链可引用的: 判断引用的证据, 加上该程序的准则片段 (提示词里另列, standard 步骤指向它们)
         allowed = [
             *pointers,
@@ -214,9 +218,7 @@ class ReviewAgent(ProcedureAgent[None]):
             system=CRITIC_SYSTEM,
         )
         if first.report.level_failed is not None:
-            return incomplete(
-                judgment, f"第一轮输出未通过 {first.report.level_failed} 校验 ({brief(first.report.errors)})"
-            )
+            return invalid(judgment, CriticReasonCode.first_round_invalid, "第一轮", first.report)
         independent = cast(CriticIndependent, first.report.output)
         unsupported = set(first.report.unsupported_steps)
         steps = [
@@ -243,9 +245,7 @@ class ReviewAgent(ProcedureAgent[None]):
             system=CRITIC_SYSTEM,
         )
         if second.report.level_failed is not None:
-            return incomplete(
-                judgment, f"第二轮输出未通过 {second.report.level_failed} 校验 ({brief(second.report.errors)})"
-            )
+            return invalid(judgment, CriticReasonCode.second_round_invalid, "第二轮", second.report)
         verdict = cast(CriticVerdictOut, second.report.output)
         update: dict[str, Any] = {
             "critic_verdict": CriticVerdict(verdict.critic_verdict),
@@ -263,8 +263,9 @@ class ReviewAgent(ProcedureAgent[None]):
             }
         if verdict.critic_verdict == "consistent":
             if not critic_chain_ok(steps):  # 结论相同而依据站不住, 不算复核过; 推理链照存, 供人复核时看
-                detail = f"判为一致, 但独立推理链没有通过校验, 不计复核分项 ({brief(first.report.errors)})"
-                return incomplete(judgment, detail, **update)
+                problems = brief(first.report.errors)
+                reason = f"判为一致, 但独立推理链没有通过校验, 不计复核分项 ({problems})"
+                return incomplete(judgment, CriticReasonCode.chain_invalid, reason, detail=problems, **update)
             parts = {**judgment.confidence_parts, "critic": 1.0}
             update |= {"confidence_parts": parts, "confidence": engine.confidence(parts)}
         return judgment.model_copy(update=update)
@@ -318,16 +319,33 @@ class ReviewAgent(ProcedureAgent[None]):
         return to_jsonable_python(row) if row is not None else "(row not found)"  # 日期, 时间转成字符串
 
 
-def skip(judgment: Judgment, reason: str) -> Judgment:
-    return judgment.model_copy(update={"critic_verdict": CriticVerdict.skipped, "critic_reason": reason})
+def skip(judgment: Judgment, code: CriticReasonCode, reason: str) -> Judgment:
+    """跳过 (skipped): critic_reason 为中文原因, critic_reason_code 为其代码 (需求 R309)."""
+    update = {"critic_verdict": CriticVerdict.skipped, "critic_reason": reason, "critic_reason_code": code}
+    return judgment.model_copy(update=update)
 
 
-def incomplete(judgment: Judgment, detail: str, **update: Any) -> Judgment:
-    """复核没做成 (not_applicable), critic_reason 写明原因; update 为同时写回的其他 critic 字段."""
-    reason = f"独立复核没有完成: {detail}"
+def incomplete(
+    judgment: Judgment, code: CriticReasonCode, reason: str, detail: str | None = None, **update: Any
+) -> Judgment:
+    """复核没做成 (not_applicable): critic_reason 为 "独立复核没有完成: " 加 reason, critic_reason_code 为 code,
+    critic_reason_detail 为 detail (校验级别与错误, 异常信息, 前端原样显示; 没有时为空); update 为同时写回的其他 critic
+    字段."""
     return judgment.model_copy(
-        update={**update, "critic_verdict": CriticVerdict.not_applicable, "critic_reason": reason}
+        update={
+            **update,
+            "critic_verdict": CriticVerdict.not_applicable,
+            "critic_reason": f"独立复核没有完成: {reason}",
+            "critic_reason_code": code,
+            "critic_reason_detail": detail,
+        }
     )
+
+
+def invalid(judgment: Judgment, code: CriticReasonCode, round_name: str, report: ValidationReport[Any]) -> Judgment:
+    """某一轮输出重试后仍未通过校验 (not_applicable); 细节为未通过的级别与错误."""
+    level, errors = report.level_failed, brief(report.errors)
+    return incomplete(judgment, code, f"{round_name}输出未通过 {level} 校验 ({errors})", detail=f"{level}: {errors}")
 
 
 def brief(errors: Sequence[str]) -> str:

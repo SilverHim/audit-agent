@@ -7191,6 +7191,23 @@
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
       },
+      "CriticReasonCode": {
+        "type": "string",
+        "enum": [
+          "critic_off",
+          "no_review_model",
+          "level_l1",
+          "level_l2",
+          "not_triggered",
+          "no_evidence",
+          "first_round_invalid",
+          "second_round_invalid",
+          "chain_invalid",
+          "review_error"
+        ],
+        "title": "CriticReasonCode",
+        "description": "独立复核跳过 (skipped) 或没做成 (not_applicable) 的原因代码 (需求 R309), 前端按界面语言显示;\nJudgment.critic_reason 照旧写中文原句."
+      },
       "CriticReasonType": {
         "type": "string",
         "enum": [
@@ -9813,6 +9830,27 @@
               }
             ],
             "title": "Critic Reason"
+          },
+          "critic_reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_reason_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Reason Detail"
           },
           "critic_conclusion": {
             "anyOf": [

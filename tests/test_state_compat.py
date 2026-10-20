@@ -19,10 +19,13 @@ from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditPlan,
+    AutonomyLevel,
     CheckItemStatus,
     ClauseStatus,
     CommunicationForm,
     ComplianceCheck,
+    CriticReasonCode,
+    CriticVerdict,
     DeclarationForm,
     EngagementTerms,
     GateDecision,
@@ -38,6 +41,7 @@ from backend.contracts.models import (
     OwnershipGraph,
     Phase,
     PlanStatus,
+    ProposedAction,
     ReportStatus,
     RepresentationStatus,
     ReviewRecord,
@@ -72,6 +76,7 @@ from backend.persistence.models import OUTPUT_KINDS
 from backend.services.features import FEATURES
 from tests.fakes import (
     ENGAGEMENT,
+    NOW,
     NUMBAT_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
@@ -530,6 +535,43 @@ def test_audit_plans_merge_by_id_and_version() -> None:
     ]
     with pytest.raises(VersionConflict):
         apply_patch(state, {"audit_plans": [audit_plan()]})
+
+
+class JudgmentsOnly(TypedDict):
+    judgments: list[Judgment]
+
+
+async def test_critic_reason_code_survives_checkpoint_as_enum() -> None:
+    """R309: 判断的原因代码经检查点白名单序列化的 InMemorySaver 存取一轮后仍是 CriticReasonCode (不退化为字符串),
+    技术细节不变; 没有代码的 (一致, 不一致, 人工建的, R309 之前的) 读回为空."""
+    base = Judgment(
+        id="J-REV-02-1-SI-1",
+        procedure_id="REV-02",
+        run_id="RUN-REV-02-1",
+        subject_id="SI-1",
+        conclusion="synthetic",
+        confidence=0.8625,
+        confidence_parts={"evidence": 0.7, "rule": 1.0, "llm": 0.9},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="synthetic",
+        proposed_action=ProposedAction.accept,
+        autonomy_level=AutonomyLevel.L3,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    failed = base.model_copy(
+        update={
+            "id": "J-REV-02-1-SI-2",
+            "critic_verdict": CriticVerdict.not_applicable,
+            "critic_reason": "独立复核没有完成: 第一轮输出未通过 syntax 校验 (not json)",
+            "critic_reason_code": CriticReasonCode.first_round_invalid,
+            "critic_reason_detail": "syntax: not json",
+        }
+    )
+    back = (await checkpoint_round_trip(JudgmentsOnly, {"judgments": [base, failed]}))["judgments"]
+    assert back == [base, failed] and back[0].critic_reason_code is None
+    assert back[1].critic_reason_code is CriticReasonCode.first_round_invalid
 
 
 def test_completion_list_fields_merge_by_id_and_version() -> None:

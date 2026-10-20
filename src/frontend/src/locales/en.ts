@@ -1,5 +1,5 @@
 // 英文界面文案. 键结构即 Messages 类型, zh.ts 必须逐键对应
-import type { DocumentRef } from '@/client/types.gen'
+import type { CriticReasonCode, DocumentRef } from '@/client/types.gen'
 
 // 没有上传人的文件在上传人一栏显示的来源 (需求 R306): 渠道 auditor_upload 而没有上传人的是系统存档 (systemArchive, 如
 // 数据集载入的合同), 其余按渠道
@@ -412,6 +412,20 @@ export const en = {
         different_conclusion: 'Reaches a different conclusion',
         reasoning_error: 'Finds an error in the reasoning',
       } as Record<string, string>,
+      // 跳过或没做成的原因, 按后端的 critic_reason_code (R309), 须覆盖全部取值; 没有代码时照 critic_reason 原文
+      reasonCodes: {
+        critic_off: 'Independent review is switched off, so it was not done',
+        no_review_model: 'No review model is configured, so it was not done',
+        level_l1: 'L1: the auditor reviews each item, so independent review is skipped',
+        level_l2: 'L2: the auditor reviews each item, so independent review is skipped',
+        not_triggered: 'No independent review trigger applied',
+        no_evidence: 'Could not be completed: none of the cited evidence could be resolved',
+        first_round_invalid: 'Could not be completed: the independent conclusion failed validation',
+        second_round_invalid: 'Could not be completed: the comparison with the original failed validation',
+        chain_invalid:
+          'Could not be completed: it agrees, but its own reasoning failed validation, so it does not add to confidence',
+        review_error: 'Could not be completed: the review call failed',
+      } satisfies Record<CriticReasonCode, string>,
       triggers: {
         main: 'Autonomous and proposed to accept or close',
         internal_copy: 'All evidence is internal copies',
