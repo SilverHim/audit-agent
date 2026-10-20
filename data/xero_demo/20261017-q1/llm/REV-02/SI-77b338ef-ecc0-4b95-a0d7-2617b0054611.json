@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoice ORC1026 belongs to the period ending 30 September 2026: the service completion record SR-ORC1026, the completion certificate, was signed on 17 September 2026, and clause 4.1 (CON-X01-T1) passes control of the Module on the Completion Date, so recognising the AUD 6,500.00 of revenue in September is correct. Rule finding X-REV-08-1-R03-1 only shows that the receipt matched to the invoice number after the period end, BT-090-0124 of AUD 3,850.00, is less than the invoice amount of AUD 7,150.00; this is a collection and reconciliation matter that does not change the transfer date and is not a cutoff misstatement.",
+  "conclusion": "Invoice ORC1026 belongs to the period ending 30 September 2026: service completion record SR-ORC1026 was signed on 17 September 2026, and under clause 4.1 (CON-X01-T1) the Services are complete, and control of the Module passes, when the Project Sponsor signs the completion certificate, so the signed record is read as that certificate and recognising the AUD 6,500.00 of revenue in September is correct. Rule finding X-REV-08-1-R03-1 only shows that the receipt matched to the invoice number after the period end, BT-090-0124 of AUD 3,850.00, is less than the invoice amount of AUD 7,150.00; this is a collection and reconciliation matter that does not change the transfer date and is not a cutoff misstatement.",
   "reasoning_chain": [
     {
       "kind": "fact",
@@ -49,7 +49,7 @@
     },
     {
       "kind": "fact",
-      "text": "Service completion record SR-ORC1026 was signed by the customer's Project Sponsor on 17 September 2026.",
+      "text": "Service completion record SR-ORC1026 was signed on 17 September 2026.",
       "evidence": [
         {
           "type": "delivery",
@@ -124,13 +124,22 @@
     },
     {
       "kind": "inference",
-      "text": "Control of the Module passed at a point in time on 17 September 2026, the Completion Date shown by the signed completion record, which is within the period ending 30 September 2026.",
+      "text": "Clause 4.1 (CON-X01-T1) makes the Project Sponsor's signing of the Completion Certificate the event that completes the Services, so the signed service completion record SR-ORC1026 is read as that certificate and the Completion Date is 17 September 2026.",
       "evidence": [],
       "from_steps": [
         2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Control of the Module passed at a point in time on the Completion Date, 17 September 2026, which is within the period ending 30 September 2026.",
+      "evidence": [],
+      "from_steps": [
         3,
         5,
-        6
+        6,
+        7
       ]
     },
     {
@@ -140,7 +149,7 @@
       "from_steps": [
         0,
         1,
-        7
+        8
       ]
     },
     {
@@ -149,7 +158,7 @@
       "evidence": [],
       "from_steps": [
         4,
-        8
+        9
       ]
     }
   ],

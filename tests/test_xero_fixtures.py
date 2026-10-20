@@ -53,7 +53,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome
-from backend.contracts.state import EngagementState, StatePatch
+from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.nodes import apply_patch, build_run
@@ -443,11 +443,11 @@ class RecordingJudgments:
         return outcome
 
 
-def xero_state(deps: AgentDeps) -> EngagementState:
+def xero_state() -> EngagementState:
     """Xero 项目进入 P2 时的状态: 计划预置的目标与风险, 外勤阶段上传的文件, 闸门定的重要性 (收入 1%, 执行重要性 50%,
-    明显微小 5%, 即 32431 / 16216 / 1622)."""
+    明显微小 5%, 即 32431 / 16216 / 1622). procedure_pack 为空, 每次执行由 xero_context 换成该程序."""
     objectives, risks = xero_presets()
-    return make_ctx(deps, "REV-08", engagement=xero_engagement()).state | {  # type: ignore[return-value]
+    return initial_state(xero_engagement(), [], xero_profile().version) | {  # type: ignore[return-value]
         "audit_objectives": objectives,
         "risk_register": risks,
         "documents": xero_documents("fieldwork"),
@@ -485,7 +485,7 @@ async def run_revenue() -> Revenue:
     trail = FakeTrail()
     client = MockLLMClient(XERO.fixtures)
     deps = make_xero_deps(trail=trail, llm=client, review_llm=client, rules=FakeRuleEngine(XERO_RULES))
-    state = xero_state(deps)
+    state = xero_state()
     rev08 = await FieldworkAgent(deps).run(xero_context(deps, state, "REV-08", REVENUE_OBJECTIVES))  # type: ignore[arg-type]
     state = apply_patch(state, rev08)  # type: ignore[arg-type]
     rev03 = await FieldworkAgent(deps).run(xero_context(deps, state, "REV-03", REVENUE_OBJECTIVES))
@@ -502,38 +502,45 @@ def revenue() -> Revenue:
     return asyncio.run(run_revenue())
 
 
-# ── REV-03 (需求 R109): 三份收入合同的条款评价, 经真实判断引擎 ──
+# ── 收入一串 (需求 R109, R110): REV-03 与 REV-02 的固定输出经真实判断引擎一次通过 ──
 
 REV03_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]
-
-
-@dataclass
-class Rev03:
-    patch: StatePatch  # A6 执行 REV-03 一次的片段
-    calls: list[TrailEntry]  # 大模型调用的留痕, 按调用顺序
-
-
-@pytest.fixture(scope="module")
-def rev03(revenue: Revenue) -> Rev03:
-    """REV-03 取 REV-02 一段那次执行 (run_revenue: REV-08 → REV-03 → REV-02) 里的片段与调用, 不另跑: 合同与文件登记
-    为演示导入之后的, 目标为 Xero 预置的收入两条, 主模型与复核模型都读正本, A7 按自主度 L2 跳过."""
-    return Rev03(revenue.rev03, [e for e in revenue.calls if e.procedure_id == "REV-03"])
+ORC = {  # 发票号 → 发票 ID, 按发票 ID 排序 (即 REV-02 判断对象的次序)
+    "ORC1021": "SI-3b28bf11-ed2f-4cf4-8e9e-fcae730cc292",
+    "ORC1024": "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45",
+    "ORC1020": "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9",
+    "ORC1026": ORC1026,
+    "ORC1022": "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b",
+    "ORC1023": "SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf",
+}
 
 
 @pytest.mark.external
-def test_rev03_fixtures_pass_real_engine(rev03: Rev03) -> None:
-    """验收 1, 5: 三份合同各调一次大模型 (第 1 次就通过), 提示词的 Standards 依次列出 AASB15-P31, P35, P38; 三条判断
-    J-REV-03-1-CON-X01 至 X03 都是 accept, 没有错报草稿, 推理链没有 assumption 步骤, A7 按 L2 跳过; 三条 normal
-    任务, 没有 failed 任务; 执行成功."""
-    assert [(e.procedure_id, e.payload["fixture_key"]) for e in rev03.calls] == [("REV-03", c) for c in REV03_CONTRACTS]
-    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in rev03.calls} == {(1, None)}
-    for entry in rev03.calls:
+@pytest.mark.parametrize(
+    ("procedure_id", "subjects", "exceptions"),
+    [
+        ("REV-03", REV03_CONTRACTS, {}),  # 需求 R109: 三份收入合同
+        ("REV-02", list(ORC.values()), {ORC1026: ["X-REV-08-1-R03-1"]}),  # 需求 R110: S01 选中的六张发票
+    ],
+)
+def test_revenue_fixtures_pass_real_engine(
+    revenue: Revenue, procedure_id: str, subjects: list[str], exceptions: dict[str, list[str]]
+) -> None:
+    """REV-03 验收 1, 5 与 REV-02 验收 2, 7 的 A7 部分 (run_revenue 那一次执行): 每个判断对象调一次大模型, 第 1 次就
+    通过, 提示词的 Standards 依次列出 AASB15-P31, P35, P38 (两条程序的 standards 相同); 判断都是 accept, 没有错报
+    草稿, 推理链没有 assumption 步骤, A7 按 L2 跳过; 只有所列对象解释例外 (REV-02 的 ORC1026 解释 R03-1); 每条判断
+    一条 normal 任务, 没有 failed 任务; 执行成功."""
+    patch = {"REV-03": revenue.rev03, "REV-02": revenue.rev02}[procedure_id]
+    calls = [e for e in revenue.calls if e.procedure_id == procedure_id]
+    assert [e.payload["fixture_key"] for e in calls] == subjects
+    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
+    for entry in calls:
         prompt = entry.payload["messages"][0]["content"]
         listed = prompt.split("Standards (cite only these IDs):\n", 1)[1].split("\n## ", 1)[0].splitlines()
         cited = [line.split(" ", 2)[1] for line in listed if line.startswith("- ")]
         assert cited == ["AASB15-P31", "AASB15-P35", "AASB15-P38"], entry.payload["fixture_key"]
-    judgments = rev03.patch["judgments"]
-    assert [j.id for j in judgments] == [f"J-REV-03-1-{c}" for c in REV03_CONTRACTS]
+    judgments = patch["judgments"]
+    assert [j.id for j in judgments] == [f"J-{procedure_id}-1-{s}" for s in subjects]
     for j in judgments:
         assert (j.proposed_action, j.misstatement_draft, j.critic_verdict) == (
             ProposedAction.accept,
@@ -541,12 +548,16 @@ def test_rev03_fixtures_pass_real_engine(rev03: Rev03) -> None:
             CriticVerdict.skipped,
         )
         assert j.critic_reason is not None and j.critic_reason.startswith("L2")
+        assert j.exception_ids == exceptions.get(j.subject_id, []), j.id
         assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}, j.id
-    assert [(t.id, t.kind) for t in rev03.patch["review_tasks"]] == [
-        (f"T-J-REV-03-1-{c}-v1", TaskKind.normal) for c in REV03_CONTRACTS
+    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [
+        (f"T-J-{procedure_id}-1-{s}-v1", TaskKind.normal) for s in subjects
     ]
-    [run] = rev03.patch["procedure_runs"]
+    [run] = patch["procedure_runs"]
     assert run.status is RunStatus.succeeded
+
+
+# ── REV-03 (需求 R109): 三份收入合同的条款评价 ──
 
 
 def sentence_with(text: str, anchor: str) -> str:
@@ -580,13 +591,13 @@ def sentence_with(text: str, anchor: str) -> str:
     ],
 )
 def test_rev03_conclusion_and_evidence(
-    rev03: Rev03, contract: str, transfer: tuple[str, ...], other: tuple[str, ...], standards: list[str]
+    revenue: Revenue, contract: str, transfer: tuple[str, ...], other: tuple[str, ...], standards: list[str]
 ) -> None:
     """验收 2 至 4: 结论里定转移的一句引 T1 (转移事件与方式), 另一句引 T3 (影响收入的其他条款); 证据含该合同文件
     T1 (第 2 页), T3 (第 3 页) 两条款的指针与所列准则片段. 只查关键词, 不比整句. 推理链的指针也核对 (页面的推理链与
     A7 第一轮证据都用它们, 判断引擎不查这几项): evidence 恰为推理链各步指针去重后的并集; 全部文件指针的 (条款 ID, 页)
     与该合同的条款一致; 准则片段都在 REV-03 的 standards 内."""
-    [j] = [j for j in rev03.patch["judgments"] if j.subject_id == contract]
+    [j] = [j for j in revenue.rev03["judgments"] if j.subject_id == contract]
     first, second = sentence_with(j.conclusion, f"{contract}-T1"), sentence_with(j.conclusion, f"{contract}-T3")
     for text in transfer:
         assert text in first, text
@@ -629,7 +640,7 @@ async def run_cash() -> Cash:
     trail = FakeTrail()
     client = MockLLMClient(XERO.fixtures)
     deps = make_xero_deps(trail=trail, llm=client, review_llm=client, rules=FakeRuleEngine(XERO_RULES))
-    state = xero_state(deps)
+    state = xero_state()
     sent = await EvidenceAgent(deps).run(xero_context(deps, state, "CSH-04", CASH_OBJECTIVES))  # type: ignore[arg-type]
     state = apply_patch(state, sent)  # type: ignore[arg-type]
     extracted = await IngestAgent(deps).run(xero_context(deps, state, "DOC-06", CASH_OBJECTIVES))
@@ -771,15 +782,6 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
 
 # ── REV-02 (需求 R110): S01 选中的六张发票的截止性判断, 经 REV-08 → REV-03 → REV-02 一次执行 ──
 
-ORC = {  # 发票号 → 发票 ID, 按发票 ID 排序 (即判断对象的次序)
-    "ORC1021": "SI-3b28bf11-ed2f-4cf4-8e9e-fcae730cc292",
-    "ORC1024": "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45",
-    "ORC1020": "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9",
-    "ORC1026": ORC1026,
-    "ORC1022": "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b",
-    "ORC1023": "SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf",
-}
-
 
 @pytest.mark.external
 def test_rev02_subjects_and_context(revenue: Revenue) -> None:
@@ -804,37 +806,13 @@ def test_rev02_subjects_and_context(revenue: Revenue) -> None:
 
 
 @pytest.mark.external
-def test_rev02_fixtures_pass_real_engine(revenue: Revenue) -> None:
-    """验收 2 与 7 的 A7 部分: 六次调用一次通过; 六条判断都是 accept, 没有错报草稿, A7 按 L2 跳过; ORC1026 的判断解释
-    R03-1, 其余不解释例外; 六条 normal 任务, 没有 failed 任务; 执行成功."""
-    rev02 = [e for e in revenue.calls if e.procedure_id == "REV-02"]
-    assert [e.payload["fixture_key"] for e in rev02] == list(ORC.values())
-    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in rev02} == {(1, None)}
-    judgments = revenue.rev02["judgments"]
-    assert [j.id for j in judgments] == [f"J-REV-02-1-{i}" for i in ORC.values()]
-    for j in judgments:
-        assert (j.proposed_action, j.misstatement_draft, j.critic_verdict) == (
-            ProposedAction.accept,
-            None,
-            CriticVerdict.skipped,
-        )
-        assert j.critic_reason is not None and j.critic_reason.startswith("L2")
-        assert j.exception_ids == (["X-REV-08-1-R03-1"] if j.subject_id == ORC1026 else []), j.id
-        assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}, j.id
-    assert [(t.id, t.kind) for t in revenue.rev02["review_tasks"]] == [
-        (f"T-J-REV-02-1-{i}-v1", TaskKind.normal) for i in ORC.values()
-    ]
-    [run] = revenue.rev02["procedure_runs"]
-    assert run.status is RunStatus.succeeded
-
-
-@pytest.mark.external
 @pytest.mark.parametrize(
     ("number", "transfer", "evidence"),
     [
-        (  # 完工证书 (服务完成记录) 09-17 签署, CON-X01-T1 完工即转移, 9 月确认正确; R03-1 只是收款与对账问题
+        (  # 服务完成记录 09-17 签署, 依 CON-X01-T1 (Project Sponsor 签完工证书即完工, 控制随之转移) 读作完工证书,
+            # 9 月确认正确; R03-1 只是收款与对账问题
             "ORC1026",
-            ("SR-ORC1026", "17 September 2026", "completion certificate", "CON-X01-T1", "September"),
+            ("SR-ORC1026", "17 September 2026", "completion certificate", "CON-X01-T1", "in September is correct"),
             {
                 ("sales_invoice", ORC1026, "posting_date", None),
                 ("journal_entry", "XJ-580-1", "credit_cents", None),
@@ -871,11 +849,12 @@ def test_rev02_fixtures_pass_real_engine(revenue: Revenue) -> None:
             )
             for number in ("ORC1021", "ORC1022", "ORC1023")
         ),
-        (  # 没有合同, 培训 08-19 完成, 某一时点
+        (  # 没有合同, 服务完成记录同一天 (08-19) 开始并确认完成, 某一时点 (是培训, 但上下文里没有这个词, 输出不写)
             "ORC1024",
-            ("SR-ORC1024", "no contract", "19 August 2026", "point in time"),
+            ("SR-ORC1024", "no contract", "same day, 19 August 2026", "point in time"),
             {
                 ("sales_invoice", ORC["ORC1024"], "posting_date", None),
+                ("delivery_note", "SR-ORC1024", "shipped_date", None),
                 ("delivery_note", "SR-ORC1024", "signed_date", None),
                 ("standard", "AASB15-P31", "para 31", None),
                 ("standard", "AASB15-P38", "para 38", None),
@@ -886,19 +865,25 @@ def test_rev02_fixtures_pass_real_engine(revenue: Revenue) -> None:
 def test_rev02_conclusion_and_evidence(
     revenue: Revenue, number: str, transfer: tuple[str, ...], evidence: set[tuple[str, str, str, int | None]]
 ) -> None:
-    """验收 3 至 5: 结论第一句写转移事件, 日期与所属期间 (只查关键词); 证据含所列指针. ORC1026 另一句回应 R03-1:
-    期后匹配到的收款 3,850.00 少于发票 7,150.00, 属收款与对账问题, 不改变转移日, 不构成截止错报."""
+    """验收 3 至 5: 结论第一句写发票号, 所属期间, 转移事件与日期 (只查关键词, 不比句首); 证据含所列指针. ORC1026
+    另一句回应 R03-1: 期后匹配到的收款 3,850.00 少于发票 7,150.00, 属收款与对账问题, 不改变转移日, 不构成截止错报.
+    关键词取能分辨肯定与否定的写法 (如 "in September is correct", "not change the transfer date")."""
     [j] = [j for j in revenue.rev02["judgments"] if j.subject_id == ORC[number]]
     first = re.split(r"(?<=\.)\s+", j.conclusion)[0]
-    assert first.startswith(f"Invoice {number} belongs to the period ending 30 September 2026"), first
-    for text in transfer:
+    for text in (f"Invoice {number}", "period ending 30 September 2026", *transfer):
         assert text in first, text
     assert evidence <= {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence}
     if number == "ORC1026":
         finding = sentence_with(j.conclusion, "X-REV-08-1-R03-1")
-        for text in ("BT-090-0124", "3,850.00", "7,150.00", "collection and reconciliation", "transfer date"):
+        for text in (
+            "BT-090-0124",
+            "3,850.00",
+            "7,150.00",
+            "collection and reconciliation",
+            "not change the transfer date",
+            "not a cutoff misstatement",
+        ):
             assert text in finding, text
-        assert "not a cutoff misstatement" in finding
 
 
 def context_problems(name: str, value: dict[str, Any], jctx: JudgmentContext, standards: list[str]) -> list[str]:
@@ -936,6 +921,7 @@ def test_rev02_fixtures_cite_only_the_context(revenue: Revenue) -> None:
 
 
 @pytest.mark.external
+@pytest.mark.parametrize("where", ["evidence", "fact step"])
 @pytest.mark.parametrize(
     "pointer",
     [
@@ -944,13 +930,24 @@ def test_rev02_fixtures_cite_only_the_context(revenue: Revenue) -> None:
         {"source_type": "document", "source_id": "DOC-7795e9312e9f", "locator": "counterparty", "page": 1},  # 合同要素
         {"source_type": "document", "source_id": "DOC-7795e9312e9f", "locator": "CON-X01-T1", "page": 3},  # 页码不对
         {"source_type": "document", "source_id": "DOC-02c5c90d4ffb", "locator": "CON-X02-T1", "page": 2},  # 别的合同
+        {"source_type": "sales_invoice", "source_id": ORC["ORC1020"], "locator": "posting_date"},  # 别的发票
+        {"source_type": "delivery_note", "source_id": "SR-ORC1021", "locator": "signed_date"},  # 别的发票的服务记录
+        {"source_type": "standard", "source_id": "AASB15-P36", "locator": "para 36"},  # 模板 standards 以外的片段
     ],
 )
-def test_context_guard_reports_pointers_outside_the_context(revenue: Revenue, pointer: dict[str, Any]) -> None:
+def test_context_guard_reports_pointers_outside_the_context(
+    revenue: Revenue, pointer: dict[str, Any], where: str
+) -> None:
     """自测: ORC1026 的 fixture 副本另引一个上下文以外的来源 (需求点名的 BT-090-0085, XJ-720-2, 合同要素字段,
-    页码不对的条款, 别的合同的条款), 守卫报且只报这一条."""
+    页码不对的条款, 别的合同的条款, 别的发票, 别的发票的服务完成记录, 模板以外的准则片段), 守卫报且只报这一条.
+    指针放在顶层 evidence 或第一个 fact 步骤的 evidence 各跑一次: 判断引擎不核对推理链的指针是否都在 evidence 里,
+    只写在推理链里的越界指针只有守卫拦得下."""
     value = json.loads((XERO.fixtures / "REV-02" / f"{ORC1026}.json").read_text(encoding="utf-8"))
-    value["evidence"].append({"type": "voucher", "page": None, "reliability": None, **pointer})
+    added = {"type": "voucher", "page": None, "reliability": None, **pointer}
+    if where == "evidence":
+        value["evidence"].append(added)
+    else:
+        next(s for s in value["reasoning_chain"] if s["kind"] == "fact")["evidence"].append(added)
     problems = context_problems("ORC1026", value, revenue.contexts[ORC1026], LIBRARY.load("REV-02").standards)
     assert problems == [
         f"ORC1026: {pointer['source_type']} {pointer['source_id']} {pointer['locator']} 不在该发票的上下文中"

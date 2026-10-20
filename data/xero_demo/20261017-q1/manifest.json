@@ -685,7 +685,7 @@
     },
     {
       "path": "llm/REV-02/SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45.json",
-      "sha256": "3d1914c766946948fbbdad17843e6942409eef4f2ce09d577c5452fa51e439e5",
+      "sha256": "7e6cc1a434108348a82f06d8fc3a7329acbb693f5f406755230d390641e7d09c",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -699,7 +699,7 @@
     },
     {
       "path": "llm/REV-02/SI-77b338ef-ecc0-4b95-a0d7-2617b0054611.json",
-      "sha256": "074011af40d80066718dffd73009242360719cf66f8a35872437d566890786f1",
+      "sha256": "dd80db7a13c94590e4dca26b078501e9100bcbf4061da75b69c1fe16a030004b",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
