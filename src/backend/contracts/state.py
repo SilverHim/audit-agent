@@ -11,6 +11,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     AuditObjective,
+    AuditPlan,
     AuditReportVersion,
     ComplianceCheck,
     Confirmation,
@@ -115,6 +116,9 @@ class EngagementState(TypedDict):
     clearly_trivial_cents: int | None  # 明显微小门槛, 同上
     audit_objectives: list[AuditObjective]  # 审计目标, 读数据集预置
     risk_register: list[RiskItem]  # 风险清单, 读数据集预置, 闸门可改等级
+    # 总体审计计划 PLAN-{revision} (需求 R203, 功能 planning): A4 PLN-15 起草, PLN-15 闸门批准; 当前计划为 status 不是
+    # superseded 的修订中 revision 最大的 (第 0 节)
+    audit_plans: Annotated[list[AuditPlan], upsert_by_id]
     procedure_pack: list[Procedure]  # 程序包: 全部程序实例, 每次写入传完整列表
     schedule_table: list[ScheduleRow]  # P2 调度表
     documents: Annotated[list[DocumentRef], replace_by_id]  # 证据文件, 同 id 后到者替换
@@ -156,6 +160,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "clearly_trivial_cents": None,
     "audit_objectives": [],
     "risk_register": [],
+    "audit_plans": [],
     "schedule_table": [],
     "documents": [],
     "staged_results": [],

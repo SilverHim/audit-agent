@@ -5,6 +5,7 @@
 
 import types
 from collections.abc import Iterable
+from datetime import date
 from enum import Enum, StrEnum
 from typing import Any, Literal, TypedDict, Union, get_args, get_origin, get_type_hints, is_typeddict
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
+    AuditPlan,
     CheckItemStatus,
     ClauseStatus,
     CommunicationForm,
@@ -29,11 +31,13 @@ from backend.contracts.models import (
     GovernanceCommunication,
     IndependenceDeclaration,
     Judgment,
+    MaterialityChoice,
     Misstatement,
     ObjectRef,
     OpinionType,
     OwnershipGraph,
     Phase,
+    PlanStatus,
     ReportStatus,
     RepresentationStatus,
     ReviewRecord,
@@ -73,6 +77,7 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    audit_plan,
     compliance_check,
     engagement_terms,
     governance_communication,
@@ -141,13 +146,13 @@ class ExtendedState(EngagementState):
     """模拟某组加了状态字段而忘了登记."""
 
     going_concern: Judgment | None
-    audit_plans: list[Judgment]
+    forgotten_items: list[Judgment]  # 列表字段 (原名 audit_plans, 需求 R203 起是真字段)
 
 
 def test_default_check_names_unregistered_and_wrong_defaults() -> None:
     """验收 1: 新增键未登记时报出键名; 缺省值与类型不符, 或多登记了不存在的键, 也报出."""
-    assert default_problems(ExtendedState) == ["未登记缺省值: going_concern", "未登记缺省值: audit_plans"]
-    assert default_problems(ExtendedState, {**STATE_DEFAULTS, "going_concern": None, "audit_plans": []}) == []
+    assert default_problems(ExtendedState) == ["未登记缺省值: going_concern", "未登记缺省值: forgotten_items"]
+    assert default_problems(ExtendedState, {**STATE_DEFAULTS, "going_concern": None, "forgotten_items": []}) == []
     wrong = {**STATE_DEFAULTS, "misstatements": None, "uncorrected_schedule": [], "extra": None}
     assert default_problems(EngagementState, wrong) == [
         "状态中没有登记的键: extra",
@@ -180,6 +185,7 @@ def test_initial_state_equals_previous_literal() -> None:
         clearly_trivial_cents=None,
         audit_objectives=[],
         risk_register=[],
+        audit_plans=[],  # 需求 R203 加
         procedure_pack=pack,
         schedule_table=[],
         documents=[],
@@ -421,7 +427,7 @@ class LocalPlan(Versioned):
 
 
 class StateWithLocalTypes(EngagementState):
-    audit_plans: list[LocalPlan]
+    local_plans: list[LocalPlan]
     plan_kind: LocalKind | None
 
 
@@ -495,6 +501,37 @@ async def test_completion_records_survive_checkpoint_as_enums() -> None:
     assert declaration.status is ReportStatus.draft and isinstance(declaration.based_on, ObjectRef)
 
 
+class PlansOnly(TypedDict):
+    audit_plans: list[AuditPlan]
+
+
+async def test_audit_plans_survive_checkpoint_and_default_to_empty() -> None:
+    """R203 验收 6: 旧检查点没有 audit_plans 键时读到 []; 经检查点白名单序列化存取一轮后仍是 AuditPlan, 状态仍是
+    PlanStatus 枚举, 嵌套的重要性选择与时间表日期不退化."""
+    assert fill_defaults({})["audit_plans"] == []
+    written = [audit_plan(version=2, status=PlanStatus.superseded), audit_plan(revision=2)]
+    back = (await checkpoint_round_trip(PlansOnly, {"audit_plans": written}))["audit_plans"]
+    assert back == written
+    assert all(isinstance(p, AuditPlan) for p in back) and back[0].status is PlanStatus.superseded
+    assert isinstance(back[1].materiality_choice, MaterialityChoice) and back[1].timetable[0].due == date(2026, 8, 14)
+
+
+def test_audit_plans_merge_by_id_and_version() -> None:
+    """R203 验收 6: audit_plans 按 upsert_by_id 并入: 驳回后的下一修订与旧修订的新版本并入后两份并存, 不整体替换;
+    同 ID 版本更低的抛 VersionConflict."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state = apply_patch(state, {"audit_plans": [audit_plan()]})
+    state = apply_patch(
+        state, {"audit_plans": [audit_plan(revision=2), audit_plan(version=2, status=PlanStatus.superseded)]}
+    )
+    assert [(p.id, p.version, p.status) for p in state["audit_plans"]] == [
+        ("PLAN-1", 2, PlanStatus.superseded),
+        ("PLAN-2", 1, PlanStatus.draft),
+    ]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"audit_plans": [audit_plan()]})
+
+
 def test_completion_list_fields_merge_by_id_and_version() -> None:
     """R215 验收 5 (审核意见 01): compliance_checks 与 governance_communications 按 upsert_by_id 并入状态: 另一程序
     (另一次执行) 的写入与已有的并存, 不整体替换; 同 ID 版本更低的抛 VersionConflict."""
@@ -555,8 +592,8 @@ def unregistered_outputs(state: Any) -> list[str]:
 
 
 def test_versioned_state_fields_have_output_tables() -> None:
-    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 22 种全部在, R136 加 OwnershipGraph,
-    R215 加签字前提的四种, R198 加 EngagementTerms)."""
+    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 23 种全部在, R136 加 OwnershipGraph,
+    R215 加签字前提的四种, R198 加 EngagementTerms, R203 加 AuditPlan)."""
     names = {t.__name__ for t in versioned_fields(EngagementState).values()}
     assert names >= {
         "AcceptanceScorecard",
@@ -581,13 +618,14 @@ def test_versioned_state_fields_have_output_tables() -> None:
         "GovernanceCommunication",
         "IndependenceDeclaration",
         "EngagementTerms",
+        "AuditPlan",  # 需求 R203 加
     }
     assert unregistered_outputs(EngagementState) == []
 
 
 def test_output_guard_names_unregistered_field() -> None:
     """验收 4: 新字段的类型未登记到审计产出表时报出字段与类型."""
-    assert unregistered_outputs(StateWithLocalTypes) == ["audit_plans: LocalPlan"]
+    assert unregistered_outputs(StateWithLocalTypes) == ["local_plans: LocalPlan"]
 
 
 async def test_wrappers_pass_injected_parameters() -> None:

@@ -9,11 +9,14 @@ from backend.contracts.data import Confidence, TablePlan
 from backend.contracts.models import (
     CriticReasonType,
     DocumentType,
+    EqrRecommendation,
     EvidencePointer,
     FinancialStatementLine,
+    Milestone,
     MisstatementDraft,
     Model,
     Officeholder,
+    ProcedureNote,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
@@ -160,6 +163,19 @@ class ReportDraft(Model):
     opinion: str  # 意见段正文
     basis_for_opinion: str  # 形成意见的基础段正文
     judgment_keys: list[str]  # 事实断言引用的已确认判断的引用键, 如 REV-02:SI-2026-0612; 取提示词列出的键
+
+
+class AuditPlanDraft(Model):
+    """PLN-15 由大模型写的计划叙述 (需求 R203): 计划骨架 (程序与参数, 重要性, 特别风险, 适用框架) 由 A4 确定性组装,
+    不在这里; 校验后与骨架合成 AuditPlan (overall_strategy 与 sections 进 narrative)."""
+
+    overall_strategy: str  # 总体审计策略: 范围, 时间与方向 (ASA 300 第 7 段)
+    sections: dict[str, str]  # 段名 → 正文, 如 scope, significant_risks, materiality, timing
+    procedure_notes: list[ProcedureNote]  # 各程序的性质, 时间与范围 (ASA 300 第 9 段), 应覆盖计划的全部程序
+    timetable: list[Milestone]  # 时间表
+    eqr_recommendation: EqrRecommendation  # 是否需要项目质量复核的建议 (ASQM 1 第 34(f) 段)
+    expert_assessment: str  # 是否需要审计师的专家 (ASA 620) 的评估
+    standards_cited: list[str]  # 引用的准则片段 ID, 取提示词列出的
 
 
 class CriticIndependent(Model):

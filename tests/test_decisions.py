@@ -50,6 +50,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
+    PLAN_CONFIRMATION,
     TYPO_PROFILE,
     EngagementWrite,
     FakeEngagementStore,
@@ -214,6 +215,9 @@ async def test_submit_insufficient_info_stays_at_gate() -> None:
         (acc01_decision(GateVerdict.approve, target_id="ANALYTICS"), "VERSION_MISMATCH"),
         (acc01_decision(GateVerdict.reject, reason=None), "MISSING_FIELD"),
         (acc01_decision(GateVerdict.approve, disposition=OpinionType.unqualified), "FIELD_NOT_ALLOWED"),
+        # 需求 R203: PLN-15 的确认只由 PLN-15 的登记行 (R205) 允许, 其他闸门带它被拒
+        (acc01_decision(GateVerdict.approve, plan_confirmation=PLAN_CONFIRMATION), "FIELD_NOT_ALLOWED"),
+        (acc01_decision(GateVerdict.approve, gate=GateId.PLN_15), "NOT_AT_GATE"),  # 还没登记的闸门
     ],
 )
 @shared_loop

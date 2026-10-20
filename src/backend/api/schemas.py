@@ -41,6 +41,7 @@ from backend.contracts.models import (
     NeitherAction,
     OpinionType,
     Phase,
+    PlanConfirmation,
     PriorEstimateOutcome,
     PriorMisstatement,
     Procedure,
@@ -123,6 +124,7 @@ class GateDecisionIn(Model):
     edits: list[GateEdit] = []
     disposition: OpinionType | None = None
     annotations: list[Annotation] = []
+    plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203)
     reason: str | None = None
 
 

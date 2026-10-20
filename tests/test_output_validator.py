@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.agents import ingest, review
 from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
@@ -206,8 +207,9 @@ def test_every_referenced_output_model_is_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 10 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
-    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290)."""
+    """现有 11 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
+    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 先登记
+    占位, 由 R204 实现)."""
     assert set(OutputValidator.CHECKS) == {
         JudgmentDraft,
         ContractExtraction,
@@ -219,6 +221,7 @@ def test_dispatch_table_covers_existing_models() -> None:
         DocumentClassification,
         SheetRecognition,
         StatementsExtraction,
+        AuditPlanDraft,
     }
     assert OutputValidator.CHECKS[DocumentClassification] is structure_only
     assert OutputValidator.CHECKS[SheetRecognition] is structure_only

@@ -24,6 +24,7 @@ from backend.contracts.models import (
     Judgment,
     OpinionType,
     Phase,
+    PlanStatus,
     ProcedureRun,
     ProposedAction,
     Reliability,
@@ -57,6 +58,7 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     ScriptA6,
+    audit_plan,
     compliance_check,
     engagement_terms,
     governance_communication,
@@ -212,6 +214,7 @@ def test_agent_fields_match_section_6_table() -> None:
         "audit_objectives",
         "risk_register",
         "exceptions",
+        "audit_plans",  # 需求 R203 (PLN-15)
     }
     assert AGENT_FIELDS[AgentId.A5] == {
         "confirmations",
@@ -300,6 +303,39 @@ def test_ownership_graph_must_come_from_this_run() -> None:
                 state=state,
                 outputs=["ownership_graph", "exceptions", "documents"],
             )
+
+
+# ── R203: 总体审计计划 ──
+
+
+def test_a4_writes_audit_plans_of_this_run() -> None:
+    """R203 验收 6: A4 执行 PLN-15 第 2 次的片段 (下一修订 PLAN-2 v1 与旧修订置 superseded 的 PLAN-1 v2, 都记本次执行)
+    通过; 旧修订的新版本仍记起草它的第 1 次执行时被拒 (merge.check_own_run); A6 的片段带 audit_plans 被拒."""
+    first, second = finished(make_run("PLN-15")), make_run("PLN-15", run_no=2)
+    state = make_state(
+        procedure_pack=[*PACK, make_procedure("PLN-15", Phase.P1_Planning)],
+        procedure_runs=[first],
+        audit_plans=[audit_plan()],
+    )
+    retired = audit_plan(version=2, status=PlanStatus.superseded, run_id=second.id)
+    patch = {"audit_plans": [audit_plan(revision=2), retired], "procedure_runs": [finished(second)]}
+    check_patch(
+        patch, writer=AgentId.A4, procedure_id="PLN-15", run_id=second.id, state=state, outputs=declared("PLN-15")
+    )
+    stale = {**patch, "audit_plans": [audit_plan(revision=2), retired.model_copy(update={"run_id": first.id})]}
+    with pytest.raises(MergeRejected, match=f"audit_plans 中 PLAN-1 的 run_id {first.id} 不是本次执行 {second.id}"):
+        check_patch(
+            stale, writer=AgentId.A4, procedure_id="PLN-15", run_id=second.id, state=state, outputs=["audit_plans"]
+        )
+    with pytest.raises(MergeRejected, match="merge_rejected: A6 不能写字段 audit_plans"):
+        check_patch(
+            a6_patch(audit_plans=[audit_plan(run_id=RUN.id)]),
+            writer=AgentId.A6,
+            procedure_id="REV-03",
+            run_id=RUN.id,
+            state=make_state(),
+            outputs=[*declared("REV-03"), "audit_plans"],
+        )
 
 
 # ── R215: 签字前提的四类审计产出 ──
@@ -897,9 +933,9 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 21 条模板 (含功能 journals 的 GEN-05, related_parties 的 GEN-08 与 acceptance 的 ACC-08) 的 outputs
-    都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序
-    声明的共享字段都不是 singleton."""
+    """R85 验收 1-3: 22 条模板 (含功能 journals 的 GEN-05, related_parties 的 GEN-08, acceptance 的 ACC-08 与 planning
+    的 PLN-15) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式, 登记的都是
+    状态字段; 两条以上程序声明的共享字段都不是 singleton."""
     assert output_problems(LIBRARY) == []
     assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
         "ACC-01": [],
@@ -918,6 +954,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "PLN-01": ["materiality_candidates", "audit_objectives", "risk_register"],
         "PLN-03": [],
         "PLN-07": ["analytics", "exceptions"],
+        "PLN-15": ["audit_plans"],  # 需求 R203, 功能 planning
         "REV-02": ["judgments", "exceptions", "review_tasks"],
         "REV-03": ["judgments", "exceptions", "review_tasks"],
         "REV-08": ["exceptions"],

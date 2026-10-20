@@ -249,7 +249,7 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
       重放不带回它; 上传后分类为 confirmation 的副本不在 CSH-04, DOC-06 的在线片段里, 重放会带回;
     - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图, 声明书, 独立性声明, 约定条款): 固定 ID 的最新版本; 模型
       带 run_id (关系图, 声明书, 独立性声明, 约定条款) 时须属于本程序, 否则节点错误;
-    - by_procedure (合规检查): 各对象最新版本中 run_id 属于本程序的.
+    - by_procedure (合规检查, 审计计划): 各对象最新版本中 run_id 属于本程序的.
     本次执行的复核任务 (含 A1 代写的 failed 任务) 总按 run_id 取回.
     再补齐引用, 使片段自成一体: 片段中对象 (merge.EXCEPTION_REFERRERS: 判断, 评分卡, 分析结果, 合规检查, 约定条款)
     的 exception_ids 与任务的例外目标所指的例外, 取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id

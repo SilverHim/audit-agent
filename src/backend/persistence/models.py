@@ -260,6 +260,7 @@ OUTPUT_KINDS = {
         "MaterialityCandidates",
         "UncorrectedSchedule",
         "EngagementTerms",  # 需求 R198; kind 为字符串列, 不需迁移
+        "AuditPlan",  # 需求 R203; 同上不需迁移
     ],
     "ownership_graphs": ["OwnershipGraph"],  # 需求 R136, 迁移 0016
     # 签字前提的四类产出 (需求 R215, 迁移 0017)

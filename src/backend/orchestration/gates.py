@@ -53,7 +53,9 @@ from backend.orchestration.nodes import uncovered_objectives, update_procedure
 from backend.services.features import FEATURES, LEGACY_FEATURES, parse_features
 from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
-GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations")  # 只在某道闸门的某种决定下可填的字段
+# 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 由 PLN-15 的登记行 (R205) 允许; 那之前任何闸门
+# 的决定带它都报 FIELD_NOT_ALLOWED
+GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations", "plan_confirmation")
 REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
 FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant

@@ -97,6 +97,14 @@ class RunStatus(StrEnum):
     failed = "failed"  # 失败
 
 
+class PlanStatus(StrEnum):
+    """总体审计计划一个修订的状态 (需求 R203)."""
+
+    draft = "draft"  # 草稿, 待 PLN-15 闸门批准
+    approved = "approved"  # 已批准, 执行按它
+    superseded = "superseded"  # 已被下一修订取代 (PLN-15 驳回后重拟, PLN-19 修订重要性)
+
+
 class EvidenceType(StrEnum):
     """证据种类."""
 
@@ -253,11 +261,13 @@ class Decision(StrEnum):
 
 
 class GateId(StrEnum):
-    """闸门. 基线四道; ACC-08 属功能 acceptance, 登记表 (orchestration/gates.GATES) 的行由需求 R201 加."""
+    """闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行
+    分别由需求 R201, R205 加."""
 
     ACC_01 = "ACC-01"  # 是否承接
     ACC_08 = "ACC-08"  # 约定条款与委任 (需求 R198)
     PLN_01_03 = "PLN-01/03"  # 重要性与风险清单
+    PLN_15 = "PLN-15"  # 总体审计计划 (需求 R203)
     FIN_01 = "FIN-01"  # 错报与意见类型
     RPT_01 = "RPT-01"  # 报告批准与签字
 
@@ -841,6 +851,94 @@ class ScheduleRow(Model):
     procedure_ids: list[str]  # 该实例负责的程序
 
 
+class PlanItem(Model):
+    """总体审计计划中的一条程序: 该修订组装时程序包里的那一版 (旧修订不随之后的改动变)."""
+
+    procedure_id: str  # 程序编号
+    name: str  # 程序名称
+    template_commit: str  # 程序库 commit
+    objective_ids: list[str] = []  # 关联的审计目标; 固定集与只经依赖加入的程序为空
+    params: dict[str, Any] = {}  # 参数 (按风险等级取值后的)
+
+
+class ProcedureNote(Model):
+    """一条程序计划的性质, 时间与范围 (ASA 300 第 9(b) 段)."""
+
+    procedure_id: str  # 程序编号, 须在计划的 items 中
+    nature_timing_extent: str  # 性质, 时间与范围的说明
+
+
+class Milestone(Model):
+    """计划时间表的一项, 如外勤完成, 报告签署, 送达股东."""
+
+    milestone: str  # 事项
+    due: date  # 预定日期
+
+
+class EqrRecommendation(Model):
+    """是否需要项目质量复核的建议 (ASQM 1 第 34(f) 段); 审计师在 PLN-15 批准时另行确认 (PlanConfirmation)."""
+
+    required: bool  # 建议是否需要
+    basis: str  # 依据
+
+
+class AuditPlan(Versioned):
+    """总体审计计划 (A4 PLN-15 起草, PLN-15 闸门批准, 需求 R203; 规格书 12.2 AuditPlan). ID 为 PLAN-{revision}.
+    内容修订 (PLN-15 驳回后重拟, PLN-19 修订重要性) 出下一修订 PLAN-{n+1}, 旧修订出新版本置 superseded; 同一修订内
+    只有状态变化出新版本 (draft → approved → superseded). 当前计划为 status 不是 superseded 的修订中 revision 最大的.
+    计划骨架 (期间, 重要性, 特别风险目标, items) 由 A4 在 PLN-15 中确定性组装, 叙述类各项取 AuditPlanDraft."""
+
+    revision: int = Field(ge=1)  # 第几次修订, 从 1 起
+    status: PlanStatus = PlanStatus.draft  # 状态
+    # 写出这一版的那次执行: 起草新修订与把旧修订置 superseded 都记做这件事的执行 (合并时须为本次执行,
+    # merge.check_own_run); 批准由 A1 在 PLN-15 闸门写出, 沿用
+    run_id: str
+    period_start: date  # 审计期间起
+    period_end: date  # 审计期间止
+    # 适用的财务报告框架, 取约定书核对结果 TERMS 的 framework (同为 ReportingFramework); 没有 TERMS 或约定书没写明为空
+    applicable_framework: ReportingFramework | None = None
+    engagement_letter_document_id: str | None = None  # 约定书的文件 ID, 同取 TERMS; 没有为空
+    materiality_choice: "MaterialityChoice"  # PLN-01/03 闸门选定的基准与比例
+    materiality_cents: int  # 整体重要性, 单位分
+    performance_materiality_cents: int  # 执行重要性, 单位分
+    clearly_trivial_cents: int  # 明显微小门槛, 单位分
+    significant_risk_objective_ids: list[str] = []  # 风险等级为 significant 的审计目标
+    items: list[PlanItem]  # 计划的程序, 按程序编号排序
+    narrative: dict[str, str]  # 段名 → 正文: AuditPlanDraft 的 overall_strategy 与 sections
+    procedure_notes: list[ProcedureNote]  # 各程序的性质, 时间与范围
+    timetable: list[Milestone]  # 时间表
+    eqr_recommendation: EqrRecommendation  # 项目质量复核的建议
+    expert_assessment: str  # 是否需要审计师的专家 (ASA 620) 的评估
+    standards_cited: list[str]  # 计划引用的准则片段 ID
+    # 审计师在 PLN-15 批准时确认的三项 (PlanConfirmation) 与批准人, 批准时间: 草稿时都为空, 批准时都填 (模型校验);
+    # 置 superseded 时沿用取代前的
+    eqr_required: bool | None = None
+    eqr_basis: str | None = None
+    auditor_expert_not_required: bool | None = None
+    addresses_decision_id: str | None = None  # 本修订回应的 PLN-15 驳回决定; PLN-19 修订与第 1 修订为空
+    revision_reason: str | None = None  # 修订的理由 (驳回理由, 或 PLN-19 修订重要性的理由); 第 1 修订为空
+    approved_by: str | None = None  # 批准人的用户 ID
+    approved_at: datetime | None = None  # 批准时间
+
+    @model_validator(mode="after")
+    def approval_fields(self) -> Self:
+        """ID 为 PLAN-{revision}; 草稿时确认三项与批准人, 批准时间都为空, 已批准时都填, 已取代的沿用取代前的, 不查."""
+        if self.id != f"PLAN-{self.revision}":
+            raise ValueError(f"{self.id}: 计划的 ID 须为 PLAN-{self.revision} (第 {self.revision} 修订)")
+        values = (
+            self.eqr_required,
+            self.eqr_basis,
+            self.auditor_expert_not_required,
+            self.approved_by,
+            self.approved_at,
+        )
+        if self.status is PlanStatus.draft and any(v is not None for v in values):
+            raise ValueError(f"{self.id}: 草稿的批准确认与批准人须为空")
+        if self.status is PlanStatus.approved and any(v is None for v in values):
+            raise ValueError(f"{self.id}: 已批准的计划须有三项确认, 批准人与批准时间")
+        return self
+
+
 # ── 2.4 闸门材料 ───────────────────────────────────────────
 
 
@@ -1181,6 +1279,18 @@ class MaterialityChoice(Model):
     clearly_trivial_pct: float  # 明显微小门槛占整体重要性的比例
 
 
+AuditPlan.model_rebuild()  # AuditPlan (第 2.3 节) 引用了本节的 MaterialityChoice
+
+
+class PlanConfirmation(Model):
+    """审计师在 PLN-15 批准时的确认 (需求 R203), 写进所批准的计划: 是否需要项目质量复核及依据 (ASQM 1 第 34(f) 段),
+    以及确认不需要审计师的专家 (ASA 620)."""
+
+    eqr_required: bool  # 是否需要项目质量复核
+    eqr_basis: str  # 依据
+    auditor_expert_not_required: bool  # 是否确认不需要审计师的专家
+
+
 class Annotation(Model):
     """RPT-01 退回报告时对某一段的批注."""
 
@@ -1200,6 +1310,7 @@ class GateDecision(Versioned):
     edits: list[GateEdit] = []  # PLN-01/03 通过时对风险等级的修改
     disposition: OpinionType | None = None  # FIN-01 通过时必填, 只能是无保留或保留
     annotations: list[Annotation] = []  # RPT-01 驳回时必填
+    plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203; 闸门的字段登记由 R205 做)
     reason: str | None = None  # 理由, 通过以外必填; FIN-01 一律必填
     decided_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间

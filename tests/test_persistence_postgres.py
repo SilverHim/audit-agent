@@ -23,6 +23,7 @@ from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     AuditObjective,
+    AuditPlan,
     ClientProfile,
     ComplianceCheck,
     DocumentType,
@@ -31,6 +32,7 @@ from backend.contracts.models import (
     IndependenceDeclaration,
     LlmSettings,
     OwnershipGraph,
+    PlanStatus,
     ProfileSource,
     Reliability,
     ReportStatus,
@@ -64,6 +66,7 @@ from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import (
     NUMBAT_ACCOUNTS,
     NUMBAT_ROWS,
+    audit_plan,
     compliance_check,
     engagement_terms,
     governance_communication,
@@ -585,6 +588,28 @@ async def test_engagement_terms_round_trip_on_postgres(storage) -> None:
     back = await store.get(e.id, EngagementTerms, "TERMS")
     assert type(back) is EngagementTerms and back == terms and back.checks[0].status is TermsCheckStatus.passed
     assert await store.latest(e.id, EngagementTerms) == [terms]
+
+
+async def test_audit_plan_versions_on_postgres(storage) -> None:  # type: ignore[no-untyped-def]
+    """R203 验收 6: PLAN-1 v1 (draft), v2 (approved) 写进 gate_materials 表 (与评分卡等同表, kind 区分, 不需迁移);
+    按版本 get 读回与写入的相等, 仍是 AuditPlan, 状态仍是枚举, 时间表日期仍是 date; 最新为 v2; 同表的其他种类读不到它,
+    别的项目也读不到 (行级安全)."""
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    v1, v2 = audit_plan(), audit_plan(version=2, status=PlanStatus.approved)
+    await store.put(e.id, [v1], actor="A4")
+    await store.put(e.id, [v2], actor="A1")
+
+    assert m.OUTPUTS["AuditPlan"].name == "gate_materials"
+    assert await store.get(e.id, AuditPlan, "PLAN-1", 1) == v1
+    back = await store.get(e.id, AuditPlan, "PLAN-1", 2)
+    assert back == v2 and type(back) is AuditPlan and back.status is PlanStatus.approved
+    assert isinstance(back.timetable[0].due, date) and back.approved_at == v2.approved_at
+    assert await store.get(e.id, AuditPlan, "PLAN-1") == v2
+    assert await store.history(e.id, AuditPlan, "PLAN-1") == [v1, v2]
+    assert await store.latest(e.id, AuditPlan) == [v2]
+    assert await store.latest(e.id, AcceptanceScorecard) == []
+    assert await store.get("ENG-OTHER", AuditPlan, "PLAN-1") is None
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

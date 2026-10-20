@@ -2361,6 +2361,7 @@ export type GateDecision = {
      * Annotations
      */
     annotations?: Array<Annotation>;
+    plan_confirmation?: PlanConfirmation | null;
     /**
      * Reason
      */
@@ -2401,6 +2402,7 @@ export type GateDecisionIn = {
      * Annotations
      */
     annotations?: Array<Annotation>;
+    plan_confirmation?: PlanConfirmation | null;
     /**
      * Reason
      */
@@ -2435,9 +2437,10 @@ export type GateEdit = {
 /**
  * GateId
  *
- * 闸门. 基线四道; ACC-08 属功能 acceptance, 登记表 (orchestration/gates.GATES) 的行由需求 R201 加.
+ * 闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行
+ * 分别由需求 R201, R205 加.
  */
-export type GateId = 'ACC-01' | 'ACC-08' | 'PLN-01/03' | 'FIN-01' | 'RPT-01';
+export type GateId = 'ACC-01' | 'ACC-08' | 'PLN-01/03' | 'PLN-15' | 'FIN-01' | 'RPT-01';
 
 /**
  * GateVerdict
@@ -3331,6 +3334,27 @@ export type PeriodSource = {
  * 项目阶段.
  */
 export type Phase = 'P0_Acceptance' | 'P1_Planning' | 'P2_Executing' | 'P3_Completion' | 'P4_Reporting' | 'Archived' | 'Declined';
+
+/**
+ * PlanConfirmation
+ *
+ * 审计师在 PLN-15 批准时的确认 (需求 R203), 写进所批准的计划: 是否需要项目质量复核及依据 (ASQM 1 第 34(f) 段),
+ * 以及确认不需要审计师的专家 (ASA 620).
+ */
+export type PlanConfirmation = {
+    /**
+     * Eqr Required
+     */
+    eqr_required: boolean;
+    /**
+     * Eqr Basis
+     */
+    eqr_basis: string;
+    /**
+     * Auditor Expert Not Required
+     */
+    auditor_expert_not_required: boolean;
+};
 
 /**
  * PlanningMaterial
