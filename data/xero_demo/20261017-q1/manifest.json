@@ -677,6 +677,48 @@
       "xero_refs": []
     },
     {
+      "path": "llm/REV-02/SI-3b28bf11-ed2f-4cf4-8e9e-fcae730cc292.json",
+      "sha256": "7772c6d2e773da6d2047f966e53d021005b095854fdbc8d8df4f93582a30e821",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-02/SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45.json",
+      "sha256": "3d1914c766946948fbbdad17843e6942409eef4f2ce09d577c5452fa51e439e5",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-02/SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9.json",
+      "sha256": "99268ae83cd73286b9f50c0c8e52f72d3d8c63d7ef2e1a72321f33a57f359aac",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-02/SI-77b338ef-ecc0-4b95-a0d7-2617b0054611.json",
+      "sha256": "074011af40d80066718dffd73009242360719cf66f8a35872437d566890786f1",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-02/SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b.json",
+      "sha256": "9d62e46f614b874e0250ca42bbed31c9bffd20a131d9b1af2f48cca9d42fecd3",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-02/SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf.json",
+      "sha256": "01abf0e75c29fa628d3d24dbefef4a2e6649545bbdb13b05e37fac11446ff7ad",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/REV-03/CON-X01.json",
       "sha256": "231a9369c7db65f1fa9cd261d72ea4dc704a211a6d623724ea52d3e1995eb315",
       "synthetic": true,

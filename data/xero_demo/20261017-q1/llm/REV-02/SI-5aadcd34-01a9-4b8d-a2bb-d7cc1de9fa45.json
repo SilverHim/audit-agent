@@ -1,0 +1,114 @@
+{
+  "conclusion": "Invoice ORC1024 belongs to the period ending 30 September 2026: no contract is linked, and service completion record SR-ORC1024 shows the training delivered and confirmed complete on 19 August 2026, so control passed at that point in time, within the period and before the invoice was posted on 16 September 2026.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice ORC1024 for 55000 cents was posted on 16 September 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Service completion record SR-ORC1024 shows the training delivered and confirmed complete on 19 August 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1024",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "An obligation not satisfied over time is satisfied at the point in time at which the customer obtains control, indicated for example by customer acceptance (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "With no contract linked, the completion record sets the transfer: control passed on 19 August 2026, when the customer confirmed the training complete, which is within the period ending 30 September 2026, so the invoice is recorded in the correct period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1024",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A record showing that the training, or part of it, took place after 30 September 2026 would move the revenue to the next period.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

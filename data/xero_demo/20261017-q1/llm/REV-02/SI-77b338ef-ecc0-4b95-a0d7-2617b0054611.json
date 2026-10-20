@@ -1,0 +1,234 @@
+{
+  "conclusion": "Invoice ORC1026 belongs to the period ending 30 September 2026: the service completion record SR-ORC1026, the completion certificate, was signed on 17 September 2026, and clause 4.1 (CON-X01-T1) passes control of the Module on the Completion Date, so recognising the AUD 6,500.00 of revenue in September is correct. Rule finding X-REV-08-1-R03-1 only shows that the receipt matched to the invoice number after the period end, BT-090-0124 of AUD 3,850.00, is less than the invoice amount of AUD 7,150.00; this is a collection and reconciliation matter that does not change the transfer date and is not a cutoff misstatement.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice ORC1026 for 715000 cents was posted on 17 September 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The posting XJ-580 credits Sales (account 200, revenue) with 650000 cents and GST (account 820) with 65000 cents, and debits Accounts Receivable (account 610) with 715000 cents.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-580-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-580-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-580-3",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Service completion record SR-ORC1026 was signed by the customer's Project Sponsor on 17 September 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1026",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 4.1 (CON-X01-T1): the Services are complete when the Module is deployed to the customer's environment and the Project Sponsor signs the Completion Certificate (the Completion Date); title to and control of the Module pass to the customer on the Completion Date.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-7795e9312e9f",
+          "locator": "CON-X01-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Rule finding X-REV-08-1-R03-1: the receipt matched to the invoice number after the period, BT-090-0124, is 385000 cents against an invoice of 715000 cents.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0124",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "An obligation not satisfied over time is satisfied at the point in time at which the customer obtains control, indicated for example by customer acceptance (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Control of the Module passed at a point in time on 17 September 2026, the Completion Date shown by the signed completion record, which is within the period ending 30 September 2026.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        3,
+        5,
+        6
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The invoice and its revenue line were posted on 17 September 2026, in the period in which control passed, so the revenue of 650000 cents is recorded in the correct period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        7
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The R03-1 shortfall concerns how much of the invoice was received after the period and how the receipts were matched; it does not move the transfer date, so the invoice is correctly cut off and the finding is not a cutoff misstatement.",
+      "evidence": [],
+      "from_steps": [
+        4,
+        8
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-580-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-580-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-580-3",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1026",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "CON-X01-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0124",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A completion certificate dated after 30 September 2026, or evidence that the Module was not deployed by 17 September 2026, would move the transfer date after the period end.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}
