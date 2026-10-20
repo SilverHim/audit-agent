@@ -786,6 +786,62 @@ async def test_upload_against_request_persists_type_before_job(monkeypatch: pyte
     assert data.data_requests[CONTRACT_REQUEST].status == "received"
 
 
+async def failing_check_inputs(*args: Any, **kwargs: Any) -> CheckInputs:
+    raise RuntimeError("汇总失败")
+
+
+async def test_contract_on_hand_after_failed_checkup_is_rechecked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R344 验收 1: 程序要合同 (REQ-contract 待补交), 对着请求上传的合同抽取转人工 (needs_manual, extract), 文件
+    作业之后的那次体检失败. 数据版本没变 (没抽出合同), 但请求要的类型已有: run_if_stale 判为过期并重算, 请求转
+    received (request_received 留痕一条); 再调不重跑."""
+    data = FakeDataStore(ready=False)
+    runner, service, financial = service_for(data, contract_wanted=True)
+    checkup = DataCheckup(service.deps)
+    await checkup.run(EID)
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"
+    inputs = data.check_inputs
+    monkeypatch.setattr(data, "check_inputs", failing_check_inputs)
+    await service.upload_documents(EID, [("contract.png", b"contract-scan")], actor="U-1", request_id=CONTRACT_REQUEST)
+    await asyncio.gather(*list(service.tasks))
+    monkeypatch.setattr(data, "check_inputs", inputs)
+    [document] = financial.document_refs
+    assert (document.type, document.status, document.failed_step) == (DocumentType.contract, "needs_manual", "extract")
+    last = data.last_run
+    assert last is not None and last.data_version == (await data.readiness(EID)).data_version
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"
+
+    run = await checkup.run_if_stale(EID)
+
+    assert run is not None and data.data_requests[CONTRACT_REQUEST].status == "received"
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    received = [e for e in trail.entries if e.payload.get("action") == "request_received"]
+    assert [e.payload["request_id"] for e in received] == [CONTRACT_REQUEST]
+    assert await checkup.run_if_stale(EID) is None
+
+
+async def test_open_document_request_without_the_file_is_not_rechecked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R344 验收 2: 合同请求待补交而合同还没有时不算过期. 体检之后什么都没变, 或只上传了分不了类的文件 (转人工,
+    类型为 other) 而那次体检失败, run_if_stale 都不重跑 (不写体检留痕)."""
+    data = FakeDataStore(ready=False)
+    _, service, financial = service_for(data, contract_wanted=True)
+    checkup = DataCheckup(service.deps)
+    await checkup.run(EID)
+    assert await checkup.run_if_stale(EID) is None
+
+    monkeypatch.setattr(data, "check_inputs", failing_check_inputs)
+    await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1")
+    await asyncio.gather(*list(service.tasks))
+    [document] = financial.document_refs
+    assert (document.type, document.status) == (DocumentType.other, "needs_manual")
+    trail = service.deps.trail
+    assert isinstance(trail, FakeTrail)
+    checks = [e for e in trail.entries if e.payload.get("action") == "check"]
+    assert await checkup.run_if_stale(EID) is None
+    assert [e for e in trail.entries if e.payload.get("action") == "check"] == checks
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"
+
+
 async def test_reupload_against_request_survives_shutdown_before_job() -> None:
     """已转人工的文件对着请求重传后, 作业开始前关停: 类型已落库, 启动补做后请求转 received (审核 FD-R15 第 2 轮探针)."""
     data = FakeDataStore(ready=False)
