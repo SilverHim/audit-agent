@@ -1,13 +1,13 @@
 """需求 R159: 错报更新随决定生效与手工结果.
 
 Xero 演示上把主图放在 P2 结清处 (功能 misstatement 打开): 检查点以 fan_in 身份写入 P2 已结清的状态
-(test_workpaper.fin03_state: 两条 identified 而未分类的错报与其来源判断; 错报与 FIN-03 也写进 Store), 主图进
+(misstatement_fakes.fin03_state: 两条 identified 而未分类的错报与其来源判断; 错报与 FIN-03 也写进 Store), 主图进
 misstatement_triage (R160), 真实 A8 读 FIN-03 的 Xero fixture 正本 (或给定的脚本大模型). FIN-03 为 L2, 两条判断各建
 normal 任务, 节点内等人; 审计师经 DecisionSubmit 决定, 同一事务按判断上或人给的载荷写出错报新版本. 主图另在
 communicate 之前停下: 本文件只看分类, 沟通及之后的去向见 test_p3_flow.
 
-验证载荷 (FIN-09, R164 起) 的效果用 review_effects 直接测; 经 DecisionSubmit 的不合格验证载荷用 FIN-03 的载荷类别改为
-verification 的程序库副本.
+验证载荷 (FIN-09, R164 起) 的效果用 review_effects 直接测; 经 DecisionSubmit 的不合格验证载荷另起一张主图, 停在
+verify_correction 内等 FIN-09 的复核.
 """
 
 import re
@@ -67,20 +67,23 @@ from tests.fakes import (
     start_at_fan_in,
     submit_and_wait,
 )
-from tests.test_decisions import Started, assert_rejected
-from tests.test_review_decisions import record
-from tests.test_workpaper import (
+from tests.misstatement_fakes import (
+    CSH02,
     FACTUAL,
     FIN03,
-    FRAUD_REASON,
+    FIN09,
+    XJ499,
     classified,
     fin03_deps,
     fin03_state,
-    fixture_raw,
-    fraud_llm,
+    fin09_deps,
     llm_calls,
-    objective,
+    notice,
+    round1_communicated,
 )
+from tests.test_decisions import Started, assert_rejected
+from tests.test_review_decisions import record
+from tests.test_workpaper import FRAUD_REASON, fixture_raw, fraud_llm, objective
 from tests.xero_fakes import xero_engagement
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-03 的 Xero fixture
@@ -88,7 +91,6 @@ pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-03 的 Xero fixt
 EID = ENGAGEMENT.id  # 同 xero_engagement().id; 收集阶段不读快照
 CONFIG = GraphRunner.config(EID)
 FEATURES = BASELINE | {MISSTATEMENT}
-XJ499, CSH02 = "M-D-XJ499", "M-D-CSH02-091"
 XJ499_TASK, CSH02_TASK = (f"T-J-FIN-03-1-{m}-v1" for m in (XJ499, CSH02))
 FAILED_TASK = f"T-RUN-FIN-03-1-{XJ499}-v1"  # 分类模型对 XJ499 失败时的任务
 # 复核人对 CSH02 改判的分类 (验收 2): 年假之外, 应计利息也属估计
@@ -114,10 +116,10 @@ def failing_xj499() -> ScriptedLLM:
     return ScriptedLLM({"XJ-499": ["not json"] * 3, "BA-091": [fixture_raw("BA-091")]})
 
 
-async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None, **changes: Any) -> Started:
-    """见模块 docstring: 停在分诊节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES;
+async def at_fin03(llm: Any = None, **changes: Any) -> Started:
+    """见模块 docstring: 停在分诊节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本;
     changes 覆盖 fin03_state 的键 (如审计目标)."""
-    deps = fin03_deps(FakeTrail(), llm, features=FEATURES, library=library)
+    deps = fin03_deps(FakeTrail(), llm, features=FEATURES)
     state = fin03_state(**changes)
     procedure = make_ctx(deps, FIN03, engagement=xero_engagement()).procedure
     runner = await start_at_fan_in(deps, state, [procedure], ["communicate"], state["misstatements"])
@@ -372,24 +374,27 @@ async def test_confirmed_fraud_sample_flagged_at_fin01() -> None:
     ]
 
 
-async def test_inconsistent_verification_update_rejected(tmp_path: Path) -> None:
-    """人给的验证载荷按它写出的新版本不合格 (已更正额加剩余额不等于错报金额) → INVALID_VALUE, 不写. FIN-09 尚未落地,
-    用载荷类别改为 verification 的 FIN-03 (程序库副本) 代它."""
-    root = tmp_path / "knowledge"
-    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
-    path = root / "procedures" / f"{FIN03}.yaml"
-    yaml = path.read_text(encoding="utf-8")
-    path.write_text(yaml.replace("misstatement_update_kind: classification", "misstatement_update_kind: verification"))
-    s = await at_fin03(library=ProcedureLibrary(root, FEATURES))
+async def test_inconsistent_verification_update_rejected() -> None:
+    """人给的验证载荷 (推翻 FIN-09 对 CSH02 的判断) 按它写出的新版本不合格 (已更正额加剩余额不等于错报金额) →
+    INVALID_VALUE, 不写. 主图停在 await_correction 等更正通知 (第 1 轮两条 v3 communicated, 同 test_correction_notice),
+    通知 D-CN1 生效后 verify_correction 执行 FIN-09 (V01 为 AJE-X01, X05 的行), 节点内等复核."""
+    deps = fin09_deps(FakeTrail(), features=FEATURES)
+    pack = [make_ctx(deps, pid, engagement=xero_engagement()).procedure for pid in (FIN03, "FIN-08", FIN09)]
+    misstatements = round1_communicated()
+    versions = [m.model_copy(update={"version": v}) for m in misstatements for v in (1, 2, 3)]
+    runner = await start_at_fan_in(deps, fin03_state(misstatements=misstatements), pack, ["p3_reassess"], versions)
+    s = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
+    await submit_and_wait(s, notice())
     update = MisstatementUpdate(
         misstatement_id=CSH02,
-        base_version=1,
+        base_version=4,
         kind="verification",
         status="corrected",
         corrected_cents=100,
         residual_cents=0,
     )
-    override = record(CSH02_TASK, Decision.override, id="D-O", override_conclusion="已更正", misstatement_update=update)
+    task = f"T-J-FIN-09-1-{CSH02}-v1"
+    override = record(task, Decision.override, id="D-O", override_conclusion="已更正", misstatement_update=update)
     await assert_rejected(s, override, "INVALID_VALUE", "已更正额加剩余额须等于错报金额")
 
 

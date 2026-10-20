@@ -1,6 +1,6 @@
 """需求 R161: FIN-08 错报沟通, 人工任务与管理层回复登记 (人工程序, 需求 R92, R93).
 
-Xero 演示上把主图放在 P2 结清处: 检查点以 fan_in 身份写入 test_workpaper.fin03_state 的两条错报的已分类版本 (v2,
+Xero 演示上把主图放在 P2 结清处: 检查点以 fan_in 身份写入 misstatement_fakes.fin03_state 的两条错报的已分类版本 (v2,
 同 R159 确认后) 或给定的错报, 程序包为 FIN-03 与 FIN-08. 分诊节点执行 FIN-03 (没有未分类的错报, 空执行), 之后进
 communicate: A10 派发 FIN-08, 材料由 A8 的 prepare 生成, 节点内等审计师提交 manual_result. 主图缺省在
 await_correction 与 verify_correction 之前停下 (本文件只看沟通; 等待更正见 test_correction_notice).
@@ -18,15 +18,12 @@ from backend.agents.workpaper import CORRECTION_REQUEST, after_response, to_comm
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
-    Assertion,
     Decision,
-    Direction,
     Judgment,
     ManagementResponse,
     ManualResult,
     Misstatement,
     MisstatementStatus,
-    MisstatementType,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
@@ -53,11 +50,20 @@ from tests.fakes import (
     submit_and_wait,
     wait_idle,
 )
+from tests.misstatement_fakes import (
+    CSH02,
+    ROUND2,
+    XJ499,
+    communicated_fields,
+    fin03_deps,
+    fin03_state,
+    round1_communicated,
+    round1_misstatements,
+)
 from tests.test_decisions import Started, assert_rejected
 from tests.test_rerun import CrashAfterCommit
 from tests.test_review_decisions import record
-from tests.test_workpaper import FACTUAL, classified, fin03_deps, fin03_state
-from tests.xero_fakes import XERO_ROUND2, registration, round_file, xero_engagement
+from tests.xero_fakes import registration, round_file, xero_engagement
 
 pytestmark = pytest.mark.external  # Xero 快照与补造
 
@@ -65,7 +71,6 @@ EID = ENGAGEMENT.id  # 同 xero_engagement().id; 收集阶段不读快照
 CONFIG = GraphRunner.config(EID)
 FEATURES = BASELINE | {MISSTATEMENT}
 FIN08 = "FIN-08"
-XJ499, CSH02 = "M-D-XJ499", "M-D-CSH02-091"
 STOPS = ("await_correction", "verify_correction")  # 等待更正 (R162) 之前停下
 DECIDED_1 = datetime(2026, 10, 20, tzinfo=UTC)  # 第 1 轮登记的决定时刻 (悉尼 10-20 11:00)
 DECIDED_2 = datetime(2026, 10, 22, tzinfo=UTC)  # 第 2 轮 (悉尼 10-22 11:00)
@@ -77,11 +82,6 @@ def registered(
     """对 FIN-08 的 manual 任务提交登记 oid (manual_result.details.responses)."""
     result = ManualResult(conclusion="已与管理层沟通并登记回复", performed_on=performed_on, details={"responses": rows})
     return record(task_id, Decision.manual_result, id=oid, manual_result=result, decided_at=decided_at)
-
-
-def round1_misstatements() -> list[Misstatement]:
-    """第 1 轮前: 两条错报已分类 (v2, 同 R159 确认后), identified."""
-    return [classified(m, **FACTUAL) for m in fin03_state()["misstatements"]]
 
 
 async def at_communicate(
@@ -258,48 +258,6 @@ async def test_refusal_recorded_as_uncorrected(refused: set[str], after: str) ->
         assert (written.version, written.status, written.uncorrected_basis) == (3, *expected)
         assert (written.management_response, written.needs_recommunication) == (data["response"], False)
     assert (await s.runner.app.aget_state(CONFIG)).next == (after,)
-
-
-def round2_misstatement(code: str, suffix: str, account: str, amount_cents: int) -> Misstatement:
-    """第 2 轮的错报 (FIN-15 第 1 次对科目 code 的判断认定, Xero演示数据集设计第 2.8 节), 已分类 (v2)."""
-    m = Misstatement(
-        id=f"M-D-{suffix}",
-        judgment_id=f"J-FIN-15-1-{code}",
-        exception_id=None,
-        review_record_id=f"D-{suffix}",
-        type=MisstatementType.factual,
-        account=account,
-        assertion=Assertion.Completeness,
-        amount_cents=amount_cents,
-        direction=Direction.understated,
-        account_code=code,
-    )
-    return classified(m, f"J-FIN-03-2-{m.id}", **FACTUAL)
-
-
-ROUND2 = [round2_misstatement(*row) for row in XERO_ROUND2]
-
-
-def communicated_fields(n: int) -> dict[str, Any]:
-    """第 n 轮登记 (都同意) 写进错报的状态与沟通, 回复四项."""
-    data = round_file(n)
-    return {
-        "status": MisstatementStatus.communicated,
-        "communicated_at": at(data["communicated_at"]),
-        "communicated_to": data["recipient"],
-        "responded_at": at(data["responded_at"]),
-        "management_response": data["response"],
-    }
-
-
-def round1_communicated() -> list[Misstatement]:
-    """第 1 轮登记之后的两条 (v3 communicated, 等更正); 不再列进沟通材料."""
-    return [m.model_copy(update={"version": 3, **communicated_fields(1)}) for m in round1_misstatements()]
-
-
-def round2_communicated() -> list[Misstatement]:
-    """第 2 轮登记之后的三条 (v3 communicated, 等更正)."""
-    return [m.model_copy(update={"version": 3, **communicated_fields(2)}) for m in ROUND2]
 
 
 async def test_round2_lists_only_new_misstatements() -> None:

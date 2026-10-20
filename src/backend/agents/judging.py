@@ -1,4 +1,4 @@
-"""判断公共流程: A6 的判断程序与 A8 的 FIN-03 (需求 R158) 共用 (接口文档第 6 节 A6 判断公共流程).
+"""判断公共流程: A6 的判断程序与 A8 的 FIN-03, FIN-09 (需求 R158, R165) 共用 (接口文档第 6 节 A6 判断公共流程).
 
 每个判断对象依次经过 judge → A7 复核 (critic) → 判断级降级 (downgrade) → classify → make_task.
 判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 判断级降级在功能 autonomy 打开时生效
@@ -137,7 +137,8 @@ async def downgrade(
 
 def judging_steps(deps: AgentDeps) -> JudgingSteps:
     """判断公共流程按功能选的部分: 功能 autonomy 打开时降级为 downgrade 且关键证据缺失交人, 关闭时为 DEFAULT_STEPS
-    (原样返回, 不看关键证据). A6 各判断程序与 A8 的 FIN-03 都由它取; classify 是否看关键证据见 checks_key_evidence."""
+    (原样返回, 不看关键证据). A6 各判断程序与 A8 的 FIN-03, FIN-09 都由它取; classify 是否看关键证据见
+    checks_key_evidence."""
     if AUTONOMY not in deps.features:
         return DEFAULT_STEPS
     return JudgingSteps(downgrade=functools.partial(downgrade, deps))
@@ -208,7 +209,7 @@ async def judge_all(
     annotate: 判断引擎之后, A7 之前给成功的判断补上程序自己的字段 (纯函数, 收判断引擎的结果, 返回补了字段的判断;
     判断失败的不调), 之后的复核与降级都看得到. 只补字段: ID, 版本, 级别 (autonomy_level, downgrade_reasons) 与
     critic 字段不能改 (调用后断言, 见 annotated). FIN-03 用它写上分类载荷 (workpaper.with_update), 降级才能按所指
-    错报的金额与舞弊迹象判 (需求 R170). 缺省不改.
+    错报的金额与舞弊迹象判 (需求 R170); FIN-09 写上验证载荷 (workpaper.with_verification). 缺省不改.
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
     fixture_key 取对象的 (缺省为对象 ID); 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile;
@@ -256,8 +257,8 @@ def judgments_patch(
 
     - normal, dispute: 判断待复核 (dispute 为独立复核不一致, 由审计师仲裁), 以判断 v1 为目标建任务.
     - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions); 判断带错报更新载荷
-      (FIN-03 的分类, 需求 R159) 时按载荷写出所指错报的新版本 (misstatement_updates, 错报取状态中的, 同复核决定确认时),
-      片段另有 misstatements (只在有时带, A6 的判断没有载荷).
+      (FIN-03 的分类, FIN-09 的验证, 需求 R159, R165) 时按载荷写出所指错报的新版本 (misstatement_updates, 错报取
+      状态中的, 同复核决定确认时), 片段另有 misstatements (只在有时带, A6 的判断没有载荷).
     - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
     - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
     执行记录置成功终态: 个别对象失败不算整次失败; outcomes 为取对象时规则引擎没有执行的规则 (需求 R130), 记进终态.

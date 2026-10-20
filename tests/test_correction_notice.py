@@ -6,7 +6,6 @@ M-D-CSH02-091 已是第 1 轮登记之后的 v3 communicated; 分诊与沟通都
 test_correction_notice_db). 主图在 verify_correction 之前停下; 部分通知的用例从停点再继续一次, 回到等待更正.
 """
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -39,38 +38,15 @@ from tests.fakes import (
     submit_and_wait,
     wait_idle,
 )
+from tests.misstatement_fakes import CSH02, POSTED_AT, SUPERSEDED, XJ499, fin03_state, notice, round1_communicated
 from tests.test_decisions import Started, assert_no_effect, assert_rejected, shared_loop, started
-from tests.test_misstatement_communication import (
-    CONFIG,
-    CSH02,
-    EID,
-    XJ499,
-    at_communicate,
-    fin03_state,
-    round1,
-    round1_communicated,
-)
+from tests.test_misstatement_communication import CONFIG, EID, at_communicate, round1
 from tests.test_review_decisions import record
-from tests.test_workpaper import SUPERSEDED
 
 pytestmark = pytest.mark.external  # Xero 快照与补造
 
 DATASET = "xero/20261017-q1"
-POSTED_AT = datetime(2026, 10, 20, 3, 30, tzinfo=UTC)  # AJE-X01, X05 录入 (03:00Z) 之后
 STOP_REASON = "Management did not post the adjustment before the report deadline."
-
-
-def notice(oid: str = "D-CN1", **fields: Any) -> CorrectionNotice:
-    """更正通知: 缺省为第 1 轮两条都已更正 (AJE-X01, AJE-X05), 由 U-1 提交; fields 覆盖任意字段."""
-    base: dict[str, Any] = {
-        "id": oid,
-        "kind": "adjustments_posted",
-        "misstatement_ids": [XJ499, CSH02],
-        "adjustment_entry_nos": ["AJE-X01", "AJE-X05"],
-        "decided_by": "U-1",
-        "decided_at": POSTED_AT,
-    }
-    return CorrectionNotice.model_validate(base | fields)
 
 
 def stop(oid: str = "D-STOP", **fields: Any) -> CorrectionNotice:

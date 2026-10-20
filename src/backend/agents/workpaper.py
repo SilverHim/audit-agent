@@ -274,8 +274,8 @@ def mismatch_exception(
     corrected: int,
     n: int,
 ) -> AuditException:
-    """分录与错报对不上的 V02 例外 X-FIN-09-{run_no}-V02-{n} (n 按判断对象的顺序编号): severity medium, 涉及匹配行
-    (没有时为来源对象), 金额为错报金额, 证据为匹配行的指针."""
+    """分录与错报对不上的 V02 例外 X-FIN-09-{run_no}-V02-{n} (n 在对不上的错报中按判断对象的顺序从 1 编号):
+    severity medium, 涉及匹配行 (没有时为来源对象), 金额为错报金额, 证据为匹配行的指针."""
     line_ids = [r["id"] for r in lines]
     return AuditException(
         id=f"X-{FIN09}-{ctx.run.run_no}-{V02}-{n}",

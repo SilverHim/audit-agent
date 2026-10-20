@@ -59,6 +59,7 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
+from tests.misstatement_fakes import fin15_judgment
 from tests.test_decisions import Started
 from tests.test_fin_gate import fin_decision
 from tests.test_review_decisions import record
@@ -145,23 +146,8 @@ def proposes_misstatement(deps: AgentDeps, ctx: RunContext) -> StatePatch:
     run = finished(ctx.run)
     if run.run_no > 1:
         return {"procedure_runs": [run]}
-    judgment = Judgment(
-        id="J-FIN-15-1-826",
-        procedure_id="FIN-15",
-        run_id=run.id,
-        subject_id="826",
-        conclusion="期末应计工资少计",
-        confidence=0.8,
-        confidence_parts={},
-        reasoning_chain=[],
-        evidence=[],
-        counter_argument="",
-        proposed_action=ProposedAction.misstatement,
-        misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"account": "Wages payable", "amount_cents": 426120}),
-        autonomy_level=AutonomyLevel.L2,
-        performed_by=ENGAGEMENT.owner_id,
-        created_at=NOW,
-    )
+    draft = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account": "Wages payable", "amount_cents": 426120})
+    judgment = fin15_judgment("826", "期末应计工资少计", draft)
     task = deps.queue.make_task(TaskKind.normal, judgment, "FIN-15", run.id, NOW)
     return {"procedure_runs": [run], "judgments": [judgment], "review_tasks": [task]}
 

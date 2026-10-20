@@ -257,7 +257,8 @@ def xero_v01_rows(
     entry_nos: Sequence[str] | None = None, loader: XeroDatasetLoader | None = None
 ) -> list[dict[str, Any]]:
     """FIN-09 V01 的行 (需求 R165): 补造的更正分录 (xero_adjustments, entry_nos 给了时只取这些凭证) 接科目表的名称,
-    类型与标准分类, 列同 FIN-09.yaml 的 SQL, 按凭证号与行 ID; 同载入之后连库跑 V01 (test_rules_fin09 断言 SQL)."""
+    类型与标准分类, 列同 FIN-09.yaml 的 SQL, 按凭证号与行 ID. 载入这些分录 (entry_nos 为空时为全部) 之后连库跑 V01
+    得到的行与它逐行相等 (test_rules_fin09 两轮各断言一次)."""
     accounts = {a.code: a for a in xero_tables(loader)["accounts"]}
     rows = []
     for line in sorted(xero_adjustments(entry_nos, loader), key=lambda r: (r.entry_no, r.id)):

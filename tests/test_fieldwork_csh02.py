@@ -546,7 +546,7 @@ async def test_failure_marks_fresh_exception_on_its_first_version(
 
 
 async def test_auto_close_attributes_fresh_exception_on_its_first_version() -> None:
-    """需求 R322 (judgments_patch 的 fresh 同样用于自动关闭): 模板去掉 always_review, BA-01 判断 L3 accept 置信度 0.9
+    """需求 R322 (judgments_patch 的 created 同样用于自动关闭): 模板去掉 always_review, BA-01 判断 L3 accept 置信度 0.9
     时自动关闭, 它解释的本次 D01 attributed 写在 v1 上 (attributed_by 为该判断), 不建任务."""
     outcomes = {"BA-01": passed(autonomy_level=AutonomyLevel.L3)}
     agent, ctx, _ = setup(outcomes=outcomes, exceptions=[])

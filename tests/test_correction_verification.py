@@ -1,14 +1,13 @@
 """需求 R165: A8 执行 FIN-09 更正验证.
 
 Xero 演示上直接调 A8 (不经主图; verify_correction 节点由 R160 接入, 两轮闭环的图测试由 R167 加): 状态为
-test_workpaper.fin03_state 换成更正通知之后 v4 verifying 的错报 (第 1 轮两条, 通知 D-CN1; 第 2 轮三条, 通知 D-CN2,
-另有其来源判断 J-FIN-15-1-{科目}); 真实判断引擎, 主模型缺省读 FIN-09 的 Xero fixture 正本 (R164), 对不上与部分更正的
-用例用脚本输出. 规则引擎的 V01 为补造更正分录接科目表的行 (xero_fakes.xero_v01_rows), 假财务存储另记这些分录 (推理链
-指向它们的指针才解析得了).
+misstatement_fakes.fin03_state 换成更正通知之后 v4 verifying 的错报 (第 1 轮两条, 通知 D-CN1; 第 2 轮三条, 通知
+D-CN2, 另有其来源判断 J-FIN-15-1-{科目}, 即 misstatement_fakes.round2_sources); 真实判断引擎, 主模型缺省读 FIN-09 的
+Xero fixture 正本 (R164), 对不上与部分更正的用例用脚本输出. 规则引擎的 V01 为补造更正分录接科目表的行
+(misstatement_fakes.fin09_deps, xero_fakes.xero_v01_rows), 假财务存储另记这些分录 (推理链指向它们的指针才解析得了).
 """
 
 import json
-from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -18,32 +17,43 @@ from backend.agents.base import AgentDeps, RunContext
 from backend.agents.workpaper import WorkpaperAgent, corrected_cents, matched_lines, to_verify, verification_update
 from backend.contracts.models import (
     AgentId,
-    AutonomyLevel,
     Decision,
     Direction,
+    EvidenceType,
     ExceptionDisposition,
     Misstatement,
     MisstatementUpdate,
+    Reliability,
     ReviewStatus,
     RunStatus,
     TaskKind,
 )
-from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import after_notice
-from tests.fakes import FakeRuleEngine, FakeTrail, ScriptedLLM, finished, make_run
+from tests.fakes import FakeTrail, ScriptedLLM, finished, make_run
 from tests.fixture_sets import XERO
-from tests.test_correction_notice import notice
-from tests.test_misstatement_communication import CSH02, XJ499, round1_communicated, round2_communicated
-from tests.test_workpaper import SUPERSEDED, fin03_context, fin03_deps, fin03_state, llm_calls
+from tests.misstatement_fakes import (
+    CSH02,
+    FIN09,
+    FIRST,
+    SECOND,
+    SUPERSEDED,
+    XJ499,
+    fin03_context,
+    fin03_state,
+    fin09_deps,
+    llm_calls,
+    notice,
+    round1_communicated,
+    round2_communicated,
+    round2_sources,
+)
 from tests.test_xero_fixtures import RecordingJudgments
-from tests.xero_fakes import fixture_judgment, with_adjustments, xero_v01_rows
+from tests.xero_fakes import xero_v01_rows
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-09 的 Xero fixture
 
-FIN09 = "FIN-09"
-FIRST, SECOND = ["AJE-X01", "AJE-X05"], ["AJE-X02", "AJE-X03", "AJE-X04"]  # 两轮更正通知载入的分录
 V02 = "X-FIN-09-1-V02-1"
 
 
@@ -75,37 +85,12 @@ def round2_state() -> EngagementState:
     已执行过一次."""
     cn2 = notice("D-CN2", misstatement_ids=[], adjustment_entry_nos=SECOND)
     misstatements = [after_notice(m, cn2) for m in round2_communicated()]
-    base = fixture_judgment("GEN-02", "XJ-499", AutonomyLevel.L2)
-    sources = [
-        base.model_copy(
-            update={
-                "id": m.judgment_id,
-                "procedure_id": "FIN-15",
-                "run_id": "RUN-FIN-15-1",
-                "subject_id": m.account_code,
-            }
-        )
-        for m in misstatements
-    ]
     state = fin03_state()
     return state | {  # type: ignore[return-value]
-        "judgments": [*state["judgments"], *sources],
+        "judgments": [*state["judgments"], *round2_sources()],
         "misstatements": misstatements,
         "procedure_runs": [finished(make_run(FIN09))],
     }
-
-
-def fin09_deps(
-    trail: FakeTrail, llm: Any = None, rows: Sequence[dict[str, Any]] | None = None, entries: Sequence[str] = FIRST
-) -> AgentDeps:
-    """Xero 假实现 (fin03_deps): 财务存储另记 entries 的更正分录; V01 为这些分录的行 (xero_v01_rows), rows 给了时换成
-    它."""
-    v01 = list(rows) if rows is not None else xero_v01_rows(entries)
-    deps = fin03_deps(
-        trail, llm, rules=FakeRuleEngine({FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": v01})})
-    )
-    with_adjustments(deps.financial_store, entries)  # type: ignore[arg-type]
-    return deps
 
 
 async def run_fin09(deps: AgentDeps, state: EngagementState) -> tuple[StatePatch, RunContext]:
@@ -271,10 +256,11 @@ async def test_mismatch_raises_v02_and_recommunicates(
         patch, writer=AgentId.A8, procedure_id=FIN09, run_id=ctx.run.id, state=ctx.state, outputs=ctx.template.outputs
     )
     [exception] = patch["exceptions"]
-    assert (exception.id, exception.version, exception.rule_id, exception.disposition) == (
+    assert (exception.id, exception.version, exception.rule_id, exception.severity, exception.disposition) == (
         V02,
         1,
         "V02",
+        "medium",
         ExceptionDisposition.open,
     )
     assert (exception.source_ids, exception.amount_cents) == (source_ids, amount)
@@ -285,7 +271,10 @@ async def test_mismatch_raises_v02_and_recommunicates(
         "corrected_cents": corrected,
         "matched_line_ids": matched,
     }
-    assert [p.source_id for p in exception.evidence] == matched
+    assert [(p.type, p.source_type, p.source_id, p.locator, p.reliability) for p in exception.evidence] == [
+        (EvidenceType.voucher, "journal_entry", lid, "debit_cents, credit_cents", Reliability.internal_original)
+        for lid in matched
+    ]
     [judgment] = [j for j in patch["judgments"] if j.subject_id == XJ499]
     assert (judgment.exception_ids, judgment.misstatement_update) == ([V02], RECOMMUNICATE)
     assert update_of(patch, CSH02) == verified(CSH02, 4, "AJE-X05", 4853)
@@ -336,21 +325,27 @@ async def test_source_judgment_must_be_in_state() -> None:
         await WorkpaperAgent(deps).execute(fin03_context(deps, state, FIN09))
 
 
-async def test_v02_numbered_by_subject() -> None:
-    """两条都对不上 (来源对象都改了): V02 按判断对象的顺序编号, 各作自己判断的规则例外."""
-    xj499, csh02 = round1_verifying()
-    other = {row["id"]: {"source_doc": "OTHER"} for row in xero_v01_rows(FIRST)}
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        (FIRST, [("X-FIN-09-1-V02-1", XJ499), ("X-FIN-09-1-V02-2", CSH02)]),
+        (["AJE-X05"], [("X-FIN-09-1-V02-1", CSH02)]),
+    ],
+    ids=["both", "csh02_only"],
+)
+async def test_v02_numbered_by_subject(entries: list[str], expected: list[tuple[str, str]]) -> None:
+    """所匹配凭证 (entries) 的来源对象改了的错报对不上: V02 的 n 在对不上的错报中按判断对象的顺序从 1 编号, 各作自己
+    判断的规则例外; 只有 CSH02 对不上时它的是 V02-1."""
+    other = {row["id"]: {"source_doc": "OTHER"} for row in xero_v01_rows(FIRST) if row["entry_no"] in entries}
     reply = {"fully_corrected": False, "other_accounts": [], "proposed_action": "more_evidence"}
-    llm = ScriptedLLM({"XJ-499": [fixture("XJ-499", **reply)], "BA-091": [fixture("BA-091", **reply)]})
-    patch, _ = await run_fin09(
-        fin09_deps(FakeTrail(), llm, rows=edited(other)), fin03_state(misstatements=[xj499, csh02])
-    )
+    sources = {"XJ-499": "AJE-X01", "BA-091": "AJE-X05"}  # 来源对象 → 匹配的凭证
+    llm = ScriptedLLM({key: [fixture(key, **(reply if no in entries else {}))] for key, no in sources.items()})
+    deps = fin09_deps(FakeTrail(), llm, rows=edited(other))
+    patch, _ = await run_fin09(deps, fin03_state(misstatements=round1_verifying()))
 
-    assert [(x.id, x.detail["misstatement_id"]) for x in patch["exceptions"]] == [
-        ("X-FIN-09-1-V02-1", XJ499),
-        ("X-FIN-09-1-V02-2", CSH02),
-    ]
-    assert [j.exception_ids for j in patch["judgments"]] == [["X-FIN-09-1-V02-1"], ["X-FIN-09-1-V02-2"]]
+    assert [(x.id, x.detail["misstatement_id"]) for x in patch["exceptions"]] == expected
+    by_subject = [[x for x, m in expected if m == mid] for mid in (XJ499, CSH02)]
+    assert [j.exception_ids for j in patch["judgments"]] == by_subject
 
 
 async def test_rerun_subjects_only() -> None:
@@ -375,9 +370,14 @@ def test_to_verify_takes_current_results() -> None:
 
 
 def line(
-    lid: str, account_type: str | None, debit: int = 0, credit: int = 0, entry_no: str = "AJE-X01"
+    lid: str,
+    account_type: str | None,
+    debit: int = 0,
+    credit: int = 0,
+    entry_no: str = "AJE-X01",
+    source_doc: str = "XJ-499",
 ) -> dict[str, Any]:
-    """一行 V01 (来源对象 XJ-499, 科目 710)."""
+    """一行 V01 (科目 710; 来源对象缺省为 XJ-499)."""
     return {
         "id": lid,
         "entry_no": entry_no,
@@ -385,14 +385,19 @@ def line(
         "account_type": account_type,
         "debit_cents": debit,
         "credit_cents": credit,
-        "source_doc": "XJ-499",
+        "source_doc": source_doc,
     }
 
 
 def test_matched_by_amount_takes_first_line_by_id() -> None:
-    """没有 account_code 时按金额匹配, 有几行时取行 ID 最小的一行 (与 V01 的顺序无关)."""
+    """没有 account_code 时按金额匹配, 有几行时取行 ID 最小的一行 (与 V01 的顺序无关); 只在来源对象的行中取, 别的
+    来源对象的行 ID 更小也不取."""
     xj499 = round1_verifying()[0].model_copy(update={"account_code": None})
-    rows = [line("AJE-X02-1", "asset", debit=75000, entry_no="AJE-X02"), line("AJE-X01-2", "asset", credit=75000)]
+    rows = [
+        line("AJE-X02-1", "asset", debit=75000, entry_no="AJE-X02"),
+        line("AJE-X01-2", "asset", credit=75000),
+        line("AJE-X01-1", "asset", credit=75000, source_doc="XJ-498"),
+    ]
     assert [r["id"] for r in matched_lines(xj499, "XJ-499", rows)] == ["AJE-X01-2"]
 
 
@@ -403,6 +408,8 @@ def test_matched_by_amount_takes_first_line_by_id() -> None:
         ("expense", Direction.overstated, 0, 75000, 75000),
         ("expense", Direction.understated, 75000, 0, 75000),
         ("liability", Direction.understated, 0, 75000, 75000),
+        ("equity", Direction.overstated, 75000, 0, 75000),
+        ("equity", Direction.understated, 0, 75000, 75000),
         ("revenue", Direction.overstated, 75000, 0, 75000),
         ("asset", Direction.overstated, 75000, 0, -75000),  # 方向相反
     ],
