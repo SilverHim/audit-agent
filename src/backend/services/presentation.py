@@ -8,7 +8,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from backend.contracts.models import (
     AuditException,
@@ -104,11 +104,19 @@ def evidence_union(
     ]
 
 
+def reads_llm_calls(task: ReviewTask) -> bool:
+    """呈递是否要读项目的 llm_call 留痕: 带对象的 failed 与 unattributed 任务 (失败原因取该对象最后一次调用)."""
+    return task.subject_id is not None and task.kind in (TaskKind.failed, TaskKind.unattributed)
+
+
 def last_llm_call(llm_calls: Sequence[TrailEntry], task: ReviewTask) -> TrailEntry | None:
-    """带对象的失败任务对应的最后一次大模型调用: 本次执行 (run_id), 本程序, payload 的 subject_id 为任务的 subject_id
-    的 llm_call 留痕中最后一行 (按写入顺序). 没记 subject_id (没有这个键或为空) 的行 (判断引擎以外的调用方, 与需求
-    R158 之前的旧行) 按 fixture_key 比: 那时 fixture_key 就是对象. FIN-03 的 fixture_key 是来源判断的对象, 不是任务的
-    对象 (错报), 只能按 subject_id 找. 同一执行里别的对象与独立复核 (GEN-09, 程序不同) 的行不算."""
+    """带对象的失败任务 (failed 与 unattributed) 对应的最后一次大模型调用: 本次执行 (run_id), 本程序, payload 的
+    subject_id 为任务的 subject_id 的 llm_call 留痕中最后一行 (按写入顺序). 没记 subject_id (没有这个键或为空) 的行
+    (判断引擎以外的调用方, 与需求 R158 之前的旧行) 按 fixture_key 比: 那时 fixture_key 就是对象. FIN-03 的
+    fixture_key 是来源判断的对象, 不是任务的对象 (错报), 只能按 subject_id 找. 同一执行里别的对象与独立复核
+    (GEN-09, 程序不同) 的行不算. 任务不带对象时为空."""
+    if task.subject_id is None:
+        return None
     return next(
         (
             entry
@@ -122,40 +130,45 @@ def last_llm_call(llm_calls: Sequence[TrailEntry], task: ReviewTask) -> TrailEnt
     )
 
 
+def call_failure(llm_calls: Sequence[TrailEntry], task: ReviewTask) -> dict[str, Any]:
+    """失败原因中取自大模型调用的几项: last_llm_call 那行的 level_failed, errors, attempt (调用次数) 与留痕 ID;
+    找不到那行时为空."""
+    call = last_llm_call(llm_calls, task)
+    if call is None:
+        return {}
+    payload = call.payload
+    return {
+        "level_failed": payload.get("level_failed"),
+        "errors": list(payload.get("errors") or []),
+        "attempts": payload.get("attempt"),
+        "trail_id": call.id,
+    }
+
+
 def failure_of(
     task: ReviewTask, target: Judgment | AuditException | ProcedureRun, llm_calls: Sequence[TrailEntry] = ()
 ) -> PresentedFailure | None:
     """失败类与无归因类任务的失败原因 (规格书 UC-04 第 2 步: 无归因类给规则结果, 失败类给失败原因); 其余任务为空.
 
-    - unattributed (目标为例外): 规则编号, 金额与明细.
+    - unattributed (目标为例外): 规则编号, 金额与明细; 另按带对象的 failed 的取法 (call_failure) 给该对象最后一次
+      调用没通过的原因 (需求 R355: 审计师在让 AI 再试与自己下结论之间选时要看到), 找不到时只有规则三项.
     - failed, 不带 subject_id (整次执行失败, A1 建的): 执行记录的 failure_reason.
-    - failed, 带 subject_id (个别对象的大模型输出没通过校验, 执行记录为成功终态): 取 last_llm_call 那行的
-      level_failed, errors 与 attempt; 找不到时只有 subject_id.
-    llm_calls: 项目的 llm_call 留痕, 按写入顺序; 只有带 subject_id 的 failed 任务用到. 纯函数.
+    - failed, 带 subject_id (个别对象的大模型输出没通过校验, 执行记录为成功终态): subject_id 与 call_failure 的
+      几项; 找不到时只有 subject_id.
+    llm_calls: 项目的 llm_call 留痕, 按写入顺序; 只有带对象的 failed 与 unattributed 任务用到 (reads_llm_calls).
+    纯函数.
     """
     if task.kind is TaskKind.unattributed and isinstance(target, AuditException):
-        return PresentedFailure(
-            source="exception", rule_id=target.rule_id, amount_cents=target.amount_cents, detail=target.detail
-        )
+        rule = {"rule_id": target.rule_id, "amount_cents": target.amount_cents, "detail": target.detail}
+        return PresentedFailure.model_validate({"source": "exception", **rule, **call_failure(llm_calls, task)})
     if task.kind is not TaskKind.failed:
         return None
     if task.subject_id is None:
         return PresentedFailure(
             source="run", reason=target.failure_reason if isinstance(target, ProcedureRun) else None
         )
-    call = last_llm_call(llm_calls, task)
-    if call is None:
-        return PresentedFailure(source="llm_call", subject_id=task.subject_id)
-    payload = call.payload
     return PresentedFailure.model_validate(
-        {
-            "source": "llm_call",
-            "subject_id": task.subject_id,
-            "level_failed": payload.get("level_failed"),
-            "errors": list(payload.get("errors") or []),
-            "attempts": payload.get("attempt"),
-            "trail_id": call.id,
-        }
+        {"source": "llm_call", "subject_id": task.subject_id, **call_failure(llm_calls, task)}
     )
 
 

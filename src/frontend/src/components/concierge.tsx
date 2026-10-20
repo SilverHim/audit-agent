@@ -45,6 +45,7 @@ import {
 import { formatAud } from '@/lib/money'
 import {
   cardLayout,
+  failureParts,
   needsPresentation,
   pointerKey,
   presentationFor,
@@ -242,36 +243,27 @@ function usePresentation(eid: string, taskId: string): TaskPresentation | undefi
   return presentationFor(data, taskId)
 }
 
-// 失败原因 (呈递的 failure): 带对象的失败给调用次数, 没通过的校验与错误; 无归因的例外给规则与明细.
-// 整次执行失败的原因 (failure_reason) 已在目标上, 不重复
+// 失败原因 (呈递的 failure, 显示哪几段见 lib/presentation.failureParts): 无归因的例外先给规则与明细, 再与带对象的
+// 失败一样给调用次数, 没通过的校验与错误
 function FailureDetail({ failure }: { failure: PresentedFailure | null | undefined }) {
   const { t } = useI18n()
   const p = t.judgment.presentation
-  if (failure?.source === 'llm_call') {
-    return (
-      <div className="flex flex-col gap-1.5" data-testid="presented-failure">
-        {failure.attempts != null && failure.level_failed ? (
-          <span>{p.attempts(failure.attempts, p.levels[failure.level_failed])}</span>
-        ) : null}
-        {failure.errors?.length ? (
-          <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] text-secondary-foreground" lang="en">
-            {failure.errors.map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    )
-  }
-  if (failure?.source === 'exception') {
-    return (
-      <div className="flex flex-col gap-1" data-testid="presented-failure">
-        {failure.rule_id ? <span>{p.rule(failure.rule_id)}</span> : null}
-        <ExceptionDetail detail={failure.detail ?? {}} />
-      </div>
-    )
-  }
-  return null
+  const parts = failureParts(failure)
+  if (!parts) return null
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="presented-failure">
+      {parts.rule?.id ? <span>{p.rule(parts.rule.id)}</span> : null}
+      {parts.rule ? <ExceptionDetail detail={parts.rule.detail} /> : null}
+      {parts.call ? <span>{p.attempts(parts.call.attempts, p.levels[parts.call.level])}</span> : null}
+      {parts.errors.length ? (
+        <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] text-secondary-foreground" lang="en">
+          {parts.errors.map((error) => (
+            <li key={error}>{error}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
 }
 
 // 争议两方的一栏: 两栏同一样式, 不标哪方更有理. proposals 为真时另显示本方的建议动作与错报草稿 (见

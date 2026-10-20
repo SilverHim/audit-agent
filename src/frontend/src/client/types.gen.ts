@@ -4066,7 +4066,9 @@ export type PresentedEvidence = {
 /**
  * PresentedFailure
  *
- * 失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空.
+ * 失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空: run 填 reason; llm_call 填 subject_id 与调用的
+ * 四项 (level_failed, errors, attempts, trail_id); exception 填规则三项 (rule_id, amount_cents, detail), 另填该对象
+ * 最后一次调用的四项 (需求 R355; 留痕里找不到该对象的调用时只有规则三项).
  */
 export type PresentedFailure = {
     /**

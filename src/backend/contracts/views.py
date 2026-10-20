@@ -224,15 +224,17 @@ class PresentedEvidence(Model):
 
 
 class PresentedFailure(Model):
-    """失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空."""
+    """失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空: run 填 reason; llm_call 填 subject_id 与调用的
+    四项 (level_failed, errors, attempts, trail_id); exception 填规则三项 (rule_id, amount_cents, detail), 另填该对象
+    最后一次调用的四项 (需求 R355; 留痕里找不到该对象的调用时只有规则三项)."""
 
     source: FailureSource  # 出处
     reason: str | None = None  # run: 执行记录的 failure_reason
     subject_id: str | None = None  # llm_call: 失败的判断对象 (任务的 subject_id)
-    level_failed: ValidationLevel | None = None  # llm_call: 最后一次没通过的校验级别
-    errors: list[str] = []  # llm_call: 最后一次的校验错误
-    attempts: int | None = None  # llm_call: 调用次数 (最后一次的 attempt)
-    trail_id: str | None = None  # llm_call: 取的那行 llm_call 留痕
+    level_failed: ValidationLevel | None = None  # llm_call, exception: 最后一次没通过的校验级别
+    errors: list[str] = []  # llm_call, exception: 最后一次的校验错误
+    attempts: int | None = None  # llm_call, exception: 调用次数 (最后一次的 attempt)
+    trail_id: str | None = None  # llm_call, exception: 取的那行 llm_call 留痕
     rule_id: str | None = None  # exception: 命中的规则
     amount_cents: int | None = None  # exception: 例外金额, 单位分
     detail: dict[str, Any] = {}  # exception: 规则输出的明细

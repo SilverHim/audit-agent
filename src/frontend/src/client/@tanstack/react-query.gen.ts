@@ -416,7 +416,8 @@ export const reviewsListReviewTasksOptions = (options: Options<ReviewsListReview
  * 判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务
  * 绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在
  * 404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.
- * deferred 按稍后处理的留痕 (已决定的任务为假); 只有带 subject_id 的 failed 任务读 llm_call 留痕取失败原因.
+ * deferred 按稍后处理的留痕 (已决定的任务为假); 只有带对象的 failed 与 unattributed 任务读 llm_call 留痕取失败
+ * 原因 (presentation.reads_llm_calls).
  */
 export const reviewsPresentReviewTaskMutation = (options?: Partial<Options<ReviewsPresentReviewTaskData>>): UseMutationOptions<ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskError, Options<ReviewsPresentReviewTaskData>> => {
     const mutationOptions: UseMutationOptions<ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskError, Options<ReviewsPresentReviewTaskData>> = {
