@@ -19,6 +19,7 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Judgment,
     MaterialityCandidates,
+    Phase,
     ProcedureRun,
     ProcedureStatus,
     ProposedAction,
@@ -31,6 +32,7 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
+from backend.contracts.state import initial_state
 from backend.orchestration import merge
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.merge import Replay, check_refs
@@ -52,8 +54,10 @@ from tests.fakes import (
     FakeTrail,
     ScriptA6,
     ScriptAgent,
+    compliance_check,
     finished,
     make_deps,
+    make_procedure,
     make_run,
     make_runner,
     ownership_graph,
@@ -624,3 +628,32 @@ async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> No
     }
     replayed = await stored_outputs(deps, EID, csh04_template, csh04)
     assert "ownership_graph" not in replayed and replayed["documents"] == [REPLY]
+
+
+# ── R215: 合规检查 (by_procedure, 带 exception_ids) ──
+
+
+async def test_compliance_check_replay_brings_its_referenced_exceptions() -> None:
+    """R215: 回退检查点后重放 FIN-10 第 1 次 (程序 YAML 由 R230 加, 这里用临时模板): CHECK-FIN-10 按 by_procedure
+    取最新版本 (第 2 次写的 v2), 一并取回第 2 次执行, 以及 v2 的 exception_ids 所指而不属第 1 次的例外 (合规检查与
+    判断, 评分卡同在 merge.EXCEPTION_REFERRERS); 片段自成一体, 外键检查通过."""
+    run1, run2 = finished(make_run("FIN-10")), finished(make_run("FIN-10", run_no=2))
+    found1 = exception(1).model_copy(update={"id": "X-FIN-10-1-E02-1", "procedure_id": "FIN-10", "run_id": run1.id})
+    found2 = found1.model_copy(update={"id": "X-FIN-10-2-E02-1", "run_id": run2.id})
+    check1 = compliance_check(exception_ids=[found1.id])
+    check2 = compliance_check(run_no=2, version=2, exception_ids=[found2.id])
+    store = FakeOutputStore([run1, run2, found1, found2, check1, check2, exception(2)])
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([]))
+    template = deps.library.load("CSH-04").model_copy(
+        update={"id": "FIN-10", "outputs": ["compliance_checks", "exceptions", "review_tasks"], "document_types": []}
+    )
+
+    patch = await stored_outputs(deps, EID, template, run1)
+
+    assert patch == {
+        "procedure_runs": [run1, run2],
+        "review_tasks": [],
+        "compliance_checks": [check2],
+        "exceptions": [found1, found2],
+    }
+    assert check_refs(patch, initial_state(ENGAGEMENT, [make_procedure("FIN-10", Phase.P3_Completion)], 1)) == []

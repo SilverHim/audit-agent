@@ -12,10 +12,18 @@ from backend.contracts.models import (
     Assertion,
     AuditException,
     AutonomyLevel,
+    CheckItem,
+    CheckItemStatus,
+    ClauseStatus,
     ClientProfile,
+    CommunicationForm,
+    CommunicationMatter,
+    ComplianceCheck,
     Confirmation,
+    Contravention,
     CriticTrigger,
     Decision,
+    DeclarationForm,
     Direction,
     DocumentRef,
     DocumentType,
@@ -24,9 +32,12 @@ from backend.contracts.models import (
     FinancialStatementLine,
     FinancialStatements,
     GateId,
+    GovernanceCommunication,
+    IndependenceDeclaration,
     Judgment,
     MisstatementDraft,
     MisstatementType,
+    ObjectRef,
     OwnershipGraph,
     PartyLink,
     PartyNode,
@@ -35,10 +46,14 @@ from backend.contracts.models import (
     ProcedureStatus,
     ProposedAction,
     Reliability,
+    ReportStatus,
+    RepresentationClause,
+    RepresentationStatus,
     ReviewRecord,
     ReviewStatus,
     TaskKind,
     TrailKind,
+    WrittenRepresentationLetter,
     company_node_id,
     person_node_id,
     split_full_name,
@@ -46,7 +61,14 @@ from backend.contracts.models import (
 from backend.contracts.state import staged, upsert_by_id
 from backend.contracts.views import GateView
 from backend.orchestration.checkpoint import checkpoint_serde
-from tests.fakes import XERO_FS_V1, ownership_graph
+from tests.fakes import (
+    XERO_FS_V1,
+    compliance_check,
+    governance_communication,
+    independence_declaration,
+    ownership_graph,
+    representation_letter,
+)
 
 
 def _exc(version: int) -> AuditException:
@@ -526,3 +548,112 @@ def test_xero_fs_v1_figures_and_mapping() -> None:
     assert pos["SOFP-TAX"].prior_amount_cents == -79120
     mapped = [code for line in pos.values() if not line.subtotal for code in line.account_codes]
     assert len(mapped) == len(set(mapped)) == 33
+
+
+# ── R215: 签字前提的四类审计产出 ──
+
+
+def test_representation_letter_contract() -> None:
+    """验收 1: REPLETTER 的字段与取值; 一项声明为 refused_accepted 而缺 acceptance_reason 或 opinion_effect (空串同),
+    或多给字段, 抛 ValidationError; 状态只收四种; 存储 JSON 往返不变."""
+    letter = representation_letter()
+    assert (letter.id, letter.status, letter.period_end, letter.run_id) == (
+        "REPLETTER",
+        RepresentationStatus.obtained,
+        date(2026, 6, 30),
+        "RUN-FIN-07-1",
+    )
+    assert letter.schedule_ref == ObjectRef(kind="UncorrectedSchedule", id="SCHEDULE", version=1)
+    accepted = letter.representations[2].model_dump()
+    assert accepted["status"] is ClauseStatus.refused_accepted
+    for change in ({"acceptance_reason": None}, {"opinion_effect": None}, {"opinion_effect": ""}, {"extra": 1}):
+        with pytest.raises(ValidationError):
+            RepresentationClause.model_validate({**accepted, **change})
+    present = letter.representations[0].model_dump()
+    assert RepresentationClause.model_validate({**present, "status": "missing"}).status is ClauseStatus.missing
+    for change in ({"status": "lost"}, {"extra": 1}):
+        with pytest.raises(ValidationError):
+            WrittenRepresentationLetter.model_validate({**letter.model_dump(), **change})
+    with pytest.raises(ValidationError):
+        ObjectRef(kind="UncorrectedSchedule", id="SCHEDULE", version=0)
+    assert WrittenRepresentationLetter.model_validate_json(letter.model_dump_json()) == letter
+
+
+def test_compliance_check_contract_and_failed_codes() -> None:
+    """验收 2: CHECK-{procedure_id} 的字段; failed_codes 只读, 列出 failed 项的代号 (按首次出现的顺序, 逐行核对的
+    同一代号只列一次), 不进 JSON; 缺省 exception_ids 为空, must_disclaim 为假; 多给字段被拒; JSON 往返不变."""
+    check = compliance_check(exception_ids=["X-FIN-10-1-E02-1"])
+    assert (check.id, check.procedure_id, check.run_id, check.basis) == (
+        "CHECK-FIN-10",
+        "FIN-10",
+        "RUN-FIN-10-1",
+        {"client_profile_version": 1},
+    )
+    assert check.failed_codes == ["E02"] and "failed_codes" not in check.model_dump()
+    assert (check.must_disclaim, check.subject_ref, compliance_check().exception_ids) == (False, None, [])
+    line = {"description": "Line agrees to adjusted trial balance", "standard_ref": "ASA 330.20(a)"}
+    fs12 = ComplianceCheck(
+        id="CHECK-FIN-12",
+        procedure_id="FIN-12",
+        run_id="RUN-FIN-12-1",
+        items=[
+            CheckItem(code="K01", status=CheckItemStatus.passed, **line),
+            CheckItem(code="K01", status=CheckItemStatus.failed, **line),
+            CheckItem(code="K03", status=CheckItemStatus.failed, **line),
+            CheckItem(code="K01", status=CheckItemStatus.failed, **line),
+            CheckItem(code="K05", status=CheckItemStatus.attention, **line),
+        ],
+        subject_ref=ObjectRef(kind="FinancialStatements", id="FS", version=1),
+        basis={"fs_version": 1, "adjustment_entry_nos": ["AJE-X01", "AJE-X05"]},
+    )
+    assert fs12.failed_codes == ["K01", "K03"]
+    with pytest.raises(ValidationError, match="frozen"):
+        fs12.failed_codes = []  # type: ignore[misc]
+    for change in ({"extra": 1}, {"items": [{**check.items[0].model_dump(), "status": "skipped"}]}):
+        with pytest.raises(ValidationError):
+            ComplianceCheck.model_validate({**check.model_dump(), **change})
+    assert ComplianceCheck.model_validate_json(fs12.model_dump_json()) == fs12
+
+
+def test_governance_communication_contract() -> None:
+    """验收 3: GC-RPT-07-1 的字段; kind 只有 completion (缺省), form 只收 written, oral; 多给字段被拒; JSON 往返不变."""
+    communication = governance_communication()
+    assert (communication.id, communication.kind, communication.form, communication.run_id) == (
+        "GC-RPT-07-1",
+        "completion",
+        CommunicationForm.written,
+        "RUN-RPT-07-1",
+    )
+    assert [m.code for m in communication.matters if m.required and not m.covered] == []
+    dumped = communication.model_dump()
+    for change in ({"kind": "planning_scope"}, {"form": "email"}, {"extra": 1}):
+        with pytest.raises(ValidationError):
+            GovernanceCommunication.model_validate({**dumped, **change})
+    with pytest.raises(ValidationError):
+        CommunicationMatter.model_validate({**communication.matters[0].model_dump(), "extra": 1})
+    assert GovernanceCommunication.model_validate_json(communication.model_dump_json()) == communication
+
+
+def test_independence_declaration_form_matches_contraventions() -> None:
+    """验收 4: S307C 的字段与缺省 (draft, 日期, 报告与签字人为空); form 为 contraventions 而列表为空, 或
+    no_contraventions 而列表非空, 抛 ValidationError; 两者一致时通过; JSON 往返不变."""
+    declaration = independence_declaration()
+    assert (declaration.id, declaration.status, declaration.based_on.id, declaration.based_on.version) == (
+        "S307C",
+        ReportStatus.draft,
+        "CHECK-FIN-10",
+        1,
+    )
+    assert (declaration.declaration_date, declaration.report_id, declaration.signed_by) == (None, None, None)
+    dumped = declaration.model_dump()
+    listed = [Contravention(item_code="E02", text="A contingent fee was agreed for the audit.")]
+    with pytest.raises(ValidationError, match="form 为 contraventions 时须列明违规"):
+        IndependenceDeclaration.model_validate({**dumped, "form": "contraventions"})
+    with pytest.raises(ValidationError, match="form 为 no_contraventions 时不能列明违规"):
+        IndependenceDeclaration.model_validate({**dumped, "contraventions": listed})
+    with_breach = IndependenceDeclaration.model_validate({**dumped, "form": "contraventions", "contraventions": listed})
+    assert with_breach.form is DeclarationForm.contraventions and with_breach.contraventions == listed
+    signed = declaration.model_copy(
+        update={"version": 2, "status": ReportStatus.signed, "declaration_date": date(2026, 8, 25)}
+    )
+    assert IndependenceDeclaration.model_validate_json(signed.model_dump_json()) == signed

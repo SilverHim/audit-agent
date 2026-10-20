@@ -239,6 +239,13 @@ OUTPUT_KINDS = {
     "report_versions": ["AuditReportVersion"],
     "gate_materials": ["AcceptanceScorecard", "AnalyticsResult", "MaterialityCandidates", "UncorrectedSchedule"],
     "ownership_graphs": ["OwnershipGraph"],  # 需求 R136, 迁移 0016
+    # 签字前提的四类产出 (需求 R215, 迁移 0017)
+    "completion_records": [
+        "WrittenRepresentationLetter",
+        "ComplianceCheck",
+        "GovernanceCommunication",
+        "IndependenceDeclaration",
+    ],
 }
 OUTPUTS = {}
 for name, kinds in OUTPUT_KINDS.items():
