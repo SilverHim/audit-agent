@@ -473,8 +473,9 @@ MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
 DocumentStatus = Literal["received", "classified", "extracted", "needs_manual", "staged", "not_imported"]
 # 需人工处理时卡在哪一步: 分类 (判断不了类型), 读取 (读不出文字), 抽取 (抽取校验不过), 关联 (对不上业务对象)
 DocumentFailedStep = Literal["classify", "read", "extract", "link"]
-# 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件
-DocumentChannel = Literal["auditor_upload", "bank_direct", "xero"]
+# 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件, 登记 (程序向登记机构查询后存档的摘录与人员检索
+# 结果, 如 GEN-08; 需求 R306)
+DocumentChannel = Literal["auditor_upload", "bank_direct", "xero", "registry"]
 
 
 # ── 2.2 证据与判断 ─────────────────────────────────────────

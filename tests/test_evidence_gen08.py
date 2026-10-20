@@ -225,12 +225,13 @@ async def test_xero_penetration_order_and_trail() -> None:
 @needs("q1_supplements")
 async def test_xero_archives_four_registry_documents() -> None:
     """验收 4: 3 份摘录与 1 份人员检索经 EvidenceStore.save 存档 (registry_extract, external_original), 文件 ID 即
-    manifest.documents 中登记途径为 registry 的 4 份; 片段 documents 4 条, 状态 extracted."""
+    manifest.documents 中登记途径为 registry 的 4 份; 片段 documents 4 条, 状态 extracted, 渠道 registry (程序向
+    登记机构查询后存档, 需求 R306), 没有上传人."""
     patch, _, _, deps = await run_gen08(xero_registry(), xero_profile(), xero=True)
     expected = {i for i, d in manifest_documents().items() if d["registration"] == "registry"}
     assert {d.id for d in patch["documents"]} == expected and len(patch["documents"]) == 4
-    assert {(d.type, d.reliability, d.status) for d in patch["documents"]} == {
-        (DocumentType.registry_extract, Reliability.external_original, "extracted")
+    assert {(d.type, d.reliability, d.status, d.channel, d.uploaded_by) for d in patch["documents"]} == {
+        (DocumentType.registry_extract, Reliability.external_original, "extracted", "registry", None)
     }
     assert {(t, r) for _, _, t, r in deps.evidence_store.save_args} == {
         (DocumentType.registry_extract, Reliability.external_original)

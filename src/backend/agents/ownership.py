@@ -351,6 +351,7 @@ class Penetrator:
             data,
             type=DocumentType.registry_extract,
             reliability=Reliability.external_original,
+            channel="registry",
             status="extracted",
         )
         found.documents.append(document)

@@ -1842,7 +1842,7 @@ export type DocumentRef = {
     /**
      * Channel
      */
-    channel?: 'auditor_upload' | 'bank_direct' | 'xero';
+    channel?: 'auditor_upload' | 'bank_direct' | 'xero' | 'registry';
     /**
      * Uploaded By
      */

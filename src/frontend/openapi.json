@@ -8068,7 +8068,8 @@
             "enum": [
               "auditor_upload",
               "bank_direct",
-              "xero"
+              "xero",
+              "registry"
             ],
             "title": "Channel",
             "default": "auditor_upload"

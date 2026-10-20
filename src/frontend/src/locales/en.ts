@@ -1165,6 +1165,12 @@ export const en = {
       internal_original: 'Internal original',
       internal_copy: 'Internal copy',
     } as Record<string, string>,
+    channels: {
+      auditor_upload: 'Archived by the system',
+      bank_direct: 'Bank direct reply',
+      xero: 'Xero attachment',
+      registry: 'Registry search archive',
+    } as Record<string, string>,
     noDocuments: 'No documents yet.',
     events: {
       import: (table: string, n: number) => `Data management · ${table}: ${n} records imported`,

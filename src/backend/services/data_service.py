@@ -18,7 +18,7 @@ from uuid import uuid4
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
-from backend.adapters.registry import latest_extractions
+from backend.adapters.registry import latest_extractions, uploaded_extracts
 from backend.adapters.xero_supplements import STAGE_REQUESTS, DemoPlan, DemoSource, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
@@ -1999,8 +1999,8 @@ class DataService:
         return record
 
     async def _registry_documents(self, eid: str) -> set[str]:
-        """现在登记为 ASIC 摘录 (registry_extract) 的文件 ID."""
-        return {d.id for d in await self.deps.financial_store.documents(eid, DocumentType.registry_extract)}
+        """审计师上传而现在登记为 ASIC 摘录 (registry_extract) 的文件 ID (adapters.registry.uploaded_extracts)."""
+        return {d.id for d in await uploaded_extracts(self.deps.financial_store, eid)}
 
     async def _registry_records(self, eid: str, document_id: str) -> list[ExtractionRecord]:
         """一份 ASIC 摘录抽取结果的各版, 按版本升序; 文件不是 ASIC 摘录或还没有抽取结果抛 LookupError."""
