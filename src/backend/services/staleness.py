@@ -1,6 +1,7 @@
 """过期程序与当前结果 (需求 R274, 接口文档第 3 节).
 
-过期: 程序最近一次执行记了数据版本 v, 而 (1) 它读的数据 (模板 reads) 在 v 之后有变动 (DataStore.changes), 或
+过期: 程序最近一次执行记了数据版本 v, 而 (1) 它读的数据 (模板 reads, 见 reads_change) 在 v 之后有变动
+(DataStore.changes), 或
 (2) 它依赖 (depends_on) 的程序过期, 或依赖的程序在它之后又执行过 (如只重跑了 REV-08, REV-02 随之过期), 或依赖的
 程序最近一次执行已被过期重跑取代 (它所依据的前置结果已不是当前的).
 过期只针对有当前结果的程序: 最近一次执行被过期重跑取代而之后没有新执行的 (重跑后转等数据, 未执行 (无数据) 或
@@ -15,7 +16,8 @@
 from collections.abc import Collection, Iterable, Sequence
 from typing import NamedTuple
 
-from backend.contracts.data import DataChange
+from backend.contracts.data import DataChange, DataInput
+from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
     ExceptionDisposition,
@@ -29,6 +31,15 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState
 from backend.services.procedure_library import ProcedureLibrary
+
+
+def reads_change(template: ProcedureTemplate, change: DataChange) -> bool:
+    """程序是否读这次变动的数据: 按模板 reads; 文件登记 (documents) 的变动带了文件类型时 (需求 R304), 只有读其中某类
+    文件登记的程序 (document_reads) 算读到, 如新登记一份待审财报不让读合同与回函登记的程序过期. 没带文件类型的
+    (迁移 0020 之前记的, 数据集载入) 不知道是哪类文件, 照旧按 reads 含 documents 判."""
+    if change.input is DataInput.documents and change.document_types is not None:
+        return bool(set(change.document_types) & set(template.document_reads))
+    return change.input in template.reads
 
 
 def latest_runs(runs: Iterable[ProcedureRun]) -> dict[str, ProcedureRun]:
@@ -57,9 +68,6 @@ def stale_procedures(
     latest = latest_runs(runs)
     in_pack = {p.id for p in pack}
     status = {p.id: p.status for p in pack}
-    changed: dict[str, int] = {}  # 数据种类 → 最近一次变动的数据版本
-    for change in changes:
-        changed[change.input] = max(changed.get(change.input, 0), change.data_version)
     memo: dict[str, bool] = {}
 
     def stale(pid: str) -> bool:
@@ -70,7 +78,8 @@ def stale_procedures(
         if run is None or run.data_version is None or run.id in superseded or status.get(pid) in STOPPED:
             return False  # 没有当前结果 (没执行过, 承接阶段, 已被重跑取代, 等数据或未执行)
         template = library.load(pid)
-        found = any(changed.get(i, 0) > run.data_version for i in template.reads)
+        version = run.data_version
+        found = any(c.data_version > version and reads_change(template, c) for c in changes)
         for dep in template.depends_on:
             if found or dep not in in_pack:
                 continue

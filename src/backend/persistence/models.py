@@ -78,6 +78,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "data_checks": {"request_id"},
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
+            "data_changes": {"document_types"},
             "financial_statements": {"directors_declaration_date", "document_id"},
             "financial_statement_lines": {"prior_amount_cents"},
             "xero_connections": {"tenant_id", "tenant_name", "last_synced_at"},
@@ -224,8 +225,9 @@ extraction_versions = table(
     "target_type:s target_id:s version:i data:j field:s reason:s changed_by:s changed_at:t",
     ("target_type", "target_id", "version"),
 )
-# 数据变动: 哪个数据版本变了哪类数据 (DataInput); 过期判断只读这里 (需求 R274, 迁移 0008)
-data_changes = table("data_changes", "data_version:i input:s", ("data_version", "input"))
+# 数据变动: 哪个数据版本变了哪类数据 (DataInput); 过期判断只读这里 (需求 R274, 迁移 0008). document_types 为 documents
+# 变动时登记变了的文件的类型 (JSON 数组, 需求 R304, 迁移 0020); 其余为空, 之前记的与数据集载入的 documents 也为空
+data_changes = table("data_changes", "data_version:i input:s document_types:j", ("data_version", "input"))
 # 项目的 Xero 网页连接 (需求 R279, 迁移 0009): 每个项目最多一行, 断开即删; 令牌只存 Fernet 密文 (tokens_encrypted,
 # 主密钥 SETTINGS_SECRET_KEY), 明文不落库; tenants 为授权给到的组织 [{id, name}], synced_tables 为最近一次同步写的表
 xero_connections = table(

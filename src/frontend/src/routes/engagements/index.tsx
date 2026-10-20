@@ -15,8 +15,8 @@ import { NewClientDialog } from '@/components/new-client-dialog'
 import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { formatAbn } from '@/lib/abn'
 import { getToken } from '@/lib/auth'
+import { clientNote, clientOptionLabel } from '@/lib/clients'
 import { invalidateEngagementList } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -176,6 +176,7 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
   const dataset = selected?.datasets.find((d) => d.default) ?? selected?.datasets[0]
   const fixedStart = dataset?.period_start ?? null
   const fixedEnd = dataset?.period_end ?? null
+  const note = clientNote(selected, t)
   // 所选数据集自带期间时自动填起止日 (建项目时须与之相同); 不带时用 Numbat 的财年
   useEffect(() => {
     setPeriodStart(fixedStart ?? DEFAULT_PERIOD.start)
@@ -208,7 +209,7 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
                 id="new-client"
                 className="h-11 rounded-[10px] border border-input bg-card px-3 text-[14px]"
                 value={adding ? NEW_CLIENT : chosen}
-                aria-describedby={selected && !dataset ? 'new-client-note' : undefined}
+                aria-describedby={note ? 'new-client-note' : undefined}
                 onChange={(event) => (event.target.value === NEW_CLIENT ? setAdding(true) : pick(event.target.value))}
               >
                 {chosen ? null : (
@@ -218,14 +219,14 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
                 )}
                 {options.map((item) => (
                   <option key={item.client_id} value={item.client_id}>
-                    {item.legal_name} · ABN {formatAbn(item.abn)}
+                    {clientOptionLabel(item, t)}
                   </option>
                 ))}
                 <option value={NEW_CLIENT}>{t.projectsPage.newClient}</option>
               </select>
-              {selected && !dataset ? (
+              {note ? (
                 <span id="new-client-note" className="text-[12.5px] text-muted-foreground">
-                  {t.projectsPage.noDataset}
+                  {note}
                 </span>
               ) : null}
             </div>

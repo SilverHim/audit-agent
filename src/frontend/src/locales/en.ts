@@ -669,6 +669,9 @@ export const en = {
     newClient: 'New client…',
     noDataset:
       'This client has no demo dataset. ACC-04 leaves the register checks for you to confirm manually, and the client data is imported in the engagement.',
+    demoTag: 'Demo',
+    demoNote:
+      'Demo company: once the engagement is created, load the synthetic demo data stage by stage on the Data management page as the audit progresses.',
   },
   abnLookup: {
     checksumOk: (abn: string) => `${abn}: check digits are valid`,

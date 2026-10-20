@@ -149,7 +149,10 @@ async def test_details_write_versions_trail_and_one_data_version() -> None:
         "related_ids": ["ACN-1", "XJ-9"],
     }
     assert data.data_version == before + 1
-    assert data.data_changes[-1] == DataChange(data_version=before + 1, input=DataInput.documents)
+    # 记下补登记的文件类型 (需求 R304): 过期只看读该类文件登记的程序
+    assert data.data_changes[-1] == DataChange(
+        data_version=before + 1, input=DataInput.documents, document_types=[DocumentType.agreement]
+    )
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
     [entry] = [e for e in trail.entries if e.payload.get("action") == "edit"]
@@ -195,7 +198,7 @@ async def test_failed_write_rolls_back_registration_and_trail_is_backfilled(monk
     runner, service, financial, _, data = service_with(LEASE)
     bump = data.bump_version
 
-    async def broken_bump(eid: str, input: DataInput) -> int:
+    async def broken_bump(eid: str, input: DataInput, **_: Any) -> int:
         raise RuntimeError("数据版本写失败")
 
     monkeypatch.setattr(data, "bump_version", broken_bump)
@@ -447,20 +450,43 @@ def p_id(path: str) -> str:
 
 
 async def test_details_make_only_document_reading_programs_stale() -> None:
-    """Numbat 停在 FIN-01 时补登记一份合同的可靠性: 数据版本 +1 (记 documents), 只有判断引用文件页的 REV-03, REV-02,
-    CSH-02 过期; 补登记的留痕不进体检与补交请求 (体检记录与请求都不变)."""
+    """Numbat 停在 FIN-01 时 (全流程只走一次) 依次补登记三类文件, 每次数据版本 +1, 数据变动记 documents 并带该文件的
+    类型 (需求 R304), 只有读该类文件登记的程序过期 (过期名单逐步累积):
+    - 新登记一份待审财报再补登记: 读合同, 回函登记的 REV-03, REV-02, CSH-02 都不过期 (R287 实测的情形);
+    - 补登记回函: 只有 CSH-02;
+    - 补登记合同的可靠性: 再加 REV-03, REV-02 (抽合同的 DOC-04 不读登记, 不过期).
+    补登记的留痕不进体检与补交请求 (体检记录与请求都不变)."""
     s = await demo_at_fin_gate()
     service = DataService(s.runner.deps, s.runner)
     data = s.runner.deps.data
     assert isinstance(data, FakeDataStore)
     assert (await overview(s)).stale_procedure_ids == []
-    contract = next(d for d in await s.runner.deps.financial_store.documents(EID) if d.type is DocumentType.contract)
-    checks, requests, version = await data.check_run(EID), await data.requests(EID), data.data_version
+    documents = await s.runner.deps.financial_store.documents(EID)
+    reply = next(d for d in documents if d.type is DocumentType.confirmation)
+    contract = next(d for d in documents if d.type is DocumentType.contract)
+    statements = await s.runner.deps.evidence_store.save(
+        EID,
+        "fs_v1.pdf",
+        b"%PDF fs",
+        type=DocumentType.financial_statements,
+        reliability=Reliability.internal_copy,
+        uploaded_by="U-1",
+    )
+    checks, requests = await data.check_run(EID), await data.requests(EID)
+    steps = [
+        (statements, edit(document_date="2026-10-22"), []),
+        (reply, edit(document_date="2026-10-16"), ["CSH-02"]),
+        (contract, edit(reliability="external_original"), ["CSH-02", "REV-02", "REV-03"]),
+    ]
+    for document, details, expected in steps:
+        version = data.data_version
 
-    await service.set_document_details(EID, {contract.id: edit(reliability="external_original")}, "U-1")
+        await service.set_document_details(EID, {document.id: details}, "U-1")
 
-    assert data.data_version == version + 1
-    assert sorted((await overview(s)).stale_procedure_ids) == ["CSH-02", "REV-02", "REV-03"]
+        assert data.data_changes[-1] == DataChange(
+            data_version=version + 1, input=DataInput.documents, document_types=[document.type]
+        )
+        assert sorted((await overview(s)).stale_procedure_ids) == expected, document.type
     assert (await data.check_run(EID), await data.requests(EID)) == (checks, requests)
     assert data_trail(s.runner)[-1]["action"] == "edit"
 

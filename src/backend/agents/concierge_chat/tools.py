@@ -4,8 +4,9 @@
 - 全部只读: 不写判断字段, 不改流程状态, 不作决定 (规格书 5.2 节 A10 的边界).
 - 项目由服务端绑定 (ToolEnv.eid), 工具参数里没有项目 ID, 模型查不到别的项目.
 - 带版本的对象取 AuditOutputStore 的最新版; 位置与重要性取 StateReader.overview, 闸门材料取 StateReader.gate.
-- 只发需要的字段 (规格书 4.3 节外发数据边界). 另在 ToolBox.call 出口对全部结果统一做一次 minimize (递归): 账号,
-  BSB 打码, 人员字段换稳定化名 (同一人同一化名), 各工具不再各自处理, 免得两次化名后同一人在不同工具里代号不同.
+- 只发需要的字段 (规格书 4.3 节外发数据边界). minimize 与遮蔽都在 ToolBox.call 出口统一做, 各工具不再各自处理:
+  先 minimize (递归): 账号, BSB 打码, 人员字段换稳定化名 (同一人同一化名, 免得两次化名后同一人在不同工具里代号不同),
+  去掉项目号与出生日期字段; 再在序列化之前遮蔽个人节点 ID 的出生日期段 (mask_person_node_ids, 需求 R305).
 - 结果是给模型的 JSON 文本, 超过 ToolEnv.max_chars 截断; 参数不合法, 未知工具, 查不到, 工具出错都回错误文本, 不中断回答.
 - 结果中出现的可引用编号进 ToolOutcome.cites, 回答提到它们时生成引用 (citations.py).
 """
@@ -25,6 +26,7 @@ from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     Contract,
+    DocumentType,
     EvidencePointer,
     EvidenceType,
     GateDecision,
@@ -41,6 +43,8 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
     UncorrectedSchedule,
+    mask_person_node_ids,
+    mask_person_text,
 )
 from backend.contracts.ports import XeroConnections
 from backend.contracts.views import EngagementOverview, GateView
@@ -167,6 +171,7 @@ class TrailArgs(Page):
 # ── 字段整理 ──
 
 MASKED_FIELDS = frozenset({"account_no", "bsb"})  # 只留末三位
+DROPPED_FIELDS = frozenset({"engagement_id", "birth_date"})  # 不外发: 项目号; 个人的出生日期 (关系图节点, 登记摘录)
 # 换成稳定化名的人员字段 (人名或用户 ID). superseded_by, attributed_by 存的是判断 ID, 不在其中
 PERSON_FIELDS = frozenset(
     {"created_by", "approved_by", "signed_by", "performed_by", "reviewed_by", "decided_by", "updated_by", "deferred_by"}
@@ -187,7 +192,8 @@ def pseudonym(name: str) -> str:
 
 def minimize(value: Any) -> Any:
     """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加 *_aud 写法;
-    去掉 engagement_id. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要经过它.
+    去掉 engagement_id 与 birth_date. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要
+    经过它; 个人节点 ID 的出生日期段随后在 ToolBox.call 出口, 序列化之前去掉 (mask_person_node_ids).
     *_aud 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
     if isinstance(value, list):
         return [minimize(item) for item in value]
@@ -195,7 +201,7 @@ def minimize(value: Any) -> Any:
         return value
     out: dict[str, Any] = {}
     for key, item in value.items():
-        if key == "engagement_id":
+        if key in DROPPED_FIELDS:
             continue
         if key in MASKED_FIELDS and isinstance(item, str):
             out[key] = "***" + item[-3:]
@@ -531,7 +537,12 @@ async def get_evidence(env: ToolEnv, args: EvidenceArgs) -> Found:
         document = documents.get(args.source_id)
         if document is None:
             raise ToolFailed(f"没有文件 {args.source_id}")
-        data = document.model_dump(mode="json", include={"id", "file_name", "type", "page_count", "status"})
+        # 登记摘录类 (公司摘录, 人员检索) 不发文件名: 人员检索存档的文件名是 {姓}-{名}-{yyyymmdd}.pdf, 含姓名与出生日期
+        # (需求 R305); 模型按文件 ID 与类型引用, 用不到文件名
+        fields = {"id", "type", "page_count", "status"}
+        if document.type is not DocumentType.registry_extract:
+            fields.add("file_name")
+        data = document.model_dump(mode="json", include=fields)
         pointer = EvidencePointer(
             type=DOCUMENT_EVIDENCE.get(document.type, EvidenceType.external),
             source_type="document",
@@ -816,32 +827,45 @@ class ToolBox:
         return tool.label[lang] if tool is not None else UNKNOWN_LABEL[lang]
 
     async def call(self, env: ToolEnv, call: ToolCall) -> ToolOutcome:
-        """执行一个调用. 参数 JSON 不合法, 不合参数模型, 未知工具, 查不到 (ToolFailed) 与其他异常都转成错误文本.
-        取消 (CancelledError) 照常上抛."""
-        tool = self.tools.get(call.name)
-        if tool is None:
-            return failure(f"没有这个工具; 可用的工具: {', '.join(self.tools)}")
-        try:
-            raw = json.loads(call.arguments) if call.arguments.strip() else {}
-        except ValueError as e:
-            return failure(f"参数不是合法的 JSON: {e}")
-        try:
-            args = tool.args.model_validate(raw)
-        except ValidationError as e:
-            return failure(f"参数不合要求: {e.errors(include_url=False, include_input=False)}")
-        try:
-            found = await tool.run(env, args)
-        except ToolFailed as e:
-            return failure(str(e))
-        except LookupError as e:
-            return failure(f"查不到: {e}")
-        except Exception as e:  # 工具出错不中断回答; 只给类型与消息, 由模型换个查法或如实说明
-            return failure(f"查询出错 ({type(e).__name__}): {e}")
-        content = json.dumps(minimize(found.data), ensure_ascii=False, default=str)
+        """执行一个调用 (_run). 发给模型的文本在这一处成形: 工具结果先 minimize, 再在序列化之前遮蔽个人节点 ID 的
+        出生日期段 (mask_person_node_ids, 对结构化数据, 字典的键也遮; 需求 R305), 然后 json.dumps, 超过 max_chars
+        截断 (遮蔽在前, 截口不会留下半截日期); 错误文本同样先遮蔽再序列化 (failure). 引用 (cites) 给前端, 原样."""
+        found = await self._run(env, call)
+        if isinstance(found, str):
+            return failure(found)
+        content = json.dumps(
+            mask_person_node_ids(minimize(found.data)),
+            ensure_ascii=False,
+            default=lambda o: mask_person_text(str(o)),  # 没 dump 的对象转成字符串后也遮蔽
+        )
         if len(content) > env.max_chars:
             content = content[: env.max_chars] + "…[结果过长, 已截断; 可用 limit, offset 翻页或换更具体的查询]"
         return ToolOutcome(content=content, ok=True, cites=found.cites)
 
+    async def _run(self, env: ToolEnv, call: ToolCall) -> Found | str:
+        """执行一个调用, 返回工具的结果 (未经 minimize 与遮蔽, 不得直接外发) 或错误文本. 参数 JSON 不合法, 不合参数
+        模型, 未知工具, 查不到 (ToolFailed) 与其他异常都转成错误文本. 取消 (CancelledError) 照常上抛."""
+        tool = self.tools.get(call.name)
+        if tool is None:
+            return f"没有这个工具; 可用的工具: {', '.join(self.tools)}"
+        try:
+            raw = json.loads(call.arguments) if call.arguments.strip() else {}
+        except ValueError as e:
+            return f"参数不是合法的 JSON: {e}"
+        try:
+            args = tool.args.model_validate(raw)
+        except ValidationError as e:
+            return f"参数不合要求: {e.errors(include_url=False, include_input=False)}"
+        try:
+            return await tool.run(env, args)
+        except ToolFailed as e:
+            return str(e)
+        except LookupError as e:
+            return f"查不到: {e}"
+        except Exception as e:  # 工具出错不中断回答; 只给类型与消息, 由模型换个查法或如实说明
+            return f"查询出错 ({type(e).__name__}): {e}"
+
 
 def failure(message: str) -> ToolOutcome:
-    return ToolOutcome(content=json.dumps({"error": message}, ensure_ascii=False), ok=False, cites={})
+    """错误文本的结果: 文本先遮蔽个人节点 ID 的出生日期段 (mask_person_text), 再序列化."""
+    return ToolOutcome(content=json.dumps({"error": mask_person_text(message)}, ensure_ascii=False), ok=False, cites={})

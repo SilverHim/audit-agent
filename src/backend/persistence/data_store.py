@@ -768,23 +768,33 @@ class PostgresDataStore(Store):
         rows = await self.rows(eid, statement.order_by(t.c.target_type, t.c.target_id, t.c.version))
         return [ExtractionRecord.model_validate(r) for r in rows]
 
-    async def bump_version(self, eid: str, input: DataInput) -> int:
+    async def bump_version(
+        self, eid: str, input: DataInput, *, document_types: Sequence[DocumentType] | None = None
+    ) -> int:
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            return await self._bump(conn, eid, [input])
+            return await self._bump(conn, eid, [input], document_types)
 
-    async def _bump(self, conn: AsyncConnection, eid: str, inputs: Iterable[DataInput]) -> int:
-        """在已开的事务里把数据版本 +1 并记下这次变了哪些数据, 返回新版本 (行锁: 同一项目的写入排队, 版本号连续)."""
+    async def _bump(
+        self,
+        conn: AsyncConnection,
+        eid: str,
+        inputs: Iterable[DataInput],
+        document_types: Sequence[DocumentType] | None = None,
+    ) -> int:
+        """在已开的事务里把数据版本 +1 并记下这次变了哪些数据 (documents 另记文件类型, 见 record_changes), 返回新版本
+        (行锁: 同一项目的写入排队, 版本号连续)."""
         loads = await self.loads_row(conn, eid)
         version = int(loads["data_version"]) + 1
         t = m.dataset_loads
         await conn.execute(update(t).where(t.c.engagement_id == eid).values(data_version=version))
-        await record_changes(conn, eid, version, inputs)
+        await record_changes(conn, eid, version, inputs, document_types)
         return version
 
     async def changes(self, eid: str) -> list[DataChange]:
         t = m.data_changes
-        rows = await self.rows(eid, select(t.c.data_version, t.c.input).order_by(t.c.data_version))
+        columns = (t.c.data_version, t.c.input, t.c.document_types)
+        rows = await self.rows(eid, select(*columns).order_by(t.c.data_version))
         order = list(DataInput)
         found = [DataChange.model_validate(r) for r in rows]
         return sorted(found, key=lambda c: (c.data_version, order.index(c.input)))

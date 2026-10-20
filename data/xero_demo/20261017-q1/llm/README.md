@@ -2,4 +2,6 @@
 
 Runtime copy of tests/fixtures/llm_xero for LLM_MODE=mock (Xero datasets read llm/<procedure>/<key>.json here).
 DOC-SHEET/ is copied from tests/fixtures/llm_variants/upload/DOC-SHEET (upload fixtures, keyed by file name).
+Procedures with no fixtures in tests/fixtures/llm_xero are copied whole from tests/fixtures/llm_xero_only17
+(the path with only the existing 17 procedures).
 Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures and regenerate.

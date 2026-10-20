@@ -74,6 +74,9 @@ class DataChange(Model):
 
     data_version: int  # 变动后的项目数据版本
     input: DataInput  # 变了哪类数据
+    # documents 变动时登记变了的文件的类型 (需求 R304, 按 DocumentType 顺序); 其余为空. 迁移 0020 之前记的与数据集
+    # 载入的 documents 变动也为空: 不知道是哪类文件, 过期按 reads 含 documents 判 (同之前)
+    document_types: list[DocumentType] | None = None
 
 
 # 账表的来源: Xero 同步, 审计师导入, 数据集载入 (种子与演示项目; 概览里显示为空)

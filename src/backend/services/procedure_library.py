@@ -109,6 +109,9 @@ class ProcedureLibrary:
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
+        wrong = document_read_problems(templates)
+        if wrong:
+            raise ValueError(f"程序读文件登记的写法不对 (过期判断要用): {'; '.join(wrong)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -391,6 +394,19 @@ def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
         missing = sorted(used - {i.value for i in t.reads})
         if missing:
             problems.append(f"{t.id} 读 {', '.join(missing)}")
+    return problems
+
+
+def document_read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """读文件登记的声明问题 (消息含程序编号, 需求 R304): reads 含 documents 而没写 document_reads (读哪几类文件的
+    登记; 不写就分不出哪些登记变动与它有关, 所以要求必须写), 或写了 document_reads 而 reads 没有 documents."""
+    problems = []
+    for t in templates:
+        reads = DataInput.documents in t.reads
+        if reads and not t.document_reads:
+            problems.append(f"{t.id}: reads 含 documents 而没写 document_reads")
+        if t.document_reads and not reads:
+            problems.append(f"{t.id}: 写了 document_reads 而 reads 没有 documents")
     return problems
 
 

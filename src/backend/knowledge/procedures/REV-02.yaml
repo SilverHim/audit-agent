@@ -6,6 +6,7 @@ owner: A6
 inputs: {tables: [sales_invoices]}  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
 outputs: [judgments, exceptions, review_tasks]
 reads: [sales_invoices, delivery_notes, journal_entries, accounts, contracts, documents]  # documents 同 REV-03; 总账与科目表: 发票分录行 (需求 R100)
+document_reads: [contract]  # 同 REV-03 (需求 R304)
 engine: hybrid
 autonomy_level: L2
 manual_result_allowed: true

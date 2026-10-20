@@ -709,6 +709,10 @@ export type ClientDataset = {
      * Default
      */
     default?: boolean;
+    /**
+     * Demo
+     */
+    demo?: boolean;
 };
 
 /**
