@@ -109,7 +109,8 @@ class EvidenceAgent(ProcedureAgent[Findings]):
     不映射), 按程序编号分派.
 
     发函是外部动作, 按接口文档第 6 节三步保证不重复: 先按幂等键查成功留痕, 有则按留痕重建; 没有才发函,
-    存档回函, 再写带幂等键的 external_call 留痕. GEN-08 的登记查询同样写带幂等键的留痕, 按留痕重建由需求 R138 做.
+    存档回函, 再写带幂等键的 external_call 留痕. GEN-08 的登记查询同样按幂等键查成功留痕, 有则重建 (ownership.Penetrator
+    .query, 需求 R138).
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A5  # 智能体编号

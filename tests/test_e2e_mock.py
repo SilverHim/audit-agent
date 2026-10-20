@@ -107,13 +107,16 @@ async def start_demo(
     features: frozenset[str] = NUMBAT_FEATURES,
     llm: LLMClient | None = None,
     library: ProcedureLibrary | None = None,
+    registry: FakeRegistry | None = None,
 ) -> Started:
     """启动 → ACC-01 approve → PLN-01/03 approve (收入 1%, 75%, 5%); 返回时后台正在执行 P2 (不等待).
     财务数据预置 Numbat 的明细行, 试算表与两份回函的登记 (合同由数据集载入登记). 参数用于替换 Agent 或注入故障;
-    llm 与 library 换主模型与程序库 (如改了某程序自主度的副本, 程序库的功能集须同 features)."""
+    llm 与 library 换主模型与程序库 (如改了某程序自主度的副本, 程序库的功能集须同 features); registry 换登记系统
+    (缺省为 make_runner 的 Numbat 记录, 如 GEN-08 的穿透用例另带摘录)."""
     financial = FakeFinancialStore(replies(), dict(NUMBAT_RECORDS), trial_balance=NUMBAT_TRIAL_BALANCE)
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     runner, store = make_runner(
+        registry=registry,
         engagement_store=engagement_store,
         agents=agents,
         financial_store=financial,

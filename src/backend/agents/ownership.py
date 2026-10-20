@@ -1,22 +1,28 @@
-"""A5 的 GEN-08 股权穿透与关系图 (需求 R137; 程序 YAML 的注释写口径, 接口文档第 6 节写节点与关系的写法).
+"""A5 的 GEN-08 股权穿透与关系图 (需求 R137, R138; 程序 YAML 的注释写口径, 接口文档第 6 节写节点与关系的写法).
 
-EvidenceAgent 按程序编号分派到这里: Penetrator 依次查登记 (每次一行 external_call, PDF 存档为 registry_extract),
-build_graph 由取得的公司摘录建 OwnershipGraph, undeclared_leads 与画像申报清单比对出 R01 例外. 不调大模型.
+EvidenceAgent 按程序编号分派到这里: Penetrator 依次查登记 (每次一行 external_call, PDF 存档为 registry_extract;
+按幂等键已有成功留痕的不再查询, 由留痕重建), build_graph 由取得的公司摘录建 OwnershipGraph, gen08_exceptions 出 R01
+(与画像申报清单比对) 与 R02 (穿透中断) 例外. 不调大模型.
 
 穿透顺序: ABN Lookup 客户 ABN 取 ACN → 报告主体的公司摘录 → 母公司链: 逐层取持股不低于 significant_pct 的法人股东的
 摘录 (至多 max_depth 层) → 对报告主体及母公司链上有出生日期的高管做人员检索, 取其任职或持股的其他公司的摘录
-(person_hops 轮). 查不到摘录, 没有 ACN, 或超过 max_depth 的公司照样建节点 (searched 为假) 与关系, 不再往下穿透;
-其穿透中断例外 (R02) 与按留痕重建, 失败路径由需求 R138 做. 持股低于 significant_pct 的法人股东不在链上: 只由摘录建
-节点与关系, 不查询, 不出 R01.
+(person_hops 轮). 查不到摘录, 没有 ACN, 或超过 max_depth 的公司照样建节点 (searched 为假) 与关系, 不再往下穿透,
+出 R02. 持股低于 significant_pct 的法人股东不在链上: 只由摘录建节点与关系, 不查询, 不出 R01, R02.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from typing import Any
+from functools import partial
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, RunContext, finish_run
+from backend.contracts.errors import RegistryUnavailable
 from backend.contracts.models import (
     OWNERSHIP_GRAPH_ID,
+    AbnRecord,
     AgentId,
     AsicExtract,
     AuditException,
@@ -30,6 +36,7 @@ from backend.contracts.models import (
     OwnershipGraph,
     PartyLink,
     PartyNode,
+    PersonSearch,
     Reliability,
     Shareholding,
     TrailEntry,
@@ -47,6 +54,15 @@ PROCEDURE_ID = "GEN-08"
 OFFICEHOLDER_PAGE = 1  # 公司摘录第 1 页为公司与高管, 第 2 页为股本与股东 (设计稿第 2.5 节)
 SHAREHOLDER_PAGE = 2
 PERSON_PAGE = 1  # 人员检索结果只有 1 页
+
+# 没有摘录的原因 (Lead.missing) → R02 的 detail.reason
+Missing = Literal["not_found", "no_acn", "beyond_depth"]
+MISSING_REASONS: dict[Missing, str] = {
+    "not_found": "查不到摘录",
+    "no_acn": "没有 ACN",
+    "beyond_depth": "达到 max_depth",
+}
+NO_PERSON_SOURCE = "没有人员检索来源, 高管未检索"  # R02 的 detail.reason: 新建的客户没有人员检索来源
 
 
 def pointer(document: DocumentRef, page: int, locator: str) -> EvidencePointer:
@@ -102,13 +118,14 @@ class Found[T]:
 @dataclass(frozen=True)
 class Lead:
     """穿透中发现的一家公司. via 为发现它的节点 (人员检索的个人, 或它持股的下一层公司), pointer 为发现它的那一行;
-    报告主体两者为空."""
+    报告主体两者为空. missing 为没有取得摘录的原因 (登记时由 reach 记下, R02 据此), 取得了为空."""
 
     node_id: str
     name: str
     acn: str | None
     via: str | None = None
     pointer: EvidencePointer | None = None
+    missing: Missing | None = None
 
 
 @dataclass
@@ -119,34 +136,43 @@ class Penetration:
     leads: list[Lead] = field(default_factory=list)
     extracts: dict[str, Found[AsicExtract]] = field(default_factory=dict)  # 公司节点 ID → 摘录
     searches: dict[str, bool] = field(default_factory=dict)  # 检索过的人员节点 ID → 是否取得了检索结果
-    documents: list[DocumentRef] = field(default_factory=list)  # 存档的 PDF, 按查询顺序
+    documents: list[DocumentRef] = field(default_factory=list)  # 存档或重建的 PDF, 按查询顺序
+    unsearched: list[str] = field(default_factory=list)  # 有高管因没有人员检索来源而未检索的公司, 按发现顺序
 
     def known(self, node_id: str) -> bool:
         return any(lead.node_id == node_id for lead in self.leads)
 
 
 class Penetrator:
-    """执行一次 GEN-08 的登记查询. 每次查询写一行 external_call (幂等键 {eid}:GEN-08:{类别}:{编号}), payload 为查询
-    参数, 结构化结果 (去掉 PDF 原件) 与存档文件 ID (ABN 查询没有文件); 查不到时结果与文件 ID 为空."""
+    """执行一次 GEN-08 的登记查询 (query): 每次查询写一行 external_call (幂等键 {eid}:GEN-08:{类别}:{编号}, 跨执行
+    共用), payload 为查询参数, 结构化结果 (去掉 PDF 原件) 与存档文件 ID (ABN 查询没有文件); 查不到时结果与文件 ID 为空,
+    且记 success 为假. 已有成功留痕的查询不再调 RegistrySource, 由留痕重建 (rebuilt)."""
 
     def __init__(self, deps: AgentDeps, ctx: RunContext) -> None:
         self.deps = deps
         self.ctx = ctx
         self.eid = ctx.engagement.id
         self.params = ctx.run.params_snapshot
+        self.registered: dict[str, DocumentRef] | None = None  # 已登记的 registry_extract 文件, 重建时才取
+        self.person_rows = 0  # 本次执行写的人员检索留痕行数 (摘要的检索序号)
 
     async def run(self) -> Penetration:
         """按模块说明的顺序查完, 返回查询所得. 画像取本项目采用的那一版 (状态中的 client_profile_version), 查不到抛
-        LookupError; 客户 ABN 查不到或没有 ACN 时写完那行留痕后抛 LookupError."""
+        LookupError; 客户 ABN 查不到或没有 ACN 时写完那行留痕后抛 LookupError (执行失败, A1 建 failed 任务)."""
         from backend.agents.ingest import client_profile  # 在此导入: ingest 导入 evidence, evidence 导入本模块
 
         profile = await client_profile(self.deps, self.ctx.engagement, self.ctx.state["client_profile_version"])
-        record = await self.deps.registry.abn(self.eid, profile.abn)
-        result = record.model_dump(mode="json") if record is not None else None
-        await self.record(f"ABN Lookup {profile.abn}", f"abn:{profile.abn}", {"abn": profile.abn, "result": result})
+        found = Penetration(profile)
+        record, _ = await self.query(
+            found,
+            f"abn:{profile.abn}",
+            f"ABN Lookup {profile.abn}",
+            {"abn": profile.abn},
+            partial(self.deps.registry.abn, self.eid, profile.abn),
+            AbnRecord,
+        )
         if record is None or record.acn is None:
             raise LookupError(f"{PROCEDURE_ID}: 客户 ABN {profile.abn} 查不到, 或登记没有 ACN (不是公司), 无从穿透")
-        found = Penetration(profile)
         entity = company_node_id(record.acn)
         chain = await self.reach(found, [Lead(entity, record.entity_name, acn_of(entity))])
         level = chain
@@ -157,36 +183,97 @@ class Penetrator:
         companies = chain
         for _ in range(int(self.params["person_hops"])):
             leads: list[Lead] = []
+            unavailable: set[str] = set()
             for node_id, family, given, birth_date in self.people(found, companies):
-                leads += await self.search(found, node_id, family, given, birth_date)
+                found_leads = await self.search(found, node_id, family, given, birth_date)
+                if found_leads is None:
+                    unavailable.add(node_id)
+                else:
+                    leads += found_leads
+            found.unsearched += [c.node_id for c in companies if self.officers(found, c) & unavailable]
             companies = await self.reach(found, leads)
         return found
 
+    async def query[T: BaseModel](
+        self,
+        found: Penetration,
+        key: str,
+        summary: str,
+        params: dict[str, Any],
+        call: Callable[[], Awaitable[T | None]],
+        model: type[T],
+    ) -> tuple[T | None, DocumentRef | None]:
+        """一次登记查询 (接口文档第 6 节外部动作三步): 幂等键已有成功留痕时由留痕重建 (rebuilt), 不调 RegistrySource,
+        不存档; 否则 call, 查到的 (摘录与人员检索) 存档 PDF, 再写留痕. 返回结果与存档文件 (ABN 查询与查不到为空).
+        上传的摘录 (新建的客户, 结果带 document_id) 不复用留痕: 读的是本所已有的文件, 审计师修改后须读到新的抽取结果.
+        查不到的留痕记 success 为假, 不算成功, 之后的执行照常再查 (登记可能之后有了, 如审计师上传了摘录)."""
+        full_key = f"{self.eid}:{PROCEDURE_ID}:{key}"
+        done = await self.deps.trail.find_success(self.eid, full_key)
+        if done is not None and not uploaded(done.payload):
+            return await self.rebuilt(found, full_key, done.payload, model)
+        record = await call()
+        archived = model is not AbnRecord
+        document = None
+        if record is not None and archived:
+            data = record.model_dump()
+            document = await self.archive(found, str(data["file_name"]), bytes(data["file_bytes"]))
+        result = record.model_dump(mode="json", by_alias=True, exclude={"file_bytes"}) if record is not None else None
+        payload: dict[str, Any] = {**params, "result": result}
+        if archived:
+            payload["document_id"] = document.id if document else None
+        if record is None:
+            payload["success"] = False  # 查不到: 记下查过, 但不作为成功复用 (AuditTrail.find_success 不认)
+        await self.record(summary, key, payload)
+        return record, document
+
+    async def rebuilt[T: BaseModel](
+        self, found: Penetration, key: str, payload: dict[str, Any], model: type[T]
+    ) -> tuple[T, DocumentRef | None]:
+        """由成功留痕重建一次查询: 结构化结果取 payload 的 result, 文件取 FinancialDataStore.documents 中已登记的
+        registry_extract (document_id). payload 缺 result, 摘录与人员检索缺 document_id, 或文件未登记时抛 LookupError
+        (消息含幂等键). 重建的结果不带 PDF 原件 (file_bytes 为空): 原件已在登记的文件里, 不再存档."""
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise LookupError(f"{key}: 留痕 payload 缺结构化结果 (result), 无从重建")
+        if model is AbnRecord:
+            return model.model_validate(result), None
+        document_id = payload.get("document_id")
+        if not isinstance(document_id, str):
+            raise LookupError(f"{key}: 留痕 payload 缺 document_id, 无从重建")
+        if self.registered is None:
+            documents = await self.deps.financial_store.documents(self.eid, DocumentType.registry_extract)
+            self.registered = {d.id: d for d in documents}
+        document = self.registered.get(document_id)
+        if document is None:
+            raise LookupError(f"{key}: 留痕记的文件 {document_id} 未登记, 无从重建")
+        found.documents.append(document)
+        return model.model_validate({**result, "file_bytes": b""}), document
+
     async def reach(self, found: Penetration, leads: list[Lead], fetch: bool = True) -> list[Lead]:
-        """登记新发现的公司 (已登记的与列表中重复的跳过, 留首次出现的), 有 ACN 且 fetch 时取其摘录; 返回取得了摘录的."""
+        """登记新发现的公司 (已登记的与列表中重复的跳过, 留首次出现的), 有 ACN 且 fetch 时取其摘录; 返回取得了摘录的.
+        没有取得摘录的在 Lead.missing 记下原因: 没有 ACN, 超过 max_depth (fetch 为假), 查不到."""
         fetched: list[Lead] = []
         for lead in leads:
             if found.known(lead.node_id):
                 continue
-            found.leads.append(lead)
-            if not fetch or lead.acn is None:
+            if lead.acn is None or not fetch:
+                found.leads.append(replace(lead, missing="no_acn" if lead.acn is None else "beyond_depth"))
                 continue
-            extract = await self.deps.registry.asic_extract(self.eid, lead.acn)
-            document = await self.archive(found, extract.file_name, extract.file_bytes) if extract else None
-            await self.record(
-                f"ASIC company extract {lead.acn}",
-                f"extract:{lead.acn}",
-                {
-                    "acn": lead.acn,
-                    "result": extract.model_dump(mode="json", by_alias=True, exclude={"file_bytes"})
-                    if extract
-                    else None,
-                    "document_id": document.id if document else None,
-                },
+            acn = lead.acn
+            extract, document = await self.query(
+                found,
+                f"extract:{acn}",
+                f"ASIC company extract {acn}",
+                {"acn": acn},
+                partial(self.deps.registry.asic_extract, self.eid, acn),
+                AsicExtract,
             )
-            if extract is not None and document is not None:
-                found.extracts[lead.node_id] = Found(extract, document)
-                fetched.append(lead)
+            if extract is None or document is None:
+                found.leads.append(replace(lead, missing="not_found"))
+                continue
+            found.leads.append(lead)
+            found.extracts[lead.node_id] = Found(extract, document)
+            fetched.append(lead)
         return fetched
 
     def parents(self, found: Penetration, companies: list[Lead]) -> list[Lead]:
@@ -218,22 +305,34 @@ class Penetrator:
                     wanted[node_id] = (node_id, family, given, officer.birth_date)
         return list(wanted.values())
 
-    async def search(self, found: Penetration, node_id: str, family: str, given: str, birth_date: date) -> list[Lead]:
-        """人员检索一人, 返回其任职或持股的公司 (按检索结果的顺序; 去重与已登记的由 reach 处理). 留痕摘要只写本次
-        执行的检索序号, 不写姓名与出生日期 (摘要会经审计助理的工具发给对话模型); 参数在 payload 与幂等键里."""
-        person = await self.deps.registry.asic_person(self.eid, family, given, birth_date)
-        document = await self.archive(found, person.file_name, person.file_bytes) if person else None
-        await self.record(
-            f"ASIC person search #{len(found.searches) + 1}",
-            f"person:{node_id.removeprefix('PER-')}",
-            {
-                "family_name": family,
-                "given_name": given,
-                "birth_date": birth_date.isoformat(),
-                "result": person.model_dump(mode="json", exclude={"file_bytes"}) if person else None,
-                "document_id": document.id if document else None,
-            },
-        )
+    @staticmethod
+    def officers(found: Penetration, company: Lead) -> set[str]:
+        """一家公司摘录中有出生日期的高管的节点 ID."""
+        extract = found.extracts[company.node_id].record
+        return {person_ref(o.name, o.birth_date)[0] for o in extract.officeholders if o.birth_date is not None}
+
+    async def search(
+        self, found: Penetration, node_id: str, family: str, given: str, birth_date: date
+    ) -> list[Lead] | None:
+        """人员检索一人, 返回其任职或持股的公司 (按检索结果的顺序; 去重与已登记的由 reach 处理). 没有人员检索来源
+        (RegistryUnavailable no_source, 新建的客户) 时不写留痕, 返回 None, 由 run 记进 unsearched 出 R02; 其他查不了
+        的情形 (不可达, 出错) 照常抛出, 整次执行失败, rerun 时已查过的不再查. 留痕摘要只写本次执行的检索序号, 不写
+        姓名与出生日期 (摘要会经审计助理的工具发给对话模型); 参数在 payload 与幂等键里."""
+        params = {"family_name": family, "given_name": given, "birth_date": birth_date.isoformat()}
+        try:
+            person, document = await self.query(
+                found,
+                f"person:{node_id.removeprefix('PER-')}",
+                f"ASIC person search #{self.person_rows + 1}",
+                params,
+                partial(self.deps.registry.asic_person, self.eid, family, given, birth_date),
+                PersonSearch,
+            )
+        except RegistryUnavailable as exc:
+            if exc.reason != "no_source":
+                raise
+            found.searches[node_id] = False
+            return None
         found.searches[node_id] = person is not None and document is not None
         if person is None or document is None:
             return []
@@ -258,6 +357,8 @@ class Penetrator:
         return document
 
     async def record(self, summary: str, key: str, payload: dict[str, Any]) -> None:
+        if key.startswith("person:"):
+            self.person_rows += 1
         await self.deps.trail.record(
             TrailEntry(
                 engagement_id=self.eid,
@@ -272,12 +373,19 @@ class Penetrator:
         )
 
 
-def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
+def uploaded(payload: dict[str, Any]) -> bool:
+    """留痕的结果来自审计师上传的摘录 (新建的客户, 结构化结果带 document_id): 这种查询不按留痕复用."""
+    result = payload.get("result")
+    return isinstance(result, dict) and result.get("document_id") is not None
+
+
+def build_graph(run_id: str, found: Penetration, version: int = 1) -> OwnershipGraph:
     """由取得的公司摘录建关系图. 公司节点为发现的各公司 (取得了摘录的名称按摘录, searched 为真; 报告主体另带画像的
     ABN) 与这些摘录里其余的法人股东 (持股低于 significant_pct 的, 以及人员检索发现的公司的法人股东); 人员节点为摘录里的
     高管与个人股东, searched 为取得了人员检索结果. 股东行按规范化姓名并入同一摘录有出生日期的高管; 由某人的检索结果
     发现的公司, 其摘录里与该人同名的股东行并入该人的节点 (只持股不任职时也是一个节点). 关系只取公司摘录: 按发现顺序
-    逐份, 高管 (第 1 页, officeholders[i]) 在前, 股东 (第 2 页, shareholders[i]) 在后. 节点按 ID 排序."""
+    逐份, 高管 (第 1 页, officeholders[i]) 在前, 股东 (第 2 页, shareholders[i]) 在后. 节点按 ID 排序. version 为图的
+    版本 (重跑时为状态中的版本 +1)."""
     entity = found.leads[0]
     nodes: dict[str, PartyNode] = {}
     for lead in found.leads:
@@ -329,6 +437,7 @@ def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
         nodes[node_id] = nodes[node_id].model_copy(update={"searched": result})
     return OwnershipGraph(
         id=OWNERSHIP_GRAPH_ID,
+        version=version,
         run_id=run_id,
         reporting_entity_id=entity.node_id,
         nodes=sorted(nodes.values(), key=lambda node: node.id),
@@ -365,12 +474,43 @@ def relation_text(link: PartyLink) -> str:
     return link.relation
 
 
-def undeclared_leads(ctx: RunContext, found: Penetration, graph: OwnershipGraph) -> list[AuditException]:
-    """R01 关联候选未申报 (high): 报告主体以外发现的公司, 不在画像申报清单中, 按发现顺序编号. detail 写名称, ACN,
-    发现它的节点 (via) 及两者之间的关系; 证据为发现它的那一行与它自己摘录的第 1 页 (取得了摘录时)."""
+def gen08_exceptions(ctx: RunContext, found: Penetration, graph: OwnershipGraph) -> list[AuditException]:
+    """本次执行的例外: R01 (undeclared_leads) 在前, R02 (interrupted_leads) 在后, 各按发现顺序编号. 状态中本程序已有的
+    同 (rule_id, source_ids) 例外不再出 (重跑时不重复), 编号只数本次出的."""
+    existing = {(x.rule_id, tuple(x.source_ids)) for x in ctx.state["exceptions"] if x.procedure_id == PROCEDURE_ID}
+    exceptions: list[AuditException] = []
+    for rule_id, severity, leads in (
+        ("R01", "high", undeclared_leads(ctx, found, graph)),
+        ("R02", "medium", interrupted_leads(found, graph)),
+    ):
+        fresh = [
+            (source, detail, evidence) for source, detail, evidence in leads if (rule_id, (source,)) not in existing
+        ]
+        exceptions += [
+            AuditException(
+                id=f"X-{PROCEDURE_ID}-{ctx.run.run_no}-{rule_id}-{n}",
+                procedure_id=ctx.procedure.id,
+                run_id=ctx.run.id,
+                rule_id=rule_id,
+                severity=severity,
+                source_ids=[source],
+                detail=detail,
+                evidence=evidence,
+            )
+            for n, (source, detail, evidence) in enumerate(fresh, start=1)
+        ]
+    return exceptions
+
+
+Finding = tuple[str, dict[str, Any], list[EvidencePointer]]  # 一条例外的 (节点 ID, detail, 证据)
+
+
+def undeclared_leads(ctx: RunContext, found: Penetration, graph: OwnershipGraph) -> list[Finding]:
+    """R01 关联候选未申报 (high): 报告主体以外发现的公司, 不在画像申报清单中, 按发现顺序. detail 写名称, ACN, 发现它的
+    节点 (via) 及两者之间的关系; 证据为发现它的那一行与它自己摘录的第 1 页 (取得了摘录时)."""
     names = {node.id: node.name for node in graph.nodes}
     suffixes = list(ctx.run.params_snapshot["entity_suffixes"])
-    exceptions: list[AuditException] = []
+    findings: list[Finding] = []
     for lead in found.leads[1:]:
         if declared(found.profile, names[lead.node_id], lead.acn, suffixes) is not None:
             continue
@@ -379,35 +519,49 @@ def undeclared_leads(ctx: RunContext, found: Penetration, graph: OwnershipGraph)
         if got is not None:
             evidence.append(pointer(got.document, OFFICEHOLDER_PAGE, "acn"))
         between = {lead.via, lead.node_id}
-        exceptions.append(
-            AuditException(
-                id=f"X-{PROCEDURE_ID}-{ctx.run.run_no}-R01-{len(exceptions) + 1}",
-                procedure_id=ctx.procedure.id,
-                run_id=ctx.run.id,
-                rule_id="R01",
-                severity="high",
-                source_ids=[lead.node_id],
-                detail={
-                    "name": names[lead.node_id],
-                    "acn": lead.acn,
-                    "via": lead.via,
-                    "via_relations": [relation_text(x) for x in graph.links if {x.from_id, x.to_id} == between],
-                    "declared": False,
-                    "profile_version": found.profile.version,
-                },
-                evidence=evidence,
-            )
-        )
-    return exceptions
+        detail = {
+            "name": names[lead.node_id],
+            "acn": lead.acn,
+            "via": lead.via,
+            "via_relations": [relation_text(x) for x in graph.links if {x.from_id, x.to_id} == between],
+            "declared": False,
+            "profile_version": found.profile.version,
+        }
+        findings.append((lead.node_id, detail, evidence))
+    return findings
+
+
+def interrupted_leads(found: Penetration, graph: OwnershipGraph) -> list[Finding]:
+    """R02 穿透中断 (medium): 发现的公司 (含报告主体) 没有取得摘录 (Lead.missing: 查不到, 没有 ACN, 达到 max_depth),
+    或有高管因没有人员检索来源而未检索 (unsearched), 按发现顺序. detail 写名称, ACN, via 与原因 (reason); 证据为
+    发现它的那一行 (报告主体没有), 未检索的另加该公司摘录的高管页."""
+    names = {node.id: node.name for node in graph.nodes}
+    findings: list[Finding] = []
+    for lead in found.leads:
+        if lead.missing is not None:
+            reason = MISSING_REASONS[lead.missing]
+        elif lead.node_id in found.unsearched:
+            reason = NO_PERSON_SOURCE
+        else:
+            continue
+        evidence = [lead.pointer] if lead.pointer is not None else []
+        got = found.extracts.get(lead.node_id)
+        if got is not None:
+            evidence.append(pointer(got.document, OFFICEHOLDER_PAGE, "officeholders"))
+        detail = {"name": names[lead.node_id], "acn": lead.acn, "via": lead.via, "reason": reason}
+        findings.append((lead.node_id, detail, evidence))
+    return findings
 
 
 def ownership_patch(ctx: RunContext, found: Penetration) -> StatePatch:
-    """GEN-08 的片段: 关系图, R01 例外, 存档的登记 PDF (按 ID 去重, 保持查询顺序) 与执行记录的成功终态."""
-    graph = build_graph(ctx.run.id, found)
+    """GEN-08 的片段: 关系图 (版本取状态中的 +1, 没有为 1), R01 与 R02 例外, 存档或重建的登记 PDF (按 ID 去重, 保持
+    查询顺序) 与执行记录的成功终态."""
+    previous = ctx.state["ownership_graph"]
+    graph = build_graph(ctx.run.id, found, previous.version + 1 if previous is not None else 1)
     documents = {document.id: document for document in found.documents}
     return {
         "ownership_graph": graph,
-        "exceptions": undeclared_leads(ctx, found, graph),
+        "exceptions": gen08_exceptions(ctx, found, graph),
         "documents": list(documents.values()),
         "procedure_runs": [finish_run(ctx.run, datetime.now(UTC))],
     }
