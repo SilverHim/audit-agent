@@ -819,15 +819,6 @@ export const en = {
     save: 'Save',
     saved: 'Saved',
     effect: 'Takes effect from the next procedure that runs.',
-    dataTitle: 'What the providers receive',
-    dataItems: [
-      'Only the fields a procedure needs. Never a whole ledger, contract set or client file.',
-      'Personal names, TFNs and bank account numbers are replaced with placeholders before sending. The mapping stays here.',
-      'The audit trail lists the fields sent with every call.',
-      'Documents and model replies are treated as data. Nothing in them can approve a step or change a setting.',
-    ],
-    dataFoot:
-      'Choose providers that meet APP 8 for overseas disclosure: a data processing agreement, no training on your data, and a region you can set.',
   },
   ask: {
     placeholder: 'Ask about this engagement',
