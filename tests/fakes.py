@@ -34,6 +34,7 @@ from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.evidence import confirmation_key, legacy_key
 from backend.agents.ingest import build_contract
+from backend.agents.registry import with_manual_owners
 from backend.contracts.data import (
     ApprovalLogRow,
     CheckId,
@@ -2455,7 +2456,7 @@ def make_deps(
     elif features != library.features:
         raise ValueError(f"features {sorted(features)} 与程序库的 {sorted(library.features)} 不一致")
     judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
-    return replace(
+    deps = replace(
         deps,
         library=library,
         queue=ReviewQueue(library),
@@ -2475,6 +2476,7 @@ def make_deps(
         review_llm=review_llm,
         features=features,
     )
+    return with_manual_owners(deps)  # 同组装根: 按换好的程序库与假实现重找人工程序的 owner
 
 
 def profile_update(profile: ClientProfile) -> tuple[int, dict[str, Any]]:

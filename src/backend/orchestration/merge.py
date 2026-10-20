@@ -25,6 +25,8 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.services.procedure_library import ProcedureLibrary
 
 # 各 Agent 可写的状态字段, 即第 6 节返回字段表; 另外都可写 procedure_runs (本次执行的终态)
+DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发, 需求 R92) 可写的字段, 另有本次执行记录
+
 AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
@@ -309,8 +311,9 @@ def check_patch(
 
     patch: Agent.run 的返回; fan_in 时为暂存结果中的片段.
     writer: 产出片段的 Agent, 决定可写哪些字段, 如 AgentId.A2.
-    procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id. run_id 为 None 时片段不带
-    执行记录, 不查终态 (人工程序 owner 整理结果的片段, 需求 R93).
+    procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id. run_id 为 None 时为人工
+    程序 owner 整理结果的片段 (需求 R93): 不能带派发片段的字段 (执行记录 procedure_runs 与 DISPATCH_FIELDS), 不查终态
+    与 check_own_run (没有本次执行), ID 与外键照查.
     state: 执行时的编排状态, 只读, 用来查外键与已有版本.
     outputs: 本程序模板声明的产出字段 (template.outputs); 片段只能含这些与 procedure_runs.
     先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键, 本次执行的终态
@@ -319,11 +322,12 @@ def check_patch(
     state=ctx.state, outputs=ctx.template.outputs)
     """
     reasons = check_fields(patch, writer, procedure_id, outputs)
+    if run_id is None:
+        dispatched = [f for f in ("procedure_runs", *DISPATCH_FIELDS) if f in patch]
+        reasons += [f"整理结果的片段不能带派发片段的字段 {f}" for f in dispatched]
     if not reasons:
         reasons = [*check_ids(patch, state), *check_refs(patch, state)]
         if run_id is not None:
             reasons += [*check_run(patch, procedure_id, run_id), *check_own_run(patch, run_id)]
-        elif "procedure_runs" in patch:
-            reasons.append("整理结果的片段不能带执行记录 procedure_runs")
     if reasons:
         raise MergeRejected(reasons)

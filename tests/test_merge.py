@@ -523,6 +523,50 @@ def test_current_run_of_other_procedure_rejected() -> None:
     assert info.value.reasons == [f"本次执行 {RUN.id} 的 procedure_id 为 REV-03, 应为 REV-08"]
 
 
+# ── 人工程序 owner 整理结果的片段 (run_id 为 None, 需求 R93) ──
+
+COLLECTED = exception("X-REV-03-1-MAN-1", "REV-03", RUN.id)  # owner A6 整理出的例外, 挂在派发的那次执行下
+
+
+@pytest.mark.parametrize(
+    ("patch", "existing", "reasons"),
+    [
+        ({"exceptions": [COLLECTED]}, [], []),
+        (
+            {"exceptions": [COLLECTED], "procedure_runs": [finished(RUN)]},
+            [],
+            ["整理结果的片段不能带派发片段的字段 procedure_runs"],
+        ),
+        ({"review_tasks": [task()]}, [], ["整理结果的片段不能带派发片段的字段 review_tasks"]),
+        (
+            {"exceptions": [COLLECTED.model_copy(update={"run_id": "RUN-REV-03-9"})]},
+            [],
+            [f"AuditException {COLLECTED.id} 的 run_id RUN-REV-03-9 不在执行记录中"],
+        ),
+        (
+            {"exceptions": [COLLECTED]},
+            [COLLECTED.model_copy(update={"version": 2})],
+            [f"exceptions 中 {COLLECTED.id} v1 低于状态中已有的 v2"],
+        ),
+    ],
+    ids=["passes", "with_runs", "with_tasks", "unknown_run", "lower_version"],
+)
+def test_collected_patch_checked_without_a_run(
+    patch: StatePatch, existing: list[AuditException], reasons: list[str]
+) -> None:
+    """run_id 为 None (owner 整理结果的片段): 不能带派发片段的字段 (执行记录, 任务; 后者即使模板 outputs 声明了也不行),
+    不查终态, ID (版本不低于状态中的) 与外键 (run_id 在执行记录中) 照查. 状态里已有派发的那次执行."""
+    state = make_state(procedure_runs=[finished(RUN)], exceptions=existing)
+    try:
+        check_patch(
+            patch, writer=AgentId.A6, procedure_id="REV-03", run_id=None, state=state, outputs=declared("REV-03")
+        )
+    except MergeRejected as e:
+        assert e.reasons == reasons
+    else:
+        assert reasons == []
+
+
 # ── 原因汇总与异常文本 ──
 
 

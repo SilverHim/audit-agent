@@ -13,10 +13,10 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
-from backend.agents.base import AgentDeps, ManualHandler, ProcedureAgent, RunContext
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.checkup import DataCheckup, resources
 from backend.agents.client_intel import company_check
-from backend.agents.registry import build_agents, manual_owners
+from backend.agents.registry import build_agents
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -49,6 +49,7 @@ from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState, StagedResult, StatePatch
 from backend.orchestration.inputs import check_inputs, declared, input_versions
 from backend.orchestration.merge import (
+    DISPATCH_FIELDS,
     FIELD_REPLAY,
     LATER_RUNS,
     TARGET_FIELDS,
@@ -167,9 +168,6 @@ def done_status(template: ProcedureTemplate) -> ProcedureStatus:
     """程序执行成功且没有待决任务时的状态: 闸门程序 (模板 gate 不为空, 如 PLN-01) 保持 planned, 由 DecisionSubmit 在
     闸门 approve 时置 completed (Q5); 其余为 completed. 节点执行 (attempt) 与复核决定后的重算 (DecisionSubmit) 共用."""
     return ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
-
-
-DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发) 可写的字段, 另有本次执行记录
 
 
 def writer_of(template: ProcedureTemplate, agent: ProcedureAgent[Any]) -> AgentId:
@@ -458,8 +456,6 @@ class GraphNodes:
         self.deps = deps  # 外部依赖
         self.parallel_cap = parallel_cap  # fieldwork 实例并行上限
         self.agents: dict[str, ProcedureAgent[Any]] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
-        # 人工程序 → 模板 owner 的 ManualHandler, 节点读回 manual_result 后调它的 collect (需求 R93)
-        self.owners: dict[str, ManualHandler] = manual_owners(deps)
         check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
         check_inputs(deps.library, NODE_PROCEDURES["p1_ingest"])  # 模板 inputs 的写法 (需求 R272)
 
@@ -764,7 +760,10 @@ class GraphNodes:
                     raise ValueError(f"{record_id} 处理的任务 {task.id} 不属于正在等待的 {procedure_id}")
                 merge_patch(result, await self.read_review(eid, procedure_id))
                 if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
-                    seen = apply_patch(current, patch)  # 带上派发的执行记录与任务, 整理出的对象可引用它们
+                    # 只并入派发的执行记录与任务 (整理出的对象可引用它们), 不并入重放按 outputs 取回的对象: 写 Store
+                    # 后被杀再重放时, 那里已有 collect 自己上次写的, owner 看到它们会算出不同的结果
+                    dispatched: StatePatch = {f: patch[f] for f in ("procedure_runs", *DISPATCH_FIELDS) if f in patch}
+                    seen = apply_patch(current, dispatched)
                     merge_patch(result, await self.collect(engagement, seen, procedure_id, record, task))
             else:
                 # 不再等: 这一轮的程序版本当时就不等人 (新执行, 或重放取回的 completed, planned) 时用它; 当时在等
@@ -786,18 +785,19 @@ class GraphNodes:
     async def collect(
         self, engagement: Engagement, state: EngagementState, procedure_id: str, record: ReviewRecord, task: ReviewTask
     ) -> StatePatch:
-        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段按 owner 与模板
-        outputs 校验 (不带执行记录), 以 owner 为写入者在一个事务内写入 Store, 返回写入后的片段.
+        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段按 owner 的写入
+        范围与模板 outputs 校验, 不能带执行记录与任务 (check_patch 的 run_id 为 None), 以 owner 为写入者在一个事务内
+        写入 Store, 返回写入后的片段.
 
-        state: 本次执行看到的状态, 带上派发的执行记录与任务; ctx.run 为派发的那次执行 (任务的 run_id). collect 是
-        纯函数, 节点重放时重算得同一对象, 再写 Store 不新增. 片段校验不过抛 MergeRejected (节点错误, 记入
-        run_error), 什么都不写.
+        state: 本次执行前的状态只并入派发片段的执行记录与任务 (在线与重放相同); ctx.run 为派发的那次执行 (任务的
+        run_id, 失败再 rerun 后为最新一次). collect 是纯函数, 节点重放时重算得同一对象, 再写 Store 不新增. 片段
+        校验不过抛 MergeRejected (节点错误, 记入 run_error), 什么都不写.
         """
         template = self.deps.library.load(procedure_id)
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         run = next(r for r in state["procedure_runs"] if r.id == task.run_id)
         ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
-        patch = self.owners[procedure_id].collect(ctx, record)
+        patch = self.deps.manual_owners[procedure_id].collect(ctx, record)
         check_patch(
             patch, writer=template.owner, procedure_id=procedure_id, run_id=None, state=state, outputs=template.outputs
         )

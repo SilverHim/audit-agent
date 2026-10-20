@@ -16,6 +16,7 @@ from backend.adapters.registry import CompositeRegistrySource, UploadedExtracts
 from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat, make_chat_source
+from backend.agents.registry import with_manual_owners
 from backend.api.errors import validation_error
 from backend.api.routes import api_router
 from backend.api.routes.integrations import install_log_filter
@@ -79,7 +80,7 @@ def build_deps(settings: Settings) -> AgentDeps:
     # 表单的在线核对另包一层短时缓存
     abn_lookup = AbnLookupClient(settings.ABN_LOOKUP_GUID, settings.ABN_LOOKUP_URL)
     data = PostgresDataStore(settings.EVIDENCE_ROOT, engine)
-    return AgentDeps(
+    deps = AgentDeps(
         financial_store=financial_store,
         output_store=PostgresAuditOutputStore(engine),
         evidence_store=evidence_store,
@@ -107,6 +108,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         review_llm=review_llm,
         features=features,
     )
+    return with_manual_owners(deps)  # 人工程序的 owner 最后找, 各处共用 (需求 R93)
 
 
 async def recover(runner: GraphRunner, data_service: DataService) -> None:

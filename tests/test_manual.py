@@ -3,19 +3,22 @@
 两条测试程序放在临时 knowledge 目录, 都在完成阶段, 由 A10 派发, 材料与结果整理由模板 owner 的测试 Agent 实现:
 - TST-M01 (owner A10, outputs []): 取得签字的管理层声明书, 结果模型 TstLetter, 至少 2 条证据 (不同于缺省的 1);
   owner LetterOwner 不另查, 不整理对象.
-- TST-M02 (owner A6, outputs [exceptions]): 登记管理层的回复, 结果模型 TstReply; owner ReplyOwner 的材料为
-  {"items": ["M-TEST-1"]}, amount_cents 为负时拒绝, 按结果整理出例外 X-TST-M02-1-MAN-1.
+- TST-M02 (owner A6, outputs [exceptions, confirmations]): 登记管理层的回复, 结果模型 TstReply; owner ReplyOwner
+  的材料为 {"items": ["M-TEST-1"]}, amount_cents 为负时拒绝, 按结果整理出例外 X-TST-M02-1-MAN-1 (编号按状态中本次
+  执行已有的例外数取) 并把状态中第一份函证出新版本 (读状态的纯函数, 重放时看到的状态须同在线).
 完成节点改为先执行其中一条再执行 FIN-04, 节点按通用等待 (R87) 停在节点内等人提交 manual_result.
 """
 
 import re
 import shutil
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 from backend.agents import registry
@@ -56,7 +59,14 @@ from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.decisions import check_manual_result
 from backend.orchestration.merge import MergeRejected
-from backend.orchestration.nodes import DISPATCH_FIELDS, NODE_PROCEDURES, check_dispatch, writer_of
+from backend.orchestration.nodes import (
+    DISPATCH_FIELDS,
+    NODE_PROCEDURES,
+    GraphNodes,
+    apply_patch,
+    check_dispatch,
+    writer_of,
+)
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.procedure_library import ProcedureLibrary, manual_program
@@ -101,7 +111,7 @@ MANUAL = f"manual:\n  instructions: {INSTRUCTIONS}\n  result_model: TstLetter\n 
 LLM = "llm:\n  prompt: DOC-04.md.j2\n  output_model: ContractExtraction\n"  # 借 DOC-04 的, 只为能加载
 REPLY_YAML = (
     f"id: {REPLY}\nname: 自测管理层回复\nphase: P3_Completion\ncycle: Completion\nowner: A6\nengine: manual\n"
-    "autonomy_level: L1\noutputs: [exceptions]\n"
+    "autonomy_level: L1\noutputs: [exceptions, confirmations]\n"
     "manual:\n  instructions: Record management's reply\n  result_model: TstReply\n  min_evidence: 1\n"
 )
 MATERIAL = {"period_end": "2026-06-30"}  # LetterOwner 派发时给人的材料
@@ -118,6 +128,7 @@ LETTER = DocumentRef(  # 审计师已上传的声明书 (2 页, 公司出具的�
 )
 DECIDED_AT = datetime(2026, 10, 23, 5, tzinfo=UTC)  # 悉尼 10-23 16:00
 CALLS: list[tuple[str, str]] = []  # 两个 owner 各步的调用 (步骤, 程序), 每个用例前清空
+CALLERS: list[object] = []  # 与 CALLS 对应的 owner 实例
 
 
 class TstLetter(Model):
@@ -144,6 +155,11 @@ class Owner(ProcedureAgent[None]):
     async def interpret(self, ctx: RunContext, findings: None) -> StatePatch:
         raise NotImplementedError("owner 只实现 ManualHandler")
 
+    def called(self, step: str, ctx: RunContext) -> None:
+        """记下一步调用 (步骤, 程序) 与调用的实例."""
+        CALLS.append((step, ctx.procedure.id))
+        CALLERS.append(self)
+
 
 class LetterOwner(Owner):
     """TST-M01 的 owner (A10): 材料为 MATERIAL, 按程序不另查, 不整理出对象."""
@@ -152,39 +168,42 @@ class LetterOwner(Owner):
     manual_procedures: ClassVar[frozenset[str]] = frozenset({TST})
 
     def prepare(self, ctx: RunContext) -> dict[str, Any]:
-        CALLS.append(("prepare", ctx.procedure.id))
+        self.called("prepare", ctx)
         return dict(MATERIAL)
 
     def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]:
-        CALLS.append(("check", ctx.procedure.id))
+        self.called("check", ctx)
         return []
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch:
-        CALLS.append(("collect", ctx.procedure.id))
+        self.called("collect", ctx)
         return {}
 
 
 class ReplyOwner(Owner):
-    """TST-M02 的 owner (A6): 材料为 REPLY_MATERIAL; amount_cents 为负时拒绝; 按回复的金额整理出一条例外 (extra 为真时
-    另带一个没声明的字段, 测合并校验)."""
+    """TST-M02 的 owner (A6): 材料为 REPLY_MATERIAL; amount_cents 为负时拒绝; 按回复的金额整理出一条例外, 编号取状态中
+    本次执行已有的例外数加 1 (同 RPT-03 按状态取修订号), 并把状态中 ID 最小的函证按常规写法出新版本 (version + 1)
+    记下回复金额: 都读 ctx.state, 重放时看到自己上次写进 Store 的对象就会多出一条例外, 一个版本. extra 为真时另带
+    一个没声明的字段, 测合并校验."""
 
     agent_id: ClassVar[AgentId] = AgentId.A6
     manual_procedures: ClassVar[frozenset[str]] = frozenset({REPLY})
     extra: ClassVar[bool] = False
 
     def prepare(self, ctx: RunContext) -> dict[str, Any]:
-        CALLS.append(("prepare", ctx.procedure.id))
+        self.called("prepare", ctx)
         return dict(REPLY_MATERIAL)
 
     def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]:
-        CALLS.append(("check", ctx.procedure.id))
+        self.called("check", ctx)
         return ["amount_cents 不得为负"] if result.details.get("amount_cents", 0) < 0 else []
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch:
-        CALLS.append(("collect", ctx.procedure.id))
+        self.called("collect", ctx)
         assert record.manual_result is not None
+        mine = [x for x in ctx.state["exceptions"] if x.run_id == ctx.run.id]
         exception = AuditException(
-            id=f"X-{REPLY}-{ctx.run.run_no}-MAN-1",
+            id=f"X-{REPLY}-{ctx.run.run_no}-MAN-{len(mine) + 1}",
             procedure_id=REPLY,
             run_id=ctx.run.id,
             rule_id="MAN",
@@ -193,19 +212,29 @@ class ReplyOwner(Owner):
             evidence=record.manual_result.evidence,
             amount_cents=record.manual_result.details["amount_cents"],
         )
-        patch: StatePatch = {"exceptions": [exception]}
+        amount = record.manual_result.details["amount_cents"]
+        confirmations = [
+            c.model_copy(update={"version": c.version + 1, "confirmed_balance_cents": amount})
+            for c in sorted(ctx.state["confirmations"], key=lambda c: c.id)[:1]
+        ]
+        patch: StatePatch = {"exceptions": [exception], "confirmations": confirmations}
         return {**patch, "judgments": []} if self.extra else patch
+
+
+def register(monkeypatch: pytest.MonkeyPatch, program: str = TST) -> None:
+    """登记两个结果模型与两个测试 owner; 完成节点先执行 program 再执行 FIN-04 (recovery 与 nodes 共用这张表)."""
+    monkeypatch.setitem(RESULT_MODELS, "TstLetter", TstLetter)
+    monkeypatch.setitem(RESULT_MODELS, "TstReply", TstReply)
+    monkeypatch.setattr(registry, "AGENT_CLASSES", (*registry.AGENT_CLASSES, LetterOwner, ReplyOwner))
+    monkeypatch.setitem(NODE_PROCEDURES, "completion", (program, "FIN-04"))
 
 
 @pytest.fixture(autouse=True)
 def registered(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """登记两个结果模型与两个测试 owner; 完成节点先执行 TST-M01 再执行 FIN-04 (recovery 与 nodes 共用这张表, R93
-    的用例另改为 TST-M02); 清空 owner 的调用记录."""
-    monkeypatch.setitem(RESULT_MODELS, "TstLetter", TstLetter)
-    monkeypatch.setitem(RESULT_MODELS, "TstReply", TstReply)
-    monkeypatch.setattr(registry, "AGENT_CLASSES", (*registry.AGENT_CLASSES, LetterOwner, ReplyOwner))
-    monkeypatch.setitem(NODE_PROCEDURES, "completion", (TST, "FIN-04"))
+    """每个用例: register (完成节点为 TST-M01, R93 的用例经 reply_node 改为 TST-M02); 清空 owner 的调用记录."""
+    register(monkeypatch)
     CALLS.clear()
+    CALLERS.clear()
     yield
 
 
@@ -333,19 +362,40 @@ def test_manual_task_carries_the_request(tmp_path: Path) -> None:
 # ── R93 验收 1: 映射到 A10, owner 须实现 ManualHandler ──
 
 
+class Undeclared(ReplyOwner):
+    """agent_id 为 A6, 实现了 ManualHandler, 但 manual_procedures 不含 TST-M02."""
+
+    manual_procedures: ClassVar[frozenset[str]] = frozenset()
+
+
+class Unimplemented(Owner):
+    """agent_id 为 A6, manual_procedures 含 TST-M02, 但没实现 ManualHandler."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A6
+    manual_procedures: ClassVar[frozenset[str]] = frozenset({REPLY})
+
+
 def test_manual_programs_map_to_a10_and_need_an_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """build_agents 把两条人工程序都映射到 RPT-03 的那个 ConciergeAgent (A10 代码不按程序改), 其 owners 为两个测试
-    owner; TST-M02 的 owner A6 没有为它实现 ManualHandler 时启动即报错, 消息含程序编号与 owner."""
+    """组装时 (registry.with_manual_owners, make_deps 同组装根) 按模板 owner 找好两条人工程序的 owner 放进 deps;
+    build_agents 把它们都映射到 RPT-03 的那个 ConciergeAgent (A10 代码不按程序改). owner 须 agent_id 为模板 owner,
+    manual_procedures 含该程序且实现了 ManualHandler, 缺一项 (不在 AGENT_CLASSES, 没声明, 没实现) 都在组装时报错,
+    消息含程序编号与 owner; 换了程序库而没重新组装时 build_agents 报错."""
     library = manual_library(tmp_path / "knowledge", [TST_YAML + MANUAL, REPLY_YAML])
     deps = make_deps(FakeRegistry(), FakeTrail(), library=library)
+    assert {pid: type(owner) for pid, owner in deps.manual_owners.items()} == {TST: LetterOwner, REPLY: ReplyOwner}
     agents = registry.build_agents(deps)
     concierge = agents["RPT-03"]
     assert isinstance(concierge, ConciergeAgent)
     assert agents[TST] is agents[REPLY] is concierge
-    assert {pid: type(owner) for pid, owner in concierge.owners.items()} == {TST: LetterOwner, REPLY: ReplyOwner}
-    monkeypatch.setattr(registry, "AGENT_CLASSES", (*registry.AGENT_CLASSES[:-1],))  # 去掉 ReplyOwner
-    with pytest.raises(LookupError, match=f"{REPLY} 的 owner A6 没有为它实现 ManualHandler"):
-        registry.build_agents(deps)
+    unassembled = replace(make_deps(FakeRegistry(), FakeTrail()), library=library)
+    with pytest.raises(LookupError, match=f"人工程序 {TST}, {REPLY} 的 owner 没有组装"):
+        registry.build_agents(unassembled)
+
+    others = registry.AGENT_CLASSES[:-1]  # 去掉 ReplyOwner
+    for extra in [(), (Undeclared,), (Unimplemented,)]:
+        monkeypatch.setattr(registry, "AGENT_CLASSES", (*others, *extra))
+        with pytest.raises(LookupError, match=f"{REPLY} 的 owner A6 没有为它实现 ManualHandler"):
+            registry.with_manual_owners(deps)
 
 
 # ── 走到完成阶段的人工程序等待 ──
@@ -515,9 +565,11 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
     """R93 验收 2, 3, 7, 一次运行:
     - 派发: A10 调 owner.prepare 一次, 不调大模型; 同一事务写入 RUN-TST-M02-1 succeeded, manual 任务 (材料为 owner 给的)
       与 TST-M02 v2 awaiting_human; 载荷同其他人工等待, 总览为等复核, 1 条待决任务;
-    - 按程序核对: amount_cents -1 被 owner.check 拒绝 (INVALID_VALUE, 消息为 owner 给的原文), 什么都不写;
+    - 按程序核对: amount_cents -1 被 owner.check 拒绝 (INVALID_VALUE, 消息为 owner 给的原文), 什么都不写; 同时缺
+      理由时报通用核对的 MISSING_FIELD, owner.check 不调 (在通用核对之后);
     - 整理: 提交 4853 后节点读回决定, 调 owner.collect 一次, 以 A6 写入 X-TST-M02-1-MAN-1 (4853, 派发的那次执行),
-      程序取决定写出的 completed 版本, 不再执行一次, 继续执行 FIN-04 停在 FIN-01 闸门."""
+      程序取决定写出的 completed 版本, 不再执行一次, 继续执行 FIN-04 停在 FIN-01 闸门;
+    - A10 派发, DecisionSubmit 核对与节点整理调的是同一个 owner 实例 (组装时找好的 deps.manual_owners)."""
     s = await at_manual(tmp_path, REPLY)
 
     assert CALLS == [("prepare", REPLY)]
@@ -538,6 +590,8 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
     overview = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).overview(EID)
     assert (overview.awaiting_review, overview.pending_tasks) == (True, 1)
 
+    await assert_rejected(s, replied(-1).model_copy(update={"reason": None}), "MISSING_FIELD", "reason")
+    assert CALLS == [("prepare", REPLY)]
     await assert_rejected(s, replied(-1), "INVALID_VALUE", "amount_cents 不得为负")
     assert CALLS[-1] == ("check", REPLY)
 
@@ -565,34 +619,68 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
     assert snapshot.next == ("gate_fin",)
     assert REPLY_EXCEPTION in {x.id for x in snapshot.values["exceptions"]}
     assert next(p for p in snapshot.values["procedure_pack"] if p.id == REPLY) == latest(s, Procedure, REPLY)
+    assert [step for step, _ in CALLS] == ["prepare", "check", "check", "collect"]
+    assert all(owner is s.runner.deps.manual_owners[REPLY] for owner in CALLERS)
 
 
-@pytest.mark.usefixtures("reply_node")
-async def test_collect_with_an_undeclared_field_is_a_node_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """R93 验收 3: owner.collect 的片段多带了模板没声明的 judgments, 合并校验不过: 节点错误 (记入 run_error), 整理出的
-    例外不写入 Store."""
+async def test_collect_with_an_undeclared_field_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R93 验收 3 (小夹具, 不走全流程): owner.collect 的片段多带了模板没声明的 judgments, GraphNodes.collect 的合并校验
+    不过抛 MergeRejected (节点里即节点错误, 记入 run_error 由 R87 的通用路径负责), 整理出的例外与函证都不写入 Store.
+    不多带时同样的调用写入例外."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), library=manual_library(tmp_path / "knowledge", [REPLY_YAML]))
+    nodes = GraphNodes(deps, 1)
+    run = finished(make_run(REPLY))
+    task = deps.queue.make_task(TaskKind.manual, run, REPLY, run.id, NOW, material=REPLY_MATERIAL)
+    state = apply_patch(
+        initial_state(ENGAGEMENT, [make_procedure(REPLY, Phase.P3_Completion)], 1),
+        {"procedure_runs": [run], "review_tasks": [task]},
+    )
     monkeypatch.setattr(ReplyOwner, "extra", True)
-    s = await at_manual(tmp_path, REPLY)
 
-    await s.submit.submit(EID, replied(4853))
-    await wait_idle(s.runner, EID)
+    with pytest.raises(MergeRejected, match=f"{REPLY} 未声明产出 judgments"):
+        await nodes.collect(ENGAGEMENT, state, REPLY, replied(4853), task)
+    assert deps.output_store.rows == []  # type: ignore[attr-defined]
 
-    assert f"{REPLY} 未声明产出 judgments" in (s.runner.run_error(EID) or "")
-    assert [r for r in s.output_store.rows if isinstance(r, AuditException) and r.id == REPLY_EXCEPTION] == []
+    monkeypatch.setattr(ReplyOwner, "extra", False)
+    written = await nodes.collect(ENGAGEMENT, state, REPLY, replied(4853), task)
+    assert [x.id for x in written["exceptions"]] == [REPLY_EXCEPTION]
 
 
 # ── R93 验收 4, 5: 重放与恢复补做 ──
 
+shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的在线基线 (reply_online) 的用例与它同一个事件循环
 
+
+@dataclass(frozen=True)
+class Baseline:
+    """不中断的一次的快照: Store 全部对象, 检查点状态, 决定留痕的幂等键."""
+
+    store: list[Any]
+    graph: Any
+    decisions: list[str]
+
+
+def decision_keys(s: Started) -> list[str]:
+    return sorted(e.idempotency_key or "" for e in entries(s, TrailKind.decision))
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def reply_online(tmp_path_factory: pytest.TempPathFactory) -> Baseline:
+    """TST-M02 不中断的一次: 派发, 提交 4853, 停在 FIN-01 闸门. 重放与恢复补做的两例都与它比对, 模块内只跑一遍
+    (模块级夹具用不了用例的 monkeypatch, 登记在这里另做, 跑完即撤)."""
+    with pytest.MonkeyPatch.context() as mp:
+        register(mp, REPLY)
+        online = await at_manual(tmp_path_factory.mktemp("reply-online"), REPLY)
+        await submit(online, replied(4853))
+        return Baseline(store_state(online.output_store), await graph_state(online), decision_keys(online))  # type: ignore[arg-type]
+
+
+@shared_loop
 @pytest.mark.usefixtures("reply_node")
-async def test_collect_replays_after_crash(tmp_path: Path) -> None:
+async def test_collect_replays_after_crash(tmp_path: Path, reply_online: Baseline) -> None:
     """R93 验收 4: collect 的结果写进 Store 后, 写检查点前被杀; 再继续时节点从头执行: 不再调 prepare (执行已是终态,
-    取 Store), collect 重算出同一对象, Store 与留痕与不中断时相同."""
-    online = await at_manual(tmp_path / "online", REPLY)
-    await submit(online, replied(4853))
-    CALLS.clear()
+    取 Store), collect 重算出同一对象, Store 与留痕与不中断时相同. ReplyOwner 按 ctx.state 取例外编号并给函证出新
+    版本: 重放时它看到的状态须同在线 (不含自己上次写进 Store 的例外与函证新版本), 否则多出 MAN-2 与又一版函证."""
     store = CrashAfterCommit(REPLY_EXCEPTION)
     s = await at_manual(tmp_path / "crash", REPLY, output_store=store)
     await s.submit.submit(EID, replied(4853))
@@ -603,11 +691,12 @@ async def test_collect_replays_after_crash(tmp_path: Path) -> None:
 
     assert CALLS == [("prepare", REPLY), ("check", REPLY), ("collect", REPLY), ("collect", REPLY)]
     assert (await s.next_nodes()) == ("gate_fin",)
-    assert store_state(store) == store_state(online.output_store)
-    assert await graph_state(s) == await graph_state(online)  # type: ignore[arg-type]
-    assert sorted(e.idempotency_key or "" for e in entries(s, TrailKind.decision)) == sorted(
-        e.idempotency_key or "" for e in entries(online, TrailKind.decision)
-    )
+    assert sorted({x.id for x in store.rows if isinstance(x, AuditException) and x.procedure_id == REPLY}) == [
+        REPLY_EXCEPTION
+    ]
+    assert store_state(store) == reply_online.store  # 函证的版本也同在线
+    assert await graph_state(s) == reply_online.graph  # type: ignore[arg-type]
+    assert decision_keys(s) == reply_online.decisions
 
 
 class FlakyQC(QCAgent):
@@ -628,22 +717,23 @@ def rerun_fin04(s: Started) -> ReviewRecord:
     return submitted(Decision.rerun, id="D-R", task_id=task.id, manual_result=None)
 
 
+@shared_loop
 @pytest.mark.usefixtures("reply_node")
-async def test_unread_result_and_rerun_recovered_in_node_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unread_result_and_rerun_recovered_in_node_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reply_online: Baseline
+) -> None:
     """R93 验收 5:
     - 决定 D-M02 写了 Store (留痕没写成) 而检查点停在 TST-M02 的等待: recover 补写留痕, 交回 D-M02, 结果与在线相同;
     - 同一节点 TST-M02 之后 FIN-04 失败再 rerun: 在线依次提交 D-M02, D-R. 读回 D-M02 后 FIN-04 的失败执行写 Store 后
       被杀, D-R 也写进 Store 而检查点仍停在 TST-M02 的等待: recover 按节点内程序次序交回 D-M02, D-R, 结果与在线相同."""
-    online = await at_manual(tmp_path / "online", REPLY)
-    await submit(online, replied(4853))
     lost = await at_manual(tmp_path / "lost", REPLY)
     await submit_unread(lost, replied(4853), monkeypatch, lose_trail=True)  # type: ignore[arg-type]
     await lost.runner.recover()
     await wait_idle(lost.runner, EID)
     assert lost.runner.run_error(EID) is None
     assert [e.idempotency_key for e in entries(lost, TrailKind.decision)].count("D-M02") == 1
-    assert store_state(lost.output_store) == store_state(online.output_store)
-    assert await graph_state(lost) == await graph_state(online)  # type: ignore[arg-type]
+    assert store_state(lost.output_store) == reply_online.store
+    assert await graph_state(lost) == reply_online.graph  # type: ignore[arg-type]
 
     online = await at_manual(tmp_path / "online-rerun", REPLY, agents=flaky)
     await submit(online, replied(4853))
@@ -665,6 +755,56 @@ async def test_unread_result_and_rerun_recovered_in_node_order(tmp_path: Path, m
 
     assert crashed.runner.run_error(EID) is None
     assert order == ["D-M02", "D-R"]
+    assert (await crashed.next_nodes()) == ("gate_fin",)
+    assert store_state(store) == store_state(online.output_store)
+    assert await graph_state(crashed) == await graph_state(online)  # type: ignore[arg-type]
+
+
+class FlakyReplyOwner(ReplyOwner):
+    """第 1 次执行的 prepare 抛错 (派发失败, A1 建 failed 任务), rerun 后照常."""
+
+    def prepare(self, ctx: RunContext) -> dict[str, Any]:
+        if ctx.run.run_no == 1:
+            raise RuntimeError("材料取不到")
+        return super().prepare(ctx)
+
+
+async def rerun_then_reply(s: Started) -> None:
+    """对派发失败的 failed 任务 rerun (D-R0), 再对第 2 次派发的 manual 任务提交回复 4853 (D-M2), 等后台停下."""
+    failed: ReviewTask = latest(s, ReviewTask, f"T-RUN-{REPLY}-1-v1")
+    assert failed.kind is TaskKind.failed
+    await submit(s, submitted(Decision.rerun, id="D-R0", task_id=failed.id, manual_result=None))
+    task: ReviewTask = latest(s, ReviewTask, f"T-RUN-{REPLY}-2-v1")
+    assert (task.kind, task.status) == (TaskKind.manual, TaskStatus.pending)
+    await s.submit.submit(EID, replied(4853, "D-M2").model_copy(update={"task_id": task.id}))
+    await wait_idle(s.runner, EID)
+
+
+@pytest.mark.usefixtures("reply_node")
+async def test_dispatch_rerun_then_result_recovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """派发失败 → rerun D-R0 → 第 2 次派发 → manual_result D-M2:
+    - 在线: collect 的 ctx.run 为最新一次 (第 2 次) 执行, 例外 X-TST-M02-2-MAN-1 挂在 RUN-TST-M02-2 下, 停在 FIN-01;
+    - collect 写 Store 后被杀: 等待中的节点带着错误, recover 复制检查点后按 D-R0, D-M2 交回 (manual 任务的决定排在
+      触发该次派发的 rerun 之后; 先交 D-M2 时它落到第 1 次执行的等待上, 找不到所属执行), 结果同在线."""
+    monkeypatch.setattr(registry, "AGENT_CLASSES", (*registry.AGENT_CLASSES[:-1], FlakyReplyOwner))
+    online = await at_manual(tmp_path / "online", REPLY)
+    await rerun_then_reply(online)
+    assert online.runner.run_error(EID) is None
+    exception: AuditException = latest(online, AuditException, f"X-{REPLY}-2-MAN-1")
+    assert exception.run_id == f"RUN-{REPLY}-2"
+    assert (await online.next_nodes()) == ("gate_fin",)
+
+    store = CrashAfterCommit(f"X-{REPLY}-2-MAN-1")
+    crashed = await at_manual(tmp_path / "crash", REPLY, output_store=store)
+    await rerun_then_reply(crashed)
+    assert "被杀" in (crashed.runner.run_error(EID) or "")
+    order = delivered(crashed, monkeypatch)  # type: ignore[arg-type]
+
+    await crashed.runner.recover()
+    await wait_idle(crashed.runner, EID)
+
+    assert crashed.runner.run_error(EID) is None
+    assert order == ["D-R0", "D-M2"]
     assert (await crashed.next_nodes()) == ("gate_fin",)
     assert store_state(store) == store_state(online.output_store)
     assert await graph_state(crashed) == await graph_state(online)  # type: ignore[arg-type]
