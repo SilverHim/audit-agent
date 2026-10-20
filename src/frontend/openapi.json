@@ -428,6 +428,54 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/plan": {
+      "get": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Get Plan",
+        "description": "审计计划页 (需求 R314): 当前计划, 各修订, PLN-15 决定, 所涉审计目标与特别风险, 程序表. 读检查点状态, 批准后\n照样返回; 功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空. 项目不存在 404.",
+        "operationId": "engagements-get_plan",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/resume": {
       "post": {
         "tags": [
@@ -11998,6 +12046,53 @@
         "title": "PlanMaterial",
         "description": "PLN-15 闸门的呈报材料 (需求 R205, 功能 planning)."
       },
+      "PlanRow": {
+        "properties": {
+          "objective_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "extent": {
+            "type": "string",
+            "enum": [
+              "full",
+              "sample"
+            ],
+            "title": "Extent"
+          },
+          "sample_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Size"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "objective_id",
+          "procedure_id",
+          "extent"
+        ],
+        "title": "PlanRow",
+        "description": "审计计划页程序表的一行: 一个审计目标下的一条程序. 针对几个目标的程序每个目标一行. 程序名称, 方法, 负责智能体\n与状态前端取总览的程序行 (同一来源), 这里不重复给."
+      },
       "PlanSection": {
         "properties": {
           "section": {
@@ -12027,6 +12122,68 @@
         ],
         "title": "PlanStatus",
         "description": "总体审计计划一个修订的状态 (需求 R203)."
+      },
+      "PlanView": {
+        "properties": {
+          "current_plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Plan Id"
+          },
+          "plans": {
+            "items": {
+              "$ref": "#/components/schemas/AuditPlan"
+            },
+            "type": "array",
+            "title": "Plans"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateDecision"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "objectives": {
+            "items": {
+              "$ref": "#/components/schemas/AuditObjective"
+            },
+            "type": "array",
+            "title": "Objectives"
+          },
+          "risks": {
+            "items": {
+              "$ref": "#/components/schemas/RiskItem"
+            },
+            "type": "array",
+            "title": "Risks"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PlanRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_plan_id",
+          "plans",
+          "decisions",
+          "objectives",
+          "risks",
+          "rows"
+        ],
+        "title": "PlanView",
+        "description": "审计计划页的数据 (GET /engagements/{eid}/plan): 读检查点状态, 不随闸门消失, 批准后与执行中照样可读.\n功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空."
       },
       "PlanningMaterial": {
         "properties": {

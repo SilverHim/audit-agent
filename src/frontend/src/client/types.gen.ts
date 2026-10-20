@@ -3906,6 +3906,31 @@ export type PlanMaterial = {
 };
 
 /**
+ * PlanRow
+ *
+ * 审计计划页程序表的一行: 一个审计目标下的一条程序. 针对几个目标的程序每个目标一行. 程序名称, 方法, 负责智能体
+ * 与状态前端取总览的程序行 (同一来源), 这里不重复给.
+ */
+export type PlanRow = {
+    /**
+     * Objective Id
+     */
+    objective_id: string | null;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Extent
+     */
+    extent: 'full' | 'sample';
+    /**
+     * Sample Size
+     */
+    sample_size?: number | null;
+};
+
+/**
  * PlanSection
  *
  * 计划叙述的一段. 用列表保段序: 存进 JSONB 的字典不保留键序.
@@ -3927,6 +3952,39 @@ export type PlanSection = {
  * 总体审计计划一个修订的状态 (需求 R203).
  */
 export type PlanStatus = 'draft' | 'approved' | 'superseded';
+
+/**
+ * PlanView
+ *
+ * 审计计划页的数据 (GET /engagements/{eid}/plan): 读检查点状态, 不随闸门消失, 批准后与执行中照样可读.
+ * 功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空.
+ */
+export type PlanView = {
+    /**
+     * Current Plan Id
+     */
+    current_plan_id: string | null;
+    /**
+     * Plans
+     */
+    plans: Array<AuditPlan>;
+    /**
+     * Decisions
+     */
+    decisions: Array<GateDecision>;
+    /**
+     * Objectives
+     */
+    objectives: Array<AuditObjective>;
+    /**
+     * Risks
+     */
+    risks: Array<RiskItem>;
+    /**
+     * Rows
+     */
+    rows: Array<PlanRow>;
+};
 
 /**
  * PlanningMaterial
@@ -6081,6 +6139,36 @@ export type EngagementsGetEngagementResponses = {
 };
 
 export type EngagementsGetEngagementResponse = EngagementsGetEngagementResponses[keyof EngagementsGetEngagementResponses];
+
+export type EngagementsGetPlanData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/plan';
+};
+
+export type EngagementsGetPlanErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsGetPlanError = EngagementsGetPlanErrors[keyof EngagementsGetPlanErrors];
+
+export type EngagementsGetPlanResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlanView;
+};
+
+export type EngagementsGetPlanResponse = EngagementsGetPlanResponses[keyof EngagementsGetPlanResponses];
 
 export type EngagementsResumeEngagementData = {
     body?: never;

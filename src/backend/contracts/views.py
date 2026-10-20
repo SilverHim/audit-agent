@@ -163,6 +163,33 @@ class GateView(Model):
     material: GateMaterial  # 呈报材料
 
 
+# ── 审计计划页 (需求 R314, 功能 planning) ─────────────────────────────
+
+PlanExtent = Literal["full", "sample"]  # 程序的范围: 全量, 或抽样
+
+
+class PlanRow(Model):
+    """审计计划页程序表的一行: 一个审计目标下的一条程序. 针对几个目标的程序每个目标一行. 程序名称, 方法, 负责智能体
+    与状态前端取总览的程序行 (同一来源), 这里不重复给."""
+
+    objective_id: str | None  # 审计目标; 为空为不针对单一认定的程序 (固定集或只经依赖装配的)
+    procedure_id: str  # 程序编号
+    extent: PlanExtent  # 范围: 计划项 params 里有整数 sample_size 为抽样, 否则全量
+    sample_size: int | None = None  # 抽样时的样本量, 全量为空
+
+
+class PlanView(Model):
+    """审计计划页的数据 (GET /engagements/{eid}/plan): 读检查点状态, 不随闸门消失, 批准后与执行中照样可读.
+    功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空."""
+
+    current_plan_id: str | None  # 当前计划 (status 不是 superseded 的修订中 revision 最大的); 没有为空
+    plans: list[AuditPlan]  # 各修订的最新版本, 按 revision 升序
+    decisions: list[GateDecision]  # 全部 PLN-15 决定, 按决定时间
+    objectives: list[AuditObjective]  # 当前计划各项涉及的审计目标, 按状态中的顺序
+    risks: list[RiskItem]  # 当前计划特别风险目标 (significant_risk_objective_ids) 下的风险项, 按风险清单的顺序
+    rows: list[PlanRow]  # 程序表: 按审计目标在状态中的顺序分组, 组内按程序编号; 没有目标的排最后
+
+
 # ── 判断呈递 (GEN-11, 需求 R152) ─────────────────────────────
 
 SideRole = Literal["generator", "reviewer"]  # 生成方 (产出判断的智能体, 如 A6) 与独立复核方 (A7)

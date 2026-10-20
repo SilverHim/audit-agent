@@ -48,7 +48,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.contracts.views import PlanMaterial
+from backend.contracts.views import PlanMaterial, PlanView
 from backend.core.config import get_settings
 from backend.orchestration import runner as runner_module
 from backend.orchestration.checkpoint import checkpoint_serde
@@ -79,6 +79,7 @@ from tests.fakes import (
     ScriptA4,
     ScriptAgent,
     acc01_decision,
+    api_client,
     assert_pack_synced,
     make_procedure,
     make_runner,
@@ -1594,6 +1595,44 @@ OTHER_GATE_FIELDS = {
 }
 
 
+# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
+XERO_PLAN_ROWS = [
+    ("OBJ-REV-OCC", "REV-03"),
+    ("OBJ-REV-OCC", "REV-08"),
+    ("OBJ-REV-CUT", "REV-02"),
+    ("OBJ-REV-CUT", "REV-03"),
+    ("OBJ-REV-CUT", "REV-08"),
+    ("OBJ-CASH-EXI", "CSH-02"),
+    ("OBJ-CASH-EXI", "CSH-04"),
+    ("OBJ-CASH-EXI", "CSH-05"),
+    (None, "DOC-06"),
+]
+
+
+async def plan_page(s: Started) -> PlanView:
+    """经 HTTP 取审计计划页 (GET /plan), 与 StateQuery.plan 的结果相同."""
+    async with api_client(s.runner) as client:
+        response = await client.get(f"/api/v1/engagements/{EID}/plan")
+    assert response.status_code == 200, response.text
+    view = PlanView.model_validate(response.json())
+    assert view == await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).plan(EID)
+    return view
+
+
+@shared_loop
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_page_at_gate(plan_gate: Started) -> None:
+    """需求 R314 验收 2: 停在 gate_p1_plan 时 GET /plan: 当前计划 PLAN-1, 修订 [PLAN-1 v1 draft], 还没有决定, 特别风险
+    [RISK-REV-OCC, RISK-REV-CUT], 计划涉及的三个审计目标, 程序表 9 行都是全量."""
+    view = await plan_page(plan_gate)
+    assert view.current_plan_id == "PLAN-1" and view.decisions == []
+    assert [(p.id, p.version, p.status) for p in view.plans] == [("PLAN-1", 1, PlanStatus.draft)]
+    assert [r.id for r in view.risks] == ["RISK-REV-OCC", "RISK-REV-CUT"]
+    assert [o.id for o in view.objectives] == ["OBJ-REV-OCC", "OBJ-REV-CUT", "OBJ-CASH-EXI"]
+    assert [(r.objective_id, r.procedure_id) for r in view.rows] == XERO_PLAN_ROWS
+    assert {(r.extent, r.sample_size) for r in view.rows} == {("full", None)}
+
+
 @pytest.mark.parametrize(
     ("decision", "code", "detail"),
     [
@@ -1782,6 +1821,18 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     assert (approved.id, approved.version, approved.status) == ("PLAN-2", 2, PlanStatus.approved)
     assert approved.model_dump(include=set(FIRST_YEAR_EQR.model_dump())) == FIRST_YEAR_EQR.model_dump()
     assert approved in values["audit_plans"] and s.latest_procedure("PLN-15").status is ProcedureStatus.completed
+    # R314 验收 3: 进入执行阶段后 GET /plan 照样返回, 当前计划为批准的 PLAN-2, 三项确认可读出
+    page = await plan_page(s)
+    assert page.current_plan_id == "PLAN-2" and page.plans[-1] == approved
+    assert [(p.id, p.version, p.status) for p in page.plans] == [
+        ("PLAN-1", 2, PlanStatus.superseded),
+        ("PLAN-2", 2, PlanStatus.approved),
+    ]
+    assert [(d.id, d.decision) for d in page.decisions] == [
+        ("D-P15I", GateVerdict.insufficient_info),
+        (PLAN_REJECT_ID, GateVerdict.reject),
+        ("D-PLAN2", GateVerdict.approve),
+    ]
 
 
 class LostCheckpoint:

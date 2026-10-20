@@ -5,10 +5,12 @@ from datetime import UTC, datetime
 import pytest
 
 from backend.contracts.models import (
+    AuditPlan,
     ClientProfile,
     GateDecision,
     GateId,
     GateVerdict,
+    PlanItem,
     PlanStatus,
     ProcedureStatus,
     ProfileSource,
@@ -18,10 +20,10 @@ from backend.contracts.models import (
     TaskStatus,
 )
 from backend.contracts.state import initial_state
-from backend.contracts.views import PlanMaterial, PlanningMaterial
+from backend.contracts.views import PlanMaterial, PlanningMaterial, PlanView
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.gates import acc01_effects, spec_of
-from backend.orchestration.query import GraphStateQuery, current_gate
+from backend.orchestration.query import GraphStateQuery, current_gate, plan_view
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
     ENGAGEMENT,
@@ -34,6 +36,7 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    api_client,
     audit_plan,
     engagement_terms,
     make_deps,
@@ -390,3 +393,70 @@ async def test_plan_material_takes_current_terms_and_rejections() -> None:
     for missing in ({"audit_plans": [audit_plan(1, 2, PlanStatus.superseded)]}, {"clearly_trivial_cents": None}):
         with pytest.raises(LookupError, match="停在 PLN-15 闸门"):
             await view(deps, EID, {**state, **missing})  # type: ignore[typeddict-item]
+
+
+# ── R314: 审计计划页 (功能 planning; Xero 停在闸门, 驳回再批准的数见 test_decisions) ──
+
+
+def test_plan_view_rows_and_lists() -> None:
+    """需求 R314 验收 1, 2: 当前计划为 PLAN-2 (PLAN-1 已取代); plans 为各修订的最新版本按修订号; decisions 只取 PLN-15
+    的, 按决定时间; objectives 为计划涉及的 (按状态顺序, 状态里没有的不列); risks 为特别风险目标下的风险项. 程序表:
+    针对几个目标的程序每个目标一行, 按目标在状态中的顺序分组 (状态里没有的目标排在其后), 组内按程序编号, 没有目标
+    的排最后; params 有整数 sample_size 为抽样, 布尔或没有为全量."""
+    base = audit_plan(2)
+    extra = [
+        PlanItem(
+            procedure_id="CSH-02",
+            name="银行余额核对",
+            template_commit="test",
+            objective_ids=["OBJ-CASH-EXI", "OBJ-REV-CUT"],
+            params={"sample_size": 25},
+        ),
+        PlanItem(
+            procedure_id="GEN-05",
+            name="分录扫描",
+            template_commit="test",
+            objective_ids=["OBJ-X"],
+            params={"sample_size": True},
+        ),
+    ]
+    plan = AuditPlan.model_validate({**base.model_dump(), "items": [*base.items, *extra]})
+    later = plan_gate_decision(1, GateId.PLN_15, GateVerdict.reject, "PLAN-1")
+    earlier = later.model_copy(update={"id": "D-0", "decided_at": NOW.replace(day=1)})
+    state = initial_state(ENGAGEMENT, [], 1)
+    state.update(  # type: ignore[typeddict-item]
+        audit_plans=[plan, audit_plan(1, 2, PlanStatus.superseded)],
+        audit_objectives=NUMBAT_OBJECTIVES,
+        risk_register=NUMBAT_RISKS,
+        gate_decisions=[later, plan_gate_decision(2, GateId.PLN_01_03, GateVerdict.approve, "MATERIALITY"), earlier],
+    )
+
+    view = plan_view(state)
+
+    assert view.current_plan_id == "PLAN-2" and view.plans == [audit_plan(1, 2, PlanStatus.superseded), plan]
+    assert view.decisions == [earlier, later]
+    assert [o.id for o in view.objectives] == ["OBJ-REV-OCC", "OBJ-REV-CUT", "OBJ-CASH-EXI"]
+    assert [r.id for r in view.risks] == ["RISK-REV-OCC", "RISK-REV-CUT"]
+    assert [(r.objective_id, r.procedure_id, r.extent, r.sample_size) for r in view.rows] == [
+        ("OBJ-REV-OCC", "REV-08", "full", None),
+        ("OBJ-REV-CUT", "CSH-02", "sample", 25),
+        ("OBJ-REV-CUT", "REV-08", "full", None),
+        ("OBJ-CASH-EXI", "CSH-02", "sample", 25),
+        ("OBJ-X", "GEN-05", "full", None),
+        (None, "DOC-06", "full", None),
+    ]
+
+
+EMPTY_PLAN = PlanView(current_plan_id=None, plans=[], decisions=[], objectives=[], risks=[], rows=[])
+
+
+async def test_plan_view_without_plan_over_http() -> None:
+    """需求 R314 验收 4: 功能 planning 关闭 (Numbat 基线, 停在 ACC-01) 时 GET /plan 为 200, 没有当前计划, 各列表为空;
+    项目不存在 404 NOT_FOUND (同其他项目接口)."""
+    runner, query, _ = await started()
+    assert await query.plan(EID) == EMPTY_PLAN
+    async with api_client(runner) as client:
+        ok = await client.get(f"/api/v1/engagements/{EID}/plan")
+        missing = await client.get("/api/v1/engagements/ENG-missing/plan")
+    assert ok.status_code == 200 and PlanView.model_validate(ok.json()) == EMPTY_PLAN
+    assert missing.status_code == 404 and missing.json()["detail"]["code"] == "NOT_FOUND"

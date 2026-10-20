@@ -1,4 +1,4 @@
-"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile."""
+"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile; GET plan."""
 
 from typing import Annotated
 
@@ -17,7 +17,7 @@ from backend.contracts.models import (
     GateId,
     User,
 )
-from backend.contracts.views import EngagementOverview
+from backend.contracts.views import EngagementOverview, PlanView
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 
@@ -134,6 +134,17 @@ async def get_engagement(
 ) -> EngagementOverview:
     async with catch_api():
         return await query.overview(engagement.id)
+
+
+@router.get("/{eid}/plan")
+async def get_plan(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    query: Annotated[GraphStateQuery, Depends(get_query)],
+) -> PlanView:
+    """审计计划页 (需求 R314): 当前计划, 各修订, PLN-15 决定, 所涉审计目标与特别风险, 程序表. 读检查点状态, 批准后
+    照样返回; 功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空. 项目不存在 404."""
+    async with catch_api():
+        return await query.plan(engagement.id)
 
 
 @router.post("/{eid}/resume", status_code=202, response_model=None)
