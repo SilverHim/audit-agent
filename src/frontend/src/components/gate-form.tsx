@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { type ReactNode, useEffect, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   gatesGetGateOptions,
@@ -48,6 +48,7 @@ import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
+import { type DetailRow, detailRows } from '@/lib/exception-detail'
 import { useI18n } from '@/lib/i18n'
 import { initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
@@ -159,57 +160,27 @@ function PercentInput({
   )
 }
 
-type FluctuationBasis = 'balance_sheet' | 'profit_or_loss'
-
-// PLN-07 A01 的波动 (输出列见 PLN-07.yaml): 比较基数 opening 为资产负债类的期初 (含留存收益的结转) 或损益类的上期,
-// 变动率 change 相对它, 基数为 0 时为空; 只在一期出现的科目, 另一期的余额为空 (显示 "—")
-function FluctuationDetail({
-  account,
-  basis,
-  opening,
-  current,
-  change,
-}: {
-  account: string
-  basis: FluctuationBasis
-  opening: number
-  current: number | null
-  change: number | null
-}) {
-  const { t } = useI18n()
-  const labels = t.planning.fluctuation
+// 例外明细按字段显示 (lib/exception-detail, 需求 R350); 对象的字段缩进一层. 有的规则 (如 ACC-04) 例外没有明细,
+// 空的不显示
+function DetailRows({ rows }: { rows: DetailRow[] }) {
   return (
-    <span className="text-secondary-foreground">
-      <span lang="en">{account}</span> · {labels.basis[basis]}: <Code>{formatAud(opening)}</Code> → {labels.current}:{' '}
-      <Code>{formatAud(current)}</Code> (
-      {change === null ? labels.zeroBase[basis] : `${change > 0 ? '+' : ''}${(change * 100).toFixed(1)}%`})
-    </span>
+    <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[13px]">
+      {rows.map((item) => (
+        <Fragment key={item.key}>
+          <dt className="text-muted-foreground">{item.label}</dt>
+          <dd className="m-0 text-secondary-foreground">
+            {'rows' in item ? <DetailRows rows={item.rows} /> : item.text}
+          </dd>
+        </Fragment>
+      ))}
+    </dl>
   )
 }
 
 function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
-  const { account_name: account, basis, opening_cents: opening, current_cents: current, change_pct: change } = detail
-  if (
-    typeof account === 'string' &&
-    typeof opening === 'number' &&
-    (basis === 'balance_sheet' || basis === 'profit_or_loss')
-  ) {
-    const ratio = change == null ? Number.NaN : Number(change) // numeric 列可能序列化为字符串
-    return (
-      <FluctuationDetail
-        account={account}
-        basis={basis}
-        opening={opening}
-        current={typeof current === 'number' ? current : null}
-        change={Number.isFinite(ratio) ? ratio : null}
-      />
-    )
-  }
-  // 有的规则 (如 ACC-04) 例外没有明细, 空的不显示
-  if (Object.keys(detail).length === 0) return null
-  return (
-    <pre className="overflow-x-auto rounded-md bg-muted p-2.5 font-mono text-xs">{JSON.stringify(detail, null, 2)}</pre>
-  )
+  const { t } = useI18n()
+  const rows = detailRows(detail, t.exceptionDetail)
+  return rows.length ? <DetailRows rows={rows} /> : null
 }
 
 // PLN-07 A03 的月度趋势 (本期按月的收入, 费用与员工费用); 没有月度数 (旧结果或没有总账) 时不显示

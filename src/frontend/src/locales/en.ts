@@ -339,6 +339,33 @@ export const en = {
           .join(' ') || 'Nothing needs you right now.',
     },
   },
+  // 例外明细的字段标签与取值 (lib/exception-detail, 需求 R350); 没有标签的字段显示字段名
+  exceptionDetail: {
+    fields: {
+      account_code: 'Account code',
+      account_name: 'Account',
+      basis: 'Compared with',
+      opening_cents: 'Comparison base',
+      current_cents: 'Current',
+      prior_cents: 'Prior period',
+      change_pct: 'Change',
+      line_cents: 'Line amount',
+      invoice_amount_cents: 'Invoice amount',
+      received_cents: 'Received',
+      bank_transaction_ids: 'Bank transactions',
+      statement_balance_cents: 'Statement balance',
+      book_balance_cents: 'Book balance',
+      entry_no: 'Entry',
+      posting_date: 'Posting date',
+      reason: 'Reason',
+    } as Record<string, string>,
+    values: {
+      balance_sheet: 'Balance sheet, opening',
+      profit_or_loss: 'Profit or loss, prior period',
+    } as Record<string, string>,
+    yes: 'yes',
+    no: 'no',
+  },
   card: {
     decision: 'Auditor decision',
     reason: 'Reason',
@@ -478,11 +505,6 @@ export const en = {
     uncovered: (ids: string) =>
       `No procedure covers these objectives at the current levels: ${ids}. Change a level or send the plan back.`,
     giveReason: (id: string) => `Give a reason for changing ${id}`,
-    fluctuation: {
-      basis: { balance_sheet: 'Balance sheet, opening', profit_or_loss: 'Profit or loss, prior period' },
-      current: 'current',
-      zeroBase: { balance_sheet: 'opening is 0', profit_or_loss: 'prior period is 0' },
-    },
     monthly: {
       title: 'Monthly trend (current period)',
       month: 'Month',
