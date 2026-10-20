@@ -130,7 +130,7 @@ DOCUMENT_TITLES = {
     DocumentType.confirmation: "回函",
     DocumentType.bank_statement: "银行对账单",
     DocumentType.minutes: "会议纪要",
-    DocumentType.financial_statements: "财务报表草稿",
+    DocumentType.financial_statements: "财务报表",
     DocumentType.registry_extract: "ASIC 摘录",
     DocumentType.engagement_letter: "审计业务约定书",
     DocumentType.representation_letter: "管理层声明书",
@@ -139,16 +139,14 @@ DOCUMENT_TITLES = {
     DocumentType.agreement: "协议",
     DocumentType.internal_record: "内部记录",
 }  # other 以外的文件类型都有标题 (模板 inputs 可写任一种, 见 test_procedure_inputs)
-# 体检请求 (就绪必需的表, 审批日志, 报表草稿) 的用途 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描
-# (GEN-05) 判断录入与审批, 报表草稿供财报与会计记录勾稽 (FIN-12). 程序要的资料的用途取模板 inputs (program_requests);
-# inputs 不能写就绪必需的表, 两类请求的资料不重叠. FIN-12 实现时改为在其 YAML 写 inputs, 再删这里的对应项; GEN-05 不写
-# inputs (缺审批人时 R04 记 not_executable, 不等数据, 需求 R131), 这里它的两项保留
-USED_FOR: dict[TableKind | DocumentType, list[str]] = {
+# 体检请求 (就绪必需的表, 审批日志) 的用途 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描 (GEN-05) 判断
+# 录入与审批. 程序要的资料的用途取模板 inputs (program_requests); inputs 不能写就绪必需的表, 两类请求的资料不重叠.
+# GEN-05 不写 inputs (缺审批人时 R04 记 not_executable, 不等数据, 需求 R131), 这里它的两项保留
+USED_FOR: dict[TableKind, list[str]] = {
     TableKind.accounts: ["PLN-07", "PLN-01"],
     TableKind.trial_balance: ["PLN-07", "PLN-01", "CSH-05", "CSH-02"],
     TableKind.journal_entries: ["PLN-07", "CSH-02", "GEN-05"],
     TableKind.approval_log: ["GEN-05"],
-    DocumentType.financial_statements: ["FIN-12"],
 }
 TABLE_FORMATS = "csv, xlsx, xls"  # 账表请求可接受的格式 (走导入)
 DOCUMENT_FORMATS = "pdf, docx, xlsx, png, jpg"  # 文件请求可接受的格式 (走上传)
@@ -159,13 +157,18 @@ CHECK_TABLES: dict[CheckId, tuple[TableKind, ...]] = {
     CheckId.count_agrees_source: (TableKind.journal_entries,),
     CheckId.mapping_complete: (TableKind.accounts,),
     CheckId.preparer_approver_available: (TableKind.journal_entries,),
-    CheckId.tb_agrees_statements: (TableKind.trial_balance,),
 }
 
 
 def request_id(subject: TableKind | DocumentType) -> str:
     """补交请求的固定 ID: REQ-{表种类或文件类型}."""
     return f"REQ-{subject.value}"
+
+
+# 体检不再提出的请求 → 撤回的理由 (写进 request_withdrawn 留痕): 已有项目里仍待补交的, 下一次体检转 withdrawn
+# (reconcile; DataCheckup.run_if_stale 见到它们即重跑). Issue #46: 财务报表以账套为准, 不再要报表草稿. 前提: 没有程序
+# 的模板 inputs 要这些资料 (test_no_procedure_wants_a_retired_request 守住), 否则请求一直 open, 每次都重跑体检
+RETIRED_REQUESTS: dict[str, str] = {request_id(DocumentType.financial_statements): "报表以账套为准"}
 
 
 # 同一时间提出的请求的先后: 账表按 TableKind 顺序, 再是文件按 DocumentType 顺序 (认不出的排最后, 按 ID)
@@ -199,16 +202,14 @@ def table_request(
     )
 
 
-def document_request(
-    kind: DocumentType, reason: RequestReason, now: datetime, used_for: Sequence[str] | None = None
-) -> DataRequest:
-    """文件的补交请求; used_for 缺省取 USED_FOR (体检请求)."""
+def document_request(kind: DocumentType, reason: RequestReason, now: datetime, used_for: Sequence[str]) -> DataRequest:
+    """文件的补交请求 (只有程序要的, 体检不要文件), used_for 为要它的程序."""
     return DataRequest(
         id=request_id(kind),
         kind="document",
         document_type=kind,
         title=DOCUMENT_TITLES[kind],
-        used_for=list(USED_FOR[kind] if used_for is None else used_for),
+        used_for=list(used_for),
         reason_code=reason,
         format_hint=DOCUMENT_FORMATS,
         created_at=now,
@@ -341,8 +342,8 @@ def journals_differences(inputs: CheckInputs) -> list[dict[str, Any]]:
     return differences
 
 
-def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVersion | None, now: datetime) -> Checkup:
-    """六项体检与补交请求.
+def run_checks(inputs: CheckInputs, *, journal_version: TableVersion | None, now: datetime) -> Checkup:
+    """五项体检与补交请求.
 
     - debits_equal_credits: 全部分录借贷合计相等; 没有分录为 missing_data.
     - journals_agree_tb: 期间内各科目发生额与试算表变动一致 (journals_differences); 缺总账, 试算表任一期或科目表为
@@ -351,9 +352,8 @@ def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVe
     - mapping_complete: 科目都已归入标准分类; 没有科目为 missing_data.
     - preparer_approver_available: 分录里有录入人与审批人 (至少一行有真实值); 缺的字段记 missing_fields, 不通过时
       请求审批日志 (field_unavailable, {fields, source}).
-    - tb_agrees_statements: 没有已分类的财务报表文件为 missing_data, 请求报表草稿 (not_provided); 有了而试算表缺为
-      missing_data; 都有时为 pending (报表数字的抽取与勾稽归 FIN-12, 还没实现).
     就绪必需的表缺失时各请求一份 (missing_table). 缺数据的项 request_id 指向它要用的表中第一张缺的表的请求.
+    财务报表以账套为准 (Issue #46), 不查试算表与报表草稿, 也不要报表草稿.
     """
     missing = missing_in(inputs)
     label = source_label(journal_version, inputs.dataset)
@@ -412,15 +412,6 @@ def run_checks(inputs: CheckInputs, *, statements: int, journal_version: TableVe
         checks.append(check(CheckId.preparer_approver_available, "failed", params, approval.id))
     else:
         checks.append(check(CheckId.preparer_approver_available, "passed", {"source": label, "missing_fields": []}))
-    provided = {"statements": statements}  # 体检时已提供的报表草稿文件数 (新鲜度判断用, 见 DataCheckup.run_if_stale)
-    if statements == 0:
-        draft = document_request(DocumentType.financial_statements, "not_provided", now)
-        requests.append(draft)
-        checks.append(check(CheckId.tb_agrees_statements, "missing_data", provided, draft.id))
-    elif not inputs.tb_current:
-        checks.append(check(CheckId.tb_agrees_statements, "missing_data", provided))
-    else:
-        checks.append(check(CheckId.tb_agrees_statements, "pending", provided))
     return Checkup(checks, requests)
 
 
@@ -441,7 +432,8 @@ def reconcile(
     """对照已有请求与这次体检需要的请求: 没有的新提出; 已收到 (或撤回) 的重新打开 (created_at 为 now, resolved_at
     清空); 标了客户无此类资料的是定论, 不重开也不改; 仍待补交的保留原提出时间, 只更新原因与参数等; 待补交而这次不再
     需要的转 received (资料已补齐), 但程序要的资料现在仍没有 (have 中没有, 要它的程序都不再执行, 需求 R280) 时转
-    withdrawn. 体检请求的资料 (USED_FOR 的) 不再需要即算收到 (如审批人随总账一并补上); have 为空时一律按收到."""
+    withdrawn. 体检请求的资料 (USED_FOR 的) 不再需要即算收到 (如审批人随总账一并补上); have 为空时一律按收到.
+    体检不再提出的请求 (RETIRED_REQUESTS) 一律转 withdrawn, 不论资料到没到."""
     changes = RequestChanges()
     current = {r.id: r for r in existing}
     for request in wanted:
@@ -457,7 +449,8 @@ def reconcile(
     for old in existing:
         if old.status == "open" and old.id not in needed:
             subject = subject_of(old)
-            gone = have is not None and subject is not None and subject not in USED_FOR and not have.has(subject)
+            missing = have is not None and subject is not None and subject not in USED_FOR and not have.has(subject)
+            gone = missing or old.id in RETIRED_REQUESTS
             resolved = old.model_copy(update={"status": "withdrawn" if gone else "received", "resolved_at": now})
             changes.saved.append(resolved)
             (changes.withdrawn if gone else changes.received).append(resolved)

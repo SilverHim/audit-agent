@@ -9,19 +9,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from backend.agents.base import AgentDeps
-from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
-from backend.contracts.models import (
-    AgentId,
-    DocumentRef,
-    DocumentType,
-    Procedure,
-    ProcedureStatus,
-    TrailEntry,
-    TrailKind,
-)
+from backend.contracts.data import CheckRun, DataRequest, TableKind
+from backend.contracts.models import AgentId, Procedure, ProcedureStatus, TrailEntry, TrailKind
 from backend.contracts.records import DatasetTraits
 from backend.orchestration.trail import record_transitions
 from backend.services.data_quality import (
+    RETIRED_REQUESTS,
     OnHand,
     merge_requests,
     on_hand,
@@ -30,17 +23,6 @@ from backend.services.data_quality import (
     run_checks,
     with_requested,
 )
-
-STATEMENT_READY = frozenset({"classified", "extracted"})  # 财务报表文件算已提供的状态 (分类完成)
-
-
-def statement_provided(document: DocumentRef) -> bool:
-    """一份 financial_statements 类文件算不算已提供: 分类完成 (STATEMENT_READY), 或类型已定而抽取没通过转了人工
-    (needs_manual, failed_step extract; 需求 R217 起 PDF 报表上传后要抽取): 客户已交, 抽取由审计师处理, 不再向客户要."""
-    return document.status in STATEMENT_READY or (
-        document.status == "needs_manual" and document.failed_step == "extract"
-    )
-
 
 # 还没执行完的程序状态: 这些程序 inputs 中还没有的资料才去要 (需求 R272)
 UNDONE = frozenset({ProcedureStatus.planned, ProcedureStatus.executing, ProcedureStatus.awaiting_data})
@@ -79,14 +61,15 @@ def check_entry(eid: str, run: CheckRun) -> TrailEntry:
 REQUEST_ACTIONS = {
     "request_raised": "需要客户补交",  # 提出或重新打开
     "request_received": "已收到",  # 资料补齐
-    "request_withdrawn": "不再需要",  # 要它的程序都不再执行, 资料又没到 (需求 R280)
+    "request_withdrawn": "不再需要",  # 要它的程序都不再执行, 资料又没到 (需求 R280); 或体检不再提这项请求
     "request_unavailable": "客户无此类资料: ",  # 审计师标记 (需求 R280)
 }
 
 
 def request_entry(eid: str, request: DataRequest, action: str) -> TrailEntry:
     """补交请求的 data 留痕, action 见 REQUEST_ACTIONS; payload 带 request_id 与 table_kind 或 document_type, 提出时
-    另带 reason_code, reason_params; 客户无此类资料时另带 reason 与 used_for, actor 为标记的审计师 (其余为 A3).
+    另带 reason_code, reason_params; 客户无此类资料时另带 reason 与 used_for, actor 为标记的审计师 (其余为 A3);
+    撤回体检不再提出的请求 (RETIRED_REQUESTS) 时另带 reason.
     防重复键 {eid}:data:{action}:{请求 ID}:{提出或转出的时间}."""
     raised = action == "request_raised"
     moment = request.created_at if raised else request.resolved_at
@@ -102,6 +85,8 @@ def request_entry(eid: str, request: DataRequest, action: str) -> TrailEntry:
     unavailable = action == "request_unavailable"
     if unavailable:
         payload |= {"reason": request.unavailable_reason, "used_for": request.used_for}
+    if action == "request_withdrawn" and request.id in RETIRED_REQUESTS:
+        payload["reason"] = RETIRED_REQUESTS[request.id]
     return TrailEntry(
         engagement_id=eid,
         kind=TrailKind.data,
@@ -145,9 +130,8 @@ class DataCheckup:
             eid, engagement.period_start, engagement.period_end, adjustment_prefix=traits.audit_adjustment_entry_prefix
         )
         journals = [v for v in await self.deps.data.versions(eid) if v.kind is TableKind.journal_entries]
-        statements = await self.statements(eid)
         now = datetime.now(UTC)
-        result = run_checks(inputs, statements=statements, journal_version=journals[-1] if journals else None, now=now)
+        result = run_checks(inputs, journal_version=journals[-1] if journals else None, now=now)
         have = await resources(self.deps, eid)
         wanted = merge_requests(result.requests, await self.program_requests(eid, have, now))
         changes = reconcile(await self.deps.data.requests(eid), wanted, now, have)
@@ -175,19 +159,13 @@ class DataCheckup:
         }
         return program_requests(needs, have, now)
 
-    async def statements(self, eid: str) -> int:
-        """已提供的财务报表文件数 (类型 financial_statements, 见 statement_provided)."""
-        documents = await self.deps.financial_store.documents(eid, DocumentType.financial_statements)
-        return sum(statement_provided(d) for d in documents)
-
     async def run_if_stale(self, eid: str) -> CheckRun | None:
-        """最近一次体检已不对应当前数据时跑一次, 否则不跑, 返回 None: 没体检过, 之后又写过数据 (数据版本变了), 或已
-        提供的报表草稿文件数变了 (文件上传与改类型不改数据版本; 体检只有报表草稿一项看文件). 用于 P1 等数据节点 (恢复
-        与重放不重复体检), 启动补做与已提交导入的重试 (上次体检失败或被跳过时补做)."""
+        """最近一次体检已不对应当前数据时跑一次, 否则不跑, 返回 None: 没体检过, 之后又写过数据 (数据版本变了), 或还有
+        体检不再提出而仍待补交的请求 (RETIRED_REQUESTS, 已有项目里的报表草稿请求; 这次体检撤回它). 用于 P1 等数据节点
+        (恢复与重放不重复体检), 确认数据已齐, 启动补做与已提交导入的重试 (上次体检失败或被跳过时补做)."""
         run = await self.deps.data.check_run(eid)
         if run is not None and run.data_version == (await self.deps.data.readiness(eid)).data_version:
-            draft = next((c for c in run.checks if c.id is CheckId.tb_agrees_statements), None)
-            recorded = draft.params.get("statements") if draft is not None else None
-            if recorded == await self.statements(eid):
+            requests = await self.deps.data.requests(eid)
+            if not any(r.status == "open" and r.id in RETIRED_REQUESTS for r in requests):
                 return None
         return await self.run(eid)

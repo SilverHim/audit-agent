@@ -14,11 +14,13 @@ from langgraph.types import Command, StateSnapshot
 from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, RunContext
+from backend.agents.workpaper import rule_fields
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
@@ -35,6 +37,8 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementDraft,
     MisstatementStatus,
+    MisstatementUpdate,
+    MisstatementUpdateKind,
     NeitherAction,
     Phase,
     Procedure,
@@ -81,7 +85,7 @@ from backend.services.features import COLLAB, MISSTATEMENT
 from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import attribute_exceptions, draft_rule
+from backend.services.review_queue import attribute_exceptions, draft_rule, misstatement_updates
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 from backend.services.trail_pages import all_of_kind
 
@@ -104,7 +108,8 @@ def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
 
 
 # 决定专用字段: 只有字段规则允许它的决定才能填 (见 ReviewFields.allowed); reason 是通用字段, 各决定都可以填.
-# misstatement_update (需求 R156) 现有决定都不允许, 由错报闭环的需求登记允许它的行
+# misstatement_update 不在登记表的任何一行: 只在模板 misstatement_update_kind 非空时由 review_fields 加进
+# UPDATE_BY_HUMAN 的决定 (需求 R159)
 REVIEW_SPECIFIC = (
     "override_conclusion",
     "misstatement_draft",
@@ -144,10 +149,30 @@ REVIEW_FIELDS: dict[tuple[TaskKind | None, Decision], ReviewFields] = {
 }
 
 
-def review_fields(kind: TaskKind, decision: Decision) -> ReviewFields:
-    """(任务类型, 决定) 的字段规则: 先取该任务类型的行, 没有时取该决定的通用行. 两者都没有抛 KeyError."""
+# 带错报更新载荷的程序 (模板 misstatement_update_kind 非空, 需求 R159) 中以人工判断取代 AI 判断的决定: 人工判断不经
+# 大模型, 载荷 (分类或验证结果) 须由人给出, 必填 misstatement_update. 其余决定 (confirm, 对判断认定错报, 仲裁 a6_upheld)
+# 确认的是 AI 判断本身, 载荷取判断上的, 不能另填
+UPDATE_BY_HUMAN = frozenset(
+    {
+        (TaskKind.normal, Decision.override),
+        (TaskKind.unattributed, Decision.override),
+        (TaskKind.unattributed, Decision.misstatement),
+        (TaskKind.failed, Decision.manual_result),
+    }
+)
+
+
+def review_fields(
+    kind: TaskKind, decision: Decision, update_kind: MisstatementUpdateKind | None = None
+) -> ReviewFields:
+    """(任务类型, 决定) 的字段规则: 先取该任务类型的行, 没有时取该决定的通用行. 两者都没有抛 KeyError.
+    update_kind 为任务所属程序模板的 misstatement_update_kind: 非空且 (任务类型, 决定) 在 UPDATE_BY_HUMAN 中时, 另把
+    misstatement_update 加进必填与可以填的字段 (需求 R159)."""
     rules = REVIEW_FIELDS.get((kind, decision))
-    return rules if rules is not None else REVIEW_FIELDS[(None, decision)]
+    rules = rules if rules is not None else REVIEW_FIELDS[(None, decision)]
+    if update_kind is not None and (kind, decision) in UPDATE_BY_HUMAN:
+        return ReviewFields((*rules.required, "misstatement_update"), rules.allowed | {"misstatement_update"})
+    return rules
 
 
 TARGET_MODELS: dict[TargetType, type[Versioned]] = {  # 复核任务的目标类型 -> 在 Store 中的对象类型
@@ -165,14 +190,16 @@ def has_value(record: ReviewRecord, name: str) -> bool:
     return bool(value)
 
 
-def check_review_fields(record: ReviewRecord, kind: TaskKind) -> None:
-    """复核决定的字段校验, 规则按 (任务类型, 决定) 取 (见 review_fields): 必填的缺了报 MISSING_FIELD, 不该填的填了报
-    FIELD_NOT_ALLOWED. None 与空值都视为未填; 必填可写点路径 (见 has_value).
+def check_review_fields(
+    record: ReviewRecord, kind: TaskKind, update_kind: MisstatementUpdateKind | None = None
+) -> None:
+    """复核决定的字段校验, 规则按 (任务类型, 决定) 与模板的 misstatement_update_kind 取 (见 review_fields): 必填的缺了报
+    MISSING_FIELD, 不该填的填了报 FIELD_NOT_ALLOWED. None 与空值都视为未填; 必填可写点路径 (见 has_value).
 
     仲裁另按结果: neither 须填 neither_action (本版只有 human_conclusion) 与 override_conclusion; a6_upheld,
     a7_upheld 不能填这两项.
     """
-    rules = review_fields(kind, record.decision)
+    rules = review_fields(kind, record.decision, update_kind)
     missing = [name for name in rules.required if not has_value(record, name)]
     if missing:
         raise DecisionRejected("MISSING_FIELD", ", ".join(missing))
@@ -238,6 +265,54 @@ async def check_account_code(financial: FinancialDataStore, eid: str, record: Re
         raise DecisionRejected("INVALID_VALUE", f"错报草稿的科目代码 {draft.account_code} 不在本项目科目表中")
 
 
+def check_update_payload(
+    record: ReviewRecord, task: ReviewTask, target: Versioned | None, update_kind: MisstatementUpdateKind | None
+) -> None:
+    """人给的错报更新载荷 (需求 R159) 的类别, 对象与内容, 不过抛 INVALID_VALUE: kind 须同模板的
+    misstatement_update_kind, misstatement_id 须为本任务的错报 (目标判断的对象, 例外与失败任务为任务的 subject_id);
+    内容不能是半成品 (update_problems, 第 1 轮审核 R159-02). 载荷是否依据错报的当前版本 (VERSION_MISMATCH) 与按它写出
+    的新版本是否合格 (INVALID_VALUE) 在算效果时查 (见 GraphDecisionSubmit._apply_review). 没带载荷不查 (必填与不能填
+    已由 check_review_fields 查过). 纯函数."""
+    update = record.misstatement_update
+    if update is None:
+        return
+    if update.kind != update_kind:
+        raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 的错报更新为 {update_kind}, 不是 {update.kind}")
+    subject = target.subject_id if isinstance(target, Judgment) else task.subject_id
+    if update.misstatement_id != subject:
+        raise DecisionRejected("INVALID_VALUE", f"错报更新须针对本任务的错报 {subject}, 不是 {update.misstatement_id}")
+    problems = update_problems(update)
+    if problems:
+        raise DecisionRejected("INVALID_VALUE", f"错报更新缺 {', '.join(problems)}")
+
+
+def update_problems(update: MisstatementUpdate) -> list[str]:
+    """人给的错报更新载荷缺的实质字段 (点路径): classification 须有 type 与 fraud_indicative, 舞弊迹象为真须有理由
+    (fraud_reason 去首尾空白后非空, 同大模型一路的语义校验); verification 须有 status. origin 与 objective_id 不靠人填,
+    由 with_rule_fields 按规则补. 例: 只有 ID, 版本与类别的分类载荷 → [misstatement_update.type,
+    misstatement_update.fraud_indicative]. 纯函数."""
+    if update.kind == "classification":
+        missing = [name for name in ("type", "fraud_indicative") if getattr(update, name) is None]
+        if update.fraud_indicative and not (update.fraud_reason or "").strip():
+            missing.append("fraud_reason")
+    else:
+        missing = ["status"] if update.status is None else []
+    return [f"misstatement_update.{name}" for name in missing]
+
+
+def with_rule_fields(
+    record: ReviewRecord, misstatements: Mapping[str, Misstatement], objectives: Sequence[AuditObjective]
+) -> ReviewRecord:
+    """人给的分类载荷补上按规则定的 origin 与 objective_id (workpaper.rule_fields, 同 FIN-03 的 AI 载荷; 人填的不用,
+    第 1 轮审核 R159-02): 推翻与手工结果之后不丢规则定的两项. misstatements: 载荷所指错报的当前版本; 没带载荷,
+    验证载荷, 或所指错报不在其中 (之后按 LookupError 报错) 时原样返回. 纯函数."""
+    update = record.misstatement_update
+    if update is None or update.kind != "classification" or update.misstatement_id not in misstatements:
+        return record
+    completed = update.model_copy(update=rule_fields(misstatements[update.misstatement_id], objectives))
+    return record.model_copy(update={"misstatement_update": completed})
+
+
 def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
@@ -292,9 +367,10 @@ def check_review_values(
     documents: Sequence[DocumentRef] = (),
 ) -> ReviewRecord:
     """复核决定与图无关的校验 (第 7 节校验顺序中图的等待之后, 决定 ID 之前): 决定须绑定任务记的目标版本, 且目标此后
-    没有出新版本 (审计师看材料期间可能被别的决定改过); 决定是该任务允许的 (复核队列); 字段 (check_review_fields);
-    manual 任务的结果按任务请求 (check_manual_result); 功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须
-    独立复核的推理链有效; rerun_params 只能改模板已有的参数.
+    没有出新版本 (审计师看材料期间可能被别的决定改过); 决定是该任务允许的 (复核队列); 字段 (check_review_fields, 按
+    模板的 misstatement_update_kind); 人给的错报更新载荷的类别与对象 (check_update_payload); manual 任务的结果按任务
+    请求 (check_manual_result); 功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须独立复核的推理链有效;
+    rerun_params 只能改模板已有的参数.
 
     target: 任务目标在 Store 中的最新版本, 没有时为 None. documents: 本项目已登记的文件, manual 任务核对证据用
     (其余任务不用). 只用 deps 的复核队列, 程序库与功能开关, 不读存储, 不看检查点; 不过抛 DecisionRejected.
@@ -310,7 +386,9 @@ def check_review_values(
         )
     if record.decision not in deps.queue.allowed(task):
         raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
-    check_review_fields(record, task.kind)
+    template = deps.library.load(task.procedure_id)
+    check_review_fields(record, task.kind, template.misstatement_update_kind)
+    check_update_payload(record, task, target, template.misstatement_update_kind)
     if task.kind is TaskKind.manual:
         record = record.model_copy(update={"manual_result": check_manual_result(record, task, documents)})
     if COLLAB in deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
@@ -324,15 +402,15 @@ def check_review_values(
     ):
         raise DecisionRejected("INVALID_VALUE", "独立复核的推理链没有通过校验, 不能采用其结论 (a7_upheld)")
     # rerun_params 只能改模板已有的参数: build_run 把它叠加到解析结果上, 不查键名, 拼错的键会悄悄无效
-    params = deps.library.load(task.procedure_id).params
-    unknown = sorted(set(record.rerun_params or {}) - set(params))
+    unknown = sorted(set(record.rerun_params or {}) - set(template.params))
     if unknown:
         raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有参数 {', '.join(unknown)}")
     return record
 
 
 def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
-    """confirm 的效果: 判断出新版本置 confirmed, 它解释的例外置 attributed (见 attribute_exceptions).
+    """confirm 的效果: 判断出新版本置 confirmed, 它解释的例外置 attributed (见 attribute_exceptions); 判断带的错报更新
+    载荷由 review_effects 统一写出 (需求 R159).
 
     judgment: 任务的目标判断 (Store 当前版本); exceptions: 其 exception_ids 所指例外的当前版本. 纯函数.
     """
@@ -370,8 +448,9 @@ def misstatement_effects(
 
     target 为判断 (normal 任务): 判断置 confirmed 并归因其例外 (同 confirm), 错报记该判断.
     target 为例外 (unattributed 任务): 同 override, 建人工判断 -H{n} (结论取决定理由, 建议 misstatement, 错报草稿
-    取决定的, 证据取例外的, 解释该例外), 例外归因于它, 错报记该人工判断. 这样报告 (RPT-03) 引用的事实总能落到已确认
-    的判断上 (R59 联调发现: 原先错报只记 exception_id, 报告无判断可引, RPT-03 反复失败).
+    取决定的, 证据取例外的, 解释该例外; 带错报更新载荷的程序另带人给的载荷, 需求 R159), 例外归因于它, 错报记该人工
+    判断. 这样报告 (RPT-03) 引用的事实总能落到已确认的判断上 (R59 联调发现: 原先错报只记 exception_id, 报告无判断可引,
+    RPT-03 反复失败). 被确认的判断带的错报更新载荷由 review_effects 统一写出 (需求 R159).
     exceptions: target 为判断时其 exception_ids 所指例外的当前版本; taken: 检查点状态中已有的判断 ID. 纯函数.
     """
     draft = record.misstatement_draft
@@ -393,6 +472,7 @@ def misstatement_effects(
             exception_ids=[target.id],
             proposed_action=ProposedAction.misstatement,
             misstatement_draft=draft,
+            misstatement_update=record.misstatement_update,
         )
         effects = [human, *attribute_exceptions(human, [target])]
     return [*effects, new_misstatement(record, source, lifecycle)]
@@ -422,10 +502,11 @@ def human_judgment(
     exception_ids: list[str],
     proposed_action: ProposedAction = ProposedAction.accept,
     misstatement_draft: MisstatementDraft | None = None,
+    misstatement_update: MisstatementUpdate | None = None,
 ) -> Judgment:
     """override, manual_result 与对例外认定错报时建的人工判断, 置 confirmed. 只填人给的 (结论, 证据, 解释的例外;
-    认定错报时另有建议 misstatement 与错报草稿); 其余取固定值: 置信度 1.0, 推理链, 分项与反方论证为空,
-    自主度 L1, 执行人为复核人, 时间为决定时间."""
+    认定错报时另有建议 misstatement 与错报草稿; 带错报更新载荷的程序另有人给的载荷, 需求 R159); 其余取固定值:
+    置信度 1.0, 推理链, 分项与反方论证为空, 自主度 L1, 执行人为复核人, 时间为决定时间."""
     return Judgment(
         id=judgment_id,
         procedure_id=task.procedure_id,
@@ -439,6 +520,7 @@ def human_judgment(
         counter_argument="",
         proposed_action=proposed_action,
         misstatement_draft=misstatement_draft,
+        misstatement_update=misstatement_update,
         exception_ids=exception_ids,
         autonomy_level=AutonomyLevel.L1,
         review_status=ReviewStatus.confirmed,
@@ -455,7 +537,8 @@ def override_effects(
     taken: set[str],
     misstatement: MisstatementDraft | None = None,
 ) -> list[Versioned]:
-    """override 的效果 (第 7 节). 按 override_conclusion 建人工判断 -H{n}, 置 confirmed 并归因其例外.
+    """override 的效果 (第 7 节). 按 override_conclusion 建人工判断 -H{n}, 置 confirmed 并归因其例外; 人工判断带决定里
+    人给的错报更新载荷 (带载荷的程序必填, 其余为空, 需求 R159).
 
     target 为判断 (normal 任务): 人工判断沿用原判断的判断对象, 证据与 exception_ids; 原判断出新版本置 overridden,
     superseded_by 记人工判断. target 为例外 (unattributed 任务): 判断对象取任务的 subject_id, 证据取例外的,
@@ -476,6 +559,7 @@ def override_effects(
             exception_ids=target.exception_ids,
             proposed_action=ProposedAction.misstatement if misstatement is not None else ProposedAction.accept,
             misstatement_draft=misstatement,
+            misstatement_update=record.misstatement_update,
         )
         overridden = target.model_copy(
             update={"version": target.version + 1, "review_status": ReviewStatus.overridden, "superseded_by": jid}
@@ -491,13 +575,15 @@ def override_effects(
         conclusion=conclusion,
         evidence=target.evidence,
         exception_ids=[target.id],
+        misstatement_update=record.misstatement_update,
     )
     return [human, *attribute_exceptions(human, [target])]
 
 
 def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str]) -> list[Versioned]:
-    """manual_result 的效果 (第 7 节): 失败任务的判断对象由人给出结论与证据, 建人工判断 -H{n}, 置 confirmed.
-    manual 任务 (人工程序) 不建人工判断, 结果只记在决定里 (见 review_effects). 纯函数."""
+    """manual_result 的效果 (第 7 节): 失败任务的判断对象由人给出结论与证据 (带错报更新载荷的程序另给载荷, 需求
+    R159), 建人工判断 -H{n}, 置 confirmed. manual 任务 (人工程序) 不建人工判断, 结果只记在决定里 (见 review_effects).
+    纯函数."""
     result = record.manual_result
     assert result is not None and task.subject_id is not None  # 校验: 必填; allowed 只对带 subject_id 的任务开放
     jid = human_judgment_id(task, task.subject_id, taken)
@@ -510,6 +596,7 @@ def manual_result_effects(record: ReviewRecord, task: ReviewTask, taken: set[str
             conclusion=result.conclusion,
             evidence=result.evidence,
             exception_ids=[],
+            misstatement_update=record.misstatement_update,
         )
     ]
 
@@ -598,6 +685,7 @@ def review_effects(
     taken: set[str],
     collab: bool = False,
     lifecycle: bool = False,
+    misstatements: Mapping[str, Misstatement] | None = None,
 ) -> list[Versioned]:
     """复核决定的效果 (第 7 节决定的效果表, 不含任务 decided 与程序重算). 纯函数.
 
@@ -605,21 +693,32 @@ def review_effects(
     exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号;
     collab: 功能 collab 是否打开 (仲裁的效果见 dispute_effects); lifecycle: 功能 misstatement 是否打开 (新错报的
     初始状态, 见 new_misstatement).
+    凡效果中置 confirmed 的判断带错报更新载荷 (被确认的 FIN-03, FIN-09 判断, 或带人给载荷的人工判断), 另按载荷写出
+    所指错报的新版本 (review_queue.misstatement_updates, 需求 R159; 同 A8 的自动确认); misstatements 为载荷所指错报的
+    当前版本, 依据的版本不符抛 VersionConflict, 写出的新版本不合格抛 DecisionRejected (INVALID_VALUE).
     """
+    effects: list[Versioned]
     if record.decision is Decision.confirm:
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
-        return confirm_effects(target, exceptions)
-    if record.decision is Decision.misstatement:
-        return misstatement_effects(record, task, target, exceptions, taken, lifecycle)
-    if record.decision is Decision.override:
-        return override_effects(record, task, target, exceptions, taken)
-    if record.decision is Decision.manual_result:
+        effects = confirm_effects(target, exceptions)
+    elif record.decision is Decision.misstatement:
+        effects = misstatement_effects(record, task, target, exceptions, taken, lifecycle)
+    elif record.decision is Decision.override:
+        effects = override_effects(record, task, target, exceptions, taken)
+    elif record.decision is Decision.manual_result:
         # manual 任务 (人工程序, 需求 R92): 只写决定, 结果由程序 owner 在节点读回后整理成领域对象 (需求 R93)
-        return [] if task.kind is TaskKind.manual else manual_result_effects(record, task, taken)
-    if record.decision is Decision.dispute_resolution:
-        return dispute_effects(record, task, target, exceptions, taken, collab, lifecycle)
-    assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
-    return []
+        effects = [] if task.kind is TaskKind.manual else manual_result_effects(record, task, taken)
+    elif record.decision is Decision.dispute_resolution:
+        effects = dispute_effects(record, task, target, exceptions, taken, collab, lifecycle)
+    else:
+        assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
+        effects = []
+    try:
+        updated = misstatement_updates(effects, misstatements or {})
+    except ValidationError as e:  # 依据的版本不符 (VersionConflict) 由 _deciding 转为 VERSION_MISMATCH
+        problems = "; ".join(error["msg"] for error in e.errors())
+        raise DecisionRejected("INVALID_VALUE", f"按错报更新写出的新版本不合格: {problems}") from None
+    return [*effects, *updated]
 
 
 def recompute_procedure(
@@ -929,9 +1028,12 @@ class GraphDecisionSubmit:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
         rerun 时连同同程序其余待决的 failed 任务一并置 decided (一轮失败算一组, 见 rerun_group).
 
-        效果按 Store 当前版本计算 (与校验读的一致). 决定的写入者为复核人, 其余为 A1. Store 若已有其中某个
-        (id, version) 而内容不同, put 会返回旧对象, 效果就丢了: 此时抛 VersionConflict 整体回滚
-        (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回 (await_events, 第 7 节恢复机制).
+        效果按 Store 当前版本计算 (与校验读的一致), 错报更新载荷所指的错报也取 Store 当前版本: 载荷依据的不是它
+        (判断之后错报已出新版本) 抛 VersionConflict, 写出的新版本不合格报 INVALID_VALUE, 都不写 (需求 R159). 人给的
+        分类载荷先按规则补上 origin 与 objective_id (with_rule_fields, 审计目标取检查点), 写入的决定带补全的载荷.
+        决定的写入者为复核人, 其余为 A1. Store 若已有其中某个 (id, version) 而内容不同, put 会返回旧对象, 效果就丢了:
+        此时抛 VersionConflict 整体回滚 (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回
+        (await_events, 第 7 节恢复机制).
         snapshot: 当前检查点, 人工判断按其中已有的判断取号 (-H{n}); 其中的过期重跑请求定出哪些归因已失效.
         """
         store = self.deps.output_store
@@ -945,7 +1047,15 @@ class GraphDecisionSubmit:
             exceptions = released([x for x in found if x is not None], superseded_judgments(values))
         taken = {j.id for j in values["judgments"]}
         features = self.deps.features
-        effects = review_effects(record, task, target, exceptions, taken, COLLAB in features, MISSTATEMENT in features)
+        # 错报更新载荷所指错报的当前版本 (需求 R159): 人给的, 或目标判断上的 (confirm 等确认它时写出)
+        payloads = [record.misstatement_update, target.misstatement_update if isinstance(target, Judgment) else None]
+        wanted = sorted({u.misstatement_id for u in payloads if u is not None})
+        current = [await store.get(eid, Misstatement, mid) for mid in wanted]
+        misstatements = {m.id: m for m in current if m is not None}
+        record = with_rule_fields(record, misstatements, values["audit_objectives"])
+        effects = review_effects(
+            record, task, target, exceptions, taken, COLLAB in features, MISSTATEMENT in features, misstatements
+        )
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)

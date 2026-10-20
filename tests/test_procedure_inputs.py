@@ -208,16 +208,14 @@ async def test_requests_list_programs_waiting_for_each_item() -> None:
     by_id = {r["id"]: r for r in listed}
     assert {rid: (r["kind"], r["reason_code"], r["used_for"], r["status"]) for rid, r in by_id.items()} == {
         "REQ-contract": ("document", "not_provided", ["DOC-04"], "open"),
-        "REQ-financial_statements": ("document", "not_provided", ["FIN-12"], "open"),  # R15 原有
         "REQ-sales_invoices": ("table", "missing_table", ["REV-02", "REV-08"], "open"),
         "REQ-bank_accounts": ("table", "missing_table", ["CSH-02", "CSH-04", "CSH-05"], "open"),
         "REQ-bank_transactions": ("table", "missing_table", ["CSH-02", "CSH-05", "REV-08"], "open"),
         "REQ-delivery_notes": ("table", "missing_table", ["REV-08"], "open"),
     }
-    # 合同与报表草稿在 P1 等数据时就提出, 四张表在装配后提出, 同时提出的按表种类顺序
+    # 合同在 P1 等数据时就提出, 四张表在装配后提出, 同时提出的按表种类顺序; 不再要报表草稿 (Issue #46)
     assert [r["id"] for r in listed] == [
         "REQ-contract",
-        "REQ-financial_statements",
         "REQ-sales_invoices",
         "REQ-bank_accounts",
         "REQ-bank_transactions",
@@ -436,8 +434,8 @@ def test_program_requests_and_merge() -> None:
     extra = table_request(TableKind.approval_log, "missing_table", {}, NOW, ["X-USE"])
     [merged] = merge_requests([approval], [extra])
     assert (merged.reason_code, merged.used_for) == ("field_unavailable", ["GEN-05", "X-USE"])
-    # 原有五项的相对顺序不变: 科目表, 试算表, 总账, 审批日志, 报表草稿
-    old = ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries", "REQ-approval_log", "REQ-financial_statements"]
+    # 体检请求的相对顺序不变: 科目表, 试算表, 总账, 审批日志
+    old = ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries", "REQ-approval_log"]
     assert sorted(old, key=REQUEST_ORDER.index) == old
 
 

@@ -20,14 +20,27 @@ from backend.contracts.data import (
     TableKind,
     TableVersion,
 )
-from backend.contracts.models import DocumentType, GateVerdict, TrailEntry, TrailKind
+from backend.contracts.models import (
+    DocumentRef,
+    DocumentType,
+    GateVerdict,
+    Phase,
+    Procedure,
+    Reliability,
+    TrailEntry,
+    TrailKind,
+    Versioned,
+)
 from backend.contracts.records import Account, JournalEntry, TrialBalanceRow
+from backend.core.config import get_settings
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.persistence.data_store import stored_checks
 from backend.persistence.stores import ADJUSTMENTS
-from backend.services.data_quality import reconcile, run_checks, summarize
+from backend.services.data_quality import RETIRED_REQUESTS, reconcile, request_id, run_checks, summarize
 from backend.services.data_service import DataService
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
@@ -36,6 +49,7 @@ from tests.fakes import (
     FakeDataStore,
     FakeEngagementStore,
     FakeFinancialStore,
+    FakeOutputStore,
     FakeTrail,
     api_client,
     make_runner,
@@ -79,10 +93,10 @@ def checkup_trail(runner: GraphRunner) -> list[TrailEntry]:
 # ── 规则 (纯函数) ──
 
 
-def test_numbat_dataset_passes_and_only_lacks_statements() -> None:
-    """Numbat 演示数据集: 借贷平衡, 分录与试算表按期初结转勾稽一致, 科目全部归类, 有录入人与审批人;
-    只缺报表草稿 (缺资料, 提出补交请求)."""
-    result = run_checks(numbat_inputs(*PERIOD), statements=0, journal_version=None, now=NOW)
+def test_numbat_dataset_passes_every_check() -> None:
+    """Numbat 演示数据集: 借贷平衡, 分录与试算表按期初结转勾稽一致, 科目全部归类, 有录入人与审批人; 五项都通过,
+    不提请求 (财务报表以账套为准, 不要报表草稿, Issue #46)."""
+    result = run_checks(numbat_inputs(*PERIOD), journal_version=None, now=NOW)
 
     checks = {c.id: c for c in result.checks}
     assert [c.id for c in result.checks] == list(CheckId)
@@ -92,7 +106,6 @@ def test_numbat_dataset_passes_and_only_lacks_statements() -> None:
         "count_agrees_source": "passed",
         "mapping_complete": "passed",
         "preparer_approver_available": "passed",
-        "tb_agrees_statements": "missing_data",
     }
     assert checks[CheckId.debits_equal_credits].params == {"debit_cents": 5271620000, "credit_cents": 5271620000}
     assert checks[CheckId.journals_agree_tb].params == {"accounts": 23, "differences": []}
@@ -102,16 +115,7 @@ def test_numbat_dataset_passes_and_only_lacks_statements() -> None:
         "received": 2686,
     }
     assert checks[CheckId.mapping_complete].params == {"mapped": 23, "total": 23}
-    assert checks[CheckId.tb_agrees_statements].request_id == "REQ-financial_statements"
-    [draft] = result.requests
-    assert (draft.id, draft.kind, draft.document_type, draft.reason_code, draft.used_for, draft.status) == (
-        "REQ-financial_statements",
-        "document",
-        DocumentType.financial_statements,
-        "not_provided",
-        ["FIN-12"],
-        "open",
-    )
+    assert result.requests == []
 
 
 @pytest.mark.external
@@ -130,7 +134,7 @@ def test_xero_snapshot_lacks_preparer_and_approver() -> None:
         dataset="xero/20261017-mock",
     )
 
-    result = run_checks(inputs, statements=1, journal_version=None, now=NOW)
+    result = run_checks(inputs, journal_version=None, now=NOW)
 
     checks = {c.id: c for c in result.checks}
     assert checks[CheckId.journals_agree_tb].status == "passed"
@@ -143,7 +147,6 @@ def test_xero_snapshot_lacks_preparer_and_approver() -> None:
         {"source": "Xero", "missing_fields": ["created_by", "approved_by"]},
         "REQ-approval_log",
     )
-    assert checks[CheckId.tb_agrees_statements].status == "pending"  # 报表草稿已有, 勾稽归 FIN-12
     [approval] = result.requests
     assert (approval.id, approval.kind, approval.table_kind, approval.reason_code, approval.reason_params) == (
         "REQ-approval_log",
@@ -154,16 +157,15 @@ def test_xero_snapshot_lacks_preparer_and_approver() -> None:
     )
 
 
-def test_empty_project_requests_required_tables_and_statements() -> None:
-    """什么都没接入: 各项缺资料, 必需的三张表与报表草稿各一份请求, 各项链到它要用的第一张缺的表."""
-    result = run_checks(CheckInputs(), statements=0, journal_version=None, now=NOW)
+def test_empty_project_requests_required_tables() -> None:
+    """什么都没接入: 各项缺资料, 必需的三张表各一份请求, 各项链到它要用的第一张缺的表."""
+    result = run_checks(CheckInputs(), journal_version=None, now=NOW)
 
     assert set(statuses(result.checks).values()) == {"missing_data"}
     assert [(r.id, r.reason_code) for r in result.requests] == [
         ("REQ-accounts", "missing_table"),
         ("REQ-trial_balance", "missing_table"),
         ("REQ-journal_entries", "missing_table"),
-        ("REQ-financial_statements", "not_provided"),
     ]
     assert {c.id.value: c.request_id for c in result.checks} == {
         "debits_equal_credits": "REQ-journal_entries",
@@ -171,7 +173,6 @@ def test_empty_project_requests_required_tables_and_statements() -> None:
         "count_agrees_source": "REQ-journal_entries",
         "mapping_complete": "REQ-accounts",
         "preparer_approver_available": "REQ-journal_entries",
-        "tb_agrees_statements": "REQ-financial_statements",
     }
 
 
@@ -194,7 +195,7 @@ def test_failures_report_amounts_differences_and_counts() -> None:
         created_at=NOW,
     )
 
-    checks = {c.id: c for c in run_checks(inputs, statements=1, journal_version=version, now=NOW).checks}
+    checks = {c.id: c for c in run_checks(inputs, journal_version=version, now=NOW).checks}
 
     assert checks[CheckId.debits_equal_credits].status == "failed"
     assert checks[CheckId.journals_agree_tb].params == {
@@ -213,7 +214,7 @@ def test_without_retained_earnings_the_prior_result_shows_as_difference() -> Non
     categories = {c: (None if v == "retained_earnings" else v) for c, v in base.account_categories.items()}
 
     checks = run_checks(
-        base.model_copy(update={"account_categories": categories}), statements=1, journal_version=None, now=NOW
+        base.model_copy(update={"account_categories": categories}), journal_version=None, now=NOW
     ).checks
 
     journals = next(c for c in checks if c.id is CheckId.journals_agree_tb)
@@ -359,22 +360,33 @@ def test_reconcile_raises_keeps_updates_receives_and_reopens() -> None:
         request("REQ-accounts"),
         request("REQ-approval_log", reason_code="field_unavailable", reason_params={"fields": ["b"]}),
         request("REQ-trial_balance"),
-        request("REQ-financial_statements", kind="document"),
+        request("REQ-contract", kind="document"),
     ]
 
     changes = reconcile(existing, wanted, NOW)
 
-    assert [r.id for r in changes.raised] == ["REQ-trial_balance", "REQ-financial_statements"]
+    assert [r.id for r in changes.raised] == ["REQ-trial_balance", "REQ-contract"]
     assert [r.id for r in changes.received] == ["REQ-journal_entries"]
     assert changes.received[0].resolved_at == NOW and changes.received[0].created_at == earlier
     saved = {r.id: r for r in changes.saved}
-    assert set(saved) == {"REQ-approval_log", "REQ-trial_balance", "REQ-financial_statements", "REQ-journal_entries"}
+    assert set(saved) == {"REQ-approval_log", "REQ-trial_balance", "REQ-contract", "REQ-journal_entries"}
     assert (saved["REQ-approval_log"].created_at, saved["REQ-approval_log"].reason_params) == (
         earlier,
         {"fields": ["b"]},
     )
     assert (saved["REQ-trial_balance"].status, saved["REQ-trial_balance"].created_at) == ("open", NOW)
     assert saved["REQ-trial_balance"].resolved_at is None
+
+
+def test_stored_checks_skip_retired_items() -> None:
+    """旧项目的 data_checks 还存着 Issue #46 删去的 tb_agrees_statements: 读出时略过, 其余按 CheckId 顺序 (防删去
+    枚举值后读旧库报错)."""
+    rows = [
+        {"id": "tb_agrees_statements", "status": "pending", "params": {"statements": 1}, "request_id": None},
+        *({"id": c.value, "status": "passed", "params": {}, "request_id": None} for c in reversed(CheckId)),
+    ]
+
+    assert [c.id for c in stored_checks(rows)] == list(CheckId)
 
 
 def test_trail_keys_do_not_depend_on_time_zone() -> None:
@@ -394,13 +406,27 @@ def test_trail_keys_do_not_depend_on_time_zone() -> None:
     )
 
 
-# ── 验收: Numbat 经 Xero 同步, 两条请求, 补交后转 received ──
+# ── 验收: Numbat 经 Xero 同步, 审批日志请求, 补交后转 received ──
+
+CONTRACT_REQUEST = "REQ-contract"  # 按请求上传的用例对着的文件请求: 程序包里还没执行的 DOC-04 要合同 (需求 R272)
 
 
-def service_for(data: FakeDataStore) -> tuple[GraphRunner, DataService, FakeFinancialStore]:
+def service_for(
+    data: FakeDataStore, *, contract_wanted: bool = False
+) -> tuple[GraphRunner, DataService, FakeFinancialStore]:
+    """Numbat 项目的数据服务, 证据文件为空. contract_wanted 时程序包里有一条还没执行的 DOC-04, 体检提出合同请求
+    (CONTRACT_REQUEST)."""
     financial = FakeFinancialStore()
+    pack: list[Versioned] = (
+        [Procedure(id="DOC-04", phase=Phase.P1_Planning, template_commit="x", autonomy_level="L2")]
+        if contract_wanted
+        else []
+    )
     runner, _ = make_runner(
-        engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]), data=data, financial_store=financial
+        engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]),
+        output_store=FakeOutputStore(pack),
+        data=data,
+        financial_store=financial,
     )
     financial.document_refs.clear()
     return runner, DataService(runner.deps, runner), financial
@@ -418,10 +444,10 @@ def approval_log_csv() -> bytes:
     return stream.getvalue().encode()
 
 
-async def test_xero_sync_raises_two_requests_received_after_uploads() -> None:
-    """验收: Numbat 经 Xero 同步后出现审批日志, 报表草稿两条请求; 导入审批日志, 上传报表草稿后都转为 received."""
+async def test_xero_sync_raises_approval_request_received_after_import() -> None:
+    """验收: Numbat 经 Xero 同步后出现审批日志一条请求 (不再要报表草稿, Issue #46); 导入审批日志后转为 received."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, _ = service_for(data)
     tables = {
         TableKind.accounts: numbat(TableKind.accounts),
         TableKind.trial_balance: numbat(TableKind.trial_balance),
@@ -433,7 +459,6 @@ async def test_xero_sync_raises_two_requests_received_after_uploads() -> None:
     requests = await data.requests(EID)
     assert [(r.id, r.reason_code, r.reason_params, r.status) for r in requests] == [
         ("REQ-approval_log", "field_unavailable", {"fields": ["created_by", "approved_by"], "source": "Xero"}, "open"),
-        ("REQ-financial_statements", "not_provided", {}, "open"),
     ]
     assert statuses(data.check_results) == {
         "debits_equal_credits": "passed",
@@ -441,14 +466,12 @@ async def test_xero_sync_raises_two_requests_received_after_uploads() -> None:
         "count_agrees_source": "passed",
         "mapping_complete": "passed",
         "preparer_approver_available": "failed",
-        "tb_agrees_statements": "missing_data",
     }
-    assert (await service.summary(EID)).open_requests == 2
+    assert (await service.summary(EID)).open_requests == 1
     async with api_client(runner) as client:
         listed = (await client.get(f"/api/v1/engagements/{EID}/data/requests")).json()
     assert [(r["id"], r["kind"], r["status"], r["raised_by"]) for r in listed] == [
         ("REQ-approval_log", "table", "open", "A3"),
-        ("REQ-financial_statements", "document", "open", "A3"),
     ]
 
     preview = await service.start_import(
@@ -460,79 +483,44 @@ async def test_xero_sync_raises_two_requests_received_after_uploads() -> None:
     approval = next(r for r in await data.requests(EID) if r.id == "REQ-approval_log")
     assert (approval.status, approval.resolved_at is not None) == ("received", True)
     assert statuses(data.check_results)["preparer_approver_available"] == "passed"
-
-    [document] = await service.upload_documents(
-        EID,
-        [("FY26 draft financial statements.pdf", b"%PDF draft")],
-        actor="U-1",
-        request_id="REQ-financial_statements",
-    )
-    await asyncio.gather(*list(service.tasks))
-    statement = next(d for d in financial.document_refs if d.id == document.id)
-    # R217: 按请求定为财务报表后抽取待审财报; 测试的固定输出里没有这份草稿, 抽取没通过转人工, 照样算已提供
-    assert (statement.type, statement.status, statement.failed_step) == (
-        DocumentType.financial_statements,
-        "needs_manual",
-        "extract",
-    )
-    assert {r.id: r.status for r in await data.requests(EID)} == {
-        "REQ-approval_log": "received",
-        "REQ-financial_statements": "received",
-    }
-    assert statuses(data.check_results)["tb_agrees_statements"] == "pending"
     assert (await service.summary(EID)).open_requests == 0
 
-    trail = runner.deps.trail
-    assert isinstance(trail, FakeTrail)
-    classify = next(e for e in trail.entries if e.payload.get("action") == "classify")
-    assert (classify.actor, classify.payload["reason"]) == ("U-1", "按补交请求 REQ-financial_statements 上传")
     events = [
         (e.payload["action"], e.payload.get("request_id"))
         for e in checkup_trail(runner)
         if e.payload["action"] != "check"
     ]
-    assert events == [
-        ("request_raised", "REQ-approval_log"),
-        ("request_raised", "REQ-financial_statements"),
-        ("request_received", "REQ-approval_log"),
-        ("request_received", "REQ-financial_statements"),
-    ]
+    assert events == [("request_raised", "REQ-approval_log"), ("request_received", "REQ-approval_log")]
     received = [e for e in checkup_trail(runner) if e.payload["action"] == "request_received"]
     assert received[0].payload == {
         "action": "request_received",
         "request_id": "REQ-approval_log",
         "table_kind": "approval_log",
     }
-    assert received[1].payload["document_type"] == "financial_statements"
-    assert [e.payload["action"] for e in checkup_trail(runner)].count("check") == 3  # 同步, 导入, 上传各一次
+    assert [e.payload["action"] for e in checkup_trail(runner)].count("check") == 2  # 同步, 导入各一次
 
 
 async def test_upload_with_unknown_or_table_request_is_classified_by_a3() -> None:
     """上传带的 request_id 不是待补交的文件请求 (不存在, 或是账表请求) 时照常由 A3 分类, request_id 只记在留痕里."""
     data = FakeDataStore(ready=False)
-    _, service, _ = service_for(data)
-    await DataCheckup(service.deps).run(EID)  # 提出缺表与报表草稿的请求
+    _, service, _ = service_for(data, contract_wanted=True)
+    await DataCheckup(service.deps).run(EID)  # 提出缺表与合同的请求
 
     hint = await service._requested(EID, "REQ-accounts")
     missing = await service._requested(EID, "REQ-nope")
-    draft = await service._requested(EID, "REQ-financial_statements")
+    contract = await service._requested(EID, CONTRACT_REQUEST)
 
     assert (hint, missing) == (None, None)
-    assert draft is not None and draft.document_type is DocumentType.financial_statements
+    assert contract is not None and contract.document_type is DocumentType.contract
 
 
 # ── 时机: P1 等数据, 写入后, 稍后处理, 留痕补写 ──
 
 
 async def test_waiting_for_data_raises_missing_table_requests_once() -> None:
-    """P1 等数据: A3 体检, 为每张缺的必需表与报表草稿提请求; 接入账表后缺表的请求转 received; 确认后恢复不再重复体检."""
+    """P1 等数据: A3 体检, 为每张缺的必需表提请求; 接入账表后转 received; 确认后恢复不再重复体检."""
     runner, _, data = await waiting_for_data()
-    assert [r.id for r in await data.requests(EID)] == [
-        "REQ-accounts",
-        "REQ-trial_balance",
-        "REQ-journal_entries",
-        "REQ-financial_statements",
-    ]
+    assert [r.id for r in await data.requests(EID)] == ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries"]
     assert len([e for e in checkup_trail(runner) if e.payload["action"] == "check"]) == 1
 
     service = DataService(runner.deps, runner)
@@ -543,7 +531,6 @@ async def test_waiting_for_data_raises_missing_table_requests_once() -> None:
         "REQ-accounts": "received",
         "REQ-trial_balance": "received",
         "REQ-journal_entries": "received",
-        "REQ-financial_statements": "open",
     }
     data.table_stats = dict(SEEDED_STATS)
     await service.confirm_ready(EID, "U-1")
@@ -557,7 +544,7 @@ async def test_waiting_for_data_raises_missing_table_requests_once() -> None:
 
 
 async def test_ready_dataset_project_is_checked_at_p1_start() -> None:
-    """数据集载入 (视同已确认) 的项目: 进 P1 时第一次体检, 只缺报表草稿."""
+    """数据集载入 (视同已确认) 的项目: 进 P1 时第一次体检, 什么都不缺, 不提请求."""
     runner, _ = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]))
     await runner.start(EID)
     await wait_idle(runner, EID)
@@ -566,9 +553,91 @@ async def test_ready_dataset_project_is_checked_at_p1_start() -> None:
 
     data = runner.deps.data
     assert isinstance(data, FakeDataStore)
-    assert [r.id for r in await data.requests(EID)] == ["REQ-financial_statements"]
+    assert await data.requests(EID) == []
     assert statuses(data.check_results)["journals_agree_tb"] == "passed"
     assert len([e for e in checkup_trail(runner) if e.payload["action"] == "check"]) == 1
+
+
+STATEMENTS_REQUEST = "REQ-financial_statements"  # Issue #46 前体检提出的报表草稿请求
+
+
+@pytest.mark.parametrize(
+    ("status", "documents", "rerun"),
+    [("open", 0, True), ("open", 1, True), ("received", 1, False), ("unavailable", 0, False)],
+    ids=["open", "open_with_statements", "received", "unavailable"],
+)
+async def test_retired_statements_request_is_withdrawn_on_next_checkup(
+    status: str, documents: int, rerun: bool
+) -> None:
+    """Issue #46 验收 3: 旧项目的最近一次体检对应当前数据, 存着报表草稿请求. 请求仍待补交时 run_if_stale 重跑体检:
+    请求转 withdrawn (resolved_at 为这次体检时间, 客户交过报表也撤回, 不按资料到了转 received), 留痕 request_withdrawn
+    一条带理由 "报表以账套为准"; 再调一次不再重跑. 已收到与标了客户无此类资料的不算过期, 不重跑; 之后再写数据时的
+    完整体检 (走到 reconcile) 也不改它们 (审核 R318-01)."""
+    data = FakeDataStore()
+    _, service, financial = service_for(data)
+    checkup = DataCheckup(service.deps)
+    await checkup.run(EID)
+    earlier = NOW - timedelta(days=30)
+    resolved = {} if status == "open" else {"resolved_at": earlier}
+    old = request(
+        STATEMENTS_REQUEST,
+        kind="document",
+        document_type="financial_statements",
+        reason_code="not_provided",
+        used_for=["FIN-12"],
+        status=status,
+        at=earlier,
+        **resolved,
+    )
+    data.data_requests[STATEMENTS_REQUEST] = old
+    financial.document_refs = [
+        DocumentRef(
+            id="DOC-fs",
+            type=DocumentType.financial_statements,
+            file_name="draft.pdf",
+            sha256="0" * 64,
+            page_count=6,
+            reliability=Reliability.internal_copy,
+            status="classified",
+            uploaded_at=earlier,
+        )
+    ][:documents]
+
+    run = await checkup.run_if_stale(EID)
+
+    current = data.data_requests[STATEMENTS_REQUEST]
+    trail = service.deps.trail
+    assert isinstance(trail, FakeTrail)
+    withdrawn = [e for e in trail.entries if e.payload.get("action") == "request_withdrawn"]
+    if not rerun:
+        assert (run, current, withdrawn) == (None, old, [])
+        await checkup.run(EID)
+        after = [e for e in trail.entries if e.payload.get("action") == "request_withdrawn"]
+        assert (data.data_requests[STATEMENTS_REQUEST], after) == (old, [])
+        return
+    assert run is not None
+    assert (current.status, current.resolved_at, current.created_at) == ("withdrawn", run.checked_at, earlier)
+    assert [e.payload for e in withdrawn] == [
+        {
+            "action": "request_withdrawn",
+            "request_id": STATEMENTS_REQUEST,
+            "document_type": "financial_statements",
+            "reason": "报表以账套为准",
+        }
+    ]
+    assert await checkup.run_if_stale(EID) is None
+
+
+def test_no_procedure_wants_a_retired_request() -> None:
+    """守卫 (审核 R318-02): 程序库 (含未启用的) 没有程序的模板 inputs 要退役请求的资料 (RETIRED_REQUESTS). 以后有程序
+    要它时这条失败, 提醒同时把它移出退役表: 否则请求被程序要而不撤回, run_if_stale 见它 open 就每次重跑体检."""
+    library = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+    wanted = {
+        request_id(subject)
+        for template in library.all(include_disabled=True)
+        for subject in [*template.inputs.tables, *template.inputs.documents]
+    }
+    assert wanted and wanted.isdisjoint(RETIRED_REQUESTS)
 
 
 async def test_data_request_can_be_deferred_until_received() -> None:
@@ -627,7 +696,6 @@ async def test_checkup_trail_failure_is_backfilled_on_next_write(monkeypatch: py
     actions = [(e.payload["action"], e.payload.get("request_id")) for e in checkup_trail(runner)]
     assert actions.count(("check", None)) == 1
     assert sorted(rid for action, rid in actions if action == "request_raised") == [
-        "REQ-financial_statements",
         "REQ-journal_entries",
         "REQ-trial_balance",
     ]
@@ -668,9 +736,7 @@ def test_retained_earnings_carried_from_prior_year_is_compared() -> None:
     )
 
     journals = next(
-        c
-        for c in run_checks(inputs, statements=1, journal_version=None, now=NOW).checks
-        if c.id is CheckId.journals_agree_tb
+        c for c in run_checks(inputs, journal_version=None, now=NOW).checks if c.id is CheckId.journals_agree_tb
     )
 
     assert journals.status == "failed"
@@ -678,10 +744,11 @@ def test_retained_earnings_carried_from_prior_year_is_compared() -> None:
 
 
 async def test_upload_against_request_persists_type_before_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    """对着报表草稿请求上传: 在请求里就定好类型落库, 作业开始前关停也不丢; 启动补做后体检, 请求转 received.
-    定类型那一步失败时 (文件已登记, 上传留痕带着请求), 启动补做从上传留痕取回请求照样定类型 (审核 FD-R15 第 1, 2 轮)."""
+    """对着合同请求上传: 在请求里就定好类型落库, 作业开始前关停也不丢; 启动补做后抽取 (固定输出里没有这几份, 抽取没通过
+    转人工) 并体检, 请求转 received. 定类型那一步失败时 (文件已登记, 上传留痕带着请求), 启动补做从上传留痕取回请求照样
+    定类型 (审核 FD-R15 第 1, 2 轮)."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, financial = service_for(data, contract_wanted=True)
     async with service.holding(EID, []):
         await DataCheckup(service.deps).run(EID)
     evidence = runner.deps.evidence_store
@@ -697,17 +764,15 @@ async def test_upload_against_request_persists_type_before_job(monkeypatch: pyte
 
     monkeypatch.setattr(evidence, "update_document", fail_once)
     with pytest.raises(RuntimeError):
-        await service.upload_documents(
-            EID, [("first.png", b"draft-one")], actor="U-1", request_id="REQ-financial_statements"
-        )
+        await service.upload_documents(EID, [("first.png", b"draft-one")], actor="U-1", request_id=CONTRACT_REQUEST)
     monkeypatch.setattr(evidence, "update_document", update)
     [first] = financial.document_refs
     assert first.status == "received"
 
     [second] = await service.upload_documents(
-        EID, [("second.png", b"draft-two")], actor="U-1", request_id="REQ-financial_statements"
+        EID, [("second.png", b"draft-two")], actor="U-1", request_id=CONTRACT_REQUEST
     )
-    assert (second.type, second.status) == (DocumentType.financial_statements, "classified")  # 已落库
+    assert (second.type, second.status) == (DocumentType.contract, "classified")  # 已落库
     await service.shutdown()  # 作业还没开始就被取消
 
     restarted = DataService(service.deps, runner)
@@ -715,52 +780,47 @@ async def test_upload_against_request_persists_type_before_job(monkeypatch: pyte
     await asyncio.gather(*list(restarted.tasks))
 
     assert {(d.file_name, d.type, d.status) for d in financial.document_refs} == {
-        ("first.png", DocumentType.financial_statements, "classified"),
-        ("second.png", DocumentType.financial_statements, "classified"),
+        ("first.png", DocumentType.contract, "needs_manual"),
+        ("second.png", DocumentType.contract, "needs_manual"),
     }
-    assert data.data_requests["REQ-financial_statements"].status == "received"
+    assert data.data_requests[CONTRACT_REQUEST].status == "received"
 
 
 async def test_reupload_against_request_survives_shutdown_before_job() -> None:
     """已转人工的文件对着请求重传后, 作业开始前关停: 类型已落库, 启动补做后请求转 received (审核 FD-R15 第 2 轮探针)."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, financial = service_for(data, contract_wanted=True)
     await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1")
     await asyncio.gather(*list(service.tasks))
-    assert financial.document_refs[0].status == "needs_manual"
+    assert (financial.document_refs[0].status, financial.document_refs[0].failed_step) == ("needs_manual", "classify")
 
-    await service.upload_documents(
-        EID, [("scan.png", b"draft-image")], actor="U-1", request_id="REQ-financial_statements"
-    )
+    await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1", request_id=CONTRACT_REQUEST)
     await service.shutdown()
     restarted = DataService(service.deps, runner)
     await restarted.recover()
     await asyncio.gather(*list(restarted.tasks))
 
     current = financial.document_refs[0]
-    assert (current.type, current.status) == (DocumentType.financial_statements, "classified")
-    assert data.data_requests["REQ-financial_statements"].status == "received"
+    assert (current.type, current.status, current.failed_step) == (DocumentType.contract, "needs_manual", "extract")
+    assert data.data_requests[CONTRACT_REQUEST].status == "received"
 
 
 async def test_reupload_against_request_retypes_document_once() -> None:
-    """先普通上传而分不了类 (转人工), 再对着报表草稿请求上传同一文件: 按请求定类型, 请求转 received;
-    再传一次不再处理."""
+    """先普通上传而分不了类 (转人工), 再对着合同请求上传同一文件: 按请求定类型, 请求转 received; 再传一次不再处理."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, financial = service_for(data, contract_wanted=True)
     await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1")
     await asyncio.gather(*list(service.tasks))
     assert financial.document_refs[0].status == "needs_manual"
-    assert data.data_requests["REQ-financial_statements"].status == "open"
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"
 
     for _ in range(2):
-        await service.upload_documents(
-            EID, [("scan.png", b"draft-image")], actor="U-1", request_id="REQ-financial_statements"
-        )
+        await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1", request_id=CONTRACT_REQUEST)
         await asyncio.gather(*list(service.tasks))
 
     current = financial.document_refs[0]
-    assert (current.type, current.status) == (DocumentType.financial_statements, "classified")
-    assert data.data_requests["REQ-financial_statements"].status == "received"
+    assert (current.type, current.failed_step) == (DocumentType.contract, "extract")
+    assert data.data_requests[CONTRACT_REQUEST].status == "received"
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
     assigned = [e for e in trail.entries if e.payload.get("action") == "classify" and e.actor == "U-1"]
@@ -799,35 +859,6 @@ async def test_import_retry_redoes_checkup_skipped_after_trail_failure(monkeypat
     assert data.last_run is not None and data.last_run.data_version == 1
 
 
-async def test_failed_checkup_after_upload_is_redone_when_p1_resumes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """报表草稿上传分类成功而随后的体检失败 (数据版本没变): 确认就绪后 P1 恢复时看出已提供的报表数变了, 补做体检."""
-    runner, _, data = await waiting_for_data()
-    service = DataService(runner.deps, runner)
-    tables = {k: numbat(k) for k in (TableKind.accounts, TableKind.trial_balance, TableKind.journal_entries)}
-    async with service.holding(EID, [k.value for k in tables]):
-        await service.write_tables(EID, tables, source="import", actor="U-1")
-    inputs = data.check_inputs
-
-    async def no_inputs(*args: Any, **kwargs: Any) -> CheckInputs:
-        raise RuntimeError("汇总失败")
-
-    monkeypatch.setattr(data, "check_inputs", no_inputs)
-    await service.upload_documents(
-        EID, [("scan.png", b"draft-image")], actor="U-1", request_id="REQ-financial_statements"
-    )
-    await asyncio.gather(*list(service.tasks))
-    assert data.data_requests["REQ-financial_statements"].status == "open"
-    monkeypatch.setattr(data, "check_inputs", inputs)
-    data.table_stats = dict(SEEDED_STATS)
-
-    await service.confirm_ready(EID, "U-1")
-    await wait_idle(runner, EID)
-
-    assert data.data_requests["REQ-financial_statements"].status == "received"
-    tb = next(c for c in data.check_results if c.id is CheckId.tb_agrees_statements)
-    assert (tb.status, tb.params) == ("pending", {"statements": 1})
-
-
 async def test_recover_redoes_stale_checkup_without_unfinished_documents(monkeypatch: pytest.MonkeyPatch) -> None:
     """启动补做: 没有要补做的文件, 但上次体检失败 (结果不对应当前数据), 补做体检; 已是最新的不再体检."""
     data = FakeDataStore(ready=False)
@@ -858,7 +889,7 @@ async def test_recover_finishes_request_typing_when_record_update_failed(
     """已有文件 (还没处理或已转人工) 对着请求重传, 写完 classify 留痕后改登记失败: classify 留痕带着 request_id,
     启动补做据此接着按请求定类型, 请求转 received (审核 FD-R15 第 3 轮探针)."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, financial = service_for(data, contract_wanted=True)
     async with service.holding(EID, []):
         await service.checkup(EID)
     await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1")
@@ -875,9 +906,7 @@ async def test_recover_finishes_request_typing_when_record_update_failed(
 
     monkeypatch.setattr(evidence, "update_document", broken)
     with pytest.raises(RuntimeError):
-        await service.upload_documents(
-            EID, [("scan.png", b"draft-image")], actor="U-1", request_id="REQ-financial_statements"
-        )
+        await service.upload_documents(EID, [("scan.png", b"draft-image")], actor="U-1", request_id=CONTRACT_REQUEST)
     monkeypatch.setattr(evidence, "update_document", update)
 
     restarted = DataService(service.deps, runner)
@@ -885,24 +914,24 @@ async def test_recover_finishes_request_typing_when_record_update_failed(
     await asyncio.gather(*list(restarted.tasks))
 
     current = financial.document_refs[0]
-    assert (current.type, current.status) == (DocumentType.financial_statements, "classified")
-    assert data.data_requests["REQ-financial_statements"].status == "received"
+    assert (current.type, current.failed_step) == (DocumentType.contract, "extract")
+    assert data.data_requests[CONTRACT_REQUEST].status == "received"
 
 
 async def test_later_manual_type_wins_over_earlier_request_upload() -> None:
-    """对着报表草稿请求上传后, 审计师又把它改成会议纪要 (请求随之重新打开): 启动补做不按旧请求改回去."""
+    """对着合同请求上传后, 审计师又把它改成会议纪要 (请求随之重新打开): 启动补做不按旧请求改回去."""
     data = FakeDataStore(ready=False)
-    runner, service, financial = service_for(data)
+    runner, service, financial = service_for(data, contract_wanted=True)
     async with service.holding(EID, []):
-        await service.checkup(EID)  # 提出报表草稿请求
+        await service.checkup(EID)  # 提出合同请求
     [document] = await service.upload_documents(
-        EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id="REQ-financial_statements"
+        EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id=CONTRACT_REQUEST
     )
     await asyncio.gather(*list(service.tasks))
-    assert data.data_requests["REQ-financial_statements"].status == "received"
+    assert data.data_requests[CONTRACT_REQUEST].status == "received"
     await service.set_document_type(EID, document.id, DocumentType.minutes, "其实是董事会纪要", "U-1")
     await asyncio.gather(*list(service.tasks))
-    assert data.data_requests["REQ-financial_statements"].status == "open"  # 重新打开
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"  # 重新打开
 
     restarted = DataService(service.deps, runner)
     await restarted.recover()
@@ -910,4 +939,4 @@ async def test_later_manual_type_wins_over_earlier_request_upload() -> None:
 
     current = next(d for d in financial.document_refs if d.id == document.id)
     assert (current.type, current.status) == (DocumentType.minutes, "classified")
-    assert data.data_requests["REQ-financial_statements"].status == "open"
+    assert data.data_requests[CONTRACT_REQUEST].status == "open"

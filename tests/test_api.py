@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import Engagement, Phase, TrailEntry, TrailKind, User
+from backend.contracts.models import Engagement, MisstatementUpdate, Phase, ReviewRecord, TrailEntry, TrailKind, User
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
 from backend.persistence.stores import PostgresUserStore
@@ -419,3 +419,15 @@ def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: in
     )
     assert response.status_code == status
     assert response.json()["detail"] == {"code": code, "message": "目标对象已更新到 version 3"}
+
+
+def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None:
+    """R159: 复核决定的请求体可带人给的错报更新载荷, 原样交给 DecisionSubmit (字段规则与取值在那里校验, 第 7 节)."""
+    update = {"misstatement_id": "M-D-CSH02-091", "base_version": 1, "kind": "classification", "type": "judgmental"}
+    body = {"task_id": "T-1", "target_version": 1, "decision": "override", "reason": "r", "override_conclusion": "c"}
+    path = "/api/v1/engagements/ENG-2026-001/review-records"
+    response = api.client.post(path, headers=_auth(api), json=body | {"misstatement_update": update})
+    assert response.status_code == 202
+    [call] = api.decisions.submit.await_args_list
+    record = call.args[1]
+    assert isinstance(record, ReviewRecord) and record.misstatement_update == MisstatementUpdate.model_validate(update)

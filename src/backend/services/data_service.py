@@ -19,7 +19,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from backend.adapters.registry import latest_extractions, uploaded_extracts
-from backend.adapters.xero_supplements import STAGE_REQUESTS, DemoPlan, DemoSource, plan
+from backend.adapters.xero_supplements import DemoPlan, DemoSource, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
 from backend.agents.ingest import (
@@ -1281,28 +1281,31 @@ class DataService:
     async def demo_summary(self, eid: str) -> DemoSummary:
         """数据管理页的演示数据导入入口 (需求 R270, 见 DemoSummary). 不是带补造目录的数据集 (只查目录在不在, 不核对
         哈希) 时只给 available 为假, 不读留痕与检查点. 已导入的阶段取全部 demo_import 留痕 (各阶段最近一条为
-        imported 的, stage_statuses), 最近一次结果取 AuditTrail.last_of; 流程停的位置见 _demo_stage_now."""
+        imported 的, stage_statuses; 只列 DEMO_IMPORT_STAGES 中的), 最近一次结果取其中最后一条认得出的 (Issue #46
+        前的 statements 阶段等旧留痕略过); 流程停的位置见 _demo_stage_now."""
         engagement = await self.deps.engagement_store.get(eid)
         dataset = engagement.dataset if engagement is not None else None
         if self.demo is None or dataset is None or not await asyncio.to_thread(self.demo.has_supplement, dataset):
             return DemoSummary()
-        trail = self.deps.trail
-        statuses = stage_statuses(await all_of_kind(trail, eid, TrailKind.data))
+        entries = await all_of_kind(self.deps.trail, eid, TrailKind.data)
+        statuses = stage_statuses(entries)
         done = [stage for stage in DEMO_IMPORT_STAGES if statuses.get(stage) == "imported"]
-        latest = await trail.last_of(eid, TrailKind.data, [DEMO_JOB])
         last = None
-        if latest is not None:
+        for entry in reversed(entries):
+            if entry.payload.get("action") != DEMO_JOB:
+                continue
             try:
-                last = DemoImportResult.model_validate({k: v for k, v in latest.payload.items() if k != "action"})
+                last = DemoImportResult.model_validate({k: v for k, v in entry.payload.items() if k != "action"})
+                break
             except ValidationError:  # 认不出的旧留痕不让概览出错
-                last = None
+                continue
         suggested = await self._demo_stage_now(eid)
         return DemoSummary(
             available=True, stages_done=done, suggested=suggested if suggested not in done else None, last=last
         )
 
     async def _demo_stage_now(self, eid: str) -> DemoStage | None:
-        """按流程停的位置该导入的阶段 (不看做过没有): ACC-01 闸门, 等数据就绪, 待审财报请求 open; 检查点只读一次.
+        """按流程停的位置该导入的阶段 (不看做过没有): ACC-01 闸门, 等数据就绪; 检查点只读一次.
         图在后台跑 (持项目锁而本服务没有登记着的数据作业) 时流程没停在任何位置, 为空 (这时导入报 ENGAGEMENT_BUSY);
         数据作业 (如这次导入本身) 持锁时照常判断, 页面按 processing 不让再点."""
         if self.runner.is_running(eid) and not self.jobs.get(eid):
@@ -1310,10 +1313,7 @@ class DataService:
         snapshot = await self.runner.app.aget_state(GraphRunner.config(eid))
         if current_gate(snapshot.next, fill_defaults(snapshot.values)) is GateId.ACC_01:
             return "acceptance"
-        if awaiting_data(snapshot):
-            return "fieldwork"
-        requests = {r.id: r.status for r in await self.deps.data.requests(eid)}
-        return "statements" if requests.get(STAGE_REQUESTS["statements"]) == "open" else None
+        return "fieldwork" if awaiting_data(snapshot) else None
 
     async def confirm_ready(self, eid: str, actor: str, reason: str | None = None) -> DataReadiness:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.

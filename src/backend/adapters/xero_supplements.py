@@ -38,9 +38,8 @@ from backend.contracts.records import BankAccount, DatasetTraits, DeliveryNote, 
 
 MISMATCH = "补造文件与快照不匹配"
 UNHASHED = frozenset({"contacts.json"})  # 快照中不记哈希的文件
-STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements", "manual")  # 清单按此顺序
+STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "manual")  # 清单按此顺序
 ARCHIVED = frozenset({"registry", "confirmation"})  # 程序执行时由登记 mock 与函证 mock 存档, 不在清单里
-STAGE_REQUESTS: dict[str, str] = {"statements": "REQ-financial_statements"}  # 按补交请求上传的阶段 → 请求 ID
 # 补造覆盖的账表 → 来源文件 (相对补造目录), 按 TableKind 顺序; 工资册的文件取数据集声明的 payroll_register
 COVERED: tuple[tuple[TableKind, str], ...] = (
     (TableKind.sales_invoices, "contract_links.csv"),
@@ -72,7 +71,6 @@ class DemoUpload(Model):
     reliability: Reliability
     document_date: date | None
     related_ids: list[str]
-    request_id: str | None  # 按补交请求上传的 (statements) 为请求 ID, 其余为空
     document_id: str  # 上传后的文件 ID (按内容, 同 EvidenceStore.save)
 
 
@@ -292,7 +290,6 @@ class Supplements:
                         reliability=document["reliability"],
                         document_date=document.get("document_date"),
                         related_ids=document.get("related_ids", []),
-                        request_id=STAGE_REQUESTS.get(stage),
                         document_id=document["document_id"],
                     )
                 )

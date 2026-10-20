@@ -3,8 +3,7 @@
 - fieldwork 先写快照的七张表 (XERO_TABLES, 含应付账单 R178; 当成从 Xero 同步一次, source xero, 一个数据版本),
   再逐张写补造账表 (source import, 原文件名为补造目录里的来源文件, 各一个数据版本).
 - 各阶段的补造 PDF 经上传交 A3 分类与抽取 (同 "上传文件"); 分类与清单不符的按清单指定类型; 再按清单一批补登记
-  可靠性, 文件日期与关联对象 (一个数据版本). statements 的 fs_v1.pdf 在 REQ-financial_statements 为 open 时按请求
-  上传 (不调大模型分类).
+  可靠性, 文件日期与关联对象 (一个数据版本). 财务报表以账套为准 (Issue #46), 没有报表一批.
 - 持项目锁一次做完 (DataService.demo_import 起的后台作业), 做完体检一次; 不确认数据已齐.
 
 可重复执行, 以 Store 为准判断做过没有, 不盖掉之后的改动:
@@ -39,7 +38,7 @@ DEMO_JOB = "demo_import"  # 演示数据导入作业在 DataService 登记的种
 NO_DEMO = "该数据集没有演示资料"
 RETYPE_REASON = "演示数据导入: 按补造清单指定类型"
 DETAILS_REASON = "演示数据导入: 按补造清单补登记"
-STAGE_NAMES: dict[DemoStage, str] = {"acceptance": "承接", "fieldwork": "外勤", "statements": "财报", "manual": "人工"}
+STAGE_NAMES: dict[DemoStage, str] = {"acceptance": "承接", "fieldwork": "外勤", "manual": "人工"}
 
 
 def stage_statuses(entries: Iterable[TrailEntry]) -> dict[str, str]:
@@ -178,27 +177,15 @@ class DemoImport:
         return written
 
     async def upload(self, eid: str, engagement: Engagement, uploads: list[DemoUpload], actor: str) -> Uploads:
-        """上传这一阶段的文件并处理没做完的 (同 "上传文件", 不体检). 带补交请求的清单项在请求为 open 时按请求上传,
-        否则照常分类. 按请求分组上传, 组内按清单顺序."""
+        """上传这一阶段的文件并处理没做完的 (同 "上传文件", 不带补交请求, 不体检), 按清单顺序."""
         deps = self.service.deps
         before = {d.id for d in await deps.financial_store.documents(eid)}
-        requests = {r.id: r for r in await deps.data.requests(eid)}
-        groups: dict[str | None, list[DemoUpload]] = {}
-        for upload in uploads:
-            found = requests.get(upload.request_id) if upload.request_id is not None else None
-            key = upload.request_id if found is not None and found.status == "open" else None
-            groups.setdefault(key, []).append(upload)
-        registered: dict[str, DocumentRef] = {}
-        processed = False
-        for request_id, group in groups.items():
-            contents = [await asyncio.to_thread((self.plan.root / u.path).read_bytes) for u in group]
-            saved = await self.service.register_uploads(eid, [u.file_name for u in group], contents, actor, request_id)
-            registered |= {u.path: d for u, d in zip(group, saved.documents, strict=True)}
-            processed = processed or bool(saved.fresh) or saved.requested is not None
-            await self.service.process_uploads(eid, engagement, saved.fresh, saved.jobs, saved.wanted)
+        contents = [await asyncio.to_thread((self.plan.root / u.path).read_bytes) for u in uploads]
+        saved = await self.service.register_uploads(eid, [u.file_name for u in uploads], contents, actor, None)
+        await self.service.process_uploads(eid, engagement, saved.fresh, saved.jobs, saved.wanted)
         current = {d.id: d for d in await deps.financial_store.documents(eid)}
-        pairs = [(u, current[registered[u.path].id]) for u in uploads]
-        return Uploads(pairs, [u.file_name for u, d in pairs if d.id not in before], processed)
+        pairs = [(u, current[d.id]) for u, d in zip(uploads, saved.documents, strict=True)]
+        return Uploads(pairs, [u.file_name for u, d in pairs if d.id not in before], bool(saved.fresh))
 
     async def retype(
         self, eid: str, engagement: Engagement, pairs: list[tuple[DemoUpload, DocumentRef]], actor: str

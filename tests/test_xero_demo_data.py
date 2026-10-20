@@ -990,20 +990,40 @@ def test_registry_inconsistencies_are_reported(tmp_path: Path) -> None:
 
 @needs_supplements
 def test_pdf_page_count_and_text_mismatch(tmp_path: Path) -> None:
+    """登记的 PDF (约定书) 与不登记的 fs_v1.pdf (审核 R319-02) 都按规格逐页核对正文与页数. fs_v1.pdf 改的是第 6 页
+    (附注与董事声明, 报表行的核对不看这一页), 改后照生成脚本重写 fs_v1.json 的 document_id, 只留正文与页数两类问题."""
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
     letter = copy / "documents" / "engagement" / "engagement_letter.pdf"
     spec_pages = next(d for d in spec()["documents"] if d["path"].endswith("engagement_letter.pdf"))["pages"]
     pages = ["\n".join(p) for p in spec_pages]
+    fs_spec = next(d for d in spec()["documents"] if d["path"] == generator.FS_PDF)
+    fs_pages = ["\n".join(p) for p in fs_spec["pages"]]
+    fs_pdf = copy / generator.FS_PDF
+
+    def write_statements(pages_of_fs: list[str]) -> None:
+        generator.write_pdf(fs_pdf, pages_of_fs, fs_spec["footer"], HEADER)
+        generator.write_financial_statements(copy, spec()["financial_statements"])
+
+    last = fs_pages[-1].splitlines()
+    changed = next(n for n, line in enumerate(last) if line.strip())
     generator.write_pdf(letter, [pages[0], pages[1], pages[2].replace("4,800", "4,900")], "x", HEADER)
+    write_statements([*fs_pages[:-1], "\n".join([*last[:changed], "Something else entirely", *last[changed + 1 :]])])
     generator.write_manifest(copy, snapshot)
     lines = check_error(copy, snapshot, scan=[]).splitlines()
-    assert lines == [f"{letter}: 第 3 页文本层缺 1 行来源内容或顺序不对"]
+    assert lines == [
+        f"{letter}: 第 3 页文本层缺 1 行来源内容或顺序不对",
+        f"{fs_pdf}: 第 6 页文本层缺 1 行来源内容或顺序不对",
+    ]
     generator.write_pdf(letter, pages[:2], "x", HEADER)
+    write_statements([*fs_pages, fs_pages[-1]])
     generator.write_manifest(copy, snapshot)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
     assert [d["page_count"] for d in manifest["documents"] if d["path"].endswith("engagement_letter.pdf")] == [2]
-    assert check_error(copy, snapshot, scan=[]).splitlines() == [f"{letter}: 页数 2 与来源的 3 页不符"]
+    assert check_error(copy, snapshot, scan=[]).splitlines() == [
+        f"{letter}: 页数 2 与来源的 3 页不符",
+        f"{fs_pdf}: 页数 7 与来源的 6 页不符",
+    ]
 
 
 def zed_snapshot(tmp_path: Path) -> Path:
@@ -2114,8 +2134,8 @@ def test_financial_statements_json() -> None:
         == ["code", "statement", "name", "amount_cents", "sign", "account_codes", "subtotal", "prior_amount_cents"]
         for line in fs["lines"]  # type: ignore[index]
     )
-    docs = {d["path"]: d for d in read("manifest.json")["documents"]}  # type: ignore[index]
-    assert fs["document_id"] == docs[generator.FS_PDF]["document_id"]  # type: ignore[index]
+    files = {f["path"]: f["sha256"] for f in read("manifest.json")["files"]}  # type: ignore[index]
+    assert fs["document_id"] == "DOC-" + files[generator.FS_PDF][:12]  # type: ignore[index]
     by = {c: (a, p) for c, *_, a, p in FS_V1_LINES}
     assert by["SOFP-TA"][0] == by["SOFP-TL"][0] + by["SOFP-EQ"][0]  # 21,829.26 = 51,878.25 + (30,048.99)
     assert by["SOFP-EQ"][1] + by["PL-NP"][0] == by["SOFP-EQ"][0]  # 期初 (7,912.00) 加本期 (22,136.99)
@@ -2280,20 +2300,17 @@ def test_representation_letter() -> None:
 @needs_supplements
 def test_r68_index_rows_and_counts() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 20 and rows[19] == (
-        "financial_statements/fs_v1.pdf,financial_statements,internal_original,2026-10-22,FS"
-    )
+    assert len(rows) == 19 and not any(r.startswith("financial_statements/") for r in rows)  # 报表不登记 (Issue #46)
     assert not any(r.startswith("representation/") for r in rows)  # 声明书经上传接口登记, 不进 index.csv
     docs = manifest_documents()
-    assert docs[generator.FS_PDF][:5] == ("financial_statements", "internal_original", "2026-10-22", "statements", 6)
+    assert generator.FS_PDF not in docs
     manifest = read("manifest.json")
     assert checker.check_document_counts(SUPPLEMENTS, manifest) == []  # type: ignore[arg-type]
     registrations = [d[3] for d in docs.values()]
-    assert len(docs) == 29 and sum(int(d[4]) for d in docs.values()) == 57  # type: ignore[call-overload]
+    assert len(docs) == 28 and sum(int(d[4]) for d in docs.values()) == 51  # type: ignore[call-overload]
     assert {r: registrations.count(r) for r in set(registrations)} == {
         "acceptance": 2,
         "fieldwork": 19,
-        "statements": 1,
         "manual": 1,
         "registry": 4,
         "confirmation": 2,
@@ -2635,18 +2652,6 @@ def test_manual_problems(tmp_path: Path) -> None:
     assert f"{folder / 'representation.json'}: document 不是 manifest 中类型 representation_letter 的文件" in (
         checker.check_manual(copy, other)
     )
-
-
-@needs_supplements
-def test_index_fs_reference(tmp_path: Path) -> None:
-    copy, path, fs = fs_copy(tmp_path)
-    manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
-    assert checker.check_index(copy, manifest) == []
-    path.write_text(json.dumps({**fs, "id": "FS-2"}), encoding="utf-8")
-    where = copy / "documents" / "index.csv"
-    assert checker.check_index(copy, manifest) == [
-        f"{where}: {generator.FS_PDF} 的关联对象 FS 不是 {generator.FS_JSON} 的 id"
-    ]
 
 
 @needs_supplements

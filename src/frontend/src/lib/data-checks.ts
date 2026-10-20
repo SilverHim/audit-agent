@@ -30,12 +30,6 @@ export function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): s
       )
       return t.data.checkDetail.fields(fields.join(lang === 'zh' ? '与' : ' and '), String(p.source ?? 'Xero'))
     }
-    case 'tb_agrees_statements':
-      if (check.status === 'missing_data')
-        return num(p.statements) ? t.data.checkDetail.statementsNoTb : t.data.checkDetail.statementsMissing
-      // 报表数字的勾稽归 FIN-12, 还没执行时为 pending
-      if (check.status === 'pending') return t.data.checkDetail.statementsPending(num(p.statements))
-      return p.difference_cents ? t.data.checkDetail.statementsDiff(formatAud(num(p.difference_cents))) : ''
     default:
       return ''
   }

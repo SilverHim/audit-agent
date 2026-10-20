@@ -122,9 +122,7 @@ class CheckId(StrEnum):
     count_agrees_source = "count_agrees_source"  # 记录数与来源一致 {source, expected, received}
     mapping_complete = "mapping_complete"  # 科目都已归入标准分类 {mapped, total}
     preparer_approver_available = "preparer_approver_available"  # 有录入人与审批人 {source, missing_fields}
-    # 试算表与报表草稿一致 {statements: 已提供的报表草稿文件数}; 报表数字的抽取与勾稽归 FIN-12 (还没实现), 届时另给
-    # difference_cents
-    tb_agrees_statements = "tb_agrees_statements"
+    # Issue #46 起财务报表以账套为准, 删去 "试算表与报表草稿一致" (tb_agrees_statements): 存储里的旧项读时略过
 
 
 # 体检结果: 通过, 不通过, 缺数据做不了, 还没做
@@ -179,7 +177,8 @@ class CheckInputs(Model):
 RequestKind = Literal["table", "document"]  # 补交的是账表 (走导入) 还是文件 (走上传)
 # 提出的原因: 就绪必需的表缺失, 来源不提供某些字段, 客户没提供
 RequestReason = Literal["missing_table", "field_unavailable", "not_provided"]
-# 待补交, 已收到, 已撤回 (要它的程序都不再执行, 资料又没到), 客户无此类资料 (审计师标记, 需求 R280; 定论, 不再重开)
+# 待补交, 已收到, 已撤回 (要它的程序都不再执行, 资料又没到; 或体检不再提这项请求, 见 data_quality.RETIRED_REQUESTS),
+# 客户无此类资料 (审计师标记, 需求 R280; 定论, 不再重开)
 RequestStatus = Literal["open", "received", "withdrawn", "unavailable"]
 
 
@@ -259,9 +258,9 @@ class XeroProfileCheck(Model):
 
 
 # 演示数据导入 (需求 R269): 补造清单的阶段 (Xero演示数据集设计第 9.5 节, adapters.xero_supplements.plan); 导入只收
-# 前三个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传
-DemoStage = Literal["acceptance", "fieldwork", "statements", "manual"]
-DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork", "statements")
+# 前两个, manual (管理层声明书) 由审计师在 FIN-07 的人工任务页上传. Issue #46 起财务报表以账套为准, 没有报表一批
+DemoStage = Literal["acceptance", "fieldwork", "manual"]
+DEMO_IMPORT_STAGES: tuple[DemoStage, ...] = ("acceptance", "fieldwork")
 DemoImportStatus = Literal["started", "imported", "already_imported", "failed"]
 
 
@@ -287,10 +286,10 @@ class DemoSummary(Model):
 
     available: bool = False
     stages_done: list[DemoStage] = []  # 已导入过的阶段 (有 imported 的 demo_import 留痕), 按 DEMO_IMPORT_STAGES 顺序
-    # 按流程停的位置该导入的阶段: 停在 ACC-01 闸门为 acceptance, 图在等数据就绪为 fieldwork,
-    # REQ-financial_statements 为 open 为 statements; 该阶段已导入过或不在这几个位置时为空
+    # 按流程停的位置该导入的阶段: 停在 ACC-01 闸门为 acceptance, 图在等数据就绪为 fieldwork; 该阶段已导入过或不在
+    # 这两个位置时为空
     suggested: DemoStage | None = None
-    last: DemoImportResult | None = None  # 最近一次导入的结果 (最近一条 demo_import 留痕)
+    last: DemoImportResult | None = None  # 最近一次导入的结果 (最近一条认得出的 demo_import 留痕)
 
 
 class XeroSource(Model):

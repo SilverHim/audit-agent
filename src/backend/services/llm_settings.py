@@ -31,13 +31,14 @@ from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
 log = logging.getLogger(__name__)
 SLOTS: tuple[LlmSlot, ...] = ("primary", "review")
 TEST_TIMEOUT = 20.0  # 测试连接的超时, 秒; 不重试
-# 测试连接的请求: 要模型回 {"ok": true}; system 里须出现 "JSON" (OpenAI 的 json_object 模式要求)
+# 测试连接的请求: 要模型回 {"ok": true}; system 里须出现 "JSON" (OpenAI 的 json_object 模式要求). 上限 1024: 推理类
+# 模型的推理 token 计入上限, 原来的 64 可能还没写出正文就用完了 (需求 R312); 只封顶, 不增加用量
 PING = LLMRequest(
     procedure_id="LLM-TEST",
     run_id="LLM-TEST",
     system='Reply with exactly this JSON object and nothing else: {"ok": true}',
     messages=[LLMMessage(role="user", content="Connection test.")],
-    max_tokens=64,
+    max_tokens=1024,
 )
 
 
@@ -290,7 +291,10 @@ class LlmSettingsService:
         except Exception as e:  # 地址不合法等; 只给类型名
             return ConnectionTest(ok=False, model=None, latency_ms=elapsed_ms(started), message=type(e).__name__)
         ok = response.output is not None and response.output.ok is True
-        message = "连接成功" if ok else redact(f'模型的回复不是 {{"ok": true}}: {response.raw[:200]}')
+        reply = f'模型的回复不是 {{"ok": true}}: {response.raw[:200]}'
+        # 没解析出来时带上客户端给的原因, 如输出在上限处被截断 (adapters/llm.TRUNCATED, 需求 R312)
+        failure = f"{reply} ({response.error[:300]})" if response.output is None and response.error else reply
+        message = "连接成功" if ok else redact(failure)
         return ConnectionTest(ok=ok, model=response.model, latency_ms=elapsed_ms(started), message=message)
 
 

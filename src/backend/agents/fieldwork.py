@@ -784,16 +784,15 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """CSH-02 的解读: 函证新版本与 D01, D04 例外, 加上要判断的账户的判断片段 (judgments_patch).
 
-        判断失败时第一条规则例外可能就是本次的 D01 或 D04, 片段里同一例外只留最高版本.
+        D01, D04 是本次刚建的 (fresh): 判断失败时第一条规则例外可能就是它们, 置 unattributed 写在第 1 版上, 取代刚建的
+        那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict); 顺序同 findings.exceptions.
         """
         assert isinstance(findings, CashFindings)
-        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes)
-        latest: dict[str, AuditException] = {}
-        for x in [*findings.exceptions, *patch["exceptions"]]:
-            if x.id not in latest or x.version > latest[x.id].version:
-                latest[x.id] = x
+        fresh = {x.id: x.version for x in findings.exceptions}
+        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes, fresh=fresh)
+        created = {x.id: x for x in findings.exceptions}
         patch["confirmations"] = findings.confirmations
-        patch["exceptions"] = list(latest.values())
+        patch["exceptions"] = list((created | {x.id: x for x in patch["exceptions"]}).values())
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:

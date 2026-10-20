@@ -8,6 +8,7 @@ LLM_BASE_URL, LLM_MODEL, LLM_API_KEY. 各家对请求参数的支持不同, 见 
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,23 @@ from backend.core.config import Settings
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"  # 未配置 LLM_BASE_URL 时的接口地址
 MAX_RETRIES = 3  # 传输层最多重试次数, 不占校验重试 (JudgmentEngine.call_llm)
+# 单次请求的超时. 不是流式请求, 模型写完之前收不到字节, 读超时即整次生成的时间: 按缺省输出上限 32768 token 放宽到
+# 600 秒 (原为 120 秒), 每秒不到约 55 token 才会超时; 建连另限 15 秒, 地址不通时不必等满 (需求 R312)
+TIMEOUT = httpx.Timeout(600.0, connect=15.0)
 ERROR_TEXT_LIMIT = 500  # 异常信息中服务端错误正文的最大长度 (先脱敏再截断)
+# 输出在上限处被截断时 LLMResponse.error 的写法 (需求 R312): 经语法级错误回传给模型重试, 用英文
+TRUNCATED = (
+    "The reply was cut off at the output token limit ({limit} tokens) before the JSON object was complete. "
+    "Reply again with a complete JSON object and keep it concise."
+)
+# 服务端因输出达到上限回 400 时 error.message 的开头, 按小写比 (OpenAI 在 JSON 模式下输出不完整时不给半截内容, 回
+# 400, param 与 code 都为空; 写法有 "... because max_tokens or model output limit was reached" 与 "... because
+# max_tokens was reached" 两种; 需求 R312)
+OUTPUT_LIMIT_MESSAGE = "could not finish the message because"
+TOKEN_PARAMS = ("max_tokens", "max_completion_tokens")  # 输出上限的两种参数名
+# 400 的错误信息里模型允许的输出上限 N: OpenAI "... supports at most N completion tokens", DeepSeek 与通义
+# "... [1, N]" (需求 R312)
+OUTPUT_CAP = (re.compile(r"at most (\d+)"), re.compile(r"\[\s*\d+\s*,\s*(\d+)\s*\]"))
 # 可能写出服务端回显内容 (如 reason phrase, 响应头) 的日志器, 挂脱敏过滤
 HTTP_LOGGERS = ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2", "httpcore.proxy")
 
@@ -149,6 +166,18 @@ class LLMTransportError(RuntimeError):
     """传输层失败: 不可重试的状态码, 重试耗尽, 响应不是 Chat Completions 的格式, 或响应回显了密钥. 消息不含密钥."""
 
 
+class OutputLimitReached(LLMTransportError):
+    """HTTP 400 且错误体说输出达到上限 (见 OUTPUT_LIMIT_MESSAGE). LiveLLMClient.complete 转成截断的响应, 不外抛."""
+
+
+class OutputCapExceeded(LLMTransportError):
+    """HTTP 400 且错误体说输出上限超出模型所允许, 并给出允许的上限 (见 output_cap)."""
+
+    def __init__(self, message: str, cap: int) -> None:
+        super().__init__(message)
+        self.cap = cap  # 模型允许的输出上限
+
+
 class UnsupportedParameter(LLMTransportError):
     """HTTP 400 且错误体指明某个请求参数不受该模型支持 (OpenAI 错误体的 error.param 与 error.code)."""
 
@@ -185,11 +214,15 @@ def strip_fences(raw: str) -> str:
 class LiveLLMClient:
     """OpenAI 兼容的 Chat Completions 接口: POST {base_url}/chat/completions.
 
-    system 作首条 system 消息, 其后为 req.messages; max_tokens 透传; temperature 与 JSON 模式 (response_format
-    json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON schema 由调用方写在 system 中,
-    见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens 与非默认 temperature: 收到
-    400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature 取值不受支持时不再发送
-    temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
+    system 作首条 system 消息, 其后为 req.messages; max_tokens 透传 (得知模型允许的输出上限后以它封顶, 见下);
+    temperature 与 JSON 模式 (response_format json_object) 按服务商的支持决定发不发 (PROVIDERS); 输出模型的 JSON
+    schema 由调用方写在 system 中, 见 JudgmentEngine.call_llm. 推理类模型 (如 OpenAI gpt-6 系列) 不接受 max_tokens
+    与非默认 temperature: 收到 400 且错误体指明 max_tokens 不受支持时改用 max_completion_tokens, 指明 temperature
+    取值不受支持时不再发送 temperature (用模型默认), 随即重发, 不计传输重试; 调整对本客户端此后的调用一直有效.
+    输出上限超出模型所允许 (400 的错误体给出允许的上限 N, 见 output_cap) 时, 本客户端此后的调用以 N 封顶, 随即重发,
+    不计传输重试; 取不出 N 或 N 小于 1 时照常抛错.
+    输出在上限处被截断 (解析失败且 finish_reason 为 length, 或服务端因输出达到上限回 400) 时不抛错, error 为
+    TRUNCATED (写实际发出的上限), 交给校验按语法失败回传给模型重试 (需求 R312); length 时 raw 照常保留, 400 时为空.
     408, 429, 全部 5xx 与超时按指数退避至多重试 max_retries 次; 其余失败状态码 (如 400, 401) 与连接失败不重试.
     不可重试或重试耗尽时抛 LLMTransportError.
 
@@ -205,7 +238,7 @@ class LiveLLMClient:
         base_url: str = DEFAULT_BASE_URL,
         *,
         provider: LlmProvider = "openai",
-        timeout: float = 120.0,
+        timeout: float | httpx.Timeout = TIMEOUT,
         backoff: float = 1.0,
         max_retries: int = MAX_RETRIES,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -223,20 +256,22 @@ class LiveLLMClient:
         self.model = model  # 请求的模型名
         self.provider = provider  # 服务商, 决定请求里发哪些参数
         self.url = base_url.rstrip("/") + "/chat/completions"  # 接口地址
-        self.timeout = timeout  # 单次请求超时, 秒
+        self.timeout = timeout  # 单次请求超时, 秒 (或分项的 httpx.Timeout)
         self.backoff = backoff  # 退避基数, 秒
         self.max_retries = max_retries  # 传输层最多重试次数
         self._transport = transport
         self._sleep = sleep
         self.token_param = "max_tokens"  # 输出上限的参数名; 模型不支持时改为 max_completion_tokens
         self.send_temperature = True  # 是否发送 temperature; 模型只支持默认值时为假
+        self.output_cap: int | None = None  # 模型允许的输出上限, 从 400 的错误体得知后封顶 (见 _cap)
         install_redaction(api_key)
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         """调用一次 (含传输层重试). 输出按 output_model 解析: 失败时 output 为空, raw 保留原文, error 为解析错误;
-        model 与 token 数取响应."""
+        model 与 token 数取响应. 输出被截断时 error 为 TRUNCATED (见类说明), 服务端回 400 的那种 token 数记 0."""
         while True:
             body = self._body(req)
+            truncated = TRUNCATED.format(limit=body[self.token_param])
             try:
                 data = await self._post(body)
                 break
@@ -244,7 +279,14 @@ class LiveLLMClient:
                 # 按本次实际发出的请求判断: 并发调用可能已先一步调整过, 这时照样按新方式重发
                 if e.param not in body or not self._adapt(e.param):
                     raise
-        raw, model, input_tokens, output_tokens = self._envelope(data)
+            except OutputCapExceeded as e:
+                if not self._cap(e.cap, body):
+                    raise
+            except OutputLimitReached:
+                return LLMResponse[output_model](  # type: ignore[valid-type]
+                    output=None, raw="", model=self.model, input_tokens=0, output_tokens=0, error=truncated
+                )
+        raw, model, input_tokens, output_tokens, finish = self._envelope(data)
         try:
             decoded = json.loads(strip_fences(raw))
         except ValueError:
@@ -256,6 +298,8 @@ class LiveLLMClient:
             error = None
         except ValidationError as e:
             output, error = None, str(e)
+        if finish == "length" and output is None:
+            error = truncated
         return LLMResponse[output_model](  # type: ignore[valid-type]
             output=output, raw=raw, model=model, input_tokens=input_tokens, output_tokens=output_tokens, error=error
         )
@@ -270,7 +314,7 @@ class LiveLLMClient:
                 {"role": "system", "content": req.system},
                 *({"role": m.role, "content": m.content} for m in req.messages),
             ],
-            self.token_param: req.max_tokens,
+            self.token_param: req.max_tokens if self.output_cap is None else min(req.max_tokens, self.output_cap),
         }
         if traits.temperature and self.send_temperature:
             body["temperature"] = req.temperature
@@ -289,15 +333,25 @@ class LiveLLMClient:
             return True
         return False
 
-    def _envelope(self, data: Any) -> tuple[str, str, int, int]:
-        """Chat Completions 响应的 (content, model, prompt_tokens, completion_tokens).
+    def _cap(self, cap: int, body: dict[str, Any]) -> bool:
+        """模型允许的输出上限为 cap: 本次发出的上限 (body) 比它大时记下封顶 (并发调用取最小的), 返回真, 调用方重发;
+        已不大于它 (封顶后仍被拒), 或 cap 小于 1 (没有可发的上限) 时返回假, 调用方照常抛错. 每次重发的上限都更小,
+        不会循环."""
+        if cap < 1 or body[self.token_param] <= cap:
+            return False
+        self.output_cap = cap if self.output_cap is None else min(self.output_cap, cap)
+        return True
+
+    def _envelope(self, data: Any) -> tuple[str, str, int, int, Any]:
+        """Chat Completions 响应的 (content, model, prompt_tokens, completion_tokens, finish_reason).
 
         只对缺失或 null 用默认值: content 取空串, model 取请求的模型名 (空串同样), usage 与 token 数取 0;
         给了值就须类型正确 (content, model 为字符串, usage 为对象, token 数为非负整数, 不接受 bool, 浮点),
         否则抛 LLMTransportError (信息只含类型名, 不含字段值).
         """
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise LLMTransportError("响应不是 Chat Completions 格式: 缺 choices[0].message.content") from None
         if content is None:
@@ -320,7 +374,7 @@ class LiveLLMClient:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise LLMTransportError(f"响应的 usage.{name} 不是非负整数 ({type(value).__name__})")
             tokens.append(value)
-        return content, model or self.model, tokens[0], tokens[1]
+        return content, model or self.model, tokens[0], tokens[1], choice.get("finish_reason")
 
     async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         """发请求, 可重试的失败按指数退避重试. 返回响应 JSON."""
@@ -354,6 +408,11 @@ class LiveLLMClient:
             param = unsupported_param(response)
             if param is not None:
                 raise UnsupportedParameter(failure, param)
+            if output_limit_reached(response):
+                raise OutputLimitReached(failure)
+            cap = output_cap(response)
+            if cap is not None:
+                raise OutputCapExceeded(failure, cap)
             if not retryable(response.status_code):
                 raise LLMTransportError(failure)
         if not self.max_retries:
@@ -364,9 +423,8 @@ class LiveLLMClient:
         return text.replace(self._api_key, "***") if self._api_key else text
 
 
-def unsupported_param(response: httpx.Response) -> str | None:
-    """400 响应中被指明不受支持的参数名: 错误体 error.code 为 unsupported_parameter 或 unsupported_value 时取
-    error.param; 其余情况 (含错误体不是这种格式) 为 None."""
+def error_of(response: httpx.Response) -> dict[str, Any] | None:
+    """400 响应的错误体 error (OpenAI 格式的对象); 不是 400, 或错误体不是这种格式时为 None."""
     if response.status_code != 400:
         return None
     try:
@@ -374,10 +432,34 @@ def unsupported_param(response: httpx.Response) -> str | None:
     except ValueError:
         return None
     error = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error, dict) or error.get("code") not in ("unsupported_parameter", "unsupported_value"):
+    return error if isinstance(error, dict) else None
+
+
+def unsupported_param(response: httpx.Response) -> str | None:
+    """400 响应中被指明不受支持的参数名: 错误体 error.code 为 unsupported_parameter 或 unsupported_value 时取
+    error.param; 其余情况 (含错误体不是这种格式) 为 None."""
+    error = error_of(response)
+    if error is None or error.get("code") not in ("unsupported_parameter", "unsupported_value"):
         return None
     param = error.get("param")
     return param if isinstance(param, str) else None
+
+
+def output_limit_reached(response: httpx.Response) -> bool:
+    """400 响应的错误体 error.message 是否说输出达到上限 (以 OUTPUT_LIMIT_MESSAGE 开头, 不分大小写)."""
+    message = (error_of(response) or {}).get("message")
+    return isinstance(message, str) and message.lower().startswith(OUTPUT_LIMIT_MESSAGE)
+
+
+def output_cap(response: httpx.Response) -> int | None:
+    """400 响应的错误体说输出上限超出模型所允许时, 模型允许的上限 (OUTPUT_CAP 两种写法); error.message 或
+    error.param 须提到输出上限的参数 (TOKEN_PARAMS), 否则 (如 temperature 的取值范围) 或取不出数时为 None."""
+    error = error_of(response) or {}
+    message = error.get("message")
+    if not isinstance(message, str) or not any(name in f"{message} {error.get('param')}" for name in TOKEN_PARAMS):
+        return None
+    found = next((m for pattern in OUTPUT_CAP if (m := pattern.search(message))), None)
+    return int(found.group(1)) if found else None
 
 
 class UnconfiguredLLMClient:

@@ -14,6 +14,7 @@ from backend.contracts.models import (
     Engine,
     EvidenceType,
     GateId,
+    MisstatementUpdateKind,
     Model,
     Phase,
     RiskLevel,
@@ -100,7 +101,9 @@ class LLMSpec(Model):
     prompt: str  # knowledge/prompts/ 下的 Jinja2 模板文件名
     output_model: str  # contracts/llm_outputs.py 中的输出模型类名
     context_budget: int = 8000  # 上下文 token 预算
-    max_tokens: int = 4096  # 单次调用最多输出的 token 数, 程序 YAML 可覆盖
+    # 单次调用最多输出的 token 数, 程序 YAML 可覆盖. 推理类模型 (如 gpt-6 系列) 的上限含推理 token: 4096 时 GEN-02
+    # 的推理就用光了上限, 正文为空; 32768 留足余量, 只封顶, 不增加实际用量 (需求 R312)
+    max_tokens: int = 32768
 
 
 class ManualSpec(Model):
@@ -131,6 +134,9 @@ class ProcedureTemplate(Model):
     autonomy_level: AutonomyLevel  # 默认自主度
     always_review: bool = False  # 判断一律建 normal 复核任务, 不论自主度 (CSH-02: 函证差异须人评价, ASA 505 para 14)
     manual_result_allowed: bool = False  # 单个判断对象失败时, 允许人工执行并提交结果 (manual_result)
+    # 本程序的判断携带的错报更新载荷 (需求 R159): classification (FIN-03) 或 verification (FIN-09), 其余为空. 非空时以
+    # 人工判断取代 AI 判断的决定须由人给出同类载荷 (decisions.review_fields), 判断确认后按载荷写错报新版本
+    misstatement_update_kind: MisstatementUpdateKind | None = None
     gate: GateId | None = None  # 闸门程序的闸门编号, 其余为空
     feature: str | None = None  # 所属功能 (services/features.FEATURES 中的名字); 为空即基线, 总是启用
     assertions: list[Assertion] = []  # 针对的认定

@@ -22,6 +22,7 @@ from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.manual_results import RESULT_MODELS
 from backend.contracts.models import (
     AuditObjective,
+    AutonomyLevel,
     ClientProfile,
     DocumentType,
     Engagement,
@@ -50,6 +51,8 @@ NONE_RUNS = {"dataset"}  # 值为 None 时以 None 执行的命名空间; 其余
 OPTIONAL_NAMESPACES = {"profile"}  # 参数可写 {ref: ..., optional: true} (为 None 时以 None 执行) 的命名空间
 JSON_NAMESPACES = {"profile"}  # 取值一律转成 JSON 兼容的值 (模型与其中的列表, 字典都成字典, 日期成文本, 枚举成值)
 MISSING_SOURCES = {"profile": "没有本项目采用的客户画像"}  # 命名空间缺取值对象时的说明
+# 带错报更新类别的程序允许的自主度 (update_autonomy_problems): L2 及以下 A7 按跳过规则不复核, 不出争议任务
+LOW_AUTONOMY = frozenset({AutonomyLevel.L1, AutonomyLevel.L2})
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, significant (枚举定义顺序)
 # 规则 SQL 里出现的账表名: 按 DataInput 的取值整词扫描 (长的在前), 逗号连接与子查询里的表也认得出
 SQL_TABLE = re.compile(
@@ -126,6 +129,9 @@ class ProcedureLibrary:
         wrong = manual_result_problems(templates)
         if wrong:
             raise ValueError(f"只有判断程序能开 manual_result_allowed (人工结果取代对象的判断): {', '.join(wrong)}")
+        wrong = update_autonomy_problems(templates)
+        if wrong:
+            raise ValueError(f"带错报更新类别的程序自主度不能高于 L2 (仲裁不收载荷): {', '.join(wrong)}")
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
@@ -389,16 +395,24 @@ def manual_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
     return problems
 
 
+def judging_program(template: ProcedureTemplate) -> bool:
+    """判断程序: llm.output_model 为 JudgmentDraft 或其子类 (经判断公共流程出 Judgment)."""
+    model = getattr(llm_outputs, template.llm.output_model, None) if template.llm is not None else None
+    return isinstance(model, type) and issubclass(model, JudgmentDraft)
+
+
 def manual_result_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
-    """开了 manual_result_allowed 而不是判断程序 (llm.output_model 为 JudgmentDraft 或其子类) 的模板编号 (需求 R158 第 1
-    轮审核 R158-07). 失败任务的 manual_result 由 DecisionSubmit 建人工判断取代该对象的判断; 别的程序 (抽取, 规则, 起草)
-    的对象该产出的领域对象 (如 DOC-04 的合同) 没人补, 程序照样记完成, 下游悄悄少一个对象."""
-    problems: list[str] = []
-    for t in templates:
-        model = getattr(llm_outputs, t.llm.output_model, None) if t.llm is not None else None
-        if t.manual_result_allowed and not (isinstance(model, type) and issubclass(model, JudgmentDraft)):
-            problems.append(t.id)
-    return problems
+    """开了 manual_result_allowed 而不是判断程序 (judging_program) 的模板编号 (需求 R158 第 1 轮审核 R158-07). 失败任务
+    的 manual_result 由 DecisionSubmit 建人工判断取代该对象的判断; 别的程序 (抽取, 规则, 起草) 的对象该产出的领域对象
+    (如 DOC-04 的合同) 没人补, 程序照样记完成, 下游悄悄少一个对象."""
+    return [t.id for t in templates if t.manual_result_allowed and not judging_program(t)]
+
+
+def update_autonomy_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """带错报更新类别 (misstatement_update_kind) 而自主度高于 L2 的模板编号 (需求 R159 第 1 轮审核 R159-03). 仲裁
+    a7_upheld 与 neither 建的人工判断不带载荷 (第 7 节), L3 起 A7 复核会出争议任务, 仲裁之后错报就不写; 要放开须先让
+    仲裁收人给的载荷."""
+    return [t.id for t in templates if t.misstatement_update_kind is not None and t.autonomy_level not in LOW_AUTONOMY]
 
 
 def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:

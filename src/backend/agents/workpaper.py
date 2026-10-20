@@ -82,10 +82,16 @@ def misstatement_objective(misstatement: Misstatement, objectives: Sequence[Audi
     return None
 
 
+def rule_fields(misstatement: Misstatement, objectives: Sequence[AuditObjective]) -> dict[str, Any]:
+    """分类载荷中按规则定的两项 (不取大模型, 也不靠人填): 期间来源 (ORIGIN) 与所属审计目标 (misstatement_objective).
+    AI 的载荷与人给的载荷 (DecisionSubmit 写入前补上, 需求 R159 第 1 轮审核) 同用. 纯函数."""
+    return {"origin": ORIGIN, "objective_id": misstatement_objective(misstatement, objectives)}
+
+
 def classification_update(
-    misstatement: Misstatement, draft: MisstatementClassificationDraft, objective_id: str | None
+    misstatement: Misstatement, draft: MisstatementClassificationDraft, objectives: Sequence[AuditObjective]
 ) -> MisstatementUpdate:
-    """一条错报的分类载荷: 类型与舞弊迹象取大模型给的性质, 审计目标与期间来源取规则 (不取大模型), 依据的版本为判断时
+    """一条错报的分类载荷: 类型与舞弊迹象取大模型给的性质, 审计目标与期间来源取规则 (rule_fields), 依据的版本为判断时
     的错报版本. 纯函数."""
     nature = draft.nature
     return MisstatementUpdate(
@@ -95,8 +101,7 @@ def classification_update(
         type=nature.type,
         fraud_indicative=nature.fraud_indicative,
         fraud_reason=nature.fraud_reason,
-        origin=ORIGIN,
-        objective_id=objective_id,
+        **rule_fields(misstatement, objectives),
     )
 
 
@@ -108,8 +113,7 @@ def with_update(item: Judged, misstatements: dict[str, Misstatement], objectives
         return item
     draft = item.outcome.draft
     assert isinstance(draft, MisstatementClassificationDraft)  # FIN-03 的输出模型
-    misstatement = misstatements[judgment.subject_id]
-    update = classification_update(misstatement, draft, misstatement_objective(misstatement, objectives))
+    update = classification_update(misstatements[judgment.subject_id], draft, objectives)
     judgment = judgment.model_copy(update={"misstatement_update": update})
     return Judged(item.ctx, item.outcome.model_copy(update={"judgment": judgment}))
 

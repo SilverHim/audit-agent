@@ -770,7 +770,7 @@ export type CategoryVersion = {
  *
  * 数据质量体检项. 前端按编号本地化文案, params 的键见各项注释.
  */
-export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available' | 'tb_agrees_statements';
+export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available';
 
 /**
  * ClientCreate
@@ -1878,8 +1878,8 @@ export type DeferralView = {
 /**
  * DemoImportIn
  *
- * 演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork, statements 之一; 用字符串, 不认识的由服务报
- * 422 INVALID_VALUE (同其他数据接口的错误结构).
+ * 演示数据导入的请求体 (需求 R270): 阶段为 acceptance, fieldwork 之一; 用字符串, 不认识的 (含 Issue #46 删去的
+ * statements) 由服务报 422 INVALID_VALUE (同其他数据接口的错误结构).
  */
 export type DemoImportIn = {
     /**
@@ -1900,7 +1900,7 @@ export type DemoImportResult = {
     /**
      * Stage
      */
-    stage: 'acceptance' | 'fieldwork' | 'statements' | 'manual';
+    stage: 'acceptance' | 'fieldwork' | 'manual';
     /**
      * Status
      */
@@ -1945,11 +1945,11 @@ export type DemoSummary = {
     /**
      * Stages Done
      */
-    stages_done?: Array<'acceptance' | 'fieldwork' | 'statements' | 'manual'>;
+    stages_done?: Array<'acceptance' | 'fieldwork' | 'manual'>;
     /**
      * Suggested
      */
-    suggested?: 'acceptance' | 'fieldwork' | 'statements' | 'manual' | null;
+    suggested?: 'acceptance' | 'fieldwork' | 'manual' | null;
     last?: DemoImportResult | null;
 };
 
@@ -3648,7 +3648,8 @@ export type MisstatementType = 'factual' | 'judgmental' | 'projected';
 /**
  * MisstatementUpdate
  *
- * 判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
+ * 判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后按它出错报新版本
+ * (review_queue.apply_misstatement_update, 需求 R159).
  * base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
  * 时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFICATION_STATUSES.
  */
@@ -4714,6 +4715,7 @@ export type ReviewRecordIn = {
      */
     override_conclusion?: string | null;
     misstatement_draft?: MisstatementDraft | null;
+    misstatement_update?: MisstatementUpdate | null;
     /**
      * Rerun Params
      */

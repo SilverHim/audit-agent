@@ -11,6 +11,7 @@ import pytest
 
 from backend.adapters.xero_supplements import DemoPlan, SupplementMismatch, plan
 from backend.contracts.data import TableKind
+from backend.contracts.models import DocumentType
 from tests.external import snapshot_dir, supplements_dir
 from tests.test_employees import EXPECTED as EMPLOYEES
 from tests.test_xero_supplements import DATASET, LINKED, copies, loader, rewrite_manifest
@@ -43,14 +44,12 @@ def test_tables_are_the_supplement_tables_with_their_sources(q1: DemoPlan) -> No
 
 
 def test_uploads_follow_stages_and_match_the_manifest(q1: DemoPlan) -> None:
-    """23 份按阶段 (承接, 等数据, 完成阶段按补交请求, 人工任务) 再按文件名排序; 登记 mock 与函证 mock 存档的 6 份
-    不在其中; 各项的类型, 可靠性, 文件日期, 关联对象与文件 ID 同 manifest.documents."""
-    assert Counter(u.stage for u in q1.uploads) == {"acceptance": 2, "fieldwork": 19, "statements": 1, "manual": 1}
+    """22 份按阶段 (承接, 等数据, 人工任务) 再按文件名排序; 登记 mock 与函证 mock 存档的 6 份不在其中, 财务报表
+    (fs_v1.pdf, 不登记, Issue #46) 也不在; 各项的类型, 可靠性, 文件日期, 关联对象与文件 ID 同 manifest.documents."""
+    assert Counter(u.stage for u in q1.uploads) == {"acceptance": 2, "fieldwork": 19, "manual": 1}
     assert [u.file_name for u in q1.uploads[:3]] == ["appointment.pdf", "engagement_letter.pdf", "CON-X01.pdf"]
-    assert [u.stage for u in q1.uploads[-2:]] == ["statements", "manual"]
-    assert [(u.path, u.request_id) for u in q1.uploads if u.request_id] == [
-        ("financial_statements/fs_v1.pdf", "REQ-financial_statements")
-    ]
+    assert q1.uploads[-1].stage == "manual"
+    assert all(u.document_type is not DocumentType.financial_statements for u in q1.uploads)
     manifest = json.loads((supplements_dir("20261017-q1") / "manifest.json").read_text(encoding="utf-8"))
     keep = ("reliability", "document_date", "related_ids", "document_id")  # 与 manifest 同名的项; type 改名
     recorded = {

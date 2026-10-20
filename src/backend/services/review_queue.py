@@ -1,9 +1,10 @@
 """复核队列: 任务类型判定, 建任务, 允许的决定, 例外归因 (A 负责). 规则见 开发接口文档.md 第 5 节"需要人", 第 7 节."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from backend.contracts.errors import VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
@@ -17,12 +18,16 @@ from backend.contracts.models import (
     Judgment,
     ManualRequest,
     Misstatement,
+    MisstatementStatus,
+    MisstatementUpdate,
     ProcedureRun,
     ProposedAction,
+    ReviewStatus,
     ReviewTask,
     ReviewTier,
     TargetType,
     TaskKind,
+    Versioned,
 )
 from backend.contracts.services import JudgmentOutcome
 from backend.services.judgment_engine import critic_chain_ok
@@ -55,6 +60,50 @@ def attribute_exceptions(judgment: Judgment, exceptions: Sequence[AuditException
             )
         )
     return attributed
+
+
+def apply_misstatement_update(misstatement: Misstatement, update: MisstatementUpdate, judgment_id: str) -> Misstatement:
+    """判断置 confirmed 后按其错报更新载荷写出的错报新版本 (需求 R159, 迁移表见接口文档第 2.5 节). 纯函数.
+
+    载荷中不为空的字段照写 (没写的不改), 版本 +1. 分类另记 classification_judgment_id 为该判断; 验证把状态改为
+    corrected 或 partially_corrected 时记 verified_by_judgment_id 为该判断, 改为 communicated (分录与错报对不上) 时置
+    needs_recommunication. 经 model_validate 重建 (model_copy 不跑校验), 状态与字段不一致抛 ValidationError.
+    载荷依据的不是该错报的当前版本 (ID 或 base_version 不符, 判断之后错报已出新版本) 抛 VersionConflict.
+    例: M-D-XJ499 v1 按 J-FIN-03-1-M-D-XJ499 的分类载荷 → v2, type factual, origin current_period,
+    classification_judgment_id J-FIN-03-1-M-D-XJ499, status 仍为 identified.
+    """
+    if (update.misstatement_id, update.base_version) != (misstatement.id, misstatement.version):
+        raise VersionConflict(
+            f"{judgment_id} 的错报更新依据 {update.misstatement_id} 第 {update.base_version} 版, "
+            f"{misstatement.id} 当前为第 {misstatement.version} 版"
+        )
+    changes = update.model_dump(exclude={"misstatement_id", "base_version", "kind"}, exclude_none=True)
+    if update.kind == "classification":
+        changes["classification_judgment_id"] = judgment_id
+    elif update.status in (MisstatementStatus.corrected, MisstatementStatus.partially_corrected):
+        changes["verified_by_judgment_id"] = judgment_id
+    elif update.status is MisstatementStatus.communicated:
+        changes["needs_recommunication"] = True
+    return Misstatement.model_validate({**misstatement.model_dump(), **changes, "version": misstatement.version + 1})
+
+
+def misstatement_updates(written: Iterable[Versioned], current: Mapping[str, Misstatement]) -> list[Misstatement]:
+    """凡判断置 confirmed 且带错报更新载荷 (需求 R159), 按载荷写出所指错报的新版本 (apply_misstatement_update), 顺序同
+    written 中的判断. written: 要写出的对象 (被确认的 AI 判断, 或带人给载荷的人工判断; 其余对象忽略); current: 错报
+    ID → 当前版本, 缺了载荷所指的抛 LookupError. 纯函数; DecisionSubmit 的复核决定与 A8 自动确认 (agents/judging) 共用,
+    同 attribute_exceptions."""
+    updated = []
+    for judgment in written:
+        if not isinstance(judgment, Judgment) or judgment.review_status is not ReviewStatus.confirmed:
+            continue
+        update = judgment.misstatement_update
+        if update is None:
+            continue
+        misstatement = current.get(update.misstatement_id)
+        if misstatement is None:
+            raise LookupError(f"{judgment.id} 的错报更新所指的错报 {update.misstatement_id} 不在给定的错报中")
+        updated.append(apply_misstatement_update(misstatement, update, judgment.id))
+    return updated
 
 
 # 交易行的类型: 判断对象本身是这类行时, 该行金额即涉及金额 (截止性判断错了, 影响的就是整行金额)

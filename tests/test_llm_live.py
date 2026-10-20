@@ -14,6 +14,7 @@ from backend.adapters.llm import (
     DEFAULT_BASE_URL,
     ERROR_TEXT_LIMIT,
     HTTP_LOGGERS,
+    TRUNCATED,
     LiveLLMClient,
     LLMTransportError,
     MockLLMClient,
@@ -137,6 +138,115 @@ async def test_unparsable_output_keeps_raw_and_error(content: str) -> None:
 def test_strip_fences() -> None:
     assert strip_fences('```\n{"a": 1}\n```') == '{"a": 1}'
     assert strip_fences('{"a": 1}') == '{"a": 1}'
+
+
+def api_error(message: str, param: str | None = None, code: str | None = None) -> tuple[int, Any]:
+    """OpenAI 格式的 400 错误体."""
+    return 400, {"error": {"message": message, "type": "invalid_request_error", "param": param, "code": code}}
+
+
+# 服务端因输出达到上限回的 400 (R312 实测 gpt-6-luna, JSON 模式下输出不完整时不给半截内容), 及 OpenAI 的另一种写法
+OUTPUT_LIMIT = api_error(
+    "Could not finish the message because max_tokens or model output limit was reached. "
+    "Please try again with higher max_tokens."
+)
+OUTPUT_LIMIT_OLDER = api_error(
+    "Could not finish the message because max_tokens was reached. Please try again with higher max_tokens."
+)
+
+
+def finished(content: str, finish_reason: str | None) -> dict[str, Any]:
+    """带 finish_reason 的响应 (为空时不带这个字段)."""
+    data = completion(content)
+    if finish_reason is not None:
+        data["choices"][0]["finish_reason"] = finish_reason
+    return data
+
+
+@pytest.mark.parametrize(
+    ("length", "finish_reason", "truncated"),
+    [(40, "length", True), (40, "stop", False), (40, None, False), (None, "length", False)],
+)
+async def test_truncated_output_says_so(length: int | None, finish_reason: str | None, truncated: bool) -> None:
+    """R312 验收 2: 半截输出且 finish_reason 为 length 时 error 写明在上限 (请求的 4096) 处被截断; stop 与缺失时照旧
+    为解析错误; raw 都照常保留. 正文恰好完整 (length 但解析得出) 时照常出 output, 不写截断说明 (R312-07)."""
+    content = raw("BA-01")[:length]
+    response = await client(Server((200, finished(content, finish_reason)))).complete(REQUEST, ConfirmationExtraction)
+    assert response.raw == content and (response.output is None) == (length is not None)
+    assert (response.error == TRUNCATED.format(limit=4096)) == truncated, response.error
+
+
+@pytest.mark.parametrize("reply", [OUTPUT_LIMIT, OUTPUT_LIMIT_OLDER], ids=["output_limit", "older"])
+async def test_output_limit_400_is_a_truncated_reply(reply: tuple[int, Any]) -> None:
+    """R312 验收 2, 5: 服务端因输出达到上限回 400 时 (两种写法, 认共同的开头) 不抛错 (此前整次执行因此失败), 返回 raw
+    为空, token 数记 0, error 同截断; 不算传输层重试, 只发一次."""
+    server = Server(reply)
+    response = await client(server).complete(REQUEST, ConfirmationExtraction)
+    assert (response.output, response.raw, response.input_tokens, response.output_tokens) == (None, "", 0, 0)
+    assert response.error == TRUNCATED.format(limit=4096) and len(server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        api_error(  # OpenAI
+            "max_tokens is too large: 4096. This model supports at most 2048 completion tokens, "
+            "whereas you provided 4096.",
+            "max_tokens",
+            "invalid_value",
+        ),
+        api_error("Invalid max_tokens value, the valid range of max_tokens is [1, 2048]"),  # DeepSeek, 通义一类
+    ],
+    ids=["openai", "range"],
+)
+async def test_output_cap_from_the_error_caps_later_calls(reply: tuple[int, Any]) -> None:
+    """R312-01: 输出上限超出模型所允许的 400 给出允许的上限 2048 时, 以 2048 立即重发 (不计传输重试, 不等待); 截断说明
+    写实际发出的 2048; 此后的调用一开始就以 2048 封顶."""
+    sleeps: list[float] = []
+    server = Server(reply, (200, finished(raw("BA-01")[:40], "length")), (200, completion(raw("BA-01"))))
+    llm = client(server, sleeps)
+    first = await llm.complete(REQUEST, ConfirmationExtraction)
+    second = await llm.complete(REQUEST, ConfirmationExtraction)
+    assert [body["max_tokens"] for body in bodies(server)] == [4096, 2048, 2048] and sleeps == []
+    assert first.error == TRUNCATED.format(limit=2048) and second.output is not None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        api_error("max_tokens is too large", "max_tokens", "invalid_value"),  # 取不出数
+        api_error(  # 允许的上限小于 1, 没有可发的上限 (R312-08: 曾当作没封顶, 以同一上限一直重发)
+            "max_tokens is too large: 4096. This model supports at most 0 completion tokens, "
+            "whereas you provided 4096.",
+            "max_tokens",
+            "invalid_value",
+        ),
+        api_error("Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"),  # 已不大于允许的上限
+        api_error("temperature must be in [0, 2]", "temperature", "invalid_value"),  # 不是输出上限的参数
+    ],
+    ids=["no_number", "zero", "not_lower", "other_param"],
+)
+async def test_output_cap_unusable_raises(reply: tuple[int, Any]) -> None:
+    """R312-01: 取不出允许的上限, 给出的上限小于 1 或不比发出的小 (封顶也没用), 或说的不是输出上限时, 照常抛错,
+    只发一次."""
+    server = Server(reply)
+    with pytest.raises(LLMTransportError, match="HTTP 400"):
+        await client(server).complete(REQUEST, ConfirmationExtraction)
+    assert len(server.requests) == 1
+
+
+async def test_connect_timeout_is_short_and_read_timeout_long() -> None:
+    """R312-04: 缺省超时只放宽读 (非流式请求的读超时即整次生成的时间), 建连仍短."""
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, json=completion(raw("BA-01")))
+
+    await LiveLLMClient(KEY, "gpt-6-luna", transport=httpx.MockTransport(handler)).complete(
+        REQUEST, ConfirmationExtraction
+    )
+    assert (seen[0]["connect"], seen[0]["read"]) == (15.0, 600.0)
 
 
 async def test_malformed_completion_raises() -> None:

@@ -212,8 +212,8 @@ NOW = datetime(2026, 9, 30, tzinfo=UTC)
 # ── 样例数据: 合成数据集的 Numbat 公司 (合成数据集设计.md 2.1, 2.2 节) ──
 
 NUMBAT_FEATURES = BASELINE  # Numbat 回归测试的功能集: 新功能全关, 保留基线的 critic (services/features.py)
-# 打开计划 (需求 R204, R205) 的功能集: 基线加 planning 与它依赖的 misstatement; 各测试共用这一处
-PLANNING_FEATURES = NUMBAT_FEATURES | {"misstatement", "planning"}
+# 打开总体审计计划 (需求 R204, R205) 的功能集: 基线加 planning, 不带 misstatement (计划不依赖错报, R313); 各测试共用
+PLANNING_FEATURES = NUMBAT_FEATURES | {"planning"}
 NUMBAT_ABN = AbnRecord(
     abn="68900042015",
     acn="900042015",

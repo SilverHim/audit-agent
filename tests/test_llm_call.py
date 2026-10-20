@@ -11,7 +11,13 @@ from typing import Any
 import pytest
 from jinja2 import UndefinedError
 
-from backend.adapters.llm import DatasetFixtureLLMClient, MockLLMClient, SwitchableLLMClient, make_llm_client
+from backend.adapters.llm import (
+    TRUNCATED,
+    DatasetFixtureLLMClient,
+    MockLLMClient,
+    SwitchableLLMClient,
+    make_llm_client,
+)
 from backend.agents.base import RunContext
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction, JudgmentDraft
@@ -43,6 +49,7 @@ from tests.fakes import (
     make_deps,
     make_run,
 )
+from tests.test_llm_live import OUTPUT_LIMIT, Server, client, completion, finished
 from tests.test_output_validator import cutoff_draft
 
 EID = ENGAGEMENT.id
@@ -183,14 +190,14 @@ async def test_request_fields() -> None:
     [req] = llm.requests
     assert (req.procedure_id, req.run_id, req.fixture_key) == ("DOC-04", "RUN-DOC-04-1", "CON-001")
     assert req.eid == EID  # R78: mock 按它选 fixture 目录
-    assert req.temperature == 0 and req.max_tokens == 4096
+    assert req.temperature == 0 and req.max_tokens == 32768
     assert json.dumps(ContractExtraction.model_json_schema(), indent=2) in req.system
     assert req.messages == [LLMMessage(role="user", content=engine.render(doc04(), variables()))]
     assert result.attempts == 1 and result.report.level_failed is None and len(result.trail_ids) == 1
 
 
 async def test_max_tokens_from_template() -> None:
-    assert LLMSpec(prompt="x.md.j2", output_model="JudgmentDraft").max_tokens == 4096
+    assert LLMSpec(prompt="x.md.j2", output_model="JudgmentDraft").max_tokens == 32768
     template = doc04()
     assert template.llm is not None
     custom = template.model_copy(update={"llm": template.llm.model_copy(update={"max_tokens": 1500})})
@@ -231,6 +238,23 @@ async def test_three_syntax_or_structure_failures_stop() -> None:
     assert "still bad" not in result.report.errors[0] and "not valid JSON" in result.report.errors[0]
     assert len(llm.requests[2].messages) == 5  # user, 第 1 次原文与错误, 第 2 次原文与错误
     assert "does not match ContractExtraction" in llm.requests[2].messages[4].content
+
+
+@pytest.mark.parametrize("first", ["length", "output_limit_400"])
+async def test_truncated_reply_is_retried_with_the_note(first: str) -> None:
+    """R312 验收 3: 真实客户端 (假传输) 第一次输出被截断 (finish_reason length 的半截输出, 或服务端回输出达上限的
+    400), 判断引擎按语法失败重试: 第二次请求按模板的上限 (缺省 32768) 发, 末条消息把截断说明回传给模型; 第二次通过.
+    上次原文为空 (400) 时不追加空的 assistant 消息 (R312-06)."""
+    truncated = (200, finished(raw("CON-001")[:60], "length")) if first == "length" else OUTPUT_LIMIT
+    server = Server(truncated, (200, completion(raw("CON-001"))))
+    engine, _ = setup(client(server))
+    result = await call(engine)
+    assert (result.attempts, result.report.level_failed) == (2, None)
+    retry = json.loads(server.requests[1].content)
+    assert retry["max_tokens"] == 32768
+    assert TRUNCATED.format(limit=32768) in retry["messages"][-1]["content"]
+    replied = ["assistant"] if first == "length" else []
+    assert [m["role"] for m in retry["messages"]] == ["system", "user", *replied, "user"]
 
 
 async def test_fixture_not_found_retries_three_times(tmp_path: Path) -> None:

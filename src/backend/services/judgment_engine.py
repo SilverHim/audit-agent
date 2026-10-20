@@ -116,6 +116,13 @@ SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON sch
 Write nothing before or after the object.
 
 {schema}"""
+# 判断 (judge) 的系统提示词: 另写明规则例外不是证据来源. 规则例外没有对应的指针类型, 模型曾用 source_type trail
+# 引 D04 例外的 ID, 解析不了, 照引用级的规则原样留在判断里 (需求 R312)
+JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
+    "{schema}",
+    "Rule findings are not evidence sources: never put a finding ID in an evidence pointer. "
+    "Cite the rows, document pages or fields that the finding is about.\n\n{schema}",
+)
 # 语法或结构失败后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:
 
@@ -974,7 +981,8 @@ class JudgmentEngine:
         system: str = SYSTEM_PROMPT,
         subject_id: str | None = None,
     ) -> LLMCallResult[Any]:
-        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
+        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文 (为空时不加) 与错误追加进对话重试, 最多共
+        MAX_ATTEMPTS 次.
 
         引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
         渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
@@ -1010,9 +1018,12 @@ class JudgmentEngine:
             trail_ids.append(await self.record(eid, actor, request, response, report, attempt, subject_id))
             if not report.retryable or attempt == MAX_ATTEMPTS:
                 break
+            # 上次的原文为空 (输出被截断, 见 adapters/llm.TRUNCATED) 时不追加空的 assistant 消息: 不带信息, 有的接口
+            # 拒收非末尾的空消息
+            replied = [LLMMessage(role="assistant", content=response.raw)] if response.raw else []
             messages = [
                 *messages,
-                LLMMessage(role="assistant", content=response.raw),
+                *replied,
                 LLMMessage(role="user", content=RETRY_PROMPT.format(errors="\n".join(report.errors))),
             ]
         return LLMCallResult(report=report, attempts=attempt, trail_ids=trail_ids, model=response.model)
@@ -1072,7 +1083,7 @@ class JudgmentEngine:
         """对一个判断对象调大模型, 把通过校验的草稿补全为 Judgment (review_status pending, 由调用方分类).
 
         失败 (重试耗尽, 引用或语义失败) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
-        调用方 Agent 取模板 owner; performed_by 为项目负责人.
+        调用方 Agent 取模板 owner; performed_by 为项目负责人. 系统提示词为 JUDGMENT_SYSTEM.
         """
         variables = {
             "subject_id": ctx.subject_id,
@@ -1096,6 +1107,7 @@ class JudgmentEngine:
             template.owner,
             ctx.fixture_key,
             subject_id=ctx.subject_id,
+            system=JUDGMENT_SYSTEM,
         )
         report = result.report
         if report.level_failed is not None:

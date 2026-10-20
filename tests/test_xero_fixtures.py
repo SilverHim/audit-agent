@@ -19,6 +19,7 @@ import functools
 import hashlib
 import json
 import re
+import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -169,11 +170,12 @@ def fixture_problems(
     对应文件, 即抛 LookupError 的, 不应有 document 指针); 没登记的程序只做以上核对;
     (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序或上传处理的模板 (DOC-CLASSIFY, DOC-STATEMENTS), 文件须能按该
     程序的输出模型解析;
-    上传分类的文件名主干 (default 除外) 须是 manifest.documents 中的文件 (按文件名取, 别的名字永远用不上);
-    不含邮箱地址. fixture 根不存在或为空时没有问题."""
+    上传处理的文件名主干 (default 除外) 须是补造目录中的 PDF (manifest.files 中的, 含不登记的 fs_v1.pdf; 按文件名
+    取, 别的名字永远用不上); 不含邮箱地址. fixture 根不存在或为空时没有问题."""
     problems: list[str] = []
     documents = fs.documents()
-    stems = {Path(d["path"]).stem for d in documents.values()}
+    listed = json.loads(fs.manifest.read_text(encoding="utf-8"))["files"]
+    stems = {Path(f["path"]).stem for f in listed if f["path"].endswith(".pdf")}
     programs = {t.id for t in library.all(include_disabled=True) if t.llm is not None} | INTAKE_TEMPLATES.keys()
     for folder in sorted(p for p in fs.fixtures.iterdir() if p.is_dir()) if fs.fixtures.is_dir() else []:
         if folder.name not in programs:
@@ -190,7 +192,7 @@ def fixture_problems(
             if any(EMAIL.search(text) for text in strings(json.loads(raw))):
                 problems.append(f"{name}: 含邮箱地址")
             if folder.name in INTAKE_TEMPLATES and path.stem != "default" and path.stem not in stems:
-                problems.append(f"{name}: 不是 manifest.documents 中的文件")
+                problems.append(f"{name}: 不是补造目录中的 PDF")
             pointers = document_pointers(json.loads(raw))
             if pointers:
                 try:
@@ -235,11 +237,18 @@ def write(root: Path, rel: str, value: Any) -> None:
 @pytest.mark.external
 def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     """自测: 合格的 CSH-02 与上传分类 fixture 不报; 未知程序目录, 没有 llm 段的程序, 不符合输出模型, 指针不在 manifest,
-    页码超出 (含 0 与空), 指向不作证据的文件 (待审财报 fs_v1.pdf), 含邮箱, 上传分类的文件名不在 manifest 都报出,
-    不抛异常. 按程序的文档对应另有自测 (test_documents_follow_the_program), 这里一律以那份回函为应指向的文件."""
+    页码超出 (含 0 与空), 指向不作证据的文件, 含邮箱, 上传分类的文件名不是补造的 PDF 都报出, 不抛异常. 按程序的文档
+    对应另有自测 (test_documents_follow_the_program), 这里一律以那份回函为应指向的文件. 正式清单已没有不作证据的登记
+    (fs_v1.pdf 不登记, Issue #46), 这里在 manifest 副本里造一份 financial_statements 登记 (副本旁放回函的副本)."""
     documents = XERO.documents()
     reply = next(d for d in documents.values() if d["type"] == "confirmation")
-    statements = next(d for d in documents.values() if d["type"] == "financial_statements")
+    statements = {"path": "statements.pdf", "document_id": "DOC-000000000fs1", "type": "financial_statements"}
+    supplement = tmp_path / "supplement"
+    (supplement / reply["path"]).parent.mkdir(parents=True)
+    shutil.copyfile(XERO.manifest.parent / reply["path"], supplement / reply["path"])
+    manifest = json.loads(XERO.manifest.read_text(encoding="utf-8"))
+    manifest["documents"].append({**statements, "page_count": 1})
+    (supplement / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     good = json.loads((get_settings().LLM_FIXTURES_ROOT / "CSH-02" / "BA-01.json").read_text(encoding="utf-8"))
 
     def to_reply(procedure_id: str, fixture_key: str) -> frozenset[str]:
@@ -257,7 +266,8 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     write(root, "DOC-CLASSIFY/fs_v1.json", {"document_type": "financial_statements", "reason": "Draft statements."})
     write(root, "DOC-CLASSIFY/default.json", {"document_type": None, "reason": "Unknown."})
     write(root, "CSH-02/PRICE.json", {**with_pointer(reply["document_id"], 1), "conclusion": "16 days 10@650.00."})
-    assert fixture_problems(replace(XERO, fixtures=root), expected=to_reply) == []  # 单价里的 @ 不算邮箱
+    fs = replace(XERO, fixtures=root, manifest=supplement / "manifest.json")
+    assert fixture_problems(fs, expected=to_reply) == []  # 单价里的 @ 不算邮箱
     write(root, "DOC-CLASSIFY/unknown.json", {"document_type": "invoice", "reason": "Not a demo document."})
     write(root, "DOC-CLASSIFY/fs_v2.json", {"document_type": "spreadsheet", "reason": "Not a document type."})
     write(
@@ -273,7 +283,7 @@ def test_fixture_problems_are_reported(tmp_path: Path) -> None:
     write(root, "CSH-02/PAGE0.json", with_pointer(reply["document_id"], 0))
     write(root, "CSH-02/PAGENULL.json", with_pointer(reply["document_id"], None))  # EvidencePointer 允许 page 为空
     write(root, "CSH-02/STATEMENTS.json", with_pointer(statements["document_id"], 1))
-    problems = fixture_problems(replace(XERO, fixtures=root), expected=to_reply)
+    problems = fixture_problems(fs, expected=to_reply)
     assert sorted({p.split(":")[0] for p in problems}) == [  # 每个不合格的指针各报一条, 这里按文件看
         "ACC-01",
         "CSH-02/BAD",
@@ -376,20 +386,25 @@ def test_gen09_second_round_uses_verdict_model() -> None:
         fixture_model(LIBRARY, "ACC-01", "x")  # 没有 llm 段
 
 
-# ── 上传分类 (DOC-CLASSIFY, 需求 R267): 补造的 23 份 PDF 各一份, 按文件名主干取 ──
+# ── 上传分类 (DOC-CLASSIFY, 需求 R267): 补造的 22 份上传 PDF 与 fs_v1.pdf 各一份, 按文件名主干取 ──
 
 
 @pytest.mark.external
 def test_classify_fixtures_follow_the_manifest() -> None:
     """每份要上传的补造 PDF 各有一份分类 fixture, 类型同 manifest.documents 中同名文件的类型 (合同只指 3 份收入合同,
-    租约, 借款协议与客户订单为 agreement); 理由为一句英文; default.json 判断不了 (document_type 为空)."""
+    租约, 借款协议与客户订单为 agreement); 不登记的 fs_v1.pdf (审计师自己上传报表的样例, Issue #46) 另有一份, 为
+    financial_statements; 理由为一句英文; default.json 判断不了 (document_type 为空)."""
     folder = XERO.fixtures / CLASSIFY.id
     fixtures = {
         p.stem: DocumentClassification.model_validate_json(p.read_text(encoding="utf-8")) for p in folder.glob("*.json")
     }
     default = fixtures.pop("default")
-    expected = {PurePath(u.file_name).stem: u.document_type for u in xero_uploads()}  # 演示导入上传的 23 份
-    assert len(expected) == 23 and {stem: f.document_type for stem, f in fixtures.items()} == expected
+    expected = {PurePath(u.file_name).stem: u.document_type for u in xero_uploads()}  # 演示导入上传的 22 份
+    assert len(expected) == 22
+    assert {stem: f.document_type for stem, f in fixtures.items()} == {
+        **expected,
+        "fs_v1": DocumentType.financial_statements,
+    }
     assert all(f.reason.isascii() and f.reason.endswith(".") and ". " not in f.reason for f in fixtures.values())
     assert default.document_type is None
 

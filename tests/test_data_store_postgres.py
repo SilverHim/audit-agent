@@ -19,6 +19,7 @@ from backend.contracts.data import (
     CheckId,
     DataChange,
     DataInput,
+    DataRequest,
     DocumentChange,
     DocumentDetailsEdit,
     ImportCommit,
@@ -629,9 +630,7 @@ async def test_contract_terms_read_in_extraction_order_and_edit_retry(
 
 async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """需求 R15 (真实库): check_inputs 的 SQL 汇总与 data_quality.summarize 一致; 验收: Numbat 经 Xero 同步后出现
-    审批日志, 报表草稿两条请求, 导入审批日志与上传报表草稿后都转为 received; 体检与请求留痕不重复."""
-    import asyncio
-
+    审批日志一条请求 (不再要报表草稿, Issue #46), 导入审批日志后转为 received; 体检与请求留痕不重复."""
     from backend.adapters.xero_dataset import CREATED_BY
     from backend.contracts.models import TrailKind
     from tests.fakes import numbat_inputs, numbat_tables
@@ -653,12 +652,11 @@ async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage,
     requests = await service.deps.data.requests(synced.id)
     assert [(r.id, r.reason_code, r.reason_params, r.status) for r in requests] == [
         ("REQ-approval_log", "field_unavailable", {"fields": ["created_by", "approved_by"], "source": "Xero"}, "open"),
-        ("REQ-financial_statements", "not_provided", {}, "open"),
     ]
     run = await service.deps.data.check_run(synced.id)
     assert run is not None and run.data_version == 1
     assert {c.id.value: c.status for c in run.checks}["journals_agree_tb"] == "passed"
-    assert await service.deps.data.open_requests(synced.id) == 2
+    assert await service.deps.data.open_requests(synced.id) == 1
 
     preview = await service.start_import(
         synced.id, "approval_log.csv", approval_log_csv(), actor="U-1", request_id="REQ-approval_log"
@@ -666,18 +664,11 @@ async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage,
     mapping = {"entry_no": "entry_no", "created_by": "created_by", "approved_by": "approved_by"}
     body = ImportCommit(kind=TableKind.approval_log, sheet=preview.sheet, date_format="ymd", mapping=mapping)
     await service.commit_import(synced.id, preview.import_id, body, "U-1")
-    await service.upload_documents(
-        synced.id, [("draft statements.pdf", b"%PDF draft")], actor="U-1", request_id="REQ-financial_statements"
-    )
-    await asyncio.gather(*list(service.tasks))
 
-    assert {r.id: r.status for r in await service.deps.data.requests(synced.id)} == {
-        "REQ-approval_log": "received",
-        "REQ-financial_statements": "received",
-    }
+    assert {r.id: r.status for r in await service.deps.data.requests(synced.id)} == {"REQ-approval_log": "received"}
     assert await service.deps.data.open_requests(synced.id) == 0
     checks = {c.id.value: c.status for c in await service.deps.data.checks(synced.id)}
-    assert (checks["preparer_approver_available"], checks["tb_agrees_statements"]) == ("passed", "pending")
+    assert checks["preparer_approver_available"] == "passed"
 
     async def checkup_actions() -> list[str]:
         entries = await service.deps.trail.list(synced.id, TrailKind.data, limit=500)
@@ -691,7 +682,64 @@ async def test_checkup_on_real_store_matches_rules_and_accepts_requests(storage,
     async with service.holding(synced.id, []):  # 补写: 同键已有的不再写
         pass
     assert await checkup_actions() == before
-    assert before.count("check") == 3 and before.count("request_raised") == 2 and before.count("request_received") == 2
+    assert before.count("check") == 2 and before.count("request_raised") == 1 and before.count("request_received") == 1
+
+
+async def test_old_statements_check_and_request_on_real_store(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """Issue #46 验收 3 (真实库): 旧项目的 data_checks 还有 tb_agrees_statements 一行, 报表草稿请求仍待补交.
+    check_run 与 checks 读出五项不报错; run_if_stale 因该请求重跑体检: 请求转 withdrawn (resolved_at 为体检时间),
+    留痕 request_withdrawn 带理由 "报表以账套为准", data_checks 不再有旧项; 再调一次不重跑."""
+    from backend.agents.checkup import DataCheckup
+    from backend.contracts.models import TrailKind
+    from backend.services.data_quality import RETIRED_REQUESTS
+
+    engine, (loaded, _), loader, _ = storage
+    service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
+    await loader.load(loaded.id, "demo")
+    eid, data = loaded.id, service.deps.data
+    checkup = DataCheckup(service.deps)
+    run = await checkup.run(eid)
+    [request_id] = RETIRED_REQUESTS
+    earlier = run.checked_at - timedelta(days=30)
+    old = DataRequest(
+        id=request_id,
+        kind="document",
+        document_type=DocumentType.financial_statements,
+        title="财务报表草稿",
+        used_for=["FIN-12"],
+        reason_code="not_provided",
+        created_at=earlier,
+    )
+    await data.save_check_run(eid, run, [old])
+    async with transaction(engine, eid) as conn:
+        values = {"status": "pending", "params": {"statements": 0}, "request_id": None}
+        row = {"engagement_id": eid, "id": "tb_agrees_statements", **values}
+        await conn.execute(
+            insert(m.data_checks).values(**row, data_version=run.data_version, checked_at=run.checked_at)
+        )
+
+    stored = await data.check_run(eid)
+    assert stored is not None and stored.checks == run.checks
+    assert await data.checks(eid) == run.checks
+    rerun = await checkup.run_if_stale(eid)
+
+    assert rerun is not None
+    current = next(r for r in await data.requests(eid) if r.id == request_id)
+    assert (current.status, current.resolved_at, current.created_at) == ("withdrawn", rerun.checked_at, earlier)
+    entries = await service.deps.trail.list(eid, TrailKind.data, limit=500)
+    withdrawn = [e.payload for e in entries if e.payload["action"] == "request_withdrawn"]
+    assert withdrawn == [
+        {
+            "action": "request_withdrawn",
+            "request_id": request_id,
+            "document_type": "financial_statements",
+            "reason": "报表以账套为准",
+        }
+    ]
+    async with transaction(engine, eid) as conn:
+        ids = (await conn.execute(select(m.data_checks.c.id))).scalars().all()
+    assert sorted(ids) == sorted(c.value for c in CheckId)
+    assert await checkup.run_if_stale(eid) is None
 
 
 async def test_table_view_and_category_edit_on_real_store(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

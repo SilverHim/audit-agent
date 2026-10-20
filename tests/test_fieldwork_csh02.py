@@ -15,6 +15,7 @@ from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.data import DataInput
 from backend.contracts.models import (
     AgentId,
+    AuditException,
     AutonomyLevel,
     Confirmation,
     ConfirmationResult,
@@ -29,11 +30,12 @@ from backend.contracts.models import (
     ReviewStatus,
     RunStatus,
     TaskKind,
+    TaskStatus,
     TrailKind,
 )
 from backend.contracts.records import DatasetTraits, TrialBalanceRow
 from backend.contracts.services import RuleResult
-from backend.orchestration.nodes import GraphNodes
+from backend.orchestration.nodes import GraphNodes, save_outputs
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -61,6 +63,8 @@ from tests.fakes import (
     numbat_csh05_exception,
 )
 from tests.test_fieldwork_judging import failed, passed
+from tests.xero_harness import FlakyLLM, LayeredMockLLMClient, Ran, offline_deps, run_programs
+from tests.xero_injection import XeroCase
 
 EID = ENGAGEMENT.id
 B01 = numbat_csh05_exception(make_run("CSH-05"))  # X-CSH-05-1-B01-1
@@ -498,14 +502,89 @@ async def test_failure_marks_csh05_exception_unattributed() -> None:
     assert (task.id, task.kind, task.subject_id) == ("T-X-CSH-05-1-B01-1-v2", TaskKind.unattributed, "BA-01")
 
 
-async def test_failure_without_csh05_exception_keeps_one_d01_version() -> None:
-    """没有前置例外时第一条规则例外就是本次的 D01: 片段里只留它的 v2 unattributed."""
-    agent, ctx, _ = setup(outcomes={"BA-01": failed("unattributed")}, exceptions=[])
-    patch = await agent.run(ctx)
+@pytest.mark.parametrize(
+    ("confirmations", "fresh"),
+    [
+        (NUMBAT_CONFIRMATIONS, "X-CSH-02-1-D01-1"),  # BA-01 余额不符, 没有 CSH-05 的例外
+        ([extracted("BA-01", 125840000, 0), extracted("BA-02", 40000000, 1, 700000)], "X-CSH-02-1-D04-1"),  # 只有 D04
+    ],
+)
+async def test_failure_marks_fresh_exception_on_its_first_version(
+    confirmations: list[Confirmation], fresh: str
+) -> None:
+    """需求 R322 验收 1: 没有前置例外时, 判断失败的账户的第一条规则例外就是本次刚建的 D01 或 D04. 片段只给它的 v1
+    (置 unattributed, 不另出 v2), 任务以 v1 为目标; 经合并校验 (run_agent), 片段的例外与任务经 save_outputs 写进
+    FakeStore 不报 VersionConflict, 存的就是这一版 (函证的前两版不在这个存储里, 不写)."""
+    outcomes = {account: failed("unattributed") for account in ("BA-01", "BA-02")}
+    agent, ctx, _ = setup(confirmations, outcomes=outcomes, exceptions=[])
+    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    assert writer is AgentId.A6, patch["procedure_runs"][0].failure_reason
     assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [
-        ("X-CSH-02-1-D01-1", 2, ExceptionDisposition.unattributed)
+        (fresh, 1, ExceptionDisposition.unattributed)
     ]
-    assert [t.id for t in patch["review_tasks"]] == ["T-X-CSH-02-1-D01-1-v2"]
+    [task] = patch["review_tasks"]
+    assert (task.id, task.kind, task.target_id, task.target_version) == (
+        f"T-{fresh}-v1",
+        TaskKind.unattributed,
+        fresh,
+        1,
+    )
+    store = agent.deps.output_store
+    async with store.transaction(EID):
+        await save_outputs(
+            store, EID, {"exceptions": patch["exceptions"], "review_tasks": patch["review_tasks"]}, writer
+        )
+    stored = await store.get(EID, AuditException, fresh)
+    assert stored is not None and (stored.version, stored.disposition) == (1, ExceptionDisposition.unattributed)
+
+
+async def test_auto_close_attributes_fresh_exception_on_its_first_version() -> None:
+    """需求 R322 (judgments_patch 的 fresh 同样用于自动关闭): 模板去掉 always_review, BA-01 判断 L3 accept 置信度 0.9
+    时自动关闭, 它解释的本次 D01 attributed 写在 v1 上 (attributed_by 为该判断), 不建任务."""
+    outcomes = {"BA-01": passed(autonomy_level=AutonomyLevel.L3)}
+    agent, ctx, _ = setup(outcomes=outcomes, exceptions=[])
+    template = ctx.template.model_copy(update={"always_review": False})
+    ctx = RunContext(ctx.engagement, ctx.procedure, template, ctx.run, ctx.state)
+    patch = await agent.run(ctx)
+    assert [(j.id, j.review_status) for j in patch["judgments"]] == [("J-CSH-02-1-BA-01", ReviewStatus.confirmed)]
+    assert [(x.id, x.version, x.disposition, x.attributed_by) for x in patch["exceptions"]] == [
+        ("X-CSH-02-1-D01-1", 1, ExceptionDisposition.attributed, "J-CSH-02-1-BA-01")
+    ]
+    assert patch["review_tasks"] == []
+
+
+XERO_D04 = "X-CSH-02-1-D04-1"  # Xero BA-091 回函应计利息未入账 (Xero演示数据集设计)
+
+
+async def assert_d04_unattributed(ran: Ran) -> None:
+    """Xero BA-091 判断失败后: 本次的 X-CSH-02-1-D04-1 在状态与存储里都只有 v1 (unattributed), 以它为目标的
+    T-X-CSH-02-1-D04-1-v1 待决 (带对象 BA-091); 存储里没有 v2."""
+    state, store = ran.state, ran.deps.output_store
+    eid = state["engagement_id"]
+    [d04] = [x for x in state["exceptions"] if x.id == XERO_D04]
+    assert (d04.version, d04.disposition, d04.source_ids) == (1, ExceptionDisposition.unattributed, ["BA-091"])
+    [task] = [t for t in state["review_tasks"] if t.target_id == XERO_D04]
+    assert (task.id, task.kind, task.status, task.subject_id) == (
+        f"T-{XERO_D04}-v1",
+        TaskKind.unattributed,
+        TaskStatus.pending,
+        "BA-091",
+    )
+    stored = await store.get(eid, AuditException, XERO_D04)
+    assert stored is not None and (stored.version, stored.disposition) == (1, ExceptionDisposition.unattributed)
+
+
+def flaky_ba091(case: XeroCase) -> FlakyLLM:
+    """副本的运行副本, BA-091 的 CSH-02 判断前 3 次 (MAX_ATTEMPTS) 都不是 JSON: 该对象判断失败, 转 unattributed."""
+    return FlakyLLM(LayeredMockLLMClient([case.supplements / "llm"]), {("CSH-02", "BA-091"): 3})
+
+
+@pytest.mark.external
+async def test_xero_failure_with_own_d04(xero_case: Any) -> None:
+    """需求 R322 验收 1 (R250 的探针): Xero T0 副本 (假存储) 上 BA-091 判断失败, 第一条规则例外为本次的 D04, 写入
+    不报 VersionConflict (见 assert_d04_unattributed). 连库同一情形见 test_xero_injections_db."""
+    case = xero_case("T0")
+    await assert_d04_unattributed(await run_programs(await offline_deps(case, llm=flaky_ba091(case)), ["CSH-02"]))
 
 
 async def test_patch_summary_and_merge_check() -> None:

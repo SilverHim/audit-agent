@@ -600,15 +600,22 @@ def file_refs(spec: dict[str, Any], rel: str) -> list[str]:
     return []
 
 
+def unregistered(spec: dict[str, Any]) -> set[str]:
+    """规格 documents 段中 registration 为空的 PDF: 照样生成, 不进 manifest 的 documents 段 (不登记为证据文件).
+    现为 fs_v1.pdf: 财务报表以账套为准 (Issue #46), 报表只作客户自行上传的样例, 演示导入不上传."""
+    return {doc["path"] for doc in spec["documents"] if "registration" in doc and doc["registration"] is None}
+
+
 def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = None) -> dict[str, Any]:
-    """重算补造目录的 manifest: 各文件哈希与合成标志, PDF 的登记信息, 快照各文件哈希 (不含 contacts.json).
-    测试副本传 injected (场景名). xero_refs 是否都在快照中由 generate 核对."""
+    """重算补造目录的 manifest: 各文件哈希与合成标志, PDF 的登记信息 (不登记的见 unregistered), 快照各文件哈希
+    (不含 contacts.json). 测试副本传 injected (场景名). xero_refs 是否都在快照中由 generate 核对."""
     if not snapshot_dir.is_dir():
         raise SystemExit(f"没有快照目录 {snapshot_dir}")
     spec = load_spec()
     snapshot = Snapshot(snapshot_dir)
     files: list[dict[str, Any]] = []
     documents: list[dict[str, Any]] = []
+    skipped = unregistered(spec)
     for path in sorted(directory.rglob("*")):
         rel = path.relative_to(directory).as_posix()
         if not path.is_file() or rel == "manifest.json":
@@ -624,7 +631,7 @@ def write_manifest(directory: Path, snapshot_dir: Path, injected: str | None = N
         if base is not None:
             item["base"] = base
         files.append(item)
-        if path.suffix == ".pdf":
+        if path.suffix == ".pdf" and rel not in skipped:
             doc = document_meta(spec, rel)
             if doc is None:
                 raise SystemExit(f"PDF {rel} 在规格 documents 段没有登记信息")

@@ -1,8 +1,8 @@
 """需求 R287: 演示公司 (Xero Demo Company (AU)) 在应用里走通. 只经 HTTP 接口, 照页面的做法一步步走 (walk):
 
 客户下拉取第一行 (演示公司) 的默认数据集与期间建项目 → 每个停点按数据管理页概览的 demo.suggested 导入该阶段的演示
-资料 (页面按钮的阶段同此): ACC-01 闸门处 acceptance, 等数据就绪时 fieldwork, 点 "数据已齐" 后在 PLN-01/03 闸门处
-statements (方案取舍: 在 FIN-01 处导入会让读文件登记的程序过期, R304) → 闸门决定取 GET /gate 的材料 → 复核按任务
+资料 (页面按钮的阶段同此): ACC-01 闸门处 acceptance, 等数据就绪时 fieldwork (财务报表以账套为准, 不再导入报表,
+Issue #46) → 闸门决定取 GET /gate 的材料 → 复核按任务
 列表逐条提交 (决定同 R119: BA-091 认定错报, 其余 confirm; GEN-02 的 7 条同 R146: XJ-499 认定错报, XJ-575 推翻为接受,
 其余 confirm) → FIN-01 无保留意见 → RPT-01 先退回再批准, 到归档.
 
@@ -10,9 +10,9 @@ statements (方案取舍: 在 FIN-01 处导入会让读文件登记的程序过�
 fixture 文件的程序由 llm_xero_only17 补位), 不用 R119 的分层客户端; 登记 mock 按项目数据集定位 (DatasetRegistrySource).
 功能集为演示配置 (.env.example 的 FEATURES=critic,collab,journals, R155, R146; R119 仍按基线回归). 断言: 例外, 判断,
 复核任务, 错报与汇总表为 R119 加 R146 的增量 (复用其断言函数), 报告与归档同 R119 (意见与报告不在 R146, FIN-01 仍按
-R119 的决定); 三个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
+R119 的决定); 两个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
 的 RPT-03 两稿放进正本后, 运行副本随之换成全接入两稿, 本模块的报告断言 (只开现有 17 条的两稿) 在同一提交里随之改.
-不与 R119 共用一次运行: 走 HTTP, 多导入 statements 阶段, 终态 (文件 22 份, 待审财报请求 received) 不同.
+不与 R119 共用一次运行: 走 HTTP, 经演示资料导入上传文件, 终态 (文件 21 份) 不同.
 读快照与补造目录, 标 external; 连库变体标 slow.
 """
 
@@ -85,7 +85,7 @@ DEMO_ABN = "25900043021"
 STOPS = [
     ("ACC-01", False, False, "acceptance"),
     (None, True, False, "fieldwork"),
-    ("PLN-01/03", False, False, "statements"),
+    ("PLN-01/03", False, False, None),
     (None, False, True, None),
     ("FIN-01", False, False, None),
     ("RPT-01", False, False, None),
@@ -316,11 +316,12 @@ async def test_demo_client_first_even_when_not_the_default(monkeypatch: pytest.M
 
 @shared_loop
 async def test_each_stop_suggests_its_stage(walked: Walk) -> None:
-    """停的位置依次为 ACC-01, 等数据就绪, PLN-01/03, 等复核, FIN-01, RPT-01 两次, 归档; 前三处建议的阶段依次为
-    acceptance, fieldwork, statements, 其余不建议. 三个阶段都已导入; 补交请求只剩审批日志 open (Xero 不给录入人)."""
+    """停的位置依次为 ACC-01, 等数据就绪, PLN-01/03, 等复核, FIN-01, RPT-01 两次, 归档; 前两处建议的阶段依次为
+    acceptance, fieldwork, 其余不建议 (不再要报表草稿, Issue #46). 两个阶段都已导入; 补交请求只剩审批日志 open
+    (Xero 不给录入人)."""
     assert walked.stops == STOPS
     demo = walked.summary["demo"]
-    assert (demo["stages_done"], demo["suggested"]) == (["acceptance", "fieldwork", "statements"], None)
+    assert (demo["stages_done"], demo["suggested"]) == (["acceptance", "fieldwork"], None)
     deps = walked.x.runner.deps
     assert {r.id: r.status for r in await deps.data.requests(walked.x.eid)} == {
         "REQ-accounts": "received",
@@ -328,14 +329,13 @@ async def test_each_stop_suggests_its_stage(walked: Walk) -> None:
         "REQ-journal_entries": "received",
         "REQ-contract": "received",
         "REQ-approval_log": "open",
-        "REQ-financial_statements": "received",
     }
 
 
 @shared_loop
 async def test_tables_and_documents_from_the_demo(walked: Walk) -> None:
-    """账表写成新数据版本, 来源沿用 R269: 快照七张为 xero (一版), 补造四张为 import (原文件名为补造来源文件); 上传 22
-    份 (承接 2, 外勤 19, 待审财报 1), 都由项目负责人上传; 合同 3 份抽取, 待审财报按请求登记为 financial_statements."""
+    """账表写成新数据版本, 来源沿用 R269: 快照七张为 xero (一版), 补造四张为 import (原文件名为补造来源文件); 上传 21
+    份 (承接 2, 外勤 19; 不再上传报表, Issue #46), 都由项目负责人上传; 合同 3 份抽取."""
     deps = walked.x.runner.deps
     eid = walked.x.eid
     versions = await deps.data.versions(eid)
@@ -347,10 +347,9 @@ async def test_tables_and_documents_from_the_demo(walked: Walk) -> None:
         "payroll/employees.csv",
     ]
     uploaded = [d for d in await deps.financial_store.documents(eid) if d.channel == "auditor_upload"]
-    assert len(uploaded) == 22 and {d.uploaded_by for d in uploaded} == {walked.x.owner}
+    assert len(uploaded) == 21 and {d.uploaded_by for d in uploaded} == {walked.x.owner}
     assert [d.status for d in uploaded if d.type is DocumentType.contract] == ["extracted"] * 3
-    [fs] = [d for d in uploaded if d.type is DocumentType.financial_statements]
-    assert fs.file_name == "fs_v1.pdf"
+    assert DocumentType.financial_statements not in {d.type for d in uploaded}
 
 
 # ── 验收 4: 计数为 R119 加 R146 的增量, 走到报告 ──
@@ -372,8 +371,7 @@ async def test_counts_and_report(walked: Walk) -> None:
 
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
-    """大模型 46 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; 待审财报上传后 A3 抽取一次, 需求 R217;
-    GEN-02 七笔凭证各一次, 需求 R146;
+    """大模型 45 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; GEN-02 七笔凭证各一次, 需求 R146;
     没有回落到 default.json 或找不到), 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本
     (应用里按项目数据集选目录)."""
     llm = walked.x.client
@@ -388,7 +386,6 @@ async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
         "CSH-02": 1,
         "GEN-02": 7,
         "RPT-03": 2,
-        "DOC-STATEMENTS": 1,
     }
     assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["r1", "r2"]
     assert len(set(reads)) == len(reads)

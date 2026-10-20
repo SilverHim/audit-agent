@@ -508,8 +508,8 @@ async def test_documents_versions_and_requests(xero17: Xero17) -> None:
 async def assert_documents(x: Xero17) -> None:
     """文件 23 份: 审计师上传 21 份 (负责人上传, 类型, 可靠性, 文件日期与关联对象同补造清单; 合同 3 份 extracted, 其余
     18 份 classified), 银行直达回函 2 份 (external_original, extracted). 数据版本 10 (方案取舍见确认材料 R119): 承接
-    文件 1, 快照七张 2, 补造四张 3 至 6, 上传后抽取的三份合同 7 至 9, 补登记 10. 补交请求中审批日志与待审财报仍 open,
-    其余 received."""
+    文件 1, 快照七张 2, 补造四张 3 至 6, 上传后抽取的三份合同 7 至 9, 补登记 10. 补交请求中审批日志仍 open, 其余
+    received."""
     deps = x.runner.deps
     documents = {d.id: d for d in await deps.financial_store.documents(x.eid)}
     planned = {u.document_id: u for u in xero_uploads() if u.stage in ("acceptance", "fieldwork")}
@@ -563,7 +563,6 @@ async def assert_documents(x: Xero17) -> None:
         "REQ-journal_entries": "received",
         "REQ-contract": "received",
         "REQ-approval_log": "open",
-        "REQ-financial_statements": "open",
     }
 
 

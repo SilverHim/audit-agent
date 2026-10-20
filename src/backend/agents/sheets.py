@@ -46,7 +46,8 @@ SHEET = ProcedureTemplate(
     owner=AgentId.A3,
     engine=Engine.llm,
     autonomy_level=AutonomyLevel.L2,
-    llm=LLMSpec(prompt="DOC-SHEET.md.j2", output_model="SheetRecognition", max_tokens=4096),
+    # 输出上限走缺省: 原来显式的 4096 等于旧缺省, 推理类模型的推理 token 计入上限, 会同 GEN-02 一样截断 (需求 R312)
+    llm=LLMSpec(prompt="DOC-SHEET.md.j2", output_model="SheetRecognition"),
 )
 SAMPLE_ROWS = 30  # 发给大模型的样本行数上限, 含标题行与空行 (issue #3 补充)
 FALLBACK = "按列名匹配, 请核对"  # 退回时理由的开头 (issue #3)
