@@ -1,0 +1,443 @@
+{
+  "conclusion": "Alex Morgan, who holds 85% of Demo Company (AU) Pty Ltd and is its sole director, is a director of Victoria Property Agency Pty Ltd and holds 50% of its shares, so it is a related party, and management's declaration of related parties does not list it. In the period the company paid it rent of AUD 4,500.00 excluding GST (AUD 4,950.00 including GST; XJ-420, XJ-518, XJ-593; BT-090-0004, BT-090-0033, BT-090-0058) under a rent letter, with no written lease, at a monthly rent 39.7% higher than the new lease of the same premises. Follow up under ASA 550 para 22(b), (c) and (d), and evaluate under para 22(e) whether the non-disclosure was intentional; the rent is in the normal course of business, so para 23 does not apply. The related party basis for this Tier 2 entity awaits the authoritative text of AASB 1060 (AASB 124 para 9(b)(vii) is a reference only).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Alex Morgan is the only director of Demo Company (AU) Pty Ltd, also its company secretary, and holds 85 of its 100 shares (85%).",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "officeholders[0]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "officeholders[1]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "shareholders[0]",
+          "page": 2,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Alex Morgan is a director of Victoria Property Agency Pty Ltd and holds 50% of its shares; Dana Morgan is the other director and holds the other 50%.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d7305364b2ae",
+          "locator": "officeholders[1]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-d7305364b2ae",
+          "locator": "shareholders[1]",
+          "page": 2,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Management's declaration of related parties lists Alex Morgan and Morgan Advisory Pty Ltd; Victoria Property Agency Pty Ltd is not listed.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "client_profile",
+          "source_id": "CLIENT-XERO-3C1332BB-Q1",
+          "locator": "related_parties",
+          "page": null,
+          "reliability": "internal_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Journal entries XJ-420, XJ-518 and XJ-593 (21 July, 21 August and 21 September 2026) each debit Rent (469) AUD 1,500.00 and GST AUD 150.00, a total of AUD 4,500.00 excluding GST and AUD 4,950.00 including GST.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-420-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-518-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-593-3",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank statement shows payments of AUD 1,650.00 to Victoria Property Agency on the same three dates (BT-090-0004, BT-090-0033, BT-090-0058).",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0004",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0033",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-090-0058",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The rent letter of 25 June 2026 from Victoria Property Agency, signed for it by Dana Morgan and accepted by Alex Morgan, sets a month-to-month occupation of 23 Main Street from 1 July 2026 at AUD 1,500.00 per month plus GST and states that no written lease will be entered into.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-31d9e46263fc",
+          "locator": "rent and no written lease",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "By notice of 28 August 2026 Victoria Property Agency ended the arrangement on 30 September 2026 because it has sold the property.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-abcccf593a3f",
+          "locator": "end of the arrangement",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The new lease of 22 September 2026 for the same premises from 1 October 2026, with the new owner, sets the rent at AUD 1,073.86 per month plus GST.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-0f8e8d98c18b",
+          "locator": "rent",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The monthly rent paid to Victoria Property Agency (AUD 1,500.00) is 39.7% higher than the rent under the new lease of the same premises (AUD 1,073.86).",
+      "evidence": [],
+      "from_steps": [
+        5,
+        7
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "A related party is a party that is a related party as defined in the applicable financial reporting framework (ASA 550 para 10(b)(i)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA550-P10",
+          "locator": "para 10",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "limitation",
+      "text": "The client profile records the framework as tier2_gpfs (Australian Accounting Standards - Simplified Disclosures), so the related party definition is the one in AASB 1060, whose authoritative text is not among the inputs. The relationship is assessed on control and key management personnel; AASB 124 para 9(b)(vii) describes the same relationship and is used only as a reference, not as the basis.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "client_profile",
+          "source_id": "CLIENT-XERO-3C1332BB-Q1",
+          "locator": "applicable_framework",
+          "page": null,
+          "reliability": "internal_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Alex Morgan controls the reporting entity and is a director and 50% shareholder of Victoria Property Agency, so Victoria Property Agency is a related party; management did not declare it, which is the matter rule finding X-GEN-08-1-R01-1 raises.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        9,
+        10
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "For a related party that management did not disclose, the auditor requests management to identify all transactions with it and enquires why controls failed, performs substantive procedures, reconsiders whether other undisclosed related parties exist, and evaluates whether the non-disclosure appears intentional (ASA 550 para 22(b) to (e)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA550-P22",
+          "locator": "para 22",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Additional procedures apply to significant related party transactions outside the normal course of business (ASA 550 para 23).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA550-P23",
+          "locator": "para 23",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Renting the office the company occupies is in its normal course of business, so para 23 does not apply; the rent is recorded and paid as agreed, but only a rent letter supports it and its rent is above the new lease.",
+      "evidence": [],
+      "from_steps": [
+        3,
+        4,
+        5,
+        8,
+        13
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The relationship and the AUD 4,950.00 of rent need to be followed up under para 22(b), (c) and (d), and whether the non-disclosure was intentional needs evaluating under para 22(e).",
+      "evidence": [],
+      "from_steps": [
+        6,
+        11,
+        12,
+        14
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "officeholders[0]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "officeholders[1]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "shareholders[0]",
+      "page": 2,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-d7305364b2ae",
+      "locator": "officeholders[1]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-d7305364b2ae",
+      "locator": "shareholders[1]",
+      "page": 2,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-XERO-3C1332BB-Q1",
+      "locator": "related_parties",
+      "page": null,
+      "reliability": "internal_copy"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-420-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-518-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-593-3",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0004",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0033",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-090-0058",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-31d9e46263fc",
+      "locator": "rent and no written lease",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-abcccf593a3f",
+      "locator": "end of the arrangement",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-0f8e8d98c18b",
+      "locator": "rent",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA550-P10",
+      "locator": "para 10",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-XERO-3C1332BB-Q1",
+      "locator": "applicable_framework",
+      "page": null,
+      "reliability": "internal_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA550-P22",
+      "locator": "para 22",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA550-P23",
+      "locator": "para 23",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A record that management did disclose Victoria Property Agency, or registry evidence that Alex Morgan had ceased to be its director and shareholder before 1 July 2026, would remove the undisclosed relationship; a market rent assessment for 23 Main Street would show whether AUD 1,500.00 a month is an arm's length rent.",
+  "proposed_action": "more_evidence",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

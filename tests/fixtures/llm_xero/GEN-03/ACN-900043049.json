@@ -1,0 +1,193 @@
+{
+  "conclusion": "Alex Morgan, the sole director and 85% shareholder of Demo Company (AU) Pty Ltd, is the director of Morgan Advisory Pty Ltd and holds 100% of its shares, so it is a related party; it is in management's declaration of related parties. No transactions with it were found in the period or in the 30 days after it.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Alex Morgan is the only director of Demo Company (AU) Pty Ltd, also its company secretary, and holds 85 of its 100 shares (85%).",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "officeholders[0]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "officeholders[1]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-c15d981bf4f9",
+          "locator": "shareholders[0]",
+          "page": 2,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Alex Morgan is the director of Morgan Advisory Pty Ltd and holds all of its shares (100%).",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-7a45958ff2c1",
+          "locator": "officeholders[0]",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-7a45958ff2c1",
+          "locator": "shareholders[0]",
+          "page": 2,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Management's declaration of related parties lists Morgan Advisory Pty Ltd as a company controlled by the director, with its ACN.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "client_profile",
+          "source_id": "CLIENT-XERO-3C1332BB-Q1",
+          "locator": "related_parties",
+          "page": null,
+          "reliability": "internal_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "limitation",
+      "text": "No journal entries, bank transactions or sales invoices mention Morgan Advisory Pty Ltd in the period or in the 30 days after it; transactions recorded under another name would not be found by this search.",
+      "evidence": [],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "A related party is a party that is a related party as defined in the applicable financial reporting framework (ASA 550 para 10(b)(i)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA550-P10",
+          "locator": "para 10",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "limitation",
+      "text": "The client profile records the framework as tier2_gpfs (Australian Accounting Standards - Simplified Disclosures), so the related party definition is the one in AASB 1060, whose authoritative text is not among the inputs. The relationship is assessed on control and key management personnel; AASB 124 para 9(b)(vii) describes the same relationship and is used only as a reference, not as the basis.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "client_profile",
+          "source_id": "CLIENT-XERO-3C1332BB-Q1",
+          "locator": "applicable_framework",
+          "page": null,
+          "reliability": "internal_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Morgan Advisory is a related party, being wholly owned by Alex Morgan, who controls the reporting entity; management has declared it and there were no transactions with it in the period or after it, so no further work is needed.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "officeholders[0]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "officeholders[1]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-c15d981bf4f9",
+      "locator": "shareholders[0]",
+      "page": 2,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "officeholders[0]",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-7a45958ff2c1",
+      "locator": "shareholders[0]",
+      "page": 2,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-XERO-3C1332BB-Q1",
+      "locator": "related_parties",
+      "page": null,
+      "reliability": "internal_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA550-P10",
+      "locator": "para 10",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-XERO-3C1332BB-Q1",
+      "locator": "applicable_framework",
+      "page": null,
+      "reliability": "internal_copy"
+    }
+  ],
+  "counter_argument": "A transaction with Morgan Advisory recorded under another name, or an undeclared balance owed to or by it, would call for further work on its terms and disclosure.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}
