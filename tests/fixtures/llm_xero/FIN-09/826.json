@@ -1,0 +1,94 @@
+{
+  "conclusion": "Audit adjustment AJE-X02 credits 826 Superannuation Payable AUD 4,261.20 and so records in full the superannuation guarantee at 12% on wages of AUD 33,500.00 and accrued wages of AUD 2,010.00. Its other line debits 478 Superannuation AUD 4,261.20, the expense side of the accrual. The residual amount is nil, so no misstatement remains.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "AJE-X02 (source 826) credits 826 Superannuation Payable AUD 4,261.20 (AJE-X02-2), the superannuation guarantee at 12% on wages of AUD 33,500.00 and accrued wages of AUD 2,010.00.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X02-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "AJE-X02 debits 478 Superannuation AUD 4,261.20 (AJE-X02-1), the expense for the same amount.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X02-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "After management has corrected misstatements at the auditor's request, the auditor performs additional procedures to determine whether misstatements remain (ASA 450 para 7).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P07",
+          "locator": "para 7",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The adjustment records the understated superannuation payable in full against the expense, so no misstatement remains.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X02-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X02-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P07",
+      "locator": "para 7",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A later entry that reverses AJE-X02, or a difference between AJE-X02 and the amount of the misstatement, would show that a misstatement remains.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9,
+  "fully_corrected": true,
+  "other_accounts": [
+    "478"
+  ]
+}

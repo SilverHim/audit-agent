@@ -987,7 +987,8 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
     assert set().union(*AGENT_FIELDS.values()) <= set(FIELD_REPLAY) <= set(STATE_HINTS)
     declared = Counter(f for t in LIBRARY.all(include_disabled=True) for f in t.outputs)
     shared = {f for f, n in declared.items() if n > 1}
-    assert shared == {"exceptions", "judgments", "review_tasks", "confirmations", "documents"}
+    # misstatements: FIN-03 与 FIN-09 (需求 R157, R164) 都写错报新版本
+    assert shared == {"exceptions", "judgments", "review_tasks", "confirmations", "documents", "misstatements"}
     assert all(FIELD_REPLAY[f] in SHAREABLE for f in shared)
 
 

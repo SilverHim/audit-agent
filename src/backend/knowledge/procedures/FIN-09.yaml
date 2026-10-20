@@ -1,0 +1,46 @@
+id: FIN-09
+name: 更正验证
+# 规格书 6.1.2 (FIN-09 在 FIN-08 与 GEN-05 增量之后), 7.2 (L2 混合), UC-06 第 3 步 (规则核对调整分录与错报, 大模型判断
+# 是否完整更正及是否影响其他科目); ASA 450 第 7 段 (管理层按审计师要求更正后, 审计师执行追加程序确定是否仍有错报).
+# 需求 R164 定模板, A8 的执行由 R165 加.
+# 判断对象是 verifying 的错报, 每条一个 (subject_id 为错报 ID); mock 的 fixture_key 取错报来源判断的 subject_id (同
+# FIN-03, 如凭证号 XJ-499, 银行账户 BA-091, 科目代码). 规则 V01 取审计更正分录的全部行: 凭证号以 adjustment_prefix 开头
+# (数据集声明, 缺省 "AJE-"; 按前缀比较, 不用 LIKE, 前缀中的 % 与 _ 不作通配符), 不看 is_adjustment (Xero 的手工分录
+# is_adjustment 也为真). 按来源对象与科目匹配更正行, 算已更正额与剩余额在代码中做 (R165); 不写死科目代码.
+# 与需求 R164 验收 1 字面的差异 (协调者 10-20 裁定):
+# - depends_on 先为空: 错报沟通 FIN-08 还没有模板, 程序库不丢弃不存在的依赖; R161 加 FIN-08.yaml 时补上, 分录段的
+#   GEN-05 增量就绪后再加 GEN-05;
+# - manual_result_allowed 先为假: P2 以外的节点等人时失败任务只认 rerun, 程序库加载时拒绝; R165 改为真;
+# - misstatement_update_kind (verification) 不写: 模板字段由 R159 加;
+# - outputs 不含 exceptions: 不匹配的 V02 例外与 A8 写入范围的 exceptions 由 R165 加.
+phase: P3_Completion
+cycle: Completion
+owner: A8
+feature: misstatement             # 功能开关 (services/features.py): 错报闭环
+outputs: [judgments, review_tasks, misstatements]
+reads: [journal_entries, accounts]   # V01 的更正分录行与科目表
+engine: hybrid
+autonomy_level: L2
+manual_result_allowed: false
+depends_on: []
+params:
+  adjustment_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录的凭证号前缀
+standards: [ASA450-P07]
+evidence_required: [voucher]
+rules:
+  - id: V01
+    name: 审计更正分录的全部行
+    severity: medium
+    emit: rows
+    sql: |
+      SELECT 'journal_entry' AS source_type, j.id, j.entry_no, j.posting_date, j.account_code,
+             a.name AS account_name, a.type AS account_type, a.category AS account_category,
+             j.debit_cents, j.credit_cents, j.description, j.source_doc
+      FROM journal_entries j
+      LEFT JOIN accounts a ON a.engagement_id = j.engagement_id AND a.code = j.account_code
+      WHERE j.engagement_id = :eid
+        AND left(j.entry_no, length(CAST(:adjustment_prefix AS text))) = CAST(:adjustment_prefix AS text)
+      ORDER BY j.entry_no, j.id
+llm:
+  prompt: FIN-09.md.j2
+  output_model: CorrectionVerificationDraft

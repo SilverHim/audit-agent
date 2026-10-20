@@ -42,6 +42,9 @@ class JudgmentContext(Model):
     # 本项目采用版本的客户画像 (需求 R128): 给了时推理链可引用它 (client_profile 指针), 校验时原样交给 OutputValidator.
     # judge 不把它放进提示词 (提示词只看 data 等变量), 调用方须同时把画像 (ID 与所需字段) 放进 data, 模型才引用得到
     client_profile: ClientProfile | None = None
+    # FIN-09 (需求 R164): 规则算出的剩余额与匹配凭证各行的科目代码, judge 原样放进 ValidationContext; 其余程序为空
+    expected_residual_cents: int | None = None
+    entry_account_codes: list[str] | None = None
 
 
 class JudgmentOutcome(Model):
@@ -79,6 +82,10 @@ class ValidationContext(Model):
     # 时间表不早于 period_end (审计期间止). 其余输出不用, 为空
     expected_procedure_ids: list[str] | None = None
     period_end: date | None = None
+    # FIN-09 的更正验证草稿 (CorrectionVerificationDraft, 需求 R164): fully_corrected 须与 "规则算出的剩余额为 0" 一致,
+    # other_accounts 须在匹配凭证各行的科目代码内. 其余输出不用, 为空
+    expected_residual_cents: int | None = None
+    entry_account_codes: list[str] | None = None
     # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针
     # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为 None 不核对 (抽取, 分类, 报告与 GEN-09 第二轮等不按引用级
     # 解析准则片段的输出). 必填, 不给缺省值: 新调用方漏传时类型检查即报, 不会静默不核对

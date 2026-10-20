@@ -18,6 +18,7 @@ from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
+    CorrectionVerificationDraft,
     CriticIndependent,
     CriticVerdictOut,
     DocumentClassification,
@@ -278,6 +279,20 @@ def going_concern_semantics(advice: GoingConcernAdvice) -> list[str]:
     )
     if required is not None and not cited:
         errors.append(f"建议 {advice.proposed_outcome} 而推理链没有引用 {required} 的 standard 步骤")
+    return errors
+
+
+def verification_semantics(
+    draft: CorrectionVerificationDraft, residual_cents: int, entry_account_codes: Sequence[str]
+) -> list[str]:
+    """更正验证 (FIN-09, 需求 R164) 的语义校验, 返回错误 (空为通过): fully_corrected 须与规则算出的剩余额为 0 一致;
+    other_accounts 只能取匹配凭证各行的科目代码."""
+    errors = []
+    if draft.fully_corrected != (residual_cents == 0):
+        errors.append(f"fully_corrected 为 {draft.fully_corrected}, 与规则算出的剩余额 {residual_cents} 不符")
+    outside = [code for code in draft.other_accounts if code not in entry_account_codes]
+    if outside:
+        errors.append(f"other_accounts 含匹配凭证以外的科目: {', '.join(outside)}")
     return errors
 
 
@@ -772,6 +787,23 @@ async def check_classification(
     return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
 
 
+async def check_verification(
+    validator: OutputValidator, eid: str, output: CorrectionVerificationDraft, ctx: ValidationContext
+) -> CheckResult:
+    """更正验证草稿 (FIN-09, 需求 R164): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级
+    另查是否完整更正与其他科目 (verification_semantics). ctx 缺 expected_residual_cents 或 entry_account_codes 时抛
+    ValueError."""
+    residual, codes = ctx.expected_residual_cents, ctx.entry_account_codes
+    if residual is None or codes is None:
+        raise ValueError(
+            "更正验证的校验须给出规则算出的剩余额与匹配凭证的科目 (ValidationContext.expected_residual_cents, "
+            "entry_account_codes)"
+        )
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    extra = verification_semantics(output, residual, codes) if level != "reference" else []
+    return CheckResult(draft, "semantic" if extra else level, unsupported, errors + extra)
+
+
 async def check_extraction(
     validator: OutputValidator, eid: str, output: Extraction, ctx: ValidationContext
 ) -> CheckResult:
@@ -848,6 +880,7 @@ async def structure_only(
 for _model, _check in (
     (JudgmentDraft, check_judgment),
     (MisstatementClassificationDraft, check_classification),
+    (CorrectionVerificationDraft, check_verification),
     (ContractExtraction, check_extraction),
     (ConfirmationExtraction, check_extraction),
     (RegistryExtraction, check_extraction),
@@ -1036,7 +1069,11 @@ class JudgmentEngine:
             run,
             variables,
             ValidationContext(
-                rule_findings=ctx.rule_findings, client_profile=ctx.client_profile, standards_of=template.id
+                rule_findings=ctx.rule_findings,
+                client_profile=ctx.client_profile,
+                standards_of=template.id,
+                expected_residual_cents=ctx.expected_residual_cents,
+                entry_account_codes=ctx.entry_account_codes,
             ),
             template.owner,
             ctx.fixture_key,

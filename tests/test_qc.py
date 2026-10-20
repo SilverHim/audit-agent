@@ -273,16 +273,18 @@ async def test_unschedulable_misstatement_fails_fin04_for_a_human(status: str) -
     assert {p.id: p.status for p in pack}["FIN-04"] is ProcedureStatus.awaiting_human
 
 
-def test_fin04_depends_on_fin03_only_when_misstatement_is_on() -> None:
-    """验收 7 (本条写 [FIN-03], FIN-09 由 R164 落地时加入): 基线下 FIN-03 未启用, FIN-04 的有效依赖为 [] (程序库丢弃对
-    已关闭功能的程序的依赖), 构造不报错; 功能 misstatement 打开时为 [FIN-03]."""
+def test_fin04_depends_on_classification_and_verification_only_when_misstatement_is_on() -> None:
+    """验收 7 (FIN-09 由 R164 加入): 基线下 FIN-03, FIN-09 未启用, FIN-04 的有效依赖为 [] (程序库丢弃对已关闭功能的
+    程序的依赖), 构造不报错; 功能 misstatement 打开时为 [FIN-03, FIN-09]."""
     from backend.core.config import get_settings
 
     root = get_settings().KNOWLEDGE_ROOT
     base = ProcedureLibrary(root)
     assert base.load("FIN-04").depends_on == []
     assert [t.id for t in base.closure(["FIN-04"])] == ["FIN-04"]
-    assert ProcedureLibrary(root, frozenset({"critic", "misstatement"})).load("FIN-04").depends_on == ["FIN-03"]
+    on = ProcedureLibrary(root, frozenset({"critic", "misstatement"}))
+    assert on.load("FIN-04").depends_on == ["FIN-03", "FIN-09"]
+    assert [t.id for t in on.closure(["FIN-04"])] == ["FIN-03", "FIN-09", "FIN-04"]
 
 
 async def test_string_status_from_checkpoint_fallback_fails_whole_run() -> None:
