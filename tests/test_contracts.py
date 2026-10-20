@@ -55,6 +55,7 @@ from backend.contracts.models import (
     TrailKind,
     WrittenRepresentationLetter,
     company_node_id,
+    organisation_node_id,
     person_node_id,
     split_full_name,
 )
@@ -486,7 +487,7 @@ def test_person_node_id_rejects_empty_family_name() -> None:
 
 def test_full_name_split_and_company_node_id() -> None:
     """验收 2: 摘录中只有全名时姓取最后一个词, 名取其余词; 含逗号时按 "姓, 名" 拆 (R136 审核意见 03); 公司节点
-    ACN-{acn}, ACN 先去掉空白, 之后不是 9 位数字抛 ValueError (审核意见 04)."""
+    ACN-{acn}, ACN 先去掉空白, 之后不是 9 位数字抛 ValueError (审核意见 04); 没有 ACN 的公司 ORG-{名称}."""
     assert split_full_name("Sam Whitfield") == ("Whitfield", "Sam")
     assert split_full_name("  Mary Ann  O'Connor ") == ("O'Connor", "Mary Ann")
     assert person_node_id(*split_full_name("Mary Ann O'Connor"), None) == "PER-OCONNOR-MARYANN-NODOB"
@@ -499,6 +500,11 @@ def test_full_name_split_and_company_node_id() -> None:
     for acn in ("", "90004302", "9000430211", "900-043-021"):
         with pytest.raises(ValueError, match="acn 须为 9 位数字"):
             company_node_id(acn)
+    # 没有 ACN 的公司 (需求 R137; 审核意见 R137-02): ORG-{名称}, 名称规范化后为空时抛 ValueError
+    assert organisation_node_id("Galah Holdings (NZ) Limited") == "ORG-GALAHHOLDINGSNZLIMITED"
+    for name in ("", "  ", "株式会社", "—"):
+        with pytest.raises(ValueError, match="名称规范化后为空"):
+            organisation_node_id(name)
 
 
 # ── R216: 待审财报 ──

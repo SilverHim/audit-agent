@@ -3,10 +3,11 @@
 EvidenceAgent 按程序编号分派到这里: Penetrator 依次查登记 (每次一行 external_call, PDF 存档为 registry_extract),
 build_graph 由取得的公司摘录建 OwnershipGraph, undeclared_leads 与画像申报清单比对出 R01 例外. 不调大模型.
 
-穿透顺序: ABN Lookup 客户 ABN 取 ACN → 报告主体的公司摘录 → 逐层取法人股东的摘录 (至多 max_depth 层) → 对报告主体
-及其母公司链上的高管与持股不低于 significant_pct 且出生日期已知的个人做人员检索, 取其任职或持股的其他公司的摘录
+穿透顺序: ABN Lookup 客户 ABN 取 ACN → 报告主体的公司摘录 → 母公司链: 逐层取持股不低于 significant_pct 的法人股东的
+摘录 (至多 max_depth 层) → 对报告主体及母公司链上有出生日期的高管做人员检索, 取其任职或持股的其他公司的摘录
 (person_hops 轮). 查不到摘录, 没有 ACN, 或超过 max_depth 的公司照样建节点 (searched 为假) 与关系, 不再往下穿透;
-其穿透中断例外 (R02) 与按留痕重建, 失败路径由需求 R138 做.
+其穿透中断例外 (R02) 与按留痕重建, 失败路径由需求 R138 做. 持股低于 significant_pct 的法人股东不在链上: 只由摘录建
+节点与关系, 不查询, 不出 R01.
 """
 
 from dataclasses import dataclass, field
@@ -20,6 +21,8 @@ from backend.contracts.models import (
     AsicExtract,
     AuditException,
     ClientProfile,
+    DeclaredHolding,
+    DeclaredParty,
     DocumentRef,
     DocumentType,
     EvidencePointer,
@@ -27,7 +30,6 @@ from backend.contracts.models import (
     OwnershipGraph,
     PartyLink,
     PartyNode,
-    PersonSearch,
     Reliability,
     Shareholding,
     TrailEntry,
@@ -71,16 +73,22 @@ def name_key(name: str) -> tuple[str, str]:
     return node_name_part(family), node_name_part(given)
 
 
-def births(extract: AsicExtract) -> dict[tuple[str, str], date]:
-    """摘录高管栏的出生日期, 按规范化姓名; 股东行据此取出生日期 (只持股不任职的取不到)."""
-    return {name_key(o.name): o.birth_date for o in extract.officeholders if o.birth_date is not None}
+def known_people(extract: AsicExtract) -> dict[tuple[str, str], str]:
+    """摘录高管栏中有出生日期的个人, 规范化姓名 → 节点 ID; 同一摘录的股东行据此并入高管的节点."""
+    return {name_key(o.name): person_ref(o.name, o.birth_date)[0] for o in extract.officeholders if o.birth_date}
 
 
-def shareholder_node_id(holder: Shareholding, extract: AsicExtract) -> str:
-    """股东行的节点 ID: 个人取同一摘录高管栏的出生日期 (没有为 NODOB); 公司为 ACN-{acn}, 没有 ACN 为 ORG-{名称}."""
+def shareholder_node_id(holder: Shareholding, people: dict[tuple[str, str], str]) -> str:
+    """股东行的节点 ID: 个人按规范化姓名取 people 中的节点 (同一摘录有出生日期的高管, 或发现这家公司的检索对象),
+    取不到为 NODOB; 公司为 ACN-{acn} (ACN 去空白), 没有 ACN 为 ORG-{名称}."""
     if holder.kind == "person":
-        return person_ref(holder.name, births(extract).get(name_key(holder.name)))[0]
+        return people.get(name_key(holder.name)) or person_ref(holder.name, None)[0]
     return company_node_id(holder.acn) if holder.acn else organisation_node_id(holder.name)
+
+
+def acn_of(node_id: str) -> str | None:
+    """公司节点 ID 中规范化后的 ACN (ACN-{acn} 的数字部分); ORG- 节点为空. 查询, 幂等键与节点都用它."""
+    return node_id.removeprefix("ACN-") if node_id.startswith("ACN-") else None
 
 
 @dataclass(frozen=True)
@@ -110,7 +118,7 @@ class Penetration:
     profile: ClientProfile  # 本项目采用的那版画像
     leads: list[Lead] = field(default_factory=list)
     extracts: dict[str, Found[AsicExtract]] = field(default_factory=dict)  # 公司节点 ID → 摘录
-    searches: dict[str, Found[PersonSearch] | None] = field(default_factory=dict)  # 人员节点 ID → 检索结果
+    searches: dict[str, bool] = field(default_factory=dict)  # 检索过的人员节点 ID → 是否取得了检索结果
     documents: list[DocumentRef] = field(default_factory=list)  # 存档的 PDF, 按查询顺序
 
     def known(self, node_id: str) -> bool:
@@ -130,17 +138,17 @@ class Penetrator:
     async def run(self) -> Penetration:
         """按模块说明的顺序查完, 返回查询所得. 画像取本项目采用的那一版 (状态中的 client_profile_version), 查不到抛
         LookupError; 客户 ABN 查不到或没有 ACN 时写完那行留痕后抛 LookupError."""
-        engagement, version = self.ctx.engagement, self.ctx.state["client_profile_version"]
-        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
-        if profile is None:
-            raise LookupError(f"client profile {engagement.client_id} v{version} not found")
+        from backend.agents.ingest import client_profile  # 在此导入: ingest 导入 evidence, evidence 导入本模块
+
+        profile = await client_profile(self.deps, self.ctx.engagement, self.ctx.state["client_profile_version"])
         record = await self.deps.registry.abn(self.eid, profile.abn)
         result = record.model_dump(mode="json") if record is not None else None
         await self.record(f"ABN Lookup {profile.abn}", f"abn:{profile.abn}", {"abn": profile.abn, "result": result})
         if record is None or record.acn is None:
             raise LookupError(f"{PROCEDURE_ID}: 客户 ABN {profile.abn} 查不到, 或登记没有 ACN (不是公司), 无从穿透")
         found = Penetration(profile)
-        chain = await self.reach(found, [Lead(company_node_id(record.acn), record.entity_name, record.acn)])
+        entity = company_node_id(record.acn)
+        chain = await self.reach(found, [Lead(entity, record.entity_name, acn_of(entity))])
         level = chain
         for _ in range(int(self.params["max_depth"])):
             level = await self.reach(found, self.parents(found, level))
@@ -150,12 +158,12 @@ class Penetrator:
         for _ in range(int(self.params["person_hops"])):
             leads: list[Lead] = []
             for node_id, family, given, birth_date in self.people(found, companies):
-                leads += await self.search(found, node_id, family, given, birth_date, leads)
+                leads += await self.search(found, node_id, family, given, birth_date)
             companies = await self.reach(found, leads)
         return found
 
     async def reach(self, found: Penetration, leads: list[Lead], fetch: bool = True) -> list[Lead]:
-        """登记新发现的公司 (已登记的跳过), 有 ACN 且 fetch 时取其摘录; 返回取得了摘录的."""
+        """登记新发现的公司 (已登记的与列表中重复的跳过, 留首次出现的), 有 ACN 且 fetch 时取其摘录; 返回取得了摘录的."""
         fetched: list[Lead] = []
         for lead in leads:
             if found.known(lead.node_id):
@@ -182,49 +190,41 @@ class Penetrator:
         return fetched
 
     def parents(self, found: Penetration, companies: list[Lead]) -> list[Lead]:
-        """这些公司的法人股东 (按摘录顺序, 去重, 已登记的不算)."""
-        leads: dict[str, Lead] = {}
+        """这些公司在母公司链上的法人股东: 持股不低于 significant_pct 的, 按摘录顺序 (去重与已登记的由 reach 处理).
+        持股更低的不在链上, 只由 build_graph 按摘录建节点与关系."""
+        threshold = float(self.params["significant_pct"])
+        leads: list[Lead] = []
         for company in companies:
             got = found.extracts[company.node_id]
             for i, holder in enumerate(got.record.shareholders):
-                if holder.kind != "company":
+                if holder.kind != "company" or holder.pct < threshold:
                     continue
-                node_id = shareholder_node_id(holder, got.record)
-                if not found.known(node_id) and node_id not in leads:
-                    at = pointer(got.document, SHAREHOLDER_PAGE, f"shareholders[{i}]")
-                    leads[node_id] = Lead(node_id, holder.name, holder.acn, company.node_id, at)
-        return list(leads.values())
+                node_id = shareholder_node_id(holder, {})
+                at = pointer(got.document, SHAREHOLDER_PAGE, f"shareholders[{i}]")
+                leads.append(Lead(node_id, holder.name, acn_of(node_id), company.node_id, at))
+        return leads
 
     def people(self, found: Penetration, companies: list[Lead]) -> list[tuple[str, str, str, date]]:
-        """要检索的个人 (节点 ID, 姓, 名, 出生日期): 这些公司的高管与持股不低于 significant_pct 的个人, 出生日期已知,
-        还没检索过; 按公司顺序, 高管在前, 去重."""
-        threshold = float(self.params["significant_pct"])
+        """要检索的个人 (节点 ID, 姓, 名, 出生日期): 这些公司有出生日期的高管, 还没检索过; 按公司与高管栏顺序, 去重.
+        持股个人的出生日期只能来自同一摘录的高管栏, 所以持股达到 significant_pct 而出生日期已知的个人都已是高管,
+        不另取股东行 (YAML 注释同)."""
         wanted: dict[str, tuple[str, str, str, date]] = {}
         for company in companies:
-            extract = found.extracts[company.node_id].record
-            born = births(extract)
-            rows: list[tuple[str, date | None]] = [(o.name, o.birth_date) for o in extract.officeholders]
-            rows += [
-                (s.name, born.get(name_key(s.name)))
-                for s in extract.shareholders
-                if s.kind == "person" and s.pct >= threshold
-            ]
-            for name, birth_date in rows:
-                if birth_date is None:
+            for officer in found.extracts[company.node_id].record.officeholders:
+                if officer.birth_date is None:
                     continue
-                node_id, family, given = person_ref(name, birth_date)
+                node_id, family, given = person_ref(officer.name, officer.birth_date)
                 if node_id not in found.searches and node_id not in wanted:
-                    wanted[node_id] = (node_id, family, given, birth_date)
+                    wanted[node_id] = (node_id, family, given, officer.birth_date)
         return list(wanted.values())
 
-    async def search(
-        self, found: Penetration, node_id: str, family: str, given: str, birth_date: date, pending: list[Lead]
-    ) -> list[Lead]:
-        """人员检索一人, 返回其任职或持股的公司中新发现的 (按检索结果的顺序; 已登记与 pending 中的不算)."""
+    async def search(self, found: Penetration, node_id: str, family: str, given: str, birth_date: date) -> list[Lead]:
+        """人员检索一人, 返回其任职或持股的公司 (按检索结果的顺序; 去重与已登记的由 reach 处理). 留痕摘要只写本次
+        执行的检索序号, 不写姓名与出生日期 (摘要会经审计助理的工具发给对话模型); 参数在 payload 与幂等键里."""
         person = await self.deps.registry.asic_person(self.eid, family, given, birth_date)
         document = await self.archive(found, person.file_name, person.file_bytes) if person else None
         await self.record(
-            f"ASIC person search {node_id.removeprefix('PER-')}",
+            f"ASIC person search #{len(found.searches) + 1}",
             f"person:{node_id.removeprefix('PER-')}",
             {
                 "family_name": family,
@@ -234,17 +234,15 @@ class Penetrator:
                 "document_id": document.id if document else None,
             },
         )
-        found.searches[node_id] = Found(person, document) if person is not None and document is not None else None
+        found.searches[node_id] = person is not None and document is not None
         if person is None or document is None:
             return []
-        leads: dict[str, Lead] = {}
-        taken = {lead.node_id for lead in pending}
+        leads: list[Lead] = []
         for i, role in enumerate(person.roles):
             company = company_node_id(role.acn)
-            if not found.known(company) and company not in taken and company not in leads:
-                at = pointer(document, PERSON_PAGE, f"roles[{i}]")
-                leads[company] = Lead(company, role.company_name, role.acn, node_id, at)
-        return list(leads.values())
+            at = pointer(document, PERSON_PAGE, f"roles[{i}]")
+            leads.append(Lead(company, role.company_name, acn_of(company), node_id, at))
+        return leads
 
     async def archive(self, found: Penetration, file_name: str, data: bytes) -> DocumentRef:
         """登记 PDF 存档 (registry_extract, 外部原件, 结构化结果已取得故为 extracted)."""
@@ -276,9 +274,10 @@ class Penetrator:
 
 def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
     """由取得的公司摘录建关系图. 公司节点为发现的各公司 (取得了摘录的名称按摘录, searched 为真; 报告主体另带画像的
-    ABN) 与这些摘录里其余的法人股东; 人员节点为摘录里的高管与个人股东 (股东行与同一摘录的高管按规范化姓名合并, 取其
-    出生日期), searched 为取得了人员检索结果. 关系只取公司摘录: 按发现顺序逐份, 高管 (第 1 页, officeholders[i]) 在前,
-    股东 (第 2 页, shareholders[i]) 在后. 节点按 ID 排序."""
+    ABN) 与这些摘录里其余的法人股东 (持股低于 significant_pct 的, 以及人员检索发现的公司的法人股东); 人员节点为摘录里的
+    高管与个人股东, searched 为取得了人员检索结果. 股东行按规范化姓名并入同一摘录有出生日期的高管; 由某人的检索结果
+    发现的公司, 其摘录里与该人同名的股东行并入该人的节点 (只持股不任职时也是一个节点). 关系只取公司摘录: 按发现顺序
+    逐份, 高管 (第 1 页, officeholders[i]) 在前, 股东 (第 2 页, shareholders[i]) 在后. 节点按 ID 排序."""
     entity = found.leads[0]
     nodes: dict[str, PartyNode] = {}
     for lead in found.leads:
@@ -297,6 +296,9 @@ def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
         if got is None:
             continue
         extract, document = got.record, got.document
+        people = known_people(extract)
+        if lead.via in found.searches:  # 由这个人的检索结果发现的公司; 节点在他任职的那份摘录里已建
+            people.setdefault(name_key(nodes[lead.via].name), lead.via)
         for i, officer in enumerate(extract.officeholders):
             node_id = person_ref(officer.name, officer.birth_date)[0]
             nodes.setdefault(
@@ -309,12 +311,9 @@ def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
                 )
             )
         for i, holder in enumerate(extract.shareholders):
-            node_id = shareholder_node_id(holder, extract)
-            if node_id not in nodes:
-                born = births(extract).get(name_key(holder.name)) if holder.kind == "person" else None
-                nodes[node_id] = PartyNode(
-                    id=node_id, kind=holder.kind, name=holder.name, acn=holder.acn, birth_date=born
-                )
+            node_id = shareholder_node_id(holder, people)
+            if node_id not in nodes:  # 并入高管或检索对象的已建好; 新建的个人没有出生日期
+                nodes[node_id] = PartyNode(id=node_id, kind=holder.kind, name=holder.name, acn=acn_of(node_id))
             at = pointer(document, SHAREHOLDER_PAGE, f"shareholders[{i}]")
             links.append(
                 PartyLink(
@@ -327,7 +326,7 @@ def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
                 )
             )
     for node_id, result in found.searches.items():
-        nodes[node_id] = nodes[node_id].model_copy(update={"searched": result is not None})
+        nodes[node_id] = nodes[node_id].model_copy(update={"searched": result})
     return OwnershipGraph(
         id=OWNERSHIP_GRAPH_ID,
         run_id=run_id,
@@ -337,21 +336,26 @@ def build_graph(run_id: str, found: Penetration) -> OwnershipGraph:
     )
 
 
-def declared(profile: ClientProfile, name: str, acn: str | None, suffixes: list[str]) -> bool:
-    """公司是否在画像的申报清单中 (related_parties 与 ownership 中的公司): 申报项有 acn 或 abn 时按 ACN 比 (acn, 或
-    abn 的后 9 位); 两者都没有时按名称比, 两边经 party_name_key (不去前缀, 去 suffixes) 后相等; 键为 None (规范化后
-    为空: 只有非拉丁字母, 或只剩公司后缀) 的不参与比对, 不算相等."""
-    parties = [(p.name, p.acn, p.abn) for p in profile.related_parties if p.kind == "company"]
-    parties += [(h.holder, None, None) for h in profile.ownership if h.kind == "company"]
-    for party_name, party_acn, party_abn in parties:
+def declared(
+    profile: ClientProfile, name: str, acn: str | None, suffixes: list[str]
+) -> DeclaredParty | DeclaredHolding | None:
+    """画像申报清单 (related_parties 与 ownership 中的公司, 按此顺序) 中与该公司匹配的第一项, 没有为 None (GEN-03
+    取同一项, 需求 R139). 申报项有 acn 或 abn 时按 ACN 比 (acn, 或 abn 的后 9 位), 不再比名称; 两者都没有时按名称比,
+    两边经 party_name_key (不去前缀, 去 suffixes) 后相等; 键为 None (规范化后为空: 只有非拉丁字母, 或只剩公司后缀)
+    的不参与比对, 不算相等."""
+    parties: list[tuple[DeclaredParty | DeclaredHolding, str, str | None, str | None]] = [
+        (p, p.name, p.acn, p.abn) for p in profile.related_parties if p.kind == "company"
+    ]
+    parties += [(h, h.holder, None, None) for h in profile.ownership if h.kind == "company"]
+    for party, party_name, party_acn, party_abn in parties:
         if party_acn or party_abn:
             if acn is not None and acn in {party_acn, (party_abn or "")[-9:]}:
-                return True
+                return party
         else:
             key = party_name_key(party_name, (), suffixes)
             if key is not None and key == party_name_key(name, (), suffixes):
-                return True
-    return False
+                return party
+    return None
 
 
 def relation_text(link: PartyLink) -> str:
@@ -368,7 +372,7 @@ def undeclared_leads(ctx: RunContext, found: Penetration, graph: OwnershipGraph)
     suffixes = list(ctx.run.params_snapshot["entity_suffixes"])
     exceptions: list[AuditException] = []
     for lead in found.leads[1:]:
-        if declared(found.profile, names[lead.node_id], lead.acn, suffixes):
+        if declared(found.profile, names[lead.node_id], lead.acn, suffixes) is not None:
             continue
         evidence = [lead.pointer] if lead.pointer is not None else []
         got = found.extracts.get(lead.node_id)
