@@ -4,9 +4,20 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
-from backend.contracts.models import AgentId, OpinionType, UncorrectedItem, UncorrectedSchedule
+from backend.contracts.models import (
+    AgentId,
+    MisstatementStatus,
+    OpinionType,
+    UncorrectedItem,
+    UncorrectedSchedule,
+)
 from backend.contracts.state import StatePatch
 from backend.services.staleness import current_results
+
+# FIN-04 能累计的错报状态: 未更正, 部分更正 (累计剩余额), 已更正 (只列 ID); 其余的出现即执行失败 (需求 R166)
+COUNTED = frozenset(
+    {MisstatementStatus.uncorrected, MisstatementStatus.partially_corrected, MisstatementStatus.corrected}
+)
 
 
 class QCAgent(ProcedureAgent[UncorrectedSchedule]):
@@ -16,25 +27,44 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
     procedures: ClassVar[frozenset[str]] = frozenset({"FIN-04"})  # 负责的程序
 
     async def execute(self, ctx: RunContext) -> UncorrectedSchedule:
-        """按状态中当前结果的错报 (本版全部未更正; 过期重跑取代的执行引出的不计, services.staleness.current_results)
-        编未更正错报汇总表 SCHEDULE, 规则见 FIN-04.yaml.
+        """按状态中当前结果的错报 (过期重跑取代的执行引出的不计, services.staleness.current_results) 编未更正错报汇总表
+        SCHEDULE, 规则见 FIN-04.yaml (需求 R166, 规格书 12.3 子状态机注).
 
-        高于明显微小门槛 (clearly_trivial_cents) 的错报计入 items, 等于或低于的只列 ID 于 excluded_trivial_ids;
+        按错报状态累计: uncorrected 取错报金额, partially_corrected 取剩余额 (residual_cents); 累计额高于明显微小门槛
+        (clearly_trivial_cents) 的计入 items (带方向与 origin), 等于或低于的只列 ID 于 excluded_trivial_ids;
+        corrected 的只列 ID 于 corrected_ids. 还有其他状态的错报 (identified, communicated, verifying 未结清; 本版不写的
+        evaluated, closed 同样不能累计) 时抛 ValueError, 不出汇总表: A1 记执行失败并建 failed 任务, 转人工 (兜底, 正常
+        拓扑下错报都已结清). 功能 misstatement 关闭时错报一律为 uncorrected (旧口径), 结果同 R23.
         total_cents 为 items 金额之和, 不按高估低估抵销; 不低于整体重要性 (materiality_cents) 时候选意见为保留.
         两个门槛取本次执行的参数快照. 状态已有汇总表 (FIN-01 驳回后重做) 时出下一版.
-        例: 一条 14200000 高估的错报, 重要性 12000000, 明显微小 600000 → items 一行, total 14200000, qualified.
+        例: 一条 14200000 高估的未更正错报, 重要性 12000000, 明显微小 600000 → items 一行, total 14200000, qualified.
         """
         params = ctx.run.params_snapshot
         materiality, trivial = params["materiality_cents"], params["clearly_trivial_cents"]
+        misstatements = current_results(ctx.state).misstatements
+        unsettled = [f"{m.id} ({m.status.value})" for m in misstatements if m.status not in COUNTED]
+        if unsettled:
+            raise ValueError(f"FIN-04: 还有不能累计的错报, 须先结清: {', '.join(unsettled)}")
         items: list[UncorrectedItem] = []
         excluded: list[str] = []
-        for misstatement in current_results(ctx.state).misstatements:
-            if misstatement.amount_cents > trivial:
+        corrected: list[str] = []
+        for misstatement in misstatements:
+            if misstatement.status is MisstatementStatus.corrected:
+                corrected.append(misstatement.id)
+                continue
+            amount = (
+                misstatement.residual_cents
+                if misstatement.status is MisstatementStatus.partially_corrected
+                else misstatement.amount_cents
+            )
+            assert amount is not None  # partially_corrected 的剩余额由 Misstatement 的模型校验保证
+            if amount > trivial:
                 items.append(
                     UncorrectedItem(
                         misstatement_id=misstatement.id,
-                        amount_cents=misstatement.amount_cents,
+                        amount_cents=amount,
                         direction=misstatement.direction,
+                        origin=misstatement.origin or "current_period",
                     )
                 )
             else:
@@ -46,6 +76,7 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
             version=previous.version + 1 if previous else 1,
             items=items,
             excluded_trivial_ids=excluded,
+            corrected_ids=corrected,
             total_cents=total,
             materiality_cents=materiality,
             candidate_opinion=OpinionType.qualified if total >= materiality else OpinionType.unqualified,

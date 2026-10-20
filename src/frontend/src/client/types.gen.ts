@@ -5489,6 +5489,10 @@ export type UncorrectedItem = {
      */
     amount_cents: number;
     direction: Direction;
+    /**
+     * Origin
+     */
+    origin?: 'current_period' | 'prior_period_uncorrected';
 };
 
 /**
@@ -5513,6 +5517,10 @@ export type UncorrectedSchedule = {
      * Excluded Trivial Ids
      */
     excluded_trivial_ids: Array<string>;
+    /**
+     * Corrected Ids
+     */
+    corrected_ids?: Array<string>;
     /**
      * Total Cents
      */

@@ -1245,15 +1245,17 @@ class UncorrectedItem(Model):
     """未更正错报汇总表中的一行."""
 
     misstatement_id: str  # 对应的错报
-    amount_cents: int  # 金额, 单位分
+    amount_cents: int  # 累计的金额, 单位分: uncorrected 取错报金额, partially_corrected 取剩余额 (需求 R166)
     direction: Direction  # 高估或低估
+    origin: MisstatementOrigin = "current_period"  # 本期或上期未更正结转, 取错报的 origin; 没分类的 (旧口径) 为本期
 
 
 class UncorrectedSchedule(Versioned):
     """未更正错报汇总表: FIN-04 产出, FIN-01 闸门的呈报材料. 规格书中叫 UncorrectedMisstatementSchedule."""
 
-    items: list[UncorrectedItem]  # 高于明显微小门槛的错报
+    items: list[UncorrectedItem]  # 高于明显微小门槛的未更正 (含部分更正的剩余额) 错报
     excluded_trivial_ids: list[str]  # 低于门槛, 不累计的错报
+    corrected_ids: list[str] = []  # 已全额更正 (corrected) 的错报, 不累计 (需求 R166); 旧汇总表没有, 读出为空
     total_cents: int  # items 金额合计, 不按方向抵销
     materiality_cents: int  # 整体重要性, 单位分
     candidate_opinion: OpinionType  # 合计不低于整体重要性为保留, 否则无保留
