@@ -284,7 +284,6 @@ def document_item(item_id: str, document: DocumentRef, staged: Staged | None) ->
         contract=staged.contract,
         reply=staged.reply,
         registry=staged.registry,
-        statements=staged.statements,
         issues=issues,
     )
 
@@ -310,7 +309,6 @@ def staged_of(item: BatchItem) -> Staged:
         item.contract,
         item.reply,
         registry=item.registry,
-        statements=item.statements,
     )
 
 

@@ -117,7 +117,7 @@ async def test_registry_and_durable_confirmation(tmp_path):
 # ── 附加证据指针 (需求 R223) ──
 
 
-async def run_rows(rows: list[dict[str, Any]], procedure_id: str = "FIN-12", rule_id: str = "K01") -> RuleResult:
+async def run_rows(rows: list[dict[str, Any]], procedure_id: str = "FIN-18", rule_id: str = "W01") -> RuleResult:
     """一条规则 SQL 返回 rows 时 SqlRuleEngine 的结果 (第 1 次执行)."""
     template = ProcedureTemplate.model_validate(
         dict(
@@ -146,7 +146,7 @@ async def run_rows(rows: list[dict[str, Any]], procedure_id: str = "FIN-12", rul
 
 
 EXTRAS = [
-    {"source_type": "trial_balance", "source_id": "090", "locator": "balance_cents"},
+    {"source_type": "journal_entry", "source_id": "XJ-397-1", "locator": "debit_cents"},
     {"source_type": "bank_account", "source_id": "BA-090"},
 ]
 
@@ -155,21 +155,21 @@ async def test_extra_pointers_follow_the_main_pointer() -> None:
     """验收 2: 行带 extra_pointers (对象数组, 或其 JSON 文本): 例外 evidence 为主指针加这些指针, 按出现顺序, 种类与
     可靠性按行类型 (银行来源 external_copy), 没给 locator 的为空串; extra_pointers 不进 detail, 也不进主指针的 locator;
     为 NULL 时只有主指针."""
-    line = {"source_type": "financial_statement_line", "amount_cents": 5, "line_cents": 7}
+    line = {"source_type": "trial_balance", "amount_cents": 5, "line_cents": 7}
     rows = [
-        {**line, "source_id": "SOFP-CASH", "extra_pointers": EXTRAS},
-        {**line, "source_id": "SOFP-OD", "extra_pointers": json.dumps(EXTRAS)},
-        {**line, "source_id": "SOFP-AR", "extra_pointers": None},
+        {**line, "source_id": "090", "extra_pointers": EXTRAS},
+        {**line, "source_id": "091", "extra_pointers": json.dumps(EXTRAS)},
+        {**line, "source_id": "610", "extra_pointers": None},
     ]
     first, second, third = (await run_rows(rows)).exceptions
     assert [(p.source_type, p.source_id, p.locator, p.type, p.reliability) for p in first.evidence] == [
-        ("financial_statement_line", "SOFP-CASH", "amount_cents, line_cents", "voucher", "internal_original"),
-        ("trial_balance", "090", "balance_cents", "voucher", "internal_original"),
+        ("trial_balance", "090", "amount_cents, line_cents", "voucher", "internal_original"),
+        ("journal_entry", "XJ-397-1", "debit_cents", "voucher", "internal_original"),
         ("bank_account", "BA-090", "", "bank", "external_copy"),
     ]
     assert second.evidence[1:] == first.evidence[1:]
     assert [x.detail for x in (first, second, third)] == [{"line_cents": 7}] * 3
-    assert [p.source_id for p in third.evidence] == ["SOFP-AR"]
+    assert [p.source_id for p in third.evidence] == ["610"]
     assert third.evidence[0].locator == "amount_cents, line_cents"
 
 
@@ -177,6 +177,7 @@ async def test_extra_pointers_follow_the_main_pointer() -> None:
     "extra",
     [
         [{"source_type": "ledger", "source_id": "x"}],  # 未知的行类型
+        [{"source_type": "financial_statement_line", "source_id": "SOFP-CASH"}],  # Issue #46 删去的待审财报行
         [{"source_type": "trial_balance"}],  # 缺 source_id
         [{"source_type": "trial_balance", "source_id": "090", "locator": 1}],
         {"source_type": "trial_balance", "source_id": "090"},  # 不是数组
@@ -187,8 +188,8 @@ async def test_extra_pointers_follow_the_main_pointer() -> None:
 async def test_bad_extra_pointers_are_rule_errors(extra: Any) -> None:
     """验收 2: extra_pointers 不合格 (未知 source_type, 缺 source_id, locator 不是字符串, 不是对象数组, 不是 JSON) 时抛
     RuleError, 消息含程序与规则编号."""
-    row = {"source_type": "financial_statement_line", "source_id": "SOFP-CASH", "extra_pointers": extra}
-    with pytest.raises(RuleError, match="FIN-12/K01"):
+    row = {"source_type": "trial_balance", "source_id": "090", "extra_pointers": extra}
+    with pytest.raises(RuleError, match="FIN-18/W01"):
         await run_rows([row])
 
 

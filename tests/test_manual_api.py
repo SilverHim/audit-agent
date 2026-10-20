@@ -26,7 +26,7 @@ from tests.test_manual import (  # noqa: F401 (registered 为自动夹具: 登�
 
 EID = ENGAGEMENT.id
 BASE = f"/api/v1/engagements/{EID}"
-DRAFT_FS = DocumentRef(  # 待审财报, 不作证据 (DOCUMENT_EVIDENCE 没有它), 人工队列不列
+DRAFT_FS = DocumentRef(  # 财务报表, 不作证据 (DOCUMENT_EVIDENCE 没有它), 人工队列不列
     id="DOC-fs0000000001",
     type=DocumentType.financial_statements,
     file_name="fs_v1.pdf",

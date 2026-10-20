@@ -670,13 +670,6 @@
       "xero_refs": []
     },
     {
-      "path": "llm/DOC-STATEMENTS/fs_v1.json",
-      "sha256": "169a42f5f632c896be2ef7698208000483f14b331b6598004609d461a2525b2b",
-      "synthetic": true,
-      "generator": "data/generate_xero_demo.py",
-      "xero_refs": []
-    },
-    {
       "path": "llm/FIN-03/804.json",
       "sha256": "f951eef8d26f22aef6de1d734373e3a42976f257dcaf19676280243c6ee05c8d",
       "synthetic": true,

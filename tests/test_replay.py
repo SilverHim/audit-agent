@@ -664,15 +664,15 @@ async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> No
 async def test_compliance_check_replay_brings_its_referenced_exceptions() -> None:
     """R215: 回退检查点后重放 FIN-10 第 1 次 (程序 YAML 由 R230 加, 这里用临时模板): CHECK-FIN-10 按 by_procedure
     取最新版本 (第 2 次写的 v2), 一并取回第 2 次执行, 以及 v2 的 exception_ids 所指而不属第 1 次的例外 (合规检查与
-    判断, 评分卡同在 merge.EXCEPTION_REFERRERS); 片段自成一体, 外键检查通过. Store 里另有 FIN-12 写的 CHECK-FIN-12,
+    判断, 评分卡同在 merge.EXCEPTION_REFERRERS); 片段自成一体, 外键检查通过. Store 里另有 FIN-18 写的 CHECK-FIN-18,
     不取回 (by_procedure 只取本程序的)."""
     run1, run2 = finished(make_run("FIN-10")), finished(make_run("FIN-10", run_no=2))
-    run12 = finished(make_run("FIN-12"))
+    run18 = finished(make_run("FIN-18"))
     found1 = exception(1).model_copy(update={"id": "X-FIN-10-1-E02-1", "procedure_id": "FIN-10", "run_id": run1.id})
     found2 = found1.model_copy(update={"id": "X-FIN-10-2-E02-1", "run_id": run2.id})
     check1 = compliance_check(exception_ids=[found1.id])
     check2 = compliance_check(run_no=2, version=2, exception_ids=[found2.id])
-    others = [run12, compliance_check("FIN-12"), exception(2)]
+    others = [run18, compliance_check("FIN-18"), exception(2)]
     store = FakeOutputStore([run1, run2, found1, found2, check1, check2, *others])
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([]))
     template = temporary_template(deps, "FIN-10", ["compliance_checks", "exceptions", "review_tasks"])

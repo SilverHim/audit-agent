@@ -151,7 +151,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
         (DataInput.contracts, {"REV-03", "REV-02"}),
         (DataInput.confirmations, {"CSH-02"}),
         (DataInput.documents, {"REV-03", "REV-02", "CSH-02"}),  # 补登记: 判断引用文件页的程序 (需求 R90)
-        (DataInput.financial_statements, set()),  # 待审财报 (需求 R217): Demo 程序库里还没有程序读它 (FIN-12 写 reads)
+        (DataInput.financial_statements, set()),  # 旧项目的待审财报变动 (Issue #46 起不再产生): 没有程序读它
     ],
 )
 def test_stale_by_what_each_program_reads(data_input: DataInput, expected: set[str]) -> None:
@@ -163,7 +163,7 @@ def test_stale_by_what_each_program_reads(data_input: DataInput, expected: set[s
 
 # 带文件类型的文件登记变动 (需求 R304): 只有读该类文件登记的程序 (模板 document_reads) 过期; 依赖它们的随之
 TYPED_DOCUMENT_CHANGES = [
-    pytest.param([DocumentType.financial_statements], set(), id="financial_statements"),  # 待审财报: 没有程序读
+    pytest.param([DocumentType.financial_statements], set(), id="financial_statements"),  # 报表以账套为准: 没有程序读
     pytest.param([DocumentType.contract], {"REV-03", "REV-02"}, id="contract"),  # DOC-04 抽合同, 不读登记
     pytest.param([DocumentType.confirmation], {"CSH-02"}, id="confirmation"),  # DOC-06 抽回函, 不读登记
     pytest.param([DocumentType.contract, DocumentType.confirmation], {"REV-03", "REV-02", "CSH-02"}, id="both"),

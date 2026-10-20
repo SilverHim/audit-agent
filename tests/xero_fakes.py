@@ -3,7 +3,7 @@
 预置的是演示数据导入 (R269) 之后的状态; 数据一律经载入器 (XeroDatasetLoader.tables), adapters.xero_supplements 与
 演示导入清单读出, 这里不重写映射. 两组函数:
 - 只需补造目录: xero_profile, xero_presets, xero_traits, xero_uploads, xero_documents, xero_pages, xero_adjustments,
-  xero_employees, xero_registry, xero_confirmations, xero_contracts, xero_financial_statements. 有快照时连快照一起核对
+  xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对
   (Supplements.verify),
   没有快照时只核对补造文件 (verify_files).
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
@@ -48,7 +48,6 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
-    FinancialStatements,
     GateDecision,
     GateId,
     GateVerdict,
@@ -269,13 +268,6 @@ def xero_confirmations(loader: XeroDatasetLoader | None = None) -> FakeConfirmat
     return FakeConfirmationChannel(
         ReceiptChannel(channels.pop()), bodies={p.stem: (root / p).read_bytes() for p in sorted(replies)}
     )
-
-
-def xero_financial_statements(loader: XeroDatasetLoader | None = None) -> FinancialStatements:
-    """待审财报第 1 版: 补造的 financial_statements/fs_v1.json (document_id 为 fs_v1.pdf), 同上传 fs_v1.pdf 后 A3 的
-    抽取 (需求 R217)."""
-    path = supplement(loader).root / "financial_statements" / "fs_v1.json"
-    return FinancialStatements.model_validate_json(path.read_bytes())
 
 
 def xero_contracts(loader: XeroDatasetLoader | None = None) -> list[Contract]:

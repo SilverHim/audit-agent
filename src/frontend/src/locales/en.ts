@@ -141,7 +141,6 @@ export const en = {
     'RPT-03': 'Report drafting',
     'RPT-01': 'Report approval and sign-off',
     'GEN-05': 'Full journal entry scan',
-    'FIN-12': 'Statements agree to accounting records',
   } as Record<string, string>,
   engines: { rule: 'Rule', llm: 'Model', hybrid: 'Rule + model', manual: 'Auditor decision' },
   levels: { L1: 'Decide each', L2: 'Review each', L3: 'Review exceptions', L4: 'Spot-check afterwards' },

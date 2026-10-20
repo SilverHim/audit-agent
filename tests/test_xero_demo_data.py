@@ -11,9 +11,8 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
-from backend.contracts.models import FinancialStatements
 from tests.external import needs, optional, snapshot_dir, snapshot_location, supplements_dir, supplements_path
-from tests.fakes import FS_V1_LINES, XERO_FS_V1
+from tests.fakes import FS_V1_LINES
 
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
@@ -2145,15 +2144,6 @@ def test_financial_statements_json() -> None:
 
 
 @needs_supplements
-def test_fs_v1_json_reads_as_contract_model() -> None:
-    """R216: 合约模型 FinancialStatements 能读入库的 fs_v1.json (R217 载入的就是它), 去掉 document_id 后等于
-    tests.fakes.XERO_FS_V1. 待审财报的表只在 fakes 一处 (FS_V1_LINES), 本模块的断言都引用它."""
-    fs = FinancialStatements.model_validate_json((SUPPLEMENTS / generator.FS_JSON).read_text(encoding="utf-8"))
-    assert fs.document_id is not None
-    assert fs.model_copy(update={"document_id": None}) == XERO_FS_V1
-
-
-@needs_supplements
 def test_financial_statements_pdf() -> None:
     pages = pdf_texts(SUPPLEMENTS / generator.FS_PDF)
     assert len(pages) == 6
@@ -2431,7 +2421,7 @@ def test_financial_statement_problems(tmp_path: Path) -> None:
     ]
     fs["lines"] = fs["lines"][:5]
     path.write_text(json.dumps({**fs, "extra": 1}), encoding="utf-8")
-    assert checker.check_financial_statements(copy, manifest) == [f"{where}: 不符合 FinancialStatements (1 处)"]
+    assert checker.check_financial_statements(copy, manifest) == [f"{where}: 不符合 StatementsFile (1 处)"]
     path.unlink()
     assert checker.check_financial_statements(copy, manifest) == [f"{where}: 文件不存在"]
 
@@ -2493,12 +2483,12 @@ def test_financial_statement_totals_problems(tmp_path: Path) -> None:
 
 
 def fs_items(**changes: dict) -> list:
-    """fs_v1.json 的各行 (FinancialStatementLine), 按行代码改字段; 值为 None 的行代码删去该行."""
+    """fs_v1.json 的各行 (checker.StatementLine), 按行代码改字段; 值为 None 的行代码删去该行."""
     items = []
     for line in read(generator.FS_JSON)["lines"]:  # type: ignore[index]
         update = changes.get(line["code"].replace("-", "_"), {})
         if update is not None:
-            items.append(checker.FinancialStatementLine.model_validate({**line, **update}))
+            items.append(checker.StatementLine.model_validate({**line, **update}))
     return items
 
 

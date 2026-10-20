@@ -26,7 +26,6 @@ from backend.contracts.llm_outputs import (
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
-    StatementsExtraction,
 )
 from backend.contracts.models import (
     AuditException,
@@ -85,7 +84,6 @@ from tests.fakes import (
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_RECORDS,
     NUMBAT_REPLIES,
-    XERO_FS_V1,
     FakeFinancialStore,
     FakeTrail,
     ScriptedLLM,
@@ -221,7 +219,7 @@ def test_every_referenced_output_model_is_registered() -> None:
     规格 (上传文件分类 ingest.CLASSIFY, 独立复核第二轮 review.VERDICT_SPEC). 新加输出模型而漏登记时在此报出,
     不至于在运行时被兜底转人工 (如上传分类转 needs_manual). 待实现表 PENDING_CHECKS 中的是已知例外."""
     referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
-    referenced |= {output_model(ingest.CLASSIFY), output_model(ingest.STATEMENTS)}
+    referenced |= {output_model(ingest.CLASSIFY)}
     referenced |= {getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
     missing = [m for m in referenced if m not in OutputValidator.CHECKS and m not in PENDING_CHECKS]
     assert sorted(m.__name__ for m in missing) == []
@@ -235,8 +233,8 @@ def test_pending_checks_are_not_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 14 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
-    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
+    """现有 13 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做
+    语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
     check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157; FIN-09 的
     CorrectionVerificationDraft 另查是否完整更正与其他科目, 需求 R164; FIN-02 的 GoingConcernAdvice 由
     check_going_concern 校验, 需求 R183)."""
@@ -254,11 +252,9 @@ def test_dispatch_table_covers_existing_models() -> None:
         CriticVerdictOut,
         DocumentClassification,
         SheetRecognition,
-        StatementsExtraction,
     }
     assert OutputValidator.CHECKS[DocumentClassification] is structure_only
     assert OutputValidator.CHECKS[SheetRecognition] is structure_only
-    assert OutputValidator.CHECKS[StatementsExtraction] is structure_only
     assert OutputValidator.CHECKS[AuditPlanDraft] is check_plan
 
 
@@ -556,7 +552,7 @@ async def test_reply_document_pointer_is_external_and_other_document_is_not_evid
 
 
 def test_document_evidence_mapping() -> None:
-    """文件类型 → 证据种类 (第 5 节文件指针映射表, 12 类); 待审财报与 other 不作证据, 不在表中."""
+    """文件类型 → 证据种类 (第 5 节文件指针映射表, 12 类); 财务报表与 other 不作证据, 不在表中."""
     assert {
         DocumentType.contract: EvidenceType.contract,
         DocumentType.invoice: EvidenceType.invoice,
@@ -1396,37 +1392,6 @@ async def test_plan_check_requires_its_context(ctx: ValidationContext) -> None:
     即 ValueError, 不静默放过."""
     with pytest.raises(ValueError):
         await check_plan_draft(plan_draft(), ctx)
-
-
-# ── R216: 待审财报的行作证据. 端口与真实取行由 R217 实现, 这里用预置 XERO_FS_V1 各行的最小假存储 ──
-
-
-@pytest.mark.parametrize(("code", "reason"), [("SOFP-OREC", None), ("SOFP-XXX", "查无此行")])
-async def test_financial_statement_line_pointer(code: str, reason: str | None) -> None:
-    """验收 3: 指针 {voucher, financial_statement_line, SOFP-OREC, amount_cents} 经假存储解析, 引用级通过, 按内部凭证
-    改写 (voucher, internal_original; 模型填的可靠性不采信); 不存在的行代码该步 unsupported, 原因 "查无此行"."""
-    lines = {
-        ("financial_statement_line", line.code): {**line.model_dump(mode="json"), "fs_id": "FS", "fs_version": 1}
-        for line in XERO_FS_V1.lines
-    }
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), {**NUMBAT_RECORDS, **lines})
-    pointer = EvidencePointer(
-        type=EvidenceType.voucher,
-        source_type="financial_statement_line",
-        source_id=code,
-        locator="amount_cents",
-        reliability=Reliability.external_original,
-    )
-    validator = OutputValidator(financial, LIBRARY, FakeTrail())
-    draft = with_step(cutoff_draft(), 1, evidence=[pointer])
-    report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
-    if reason is None:
-        assert report.unsupported_steps == [] and report.errors == []
-        [resolved] = report.output.reasoning_chain[1].evidence
-        assert (resolved.type, resolved.reliability) == (EvidenceType.voucher, Reliability.internal_original)
-    else:
-        assert report.unsupported_steps == [1] and len(report.errors) == 1 and reason in report.errors[0]
-    assert ("financial_statement_line", code) in financial.record_calls
 
 
 # ── FIN-03 错报分类 (需求 R157) ──

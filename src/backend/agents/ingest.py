@@ -1,8 +1,8 @@
 """A3: DOC-04, DOC-06. 返回字段: documents, confirmations, review_tasks, procedure_runs; 合同经 save_contract 写入.
 
 另有上传文件的处理 (需求 R14, DocumentIntake): 审计师上传后立即读首页文字, 按文件名与首页文字分类, 合同走 DOC-04
-抽取, 回函走 DOC-06 抽取, ASIC 摘录走 DOC-REGISTRY 抽取 (需求 R290), 财务报表走 DOC-STATEMENTS 抽取待审财报 (需求
-R217); 不经编排, 不建执行记录与复核任务, 只改文件登记, 写合同, 待审财报与抽取版本.
+抽取, 回函走 DOC-06 抽取, ASIC 摘录走 DOC-REGISTRY 抽取 (需求 R290); 财务报表以账套为准 (Issue #46), 只分类不抽取.
+不经编排, 不建执行记录与复核任务, 只改文件登记, 写合同与抽取版本.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import io
 import logging
 import re
 import zipfile
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePath
@@ -25,7 +25,6 @@ from backend.contracts.llm_outputs import (
     ContractExtraction,
     DocumentClassification,
     RegistryExtraction,
-    StatementsExtraction,
 )
 from backend.contracts.models import (
     AgentId,
@@ -40,7 +39,6 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     Engine,
-    FinancialStatements,
     Phase,
     ProcedureRun,
     Reliability,
@@ -372,31 +370,6 @@ REGISTRY = ProcedureTemplate(
     autonomy_level=AutonomyLevel.L2,
     llm=LLMSpec(prompt="DOC-REGISTRY.md.j2", output_model="RegistryExtraction", max_tokens=2048),
 )
-# 待审财报抽取的模板 (需求 R217): 同 CLASSIFY 不在程序库里; 结果写财报表 (新一版) 与抽取版本表 (target_type FS_TARGET)
-STATEMENTS = ProcedureTemplate(
-    id="DOC-STATEMENTS",
-    name="待审财报抽取",
-    phase=Phase.P3_Completion,
-    cycle="Data",
-    owner=AgentId.A3,
-    engine=Engine.llm,
-    autonomy_level=AutonomyLevel.L2,
-    llm=LLMSpec(prompt="DOC-STATEMENTS.md.j2", output_model="StatementsExtraction", max_tokens=8192),
-)
-
-
-def build_statements(extraction: StatementsExtraction, document: DocumentRef, version: int) -> FinancialStatements:
-    """抽取结果组装为待审财报的一版: id 固定 FS, version 为这一版的版本号 (接在已有版本之后), document_id 为该文件."""
-    return FinancialStatements.model_validate(
-        {**extraction.model_dump(), "version": version, "document_id": document.id}
-    )
-
-
-def next_statements_version(history: Sequence[ExtractionRecord]) -> int:
-    """待审财报的下一个版本号: 已有各版 (FinancialDataStore.statements_history) 的最大版本 +1, 没有为 1."""
-    return max((r.version for r in history), default=0) + 1
-
-
 # 各类型文件的可靠性 (审计师上传的都是副本), 每种类型一行, 按出具方: 第三方或有对方一起签署的 (合同, 回函, 对账单,
 # 登记摘录, 约定书, 协议) 为外部副本, 被审计单位自己的 (含来源不定的往来函件) 为内部副本; 之后可经补登记改
 RELIABILITY: dict[DocumentType, Reliability] = {
@@ -531,30 +504,18 @@ def sheet_first_page(sheet: Sheet) -> str:
     return "\n".join(", ".join(row) for row in [sheet.columns, *texts[1:]])[:FIRST_PAGE_CHARS]
 
 
-# 分类后还要抽取要素的类型; 财务报表只抽 PDF (见 needs_extraction)
-EXTRACTED_TYPES = frozenset(
-    {DocumentType.contract, DocumentType.confirmation, DocumentType.registry_extract, DocumentType.financial_statements}
-)
-
-
-def needs_extraction(kind: DocumentType, document: DocumentRef) -> bool:
-    """定为 kind 类型的这份文件分类后是否还要抽取要素: 类型在 EXTRACTED_TYPES 中; 财务报表只抽 PDF (需求 R217: 报表行
-    按文本层逐页抽), Excel 草稿等其他格式的不抽取, 同之前停在 classified (待审财报仍为空, 审计师可另传 PDF)."""
-    if kind is DocumentType.financial_statements:
-        return document.media_type == "application/pdf"
-    return kind in EXTRACTED_TYPES
+# 分类后还要抽取要素的类型. 财务报表以账套为准 (Issue #46), 只分类不抽取
+EXTRACTED_TYPES = frozenset({DocumentType.contract, DocumentType.confirmation, DocumentType.registry_extract})
 
 
 def unfinished(document: DocumentRef) -> bool:
     """审计师上传的文件 (渠道 auditor_upload 且有上传人), A3 处理是否没做完: 还没分类 (received), 或已分类为合同,
-    回函, ASIC 摘录, PDF 财务报表 (needs_extraction) 而没抽取完 (classified; 作业在两步之间被取消或进程退出).
+    回函, ASIC 摘录 (EXTRACTED_TYPES) 而没抽取完 (classified; 作业在两步之间被取消或进程退出).
     extracted, needs_manual 与其他的 classified 都算做完. 系统存档的文件 (数据集载入的合同, CSH-04 存档的银行直达回函
     等, 没有上传人) 由编排处理, 不在其中. 智能导入批次里暂存的文件 (staged) 等确认, 不在其中 (需求 R277)."""
     if document.channel != "auditor_upload" or document.uploaded_by is None:
         return False
-    return document.status == "received" or (
-        document.status == "classified" and needs_extraction(document.type, document)
-    )
+    return document.status == "received" or (document.status == "classified" and document.type in EXTRACTED_TYPES)
 
 
 @dataclass(frozen=True)
@@ -601,7 +562,6 @@ class Staged:
     contract: Contract | None = None  # 合同的抽取要素 (第 1 版, 未写入)
     reply: dict[str, Any] | None = None  # 回函副本的抽取结果 (ConfirmationExtraction 的 JSON, 未写入)
     registry: dict[str, Any] | None = None  # ASIC 摘录的抽取结果 (RegistryExtraction 的 JSON, 未写入, 需求 R290)
-    statements: dict[str, Any] | None = None  # 待审财报的抽取结果 (StatementsExtraction 的 JSON, 未写入, 需求 R217)
 
 
 @dataclass(frozen=True)
@@ -614,11 +574,11 @@ class Job:
 
 class DocumentIntake:
     """A3 处理一份上传的文件 (需求 R14): 读首页文字 → 分类 → 合同走 DOC-04, 回函走 DOC-06, ASIC 摘录走
-    DOC-REGISTRY (需求 R290), 财务报表走 DOC-STATEMENTS (需求 R217) 抽取.
+    DOC-REGISTRY (需求 R290) 抽取.
 
     结果只体现在文件登记 (类型, 可靠性, 状态, 卡住的步骤), 合同表与抽取版本表上; 不经编排, 不建执行记录与复核任务.
     失败不抛出: 读不出为 needs_manual (read), 判断不了类型为 needs_manual (classify), 抽取校验不过为
-    needs_manual (extract). 合同, 回函, ASIC 摘录与财务报表以外的类型停在 classified.
+    needs_manual (extract). 合同, 回函与 ASIC 摘录以外的类型 (含财务报表, Issue #46) 停在 classified.
     """
 
     def __init__(self, deps: AgentDeps) -> None:
@@ -697,9 +657,8 @@ class DocumentIntake:
 
         审计师在确认单上改定了类型 (chosen) 时取它 (不调大模型, 留痕记审计师与理由); 对应了待补交的文件请求时取请求
         的 (理由注明请求); 否则调 DOC-CLASSIFY. 三者都写 classify 留痕 (同上传后的处理, 留痕 ID 为抽取的作业号, 改定
-        类型的是新的作业). 合同按 DOC-04 抽出合同, 回函按 DOC-06 抽出余额与截至日, ASIC 摘录与财务报表按
-        DOC-REGISTRY 与 DOC-STATEMENTS 抽取, 都不写入; 抽取没通过的记 failed_step extract. 读不出, 判断不了类型的记
-        read, classify."""
+        类型的是新的作业). 合同按 DOC-04 抽出合同, 回函按 DOC-06 抽出余额与截至日, ASIC 摘录按 DOC-REGISTRY 抽取,
+        都不写入; 抽取没通过的记 failed_step extract. 读不出, 判断不了类型的记 read, classify."""
         if chosen is not None:
             kind: DocumentType | None = chosen.document_type
             reason: str | None = chosen.reason
@@ -720,7 +679,6 @@ class DocumentIntake:
         contract: Contract | None = None
         reply: dict[str, Any] | None = None
         registry: dict[str, Any] | None = None
-        statements: dict[str, Any] | None = None
         # 抽取按定下的类型看这份文件 (同上传后的处理先改登记再抽取; 这里登记不改, 只给抽取与校验用的副本)
         reliability = await registered_reliability(self.deps, eid, document, kind)
         typed = document.model_copy(update={"type": kind, "reliability": reliability, "status": "classified"})
@@ -735,39 +693,27 @@ class DocumentIntake:
             elif kind is DocumentType.registry_extract:
                 found = await self.extract_registry(eid, typed)
                 registry = found.model_dump(mode="json") if found is not None else None
-            elif kind is DocumentType.financial_statements and needs_extraction(kind, typed):
-                extracted = await self.extract_statements(eid, typed, job)
-                statements = extracted.model_dump(mode="json") if extracted is not None else None
         except Exception:
             logger.exception("抽取出错 %s %s", eid, document.id)
-        failed = needs_extraction(kind, typed) and all(r is None for r in (contract, reply, registry, statements))
-        return Staged(kind, reason, job, "extract" if failed else None, contract, reply, registry, statements)
+        failed = kind in EXTRACTED_TYPES and all(r is None for r in (contract, reply, registry))
+        return Staged(kind, reason, job, "extract" if failed else None, contract, reply, registry)
 
     async def staged_change(self, eid: str, document: DocumentRef, staged: Staged) -> DocumentChange:
         """确认单上的一份文件 (需求 R277) 确认时要写的, 由 DataStore.commit_batch 在写表的同一事务里写入; 只读, 不调
         大模型. 类型为 staged 的 (审计师改了类型时已按新类型重新识别与抽取): 合同 (版本规则见 contract_writes), 回函
-        抽取结果 (reply, 第 1 版), ASIC 摘录抽取结果 (registry_extract, 接在已有版本之后) 或待审财报 (接在已有版本
-        之后, 需求 R217) 置 extracted, 抽取没通过的置 needs_manual (extract); 其余类型置 classified."""
+        抽取结果 (reply, 第 1 版) 或 ASIC 摘录抽取结果 (registry_extract, 接在已有版本之后) 置 extracted, 抽取没通过的
+        置 needs_manual (extract); 其余类型置 classified."""
         kind = staged.document_type
         if kind is None:
             raise ValueError(f"{document.id} 没有类型, 不能确认")
         reliability = await registered_reliability(self.deps, eid, document, kind)
         change = DocumentChange(document_id=document.id, type=kind, reliability=reliability, status="classified")
-        if not needs_extraction(kind, document):
+        if kind not in EXTRACTED_TYPES:
             return change
-        if all(r is None for r in (staged.contract, staged.reply, staged.registry, staged.statements)):
+        if all(r is None for r in (staged.contract, staged.reply, staged.registry)):
             return change.model_copy(update={"status": "needs_manual", "failed_step": "extract"})
         contracts = await contract_writes(self.deps, eid, staged.contract) if staged.contract is not None else []
-        statements = None
-        if staged.statements is not None:
-            version = next_statements_version(await self.deps.financial_store.statements_history(eid))
-            statements = build_statements(StatementsExtraction.model_validate(staged.statements), document, version)
-        update = {
-            "contracts": contracts,
-            "reply": staged.reply,
-            "registry_extract": staged.registry,
-            "financial_statements": statements,
-        }
+        update = {"contracts": contracts, "reply": staged.reply, "registry_extract": staged.registry}
         return change.model_copy(update={"status": "extracted", **update})
 
     async def resume(
@@ -815,8 +761,6 @@ class DocumentIntake:
                 done = await self.reply(eid, document)
             elif kind is DocumentType.registry_extract:
                 done = await self.registry(eid, document, since)
-            elif kind is DocumentType.financial_statements and needs_extraction(kind, document):
-                done = await self.statements(eid, document, job, since)
             else:
                 return document
         except Exception:
@@ -924,45 +868,6 @@ class DocumentIntake:
         if result.report.level_failed is not None or result.report.output is None:
             return None
         return cast(RegistryExtraction, result.report.output)
-
-    async def statements(self, eid: str, document: DocumentRef, job: str | None, since: datetime | None) -> bool:
-        """DOC-STATEMENTS 抽取待审财报 (需求 R217), 通过时写新一版 (接在已有版本之后, document_id 为该文件, 记 A3;
-        重新上传或改类型后重抽同样接在后面), 同一事务内数据版本 +1, 记数据变动 financial_statements (读财报的程序据此
-        标过期, 同合同). 补做 (since 为作业开始的时间) 时已有作业开始之后的版本 (这个作业写的, 或之后审计师修改的)
-        不重抽, 不拿旧作业覆盖: 来源正是这份文件的算做完, 是别的文件的 (之后另传了一份财报) 这份没抽成, 转人工."""
-        history = await self.deps.financial_store.statements_history(eid)
-        if since is not None and history and history[-1].changed_at > since:
-            return history[-1].data.get("document_id") == document.id
-        extraction = await self.extract_statements(eid, document, job)
-        if extraction is None:
-            return False
-        statements = build_statements(extraction, document, next_statements_version(history))
-        async with self.deps.output_store.transaction(eid):
-            await self.deps.financial_store.save_financial_statements(eid, statements)
-            await self.deps.data.bump_version(eid, DataInput.financial_statements)
-        return True
-
-    async def extract_statements(self, eid: str, document: DocumentRef, job: str | None) -> StatementsExtraction | None:
-        """DOC-STATEMENTS 抽取财务报表 (不写入); 变量为文件登记, 文本层各页与科目表 (代码, 名称, 类型; 报表行映射到
-        科目), fixture_key 为文件名主干, run_id 为 UPLOAD-{文件 ID}-{作业号}. 校验不过为 None."""
-        pages = await self.deps.evidence_store.pages(eid, document.id)
-        accounts = [
-            a.model_dump(mode="json", include={"code", "name", "type"})
-            for a in await self.deps.financial_store.accounts(eid)
-        ]
-        variables = {"document": document.model_dump(mode="json"), "pages": pages, "accounts": accounts}
-        result = await self.deps.judgments.call_llm(
-            eid,
-            STATEMENTS,
-            upload_run(STATEMENTS.id, document, job),
-            variables,
-            ValidationContext(document=document, standards_of=None),
-            self.agent,
-            PurePath(document.file_name).stem,
-        )
-        if result.report.level_failed is not None or result.report.output is None:
-            return None
-        return cast(StatementsExtraction, result.report.output)
 
     async def manual(self, eid: str, document: DocumentRef, step: DocumentFailedStep) -> DocumentRef:
         """置 needs_manual, 记卡住的步骤; 类型与可靠性不变."""

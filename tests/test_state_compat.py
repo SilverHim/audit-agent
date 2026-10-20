@@ -588,8 +588,8 @@ def test_completion_list_fields_merge_by_id_and_version() -> None:
     (另一次执行) 的写入与已有的并存, 不整体替换; 同 ID 版本更低的抛 VersionConflict."""
     state = initial_state(ENGAGEMENT, [], 1)
     state = apply_patch(state, {"compliance_checks": [compliance_check(version=2)]})
-    state = apply_patch(state, {"compliance_checks": [compliance_check("FIN-12")]})
-    assert [(c.id, c.version) for c in state["compliance_checks"]] == [("CHECK-FIN-10", 2), ("CHECK-FIN-12", 1)]
+    state = apply_patch(state, {"compliance_checks": [compliance_check("FIN-18")]})
+    assert [(c.id, c.version) for c in state["compliance_checks"]] == [("CHECK-FIN-10", 2), ("CHECK-FIN-18", 1)]
     with pytest.raises(VersionConflict):
         apply_patch(state, {"compliance_checks": [compliance_check()]})
     state = apply_patch(state, {"governance_communications": [governance_communication(version=2)]})

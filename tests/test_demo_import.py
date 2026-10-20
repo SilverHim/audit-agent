@@ -1,5 +1,5 @@
 """需求 R269: 演示数据导入 (services/demo_import). Xero 演示项目在空的假存储上按阶段导入: 承接文件, 快照与补造账表,
-外勤文件, 待审财报; 再执行不重复写, 不盖掉之后的改动; 中途失败后接着做完; 与 R97 的预置状态逐对象相同. 不连库 (连库见
+外勤文件; 再执行不重复写, 不盖掉之后的改动; 中途失败后接着做完; 与 R97 的预置状态逐对象相同. 不连库 (连库见
 test_demo_import_db). 读快照与补造目录, 标 external.
 
 整段流程 (启动 → ACC-01 闸门经数据管理页的接口导入承接 → approve → p1_await_data 导入外勤 → 再执行 → 确认数据已齐
@@ -371,7 +371,7 @@ def test_fieldwork_writes_the_snapshot_and_supplement_tables(flow: Flow) -> None
 def test_fieldwork_uploads_classifies_extracts_and_registers(flow: Flow) -> None:
     """19 份上传, A3 分类 19 次, 3 份合同随即抽取 (CON-X01 至 X03 第 1 版, 执行 ID 以 UPLOAD-{文件 ID}- 开头, 置
     extracted), 其余 16 份 classified; 补登记后类型, 可靠性, 文件日期, 关联对象等于清单; 账表与合同的请求收到, 审批
-    日志与待审财报的请求 open; 不确认就绪, 总览仍在等数据而不缺表."""
+    日志的请求 open; 不确认就绪, 总览仍在等数据而不缺表."""
     assert flow.fieldwork is not None and (flow.fieldwork.retyped, flow.fieldwork.needs_manual) == ([], [])
     planned = xero_uploads("fieldwork")
     assert flow.fieldwork.uploaded == [u.file_name for u in planned]

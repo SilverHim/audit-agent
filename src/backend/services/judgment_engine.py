@@ -29,7 +29,6 @@ from backend.contracts.llm_outputs import (
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
-    StatementsExtraction,
 )
 from backend.contracts.models import (
     AgentId,
@@ -89,10 +88,9 @@ ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
     "bank_transaction": (EvidenceType.bank, Reliability.external_copy),
     "bank_account": (EvidenceType.bank, Reliability.external_copy),
     "trial_balance": (EvidenceType.voucher, Reliability.internal_original),
-    "financial_statement_line": (EvidenceType.voucher, Reliability.internal_original),  # 待审财报的行 (需求 R216)
 }
 # 文件指针的证据种类按文件类型 (第 5 节文件指针映射表): 回函与登记摘录属外部来源, 约定书与协议按合同, 对账单按银行,
-# 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 待审财报 (判断引报表行) 与 other 不作证据, 不在表中
+# 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 财务报表 (以账套为准, Issue #46) 与 other 不作证据, 不在表中
 DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
     DocumentType.contract: EvidenceType.contract,
     DocumentType.invoice: EvidenceType.invoice,
@@ -883,8 +881,7 @@ async def structure_only(
     validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
 ) -> CheckResult:
     """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification; 上传账表识别
-    SheetRecognition; 待审财报抽取 StatementsExtraction (需求 R217: 报表不作证据, 没有指针; 行代码不重复在结构级查,
-    各行与科目余额勾不勾得上由 FIN-12 核对, 不算大模型输出失败).
+    SheetRecognition.
 
     文件分类的类型取值已由结构校验限定, 没有证据指针. 账表识别的方案在结构校验里自洽 (TablePlan 的模型校验); 与工作表
     对不对得上在套用时查 (table_plan.check_plan), 不算大模型输出失败.
@@ -906,7 +903,6 @@ for _model, _check in (
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
-    (StatementsExtraction, structure_only),
 ):
     OutputValidator.register(_model, _check)
 

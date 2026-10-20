@@ -206,8 +206,8 @@ account_category_history = table(
     "account_code:s version:i category:s basis:s changed_by:s changed_at:t reason:s",
     ("account_code", "version"),
 )
-# 待审财报 (需求 R217, 迁移 0019): 每版一行, 各行另表 (按 line_no 为列示顺序); A3 从上传的财务报表抽取与审计师修改
-# 各写一版, 旧版本不删. 当前版本为每个项目 version 最高的一版 (FinancialDataStore.financial_statements)
+# 待审财报 (需求 R217, 迁移 0019): 每版一行, 各行另表 (按 line_no 为列示顺序). Issue #46 起财务报表以账套为准, 不再
+# 抽取, 两张表不再写入也不再读; 已执行的迁移不改, 表与定义保留 (旧项目里可能有数据)
 financial_statements = table(
     "financial_statements",
     "id:s version:i prepared_at:d directors_declaration_date:d document_id:s comparative_restatement_entry_nos:j",
