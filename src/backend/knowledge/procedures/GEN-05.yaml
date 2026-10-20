@@ -241,7 +241,7 @@ rules:
             AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
           HAVING count(DISTINCT j.created_by)<2
     sql: |
-      WITH preparers AS (
+      WITH preparers AS MATERIALIZED (  -- 先算好各录入人的凭证数: 刚载入还没统计时规划器会把分组聚合放进嵌套循环反复执行
         SELECT j.created_by, count(DISTINCT j.entry_no) AS preparer_entries
         FROM journal_entries j
         WHERE j.engagement_id=:eid
