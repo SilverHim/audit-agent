@@ -177,25 +177,25 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
 ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed)
 
 
-D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 只有第 1 次执行为 BA-091 新建的 D04
+D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 各组都只有第 1 次执行为 BA-091 新建的这一条 D04
 
 
 @pytest.mark.parametrize(
-    ("failing", "kind", "csh02"),
+    ("failing", "kind"),
     [
-        ([("REV-02", ORC1021)], "failed", D04),
+        ([("REV-02", ORC1021)], "failed"),
         # 带 REV-08 的 R03-1, 判断失败转 unattributed 任务, 驱动同 failed 先重跑一次 (需求 R347 验收 3)
-        ([("REV-02", ORC1026)], "unattributed", D04),
+        ([("REV-02", ORC1026)], "unattributed"),
         # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
-        ([("CSH-02", "BA-091")], "unattributed", D04),
+        ([("CSH-02", "BA-091")], "unattributed"),
         # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
-        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed", D04),
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed"),
     ],
     ids=["rev02", "rev02_findings", "csh02", "revisions"],
 )
 @pytest.mark.external
 async def test_live_driver_reruns_a_failed_object_once(
-    tmp_path: Path, failing: list[tuple[str, str]], kind: str, csh02: list[str]
+    tmp_path: Path, failing: list[tuple[str, str]], kind: str
 ) -> None:
     """自测重跑一路: 各对象 (REV-02 的 ORC1021 与带规则例外的 ORC1026, CSH-02 的 BA-091, 计划或报告的每个修订) 前
     MAX_ATTEMPTS 次调用输出不是 JSON, 成为 kind 类任务 (failed; 带规则例外的为 unattributed); 驱动对每个各重跑一次,
@@ -213,7 +213,7 @@ async def test_live_driver_reruns_a_failed_object_once(
     for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (与固定输出的建议动作相同)
         assert rows[key]["same"], rows[key]
     assert stranded(exceptions) == []
-    assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == csh02  # 重跑不另建 D04
+    assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == D04  # 重跑不另建 D04
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
