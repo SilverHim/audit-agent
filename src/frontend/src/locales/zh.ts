@@ -767,6 +767,14 @@ export const zh: Messages = {
     exceptions: '规则发现',
     judgments: '判断',
     none: '无',
+    notRun: {
+      title: '未执行的规则',
+      status: { not_executable: '无法执行', skipped: '跳过' },
+      meaning: {
+        not_executable: '无法执行：该规则本应执行，但缺少所需的数据或参数，补齐后重跑。',
+        skipped: '跳过：按程序设计，该规则不适用于本项目。',
+      },
+    },
   },
   rerun: {
     stale: '数据已更新，结果已过期',

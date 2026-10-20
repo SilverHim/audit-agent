@@ -831,6 +831,15 @@ export const en = {
     exceptions: 'Rule findings',
     judgments: 'Judgments',
     none: 'None',
+    notRun: {
+      title: 'Rules not run',
+      status: { not_executable: 'Not executable', skipped: 'Skipped' },
+      meaning: {
+        not_executable:
+          'Not executable: the rule should have run, but data or a parameter it needs is missing. Supply it and re-run.',
+        skipped: 'Skipped: by design the rule does not apply to this engagement.',
+      },
+    },
   },
   rerun: {
     stale: 'Data updated · results out of date',
