@@ -122,14 +122,21 @@ def run_population(
     return RunPopulation(id=population_id(run.id), run_id=run.id, procedure_id=run.procedure_id, rules=populations)
 
 
-def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
-    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no."""
+def next_run(
+    procedure_id: str,
+    runs: list[ProcedureRun],
+    params: dict[str, Any],
+    started_at: datetime,
+    trigger: RunTrigger | None = None,
+) -> ProcedureRun:
+    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no; trigger 为空时第 1 次为 initial, 其后为
+    rerun (增量实例给 incremental)."""
     run_no = next_run_no(procedure_id, runs)
     return ProcedureRun(
         run_no=run_no,
         id=run_id_of(procedure_id, run_no),
         procedure_id=procedure_id,
-        trigger=RunTrigger.initial if run_no == 1 else RunTrigger.rerun,
+        trigger=trigger or (RunTrigger.initial if run_no == 1 else RunTrigger.rerun),
         params_snapshot=params,
         started_at=started_at,
         status=RunStatus.running,
@@ -146,16 +153,20 @@ def build_run(
     *,
     traits: DatasetTraits,
     profile: ClientProfile | None,
+    trigger: RunTrigger | None = None,
+    overrides: Mapping[str, Any] | None = None,
 ) -> ProcedureRun:
-    """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
+    """建某条程序的下一次执行记录, execute, fieldwork 与增量实例 (scan_increment) 共用.
 
     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
-    为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
-    本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
-    记录. language 取项目当时的工作语言 (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
+    为准), 最后叠加 overrides (增量实例的 entry_nos, 需求 R194). 解析用的风险等级取程序关联审计目标的最高等级,
+    dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目采用版本的客户画像 profile. trigger 见 next_run.
+    参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录. language 取项目当时的工作语言
+    (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
     """
     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
-    run = next_run(procedure.id, state["procedure_runs"], params, started_at)
+    params |= overrides or {}
+    run = next_run(procedure.id, state["procedure_runs"], params, started_at, trigger)
     return run.model_copy(update={"language": engagement.working_language})
 
 
@@ -255,7 +266,7 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
 MISSTATEMENT_NODES: dict[str, tuple[str, ...]] = {
     "misstatement_triage": ("FIN-03",),
     "communicate": ("FIN-08",),
-    "verify_correction": ("FIN-09",),
+    "verify_correction": ("GEN-05", "FIN-09"),  # 先对更正分录做 GEN-05 增量扫描 (需求 R194)
     "p3_reassess": ("PLN-19",),
     "summarize": ("FIN-04",),
     "final_review": ("FIN-15",),
@@ -543,6 +554,21 @@ def awaiting_correction(state: EngagementState) -> list[str]:
     )
 
 
+def increment_entry_nos(state: EngagementState, procedure_id: str, available: Sequence[str]) -> list[str]:
+    """增量实例要扫的凭证号 (需求 R194): 状态中各份 adjustments_posted 更正通知载入的凭证 (通知的凭证号为空即载入了全部
+    未载入的, 取 available: 数据集可载入的全部更正分录), 去掉本程序已有的增量执行 (trigger incremental) 参数快照里
+    entry_nos 扫过的, 排序. 纯函数."""
+    posted = [n for n in state["correction_notices"] if n.kind == "adjustments_posted"]
+    loaded = {no for n in posted for no in (n.adjustment_entry_nos or available)}
+    scanned = {
+        no
+        for r in state["procedure_runs"]
+        if r.procedure_id == procedure_id and r.trigger is RunTrigger.incremental
+        for no in r.params_snapshot.get("entry_nos") or []
+    }
+    return sorted(loaded - scanned)
+
+
 def after_notice(misstatement: Misstatement, notice: CorrectionNotice) -> Misstatement:
     """按更正通知写出的错报新版本 (接口文档第 2.5 节迁移表): adjustments_posted 转 verifying, stop_waiting 记
     uncorrected (stopped_waiting); 都记 correction_notice_id, needs_recommunication 置假. 经 model_validate 重建.
@@ -646,26 +672,8 @@ class GraphNodes:
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
-        dataset = engagement.dataset  # 没有数据集的项目 (新建的客户) 取缺省声明
-        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
-        # 画像按本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用
-        version = state["client_profile_version"]
-        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
-        procedure_run = build_run(
-            self.deps.library,
-            template,
-            procedure,
-            engagement,
-            state,
-            datetime.now(UTC),
-            traits=traits,
-            profile=profile,
-        )
-        # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
-        data_version = None
-        if template.phase is not Phase.P0_Acceptance:
-            data_version = (await self.deps.data.readiness(engagement.id)).data_version
-        procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
+        procedure_run = await self.new_run(state, engagement, template, procedure)
+        procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
         population = None
@@ -687,6 +695,78 @@ class GraphNodes:
         if population is not None:
             staged["population"] = population
         return staged
+
+    async def new_run(
+        self,
+        state: EngagementState,
+        engagement: Engagement,
+        template: ProcedureTemplate,
+        procedure: Procedure,
+        trigger: RunTrigger | None = None,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> ProcedureRun:
+        """本程序的下一次执行记录 (build_run): 数据集声明取项目的 (没有数据集的项目, 即新建的客户, 取缺省声明), 画像按
+        本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用; 记执行时的数据版本, 总览
+        据此标过期 (需求 R16; 承接阶段只看客户资料, 不读财务数据, 不记). perform 与 scan_increment 共用."""
+        dataset = engagement.dataset
+        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
+        version = state["client_profile_version"]
+        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
+        run = build_run(
+            self.deps.library,
+            template,
+            procedure,
+            engagement,
+            state,
+            datetime.now(UTC),
+            traits=traits,
+            profile=profile,
+            trigger=trigger,
+            overrides=overrides,
+        )
+        data_version = None
+        if template.phase is not Phase.P0_Acceptance:
+            data_version = (await self.deps.data.readiness(engagement.id)).data_version
+        return run.model_copy(update={"data_version": data_version})
+
+    async def scan_increment(
+        self, state: EngagementState, engagement: Engagement, procedure_id: str, entry_nos: Sequence[str]
+    ) -> StatePatch:
+        """程序的增量实例 (需求 R194; 模板 incremental, 即 GEN-05): 只扫 entry_nos 这些凭证. 建下一次执行记录 (new_run:
+        trigger incremental, 参数为模板参数的解析结果, entry_nos 换成排序后的这些凭证号), 调 Agent, 片段经合并校验后
+        与执行记录, 被测总体 (run_population, 需求 R324) 在一个事务内写入 Store; 程序不出新版本 (仍 completed), 不建
+        任务. 返回写入后的片段, 由节点并入状态.
+        重放: 这次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (同 perform). 模板 incremental 为假抛
+        ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过为节点错误, 照常抛出
+        (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error, 恢复时重做."""
+        template = self.deps.library.load(procedure_id)
+        if not template.incremental:
+            raise ValueError(f"{procedure_id} 没有增量实例 (模板 incremental 为假)")
+        if not entry_nos:
+            return {}
+        eid = engagement.id
+        procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
+        overrides = {"entry_nos": sorted(entry_nos)}
+        run = await self.new_run(state, engagement, template, procedure, RunTrigger.incremental, overrides)
+        stored = await self.deps.output_store.get(eid, ProcedureRun, run.id)
+        if stored is not None and stored.status is not RunStatus.running:
+            return await stored_outputs(self.deps, eid, template, stored)
+        agent = self.agents[procedure_id]
+        writer = writer_of(template, agent)
+        output = await agent.outcome(
+            RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
+        )
+        patch = output.patch
+        check_patch(
+            patch, writer=writer, procedure_id=procedure_id, run_id=run.id, state=state, outputs=template.outputs
+        )
+        ended = next(r for r in patch["procedure_runs"] if r.id == run.id)
+        population = run_population(template, ended, output.populations)
+        async with self.deps.output_store.transaction(eid):
+            saved = await save_outputs(self.deps.output_store, eid, patch, actor=writer)
+            if population is not None:
+                await self.deps.output_store.put(eid, [population], actor=writer)
+            return saved
 
     async def attempt(
         self,
@@ -994,14 +1074,29 @@ class GraphNodes:
         合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕).
         先执行的程序读回的决定传给后面的 (execute 的 earlier).
         模板 inputs 的资料还缺的程序不执行, 记 awaiting_data 或 no_data (execute 每次执行前查, 需求 R272, R280), 节点
-        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
+        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门).
+        有增量实例的程序 (模板 incremental, 只在 verify_correction 的 GEN-05) 不经 execute, 走 increment."""
         result: StatePatch = {}
         for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
-            earlier = [r.id for r in result.get("review_records", [])]
-            patch = await self.execute(state, procedure_id, phase, earlier)
+            if self.deps.library.load(procedure_id).incremental:
+                patch = await self.increment(state, procedure_id)
+            else:
+                earlier = [r.id for r in result.get("review_records", [])]
+                patch = await self.execute(state, procedure_id, phase, earlier)
             merge_patch(result, patch)
             state = apply_patch(state, patch)
         return result
+
+    async def increment(self, state: EngagementState, procedure_id: str) -> StatePatch:
+        """对更正通知载入而还没扫过的凭证 (increment_entry_nos; 数据集可载入的更正分录取 DatasetLoader) 做本程序的增量
+        实例 (scan_increment, 需求 R194); 没有要扫的返回 {}."""
+        engagement = await self.deps.engagement_store.get(state["engagement_id"])
+        if engagement is None:
+            raise LookupError(f"Engagement {state['engagement_id']} not found")
+        dataset = engagement.dataset
+        available = self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
+        entry_nos = increment_entry_nos(state, procedure_id, available)
+        return await self.scan_increment(state, engagement, procedure_id, entry_nos)
 
     async def inputs_before_run(self, state: EngagementState, procedure_id: str) -> StatePatch:
         """执行一条 P2 以外的程序前查它要的资料 (需求 R272), 首次执行与 rerun 都经过这里 (execute): 按现有资料重定
@@ -1391,7 +1486,8 @@ class GraphNodes:
         return {"misstatements": written, "correction_notices": [notice]}
 
     async def verify_correction(self, state: EngagementState) -> StatePatch:
-        """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""
+        """验证更正: 先对更正通知载入而还没扫过的更正分录做 GEN-05 的增量实例 (需求 R194, 程序包没有 GEN-05 时跳过),
+        再由 A8 执行 FIN-09 (需求 R165)."""
         return await self.run_node(state, "verify_correction")
 
     async def p3_reassess(self, state: EngagementState) -> StatePatch:

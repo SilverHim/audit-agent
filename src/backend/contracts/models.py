@@ -116,6 +116,7 @@ class RunTrigger(StrEnum):
 
     initial = "initial"  # 首次执行
     rerun = "rerun"  # 按复核决定重跑
+    incremental = "incremental"  # 增量实例: 只扫更正通知载入的更正分录 (GEN-05, 需求 R194), 程序不出新版本
 
 
 class RunStatus(StrEnum):

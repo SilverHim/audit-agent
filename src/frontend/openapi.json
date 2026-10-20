@@ -14163,7 +14163,8 @@
         "type": "string",
         "enum": [
           "initial",
-          "rerun"
+          "rerun",
+          "incremental"
         ],
         "title": "RunTrigger",
         "description": "一次执行的起因."

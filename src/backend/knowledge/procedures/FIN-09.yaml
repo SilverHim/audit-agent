@@ -18,8 +18,9 @@ scope:
 #   severity medium, source_ids 为匹配行 ID (没有时为来源对象), amount_cents 为错报金额, detail {misstatement_id,
 #   expected_cents, corrected_cents, matched_line_ids}; 作该错报判断的规则例外, 验证载荷为 communicated 且须重新沟通.
 #   该错报已有本程序尚未归因的 V02 时沿用, 不看本次比对, 不再新建 (同 CSH-02 的 D01, D04; 审核 R165-07).
-# depends_on 只有 FIN-08 (R161 加 FIN-08.yaml 时补上); 分录段的 GEN-05 增量就绪后再加 GEN-05 (需求 R164 验收 1 的差异,
-# 协调者 10-20 裁定).
+# depends_on: FIN-08 (R161 加 FIN-08.yaml 时补上) 与 GEN-05 (分录段的增量扫描, 需求 R194; 功能 journals 关闭时程序库丢弃
+# 这条依赖). verify_correction 先对更正通知载入的凭证做 GEN-05 增量扫描, 再执行本程序; 增量实例在匹配凭证上的未归因例外
+# 接在 V02 之后作该错报判断的规则例外 (需求 R194).
 phase: P3_Completion
 cycle: Completion
 owner: A8
@@ -31,7 +32,7 @@ autonomy_level: L2
 manual_result_allowed: true          # 判断失败的错报可由审计师给出验证结果 (须带人给的验证载荷)
 misstatement_update_kind: verification   # 判断带验证载荷, 确认后写错报新版本; 推翻与手工结果须由人给载荷 (需求 R159);
                                          # 带它的程序自主度不能高于 L2 (仲裁不收载荷)
-depends_on: [FIN-08]
+depends_on: [FIN-08, GEN-05]
 params:
   adjustment_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录的凭证号前缀
 standards: [ASA450-P07]

@@ -6,7 +6,7 @@ manual/fin08_round{n}.json (xero_fakes.round_file). 模块常量不读快照与�
 第 2 轮的 SECOND, round2_communicated, round2_sources 现由 FIN-09 第 2 轮的用例用, 也是给 R167 两轮闭环预留的.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +23,7 @@ from backend.contracts.models import (
     MisstatementStatus,
     MisstatementType,
     Phase,
+    ProcedureRun,
     ProposedAction,
     RerunRequest,
     TrailEntry,
@@ -70,12 +71,14 @@ def fin09_deps(
     llm: Any = None,
     rows: Sequence[dict[str, Any]] | None = None,
     entries: Sequence[str] = FIRST,
+    results: Mapping[str, Callable[[ProcedureRun], RuleResult]] | None = None,
     **kwargs: Any,
 ) -> AgentDeps:
     """fin03_deps (kwargs 原样转交, 如 features) 加 FIN-09 的数据: 财务存储另记 entries 的更正分录; 规则引擎的 V01
-    为这些分录的行 (xero_v01_rows), rows 给了时换成它."""
+    为这些分录的行 (xero_v01_rows), rows 给了时换成它; results 为别的程序的规则结果 (同 FakeRuleEngine)."""
     v01 = list(rows) if rows is not None else xero_v01_rows(entries)
-    rules = FakeRuleEngine({FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": v01})})
+    fin09 = {FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": v01})}
+    rules = FakeRuleEngine({**fin09, **(results or {})})
     deps = fin03_deps(trail, llm, rules=rules, **kwargs)
     with_adjustments(deps.financial_store, entries)  # type: ignore[arg-type]
     return deps

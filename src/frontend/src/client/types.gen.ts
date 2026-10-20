@@ -5046,7 +5046,7 @@ export type RunStatus = 'running' | 'succeeded' | 'failed';
  *
  * 一次执行的起因.
  */
-export type RunTrigger = 'initial' | 'rerun';
+export type RunTrigger = 'initial' | 'rerun' | 'incremental';
 
 /**
  * ServiceOrganisation

@@ -28,6 +28,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewStatus,
     RunStatus,
+    RunTrigger,
     TaskKind,
     TaskStatus,
 )
@@ -36,7 +37,7 @@ from backend.orchestration.decisions import review_effects
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import after_notice, apply_patch
 from backend.services.review_queue import RERUNNABLE
-from tests.fakes import FakeTrail, ScriptedLLM, finished, make_run
+from tests.fakes import FakeTrail, ScriptedLLM, finished, gen05_exception, make_run
 from tests.fixture_sets import XERO
 from tests.misstatement_fakes import (
     CSH02,
@@ -539,3 +540,28 @@ def test_entry_numbers_deduplicated() -> None:
     xj499 = round1_verifying()[0]
     lines = [line("AJE-X01-2", "asset", credit=50000), line("AJE-X01-4", "asset", credit=25000)]
     assert verification_update(xj499, lines, corrected_cents(xj499, lines)) == verified(XJ499, 4, "AJE-X01", 75000)
+
+
+async def test_increment_exceptions_join_rule_findings() -> None:
+    """需求 R194 认领: GEN-05 增量执行在匹配凭证 (AJE-X01) 上未归因的例外接在 XJ499 判断的规则例外中; 别的凭证上的,
+    初始执行引出的, 被过期重跑取代的增量执行引出的与已归因的不进; CSH02 的匹配凭证 (AJE-X05) 上没有."""
+    increment, superseded = (
+        finished(make_run("GEN-05", n).model_copy(update={"trigger": RunTrigger.incremental})) for n in (2, 3)
+    )
+    initial = finished(make_run("GEN-05"))
+    on_entry = gen05_exception(increment, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
+    attributed = gen05_exception(increment, "R09", "high", "AJE-X01-1", 82500, {"entry_no": "AJE-X01"})
+    attributed = attributed.model_copy(update={"disposition": ExceptionDisposition.attributed, "attributed_by": "J-1"})
+    elsewhere = gen05_exception(increment, "R02", "medium", "AJE-X02-1", 426120, {"entry_no": "AJE-X02"}, number=2)
+    earlier = gen05_exception(initial, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
+    stale = gen05_exception(superseded, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
+    rerun = SUPERSEDED.model_copy(update={"procedure_ids": ["GEN-05"], "superseded_run_ids": [superseded.id]})
+    state = fin03_state(
+        misstatements=round1_verifying(),
+        procedure_runs=[initial, increment, superseded],
+        exceptions=[on_entry, attributed, elsewhere, earlier, stale],
+        rerun_requests=[rerun],
+    )
+    patch, _ = await run_fin09(fin09_deps(FakeTrail()), state)
+
+    assert [j.exception_ids for j in patch["judgments"]] == [[on_entry.id], []]
