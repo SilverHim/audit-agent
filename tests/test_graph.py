@@ -487,6 +487,17 @@ def test_gate_route_pln15_after_approval(status: PlanStatus, version: int, verdi
     assert gate_route(GateId.PLN_15)(state) == route
 
 
+@pytest.mark.parametrize("verdict", list(GateVerdict))
+def test_gate_route_pln15_represents_new_revision(verdict: GateVerdict) -> None:
+    """需求 R206 验收 5: 驳回后起草了 PLAN-2 v1 (PLAN-1 置 superseded), 最后一条 PLN-15 决定仍绑定 PLAN-1 v1: 不论哪种
+    决定都已过期, 重新呈报 (回 gate_p1_plan 呈报 PLAN-2), 不按旧决定放行或再驳回."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state["gate_decisions"] = [_decision(0, GateId.PLN_15, verdict)]
+    state["audit_plans"] = [audit_plan(1, 2, PlanStatus.superseded), audit_plan(2)]
+
+    assert gate_route(GateId.PLN_15)(state) == "represent"
+
+
 # 功能 planning 打开时 (需求 R205 验收 1) 比基线多的边; 基线的 assemble_pack → schedule 改为 → plan_draft
 PLANNING_EDGES = [
     ("assemble_pack", "plan_draft", False, None),

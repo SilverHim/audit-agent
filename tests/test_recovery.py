@@ -19,6 +19,7 @@ from backend.contracts.models import (
     Judgment,
     OpinionType,
     Phase,
+    PlanStatus,
     ProcedureRun,
     ProcedureStatus,
     ProfileSource,
@@ -37,6 +38,7 @@ from backend.orchestration.gates import acc01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.presentation import record_presentation
+from tests.external import needs
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -50,13 +52,19 @@ from tests.fakes import (
     profile_update,
     wait_idle,
 )
+from tests.fixture_sets import XERO
 from tests.test_collab import CASH_DRAFT, COLLAB, CONSULT, disputed
 from tests.test_decisions import (
     FIXED_PROFILE,
+    SecondPlanAsFirst,
     Started,
     acc01_decision,
+    at_plan_gate,
     at_pln_gate,
     edit,
+    plan_decision,
+    plan_versions,
+    pln15_runs,
     pln_decision,
     started,
     stop_after_submit,
@@ -339,6 +347,47 @@ async def test_insufficient_info_caught_up_stays_at_gate(setup: Any, factory: An
     await s.runner.resume(EID)
     assert (await s.runner.app.aget_state(CONFIG)).config == after.config
     assert len(s.output_store.commits) == commits
+
+
+@pytest.mark.parametrize(
+    ("verdict", "plans", "runs"),
+    [
+        (
+            GateVerdict.reject,
+            [("PLAN-1", 1, PlanStatus.draft), ("PLAN-2", 1, PlanStatus.draft), ("PLAN-1", 2, PlanStatus.superseded)],
+            ["RUN-PLN-15-1", "RUN-PLN-15-2"],
+        ),
+        (GateVerdict.insufficient_info, [("PLAN-1", 1, PlanStatus.draft)], ["RUN-PLN-15-1"]),
+    ],
+)
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_decision_caught_up(
+    verdict: GateVerdict, plans: list[tuple[str, int, PlanStatus]], runs: list[str]
+) -> None:
+    """R206 验收 6(b), (c): PLN-15 驳回或信息不足已写 Store 而检查点没跟上: 新决定报 RESUME_REQUIRED. resume 补做后,
+    驳回的下一节点为 plan_draft, 以 rerun 起草 PLAN-2 v1 再停闸门 (RUN-PLN-15-2 与 PLAN-2 v1 各只一个); 信息不足仍停
+    闸门, 计划不变. decision 留痕不重复; 再 resume 一次检查点, Store 与留痕都不变. (批准的补做见 test_decisions 的
+    test_plan_approve_caught_up_after_lost_checkpoint.)"""
+    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
+    decision = plan_decision(verdict, id="D-P15-LOST")
+    await submit_lost(s, decision)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, plan_decision(verdict, id="D-P15-NEXT"))
+    assert e.value.code == "RESUME_REQUIRED"
+
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+
+    assert s.runner.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
+    caught_up = [h async for h in s.runner.app.aget_state_history(CONFIG) if decision in h.values["gate_decisions"]]
+    assert caught_up[-1].next == (("plan_draft",) if verdict is GateVerdict.reject else ("gate_p1_plan",))
+    assert (plan_versions(s), pln15_runs(s), decision_keys(s).count(decision.id)) == (plans, runs, 1)
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    after = (await s.runner.app.aget_state(CONFIG)).config, len(s.output_store.rows), len(trail.entries)
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+    assert ((await s.runner.app.aget_state(CONFIG)).config, len(s.output_store.rows), len(trail.entries)) == after
 
 
 async def test_missing_decisions_caught_up_in_decision_order() -> None:

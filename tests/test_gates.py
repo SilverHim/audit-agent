@@ -20,7 +20,9 @@ from backend.contracts.models import (
     MaterialityCandidates,
     MaterialityChoice,
     OpinionType,
+    Phase,
     PlanStatus,
+    ProcedureStatus,
     ReportSection,
 )
 from backend.contracts.state import EngagementState, initial_state
@@ -52,6 +54,7 @@ from tests.fakes import (
     audit_plan,
     make_deps,
     make_graph_nodes,
+    make_procedure,
 )
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
@@ -135,6 +138,7 @@ def test_pln15_gate_row() -> None:
         "planning",
     )
     assert spec.is_list and spec.pick is current_plan and spec.passed is not None and spec.rebuild is not None
+    assert spec.check is gates.pln15_check  # 需求 R206: 项目质量复核的依据不能为空
     assert path_map([spec], PLANNING_FEATURES) == {
         "represent": "gate_p1_plan",
         "approve": "schedule",
@@ -164,6 +168,36 @@ def test_current_plan_skips_superseded_revisions() -> None:
     assert current_plan([plan1]) == plan1 and current_plan([approved]) == approved
     assert current_plan([retired, plan2]) == plan2
     assert current_plan([retired]) is None and current_plan([]) is None
+
+
+def test_pln15_effects_is_pure() -> None:
+    """需求 R206 验收 7: pln15_effects 是 (程序包, 决定, 当前计划) 的纯函数: 同一输入两次结果相等, 输入不变. 通过出
+    批准版 (下一版, 批准时间取决定时刻), PLN-15 completed, 阶段 P2_Executing; 驳回与信息不足只返回决定."""
+    pack = [make_procedure("PLN-15", Phase.P1_Planning), make_procedure("REV-08", Phase.P2_Executing)]
+    plan = audit_plan()
+    approve = decision(GateId.PLN_15, GateVerdict.approve, "PLAN-1").model_copy(
+        update={"plan_confirmation": PLAN_CONFIRMATION}
+    )
+    inputs = (list(pack), plan.model_copy())
+
+    effects = gates.pln15_effects(pack, approve, plan)
+
+    assert effects == gates.pln15_effects(pack, approve, plan) and (pack, plan) == inputs
+    [approved] = effects["audit_plans"]
+    assert (approved.id, approved.version, approved.status, approved.approved_at) == (
+        "PLAN-1",
+        2,
+        PlanStatus.approved,
+        NOW,
+    )
+    assert [(p.id, p.version, p.status) for p in effects["procedure_pack"]] == [
+        ("PLN-15", 2, ProcedureStatus.completed),
+        ("REV-08", 1, ProcedureStatus.planned),
+    ]
+    assert (effects["gate_decisions"], effects["phase"]) == ([approve], Phase.P2_Executing)
+    for verdict in (GateVerdict.reject, GateVerdict.insufficient_info):
+        d = decision(GateId.PLN_15, verdict, "PLAN-1")
+        assert gates.pln15_effects(pack, d, plan) == {"gate_decisions": [d]}
 
 
 # ── 验收 3: 一个节点挂两道闸门的组合路由 (纯函数) ──
