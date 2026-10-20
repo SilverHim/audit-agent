@@ -28,7 +28,6 @@ from backend.contracts.models import (
     GateVerdict,
     MaterialityCandidates,
     MaterialityChoice,
-    OpinionType,
     Phase,
     PlanStatus,
     Procedure,
@@ -54,13 +53,13 @@ from backend.contracts.views import (
 )
 from backend.orchestration.nodes import uncovered_objectives, update_procedure
 from backend.services.features import FEATURES, LEGACY_FEATURES, MISSTATEMENT, PLANNING, parse_features
+from backend.services.opinion import allowed_opinions
 from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
 # 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 只有 PLN-15 的通过决定能填 (登记行, 需求 R205),
 # 其余闸门的决定带它报 FIELD_NOT_ALLOWED
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations", "plan_confirmation")
 REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
-FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
 
 # 闸门路由的返回值, 即闸门的出口名: 通过, 驳回, 重跑 ACC-04, 重新呈报.
@@ -685,9 +684,18 @@ async def pln15_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
 
 
 async def fin01_check(deps: AgentDeps, eid: str, decision: GateDecision, target: Versioned) -> None:
-    if decision.disposition is not None and decision.disposition not in FIN01_DISPOSITIONS:
+    """disposition 须在 services.opinion.allowed_opinions 给出的可选范围内 (与 A9 的候选同一函数, 需求 R184;
+    target 为当前汇总表; 持续经营结论本条传 None, 接上已批准的 FIN-02 结论由 GC-10 做); 不在时报 INVALID_VALUE,
+    消息列出可选的意见类型与理由."""
+    if decision.disposition is None:
+        return
+    assert isinstance(target, UncorrectedSchedule)  # FIN-01 的材料对象 (GateSpec.material_model)
+    options = allowed_opinions(target, None)
+    if decision.disposition not in options.allowed:
+        allowed = ", ".join(o.value for o in options.allowed) or "(无)"
         raise DecisionRejected(
-            "INVALID_VALUE", f"意见类型只能选 unqualified 或 qualified, 不能选 {decision.disposition}"
+            "INVALID_VALUE",
+            f"意见类型只能选 {allowed}, 不能选 {decision.disposition}; {'; '.join(options.reasons)}",
         )
 
 

@@ -20,9 +20,11 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.views import CompletionMaterial
+from backend.orchestration import gates
 from backend.orchestration.gates import fin01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.opinion import OpinionOptions
 from tests.fakes import NOW, EngagementWrite, FakeTrail, make_procedure, wait_idle
 from tests.test_decisions import CHOICE, Started, assert_rejected, at_pln_gate, edit, stop_after_submit
 from tests.test_flow import EID, approve_materiality, review_all, start_numbat
@@ -130,8 +132,17 @@ ANNOTATION = Annotation(section=ReportSection.basis_for_opinion, comment="x")
     [
         (fin_decision(GateVerdict.approve, disposition=None), "MISSING_FIELD", "disposition"),
         (fin_decision(GateVerdict.approve, reason=None), "MISSING_FIELD", "reason"),
-        (fin_decision(GateVerdict.approve, disposition=OpinionType.adverse), "INVALID_VALUE", "adverse"),
-        (fin_decision(GateVerdict.approve, disposition=OpinionType.disclaimer), "INVALID_VALUE", "disclaimer"),
+        # 消息列出可选范围 (services.opinion.allowed_opinions, 需求 R184)
+        (
+            fin_decision(GateVerdict.approve, disposition=OpinionType.adverse),
+            "INVALID_VALUE",
+            "只能选 unqualified, qualified, 不能选 adverse",
+        ),
+        (
+            fin_decision(GateVerdict.approve, disposition=OpinionType.disclaimer),
+            "INVALID_VALUE",
+            "只能选 unqualified, qualified, 不能选 disclaimer",
+        ),
         (fin_decision(GateVerdict.reject, disposition=OpinionType.qualified), "FIELD_NOT_ALLOWED", "disposition"),
         (fin_decision(GateVerdict.approve, materiality=CHOICE), "FIELD_NOT_ALLOWED", "materiality"),
         (fin_decision(GateVerdict.reject, edits=[edit()]), "FIELD_NOT_ALLOWED", "edits"),
@@ -146,6 +157,24 @@ async def test_invalid_fin01_decision_rejected(
 ) -> None:
     """验收 4: 不合规的 FIN-01 决定被拒, Store 与检查点不变, 锁释放."""
     await assert_rejected(fin_gate, decision, code, detail)
+
+
+async def test_fin01_check_uses_allowed_opinions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R184: FIN-01 的 disposition 校验取 services.opinion.allowed_opinions (与 A9 的候选同一函数), 收到的是绑定的
+    汇总表 SCHEDULE v1 与持续经营结论 None; 可选范围换掉时按换后的判断 (这里只许 unqualified, 选 qualified 被拒,
+    消息带理由)."""
+    s = await at_fin_gate()
+    seen: list[tuple[Any, Any]] = []
+
+    def only_unqualified(schedule: UncorrectedSchedule, going_concern: Any) -> OpinionOptions:
+        seen.append(((schedule.id, schedule.version), going_concern))
+        return OpinionOptions(OpinionType.unqualified, (OpinionType.unqualified,), ["测试的理由"])
+
+    monkeypatch.setattr(gates, "allowed_opinions", only_unqualified)
+    await assert_rejected(
+        s, fin_decision(GateVerdict.approve), "INVALID_VALUE", "只能选 unqualified, 不能选 qualified; 测试的理由"
+    )
+    assert seen == [(("SCHEDULE", 1), None)]
 
 
 async def test_fin01_decision_not_at_gate_rejected() -> None:

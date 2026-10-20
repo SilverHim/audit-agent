@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from backend.agents import qc
 from backend.agents.base import RunContext
 from backend.agents.qc import QCAgent
 from backend.contracts.models import (
@@ -25,6 +26,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.state import StatePatch, initial_state
+from backend.services.opinion import OpinionOptions
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import ENGAGEMENT, FakeRegistry, FakeTrail, make_deps, make_procedure, make_run
 from tests.xero_fakes import XERO_ROUND2
@@ -150,6 +152,21 @@ async def test_opinion_boundary_and_no_misstatements() -> None:
     )
     empty = (await run_fin04([]))["uncorrected_schedule"]
     assert (empty.items, empty.total_cents, empty.candidate_opinion) == ([], 0, OpinionType.unqualified)
+
+
+async def test_candidate_comes_from_allowed_opinions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R184: 候选意见取 services.opinion.allowed_opinions (与 FIN-01 的校验同一函数), 收到的是本次编出的汇总表
+    (合计与重要性) 与持续经营结论 None; 换掉它时候选随之改."""
+    seen: list[tuple[int, int, Any]] = []
+
+    def adverse(schedule: UncorrectedSchedule, going_concern: Any) -> OpinionOptions:
+        seen.append((schedule.total_cents, schedule.materiality_cents, going_concern))
+        return OpinionOptions(OpinionType.adverse, (), [])
+
+    monkeypatch.setattr(qc, "allowed_opinions", adverse)
+    schedule = (await run_fin04([misstatement(1, 14200000)]))["uncorrected_schedule"]
+    assert schedule.candidate_opinion is OpinionType.adverse
+    assert seen == [(14200000, MATERIALITY, None)]
 
 
 async def test_next_version_when_schedule_exists() -> None:
