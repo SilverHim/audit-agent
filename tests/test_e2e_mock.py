@@ -43,6 +43,7 @@ from backend.contracts.models import (
     MisstatementType,
     OpinionType,
     Phase,
+    ProcedureRun,
     ProposedAction,
     ReportSection,
     ReportStatus,
@@ -322,6 +323,19 @@ async def test_trail_counts(demo: Started) -> None:
     assert_trail_counts(trail_of(demo).entries)
 
 
+@shared_loop
+async def test_no_rule_is_left_unexecuted(demo: Started) -> None:
+    await assert_all_rules_ran(demo)
+
+
+async def assert_all_rules_ran(s: Started, eid: str = EID) -> None:
+    """需求 R130 零影响: 现有程序都没有执行前检查, 跑完后存储里每条执行记录的 rule_outcomes 都为空 (连库的变体用
+    真实规则引擎与 Postgres 存储). 防给现有程序记出未执行的规则."""
+    runs = await s.output_store.latest(eid, ProcedureRun)
+    assert {r.procedure_id for r in runs} >= {"PLN-07", "PLN-01", "REV-08", "CSH-05", "REV-02", "CSH-02"}
+    assert [r.id for r in runs if r.rule_outcomes] == []
+
+
 def assert_trail_counts(entries: Sequence[TrailEntry]) -> None:
     """验收 3: llm_call 15 行 (DOC-04 3, DOC-06 2, REV-03 3, REV-02 2, CSH-02 1, GEN-09 2, RPT-03 2), decision 11 行,
     external_call 4 行 (ACC-04 2, CSH-04 2). GEN-09 两行是 A7 对 BA-01 (L3, 建议关闭) 的两轮独立复核.
@@ -565,6 +579,7 @@ async def test_real_storage_variant(tmp_path: Path) -> None:
             assert s.runner.run_error(eid) is None, (decision.id, s.runner.run_error(eid))
 
         await assert_results(s, eid, approver=owner)
+        await assert_all_rules_ran(s, eid)
         entries = await deps.trail.list(eid, limit=10_000)
         assert_trail_counts(entries)
         files = assert_fixtures_used_once(entries, enabled_programs(deps))

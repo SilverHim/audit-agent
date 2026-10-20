@@ -1585,7 +1585,8 @@ class FakeUserStore:
 
 
 class FakeRuleEngine:
-    """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果.
+    """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果. 不执行
+    检查; 要模拟没有执行的规则时, 预置的 RuleResult 带上 outcomes (需求 R130).
 
     calls 记下每次调用 (程序编号, Run ID, 参数). B 的 SqlRuleEngine 就绪前代替它.
     """

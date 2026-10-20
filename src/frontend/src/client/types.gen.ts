@@ -3481,6 +3481,10 @@ export type ProcedureRun = {
      * Data Version
      */
     data_version?: number | null;
+    /**
+     * Rule Outcomes
+     */
+    rule_outcomes?: Array<RuleOutcome>;
 };
 
 /**
@@ -4097,6 +4101,26 @@ export type RowRule = {
      * Pattern
      */
     pattern: string;
+};
+
+/**
+ * RuleOutcome
+ *
+ * 一条没有执行的规则 (执行前检查命中, 需求 R130): 规则编号, 原因与理由. 执行了的规则不记.
+ */
+export type RuleOutcome = {
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Status
+     */
+    status: 'skipped' | 'not_executable';
+    /**
+     * Reason
+     */
+    reason: string;
 };
 
 /**

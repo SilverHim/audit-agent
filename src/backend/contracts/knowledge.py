@@ -14,6 +14,7 @@ from backend.contracts.models import (
     Model,
     Phase,
     RiskLevel,
+    RuleOutcomeStatus,
 )
 
 
@@ -36,6 +37,13 @@ class ProcedureInputs(Model):
     documents: list[DocumentType] = []  # 文件类型: 有一份该类型的文件即算有
 
 
+class RuleCheck(Model):
+    """规则的一项执行前检查 (需求 R130): SQL 返回行即不执行该规则, 记 status 与第一行的 reason 列."""
+
+    status: RuleOutcomeStatus  # 命中时记的原因: skipped 或 not_executable
+    sql: str  # SQL, 参数同规则 SQL; 返回行即命中, 理由取第一行的 reason 列 (固定理由写字面量)
+
+
 class RuleSpec(Model):
     """程序 YAML 里的一条规则 SQL."""
 
@@ -44,6 +52,7 @@ class RuleSpec(Model):
     severity: Literal["low", "medium", "high"]  # 命中时例外的严重程度
     emit: Literal["exception", "rows"] = "exception"  # exception 每行出一条例外, rows 原样返回行
     sql: str  # SQL, 参数用 :name 绑定; 由 B 编写
+    checks: list[RuleCheck] = []  # 执行前检查, 按顺序执行, 第一个返回行的决定不执行 (需求 R130); 为空即总是执行
 
 
 class LLMSpec(Model):

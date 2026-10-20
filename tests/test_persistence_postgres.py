@@ -502,6 +502,78 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         await stack.aclose()
 
 
+async def test_rule_checks_on_postgres(storage):
+    """需求 R130: 执行前检查在真实 Postgres 上按约定的写法执行 (接口文档第 8.1 节): 只看参数的检查不碰表, 参数为
+    None 与布尔值用 CAST 绑定; 看数据的检查查表; 理由取 reason 列 (字面量或参数). 命中的规则不执行, 没命中的照常出例外.
+    防约定的 SQL 写法在 psycopg 下绑定不了 (None 推不出类型)."""
+    import yaml
+
+    from backend.contracts.knowledge import ProcedureTemplate
+    from backend.contracts.models import ProcedureRun, RuleOutcome
+    from backend.services.rule_engine import SqlRuleEngine
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    template = ProcedureTemplate.model_validate(
+        yaml.safe_load(
+            """
+id: T
+name: 执行前检查连库
+phase: P2_Executing
+cycle: Journals
+owner: A6
+engine: rule
+autonomy_level: L3
+reads: [journal_entries]
+rules:
+  - id: R01
+    name: 录入时间不可靠时跳过
+    severity: high
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:note AS text) AS reason WHERE NOT CAST(:reliable AS boolean)
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+  - id: R03
+    name: 没有审批限额时不可执行
+    severity: high
+    checks:
+      - status: not_executable
+        sql: SELECT '客户画像没有审批限额' AS reason WHERE CAST(:limit_cents AS bigint) IS NULL
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+  - id: R04
+    name: 审批人全空时不可执行
+    severity: high
+    checks:
+      - status: not_executable
+        sql: >-
+          SELECT '审批人数据缺失' AS reason
+          WHERE NOT EXISTS (SELECT 1 FROM journal_entries WHERE approved_by IS NOT NULL)
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+"""
+        )
+    )
+    run = ProcedureRun(
+        id="RUN-T-1",
+        procedure_id="T",
+        run_no=1,
+        trigger="initial",
+        params_snapshot={},
+        status="running",
+        started_at=now(),
+    )
+    params = {"note": "录入时间不可靠", "reliable": False, "limit_cents": None}
+    found = await SqlRuleEngine(PostgresFinancialDataStore(engine)).run(e.id, template, run, params)
+    assert found.outcomes == [
+        RuleOutcome(rule_id="R01", status="skipped", reason="录入时间不可靠"),
+        RuleOutcome(rule_id="R03", status="not_executable", reason="客户画像没有审批限额"),
+    ]
+    assert [x.rule_id for x in found.exceptions] == ["R04"]  # Numbat 的分录有审批人, R04 照常执行
+    again = await SqlRuleEngine(PostgresFinancialDataStore(engine)).run(
+        e.id, template, run, params | {"reliable": True, "limit_cents": 500000}
+    )
+    assert (again.outcomes, [x.rule_id for x in again.exceptions]) == ([], ["R01", "R03", "R04"])
+
+
 async def test_rule_edge_cases(storage):
     import yaml
     from sqlalchemy import delete, update

@@ -12,6 +12,7 @@ from backend.contracts.models import (
     Judgment,
     Model,
     OpinionType,
+    RuleOutcome,
 )
 
 T = TypeVar("T")
@@ -21,7 +22,8 @@ class RuleResult(Model):
     """RuleEngine 执行一条程序全部规则的结果."""
 
     exceptions: list[AuditException]  # emit = exception 的规则产出的例外
-    rows: dict[str, list[dict[str, Any]]]  # emit = rows 的规则返回的行, 按规则编号
+    rows: dict[str, list[dict[str, Any]]]  # emit = rows 的规则返回的行, 按规则编号; 没有执行的规则不在其中
+    outcomes: list[RuleOutcome] = []  # 执行前检查命中而没有执行的规则, 按 YAML 顺序 (需求 R130)
 
 
 class JudgmentContext(Model):

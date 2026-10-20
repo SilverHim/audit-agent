@@ -4,7 +4,7 @@
 判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级由对应需求实现, 缺省原样返回.
 """
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -16,6 +16,7 @@ from backend.contracts.models import (
     Judgment,
     ReviewStatus,
     ReviewTask,
+    RuleOutcome,
     TargetType,
     TaskKind,
     TaskStatus,
@@ -34,12 +35,30 @@ class Subject:
     rule_findings: list[AuditException] = field(default_factory=list)  # 该对象的规则例外 (当前版本)
 
 
+class Subjects(list[Subject]):
+    """取判断对象的结果: 判断对象的列表. 混合程序取对象时经规则引擎, outcomes 为引擎没有执行的规则
+    (RuleResult.outcomes, 需求 R130), 随判断结果 (JudgedRun) 交到执行记录的终态. 只返回普通列表的取对象函数 (如测试
+    替换的) 视为没有."""
+
+    def __init__(self, items: Iterable[Subject] = (), outcomes: Sequence[RuleOutcome] = ()) -> None:
+        super().__init__(items)
+        self.outcomes = list(outcomes)
+
+
 @dataclass(frozen=True)
 class Judged:
     """一个判断对象送给判断引擎的上下文与引擎的结果."""
 
     ctx: JudgmentContext  # 判断上下文
     outcome: JudgmentOutcome  # 判断或失败类型
+
+
+@dataclass(frozen=True)
+class JudgedRun:
+    """判断程序一次执行的原始发现: 各对象的判断结果, 与取对象时规则引擎没有执行的规则 (Subjects.outcomes, 需求 R130)."""
+
+    judged: list[Judged]
+    outcomes: list[RuleOutcome] = field(default_factory=list)
 
 
 class Critic(Protocol):
@@ -131,17 +150,19 @@ async def judge_all(
     return await gather_all(judge(s) for s in subjects)
 
 
-def judgments_patch(deps: AgentDeps, ctx: RunContext, judged: list[Judged]) -> StatePatch:
+def judgments_patch(
+    deps: AgentDeps, ctx: RunContext, judged: list[Judged], outcomes: Sequence[RuleOutcome] = ()
+) -> StatePatch:
     """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
 
     - normal, dispute: 判断待复核 (dispute 为独立复核不一致, 由审计师仲裁), 以判断 v1 为目标建任务.
     - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions).
     - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
     - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
-    执行记录置成功终态: 个别对象失败不算整次失败.
+    执行记录置成功终态: 个别对象失败不算整次失败; outcomes 为取对象时规则引擎没有执行的规则 (需求 R130), 记进终态.
     """
     now = datetime.now(UTC)
-    run = finish_run(ctx.run, now)
+    run = finish_run(ctx.run, now, outcomes)
     queue = deps.queue
     judgments: list[Judgment] = []
     exceptions: list[AuditException] = []

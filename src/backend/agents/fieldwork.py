@@ -15,8 +15,10 @@ from backend.agents.evidence import current_confirmations, legacy_accounts
 from backend.agents.judging import (
     DEFAULT_STEPS,
     Judged,
+    JudgedRun,
     JudgingSteps,
     Subject,
+    Subjects,
     in_scope,
     judge_all,
     judgments_patch,
@@ -34,6 +36,7 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Reliability,
     ReviewStatus,
+    RuleOutcome,
 )
 from backend.contracts.records import BankAccount, SalesInvoice
 from backend.contracts.services import RuleResult
@@ -44,14 +47,17 @@ from backend.services.staleness import current_results
 
 @dataclass(frozen=True)
 class CashFindings:
-    """CSH-02 的原始发现: 回函与账面比对后的函证新版本, 规则部分的例外 (D01, D04), 以及要判断的账户的判断结果."""
+    """CSH-02 的原始发现: 回函与账面比对后的函证新版本, 规则部分的例外 (D01, D04), 要判断的账户的判断结果, 以及规则
+    引擎没有执行的规则 (D02, D03 的执行前检查命中时, 需求 R130)."""
 
     confirmations: list[Confirmation]  # 写入账面余额, 差额与结果的函证新版本
     exceptions: list[AuditException]  # 回函与账面不符的 D01 例外, 回函应计利息未入账的 D04 例外
     judged: list[Judged] = field(default_factory=list)  # 有 D01 或 D04 的账户的判断结果
+    outcomes: list[RuleOutcome] = field(default_factory=list)  # 规则引擎没有执行的规则
 
 
-Findings = RuleResult | list[Judged] | CashFindings  # 规则程序为规则结果, 判断程序为各对象的判断结果, CSH-02 为两者
+# 规则程序为规则结果, 判断程序为各对象的判断结果 (带取对象时没有执行的规则), CSH-02 为两者
+Findings = RuleResult | JudgedRun | CashFindings
 
 
 def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[str, Any]], trivial_cents: int) -> bool:
@@ -68,7 +74,7 @@ Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转�
 SubjectSource = Callable[[RunContext], Awaitable[list[Subject]]]  # 判断程序取全部判断对象
 JSON_ROWS = TypeAdapter(list[dict[str, Any]])  # 规则返回的行转 JSON 形式 (日期为字符串), 供提示词 tojson
 # 判断公共流程的名字移到 agents/judging.py, 这里再导出, 原有的导入路径照用
-__all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "in_scope", "subjects_awaiting_review"]
+__all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "in_scope", "subjects_awaiting_review"]
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
@@ -115,18 +121,22 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
     def rule_exceptions(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """纯规则程序 (REV-08, CSH-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因."""
+        """纯规则程序 (REV-08, CSH-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因. 没有执行的规则
+        (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes."""
         assert isinstance(findings, RuleResult)
-        return {"exceptions": list(findings.exceptions), "procedure_runs": [finish_run(ctx.run, datetime.now(UTC))]}
+        run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
+        return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}
 
-    async def judge_subjects(self, ctx: RunContext) -> list[Judged]:
+    async def judge_subjects(self, ctx: RunContext) -> JudgedRun:
         """判断程序的执行: 取判断对象 (rerun 时只留 rerun_subject_ids 中的, 已交人处理的不再重判), 并发逐个交判断引擎.
 
         任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
         fixture_key 为对象 ID; performed_by 为项目负责人. 一个对象失败 (引擎返回 failure) 不影响其他对象;
-        引擎抛异常时等其余对象结束再上抛.
+        引擎抛异常时等其余对象结束再上抛. 取对象时规则引擎没有执行的规则 (Subjects.outcomes) 随结果交到解读.
         """
-        return await self.judge_all(ctx, await self.subject_sources[ctx.procedure.id](ctx))
+        subjects = await self.subject_sources[ctx.procedure.id](ctx)
+        outcomes = subjects.outcomes if isinstance(subjects, Subjects) else []
+        return JudgedRun(await self.judge_all(ctx, subjects), outcomes)
 
     async def judge_all(self, ctx: RunContext, subjects: list[Subject]) -> list[Judged]:
         """对给定的判断对象走判断公共流程 (judging.judge_all; CSH-02 先比对余额再交它).
@@ -158,7 +168,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         documents.update({d.id: d for d in await self.deps.financial_store.documents(ctx.engagement.id)})
         return documents
 
-    async def rev02_subjects(self, ctx: RunContext) -> list[Subject]:
+    async def rev02_subjects(self, ctx: RunContext) -> Subjects:
         """REV-02 的判断对象: 规则 S01 选中的发票, 加前置程序 (REV-08) 尚未归因的例外所指的发票 (Q13: R01, R02, R03
         都算; 只看当前结果, 过期重跑取代的执行的例外不算, services.staleness), 去重后按发票 ID 排序; 先按 in_scope
         筛选, 再取数据.
@@ -184,7 +194,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         selected = {row["id"] for row in rules.rows.get("S01", [])}
         ids = sorted(i for i in selected | {i for x in open_findings for i in x.source_ids} if in_scope(ctx, i))
         if not ids:
-            return []
+            return Subjects((), rules.outcomes)
         invoices = {i.id: i for i in await store.sales_invoices(eid, ids)}
         missing = [i for i in ids if i not in invoices]
         if missing:
@@ -218,7 +228,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 "contract_judgment": judgment,
             }
             subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
-        return subjects
+        return Subjects(subjects, rules.outcomes)
 
     async def invoice_journal_lines(
         self, eid: str, invoices: Sequence[SalesInvoice]
@@ -339,7 +349,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 )
                 found.append(accrued[-1])
             subjects.append(self.cash_subject(ctx, confirmation, account, reply, found, rules))
-        return CashFindings(updated, [*differences, *accrued], await self.judge_all(ctx, subjects))
+        judged = await self.judge_all(ctx, subjects)
+        return CashFindings(updated, [*differences, *accrued], judged, rules.outcomes)
 
     @staticmethod
     def difference_exception(
@@ -457,7 +468,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         判断失败时第一条规则例外可能就是本次的 D01 或 D04, 片段里同一例外只留最高版本.
         """
         assert isinstance(findings, CashFindings)
-        patch = self.judgments_patch(ctx, findings.judged)
+        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes)
         latest: dict[str, AuditException] = {}
         for x in [*findings.exceptions, *patch["exceptions"]]:
             if x.id not in latest or x.version > latest[x.id].version:
@@ -467,6 +478,6 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """判断程序的解读: 见 judging.judgments_patch."""
-        assert isinstance(findings, list)
-        return judgments_patch(self.deps, ctx, findings)
+        """判断程序的解读: 见 judging.judgments_patch; 取对象时没有执行的规则记进执行记录终态."""
+        assert isinstance(findings, JudgedRun)
+        return judgments_patch(self.deps, ctx, findings.judged, findings.outcomes)

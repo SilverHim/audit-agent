@@ -10816,6 +10816,14 @@
               }
             ],
             "title": "Data Version"
+          },
+          "rule_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/RuleOutcome"
+            },
+            "type": "array",
+            "title": "Rule Outcomes",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -11952,6 +11960,35 @@
         ],
         "title": "RowRule",
         "description": "按一列的文本认出一类行: 该列单元格的文本 (去首尾空白; 数值, 日期按导入的写法转成文本) 中有匹配 pattern 的部分\n(re.search, 要整格匹配就写 ^ 与 $)."
+      },
+      "RuleOutcome": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "skipped",
+              "not_executable"
+            ],
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "rule_id",
+          "status",
+          "reason"
+        ],
+        "title": "RuleOutcome",
+        "description": "一条没有执行的规则 (执行前检查命中, 需求 R130): 规则编号, 原因与理由. 执行了的规则不记."
       },
       "RunStatus": {
         "type": "string",
