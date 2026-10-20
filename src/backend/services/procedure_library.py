@@ -20,7 +20,7 @@ from backend.contracts import llm_outputs
 from backend.contracts.data import DataInput
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
 from backend.contracts.llm_outputs import JudgmentDraft
-from backend.contracts.manual_results import RESULT_MODELS
+from backend.contracts.manual_results import RESULT_MODELS, ManagementResponses
 from backend.contracts.models import (
     AuditObjective,
     AutonomyLevel,
@@ -34,12 +34,14 @@ from backend.contracts.models import (
     ReportSection,
     RiskItem,
     RiskLevel,
+    TaskKind,
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
 from backend.services.data_quality import REQUIRED_TABLES
 from backend.services.features import BASELINE, FEATURES, check_features
 
+FIN08 = "FIN-08"  # 错报沟通: 首次沟通时间取它的登记 (first_misstatement_communicated_at)
 # 参数 {ref: 名称} 可用的名称. 不带前缀的: 图状态的重要性 (为 None 时不执行), 项目期间与派生引用 (DERIVED_REFS)
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
@@ -62,13 +64,25 @@ SQL_TABLE = re.compile(
 
 
 def first_misstatement_communicated_at(state: EngagementState) -> datetime | None:
-    """首次发出错报沟通的时间 (需求 R161): 状态中各错报 communicated_at 的最早值; 还没有沟通过的错报为 None (如 P2 中
-    GEN-05 首次执行时). 纯函数."""
-    return min((m.communicated_at for m in state["misstatements"] if m.communicated_at is not None), default=None)
+    """首次发出错报沟通的时间 (需求 R161): 状态中 FIN-08 各次登记 (manual 任务的 manual_result 决定) 的沟通时间的最早
+    值; 还没有登记过为 None (如 P2 中 GEN-05 首次执行时). 决定只追加, 每次沟通都登记在那里, 被过期重跑取代的执行的
+    登记也还在; 不看错报上的 communicated_at: 重新沟通会覆盖它 (第 1 轮审核 R161-02). 纯函数."""
+    fin08 = {t.id for t in state["review_tasks"] if t.procedure_id == FIN08 and t.kind is TaskKind.manual}
+    return min(
+        (
+            response.communicated_at
+            for record in state["review_records"]
+            if record.task_id in fin08 and record.manual_result is not None
+            for response in ManagementResponses.model_validate(record.manual_result.details).responses
+        ),
+        default=None,
+    )
 
 
-# 派生引用 (需求 R161): 名字 → 由图状态算出值的纯函数, 值可为 None 并以 None 执行, None 的语义由引用它的程序处理
-# (如 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行). R174 再加 verified_adjustment_entry_nos
+# 派生引用 (需求 R161): 名字 → 由图状态算出值的纯函数 (只收纯函数: 重放时重算得同一值). 值可为 None 并以 None 执行,
+# None 的语义由引用它的程序处理 (接口文档第 8.1 节; 如 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行); 值经
+# to_jsonable_python 转成 JSON 兼容的值 (同 JSON_NAMESPACES), 参数快照首次执行与经检查点, Store 读回后一致. R174 再加
+# verified_adjustment_entry_nos
 DERIVED_REFS: dict[str, Callable[[EngagementState], Any]] = {
     "first_misstatement_communicated_at": first_misstatement_communicated_at,
 }
@@ -266,7 +280,7 @@ class ProcedureLibrary:
                 if ref in ENGAGEMENT_REFS:
                     out[key] = getattr(engagement, ref)
                 elif ref in DERIVED_REFS:
-                    out[key] = DERIVED_REFS[ref](state)
+                    out[key] = to_jsonable_python(DERIVED_REFS[ref](state))
                 elif ref in STATE_REFS:
                     resolved = state[ref]  # type: ignore[literal-required]
                     if resolved is None:

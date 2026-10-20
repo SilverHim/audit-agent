@@ -1204,3 +1204,39 @@ def xero_identified_misstatements() -> dict[str, list[Any]]:
         "judgments": [*sources, fixture_judgment("REV-03", "CON-X01", AutonomyLevel.L2)],
         "misstatements": misstatements,
     }
+
+
+# 第 2 轮的三条薪酬错报 (FIN-15 第 1 次对科目的判断认定, Xero演示数据集设计第 2.8 节): (科目代码, 决定 ID 后缀, 科目,
+# 金额), 都是 Completeness 低估
+XERO_ROUND2 = [
+    ("826", "F03", "Superannuation payable (826)", 426120),
+    ("804", "F04", "Wages payable (804)", 201000),
+    ("805", "F05", "Annual leave provision (805)", 268736),
+]
+
+
+def round_file(n: int) -> dict[str, Any]:
+    """补造的 FIN-08 第 n 轮沟通记录 (中性格式, manual/fin08_round{n}.json)."""
+    path = supplements_dir(SNAPSHOT_NAME) / "manual" / f"fin08_round{n}.json"
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def registration(
+    n: int, misstatements: Sequence[Misstatement], agrees: Mapping[str, bool] | None = None
+) -> list[dict[str, Any]]:
+    """第 n 轮记录映射成 FIN-08 结果模型 ManagementResponses 的行 (JSON 形式, 同前端提交): misstatement_sources 为
+    错报的来源判断, 每条一行, 依据的版本为给定错报的版本; 沟通对象取 recipient; agrees 缺省都同意 (补造的两轮都同意)."""
+    data = round_file(n)
+    by_source = {m.judgment_id: m for m in misstatements}
+    return [
+        {
+            "misstatement_id": by_source[source].id,
+            "base_version": by_source[source].version,
+            "communicated_at": data["communicated_at"],
+            "communicated_to": data["recipient"],
+            "responded_at": data["responded_at"],
+            "response": data["response"],
+            "agrees_to_correct": (agrees or {}).get(by_source[source].id, True),
+        }
+        for source in data["misstatement_sources"]
+    ]

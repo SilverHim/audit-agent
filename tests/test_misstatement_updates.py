@@ -12,13 +12,12 @@ verification 的程序库副本.
 
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 
-from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
@@ -49,17 +48,24 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.core.config import get_settings
-from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import check_review_fields, check_update_payload, review_effects
-from backend.orchestration.gates import fin01_view, gate_nodes
-from backend.orchestration.graph import build_graph
+from backend.orchestration.gates import fin01_view
 from backend.orchestration.merge import check_outputs
-from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.features import BASELINE, MISSTATEMENT
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import apply_misstatement_update, misstatement_updates
-from tests.fakes import NOW, FakeTrail, ScriptedLLM, make_ctx, wait_idle
+from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
+    FakeTrail,
+    ScriptedLLM,
+    entries,
+    make_ctx,
+    record_writers,
+    start_at_fan_in,
+    submit_and_wait,
+)
 from tests.test_decisions import Started, assert_rejected
 from tests.test_review_decisions import record
 from tests.test_workpaper import (
@@ -78,7 +84,7 @@ from tests.xero_fakes import xero_engagement
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-03 的 Xero fixture
 
-EID = xero_engagement().id
+EID = ENGAGEMENT.id  # 同 xero_engagement().id; 收集阶段不读快照
 CONFIG = GraphRunner.config(EID)
 FEATURES = BASELINE | {MISSTATEMENT}
 XJ499, CSH02 = "M-D-XJ499", "M-D-CSH02-091"
@@ -107,42 +113,22 @@ def failing_xj499() -> ScriptedLLM:
     return ScriptedLLM({"XJ-499": ["not json"] * 3, "BA-091": [fixture_raw("BA-091")]})
 
 
-def triage_runner(deps: AgentDeps) -> GraphRunner:
-    """deps 上的主图 (真实 Agent, 内存检查点, 同 xero_flow.offline_runner), 闸门之外另在 communicate 之前停下."""
-    nodes = GraphNodes(deps, 2)
-    interrupts = [*gate_nodes(deps.features), "communicate"]
-    app = build_graph(nodes, deps.features).compile(
-        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=interrupts
-    )
-    return GraphRunner(app, deps)
-
-
 async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None, **changes: Any) -> Started:
     """见模块 docstring: 停在分诊节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES;
     changes 覆盖 fin03_state 的键 (如审计目标)."""
     deps = fin03_deps(FakeTrail(), llm, features=FEATURES, library=library)
     state = fin03_state(**changes)
     procedure = make_ctx(deps, FIN03, engagement=xero_engagement()).procedure
-    store = deps.output_store
-    async with store.transaction(EID):
-        await store.put(EID, [procedure, *state["misstatements"]], actor=AgentId.A1)
-    runner = triage_runner(deps)
-    await runner.app.aupdate_state(CONFIG, state | {"procedure_pack": [procedure]}, as_node="fan_in")
-    runner.acquire(EID)
-    runner.launch(EID, None)
-    await wait_idle(runner, EID)
-    assert runner.run_error(EID) is None
+    runner = await start_at_fan_in(deps, state, [procedure], ["communicate"], state["misstatements"])
     payload = {"awaiting": "human", "procedure_id": FIN03, "run_id": "RUN-FIN-03-1", "records": []}
     assert waiting_payloads(await runner.app.aget_state(CONFIG)) == [payload]
-    return Started(runner, store, deps.engagement_store)  # type: ignore[arg-type]
+    return Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
 
 
 async def submit(s: Started, decision: ReviewRecord) -> list[Any]:
     """提交并等后台停下; 返回这次决定的那次提交写入的对象."""
     before = len(s.output_store.commits)
-    await s.submit.submit(EID, decision)
-    await wait_idle(s.runner, EID)
-    assert s.runner.run_error(EID) is None
+    await submit_and_wait(s, decision)
     return list(s.output_store.commits[before])
 
 
@@ -160,9 +146,7 @@ def misstatement_v1(oid: str) -> Misstatement:
 
 
 def decision_rows(s: Started, decision_id: str) -> list[Any]:
-    trail = s.runner.deps.trail
-    assert isinstance(trail, FakeTrail)
-    return [e for e in trail.entries if e.kind is TrailKind.decision and e.idempotency_key == decision_id]
+    return [e for e in entries(s, TrailKind.decision) if e.idempotency_key == decision_id]
 
 
 @pytest.fixture
@@ -177,16 +161,7 @@ async def test_confirm_writes_classified_misstatement_in_same_commit(
     无舞弊迹象, 本期, 无审计目标, 作分类的判断为它, 仍为 identified) 与任务 v2 decided; FIN-03 另有待决任务, 不出新版本;
     1 行 decision 留痕. 决定由复核人写, 其余 (含错报) 由 A1 写 (假存储不记写入者, 这里包一层 put 记下首次写入的;
     节点之后重放时以 A8 再写同一版本, Store 不新增)."""
-    store = waiting.output_store
-    writers: dict[tuple[str, int], str] = {}
-    put = store.put
-
-    async def recording(eid: str, objs: Any, *, actor: str) -> Any:
-        for o in objs:
-            writers.setdefault((o.id, o.version), actor)
-        return await put(eid, objs, actor=actor)
-
-    monkeypatch.setattr(store, "put", recording)
+    writers = record_writers(monkeypatch, waiting.output_store)
     commit = await submit(waiting, record(XJ499_TASK, id="D-C1"))
 
     judgment = f"J-FIN-03-1-{XJ499}"
@@ -563,17 +538,17 @@ def test_apply_rejects_update_for_another_misstatement() -> None:
 
 
 @pytest.mark.parametrize(
-    ("base", "update", "changes"),
+    ("make_base", "update", "changes"),
     [
-        (  # 显式给 None 的字段不清掉已有的值
-            misstatement_v1(XJ499).model_copy(update={"fraud_reason": "已有理由", "objective_id": "OBJ-1"}),
+        (  # 显式给 None 的字段不清掉已有的值 (错报在用例内取: 收集阶段不读快照)
+            lambda: misstatement_v1(XJ499).model_copy(update={"fraud_reason": "已有理由", "objective_id": "OBJ-1"}),
             MisstatementUpdate(
                 misstatement_id=XJ499, base_version=1, kind="classification", type="judgmental", fraud_reason=None
             ),
             {"type": "judgmental", "classification_judgment_id": "J-1"},
         ),
         (  # 验证载荷不带状态: 不置重新沟通, 不记作验证的判断
-            VERIFYING,
+            lambda: VERIFYING,
             verification(adjustment_entry_nos=["AJE-X01"]),
             {"adjustment_entry_nos": ["AJE-X01"]},
         ),
@@ -581,9 +556,10 @@ def test_apply_rejects_update_for_another_misstatement() -> None:
     ids=["explicit_none", "no_status"],
 )
 def test_apply_writes_only_given_fields(
-    base: Misstatement, update: MisstatementUpdate, changes: dict[str, Any]
+    make_base: Callable[[], Misstatement], update: MisstatementUpdate, changes: dict[str, Any]
 ) -> None:
     """载荷中为空的字段不改; 只有改为 corrected 类状态才记验证判断, 改为 communicated 才置重新沟通."""
+    base = make_base()
     expected = base.model_copy(update={"version": base.version + 1, **changes})
     assert apply_misstatement_update(base, update, "J-1") == expected
 

@@ -7,7 +7,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -1596,9 +1596,9 @@ class ManagementResponse(Model):
 
     misstatement_id: str  # 回复的错报
     base_version: int  # 沟通时的错报版本
-    communicated_at: datetime  # 沟通时间
+    communicated_at: AwareDatetime  # 沟通时间 (须带时区: 与决定时刻比较, 第 1 轮审核 R161-01)
     communicated_to: NonBlank  # 沟通对象 (管理层或治理层中的人与职务)
-    responded_at: datetime  # 回复时间
+    responded_at: AwareDatetime  # 回复时间 (须带时区)
     response: NonBlank  # 回复原文
     agrees_to_correct: bool  # 是否同意更正
 

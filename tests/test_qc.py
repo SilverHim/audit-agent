@@ -27,6 +27,7 @@ from backend.contracts.models import (
 from backend.contracts.state import StatePatch, initial_state
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import ENGAGEMENT, FakeRegistry, FakeTrail, make_deps, make_procedure, make_run
+from tests.xero_fakes import XERO_ROUND2
 
 MATERIALITY, TRIVIAL = 12000000, 600000  # 合成数据集设计第 7 节的整体重要性与明显微小门槛
 XERO_MATERIALITY, XERO_TRIVIAL = 32431, 1622  # Xero 演示的整体重要性与明显微小门槛 (收入 1%, 5%)
@@ -164,7 +165,7 @@ async def test_next_version_when_schedule_exists() -> None:
 # ── R166 按错报状态累计 (Xero 演示的五条错报, 重要性 32431, 明显微小 1622) ──
 
 XJ499, CSH091 = "XJ499", "CSH02-091"  # 办公设备 (高估 750.00) 与应计利息 (低估 48.53)
-PAYROLL = [("F03", 426120), ("F04", 201000), ("F05", 268736)]  # 第 2 轮的三条薪酬错报
+PAYROLL = [(suffix, amount) for _, suffix, _, amount in XERO_ROUND2]  # 第 2 轮的三条薪酬错报
 
 
 async def xero_fin04(

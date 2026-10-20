@@ -84,12 +84,16 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     ScriptAgent,
+    entries,
     finished,
+    latest,
     make_deps,
     make_procedure,
     make_run,
     make_runner,
     numbat_all_p2_agents,
+    record_writers,
+    submit_and_wait,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision, assert_rejected
@@ -443,22 +447,6 @@ async def at_manual(
     return s
 
 
-async def submit(s: Started, decision: ReviewRecord) -> None:
-    await s.submit.submit(EID, decision)
-    await wait_idle(s.runner, EID)
-    assert s.runner.run_error(EID) is None
-
-
-def latest(s: Started, model: type[Any], oid: str) -> Any:
-    return max((r for r in s.output_store.rows if isinstance(r, model) and r.id == oid), key=lambda r: r.version)
-
-
-def entries(s: Started, kind: TrailKind) -> list[Any]:
-    trail = s.runner.deps.trail
-    assert isinstance(trail, FakeTrail)
-    return [e for e in trail.entries if e.kind is kind]
-
-
 def transitions(s: Started, pid: str = TST) -> list[tuple[str, str]]:
     return [(e.payload["from"], e.payload["to"]) for e in entries(s, TrailKind.transition) if e.payload["id"] == pid]
 
@@ -545,7 +533,7 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
             raise AssertionError(f"{name}: {e}") from e
 
     decision = submitted()
-    await submit(s, decision)
+    await submit_and_wait(s, decision)
     assert written(s, "D-M01") == [("Procedure", TST, 3), ("ReviewRecord", "D-M01", 1), ("ReviewTask", TASK, 2)]
     stored = latest(s, ReviewRecord, "D-M01")
     assert stored == decision.model_copy(update={"manual_result": as_registered(letter_result())})
@@ -573,7 +561,7 @@ def reply_node(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("reply_node")
-async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
+async def test_reply_dispatched_checked_and_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """R93 验收 2, 3, 7, 一次运行:
     - 派发: A10 调 owner.prepare 一次, 不调大模型; 同一事务写入 RUN-TST-M02-1 succeeded, manual 任务 (材料为 owner 给的)
       与 TST-M02 v2 awaiting_human; 载荷同其他人工等待, 总览为等复核, 1 条待决任务;
@@ -611,19 +599,12 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
         (EvidenceType.voucher, Reliability.internal_original)
     }
 
-    actors: dict[str, str] = {}
-    put = s.output_store.put
-
-    async def recording(eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
-        actors.update({o.id: actor for o in objs})
-        return await put(eid, objs, actor=actor)
-
-    s.output_store.put = recording  # type: ignore[method-assign]
-    await submit(s, replied(4853))
+    writers = record_writers(monkeypatch, s.output_store)
+    await submit_and_wait(s, replied(4853))
 
     assert [c for c in CALLS if c[0] == "collect"] == [("collect", REPLY)]
     exception: AuditException = latest(s, AuditException, REPLY_EXCEPTION)
-    assert (exception.version, exception.amount_cents, exception.run_id, actors[REPLY_EXCEPTION]) == (
+    assert (exception.version, exception.amount_cents, exception.run_id, writers[(REPLY_EXCEPTION, 1)]) == (
         1,
         4853,
         REPLY_RUN,
@@ -732,7 +713,7 @@ async def reply_online(tmp_path_factory: pytest.TempPathFactory) -> Baseline:
     with pytest.MonkeyPatch.context() as mp:
         register(mp, REPLY)
         online = await at_manual(tmp_path_factory.mktemp("reply-online"), REPLY)
-        await submit(online, replied(4853))
+        await submit_and_wait(online, replied(4853))
         return Baseline(store_state(online.output_store), await graph_state(online), decision_keys(online))  # type: ignore[arg-type]
 
 
@@ -797,9 +778,9 @@ async def test_unread_result_and_rerun_recovered_in_node_order(
     assert await graph_state(lost) == reply_online.graph  # type: ignore[arg-type]
 
     online = await at_manual(tmp_path / "online-rerun", REPLY, agents=flaky)
-    await submit(online, replied(4853))
+    await submit_and_wait(online, replied(4853))
     assert waiting_payloads(await online.runner.app.aget_state(CONFIG))[0]["procedure_id"] == "FIN-04"
-    await submit(online, rerun_fin04(online))
+    await submit_and_wait(online, rerun_fin04(online))
     assert (await online.next_nodes()) == ("gate_fin",)
     store = CrashAfterCommit("RUN-FIN-04-1")
     crashed = await at_manual(tmp_path / "crash-rerun", REPLY, output_store=store, agents=flaky)
@@ -834,7 +815,7 @@ async def rerun_then_reply(s: Started) -> None:
     """对派发失败的 failed 任务 rerun (D-R0), 再对第 2 次派发的 manual 任务提交回复 4853 (D-M2), 等后台停下."""
     failed: ReviewTask = latest(s, ReviewTask, f"T-RUN-{REPLY}-1-v1")
     assert failed.kind is TaskKind.failed
-    await submit(s, submitted(Decision.rerun, id="D-R0", task_id=failed.id, manual_result=None))
+    await submit_and_wait(s, submitted(Decision.rerun, id="D-R0", task_id=failed.id, manual_result=None))
     task: ReviewTask = latest(s, ReviewTask, f"T-RUN-{REPLY}-2-v1")
     assert (task.kind, task.status) == (TaskKind.manual, TaskStatus.pending)
     await s.submit.submit(EID, replied(4853, "D-M2").model_copy(update={"task_id": task.id}))

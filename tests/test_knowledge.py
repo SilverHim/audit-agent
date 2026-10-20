@@ -43,8 +43,10 @@ from backend.contracts.models import (
     Phase,
     Procedure,
     ReportingFramework,
+    RerunRequest,
     Retention,
     RiskLevel,
+    TaskKind,
     TermType,
 )
 from backend.contracts.records import DatasetTraits
@@ -69,6 +71,7 @@ from tests.fakes import (
     FakeTrail,
     audit_plan,
     engagement_terms,
+    fin08_registered,
     make_deps,
     make_graph_nodes,
 )
@@ -2134,44 +2137,86 @@ def test_fin08_template_loads_only_with_misstatement() -> None:
     assert on.enabled("FIN-08") and "FIN-08" in {p.id for p in fixed_procedures(on)}
 
 
-def communicated(oid: str, at: datetime | None) -> Misstatement:
-    """一条错报: 给了沟通时间的为 communicated, 否则 identified."""
-    status = MisstatementStatus.identified if at is None else MisstatementStatus.communicated
-    return Misstatement(
-        id=oid,
-        judgment_id="J-1",
-        exception_id=None,
-        review_record_id="D-1",
-        type="factual",
-        account="Revenue",
-        assertion="Cutoff",
-        amount_cents=100,
-        direction="overstated",
-        status=status,
-        communicated_at=at,
-    )
+def response_row(mid: str, at: datetime) -> dict[str, Any]:
+    """FIN-08 登记的一行 (JSON 形式, 同前端提交): 沟通与回复都在 at."""
+    return {
+        "misstatement_id": mid,
+        "base_version": 2,
+        "communicated_at": at.isoformat(),
+        "communicated_to": "CFO",
+        "responded_at": at.isoformat(),
+        "response": "Agreed.",
+        "agrees_to_correct": True,
+    }
+
+
+def registered_at(*rounds: list[datetime]) -> dict[str, list[Any]]:
+    """FIN-08 依次各次执行的登记 (状态片段): 第 n 次登记 rounds[n-1] 中各时间各一行 (错报 M-1, M-2, ...)."""
+    history: dict[str, list[Any]] = {"review_tasks": [], "review_records": []}
+    for run_no, times in enumerate(rounds, start=1):
+        rows = [response_row(f"M-{i}", at) for i, at in enumerate(times, start=1)]
+        for key, items in fin08_registered(run_no, rows).items():
+            history[key] += items
+    return history
 
 
 ROUND_1, ROUND_2 = datetime.fromisoformat("2026-10-19T04:00:00Z"), datetime.fromisoformat("2026-10-21T04:00:00Z")
+# 第 2 次登记 (重新沟通) 改写了 M-1 的沟通时间: 错报上只剩第 2 次的
+RECOMMUNICATED = Misstatement(
+    id="M-1",
+    judgment_id="J-1",
+    exception_id=None,
+    review_record_id="D-1",
+    type="factual",
+    account="Revenue",
+    assertion="Cutoff",
+    amount_cents=100,
+    direction="overstated",
+    status=MisstatementStatus.communicated,
+    communicated_at=ROUND_2,
+)
+SUPERSEDED_FIN08 = RerunRequest(  # 过期重跑取代了 FIN-08 第 1 次执行: 它的登记仍算
+    id="RR-1",
+    procedure_ids=["FIN-08"],
+    superseded_run_ids=["RUN-FIN-08-1"],
+    data_version=2,
+    requested_by="U-1",
+    requested_at=ROUND_2,
+)
+
+
+def other_manual_result() -> dict[str, list[Any]]:
+    """别的程序 (FIN-03 的 failed 任务) 的 manual_result: details 不是 FIN-08 的登记 (按它解析会报错), 不看."""
+    history = fin08_registered(9, [])
+    task = history["review_tasks"][0]
+    task = task.model_copy(update={"procedure_id": "FIN-03", "kind": TaskKind.failed, "manual_request": None})
+    record = history["review_records"][0]
+    result = record.manual_result.model_copy(update={"details": {}})
+    return {"review_tasks": [task], "review_records": [record.model_copy(update={"manual_result": result})]}
 
 
 @pytest.mark.parametrize(
-    ("misstatements", "expected"),
+    ("changes", "expected"),
     [
-        ([], None),
-        ([communicated("M-1", None)], None),
-        ([communicated("M-1", None), communicated("M-2", ROUND_2), communicated("M-3", ROUND_1)], ROUND_1),
+        ({}, None),
+        ({"misstatements": [RECOMMUNICATED]}, None),  # 没有登记: 不看错报上的沟通时间
+        (registered_at([ROUND_2, ROUND_1]), "2026-10-19T04:00:00Z"),  # 一次登记中最早的
+        (registered_at([ROUND_1], [ROUND_2]) | {"misstatements": [RECOMMUNICATED]}, "2026-10-19T04:00:00Z"),
+        (registered_at([ROUND_1], [ROUND_2]) | {"rerun_requests": [SUPERSEDED_FIN08]}, "2026-10-19T04:00:00Z"),
+        (other_manual_result(), None),
     ],
-    ids=["none", "not_communicated", "earliest"],
+    ids=["none", "misstatement_only", "earliest", "recommunicated", "superseded", "other_program"],
 )
-def test_first_misstatement_communicated_at(misstatements: list[Misstatement], expected: datetime | None) -> None:
-    """R161 验收 9: 派生引用 first_misstatement_communicated_at 解析为状态中错报沟通时间的最早值; 还没有沟通过的错报
-    时为 None, 以 None 执行, 不抛错. ref 写法校验认得这个名字."""
+def test_first_misstatement_communicated_at(changes: dict[str, Any], expected: str | None) -> None:
+    """R161 验收 9 (第 1 轮审核 R161-02, R161-08): 派生引用 first_misstatement_communicated_at 解析为 FIN-08 各次登记的
+    沟通时间的最早值, 转成 ISO 文本 (JSON 兼容); 重新沟通 (第 2 次登记) 改写错报上的沟通时间后仍为首次的, 被过期重跑
+    取代的执行的登记也算, 别的程序的 manual_result 与错报上的字段不看; 还没有登记时为 None, 以 None 执行, 不抛错.
+    ref 写法校验认得这个名字."""
     library = ProcedureLibrary(ROOT)
     param = {"ref": "first_misstatement_communicated_at"}
     assert ref_problem(param["ref"]) is None
     template = library.load("FIN-04").model_copy(update={"params": {"start": param}})
-    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements}
+    state = initial_state(ENGAGEMENT, [], 1) | changes
     resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
     assert resolved == {"start": expected}
 

@@ -14,7 +14,8 @@ from backend.contracts.models import TaskKind
 from backend.contracts.state import StatePatch
 
 Prepare = Callable[[AgentDeps, RunContext], Awaitable[dict[str, Any] | None]]  # 执行: 取派发材料, None 为空执行
-Dispatch = Callable[[RunContext, dict[str, Any] | None], StatePatch]  # 解读: 执行记录置 succeeded, 建 manual 任务
+# 解读: 执行记录置 succeeded, 建 manual 任务; 材料为 None 时只出执行记录
+Dispatch = Callable[[RunContext, dict[str, Any] | None], StatePatch]
 
 
 def dispatcher(owner: ManualHandler, deps: AgentDeps) -> tuple[Prepare, Dispatch]:

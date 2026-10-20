@@ -17,10 +17,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, ClassVar, Literal, TypeVar, cast
+from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 from unittest import mock
 
 import httpx
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ValidationError
 
@@ -112,6 +113,8 @@ from backend.contracts.models import (
     JudgmentRef,
     LlmSettings,
     LlmSlot,
+    ManualRequest,
+    ManualResult,
     MaterialityCandidate,
     MaterialityCandidates,
     MaterialityChoice,
@@ -150,6 +153,7 @@ from backend.contracts.models import (
     RunTrigger,
     ShareholderDirection,
     StepKind,
+    TargetType,
     TaskKind,
     TaskStatus,
     TermsCheck,
@@ -183,7 +187,7 @@ from backend.contracts.records import (
     TrialBalanceRow,
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
-from backend.contracts.state import StatePatch, initial_state
+from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.core.security import create_access_token
 from backend.main import build_deps, create_app
@@ -3569,6 +3573,110 @@ async def wait_idle(runner: GraphRunner, eid: str) -> None:
     task = runner.tasks.get(eid)
     if task is not None:
         await task
+
+
+def fin08_registered(
+    run_no: int, rows: Sequence[Mapping[str, Any]], decided_at: datetime = NOW
+) -> dict[str, list[Any]]:
+    """FIN-08 第 run_no 次执行已登记的状态片段 (需求 R161): 已决定的 manual 任务 T-RUN-FIN-08-{run_no}-v1 (第 2 版)
+    与对它的 manual_result 决定 D-FIN08-{run_no}, details 为 ManagementResponses 的 rows (JSON 形式)."""
+    run_id = f"RUN-FIN-08-{run_no}"
+    request = ManualRequest(instructions="", result_model="ManagementResponses", min_evidence=0, material={})
+    task = ReviewTask(
+        id=f"T-{run_id}-v1",
+        version=2,
+        kind=TaskKind.manual,
+        procedure_id="FIN-08",
+        target_type=TargetType.ProcedureRun,
+        target_id=run_id,
+        target_version=1,
+        run_id=run_id,
+        subject_id="RESULT",
+        status=TaskStatus.decided,
+        created_at=decided_at,
+        manual_request=request,
+    )
+    result = ManualResult(conclusion="已登记", performed_on=decided_at.date(), details={"responses": list(rows)})
+    record = ReviewRecord(
+        id=f"D-FIN08-{run_no}",
+        task_id=task.id,
+        target_version=1,
+        decision=Decision.manual_result,
+        manual_result=result,
+        reviewed_by=ENGAGEMENT.owner_id,
+        decided_at=decided_at,
+    )
+    return {"review_tasks": [task], "review_records": [record]}
+
+
+class Session(Protocol):
+    """在后台跑着主图的用例 (tests.test_decisions.Started): runner, 假审计产出存储与决定入口."""
+
+    runner: GraphRunner
+    output_store: FakeOutputStore
+    submit: GraphDecisionSubmit
+
+
+def latest(s: Session, model: type[T], oid: str) -> T:
+    """假 Store (默认项目) 中 oid 的最新版本; 没有抛 ValueError."""
+    return max((r for r in s.output_store.rows if isinstance(r, model) and r.id == oid), key=lambda r: r.version)
+
+
+async def submit_and_wait(s: Session, decision: Any, eid: str = ENGAGEMENT.id) -> None:
+    """提交决定, 等后台停下, 后台没有出错."""
+    await s.submit.submit(eid, decision)
+    await wait_idle(s.runner, eid)
+    assert s.runner.run_error(eid) is None
+
+
+def entries(s: Session, kind: TrailKind) -> list[TrailEntry]:
+    """runner 的假留痕中 kind 类的行, 按写入顺序."""
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return [e for e in trail.entries if e.kind is kind]
+
+
+def record_writers(monkeypatch: pytest.MonkeyPatch, store: FakeOutputStore) -> dict[tuple[str, int], str]:
+    """之后经 store.put 写入的各 (ID, 版本) 的写入者 (假存储不记写入者): 记首次写入的那个, 重放时再写同一版本不改."""
+    writers: dict[tuple[str, int], str] = {}
+    put = store.put
+
+    async def recording(eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
+        for o in objs:
+            writers.setdefault((o.id, o.version), actor)
+        return await put(eid, objs, actor=actor)
+
+    monkeypatch.setattr(store, "put", recording)
+    return writers
+
+
+def p3_runner(deps: AgentDeps, stops: Sequence[str]) -> GraphRunner:
+    """deps 上的主图 (真实 Agent, 内存检查点), 闸门之外另在 stops 各节点之前停下 (错报闭环的用例只看其中一段)."""
+    app = build_graph(GraphNodes(deps, 2), deps.features).compile(
+        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=[*gate_nodes(deps.features), *stops]
+    )
+    return GraphRunner(app, deps)
+
+
+async def start_at_fan_in(
+    deps: AgentDeps,
+    state: EngagementState,
+    pack: Sequence[Procedure],
+    stops: Sequence[str],
+    stored: Sequence[Versioned] = (),
+) -> GraphRunner:
+    """把主图放在 P2 结清处起跑 (p3_runner): 程序包与 stored (如错报的各版本) 先写进 Store (写入者 A1), 检查点以
+    fan_in 身份写入 state 与程序包, 后台推进到下一个停点或等待; 返回 runner (后台已停下, 没有出错)."""
+    eid = state["engagement_id"]
+    async with deps.output_store.transaction(eid):
+        await deps.output_store.put(eid, [*pack, *stored], actor=AgentId.A1)
+    runner = p3_runner(deps, stops)
+    await runner.app.aupdate_state(GraphRunner.config(eid), state | {"procedure_pack": list(pack)}, as_node="fan_in")
+    runner.acquire(eid)
+    runner.launch(eid, None)
+    await wait_idle(runner, eid)
+    assert runner.run_error(eid) is None
+    return runner
 
 
 # ── 经 HTTP 调接口: 依赖取自 make_runner 的 runner ──
