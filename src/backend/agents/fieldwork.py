@@ -71,7 +71,7 @@ def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[s
 
 Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返回原始发现
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
-SubjectSource = Callable[[RunContext], Awaitable[list[Subject]]]  # 判断程序取全部判断对象
+SubjectSource = Callable[[RunContext], Awaitable[Subjects]]  # 判断程序取全部判断对象, 带取对象时没有执行的规则
 JSON_ROWS = TypeAdapter(list[dict[str, Any]])  # 规则返回的行转 JSON 形式 (日期为字符串), 供提示词 tojson
 # 判断公共流程的名字移到 agents/judging.py, 这里再导出, 原有的导入路径照用
 __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "in_scope", "subjects_awaiting_review"]
@@ -135,15 +135,14 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         引擎抛异常时等其余对象结束再上抛. 取对象时规则引擎没有执行的规则 (Subjects.outcomes) 随结果交到解读.
         """
         subjects = await self.subject_sources[ctx.procedure.id](ctx)
-        outcomes = subjects.outcomes if isinstance(subjects, Subjects) else []
-        return JudgedRun(await self.judge_all(ctx, subjects), outcomes)
+        return JudgedRun(await self.judge_all(ctx, subjects), subjects.outcomes)
 
     async def judge_all(self, ctx: RunContext, subjects: list[Subject]) -> list[Judged]:
         """对给定的判断对象走判断公共流程 (judging.judge_all; CSH-02 先比对余额再交它).
         A7 复核与两个可替换步骤取自本 Agent (reviewer, steps)."""
         return await judge_all(self.deps, ctx, subjects, self.reviewer, self.steps)
 
-    async def rev03_subjects(self, ctx: RunContext) -> list[Subject]:
+    async def rev03_subjects(self, ctx: RunContext) -> Subjects:
         """REV-03 的判断对象: DOC-04 抽出的全部合同, 按合同编号排序.
 
         data 为 {contract, document} (REV-03.md.j2 头注释), document 为该合同的文件登记 (见 registered_documents);
@@ -158,7 +157,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 未登记")
             data = {"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")}
             subjects.append(Subject(contract.id, data))
-        return subjects
+        return Subjects(subjects)
 
     async def registered_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
         """文件登记, 以存储 (FinancialDataStore.documents) 的当前登记为准: 可靠性, 文件日期与关联对象是文件登记的属性,

@@ -129,6 +129,7 @@ async def test_checks_decide_which_rules_run(template: ProcedureTemplate) -> Non
         ([{"reason": "缺审批人"}], [{"reason": "不该用到"}], ("not_executable", "缺审批人"), ["c1"]),
         ([], [{"reason": "y"}], ("skipped", "y"), ["c1", "c2"]),
         ([{"reason": ""}], [], ("not_executable", DEFAULT_REASON), ["c1"]),  # reason 为空
+        ([{"reason": "  "}], [], ("not_executable", "  "), ["c1"]),  # 只有空白不算空, 理由原样
         ([], [{"other": 1}], ("skipped", DEFAULT_REASON), ["c1", "c2"]),  # 没有 reason 列
         ([], [{"reason": None}], ("skipped", DEFAULT_REASON), ["c1", "c2"]),
     ],

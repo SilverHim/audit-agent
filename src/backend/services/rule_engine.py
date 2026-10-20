@@ -87,6 +87,6 @@ class SqlRuleEngine:
             rows = await self.financial_store.query(eid, check.sql, params)
             if rows:
                 reason = rows[0].get("reason")
-                text = str(reason).strip() if reason is not None else ""
+                text = str(reason) if reason is not None else ""  # 理由原样, 为空或没有时取缺省
                 return RuleOutcome(rule_id=rule.id, status=check.status, reason=text or DEFAULT_REASON)
         return None

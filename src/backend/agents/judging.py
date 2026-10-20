@@ -37,8 +37,8 @@ class Subject:
 
 class Subjects(list[Subject]):
     """取判断对象的结果: 判断对象的列表. 混合程序取对象时经规则引擎, outcomes 为引擎没有执行的规则
-    (RuleResult.outcomes, 需求 R130), 随判断结果 (JudgedRun) 交到执行记录的终态. 只返回普通列表的取对象函数 (如测试
-    替换的) 视为没有."""
+    (RuleResult.outcomes, 需求 R130), 随判断结果 (JudgedRun) 交到执行记录的终态. 取对象函数 (fieldwork.SubjectSource)
+    都返回它, 不经规则引擎的 outcomes 为空."""
 
     def __init__(self, items: Iterable[Subject] = (), outcomes: Sequence[RuleOutcome] = ()) -> None:
         super().__init__(items)
