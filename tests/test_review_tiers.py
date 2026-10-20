@@ -269,7 +269,8 @@ async def test_numbat_review_queue_tiers() -> None:
         "T-J-CSH-02-1-BA-01-v1": (0.65, -5_000_000, "check_evidence"),
     }
     assert [v["task"]["created_at"] for v in first] == sorted(v["task"]["created_at"] for v in first)
-    assert {v["misstatement_update_kind"] for v in first + second} == {None}  # 不带错报更新类别的程序 (需求 R163)
+    # 不带错报更新类别的程序 (需求 R163): 没有类别, 也没有须带载荷的决定
+    assert {(v["misstatement_update_kind"], tuple(v["update_decisions"])) for v in first + second} == {(None, ())}
     assert tiers(second) == {
         "T-J-CSH-02-1-BA-01-v1": (0.65, -5_000_000, "check_evidence"),
         # 截止性: 0612 有错报草稿 142,000 澳元, 0618 没有草稿与例外, 取发票金额 95,000 澳元; 都超过执行重要性 90,000

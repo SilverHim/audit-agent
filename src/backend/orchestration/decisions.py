@@ -171,6 +171,16 @@ UPDATE_BY_HUMAN = frozenset(
 )
 
 
+def update_decisions(
+    kind: TaskKind, allowed: Sequence[Decision], update_kind: MisstatementUpdateKind | None
+) -> list[Decision]:
+    """允许的决定中须带 misstatement_update 的 (按 UPDATE_BY_HUMAN, 同 review_fields), 保持 allowed 的顺序; 模板
+    没有载荷类别 (update_kind 为空) 时为空. 复核队列据此告诉前端哪些决定要给载荷 (需求 R163), 前端不另抄这张表."""
+    if update_kind is None:
+        return []
+    return [decision for decision in allowed if (kind, decision) in UPDATE_BY_HUMAN]
+
+
 def review_fields(
     kind: TaskKind, decision: Decision, update_kind: MisstatementUpdateKind | None = None
 ) -> ReviewFields:

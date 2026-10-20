@@ -304,15 +304,15 @@ export const en = {
   },
   // FIN-08 的登记 (人工任务页, 结果模型 ManagementResponses): 每条错报一行
   fin08: {
-    title: 'Management responses',
     hint: 'One row for each misstatement in the material',
     fields: {
       communicatedAt: 'Communicated at',
       communicatedTo: 'Communicated to',
       respondedAt: 'Responded at',
       response: 'Response (verbatim)',
-      agrees: 'Agrees to correct',
+      agrees: 'Agreement to correct',
     },
+    agreeChoices: { yes: 'Agrees', no: 'Does not agree' },
     separator: ', ',
     errors: {
       missing: (fields: string) => `Fill in ${fields}.`,

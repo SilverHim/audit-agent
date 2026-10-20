@@ -237,6 +237,12 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
 
 // FIN-08 的登记表: 材料中的每条错报一行 (沟通时间与对象, 回复时间与原文, 是否同意更正); 时刻按本机时区填, 提交时带
 // 时区. 有问题的行在行下提示 (lib/misstatements.responsesDetails)
+// 是否同意更正的两个选项; 两个都没选为未选 (null)
+const AGREE_CHOICES: ReadonlyArray<['yes' | 'no', boolean]> = [
+  ['yes', true],
+  ['no', false],
+]
+
 function ResponsesForm({
   listed,
   rows,
@@ -319,17 +325,23 @@ function ResponsesForm({
                 onChange={(event) => set({ response: event.target.value })}
               />
             </label>
-            <div className="flex items-center gap-2 text-[13.5px]">
-              <input
-                id={`${id}-agrees`}
-                type="checkbox"
-                className="size-4 accent-primary"
-                checked={row.agrees}
-                disabled={disabled}
-                onChange={(event) => set({ agrees: event.target.checked })}
-              />
-              <label htmlFor={`${id}-agrees`}>{f.agrees}</label>
-            </div>
+            <fieldset className="m-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-0 p-0 text-[13.5px]">
+              <legend className="float-left mr-2 text-[12.5px] text-[#4a5262]">{f.agrees}</legend>
+              {AGREE_CHOICES.map(([choice, value]) => (
+                <span key={choice} className="flex items-center gap-1.5">
+                  <input
+                    id={`${id}-agrees-${choice}`}
+                    type="radio"
+                    name={`${id}-agrees`}
+                    className="size-4 accent-primary"
+                    checked={row.agrees === value}
+                    disabled={disabled}
+                    onChange={() => set({ agrees: value })}
+                  />
+                  <label htmlFor={`${id}-agrees-${choice}`}>{t.fin08.agreeChoices[choice]}</label>
+                </span>
+              ))}
+            </fieldset>
             {errors[item.id] ? (
               <span role="alert" className="text-[13px] text-risk">
                 {errors[item.id]}

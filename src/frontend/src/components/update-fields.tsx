@@ -45,7 +45,7 @@ export function UpdatePayload({ update }: { update: MisstatementUpdate }) {
 }
 
 // 复核表单里人给的载荷 (推翻, 对例外认定错报, 失败任务给手工结果时必填): 分类为类型与舞弊迹象 (有迹象须写理由);
-// 验证为结果, 凭证号, 已更正与剩余金额, 是否须重新沟通
+// 验证为结果, 凭证号, 已更正与剩余金额 (是否须重新沟通由后端按结果推出, 不在这里填)
 export function UpdateFields({
   id,
   kind,
@@ -156,17 +156,6 @@ export function UpdateFields({
               onChange={(event) => onChange({ residual: event.target.value })}
             />
           </label>
-          <div className="flex items-center gap-2 text-[13.5px]">
-            <input
-              id={`${id}-recommunicate`}
-              type="checkbox"
-              className="size-4 accent-primary"
-              checked={value.recommunicate}
-              disabled={disabled}
-              onChange={(event) => onChange({ recommunicate: event.target.checked })}
-            />
-            <label htmlFor={`${id}-recommunicate`}>{u.recommunicate}</label>
-          </div>
         </div>
       )}
     </div>

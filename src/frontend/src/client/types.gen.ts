@@ -4915,6 +4915,10 @@ export type ReviewTaskView = {
      * Misstatement Update Kind
      */
     misstatement_update_kind?: 'classification' | 'verification' | null;
+    /**
+     * Update Decisions
+     */
+    update_decisions?: Array<Decision>;
 };
 
 /**

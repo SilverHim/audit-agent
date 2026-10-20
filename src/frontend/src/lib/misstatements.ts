@@ -7,7 +7,6 @@ import type {
   MisstatementType,
   MisstatementUpdate,
   ReviewTaskView,
-  TaskKind,
 } from '@/client/types.gen'
 import { audToCents } from '@/lib/money'
 import type { Messages } from '@/locales/en'
@@ -76,19 +75,20 @@ export type ListedMisstatement = {
   source_conclusion: string | null
 }
 
-// 一行登记的表单值: 两个时刻为 datetime-local 的文本 (本机时区)
+// 一行登记的表单值: 两个时刻为 datetime-local 的文本 (本机时区); 是否同意更正为三态, 缺省未选 (null): 管理层拒绝更正
+// 的一路 (ASA 450 第 9 段) 不能被缺省值悄悄带过, 未选的行同漏填一样提示
 export type ResponseRow = {
   communicatedAt: string
   communicatedTo: string
   respondedAt: string
   response: string
-  agrees: boolean
+  agrees: boolean | null
 }
 
 export const RESPONSES_MODEL = 'ManagementResponses' // FIN-08 模板的 manual.result_model
 
 export function emptyResponseRow(): ResponseRow {
-  return { communicatedAt: '', communicatedTo: '', respondedAt: '', response: '', agrees: true }
+  return { communicatedAt: '', communicatedTo: '', respondedAt: '', response: '', agrees: null }
 }
 
 // 任务的材料是否按错报逐条登记 (结果模型为 ManagementResponses); 是时返回材料中的错报, 否则为 null
@@ -124,6 +124,7 @@ export function responsesDetails(
       row.communicatedTo.trim() ? null : t.fin08.fields.communicatedTo,
       responded ? null : t.fin08.fields.respondedAt,
       row.response.trim() ? null : t.fin08.fields.response,
+      row.agrees === null ? t.fin08.fields.agrees : null,
     ].filter((label): label is string => label !== null)
     if (missing.length) errors[item.id] = t.fin08.errors.missing(missing.join(t.fin08.separator))
     else if (communicated && responded && responded < communicated) errors[item.id] = t.fin08.errors.order
@@ -157,19 +158,12 @@ export function accountOptions(
 
 // ── 复核表单的错报更新载荷 (需求 R159): 带载荷类别的程序 (FIN-03 分类, FIN-09 验证) 中以人工判断取代 AI 判断的决定 ──
 
-// 同后端 decisions.UPDATE_BY_HUMAN: 这几种 (任务类型, 决定) 须由人给载荷; 其余决定确认的是 AI 判断本身, 不能另填
-const UPDATE_BY_HUMAN: ReadonlyArray<[TaskKind, Decision]> = [
-  ['normal', 'override'],
-  ['unattributed', 'override'],
-  ['unattributed', 'misstatement'],
-  ['failed', 'manual_result'],
-]
-
-// 这次决定须带哪一类载荷; 不须带时为 null
+// 这次决定须带哪一类载荷: 须带载荷的决定由后端给 (ReviewTaskView.update_decisions, 按 decisions.UPDATE_BY_HUMAN),
+// 类别取 misstatement_update_kind; 不须带时为 null. 其余决定确认的是 AI 判断本身, 不能另填
 export function updateKindFor(view: ReviewTaskView, decision: Decision | null): MisstatementUpdate['kind'] | null {
   const kind = view.misstatement_update_kind ?? null
   if (!kind || !decision) return null
-  return UPDATE_BY_HUMAN.some(([task, choice]) => task === view.task.kind && choice === decision) ? kind : null
+  return (view.update_decisions ?? []).includes(decision) ? kind : null
 }
 
 export const VERIFIED_STATUSES: MisstatementStatus[] = ['corrected', 'partially_corrected', 'communicated']
@@ -182,7 +176,6 @@ export type UpdateDraft = {
   entryNos: string // 凭证号, 逗号或空白分隔
   corrected: string // AUD
   residual: string // AUD
-  recommunicate: boolean
 }
 
 export function emptyUpdate(): UpdateDraft {
@@ -194,7 +187,6 @@ export function emptyUpdate(): UpdateDraft {
     entryNos: '',
     corrected: '',
     residual: '',
-    recommunicate: false,
   }
 }
 
@@ -209,7 +201,6 @@ export function updateFromPayload(payload: MisstatementUpdate): UpdateDraft {
     entryNos: (payload.adjustment_entry_nos ?? []).join(', '),
     corrected: cents(payload.corrected_cents),
     residual: cents(payload.residual_cents),
-    recommunicate: payload.needs_recommunication ?? false,
   }
 }
 
@@ -227,7 +218,8 @@ export function updateBase(
 }
 
 // 表单 → 载荷; 缺依据或必填, 金额写不对时返回错误文案. 分类: 类型与是否舞弊迹象, 有舞弊迹象须写理由 (来源与审计目标
-// 由后端按规则补); 验证: 状态, 凭证号, 已更正与剩余金额, 是否须重新沟通
+// 由后端按规则补); 验证: 状态, 凭证号, 已更正与剩余金额. 没写的可选字段为 null (表示不改): 凭证号为空不发 [];
+// 是否须重新沟通不由人填, 恒为 null, 由后端按状态推出
 export function misstatementUpdate(
   kind: MisstatementUpdate['kind'],
   base: { misstatement_id: string; base_version: number } | null,
@@ -250,9 +242,9 @@ export function misstatementUpdate(
     ...base,
     kind,
     status: draft.status,
-    adjustment_entry_nos: entries,
+    adjustment_entry_nos: entries.length ? entries : null,
     corrected_cents: corrected,
     residual_cents: residual,
-    needs_recommunication: draft.recommunicate,
+    needs_recommunication: null,
   }
 }

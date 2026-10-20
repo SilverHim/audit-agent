@@ -13886,6 +13886,14 @@
               }
             ],
             "title": "Misstatement Update Kind"
+          },
+          "update_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "type": "array",
+            "title": "Update Decisions",
+            "default": []
           }
         },
         "additionalProperties": false,

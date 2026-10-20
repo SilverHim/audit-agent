@@ -33,7 +33,7 @@ from backend.contracts.models import (
     User,
 )
 from backend.contracts.views import EngagementOverview, TaskPresentation
-from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit
+from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit, update_decisions
 from backend.orchestration.query import GraphStateQuery
 from backend.services.deferrals import is_active, latest_entries
 from backend.services.features import COLLAB
@@ -62,6 +62,7 @@ class TaskParts:
     allowed_resolutions: list[DisputeResolution]
     draft_rules: dict[DisputeResolution, DraftRule]
     misstatement_update_kind: MisstatementUpdateKind | None  # 所属程序模板的错报更新类别 (需求 R163)
+    update_decisions: list[Decision]  # 允许的决定中须带 misstatement_update 的 (decisions.update_decisions)
 
 
 async def updated_misstatement(
@@ -98,15 +99,17 @@ async def task_parts(
     misstatements = await updated_misstatement(deps, eid, target)
     subject = await subject_amount(deps.financial_store, eid, target) if isinstance(target, Judgment) else None
     amount = task_amount(target, exceptions, subject, misstatements)
+    allowed = _allowed(task, deps)
     return TaskParts(
         procedure_name=template.name,
         target=target,
-        allowed_decisions=_allowed(task, deps),
+        allowed_decisions=allowed,
         amount_cents=amount,
         tier=review_tier(task, target, amount, overview.performance_materiality_cents, overview.clearly_trivial_cents),
         allowed_resolutions=deps.queue.resolutions(task, target),
         draft_rules=deps.queue.draft_rules(task, target, COLLAB in overview.features),
         misstatement_update_kind=template.misstatement_update_kind,
+        update_decisions=update_decisions(task.kind, allowed, template.misstatement_update_kind),
     )
 
 
@@ -144,6 +147,7 @@ async def list_review_tasks(
                     allowed_resolutions=parts.allowed_resolutions,
                     draft_rules=parts.draft_rules,
                     misstatement_update_kind=parts.misstatement_update_kind,
+                    update_decisions=parts.update_decisions,
                 )
             )
     return views

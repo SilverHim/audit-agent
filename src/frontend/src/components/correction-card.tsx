@@ -9,6 +9,7 @@ import {
 import type { CorrectionNoticeIn } from '@/client/types.gen'
 import { Code, SectionLabel } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
+import { QueryState } from '@/components/query-state'
 import { Button } from '@/components/ui/button'
 import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
@@ -23,8 +24,9 @@ function toggle(list: string[], value: string, on: boolean): string[] {
   return on ? [...list.filter((item) => item !== value), value] : list.filter((item) => item !== value)
 }
 
-// 等待客户更正 (总览 awaiting_correction, 需求 R163): 列待更正的错报, 两个操作 "客户已过账调整分录" (勾选错报与可载入的
-// 更正分录) 与 "停止等待" (理由必填); 提交更正通知后刷新. 不在等更正 (NOT_AWAITING_CORRECTION) 按文案提示
+// 等待客户更正 (总览 awaiting_correction, 需求 R163): 列待更正的错报, 两个操作 "客户已过账调整分录" (勾选错报与更正
+// 分录; 已载入的照样可勾, 只作标注) 与 "停止等待" (理由必填); 提交更正通知后刷新. 不在等更正 (NOT_AWAITING_CORRECTION)
+// 按文案提示. 待更正的错报变了由调用方换 key 重新挂载, 勾选与理由不带进下一份通知
 export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: string[]; disabled: boolean }) {
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -110,38 +112,40 @@ export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: strin
       {kind === 'adjustments_posted' ? (
         <div className="flex flex-col gap-1.5">
           <SectionLabel>{t.correction.entries}</SectionLabel>
-          {entries.data?.length ? (
-            <ul className="m-0 flex list-none flex-col gap-2 p-0 text-[14px]">
-              {entries.data.map((entry) => (
-                <li key={entry.entry_no} className="flex items-start gap-2">
-                  <input
-                    id={`correction-entry-${entry.entry_no}`}
-                    type="checkbox"
-                    className="mt-0.5 size-4 shrink-0 accent-primary"
-                    checked={entry.loaded || entryNos.includes(entry.entry_no)}
-                    disabled={busy || entry.loaded}
-                    onChange={(event) => setEntryNos((list) => toggle(list, entry.entry_no, event.target.checked))}
-                  />
-                  <label htmlFor={`correction-entry-${entry.entry_no}`} className="flex min-w-0 flex-col gap-0.5">
-                    <span className="flex flex-wrap gap-2">
-                      <Code className="font-semibold">{entry.entry_no}</Code>
-                      <span>
-                        {entry.posting_date} · {t.correction.lines(entry.line_count)}
-                        {entry.loaded ? ` · ${t.correction.loaded}` : ''}
+          <QueryState isPending={entries.isPending} error={entries.error}>
+            {entries.data?.length ? (
+              <ul className="m-0 flex list-none flex-col gap-2 p-0 text-[14px]">
+                {entries.data.map((entry) => (
+                  <li key={entry.entry_no} className="flex items-start gap-2">
+                    <input
+                      id={`correction-entry-${entry.entry_no}`}
+                      type="checkbox"
+                      className="mt-0.5 size-4 shrink-0 accent-primary"
+                      checked={entryNos.includes(entry.entry_no)}
+                      disabled={busy}
+                      onChange={(event) => setEntryNos((list) => toggle(list, entry.entry_no, event.target.checked))}
+                    />
+                    <label htmlFor={`correction-entry-${entry.entry_no}`} className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex flex-wrap gap-2">
+                        <Code className="font-semibold">{entry.entry_no}</Code>
+                        <span>
+                          {entry.posting_date} · {t.correction.lines(entry.line_count)}
+                          {entry.loaded ? ` · ${t.correction.loaded}` : ''}
+                        </span>
                       </span>
-                    </span>
-                    {entry.description ? (
-                      <span lang="en" className="text-[13px] text-muted-foreground">
-                        {entry.description}
-                      </span>
-                    ) : null}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <span className="text-[13px] text-muted-foreground">{t.correction.noEntries}</span>
-          )}
+                      {entry.description ? (
+                        <span lang="en" className="text-[13px] text-muted-foreground">
+                          {entry.description}
+                        </span>
+                      ) : null}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className="text-[13px] text-muted-foreground">{t.correction.noEntries}</span>
+            )}
+          </QueryState>
         </div>
       ) : null}
       <ReasonField id="correction-reason" value={reason} onChange={setReason} required={kind === 'stop_waiting'} />

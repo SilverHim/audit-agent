@@ -121,7 +121,7 @@ describe('FIN-08 的登记', () => {
     expect(listedMisstatements(view(null))).toBeNull()
   })
 
-  test('每行一条回复: 依据材料中的版本, 时刻带时区, 文字去首尾空白; 同意与否照勾选', () => {
+  test('每行一条回复: 依据材料中的版本, 时刻带时区, 文字去首尾空白; 同意与否照所选', () => {
     const row = {
       communicatedAt: '2026-10-19T15:00',
       communicatedTo: ' Alex Morgan, Director ',
@@ -144,42 +144,66 @@ describe('FIN-08 的登记', () => {
     expect(second).toMatchObject({ misstatement_id: CSH02, agrees_to_correct: false })
   })
 
-  test('有问题的行各给一条提示 (按错报 ID): 漏填的列出各项, 回复早于沟通另报', () => {
+  test('有问题的行各给一条提示 (按错报 ID): 漏填的列出各项 (含未选是否同意), 回复早于沟通另报', () => {
     const early = {
       ...emptyResponseRow(),
       communicatedAt: '2026-10-20T09:00',
       communicatedTo: 'Alex Morgan',
       respondedAt: '2026-10-19T15:00',
       response: 'No.',
+      agrees: false,
     }
     const result = responsesDetails(listed as never, { [CSH02]: early }, zh)
     expect(result).toEqual({
       errors: {
-        [XJ499]: zh.fin08.errors.missing('沟通时间、沟通对象、回复时间、回复原文'),
+        [XJ499]: zh.fin08.errors.missing('沟通时间、沟通对象、回复时间、回复原文、是否同意更正'),
         [CSH02]: zh.fin08.errors.order,
       },
     })
+  })
+
+  test('是否同意更正缺省未选: 别的都填了也按漏填提示, 不当作同意 (ASA 450 第 9 段: 拒绝更正的一路不能被缺省值跳过)', () => {
+    expect(emptyResponseRow().agrees).toBeNull()
+    const filled = {
+      communicatedAt: '2026-10-19T15:00',
+      communicatedTo: 'Alex Morgan, Director',
+      respondedAt: '2026-10-20T09:00',
+      response: 'Agreed.',
+      agrees: null,
+    }
+    const result = responsesDetails(listed as never, { [XJ499]: filled, [CSH02]: { ...filled, agrees: true } }, en)
+    expect(result).toEqual({ errors: { [XJ499]: en.fin08.errors.missing(en.fin08.fields.agrees) } })
   })
 })
 
 describe('复核表单的错报更新载荷', () => {
   const carried = { misstatement_id: XJ499, base_version: 1, kind: 'classification' as const, type: 'factual' as const }
 
-  function task(kind: string, target: object, updateKind: string | null = 'classification'): ReviewTaskView {
+  // updateDecisions: 后端给的须带载荷的决定 (ReviewTaskView.update_decisions)
+  function task(
+    kind: string,
+    target: object,
+    updateDecisions: string[] = [],
+    updateKind: string | null = 'classification',
+  ): ReviewTaskView {
     return {
       task: { id: 'T-1', kind, subject_id: XJ499, procedure_id: 'FIN-03' },
       target,
       misstatement_update_kind: updateKind,
+      update_decisions: updateDecisions,
     } as unknown as ReviewTaskView
   }
   const judgment = { conclusion: 'c', subject_id: XJ499, misstatement_update: carried }
 
-  test('带载荷类别的程序: 推翻, 对例外认定错报, 失败任务给手工结果须带载荷; 确认与别的程序不带', () => {
-    expect(updateKindFor(task('normal', judgment), 'override')).toBe('classification')
-    expect(updateKindFor(task('normal', judgment), 'confirm')).toBeNull()
-    expect(updateKindFor(task('unattributed', { rule_id: 'V02' }, 'verification'), 'misstatement')).toBe('verification')
-    expect(updateKindFor(task('failed', { run_no: 1 }), 'manual_result')).toBe('classification')
-    expect(updateKindFor(task('normal', judgment, null), 'override')).toBeNull()
+  test('须带载荷的决定只看后端给的 update_decisions, 类别取 misstatement_update_kind; 不在其中或没有类别时不带', () => {
+    const normal = task('normal', judgment, ['override'])
+    expect(updateKindFor(normal, 'override')).toBe('classification')
+    expect(updateKindFor(normal, 'confirm')).toBeNull()
+    expect(updateKindFor(normal, null)).toBeNull()
+    const exception = task('unattributed', { rule_id: 'V02' }, ['override', 'misstatement'], 'verification')
+    expect(updateKindFor(exception, 'misstatement')).toBe('verification')
+    expect(updateKindFor(task('normal', judgment, [], 'classification'), 'override')).toBeNull()
+    expect(updateKindFor(task('normal', judgment, ['override'], null), 'override')).toBeNull()
   })
 
   test('依据: 判断带的载荷的错报与版本; 失败任务取对象在错报列表中的当前版本, 没取到为 null', () => {
@@ -205,7 +229,7 @@ describe('复核表单的错报更新载荷', () => {
     expect(misstatementUpdate('classification', null, emptyUpdate(), en)).toBe(en.updateForm.errors.base)
   })
 
-  test('验证: 状态, 凭证号 (逗号或空白分隔), 金额按 AUD 转分; 金额写不对报错', () => {
+  test('验证: 状态, 凭证号 (逗号或空白分隔), 金额按 AUD 转分; 是否须重新沟通恒为 null (后端按状态推出); 金额写不对报错', () => {
     const base = { misstatement_id: CSH02, base_version: 4 }
     const draft = {
       ...emptyUpdate(),
@@ -221,11 +245,26 @@ describe('复核表单的错报更新载荷', () => {
       adjustment_entry_nos: ['AJE-X05', 'AJE-X06'],
       corrected_cents: 4000,
       residual_cents: 853,
-      needs_recommunication: false,
+      needs_recommunication: null,
     })
     expect(misstatementUpdate('verification', base, { ...draft, residual: 'n/a' }, en)).toBe(
       en.updateForm.errors.amount,
     )
+  })
+
+  test('验证: 没写的可选字段为 null (表示不改), 凭证号为空不发 []', () => {
+    const base = { misstatement_id: CSH02, base_version: 4 }
+    expect(
+      misstatementUpdate('verification', base, { ...emptyUpdate(), status: 'communicated', entryNos: ' ' }, en),
+    ).toEqual({
+      ...base,
+      kind: 'verification',
+      status: 'communicated',
+      adjustment_entry_nos: null,
+      corrected_cents: null,
+      residual_cents: null,
+      needs_recommunication: null,
+    })
   })
 })
 

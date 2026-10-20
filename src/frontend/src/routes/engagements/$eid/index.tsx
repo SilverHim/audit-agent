@@ -657,7 +657,8 @@ function CurrentItem({
         <ConciergeMessage>
           <ConciergeText>{t.correction.intro(current.ids.length)}</ConciergeText>
         </ConciergeMessage>
-        <CorrectionCard eid={eid} ids={current.ids} disabled={disabled} />
+        {/* 待更正的错报一变 (如部分通知之后) 即重新挂载, 勾选与理由不带进下一份通知 */}
+        <CorrectionCard key={current.ids.join(',')} eid={eid} ids={current.ids} disabled={disabled} />
       </div>
     )
   }

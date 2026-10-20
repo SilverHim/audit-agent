@@ -318,9 +318,12 @@ class ReviewTaskView(Model):
     allowed_resolutions: list[DisputeResolution] = []
     # 各可选仲裁的错报草稿规则 (功能 collab 打开时的争议任务, ReviewQueue.draft_rules, 与校验同一规则); 其余为空
     draft_rules: dict[DisputeResolution, DraftRule] = {}
-    # 所属程序模板的错报更新类别 (FIN-03 classification, FIN-09 verification, 需求 R163): 有值时推翻, 对例外认定错报
-    # 与失败任务给手工结果须填 misstatement_update (需求 R159); 其余程序为空
+    # 所属程序模板的错报更新类别 (FIN-03 classification, FIN-09 verification, 需求 R163), 前端按它给分类或验证表单;
+    # 其余程序为空
     misstatement_update_kind: MisstatementUpdateKind | None = None
+    # allowed_decisions 中须填 misstatement_update 的决定 (orchestration.decisions.update_decisions: 推翻, 对例外认定
+    # 错报, 失败任务给手工结果, 需求 R159); 模板没有载荷类别时为空. 前端只看它, 不另抄规则
+    update_decisions: list[Decision] = []
 
 
 class ManualTaskView(Model):

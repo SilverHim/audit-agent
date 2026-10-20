@@ -289,15 +289,15 @@ export const zh: Messages = {
     },
   },
   fin08: {
-    title: '管理层回复',
     hint: '材料中的每条错报各登记一行',
     fields: {
       communicatedAt: '沟通时间',
       communicatedTo: '沟通对象',
       respondedAt: '回复时间',
       response: '回复原文',
-      agrees: '同意更正',
+      agrees: '是否同意更正',
     },
+    agreeChoices: { yes: '同意', no: '不同意' },
     separator: '、',
     errors: {
       missing: (fields) => `请填写${fields}。`,

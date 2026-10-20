@@ -1,9 +1,10 @@
 """登录、项目归属与决定错误码. 不启动数据库或编排图."""
 
 import functools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -26,8 +27,8 @@ from backend.contracts.models import (
 )
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
-from backend.persistence.stores import PostgresUserStore
-from tests.fakes import FakeDatasetLoader, FakeFinancialStore, FakeOutputStore, FakeTrail
+from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
+from tests.fakes import FakeFinancialStore, FakeOutputStore, FakeTrail
 
 
 @functools.cache
@@ -430,18 +431,22 @@ def test_trail_cursor_must_be_a_trail_of_this_engagement(api: SimpleNamespace, b
         ("INVALID_VALUE", 422),
         ("ENGAGEMENT_LOCKED", 423),
         ("TASK_NOT_FOUND", 404),
+        ("NOT_AWAITING_CORRECTION", 409),
     ],
 )
-@pytest.mark.parametrize("route", ["gate-decisions", "client-profile"])
+@pytest.mark.parametrize("route", ["gate-decisions", "client-profile", "correction-notices"])
 def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: int, route: str) -> None:
-    """DecisionRejected 按错误码表映射, 闸门的两条写入路由 (提交决定, 更新客户资料) 同一张表: NOT_AT_GATE 为 409
-    (需求 R346: 不再按方法区分)."""
+    """DecisionRejected 按错误码表映射, 原样带消息; 闸门的两条写入路由 (提交决定, 更新客户资料) 与提交更正通知 (需求
+    R163) 同一张表: NOT_AT_GATE 为 409 (需求 R346: 不再按方法区分), NOT_AWAITING_CORRECTION 为 409."""
     rejected = DecisionRejected(code, "目标对象已更新到 version 3")
     url = f"/api/v1/engagements/ENG-2026-001/{route}"
     if route == "gate-decisions":
         api.decisions.submit.side_effect = rejected
         body = {"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"}
         response = api.client.post(url, headers=_auth(api), json=body)
+    elif route == "correction-notices":
+        api.decisions.submit.side_effect = rejected
+        response = api.client.post(url, headers=_auth(api), json=POSTED)
     else:
         api.decisions.update_client_profile.side_effect = rejected
         response = api.client.put(url, headers=_auth(api), json=CLIENT_PROFILE_BODY)
@@ -474,6 +479,7 @@ def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None
 
 # ── 更正通知与可载入的更正分录 (需求 R163) ──
 
+REPO = Path(__file__).resolve().parents[1]
 NOTICE_URL = "/api/v1/engagements/ENG-2026-001/correction-notices"
 POSTED = {"kind": "adjustments_posted", "misstatement_ids": ["M-D-XJ499"], "adjustment_entry_nos": ["AJE-X01"]}
 
@@ -499,26 +505,6 @@ def test_correction_notice_filled_by_server(api: SimpleNamespace) -> None:
     assert forged.status_code == 422
 
 
-@pytest.mark.parametrize(
-    ("code", "status"),
-    [
-        ("NOT_AWAITING_CORRECTION", 409),
-        ("ENGAGEMENT_BUSY", 409),
-        ("RESUME_REQUIRED", 409),
-        ("FEATURES_MISMATCH", 409),
-        ("MISSING_FIELD", 422),
-        ("FIELD_NOT_ALLOWED", 422),
-        ("INVALID_VALUE", 422),
-        ("ENGAGEMENT_LOCKED", 423),
-    ],
-)
-def test_correction_notice_error_mapping(api: SimpleNamespace, code: str, status: int) -> None:
-    """验收 1: DecisionSubmit 的拒绝按错误码表映射, 原样带消息; NOT_AWAITING_CORRECTION 为 409."""
-    api.decisions.submit.side_effect = DecisionRejected(code, "当前不在等待更正")
-    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED)
-    assert (response.status_code, response.json()["detail"]) == (status, {"code": code, "message": "当前不在等待更正"})
-
-
 def test_correction_notice_body_checked(api: SimpleNamespace) -> None:
     """请求体的种类不认识 422, 不交 DecisionSubmit; 不是本人的项目 404."""
     response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED | {"kind": "posted"})
@@ -534,11 +520,30 @@ def use_engagement(api: SimpleNamespace, **fields: Any) -> SimpleNamespace:
     return deps  # type: ignore[no-any-return]
 
 
+# Xero演示数据集设计 "补造的更正分录" 一表: 凭证号, 行数, 摘要 (同一笔各行摘要相同; 都记 2026-09-30)
+XERO_ADJUSTMENTS = [
+    ("AJE-X01", 3, "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026"),
+    (
+        "AJE-X02",
+        2,
+        "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+    ),
+    ("AJE-X03", 2, "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026"),
+    ("AJE-X04", 2, "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026"),
+    (
+        "AJE-X05",
+        2,
+        "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, "
+        "as confirmed by the bank",
+    ),
+]
+
+
 @pytest.mark.external  # Xero 补造的更正分录
 @pytest.mark.parametrize(("loaded", "expected"), [([], []), (["AJE-X01", "AJE-X05"], ["AJE-X01", "AJE-X05"])])
 def test_adjustment_entries_of_xero(api: SimpleNamespace, loaded: list[str], expected: list[str]) -> None:
-    """验收 2: Xero 的 AJE-X01 至 AJE-X05 共 5 笔 (凭证号, 入账日, 摘要, 行数取补造的分录); 总账里还没有时都未载入,
-    D-CN1 载入 AJE-X01, AJE-X05 之后这两笔为已载入 (按总账里有没有该凭证号的行判断)."""
+    """验收 2: Xero 的 AJE-X01 至 AJE-X05 共 5 笔, 凭证号, 入账日, 摘要与行数同设计文档 (XERO_ADJUSTMENTS); 总账里还
+    没有时都未载入, D-CN1 载入 AJE-X01, AJE-X05 之后这两笔为已载入 (按总账里有没有该凭证号的行判断)."""
     from tests.xero_fakes import XERO_DATASET, XeroFakeDatasetLoader, xero_adjustments
 
     lines = {("journal_entry", r.id): r.model_dump() for r in xero_adjustments(loaded)} if loaded else {}
@@ -548,23 +553,31 @@ def test_adjustment_entries_of_xero(api: SimpleNamespace, loaded: list[str], exp
     response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
     assert response.status_code == 200
     rows = response.json()
-    by_no = {r.entry_no: r for r in deps.datasets.adjustment_entries(XERO_DATASET)}
-    assert [r["entry_no"] for r in rows] == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
-    for row in rows:
-        summary = by_no[row["entry_no"]]
-        assert (row["posting_date"], row["description"], row["line_count"]) == (
-            summary.posting_date.isoformat(),
-            summary.description,
-            summary.line_count,
-        )
+    assert [(r["entry_no"], r["posting_date"], r["line_count"], r["description"]) for r in rows] == [
+        (entry_no, "2026-09-30", line_count, description) for entry_no, line_count, description in XERO_ADJUSTMENTS
+    ]
     assert [r["entry_no"] for r in rows if r["loaded"]] == expected
 
 
-@pytest.mark.parametrize("dataset", ["demo", None])
-def test_adjustment_entries_empty_without_adjustments(api: SimpleNamespace, dataset: str | None) -> None:
-    """验收 2: Numbat (数据集没有更正分录) 与没有数据集的新客户都为 [], 后者不读数据集."""
+class UnreadDatasets:
+    """调一下就失败的载入器: 没有数据集的项目不该读它."""
+
+    def adjustment_entries(self, dataset: str) -> list[Any]:
+        raise AssertionError(f"不该读数据集 {dataset}")
+
+
+@pytest.mark.parametrize(
+    ("dataset", "datasets"),
+    [("demo", lambda: CsvDatasetLoader(REPO / "data")), (None, UnreadDatasets)],
+    ids=["numbat", "no_dataset"],
+)
+def test_adjustment_entries_empty_without_adjustments(
+    api: SimpleNamespace, dataset: str | None, datasets: Callable[[], Any]
+) -> None:
+    """验收 2: Numbat (仓库里的 data/demo, 真实 CSV 载入器: 没有更正分录文件) 为 []; 没有数据集的新客户为 [] 且不读
+    数据集 (载入器一调就失败)."""
     deps = use_engagement(api, dataset=dataset)
-    deps.datasets = FakeDatasetLoader(FakeFinancialStore())
+    deps.datasets = datasets()
     deps.financial_store = FakeFinancialStore()
     response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
     assert (response.status_code, response.json()) == (200, [])
