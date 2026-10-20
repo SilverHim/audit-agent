@@ -26,6 +26,8 @@ from backend.contracts.models import (
     AutonomyLevel,
     CriticReasonType,
     CriticVerdict,
+    DocumentRef,
+    DocumentType,
     EvidencePointer,
     EvidenceType,
     GateId,
@@ -42,6 +44,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
     mask_person_node_ids,
+    mask_person_text,
 )
 from backend.contracts.views import GateView, PlanningMaterial
 from tests.chat_fakes import FixedState, chat_deps, make_overview
@@ -453,7 +456,37 @@ BIRTH_FORMS = ("19790412", "1979-04-12")
     ids=["dated", "nodob", "single_name", "embedded", "underscore", "not_person_ids"],
 )
 def test_mask_person_node_ids(text: str, masked: str) -> None:
-    assert mask_person_node_ids(text) == masked
+    assert mask_person_node_ids(text) == masked == mask_person_text(text)
+
+
+def test_mask_person_node_ids_walks_keys_and_nested_values() -> None:
+    """结构化版本遮字典的键与值, 列表与元组里的字符串, 其余原样, 不改入参."""
+    data = {MORGAN: [MORGAN, (MORGAN, 3)], "n": 1.5, "nodob": WHITFIELD}
+    assert mask_person_node_ids(data) == {
+        "PER-MORGAN-ALEX": ["PER-MORGAN-ALEX", ("PER-MORGAN-ALEX", 3)],
+        "n": 1.5,
+        "nodob": WHITFIELD,
+    }
+    assert MORGAN in data
+
+
+ESCAPED = ["关联方:\n", "列表\t", "a\r", "\u001f", "→", "董事", "'"]  # 序列化时会转义, 或紧邻 ID 的字符
+
+
+@pytest.mark.parametrize("prefix", ESCAPED, ids=["newline", "tab", "cr", "control", "arrow", "hanzi", "quote"])
+async def test_ids_after_escaped_characters_are_masked(prefix: str) -> None:
+    """自由文本 (判断结论, 退回理由等) 里 ID 紧跟在换行, 制表符, 控制字符, 箭头, 汉字或单引号之后: 工具出口在序列化
+    之前遮蔽, 发给模型的文本不含两种日期写法. 文本版对已序列化的文本 (ensure_ascii, 同 tojson) 也不漏, 防误用. 防
+    按原文的边界去遮已序列化的文本: 转义 (\\n, \\uXXXX) 的末字符是字母数字, 边界不成立 (第 1 轮审核 R305-01)."""
+
+    async def get_text(env: ToolEnv, args: NoArgs) -> Found:
+        return Found({"conclusion": f"{prefix}{MORGAN} 任董事"})
+
+    tools = ToolBox([Tool("get_text", "文本", NoArgs, get_text, {"zh": "查看", "en": "Text"})])
+    outcome = await tools.call(env(), ToolCall(id="c", name="get_text", arguments="{}"))
+    assert json.loads(outcome.content) == {"conclusion": f"{prefix}PER-MORGAN-ALEX 任董事"}
+    for escaped in (json.dumps(f"{prefix}{MORGAN}"), json.dumps(f"{prefix}{MORGAN}", ensure_ascii=False)):
+        assert not [form for form in BIRTH_FORMS if form in mask_person_text(escaped)], escaped
 
 
 async def test_person_ids_reach_the_model_without_birth_dates() -> None:
@@ -512,3 +545,47 @@ async def test_masking_comes_before_truncation() -> None:
     cut = len('{"id": "PER-MORGAN-ALEX-1979')  # 未遮蔽的全文在这里截断会留下 1979
     outcome = await tools.call(env(max_chars=cut), ToolCall(id="c", name="get_person", arguments="{}"))
     assert outcome.content == '{"id": "PER-MORGAN-ALEX"}'
+
+
+async def test_registry_extract_file_name_is_not_sent() -> None:
+    """GEN-08 存档的人员检索 PDF 文件名为 {姓}-{名}-{yyyymmdd}.pdf (Xero 补造的 MORGAN-ALEX-19790412.pdf), 不带 PER-
+    前缀, 遮蔽认不出: get_evidence 对登记摘录类文件不发文件名. 模型照 X-GEN-08-1-R01-1 的证据 (list_exceptions) 再调
+    get_evidence, 两次发给模型的文本都不含两种日期写法; 别的类型的文件照发文件名. R137 未收进来, 例外与文件是合成的."""
+    person = DocumentRef(
+        id="DOC-0123456789ab",
+        type=DocumentType.registry_extract,
+        file_name="MORGAN-ALEX-19790412.pdf",
+        sha256="0" * 64,
+        page_count=1,
+        reliability=Reliability.external_original,
+        status="extracted",
+        uploaded_at=NOW,
+    )
+    letter = person.model_copy(
+        update={"id": "DOC-ba9876543210", "type": DocumentType.engagement_letter, "file_name": "engagement_letter.pdf"}
+    )
+    pointer = EvidencePointer(
+        type=EvidenceType.external,
+        source_type="document",
+        source_id=person.id,
+        locator="document",
+        page=1,
+        reliability=Reliability.external_original,
+    )
+    exception = EXCEPTION.model_copy(
+        update={"id": "X-GEN-08-1-R01-1", "procedure_id": "GEN-08", "source_ids": [MORGAN], "evidence": [pointer]}
+    )
+    deps = chat_deps(
+        output_store=FakeOutputStore([exception]),
+        financial_store=FakeFinancialStore(documents=[person, letter], records=NUMBAT_RECORDS),
+    )
+    tool_env = ToolEnv(EID, deps, FixedState(), 6000)
+    _, listed = await call("list_exceptions", {"procedure_id": "GEN-08"}, tool_env)
+    [evidence] = listed["exceptions"][0]["evidence"]
+    outcome, found = await call(
+        "get_evidence", {"source_type": "document", "source_id": evidence["source_id"]}, tool_env
+    )
+    _, other = await call("get_evidence", {"source_type": "document", "source_id": letter.id}, tool_env)
+    assert outcome.ok and not [form for form in BIRTH_FORMS if form in outcome.content + json.dumps(listed)]
+    assert (found["id"], found["type"], "file_name" in found) == (person.id, "registry_extract", False)
+    assert other["file_name"] == "engagement_letter.pdf"

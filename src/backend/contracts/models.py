@@ -1324,16 +1324,34 @@ def node_name_part(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", text).upper())
 
 
-# 带出生日期的个人节点 ID (person_node_id 的写法, 名可为空): 前面不接字母数字 (下划线, 冒号等可以), 8 位日期后不再
-# 接数字 (后面接字母也照样遮, 宁可多遮); 末段为 NODOB 的不匹配
-PERSON_ID_WITH_BIRTH = re.compile(r"(?<![A-Za-z0-9])(PER-[A-Z0-9]+-[A-Z0-9]*)-[0-9]{8}(?![0-9])")
+# 带出生日期的个人节点 ID (person_node_id 的写法, 名可为空): 前面不接字母数字 (下划线, 冒号, 汉字等可以), 8 位日期后
+# 不再接数字 (后面接字母也照样遮, 宁可多遮); 末段为 NODOB 的不匹配. 前面是 JSON 转义 (\n, \t, \uXXXX 等, 末字符是字母
+# 数字) 时也算边界, 已序列化的文本误交进来时不漏 (正常用法是在序列化之前遮, 见 mask_person_node_ids)
+PERSON_ID_WITH_BIRTH = re.compile(
+    r"(?:(?<![A-Za-z0-9])|(?<=\\[bfnrt])|(?<=\\u[0-9A-Fa-f]{4}))(PER-[A-Z0-9]+-[A-Z0-9]*)-[0-9]{8}(?![0-9])"
+)
 
 
-def mask_person_node_ids(text: str) -> str:
-    """发给模型的文本里, 个人节点 ID 去掉出生日期一段 (接口文档第 0 节 "个人信息"): PER-MORGAN-ALEX-19790412 →
-    PER-MORGAN-ALEX; 末段为 NODOB 的与其余文本不变. 审计助理的工具结果 (需求 R305) 与 GEN-03, GEN-01 进提示词前
-    (R139, R141) 共用这一个. 同名而出生日期不同的两人遮蔽后相同 (已知局限)."""
+def mask_person_text(text: str) -> str:
+    """一段原文里的个人节点 ID 去掉出生日期一段: PER-MORGAN-ALEX-19790412 → PER-MORGAN-ALEX; 末段为 NODOB 的与其余
+    文本不变. 给错误文本这类纯字符串用; 结构化数据用 mask_person_node_ids."""
     return PERSON_ID_WITH_BIRTH.sub(r"\1", text)
+
+
+def mask_person_node_ids(value: Any) -> Any:
+    """发给模型的数据在序列化之前遮蔽个人节点 ID 的出生日期 (接口文档第 0 节 "个人信息"): 递归处理字典 (键与值),
+    列表与元组, 每个字符串经 mask_person_text, 其余原样; 返回新对象, 不改入参. 审计助理的工具结果 (需求 R305) 与
+    GEN-03, GEN-01 进提示词前 (R139, R141, 先遮蔽数据再渲染) 共用这一个. 同名而出生日期不同的两人遮蔽后相同 (已知
+    局限; 两人的 ID 作字典的键时遮蔽后撞键, 后一项覆盖前一项, 所以发给模型的数据不以人员节点 ID 作键)."""
+    if isinstance(value, str):
+        return mask_person_text(value)
+    if isinstance(value, dict):
+        return {mask_person_node_ids(k): mask_person_node_ids(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_person_node_ids(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(mask_person_node_ids(item) for item in value)
+    return value
 
 
 def company_node_id(acn: str) -> str:
