@@ -94,11 +94,12 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板只有 GEN-05 (功能 journals, 基线下不启用); 非 P2 模板写 fixed,
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-05 (功能 journals) 与 GEN-08 (功能 related_parties, 需求
+    R137), 基线下都不启用; 非 P2 模板写 fixed,
     fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
     ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05"]
+    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05", "GEN-08"]
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature

@@ -1129,13 +1129,14 @@ PartyRelation = Literal["director", "secretary", "shareholder"]  # 关系图中�
 class PartyNode(Model):
     """股权与任职关系图中的一个人或一家公司. ID 规则见接口文档第 0 节 (company_node_id, person_node_id)."""
 
-    id: str  # 公司 ACN-{acn}; 个人 PER-{姓}-{名}-{yyyymmdd}, 没有出生日期时 PER-{姓}-{名}-NODOB
+    id: str  # 公司 ACN-{acn}, 没有 ACN 的 ORG-{名称}; 个人 PER-{姓}-{名}-{yyyymmdd}, 没有出生日期时 PER-{姓}-{名}-NODOB
     kind: PartyKind  # 个人或公司
     name: str  # 名称或姓名, 按登记摘录原样
     acn: str | None = None  # ACN, 9 位数字; 个人为空
     abn: str | None = None  # ABN, 11 位数字; 只有报告主体取画像的 ABN, 其余为空
     birth_date: date | None = None  # 出生日期 (个人, 摘录高管栏有); 只持股不任职的没有
-    searched: bool = False  # 是否做过人员检索 (个人) 或取过公司摘录 (公司)
+    # 是否取得了人员检索结果 (个人) 或公司摘录 (公司); 不检索的人员, 不穿透的公司, 查了而查不到的都为假 (需求 R137)
+    searched: bool = False
 
     @model_validator(mode="after")
     def numbers(self) -> Self:
@@ -1195,6 +1196,15 @@ def company_node_id(acn: str) -> str:
     if problem:
         raise ValueError(problem)
     return f"ACN-{digits}"
+
+
+def organisation_node_id(name: str) -> str:
+    """没有 ACN 的公司 (外国法人股东等, 需求 R137) 的节点 ID: ORG-{名称}, 名称经 node_name_part (例 "Galah Holdings
+    (NZ) Limited" → ORG-GALAHHOLDINGSNZLIMITED). 规范化后为空 (如只有非拉丁字母) 时抛 ValueError."""
+    part = node_name_part(name)
+    if not part:
+        raise ValueError(f"名称规范化后为空, 建不出节点 ID: {name!r}")
+    return f"ORG-{part}"
 
 
 def person_node_id(family_name: str, given_names: str, birth_date: date | None) -> str:
