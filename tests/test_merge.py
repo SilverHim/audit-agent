@@ -229,7 +229,8 @@ def test_agent_fields_match_section_6_table() -> None:
         "representation_letter",  # 需求 R215
     }
     assert AGENT_FIELDS[AgentId.A6] == {"exceptions", "judgments", "review_tasks", "confirmations"}
-    assert AGENT_FIELDS[AgentId.A8] == {"judgments", "review_tasks", "misstatements"}  # 需求 R156
+    # 需求 R156; R165 加 FIN-09 的 V02 例外
+    assert AGENT_FIELDS[AgentId.A8] == {"judgments", "exceptions", "review_tasks", "misstatements"}
     # 需求 R215: A9 加合规检查与其例外, 任务; A10 加治理层沟通与独立性声明
     assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}
     assert AGENT_FIELDS[AgentId.A10] == {

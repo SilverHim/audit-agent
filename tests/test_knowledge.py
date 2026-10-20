@@ -2337,9 +2337,9 @@ def test_fin03_prompt_renders_with_its_header_variables() -> None:
 def test_fin09_template_loads_only_with_misstatement() -> None:
     """R164 验收 1, 8: FIN-09 为完成阶段 A8 的混合程序 (L2), 挂功能 misstatement, 读分录与科目表; 参数 adjustment_prefix
     取数据集声明 (没有数据集时为 "AJE-"), 规则只有 V01 (emit rows), 准则片段 ASA450-P07 (其 procedures 列了 FIN-09),
-    输出模型为更正验证草稿. 与验收字面的差异 (协调者裁定) 见 FIN-09.yaml 注释: depends_on 只有 FIN-08 (R161 补上,
-    GEN-05 增量就绪后再加), manual_result_allowed 为假, outputs 不含 exceptions. 规则 SQL, 参数与提示词里没有 3 到 4
-    位的数字 (不写死科目代码). 基线下不启用, 打开 misstatement 时进 P2 以外的固定集."""
+    输出模型为更正验证草稿. depends_on 只有 FIN-08 (R161 补上, GEN-05 增量就绪后再加, 协调者裁定见 FIN-09.yaml 注释);
+    R165 起 manual_result_allowed 为真, 载荷类别 verification, outputs 含 V02 的 exceptions. 规则 SQL, 参数与提示词里
+    没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开 misstatement 时进 P2 以外的固定集."""
     base = ProcedureLibrary(ROOT)
     t = base.load("FIN-09")
     assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
@@ -2352,8 +2352,12 @@ def test_fin09_template_loads_only_with_misstatement() -> None:
         "misstatement",
         None,
     )
-    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08"], [], False, False)
-    assert (t.outputs, t.reads) == (["judgments", "review_tasks", "misstatements"], ["journal_entries", "accounts"])
+    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08"], [], False, True)
+    assert t.misstatement_update_kind == "verification"
+    assert (t.outputs, t.reads) == (
+        ["judgments", "exceptions", "review_tasks", "misstatements"],
+        ["journal_entries", "accounts"],
+    )
     assert t.evidence_required == [EvidenceType.voucher]
     state = initial_state(ENGAGEMENT, [], 1)
     resolved = base.resolve_params(t, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=NUMBAT_PROFILE)

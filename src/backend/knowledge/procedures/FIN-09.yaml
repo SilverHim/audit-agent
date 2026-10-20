@@ -2,25 +2,28 @@ id: FIN-09
 name: 更正验证
 # 规格书 6.1.2 (FIN-09 在 FIN-08 与 GEN-05 增量之后), 7.2 (L2 混合), UC-06 第 3 步 (规则核对调整分录与错报, 大模型判断
 # 是否完整更正及是否影响其他科目); ASA 450 第 7 段 (管理层按审计师要求更正后, 审计师执行追加程序确定是否仍有错报).
-# 需求 R164 定模板, A8 的执行由 R165 加.
+# 需求 R164 定模板, A8 的执行由 R165 加 (agents/workpaper.py, 口径见接口文档第 6 节 FIN-09 段).
 # 判断对象是 verifying 的错报, 每条一个 (subject_id 为错报 ID); mock 的 fixture_key 取错报来源判断的 subject_id (同
 # FIN-03, 如凭证号 XJ-499, 银行账户 BA-091, 科目代码). 规则 V01 取审计更正分录的全部行: 凭证号以 adjustment_prefix 开头
 # (数据集声明, 缺省 "AJE-"; 按前缀比较, 不用 LIKE, 前缀中的 % 与 _ 不作通配符), 不看 is_adjustment (Xero 的手工分录
 # is_adjustment 也为真). 按来源对象与科目匹配更正行, 算已更正额与剩余额在代码中做 (R165); 不写死科目代码.
-# 与需求 R164 验收 1 字面的差异 (协调者 10-20 裁定):
-# - depends_on 只有 FIN-08 (R161 加 FIN-08.yaml 时补上); 分录段的 GEN-05 增量就绪后再加 GEN-05;
-# - manual_result_allowed 先为假: P2 以外的节点等人时失败任务只认 rerun, 程序库加载时拒绝; R165 改为真;
-# - misstatement_update_kind (verification) 不写: 模板字段由 R159 加;
-# - outputs 不含 exceptions: 不匹配的 V02 例外与 A8 写入范围的 exceptions 由 R165 加.
+# V02 分录与错报对不上由 A8 在代码中生成 (不写 SQL): 没有匹配行, 方向相反或超额 (已更正额不在 (0, 错报金额] 内) 时建
+#   AuditException: id X-FIN-09-{run_no}-V02-{n} (n 按判断对象的顺序), rule_id V02, severity medium, source_ids 为匹配行
+#   ID (没有时为来源对象), amount_cents 为错报金额, detail {misstatement_id, expected_cents, corrected_cents,
+#   matched_line_ids}; 作该错报判断的规则例外, 验证载荷为 communicated 且须重新沟通.
+# depends_on 只有 FIN-08 (R161 加 FIN-08.yaml 时补上); 分录段的 GEN-05 增量就绪后再加 GEN-05 (需求 R164 验收 1 的差异,
+# 协调者 10-20 裁定).
 phase: P3_Completion
 cycle: Completion
 owner: A8
 feature: misstatement             # 功能开关 (services/features.py): 错报闭环
-outputs: [judgments, review_tasks, misstatements]
+outputs: [judgments, exceptions, review_tasks, misstatements]
 reads: [journal_entries, accounts]   # V01 的更正分录行与科目表
 engine: hybrid
 autonomy_level: L2
-manual_result_allowed: false
+manual_result_allowed: true          # 判断失败的错报可由审计师给出验证结果 (须带人给的验证载荷)
+misstatement_update_kind: verification   # 判断带验证载荷, 确认后写错报新版本; 推翻与手工结果须由人给载荷 (需求 R159);
+                                         # 带它的程序自主度不能高于 L2 (仲裁不收载荷)
 depends_on: [FIN-08]
 params:
   adjustment_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录的凭证号前缀

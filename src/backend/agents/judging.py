@@ -6,7 +6,7 @@
 """
 
 import functools
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -42,6 +42,9 @@ class Subject:
     client_profile: ClientProfile | None = None
     # mock 模式取固定输出的键, 缺省为对象 ID; FIN-03 的对象是错报, 取其来源判断的对象 (需求 R158)
     fixture_key: str | None = None
+    # FIN-09 (需求 R165): 规则算出的剩余额与匹配凭证各行的科目中错报科目以外的, 原样进 JudgmentContext; 其余程序为空
+    expected_residual_cents: int | None = None
+    entry_account_codes: list[str] | None = None
 
 
 class Subjects(list[Subject]):
@@ -227,6 +230,8 @@ async def judge_all(
             fixture_key=subject.fixture_key or subject.subject_id,
             autonomy_level=ctx.procedure.autonomy_level,
             client_profile=subject.client_profile,
+            expected_residual_cents=subject.expected_residual_cents,
+            entry_account_codes=subject.entry_account_codes,
         )
         outcome = await deps.judgments.judge(ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id)
         if outcome.judgment is not None:
@@ -245,7 +250,7 @@ def judgments_patch(
     ctx: RunContext,
     judged: list[Judged],
     outcomes: Sequence[RuleOutcome] = (),
-    fresh: Mapping[str, int] | None = None,
+    created: Sequence[AuditException] = (),
 ) -> StatePatch:
     """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
 
@@ -256,19 +261,20 @@ def judgments_patch(
     - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
     - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
     执行记录置成功终态: 个别对象失败不算整次失败; outcomes 为取对象时规则引擎没有执行的规则 (需求 R130), 记进终态.
-    fresh 为本次执行刚建, 还没有写入的例外 (ID → 刚建的版本, 即第 1 版; CSH-02 的 D01, D04): 它们不出新版本,
-    attributed 或 unattributed 直接写在刚建的版本上 (同判断第 1 版即 confirmed), 片段里同一例外只有一个版本
-    (merge.check_ids), 写入 Store 也从 v1 起 (需求 R322). 例: BA-091 判断失败, 第一条规则例外为本次的
-    X-CSH-02-1-D04-1 → v1 unattributed, 任务 T-X-CSH-02-1-D04-1-v1.
+    created 为本次执行刚建, 还没有写入的例外 (第 1 版; CSH-02 的 D01, D04, FIN-09 的 V02): 片段的 exceptions 依次为
+    它们 (归因或标未归因的换成写好的那一版), 再接其余例外的新版本. 它们不出新版本, attributed 或 unattributed 直接写在
+    刚建的版本上 (同判断第 1 版即 confirmed), 片段里同一例外只有一个版本 (merge.check_ids), 写入 Store 也从 v1 起
+    (需求 R322). 例: BA-091 判断失败, 第一条规则例外为本次的 X-CSH-02-1-D04-1 → v1 unattributed, 任务
+    T-X-CSH-02-1-D04-1-v1.
     """
 
-    created = fresh or {}
+    fresh = {x.id: x.version for x in created}
 
     def settled(exception: AuditException) -> AuditException:
         """例外新版本; 本次刚建的写在刚建的版本上 (内容为新版本的)."""
-        if exception.id not in created:
+        if exception.id not in fresh:
             return exception
-        return exception.model_copy(update={"version": created[exception.id]})
+        return exception.model_copy(update={"version": fresh[exception.id]})
 
     now = datetime.now(UTC)
     run = finish_run(ctx.run, now, outcomes)
@@ -301,6 +307,8 @@ def judgments_patch(
             tasks.append(queue.make_task(TaskKind.unattributed, marked, pid, run.id, now, subject_id=subject_id))
         else:
             tasks.append(queue.make_task(TaskKind.failed, run, pid, run.id, now, subject_id=subject_id))
+    written = {x.id: x for x in exceptions if x.id in fresh}  # 刚建的例外写好的那一版 (归因或标未归因的)
+    exceptions = [written.get(x.id, x) for x in created] + [x for x in exceptions if x.id not in fresh]
     patch: StatePatch = {"judgments": judgments, "exceptions": exceptions, "review_tasks": tasks}
     updated = misstatement_updates(judgments, {m.id: m for m in ctx.state["misstatements"]})
     return {**patch, **({"misstatements": updated} if updated else {}), "procedure_runs": [run]}

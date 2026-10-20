@@ -808,16 +808,13 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """CSH-02 的解读: 函证新版本与 D01, D04 例外, 加上要判断的账户的判断片段 (judgments_patch).
 
-        本次新建的 D01, D04 (findings.exceptions) 是 fresh: 判断失败时第一条规则例外可能就是它们, 置 unattributed 写在
-        第 1 版上, 取代刚建的那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict); 顺序同
-        findings.exceptions. 沿用的不是 fresh, 归因或再置 unattributed 时照常出新版本 (需求 R347).
+        本次新建的 D01, D04 (findings.exceptions) 是 judgments_patch 的 created: 判断失败时第一条规则例外可能就是它们, 置
+        unattributed 写在第 1 版上, 取代刚建的那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict);
+        顺序同 findings.exceptions. 沿用的不是 created, 归因或再置 unattributed 时照常出新版本 (需求 R347).
         """
         assert isinstance(findings, CashFindings)
-        fresh = {x.id: x.version for x in findings.exceptions}
-        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes, fresh=fresh)
-        created = {x.id: x for x in findings.exceptions}
+        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes, created=findings.exceptions)
         patch["confirmations"] = findings.confirmations
-        patch["exceptions"] = list((created | {x.id: x for x in patch["exceptions"]}).values())
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:

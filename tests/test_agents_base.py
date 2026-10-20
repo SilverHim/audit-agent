@@ -8,8 +8,11 @@ import pytest
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, gather_all
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.registry import AGENT_CLASSES, build_agents
+from backend.agents.workpaper import WorkpaperAgent
 from backend.contracts.models import AgentId
 from backend.contracts.state import StatePatch
+from backend.orchestration.nodes import MISSTATEMENT_NODES
+from backend.services.features import FEATURES
 from tests.fakes import FakeRegistry, FakeTrail, make_ctx, make_deps
 
 
@@ -59,6 +62,16 @@ def test_build_agents_maps_every_declared_procedure() -> None:
     declared = {pid for cls in AGENT_CLASSES for pid in cls.procedures}
     assert set(agents) == {pid for pid in declared if deps.library.enabled(pid)}
     assert {"GEN-05", "GEN-02"} <= declared - set(agents)
+
+
+def test_misstatement_nodes_have_agents() -> None:
+    """功能全开时, 完成阶段错报闭环各节点 (MISSTATEMENT_NODES) 中启用的程序都映射到 Agent: 节点不会在取 Agent 时抛
+    KeyError (R160 第 1 轮审核 06); FIN-09 由 A8 执行 (需求 R165)."""
+    deps = make_deps(FakeRegistry({}, {}), FakeTrail(), features=frozenset(FEATURES))
+    agents = build_agents(deps)
+    enabled = [pid for pids in MISSTATEMENT_NODES.values() for pid in pids if deps.library.enabled(pid)]
+    assert [pid for pid in enabled if pid not in agents] == []
+    assert isinstance(agents["FIN-09"], WorkpaperAgent)
 
 
 def test_build_agents_rejects_procedure_without_template(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -253,6 +253,41 @@ def xero_adjustments(
     return sorted((r for r in rows if entry_nos is None or r.entry_no in entry_nos), key=lambda r: r.id)
 
 
+def xero_v01_rows(
+    entry_nos: Sequence[str] | None = None, loader: XeroDatasetLoader | None = None
+) -> list[dict[str, Any]]:
+    """FIN-09 V01 的行 (需求 R165): 补造的更正分录 (xero_adjustments, entry_nos 给了时只取这些凭证) 接科目表的名称,
+    类型与标准分类, 列同 FIN-09.yaml 的 SQL, 按凭证号与行 ID; 同载入之后连库跑 V01 (test_rules_fin09 断言 SQL)."""
+    accounts = {a.code: a for a in xero_tables(loader)["accounts"]}
+    rows = []
+    for line in sorted(xero_adjustments(entry_nos, loader), key=lambda r: (r.entry_no, r.id)):
+        account = accounts.get(line.account_code)
+        rows.append(
+            {
+                "source_type": "journal_entry",
+                "id": line.id,
+                "entry_no": line.entry_no,
+                "posting_date": line.posting_date,
+                "account_code": line.account_code,
+                "account_name": account.name if account else None,
+                "account_type": account.type if account else None,
+                "account_category": account.category if account else None,
+                "debit_cents": line.debit_cents,
+                "credit_cents": line.credit_cents,
+                "description": line.description,
+                "source_doc": line.source_doc,
+            }
+        )
+    return rows
+
+
+def with_adjustments(
+    store: FakeFinancialStore, entry_nos: Sequence[str], loader: XeroDatasetLoader | None = None
+) -> None:
+    """假财务存储另记补造的更正分录 entry_nos 的各行 (经 record 与 journal_entries 取得到, 同载入之后)."""
+    store.records |= {("journal_entry", r.id): r.model_dump() for r in xero_adjustments(entry_nos, loader)}
+
+
 def xero_employees(loader: XeroDatasetLoader | None = None) -> list[Employee]:
     """补造的工资册 (3 行)."""
     return supplement(loader).employees()

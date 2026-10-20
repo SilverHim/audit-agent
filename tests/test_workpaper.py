@@ -73,10 +73,11 @@ def fin03_state(**changes: Any) -> EngagementState:
     return state | changes  # type: ignore[return-value]
 
 
-def fin03_context(deps: AgentDeps, state: EngagementState) -> RunContext:
-    """FIN-03 第 1 次执行: 程序为完成阶段的第 1 版 (L2), 执行记录同 GraphNodes.perform 用 build_run 建."""
+def fin03_context(deps: AgentDeps, state: EngagementState, procedure_id: str = FIN03) -> RunContext:
+    """A8 的完成阶段程序 (缺省 FIN-03) 的一次执行: 程序为完成阶段的第 1 版 (L2), 执行记录同 GraphNodes.perform 用
+    build_run 建 (run_no 按状态中的执行记录, 没有时为第 1 次)."""
     engagement = xero_engagement()
-    ctx = make_ctx(deps, FIN03, engagement=engagement)
+    ctx = make_ctx(deps, procedure_id, engagement=engagement)
     procedure = ctx.procedure.model_copy(update={"phase": Phase.P3_Completion})
     run = build_run(
         deps.library, ctx.template, procedure, engagement, state, NOW, traits=xero_traits(), profile=xero_profile()

@@ -280,17 +280,26 @@ def round2_misstatement(code: str, suffix: str, account: str, amount_cents: int)
 ROUND2 = [round2_misstatement(*row) for row in XERO_ROUND2]
 
 
-def round1_communicated() -> list[Misstatement]:
-    """第 1 轮登记之后的两条 (v3 communicated, 等更正); 不再列进沟通材料."""
-    data = round_file(1)
-    fields = {
+def communicated_fields(n: int) -> dict[str, Any]:
+    """第 n 轮登记 (都同意) 写进错报的状态与沟通, 回复四项."""
+    data = round_file(n)
+    return {
         "status": MisstatementStatus.communicated,
         "communicated_at": at(data["communicated_at"]),
         "communicated_to": data["recipient"],
         "responded_at": at(data["responded_at"]),
         "management_response": data["response"],
     }
-    return [m.model_copy(update={"version": 3, **fields}) for m in round1_misstatements()]
+
+
+def round1_communicated() -> list[Misstatement]:
+    """第 1 轮登记之后的两条 (v3 communicated, 等更正); 不再列进沟通材料."""
+    return [m.model_copy(update={"version": 3, **communicated_fields(1)}) for m in round1_misstatements()]
+
+
+def round2_communicated() -> list[Misstatement]:
+    """第 2 轮登记之后的三条 (v3 communicated, 等更正)."""
+    return [m.model_copy(update={"version": 3, **communicated_fields(2)}) for m in ROUND2]
 
 
 async def test_round2_lists_only_new_misstatements() -> None:
@@ -319,14 +328,7 @@ async def test_round2_lists_only_new_misstatements() -> None:
 def needs_recommunication() -> list[Misstatement]:
     """第 2 轮验证之后: M-D-F03 分录对不上, v5 communicated 且须重新沟通 (沟通字段为第 2 轮的); M-D-F04 已沟通, 没有
     标记 (等更正), 不再列."""
-    data = round_file(2)
-    fields = {
-        "status": MisstatementStatus.communicated,
-        "communicated_at": at(data["communicated_at"]),
-        "communicated_to": data["recipient"],
-        "responded_at": at(data["responded_at"]),
-        "management_response": data["response"],
-    }
+    fields = communicated_fields(2)
     f03, f04, _ = ROUND2
     return [
         f03.model_copy(update={"version": 5, "needs_recommunication": True, "correction_notice_id": "D-CN2", **fields}),
