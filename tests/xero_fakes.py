@@ -92,6 +92,7 @@ from tests.fakes import (
     make_deps,
     wait_idle,
 )
+from tests.fixture_sets import XERO
 
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
@@ -1120,13 +1121,11 @@ async def finish_xero17(
 
 # ── 错报闭环 (需求 R158): 已认定而未分类的两条错报与其来源判断, FIN-03 的判断对象 ──
 
-XERO_FIXTURE_ROOT = REPO / "tests" / "fixtures" / "llm_xero"  # Xero fixture 正本 (同 tests.fixture_sets.XERO.fixtures)
-
 
 def fixture_judgment(procedure_id: str, subject_id: str, autonomy_level: AutonomyLevel) -> Judgment:
     """某程序第 1 次执行对 subject_id 的判断, 内容取该程序 Xero fixture 正本的草稿 (结论, 推理链, 证据, 建议动作与
     错报草稿), 已由审计师确认 (第 2 版 confirmed). 置信度给定值, 不重算."""
-    raw = (XERO_FIXTURE_ROOT / procedure_id / f"{subject_id}.json").read_text(encoding="utf-8")
+    raw = (XERO.fixtures / procedure_id / f"{subject_id}.json").read_text(encoding="utf-8")
     draft = JudgmentDraft.model_validate_json(raw)
     return Judgment(
         id=f"J-{procedure_id}-1-{subject_id}",

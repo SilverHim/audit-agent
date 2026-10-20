@@ -653,7 +653,29 @@ async def test_gate_program_stays_planned_after_its_tasks_decided(tmp_path: Path
 
 TWO_FAILED: Plan = {1: [("S1", TaskKind.failed), ("S2", TaskKind.failed)], 2: [("S2", None)]}
 A8_OUTPUTS = "outputs: [judgments, review_tasks]\n"  # A8 不能写例外
-MANUAL_ALLOWED = "manual_result_allowed: true\n"
+JUDGING_LLM = "llm:\n  prompt: REV-03.md.j2\n  output_model: JudgmentDraft\n"  # 判断程序的大模型配置
+MANUAL_ALLOWED = "manual_result_allowed: true\n" + JUDGING_LLM  # 只有判断程序能开 (第 1 轮审核 R158-07)
+
+
+@pytest.mark.parametrize(
+    ("llm", "loads"),
+    [
+        (JUDGING_LLM, True),
+        ("llm:\n  prompt: DOC-04.md.j2\n  output_model: ContractExtraction\n", False),
+        ("", False),
+    ],
+    ids=["judgment", "extraction", "no_llm"],
+)
+def test_manual_result_only_for_judging_programs(tmp_path: Path, llm: str, loads: bool) -> None:
+    """R158 (第 1 轮审核 R158-07): manual_result_allowed 只许判断程序开 (llm.output_model 为 JudgmentDraft 或其子类,
+    不论阶段): 人工结果建人工判断取代该对象的判断. 抽取程序 (如 DOC-04 的合同) 或规则程序误开时, 对象该产出的领域对象
+    没人补, 下游悄悄少一个对象, 所以程序库加载即报错, 消息含程序编号."""
+    extra = "manual_result_allowed: true\n" + llm
+    if loads:
+        assert tst_library(tmp_path / "knowledge", extra).load(TST).manual_result_allowed
+    else:
+        with pytest.raises(ValueError, match=f"只有判断程序能开 manual_result_allowed .*{TST}"):
+            tst_library(tmp_path / "knowledge", extra)
 
 
 def manual_result(task: ReviewTask, decision_id: str) -> ReviewRecord:

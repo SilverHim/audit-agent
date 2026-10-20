@@ -972,6 +972,7 @@ class JudgmentEngine:
         *,
         llm: LLMClient | None = None,
         system: str = SYSTEM_PROMPT,
+        subject_id: str | None = None,
     ) -> LLMCallResult[Any]:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
@@ -980,6 +981,8 @@ class JudgmentEngine:
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
+        subject_id: 判断对象 (judge 给; 需求 R158 起可与 fixture_key 不同, 如 FIN-03 的对象是错报, fixture_key 是
+        来源判断的对象), 记进留痕供失败任务的呈递按它找调用 (presentation.last_llm_call); 其余调用方不给.
         """
         model = output_model(template)
         assert template.llm is not None  # output_model 已确认
@@ -1004,7 +1007,7 @@ class JudgmentEngine:
             )
             response = await client.complete(request, model)
             report = await self.validator.validate(eid, template, response, ctx)
-            trail_ids.append(await self.record(eid, actor, request, response, report, attempt))
+            trail_ids.append(await self.record(eid, actor, request, response, report, attempt, subject_id))
             if not report.retryable or attempt == MAX_ATTEMPTS:
                 break
             messages = [
@@ -1022,8 +1025,10 @@ class JudgmentEngine:
         response: LLMResponse[Any],
         report: ValidationReport[Any],
         attempt: int,
+        subject_id: str | None = None,
     ) -> str:
-        """写一次尝试的 llm_call 留痕, 返回留痕 ID. payload 存提示词全文与原文, 供复查."""
+        """写一次尝试的 llm_call 留痕, 返回留痕 ID. payload 存提示词全文与原文, 供复查; 给了判断对象时另记
+        subject_id."""
         outcome = report.level_failed or "passed"
         return await self.trail.record(
             TrailEntry(
@@ -1040,6 +1045,7 @@ class JudgmentEngine:
                 payload={
                     "attempt": attempt,
                     "fixture_key": request.fixture_key,
+                    **({"subject_id": subject_id} if subject_id is not None else {}),
                     "system": request.system,
                     "messages": [m.model_dump() for m in request.messages],
                     "raw": response.raw,
@@ -1089,6 +1095,7 @@ class JudgmentEngine:
             ),
             template.owner,
             ctx.fixture_key,
+            subject_id=ctx.subject_id,
         )
         report = result.report
         if report.level_failed is not None:

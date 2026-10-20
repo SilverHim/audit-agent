@@ -15,8 +15,10 @@ import yaml
 from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
 
+from backend.contracts import llm_outputs
 from backend.contracts.data import DataInput
 from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
+from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.manual_results import RESULT_MODELS
 from backend.contracts.models import (
     AuditObjective,
@@ -121,6 +123,9 @@ class ProcedureLibrary:
         wrong = manual_problems(templates)
         if wrong:
             raise ValueError(f"人工程序写法不对: {'; '.join(wrong)}")
+        wrong = manual_result_problems(templates)
+        if wrong:
+            raise ValueError(f"只有判断程序能开 manual_result_allowed (人工结果取代对象的判断): {', '.join(wrong)}")
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
@@ -381,6 +386,18 @@ def manual_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
             problems.append(f"{t.id}: engine manual 且不是闸门程序, 须有 manual 段")
         elif t.manual.result_model is not None and t.manual.result_model not in RESULT_MODELS:
             problems.append(f"{t.id}: 结果模型 {t.manual.result_model} 没有登记 (contracts/manual_results)")
+    return problems
+
+
+def manual_result_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """开了 manual_result_allowed 而不是判断程序 (llm.output_model 为 JudgmentDraft 或其子类) 的模板编号 (需求 R158 第 1
+    轮审核 R158-07). 失败任务的 manual_result 由 DecisionSubmit 建人工判断取代该对象的判断; 别的程序 (抽取, 规则, 起草)
+    的对象该产出的领域对象 (如 DOC-04 的合同) 没人补, 程序照样记完成, 下游悄悄少一个对象."""
+    problems: list[str] = []
+    for t in templates:
+        model = getattr(llm_outputs, t.llm.output_model, None) if t.llm is not None else None
+        if t.manual_result_allowed and not (isinstance(model, type) and issubclass(model, JudgmentDraft)):
+            problems.append(t.id)
     return problems
 
 

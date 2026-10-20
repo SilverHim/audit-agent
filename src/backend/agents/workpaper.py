@@ -10,7 +10,7 @@ from typing import Any, ClassVar, cast, get_args
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.fieldwork import JSON_ROWS, journal_rows
-from backend.agents.judging import Judged, JudgedRun, Subject, Subjects, judge_all, judgments_patch
+from backend.agents.judging import Judged, JudgedRun, Subject, Subjects, in_scope, judge_all, judgments_patch
 from backend.agents.review import ReviewAgent
 from backend.contracts.llm_outputs import MisstatementClassificationDraft
 from backend.contracts.models import (
@@ -72,11 +72,11 @@ def unclassified(state: Any) -> list[Misstatement]:
 
 
 def misstatement_objective(misstatement: Misstatement, objectives: Sequence[AuditObjective]) -> str | None:
-    """错报所属的审计目标 (需求 R158 验收 2): 审计目标的科目名作整词出现在错报科目里 (不分大小写) 且认定相同的第一条,
-    按状态中审计目标的顺序; 没有为空. 如 {Revenue, Cutoff} 的错报配 OBJ-REV-CUT, "Interest income (270)" 不配任何
-    目标. 纯函数."""
+    """错报所属的审计目标 (需求 R158 验收 2): 审计目标的科目名作整词出现在错报科目里 (不分大小写, 前后不是字母, 数字或
+    下划线; 科目名首尾是标点时也成立) 且认定相同的第一条, 按状态中审计目标的顺序; 没有为空. 如 {Revenue, Cutoff} 的
+    错报配 OBJ-REV-CUT, "Interest income (270)" 不配任何目标. 纯函数."""
     for objective in objectives:
-        word = rf"\b{re.escape(objective.account)}\b"
+        word = rf"(?<!\w){re.escape(objective.account)}(?!\w)"
         if objective.assertion is misstatement.assertion and re.search(word, misstatement.account, re.IGNORECASE):
             return objective.id
     return None
@@ -100,6 +100,20 @@ def classification_update(
     )
 
 
+def with_update(item: Judged, misstatements: dict[str, Misstatement], objectives: Sequence[AuditObjective]) -> Judged:
+    """成功的判断写上分类载荷 (同一版本); 失败的原样. 判断的草稿 (JudgmentOutcome.draft) 为分类草稿, 判断对象为
+    misstatements 中的错报. 纯函数."""
+    judgment = item.outcome.judgment
+    if judgment is None:
+        return item
+    draft = item.outcome.draft
+    assert isinstance(draft, MisstatementClassificationDraft)  # FIN-03 的输出模型
+    misstatement = misstatements[judgment.subject_id]
+    update = classification_update(misstatement, draft, misstatement_objective(misstatement, objectives))
+    judgment = judgment.model_copy(update={"misstatement_update": update})
+    return Judged(item.ctx, item.outcome.model_copy(update={"judgment": judgment}))
+
+
 class WorkpaperAgent(ProcedureAgent[JudgedRun]):
     """A8: 错报分类 (FIN-03, 混合程序). 规则部分定审计目标与期间来源, 大模型判类型与舞弊迹象, 走判断公共流程
     (agents/judging.py: judge, A7 复核, 降级, classify, 建任务), 判断带分类载荷 misstatement_update (需求 R158).
@@ -116,29 +130,16 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
         self.reviewer = ReviewAgent(deps)  # A7: 判断公共流程中的独立复核 (FIN-03 为 L2, 按跳过规则不复核)
 
     async def execute(self, ctx: RunContext) -> JudgedRun:
-        """FIN-03 的执行: 取判断对象 (fin03_subjects) 交判断公共流程, 成功的判断带上分类载荷 (classification_update).
-        没有判断对象时不调大模型."""
+        """FIN-03 的执行: 未分类的错报 (unclassified) 先按 in_scope 筛选 (rerun_subject_ids 与已交人处理的对象, 同 A6
+        各程序), 再取数 (fin03_subjects) 交判断公共流程, 成功的判断带上分类载荷 (with_update). 没有判断对象时不调
+        大模型."""
         if ctx.procedure.id != FIN03:
             raise NotImplementedError(ctx.procedure.id)
-        subjects = await self.fin03_subjects(ctx)
+        targets = {m.id: m for m in unclassified(ctx.state) if in_scope(ctx, m.id)}
+        subjects = await self.fin03_subjects(ctx, list(targets.values()))
         judged = await judge_all(self.deps, ctx, subjects, self.reviewer)
-        misstatements = {m.id: m for m in unclassified(ctx.state)}
         objectives = ctx.state["audit_objectives"]
-        return JudgedRun([self.with_update(item, misstatements, objectives) for item in judged], subjects.outcomes)
-
-    def with_update(
-        self, item: Judged, misstatements: dict[str, Misstatement], objectives: Sequence[AuditObjective]
-    ) -> Judged:
-        """成功的判断写上分类载荷 (同一版本); 失败的原样. 判断的草稿 (JudgmentOutcome.draft) 为分类草稿."""
-        judgment = item.outcome.judgment
-        if judgment is None:
-            return item
-        draft = item.outcome.draft
-        assert isinstance(draft, MisstatementClassificationDraft)  # FIN-03 的输出模型
-        misstatement = misstatements[judgment.subject_id]
-        update = classification_update(misstatement, draft, misstatement_objective(misstatement, objectives))
-        judgment = judgment.model_copy(update={"misstatement_update": update})
-        return Judged(item.ctx, item.outcome.model_copy(update={"judgment": judgment}))
+        return JudgedRun([with_update(item, targets, objectives) for item in judged], subjects.outcomes)
 
     async def interpret(self, ctx: RunContext, findings: JudgedRun) -> StatePatch:
         """判断公共流程的解读 (judgments_patch: 判断, 复核任务, 执行记录终态), 去掉为空的字段: 没有判断对象时片段只有
@@ -147,9 +148,9 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
         assert not patch.get("exceptions")  # 判断对象不带规则例外, 归因与标未归因都不会发生
         return {field: value for field, value in patch.items() if value or field == "procedure_runs"}
 
-    async def fin03_subjects(self, ctx: RunContext) -> Subjects:
-        """FIN-03 的判断对象 (unclassified 的错报, 对象 ID 为错报 ID, mock 的 fixture_key 为来源判断的对象). data 按
-        FIN-03.md.j2 头注释 (均为 JSON 形式):
+    async def fin03_subjects(self, ctx: RunContext, misstatements: Sequence[Misstatement]) -> Subjects:
+        """FIN-03 的判断对象: 给定的错报 (已筛选的未分类错报, 见 execute), 对象 ID 为错报 ID, mock 的 fixture_key 为
+        来源判断的对象. data 按 FIN-03.md.j2 头注释 (均为 JSON 形式):
         - misstatement: 错报; source_judgment: 来源判断 (状态中的当前版本) 的结论与证据;
         - journal_lines: 来源判断的对象为凭证号时该凭证的全部行 (journal_entries(entry_nos=[对象])), 加以该对象为
           原始单据的行 (journal_entries(source_docs=[对象])); 两次调用分开, 按行 ID 去重并排序; 都取不到为空;
@@ -166,7 +167,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
         risks = ctx.state["risk_register"]
         fraud_risks = [r.model_dump(mode="json", include=RISK_FIELDS) for r in risks if r.fraud_related]
         subjects = []
-        for misstatement in unclassified(ctx.state):
+        for misstatement in misstatements:
             source = judgments.get(misstatement.judgment_id or "")
             if source is None:
                 raise LookupError(f"错报 {misstatement.id} 的来源判断 {misstatement.judgment_id} 不在状态中")

@@ -22,12 +22,16 @@ from backend.contracts.models import (
     Decision,
     Misstatement,
     MisstatementStatus,
+    MisstatementType,
     MisstatementUpdate,
     OpinionType,
     Phase,
+    RerunRequest,
     ReviewStatus,
+    ReviewTask,
     RiskLevel,
     RunStatus,
+    TargetType,
     TaskKind,
     TrailKind,
     UncorrectedSchedule,
@@ -36,6 +40,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.gates import fin01_view
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import build_run
+from backend.services.presentation import failure_of
 from tests.fakes import NOW, FakeTrail, ScriptedLLM, make_ctx, xero_document
 from tests.fixture_sets import XERO
 from tests.test_xero_fixtures import RecordingJudgments, xero_state
@@ -133,12 +138,15 @@ async def test_fin03_classifies_identified_misstatements() -> None:
 
 @pytest.mark.external
 async def test_fin03_context_per_misstatement() -> None:
-    """验收 3: 上下文为错报, 来源判断 (结论与证据), XJ-499 的整笔分录行 XJ-499-1..3 (BA-091 不是凭证号, 两次取数都
-    为空), 来源判断其余指针所指的行 (XJ-499: 试算表 710; BA-091: 试算表 091 与分录行 XJ-601-1), 来源判断所引文件的
-    登记 (固定资产登记表; 回函), 舞弊相关风险; 分录行按凭证号与按原始单据各取一次. 不含别的程序的判断 (REV-03 对
-    CON-X01 的判断在状态里, 不进提示词)."""
+    """验收 3: 上下文为错报, 来源判断 (结论与证据), 两次分开取的分录行, 来源判断其余指针所指的行, 所引文件的登记,
+    舞弊相关风险; 各项的键同 FIN-03.md.j2 头注释. 分录行按凭证号与按原始单据各取一次. 不含别的程序的判断 (REV-03 对
+    CON-X01 的判断在状态里, 不进提示词). 另造三处数据以区分对错:
+    - 按原始单据另取到一行 (合成 XJ-101-1, source_doc XJ-499, 行 ID 排在前): 进 journal_lines 并排在最前;
+    - BA-091 的来源判断另引一个不存在的试算表科目 999: cited_rows 不列它 (取不到的不列), 不报错;
+    - BA-091 的回函不登记: documents 不列它 (没登记的不列), 不报错."""
     trail = FakeTrail()
     deps = fin03_deps(trail)
+    deps.financial_store.document_refs.remove(xero_document(REPLY))  # type: ignore[attr-defined]
     recorder = RecordingJudgments(deps.judgments)
     deps = replace(deps, judgments=recorder)
     calls: list[dict[str, Any]] = []
@@ -147,10 +155,20 @@ async def test_fin03_context_per_misstatement() -> None:
 
     async def journal_entries(eid: str, **kwargs: Any) -> Any:
         calls.append(kwargs)
+        if kwargs == {"source_docs": ["XJ-499"]}:
+            [line] = [x for x in await original(eid, entry_nos=["XJ-601"]) if x.id == "XJ-601-2"]
+            return [line.model_copy(update={"id": "XJ-101-1", "entry_no": "XJ-101", "source_doc": "XJ-499"})]
         return await original(eid, **kwargs)
 
     store.journal_entries = journal_entries  # type: ignore[method-assign]
-    await run_fin03(deps, fin03_state())
+    judgments = []
+    for j in fin03_state()["judgments"]:
+        if j.id == "J-CSH-02-1-BA-091":
+            balance = next(p for p in j.evidence if p.source_type == "trial_balance")
+            j = j.model_copy(update={"evidence": [*j.evidence, balance.model_copy(update={"source_id": "999"})]})
+        judgments.append(j)
+    state = fin03_state(judgments=judgments)
+    await run_fin03(deps, state)
 
     assert calls == [
         {"entry_nos": ["XJ-499"]},
@@ -160,22 +178,38 @@ async def test_fin03_context_per_misstatement() -> None:
     ]
     xj499, ba091 = (c.data for c in recorder.contexts)
     assert [c.fixture_key for c in recorder.contexts] == FIXTURE_KEYS
-    assert (xj499["misstatement"]["id"], xj499["misstatement"]["account_code"]) == ("M-D-XJ499", "710")
-    assert (xj499["source_judgment"]["id"], xj499["source_judgment"]["subject_id"]) == ("J-GEN-02-1-XJ-499", "XJ-499")
-    assert [r["id"] for r in xj499["journal_lines"]] == ["XJ-499-1", "XJ-499-2", "XJ-499-3"]
+    assert set(xj499["misstatement"]) == {
+        "id", "version", "judgment_id", "type", "account", "account_code", "assertion", "amount_cents", "direction",
+        "status",
+    }  # fmt: skip
+    assert (xj499["misstatement"]["id"], xj499["misstatement"]["amount_cents"]) == ("M-D-XJ499", 75000)
+    source = next(j for j in state["judgments"] if j.id == "J-GEN-02-1-XJ-499")
+    assert xj499["source_judgment"] == source.model_dump(
+        mode="json", include={"id", "procedure_id", "subject_id", "conclusion", "evidence"}
+    )
+    assert [r["id"] for r in xj499["journal_lines"]] == ["XJ-101-1", "XJ-499-1", "XJ-499-2", "XJ-499-3"]
+    assert {frozenset(r) for r in xj499["journal_lines"]} == {
+        frozenset({
+            "source_type", "id", "entry_no", "posting_date", "created_by", "approved_by", "account_code",
+            "debit_cents", "credit_cents", "description", "source_doc",
+        })
+    }  # fmt: skip
     assert [(r["source_type"], r["account_code"]) for r in xj499["cited_rows"]] == [("trial_balance", "710")]
-    assert [d["id"] for d in xj499["documents"]] == [xero_document("documents/evidence/fixed_asset_register.pdf").id]
+    register = xero_document("documents/evidence/fixed_asset_register.pdf")
+    assert xj499["documents"] == [
+        register.model_dump(mode="json", include={"id", "file_name", "type", "page_count", "reliability"})
+    ]
     assert ba091["journal_lines"] == []
     assert [(r["source_type"], r.get("id") or r.get("account_code")) for r in ba091["cited_rows"]] == [
         ("trial_balance", "091"),
         ("journal_entry", "XJ-601-1"),
     ]
-    assert [d["id"] for d in ba091["documents"]] == [xero_document(REPLY).id]
-    risks = [r for r in fin03_state()["risk_register"] if r.fraud_related]
+    assert ba091["documents"] == []
+    risks = [r for r in state["risk_register"] if r.fraud_related]
     expected = [r.model_dump(mode="json", include={"id", "assertion", "level", "description"}) for r in risks]
     assert xj499["fraud_risks"] == ba091["fraud_risks"] == expected
     prompts = [m["content"] for e in llm_calls(trail) for m in e.payload["messages"]]
-    assert prompts and not any("J-REV-03-1-CON-X01" in p or "CON-X01" in p for p in prompts)
+    assert prompts and not any("CON-X01" in p for p in prompts)
 
 
 @pytest.mark.external
@@ -210,19 +244,36 @@ OBJECTIVES = [
 ]
 
 
+def objective(oid: str, account: str, assertion: Assertion) -> AuditObjective:
+    return AuditObjective(id=oid, account=account, assertion=assertion, risk_level=RiskLevel.high, is_material=True)
+
+
+REV_CUT = objective("OBJ-A", "Revenue", Assertion.Cutoff)
+SALES_CUT = objective("OBJ-B", "Sales revenue", Assertion.Cutoff)
+
+
 @pytest.mark.parametrize(
-    ("account", "assertion", "objective"),
+    ("account", "assertion", "objectives", "expected"),
     [
-        ("Revenue", Assertion.Cutoff, "OBJ-REV-CUT"),
-        ("Sales revenue (200)", Assertion.Occurrence, "OBJ-REV-OCC"),  # 整词出现, 不分大小写
-        ("Revenue", Assertion.Existence, None),  # 认定不同
-        ("Revenues", Assertion.Cutoff, None),  # 不是整词
-        ("Interest income (270)", Assertion.Completeness, None),
-        ("Petty cash", Assertion.Existence, "OBJ-CASH-EXI"),
+        ("Revenue", Assertion.Cutoff, OBJECTIVES, "OBJ-REV-CUT"),
+        ("Sales revenue (200)", Assertion.Occurrence, OBJECTIVES, "OBJ-REV-OCC"),  # 整词出现, 不分大小写
+        ("Revenue", Assertion.Existence, OBJECTIVES, None),  # 认定不同
+        ("Revenues", Assertion.Cutoff, OBJECTIVES, None),  # 后面不是整词
+        ("Noncash expenses", Assertion.Existence, OBJECTIVES, None),  # 前面不是整词
+        ("Interest income (270)", Assertion.Completeness, OBJECTIVES, None),
+        ("Petty cash", Assertion.Existence, OBJECTIVES, "OBJ-CASH-EXI"),
+        ("Sales revenue", Assertion.Cutoff, [REV_CUT, SALES_CUT], "OBJ-A"),  # 都配得上时取状态顺序的第一条
+        ("Sales revenue", Assertion.Cutoff, [SALES_CUT, REV_CUT], "OBJ-B"),
+        # 科目名首尾是标点时也算整词, 括号按字面比 (第 1 轮审核 R158-08)
+        ("Cash (bank)", Assertion.Existence, [objective("OBJ-X", "Cash (bank)", Assertion.Existence)], "OBJ-X"),
+        ("Cash bank", Assertion.Existence, [objective("OBJ-X", "Cash (bank)", Assertion.Existence)], None),
     ],
 )
-def test_misstatement_objective_rule(account: str, assertion: Assertion, objective: str | None) -> None:
-    """验收 2: 审计目标的科目名作整词出现在错报科目里 (不分大小写) 且认定相同的第一条; 配不上为空. 不取大模型."""
+def test_misstatement_objective_rule(
+    account: str, assertion: Assertion, objectives: list[AuditObjective], expected: str | None
+) -> None:
+    """验收 2: 审计目标的科目名作整词出现在错报科目里 (不分大小写) 且认定相同的第一条; 配不上为空. 不取大模型.
+    接进载荷见 test_payload_type_from_model_objective_from_rule."""
     misstatement = Misstatement(
         id="M-D-1",
         judgment_id="J-1",
@@ -234,7 +285,27 @@ def test_misstatement_objective_rule(account: str, assertion: Assertion, objecti
         amount_cents=100,
         direction="overstated",
     )
-    assert misstatement_objective(misstatement, OBJECTIVES) == objective
+    assert misstatement_objective(misstatement, objectives) == expected
+
+
+@pytest.mark.external
+async def test_payload_type_from_model_objective_from_rule() -> None:
+    """验收 2: 载荷的类型取模型 (XJ-499 认定时为 factual, 模型判 judgmental), 审计目标取规则 (状态另有一条配得上
+    XJ-499 的目标 Office equipment / Existence, BA-091 仍配不上)."""
+    raw = json.loads(fixture_raw("XJ-499"))
+    raw["nature"] = {"type": "judgmental", "fraud_indicative": False}
+    llm = ScriptedLLM({"XJ-499": [json.dumps(raw)], "BA-091": [fixture_raw("BA-091")]})
+    state = fin03_state()
+    ppe = objective("OBJ-PPE-EXI", "Office equipment", Assertion.Existence)
+    state = fin03_state(audit_objectives=[*state["audit_objectives"], ppe])
+    patch, _ = await run_fin03(fin03_deps(FakeTrail(), llm), state)
+
+    assert state["misstatements"][0].type is MisstatementType.factual
+    updates = [j.misstatement_update for j in patch["judgments"]]
+    assert [(u.type, u.objective_id) for u in updates if u is not None] == [
+        (MisstatementType.judgmental, "OBJ-PPE-EXI"),
+        (MisstatementType.factual, None),
+    ]
 
 
 def classified(m: Misstatement) -> Misstatement:
@@ -262,6 +333,59 @@ async def test_fin03_without_unclassified_misstatements_calls_no_model(misstatem
     assert llm_calls(trail) == []
     assert list(patch) == ["procedure_runs"]
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
+
+
+SUPERSEDED = RerunRequest(  # 过期重跑取代了 XJ-499 来源判断的那次执行
+    id="RR-1",
+    procedure_ids=["GEN-02"],
+    superseded_run_ids=["RUN-GEN-02-1"],
+    data_version=2,
+    requested_by="U-1",
+    requested_at=NOW,
+)
+WAITING = ReviewTask(  # M-D-XJ499 已交人处理 (带对象的待决任务)
+    id="T-RUN-FIN-03-1-M-D-XJ499-v1",
+    kind=TaskKind.failed,
+    procedure_id=FIN03,
+    target_type=TargetType.ProcedureRun,
+    target_id="RUN-FIN-03-1",
+    target_version=1,
+    run_id="RUN-FIN-03-1",
+    subject_id="M-D-XJ499",
+    created_at=NOW,
+)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("changes", "rerun_subjects"),
+    [
+        ({"rerun_requests": [SUPERSEDED]}, []),  # 来源判断不在当前结果中 (同 FIN-04)
+        ({}, ["M-D-CSH02-091"]),  # 只重判 BA-091 那条
+        ({"review_tasks": [WAITING]}, []),
+    ],
+    ids=["superseded", "rerun_subjects", "awaiting_review"],
+)
+async def test_subjects_filtered_before_fetching(changes: dict[str, Any], rerun_subjects: list[str]) -> None:
+    """判断对象只取当前结果, 并先按 rerun_subject_ids 与已交人处理的对象筛选再取数 (同 A6 各程序, 第 1 轮审核
+    R158-04, R158-06): 三种情形都只判 M-D-CSH02-091, 分录行也只为 BA-091 取."""
+    trail = FakeTrail()
+    deps = fin03_deps(trail)
+    calls: list[dict[str, Any]] = []
+    original = deps.financial_store.journal_entries
+
+    async def journal_entries(eid: str, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return await original(eid, **kwargs)
+
+    deps.financial_store.journal_entries = journal_entries  # type: ignore[method-assign]
+    ctx = fin03_context(deps, fin03_state(**changes))
+    ctx = replace(ctx, procedure=ctx.procedure.model_copy(update={"rerun_subject_ids": rerun_subjects}))
+    patch = await WorkpaperAgent(deps).run(ctx)
+
+    assert [j.subject_id for j in patch["judgments"]] == ["M-D-CSH02-091"]
+    assert [e.payload["fixture_key"] for e in llm_calls(trail)] == ["BA-091"]
+    assert calls == [{"entry_nos": ["BA-091"]}, {"source_docs": ["BA-091"]}]
 
 
 FRAUD_REASON = "The entry records an asset that does not exist and was posted by the sole director without review."
@@ -311,9 +435,9 @@ async def test_fraud_indicative_sample_is_flagged_and_visible_at_fin01() -> None
 
 @pytest.mark.external
 @pytest.mark.parametrize(
-    ("replies", "attempts"),
+    ("replies", "attempts", "level"),
     [
-        (["not json", "not json", "not json"], 3),  # 结构失败, 重试 2 次
+        (["not json", "not json", "not json"], 3, "syntax"),  # 不是 JSON (语法级, 同结构级重试 2 次)
         (
             [
                 json.dumps(
@@ -321,16 +445,17 @@ async def test_fraud_indicative_sample_is_flagged_and_visible_at_fin01() -> None
                 )
             ],
             1,
+            "semantic",
         ),
     ],
-    ids=["structure", "semantic"],
+    ids=["syntax", "semantic"],
 )
 async def test_failed_classification_creates_failed_task_allowing_manual_result(
-    replies: list[str], attempts: int
+    replies: list[str], attempts: int, level: str
 ) -> None:
-    """验收 7: 大模型连续 3 次结构失败, 或引用, 语义失败 (只调 1 次, 如类型为 projected) 时, 该错报建带对象的 failed
-    任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开 manual_result_allowed, 需求 R158);
-    另一条照常判断."""
+    """验收 7: 大模型连续 3 次语法或结构失败 (重试耗尽), 或引用, 语义失败 (只调 1 次, 如类型为 projected) 时, 该错报
+    建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开 manual_result_allowed,
+    需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数与留痕."""
     llm = ScriptedLLM({"XJ-499": replies, "BA-091": [fixture_raw("BA-091")]})
     trail = FakeTrail()
     deps = fin03_deps(trail, llm)
@@ -345,4 +470,10 @@ async def test_failed_classification_creates_failed_task_allowing_manual_result(
         "RUN-FIN-03-1",
     )
     assert deps.queue.allowed(failed) == {Decision.rerun, Decision.manual_result}
-    assert patch["procedure_runs"][0].status is RunStatus.succeeded  # 个别对象失败不算整次失败
+    [run] = patch["procedure_runs"]
+    assert run.status is RunStatus.succeeded  # 个别对象失败不算整次失败
+    # 失败卡片按任务的对象 (错报) 找到最后一次调用, 虽然 fixture_key 是来源判断的对象 (第 1 轮审核 R158-01)
+    last = [e for e in llm_calls(trail) if e.payload["fixture_key"] == "XJ-499"][-1]
+    failure = failure_of(failed, run, llm_calls(trail))
+    assert failure is not None
+    assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, attempts, last.id)
