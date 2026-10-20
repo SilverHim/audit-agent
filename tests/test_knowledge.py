@@ -46,7 +46,6 @@ from backend.contracts.models import (
     RerunRequest,
     Retention,
     RiskLevel,
-    TaskKind,
     TermType,
 )
 from backend.contracts.records import DatasetTraits
@@ -2186,12 +2185,12 @@ SUPERSEDED_FIN08 = RerunRequest(  # 过期重跑取代了 FIN-08 第 1 次执行
 
 
 def other_manual_result() -> dict[str, list[Any]]:
-    """别的程序 (FIN-03 的 failed 任务) 的 manual_result: details 不是 FIN-08 的登记 (按它解析会报错), 不看."""
+    """别的人工程序 (以后的 FIN-07, RPT-07 一类, kind 同为 manual) 的 manual_result: details 不是 FIN-08 的登记 (按它
+    解析会报错), 不看 (第 2 轮审核 R161-09)."""
     history = fin08_registered(9, [])
-    task = history["review_tasks"][0]
-    task = task.model_copy(update={"procedure_id": "FIN-03", "kind": TaskKind.failed, "manual_request": None})
+    task = history["review_tasks"][0].model_copy(update={"procedure_id": "FIN-07"})
     record = history["review_records"][0]
-    result = record.manual_result.model_copy(update={"details": {}})
+    result = record.manual_result.model_copy(update={"details": {"x": 1}})
     return {"review_tasks": [task], "review_records": [record.model_copy(update={"manual_result": result})]}
 
 

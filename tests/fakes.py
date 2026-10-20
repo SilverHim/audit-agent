@@ -23,6 +23,7 @@ from unittest import mock
 import httpx
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, ValidationError
 
 import backend.main
@@ -3558,14 +3559,20 @@ def make_runner(
     nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))
-    saver = InMemorySaver(serde=checkpoint_serde())
-    if interrupt_before:  # 主图与闸门按 deps 的功能集取, 同 compile_graph (planning 打开时有 PLN-15 的节点)
-        app = build_graph(nodes, deps.features).compile(
-            checkpointer=saver, interrupt_before=[*gate_nodes(deps.features), *interrupt_before]
-        )
+    if interrupt_before:
+        app = stopping_graph(nodes, interrupt_before)
     else:
-        app = compile_graph(nodes, saver)
+        app = compile_graph(nodes, InMemorySaver(serde=checkpoint_serde()))
     return GraphRunner(app, deps), output_store
+
+
+def stopping_graph(nodes: GraphNodes, stops: Sequence[str]) -> CompiledStateGraph[EngagementState]:
+    """nodes 上的主图 (内存检查点), 闸门之外另在 stops 各节点之前停下; 主图与闸门按 nodes 的功能集取, 同 compile_graph
+    (planning 打开时有 PLN-15 的节点). make_runner 与 start_at_fan_in 共用."""
+    features = nodes.deps.features
+    return build_graph(nodes, features).compile(
+        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=[*gate_nodes(features), *stops]
+    )
 
 
 async def wait_idle(runner: GraphRunner, eid: str) -> None:
@@ -3650,14 +3657,6 @@ def record_writers(monkeypatch: pytest.MonkeyPatch, store: FakeOutputStore) -> d
     return writers
 
 
-def p3_runner(deps: AgentDeps, stops: Sequence[str]) -> GraphRunner:
-    """deps 上的主图 (真实 Agent, 内存检查点), 闸门之外另在 stops 各节点之前停下 (错报闭环的用例只看其中一段)."""
-    app = build_graph(GraphNodes(deps, 2), deps.features).compile(
-        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=[*gate_nodes(deps.features), *stops]
-    )
-    return GraphRunner(app, deps)
-
-
 async def start_at_fan_in(
     deps: AgentDeps,
     state: EngagementState,
@@ -3665,12 +3664,13 @@ async def start_at_fan_in(
     stops: Sequence[str],
     stored: Sequence[Versioned] = (),
 ) -> GraphRunner:
-    """把主图放在 P2 结清处起跑 (p3_runner): 程序包与 stored (如错报的各版本) 先写进 Store (写入者 A1), 检查点以
-    fan_in 身份写入 state 与程序包, 后台推进到下一个停点或等待; 返回 runner (后台已停下, 没有出错)."""
+    """把主图放在 P2 结清处起跑 (真实 Agent, 闸门之外另在 stops 各节点之前停下, 错报闭环的用例只看其中一段): 程序包与
+    stored (如错报的各版本) 先写进 Store (写入者 A1), 检查点以 fan_in 身份写入 state 与程序包, 后台推进到下一个停点
+    或等待; 返回 runner (后台已停下, 没有出错)."""
     eid = state["engagement_id"]
     async with deps.output_store.transaction(eid):
         await deps.output_store.put(eid, [*pack, *stored], actor=AgentId.A1)
-    runner = p3_runner(deps, stops)
+    runner = GraphRunner(stopping_graph(GraphNodes(deps, 2), stops), deps)
     await runner.app.aupdate_state(GraphRunner.config(eid), state | {"procedure_pack": list(pack)}, as_node="fan_in")
     runner.acquire(eid)
     runner.launch(eid, None)
