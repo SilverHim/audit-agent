@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     DefaultClause,
     ForeignKey,
+    Index,
     Integer,
     Table,
     Text,
@@ -249,5 +250,26 @@ audit_trail = table(
     "id:s kind:s actor:s procedure_id:s run_id:s summary:s model:s prompt_hash:s "
     "input_tokens:i output_tokens:i idempotency_key:s payload:j created_at:t",
     ("id",),
+)
+# 按项目读留痕走索引 (需求 R298, 迁移 0015). 项目条件来自行级安全 (engagement_id = 当前项目), 排序键同
+# AuditTrail.list 的 (created_at, id):
+# - TRAIL_BY_TIME: 时间线的最近一页 (newest) 与游标往前翻 (before), 带或不带一组 kind;
+# - TRAIL_BY_KIND: 只取一类时 (trail_pages.all_of_kind 按写入顺序逐页读完, last_of 取最近一条), 不必扫过别的类;
+# - TRAIL_BY_KEY: find_success 按防重复键取 (每写一条带键的留痕前查一次), 部分索引, 只含带键的行.
+TRAIL_BY_TIME = Index(
+    "ix_audit_trail_engagement_time", audit_trail.c.engagement_id, audit_trail.c.created_at, audit_trail.c.id
+)
+TRAIL_BY_KIND = Index(
+    "ix_audit_trail_engagement_kind_time",
+    audit_trail.c.engagement_id,
+    audit_trail.c.kind,
+    audit_trail.c.created_at,
+    audit_trail.c.id,
+)
+TRAIL_BY_KEY = Index(
+    "ix_audit_trail_engagement_key",
+    audit_trail.c.engagement_id,
+    audit_trail.c.idempotency_key,
+    postgresql_where=audit_trail.c.idempotency_key.is_not(None),
 )
 SCOPED = [t for t in metadata.tables.values() if "engagement_id" in t.c]
