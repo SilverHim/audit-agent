@@ -77,11 +77,16 @@ def decision(gate: GateId, verdict: GateVerdict, target_id: str, version: int = 
 # ── 验收 1: 现有 4 道闸门 ──
 
 
+def exits_in(spec: Any, features: frozenset[str]) -> dict[str, str]:
+    """闸门在功能集下的出口去向 (去向为函数时按功能集取)."""
+    return {name: target(features) if callable(target) else target for name, target in spec.exits.items()}
+
+
 def test_four_gates_registered_as_before() -> None:
     """基线的 4 道闸门: 节点, 材料, 留痕程序与出口同改造前; 每个节点另有 represent 回自身 (path_map). 挂功能名的
     闸门只有 PLN-15 (功能 planning, 需求 R205, 见 test_pln15_gate_row)."""
     rows = {
-        spec.gate: (spec.node, spec.material_field, spec.material_id, spec.procedure_id, dict(spec.exits))
+        spec.gate: (spec.node, spec.material_field, spec.material_id, spec.procedure_id, exits_in(spec, BASELINE))
         for spec in GATES
         if spec.feature is None
     }
@@ -121,6 +126,8 @@ def test_four_gates_registered_as_before() -> None:
         "approve": "report_draft",
         "reject": "completion",
     }
+    # 功能 misstatement 打开时 FIN-01 驳回回 summarize 重做 FIN-04 (需求 R160)
+    assert exits_in(spec_of(GateId.FIN_01), BASELINE | {"misstatement"})["reject"] == "summarize"
     assert {spec.gate: spec.feature for spec in GATES if spec.feature is not None} == {GateId.PLN_15: "planning"}
 
 

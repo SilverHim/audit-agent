@@ -250,8 +250,9 @@ async def test_critic_off_skips_independent_review() -> None:
 
 async def test_node_runs_only_procedures_in_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """验收 7: completion 节点的程序表改为 (X-NEW, FIN-04). 基线下 X-NEW 不在固定集, 只执行 FIN-04, 片段与留痕同
-    现状; 开 misstatement 时先执行 X-NEW (脚本 Agent) 再执行 FIN-04."""
-    root = knowledge(tmp_path, **{"X-NEW": X_NEW})
+    现状; 开 X-NEW 的功能时先执行 X-NEW (脚本 Agent) 再执行 FIN-04. X-NEW 在这里挂 journals: misstatement 会换掉完成
+    阶段的节点表 (需求 R160, 见 test_p3_flow)."""
+    root = knowledge(tmp_path, **{"X-NEW": X_NEW.replace("feature: misstatement", "feature: journals")})
 
     async def completion(features: frozenset[str], patched: bool) -> tuple[StatePatch, list[Any], list[str]]:
         library = ProcedureLibrary(root, features)
@@ -280,7 +281,7 @@ async def test_node_runs_only_procedures_in_pack(tmp_path: Path, monkeypatch: py
 
     phase = [t[2] for t in current_trail if t[0] is TrailKind.transition and t[4] == "engagement"]
     assert phase == ["FIN-04"]  # 阶段 P1 → P3 的留痕归在执行的程序下
-    patch, trail, order = await completion(frozenset({"critic", "misstatement"}), patched=True)
+    patch, trail, order = await completion(frozenset({"critic", "journals"}), patched=True)
     assert order == ["X-NEW"]
     # 两条程序都带 phase: 第一条已把阶段推进到 P3_Completion, 阶段留痕只有 1 行, 归在第一条程序下
     assert [t[2] for t in trail if t[0] is TrailKind.transition and t[4] == "engagement"] == ["X-NEW"]

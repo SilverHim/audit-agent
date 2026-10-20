@@ -53,7 +53,7 @@ from backend.contracts.views import (
     ReportMaterial,
 )
 from backend.orchestration.nodes import uncovered_objectives, update_procedure
-from backend.services.features import FEATURES, LEGACY_FEATURES, PLANNING, parse_features
+from backend.services.features import FEATURES, LEGACY_FEATURES, MISSTATEMENT, PLANNING, parse_features
 from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
 # 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 只有 PLN-15 的通过决定能填 (登记行, 需求 R205),
@@ -182,11 +182,18 @@ def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     }
 
 
+def fin01_reject(features: frozenset[str]) -> str:
+    """FIN-01 驳回的去处: 功能 misstatement 打开时回 summarize 重做 FIN-04 (需求 R160, 不重跑分类, 沟通与验证),
+    关闭时回 completion."""
+    return "summarize" if MISSTATEMENT in features else "completion"
+
+
 def fin01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     """FIN-01 闸门决定的效果 (第 7 节), 纯函数, 由 aupdate_state(as_node="gate_fin") 写入状态.
 
     approve: FIN-01 置 completed, opinion_route 取审计师选的意见类型 (可与候选意见不同), 阶段进 P4_Reporting;
-    reject 与 insufficient_info: 只记决定 (reject 由路由回 completion 重做汇总表, insufficient_info 留在闸门重新呈报).
+    reject 与 insufficient_info: 只记决定 (reject 由路由回 completion 重做汇总表, 功能 misstatement 打开时回 summarize,
+    见 fin01_reject; insufficient_info 留在闸门重新呈报).
     """
     if decision.decision is not GateVerdict.approve:
         return {"gate_decisions": [decision]}
@@ -837,7 +844,7 @@ GATES: list[GateSpec] = [
         material_field="uncorrected_schedule",
         material_model=UncorrectedSchedule,
         material_id="SCHEDULE",
-        exits={"approve": "report_draft", "reject": "completion"},
+        exits={"approve": "report_draft", "reject": fin01_reject},
         fields={
             GateVerdict.approve: FieldRule(("reason", "disposition")),  # FIN-01 通过也须填理由
             GateVerdict.reject: REASON,

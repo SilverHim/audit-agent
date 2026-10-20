@@ -4,7 +4,7 @@
 """
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -67,7 +67,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
-from backend.services.features import AUTONOMY, COLLAB, PLANNING
+from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
 
@@ -214,7 +214,7 @@ def rerun_subjects(group: list[ReviewTask]) -> list[str]:
 
 
 # 各图节点依次执行的 P2 以外程序 (接口文档第 3 节). 节点按它执行 (只取程序包中有的, 见 node_procedures),
-# 恢复补做按它确定同一节点内复核决定的先后
+# 恢复补做按它确定同一节点内复核决定的先后. 按功能取用 node_table
 NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "p0_intel": ("ACC-04",),
     "p1_ingest": ("DOC-04",),
@@ -223,17 +223,39 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "completion": ("FIN-04",),
     "report_draft": ("RPT-03",),
 }
+# 功能 misstatement 打开时的完成阶段 (需求 R160, 设计稿 v2.1 第 7.2 节; 规格书第 10 节 P3 的顺序: 分类, 沟通, 等待更正,
+# 更正验证, PLN-19 重评, FIN-04 累计, FIN-15 复核, FIN-02 持续经营; Issue #46 起没有 FIN-12 报表检查), 覆盖
+# NODE_PROCEDURES 的同名节点: FIN-04 改在 summarize, completion 只执行 FIN-02. 程序库还没有的程序 (由错报闭环, 计划,
+# 签字前各需求加) 照列, 节点只执行程序包中有的; 分录段的 GEN-05 增量扫描由 R194 加在 verify_correction 的 FIN-09 之前
+MISSTATEMENT_NODES: dict[str, tuple[str, ...]] = {
+    "misstatement_triage": ("FIN-03",),
+    "communicate": ("FIN-08",),
+    "verify_correction": ("FIN-09",),
+    "p3_reassess": ("PLN-19",),
+    "summarize": ("FIN-04",),
+    "final_review": ("FIN-15",),
+    "completion": ("FIN-02",),
+}
+
+
+def node_table(features: Collection[str]) -> Mapping[str, tuple[str, ...]]:
+    """功能集下各图节点依次执行的程序: NODE_PROCEDURES, 功能 misstatement 打开时以 MISSTATEMENT_NODES 覆盖同名节点.
+    节点 (node_procedures) 与恢复补做 (recovery.catch_up_review) 共用."""
+    return {**NODE_PROCEDURES, **(MISSTATEMENT_NODES if MISSTATEMENT in features else {})}
 
 
 def node_procedures(node: str, pack: Iterable[Procedure], library: ProcedureLibrary) -> list[str]:
-    """该图节点要执行的程序: 按 NODE_PROCEDURES 的顺序, 只取程序包中有的. 挂了功能名的程序 (模板 feature 不为空)
-    不在程序包中时跳过: 功能未启用时不在固定集里 (services/features.py), 旧项目的程序包也可能缺后来新增的程序.
-    基线程序 (feature 为空) 不在程序包中是程序包出错, 抛 LookupError, 不静默跳过."""
+    """该图节点要执行的程序: 按 node_table (程序库的功能集) 的顺序, 只取程序包中有的. 挂了功能名的程序 (模板 feature
+    不为空) 与程序库还没有的程序不在程序包中时跳过: 功能未启用时不在固定集里 (services/features.py), 旧项目的程序包也
+    可能缺后来新增的程序. 基线程序 (feature 为空) 不在程序包中是程序包出错, 抛 LookupError, 不静默跳过."""
     present = {p.id for p in pack}
-    missing = [pid for pid in NODE_PROCEDURES[node] if pid not in present and library.load(pid).feature is None]
+    order = node_table(library.features)[node]
+    missing = [
+        pid for pid in order if pid not in present and library.enabled(pid) and library.load(pid).feature is None
+    ]
     if missing:
         raise LookupError(f"{node}: 程序包中没有基线程序 {', '.join(missing)}")
-    return [pid for pid in NODE_PROCEDURES[node] if pid in present]
+    return [pid for pid in order if pid in present]
 
 
 async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate, run: ProcedureRun) -> StatePatch:
@@ -1228,12 +1250,45 @@ class GraphNodes:
 
     # ── P3, P4 ──
     async def completion(self, state: EngagementState) -> StatePatch:
-        """P2 结清后进入完成阶段: A9 执行 FIN-04, 产出未更正错报汇总表 SCHEDULE (下一版) 与候选意见.
-
-        阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行一次,
-        出 SCHEDULE 下一版.
+        """功能 misstatement 关闭时: P2 结清后进入完成阶段, A9 执行 FIN-04, 产出未更正错报汇总表 SCHEDULE (下一版) 与
+        候选意见. 阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行
+        一次, 出 SCHEDULE 下一版.
+        功能 misstatement 打开时 (需求 R160): 完成阶段的最后一步, 只执行 FIN-02 (node_table), 不写阶段 (已在
+        misstatement_triage 写过); FIN-04 在 summarize.
         """
-        return await self.run_node(state, "completion", phase=Phase.P3_Completion)
+        phase = None if MISSTATEMENT in self.deps.features else Phase.P3_Completion
+        return await self.run_node(state, "completion", phase=phase)
+
+    # 功能 misstatement 打开时的完成阶段各节点 (需求 R160), 执行的程序见 MISSTATEMENT_NODES, 去向见 graph 的路由
+    async def misstatement_triage(self, state: EngagementState) -> StatePatch:
+        """错报分诊: A8 执行 FIN-03, 给未分类的 identified 错报分类. P2 结清后第一次进来时阶段置 P3_Completion, 与
+        FIN-03 的执行写入同一事务; 回流再进来 (完成阶段新认定了错报) 时阶段已是 P3_Completion, 不再写."""
+        phase = None if state["phase"] is Phase.P3_Completion else Phase.P3_Completion
+        return await self.run_node(state, "misstatement_triage", phase=phase)
+
+    async def communicate(self, state: EngagementState) -> StatePatch:
+        """与管理层沟通错报 (FIN-08, 人工程序, 由 R161 加入)."""
+        return await self.run_node(state, "communicate")
+
+    async def await_correction(self, state: EngagementState) -> StatePatch:
+        """等待管理层更正 (节点内 interrupt, 由 R162 实现). 路由只在有 communicated 错报时进入, R161 之前走不到."""
+        raise NotImplementedError("await_correction: 等待更正由需求 R162 实现")
+
+    async def verify_correction(self, state: EngagementState) -> StatePatch:
+        """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""
+        return await self.run_node(state, "verify_correction")
+
+    async def p3_reassess(self, state: EngagementState) -> StatePatch:
+        """完成阶段重评重要性与风险 (PLN-19, 由计划段加入)."""
+        return await self.run_node(state, "p3_reassess")
+
+    async def summarize(self, state: EngagementState) -> StatePatch:
+        """错报累计: A9 执行 FIN-04, 出 SCHEDULE 下一版; 每轮回流一次, FIN-01 驳回后回到这里重做. 不写阶段."""
+        return await self.run_node(state, "summarize")
+
+    async def final_review(self, state: EngagementState) -> StatePatch:
+        """签字前的最终复核 (FIN-15, 由签字前段加入); 新认定的错报由路由送回分诊."""
+        return await self.run_node(state, "final_review")
 
     async def report_draft(self, state: EngagementState) -> StatePatch:
         """A10 执行 RPT-03, 出审计报告的下一修订 (REPORT-{revision}, 第 1 版); RPT-01 退回后回到这里, 按批注修订,

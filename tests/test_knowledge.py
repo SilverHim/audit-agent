@@ -47,9 +47,12 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import initial_state
 from backend.core.config import get_settings
+from backend.orchestration.graph import P3_NODES
+from backend.orchestration.nodes import MISSTATEMENT_NODES
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
+from backend.services.features import FEATURES
 from backend.services.judgment_engine import output_model, prompt_env
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.external import optional, supplements_dir
@@ -3076,3 +3079,36 @@ def test_runtime_check_fails_without_runtime_copy(tmp_path: Path) -> None:
     (runtime / "REV-03" / "CON-999.json").write_text("{}", encoding="utf-8")
     with pytest.raises(AssertionError):
         check_runtime(replace(NUMBAT, runtime=runtime))
+
+
+# 功能 misstatement 打开时完成阶段各节点在图上的先后 (需求 R160): 分诊到报表检查 (await_correction 不执行程序), 最后
+# completion; 回流只回到分诊, 所以先后即节点在 P3_NODES 中的次序
+P3_ORDER = [node for node in (*P3_NODES, "completion") if node in MISSTATEMENT_NODES]
+
+
+def p3_rank(pid: str) -> tuple[int, int]:
+    """程序在完成阶段的先后: (节点次序, 节点内次序)."""
+    return next(
+        (n, MISSTATEMENT_NODES[node].index(pid)) for n, node in enumerate(P3_ORDER) if pid in MISSTATEMENT_NODES[node]
+    )
+
+
+def test_p3_dependencies_follow_node_order() -> None:
+    """需求 R160 验收 9: 功能全开时, 完成阶段的非闸门程序都在某个节点里执行; 每条的 depends_on 中同在完成阶段节点里的
+    程序排在它之前 (节点在前, 或同节点内在前); 裁定第 1 批的依赖表与节点顺序一致 (FIN-04 在 FIN-03, FIN-09, PLN-19
+    之后; FIN-15 在 FIN-09, FIN-04 之后; FIN-02 所在的 completion 在 final_review 之后; Issue #46 起没有 FIN-12), 表里的
+    程序还没有模板的也核对."""
+    placed = {pid for pids in MISSTATEMENT_NODES.values() for pid in pids}
+    library = ProcedureLibrary(ROOT, frozenset(FEATURES))
+    p3 = [t for t in library.all() if t.phase is Phase.P3_Completion and t.gate is None]
+    assert p3 and {t.id for t in p3} <= placed
+    for t in p3:
+        for dep in (d for d in t.depends_on if d in placed):
+            assert p3_rank(dep) < p3_rank(t.id), (dep, t.id)
+    ruling = {
+        "FIN-04": ["FIN-03", "FIN-09", "PLN-19"],
+        "FIN-15": ["FIN-09", "FIN-04"],
+        "FIN-02": ["FIN-15"],
+    }
+    for pid, deps in ruling.items():
+        assert all(p3_rank(dep) < p3_rank(pid) for dep in deps), pid

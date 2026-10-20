@@ -33,7 +33,7 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.decisions import rerun_trail, review_trail
 from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
-from backend.orchestration.nodes import NODE_PROCEDURES, confirmations_from_store
+from backend.orchestration.nodes import confirmations_from_store, node_table
 from backend.orchestration.runner import GraphRunner, at_rerun_point, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 
@@ -216,8 +216,8 @@ async def catch_up_review(
     ainvoke(Command(resume=决定 ID)) 交出 (每交一个停在下一次等待), 返回交最后一个的 Command; 没有返回 None.
 
     节点内等待载荷 records 列出的本节点已读回的决定不算缺. 读回顺序不靠时间推断, 按 (程序在该节点内的执行次序
-    (nodes.NODE_PROCEDURES), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等, 读回后从 Store
-    整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
+    (nodes.node_table, 按项目的功能集), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等,
+    读回后从 Store 整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
     (次序, 1, 所针对任务所属执行的 run_no) 排 rerun 决定 (Q17 一轮失败算一组, 整组重跑: 同一程序每轮只对应一个 rerun
     决定, 下一轮由它触发). 同一程序同一轮有两个 rerun 决定说明不变式被破坏, 抛 RuntimeError. manual 任务 (人工程序,
     需求 R93) 的决定按 (次序, 1, 任务所属执行的 run_no, 任务 ID) 排: 节点读回它时即调 owner 整理结果, 要看到它所属
@@ -229,7 +229,7 @@ async def catch_up_review(
     重算, 复制后或只交回一部分时中断, 下次补做看到的是节点待执行或停在中间某次等待, 照样接着交.
 
     P2 的等复核 (await_events) 每次读回一个决定后即从 Store 整体读回, 与交哪个, 按什么顺序无关: 只交一个, 不复制.
-    图停在闸门, 不在等待也没有待执行的节点, 或节点不在 NODE_PROCEDURES 中时抛 RuntimeError.
+    图停在闸门, 不在等待也没有待执行的节点, 或节点不在节点表中时抛 RuntimeError.
     """
     eid = engagement.id
     store = deps.output_store
@@ -254,9 +254,10 @@ async def catch_up_review(
     await backfill_transitions(deps, engagement, snapshot, None)  # 复核决定不改阶段
     if node == "await_events":
         return Command(resume=min(r.id for r in missing))
-    if node not in NODE_PROCEDURES:
+    table = node_table(deps.features)
+    if node not in table:
         raise RuntimeError(f"复核决定未进检查点, 节点 {node} 不是等复核的节点, 无法补做")
-    order = NODE_PROCEDURES[node]
+    order = table[node]
 
     async def key(record: ReviewRecord) -> tuple[int, int, int, str]:
         task = tasks[record.task_id]

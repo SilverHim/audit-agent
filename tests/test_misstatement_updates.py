@@ -1,10 +1,10 @@
 """需求 R159: 错报更新随决定生效与手工结果.
 
-Xero 演示上把主图放在 FIN-03 之前 (R160 接入 misstatement_triage 前, 完成节点改为只执行 FIN-03): 检查点以 fan_in
-身份写入 P2 已结清的状态 (test_workpaper.fin03_state: 两条 identified 而未分类的错报与其来源判断; 错报与 FIN-03
-也写进 Store),
-真实 A8 读 FIN-03 的 Xero fixture 正本 (或给定的脚本大模型). FIN-03 为 L2, 两条判断各建 normal 任务, 完成节点内等人;
-审计师经 DecisionSubmit 决定, 同一事务按判断上或人给的载荷写出错报新版本.
+Xero 演示上把主图放在 P2 结清处 (功能 misstatement 打开): 检查点以 fan_in 身份写入 P2 已结清的状态
+(test_workpaper.fin03_state: 两条 identified 而未分类的错报与其来源判断; 错报与 FIN-03 也写进 Store), 主图进
+misstatement_triage (R160), 真实 A8 读 FIN-03 的 Xero fixture 正本 (或给定的脚本大模型). FIN-03 为 L2, 两条判断各建
+normal 任务, 节点内等人; 审计师经 DecisionSubmit 决定, 同一事务按判断上或人给的载荷写出错报新版本. 主图另在
+communicate 之前停下: 本文件只看分类, 沟通及之后的去向见 test_p3_flow.
 
 验证载荷 (FIN-09, R164 起) 的效果用 review_effects 直接测; 经 DecisionSubmit 的不合格验证载荷用 FIN-03 的载荷类别改为
 verification 的程序库副本.
@@ -12,12 +12,13 @@ verification 的程序库副本.
 
 import re
 import shutil
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
+from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
@@ -48,10 +49,12 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.core.config import get_settings
+from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import check_review_fields, check_update_payload, review_effects
-from backend.orchestration.gates import fin01_view
+from backend.orchestration.gates import fin01_view, gate_nodes
+from backend.orchestration.graph import build_graph
 from backend.orchestration.merge import check_outputs
-from backend.orchestration.nodes import NODE_PROCEDURES
+from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.features import BASELINE, MISSTATEMENT
 from backend.services.procedure_library import ProcedureLibrary
@@ -72,7 +75,6 @@ from tests.test_workpaper import (
     objective,
 )
 from tests.xero_fakes import xero_engagement
-from tests.xero_flow import offline_runner
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-03 的 Xero fixture
 
@@ -105,15 +107,18 @@ def failing_xj499() -> ScriptedLLM:
     return ScriptedLLM({"XJ-499": ["not json"] * 3, "BA-091": [fixture_raw("BA-091")]})
 
 
-@pytest.fixture(autouse=True)
-def completion_runs_fin03(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """完成节点只执行 FIN-03 (recovery 与 nodes 共用这张表)."""
-    monkeypatch.setitem(NODE_PROCEDURES, "completion", (FIN03,))
-    yield
+def triage_runner(deps: AgentDeps) -> GraphRunner:
+    """deps 上的主图 (真实 Agent, 内存检查点, 同 xero_flow.offline_runner), 闸门之外另在 communicate 之前停下."""
+    nodes = GraphNodes(deps, 2)
+    interrupts = [*gate_nodes(deps.features), "communicate"]
+    app = build_graph(nodes, deps.features).compile(
+        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=interrupts
+    )
+    return GraphRunner(app, deps)
 
 
 async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None, **changes: Any) -> Started:
-    """见模块 docstring: 停在完成节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES;
+    """见模块 docstring: 停在分诊节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES;
     changes 覆盖 fin03_state 的键 (如审计目标)."""
     deps = fin03_deps(FakeTrail(), llm, features=FEATURES, library=library)
     state = fin03_state(**changes)
@@ -121,7 +126,7 @@ async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None, **c
     store = deps.output_store
     async with store.transaction(EID):
         await store.put(EID, [procedure, *state["misstatements"]], actor=AgentId.A1)
-    runner = offline_runner(deps)
+    runner = triage_runner(deps)
     await runner.app.aupdate_state(CONFIG, state | {"procedure_pack": [procedure]}, as_node="fan_in")
     runner.acquire(EID)
     runner.launch(EID, None)
@@ -316,7 +321,7 @@ async def test_misstatement_on_classification_applies_judgments_update(waiting: 
 async def test_manual_result_on_failed_classification_takes_reviewers_update() -> None:
     """验收 6: 分类模型对 XJ499 连续 3 次结构失败, 其 failed 任务提交 manual_result: 缺载荷 → MISSING_FIELD; 带了:
     建人工判断 -H1 (带人给的载荷), M-D-XJ499 v2 的作分类的判断为它; 节点读回后仍等 CSH02 的任务. 再确认 CSH02 后节点
-    结束, 走到 FIN-01 闸门前, 状态中 XJ499 为 -H1 作分类的 v2 (按 outputs 重放取回)."""
+    结束, 停在 communicate 之前, 状态中 XJ499 为 -H1 作分类的 v2 (按 outputs 重放取回)."""
     s = await at_fin03(failing_xj499())
     manual = record(FAILED_TASK, Decision.manual_result, id="D-H", manual_result=ManualResult(conclusion="人工分类"))
     await assert_rejected(s, manual, "MISSING_FIELD", "misstatement_update")
@@ -332,19 +337,19 @@ async def test_manual_result_on_failed_classification_takes_reviewers_update() -
 
     await submit(s, record(CSH02_TASK, id="D-C3"))
     snapshot = await s.runner.app.aget_state(CONFIG)
-    assert snapshot.next == ("gate_fin",)
+    assert snapshot.next == ("communicate",)
     by_id = {m.id: m for m in snapshot.values["misstatements"]}
     assert by_id[XJ499] == classified(misstatement_v1(XJ499), human_id, **FACTUAL)
 
 
 async def test_both_confirmed_node_replays_latest_misstatements(waiting: Started) -> None:
-    """验收 9: 两条都确认后节点结束, 走到 FIN-01 闸门前. 节点每次恢复都从头执行, RUN-FIN-03-1 已是终态, 按 outputs 从
-    Store 重放 (不再调大模型, 全程 2 行 llm_call), 取回两条错报的最新版本: 状态中为 v2."""
+    """验收 9: 两条都确认后分诊节点结束, 往下到沟通 (停在 communicate 之前). 节点每次恢复都从头执行, RUN-FIN-03-1 已是
+    终态, 按 outputs 从 Store 重放 (不再调大模型, 全程 2 行 llm_call), 取回两条错报的最新版本: 状态中为 v2."""
     await submit(waiting, record(XJ499_TASK, id="D-C1"))
     await submit(waiting, record(CSH02_TASK, id="D-C3"))
 
     snapshot = await waiting.runner.app.aget_state(CONFIG)
-    assert snapshot.next == ("gate_fin",)
+    assert snapshot.next == ("communicate",)
     assert len(llm_calls(waiting.runner.deps.trail)) == 2  # type: ignore[arg-type]
     assert sorted((m.id, m.version, m.classification_judgment_id) for m in snapshot.values["misstatements"]) == [
         (CSH02, 2, f"J-FIN-03-1-{CSH02}"),
@@ -355,7 +360,7 @@ async def test_both_confirmed_node_replays_latest_misstatements(waiting: Started
 async def test_confirmed_fraud_sample_flagged_at_fin01() -> None:
     """R158 验收 6 后半句 (协调者在 R159 记的用例): 模型给 XJ-499 有舞弊迹象与理由, 确认该判断: 同一提交写出的
     M-D-XJ499 v2 带舞弊标记与理由; 两条都确认后在 FIN-01 闸门材料 CompletionMaterial.misstatements 中可见, 材料照常
-    生成, 流程照常走到闸门, 不阻断 (汇总表照 R158 的用例给定)."""
+    生成; 分诊之后照常往下 (停在 communicate 之前), 不阻断 (汇总表照 R158 的用例给定)."""
     s = await at_fin03(fraud_llm())
     commit = await submit(s, record(XJ499_TASK, id="D-C1"))
     flagged = one(commit, Misstatement, XJ499)
@@ -363,7 +368,7 @@ async def test_confirmed_fraud_sample_flagged_at_fin01() -> None:
     await submit(s, record(CSH02_TASK, id="D-C3"))
 
     snapshot = await s.runner.app.aget_state(CONFIG)
-    assert snapshot.next == ("gate_fin",)
+    assert snapshot.next == ("communicate",)
     values = snapshot.values
     schedule = UncorrectedSchedule(
         id="SCHEDULE",

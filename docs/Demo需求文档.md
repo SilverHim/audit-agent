@@ -103,10 +103,22 @@ completion → gate_fin → report_draft → gate_rpt01 → { report_draft | arc
 gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
 ```
 
+功能 misstatement 打开时（需求 R160），P2 结清后先走完成阶段的错报闭环，FIN-01 驳回回 summarize：
+
+```
+fan_in → misstatement_triage → { misstatement_triage | communicate }
+communicate → { await_correction | verify_correction }，await_correction → verify_correction
+verify_correction → { misstatement_triage | communicate | await_correction | p3_reassess }
+p3_reassess → summarize → final_review → { misstatement_triage | completion }
+completion → gate_fin → { report_draft | summarize }
+```
+
+- 各节点依次执行 FIN-03（分类）、FIN-08（沟通）、FIN-09（更正验证）、PLN-19（重评）、FIN-04（累计，每轮一次）、FIN-15（最终复核）、FIN-02（持续经营）；程序库还没有的程序（由错报闭环、计划、签字前、持续经营各需求加入）节点为空操作，await_correction 由 R162 实现。阶段 P3_Completion 在 misstatement_triage 写入。完成阶段新认定的错报都回 misstatement_triage 先分类再沟通。
+
 - p0_inputs：新客户（项目没有数据集）先经 ABN Lookup 查是不是公司，是公司而没有上传 ASIC 摘录时把 ACC-04 置等资料（awaiting_data，A3 提出补交请求 REQ-registry_extract），在节点内 `interrupt()` 等审计师上传；上传后 A3 抽取，数据变动带动图回到 p0_inputs 再判一次，有摘录或请求标为客户无此类资料后进 p0_intel（需求 R290）。有数据集的项目、不是公司或查不到 ABN 的不等，直接进 p0_intel。
 - p1_await_data：建项目不载入财务数据，ACC-01 通过后在节点内 `interrupt()` 等审计师在数据管理页接入数据并确认已齐（数据集载入视同确认，不等）。
 - 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01（功能 planning 另加 gate_p1_plan）。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
-- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_inputs 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
+- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_inputs 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion（功能 misstatement 打开时回 summarize）；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
 - assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。功能 planning 打开时 assemble_pack 只写 P2 程序，不改阶段；plan_draft 由 A4 执行 PLN-15 起草计划，停在 gate_p1_plan；批准时计划置 approved、PLN-15 完成、阶段进 P2_Executing（同一事务），之后才派发（未批准的计划不派发）；驳回回 plan_draft 起草下一修订。
 - schedule 按依赖图拓扑分层，同层按循环分组，用 `Send` 派发 fieldwork 实例，上限 4；fieldwork 按程序的 owner 调用对应 Agent。
 - fan_in 用按 ID 合并的 reducer 收各实例返回的 ProcedureRun、Exception、Judgment、ReviewTask，由 A1 重算程序状态：有待决任务为 awaiting_human，否则为 completed；rerun 决定时由 DecisionSubmit 先置 executing，不受待决任务影响。
