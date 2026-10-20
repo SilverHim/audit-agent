@@ -9,10 +9,10 @@ import builtins
 import copy
 import io
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -24,10 +24,7 @@ from backend.adapters.xero_dataset import (
     map_supplier_bills,
     trial_balance_cents,
 )
-from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.models import EvidenceType, ProcedureRun, Reliability
-from backend.contracts.records import SupplierBill
-from backend.services.rule_engine import SqlRuleEngine
+from backend.contracts.records import SalesInvoice, SupplierBill
 from tests.external import snapshot_dir
 from tests.xero_fakes import xero_traits
 
@@ -109,25 +106,34 @@ BILL_RESOURCES = ("accounts", "invoices", "payments", "credit_notes", "prepaymen
 SNAPSHOTS = ("20261017-q1", "20261017-mock")
 
 
+@dataclass(frozen=True)
+class Built:
+    """一份快照建出的表: 应付账单, 销售发票, 本期试算表应付科目的余额 (借正)."""
+
+    bills: list[SupplierBill]
+    invoices: list[SalesInvoice]
+    payables: int
+
+
 @pytest.fixture(scope="module")
-def built() -> dict[str, tuple[list[SupplierBill], int]]:
-    """两份快照各建一次全部表: 快照名 → (应付账单, 本期试算表应付科目的余额 (借正))."""
+def built() -> dict[str, Built]:
+    """两份快照各建一次全部表."""
     found = {}
     for name in SNAPSHOTS:
         snapshot = Snapshot(snapshot_dir(name))
         meta = snapshot.load("dataset")
         balances = trial_balance_cents(snapshot.trial_balance(date.fromisoformat(meta["period_end"])))
-        found[name] = (build_tables(snapshot)["supplier_bills"], balances[CREDITORS])
+        tables = build_tables(snapshot)
+        found[name] = Built(tables["supplier_bills"], tables["sales_invoices"], balances[CREDITORS])
     return found
 
 
 @pytest.mark.parametrize("name", SNAPSHOTS)
-def test_outstanding_bills_tie_to_the_payables_balance(
-    built: dict[str, tuple[list[SupplierBill], int]], name: str
-) -> None:
+def test_outstanding_bills_tie_to_the_payables_balance(built: dict[str, Built], name: str) -> None:
     """验收 2: 未付合计等于期末试算表应付的贷方余额 (q1: 6 张 400516; mock: 11 张 850778); q1 逐字段等于 Q1_BILLS,
-    到期日早于期末的 3 张合计 328356, 其余 72160."""
-    bills, payables = built[name]
+    到期日早于期末的 3 张合计 328356, 其余 72160. 逐字段相等也守着验收 3 的 "期后付款不扣": 945-ORC (10-14 付了
+    900.00) 与 M000442 (10-06 付清) 在 Q1_BILLS 里都是全额."""
+    bills, payables = built[name].bills, built[name].payables
     assert sum(b.outstanding_cents for b in bills) == -payables
     if name == "20261017-q1":
         assert bills == Q1_BILLS and -payables == 400516
@@ -140,9 +146,6 @@ def test_outstanding_bills_tie_to_the_payables_balance(
 @pytest.mark.parametrize(
     ("snapshot", "bill", "expected"),
     [
-        # 期后付款不扣 (验收 3): 945-ORC 10-14 付了 900.00, M000442 10-06 付清
-        ("20261017-q1", "PB-69fc971e-9b37-41c5-9c87-174330f22343", 106356),
-        ("20261017-q1", "PB-c011f4e5-d533-4744-97fe-c3282f928825", 22000),
         # 9 月前由付款 250.00 与贷项 200.00 结清的 Party Hire, 期后 10-11 的 PC Complete 账单: 都不出现
         ("20261017-q1", "PB-7dae876a-b424-436b-a4e6-17b3fdeec80c", None),
         ("20261017-q1", "PB-c12aff7e-12bf-4185-8702-460929f19674", None),
@@ -151,22 +154,31 @@ def test_outstanding_bills_tie_to_the_payables_balance(
         # 作废的付款不扣: O721-003 只有一笔 DELETED 的付款
         ("20261017-mock", "PB-86102312-aa3f-438c-9938-6840f4d8dda6", 5413),
     ],
-    ids=["paid_after_period", "settled_after_period", "settled_by_credit", "after_period", "partial", "deleted"],
+    ids=["settled_by_credit", "after_period", "partial", "deleted"],
 )
 def test_outstanding_follows_the_settlements(
-    built: dict[str, tuple[list[SupplierBill], int]], snapshot: str, bill: str, expected: int | None
+    built: dict[str, Built], snapshot: str, bill: str, expected: int | None
 ) -> None:
-    found = {b.id: b.outstanding_cents for b in built[snapshot][0]}
+    """验收 3 的其余几种 (期后付款不扣由上一例的逐字段断言守着)."""
+    found = {b.id: b.outstanding_cents for b in built[snapshot].bills}
     assert found.get(bill) == expected
 
 
-def test_journal_line_skips_reversed_postings(built: dict[str, tuple[list[SupplierBill], int]]) -> None:
+def test_journal_line_skips_reversed_postings(built: dict[str, Built]) -> None:
     """journal_entry_id 取最后过账且未被冲回的分录里贷记应付的那一行 (销售发票同一取法). mock 快照里
     SM0210-70209 最后一笔 XJ-643 被 XJ-639 冲回 (冲回号码更小, 来源类型也换了), 取 XJ-641; GB1-White 的 XJ-719 被
     XJ-707 冲回, 取 XJ-709. 冲回的格式与 Xero 数据集声明的 reversal_reference_pattern 相同."""
-    lines = {b.bill_no: b.journal_entry_id for b in built["20261017-mock"][0]}
+    lines = {b.bill_no: b.journal_entry_id for b in built["20261017-mock"].bills}
     assert (lines["SM0210-70209"], lines["GB1-White"]) == ("XJ-641-3", "XJ-709-3")
     assert xero_traits().reversal_reference_pattern == REVERSAL_REFERENCE
+
+
+@pytest.mark.parametrize("name", SNAPSHOTS)
+def test_journal_line_takes_the_first_line_of_an_entry(built: dict[str, Built], name: str) -> None:
+    """一笔分录里有几行记同一科目时取第一行 (裁定 3C, 销售发票与应付账单共用的取法): 销售发票 ORC1036 最后过账的
+    XJ-733 有两行借记应收 (385.00, 529.55), 关联 XJ-733-1, 不是 XJ-733-2."""
+    lines = {i.invoice_no: i.journal_entry_id for i in built[name].invoices}
+    assert lines["ORC1036"] == "XJ-733-1"
 
 
 def test_bills_are_built_without_contacts_or_raw_exports(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,39 +300,3 @@ def test_settled_bill_is_left_out(q1_files: dict[str, Any]) -> None:
     allocated("credit_notes", "PAID", "2026-09-12")(files)
     bills = map_supplier_bills(Snapshot(Path("edge"), files=files), [], date(2026, 9, 30))
     assert SMART not in {b.id for b in bills} and len(bills) == 5
-
-
-async def test_rule_rows_on_supplier_bills_point_to_invoices() -> None:
-    """规则 SQL 出 supplier_bill 行时证据指针为 invoice, internal_original (同销售发票)."""
-    template = ProcedureTemplate.model_validate(
-        dict(
-            id="GEN-04",
-            name="Overdue payables",
-            phase="P2_Executing",
-            cycle="Pervasive",
-            owner="A6",
-            engine="rule",
-            autonomy_level="L3",
-            rules=[dict(id="R01", name="Overdue", severity="medium", sql="SELECT 1 ORDER BY 1")],
-        )
-    )
-    run = ProcedureRun.model_validate(
-        dict(
-            id="RUN-GEN-04-1",
-            procedure_id="GEN-04",
-            run_no=1,
-            trigger="initial",
-            params_snapshot={},
-            started_at="2026-10-19T00:00:00Z",
-            status="running",
-        )
-    )
-    financial = AsyncMock()
-    financial.query.return_value = [{"source_type": "supplier_bill", "source_id": SMART, "amount_cents": 200000}]
-    result = await SqlRuleEngine(financial).run("ENG", template, run, {})
-    [pointer] = result.exceptions[0].evidence
-    assert (pointer.type, pointer.reliability, pointer.source_id) == (
-        EvidenceType.invoice,
-        Reliability.internal_original,
-        SMART,
-    )

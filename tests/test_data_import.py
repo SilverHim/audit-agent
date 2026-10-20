@@ -202,26 +202,30 @@ def test_generated_ids_and_approval_log_only_mapped_fields() -> None:
     assert all(isinstance(r, ApprovalLogRow) for r in rows)
 
 
-@pytest.mark.parametrize("file_name", ["aged_payables.csv", "export.csv"])
-def test_supplier_bills_export_is_recognised(file_name: str) -> None:
-    """需求 R178: 应付账单导出 (Xero Aged Payables 一类的表头) 按文件名或列名认作 supplier_bills, 列按别名对应,
-    没有编号列时 id 取账单号; 金额按元写的换成分."""
-    sheet = sheet_of(
-        "Bill Number,Supplier,Bill Date,Due Date,Total,Amount Due\n"
-        '945-ORC,Central Copiers,17/08/2026,15/09/2026,"1,063.56","1,063.56"\n'
-        "3395,PowerDirect,30/09/2026,16/10/2026,331.10,331.10\n",
-        file_name,
-    )
+SHARED_HEADER = "Invoice Number,Contact,Invoice Date,Due Date,Total,Amount Due"  # Xero 的应付与应收导出都这样写
+BILL_HEADER = "Bill Number,Supplier,Bill Date,Due Date,Total,Outstanding"  # 只有应付账单才有的列名
+VENDOR_HEADER = "Bill No,Vendor,Bill Date,Payment Due,Total,Owing"  # 同上, 换用别名
+BILL_ROWS = (
+    '945-ORC,Central Copiers,17/08/2026,15/09/2026,"1,063.56","1,063.56"\n'
+    "3395,PowerDirect,30/09/2026,16/10/2026,331.10,331.10\n"
+)
+BILL_FIELDS = ("bill_no", "supplier", "bill_date", "due_date", "amount_cents", "outstanding_cents")
+
+
+@pytest.mark.parametrize(
+    ("file_name", "header"),
+    [("Aged Payables.csv", SHARED_HEADER), ("export.csv", BILL_HEADER), ("export.csv", VENDOR_HEADER)],
+    ids=["shared_columns_with_payables_name", "bill_columns", "bill_aliases"],
+)
+def test_supplier_bills_export_is_recognised(file_name: str, header: str) -> None:
+    """需求 R178: 应付账单导出认作 supplier_bills. 与应收清单共有的列名 (Contact, Invoice Number 等) 要文件名有应付
+    提示才算; 应付账单特有的列名 (Bill Number, Supplier 等) 不看文件名. 没有编号列时 id 取账单号; 金额按元写的换成分."""
+    sheet = sheet_of(f"{header}\n{BILL_ROWS}", file_name)
     preview = d.preview("IMP-1", file_name, [file_name], sheet)
     assert preview.suggested_kind is TableKind.supplier_bills
     assert preview.suggested_mapping == {
         "id": None,
-        "bill_no": "Bill Number",
-        "supplier": "Supplier",
-        "bill_date": "Bill Date",
-        "due_date": "Due Date",
-        "amount_cents": "Total",
-        "outstanding_cents": "Amount Due",
+        **dict(zip(BILL_FIELDS, header.split(","), strict=True)),
         "journal_entry_id": None,
     }
     rows, failures = tp.convert(TableKind.supplier_bills, sheet, preview.suggested_mapping, "dmy")
@@ -248,6 +252,13 @@ def test_supplier_bills_export_is_recognised(file_name: str) -> None:
             journal_entry_id=None,
         ),
     ]
+
+
+@pytest.mark.parametrize("file_name", ["Sales Invoices.csv", "invoices.csv", "Aged Receivables.csv", "export.csv"])
+def test_receivables_list_is_not_taken_for_supplier_bills(file_name: str) -> None:
+    """R178 审核 02: 表头与应付导出相同的应收清单, 文件名没有应付提示时不建议成应付账单; 销售发票缺入账日期也对不全,
+    同改前一样不建议, 由审计师选. 已选定应付账单时, 共有的列名照样能对应 (见上一例)."""
+    assert d.suggest_kind(file_name, SHARED_HEADER.split(",")) is None
 
 
 def test_suggestions_for_unclear_files() -> None:

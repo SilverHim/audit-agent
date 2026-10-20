@@ -161,11 +161,11 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "invoice_date": ("issuedate", "date"),
     "amount_cents": ("amount", "total", "invoicetotal", "totalamount", "gross", "value"),
     "journal_entry_id": ("journalid", "journalline"),
-    "bill_no": ("billnumber", "billno", "invoicenumber", "invoiceno", "number", "reference"),
-    "supplier": ("suppliername", "vendor", "vendorname", "creditor", "contact", "contactname", "payee"),
-    "bill_date": ("billdate", "invoicedate", "issuedate", "date"),
+    "bill_no": ("billnumber", "billno"),
+    "supplier": ("suppliername", "vendor", "vendorname", "creditor", "payee"),
+    "bill_date": ("billdate",),
     "due_date": ("duedate", "paymentdue", "dueby"),
-    "outstanding_cents": ("outstanding", "amountdue", "balancedue", "due", "owing", "unpaid"),
+    "outstanding_cents": ("owing", "unpaid"),  # "Outstanding" 由字段名本身对上
     "delivery_no": ("deliverynumber", "dispatchno", "shipmentno", "dnno"),
     "invoice_id": ("invoice", "invoiceno", "invoicenumber"),
     "shipped_date": ("shipdate", "dispatchdate", "dispatched"),
@@ -184,6 +184,17 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "employment_type": ("employmenttype", "employmentbasis", "basis"),
     "pay_period_days": ("payperioddays", "payperiod", "payfrequencydays", "periodlength"),
     "gross_per_period_cents": ("grossperperiod", "grosspay", "grosswages", "gross", "ordinarypay"),
+}
+# 应付账单与应收清单共有的列名 (Xero 的导出两边都写 Contact, Invoice Number, Invoice Date, Amount Due): 选定应付账单后
+# 照样按它们对应列, 但猜表种类时只在文件名有应付账单的提示 (NAME_HINTS) 时才算应付账单的证据, 免得常见的应收清单
+# 被建议成应付账单 (需求 R178 审核 02)
+SHARED_ALIASES: dict[TableKind, dict[str, tuple[str, ...]]] = {
+    TableKind.supplier_bills: {
+        "bill_no": ("invoicenumber", "invoiceno", "number", "reference"),
+        "supplier": ("contact", "contactname"),
+        "bill_date": ("invoicedate", "issuedate", "date"),
+        "outstanding_cents": ("amountdue", "balancedue", "due"),
+    },
 }
 # 文件名提示: 规范化后的文件名含这些词时加分
 NAME_HINTS: dict[TableKind, tuple[str, ...]] = {
@@ -413,14 +424,16 @@ def _xls_rows(data: bytes, name: str) -> Iterator[tuple[int, list[Cell]]]:
 # ── 建议 ──
 
 
-def suggest_mapping(kind: TableKind, columns: Sequence[str]) -> dict[str, str | None]:
-    """按列名为每个字段找一列: 先字段名本身 (含去掉 cents 的写法), 再按别名顺序; 一列只用一次."""
+def suggest_mapping(kind: TableKind, columns: Sequence[str], *, shared: bool = True) -> dict[str, str | None]:
+    """按列名为每个字段找一列: 先字段名本身 (含去掉 cents 的写法), 再按别名顺序, 最后是与别的表共有的列名
+    (SHARED_ALIASES, shared 为假时不用); 一列只用一次."""
     normalized = {normalize(c): c for c in reversed(columns)}  # 规范化后同名的取靠前的列
     used: set[str] = set()
     mapping: dict[str, str | None] = {}
+    common = SHARED_ALIASES.get(kind, {}) if shared else {}
     for field in SCHEMAS[kind].fields:
         own = normalize(field.name)
-        candidates = [own, own.removesuffix("cents"), *ALIASES.get(field.name, ())]
+        candidates = [own, own.removesuffix("cents"), *ALIASES.get(field.name, ()), *common.get(field.name, ())]
         column = next((normalized[c] for c in candidates if c in normalized and normalized[c] not in used), None)
         if column is not None:
             used.add(column)
@@ -430,11 +443,12 @@ def suggest_mapping(kind: TableKind, columns: Sequence[str]) -> dict[str, str | 
 
 def suggest_kind(file_name: str, columns: Sequence[str]) -> TableKind | None:
     """按列名与文件名猜表种类: 必须字段 (与至少对应一个的字段组) 都能对应的种类中, 取能对应的字段个数最多
-    (文件名提示加分) 的; 都对应不全为空."""
+    (文件名提示加分) 的; 都对应不全为空. 与别的表共有的列名 (SHARED_ALIASES) 只在文件名有该表的提示时才算."""
     stem = normalize(PurePath(file_name).stem)
     best: tuple[float, TableKind] | None = None
     for kind, schema in SCHEMAS.items():
-        mapping = suggest_mapping(kind, columns)
+        hinted = any(h in stem for h in NAME_HINTS[kind])
+        mapping = suggest_mapping(kind, columns, shared=hinted)
         if any(mapping[f.name] is None for f in schema.fields if f.required):
             continue
         group = ONE_OF.get(kind)
@@ -442,7 +456,7 @@ def suggest_kind(file_name: str, columns: Sequence[str]) -> TableKind | None:
             continue
         matched = sum(1 for f in schema.fields if mapping[f.name] is not None)
         # 按能对应的字段个数 (不是占比): 完整的总账能对上的字段多于它的子集审批日志; 文件名提示加 2 分, 平局时取先列出的
-        score = matched + (2 if any(h in stem for h in NAME_HINTS[kind]) else 0)
+        score = matched + (2 if hinted else 0)
         if best is None or score > best[0]:
             best = (score, kind)
     return best[1] if best else None
