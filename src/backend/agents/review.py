@@ -15,12 +15,14 @@ from typing import Any, ClassVar, cast
 from pydantic_core import to_jsonable_python
 
 from backend.agents.base import ProcedureAgent, RunContext
+from backend.agents.ingest import client_profile
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import CriticIndependent, CriticVerdictOut
 from backend.contracts.models import (
     AgentId,
     AuditException,
     AutonomyLevel,
+    ClientProfile,
     CriticTrigger,
     CriticVerdict,
     EvidencePointer,
@@ -137,15 +139,16 @@ class ReviewAgent(ProcedureAgent[None]):
         collab = COLLAB in self.deps.features
         given: list[EvidencePointer] | None = None
         try:
+            profile = await self.cited_profile(ctx, judgment)
             # 第一轮要给的证据: collab 打开时 internal_copy 要用, 先取, 复核时沿用 (主规则命中时复核本来也要取)
             if collab:
-                given = await self.given_evidence(ctx.engagement.id, judgment)
+                given = await self.given_evidence(ctx.engagement.id, judgment, profile)
             hit = trigger(level, judgment, rate, given or (), collab)
             if hit is None:
                 return skip(judgment, "未命中独立复核的触发规则")
             if collab:
                 judgment = judgment.model_copy(update={"critic_trigger": hit})
-            return await self.cross_check(ctx, template, judgment, given, findings)
+            return await self.cross_check(ctx, template, judgment, given, findings, profile)
         except Exception as e:
             return incomplete(judgment, str(e))
 
@@ -156,10 +159,12 @@ class ReviewAgent(ProcedureAgent[None]):
         judgment: Judgment,
         given: list[EvidencePointer] | None = None,
         findings: Sequence[AuditException] = (),
+        profile: ClientProfile | None = None,
     ) -> Judgment:
         """两轮调用复核模型 (见模块说明). 没有能给的证据, 或任一轮未通过校验时记 not_applicable.
         given: review 判定触发规则时已取得的第一轮证据 (given_evidence), 为空时在这里取.
         findings: 该判断解释的例外, 第一轮校验错报草稿的金额用 (口径同 A6 的错报草稿).
+        profile: 判断引用的客户画像 (cited_profile), review 已取得时传入; 为空时在这里取 (没引用时不读存储).
         功能 collab 打开时另写回第一轮的建议动作与 (通过校验的) 错报草稿 (需求 R150)."""
         eid, subject = ctx.engagement.id, judgment.subject_id
         engine, llm = self.deps.judgments, self.deps.review_llm
@@ -168,7 +173,8 @@ class ReviewAgent(ProcedureAgent[None]):
             "name": ctx.template.name,
             "assertions": [a.value for a in ctx.template.assertions],
         }
-        pointers = given if given is not None else await self.given_evidence(eid, judgment)
+        profile = profile if profile is not None else await self.cited_profile(ctx, judgment)
+        pointers = given if given is not None else await self.given_evidence(eid, judgment, profile)
         if not pointers:
             return incomplete(judgment, "判断没有能解析的证据指针")
         # 推理链可引用的: 判断引用的证据, 加上该程序的准则片段 (提示词里另列, standard 步骤指向它们)
@@ -180,7 +186,8 @@ class ReviewAgent(ProcedureAgent[None]):
             ),
         ]
         items = [
-            {"pointer": p.model_dump(mode="json"), "content": await self.evidence_content(eid, p)} for p in pointers
+            {"pointer": p.model_dump(mode="json"), "content": await self.evidence_content(eid, p, profile)}
+            for p in pointers
         ]
         first = await engine.call_llm(
             eid,
@@ -193,7 +200,10 @@ class ReviewAgent(ProcedureAgent[None]):
                 "standards": engine.standards(ctx.template),
             },
             ValidationContext(
-                allowed_evidence=allowed, rule_findings=list(findings), critic_drafts=COLLAB in self.deps.features
+                allowed_evidence=allowed,
+                rule_findings=list(findings),
+                critic_drafts=COLLAB in self.deps.features,
+                client_profile=profile,
             ),
             self.agent_id,
             f"{subject}-r1",
@@ -256,13 +266,23 @@ class ReviewAgent(ProcedureAgent[None]):
             update |= {"confidence_parts": parts, "confidence": engine.confidence(parts)}
         return judgment.model_copy(update=update)
 
-    async def given_evidence(self, eid: str, judgment: Judgment) -> list[EvidencePointer]:
+    async def cited_profile(self, ctx: RunContext, judgment: Judgment) -> ClientProfile | None:
+        """判断引用了客户画像 (client_profile 指针, 需求 R128) 时, 本项目采用的那一版 (状态中的 client_profile_version);
+        没引用时为空, 不读项目存储."""
+        if not any(p.source_type == "client_profile" for p in evidence_pointers(judgment)):
+            return None
+        return await client_profile(self.deps, ctx.engagement, ctx.state["client_profile_version"])
+
+    async def given_evidence(
+        self, eid: str, judgment: Judgment, profile: ClientProfile | None = None
+    ) -> list[EvidencePointer]:
         """第一轮给出的证据: 判断引用的指针 (evidence_pointers) 中按 OutputValidator 引用级解析得了的, 改写后的指针.
+        profile: 本项目采用的客户画像 (cited_profile), client_profile 指针按它解析, 规则同 OutputValidator.
 
         A6 校验时解析不了的指针原样留在判断里 (只要还有别的有效指针), 如指向 llm_call 的留痕, 其明细含旧输出的结论;
         这些既不给模型, 也不进推理链可引用的证据.
         """
-        resolver = PointerResolver(self.deps.judgments.validator, eid)
+        resolver = PointerResolver(self.deps.judgments.validator, eid, profile)
         given = []
         for p in evidence_pointers(judgment):
             resolved, _ = await resolver.resolve(p)
@@ -270,10 +290,14 @@ class ReviewAgent(ProcedureAgent[None]):
                 given.append(resolved)
         return given
 
-    async def evidence_content(self, eid: str, pointer: EvidencePointer) -> Any:
+    async def evidence_content(self, eid: str, pointer: EvidencePointer, profile: ClientProfile | None = None) -> Any:
         """证据指针所指的内容: 数据行 (JSON), 文件该页的文本, 准则片段原文, 外部调用留痕的摘要与明细
-        (只有这类留痕能通过 given_evidence). 查不到给说明文字."""
+        (只有这类留痕能通过 given_evidence), 客户画像 (profile) 中 locator 那个字段的 JSON. 查不到给说明文字."""
         source_type, source_id = pointer.source_type, pointer.source_id
+        if source_type == "client_profile":
+            if profile is None or profile.id != source_id or pointer.locator not in ClientProfile.model_fields:
+                return "(client profile field not available)"
+            return to_jsonable_python(getattr(profile, pointer.locator))
         if source_type == "standard":
             fragment = self.deps.library.fragment(source_id)
             return fragment.text if fragment is not None else "(standard fragment not found)"

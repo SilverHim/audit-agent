@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 import pytest
+from pydantic_core import to_jsonable_python
 
 from backend.agents.base import RunContext
 from backend.agents.review import CRITIC_SYSTEM, ReviewAgent, trigger
@@ -18,6 +19,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     CriticTrigger,
     CriticVerdict,
+    DeclaredParty,
     DisputeResolution,
     DocumentRef,
     DocumentType,
@@ -45,6 +47,8 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_CONTRACTS,
+    NUMBAT_PROFILE,
+    FakeEngagementStore,
     FakeFinancialStore,
     FakeRegistry,
     FakeTrail,
@@ -700,6 +704,61 @@ async def test_no_resolvable_evidence_is_not_applicable_without_calling_model() 
         "独立复核没有完成: 判断没有能解析的证据指针",
     )
     assert review.requests == [] and j.confidence == 0.8625
+
+
+async def test_cited_client_profile_is_given_from_the_adopted_version() -> None:
+    """判断引用了客户画像 (client_profile 指针, 需求 R128): 第一轮给出的证据含该指针, 内容为本项目采用那一版 (状态中
+    v1) 该字段的 JSON, 画像之后改出的 v2 不进来; 复核方引用同一指针的步骤 supported. 防第一轮读最新版画像, 或复核方
+    引用管理层申报的步骤全都站不住."""
+    party = DeclaredParty(name="Wombat Holdings Pty Ltd", kind="company", relationship="parent entity")
+    later = DeclaredParty(name="Quoll Trading Pty Ltd", kind="company", relationship="sister company")
+    v1 = NUMBAT_PROFILE.model_copy(update={"related_parties": [party]})
+    v2 = v1.model_copy(update={"version": 2, "related_parties": [party, later]})
+    cited = EvidencePointer(
+        type=EvidenceType.voucher,
+        source_type="client_profile",
+        source_id=NUMBAT_PROFILE.id,
+        locator="related_parties",
+        reliability=Reliability.internal_copy,
+    )
+    independent = {
+        "conclusion": "Management declared one related party.",
+        "reasoning_chain": [step("fact", "One party is declared.", [cited]), step("inference", "So.", from_steps=[0])],
+    }
+    review = ScriptedLLM({"BA-01-r1": [json.dumps(independent)], "BA-01-r2": [verdict()]})
+    deps = make_deps(
+        FakeRegistry(),
+        FakeTrail(),
+        engagement_store=FakeEngagementStore([v1, v2], [ENGAGEMENT]),
+        llm=ScriptedLLM({}),
+        review_llm=review,
+    )
+    procedure = make_procedure("CSH-02", phase=Phase.P2_Executing)
+    ctx = RunContext(
+        ENGAGEMENT, procedure, deps.library.load("CSH-02"), make_run("CSH-02"), initial_state(ENGAGEMENT, [], 1)
+    )
+    judgment = Judgment(
+        id="J-CSH-02-1-BA-01",
+        procedure_id="CSH-02",
+        run_id=ctx.run.id,
+        subject_id="BA-01",
+        conclusion=CONCLUSION,
+        confidence=0.5625,
+        confidence_parts={"evidence": 0.9, "rule": 0.0, "llm": 0.9},
+        reasoning_chain=[ReasoningStep(kind=StepKind.fact, text=CHAIN_TEXT, evidence=[cited])],
+        evidence=[cited],
+        counter_argument=COUNTER,
+        proposed_action=ProposedAction.close,
+        autonomy_level=AutonomyLevel.L3,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    j = await ReviewAgent(deps).review(ctx, judgment)
+    prompt = review.requests[0].messages[0].content
+    assert party.name in prompt and later.name not in prompt
+    assert json.dumps(to_jsonable_python(v1.related_parties), indent=2, sort_keys=True) in prompt  # 同 tojson
+    assert j.critic_verdict is CriticVerdict.consistent
+    assert [s.status for s in j.critic_reasoning_chain] == [StepStatus.supported, StepStatus.supported]
 
 
 async def test_document_page_not_given_is_unsupported() -> None:

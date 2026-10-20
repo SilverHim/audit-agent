@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
+    ClientProfile,
     Confirmation,
     DocumentRef,
     EvidencePointer,
@@ -32,6 +33,8 @@ class JudgmentContext(Model):
     rule_findings: list[AuditException] = []  # 该对象的规则例外 (混合程序), 本程序与前置程序的都算
     fixture_key: str  # mock 模式下取固定输出用的键
     autonomy_level: AutonomyLevel | None = None  # 判断的自主度: 程序的运行时级别 (Procedure); 为空时取模板
+    # 本项目采用版本的客户画像 (需求 R128): 给了时推理链可引用它 (client_profile 指针), 校验时原样交给 OutputValidator
+    client_profile: ClientProfile | None = None
 
 
 class JudgmentOutcome(Model):
@@ -55,6 +58,9 @@ class ValidationContext(Model):
     allowed_evidence: list[EvidencePointer] | None = None
     # GEN-09 第一轮是否核对复核方的建议动作与错报草稿 (功能 collab 打开时, 需求 R150); 问题记进报告的 notes
     critic_drafts: bool = False
+    # 本项目采用版本的客户画像 (需求 R128): client_profile 指针只认它 (ID 相同, locator 为其顶层字段名), 不读
+    # EngagementStore; 为空时这类指针解析不了
+    client_profile: ClientProfile | None = None
 
 
 class ValidationReport(Model, Generic[T]):

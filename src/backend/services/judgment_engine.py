@@ -28,6 +28,7 @@ from backend.contracts.llm_outputs import (
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    ClientProfile,
     Confirmation,
     DocumentRef,
     DocumentType,
@@ -309,18 +310,20 @@ def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | N
 
 
 class PointerResolver:
-    """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次."""
+    """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次. client_profile 指针不查存储, 只认
+    profile (校验上下文中本项目采用的那一版客户画像, 需求 R128)."""
 
-    def __init__(self, validator: "OutputValidator", eid: str) -> None:
+    def __init__(self, validator: "OutputValidator", eid: str, profile: ClientProfile | None = None) -> None:
         self.validator = validator
         self.eid = eid
+        self.profile = profile
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}  # 解析得了的行, (行类型, 行 ID) -> 行
         # (source_type, source_id) -> (查得的对象, 查不到的原因)
         self._cache: dict[tuple[str, str], tuple[Any, str]] = {}
         self._documents: dict[str, DocumentRef] | None = None  # 项目登记的文件, 首次用到时取
 
     async def lookup(self, source_type: str, source_id: str) -> tuple[Any, str]:
-        """取指针来源: 行, 准则片段, 文件登记或留痕. 返回 (对象, 原因), 查不到时对象为 None."""
+        """取指针来源: 行, 准则片段, 文件登记, 留痕或客户画像. 返回 (对象, 原因), 查不到时对象为 None."""
         key = (source_type, source_id)
         if key not in self._cache:
             self._cache[key] = await self._fetch(source_type, source_id)
@@ -339,6 +342,12 @@ class PointerResolver:
                 self._documents = {d.id: d for d in await v.financial.documents(self.eid)}
             doc = self._documents.get(source_id)
             return doc, "" if doc is not None else "文件未登记"
+        if source_type == "client_profile":
+            if self.profile is None:
+                return None, "校验上下文没有客户画像"
+            if source_id != self.profile.id:
+                return None, f"不是本项目采用的客户画像 {self.profile.id}"
+            return self.profile, ""
         entry = await v.trail.get(self.eid, source_id)
         if entry is None:
             return None, "留痕不存在"
@@ -359,6 +368,11 @@ class PointerResolver:
             return p.model_copy(update={"type": EvidenceType.standard, "reliability": None}), ""
         if p.source_type == "document":
             return document_pointer(p, found)
+        if p.source_type == "client_profile":
+            if p.locator not in ClientProfile.model_fields:
+                return None, f"{p.locator} 不是客户画像的字段"
+            # 客户画像是管理层申报的资料 (ASA 550 第 13 段), 不是外部证据: 按内部副本的凭证
+            return p.model_copy(update={"type": EvidenceType.voucher, "reliability": Reliability.internal_copy}), ""
         # 留痕只认外部调用, 如登记查询; 可靠性按留痕记下的事实 (trail_evidence, 同 ACC-04)
         evidence_type, reliability = trail_evidence(found.payload)
         return p.model_copy(update={"type": evidence_type, "reliability": reliability}), ""
@@ -450,7 +464,7 @@ class OutputValidator:
         self, eid: str, draft: JudgmentDraft, ctx: ValidationContext
     ) -> tuple[JudgmentDraft, Level | None, list[int], list[str]]:
         """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误)."""
-        resolver = PointerResolver(self, eid)
+        resolver = PointerResolver(self, eid, ctx.client_profile)
         errors: list[str] = []
         valid = 0
 
@@ -495,7 +509,7 @@ class OutputValidator:
         """独立复核推理链的引用与语义: 指针须可解析, 且在 ctx.allowed_evidence 内 (按 evidence_key, 文件须同页),
         否则该步不受支持. ctx.critic_drafts 为真 (功能 collab) 时另核对错报草稿 (_critic_draft), 其问题与推理链的
         分开. 返回 (改写指针后的输出, 不受支持的步骤, 推理链的错误, 草稿的问题)."""
-        resolver = PointerResolver(self, eid)
+        resolver = PointerResolver(self, eid, ctx.client_profile)
         allowed = {evidence_key(p) for p in ctx.allowed_evidence or []}
         errors: list[str] = []
         steps: list[ReasoningStep] = []
@@ -818,7 +832,7 @@ class JudgmentEngine:
             template,
             run,
             variables,
-            ValidationContext(rule_findings=ctx.rule_findings),
+            ValidationContext(rule_findings=ctx.rule_findings, client_profile=ctx.client_profile),
             template.owner,
             ctx.fixture_key,
         )

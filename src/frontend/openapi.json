@@ -8272,7 +8272,8 @@
               "trial_balance",
               "document",
               "standard",
-              "trail"
+              "trail",
+              "client_profile"
             ],
             "title": "Source Type"
           },

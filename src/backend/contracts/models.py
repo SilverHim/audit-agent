@@ -386,7 +386,7 @@ class AgentId(StrEnum):
     A10 = "A10"  # Concierge: 审计师对话入口与报告生成
 
 
-# 证据指针指向哪类存储: 财务数据行, 文件, 准则片段或留痕
+# 证据指针指向哪类存储: 财务数据行, 文件, 准则片段, 留痕, 或本项目采用版本的客户画像 (管理层申报, 需求 R128)
 PointerSource = Literal[
     "journal_entry",
     "sales_invoice",
@@ -397,6 +397,7 @@ PointerSource = Literal[
     "document",
     "standard",
     "trail",
+    "client_profile",
 ]
 # 财务数据的行类型, PointerSource 的子集
 SourceType = Literal[
@@ -429,8 +430,8 @@ class EvidencePointer(Model):
 
     type: EvidenceType  # 证据种类
     source_type: PointerSource  # 证据存在哪类存储, 决定到哪里解析
-    source_id: str  # 那条证据的 ID: 行 ID, 文件 ID, 准则片段 ID 或留痕 ID
-    locator: str  # 证据里的哪一处: 列名, 字段名, 条款号或页码描述
+    source_id: str  # 那条证据的 ID: 行 ID, 文件 ID, 准则片段 ID, 留痕 ID 或客户画像 ID (client_id)
+    locator: str  # 证据里的哪一处: 列名, 字段名 (客户画像为顶层字段名), 条款号或页码描述
     page: int | None = None  # PDF 页码, 从 1 起, 前端据此跳页
     reliability: Reliability | None = None  # 证据可靠性, 准则类为空
 

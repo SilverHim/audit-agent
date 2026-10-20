@@ -2063,7 +2063,7 @@ export type EvidencePointer = {
     /**
      * Source Type
      */
-    source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail';
+    source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail' | 'client_profile';
     /**
      * Source Id
      */

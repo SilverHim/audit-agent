@@ -39,6 +39,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     StepKind,
+    StepStatus,
     TaskKind,
     TermType,
     TrailEntry,
@@ -75,6 +76,7 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
+from tests.xero_fakes import xero_profile
 
 EID = ENGAGEMENT.id
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
@@ -428,6 +430,73 @@ async def test_trail_pointer_must_be_external_call() -> None:
     [pointer] = report.output.reasoning_chain[3].evidence
     assert (pointer.type, pointer.reliability) == (EvidenceType.voucher, Reliability.internal_original)
     assert "不是外部调用" in report.errors[0] and "留痕不存在" in report.errors[1]
+
+
+# ── 客户画像作证据 (需求 R128): 只认上下文中本项目采用版本的画像 ──
+
+PROFILE_POINTER = EvidencePointer(  # 模型填的 type 与 reliability 故意写错
+    type=EvidenceType.external,
+    source_type="client_profile",
+    source_id="CLIENT-XERO-3C1332BB-Q1",
+    locator="related_parties",
+    reliability=Reliability.external_original,
+)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("pointer", "with_profile", "reason"),
+    [
+        (PROFILE_POINTER, True, None),
+        (PROFILE_POINTER.model_copy(update={"locator": "related_party_list"}), True, "不是客户画像的字段"),
+        (PROFILE_POINTER.model_copy(update={"source_id": "CLIENT-001"}), True, "不是本项目采用的客户画像"),
+        (PROFILE_POINTER, False, "校验上下文没有客户画像"),
+    ],
+)
+async def test_client_profile_pointer_resolves_only_against_the_context(
+    pointer: EvidencePointer, with_profile: bool, reason: str | None
+) -> None:
+    """client_profile 指针: 上下文给了本项目采用的画像 (Xero 演示画像 v1) 时, ID 相同且 locator 是画像的顶层字段才
+    解析通过, 改写为 voucher, internal_copy (管理层申报, 不采信模型填的); 否则该步 unsupported, 同行指针. 校验器
+    没有项目存储 (make_validator), 只能用上下文里的画像. 防管理层申报被当成外部证据, 或引用别的客户或别的字段."""
+    ctx = ValidationContext(client_profile=xero_profile() if with_profile else None)
+    report = await check(with_step(cutoff_draft(), 1, evidence=[pointer]), ctx=ctx)
+    if reason is None:
+        assert report.unsupported_steps == [] and report.errors == []
+        [resolved] = report.output.reasoning_chain[1].evidence
+        assert (resolved.type, resolved.reliability) == (EvidenceType.voucher, Reliability.internal_copy)
+    else:
+        assert report.unsupported_steps == [1] and report.output.reasoning_chain[1].evidence == [pointer]
+        assert len(report.errors) == 1 and reason in report.errors[0]
+
+
+@pytest.mark.external
+async def test_judge_passes_the_client_profile_to_the_validator() -> None:
+    """JudgmentEngine.judge 把 JudgmentContext.client_profile 交给校验: 引用画像的步骤 supported; 上下文不给画像时同一
+    草稿该步 unsupported. 防判断引擎丢掉画像, 引用管理层申报的判断全都站不住."""
+    draft = with_step(cutoff_draft(), 1, evidence=[PROFILE_POINTER])
+    statuses = []
+    for profile in (xero_profile(), None):
+        financial, trail = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS), FakeTrail()
+        llm = ScriptedLLM({"SI-2026-0612": [draft.model_dump_json()]})
+        engine = JudgmentEngine(llm, OutputValidator(financial, LIBRARY, trail), trail, LIBRARY)
+        invoice = {"source_type": "sales_invoice", **NUMBAT_RECORDS[("sales_invoice", "SI-2026-0612")]}
+        data = {
+            "invoice": json.loads(json.dumps(invoice, default=str)),
+            "delivery_notes": [],
+            "journal_lines": [],
+            "contract": None,
+            "document": None,
+            "contract_judgment": None,
+        }
+        task = {"params": {"period_end": "2026-06-30", "window_days": 20, "threshold_cents": 9000000}, "risks": []}
+        jctx = JudgmentContext(
+            subject_id="SI-2026-0612", task=task, data=data, fixture_key="SI-2026-0612", client_profile=profile
+        )
+        outcome = await engine.judge(EID, REV02, make_run("REV-02"), jctx, "U-1")
+        assert outcome.judgment is not None
+        statuses.append(outcome.judgment.reasoning_chain[1].status)
+    assert statuses == [StepStatus.supported, StepStatus.unsupported]
 
 
 async def test_reply_document_pointer_is_external_and_other_document_is_not_evidence() -> None:
