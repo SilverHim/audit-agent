@@ -167,8 +167,12 @@ XJ499, CSH091 = "XJ499", "CSH02-091"  # 办公设备 (高估 750.00) 与应计�
 PAYROLL = [("F03", 426120), ("F04", 201000), ("F05", 268736)]  # 第 2 轮的三条薪酬错报
 
 
-async def xero_fin04(misstatements: list[Misstatement], previous: UncorrectedSchedule | None = None) -> Any:
-    return (await run_fin04(misstatements, previous, XERO_MATERIALITY, XERO_TRIVIAL))["uncorrected_schedule"]
+async def xero_fin04(
+    misstatements: list[Misstatement], previous: UncorrectedSchedule | None = None
+) -> UncorrectedSchedule:
+    schedule = (await run_fin04(misstatements, previous, XERO_MATERIALITY, XERO_TRIVIAL))["uncorrected_schedule"]
+    assert schedule is not None
+    return schedule
 
 
 async def test_corrected_misstatements_are_listed_not_accumulated() -> None:
@@ -233,21 +237,24 @@ async def test_uncorrected_amount_against_materiality(amount: int, opinion: Opin
     assert (schedule.total_cents, schedule.candidate_opinion) == (amount, opinion)
 
 
-UNSETTLED = {  # 未结清的错报: 状态与该状态须有的字段
+UNSCHEDULABLE = {  # 不能累计的错报: 未结清的三种与本版不写的两种, 状态与该状态须有的字段
     "identified": {"status": MisstatementStatus.identified},
     "communicated": {"status": MisstatementStatus.communicated, "communicated_at": NOW},
     "verifying": {"status": MisstatementStatus.verifying, "communicated_at": NOW, "correction_notice_id": "CN-1"},
+    "evaluated": {"status": MisstatementStatus.evaluated},
+    "closed": {"status": MisstatementStatus.closed},
 }
 
 
-@pytest.mark.parametrize("status", UNSETTLED)
-async def test_unsettled_misstatement_fails_fin04_for_a_human(status: str) -> None:
-    """验收 6 (兜底, 正常拓扑下不会出现): 还有未结清 (identified, communicated, verifying) 的错报时 A9 抛错, 不出汇总表;
-    A1 记 RUN-FIN-04-1 failed (理由写明哪条错报与其状态), 建 failed 任务 (只能 rerun), FIN-04 等人 (awaiting_human)."""
+@pytest.mark.parametrize("status", UNSCHEDULABLE)
+async def test_unschedulable_misstatement_fails_fin04_for_a_human(status: str) -> None:
+    """验收 6 (兜底, 正常拓扑下不会出现): 还有未结清 (identified, communicated, verifying) 或本版不写 (evaluated,
+    closed) 的错报时 A9 抛错, 不出汇总表; A1 记 RUN-FIN-04-1 failed (理由写明哪条错报与其状态), 建 failed 任务 (只能
+    rerun), FIN-04 等人 (awaiting_human)."""
     from tests.test_assemble import after_pln_approve
 
     nodes, _, engagements, state = after_pln_approve()
-    state["misstatements"] = [corrected(XJ499, 75000), misstatement(CSH091, 4853, **UNSETTLED[status])]
+    state["misstatements"] = [corrected(XJ499, 75000), misstatement(CSH091, 4853, **UNSCHEDULABLE[status])]
     engagement = await engagements.get(ENGAGEMENT.id)
     assert engagement is not None
 
@@ -272,6 +279,16 @@ def test_fin04_depends_on_fin03_only_when_misstatement_is_on() -> None:
     from backend.core.config import get_settings
 
     root = get_settings().KNOWLEDGE_ROOT
-    assert ProcedureLibrary(root).load("FIN-04").depends_on == []
+    base = ProcedureLibrary(root)
+    assert base.load("FIN-04").depends_on == []
+    assert [t.id for t in base.closure(["FIN-04"])] == ["FIN-04"]
     assert ProcedureLibrary(root, frozenset({"critic", "misstatement"})).load("FIN-04").depends_on == ["FIN-03"]
-    assert [t.id for t in ProcedureLibrary(root).closure(["FIN-04"])] == ["FIN-04"]
+
+
+async def test_string_status_from_checkpoint_fallback_fails_whole_run() -> None:
+    """审核 R166-05: 检查点读回校验不过时错报退回 model_construct, 状态成了字符串. 能否累计与编表的分支都按枚举成员判断,
+    这时整次失败, 不把已更正的按全额累计, 也不把部分更正的按错报金额累计."""
+    settled = [corrected(XJ499, 75000), partially_corrected(CSH091, 75000, 7500)]
+    as_strings = [Misstatement.model_construct(**{**m.model_dump(), "status": m.status.value}) for m in settled]
+    with pytest.raises(ValueError, match=r"M-D-XJ499 \(corrected\), M-D-CSH02-091 \(partially_corrected\)"):
+        await xero_fin04(as_strings)

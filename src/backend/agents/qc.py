@@ -14,10 +14,9 @@ from backend.contracts.models import (
 from backend.contracts.state import StatePatch
 from backend.services.staleness import current_results
 
-# FIN-04 能累计的错报状态: 未更正, 部分更正 (累计剩余额), 已更正 (只列 ID); 其余的出现即执行失败 (需求 R166)
-COUNTED = frozenset(
-    {MisstatementStatus.uncorrected, MisstatementStatus.partially_corrected, MisstatementStatus.corrected}
-)
+# FIN-04 能编入汇总表的错报状态: 未更正, 部分更正 (累计剩余额), 已更正 (只列 ID); 其余的出现即执行失败 (需求 R166).
+# 按枚举成员的同一性判断, 与编表时的分支一致: 检查点读回退回 model_construct 时状态是字符串, 也整次失败, 不按全额累计
+SCHEDULABLE = (MisstatementStatus.uncorrected, MisstatementStatus.partially_corrected, MisstatementStatus.corrected)
 
 
 class QCAgent(ProcedureAgent[UncorrectedSchedule]):
@@ -42,9 +41,9 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
         params = ctx.run.params_snapshot
         materiality, trivial = params["materiality_cents"], params["clearly_trivial_cents"]
         misstatements = current_results(ctx.state).misstatements
-        unsettled = [f"{m.id} ({m.status.value})" for m in misstatements if m.status not in COUNTED]
+        unsettled = [f"{m.id} ({m.status})" for m in misstatements if not any(m.status is s for s in SCHEDULABLE)]
         if unsettled:
-            raise ValueError(f"FIN-04: 还有不能累计的错报, 须先结清: {', '.join(unsettled)}")
+            raise ValueError(f"FIN-04: 还有不能累计的错报 (未结清或本版不写的状态): {', '.join(unsettled)}")
         items: list[UncorrectedItem] = []
         excluded: list[str] = []
         corrected: list[str] = []
