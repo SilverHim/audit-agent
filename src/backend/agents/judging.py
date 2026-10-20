@@ -4,7 +4,7 @@
 判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级由对应需求实现, 缺省原样返回.
 """
 
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -158,7 +158,11 @@ async def judge_all(
 
 
 def judgments_patch(
-    deps: AgentDeps, ctx: RunContext, judged: list[Judged], outcomes: Sequence[RuleOutcome] = ()
+    deps: AgentDeps,
+    ctx: RunContext,
+    judged: list[Judged],
+    outcomes: Sequence[RuleOutcome] = (),
+    fresh: Collection[str] = (),
 ) -> StatePatch:
     """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
 
@@ -169,7 +173,18 @@ def judgments_patch(
     - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
     - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
     执行记录置成功终态: 个别对象失败不算整次失败; outcomes 为取对象时规则引擎没有执行的规则 (需求 R130), 记进终态.
+    fresh 为本次执行刚建, 还没有写入版本的例外 ID (CSH-02 的 D01, D04): 它们不出新版本, attributed 或 unattributed
+    直接写在第 1 版上 (同判断第 1 版即 confirmed), 片段里同一例外只有一个版本 (merge.check_ids), 写入 Store 也从
+    v1 起 (需求 R322). 例: BA-091 判断失败, 第一条规则例外为本次的 X-CSH-02-1-D04-1 → v1 unattributed, 任务
+    T-X-CSH-02-1-D04-1-v1.
     """
+
+    def settled(exception: AuditException) -> AuditException:
+        """例外新版本: 本次刚建的退回第 1 版 (内容为新版本的)."""
+        if exception.id not in fresh:
+            return exception
+        return exception.model_copy(update={"version": exception.version - 1})
+
     now = datetime.now(UTC)
     run = finish_run(ctx.run, now, outcomes)
     queue = deps.queue
@@ -188,11 +203,13 @@ def judgments_patch(
         elif judgment is not None and kind is None:
             confirmed = judgment.model_copy(update={"review_status": ReviewStatus.confirmed})
             judgments.append(confirmed)
-            exceptions += attribute_exceptions(confirmed, findings_of_subject)
+            exceptions += [settled(x) for x in attribute_exceptions(confirmed, findings_of_subject)]
         elif kind is TaskKind.unattributed:
             first = findings_of_subject[0]
-            marked = first.model_copy(
-                update={"version": first.version + 1, "disposition": ExceptionDisposition.unattributed}
+            marked = settled(
+                first.model_copy(
+                    update={"version": first.version + 1, "disposition": ExceptionDisposition.unattributed}
+                )
             )
             exceptions.append(marked)
             tasks.append(queue.make_task(TaskKind.unattributed, marked, pid, run.id, now, subject_id=subject_id))

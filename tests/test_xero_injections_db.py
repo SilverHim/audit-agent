@@ -17,6 +17,7 @@ from backend.contracts.models import TrailEntry, TrailKind
 from backend.contracts.ports import LLMClient
 from backend.contracts.services import RuleResult
 from tests.external import live_llm_settings, snapshot_dir, supplements_dir
+from tests.test_fieldwork_csh02 import assert_d04_unattributed, flaky_ba091
 from tests.test_xero_injections import (
     LLM_INJECTED,
     T1_ORC1026,
@@ -104,6 +105,13 @@ async def test_t1_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
     for procedure_id in ("PLN-07", "PLN-01", "CSH-05", "CSH-02", "REV-02"):
         run, found = results[procedure_id]
         assert by_rule(found) == by_rule(offline(procedure_id, run)), procedure_id
+
+
+async def test_t0_csh02_failure_with_own_d04_on_postgres(xero_case: Any) -> None:
+    """需求 R322 验收 2: 同 test_fieldwork_csh02.test_xero_failure_with_own_d04, 写入 Postgres: BA-091 判断失败时
+    本次的 D04 只写 v1 (unattributed), 不报 VersionConflict."""
+    case = xero_case("T0")
+    await assert_d04_unattributed(await run_programs(await db_deps(case, llm=flaky_ba091(case)), ["CSH-02"]))
 
 
 async def test_t1_rev02_request_carries_the_completion_date(xero_case: Any) -> None:
