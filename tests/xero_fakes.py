@@ -31,26 +31,39 @@ from backend.adapters.registry_mock import MockRegistrySource
 from backend.adapters.xero_supplements import STAGES, DemoStage, DemoUpload, Supplements
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import build_contract, contract_id
-from backend.contracts.data import CheckInputs, TableKind, TableStats
+from backend.contracts.data import XERO_TABLES, CheckInputs, TableKind, TableStats
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
     AbnRecord,
+    Annotation,
     AsicCompanyRecord,
     AuditException,
     AuditObjective,
     ClientProfile,
     Contract,
+    Decision,
     DocumentRef,
     DocumentType,
     Engagement,
     EvidencePointer,
+    GateDecision,
+    GateId,
+    GateVerdict,
+    MaterialityChoice,
+    MisstatementDraft,
+    OpinionType,
     ProcedureRun,
     ReceiptChannel,
+    ReportSection,
+    ReviewRecord,
     RiskItem,
 )
 from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
+from backend.orchestration.decisions import GraphDecisionSubmit
+from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
+from backend.services.features import BASELINE
 from backend.services.judgment_engine import document_pointer
 from tests.external import external_dir, require_xero_snapshot, snapshot_dir, supplements_dir
 from tests.fakes import (
@@ -69,6 +82,7 @@ from tests.fakes import (
     csh02_subsequent_rows,
     csh02_window_rows,
     make_deps,
+    wait_idle,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -605,3 +619,135 @@ XERO_RULES: dict[
     "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
     "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
 }
+
+
+# ── 只开现有 17 条的全流程 (需求 R119; 连库变体 R120 共用): 空项目的启动与确认数据已齐之后的收尾 ──
+# 启动到确认数据已齐见 tests/xero_flow (to_ready). 决定按设计稿第 7.3 节末段 "只开现有 17 条时"; 决定人 actor 缺省为
+# ENGAGEMENT 的项目负责人, 连库时传新建的用户.
+
+XERO17_FEATURES = BASELINE  # 新功能全关 (同 Numbat 回归, 只留基线的 critic), 测试显式传给依赖
+XERO17_MATERIALITY = MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.5, clearly_trivial_pct=0.05)
+# 审计师对 BA-091 判断认定错报所附草稿: 未计提的应计利息 48.53, 科目写到代码
+XERO17_BA091_DRAFT = MisstatementDraft(
+    type="factual",
+    account="Interest income (270)",
+    assertion="Completeness",
+    amount_cents=4853,
+    direction="understated",
+)
+# RPT-01 第一次退回的批注 (需求 R119 来由: 本路径没有持续经营段, 挂在形成意见的基础段)
+XERO17_ANNOTATION = Annotation(
+    section=ReportSection.basis_for_opinion,
+    comment=(
+        "Name the financial reporting framework (Australian Accounting Standards - Simplified Disclosures) "
+        "in this paragraph."
+    ),
+)
+XERO17_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]  # REV-03 的判断对象, 按编号
+XERO17_INVOICES = [str(row["id"]) for row in XERO_S01_ROWS]  # REV-02 的判断对象 (S01 六张), 按发票 ID
+
+
+def new_xero_deps(**kwargs: Any) -> AgentDeps:
+    """还没有数据的 Xero 演示项目 (演示数据导入从空写起, 需求 R269): 空的假财务存储, 数据管理存储未就绪 (数据版本 0,
+    各表为空), 其余同 make_xero_deps (kwargs 原样转交, 如 llm, trail, rules, features)."""
+    financial = FakeFinancialStore()
+    empty = {kind.value: [] for kind in (*XERO_TABLES, TableKind.delivery_notes)}
+    return make_xero_deps(financial_store=financial, data=XeroFakeDataStore(financial, empty, ready=False), **kwargs)
+
+
+def xero17_reviews(actor: str = ENGAGEMENT.owner_id) -> list[ReviewRecord]:
+    """10 条复核决定, 按提交顺序 (各层的任务依次出现): REV-03 三条 confirm, REV-02 六条 confirm, BA-091 认定错报
+    (草稿 XERO17_BA091_DRAFT). 都绑定判断第 1 版."""
+
+    def record(task_id: str, rid: str, decision: Decision = Decision.confirm, **fields: Any) -> ReviewRecord:
+        return ReviewRecord(
+            id=rid, task_id=task_id, target_version=1, decision=decision, reviewed_by=actor, decided_at=NOW, **fields
+        )
+
+    return [
+        *(record(f"T-J-REV-03-1-{c}-v1", f"D-REV03-{n}") for n, c in enumerate(XERO17_CONTRACTS, 1)),
+        *(record(f"T-J-REV-02-1-{i}-v1", f"D-REV02-{n}") for n, i in enumerate(XERO17_INVOICES, 1)),
+        record(
+            "T-J-CSH-02-1-BA-091-v1",
+            "D-CSH02",
+            Decision.misstatement,
+            reason="Accrued interest of AUD 48.53 confirmed by the bank was not recorded.",
+            misstatement_draft=XERO17_BA091_DRAFT,
+        ),
+    ]
+
+
+def xero17_gates(actor: str = ENGAGEMENT.owner_id) -> dict[str, GateDecision]:
+    """闸门决定 (ACC-01 由 xero_flow.approve_acceptance 提交): pln approve 收入 1%, 50%, 5%; fin approve 无保留意见;
+    rpt_reject 退回 REPORT-1 (批注 XERO17_ANNOTATION); rpt_approve 批准 REPORT-2."""
+    return {
+        "pln": GateDecision(
+            id="D-PLN",
+            gate=GateId.PLN_01_03,
+            target_id="MATERIALITY",
+            target_version=1,
+            decision=GateVerdict.approve,
+            materiality=XERO17_MATERIALITY,
+            decided_by=actor,
+            decided_at=NOW,
+        ),
+        "fin": GateDecision(
+            id="D-FIN",
+            gate=GateId.FIN_01,
+            target_id="SCHEDULE",
+            target_version=1,
+            decision=GateVerdict.approve,
+            disposition=OpinionType.unqualified,
+            reason="The only uncorrected misstatement, AUD 48.53, is below overall materiality of AUD 324.31.",
+            decided_by=actor,
+            decided_at=NOW,
+        ),
+        "rpt_reject": GateDecision(
+            id="D-RPT-REJECT",
+            gate=GateId.RPT_01,
+            target_id="REPORT-1",
+            target_version=1,
+            decision=GateVerdict.reject,
+            annotations=[XERO17_ANNOTATION],
+            reason="形成意见的基础段须写明编制框架",
+            decided_by=actor,
+            decided_at=NOW,
+        ),
+        "rpt_approve": GateDecision(
+            id="D-RPT-APPROVE",
+            gate=GateId.RPT_01,
+            target_id="REPORT-2",
+            target_version=1,
+            decision=GateVerdict.approve,
+            decided_by=actor,
+            decided_at=NOW,
+        ),
+    }
+
+
+async def finish_xero17(runner: GraphRunner, eid: str, actor: str = ENGAGEMENT.owner_id) -> None:
+    """确认数据已齐之后 (停在 PLN-01/03 闸门) 推到签字归档: PLN-01/03 approve, 10 条复核 (每次提交前须停在
+    await_events, 没有后台错误), FIN-01 approve 无保留意见, RPT-01 先退回再批准. 每步等后台停下."""
+    submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    gates = xero17_gates(actor)
+
+    async def at() -> tuple[str, ...]:
+        return (await runner.app.aget_state(GraphRunner.config(eid))).next
+
+    async def send(decision: ReviewRecord | GateDecision) -> None:
+        await submit.submit(eid, decision)
+        await wait_idle(runner, eid)
+        assert runner.run_error(eid) is None, (decision.id, runner.run_error(eid))
+
+    assert await at() == ("gate_p1_risk",), runner.run_error(eid)
+    await send(gates["pln"])
+    for review in xero17_reviews(actor):
+        assert await at() == ("await_events",), (review.task_id, runner.run_error(eid))
+        await send(review)
+    assert await at() == ("gate_fin",), runner.run_error(eid)
+    await send(gates["fin"])
+    assert await at() == ("gate_rpt01",)
+    await send(gates["rpt_reject"])
+    assert await at() == ("gate_rpt01",)
+    await send(gates["rpt_approve"])
+    assert await at() == ()
