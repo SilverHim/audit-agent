@@ -22,6 +22,7 @@ from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, RunContext
 from backend.agents.evidence import confirmation_key
 from backend.agents.registry import build_agents
+from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AuditException,
     ConfirmationResult,
@@ -32,6 +33,7 @@ from backend.contracts.models import (
     Judgment,
     Misstatement,
     MisstatementDraft,
+    MisstatementStatus,
     OpinionType,
     Phase,
     Procedure,
@@ -49,7 +51,12 @@ from backend.contracts.models import (
 )
 from backend.contracts.records import BankAccount
 from backend.contracts.state import EngagementState, StatePatch
-from backend.orchestration.decisions import check_review_values, confirm_effects, misstatement_effects
+from backend.orchestration.decisions import (
+    check_account_code,
+    check_review_values,
+    confirm_effects,
+    misstatement_effects,
+)
 from backend.orchestration.nodes import apply_patch, build_run
 from tests.fakes import NOW, FakeConfirmationChannel, FakeEvidenceStore, FakeRuleEngine, FakeTrail
 from tests.fixture_sets import XERO
@@ -293,6 +300,7 @@ async def test_misstatement_path_reaches_fin04(p2: P2) -> None:
         judgment_id=cash.id,
         exception_id=None,
         review_record_id="D-CSH02-091",
+        status=MisstatementStatus.uncorrected,  # 功能 misstatement 关闭 (需求 R156 起缺省为 identified)
         **DRAFT.model_dump(),
     )
     assert misstatement.status == "uncorrected"
@@ -328,3 +336,35 @@ async def test_misstatement_path_reaches_fin04(p2: P2) -> None:
     )
     [run] = patch["procedure_runs"]
     assert (run.id, run.status) == ("RUN-FIN-04-1", RunStatus.succeeded)
+
+
+@pytest.mark.external
+async def test_lifecycle_misstatement_keeps_account_code(p2: P2) -> None:
+    """R156 验收 4: 决定 D-CSH02-091 的草稿带科目代码 270 (Xero 科目表 Interest Income) 时过科目代码校验; 功能
+    misstatement 打开时 M-D-CSH02-091 v1 为 identified, 带 account_code 270, 来源 J-CSH-02-1-BA-091, 其余字段同
+    R19; 关闭时为 uncorrected 且 uncorrected_basis 为空 (上一用例为不带代码的原断言). 代码 999 (科目表没有) 报
+    INVALID_VALUE; 提交路径上被拒不写由 test_review_decisions 经 GraphDecisionSubmit 核对."""
+    judgments = {j.id: j for j in p2.state["judgments"]}
+    cash = judgments["J-CSH-02-1-BA-091"]
+    explained = [x for x in p2.state["exceptions"] if x.id in cash.exception_ids]
+    draft = DRAFT.model_copy(update={"account_code": "270"})
+    task, record = decide(
+        p2, cash.id, "D-CSH02-091", Decision.misstatement, reason="复核意见", misstatement_draft=draft
+    )
+    eid = xero_engagement().id
+    await check_account_code(p2.deps.financial_store, eid, record)
+    for lifecycle, status in ((True, MisstatementStatus.identified), (False, MisstatementStatus.uncorrected)):
+        *_, misstatement = misstatement_effects(record, task, cash, explained, set(judgments), lifecycle)
+        assert misstatement == Misstatement(
+            id="M-D-CSH02-091",
+            judgment_id=cash.id,
+            exception_id=None,
+            review_record_id="D-CSH02-091",
+            status=status,
+            **draft.model_dump(),
+        )
+        assert (misstatement.version, misstatement.account_code, misstatement.uncorrected_basis) == (1, "270", None)
+    unknown = record.model_copy(update={"misstatement_draft": draft.model_copy(update={"account_code": "999"})})
+    with pytest.raises(DecisionRejected) as e:
+        await check_account_code(p2.deps.financial_store, eid, unknown)
+    assert (e.value.code, e.value.message) == ("INVALID_VALUE", "错报草稿的科目代码 999 不在本项目科目表中")

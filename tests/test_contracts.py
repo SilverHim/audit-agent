@@ -2,6 +2,7 @@ import json
 from collections import Counter
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -41,8 +42,12 @@ from backend.contracts.models import (
     GovernanceCommunication,
     IndependenceDeclaration,
     Judgment,
+    ManagementResponse,
+    Misstatement,
     MisstatementDraft,
+    MisstatementStatus,
     MisstatementType,
+    MisstatementUpdate,
     ObjectRef,
     OwnershipGraph,
     PartyLink,
@@ -68,6 +73,7 @@ from backend.contracts.models import (
     organisation_node_id,
     person_node_id,
     split_full_name,
+    verified_adjustment_entries,
 )
 from backend.contracts.state import staged, upsert_by_id
 from backend.contracts.views import GateView
@@ -884,3 +890,240 @@ def test_audit_plan_draft_contract() -> None:
         AuditPlanDraft.model_validate({**json.loads(text), "extra": 1})
     with pytest.raises(ValidationError, match="expert_assessment"):
         AuditPlanDraft.model_validate({k: v for k, v in json.loads(text).items() if k != "expert_assessment"})
+
+
+# ── 需求 R156: 错报生命周期契约 ──
+
+R19_FIELDS = {  # R19 的错报字段 (另有 status, 原固定为 uncorrected)
+    "id",
+    "version",
+    "judgment_id",
+    "exception_id",
+    "review_record_id",
+    "type",
+    "account",
+    "assertion",
+    "amount_cents",
+    "direction",
+}
+LIFECYCLE_DEFAULTS = {  # 本条新加的字段与缺省 (验收 1)
+    "account_code": None,
+    "status": MisstatementStatus.identified,
+    "objective_id": None,
+    "fraud_indicative": None,
+    "fraud_reason": None,
+    "origin": None,
+    "classification_judgment_id": None,
+    "communicated_at": None,
+    "communicated_to": None,
+    "responded_at": None,
+    "management_response": None,
+    "needs_recommunication": False,
+    "uncorrected_basis": None,
+    "correction_notice_id": None,
+    "adjustment_entry_nos": [],
+    "corrected_cents": 0,
+    "residual_cents": None,
+    "verified_by_judgment_id": None,
+}
+AT = datetime(2026, 10, 19, 4, tzinfo=UTC)
+
+
+def lifecycle_misstatement(**changes: Any) -> Misstatement:
+    """一条错报 (金额 10000), changes 覆盖任意字段 (含状态与生命周期字段), 经校验构造."""
+    base = {
+        "id": "M-D-1",
+        "judgment_id": "J-1",
+        "exception_id": None,
+        "review_record_id": "D-1",
+        "type": "factual",
+        "account": "Interest income (270)",
+        "assertion": "Completeness",
+        "amount_cents": 10000,
+        "direction": "understated",
+    }
+    return Misstatement.model_validate(base | changes)
+
+
+def test_misstatement_lifecycle_fields_default_and_old_rows_read_back() -> None:
+    """验收 1, 10: 状态恰为 8 值; 新字段恰为 LIFECYCLE_DEFAULTS 所列, 缺省 account_code None, status identified,
+    needs_recommunication 假, adjustment_entry_nos [], corrected_cents 0, 其余为 None; Store 中只有 R19 字段且 status
+    uncorrected 的旧行 (R56 真实库) 照常读回, 新字段取缺省."""
+    assert [s.value for s in MisstatementStatus] == [
+        "identified",
+        "communicated",
+        "verifying",
+        "corrected",
+        "partially_corrected",
+        "uncorrected",
+        "evaluated",
+        "closed",
+    ]
+    assert set(Misstatement.model_fields) == R19_FIELDS | LIFECYCLE_DEFAULTS.keys()
+    dumped = lifecycle_misstatement().model_dump()
+    assert {k: dumped[k] for k in LIFECYCLE_DEFAULTS} == LIFECYCLE_DEFAULTS
+    stored = {
+        "id": "M-D-REV02",
+        "version": 1,
+        "judgment_id": "J-REV-02-1-SI-2026-0612",
+        "exception_id": None,
+        "review_record_id": "D-REV02",
+        "type": "factual",
+        "account": "Revenue",
+        "assertion": "Cutoff",
+        "amount_cents": 14200000,
+        "direction": "overstated",
+        "status": "uncorrected",
+    }
+    back = Misstatement.model_validate_json(json.dumps(stored)).model_dump()
+    assert {k: back[k] for k in LIFECYCLE_DEFAULTS} == LIFECYCLE_DEFAULTS | {"status": MisstatementStatus.uncorrected}
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"status": "corrected", "residual_cents": 1, "verified_by_judgment_id": "J-V"}, "corrected 须剩余额为 0"),
+        ({"status": "corrected", "residual_cents": None, "verified_by_judgment_id": "J-V"}, "corrected 须剩余额为 0"),
+        ({"status": "corrected", "residual_cents": 0}, "corrected 须剩余额为 0 且有验证判断"),
+        ({"status": "partially_corrected", "residual_cents": 0}, "剩余额 0 须在 \\(0, 10000\\) 内"),
+        ({"status": "partially_corrected", "residual_cents": 10000}, "剩余额 10000 须在"),
+        ({"status": "partially_corrected"}, "剩余额 None 须在"),
+        (
+            {"status": "uncorrected", "uncorrected_basis": "refused", "management_response": "We will not adjust."},
+            "须有沟通时间",
+        ),
+        ({"status": "uncorrected", "uncorrected_basis": "refused", "communicated_at": AT}, "管理层回复"),
+        ({"status": "uncorrected", "uncorrected_basis": "stopped_waiting"}, "停止等待更正须有更正通知"),
+        ({"status": "verifying", "uncorrected_basis": "stopped_waiting"}, "停止等待更正须有更正通知"),
+        ({"status": "identified", "needs_recommunication": True}, "needs_recommunication 只在 communicated"),
+        ({"status": "verifying", "needs_recommunication": True}, "needs_recommunication 只在 communicated"),
+    ],
+)
+def test_misstatement_state_and_fields_must_agree(fields: dict[str, Any], message: str) -> None:
+    """验收 2: 状态与字段不一致时模型校验抛 ValidationError, 消息写明哪一条 (剩余额的边界 0 与金额本身都不算部分
+    更正)."""
+    with pytest.raises(ValidationError, match=message):
+        lifecycle_misstatement(**fields)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": "uncorrected"},  # 功能关闭时的旧口径: 未经沟通, basis 为空
+        {"status": "corrected", "residual_cents": 0, "verified_by_judgment_id": "J-V", "corrected_cents": 10000},
+        {"status": "partially_corrected", "residual_cents": 1, "corrected_cents": 9999},
+        {"status": "partially_corrected", "residual_cents": 9999, "corrected_cents": 1},
+        {
+            "status": "uncorrected",
+            "uncorrected_basis": "refused",
+            "communicated_at": AT,
+            "management_response": "We will not adjust.",
+        },
+        {"status": "uncorrected", "uncorrected_basis": "stopped_waiting", "correction_notice_id": "CN-1"},
+        {"status": "communicated", "needs_recommunication": True},
+    ],
+)
+def test_consistent_misstatement_states_validate(fields: dict[str, Any]) -> None:
+    """验收 2, 3: 与之对照, 各状态字段齐全时通过; 拒绝更正是压缩迁移, identified 之后直接出带沟通与回复的
+    uncorrected 版本."""
+    assert lifecycle_misstatement(**fields).status == fields["status"]
+
+
+def test_verified_adjustment_entries_take_only_verified_corrections() -> None:
+    """验收 1: 已验证更正分录为 corrected 或 partially_corrected 且有验证判断的错报的凭证号并集 (去重, 按凭证号);
+    未验证, 未更正与重新沟通的不算."""
+    rows = [
+        lifecycle_misstatement(
+            id="M-1",
+            status="corrected",
+            residual_cents=0,
+            verified_by_judgment_id="J-V1",
+            adjustment_entry_nos=["AJE-X05", "AJE-X01"],
+        ),
+        lifecycle_misstatement(
+            id="M-2",
+            status="partially_corrected",
+            residual_cents=100,
+            verified_by_judgment_id="J-V2",
+            adjustment_entry_nos=["AJE-X01", "AJE-X02"],
+        ),
+        lifecycle_misstatement(
+            id="M-3", status="partially_corrected", residual_cents=100, adjustment_entry_nos=["AJE-X03"]
+        ),
+        lifecycle_misstatement(id="M-4", status="verifying", adjustment_entry_nos=["AJE-X04"]),
+        lifecycle_misstatement(
+            id="M-5", status="communicated", needs_recommunication=True, adjustment_entry_nos=["AJE-X06"]
+        ),
+    ]
+    assert verified_adjustment_entries(rows) == ["AJE-X01", "AJE-X02", "AJE-X05"]
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"kind": "classification", "status": "corrected"}, "classification 的错报更新不能带 status"),
+        ({"kind": "classification", "corrected_cents": 100}, "不能带 corrected_cents"),
+        ({"kind": "classification", "needs_recommunication": True}, "不能带 needs_recommunication"),
+        ({"kind": "verification", "type": "judgmental"}, "verification 的错报更新不能带 type"),
+        ({"kind": "verification", "fraud_indicative": False}, "不能带 fraud_indicative"),
+        ({"kind": "verification", "objective_id": "OBJ-REV-OCC"}, "不能带 objective_id"),
+        ({"kind": "verification", "status": "verifying"}, "不能为 verifying"),
+        ({"kind": "verification", "status": "uncorrected"}, "不能为 uncorrected"),
+    ],
+)
+def test_misstatement_update_carries_only_its_kind(fields: dict[str, Any], message: str) -> None:
+    """验收 8: 分类只带类型, 舞弊迹象与理由, 来源, 审计目标; 验证只带状态 (只许 corrected, partially_corrected,
+    communicated), 凭证号, 已更正与剩余金额, 重新沟通标记; 带了别类的字段或别的状态抛 ValidationError."""
+    with pytest.raises(ValidationError, match=message):
+        MisstatementUpdate.model_validate({"misstatement_id": "M-D-1", "base_version": 2} | fields)
+
+
+def test_misstatement_update_and_management_response_shapes() -> None:
+    """验收 8: 两类更新各带自己的全部字段时通过; ManagementResponse 七项都必填 (缺一项抛 ValidationError), 回复不能早于
+    沟通 (同一时刻可以)."""
+    classification = MisstatementUpdate(
+        misstatement_id="M-D-1",
+        base_version=1,
+        kind="classification",
+        type=MisstatementType.factual,
+        fraud_indicative=False,
+        fraud_reason="No indication of intent.",
+        origin="current_period",
+        objective_id="OBJ-PPE-EXI",
+    )
+    assert classification.status is None
+    for status in ("corrected", "partially_corrected", "communicated"):
+        verification = MisstatementUpdate(
+            misstatement_id="M-D-1",
+            base_version=2,
+            kind="verification",
+            status=status,
+            adjustment_entry_nos=["AJE-X01"],
+            corrected_cents=10000,
+            residual_cents=0,
+            needs_recommunication=False,
+        )
+        assert verification.type is None
+    response = {
+        "misstatement_id": "M-D-1",
+        "base_version": 1,
+        "communicated_at": AT,
+        "communicated_to": "Alex Morgan, Director",
+        "responded_at": AT,
+        "response": "Agreed; AJE-X01 will be posted.",
+        "agrees_to_correct": True,
+    }
+    assert ManagementResponse.model_validate(response).agrees_to_correct is True
+    for key in response:
+        with pytest.raises(ValidationError):
+            ManagementResponse.model_validate({k: v for k, v in response.items() if k != key})
+    with pytest.raises(ValidationError, match="早于沟通时间"):
+        ManagementResponse.model_validate(response | {"responded_at": datetime(2026, 10, 19, 3, tzinfo=UTC)})
+
+
+def test_drafts_and_records_carry_the_new_optional_fields() -> None:
+    """范围: MisstatementDraft.account_code, Judgment 与 ReviewRecord 的 misstatement_update 都可空且缺省为空, 旧 JSON
+    照常读回."""
+    assert MisstatementDraft.model_fields["account_code"].default is None
+    assert Judgment.model_fields["misstatement_update"].default is None
+    assert ReviewRecord.model_fields["misstatement_update"].default is None

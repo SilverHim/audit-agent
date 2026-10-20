@@ -571,6 +571,9 @@ class OutputValidator:
         ):
             errors.append(f"错报金额 {md.amount_cents} 不等于引用行的金额, 两条引用行之差或归因例外的金额")
             return draft, "reference", unsupported, errors
+        if md is not None and md.account_code is not None and not await self.financial.accounts(eid, [md.account_code]):
+            errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
+            return draft, "reference", unsupported, errors
         semantic = judgment_semantics(draft)
         return draft, "semantic" if semantic else None, unsupported, errors + semantic
 

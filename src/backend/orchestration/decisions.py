@@ -34,6 +34,7 @@ from backend.contracts.models import (
     ManualResult,
     Misstatement,
     MisstatementDraft,
+    MisstatementStatus,
     NeitherAction,
     Phase,
     Procedure,
@@ -53,6 +54,7 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
+from backend.contracts.ports import FinancialDataStore
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration.gates import (
     REPORT_TZ,
@@ -75,7 +77,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.data_quality import OnHand
-from backend.services.features import COLLAB
+from backend.services.features import COLLAB, MISSTATEMENT
 from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
@@ -100,10 +102,12 @@ def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
     return created
 
 
-# 决定专用字段: 只有字段规则允许它的决定才能填 (见 ReviewFields.allowed); reason 是通用字段, 各决定都可以填
+# 决定专用字段: 只有字段规则允许它的决定才能填 (见 ReviewFields.allowed); reason 是通用字段, 各决定都可以填.
+# misstatement_update (需求 R156) 现有决定都不允许, 由错报闭环的需求登记允许它的行
 REVIEW_SPECIFIC = (
     "override_conclusion",
     "misstatement_draft",
+    "misstatement_update",
     "rerun_params",
     "manual_result",
     "dispute_resolution",
@@ -222,6 +226,17 @@ def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
+async def check_account_code(financial: FinancialDataStore, eid: str, record: ReviewRecord) -> None:
+    """决定所附错报草稿的科目代码 (需求 R156): 非空时须在本项目科目表中 (FinancialDataStore.accounts), 否则
+    INVALID_VALUE. misstatement 决定与附草稿的仲裁都查; 没带草稿或代码为空不查. 在 check_review_values 之后,
+    决定 ID 之前 (第 7 节校验表). 例: 科目表没有 999 → INVALID_VALUE "错报草稿的科目代码 999 不在本项目科目表中"."""
+    draft = record.misstatement_draft
+    if draft is None or draft.account_code is None:
+        return
+    if not await financial.accounts(eid, [draft.account_code]):
+        raise DecisionRejected("INVALID_VALUE", f"错报草稿的科目代码 {draft.account_code} 不在本项目科目表中")
+
+
 def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
@@ -324,10 +339,33 @@ def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> lis
     return [confirmed, *attribute_exceptions(confirmed, exceptions)]
 
 
+def new_misstatement(record: ReviewRecord, judgment_id: str, lifecycle: bool) -> Misstatement:
+    """人认定的错报第 1 版 M-{决定 ID} (需求 R156): 字段取决定的错报草稿 (含 account_code), 来源为一条已确认的判断.
+    lifecycle (功能 misstatement 打开) 时为 identified, 等分类与沟通; 关闭时为 uncorrected (旧口径, basis 为空).
+    纯函数."""
+    draft = record.misstatement_draft
+    assert draft is not None  # 校验时已查必填
+    status = MisstatementStatus.identified if lifecycle else MisstatementStatus.uncorrected
+    return Misstatement(
+        id=f"M-{record.id}",
+        judgment_id=judgment_id,
+        exception_id=None,
+        review_record_id=record.id,
+        status=status,
+        **draft.model_dump(),
+    )
+
+
 def misstatement_effects(
-    record: ReviewRecord, task: ReviewTask, target: Versioned, exceptions: list[AuditException], taken: set[str]
+    record: ReviewRecord,
+    task: ReviewTask,
+    target: Versioned,
+    exceptions: list[AuditException],
+    taken: set[str],
+    lifecycle: bool = False,
 ) -> list[Versioned]:
-    """misstatement 的效果 (第 7 节): 按决定的错报草稿建 Misstatement M-{决定 ID}, 来源为一条已确认的判断.
+    """misstatement 的效果 (第 7 节): 按决定的错报草稿建 Misstatement M-{决定 ID}, 来源为一条已确认的判断; 初始状态
+    见 new_misstatement (lifecycle 为功能 misstatement 是否打开).
 
     target 为判断 (normal 任务): 判断置 confirmed 并归因其例外 (同 confirm), 错报记该判断.
     target 为例外 (unattributed 任务): 同 override, 建人工判断 -H{n} (结论取决定理由, 建议 misstatement, 错报草稿
@@ -356,10 +394,7 @@ def misstatement_effects(
             misstatement_draft=draft,
         )
         effects = [human, *attribute_exceptions(human, [target])]
-    misstatement = Misstatement(
-        id=f"M-{record.id}", review_record_id=record.id, judgment_id=source, exception_id=None, **draft.model_dump()
-    )
-    return [*effects, misstatement]
+    return [*effects, new_misstatement(record, source, lifecycle)]
 
 
 def human_judgment_id(task: ReviewTask, subject_id: str, taken: set[str]) -> str:
@@ -522,10 +557,12 @@ def dispute_effects(
     exceptions: list[AuditException],
     taken: set[str],
     collab: bool = False,
+    lifecycle: bool = False,
 ) -> list[Versioned]:
     """仲裁的效果 (规格书第 11 节争议项出口): a6_upheld 同 confirm; a7_upheld 以独立复核的结论与推理链建新判断
     -H{n} (critic_judgment), 原判断置 overridden 并记 superseded_by; neither (human_conclusion) 同 override.
-    附了 misstatement_draft 时另建 Misstatement M-{决定 ID}, 来源为最终采用的判断. 纯函数.
+    附了 misstatement_draft 时另建 Misstatement M-{决定 ID}, 来源为最终采用的判断, 初始状态同 misstatement 决定
+    (new_misstatement, lifecycle 为功能 misstatement 是否打开, 需求 R156). 纯函数.
     collab 打开时 (需求 R150) 采用的人工判断写明它认定的错报: a7_upheld 见 critic_judgment; neither 附了草稿时
     建议动作为 misstatement, 错报草稿为记录的.
     """
@@ -546,18 +583,9 @@ def dispute_effects(
         judged = record.misstatement_draft if collab else None
         effects = override_effects(record, task, target, exceptions, taken, judged)
         adopted = effects[1]
-    draft = record.misstatement_draft
-    if draft is not None:
+    if record.misstatement_draft is not None:
         assert isinstance(adopted, Judgment)
-        effects.append(
-            Misstatement(
-                id=f"M-{record.id}",
-                judgment_id=adopted.id,
-                exception_id=None,
-                review_record_id=record.id,
-                **draft.model_dump(),
-            )
-        )
+        effects.append(new_misstatement(record, adopted.id, lifecycle))
     return effects
 
 
@@ -568,25 +596,27 @@ def review_effects(
     exceptions: list[AuditException],
     taken: set[str],
     collab: bool = False,
+    lifecycle: bool = False,
 ) -> list[Versioned]:
     """复核决定的效果 (第 7 节决定的效果表, 不含任务 decided 与程序重算). 纯函数.
 
     task: 决定处理的任务; target: 任务目标的当前版本 (判断, 例外或执行记录);
     exceptions: target 为判断时其解释的例外的当前版本; taken: 检查点状态中已有的判断 ID, 人工判断据此取号;
-    collab: 功能 collab 是否打开 (仲裁的效果见 dispute_effects).
+    collab: 功能 collab 是否打开 (仲裁的效果见 dispute_effects); lifecycle: 功能 misstatement 是否打开 (新错报的
+    初始状态, 见 new_misstatement).
     """
     if record.decision is Decision.confirm:
         assert isinstance(target, Judgment)  # confirm 只允许用于 normal 任务, 目标是判断
         return confirm_effects(target, exceptions)
     if record.decision is Decision.misstatement:
-        return misstatement_effects(record, task, target, exceptions, taken)
+        return misstatement_effects(record, task, target, exceptions, taken, lifecycle)
     if record.decision is Decision.override:
         return override_effects(record, task, target, exceptions, taken)
     if record.decision is Decision.manual_result:
         # manual 任务 (人工程序, 需求 R92): 只写决定, 结果由程序 owner 在节点读回后整理成领域对象 (需求 R93)
         return [] if task.kind is TaskKind.manual else manual_result_effects(record, task, taken)
     if record.decision is Decision.dispute_resolution:
-        return dispute_effects(record, task, target, exceptions, taken, collab)
+        return dispute_effects(record, task, target, exceptions, taken, collab, lifecycle)
     assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
     return []
 
@@ -838,6 +868,7 @@ class GraphDecisionSubmit:
         checked = check_review_values(self.deps, record, task, target, documents)
         if manual:
             await self._check_manual_owner(eid, checked, task, target, snapshot)
+        await check_account_code(self.deps.financial_store, eid, checked)
         await self._check_decision_id(eid, record.id)
         return task, checked
 
@@ -912,7 +943,8 @@ class GraphDecisionSubmit:
             # 由被过期重跑取代的判断做的归因已失效, 按未归因处理, 新判断确认时重新归因 (同 current_results)
             exceptions = released([x for x in found if x is not None], superseded_judgments(values))
         taken = {j.id for j in values["judgments"]}
-        effects = review_effects(record, task, target, exceptions, taken, COLLAB in self.deps.features)
+        features = self.deps.features
+        effects = review_effects(record, task, target, exceptions, taken, COLLAB in features, MISSTATEMENT in features)
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)

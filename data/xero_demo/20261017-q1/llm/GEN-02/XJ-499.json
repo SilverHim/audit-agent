@@ -195,7 +195,8 @@
     "account": "Office equipment (710)",
     "assertion": "Existence",
     "amount_cents": 75000,
-    "direction": "overstated"
+    "direction": "overstated",
+    "account_code": "710"
   },
   "self_confidence": 0.85
 }

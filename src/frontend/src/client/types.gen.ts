@@ -118,7 +118,7 @@ export type AccountCategoryIn = {
 /**
  * AgentId
  *
- * 智能体编号. A8 本版不实现, 只占位.
+ * 智能体编号.
  */
 export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
 
@@ -2770,6 +2770,7 @@ export type Judgment = {
     counter_argument: string;
     proposed_action: ProposedAction;
     misstatement_draft?: MisstatementDraft | null;
+    misstatement_update?: MisstatementUpdate | null;
     /**
      * Exception Ids
      */
@@ -3148,7 +3149,9 @@ export type MaterialityChoice = {
 /**
  * Misstatement
  *
- * 已认定的错报, 来自某条判断或例外. 本版一律按未更正处理.
+ * 已认定的错报, 来自某条判断或例外; 规格书 12.2 Misstatement 与 12.3 的生命周期 (需求 R156, 迁移表见接口文档
+ * 第 2.5 节). 人认定时建第 1 版, 功能 misstatement 打开为 identified, 关闭为 uncorrected (旧口径, 不经沟通, basis
+ * 为空); 之后的分类, 沟通与验证各出新版本 (model_copy, version +1). 新字段都有缺省, Store 中的旧行照常读回.
  */
 export type Misstatement = {
     /**
@@ -3183,9 +3186,74 @@ export type Misstatement = {
     amount_cents: number;
     direction: Direction;
     /**
-     * Status
+     * Account Code
      */
-    status?: 'uncorrected';
+    account_code?: string | null;
+    status?: MisstatementStatus;
+    /**
+     * Objective Id
+     */
+    objective_id?: string | null;
+    /**
+     * Fraud Indicative
+     */
+    fraud_indicative?: boolean | null;
+    /**
+     * Fraud Reason
+     */
+    fraud_reason?: string | null;
+    /**
+     * Origin
+     */
+    origin?: 'current_period' | 'prior_period_uncorrected' | null;
+    /**
+     * Classification Judgment Id
+     */
+    classification_judgment_id?: string | null;
+    /**
+     * Communicated At
+     */
+    communicated_at?: string | null;
+    /**
+     * Communicated To
+     */
+    communicated_to?: string | null;
+    /**
+     * Responded At
+     */
+    responded_at?: string | null;
+    /**
+     * Management Response
+     */
+    management_response?: string | null;
+    /**
+     * Needs Recommunication
+     */
+    needs_recommunication?: boolean;
+    /**
+     * Uncorrected Basis
+     */
+    uncorrected_basis?: 'refused' | 'stopped_waiting' | null;
+    /**
+     * Correction Notice Id
+     */
+    correction_notice_id?: string | null;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Corrected Cents
+     */
+    corrected_cents?: number;
+    /**
+     * Residual Cents
+     */
+    residual_cents?: number | null;
+    /**
+     * Verified By Judgment Id
+     */
+    verified_by_judgment_id?: string | null;
 };
 
 /**
@@ -3205,6 +3273,10 @@ export type MisstatementDraft = {
      */
     amount_cents: number;
     direction: Direction;
+    /**
+     * Account Code
+     */
+    account_code?: string | null;
 };
 
 /**
@@ -3226,11 +3298,75 @@ export type MisstatementReport = {
 };
 
 /**
+ * MisstatementStatus
+ *
+ * 错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement
+ * 关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写.
+ */
+export type MisstatementStatus = 'identified' | 'communicated' | 'verifying' | 'corrected' | 'partially_corrected' | 'uncorrected' | 'evaluated' | 'closed';
+
+/**
  * MisstatementType
  *
  * 错报类型.
  */
 export type MisstatementType = 'factual' | 'judgmental' | 'projected';
+
+/**
+ * MisstatementUpdate
+ *
+ * 判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
+ * base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
+ * 时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFIED_STATUSES.
+ */
+export type MisstatementUpdate = {
+    /**
+     * Misstatement Id
+     */
+    misstatement_id: string;
+    /**
+     * Base Version
+     */
+    base_version: number;
+    /**
+     * Kind
+     */
+    kind: 'classification' | 'verification';
+    type?: MisstatementType | null;
+    /**
+     * Fraud Indicative
+     */
+    fraud_indicative?: boolean | null;
+    /**
+     * Fraud Reason
+     */
+    fraud_reason?: string | null;
+    /**
+     * Origin
+     */
+    origin?: 'current_period' | 'prior_period_uncorrected' | null;
+    /**
+     * Objective Id
+     */
+    objective_id?: string | null;
+    status?: MisstatementStatus | null;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string> | null;
+    /**
+     * Corrected Cents
+     */
+    corrected_cents?: number | null;
+    /**
+     * Residual Cents
+     */
+    residual_cents?: number | null;
+    /**
+     * Needs Recommunication
+     */
+    needs_recommunication?: boolean | null;
+};
 
 /**
  * MonthlyFigures
@@ -4081,6 +4217,7 @@ export type ReviewRecord = {
      */
     override_conclusion?: string | null;
     misstatement_draft?: MisstatementDraft | null;
+    misstatement_update?: MisstatementUpdate | null;
     /**
      * Rerun Params
      */

@@ -19,15 +19,18 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Judgment,
     Misstatement,
+    MisstatementStatus,
     NeitherAction,
     Procedure,
     ProcedureStatus,
+    ProposedAction,
     ReviewStatus,
     ReviewTask,
     TaskKind,
     TaskStatus,
     TrailKind,
 )
+from backend.orchestration.decisions import review_effects
 from backend.services.judgment_engine import critic_chain_ok
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT, api_client, wait_idle
 from tests.test_decisions import Started
@@ -117,6 +120,27 @@ async def test_a7_upheld_builds_new_version_from_critic_and_records_misstatement
     }
     misstatement = await latest(s, Misstatement, "M-D-ARB")
     assert (misstatement.judgment_id, misstatement.amount_cents) == (new.id, NUMBAT_CUTOFF_DRAFT.amount_cents)
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "status"), [(False, MisstatementStatus.uncorrected), (True, MisstatementStatus.identified)]
+)
+def test_attached_misstatement_status_follows_the_feature(lifecycle: bool, status: MisstatementStatus) -> None:
+    """R156 验收 5 (C5f): 仲裁附错报草稿时建的错报, 初始状态同 misstatement 决定, 按功能 misstatement (经
+    review_effects, 纯函数): 关闭为 uncorrected (同上一用例实际走的), 打开为 identified; 来源为采用的判断."""
+    target = Judgment.model_construct(id=JID, version=1, exception_ids=[], proposed_action=ProposedAction.misstatement)
+    task = ReviewTask.model_construct(id=TASK, kind=TaskKind.dispute)
+    decision = resolve(DisputeResolution.a6_upheld, misstatement_draft=NUMBAT_CUTOFF_DRAFT)
+    effects = review_effects(decision, task, target, [], set(), lifecycle=lifecycle)
+    [misstatement] = [e for e in effects if isinstance(e, Misstatement)]
+    assert misstatement == Misstatement(
+        id="M-D-ARB",
+        judgment_id=JID,
+        exception_id=None,
+        review_record_id="D-ARB",
+        status=status,
+        **NUMBAT_CUTOFF_DRAFT.model_dump(),
+    )
 
 
 async def test_neither_needs_human_conclusion() -> None:

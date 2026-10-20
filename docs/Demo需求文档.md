@@ -122,7 +122,7 @@ completion → gate_fin → report_draft → gate_rpt01 → { report_draft | arc
 |---|---|---|
 | confirm | normal | Judgment 置 confirmed |
 | override | normal、unattributed | 按人的结论另建人工 Judgment；normal 任务的旧 Judgment 置 overridden 并记 superseded_by |
-| misstatement | normal、unattributed | 按 misstatement_draft 建 Misstatement，本版一律按未更正处理 |
+| misstatement | normal、unattributed | 按 misstatement_draft 建 Misstatement；初始状态按功能 misstatement：打开为 identified（之后分类、沟通、等待更正与验证，接口文档第 2.5 节），关闭为未更正（uncorrected） |
 | rerun | failed | 程序回到 executing；P2 程序重新派发，P2 以外的程序在所在节点内重跑 |
 | manual_result | failed（只限产出 Judgment 的程序，且任务带 subject_id） | 人的结果成为 Judgment |
 

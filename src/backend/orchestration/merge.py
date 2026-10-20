@@ -39,6 +39,8 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph", "representation_letter"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
     AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
+    # A8 (需求 R156 登记, 程序由错报闭环各需求加): 分类与验证的判断与任务, 按判断确认的更新载荷写错报新版本
+    AgentId.A8: frozenset({"judgments", "review_tasks", "misstatements"}),
     AgentId.A9: frozenset({"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}),
     AgentId.A10: frozenset(
         {"report_versions", "review_tasks", "governance_communications", "independence_declaration"}

@@ -50,7 +50,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMResponse
-from backend.contracts.records import JournalEntry, SalesInvoice
+from backend.contracts.records import Account, JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentContext, ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
@@ -794,6 +794,24 @@ async def test_misstatement_amount_from_rows_or_their_difference(amount: int, pa
     pointers = [row("journal_entry", "CR-SI-2026-0547-1"), row("bank_transaction", "BT-01-20260630-03")]
     report = await check(misstated(amount, pointers))
     assert (report.level_failed is None) is passes
+
+
+SALES = Account(code="200", name="Sales", type="revenue", category="revenue", category_basis="name")  # Xero 科目表一行
+
+
+@pytest.mark.parametrize(("code", "passes"), [("200", True), (None, True), ("9999", False)])
+async def test_misstatement_account_code_must_be_in_the_chart(code: str | None, passes: bool) -> None:
+    """R156 验收 9: REV-02 草稿带科目表有的 account_code 200 通过; 9999 → 引用级失败, 不重试; 不带代码不查 (现有
+    fixture 照旧). GEN-02 XJ-499 的 Xero fixture (710) 经真实科目表通过见 test_fieldwork_gen02."""
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=[SALES])
+    validator = OutputValidator(financial, LIBRARY, FakeTrail())
+    draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": code}))
+    report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
+    if passes:
+        assert report.level_failed is None and report.output.misstatement_draft.account_code == code
+    else:
+        error = f"错报草稿的科目代码 {code} 不在本项目科目表中"
+        assert (report.level_failed, report.retryable, report.errors) == ("reference", False, [error])
 
 
 # ── 独立复核第一轮的错报草稿 (R150, 只记不判失败) ──

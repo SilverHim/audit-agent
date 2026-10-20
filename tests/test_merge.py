@@ -12,16 +12,20 @@ from backend.agents.registry import AGENT_CLASSES
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
+    Assertion,
     AuditException,
     AuditReportVersion,
     AutonomyLevel,
     CheckItem,
     CheckItemStatus,
     ComplianceCheck,
+    Direction,
     DocumentRef,
     DocumentType,
     ExceptionDisposition,
     Judgment,
+    Misstatement,
+    MisstatementType,
     OpinionType,
     Phase,
     PlanStatus,
@@ -34,6 +38,7 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TaskStatus,
+    UncorrectedSchedule,
 )
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
@@ -455,8 +460,13 @@ def test_completion_records_come_from_their_writer_and_this_run(
         check_patch(patch(stale), outputs=[field], **common)
 
 
+PENDING_AGENTS = {AgentId.A8}  # 只登记了写入归属, 还没有 Agent 类 (错报闭环首个程序落地时删去; 需求 R156)
+
+
 def test_every_registered_agent_has_field_table() -> None:
-    assert {cls.agent_id for cls in AGENT_CLASSES} == set(AGENT_FIELDS)
+    registered = {cls.agent_id for cls in AGENT_CLASSES}
+    assert registered <= AGENT_FIELDS.keys()
+    assert AGENT_FIELDS.keys() - registered == PENDING_AGENTS
 
 
 def test_field_type_follows_state_annotations() -> None:
@@ -1061,3 +1071,60 @@ async def test_a1_failure_patch_not_limited_by_outputs() -> None:
     assert writer is AgentId.A1
     [failed] = patch["review_tasks"]
     assert (failed.kind, failed.procedure_id) == (TaskKind.failed, "REV-08")
+
+
+# ── 需求 R156: A8 的写入归属 ──
+
+
+def a8_patch() -> tuple[StatePatch, ProcedureRun, EngagementState]:
+    """A8 执行 FIN-03 (错报分类) 的片段: 一条判断与它的复核任务, BA-091 错报的新版本 (已分类), 本次执行成功."""
+    run = make_run("FIN-03")
+    classified = judgment("J-FIN-03-1-M-D-CSH02-091", "FIN-03", run.id)
+    review = task(classified.id, run_id=run.id).model_copy(update={"procedure_id": "FIN-03"})
+    misstatement = Misstatement(
+        id="M-D-CSH02-091",
+        version=2,
+        judgment_id="J-CSH-02-1-BA-091",
+        exception_id=None,
+        review_record_id="D-CSH02-091",
+        type=MisstatementType.factual,
+        account="Interest income (270)",
+        assertion=Assertion.Completeness,
+        amount_cents=4853,
+        direction=Direction.understated,
+        origin="current_period",
+        classification_judgment_id=classified.id,
+    )
+    patch: StatePatch = {
+        "judgments": [classified],
+        "review_tasks": [review],
+        "misstatements": [misstatement],
+        "procedure_runs": [finished(run)],
+    }
+    return patch, run, make_state(procedure_pack=[*PACK, make_procedure("FIN-03", Phase.P3_Completion)])
+
+
+def test_a8_writes_judgments_tasks_and_misstatements_only() -> None:
+    """R156 验收 7: A8 片段写 judgments, review_tasks, misstatements 与本次执行记录通过; A8 再写 uncorrected_schedule
+    被拒; A6 写 misstatements 被拒 (人认定错报经决定, 不经 A6), 原因含 Agent 与字段."""
+    patch, run, state = a8_patch()
+    outputs = ["judgments", "review_tasks", "misstatements"]
+    check = {"procedure_id": "FIN-03", "run_id": run.id, "state": state}
+    check_patch(patch, writer=AgentId.A8, outputs=outputs, **check)  # type: ignore[arg-type]
+    schedule = UncorrectedSchedule(
+        id="SCHEDULE",
+        items=[],
+        excluded_trivial_ids=[],
+        total_cents=0,
+        materiality_cents=32431,
+        candidate_opinion=OpinionType.unqualified,
+    )
+    with pytest.raises(MergeRejected, match="merge_rejected: A8 不能写字段 uncorrected_schedule"):
+        check_patch(
+            {**patch, "uncorrected_schedule": schedule},
+            writer=AgentId.A8,
+            outputs=[*outputs, "uncorrected_schedule"],
+            **check,  # type: ignore[arg-type]
+        )
+    with pytest.raises(MergeRejected, match="merge_rejected: A6 不能写字段 misstatements"):
+        check_patch(patch, writer=AgentId.A6, outputs=outputs, **check)  # type: ignore[arg-type]

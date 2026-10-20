@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
@@ -313,6 +313,25 @@ class MisstatementType(StrEnum):
     projected = "projected"  # 推断错报, 由抽样外推
 
 
+class MisstatementStatus(StrEnum):
+    """错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement
+    关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写."""
+
+    identified = "identified"  # 已认定, 待分类与沟通
+    communicated = "communicated"  # 已与管理层沟通, 等更正 (分录对不上时回到这里重新沟通)
+    verifying = "verifying"  # 管理层已更正, 待验证更正分录
+    corrected = "corrected"  # 验证通过且剩余额为零
+    partially_corrected = "partially_corrected"  # 验证通过而剩余额大于零
+    uncorrected = "uncorrected"  # 拒绝更正, 或审计师决定停止等待
+    evaluated = "evaluated"  # 已作未更正错报评价 (本版不写)
+    closed = "closed"  # 已结束 (本版不写)
+
+
+# 错报来源: 本期发现, 或上期未更正的结转 (ASA 450 第 13 段)
+MisstatementOrigin = Literal["current_period", "prior_period_uncorrected"]
+UncorrectedBasis = Literal["refused", "stopped_waiting"]  # 未更正的依据: 管理层拒绝更正, 或审计师决定停止等待
+
+
 class Direction(StrEnum):
     """错报方向."""
 
@@ -441,7 +460,7 @@ class TrailKind(StrEnum):
 
 
 class AgentId(StrEnum):
-    """智能体编号. A8 本版不实现, 只占位."""
+    """智能体编号."""
 
     A1 = "A1"  # Orchestrator: 编排, 闸门, 程序包装配, 调度
     A2 = "A2"  # ClientIntel: 客户背景与登记核查
@@ -450,7 +469,7 @@ class AgentId(StrEnum):
     A5 = "A5"  # Evidence: 对外取证, 如函证发函
     A6 = "A6"  # Fieldwork: 实质性程序与判断
     A7 = "A7"  # Review: 判断独立复核
-    A8 = "A8"  # Workpaper: 错报沟通与底稿
+    A8 = "A8"  # Workpaper: 错报分类, 沟通与更正验证 (需求 R156 登记写入归属, 程序由错报闭环各需求加)
     A9 = "A9"  # QC: 错报累计与质量控制
     A10 = "A10"  # Concierge: 审计师对话入口与报告生成
 
@@ -533,6 +552,51 @@ class MisstatementDraft(Model):
     assertion: Assertion  # 涉及的认定
     amount_cents: int  # 金额, 单位分
     direction: Direction  # 高估或低估
+    # 科目代码 (需求 R156): AI 草稿能从上下文得到时填, 审计师提交认定时可填或改; 非空时须在本项目科目表中
+    account_code: str | None = None
+
+
+# 错报更新载荷两类各自能带的字段 (需求 R156): 分类 (FIN-03) 定类型, 舞弊迹象, 来源与审计目标; 验证 (FIN-09) 定更正结果
+CLASSIFICATION_FIELDS = ("type", "fraud_indicative", "fraud_reason", "origin", "objective_id")
+VERIFICATION_FIELDS = ("status", "adjustment_entry_nos", "corrected_cents", "residual_cents", "needs_recommunication")
+# 验证能把错报改成的状态: 全部更正, 部分更正, 或分录对不上而回到 communicated 重新沟通
+VERIFIED_STATUSES = (
+    MisstatementStatus.corrected,
+    MisstatementStatus.partially_corrected,
+    MisstatementStatus.communicated,
+)
+
+
+class MisstatementUpdate(Model):
+    """判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
+    base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
+    时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFIED_STATUSES."""
+
+    misstatement_id: str  # 更新哪条错报
+    base_version: int  # 依据的错报版本
+    kind: Literal["classification", "verification"]  # 分类 (FIN-03) 或验证 (FIN-09)
+    type: MisstatementType | None = None  # 分类: 错报类型
+    fraud_indicative: bool | None = None  # 分类: 是否有舞弊迹象 (ASA 240 第 36 段)
+    fraud_reason: str | None = None  # 分类: 舞弊迹象的理由
+    origin: MisstatementOrigin | None = None  # 分类: 本期或上期未更正结转
+    objective_id: str | None = None  # 分类: 所属审计目标
+    status: MisstatementStatus | None = None  # 验证: corrected, partially_corrected 或 communicated
+    adjustment_entry_nos: list[str] | None = None  # 验证: 已验证的更正分录凭证号
+    corrected_cents: int | None = None  # 验证: 已更正的金额
+    residual_cents: int | None = None  # 验证: 剩余未更正的金额
+    needs_recommunication: bool | None = None  # 验证: 分录对不上, 须重新沟通
+
+    @model_validator(mode="after")
+    def fields_of_kind(self) -> Self:
+        """每类只带自己的字段; 验证的状态只许 VERIFIED_STATUSES."""
+        allowed = CLASSIFICATION_FIELDS if self.kind == "classification" else VERIFICATION_FIELDS
+        other = VERIFICATION_FIELDS if self.kind == "classification" else CLASSIFICATION_FIELDS
+        stray = [name for name in other if getattr(self, name) is not None]
+        if stray:
+            raise ValueError(f"{self.kind} 的错报更新不能带 {', '.join(stray)} (只能带 {', '.join(allowed)})")
+        if self.status is not None and self.status not in VERIFIED_STATUSES:
+            raise ValueError(f"验证只能把错报改为 {', '.join(VERIFIED_STATUSES)}, 不能为 {self.status}")
+        return self
 
 
 class Judgment(Versioned):
@@ -549,6 +613,8 @@ class Judgment(Versioned):
     counter_argument: str  # 反方论证: 结论可能错在哪里
     proposed_action: ProposedAction  # 建议动作
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
+    # 对已有错报的更新载荷 (需求 R156): FIN-03 分类与 FIN-09 验证的判断携带, 确认后由 A8 写出错报新版本; 其余为空
+    misstatement_update: MisstatementUpdate | None = None
     exception_ids: list[str] = []  # 本判断解释的例外, 判断确认后这些例外置 attributed
     autonomy_level: AutonomyLevel  # 判断时的有效自主度
     review_status: ReviewStatus = ReviewStatus.pending  # 复核状态
@@ -1280,6 +1346,7 @@ class ReviewRecord(Versioned):
     reason: str | None = None  # 理由, confirm 以外必填
     override_conclusion: str | None = None  # override 时的新结论
     misstatement_draft: MisstatementDraft | None = None  # misstatement 时的错报草稿
+    misstatement_update: MisstatementUpdate | None = None  # 对已有错报的更新载荷 (需求 R156); 现有决定都不能填
     rerun_params: dict[str, Any] | None = None  # rerun 时要改的参数
     manual_result: ManualResult | None = None  # manual_result 时人给的结果
     dispute_resolution: DisputeResolution | None = None  # dispute_resolution 时的仲裁结果
@@ -1367,7 +1434,9 @@ class RerunRequest(Versioned):
 
 
 class Misstatement(Versioned):
-    """已认定的错报, 来自某条判断或例外. 本版一律按未更正处理."""
+    """已认定的错报, 来自某条判断或例外; 规格书 12.2 Misstatement 与 12.3 的生命周期 (需求 R156, 迁移表见接口文档
+    第 2.5 节). 人认定时建第 1 版, 功能 misstatement 打开为 identified, 关闭为 uncorrected (旧口径, 不经沟通, basis
+    为空); 之后的分类, 沟通与验证各出新版本 (model_copy, version +1). 新字段都有缺省, Store 中的旧行照常读回."""
 
     judgment_id: str | None  # 来源判断, 与 exception_id 二选一
     exception_id: str | None  # 来源例外, 与 judgment_id 二选一
@@ -1377,7 +1446,88 @@ class Misstatement(Versioned):
     assertion: Assertion  # 认定
     amount_cents: int  # 金额, 单位分
     direction: Direction  # 高估或低估
-    status: Literal["uncorrected"] = "uncorrected"  # 本版不做更正流程, 固定为未更正
+    account_code: str | None = None  # 科目代码, 由认定时的草稿带入
+    status: MisstatementStatus = MisstatementStatus.identified  # 生命周期状态
+    # 分类 (A8, FIN-03): 所属审计目标, 舞弊迹象与理由, 本期或上期未更正结转, 作分类的判断
+    objective_id: str | None = None
+    fraud_indicative: bool | None = None
+    fraud_reason: str | None = None
+    origin: MisstatementOrigin | None = None
+    classification_judgment_id: str | None = None
+    # 沟通 (A8, FIN-08): 沟通时间与对象, 管理层回复的时间与原文; 验证发现分录对不上时置 needs_recommunication
+    communicated_at: datetime | None = None
+    communicated_to: str | None = None
+    responded_at: datetime | None = None
+    management_response: str | None = None
+    needs_recommunication: bool = False
+    uncorrected_basis: UncorrectedBasis | None = None  # status 为 uncorrected 时的依据; 旧口径 (未经沟通) 为空
+    # 更正与验证 (A1 等待更正, A8 验证, FIN-09): 更正通知, 已验证的更正分录凭证号, 已更正与剩余金额, 作验证的判断
+    correction_notice_id: str | None = None
+    adjustment_entry_nos: list[str] = []
+    corrected_cents: int = 0
+    residual_cents: int | None = None
+    verified_by_judgment_id: str | None = None
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        """状态与字段一致 (接口文档第 2.5 节): corrected 剩余额为 0 且有验证判断; partially_corrected 剩余额在
+        (0, amount_cents) 内; 因拒绝而 uncorrected 须有沟通时间与管理层回复; 停止等待须有更正通知; 重新沟通的标记
+        只在 communicated 时为真. uncorrected 而 basis 为空合法 (功能关闭时的旧口径)."""
+        problems = []
+        status, residual = self.status, self.residual_cents
+        if status is MisstatementStatus.corrected and (residual != 0 or self.verified_by_judgment_id is None):
+            problems.append("corrected 须剩余额为 0 且有验证判断 (verified_by_judgment_id)")
+        if status is MisstatementStatus.partially_corrected and not (
+            residual is not None and 0 < residual < self.amount_cents
+        ):
+            problems.append(f"partially_corrected 的剩余额 {residual} 须在 (0, {self.amount_cents}) 内")
+        basis = self.uncorrected_basis
+        if (
+            status is MisstatementStatus.uncorrected
+            and basis == "refused"
+            and (self.communicated_at is None or self.management_response is None)
+        ):
+            problems.append("因管理层拒绝而未更正, 须有沟通时间 (communicated_at) 与管理层回复 (management_response)")
+        if basis == "stopped_waiting" and self.correction_notice_id is None:
+            problems.append("停止等待更正须有更正通知 (correction_notice_id)")
+        if self.needs_recommunication and status is not MisstatementStatus.communicated:
+            problems.append(f"needs_recommunication 只在 communicated 时为真, 现为 {status}")
+        if problems:
+            raise ValueError(f"错报 {self.id} 的状态与字段不一致: {'; '.join(problems)}")
+        return self
+
+
+def verified_adjustment_entries(misstatements: Iterable[Misstatement]) -> list[str]:
+    """已验证更正分录 (需求 R156, 接口文档第 2.5 节; 计划段 AP-51 的取数口径): status 为 corrected 或
+    partially_corrected 且 verified_by_judgment_id 非空的错报的 adjustment_entry_nos 并集, 按凭证号排序. 纯函数."""
+    verified = (MisstatementStatus.corrected, MisstatementStatus.partially_corrected)
+    return sorted(
+        {
+            no
+            for m in misstatements
+            if m.status in verified and m.verified_by_judgment_id is not None
+            for no in m.adjustment_entry_nos
+        }
+    )
+
+
+class ManagementResponse(Model):
+    """管理层对一条错报的回复 (FIN-08 的人工结果载荷, 需求 R156): 沟通的时间与对象, 回复的时间与原文, 是否同意更正.
+    base_version 为沟通时的错报版本. 回复不能早于沟通."""
+
+    misstatement_id: str  # 回复的错报
+    base_version: int  # 沟通时的错报版本
+    communicated_at: datetime  # 沟通时间
+    communicated_to: str  # 沟通对象 (管理层或治理层中的人与职务)
+    responded_at: datetime  # 回复时间
+    response: str  # 回复原文
+    agrees_to_correct: bool  # 是否同意更正
+
+    @model_validator(mode="after")
+    def responded_after_communication(self) -> Self:
+        if self.responded_at < self.communicated_at:
+            raise ValueError(f"回复时间 {self.responded_at} 早于沟通时间 {self.communicated_at}")
+        return self
 
 
 # ── 2.6 函证, 文件与报告 ───────────────────────────────────
