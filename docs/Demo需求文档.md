@@ -8,6 +8,7 @@
 P0 承接   录入客户 ABN → ACC-04 查询 ASIC / ABN（mock）→【闸门】ACC-01 是否承接
 P1 计划   载入合成数据集 → DOC-04 合同抽取 → PLN-07 初步分析 → PLN-01 重要性候选
           →【闸门】PLN-01/03 确认重要性与风险清单 → 装配程序包
+          → PLN-15 起草总体审计计划 →【闸门】PLN-15 计划审批（批准后进入执行，退回则按理由重拟；功能 planning）
 P2 执行   收入：REV-08 三单匹配、REV-03 合同条款评价 → REV-02 截止性判断
           函证：CSH-04 发函 → DOC-06 回函抽取；CSH-05 流水账面核对 → CSH-02 差异评价
           需要人的结果进复核队列，审计师逐条决定
@@ -97,7 +98,7 @@ p0_inputs → p0_intel → gate_acc01 → p1_await_data → p1_ingest → p1_ana
 completion → gate_fin → report_draft → gate_rpt01 → { report_draft | archive }
 ```
 
-功能 planning 打开时（需求 R205），装配之后先起草总体审计计划，批准才进入执行阶段。planning 只含 PLN-15 与其闸门，不依赖其他功能；重要性重估（PLN-19 与其闸门）另为功能 reassessment，依赖 misstatement 与 planning（需求 R313）：
+功能 planning 打开时（需求 R205；演示配置自需求 R317 起打开），装配之后先起草总体审计计划，批准才进入执行阶段。planning 只含 PLN-15 与其闸门，不依赖其他功能；重要性重估（PLN-19 与其闸门）另为功能 reassessment，依赖 misstatement 与 planning（需求 R313）：
 
 ```
 gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
