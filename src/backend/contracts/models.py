@@ -318,6 +318,15 @@ class OpinionType(StrEnum):
     disclaimer = "disclaimer"  # 无法表示意见
 
 
+class GoingConcernOutcome(StrEnum):
+    """持续经营结论 (FIN-02, 需求 R183; ASA 570 第 17, 18, 21-23 段)."""
+
+    no_material_uncertainty = "no_material_uncertainty"  # 持续经营基础适当, 不存在重大不确定性
+    material_uncertainty_disclosed = "material_uncertainty_disclosed"  # 存在重大不确定性, 披露充分 (第 22 段)
+    material_uncertainty_not_disclosed = "material_uncertainty_not_disclosed"  # 存在重大不确定性, 披露不充分 (第 23 段)
+    basis_inappropriate = "basis_inappropriate"  # 持续经营假设不恰当 (第 21 段, 否定意见); 闸门拒绝批准, 本版不支持
+
+
 class MisstatementType(StrEnum):
     """错报类型."""
 

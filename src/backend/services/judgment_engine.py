@@ -21,6 +21,7 @@ from backend.contracts.llm_outputs import (
     CriticIndependent,
     CriticVerdictOut,
     DocumentClassification,
+    GoingConcernAdvice,
     JudgmentDraft,
     MisstatementClassificationDraft,
     MisstatementNature,
@@ -39,7 +40,9 @@ from backend.contracts.models import (
     Engine,
     EvidencePointer,
     EvidenceType,
+    GoingConcernOutcome,
     Judgment,
+    JudgmentRef,
     MisstatementDraft,
     MisstatementType,
     OpinionType,
@@ -233,6 +236,43 @@ def nature_semantics(nature: MisstatementNature) -> list[str]:
     return errors
 
 
+def judgment_ref_errors(
+    refs: Sequence[JudgmentRef], judgments: Sequence[Judgment], required: Sequence[str]
+) -> list[str]:
+    """引用判断的引用级 (FIN-02, 需求 R183), 返回错误 (空为通过): 每条引用须在 judgments (状态中的判断) 中, 版本为
+    其当前版本, 且已确认; required 中的判断 ID 须都被引用."""
+    current = {j.id: j for j in judgments}
+    errors = []
+    for ref in refs:
+        judgment = current.get(ref.id)
+        if judgment is None:
+            errors.append(f"引用的判断 {ref.id} 不在状态中")
+        elif ref.version != judgment.version:
+            errors.append(f"引用的判断 {ref.id} 第 {ref.version} 版不是当前版本 (第 {judgment.version} 版)")
+        elif judgment.review_status is not ReviewStatus.confirmed:
+            errors.append(f"引用的判断 {ref.id} 尚未确认 ({judgment.review_status})")
+    cited = {ref.id for ref in refs}
+    errors += [f"没有引用必须引用的判断 {rid}" for rid in required if rid not in cited]
+    return errors
+
+
+UNCERTAINTY_STANDARD = "ASA570-P18"  # 审计师就是否存在重大不确定性下结论 (ASA 570 第 18 段)
+
+
+def going_concern_semantics(advice: GoingConcernAdvice) -> list[str]:
+    """持续经营结论建议的语义校验, 返回错误 (空为通过): 推理链 (chain_semantics); 建议不是 no_material_uncertainty 时
+    推理链须有引用 UNCERTAINTY_STANDARD 的 standard 步骤 (只在 evidence 列表或别的步骤里引用不算)."""
+    errors = chain_semantics(advice.reasoning_chain)
+    cites_uncertainty = any(
+        step.kind is StepKind.standard
+        and any(p.source_type == "standard" and p.source_id == UNCERTAINTY_STANDARD for p in step.evidence)
+        for step in advice.reasoning_chain
+    )
+    if advice.proposed_outcome is not GoingConcernOutcome.no_material_uncertainty and not cites_uncertainty:
+        errors.append(f"建议 {advice.proposed_outcome} 而推理链没有引用 {UNCERTAINTY_STANDARD} 的 standard 步骤")
+    return errors
+
+
 def evidence_key(p: EvidencePointer) -> tuple[str, str, int | str | None]:
     """独立复核证据白名单的比对键: 文件按 (来源, 页), 第一轮只给了所引页的文字; 客户画像按 (来源, 字段), 第一轮只给了
     所引字段的 JSON; 其余按来源, 第三项为空."""
@@ -378,6 +418,17 @@ def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | N
     return ("semantic" if errors else None), errors
 
 
+@dataclass(frozen=True)
+class Resolved:
+    """PointerResolver.resolve_chain 的结果."""
+
+    steps: list[ReasoningStep]  # 指针已按来源改写的推理链
+    evidence: list[EvidencePointer]  # 指针已按来源改写的 evidence 列表
+    unsupported: list[int]  # 有指针解析不了的步骤下标
+    errors: list[str]  # 解析不了的指针, 每个一条
+    valid: int  # 解析得了的指针数, 为 0 时引用级失败
+
+
 class PointerResolver:
     """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次. client_profile 指针不查存储, 只认
     profile (校验上下文中本项目采用的那一版客户画像, 需求 R128).
@@ -460,6 +511,35 @@ class PointerResolver:
         # 留痕只认外部调用, 如登记查询; 可靠性按留痕记下的事实 (trail_evidence, 同 ACC-04)
         evidence_type, reliability = trail_evidence(found.payload)
         return p.model_copy(update={"type": evidence_type, "reliability": reliability}), ""
+
+    async def resolve_chain(self, chain: Sequence[ReasoningStep], evidence: Sequence[EvidencePointer]) -> Resolved:
+        """解析推理链各步与 evidence 列表的指针 (判断草稿与持续经营结论建议共用). 一步中有指针解析不了即该步
+        unsupported; 只出现在 evidence 中的不标步骤; 每个解析不了的指针记一条错误, 指针原样保留."""
+        errors: list[str] = []
+        valid = 0
+
+        async def resolve_all(pointers: Sequence[EvidencePointer], where: str) -> tuple[list[EvidencePointer], bool]:
+            nonlocal valid
+            out, ok = [], True
+            for p in pointers:
+                resolved, reason = await self.resolve(p)
+                if resolved is None:
+                    ok = False
+                    errors.append(f"{where}指针 {p.source_type} {p.source_id}: {reason}")
+                else:
+                    valid += 1
+                out.append(resolved or p)
+            return out, ok
+
+        steps: list[ReasoningStep] = []
+        unsupported: list[int] = []
+        for i, step in enumerate(chain):
+            pointers, ok = await resolve_all(step.evidence, f"第 {i} 步")
+            steps.append(step.model_copy(update={"evidence": pointers}))
+            if not ok:
+                unsupported.append(i)
+        listed, _ = await resolve_all(evidence, "evidence 中")
+        return Resolved(steps, listed, unsupported, errors, valid)
 
 
 @dataclass(frozen=True)
@@ -550,33 +630,10 @@ class OutputValidator:
         """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误).
         准则片段按 ctx.standards_of 核对 (见 PointerResolver)."""
         resolver = PointerResolver(self, eid, ctx.standards_of, ctx.client_profile)
-        errors: list[str] = []
-        valid = 0
-
-        async def resolve_all(pointers: list[EvidencePointer], where: str) -> tuple[list[EvidencePointer], bool]:
-            nonlocal valid
-            out, ok = [], True
-            for p in pointers:
-                resolved, reason = await resolver.resolve(p)
-                if resolved is None:
-                    ok = False
-                    errors.append(f"{where}指针 {p.source_type} {p.source_id}: {reason}")
-                else:
-                    valid += 1
-                out.append(resolved or p)
-            return out, ok
-
-        steps: list[ReasoningStep] = []
-        unsupported: list[int] = []
-        for i, step in enumerate(draft.reasoning_chain):
-            pointers, ok = await resolve_all(step.evidence, f"第 {i} 步")
-            steps.append(step.model_copy(update={"evidence": pointers}))
-            if not ok:
-                unsupported.append(i)
-        evidence, _ = await resolve_all(draft.evidence, "evidence 中")
-        draft = draft.model_copy(update={"reasoning_chain": steps, "evidence": evidence})
-
-        if valid == 0:
+        resolved = await resolver.resolve_chain(draft.reasoning_chain, draft.evidence)
+        draft = draft.model_copy(update={"reasoning_chain": resolved.steps, "evidence": resolved.evidence})
+        errors, unsupported = list(resolved.errors), resolved.unsupported
+        if resolved.valid == 0:
             errors.append("没有一个能解析的证据指针")
             return draft, "reference", unsupported, errors
         md = draft.misstatement_draft
@@ -739,6 +796,25 @@ async def check_plan(
     return CheckResult(output, level, errors=errors)
 
 
+async def check_going_concern(
+    validator: OutputValidator, eid: str, output: GoingConcernAdvice, ctx: ValidationContext
+) -> CheckResult:
+    """持续经营结论建议 (FIN-02, 需求 R183). 引用级: judgment_refs 按 ctx.judgments 与 ctx.required_refs 核对
+    (judgment_ref_errors); 证据指针同判断草稿, 一个都解析不了即失败 (准则片段按 ctx.standards_of 核对). 引用级不过时
+    不查语义; 语义级见 going_concern_semantics."""
+    resolver = PointerResolver(validator, eid, ctx.standards_of, ctx.client_profile)
+    resolved = await resolver.resolve_chain(output.reasoning_chain, output.evidence)
+    advice = output.model_copy(update={"reasoning_chain": resolved.steps, "evidence": resolved.evidence})
+    ref_errors = judgment_ref_errors(output.judgment_refs, ctx.judgments, ctx.required_refs)
+    errors = ref_errors + resolved.errors
+    if resolved.valid == 0:
+        errors.append("没有一个能解析的证据指针")
+    if ref_errors or resolved.valid == 0:
+        return CheckResult(advice, "reference", resolved.unsupported, errors)
+    semantic = going_concern_semantics(advice)
+    return CheckResult(advice, "semantic" if semantic else None, resolved.unsupported, errors + semantic)
+
+
 async def check_critic(
     validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
 ) -> CheckResult:
@@ -770,6 +846,7 @@ for _model, _check in (
     (ReportDraft, check_report),
     (CriticIndependent, check_critic),
     (AuditPlanDraft, check_plan),
+    (GoingConcernAdvice, check_going_concern),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
