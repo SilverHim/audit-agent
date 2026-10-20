@@ -41,7 +41,6 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import REPORT_HEADINGS, PointerResolver
@@ -66,7 +65,7 @@ from tests.xero_fakes import (
     xero_journal_reviews,
 )
 from tests.xero_flow import READY_REASON, demo_source, drain, offline_runner
-from tests.xero_harness import LayeredMockLLMClient
+from tests.xero_harness import FlakyLLM, LayeredMockLLMClient
 
 MAX_CALLS = 150  # 用量上限: 固定输出走一遍 45 次 (另有 A7 两轮复核, 随模型输出触发), 留出校验重试与重跑的余量
 MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
@@ -414,22 +413,6 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
     assert_hard(data)
     assert (data["differences"], data["reruns"], data["troubled_tasks"], data["usage"]["calls"]) == ([], {}, [], 45)
     assert walk.gates == ["ACC-01", "PLN-01/03", "FIN-01", "RPT-01", "RPT-01"] and len(calls) == 45
-
-
-class FlakyLLM:
-    """固定输出的包装: 给定的 (程序, fixture_key) 前 n 次调用返回不是 JSON 的原文 (判断引擎重试 MAX_ATTEMPTS 次仍不过,
-    该对象成为 failed 任务), 之后照常读固定输出. 自测驱动的重跑一路用."""
-
-    def __init__(self, inner: LLMClient, failing: dict[tuple[str, str], int]) -> None:
-        self.inner = inner
-        self.left = dict(failing)
-
-    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
-        key = (req.procedure_id, req.fixture_key)
-        if self.left.get(key, 0) > 0:
-            self.left[key] -= 1
-            return LLMResponse(output=None, raw="not json", model="mock", input_tokens=1, output_tokens=1)
-        return await self.inner.complete(req, output_model)
 
 
 async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> tuple[LiveWalk, dict[str, Any]]:

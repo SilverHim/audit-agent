@@ -62,9 +62,8 @@ from tests.fakes import (
     numbat_confirmation_key,
     numbat_csh05_exception,
 )
-from tests.test_demo_walkthrough_live import FlakyLLM
 from tests.test_fieldwork_judging import failed, passed
-from tests.xero_harness import LayeredMockLLMClient, Ran, offline_deps, run_programs
+from tests.xero_harness import FlakyLLM, LayeredMockLLMClient, Ran, offline_deps, run_programs
 from tests.xero_injection import XeroCase
 
 EID = ENGAGEMENT.id
@@ -554,6 +553,9 @@ async def test_auto_close_attributes_fresh_exception_on_its_first_version() -> N
     assert patch["review_tasks"] == []
 
 
+XERO_D04 = "X-CSH-02-1-D04-1"  # Xero BA-091 回函应计利息未入账 (Xero演示数据集设计)
+
+
 async def assert_d04_unattributed(ran: Ran) -> None:
     """Xero BA-091 判断失败后: 本次的 X-CSH-02-1-D04-1 在状态与存储里都只有 v1 (unattributed), 以它为目标的
     T-X-CSH-02-1-D04-1-v1 待决 (带对象 BA-091); 存储里没有 v2."""
@@ -570,9 +572,6 @@ async def assert_d04_unattributed(ran: Ran) -> None:
     )
     stored = await store.get(eid, AuditException, XERO_D04)
     assert stored is not None and (stored.version, stored.disposition) == (1, ExceptionDisposition.unattributed)
-
-
-XERO_D04 = "X-CSH-02-1-D04-1"  # Xero BA-091 回函应计利息未入账 (Xero演示数据集设计)
 
 
 def flaky_ba091(case: XeroCase) -> FlakyLLM:

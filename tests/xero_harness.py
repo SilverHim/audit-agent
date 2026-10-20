@@ -319,6 +319,23 @@ class LayeredMockLLMClient(LayeredMockLLM):
         return await super().complete(req, output_model)
 
 
+class FlakyLLM:
+    """固定输出的包装: 给定的 (程序, fixture_key) 前 n 次调用返回不是 JSON 的原文 (判断引擎重试 MAX_ATTEMPTS 次仍不过,
+    该对象判断失败: 没有规则例外的成为 failed 任务, 有的转 unattributed), 之后照常读固定输出. 自测驱动的重跑一路,
+    Xero 评测与 CSH-02 自生例外的失败用例 (需求 R322) 用."""
+
+    def __init__(self, inner: LLMClient, failing: dict[tuple[str, str], int]) -> None:
+        self.inner = inner
+        self.left = dict(failing)
+
+    async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
+        key = (req.procedure_id, req.fixture_key)
+        if self.left.get(key, 0) > 0:
+            self.left[key] -= 1
+            return LLMResponse(output=None, raw="not json", model="mock", input_tokens=1, output_tokens=1)
+        return await self.inner.complete(req, output_model)
+
+
 class RoutedLLMClient:
     """(程序, fixture_key) 在 live_keys 中的, 或程序在 programs 中的 (整条程序的调用) 交 live (经 BudgetedLLMClient
     计入 budget, 超限即停发), 其余交 mock. 记下每次的去向与请求全文 (requests: (live 或 mock, 请求))."""

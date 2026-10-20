@@ -788,10 +788,11 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict); 顺序同 findings.exceptions.
         """
         assert isinstance(findings, CashFindings)
-        fresh = {x.id: x for x in findings.exceptions}
-        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes, fresh=fresh.keys())
+        fresh = {x.id: x.version for x in findings.exceptions}
+        patch = judgments_patch(self.deps, ctx, findings.judged, findings.outcomes, fresh=fresh)
+        created = {x.id: x for x in findings.exceptions}
         patch["confirmations"] = findings.confirmations
-        patch["exceptions"] = list((fresh | {x.id: x for x in patch["exceptions"]}).values())
+        patch["exceptions"] = list((created | {x.id: x for x in patch["exceptions"]}).values())
         return patch
 
     def judgments_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:

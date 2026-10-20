@@ -38,13 +38,13 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMClient
-from tests.test_demo_walkthrough_live import FlakyLLM, latest_model_judgments, unresolved_pointers
+from tests.test_demo_walkthrough_live import latest_model_judgments, unresolved_pointers
 from tests.test_xero_injections import Build, offline_build
 from tests.test_xero_injections_db import db_build, live_client
 from tests.tools.live_budget import EVAL_DIR, Budget, summary, write_summary
 from tests.xero_fakes import XERO_RULES
 from tests.xero_flow import offline_runner
-from tests.xero_harness import LayeredMockLLMClient, RoutedLLMClient, XeroHarness, run_programs
+from tests.xero_harness import FlakyLLM, LayeredMockLLMClient, RoutedLLMClient, XeroHarness, run_programs
 from tests.xero_injection import XeroCase
 
 pytestmark = pytest.mark.external  # 都读 Xero 副本
