@@ -11,6 +11,7 @@ from langgraph.types import Command
 
 from backend.agents.base import RunContext
 from backend.agents.concierge import ConciergeAgent
+from backend.agents.concierge.report import fin01_reason, misstatement_inputs, revision_inputs
 from backend.contracts.llm_outputs import ReportDraft
 from backend.contracts.models import (
     AgentId,
@@ -155,6 +156,20 @@ def fixed(opinion: OpinionType) -> dict[ReportSection, str]:
         "auditor_name": NUMBAT_AUDITOR.full_name,
     }
     return {s: t.format(**values) for s, t in deps.library.report_sections(opinion).items()}
+
+
+# ── 分派 (需求 R91) ─────────────────────────────────────────
+
+
+async def test_dispatch_covers_only_registered_programs() -> None:
+    """A10 按程序编号分派: 负责的程序恰为分派表登记的 (现只有 RPT-03); 没登记的程序 (如以后的 RPT-08) 执行时抛
+    NotImplementedError, 不会落到 RPT-03 的逻辑上去起草报告."""
+    agent, ctx, trail = setup()
+    assert agent.procedures == frozenset({"RPT-03"})
+    other = replace(ctx, procedure=ctx.procedure.model_copy(update={"id": "RPT-08"}))
+    with pytest.raises(NotImplementedError, match="RPT-08"):
+        await agent.execute(other)
+    assert trail.entries == []
 
 
 # ── 首稿 ─────────────────────────────────────────
@@ -499,7 +514,7 @@ async def test_node_replay_returns_stored_report_without_llm_or_user_lookup() ->
 
 def test_misstatement_inputs_follow_schedule_order_and_confirmed_sources() -> None:
     """错报按汇总表顺序; 来源判断只取已确认且在状态中的 (各取当前版本), 字段为引用键加提示词要的六个."""
-    agent, ctx, _ = setup()
+    _, ctx, _ = setup()
     second_j = CUTOFF.model_copy(update={"id": "J-SECOND", "version": 7, "conclusion": "second"})
     pending_j = CUTOFF.model_copy(update={"id": "J-PENDING", "review_status": ReviewStatus.pending})
     second_m = MISSTATEMENT.model_copy(update={"id": "M-SECOND", "judgment_id": second_j.id})
@@ -514,7 +529,7 @@ def test_misstatement_inputs_follow_schedule_order_and_confirmed_sources() -> No
         "judgments": [pending_j, CUTOFF, second_j],
     }
 
-    values = agent.misstatement_inputs(replace(ctx, state=state))
+    values = misstatement_inputs(replace(ctx, state=state))
 
     assert [m["id"] for m in values["misstatements"]] == [m.id for m in ordered]
     assert [(j["key"], j["id"], j["version"]) for j in values["judgments"]] == [
@@ -526,20 +541,20 @@ def test_misstatement_inputs_follow_schedule_order_and_confirmed_sources() -> No
 
 
 def test_schedule_misstatement_missing_from_state_raises() -> None:
-    agent, ctx, _ = setup()
+    _, ctx, _ = setup()
     with pytest.raises(KeyError, match=MISSTATEMENT.id):
-        agent.misstatement_inputs(replace(ctx, state=ctx.state | {"misstatements": []}))
+        misstatement_inputs(replace(ctx, state=ctx.state | {"misstatements": []}))
 
 
 def test_fin01_reason_is_last_approval() -> None:
     """FIN-01 理由取最后一条 FIN-01 通过决定的, 不取驳回或其他闸门的."""
-    agent, ctx, _ = setup()
+    _, ctx, _ = setup()
     early = fin01(OpinionType.qualified).model_copy(update={"id": "D-EARLY", "reason": "first approval"})
     last = early.model_copy(update={"id": "D-LAST", "reason": "last approval"})
     reject = early.model_copy(update={"id": "D-REJECT", "reason": "reject", "decision": GateVerdict.reject})
     other = early.model_copy(update={"id": "D-OTHER", "gate": GateId.ACC_01, "reason": "different gate"})
     state = ctx.state | {"gate_decisions": [early, last, reject, other]}
-    assert agent.fin01_reason(replace(ctx, state=state)) == "last approval"
+    assert fin01_reason(replace(ctx, state=state)) == "last approval"
 
 
 async def test_profile_version_owner_and_params_snapshot_sources() -> None:
@@ -642,7 +657,7 @@ async def test_reject_revision_and_sign_on_main_graph(monkeypatch: pytest.Monkey
 
 
 def test_previous_draft_is_current_version_of_previous_revision() -> None:
-    agent, ctx, _ = setup()
+    _, ctx, _ = setup()
     old = report(1, "old version")
     current = old.model_copy(
         update={
@@ -651,7 +666,7 @@ def test_previous_draft_is_current_version_of_previous_revision() -> None:
         }
     )
     state = ctx.state | {"report_versions": [current, old], "gate_decisions": [REJECT]}
-    previous, annotations, addresses = agent.revision_inputs(replace(ctx, state=state), 2)
+    previous, annotations, addresses = revision_inputs(replace(ctx, state=state), 2)
     assert previous == {"opinion": "current opinion", "basis_for_opinion": "current basis"}
     assert annotations[0]["comment"] == REJECT.annotations[0].comment and addresses == REJECT.id
 
