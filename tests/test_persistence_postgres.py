@@ -182,6 +182,10 @@ async def test_load_rules_and_project_isolation(storage):
         party_names=[],
         party_acns=[],
         equity_categories=["share_capital", "retained_earnings", "other_equity"],
+        # GEN-07 (需求 R177): 期后窗口的数据截止日 (Numbat 没有数据集声明, 不设上限), S01, S03 的整体重要性, S01 的天数
+        data_as_of=None,
+        materiality_cents=12000000,
+        match_days=10,
     )
     for path in (
         (library.root / "procedures").glob("*.yaml")

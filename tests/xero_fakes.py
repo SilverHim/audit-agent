@@ -813,6 +813,90 @@ def xero_gen03_rows(keys: Sequence[str], loader: XeroDatasetLoader | None = None
     return rows
 
 
+DIISR_SERVICES = "DIISR - Small Business Services"  # XJ-720 (贷项凭证 1026C) 的摘要
+GEN07_WINDOW_END = "2026-10-17"  # GEN-07 期后窗口的截止日: 期末加 31 天 (10-31) 截到数据截止日 (dataset_traits)
+GEN07_POINTERS = {  # GEN-07 例外的行类型 → (证据种类, 可靠性), 同 SqlRuleEngine 按 judgment_engine.ROW_EVIDENCE
+    "bank_transaction": ("bank", "external_copy"),
+    "journal_entry": ("voucher", "internal_original"),
+}
+
+
+def gen07_exception(
+    run: ProcedureRun,
+    rule_id: str,
+    number: int,
+    source_type: str,
+    source_id: str,
+    amount_cents: int,
+    detail: dict[str, Any],
+) -> AuditException:
+    """GEN-07 一条规则的第 number 条例外, 字段同 SqlRuleEngine 按 GEN-07.yaml 的输出列组装: detail 为 source_type,
+    source_id, amount_cents 之外的列 (最后一列为 window_end), 证据指针指向该行, locator 为这些列名."""
+    detail = detail | {"window_end": GEN07_WINDOW_END}
+    kind, reliability = GEN07_POINTERS[source_type]
+    return AuditException(
+        id=f"X-GEN-07-{run.run_no}-{rule_id}-{number}",
+        version=1,
+        procedure_id="GEN-07",
+        run_id=run.id,
+        rule_id=rule_id,
+        severity={"S01": "medium", "S02": "high", "S03": "medium"}[rule_id],
+        source_ids=[source_id],
+        amount_cents=amount_cents,
+        detail=detail,
+        evidence=[
+            EvidencePointer.model_validate(
+                {
+                    "type": kind,
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "locator": ", ".join(["amount_cents", *detail]),
+                    "reliability": reliability,
+                }
+            )
+        ],
+    )
+
+
+def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
+    """GEN-07 对 Xero 演示的 9 条例外 (需求 R177 验收 5, 设计稿第 5.4 节; 取自连库跑一次的结果, 窗口 10-01 至 10-17):
+    S01 六笔期后大额流水在总账银行科目 ±10 天内没有同额行 (BT-090-0097 只有作废对 XJ-728/XJ-744 的同额行); S02 一笔
+    非常规分录, 即 DIISR 的贷项凭证 1026C (借收入, 贷应收, 不是常规赊销); S03 两笔期后购入的办公家具与电脑."""
+
+    def txn(account: str, day: int, payee: str, reference: str | None) -> dict[str, Any]:
+        day_text = f"2026-10-{day:02d}"
+        return {"bank_account_id": account, "txn_date": day_text, "description": payee, "reference": reference}
+
+    def line(no: str, day: int, account: str, description: str, source_doc: str) -> dict[str, Any]:
+        return {
+            "entry_no": no,
+            "posting_date": f"2026-10-{day:02d}",
+            "account_code": account,
+            "description": description,
+            "source_doc": source_doc,
+        }
+
+    s01 = [
+        ("BT-090-0092", 618750, txn("BA-090", 10, "Ridgeway University", "ORC01025")),
+        ("BT-090-0097", -450000, txn("BA-090", 11, "SMART Agency", "70135 70209")),
+        ("BT-090-0099", 200000, txn("BA-090", 11, "Jakaranda Maple Systems", "DEPOSIT ADV")),
+        ("BT-090-0107", 100000, txn("BA-090", 12, "e-Bank dep", None)),
+        ("BT-090-0130", 150000, txn("BA-090", 15, "e-Bank dep", None)),
+        ("BT-090-0131", 45000, txn("BA-090", 15, "Majestic Contracting", "Sublet RM2031")),
+    ]
+    s03 = [
+        ("XJ-626-2", 630000, line("XJ-626", 4, "710", "Desks, chairs, reception furniture for office", "MKT-08123")),
+        ("XJ-676-2", 196999, line("XJ-676", 11, "720", "Laptop (Tracy)", "PC Complete")),
+    ]
+    return [
+        *(gen07_exception(run, "S01", n, "bank_transaction", *row) for n, row in enumerate(s01, 1)),
+        gen07_exception(
+            run, "S02", 1, "journal_entry", "XJ-720-2", 115500, line("XJ-720", 16, "610", DIISR_SERVICES, "1026C")
+        ),
+        *(gen07_exception(run, "S03", n, "journal_entry", *row) for n, row in enumerate(s03, 1)),
+    ]
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES)
@@ -829,6 +913,7 @@ XERO_RULES: dict[
     "GEN-03": lambda run: RuleResult(
         exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []}
     ),
+    "GEN-07": lambda run: RuleResult(exceptions=xero_gen07_exceptions(run), rows={}),  # 功能 going_concern 打开时才执行
 }
 
 

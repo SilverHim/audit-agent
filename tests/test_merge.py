@@ -933,11 +933,13 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 24 条模板 (含功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, GEN-03, acceptance 的
-    ACC-08 与 planning 的 PLN-15) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了
-    取回方式, 登记的都是状态字段; 两条以上程序声明的共享字段都不是 singleton."""
+    """R85 验收 1-3: 全部模板 (含未启用的) 的 outputs 都在 owner 的写入范围内且登记了取回方式, 其中包含下列 24 条 (含
+    功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, GEN-03, acceptance 的 ACC-08 与 planning 的
+    PLN-15); 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序声明的共享字段都不是
+    singleton."""
     assert output_problems(LIBRARY) == []
-    assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
+    # 集合包含 (X-01): 之后新加的模板 (如 GEN-07, 需求 R177) 由各自的用例核对 outputs
+    assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)}.items() >= {
         "ACC-01": [],
         "ACC-04": ["acceptance_scorecard", "exceptions"],
         "ACC-08": ["engagement_terms", "judgments", "exceptions", "documents"],
@@ -962,7 +964,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "REV-08": ["exceptions"],
         "RPT-01": [],
         "RPT-03": ["report_versions", "review_tasks"],
-    }
+    }.items()
     assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
         "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],
         "CSH-04": [DocumentType.confirmation],
