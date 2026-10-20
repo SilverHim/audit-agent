@@ -7,6 +7,7 @@ live 组 (需求 R124, 设计稿第 8.1 节): 识别能力只由真实模型证�
 两侧都必须通过. 只有被测对象交真实模型, 其余读 fixture; 另标 live (须配 LLM_MODEL 与 LLM_API_KEY, 见
 tests.external.live_llm_settings, 没配时跳过)."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from backend.contracts.models import TrailEntry, TrailKind
 from backend.contracts.ports import LLMClient
 from backend.contracts.services import RuleResult
 from tests.external import live_llm_settings, snapshot_dir, supplements_dir
+from tests.fakes import rev08_populations
 from tests.test_fieldwork_csh02 import assert_d04_unattributed, flaky_ba091
 from tests.test_xero_injections import (
     LLM_INJECTED,
@@ -41,9 +43,18 @@ from tests.test_xero_rules_db import (
     run_rule_programs,
 )
 from tests.tools.live_budget import Budget, report
-from tests.xero_fakes import ORC1026, manifest_documents, xero_uploads
+from tests.xero_fakes import (
+    ORC1026,
+    SNAPSHOT_NAME,
+    XERO_PERIOD,
+    XERO_REV08_WINDOW,
+    manifest_documents,
+    xero_rev08_populations,
+    xero_tables,
+    xero_uploads,
+)
 from tests.xero_harness import LayeredMockLLMClient, XeroHarness, db_deps, request_text, run_programs
-from tests.xero_injection import XeroCase
+from tests.xero_injection import DeleteOp, Patch, SetOp, XeroCase
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
 
@@ -151,6 +162,93 @@ async def test_t4_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
     _, pln07 = results["PLN-07"]
     changes = {x.source_ids[0]: x.amount_cents for x in pln07.exceptions if x.rule_id == "A01"}
     assert len(changes) == 8 and "090" not in changes and changes["610"] == 964950
+
+
+# ── REV-08 被测总体随注入变 (需求 R324 审核 R324-02): 补丁只在副本上执行, 期望值由副本的表经 rev08_populations 算出 ──
+
+ORC1024_RECORD = {  # 补造的 ORC1024 服务完成记录 (delivery_notes.csv 一行)
+    "id": "SR-ORC1024",
+    "delivery_no": "SR-ORC1024",
+    "invoice_no": "ORC1024",
+    "shipped_date": "2026-08-19",
+    "signed_date": "2026-08-19",
+    "signed_by": "Ruth Carmody",
+}
+REFUND_1020 = {  # 期末后退还 ORC1020 的 550.00: 090 账户的负数流水, 参考号含 1020, 记在对账单末尾 (原流水编号不变)
+    "statementLineId": "00000000-0000-5000-8000-000000001020",
+    "postedDate": "2026-10-17",
+    "payee": "Hamilton Smith PTY",
+    "reference": "Refund 1020",
+    "notes": "",
+    "chequeNo": "",
+    "amount": -550.0,
+    "transactionDate": "2026-10-17",
+    "type": "DEBIT",
+    "isReconciled": True,
+    "isDuplicate": False,
+    "isDeleted": False,
+    "payments": [],
+    "bankTransactions": [],
+}
+RECORD_COLUMNS = ("delivery_no", "signed_date", "signed_by")
+# 场景 → (各规则的 (对象数, 金额合计), 与基线总体相同的规则, R02 中 ORC1024 的记录三列)
+REV08_INJECTIONS = {
+    "no_record_orc1024": (
+        [("R01", 5, 935000), ("R02", 6, 990000), ("R03", 5, 935000)],
+        ["R03"],
+        (None, None, None),
+    ),
+    "refund_1020": (
+        [("R01", 6, 990000), ("R02", 6, 990000), ("R03", 5, 935000)],
+        ["R01", "R02", "R03"],
+        ("SR-ORC1024", "2026-08-19", "Ruth Carmody"),
+    ),
+}
+
+
+def rev08_patch(scenario: str) -> Patch:
+    """两个注入: 删去 ORC1024 的服务完成记录; 090 账户对账单末尾加 REFUND_1020 (before 取原快照的对账单行)."""
+    if scenario == "no_record_orc1024":
+        op: DeleteOp | SetOp = DeleteOp(
+            op="delete", file="xero_demo/delivery_notes.csv", row="SR-ORC1024", before=ORC1024_RECORD
+        )
+    else:
+        statements = json.loads((snapshot_dir(SNAPSHOT_NAME) / "bank_statements.json").read_text(encoding="utf-8"))
+        lines = statements["090"]["statements"][0]["statementLines"]
+        op = SetOp(
+            op="set",
+            file="api/bank_statements.json",
+            key="090",
+            field="statements.0.statementLines",
+            before=lines,
+            after=[*lines, REFUND_1020],
+        )
+    return Patch(scenario=scenario, title=scenario, ops=[op])
+
+
+@pytest.mark.parametrize("scenario", REV08_INJECTIONS)
+async def test_rev08_populations_follow_injections(xero_case: Any, tmp_path: Path, scenario: str) -> None:
+    """R324-02: 注入副本上连库的 REV-08 总体等于由副本的表算出的 (rev08_populations). 删去 ORC1024 的记录: R01 为
+    5 张 935000, R02 仍为 6 张 990000 而 ORC1024 的记录三列为空, R03 同基线; 期末后参考号含 1020 的退款 (负数流水):
+    R03 只认正数流水, 三条规则的总体都同基线."""
+    counts, unchanged, orc1024 = REV08_INJECTIONS[scenario]
+    case = xero_case(rev08_patch(scenario))
+    project = await build_xero_project(database_url(), case.snapshot, case.supplements, tmp_path / "rules")
+    _, rev08 = (await run_rule_programs(project))["REV-08"]
+    tables = xero_tables(case.loader)
+    assert rev08.populations == rev08_populations(
+        tables["sales_invoices"],
+        tables["delivery_notes"],
+        tables["bank_transactions"],
+        XERO_PERIOD[1],
+        XERO_REV08_WINDOW,
+    )
+    assert [(p.rule_id, p.count, p.amount_cents) for p in rev08.populations] == counts
+    base = {p.rule_id: p for p in xero_rev08_populations()}
+    assert [p.rule_id for p in rev08.populations if p == base[p.rule_id]] == unchanged
+    [r02] = [p for p in rev08.populations if p.rule_id == "R02"]
+    [item] = [i for i in r02.items if i.fields["invoice_no"] == "ORC1024"]
+    assert tuple(item.fields[c] for c in RECORD_COLUMNS) == orc1024
 
 
 # ── live 组: T1, T4 真实大模型成对断言 (需求 R124); 两个用例的调用上限合计 15 次 ──

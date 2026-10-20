@@ -152,6 +152,7 @@ from backend.contracts.models import (
     RiskItem,
     RuleOutcome,
     RulePopulation,
+    RunPopulation,
     RunStatus,
     RunTrigger,
     ShareholderDirection,
@@ -1733,8 +1734,9 @@ def rev08_populations(
     window_days: int,
 ) -> list[RulePopulation]:
     """REV-08 R01, R02, R03 的被测总体, 按 REV-08.yaml 总体 SQL 的口径由表独立算一遍: 期末前 window_days 天 (两端都含)
-    入账的发票, 按发票 ID; R01 为有服务完成记录的 (每条记录一项, 按记录 ID), R02 为全部 (没有记录的, 记录三列为空),
-    R03 为找得到收款的 (正数流水, 见 receipt_matches), 带收款流水 ID 与收款日 (逗号连接, 按流水 ID) 及收款合计."""
+    入账的发票, 按发票 ID, 每张一项; R01 为有服务完成记录的, R02 为全部, 记录号, 签收日与签收人按记录 ID 逗号连接 (没
+    签收的为空串, 没有记录的三列为空); R03 为找得到收款的 (正数流水, 见 receipt_matches), 带收款流水 ID 与收款日
+    (逗号连接, 按流水 ID) 及收款合计."""
     start = period_end - timedelta(days=window_days)
     window = sorted((i for i in invoices if start <= i.posting_date <= period_end), key=lambda i: i.id)
     recorded: dict[str, list[DeliveryNote]] = {}
@@ -1751,13 +1753,17 @@ def rev08_populations(
         }
         return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
 
-    def with_note(invoice: SalesInvoice, note: DeliveryNote | None) -> PopulationItem:
-        signed = note.signed_date if note is not None else None
+    def with_notes(invoice: SalesInvoice) -> PopulationItem:
+        found = recorded.get(invoice.id, [])
+
+        def joined(values: Iterable[str]) -> str | None:
+            return ",".join(values) if found else None
+
         return item(
             invoice,
-            delivery_no=note.delivery_no if note is not None else None,
-            signed_date=signed.isoformat() if signed is not None else None,
-            signed_by=note.signed_by if note is not None else None,
+            delivery_no=joined(n.delivery_no for n in found),
+            signed_date=joined(n.signed_date.isoformat() if n.signed_date else "" for n in found),
+            signed_by=joined(n.signed_by or "" for n in found),
         )
 
     r03 = []
@@ -1776,8 +1782,8 @@ def rev08_populations(
                 )
             )
     items = {
-        "R01": [with_note(i, n) for i in window for n in recorded.get(i.id, [])],
-        "R02": [with_note(i, n) for i in window for n in recorded.get(i.id, [None])],
+        "R01": [with_notes(i) for i in window if i.id in recorded],
+        "R02": [with_notes(i) for i in window],
         "R03": r03,
     }
     return [
@@ -1790,6 +1796,17 @@ def rev08_populations(
         )
         for rule_id, found in items.items()
     ]
+
+
+def no_population(value: Any) -> bool:
+    """片段或状态的值里没有被测总体 RunPopulation (需求 R324, 逐层看列表与字典): 总体只在 Store, 不进片段与状态."""
+    if isinstance(value, RunPopulation):
+        return False
+    if isinstance(value, dict):
+        return all(no_population(v) for v in value.values())
+    if isinstance(value, list):
+        return all(no_population(v) for v in value)
+    return True
 
 
 @functools.cache

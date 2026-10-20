@@ -34,10 +34,12 @@ from backend.contracts.models import (
     LlmSettings,
     OwnershipGraph,
     PlanStatus,
+    ProcedureRun,
     ProfileSource,
     Reliability,
     ReportStatus,
     RepresentationStatus,
+    RunPopulation,
     TermsCheckStatus,
     TrailEntry,
     TrailKind,
@@ -70,8 +72,11 @@ from tests.fakes import (
     audit_plan,
     compliance_check,
     engagement_terms,
+    finished,
     governance_communication,
     independence_declaration,
+    make_run,
+    numbat_rev08_populations,
     ownership_graph,
     representation_letter,
 )
@@ -668,6 +673,25 @@ async def test_ownership_graph_versions_on_postgres(storage) -> None:
     assert await store.history(e.id, OwnershipGraph, "OWNERSHIP") == [v1, v2]
     assert await store.latest(e.id, OwnershipGraph) == [v2]
     assert await store.get("ENG-OTHER", OwnershipGraph, "OWNERSHIP") is None
+
+
+async def test_run_population_on_postgres(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R324 审核 R324-03: 被测总体 (Numbat REV-08 的三条规则) 与执行记录终态一次写入 procedures 表, 按 ID 读回
+    相等 (规则, 项目与识别字段不丢, 仍是 RunPopulation); 同表按 kind 分开, latest 各取各的; 别的项目读不到
+    (行级安全)."""
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    run = finished(make_run("REV-08"))
+    population = RunPopulation(
+        id="POP-RUN-REV-08-1", run_id=run.id, procedure_id="REV-08", rules=numbat_rev08_populations()
+    )
+    await store.put(e.id, [run, population], actor="A6")
+
+    assert m.OUTPUTS["RunPopulation"].name == "procedures"
+    assert await store.get(e.id, RunPopulation, "POP-RUN-REV-08-1") == population
+    assert await store.latest(e.id, RunPopulation) == [population]
+    assert await store.latest(e.id, ProcedureRun) == [run]
+    assert await store.get("ENG-OTHER", RunPopulation, "POP-RUN-REV-08-1") is None
 
 
 @pytest.mark.parametrize(

@@ -34,7 +34,8 @@ rules:
         AND d.signed_date > CAST(:period_end AS date)
       ORDER BY i.id
     check: {zh: 入账期间正确, en: Recorded in the correct period}
-    # 被测总体 (需求 R324): 窗口内有服务完成记录 (发运单) 的发票, 每条记录一行 (同本规则逐条核对签收日)
+    # 被测总体 (需求 R324): 窗口内有服务完成记录 (发运单) 的发票, 每张一行; 有几条记录时三列按记录 ID 逗号连接, 没签收的
+    # 签收日与签收人为空串 (各列按位对得上)
     population:
       description:
         zh: >-
@@ -45,12 +46,16 @@ rules:
       sql: |
         SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
                i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id,
-               d.delivery_no, d.signed_date, d.signed_by
+               string_agg(d.delivery_no, ',' ORDER BY d.id) FILTER (WHERE d.id IS NOT NULL) AS delivery_no,
+               string_agg(COALESCE(CAST(d.signed_date AS text), ''), ',' ORDER BY d.id)
+                 FILTER (WHERE d.id IS NOT NULL) AS signed_date,
+               string_agg(COALESCE(d.signed_by, ''), ',' ORDER BY d.id) FILTER (WHERE d.id IS NOT NULL) AS signed_by
         FROM sales_invoices i JOIN delivery_notes d ON d.engagement_id = i.engagement_id AND d.invoice_id = i.id
         WHERE i.engagement_id = :eid
           AND i.posting_date BETWEEN CAST(:period_end AS date) - CAST(:window_days AS int)
                                  AND CAST(:period_end AS date)
-        ORDER BY i.id, d.id
+        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id
+        ORDER BY i.id
   - id: R02
     name: 缺发运单或无签收日
     severity: high
@@ -63,18 +68,22 @@ rules:
         AND (d.id IS NULL OR d.signed_date IS NULL)
       ORDER BY i.id, d.id
     check: {zh: 有服务完成记录, en: Service completion record exists}
-    population:  # 窗口内的全部发票; 没有服务完成记录的, 记录的三列为空
+    population:  # 窗口内的全部发票, 每张一行 (列同 R01); 没有服务完成记录的, 记录的三列为空
       description:
         zh: "{{ period_end | days_before(window_days) }} 至 {{ period_end }} 入账的全部销售发票"
         en: "All sales invoices posted from {{ period_end | days_before(window_days) }} to {{ period_end }}"
       sql: |
         SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
                i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id,
-               d.delivery_no, d.signed_date, d.signed_by
+               string_agg(d.delivery_no, ',' ORDER BY d.id) FILTER (WHERE d.id IS NOT NULL) AS delivery_no,
+               string_agg(COALESCE(CAST(d.signed_date AS text), ''), ',' ORDER BY d.id)
+                 FILTER (WHERE d.id IS NOT NULL) AS signed_date,
+               string_agg(COALESCE(d.signed_by, ''), ',' ORDER BY d.id) FILTER (WHERE d.id IS NOT NULL) AS signed_by
         FROM sales_invoices i LEFT JOIN delivery_notes d ON d.engagement_id=i.engagement_id AND d.invoice_id=i.id
         WHERE i.engagement_id=:eid
           AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
-        ORDER BY i.id, d.id
+        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id
+        ORDER BY i.id
   # R03 的收款与发票对应: 流水参考号包含发票号; 发票号为 "字母前缀加纯数字" (如 Xero 的 ORC1026) 时另认参考号里
   # 出现该数字串且前后都不是数字的 (客户付款时常只写数字: "1026", "Invoice 1026"; "10261", "21026" 不算).
   # 带连字符等其他写法的发票号 (Numbat 的 SI-2026-0612) 只按包含发票号对应 (设计稿 v2.1 第 5.1 节, 决定 9)

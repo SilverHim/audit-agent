@@ -396,7 +396,7 @@ async def test_missing_data_fails_whole_run_by_a1(change: str) -> None:
     """发票关联的合同, 或发票指向的分录行 (需求 R100 验收 2) 不在财务数据中: 整次执行失败, 由 A1 建失败任务
     T-RUN-REV-02-1-v1, 不调判断引擎. 抛的错见 test_missing_data_raises."""
     agent, ctx, engine = setup_missing(change)
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and engine.calls == [] and set(patch) == {"procedure_runs", "review_tasks"}
     assert patch["procedure_runs"][0].status is RunStatus.failed
     assert [(t.id, t.kind) for t in patch["review_tasks"]] == [("T-RUN-REV-02-1-v1", TaskKind.failed)]

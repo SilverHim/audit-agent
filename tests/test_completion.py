@@ -136,7 +136,7 @@ async def test_old_checkpoint_replay_blocked_while_later_run_waits(monkeypatch: 
     async def broken(ctx: object) -> None:
         raise RuntimeError("FIN-01 驳回后的 FIN-04 重做失败")
 
-    monkeypatch.setattr(nodes.agents["FIN-04"], "run", broken)
+    monkeypatch.setattr(nodes.agents["FIN-04"], "outcome", broken)  # 节点经 outcome 调 Agent (需求 R324)
     waiting = completion_graph(nodes)
     await waiting.ainvoke(apply_patch(before_first, first), GraphRunner.config(EID))
     run2 = await store.get(EID, ProcedureRun, "RUN-FIN-04-2")

@@ -408,7 +408,7 @@ async def test_retry_after_parse_error() -> None:
 
 async def handed_to_human(agent: ConciergeAgent, ctx: RunContext) -> dict[str, Any]:
     """经 A1 的 run_agent: 校验失败时整次执行失败, 建以执行为目标的 failed 任务 (无对象, 只能 rerun)."""
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and "report_versions" not in patch
     [run] = patch["procedure_runs"]
     assert run.id == "RUN-RPT-03-1" and run.status is RunStatus.failed

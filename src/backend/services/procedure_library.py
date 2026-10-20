@@ -213,7 +213,7 @@ class ProcedureLibrary:
             raise ValueError(f"规则被测总体的写法不对: {'; '.join(wrong)}")
         wrong = text_problems(templates)
         if wrong:
-            raise ValueError(f"范围说明与总体说明的占位不对: {'; '.join(wrong)}")
+            raise ValueError(f"范围说明, 总体说明与检查项名称的写法不对: {'; '.join(wrong)}")
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
@@ -531,9 +531,9 @@ def population_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
 
 
 def text_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
-    """带参数占位的文字 (scope 与规则总体的 description, 需求 R324) 的写法问题 (消息含程序编号与位置): 语法错, 用了
-    不认识的过滤器 (条件块里的也查, Jinja2 编译时不查它们), 或占位用了 params 以外的变量. zh 与 en 都要给由字段校验
-    保证 (LocalizedText)."""
+    """程序 YAML 里文字的写法问题 (需求 R324, 消息含程序编号与位置). 带参数占位的 scope 与规则总体的 description:
+    语法错, 用了不认识的过滤器或检验 (test, 条件块里的也查: Jinja2 编译时不查它们), 或占位用了 params 以外的变量;
+    检查项名称 check 不渲染, 不能写占位 (语法块, 变量或注释). zh 与 en 都要给由字段校验保证 (LocalizedText)."""
     problems = []
     for t in templates:
         texts = [
@@ -552,10 +552,27 @@ def text_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
                 filters = sorted({f.name for f in tree.find_all(nodes.Filter)} - set(TEXT_ENV.filters))
                 if filters:
                     problems.append(f"{t.id}.{where}.{lang} 用了不认识的过滤器 {', '.join(filters)}")
+                tests = sorted({x.name for x in tree.find_all(nodes.Test)} - set(TEXT_ENV.tests))
+                if tests:
+                    problems.append(f"{t.id}.{where}.{lang} 用了不认识的检验 {', '.join(tests)}")
                 unknown = sorted(meta.find_undeclared_variables(tree) - set(t.params))
                 if unknown:
                     problems.append(f"{t.id}.{where}.{lang} 的占位不在 params 内: {', '.join(unknown)}")
+        for rule in t.rules:
+            if rule.check is None:
+                continue
+            for lang, source in (("zh", rule.check.zh), ("en", rule.check.en)):
+                if has_markup(source):
+                    problems.append(f"{t.id}.{rule.id}.check.{lang} 不渲染, 不能写占位")
     return problems
+
+
+def has_markup(source: str) -> bool:
+    """文字里有没有 Jinja2 的语法块, 变量或注释 (词法上只有纯文字才算没有; 写坏了的标记也算有)."""
+    try:
+        return any(kind != "data" for _, kind, _ in TEXT_ENV.lex(source))
+    except TemplateSyntaxError:
+        return True
 
 
 def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:

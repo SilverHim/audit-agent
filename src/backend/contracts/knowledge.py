@@ -2,7 +2,7 @@
 
 from typing import Any, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.contracts.data import DataInput, TableKind
 from backend.contracts.models import (
@@ -42,10 +42,17 @@ class ProcedureInputs(Model):
 
 
 class LocalizedText(Model):
-    """中英两种写法的文字 (需求 R324), 两种都须给出, 不能为空."""
+    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改)."""
 
-    zh: str = Field(min_length=1)  # 中文
-    en: str = Field(min_length=1)  # 英文
+    zh: str  # 中文
+    en: str  # 英文
+
+    @field_validator("zh", "en")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("不能为空或只有空白")
+        return value
 
 
 class RulePopulationSpec(Model):

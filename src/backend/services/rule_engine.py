@@ -14,7 +14,7 @@ emit exception 的规则写了 population 时另执行其 SQL (参数同规则 S
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, get_args
 
 from pydantic_core import to_jsonable_python
 
@@ -27,6 +27,7 @@ from backend.contracts.models import (
     ProcedureRun,
     RuleOutcome,
     RulePopulation,
+    SourceType,
 )
 from backend.contracts.ports import FinancialDataStore
 from backend.contracts.services import RuleResult
@@ -34,6 +35,7 @@ from backend.services.judgment_engine import ROW_EVIDENCE
 from backend.services.populations import total_cents
 
 DEFAULT_REASON = "前置检查未通过"  # 命中的检查没有给出理由 (reason 列为空或没有) 时的理由
+ROW_TYPES = frozenset(get_args(SourceType))  # 认识的行类型, 被测总体的对象类型只取这些 (rule_population)
 EXTRA_POINTERS = "extra_pointers"  # 附加指针列: JSON 数组 (或其文本), 每项 {source_type, source_id, locator 可选}
 
 
@@ -74,12 +76,14 @@ def extra_pointers(value: Any) -> list[EvidencePointer]:
 
 
 def rule_population(rule_id: str, rows: Sequence[Mapping[str, Any]]) -> RulePopulation:
-    """一条规则的被测总体 (需求 R324): 每行一个被测项目. 各行 source_type 列相同时为对象类型 (不认识的类型校验抛
-    ValidationError); 不同时 (如 GEN-03 C01 合并分录与流水) 对象类型为空, 各行的 source_type 留在识别字段里.
-    source_id 列为行 ID (没有该列时取 id 列, emit rows 的规则多以 id 返回行 ID), amount_cents 列为金额, 其余列为识别
-    字段 (JSON 形式, 日期成 ISO 文本). 金额合计见 populations.total_cents."""
+    """一条规则的被测总体 (需求 R324): 每行一个被测项目. 各行 source_type 列相同且是认识的行类型 (SourceType) 时为
+    对象类型; 不同 (如 GEN-03 C01 合并分录与流水), 不认识或没有该列时对象类型为空, 各行的 source_type 原样留在识别字段
+    里 (不报错: emit rows 的规则返回什么列由程序自定). source_id 列为行 ID (没有该列时取 id 列, emit rows 的规则多以 id
+    返回行 ID), amount_cents 列为金额, 其余列为识别字段 (JSON 形式, 日期成 ISO 文本). 金额合计见
+    populations.total_cents."""
     types = {row.get("source_type") for row in rows}
-    source_type = types.pop() if len(types) == 1 else None
+    only = next(iter(types)) if len(types) == 1 else None
+    source_type = only if only in ROW_TYPES else None
     items = []
     for row in rows:
         key = "source_id" if "source_id" in row else "id"

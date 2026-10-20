@@ -9,13 +9,12 @@ REV-08 换成真实的 A6, 规则引擎为预置 NUMBAT_RULES 的 FakeRuleEngine
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import yaml
-from pydantic import ValidationError
 
-from backend.agents.base import RunContext
+from backend.agents.base import ProcedureAgent, RunContext
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.risk_assessor import RiskAssessorAgent
 from backend.contracts.errors import RuleError
@@ -24,7 +23,6 @@ from backend.contracts.models import (
     AgentId,
     DocumentType,
     PopulationItem,
-    Procedure,
     ProcedureRun,
     RuleOutcome,
     RulePopulation,
@@ -33,7 +31,7 @@ from backend.contracts.models import (
     TaskKind,
 )
 from backend.contracts.services import RuleResult
-from backend.contracts.state import EngagementState, initial_state
+from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.nodes import GraphNodes, run_population
 from backend.services.populations import distinct_items, extracted_documents, judged_subjects, total_cents
@@ -50,6 +48,7 @@ from tests.fakes import (
     finished,
     knowledge_library,
     make_run,
+    no_population,
     numbat_rev08_exception,
     numbat_rev08_populations,
 )
@@ -176,6 +175,11 @@ async def test_population_sql_error_is_a_rule_error() -> None:
                 source_type=None,
             ),
         ),
+        # 各行类型相同而不是认识的行类型: 同各行不同, 对象类型为空, 原值留在识别字段里, 不报错 (审核 R324-04)
+        (
+            [{"source_type": "contract", "id": "CON-1"}],
+            recorded("R", item("CON-1", None, source_type="contract"), source_type=None),
+        ),
         # 有一项没有金额, 合计为空 (合计不全)
         (
             [
@@ -196,12 +200,6 @@ async def test_population_sql_error_is_a_rule_error() -> None:
 )
 def test_rule_population_reads_standard_columns(rows: list[dict[str, Any]], expected: RulePopulation) -> None:
     assert rule_population("R", rows) == expected
-
-
-def test_rule_population_rejects_unknown_row_type() -> None:
-    """对象类型不认识 (同例外行的 row_pointer) 时校验报错, 由引擎包成 RuleError."""
-    with pytest.raises(ValidationError, match="source_type"):
-        rule_population("R", [{"source_type": "document", "source_id": "DOC-1"}])
 
 
 # ── 纯函数: 合计, 去重与对象清单 (验收 1, 4) ──
@@ -271,38 +269,68 @@ def test_extracted_documents_by_type_and_status() -> None:
 # ── 节点: 写入时机 (验收 3) ──
 
 
-def context(procedure_id: str, results: list[RuleResult]) -> RunContext:
-    template = knowledge_library(KNOWLEDGE).load(procedure_id)
-    procedure = Procedure(
-        id=procedure_id, phase=template.phase, template_commit="x", autonomy_level=template.autonomy_level
-    )
-    ctx = RunContext(ENGAGEMENT, procedure, template, make_run(procedure_id), initial_state(ENGAGEMENT, [procedure], 1))
-    ctx.rule_results.extend(results)
-    return ctx
-
-
-ONE = RuleResult(exceptions=[], rows={}, populations=[RulePopulation(rule_id="R01")])
+ONE = [RulePopulation(rule_id="R01")]
 
 
 @pytest.mark.parametrize(
-    ("procedure_id", "results", "status", "written"),
+    ("procedure_id", "populations", "status", "written"),
     [
-        ("REV-08", [ONE], RunStatus.succeeded, True),
-        ("REV-08", [ONE], RunStatus.failed, False),  # 失败的执行 (含 A1 代写的失败片段) 不写
-        ("REV-08", [], RunStatus.succeeded, False),  # 没经规则引擎 (如脚本 Agent)
-        ("REV-02", [ONE], RunStatus.succeeded, False),  # 判断程序: 对象清单由 Store 推出, 不另存
-        ("PLN-01", [ONE], RunStatus.succeeded, False),  # 闸门程序 (engine manual) 取数用规则引擎, 也不写
+        ("REV-08", ONE, RunStatus.succeeded, True),
+        ("REV-08", [], RunStatus.succeeded, True),  # 规则都没执行 (检查命中) 也写, 总体为空列表
+        ("REV-08", ONE, RunStatus.failed, False),  # 失败的执行 (含 A1 代写的失败片段) 不写
+        ("REV-08", None, RunStatus.succeeded, False),  # 没经规则引擎 (如脚本 Agent)
+        ("REV-02", ONE, RunStatus.succeeded, False),  # 判断程序: 对象清单由 Store 推出, 不另存
+        ("PLN-01", ONE, RunStatus.succeeded, False),  # 闸门程序 (engine manual) 取数用规则引擎, 也不写
     ],
 )
 def test_run_population_only_for_succeeded_rule_programs(
-    procedure_id: str, results: list[RuleResult], status: RunStatus, written: bool
+    procedure_id: str, populations: list[RulePopulation] | None, status: RunStatus, written: bool
 ) -> None:
-    ctx = context(procedure_id, results)
-    population = run_population(ctx, {"procedure_runs": [finished(ctx.run, status)]})
-    expected = RunPopulation(
-        id=f"POP-RUN-{procedure_id}-1", run_id=f"RUN-{procedure_id}-1", procedure_id=procedure_id, rules=ONE.populations
+    run = finished(make_run(procedure_id), status)
+    population = run_population(knowledge_library(KNOWLEDGE).load(procedure_id), run, populations)
+    if not written:
+        assert population is None
+        return
+    assert population == RunPopulation(
+        id=f"POP-RUN-{procedure_id}-1", run_id=f"RUN-{procedure_id}-1", procedure_id=procedure_id, rules=populations
     )
-    assert population == (expected if written else None)
+
+
+class FixedFindings(ProcedureAgent[Any]):
+    """Agent 的 execute 交回给定的原始发现, interpret 只把执行置成功."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A6
+    procedures: ClassVar[frozenset[str]] = frozenset()
+
+    def __init__(self, deps: Any, findings: Any) -> None:
+        super().__init__(deps)
+        self.findings = findings
+
+    async def execute(self, ctx: RunContext) -> Any:
+        return self.findings
+
+    async def interpret(self, ctx: RunContext, findings: Any) -> StatePatch:
+        return {"procedure_runs": [finished(ctx.run)]}
+
+
+@pytest.mark.parametrize(
+    ("findings", "expected"),
+    [
+        (RuleResult(exceptions=[], rows={}, populations=ONE), ONE),
+        (RuleResult(exceptions=[], rows={}), []),  # 规则都没执行: 空列表, 不是空值
+        ({"judged": []}, None),  # 原始发现不是规则引擎的结果 (判断, 抽取, 外部查询)
+    ],
+    ids=["rules", "none_executed", "not_rules"],
+)
+async def test_outcome_hands_back_rule_populations(findings: Any, expected: list[RulePopulation] | None) -> None:
+    """ProcedureAgent.outcome 交回片段, 原始发现为规则引擎的结果 (RuleResult) 时另交回其被测总体; run 给同一个片段."""
+    nodes, _, state = await assembled()
+    agent = FixedFindings(nodes.deps, findings)
+    procedure = state["procedure_pack"][0]
+    ctx = RunContext(ENGAGEMENT, procedure, nodes.deps.library.load(procedure.id), make_run(procedure.id), state)
+    output = await agent.outcome(ctx)
+    assert output.populations == expected
+    assert await agent.run(ctx) == output.patch
 
 
 async def staged_rev08(rules: FakeRuleEngine | None = None) -> tuple[GraphNodes, FakeOutputStore, EngagementState]:
@@ -319,20 +347,22 @@ def numbat_population(run_id: str = "RUN-REV-08-1") -> RunPopulation:
     return RunPopulation(id=f"POP-{run_id}", run_id=run_id, procedure_id="REV-08", rules=numbat_rev08_populations())
 
 
-def no_population(value: Any) -> bool:
-    """片段或状态的值里没有 RunPopulation (逐层看列表与字典)."""
-    if isinstance(value, RunPopulation):
-        return False
-    if isinstance(value, dict):
-        return all(no_population(v) for v in value.values())
-    if isinstance(value, list):
-        return all(no_population(v) for v in value)
-    return True
+def population_writers(store: FakeOutputStore) -> list[tuple[str, str]]:
+    """之后经 store.put 写入的被测总体的 (ID, 写入者); 假存储不记写入者, 这里记下 put 的参数."""
+    seen: list[tuple[str, str]] = []
+    put = store.put
+
+    async def recording(eid: str, objs: Any, *, actor: str) -> list[Any]:
+        seen.extend((o.id, actor) for o in objs if isinstance(o, RunPopulation))
+        return await put(eid, objs, actor=actor)
+
+    store.put = recording  # type: ignore[method-assign]
+    return seen
 
 
 async def test_p2_population_rides_the_staged_item_into_fan_in() -> None:
     """验收 3 (P2): 暂存项带 POP-RUN-REV-08-1 (Numbat 的窗口六十张发票, R03 没有找得到收款的), 片段里没有; 暂存项
-    经检查点读回后总体不变; fan_in 与执行记录终态同一次提交写入, 返回的片段不带总体, 暂存区清空."""
+    经检查点读回后总体不变; fan_in 与执行记录终态同一次提交写入, 写入者为执行它的 A6; 返回的片段不带总体, 暂存区清空."""
     nodes, store, state = await staged_rev08()
     [staged] = state["staged_results"]
     assert staged["population"] == numbat_population()
@@ -346,12 +376,13 @@ async def test_p2_population_rides_the_staged_item_into_fan_in() -> None:
     [back] = serde.loads_typed(serde.dumps_typed({"staged_results": [staged]}))["staged_results"]
     assert back == staged and isinstance(back["population"], RunPopulation)
     assert isinstance(back["population"].rules[0].items[0], PopulationItem)
-    commits = len(store.commits)
+    commits, writers = len(store.commits), population_writers(store)
 
     patch = await nodes.fan_in(state)
 
     [commit] = store.commits[commits:]
     assert [o for o in commit if isinstance(o, RunPopulation)] == [numbat_population()]
+    assert writers == [("POP-RUN-REV-08-1", AgentId.A6)]
     assert [o.id for o in commit if isinstance(o, ProcedureRun)] == ["RUN-REV-08-1"]
     assert await store.get(EID, RunPopulation, "POP-RUN-REV-08-1") == numbat_population()
     assert no_population(patch) and patch["staged_results"] is None
@@ -395,17 +426,18 @@ async def test_failed_executions_write_no_population() -> None:
 
 async def test_attempt_writes_population_with_the_terminal_run() -> None:
     """验收 3 (P2 以外): PLN-07 由真实的 A4 执行 (attempt), 总体 POP-RUN-PLN-07-1 与执行记录终态, 程序新版本同一次
-    提交; A01 没写总体 SQL 记为未记录, A02, A03 以返回行为总体; 返回的片段不带总体."""
+    提交, 写入者为执行它的 A4; A01 没写总体 SQL 记为未记录, A02, A03 以返回行为总体; 返回的片段不带总体."""
     nodes, store, state = await assembled()
     nodes.agents["PLN-07"] = RiskAssessorAgent(nodes.deps)
     engagement = ENGAGEMENT.model_copy(update={"client_profile_version": NUMBAT_PROFILE.version})
-    commits = len(store.commits)
+    commits, writers = len(store.commits), population_writers(store)
 
     patch, _ = await nodes.attempt(state, engagement, "PLN-07")
 
     [commit] = store.commits[commits:]
     [population] = [o for o in commit if isinstance(o, RunPopulation)]
     assert (population.id, population.run_id) == ("POP-RUN-PLN-07-1", "RUN-PLN-07-1")
+    assert writers == [("POP-RUN-PLN-07-1", AgentId.A4)]
     assert [(r.rule_id, r.count) for r in population.rules] == [("A01", None), ("A02", 2), ("A03", 12)]
     assert {type(o).__name__ for o in commit} >= {"ProcedureRun", "Procedure", "AnalyticsResult"}
     assert no_population(patch)

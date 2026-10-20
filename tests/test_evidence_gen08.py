@@ -803,7 +803,7 @@ async def test_client_not_penetrable_becomes_failed_run_and_rerun_task() -> None
     for records in ({}, {NUMBAT_PROFILE.abn: no_acn}):
         deps = make_deps(FakeRegistry(records), FakeTrail(), features=FEATURES)
         agent, ctx = EvidenceAgent(deps), make_ctx(deps, "GEN-08")
-        patch, writer = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
+        patch, writer, _ = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
         [run] = patch["procedure_runs"]
         [task] = patch["review_tasks"]
         assert writer is AgentId.A1 and (run.id, run.status) == ("RUN-GEN-08-1", RunStatus.failed)

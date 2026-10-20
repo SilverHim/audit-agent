@@ -67,7 +67,7 @@ async def test_rule_error_becomes_failed_run_and_rerun_task_by_a1() -> None:
     with pytest.raises(RuleError) as caught:
         await agent.run(ctx)
     assert caught.value is error
-    patch, writer = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1
     [run] = patch["procedure_runs"]
     [task] = patch["review_tasks"]

@@ -38,6 +38,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     ReviewRecord,
     ReviewTask,
+    RulePopulation,
     RunPopulation,
     RunStatus,
     RunTrigger,
@@ -109,21 +110,16 @@ def population_id(run_id: str) -> str:
     return f"POP-{run_id}"
 
 
-def run_population(ctx: RunContext, patch: StatePatch) -> RunPopulation | None:
-    """一次执行要写入 Store 的被测总体 (需求 R324): 规则程序 (engine rule) 经规则引擎执行 (ctx.rule_results 非空) 且
-    片段中本次执行为成功终态时, 为规则引擎记下的各规则总体; 其余为空: 执行失败 (含 A1 代写的失败片段), 不经规则引擎
-    (如测试的脚本 Agent), 判断与抽取程序 (对象清单由 Store 推出, services.populations)."""
-    if ctx.template.engine is not Engine.rule or not ctx.rule_results:
+def run_population(
+    template: ProcedureTemplate, run: ProcedureRun, populations: list[RulePopulation] | None
+) -> RunPopulation | None:
+    """一次执行要写入 Store 的被测总体 (需求 R324): 规则程序 (engine rule) 经规则引擎执行 (populations 不为空, 见
+    agents.base.AgentOutput) 且 run (片段中本次执行的终态) 成功时, 为规则引擎记下的各规则总体; 其余为空: 执行失败 (含
+    A1 代写的失败片段), 不经规则引擎 (如测试的脚本 Agent), 判断, 抽取与闸门程序 (对象清单由 Store 推出,
+    services.populations)."""
+    if template.engine is not Engine.rule or populations is None or run.status is not RunStatus.succeeded:
         return None
-    run = next(r for r in patch["procedure_runs"] if r.id == ctx.run.id)
-    if run.status is not RunStatus.succeeded:
-        return None
-    return RunPopulation(
-        id=population_id(run.id),
-        run_id=run.id,
-        procedure_id=run.procedure_id,
-        rules=[p for result in ctx.rule_results for p in result.populations],
-    )
+    return RunPopulation(id=population_id(run.id), run_id=run.id, procedure_id=run.procedure_id, rules=populations)
 
 
 def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
@@ -605,18 +601,21 @@ class GraphNodes:
         check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
         check_inputs(deps.library, NODE_PROCEDURES["p1_ingest"])  # 模板 inputs 的写法 (需求 R272)
 
-    async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
-        """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
+    async def run_agent(
+        self, agent: ProcedureAgent[Any], ctx: RunContext
+    ) -> tuple[StatePatch, AgentId, list[RulePopulation] | None]:
+        """调 Agent (ProcedureAgent.outcome) 并校验它的片段, 返回 (要写入的片段, 写入者, 被测总体).
 
-        正常时为 Agent 的片段与写入者 (writer_of). Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
-        返回 A1 代写的失败片段 (fail_run) 与 A1. failure_reason 为 "异常类名: 异常文本",
-        校验不过为 "merge_rejected: 原因".
+        正常时为 Agent 的片段, 写入者 (writer_of) 与规则引擎记下的被测总体 (不经规则引擎为空, 需求 R324). Agent 抛异常
+        (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃, 返回 A1 代写的失败片段 (fail_run), A1 与空的总体.
+        failure_reason 为 "异常类名: 异常文本", 校验不过为 "merge_rejected: 原因".
         LangGraph 的中断等控制流信号 (GraphBubbleUp) 不算失败, 照常抛出.
         """
         writer = writer_of(ctx.template, agent)
         procedure_id, run_id = ctx.run.procedure_id, ctx.run.id
         try:
-            patch = await agent.run(ctx)
+            output = await agent.outcome(ctx)
+            patch = output.patch
             if manual_program(ctx.template):  # 人工程序的执行片段是派发片段 (需求 R92)
                 check_dispatch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state)
             else:
@@ -631,8 +630,8 @@ class GraphNodes:
         except Exception as e:
             reason = f"{type(e).__name__}: {e}"
         else:
-            return patch, writer
-        return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
+            return patch, writer, output.populations
+        return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1, None
 
     async def perform(
         self, state: EngagementState, engagement: Engagement, procedure_id: str, instance: str | None = None
@@ -674,8 +673,9 @@ class GraphNodes:
             ctx = RunContext(
                 engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
             )
-            patch, writer = await self.run_agent(agent, ctx)
-            population = run_population(ctx, patch)
+            patch, writer, populations = await self.run_agent(agent, ctx)
+            ended = next(r for r in patch["procedure_runs"] if r.id == procedure_run.id)
+            population = run_population(template, ended, populations)
         else:
             patch = await stored_outputs(self.deps, engagement.id, template, stored_run)
             # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误

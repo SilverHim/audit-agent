@@ -63,11 +63,10 @@ from backend.services.data_service import DataService
 from backend.services.features import BASELINE
 from backend.services.populations import distinct_items, judged_subjects, total_cents
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, wait_idle
+from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, no_population, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
 from tests.test_e2e_mock import Demo, assert_pointers_resolve, real_storage, trail_of
-from tests.test_rule_engine import no_population
 from tests.xero_fakes import (
     XERO17_CONTRACTS,
     XERO17_FEATURES,

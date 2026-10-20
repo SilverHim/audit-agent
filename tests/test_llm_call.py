@@ -441,7 +441,7 @@ async def test_trail_failure_becomes_failed_run() -> None:
                 "CON-001",
             )
 
-    patch, writer = await GraphNodes(deps, parallel_cap=2).run_agent(
+    patch, writer, _ = await GraphNodes(deps, parallel_cap=2).run_agent(
         CallingAgent(deps, lambda ctx: {}), make_ctx(deps, "DOC-04")
     )
     assert writer is AgentId.A1

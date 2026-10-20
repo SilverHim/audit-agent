@@ -524,7 +524,7 @@ async def test_failure_marks_fresh_exception_on_its_first_version(
     FakeStore 不报 VersionConflict, 存的就是这一版 (函证的前两版不在这个存储里, 不写)."""
     outcomes = {account: failed("unattributed") for account in ("BA-01", "BA-02")}
     agent, ctx, _ = setup(confirmations, outcomes=outcomes, exceptions=[])
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A6, patch["procedure_runs"][0].failure_reason
     assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [
         (fresh, 1, ExceptionDisposition.unattributed)
@@ -602,7 +602,7 @@ async def test_patch_summary_and_merge_check() -> None:
         "procedure_runs": [finished(make_run("CSH-05"))],
     }
     ctx = RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A6, patch["procedure_runs"][0].failure_reason
     assert [x.id for x in patch["exceptions"]] == ["X-CSH-02-1-D01-1"]
     assert [(c.id, c.version) for c in patch["confirmations"]] == [("C-BA-01", 3), ("C-BA-02", 3)]

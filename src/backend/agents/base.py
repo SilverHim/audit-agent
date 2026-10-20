@@ -16,6 +16,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     RuleOutcome,
+    RulePopulation,
     RunStatus,
 )
 from backend.contracts.ports import (
@@ -90,9 +91,15 @@ class RunContext:
     template: ProcedureTemplate  # 该程序的模板, 来自程序 YAML
     run: ProcedureRun  # 本次执行记录, 状态为 running
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
-    # 本次执行规则引擎的结果, 由 run_rules 按调用顺序追加 (需求 R324): 规则程序成功执行后, 节点据其中的被测总体建
-    # RunPopulation, 与执行记录终态同一事务写入 Store (nodes.run_population). 总体不进片段, 片段只含状态字段
-    rule_results: list[RuleResult] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AgentOutput:
+    """Agent 一次执行的产出, 节点入口 ProcedureAgent.outcome 的返回: 要并入编排状态的片段, 与规则引擎记下的被测总体
+    (需求 R324). 总体不是状态字段, 不进片段; 节点只给规则程序的成功执行写 RunPopulation (nodes.run_population)."""
+
+    patch: StatePatch  # 片段, 同 run 的返回
+    populations: list[RulePopulation] | None  # 原始发现为规则引擎的结果 (RuleResult) 时为其 populations, 否则为空
 
 
 @runtime_checkable
@@ -143,12 +150,9 @@ def finish_run(run: ProcedureRun, ended_at: datetime, outcomes: Sequence[RuleOut
 
 
 async def run_rules(deps: AgentDeps, ctx: RunContext) -> RuleResult:
-    """执行程序 YAML 中的规则, 参数取本次执行的参数快照, 结果另记进 ctx.rule_results (节点据此写被测总体, 需求
-    R324). RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A4 的 PLN-07, A5 的 GEN-07, A6 的 REV-08, CSH-05,
-    GEN-05) 登记它作执行, A4 的 PLN-01 与 A6 的混合程序取规则部分也用它."""
-    result = await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
-    ctx.rule_results.append(result)
-    return result
+    """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A5
+    的 GEN-07, A6 的 REV-08, CSH-05, GEN-05) 登记它作执行, A6 的混合程序取规则部分也用它."""
+    return await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
 
 def rule_patch(ctx: RunContext, findings: object) -> StatePatch:
@@ -163,7 +167,7 @@ class ProcedureAgent[F](ABC):
     """执行审计程序的 Agent 的抽象基类, 对应设计规格 5.3 的三步: 选程序, 执行, 解读.
 
     子类声明编号与负责的程序, 实现 execute 与 interpret; F 是 execute 产出的原始发现类型.
-    run 是模板方法, 子类不覆写.
+    outcome 与 run 是模板方法, 子类不覆写: 节点调 outcome (片段与被测总体), 只要片段的地方调 run.
     """
 
     agent_id: ClassVar[AgentId]  # 智能体编号, 子类给值
@@ -186,7 +190,13 @@ class ProcedureAgent[F](ABC):
     async def interpret(self, ctx: RunContext, findings: F) -> StatePatch:
         """把原始发现解读为要并入编排状态的片段. procedure_runs 须含 ctx.run 的终态 (succeeded 或 failed)."""
 
-    async def run(self, ctx: RunContext) -> StatePatch:
-        """编排节点调用的唯一入口: 先 execute, 再 interpret."""
+    async def outcome(self, ctx: RunContext) -> AgentOutput:
+        """编排节点调用的入口: 先 execute, 再 interpret; 原始发现是规则引擎的结果 (RuleResult) 时另交回其被测总体
+        (需求 R324)."""
         findings = await self.execute(ctx)
-        return await self.interpret(ctx, findings)
+        patch = await self.interpret(ctx, findings)
+        return AgentOutput(patch, findings.populations if isinstance(findings, RuleResult) else None)
+
+    async def run(self, ctx: RunContext) -> StatePatch:
+        """只要片段时的入口 (测试与直接调用 Agent 的地方): outcome 的片段."""
+        return (await self.outcome(ctx)).patch

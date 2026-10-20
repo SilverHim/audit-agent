@@ -374,7 +374,7 @@ async def test_fan_in_status_follows_outcome(auto_close: bool) -> None:
         ctx.engagement.id, [*state["procedure_pack"], *state["procedure_runs"], X1, X2], actor=AgentId.A1
     )
     nodes = GraphNodes(agent.deps, parallel_cap=2)
-    patch, writer = await nodes.run_agent(agent, ctx)
+    patch, writer, _ = await nodes.run_agent(agent, ctx)
     assert writer is AgentId.A6
     staged = {"procedure_id": ctx.procedure.id, "run_id": ctx.run.id, "writer": writer, "patch": patch}
     merged = apply_patch(state, await nodes.fan_in(state | {"staged_results": [staged]}))  # type: ignore[arg-type]
@@ -399,7 +399,7 @@ async def test_same_exception_for_two_subjects_rejected_by_merge_check() -> None
         "procedure_runs": [finished(make_run("REV-08"))],
     }
     ctx = RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and "merge_rejected" in (patch["procedure_runs"][0].failure_reason or "")
 
 
@@ -421,5 +421,5 @@ async def test_patch_passes_merge_check() -> None:
         "procedure_runs": [finished(make_run("REV-08"))],
     }
     ctx = RunContext(ctx.engagement, ctx.procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A6, patch["procedure_runs"][0].failure_reason

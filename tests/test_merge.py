@@ -1050,7 +1050,7 @@ async def test_run_agent_checks_template_outputs() -> None:
     def with_confirmations(ctx: Any) -> StatePatch:
         return {"confirmations": [], "procedure_runs": [finished(ctx.run)]}
 
-    patch, writer = await nodes.run_agent(ScriptA6(deps, with_confirmations), make_ctx(deps, "REV-02"))
+    patch, writer, _ = await nodes.run_agent(ScriptA6(deps, with_confirmations), make_ctx(deps, "REV-02"))
     assert writer is AgentId.A1 and "confirmations" not in patch
     [run] = patch["procedure_runs"]
     assert (run.status, run.failure_reason) == (RunStatus.failed, "merge_rejected: REV-02 未声明产出 confirmations")
@@ -1067,7 +1067,7 @@ async def test_a1_failure_patch_not_limited_by_outputs() -> None:
 
     ctx = make_ctx(deps, "REV-08")
     assert "review_tasks" not in ctx.template.outputs
-    patch, writer = await nodes.run_agent(ScriptA6(deps, broken), ctx)
+    patch, writer, _ = await nodes.run_agent(ScriptA6(deps, broken), ctx)
     assert writer is AgentId.A1
     [failed] = patch["review_tasks"]
     assert (failed.kind, failed.procedure_id) == (TaskKind.failed, "REV-08")

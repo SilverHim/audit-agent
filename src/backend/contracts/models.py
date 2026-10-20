@@ -993,7 +993,8 @@ class RulePopulation(Model):
     count 与 amount_cents 为 0."""
 
     rule_id: str  # 规则编号, 如 R01
-    source_type: SourceType | None = None  # 对象类型; 未记录, 返回行没有 source_type 列或没有项目时为空
+    # 对象类型; 未记录, 没有项目, 返回行没有 source_type 列, 各行不同或不是认识的行类型时为空 (原值留在识别字段里)
+    source_type: SourceType | None = None
     items: list[PopulationItem] = []  # 各被测项目, 按 SQL 返回的顺序
     count: int | None = None  # 项目数, 未记录为空
     amount_cents: int | None = None  # 金额合计: 各项目都有金额时为其和, 否则 (含未记录) 为空

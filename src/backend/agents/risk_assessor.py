@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, ClassVar
 
 from backend.agents.audit_plan import draft_plans, plan_patch
-from backend.agents.base import ProcedureAgent, RunContext, finish_run, run_rules
+from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
@@ -127,7 +127,7 @@ class RiskAssessorAgent(ProcedureAgent[Findings]):
         """PLN-15 交 audit_plan.draft_plans 起草计划; 其余执行程序 YAML 中的规则, 参数取本次执行的参数快照."""
         if ctx.procedure.id == "PLN-15":
             return await draft_plans(self.deps, ctx)
-        return await run_rules(self.deps, ctx)
+        return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
     async def interpret(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """按程序组装片段, 执行记录置成功终态 (规则程序没有执行的规则记进 rule_outcomes, 需求 R130)."""

@@ -71,6 +71,7 @@ from tests.fakes import (
     audit_plan,
     engagement_terms,
     fin08_registered,
+    knowledge_library,
     make_deps,
     make_graph_nodes,
 )
@@ -3354,6 +3355,13 @@ def pop_template(path: str = "", value: Any = None) -> dict[str, Any]:
             "{{ period_end",
             ["X-POP.R01.population.zh: unexpected end of template, expected 'end of print statement'."],
         ),
+        (  # 检验名同过滤器, 只能用已有的 (审核 R324-11)
+            "rules.0.population.description.en",
+            "{% if window_days is odd_ish %}Odd{% endif %}",
+            ["X-POP.R01.population.en 用了不认识的检验 odd_ish"],
+        ),
+        ("rules.0.check.zh", "入账 {{ window_days }} 天内", ["X-POP.R01.check.zh 不渲染, 不能写占位"]),
+        ("rules.0.check.en", "Correct {% if x %}period{% endif %}", ["X-POP.R01.check.en 不渲染, 不能写占位"]),
         (  # 总体 SQL 读的账表也须在 reads 中 (过期判断按 reads)
             "rules.0.population.sql",
             "SELECT d.id AS source_id FROM delivery_notes d WHERE d.engagement_id = :eid",
@@ -3379,10 +3387,11 @@ def test_population_and_placeholder_checks(path: str, value: Any, problems: list
         ("scope", {"zh": "范围"}),  # 缺 en
         ("rules.0.check", {"zh": "", "en": "Recorded in the correct period"}),  # zh 为空
         ("rules.0.population.description", {"en": "Posted"}),
+        ("scope", {"zh": " \n ", "en": "Scope"}),  # 只有空白也算空 (审核 R324-11)
     ],
 )
 def test_localized_texts_need_both_languages(path: str, value: dict[str, str]) -> None:
-    """验收 5: description, check, scope 的 zh 与 en 须同时给出, 不能为空."""
+    """验收 5: description, check, scope 的 zh 与 en 须同时给出, 去掉首尾空白后不能为空."""
     with pytest.raises(ValidationError):
         ProcedureTemplate.model_validate(pop_template(path, value))
 
@@ -3391,7 +3400,7 @@ def test_localized_texts_need_both_languages(path: str, value: dict[str, str]) -
     ("path", "value", "message"),
     [
         ("rules.0.population.sql", "SELECT 1 WHERE :x = 1", "规则被测总体的写法不对: X-POP.R01 的总体 SQL"),
-        ("scope.en", "{{ days }} days", "范围说明与总体说明的占位不对: X-POP.scope.en"),
+        ("scope.en", "{{ days }} days", "范围说明, 总体说明与检查项名称的写法不对: X-POP.scope.en"),
     ],
 )
 def test_population_problems_fail_the_load(tmp_path: Path, path: str, value: str, message: str) -> None:
@@ -3405,7 +3414,7 @@ def test_rev08_scope_checks_and_population_descriptions(period_end: date | str) 
     """验收 1: REV-08 (Xero, 特别风险, window_days 20) 的 scope 渲染为 "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的
     销售发票" 与英文; 三条规则都写了总体, check 的中文依次为入账期间正确, 有服务完成记录, 收款金额相符; 快照缺参数时
     渲染即报错 (StrictUndefined)."""
-    template = ProcedureLibrary(ROOT).load("REV-08")
+    template = knowledge_library(ROOT).load("REV-08")
     params = {"window_days": 20, "period_end": period_end}
     assert template.scope is not None
     assert render_text(template.scope, params) == LocalizedText(

@@ -640,7 +640,7 @@ async def test_pln15_failed_check_fails_the_run(reply: str, level: str) -> None:
     经 A1 的 run_agent 转为 RUN-PLN-15-1 failed 与 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun), 不写计划."""
     ctx, deps, trail = await plan_context(ScriptedLLM({"r1": [reply] * MAX_ATTEMPTS}))
     agent = RiskAssessorAgent(deps)
-    patch, writer = await GraphNodes(deps, 2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(deps, 2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and "audit_plans" not in patch
     [run] = patch["procedure_runs"]
     assert (run.id, run.status) == ("RUN-PLN-15-1", RunStatus.failed)
