@@ -614,6 +614,35 @@ async def test_chain_citing_evidence_not_given_is_unsupported() -> None:
     assert j.critic_verdict is CriticVerdict.inconsistent and not critic_chain_ok(j.critic_reasoning_chain)
 
 
+async def test_chain_citing_a_fragment_outside_the_reviewed_program_is_unsupported() -> None:
+    """需求 R301: 第一轮推理链的准则片段按被复核程序 (REV-02) 的 standards 核对: A6 的判断引了已登记而不在 REV-02
+    standards 里的 ASA450-P05 (于是它在给出的证据内), 复核方引它的一步仍不受支持; 引 REV-02 自己的片段照常."""
+    x = Xero()
+    outside = EvidencePointer.model_validate(standard_pointer("ASA450-P05") | {"locator": "para 5"})
+    base = x.judgment()
+    judgment = x.judgment(
+        reasoning_chain=[
+            *base.reasoning_chain,
+            ReasoningStep(kind=StepKind.standard, text="ASA 450.", evidence=[outside]),
+        ],
+        evidence=[*base.evidence, outside],
+    )
+    chain = [
+        step("fact", "The invoice is dated in the period.", [invoice_pointer(x.invoice)]),
+        step("standard", "Revenue is recognised when control transfers.", [standard_pointer(x.standard)]),
+        step("standard", "Misstatements are accumulated.", [outside]),
+        step("inference", "The invoice is revenue of the period.", from_steps=[0, 1, 2]),
+    ]
+    x.review = scripted(x.invoice.id, [x.independent(chain)], [verdict()])
+    j = await x.agent(x.review).review(x.ctx, judgment)
+    assert [s.status for s in j.critic_reasoning_chain] == [
+        StepStatus.supported,
+        StepStatus.supported,
+        StepStatus.unsupported,
+        StepStatus.supported,
+    ]
+
+
 # ── 复核没做成: not_applicable, 转人工 ──
 
 

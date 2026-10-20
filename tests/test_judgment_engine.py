@@ -227,6 +227,20 @@ async def test_judge_passes_the_client_profile_to_the_validator(given: bool, sta
     assert outcome.judgment.reasoning_chain[1].status is status
 
 
+async def test_standard_outside_the_program_marks_its_step() -> None:
+    """需求 R301: judge 按本程序的 standards 核对准则片段: REV-03 的草稿另引已登记而不在 REV-03 standards 里的
+    ASA450-P05 时该步 unsupported (同引用未登记的片段), 判断照常出; 只引本程序片段的照常 supported."""
+    outside = STANDARD.model_copy(update={"source_id": "ASA450-P05", "locator": "para 5"})
+    for cited, status in ((STANDARD, StepStatus.supported), (outside, StepStatus.unsupported)):
+        draft = with_step(rev03_draft(), 1, evidence=[cited]).model_copy(update={"evidence": [CLAUSE, cited]})
+        outcome, _ = await judge("REV-03", rev03_context(), [draft.model_dump_json()])
+        assert [s.status for s in outcome.judgment.reasoning_chain] == [
+            StepStatus.supported,
+            status,
+            StepStatus.supported,
+        ], cited.source_id
+
+
 def test_evidence_coverage_takes_best_reliability_per_type() -> None:
     weights = {"external_original": 1.0, "external_copy": 0.8, "internal_original": 0.7, "internal_copy": 0.5}
     copy = EvidencePointer(

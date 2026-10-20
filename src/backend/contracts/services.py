@@ -65,6 +65,9 @@ class ValidationContext(Model):
     # 本项目采用版本的客户画像 (需求 R128): client_profile 指针只认它 (ID 相同, locator 为其顶层字段名), 不读
     # EngagementStore; 为空时这类指针解析不了
     client_profile: ClientProfile | None = None
+    # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针
+    # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为空不核对
+    standards_of: str | None = None
 
 
 class ValidationReport(Model, Generic[T]):

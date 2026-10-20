@@ -206,6 +206,7 @@ class ReviewAgent(ProcedureAgent[None]):
                 rule_findings=list(findings),
                 critic_drafts=COLLAB in self.deps.features,
                 client_profile=profile,
+                standards_of=ctx.template.id,  # 被复核程序的 standards (需求 R301)
             ),
             self.agent_id,
             f"{subject}-r1",
@@ -284,7 +285,7 @@ class ReviewAgent(ProcedureAgent[None]):
         A6 校验时解析不了的指针原样留在判断里 (只要还有别的有效指针), 如指向 llm_call 的留痕, 其明细含旧输出的结论;
         这些既不给模型, 也不进推理链可引用的证据.
         """
-        resolver = PointerResolver(self.deps.judgments.validator, eid, profile)
+        resolver = PointerResolver(self.deps.judgments.validator, eid, profile=profile)
         given = []
         for p in evidence_pointers(judgment):
             resolved, _ = await resolver.resolve(p)
