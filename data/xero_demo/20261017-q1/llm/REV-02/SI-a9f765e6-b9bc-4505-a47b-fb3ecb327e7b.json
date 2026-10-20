@@ -1,0 +1,130 @@
+{
+  "conclusion": "Invoice ORC1022 belongs to the period ending 30 September 2026: no contract is linked, and service completion record SR-ORC1022 shows the service provided from 1 to 30 September 2026 and confirmed complete on 30 September 2026; control of a service provided through the month transfers over time as it is provided, all within the period.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice ORC1022 for 55000 cents was posted on 17 September 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Service completion record SR-ORC1022 shows the service starting on 1 September 2026 and confirmed complete on 30 September 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1022",
+          "locator": "shipped_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1022",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Control of a service transfers over time when the customer simultaneously receives and consumes the benefits as the entity performs (AASB 15 para 35(a)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "With no contract linked, the service-completion record sets the transfer: the customer received the service through September and confirmed it complete on 30 September 2026, within the period, so the invoice is recorded in the correct period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1022",
+      "locator": "shipped_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1022",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A service record showing that the billed service continued after 30 September 2026, or no record of the service at all, would change the conclusion.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

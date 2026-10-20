@@ -2,7 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -23,6 +23,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     ProposedAction,
     ReasoningStep,
+    Reliability,
     ReviewTask,
     RiskItem,
     StepKind,
@@ -213,6 +214,17 @@ async def test_evidence_masks_accounts_and_pseudonymises_people() -> None:
     outcome, data = await call("get_evidence", {"source_type": "delivery_note", "source_id": "DN-2026-0612"})
     assert "Daniel Price" not in outcome.content
     assert outcome.cites["DN-2026-0612"].kind == "evidence"
+
+
+async def test_evidence_reads_a_supplier_bill_row() -> None:
+    """需求 R178: 取证据工具能读应付账单的行, 金额另给 AUD 写法, 引用为发票类的内部原件 (同销售发票)."""
+    tool_env = env()
+    bill = {"id": "PB-1", "bill_no": "3395", "supplier": "PowerDirect", "outstanding_cents": 33110}
+    cast(FakeFinancialStore, tool_env.deps.financial_store).records[("supplier_bill", "PB-1")] = bill
+    outcome, data = await call("get_evidence", {"source_type": "supplier_bill", "source_id": "PB-1"}, tool_env)
+    assert (data["source_type"], data["row"]["outstanding_aud"]) == ("supplier_bill", "AUD 331.10")
+    pointer = outcome.cites["PB-1"].pointer
+    assert (pointer.type, pointer.reliability) == (EvidenceType.invoice, Reliability.internal_original)
 
 
 async def test_open_items_list_gate_then_tasks_with_deferral() -> None:

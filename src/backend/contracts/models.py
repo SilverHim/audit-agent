@@ -386,10 +386,11 @@ class AgentId(StrEnum):
     A10 = "A10"  # Concierge: 审计师对话入口与报告生成
 
 
-# 证据指针指向哪类存储: 财务数据行, 文件, 准则片段或留痕
+# 证据指针指向哪类存储: 财务数据行, 文件, 准则片段, 留痕, 或本项目采用版本的客户画像 (管理层申报, 需求 R128)
 PointerSource = Literal[
     "journal_entry",
     "sales_invoice",
+    "supplier_bill",  # 应付账单 (需求 R178)
     "delivery_note",
     "bank_transaction",
     "bank_account",
@@ -397,10 +398,17 @@ PointerSource = Literal[
     "document",
     "standard",
     "trail",
+    "client_profile",
 ]
 # 财务数据的行类型, PointerSource 的子集
 SourceType = Literal[
-    "journal_entry", "sales_invoice", "delivery_note", "bank_transaction", "bank_account", "trial_balance"
+    "journal_entry",
+    "sales_invoice",
+    "supplier_bill",  # 应付账单 (需求 R178)
+    "delivery_note",
+    "bank_transaction",
+    "bank_account",
+    "trial_balance",
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
@@ -429,8 +437,8 @@ class EvidencePointer(Model):
 
     type: EvidenceType  # 证据种类
     source_type: PointerSource  # 证据存在哪类存储, 决定到哪里解析
-    source_id: str  # 那条证据的 ID: 行 ID, 文件 ID, 准则片段 ID 或留痕 ID
-    locator: str  # 证据里的哪一处: 列名, 字段名, 条款号或页码描述
+    source_id: str  # 那条证据的 ID: 行 ID, 文件 ID, 准则片段 ID, 留痕 ID 或客户画像 ID (client_id)
+    locator: str  # 证据里的哪一处: 列名, 字段名 (客户画像为顶层字段名), 条款号或页码描述
     page: int | None = None  # PDF 页码, 从 1 起, 前端据此跳页
     reliability: Reliability | None = None  # 证据可靠性, 准则类为空
 
@@ -749,6 +757,19 @@ class Procedure(Versioned):
     data_request_ids: list[str] = []
 
 
+# 规则没有执行的原因 (需求 R130): skipped 为按设计对本项目不适用 (如数据集声明录入时间不可靠), not_executable 为本该
+# 执行而缺数据或参数 (如画像没有审批限额), 是要让审计师知道的缺口. 本版两者处理相同: 不出例外, 不建复核任务
+RuleOutcomeStatus = Literal["skipped", "not_executable"]
+
+
+class RuleOutcome(Model):
+    """一条没有执行的规则 (执行前检查命中, 需求 R130): 规则编号, 原因与理由. 执行了的规则不记."""
+
+    rule_id: str  # 规则编号, 如 R03
+    status: RuleOutcomeStatus  # 没有执行的原因
+    reason: str  # 理由: 命中的检查 SQL 返回的第一行的 reason 列, 为空时为 "前置检查未通过"
+
+
 class ProcedureRun(Versioned):
     """程序的一次执行记录: 第几次, 起因, 起止时间, 成败. 重跑会产生新记录."""
 
@@ -763,6 +784,8 @@ class ProcedureRun(Versioned):
     failure_reason: str | None = None  # 失败原因
     # 执行时的项目数据版本 (需求 R16, 总览据此标过期); 承接阶段的程序 (不读财务数据) 与之前的执行为空
     data_version: int | None = None
+    # 规则引擎没有执行的规则 (需求 R130), 按 YAML 顺序; 全部执行或不经规则引擎为空. 旧记录读回时为空
+    rule_outcomes: list[RuleOutcome] = []
 
 
 class ScheduleRow(Model):

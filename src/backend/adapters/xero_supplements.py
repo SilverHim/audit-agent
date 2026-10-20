@@ -14,7 +14,7 @@ sales_invoices.contract_id, 服务完成记录写成 delivery_notes (发票号�
 合同 PDF 由 contracts() 列出. 发票号在快照中找不到或不唯一, 或开户行表的账号与快照不符, 抛 SupplementMismatch
 (消息含发票号或账户 ID). 数据集载入只载快照 (需求 R269), apply 供演示导入清单与测试算导入后的表.
 
-演示导入清单 (plan, 需求 R268): 不连库列出演示数据导入 (services.demo_import, 需求 R269) 要写的快照六张表, 补造账表
+演示导入清单 (plan, 需求 R268): 不连库列出演示数据导入 (services.demo_import, 需求 R269) 要写的快照七张表, 补造账表
 (demo_tables) 与要上传的文件 (uploads).
 """
 
@@ -79,13 +79,13 @@ class DemoUpload(Model):
 @dataclass(frozen=True)
 class DemoPlan:
     """演示导入清单: 补造账表 (按 TableKind 顺序) 与上传文件 (按阶段, 再按文件名); 另带补造目录 (上传文件的 path
-    相对于它) 与快照映射出的六张表 (XERO_TABLES, 演示导入当成从 Xero 同步一次写入, 需求 R269)."""
+    相对于它) 与快照映射出的七张表 (XERO_TABLES, 演示导入当成从 Xero 同步一次写入, 需求 R269)."""
 
     dataset: str
     tables: list[DemoTable]
     uploads: list[DemoUpload]
     root: Path  # 已核对的补造目录
-    snapshot: dict[TableKind, list[BaseModel]]  # 快照的六张表, 按 XERO_TABLES 顺序
+    snapshot: dict[TableKind, list[BaseModel]]  # 快照的七张表, 按 XERO_TABLES 顺序
 
 
 class SupplementLoader(Protocol):

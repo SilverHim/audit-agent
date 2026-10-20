@@ -106,6 +106,20 @@ class SalesInvoice(Model):
     journal_entry_id: str | None  # 对应的收入分录
 
 
+class SupplierBill(Model):
+    """应付账单的期末未付明细 (需求 R178): 截至审计期末仍有未付余额的供应商账单. Xero 由 ACCPAY 账单连同付款,
+    贷项, 预付与多付的分配算出 (adapters.xero_dataset.map_supplier_bills); Numbat 没有, 表为空."""
+
+    id: str  # 账单 ID, Xero 为 PB-{InvoiceID}
+    bill_no: str  # 账单号; Xero 账单没有编号时取短 ID (同销售发票)
+    supplier: str  # 供应商名称 (Xero 取账单上的 Contact.Name)
+    bill_date: date  # 账单日期
+    due_date: date  # 到期日
+    amount_cents: int  # 含税总额, 单位分
+    outstanding_cents: int  # 期末未付余额, 单位分 (总额减期末日及以前的付款与分配)
+    journal_entry_id: str | None  # 对应的应付分录行 (贷记应付科目的那一行)
+
+
 class DeliveryNote(Model):
     """发运单: 货物发出与客户签收记录."""
 

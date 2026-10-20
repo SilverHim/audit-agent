@@ -27,7 +27,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import ConfirmationRequest
-from backend.contracts.records import Account, JournalEntry
+from backend.contracts.records import Account, JournalEntry, SupplierBill
 from backend.persistence import models as m
 from backend.persistence.db import transaction
 from backend.persistence.stores import (
@@ -48,6 +48,7 @@ from backend.services.procedure_library import ProcedureLibrary
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
 from tests.test_fakes import demo_rows, trail_pages_hold
+from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -499,6 +500,78 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         await runner.shutdown()
         await deps.financial_store.engine.dispose()
         await stack.aclose()
+
+
+async def test_rule_checks_on_postgres(storage):
+    """需求 R130: 执行前检查在真实 Postgres 上按约定的写法执行 (接口文档第 8.1 节): 只看参数的检查不碰表, 参数为
+    None 与布尔值用 CAST 绑定; 看数据的检查查表; 理由取 reason 列 (字面量或参数). 命中的规则不执行, 没命中的照常出例外.
+    防约定的 SQL 写法在 psycopg 下绑定不了 (None 推不出类型)."""
+    import yaml
+
+    from backend.contracts.knowledge import ProcedureTemplate
+    from backend.contracts.models import ProcedureRun, RuleOutcome
+    from backend.services.rule_engine import SqlRuleEngine
+
+    engine, e, loader, _evidence = storage
+    await loader.load(e.id, "demo")
+    template = ProcedureTemplate.model_validate(
+        yaml.safe_load(
+            """
+id: T
+name: 执行前检查连库
+phase: P2_Executing
+cycle: Journals
+owner: A6
+engine: rule
+autonomy_level: L3
+reads: [journal_entries]
+rules:
+  - id: R01
+    name: 录入时间不可靠时跳过
+    severity: high
+    checks:
+      - status: skipped
+        sql: SELECT CAST(:note AS text) AS reason WHERE NOT CAST(:reliable AS boolean)
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+  - id: R03
+    name: 没有审批限额时不可执行
+    severity: high
+    checks:
+      - status: not_executable
+        sql: SELECT '客户画像没有审批限额' AS reason WHERE CAST(:limit_cents AS bigint) IS NULL
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+  - id: R04
+    name: 审批人全空时不可执行
+    severity: high
+    checks:
+      - status: not_executable
+        sql: >-
+          SELECT '审批人数据缺失' AS reason
+          WHERE NOT EXISTS (SELECT 1 FROM journal_entries WHERE approved_by IS NOT NULL)
+    sql: SELECT 'journal_entry' AS source_type, MIN(id) AS source_id FROM journal_entries ORDER BY 1
+"""
+        )
+    )
+    run = ProcedureRun(
+        id="RUN-T-1",
+        procedure_id="T",
+        run_no=1,
+        trigger="initial",
+        params_snapshot={},
+        status="running",
+        started_at=now(),
+    )
+    params = {"note": "录入时间不可靠", "reliable": False, "limit_cents": None}
+    found = await SqlRuleEngine(PostgresFinancialDataStore(engine)).run(e.id, template, run, params)
+    assert found.outcomes == [
+        RuleOutcome(rule_id="R01", status="skipped", reason="录入时间不可靠"),
+        RuleOutcome(rule_id="R03", status="not_executable", reason="客户画像没有审批限额"),
+    ]
+    assert [x.rule_id for x in found.exceptions] == ["R04"]  # Numbat 的分录有审批人, R04 照常执行
+    again = await SqlRuleEngine(PostgresFinancialDataStore(engine)).run(
+        e.id, template, run, params | {"reliable": True, "limit_cents": 500000}
+    )
+    assert (again.outcomes, [x.rule_id for x in again.exceptions]) == ([], ["R01", "R03", "R04"])
 
 
 async def test_rule_edge_cases(storage):
@@ -1144,17 +1217,21 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
         "trial_balance": 33,
         "journal_entries": 1017,
         "sales_invoices": 42,
+        "supplier_bills": 6,  # 期末仍未付的应付账单 (需求 R178)
         "delivery_notes": 0,
         "bank_accounts": 2,
         "bank_transactions": 146,
         "employees": 0,  # 工资册不随数据集载入 (需求 R96)
     }
+    bills = await financial.query(e.id, SELECT_BILLS, {})
+    assert [SupplierBill.model_validate(b) for b in bills] == Q1_BILLS  # 数据集载入同样写入 (需求 R178 验收 6)
+    assert await financial.record(e.id, "supplier_bill", Q1_BILLS[1].id) == Q1_BILLS[1].model_dump()
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
     assert await financial.documents(e.id) == [] and await financial.contracts(e.id) == []
     linked = await financial.query(e.id, "SELECT count(*) AS n FROM sales_invoices WHERE contract_id IS NOT NULL", {})
     assert linked[0]["n"] == 0
-    snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的七张表, 不并补造表
+    snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的八张表, 不并补造表
     banks = await financial.query(e.id, "SELECT id, bank_name FROM bank_accounts ORDER BY id", {})
     assert [(b["id"], b["bank_name"]) for b in banks] == sorted((b.id, b.bank_name) for b in snapshot["bank_accounts"])
     # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入

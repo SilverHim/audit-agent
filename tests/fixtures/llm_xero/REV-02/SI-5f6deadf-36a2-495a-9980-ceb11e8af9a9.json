@@ -1,0 +1,154 @@
+{
+  "conclusion": "Invoice ORC1020 belongs to the period ending 30 September 2026: it bills the support provided under CON-X02, whose clause 4.1 (CON-X02-T1) transfers control over time as the support is provided, and service completion record SR-ORC1020 shows the service from 1 to 30 September 2026, all within the period.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice ORC1020 for 55000 cents was posted on 17 September 2026.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Service completion record SR-ORC1020 shows the support service starting on 1 September 2026 and confirmed complete on 30 September 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1020",
+          "locator": "shipped_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1020",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 4.1 (CON-X02-T1): the Support Services are provided throughout each calendar month and the customer simultaneously receives and consumes their benefit as the Supplier provides them.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Control of a service transfers over time when the customer simultaneously receives and consumes the benefits as the entity performs (AASB 15 para 35(a)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Control transfers over time as the September support is provided, and the whole service period, 1 to 30 September 2026, falls within the period ending 30 September 2026, so the invoice is recorded in the correct period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1020",
+      "locator": "shipped_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1020",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A service record showing that part of the billed support was provided after 30 September 2026 would split the revenue between periods.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

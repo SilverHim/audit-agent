@@ -2,13 +2,13 @@
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Iterable
+from collections.abc import Awaitable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, cast
 
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RunStatus
+from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RuleOutcome, RunStatus
 from backend.contracts.ports import (
     AbnLookup,
     AuditOutputStore,
@@ -87,9 +87,11 @@ async def gather_all[T](aws: Iterable[Awaitable[T]]) -> list[T]:
     return cast(list[T], results)
 
 
-def finish_run(run: ProcedureRun, ended_at: datetime) -> ProcedureRun:
-    """把运行中的执行记录置为成功终态. 版本号不变: 运行中那一版不写入存储, 终态就是第 1 版."""
-    return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at})
+def finish_run(run: ProcedureRun, ended_at: datetime, outcomes: Sequence[RuleOutcome] = ()) -> ProcedureRun:
+    """把运行中的执行记录置为成功终态. 版本号不变: 运行中那一版不写入存储, 终态就是第 1 版. outcomes: 规则引擎没有
+    执行的规则 (RuleResult.outcomes, 需求 R130), 经规则引擎的程序传入, 记进 rule_outcomes; 全部执行或不经规则引擎
+    为空."""
+    return run.model_copy(update={"status": RunStatus.succeeded, "ended_at": ended_at, "rule_outcomes": list(outcomes)})
 
 
 class ProcedureAgent[F](ABC):

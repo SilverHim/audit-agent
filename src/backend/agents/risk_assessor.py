@@ -110,13 +110,13 @@ class RiskAssessorAgent(ProcedureAgent[RuleResult]):
         return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
     async def interpret(self, ctx: RunContext, findings: RuleResult) -> StatePatch:
-        """按程序组装片段, 执行记录置成功终态."""
+        """按程序组装片段, 执行记录置成功终态 (没有执行的规则记进 rule_outcomes, 需求 R130)."""
         interpreters: dict[str, Callable[[RunContext, RuleResult], StatePatch]] = {
             "PLN-07": self.analytics,
             "PLN-01": self.materiality,
         }
         patch = interpreters[ctx.procedure.id](ctx, findings)
-        return patch | {"procedure_runs": [finish_run(ctx.run, datetime.now(UTC))]}
+        return patch | {"procedure_runs": [finish_run(ctx.run, datetime.now(UTC), findings.outcomes)]}
 
     def analytics(self, ctx: RunContext, findings: RuleResult) -> StatePatch:
         """PLN-07: A01 的变动例外原样返回, 由 A02 的取数算比率, A03 的取数出月度表, 出分析结果下一版."""

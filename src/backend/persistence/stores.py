@@ -155,6 +155,7 @@ class PostgresFinancialDataStore(Store):
             "trial_balance": "trial_balance",
             "journal_entry": "journal_entries",
             "sales_invoice": "sales_invoices",
+            "supplier_bill": "supplier_bills",
             "delivery_note": "delivery_notes",
             "bank_account": "bank_accounts",
             "bank_transaction": "bank_transactions",
@@ -506,10 +507,12 @@ FINANCIAL_ROWS: dict[str, type[BaseModel]] = {
     "trial_balance": TrialBalanceRow,
     "journal_entries": records.JournalEntry,
     "sales_invoices": SalesInvoice,
+    "supplier_bills": records.SupplierBill,
     "delivery_notes": DeliveryNote,
     "bank_accounts": BankAccount,
     "bank_transactions": BankTransaction,
 }  # 数据集载入的财务表 → 行模型, 与 m.FINANCIAL 同序; 工资册不随数据集载入, 不在其中
+OPTIONAL_CSV = frozenset({"supplier_bills"})  # CSV 数据集可以没有的表 (应付账单, 需求 R178), 其余缺文件报错
 
 
 Tables = tuple[Mapping[str, Sequence[BaseModel]], Sequence[Path]]  # (财务表 → 行, 合同 PDF 路径)
@@ -521,8 +524,8 @@ DATASET_READY_BY = "dataset"  # 数据集载入视同确认就绪时, dataset_lo
 class TableLoader(Store):
     """各数据源载入器的公共部分: 一个事务内写入财务表并登记合同 PDF, 数据版本 +1 并视同已确认就绪; 已载入则跳过.
 
-    已载入看该项目有没有财务表行 (数据集载入的七张表, 需求 R268), 不看 dataset_loads 有没有行: 导入, 确认就绪, 抽取
-    结果修改与补登记都会先建版本 0 的 dataset_loads 行, 之前按 "有行" 判断时种子载入会被静默跳过.
+    已载入看该项目有没有财务表行 (数据集载入的八张表, 需求 R268, R178), 不看 dataset_loads 有没有行: 导入, 确认
+    就绪, 抽取结果修改与补登记都会先建版本 0 的 dataset_loads 行, 之前按 "有行" 判断时种子载入会被静默跳过.
     - 没有 dataset_loads 行: 建行, 数据版本 1, 视同就绪.
     - 有行而还没有财务表行: 在该行上数据版本 +1; 还没确认就绪的视同就绪, 已由审计师确认的保留原记录 (确认的人,
       时间, 理由与未通过项都不改); loaded_at (第一次接入数据的时间) 不改.
@@ -681,7 +684,8 @@ def natural_key(text: str) -> list[Any]:
 
 
 class CsvDatasetLoader(TableLoader):
-    """CSV 数据集 (如 Numbat): 每张财务表一个 CSV; 科目没有 category 列时按名称映射标准分类."""
+    """CSV 数据集 (如 Numbat): 每张财务表一个 CSV, 只有应付账单可以没有文件, 没有时为空 (Numbat 没有账单, 需求
+    R178), 其余缺文件照旧报错; 科目没有 category 列时按名称映射标准分类."""
 
     def __init__(
         self, root: Path, engine: AsyncEngine | None = None, evidence_store: FileEvidenceStore | None = None
@@ -695,6 +699,8 @@ class CsvDatasetLoader(TableLoader):
         def build() -> Tables:
             tables: dict[str, list[BaseModel]] = {}
             for name, kind in FINANCIAL_ROWS.items():
+                if name in OPTIONAL_CSV and not (directory / f"{name}.csv").is_file():
+                    continue
                 with (directory / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
                     rows = [
                         kind.model_validate({k: (v if v != "" else None) for k, v in r.items()})
@@ -794,13 +800,13 @@ class XeroDatasetLoader(TableLoader):
         return found
 
     def tables(self, dataset: str) -> dict[str, list[Any]]:
-        """演示数据导入之后的七张财务表 (不连库的纯函数, 测试用; load 只载快照, 需求 R269): 快照映射出
-        七张表 (adapters.xero_dataset); 有补造目录时先核对, 再并入合同关联, 服务完成记录与开户行
+        """演示数据导入之后的八张财务表 (不连库的纯函数, 测试用; load 只载快照, 需求 R269): 快照映射出
+        八张表 (adapters.xero_dataset, 含应付账单); 有补造目录时先核对, 再并入合同关联, 服务完成记录与开户行
         (Supplements.apply). 没有补造目录时与纯快照相同."""
         return self.merged(dataset, self.supplement(dataset))
 
     def merged(self, dataset: str, found: Supplements | None) -> dict[str, list[Any]]:
-        """快照映射出的七张表, 有 (已核对的) 补造目录 found 时并入补造表."""
+        """快照映射出的八张表, 有 (已核对的) 补造目录 found 时并入补造表."""
         tables = build_tables(self.snapshot(dataset))
         return found.apply(tables) if found is not None else tables
 
@@ -822,8 +828,9 @@ class XeroDatasetLoader(TableLoader):
         return found.demo_tables() if found is not None else []
 
     async def load(self, eid: str, dataset: str) -> None:
-        """只载快照映射出的七张表 (需求 R269): 不并补造账表, 不登记文件; 补造部分 (账表与文件) 由演示数据导入
-        (services.demo_import) 分阶段写入与上传. 有补造目录时仍先核对 (与快照不符抛 SupplementMismatch, 不写)."""
+        """只载快照映射出的八张表 (需求 R269, 含应付账单 R178): 不并补造账表, 不登记文件; 补造部分 (账表与文件)
+        由演示数据导入 (services.demo_import) 分阶段写入与上传. 有补造目录时仍先核对 (与快照不符抛
+        SupplementMismatch, 不写)."""
         self.directory(dataset)  # 名称先校验; 快照是否存在与补造核对等确认未载入后再做
 
         def build() -> Tables:

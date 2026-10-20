@@ -85,6 +85,7 @@ export const TABLE_KINDS: TableKind[] = [
   'trial_balance',
   'journal_entries',
   'sales_invoices',
+  'supplier_bills',
   'bank_accounts',
   'bank_transactions',
   'delivery_notes',

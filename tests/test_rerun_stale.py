@@ -139,6 +139,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
         # PLN-07 的 A03 月度数读总账 (需求 R103); REV-02 带发票过账分录的全部行 (需求 R100)
         (DataInput.journal_entries, {"PLN-07", "CSH-02", "REV-02"}),
         (DataInput.sales_invoices, {"REV-08", "REV-02"}),
+        (DataInput.supplier_bills, set()),  # 应付账单 (需求 R178): Demo 程序库里还没有程序读它
         (DataInput.bank_accounts, {"CSH-04", "DOC-06", "CSH-05", "CSH-02"}),  # DOC-06 依赖 CSH-04
         (DataInput.bank_transactions, {"REV-08", "REV-02", "CSH-05", "CSH-02"}),  # REV-02 依赖 REV-08
         (DataInput.delivery_notes, {"REV-08", "REV-02"}),

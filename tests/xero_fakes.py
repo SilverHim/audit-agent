@@ -82,6 +82,7 @@ CLIENT_PREFIX = "CLIENT-XERO-3C1332BB-"
 RECORD_TYPES: dict[TableKind, str] = {
     TableKind.journal_entries: "journal_entry",
     TableKind.sales_invoices: "sales_invoice",
+    TableKind.supplier_bills: "supplier_bill",
     TableKind.delivery_notes: "delivery_note",
     TableKind.bank_accounts: "bank_account",
     TableKind.bank_transactions: "bank_transaction",
@@ -263,7 +264,7 @@ def loaded_tables(api: Path) -> dict[str, tuple[Any, ...]]:
 
 
 def xero_tables() -> dict[str, list[Any]]:
-    """演示数据导入之后的七张表 (XeroDatasetLoader.tables)."""
+    """演示数据导入之后的八张表 (XeroDatasetLoader.tables, 含应付账单)."""
     return {name: list(rows) for name, rows in loaded_tables(snapshot_root(SNAPSHOT_REPO).parent).items()}
 
 
@@ -287,7 +288,7 @@ def put_rows(store: FakeFinancialStore, kind: TableKind, rows: Sequence[BaseMode
 
 
 def xero_financial_store(stage: DemoStage = "fieldwork", contracts: bool = True) -> FakeFinancialStore:
-    """装好演示数据的假财务存储: 七张表 (put_rows) 与工资册, 到 stage 为止上传的文件; contracts 为真时预置
+    """装好演示数据的假财务存储: 八张表 (put_rows) 与工资册, 到 stage 为止上传的文件; contracts 为真时预置
     xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError)."""
     if contracts and stage == "acceptance":
         raise ValueError("合同在 fieldwork 阶段才上传, acceptance 阶段不能预置合同")

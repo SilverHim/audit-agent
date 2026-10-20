@@ -352,12 +352,13 @@ def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
 
 
 def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
-    """规则 SQL 读到而 reads 没声明的账表 (消息含程序编号): 过期判断按 reads 看数据变动, 漏了就标不出过期.
-    SQL 里整词出现的账表名都算读了 (FROM, JOIN, 逗号连接, 子查询); 列名或别名与账表同名时也算, 宁多勿漏. 大模型与
-    Agent 另读的数据 (如 REV-02 的发运单, 合同) 靠 YAML 手写."""
+    """规则 SQL (含执行前检查的 SQL, 需求 R130) 读到而 reads 没声明的账表 (消息含程序编号): 过期判断按 reads 看数据
+    变动, 漏了就标不出过期. SQL 里整词出现的账表名都算读了 (FROM, JOIN, 逗号连接, 子查询); 列名或别名与账表同名时
+    也算, 宁多勿漏. 大模型与 Agent 另读的数据 (如 REV-02 的发运单, 合同) 靠 YAML 手写."""
     problems = []
     for t in templates:
-        used = {name.lower() for rule in t.rules for name in SQL_TABLE.findall(rule.sql)}
+        sqls = [sql for rule in t.rules for sql in (rule.sql, *(check.sql for check in rule.checks))]
+        used = {name.lower() for sql in sqls for name in SQL_TABLE.findall(sql)}
         missing = sorted(used - {i.value for i in t.reads})
         if missing:
             problems.append(f"{t.id} 读 {', '.join(missing)}")

@@ -986,7 +986,7 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 - 从快照裁出最小 fixture 入库本版不做 (见文末 "本版不做").
 - Agent 层测试用的假存储与样例 `tests/xero_fakes.py` (R97) 按同一分法, 预置演示数据导入之后的状态:
   - 只需补造目录的样例 (画像, 计划预置, 声明, 清单, 各阶段上传后的登记, 文本层, 更正分录, 工资册, 登记与函证的假实现, 合同) 有快照时连快照一起核对, 没有快照时只核补造文件 (`Supplements.verify_files`), 照常跑.
-  - 需要快照的 (七张表, 假财务存储, 项目, 假数据集载入与数据管理存储, `make_xero_deps`) 按 `tests.external.require_xero_snapshot` 定位: 仓库跟踪了却找不到时失败, 没有时跳过.
+  - 需要快照的 (八张表, 假财务存储, 项目, 假数据集载入与数据管理存储, `make_xero_deps`) 按 `tests.external.require_xero_snapshot` 定位: 仓库跟踪了却找不到时失败, 没有时跳过.
 
 **三种跑法与各自能证明什么**
 - 离线 mock (默认跑): 不连库. 有快照时对副本调 `build_tables` 与补造表的读入, 断言表层事实 (改动的行确实变了, 其余表逐行不变); 再用 FakeRuleEngine 预置该场景的例外, FakeLLM 读 `tests/fixtures/llm_injected/<场景>/<程序>/<对象>.json`, 走 Agent 与判断引擎, 断言判断, 错报草稿, 四级校验与 Q12 金额校验. 检的是编排与校验链路; 判断结论是预写的 fixture, **不证明系统能识别错报**.
@@ -1047,7 +1047,7 @@ A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断
 (a) 改动 (快照副本)
 - `journals.json`: JournalNumber 547, 548, 549 的 JournalDate 由 2026-09-05 改为 2026-10-06 (548 是 SM0195-70135 的生效过账, 547/549 是同日作废对, 一起移).
 - `trial_balance_2026-09-30.json`: 800 -400516 → -200516; 400 183018 → 1200; 820 -119197 → -137379.
-- `invoices.json` 中账单日期 09-05 不改 (载入器不读应付账单); 补造的 SMART Agency 发票 PDF (第 4 节第 25 项, 账单日 09-05, 服务交付 09-04) 不改.
+- `invoices.json` 中账单日期 09-05 不改 (应付账单明细 supplier_bills 由账单与付款算出, R178, 仍列出这张, 6 张合计比改后的 800 余额多 200000); 补造的 SMART Agency 发票 PDF (第 4 节第 25 项, 账单日 09-05, 服务交付 09-04) 不改.
 
 (b) 应检出
 - GEN-07 S01: BT-090-0097 (10-11, -450000, 参考号 "70135 70209") 仍是期后未入账流水 (与基线相同, 规则层没有区分点).
@@ -1171,8 +1171,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 3. `client_profile()`: 有 client_profile.json 时整份取它, 校验 id 以快照组织 ID 推出的 `CLIENT-XERO-{短 ID}-` 开头 (本数据集 CLIENT-XERO-3C1332BB-Q1), 不符抛 SupplementMismatch, 消息含该前缀. 带后缀是为了与 20261017-mock 的载入器画像 CLIENT-XERO-3C1332BB v1 区分, 避免同库建项目时 VersionConflict (2.6 节).
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.
-6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72): `XeroDatasetLoader.tables` 给出并入补造后的七张表 (不连库的纯函数, R268 起不再带合同路径), `supplement_tables` 与演示导入清单 (第 9.5 节) 给出补造覆盖的表.
-    - 载入只载快照 (R269): `load` 不并补造表, 不登记文件 (delivery_notes 为 0, contract_id 全空, 开户行为 Xero 科目名); 有补造目录时仍先核对, 篡改时不写. 补造部分由演示数据导入 (`services/demo_import`, 数据管理页按钮见 R270) 按阶段做: acceptance 上传 2 份承接文件; fieldwork 把快照六张表当成从 Xero 同步一次写一版 (source xero), 补造表各写一版 (source import, 原文件名为补造目录的来源文件), 上传 19 份 (合同随即抽取); statements 在 REQ-financial_statements 为 open 时按请求上传 fs_v1.pdf. 各阶段上传后按 manifest.documents 指定类型 (分类不符时) 与补登记; 不确认数据已齐. 管理层声明书 (manual) 由审计师在 FIN-07 的人工任务页上传.
+6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72): `XeroDatasetLoader.tables` 给出并入补造后的八张表 (含应付账单, R178; 不连库的纯函数, R268 起不再带合同路径), `supplement_tables` 与演示导入清单 (第 9.5 节) 给出补造覆盖的表.
+    - 载入只载快照 (R269): `load` 不并补造表, 不登记文件 (delivery_notes 为 0, contract_id 全空, 开户行为 Xero 科目名); 有补造目录时仍先核对, 篡改时不写. 补造部分由演示数据导入 (`services/demo_import`, 数据管理页按钮见 R270) 按阶段做: acceptance 上传 2 份承接文件; fieldwork 把快照的七张表 (XERO_TABLES, 含应付账单, R178) 当成从 Xero 同步一次写一版 (source xero), 补造表各写一版 (source import, 原文件名为补造目录的来源文件), 上传 19 份 (合同随即抽取); statements 在 REQ-financial_statements 为 open 时按请求上传 fs_v1.pdf. 各阶段上传后按 manifest.documents 指定类型 (分类不符时) 与补登记; 不确认数据已齐. 管理层声明书 (manual) 由审计师在 FIN-07 的人工任务页上传.
 7. sales_invoices.contract_id 按 contract_links.csv 的 invoice_no 填.
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
@@ -1327,7 +1327,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - `XeroDatasetLoader(root, planning, engine=None, evidence_store=None, *, supplements: Path | None = None, allow_injected: bool = False)`; 补造与快照不匹配抛 `SupplementMismatch` (ValueError 子类), 消息以 "补造文件与快照不匹配" 开头, 只列文件名.
 - `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 另有关键字参数 actor, 缺省 "A1"; 幂等, 有新行时总账出一个新版本, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
 - `DatasetLoader.dataset_traits(dataset) -> DatasetTraits` (缺文件时为缺省值); `DatasetLoader.period(dataset) -> tuple[date, date] | None`.
-- `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回演示数据导入之后的七张表, load 与测试共用; R268 起不再带合同 PDF 路径), `supplement_tables(dataset)` 与 `xero_supplements.plan(loader, dataset)` (演示导入清单, 本节上文); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
+- `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回演示数据导入之后的八张表 (含应付账单, R178), load 与测试共用; R268 起不再带合同 PDF 路径), `supplement_tables(dataset)` 与 `xero_supplements.plan(loader, dataset)` (演示导入清单, 本节上文); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
 - `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]`; `FinancialDataStore.financial_statements(eid) -> FinancialStatements | None`, `record(eid, "financial_statement_line", code)`.
 - `RegistrySource.abn(eid, abn)`, `asic_company(eid, acn)`, `asic_extract(eid, acn)`, `asic_person(eid, family_name, given_name, birth_date)`: 按项目数据集定位登记 mock (Numbat → data/demo, Xero → 补造目录).
 - `LLMRequest.eid`: mock 按它选 fixture 目录.

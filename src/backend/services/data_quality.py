@@ -117,6 +117,7 @@ TABLE_TITLES = {
     TableKind.trial_balance: "试算表 (本期与上期)",
     TableKind.journal_entries: "总账分录",
     TableKind.sales_invoices: "销售发票",
+    TableKind.supplier_bills: "应付账单",
     TableKind.bank_accounts: "银行账户",
     TableKind.bank_transactions: "银行流水",
     TableKind.delivery_notes: "发运单",

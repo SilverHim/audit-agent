@@ -75,6 +75,7 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
+from tests.xero_fakes import xero_profile
 
 EID = ENGAGEMENT.id
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
@@ -430,6 +431,44 @@ async def test_trail_pointer_must_be_external_call() -> None:
     assert "不是外部调用" in report.errors[0] and "留痕不存在" in report.errors[1]
 
 
+# ── 客户画像作证据 (需求 R128): 只认上下文中本项目采用版本的画像 ──
+
+PROFILE_POINTER = EvidencePointer(  # 模型填的 type 与 reliability 故意写错
+    type=EvidenceType.external,
+    source_type="client_profile",
+    source_id="CLIENT-XERO-3C1332BB-Q1",
+    locator="related_parties",
+    reliability=Reliability.external_original,
+)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("pointer", "with_profile", "reason"),
+    [
+        (PROFILE_POINTER, True, None),
+        (PROFILE_POINTER.model_copy(update={"locator": "related_party_list"}), True, "不是客户画像的字段"),
+        (PROFILE_POINTER.model_copy(update={"source_id": "CLIENT-001"}), True, "不是本项目采用的客户画像"),
+        (PROFILE_POINTER, False, "校验上下文没有客户画像"),
+    ],
+)
+async def test_client_profile_pointer_resolves_only_against_the_context(
+    pointer: EvidencePointer, with_profile: bool, reason: str | None
+) -> None:
+    """client_profile 指针: 上下文给了本项目采用的画像 (Xero 演示画像 v1) 时, ID 相同且 locator 是画像的顶层字段才
+    解析通过, 改写为 voucher, internal_copy (管理层申报, 不采信模型填的); 否则该步 unsupported, 同行指针. 校验器
+    没有项目存储 (make_validator), 只能用上下文里的画像. 防管理层申报被当成外部证据, 或引用别的客户或别的字段."""
+    ctx = ValidationContext(client_profile=xero_profile() if with_profile else None)
+    report = await check(with_step(cutoff_draft(), 1, evidence=[pointer]), ctx=ctx)
+    if reason is None:
+        assert report.unsupported_steps == [] and report.errors == []
+        [resolved] = report.output.reasoning_chain[1].evidence
+        assert (resolved.type, resolved.reliability) == (EvidenceType.voucher, Reliability.internal_copy)
+    else:
+        assert report.unsupported_steps == [1] and report.output.reasoning_chain[1].evidence == [pointer]
+        assert len(report.errors) == 1 and reason in report.errors[0]
+
+
 async def test_reply_document_pointer_is_external_and_other_document_is_not_evidence() -> None:
     reply = NUMBAT_REPLIES[0]
     memo = CON001.model_copy(update={"id": "DOC-MEMO", "type": DocumentType.other})
@@ -532,6 +571,7 @@ async def test_xero_agreement_page_outside_and_statements_not_evidence() -> None
     [
         ("journal_entry", "CR-SI-2026-0547-1", (EvidenceType.voucher, Reliability.internal_original)),
         ("sales_invoice", "SI-2026-0612", (EvidenceType.invoice, Reliability.internal_original)),
+        ("supplier_bill", "PB-1", (EvidenceType.invoice, Reliability.internal_original)),  # 应付账单 (需求 R178)
         ("delivery_note", "DN-2026-0612", (EvidenceType.delivery, Reliability.internal_original)),
         ("bank_transaction", "BT-01-20260630-03", (EvidenceType.bank, Reliability.external_copy)),
         ("bank_account", "BA-01", (EvidenceType.bank, Reliability.external_copy)),
@@ -543,6 +583,7 @@ async def test_every_row_type_maps_per_rule_engine_table(
 ) -> None:
     validator, financial = make_validator()
     financial.records[("trial_balance", "1010")] = {"account_code": "1010", "balance_cents": 125840000}
+    financial.records[("supplier_bill", "PB-1")] = {"id": "PB-1", "outstanding_cents": 100}
     pointer = row(source_type, source_id).model_copy(update={"reliability": Reliability.internal_copy})
     draft = with_step(
         cutoff_draft(proposed_action=ProposedAction.accept, misstatement_draft=None), 0, evidence=[pointer]

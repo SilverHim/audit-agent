@@ -1,7 +1,7 @@
 """演示数据导入 (需求 R269): 按补造清单 (adapters.xero_supplements.plan) 分阶段把 Xero 演示数据集写进项目.
 
-- fieldwork 先写快照的六张表 (当成从 Xero 同步一次, source xero, 一个数据版本), 再逐张写补造账表 (source import,
-  原文件名为补造目录里的来源文件, 各一个数据版本).
+- fieldwork 先写快照的七张表 (XERO_TABLES, 含应付账单 R178; 当成从 Xero 同步一次, source xero, 一个数据版本),
+  再逐张写补造账表 (source import, 原文件名为补造目录里的来源文件, 各一个数据版本).
 - 各阶段的补造 PDF 经上传交 A3 分类与抽取 (同 "上传文件"); 分类与清单不符的按清单指定类型; 再按清单一批补登记
   可靠性, 文件日期与关联对象 (一个数据版本). statements 的 fs_v1.pdf 在 REQ-financial_statements 为 open 时按请求
   上传 (不调大模型分类).
@@ -71,7 +71,7 @@ class DemoImport:
         return [u for u in self.plan.uploads if u.stage == stage]
 
     def planned_tables(self, stage: DemoStage) -> list[TableKind]:
-        """这一阶段要写的表 (只有 fieldwork 有): 快照六张, 再是补造表 (sales_invoices, bank_accounts 两张各写两次)."""
+        """这一阶段要写的表 (只有 fieldwork 有): 快照七张, 再是补造表 (sales_invoices, bank_accounts 两张各写两次)."""
         if stage != "fieldwork":
             return []
         return [*self.plan.snapshot, *(t.kind for t in self.plan.tables)]
@@ -160,7 +160,7 @@ class DemoImport:
             logger.exception("演示数据导入失败的留痕没写成: %s %s", eid, stage)
 
     async def write_tables(self, eid: str, actor: str) -> list[TableKind]:
-        """快照六张表一个版本 (source xero), 补造表各一个版本 (source import, 原文件名); 写过的表跳过. 返回写了的表."""
+        """快照七张表一个版本 (source xero), 补造表各一个版本 (source import, 原文件名); 写过的表跳过. 返回写了的表."""
         versions = await self.service.deps.data.versions(eid)
         synced = {v.kind for v in versions if v.source == "xero"}
         snapshot = {kind: rows for kind, rows in self.plan.snapshot.items() if kind not in synced}

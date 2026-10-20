@@ -84,6 +84,7 @@ INVOICES = [
         Type="ACCPAY",
         Status="AUTHORISED",
         DateString="2026-08-03T00:00:00",
+        DueDateString="2026-08-31T00:00:00",
         LineAmountTypes="Inclusive",
         Total=110.0,
         LineItems=[{"AccountCode": "400", "LineAmount": 110.0, "TaxAmount": 10.0}],
@@ -414,6 +415,30 @@ def test_invoice_links_reposted_receivable_line(tmp_path: Path) -> None:
     journals = [posted(9, 1100), posted(10, -1100), posted(11, 1200)]
     [sales_invoice] = build_tables(write_snapshot(tmp_path, invoices=[invoice], journals=journals))["sales_invoices"]
     assert sales_invoice.journal_entry_id == "XJ-11-1"
+
+
+def test_invoice_skips_a_reversed_reposting(tmp_path: Path) -> None:
+    """最后一次过账 (12 号) 已被冲回时, 关联它之前仍有效的 9 号 (需求 R178 裁定 3, 与应付账单共用一个取法).
+    冲回分录 10 号号码更小, 换了来源类型, 不带发票的 SourceID, 只在说明里写 "Reversal of ID 12"."""
+    invoice = copy.deepcopy(INVOICES[0]) | {
+        "Total": 1200,
+        "LineItems": [{"AccountCode": "200", "LineAmount": 1200, "TaxAmount": 0}],
+    }
+
+    def posted(number: int, amount: int, **extra: Any) -> dict[str, Any]:
+        return {
+            "JournalNumber": number,
+            "JournalDate": "/Date(1785542400000+0000)/",
+            "CreatedDateUTC": STAMP,
+            "SourceID": "I1",
+            "SourceType": "ACCREC",
+            "JournalLines": [{"AccountCode": "610", "NetAmount": amount}, {"AccountCode": "200", "NetAmount": -amount}],
+        } | extra
+
+    reversal = posted(10, -1200, SourceID=None, SourceType="ACCRECCREDIT", Reference="Reversal of ID 12")
+    journals = [posted(9, 1200), reversal, posted(12, 1200)]
+    [sales_invoice] = build_tables(write_snapshot(tmp_path, invoices=[invoice], journals=journals))["sales_invoices"]
+    assert sales_invoice.journal_entry_id == "XJ-9-1"
 
 
 def test_invoice_links_latest_posting_even_with_earlier_date(tmp_path: Path) -> None:

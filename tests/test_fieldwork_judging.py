@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from backend.agents.base import RunContext
-from backend.agents.fieldwork import FieldworkAgent, Subject
+from backend.agents.fieldwork import FieldworkAgent, Subject, Subjects
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -110,8 +110,8 @@ def setup(
     run = ctx.run.model_copy(update={"params_snapshot": {"period_end": "2026-06-30", "window_days": 20}})
     agent = FieldworkAgent(deps)
 
-    async def source(c: RunContext) -> list[Subject]:
-        return subjects
+    async def source(c: RunContext) -> Subjects:
+        return Subjects(subjects)
 
     agent.subject_sources[procedure_id] = source
     return agent, RunContext(ctx.engagement, procedure, ctx.template, run, state), engine  # type: ignore[arg-type]
@@ -309,9 +309,9 @@ async def test_full_rerun_keeps_subject_in_human_hands(third: str) -> None:
         engines.append(engine)
         agent = FieldworkAgent(replace(deps, judgments=engine, review_llm=None))
 
-        async def source(ctx: RunContext) -> list[Subject]:
+        async def source(ctx: RunContext) -> Subjects:
             current_x = next(x for x in ctx.state["exceptions"] if x.id == X1.id)
-            return [Subject(a, {}, [current_x]), Subject(b, {})]
+            return Subjects([Subject(a, {}, [current_x]), Subject(b, {})])
 
         agent.subject_sources["REV-02"] = source
         return {**p2_agents(deps), "REV-08": numbat_p2_agents(deps)["REV-08"], "REV-02": agent}

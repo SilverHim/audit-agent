@@ -6,7 +6,8 @@ GEN-09 判断独立复核第一轮 → CriticIndependent，A6 每生成一条命
   subject_id      判断对象 ID（如银行账户、发票、合同）
   procedure       被复核的程序：id、name、assertions
   items           证据，每条：pointer（EvidencePointer：type、source_type、source_id、locator、page、reliability）
-                  与 content（数据行、文件该页的文本、准则片段原文或留痕摘要）；推理链只能引用这些指针
+                  与 content（数据行、文件该页的文本、准则片段原文、留痕摘要或客户画像该字段的 JSON）；
+                  推理链只能引用这些指针
   standards       该程序引用的 StandardFragment：id、standard、paragraph、text
 输出另有 proposed_action 与 misstatement_draft（建议 misstatement 时必给；需求 R150），只在功能 collab 打开时写回判断。
 #}

@@ -27,6 +27,7 @@ from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     FakeFinancialStore,
     FakeRegistry,
@@ -212,6 +213,18 @@ async def test_unsupported_step_marked_and_excluded_from_coverage() -> None:
         StepStatus.supported,
     ]
     assert j.confidence_parts["evidence"] == 0.5
+
+
+@pytest.mark.parametrize(("given", "status"), [(True, StepStatus.supported), (False, StepStatus.unsupported)])
+async def test_judge_passes_the_client_profile_to_the_validator(given: bool, status: StepStatus) -> None:
+    """judge 把 JudgmentContext.client_profile 交给校验 (需求 R128): 引用本项目画像的步骤 supported; 上下文不给画像时
+    同一草稿该步 unsupported. 防判断引擎丢掉画像, 引用管理层申报的判断全都站不住."""
+    pointer = EvidencePointer(
+        type=EvidenceType.voucher, source_type="client_profile", source_id=NUMBAT_PROFILE.id, locator="related_parties"
+    )
+    ctx = rev02_context(findings=False).model_copy(update={"client_profile": NUMBAT_PROFILE if given else None})
+    outcome, _ = await judge("REV-02", ctx, [with_step(cutoff_draft(), 1, evidence=[pointer]).model_dump_json()])
+    assert outcome.judgment.reasoning_chain[1].status is status
 
 
 def test_evidence_coverage_takes_best_reliability_per_type() -> None:

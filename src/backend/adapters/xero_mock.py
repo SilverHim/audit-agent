@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from backend.adapters.xero_dataset import Snapshot, cents, xero_date
+from backend.adapters.xero_dataset import REVERSAL_REFERENCE, Snapshot, cents, xero_date
 
 NAMESPACE = uuid.UUID("6f1c2a52-6a0e-4b8f-9d55-3a0c8b1f2e10")  # 模拟数据的确定性 ID
 XERO_TZ = ZoneInfo("Australia/Sydney")  # 网页导出的时间按组织所在时区显示
@@ -31,7 +31,7 @@ SOURCE_DOCS = (
     ("bank_transactions", "Total", "Contact", "Type", "BankTransactionID"),
 )
 BANK_TYPES = {"SPEND": "CASHPAID", "RECEIVE": "CASHREC", "SPEND-TRANSFER": "TRANSFER", "RECEIVE-TRANSFER": "TRANSFER"}
-REVERSAL = re.compile(r"Reversal of ID (\d+)")
+REVERSAL = re.compile(REVERSAL_REFERENCE)  # 冲回分录说明的固定格式, 与映射共用一个常量
 SYSTEM_PREFIXES = (
     "conversion balance",
     "reconciliation adjustment",

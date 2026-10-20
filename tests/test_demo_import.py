@@ -338,14 +338,15 @@ def test_acceptance_uploads_the_engagement_documents(flow: Flow) -> None:
 
 
 def test_fieldwork_writes_the_snapshot_and_supplement_tables(flow: Flow) -> None:
-    """快照六张表一版 (source xero, 数据版本 2, sync 留痕 6 条), 补造表四版 (source import, 3-6, 按清单的 TableKind
-    顺序); 3 份合同各一版 (7-9, 上传后抽出合同记数据变动 contracts), 补登记一批 (10)."""
+    """快照七张表一版 (source xero, 数据版本 2, sync 留痕 7 条; 应付账单 6 行, 需求 R178), 补造表四版 (source
+    import, 3-6, 按清单的 TableKind 顺序); 3 份合同各一版 (7-9, 上传后抽出合同记数据变动 contracts), 补登记一批 (10)."""
     versions: list[TableVersion] = flow.after_fieldwork["versions"]
     assert [(v.kind, v.source, v.file_name, v.records, v.data_version) for v in versions] == [
         (TableKind.accounts, "xero", None, 62, 2),
         (TableKind.trial_balance, "xero", None, 33, 2),
         (TableKind.journal_entries, "xero", None, 1017, 2),
         (TableKind.sales_invoices, "xero", None, 42, 2),
+        (TableKind.supplier_bills, "xero", None, 6, 2),
         (TableKind.bank_accounts, "xero", None, 2, 2),
         (TableKind.bank_transactions, "xero", None, 146, 2),
         (TableKind.sales_invoices, "import", "contract_links.csv", 42, 3),
@@ -358,7 +359,7 @@ def test_fieldwork_writes_the_snapshot_and_supplement_tables(flow: Flow) -> None
     assert flow.after_fieldwork["data_version"] == flow.fieldwork.data_version == 10
     assert actions(added(flow.after_acceptance, flow.after_fieldwork)) == Counter(
         {
-            "sync": 6,
+            "sync": 7,
             "import": 4,
             "upload": 19,
             "classify": 19,
