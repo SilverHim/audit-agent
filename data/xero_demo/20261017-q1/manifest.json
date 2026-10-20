@@ -376,6 +376,13 @@
       "xero_refs": []
     },
     {
+      "path": "llm/CSH-02/BA-091.json",
+      "sha256": "c785a72cad6ef64ccb8dee607bc7d386c8659d69164450ea2c77f2aa58109cbe",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/DOC-04/CON-X01.json",
       "sha256": "1a20c44f75ea2d24e8401fe96ab8f3cb87916a03184783ac28f37b487c74c108",
       "synthetic": true,
@@ -392,6 +399,20 @@
     {
       "path": "llm/DOC-04/CON-X03.json",
       "sha256": "1b6179028092defe5c0a6a93bc183543fbd8df732869eb8930db8bb5f77cd587",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-06/BA-090.json",
+      "sha256": "94aca4fc7a1b8f748b4f52101c312accae1070a9b4d0fdb9703526538497ed38",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-06/BA-091.json",
+      "sha256": "f92bcbaf224ea14cf0cee9ebfb89923b038ae22f726e7de83ccfd3ea7e970886",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
