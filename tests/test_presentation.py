@@ -6,7 +6,7 @@ Numbat 争议变体 (功能 collab) 只跑一次, 依次呈递争议, normal, �
 
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +22,11 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Judgment,
     ProcedureRun,
+    ReviewRecord,
     ReviewTask,
     ReviewTier,
     TaskKind,
+    TaskStatus,
     TrailEntry,
     TrailKind,
 )
@@ -32,7 +34,14 @@ from backend.contracts.views import PresentedSide, TaskPresentation
 from backend.core.config import get_settings
 from backend.orchestration.nodes import fail_run
 from backend.orchestration.runner import GraphRunner
-from backend.services.presentation import assemble, evidence_union, failure_of, presentation_entry
+from backend.services.presentation import (
+    assemble,
+    dwell_seconds,
+    evidence_union,
+    failure_of,
+    presentation_entry,
+    record_presentation,
+)
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
@@ -380,3 +389,77 @@ def test_presentation_entry_time_is_injected() -> None:
         2,
         "RUN-REV-02-1",
     )
+
+
+# ── R153 复核停留时长: dwell_seconds 取该复核人对该任务在决定之前最近一次呈递 ──
+
+
+def shown(at: str, actor: str = "U-1", task_id: str = TASK) -> TrailEntry:
+    """10 月 1 日 at (时:分:秒, UTC) 的一次呈递留痕 (字段同 presentation_entry 写的), ID 为 P-{actor}-{at}."""
+    return TrailEntry(
+        id=f"P-{actor}-{at}",
+        engagement_id=EID,
+        kind=TrailKind.presentation,
+        actor=actor,
+        procedure_id="GEN-11",
+        summary=f"呈递复核任务 {task_id}",
+        payload={"task_id": task_id},
+        created_at=datetime.fromisoformat(f"2026-10-01T{at}+00:00"),
+    )
+
+
+DECIDED = datetime(2026, 10, 1, 10, 1, 35, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        ([shown("10:00:00")], (95, "P-U-1-10:00:00")),
+        ([shown("10:00:00"), shown("10:01:00")], (35, "P-U-1-10:01:00")),  # 两次呈递取最近一次
+        ([shown("10:00:00"), shown("10:02:00")], (95, "P-U-1-10:00:00")),  # 晚于决定的不算
+        ([shown("10:00:00"), shown("10:01:00", actor="U-2")], (95, "P-U-1-10:00:00")),  # 别人的不算
+        ([shown("10:01:00", task_id="T-J-REV-03-1-CON-001-v1")], (None, None)),  # 别的任务的不算
+        ([], (None, None)),
+        ([shown("10:01:34.400000")], (0, "P-U-1-10:01:34.400000")),  # 不足 1 秒向下取整
+        ([shown("10:01:35")], (0, "P-U-1-10:01:35")),  # 与决定同一时刻也算
+    ],
+)
+def test_dwell_seconds(entries: list[TrailEntry], expected: tuple[int | None, str | None]) -> None:
+    """R153 验收 2, 4: 决定 10:01:35 提交, 取 U-1 对该任务不晚于决定的最近一次呈递, 秒数向下取整."""
+    noise = shown("10:01:30").model_copy(update={"id": "D-OTHER", "kind": TrailKind.decision})  # 不是呈递的不算
+    assert dwell_seconds([noise, *entries], TASK, "U-1", DECIDED) == expected
+
+
+SHOWN_AT = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
+
+
+async def presented_ba01(features: frozenset[str]) -> tuple[Started, str]:
+    """Numbat 全流程停在等复核, 先写 501 行别的任务的呈递 (多于 all_of_kind 的一页), 再于 10:00:00 由 U-1 呈递
+    BA-01 的任务. 返回运行与这次呈递的留痕 ID."""
+    s = await start_demo(features=features)
+    await wait_idle(s.runner, EID)
+    task = await s.output_store.get(EID, ReviewTask, TASK)
+    assert task is not None and task.status is TaskStatus.pending
+    trail = trail_of(s)
+    for n in range(501):
+        await record_presentation(trail, EID, task.model_copy(update={"id": f"T-OTHER-{n}"}), "U-1", SHOWN_AT)
+    return s, await record_presentation(trail, EID, task, "U-1", SHOWN_AT)
+
+
+async def test_dwell_seconds_from_last_presentation() -> None:
+    """R153 验收 3, 5, 7 (collab 打开, 全流程只此一处): 10:01:35 提交 confirm D-CSH02, 存入的记录 dwell_seconds 95,
+    presentation_id 为 10:00:00 那次呈递 (排在 501 行别的任务的呈递之后, 须翻页才读到), decision 留痕 payload 带这
+    两项; 提交时调用方给的值不用. 闸门决定的留痕不带停留时长. collab 关闭见 test_review_decisions 的 timed 用例."""
+    s, presentation_id = await presented_ba01(COLLAB)
+    [decision] = [r for r in REVIEWS if r.id == "D-CSH02"]  # confirm T-J-CSH-02-1-BA-01-v1
+    decision = decision.model_copy(update={"decided_at": SHOWN_AT + timedelta(seconds=95)})
+    await s.submit.submit(EID, decision.model_copy(update={"dwell_seconds": 1, "presentation_id": "TR-FORGED"}))
+    await wait_idle(s.runner, EID)
+
+    stored = await s.output_store.get(EID, ReviewRecord, "D-CSH02")
+    assert stored is not None and s.runner.run_error(EID) is None
+    entries = {e.idempotency_key: e for e in trail_of(s).entries if e.kind is TrailKind.decision}
+    payload = entries["D-CSH02"].payload
+    assert (stored.dwell_seconds, stored.presentation_id) == (95, presentation_id)
+    assert (payload["dwell_seconds"], payload["presentation_id"]) == (95, presentation_id)
+    assert not {"dwell_seconds", "presentation_id"} & set(entries["D-ACC"].payload)  # 验收 7

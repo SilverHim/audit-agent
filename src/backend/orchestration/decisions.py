@@ -66,9 +66,11 @@ from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.data_quality import OnHand
 from backend.services.features import COLLAB
+from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import attribute_exceptions, draft_rule
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
+from backend.services.trail_pages import all_of_kind
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
 # 效果中会出新版本的对象列表
@@ -564,6 +566,9 @@ def review_trail(eid: str, record: ReviewRecord, task: ReviewTask, closed: list[
     if record.consulted:  # 系统外咨询 (需求 R150): 咨询过才随决定留痕对象与结论
         payload["consulted"] = True
         payload["consultation_record"] = record.consultation_record
+    if record.dwell_seconds is not None:  # 复核停留时长 (需求 R153): 算出了才带, 起算的呈递留痕一并带上
+        payload["dwell_seconds"] = record.dwell_seconds
+        payload["presentation_id"] = record.presentation_id
     if closed:
         payload["closed_task_ids"] = closed
     return TrailEntry(
@@ -752,7 +757,8 @@ class GraphDecisionSubmit:
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task = await self.check_review_record(eid, decision, snapshot)
-                await self._apply_review(eid, kept_consultation(decision), task, snapshot)
+                record = await self.timed(eid, kept_consultation(decision))
+                await self._apply_review(eid, record, task, snapshot)
             return
         async with self._deciding(eid) as (_, snapshot):
             values = fill_defaults(snapshot.values)
@@ -772,6 +778,15 @@ class GraphDecisionSubmit:
                 written[spec.material_field] = [target] if spec.is_list else target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由节点的路由按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=spec.node)
+
+    async def timed(self, eid: str, record: ReviewRecord) -> ReviewRecord:
+        """填上复核停留时长 (需求 R153): 功能 collab 打开时按项目的全部 presentation 留痕 (逐页读完) 算 dwell_seconds
+        与 presentation_id (presentation.dwell_seconds), 关闭时两项为空; 调用方给的值一律不用. 校验之后, 写入之前用."""
+        seconds, presentation_id = None, None
+        if COLLAB in self.deps.features:
+            entries = await all_of_kind(self.deps.trail, eid, TrailKind.presentation)
+            seconds, presentation_id = dwell_seconds(entries, record.task_id, record.reviewed_by, record.decided_at)
+        return record.model_copy(update={"dwell_seconds": seconds, "presentation_id": presentation_id})
 
     async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.

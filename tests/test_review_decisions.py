@@ -7,7 +7,9 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from langgraph.types import Command
+from pydantic import ValidationError
 
+from backend.api.schemas import ReviewRecordIn
 from backend.contracts.errors import DecisionRejected, RuleError, VersionConflict
 from backend.contracts.models import (
     Assertion,
@@ -32,11 +34,13 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
+    TargetType,
     TaskKind,
     TaskStatus,
     TrailKind,
 )
 from backend.orchestration.decisions import (
+    GraphDecisionSubmit,
     check_consultation,
     check_dispute_draft,
     human_judgment_id,
@@ -46,21 +50,25 @@ from backend.orchestration.decisions import (
 )
 from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
+from backend.services.presentation import record_presentation
 from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
+    FakeRegistry,
     FakeTrail,
     ScriptA4,
     ScriptA6,
     ScriptAgent,
     assert_pack_synced,
     finished,
+    make_deps,
     make_procedure,
     make_runner,
     numbat_cash_agents,
@@ -1007,3 +1015,66 @@ def test_consultation_kept_and_trailed_only_when_consulted(
     payload = review_trail(EID, decision, task, []).payload
     expected = {"consulted": True, "consultation_record": kept} if trailed else {}
     assert {k: payload[k] for k in ("consulted", "consultation_record") if k in payload} == expected
+
+
+# ── R153: 复核停留时长 (功能 collab), 从该复核人对该任务最近一次呈递起算 ──
+
+
+def test_dwell_fields_are_not_taken_from_the_request() -> None:
+    """R153 验收 1: 请求体 ReviewRecordIn 带 dwell_seconds 或 presentation_id 即不过 (接口 422); 没有这两项的旧决定
+    JSON 照常读出, 两项为空."""
+    body = {"task_id": DISPUTE, "target_version": 1, "decision": "confirm"}
+    ReviewRecordIn.model_validate(body)
+    for extra in ({"dwell_seconds": 95}, {"presentation_id": "TR-1"}):
+        with pytest.raises(ValidationError):
+            ReviewRecordIn.model_validate(body | extra)
+    old = {
+        k: v
+        for k, v in record(DISPUTE).model_dump(mode="json").items()
+        if k not in ("dwell_seconds", "presentation_id")
+    }
+    read = ReviewRecord.model_validate(old)
+    assert (read.dwell_seconds, read.presentation_id) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("dwell", "presentation_id", "expected"),
+    [
+        (0, "TR-9", {"dwell_seconds": 0, "presentation_id": "TR-9"}),  # 停留 0 秒 (同一秒内决定) 照带
+        (95, "TR-9", {"dwell_seconds": 95, "presentation_id": "TR-9"}),
+        (None, None, {}),
+    ],
+)
+def test_dwell_trailed_whenever_measured(
+    dwell: int | None, presentation_id: str | None, expected: dict[str, Any]
+) -> None:
+    """R153 验收 3, 4 (第 1 轮审核 R153-01): decision 留痕在算出了停留时长时带秒数与呈递留痕 ID, 0 秒也带; 没有算出时
+    两个键都没有. 提交与恢复补写共用 review_trail."""
+    task = ReviewTask.model_construct(id=DISPUTE, procedure_id="CSH-02")
+    decision = record(DISPUTE, dwell_seconds=dwell, presentation_id=presentation_id)
+    payload = review_trail(EID, decision, task, []).payload
+    assert {k: payload[k] for k in ("dwell_seconds", "presentation_id") if k in payload} == expected
+
+
+@pytest.mark.parametrize(("features", "on"), [(NUMBAT_FEATURES | {"collab"}, True), (NUMBAT_FEATURES, False)])
+async def test_timed_fills_dwell_only_with_collab(features: frozenset[str], on: bool) -> None:
+    """R153 验收 5, 9 (第 1 轮审核 R153-03, 不跑全流程): GraphDecisionSubmit.timed 只用功能集与留痕. 501 行别的任务的
+    呈递之后 (多于一页) 再呈递本任务, 95 秒后决定: collab 打开时为 (95, 该呈递 ID), 关闭时两项为空; 调用方给的伪造值
+    都不用."""
+    trail = FakeTrail()
+    submit = GraphDecisionSubmit(cast(Any, None), make_deps(FakeRegistry(), trail, features=features), cast(Any, None))
+    forged = record(DISPUTE, dwell_seconds=1, presentation_id="TR-FORGED")
+    shown_at = forged.decided_at - timedelta(seconds=95)
+    task = ReviewTask.model_construct(
+        id=DISPUTE,
+        version=1,
+        run_id="RUN-CSH-02-1",
+        target_type=TargetType.Judgment,
+        target_id="J-CSH-02-1-BA-01",
+        target_version=1,
+    )
+    for n in range(501):
+        await record_presentation(trail, EID, task.model_copy(update={"id": f"T-OTHER-{n}"}), "U-1", shown_at)
+    presentation_id = await record_presentation(trail, EID, task, "U-1", shown_at)
+    timed = await submit.timed(EID, forged)
+    assert (timed.dwell_seconds, timed.presentation_id) == ((95, presentation_id) if on else (None, None))

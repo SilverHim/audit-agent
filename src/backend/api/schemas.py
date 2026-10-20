@@ -123,7 +123,8 @@ class GateDecisionIn(Model):
 
 
 class ReviewRecordIn(Model):
-    """复核决定请求体: 去掉 id, version, reviewed_by, decided_at."""
+    """复核决定请求体: 去掉 id, version, reviewed_by, decided_at, 以及服务端算的 dwell_seconds, presentation_id
+    (需求 R153)."""
 
     task_id: str
     target_version: int

@@ -1,12 +1,13 @@
 """判断呈递 (GEN-11, 需求 R152): 审计师打开一条复核任务即为一次呈递.
 
 按任务类型组装呈递视图 (争议任务两方并排, 两方证据的并集, 失败原因), 每次呈递写一行 presentation 留痕 (复核停留时长的
-起点). 不改任务, 不写 Store, 不取项目锁, 不调大模型. 组装是纯函数; 任务, 目标, 金额与档位由调用方按复核队列的取法读好
-(api/routes/reviews.task_parts). 规则见 开发接口文档.md 第 10 节 "判断呈递".
+起点, 提交复核决定时按它算, 见 dwell_seconds). 不改任务, 不写 Store, 不取项目锁, 不调大模型. 组装是纯函数; 任务,
+目标, 金额与档位由调用方按复核队列的取法读好 (api/routes/reviews.task_parts).
+规则见 开发接口文档.md 第 10 节 "判断呈递".
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import cast
 
 from backend.contracts.models import (
@@ -217,3 +218,26 @@ def presentation_entry(eid: str, task: ReviewTask, actor: str, now: datetime) ->
 async def record_presentation(trail: AuditTrail, eid: str, task: ReviewTask, actor: str, now: datetime) -> str:
     """写一次呈递的留痕, 返回留痕 ID (即 presentation_id). now 为呈递时间, 由调用方给 (接口取当前时间, 测试可注入)."""
     return await trail.record(presentation_entry(eid, task, actor, now))
+
+
+def dwell_seconds(
+    entries: Sequence[TrailEntry], task_id: str, reviewer: str, decided_at: datetime
+) -> tuple[int | None, str | None]:
+    """复核停留时长 (需求 R153): entries 中 kind presentation, payload.task_id 为 task_id, actor 为 reviewer, 呈递时间
+    不晚于 decided_at 的留痕里取最近一条, 返回 (decided_at 减呈递时间的秒数, 向下取整; 该留痕 ID); 没有时为
+    (None, None). 别人的呈递与决定之后的呈递不算. 纯函数."""
+    shown = [
+        e
+        for e in entries
+        if e.kind is TrailKind.presentation
+        and e.payload.get("task_id") == task_id
+        and e.actor == reviewer
+        and e.created_at is not None
+        and e.created_at <= decided_at
+    ]
+    if not shown:
+        return None, None
+    # 取呈递时间最晚的; 同一时刻的取排在后面的 (同 AuditTrail.list, 留痕按 (created_at, id) 排)
+    last = sorted(shown, key=lambda e: e.created_at or decided_at)[-1]
+    assert last.created_at is not None
+    return (decided_at - last.created_at) // timedelta(seconds=1), last.id
