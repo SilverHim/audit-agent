@@ -1,5 +1,8 @@
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy, Util } from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+// pdf.js 用官方的 legacy 构建 (主线程与 worker 都是), 版本不变: 标准构建用到较新的内置方法 (如
+// Map.prototype.getOrInsertComputed), 较旧的浏览器 (如 Chromium 141) 上报 TypeError, 一页都画不出; legacy 构建自带
+// 这些方法的 polyfill
+import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy, Util } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import type { TextItem } from 'pdfjs-dist/types/src/display/api'
 import { useEffect, useRef, useState } from 'react'
 
