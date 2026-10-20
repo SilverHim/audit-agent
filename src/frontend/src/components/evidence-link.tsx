@@ -11,10 +11,12 @@ import { evidenceGetEvidence, evidenceGetRecord } from '@/client/sdk.gen'
 import type { EvidencePointer } from '@/client/types.gen'
 import { StatusPill } from '@/components/chrome'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { formatAbn } from '@/lib/abn'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { pointerKey } from '@/lib/presentation'
-import { humanize, type ProfileField, type ProfilePair, profileEvidence } from '@/lib/profile-evidence'
+import { formatAud } from '@/lib/money'
+import { humanize, pointerKey } from '@/lib/presentation'
+import { type ProfileField, type ProfilePair, type ProfileWords, profileEvidence } from '@/lib/profile-evidence'
 import type { Messages } from '@/locales/en'
 
 // 能点开行明细的行指针来源 (同后端 SourceType); tests/table-kinds.test.ts 核对与接口一致
@@ -224,7 +226,18 @@ function ProfileBody({ eid, pointer }: { eid: string; pointer: EvidencePointer }
   const query = useQuery(engagementsGetClientProfileOptions({ path: { eid } }))
   if (query.isPending) return <p className="text-muted-foreground text-sm">{t.app.loading}</p>
   if (query.error) return <p className="text-destructive text-sm">{apiMessage(query.error)}</p>
-  const shown = profileEvidence(query.data, pointer, { yes: t.clientPage.yes, no: t.clientPage.no })
+  // 字段的显示沿用客户资料页 (主体类型, ABN) 与新建客户表单 (报告框架) 的标签与格式
+  const frameworks: Record<string, string> = t.newClient.frameworks
+  const words: ProfileWords = {
+    yes: t.clientPage.yes,
+    no: t.clientPage.no,
+    display: {
+      entity_type: (value) => t.clientPage.entityTypes[value] ?? value,
+      applicable_framework: (value) => frameworks[value] ?? value,
+      abn: formatAbn,
+    },
+  }
+  const shown = profileEvidence(query.data, pointer, words)
   if (shown.kind !== 'shown') return <p className="text-muted-foreground text-sm">{t.evidence.profile[shown.kind]}</p>
   return (
     <div className="space-y-3 text-sm">
@@ -240,11 +253,11 @@ function ProfileBody({ eid, pointer }: { eid: string; pointer: EvidencePointer }
 
 function ProfileContent({ field }: { field: ProfileField }) {
   const { t } = useI18n()
-  if (field.kind === 'undeclared') return <p className="text-muted-foreground">{t.evidence.profile.undeclared}</p>
+  if (field.kind === 'undeclared') return <p className="text-muted-foreground">{t.newClient.notDeclared}</p>
   if (field.kind === 'text') return <p className="break-all font-mono">{field.text}</p>
   if (field.kind === 'pairs') return <PairList pairs={field.pairs} />
   return (
-    <ol className="m-0 flex list-none flex-col gap-2 p-0">
+    <ol className="flex list-none flex-col gap-2 p-0">
       {field.rows.map((row, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: 申报的列表没有 ID, 只读不重排, 行号即位置
         <li key={index} className="rounded-md border px-3 py-2">
@@ -257,11 +270,11 @@ function ProfileContent({ field }: { field: ProfileField }) {
 
 function PairList({ pairs }: { pairs: ProfilePair[] }) {
   return (
-    <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
       {pairs.map(({ key, value }) => (
         <div key={key} className="contents">
           <dt className="text-muted-foreground">{key}</dt>
-          <dd className="m-0 break-all font-mono">{value}</dd>
+          <dd className="break-all font-mono">{value}</dd>
         </div>
       ))}
     </dl>
@@ -285,9 +298,7 @@ export function RecordTable({ row, highlight }: { row: Record<string, unknown>; 
 
 function formatCell(key: string, value: unknown): string {
   if (value == null) return '—'
-  if (key.endsWith('_cents') && typeof value === 'number') {
-    return `AUD ${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2 }).format(value / 100)}`
-  }
+  if (key.endsWith('_cents') && typeof value === 'number') return formatAud(value)
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }

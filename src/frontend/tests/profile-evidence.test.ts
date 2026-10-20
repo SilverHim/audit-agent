@@ -2,10 +2,19 @@
 // bun test 运行. 画像是合成的 (Numbat 的六项必填加上各类扩展字段), 形状同 GET /client-profile 的返回.
 import { describe, expect, test } from 'bun:test'
 import type { ClientProfile, ClientProfileView, EvidencePointer } from '../src/client/types.gen'
+import { formatAbn } from '../src/lib/abn'
 import { pointerKey } from '../src/lib/presentation'
-import { adoptedProfile, profileEvidence, profileField } from '../src/lib/profile-evidence'
+import { type ProfileWords, profileEvidence, profileField } from '../src/lib/profile-evidence'
 
-const WORDS = { yes: 'Yes', no: 'No' }
+// 同组件给的: 是否, 以及按字段名的显示 (主体类型的标签, ABN 分组)
+const WORDS: ProfileWords = {
+  yes: 'Yes',
+  no: 'No',
+  display: {
+    entity_type: (value) => ({ small_proprietary: 'Small proprietary company' })[value] ?? value,
+    abn: formatAbn,
+  },
+}
 const PARTY = {
   name: 'Wombat Holdings Pty Ltd',
   kind: 'company',
@@ -59,11 +68,6 @@ function pointer(locator: string, sourceId = 'CLIENT-001'): Pick<EvidencePointer
 }
 
 describe('采用的版本', () => {
-  test('取 history 中本项目采用的那一版, 不取最新版', () => {
-    expect(adoptedProfile(view(1))?.version).toBe(1)
-    expect(adoptedProfile(view(2))?.version).toBe(2)
-  })
-
   test('画像改出新版本后, 采用旧版本的项目照旧显示旧版本的内容 (验收 2)', () => {
     expect(profileEvidence(view(1), pointer('related_parties'), WORDS)).toEqual({
       kind: 'shown',
@@ -91,11 +95,6 @@ describe('采用的版本', () => {
     })
   })
 
-  test('没有版本号的旧画像按第 1 版', () => {
-    const { version: _, ...old } = profile(1)
-    expect(adoptedProfile({ history: [old], engagement_profile_version: 1 })?.id).toBe('CLIENT-001')
-  })
-
   test('显示不了的三种情形各给原因', () => {
     expect(profileEvidence(view(3), pointer('directors'), WORDS)).toEqual({ kind: 'not_adopted' })
     expect(profileEvidence(view(1), pointer('directors', 'CLIENT-XERO-3C1332BB-Q1'), WORDS)).toEqual({
@@ -113,15 +112,20 @@ describe('字段的内容 (验收 1)', () => {
     }
   })
 
-  test('标量: 金额按 AUD, 布尔按是否, 其余原样', () => {
+  test('标量: 金额按 AUD, 布尔按是否, 有标签或格式的按组件给的显示, 其余原样', () => {
     expect(profileField('approval_limit_cents', 500000, WORDS)).toEqual({ kind: 'text', text: 'AUD 5,000.00' })
     expect(profileField('approval_limit_cents', 0, WORDS)).toEqual({ kind: 'text', text: 'AUD 0.00' }) // 0 不是未申报
     expect(profileField('listed', false, WORDS)).toEqual({ kind: 'text', text: 'No' })
     expect(profileField('prior_period_audited', true, WORDS)).toEqual({ kind: 'text', text: 'Yes' })
     expect(profileField('financial_year_end', '06-30', WORDS)).toEqual({ kind: 'text', text: '06-30' })
+    expect(profileField('entity_type', 'small_proprietary', WORDS)).toEqual({
+      kind: 'text',
+      text: 'Small proprietary company',
+    })
+    expect(profileField('abn', '68900042015', WORDS)).toEqual({ kind: 'text', text: '68 900 042 015' })
   })
 
-  test('列表按行: 标量一行一项, 对象一行一组键值', () => {
+  test('列表按行: 标量一行一项, 对象一行一组键值 (嵌套的同名字段同样按显示)', () => {
     expect(profileField('directors', ['Jordan Avery', 'Priya Raman'], WORDS)).toEqual({
       kind: 'rows',
       rows: [{ text: 'Jordan Avery' }, { text: 'Priya Raman' }],
@@ -140,6 +144,9 @@ describe('字段的内容 (验收 1)', () => {
         },
       ],
     })
+    expect(profileField('related_parties', [{ ...PARTY, abn: '68900042015' }], WORDS)).toMatchObject({
+      rows: [{ pairs: expect.arrayContaining([{ key: 'abn', value: '68 900 042 015' }]) }],
+    })
     const misstatement = { engagement: 'ENG-2025-001', area: 'cutoff', amount_cents: 1420000, corrected: true }
     expect(profileField('prior_misstatements', [misstatement], WORDS)).toEqual({
       kind: 'rows',
@@ -156,7 +163,7 @@ describe('字段的内容 (验收 1)', () => {
     })
   })
 
-  test('对象按键值; 嵌套的列表与对象写成一行, 数据为键的字典沿用字段名的单位', () => {
+  test('对象按键值; 嵌套的列表与对象写成一行 (空的为 "—"), 数据为键的字典沿用字段名的单位', () => {
     const governance = {
       body: 'board',
       members: [
@@ -173,12 +180,20 @@ describe('字段的内容 (验收 1)', () => {
         { key: 'all in management', value: 'No' },
       ],
     })
-    const fees = { audit_fee_cents: 4500000, dependency_pct_by_year: { '2025': 0.12, '2026': 0.155 } }
+    expect(profileField('governance', { ...governance, members: [] }, WORDS)).toMatchObject({
+      pairs: expect.arrayContaining([{ key: 'members', value: '—' }]),
+    })
+    const fees = {
+      audit_fee_cents: 4500000,
+      dependency_pct_by_year: { '2025': 0.12, '2026': 0.155 },
+      referral_source_fees_pct_by_year: {}, // Fees 的缺省
+    }
     expect(profileField('fees', fees, WORDS)).toEqual({
       kind: 'pairs',
       pairs: [
         { key: 'audit fee', value: 'AUD 45,000.00' },
         { key: 'dependency pct by year', value: '2025: 12.00%, 2026: 15.50%' },
+        { key: 'referral source fees pct by year', value: '—' },
       ],
     })
     expect(profileField('prior_risk_register', { 'ENG-2025-001': ['revenue:high', 'cash:low'] }, WORDS)).toEqual({
@@ -188,24 +203,20 @@ describe('字段的内容 (验收 1)', () => {
   })
 })
 
-describe('证据列表的 key (R128 第 2 轮审核意见 08)', () => {
-  const base = { type: 'voucher', source_type: 'client_profile', source_id: 'CLIENT-001', page: null } as const
-
-  test('同一画像的不同字段各算一项', () => {
-    const parties = pointerKey({ ...base, locator: 'related_parties' })
-    expect(parties).toBe('client_profile:CLIENT-001:related_parties:')
-    expect(pointerKey({ ...base, locator: 'directors' })).not.toBe(parties)
-  })
-
-  test('文件按页与 locator 分开, 没有页时页为空', () => {
-    const page = { source_type: 'document', source_id: 'DOC-1', locator: 'clause 5.1' } as const
-    const keys = [
-      pointerKey({ ...page, page: 1 }),
-      pointerKey({ ...page, page: 2 }),
-      pointerKey({ ...page, locator: 'clause 6', page: 1 }),
-      pointerKey({ ...page, page: null }),
-    ]
-    expect(new Set(keys).size).toBe(4)
-    expect(keys[0]).toBe('document:DOC-1:clause 5.1:1')
-  })
+test('证据列表的 key: 来源, ID, locator 与页都进 key, 只差一项的指针各算一项 (R128 第 2 轮审核意见 08)', () => {
+  const parties: Pick<EvidencePointer, 'source_type' | 'source_id' | 'locator' | 'page'> = {
+    source_type: 'client_profile',
+    source_id: 'CLIENT-001',
+    locator: 'related_parties',
+    page: null,
+  }
+  const keys = [
+    pointerKey(parties),
+    pointerKey({ ...parties, locator: 'directors' }), // 同一画像的另一字段
+    pointerKey({ ...parties, source_id: 'CLIENT-002' }),
+    pointerKey({ ...parties, source_type: 'document' }),
+    pointerKey({ ...parties, page: 1 }),
+  ]
+  expect(new Set(keys).size).toBe(keys.length)
+  expect(keys[0]).toBe('client_profile:CLIENT-001:related_parties:')
 })

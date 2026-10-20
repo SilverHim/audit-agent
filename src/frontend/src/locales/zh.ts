@@ -1427,7 +1427,6 @@ export const zh: Messages = {
     profile: {
       declared: '管理层申报',
       version: (n) => `客户画像第 ${n} 版（本项目采用）`,
-      undeclared: '未申报',
       note: '管理层申报的资料，未经审计组核实。',
       not_adopted: '找不到本项目采用的客户画像版本。',
       other_profile: '该指针指向的不是本项目客户的画像。',

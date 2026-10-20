@@ -3,6 +3,7 @@
 // 画像改出新版本后 (如同客户的其他项目更新), 本项目采用的旧版本照旧显示. 纯函数, bun test 覆盖.
 import type { ClientProfileView, EvidencePointer } from '@/client/types.gen'
 import { formatAud, formatPct } from '@/lib/money'
+import { humanize } from '@/lib/presentation'
 
 // 键值对的一项: 字段名 (humanize 后) 与显示文本
 export type ProfilePair = { key: string; value: string }
@@ -24,23 +25,19 @@ export type ProfileEvidence =
   | { kind: 'other_profile' } // 指针的 source_id 不是本项目客户的画像
   | { kind: 'unknown_field' } // locator 不是画像的字段
 
-// 布尔值的文案 (中英由调用方给)
-export type BooleanWords = { yes: string; no: string }
+// 显示用的文案与格式 (由组件给, 文案留在组件): 布尔的是否; display 为字段名 → 字符串值的显示, 沿用客户资料页与
+// 新建客户表单的标签与格式 (如 entity_type, applicable_framework 的标签, ABN 分组), 顶层与嵌套的同名字段都用
+export type ProfileWords = { yes: string; no: string; display?: Record<string, (value: string) => string> }
 
-// 字段名的显示: 去掉 _cents 后缀, 下划线换空格 (同证据弹窗的数据行)
-export function humanize(key: string): string {
-  return key.replace(/_cents$/, '').replaceAll('_', ' ')
-}
-
-// 本项目采用的那一版: history 中版本等于 engagement_profile_version 的 (旧版本缺省版本号按 1)
-export function adoptedProfile(view: Pick<ClientProfileView, 'history' | 'engagement_profile_version'>) {
+// 本项目采用的那一版: history 中版本等于 engagement_profile_version 的 (生成的类型里 version 可选, 接口总会给)
+function adoptedProfile(view: Pick<ClientProfileView, 'history' | 'engagement_profile_version'>) {
   return view.history.find((profile) => (profile.version ?? 1) === view.engagement_profile_version)
 }
 
 export function profileEvidence(
   view: Pick<ClientProfileView, 'history' | 'engagement_profile_version'>,
   pointer: Pick<EvidencePointer, 'source_id' | 'locator'>,
-  words: BooleanWords,
+  words: ProfileWords,
 ): ProfileEvidence {
   const profile = adoptedProfile(view)
   if (!profile) return { kind: 'not_adopted' }
@@ -62,7 +59,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function profileField(key: string, value: unknown, words: BooleanWords): ProfileField {
+export function profileField(key: string, value: unknown, words: ProfileWords): ProfileField {
   if (isEmpty(value)) return { kind: 'undeclared' }
   if (Array.isArray(value)) {
     return {
@@ -74,7 +71,7 @@ export function profileField(key: string, value: unknown, words: BooleanWords): 
   return { kind: 'text', text: inline(key, value, words) }
 }
 
-function pairs(record: Record<string, unknown>, words: BooleanWords): ProfilePair[] {
+function pairs(record: Record<string, unknown>, words: ProfileWords): ProfilePair[] {
   return Object.entries(record).map(([key, value]) => ({ key: humanize(key), value: inline(key, value, words) }))
 }
 
@@ -89,7 +86,7 @@ function isPercent(key: string): boolean {
 
 // 一个值的单行文本: 金额为 AUD, 比例为百分比, 布尔为是否, 空为 "—"; 嵌套的列表用分号连接, 嵌套的对象写成
 // "键: 值" (键为数据的字典, 如各年的收费占比 dependency_pct_by_year, 其值沿用字段名的单位)
-function inline(key: string, value: unknown, words: BooleanWords): string {
+function inline(key: string, value: unknown, words: ProfileWords): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? words.yes : words.no
   if (typeof value === 'number') {
@@ -97,6 +94,7 @@ function inline(key: string, value: unknown, words: BooleanWords): string {
     if (isPercent(key)) return formatPct(value)
     return String(value)
   }
+  if (typeof value === 'string') return words.display?.[key]?.(value) ?? value
   if (Array.isArray(value)) return value.length ? value.map((item) => inline(key, item, words)).join('; ') : '—'
   if (isRecord(value)) {
     const unit = isCents(key) || isPercent(key)

@@ -38,3 +38,8 @@ export function showSideProposals(collab: boolean, view: ReviewTaskView): boolea
 export function pointerKey(pointer: Pick<EvidencePointer, 'source_type' | 'source_id' | 'locator' | 'page'>): string {
   return `${pointer.source_type}:${pointer.source_id}:${pointer.locator}:${pointer.page ?? ''}`
 }
+
+// 证据弹窗里字段名的显示: 去掉 _cents 后缀, 下划线换空格 (数据行与客户画像的字段共用). 纯函数
+export function humanize(key: string): string {
+  return key.replace(/_cents$/, '').replaceAll('_', ' ')
+}
