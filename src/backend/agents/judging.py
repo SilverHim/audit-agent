@@ -1,9 +1,11 @@
 """判断公共流程: A6 的判断程序与 A8 的 FIN-03 (需求 R158) 共用 (接口文档第 6 节 A6 判断公共流程).
 
 每个判断对象依次经过 judge → A7 复核 (critic) → 判断级降级 (downgrade) → classify → make_task.
-判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级由对应需求实现, 缺省原样返回.
+判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 判断级降级在功能 autonomy 打开时生效
+(judging_steps, 需求 R170), 关闭时原样返回.
 """
 
+import functools
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -24,7 +26,9 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome
 from backend.contracts.state import StatePatch
-from backend.services.review_queue import attribute_exceptions, misstatement_updates
+from backend.services.autonomy_policy import judgment_level
+from backend.services.features import AUTONOMY
+from backend.services.review_queue import attribute_exceptions, judgment_amount, misstatement_updates, subject_amount
 
 
 @dataclass(frozen=True)
@@ -75,10 +79,11 @@ class Critic(Protocol):
     ) -> Judgment: ...
 
 
-Step = Callable[[RunContext, Judgment], Awaitable[Judgment]]  # 复核之后, 分类之前的一步: 收判断, 返回 (可能改过的) 判断
+# 复核之后, 分类之前的一步: 收判断与该对象的规则例外 (当前版本, 同 A7 收到的), 返回 (可能改过的) 判断
+Step = Callable[[RunContext, Judgment, Sequence[AuditException]], Awaitable[Judgment]]
 
 
-async def unchanged(ctx: RunContext, judgment: Judgment) -> Judgment:
+async def unchanged(ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException]) -> Judgment:
     """缺省步骤: 原样返回."""
     return judgment
 
@@ -87,13 +92,50 @@ async def unchanged(ctx: RunContext, judgment: Judgment) -> Judgment:
 class JudgingSteps:
     """A7 复核之后, classify 之前的可替换步骤; 收到的判断已带 critic 字段.
 
-    downgrade: 判断级降级 (规格书第 7.4 节, 在 A7 之后), 缺省原样返回.
+    downgrade: 判断级降级 (规格书第 7.4 节, 在 A7 之后), 缺省原样返回; 功能 autonomy 打开时为 downgrade (judging_steps).
     """
 
     downgrade: Step = unchanged
 
 
 DEFAULT_STEPS = JudgingSteps()  # 原样返回
+
+
+async def downgrade(
+    deps: AgentDeps, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException]
+) -> Judgment:
+    """判断级降级 (规格书第 7.4 节, 需求 R170): 按 autonomy_policy.judgment_level 改写判断的 autonomy_level 与
+    downgrade_reasons (同一版本, 第 1 版写入之前), 之后 classify 读这个有效级别.
+
+    起点与装配时的理由取 ctx.procedure (运行时级别); 判断金额经 review_queue.judgment_amount, 与复核档位同一口径:
+    例外取 findings (该对象的规则例外, 含本次执行刚建的, 如 CSH-02 的 D01, D04), 交易行的金额经 subject_amount 读,
+    所指错报取状态中的当前版本; 执行重要性取状态的, 未定时 amount_over_pm 不适用. A7 的结论不影响级别.
+    例: CSH-02 运行时 L2 [high_risk], BA-091 金额 4853 (执行重要性 16216), 置信度不低于 0.7 → L2 [high_risk].
+    """
+    exceptions = {x.id: x for x in findings}
+    amount = judgment_amount(
+        judgment,
+        exceptions,
+        await subject_amount(deps.financial_store, ctx.engagement.id, judgment),
+        {m.id: m for m in ctx.state["misstatements"]},
+    )
+    decision = judgment_level(
+        deps.autonomy,
+        ctx.template,
+        ctx.procedure,
+        judgment,
+        amount=amount,
+        performance_cents=ctx.state["performance_materiality_cents"],
+        exceptions=exceptions,
+    )
+    return judgment.model_copy(update={"autonomy_level": decision.level, "downgrade_reasons": decision.reasons})
+
+
+def judging_steps(deps: AgentDeps) -> JudgingSteps:
+    """判断程序所用的可替换步骤: 功能 autonomy 打开时降级为 downgrade, 关闭时为 DEFAULT_STEPS (原样返回)."""
+    if AUTONOMY not in deps.features:
+        return DEFAULT_STEPS
+    return JudgingSteps(downgrade=functools.partial(downgrade, deps))
 
 
 def subjects_awaiting_review(ctx: RunContext) -> set[str]:
@@ -123,7 +165,8 @@ def in_scope(ctx: RunContext, subject_id: str) -> bool:
 async def judge_all(
     deps: AgentDeps, ctx: RunContext, subjects: list[Subject], critic: Critic, steps: JudgingSteps = DEFAULT_STEPS
 ) -> list[Judged]:
-    """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级.
+    """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级 (两步都收该对象的
+    规则例外).
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
     fixture_key 取对象的 (缺省为对象 ID); 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile;
@@ -150,7 +193,7 @@ async def judge_all(
         if outcome.judgment is not None:
             # 独立复核在降级与分类之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
             judgment = await critic.review(ctx, outcome.judgment, subject.rule_findings)
-            judgment = await steps.downgrade(ctx, judgment)
+            judgment = await steps.downgrade(ctx, judgment, subject.rule_findings)
             outcome = outcome.model_copy(update={"judgment": judgment})
         return Judged(jctx, outcome)
 

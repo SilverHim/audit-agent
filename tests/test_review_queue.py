@@ -8,15 +8,22 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     Decision,
+    EvidencePointer,
+    EvidenceType,
     Judgment,
     ManualRequest,
     ProposedAction,
+    ReasoningStep,
+    Reliability,
     ReviewTask,
+    StepKind,
+    StepStatus,
     TargetType,
     TaskKind,
 )
 from backend.contracts.services import JudgmentOutcome
 from backend.core.config import get_settings
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import NOW, make_run
@@ -25,13 +32,15 @@ LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 QUEUE = ReviewQueue(LIBRARY)
 
 
-def make_outcome(procedure_id: str, level: AutonomyLevel, action: ProposedAction) -> JudgmentOutcome:
-    """一个判断对象的成功产出; classify 只读自主度与建议动作, 其余字段不校验."""
+def make_outcome(procedure_id: str, level: AutonomyLevel, action: ProposedAction, **extra: Any) -> JudgmentOutcome:
+    """一个判断对象的成功产出; classify 只读自主度与建议动作 (功能 autonomy 打开时另读推理链, 由 extra 给), 其余字段
+    不校验."""
     fields: dict[str, Any] = {
         "id": f"J-{procedure_id}-1-S1",
         "procedure_id": procedure_id,
         "autonomy_level": level,
         "proposed_action": action,
+        **extra,
     }
     judgment = Judgment.model_construct(**fields)
     return JudgmentOutcome(judgment=judgment, failure=None, attempts=1, trail_ids=[])
@@ -150,3 +159,49 @@ def test_make_task_ids_and_target_types() -> None:
     assert (failed.id, failed.target_type) == ("T-RUN-REV-02-1-SI-1-v1", TargetType.ProcedureRun)
     assert failed_whole.id == "T-RUN-REV-02-1-v1"
     assert [t.subject_id for t in (normal, unattributed, failed, failed_whole)] == ["SI-1", "SI-1", "SI-1", None]
+
+
+# ── 需求 R170 验收 7: 关键证据缺失 ──
+
+REPLY = EvidencePointer(
+    type=EvidenceType.external,
+    source_type="document",
+    source_id="DOC-REPLY",
+    locator="confirmed_balance_cents",
+    page=1,
+    reliability=Reliability.external_original,
+)
+STATEMENT = EvidencePointer(
+    type=EvidenceType.bank,
+    source_type="bank_transaction",
+    source_id="BT-1",
+    locator="amount_cents",
+    reliability=Reliability.external_original,
+)
+AUTONOMY = BASELINE | {"autonomy"}
+
+
+def fact(pointer: EvidencePointer, status: StepStatus = StepStatus.supported) -> ReasoningStep:
+    return ReasoningStep(kind=StepKind.fact, text="x", evidence=[pointer], status=status)
+
+
+@pytest.mark.parametrize(
+    ("features", "chain", "expected"),
+    [
+        (AUTONOMY, [fact(REPLY)], TaskKind.normal),  # 缺 bank: 置信度 0.95 也交人
+        (AUTONOMY, [fact(REPLY), fact(STATEMENT)], None),  # 两种都有: 自动关闭
+        (AUTONOMY, [fact(REPLY), fact(STATEMENT, StepStatus.unsupported)], TaskKind.normal),  # 所在步骤不受支持, 不算
+        (BASELINE, [fact(REPLY)], None),  # 功能关闭: 不看关键证据 (同现状)
+    ],
+)
+def test_missing_key_evidence_goes_to_human(
+    features: frozenset[str], chain: list[ReasoningStep], expected: TaskKind | None
+) -> None:
+    """合成 L3 hybrid 判断 (CSH-02 去掉 always_review, evidence_required [external, bank]), 置信度 0.95, accept:
+    功能 autonomy 打开时, 受支持步骤里缺任一种要求的证据就建 normal 任务, 不自动关闭 (规格书第 8.4 节: 不允许加权
+    抵消); 补上 bank 的指针后自动关闭."""
+    queue = ReviewQueue(ProcedureLibrary(get_settings().KNOWLEDGE_ROOT, features))
+    template = queue.library.load("CSH-02").model_copy(update={"always_review": False})
+    assert template.engine == "hybrid" and template.evidence_required == [EvidenceType.external, EvidenceType.bank]
+    outcome = make_outcome("CSH-02", AutonomyLevel.L3, ProposedAction.accept, confidence=0.95, reasoning_chain=chain)
+    assert queue.classify(template, outcome, []) is expected

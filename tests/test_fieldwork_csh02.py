@@ -110,14 +110,16 @@ def setup(
     outcomes: dict[str, Any] | None = None,
     exceptions: list[Any] | None = None,
     real_engine: bool = False,
+    features: frozenset[str] | None = None,
 ) -> tuple[FieldworkAgent, RunContext, Any]:
     """A6 与 CSH-02 第 1 次执行: 财务数据有两个银行账户, 本期试算表 (1010 = 125840000, 1020 = 40000000) 与两份回函;
-    状态有 CSH-05 的余额不符例外与回函文件. 判断引擎缺省为假引擎 (L2 close, 待复核), real_engine 时为真实引擎 (mock)."""
+    状态有 CSH-05 的余额不符例外与回函文件. 判断引擎缺省为假引擎 (L2 close, 待复核), real_engine 时为真实引擎 (mock).
+    features 缺省为基线."""
     financial = FakeFinancialStore(
         list(NUMBAT_REPLIES), NUMBAT_RECORDS, trial_balance=NUMBAT_TRIAL_BALANCE if books is None else books
     )
     trail = FakeTrail()
-    deps = make_deps(FakeRegistry(), trail, financial_store=financial)
+    deps = make_deps(FakeRegistry(), trail, financial_store=financial, features=features)
     engine: Any = deps.judgments
     if not real_engine:
         default = passed(proposed_action=ProposedAction.close)

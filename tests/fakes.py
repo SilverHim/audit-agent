@@ -198,6 +198,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
 from backend.services.abn import normalize_abn
+from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
@@ -2547,7 +2548,8 @@ def make_deps(
     函证平台与用户 (给了 library 时另换程序库).
     features: 启用的功能, 写入 AgentDeps.features. 没给 library 时缺省为基线, 按它建 knowledge 目录的程序库 (同
     组装根); 给了 library 时不重建, 缺省取 library.features, 给了而与之不同时抛 ValueError (两处功能集须一致).
-    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建, 复核队列按替换后的程序库重建.
+    其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建, 复核队列与自主度降级的知识
+    (AgentDeps.autonomy) 按替换后的程序库重建.
 
     项目存储缺省只有 Numbat 的画像与 ENGAGEMENT; 审计产出存储与财务数据存储缺省为空; 规则引擎缺省给 Numbat 的结果;
     大模型缺省为 mock 模式的固定输出客户端 (按假项目存储中项目的数据集选 fixture 目录); 复核模型缺省同样,
@@ -2604,6 +2606,7 @@ def make_deps(
         users=FakeUserStore(),
         review_llm=review_llm,
         features=features,
+        autonomy=AutonomyPolicy.load(library),
     )
     return with_manual_owners(deps)  # 同组装根: 按换好的程序库与假实现重找人工程序的 owner
 

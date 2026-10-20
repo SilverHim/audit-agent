@@ -45,7 +45,14 @@ from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.gates import materiality_amounts
-from backend.orchestration.nodes import GraphNodes, apply_patch, rerun_subjects, save_outputs, update_procedure
+from backend.orchestration.nodes import (
+    GraphNodes,
+    apply_patch,
+    assembled_procedure,
+    rerun_subjects,
+    save_outputs,
+    update_procedure,
+)
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
@@ -240,11 +247,11 @@ async def rerun_failed(h: XeroHarness, nodes: GraphNodes, state: EngagementState
 
 async def run_programs(h: XeroHarness, ids: Sequence[str], *, rerun: bool = False) -> Ran:
     """先跑 DOC-04 (合同已在导入时抽取时不调大模型), PLN-07, PLN-01, 按 MATERIALITY 与 PLN-01 的候选定重要性 (同
-    PLN-01/03 闸门的算法); 再把 ids 补齐依赖闭包 (除去以上三条), 程序第 1 版写入存储 (关联目标同 assemble_pack 的
-    匹配), 按依赖分层执行: 每层先自动确认上游判断 (confirm_upstream), 同层的程序都以本层开始时的状态执行, 再逐个
-    写入并入 (同 fan_in). 每次执行经 GraphNodes.perform (建执行记录, 调 Agent; Agent 出错时为 A1 的失败片段),
-    片段写入存储后经 apply_patch 并入状态. rerun 时每条程序写入后, 出了 failed 任务的重跑一次 (rerun_failed), 下游
-    看到的是重跑后的结果."""
+    PLN-01/03 闸门的算法); 再把 ids 补齐依赖闭包 (除去以上三条), 程序第 1 版写入存储 (关联目标与级别同 assemble_pack,
+    见 nodes.assembled_procedure), 按依赖分层执行: 每层先自动确认上游判断 (confirm_upstream), 同层的程序都以本层
+    开始时的状态执行, 再逐个写入并入 (同 fan_in). 每次执行经 GraphNodes.perform (建执行记录, 调 Agent; Agent
+    出错时为 A1 的失败片段), 片段写入存储后经 apply_patch 并入状态. rerun 时每条程序写入后, 出了 failed 任务的
+    重跑一次 (rerun_failed), 下游看到的是重跑后的结果."""
     deps, library = h.deps, h.deps.library
     nodes = GraphNodes(deps, 2)
     state = h.state
@@ -264,18 +271,7 @@ async def run_programs(h: XeroHarness, ids: Sequence[str], *, rerun: bool = Fals
     )
     wanted = [t for t in library.closure(sorted(ids)) if t.id not in PLANNING_PROGRAMS]
     held = {p.id for p in state["procedure_pack"]}
-    objectives = state["audit_objectives"]
-    added = [
-        Procedure(
-            id=t.id,
-            phase=t.phase,
-            template_commit=library.commit,
-            objective_ids=[o.id for o in objectives if t in library.match(o)],
-            autonomy_level=t.autonomy_level,
-        )
-        for t in wanted
-        if t.id not in held
-    ]
+    added = [assembled_procedure(deps, t, state["audit_objectives"]) for t in wanted if t.id not in held]
     async with deps.output_store.transaction(h.engagement.id):
         stored = await deps.output_store.put(h.engagement.id, added, actor=AgentId.A1)
     state = apply_patch(state, {"procedure_pack": [*state["procedure_pack"], *cast(list[Procedure], stored)]})

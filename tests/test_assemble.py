@@ -7,6 +7,8 @@ import pytest
 
 from backend.contracts.models import (
     AuditObjective,
+    AutonomyLevel,
+    DowngradeCondition,
     GateVerdict,
     Phase,
     Procedure,
@@ -38,6 +40,7 @@ from tests.fakes import (
     make_runner,
     wait_idle,
 )
+from tests.test_autonomy_policy import XERO_OBJECTIVES
 from tests.test_decisions import Started, acc01_decision, assert_rejected, at_pln_gate, inventory, pln_decision
 
 EID = ENGAGEMENT.id
@@ -219,6 +222,45 @@ async def test_schedule_layers_and_groups_without_writing() -> None:
     }
     assert store.commits == commits
     assert all(p.status is ProcedureStatus.planned for p in added_programs(state["procedure_pack"]))
+
+
+# ── 需求 R170: 装配时的自主度降级 ──
+
+L1, L2, L3, L4 = AutonomyLevel.L1, AutonomyLevel.L2, AutonomyLevel.L3, AutonomyLevel.L4
+SIG, HIGH = DowngradeCondition.significant_risk, DowngradeCondition.high_risk
+# 程序: (模板级别, 功能 autonomy 打开时的级别与理由); Xero 目标下收入两条 significant, 现金 high (需求 R168 验收 2)
+ASSEMBLED = {
+    "REV-08": (L3, L1, [SIG]),
+    "REV-03": (L2, L1, [SIG]),  # −2 越过下限, 截在 L1
+    "REV-02": (L2, L1, [SIG]),
+    "CSH-04": (L4, L3, [HIGH]),
+    "CSH-05": (L4, L3, [HIGH]),
+    "CSH-02": (L3, L2, [HIGH]),
+    "DOC-06": (L3, L3, []),  # 只经依赖加入, 没有关联目标
+    "GEN-05": (L3, L3, []),  # P2 固定集 (功能 journals), 没有关联目标
+    "GEN-02": (L2, L2, []),
+}
+UNASSEMBLED = {"FIN-03": L2, "FIN-04": L3}  # 项目启动时实例化的 (fixed_procedures), 没有关联目标, 一律取模板级别
+
+
+@pytest.mark.parametrize("autonomy", [False, True])
+async def test_assembly_downgrade(autonomy: bool) -> None:
+    """需求 R170 验收 1-3: 功能 autonomy 打开时, PLN-01/03 通过后 assemble_pack 写入的 P2 程序第 1 版按关联审计目标的
+    最高风险降级 (significant −2, high −1, 下限 L1), 理由记在 downgrade_reasons, 与阶段 P2_Executing 同一次提交;
+    没有关联目标的 (只经依赖加入的 DOC-06, 固定集 GEN-05, GEN-02, 启动时实例化的 FIN-03, FIN-04) 取模板级别, 理由
+    为空. 关闭时一律取模板级别 (同现状)."""
+    features = frozenset({"critic", "journals", "misstatement"} | ({"autonomy"} if autonomy else set()))
+    nodes, store, _, state = after_pln_approve(XERO_OBJECTIVES, features=features)
+    patch = await nodes.assemble_pack(state)
+    expected = {pid: (on, reasons) if autonomy else (off, []) for pid, (off, on, reasons) in ASSEMBLED.items()}
+    [commit] = store.commits
+    written = {o.id: (o.autonomy_level, o.downgrade_reasons) for o in commit if isinstance(o, Procedure)}
+    assert written == expected
+    assert EngagementWrite("update", EID, {"phase": Phase.P2_Executing}) in commit
+    pack = {p.id: (p.autonomy_level, p.downgrade_reasons) for p in patch["procedure_pack"]}
+    assert {pid: pack[pid] for pid in [*ASSEMBLED, *UNASSEMBLED]} == expected | {
+        pid: (level, []) for pid, level in UNASSEMBLED.items()
+    }
 
 
 # ── R81: P2 固定集 (模板 fixed) ──
