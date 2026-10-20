@@ -77,7 +77,8 @@ def scaled(base_cents: int, pct: float) -> int:
 
 def inapplicable(basis: str, base_cents: int) -> MaterialityInapplicable | None:
     """候选本期不适用的原因 (需求 R351): 基准金额为正时为空; 税前利润为负记 loss, 其余不为正的记 not_positive.
-    依据 ASA 320 第 A5 段 (税前利润不宜作基准时改用收入等其他基准); 不为正的基准乘比例得不出重要性."""
+    loss 依据 ASA 320 第 A5 段 (税前利润波动时宜改用毛利或收入等其他基准); not_positive: 不为正的基准乘比例得不出
+    重要性."""
     if base_cents > 0:
         return None
     return "loss" if basis == "profit_before_tax" and base_cents < 0 else "not_positive"

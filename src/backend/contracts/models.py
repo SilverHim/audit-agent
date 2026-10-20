@@ -1264,7 +1264,8 @@ class MaterialityCandidate(Model):
     pct_high: float  # 比例上限
     low_cents: int  # 候选下限 = 基准金额 × pct_low
     high_cents: int  # 候选上限 = 基准金额 × pct_high
-    # 本期不适用的原因: 基准金额不为正时有值 (ASA 320 第 A5 段), 候选照常呈报, 不能选为重要性基准 (需求 R351)
+    # 本期不适用的原因: 基准金额不为正时有值 (loss 依据 ASA 320 第 A5 段; not_positive 为不为正的基准乘比例得不出
+    # 重要性), 候选照常呈报, 不能选为重要性基准 (需求 R351)
     not_applicable: MaterialityInapplicable | None = None
 
 

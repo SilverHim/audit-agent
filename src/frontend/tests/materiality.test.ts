@@ -1,5 +1,6 @@
 // PLN-01/03 闸门的重要性候选 (lib/materiality, 需求 R351), bun test 运行.
-// 候选取 Xero 演示的三基准: 税前亏损, 税前利润一项本期不适用
+// 候选取 Xero 演示的三基准与金额 (税前亏损, 税前利润一项本期不适用); 顺序有意调过, 把不适用的一项排在最前,
+// 看初值会不会取它 (材料里的实际顺序是收入, 总资产, 税前利润)
 import { describe, expect, test } from 'bun:test'
 import type { MaterialityCandidate, MaterialityCandidates } from '../src/client/types.gen'
 import { initialChoice, selectableCandidates } from '../src/lib/materiality'
@@ -44,6 +45,15 @@ describe('重要性候选', () => {
       performance_pct: 0.75,
       clearly_trivial_pct: 0.05,
     })
+  })
+
+  test('没有标记的旧材料 (R351 以前存下的): 为负的税前利润同样不进选项, 初值也不取它', () => {
+    const old = materials([
+      candidate('profit_before_tax', -150000000, [0.05, 0.05]),
+      candidate('revenue', 1200000000, [0.005, 0.01]),
+    ])
+    expect(selectableCandidates(old).map((item) => item.basis)).toEqual(['revenue'])
+    expect(initialChoice(old).basis).toBe('revenue')
   })
 
   test('都不适用时退回第一项 (提交时后端拒绝)', () => {
