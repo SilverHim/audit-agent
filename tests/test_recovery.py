@@ -59,6 +59,7 @@ from tests.test_decisions import (
     acc01_decision,
     at_plan_gate,
     at_pln_gate,
+    checkpoint_matches_store,
     edit,
     plan_decision,
     plan_versions,
@@ -380,6 +381,7 @@ async def test_plan_decision_caught_up(
     caught_up = [h async for h in s.runner.app.aget_state_history(CONFIG) if decision in h.values["gate_decisions"]]
     assert caught_up[-1].next == (("plan_draft",) if verdict is GateVerdict.reject else ("gate_p1_plan",))
     assert (plan_versions(s), pln15_runs(s), decision_keys(s).count(decision.id)) == (plans, runs, 1)
+    await checkpoint_matches_store(s)
     trail = s.runner.deps.trail
     assert isinstance(trail, FakeTrail)
     after = (await s.runner.app.aget_state(CONFIG)).config, len(s.output_store.rows), len(trail.entries)

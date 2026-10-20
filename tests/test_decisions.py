@@ -1523,6 +1523,15 @@ def stored_plans(s: Started) -> list[AuditPlan]:
     return plans
 
 
+async def checkpoint_matches_store(s: Started) -> None:
+    """检查点中的各计划 (每个 ID 一项) 与 Store 中该计划的最新版逐个相等: 写出的每一版在检查点与 Store 中相同, 含置
+    superseded 的旧修订 (审核意见 R206-02, 即 R203 普审意见 03 的检查点一侧)."""
+    latest = {p.id: p for p in stored_plans(s)}  # 按写入顺序, 后写的覆盖
+    assert sorted((await checkpoint_values(s))["audit_plans"], key=lambda p: p.id) == [
+        latest[k] for k in sorted(latest)
+    ]
+
+
 def trail_of(s: Started, kind: TrailKind) -> list[TrailEntry]:
     assert isinstance(s.runner.deps.trail, FakeTrail)
     return [e for e in s.runner.deps.trail.entries if e.kind is kind]
@@ -1630,6 +1639,9 @@ async def test_plan_page_at_gate(plan_gate: Started) -> None:
         (plan_decision(GateVerdict.approve, plan_confirmation=None), "MISSING_FIELD", "plan_confirmation"),
         (plan_decision(GateVerdict.approve, target_version=2), "VERSION_MISMATCH", None),
         (plan_decision(GateVerdict.approve, target_id="PLAN-2"), "VERSION_MISMATCH", None),
+        # 审核意见 R206-01: 绑定的版本不对时驳回与信息不足同样被拒, 不只 approve
+        (plan_decision(GateVerdict.reject, target_version=2), "VERSION_MISMATCH", None),
+        (plan_decision(GateVerdict.insufficient_info, target_id="PLAN-2"), "VERSION_MISMATCH", None),
         # R206 验收 1
         *[
             (
@@ -1749,6 +1761,7 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     批准 PLAN-2 v1 (需要项目质量复核, 未确认不需要专家: 只作记录, 不拦截): PLAN-2 v2 approved, 三项照写入,
     PLN-15 completed, 阶段 P2_Executing, 越过闸门后下一节点为 schedule."""
     s = await at_plan_gate()
+    await checkpoint_matches_store(s)
 
     async def decide(decision: GateDecision) -> EngagementState:
         await s.submit.submit(EID, decision)
@@ -1766,6 +1779,7 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     assert await s.next_nodes() == ("gate_p1_plan",) and await plan_gate_view(s) == ("PLAN-1", 1, [])
     assert plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)] and values["phase"] is Phase.P1_Planning
     assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+    await checkpoint_matches_store(s)
 
     reject = plan_decision(GateVerdict.reject, id=PLAN_REJECT_ID, reason=PLAN_REJECT_REASON)
     values = await decide(reject)
@@ -1789,6 +1803,7 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     )
     assert values["phase"] is Phase.P1_Planning and s.latest_procedure("PLN-15").status is ProcedureStatus.planned
     assert gate_route(GateId.PLN_15)(values) == "represent"  # 验收 5: 最后一条决定绑定的计划已被取代
+    await checkpoint_matches_store(s)
 
     config = GraphRunner.config(EID)
     before = (await s.runner.app.aget_state(config)).config, len(s.output_store.rows)
@@ -1799,7 +1814,9 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     assert restarted.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
     assert ((await restarted.app.aget_state(config)).config, len(s.output_store.rows)) == before
     assert pln15_runs(s) == ["RUN-PLN-15-1", "RUN-PLN-15-2"]
-    await assert_rejected(s, plan_decision(GateVerdict.approve, id="D-OLD"), "VERSION_MISMATCH")
+    await checkpoint_matches_store(s)
+    for verdict in GateVerdict:  # 绑定已被取代的 PLAN-1 v1: 哪种决定都被拒 (审核意见 R206-01)
+        await assert_rejected(s, plan_decision(verdict, id=f"D-OLD-{verdict.value}"), "VERSION_MISMATCH")
 
     values = await decide(
         plan_decision(GateVerdict.approve, id="D-PLAN2", target_id="PLAN-2", plan_confirmation=FIRST_YEAR_EQR)
@@ -1811,9 +1828,12 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     assert (approved.id, approved.version, approved.status) == ("PLAN-2", 2, PlanStatus.approved)
     assert approved.model_dump(include=set(FIRST_YEAR_EQR.model_dump())) == FIRST_YEAR_EQR.model_dump()
     assert approved in values["audit_plans"] and s.latest_procedure("PLN-15").status is ProcedureStatus.completed
+    await checkpoint_matches_store(s)
     # R314 验收 3: 进入执行阶段后 GET /plan 照样返回, 当前计划为批准的 PLAN-2, 三项确认可读出
     page = await plan_page(s)
     assert page.current_plan_id == "PLAN-2" and page.plans[-1] == approved
+    confirmed = page.plans[-1].model_dump(include={"eqr_required", "eqr_basis", "auditor_expert_not_required"})
+    assert confirmed == FIRST_YEAR_EQR.model_dump()  # R206 验收 2: 三项确认经 GET /plan 读得出
     assert [(p.id, p.version, p.status) for p in page.plans] == [
         ("PLAN-1", 2, PlanStatus.superseded),
         ("PLAN-2", 2, PlanStatus.approved),

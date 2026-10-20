@@ -396,6 +396,27 @@ async def test_plan_material_takes_current_terms_and_rejections() -> None:
             await view(deps, EID, {**state, **missing})  # type: ignore[typeddict-item]
 
 
+async def test_plan_material_after_two_rejections() -> None:
+    """两次驳回 (审核意见 R206-03): PLAN-1, PLAN-2 都已取代, 材料取回应第 2 次驳回的 PLAN-3, 此前的两次驳回按决定顺序
+    都列出."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=PLANNING_FEATURES)
+    rejects = [plan_gate_decision(n, GateId.PLN_15, GateVerdict.reject, f"PLAN-{n}") for n in (1, 2)]
+    state = initial_state(ENGAGEMENT, [], 1)
+    state.update(  # type: ignore[typeddict-item]
+        audit_plans=[audit_plan(1, 2, PlanStatus.superseded), audit_plan(2, 2, PlanStatus.superseded), audit_plan(3)],
+        materiality_cents=12_000_000,
+        performance_materiality_cents=9_000_000,
+        clearly_trivial_cents=600_000,
+        gate_decisions=rejects,
+    )
+
+    material, shown = await spec_of(GateId.PLN_15).view(deps, EID, state)
+
+    assert material == audit_plan(3)
+    assert shown.plan == audit_plan(3)
+    assert shown.previous_decisions == rejects
+
+
 # ── R314: 审计计划页 (功能 planning; Xero 停在闸门, 驳回再批准的数见 test_decisions) ──
 
 
