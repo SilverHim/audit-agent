@@ -61,10 +61,10 @@ from tests.test_decisions import (
     started,
     stop_after_submit,
 )
-from tests.test_dispute import JID, resolve
+from tests.test_dispute import JID, TASK, resolve
 from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import REVIEWS, approve_materiality, start_numbat
-from tests.test_presentation import DWELL_TASK, SHOWN_AT, presented_ba01
+from tests.test_presentation import SHOWN_AT, presented_ba01
 from tests.test_rerun import CrashAfterCommit, FlakyRegistry, failed_at_p0
 from tests.test_rpt_gate import at_rpt_gate, reject_and_redraft, rpt_decision
 
@@ -454,7 +454,7 @@ async def test_review_dwell_kept_when_trail_backfilled() -> None:
     """R153 验收 6 (collab 打开): 10:00:00 呈递, 10:01:35 提交 D-CSH02, 决定写 Store 后 decision 留痕没写成 (进程中断,
     检查点也未跟上): recover 补写的留痕 dwell_seconds 95 与 presentation_id 取记录上存的, 不重算 (中断后又补了一次
     10:01:00 的呈递, 重算会得 35); 留痕 1 行, 再 recover 不重复."""
-    s, shown = await presented_ba01(COLLAB)
+    s, presentation_id = await presented_ba01(COLLAB)
     trail = s.runner.deps.trail
     assert isinstance(trail, FakeTrail)
     real = trail.record
@@ -470,7 +470,7 @@ async def test_review_dwell_kept_when_trail_backfilled() -> None:
         await s.submit.submit(EID, decision.model_copy(update={"decided_at": SHOWN_AT + timedelta(seconds=95)}))
     trail.record = real  # type: ignore[method-assign]
     assert "D-CSH02" not in decision_keys(s)
-    task = await s.output_store.get(EID, ReviewTask, DWELL_TASK)
+    task = await s.output_store.get(EID, ReviewTask, TASK)
     assert task is not None
     await record_presentation(trail, EID, task, "U-1", SHOWN_AT + timedelta(seconds=60))
 
@@ -480,7 +480,7 @@ async def test_review_dwell_kept_when_trail_backfilled() -> None:
 
     assert s.runner.run_error(EID) is None
     [entry] = [e for e in trail.entries if e.kind is TrailKind.decision and e.idempotency_key == "D-CSH02"]
-    assert (entry.payload["dwell_seconds"], entry.payload["presentation_id"]) == (95, shown)
+    assert (entry.payload["dwell_seconds"], entry.payload["presentation_id"]) == (95, presentation_id)
 
 
 async def test_rerun_decision_in_p0_node_resumed_with_trail_backfilled() -> None:

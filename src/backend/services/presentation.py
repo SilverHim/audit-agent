@@ -237,6 +237,7 @@ def dwell_seconds(
     ]
     if not shown:
         return None, None
-    last = sorted(shown, key=lambda e: e.created_at or decided_at)[-1]  # 稳定排序: 同一时刻的取后写的
+    # 取呈递时间最晚的; 同一时刻的取排在后面的 (同 AuditTrail.list, 留痕按 (created_at, id) 排)
+    last = sorted(shown, key=lambda e: e.created_at or decided_at)[-1]
     assert last.created_at is not None
     return (decided_at - last.created_at) // timedelta(seconds=1), last.id

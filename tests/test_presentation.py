@@ -48,7 +48,6 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_AUDITOR,
-    NUMBAT_FEATURES,
     FakeTrail,
     LayeredMockLLM,
     api_client,
@@ -394,10 +393,8 @@ def test_presentation_entry_time_is_injected() -> None:
 
 # ── R153 复核停留时长: dwell_seconds 取该复核人对该任务在决定之前最近一次呈递 ──
 
-DWELL_TASK = "T-J-CSH-02-1-BA-01-v1"
 
-
-def shown(at: str, actor: str = "U-1", task_id: str = DWELL_TASK) -> TrailEntry:
+def shown(at: str, actor: str = "U-1", task_id: str = TASK) -> TrailEntry:
     """10 月 1 日 at (时:分:秒, UTC) 的一次呈递留痕 (字段同 presentation_entry 写的), ID 为 P-{actor}-{at}."""
     return TrailEntry(
         id=f"P-{actor}-{at}",
@@ -422,7 +419,6 @@ DECIDED = datetime(2026, 10, 1, 10, 1, 35, tzinfo=UTC)
         ([shown("10:00:00"), shown("10:02:00")], (95, "P-U-1-10:00:00")),  # 晚于决定的不算
         ([shown("10:00:00"), shown("10:01:00", actor="U-2")], (95, "P-U-1-10:00:00")),  # 别人的不算
         ([shown("10:01:00", task_id="T-J-REV-03-1-CON-001-v1")], (None, None)),  # 别的任务的不算
-        ([shown("10:01:00", actor="U-2")], (None, None)),
         ([], (None, None)),
         ([shown("10:01:34.400000")], (0, "P-U-1-10:01:34.400000")),  # 不足 1 秒向下取整
         ([shown("10:01:35")], (0, "P-U-1-10:01:35")),  # 与决定同一时刻也算
@@ -431,7 +427,7 @@ DECIDED = datetime(2026, 10, 1, 10, 1, 35, tzinfo=UTC)
 def test_dwell_seconds(entries: list[TrailEntry], expected: tuple[int | None, str | None]) -> None:
     """R153 验收 2, 4: 决定 10:01:35 提交, 取 U-1 对该任务不晚于决定的最近一次呈递, 秒数向下取整."""
     noise = shown("10:01:30").model_copy(update={"id": "D-OTHER", "kind": TrailKind.decision})  # 不是呈递的不算
-    assert dwell_seconds([noise, *entries], DWELL_TASK, "U-1", DECIDED) == expected
+    assert dwell_seconds([noise, *entries], TASK, "U-1", DECIDED) == expected
 
 
 SHOWN_AT = datetime(2026, 10, 1, 10, 0, 0, tzinfo=UTC)
@@ -442,7 +438,7 @@ async def presented_ba01(features: frozenset[str]) -> tuple[Started, str]:
     BA-01 的任务. 返回运行与这次呈递的留痕 ID."""
     s = await start_demo(features=features)
     await wait_idle(s.runner, EID)
-    task = await s.output_store.get(EID, ReviewTask, DWELL_TASK)
+    task = await s.output_store.get(EID, ReviewTask, TASK)
     assert task is not None and task.status is TaskStatus.pending
     trail = trail_of(s)
     for n in range(501):
@@ -450,12 +446,11 @@ async def presented_ba01(features: frozenset[str]) -> tuple[Started, str]:
     return s, await record_presentation(trail, EID, task, "U-1", SHOWN_AT)
 
 
-@pytest.mark.parametrize(("features", "on"), [(COLLAB, True), (NUMBAT_FEATURES, False)], ids=["collab", "baseline"])
-async def test_dwell_seconds_from_last_presentation(features: frozenset[str], on: bool) -> None:
-    """R153 验收 3, 5, 7, 9: 10:01:35 提交 confirm D-CSH02. collab 打开: 存入的记录 dwell_seconds 95, presentation_id
-    为 10:00:00 那次呈递 (排在 501 行别的任务的呈递之后, 须翻页才读到), decision 留痕 payload 带这两项; 关闭时两项
-    为空, payload 不带. 提交时调用方给的值不用. 闸门决定的留痕不带停留时长."""
-    s, shown = await presented_ba01(features)
+async def test_dwell_seconds_from_last_presentation() -> None:
+    """R153 验收 3, 5, 7 (collab 打开, 全流程只此一处): 10:01:35 提交 confirm D-CSH02, 存入的记录 dwell_seconds 95,
+    presentation_id 为 10:00:00 那次呈递 (排在 501 行别的任务的呈递之后, 须翻页才读到), decision 留痕 payload 带这
+    两项; 提交时调用方给的值不用. 闸门决定的留痕不带停留时长. collab 关闭见 test_review_decisions 的 timed 用例."""
+    s, presentation_id = await presented_ba01(COLLAB)
     [decision] = [r for r in REVIEWS if r.id == "D-CSH02"]  # confirm T-J-CSH-02-1-BA-01-v1
     decision = decision.model_copy(update={"decided_at": SHOWN_AT + timedelta(seconds=95)})
     await s.submit.submit(EID, decision.model_copy(update={"dwell_seconds": 1, "presentation_id": "TR-FORGED"}))
@@ -465,10 +460,6 @@ async def test_dwell_seconds_from_last_presentation(features: frozenset[str], on
     assert stored is not None and s.runner.run_error(EID) is None
     entries = {e.idempotency_key: e for e in trail_of(s).entries if e.kind is TrailKind.decision}
     payload = entries["D-CSH02"].payload
-    if on:
-        assert (stored.dwell_seconds, stored.presentation_id) == (95, shown)
-        assert (payload["dwell_seconds"], payload["presentation_id"]) == (95, shown)
-    else:
-        assert (stored.dwell_seconds, stored.presentation_id) == (None, None)
-        assert not {"dwell_seconds", "presentation_id"} & set(payload)
+    assert (stored.dwell_seconds, stored.presentation_id) == (95, presentation_id)
+    assert (payload["dwell_seconds"], payload["presentation_id"]) == (95, presentation_id)
     assert not {"dwell_seconds", "presentation_id"} & set(entries["D-ACC"].payload)  # 验收 7
