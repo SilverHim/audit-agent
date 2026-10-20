@@ -385,8 +385,8 @@ export const zh: Messages = {
         no_evidence: '独立复核没有完成：判断引用的证据都解析不了',
         first_round_invalid: '独立复核没有完成：独立结论未通过校验',
         second_round_invalid: '独立复核没有完成：与原结论的比对未通过校验',
-        chain_invalid: '独立复核没有完成：判为一致，但独立推理链未通过校验，不计入置信度',
-        review_error: '独立复核没有完成：复核调用出错',
+        chain_invalid: '独立复核没有完成：判为一致，但独立推理链未通过校验，不计复核分项',
+        review_error: '独立复核没有完成：复核出错',
       },
       triggers: {
         main: '自主执行且建议接受或关闭',

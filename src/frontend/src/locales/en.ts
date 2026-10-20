@@ -424,7 +424,7 @@ export const en = {
         second_round_invalid: 'Could not be completed: the comparison with the original failed validation',
         chain_invalid:
           'Could not be completed: it agrees, but its own reasoning failed validation, so it does not add to confidence',
-        review_error: 'Could not be completed: the review call failed',
+        review_error: 'Could not be completed: the review failed with an error',
       } satisfies Record<CriticReasonCode, string>,
       triggers: {
         main: 'Autonomous and proposed to accept or close',

@@ -17,21 +17,6 @@ const L2 = judgment({
   critic_reason_code: 'level_l2',
 })
 
-// 后端 CriticReasonCode 的全部取值 (contracts/models.py). 文案覆盖全部取值由 en.ts 的 satisfies 经 tsc 保证, 这里再核对
-// 中英两份的键
-const CODES = {
-  critic_off: true,
-  no_review_model: true,
-  level_l1: true,
-  level_l2: true,
-  not_triggered: true,
-  no_evidence: true,
-  first_round_invalid: true,
-  second_round_invalid: true,
-  chain_invalid: true,
-  review_error: true,
-} satisfies Record<CriticReasonCode, true>
-
 describe('criticReasonText', () => {
   test('验收 1: BA-091 未命中触发规则与 L2 跳过, 英文界面显示英文, 中文界面显示中文', () => {
     expect(criticReasonText(NOT_TRIGGERED, en)).toEqual({
@@ -70,12 +55,11 @@ describe('criticReasonText', () => {
       detail: 'syntax: not json',
       raw: false,
     })
-    for (const code of Object.keys(CODES) as CriticReasonCode[]) {
+    // 文案覆盖全部代码由 en.ts 的 satisfies 与 zh 的 Messages 类型经 tsc 保证
+    for (const code of Object.keys(en.judgment.critic.reasonCodes) as CriticReasonCode[]) {
       const texts = [en, zh].map((t) => criticReasonText(judgment({ critic_reason_code: code }), t))
       expect(texts.every((r) => r !== null && !r.raw && r.text.length > 0)).toBe(true)
       expect(texts[0]?.text).not.toBe(texts[1]?.text)
     }
-    expect(Object.keys(en.judgment.critic.reasonCodes).sort()).toEqual(Object.keys(CODES).sort())
-    expect(Object.keys(zh.judgment.critic.reasonCodes).sort()).toEqual(Object.keys(CODES).sort())
   })
 })

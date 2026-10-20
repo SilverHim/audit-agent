@@ -52,7 +52,7 @@ below. Write nothing before or after the object.
 VERDICT_SPEC = LLMSpec(prompt="GEN-09-verdict.md.j2", output_model="CriticVerdictOut", max_tokens=1024)
 REVIEWED_LEVELS = (AutonomyLevel.L3, AutonomyLevel.L4)  # 主规则: 人只看异常或事后抽查, 会自动关闭的判断必复核
 CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: 会关闭事项的建议动作
-SKIPPED_LEVELS = (AutonomyLevel.L1, AutonomyLevel.L2)  # 跳过规则: 审计师逐条复核
+# 跳过规则: 运行时自主度 L1, L2 由审计师逐条复核, 不经独立复核; 值为跳过原因的代码 (需求 R309)
 LEVEL_CODES = {AutonomyLevel.L1: CriticReasonCode.level_l1, AutonomyLevel.L2: CriticReasonCode.level_l2}
 
 
@@ -135,9 +135,8 @@ class ReviewAgent(ProcedureAgent[None]):
             return skip(judgment, CriticReasonCode.critic_off, "功能开关 critic 关闭, 不做独立复核")
         if self.deps.review_llm is None:
             return skip(judgment, CriticReasonCode.no_review_model, "未配置复核模型, 不做独立复核")
-        if level in SKIPPED_LEVELS:
-            reason = f"{level.value}: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"
-            return skip(judgment, LEVEL_CODES[level], reason)
+        if (code := LEVEL_CODES.get(level)) is not None:
+            return skip(judgment, code, f"{level.value}: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)")
         template = self.deps.library.load(GEN09)
         rate = float(template.params.get("sample_rate", 0))
         collab = COLLAB in self.deps.features

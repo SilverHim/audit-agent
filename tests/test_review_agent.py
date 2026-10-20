@@ -1005,31 +1005,3 @@ async def test_reviewed_and_human_judgments_have_no_reason_code() -> None:
     )
     human = Xero().judgment()  # 人工建的判断不经复核, 两项取缺省
     assert (human.critic_reason_code, human.critic_reason_detail) == (None, None)
-
-
-def test_judgment_saved_before_reason_codes_reads_back_without_code() -> None:
-    """R309 验收 2 的后端部分: R309 之前存下的判断 (Store 的 JSON, 检查点里的对象都经 Judgment(**字段) 重建) 没有两个
-    新字段, 读回为空, 中文原句照旧; 带代码的经 JSON 往返后仍是枚举."""
-    j = Judgment(
-        id="J-REV-02-1-SI-1",
-        procedure_id="REV-02",
-        run_id="RUN-REV-02-1",
-        subject_id="SI-1",
-        conclusion="synthetic",
-        confidence=0.8625,
-        confidence_parts={"evidence": 0.7, "rule": 1.0, "llm": 0.9},
-        reasoning_chain=[],
-        evidence=[],
-        counter_argument="synthetic",
-        proposed_action=ProposedAction.accept,
-        autonomy_level=AutonomyLevel.L2,
-        performed_by="U-1",
-        created_at=NOW,
-        critic_reason="L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)",
-    )
-    old = j.model_dump(mode="json", exclude={"critic_reason_code", "critic_reason_detail"})
-    back = Judgment.model_validate(old)
-    assert (back.critic_reason, back.critic_reason_code, back.critic_reason_detail) == (j.critic_reason, None, None)
-    assert Judgment(**j.model_dump(exclude={"critic_reason_code", "critic_reason_detail"})) == j  # 检查点的重建方式
-    saved = j.model_copy(update={"critic_reason_code": CriticReasonCode.level_l2}).model_dump_json()
-    assert Judgment.model_validate_json(saved).critic_reason_code is CriticReasonCode.level_l2

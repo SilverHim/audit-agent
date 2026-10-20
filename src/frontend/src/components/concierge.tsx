@@ -172,6 +172,7 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
   if (!critic.critic_verdict) return null
   const verdict = critic.critic_verdict
   const reason = criticReasonText(judgment, t)
+  const modelWritten = verdict === 'consistent' || verdict === 'inconsistent' // 理由由复核模型写 (英文)
   const tone = verdict === 'consistent' ? 'ok' : verdict === 'inconsistent' ? 'risk' : 'neutral'
   return (
     <div className="flex flex-1 basis-[240px] flex-col gap-1.5 border-line-soft p-4 sm:border-l">
@@ -184,9 +185,9 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
           {t.judgment.critic.reasonTypes[critic.critic_reason_type] ?? critic.critic_reason_type}
         </span>
       ) : null}
-      {/* 跳过或没做成的原因按界面语言显示 (R309), 技术细节原样; 模型写的理由与旧数据照原文 */}
+      {/* 跳过或没做成的原因按界面语言显示 (R309), 技术细节原样; 模型写的理由与旧数据照原文, 只有前者标英文 */}
       {reason ? (
-        <p className="m-0 text-[14px] text-secondary-foreground" lang={reason.raw ? 'en' : undefined}>
+        <p className="m-0 text-[14px] text-secondary-foreground" lang={reason.raw && modelWritten ? 'en' : undefined}>
           {reason.text}
         </p>
       ) : null}

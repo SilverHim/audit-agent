@@ -543,7 +543,8 @@ class JudgmentsOnly(TypedDict):
 
 async def test_critic_reason_code_survives_checkpoint_as_enum() -> None:
     """R309: 判断的原因代码经检查点白名单序列化的 InMemorySaver 存取一轮后仍是 CriticReasonCode (不退化为字符串),
-    技术细节不变; 没有代码的 (一致, 不一致, 人工建的, R309 之前的) 读回为空."""
+    技术细节不变; 没有代码的 (一致, 不一致, 人工建的, R309 之前的) 读回为空. R309 之前存下的 JSON (Store) 没有两项,
+    读回为空, 其余不变."""
     base = Judgment(
         id="J-REV-02-1-SI-1",
         procedure_id="REV-02",
@@ -572,6 +573,10 @@ async def test_critic_reason_code_survives_checkpoint_as_enum() -> None:
     back = (await checkpoint_round_trip(JudgmentsOnly, {"judgments": [base, failed]}))["judgments"]
     assert back == [base, failed] and back[0].critic_reason_code is None
     assert back[1].critic_reason_code is CriticReasonCode.first_round_invalid
+    old = failed.model_dump(mode="json", exclude={"critic_reason_code", "critic_reason_detail"})
+    assert Judgment.model_validate(old) == failed.model_copy(
+        update={"critic_reason_code": None, "critic_reason_detail": None}
+    )
 
 
 def test_completion_list_fields_merge_by_id_and_version() -> None:
