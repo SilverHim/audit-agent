@@ -15,7 +15,8 @@ name: 关联方图谱研判
 #   全部行 (费用行的说明常是物品描述, 不含对方名称); (2) 银行流水: 窗口内 description 整词含名称键的; (3) 销售发票: 开票日
 #   在窗口内, customer 的键 (同样去后缀) 等于名称键, 或 customer_abn 去掉非数字后的末 9 位等于该方 ACN (ABN 只作附加
 #   条件). 每行为 {source_type, party_key (名称键), record (该来源的列, jsonb; 不带录入时间与交易后余额)}, 同一行对同一方
-#   只出一次; 按 (party_key, source_type, 日期, ID 自然序) 排序.
+#   只出一次; 按 (party_key, source_type, 日期, ID 自然序) 排序. A6 按 party_key 把行分给节点. 已知局限: 两个节点名称键
+#   相同 (如 "Morgan Pty Ltd" 与 "Morgan Limited") 或都为 NULL 时, 一方按 ABN 命中的发票两方都拿到; 情形罕见, 不另编号.
 # - C02 权益科目的分录: 窗口内 equity_categories 分类科目的分录行, 剔除作废对; 列同 C01 分录的 record. A6 只交给持有
 #   报告主体股份的节点.
 # - 作废对 (C01 的分录与 C02 剔除): 同 CSH-02 的注释; WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02,

@@ -123,8 +123,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     产出例外与判断.
 
     按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03) 共用判断公共流程
-    (agents/judging.py),
-    各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
+    (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号

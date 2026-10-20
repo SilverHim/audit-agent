@@ -69,12 +69,28 @@ def entry_nos(result: RuleResult, key: str) -> set[str]:
     return {r["record"]["entry_no"] for r in result.rows["C01"] if r["party_key"] == key and "entry_no" in r["record"]}
 
 
+# 合成行缺省的列: 分录行没有录入与审批, 不是调整分录; 银行流水的交易后余额记 0 (C01 不取它)
+BLANK = {
+    "journal_entries": {
+        "created_at": None,
+        "created_by": None,
+        "approved_by": None,
+        "approved_at": None,
+        "is_adjustment": False,
+    },
+    "bank_transactions": {"balance_after_cents": 0, "reference": None},
+}
+
+
 @asynccontextmanager
-async def with_lines(project: Gen03Project, lines: list[dict[str, Any]]) -> AsyncIterator[None]:
-    """在测试库的项目中暂时写入合成的分录行 (测试库是副本, 原文件不改), 退出时删去, 共用项目的其余用例不受影响."""
+async def with_lines(
+    project: Gen03Project, lines: list[dict[str, Any]], table_name: str = "journal_entries"
+) -> AsyncIterator[None]:
+    """在测试库的项目中暂时写入一张账表 (分录或银行流水) 的合成行 (测试库是副本, 原文件不改), 退出时删去, 共用项目的
+    其余用例不受影响."""
     engine = project.deps.data.engine  # type: ignore[attr-defined]
-    table = m.FINANCIAL["journal_entries"]
-    blank = {"created_at": None, "created_by": None, "approved_by": None, "approved_at": None, "is_adjustment": False}
+    table = m.FINANCIAL[table_name]
+    blank = BLANK[table_name]
     async with engine.begin() as conn:
         await bind_engagement(conn, project.eid)
         await conn.execute(insert(table), [blank | line | {"engagement_id": project.eid} for line in lines])
@@ -109,6 +125,51 @@ async def test_xero_takes_whole_vouchers_for_smart(xero: Gen03Project) -> None:
     assert result.rows["C01"] == xero_gen03_rows(["smart agency", "victoria property agency"])
     [design] = [r["record"] for r in result.rows["C01"] if r["record"]["id"] == "XJ-548-2"]
     assert design["debit_cents"] == 181818 and "smart" not in design["description"].lower()
+
+
+@pytest.mark.external
+async def test_whole_words_after_normalisation(xero: Gen03Project) -> None:
+    """验收 2 的 "整词含" (审核 R139-02): 临时写入合成的分录与银行流水, 名称规范化后整词相同才命中: 标点, 连字符, 多个
+    空格与大小写不影响 (分录说明, 流水摘要), source_doc 带开头的前缀 "Payment to:" 去掉后命中; 名称后面接着字母的
+    ("Agencyx") 不命中, 防改成子串含; ORG 节点 (ACN 为空) 照常按名称命中自己那一行."""
+
+    def entry(no: str, description: str, source_doc: str = "SYNTHETIC") -> dict[str, Any]:
+        return {
+            "id": f"{no}-1",
+            "entry_no": no,
+            "posting_date": date(2026, 8, 3),
+            "account_code": "469",
+            "debit_cents": 100,
+            "credit_cents": 0,
+            "description": description,
+            "source_doc": source_doc,
+        }
+
+    def bank(no: str, description: str) -> dict[str, Any]:
+        return {
+            "id": no,
+            "bank_account_id": "BA-090",
+            "txn_date": date(2026, 8, 3),
+            "amount_cents": -100,
+            "description": description,
+        }
+
+    entries = [
+        entry("SYN-B1", "VICTORIA-PROPERTY  AGENCY. rent Aug"),  # 标点, 多空格, 大写: 命中
+        entry("SYN-B2", "Victoria Property Agencyx Ltd"),  # 名称后接字母: 不命中
+        entry("SYN-B3", "misc", "Payment to: Victoria Property Agency"),  # source_doc 去前缀后: 命中
+        entry("SYN-B4", "Kiwi Holdings Ltd management fee"),  # ORG 节点 (ACN 为空): 命中
+    ]
+    lines = [bank("SYN-T1", "Victoria-Property Agency."), bank("SYN-T2", "VICTORIA PROPERTY AGENCYX")]
+    async with with_lines(xero, entries), with_lines(xero, lines, "bank_transactions"):
+        result = await gen03(xero, VPA, ("Kiwi Holdings Ltd", None))
+    hits = {(r["party_key"], r["record"]["id"]) for r in result.rows["C01"] if r["record"]["id"].startswith("SYN-")}
+    assert hits == {
+        ("victoria property agency", "SYN-B1-1"),
+        ("victoria property agency", "SYN-B3-1"),
+        ("kiwi holdings", "SYN-B4-1"),
+        ("victoria property agency", "SYN-T1"),
+    }
 
 
 @pytest.mark.external
