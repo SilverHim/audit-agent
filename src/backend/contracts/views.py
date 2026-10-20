@@ -62,6 +62,17 @@ class ProcedureSummary(Model):
     rerunnable: bool = False
 
 
+class PhaseProgress(Model):
+    """当前阶段的进度 (需求 R325): 工作区顶部 "正在执行 n/m" 与审计助理 "现在在做什么" 用."""
+
+    phase: Phase  # 当前阶段 (项目的 phase)
+    done: int  # 本阶段已结清的程序数: completed 或 no_data (未执行, 无数据), 同 P2 结清的口径 (graph.SETTLED)
+    total: int  # 程序包中本阶段的程序数
+    # 正在运行的程序: 本项目 run 留痕中有开始而没有结束的执行 (按执行 ID 配对) 所属的程序, 按开始的先后; 只在后台正为
+    # 本项目推进时给, 否则为空 (进程中断后残留的开始不算)
+    running: list[str]
+
+
 class EngagementOverview(Model):
     """项目总览页的数据."""
 
@@ -78,6 +89,7 @@ class EngagementOverview(Model):
     awaiting_correction_ids: list[str] = []
     missing_tables: list[TableKind]  # 等数据就绪时还缺的必需表 (科目表, 本期与上期试算表, 总账分录), 现查; 不在等时为空
     procedures: list[ProcedureSummary]  # 各程序状态
+    progress: PhaseProgress  # 当前阶段的进度与正在运行的程序 (需求 R325)
     stale_procedure_ids: list[str] = []  # 过期的程序, 按 procedures 的顺序 (含不能重跑的)
     can_rerun: bool = False  # 现在能否重跑过期程序: 图停在等复核, FIN-01 或 RPT-01 闸门, 项目未锁定, 不在执行
     pending_tasks: int  # 待决复核任务数

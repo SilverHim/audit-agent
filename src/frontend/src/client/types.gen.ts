@@ -2307,6 +2307,7 @@ export type EngagementOverview = {
      * Procedures
      */
     procedures: Array<ProcedureSummary>;
+    progress: PhaseProgress;
     /**
      * Stale Procedure Ids
      */
@@ -3874,6 +3875,27 @@ export type PeriodSource = {
  * 项目阶段.
  */
 export type Phase = 'P0_Acceptance' | 'P1_Planning' | 'P2_Executing' | 'P3_Completion' | 'P4_Reporting' | 'Archived' | 'Declined';
+
+/**
+ * PhaseProgress
+ *
+ * 当前阶段的进度 (需求 R325): 工作区顶部 "正在执行 n/m" 与审计助理 "现在在做什么" 用.
+ */
+export type PhaseProgress = {
+    phase: Phase;
+    /**
+     * Done
+     */
+    done: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Running
+     */
+    running: Array<string>;
+};
 
 /**
  * PlanConfirmation
@@ -5614,7 +5636,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'run';
 
 /**
  * UncorrectedItem

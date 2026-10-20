@@ -113,6 +113,7 @@ class Walk:
     plan_gates: list[dict[str, Any]]
     plan_pages: list[dict[str, Any]]
     final_plan: dict[str, Any]
+    progress: list[dict[str, Any]]  # 每个停点总览的 progress (需求 R325), 同 stops 的顺序
     language: WorkingLanguage = "en"  # 建项目时的工作语言
 
 
@@ -130,6 +131,7 @@ async def walk(
     eid = created.json()["engagement"]["id"]
     base = f"{API}/engagements/{eid}"
     stops: list[tuple[str | None, bool, bool, str | None]] = []
+    progress: list[dict[str, Any]] = []
 
     async def settle() -> dict[str, Any]:
         await drain(service)
@@ -143,6 +145,7 @@ async def walk(
         overview = await settle()
         suggested = (await client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
         stops.append((overview["current_gate"], overview["awaiting_data"], overview["awaiting_review"], suggested))
+        progress.append(overview["progress"])
         if suggested is not None:
             started = await client.post(f"{base}/data/demo-import", json={"stage": suggested})
             assert (started.status_code, started.json()["status"]) == (202, "started"), started.text
@@ -216,7 +219,7 @@ async def walk(
     x = Xero17(runner, eid, owner, llm, False, GateView.model_validate(pln), [], [])
     summary = (await client.get(f"{base}/data/summary")).json()
     final_plan = await plan_page()
-    return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan, language)
+    return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan, progress, language)
 
 
 def app_llm(store: Any) -> DatasetFixtureLLMClient:
@@ -383,6 +386,36 @@ async def test_mock_runs_are_generated_in_english(walked: Walk) -> None:
     assert walked.overview["engagement"]["working_language"] == walked.language
     assert runs and {r.language for r in runs} == {"en"}
     assert walked.overview["run_languages"] == ({r.id: "en" for r in runs} if walked.language == "zh" else {})
+
+
+# ── R325: 执行进度留痕与进度 ──
+
+
+@shared_loop
+async def test_run_entries_pair_every_run_and_progress(walked: Walk) -> None:
+    """需求 R325 验收 1, 4, 6: 每次执行 (Store 中的 ProcedureRun) 恰有开始与结束各一行 run 留痕, 开始在前, 条数为执行数
+    的两倍, 按写入顺序; REV-08 的范围按快照渲染, 结束的结果为去重 6 张 990000, 例外 1 条; REV-03 判断 3, 待复核 3;
+    REV-02 判断 6. 停在执行阶段等复核时本阶段共 9 条程序, 不在执行, 没有正在运行的."""
+    runs = await walked.x.runner.deps.output_store.latest(walked.x.eid, ProcedureRun)
+    rows = [e for e in entries(walked) if e.kind is TrailKind.run]
+    assert len(rows) == 2 * len(runs)
+    for run in runs:
+        actions = [(n, e.payload["action"]) for n, e in enumerate(rows) if e.run_id == run.id]
+        assert [a for _, a in actions] == ["started", "finished"], run.id
+    finished = {e.run_id: e.payload for e in rows if e.payload["action"] == "finished"}
+    rev08 = finished["RUN-REV-08-1"]
+    assert rev08["scope"]["zh"] == "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票"
+    assert rev08["run_status"] == "succeeded"
+    assert {k: rev08["result"][k] for k in ("items", "amount_cents", "exceptions")} == {
+        "items": 6,
+        "amount_cents": 990000,
+        "exceptions": 1,
+    }
+    assert [(p["rule_id"], p["count"]) for p in rev08["result"]["populations"]] == [("R01", 6), ("R02", 6), ("R03", 5)]
+    rev03, rev02 = finished["RUN-REV-03-1"]["result"], finished["RUN-REV-02-1"]["result"]
+    assert (rev03["judgments"], rev03["pending_reviews"], rev02["judgments"]) == (3, 3, 6)
+    [review] = [p for stop, p in zip(walked.stops, walked.progress, strict=True) if stop[2]]  # 等复核的停点
+    assert (review["phase"], review["total"], review["running"]) == ("P2_Executing", 9, [])
 
 
 # ── R317: 计划批准在先, 退回一次再批准 ──

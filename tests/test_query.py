@@ -1,17 +1,22 @@
 """StateQuery: 读检查点判断停在哪道闸门, 组装闸门材料与项目总览. 依赖用 tests/fakes.py 的假实现."""
 
+import asyncio
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
+from backend.agents.base import RunContext
 from backend.contracts.models import (
     AuditPlan,
     ClientProfile,
     GateDecision,
     GateId,
     GateVerdict,
+    Phase,
     PlanItem,
     PlanStatus,
+    Procedure,
     ProcedureStatus,
     ProfileSource,
     ReviewTask,
@@ -19,6 +24,8 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TaskStatus,
+    TrailEntry,
+    TrailKind,
 )
 from backend.contracts.state import initial_state
 from backend.contracts.views import PlanMaterial, PlanningMaterial, PlanView
@@ -37,14 +44,18 @@ from tests.fakes import (
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    ScriptA6,
+    ScriptAgent,
     api_client,
     audit_plan,
     engagement_terms,
     make_deps,
     make_runner,
+    numbat_p2_agents,
     wait_idle,
 )
-from tests.test_decisions import Agents, inventory
+from tests.test_decisions import Agents, Started, acc01_decision, inventory, pln_decision
+from tests.test_fieldwork import p2_agents
 from tests.test_runner import BrokenOutputStore, BrokenRegistry
 
 EID = ENGAGEMENT.id
@@ -487,3 +498,124 @@ async def test_plan_view_without_plan_over_http() -> None:
         missing = await client.get("/api/v1/engagements/ENG-missing/plan")
     assert ok.status_code == 200 and PlanView.model_validate(ok.json()) == EMPTY_PLAN
     assert missing.status_code == 404 and missing.json()["detail"]["code"] == "NOT_FOUND"
+
+
+# ── 需求 R325: 当前阶段的进度与正在运行的程序 ──
+
+
+class HeldA6(ScriptA6):
+    """执行时先置 entered, 等 release 置位才交回 (片段由脚本给), 用来看执行中的总览."""
+
+    def __init__(self, deps: Any, script: Any, entered: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__(deps, script)
+        self.entered, self.release = entered, release
+
+    async def execute(self, ctx: RunContext) -> None:
+        self.entered.set()
+        await self.release.wait()
+
+
+def held_rev08(entered: asyncio.Event, release: asyncio.Event) -> Agents:
+    """P2 程序为 Numbat 脚本 Agent, REV-08 执行时停住 (HeldA6)."""
+
+    def agents(deps: Any) -> dict[str, Any]:
+        numbat = numbat_p2_agents(deps)
+        script = cast(ScriptAgent, numbat["REV-08"]).script
+        return {**p2_agents(deps), **numbat, "REV-08": HeldA6(deps, script, entered, release)}
+
+    return agents
+
+
+async def at_pln_approved(agents: Agents) -> Started:
+    """Numbat 跑过两道闸门, PLN-01/03 通过后不等后台 (同 test_rerun_decision.at_review, 只是不等停下)."""
+    engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
+    runner, store = make_runner(engagement_store=engagement_store, agents=agents)
+    s = Started(runner, store, engagement_store)
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, acc01_decision(GateVerdict.approve, id="D-ACC"))
+    await wait_idle(runner, EID)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve))
+    return s
+
+
+async def test_progress_while_p2_runs_and_after() -> None:
+    """验收 4: 执行阶段第 0 层派出后 REV-08 停住: 本阶段 0/7, 正在运行的为本轮开始了而还没有结束 (fan_in 才写结束)
+    的四条, 按开始的先后; 放行后不在执行, running 为空, done 为已完成的 (REV-03 等复核, 不算)."""
+    entered, release = asyncio.Event(), asyncio.Event()
+    s = await at_pln_approved(held_rev08(entered, release))
+    await entered.wait()
+    query = GraphStateQuery(s.runner.app, s.runner.deps, s.runner)
+
+    held = await query.overview(EID)
+
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    starts = [e.procedure_id for e in trail.entries if e.kind is TrailKind.run and e.payload["action"] == "started"]
+    assert held.running is True
+    assert (held.progress.phase, held.progress.done, held.progress.total) == (Phase.P2_Executing, 0, 7)
+    assert held.progress.running == ["CSH-04", "CSH-05", "REV-03", "REV-08"] == starts[-4:]  # 开始的先后
+    release.set()
+    await wait_idle(s.runner, EID)
+
+    after = await query.overview(EID)
+
+    assert after.running is False and after.progress.running == []
+    status = {p.id: p.status for p in after.procedures if p.phase is Phase.P2_Executing}
+    settled = [pid for pid, st in status.items() if st in (ProcedureStatus.completed, ProcedureStatus.no_data)]
+    assert (after.progress.done, after.progress.total) == (len(settled), 7) and "REV-03" not in settled
+
+
+def run_entry(action: str, run_id: str, eid: str = EID) -> TrailEntry:
+    procedure_id = run_id.removeprefix("RUN-").rsplit("-", 1)[0]
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.run,
+        actor="A1",
+        procedure_id=procedure_id,
+        run_id=run_id,
+        summary=action,
+        idempotency_key=f"{eid}:run:{run_id}:{action}",
+        payload={"action": action},
+    )
+
+
+async def test_running_pairs_starts_and_ends_by_run_id() -> None:
+    """验收 4: 开始与结束按执行 ID 配对, 与写入先后无关: REV-08 第 2 次已开始, 第 1 次的结束补写在它之后, 仍算在运行
+    (按程序编号配对会误抵); CSH-05 一对已结束不算, 开始补写在结束之后的 CSH-02 也不算; 别的项目的留痕不读. 后台不在
+    执行时总览不给 (残留的开始不算)."""
+    runner, query, _ = await started()
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    for action, run_id, eid in [
+        ("started", "RUN-REV-08-1", EID),
+        ("started", "RUN-REV-08-2", EID),
+        ("finished", "RUN-REV-08-1", EID),
+        ("started", "RUN-CSH-05-1", EID),
+        ("finished", "RUN-CSH-05-1", EID),
+        ("finished", "RUN-CSH-02-1", EID),
+        ("started", "RUN-CSH-02-1", EID),
+        ("started", "RUN-REV-02-1", "ENG-OTHER"),
+    ]:
+        await trail.record(run_entry(action, run_id, eid))
+
+    assert await query.running_procedures(EID) == ["REV-08"]
+    overview = await query.overview(EID)
+    assert overview.running is False and overview.progress.running == []
+    assert (overview.progress.phase, overview.progress.total) == (Phase.P0_Acceptance, 2)  # ACC-01 与 ACC-04
+
+
+@pytest.mark.parametrize(
+    ("status", "done"),
+    [(ProcedureStatus.completed, 1), (ProcedureStatus.no_data, 1), (ProcedureStatus.awaiting_human, 0)],
+)
+async def test_progress_counts_settled_procedures(status: ProcedureStatus, done: int) -> None:
+    """验收 4: done 为本阶段已结清的程序, completed 与 no_data (未执行, 无数据; 同 graph.SETTLED) 都算, 等人的不算.
+    停在 ACC-01 闸门前, 把 ACC-04 的最新版本换成给定状态 (ACC-01 待决, 不算)."""
+    _, query, store = await started()
+    [acc04] = [p for p in await store.latest(EID, Procedure) if p.id == "ACC-04"]
+    await store.put(EID, [acc04.model_copy(update={"version": acc04.version + 1, "status": status})], actor="A1")
+
+    progress = (await query.overview(EID)).progress
+
+    assert (progress.phase, progress.done, progress.total) == (Phase.P0_Acceptance, done, 2)

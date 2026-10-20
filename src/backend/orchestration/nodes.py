@@ -46,6 +46,7 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TaskStatus,
+    TrailEntry,
     Versioned,
     WorkingLanguage,
 )
@@ -70,13 +71,20 @@ from backend.orchestration.merge import (
     objects,
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
-from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.orchestration.trail import (
+    phase_transition,
+    procedure_transitions,
+    record_transitions,
+    run_finished,
+    run_started,
+)
 from backend.orchestration.waits import correction_payload, data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
 from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import RERUNNABLE, ReviewQueue
+from backend.services.run_summary import run_result
 from backend.services.staleness import current_results
 
 logger = logging.getLogger(__name__)
@@ -671,6 +679,7 @@ class GraphNodes:
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
+        调 Agent 之前写开始的 run 留痕 (需求 R325, 重放时同键跳过, 缺了补写); 结束留痕由提交终态的 attempt, fan_in 写.
         返回程序编号, 执行记录 ID, 写入者与要写入的片段; 规则程序成功执行时另有被测总体 (见 run_population).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
         取回的执行是失败的, 写入者为 A1. 重放不带被测总体: 已与执行记录终态一起写过.
@@ -681,6 +690,9 @@ class GraphNodes:
         procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+        # 开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过 (缺了补写: 重建的执行记录
+        # 与 Store 中的同号同参数, 第 3 节重放规则)
+        await record_transitions(self.deps.trail, [run_started(engagement.id, template, procedure_run)])
         population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
@@ -804,7 +816,8 @@ class GraphNodes:
         之前各次执行留下的可重跑任务 (failed, unattributed) 都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         规则程序成功执行的被测总体 (需求 R324) 在同一事务内写入, 不并入状态.
-        提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
+        提交后写结束的 run 留痕 (需求 R325), 再写程序状态与阶段的 transition 留痕 (原阶段取 state); 重放时都同键跳过,
+        缺了补写.
         """
         result = await self.perform(state, engagement, procedure_id)
         patch, writer = result["patch"], result["writer"]
@@ -830,13 +843,23 @@ class GraphNodes:
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
             if phase is not None:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
-        entries = await procedure_transitions(self.deps.output_store, engagement.id, [saved])
+        entries = [await self.run_finished_entry(engagement.id, template, stored, result["run_id"])]
+        entries += await procedure_transitions(self.deps.output_store, engagement.id, [saved])
         if phase is not None:
             entries += phase_transition(
                 engagement.id, state["phase"], phase, procedure_id, reruns=len(state["rerun_requests"])
             )
         await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+
+    async def run_finished_entry(
+        self, eid: str, template: ProcedureTemplate, patch: StatePatch, run_id: str
+    ) -> TrailEntry:
+        """一次执行的结束留痕 (需求 R325): 终态取写入后的片段, 结果摘要按片段与 Store 中的被测总体 (与终态同一事务写入,
+        重放时也在) 算 (services.run_summary). 在终态提交之后调用."""
+        run = next(r for r in patch["procedure_runs"] if r.id == run_id)
+        population = await self.deps.output_store.get(eid, RunPopulation, population_id(run_id))
+        return run_finished(eid, template, run, run_result(template, run, patch, population))
 
     async def pending_tasks(self, eid: str, procedure_id: str, patch: StatePatch) -> list[ReviewTask]:
         """本程序在片段写入后仍待决的任务: Store 中本程序各任务的最新版本, 换成片段中的同 ID 版本, 加上片段新建的."""
@@ -1382,7 +1405,7 @@ class GraphNodes:
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human (功能 collab 打开且有待决的 dispute 任务时为
         in_dispute, 见 waiting_status), 否则为 completed; rerun_subject_ids 清空.
         重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
-        提交后写程序状态的 transition 留痕.
+        提交后按暂存项的顺序写各次执行结束的 run 留痕 (需求 R325), 再写程序状态的 transition 留痕; 同键跳过, 缺了补写.
         没有暂存结果 (如 await_events 之后回到这里) 时只清空, 不写.
         """
         staged = state["staged_results"]
@@ -1393,6 +1416,7 @@ class GraphNodes:
         executed = list(dict.fromkeys(item["procedure_id"] for item in staged))
         result: StatePatch = {}
         current = state  # 已并入本轮前面各项的状态, 用来校验后面的项
+        finished: list[tuple[str, StatePatch, str]] = []  # 各项 (程序编号, 写入后的片段, 执行 ID), 提交后写结束留痕
         async with store.transaction(eid):
             for item in staged:
                 patch, writer, population = item["patch"], item["writer"], item.get("population")
@@ -1405,6 +1429,7 @@ class GraphNodes:
                 saved = await save_outputs(store, eid, patch, actor=writer, evidence_store=self.deps.evidence_store)
                 if population is not None:
                     await store.put(eid, [population], actor=writer)
+                finished.append((item["procedure_id"], saved, item["run_id"]))
                 merge_patch(result, saved)
                 current = apply_patch(current, saved)
             tasks = current["review_tasks"]
@@ -1415,7 +1440,9 @@ class GraphNodes:
                 status = waiting_status(pending, collab) or ProcedureStatus.completed
                 pack = update_procedure(pack, procedure_id, status=status, rerun_subject_ids=[])
             stored = await store.put(eid, [p for p in pack if p.id in executed], actor=AgentId.A1)
-        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, stored))
+        library = self.deps.library
+        entries = [await self.run_finished_entry(eid, library.load(pid), saved, rid) for pid, saved, rid in finished]
+        await record_transitions(self.deps.trail, [*entries, *await procedure_transitions(store, eid, stored)])
         saved_versions = {p.id: cast(Procedure, p) for p in stored}
         pack = [saved_versions.get(p.id, p) for p in pack]
         return {**result, "procedure_pack": pack, "staged_results": None}

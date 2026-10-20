@@ -20,7 +20,8 @@ from backend.contracts.conversation import (
     TextDelta,
     ToolSpec,
 )
-from backend.contracts.models import AgentId, Engagement, GateId, TrailEntry, TrailKind
+from backend.contracts.models import AgentId, Engagement, GateId, Phase, TrailEntry, TrailKind
+from backend.contracts.views import PhaseProgress
 from tests.chat_fakes import (
     FixedState,
     ScriptedChatModel,
@@ -329,6 +330,42 @@ async def test_rule_model_names_the_gate(gate: GateId, zh: str, en: str) -> None
     """进度回答里的闸门名 (zh, en); 没登记的闸门会退回编号, 用例防新闸门漏登记话术."""
     assert zh in await rule_ask("进度如何", current_gate=gate)
     assert en in await rule_ask("What stage are we at?", "en", current_gate=gate)
+
+
+RUNNING = PhaseProgress(phase=Phase.P2_Executing, done=3, total=9, running=["REV-08", "CSH-05"])
+
+
+@pytest.mark.parametrize(
+    ("progress", "question", "lang", "answer"),
+    [
+        (
+            RUNNING,
+            "现在在做什么？",
+            "zh",
+            "项目目前处于执行阶段，本阶段 3/9 个审计程序已完成。正在执行：REV-08 凭证三单匹配、CSH-05 流水账面核对。",
+        ),
+        (
+            RUNNING,
+            "What are you doing now?",
+            "en",
+            "The engagement is in the fieldwork phase: 3 of 9 procedures in this phase are complete."
+            " Running now: REV-08 凭证三单匹配, CSH-05 流水账面核对.",
+        ),
+        (
+            RUNNING.model_copy(update={"running": []}),
+            "现在在做什么",
+            "zh",
+            "项目目前处于执行阶段，本阶段 3/9 个审计程序已完成。现在没有正在执行的程序。",
+        ),
+    ],
+    ids=["zh", "en", "zh-idle"],
+)
+async def test_rule_model_says_what_is_running(
+    progress: PhaseProgress, question: str, lang: Literal["zh", "en"], answer: str
+) -> None:
+    """需求 R325 验收 5: 问 "现在在做什么" 时按阶段, 本阶段 n/m 与正在运行的程序 (编号与名称, 取 get_overview 的
+    progress) 回答, zh 与 en 各一例; 没有在运行的说明没有."""
+    assert await rule_ask(question, lang, progress=progress) == answer
 
 
 async def test_rule_model_materiality_and_open_items() -> None:

@@ -498,6 +498,7 @@ class TrailKind(StrEnum):
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
     presentation = "presentation"  # 判断呈递 (GEN-11): 审计师打开一条复核任务, 每次一行 (services/presentation)
+    run = "run"  # 程序执行的开始与结束, 每次执行各一行 (需求 R325, orchestration/trail)
 
 
 class AgentId(StrEnum):
