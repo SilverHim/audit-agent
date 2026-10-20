@@ -4,7 +4,6 @@ import functools
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -28,6 +27,7 @@ from backend.contracts.models import (
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
 from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
+from tests.external import REPO
 from tests.fakes import FakeFinancialStore, FakeOutputStore, FakeTrail
 
 
@@ -479,7 +479,6 @@ def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None
 
 # ── 更正通知与可载入的更正分录 (需求 R163) ──
 
-REPO = Path(__file__).resolve().parents[1]
 NOTICE_URL = "/api/v1/engagements/ENG-2026-001/correction-notices"
 POSTED = {"kind": "adjustments_posted", "misstatement_ids": ["M-D-XJ499"], "adjustment_entry_nos": ["AJE-X01"]}
 
