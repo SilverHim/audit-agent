@@ -372,7 +372,7 @@ OUTSIDE = STANDARD.model_copy(update={"source_id": "ASA450-P05", "locator": "par
         ("REV-02", STANDARD, False),  # AASB15-P38 在 REV-02 的 standards 内
         ("REV-02", OUTSIDE, True),
         ("CSH-02", OUTSIDE, False),  # 同一片段在 CSH-02 的 standards 内
-        (None, OUTSIDE, False),  # 不给程序时只核登记 (如 A7 取第一轮给出的证据)
+        (None, OUTSIDE, False),  # 不给程序时只核登记 (如抽取, 分类与 A7 第二轮)
     ],
 )
 async def test_standard_must_be_in_the_program_standards(
