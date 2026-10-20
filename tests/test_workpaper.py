@@ -497,13 +497,13 @@ async def test_failed_classification_creates_failed_task_allowing_manual_result(
     该错报建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开
     manual_result_allowed, 需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数
     与留痕."""
-    replies, attempts = [reply] * MAX_ATTEMPTS, MAX_ATTEMPTS
+    replies = [reply] * MAX_ATTEMPTS
     llm = ScriptedLLM({"XJ-499": replies, "BA-091": [fixture_raw("BA-091")]})
     trail = FakeTrail()
     deps = fin03_deps(trail, llm)
     patch, _ = await run_fin03(deps, fin03_state())
 
-    assert len(llm.requests) == attempts + 1
+    assert len(llm.requests) == MAX_ATTEMPTS + 1
     assert [j.id for j in patch["judgments"]] == ["J-FIN-03-1-M-D-CSH02-091"]
     failed = next(t for t in patch["review_tasks"] if t.kind is TaskKind.failed)
     assert (failed.id, failed.subject_id, failed.target_id) == (
@@ -518,7 +518,7 @@ async def test_failed_classification_creates_failed_task_allowing_manual_result(
     last = [e for e in llm_calls(trail) if e.payload["fixture_key"] == "XJ-499"][-1]
     failure = failure_of(failed, run, llm_calls(trail))
     assert failure is not None
-    assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, attempts, last.id)
+    assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, MAX_ATTEMPTS, last.id)
 
 
 class Consistent:

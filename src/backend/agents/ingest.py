@@ -204,7 +204,7 @@ class IngestAgent(ProcedureAgent[list[Extracted]]):
         的合同, 文件登记照样交回 (并入状态, 置 extracted); rerun 点名的合同重抽, 版本接在已有版本之后.
         同一合同编号有多份原件 (同名文件重新上传了不同内容) 时只处理一份, 见 contract_sources.
 
-        单份失败 (重试耗尽, 引用失败) 不影响其他合同. 合同按文件名排序, 结果顺序固定.
+        单份失败 (重试用完仍没通过) 不影响其他合同. 合同按文件名排序, 结果顺序固定.
         某份抛异常 (如读不到文件) 时等其余合同都结束再上抛 (gather_all), 由 A1 记整次失败.
         """
         eid = ctx.engagement.id

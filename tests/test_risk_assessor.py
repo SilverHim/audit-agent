@@ -633,6 +633,7 @@ async def test_plan_fixtures_cover_the_demo_procedures(fixture: Path) -> None:
         (plan_raw(standards_cited=["ASA315-P12"]), "reference"),
         (plan_raw(timetable=[{"milestone": "Planning", "due": "2026-09-01"}]), "semantic"),
     ],
+    ids=["syntax", "structure", "reference", "semantic"],
 )
 async def test_pln15_failed_check_fails_the_run(reply: str, level: str) -> None:
     """验收 4, 5: 任一级不过都回传重试 (引用与语义级自需求 R348 起), 至 3 次仍失败: A4 抛 ValueError (含失败的级别),

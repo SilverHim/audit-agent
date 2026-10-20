@@ -27,6 +27,7 @@ from backend.contracts.models import (
 )
 from backend.core.config import get_settings
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_ABN,
@@ -190,11 +191,11 @@ def con002_with(change: dict[str, Any]) -> str:
     ids=["structure", "page", "other_document"],
 )
 async def test_three_failures_hand_contract_to_human(bad: str) -> None:
-    """结构级与引用级不过都回传重试 (需求 R348), 三次都不过即转人工; 备着的合格输出不再调用."""
-    replies = {c: [raw(c)] for c in CONTRACT_IDS} | {"CON-002": [bad, bad, bad, raw("CON-002")]}
+    """结构级与引用级不过都回传重试 (需求 R348), MAX_ATTEMPTS 次都不过即转人工; 备着的合格输出不再调用."""
+    replies = {c: [raw(c)] for c in CONTRACT_IDS} | {"CON-002": [*[bad] * MAX_ATTEMPTS, raw("CON-002")]}
     agent, ctx, financial, llm = setup(replies)
     patch = await agent.run(ctx)
-    assert [r.fixture_key for r in llm.requests].count("CON-002") == 3
+    assert [r.fixture_key for r in llm.requests].count("CON-002") == MAX_ATTEMPTS
     assert_con002_handed_to_human(agent, patch, financial)
 
 

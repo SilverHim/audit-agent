@@ -52,6 +52,7 @@ from backend.core.config import get_settings
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -416,41 +417,30 @@ async def handed_to_human(agent: ConciergeAgent, ctx: RunContext) -> dict[str, A
     return {"failure_reason": run.failure_reason}
 
 
-async def test_three_syntax_failures_fail_the_run() -> None:
-    agent, ctx, trail = setup(llm=ScriptedLLM({"r1": ["x", "{}", "still bad"]}))
-    result = await handed_to_human(agent, ctx)
-    assert "未通过 syntax 校验" in result["failure_reason"] and "Output is not valid JSON" in result["failure_reason"]
-    assert len([e for e in trail.entries if e.kind is TrailKind.llm_call]) == 3
-
-
 @pytest.mark.parametrize(
-    ("changes", "level"),
+    ("bad", "level", "error"),
     [
-        ({"judgment_keys": ["REV-02:SI-2026-0618"]}, "reference"),
-        ({"opinion": "Opinion\n\nclean"}, "semantic"),
+        ("x", "syntax", "Output is not valid JSON"),
+        (r1_raw(judgment_keys=["REV-02:SI-2026-0618"]), "reference", "REV-02:SI-2026-0618"),
+        (r1_raw(opinion="Opinion\n\nclean"), "semantic", "Qualified Opinion"),
     ],
+    ids=["syntax", "reference", "semantic"],
 )
-async def test_reference_or_semantic_failure_fails_after_retries(changes: dict[str, Any], level: str) -> None:
-    """引用级与语义级不过时同样回传重试 (需求 R348); 三次都不过即执行失败, 备着的合格稿不再调用."""
-    llm = ScriptedLLM({"r1": [*[r1_raw(**changes)] * 3, r1_raw()]})
-    agent, ctx, _ = setup(llm=llm)
+async def test_failures_of_any_level_fail_the_run(bad: str, level: str, error: str) -> None:
+    """任一级不过都回传重试 (语法与结构 R34, 引用与语义 R348); MAX_ATTEMPTS 次都不过即执行失败, 失败原因带级别与
+    错误, 每次一行留痕, 备着的合格稿不再调用."""
+    llm = ScriptedLLM({"r1": [*[bad] * MAX_ATTEMPTS, r1_raw()]})
+    agent, ctx, trail = setup(llm=llm)
     result = await handed_to_human(agent, ctx)
-    assert f"未通过 {level} 校验" in result["failure_reason"]
-    assert len(llm.requests) == 3
+    assert f"未通过 {level} 校验" in result["failure_reason"] and error in result["failure_reason"]
+    assert len(llm.requests) == MAX_ATTEMPTS
+    assert len([e for e in trail.entries if e.kind is TrailKind.llm_call]) == MAX_ATTEMPTS
 
 
-@pytest.mark.parametrize(
-    "bad_replies",
-    [
-        ["{}", "{}", "{}"],
-        [r1_raw(opinion="## Qualified Opinion\n\nbody")] * 3,
-        [r1_raw(judgment_keys=["REV-02:SI-2026-0618"])] * 3,
-    ],
-    ids=["structure", "semantic", "reference"],
-)
-async def test_report_node_failure_waits_then_rerun_drafts_report(bad_replies: list[str]) -> None:
-    """(Codex R52 探针) report_draft 节点中校验失败: 写失败的 Run, 任务与 awaiting_human, 节点内等待, 不出报告;
-    重放不重调模型; 审计师 rerun 后第 2 次执行出 REPORT-1."""
+async def test_report_node_failure_waits_then_rerun_drafts_report() -> None:
+    """(Codex R52 探针) report_draft 节点中校验失败 (意见段标题不对, 语义级重试用完): 写失败的 Run, 任务与
+    awaiting_human, 节点内等待, 不出报告; 重放不重调模型; 审计师 rerun 后第 2 次执行出 REPORT-1."""
+    bad_replies = [r1_raw(opinion="## Qualified Opinion\n\nbody")] * MAX_ATTEMPTS
     llm = ScriptedLLM({"r1": [*bad_replies, r1_raw()]})
     agent, ctx, _ = setup(llm=llm)
     store = agent.deps.output_store

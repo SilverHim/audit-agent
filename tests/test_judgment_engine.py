@@ -22,7 +22,13 @@ from backend.contracts.models import (
 from backend.contracts.services import JudgmentContext
 from backend.core.config import get_settings
 from backend.main import build_deps
-from backend.services.judgment_engine import JudgmentEngine, OutputValidator, evidence_coverage, rule_consistency
+from backend.services.judgment_engine import (
+    MAX_ATTEMPTS,
+    JudgmentEngine,
+    OutputValidator,
+    evidence_coverage,
+    rule_consistency,
+)
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -300,21 +306,24 @@ def test_evidence_coverage_takes_best_reliability_per_type() -> None:
 
 async def test_hybrid_failure_is_unattributed() -> None:
     outcome, _ = await judge("REV-02", rev02_context(), ["x", "y", "z"])
-    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "unattributed", 3, 3)
+    expected = (None, "unattributed", MAX_ATTEMPTS, MAX_ATTEMPTS)
+    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == expected
 
 
 async def test_hybrid_reference_failure_is_unattributed_after_retries() -> None:
-    """错报金额对不上引用行: 引用级失败, 回传重试 (需求 R348) 三次仍不过, 混合程序为 unattributed."""
+    """错报金额对不上引用行: 引用级失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, 混合程序为 unattributed."""
     untraceable = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": 1}))
-    outcome, _ = await judge("REV-02", rev02_context(), [untraceable.model_dump_json()] * 3)
-    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "unattributed", 3, 3)
+    outcome, _ = await judge("REV-02", rev02_context(), [untraceable.model_dump_json()] * MAX_ATTEMPTS)
+    expected = (None, "unattributed", MAX_ATTEMPTS, MAX_ATTEMPTS)
+    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == expected
 
 
 async def test_llm_failure_is_failed() -> None:
-    """推理链为空: 语义级失败, 回传重试 (需求 R348) 三次仍不过, 大模型程序为 failed."""
+    """推理链为空: 语义级失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, 大模型程序为 failed."""
     bad = rev03_draft().model_copy(update={"reasoning_chain": []})
-    outcome, _ = await judge("REV-03", rev03_context(), [bad.model_dump_json()] * 3)
-    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "failed", 3, 3)
+    outcome, _ = await judge("REV-03", rev03_context(), [bad.model_dump_json()] * MAX_ATTEMPTS)
+    expected = (None, "failed", MAX_ATTEMPTS, MAX_ATTEMPTS)
+    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == expected
 
 
 # ── 权重与组装 ─────────────────────────────────────────

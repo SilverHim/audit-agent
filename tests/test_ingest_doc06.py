@@ -22,6 +22,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.core.config import get_settings
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -186,12 +187,12 @@ def assert_ba01_handed_to_human(agent: IngestAgent, patch: dict[str, Any]) -> No
 
 
 async def test_account_number_mismatch_fails_that_account() -> None:
-    """回函账号不是被函证账户的: 语义失败, 回传重试 (需求 R348) 三次仍不过, BA-01 交人."""
-    agent, ctx, trail = setup(scripted(BA_01=[*[raw("BA-01", account_no="99999999")] * 3, raw("BA-01")]))
+    """回函账号不是被函证账户的: 语义失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, BA-01 交人."""
+    agent, ctx, trail = setup(scripted(BA_01=[*[raw("BA-01", account_no="99999999")] * MAX_ATTEMPTS, raw("BA-01")]))
     patch = await agent.run(ctx)
     assert_ba01_handed_to_human(agent, patch)
     entries = [e for e in trail.entries if e.payload.get("fixture_key") == "BA-01"]
-    assert [e.payload["level_failed"] for e in entries] == ["semantic"] * 3
+    assert [e.payload["level_failed"] for e in entries] == ["semantic"] * MAX_ATTEMPTS
     assert "99999999" in entries[-1].payload["errors"][0] and "12345601" in entries[-1].payload["errors"][0]
 
 
@@ -212,10 +213,14 @@ async def test_retries_exhausted_fails_that_account() -> None:
 
 
 async def test_pointer_page_beyond_document_fails_that_account() -> None:
+    """指针页码超出回函页数: 引用失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, BA-01 交人; 备着的合格输出
+    不再调用."""
     bad = json.loads(raw("BA-01"))
     bad["evidence"][0]["page"] = 3
-    agent, ctx, _ = setup(scripted(BA_01=[json.dumps(bad)] * 3))
+    llm = scripted(BA_01=[*[json.dumps(bad)] * MAX_ATTEMPTS, raw("BA-01")])
+    agent, ctx, _ = setup(llm)
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == MAX_ATTEMPTS
 
 
 # ── 回函应计利息 (需求 R104) ─────────────────────────────────────────
@@ -251,12 +256,12 @@ async def test_accrued_interest_is_written_to_the_confirmation(cents: int) -> No
 
 @pytest.mark.parametrize("page", [None, 3])  # 没有该指针; 指针页码超出页数 (2 页)
 async def test_accrued_interest_without_a_valid_pointer_fails_that_account(page: int | None) -> None:
-    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败, 回传重试 (需求 R348) 三次仍不过,
-    BA-01 交人, 函证不更新, 另一账户照常."""
-    llm = scripted(BA_01=[*[with_accrued("BA-01", 4853, page)] * 3, raw("BA-01")])
+    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败, 回传重试 (需求 R348) MAX_ATTEMPTS
+    次仍不过, BA-01 交人, 函证不更新, 另一账户照常."""
+    llm = scripted(BA_01=[*[with_accrued("BA-01", 4853, page)] * MAX_ATTEMPTS, raw("BA-01")])
     agent, ctx, _ = setup(llm)
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
-    assert [r.fixture_key for r in llm.requests].count("BA-01") == 3
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == MAX_ATTEMPTS
 
 
 # 应计利息口径的关键词: 每条在应计利息一节里须有一个分句同时含这几个词 (不分大小写), 不比逐字原文

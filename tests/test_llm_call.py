@@ -1,4 +1,5 @@
-"""JudgmentEngine.call_llm: 渲染提示词, 组装请求, 语法与结构失败重试, 每次尝试一行 llm_call 留痕 (接口文档第 5 节)."""
+"""JudgmentEngine.call_llm: 渲染提示词, 组装请求, 四级校验任一级没通过即回传重试 (语法与结构 R34, 引用与语义 R348),
+每次尝试一行 llm_call 留痕 (接口文档第 5 节)."""
 
 import asyncio
 import hashlib
@@ -302,17 +303,28 @@ def llm_levels(trail: FakeTrail) -> list[str | None]:
 
 
 GOOD = cutoff_draft()
-BAD_PLAN = [
-    # 语义级 (需求 R348 验收 1)
-    (with_step(GOOD, 3, evidence=[GOOD.evidence[0]]), "semantic", "第 3 步 standard 没有指向准则片段"),
-    (with_step(GOOD, 4, from_steps=[0, 4]), "semantic", "第 4 步 inference 引用了非前序步骤 [4]"),
-    (GOOD.model_copy(update={"misstatement_draft": None}), "semantic", "建议认定错报, 但没有错报草稿"),
-    # 引用级判为失败的那类 (验收 2)
-    (misstated(14000000), "reference", "错报金额 14000000 不等于引用行的金额"),
-]
+# 没通过的判断草稿: 语义级三例 (需求 R348 验收 1), 引用级判为失败的一例 (验收 2)
+BAD_DRAFTS = {
+    "standard_without_fragment": (
+        with_step(GOOD, 3, evidence=[GOOD.evidence[0]]),
+        "semantic",
+        "第 3 步 standard 没有指向准则片段",
+    ),
+    "inference_not_preceding": (
+        with_step(GOOD, 4, from_steps=[0, 4]),
+        "semantic",
+        "第 4 步 inference 引用了非前序步骤 [4]",
+    ),
+    "misstatement_without_draft": (
+        GOOD.model_copy(update={"misstatement_draft": None}),
+        "semantic",
+        "建议认定错报, 但没有错报草稿",
+    ),
+    "amount_not_traceable": (misstated(14000000), "reference", "错报金额 14000000 不等于引用行的金额"),
+}
 
 
-@pytest.mark.parametrize(("bad", "level", "error"), BAD_PLAN)
+@pytest.mark.parametrize(("bad", "level", "error"), list(BAD_DRAFTS.values()), ids=list(BAD_DRAFTS))
 async def test_failed_judgment_is_retried_with_its_errors(
     bad: JudgmentDraft, level: str, error: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -324,11 +336,8 @@ async def test_failed_judgment_is_retried_with_its_errors(
     assert outcome.judgment is not None and outcome.attempts == 2 and len(outcome.trail_ids) == 2
     assert llm_levels(trail) == [level, None]
     retry = llm.requests[1].messages[-1]
-    assert (
-        retry.role == "user"
-        and retry.content.startswith("Your previous reply failed validation")
-        and error in (retry.content)
-    )
+    assert retry.role == "user" and retry.content.startswith("Your previous reply failed validation")
+    assert error in retry.content
 
 
 async def test_unsupported_pointer_alone_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
