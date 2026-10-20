@@ -66,8 +66,9 @@ class ValidationContext(Model):
     # EngagementStore; 为空时这类指针解析不了
     client_profile: ClientProfile | None = None
     # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针
-    # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为空不核对
-    standards_of: str | None = None
+    # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为 None 不核对 (抽取, 分类, 报告与 GEN-09 第二轮等不按引用级
+    # 解析准则片段的输出). 必填, 不给缺省值: 新调用方漏传时类型检查即报, 不会静默不核对
+    standards_of: str | None
 
 
 class ValidationReport(Model, Generic[T]):

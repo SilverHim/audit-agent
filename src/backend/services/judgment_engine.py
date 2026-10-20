@@ -319,14 +319,15 @@ class PointerResolver:
     """一次校验内解析证据指针: 按 source_type 到对应存储查, 同一来源只查一次. client_profile 指针不查存储, 只认
     profile (校验上下文中本项目采用的那一版客户画像, 需求 R128).
 
-    standards_of 给了时, 准则片段还须在该程序 YAML 的 standards 内 (需求 R301: 提示词只列这些片段), 否则同未登记的
-    片段一样解析不了, 原因写明片段与程序; 为空不核对 (如 A7 取第一轮给出的证据)."""
+    standards_of 不为 None 时, 准则片段还须在该程序 YAML 的 standards 内 (需求 R301: 提示词只列这些片段), 否则同未
+    登记的片段一样解析不了, 原因写明片段与程序. 判断取本程序, GEN-09 第一轮的校验与给出的证据 (given_evidence) 取被
+    复核的程序; 必填 (None 不核对), 新调用方漏传时类型检查即报."""
 
     def __init__(
         self,
         validator: "OutputValidator",
         eid: str,
-        standards_of: str | None = None,
+        standards_of: str | None,
         profile: ClientProfile | None = None,
     ) -> None:
         self.validator = validator

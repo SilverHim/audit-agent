@@ -142,7 +142,7 @@ class SheetIntake:
         run = upload_run(SHEET.id, document)
         try:
             result = await self.deps.judgments.call_llm(
-                eid, SHEET, run, variables, ValidationContext(), self.agent, key
+                eid, SHEET, run, variables, ValidationContext(standards_of=None), self.agent, key
             )
         except Exception:
             logger.exception("识别账表时调用大模型出错 %s %s %s", eid, document.id, sheet)

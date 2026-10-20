@@ -76,7 +76,7 @@ class ConciergeAgent(ProcedureAgent[AuditReportVersion]):
             ctx.run,
             variables,
             # 引用只认提示词列出的键: 当前结果的判断 (过期重跑取代的不算, 同汇总表与 FIN-01 材料)
-            ValidationContext(judgments=citable, opinion=opinion),
+            ValidationContext(judgments=citable, opinion=opinion, standards_of=None),
             self.agent_id,
             f"r{revision}",
         )

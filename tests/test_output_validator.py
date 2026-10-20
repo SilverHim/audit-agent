@@ -158,14 +158,14 @@ def with_step(draft: JudgmentDraft, index: int, **changes: Any) -> JudgmentDraft
 
 async def check(output: Any, raw: str | None = None, ctx: ValidationContext | None = None, **kw: Any) -> Any:
     validator, _ = make_validator(**kw)
-    return await validator.validate(EID, REV02, respond(output, raw), ctx or ValidationContext())
+    return await validator.validate(EID, REV02, respond(output, raw), ctx or ValidationContext(standards_of=None))
 
 
 # ── 签名与上下文 ─────────────────────────────────────────
 
 
 def test_validation_context_defaults() -> None:
-    ctx = ValidationContext()
+    ctx = ValidationContext(standards_of=None)
     assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == []
 
 
@@ -235,7 +235,9 @@ async def test_unregistered_model_is_not_implemented(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(llm_outputs, "ProbeOut", ProbeOut, raising=False)
     validator, _ = make_validator()
     with pytest.raises(NotImplementedError, match="ProbeOut"):
-        await validator.validate(EID, probe_template(), respond(ProbeOut(value=1)), ValidationContext())
+        await validator.validate(
+            EID, probe_template(), respond(ProbeOut(value=1)), ValidationContext(standards_of=None)
+        )
 
 
 async def test_registered_check_decides_report(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,7 +255,7 @@ async def test_registered_check_decides_report(monkeypatch: pytest.MonkeyPatch) 
 
     OutputValidator.register(ProbeOut, check_probe)
     validator, _ = make_validator()
-    ctx = ValidationContext()
+    ctx = ValidationContext(standards_of=None)
     odd = await validator.validate(EID, probe_template(), respond(ProbeOut(value=3)), ctx)
     assert (odd.level_failed, odd.retryable, odd.errors, odd.notes, odd.unsupported_steps) == (
         "semantic",
@@ -281,7 +283,9 @@ async def test_raw_not_json_is_syntax_and_retryable() -> None:
 
 async def test_syntax_error_keeps_client_error() -> None:
     validator, _ = make_validator()
-    report = await validator.validate(EID, REV02, respond(None, raw="", error="fixture_not_found"), ValidationContext())
+    report = await validator.validate(
+        EID, REV02, respond(None, raw="", error="fixture_not_found"), ValidationContext(standards_of=None)
+    )
     assert report.level_failed == "syntax" and report.errors[-1] == "fixture_not_found"
 
 
@@ -487,7 +491,7 @@ async def test_client_profile_pointer_resolves_only_against_the_context(
     """client_profile 指针: 上下文给了本项目采用的画像 (Xero 演示画像 v1) 时, ID 相同且 locator 是画像的顶层字段才
     解析通过, 改写为 voucher, internal_copy (管理层申报, 不采信模型填的); 否则该步 unsupported, 同行指针. 校验器
     没有项目存储 (make_validator), 只能用上下文里的画像. 防管理层申报被当成外部证据, 或引用别的客户或别的字段."""
-    ctx = ValidationContext(client_profile=xero_profile() if with_profile else None)
+    ctx = ValidationContext(client_profile=xero_profile() if with_profile else None, standards_of=None)
     report = await check(with_step(cutoff_draft(), 1, evidence=[pointer]), ctx=ctx)
     if reason is None:
         assert report.unsupported_steps == [] and report.errors == []
@@ -617,7 +621,7 @@ async def test_every_row_type_maps_per_rule_engine_table(
     draft = with_step(
         cutoff_draft(proposed_action=ProposedAction.accept, misstatement_draft=None), 0, evidence=[pointer]
     )
-    report = await validator.validate(EID, REV02, respond(draft), ValidationContext())
+    report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
     assert report.level_failed is None
     [resolved] = report.output.reasoning_chain[0].evidence
     assert (resolved.type, resolved.reliability) == expected
@@ -625,7 +629,7 @@ async def test_every_row_type_maps_per_rule_engine_table(
 
 async def test_each_source_is_looked_up_once() -> None:
     validator, financial = make_validator()
-    report = await validator.validate(EID, REV02, respond(cutoff_draft()), ValidationContext())
+    report = await validator.validate(EID, REV02, respond(cutoff_draft()), ValidationContext(standards_of=None))
     assert report.level_failed is None
     assert financial.record_calls == [("sales_invoice", "SI-2026-0612"), ("delivery_note", "DN-2026-0612")]
 
@@ -745,7 +749,7 @@ async def test_misstatement_amount_not_traceable_is_reference_failure() -> None:
 
 async def test_misstatement_amount_may_equal_attributed_exception_by_absolute_value() -> None:
     assert (await check(misstated(5000000))).level_failed == "reference"
-    report = await check(misstated(5000000), ctx=ValidationContext(rule_findings=[B01]))
+    report = await check(misstated(5000000), ctx=ValidationContext(rule_findings=[B01], standards_of=None))
     assert report.level_failed is None
 
 
@@ -789,7 +793,9 @@ def critic_output(
 async def critic_check(output: CriticIndependent, findings: Sequence[AuditException] = (), drafts: bool = True) -> Any:
     """第一轮的校验: 给出 CR0547 与 BT0630 两行; drafts 为真 (功能 collab 打开) 时核对草稿."""
     validator, _ = make_validator()
-    ctx = ValidationContext(allowed_evidence=[CR0547, BT0630], rule_findings=list(findings), critic_drafts=drafts)
+    ctx = ValidationContext(
+        allowed_evidence=[CR0547, BT0630], rule_findings=list(findings), critic_drafts=drafts, standards_of=None
+    )
     return await validator.validate(EID, GEN09, respond(output), ctx)
 
 
@@ -908,7 +914,9 @@ def con001() -> ContractExtraction:
 
 async def extract(output: Any, document: DocumentRef | None = CON001, procedure: str = "DOC-04") -> Any:
     validator, _ = make_validator()
-    return await validator.validate(EID, LIBRARY.load(procedure), respond(output), ValidationContext(document=document))
+    return await validator.validate(
+        EID, LIBRARY.load(procedure), respond(output), ValidationContext(document=document, standards_of=None)
+    )
 
 
 async def test_contract_extraction_passes_and_takes_reliability_from_document() -> None:
@@ -1011,7 +1019,7 @@ def sent_confirmation(account: str = "BA-01", channel: ReceiptChannel = ReceiptC
 
 async def check_reply(output: ConfirmationExtraction, confirmation: Confirmation | None) -> Any:
     validator, _ = make_validator(documents=[NUMBAT_REPLIES[0]])
-    ctx = ValidationContext(document=NUMBAT_REPLIES[0], confirmation=confirmation)
+    ctx = ValidationContext(document=NUMBAT_REPLIES[0], confirmation=confirmation, standards_of=None)
     return await validator.validate(EID, LIBRARY.load("DOC-06"), respond(output), ctx)
 
 
@@ -1105,7 +1113,7 @@ async def check_report(
     draft: ReportDraft, judgments: list[Judgment], opinion: OpinionType | None = OpinionType.qualified
 ) -> Any:
     validator, _ = make_validator()
-    ctx = ValidationContext(judgments=judgments, opinion=opinion)
+    ctx = ValidationContext(judgments=judgments, opinion=opinion, standards_of=None)
     return await validator.validate(EID, LIBRARY.load("RPT-03"), respond(draft), ctx)
 
 
@@ -1160,7 +1168,9 @@ async def test_report_needs_opinion_type() -> None:
 
 async def test_report_syntax_failure_is_retryable() -> None:
     validator, _ = make_validator()
-    report = await validator.validate(EID, LIBRARY.load("RPT-03"), respond(None, raw="{"), ValidationContext())
+    report = await validator.validate(
+        EID, LIBRARY.load("RPT-03"), respond(None, raw="{"), ValidationContext(standards_of=None)
+    )
     assert report.level_failed == "syntax" and report.retryable
 
 

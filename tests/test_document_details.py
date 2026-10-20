@@ -388,7 +388,7 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
         type=EvidenceType.voucher, source_type="document", source_id=register.id, locator="page 1", page=1
     )
     validator = OutputValidator(financial, runner.deps.library, runner.deps.trail)
-    resolved, _ = await PointerResolver(validator, EID).resolve(pointer)
+    resolved, _ = await PointerResolver(validator, EID, None).resolve(pointer)
     assert resolved is not None and resolved.reliability is Reliability.internal_copy
 
     await service.set_document_details(EID, {p_id(p): listed_edit(p) for p in FIRST}, "U-1")
@@ -435,7 +435,7 @@ async def test_xero_list_details_and_lookup_by_related_object() -> None:
         EID, "document", p_id("documents/related_party/harbourview_lease.pdf")
     )
     assert last.field == "document_date,related_ids"
-    resolved, _ = await PointerResolver(validator, EID).resolve(pointer)
+    resolved, _ = await PointerResolver(validator, EID, None).resolve(pointer)
     assert resolved is not None and resolved.reliability is Reliability.internal_original
 
 
