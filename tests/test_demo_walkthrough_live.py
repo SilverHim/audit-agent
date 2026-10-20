@@ -171,10 +171,10 @@ ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一�
     "failing",
     [
         [("REV-02", ORC1021)],
-        [("PLN-15", "r1"), ("PLN-15", "r2")],  # 计划两个修订各整条失败一次 (需求 R317)
-        [("RPT-03", "r1"), ("RPT-03", "r2")],  # 报告两稿各整条失败一次
+        # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
+        [("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")],
     ],
-    ids=["rev02", "pln15", "rpt03"],
+    ids=["rev02", "revisions"],
 )
 @pytest.mark.external
 async def test_live_driver_reruns_a_failed_object_once(tmp_path: Path, failing: list[tuple[str, str]]) -> None:

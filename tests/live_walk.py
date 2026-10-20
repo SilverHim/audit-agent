@@ -47,8 +47,10 @@ from tests.xero_flow import API, READY_REASON, drain, entered_p2_by
 
 JUDGING = ("REV-03", "REV-02", "CSH-02", "GEN-02")  # 演示配置下出判断的大模型程序, 各对象的固定输出在运行副本里
 JUDGED = sum(FIXTURE_READS[pid] for pid in JUDGING)  # 判断对象数 (17)
-# 真实模型的用量余量: 每次调用都可能再回传重试 MAX_ATTEMPTS - 1 次 (需求 R34, R348), 另有 A7 两轮复核 (随模型输出
-# 触发, 每个判断对象至多一次). 重跑另算: 驱动每个对象至多重跑一次, 一般落在重试的余量里
+# 真实模型的用量余量. 重试项按最坏情况算: 语法与结构失败回传重试 (R34; R348 合入后扩到全部失败级别, 次数不变),
+# 每次调用都再重试 MAX_ATTEMPTS - 1 次. A7 两轮复核从宽, 按全部判断对象计 (演示配置下 L1, L2 跳过 GEN-09, 实际只有
+# CSH-02 的 BA-091 一个对象可触发); 多出的部分留给没单列的重跑 (每个对象或修订至多一次, 每次至多 MAX_ATTEMPTS 次)
+# 与 A7 自身的重试
 LIVE_MARGIN = (MAX_ATTEMPTS - 1) * FIXED_CALLS + 2 * JUDGED
 MAX_CALLS = FIXED_CALLS + LIVE_MARGIN  # 用量上限
 MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)

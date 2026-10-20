@@ -90,7 +90,7 @@ from tests.fakes import (
 )
 from tests.fixture_sets import XERO
 from tests.xero_fakes import XERO17_MATERIALITY, XERO_PLAN_ROWS, XERO_RULES, make_xero_deps, xero_financial_store
-from tests.xero_flow import approve_acceptance, to_acceptance_gate
+from tests.xero_flow import approve_acceptance, entered_p2_by, to_acceptance_gate
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 ANNOTATION = Annotation(section=ReportSection.opinion, comment="x")
@@ -1550,11 +1550,7 @@ async def test_plan_gate_stops_before_p2(plan_gate: Started) -> None:
     assert {(p.version, p.status) for p in p2} == {(1, ProcedureStatus.planned)}
     engagement = await s.engagement_store.get(EID)
     assert engagement is not None and engagement.phase is Phase.P1_Planning and values["phase"] is Phase.P1_Planning
-    assert not [
-        e
-        for e in trail_of(s, TrailKind.transition)
-        if e.payload["object"] == "engagement" and e.payload["to"] == Phase.P2_Executing
-    ]
+    assert entered_p2_by(trail_of(s, TrailKind.transition)) == []
     assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned
     runs = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun)}
     assert runs["RUN-PLN-15-1"].status is RunStatus.succeeded

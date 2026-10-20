@@ -61,6 +61,7 @@ from tests.fakes import (
     NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
     NUMBAT_REPLIES,
+    PLAN_REJECT_REASON,
     FakeRegistry,
     FakeTrail,
     audit_plan,
@@ -2353,7 +2354,7 @@ def test_pln15_prompt_header_lists_its_variables() -> None:
     assert all(f"- {item.procedure_id}:" in first for item in audit_plan().items)
     terms = engagement_terms()  # R198 的 TERMS 样例, 按 JSON 渲染 (第 2 修订的上下文带它)
     second = template.render(pln15_context(2, terms.model_dump(mode="json")))
-    assert "## Revision 2" in second and "Add the planned timing of bank confirmations" in second
+    assert "## Revision 2" in second and PLAN_REJECT_REASON in second
     assert f'"framework": "{terms.framework}"' in second and "Engagement terms: not checked" not in second
 
 
