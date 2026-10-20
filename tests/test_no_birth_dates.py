@@ -1,4 +1,4 @@
-"""需求 R310: 判断 (A6) 与独立复核 (A7) 发给模型的内容不含出生日期.
+"""需求 R310: 判断 (A6, A8) 与独立复核 (A7) 发给模型的内容不含出生日期.
 
 Xero 演示的关系图取 GEN-08 在补造登记上的结果 (tests/test_evidence_gen08.run_gen08), 其余为 Xero 演示的假存储; 大模型
 为读 Xero fixture 正本的 mock (没有 fixture 的调用失败, 提示词照样记进 llm_call 留痕). 出生日期按关系图里有出生日期的
@@ -18,6 +18,7 @@ from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import DocumentIntake
 from backend.agents.registry import AGENT_CLASSES
 from backend.agents.review import GEN09, ReviewAgent
+from backend.agents.workpaper import WorkpaperAgent
 from backend.contracts.data import REGISTRY_TARGET
 from backend.contracts.models import (
     AgentId,
@@ -40,7 +41,14 @@ from tests.fakes import FakeRuleEngine, FakeTrail, make_run
 from tests.fixture_sets import XERO
 from tests.test_evidence_gen08 import VPA, run_gen08
 from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, make_xero_deps, manifest_documents, xero_profile, xero_registry
+from tests.xero_fakes import (
+    XERO_RULES,
+    make_xero_deps,
+    manifest_documents,
+    xero_identified_misstatements,
+    xero_profile,
+    xero_registry,
+)
 
 FEATURES = frozenset({"critic", "related_parties"})
 RAW_PERSON_ID = re.compile(r"PER-[A-Z0-9]+-[A-Z0-9]*-[0-9]{8}")  # 带出生日期的人员节点 ID 原文
@@ -257,19 +265,23 @@ def sees_person_data(procedure_id: str) -> bool:
 
 
 # 上下文可能带人员信息, 但还没有 Agent 执行的判断程序 → 落地它的需求. 那时 Agent 一注册,
-# test_guarded_programs_are_listed 即失败, 须同一提交删去这一项并让下面的守卫能执行它
-PENDING = {"FIN-03": "R158"}  # A8 错报性质分类
+# test_guarded_programs_are_listed 即失败, 须同一提交删去这一项并让下面的守卫能执行它 (FIN-03 由 R158 落地后删去)
+PENDING: dict[str, str] = {}
 GUARDED = sorted(
     t.id
     for t in LIBRARY.all(include_disabled=True)
     if t.llm is not None and sees_person_data(t.id) and t.id not in PENDING
 )
+# 守卫按程序的 owner 执行: A6 的判断程序与 A8 的 FIN-03 (需求 R158)
+OWNERS = {AgentId.A6: FieldworkAgent, AgentId.A8: WorkpaperAgent}
 
 
 def test_guarded_programs_are_listed() -> None:
-    """守卫自身: 上下文可能带人员信息的判断程序按依赖闭包与 document_reads 自动列出, 现含 GEN-02 与 GEN-03; 之后的
-    GEN-01 等加进程序库即进下一例受查. 不读关系图也不读摘录登记的 (如 REV-02) 不在其中."""
-    assert {"GEN-02", "GEN-03"} <= set(GUARDED) and "GEN-08" not in GUARDED and "REV-02" not in GUARDED
+    """守卫自身: 上下文可能带人员信息的判断程序按依赖闭包与 document_reads 自动列出, 现含 GEN-02, GEN-03 与 FIN-03
+    (A8, 需求 R158); 之后的 GEN-01 等加进程序库即进下一例受查. 不读关系图也不读摘录登记的 (如 REV-02) 不在其中.
+    受查的都由 OWNERS 里的 Agent 执行."""
+    assert {"GEN-02", "GEN-03", "FIN-03"} <= set(GUARDED) and "GEN-08" not in GUARDED and "REV-02" not in GUARDED
+    assert all(LIBRARY.load(p).owner in OWNERS and p in OWNERS[LIBRARY.load(p).owner].procedures for p in GUARDED)
     executed = {p for agent in AGENT_CLASSES for p in agent.procedures}
     assert all(sees_person_data(p) for p in PENDING) and not set(PENDING) & executed  # 待落地的确实还没有 Agent
 
@@ -278,16 +290,24 @@ def test_guarded_programs_are_listed() -> None:
 @pytest.mark.parametrize("procedure_id", GUARDED)
 async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
     """验收 2 (守卫): 上下文可能带人员信息的每个判断程序 (GUARDED) 在 Xero 演示上执行一次, 防新程序把出生日期发给
-    模型: 先按依赖顺序执行依赖闭包里 A6 的程序 (GEN-08 已在状态里, 规则结果取 XERO_RULES), 运行时自主度都提到 L3 (A7
-    按主规则复核建议 accept 的判断); 四份登记摘录补登记关联到关系图的全部节点, 客户与 GEN-05 例外所指的凭证 (合成的
-    登记, 让按关联对象取文件的上下文都取得到摘录). A6 与 A7 发给模型的消息都不含出生日期 (三种写法) 与人员节点 ID
-    原文. 用的是正本 fixture, 没有 fixture 的调用失败也照样查消息."""
+    模型: 先按依赖顺序执行依赖闭包里 A6 的程序 (GEN-08 已在状态里, 规则结果取 XERO_RULES), 再由程序的 owner (OWNERS)
+    执行它, 运行时自主度都提到 L3 (A7 按主规则复核建议 accept 的判断). 错报闭环的程序 (outputs 含 misstatements)
+    另在状态里放已认定而未分类的两条错报与其来源判断 (FIN-03 的判断对象, xero_identified_misstatements). 四份登记
+    摘录补登记关联到关系图的全部节点, 客户与 GEN-05 例外所指的凭证 (合成的登记, 让按关联对象取文件的上下文都取得到
+    摘录). owner 与 A7 发给模型的消息都不含出生日期 (三种写法) 与人员节点 ID 原文. 用的是正本 fixture, 没有 fixture
+    的调用失败也照样查消息."""
     trail = FakeTrail()
     client = MockLLMClient(XERO.fixtures)
     deps = make_xero_deps(
         trail=trail, llm=client, review_llm=client, features=FEATURES | {"journals"}, rules=FakeRuleEngine(XERO_RULES)
     )
     state = await graph_state(deps, trail, related_to_all=True)
+    if "misstatements" in LIBRARY.load(procedure_id).outputs:  # 错报闭环的程序: 判断对象是已认定的错报
+        preset = xero_identified_misstatements()
+        state = state | {
+            "judgments": [*state["judgments"], *preset["judgments"]],
+            "misstatements": preset["misstatements"],
+        }
     graph = state["ownership_graph"]
     assert graph is not None
     earlier = (p for p in closure(procedure_id) if p in FieldworkAgent.procedures)
@@ -296,7 +316,8 @@ async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
         ctx = xero_context(deps, state, pid, [])
         procedure = ctx.procedure.model_copy(update={"autonomy_level": AutonomyLevel.L3})
         ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state | {"procedure_pack": [procedure]})
-        state = apply_patch(state, await FieldworkAgent(deps).run(ctx))  # type: ignore[arg-type]
-    a6, a7 = sent(trail, AgentId.A6), sent(trail, AgentId.A7)
-    assert a6 and a7  # 两边都发了消息, 守卫查得到东西
-    assert leaks([*a6, *a7], graph) == []
+        agent = OWNERS[LIBRARY.load(pid).owner](deps)
+        state = apply_patch(state, await agent.run(ctx))  # type: ignore[arg-type]
+    owner, a7 = sent(trail, LIBRARY.load(procedure_id).owner), sent(trail, AgentId.A7)
+    assert owner and a7  # 两边都发了消息, 守卫查得到东西
+    assert leaks([*owner, *a7], graph) == []

@@ -3029,6 +3029,12 @@ class ScriptA6(ScriptAgent):
     agent_id: ClassVar[AgentId] = AgentId.A6
 
 
+class ScriptA8(ScriptAgent):
+    """以 A8 (底稿, 错报闭环) 身份写片段的脚本 Agent, 可写判断, 复核任务, 错报 (需求 R158)."""
+
+    agent_id: ClassVar[AgentId] = AgentId.A8
+
+
 class ScriptA10(ScriptAgent):
     """以 A10 (报告) 身份写片段的脚本 Agent, 可写 report_versions, review_tasks."""
 

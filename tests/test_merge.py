@@ -461,13 +461,9 @@ def test_completion_records_come_from_their_writer_and_this_run(
         check_patch(patch(stale), outputs=[field], **common)
 
 
-PENDING_AGENTS = {AgentId.A8}  # 只登记了写入归属, 还没有 Agent 类 (错报闭环首个程序落地时删去; 需求 R156)
-
-
 def test_every_registered_agent_has_field_table() -> None:
-    registered = {cls.agent_id for cls in AGENT_CLASSES}
-    assert registered <= AGENT_FIELDS.keys()
-    assert AGENT_FIELDS.keys() - registered == PENDING_AGENTS
+    """注册的 Agent 与写入归属表一一对应 (A8 由需求 R158 注册后, 待落地表已删去)."""
+    assert {cls.agent_id for cls in AGENT_CLASSES} == set(AGENT_FIELDS)
 
 
 def test_field_type_follows_state_annotations() -> None:

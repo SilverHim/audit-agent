@@ -2056,7 +2056,7 @@ def test_pln15_template() -> None:
 def test_fin03_template_loads_only_with_misstatement() -> None:
     """R157 验收 1, 7: FIN-03 为完成阶段 A8 的混合程序, 挂功能 misstatement, 没有规则与前置 ("全部 P2 判断已复核" 由
     主图保证), 写判断, 复核任务与错报; 两个准则片段都已登记且各自的 procedures 列了 FIN-03; 输出模型为分类草稿.
-    manual_result_allowed 本条为假 (P2 以外的节点等人时失败任务只认 rerun, 由 R158 打开; 方案取舍). 基线下不启用,
+    manual_result_allowed 为真 (需求 R158 让 P2 以外的节点读回失败任务的 manual_result 后打开). 基线下不启用,
     不进项目启动实例化的程序 (基线启用集恰为 BASE_18 见 test_all_procedures_load); 打开 misstatement 时进."""
     base = ProcedureLibrary(ROOT)
     t = base.load("FIN-03")
@@ -2070,7 +2070,7 @@ def test_fin03_template_loads_only_with_misstatement() -> None:
         "misstatement",
         None,
     )
-    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, False)
+    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, True)
     assert (t.outputs, t.evidence_required) == (["judgments", "review_tasks", "misstatements"], [EvidenceType.voucher])
     assert t.standards == ["ASA450-A6", "ASA240-P36"]
     assert t.llm == LLMSpec(prompt="FIN-03.md.j2", output_model="MisstatementClassificationDraft")

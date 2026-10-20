@@ -652,8 +652,9 @@ class GraphNodes:
     ) -> tuple[ReviewRecord, Procedure]:
         """读回审计师对某个 failed 任务的决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
 
-        failed: 正在等待的这一轮执行建的 failed 任务, 同属一组 (Q17), 决定须针对其中之一: 第 k 次等待只接受针对
-        第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph 沿用上次的恢复值) 时, execute 在调用前就跳过, 不到这里.
+        failed: 正在等待的这一轮执行建的 failed 任务, 同属一组 (Q17; 已由 manual_result 关闭的已移出, 需求 R158), 决定
+        须针对其中之一: 第 k 次等待只接受针对第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph 沿用上次的恢复值)
+        时, execute 在调用前就跳过, 不到这里.
         waiting: 等待时写出的 awaiting_human 程序版本. 程序版本取 waiting.version + 1, 即 rerun 决定在同一事务里写出的
         那一版 (executing, 含合并后的 params 与 rerun_subject_ids), 不取最新版本: 节点重放时会依次经过多次等待,
         最新版本可能是之后的决定写出的. 这一版的 rerun_subject_ids 须覆盖整组 (见 rerun_subjects), 否则决定没有
@@ -692,10 +693,12 @@ class GraphNodes:
         待决任务, 失败留下的 failed 任务或判断与例外的 normal, unattributed, dispute 等任务, 或有针对本程序任务而尚未
         读回的决定); 要等时 interrupt() 暂停, 审计师对本程序的任务提交决定后以 Command(resume=决定 ID) 恢复, 节点从头
         执行: 已结束的执行按重放规则取 Store, 各次 interrupt() 依次取回已提交的决定 ID. 取回的决定:
-        - rerun (或针对 failed 任务的决定): 读回它写出的程序版本 (见 read_rerun), 以 run_no + 1 再执行一次.
-          一次失败留下多个任务时算一组 (Q17): 对其中任一个 rerun 即整组关闭, 下一轮一起重跑这组的全部对象;
-          第 k 轮的等待只接受针对第 k 轮任务的 rerun.
-        - 其余: 从 Store 整体读回本程序的对象 (见 read_review), 与提交顺序无关.
+        - rerun (或针对 failed 任务而不是 manual_result 的决定): 读回它写出的程序版本 (见 read_rerun), 以 run_no + 1
+          再执行一次. 一次失败留下多个任务时算一组 (Q17): 对其中任一个 rerun 即整组关闭, 下一轮一起重跑这组里仍待决
+          的对象; 第 k 轮的等待只接受针对第 k 轮任务的 rerun.
+        - 其余: 从 Store 整体读回本程序的对象 (见 read_review), 与提交顺序无关. 其中针对 failed 任务的 manual_result
+          (模板 manual_result_allowed, 需求 R158) 已由 DecisionSubmit 建成人工判断并关闭该任务, 同样整体读回; 该任务
+          移出本轮的组, 之后同轮其余失败任务的 rerun 只重跑组内其余对象 (同 DecisionSubmit 关闭整组时只取待决的).
         不再等时节点结束: 这一轮的程序版本当时就不等人时用它, 当时在等时取 Store 最新版本 (DecisionSubmit 重算出的).
         返回历次执行写入的片段 (含失败的执行与已决定的任务), 读回的决定与对象, 以及最终的完整程序包.
         phase: 节点同时推进的阶段 (见 attempt), 不为空时返回的片段带上它.
@@ -756,8 +759,20 @@ class GraphNodes:
                     raise LookupError(f"ReviewRecord {record_id} not found")
                 delivered.append(record_id)
                 task = await store.get(eid, ReviewTask, record.task_id)
-                # 针对 failed 任务的决定 (或找不到任务的) 走 rerun 的读回, 由 read_rerun 查它须为 rerun 且针对本轮
-                if record.decision is Decision.rerun or task is None or task.kind is TaskKind.failed:
+                # 针对 failed 任务的决定 (或找不到任务的) 走 rerun 的读回, 由 read_rerun 查它须为 rerun 且针对本轮;
+                # 复核队列允许的 failed 任务的 manual_result (带对象且模板 manual_result_allowed, 需求 R158) 除外, 同
+                # 其余决定整体读回. 整次失败的任务 (没有对象) 收到 manual_result 仍按 read_rerun 报错
+                failed_result = (
+                    task is not None
+                    and task.kind is TaskKind.failed
+                    and record.decision is Decision.manual_result
+                    and Decision.manual_result in self.deps.queue.allowed(task)
+                )
+                if (
+                    record.decision is Decision.rerun
+                    or task is None
+                    or (task.kind is TaskKind.failed and not failed_result)
+                ):
                     record, procedure = await self.read_rerun(eid, record_id, failed, waiting)
                     # 整组任务已在 result 中: 节点能越过 interrupt() 时一定是在重放, 取回的是任务的最新版本 (decided)
                     result["review_records"] = [*result.get("review_records", []), record]
@@ -772,6 +787,8 @@ class GraphNodes:
                     break  # 以 run_no + 1 再执行一轮
                 if task.procedure_id != procedure_id:
                     raise ValueError(f"{record_id} 处理的任务 {task.id} 不属于正在等待的 {procedure_id}")
+                if failed_result:  # 该任务出组: 本轮其余失败任务的 rerun 只重跑组内其余对象 (见 read_rerun)
+                    failed.pop(task.id, None)
                 merge_patch(result, await self.read_review(eid, procedure_id))
                 if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
                     # 只并入派发的执行记录与任务 (整理出的对象可引用它们), 不并入重放按 outputs 取回的对象: 写 Store

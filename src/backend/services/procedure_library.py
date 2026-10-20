@@ -107,11 +107,6 @@ class ProcedureLibrary:
         wrong = fixed_problems(templates)
         if wrong:
             raise ValueError(f"固定集程序写法不对: {'; '.join(wrong)}")
-        # P2 以外的程序在所在节点内等人, 失败任务只收 rerun (nodes.read_rerun); 开 manual_result 会被 DecisionSubmit
-        # 收下而节点读回时报错, 等待卡住, 所以加载时就拒绝
-        manual = [t.id for t in templates if t.manual_result_allowed and t.phase is not Phase.P2_Executing]
-        if manual:
-            raise ValueError(f"P2 以外的程序不能开 manual_result_allowed (失败只能 rerun): {', '.join(manual)}")
         refs = [
             f"{t.id}.{key}: {problem}"
             for t in templates
