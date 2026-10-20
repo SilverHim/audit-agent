@@ -76,6 +76,7 @@ from tests.fakes import (
 )
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
+from tests.test_contracts import lifecycle_misstatement
 
 ROOT = get_settings().KNOWLEDGE_ROOT
 P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
@@ -2194,68 +2195,63 @@ def other_manual_result() -> dict[str, list[Any]]:
     return {"review_tasks": [task], "review_records": [record.model_copy(update={"manual_result": result})]}
 
 
-@pytest.mark.parametrize(
-    ("changes", "expected"),
-    [
-        ({}, None),
-        ({"misstatements": [RECOMMUNICATED]}, None),  # 没有登记: 不看错报上的沟通时间
-        (registered_at([ROUND_2, ROUND_1]), "2026-10-19T04:00:00Z"),  # 一次登记中最早的
-        (registered_at([ROUND_1], [ROUND_2]) | {"misstatements": [RECOMMUNICATED]}, "2026-10-19T04:00:00Z"),
-        (registered_at([ROUND_1], [ROUND_2]) | {"rerun_requests": [SUPERSEDED_FIN08]}, "2026-10-19T04:00:00Z"),
-        (other_manual_result(), None),
-    ],
-    ids=["none", "misstatement_only", "earliest", "recommunicated", "superseded", "other_program"],
+FIRST_COMMUNICATED, VERIFIED_ENTRIES = "first_misstatement_communicated_at", "verified_adjustment_entry_nos"
+VERIFIED = lifecycle_misstatement(  # FIN-09 验证为 corrected 的错报, 两笔更正分录
+    id="M-1",
+    status="corrected",
+    correction_notice_id="CN-1",
+    adjustment_entry_nos=["AJE-X05", "AJE-X01"],
+    corrected_cents=10000,
+    residual_cents=0,
+    verified_by_judgment_id="J-FIN-09-1-M-1",
 )
-def test_first_misstatement_communicated_at(changes: dict[str, Any], expected: str | None) -> None:
-    """R161 验收 9 (第 1 轮审核 R161-02, R161-08): 派生引用 first_misstatement_communicated_at 解析为 FIN-08 各次登记的
-    沟通时间的最早值, 转成 ISO 文本 (JSON 兼容); 重新沟通 (第 2 次登记) 改写错报上的沟通时间后仍为首次的, 被过期重跑
-    取代的执行的登记也算, 别的程序的 manual_result 与错报上的字段不看; 还没有登记时为 None, 以 None 执行, 不抛错.
-    ref 写法校验认得这个名字."""
+
+
+@pytest.mark.parametrize(
+    ("ref", "changes", "expected"),
+    [
+        (FIRST_COMMUNICATED, {}, None),
+        (FIRST_COMMUNICATED, {"misstatements": [RECOMMUNICATED]}, None),  # 没有登记: 不看错报上的沟通时间
+        (FIRST_COMMUNICATED, registered_at([ROUND_2, ROUND_1]), "2026-10-19T04:00:00Z"),  # 一次登记中最早的
+        (
+            FIRST_COMMUNICATED,
+            registered_at([ROUND_1], [ROUND_2]) | {"misstatements": [RECOMMUNICATED]},
+            "2026-10-19T04:00:00Z",
+        ),
+        (
+            FIRST_COMMUNICATED,
+            registered_at([ROUND_1], [ROUND_2]) | {"rerun_requests": [SUPERSEDED_FIN08]},
+            "2026-10-19T04:00:00Z",
+        ),
+        (FIRST_COMMUNICATED, other_manual_result(), None),
+        (VERIFIED_ENTRIES, {"misstatements": [VERIFIED]}, ["AJE-X01", "AJE-X05"]),
+        (VERIFIED_ENTRIES, {}, []),  # 没有错报: [], 不是 None
+    ],
+    ids=[
+        "none",
+        "misstatement_only",
+        "earliest",
+        "recommunicated",
+        "superseded",
+        "other_program",
+        "verified_entries",
+        "no_entries",
+    ],
+)
+def test_derived_refs(ref: str, changes: dict[str, Any], expected: Any) -> None:
+    """派生引用 (DERIVED_REFS) 按状态解析, 值转成 JSON 兼容的; ref 写法校验认得这两个名字.
+    - first_misstatement_communicated_at (R161 验收 9, 第 1 轮审核 R161-02, R161-08): FIN-08 各次登记的沟通时间的
+      最早值, 转成 ISO 文本; 重新沟通 (第 2 次登记) 改写错报上的沟通时间后仍为首次的, 被过期重跑取代的执行的登记也算,
+      别的程序的 manual_result 与错报上的字段不看; 还没有登记时为 None, 以 None 执行, 不抛错.
+    - verified_adjustment_entry_nos (R174 验收 2): 已验证更正分录的凭证号 (services/adjusted_tb.verified_entry_nos,
+      判断条件见 test_contracts); 状态没有错报时为 [], 不是 None, 不抛错."""
     library = ProcedureLibrary(ROOT)
-    param = {"ref": "first_misstatement_communicated_at"}
-    assert ref_problem(param["ref"]) is None
-    template = library.load("FIN-04").model_copy(update={"params": {"start": param}})
+    param = {"ref": ref}
+    assert ref_problem(ref) is None
+    template = library.load("FIN-04").model_copy(update={"params": {"value": param}})
     state = initial_state(ENGAGEMENT, [], 1) | changes
     resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
-    assert resolved == {"start": expected}
-
-
-def correcting(mid: str, status: MisstatementStatus, entry_no: str) -> Misstatement:
-    """RECOMMUNICATED 改成错报 mid 的更正阶段 (经模型校验): verifying 带更正通知与凭证号, corrected 另有 FIN-09 的
-    验证判断."""
-    fields = RECOMMUNICATED.model_dump() | {
-        "id": mid,
-        "status": status,
-        "correction_notice_id": "N-1",
-        "adjustment_entry_nos": [entry_no],
-    }
-    if status is MisstatementStatus.corrected:
-        fields |= {"corrected_cents": 100, "residual_cents": 0, "verified_by_judgment_id": f"J-FIN-09-1-{mid}"}
-    return Misstatement.model_validate(fields)
-
-
-XERO_ROUND_1 = [  # Xero 第 1 轮: M-1, M-5 验证为 corrected; 还在验证的不算
-    correcting("M-1", MisstatementStatus.corrected, "AJE-X01"),
-    correcting("M-2", MisstatementStatus.verifying, "AJE-X02"),
-    correcting("M-5", MisstatementStatus.corrected, "AJE-X05"),
-]
-
-
-@pytest.mark.parametrize(
-    ("misstatements", "expected"),
-    [(XERO_ROUND_1, ["AJE-X01", "AJE-X05"]), ([], [])],
-    ids=["round1", "none"],
-)
-def test_verified_adjustment_entry_nos(misstatements: list[Misstatement], expected: list[str]) -> None:
-    """R174 验收 2: 派生引用 verified_adjustment_entry_nos 解析为已验证更正分录的凭证号 (services/adjusted_tb 的
-    verified_entry_nos); 状态没有错报时为 [], 不是 None, 不抛错. ref 写法校验认得这个名字."""
-    library = ProcedureLibrary(ROOT)
-    param = {"ref": "verified_adjustment_entry_nos"}
-    assert ref_problem(param["ref"]) is None
-    template = library.load("FIN-04").model_copy(update={"params": {"entry_nos": param}})
-    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements}
-    resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
-    assert resolved == {"entry_nos": expected}
+    assert resolved == {"value": expected}
 
 
 def fin03_variables() -> dict[str, Any]:

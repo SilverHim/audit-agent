@@ -11,26 +11,27 @@ adjustment_entry_nos 并集.
 纯函数, 不读写存储.
 """
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
-from typing import Any
+from collections.abc import Collection, Iterable, Sequence
 
 from backend.contracts.models import verified_adjustment_entries
 from backend.contracts.records import JournalEntry, TrialBalanceRow
+from backend.contracts.state import EngagementState
 
 
-def verified_entry_nos(state: Mapping[str, Any]) -> list[str]:
+def verified_entry_nos(state: EngagementState) -> list[str]:
     """已验证更正分录的凭证号: 状态 misstatements (各错报的当前版本) 按 verified_adjustment_entries 取, 去重排序.
     没有错报 (含功能 misstatement 关闭, Numbat) 为 [].
     例: Xero 第 1 轮 M-D-XJ499 与 M-D-CSH02-091 验证为 corrected → [AJE-X01, AJE-X05]."""
-    return verified_adjustment_entries(state.get("misstatements") or [])
+    return verified_adjustment_entries(state["misstatements"])
 
 
 def adjusted_balances(
     trial_balance: Sequence[TrialBalanceRow], lines: Iterable[JournalEntry], entry_nos: Collection[str]
 ) -> dict[str, int]:
-    """更正后余额 (科目代码 → 余额, 借方为正, 按科目代码排序): 本期试算表的余额 (上期的行不算) 加凭证号在 entry_nos
-    中的分录行的借方减贷方, 按科目合计; 试算表没有的科目随分录行新出现. entry_nos 为空时与本期试算表逐科目相等.
-    口径同数据库函数 adjusted_trial_balance. 例: Xero 本期 820 为 -119197, 加 AJE-X01 后为 -126697."""
+    """更正后余额 (科目代码 → 余额, 借方为正, 键按科目代码排序): 本期试算表的余额 (上期的行不算) 加凭证号在
+    entry_nos 中的分录行的借方减贷方, 按科目合计; 试算表没有的科目随分录行新出现. entry_nos 为空时与本期试算表逐科目
+    相等. 逐科目同数据库函数 adjusted_trial_balance (函数的行序不定). 例: Xero 本期 820 为 -119197, 加 AJE-X01 后为
+    -126697."""
     balances: dict[str, int] = {}
     for row in trial_balance:
         if row.period == "current":

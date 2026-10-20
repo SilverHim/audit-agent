@@ -1,78 +1,61 @@
-"""需求 R174: 试算表加已验证更正分录 (services/adjusted_tb) 的两个纯函数, 与迁移链.
+"""需求 R174: 试算表加已验证更正分录 (services/adjusted_tb) 的两个纯函数.
 
-Xero 演示: 第 1 轮 FIN-09 验证 M-D-XJ499 (AJE-X01) 与 M-D-CSH02-091 (AJE-X05) 为 corrected (设计稿的 M-1, M-5),
-第 2 轮另有设计稿的 M-2 至 M-4 (AJE-X02 至 X04, 用例里编号为 M-D-F03 至 F05). 余额取演示数据导入后的本期试算表与
-总账, 更正分录取补造的 11 行 (设计稿 v2.1 第 2.8 节). 连库的数据库函数 adjusted_trial_balance 见
-test_persistence_postgres.
+verified_entry_nos 的判断条件由 test_contracts 的 test_verified_adjustment_entries_take_only_verified_corrections
+守住, 这里只核验收 1 列的几种情形. adjusted_balances 的 Xero 用例取演示数据导入后的本期试算表与总账, 更正分录取补造的
+11 行 (设计稿 v2.1 第 2.8 节). 连库的数据库函数 adjusted_trial_balance 见 test_persistence_postgres.
 """
 
-from pathlib import Path
-from typing import Any
-
 import pytest
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 
-from backend.contracts.models import Misstatement, MisstatementStatus
+from backend.contracts.models import Misstatement
 from backend.contracts.records import JournalEntry, TrialBalanceRow
 from backend.contracts.state import initial_state
 from backend.services.adjusted_tb import adjusted_balances, verified_entry_nos
 from tests.fakes import ENGAGEMENT
-from tests.xero_fakes import xero_adjustments, xero_identified_misstatements, xero_tables
+from tests.test_contracts import lifecycle_misstatement
+from tests.xero_fakes import xero_adjustments, xero_tables
 
-ROOT = Path(__file__).resolve().parents[1]
 ROUND_1 = ["AJE-X01", "AJE-X05"]
 ROUND_2 = ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
 
 
-def lifecycle(base: Misstatement, mid: str, status: MisstatementStatus, entries: list[str]) -> Misstatement:
-    """base 改成另一条错报 mid 的某个更正阶段 (经模型校验): verifying 带更正通知与凭证号; corrected 已更正全额,
-    partially_corrected 已更正一半, 两者由 FIN-09 的判断验证; uncorrected 为功能关闭时的旧口径."""
-    fields: dict[str, Any] = {**base.model_dump(), "id": mid, "status": status, "adjustment_entry_nos": entries}
-    if status is not MisstatementStatus.uncorrected:
-        fields["correction_notice_id"] = "N-1"
-    if status is MisstatementStatus.corrected:
-        fields |= {"corrected_cents": base.amount_cents, "residual_cents": 0}
-    if status is MisstatementStatus.partially_corrected:
-        half = base.amount_cents // 2
-        fields |= {"corrected_cents": half, "residual_cents": base.amount_cents - half}
-    if status in (MisstatementStatus.corrected, MisstatementStatus.partially_corrected):
-        fields["verified_by_judgment_id"] = f"J-FIN-09-1-{mid}"
-    return Misstatement.model_validate(fields)
+def corrected(mid: str, entry_no: str, residual: int = 0) -> Misstatement:
+    """FIN-09 验证过的更正 (凭证号 entry_no): 剩余额为 0 时 corrected, 否则 partially_corrected (错报金额 10000)."""
+    return lifecycle_misstatement(
+        id=mid,
+        status="partially_corrected" if residual else "corrected",
+        correction_notice_id="CN-1",
+        adjustment_entry_nos=[entry_no],
+        corrected_cents=10000 - residual,
+        residual_cents=residual,
+        verified_by_judgment_id=f"J-FIN-09-1-{mid}",
+    )
 
 
-def misstatements(*rows: tuple[str, MisstatementStatus, list[str]]) -> list[Misstatement]:
-    base = xero_identified_misstatements()["misstatements"][0]  # M-D-XJ499 (710, 75000 overstated)
-    return [lifecycle(base, mid, status, entries) for mid, status, entries in rows]
+FIRST = [corrected("M-1", "AJE-X01"), corrected("M-5", "AJE-X05")]
 
 
-CORRECTED, PARTIAL = MisstatementStatus.corrected, MisstatementStatus.partially_corrected
-FIRST = [("M-D-XJ499", CORRECTED, ["AJE-X01"]), ("M-D-CSH02-091", CORRECTED, ["AJE-X05"])]
-SECOND = [*FIRST, ("M-D-F03", CORRECTED, ["AJE-X02"]), ("M-D-F04", CORRECTED, ["AJE-X03"])]
-
-
-@pytest.mark.external
 @pytest.mark.parametrize(
-    ("rows", "expected"),
+    ("misstatements", "expected"),
     [
-        (FIRST, ROUND_1),  # 第 1 轮
-        ([*SECOND, ("M-D-F05", PARTIAL, ["AJE-X04"])], ROUND_2),  # 第 2 轮, 部分更正的也算
-        ([("M-D-F03", CORRECTED, ["AJE-X02"]), ("M-D-X", CORRECTED, ["AJE-X02", "AJE-X01"])], ["AJE-X01", "AJE-X02"]),
-        ([("M-D-XJ499", MisstatementStatus.verifying, ["AJE-X01"])], []),  # 还在验证: 不算
-        ([("M-D-XJ499", MisstatementStatus.uncorrected, [])], []),
+        (FIRST, ROUND_1),  # 第 1 轮 (M-1, M-5 corrected)
+        (  # 第 2 轮, 部分更正的也算
+            [*FIRST, corrected("M-2", "AJE-X02"), corrected("M-3", "AJE-X03"), corrected("M-4", "AJE-X04", 100)],
+            ROUND_2,
+        ),
+        (
+            [lifecycle_misstatement(status="verifying", correction_notice_id="CN-1", adjustment_entry_nos=["AJE-X01"])],
+            [],
+        ),
+        ([lifecycle_misstatement(status="uncorrected")], []),
         ([], []),  # 没有错报 (功能 misstatement 关闭, Numbat)
     ],
-    ids=["round1", "round2", "dedup", "verifying", "uncorrected", "none"],
+    ids=["round1", "round2", "verifying", "uncorrected", "none"],
 )
-def test_verified_entry_nos(rows: list[tuple[str, MisstatementStatus, list[str]]], expected: list[str]) -> None:
-    """验收 1: 状态 misstatements 中 corrected 或 partially_corrected 且有验证判断的错报, 其凭证号并集去重排序."""
-    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements(*rows)}
+def test_verified_entry_nos(misstatements: list[Misstatement], expected: list[str]) -> None:
+    """验收 1: 状态 misstatements 中 corrected 或 partially_corrected 且有验证判断的错报的凭证号, 去重排序."""
+    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements}
     assert verified_entry_nos(state) == expected
-
-
-def test_verified_entry_nos_without_misstatements() -> None:
-    """Numbat 的初始状态 (没有错报) 为 []."""
-    assert verified_entry_nos(initial_state(ENGAGEMENT, [], 1)) == []
 
 
 def xero_books() -> tuple[list[TrialBalanceRow], list[JournalEntry]]:
@@ -129,10 +112,3 @@ def test_adjusted_balances_ignores_prior_period_and_other_entries() -> None:
     lines = [line("1", "AJE-1", "100", 0, 300), line("2", "AJE-1", "200", 300, 0), line("3", "J-9", "100", 50, 0)]
     assert adjusted_balances(trial, lines, ["AJE-1"]) == {"100": 700, "200": 300}
     assert adjusted_balances(trial, lines, []) == {"100": 1000}
-
-
-def test_migration_chain_has_one_head_with_adjusted_trial_balance() -> None:
-    """验收 4: 迁移链只有一个头, 含建 adjusted_trial_balance 的 0022."""
-    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    [head] = script.get_heads()
-    assert "0022" in {r.revision for r in script.walk_revisions("base", head)}

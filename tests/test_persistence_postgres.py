@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -13,7 +14,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import Index, delete, event, insert, select, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
 from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
@@ -26,6 +27,7 @@ from backend.contracts.models import (
     ClientProfile,
     ComplianceCheck,
     DocumentType,
+    Engagement,
     EngagementTerms,
     GovernanceCommunication,
     IndependenceDeclaration,
@@ -102,6 +104,56 @@ async def storage(tmp_path):
         owner_id=user, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
     )
     yield engine, engagement, loader, evidence
+    await engine.dispose()
+
+
+XERO_Q1 = "xero/20261017-q1"
+
+
+@dataclass
+class XeroStorage:
+    """真实库上的 Xero 装配 (xero_storage): 引擎, 新建的用户, 证据存储, 载入器 (快照与补造取仓库的), 项目存储;
+    api 与 supplements 为快照与补造的上一级目录."""
+
+    engine: AsyncEngine
+    user: str
+    evidence: FileEvidenceStore
+    xero: XeroDatasetLoader
+    engagements: PostgresEngagementStore
+    api: Path
+    supplements: Path
+
+    async def engagement(self, dataset: str = XERO_Q1, period_end: date = date(2026, 9, 30)) -> Engagement:
+        """新建项目 (期间自 2026-07-01 起); 画像取数据集的: xero/ 取载入器的, 其余取 data/ 下的 CSV 数据集."""
+        loader = self.xero if dataset.startswith("xero/") else CsvDatasetLoader(ROOT / "data")
+        return await self.engagements.create(
+            owner_id=self.user,
+            period_start=date(2026, 7, 1),
+            period_end=period_end,
+            dataset=dataset,
+            profile=loader.client_profile(dataset),
+        )
+
+
+@pytest.fixture
+async def xero_storage(tmp_path):
+    """Xero 用例的开场: 先核对 xero/20261017-q1 的快照与补造 (tests.external: 跟踪了却找不到时失败, 哈希不符跳过),
+    没有 TEST_DATABASE_URL 时跳过; 建一个用户, 证据存在 tmp_path. 见 XeroStorage."""
+    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    xero = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
+    yield XeroStorage(engine, user, evidence, xero, PostgresEngagementStore(engine), api, supplements)
     await engine.dispose()
 
 
@@ -1374,43 +1426,18 @@ async def test_user_store_create_keeps_existing_account():
 
 
 @pytest.mark.external
-async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
+async def test_xero_mock_and_q1_profiles_coexist(xero_storage):
     """R70: 同一库先后以 xero/20261017-mock 与 xero/20261017-q1 建项目都成功, 快照画像 CLIENT-XERO-3C1332BB 与
     补造画像 CLIENT-XERO-3C1332BB-Q1 并存; 再建一次 (画像已在库中, 内容相同) 也照常. 不写死版本号 (R127): 库里
     若存着补造画像改内容之前的版本, 建项目时会出新版本, 断言最新一版的内容等于补造画像, 项目采用最新一版."""
-    api, _ = snapshot_dir("20261017-q1").parent, snapshot_dir("20261017-mock")  # 先核对两个快照
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("需要 TEST_DATABASE_URL")
-    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
-    user = "USR-" + uuid4().hex
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(m.users).values(
-                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
-            )
-        )
-    loader = XeroDatasetLoader(
-        api,
-        ROOT / "src/backend/knowledge/planning",
-        engine,
-        FileEvidenceStore(tmp_path, engine),
-        supplements=supplements_dir("20261017-q1").parent,
-    )
-    store = PostgresEngagementStore(engine)
-    periods = {"xero/20261017-mock": date(2026, 11, 30), "xero/20261017-q1": date(2026, 9, 30)}
+    snapshot_dir("20261017-mock")  # 另核对 mock 快照 (q1 的由 xero_storage 核对)
+    x = xero_storage
+    loader, store = x.xero, x.engagements
+    periods = {"xero/20261017-mock": date(2026, 11, 30), XERO_Q1: date(2026, 9, 30)}
     created = []
     for _ in range(2):
         for dataset, end in periods.items():
-            created.append(
-                await store.create(
-                    owner_id=user,
-                    period_start=date(2026, 7, 1),
-                    period_end=end,
-                    dataset=dataset,
-                    profile=loader.client_profile(dataset),
-                )
-            )
+            created.append(await x.engagement(dataset, period_end=end))
     mock = await store.client_profile("CLIENT-XERO-3C1332BB")
     q1 = await store.client_profile("CLIENT-XERO-3C1332BB-Q1")
     assert mock is not None and mock.legal_name == "Demo Company (AU)"
@@ -1420,7 +1447,6 @@ async def test_xero_mock_and_q1_profiles_coexist(tmp_path):
     assert q1.approval_limit_cents == 500000  # 扩展字段 (R127) 写进了库
     adopted = {e.client_id: e.client_profile_version for e in created[2:]}  # 第二轮: 两份画像都已是最新一版
     assert adopted == {mock.id: mock.version, q1.id: q1.version}
-    await engine.dispose()
 
 
 async def test_create_adopts_latest_profile_or_writes_a_new_version():
@@ -1486,31 +1512,13 @@ async def test_create_adopts_latest_profile_or_writes_a_new_version():
 
 
 @pytest.mark.external
-async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
+async def test_xero_q1_seed_load_is_snapshot_only(tmp_path, xero_storage):
     """R269 验收 11: 真实库载入 xero/20261017-q1 只载快照: 服务完成记录与工资册为 0 行, 发票的合同关联为空, 开户行取
     快照的科目名, 不登记文件 (补造部分由演示数据导入写入, 见 test_demo_import_db); 每个科目 gl_balance 等于本期试算表.
     补造与快照不匹配时不载入."""
-    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("需要 TEST_DATABASE_URL")
-    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
-    user = "USR-" + uuid4().hex
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(m.users).values(
-                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
-            )
-        )
-    evidence = FileEvidenceStore(tmp_path, engine)
-    loader = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
-    e = await PostgresEngagementStore(engine).create(
-        owner_id=user,
-        period_start=date(2026, 7, 1),
-        period_end=date(2026, 9, 30),
-        dataset="xero/20261017-q1",
-        profile=loader.client_profile("xero/20261017-q1"),
-    )
+    x = xero_storage
+    engine, api, supplements, loader = x.engine, x.api, x.supplements, x.xero
+    e = await x.engagement()
     await loader.load(e.id, "xero/20261017-q1")
     financial = PostgresFinancialDataStore(engine)
     counts = {t: (await financial.query(e.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] for t in m.FINANCIAL}
@@ -1543,50 +1551,23 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
     links.write_bytes(links.read_bytes() + b" ")
     planning = ROOT / "src/backend/knowledge/planning"
     broken = XeroDatasetLoader(api, planning, engine, FileEvidenceStore(tmp_path / "ev", engine), supplements=demo)
-    other = await PostgresEngagementStore(engine).create(
-        owner_id=user,
-        period_start=date(2026, 7, 1),
-        period_end=date(2026, 9, 30),
-        dataset="xero/20261017-q1",
-        profile=loader.client_profile("xero/20261017-q1"),
-    )
+    other = await x.engagement()
     with pytest.raises(SupplementMismatch, match=r"contract_links\.csv"):
         await broken.load(other.id, "xero/20261017-q1")
     for t in m.FINANCIAL:
         assert (await financial.query(other.id, f"SELECT count(*) AS n FROM {t}", {}))[0]["n"] == 0
     assert await financial.documents(other.id) == []
     assert not (tmp_path / "ev").exists() or not any((tmp_path / "ev").rglob("*.pdf"))
-    await engine.dispose()
 
 
 @pytest.mark.external
-async def test_load_adjustments_two_rounds(tmp_path):
+async def test_load_adjustments_two_rounds(tmp_path, xero_storage):
     """R73: 真实库载入 xero/20261017-q1 后按两轮载入更正分录: 行数, data_version, 幂等, gl_balance, 试算表不变;
     尚未载入, 数据集不同, 同 ID 内容不同, 项目锁定都拒绝且不写. R271: 每轮有新行时总账整表换一版 (版本行的来源,
     原文件名, 行数与写入人), 两轮之后体检的借贷平衡, 分录与试算表, 行数与来源都通过, 计入更正分录时分录与试算表不符."""
-    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("需要 TEST_DATABASE_URL")
-    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
-    user = "USR-" + uuid4().hex
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(m.users).values(
-                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
-            )
-        )
-    evidence = FileEvidenceStore(tmp_path, engine)
-    xero = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
-    store = PostgresEngagementStore(engine)
-    profile = xero.client_profile("xero/20261017-q1")
-
-    async def engagement(dataset: str = "xero/20261017-q1"):
-        chosen = profile if dataset.startswith("xero/") else CsvDatasetLoader(ROOT / "data").client_profile(dataset)
-        return await store.create(
-            owner_id=user, period_start=date(2026, 7, 1), period_end=date(2026, 9, 30), dataset=dataset, profile=chosen
-        )
-
+    x = xero_storage
+    engine, user, evidence, xero, store = x.engine, x.user, x.evidence, x.xero, x.engagements
+    api, supplements, engagement = x.api, x.supplements, x.engagement
     financial = PostgresFinancialDataStore(engine)
 
     async def state(eid):
@@ -1724,7 +1705,6 @@ async def test_load_adjustments_two_rounds(tmp_path):
     with pytest.raises(EngagementLocked):
         await xero.load_adjustments(locked.id, "xero/20261017-q1", ["AJE-X01"])
     assert await state(locked.id) == (1017, 1)
-    await engine.dispose()
 
 
 # ── 试算表加已验证更正分录: 数据库函数 adjusted_trial_balance (需求 R174) ──
@@ -1743,47 +1723,24 @@ ADJUSTED_BALANCES = (
 
 
 @pytest.mark.external
-async def test_adjusted_trial_balance_on_xero(tmp_path):
+async def test_adjusted_trial_balance_on_xero(xero_storage):
     """R174 验收 5: 真实库载入 xero/20261017-q1, 按 MD-8 (load_adjustments) 两轮载入更正分录. 数据库函数
-    adjusted_trial_balance 与 services/adjusted_tb.adjusted_balances (分录行按凭证号取自库) 逐科目相等, 按科目代码排序;
-    PLN-01 M01 同口径 (模板的 SQL 只把余额来源换成该函数) 得三个基准: 列表为空同 PLN-01, 第 1 轮 (AJE-X01, X05),
-    第 2 轮 (另加 X02 至 X04); 已载入而不在列表中的凭证不算; NULL 同空列表. 系统试算表不随更正改版. SECURITY INVOKER:
-    绑定别的项目时读不到本项目的行 (行级安全照常生效); 绑定本项目而 p_eid 为别的项目时也不取本项目的行."""
-    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("需要 TEST_DATABASE_URL")
+    adjusted_trial_balance 与 services/adjusted_tb.adjusted_balances (分录行按凭证号取自库) 逐科目相等 (函数的行序
+    不定, 按科目比); PLN-01 M01 同口径 (模板的 SQL 只把余额来源换成该函数) 得三个基准: 列表为空同 PLN-01, 第 1 轮
+    (AJE-X01, X05), 第 2 轮 (另加 X02 至 X04); 已载入而不在列表中的凭证不算; NULL 同空列表. 系统试算表不随更正改版.
+    SECURITY INVOKER: 绑定别的项目时读不到本项目的行 (行级安全照常生效); 绑定本项目而 p_eid 为别的项目时也不取本项目
+    的行."""
     from backend.services.adjusted_tb import adjusted_balances
 
-    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
-    user = "USR-" + uuid4().hex
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(m.users).values(
-                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
-            )
-        )
-    evidence = FileEvidenceStore(tmp_path, engine)
-    xero = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
-    store = PostgresEngagementStore(engine)
-
-    async def engagement():
-        return await store.create(
-            owner_id=user,
-            period_start=date(2026, 7, 1),
-            period_end=date(2026, 9, 30),
-            dataset="xero/20261017-q1",
-            profile=xero.client_profile("xero/20261017-q1"),
-        )
-
-    financial = PostgresFinancialDataStore(engine)
+    x = xero_storage
+    financial = PostgresFinancialDataStore(x.engine)
     pln01 = ProcedureLibrary(ROOT / "src/backend/knowledge").load("PLN-01")
     [original] = [r.sql for r in pln01.rules if r.id == "M01"]
     assert original.count(TB_BALANCES) == 1
     m01 = original.replace(TB_BALANCES, ADJUSTED_BALANCES)
     categories = {k: pln01.params[k] for k in ("revenue_categories", "income_tax_categories")}
-    e = await engagement()
-    await xero.load(e.id, "xero/20261017-q1")
+    e = await x.engagement()
+    await x.xero.load(e.id, XERO_Q1)
     trial = await financial.trial_balance(e.id, "current")
 
     async def bases(sql: str, entry_nos: list[str]) -> tuple[int, int, int]:
@@ -1793,33 +1750,32 @@ async def test_adjusted_trial_balance_on_xero(tmp_path):
         }
         return rows["revenue"], rows["total_assets"], rows["profit_before_tax"]
 
+    async def adjusted(target: str, entry_nos: list[str] | None, bound: str | None = None) -> dict[str, int]:
+        rows = await financial.query(bound or e.id, ADJUSTED, {"target": target, "entry_nos": entry_nos})
+        return {r["account_code"]: r["balance_cents"] for r in rows}
+
     async def agrees(entry_nos: list[str]) -> None:
-        found = await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": entry_nos})
         lines = await financial.journal_entries(e.id, entry_nos=entry_nos)
-        assert [(r["account_code"], r["balance_cents"]) for r in found] == list(
-            adjusted_balances(trial, lines, entry_nos).items()
-        )
+        assert await adjusted(e.id, entry_nos) == adjusted_balances(trial, lines, entry_nos)
 
     first, both = ADJUSTMENT_ROUNDS[0], sorted(ADJUSTMENT_ROUNDS[0] + ADJUSTMENT_ROUNDS[1])
     unadjusted = (3243100, 1080529, -1322696)
     assert await bases(original, []) == await bases(m01, []) == unadjusted  # 列表为空: 同 PLN-01
     await agrees([])
-    none = await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": None})  # NULL 同空列表
-    assert none == await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": []})
-    await xero.load_adjustments(e.id, "xero/20261017-q1", first)
+    assert await adjusted(e.id, None) == await adjusted(e.id, [])  # NULL 同空列表
+    await x.xero.load_adjustments(e.id, XERO_Q1, first)
     await agrees(first)
     assert await bases(m01, first) == (3243100, 1092882, -1317843)
-    await xero.load_adjustments(e.id, "xero/20261017-q1", ADJUSTMENT_ROUNDS[1])
+    await x.xero.load_adjustments(e.id, XERO_Q1, ADJUSTMENT_ROUNDS[1])
     await agrees(both)
     await agrees(first)  # 已载入的 X02 至 X04 不在列表中: 不算
     assert await bases(m01, both) == (3243100, 1092882, -2213699)
     assert await bases(m01, first) == (3243100, 1092882, -1317843)
     assert await bases(m01, []) == await bases(original, []) == unadjusted
     assert await financial.trial_balance(e.id, "current") == trial  # 系统试算表不随更正改版
-    other = await engagement()
-    assert await financial.query(other.id, ADJUSTED, {"target": e.id, "entry_nos": both}) == []
-    assert await financial.query(e.id, ADJUSTED, {"target": other.id, "entry_nos": both}) == []  # 只取 p_eid 的行
-    await engine.dispose()
+    other = await x.engagement()
+    assert await adjusted(e.id, both, bound=other.id) == {}  # 行级安全: 读不到本项目的行
+    assert await adjusted(other.id, both) == {}  # 只取 p_eid 的行
 
 
 async def test_migration_0022_round_trip() -> None:
