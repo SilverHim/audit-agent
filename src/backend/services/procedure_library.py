@@ -26,6 +26,7 @@ from backend.contracts.models import (
     Engine,
     OpinionType,
     Phase,
+    Procedure,
     ReportSection,
     RiskItem,
     RiskLevel,
@@ -67,6 +68,25 @@ def highest_risk(objectives: Iterable[AuditObjective], objective_ids: Iterable[s
         raise LookupError(f"审计目标不存在: {', '.join(missing)}")
     levels = [by_id[i].risk_level for i in ids]
     return max(levels, key=RISK_ORDER.index) if levels else None
+
+
+def run_params(
+    library: "ProcedureLibrary",
+    template: ProcedureTemplate,
+    procedure: Procedure,
+    engagement: Engagement,
+    state: EngagementState,
+    *,
+    traits: DatasetTraits,
+    profile: ClientProfile | None,
+) -> dict[str, Any]:
+    """程序某次执行的参数: 模板参数的解析结果 (resolve_params; 风险等级取程序关联审计目标的最高等级, highest_risk),
+    再叠加 Procedure.params (rerun 决定改的参数, 同名键以它为准). 建执行记录 (nodes.build_run) 与总体审计计划的程序
+    参数 (agents/audit_plan, 需求 R204) 共用, 两处同口径由此保证.
+    Procedure.params 深拷贝后叠加: 其中的列表与字典若与快照共用, 改一处会连带改到程序和历次执行的快照."""
+    risk = highest_risk(state["audit_objectives"], procedure.objective_ids)
+    resolved = library.resolve_params(template, engagement, state, risk, traits=traits, profile=profile)
+    return {**resolved, **copy.deepcopy(procedure.params)}
 
 
 class ProcedureLibrary:

@@ -83,7 +83,6 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
-from tests.fixture_sets import XERO
 from tests.xero_fakes import xero_profile
 
 EID = ENGAGEMENT.id
@@ -1290,61 +1289,67 @@ async def check_plan_draft(draft: AuditPlanDraft, ctx: ValidationContext | None 
 
 
 async def test_plan_draft_passes() -> None:
-    """合格的叙述通过 (时间表等于期末的一项不算早于期末); Xero 的固定输出正本 (llm_xero/PLN-15/r1.json, 验收 3) 也
-    一次通过, 它引用的准则片段都在模板 standards 内."""
+    """合格的叙述通过 (时间表等于期末的一项不算早于期末). Xero 的固定输出正本经 A4 校验通过, 见
+    test_risk_assessor.test_pln15_xero_fixture_passes_once."""
     report = await check_plan_draft(plan_draft())
     assert (report.level_failed, report.errors, report.output) == (None, [], plan_draft())
-    xero = AuditPlanDraft.model_validate_json((XERO.fixtures / "PLN-15" / "r1.json").read_text(encoding="utf-8"))
-    assert (await check_plan_draft(xero)).level_failed is None
-    assert set(xero.standards_cited) <= set(PLN15.standards)
+
+
+PLAN_MISSING = "procedure_notes 缺计划的程序: CSH-02"
+PLAN_OUTSIDE = "standards_cited 含模板 standards 以外的片段: ASA315-P12"
+PLAN_NO_BASIS = "eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)"
+PLAN_EARLY = [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]
 
 
 @pytest.mark.parametrize(
-    ("changes", "level", "error"),
+    ("changes", "level", "errors"),
     [
-        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES[1:])}, "semantic", "procedure_notes 缺计划的程序: CSH-02"),
+        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES[1:])}, "semantic", [PLAN_MISSING]),
         (
             {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-05")},
             "semantic",
-            "procedure_notes 有计划以外的程序: REV-05",
-        ),
-        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-02")}, "semantic", "procedure_notes 的程序重复: REV-02"),
-        (
-            {"standards_cited": ["ASA300-P07", "ASA315-P12"]},
-            "reference",
-            "standards_cited 含模板 standards 以外的片段: ASA315-P12",
+            ["procedure_notes 有计划以外的程序: REV-05"],
         ),
         (
-            {"timetable": [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]},
+            {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-02")},
             "semantic",
-            "时间表早于期末 2026-09-30: Planning meeting (2026-09-29)",
+            ["procedure_notes 的程序重复: REV-02"],
         ),
+        ({"standards_cited": ["ASA300-P07", "ASA315-P12"]}, "reference", [PLAN_OUTSIDE]),
+        ({"timetable": PLAN_EARLY}, "semantic", ["时间表早于期末 2026-09-30: Planning meeting (2026-09-29)"]),
         *[
             (
                 {"sections": {k: v for k, v in PLAN_SECTIONS.items() if k != name}},
                 "semantic",
-                f"sections 缺必备的段: {name}",
+                [f"sections 缺必备的段: {name}"],
             )
             for name in PLAN_REQUIRED_SECTIONS
         ],
-        ({"sections": PLAN_SECTIONS | {"timing": "  "}}, "semantic", "sections 缺必备的段: timing"),
+        ({"sections": PLAN_SECTIONS | {"timing": "  "}}, "semantic", ["sections 缺必备的段: timing"]),
         (
             {"sections": PLAN_SECTIONS | {"overall_strategy": "again"}},
             "semantic",
-            "sections 不能含 overall_strategy (总体策略另有字段)",
+            ["sections 不能含 overall_strategy (总体策略另有字段)"],
         ),
+        ({"eqr_recommendation": EqrRecommendation(required=False, basis=" ")}, "semantic", [PLAN_NO_BASIS]),
+        # 语义级的问题一并列出; 引用失败即返回, 不再查语义
         (
-            {"eqr_recommendation": EqrRecommendation(required=False, basis=" ")},
+            {
+                "procedure_notes": plan_notes(*PLAN_PROCEDURES[1:]),
+                "eqr_recommendation": EqrRecommendation(required=False, basis=""),
+            },
             "semantic",
-            "eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)",
+            [PLAN_MISSING, PLAN_NO_BASIS],
         ),
+        ({"standards_cited": ["ASA315-P12"], "timetable": PLAN_EARLY}, "reference", [PLAN_OUTSIDE]),
     ],
 )
-async def test_plan_draft_failures(changes: dict[str, Any], level: str, error: str) -> None:
+async def test_plan_draft_failures(changes: dict[str, Any], level: str, errors: list[str]) -> None:
     """验收 4: 程序说明与计划的程序不等 (缺, 多, 重复), 时间表早于期末, 缺必备段 (或只有空白), 段里重复总体策略,
-    项目质量复核建议没写依据 → semantic; 引用模板 standards 以外的片段 → reference (不再查语义). 都不可重试."""
+    项目质量复核建议没写依据 → semantic, 几项一并列出; 引用模板 standards 以外的片段 → reference, 不再查语义. 都不可
+    重试."""
     report = await check_plan_draft(plan_draft(**changes))
-    assert (report.level_failed, report.errors, report.retryable) == (level, [error], False)
+    assert (report.level_failed, report.errors, report.retryable) == (level, errors, False)
 
 
 @pytest.mark.parametrize(
@@ -1352,6 +1357,7 @@ async def test_plan_draft_failures(changes: dict[str, Any], level: str, error: s
     [
         ValidationContext(standards_of="PLN-15"),
         ValidationContext(standards_of="PLN-15", expected_procedure_ids=PLAN_PROCEDURES),
+        ValidationContext(standards_of="PLN-15", period_end=PLAN_END),
         ValidationContext(standards_of=None, expected_procedure_ids=PLAN_PROCEDURES, period_end=PLAN_END),
     ],
 )

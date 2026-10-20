@@ -3,7 +3,6 @@
 闸门节点不做业务处理: 决定由 DecisionSubmit 写入, 并以 aupdate_state(as_node=闸门节点) 直接越过闸门.
 """
 
-import copy
 import logging
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -68,7 +67,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.data_quality import request_id
 from backend.services.features import COLLAB
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program
+from backend.services.procedure_library import ProcedureLibrary, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
@@ -126,14 +125,12 @@ def build_run(
 ) -> ProcedureRun:
     """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
 
-    参数 = 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它为准).
-    解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目
-    采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录.
-    Procedure.params 深拷贝后叠加: 其中的列表与字典若与快照共用, 改一处会连带改到程序和历次执行的快照.
+    参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
+    为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
+    本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
+    记录.
     """
-    risk_level = highest_risk(state["audit_objectives"], procedure.objective_ids)
-    resolved = library.resolve_params(template, engagement, state, risk_level, traits=traits, profile=profile)
-    params = {**resolved, **copy.deepcopy(procedure.params)}
+    params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
     return next_run(procedure.id, state["procedure_runs"], params, started_at)
 
 

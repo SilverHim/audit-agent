@@ -6,7 +6,6 @@
 置 superseded. RiskAssessorAgent 按程序编号分派到 draft_plans (执行) 与 plan_patch (解读).
 """
 
-from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
@@ -31,15 +30,9 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import EngagementState, StatePatch
-from backend.services.procedure_library import highest_risk
+from backend.services.procedure_library import run_params
 
 PROCEDURE_ID = "PLN-15"
-
-
-def current_plan(plans: Sequence[AuditPlan]) -> AuditPlan | None:
-    """当前计划: status 不是 superseded 的修订中 revision 最大的 (第 0 节); 没有为 None."""
-    live = [p for p in plans if p.status is not PlanStatus.superseded]
-    return max(live, key=lambda p: (p.revision, p.version)) if live else None
 
 
 def period_months(start: date, end: date) -> int:
@@ -75,21 +68,20 @@ def rejection(state: EngagementState, previous: AuditPlan) -> GateDecision:
 def plan_items(
     deps: AgentDeps, ctx: RunContext, traits: DatasetTraits, profile: ClientProfile | None
 ) -> list[PlanItem]:
-    """计划的程序: 程序包中的 P2 程序, 按程序编号排序. 参数同建执行记录时 (nodes.build_run): 模板参数按关联审计目标的
-    最高风险等级解析, 叠加 Procedure.params; 转成 JSON 形式 (日期为 ISO 文本), 经 Store 与检查点读回不变."""
+    """计划的程序: 程序包中的 P2 程序, 按程序编号排序. 参数与建执行记录时同一函数 (procedure_library.run_params), 转成
+    JSON 形式 (日期为 ISO 文本), 经 Store 与检查点读回不变."""
     items: list[PlanItem] = []
     state, library = ctx.state, deps.library
     for procedure in sorted((p for p in state["procedure_pack"] if p.phase is Phase.P2_Executing), key=lambda p: p.id):
         template = library.load(procedure.id)
-        risk: RiskLevel | None = highest_risk(state["audit_objectives"], procedure.objective_ids)
-        resolved = library.resolve_params(template, ctx.engagement, state, risk, traits=traits, profile=profile)
+        params = run_params(library, template, procedure, ctx.engagement, state, traits=traits, profile=profile)
         items.append(
             PlanItem(
                 procedure_id=procedure.id,
                 name=template.name,
                 template_commit=library.commit,
                 objective_ids=list(procedure.objective_ids),
-                params=to_jsonable_python({**resolved, **procedure.params}),
+                params=to_jsonable_python(params),
             )
         )
     return items
@@ -105,7 +97,7 @@ def skeleton(ctx: RunContext, revision: int, items: list[PlanItem], decision: Ga
         raise ValueError(f"{PROCEDURE_ID} 需要 PLN-01/03 确定的重要性三项")
     materiality, performance, trivial = cast(tuple[int, int, int], amounts)
     terms = state["engagement_terms"]
-    letter = terms.letter_evidence or terms.framework_evidence if terms is not None else []
+    letter = (terms.letter_evidence or terms.framework_evidence) if terms is not None else []
     return {
         "id": f"PLAN-{revision}",
         "revision": revision,
@@ -150,14 +142,15 @@ async def draft_plans(deps: AgentDeps, ctx: RunContext) -> list[AuditPlan]:
     提示词变量见 PLN-15.md.j2 头注释, fixture_key 为 r{revision}. 校验上下文给出模板 (准则片段只能取它的 standards),
     计划的程序与期末. 校验不通过时抛 ValueError (含最后一次的错误), 由 A1 按执行失败处理.
     """
-    from backend.agents.ingest import client_profile  # 在此导入: ingest 经 evidence 间接导入的模块多, 免得循环
-
     state, engagement = ctx.state, ctx.engagement
     revision = max((p.revision for p in state["audit_plans"]), default=0) + 1
-    earlier = [p for p in state["audit_plans"] if p.revision == revision - 1]
-    previous = max(earlier, key=lambda p: p.version, default=None)  # 上一修订的最新版本
+    # 上一修订的最新版本: 状态中的计划按 upsert_by_id 归并, 每个 ID 一项
+    previous = next((p for p in state["audit_plans"] if p.id == f"PLAN-{revision - 1}"), None)
     decision = rejection(state, previous) if previous is not None else None
-    profile = await client_profile(deps, engagement, state["client_profile_version"])
+    version = state["client_profile_version"]
+    profile = await deps.engagement_store.client_profile(engagement.client_id, version)
+    if profile is None:
+        raise LookupError(f"client profile {engagement.client_id} v{version} not found")
     traits = deps.datasets.dataset_traits(engagement.dataset) if engagement.dataset is not None else DatasetTraits()
     items = plan_items(deps, ctx, traits, profile)
     fields = skeleton(ctx, revision, items, decision)

@@ -18,12 +18,12 @@ from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
     Decision,
+    EngagementTerms,
     ExceptionDisposition,
     GateDecision,
     GateId,
     GateVerdict,
     MaterialityCandidates,
-    MaterialityChoice,
     MonthlyFigures,
     PlanStatus,
     ProcedureStatus,
@@ -52,6 +52,7 @@ from tests.fakes import (
     NUMBAT_M01_ROWS,
     NUMBAT_OBJECTIVES,
     NUMBAT_RISKS,
+    PLAN_REJECT_ID,
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
@@ -65,10 +66,11 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.test_decisions import Started, acc01_decision
+from tests.test_decisions import Started, acc01_decision, pln_decision
+from tests.test_output_validator import PLAN_PROCEDURES
 from tests.test_p1 import p1_setup
 from tests.test_xero_fixtures import xero_state
-from tests.xero_fakes import make_xero_deps, xero_engagement, xero_profile, xero_traits
+from tests.xero_fakes import XERO17_MATERIALITY, make_xero_deps, xero_engagement, xero_profile, xero_traits
 
 EID = ENGAGEMENT.id
 NUMBAT_RATIOS = {"gross_margin_current": 0.3, "gross_margin_prior": 0.305, "revenue_growth": 0.1538}
@@ -340,17 +342,10 @@ async def test_rerun_keeps_revised_risks_and_recomputes_candidates() -> None:
 # ── PLN-15 总体审计计划 (需求 R204, 功能 planning) ──
 
 PLAN_FEATURES = frozenset({"critic", "misstatement", "acceptance", "planning"})
-XERO_CHOICE = MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.5, clearly_trivial_pct=0.05)
 XERO_PLAN = XERO.fixtures / "PLN-15" / "r1.json"  # Xero 的固定输出正本 (验收 3)
-PLAN_OBJECTIVES = {  # 验收 1: Xero 装配后的 P2 程序 (按程序编号) → 关联目标
-    "CSH-02": ["OBJ-CASH-EXI"],
-    "CSH-04": ["OBJ-CASH-EXI"],
-    "CSH-05": ["OBJ-CASH-EXI"],
-    "DOC-06": [],
-    "REV-02": ["OBJ-REV-CUT"],
-    "REV-03": ["OBJ-REV-OCC", "OBJ-REV-CUT"],
-    "REV-08": ["OBJ-REV-OCC", "OBJ-REV-CUT"],
-}
+CASH, REVENUE = ["OBJ-CASH-EXI"], ["OBJ-REV-OCC", "OBJ-REV-CUT"]
+# 验收 1: Xero 装配后的 P2 程序 (PLAN_PROCEDURES, 按程序编号) → 关联目标
+PLAN_OBJECTIVES = dict(zip(PLAN_PROCEDURES, [CASH, CASH, CASH, [], ["OBJ-REV-CUT"], REVENUE, REVENUE], strict=True))
 PLAN_PARAMS = {  # 验收 1 列出的参数 (其余参数取建 Run 时的解析结果, 见 test_pln15_xero_skeleton)
     "CSH-02": {"period_end": "2026-09-30", "subsequent_days": 10, "lookback_days": 5},
     "CSH-04": {"as_of": "2026-09-30"},
@@ -363,15 +358,17 @@ PLAN_PARAMS = {  # 验收 1 列出的参数 (其余参数取建 Run 时的解析
 REJECT_REASON = "Add the planned timing of bank confirmations"
 
 
-def plan_decision(gate: GateId, verdict: GateVerdict, **fields: Any) -> GateDecision:
+def plan_reject(target_id: str, reason: str = REJECT_REASON, decision_id: str = PLAN_REJECT_ID) -> GateDecision:
+    """PLN-15 对 target_id 第 1 版的驳回."""
     return GateDecision(
-        id=fields.pop("id", f"D-{gate.value}"),
-        version=1,
-        gate=gate,
-        decision=verdict,
+        id=decision_id,
+        gate=GateId.PLN_15,
+        target_id=target_id,
+        target_version=1,
+        decision=GateVerdict.reject,
+        reason=reason,
         decided_by="U-1",
         decided_at=NOW,
-        **{"target_id": "MATERIALITY", "target_version": 1, **fields},
     )
 
 
@@ -384,7 +381,7 @@ async def plan_context(
     trail = FakeTrail()
     deps = make_xero_deps(trail=trail, llm=llm or MockLLMClient(XERO.fixtures), features=features)
     base = xero_state() | {
-        "gate_decisions": [plan_decision(GateId.PLN_01_03, GateVerdict.approve, materiality=XERO_CHOICE)],
+        "gate_decisions": [pln_decision(GateVerdict.approve, materiality=XERO17_MATERIALITY)],
         "engagement_terms": engagement_terms() if "acceptance" in features else None,
     }
     assembled = await GraphNodes(deps, 2).assemble_pack(base)  # type: ignore[arg-type]
@@ -431,7 +428,8 @@ def llm_calls(trail: FakeTrail) -> list[TrailEntry]:
 async def test_pln15_xero_skeleton() -> None:
     """验收 1: PLAN-1 v1 draft (revision 1, RUN-PLN-15-1); items 按程序编号排序, 目标同装配, 参数为建 Run 时的解析
     结果 (含所列各项), template_commit 为 library.commit; 重要性取闸门选定的与状态中的三项; 特别风险为两条收入目标;
-    适用框架与约定书取 TERMS; 确认三项为空. 功能 acceptance 关闭时 (没有 TERMS) 框架与约定书为空, 其余相同."""
+    适用框架与约定书取 TERMS (约定书取出具日指针的文件, 没有时取框架指针的); 确认三项为空. 功能 acceptance 关闭时
+    (没有 TERMS) 框架与约定书为空, 其余相同."""
     ctx, deps, _ = await plan_context()
     [plan] = (await drafted(ctx, deps))["audit_plans"]
     assert (plan.id, plan.version, plan.status, plan.revision, plan.run_id) == (
@@ -442,7 +440,7 @@ async def test_pln15_xero_skeleton() -> None:
         "RUN-PLN-15-1",
     )
     assert {i.procedure_id: i.objective_ids for i in plan.items} == PLAN_OBJECTIVES
-    assert [i.procedure_id for i in plan.items] == sorted(PLAN_OBJECTIVES)
+    assert [i.procedure_id for i in plan.items] == PLAN_PROCEDURES
     pack = {p.id: p for p in ctx.state["procedure_pack"]}
     for item in plan.items:
         template = deps.library.load(item.procedure_id)
@@ -459,7 +457,7 @@ async def test_pln15_xero_skeleton() -> None:
         assert item.params == to_jsonable_python(run.params_snapshot)
         assert {k: item.params[k] for k in PLAN_PARAMS[item.procedure_id]} == PLAN_PARAMS[item.procedure_id]
         assert (item.name, item.template_commit) == (template.name, deps.library.commit)
-    assert plan.materiality_choice == XERO_CHOICE
+    assert plan.materiality_choice == XERO17_MATERIALITY
     assert (plan.materiality_cents, plan.performance_materiality_cents, plan.clearly_trivial_cents) == (
         32431,
         16216,
@@ -477,12 +475,23 @@ async def test_pln15_xero_skeleton() -> None:
     framework = {"applicable_framework", "engagement_letter_document_id"}
     assert bare.model_dump(exclude=framework) == plan.model_dump(exclude=framework)
 
+    # 约定书取出具日指针 (letter_evidence) 的文件, 没有时取框架指针所在的文件; 两者指向不同文件以区分先后
+    terms = engagement_terms()
+    moved = terms.framework_evidence[0].model_copy(update={"source_id": "DOC-FRAMEWORK"})
+    for letter, expected in ((terms.letter_evidence, DOC_EL), ([], "DOC-FRAMEWORK")):
+        changed = EngagementTerms.model_validate(
+            {**terms.model_dump(), "letter_evidence": letter, "framework_evidence": [moved]}
+        )
+        ctx, deps, _ = await plan_context(engagement_terms=changed)
+        [found] = (await drafted(ctx, deps))["audit_plans"]
+        assert found.engagement_letter_document_id == expected
+
 
 @needs("q1_snapshot", "q1_supplements")
 async def test_pln15_request_prompt_and_trail() -> None:
     """验收 2: 请求为 PLN-15, RUN-PLN-15-1, fixture_key r1; 提示词含 7 条程序的编号与参数, 重要性三项, tier2_gpfs,
-    期间 3 个月, Sam Whitfield 的 s293 指示与本期试算表各科目, 不含修订段; 1 行 llm_call (A4); 执行成功, PLN-15
-    本身不改 (仍 planned, 由闸门批准时完成, Q5)."""
+    期间 3 个月, Sam Whitfield 的 s293 指示与本期试算表各科目, 不含修订段; 1 行 llm_call (A4); 执行成功, 片段只有
+    计划与执行记录."""
     llm = ScriptedLLM({"r1": [XERO_PLAN.read_text(encoding="utf-8")]})
     ctx, deps, trail = await plan_context(llm)
     patch = await drafted(ctx, deps)
@@ -506,14 +515,13 @@ async def test_pln15_request_prompt_and_trail() -> None:
     assert (row.actor, row.run_id, row.payload["level_failed"]) == (AgentId.A4, "RUN-PLN-15-1", None)
     [run] = patch["procedure_runs"]
     assert (run.id, run.status) == ("RUN-PLN-15-1", RunStatus.succeeded)
-    assert set(patch) == {"audit_plans", "procedure_runs"} and ctx.procedure.status is ProcedureStatus.planned
+    assert set(patch) == {"audit_plans", "procedure_runs"}  # 不改程序 (闸门程序的状态归节点, Q5)
 
 
 @needs("q1_snapshot", "q1_supplements")
 async def test_pln15_xero_fixture_passes_once() -> None:
     """验收 3: Xero 正本一次通过校验 (1 行 llm_call), 叙述按设计稿第 6.6, 2.7 节: 总体策略在首, 各段, 7 条程序各一条
-    说明, 时间表 (外勤 10-19 至 10-22, 报告日 10-23, 送达股东 2027-01-31), 不需要项目质量复核及其依据, 引用的片段为
-    模板 standards 的子集."""
+    说明, 时间表 (外勤 10-19 至 10-22, 报告日 10-23, 送达股东 2027-01-31), 不需要项目质量复核及其依据."""
     ctx, deps, trail = await plan_context()
     [plan] = (await drafted(ctx, deps))["audit_plans"]
     assert len(llm_calls(trail)) == 1
@@ -562,7 +570,6 @@ async def test_pln15_xero_fixture_passes_once() -> None:
     ]
     assert plan.eqr_recommendation.required is False
     assert all(p in plan.eqr_recommendation.basis for p in ("not listed", "law or regulation", "ASQM 1 para 34(f)"))
-    assert set(plan.standards_cited) <= set(ctx.template.standards)
 
 
 @needs("q1_snapshot", "q1_supplements")
@@ -595,17 +602,17 @@ async def test_pln15_failed_check_fails_the_run(replies: list[str], level: str, 
 
 @needs("q1_snapshot", "q1_supplements")
 async def test_pln15_revision_answers_the_rejection() -> None:
-    """验收 6: 状态有 PLAN-1 v1 (第 1 次执行) 与 PLN-15 对它的驳回 D-P15R: RUN-PLN-15-2 出 PLAN-2 v1 draft (revision 2,
-    回应 D-P15R, 理由取其 reason), PLAN-1 出 v2 superseded (记本次执行, 其余不变); 请求的 fixture_key 为 r2, 提示词
-    含 "## Revision 2" 与该理由. 找不到针对上一修订的驳回时抛 LookupError, 不起草."""
+    """验收 6: 状态有 PLAN-1 v1 (第 1 次执行) 与 PLN-15 的驳回 (对别的计划 PLAN-9 一条, 对 PLAN-1 两条, 最近一条为
+    D-P15R): RUN-PLN-15-2 出 PLAN-2 v1 draft (revision 2, 回应 D-P15R, 理由取其 reason), PLAN-1 出 v2 superseded (记本次
+    执行, 其余不变); 请求的 fixture_key 为 r2, 提示词含 "## Revision 2" 与该理由. 上一修订已是 superseded 时只写新修订.
+    只有针对别的计划的驳回时抛 LookupError, 不起草."""
     first_ctx, first_deps, _ = await plan_context()
     first = await drafted(first_ctx, first_deps)
     [plan1], [run1] = first["audit_plans"], first["procedure_runs"]
-    reject = plan_decision(
-        GateId.PLN_15, GateVerdict.reject, id="D-P15R", target_id=plan1.id, target_version=1, reason=REJECT_REASON
-    )
-    llm = ScriptedLLM({"r2": [XERO_PLAN.read_text(encoding="utf-8")]})
-    gates = [*first_ctx.state["gate_decisions"], reject]
+    other = plan_reject("PLAN-9", "Not this plan", "D-X")
+    earlier = plan_reject(plan1.id, "An earlier reason", "D-A")
+    gates = [*first_ctx.state["gate_decisions"], other, earlier, plan_reject(plan1.id)]
+    llm = ScriptedLLM({"r2": [XERO_PLAN.read_text(encoding="utf-8")] * 2})
     ctx, deps, _ = await plan_context(llm, audit_plans=[plan1], procedure_runs=[run1], gate_decisions=gates)
     patch = await drafted(ctx, deps)
     plan2, retired = patch["audit_plans"]
@@ -616,7 +623,7 @@ async def test_pln15_revision_answers_the_rejection() -> None:
         2,
         "RUN-PLN-15-2",
     )
-    assert (plan2.addresses_decision_id, plan2.revision_reason) == ("D-P15R", REJECT_REASON)
+    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, REJECT_REASON)
     assert (retired.id, retired.version, retired.status, retired.run_id) == (
         "PLAN-1",
         2,
@@ -629,9 +636,30 @@ async def test_pln15_revision_answers_the_rejection() -> None:
     prompt = "\n".join(m.content for m in request.messages)
     assert request.fixture_key == "r2" and "## Revision 2" in prompt and REJECT_REASON in prompt
 
-    ctx, deps, _ = await plan_context(llm, audit_plans=[plan1], procedure_runs=[run1])
+    ctx, deps, _ = await plan_context(llm, audit_plans=[retired], procedure_runs=[run1], gate_decisions=gates)
+    assert [p.id for p in (await drafted(ctx, deps))["audit_plans"]] == ["PLAN-2"]
+
+    gates = [*first_ctx.state["gate_decisions"], other]
+    ctx, deps, _ = await plan_context(llm, audit_plans=[plan1], procedure_runs=[run1], gate_decisions=gates)
     with pytest.raises(LookupError, match="PLN-15 对 PLAN-1 的驳回"):
         await RiskAssessorAgent(deps).run(ctx)
+
+
+@needs("q1_snapshot", "q1_supplements")
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        ({"gate_decisions": []}, "PLN-01/03 通过时选定的重要性"),
+        ({"materiality_cents": None}, "PLN-01/03 确定的重要性三项"),  # P2 程序的参数不引用它, 由骨架报出
+    ],
+)
+async def test_pln15_requires_decided_materiality(state: dict[str, Any], message: str) -> None:
+    """没有带重要性的 PLN-01/03 通过决定, 或状态中缺重要性三项之一时抛 ValueError (由 A1 按执行失败处理), 不调大模型."""
+    llm = ScriptedLLM({})
+    ctx, deps, _ = await plan_context(llm, **state)
+    with pytest.raises(ValueError, match=message):
+        await RiskAssessorAgent(deps).run(ctx)
+    assert llm.requests == []
 
 
 def test_planning_off_keeps_a4_to_its_two_programs() -> None:
