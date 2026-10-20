@@ -21,7 +21,7 @@ from backend.core.security import SecretKeyError, decrypt_secret
 from backend.services.llm_settings import LlmSettingsService, SettingsRejected
 from tests.fakes import FakeLlmSettingsStore, api_client, make_runner
 from tests.test_ingest_doc06 import raw
-from tests.test_llm_live import REQUEST, Server, completion
+from tests.test_llm_live import OUTPUT_LIMIT, REQUEST, Server, completion, finished
 
 MASTER = Fernet.generate_key().decode()  # 测试用的主密钥
 KEY = "sk-ant-test-0000-1234"
@@ -253,6 +253,17 @@ async def test_connection_success_unauthorized_and_timeout() -> None:
         "primary", provider="openai", base_url=DEFAULT_BASE_URL, model="gpt-5", api_key=KEY
     )
     assert not result.ok and "超时" in result.message and len(slow.requests) == 1  # 不重试
+
+
+@pytest.mark.parametrize("reply", [OUTPUT_LIMIT, (200, finished("", "length"))], ids=["output_limit_400", "length"])
+async def test_connection_says_when_the_reply_is_truncated(reply: tuple[int, Any]) -> None:
+    """R312-03: 测试连接的回复在上限 (1024, 推理 token 计入) 处被截断时 (服务端回 400, 或 finish_reason length 而正文
+    为空), 提示写明被截断, 不只给空的回复."""
+    server = Server(reply)
+    result = await service(transport=httpx.MockTransport(server.handler)).test(
+        "primary", provider="openai", base_url=DEFAULT_BASE_URL, model="gpt-6-luna", api_key=KEY
+    )
+    assert not result.ok and "cut off at the output token limit (1024 tokens)" in result.message
 
 
 async def test_connection_uses_stored_key_when_blank() -> None:

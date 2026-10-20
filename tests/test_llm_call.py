@@ -243,7 +243,8 @@ async def test_three_syntax_or_structure_failures_stop() -> None:
 @pytest.mark.parametrize("first", ["length", "output_limit_400"])
 async def test_truncated_reply_is_retried_with_the_note(first: str) -> None:
     """R312 验收 3: 真实客户端 (假传输) 第一次输出被截断 (finish_reason length 的半截输出, 或服务端回输出达上限的
-    400), 判断引擎按语法失败重试: 第二次请求按模板的上限 (缺省 32768) 发, 末条消息把截断说明回传给模型; 第二次通过."""
+    400), 判断引擎按语法失败重试: 第二次请求按模板的上限 (缺省 32768) 发, 末条消息把截断说明回传给模型; 第二次通过.
+    上次原文为空 (400) 时不追加空的 assistant 消息 (R312-06)."""
     truncated = (200, finished(raw("CON-001")[:60], "length")) if first == "length" else OUTPUT_LIMIT
     server = Server(truncated, (200, completion(raw("CON-001"))))
     engine, _ = setup(client(server))
@@ -252,6 +253,8 @@ async def test_truncated_reply_is_retried_with_the_note(first: str) -> None:
     retry = json.loads(server.requests[1].content)
     assert retry["max_tokens"] == 32768
     assert TRUNCATED.format(limit=32768) in retry["messages"][-1]["content"]
+    replied = ["assistant"] if first == "length" else []
+    assert [m["role"] for m in retry["messages"]] == ["system", "user", *replied, "user"]
 
 
 async def test_fixture_not_found_retries_three_times(tmp_path: Path) -> None:

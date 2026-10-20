@@ -981,7 +981,8 @@ class JudgmentEngine:
         system: str = SYSTEM_PROMPT,
         subject_id: str | None = None,
     ) -> LLMCallResult[Any]:
-        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
+        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文 (为空时不加) 与错误追加进对话重试, 最多共
+        MAX_ATTEMPTS 次.
 
         引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
         渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
@@ -1017,9 +1018,12 @@ class JudgmentEngine:
             trail_ids.append(await self.record(eid, actor, request, response, report, attempt, subject_id))
             if not report.retryable or attempt == MAX_ATTEMPTS:
                 break
+            # 上次的原文为空 (输出被截断, 见 adapters/llm.TRUNCATED) 时不追加空的 assistant 消息: 不带信息, 有的接口
+            # 拒收非末尾的空消息
+            replied = [LLMMessage(role="assistant", content=response.raw)] if response.raw else []
             messages = [
                 *messages,
-                LLMMessage(role="assistant", content=response.raw),
+                *replied,
                 LLMMessage(role="user", content=RETRY_PROMPT.format(errors="\n".join(report.errors))),
             ]
         return LLMCallResult(report=report, attempts=attempt, trail_ids=trail_ids, model=response.model)
