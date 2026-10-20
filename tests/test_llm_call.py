@@ -41,9 +41,9 @@ from backend.services.judgment_engine import (
     MAX_ATTEMPTS,
     JudgmentEngine,
     OutputValidator,
-    prompt_env,
     prompt_hash,
 )
+from backend.services.procedure_library import prompt_env
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CONTRACTS,

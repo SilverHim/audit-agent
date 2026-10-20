@@ -6,10 +6,8 @@ import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, ClassVar, Literal, NoReturn, cast
+from typing import Any, ClassVar, Literal, cast
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 from pydantic import BaseModel, ValidationError
 
 from backend.contracts import llm_outputs
@@ -75,7 +73,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
-from backend.services.procedure_library import ProcedureLibrary
+from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
 
@@ -904,25 +902,6 @@ for _model, _check in (
     (SheetRecognition, structure_only),
 ):
     OutputValidator.register(_model, _check)
-
-
-def json_default(value: object) -> NoReturn:
-    """tojson 遇到不能序列化的对象时调用: 缺变量 (StrictUndefined) 抛 UndefinedError, 其余仍抛 TypeError.
-
-    StrictUndefined 只在取值, 转字符串等操作时报错, json.dumps 只会说它不能序列化, 看不出是缺了变量.
-    """
-    if isinstance(value, Undefined):
-        str(value)  # StrictUndefined 转字符串即抛 UndefinedError, 消息写明缺的是哪个变量
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def prompt_env(root: Path) -> Environment:
-    """提示词模板的 Jinja2 环境: 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义."""
-    env = Environment(
-        loader=FileSystemLoader(root), trim_blocks=True, lstrip_blocks=True, undefined=StrictUndefined, autoescape=False
-    )
-    env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
-    return env
 
 
 def prompt_hash(system: str, messages: Sequence[LLMMessage]) -> str:

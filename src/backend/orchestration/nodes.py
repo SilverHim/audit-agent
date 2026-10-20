@@ -28,6 +28,7 @@ from backend.contracts.models import (
     Decision,
     DocumentType,
     Engagement,
+    Engine,
     Judgment,
     Misstatement,
     MisstatementStatus,
@@ -37,6 +38,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     ReviewRecord,
     ReviewTask,
+    RunPopulation,
     RunStatus,
     RunTrigger,
     TargetType,
@@ -100,6 +102,28 @@ def next_run_no(procedure_id: str, runs: list[ProcedureRun]) -> int:
 def run_id_of(procedure_id: str, run_no: int) -> str:
     """执行记录的 ID (接口文档第 0 节)."""
     return f"RUN-{procedure_id}-{run_no}"
+
+
+def population_id(run_id: str) -> str:
+    """一次执行的被测总体的 ID (接口文档第 0 节, 需求 R324)."""
+    return f"POP-{run_id}"
+
+
+def run_population(ctx: RunContext, patch: StatePatch) -> RunPopulation | None:
+    """一次执行要写入 Store 的被测总体 (需求 R324): 规则程序 (engine rule) 经规则引擎执行 (ctx.rule_results 非空) 且
+    片段中本次执行为成功终态时, 为规则引擎记下的各规则总体; 其余为空: 执行失败 (含 A1 代写的失败片段), 不经规则引擎
+    (如测试的脚本 Agent), 判断与抽取程序 (对象清单由 Store 推出, services.populations)."""
+    if ctx.template.engine is not Engine.rule or not ctx.rule_results:
+        return None
+    run = next(r for r in patch["procedure_runs"] if r.id == ctx.run.id)
+    if run.status is not RunStatus.succeeded:
+        return None
+    return RunPopulation(
+        id=population_id(run.id),
+        run_id=run.id,
+        procedure_id=run.procedure_id,
+        rules=[p for result in ctx.rule_results for p in result.populations],
+    )
 
 
 def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
@@ -617,9 +641,9 @@ class GraphNodes:
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
-        返回程序编号, 执行记录 ID, 写入者与要写入的片段.
+        返回程序编号, 执行记录 ID, 写入者与要写入的片段; 规则程序成功执行时另有被测总体 (见 run_population).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
-        取回的执行是失败的, 写入者为 A1.
+        取回的执行是失败的, 写入者为 A1. 重放不带被测总体: 已与执行记录终态一起写过.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
@@ -645,11 +669,13 @@ class GraphNodes:
         procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+        population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
                 engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
             )
             patch, writer = await self.run_agent(agent, ctx)
+            population = run_population(ctx, patch)
         else:
             patch = await stored_outputs(self.deps, engagement.id, template, stored_run)
             # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误
@@ -657,7 +683,10 @@ class GraphNodes:
             if problems:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
             writer = AgentId.A1 if stored_run.status is RunStatus.failed else writer_of(template, agent)
-        return StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
+        staged = StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
+        if population is not None:
+            staged["population"] = population
+        return staged
 
     async def attempt(
         self,
@@ -676,6 +705,7 @@ class GraphNodes:
         rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
         之前各次执行留下的可重跑任务 (failed, unattributed) 都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
+        规则程序成功执行的被测总体 (需求 R324) 在同一事务内写入, 不并入状态.
         提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
         """
         result = await self.perform(state, engagement, procedure_id)
@@ -697,6 +727,8 @@ class GraphNodes:
             stored = await save_outputs(
                 self.deps.output_store, engagement.id, patch, actor=writer, evidence_store=self.deps.evidence_store
             )
+            if "population" in result:
+                await self.deps.output_store.put(engagement.id, [result["population"]], actor=writer)
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
             if phase is not None:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
@@ -1229,7 +1261,8 @@ class GraphNodes:
         各项在 fieldwork 中都按派发时的状态校验过, 但同轮几项合起来可能冲突, 如前一项把某例外改出 v2, 后一项仍交回
         v1, 或建了指向 v1 的待决任务. 不过的项丢弃片段, 改为 A1 写的失败执行与 failed 任务 (结束时间沿用原执行的),
         其余项照常写入. 字段归属与本次执行的终态只在 fieldwork 查: A1 的失败片段与重放取回的片段按 Agent 的规则会被误拒.
-        片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
+        片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs); 暂存项带被测总体 (规则程序成功
+        执行, 需求 R324) 时同一事务内按写入者写入, 不并入状态, 改为失败项的不写.
         本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human (功能 collab 打开且有待决的 dispute 任务时为
         in_dispute, 见 waiting_status), 否则为 completed; rerun_subject_ids 清空.
@@ -1247,13 +1280,16 @@ class GraphNodes:
         current = state  # 已并入本轮前面各项的状态, 用来校验后面的项
         async with store.transaction(eid):
             for item in staged:
-                patch, writer = item["patch"], item["writer"]
+                patch, writer, population = item["patch"], item["writer"], item.get("population")
                 problems = [*check_ids(patch, current), *check_refs(patch, current)]
                 if problems:
                     run = next(r for r in patch["procedure_runs"] if r.id == item["run_id"])
                     ended_at = run.ended_at or datetime.now(UTC)
                     patch, writer = fail_run(self.deps.queue, run, str(MergeRejected(problems)), ended_at), AgentId.A1
+                    population = None
                 saved = await save_outputs(store, eid, patch, actor=writer, evidence_store=self.deps.evidence_store)
+                if population is not None:
+                    await store.put(eid, [population], actor=writer)
                 merge_patch(result, saved)
                 current = apply_patch(current, saved)
             tasks = current["review_tasks"]

@@ -247,7 +247,7 @@ import_batches = table(
 OUTPUT_KINDS = {
     "audit_objectives": ["AuditObjective"],
     "risk_register": ["RiskItem"],
-    "procedures": ["Procedure", "ProcedureRun"],
+    "procedures": ["Procedure", "ProcedureRun", "RunPopulation"],  # RunPopulation 需求 R324; kind 为字符串列, 不需迁移
     "exceptions": ["AuditException"],
     "judgments": ["Judgment"],
     "review_tasks": ["ReviewTask"],

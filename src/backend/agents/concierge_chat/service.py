@@ -68,8 +68,8 @@ from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
 from backend.contracts.views import EngagementOverview
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError
-from backend.services.judgment_engine import prompt_env
 from backend.services.llm_settings import LlmSettingsService
+from backend.services.procedure_library import prompt_env
 
 log = logging.getLogger(__name__)
 PING_SECONDS = 15.0  # 这么久没有事件就发一行 SSE 注释保活, 免得代理断开空闲连接

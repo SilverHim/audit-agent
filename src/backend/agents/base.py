@@ -90,6 +90,9 @@ class RunContext:
     template: ProcedureTemplate  # 该程序的模板, 来自程序 YAML
     run: ProcedureRun  # 本次执行记录, 状态为 running
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
+    # 本次执行规则引擎的结果, 由 run_rules 按调用顺序追加 (需求 R324): 规则程序成功执行后, 节点据其中的被测总体建
+    # RunPopulation, 与执行记录终态同一事务写入 Store (nodes.run_population). 总体不进片段, 片段只含状态字段
+    rule_results: list[RuleResult] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -140,9 +143,12 @@ def finish_run(run: ProcedureRun, ended_at: datetime, outcomes: Sequence[RuleOut
 
 
 async def run_rules(deps: AgentDeps, ctx: RunContext) -> RuleResult:
-    """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A5
-    的 GEN-07, A6 的 REV-08, CSH-05, GEN-05) 登记它作执行, A6 的混合程序取规则部分也用它."""
-    return await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
+    """执行程序 YAML 中的规则, 参数取本次执行的参数快照, 结果另记进 ctx.rule_results (节点据此写被测总体, 需求
+    R324). RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A4 的 PLN-07, A5 的 GEN-07, A6 的 REV-08, CSH-05,
+    GEN-05) 登记它作执行, A4 的 PLN-01 与 A6 的混合程序取规则部分也用它."""
+    result = await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
+    ctx.rule_results.append(result)
+    return result
 
 
 def rule_patch(ctx: RunContext, findings: object) -> StatePatch:

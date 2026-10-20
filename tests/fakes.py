@@ -133,6 +133,7 @@ from backend.contracts.models import (
     PlanItem,
     PlanSection,
     PlanStatus,
+    PopulationItem,
     Procedure,
     ProcedureNote,
     ProcedureRun,
@@ -150,6 +151,7 @@ from backend.contracts.models import (
     ReviewTask,
     RiskItem,
     RuleOutcome,
+    RulePopulation,
     RunStatus,
     RunTrigger,
     ShareholderDirection,
@@ -207,8 +209,10 @@ from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
 from backend.services.judgment_engine import MAX_ATTEMPTS, JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
+from backend.services.populations import total_cents
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
+from backend.services.rule_engine import rule_population
 from backend.services.xero_link import XeroLink
 from tests.external import snapshot_dir, supplements_dir
 
@@ -1688,18 +1692,134 @@ NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计�
         ("0618", "CON-002", date(2026, 6, 29), 9500000),
     )
 ]
+
+
+def engine_result(procedure_id: str, result: RuleResult, recorded: Sequence[RulePopulation] = ()) -> RuleResult:
+    """预置的规则结果补上被测总体 (需求 R324), 口径同 SqlRuleEngine: 按程序 YAML 的规则顺序, 没有执行的规则 (outcomes)
+    不记; emit rows 的规则以预置的 rows 为总体 (rule_engine.rule_population); 写了总体 SQL 的规则取 recorded 中同规则
+    编号的 (须给, 缺了抛 KeyError); 其余 emit exception 的规则记为未记录."""
+    template = knowledge_library(KNOWLEDGE).load(procedure_id)
+    skipped = {o.rule_id for o in result.outcomes}
+    given = {p.rule_id: p for p in recorded}
+    populations = []
+    for rule in template.rules:
+        if rule.id in skipped:
+            continue
+        if rule.emit == "rows":
+            populations.append(rule_population(rule.id, result.rows[rule.id]))
+        elif rule.population is not None:
+            populations.append(given[rule.id])
+        else:
+            populations.append(RulePopulation(rule_id=rule.id))
+    return result.model_copy(update={"populations": populations})
+
+
+def receipt_matches(invoice_no: str, reference: str | None) -> bool:
+    """流水参考号对得上发票号 (REV-08 R03 的收款对应, 测试里独立写一遍): 包含发票号; 或发票号为字母前缀加纯数字时,
+    参考号里出现该数字串且前后都不是数字."""
+    if reference is None:
+        return False
+    if invoice_no in reference:
+        return True
+    digits = re.fullmatch(r"[A-Za-z]+([0-9]+)", invoice_no)
+    return digits is not None and re.search(rf"(^|[^0-9]){digits.group(1)}([^0-9]|$)", reference) is not None
+
+
+def rev08_populations(
+    invoices: Iterable[SalesInvoice],
+    notes: Iterable[DeliveryNote],
+    transactions: Iterable[BankTransaction],
+    period_end: date,
+    window_days: int,
+) -> list[RulePopulation]:
+    """REV-08 R01, R02, R03 的被测总体, 按 REV-08.yaml 总体 SQL 的口径由表独立算一遍: 期末前 window_days 天 (两端都含)
+    入账的发票, 按发票 ID; R01 为有服务完成记录的 (每条记录一项, 按记录 ID), R02 为全部 (没有记录的, 记录三列为空),
+    R03 为找得到收款的 (正数流水, 见 receipt_matches), 带收款流水 ID 与收款日 (逗号连接, 按流水 ID) 及收款合计."""
+    start = period_end - timedelta(days=window_days)
+    window = sorted((i for i in invoices if start <= i.posting_date <= period_end), key=lambda i: i.id)
+    recorded: dict[str, list[DeliveryNote]] = {}
+    for note in sorted(notes, key=lambda n: n.id):
+        recorded.setdefault(note.invoice_id, []).append(note)
+
+    def item(invoice: SalesInvoice, **extra: Any) -> PopulationItem:
+        fields = {
+            "invoice_no": invoice.invoice_no,
+            "customer": invoice.customer,
+            "contract_id": invoice.contract_id,
+            "posting_date": invoice.posting_date.isoformat(),
+            "journal_entry_id": invoice.journal_entry_id,
+        }
+        return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
+
+    def with_note(invoice: SalesInvoice, note: DeliveryNote | None) -> PopulationItem:
+        signed = note.signed_date if note is not None else None
+        return item(
+            invoice,
+            delivery_no=note.delivery_no if note is not None else None,
+            signed_date=signed.isoformat() if signed is not None else None,
+            signed_by=note.signed_by if note is not None else None,
+        )
+
+    r03 = []
+    for invoice in window:
+        paid = sorted(
+            (t for t in transactions if t.amount_cents > 0 and receipt_matches(invoice.invoice_no, t.reference)),
+            key=lambda t: t.id,
+        )
+        if paid:
+            r03.append(
+                item(
+                    invoice,
+                    bank_transaction_ids=",".join(t.id for t in paid),
+                    received_dates=",".join(t.txn_date.isoformat() for t in paid),
+                    received_cents=sum(t.amount_cents for t in paid),
+                )
+            )
+    items = {
+        "R01": [with_note(i, n) for i in window for n in recorded.get(i.id, [])],
+        "R02": [with_note(i, n) for i in window for n in recorded.get(i.id, [None])],
+        "R03": r03,
+    }
+    return [
+        RulePopulation(
+            rule_id=rule_id,
+            source_type="sales_invoice" if found else None,
+            items=found,
+            count=len(found),
+            amount_cents=total_cents(i.amount_cents for i in found),
+        )
+        for rule_id, found in items.items()
+    ]
+
+
+@functools.cache
+def numbat_rev08_populations() -> list[RulePopulation]:
+    """Numbat REV-08 的被测总体 (期末 2026-06-30, 特别风险的窗口 20 天), 由演示数据集的发票, 发运单与流水算出."""
+    return rev08_populations(
+        numbat_records("sales_invoices", SalesInvoice),
+        numbat_records("delivery_notes", DeliveryNote),
+        numbat_bank_transactions(),
+        ENGAGEMENT.period_end,
+        20,
+    )
+
+
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
-    "PLN-07": lambda run: RuleResult(
-        exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}
+    "PLN-07": lambda run: engine_result(
+        "PLN-07",
+        RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}),
     ),
-    "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
-    "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
-    "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
-    "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
-    "CSH-02": lambda run: RuleResult(
-        exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
+    "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS})),
+    "REV-08": lambda run: engine_result(
+        "REV-08", RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}), numbat_rev08_populations()
     ),
-    "GEN-05": numbat_gen05_result,  # 功能 journals 打开时才执行
+    "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS})),
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={})),
+    "CSH-02": lambda run: engine_result(
+        "CSH-02",
+        RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),
+    ),
+    "GEN-05": lambda run: engine_result("GEN-05", numbat_gen05_result(run)),  # 功能 journals 打开时才执行
 }
 
 
@@ -1862,7 +1982,8 @@ class FakeUserStore:
 
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果. 不执行
-    检查; 要模拟没有执行的规则时, 预置的 RuleResult 带上 outcomes (需求 R130).
+    检查; 要模拟没有执行的规则时, 预置的 RuleResult 带上 outcomes (需求 R130). 被测总体 (需求 R324) 也取预置的,
+    NUMBAT_RULES 与 XERO_RULES 经 engine_result 补齐; 没带总体的预置 (多为单个用例自己给的) 总体为空列表.
 
     calls 记下每次调用 (程序编号, Run ID, 参数). B 的 SqlRuleEngine 就绪前代替它.
     """
@@ -2050,12 +2171,15 @@ def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
 
 
 @functools.cache
+def numbat_records[M: BaseModel](name: str, model: type[M]) -> tuple[M, ...]:
+    """Numbat 演示数据集的一张表 (data/demo/{name}.csv, 空串为空值, 读一次缓存)."""
+    with (DEMO_DATASET / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
+        return tuple(model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream))
+
+
 def numbat_bank_transactions() -> tuple[BankTransaction, ...]:
     """Numbat 演示数据集的银行流水 (data/demo/bank_transactions.csv, 读一次缓存)."""
-    with (DEMO_DATASET / "bank_transactions.csv").open(newline="", encoding="utf-8") as stream:
-        return tuple(
-            BankTransaction.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)
-        )
+    return numbat_records("bank_transactions", BankTransaction)
 
 
 def csh02_voided(lines: Iterable[JournalEntry], pattern: str | None, template: str | None) -> set[str]:

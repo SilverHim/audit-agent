@@ -17,7 +17,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
-from backend.contracts.knowledge import LLMSpec, ManualSpec
+from backend.contracts.knowledge import LLMSpec, LocalizedText, ManualSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ContractExtraction,
@@ -57,8 +57,8 @@ from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
 from backend.services.features import FEATURES
-from backend.services.judgment_engine import output_model, prompt_env
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
+from backend.services.judgment_engine import output_model
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, prompt_env, ref_problem, render_text
 from tests.external import optional, supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
@@ -3285,3 +3285,143 @@ def test_p3_dependencies_follow_node_order() -> None:
     }
     for pid, deps in ruling.items():
         assert all(p3_rank(dep) < p3_rank(pid) for dep in deps), pid
+
+
+# ── 需求 R324: 范围说明, 规则的被测总体与检查项 ──
+
+POP_TEMPLATE: dict[str, Any] = {
+    "id": "X-POP",
+    "name": "被测总体自测",
+    "phase": "P2_Executing",
+    "cycle": "Revenue",
+    "owner": "A6",
+    "engine": "rule",
+    "autonomy_level": "L3",
+    "reads": ["sales_invoices"],
+    "params": {"window_days": 20, "period_end": {"ref": "period_end"}},
+    "scope": {"zh": "期末前 {{ window_days }} 天入账的发票", "en": "Invoices posted {{ window_days }} days before"},
+    "rules": [
+        {
+            "id": "R01",
+            "name": "自测",
+            "severity": "high",
+            "sql": "SELECT 1 FROM sales_invoices",
+            "check": {"zh": "入账期间正确", "en": "Recorded in the correct period"},
+            "population": {
+                # :: 类型转换不是绑定参数
+                "sql": "SELECT i.id::text AS source_id FROM sales_invoices i WHERE i.engagement_id = :eid"
+                " AND i.posting_date <= CAST(:period_end AS date)",
+                "description": {
+                    "zh": "{{ period_end | days_before(window_days) }} 起入账",
+                    "en": "{% if window_days %}Posted from {{ period_end | days_before(window_days) }}{% endif %}",
+                },
+            },
+        }
+    ],
+}
+
+
+def pop_template(path: str = "", value: Any = None) -> dict[str, Any]:
+    """POP_TEMPLATE 的深拷贝, 点分路径 (列表下标写数字) 处的值换成 value; path 为空时原样."""
+    template = json.loads(json.dumps(POP_TEMPLATE))
+    if path:
+        *parents, last = path.split(".")
+        node = template
+        for key in parents:
+            node = node[int(key)] if isinstance(node, list) else node[key]
+        node[last] = value
+    return template
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "problems"),
+    [
+        ("", None, []),
+        (
+            "rules.0.population.sql",
+            "SELECT i.id AS source_id FROM sales_invoices i WHERE i.amount_cents > :limit_cents",
+            ["X-POP.R01 的总体 SQL 用了 params 以外的参数 limit_cents"],
+        ),
+        ("rules.0.emit", "rows", ["X-POP.R01: emit rows 的规则以返回行为总体, 不能写 population"]),
+        ("scope.zh", "期末前 {{ window }} 天", ["X-POP.scope.zh 的占位不在 params 内: window"]),
+        (  # 条件块里的过滤器 Jinja2 编译时不查, 这里也要查出
+            "rules.0.population.description.en",
+            "{% if window_days %}{{ period_end | days_after(1) }}{% endif %}",
+            ["X-POP.R01.population.en 用了不认识的过滤器 days_after"],
+        ),
+        (
+            "rules.0.population.description.zh",
+            "{{ period_end",
+            ["X-POP.R01.population.zh: unexpected end of template, expected 'end of print statement'."],
+        ),
+        (  # 总体 SQL 读的账表也须在 reads 中 (过期判断按 reads)
+            "rules.0.population.sql",
+            "SELECT d.id AS source_id FROM delivery_notes d WHERE d.engagement_id = :eid",
+            ["X-POP 读 delivery_notes"],
+        ),
+    ],
+)
+def test_population_and_placeholder_checks(path: str, value: Any, problems: list[str]) -> None:
+    """验收 5: 总体 SQL 的绑定参数只能用 params 中的与 eid; emit rows 的规则不写总体; scope 与 description 的占位只用
+    params 中的参数, 语法与过滤器 (只有 days_before) 写对; 总体 SQL 读的账表须在 reads 中."""
+    template = ProcedureTemplate.model_validate(pop_template(path, value))
+    found = [
+        *procedure_library.population_problems([template]),
+        *procedure_library.text_problems([template]),
+        *procedure_library.read_problems([template]),
+    ]
+    assert found == problems
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("scope", {"zh": "范围"}),  # 缺 en
+        ("rules.0.check", {"zh": "", "en": "Recorded in the correct period"}),  # zh 为空
+        ("rules.0.population.description", {"en": "Posted"}),
+    ],
+)
+def test_localized_texts_need_both_languages(path: str, value: dict[str, str]) -> None:
+    """验收 5: description, check, scope 的 zh 与 en 须同时给出, 不能为空."""
+    with pytest.raises(ValidationError):
+        ProcedureTemplate.model_validate(pop_template(path, value))
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        ("rules.0.population.sql", "SELECT 1 WHERE :x = 1", "规则被测总体的写法不对: X-POP.R01 的总体 SQL"),
+        ("scope.en", "{{ days }} days", "范围说明与总体说明的占位不对: X-POP.scope.en"),
+    ],
+)
+def test_population_problems_fail_the_load(tmp_path: Path, path: str, value: str, message: str) -> None:
+    """验收 5: 写法不对时程序库构造即报错 (含未启用的模板, 同其他加载校验)."""
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ref_library(tmp_path, yaml.safe_dump(pop_template(path, value) | {"feature": "journals"}, allow_unicode=True))
+
+
+@pytest.mark.parametrize("period_end", [date(2026, 9, 30), "2026-09-30"])  # 参数快照经 Store 读回后日期为文本
+def test_rev08_scope_checks_and_population_descriptions(period_end: date | str) -> None:
+    """验收 1: REV-08 (Xero, 特别风险, window_days 20) 的 scope 渲染为 "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的
+    销售发票" 与英文; 三条规则都写了总体, check 的中文依次为入账期间正确, 有服务完成记录, 收款金额相符; 快照缺参数时
+    渲染即报错 (StrictUndefined)."""
+    template = ProcedureLibrary(ROOT).load("REV-08")
+    params = {"window_days": 20, "period_end": period_end}
+    assert template.scope is not None
+    assert render_text(template.scope, params) == LocalizedText(
+        zh="期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票",
+        en="Sales invoices posted in the 20 days before period end (2026-09-10 to 2026-09-30)",
+    )
+    assert [(r.id, r.check.zh if r.check else None) for r in template.rules] == [
+        ("R01", "入账期间正确"),
+        ("R02", "有服务完成记录"),
+        ("R03", "收款金额相符"),
+    ]
+    descriptions = [render_text(r.population.description, params).zh for r in template.rules if r.population]
+    assert descriptions == [
+        "2026-09-10 至 2026-09-30 入账, 有服务完成记录的销售发票",
+        "2026-09-10 至 2026-09-30 入账的全部销售发票",
+        "2026-09-10 至 2026-09-30 入账, 银行流水里找得到收款的销售发票",
+    ]
+    with pytest.raises(UndefinedError, match="window_days"):
+        render_text(template.scope, {"period_end": period_end})

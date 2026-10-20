@@ -977,6 +977,28 @@ class RuleOutcome(Model):
     reason: str  # 理由: 命中的检查 SQL 返回的第一行的 reason 列, 为空时为 "前置检查未通过"
 
 
+class PopulationItem(Model):
+    """被测总体中的一个被测项目 (需求 R324, ASA 230 第 9(a) 段的识别特征): SQL 返回的一行."""
+
+    source_id: str | None  # 行 ID; 返回行没有行 ID (如汇总行) 时为空
+    amount_cents: int | None  # 金额, 单位分; 返回行没有金额列时为空
+    fields: dict[str, Any]  # 其余列 (识别字段, 如发票号, 客户, 入账日), JSON 形式
+
+
+class RulePopulation(Model):
+    """一条执行了的规则的被测总体 (需求 R324): 对象类型, 各被测项目, 项目数与金额合计. 执行前检查命中而没有执行的
+    规则不记.
+
+    emit exception 而没写总体 SQL 的规则记为未记录: count 与 amount_cents 为空, 没有项目; 记录了而一个项目都没有时
+    count 与 amount_cents 为 0."""
+
+    rule_id: str  # 规则编号, 如 R01
+    source_type: SourceType | None = None  # 对象类型; 未记录, 返回行没有 source_type 列或没有项目时为空
+    items: list[PopulationItem] = []  # 各被测项目, 按 SQL 返回的顺序
+    count: int | None = None  # 项目数, 未记录为空
+    amount_cents: int | None = None  # 金额合计: 各项目都有金额时为其和, 否则 (含未记录) 为空
+
+
 class ProcedureRun(Versioned):
     """程序的一次执行记录: 第几次, 起因, 起止时间, 成败. 重跑会产生新记录."""
 
@@ -997,6 +1019,15 @@ class ProcedureRun(Versioned):
     # 提示词从 R340 起按它输出, mock 由 R343 照实记 en; 页面据此标注. 之前的执行记录 (Store 与检查点里没有这个键)
     # 读回为 en: 那时的输出都是英文
     language: WorkingLanguage = "en"
+
+
+class RunPopulation(Versioned):
+    """规则程序一次成功执行的被测总体 (需求 R324), ID 为 POP-{run_id}. 只在 Store (不是编排状态的字段), 与执行记录
+    终态同一事务写入; 失败的执行不写, 重放不重写. 判断与抽取程序的对象清单由 Store 推出 (services.populations), 不写."""
+
+    run_id: str  # 所属执行
+    procedure_id: str  # 所属程序
+    rules: list[RulePopulation]  # 各执行了的规则的总体, 按 YAML 顺序
 
 
 class ScheduleRow(Model):

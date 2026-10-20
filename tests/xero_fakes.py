@@ -62,6 +62,7 @@ from backend.contracts.models import (
     ReviewStatus,
     RiskItem,
     RuleOutcome,
+    RulePopulation,
 )
 from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
@@ -89,8 +90,10 @@ from tests.fakes import (
     FakeTrail,
     csh02_subsequent_rows,
     csh02_window_rows,
+    engine_result,
     gen05_exception,
     make_deps,
+    rev08_populations,
     wait_idle,
 )
 from tests.fixture_sets import XERO
@@ -698,6 +701,24 @@ def xero_rev08_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+XERO_REV08_WINDOW = 20  # REV-08 的窗口天数: 关联的收入目标为特别风险 (见上)
+
+
+@functools.cache
+def xero_rev08_populations() -> list[RulePopulation]:
+    """REV-08 对 Xero 演示的被测总体 (需求 R324): 由演示数据导入之后的表 (xero_tables) 按总体 SQL 的口径算出, 期末取
+    快照. R01, R02 为窗口内六张发票, R03 为其中找得到收款的五张 (ORC1024 截至数据日尚未收款). 连库结果与它一致由 R112
+    的连库用例断言 (同上)."""
+    tables = xero_tables()
+    return rev08_populations(
+        tables["sales_invoices"],
+        tables["delivery_notes"],
+        tables["bank_transactions"],
+        XERO_PERIOD[1],
+        XERO_REV08_WINDOW,
+    )
+
+
 # GEN-05 R10 两笔贷项凭证配到的同额发票 (07-17 的 550.00 五张, ORC1003, 1008, 1009, 1010, 1011), 按 (开票日, ID)
 XERO_SAME_AMOUNT_INVOICES = [
     "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",  # ORC1008
@@ -974,21 +995,26 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
 
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
-] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES)
-    "PLN-07": lambda run: RuleResult(
-        exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}
+] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
+    "PLN-07": lambda run: engine_result(
+        "PLN-07",
+        RuleResult(exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}),
     ),
-    "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS}),
-    "REV-08": lambda run: RuleResult(exceptions=[xero_rev08_exception(run)], rows={}),
-    "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS}),
-    "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
-    "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
-    "GEN-05": xero_gen05_result,  # 功能 journals 打开时才执行
+    "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS})),
+    "REV-08": lambda run: engine_result(
+        "REV-08", RuleResult(exceptions=[xero_rev08_exception(run)], rows={}), xero_rev08_populations()
+    ),
+    "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS})),
+    # 两个账户对账单的期末余额都等于试算表
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={})),
+    "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
+    "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
-    "GEN-03": lambda run: RuleResult(
-        exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []}
+    "GEN-03": lambda run: engine_result(
+        "GEN-03", RuleResult(exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []})
     ),
-    "GEN-07": lambda run: RuleResult(exceptions=xero_gen07_exceptions(run), rows={}),  # 功能 going_concern 打开时才执行
+    # 功能 going_concern 打开时才执行
+    "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
 }
 
 

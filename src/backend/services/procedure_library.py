@@ -7,18 +7,19 @@ import os
 import re
 import subprocess
 import types
-from collections.abc import Callable, Iterable
-from datetime import datetime
+from collections.abc import Callable, Iterable, Mapping
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, TypeGuard, Union, get_args, get_origin
+from typing import Any, NoReturn, TypeGuard, Union, get_args, get_origin
 
 import yaml
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError, Undefined, meta, nodes
 from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
 
 from backend.contracts import llm_outputs
 from backend.contracts.data import DataInput
-from backend.contracts.knowledge import ProcedureTemplate, StandardFragment
+from backend.contracts.knowledge import LocalizedText, ProcedureTemplate, StandardFragment
 from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.manual_results import RESULT_MODELS, ManagementResponses
 from backend.contracts.models import (
@@ -62,6 +63,51 @@ RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, sig
 SQL_TABLE = re.compile(
     r"\b(" + "|".join(sorted((i.value for i in DataInput), key=len, reverse=True)) + r")\b", re.IGNORECASE
 )
+# SQL 的绑定参数 :name, 写法同 SQLAlchemy text() 的认法 (PostgreSQL 的 :: 类型转换不算)
+SQL_BIND = re.compile(r"(?<![:\w\\]):(\w+)(?!:)")
+
+
+def json_default(value: object) -> NoReturn:
+    """tojson 遇到不能序列化的对象时调用: 缺变量 (StrictUndefined) 抛 UndefinedError, 其余仍抛 TypeError.
+
+    StrictUndefined 只在取值, 转字符串等操作时报错, json.dumps 只会说它不能序列化, 看不出是缺了变量.
+    """
+    if isinstance(value, Undefined):
+        str(value)  # StrictUndefined 转字符串即抛 UndefinedError, 消息写明缺的是哪个变量
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def days_before(day: date | str, days: int) -> date:
+    """过滤器 days_before (需求 R324): 日期往前推 days 天, 如 {{ period_end | days_before(window_days) }}. 日期可为
+    ISO 文本 (参数快照经 Store 读回后日期为文本)."""
+    return (day if isinstance(day, date) else date.fromisoformat(day)) - timedelta(days=days)
+
+
+def prompt_env(root: Path | None = None) -> Environment:
+    """知识文件里 Jinja2 模板的环境: 提示词 (root 为模板目录), 与程序 YAML 带参数占位的文字 (不给 root, 见
+    render_text). 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义; 另有过滤器
+    days_before."""
+    env = Environment(
+        loader=FileSystemLoader(root) if root is not None else None,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        undefined=StrictUndefined,
+        autoescape=False,
+    )
+    env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
+    env.filters["days_before"] = days_before
+    return env
+
+
+TEXT_ENV = prompt_env()  # 程序 YAML 带参数占位的文字 (范围说明, 总体说明) 的环境
+
+
+def render_text(text: LocalizedText, params: Mapping[str, Any]) -> LocalizedText:
+    """程序 YAML 带参数占位的文字 (scope 与规则总体的 description, 需求 R324) 按一次执行的参数快照渲染, 纯函数.
+    占位只能用 params 中的参数, 加载时已校验 (text_problems); 快照缺参数时抛 UndefinedError."""
+    return LocalizedText(
+        zh=TEXT_ENV.from_string(text.zh).render(params), en=TEXT_ENV.from_string(text.en).render(params)
+    )
 
 
 def first_misstatement_communicated_at(state: EngagementState) -> datetime | None:
@@ -162,6 +208,12 @@ class ProcedureLibrary:
         wrong = update_autonomy_problems(templates)
         if wrong:
             raise ValueError(f"带错报更新类别的程序自主度不能高于 L2 (仲裁不收载荷): {', '.join(wrong)}")
+        wrong = population_problems(templates)
+        if wrong:
+            raise ValueError(f"规则被测总体的写法不对: {'; '.join(wrong)}")
+        wrong = text_problems(templates)
+        if wrong:
+            raise ValueError(f"范围说明与总体说明的占位不对: {'; '.join(wrong)}")
         unread = read_problems(templates)
         if unread:
             raise ValueError(f"程序的 reads 漏了规则 SQL 读的数据 (过期判断要用): {'; '.join(unread)}")
@@ -462,13 +514,65 @@ def inputs_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
     return problems
 
 
-def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
-    """规则 SQL (含执行前检查的 SQL, 需求 R130) 读到而 reads 没声明的账表 (消息含程序编号): 过期判断按 reads 看数据
-    变动, 漏了就标不出过期. SQL 里整词出现的账表名都算读了 (FROM, JOIN, 逗号连接, 子查询); 列名或别名与账表同名时
-    也算, 宁多勿漏. 大模型与 Agent 另读的数据 (如 REV-02 的发运单, 合同) 靠 YAML 手写."""
+def population_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """规则被测总体的写法问题 (需求 R324, 消息含程序与规则编号): emit rows 的规则以返回行为总体, 不能写 population;
+    总体 SQL 的绑定参数只能用 params 中的与 eid (执行时参数取参数快照, 别的参数绑不上)."""
     problems = []
     for t in templates:
-        sqls = [sql for rule in t.rules for sql in (rule.sql, *(check.sql for check in rule.checks))]
+        for rule in t.rules:
+            if rule.population is None:
+                continue
+            if rule.emit == "rows":
+                problems.append(f"{t.id}.{rule.id}: emit rows 的规则以返回行为总体, 不能写 population")
+            unknown = sorted(set(SQL_BIND.findall(rule.population.sql)) - set(t.params) - {"eid"})
+            if unknown:
+                problems.append(f"{t.id}.{rule.id} 的总体 SQL 用了 params 以外的参数 {', '.join(unknown)}")
+    return problems
+
+
+def text_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """带参数占位的文字 (scope 与规则总体的 description, 需求 R324) 的写法问题 (消息含程序编号与位置): 语法错, 用了
+    不认识的过滤器 (条件块里的也查, Jinja2 编译时不查它们), 或占位用了 params 以外的变量. zh 与 en 都要给由字段校验
+    保证 (LocalizedText)."""
+    problems = []
+    for t in templates:
+        texts = [
+            ("scope", t.scope),
+            *((f"{r.id}.population", r.population.description) for r in t.rules if r.population),
+        ]
+        for where, text in texts:
+            if text is None:
+                continue
+            for lang, source in (("zh", text.zh), ("en", text.en)):
+                try:
+                    tree = TEXT_ENV.parse(source)
+                except TemplateSyntaxError as e:
+                    problems.append(f"{t.id}.{where}.{lang}: {e}")
+                    continue
+                filters = sorted({f.name for f in tree.find_all(nodes.Filter)} - set(TEXT_ENV.filters))
+                if filters:
+                    problems.append(f"{t.id}.{where}.{lang} 用了不认识的过滤器 {', '.join(filters)}")
+                unknown = sorted(meta.find_undeclared_variables(tree) - set(t.params))
+                if unknown:
+                    problems.append(f"{t.id}.{where}.{lang} 的占位不在 params 内: {', '.join(unknown)}")
+    return problems
+
+
+def read_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
+    """规则 SQL (含执行前检查的 SQL, 需求 R130, 与被测总体的 SQL, 需求 R324) 读到而 reads 没声明的账表 (消息含程序
+    编号): 过期判断按 reads 看数据变动, 漏了就标不出过期. SQL 里整词出现的账表名都算读了 (FROM, JOIN, 逗号连接,
+    子查询); 列名或别名与账表同名时也算, 宁多勿漏. 大模型与 Agent 另读的数据 (如 REV-02 的发运单, 合同) 靠 YAML 手写."""
+    problems = []
+    for t in templates:
+        sqls = [
+            sql
+            for rule in t.rules
+            for sql in (
+                rule.sql,
+                *(check.sql for check in rule.checks),
+                *((rule.population.sql,) if rule.population else ()),
+            )
+        ]
         used = {name.lower() for sql in sqls for name in SQL_TABLE.findall(sql)}
         missing = sorted(used - {i.value for i in t.reads})
         if missing:

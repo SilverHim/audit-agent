@@ -2,7 +2,7 @@
 
 import copy
 from collections.abc import Mapping
-from typing import Annotated, Any, TypedDict, TypeVar, cast
+from typing import Annotated, Any, NotRequired, TypedDict, TypeVar, cast
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
@@ -34,6 +34,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     RiskItem,
+    RunPopulation,
     ScheduleRow,
     UncorrectedSchedule,
     Versioned,
@@ -50,6 +51,9 @@ class StagedResult(TypedDict):
     run_id: str  # 本次执行记录的 ID
     writer: AgentId  # 片段的写入者: 执行程序的 Agent; 执行失败时为 A1
     patch: StatePatch  # 要写入的片段, 含本次执行记录的终态
+    # 本次执行的被测总体 (需求 R324): 规则程序经规则引擎成功执行时才有, 随暂存项过检查点, fan_in 与执行记录终态同一
+    # 事务写入 Store 后随 staged_results 清空; 不并入状态
+    population: NotRequired[RunPopulation]
 
 
 V = TypeVar("V", bound=Versioned)

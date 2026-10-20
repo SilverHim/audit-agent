@@ -49,7 +49,7 @@ from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader, 
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import FakeJudgmentEngine, make_ctx, passed
 from tests.test_data_store_postgres import table_rows
-from tests.xero_fakes import SNAPSHOT_NAME, XERO_DATASET, XERO_RULES, XERO_S01_ROWS
+from tests.xero_fakes import SNAPSHOT_NAME, XERO_DATASET, XERO_RULES, XERO_S01_ROWS, xero_rev08_populations
 from tests.xero_injection import file_hashes
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
@@ -397,6 +397,24 @@ async def test_xero_rules_on_postgres(tmp_path: Path) -> None:
     await check_csh02_fieldwork(project, supplements)
     await check_acc04(project)
     assert {path: file_hashes(path) for path in (snapshot, supplements)} == before
+
+
+async def test_rev08_populations_on_postgres(tmp_path: Path) -> None:
+    """需求 R324 验收 6: 连库的 REV-08 被测总体等于离线预置 (xero_rev08_populations, 其值见 tests/test_e2e_xero17
+    的 test_populations): R01, R02 六张 990000, R03 五张 935000 (没有 ORC1024); 每条例外所指的发票都在出它的规则的
+    总体里."""
+    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
+    project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
+    run, rev08 = (await run_rule_programs(project))["REV-08"]
+    assert run.params_snapshot["window_days"] == 20
+    assert rev08.populations == xero_rev08_populations()
+    assert [(p.rule_id, p.count, p.amount_cents) for p in rev08.populations] == [
+        ("R01", 6, 990000),
+        ("R02", 6, 990000),
+        ("R03", 5, 935000),
+    ]
+    tested = {p.rule_id: {i.source_id for i in p.items} for p in rev08.populations}
+    assert rev08.exceptions and all(set(x.source_ids) <= tested[x.rule_id] for x in rev08.exceptions)
 
 
 async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> None:
