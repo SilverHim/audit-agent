@@ -3,7 +3,7 @@
 // 看初值会不会取它 (材料里的实际顺序是收入, 总资产, 税前利润)
 import { describe, expect, test } from 'bun:test'
 import type { MaterialityCandidate, MaterialityCandidates } from '../src/client/types.gen'
-import { initialChoice, selectableCandidates } from '../src/lib/materiality'
+import { inapplicable, initialChoice, selectableCandidates } from '../src/lib/materiality'
 
 function candidate(
   basis: MaterialityCandidate['basis'],
@@ -34,7 +34,8 @@ const XERO = materials([
 ])
 
 describe('重要性候选', () => {
-  test('本期不适用的候选不进基准的选项, 其余按材料顺序', () => {
+  test('本期不适用的候选取材料的标记作原因, 不进基准的选项, 其余按材料顺序', () => {
+    expect(XERO.candidates.map(inapplicable)).toEqual(['loss', null, null])
     expect(selectableCandidates(XERO).map((item) => item.basis)).toEqual(['revenue', 'total_assets'])
   })
 
@@ -47,11 +48,12 @@ describe('重要性候选', () => {
     })
   })
 
-  test('没有标记的旧材料 (R351 以前存下的): 为负的税前利润同样不进选项, 初值也不取它', () => {
+  test('没有标记的旧材料 (R351 以前存下的): 为负的税前利润按 not_positive 显示原因, 不进选项, 初值也不取它', () => {
     const old = materials([
       candidate('profit_before_tax', -150000000, [0.05, 0.05]),
       candidate('revenue', 1200000000, [0.005, 0.01]),
     ])
+    expect(old.candidates.map(inapplicable)).toEqual(['not_positive', null])
     expect(selectableCandidates(old).map((item) => item.basis)).toEqual(['revenue'])
     expect(initialChoice(old).basis).toBe('revenue')
   })

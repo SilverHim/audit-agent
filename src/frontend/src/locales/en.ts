@@ -357,6 +357,9 @@ export const en = {
       book_balance_cents: 'Book balance',
       entry_no: 'Entry',
       posting_date: 'Posting date',
+      signed_date: 'Signed date',
+      invoice_no: 'Invoice',
+      delivery_note_id: 'Delivery note',
       reason: 'Reason',
     } as Record<string, string>,
     // 取值按字段分组: 只换该字段的取值 (balance_sheet 的 "opening" 只对 PLN-07 的 basis 成立)

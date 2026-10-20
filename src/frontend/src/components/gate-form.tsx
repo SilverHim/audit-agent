@@ -50,7 +50,7 @@ import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { initialChoice, selectableCandidates } from '@/lib/materiality'
+import { inapplicable, initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
 import { reportPart } from '@/lib/report-sections'
@@ -610,20 +610,23 @@ function PlanningFields({
       <div className="flex flex-col gap-1.5">
         <SectionLabel>{t.planning.candidates}</SectionLabel>
         <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[13.5px]">
-          {candidates.candidates.map((item) => (
-            <li key={item.basis} className="flex flex-wrap gap-x-2">
-              <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
-              <Code>{formatAud(item.base_amount_cents)}</Code>
-              {item.not_applicable ? (
-                <span className="text-muted-foreground">· {t.planning.notApplicable[item.not_applicable]}</span>
-              ) : (
-                <span className="text-muted-foreground">
-                  · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
-                  <Code>{formatAud(item.high_cents)}</Code>
-                </span>
-              )}
-            </li>
-          ))}
+          {candidates.candidates.map((item) => {
+            const reason = inapplicable(item)
+            return (
+              <li key={item.basis} className="flex flex-wrap gap-x-2">
+                <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
+                <Code>{formatAud(item.base_amount_cents)}</Code>
+                {reason ? (
+                  <span className="text-muted-foreground">· {t.planning.notApplicable[reason]}</span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
+                    <Code>{formatAud(item.high_cents)}</Code>
+                  </span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </div>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">

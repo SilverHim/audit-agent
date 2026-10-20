@@ -39,11 +39,12 @@ describe('例外明细', () => {
     ])
   })
 
-  test('复核页无归因任务的失败原因走同一套: 日期按文本, 认得的字段取标签', () => {
+  test('复核页无归因任务的失败原因 (REV-08 的明细): 日期按文本, 中英界面取各自的标签', () => {
     expect(detailRows(REV08, en.exceptionDetail)).toEqual([
       { key: 'posting_date', label: 'Posting date', text: '2026-06-28' },
-      { key: 'signed_date', label: 'signed_date', text: '2026-07-03' },
+      { key: 'signed_date', label: 'Signed date', text: '2026-07-03' },
     ])
+    expect(detailRows(REV08, zh.exceptionDetail).map((row) => row.label)).toEqual(['记账日期', '签收日期'])
   })
 
   test('对象逐个字段展开, 元素是对象的数组各自展开, 其余数组以逗号连接, 空数组为 "—"', () => {
