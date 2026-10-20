@@ -11,7 +11,6 @@ from typing import Any, ClassVar, cast, get_args
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.fieldwork import JSON_ROWS, journal_rows
 from backend.agents.judging import (
-    Judged,
     JudgedRun,
     Subject,
     Subjects,
@@ -32,6 +31,7 @@ from backend.contracts.models import (
     MisstatementUpdate,
     SourceType,
 )
+from backend.contracts.services import JudgmentOutcome
 from backend.contracts.state import StatePatch
 from backend.services.staleness import current_results
 
@@ -114,17 +114,16 @@ def classification_update(
     )
 
 
-def with_update(item: Judged, misstatements: dict[str, Misstatement], objectives: Sequence[AuditObjective]) -> Judged:
-    """成功的判断写上分类载荷 (同一版本); 失败的原样. 判断的草稿 (JudgmentOutcome.draft) 为分类草稿, 判断对象为
-    misstatements 中的错报. 纯函数."""
-    judgment = item.outcome.judgment
-    if judgment is None:
-        return item
-    draft = item.outcome.draft
-    assert isinstance(draft, MisstatementClassificationDraft)  # FIN-03 的输出模型
+def with_update(
+    outcome: JudgmentOutcome, misstatements: dict[str, Misstatement], objectives: Sequence[AuditObjective]
+) -> Judgment:
+    """成功的判断写上分类载荷 (同一版本, 只加 misstatement_update). 判断的草稿 (JudgmentOutcome.draft) 为分类草稿,
+    判断对象为 misstatements 中的错报. 纯函数; 作 judge_all 的 annotate, 只对成功的判断调用."""
+    judgment = outcome.judgment
+    draft = outcome.draft
+    assert judgment is not None and isinstance(draft, MisstatementClassificationDraft)  # FIN-03 的输出模型
     update = classification_update(misstatements[judgment.subject_id], draft, objectives)
-    judgment = judgment.model_copy(update={"misstatement_update": update})
-    return Judged(item.ctx, item.outcome.model_copy(update={"judgment": judgment}))
+    return judgment.model_copy(update={"misstatement_update": update})
 
 
 class WorkpaperAgent(ProcedureAgent[JudgedRun]):
@@ -158,7 +157,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             subjects,
             self.reviewer,
             judging_steps(self.deps),
-            annotate=lambda item: with_update(item, targets, objectives),
+            annotate=lambda outcome: with_update(outcome, targets, objectives),
         )
         return JudgedRun(judged, subjects.outcomes)
 

@@ -11,7 +11,15 @@ import pytest
 
 from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent, Subject
-from backend.agents.judging import DEFAULT_STEPS, Judged, JudgingSteps, downgrade, judgments_patch, unchanged
+from backend.agents.judging import (
+    DEFAULT_STEPS,
+    Judged,
+    JudgingSteps,
+    downgrade,
+    judge_all,
+    judgments_patch,
+    unchanged,
+)
 from backend.contracts.knowledge import DowngradeRule, ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
@@ -307,6 +315,7 @@ AUTONOMY = BASELINE | {"autonomy"}
 L1, L2, L3 = AutonomyLevel.L1, AutonomyLevel.L2, AutonomyLevel.L3
 HIGH, OVER_PM = DowngradeCondition.high_risk, DowngradeCondition.amount_over_pm
 LOW, UNSUPPORTED = DowngradeCondition.low_confidence, DowngradeCondition.unsupported_steps
+FRAUD = DowngradeCondition.fraud_flag
 
 
 @pytest.mark.parametrize(
@@ -365,24 +374,31 @@ UPDATE = MisstatementUpdate(misstatement_id="M-1", base_version=1, kind="classif
 MISSTATEMENT = Misstatement.model_construct(id="M-1", version=1, amount_cents=-50_000)
 
 
+FLAGGED = X1.model_copy(update={"amount_cents": None})  # 出自 REV-08 R01, 不带金额
+FRAUD_RULES = frozenset({("REV-08", "R01")})  # 给策略标上 fraud_flag 的规则
+
+
 @pytest.mark.parametrize(
-    ("findings", "update", "pm", "expected"),
+    ("findings", "update", "pm", "fraud_rules", "expected"),
     [
-        ([NEW], None, 16216, (L1, [OVER_PM])),  # 金额取该对象的规则例外 (本次执行刚建的也算)
-        ([], UPDATE, 16216, (L1, [OVER_PM])),  # 错报更新所指的错报取状态中的当前版本, 按绝对值比
-        ([NEW], None, None, (L3, [])),  # 执行重要性未定 (PLN-01/03 之前): amount_over_pm 不适用
-        ([], None, 16216, (L3, [])),  # 没有涉及金额
+        ([NEW], None, 16216, frozenset(), (L1, [OVER_PM])),  # 金额取该对象的规则例外 (本次执行刚建的也算)
+        ([], UPDATE, 16216, frozenset(), (L1, [OVER_PM])),  # 错报更新所指的错报取状态中的当前版本, 按绝对值比
+        ([NEW], None, None, frozenset(), (L3, [])),  # 执行重要性未定 (PLN-01/03 之前): amount_over_pm 不适用
+        ([], None, 16216, frozenset(), (L3, [])),  # 没有涉及金额
+        ([FLAGGED], None, None, FRAUD_RULES, (L1, [FRAUD])),  # 规则例外出自标了 fraud_flag 的规则: 命中 fraud_flag
     ],
 )
 async def test_downgrade_amount_sources(
     findings: list[AuditException],
     update: MisstatementUpdate | None,
     pm: int | None,
+    fraud_rules: frozenset[tuple[str, str]],
     expected: tuple[AutonomyLevel, list[DowngradeCondition]],
 ) -> None:
     """downgrade 的判断金额与复核档位同一口径 (judgment_amount): 例外取收到的规则例外, 所指错报取状态, 执行重要性取
-    状态. 运行时 L3, 置信度 0.9."""
+    状态; 收到的规则例外也交给 judgment_level 判舞弊规则. 运行时 L3, 置信度 0.9."""
     agent, ctx, _ = setup("REV-03", [], {}, features=AUTONOMY)
+    agent.deps = replace(agent.deps, autonomy=replace(agent.deps.autonomy, fraud_rules=fraud_rules))
     jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=findings)
     judgment = passed(misstatement_update=update)(jctx, ctx.run).judgment
     procedure = ctx.procedure.model_copy(update={"autonomy_level": L3})
@@ -390,20 +406,6 @@ async def test_downgrade_amount_sources(
     run_ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
     result = await downgrade(agent.deps, run_ctx, judgment, findings)
     assert (result.id, result.version, result.autonomy_level, result.downgrade_reasons) == (judgment.id, 1, *expected)
-
-
-async def test_downgrade_passes_rule_findings_for_fraud_rules() -> None:
-    """downgrade 把收到的规则例外交给 judgment_level: 例外出自标了 fraud_flag 的规则 (这里给策略标上 REV-08 R01) 时
-    命中 fraud_flag. 例外金额置空, 执行重要性未定 (不命中 amount_over_pm), 运行时 L3, 置信度 0.9 → L1 [fraud_flag]."""
-    agent, ctx, _ = setup("REV-03", [], {}, features=AUTONOMY)
-    deps = replace(agent.deps, autonomy=replace(agent.deps.autonomy, fraud_rules=frozenset({("REV-08", "R01")})))
-    finding = X1.model_copy(update={"amount_cents": None})
-    jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=[finding])
-    judgment = passed()(jctx, ctx.run).judgment
-    procedure = ctx.procedure.model_copy(update={"autonomy_level": L3})
-    run_ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, ctx.state)
-    result = await downgrade(deps, run_ctx, judgment, [finding])
-    assert (result.autonomy_level, result.downgrade_reasons) == (L1, [DowngradeCondition.fraud_flag])
 
 
 @pytest.mark.parametrize(("features", "kind"), [(AUTONOMY, TaskKind.normal), (BASELINE, None)])
@@ -420,3 +422,34 @@ def test_judgments_patch_routes_missing_key_evidence(features: frozenset[str], k
     assert [t.kind for t in patch["review_tasks"]] == ([kind] if kind else [])
     expected = ReviewStatus.pending if kind else ReviewStatus.confirmed
     assert [j.review_status for j in patch["judgments"]] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"conclusion": "annotated"}, None),  # 补程序自己的字段
+        ({"id": "J-OTHER"}, "id"),
+        ({"autonomy_level": AutonomyLevel.L1}, "autonomy_level"),
+        ({"critic_verdict": CriticVerdict.consistent}, "critic_verdict"),
+    ],
+)
+async def test_annotate_only_fills_successful_judgments(change: dict[str, Any], error: str | None) -> None:
+    """judge_all 的 annotate (需求 R170, FIN-03 写分类载荷用): 判断引擎之后, A7 之前调用, 只对成功的判断 (失败的对象
+    不调); 补的字段之后的复核, 降级与分类都看得到. 改了 ID, 版本, 级别或 critic 字段时断言失败."""
+    subjects = [Subject("A", {}), Subject("F", {})]
+    agent, ctx, calls = recorded("REV-03", subjects, {"A": passed(autonomy_level=L3), "F": failed("failed")})
+
+    def annotate(outcome: JudgmentOutcome) -> Judgment:
+        assert outcome.judgment is not None
+        calls.append(("annotate", outcome.judgment.subject_id))
+        return outcome.judgment.model_copy(update=change)
+
+    if error is not None:
+        with pytest.raises(AssertionError, match=error):
+            await judge_all(agent.deps, ctx, subjects, agent.reviewer, agent.steps, annotate=annotate)
+        return
+    judged = await judge_all(agent.deps, ctx, subjects, agent.reviewer, agent.steps, annotate=annotate)
+    assert [c[0] for c in calls if c[1:2] == ("A",)] == ["judge", "annotate", "critic", "downgrade"]
+    assert [c[0] for c in calls if c[1:2] == ("F",)] == ["judge"]
+    [annotated] = [item.outcome.judgment for item in judged if item.outcome.judgment is not None]
+    assert annotated.conclusion == "annotated"

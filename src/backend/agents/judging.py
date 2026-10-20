@@ -90,15 +90,13 @@ async def unchanged(ctx: RunContext, judgment: Judgment, findings: Sequence[Audi
 
 @dataclass(frozen=True)
 class JudgingSteps:
-    """判断公共流程中按功能变化的部分 (由 judging_steps 按功能集选, 功能 autonomy 只在那里读).
+    """判断公共流程中按功能替换的步骤 (由 judging_steps 按功能集选).
 
     downgrade: A7 复核之后, classify 之前的判断级降级 (规格书第 7.4 节), 收到的判断已带 critic 字段; 缺省原样返回,
     功能 autonomy 打开时为 downgrade.
-    key_evidence: classify 是否把关键证据缺失 (review_queue.missing_evidence) 也算作交人; 功能 autonomy 打开时为真.
     """
 
     downgrade: Step = unchanged
-    key_evidence: bool = False
 
 
 DEFAULT_STEPS = JudgingSteps()  # 原样返回
@@ -136,10 +134,16 @@ async def downgrade(
 
 def judging_steps(deps: AgentDeps) -> JudgingSteps:
     """判断公共流程按功能选的部分: 功能 autonomy 打开时降级为 downgrade 且关键证据缺失交人, 关闭时为 DEFAULT_STEPS
-    (原样返回, 不看关键证据). A6 各判断程序与 A8 的 FIN-03 都由它取, judgments_patch 的 classify 也读它."""
+    (原样返回, 不看关键证据). A6 各判断程序与 A8 的 FIN-03 都由它取; classify 是否看关键证据见 checks_key_evidence."""
     if AUTONOMY not in deps.features:
         return DEFAULT_STEPS
-    return JudgingSteps(downgrade=functools.partial(downgrade, deps), key_evidence=True)
+    return JudgingSteps(downgrade=functools.partial(downgrade, deps))
+
+
+def checks_key_evidence(deps: AgentDeps) -> bool:
+    """classify 是否把关键证据缺失 (review_queue.missing_evidence) 也算作交人: 功能 autonomy 打开时为真 (需求 R170;
+    与 judging_steps 同看 deps.features). judgments_patch 按它传 classify 的 key_evidence."""
+    return AUTONOMY in deps.features
 
 
 def subjects_awaiting_review(ctx: RunContext) -> set[str]:
@@ -166,19 +170,41 @@ def in_scope(ctx: RunContext, subject_id: str) -> bool:
     return (not only or subject_id in only) and subject_id not in subjects_awaiting_review(ctx)
 
 
+# annotate 不能改的判断字段: 身份与版本, 自主度及其理由, A7 复核的各项
+KEPT_BY_ANNOTATE = (
+    "id",
+    "version",
+    "autonomy_level",
+    "downgrade_reasons",
+    *(name for name in Judgment.model_fields if name.startswith("critic_")),
+)
+
+
+def annotated(annotate: Callable[[JudgmentOutcome], Judgment], outcome: JudgmentOutcome) -> Judgment:
+    """judge_all 的 annotate 给成功的判断补字段; 补了 KEPT_BY_ANNOTATE 中的字段时断言失败 (程序错误)."""
+    before = outcome.judgment
+    assert before is not None  # 只对成功的判断调用
+    after = annotate(outcome)
+    changed = [name for name in KEPT_BY_ANNOTATE if getattr(after, name) != getattr(before, name)]
+    assert not changed, f"annotate 只补字段, 不能改 {', '.join(changed)}"
+    return after
+
+
 async def judge_all(
     deps: AgentDeps,
     ctx: RunContext,
     subjects: list[Subject],
     critic: Critic,
     steps: JudgingSteps = DEFAULT_STEPS,
-    annotate: Callable[[Judged], Judged] | None = None,
+    annotate: Callable[[JudgmentOutcome], Judgment] | None = None,
 ) -> list[Judged]:
     """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级 (两步都收该对象的
     规则例外).
 
-    annotate: 判断引擎之后, A7 之前给结果补上程序自己的字段 (纯函数, 收发 Judged), 之后的复核与降级都看得到;
-    FIN-03 用它写上分类载荷 (workpaper.with_update), 降级才能按所指错报的金额与舞弊迹象判 (需求 R170). 缺省不改.
+    annotate: 判断引擎之后, A7 之前给成功的判断补上程序自己的字段 (纯函数, 收判断引擎的结果, 返回补了字段的判断;
+    判断失败的不调), 之后的复核与降级都看得到. 只补字段: ID, 版本, 级别 (autonomy_level, downgrade_reasons) 与
+    critic 字段不能改 (调用后断言, 见 annotated). FIN-03 用它写上分类载荷 (workpaper.with_update), 降级才能按所指
+    错报的金额与舞弊迹象判 (需求 R170). 缺省不改.
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
     fixture_key 取对象的 (缺省为对象 ID); 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile;
@@ -202,16 +228,13 @@ async def judge_all(
             client_profile=subject.client_profile,
         )
         outcome = await deps.judgments.judge(ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id)
-        item = Judged(jctx, outcome)
-        if annotate is not None:
-            item = annotate(item)
-        judgment = item.outcome.judgment
-        if judgment is not None:
+        if outcome.judgment is not None:
+            judgment = annotated(annotate, outcome) if annotate is not None else outcome.judgment
             # 独立复核在降级与分类之前: 结论进置信度 (8.4), 不一致的由 ReviewQueue 建争议任务
             judgment = await critic.review(ctx, judgment, subject.rule_findings)
             judgment = await steps.downgrade(ctx, judgment, subject.rule_findings)
-            item = Judged(jctx, item.outcome.model_copy(update={"judgment": judgment}))
-        return item
+            outcome = outcome.model_copy(update={"judgment": judgment})
+        return Judged(jctx, outcome)
 
     return await gather_all(judge(s) for s in subjects)
 
@@ -253,11 +276,11 @@ def judgments_patch(
     exceptions: list[AuditException] = []
     tasks: list[ReviewTask] = []
     pid = ctx.procedure.id
-    steps = judging_steps(deps)
+    key_evidence = checks_key_evidence(deps)
     for item in judged:
         subject_id = item.ctx.subject_id
         findings_of_subject = item.ctx.rule_findings
-        kind = queue.classify(ctx.template, item.outcome, findings_of_subject, key_evidence=steps.key_evidence)
+        kind = queue.classify(ctx.template, item.outcome, findings_of_subject, key_evidence=key_evidence)
         judgment = item.outcome.judgment
         if judgment is not None and kind in (TaskKind.normal, TaskKind.dispute):
             judgments.append(judgment)
