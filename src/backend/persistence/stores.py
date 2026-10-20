@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 import pdfplumber
 from pydantic import BaseModel
-from sqlalchemy import delete, exists, func, or_, select, text, update
+from sqlalchemy import delete, exists, func, null, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -1008,17 +1008,19 @@ async def record_changes(
     eid: str,
     version: int,
     inputs: Iterable[DataInput],
-    document_types: Iterable[DocumentType] | None = None,
+    document_types: Sequence[DocumentType] | None = None,
 ) -> None:
     """在当前事务里记下数据版本 version 变了哪些数据 (表 data_changes); 已记的跳过. document_types 为登记变了的文件的
-    类型 (需求 R304), 记在 documents 那一行 (按 DocumentType 顺序去重); 不给为空, 即不知道是哪类文件."""
-    types = None if document_types is None else [t.value for t in DocumentType if t in set(document_types)]
+    类型 (需求 R304), 记在 documents 那一行 (按 DocumentType 顺序去重); 不给时与其余各行一样存 SQL NULL (不写 JSON
+    null), 即不知道是哪类文件."""
+    wanted = None if document_types is None else set(document_types)
+    types = None if wanted is None else [t.value for t in DocumentType if t in wanted]
     rows = [
         {
             "engagement_id": eid,
             "data_version": version,
             "input": i.value,
-            "document_types": types if i is DataInput.documents else None,
+            "document_types": types if i is DataInput.documents and types is not None else null(),
         }
         for i in dict.fromkeys(inputs)
     ]

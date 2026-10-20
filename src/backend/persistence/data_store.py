@@ -780,7 +780,7 @@ class PostgresDataStore(Store):
         conn: AsyncConnection,
         eid: str,
         inputs: Iterable[DataInput],
-        document_types: Iterable[DocumentType] | None = None,
+        document_types: Sequence[DocumentType] | None = None,
     ) -> int:
         """在已开的事务里把数据版本 +1 并记下这次变了哪些数据 (documents 另记文件类型, 见 record_changes), 返回新版本
         (行锁: 同一项目的写入排队, 版本号连续)."""

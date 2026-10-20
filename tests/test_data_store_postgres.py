@@ -1088,6 +1088,10 @@ async def test_data_changes_record_what_each_version_changed(storage, tmp_path: 
         data_version=7, input=DataInput.documents, document_types=[DocumentType.contract, DocumentType.confirmation]
     )
     assert {c.document_types for c in changes[:-1]} == {None}
+    # 不带类型的存 SQL NULL, 不写 JSON null (审核 R304-04): 规则 SQL 写 IS NULL 即可
+    kinds_sql = "SELECT jsonb_typeof(document_types) AS kind, count(*) AS n FROM data_changes GROUP BY 1 ORDER BY 1"
+    found = await PostgresFinancialDataStore(engine).query(first.id, kinds_sql, {})
+    assert {r["kind"]: r["n"] for r in found} == {"array": 1, None: len(changes) - 1}
 
 
 async def test_migration_0008_backfills_data_changes_under_force_rls(storage) -> None:  # type: ignore[no-untyped-def]

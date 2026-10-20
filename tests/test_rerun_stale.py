@@ -180,20 +180,13 @@ def test_document_changes_with_types_stale_only_their_readers(types: list[Docume
 
 def test_programs_reading_registrations_declare_the_document_types() -> None:
     """需求 R304 验收 2 (取 "必须声明"): reads 含 documents 的程序都写了 document_reads, 两者须同时写, 否则程序库加载
-    即报错; 读登记的类型与产出侧 document_types 各管各的 (DOC-04 交回合同文件而不读登记)."""
+    即报错 (产出侧 document_types 的对应校验见 test_merge)."""
     readers = {t.id: t.document_reads for t in LIBRARY.all(include_disabled=True) if t.document_reads}
     assert readers == {
         "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],  # 承接阶段, 不判过期
         "REV-03": [DocumentType.contract],
         "REV-02": [DocumentType.contract],
         "CSH-02": [DocumentType.confirmation],
-    }
-    assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
-        "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],
-        "GEN-08": [DocumentType.registry_extract],
-        "DOC-04": [DocumentType.contract],
-        "DOC-06": [DocumentType.confirmation],
-        "CSH-04": [DocumentType.confirmation],
     }
     rev03 = LIBRARY.load("REV-03")
     undeclared = rev03.model_copy(update={"document_reads": []})

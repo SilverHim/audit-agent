@@ -2094,7 +2094,8 @@ class FakeDataStore:
     def record(self, *inputs: DataInput, document_types: Sequence[DocumentType] | None = None) -> None:
         """数据版本 +1 并记下这次变了哪些数据; documents 另记文件类型 (同真实实现, 按 DocumentType 顺序去重)."""
         self.data_version += 1
-        types = None if document_types is None else [t for t in DocumentType if t in set(document_types)]
+        wanted = None if document_types is None else set(document_types)
+        types = None if wanted is None else [t for t in DocumentType if t in wanted]
         self.data_changes += [
             DataChange(
                 data_version=self.data_version, input=i, document_types=types if i is DataInput.documents else None
