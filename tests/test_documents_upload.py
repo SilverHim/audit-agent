@@ -1316,16 +1316,12 @@ async def test_edit_statements_line_creates_a_new_version_and_marks_readers_stal
     [
         ("lines[SOFP-OREC].amount_cents", 4900, " ", "MISSING_FIELD"),
         ("lines[SOFP-XXX].amount_cents", 4900, "r", "INVALID_VALUE"),  # 没有该行
-        ("lines[SOFP-OREC].account_codes", "620", "r", "INVALID_VALUE"),  # 映射科目只读
         ("lines[SOFP-OREC].amount_cents", 4853, "r", "INVALID_VALUE"),  # 与当前相同
-        ("lines[SOFP-OREC].amount_cents", "48.53", "r", "INVALID_VALUE"),
-        ("lines[SOFP-OREC].amount_cents", None, "r", "INVALID_VALUE"),  # 本期金额不可空
-        ("prepared_at", "2026-10-32", "r", "INVALID_VALUE"),
-        ("document_id", "DOC-x", "r", "INVALID_VALUE"),
     ],
 )
 async def test_edit_statements_rejects_bad_fields_and_values(field: str, value: Any, reason: str, code: str) -> None:
-    """验收 4: 缺理由 MISSING_FIELD; 字段不认识或只读, 没有该行, 值不合法或与当前相同 INVALID_VALUE; 都不写新版本."""
+    """验收 4: 错误码的映射与 "拒绝时不写新版本": 缺理由 MISSING_FIELD; 没有该行, 与当前相同 INVALID_VALUE (值的校验
+    见 test_statements_edits)."""
     _, service, financial, _ = await extracted_statements()
     with pytest.raises(DataRejected) as rejected:
         await service.edit_financial_statements(EID, ExtractionEdit(field=field, value=value, reason=reason), "U-1")
@@ -1361,22 +1357,20 @@ async def test_edit_statements_needs_the_lock_and_current_statements(case: str) 
     assert len(await financial.statements_history(EID)) == (0 if case == "none" else 1)
 
 
-async def test_statements_follow_the_source_document_type() -> None:
-    """验收 5: 当前版本只取来源文件现在仍登记为 financial_statements 的: 文件改成别的类型后为 None (record 也查不到),
-    改回来又是原来那一版."""
-    _, _, financial, _ = await extracted_statements()
-    evidence = FakeEvidenceStore(financial)
+async def test_current_statements_are_the_latest_version_whatever_the_file_type() -> None:
+    """当前版本即最高版本, 不看来源文件现在登记的类型 (审核 R217-01): 报表文件改成别的类型后财报不变, record 照样
+    取得到, 也不记数据变动; 要换财报就上传正确的那份, 出新一版."""
+    _, service, financial, data = await extracted_statements()
+    changes = list(data.data_changes)
 
-    async def retype(kind: DocumentType) -> None:
-        await evidence.update_document(
-            EID, FS_DOC, type=kind, reliability=Reliability.internal_copy, status="classified", failed_step=None
-        )
+    await service.set_document_type(EID, FS_DOC, DocumentType.other, "误分类", "U-1")
+    await drain(service)
 
-    await retype(DocumentType.other)
-    assert await financial.financial_statements(EID) is None
-    assert await financial.record(EID, "financial_statement_line", "SOFP-OREC") is None
-    await retype(DocumentType.financial_statements)
+    assert document(financial, FS_PDF).type is DocumentType.other
     assert await financial.financial_statements(EID) == FS_V1
+    record = await financial.record(EID, "financial_statement_line", "SOFP-OREC")
+    assert record is not None and record["fs_version"] == 1
+    assert data.data_changes == changes
 
 
 @pytest.mark.parametrize(
@@ -1391,7 +1385,21 @@ async def test_statements_follow_the_source_document_type() -> None:
         ("lines[PL-REV].amount_cents", True, "须为整数分"),
         ("prepared_at", None, "须为 YYYY-MM-DD 日期"),
         ("lines[PL-REV].sign", 1, "不能改 lines[PL-REV].sign"),
-        ("comparative_restatement_entry_nos", "XJ-398", "不能改 comparative_restatement_entry_nos"),
+        # 两个列表写成逗号分隔的文本 (审核 R217-02): 各项去空白, 空串为空列表; 有空项, 重复或不是文本拒绝
+        ("lines[SOFP-OREC].account_codes", " 620 , 621", ("SOFP-OREC", "account_codes", ["620", "621"])),
+        ("lines[CE-OCI].account_codes", "960", ("CE-OCI", "account_codes", ["960"])),
+        ("lines[SOFP-OREC].account_codes", "", ("SOFP-OREC", "account_codes", [])),
+        (
+            "comparative_restatement_entry_nos",
+            "XJ-397, XJ-398",
+            ("comparative_restatement_entry_nos", ["XJ-397", "XJ-398"]),
+        ),
+        ("comparative_restatement_entry_nos", " ", ("comparative_restatement_entry_nos", [])),
+        ("lines[SOFP-OREC].account_codes", "620,,621", "account_codes 有空的一项"),
+        ("lines[SOFP-OREC].account_codes", "620,620", "account_codes 重复: 620"),
+        ("lines[SOFP-OREC].account_codes", 620, "须为逗号分隔的文本"),
+        ("lines[SOFP-OREC].account_codes", "620", "与当前值相同"),
+        ("comparative_restatement_entry_nos", "XJ-397", "与当前值相同"),
     ],
 )
 def test_statements_edits(field: str, value: Any, expected: tuple[Any, ...] | str) -> None:

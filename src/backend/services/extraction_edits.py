@@ -37,17 +37,19 @@ REGISTRY_FIELDS = (
     "officeholders[n].appointed",
 )
 OFFICEHOLDER_FIELD = re.compile(r"^officeholders\[(\d+)\]\.(name|role|appointed)$")
-# 待审财报可改的字段 (需求 R217): 编制日, 董事声明日与各行的名称和金额; 行以行代码指定, 如
-# lines[SOFP-OREC].amount_cents, 只改不增删. 报表, 符号, 小计标记是行的结构, 不改; 映射科目与比较数凭证号是列表,
-# ExtractionEdit 的值只有文本, 整数与空, 本版只读
+# 待审财报可改的字段 (需求 R217): 编制日, 董事声明日, 比较数凭证号与各行的名称, 金额和映射科目; 行以行代码指定, 如
+# lines[SOFP-OREC].amount_cents, 只改不增删. 报表, 符号, 小计标记是行的结构, 不改. 两个列表 (比较数凭证号, 映射科目)
+# 的值写成逗号分隔的文本 (ExtractionEdit 的值只有文本, 整数与空), 如 "620,621", 空串为空列表
 STATEMENTS_FIELDS = (
     "prepared_at",
     "directors_declaration_date",
+    "comparative_restatement_entry_nos",
     "lines[code].name",
     "lines[code].amount_cents",
     "lines[code].prior_amount_cents",
+    "lines[code].account_codes",
 )
-LINE_FIELD = re.compile(r"^lines\[([^\]]+)\]\.(name|amount_cents|prior_amount_cents)$")
+LINE_FIELD = re.compile(r"^lines\[([^\]]+)\]\.(name|amount_cents|prior_amount_cents|account_codes)$")
 REGISTRY_STATUS = ("Registered", "Deregistered")
 ROLES = ("director", "secretary")
 TERM_FIELD = re.compile(r"^terms\[(\d+)\]\.(text|term_type)$")
@@ -217,6 +219,21 @@ def apply_registry_edit(extraction: RegistryExtraction, field: str, value: Any) 
     return extraction.model_copy(update={field: new})
 
 
+def list_value(value: Any, field: str) -> list[str]:
+    """逗号分隔的文本转成列表: 各项去首尾空白, 整个为空串 (或只有空白) 为空列表; 有空项或重复 INVALID_VALUE."""
+    if not isinstance(value, str):
+        raise invalid(f"{field} 须为逗号分隔的文本, 空串为空列表")
+    if not value.strip():
+        return []
+    items = [item.strip() for item in value.split(",")]
+    if any(not item for item in items):
+        raise invalid(f"{field} 有空的一项")
+    repeated = sorted({item for item in items if items.count(item) > 1})
+    if repeated:
+        raise invalid(f"{field} 重复: {', '.join(repeated)}")
+    return items
+
+
 def apply_statements_edit(statements: FinancialStatements, field: str, value: Any) -> FinancialStatements:
     """待审财报改一个字段后的内容 (需求 R217; 版本号由调用方定, 接在已有版本之后). 字段不认识, 没有该行代码, 值不合法
     或与当前相同抛 DataRejected(INVALID_VALUE)."""
@@ -228,6 +245,8 @@ def apply_statements_edit(statements: FinancialStatements, field: str, value: An
             raise invalid(f"待审财报没有行 {code}")
         if part == "name":
             new: Any = text_value(value, field)
+        elif part == "account_codes":
+            new = list_value(value, field)
         else:
             new = cents_value(value, field, optional=part == "prior_amount_cents")
         line = statements.lines[index]
@@ -241,6 +260,8 @@ def apply_statements_edit(statements: FinancialStatements, field: str, value: An
         new = date_value(value, field, optional=False)
     elif field == "directors_declaration_date":
         new = date_value(value, field, optional=True)
+    elif field == "comparative_restatement_entry_nos":
+        new = list_value(value, field)
     else:
         raise invalid(f"待审财报不能改 {field}; 可改: {', '.join(STATEMENTS_FIELDS)}")
     if getattr(statements, field) == new:

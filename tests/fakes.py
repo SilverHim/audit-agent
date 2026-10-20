@@ -846,9 +846,8 @@ class FakeFinancialStore:
         return found
 
     async def financial_statements(self, eid: str) -> FinancialStatements | None:
-        """同真实实现: 来源文件现在登记为 financial_statements 的各版中版本最高的."""
-        sources = {d.id for d in self.document_refs if d.type is DocumentType.financial_statements}
-        found = [r for r in self.statement_versions if r.data.get("document_id") in sources]
+        """同真实实现: 版本最高的一版, 不看来源文件现在登记的类型."""
+        found = self.statement_versions
         return FinancialStatements.model_validate(found[-1].data) if found else None
 
     async def save_financial_statements(

@@ -307,11 +307,8 @@ class PostgresFinancialDataStore(Store):
 
     async def financial_statements(self, eid: str) -> FinancialStatements | None:
         fs, lines = m.financial_statements, m.financial_statement_lines
-        sources = select(m.documents.c.id).where(m.documents.c.type == DocumentType.financial_statements)
         async with transaction(self.engine, eid):
-            heads = await self.rows(
-                eid, select(fs).where(fs.c.document_id.in_(sources)).order_by(fs.c.version.desc()).limit(1)
-            )
+            heads = await self.rows(eid, select(fs).order_by(fs.c.version.desc()).limit(1))
             if not heads:
                 return None
             head = heads[0]

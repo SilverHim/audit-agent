@@ -206,7 +206,7 @@ account_category_history = table(
     ("account_code", "version"),
 )
 # 待审财报 (需求 R217, 迁移 0019): 每版一行, 各行另表 (按 line_no 为列示顺序); A3 从上传的财务报表抽取与审计师修改
-# 各写一版, 旧版本不删. 当前版本由 FinancialDataStore.financial_statements 按来源文件的登记选
+# 各写一版, 旧版本不删. 当前版本为每个项目 version 最高的一版 (FinancialDataStore.financial_statements)
 financial_statements = table(
     "financial_statements",
     "id:s version:i prepared_at:d directors_declaration_date:d document_id:s comparative_restatement_entry_nos:j",

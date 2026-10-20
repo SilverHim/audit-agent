@@ -875,9 +875,11 @@ export const evidenceGetFinancialStatementsOptions = (options: Options<EvidenceG
 /**
  * Edit Financial Statements
  *
- * 修改待审财报的抽取结果, 返回新的一版. field 为 prepared_at, directors_declaration_date, lines[行代码].name,
- * lines[行代码].amount_cents, lines[行代码].prior_amount_cents (如 lines[SOFP-OREC].amount_cents). 还没有待审财报
- * 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 没有该行, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
+ * 修改待审财报的抽取结果, 返回新的一版. field 为 prepared_at, directors_declaration_date,
+ * comparative_restatement_entry_nos, lines[行代码].name, lines[行代码].amount_cents, lines[行代码].prior_amount_cents,
+ * lines[行代码].account_codes (如 lines[SOFP-OREC].amount_cents); 两个列表的值写成逗号分隔的文本 (如 "620,621",
+ * 空串为空列表). 还没有待审财报 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 没有该行, 与当前相同 422
+ * INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditFinancialStatementsMutation = (options?: Partial<Options<EvidenceEditFinancialStatementsData>>): UseMutationOptions<EvidenceEditFinancialStatementsResponse, EvidenceEditFinancialStatementsError, Options<EvidenceEditFinancialStatementsData>> => {
     const mutationOptions: UseMutationOptions<EvidenceEditFinancialStatementsResponse, EvidenceEditFinancialStatementsError, Options<EvidenceEditFinancialStatementsData>> = {
