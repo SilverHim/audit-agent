@@ -1,0 +1,39 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_210.pdf (现行编译版, Compilation 8) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行.
+standard: ASA 210
+title: Agreeing the Terms of Audit Engagements
+compiled: "2025-12-02"   # Compilation Number 8
+fragments:
+  - id: ASA210-P06
+    paragraph: "6"
+    topic: preconditions_for_an_audit
+    text: |
+      In order to establish whether the preconditions for an audit are present, the auditor shall:
+      (a) Determine whether the financial reporting framework to be applied in the preparation of the financial report is acceptable; and
+      (b) Obtain the agreement of management that it acknowledges and understands its responsibility:
+      (i) For the preparation of the financial report in accordance with the applicable financial reporting framework, including where relevant their fair presentation;
+      (ii) For such internal control as management determines is necessary to enable the preparation of the financial report that is free from material misstatement, whether due to fraud or error; and
+      (iii) To provide the auditor with:
+      a. Access to all information of which management is aware that is relevant to the preparation of the financial report such as records, documentation and other matters;
+      b. Additional information that the auditor may request from management for the purpose of the audit; and
+      c. Unrestricted access to persons within the entity from whom the auditor determines it necessary to obtain audit evidence.
+    procedures: [ACC-08]
+  - id: ASA210-P08
+    paragraph: "8"
+    topic: preconditions_not_present
+    text: |
+      If the preconditions for an audit are not present, the auditor shall discuss the matter with management. Unless required by law or regulation to do so, the auditor shall not accept the proposed audit engagement:
+      (a) If the auditor has determined that the financial reporting framework to be applied in the preparation of the financial report is unacceptable, except as provided in paragraph 19 of this Auditing Standard; or
+      (b) If the agreement referred to in paragraph 6(b) of this Auditing Standard has not been obtained.
+    procedures: [ACC-08]
+  - id: ASA210-P10
+    paragraph: "10"
+    topic: engagement_letter_contents
+    text: |
+      Subject to paragraph 11 of this Auditing Standard, the agreed terms of the audit engagement shall be recorded in an audit engagement letter or other suitable form of written agreement and shall include:
+      (a) The objective and scope of the audit of the financial report;
+      (b) The responsibilities of the auditor;
+      (c) The responsibilities of management;
+      (d) Identification of the applicable financial reporting framework for the preparation of the financial report; and
+      (e) Reference to the expected form and content of any reports to be issued by the auditor and a statement that there may be circumstances in which a report may differ from its expected form and content.
+    procedures: [ACC-08]

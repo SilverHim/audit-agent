@@ -1,0 +1,13 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_710.pdf (现行编译版, Compilation 5) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用. 第 14 段首句末 "report" 后的上标脚注号 (4) 按
+# 抽取规则去掉.
+standard: ASA 710
+title: Comparative Information-Corresponding Figures and Comparative Financial Reports
+compiled: "2023-03-22"   # Compilation number 5
+fragments:
+  - id: ASA710-P14
+    paragraph: "14"
+    topic: prior_period_unaudited
+    text: |
+      If the prior period financial report was not audited, the auditor shall state in an Other Matter paragraph in the auditor’s report that the corresponding figures are unaudited. Such a statement does not, however, relieve the auditor of the requirement to obtain sufficient appropriate audit evidence that the opening balances do not contain misstatements that materially affect the current period’s financial report.
+    procedures: [PLN-15]
