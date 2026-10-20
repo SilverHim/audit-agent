@@ -7,7 +7,9 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from langgraph.types import Command
+from pydantic import ValidationError
 
+from backend.api.schemas import ReviewRecordIn
 from backend.contracts.errors import DecisionRejected, RuleError, VersionConflict
 from backend.contracts.models import (
     Assertion,
@@ -1007,3 +1009,22 @@ def test_consultation_kept_and_trailed_only_when_consulted(
     payload = review_trail(EID, decision, task, []).payload
     expected = {"consulted": True, "consultation_record": kept} if trailed else {}
     assert {k: payload[k] for k in ("consulted", "consultation_record") if k in payload} == expected
+
+
+# ── R153: 复核停留时长 (功能 collab), 从该复核人对该任务最近一次呈递起算 ──
+
+BA01 = "T-J-CSH-02-1-BA-01-v1"
+
+
+def test_dwell_fields_are_not_taken_from_the_request() -> None:
+    """R153 验收 1: 请求体 ReviewRecordIn 带 dwell_seconds 或 presentation_id 即不过 (接口 422); 没有这两项的旧决定
+    JSON 照常读出, 两项为空."""
+    body = {"task_id": BA01, "target_version": 1, "decision": "confirm"}
+    ReviewRecordIn.model_validate(body)
+    for extra in ({"dwell_seconds": 95}, {"presentation_id": "TR-1"}):
+        with pytest.raises(ValidationError):
+            ReviewRecordIn.model_validate(body | extra)
+    old = {
+        k: v for k, v in record(BA01).model_dump(mode="json").items() if k not in ("dwell_seconds", "presentation_id")
+    }
+    assert (lambda r: (r.dwell_seconds, r.presentation_id))(ReviewRecord.model_validate(old)) == (None, None)

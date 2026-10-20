@@ -912,6 +912,11 @@ class ReviewRecord(Versioned):
     )
     consulted: bool = False  # 仲裁时是否在系统外咨询过 (ASQM 1); 已咨询本身不是处置, 裁决仍是三值之一 (需求 R150)
     consultation_record: str | None = None  # 咨询对象与结论; consulted 为真时必填 (功能 collab 打开时校验)
+    # 复核停留时长 (需求 R153, 功能 collab 打开时): 服务端在校验通过后, 写入前按复核人对该任务最近一次呈递算
+    # (services/presentation.dwell_seconds), 不收请求体的; 没有呈递或 collab 关闭时两项都为空. presentation_id 为起算的
+    # 那行 presentation 留痕, 与秒数一起进 decision 留痕; 恢复补写留痕时取这两项, 不重算
+    dwell_seconds: int | None = None
+    presentation_id: str | None = None
     reviewed_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间
 

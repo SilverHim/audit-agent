@@ -3896,6 +3896,14 @@ export type ReviewRecord = {
      */
     consultation_record?: string | null;
     /**
+     * Dwell Seconds
+     */
+    dwell_seconds?: number | null;
+    /**
+     * Presentation Id
+     */
+    presentation_id?: string | null;
+    /**
      * Reviewed By
      */
     reviewed_by: string;
@@ -3908,7 +3916,8 @@ export type ReviewRecord = {
 /**
  * ReviewRecordIn
  *
- * 复核决定请求体: 去掉 id, version, reviewed_by, decided_at.
+ * 复核决定请求体: 去掉 id, version, reviewed_by, decided_at, 以及服务端算的 dwell_seconds, presentation_id
+ * (需求 R153).
  */
 export type ReviewRecordIn = {
     /**

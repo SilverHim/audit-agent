@@ -11555,6 +11555,28 @@
             ],
             "title": "Consultation Record"
           },
+          "dwell_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dwell Seconds"
+          },
+          "presentation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presentation Id"
+          },
           "reviewed_by": {
             "type": "string",
             "title": "Reviewed By"
@@ -11690,7 +11712,7 @@
           "decision"
         ],
         "title": "ReviewRecordIn",
-        "description": "复核决定请求体: 去掉 id, version, reviewed_by, decided_at."
+        "description": "复核决定请求体: 去掉 id, version, reviewed_by, decided_at, 以及服务端算的 dwell_seconds, presentation_id\n(需求 R153)."
       },
       "ReviewStatus": {
         "type": "string",
