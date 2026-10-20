@@ -770,6 +770,7 @@ def test_audit_plan_fields_and_defaults() -> None:
     assert (plan.eqr_required, plan.eqr_basis, plan.auditor_expert_not_required) == (None, None, None)
     assert (plan.addresses_decision_id, plan.revision_reason, plan.approved_by, plan.approved_at) == (None,) * 4
     assert plan.materiality_choice.basis == "revenue" and plan.timetable[0].due == date(2026, 8, 14)
+    assert [x.section for x in plan.narrative] == ["overall_strategy", "scope", "significant_risks", "materiality"]
     dumped = plan.model_dump()
     minimal = {
         k: v for k, v in dumped.items() if k not in {"status", "applicable_framework", "engagement_letter_document_id"}
@@ -790,13 +791,14 @@ def test_audit_plan_fields_and_defaults() -> None:
         ({"approved_by": "U-1"}, "草稿的批准确认与批准人须为空"),
         ({"eqr_required": False}, "草稿的批准确认与批准人须为空"),
         ({"status": "approved"}, "已批准的计划须有三项确认, 批准人与批准时间"),
+        ({"narrative": [{"section": "scope", "text": "a"}, {"section": "scope", "text": "b"}]}, "段名重复"),
         ({"applicable_framework": "unknown"}, "applicable_framework"),
         ({"applicable_framework": "special_purpose"}, "applicable_framework"),  # 特殊目的写作 spfr (ReportingFramework)
     ],
 )
 def test_audit_plan_rejects_inconsistent_fields(change: dict, message: str) -> None:
-    """验收 1, 2: ID 与修订号不符, 修订号小于 1, 草稿带批准的项, 已批准缺批准的项, 框架不是 ReportingFramework 的
-    取值 (同 TERMS) 时抛错."""
+    """验收 1, 2: ID 与修订号不符, 修订号小于 1, 草稿带批准的项, 已批准缺批准的项, 叙述段名重复, 框架不是
+    ReportingFramework 的取值 (同 TERMS) 时抛错. 改版须经 model_validate (model_copy 不跑这些校验)."""
     with pytest.raises(ValidationError, match=message):
         AuditPlan.model_validate({**audit_plan().model_dump(), **change})
 

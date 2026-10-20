@@ -862,7 +862,7 @@ class PlanItem(Model):
 
 
 class ProcedureNote(Model):
-    """一条程序计划的性质, 时间与范围 (ASA 300 第 9(b) 段)."""
+    """一条程序计划的性质, 时间与范围 (ASA 300 第 9(c) 段: 认定层次的进一步审计程序)."""
 
     procedure_id: str  # 程序编号, 须在计划的 items 中
     nature_timing_extent: str  # 性质, 时间与范围的说明
@@ -882,29 +882,40 @@ class EqrRecommendation(Model):
     basis: str  # 依据
 
 
+class PlanSection(Model):
+    """计划叙述的一段. 用列表保段序: 存进 JSONB 的字典不保留键序."""
+
+    section: str  # 段名, 如 overall_strategy, scope, significant_risks
+    text: str  # 正文
+
+
 class AuditPlan(Versioned):
-    """总体审计计划 (A4 PLN-15 起草, PLN-15 闸门批准, 需求 R203; 规格书 12.2 AuditPlan). ID 为 PLAN-{revision}.
-    内容修订 (PLN-15 驳回后重拟, PLN-19 修订重要性) 出下一修订 PLAN-{n+1}, 旧修订出新版本置 superseded; 同一修订内
-    只有状态变化出新版本 (draft → approved → superseded). 当前计划为 status 不是 superseded 的修订中 revision 最大的.
-    计划骨架 (期间, 重要性, 特别风险目标, items) 由 A4 在 PLN-15 中确定性组装, 叙述类各项取 AuditPlanDraft."""
+    """总体审计计划 (需求 R203; 规格书 12.2 AuditPlan). ID 为 PLAN-{revision}. A4 在 PLN-15 中起草 (第 1 修订与
+    PLN-15 驳回后的重拟); A1 写闸门效果: PLN-15 批准出 approved 新版本 (R205), PLN-19 带 materiality 的通过直接建出
+    下一修订 (approved, R210). 内容修订一律出下一修订 PLAN-{n+1}, 旧修订出新版本置 superseded; 同一修订内只有状态
+    变化出新版本 (draft → approved → superseded). 当前计划为 status 不是 superseded 的修订中 revision 最大的.
+    计划骨架 (期间, 重要性, 特别风险目标, items) 由 A4 在 PLN-15 中确定性组装, 叙述类各项取 AuditPlanDraft.
+    出新版本或新修订须经校验构造, 如 AuditPlan.model_validate({**plan.model_dump(), **update}): model_copy 不跑
+    approval_fields, 不合规的版本会在之后读回时才报错."""
 
     revision: int = Field(ge=1)  # 第几次修订, 从 1 起
     status: PlanStatus = PlanStatus.draft  # 状态
-    # 写出这一版的那次执行: 起草新修订与把旧修订置 superseded 都记做这件事的执行 (合并时须为本次执行,
-    # merge.check_own_run); 批准由 A1 在 PLN-15 闸门写出, 沿用
+    # 内容来自哪次执行: A4 写出的版本 (起草新修订, 把旧修订置 superseded) 记本次执行 (合并时须为本次执行,
+    # merge.check_own_run); A1 写出的 (PLN-15 批准的新版本, PLN-19 修订建出的新修订与旧修订的 superseded 版)
+    # 沿用所依据的那一版的 run_id, 不另起执行
     run_id: str
     period_start: date  # 审计期间起
     period_end: date  # 审计期间止
     # 适用的财务报告框架, 取约定书核对结果 TERMS 的 framework (同为 ReportingFramework); 没有 TERMS 或约定书没写明为空
     applicable_framework: ReportingFramework | None = None
     engagement_letter_document_id: str | None = None  # 约定书的文件 ID, 同取 TERMS; 没有为空
-    materiality_choice: "MaterialityChoice"  # PLN-01/03 闸门选定的基准与比例
+    materiality_choice: "MaterialityChoice"  # PLN-01/03 闸门选定的基准与比例; PLN-19 修订出的修订为修订后的
     materiality_cents: int  # 整体重要性, 单位分
     performance_materiality_cents: int  # 执行重要性, 单位分
     clearly_trivial_cents: int  # 明显微小门槛, 单位分
     significant_risk_objective_ids: list[str] = []  # 风险等级为 significant 的审计目标
     items: list[PlanItem]  # 计划的程序, 按程序编号排序
-    narrative: dict[str, str]  # 段名 → 正文: AuditPlanDraft 的 overall_strategy 与 sections
+    narrative: list[PlanSection]  # 叙述各段, 按显示顺序: AuditPlanDraft 的 overall_strategy 在首, 其后为 sections
     procedure_notes: list[ProcedureNote]  # 各程序的性质, 时间与范围
     timetable: list[Milestone]  # 时间表
     eqr_recommendation: EqrRecommendation  # 项目质量复核的建议
@@ -915,14 +926,16 @@ class AuditPlan(Versioned):
     eqr_required: bool | None = None
     eqr_basis: str | None = None
     auditor_expert_not_required: bool | None = None
-    addresses_decision_id: str | None = None  # 本修订回应的 PLN-15 驳回决定; PLN-19 修订与第 1 修订为空
-    revision_reason: str | None = None  # 修订的理由 (驳回理由, 或 PLN-19 修订重要性的理由); 第 1 修订为空
+    # 本修订回应的决定: PLN-15 驳回 (A4 重拟), 或 PLN-19 带 materiality 的通过 (A1 建修订, 如 D-RE19); 第 1 修订为空
+    addresses_decision_id: str | None = None
+    revision_reason: str | None = None  # 修订的理由, 取所回应决定的 reason; 第 1 修订为空
     approved_by: str | None = None  # 批准人的用户 ID
     approved_at: datetime | None = None  # 批准时间
 
     @model_validator(mode="after")
     def approval_fields(self) -> Self:
-        """ID 为 PLAN-{revision}; 草稿时确认三项与批准人, 批准时间都为空, 已批准时都填, 已取代的沿用取代前的, 不查."""
+        """ID 为 PLAN-{revision}; 草稿时确认三项与批准人, 批准时间都为空, 已批准时都填, 已取代的沿用取代前的, 不查;
+        叙述的段名不重复."""
         if self.id != f"PLAN-{self.revision}":
             raise ValueError(f"{self.id}: 计划的 ID 须为 PLAN-{self.revision} (第 {self.revision} 修订)")
         values = (
@@ -936,6 +949,9 @@ class AuditPlan(Versioned):
             raise ValueError(f"{self.id}: 草稿的批准确认与批准人须为空")
         if self.status is PlanStatus.approved and any(v is None for v in values):
             raise ValueError(f"{self.id}: 已批准的计划须有三项确认, 批准人与批准时间")
+        names = [s.section for s in self.narrative]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{self.id}: 叙述的段名重复: {sorted({n for n in names if names.count(n) > 1})}")
         return self
 
 

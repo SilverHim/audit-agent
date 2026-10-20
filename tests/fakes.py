@@ -129,6 +129,7 @@ from backend.contracts.models import (
     Phase,
     PlanConfirmation,
     PlanItem,
+    PlanSection,
     PlanStatus,
     Procedure,
     ProcedureNote,
@@ -2929,7 +2930,12 @@ def audit_plan(
                 params={"window_days": 20, "period_end": "2026-06-30"},
             ),
         ],
-        narrative={"overall_strategy": "Substantive audit of revenue and cash.", "scope": "Year ended 30 June 2026."},
+        narrative=[
+            PlanSection(section="overall_strategy", text="Substantive audit of revenue and cash."),
+            PlanSection(section="scope", text="Year ended 30 June 2026."),
+            PlanSection(section="significant_risks", text="Presumed fraud risk in revenue recognition."),
+            PlanSection(section="materiality", text="1% of revenue."),
+        ],
         procedure_notes=[
             ProcedureNote(procedure_id="DOC-06", nature_timing_extent="Extract every bank confirmation reply."),
             ProcedureNote(procedure_id="REV-08", nature_timing_extent="Match all invoices in the last 20 days."),

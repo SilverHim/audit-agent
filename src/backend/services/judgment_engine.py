@@ -15,7 +15,6 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
-    AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
@@ -664,14 +663,6 @@ async def check_critic(
     return CheckResult(checked, None, unsupported, errors, notes)
 
 
-async def check_plan(
-    validator: OutputValidator, eid: str, output: AuditPlanDraft, ctx: ValidationContext
-) -> CheckResult:
-    """PLN-15 的计划叙述 (需求 R203 建模型, 本函数先占位登记): 引用 (standards_cited 只能取模板 standards) 与语义
-    (procedure_notes 覆盖计划的全部程序, 时间表不早于期末, 必备各段, EQR 建议有依据) 由 R204 实现."""
-    raise NotImplementedError("AuditPlanDraft 的引用与语义校验 (需求 R204)")
-
-
 async def structure_only(
     validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
 ) -> CheckResult:
@@ -692,7 +683,6 @@ for _model, _check in (
     (RegistryExtraction, check_extraction),
     (ReportDraft, check_report),
     (CriticIndependent, check_critic),
-    (AuditPlanDraft, check_plan),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),

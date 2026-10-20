@@ -592,8 +592,8 @@ async def test_engagement_terms_round_trip_on_postgres(storage) -> None:
 
 async def test_audit_plan_versions_on_postgres(storage) -> None:  # type: ignore[no-untyped-def]
     """R203 验收 6: PLAN-1 v1 (draft), v2 (approved) 写进 gate_materials 表 (与评分卡等同表, kind 区分, 不需迁移);
-    按版本 get 读回与写入的相等, 仍是 AuditPlan, 状态仍是枚举, 时间表日期仍是 date; 最新为 v2; 同表的其他种类读不到它,
-    别的项目也读不到 (行级安全)."""
+    按版本 get 读回与写入的相等, 仍是 AuditPlan, 状态仍是枚举, 时间表日期仍是 date, 叙述的段序不变 (JSONB 不保留
+    字典键序, 叙述用列表); 最新为 v2; 同表的其他种类读不到它, 别的项目也读不到 (行级安全)."""
     engine, e, _, _ = storage
     store = PostgresAuditOutputStore(engine)
     v1, v2 = audit_plan(), audit_plan(version=2, status=PlanStatus.approved)
@@ -605,6 +605,8 @@ async def test_audit_plan_versions_on_postgres(storage) -> None:  # type: ignore
     back = await store.get(e.id, AuditPlan, "PLAN-1", 2)
     assert back == v2 and type(back) is AuditPlan and back.status is PlanStatus.approved
     assert isinstance(back.timetable[0].due, date) and back.approved_at == v2.approved_at
+    # 叙述的段序经 JSONB 存取不变 (审核意见 R203-02: 段序由列表定, 不靠字典键序)
+    assert [x.section for x in back.narrative] == ["overall_strategy", "scope", "significant_risks", "materiality"]
     assert await store.get(e.id, AuditPlan, "PLAN-1") == v2
     assert await store.history(e.id, AuditPlan, "PLAN-1") == [v1, v2]
     assert await store.latest(e.id, AuditPlan) == [v2]
