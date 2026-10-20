@@ -11,7 +11,7 @@
 """
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +26,7 @@ from backend.contracts.models import (
     StepStatus,
 )
 from backend.services.procedure_library import ProcedureLibrary
+from backend.services.review_queue import explained_exceptions
 
 LEVELS = list(AutonomyLevel)  # 由低到高: L1 < L2 < L3 < L4; 下标 0 即下限 L1
 # 装配看的风险等级 → 条件; 其余等级不降级
@@ -104,13 +105,14 @@ def judgment_level(
     *,
     amount: int | None,
     performance_cents: int | None,
-    exceptions: Sequence[AuditException] = (),
+    exceptions: Mapping[str, AuditException],
 ) -> AutonomyDecision:
     """判断时的级别: 起点为程序的运行时级别 (procedure.autonomy_level), 理由先列程序装配时的
     (procedure.downgrade_reasons), 再列判断时命中的.
 
     amount: 判断金额 (review_queue.judgment_amount, 与复核档位同一口径); performance_cents: 执行重要性, 未定
-    (PLN-01/03 之前) 为 None, 此时 amount_over_pm 不适用. exceptions: 判断解释的例外 (看所属规则是否标 fraud_flag).
+    (PLN-01/03 之前) 为 None, 此时 amount_over_pm 不适用. exceptions: 例外 ID -> 当前版本, 与 judgment_amount 同一
+    入参; 只看判断解释的 (review_queue.explained_exceptions, 按 exception_ids 取) 所属规则是否标 fraud_flag.
     """
     hit = {
         DowngradeCondition.amount_over_pm: performance_cents is not None
@@ -123,7 +125,7 @@ def judgment_level(
         DowngradeCondition.fraud_flag: bool(
             judgment.misstatement_update is not None and judgment.misstatement_update.fraud_indicative
         )
-        or any((x.procedure_id, x.rule_id) in policy.fraud_rules for x in exceptions),
+        or any((x.procedure_id, x.rule_id) in policy.fraud_rules for x in explained_exceptions(judgment, exceptions)),
     }
     hits = [r for r in policy.table(template, "judgment") if hit[r.condition]]
     reasons = [*procedure.downgrade_reasons, *(r.condition for r in hits)]

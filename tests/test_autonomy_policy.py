@@ -5,6 +5,7 @@
 """
 
 import dataclasses
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -110,11 +111,22 @@ def decide(
     pm: int | None = PM,
     exceptions: list[AuditException] | None = None,
     policy: AutonomyPolicy = POLICY,
+    template: ProcedureTemplate | None = None,
 ) -> tuple[AutonomyLevel, list[DowngradeCondition]]:
+    by_id = {x.id: x for x in exceptions or []}
     d = judgment_level(
-        policy, template_of(pid), start, j, amount=amount, performance_cents=pm, exceptions=exceptions or []
+        policy, template or template_of(pid), start, j, amount=amount, performance_cents=pm, exceptions=by_id
     )
     return d.level, d.reasons
+
+
+def update(misstatement_id: str, **fields: Any) -> MisstatementUpdate:
+    kind = "verification" if "status" in fields else "classification"
+    return MisstatementUpdate(misstatement_id=misstatement_id, base_version=1, kind=kind, **fields)
+
+
+UNSUPPORTED_CHAIN = [ReasoningStep(kind=StepKind.fact, text="x", status=StepStatus.unsupported)]
+SAYS_FRAUD = update("M-1", fraud_indicative=True)  # FIN-03 认定的舞弊迹象
 
 
 # ── 验收 1: 默认表 ──
@@ -160,6 +172,21 @@ def test_assembly_level_with_xero_objectives(
     assert decision == AutonomyDecision(level, reasons)
 
 
+@pytest.mark.parametrize(
+    ("risk", "expected"),
+    [
+        (RiskLevel.significant, AutonomyDecision(L2, [SIG])),
+        (RiskLevel.high, AutonomyDecision(L3, [HIGH])),
+        (RiskLevel.medium, AutonomyDecision(L4, [])),
+        (RiskLevel.low, AutonomyDecision(L4, [])),
+        (None, AutonomyDecision(L4, [])),
+    ],
+)
+def test_assembly_level_by_risk(risk: RiskLevel | None, expected: AutonomyDecision) -> None:
+    """每个风险等级: 只有 significant 与 high 降级, medium, low 与没有关联目标取模板级别 (CSH-04 L4)."""
+    assert assembly_level(POLICY, LIBRARY.load("CSH-04"), risk) == expected
+
+
 # ── 验收 3: 下限 L1, 只有级别与理由 ──
 
 
@@ -170,8 +197,7 @@ def test_floor_is_l1_and_every_hit_is_listed() -> None:
     assert assembled == AutonomyDecision(L1, [SIG])
     start = procedure("REV-02", assembled.level, assembled.reasons)
     assert decide("REV-02", start, judgment(0.6), None) == (L1, [SIG, LOW])
-    chain = [ReasoningStep(kind=StepKind.fact, text="x", status=StepStatus.unsupported)]
-    assert decide("GEN-02", procedure("GEN-02", L2), judgment(0.6, reasoning_chain=chain), None) == (
+    assert decide("GEN-02", procedure("GEN-02", L2), judgment(0.6, reasoning_chain=UNSUPPORTED_CHAIN), None) == (
         L1,
         [LOW, UNSUPPORTED],
     )  # L2 −2 越过下限
@@ -181,51 +207,78 @@ def test_floor_is_l1_and_every_hit_is_listed() -> None:
 # ── 验收 4: 判断级 ──
 
 
-def test_judgment_level_rules() -> None:
-    """起点为程序运行时级别; delta 与目标级规则都可命中, 结果不低于 L1; A7 不一致的判断照常算级别; 执行重要性未定
-    时 amount_over_pm 不适用; 舞弊迹象 (FIN-03 认定 fraud_indicative, 或解释的例外所属规则标 fraud_flag) 直接 L1."""
-    start = procedure("GEN-06", L3)
-    assert decide("GEN-06", start, judgment(0.6), 45000) == (L1, [OVER_PM, LOW])
-    assert decide("GEN-06", start, judgment(0.6), 45000, pm=None) == (L2, [LOW])  # PLN-01/03 之前
-    assert decide("GEN-06", start, judgment(0.9), -45000) == (L1, [OVER_PM])  # 按绝对值比较
-    assert decide("GEN-06", start, judgment(0.9), PM) == (L3, [])  # 等于执行重要性不算超过
-    assert decide("GEN-06", start, judgment(0.70), None) == (L3, [])  # 等于阈值不算低
-    raising = LIBRARY.load("GEN-02").model_copy(
-        update={"downgrade_rules": [DowngradeRule(condition=OVER_PM, at="judgment", target_level=L3)]}
-    )
-    lowered_only = judgment_level(
-        POLICY, raising, procedure("GEN-02", L2), judgment(0.9), amount=45000, performance_cents=PM
-    )
-    assert lowered_only == AutonomyDecision(L2, [OVER_PM])  # 目标级高于当前级别时不升 (只降不升)
-    disputed = judgment(0.6, critic_verdict=CriticVerdict.inconsistent)
-    assert decide("GEN-06", start, disputed, 45000) == decide("GEN-06", start, judgment(0.6), 45000)
+@pytest.mark.parametrize(
+    ("start", "j", "amount", "pm", "over_pm_target", "expected"),
+    [
+        (L3, judgment(0.6), 45000, PM, None, (L1, [OVER_PM, LOW])),
+        (L3, judgment(0.6), 45000, None, None, (L2, [LOW])),  # 执行重要性未定 (PLN-01/03 之前)
+        (L3, judgment(0.9), -45000, PM, None, (L1, [OVER_PM])),  # 按绝对值比较
+        (L3, judgment(0.9), PM, PM, None, (L3, [])),  # 等于执行重要性不算超过
+        (L3, judgment(0.70), None, PM, None, (L3, [])),  # 等于阈值不算低
+        (L4, judgment(0.6, reasoning_chain=UNSUPPORTED_CHAIN), None, PM, None, (L2, [LOW, UNSUPPORTED])),  # delta 相加
+        # 先加 delta 再取不高于 target: L4 −1 = L3, target L3 不更低 (先取 target 会得 L2); 覆盖的条件留在默认表的位置
+        (L4, judgment(0.6), 45000, PM, L3, (L3, [OVER_PM, LOW])),
+        (L2, judgment(0.9), 45000, PM, L3, (L2, [OVER_PM])),  # 目标级高于当前级别时不升
+        # A7 不一致照常算级别 (不一致的判断由 classify 定为争议任务)
+        (L3, judgment(0.9, critic_verdict=CriticVerdict.inconsistent), None, PM, None, (L3, [])),
+        (L2, judgment(0.9, misstatement_update=SAYS_FRAUD), None, PM, None, (L1, [FRAUD])),
+        (L2, judgment(0.9, misstatement_update=update("M-1", fraud_indicative=False)), None, PM, None, (L2, [])),
+        # 理由按规则表的顺序: low_confidence 在 fraud_flag 之前 (按名称排序会反过来)
+        (L4, judgment(0.6, misstatement_update=SAYS_FRAUD), None, PM, None, (L1, [LOW, FRAUD])),
+    ],
+)
+def test_judgment_level_rules(
+    start: AutonomyLevel,
+    j: Judgment,
+    amount: int | None,
+    pm: int | None,
+    over_pm_target: AutonomyLevel | None,
+    expected: tuple[AutonomyLevel, list[DowngradeCondition]],
+) -> None:
+    """起点为程序运行时级别; 命中规则的 delta 相加, target_level 取不高于它, 不低于 L1; 执行重要性未定时
+    amount_over_pm 不适用. over_pm_target: 模板把 amount_over_pm 覆盖为该目标级."""
+    template = LIBRARY.load("GEN-02")
+    if over_pm_target is not None:
+        rule = DowngradeRule(condition=OVER_PM, at="judgment", target_level=over_pm_target)
+        template = template.model_copy(update={"downgrade_rules": [rule]})
+    assert decide("GEN-02", procedure("GEN-02", start), j, amount, pm, template=template) == expected
 
-    fraud = judgment(0.9, misstatement_update=update("M-1", fraud_indicative=True))
-    assert decide("FIN-03", procedure("FIN-03", L2), fraud, None) == (L1, [FRAUD])
-    flagged = AuditException(
-        id="X-GEN-05-1-JE-R01-1",
-        procedure_id="GEN-05",
-        run_id="RUN-GEN-05-1",
-        rule_id="JE-R01",
+
+@pytest.mark.parametrize(
+    ("source", "explained", "marked", "expected"),
+    [
+        ("GEN-05", True, True, (L1, [FRAUD])),  # 判断解释的例外出自标了 fraud_flag 的规则
+        ("GEN-05", False, True, (L2, [])),  # 例外不在判断的 exception_ids 中 (别的判断解释的), 不算
+        ("REV-08", True, True, (L2, [])),  # 别的程序同编号的规则: 按 (程序编号, 规则编号) 认
+        ("GEN-05", True, False, (L2, [])),  # 规则没标 fraud_flag
+    ],
+)
+def test_fraud_flag_from_marked_rules(
+    source: str, explained: bool, marked: bool, expected: tuple[AutonomyLevel, list[DowngradeCondition]]
+) -> None:
+    """RuleSpec.fraud_flag 经 from_rules 收集为 (程序编号, 规则编号); exceptions 与 judgment_amount 同为例外 ID ->
+    例外, 只看判断 exception_ids 中的. 程序 YAML 都没标 fraud_flag, 这里给 GEN-05 的第一条规则标上."""
+    gen05 = LIBRARY.load("GEN-05")
+    rule = gen05.rules[0]
+    if marked:
+        gen05 = gen05.model_copy(update={"rules": [rule.model_copy(update={"fraud_flag": True}), *gen05.rules[1:]]})
+    rules = json.loads((LIBRARY.root / "rules.json").read_text(encoding="utf-8"))
+    policy = AutonomyPolicy.from_rules(rules, [gen05, LIBRARY.load("REV-08")])
+    assert policy.fraud_rules == ({("GEN-05", rule.id)} if marked else set())
+    x = AuditException(
+        id=f"X-{source}-1-{rule.id}-1",
+        procedure_id=source,
+        run_id=f"RUN-{source}-1",
+        rule_id=rule.id,
         severity="high",
         source_ids=[],
         evidence=[],
     )
-    policy = dataclasses.replace(POLICY, fraud_rules=frozenset({("GEN-05", "JE-R01")}))
-    explained = judgment(0.9, exception_ids=[flagged.id])
-    assert decide("GEN-02", procedure("GEN-02", L2), explained, None, exceptions=[flagged], policy=policy) == (
-        L1,
-        [FRAUD],
-    )
-    assert decide("GEN-02", procedure("GEN-02", L2), explained, None, exceptions=[flagged]) == (L2, [])
+    j = judgment(0.9, exception_ids=[x.id] if explained else ["X-GEN-05-1-OTHER-1"])
+    assert decide("GEN-02", procedure("GEN-02", L2), j, None, exceptions=[x], policy=policy) == expected
 
 
 # ── 验收 5: Xero 推导表 ──
-
-
-def update(misstatement_id: str, **fields: Any) -> MisstatementUpdate:
-    kind = "verification" if "status" in fields else "classification"
-    return MisstatementUpdate(misstatement_id=misstatement_id, base_version=1, kind=kind, **fields)
 
 
 def misstatement(misstatement_id: str, amount: int) -> Misstatement:
@@ -270,7 +323,9 @@ XERO_TABLE: list[tuple[str, str, AutonomyLevel, list[DowngradeCondition], int | 
     ("J-GEN-04-1-CLIENT-XERO-3C1332BB-Q1", "GEN-04", L2, [], None, 0.8, (L2, [])),
     ("J-GEN-01-1-CLIENT-XERO-3C1332BB-Q1", "GEN-01", L1, [], None, 0.8, (L1, [])),
     ("J-ACC-08-1-TERMS (闸门程序)", "ACC-08", L1, [], None, 0.8, (L1, [])),
+    ("J-PLN-19-1-* (闸门程序)", "PLN-19", L1, [], None, 0.8, (L1, [])),
     ("J-FIN-15-1-* (F01)", "FIN-15", L2, [], 201000, 0.625, (L1, [OVER_PM, LOW])),
+    ("J-FIN-15-1-* (F03)", "FIN-15", L2, [], 426120, 0.8, (L1, [OVER_PM])),  # 有例外且 misstatement, c_rule 一致
 ]
 # FIN-03 分类与 FIN-09 验证: 判断金额取所指错报 (judgment_amount 第 1 步), 错报 ID 为 M-{决定 ID}
 MISSTATEMENTS = {
@@ -359,6 +414,7 @@ def test_conditions_are_only_the_six_of_this_version() -> None:
         ({"condition": "high_risk", "at": "assembly"}, "恰给一个"),
         ({"condition": "high_risk", "at": "assembly", "delta": -1, "target_level": "L1"}, "恰给一个"),
         ({"condition": "high_risk", "at": "assembly", "delta": 1}, "只降不升"),
+        ({"condition": "high_risk", "at": "assembly", "delta": 0}, "只降不升"),  # 不降级却会记理由
         ({"condition": "high_risk", "at": "judgment", "delta": -1}, "assembly 时看"),
         ({"condition": "first_service", "at": "assembly", "delta": -1}, "condition"),
     ],

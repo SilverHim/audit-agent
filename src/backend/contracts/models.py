@@ -639,7 +639,7 @@ class Judgment(Versioned):
     misstatement_update: MisstatementUpdate | None = None
     exception_ids: list[str] = []  # 本判断解释的例外, 判断确认后这些例外置 attributed
     autonomy_level: AutonomyLevel  # 判断时的有效自主度
-    # 有效自主度由程序运行时级别降下来所命中的条件 (需求 R168, 功能 autonomy): 程序装配时的条件在前, 判断时的在后;
+    # 由模板级别降到有效自主度所命中的条件 (需求 R168, 功能 autonomy): 装配时的在前, 判断时的在后;
     # 没有降级, 功能关闭, 人工建的判断与旧数据为空
     downgrade_reasons: list[DowngradeCondition] = []
     review_status: ReviewStatus = ReviewStatus.pending  # 复核状态

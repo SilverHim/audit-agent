@@ -90,6 +90,12 @@ def row_amount(source_type: str, row: Mapping[str, Any]) -> int | None:
     return int(amount) if amount is not None else None
 
 
+def explained_exceptions(judgment: Judgment, exceptions: Mapping[str, AuditException]) -> list[AuditException]:
+    """判断解释的例外: exception_ids 中的, 顺序同它, 不在 exceptions 中的跳过; exceptions 里别的例外 (如同一执行记录
+    其他判断解释的) 不算. judgment_amount 与自主度判断级降级 (autonomy_policy.judgment_level) 共用这一取法. 纯函数."""
+    return [x for i in judgment.exception_ids if (x := exceptions.get(i)) is not None]
+
+
 def judgment_amount(
     judgment: Judgment,
     exceptions: Mapping[str, AuditException],
@@ -102,19 +108,15 @@ def judgment_amount(
     金额; 3. 判断解释的例外中绝对值最大的金额; 4. 判断对象本身是交易行, 取该行金额 (subject_amount, 由调用方按
     subject_row 读出); 5. 都没有为 None.
 
-    exceptions: 例外 ID -> 当前版本, 须含 exception_ids 中的 (缺的跳过); misstatements: 错报 ID -> 当前版本, 所指错报
-    不在其中时跳过这一步. 纯函数.
+    exceptions: 例外 ID -> 当前版本, 按 explained_exceptions 取 (可以多给, 缺的跳过); misstatements: 错报 ID -> 当前
+    版本, 所指错报不在其中时跳过这一步. 纯函数.
     """
     update = judgment.misstatement_update
     if update is not None and (found := (misstatements or {}).get(update.misstatement_id)) is not None:
         return found.amount_cents
     if judgment.misstatement_draft is not None:
         return judgment.misstatement_draft.amount_cents
-    amounts = [
-        x.amount_cents
-        for i in judgment.exception_ids
-        if (x := exceptions.get(i)) is not None and x.amount_cents is not None
-    ]
+    amounts = [x.amount_cents for x in explained_exceptions(judgment, exceptions) if x.amount_cents is not None]
     if amounts:
         return max(amounts, key=abs)
     return subject_amount

@@ -4,11 +4,13 @@
 "按交易行取金额" 与负数金额用 Xero Demo Company 快照的发票, 分录与银行流水 (本机没有快照时跳过).
 """
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from backend.adapters.xero_dataset import build_tables
+from backend.api.routes.reviews import task_parts
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
@@ -29,7 +31,18 @@ from backend.contracts.models import (
     TaskKind,
 )
 from backend.services.review_queue import judgment_amount, review_tier, row_amount, subject_row, task_amount
-from tests.fakes import ENGAGEMENT, NOW, NUMBAT_CUTOFF_DRAFT, api_client, wait_idle, xero_snapshot
+from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
+    NUMBAT_CUTOFF_DRAFT,
+    FakeOutputStore,
+    FakeRegistry,
+    FakeTrail,
+    api_client,
+    make_deps,
+    wait_idle,
+    xero_snapshot,
+)
 from tests.test_e2e_mock import start_demo
 from tests.test_flow import REVIEWS
 
@@ -134,6 +147,34 @@ def test_judgment_amount_takes_the_updated_misstatement_first() -> None:
     assert judgment_amount(j, exceptions, subject_amount=5, misstatements={found.id: found}) == -426_120
     assert task_amount(j, exceptions, 5, {found.id: found}) == -426_120
     assert judgment_amount(j, exceptions, subject_amount=5) == NUMBAT_CUTOFF_DRAFT.amount_cents  # 没给错报: 跳过
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"), [(True, (9_500_000, ReviewTier.full_review)), (False, (None, ReviewTier.read_reasoning))]
+)
+async def test_review_task_amount_takes_the_updated_misstatement(
+    stored: bool, expected: tuple[int | None, ReviewTier]
+) -> None:
+    """R168 验收 6 的接口接线: 复核任务 (reviews.task_parts) 对 FIN-03 判断取所指错报的当前金额, 超过执行重要性为
+    完整复核; 存储里查不到所指错报时金额为空, 置信度 0.85 为阅读推理链. 不受功能 autonomy 控制."""
+    found = Misstatement(
+        id="M-D-1",
+        judgment_id="J-REV-02-1-SI-2026-0618",
+        exception_id=None,
+        review_record_id="D-1",
+        type=MisstatementType.factual,
+        account="Revenue",
+        assertion="Cutoff",
+        amount_cents=9_500_000,
+        direction=Direction.overstated,
+    )
+    update = MisstatementUpdate(misstatement_id=found.id, base_version=1, kind="classification", objective_id="O")
+    j = judgment(0.85, id="J-FIN-03-1-M-D-1", procedure_id="FIN-03", run_id="RUN-FIN-03-1", misstatement_update=update)
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=FakeOutputStore([found, j] if stored else [j]))
+    on_j = task().model_copy(update={"procedure_id": "FIN-03", "target_id": j.id, "run_id": j.run_id})
+    overview: Any = SimpleNamespace(performance_materiality_cents=PM, clearly_trivial_cents=TRIVIAL, features=[])
+    parts = await task_parts(deps, ENGAGEMENT.id, on_j, {}, overview)  # 只读总览的这三项
+    assert (parts.amount_cents, parts.tier) == expected
 
 
 # ── 复核档位 ──
