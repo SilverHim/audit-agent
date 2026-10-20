@@ -18,6 +18,7 @@ from backend.agents.workpaper import rule_fields
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
+    BLANK,
     AgentId,
     AuditException,
     AuditObjective,
@@ -316,8 +317,9 @@ def with_rule_fields(
 def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
-    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝),
-    没有结果模型时为空. 必填 (reason, manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝;
+    不合的只是必填文字为空白 (NonBlank) 时报 MISSING_FIELD, 需求 R161), 没有结果模型时为空. 必填 (reason,
+    manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
     返回要存下的结果: 证据指针按文件当前登记改写 type 与 reliability (同判断的文件指针), 其余原样.
     例: 页数 2 的文件引第 3 页 → INVALID_VALUE "DOC-0a1b2c3d4e5f: 页码 3 不在 1-2 之间".
     """
@@ -353,7 +355,10 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
     try:
         model.model_validate(result.details)
     except ValidationError as e:
-        fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in e.errors())
+        errors = e.errors()
+        fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in errors)
+        if all(error["type"] == BLANK for error in errors):  # 必填文字为空白 (NonBlank, 需求 R161), 同理由为空
+            raise DecisionRejected("MISSING_FIELD", f"manual_result.details 的必填文字为空: {fields}") from e
         detail = f"manual_result.details 不合 {request.result_model}: {fields}"
         raise DecisionRejected("INVALID_VALUE", detail) from e
     return result.model_copy(update={"evidence": evidence})
@@ -976,15 +981,15 @@ class GraphDecisionSubmit:
         self, eid: str, record: ReviewRecord, task: ReviewTask, target: Versioned | None, snapshot: StateSnapshot
     ) -> None:
         """人工程序的按程序核对 (需求 R93): 调模板 owner 的 ManualHandler.check, 返回问题时拒绝 (INVALID_VALUE,
-        消息为问题原文, 多条以分号连接). 在通用核对之后调, record 为其返回的 (证据指针已按登记改写). 上下文为该程序
-        在检查点中的版本与检查点状态 (节点停在等待, 派发的执行记录与任务只在 Store), run 为派发的那次执行 (任务目标).
-        owner 取 deps.manual_owners."""
+        消息为问题原文, 多条以分号连接; owner 抛的 VersionConflict 由 _deciding 转为 VERSION_MISMATCH, 需求 R161). 在
+        通用核对之后调, record 为其返回的 (证据指针已按登记改写). 上下文为该程序在检查点中的版本与检查点状态 (节点停在
+        等待, 派发的执行记录与任务只在 Store), run 为派发的那次执行 (任务目标). owner 取 deps.manual_owners."""
         assert isinstance(target, ProcedureRun) and record.manual_result is not None  # 通用核对已过
         values = fill_defaults(snapshot.values)
         procedure = next(p for p in values["procedure_pack"] if p.id == task.procedure_id)
         template = self.deps.library.load(task.procedure_id)
         ctx = RunContext(await self._engagement(eid), procedure, template, target, values)
-        problems = self.deps.manual_owners[task.procedure_id].check(ctx, task, record.manual_result)
+        problems = self.deps.manual_owners[task.procedure_id].check(ctx, task, record)
         if problems:
             raise DecisionRejected("INVALID_VALUE", "; ".join(problems))
 

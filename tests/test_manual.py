@@ -133,7 +133,7 @@ LETTER = DocumentRef(  # 审计师已上传的声明书 (2 页, 公司出具的�
 DECIDED_AT = datetime(2026, 10, 23, 5, tzinfo=UTC)  # 悉尼 10-23 16:00
 CALLS: list[tuple[str, str]] = []  # 两个 owner 各步的调用 (步骤, 程序), 每个用例前清空
 CALLERS: list[object] = []  # 与 CALLS 对应的 owner 实例
-CHECKED: list[ManualResult] = []  # ReplyOwner.check 收到的结果
+CHECKED: list[ManualResult] = []  # ReplyOwner.check 收到的决定中的结果
 
 
 class TstLetter(Model):
@@ -176,7 +176,7 @@ class LetterOwner(Owner):
         self.called("prepare", ctx)
         return dict(MATERIAL)
 
-    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]:
+    def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]:
         self.called("check", ctx)
         return []
 
@@ -199,10 +199,11 @@ class ReplyOwner(Owner):
         self.called("prepare", ctx)
         return dict(REPLY_MATERIAL)
 
-    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]:
+    def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]:
         self.called("check", ctx)
-        CHECKED.append(result)
-        return ["amount_cents 不得为负"] if result.details.get("amount_cents", 0) < 0 else []
+        assert record.manual_result is not None
+        CHECKED.append(record.manual_result)
+        return ["amount_cents 不得为负"] if record.manual_result.details.get("amount_cents", 0) < 0 else []
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch:
         self.called("collect", ctx)
@@ -335,11 +336,14 @@ def test_library_rejects_malformed_manual_programs(tmp_path: Path, yaml: str, pr
 
 
 def test_gate_programs_are_not_manual_programs() -> None:
-    """现有五个闸门程序都是 engine manual, 不算人工程序, 没有 manual 段照常加载."""
+    """现有五个闸门程序都是 engine manual, 不算人工程序, 没有 manual 段照常加载; engine manual 的程序里只有 FIN-08
+    (功能 misstatement, 需求 R161) 是人工程序."""
     library = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
-    gates = [t for t in library.all(include_disabled=True) if t.engine == "manual"]
+    engine_manual = [t for t in library.all(include_disabled=True) if t.engine == "manual"]
+    assert [t.id for t in engine_manual if manual_program(t)] == ["FIN-08"]
+    gates = [t for t in engine_manual if not manual_program(t)]
     assert sorted(t.id for t in gates) == ["ACC-01", "FIN-01", "PLN-01", "PLN-03", "RPT-01"]
-    assert not any(manual_program(t) or t.manual is not None for t in gates)
+    assert not any(t.manual is not None for t in gates)
 
 
 # ── R92 验收 2: manual 任务 ──

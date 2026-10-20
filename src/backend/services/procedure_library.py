@@ -7,7 +7,8 @@ import os
 import re
 import subprocess
 import types
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeGuard, Union, get_args, get_origin
 
@@ -39,7 +40,7 @@ from backend.contracts.state import EngagementState
 from backend.services.data_quality import REQUIRED_TABLES
 from backend.services.features import BASELINE, FEATURES, check_features
 
-# 参数 {ref: 名称} 可用的名称. 不带前缀的: 图状态的重要性 (为 None 时不执行) 与项目期间
+# 参数 {ref: 名称} 可用的名称. 不带前缀的: 图状态的重要性 (为 None 时不执行), 项目期间与派生引用 (DERIVED_REFS)
 STATE_REFS = {"materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"}
 ENGAGEMENT_REFS = {"period_start", "period_end"}
 # 带命名空间的: 前缀 → 取值的模型, 写成 {前缀}.{字段}, 字段是嵌套模型 (或可为空的嵌套模型) 时可再往下取 (如
@@ -58,6 +59,19 @@ RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low, medium, high, sig
 SQL_TABLE = re.compile(
     r"\b(" + "|".join(sorted((i.value for i in DataInput), key=len, reverse=True)) + r")\b", re.IGNORECASE
 )
+
+
+def first_misstatement_communicated_at(state: EngagementState) -> datetime | None:
+    """首次发出错报沟通的时间 (需求 R161): 状态中各错报 communicated_at 的最早值; 还没有沟通过的错报为 None (如 P2 中
+    GEN-05 首次执行时). 纯函数."""
+    return min((m.communicated_at for m in state["misstatements"] if m.communicated_at is not None), default=None)
+
+
+# 派生引用 (需求 R161): 名字 → 由图状态算出值的纯函数, 值可为 None 并以 None 执行, None 的语义由引用它的程序处理
+# (如 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行). R174 再加 verified_adjustment_entry_nos
+DERIVED_REFS: dict[str, Callable[[EngagementState], Any]] = {
+    "first_misstatement_communicated_at": first_misstatement_communicated_at,
+}
 
 
 def highest_risk(objectives: Iterable[AuditObjective], objective_ids: Iterable[str]) -> RiskLevel | None:
@@ -227,7 +241,8 @@ class ProcedureLibrary:
         profile: 本项目采用版本的客户画像, profile. 命名空间的 ref 从它取; 为 None 时引用 profile. 抛 ValueError.
             profile. 的取值一律是 JSON 兼容的值 (见 JSON_NAMESPACES), 参数快照经检查点与 Store 读回后与首次执行相等.
         by_risk 参数在 risk_level 为 None 或没有该等级的取值时抛 ValueError.
-        ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; dataset. 的值为 None
+        ref 指向的状态值为 None (如重要性还没经闸门确定) 时抛 ValueError, 不以 None 执行; 派生引用 (DERIVED_REFS)
+        与 dataset. 的值为 None
         时照样以 None 执行; profile. 的值为 None 时 (含路径中途为 None) 抛 ValueError ("<字段路径> 尚未确定"), 写了
         optional: true 时以 None 执行; 写法不对 (见 ref_param_problem) 抛 KeyError.
         字面量与取自声明的值深拷贝, 取自画像的值是新建的 JSON 兼容值, 改返回值不会改到模板, 声明与画像.
@@ -250,6 +265,8 @@ class ProcedureLibrary:
                     raise KeyError(f"{template.id}.{key}: {problem}")
                 if ref in ENGAGEMENT_REFS:
                     out[key] = getattr(engagement, ref)
+                elif ref in DERIVED_REFS:
+                    out[key] = DERIVED_REFS[ref](state)
                 elif ref in STATE_REFS:
                     resolved = state[ref]  # type: ignore[literal-required]
                     if resolved is None:
@@ -314,7 +331,7 @@ def ref_problem(ref: object) -> str | None:
     dataset.payroll_accounts.wages_expense)."""
     if not isinstance(ref, str):
         return f"ref 须为文本: {ref!r}"
-    if ref in STATE_REFS or ref in ENGAGEMENT_REFS:
+    if ref in STATE_REFS or ref in ENGAGEMENT_REFS or ref in DERIVED_REFS:
         return None
     namespace, _, path = ref.partition(".")
     model: type[BaseModel] | None = REF_NAMESPACES.get(namespace)

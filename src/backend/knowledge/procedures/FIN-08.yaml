@@ -1,0 +1,22 @@
+id: FIN-08
+name: 错报沟通与回复记录
+# 规格书 6.1.2 (FIN-08 ← FIN-03, manual), 第 10 节 P3 人员行 (FIN-08 与管理层沟通错报) 与拒绝更正记 uncorrected 并保留
+# 回复原文, UC-06 第 1 步; ASA 450 第 8 段 (及时沟通累计的错报并请管理层更正), 第 9 段 (拒绝更正时了解理由). 需求 R161.
+# 人工程序 (需求 R92, R93): communicate 节点中由 A10 派发, 模板 owner A8 的 prepare 列出待沟通的错报 (当前结果中已分类的
+# identified, 与分录对不上而须重新沟通的 communicated) 与更正请求; 没有时空执行, 不建任务. 审计师在人工队列页登记与
+# 管理层的沟通 (每条错报一行 ManagementResponse) 并以 manual_result 提交; A8 的 check 核对登记与材料, collect 整理:
+# 同意的置 communicated, 拒绝的置 uncorrected (refused), 都带沟通与回复字段, 清掉重新沟通的标记. 回复以原文登记
+# (Xero演示数据集设计第 4.8 节只有回复文字), 不要求证据文件.
+phase: P3_Completion
+cycle: Completion
+owner: A8
+feature: misstatement             # 功能开关 (services/features.py): 错报闭环
+outputs: [misstatements]
+engine: manual
+autonomy_level: L1
+depends_on: [FIN-03]
+standards: [ASA450-P08, ASA450-P09]
+manual:
+  instructions: 请求管理层更正已累计的错报并登记回复 (ASA 450 第 8 段)
+  result_model: ManagementResponses
+  min_evidence: 0

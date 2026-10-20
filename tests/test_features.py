@@ -328,8 +328,11 @@ JOURNALS = frozenset({"critic", "journals"})
 
 
 def rebuilt(runner: GraphRunner, features: frozenset[str]) -> GraphRunner:
-    """同一检查点与存储, 换成另一功能集的进程 (模拟改了 FEATURES 后重启): 程序库, 依赖与主图按 features 重建."""
-    deps = replace(runner.deps, features=features, library=ProcedureLibrary(KNOWLEDGE, features))
+    """同一检查点与存储, 换成另一功能集的进程 (模拟改了 FEATURES 后重启): 程序库, 依赖与主图按 features 重建 (换了程序库
+    重新组装人工程序的 owner, 同 main.build_deps)."""
+    deps = registry.with_manual_owners(
+        replace(runner.deps, features=features, library=ProcedureLibrary(KNOWLEDGE, features))
+    )
     return GraphRunner(compile_graph(make_graph_nodes(deps), runner.app.checkpointer), deps)
 
 

@@ -11,7 +11,6 @@ from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AgentId,
     Engagement,
-    ManualResult,
     Procedure,
     ProcedureRun,
     ReviewRecord,
@@ -98,11 +97,13 @@ class ManualHandler(Protocol):
     """人工程序 (engine manual 且不是闸门, 需求 R93) 的模板 owner 为它实现的三步, 由 Agent 声明在 manual_procedures
     (agents/registry.manual_owners 按模板 owner 找). 派发与写入由编排完成, 三步都不写存储.
 
-    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material). ctx 同其他程序的执行
-      (run 为本次执行, state 为执行前的状态).
-    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后, 收到的结果
-      证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文). ctx.run 为派发的那次执行
-      (任务目标), ctx.state 为检查点里的状态: 节点停在等待, 派发的执行记录与任务只在 Store, 不在其中.
+    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material); 返回 None 表示没有要人做的
+      (空执行: 执行记录 succeeded, 不建任务, 不等人; 需求 R161). ctx 同其他程序的执行 (run 为本次执行, state 为执行
+      前的状态).
+    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后, 收到的决定中
+      结果的证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文); 结果依据的对象版本不对时
+      可抛 VersionConflict (VERSION_MISMATCH). ctx.run 为派发的那次执行 (任务目标), ctx.state 为检查点里的状态: 节点
+      停在等待, 派发的执行记录与任务只在 Store, 不在其中.
     - collect: 节点读回 manual_result 后调, 把结果整理成领域对象, 返回的片段只能含 owner 写入范围 (merge.AGENT_FIELDS)
       内, 模板 outputs 声明的字段, 不能含执行记录与任务 (procedure_runs, review_tasks, 派发片段的字段), 只能由本次
       执行写的对象 (如关系图) run_id 须为派发的那次执行 (nodes.check_collected), 以 owner 为写入者写入; Store 已有
@@ -111,9 +112,9 @@ class ManualHandler(Protocol):
       纯函数: 不取当前时间, 不调大模型, 只看 ctx 与决定, 重放时重算得同一结果.
     """
 
-    def prepare(self, ctx: RunContext) -> dict[str, Any]: ...
+    def prepare(self, ctx: RunContext) -> dict[str, Any] | None: ...
 
-    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]: ...
+    def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]: ...
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch: ...
 

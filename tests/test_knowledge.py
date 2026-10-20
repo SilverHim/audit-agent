@@ -17,7 +17,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
-from backend.contracts.knowledge import LLMSpec
+from backend.contracts.knowledge import LLMSpec, ManualSpec
 from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ContractExtraction,
@@ -25,6 +25,7 @@ from backend.contracts.llm_outputs import (
     EngagementTermsExtraction,
     MisstatementClassificationDraft,
 )
+from backend.contracts.manual_results import ManagementResponses, result_model
 from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
@@ -36,6 +37,8 @@ from backend.contracts.models import (
     EvidencePointer,
     EvidenceType,
     GateId,
+    Misstatement,
+    MisstatementStatus,
     Model,
     Phase,
     Procedure,
@@ -2100,6 +2103,79 @@ def test_fin03_template_loads_only_with_misstatement() -> None:
     assert on.enabled("FIN-03") and "FIN-03" in {p.id for p in fixed_procedures(on)}
 
 
+def test_fin08_template_loads_only_with_misstatement() -> None:
+    """R161 验收 1, 11: FIN-08 为完成阶段 A8 的人工程序 (L1), 挂功能 misstatement, 依赖 FIN-03, 写错报; 人工段为更正
+    请求的说明, 结果模型 ManagementResponses (已登记), 不要证据文件; 两个准则片段的 procedures 列了 FIN-08. 基线下不
+    启用, 不进项目启动实例化的程序; 打开 misstatement 时进."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("FIN-08")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
+        "错报沟通与回复记录",
+        Phase.P3_Completion,
+        "Completion",
+        AgentId.A8,
+        Engine.manual,
+        AutonomyLevel.L1,
+        "misstatement",
+        None,
+    )
+    assert (t.depends_on, t.outputs, t.standards) == (["FIN-03"], ["misstatements"], ["ASA450-P08", "ASA450-P09"])
+    assert t.manual == ManualSpec(
+        instructions="请求管理层更正已累计的错报并登记回复 (ASA 450 第 8 段)",
+        result_model="ManagementResponses",
+        min_evidence=0,
+    )
+    assert result_model("ManagementResponses") is ManagementResponses
+    for fragment_id in t.standards:
+        fragment = base.fragment(fragment_id)
+        assert fragment is not None and fragment.procedures == ["FIN-08"], fragment_id
+    assert "FIN-08" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
+    on = ProcedureLibrary(ROOT, frozenset({"misstatement"}))
+    assert on.enabled("FIN-08") and "FIN-08" in {p.id for p in fixed_procedures(on)}
+
+
+def communicated(oid: str, at: datetime | None) -> Misstatement:
+    """一条错报: 给了沟通时间的为 communicated, 否则 identified."""
+    status = MisstatementStatus.identified if at is None else MisstatementStatus.communicated
+    return Misstatement(
+        id=oid,
+        judgment_id="J-1",
+        exception_id=None,
+        review_record_id="D-1",
+        type="factual",
+        account="Revenue",
+        assertion="Cutoff",
+        amount_cents=100,
+        direction="overstated",
+        status=status,
+        communicated_at=at,
+    )
+
+
+ROUND_1, ROUND_2 = datetime.fromisoformat("2026-10-19T04:00:00Z"), datetime.fromisoformat("2026-10-21T04:00:00Z")
+
+
+@pytest.mark.parametrize(
+    ("misstatements", "expected"),
+    [
+        ([], None),
+        ([communicated("M-1", None)], None),
+        ([communicated("M-1", None), communicated("M-2", ROUND_2), communicated("M-3", ROUND_1)], ROUND_1),
+    ],
+    ids=["none", "not_communicated", "earliest"],
+)
+def test_first_misstatement_communicated_at(misstatements: list[Misstatement], expected: datetime | None) -> None:
+    """R161 验收 9: 派生引用 first_misstatement_communicated_at 解析为状态中错报沟通时间的最早值; 还没有沟通过的错报
+    时为 None, 以 None 执行, 不抛错. ref 写法校验认得这个名字."""
+    library = ProcedureLibrary(ROOT)
+    param = {"ref": "first_misstatement_communicated_at"}
+    assert ref_problem(param["ref"]) is None
+    template = library.load("FIN-04").model_copy(update={"params": {"start": param}})
+    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements}
+    resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
+    assert resolved == {"start": expected}
+
+
 def fin03_variables() -> dict[str, Any]:
     """FIN-03 提示词的变量, 按头注释逐项给齐 (data 的各列表都非空), 模拟 R158 交给 judge 的上下文."""
     library = ProcedureLibrary(ROOT)
@@ -2183,9 +2259,9 @@ def test_fin03_prompt_renders_with_its_header_variables() -> None:
 def test_fin09_template_loads_only_with_misstatement() -> None:
     """R164 验收 1, 8: FIN-09 为完成阶段 A8 的混合程序 (L2), 挂功能 misstatement, 读分录与科目表; 参数 adjustment_prefix
     取数据集声明 (没有数据集时为 "AJE-"), 规则只有 V01 (emit rows), 准则片段 ASA450-P07 (其 procedures 列了 FIN-09),
-    输出模型为更正验证草稿. 与验收字面的差异 (协调者裁定) 见 FIN-09.yaml 注释: depends_on 为空, manual_result_allowed
-    为假, outputs 不含 exceptions. 规则 SQL, 参数与提示词里没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开
-    misstatement 时进 P2 以外的固定集."""
+    输出模型为更正验证草稿. 与验收字面的差异 (协调者裁定) 见 FIN-09.yaml 注释: depends_on 只有 FIN-08 (R161 补上,
+    GEN-05 增量就绪后再加), manual_result_allowed 为假, outputs 不含 exceptions. 规则 SQL, 参数与提示词里没有 3 到 4
+    位的数字 (不写死科目代码). 基线下不启用, 打开 misstatement 时进 P2 以外的固定集."""
     base = ProcedureLibrary(ROOT)
     t = base.load("FIN-09")
     assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
@@ -2198,7 +2274,7 @@ def test_fin09_template_loads_only_with_misstatement() -> None:
         "misstatement",
         None,
     )
-    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], False, False)
+    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08"], [], False, False)
     assert (t.outputs, t.reads) == (["judgments", "review_tasks", "misstatements"], ["journal_entries", "accounts"])
     assert t.evidence_required == [EvidenceType.voucher]
     state = initial_state(ENGAGEMENT, [], 1)

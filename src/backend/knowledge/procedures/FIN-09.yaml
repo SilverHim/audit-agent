@@ -8,8 +8,7 @@ name: 更正验证
 # (数据集声明, 缺省 "AJE-"; 按前缀比较, 不用 LIKE, 前缀中的 % 与 _ 不作通配符), 不看 is_adjustment (Xero 的手工分录
 # is_adjustment 也为真). 按来源对象与科目匹配更正行, 算已更正额与剩余额在代码中做 (R165); 不写死科目代码.
 # 与需求 R164 验收 1 字面的差异 (协调者 10-20 裁定):
-# - depends_on 先为空: 错报沟通 FIN-08 还没有模板, 程序库不丢弃不存在的依赖; R161 加 FIN-08.yaml 时补上, 分录段的
-#   GEN-05 增量就绪后再加 GEN-05;
+# - depends_on 只有 FIN-08 (R161 加 FIN-08.yaml 时补上); 分录段的 GEN-05 增量就绪后再加 GEN-05;
 # - manual_result_allowed 先为假: P2 以外的节点等人时失败任务只认 rerun, 程序库加载时拒绝; R165 改为真;
 # - misstatement_update_kind (verification) 不写: 模板字段由 R159 加;
 # - outputs 不含 exceptions: 不匹配的 V02 例外与 A8 写入范围的 exceptions 由 R165 加.
@@ -22,7 +21,7 @@ reads: [journal_entries, accounts]   # V01 的更正分录行与科目表
 engine: hybrid
 autonomy_level: L2
 manual_result_allowed: false
-depends_on: []
+depends_on: [FIN-08]
 params:
   adjustment_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录的凭证号前缀
 standards: [ASA450-P07]

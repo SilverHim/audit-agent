@@ -7,13 +7,29 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 
 class Model(BaseModel):
     """所有领域对象的基类: 建好后不可修改, 不许出现未定义的字段."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")  # frozen 不可修改, extra=forbid 不许多字段
+
+
+BLANK = (
+    "blank"  # 必填文字为空白时的校验错误类型; 人工结果按它报 MISSING_FIELD (decisions.check_manual_result, 需求 R161)
+)
+
+
+def not_blank(text: str) -> str:
+    """必填文字去首尾空白后不能为空, 不过抛错误类型 BLANK; 通过时原样返回 (不改人填的文字)."""
+    if not text.strip():
+        raise PydanticCustomError(BLANK, "不能为空")
+    return text
+
+
+NonBlank = Annotated[str, AfterValidator(not_blank)]  # 必填文字: 去首尾空白后非空
 
 
 # ── 2.1 枚举 ──────────────────────────────────────────────
@@ -1581,9 +1597,9 @@ class ManagementResponse(Model):
     misstatement_id: str  # 回复的错报
     base_version: int  # 沟通时的错报版本
     communicated_at: datetime  # 沟通时间
-    communicated_to: str  # 沟通对象 (管理层或治理层中的人与职务)
+    communicated_to: NonBlank  # 沟通对象 (管理层或治理层中的人与职务)
     responded_at: datetime  # 回复时间
-    response: str  # 回复原文
+    response: NonBlank  # 回复原文
     agrees_to_correct: bool  # 是否同意更正
 
     @model_validator(mode="after")
