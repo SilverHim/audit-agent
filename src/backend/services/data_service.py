@@ -134,7 +134,7 @@ TARGET_NAMES = {
     DocumentType.contract: "合同",
     DocumentType.confirmation: "回函",
     DocumentType.registry_extract: "ASIC 摘录",
-    DocumentType.financial_statements: "待审财报",
+    DocumentType.financial_statements: "待审财报",  # 旧项目的待审财报修改 (需求 R217, 本版不再产生), 补写留痕时用
 }
 EDITED_TYPES = {  # 抽取版本表的 target_type → 文件类型; 其余为函证
     "contract": DocumentType.contract,

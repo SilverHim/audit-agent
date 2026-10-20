@@ -1322,9 +1322,9 @@ class ComplianceCheck(Versioned):
     exception_ids: list[str] = []  # 不通过的项生成的例外
     must_disclaim: bool = False  # 检查结果要求出具无法表示意见, 如管理层不提供第 10, 11 段的声明 (ASA 580 第 20 段)
     subject_ref: ObjectRef | None = None  # 被检查的对象, 如声明书 REPLETTER 的版本; 没有单一对象时为空
-    # 所依据的输入及其版本, 如 {fs_version: 1, adjustment_entry_nos: [...]}, {client_profile_version: 3}; 节点再入时
-    # 与当前输入比对, 判断检查是否过期. 只放 JSON 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组
-    # 等经 Store 读回会变成字符串与列表, 与检查点读回的不相等
+    # 所依据的输入及其版本, 如 {client_profile_version: 3}; 节点再入时与当前输入比对, 判断检查是否过期. 只放 JSON
+    # 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组等经 Store 读回会变成字符串与列表, 与检查点读回的
+    # 不相等
     basis: dict[str, Any] = {}
 
     @property

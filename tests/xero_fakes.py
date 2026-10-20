@@ -3,8 +3,7 @@
 预置的是演示数据导入 (R269) 之后的状态; 数据一律经载入器 (XeroDatasetLoader.tables), adapters.xero_supplements 与
 演示导入清单读出, 这里不重写映射. 两组函数:
 - 只需补造目录: xero_profile, xero_presets, xero_traits, xero_uploads, xero_documents, xero_pages, xero_adjustments,
-  xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对
-  (Supplements.verify),
+  xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对 (Supplements.verify),
   没有快照时只核对补造文件 (verify_files).
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
   make_xero_deps. 快照按 tests.external.snapshot_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过).

@@ -1332,7 +1332,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - `DatasetLoader.load_adjustments(eid, dataset, entry_nos=None) -> list[JournalEntry]` (按凭证号载入更正分录, 另有关键字参数 actor, 缺省 "A1"; 幂等, 有新行时总账出一个新版本, 试算表不动); `DatasetLoader.adjustment_entries(dataset) -> list[AdjustmentEntrySummary]` (entry_no, posting_date, description, line_count) 与 `adjustment_entry_nos(dataset) -> list[str]` (可载入的凭证号, 更正通知提交时校验; 没有补造更正分录的数据集为 []).
 - `DatasetLoader.dataset_traits(dataset) -> DatasetTraits` (缺文件时为缺省值); `DatasetLoader.period(dataset) -> tuple[date, date] | None`.
 - `XeroDatasetLoader.tables(dataset)` (不连库的纯函数, 返回演示数据导入之后的八张表 (含应付账单, R178), load 与测试共用; R268 起不再带合同 PDF 路径), `supplement_tables(dataset)` 与 `xero_supplements.plan(loader, dataset)` (演示导入清单, 本节上文); `EvidenceStore.save(..., document_date=None, related_ids=())` (同哈希已登记时返回已有记录, 不改字段).
-- `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]`; `FinancialDataStore.financial_statements(eid) -> FinancialStatements | None`, `record(eid, "financial_statement_line", code)`.
+- `FinancialDataStore.documents(eid, type=None, related_id=None)`; `FinancialDataStore.employees(eid) -> list[Employee]` (待审财报的端口随 Issue #46 删去).
 - `RegistrySource.abn(eid, abn)`, `asic_company(eid, acn)`, `asic_extract(eid, acn)`, `asic_person(eid, family_name, given_name, birth_date)`: 按项目数据集定位登记 mock (Numbat → data/demo, Xero → 补造目录).
 - `LLMRequest.eid`: mock 按它选 fixture 目录.
 

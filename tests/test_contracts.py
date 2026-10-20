@@ -600,7 +600,7 @@ def test_compliance_check_contract_and_failed_codes() -> None:
     assert (check.must_disclaim, check.subject_ref, compliance_check().exception_ids) == (False, None, [])
     assert [item.requires_disposition for item in check.items] == [False, True, False]  # 样例只给 E02 显式置真
     line = {"description": "Representation is present in the letter", "standard_ref": "ASA 580.10"}
-    fs18 = ComplianceCheck(
+    check18 = ComplianceCheck(
         id="CHECK-FIN-18",
         procedure_id="FIN-18",
         run_id="RUN-FIN-18-1",
@@ -614,13 +614,13 @@ def test_compliance_check_contract_and_failed_codes() -> None:
         subject_ref=ObjectRef(kind="WrittenRepresentationLetter", id="REPLETTER", version=1),
         basis={"letter_version": 1},
     )
-    assert fs18.failed_codes == ["W03", "W01"]
+    assert check18.failed_codes == ["W03", "W01"]
     with pytest.raises(ValidationError, match="frozen"):
-        fs18.failed_codes = []  # type: ignore[misc]
+        check18.failed_codes = []  # type: ignore[misc]
     for change in ({"extra": 1}, {"items": [{**check.items[0].model_dump(), "status": "skipped"}]}):
         with pytest.raises(ValidationError):
             ComplianceCheck.model_validate({**check.model_dump(), **change})
-    assert ComplianceCheck.model_validate_json(fs18.model_dump_json()) == fs18
+    assert ComplianceCheck.model_validate_json(check18.model_dump_json()) == check18
 
 
 def test_governance_communication_contract() -> None:

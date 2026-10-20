@@ -4,9 +4,10 @@ import asyncio
 import io
 import json
 import zipfile
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from backend.agents.ingest import (
     IngestAgent,
     save_new_contract,
 )
-from backend.contracts.data import DataInput, ExtractionEdit
+from backend.contracts.data import FS_TARGET, BatchItem, DataInput, ExtractionEdit, ExtractionRecord
 from backend.contracts.errors import DataRejected, DecisionRejected
 from backend.contracts.models import (
     Confirmation,
@@ -39,7 +40,8 @@ from backend.contracts.models import (
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.services import data_import
-from backend.services.data_service import DataService
+from backend.services.data_service import DataService, edit_entry
+from backend.services.import_batches import staged_of
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from tests.fakes import (
     ENGAGEMENT,
@@ -223,21 +225,30 @@ async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:
     }
 
 
-async def test_type_set_to_agreement_is_external_copy_without_extraction() -> None:
-    """人工指定为协议 (收入合同以外的协议): 登记为 agreement, 外部副本, classified, 不抽取 (只有合同与回函抽取)."""
-    _, service, financial, _, _ = setup()
+@pytest.mark.parametrize(
+    ("kind", "reliability"),
+    [
+        (DocumentType.agreement, Reliability.external_copy),  # 收入合同以外的协议
+        (DocumentType.financial_statements, Reliability.internal_copy),  # 财务报表以账套为准 (Issue #46 验收 1)
+    ],
+)
+async def test_type_set_without_extraction(kind: DocumentType, reliability: Reliability) -> None:
+    """人工指定为协议或财务报表: 登记为该类型与其可靠性, classified, 不抽取 (只有合同, 回函与 ASIC 摘录抽取);
+    大模型只有上传时的分类一次, 数据版本与数据变动都不变."""
+    runner, service, financial, _, data = setup()
     await service.upload_documents(EID, [("scan-0043.png", b"\x89PNG lease")], actor="U-1")
     await drain(service)
+    before = (data.data_version, list(data.data_changes))
     scan = document(financial, "scan-0043.png")
-    updated = await service.set_document_type(EID, scan.id, DocumentType.agreement, "新租约扫描件", "U-1")
+    updated = await service.set_document_type(EID, scan.id, kind, "人工指定类型", "U-1")
     await drain(service)
 
-    assert (updated.type, updated.reliability, updated.status) == (
-        DocumentType.agreement,
-        Reliability.external_copy,
-        "classified",
-    )
+    assert (updated.type, updated.reliability, updated.status) == (kind, reliability, "classified")
     assert document(financial, "scan-0043.png").status == "classified" and financial.save_calls == []
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    assert [e.procedure_id for e in trail.entries if e.kind is TrailKind.llm_call] == ["DOC-CLASSIFY"]
+    assert (data.data_version, data.data_changes) == before
 
 
 def test_upload_reliability_covers_every_type() -> None:
@@ -1125,7 +1136,6 @@ FS_PDF = "fs_v1.pdf"  # 补造的财务报表样例 (不在补造清单的登记
 def statements_setup() -> tuple[GraphRunner, DataService, FakeFinancialStore, FakeEvidenceStore, FakeDataStore]:
     """setup() 的存储, 大模型先读 Xero 的固定输出正本 (DOC-CLASSIFY/fs_v1), 再读上传固定输出."""
     runner, _, financial, evidence, data = setup()
-    evidence.page_counts[FS_PDF] = 6
     llm = LayeredMockLLM(LLM_XERO, UPLOAD_FIXTURES)
     deps = runner.deps
     validator = OutputValidator(deps.financial_store, deps.library, deps.trail)
@@ -1133,21 +1143,16 @@ def statements_setup() -> tuple[GraphRunner, DataService, FakeFinancialStore, Fa
     return runner, DataService(deps, runner), financial, evidence, data
 
 
-@pytest.mark.parametrize("how", ["classified", "retyped"])
-async def test_uploaded_statements_are_only_classified(how: str) -> None:
-    """Issue #46 验收 1: 上传 fs_v1.pdf (A3 按 DOC-CLASSIFY 定为 financial_statements), 或上传别的文件后审计师改类型
-    为 financial_statements: 文件停在 classified, 不算没做完 (启动不补做); 大模型只有分类一次 (改类型时为上传时那次),
-    数据版本与数据变动都不变 (没有程序因它过期)."""
+async def test_uploaded_statements_are_only_classified() -> None:
+    """Issue #46 验收 1: 上传 fs_v1.pdf (A3 按 DOC-CLASSIFY 定为 financial_statements): 文件停在 classified, 不算
+    没做完 (启动不补做); 大模型只有分类一次, 数据版本与数据变动都不变 (没有程序因它过期). 改类型一例见
+    test_type_set_without_extraction, 智能导入一例见 test_import_batches."""
     runner, service, financial, _, data = statements_setup()
     before = (data.data_version, list(data.data_changes))
-    name = FS_PDF if how == "classified" else "scan.png"
-    [uploaded] = await service.upload_documents(EID, [(name, b"%PDF statements")], actor="U-1")
+    await service.upload_documents(EID, [(FS_PDF, b"%PDF statements")], actor="U-1")
     await drain(service)
-    if how == "retyped":
-        await service.set_document_type(EID, uploaded.id, DocumentType.financial_statements, "客户的财务报表", "U-1")
-        await drain(service)
 
-    doc = document(financial, name)
+    doc = document(financial, FS_PDF)
     assert (doc.type, doc.status, doc.failed_step) == (DocumentType.financial_statements, "classified", None)
     assert not ingest.unfinished(doc)
     trail = runner.deps.trail
@@ -1156,30 +1161,56 @@ async def test_uploaded_statements_are_only_classified(how: str) -> None:
     assert (data.data_version, data.data_changes) == before
 
 
-async def test_staged_statements_are_only_classified() -> None:
-    """Issue #46 验收 1: 智能导入批次里识别为财务报表的文件同样只分类: 识别结果没有抽取要素也不算抽取没通过, 确认时
-    置 classified, 不带抽取结果."""
-    runner, service, _, evidence, _ = statements_setup()
-    staged_doc = await evidence.save(
+OLD_STATEMENTS = {"prepared_at": "2026-10-22", "lines": []}  # 旧批次里 R217 抽出的报表 (StatementsExtraction 的 JSON)
+
+
+async def old_statements_edit() -> tuple[object, object]:
+    """旧项目里审计师改过待审财报 (抽取版本表里带 field 的 FS_TARGET 一版): 补写留痕的 payload 与摘要."""
+    record = ExtractionRecord(
+        target_type=FS_TARGET,
+        target_id="FS",
+        version=2,
+        data={"id": "FS", "version": 2, "document_id": "DOC-e2670a8e43ac", "lines": []},
+        field="prepared_at",
+        reason="按董事声明日改",
+        changed_by="U-1",
+        changed_at=datetime(2026, 10, 23, tzinfo=UTC),
+    )
+    entry = edit_entry(EID, record)
+    payload = {
+        "action": "edit",
+        "document_type": "financial_statements",
+        "field": "prepared_at",
+        "reason": "按董事声明日改",
+        "document_id": "DOC-e2670a8e43ac",
+    }
+    return (entry.payload, entry.summary), (payload, "修改待审财报 FS 的抽取结果 prepared_at, 第 2 版")
+
+
+async def old_batch_item() -> tuple[object, object]:
+    """旧批次里带待审财报抽取结果 (statements) 的文件项: 读得回, 确认时只分类."""
+    item = BatchItem(
+        id="BAT-1-1",
+        file_name=FS_PDF,
+        document_id="DOC-e2670a8e43ac",
+        item_kind="document",
+        document_type=DocumentType.financial_statements,
+        statements=OLD_STATEMENTS,
+    )
+    item = BatchItem.model_validate_json(item.model_dump_json())
+    _, service, _, evidence, _ = statements_setup()
+    staged = await evidence.save(
         EID, FS_PDF, b"%PDF fs_v1", type=DocumentType.other, reliability=Reliability.internal_copy, status="staged"
     )
-    intake = DocumentIntake(service.deps)
-
-    staged = await intake.stage(EID, staged_doc, ENGAGEMENT)
-    change = await intake.staged_change(EID, staged_doc, staged)
-
-    assert (staged.document_type, staged.failed_step) == (DocumentType.financial_statements, None)
-    assert (change.type, change.status, change.failed_step) == (DocumentType.financial_statements, "classified", None)
-    trail = runner.deps.trail
-    assert isinstance(trail, FakeTrail)
-    assert [e.procedure_id for e in trail.entries if e.kind is TrailKind.llm_call] == ["DOC-CLASSIFY"]
+    change = await DocumentIntake(service.deps).staged_change(EID, staged, staged_of(item))
+    actual = (item.statements, change.type, change.status, change.failed_step)
+    return actual, (OLD_STATEMENTS, DocumentType.financial_statements, "classified", None)
 
 
-@pytest.mark.parametrize(("method", "path"), [("GET", ""), ("PUT", ""), ("GET", "/history")])
-async def test_statements_endpoints_are_gone(method: str, path: str) -> None:
-    """Issue #46 验收 2: 待审财报的查看, 修改与历史接口 (R217) 已删, 一律 404."""
-    runner, *_ = setup()
-    body = {"field": "prepared_at", "value": "2026-10-22", "reason": "x"} if method == "PUT" else None
-    async with api_client(runner) as client:
-        response = await client.request(method, f"{BASE}/financial-statements{path}", json=body)
-    assert response.status_code == 404
+@pytest.mark.parametrize("case", [old_statements_edit, old_batch_item], ids=["edit_trail", "batch_item"])
+async def test_old_statements_data_still_reads(case: Callable[[], Awaitable[tuple[object, object]]]) -> None:
+    """Issue #46 删去待审财报后为读旧数据保留的项: TARGET_NAMES 与 EDITED_TYPES 的财务报表一项 (FS_TARGET),
+    BatchItem.statements. 改过待审财报的旧项目补写留痕照常, 带 statements 的旧批次读得回且确认时只分类. 防把这些
+    保留项当死代码删掉: 只删 TARGET_NAMES 那项时 backfill_trails 抛 KeyError, 该项目的数据写入全部失败."""
+    actual, expected = await case()
+    assert actual == expected

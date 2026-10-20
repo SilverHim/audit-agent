@@ -165,7 +165,7 @@ def fixture_problems(
 ) -> list[str]:
     """不合格的 fixture (只写文件, 程序与指针 ID, 不写内容):
     (b) document 指针的 source_id 须在 manifest.documents 中, 1 ≤ page ≤ page_count, 所指文件类型能作证据
-    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如 financial_statements 不作证据, 判断引报表行); 登记了对应的程序,
+    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如财务报表不作证据); 登记了对应的程序,
     指针还须指向 expected 给出的文件之一 (补造目录下的路径, 文件 ID 由文件内容算; 每个指错的指针各报一条; 对象没有
     对应文件, 即抛 LookupError 的, 不应有 document 指针); 没登记的程序只做以上核对;
     (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序或上传处理的模板 (DOC-CLASSIFY), 文件须能按该
