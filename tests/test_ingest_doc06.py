@@ -276,11 +276,13 @@ ACCRUED_RULES = {
     "只写整期利息时为 null": ("only a whole period", "null"),
     "不自行计算截至余额日的部分": ("not calculate",),
 }
+# 不得回来的旧口径 (需求 R354): 同一分句里既说整期利息又说以后某日, 模型曾据此把截至余额日已计的利息漏抽
+FORBIDDEN = [("full period", "later date"), ("whole period", "later date")]
 
 
 async def test_prompt_states_how_to_read_accrued_interest() -> None:
-    """渲染一次 DOC-06 提示词, 截出应计利息一节 (到下一个字段为止): 按分句查各条口径的关键词; evidence 一条另要求
-    给 accrued_interest_cents 的指针."""
+    """渲染一次 DOC-06 提示词, 截出应计利息一节 (到下一个字段为止): 按分句查各条口径的关键词, 旧口径的分句 (FORBIDDEN)
+    不得出现; evidence 一条另要求给 accrued_interest_cents 的指针."""
     llm = scripted()
     agent, ctx, _ = setup(llm, confirmations=CONFIRMATIONS[:1])
     await agent.run(ctx)
@@ -291,6 +293,7 @@ async def test_prompt_states_how_to_read_accrued_interest() -> None:
     clauses = [c.casefold() for line in lines[start:end] for c in re.split(r"[.;]\s", line)]
     missing = [rule for rule, words in ACCRUED_RULES.items() if not any(all(w in c for w in words) for c in clauses)]
     assert missing == []
+    assert [words for words in FORBIDDEN if any(all(w in c for w in words) for c in clauses)] == []
     assert lines[end].startswith("- `evidence`") and "accrued_interest_cents" in lines[end]
 
 
