@@ -1818,10 +1818,10 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
         ("PLAN-1", 2, PlanStatus.superseded),
         ("PLAN-2", 2, PlanStatus.approved),
     ]
-    assert [(d.id, d.decision) for d in page.decisions] == [
-        ("D-P15I", GateVerdict.insufficient_info),
-        (PLAN_REJECT_ID, GateVerdict.reject),
-        ("D-PLAN2", GateVerdict.approve),
+    assert [(d.id, d.decision, d.reason) for d in page.decisions] == [
+        ("D-P15I", GateVerdict.insufficient_info, "Awaiting partner availability"),
+        (PLAN_REJECT_ID, GateVerdict.reject, PLAN_REJECT_REASON),
+        ("D-PLAN2", GateVerdict.approve, None),
     ]
 
 

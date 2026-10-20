@@ -44,7 +44,6 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader
 from backend.services.abn import abn_problem
 from backend.services.data_service import DataService
-from backend.services.features import parse_features
 from backend.services.xero_link import XeroLink
 from tests.external import supplements_dir
 from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, FakeXeroConnectionStore, api_client, wait_idle
@@ -53,7 +52,7 @@ from tests.test_demo_default import CreatingEngagementStore, demo_runner
 from tests.test_e2e_mock import real_storage
 from tests.test_e2e_xero17 import XERO_PERIOD, Xero17, assert_materiality, assert_report, assert_results
 from tests.xero_fakes import (
-    REPO,
+    DEMO_FEATURES,
     SNAPSHOT_NAME,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,
@@ -71,14 +70,6 @@ pytestmark = pytest.mark.external
 shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走通 (walked) 的用例与它同一个事件循环
 API = "/api/v1"
 BA091 = "J-CSH-02-1-BA-091"
-# 演示配置的功能集: 取 .env.example 的 FEATURES (critic,collab,journals; R155 打开 collab, R146 打开 journals)
-DEMO_FEATURES = parse_features(
-    next(
-        line
-        for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
-        if line.startswith("FEATURES=")
-    ).split("=", 1)[1]
-)
 REVIEW_ROUNDS = 5  # 复核循环的轮数上限 (本路径分三层出任务, 3 轮即完)
 DEMO_ABN = "25900043021"
 # 每个停点: (总览的闸门, 是否等数据就绪, 是否等复核, 概览建议导入的阶段); 复核的停点只记第一次

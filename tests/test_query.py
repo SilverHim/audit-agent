@@ -15,6 +15,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     ProfileSource,
     ReviewTask,
+    RiskLevel,
     TargetType,
     TaskKind,
     TaskStatus,
@@ -398,9 +399,14 @@ async def test_plan_material_takes_current_terms_and_rejections() -> None:
 # ── R314: 审计计划页 (功能 planning; Xero 停在闸门, 驳回再批准的数见 test_decisions) ──
 
 
+# 特别风险目标 OBJ-REV-OCC 下另一条等级较低的风险项: 不是特别风险, 计划页不列 (审核意见 R314-01)
+LOWER_RISK = NUMBAT_RISKS[0].model_copy(update={"id": "RISK-REV-OCC-2", "level": RiskLevel.medium})
+
+
 def test_plan_view_rows_and_lists() -> None:
     """需求 R314 验收 1, 2: 当前计划为 PLAN-2 (PLAN-1 已取代); plans 为各修订的最新版本按修订号; decisions 只取 PLN-15
-    的, 按决定时间; objectives 为计划涉及的 (按状态顺序, 状态里没有的不列); risks 为特别风险目标下的风险项. 程序表:
+    的, 按决定时间; objectives 为计划涉及的 (按状态顺序, 状态里没有的不列); risks 为特别风险目标下等级为 significant
+    的风险项 (同一目标下另有一条 medium 的不列, 审核意见 R314-01). 程序表:
     针对几个目标的程序每个目标一行, 按目标在状态中的顺序分组 (状态里没有的目标排在其后), 组内按程序编号, 没有目标
     的排最后; params 有整数 sample_size 为抽样, 布尔或没有为全量."""
     base = audit_plan(2)
@@ -427,7 +433,7 @@ def test_plan_view_rows_and_lists() -> None:
     state.update(  # type: ignore[typeddict-item]
         audit_plans=[plan, audit_plan(1, 2, PlanStatus.superseded)],
         audit_objectives=NUMBAT_OBJECTIVES,
-        risk_register=NUMBAT_RISKS,
+        risk_register=[*NUMBAT_RISKS, LOWER_RISK],
         gate_decisions=[later, plan_gate_decision(2, GateId.PLN_01_03, GateVerdict.approve, "MATERIALITY"), earlier],
     )
 

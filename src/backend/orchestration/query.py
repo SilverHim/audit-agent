@@ -21,6 +21,7 @@ from backend.contracts.models import (
     ProcedureRun,
     RerunRequest,
     ReviewTask,
+    RiskLevel,
     TaskStatus,
 )
 from backend.contracts.state import EngagementState, fill_defaults
@@ -62,8 +63,9 @@ def plan_rows(plan: AuditPlan, objectives: Sequence[AuditObjective]) -> list[Pla
 
 
 def plan_view(values: EngagementState) -> PlanView:
-    """审计计划页的数据, 只取状态 (已补缺省值): 当前计划, 各修订的最新版本, PLN-15 决定, 当前计划涉及的审计目标与
-    特别风险目标下的风险项, 程序表. 没有计划时 current_plan_id 为空, 各列表为空."""
+    """审计计划页的数据, 只取状态 (已补缺省值): 当前计划, 各修订的最新版本, PLN-15 决定, 当前计划涉及的审计目标,
+    特别风险 (特别风险目标下等级为 significant 的风险项; 同一目标下等级更低的不算, 目标等级取其下最高), 程序表.
+    没有计划时 current_plan_id 为空, 各列表为空."""
     plan = current_plan(values["audit_plans"])
     if plan is None:
         return PlanView(current_plan_id=None, plans=[], decisions=[], objectives=[], risks=[], rows=[])
@@ -74,7 +76,9 @@ def plan_view(values: EngagementState) -> PlanView:
         plans=sorted(values["audit_plans"], key=lambda p: p.revision),
         decisions=sorted((d for d in values["gate_decisions"] if d.gate is GateId.PLN_15), key=lambda d: d.decided_at),
         objectives=[o for o in values["audit_objectives"] if o.id in referenced],
-        risks=[r for r in values["risk_register"] if r.objective_id in significant],
+        risks=[
+            r for r in values["risk_register"] if r.objective_id in significant and r.level is RiskLevel.significant
+        ],
         rows=plan_rows(plan, values["audit_objectives"]),
     )
 

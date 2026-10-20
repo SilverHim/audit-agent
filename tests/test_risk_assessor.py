@@ -70,11 +70,17 @@ from tests.fakes import (
 )
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started, acc01_decision, pln_decision
-from tests.test_demo_walkthrough import DEMO_FEATURES
 from tests.test_output_validator import PLAN_PROCEDURES
 from tests.test_p1 import p1_setup
 from tests.test_xero_fixtures import xero_state
-from tests.xero_fakes import XERO17_MATERIALITY, make_xero_deps, xero_engagement, xero_profile, xero_traits
+from tests.xero_fakes import (
+    DEMO_FEATURES,
+    XERO17_MATERIALITY,
+    make_xero_deps,
+    xero_engagement,
+    xero_profile,
+    xero_traits,
+)
 
 EID = ENGAGEMENT.id
 NUMBAT_RATIOS = {"gross_margin_current": 0.3, "gross_margin_prior": 0.305, "revenue_growth": 0.1538}
@@ -647,10 +653,12 @@ async def test_pln15_revision_answers_the_rejection() -> None:
         (date(2026, 10, 19), "Bank confirmation requests sent for both accounts"),
         (date(2026, 10, 22), "Bank confirmation replies received, before fieldwork is completed"),
     ]
-    first, second = (json.loads(p.read_text(encoding="utf-8")) for p in (XERO_PLAN, XERO_PLAN_R2))
-    del first["sections"]["timing"]
-    del second["sections"]["timing"]
-    assert {k: v for k, v in first.items() if k != "timetable"} == {k: v for k, v in second.items() if k != "timetable"}
+    r1_json, r2_json = (json.loads(p.read_text(encoding="utf-8")) for p in (XERO_PLAN, XERO_PLAN_R2))
+    del r1_json["sections"]["timing"]
+    del r2_json["sections"]["timing"]
+    assert {k: v for k, v in r1_json.items() if k != "timetable"} == {
+        k: v for k, v in r2_json.items() if k != "timetable"
+    }
     assert (plan2.id, plan2.version, plan2.status, plan2.revision, plan2.run_id) == (
         "PLAN-2",
         1,

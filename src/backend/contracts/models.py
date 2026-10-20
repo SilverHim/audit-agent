@@ -991,7 +991,9 @@ class PlanItem(Model):
 class ProcedureNote(Model):
     """一条程序计划的性质, 时间与范围 (ASA 300 第 9(c) 段: 认定层次的进一步审计程序)."""
 
-    procedure_id: str  # 程序编号, 须在计划的 items 中
+    # 程序编号. 草稿 (AuditPlanDraft) 的说明可多于计划的程序 (校验只查缺与重复); 合成后的计划 (AuditPlan) 只含 items
+    # 中程序的说明, 由 A4 过滤 (需求 R316)
+    procedure_id: str
     nature_timing_extent: str  # 性质, 时间与范围的说明
 
 

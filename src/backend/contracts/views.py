@@ -186,7 +186,8 @@ class PlanView(Model):
     plans: list[AuditPlan]  # 各修订的最新版本, 按 revision 升序
     decisions: list[GateDecision]  # 全部 PLN-15 决定, 按决定时间
     objectives: list[AuditObjective]  # 当前计划各项涉及的审计目标, 按状态中的顺序
-    risks: list[RiskItem]  # 当前计划特别风险目标 (significant_risk_objective_ids) 下的风险项, 按风险清单的顺序
+    # 特别风险: 当前计划特别风险目标 (significant_risk_objective_ids) 下等级为 significant 的风险项, 按风险清单的顺序
+    risks: list[RiskItem]
     rows: list[PlanRow]  # 程序表: 按审计目标在状态中的顺序分组, 组内按程序编号; 没有目标的排最后
 
 

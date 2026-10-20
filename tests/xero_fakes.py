@@ -70,7 +70,7 @@ from backend.contracts.services import RuleResult
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
-from backend.services.features import BASELINE
+from backend.services.features import BASELINE, parse_features
 from backend.services.judgment_engine import document_pointer
 from tests.external import external_dir, require_xero_snapshot, snapshot_dir, supplements_dir
 from tests.fakes import (
@@ -97,6 +97,14 @@ from tests.fixture_sets import XERO
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
 SNAPSHOT_NAME = "20261017-q1"  # 快照目录名, data/external/xero/api/20261017-q1
+# 演示配置的功能集: 取 .env.example 的 FEATURES (演示走通, 真实模型变体与 PLN-15 固定输出的守卫共用这一处)
+DEMO_FEATURES = parse_features(
+    next(
+        line
+        for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith("FEATURES=")
+    ).split("=", 1)[1]
+)
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"  # 通用计划模板 (载入器的构造参数)
 DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_contracts 的来源
 # 查快照用的仓库根 (require_xero_snapshot 的 repo); 测试把它指向空目录来模拟没有快照
