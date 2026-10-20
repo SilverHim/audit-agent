@@ -1,6 +1,7 @@
-"""需求 R134: A6 GEN-02 分录例外归因的判断对象与上下文. GEN-05 的例外取 Xero 演示的预置 (XERO_RULES, 7 条, 连库
-一致见 tests/test_gen05_sql.py), 经 FieldworkAgent 并入状态后执行 GEN-02; 判断引擎为按凭证预置结果的
-FakeJudgmentEngine, 渲染提示词用真实判断引擎 (同 JudgmentEngine.judge 的变量). 设计稿第 6.3 节."""
+"""需求 R134, R135: A6 GEN-02 分录例外归因. GEN-05 的例外取 Xero 演示的预置 (XERO_RULES, 7 条, 连库一致见
+tests/test_gen05_sql.py), 经 FieldworkAgent 并入状态后执行 GEN-02. R134 (判断对象与上下文) 的判断引擎为按凭证预置
+结果的 FakeJudgmentEngine, 渲染提示词用真实判断引擎 (同 JudgmentEngine.judge 的变量); R135 (7 份 fixture) 用真实
+判断引擎读 Xero 的 fixture 正本 (tests/fixtures/llm_xero/GEN-02). 设计稿第 6.3 节."""
 
 import asyncio
 import json
@@ -11,15 +12,21 @@ from typing import Any
 
 import pytest
 
+from backend.adapters.llm import MockLLMClient
 from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent, entry_order
 from backend.contracts.models import (
     Decision,
     ExceptionDisposition,
+    Judgment,
+    ProposedAction,
     ReviewStatus,
     RunStatus,
+    StepStatus,
     TargetType,
     TaskKind,
+    TrailEntry,
+    TrailKind,
 )
 from backend.contracts.services import JudgmentContext
 from backend.contracts.state import EngagementState, StatePatch
@@ -34,8 +41,9 @@ from tests.fakes import (
     make_run,
     numbat_gen05_result,
 )
+from tests.fixture_sets import XERO
 from tests.test_fieldwork_judging import failed, passed, pending_task
-from tests.test_xero_fixtures import xero_context, xero_state
+from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
 from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement
 
 VOUCHERS = ["XJ-397", "XJ-405", "XJ-430", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # 凭证号自然序
@@ -332,3 +340,238 @@ def test_prompt_holds_only_cited_journal_lines_and_no_birth_dates(flow: Flow) ->
         found = {o["entry_no"] for o in json_objects(prompt) if o.get("source_type") == "journal_entry"}
         assert found == expected, no
         assert not [form for form in forms if form in prompt], no
+
+
+# ── 7 份 fixture (需求 R135): 真实判断引擎, mock 大模型读 Xero 的 fixture 正本 ─────────────────────────
+
+
+@dataclass(frozen=True)
+class Fixed:
+    patch: StatePatch  # GEN-02 的状态片段
+    calls: list[TrailEntry]  # 大模型调用的留痕, 按调用顺序
+    contexts: dict[str, JudgmentContext]  # 送给判断引擎的上下文, 按凭证号
+    judgments: dict[str, Judgment]  # 判断, 按凭证号
+
+
+async def run_fixed() -> Fixed:
+    """GEN-05 之后用真实判断引擎执行一次 GEN-02: 主模型与复核模型都读 Xero 的 fixture 正本 (同 test_xero_fixtures 的
+    收入一串)."""
+    trail = FakeTrail()
+    client = MockLLMClient(XERO.fixtures)
+    deps = make_xero_deps(trail=trail, llm=client, review_llm=client)
+    recording = RecordingJudgments(deps.judgments)
+    deps = replace(deps, judgments=recording)  # type: ignore[arg-type]
+    patch = await FieldworkAgent(deps).run(xero_context(deps, await gen05_state(), "GEN-02", []))
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    return Fixed(
+        patch,
+        calls,
+        {c.subject_id: c for c in recording.contexts},
+        {j.subject_id: j for j in patch["judgments"]},
+    )
+
+
+@pytest.fixture(scope="module")
+def fixed() -> Fixed:
+    return asyncio.run(run_fixed())
+
+
+def context_problems(name: str, value: dict[str, Any], jctx: JudgmentContext, standards: list[str]) -> list[str]:
+    """GEN-02 fixture 中引了上下文以外来源的指针 (只写 fixture 与指针): 允许的来源为本凭证与相关凭证的分录行, 科目
+    余额, 银行账户与对账单行, 相关发票及其服务完成记录, data.contracts 中合同的条款 (locator 为条款 ID, page 为该
+    条款的页), 关联文件的页 (1 至 page_count), 以及模板 standards 的片段."""
+    data = jctx.data
+    bank = data["bank"] or {"accounts": [], "lines": []}
+    invoices = data["related_invoices"]
+    allowed: dict[str, set[Any]] = {
+        "journal_entry": {r["id"] for r in [*data["entry_lines"], *data["related_entries"]]},
+        "trial_balance": {b["code"] for b in data["account_balances"]},
+        "bank_account": {a["id"] for a in bank["accounts"]},
+        "bank_transaction": {t["id"] for t in bank["lines"]},
+        "sales_invoice": {i["invoice"]["id"] for i in invoices},
+        "delivery_note": {n["id"] for i in invoices for n in i["delivery_notes"]},
+        "standard": set(standards),
+        "document": {
+            (c["document"]["id"], t["id"], t["page"]) for c in data["contracts"] for t in c["contract"]["terms"]
+        },
+    }
+    pages = {d["document"]["id"]: d["document"]["page_count"] for d in data["documents"]}
+    problems = []
+    for p in [*value["evidence"], *(q for s in value["reasoning_chain"] for q in s["evidence"])]:
+        if p["source_type"] == "document" and 1 <= (p.get("page") or 0) <= pages.get(p["source_id"], 0):
+            continue
+        key = (p["source_id"], p.get("locator"), p.get("page")) if p["source_type"] == "document" else p["source_id"]
+        if key not in allowed.get(p["source_type"], set()):
+            problems.append(f"{name}: {p['source_type']} {p['source_id']} {p.get('locator')} 不在该凭证的上下文中")
+    return sorted(set(problems))
+
+
+def fixture(voucher: str) -> dict[str, Any]:
+    """该凭证的 fixture 正本."""
+    return json.loads((XERO.fixtures / "GEN-02" / f"{voucher}.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.external
+def test_fixtures_pass_the_real_engine_and_cite_only_the_context(fixed: Fixed) -> None:
+    """R135 验收 1: 每笔凭证调一次大模型, 第 1 次就通过 (没有失败级别, 没有错误), 推理链每步都受支持 (指针都可解析);
+    7 条判断各一条 normal 任务, 例外不升版, 执行成功; 每份 fixture 的指针都在该凭证的上下文内 (context_problems)."""
+    assert [e.payload["fixture_key"] for e in fixed.calls] == VOUCHERS
+    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in fixed.calls} == {(1, None)}
+    assert [e.payload["errors"] for e in fixed.calls] == [[]] * len(VOUCHERS)
+    for j in fixed.judgments.values():
+        assert {s.status for s in j.reasoning_chain} == {StepStatus.supported}, j.id
+    assert [(t.id, t.kind) for t in fixed.patch["review_tasks"]] == [
+        (f"T-J-GEN-02-1-{no}-v1", TaskKind.normal) for no in VOUCHERS
+    ]
+    assert fixed.patch["exceptions"] == [] and fixed.patch["procedure_runs"][0].status is RunStatus.succeeded
+    standards = LIBRARY.load("GEN-02").standards
+    for no in VOUCHERS:
+        assert context_problems(no, fixture(no), fixed.contexts[no], standards) == []
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    "pointer",
+    [
+        {"source_type": "journal_entry", "source_id": "XJ-500-1", "locator": "debit_cents"},  # 上下文外的凭证
+        {"source_type": "trial_balance", "source_id": "200", "locator": "current_cents"},  # 别的科目
+        {"source_type": "bank_transaction", "source_id": "BT-090-0040", "locator": "amount_cents"},  # 窗口外的流水
+        {"source_type": "document", "source_id": "DOC-4873d193e29f", "locator": "Nil", "page": 2},  # 页码超出
+        {"source_type": "standard", "source_id": "ASA240-P27", "locator": "para 27"},  # 模板 standards 以外
+    ],
+)
+def test_context_guard_reports_pointers_outside_the_context(fixed: Fixed, pointer: dict[str, Any]) -> None:
+    """自测: XJ-499 的 fixture 副本另引一个上下文以外的来源, 守卫报且只报这一条."""
+    value = fixture("XJ-499")
+    value["evidence"].append({"type": "voucher", "page": None, "reliability": None, **pointer})
+    problems = context_problems("XJ-499", value, fixed.contexts["XJ-499"], LIBRARY.load("GEN-02").standards)
+    assert problems == [
+        f"XJ-499: {pointer['source_type']} {pointer['source_id']} {pointer['locator']} 不在该凭证的上下文中"
+    ]
+
+
+def evidence_of(j: Judgment) -> set[tuple[str, str, int | None]]:
+    return {(p.source_type, p.source_id, p.page) for p in j.evidence}
+
+
+@pytest.mark.external
+def test_xj499_is_a_misstatement_of_office_equipment(fixed: Fixed) -> None:
+    """R135 验收 2: XJ-499 认定错报, 草稿为 710 多记 750.00 (金额即所引 XJ-499-1 的借方); 结论写明 710 上期无余额而
+    本期 750.00 全来自 XJ-499-1, 固定资产登记表为 Nil, 分录没有依据且对折旧抵扣进项税, 711 多记 825.00, 820 少记
+    75.00, 不影响损益与净资产 (只查关键词); 证据含三行分录, 710 的试算表, 登记表第 1 页与两个准则片段; 置信度按
+    0.3 / 0.3 / 0.2 加权为 0.85."""
+    j = fixed.judgments["XJ-499"]
+    assert j.proposed_action is ProposedAction.misstatement
+    assert j.misstatement_draft is not None
+    assert j.misstatement_draft.model_dump(mode="json") == {
+        "type": "factual",
+        "account": "Office equipment (710)",
+        "assertion": "Existence",
+        "amount_cents": 75000,
+        "direction": "overstated",
+    }
+    for text in (
+        "no prior period trial balance",
+        "AUD 750.00 comes entirely from XJ-499-1",
+        "shows Nil",
+        "input tax on depreciation",
+        "(711) is overstated by AUD 825.00",
+        "(820) is understated by AUD 75.00",
+        "no effect on profit or loss or net assets",
+    ):
+        assert text in j.conclusion, text
+    assert {
+        ("journal_entry", "XJ-499-1", None),
+        ("journal_entry", "XJ-499-2", None),
+        ("journal_entry", "XJ-499-3", None),
+        ("trial_balance", "710", None),
+        ("document", "DOC-4873d193e29f", 1),
+        ("standard", "ASA240-P33", None),
+        ("standard", "ASA240-A44", None),
+    } <= evidence_of(j)
+    assert (j.confidence_parts, j.confidence, j.exception_ids) == (
+        {"evidence": 0.7, "rule": 1.0, "llm": 0.85},
+        0.85,
+        ["X-GEN-05-1-R09-2"],
+    )
+
+
+@pytest.mark.external
+def test_xj575_needs_the_expense_claim(fixed: Fixed) -> None:
+    """R135 验收 3: XJ-575 要更多证据, 没有错报草稿; 结论写明原凭证 XJ-560 收款人 Grainger, 同日由 XJ-567 作废后
+    改记为 Garrison, 银行只有当日的批量付款 BT-090-0052 (-889.80), 看不出收款人, 改名没有记录, 须取得报销单与审批
+    (ASA 240 第 33(a)(i) 段); 置信度 0.8125."""
+    j = fixed.judgments["XJ-575"]
+    assert (j.proposed_action, j.misstatement_draft) == (ProposedAction.more_evidence, None)
+    for text in (
+        "XJ-560",
+        "to Odette Grainger and voided by XJ-567",
+        "to Odette Garrison",
+        "BT-090-0052",
+        "AUD -889.80",
+        "does not identify the payee",
+        "why the payee's name was changed",
+        "expense claim and its approval",
+        "33(a)(i)",
+    ):
+        assert text in j.conclusion, text
+    assert {("journal_entry", "XJ-560-1", None), ("bank_transaction", "BT-090-0052", None)} <= evidence_of(j)
+    assert (j.confidence_parts, j.confidence) == ({"evidence": 0.7, "rule": 1.0, "llm": 0.7}, 0.8125)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("voucher", "texts"),
+    [
+        (  # 银行两侧与对账单期初一致, 840 为董事借款, 比较数转 FIN-12
+            "XJ-397",
+            (
+                "-8,703.20 + 4,130.98 = -4,572.22",
+                "091 opens at AUD 15,081.23",
+                "loan agreement",
+                "confirmation",
+                "FIN-12",
+            ),
+        ),
+        (  # 同日同额重复开票, 没有服务记录的已全额冲销
+            "XJ-405",
+            (
+                "ORC1003 duplicates ORC1008",
+                "ORC1003 has no service-completion record",
+                "SR-ORC1008",
+                "cancelled in full by credit note CR1003 (XJ-430)",
+                "CON-X02 provides for one invoice",
+            ),
+        ),
+        (  # 冲销的是重复开票 ORC1003, 依据 R12-1
+            "XJ-430",
+            ("X-GEN-05-1-R12-1", "paired invoices", "full credit", "cancels the duplicate invoice ORC1003 in full"),
+        ),
+        (  # 同日, 同一客户, 同额, 收入净额不受影响
+            "XJ-449",
+            (
+                "ORC1005 is the only one to Bank West",
+                "same day",
+                "no service-completion record",
+                "revenue is not affected",
+            ),
+        ),
+        (  # 091 转 090, 只换了名称, 两边对账单对应, 两户同一银行
+            "XJ-601",
+            (
+                "AUD 3,500.00 from the Business Savings Account (091) to the Business Bank Account (090)",
+                "only the description now uses the account names",
+                "BT-090-0065",
+                "BT-091-0001",
+                "Wattlebrook Bank Limited",
+            ),
+        ),
+    ],
+)
+def test_other_vouchers_are_accepted(fixed: Fixed, voucher: str, texts: tuple[str, ...]) -> None:
+    """R135 验收 4: 其余 5 笔 accept, 没有错报草稿, 结论含设计稿第 6.3 节的要点 (只查关键词); 有例外而建议 accept,
+    rule 分项为 0 (只断言分项值, 不比较各判断置信度的高低)."""
+    j = fixed.judgments[voucher]
+    assert (j.proposed_action, j.misstatement_draft, j.confidence_parts["rule"]) == (ProposedAction.accept, None, 0.0)
+    for text in texts:
+        assert text in j.conclusion, text

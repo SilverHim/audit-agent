@@ -1,0 +1,242 @@
+{
+  "conclusion": "Credit note CR1003 (journal entry XJ-430, 26 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Hamilton Smith Pty. Of the five AUD 550.00 invoices it matches by amount, only ORC1003 and ORC1008 are to Hamilton Smith Pty, and finding X-GEN-05-1-R12-1 identifies ORC1003 as a duplicate of ORC1008 (paired invoices) with XJ-430 as its full credit; ORC1003 has no service-completion record, while ORC1008 has SR-ORC1008. CR1003 therefore cancels the duplicate invoice ORC1003 in full, which is appropriate, and no misstatement arises.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-430 (CR1003) on 26 July 2026 debits revenue AUD 500.00 and GST AUD 50.00 and credits the receivable AUD 550.00, with the description Hamilton Smith Pty.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-430-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-430-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Of the invoices matched by amount, ORC1003 and ORC1008 are to Hamilton Smith Pty; ORC1009, ORC1010 and ORC1011 are to Yarra Transport, Port Phillip Freight and Rex Media Group.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-76e3f056-479f-417c-a72b-f3d767899b87",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-5613938b-9e27-472e-92ae-3b038b669d10",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-33e4123e-7cdd-4f05-9a0a-eb8adeb2b868",
+          "locator": "customer",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Finding X-GEN-05-1-R12-1 on XJ-405 (ORC1003) pairs it with ORC1008 of the same customer, date and amount and lists XJ-430 as its full credit; ORC1003 is posted by XJ-405-2.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "ORC1008 has the service record SR-ORC1008 for July 2026; ORC1003 has none.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1008",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "id",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Journal entries processed outside the normal course of business, and entries with little or no explanation, call for examination of their underlying support (ASA 240 para A44).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The only invoice CR1003 can cancel is ORC1003, the duplicate of ORC1008 without a service record.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Cancelling a duplicate invoice in full is appropriate, so XJ-430 is supported and no misstatement arises.",
+      "evidence": [],
+      "from_steps": [
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-430-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-430-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-76e3f056-479f-417c-a72b-f3d767899b87",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-5613938b-9e27-472e-92ae-3b038b669d10",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-33e4123e-7cdd-4f05-9a0a-eb8adeb2b868",
+      "locator": "customer",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1008",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "id",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A service record for ORC1003, or a customer statement showing ORC1003 as owed, would show CR1003 cancels a valid invoice.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}
