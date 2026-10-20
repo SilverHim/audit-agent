@@ -34,7 +34,7 @@
     },
     {
       "kind": "fact",
-      "text": "No approver is recorded for XJ-499: the entry was posted without independent review.",
+      "text": "No approver is recorded for XJ-499; the ledger records no approver for any journal, so there is no evidence of independent review.",
       "evidence": [
         {
           "type": "voucher",
@@ -105,7 +105,7 @@
     },
     {
       "kind": "inference",
-      "text": "An openly described entry whose effects offset, with no effect on profit or loss or net assets, gives no indication of fraud; the missing review is a control deficiency lead, not evidence of intent.",
+      "text": "An openly described entry whose effects offset, with no effect on profit or loss or net assets, gives no indication of fraud; the lack of evidence of independent review is a control deficiency lead, not evidence of intent.",
       "evidence": [],
       "from_steps": [
         0,

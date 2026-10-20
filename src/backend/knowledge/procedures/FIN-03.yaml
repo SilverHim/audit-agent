@@ -14,6 +14,14 @@ cycle: Completion
 owner: A8
 feature: misstatement             # 功能开关 (services/features.py): 错报闭环
 outputs: [judgments, review_tasks, misstatements]
+# 读的数据 (需求 R274, 第 1 轮审核 R157-01): 提示词的上下文 (见 FIN-03.md.j2 头注释) 有来源判断对象的分录行, 来源判断
+# 所引的其余行与文件登记 (document 指针的可靠性取自登记). 所引的行取现有来源程序 (REV-02, CSH-02, GEN-02) 判断能引的
+# 行类型: 分录行, 试算表行, 银行流水, 销售发票, 发运或服务完成记录
+reads: [journal_entries, trial_balance, bank_transactions, sales_invoices, delivery_notes, documents]
+# 读哪几类文件的登记 (需求 R304): 来源判断所引的文件类型不定 (Xero 演示里有固定资产登记表, 回函与工资册), 同 GEN-02
+# 列全部可作证据的类型, 即 judgment_engine.DOCUMENT_EVIDENCE 的键
+document_reads: [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter,
+                 representation_letter, correspondence, governance_communication, agreement, internal_record]
 engine: hybrid
 autonomy_level: L2
 # 需求原文要求分类模型反复失败时允许审计师手工给结果 (manual_result_allowed 真). P2 以外的节点等人时失败任务现在只认

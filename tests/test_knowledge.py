@@ -177,7 +177,8 @@ APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pd
 SOURCES: dict[str, Source] = {
     "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
     "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", (12, 21)),)),  # 第 31 段至第 88 段
-    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
+    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; 第 36 段即 ASA240-P36, 需求 R157, 也在第 17 页), 第 31-32 页
+    # (A44); 新版不用
     "ASA210": Source((("01_审计准则_ASA/ASA_210.pdf", (10, 12)),)),  # 第 6 段至第 10 段
     "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
     "ASA300": Source((("01_审计准则_ASA/ASA_300.pdf", (10, 12)),)),  # 第 7 段至第 13 段
@@ -2079,6 +2080,86 @@ def test_fin03_template_loads_only_with_misstatement() -> None:
     assert "FIN-03" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
     on = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement"}))
     assert on.enabled("FIN-03") and "FIN-03" in {p.id for p in fixed_procedures(on)}
+
+
+def fin03_variables() -> dict[str, Any]:
+    """FIN-03 提示词的变量, 按头注释逐项给齐 (data 的各列表都非空), 模拟 R158 交给 judge 的上下文."""
+    library = ProcedureLibrary(ROOT)
+    fragments = [library.fragment(f) for f in library.load("FIN-03").standards]
+    misstatement = {
+        "id": "M-D-1",
+        "version": 1,
+        "judgment_id": "J-GEN-02-1-XJ-499",
+        "type": "factual",
+        "account": "Office equipment (710)",
+        "account_code": "710",
+        "assertion": "Existence",
+        "amount_cents": 75000,
+        "direction": "overstated",
+        "status": "identified",
+    }
+    pointer = {"type": "voucher", "source_type": "journal_entry", "source_id": "XJ-499-1", "locator": "debit_cents"}
+    source = {
+        "id": "J-GEN-02-1-XJ-499",
+        "procedure_id": "GEN-02",
+        "subject_id": "XJ-499",
+        "conclusion": "The entry has no basis.",
+        "evidence": [pointer],
+    }
+    line = {
+        "source_type": "journal_entry",
+        "id": "XJ-499-1",
+        "entry_no": "XJ-499",
+        "posting_date": "2026-08-16",
+        "created_by": "xero",
+        "approved_by": None,
+        "account_code": "710",
+        "debit_cents": 75000,
+        "credit_cents": 0,
+        "description": "Office equipment depreciation",
+        "source_doc": "Being depreciation on office equipment - Manual",
+    }
+    data = {
+        "misstatement": misstatement,
+        "source_judgment": source,
+        "journal_lines": [line],
+        "cited_rows": [{"source_type": "trial_balance", "account_code": "710", "balance_cents": 75000}],
+        "documents": [
+            {
+                "id": "DOC-FAR",
+                "file_name": "fixed_asset_register.pdf",
+                "type": "internal_record",
+                "page_count": 1,
+                "reliability": "internal_original",
+            }
+        ],
+        "fraud_risks": [
+            {"id": "R-9", "assertion": "Occurrence", "level": "significant", "description": "Management override."}
+        ],
+    }
+    return {
+        "subject_id": "M-D-1",
+        "task": {"params": {}, "risks": []},
+        "data": data,
+        "rule_findings": [],
+        "standards": [f.model_dump(mode="json") for f in fragments if f is not None],
+    }
+
+
+def test_fin03_prompt_renders_with_its_header_variables() -> None:
+    """R157 (第 1 轮审核 R157-02): 头注释是 R158 的数据契约. 模板取用的顶层变量都在头注释里; 按头注释给齐变量 (各列表
+    非空) 渲染通过 (StrictUndefined), 舞弊风险行, 分录行, 所引的行, 文件登记与两个片段的正文都进了提示词."""
+    source = (ROOT / "prompts" / "FIN-03.md.j2").read_text(encoding="utf-8")
+    header = source.split("#}", 1)[0]
+    used = meta.find_undeclared_variables(Environment().parse(source))
+    assert used and all(re.search(rf"^ +{name}\b", header, re.MULTILINE) for name in used), used
+    variables = fin03_variables()
+    text = prompt_env(ROOT / "prompts").get_template("FIN-03.md.j2").render(variables)
+    assert "- R-9: Occurrence, significant. Management override." in text
+    assert '"id": "XJ-499-1"' in text and '"balance_cents": 75000' in text and '"id": "DOC-FAR"' in text
+    assert "judgment J-GEN-02-1-XJ-499 (GEN-02, subject XJ-499)" in text
+    for f in variables["standards"]:
+        assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
 
 
 PLN15_VARIABLES = [

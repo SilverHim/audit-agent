@@ -2,7 +2,7 @@
 # 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行.
 # 本项目两个审计期间分别始于 2025-07-01 (Numbat) 与 2026-07-01 (Xero), 早于新版 ASA_240_（2026-12-15起生效）.pdf
 # Aus 0.3 段的 2026-12-15 (operative for periods beginning on or after), 适用现行版, 新版不用. 分录测试的段号以现行
-# 编译版第 33(a) 段为准 (新版另行编号); 错报段 (MD-2) 只往本文件追加 ASA240-P36.
+# 编译版第 33(a) 段为准 (新版另行编号); ASA240-P36 由需求 R157 追加.
 standard: ASA 240
 title: The Auditor's Responsibilities Relating to Fraud in an Audit of a Financial Report
 compiled: "2023-12-14"   # Compilation Number 8

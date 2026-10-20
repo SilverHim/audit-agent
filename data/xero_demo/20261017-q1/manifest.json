@@ -678,35 +678,35 @@
     },
     {
       "path": "llm/FIN-03/804.json",
-      "sha256": "4c703ea1f27840997bae0910d6c23519fb0c0a75937843d6842f844209ae9379",
+      "sha256": "f951eef8d26f22aef6de1d734373e3a42976f257dcaf19676280243c6ee05c8d",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
     },
     {
       "path": "llm/FIN-03/805.json",
-      "sha256": "c4b7ef939fecd2cc55a5413eeafa1ab1557b50cc3b7c6970ba13836ee0fe35d1",
+      "sha256": "5482b750a110d2ed9121537676e6f7eba67b06b866cdd3eebcafd371786c4037",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
     },
     {
       "path": "llm/FIN-03/826.json",
-      "sha256": "51c48d197d92f61d7539043f57d83452a4d64e98e8636e2f13fa37e33afdab62",
+      "sha256": "a786f4df0b57305469b439990867f29ad41f84af8e450bce26b03ad908b48285",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
     },
     {
       "path": "llm/FIN-03/BA-091.json",
-      "sha256": "dff37242c5d8c7a5d36f6e33bc94fcbc29652dda4dcf41e087f90d27065d2fda",
+      "sha256": "2daf6e65d16abb477ecee4b7e31b6d4d03ee3fb2ebc0091e8ef0e424bdb354fd",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
     },
     {
       "path": "llm/FIN-03/XJ-499.json",
-      "sha256": "a685b0fc6158456c08c46a099eeb75b41dab2b130ade48af3414ab0037069764",
+      "sha256": "ad0629f87ab0093d097f69ff5a4378f54ecc4e2b24254f5d66197f2f7fcb2b26",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

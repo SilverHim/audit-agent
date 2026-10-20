@@ -3,7 +3,7 @@
   "reasoning_chain": [
     {
       "kind": "fact",
-      "text": "Wages and salaries (477) total AUD 33,500.00 for the period, the five fortnightly pay runs from 2 August to 27 September 2026.",
+      "text": "Wages and salaries (477) total AUD 33,500.00 for the period.",
       "evidence": [
         {
           "type": "voucher",
@@ -18,7 +18,7 @@
     },
     {
       "kind": "fact",
-      "text": "The payroll register shows three full-time employees who started on 20 July 2026, paid AUD 6,700.00 in total per 14-day pay period; the last pay period ended on 27 September 2026 and the next pay day is 11 October 2026.",
+      "text": "The payroll register shows three full-time employees who started on 20 July 2026, paid AUD 6,700.00 in total per 14-day pay period in five pay runs from 2 August to 27 September 2026 (AUD 33,500.00 in total); the last pay period ended on 27 September 2026 and the next pay day is 11 October 2026.",
       "evidence": [
         {
           "type": "voucher",

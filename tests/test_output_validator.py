@@ -1542,9 +1542,9 @@ async def test_fin03_xero_fixtures_pass_four_levels(
 
 @pytest.mark.external
 async def test_fin03_judge_returns_the_classification_draft() -> None:
-    """R157 验收 4, 6: judge 带回通过校验的草稿 (JudgmentOutcome.draft, 即分类草稿, 判断之外的性质由调用方取); 提示词按
-    头注释的变量渲染 (StrictUndefined, 缺一项即报错). XJ-499 改为有舞弊迹象而理由为空: 判 semantic, 只调 1 次,
-    judgment 与 draft 都为空, 失败类型 unattributed (混合程序)."""
+    """R157 验收 4, 6: judge 带回通过校验的草稿 (JudgmentOutcome.draft, 即分类草稿, 判断之外的性质由调用方取, 序列化
+    时也在); 提示词按 judge 给的顶层变量渲染 (data 的各列表为空; 按头注释给齐时的渲染见 test_knowledge). XJ-499 改为
+    有舞弊迹象而理由为空: 判 semantic, 只调 1 次, judgment 与 draft 都为空, 失败类型 unattributed (混合程序)."""
     good = fin03_fixture("XJ-499")
     fraud = json.loads(good)
     fraud["nature"]["fraud_indicative"] = True
@@ -1566,6 +1566,7 @@ async def test_fin03_judge_returns_the_classification_draft() -> None:
     assert passed.judgment is not None and passed.judgment.id == "J-FIN-03-1-M-D-XJ499"
     assert isinstance(passed.draft, MisstatementClassificationDraft)
     assert passed.draft.nature.type is MisstatementType.factual
+    assert passed.model_dump(mode="json")["draft"]["nature"]["type"] == "factual"  # 序列化不丢性质 (审核 R157-05)
     assert passed.draft.evidence == passed.judgment.evidence  # 指针已按来源改写, 同判断
     failed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
     assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (None, None, "unattributed", 1)

@@ -3,7 +3,7 @@
   "reasoning_chain": [
     {
       "kind": "fact",
-      "text": "GL account 091 shows AUD 11,581.23 at 30 September 2026, the balance the bank confirms; no interest was credited to the account in the period.",
+      "text": "GL account 091 shows AUD 11,581.23 at 30 September 2026.",
       "evidence": [
         {
           "type": "voucher",
@@ -18,7 +18,7 @@
     },
     {
       "kind": "fact",
-      "text": "The bank's reply states accrued interest of AUD 48.53 at 30 September 2026, in the customer's favour and not yet credited to the account.",
+      "text": "The bank's reply confirms a balance of AUD 11,581.23 at 30 September 2026, states that no interest was credited to the account in the period, and states accrued interest of AUD 48.53 at that date, in the customer's favour and not yet credited to the account.",
       "evidence": [
         {
           "type": "external",
