@@ -3,12 +3,14 @@
 import asyncio
 import os
 import shutil
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, insert, select, text
+from sqlalchemy import Index, delete, event, insert, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -47,6 +49,7 @@ from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
+from tests.test_data_store_postgres import migration as migration_module
 from tests.test_fakes import demo_rows, trail_pages_hold
 from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
 
@@ -314,6 +317,143 @@ async def test_trail_list_pages(storage):
         profile=loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex}),
     )
     await trail_pages_hold(PostgresAuditTrail(engine), e.id, other.id)
+
+
+# ── 需求 R298: 留痕表按项目读取的索引 ──
+
+TIMELINE_KINDS = [TrailKind.transition, TrailKind.decision, TrailKind.deferral, TrailKind.data, TrailKind.conversation]
+KEY = "R298:transition:p0_intel"  # 测试写入的一条带防重复键的留痕
+TrailRead = Callable[[PostgresAuditTrail, str, str], Awaitable[object]]  # (留痕, 项目, 游标) → 一次读取
+TRAIL_READS = [
+    # 工作台时间线 (前端 lib/timeline.ts): 最近一页与以最早一条为游标往前翻, 带或不带它的那几类; 索引须给出顺序
+    pytest.param(lambda t, eid, _: t.list(eid, None, limit=100, newest=True), m.TRAIL_BY_TIME, True, id="newest"),
+    pytest.param(
+        lambda t, eid, at: t.list(eid, None, limit=100, newest=True, before=at), m.TRAIL_BY_TIME, True, id="before"
+    ),
+    pytest.param(
+        lambda t, eid, _: t.list(eid, TIMELINE_KINDS, limit=100, newest=True),
+        m.TRAIL_BY_TIME,
+        True,
+        id="timeline_newest",
+    ),
+    pytest.param(
+        lambda t, eid, at: t.list(eid, TIMELINE_KINDS, limit=100, newest=True, before=at),
+        m.TRAIL_BY_TIME,
+        True,
+        id="timeline_before",
+    ),
+    # 只取一类: trail_pages.all_of_kind 的一页 (按写入顺序), last_of (最近一条); 索引须给出顺序
+    pytest.param(
+        lambda t, eid, _: t.list(eid, TrailKind.deferral, limit=500), m.TRAIL_BY_KIND, True, id="one_kind_page"
+    ),
+    pytest.param(
+        lambda t, eid, _: t.last_of(eid, TrailKind.data, ("xero_synced",)), m.TRAIL_BY_KIND, True, id="last_of"
+    ),
+    # 按防重复键取: 一个键至多几条, 排序可以留着
+    pytest.param(lambda t, eid, _: t.find_success(eid, KEY), m.TRAIL_BY_KEY, False, id="find_success"),
+]
+
+
+@pytest.mark.parametrize(("read", "index", "ordered"), TRAIL_READS)
+async def test_trail_reads_use_the_indexes(storage, read: TrailRead, index: Index, ordered: bool) -> None:
+    """验收 2: 截下 PostgresAuditTrail 这次读取发出的 SQL, 在本项目的事务里 (项目条件同真实查询, 来自行级安全)
+    EXPLAIN, 计划中出现该索引名 (不断言代价).
+
+    EXPLAIN 前关掉顺序扫描; 要索引给出顺序的读法 (ordered) 另关掉排序. 项目条件是 current_setting(...), 规划时不知道
+    是哪个项目, 按 "每个项目的平均行数" 估计; 测试库里项目多而每个项目留痕少, 估出来先取全再排序更便宜. 关掉排序后看的
+    是索引能否直接按 (created_at, id) 的顺序取到 limit 条. 按键取的 find_success 一个键至多几条, 排序不贵, 不关; 关了
+    规划器反而改用按时间的索引逐条比键. 没有对应索引时计划里就没有这个索引名."""
+    engine, e, _, _ = storage
+    trail = PostgresAuditTrail(engine)
+    ids = [
+        await trail.record(
+            TrailEntry(
+                engagement_id=e.id,
+                kind=kind,
+                actor="U-1",
+                summary=kind.value,
+                payload={"action": "xero_synced"},
+                idempotency_key=KEY if kind is TrailKind.transition else None,
+            )
+        )
+        for kind in (TrailKind.data, TrailKind.transition, TrailKind.deferral)
+    ]
+    sent: list[tuple[str, Any]] = []
+
+    def capture(conn: Any, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool) -> None:
+        if statement.lstrip().startswith("SELECT") and "audit_trail" in statement:
+            sent.append((statement, parameters))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture)
+    try:
+        await read(trail, e.id, ids[1])
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture)
+    [(statement, parameters)] = sent
+    async with transaction(engine, e.id) as conn:
+        await conn.execute(text("SET LOCAL enable_seqscan = off"))
+        if ordered:
+            await conn.execute(text("SET LOCAL enable_sort = off"))
+        plan = "\n".join((await conn.exec_driver_sql(f"EXPLAIN {statement}", parameters)).scalars())
+    assert index.name in plan, plan
+
+
+# pg_indexes 的写法 (USING btree 之后): 列, 部分索引另有条件
+TRAIL_INDEXES = {
+    m.TRAIL_BY_TIME.name: "(engagement_id, created_at, id)",
+    m.TRAIL_BY_KIND.name: "(engagement_id, kind, created_at, id)",
+    m.TRAIL_BY_KEY.name: "(engagement_id, idempotency_key) WHERE (idempotency_key IS NOT NULL)",
+}
+
+
+async def test_migration_0015_round_trip(storage) -> None:
+    """验收 3: 以属主角色在一个事务里走 0015 降级再升级 (两次), 最后回滚. 测试库的留痕表已有数据; 降级后三个索引
+    都没了, 升级后定义同 TRAIL_INDEXES, 再升级一次不报错; 模型声明的列与部分索引的条件与之相同. 新库 0001 按当前模型
+    建表时已带这三个索引, 0015 跳过. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    engine, e, _, _ = storage
+    await PostgresAuditTrail(engine).record(
+        TrailEntry(engagement_id=e.id, kind=TrailKind.data, actor="U-1", summary="x", idempotency_key=KEY)
+    )
+    module = migration_module("0015_audit_trail_indexes")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    owner = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with owner.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def indexes() -> dict[str, str]:
+                    found = await conn.execute(
+                        text("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'audit_trail'")
+                    )
+                    return {name: definition.split(" USING btree ")[1] for name, definition in found}
+
+                assert (await indexes()).items() >= TRAIL_INDEXES.items()
+                await conn.run_sync(run("downgrade"))
+                assert not set(await indexes()) & set(TRAIL_INDEXES)
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert (await indexes()).items() >= TRAIL_INDEXES.items()
+            finally:
+                await outer.rollback()
+    finally:
+        await owner.dispose()
+    declared = {i.name: "(" + ", ".join(c.name for c in i.columns) + ")" for i in m.audit_trail.indexes}
+    assert declared == {name: definition.split(" WHERE ")[0] for name, definition in TRAIL_INDEXES.items()}
+    assert str(m.TRAIL_BY_KEY.dialect_options["postgresql"]["where"]) == "audit_trail.idempotency_key IS NOT NULL"
 
 
 async def test_evidence_and_adapters(storage, tmp_path):
