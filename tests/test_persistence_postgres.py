@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from backend.adapters.confirmation_mock import DatasetConfirmationChannel, MockConfirmationChannel
 from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource
 from backend.adapters.xero_supplements import SupplementMismatch
+from backend.contracts.data import ExtractionEdit
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -116,6 +117,9 @@ async def test_load_rules_and_project_isolation(storage):
     assert await financial.gl_balance(e.id, "3200", date(2026, 6, 30)) == -376100000
     assert await financial.gl_balance(e.id, "4100", date(2026, 6, 30)) == -1200000000
     assert len(await financial.documents(e.id)) == 3
+    # 数据集载入不写待审财报, 不为 Numbat 补财报 (需求 R217 验收 5)
+    assert await financial.financial_statements(e.id) is None
+    assert await financial.record(e.id, "financial_statement_line", "SOFP-OREC") is None
     async with engine.connect() as conn:
         assert not (await conn.execute(select(m.FINANCIAL["sales_invoices"]))).all()
         role = (
@@ -1256,6 +1260,7 @@ async def test_xero_snapshot_loads_and_ties_to_trial_balance(tmp_path):
     assert counts["accounts"] > 0 and counts["journal_entries"] > 0 and counts["delivery_notes"] == 0
     unmapped = await financial.query(e.id, "SELECT code FROM accounts WHERE category IS NULL", {})
     assert len(unmapped) <= 1  # Demo 只有中转科目认不出
+    assert await financial.financial_statements(e.id) is None  # 不写待审财报 (需求 R217 验收 5)
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     diff = {
         code: (balance, gl)
@@ -1496,6 +1501,7 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
     assert await financial.documents(e.id) == [] and await financial.contracts(e.id) == []
+    assert await financial.financial_statements(e.id) is None  # 财报由上传后的抽取写入 (需求 R217)
     linked = await financial.query(e.id, "SELECT count(*) AS n FROM sales_invoices WHERE contract_id IS NOT NULL", {})
     assert linked[0]["n"] == 0
     snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的八张表, 不并补造表
@@ -1958,3 +1964,70 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
             if e.kind is TrailKind.transition and e.payload["id"] == "CSH-02"
         ]
         assert moved == [("planned", "in_dispute"), ("in_dispute", "completed")]
+
+
+# ── 需求 R217: 待审财报上传抽取 (真实库) ──
+
+
+@pytest.mark.external
+async def test_statements_extracted_and_edited_on_real_store(xero_case) -> None:  # type: ignore[no-untyped-def]
+    """验收 6: 真实库上的 Xero 项目 (承接与外勤已导入, 数据已齐) REQ-financial_statements 为 open, 演示导入 statements
+    阶段按请求上传 fs_v1.pdf: 不调分类, 1 行 llm_call DOC-STATEMENTS (run_id 以 UPLOAD-{文件 ID}- 开头); 待审财报第 1 版
+    同 fs_v1.json (document_id 为该文件), 35 行按列示顺序读回; record 取 SOFP-OREC; 抽取版本一版; 文件 extracted,
+    请求 received. 审计师改一行出第 2 版, 当前版本读它. 另一项目读不到 (行级安全)."""
+    from backend.services.data_service import DataService
+    from backend.services.trail_pages import all_of_kind
+    from tests.fakes import XERO_FS_V1
+    from tests.xero_fakes import xero_profile
+    from tests.xero_flow import import_stage, offline_runner
+    from tests.xero_harness import db_deps
+
+    h = await db_deps(xero_case("T0"))
+    eid, financial = h.engagement.id, h.deps.financial_store
+    service = DataService(h.deps, offline_runner(h.deps), demo=cast(Any, h.deps.datasets))
+    assert {r.id: r.status for r in await h.deps.data.requests(eid)}["REQ-financial_statements"] == "open"
+
+    result = await import_stage(service, eid, "statements", h.actor)
+
+    assert result is not None and result.status == "imported"
+    [fs_doc] = await financial.documents(eid, DocumentType.financial_statements)
+    assert (fs_doc.id, fs_doc.file_name, fs_doc.status) == ("DOC-e2670a8e43ac", "fs_v1.pdf", "extracted")
+    calls = [(e.procedure_id, e.run_id) for e in await all_of_kind(h.deps.trail, eid, TrailKind.llm_call)]
+    statements_calls = [run for procedure, run in calls if procedure == "DOC-STATEMENTS"]
+    assert len(statements_calls) == 1 and statements_calls[0].startswith(f"UPLOAD-{fs_doc.id}-")
+    assert all(run is None or not run.startswith(f"UPLOAD-{fs_doc.id}") for p, run in calls if p == "DOC-CLASSIFY")
+    v1 = XERO_FS_V1.model_copy(update={"document_id": fs_doc.id})
+    assert await financial.financial_statements(eid) == v1
+    assert await financial.record(eid, "financial_statement_line", "SOFP-OREC") == {
+        "code": "SOFP-OREC",
+        "statement": "financial_position",
+        "name": "Other receivables (accrued interest)",
+        "amount_cents": 4853,
+        "prior_amount_cents": 0,
+        "sign": 1,
+        "account_codes": ["620"],
+        "subtotal": False,
+        "fs_id": "FS",
+        "fs_version": 1,
+    }
+    assert [(r.version, r.changed_by) for r in await financial.statements_history(eid)] == [(1, "A3")]
+    assert {r.id: r.status for r in await h.deps.data.requests(eid)}["REQ-financial_statements"] == "received"
+
+    edit = ExtractionEdit(field="lines[SOFP-OREC].amount_cents", value=4900, reason="按附注 1 核对")
+    v2 = await service.edit_financial_statements(eid, edit, h.actor)
+    assert (v2.version, v2.lines[2].amount_cents) == (2, 4900)
+    assert await financial.financial_statements(eid) == v2
+    assert [r.version for r in await financial.statements_history(eid)] == [1, 2]
+
+    period = (h.engagement.period_start, h.engagement.period_end)
+    other = await cast(Any, h.deps.engagement_store).create(
+        owner_id=h.actor,
+        period_start=period[0],
+        period_end=period[1],
+        dataset=None,
+        profile=xero_profile().model_copy(update={"id": "CLIENT-" + uuid4().hex}),
+    )
+    assert await financial.financial_statements(other.id) is None
+    assert await financial.statements_history(other.id) == []
+    lines = "SELECT count(*) AS n FROM financial_statement_lines"
+    assert [(await financial.query(e, lines, {}))[0]["n"] for e in (eid, other.id)] == [70, 0]

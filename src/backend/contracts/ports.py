@@ -52,6 +52,7 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    FinancialStatements,
     LlmSettings,
     LlmSlot,
     Model,
@@ -100,7 +101,8 @@ class FinancialDataStore(Protocol):
     async def gl_balance(self, eid: str, account_code: str, as_of: date) -> int: ...
 
     async def record(self, eid: str, source_type: SourceType, source_id: str) -> dict[str, Any] | None:
-        """取一行明细; trial_balance 的 source_id 为 account_code."""
+        """取一行明细; trial_balance 的 source_id 为 account_code. financial_statement_line 的 source_id 为行代码, 取
+        当前版本 (financial_statements) 中该行, 键为 FinancialStatementLine 的字段加 fs_id, fs_version (需求 R217)."""
         ...
 
     async def journal_entries(
@@ -156,6 +158,30 @@ class FinancialDataStore(Protocol):
         ...
 
     async def data_version(self, eid: str) -> int: ...
+
+    async def financial_statements(self, eid: str) -> FinancialStatements | None:
+        """待审财报的当前版本 (需求 R217): 版本最高的一版 (抽取与修改都出新版本), 不看来源文件现在登记的类型; 从没
+        抽出过 (没有已抽取的财务报表文件) 为 None. 数据集载入不写财报."""
+        ...
+
+    async def save_financial_statements(
+        self,
+        eid: str,
+        statements: FinancialStatements,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """A3 抽取与审计师修改共用 (需求 R217): 写这一版财报与各行 (同版本已有则覆盖, 抽取重做时幂等), 并在
+        extraction_versions 记这一版的完整内容 (target_type financial_statements, target_id 财报 ID). changed_by,
+        field, reason 为修改人, 改的字段与理由, 抽取所得为 A3 与空. 在 AuditOutputStore.transaction 块内调用时加入
+        该事务."""
+        ...
+
+    async def statements_history(self, eid: str) -> list[ExtractionRecord]:
+        """待审财报的各版 (extraction_versions 中 target_type financial_statements 的), 按版本升序; 没有为空."""
+        ...
 
 
 class AuditOutputStore(Protocol):
@@ -483,10 +509,11 @@ class DataStore(Protocol):
     ) -> ImportBatch:
         """确认一次智能导入 (需求 R277), 一个事务内全部写成或全不写: 有表时同 write_tables 写一个新数据版本 (source
         import, 出处取 origins); 各文件按 DocumentChange 改登记, 依次写合同的各版 (同 FinancialDataStore.save_contract,
-        记 A3), 回函副本的抽取结果 (reply, 第 1 版) 与 ASIC 摘录的抽取结果 (registry_extract, 接在该文件已有的版本
-        之后, 记 A3, 需求 R290); 写了合同或摘录时数据变动另记 contracts 或 registry_extracts (需求 R274; 有表时记在
-        写表的版本上, 没有表时数据版本 +1 只记这两类, 同 bump_version); 再把批次覆盖为 batch (调用方已置
-        committed), 记写入后的数据版本 (没写表, 合同与摘录时为空). 批次 ID 是幂等键: 库里的批次已是 committed 时
+        记 A3), 回函副本的抽取结果 (reply, 第 1 版), ASIC 摘录的抽取结果 (registry_extract, 接在该文件已有的版本
+        之后, 记 A3, 需求 R290) 与待审财报的新一版 (同 FinancialDataStore.save_financial_statements, 记 A3, 需求
+        R217); 写了合同, 摘录或财报时数据变动另记 contracts, registry_extracts 或 financial_statements (需求 R274; 有表
+        时记在写表的版本上, 没有表时数据版本 +1 只记这几类, 同 bump_version); 再把批次覆盖为 batch (调用方已置
+        committed), 记写入后的数据版本 (没写表, 合同, 摘录与财报时为空). 批次 ID 是幂等键: 库里的批次已是 committed 时
         什么都不写, 返回库里的批次. 返回写入后的批次. 批次不存在抛 LookupError, 文件不存在抛 FileNotFoundError
         (都整体回滚); 项目 locked 抛 EngagementLocked."""
         ...

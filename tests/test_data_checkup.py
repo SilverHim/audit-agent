@@ -469,7 +469,12 @@ async def test_xero_sync_raises_two_requests_received_after_uploads() -> None:
     )
     await asyncio.gather(*list(service.tasks))
     statement = next(d for d in financial.document_refs if d.id == document.id)
-    assert (statement.type, statement.status) == (DocumentType.financial_statements, "classified")
+    # R217: 按请求定为财务报表后抽取待审财报; 测试的固定输出里没有这份草稿, 抽取没通过转人工, 照样算已提供
+    assert (statement.type, statement.status, statement.failed_step) == (
+        DocumentType.financial_statements,
+        "needs_manual",
+        "extract",
+    )
     assert {r.id: r.status for r in await data.requests(EID)} == {
         "REQ-approval_log": "received",
         "REQ-financial_statements": "received",

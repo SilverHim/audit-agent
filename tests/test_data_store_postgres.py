@@ -1453,7 +1453,7 @@ async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-un
         await engine.dispose()
 
 
-# ── 需求 R96, R178, R136, R215: 新建的项目表 (工资册, 应付账单, 股权与任职关系图, 签字前提的产出) ──
+# ── 需求 R96, R178, R136, R215, R217: 新建的项目表 (工资册, 应付账单, 股权与任职关系图, 签字前提的产出, 待审财报) ──
 
 NEW_TABLES = [
     pytest.param(
@@ -1484,12 +1484,29 @@ NEW_TABLES = [
         "VALUES (:e, 'S307C', 1, 'IndependenceDeclaration', '{}', 'A10', now())",
         id="completion_records",
     ),
+    pytest.param(
+        "0019_financial_statements",
+        "financial_statements",
+        "INSERT INTO financial_statements (engagement_id, id, version, prepared_at, directors_declaration_date, "
+        "document_id, comparative_restatement_entry_nos) VALUES (:e, 'FS', 1, '2026-10-22', NULL, NULL, '[]')",
+        id="financial_statements",
+    ),
+    pytest.param(
+        "0019_financial_statements",
+        "financial_statement_lines",
+        "INSERT INTO financial_statement_lines (engagement_id, fs_id, fs_version, line_no, code, statement, name, "
+        "amount_cents, sign, account_codes, subtotal, prior_amount_cents) "
+        "VALUES (:e, 'FS', 1, 1, 'SOFP-OREC', 'financial_position', 'Other receivables', 4853, 1, "
+        "'[\"620\"]', false, 0)",
+        id="financial_statement_lines",
+    ),
 ]
 
 
 @pytest.mark.parametrize(("name", "table", "insert_row"), NEW_TABLES)
 async def test_migration_of_a_new_table_round_trip(storage, name: str, table: str, insert_row: str) -> None:  # type: ignore[no-untyped-def]
-    """需求 R96 (0013 工资册), R178 (0014 应付账单), R136 (0016 关系图), R215 (0017 签字前提的产出): 以属主角色
+    """需求 R96 (0013 工资册), R178 (0014 应付账单), R136 (0016 关系图), R215 (0017 签字前提的产出), R217 (0019 待审
+    财报的两张表, 各查一次): 以属主角色
     在一个事务里走该迁移降级再升级 (两次), 最后回滚.
     降级后没有这张表; 升级后开了并强制行级安全, 有项目隔离策略, 应用角色可增删改查 (先撤掉 0001 的默认授权, 权限须来自
     迁移的 GRANT); 一个项目写的行另一项目看不到. 需另设 TEST_DATABASE_OWNER_URL."""

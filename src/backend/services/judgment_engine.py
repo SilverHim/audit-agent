@@ -24,6 +24,7 @@ from backend.contracts.llm_outputs import (
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
+    StatementsExtraction,
 )
 from backend.contracts.models import (
     AgentId,
@@ -666,7 +667,8 @@ async def structure_only(
     validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
 ) -> CheckResult:
     """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification; 上传账表识别
-    SheetRecognition.
+    SheetRecognition; 待审财报抽取 StatementsExtraction (需求 R217: 报表不作证据, 没有指针; 行代码不重复在结构级查,
+    各行与科目余额勾不勾得上由 FIN-12 核对, 不算大模型输出失败).
 
     文件分类的类型取值已由结构校验限定, 没有证据指针. 账表识别的方案在结构校验里自洽 (TablePlan 的模型校验); 与工作表
     对不对得上在套用时查 (table_plan.check_plan), 不算大模型输出失败.
@@ -684,6 +686,7 @@ for _model, _check in (
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
+    (StatementsExtraction, structure_only),
 ):
     OutputValidator.register(_model, _check)
 

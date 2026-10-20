@@ -24,7 +24,7 @@ from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_perio
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import DemoTable, Supplements
 from backend.contracts import records
-from backend.contracts.data import ContractVersion, DataInput, TableKind
+from backend.contracts.data import FS_TARGET, ContractVersion, DataInput, ExtractionRecord, TableKind
 from backend.contracts.errors import AbnTaken, VersionConflict
 from backend.contracts.models import (
     AgentId,
@@ -38,6 +38,7 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    FinancialStatements,
     LlmSettings,
     LlmSlot,
     Phase,
@@ -160,9 +161,12 @@ class PostgresFinancialDataStore(Store):
             "bank_account": "bank_accounts",
             "bank_transaction": "bank_transactions",
         }
-        # 待审财报的表由需求 R217 加, 之前一律查不到; 其余没登记的行类型照旧报 KeyError
-        if source_type == "financial_statement_line":
-            return None
+        if source_type == "financial_statement_line":  # 待审财报当前版本的一行 (需求 R217)
+            current = await self.financial_statements(eid)
+            line = next((x for x in current.lines if x.code == source_id), None) if current is not None else None
+            if current is None or line is None:
+                return None
+            return {**line.model_dump(), "fs_id": current.id, "fs_version": current.version}
         t = m.FINANCIAL[names[source_type]]
         stmt = (
             select(t).where(t.c.account_code == source_id, t.c.period == "current")
@@ -300,6 +304,49 @@ class PostgresFinancialDataStore(Store):
     async def data_version(self, eid: str) -> int:
         rows = await self.rows(eid, select(m.dataset_loads.c.data_version))
         return int(rows[0]["data_version"]) if rows else 0
+
+    async def financial_statements(self, eid: str) -> FinancialStatements | None:
+        fs, lines = m.financial_statements, m.financial_statement_lines
+        async with transaction(self.engine, eid):
+            heads = await self.rows(eid, select(fs).order_by(fs.c.version.desc()).limit(1))
+            if not heads:
+                return None
+            head = heads[0]
+            rows = await self.rows(
+                eid,
+                select(lines)
+                .where(lines.c.fs_id == head["id"], lines.c.fs_version == head["version"])
+                .order_by(lines.c.line_no),
+            )
+        skip = {"engagement_id", "fs_id", "fs_version", "line_no"}
+        return FinancialStatements.model_validate(
+            {
+                **{k: v for k, v in head.items() if k != "engagement_id"},
+                "lines": [{k: v for k, v in r.items() if k not in skip} for r in rows],
+            }
+        )
+
+    async def save_financial_statements(
+        self,
+        eid: str,
+        statements: FinancialStatements,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            await write_statements(conn, eid, statements, changed_by=changed_by, field=field, reason=reason)
+
+    async def statements_history(self, eid: str) -> list[ExtractionRecord]:
+        t = m.extraction_versions
+        statement = (
+            select(*[t.c[name] for name in ExtractionRecord.model_fields])
+            .where(t.c.target_type == FS_TARGET)
+            .order_by(t.c.version)
+        )
+        return [ExtractionRecord.model_validate(r) for r in await self.rows(eid, statement)]
 
 
 class PostgresAuditOutputStore(Store):
@@ -998,6 +1045,45 @@ async def write_contract(
         await conn.execute(
             insert(m.contract_terms).values(engagement_id=eid, contract_id=contract.id, **term.model_dump())
         )
+
+
+async def write_statements(
+    conn: AsyncConnection,
+    eid: str,
+    statements: FinancialStatements,
+    *,
+    changed_by: str = AgentId.A3,
+    field: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """在已开的事务里写一版待审财报 (FinancialDataStore.save_financial_statements 与智能导入的确认共用, 需求 R217):
+    覆盖同版本的财报与各行 (line_no 为列示顺序, 从 1 起), 在 extraction_versions 记这一版."""
+    head = statements.model_dump(exclude={"lines"})
+    upsert_head = insert(m.financial_statements).values(engagement_id=eid, **head)
+    await conn.execute(upsert_head.on_conflict_do_update(index_elements=["engagement_id", "id", "version"], set_=head))
+    lines = m.financial_statement_lines
+    await conn.execute(
+        delete(lines).where(
+            lines.c.engagement_id == eid, lines.c.fs_id == statements.id, lines.c.fs_version == statements.version
+        )
+    )
+    rows = [
+        {"engagement_id": eid, "fs_id": statements.id, "fs_version": statements.version, "line_no": n, **x.model_dump()}
+        for n, x in enumerate(statements.lines, 1)
+    ]
+    if rows:
+        await conn.execute(insert(lines), rows)
+    await upsert_extraction(
+        conn,
+        eid,
+        FS_TARGET,
+        statements.id,
+        statements.version,
+        statements.model_dump(mode="json"),
+        changed_by=changed_by,
+        field=field,
+        reason=reason,
+    )
 
 
 async def write_document(

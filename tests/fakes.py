@@ -36,6 +36,7 @@ from backend.agents.evidence import confirmation_key, legacy_key
 from backend.agents.ingest import build_contract
 from backend.agents.registry import with_manual_owners
 from backend.contracts.data import (
+    FS_TARGET,
     ApprovalLogRow,
     CheckId,
     CheckInputs,
@@ -787,7 +788,8 @@ class FakeTrail:
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
     银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts),
-    试算表 (trial_balance) 与工资册 (employees), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    试算表 (trial_balance), 工资册 (employees) 与待审财报 (financial_statements, save_financial_statements,
+    statements_history; 需求 R217), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -797,6 +799,7 @@ class FakeFinancialStore:
         trial_balance: list[TrialBalanceRow] | None = None,
         accounts: list[Account] | None = None,
         employees: list[Employee] | None = None,
+        statements: list[FinancialStatements] | None = None,
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
         self.employee_rows = list(employees or [])  # 工资册 (可预置; FakeDataStore.write_tables 写入时替换), 各项目共用
@@ -808,10 +811,58 @@ class FakeFinancialStore:
         self.saved_contracts: dict[str, Contract] = {c.id: c for c in contracts or []}
         self.save_calls: list[str] = []  # save_contract 的每次调用 (合同编号)
         self.contract_versions: dict[str, list[ContractVersion]] = {}  # 合同编号 → save_contract 记下的各版本
+        # 待审财报的各版 (预置的记 A3, 与 save_financial_statements 写入的), 按版本升序, 各项目共用
+        self.statement_versions: list[ExtractionRecord] = []
+        for fs in statements or []:
+            self.put_statements(fs, AgentId.A3, None, None)
+
+    def put_statements(
+        self, statements: FinancialStatements, changed_by: str, field: str | None, reason: str | None
+    ) -> None:
+        """记一版待审财报 (同版本覆盖), 同真实实现的表与 extraction_versions."""
+        record = ExtractionRecord(
+            target_type=FS_TARGET,
+            target_id=statements.id,
+            version=statements.version,
+            data=statements.model_dump(mode="json"),
+            field=field,
+            reason=reason,
+            changed_by=changed_by,
+            changed_at=datetime.now(UTC),
+        )
+        kept = [r for r in self.statement_versions if r.version != statements.version]
+        self.statement_versions = sorted([*kept, record], key=lambda r: r.version)
 
     async def record(self, eid: str, source_type: str, source_id: str) -> dict[str, Any] | None:
+        """records 中的行; 其中没有的 financial_statement_line 取当前版本财报的该行 (同真实实现, 带 fs_id 与
+        fs_version)."""
         self.record_calls.append((source_type, source_id))
-        return self.records.get((source_type, source_id))
+        found = self.records.get((source_type, source_id))
+        if found is None and source_type == "financial_statement_line":
+            current = await self.financial_statements(eid)
+            line = next((x for x in current.lines if x.code == source_id), None) if current is not None else None
+            if current is not None and line is not None:
+                return {**line.model_dump(), "fs_id": current.id, "fs_version": current.version}
+        return found
+
+    async def financial_statements(self, eid: str) -> FinancialStatements | None:
+        """同真实实现: 版本最高的一版, 不看来源文件现在登记的类型."""
+        found = self.statement_versions
+        return FinancialStatements.model_validate(found[-1].data) if found else None
+
+    async def save_financial_statements(
+        self,
+        eid: str,
+        statements: FinancialStatements,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        self.put_statements(statements, changed_by, field, reason)
+
+    async def statements_history(self, eid: str) -> list[ExtractionRecord]:
+        return list(self.statement_versions)
 
     async def trial_balance(self, eid: str, period: Literal["current", "prior"]) -> list[TrialBalanceRow]:
         return [r for r in self.trial_balance_rows if r.period == period]
@@ -2295,8 +2346,9 @@ class FakeDataStore:
     ) -> ImportBatch:
         """同真实实现一次写成: 批次已 committed 时什么都不写, 返回它; 有表时经 write_tables 写 (记进 written, 那里
         出错时什么都没改); 改文件登记 (财务数据存储的 document_refs), 依次写合同 (save_contract), 回函抽取 (reply,
-        第 1 版) 与 ASIC 摘录抽取 (registry_extract, 接在已有版本之后); 写了合同或摘录时记数据变动 contracts 或
-        registry_extracts (有表时记在写表的版本上, 否则数据版本 +1); 批次覆盖为 batch 并记数据版本. 批次或文件
+        第 1 版), ASIC 摘录抽取 (registry_extract, 接在已有版本之后) 与待审财报 (save_financial_statements); 写了合同,
+        摘录或财报时记数据变动 contracts, registry_extracts 或 financial_statements (有表时记在写表的版本上, 否则数据
+        版本 +1); 批次覆盖为 batch 并记数据版本. 批次或文件
         不存在时在改动之前抛出 (模拟回滚)."""
         stored = self.import_batches.get(batch.id)
         if stored is None:
@@ -2331,9 +2383,13 @@ class FakeDataStore:
                 data = change.registry_extract
                 document_id = change.document_id
                 await self.save_extraction(eid, "registry_extract", document_id, number, data, changed_by=AgentId.A3)
+            if change.financial_statements is not None:  # 版本已由 staged_change 接在已有版本之后 (需求 R217)
+                await self.financial.save_financial_statements(eid, change.financial_statements)
         extracted = [DataInput.contracts] if any(change.contracts for change in documents) else []
         if any(change.registry_extract is not None for change in documents):
             extracted.append(DataInput.registry_extracts)
+        if any(change.financial_statements is not None for change in documents):
+            extracted.append(DataInput.financial_statements)
         if extracted:
             if version is None:
                 self.record(*extracted)
@@ -3405,8 +3461,9 @@ async def api_client(
 
 
 # ── Xero 演示公司的待审财报 fs_v1 (需求 R216 的表; 测试里只此一份) ──
-# data/xero_demo 的 financial_statements/fs_v1.json 由补造脚本生成并入库, R217 载入它; test_xero_demo_data 核对
-# 它与本表逐行相同, 并经 FinancialStatements 读入后 (去掉 document_id) 等于 XERO_FS_V1
+# data/xero_demo 的 financial_statements/fs_v1.json 由补造脚本生成并入库, 上传 fs_v1.pdf 后 A3 抽取的就是它 (R217 的
+# DOC-STATEMENTS fixture); test_xero_demo_data 核对它与本表逐行相同, 并经 FinancialStatements 读入后 (去掉 document_id)
+# 等于 XERO_FS_V1
 
 # 17 个损益科目
 PL_ACCOUNTS = [

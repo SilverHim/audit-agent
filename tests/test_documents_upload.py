@@ -3,31 +3,45 @@
 import asyncio
 import io
 import json
+import re
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from backend.agents import ingest
 from backend.agents.base import AgentDeps
-from backend.agents.ingest import IngestAgent, save_new_contract
-from backend.contracts.data import DataInput, ExtractionEdit
+from backend.agents.ingest import (
+    STATEMENTS,
+    DocumentIntake,
+    IngestAgent,
+    Requested,
+    build_statements,
+    save_new_contract,
+)
+from backend.contracts.data import FS_TARGET, DataChange, DataInput, ExtractionEdit, ImportBatch
 from backend.contracts.errors import DataRejected, DecisionRejected
+from backend.contracts.knowledge import ProcedureTemplate
+from backend.contracts.llm_outputs import StatementsExtraction
 from backend.contracts.models import (
     Confirmation,
     Contract,
     Decision,
     DocumentRef,
     DocumentType,
+    FinancialStatements,
     GateVerdict,
+    Phase,
     ProcedureRun,
+    ProcedureStatus,
     Reliability,
     ReviewTask,
     RunStatus,
+    RunTrigger,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -35,16 +49,23 @@ from backend.contracts.models import (
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.services import data_import
+from backend.services.data_quality import document_request
 from backend.services.data_service import DataService
+from backend.services.extraction_edits import apply_statements_edit
+from backend.services.import_batches import document_item, staged_of
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from backend.services.staleness import stale_procedures
+from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
+    NOW,
     NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     NUMBAT_REPLIES,
     NUMBAT_TRIAL_BALANCE,
     UPLOAD_FIXTURES,
+    XERO_FS_V1,
     FakeDataStore,
     FakeEngagementStore,
     FakeEvidenceStore,
@@ -55,6 +76,7 @@ from tests.fakes import (
     api_client,
     make_ctx,
     make_deps,
+    make_procedure,
     make_runner,
     wait_idle,
 )
@@ -1110,3 +1132,410 @@ async def test_recover_and_reupload_backfill_missing_upload_trail(monkeypatch: p
     entries = [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] not in CHECKUP_ACTIONS]
     assert [e.payload["action"] for e in entries] == ["upload", "classify"]
     assert entries[0].actor == "U-1"
+
+
+# ── 待审财报: 上传抽取, 当前版本与修改 (需求 R217) ──
+
+LLM_XERO = UPLOAD_FIXTURES.parents[1] / "llm_xero"  # Xero 演示的固定输出正本, 含 DOC-STATEMENTS/fs_v1.json
+FS_PDF = "fs_v1.pdf"
+FS_DOC = "DOC-e2670a8e43ac"  # 补造 fs_v1.pdf 的文件 ID (manifest), 同 fs_v1.json 的 document_id
+FS_REQUEST = "REQ-financial_statements"
+FS_V1 = XERO_FS_V1.model_copy(update={"document_id": FS_DOC})  # 上传 fs_v1.pdf 后抽出的第 1 版
+SYSTEM_FIELDS = {"id", "version", "document_id"}  # 待审财报中由系统补上的字段 (不在抽取输出里)
+
+
+def statements_setup(*overlays: Path) -> tuple[GraphRunner, DataService, FakeFinancialStore, FakeDataStore]:
+    """setup() 的存储, 上传的 fs_v1.pdf 取补造文件的 ID 与页数; REQ-financial_statements 为 open; 大模型先读 overlays,
+    再读 Xero 的固定输出正本 (DOC-STATEMENTS) 与上传固定输出."""
+    runner, _, financial, evidence, data = setup()
+    evidence.ids[FS_PDF], evidence.page_counts[FS_PDF] = FS_DOC, 6
+    data.data_requests[FS_REQUEST] = document_request(DocumentType.financial_statements, "not_provided", NOW)
+    llm = LayeredMockLLM(*overlays, LLM_XERO, UPLOAD_FIXTURES)
+    deps = runner.deps
+    validator = OutputValidator(deps.financial_store, deps.library, deps.trail)
+    deps = replace(deps, llm=llm, judgments=JudgmentEngine(llm, validator, deps.trail, deps.library))
+    return runner, DataService(deps, runner), financial, data
+
+
+async def extracted_statements(*overlays: Path) -> tuple[GraphRunner, DataService, FakeFinancialStore, FakeDataStore]:
+    """按补交请求上传 fs_v1.pdf, 等 A3 处理完."""
+    runner, service, financial, data = statements_setup(*overlays)
+    await service.upload_documents(EID, [(FS_PDF, b"%PDF fs_v1")], actor="U-1", request_id=FS_REQUEST)
+    await drain(service)
+    return runner, service, financial, data
+
+
+async def test_statements_uploaded_by_request_are_extracted_without_classification() -> None:
+    """验收 1, 3: 按 REQ-financial_statements 上传 fs_v1.pdf, 不调分类, 1 行 llm_call (DOC-STATEMENTS, run_id 为
+    UPLOAD-{文件 ID}-{作业号}); 写第 1 版 (同 fs_v1.json, document_id 为该文件), 抽取版本记一版 (A3); record 按行代码
+    取当前版本的行 (带 fs_id, fs_version), 查不到为 None; 文件置 extracted, 请求转 received, 记数据变动."""
+    runner, _, financial, data = await extracted_statements()
+
+    doc = document(financial, FS_PDF)
+    assert (doc.id, doc.type, doc.status, doc.failed_step) == (
+        FS_DOC,
+        DocumentType.financial_statements,
+        "extracted",
+        None,
+    )
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [classify] = [e for e in trail.entries if e.payload.get("action") == "classify"]
+    assert classify.payload["request_id"] == FS_REQUEST
+    calls = [(e.procedure_id, e.run_id) for e in trail.entries if e.kind is TrailKind.llm_call]
+    assert calls == [("DOC-STATEMENTS", f"UPLOAD-{FS_DOC}-{classify.id}")]
+    assert await financial.financial_statements(EID) == FS_V1
+    [version] = await financial.statements_history(EID)
+    assert (version.target_type, version.target_id, version.version, version.changed_by, version.field) == (
+        FS_TARGET,
+        "FS",
+        1,
+        "A3",
+        None,
+    )
+    assert await financial.record(EID, "financial_statement_line", "SOFP-OREC") == {
+        "code": "SOFP-OREC",
+        "statement": "financial_position",
+        "name": "Other receivables (accrued interest)",
+        "amount_cents": 4853,
+        "prior_amount_cents": 0,
+        "sign": 1,
+        "account_codes": ["620"],
+        "subtotal": False,
+        "fs_id": "FS",
+        "fs_version": 1,
+    }
+    assert await financial.record(EID, "financial_statement_line", "SOFP-XXX") is None
+    assert data.data_requests[FS_REQUEST].status == "received"
+    assert DataInput.financial_statements in {c.input for c in data.data_changes}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"prepared_at": "2026-10-22", "lines": [XERO_FS_V1.lines[0].model_dump(), XERO_FS_V1.lines[0].model_dump()]},
+        {"directors_declaration_date": "2026-10-23", "lines": []},  # 缺编制日
+    ],
+    ids=["repeated_code", "missing_prepared_at"],
+)
+async def test_statements_output_that_fails_validation_needs_manual(tmp_path: Path, output: dict[str, Any]) -> None:
+    """验收 3: 抽取输出不能按模型解析或校验不过 (行代码重复, 缺必填字段) → needs_manual (extract), 不写财报, 不记数据
+    变动."""
+    (tmp_path / "DOC-STATEMENTS").mkdir()
+    (tmp_path / "DOC-STATEMENTS" / "fs_v1.json").write_text(json.dumps(output), encoding="utf-8")
+    _, _, financial, data = await extracted_statements(tmp_path)
+
+    doc = document(financial, FS_PDF)
+    assert (doc.status, doc.failed_step) == ("needs_manual", "extract")
+    assert await financial.financial_statements(EID) is None and await financial.statements_history(EID) == []
+    assert DataInput.financial_statements not in {c.input for c in data.data_changes}
+
+
+async def test_spreadsheet_statements_are_classified_without_extraction() -> None:
+    """财务报表只抽 PDF (报表行按文本层逐页抽): 按请求上传的 Excel 草稿定为 financial_statements 后停在 classified,
+    不调 DOC-STATEMENTS, 不算没做完 (启动不补做); 待审财报仍为空, 请求照旧算收到."""
+    runner, service, financial, data = statements_setup()
+    await service.upload_documents(
+        EID, [("draft-financial-statements.xlsx", workbook_bytes())], actor="U-1", request_id=FS_REQUEST
+    )
+    await drain(service)
+
+    doc = document(financial, "draft-financial-statements.xlsx")
+    assert (doc.type, doc.status, doc.failed_step) == (DocumentType.financial_statements, "classified", None)
+    assert not ingest.unfinished(doc)
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    assert [e.procedure_id for e in trail.entries if e.kind is TrailKind.llm_call] == []
+    assert await financial.financial_statements(EID) is None
+    assert data.data_requests[FS_REQUEST].status == "received"
+
+
+async def test_edit_statements_line_creates_a_new_version_and_marks_readers_stale() -> None:
+    """验收 4: 改一行金额 (理由必填) → 第 2 版 (只改这一项), 抽取版本记修改人, 字段与理由, 数据版本 +1 记
+    financial_statements, 写 data 留痕; financial_statements 与 record 读最新一版; 同一修改重试返回当前版本. 读财报的
+    程序 (模板 reads 含 financial_statements) 之前的执行随之过期, 同修改合同的规则 (services.staleness)."""
+    runner, service, financial, data = await extracted_statements()
+    before = data.data_version
+
+    edit = ExtractionEdit(field="lines[SOFP-OREC].amount_cents", value=4900, reason="按附注 1 核对")
+    updated = await service.edit_financial_statements(EID, edit, "U-1")
+
+    lines = [x.model_copy(update={"amount_cents": 4900}) if x.code == "SOFP-OREC" else x for x in FS_V1.lines]
+    assert updated == FS_V1.model_copy(update={"version": 2, "lines": lines})
+    assert await financial.financial_statements(EID) == updated
+    record = await financial.record(EID, "financial_statement_line", "SOFP-OREC")
+    assert record is not None and (record["amount_cents"], record["fs_version"]) == (4900, 2)
+    history = await service.statements_history(EID)
+    assert [(r.version, r.changed_by, r.field, r.reason) for r in history] == [
+        (1, "A3", None, None),
+        (2, "U-1", "lines[SOFP-OREC].amount_cents", "按附注 1 核对"),
+    ]
+    assert data.data_version == before + 1
+    assert data.data_changes[-1] == DataChange(data_version=before + 1, input=DataInput.financial_statements)
+    assert data_trail(runner)[-1] == {
+        "action": "edit",
+        "document_type": "financial_statements",
+        "field": "lines[SOFP-OREC].amount_cents",
+        "reason": "按附注 1 核对",
+        "document_id": FS_DOC,
+    }
+    assert await service.edit_financial_statements(EID, edit, "U-1") == updated  # 重试: 不再写
+    assert len(await financial.statements_history(EID)) == 2 and data.data_version == before + 1
+
+    library = runner.deps.library
+
+    class ReadsStatements:
+        """REV-03 的模板另读待审财报 (Demo 程序库里还没有程序读它, FIN-12 由之后的需求写 reads)."""
+
+        def load(self, procedure_id: str) -> ProcedureTemplate:
+            template = library.load(procedure_id)
+            if procedure_id != "REV-03":
+                return template
+            return template.model_copy(update={"reads": [*template.reads, DataInput.financial_statements]})
+
+    pack = [make_procedure("REV-03", Phase.P2_Executing, status=ProcedureStatus.completed)]
+    runs = [
+        ProcedureRun(
+            id="RUN-REV-03-1",
+            procedure_id="REV-03",
+            run_no=1,
+            trigger=RunTrigger.initial,
+            params_snapshot={},
+            started_at=NOW,
+            status=RunStatus.succeeded,
+            data_version=before,  # 修改之前执行的
+        )
+    ]
+    changes = await data.changes(EID)
+    assert stale_procedures(pack, runs, changes, library) == []
+    assert stale_procedures(pack, runs, changes, cast(Any, ReadsStatements())) == ["REV-03"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason", "code"),
+    [
+        ("lines[SOFP-OREC].amount_cents", 4900, " ", "MISSING_FIELD"),
+        ("lines[SOFP-XXX].amount_cents", 4900, "r", "INVALID_VALUE"),  # 没有该行
+        ("lines[SOFP-OREC].amount_cents", 4853, "r", "INVALID_VALUE"),  # 与当前相同
+    ],
+)
+async def test_edit_statements_rejects_bad_fields_and_values(field: str, value: Any, reason: str, code: str) -> None:
+    """验收 4: 错误码的映射与 "拒绝时不写新版本": 缺理由 MISSING_FIELD; 没有该行, 与当前相同 INVALID_VALUE (值的校验
+    见 test_statements_edits)."""
+    _, service, financial, _ = await extracted_statements()
+    with pytest.raises(DataRejected) as rejected:
+        await service.edit_financial_statements(EID, ExtractionEdit(field=field, value=value, reason=reason), "U-1")
+    assert rejected.value.code == code
+    assert [r.version for r in await financial.statements_history(EID)] == [1]
+
+
+@pytest.mark.parametrize("case", ["busy", "locked", "none"])
+async def test_edit_statements_needs_the_lock_and_current_statements(case: str) -> None:
+    """验收 4, 5: 图在跑 (锁被占) ENGAGEMENT_BUSY (409), 项目锁定 ENGAGEMENT_LOCKED (423), 同上游; 还没有待审财报
+    (Numbat 项目, 不为它补财报) 为 LookupError (404). 都不写."""
+    if case == "none":
+        runner, service, financial, _ = statements_setup()
+    else:
+        runner, service, financial, _ = await extracted_statements()
+    edit = ExtractionEdit(field="prepared_at", value="2026-10-21", reason="r")
+    rejected: type[Exception] = DataRejected
+    code = ""
+    if case == "busy":
+        runner.acquire(EID)
+        rejected, code = DecisionRejected, "ENGAGEMENT_BUSY"
+    elif case == "locked":
+        engagements = runner.deps.engagement_store
+        assert isinstance(engagements, FakeEngagementStore)
+        await engagements.update(EID, locked=True)
+        code = "ENGAGEMENT_LOCKED"
+    else:
+        rejected = LookupError
+        assert await financial.financial_statements(EID) is None
+    with pytest.raises(rejected) as raised:
+        await service.edit_financial_statements(EID, edit, "U-1")
+    assert getattr(raised.value, "code", "") == code
+    assert len(await financial.statements_history(EID)) == (0 if case == "none" else 1)
+
+
+async def test_current_statements_are_the_latest_version_whatever_the_file_type() -> None:
+    """当前版本即最高版本, 不看来源文件现在登记的类型 (审核 R217-01): 报表文件改成别的类型后财报不变, record 照样
+    取得到, 也不记数据变动; 要换财报就上传正确的那份, 出新一版."""
+    _, service, financial, data = await extracted_statements()
+    changes = list(data.data_changes)
+
+    await service.set_document_type(EID, FS_DOC, DocumentType.other, "误分类", "U-1")
+    await drain(service)
+
+    assert document(financial, FS_PDF).type is DocumentType.other
+    assert await financial.financial_statements(EID) == FS_V1
+    record = await financial.record(EID, "financial_statement_line", "SOFP-OREC")
+    assert record is not None and record["fs_version"] == 1
+    assert data.data_changes == changes
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("prepared_at", "2026-10-21", ("prepared_at", date(2026, 10, 21))),
+        ("directors_declaration_date", None, ("directors_declaration_date", None)),
+        ("lines[PL-REV].name", " Revenue from contracts ", ("PL-REV", "name", "Revenue from contracts")),
+        ("lines[SOFP-CASH].prior_amount_cents", None, ("SOFP-CASH", "prior_amount_cents", None)),
+        ("lines[CF-REC].amount_cents", -1019951, ("CF-REC", "amount_cents", -1019951)),
+        ("lines[PL-REV].name", "", "须为非空文本"),
+        ("lines[PL-REV].amount_cents", True, "须为整数分"),
+        ("prepared_at", None, "须为 YYYY-MM-DD 日期"),
+        ("lines[PL-REV].sign", 1, "不能改 lines[PL-REV].sign"),
+        # 两个列表写成逗号分隔的文本 (审核 R217-02): 各项去空白, 空串为空列表; 有空项, 重复或不是文本拒绝
+        ("lines[SOFP-OREC].account_codes", " 620 , 621", ("SOFP-OREC", "account_codes", ["620", "621"])),
+        ("lines[CE-OCI].account_codes", "960", ("CE-OCI", "account_codes", ["960"])),
+        ("lines[SOFP-OREC].account_codes", "", ("SOFP-OREC", "account_codes", [])),
+        (
+            "comparative_restatement_entry_nos",
+            "XJ-397, XJ-398",
+            ("comparative_restatement_entry_nos", ["XJ-397", "XJ-398"]),
+        ),
+        ("comparative_restatement_entry_nos", " ", ("comparative_restatement_entry_nos", [])),
+        ("lines[SOFP-OREC].account_codes", "620,,621", "account_codes 有空的一项"),
+        ("lines[SOFP-OREC].account_codes", "620,620", "account_codes 重复: 620"),
+        ("lines[SOFP-OREC].account_codes", 620, "须为逗号分隔的文本"),
+        ("lines[SOFP-OREC].account_codes", "620", "与当前值相同"),
+        ("comparative_restatement_entry_nos", "XJ-397", "与当前值相同"),
+    ],
+)
+def test_statements_edits(field: str, value: Any, expected: tuple[Any, ...] | str) -> None:
+    """可改编制日, 董事声明日与各行的名称, 本期与比较数 (行以行代码指定, 不增删); 报表, 符号, 小计, 映射科目与比较数
+    凭证号只读; 值不合法拒绝. 只改这一项, 版本号由调用方定."""
+    if isinstance(expected, str):
+        with pytest.raises(DataRejected, match=re.escape(expected)):
+            apply_statements_edit(FS_V1, field, value)
+        return
+    updated = apply_statements_edit(FS_V1, field, value)
+    assert updated.version == FS_V1.version
+    if len(expected) == 2:
+        name, new = expected
+        assert getattr(updated, name) == new and updated.lines == FS_V1.lines
+        return
+    code, part, new = expected
+    [index] = [i for i, x in enumerate(FS_V1.lines) if x.code == code]
+    assert getattr(updated.lines[index], part) == new
+    assert [x for i, x in enumerate(updated.lines) if i != index] == [
+        x for i, x in enumerate(FS_V1.lines) if i != index
+    ]
+
+
+async def test_statements_endpoints() -> None:
+    """接口: GET /financial-statements 没有时为 null, 抽取后为第 1 版; PUT 改一项返回第 2 版; GET history 两版;
+    GET /records/financial_statement_line/{行代码} 取当前版本的行. 没有待审财报时 PUT 与 history 为 404."""
+    runner, service, _, _ = statements_setup()
+    async with api_client(runner) as client:
+        client._transport.app.state.data_service = service  # type: ignore[attr-defined]
+        empty = await client.get(f"{BASE}/financial-statements")
+        put_none = await client.put(
+            f"{BASE}/financial-statements", json={"field": "prepared_at", "value": "2026-10-21", "reason": "r"}
+        )
+        history_none = await client.get(f"{BASE}/financial-statements/history")
+        await service.upload_documents(EID, [(FS_PDF, b"%PDF fs_v1")], actor="U-1", request_id=FS_REQUEST)
+        await drain(service)
+        first = await client.get(f"{BASE}/financial-statements")
+        put = await client.put(
+            f"{BASE}/financial-statements",
+            json={"field": "lines[SOFP-OREC].amount_cents", "value": 4900, "reason": "按附注 1 核对"},
+        )
+        history = await client.get(f"{BASE}/financial-statements/history")
+        line = await client.get(f"{BASE}/records/financial_statement_line/SOFP-OREC")
+    assert (empty.status_code, empty.json(), put_none.status_code, history_none.status_code) == (200, None, 404, 404)
+    assert FinancialStatements.model_validate(first.json()) == FS_V1
+    assert (put.status_code, put.json()["version"]) == (200, 2)
+    assert [(r["version"], r["field"]) for r in history.json()] == [(1, None), (2, "lines[SOFP-OREC].amount_cents")]
+    assert (line.status_code, line.json()["amount_cents"], line.json()["fs_version"]) == (200, 4900, 2)
+
+
+async def test_staged_import_extracts_statements_and_commit_writes_the_next_version() -> None:
+    """智能导入的批次 (需求 R277) 里的财务报表: 识别时按定下的类型抽取 (不写入), 经确认单的文件项原样带到确认;
+    确认时接在已有版本之后写一版, 记数据变动 financial_statements. 同一批里两份财务报表时后一份接在前一份之后."""
+    runner, service, financial, data = await extracted_statements()  # 已有第 1 版
+    data.financial = financial
+    evidence = runner.deps.evidence_store
+    assert isinstance(evidence, FakeEvidenceStore)
+    intake = DocumentIntake(service.deps)
+    fixture = json.loads((LLM_XERO / "DOC-STATEMENTS" / "fs_v1.json").read_text(encoding="utf-8"))
+    items, staged_docs = [], []
+    for n in (2, 3):  # 同名而内容不同的两份报表 (各一个文件 ID; 固定输出按文件名主干取, 都抽出 fs_v1)
+        evidence.ids[FS_PDF] = f"DOC-fs000000000{n}"
+        staged_doc = await evidence.save(
+            EID,
+            FS_PDF,
+            f"%PDF fs_v1 copy {n}".encode(),
+            type=DocumentType.other,
+            reliability=Reliability.internal_copy,
+            status="staged",
+        )
+        staged = await intake.stage(
+            EID, staged_doc, ENGAGEMENT, Requested(FS_REQUEST, DocumentType.financial_statements)
+        )
+        assert (staged.failed_step, staged.statements) == (None, fixture)
+        items.append(document_item(f"BAT-1-{n}", staged_doc, staged))
+        staged_docs.append(staged_doc)
+    assert staged_of(items[0]).statements == fixture
+    batch = ImportBatch(id="BAT-1", status="ready", created_by="U-1", created_at=NOW, files=[])
+    changes = await service._batch_documents(EID, batch, [], items)
+    assert [(c.status, c.financial_statements) for c in changes] == [
+        ("extracted", FS_V1.model_copy(update={"version": n, "document_id": d.id}))
+        for n, d in zip((2, 3), staged_docs, strict=True)
+    ]
+    data.import_batches[batch.id] = batch
+    before = data.data_version
+    await data.commit_batch(EID, batch, {}, actor="U-1", origins={}, documents=changes)
+    assert [r.version for r in await financial.statements_history(EID)] == [1, 2, 3]
+    current = await financial.financial_statements(EID)
+    assert current is not None and (current.version, current.document_id) == (3, staged_docs[1].id)
+    assert (data.data_version, data.data_changes[-1].input) == (before + 1, DataInput.financial_statements)
+
+
+def test_statements_fixture_is_fs_v1_without_system_fields() -> None:
+    """守卫: DOC-STATEMENTS 的固定输出按 StatementsExtraction 读入, 补上 ID, 版本与文件 ID 后即 XERO_FS_V1 (fs_v1.json
+    的正本表); 校验不另加指针 (报表不作证据)."""
+    raw = (LLM_XERO / "DOC-STATEMENTS" / "fs_v1.json").read_text(encoding="utf-8")
+    extraction = StatementsExtraction.model_validate_json(raw)
+    assert not SYSTEM_FIELDS & set(json.loads(raw))
+    assert build_statements(extraction, document_ref(FS_DOC), 1) == FS_V1
+
+
+@pytest.mark.external
+def test_statements_fixture_equals_the_supplement_file() -> None:
+    """守卫: 固定输出与补造目录的 financial_statements/fs_v1.json 去掉系统字段后逐字段相同 (改了补造报表要同步)."""
+    supplied = json.loads(
+        (supplements_dir("20261017-q1") / "financial_statements" / "fs_v1.json").read_text(encoding="utf-8")
+    )
+    fixture = json.loads((LLM_XERO / "DOC-STATEMENTS" / "fs_v1.json").read_text(encoding="utf-8"))
+    assert fixture == {k: v for k, v in supplied.items() if k not in SYSTEM_FIELDS}
+    assert supplied["document_id"] == FS_DOC
+
+
+def test_statements_prompt_lists_pages_and_accounts() -> None:
+    """DOC-STATEMENTS 提示词渲染一次: 带各页文字与科目表 (报表行映射到科目), 写明金额为整数分, 行代码的前缀与原文
+    当数据."""
+    document = {"id": FS_DOC, "file_name": FS_PDF, "page_count": 2}
+    accounts = [{"code": "620", "name": "Accrued interest receivable", "type": "CURRENT"}]
+    rendered = make_deps(FakeRegistry(), FakeTrail()).judgments.render(
+        STATEMENTS, {"document": document, "pages": ["page one", "page two"], "accounts": accounts}
+    )
+    assert '<page number="2">' in rendered and FS_DOC in rendered
+    assert "- 620 Accrued interest receivable (CURRENT)" in rendered
+    lines = [line.casefold() for line in rendered.splitlines()]
+    for words in (("integer cents",), ("`sof", "`pl-", "`ce-", "`cf-"), ("data", "ignore", "instruction")):
+        assert any(all(w.casefold() in x for w in words) for x in lines), words
+
+
+def document_ref(document_id: str) -> DocumentRef:
+    """只有 ID 要紧的财务报表登记 (build_statements 只取它的 ID)."""
+    return DocumentRef(
+        id=document_id,
+        type=DocumentType.financial_statements,
+        file_name=FS_PDF,
+        sha256="0" * 64,
+        page_count=6,
+        reliability=Reliability.internal_copy,
+        status="classified",
+        uploaded_at=NOW,
+    )

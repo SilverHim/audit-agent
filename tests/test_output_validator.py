@@ -21,6 +21,7 @@ from backend.contracts.llm_outputs import (
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
+    StatementsExtraction,
 )
 from backend.contracts.models import (
     AuditException,
@@ -199,13 +200,14 @@ def test_every_referenced_output_model_is_registered() -> None:
     规格 (上传文件分类 ingest.CLASSIFY, 独立复核第二轮 review.VERDICT_SPEC). 新加输出模型而漏登记时在此报出,
     不至于在运行时被兜底转人工 (如上传分类转 needs_manual)."""
     referenced = {output_model(t) for t in LIBRARY.all(include_disabled=True) if t.llm is not None}
-    referenced |= {output_model(ingest.CLASSIFY), getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
+    referenced |= {output_model(ingest.CLASSIFY), output_model(ingest.STATEMENTS)}
+    referenced |= {getattr(llm_outputs, review.VERDICT_SPEC.output_model)}
     assert sorted(m.__name__ for m in referenced if m not in OutputValidator.CHECKS) == []
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 9 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做语法与
-    结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290)."""
+    """现有 10 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
+    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290)."""
     assert set(OutputValidator.CHECKS) == {
         JudgmentDraft,
         ContractExtraction,
@@ -216,9 +218,11 @@ def test_dispatch_table_covers_existing_models() -> None:
         CriticVerdictOut,
         DocumentClassification,
         SheetRecognition,
+        StatementsExtraction,
     }
     assert OutputValidator.CHECKS[DocumentClassification] is structure_only
     assert OutputValidator.CHECKS[SheetRecognition] is structure_only
+    assert OutputValidator.CHECKS[StatementsExtraction] is structure_only
 
 
 class ProbeOut(BaseModel):

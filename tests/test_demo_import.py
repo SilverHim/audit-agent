@@ -35,6 +35,7 @@ from backend.contracts.models import (
     DocumentRef,
     DocumentType,
     Engagement,
+    FinancialStatements,
     ProcedureStatus,
     Reliability,
     TrailEntry,
@@ -62,6 +63,7 @@ from tests.xero_fakes import (
     XeroFakeDataStore,
     make_xero_deps,
     xero_engagement,
+    xero_financial_statements,
     xero_financial_store,
     xero_profile,
     xero_tables,
@@ -109,11 +111,13 @@ def env(llm: LLMClient | None = None, engagement: Engagement | None = None, demo
 
 
 def snapshot(e: Env) -> dict[str, Any]:
-    """一个停点的状态 (副本): 文件登记, 合同, save_contract 的调用 (合同编号), 账表版本, 数据版本, 就绪, 补交请求,
-    留痕."""
+    """一个停点的状态 (副本): 文件登记, 合同, save_contract 的调用 (合同编号), 待审财报的各版, 账表版本, 数据版本,
+    数据变动, 就绪, 补交请求, 留痕."""
     return {
         "documents": list(e.financial.document_refs),
         "contracts": dict(e.financial.saved_contracts),
+        "statements": list(e.financial.statement_versions),
+        "changes": list(e.data.data_changes),
         "save_calls": list(e.financial.save_calls),
         "versions": list(e.data.table_versions),
         "data_version": e.data.data_version,
@@ -496,35 +500,51 @@ def test_doc04_reuses_the_uploaded_contracts_after_ready(flow: Flow) -> None:
 
 def test_statements_upload_answers_the_open_request(flow: Flow) -> None:
     """REQ-financial_statements 为 open: 按请求上传 fs_v1.pdf, 不调大模型分类, classify 留痕带 request_id; 请求转
-    received; 补登记 internal_original, 2026-10-22, [FS]."""
+    received; 补登记 internal_original, 2026-10-22, [FS].
+    R217 验收 3: A3 随即抽取 (1 行 llm_call DOC-STATEMENTS, run_id 为 UPLOAD-{文件 ID}-{作业号}, 作业号即那条
+    classify 留痕), 写待审财报第 1 版 (逐字段等于 fs_v1.json: 编制日, 董事声明日, document_id 为该文件, 比较数凭证号,
+    35 行), 抽取版本只记这一版 (A3), 文件置 extracted, 记数据变动 financial_statements."""
     assert flow.statements is not None and flow.statements.uploaded == ["fs_v1.pdf"]
     fs = by_name(flow.after_statements["documents"])["fs_v1.pdf"]
     assert (fs.type, fs.status, fs.reliability, fs.document_date, fs.related_ids) == (
         DocumentType.financial_statements,
-        "classified",
+        "extracted",
         Reliability.internal_original,
         date(2026, 10, 22),
         ["FS"],
     )
     new = added(flow.after_ready, flow.after_statements)
-    assert [e.procedure_id for e in new if e.kind is TrailKind.llm_call] == []
-    [classify] = [e.payload for e in new if e.payload.get("action") == "classify"]
-    assert classify["request_id"] == "REQ-financial_statements"
+    [classify_entry] = [e for e in new if e.payload.get("action") == "classify"]
+    assert classify_entry.payload["request_id"] == "REQ-financial_statements"
+    [call] = [e for e in new if e.kind is TrailKind.llm_call]
+    assert (call.procedure_id, call.run_id) == ("DOC-STATEMENTS", f"UPLOAD-{fs.id}-{classify_entry.id}")
     assert flow.after_statements["requests"]["REQ-financial_statements"] == "received"
+    [version] = flow.after_statements["statements"]
+    assert (version.version, version.changed_by, version.field) == (1, "A3", None)
+    statements = FinancialStatements.model_validate(version.data)
+    assert statements == xero_financial_statements() and statements.document_id == fs.id
+    assert (statements.prepared_at, statements.directors_declaration_date) == (date(2026, 10, 22), date(2026, 10, 23))
+    assert (statements.comparative_restatement_entry_nos, len(statements.lines)) == (["XJ-397"], 35)
+    changes = flow.after_statements["changes"][len(flow.after_ready["changes"]) :]
+    assert DataInput.financial_statements in {c.input for c in changes}
 
 
 async def test_statements_without_an_open_request_are_classified() -> None:
-    """请求不在 open (项目没有体检过, 没有这项请求) 时照常由 A3 分类为 financial_statements, 再补登记."""
+    """请求不在 open (项目没有体检过, 没有这项请求) 时照常由 A3 分类为 financial_statements 并抽取 (需求 R217),
+    再补登记."""
     e = env()
     result = await import_stage(e.service, EID, "statements", ACTOR)
     assert result is not None and result.uploaded == ["fs_v1.pdf"]
     [fs] = e.financial.document_refs
-    assert (fs.type, fs.reliability, fs.document_date) == (
+    assert (fs.type, fs.status, fs.reliability, fs.document_date) == (
         DocumentType.financial_statements,
+        "extracted",
         Reliability.internal_original,
         date(2026, 10, 22),
     )
-    assert [x.procedure_id for x in e.trail.entries if x.kind is TrailKind.llm_call] == ["DOC-CLASSIFY"]
+    calls = [x.procedure_id for x in e.trail.entries if x.kind is TrailKind.llm_call]
+    assert calls == ["DOC-CLASSIFY", "DOC-STATEMENTS"]
+    assert await e.financial.financial_statements(EID) == xero_financial_statements()
 
 
 # ── 分类与清单不符 (验收 5), 之后的改动不盖掉 ──

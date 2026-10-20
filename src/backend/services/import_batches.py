@@ -283,6 +283,7 @@ def document_item(item_id: str, document: DocumentRef, staged: Staged | None) ->
         job=staged.job,
         contract=staged.contract,
         reply=staged.reply,
+        statements=staged.statements,
         issues=issues,
     )
 
@@ -300,7 +301,9 @@ def unreadable_item(item_id: str, file: BatchFile) -> BatchItem:
 
 def staged_of(item: BatchItem) -> Staged:
     """确认单上的文件项还原成 A3 当时的结果 (DocumentIntake.staged_change 用)."""
-    return Staged(item.document_type, item.type_reason, item.job, None, item.contract, item.reply)
+    return Staged(
+        item.document_type, item.type_reason, item.job, None, item.contract, item.reply, statements=item.statements
+    )
 
 
 class BatchIntake:

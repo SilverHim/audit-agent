@@ -49,6 +49,7 @@ from backend.persistence.stores import (
     upsert_extraction,
     write_contract,
     write_document,
+    write_statements,
 )
 from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 
@@ -699,11 +700,13 @@ class PostgresDataStore(Store):
                 if tables
                 else None
             )
-            # 程序执行之外写进的合同新版本与 ASIC 摘录的抽取结果, 同上传后的抽取: 记数据变动 contracts 与
-            # registry_extracts (需求 R274, R290); 有表时记在同一版本上
+            # 程序执行之外写进的合同新版本, ASIC 摘录的抽取结果与待审财报, 同上传后的抽取: 记数据变动 contracts,
+            # registry_extracts 与 financial_statements (需求 R274, R290, R217); 有表时记在同一版本上
             extracted = [DataInput.contracts] if any(change.contracts for change in documents) else []
             if any(change.registry_extract is not None for change in documents):
                 extracted.append(DataInput.registry_extracts)
+            if any(change.financial_statements is not None for change in documents):
+                extracted.append(DataInput.financial_statements)
             if extracted:
                 if version is None:
                     version = await self._bump(conn, eid, extracted)
@@ -745,6 +748,8 @@ class PostgresDataStore(Store):
                         field=None,
                         reason=None,
                     )
+                if change.financial_statements is not None:  # 版本已由 DocumentIntake.staged_change 接在已有版本之后
+                    await write_statements(conn, eid, change.financial_statements, changed_by=SYSTEM)
             committed = batch.model_copy(update={"data_version": version})
             await self._save_batch(conn, eid, committed)
         return committed

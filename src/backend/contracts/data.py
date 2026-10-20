@@ -16,6 +16,7 @@ from backend.contracts.models import (
     DocumentFailedStep,
     DocumentStatus,
     DocumentType,
+    FinancialStatements,
     Model,
     Reliability,
 )
@@ -40,8 +41,8 @@ class TableKind(StrEnum):
 
 class DataInput(StrEnum):
     """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 十种账表 (取值同 TableKind),
-    加审计师修改过的合同与回函抽取结果, 审计师补登记的文件登记, 以及上传的 ASIC 摘录的抽取结果. 改科目分类改的是
-    科目表, 记 accounts."""
+    加审计师修改过的合同与回函抽取结果, 审计师补登记的文件登记, 上传的 ASIC 摘录的抽取结果, 以及待审财报. 改科目
+    分类改的是科目表, 记 accounts."""
 
     accounts = "accounts"  # 科目表 (含科目分类)
     trial_balance = "trial_balance"  # 试算表
@@ -57,6 +58,7 @@ class DataInput(StrEnum):
     confirmations = "confirmations"  # 回函抽取结果 (审计师修改)
     documents = "documents"  # 文件登记: 审计师补登记的可靠性, 文件日期与关联对象 (需求 R90)
     registry_extracts = "registry_extracts"  # 上传的 ASIC 摘录的抽取结果: A3 抽取与审计师修改 (需求 R290)
+    financial_statements = "financial_statements"  # 待审财报: A3 从上传的财务报表抽取与审计师修改 (需求 R217)
 
 
 def table_changes(kinds: Iterable[TableKind]) -> list[DataInput]:
@@ -668,6 +670,7 @@ class BatchItem(Model):
     job: str | None = None  # 文件: 定下类型的那条 classify 留痕 ID, 确认时抽取结果按它的作业写入
     contract: Contract | None = None  # 文件: 合同的抽取要素 (尚未写入)
     reply: dict[str, Any] | None = None  # 文件: 回函副本的抽取结果 (ConfirmationExtraction 的 JSON, 尚未写入)
+    statements: dict[str, Any] | None = None  # 文件: 待审财报的抽取结果 (StatementsExtraction 的 JSON, 尚未写入, R217)
     issues: list[BatchIssue] = []  # 问题 (标红)
     selected: bool = False  # 是否勾选写入
     chosen_by: str | None = None  # 审计师手动勾选或取消时的用户 ID; 为空时勾选随问题 (没有问题即勾)
@@ -696,8 +699,8 @@ class ImportBatch(Model):
 
 class DocumentChange(Model):
     """确认导入时一份文件要写的 (DataStore.commit_batch 在写表的同一事务里写): 登记改成的类型, 可靠性, 状态与卡住的
-    步骤; 合同要依次写的各版 (版本规则见 ingest.contract_writes: 已有合同没有版本记录时先补记它) 与回函副本的抽取结果
-    (reply, 第 1 版)."""
+    步骤; 合同要依次写的各版 (版本规则见 ingest.contract_writes: 已有合同没有版本记录时先补记它), 回函副本的抽取结果
+    (reply, 第 1 版), ASIC 摘录的抽取结果与待审财报的新一版."""
 
     document_id: str  # 证据文件 ID
     type: DocumentType  # 确认的类型
@@ -707,6 +710,8 @@ class DocumentChange(Model):
     contracts: list[Contract] = []  # 合同: 依次写入的各版 (save_contract 的写法, 记 A3)
     reply: dict[str, Any] | None = None  # 回函副本的抽取结果 (ConfirmationExtraction 的 JSON)
     registry_extract: dict[str, Any] | None = None  # ASIC 摘录的抽取结果 (RegistryExtraction 的 JSON, 需求 R290)
+    # 待审财报的新一版 (需求 R217): 版本接在已有版本之后, document_id 为该文件 (save_financial_statements 的写法, 记 A3)
+    financial_statements: FinancialStatements | None = None
 
 
 class BatchItemEdit(Model):
@@ -753,7 +758,8 @@ class ContractVersion(Model):
 
 
 class ExtractionEdit(Model):
-    """修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."""
+    """修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id}, PUT /registry-extracts/{id},
+    PUT /financial-statements)."""
 
     field: str  # 字段, 如 counterparty, terms[0].text, confirmed_balance_cents
     value: (
@@ -763,15 +769,16 @@ class ExtractionEdit(Model):
 
 
 REGISTRY_TARGET = "registry_extract"  # 抽取版本表里 ASIC 摘录抽取结果的 target_type, target_id 为文件 ID (需求 R290)
+FS_TARGET = "financial_statements"  # 抽取版本表里待审财报的 target_type, target_id 为财报 ID (固定 FS, 需求 R217)
 
 
 class ExtractionRecord(Model):
     """抽取结果的一版 (表 extraction_versions 的一行)."""
 
     # contract (合同), confirmation (函证, 审计师修改), reply (上传的回函副本), document (文件登记), registry_extract
-    # (上传的 ASIC 摘录: A3 抽取与审计师修改, 需求 R290)
+    # (上传的 ASIC 摘录: A3 抽取与审计师修改, 需求 R290), financial_statements (待审财报: 同上, 需求 R217)
     target_type: str
-    target_id: str  # 合同编号, 函证 ID 或文件 ID
+    target_id: str  # 合同编号, 函证 ID, 文件 ID 或财报 ID (FS)
     version: int  # 版本号
     data: dict[str, Any]  # 该版完整内容
     field: str | None = None  # 改的字段; 抽取所得为空
