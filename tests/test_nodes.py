@@ -20,6 +20,7 @@ from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
     AuditObjective,
+    AuditPlan,
     Phase,
     Procedure,
     ProcedureRun,
@@ -37,7 +38,8 @@ from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.nodes import GraphNodes, build_run, fail_run, next_run, save_outputs, update_procedure
-from backend.orchestration.runner import GraphRunner
+from backend.orchestration.runner import GraphRunner, fixed_procedures
+from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
@@ -56,6 +58,7 @@ from tests.fakes import (
     ScriptAgent,
     finished,
     make_deps,
+    make_graph_nodes,
     make_procedure,
     make_run,
     make_runner,
@@ -926,3 +929,27 @@ def test_numbat_params_do_not_depend_on_traits() -> None:
                 getattr(traits, field),
             ), (template.id, key)
         assert declared_params == default_params, template.id
+
+
+# ── R205: plan_draft (功能 planning) ──
+
+
+async def test_plan_draft_runs_pln15_and_leaves_it_planned() -> None:
+    """需求 R205 验收 2: plan_draft 按 NODE_PROCEDURES 执行 PLN-15 (这里用脚本 A4, numbat_plan_agents): 计划 PLAN-1 v1
+    与执行 RUN-PLN-15-1 (succeeded) 写入 Store, 进片段; PLN-15 出新版本仍为 planned (闸门程序, 由 PLN-15 闸门批准时
+    完成, Q5)."""
+    store = FakeOutputStore()
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, features=BASELINE | {"misstatement", "planning"})
+    pack = fixed_procedures(deps.library)
+    store.rows.extend(pack)
+    nodes = make_graph_nodes(deps)
+
+    patch = await nodes.plan_draft(initial_state(ENGAGEMENT, pack, NUMBAT_PROFILE.version))
+
+    [plan] = patch["audit_plans"]
+    assert (plan.id, plan.version, plan.run_id) == ("PLAN-1", 1, "RUN-PLN-15-1")
+    assert await store.get(ENGAGEMENT.id, AuditPlan, "PLAN-1") == plan
+    [run] = patch["procedure_runs"]
+    assert (run.id, run.status) == ("RUN-PLN-15-1", RunStatus.succeeded)
+    pln15 = next(p for p in patch["procedure_pack"] if p.id == "PLN-15")
+    assert (pln15.version, pln15.status) == (2, ProcedureStatus.planned)

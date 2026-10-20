@@ -11,6 +11,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     AuditObjective,
+    AuditPlan,
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
@@ -18,6 +19,7 @@ from backend.contracts.models import (
     Decision,
     DisputeResolution,
     Engagement,
+    EngagementTerms,
     Engine,
     EvidencePointer,
     GateDecision,
@@ -87,7 +89,7 @@ class EngagementOverview(Model):
 class AcceptanceMaterial(Model):
     """ACC-01 闸门的呈报材料."""
 
-    kind: Literal["ACC-01"] = "ACC-01"  # 材料类型标记, 用于区分四种材料
+    kind: Literal["ACC-01"] = "ACC-01"  # 材料类型标记, 用于区分各种材料
     scorecard: AcceptanceScorecard  # 承接评分卡
     exceptions: list[AuditException]  # 未通过的检查生成的例外
     # 客户画像的最新版本 (可能由同客户的其他项目更新), ACC-01 页面据此编辑客户资料;
@@ -105,6 +107,18 @@ class PlanningMaterial(Model):
     objectives: list[AuditObjective]  # 审计目标
     risks: list[RiskItem]  # 风险清单
     uncovered_objective_ids: list[str]  # 按当前风险等级没有程序覆盖的审计目标; 非空时不能通过, 须驳回或改风险等级
+
+
+class PlanMaterial(Model):
+    """PLN-15 闸门的呈报材料 (需求 R205, 功能 planning)."""
+
+    kind: Literal["PLN-15"] = "PLN-15"  # 材料类型标记
+    plan: AuditPlan  # 当前计划 (status 不是 superseded 的修订中 revision 最大的), 决定绑定它
+    terms: EngagementTerms | None  # 约定书核对结果 TERMS 的当前版本; 功能 acceptance 关闭或没有时为空
+    materiality_cents: int  # 整体重要性 (PLN-01/03 选定), 单位分
+    performance_materiality_cents: int  # 执行重要性, 单位分
+    clearly_trivial_cents: int  # 明显微小门槛, 单位分
+    previous_decisions: list[GateDecision]  # 此前的 PLN-15 驳回决定 (含理由; 信息不足的不在其中), 首次为空
 
 
 class NotExecuted(Model):
@@ -133,9 +147,9 @@ class ReportMaterial(Model):
     previous_decisions: list[GateDecision]  # 此前的 RPT-01 退回决定与批注
 
 
-# 四种闸门材料之一, 按 kind 区分
+# 闸门材料之一, 按 kind 区分
 GateMaterial = Annotated[
-    AcceptanceMaterial | PlanningMaterial | CompletionMaterial | ReportMaterial,
+    AcceptanceMaterial | PlanningMaterial | PlanMaterial | CompletionMaterial | ReportMaterial,
     Field(discriminator="kind"),
 ]
 

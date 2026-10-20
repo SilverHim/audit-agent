@@ -66,7 +66,7 @@ from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.data_quality import request_id
-from backend.services.features import COLLAB
+from backend.services.features import COLLAB, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
 
@@ -218,6 +218,7 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "p0_intel": ("ACC-04",),
     "p1_ingest": ("DOC-04",),
     "p1_analytics": ("PLN-07", "PLN-01"),
+    "plan_draft": ("PLN-15",),  # 功能 planning (需求 R205)
     "completion": ("FIN-04",),
     "report_draft": ("RPT-03",),
 }
@@ -978,11 +979,12 @@ class GraphNodes:
         只把尚不在程序包中的 P2 程序加入.
 
         每条审计目标至少要被一条程序的 trigger 匹配到, 否则抛 ValueError 阻断 (Demo需求文档第 4.1 节), 什么都不写.
-        新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节).
+        新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节). 功能 planning
+        打开时只写程序, 阶段仍为 P1_Planning, 由 PLN-15 闸门批准计划时进入 P2 (需求 R205, M-10).
         objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 与固定集程序为空. 覆盖校验只看 trigger,
         固定集程序不计入.
         没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
-        提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写).
+        提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写; 功能 planning 打开时不改阶段, 也不写).
         """
         library = self.deps.library
         objectives = state["audit_objectives"]
@@ -1005,11 +1007,22 @@ class GraphNodes:
         if not added:
             return {}
         eid = state["engagement_id"]
+        planning = PLANNING in self.deps.features
         async with self.deps.output_store.transaction(eid):
             stored = await self.deps.output_store.put(eid, added, actor=AgentId.A1)
-            await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+            if not planning:
+                await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+        pack = [*state["procedure_pack"], *stored]
+        if planning:
+            return {"procedure_pack": pack}
         await record_transitions(self.deps.trail, phase_transition(eid, state["phase"], Phase.P2_Executing))
-        return {"procedure_pack": [*state["procedure_pack"], *stored], "phase": Phase.P2_Executing}
+        return {"procedure_pack": pack, "phase": Phase.P2_Executing}
+
+    async def plan_draft(self, state: EngagementState) -> StatePatch:
+        """功能 planning (需求 R205): 装配之后 A4 执行 PLN-15, 起草总体审计计划的下一修订 (agents/audit_plan); PLN-15
+        驳回后回到这里, 以 rerun 再执行一次出下一修订. 成功后 PLN-15 仍为 planned (闸门程序, Q5), 由 PLN-15 闸门批准时
+        完成; 执行失败时在节点内等 rerun (见 execute)."""
+        return await self.run_node(state, "plan_draft")
 
     # ── P2 ──
     async def schedule(self, state: EngagementState) -> StatePatch:

@@ -766,6 +766,7 @@ function gateIntro(t: Messages, view: GateView): ReactNode {
       material.not_executed?.length ?? 0,
     )
   }
+  if (material.kind === 'PLN-15') return t.workspace.gateIntro['PLN-15'](material.plan.revision)
   return t.workspace.gateIntro['RPT-01'](material.report.revision)
 }
 

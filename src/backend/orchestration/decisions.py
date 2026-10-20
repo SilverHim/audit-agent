@@ -87,11 +87,12 @@ from backend.services.trail_pages import all_of_kind
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
 # 效果中会出新版本的对象列表
-VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives", "report_versions")
+VERSIONED_EFFECTS = ("procedure_pack", "risk_register", "audit_objectives", "report_versions", "audit_plans")
 
 
 def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
-    """效果中新出的版本: 程序包, 风险清单, 审计目标, 报告里 (id, version) 不在效果输入 (sources 同名字段) 中的对象.
+    """效果中新出的版本: 程序包, 风险清单, 审计目标, 报告, 计划里 (id, version) 不在效果输入 (sources 同名字段)
+    中的对象.
 
     决定只写这些; 输入里本来就有的不写, 即使它们比 Store 新 (检查点领先 Store 时不顺带写出无关版本).
     """
@@ -909,7 +910,7 @@ class GraphDecisionSubmit:
             reruns = len(values["rerun_requests"])
             written = await self._write_gate(eid, decision, effects, created, values["phase"], reruns)
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
-            # 效果已出材料的新版本时 (RPT-01 签字) 只写新版本, 路由另行放行 (spec.passed)
+            # 效果已出材料的新版本时 (RPT-01 签字, PLN-15 批准) 只写新版本, 路由另行放行 (spec.passed)
             if spec.material_field not in written:
                 written[spec.material_field] = [target] if spec.is_list else target
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由节点的路由按刚写入的决定选出口

@@ -5,12 +5,14 @@ p0_intel → gate_acc01 → { p1_await_data | declined | p0_inputs (客户画像
 p1_await_data (等审计师接入数据并确认已齐) → p1_ingest → { p1_analytics | fan_in (执行阶段补跑 DOC-04 后) }
 p1_analytics → gate_p1_risk → { assemble_pack | p1_analytics }
 assemble_pack → schedule ⇉ fieldwork × N ⇉ fan_in → { p1_ingest | schedule | await_events | await_data | completion }
+  功能 planning 打开时 (需求 R205): assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
 await_events, await_data → fan_in
 completion → gate_fin → { report_draft | completion }
 report_draft → gate_rpt01 → { archive | report_draft }
 
 读法: → 固定边; { a | b } 条件边, 由路由函数按状态选一个; ⇉ 用 Send 并行派发多个实例.
-四道闸门 (gate_*) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口, 回到自己重新呈报.
+闸门 (gate_*; 基线四道, 功能 planning 另加 gate_p1_plan) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口,
+回到自己重新呈报.
 p0_inputs, p1_await_data, await_events, await_data 与 P2 以外节点等人 (失败或有待复核任务) 时在节点内
 interrupt() (种类见 waits.py).
 """
@@ -35,7 +37,7 @@ from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration import gates
 from backend.orchestration.nodes import NODE_PROCEDURES, WAITING, FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
-from backend.services.features import BASELINE
+from backend.services.features import BASELINE, PLANNING
 from backend.services.procedure_library import ProcedureLibrary
 
 # 闸门的节点, 出口, 材料与路由都在登记表 (gates.GATES); 这里给基线功能集下的两个常用视图
@@ -204,8 +206,10 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     """搭主图: 先登记节点, 再连固定边, 最后连条件边与闸门出口. 返回未编译的图.
 
     features: 启用的功能 (services/features.py). 基线功能集下的主图即下面的结构 (tests/test_graph.py 守卫);
-    各功能的新节点与闸门只在该功能启用时加入 (由各功能组的需求加, 目前没有).
+    各功能的新节点与闸门只在该功能启用时加入: planning 加 plan_draft 与 gate_p1_plan, 装配之后先起草计划, 批准才进
+    P2 (需求 R205).
     """
+    planning = PLANNING in features
     g = StateGraph(EngagementState)
 
     # ── 节点: 名字 → 节点函数. 节点与路由函数都包一层 fill_defaults, 旧检查点缺的键读到缺省值 ──
@@ -215,6 +219,8 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g.add_node("p1_ingest", node_with_defaults(nodes.p1_ingest))
     g.add_node("p1_analytics", node_with_defaults(nodes.p1_analytics))
     g.add_node("assemble_pack", node_with_defaults(nodes.assemble_pack))
+    if planning:
+        g.add_node("plan_draft", node_with_defaults(nodes.plan_draft))
     g.add_node("schedule", node_with_defaults(nodes.schedule))
     # fieldwork 接收 Send 传来的 FieldworkInput 而不是整个状态, 与 add_node 声明的类型对不上, 故忽略类型检查
     g.add_node("fieldwork", fieldwork_with_defaults(nodes.fieldwork))  # type: ignore[call-overload]
@@ -238,7 +244,11 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     # P1 中往下到 p1_analytics; 执行阶段补跑 DOC-04 (等到了合同) 后回 fan_in
     g.add_conditional_edges("p1_ingest", route_with_defaults(after_ingest), ["p1_analytics", "fan_in"])
     g.add_edge("p1_analytics", "gate_p1_risk")
-    g.add_edge("assemble_pack", "schedule")
+    if planning:  # 装配之后起草计划, 停在 PLN-15 闸门; 批准才到 schedule (闸门出口, 登记表)
+        g.add_edge("assemble_pack", "plan_draft")
+        g.add_edge("plan_draft", gates.spec_of(GateId.PLN_15).node)
+    else:
+        g.add_edge("assemble_pack", "schedule")
     # ── P2 循环: schedule → fieldwork × N → fan_in → 再判断去哪 ──
     # 条件边: 执行完由路由函数选下一个节点; 第三个参数列出所有可能的去向
     g.add_conditional_edges("schedule", route_with_defaults(route_schedule(nodes)), ["fieldwork", "fan_in"])

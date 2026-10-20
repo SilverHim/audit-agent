@@ -278,7 +278,9 @@ def test_every_node_and_route_is_wrapped() -> None:
         unwrapped = [name for name, spec in graph.nodes.items() if spec.runnable.afunc.__code__ not in node_code]
         assert unwrapped == [], features
         routes = [b.path.func for branches in graph.branches.values() for b in branches.values()]
-        assert len(routes) == 8 and all(r.__code__ is route_code for r in routes), features  # 含 R290 的 p0_inputs
+        # 含 R290 的 p0_inputs; 功能 planning 另有 gate_p1_plan 的出口 (需求 R205)
+        count = 9 if "planning" in features else 8
+        assert len(routes) == count and all(r.__code__ is route_code for r in routes), features
 
 
 # ── 验收 2: 模拟旧检查点 ──

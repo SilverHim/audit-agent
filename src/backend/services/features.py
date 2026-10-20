@@ -36,6 +36,7 @@ FEATURES: dict[str, FeatureSpec] = {
 BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回归测试显式用它 (tests/fakes.NUMBAT_FEATURES)
 COLLAB = "collab"  # 智能体协作增量的功能名 (A7 触发规则, 争议中状态与单列, 仲裁补全等按它开关)
 MISSTATEMENT = "misstatement"  # 错报闭环的功能名 (需求 R156 起: 新错报为 identified 并走生命周期; 关闭时为 uncorrected)
+PLANNING = "planning"  # 计划的功能名: 装配后起草总体审计计划, 停在 PLN-15 闸门, 计划批准才进 P2 (需求 R205)
 
 
 def features_text(features: Iterable[str]) -> str:

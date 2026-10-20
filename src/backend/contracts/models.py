@@ -1423,7 +1423,7 @@ class GateDecision(Versioned):
     edits: list[GateEdit] = []  # PLN-01/03 通过时对风险等级的修改
     disposition: OpinionType | None = None  # FIN-01 通过时必填, 只能是无保留或保留
     annotations: list[Annotation] = []  # RPT-01 驳回时必填
-    plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203; 闸门的字段登记由 R205 做)
+    plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203; 只有它的登记行允许, 需求 R205)
     reason: str | None = None  # 理由, 通过以外必填; FIN-01 一律必填
     decided_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间

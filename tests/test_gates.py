@@ -13,12 +13,14 @@ from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
+    AuditPlan,
     GateDecision,
     GateId,
     GateVerdict,
     MaterialityCandidates,
     MaterialityChoice,
     OpinionType,
+    PlanStatus,
     ReportSection,
 )
 from backend.contracts.state import EngagementState, initial_state
@@ -31,6 +33,7 @@ from backend.orchestration.gates import (
     check_fields,
     check_registry,
     current_gate,
+    current_plan,
     gate_at,
     node_route,
     path_map,
@@ -40,10 +43,19 @@ from backend.orchestration.gates import (
 from backend.orchestration.graph import build_graph, compile_graph
 from backend.orchestration.runner import waiting_for_human
 from backend.services.features import BASELINE
-from tests.fakes import ENGAGEMENT, PLAN_CONFIRMATION, FakeRegistry, FakeTrail, make_deps, make_graph_nodes
+from tests.fakes import (
+    ENGAGEMENT,
+    PLAN_CONFIRMATION,
+    FakeRegistry,
+    FakeTrail,
+    audit_plan,
+    make_deps,
+    make_graph_nodes,
+)
 
 NOW = datetime(2026, 10, 18, tzinfo=UTC)
 JOURNALS = frozenset({"critic", "journals"})
+PLANNING_FEATURES = frozenset({"critic", "misstatement", "planning"})
 
 
 def decision(gate: GateId, verdict: GateVerdict, target_id: str, version: int = 1, n: int = 1) -> GateDecision:
@@ -63,10 +75,12 @@ def decision(gate: GateId, verdict: GateVerdict, target_id: str, version: int = 
 
 
 def test_four_gates_registered_as_before() -> None:
-    """节点, 材料, 留痕程序与出口同改造前; 每个节点另有 represent 回自身 (path_map)."""
+    """基线的 4 道闸门: 节点, 材料, 留痕程序与出口同改造前; 每个节点另有 represent 回自身 (path_map). 挂功能名的
+    闸门只有 PLN-15 (功能 planning, 需求 R205, 见 test_pln15_gate_row)."""
     rows = {
         spec.gate: (spec.node, spec.material_field, spec.material_id, spec.procedure_id, dict(spec.exits))
         for spec in GATES
+        if spec.feature is None
     }
     assert rows == {
         GateId.ACC_01: (
@@ -104,7 +118,52 @@ def test_four_gates_registered_as_before() -> None:
         "approve": "report_draft",
         "reject": "completion",
     }
-    assert all(spec.feature is None for spec in GATES)
+    assert {spec.gate: spec.feature for spec in GATES if spec.feature is not None} == {GateId.PLN_15: "planning"}
+
+
+def test_pln15_gate_row() -> None:
+    """需求 R205 验收 1: PLN-15 的登记行. 节点 gate_p1_plan, 留痕程序 PLN-15, 材料为 audit_plans 中的当前计划 (pick:
+    status 不是 superseded 的修订中 revision 最大的), 出口 approve → schedule, reject → plan_draft (represent 回自身),
+    通过须带 plan_confirmation, 驳回与信息不足须带理由; 登记了 "通过时材料出新版本仍放行" (passed, 同 RPT-01 签字);
+    功能 planning. 基线下不在主图中."""
+    spec = spec_of(GateId.PLN_15)
+    assert (spec.node, spec.procedure_id, spec.material_field, spec.material_model, spec.feature) == (
+        "gate_p1_plan",
+        "PLN-15",
+        "audit_plans",
+        AuditPlan,
+        "planning",
+    )
+    assert spec.is_list and spec.pick is current_plan and spec.passed is not None and spec.rebuild is not None
+    assert path_map([spec], PLANNING_FEATURES) == {
+        "represent": "gate_p1_plan",
+        "approve": "schedule",
+        "reject": "plan_draft",
+    }
+    assert dict(spec.fields) == {
+        GateVerdict.approve: FieldRule(("plan_confirmation",)),
+        GateVerdict.reject: FieldRule(("reason",)),
+        GateVerdict.insufficient_info: FieldRule(("reason",)),
+    }
+    assert "gate_p1_plan" not in gates.gate_nodes(BASELINE)
+    assert gates.gate_nodes(PLANNING_FEATURES) == [
+        "gate_acc01",
+        "gate_p1_risk",
+        "gate_p1_plan",
+        "gate_fin",
+        "gate_rpt01",
+    ]
+
+
+def test_current_plan_skips_superseded_revisions() -> None:
+    """PLN-15 的材料: status 不是 superseded 的修订中 revision 最大的 (第 0 节); 驳回重拟后上一修订已取代, 当前为新
+    修订; 都已取代或没有计划时为 None."""
+    plan1, plan2 = audit_plan(1), audit_plan(2)
+    retired = audit_plan(1, 2, PlanStatus.superseded)
+    approved = audit_plan(1, 2, PlanStatus.approved)
+    assert current_plan([plan1]) == plan1 and current_plan([approved]) == approved
+    assert current_plan([retired, plan2]) == plan2
+    assert current_plan([retired]) is None and current_plan([]) is None
 
 
 # ── 验收 3: 一个节点挂两道闸门的组合路由 (纯函数) ──
@@ -215,11 +274,16 @@ FILLED = {
 
 @pytest.mark.parametrize("gate", [spec.gate for spec in GATES])
 @pytest.mark.parametrize("verdict", list(GateVerdict))
-def test_plan_confirmation_not_allowed_before_pln15(gate: GateId, verdict: GateVerdict) -> None:
-    """需求 R203: plan_confirmation 是闸门专属字段, 已登记的闸门都不允许, 带它报 FIELD_NOT_ALLOWED (PLN-15 的登记行由
-    R205 加). 必填字段照各闸门的规则补齐, 只看这一项."""
-    assert "plan_confirmation" in GATE_SPECIFIC and GateId.PLN_15 not in {spec.gate for spec in GATES}
+def test_plan_confirmation_only_on_pln15_approve(gate: GateId, verdict: GateVerdict) -> None:
+    """需求 R203, R205: plan_confirmation 是闸门专属字段, 只有 PLN-15 的通过决定能填 (且必填); 其余闸门的决定与 PLN-15
+    的驳回, 信息不足带它报 FIELD_NOT_ALLOWED. 必填字段照各闸门的规则补齐, 只看这一项."""
+    assert "plan_confirmation" in GATE_SPECIFIC
     spec = spec_of(gate)
+    if (gate, verdict) == (GateId.PLN_15, GateVerdict.approve):
+        d = decision(gate, verdict, "PLAN-1").model_copy(update={"plan_confirmation": PLAN_CONFIRMATION})
+        assert required_fields(spec, d) == ["plan_confirmation"] and allowed_fields(spec, d) == {"plan_confirmation"}
+        check_fields(spec, d)
+        return
     filled = {name: FILLED[name] for name in required_fields(spec, decision(gate, verdict, "X"))}
     d = decision(gate, verdict, "X").model_copy(update={**filled, "plan_confirmation": PLAN_CONFIRMATION})
     assert "plan_confirmation" not in allowed_fields(spec, d)
