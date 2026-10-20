@@ -14951,6 +14951,15 @@
           },
           "direction": {
             "$ref": "#/components/schemas/Direction"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "current_period",
+              "prior_period_uncorrected"
+            ],
+            "title": "Origin",
+            "default": "current_period"
           }
         },
         "additionalProperties": false,
@@ -14987,6 +14996,14 @@
             },
             "type": "array",
             "title": "Excluded Trivial Ids"
+          },
+          "corrected_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Corrected Ids",
+            "default": []
           },
           "total_cents": {
             "type": "integer",

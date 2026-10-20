@@ -49,6 +49,7 @@ from backend.contracts.models import (
     ReviewStatus,
     TermsCheckStatus,
     TrailKind,
+    UncorrectedItem,
     UncorrectedSchedule,
     Versioned,
     WrittenRepresentationLetter,
@@ -666,6 +667,49 @@ def test_old_checkpoint_misstatements_read_back_and_take_new_versions() -> None:
     state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": [back]}
     newer = back.model_copy(update={"version": 2, "account_code": "270"})
     assert apply_patch(state, {"misstatements": [newer]})["misstatements"] == [newer]
+
+
+class LegacyItem(BaseModel):
+    """R166 之前的汇总表一行: 没有 origin."""
+
+    misstatement_id: str
+    amount_cents: int
+    direction: str
+
+
+class LegacySchedule(BaseModel):
+    """R166 之前写进检查点的未更正错报汇总表: 没有 corrected_ids (按原类名序列化, 读回时取现在的类)."""
+
+    id: str
+    version: int
+    items: list[LegacyItem]
+    excluded_trivial_ids: list[str]
+    total_cents: int
+    materiality_cents: int
+    candidate_opinion: str
+
+
+LegacySchedule.__module__ = UncorrectedSchedule.__module__
+LegacySchedule.__name__ = LegacySchedule.__qualname__ = "UncorrectedSchedule"
+
+
+def test_old_checkpoint_schedule_reads_back_with_new_defaults() -> None:
+    """R166 (审核 R166-04): 改动前检查点里的汇总表经白名单 serde 读回为现在的 UncorrectedSchedule, 各行为
+    UncorrectedItem (没有退回 model_construct), 新字段取缺省: corrected_ids 为空, origin 为本期."""
+    serde = checkpoint_serde()
+    item = LegacyItem(misstatement_id="M-D-1", amount_cents=14200000, direction="overstated")
+    old = LegacySchedule(
+        id="SCHEDULE",
+        version=1,
+        items=[item],
+        excluded_trivial_ids=[],
+        total_cents=14200000,
+        materiality_cents=12000000,
+        candidate_opinion="qualified",
+    )
+    back = serde.loads_typed(serde.dumps_typed(old))
+    assert isinstance(back, UncorrectedSchedule) and back.corrected_ids == []
+    assert isinstance(back.items[0], UncorrectedItem) and back.items[0].origin == "current_period"
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:

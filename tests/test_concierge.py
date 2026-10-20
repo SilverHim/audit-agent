@@ -26,6 +26,7 @@ from backend.contracts.models import (
     Judgment,
     JudgmentRef,
     Misstatement,
+    MisstatementStatus,
     MisstatementType,
     OpinionType,
     Phase,
@@ -101,6 +102,7 @@ MISSTATEMENT = Misstatement(
     assertion=Assertion.Cutoff,
     amount_cents=14200000,
     direction=Direction.overstated,
+    status=MisstatementStatus.uncorrected,  # 功能 misstatement 关闭时的旧口径 (FIN-04 按状态累计, 需求 R166)
 )
 # 生命周期之前错报的字段 (R19 加 status), 写死不取 report.MISSTATEMENT_FIELDS
 R19_MISSTATEMENT_KEYS = {

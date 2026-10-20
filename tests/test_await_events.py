@@ -17,6 +17,7 @@ from backend.contracts.models import (
     Judgment,
     Misstatement,
     MisstatementDraft,
+    MisstatementStatus,
     MisstatementType,
     Procedure,
     ProcedureStatus,
@@ -220,8 +221,13 @@ async def test_new_exception_version_and_misstatement_read_back() -> None:
         reviewed_by="U-1",
         decided_at=NOW,
     )
-    misstatement = Misstatement(
-        id="M-D-1", judgment_id=judgment.id, exception_id=None, review_record_id=record.id, **draft.model_dump()
+    misstatement = Misstatement(  # 功能 misstatement 关闭时的旧口径 (FIN-04 按状态累计, 需求 R166)
+        id="M-D-1",
+        judgment_id=judgment.id,
+        exception_id=None,
+        review_record_id=record.id,
+        status=MisstatementStatus.uncorrected,
+        **draft.model_dump(),
     )
     attributed = exception.model_copy(
         update={"version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": judgment.id}
