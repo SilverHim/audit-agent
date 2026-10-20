@@ -50,6 +50,7 @@ from backend.contracts.models import (
     StepStatus,
     TrailEntry,
     TrailKind,
+    drop_fields,
     mask_person_node_ids,
 )
 from backend.contracts.ports import (
@@ -102,6 +103,7 @@ DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
 # 不算行金额的金额列: 银行流水的交易后余额是累计数, 不是这一行的金额
 NOT_ROW_AMOUNTS = {"balance_after_cents"}
 MAX_ATTEMPTS = 3  # 首次调用加语法, 结构失败后最多 2 次重试
+PERSONAL_FIELDS = frozenset({"birth_date"})  # 渲染提示词前从变量里去掉的字段: 个人的出生日期 (需求 R310)
 # 系统提示词: 要求只输出符合输出模型 JSON schema 的一个对象
 SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON schema below. \
 Write nothing before or after the object.
@@ -818,7 +820,7 @@ class JudgmentEngine:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
         引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
-        渲染前经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139),
+        渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
@@ -827,8 +829,10 @@ class JudgmentEngine:
         assert template.llm is not None  # output_model 已确认
         client = llm if llm is not None else self.llm
         system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
-        # 人员节点 ID 先去掉出生日期再渲染 (接口文档第 0 节 "个人信息"): 关系图的端点, 例外的 detail 都可能带它
-        messages = [LLMMessage(role="user", content=self.render(template, mask_person_node_ids(dict(variables))))]
+        # 先去掉个人信息再渲染 (接口文档第 0 节 "个人信息"): 出生日期字段 (需求 R310), 人员节点 ID 的出生日期一段
+        # (关系图的端点, 例外的 detail 都可能带它, 需求 R139)
+        outbound = mask_person_node_ids(drop_fields(dict(variables), PERSONAL_FIELDS))
+        messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
             request = LLMRequest(

@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
@@ -1499,6 +1499,18 @@ def mask_person_node_ids(value: Any) -> Any:
         return [mask_person_node_ids(item) for item in value]
     if isinstance(value, tuple):
         return tuple(mask_person_node_ids(item) for item in value)
+    return value
+
+
+def drop_fields(value: Any, fields: Collection[str]) -> Any:
+    """递归去掉字典中名为 fields 的键 (列表与元组逐项处理), 其余原样; 返回新对象, 不改入参. 发给模型的数据在序列化
+    之前去掉出生日期字段 (birth_date, 接口文档第 0 节 "个人信息", 需求 R310) 等用, 与 mask_person_node_ids 配合."""
+    if isinstance(value, dict):
+        return {k: drop_fields(v, fields) for k, v in value.items() if k not in fields}
+    if isinstance(value, list):
+        return [drop_fields(item, fields) for item in value]
+    if isinstance(value, tuple):
+        return tuple(drop_fields(item, fields) for item in value)
     return value
 
 

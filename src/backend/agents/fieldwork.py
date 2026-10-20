@@ -197,6 +197,17 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             subjects.append(Subject(contract.id, data))
         return Subjects(subjects)
 
+    async def related_documents(self, eid: str, related_id: str) -> list[dict[str, Any]]:
+        """关联对象含 related_id 的已登记文件 (FinancialDataStore.documents(related_id=...) 的顺序), 每项为 {document
+        (DocumentRef, JSON 形式), pages (EvidenceStore.pages, 下标 0 为第 1 页)}; GEN-02, GEN-03 共用. 登记摘录
+        (registry_extract) 不给 (需求 R310): 摘录页印有人员的出生日期, 人员检索的文件名带 yyyymmdd, 判断引擎的遮蔽
+        只认人员节点 ID 与 birth_date 字段, 管不到页面文字."""
+        return [
+            {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
+            for d in await self.deps.financial_store.documents(eid, related_id=related_id)
+            if d.type is not DocumentType.registry_extract
+        ]
+
     async def registered_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
         """文件登记, 以存储 (FinancialDataStore.documents) 的当前登记为准: 可靠性, 文件日期与关联对象是文件登记的属性,
         审计师补登记后 (需求 R90) 过期重跑用的就是新登记, 不用编排状态里的旧副本; 存储里没有而状态里有的才取状态.
@@ -345,8 +356,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         - equity_entries: 本节点直接持有报告主体股份时为规则 C02 的行, 否则为 [].
         - contracts: 对方 ABN (去非数字) 的末 9 位等于节点 ACN, 或对方名称的键等于名称键的合同 (按合同编号), 带合同
           文件的登记 (见 registered_documents, 未登记抛 LookupError).
-        - documents: 关联对象含本节点的文件 (FinancialDataStore.documents(related_id=...)), 带各页文字; 登记摘录
-          (registry_extract) 不给: 摘录页印有人员的出生日期 (遮蔽只认人员节点 ID), 内容已在关系图里 (links).
+        - documents: 关联对象含本节点的文件, 带各页文字 (related_documents, 不给登记摘录; 摘录的内容已在关系图里).
         - reporting_entity, client_profile: 报告主体节点的 ID 与名称; 画像的 ID (client_profile 指针用) 与适用框架.
         """
         eid = ctx.engagement.id
@@ -382,11 +392,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             if document is None:
                 raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 未登记")
             own.append({"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")})
-        related = [
-            {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
-            for d in await self.deps.financial_store.documents(eid, related_id=node.id)
-            if d.type is not DocumentType.registry_extract
-        ]
+        related = await self.related_documents(eid, node.id)
         found = declared(profile, node.name, node.acn, suffixes)
         return {
             "entity": {"name": node.name, "acn": node.acn},
@@ -468,7 +474,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         (detail_invoices, 按 ID), 每张为 invoice_records 的 invoice 与 delivery_notes; contracts 为这些发票所挂的合同
         与其文件登记 (invoice_records 的 contract 与 document), 按文件 ID 去重, 按合同编号排序, 同一份合同只送一次,
         发票以 contract_id 引用; related_findings 为 detail 指向本凭证的其他 GEN-05 例外 (按 ID; 已归因的也算);
-        documents 为关联对象含本凭证号的文件登记与各页文字 (EvidenceStore.pages, 整份送出, 暂不设页数上限);
+        documents 为关联对象含本凭证号的文件登记与各页文字 (related_documents, 整份送出, 暂不设页数上限);
         fraud_risks 为风险清单中 fraud_related 为真的全部风险. 本凭证, 相关凭证或 detail 所指的分录行查不到抛
         LookupError, 发票与合同同 invoice_records. 没有规则 SQL, 不经规则引擎.
         """
@@ -532,10 +538,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 )
             touched = {line.account_code for line in own} & cash
             linked = [a for a in bank_accounts if a.gl_account_code in touched]
-            documents = [
-                {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
-                for d in await store.documents(eid, related_id=no)
-            ]
+            documents = await self.related_documents(eid, no)
             records = [invoices[i][1] for i in sorted({i for x in groups[no] for i in detail_invoices(x.detail)})]
             contracts: dict[str, dict[str, Any]] = {}  # 文件 ID -> {contract, document}, 同一份合同只送一次
             for record in records:
