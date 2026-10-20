@@ -58,9 +58,9 @@ REVIEWED_LEVELS = (AutonomyLevel.L3, AutonomyLevel.L4)  # 主规则: 人只看�
 CLOSING_ACTIONS = (ProposedAction.accept, ProposedAction.close)  # 主规则: 会关闭事项的建议动作
 # 跳过规则: 运行时自主度 L1, L2 由审计师逐条复核, 不经独立复核; 值为跳过原因的代码 (需求 R309)
 LEVEL_CODES = {AutonomyLevel.L1: CriticReasonCode.level_l1, AutonomyLevel.L2: CriticReasonCode.level_l2}
-# 登记摘录的结构化内容与外部调用留痕的明细里不给复核模型的字段 (需求 R310): 出生日期 (判断引擎渲染前也去掉), 存档的
-# 文件名 (人员检索的为 {姓}-{名}-{yyyymmdd}.pdf)
-PERSONAL_FIELDS = frozenset({"birth_date", "file_name"})
+# 登记摘录的结构化内容与外部调用留痕的明细里不给复核模型的字段 (需求 R310): 存档的文件名 (人员检索的为
+# {姓}-{名}-{yyyymmdd}.pdf), 判断引擎认不出. 出生日期字段 birth_date 不在这里去, 由判断引擎渲染前统一去掉
+WITHHELD_FROM_CRITIC = frozenset({"file_name"})
 
 
 def trigger(
@@ -306,7 +306,7 @@ class ReviewAgent(ProcedureAgent[None]):
         (只有这类留痕能通过 given_evidence), 客户画像 (profile) 中 locator 那个字段的 JSON. 查不到给说明文字.
 
         不把出生日期发给复核模型 (需求 R310): 登记摘录 (registry_extract) 的页印有出生日期, 不给页面文字, 改给该文件的
-        结构化内容 (registry_record); 留痕的明细去掉 PERSONAL_FIELDS. 人员节点 ID 与其余的 birth_date 字段由判断引擎在
+        结构化内容 (registry_record); 留痕的明细去掉 WITHHELD_FROM_CRITIC. 人员节点 ID 与 birth_date 字段由判断引擎在
         渲染前处理."""
         source_type, source_id = pointer.source_type, pointer.source_id
         if source_type == "client_profile":
@@ -329,24 +329,24 @@ class ReviewAgent(ProcedureAgent[None]):
             if entry is None:
                 return "(trail not found)"
             return to_jsonable_python(
-                {"summary": entry.summary, "payload": drop_fields(entry.payload, PERSONAL_FIELDS)}
+                {"summary": entry.summary, "payload": drop_fields(entry.payload, WITHHELD_FROM_CRITIC)}
             )
         row = await self.deps.financial_store.record(eid, cast(Any, source_type), source_id)
         return to_jsonable_python(row) if row is not None else "(row not found)"  # 日期, 时间转成字符串
 
     async def registry_record(self, eid: str, document_id: str) -> Any:
-        """一份登记摘录 (registry_extract) 的结构化内容, 代替页面文字 (需求 R310), 去掉 PERSONAL_FIELDS: 上传的摘录取
-        A3 抽取的最新一版 (抽取版本表, 需求 R290); 否则取 GEN-08 存档它的那次查询记下的结构化结果 (external_call 留痕
-        payload 中 document_id 为它的那条的 result; 公司摘录带高管的姓名, 职务, 任职日期与股东持股, 人员检索带任职与
-        持股的公司). 都没有时给说明文字."""
+        """一份登记摘录 (registry_extract) 的结构化内容, 代替页面文字 (需求 R310), 去掉 WITHHELD_FROM_CRITIC: 上传的
+        摘录取 A3 抽取的最新一版 (抽取版本表, 需求 R290); 否则取 GEN-08 存档它的那次查询记下的结构化结果 (external_call
+        留痕 payload 中 document_id 为它的那条的 result; 公司摘录带高管的姓名, 职务, 任职日期与股东持股, 人员检索带任职
+        与持股的公司). 都没有时给说明文字. birth_date 字段留到判断引擎渲染前去掉."""
         versions = await self.deps.data.extraction_versions(eid, REGISTRY_TARGET, document_id)
         if versions:
-            return to_jsonable_python(drop_fields(versions[-1].data, PERSONAL_FIELDS))
+            return to_jsonable_python(drop_fields(versions[-1].data, WITHHELD_FROM_CRITIC))
         offset = 0
         while batch := await self.deps.trail.list(eid, TrailKind.external_call, limit=100, offset=offset):
             for entry in batch:
                 if entry.payload.get("document_id") == document_id:
-                    return to_jsonable_python(drop_fields(entry.payload.get("result"), PERSONAL_FIELDS))
+                    return to_jsonable_python(drop_fields(entry.payload.get("result"), WITHHELD_FROM_CRITIC))
             offset += len(batch)
         return "(registry extract: page text withheld, no structured record)"
 
