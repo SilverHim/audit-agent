@@ -1,5 +1,6 @@
 id: GEN-08
 name: 股权穿透与关联方关系图
+workpaper: {ref: G-3, area: G}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 规格书 6.1.1 (A5 含 GEN-08), 7.2 节 (L4); ASA 550 第 15 段 (识别关联方关系时留意记录与文件中未申报的关联方).
 # 无 SQL, 不调大模型. A5 经 RegistrySource 查登记 (agents/ownership, 需求 R137, R138):
 # 1. ABN Lookup 客户画像 (本项目采用的版本) 的 ABN, 取 ACN; 查不到或没有 ACN (不是公司) 抛 LookupError, 执行失败.

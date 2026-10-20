@@ -1,4 +1,4 @@
-"""知识文件的模型: 程序 YAML 与准则片段, 定义见 开发接口文档.md 第 8 节."""
+"""知识文件的模型: 程序 YAML, 准则片段与底稿配置, 定义见 开发接口文档.md 第 8 节."""
 
 from typing import Any, Literal, Self
 
@@ -20,6 +20,7 @@ from backend.contracts.models import (
     RiskLevel,
     RuleOutcomeStatus,
 )
+from backend.contracts.records import AccountCategory
 
 
 class Trigger(Model):
@@ -143,6 +144,21 @@ class ManualSpec(Model):
     subject: str = "RESULT"  # manual 任务的 subject_id
 
 
+class Bilingual(Model):
+    """一段固定文字的中文与英文 (底稿配置的名称与说明, 需求 R329)."""
+
+    zh: str
+    en: str
+
+
+class WorkpaperRef(Model):
+    """程序的底稿 (需求 R329): 索引号与所属区, 写在程序 YAML 的 workpaper 一行. 规则见 workpapers.yaml 与
+    procedure_library.workpaper_problems."""
+
+    ref: str  # 索引号, 如 A-2, X (FIN-04 的错报汇总), X-A
+    area: str  # 区字母, 须在底稿配置的 areas 中
+
+
 class ProcedureTemplate(Model):
     """审计程序模板, 对应 knowledge/procedures/ 下的一个 YAML."""
 
@@ -185,6 +201,7 @@ class ProcedureTemplate(Model):
     manual: ManualSpec | None = None  # 人工程序交给人的要求, 人工程序须有, 其余程序不能写 (加载时校验)
     # 按条件覆盖默认降级表 (rules.json 的 autonomy 段, 需求 R168); 同一条件只写一条, 没写的条件照默认
     downgrade_rules: list[DowngradeRule] = []
+    workpaper: WorkpaperRef | None = None  # 本程序的底稿 (需求 R329); 不单独出底稿的程序 (GEN-09) 为空
 
     @model_validator(mode="after")
     def unique_downgrade_conditions(self) -> Self:
@@ -206,3 +223,61 @@ class StandardFragment(Model):
     topic: str  # 主题, 如 control_transfer
     text: str  # 原文摘录
     procedures: list[str]  # 引用它的程序
+
+
+# 按程序模板分的底稿类别 (procedure_library.workpaper_kind): rule 为规则程序, judgment 为判断程序
+WorkpaperKind = Literal["rule", "judgment"]
+
+
+class WorkpaperArea(Model):
+    """底稿的区 (需求 R329)."""
+
+    id: str  # 区字母, 如 A
+    name: Bilingual
+    # 程序底稿索引号的序号写法: digits 为 {区}-1 起, letters 为 {区}-A 起 (错报区 X: X-数字留给错报汇总表中的错报编号).
+    # 区字母本身 (如 X) 也可作索引号, 与系统底稿不重复即可
+    numbering: Literal["digits", "letters"] = "digits"
+
+
+class SystemWorkpaper(Model):
+    """系统生成, 不对应程序的底稿 (00 索引, 导引表 C, D, S 准则对照)."""
+
+    ref: str  # 索引号
+    name: Bilingual
+    area: str | None = None  # 导引表属其区 (索引号即区字母); 索引与准则对照不属任何区
+    categories: list[AccountCategory] = []  # 导引表取试算表中这些标准分类的科目 (Q29); 其余为空
+
+
+class RequiredItem(Model):
+    """各类底稿必须记录的一项 (ASA 230 第 8, 9 段与各准则). kinds 与 refs 都为空即全部底稿, 否则为其并集
+    (ProcedureLibrary.required_items)."""
+
+    id: str  # 代号, 如 preparer
+    name: Bilingual
+    standard: str  # 出处的准则, 如 ASA 230
+    paragraph: str  # 出处的段号 (现行), 如 9(b)
+    supplementable: bool  # 缺了时能否由审计师的补充说明补齐 (需求 R330): 理由, 考虑因素与结论可以; 编制, 复核与事实不行
+    kinds: list[WorkpaperKind] = []  # 只对这几类程序的底稿
+    refs: list[str] = []  # 只对这几份底稿 (索引号)
+
+
+class StandardRequirement(Model):
+    """准则文档要求对照的一行 (ASA 230 附录 1 所列, 段号按各准则现行文本)."""
+
+    standard: str  # 准则, 如 ASA 240
+    paragraphs: str  # 现行段号, 如 45-48
+    content: Bilingual  # 要求记录的内容
+    refs: list[str] = []  # 对应的底稿 (索引号)
+    areas: list[str] = []  # 另对应这些区的全部底稿 (程序底稿与导引表, ProcedureLibrary.standard_refs)
+    note: Bilingual | None = None  # 说明 (如 ASA 330 第 30 段由导引表与试算表的勾稽支持)
+    not_applicable: Bilingual | None = None  # 不适用的条件 (如 ASA 600: 单一主体)
+
+
+class WorkpaperConfig(Model):
+    """底稿配置 (knowledge/workpapers.yaml, 需求 R329, 接口文档第 8.1 节 "底稿配置")."""
+
+    areas: list[WorkpaperArea]  # 区, 按档案中的顺序
+    system: list[SystemWorkpaper]  # 不对应程序的系统底稿
+    required: list[RequiredItem]  # 必填项
+    standards_note: Bilingual  # 准则对照的说明一行
+    standards: list[StandardRequirement]  # 准则对照, 按准则编号

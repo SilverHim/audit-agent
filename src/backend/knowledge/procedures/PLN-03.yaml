@@ -1,5 +1,6 @@
 id: PLN-03
 name: 风险清单终审
+workpaper: {ref: A-3, area: A}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P1_Planning
 cycle: Planning
 owner: A4

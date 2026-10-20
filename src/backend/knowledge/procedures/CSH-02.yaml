@@ -1,5 +1,6 @@
 id: CSH-02
 name: 函证差异评价
+workpaper: {ref: C-4, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P2_Executing
 cycle: Cash
 owner: A6

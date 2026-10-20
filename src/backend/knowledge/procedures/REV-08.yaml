@@ -1,5 +1,6 @@
 id: REV-08
 name: 凭证三单匹配
+workpaper: {ref: D-3, area: D}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 范围与各规则总体的说明 (需求 R324): 占位按参数快照渲染, 窗口两端都含 (同规则 SQL 的 BETWEEN)
 scope:
   zh: 期末前 {{ window_days }} 天 ({{ period_end | days_before(window_days) }} 至 {{ period_end }}) 入账的销售发票

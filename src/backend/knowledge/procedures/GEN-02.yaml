@@ -1,5 +1,6 @@
 id: GEN-02
 name: 分录例外归因
+workpaper: {ref: G-2, area: G}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 规格书 6.4 (混合程序为异常归因), 7.2 GEN-02 L2, 8.5 (只送规则筛出的例外及其关联行); ASA 240 第 32, 33(a) 段,
 # A44 段 (需求 R134). 本程序没有规则 SQL: 判断对象是前置程序 GEN-05 尚未归因的例外, 按例外 detail 的 entry_no 分组,
 # 每笔凭证一个对象 (按凭证号自然序), 由 agents/fieldwork.py 的 gen02_subjects 组装上下文 (data 字段见

@@ -1,5 +1,6 @@
 id: CSH-04
 name: 函证发起
+workpaper: {ref: C-1, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P2_Executing
 cycle: Cash
 owner: A5

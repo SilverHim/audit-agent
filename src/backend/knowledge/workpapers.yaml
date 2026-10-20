@@ -1,0 +1,258 @@
+# 底稿配置 (需求 R329, Issue #50; 接口文档第 8.1 节 "底稿配置"; 模型 contracts/knowledge.WorkpaperConfig).
+# 一个程序一份底稿, 索引号与区写在各程序 YAML 的 workpaper 一行; 这里写区, 不对应程序的系统底稿, 各类底稿的必填项
+# 与准则文档要求对照. ProcedureLibrary 加载时与程序模板一起校验 (procedure_library.workpaper_problems).
+# 依据: ASA 230 第 8, 9 段与附录 1; 段号按 docs/参考资料 中各准则现行文本 (pdftotext 核过).
+# 版式与示例: docs/云端开发/design/底稿示例/ (00 索引, S 准则对照).
+
+# 区, 按档案中的顺序. 程序底稿的索引号为区字母, 或 {区}-{序号}: numbering digits 为 1 起, letters 为 A 起
+areas:
+  - {id: A, name: {zh: 计划, en: Planning}}
+  - {id: B, name: {zh: 承接, en: Acceptance}}
+  - {id: C, name: {zh: 现金, en: Cash}}
+  - {id: D, name: {zh: 收入, en: Revenue}}
+  - {id: G, name: {zh: 一般, en: General}}
+  # 错报区: 程序为 X (错报汇总) 与 X-A 起, X-1 起留给错报汇总表中的错报编号 (同示例)
+  - {id: X, name: {zh: 错报, en: Misstatements}, numbering: letters}
+  - {id: Z, name: {zh: 完成与报告, en: Completion and reporting}}
+
+# 系统生成, 不对应程序的底稿. 导引表 (有 categories 的) 取试算表中这些标准分类的科目; 只给有审计程序的现金, 收入
+# 两区各一张 (Q29), 其余报表项目列在索引的 "本期未执行专门程序的报表项目" 一节
+system:
+  - {ref: "00", name: {zh: 审计档案索引, en: Audit file index}}
+  - {ref: C, area: C, name: {zh: 现金导引表, en: Cash lead schedule}, categories: [cash]}
+  - {ref: D, area: D, name: {zh: 收入导引表, en: Revenue lead schedule}, categories: [revenue, other_income]}
+  - {ref: S, name: {zh: 准则文档要求对照, en: Cross-reference to documentation requirements}}
+
+# 必填项: 各类底稿必须记录的内容. kinds 与 refs 都不写即全部底稿; kinds 为程序类别 (rule 规则程序, judgment 判断程序),
+# refs 为索引号. supplementable: 缺了时能否由审计师的补充说明补齐 (理由, 考虑因素与结论可以; 编制, 复核与事实不行)
+required:
+  - id: preparer
+    name:
+      zh: "编制人"
+      en: "Preparer"
+    standard: ASA 230
+    paragraph: 9(b)
+    supplementable: false
+  - id: completed_on
+    name:
+      zh: "完成日期"
+      en: "Date completed"
+    standard: ASA 230
+    paragraph: 9(b)
+    supplementable: false
+  - id: reviewer
+    name:
+      zh: "复核人"
+      en: "Reviewer"
+    standard: ASA 230
+    paragraph: 9(c)
+    supplementable: false
+  - id: reviewed_on
+    name:
+      zh: "复核日期"
+      en: "Date reviewed"
+    standard: ASA 230
+    paragraph: 9(c)
+    supplementable: false
+  - id: review_scope
+    name:
+      zh: "复核范围"
+      en: "Extent of review"
+    standard: ASA 230
+    paragraph: 9(c)
+    supplementable: false
+  - id: procedures
+    name:
+      zh: "程序的性质, 时间与范围"
+      en: "Nature, timing and extent of procedures"
+    standard: ASA 230
+    paragraph: 8(a)
+    supplementable: false
+  - id: results
+    name:
+      zh: "程序结果与取得的证据"
+      en: "Results of procedures and evidence obtained"
+    standard: ASA 230
+    paragraph: 8(b)
+    supplementable: false
+  - id: conclusions
+    name:
+      zh: "重大事项, 结论与重大判断"
+      en: "Significant matters, conclusions and significant judgements"
+    standard: ASA 230
+    paragraph: 8(c)
+    supplementable: true
+  - id: tested_items
+    name:
+      zh: "被测项目的识别特征"
+      en: "Identifying characteristics of the items tested"
+    standard: ASA 230
+    paragraph: 9(a)
+    supplementable: false
+    kinds: [rule, judgment]
+  - id: materiality_amounts
+    name:
+      zh: "整体重要性, 特定重要性, 执行重要性的金额及其修订"
+      en: "Amounts of materiality, specific materiality and performance materiality, and their revision"
+    standard: ASA 320
+    paragraph: "14"
+    supplementable: false
+    refs: [A-2]
+  - id: materiality_factors
+    name:
+      zh: "确定重要性的考虑因素 (含选择基准与比例的理由)"
+      en: "Factors considered in determining materiality (including the reasons for the benchmark and percentages)"
+    standard: ASA 320
+    paragraph: "14"
+    supplementable: true
+    refs: [A-2]
+  - id: clearly_trivial
+    name:
+      zh: "明显微小临界值"
+      en: "Clearly trivial threshold"
+    standard: ASA 450
+    paragraph: 15(a)
+    supplementable: false
+    refs: [X]
+  - id: misstatements_accumulated
+    name:
+      zh: "累计的全部错报及是否已更正"
+      en: "All misstatements accumulated and whether they have been corrected"
+    standard: ASA 450
+    paragraph: 15(b)
+    supplementable: false
+    refs: [X]
+  - id: uncorrected_conclusion
+    name:
+      zh: "未更正错报是否重大的结论及依据"
+      en: "Conclusion on whether uncorrected misstatements are material, and its basis"
+    standard: ASA 450
+    paragraph: 15(c)
+    supplementable: true
+    refs: [X]
+  - id: audit_strategy
+    name:
+      zh: "总体审计策略"
+      en: "Overall audit strategy"
+    standard: ASA 300
+    paragraph: 12(a)
+    supplementable: false
+    refs: [A-1]
+  - id: audit_plan
+    name:
+      zh: "审计计划"
+      en: "Audit plan"
+    standard: ASA 300
+    paragraph: 12(b)
+    supplementable: false
+    refs: [A-1]
+  - id: plan_changes
+    name:
+      zh: "总体策略与计划的重大修改及原因"
+      en: "Significant changes to the overall strategy or audit plan, and the reasons"
+    standard: ASA 300
+    paragraph: 12(c)
+    supplementable: true
+    refs: [A-1]
+
+standards_note:
+  zh: "段号按各准则现行文本; ASA 230 附录 1 中 ASA 240, 250, 260 的段号为修订前编号 (分别为 44-47, 29, 23)."
+  en: "Paragraph numbers follow the current text of each standard; the paragraphs listed in ASA 230 Appendix 1 for ASA 240, 250 and 260 (44-47, 29 and 23) are pre-revision numbers."
+
+# 准则文档要求对照 (ASA 230 附录 1 所列 15 条): refs 为对应的底稿索引号, areas 为另对应其全部底稿的区; 本版没有程序
+# 记录的 (ASA 250, 260, 540, 720) 不写对应底稿; not_applicable 为不适用的条件
+standards:
+  - standard: ASA 210
+    paragraphs: 10-12
+    content:
+      zh: "约定条款: 审计目标与范围, 审计师与管理层的责任, 适用的财务报告框架, 报告的预期形式与内容"
+      en: "Agreed terms of the engagement: objective and scope, responsibilities of the auditor and management, applicable financial reporting framework, expected form and content of reports"
+    refs: [B-1, B-2, B-3]
+  - standard: ASA 220
+    paragraphs: "41"
+    content:
+      zh: "职业道德与独立性, 客户关系与业务的承接与保持中识别的事项, 讨论与结论; 咨询的性质, 范围与结论"
+      en: "Matters identified, discussions and conclusions on ethical requirements including independence and on acceptance and continuance; nature, scope and conclusions of consultations"
+    refs: [B-1, B-3, Z-1]
+  - standard: ASA 240
+    paragraphs: 45-48
+    content:
+      zh: "舞弊风险的团队讨论与重大决定, 识别与评估的舞弊风险, 应对与结果, 关于舞弊的沟通, 收入舞弊推定不适用时的理由"
+      en: "Engagement team discussion and significant decisions, identified and assessed risks of fraud, responses and results, communications about fraud, reasons where the revenue fraud presumption is rebutted"
+    refs: [A-3, D-3, G-1, G-2]
+  - standard: ASA 250
+    paragraphs: "30"
+    content:
+      zh: "识别或怀疑的违反法律法规事项, 执行的程序与结论, 与管理层及治理层的讨论"
+      en: "Identified or suspected non-compliance with laws and regulations, procedures performed and conclusions, discussions with management and those charged with governance"
+  - standard: ASA 260
+    paragraphs: "24"
+    content:
+      zh: "与治理层口头沟通的事项, 时间与对象; 书面沟通留副本"
+      en: "Matters communicated orally to those charged with governance, when and to whom; copies of written communications"
+  - standard: ASA 300
+    paragraphs: "12"
+    content:
+      zh: "总体审计策略, 审计计划, 及其重大修改与原因"
+      en: "Overall audit strategy, audit plan, and significant changes with the reasons"
+    refs: [A-1]
+  - standard: ASA 315
+    paragraphs: "38"
+    content:
+      zh: "团队讨论, 了解被审计单位的要点与信息来源, 风险评估程序, 控制的评价, 识别与评估的风险及重大判断的理由"
+      en: "Engagement team discussion, key elements of the understanding and their sources, risk assessment procedures, evaluation of controls, identified and assessed risks and the rationale for significant judgements"
+    refs: [A-3, A-4]
+  - standard: ASA 320
+    paragraphs: "14"
+    content:
+      zh: "整体重要性, 特定重要性, 执行重要性的金额与考虑因素, 及其修订"
+      en: "Amounts of materiality, specific materiality and performance materiality, the factors considered, and their revision"
+    refs: [A-2]
+  - standard: ASA 330
+    paragraphs: 28-30
+    content:
+      zh: "总体应对, 进一步程序的性质时间范围, 与认定层次风险的对应, 结果与结论; 财务报表与会计记录一致"
+      en: "Overall responses, nature, timing and extent of further procedures, linkage to assertion-level risks, results and conclusions; agreement of the financial report with the accounting records"
+    areas: [C, D, G]
+    note:
+      zh: "第 30 段 (报表与会计记录一致) 按 \"报表以账套为准\" (Issue #46), 由导引表 C, D 与试算表的勾稽说明"
+      en: "Paragraph 30 (agreement with the accounting records) is supported by reconciling lead schedules C and D to the trial balance, the financial report being prepared from the ledger (Issue #46)"
+  - standard: ASA 450
+    paragraphs: "15"
+    content:
+      zh: "明显微小临界值, 累计错报及是否更正, 未更正错报是否重大的结论及依据"
+      en: "Clearly trivial threshold, misstatements accumulated and whether corrected, conclusion on whether uncorrected misstatements are material and its basis"
+    areas: [X]
+    refs: [Z-1]
+  - standard: ASA 540
+    paragraphs: "39"
+    content:
+      zh: "会计估计: 了解的要点, 程序与风险的对应, 管理层偏向的迹象, 估计是否合理的重大判断"
+      en: "Accounting estimates: key elements of the understanding, linkage of procedures to risks, indicators of management bias, significant judgements on reasonableness"
+  - standard: ASA 550
+    paragraphs: "28"
+    content:
+      zh: "识别的关联方名称及关联方关系的性质"
+      en: "Names of the identified related parties and the nature of the relationships"
+    refs: [G-3, G-4]
+  - standard: ASA 600
+    paragraphs: "59"
+    content:
+      zh: "集团审计的范围, 组成部分与访问受限的重大事项"
+      en: "Group audit matters, including restrictions on access and the determination of components"
+    not_applicable:
+      zh: "单一主体, 不是集团审计"
+      en: "Single entity, not a group audit"
+  - standard: ASA 610
+    paragraphs: "36"
+    content:
+      zh: "利用内部审计工作时对内部审计的评价, 所用工作的性质与范围及对其执行的程序"
+      en: "When using the work of internal audit, the evaluation of the function, the nature and extent of the work used, and the procedures performed on it"
+    not_applicable:
+      zh: "被审计单位没有内部审计"
+      en: "The entity has no internal audit function"
+  - standard: ASA 720
+    paragraphs: "25"
+    content:
+      zh: "对其他信息执行的程序, 及所读的其他信息最终版本"
+      en: "Procedures performed on the other information, and the final version of the other information read"

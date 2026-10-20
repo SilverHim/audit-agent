@@ -1,5 +1,6 @@
 id: ACC-01
 name: 是否承接
+workpaper: {ref: B-1, area: B}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P0_Acceptance
 cycle: Acceptance
 owner: A2

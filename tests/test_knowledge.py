@@ -123,7 +123,8 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
     shutil.copytree(ROOT, root)
     template = yaml.safe_load((root / "procedures" / "REV-02.yaml").read_text(encoding="utf-8"))
     for pid, feature in (("X-J", "journals"), ("X-B", None)):
-        extra = {k: v for k, v in template.items() if k not in ("triggers", "depends_on", "feature")}
+        # 底稿索引号不复制 (需求 R329: 索引号不能重复)
+        extra = {k: v for k, v in template.items() if k not in ("triggers", "depends_on", "feature", "workpaper")}
         extra |= {"id": pid, **({"feature": feature} if feature else {})}
         (root / "procedures" / f"{pid}.yaml").write_text(yaml.safe_dump(extra, allow_unicode=True), encoding="utf-8")
         assert count_guards(root) == (set(), set() if feature else {"X-B"}), pid
@@ -3435,3 +3436,242 @@ def test_rev08_scope_checks_and_population_descriptions(period_end: date | str) 
     ]
     with pytest.raises(UndefinedError, match="window_days"):
         render_text(template.scope, {"period_end": period_end})
+
+
+# ── 需求 R329: 底稿索引号, 所属区, 必填项与准则对照 (knowledge/workpapers.yaml) ──
+
+WORKPAPERS = {  # 程序 → 底稿索引号 (验收 1); GEN-09 不出底稿
+    "PLN-15": "A-1",
+    "PLN-01": "A-2",
+    "PLN-03": "A-3",
+    "PLN-07": "A-4",
+    "ACC-01": "B-1",
+    "ACC-04": "B-2",
+    "ACC-08": "B-3",
+    "CSH-04": "C-1",
+    "DOC-06": "C-2",
+    "CSH-05": "C-3",
+    "CSH-02": "C-4",
+    "DOC-04": "D-1",
+    "REV-03": "D-2",
+    "REV-08": "D-3",
+    "REV-02": "D-4",
+    "GEN-05": "G-1",
+    "GEN-02": "G-2",
+    "GEN-08": "G-3",
+    "GEN-03": "G-4",
+    "GEN-07": "G-5",
+    "FIN-04": "X",
+    "FIN-03": "X-A",
+    "FIN-08": "X-B",
+    "FIN-09": "X-C",
+    "FIN-01": "Z-1",
+    "RPT-03": "Z-2",
+    "RPT-01": "Z-3",
+}
+WORKPAPER_FILE = "workpapers.yaml"
+
+
+def test_workpaper_refs_of_programs() -> None:
+    """验收 1: 每条程序 (含功能未启用的) 的底稿索引号与区, 区即索引号的首字母; GEN-09 不出底稿. 系统底稿 00, C, D
+    (导引表: 现金 cash, 收入 revenue 与 other_income, Q29), S 不对应程序. 全部底稿按档案顺序: 00 在前, 区按 A, B,
+    C, D, G, X, Z, 区字母本身 (导引表 C, D, 错报汇总 X) 在该区序号之前, S 在最后."""
+    library = knowledge_library(ROOT)
+    found = {t.id: t.workpaper for t in library.all(include_disabled=True)}
+    assert {pid: w.ref for pid, w in found.items() if w is not None} == WORKPAPERS
+    assert [pid for pid, w in found.items() if w is None] == ["GEN-09"]
+    assert all(w.area == w.ref[0] for w in found.values() if w is not None)
+    config = library.workpapers
+    assert [(a.id, a.name.zh, a.numbering) for a in config.areas] == [
+        ("A", "计划", "digits"),
+        ("B", "承接", "digits"),
+        ("C", "现金", "digits"),
+        ("D", "收入", "digits"),
+        ("G", "一般", "digits"),
+        ("X", "错报", "letters"),
+        ("Z", "完成与报告", "digits"),
+    ]
+    assert all(a.name.en for a in config.areas)
+    assert [(w.ref, w.area, w.categories) for w in config.system] == [
+        ("00", None, []),
+        ("C", "C", ["cash"]),
+        ("D", "D", ["revenue", "other_income"]),
+        ("S", None, []),
+    ]
+    refs = library.workpaper_refs()
+    assert (refs[0], refs[-1], len(refs)) == ("00", "S", len(WORKPAPERS) + 4)
+    assert refs[refs.index("C") : refs.index("D")] == ["C", "C-1", "C-2", "C-3", "C-4"]
+    assert refs[refs.index("X") : refs.index("Z-1")] == ["X", "X-A", "X-B", "X-C"]
+
+
+def edited_knowledge(tmp_path: Path, procedure: dict[str, str] | None = None, config: Any = None) -> Path:
+    """knowledge 目录的副本: procedure 为程序编号 → 新的 workpaper 一行 (空串删去该行), config 改写底稿配置 (收解析后的
+    字典, 原地改)."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(ROOT, root)
+    for pid, line in (procedure or {}).items():
+        path = root / "procedures" / f"{pid}.yaml"
+        text = re.sub(r"^workpaper: .*\n", line + ("\n" if line else ""), path.read_text(encoding="utf-8"), flags=re.M)
+        path.write_text(text, encoding="utf-8")
+    if config is not None:
+        data = yaml.safe_load((root / WORKPAPER_FILE).read_text(encoding="utf-8"))
+        config(data)
+        (root / WORKPAPER_FILE).write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    return root
+
+
+def drop_area(area: str) -> Any:
+    def edit(data: dict[str, Any]) -> None:
+        data["areas"] = [a for a in data["areas"] if a["id"] != area]
+
+    return edit
+
+
+@pytest.mark.parametrize(
+    ("procedure", "config", "message"),
+    [
+        ({"REV-08": "workpaper: {ref: D-2, area: D}"}, None, "索引号 D-2 重复: REV-03, REV-08"),
+        ({"REV-08": "workpaper: {ref: C, area: C}"}, None, "索引号 C 重复: REV-08, 系统底稿"),  # 与导引表 C 重复
+        ({"REV-08": "workpaper: {ref: D-3, area: Q}"}, None, "REV-08: 区 Q 不在底稿配置的 areas 中"),
+        ({"REV-08": "workpaper: {ref: C-9, area: D}"}, None, "REV-08: 索引号 C-9 应为 D 或 D-序号"),  # 不以区字母开头
+        ({"REV-08": "workpaper: {ref: D-0, area: D}"}, None, "REV-08: 索引号 D-0 应为 D 或 D-序号"),
+        # 错报区按配置为字母序号: X-数字留给错报编号; 功能未启用 (misstatement) 的 FIN-03 照样校验
+        ({"FIN-03": "workpaper: {ref: X-1, area: X}"}, None, "FIN-03: 索引号 X-1 应为 X 或 X-序号 (错报区的序号为A 起"),
+        ({"REV-08": "workpaper: {ref: D-A, area: D}"}, None, "REV-08: 索引号 D-A 应为 D 或 D-序号 (收入区的序号为1 起"),
+        (None, drop_area("G"), "GEN-05: 区 G 不在底稿配置的 areas 中"),
+        (None, lambda d: d["required"][-1]["refs"].append("A-9"), "必填项 plan_changes: 索引号 A-9 不存在"),
+        (None, lambda d: d["standards"][0]["refs"].append("B-9"), "准则对照 ASA 210: 索引号 B-9 不存在"),
+        (None, lambda d: d["standards"][0].update(areas=["Q"]), "准则对照 ASA 210: 区 Q 不在 areas 中"),
+        (None, lambda d: d["areas"].append(d["areas"][0]), "区 A 重复"),
+        (None, lambda d: d["required"].append(d["required"][0]), "必填项代号 preparer 重复"),
+        (None, lambda d: d["system"][1].pop("area"), "系统底稿 C: 导引表 (有 categories) 须属一个区"),
+    ],
+    ids=[
+        "duplicate",
+        "system_duplicate",
+        "unknown_area",
+        "wrong_letter",
+        "zero",
+        "x_digits_reserved",
+        "letters_elsewhere",
+        "area_removed",
+        "required_ref",
+        "standard_ref",
+        "standard_area",
+        "area_repeated",
+        "item_repeated",
+        "lead_without_area",
+    ],
+)
+def test_workpaper_problems_rejected_on_load(
+    tmp_path: Path, procedure: dict[str, str] | None, config: Any, message: str
+) -> None:
+    """验收 2: ProcedureLibrary 加载时与程序模板一起校验底稿索引号与配置 (同 params, triggers 的校验): 索引号不重复
+    (程序之间, 与系统底稿之间), 区在配置里, 索引号为区字母或 {区}-序号, 序号按配置的写法 (错报区为 A 起的字母, X-数字
+    留给错报编号; 其余区为 1 起的数字); 必填项与准则对照所引的索引号与区都在. 功能未启用的程序照样校验. 消息含程序
+    编号或索引号."""
+    root = edited_knowledge(tmp_path, procedure, config)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ProcedureLibrary(root)
+
+
+def test_workpaper_config_must_parse(tmp_path: Path) -> None:
+    """底稿配置的字段写错 (如必填项的 supplementable 不是布尔, 导引表的分类不是标准分类) 时加载即报错, 消息带文件名."""
+    root = edited_knowledge(tmp_path, config=lambda d: d["system"][1].update(categories=["cash_at_bank"]))
+    with pytest.raises(ValueError, match=r"底稿配置 \(workpapers.yaml\) 写法不对"):
+        ProcedureLibrary(root)
+
+
+GENERAL_ITEMS = [  # 全部底稿的必填项: (代号, 出处段号, 可否由补充说明补齐)
+    ("preparer", "9(b)", False),
+    ("completed_on", "9(b)", False),
+    ("reviewer", "9(c)", False),
+    ("reviewed_on", "9(c)", False),
+    ("review_scope", "9(c)", False),
+    ("procedures", "8(a)", False),
+    ("results", "8(b)", False),
+    ("conclusions", "8(c)", True),
+]
+
+
+def test_required_items_by_workpaper() -> None:
+    """验收 3: 必填项. 全部底稿为 ASA 230 第 9(b) 段编制人与完成日期, 第 9(c) 段复核人, 复核日期与范围, 第 8(a)(b)(c)
+    段程序的性质时间范围, 结果与结论; 规则与判断类 (workpaper_kind) 另加第 9(a) 段被测项目的识别特征; A-2 另加 ASA 320
+    第 14 段的金额与考虑因素 (含选择理由, 可补齐); X 另加 ASA 450 第 15(a)-(c) 段 (结论可补齐); A-1 另加 ASA 300 第 12
+    段. 每项有代号, 名称 (zh, en), 出处与是否可补齐."""
+    library = knowledge_library(ROOT)
+    items = library.workpapers.required
+    assert all(i.name.zh and i.name.en for i in items)
+    general = [(i.id, i.paragraph, i.supplementable) for i in items if not i.kinds and not i.refs]
+    assert general == GENERAL_ITEMS and {i.standard for i in items if not i.kinds and not i.refs} == {"ASA 230"}
+
+    def extra(ref: str) -> list[tuple[str, str, str, bool]]:
+        found = library.required_items(ref)
+        assert [(i.id, i.paragraph, i.supplementable) for i in found[:8]] == GENERAL_ITEMS, ref
+        return [(i.id, i.standard, i.paragraph, i.supplementable) for i in found[8:]]
+
+    tested = ("tested_items", "ASA 230", "9(a)", False)
+    assert extra("D-3") == extra("G-1") == extra("D-2") == extra("G-2") == extra("X-A") == [tested]  # 规则, 判断
+    assert extra("B-1") == extra("D-1") == extra("Z-2") == extra("00") == extra("C") == []  # 人工, 抽取, 起草, 系统
+    assert extra("A-2") == [
+        ("materiality_amounts", "ASA 320", "14", False),
+        ("materiality_factors", "ASA 320", "14", True),
+    ]
+    assert extra("X") == [
+        tested,
+        ("clearly_trivial", "ASA 450", "15(a)", False),
+        ("misstatements_accumulated", "ASA 450", "15(b)", False),
+        ("uncorrected_conclusion", "ASA 450", "15(c)", True),
+    ]
+    assert extra("A-1") == [
+        ("audit_strategy", "ASA 300", "12(a)", False),
+        ("audit_plan", "ASA 300", "12(b)", False),
+        ("plan_changes", "ASA 300", "12(c)", True),
+    ]
+    with pytest.raises(KeyError):
+        library.required_items("A-9")
+
+
+STANDARD_PARAGRAPHS = [  # 准则对照: 准则与现行段号 (需求 R329 依据一行, 已对 docs/参考资料 原文)
+    ("ASA 210", "10-12"),
+    ("ASA 220", "41"),
+    ("ASA 240", "45-48"),
+    ("ASA 250", "30"),
+    ("ASA 260", "24"),
+    ("ASA 300", "12"),
+    ("ASA 315", "38"),
+    ("ASA 320", "14"),
+    ("ASA 330", "28-30"),
+    ("ASA 450", "15"),
+    ("ASA 540", "39"),
+    ("ASA 550", "28"),
+    ("ASA 600", "59"),
+    ("ASA 610", "36"),
+    ("ASA 720", "25"),
+]
+
+
+def test_standards_cross_reference() -> None:
+    """验收 4: 准则对照 15 条, 准则与段号同依据一行 (现行段号); 每条有要求记录的内容 (zh, en); 说明一行写明附录 1 中
+    ASA 240, 250, 260 为修订前编号. ASA 330 第 28-30 段对应现金, 收入, 一般三区的程序底稿与导引表 C, D, 说明第 30 段
+    由导引表与试算表的勾稽支持 (报表以账套为准, Issue #46); ASA 600, 610 标不适用的条件 (单一主体, 没有内部审计);
+    对应的索引号都是现有底稿."""
+    library = knowledge_library(ROOT)
+    config = library.workpapers
+    assert [(s.standard, s.paragraphs) for s in config.standards] == STANDARD_PARAGRAPHS
+    assert all(s.content.zh and s.content.en for s in config.standards)
+    assert "ASA 240, 250, 260 的段号为修订前编号 (分别为 44-47, 29, 23)" in config.standards_note.zh
+    rows = {s.standard: s for s in config.standards}
+    asa330 = library.standard_refs(rows["ASA 330"])
+    programs = sorted(w for w in WORKPAPERS.values() if w[0] in "CDG")
+    assert {"C", "D"} <= set(asa330) and set(asa330) == {"C", "D", *programs}
+    note = rows["ASA 330"].note
+    assert note is not None and "第 30 段" in note.zh and "Issue #46" in note.zh and "C, D" in note.zh
+    assert {k for k, s in rows.items() if s.not_applicable is not None} == {"ASA 600", "ASA 610"}
+    assert [rows[k].not_applicable.zh for k in ("ASA 600", "ASA 610")] == [
+        "单一主体, 不是集团审计",
+        "被审计单位没有内部审计",
+    ]  # type: ignore[union-attr]
+    assert library.standard_refs(rows["ASA 320"]) == ["A-2"] and library.standard_refs(rows["ASA 450"])[0] == "X"
+    known = set(library.workpaper_refs())
+    assert all(set(library.standard_refs(s)) <= known for s in config.standards)

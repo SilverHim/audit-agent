@@ -1,5 +1,6 @@
 id: PLN-15
 name: 总体审计计划
+workpaper: {ref: A-1, area: A}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 规格书 6.1.2 PLN-15, 12.2 AuditPlan; 设计稿 v2.1 第 6.6 节. PLN-01/03 通过并装配程序包后, A4 按程序包与状态
 # 确定性组装计划骨架 (期间, 适用框架, 重要性, 特别风险目标, 程序与参数), 由大模型写叙述 (AuditPlanDraft: 总体
 # 策略, 各段, 各程序的性质时间范围, 时间表, 项目质量复核建议, 专家评估), 合成 PLAN-{revision} (status draft);

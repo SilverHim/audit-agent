@@ -1,5 +1,6 @@
 id: FIN-04
 name: 错报累计
+workpaper: {ref: X, area: X}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P3_Completion
 cycle: Completion
 owner: A9

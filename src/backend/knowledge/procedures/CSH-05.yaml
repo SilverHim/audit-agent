@@ -1,5 +1,6 @@
 id: CSH-05
 name: 流水账面核对
+workpaper: {ref: C-3, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 phase: P2_Executing
 cycle: Cash
 owner: A6

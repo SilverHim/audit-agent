@@ -1,5 +1,6 @@
 id: GEN-05
 name: 全量分录扫描
+workpaper: {ref: G-1, area: G}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 规格书 6.3 GEN-05; ASA 240 第 32, 33(a) 段, A44 段. 对本期全部分录按规则取例外, 原样返回, 不作判断, 不建复核
 # 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08, 期末后补记 R13 (需求 R131) 与不看录入时间的新规则
 # R09-R12 (需求 R132; 设计稿第 5.3 节, R09 依 ASA 240 A44 段的 nonstandard journal entries, R10-R12 是据此自定的口径);
