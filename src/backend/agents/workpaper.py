@@ -19,6 +19,7 @@ from backend.agents.judging import (
     JudgedRun,
     Subject,
     Subjects,
+    earlier_findings,
     in_scope,
     judge_all,
     judging_steps,
@@ -274,8 +275,8 @@ def mismatch_exception(
     corrected: int,
     n: int,
 ) -> AuditException:
-    """分录与错报对不上的 V02 例外 X-FIN-09-{run_no}-V02-{n} (n 在对不上的错报中按判断对象的顺序从 1 编号):
-    severity medium, 涉及匹配行 (没有时为来源对象), 金额为错报金额, 证据为匹配行的指针."""
+    """分录与错报对不上的 V02 例外 X-FIN-09-{run_no}-V02-{n} (n 在本次新建 V02 的错报中按判断对象的顺序从 1 编号,
+    沿用的不计): severity medium, 涉及匹配行 (没有时为来源对象), 金额为错报金额, 证据为匹配行的指针."""
     line_ids = [r["id"] for r in lines]
     return AuditException(
         id=f"X-{FIN09}-{ctx.run.run_no}-{V02}-{n}",
@@ -402,8 +403,10 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
     async def verify(self, ctx: RunContext) -> VerifiedRun:
         """FIN-09 的执行: verifying 的错报 (to_verify) 先按 in_scope 筛选, 没有时不执行规则, 不调大模型. 规则 V01 取审计
         更正分录的全部行; 逐条错报在代码中匹配 (matched_lines), 算已更正额 (corrected_cents) 与验证载荷
-        (verification_update), 对不上时建 V02 例外 (mismatch_exception) 作该对象的规则例外; 再交判断公共流程, 成功的
-        判断经 annotate 写上验证载荷. 来源判断不在状态中抛 LookupError."""
+        (verification_update), 对不上时建 V02 例外 (mismatch_exception) 作该对象的规则例外; 当前结果里该错报已有本程序
+        尚未归因的 V02 (judging.earlier_findings, 同 CSH-02 的 D01, D04, 需求 R347) 时沿用, 不看本次比对, 不再新建 (对
+        unattributed 任务 rerun 后旧 V02 才有任务指向; 本次对得上也沿用, 同 CSH-02 数据变了不另处理). 再交判断公共流程,
+        成功的判断经 annotate 写上验证载荷. 来源判断不在状态中抛 LookupError."""
         targets = [m for m in to_verify(ctx.state) if in_scope(ctx, m.id)]
         if not targets:
             return VerifiedRun([])
@@ -418,8 +421,14 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             lines = matched_lines(m, source.subject_id, rows)
             corrected = corrected_cents(m, lines)
             updates[m.id] = verification_update(m, lines, corrected)
-            findings: list[AuditException] = []
-            if updates[m.id].status is MisstatementStatus.communicated:
+            # 该错报有此前未归因的 V02 就沿用 (不看本次比对), 没有才在对不上时新建 (谓词在调用内用完, B023 不适用)
+            findings = earlier_findings(
+                ctx.state,
+                ctx.procedure.id,
+                (V02,),
+                lambda x: x.detail.get("misstatement_id") == m.id,  # noqa: B023
+            )
+            if not findings and updates[m.id].status is MisstatementStatus.communicated:
                 exceptions.append(mismatch_exception(ctx, m, source.subject_id, lines, corrected, len(exceptions) + 1))
                 findings.append(exceptions[-1])
             subjects.append(verification_subject(m, source, lines, rows, corrected, findings))

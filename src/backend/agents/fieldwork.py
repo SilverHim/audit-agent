@@ -21,6 +21,7 @@ from backend.agents.judging import (
     JudgingSteps,
     Subject,
     Subjects,
+    earlier_findings,
     in_scope,
     judge_all,
     judging_steps,
@@ -610,10 +611,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         (见 accrued_interest_exception, 在 D04 内同样按账户编号), 函证结果不变 (余额相符的仍为 agreed).
         函证还没有回函余额时抛 ValueError. 账户的筛选同判断对象 (in_scope).
         判断对象为有 D01 或 D04 的账户 (按账户 ID, 每个账户一次), 候选调节项取规则 D02, D03 的行 (按账户切分).
-        当前结果里该账户已有本程序尚未归因的 D01, D04 (previous_findings) 时沿用, 不再新建 (需求 R347, 审核 R347-02,
-        R347-11): 判断以它们为规则例外, 确认时给同一 ID 出 attributed 新版本. 若照常新建 (ID 带 run_no), 此前判断失败
-        时已置 unattributed 的那条就没有任务再指向它 (重跑不取代旧执行, 两条都在当前结果里; 部分重跑整次失败后的整条
-        重跑也是). 首次执行与过期重跑 (当前结果不含被取代的执行) 没有此前的, 照常按本次比对新建.
+        当前结果里该账户已有本程序尚未归因的 D01, D04 (judging.earlier_findings) 时沿用, 不再新建 (需求 R347, 审核
+        R347-02, R347-11): 判断以它们为规则例外, 确认时给同一 ID 出 attributed 新版本. 若照常新建 (ID 带 run_no), 此前
+        判断失败时已置 unattributed 的那条就没有任务再指向它 (重跑不取代旧执行, 两条都在当前结果里; 部分重跑整次失败后
+        的整条重跑也是). 首次执行与过期重跑 (当前结果不含被取代的执行) 没有此前的, 照常按本次比对新建.
         """
         eid = ctx.engagement.id
         rules = await run_rules(self.deps, ctx)
@@ -657,7 +658,13 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             unbooked = accrued_interest_unbooked(
                 confirmation, rules.rows.get("D04", []), params["clearly_trivial_cents"]
             )
-            found = self.previous_findings(ctx, account.id)  # 有此前未归因的就沿用, 没有才按本次比对新建
+            # 有此前未归因的就沿用, 没有才按本次比对新建 (谓词在调用内用完, B023 不适用)
+            found = earlier_findings(
+                ctx.state,
+                ctx.procedure.id,
+                ("D01", "D04"),
+                lambda x: account.id in x.source_ids,  # noqa: B023
+            )
             if not found and not difference and not unbooked:
                 continue
             reply = documents.get(cast(str, confirmation.reply_document_id))
@@ -675,24 +682,6 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             subjects.append(self.cash_subject(ctx, confirmation, account, reply, found, rules))
         judged = await self.judge_all(ctx, subjects)
         return CashFindings(updated, [*differences, *accrued], judged, rules.outcomes)
-
-    @staticmethod
-    def previous_findings(ctx: RunContext, account_id: str) -> list[AuditException]:
-        """该账户沿用的规则例外: 当前结果中本程序此前执行在该账户上出的 D01, D04 里尚未归因的 (第 1 版 open, 或判断
-        失败时置的 unattributed 版本; 已归因的不带回, 再失败时不会被改回 unattributed), 按规则 (D01 在前) 与 ID 排序.
-        例: Xero BA-091 第 1 次判断失败, 对其 unattributed 任务 rerun → 第 2 次沿用 X-CSH-02-1-D04-1 v1
-        (unattributed), 不建 X-CSH-02-2-D04-1."""
-        return sorted(
-            (
-                x
-                for x in current_results(ctx.state).exceptions
-                if x.procedure_id == ctx.procedure.id
-                and x.rule_id in ("D01", "D04")
-                and account_id in x.source_ids
-                and x.disposition is not ExceptionDisposition.attributed
-            ),
-            key=lambda x: (x.rule_id, x.id),
-        )
 
     @staticmethod
     def difference_exception(
@@ -775,7 +764,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         """有 D01 或 D04 的账户的判断对象, data 字段按 CSH-02.md.j2 头注释 (均为 JSON 形式).
 
         规则例外为前置程序 (depends_on, 即 CSH-05) 在该账户上尚未归因的例外 (当前结果, 按 ID 排序), 再加该账户上本程序
-        的 D01, D04 (found, 依次: 沿用的 previous_findings, 没有时为本次新建的). reply 为回函当前的文件登记
+        的 D01, D04 (found, 依次: 沿用的 earlier_findings, 没有时为本次新建的). reply 为回函当前的文件登记
         (调用方按 registered_documents 取, 未登记抛 LookupError).
         """
         earlier = set(ctx.template.depends_on)
@@ -808,8 +797,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     def cash_patch(self, ctx: RunContext, findings: Findings) -> StatePatch:
         """CSH-02 的解读: 函证新版本与 D01, D04 例外, 加上要判断的账户的判断片段 (judgments_patch).
 
-        本次新建的 D01, D04 (findings.exceptions) 是 judgments_patch 的 created: 判断失败时第一条规则例外可能就是它们, 置
-        unattributed 写在第 1 版上, 取代刚建的那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict);
+        本次新建的 D01, D04 (findings.exceptions) 是 judgments_patch 的 created: 判断失败时第一条规则例外可能就是它们,
+        置 unattributed 写在第 1 版上, 取代刚建的那一份 (需求 R322: 只给 v1, Store 里从 v1 起, 不再报 VersionConflict);
         顺序同 findings.exceptions. 沿用的不是 created, 归因或再置 unattributed 时照常出新版本 (需求 R347).
         """
         assert isinstance(findings, CashFindings)

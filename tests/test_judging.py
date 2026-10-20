@@ -16,6 +16,7 @@ from backend.agents.judging import (
     Judged,
     JudgingSteps,
     downgrade,
+    earlier_findings,
     judge_all,
     judgments_patch,
     unchanged,
@@ -28,12 +29,14 @@ from backend.contracts.models import (
     CriticVerdict,
     DowngradeCondition,
     EvidenceType,
+    ExceptionDisposition,
     Judgment,
     Misstatement,
     MisstatementUpdate,
     Phase,
     ProcedureRun,
     ReasoningStep,
+    RerunRequest,
     ReviewStatus,
     ReviewTask,
     StepKind,
@@ -42,9 +45,12 @@ from backend.contracts.models import (
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
+from backend.contracts.state import initial_state
 from backend.services.features import BASELINE
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
+    ENGAGEMENT,
+    NOW,
     NUMBAT_CONTRACTS,
     NUMBAT_OBJECTIVES,
     NUMBAT_RISKS,
@@ -455,3 +461,36 @@ async def test_annotate_only_fills_successful_judgments(change: dict[str, Any], 
     assert [c[0] for c in calls if c[1:2] == ("F",)] == ["judge"]
     [annotated] = [item.outcome.judgment for item in judged if item.outcome.judgment is not None]
     assert annotated.conclusion == "annotated"
+
+
+def test_earlier_findings_takes_unattributed_of_procedure_rule_and_subject() -> None:
+    """earlier_findings (需求 R347, R165; CSH-02 与 FIN-09 共用): 当前结果中本程序, 给定规则, 属于该对象而未归因的例外
+    (open 与 unattributed 都算), 按规则与 ID 排序; 已归因的, 别的程序, 别的规则, 别的对象, 被过期重跑取代的执行的
+    都不算."""
+    base = numbat_csh05_exception(make_run("CSH-05"))
+
+    def made(oid: str, procedure_id: str, run_no: int, rule_id: str, account: str, **changes: Any) -> AuditException:
+        update = {"procedure_id": procedure_id, "run_id": f"RUN-{procedure_id}-{run_no}", "rule_id": rule_id}
+        return base.model_copy(update={"id": oid, "source_ids": [account], **update, **changes})
+
+    d04 = made("X-CSH-02-2-D04-1", "CSH-02", 2, "D04", "BA-01")
+    d01 = made("X-CSH-02-1-D01-1", "CSH-02", 1, "D01", "BA-01", disposition=ExceptionDisposition.unattributed)
+    others = [
+        made("X-CSH-02-1-D01-2", "CSH-02", 1, "D01", "BA-01", disposition=ExceptionDisposition.attributed),
+        made("X-CSH-02-1-D01-3", "CSH-02", 1, "D01", "BA-02"),  # 别的账户
+        made("X-CSH-02-1-D02-1", "CSH-02", 1, "D02", "BA-01"),  # 别的规则
+        made("X-CSH-05-1-D01-1", "CSH-05", 1, "D01", "BA-01"),  # 别的程序
+        made("X-CSH-02-3-D01-1", "CSH-02", 3, "D01", "BA-01"),  # 被过期重跑取代
+    ]
+    rerun = RerunRequest(
+        id="RR-1",
+        procedure_ids=["CSH-02"],
+        superseded_run_ids=["RUN-CSH-02-3"],
+        data_version=2,
+        requested_by="U-1",
+        requested_at=NOW,
+    )
+    state = initial_state(ENGAGEMENT, [], 1) | {"exceptions": [d04, *others, d01], "rerun_requests": [rerun]}
+
+    found = earlier_findings(state, "CSH-02", ("D01", "D04"), lambda x: "BA-01" in x.source_ids)  # type: ignore[arg-type]
+    assert found == [d01, d04]

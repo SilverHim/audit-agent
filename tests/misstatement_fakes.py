@@ -3,6 +3,7 @@
 
 错报与来源判断出自 xero_fakes (xero_identified_misstatements, XERO_ROUND2), 第 n 轮登记出自补造的
 manual/fin08_round{n}.json (xero_fakes.round_file). 模块常量不读快照与补造, 函数在用例内调用 (收集阶段不读数据).
+第 2 轮的 SECOND, round2_communicated, round2_sources 现由 FIN-09 第 2 轮的用例用, 也是给 R167 两轮闭环预留的.
 """
 
 from collections.abc import Sequence
@@ -32,7 +33,6 @@ from backend.contracts.state import EngagementState
 from backend.orchestration.nodes import build_run
 from tests.fakes import ENGAGEMENT, NOW, FakeRuleEngine, FakeTrail, make_ctx, xero_document
 from tests.fixture_sets import XERO
-from tests.test_xero_fixtures import xero_state
 from tests.xero_fakes import (
     XERO_ROUND2,
     make_xero_deps,
@@ -41,6 +41,7 @@ from tests.xero_fakes import (
     xero_engagement,
     xero_identified_misstatements,
     xero_profile,
+    xero_state,
     xero_traits,
     xero_v01_rows,
 )

@@ -6,7 +6,7 @@
 """
 
 import functools
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -25,10 +25,11 @@ from backend.contracts.models import (
     TaskStatus,
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome
-from backend.contracts.state import StatePatch
+from backend.contracts.state import EngagementState, StatePatch
 from backend.services.autonomy_policy import judgment_level
 from backend.services.features import AUTONOMY
 from backend.services.review_queue import attribute_exceptions, judgment_amount, misstatement_updates, subject_amount
+from backend.services.staleness import current_results
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,28 @@ def in_scope(ctx: RunContext, subject_id: str) -> bool:
     """该对象本次要不要处理: rerun_subject_ids 非空时须在其中, 且不在已交人处理的对象里."""
     only = ctx.procedure.rerun_subject_ids
     return (not only or subject_id in only) and subject_id not in subjects_awaiting_review(ctx)
+
+
+def earlier_findings(
+    state: EngagementState, procedure_id: str, rule_ids: Collection[str], belongs: Callable[[AuditException], bool]
+) -> list[AuditException]:
+    """该对象沿用的规则例外 (需求 R347, R165): 当前结果中本程序此前执行出的, 规则编号在 rule_ids 中, 属于该对象
+    (belongs) 而尚未归因的例外 (第 1 版 open, 或判断失败时置的 unattributed 版本; 已归因的不带回, 再失败时不会被
+    改回 unattributed), 按规则编号与 ID 排序. 有就沿用, 不再按本次比对新建: 若照常新建 (ID 带 run_no), 此前判断失败
+    时已置 unattributed 的那条就没有任务再指向它 (重跑不取代旧执行, 两条都在当前结果里). 沿用的不是 judgments_patch
+    的 created, 确认时出 attributed 新版本, 再失败时出 unattributed 新版本. CSH-02 (D01, D04, 属于该账户) 与 FIN-09
+    (V02, 属于该错报) 共用. 纯函数."""
+    return sorted(
+        (
+            x
+            for x in current_results(state).exceptions
+            if x.procedure_id == procedure_id
+            and x.rule_id in rule_ids
+            and x.disposition is not ExceptionDisposition.attributed
+            and belongs(x)
+        ),
+        key=lambda x: (x.rule_id, x.id),
+    )
 
 
 # annotate 不能改的判断字段: 身份与版本, 自主度及其理由, A7 复核的各项

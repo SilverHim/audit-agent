@@ -59,7 +59,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, ValidationContext
-from backend.contracts.state import EngagementState, StatePatch, initial_state
+from backend.contracts.state import EngagementState, StatePatch
 from backend.core.config import get_settings
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.nodes import apply_patch, build_run
@@ -87,10 +87,9 @@ from tests.xero_fakes import (
     XERO_RULES,
     make_xero_deps,
     xero_contracts,
-    xero_documents,
     xero_engagement,
-    xero_presets,
     xero_profile,
+    xero_state,
     xero_tables,
     xero_traits,
     xero_uploads,
@@ -462,20 +461,6 @@ class RecordingJudgments:
         self.contexts.append(ctx)
         outcome: JudgmentOutcome = await self.inner.judge(eid, template, run, ctx, performed_by)
         return outcome
-
-
-def xero_state() -> EngagementState:
-    """Xero 项目进入 P2 时的状态: 计划预置的目标与风险, 外勤阶段上传的文件, 闸门定的重要性 (收入 1%, 执行重要性 50%,
-    明显微小 5%, 即 32431 / 16216 / 1622). procedure_pack 为空, 每次执行由 xero_context 换成该程序."""
-    objectives, risks = xero_presets()
-    return initial_state(xero_engagement(), [], xero_profile().version) | {  # type: ignore[return-value]
-        "audit_objectives": objectives,
-        "risk_register": risks,
-        "documents": xero_documents("fieldwork"),
-        "materiality_cents": 32431,
-        "performance_materiality_cents": 16216,
-        "clearly_trivial_cents": 1622,
-    }
 
 
 def xero_context(deps: AgentDeps, state: EngagementState, procedure_id: str, objective_ids: list[str]) -> RunContext:

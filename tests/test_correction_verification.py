@@ -8,6 +8,7 @@ Xero fixture 正本 (R164), 对不上与部分更正的用例用脚本输出. �
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -17,6 +18,7 @@ from backend.agents.base import AgentDeps, RunContext
 from backend.agents.workpaper import WorkpaperAgent, corrected_cents, matched_lines, to_verify, verification_update
 from backend.contracts.models import (
     AgentId,
+    AuditException,
     Decision,
     Direction,
     EvidenceType,
@@ -27,10 +29,12 @@ from backend.contracts.models import (
     ReviewStatus,
     RunStatus,
     TaskKind,
+    TaskStatus,
 )
 from backend.contracts.state import EngagementState, StatePatch
+from backend.orchestration.decisions import review_effects
 from backend.orchestration.merge import check_patch
-from backend.orchestration.nodes import after_notice
+from backend.orchestration.nodes import after_notice, apply_patch
 from tests.fakes import FakeTrail, ScriptedLLM, finished, make_run
 from tests.fixture_sets import XERO
 from tests.misstatement_fakes import (
@@ -49,6 +53,7 @@ from tests.misstatement_fakes import (
     round2_communicated,
     round2_sources,
 )
+from tests.test_review_decisions import record
 from tests.test_xero_fixtures import RecordingJudgments
 from tests.xero_fakes import xero_v01_rows
 
@@ -222,10 +227,12 @@ async def test_partial_correction() -> None:
     )
 
 
+MISMATCH: dict[str, Any] = {"fully_corrected": False, "other_accounts": [], "proposed_action": "more_evidence"}
+
+
 def mismatch_llm() -> ScriptedLLM:
-    """对不上时的脚本输出: XJ499 判未更正, 不涉及其他科目, 要更多证据; CSH02 照 fixture 正本."""
-    reply = fixture("XJ-499", fully_corrected=False, other_accounts=[], proposed_action="more_evidence")
-    return ScriptedLLM({"XJ-499": [reply], "BA-091": [fixture("BA-091")]})
+    """对不上时的脚本输出: XJ499 判未更正, 不涉及其他科目, 要更多证据 (MISMATCH); CSH02 照 fixture 正本."""
+    return ScriptedLLM({"XJ-499": [fixture("XJ-499", **MISMATCH)], "BA-091": [fixture("BA-091")]})
 
 
 OTHER_SOURCE = {f"AJE-X01-{n}": {"source_doc": "XJ-498"} for n in (1, 2, 3)}
@@ -305,6 +312,92 @@ async def test_model_failure_hands_over(rows: dict[str, dict[str, Any]], kind: T
         ]
 
 
+async def failed_with_v02(
+    rows: dict[str, dict[str, Any]] = OTHER_SOURCE, failing: Sequence[str] = ("XJ-499",)
+) -> tuple[EngagementState, StatePatch]:
+    """第 1 次执行: V01 按 rows 改 (缺省 XJ499 的分录来源对象对不上, 出 V02), 模型对 failing 中的来源对象连续 3 次
+    结构失败: 其 V02 v1 unattributed, 建 unattributed 任务. 返回执行时的状态与片段."""
+    llm = ScriptedLLM({key: ["not json"] * 3 if key in failing else [fixture(key)] for key in ("XJ-499", "BA-091")})
+    state = fin03_state(misstatements=round1_verifying())
+    patch, _ = await run_fin09(fin09_deps(FakeTrail(), llm, rows=edited(rows)), state)
+    return state, patch
+
+
+async def rerun(
+    state: EngagementState,
+    first: StatePatch,
+    rows: dict[str, dict[str, Any]],
+    llm: Any,
+    subjects: Sequence[str] = (XJ499,),
+    later: Sequence[AuditException] = (),
+) -> StatePatch:
+    """第 1 次的片段并入状态, 其 unattributed 任务已决定 rerun (一组, decided), later 为之后的例外版本; 第 2 次执行
+    只重判 subjects (rerun_subject_ids), V01 按 rows 改."""
+    decided = [
+        t.model_copy(update={"version": 2, "status": TaskStatus.decided})
+        for t in first["review_tasks"]
+        if t.kind is TaskKind.unattributed
+    ]
+    state = apply_patch(apply_patch(state, first), {"review_tasks": decided, "exceptions": list(later)})
+    deps = fin09_deps(FakeTrail(), llm, rows=edited(rows))
+    ctx = fin03_context(deps, state, FIN09)
+    ctx = replace(ctx, procedure=ctx.procedure.model_copy(update={"rerun_subject_ids": list(subjects)}))
+    return await WorkpaperAgent(deps).run(ctx)
+
+
+@pytest.mark.parametrize(
+    ("rows", "reply"),
+    [(OTHER_SOURCE, MISMATCH), ({}, {})],
+    ids=["still_mismatched", "now_matched"],
+)
+async def test_rerun_reuses_unattributed_v02(rows: dict[str, dict[str, Any]], reply: dict[str, Any]) -> None:
+    """审核 R165-07 (需求 R347 起 unattributed 任务可以 rerun, 规则同 CSH-02 的 D01, D04): 第 1 次 V02 v1
+    unattributed; 对其任务 rerun 后第 2 次只重判 XJ499, 沿用 X-FIN-09-1-V02-1 作规则例外, 不建 X-FIN-09-2-V02-1
+    (片段里没有例外); 本次对得上也沿用 (不看本次比对). 确认该判断时它出 v2 attributed."""
+    state, first = await failed_with_v02()
+    assert [(x.id, x.version, x.disposition) for x in first["exceptions"]] == [
+        (V02, 1, ExceptionDisposition.unattributed)
+    ]
+    second = await rerun(state, first, rows, ScriptedLLM({"XJ-499": [fixture("XJ-499", **reply)]}))
+
+    [judgment] = second["judgments"]
+    assert (judgment.exception_ids, "exceptions" in second) == ([V02], False)
+    [task] = second["review_tasks"]
+    misstatements = {XJ499: round1_verifying()[0]}
+    effects = review_effects(
+        record(task.id, id="D-C"), task, judgment, first["exceptions"], set(), misstatements=misstatements
+    )
+    assert [(x.id, x.version, x.disposition) for x in effects if isinstance(x, AuditException)] == [
+        (V02, 2, ExceptionDisposition.attributed)
+    ]
+
+
+async def test_attributed_earlier_v02_not_reused() -> None:
+    """已归因的旧 V02 (第 1 次的, v2 attributed) 不沿用: 第 2 次仍对不上时按本次比对新建 X-FIN-09-2-V02-1 作规则例外."""
+    state, first = await failed_with_v02()
+    [v02] = first["exceptions"]
+    attributed = v02.model_copy(
+        update={"version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": "J-FIN-09-1-H1"}
+    )
+    second = await rerun(state, first, OTHER_SOURCE, mismatch_llm(), later=[attributed])
+
+    assert [(x.id, x.version) for x in second["exceptions"]] == [("X-FIN-09-2-V02-1", 1)]
+    [judgment] = second["judgments"]
+    assert judgment.exception_ids == ["X-FIN-09-2-V02-1"]
+
+
+async def test_group_rerun_reuses_each_own_v02() -> None:
+    """两条都对不上且都判断失败 (V02-1 属 XJ499, V02-2 属 CSH02, 都 v1 unattributed): 一组重跑时各沿用自己的 V02
+    (按 detail.misstatement_id 对上), 不新建."""
+    other = {row["id"]: {"source_doc": "OTHER"} for row in xero_v01_rows(FIRST)}
+    state, first = await failed_with_v02(other, ("XJ-499", "BA-091"))
+    llm = ScriptedLLM({key: [fixture(key, **MISMATCH)] for key in ("XJ-499", "BA-091")})
+    second = await rerun(state, first, other, llm, (XJ499, CSH02))
+
+    assert [j.exception_ids for j in second["judgments"]] == [["X-FIN-09-1-V02-1"], ["X-FIN-09-1-V02-2"]]
+    assert "exceptions" not in second
+
+
 async def test_nothing_to_verify_runs_empty() -> None:
     """验收 7: 没有 verifying 的错报 (两条都还是 v3 communicated): 不执行规则, 不调大模型, 执行成功, 片段只有执行
     记录."""
@@ -337,9 +430,8 @@ async def test_v02_numbered_by_subject(entries: list[str], expected: list[tuple[
     """所匹配凭证 (entries) 的来源对象改了的错报对不上: V02 的 n 在对不上的错报中按判断对象的顺序从 1 编号, 各作自己
     判断的规则例外; 只有 CSH02 对不上时它的是 V02-1."""
     other = {row["id"]: {"source_doc": "OTHER"} for row in xero_v01_rows(FIRST) if row["entry_no"] in entries}
-    reply = {"fully_corrected": False, "other_accounts": [], "proposed_action": "more_evidence"}
     sources = {"XJ-499": "AJE-X01", "BA-091": "AJE-X05"}  # 来源对象 → 匹配的凭证
-    llm = ScriptedLLM({key: [fixture(key, **(reply if no in entries else {}))] for key, no in sources.items()})
+    llm = ScriptedLLM({key: [fixture(key, **(MISMATCH if no in entries else {}))] for key, no in sources.items()})
     deps = fin09_deps(FakeTrail(), llm, rows=edited(other))
     patch, _ = await run_fin09(deps, fin03_state(misstatements=round1_verifying()))
 

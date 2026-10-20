@@ -65,6 +65,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
+from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
@@ -420,6 +421,21 @@ def xero_engagement(loader: XeroDatasetLoader | None = None) -> Engagement:
             "period_end": period[1],
         }
     )
+
+
+def xero_state() -> EngagementState:
+    """Xero 项目进入 P2 时的状态: 计划预置的目标与风险, 外勤阶段上传的文件, 闸门定的重要性 (收入 1%, 执行重要性 50%,
+    明显微小 5%, 即 32431 / 16216 / 1622). procedure_pack 为空, 每次执行由 xero_context (test_xero_fixtures) 换成
+    该程序."""
+    objectives, risks = xero_presets()
+    return initial_state(xero_engagement(), [], xero_profile().version) | {  # type: ignore[return-value]
+        "audit_objectives": objectives,
+        "risk_register": risks,
+        "documents": xero_documents("fieldwork"),
+        "materiality_cents": 32431,
+        "performance_materiality_cents": 16216,
+        "clearly_trivial_cents": 1622,
+    }
 
 
 class XeroFakeDatasetLoader(FakeDatasetLoader):
