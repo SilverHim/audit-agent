@@ -346,7 +346,8 @@ class DataStore(Protocol):
         ...
 
     async def checks(self, eid: str) -> list[DataCheck]:
-        """最近一次体检的各项结果, 按 CheckId 顺序; 没体检过为空."""
+        """最近一次体检的各项结果, 按 CheckId 顺序; 没体检过为空; 已删去的旧项 (tb_agrees_statements, Issue #46)
+        略过."""
         ...
 
     async def open_requests(self, eid: str) -> int:
@@ -362,7 +363,7 @@ class DataStore(Protocol):
         ...
 
     async def check_run(self, eid: str) -> CheckRun | None:
-        """最近一次体检 (各项结果, 体检时的数据版本与时间); 没体检过为 None."""
+        """最近一次体检 (各项结果, 体检时的数据版本与时间); 没体检过为 None; 旧项略过同 checks."""
         ...
 
     async def requests(self, eid: str) -> list[DataRequest]:

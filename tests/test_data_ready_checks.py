@@ -113,7 +113,7 @@ async def test_failed_checkup_needs_reason_to_confirm() -> None:
 
 
 async def test_passed_checkup_confirms_without_reason() -> None:
-    """验收 2: 原样导入 Numbat 三张必需表, 体检没有不通过的项 (只缺报表草稿): 不带理由照常确认, 记录与留痕同以前."""
+    """验收 2: 原样导入 Numbat 三张必需表, 体检五项都通过: 不带理由照常确认, 记录与留痕同以前."""
     runner, _, data = await waiting_for_data()
 
     async with api_client(runner) as client:

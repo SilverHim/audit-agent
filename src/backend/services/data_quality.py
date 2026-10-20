@@ -166,7 +166,8 @@ def request_id(subject: TableKind | DocumentType) -> str:
 
 
 # 体检不再提出的请求 → 撤回的理由 (写进 request_withdrawn 留痕): 已有项目里仍待补交的, 下一次体检转 withdrawn
-# (reconcile; DataCheckup.run_if_stale 见到它们即重跑). Issue #46: 财务报表以账套为准, 不再要报表草稿
+# (reconcile; DataCheckup.run_if_stale 见到它们即重跑). Issue #46: 财务报表以账套为准, 不再要报表草稿. 前提: 没有程序
+# 的模板 inputs 要这些资料 (test_no_procedure_wants_a_retired_request 守住), 否则请求一直 open, 每次都重跑体检
 RETIRED_REQUESTS: dict[str, str] = {request_id(DocumentType.financial_statements): "报表以账套为准"}
 
 

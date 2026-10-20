@@ -32,13 +32,15 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.records import Account, JournalEntry, TrialBalanceRow
+from backend.core.config import get_settings
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.data_store import stored_checks
 from backend.persistence.stores import ADJUSTMENTS
-from backend.services.data_quality import reconcile, run_checks, summarize
+from backend.services.data_quality import RETIRED_REQUESTS, reconcile, request_id, run_checks, summarize
 from backend.services.data_service import DataService
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
@@ -569,7 +571,8 @@ async def test_retired_statements_request_is_withdrawn_on_next_checkup(
 ) -> None:
     """Issue #46 验收 3: 旧项目的最近一次体检对应当前数据, 存着报表草稿请求. 请求仍待补交时 run_if_stale 重跑体检:
     请求转 withdrawn (resolved_at 为这次体检时间, 客户交过报表也撤回, 不按资料到了转 received), 留痕 request_withdrawn
-    一条带理由 "报表以账套为准"; 再调一次不再重跑. 已收到与标了客户无此类资料的不算过期, 不重跑, 请求不改."""
+    一条带理由 "报表以账套为准"; 再调一次不再重跑. 已收到与标了客户无此类资料的不算过期, 不重跑; 之后再写数据时的
+    完整体检 (走到 reconcile) 也不改它们 (审核 R318-01)."""
     data = FakeDataStore()
     _, service, financial = service_for(data)
     checkup = DataCheckup(service.deps)
@@ -608,6 +611,9 @@ async def test_retired_statements_request_is_withdrawn_on_next_checkup(
     withdrawn = [e for e in trail.entries if e.payload.get("action") == "request_withdrawn"]
     if not rerun:
         assert (run, current, withdrawn) == (None, old, [])
+        await checkup.run(EID)
+        after = [e for e in trail.entries if e.payload.get("action") == "request_withdrawn"]
+        assert (data.data_requests[STATEMENTS_REQUEST], after) == (old, [])
         return
     assert run is not None
     assert (current.status, current.resolved_at, current.created_at) == ("withdrawn", run.checked_at, earlier)
@@ -620,6 +626,18 @@ async def test_retired_statements_request_is_withdrawn_on_next_checkup(
         }
     ]
     assert await checkup.run_if_stale(EID) is None
+
+
+def test_no_procedure_wants_a_retired_request() -> None:
+    """守卫 (审核 R318-02): 程序库 (含未启用的) 没有程序的模板 inputs 要退役请求的资料 (RETIRED_REQUESTS). 以后有程序
+    要它时这条失败, 提醒同时把它移出退役表: 否则请求被程序要而不撤回, run_if_stale 见它 open 就每次重跑体检."""
+    library = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+    wanted = {
+        request_id(subject)
+        for template in library.all(include_disabled=True)
+        for subject in [*template.inputs.tables, *template.inputs.documents]
+    }
+    assert wanted and wanted.isdisjoint(RETIRED_REQUESTS)
 
 
 async def test_data_request_can_be_deferred_until_received() -> None:
