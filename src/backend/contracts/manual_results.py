@@ -8,6 +8,7 @@ from pydantic import BaseModel
 RESULT_MODELS: dict[str, type[BaseModel]] = {}  # 结果模型名 → 模型 (宜继承 contracts.models.Model, 多出的字段报错)
 
 
-def result_model(name: str) -> type[BaseModel]:
-    """按名取结果模型. 没登记抛 KeyError (程序库加载时已核对 YAML 写的名字都登记了)."""
-    return RESULT_MODELS[name]
+def result_model(name: str) -> type[BaseModel] | None:
+    """按名取结果模型, 没登记为 None. 程序库加载时只核对当前模板写的名字; 派发之后模板改了名字或登记删了它, 旧任务
+    请求里的名字就取不到 (提交时 decisions.check_manual_result 拒绝)."""
+    return RESULT_MODELS.get(name)

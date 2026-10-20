@@ -880,7 +880,7 @@ class ManualRequest(Model):
 
     instructions: str  # 给执行人的说明
     result_model: str | None  # 结构化结果的模型名 (contracts/manual_results 登记), 为空时 details 须为空
-    min_evidence: int  # 至少要附的证据文件指针数
+    min_evidence: int = Field(ge=0)  # 至少要附的证据文件指针数, 不小于 0
     material: dict[str, Any]  # 派发时生成的材料 (需求 R93 由程序 owner 的 prepare 生成), 原样给人看
 
 
@@ -899,6 +899,13 @@ class ReviewTask(Versioned):
     status: TaskStatus = TaskStatus.pending  # 待决或已决定
     created_at: datetime  # 创建时间
     manual_request: ManualRequest | None = None  # manual 任务的请求, 其余类型为空
+
+    @model_validator(mode="after")
+    def request_matches_kind(self) -> Self:
+        """manual 任务须带请求, 其余类型不能带 (需求 R92)."""
+        if (self.kind is TaskKind.manual) != (self.manual_request is not None):
+            raise ValueError(f"{self.id}: manual 任务须带 manual_request, 其余类型不能带 ({self.kind})")
+        return self
 
 
 class ManualResult(Model):

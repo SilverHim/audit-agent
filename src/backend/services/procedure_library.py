@@ -350,10 +350,12 @@ def manual_program(template: ProcedureTemplate) -> bool:
 
 def manual_problems(templates: Iterable[ProcedureTemplate]) -> list[str]:
     """人工程序的写法问题, 每条含程序编号: 在 P2 (本级不做 P2 人工程序), 没写 manual 段, 或 manual.result_model 没在
-    contracts/manual_results.RESULT_MODELS 登记. 闸门程序不查."""
+    contracts/manual_results.RESULT_MODELS 登记; 不是人工程序 (含闸门程序) 却写了 manual 段."""
     problems: list[str] = []
     for t in templates:
         if not manual_program(t):
+            if t.manual is not None:
+                problems.append(f"{t.id}: 不是人工程序 (engine manual 且不是闸门), 不能写 manual 段")
             continue
         if t.phase is Phase.P2_Executing:
             problems.append(f"{t.id}: 本级不做 P2 的人工程序")

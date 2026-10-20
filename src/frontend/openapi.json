@@ -9731,6 +9731,45 @@
         "title": "LlmTestResult",
         "description": "测试连接的结果. message 已脱敏."
       },
+      "ManualRequest": {
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "result_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Model"
+          },
+          "min_evidence": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Min Evidence"
+          },
+          "material": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Material"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "instructions",
+          "result_model",
+          "min_evidence",
+          "material"
+        ],
+        "title": "ManualRequest",
+        "description": "manual 任务交给人的请求 (需求 R92): 派发时抄自程序模板的 manual 段, 加上派发时生成的材料. 提交 manual_result\n时按它核对证据数与结构化结果 (decisions.check_manual_result)."
+      },
       "ManualResult": {
         "properties": {
           "conclusion": {
@@ -9744,6 +9783,24 @@
             "type": "array",
             "title": "Evidence",
             "default": []
+          },
+          "performed_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Performed On"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details",
+            "default": {}
           }
         },
         "additionalProperties": false,
@@ -9752,7 +9809,7 @@
           "conclusion"
         ],
         "title": "ManualResult",
-        "description": "人工直接给出的结果, 用于 manual_result 决定."
+        "description": "人工直接给出的结果, 用于 manual_result 决定 (failed 任务的人工执行, manual 任务的人工程序结果)."
       },
       "MaterialityCandidate": {
         "properties": {
@@ -11777,6 +11834,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "manual_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

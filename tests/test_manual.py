@@ -1,11 +1,12 @@
 """R92 人工程序契约与提交校验 (接口文档第 2.5, 5, 7, 8.1 节).
 
 测试程序 TST-M01 放在临时 knowledge 目录 (完成阶段, owner A10, engine manual, L1, outputs [], manual 段要取得签字的
-管理层声明书, 结果模型 TstLetter 为测试登记). 完成节点改为先执行它再执行 FIN-04; 它的脚本 A10 出执行记录与 manual
-任务 (派发与材料由 R93 实现), 节点按通用等待 (R87) 停在节点内. 提交 manual_result 后只写决定, 任务 decided, 程序
-completed, 不建人工判断; 结果整理成领域对象由 R93 做.
+管理层声明书, 结果模型 TstLetter 为测试登记, 至少 2 条证据, 不同于缺省的 1). 完成节点改为先执行它再执行 FIN-04;
+它的脚本 A10 出执行记录与 manual 任务 (派发与材料由 R93 实现), 节点按通用等待 (R87) 停在节点内. 提交
+manual_result 后只写决定, 任务 decided, 程序 completed, 不建人工判断; 结果整理成领域对象由 R93 做.
 """
 
+import re
 import shutil
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
@@ -13,11 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, RunContext
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.manual_results import RESULT_MODELS
 from backend.contracts.models import (
+    AgentId,
     Decision,
     DocumentRef,
     DocumentType,
@@ -28,6 +31,7 @@ from backend.contracts.models import (
     ManualRequest,
     ManualResult,
     Model,
+    Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
@@ -41,10 +45,11 @@ from backend.contracts.models import (
     TrailKind,
     Versioned,
 )
-from backend.contracts.state import StatePatch
+from backend.contracts.state import StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.decisions import check_manual_result
-from backend.orchestration.nodes import NODE_PROCEDURES
+from backend.orchestration.merge import MergeRejected
+from backend.orchestration.nodes import DISPATCH_FIELDS, NODE_PROCEDURES, check_dispatch, writer_of
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.procedure_library import ProcedureLibrary, manual_program
 from backend.services.review_queue import ReviewQueue
@@ -53,9 +58,13 @@ from tests.fakes import (
     NOW,
     NUMBAT_PROFILE,
     FakeEngagementStore,
+    FakeRegistry,
     FakeTrail,
     ScriptA10,
+    ScriptAgent,
     finished,
+    make_deps,
+    make_procedure,
     make_run,
     make_runner,
     numbat_all_p2_agents,
@@ -73,7 +82,8 @@ TST_YAML = (
     f"id: {TST}\nname: 自测人工程序\nphase: P3_Completion\ncycle: Completion\nowner: A10\nengine: manual\n"
     "autonomy_level: L1\noutputs: []\n"
 )
-MANUAL = f"manual:\n  instructions: {INSTRUCTIONS}\n  result_model: TstLetter\n  min_evidence: 1\n"
+MANUAL = f"manual:\n  instructions: {INSTRUCTIONS}\n  result_model: TstLetter\n  min_evidence: 2\n"
+LLM = "llm:\n  prompt: DOC-04.md.j2\n  output_model: ContractExtraction\n"  # 借 DOC-04 的, 只为能加载
 MATERIAL = {"period_end": "2026-06-30"}  # 派发时给人的材料 (R93 由 owner 的 prepare 生成)
 LETTER = DocumentRef(  # 审计师已上传的声明书 (2 页, 公司出具的原件)
     id="DOC-0a1b2c3d4e5f",
@@ -110,21 +120,36 @@ def manual_library(root: Path, yaml: str = TST_YAML + MANUAL) -> ProcedureLibrar
     return ProcedureLibrary(root)
 
 
-def pointer(source_type: str = "document", source_id: str = LETTER.id, page: int | None = 2) -> EvidencePointer:
+def pointer(
+    source_type: str = "document", source_id: str = LETTER.id, page: int | None = 2, locator: str = "signature"
+) -> EvidencePointer:
+    """人填的证据指针: 种类填成 external, 不填可靠性 (写入时按文件登记改写为 voucher, internal_original)."""
     return EvidencePointer(
-        type=EvidenceType.voucher, source_type=source_type, source_id=source_id, locator="signature", page=page
+        type=EvidenceType.external, source_type=source_type, source_id=source_id, locator=locator, page=page
     )
+
+
+BODY = pointer(page=1, locator="representations")  # 声明书正文页
 
 
 def letter_result(**changes: Any) -> ManualResult:
-    """取得声明书的结果: 结论, 10-23 执行, 证据为声明书第 2 页 (签字页), 结构化结果合 TstLetter."""
+    """取得声明书的结果: 结论, 10-23 执行, 证据为声明书第 1 页 (正文) 与第 2 页 (签字页), 结构化结果合 TstLetter."""
     base = ManualResult(
         conclusion="Signed letter obtained, dated 23 October 2026",
         performed_on=date(2026, 10, 23),
-        evidence=[pointer()],
+        evidence=[BODY, pointer()],
         details={"signed_on": "2026-10-23", "signatory": "Alex Morgan"},
     )
     return base.model_copy(update=changes)
+
+
+def as_registered(result: ManualResult) -> ManualResult:
+    """写入的结果: 证据指针按 LETTER 的登记改写种类与可靠性 (同判断的文件指针), 其余原样."""
+    evidence = [
+        p.model_copy(update={"type": EvidenceType.voucher, "reliability": Reliability.internal_original})
+        for p in result.evidence
+    ]
+    return result.model_copy(update={"evidence": evidence})
 
 
 def submitted(decision: Decision = Decision.manual_result, **changes: Any) -> ReviewRecord:
@@ -151,12 +176,21 @@ def submitted(decision: Decision = Decision.manual_result, **changes: Any) -> Re
         (TST_YAML, f"{TST}: engine manual 且不是闸门程序, 须有 manual 段"),
         (TST_YAML + MANUAL.replace("TstLetter", "TstUnknown"), f"{TST}: 结果模型 TstUnknown 没有登记"),
         (TST_YAML.replace("P3_Completion", "P2_Executing") + MANUAL, f"{TST}: 本级不做 P2 的人工程序"),
+        (
+            TST_YAML.replace("engine: manual", "engine: llm") + LLM + MANUAL,
+            f"{TST}: 不是人工程序 (engine manual 且不是闸门), 不能写 manual 段",
+        ),
+        (
+            TST_YAML + MANUAL.replace("min_evidence: 2", "min_evidence: -1"),
+            "manual.min_evidence\n  Input should be greater than or equal to 0",
+        ),
     ],
+    ids=["no_manual_section", "unregistered_model", "in_p2", "manual_on_llm_program", "negative_min_evidence"],
 )
 def test_library_rejects_malformed_manual_programs(tmp_path: Path, yaml: str, problem: str) -> None:
-    """人工程序没写 manual 段, 结果模型没登记, 或放在 P2, 程序库构造即报错, 消息含程序编号 (防派出没有说明或无从
-    校验结果的任务, 提交时才发现)."""
-    with pytest.raises(ValueError, match=problem):
+    """人工程序没写 manual 段, 结果模型没登记, 或放在 P2; 别的程序写了 manual 段; 证据下限为负: 程序库构造即报错,
+    消息含程序编号或字段 (防派出没有说明或无从校验结果的任务, 提交时才发现)."""
+    with pytest.raises(ValueError, match=re.escape(problem)):
         manual_library(tmp_path / "knowledge", yaml)
 
 
@@ -185,7 +219,7 @@ def test_manual_task_carries_the_request(tmp_path: Path) -> None:
         "RESULT",
     )
     assert task.manual_request == ManualRequest(
-        instructions=INSTRUCTIONS, result_model="TstLetter", min_evidence=1, material=MATERIAL
+        instructions=INSTRUCTIONS, result_model="TstLetter", min_evidence=2, material=MATERIAL
     )
     assert queue.allowed(task) == {Decision.manual_result}
     with pytest.raises(ValueError, match="FIN-04 没有 manual 段"):
@@ -245,22 +279,23 @@ REJECTED = [  # (说明, 决定, 错误码, 消息含)
     ("缺执行日期", submitted(manual_result=letter_result(performed_on=None)), "MISSING_FIELD", "performed_on"),
     ("confirm", submitted(Decision.confirm, reason=None), "DECISION_NOT_ALLOWED", "confirm"),
     ("rerun", submitted(Decision.rerun), "DECISION_NOT_ALLOWED", "rerun"),
-    ("没有证据", submitted(manual_result=letter_result(evidence=[])), "INVALID_VALUE", "至少 1 条"),
-    (
+    ("没有证据", submitted(manual_result=letter_result(evidence=[])), "INVALID_VALUE", "至少 2 条, 只有 0 条"),
+    ("证据不够", submitted(manual_result=letter_result(evidence=[pointer()])), "INVALID_VALUE", "至少 2 条, 只有 1 条"),
+    (  # ID 是已登记的声明书, 来源却写成留痕: 按来源类型拒, 不只按 ID 查登记
         "证据不是文件",
-        submitted(manual_result=letter_result(evidence=[pointer("sales_invoice", "SI-2026-0612", None)])),
+        submitted(manual_result=letter_result(evidence=[BODY, pointer("trail", LETTER.id)])),
         "INVALID_VALUE",
-        "sales_invoice SI-2026-0612",
+        f"证据须为本项目已登记的文件, trail {LETTER.id} 不是",
     ),
     (
         "文件不在本项目",
-        submitted(manual_result=letter_result(evidence=[pointer(source_id="DOC-ffffffffffff")])),
+        submitted(manual_result=letter_result(evidence=[BODY, pointer(source_id="DOC-ffffffffffff")])),
         "INVALID_VALUE",
         "DOC-ffffffffffff",
     ),
     (
         "页码超出",
-        submitted(manual_result=letter_result(evidence=[pointer(page=3)])),
+        submitted(manual_result=letter_result(evidence=[BODY, pointer(page=3)])),
         "INVALID_VALUE",
         "页码 3 不在 1-2 之间",
     ),
@@ -285,8 +320,9 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
     - 派发: 脚本 A10 只调 1 次, 同一事务写入 RUN-TST-M01-1 succeeded, manual 任务 (带请求) 与 TST-M01 awaiting_human;
       节点内等待, 载荷同其他人工等待;
     - 拒绝: 逐条提交 REJECTED, 错误码与消息对, Store, 留痕与检查点都不变;
-    - 通过: 一个事务写入决定 (结果原样), 任务 v2 decided 与 TST-M01 completed; 不建判断; 1 行 decision 留痕, 1 行
-      transition awaiting_human → completed; 节点读回后继续执行 FIN-04, 停在 FIN-01 闸门."""
+    - 通过: 一个事务写入决定 (证据指针按文件登记改写种类与可靠性, 其余原样), 任务 v2 decided 与 TST-M01
+      completed; 不建判断; 1 行 decision 留痕, 1 行 transition awaiting_human → completed; 节点读回后继续执行
+      FIN-04, 停在 FIN-01 闸门."""
     s, agent = await at_manual(tmp_path)
 
     assert waiting_payloads(await s.runner.app.aget_state(GraphRunner.config(EID))) == [
@@ -325,7 +361,11 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
         ("ReviewRecord", "D-M01", 1),
         ("ReviewTask", TASK, 2),
     ]
-    assert latest(s, ReviewRecord, "D-M01") == decision  # 结果连同 details 原样存下
+    stored = latest(s, ReviewRecord, "D-M01")
+    assert stored == decision.model_copy(update={"manual_result": as_registered(letter_result())})
+    assert [(p.type, p.reliability) for p in stored.manual_result.evidence] == [
+        (EvidenceType.voucher, Reliability.internal_original)
+    ] * 2  # 人填的 external 与空可靠性不留
     assert (latest(s, ReviewTask, TASK).status, latest(s, Procedure, TST).status) == (
         TaskStatus.decided,
         ProcedureStatus.completed,
@@ -368,14 +408,24 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
             {"signed_on": "2026-10-23", "signatory": "A", "extra": 1},
             "TstLetter: extra",
         ),
+        # 派发之后结果模型名从登记里拿掉了 (或模板改了名): 旧任务的请求取不到模型, 拒绝而不是 500
+        (
+            "TstGone",
+            DECIDED_AT,
+            date(2026, 10, 23),
+            {"signed_on": "2026-10-23", "signatory": "A"},
+            "结果模型 TstGone 未登记 (contracts/manual_results), 无从核对 manual_result.details",
+        ),
     ],
+    ids=["no_model_empty_details", "no_model_with_details", "sydney_date", "extra_field", "unregistered_model"],
 )
 def test_result_checked_against_the_request(
     result_model: str | None, decided_at: datetime, performed_on: date, details: dict[str, Any], problem: str | None
 ) -> None:
     """check_manual_result 按任务请求核对: 没有结果模型时 details 须为空; 执行日期按决定时刻的悉尼日期比; 结果模型
-    多出的字段也报 (TstLetter 继承 Model, extra forbid)."""
-    request = ManualRequest(instructions=INSTRUCTIONS, result_model=result_model, min_evidence=1, material={})
+    多出的字段也报 (TstLetter 继承 Model, extra forbid); 请求里的模型没登记报 INVALID_VALUE. 通过时返回的结果证据指针
+    按文件登记改写, 其余原样."""
+    request = ManualRequest(instructions=INSTRUCTIONS, result_model=result_model, min_evidence=2, material={})
     task = ReviewTask(
         id=TASK,
         kind=TaskKind.manual,
@@ -390,8 +440,77 @@ def test_result_checked_against_the_request(
     )
     record = submitted(decided_at=decided_at, manual_result=letter_result(performed_on=performed_on, details=details))
     if problem is None:
-        check_manual_result(record, task, [LETTER])
+        assert record.manual_result is not None
+        assert check_manual_result(record, task, [LETTER]) == as_registered(record.manual_result)
         return
     with pytest.raises(DecisionRejected) as e:
         check_manual_result(record, task, [LETTER])
     assert e.value.code == "INVALID_VALUE" and problem in str(e.value)
+
+
+def test_manual_request_goes_with_manual_tasks_only() -> None:
+    """ReviewTask 的模型校验: manual 任务须带请求, 其余类型不能带 (不靠核对时的 assert)."""
+    request = ManualRequest(instructions=INSTRUCTIONS, result_model=None, min_evidence=0, material={})
+    fields: dict[str, Any] = {
+        "id": TASK,
+        "procedure_id": TST,
+        "target_type": TargetType.ProcedureRun,
+        "target_id": RUN,
+        "target_version": 1,
+        "run_id": RUN,
+        "created_at": NOW,
+    }
+    with pytest.raises(ValidationError, match="manual 任务须带 manual_request"):
+        ReviewTask(kind=TaskKind.manual, **fields)
+    with pytest.raises(ValidationError, match="其余类型不能带"):
+        ReviewTask(kind=TaskKind.failed, manual_request=request, **fields)
+    assert ReviewTask(kind=TaskKind.manual, manual_request=request, **fields).manual_request == request
+    with pytest.raises(ValidationError, match="min_evidence"):
+        ManualRequest(instructions=INSTRUCTIONS, result_model=None, min_evidence=-1, material={})
+
+
+# ── 派发片段 (纯函数) ──
+
+
+def dispatch(*tasks: ReviewTask, **fields: Any) -> tuple[StatePatch, dict[str, Any]]:
+    """TST-M01 的派发片段 (本次执行 succeeded 与给定任务, 另加 fields) 与 check_dispatch 的其余参数."""
+    run = finished(make_run(TST))
+    patch: StatePatch = {"procedure_runs": [run], "review_tasks": list(tasks), **fields}
+    state = initial_state(ENGAGEMENT, [make_procedure(TST, Phase.P3_Completion)], 1)
+    return patch, {"procedure_id": TST, "run_id": run.id, "state": state}
+
+
+def manual_task(kind: TaskKind = TaskKind.manual) -> ReviewTask:
+    request = ManualRequest(instructions=INSTRUCTIONS, result_model=None, min_evidence=0, material={})
+    return ReviewTask(
+        id=TASK,
+        kind=kind,
+        procedure_id=TST,
+        target_type=TargetType.ProcedureRun,
+        target_id=RUN,
+        target_version=1,
+        run_id=RUN,
+        subject_id="RESULT",
+        created_at=NOW,
+        manual_request=request if kind is TaskKind.manual else None,
+    )
+
+
+def test_dispatch_patch_holds_the_run_and_manual_tasks_only(tmp_path: Path) -> None:
+    """派发片段 (check_dispatch) 由 A10 写, 只能含本次执行记录与 manual 任务: 另带 A10 写入范围内的 report_versions
+    (模板 outputs 不列, 按 DISPATCH_FIELDS 查) 被拒, 建 failed 任务被拒. 写入者取 writer_of: 人工程序不论由哪个
+    Agent 执行都是 A10; 按执行它的非 A10 Agent (脚本 Agent 为 A2, 不能写 review_tasks) 查则被拒."""
+    patch, where = dispatch(manual_task())
+    check_dispatch(patch, writer=AgentId.A10, **where)
+    assert DISPATCH_FIELDS == ("review_tasks",)
+
+    with pytest.raises(MergeRejected, match="未声明产出 report_versions"):
+        check_dispatch(dispatch(manual_task(), report_versions=[])[0], writer=AgentId.A10, **where)
+    with pytest.raises(MergeRejected, match=f"派发片段只能建 manual 任务, {TASK} 不是"):
+        check_dispatch(dispatch(manual_task(TaskKind.failed))[0], writer=AgentId.A10, **where)
+
+    template = manual_library(tmp_path / "knowledge").load(TST)
+    agent = ScriptAgent(make_deps(FakeRegistry(), FakeTrail()), lambda ctx: {})
+    assert (agent.agent_id, writer_of(template, agent)) == (AgentId.A2, AgentId.A10)
+    with pytest.raises(MergeRejected, match="review_tasks"):
+        check_dispatch(patch, writer=agent.agent_id, **where)

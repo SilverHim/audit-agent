@@ -31,6 +31,7 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     Judgment,
+    ManualResult,
     Misstatement,
     MisstatementDraft,
     NeitherAction,
@@ -221,20 +222,22 @@ def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
         raise DecisionRejected("FIELD_NOT_ALLOWED", detail)
 
 
-def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> None:
+def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
-    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results), 没有结果模型时为空.
-    必填 (reason, manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝),
+    没有结果模型时为空. 必填 (reason, manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    返回要存下的结果: 证据指针按文件当前登记改写 type 与 reliability (同判断的文件指针), 其余原样.
     例: 页数 2 的文件引第 3 页 → INVALID_VALUE "DOC-0a1b2c3d4e5f: 页码 3 不在 1-2 之间".
     """
     request, result = task.manual_request, record.manual_result
-    assert request is not None, f"manual 任务 {task.id} 没有请求"  # make_task 建 manual 任务时一并带上
+    assert request is not None  # ReviewTask 的模型校验保证 manual 任务带请求
     assert result is not None and result.performed_on is not None  # check_review_fields 已查必填
     if len(result.evidence) < request.min_evidence:
         detail = f"manual_result.evidence 至少 {request.min_evidence} 条, 只有 {len(result.evidence)} 条"
         raise DecisionRejected("INVALID_VALUE", detail)
     registered = {d.id: d for d in documents}
+    evidence: list[EvidencePointer] = []
     for pointer in result.evidence:
         doc = registered.get(pointer.source_id) if pointer.source_type == "document" else None
         if doc is None:
@@ -243,6 +246,7 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
         resolved, reason = document_pointer(pointer, doc)
         if resolved is None:
             raise DecisionRejected("INVALID_VALUE", f"{doc.id}: {reason}")
+        evidence.append(resolved)
     decided_on = record.decided_at.astimezone(REPORT_TZ).date()
     if result.performed_on > decided_on:
         detail = f"manual_result.performed_on {result.performed_on} 晚于决定当天 {decided_on} (悉尼日期)"
@@ -250,13 +254,18 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
     if request.result_model is None:
         if result.details:
             raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有结果模型, manual_result.details 须为空")
-        return
+        return result.model_copy(update={"evidence": evidence})
+    model = result_model(request.result_model)
+    if model is None:  # 派发之后模板改了结果模型名或登记删了它
+        detail = f"结果模型 {request.result_model} 未登记 (contracts/manual_results), 无从核对 manual_result.details"
+        raise DecisionRejected("INVALID_VALUE", detail)
     try:
-        result_model(request.result_model).model_validate(result.details)
+        model.model_validate(result.details)
     except ValidationError as e:
         fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in e.errors())
         detail = f"manual_result.details 不合 {request.result_model}: {fields}"
         raise DecisionRejected("INVALID_VALUE", detail) from e
+    return result.model_copy(update={"evidence": evidence})
 
 
 def check_review_values(
@@ -265,7 +274,7 @@ def check_review_values(
     task: ReviewTask,
     target: Versioned | None,
     documents: Sequence[DocumentRef] = (),
-) -> None:
+) -> ReviewRecord:
     """复核决定与图无关的校验 (第 7 节校验顺序中图的等待之后, 决定 ID 之前): 决定须绑定任务记的目标版本, 且目标此后
     没有出新版本 (审计师看材料期间可能被别的决定改过); 决定是该任务允许的 (复核队列); 字段 (check_review_fields);
     manual 任务的结果按任务请求 (check_manual_result); 功能 collab 打开时的咨询记录与仲裁的错报草稿; a7_upheld 须
@@ -274,7 +283,8 @@ def check_review_values(
     target: 任务目标在 Store 中的最新版本, 没有时为 None. documents: 本项目已登记的文件, manual 任务核对证据用
     (其余任务不用). 只用 deps 的复核队列, 程序库与功能开关, 不读存储, 不看检查点; 不过抛 DecisionRejected.
     任务存在且待决, 图在等待, 决定 ID 未用过由 GraphDecisionSubmit.check_review_record 另查 (待决在图的检查之前,
-    先报 TASK_NOT_PENDING). 例: 决定绑定第 1 版而目标已有第 2 版 → VERSION_MISMATCH.
+    先报 TASK_NOT_PENDING). 返回要写入的决定: manual 任务的结果换成 check_manual_result 返回的 (证据指针按文件登记
+    改写), 其余原样. 例: 决定绑定第 1 版而目标已有第 2 版 → VERSION_MISMATCH.
     """
     if record.target_version != task.target_version or target is None or target.version != task.target_version:
         current = target.version if target is not None else None
@@ -286,7 +296,7 @@ def check_review_values(
         raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
     check_review_fields(record, task.kind)
     if task.kind is TaskKind.manual:
-        check_manual_result(record, task, documents)
+        record = record.model_copy(update={"manual_result": check_manual_result(record, task, documents)})
     if COLLAB in deps.features:  # 需求 R150: 咨询记录; 采纳的一方建议错报时须带草稿, 不建议时不能带
         check_consultation(record)
         if record.decision is Decision.dispute_resolution and isinstance(target, Judgment):
@@ -302,6 +312,7 @@ def check_review_values(
     unknown = sorted(set(record.rerun_params or {}) - set(params))
     if unknown:
         raise DecisionRejected("INVALID_VALUE", f"{task.procedure_id} 没有参数 {', '.join(unknown)}")
+    return record
 
 
 def confirm_effects(judgment: Judgment, exceptions: list[AuditException]) -> list[Versioned]:
@@ -792,10 +803,12 @@ class GraphDecisionSubmit:
         await self._check_decision_id(eid, decision.id)
         return target
 
-    async def check_review_record(self, eid: str, record: ReviewRecord, snapshot: StateSnapshot) -> ReviewTask:
+    async def check_review_record(
+        self, eid: str, record: ReviewRecord, snapshot: StateSnapshot
+    ) -> tuple[ReviewTask, ReviewRecord]:
         """第 7 节校验顺序中 RESUME_REQUIRED 之后的部分, 对复核决定: 任务存在且待决, 图在节点内等待, 版本,
         允许的决定, 字段, 取值 (版本至取值与图无关, 见 check_review_values), 决定 ID 未用过. 任务与目标对象读 Store
-        的最新版本. 返回所处理的任务. 不过抛 DecisionRejected.
+        的最新版本. 返回所处理的任务与要写入的决定 (check_review_values 返回的). 不过抛 DecisionRejected.
         """
         store = self.deps.output_store
         task = await store.get(eid, ReviewTask, record.task_id)
@@ -822,16 +835,16 @@ class GraphDecisionSubmit:
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
         manual = task.kind is TaskKind.manual  # 人工程序的结果引用的文件须已在本项目登记
         documents = await self.deps.financial_store.documents(eid) if manual else []
-        check_review_values(self.deps, record, task, target, documents)
+        checked = check_review_values(self.deps, record, task, target, documents)
         await self._check_decision_id(eid, record.id)
-        return task
+        return task, checked
 
     async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
         """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
-                task = await self.check_review_record(eid, decision, snapshot)
-                record = await self.timed(eid, kept_consultation(decision))
+                task, checked = await self.check_review_record(eid, decision, snapshot)
+                record = await self.timed(eid, kept_consultation(checked))
                 await self._apply_review(eid, record, task, snapshot)
             return
         async with self._deciding(eid) as (_, snapshot):

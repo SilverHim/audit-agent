@@ -178,6 +178,18 @@ def writer_of(template: ProcedureTemplate, agent: ProcedureAgent[Any]) -> AgentI
     return AgentId.A10 if manual_program(template) else agent.agent_id
 
 
+def check_dispatch(
+    patch: StatePatch, *, writer: AgentId, procedure_id: str, run_id: str, state: EngagementState
+) -> None:
+    """人工程序执行片段 (派发片段, 需求 R92) 的合并校验, 不过抛 MergeRejected: 同 check_patch, 但字段限本次执行记录与
+    DISPATCH_FIELDS (模板 outputs 列的是人交回结果后 owner 整理出的字段, 需求 R93, 这里不按它查), 任务限 manual 类.
+    writer 为 writer_of 给的 A10; 别的写入者按其写入范围查 (如 A9 不能写 review_tasks)."""
+    check_patch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=state, outputs=DISPATCH_FIELDS)
+    other = [t.id for t in patch.get("review_tasks", []) if t.kind is not TaskKind.manual]
+    if other:
+        raise MergeRejected([f"派发片段只能建 manual 任务, {', '.join(other)} 不是"])
+
+
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
     """片段里的 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务), 不论是否已决定."""
     return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
@@ -451,25 +463,22 @@ class GraphNodes:
     async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
         """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
 
-        正常时为 Agent 的片段与 Agent 编号. Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
+        正常时为 Agent 的片段与写入者 (writer_of). Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
         返回 A1 代写的失败片段 (fail_run) 与 A1. failure_reason 为 "异常类名: 异常文本",
         校验不过为 "merge_rejected: 原因".
         LangGraph 的中断等控制流信号 (GraphBubbleUp) 不算失败, 照常抛出.
         """
-        # 人工程序 (需求 R92) 的执行片段是派发片段: 由 A10 写, 只含执行记录与 manual 任务; 其模板 outputs 列的是人交回
-        # 结果后整理出的字段 (需求 R93), 这里不按它查
         writer = writer_of(ctx.template, agent)
-        outputs = DISPATCH_FIELDS if manual_program(ctx.template) else ctx.template.outputs
+        procedure_id, run_id = ctx.run.procedure_id, ctx.run.id
         try:
             patch = await agent.run(ctx)
-            check_patch(
-                patch,
-                writer=writer,
-                procedure_id=ctx.run.procedure_id,
-                run_id=ctx.run.id,
-                state=ctx.state,
-                outputs=outputs,
-            )
+            if manual_program(ctx.template):  # 人工程序的执行片段是派发片段 (需求 R92)
+                check_dispatch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state)
+            else:
+                outputs = ctx.template.outputs
+                check_patch(
+                    patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state, outputs=outputs
+                )
         except GraphBubbleUp:
             raise
         except MergeRejected as e:
