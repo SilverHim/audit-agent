@@ -7613,13 +7613,13 @@
             "type": "string",
             "title": "Answer"
           },
-          "lang": {
+          "answer_lang": {
             "type": "string",
             "enum": [
               "zh",
               "en"
             ],
-            "title": "Lang"
+            "title": "Answer Lang"
           },
           "citations": {
             "items": {
@@ -7655,7 +7655,7 @@
         "required": [
           "question",
           "answer",
-          "lang",
+          "answer_lang",
           "citations",
           "trail_id",
           "created_at"

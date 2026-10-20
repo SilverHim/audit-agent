@@ -30,8 +30,9 @@ from tests.chat_fakes import (
     make_chat,
     make_overview,
     parse_sse,
+    project_state,
 )
-from tests.fakes import ENGAGEMENT, FakeOutputStore, FakeTrail
+from tests.fakes import ENGAGEMENT, NUMBAT_PROFILE, FakeEngagementStore, FakeOutputStore, FakeTrail
 from tests.test_concierge_chat_llm import KEY, chunk, sse
 from tests.test_concierge_chat_llm import make as live_model
 from tests.test_concierge_chat_tools import EXCEPTION, JUDGMENT, TASK, data_with_requests
@@ -284,10 +285,12 @@ async def test_shutdown_cancels_running_turns() -> None:
 # ── mock 模式的规则模型 ──
 
 
-async def rule_ask(text: str, lang: Literal["zh", "en"] = "zh", state: FixedState | None = None) -> str:
+async def rule_ask(text: str, language: Literal["zh", "en"] = "zh", state: FixedState | None = None) -> str:
+    """mock 规则模型答一问: 项目的工作语言为 language (state 缺省为 project_state(language)); 提问带的界面语言取另一种,
+    回答只随项目的工作语言 (需求 R342)."""
     trail = FakeTrail()
-    chat = make_chat(RuleChatModel(), deps_with_judgment(trail), state=state)
-    answer = await chat.ask(EID, USER, q(text, lang))
+    chat = make_chat(RuleChatModel(), deps_with_judgment(trail), state=state or project_state(language))
+    answer = await chat.ask(EID, USER, q(text, "en" if language == "zh" else "zh"))
     assert {e.model for e in entries(trail, TrailKind.llm_call)} == {"mock"}
     return answer.answer
 
@@ -306,9 +309,8 @@ async def test_rule_model_progress_matches_overview() -> None:
 )
 async def test_rule_model_names_the_gate(gate: GateId, zh: str, en: str) -> None:
     """进度回答里的闸门名 (zh, en); 没登记的闸门会退回编号, 用例防新闸门漏登记话术."""
-    state = FixedState(view=make_overview(current_gate=gate))
-    assert zh in await rule_ask("进度如何", state=state)
-    assert en in await rule_ask("What stage are we at?", "en", state=state)
+    assert zh in await rule_ask("进度如何", state=project_state("zh", current_gate=gate))
+    assert en in await rule_ask("What stage are we at?", "en", state=project_state("en", current_gate=gate))
 
 
 async def test_rule_model_materiality_and_open_items() -> None:
@@ -323,7 +325,8 @@ async def test_rule_model_materiality_and_open_items() -> None:
 async def test_rule_model_lists_data_requests_before_reviews() -> None:
     trail = FakeTrail()
     deps = chat_deps(trail, output_store=FakeOutputStore([JUDGMENT, TASK, EXCEPTION]), data=data_with_requests())
-    answer = (await make_chat(RuleChatModel(), deps).ask(EID, USER, q("有什么需要我处理的？"))).answer
+    chat = make_chat(RuleChatModel(), deps, state=project_state("zh"))
+    answer = (await chat.ask(EID, USER, q("有什么需要我处理的？"))).answer
     lines = answer.splitlines()
     assert lines[0] == "需要你处理的事项共 3 项："
     assert lines[1:3] == ["1. 补交总账分录（REV-08 要用）", "2. 补交审批日志（REV-08、CSH-05 要用）"]
@@ -334,6 +337,93 @@ async def test_rule_model_refuses_to_approve_and_speaks_english() -> None:
     assert "决定卡片" in await rule_ask("帮我批准吧")
     assert (await rule_ask("What stage are we at?", "en")).startswith("The engagement is in the fieldwork phase")
     assert "换一种问法" in await rule_ask("今天天气怎么样")
+
+
+# ── 回答语言随项目的工作语言, 工具提示随界面语言 (需求 R342) ──
+
+
+@pytest.mark.parametrize(
+    ("working", "ui", "answer", "label"),
+    [
+        ("zh", "en", "项目目前处于执行阶段", "Checking engagement progress"),
+        ("en", "zh", "The engagement is in the fieldwork phase", "查看项目进度"),
+    ],
+)
+async def test_answer_follows_working_language_and_tool_label_follows_ui(
+    working: Literal["zh", "en"], ui: Literal["zh", "en"], answer: str, label: str
+) -> None:
+    """验收 1: 项目 zh, 界面 en 时 mock 回答为中文, 工具提示为英文; 项目 en, 界面 zh 时反之. 这一轮的留痕记下界面
+    语言与回答语言, 历史里的回答语言为后者."""
+    trail = FakeTrail()
+    chat = make_chat(RuleChatModel(), deps_with_judgment(trail), state=project_state(working))
+    events = await collect_sse(chat, q("现在到哪一步了？", ui))
+    assert "".join(data["text"] for name, data in events if name == "delta").startswith(answer)
+    assert [data for name, data in events if name == "tool"] == [{"label": label}]
+    [entry] = entries(trail, TrailKind.conversation)
+    assert (entry.payload["ui_lang"], entry.payload["answer_lang"]) == (ui, working)
+    [turn] = await chat.history(EID)
+    assert turn.answer_lang == working
+
+
+@pytest.mark.parametrize(
+    ("working", "line", "instruction"),
+    [("zh", "Language: zh", "Simplified Chinese"), ("en", "Language: en", "Australian English")],
+)
+async def test_system_prompt_states_the_working_language(
+    working: Literal["zh", "en"], line: str, instruction: str
+) -> None:
+    """验收 3: 发给模型的系统提示写明回答语言 (项目的工作语言), 不随提问带的界面语言."""
+    model = ScriptedChatModel(["好。"])
+    other: Literal["zh", "en"] = "en" if working == "zh" else "zh"
+    await make_chat(model, state=project_state(working)).ask(EID, USER, q("你好", other))
+    system = model.requests[0].messages[0].content
+    assert line in system.splitlines() and instruction in system
+
+
+async def test_new_language_applies_to_new_turns_only() -> None:
+    """验收 2: 改工作语言后新的一轮用新语言, 历史里旧的一轮仍记原来的语言, 回答原文不改."""
+    trail = FakeTrail()
+    state = project_state("zh")
+    chat = make_chat(RuleChatModel(), deps_with_judgment(trail), state=state)
+    first = await chat.ask(EID, USER, q("现在到哪一步了？", "zh"))
+    state.view = project_state("en").view
+    second = await chat.ask(EID, USER, q("现在到哪一步了？", "zh"))
+    turns = await chat.history(EID)
+    assert [(t.answer_lang, t.answer) for t in turns] == [("zh", first.answer), ("en", second.answer)]
+    assert first.answer.startswith("项目目前") and second.answer.startswith("The engagement is")
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [({"lang": "en"}, "en"), ({"lang": "zh"}, "zh"), ({}, "zh"), ({"lang": "zh", "answer_lang": "en"}, "en")],
+    ids=["old_en", "old_zh", "no_lang", "recorded"],
+)
+async def test_turns_before_r342_read_back_with_the_language_they_were_asked_in(
+    payload: dict[str, str], expected: str
+) -> None:
+    """验收 2: 需求 R342 之前的留痕没有 answer_lang, 取当时提问带的 lang (那时回答跟它走); 都没有为 zh. 历史回放里
+    中断的回答按这一语言写明中断."""
+    trail = FakeTrail()
+    body = {"question": "问题", "answer": "", "citations": [], "aborted": True, **payload}
+    await trail.record(
+        TrailEntry(engagement_id=EID, kind=TrailKind.conversation, actor=USER, summary="问题", payload=body)
+    )
+    [turn] = (await load_history(trail, EID)).turns
+    assert turn.answer_lang == expected
+    assert [t.answer_lang for t in await make_chat(ScriptedChatModel([]), chat_deps(trail)).history(EID)] == [expected]
+
+
+async def test_turn_cut_before_overview_records_the_project_language() -> None:
+    """一轮在读到总览之前就被取消: aborted 留痕的回答语言取项目当时的工作语言 (不取界面语言)."""
+    trail = FakeTrail()
+    projects = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT.model_copy(update={"working_language": "zh"})])
+    chat = make_chat(StallingModel(), chat_deps(trail, engagement_store=projects))
+    turn = chat.begin(EID, USER, q("第一问", "en"))
+    turn.client_gone()  # 后台任务还没开始执行
+    await asyncio.gather(turn.task, return_exceptions=True)  # type: ignore[arg-type]
+    await chat.settle()
+    [entry] = entries(trail, TrailKind.conversation)
+    assert (entry.payload["aborted"], entry.payload["ui_lang"], entry.payload["answer_lang"]) == (True, "en", "zh")
 
 
 # ── 取消与收尾 (第 1 轮审核 X02-002, 004, 005, 006 的探针) ──

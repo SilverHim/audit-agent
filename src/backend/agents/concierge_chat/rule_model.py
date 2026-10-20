@@ -15,7 +15,7 @@ from backend.contracts.ports import ChatModel
 
 MODEL_NAME = "mock"
 CHUNK = 12  # 流式输出每段的字数
-LANGUAGE = re.compile(r"^Language: (zh|en)$", re.MULTILINE)  # 系统提示词里的语言行
+LANGUAGE = re.compile(r"^Language: (zh|en)$", re.MULTILINE)  # 系统提示词里的回答语言行 (项目的工作语言, 需求 R342)
 AUDITOR = "[Auditor] "  # 压缩提示词里审计师问题行的前缀
 
 Intent = Literal["todo", "approve", "materiality", "progress", "other"]
@@ -50,7 +50,8 @@ def classify(question: str) -> Intent:
     return next((intent for intent, pattern in INTENTS if pattern.search(question)), "other")
 
 
-def language(messages: Sequence[ChatMessage]) -> Lang:
+def answer_language(messages: Sequence[ChatMessage]) -> Lang:
+    """回答语言: 系统提示词里的 "Language:" 一行 (取项目的工作语言, 不看提问带的界面语言)."""
     system = next((m.content for m in messages if m.role == "system"), "")
     match = LANGUAGE.search(system)
     return "en" if match and match.group(1) == "en" else "zh"
@@ -188,7 +189,7 @@ class RuleChatModel:
         if not tools:
             text = summarize(messages)
         else:
-            lang = language(messages)
+            answer_lang = answer_language(messages)
             question = next((m.content for m in reversed(messages) if m.role == "user"), "")
             intent = classify(question)
             results = tool_results(messages)
@@ -197,7 +198,7 @@ class RuleChatModel:
                 call = ToolCall(id="call_0", name=tool, arguments="{}")
                 yield AssistantTurn(text="", tool_calls=[call], finish_reason="tool_calls", model=MODEL_NAME)
                 return
-            text = compose(intent, results, lang)
+            text = compose(intent, results, answer_lang)
         for start in range(0, len(text), CHUNK):
             yield TextDelta(text=text[start : start + CHUNK])
         yield AssistantTurn(text=text, finish_reason="stop", model=MODEL_NAME)

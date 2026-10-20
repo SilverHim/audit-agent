@@ -1551,9 +1551,9 @@ export type ConversationTurn = {
      */
     answer: string;
     /**
-     * Lang
+     * Answer Lang
      */
-    lang: 'zh' | 'en';
+    answer_lang: 'zh' | 'en';
     /**
      * Citations
      */

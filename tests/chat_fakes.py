@@ -10,7 +10,7 @@ import httpx
 
 from backend.agents.base import AgentDeps
 from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat
-from backend.contracts.conversation import AssistantTurn, ChatEvent, ChatMessage, TextDelta, ToolCall, ToolSpec
+from backend.contracts.conversation import AssistantTurn, ChatEvent, ChatMessage, Lang, TextDelta, ToolCall, ToolSpec
 from backend.contracts.models import Engagement, Phase
 from backend.contracts.ports import ChatModel
 from backend.contracts.views import EngagementOverview, GateView, ProcedureSummary
@@ -142,6 +142,11 @@ class FixedState:
 
     async def gate(self, eid: str) -> GateView | None:
         return self.gate_view
+
+
+def project_state(language: Lang, **changes: Any) -> FixedState:
+    """项目的工作语言为 language 的固定总览 (审计助理的回答语言随它, 需求 R342); changes 同 make_overview."""
+    return FixedState(view=make_overview(ENGAGEMENT.model_copy(update={"working_language": language}), **changes))
 
 
 def chat_deps(trail: FakeTrail | None = None, **kwargs: Any) -> AgentDeps:

@@ -166,6 +166,8 @@ class ChatTurn:
     cites: dict[str, ConciergeCitation] = field(default_factory=dict)  # 已执行的工具结果里的编号池, 随图状态更新
     history_pool: dict[str, ConciergeCitation] = field(default_factory=dict)  # 历史中可引用的编号
     model: str = ""  # 最近一次调用的模型名
+    # 本轮的回答语言 (项目的工作语言, 需求 R342): 读总览时定下, 之后改了工作语言也不影响这一轮; 还没读到时为空
+    answer_lang: Lang | None = None
     input_tokens: int = 0  # 本轮各次调用的输入 token 合计
     output_tokens: int = 0  # 本轮各次调用的输出 token 合计
     record: "asyncio.Task[Any] | None" = None  # 写这一轮 conversation 留痕 (正常或 aborted) 的独立任务, 只建一次
@@ -383,9 +385,12 @@ class ConciergeChat:
             await asyncio.wait([previous])
         model = await self.source.current()
         overview = await self.state.overview(eid)
+        # 回答语言取项目的工作语言 (需求 R342); 提问带的 lang 是界面语言, 只管工具提示 (见 _converse)
+        answer_lang: Lang = overview.engagement.working_language
+        turn.answer_lang = answer_lang
 
         def system(summary: Summary | None) -> str:
-            return self.system_prompt(overview, question.lang, summary.text if summary else "")
+            return self.system_prompt(overview, answer_lang, summary.text if summary else "")
 
         history = await self._fit(eid, model, await load_history(self.deps.trail, eid), system, question, force=False)
         turn.history_pool = history.pool()
@@ -407,13 +412,14 @@ class ConciergeChat:
         turn.emit("done", {"trail_id": trail_id})
         return ConciergeAnswer(answer=answer, citations=citations, trail_id=trail_id)
 
-    def system_prompt(self, overview: EngagementOverview, lang: Lang, summary: str) -> str:
+    def system_prompt(self, overview: EngagementOverview, answer_lang: Lang, summary: str) -> str:
+        """系统提示词; answer_lang 为回答语言 (项目的工作语言), 写在 "Language:" 一行与末尾的语言要求里."""
         engagement = overview.engagement
         return self.prompts.get_template("system.md.j2").render(
             client_name=overview.client_name,
             period_start=engagement.period_start.isoformat(),
             period_end=engagement.period_end.isoformat(),
-            lang=lang,
+            answer_lang=answer_lang,
             summary=summary,
         )
 
@@ -447,7 +453,7 @@ class ConciergeChat:
             model=model,
             tools=self.tools,
             env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero),
-            lang=question.lang,
+            ui_lang=question.lang,  # 界面语言: 工具提示文字按它, 回答语言另在系统提示里
             max_steps=limits.max_steps,
             max_tokens=limits.max_tokens,
             tool_budget=limits.turn_reserve * 3,
@@ -566,6 +572,11 @@ class ConciergeChat:
             )
         )
 
+    async def _working_language(self, eid: str) -> Lang:
+        """项目当前的工作语言; 查不到项目为 en (缺省值, 同 Engagement.working_language)."""
+        engagement = await self.deps.engagement_store.get(eid)
+        return engagement.working_language if engagement is not None else "en"
+
     async def _record_turn(
         self,
         turn: ChatTurn,
@@ -577,11 +588,14 @@ class ConciergeChat:
         *,
         aborted: bool,
     ) -> str:
-        """这轮问答的 conversation 留痕: 执行者为审计师; payload 含问, 答, 引用, 工具轨迹 (不含结果原文)."""
+        """这轮问答的 conversation 留痕: 执行者为审计师; payload 含问, 答, 界面语言 (ui_lang), 回答语言 (answer_lang,
+        需求 R342), 引用, 工具轨迹 (不含结果原文). 还没读到总览就中断的, 回答语言取项目当时的工作语言."""
+        answer_lang = turn.answer_lang or await self._working_language(eid)
         payload: dict[str, Any] = {
             "question": question.question,
             "answer": answer,
-            "lang": question.lang,
+            "ui_lang": question.lang,
+            "answer_lang": answer_lang,
             "citations": [c.model_dump(mode="json") for c in citations],
             "model": turn.model,
             "tools": [asdict(t) for t in turn.traces],

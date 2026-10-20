@@ -11,7 +11,7 @@ from pydantic import Field, field_validator
 
 from backend.contracts.models import EvidencePointer, Model
 
-Lang = Literal["zh", "en"]  # 回答语言
+Lang = Literal["zh", "en"]  # 语言: 界面语言 (提问带的) 与回答语言 (项目的工作语言) 都取这两个值
 CitationKind = Literal["judgment", "procedure", "evidence", "trail"]  # 引用指向的对象种类
 QUESTION_MAX = 2000  # 问题最多字数
 
@@ -74,7 +74,8 @@ class ConciergeQuestion(Model):
     """审计师的一次提问."""
 
     question: str = Field(max_length=QUESTION_MAX)  # 问题, 不超过 2000 字, 不能全是空白
-    lang: Lang  # 回答语言
+    # 界面语言: 只管工具提示等界面文字 (需求 R342); 回答语言取项目的工作语言 (Engagement.working_language)
+    lang: Lang
 
     @field_validator("question")
     @classmethod
@@ -97,7 +98,8 @@ class ConversationTurn(Model):
 
     question: str  # 问题
     answer: str  # 回答; 中途断开时为已生成的部分
-    lang: Lang  # 回答语言
+    # 这一轮的回答语言 (需求 R342): 提问时项目的工作语言; 之前的轮没有记, 取当时提问带的语言 (那时回答跟它走)
+    answer_lang: Lang
     citations: list[ConciergeCitation]  # 引用
     trail_id: str  # 留痕 ID
     created_at: datetime | None  # 留痕写入时间
