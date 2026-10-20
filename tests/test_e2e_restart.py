@@ -18,6 +18,17 @@ from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import ENGAGEMENT, NUMBAT_FEATURES, FakeConfirmationChannel, FakeTrail, make_graph_nodes, wait_idle
+from tests.test_collab_flow import (
+    COLLAB,
+    PRESENTATION,
+    REV02_TASK,
+    SHOWN,
+    TASK,
+    dwell,
+    presentation_ids,
+    presentations,
+    presenting,
+)
 from tests.test_decisions import Started
 from tests.test_e2e_mock import (
     assert_fixtures_used_once,
@@ -88,9 +99,13 @@ class BlockingIngest(IngestAgent):
         return await super().execute(ctx)
 
 
-async def test_killed_during_doc06_recovers_without_resending() -> None:
+@pytest.mark.parametrize("features", [NUMBAT_FEATURES, COLLAB], ids=["baseline", "collab"])
+async def test_killed_during_doc06_recovers_without_resending(features: frozenset[str]) -> None:
     """验收 1, 2: 第 0 层汇合后 DOC-06 执行中进程被杀; 新 runner recover 后跑到归档, 结果同不中断时,
-    第 0 层不重跑, 函证不重发."""
+    第 0 层不重跑, 函证不重发.
+
+    功能 collab 打开的一遍 (需求 R155 验收 5, 中断点在 CSH-02 之前): 收尾时同 test_collab_flow 的主流程呈递两条任务;
+    GEN-09 留痕 2 行 (assert_trail_counts), 呈递 2 行, D-CSH02 与 D-REV02-0612 的停留时长 95 与 40 秒, 同不中断时."""
     holder: dict[str, BlockingIngest] = {}
 
     def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
@@ -98,7 +113,7 @@ async def test_killed_during_doc06_recovers_without_resending() -> None:
         return {**real_agents(deps), "DOC-06": holder["DOC-06"]}
 
     channel = FakeConfirmationChannel()
-    s = await start_demo(agents, confirmations=channel, features=NUMBAT_FEATURES)
+    s = await start_demo(agents, confirmations=channel, features=features)
     await asyncio.wait_for(holder["DOC-06"].entered.wait(), timeout=5)
     values = (await s.runner.app.aget_state(CONFIG)).values
     assert sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0) == sorted(
@@ -107,9 +122,18 @@ async def test_killed_during_doc06_recovers_without_resending() -> None:
     await kill(s)
 
     s = await restart(s)
-    await finish_demo(s)
+    collab = "collab" in features
+    await finish_demo(s, before=presenting(SHOWN) if collab else None)
 
     await assert_same_as_uninterrupted(s, channel)
+    entries = trail_of(s).entries
+    if collab:
+        assert presentations(entries) == [(PRESENTATION, "U-1", REV02_TASK), (PRESENTATION, "U-1", TASK)]
+        shown = presentation_ids(entries)
+        records = await dwell(s)
+        assert (records["D-CSH02"], records["D-REV02-0612"]) == ((95, shown[TASK]), (40, shown[REV02_TASK]))
+    else:
+        assert presentations(entries) == [] and {r for r, _ in (await dwell(s)).values()} == {None}
 
 
 # ── fan_in 写 Store 后, 写检查点前抛错 ─────────────────────────────────────────

@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -134,12 +134,18 @@ async def start_demo(
     return s
 
 
-async def finish_demo(s: Started) -> None:
-    """等后台停下, 按第 7 节提交 6 条复核 (每次提交前停在 await_events), FIN-01 approve qualified,
-    RPT-01 先退回再批准, 到归档."""
+async def finish_demo(
+    s: Started,
+    reviews: Sequence[ReviewRecord] = REVIEWS,
+    before: Callable[[Started, ReviewRecord], Awaitable[None]] | None = None,
+) -> None:
+    """等后台停下, 按第 7 节提交 6 条复核 (reviews, 每次提交前停在 await_events), FIN-01 approve qualified,
+    RPT-01 先退回再批准, 到归档. before 在提交每条复核之前调 (如先呈递它的任务, 需求 R155)."""
     await wait_idle(s.runner, EID)
-    for decision in REVIEWS:
+    for decision in reviews:
         assert await s.next_nodes() == ("await_events",), (decision.task_id, s.runner.run_error(EID))
+        if before is not None:
+            await before(s, decision)
         await s.submit.submit(EID, decision)
         await wait_idle(s.runner, EID)
     assert await s.next_nodes() == ("gate_fin",), s.runner.run_error(EID)

@@ -11,6 +11,7 @@ P0-P4. 第 1 级前的回归里程碑, 长期保留 (同 Numbat 回归 R55, test
 
 import json
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -41,6 +42,7 @@ from backend.contracts.models import (
     ProposedAction,
     ReportSection,
     ReportStatus,
+    ReviewRecord,
     ReviewStatus,
     ReviewTask,
     TaskStatus,
@@ -122,25 +124,35 @@ def xero17_client() -> LayeredMockLLMClient:
     return LayeredMockLLMClient([ONLY17, XERO.runtime])
 
 
-async def run_xero17() -> Xero17:
-    """离线: 空的假存储, 规则引擎 FakeRuleEngine(XERO_RULES), 主模型与复核模型为 xero17_client(); 跑完整个流程."""
+async def run_xero17(
+    features: frozenset[str] = XERO17_FEATURES,
+    before_review: Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]] | None = None,
+) -> Xero17:
+    """离线: 空的假存储, 规则引擎 FakeRuleEngine(XERO_RULES), 主模型与复核模型为 xero17_client(); 跑完整个流程.
+    features 为功能集 (缺省新功能全关), before_review 见 finish_xero17 (需求 R155 打开 collab 的变体用)."""
     client = xero17_client()
     deps = new_xero_deps(
         trail=FakeTrail(),
         llm=client,
         review_llm=client,
         rules=FakeRuleEngine(dict(XERO_RULES)),
-        features=XERO17_FEATURES,
+        features=features,
     )
     runner = offline_runner(deps)
-    return await drive_xero17(runner, DataService(deps, runner, demo=demo_source()), EID, OWNER, client)
+    service = DataService(deps, runner, demo=demo_source())
+    return await drive_xero17(runner, service, EID, OWNER, client, before_review)
 
 
 async def drive_xero17(
-    runner: GraphRunner, service: DataService, eid: str, owner: str, client: LayeredMockLLMClient
+    runner: GraphRunner,
+    service: DataService,
+    eid: str,
+    owner: str,
+    client: LayeredMockLLMClient,
+    before_review: Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]] | None = None,
 ) -> Xero17:
     """从新建的项目跑完整个流程 (见模块说明; 假存储与真实库都用这一个), 记下每次执行的 Agent; 前后各记一次原目录的
-    逐文件哈希. client 须已是 runner.deps 的主模型与复核模型."""
+    逐文件哈希. client 须已是 runner.deps 的主模型与复核模型; before_review 见 finish_xero17."""
     before = originals()
     deps = runner.deps
     agents: list[tuple[str, str, bool]] = []
@@ -164,7 +176,7 @@ async def drive_xero17(
         await confirm_ready(service, eid, owner)
         pln = await query.gate(eid)
         assert pln is not None, runner.run_error(eid)
-        await finish_xero17(runner, eid, owner)
+        await finish_xero17(runner, eid, owner, before_review)
     return Xero17(runner, eid, owner, client, awaiting, pln, agents, changed(before, originals()))
 
 

@@ -18,7 +18,7 @@ XeroFakeDatasetLoader.load 只记调用, 不登记文件, 与真实载入器只�
 
 import functools
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -862,9 +862,15 @@ def xero17_gates(actor: str = ENGAGEMENT.owner_id) -> dict[str, GateDecision]:
     }
 
 
-async def finish_xero17(runner: GraphRunner, eid: str, actor: str = ENGAGEMENT.owner_id) -> None:
+async def finish_xero17(
+    runner: GraphRunner,
+    eid: str,
+    actor: str = ENGAGEMENT.owner_id,
+    before_review: Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]] | None = None,
+) -> None:
     """确认数据已齐之后 (停在 PLN-01/03 闸门) 推到签字归档: PLN-01/03 approve, 10 条复核 (每次提交前须停在
-    await_events, 没有后台错误), FIN-01 approve 无保留意见, RPT-01 先退回再批准. 每步等后台停下."""
+    await_events, 没有后台错误), FIN-01 approve 无保留意见, RPT-01 先退回再批准. 每步等后台停下. before_review 在
+    提交每条复核之前以 (runner, eid, 决定) 调 (如先呈递它的任务, 需求 R155)."""
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
     gates = xero17_gates(actor)
 
@@ -880,6 +886,8 @@ async def finish_xero17(runner: GraphRunner, eid: str, actor: str = ENGAGEMENT.o
     await send(gates["pln"])
     for review in xero17_reviews(actor):
         assert await at() == ("await_events",), (review.task_id, runner.run_error(eid))
+        if before_review is not None:
+            await before_review(runner, eid, review)
         await send(review)
     assert await at() == ("gate_fin",), runner.run_error(eid)
     await send(gates["fin"])
