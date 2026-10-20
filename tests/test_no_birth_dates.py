@@ -16,6 +16,7 @@ from backend.adapters.llm import MockLLMClient
 from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import DocumentIntake
+from backend.agents.registry import AGENT_CLASSES
 from backend.agents.review import GEN09, ReviewAgent
 from backend.contracts.data import REGISTRY_TARGET
 from backend.contracts.models import (
@@ -255,13 +256,22 @@ def sees_person_data(procedure_id: str) -> bool:
     return "GEN-08" in closure(procedure_id) or DocumentType.registry_extract in template.document_reads
 
 
-GUARDED = sorted(t.id for t in LIBRARY.all(include_disabled=True) if t.llm is not None and sees_person_data(t.id))
+# 上下文可能带人员信息, 但还没有 Agent 执行的判断程序 → 落地它的需求. 那时 Agent 一注册,
+# test_guarded_programs_are_listed 即失败, 须同一提交删去这一项并让下面的守卫能执行它
+PENDING = {"FIN-03": "R158"}  # A8 错报性质分类
+GUARDED = sorted(
+    t.id
+    for t in LIBRARY.all(include_disabled=True)
+    if t.llm is not None and sees_person_data(t.id) and t.id not in PENDING
+)
 
 
 def test_guarded_programs_are_listed() -> None:
     """守卫自身: 上下文可能带人员信息的判断程序按依赖闭包与 document_reads 自动列出, 现含 GEN-02 与 GEN-03; 之后的
     GEN-01 等加进程序库即进下一例受查. 不读关系图也不读摘录登记的 (如 REV-02) 不在其中."""
     assert {"GEN-02", "GEN-03"} <= set(GUARDED) and "GEN-08" not in GUARDED and "REV-02" not in GUARDED
+    executed = {p for agent in AGENT_CLASSES for p in agent.procedures}
+    assert all(sees_person_data(p) for p in PENDING) and not set(PENDING) & executed  # 待落地的确实还没有 Agent
 
 
 @needs("q1_snapshot", "q1_supplements")
