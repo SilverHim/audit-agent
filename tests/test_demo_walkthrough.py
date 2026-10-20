@@ -3,12 +3,14 @@
 客户下拉取第一行 (演示公司) 的默认数据集与期间建项目 → 每个停点按数据管理页概览的 demo.suggested 导入该阶段的演示
 资料 (页面按钮的阶段同此): ACC-01 闸门处 acceptance, 等数据就绪时 fieldwork, 点 "数据已齐" 后在 PLN-01/03 闸门处
 statements (方案取舍: 在 FIN-01 处导入会让读文件登记的程序过期, R304) → 闸门决定取 GET /gate 的材料 → 复核按任务
-列表逐条提交 (决定同 R119: BA-091 认定错报, 其余 confirm) → FIN-01 无保留意见 → RPT-01 先退回再批准, 到归档.
+列表逐条提交 (决定同 R119: BA-091 认定错报, 其余 confirm; GEN-02 的 7 条同 R146: XJ-499 认定错报, XJ-575 推翻为接受,
+其余 confirm) → FIN-01 无保留意见 → RPT-01 先退回再批准, 到归档.
 
 大模型只读运行副本 data/xero_demo/20261017-q1/llm (应用里按项目数据集选的目录, 生成脚本从 llm_xero 复制, 正本里没有
 fixture 文件的程序由 llm_xero_only17 补位), 不用 R119 的分层客户端; 登记 mock 按项目数据集定位 (DatasetRegistrySource).
-功能集为演示配置 (.env.example 的 FEATURES=critic,collab, R155; R119 仍按基线回归). 断言: 例外, 判断, 复核任务, 错报同
-R119 (复用其断言函数), 报告与归档同 R119; 三个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
+功能集为演示配置 (.env.example 的 FEATURES=critic,collab,journals, R155, R146; R119 仍按基线回归). 断言: 例外, 判断,
+复核任务, 错报与汇总表为 R119 加 R146 的增量 (复用其断言函数), 报告与归档同 R119 (意见与报告不在 R146, FIN-01 仍按
+R119 的决定); 三个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
 的 RPT-03 两稿放进正本后, 运行副本随之换成全接入两稿, 本模块的报告断言 (只开现有 17 条的两稿) 在同一提交里随之改.
 不与 R119 共用一次运行: 走 HTTP, 多导入 statements 阶段, 终态 (文件 22 份, 待审财报请求 received) 不同.
 读快照与补造目录, 标 external; 连库变体标 slow.
@@ -42,7 +44,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader
 from backend.services.abn import abn_problem
 from backend.services.data_service import DataService
-from backend.services.features import BASELINE, COLLAB
+from backend.services.features import parse_features
 from backend.services.xero_link import XeroLink
 from tests.external import supplements_dir
 from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, FakeXeroConnectionStore, api_client, wait_idle
@@ -51,6 +53,7 @@ from tests.test_demo_default import CreatingEngagementStore, demo_runner
 from tests.test_e2e_mock import real_storage
 from tests.test_e2e_xero17 import XERO_PERIOD, Xero17, assert_materiality, assert_report, assert_results
 from tests.xero_fakes import (
+    REPO,
     SNAPSHOT_NAME,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,
@@ -59,6 +62,7 @@ from tests.xero_fakes import (
     XERO_RULES,
     new_xero_deps,
     xero17_gates,
+    xero_journal_reviews,
 )
 from tests.xero_flow import READY_REASON, demo_source, drain, offline_runner
 from tests.xero_harness import LayeredMockLLMClient
@@ -67,7 +71,14 @@ pytestmark = pytest.mark.external
 shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走通 (walked) 的用例与它同一个事件循环
 API = "/api/v1"
 BA091 = "J-CSH-02-1-BA-091"
-DEMO_FEATURES = BASELINE | {COLLAB}  # 演示配置的功能集 (.env.example 的 FEATURES=critic,collab, R155)
+# 演示配置的功能集: 取 .env.example 的 FEATURES (critic,collab,journals; R155 打开 collab, R146 打开 journals)
+DEMO_FEATURES = parse_features(
+    next(
+        line
+        for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith("FEATURES=")
+    ).split("=", 1)[1]
+)
 REVIEW_ROUNDS = 5  # 复核循环的轮数上限 (本路径分三层出任务, 3 轮即完)
 DEMO_ABN = "25900043021"
 # 每个停点: (总览的闸门, 是否等数据就绪, 是否等复核, 概览建议导入的阶段); 复核的停点只记第一次
@@ -146,6 +157,7 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
     await stop()
     pln = await decide("approve", materiality=XERO17_MATERIALITY.model_dump())
     overview = await stop()
+    journal_reviews = {r.task_id: r for r in xero_journal_reviews(owner)}
     for _ in range(REVIEW_ROUNDS):
         if not overview["awaiting_review"]:
             break
@@ -154,7 +166,10 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
         for view in pending:
             task = view["task"]
             body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
-            if task["target_id"] == BA091:
+            if task["id"] in journal_reviews:  # GEN-02 的决定同 R146
+                fields = {"decision", "reason", "override_conclusion", "misstatement_draft"}
+                body |= journal_reviews[task["id"]].model_dump(mode="json", include=fields, exclude_none=True)
+            elif task["target_id"] == BA091:
                 draft = XERO17_BA091_DRAFT.model_dump(exclude_none=True)
                 reason = "Accrued interest of AUD 48.53 confirmed by the bank was not recorded."
                 body |= {"decision": "misstatement", "reason": reason, "misstatement_draft": draft}
@@ -338,24 +353,27 @@ async def test_tables_and_documents_from_the_demo(walked: Walk) -> None:
     assert fs.file_name == "fs_v1.pdf"
 
 
-# ── 验收 4: 计数同 R119, 走到报告 ──
+# ── 验收 4: 计数为 R119 加 R146 的增量, 走到报告 ──
 
 
 @shared_loop
-async def test_counts_and_report_match_r119(walked: Walk) -> None:
-    """例外 11 条, 判断 10 条 (v2 confirmed), 复核任务 10 条 (decided), 错报 1 条 (BA-091, 4853), 函证两户, 重要性与
-    汇总表同 R119; REPORT-2 签字归档, 回应接口生成的 RPT-01 退回决定. 走完没有过期程序, 后台没有错误; 功能集为演示
-    配置 (critic, collab)."""
-    await assert_results(walked.x)
-    await assert_materiality(walked.x)
+async def test_counts_and_report(walked: Walk) -> None:
+    """R119 的计数 (例外 11 条, 判断 10 条 v2 confirmed, 复核任务 10 条 decided, 错报 1 条 BA-091 4853, 函证两户,
+    重要性) 加 R146 的增量 (例外多 GEN-05 七条, 判断多 8 条, 任务多 7 条, 错报多 XJ-499 的 75000, 汇总表合计 79853,
+    候选保留意见); REPORT-2 签字归档, 回应接口生成的 RPT-01 退回决定 (同 R119). 走完没有过期程序, 后台没有错误;
+    项目冻结的功能集为演示配置 critic, collab, journals."""
+    assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals"]
+    await assert_results(walked.x, journals=True)
+    await assert_materiality(walked.x, journals=True)
     await assert_report(walked.x, walked.reject_id)
     assert (walked.overview["stale_procedure_ids"], walked.overview["run_error"]) == ([], None)
-    assert sorted(walked.overview["features"]) == sorted(DEMO_FEATURES)  # 项目冻结的是演示配置的功能集
+    assert sorted(walked.overview["features"]) == sorted(DEMO_FEATURES)
 
 
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
-    """大模型 39 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; 待审财报上传后 A3 抽取一次, 需求 R217;
+    """大模型 46 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; 待审财报上传后 A3 抽取一次, 需求 R217;
+    GEN-02 七笔凭证各一次, 需求 R146;
     没有回落到 default.json 或找不到), 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本
     (应用里按项目数据集选目录)."""
     llm = walked.x.client
@@ -368,6 +386,7 @@ async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
         "REV-03": 3,
         "REV-02": 6,
         "CSH-02": 1,
+        "GEN-02": 7,
         "RPT-03": 2,
         "DOC-STATEMENTS": 1,
     }
@@ -399,8 +418,8 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         async with api_client(runner, run.owner, deps=deps, xero=xero_link(deps, service)) as client:
             w = await walk(client, runner, service, None)
         assert w.stops == STOPS
-        await assert_results(w.x)
-        await assert_materiality(w.x)
+        await assert_results(w.x, journals=True)
+        await assert_materiality(w.x, journals=True)
         await assert_report(w.x, w.reject_id)
         assert (w.overview["stale_procedure_ids"], sorted(w.overview["features"])) == ([], sorted(DEMO_FEATURES))
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
