@@ -1855,8 +1855,10 @@ class DataService:
         否则 409 NOT_EDITABLE. 改后只写 Store; 从停着的位置回到写函证的节点 (DOC-06 重跑, CSH-02) 之前都从库读回
         最新版本 (nodes.confirmations_from_store): 等复核恢复 (await_events), 过期重跑写检查点 (rerun_stale) 与其恢复
         补做; DOC-06 重跑时回函原件没换的沿用这一版, 不重抽 (IngestAgent.kept_edit). P2 以外节点等人或停在闸门而不
-        重跑时, 状态中的函证比库里旧; 但之后不再有写函证或按状态函证计算的节点, 不影响结果. CSH-02 已比对过的差额与
-        结果不随之重算, 记数据变动 confirmations 标出过期 (需求 R274), 审计师可在等复核, FIN-01 或 RPT-01 处重跑它.
+        重跑时, 状态中的函证比库里旧: 之后按状态函证计算的只有人工程序 owner 的整理 (需求 R93), 它给函证出的版本与
+        这一版撞号时节点报错 (nodes.GraphNodes.collect, Store 已有内容不同的同版本), 不静默丢掉. CSH-02 已比对过的
+        差额与结果不随之重算, 记数据变动 confirmations 标出过期 (需求 R274), 审计师可在等复核, FIN-01 或 RPT-01
+        处重跑它.
         持项目锁 (锁定 423, 忙 409); 函证不存在 404; 理由为空 MISSING_FIELD; 字段或值不合法, 与当前相同
         INVALID_VALUE; 同一修改的重试返回当前版本 (同 edit_contract)."""
         reason = self._reason(edit)

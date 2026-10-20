@@ -68,7 +68,8 @@ class AgentDeps:
     # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES
     features: frozenset[str] = BASELINE
     # 启用的人工程序 → 模板 owner 的 ManualHandler (需求 R93): 组装的最后一步由 registry.with_manual_owners 按 library
-    # 找好, 只找一次; A10 派发, 节点整理结果与 DecisionSubmit 核对都取这同一套实例. 换了 library 须重新组装
+    # 找好, 只找一次, owner 以组装好的这个 deps 构造; A10 派发, 节点整理结果与 DecisionSubmit 核对都取这同一套实例.
+    # 换了 library 或端口 (dataclasses.replace) 须重新组装
     manual_owners: Mapping[str, "ManualHandler"] = field(default_factory=dict)
 
 
@@ -98,10 +99,11 @@ class ManualHandler(Protocol):
       证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文). ctx.run 为派发的那次执行
       (任务目标), ctx.state 为检查点里的状态: 节点停在等待, 派发的执行记录与任务只在 Store, 不在其中.
     - collect: 节点读回 manual_result 后调, 把结果整理成领域对象, 返回的片段只能含 owner 写入范围 (merge.AGENT_FIELDS)
-      内, 模板 outputs 声明的字段, 不能含执行记录与任务 (procedure_runs, review_tasks, 派发片段的字段), 以 owner 为
-      写入者写入. ctx.run 为派发的那次执行 (任务的 run_id), ctx.state 为本次执行前的状态只并入派发片段的执行记录
-      与任务, 不含按 outputs 取回的对象 (重放时也一样, 见 nodes.GraphNodes.collect). 须为纯函数: 不取当前时间,
-      不调大模型, 只看 ctx 与决定, 重放时重算得同一结果.
+      内, 模板 outputs 声明的字段, 不能含执行记录与任务 (procedure_runs, review_tasks, 派发片段的字段), 只能由本次
+      执行写的对象 (如关系图) run_id 须为派发的那次执行 (nodes.check_collected), 以 owner 为写入者写入; Store 已有
+      内容不同的同版本时节点报错, 不覆盖. ctx.run 为派发的那次执行 (任务的 run_id), ctx.state 为本次执行前的状态
+      只并入派发片段的执行记录与任务, 不含按 outputs 取回的对象 (重放时也一样, 见 nodes.GraphNodes.collect). 须为
+      纯函数: 不取当前时间, 不调大模型, 只看 ctx 与决定, 重放时重算得同一结果.
     """
 
     def prepare(self, ctx: RunContext) -> dict[str, Any]: ...

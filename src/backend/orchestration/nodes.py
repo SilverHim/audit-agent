@@ -17,6 +17,7 @@ from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.checkup import DataCheckup, resources
 from backend.agents.client_intel import company_check
 from backend.agents.registry import build_agents
+from backend.contracts.errors import VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -57,9 +58,11 @@ from backend.orchestration.merge import (
     Replay,
     check_ids,
     check_outputs,
+    check_own_run,
     check_patch,
     check_refs,
     field_type,
+    objects,
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
@@ -186,6 +189,18 @@ def check_dispatch(
     other = [t.id for t in patch.get("review_tasks", []) if t.kind is not TaskKind.manual]
     if other:
         raise MergeRejected([f"派发片段只能建 manual 任务, {', '.join(other)} 不是"])
+
+
+def check_collected(
+    patch: StatePatch, *, writer: AgentId, procedure_id: str, run_id: str, state: EngagementState, outputs: list[str]
+) -> None:
+    """人工程序 owner 整理结果的片段 (需求 R93) 的合并校验, 不过抛 MergeRejected: 同 check_patch 的 run_id 为 None
+    (不能带派发片段的字段, 不查终态, ID 与外键照查), 另按派发的那次执行 run_id 查只能由它写的对象 (check_own_run,
+    如关系图: 整理出的对象写在派发的那次执行下)."""
+    check_patch(patch, writer=writer, procedure_id=procedure_id, run_id=None, state=state, outputs=outputs)
+    reasons = check_own_run(patch, run_id)
+    if reasons:
+        raise MergeRejected(reasons)
 
 
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
@@ -785,24 +800,33 @@ class GraphNodes:
     async def collect(
         self, engagement: Engagement, state: EngagementState, procedure_id: str, record: ReviewRecord, task: ReviewTask
     ) -> StatePatch:
-        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段按 owner 的写入
-        范围与模板 outputs 校验, 不能带执行记录与任务 (check_patch 的 run_id 为 None), 以 owner 为写入者在一个事务内
-        写入 Store, 返回写入后的片段.
+        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段经
+        check_collected 校验, 以 owner 为写入者在一个事务内写入 Store, 返回写入后的片段.
 
         state: 本次执行前的状态只并入派发片段的执行记录与任务 (在线与重放相同); ctx.run 为派发的那次执行 (任务的
         run_id, 失败再 rerun 后为最新一次). collect 是纯函数, 节点重放时重算得同一对象, 再写 Store 不新增. 片段
-        校验不过抛 MergeRejected (节点错误, 记入 run_error), 什么都不写.
+        校验不过抛 MergeRejected, 写入时 Store 已有内容不同的同版本 (图停着时 Store 里被改出了这一版, 如等待时审计师
+        改了回函抽取结果; 整理结果会被静默丢掉) 抛 VersionConflict 整体回滚: 都是节点错误, 记入 run_error, 什么都不写.
         """
         template = self.deps.library.load(procedure_id)
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         run = next(r for r in state["procedure_runs"] if r.id == task.run_id)
         ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
         patch = self.deps.manual_owners[procedure_id].collect(ctx, record)
-        check_patch(
-            patch, writer=template.owner, procedure_id=procedure_id, run_id=None, state=state, outputs=template.outputs
-        )
+        owner, outputs = template.owner, template.outputs
+        check_collected(patch, writer=owner, procedure_id=procedure_id, run_id=run.id, state=state, outputs=outputs)
         async with self.deps.output_store.transaction(engagement.id):
-            return await save_outputs(self.deps.output_store, engagement.id, patch, actor=template.owner)
+            written = await save_outputs(self.deps.output_store, engagement.id, patch, actor=owner)
+            clashes = [
+                f"{mine.id} v{mine.version}"
+                for field, value in patch.items()
+                for mine, stored in zip(objects(value), objects(written[field]), strict=True)
+                if mine != stored
+            ]
+            if clashes:
+                detail = ", ".join(clashes)
+                raise VersionConflict(f"{procedure_id} 整理出的对象与 Store 中已有的同版本内容不同: {detail}")
+        return written
 
     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
         """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的

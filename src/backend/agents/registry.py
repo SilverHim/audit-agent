@@ -57,8 +57,12 @@ def manual_owners(deps: AgentDeps) -> dict[str, ManualHandler]:
 
 def with_manual_owners(deps: AgentDeps) -> AgentDeps:
     """组装的最后一步 (main.build_deps, 测试的 make_deps): 按 deps 的程序库找好人工程序的 owner (manual_owners), 放进
-    deps.manual_owners, 之后 A10, 节点与 DecisionSubmit 共用. owner 没实现时在这里报错, 即启动即报错."""
-    return replace(deps, manual_owners=manual_owners(deps))
+    deps.manual_owners, 之后 A10, 节点与 DecisionSubmit 共用. owner 没实现时在这里报错, 即启动即报错. owner 以返回的
+    这个 deps 构造 (先放一个空表, 找好后填进去), 与各处用的是同一个; 之后再 replace 换端口须重新组装."""
+    owners: dict[str, ManualHandler] = {}
+    assembled = replace(deps, manual_owners=owners)
+    owners.update(manual_owners(assembled))
+    return assembled
 
 
 def build_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:

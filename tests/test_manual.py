@@ -30,6 +30,7 @@ from backend.contracts.manual_results import RESULT_MODELS
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    Confirmation,
     Decision,
     DocumentRef,
     DocumentType,
@@ -40,6 +41,8 @@ from backend.contracts.models import (
     ManualRequest,
     ManualResult,
     Model,
+    OwnershipGraph,
+    PartyNode,
     Phase,
     Procedure,
     ProcedureRun,
@@ -64,6 +67,7 @@ from backend.orchestration.nodes import (
     NODE_PROCEDURES,
     GraphNodes,
     apply_patch,
+    check_collected,
     check_dispatch,
     writer_of,
 )
@@ -129,6 +133,7 @@ LETTER = DocumentRef(  # 审计师已上传的声明书 (2 页, 公司出具的�
 DECIDED_AT = datetime(2026, 10, 23, 5, tzinfo=UTC)  # 悉尼 10-23 16:00
 CALLS: list[tuple[str, str]] = []  # 两个 owner 各步的调用 (步骤, 程序), 每个用例前清空
 CALLERS: list[object] = []  # 与 CALLS 对应的 owner 实例
+CHECKED: list[ManualResult] = []  # ReplyOwner.check 收到的结果
 
 
 class TstLetter(Model):
@@ -196,6 +201,7 @@ class ReplyOwner(Owner):
 
     def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]:
         self.called("check", ctx)
+        CHECKED.append(result)
         return ["amount_cents 不得为负"] if result.details.get("amount_cents", 0) < 0 else []
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch:
@@ -235,6 +241,7 @@ def registered(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     register(monkeypatch)
     CALLS.clear()
     CALLERS.clear()
+    CHECKED.clear()
     yield
 
 
@@ -387,6 +394,7 @@ def test_manual_programs_map_to_a10_and_need_an_owner(tmp_path: Path, monkeypatc
     concierge = agents["RPT-03"]
     assert isinstance(concierge, ConciergeAgent)
     assert agents[TST] is agents[REPLY] is concierge
+    assert all(owner.deps is deps for owner in deps.manual_owners.values())  # type: ignore[attr-defined]  # 同一个 deps
     unassembled = replace(make_deps(FakeRegistry(), FakeTrail()), library=library)
     with pytest.raises(LookupError, match=f"人工程序 {TST}, {REPLY} 的 owner 没有组装"):
         registry.build_agents(unassembled)
@@ -594,6 +602,10 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path) -> None:
     assert CALLS == [("prepare", REPLY)]
     await assert_rejected(s, replied(-1), "INVALID_VALUE", "amount_cents 不得为负")
     assert CALLS[-1] == ("check", REPLY)
+    # owner 收到的是通用核对改写后的结果: 人填的 external 与空可靠性已按声明书的登记改为 voucher, internal_original
+    assert {(p.type, p.reliability) for p in CHECKED[-1].evidence} == {
+        (EvidenceType.voucher, Reliability.internal_original)
+    }
 
     actors: dict[str, str] = {}
     put = s.output_store.put
@@ -644,6 +656,51 @@ async def test_collect_with_an_undeclared_field_writes_nothing(tmp_path: Path, m
     monkeypatch.setattr(ReplyOwner, "extra", False)
     written = await nodes.collect(ENGAGEMENT, state, REPLY, replied(4853), task)
     assert [x.id for x in written["exceptions"]] == [REPLY_EXCEPTION]
+
+
+@pytest.mark.usefixtures("reply_node")
+async def test_collect_clash_with_a_store_edit_is_a_node_error(tmp_path: Path) -> None:
+    """停在 TST-M02 的等待时审计师改了回函抽取结果 (同 DataService.edit_confirmation, 只写 Store, 函证出 v+1). 提交
+    回复后 owner 按状态里的 v 也出 v+1, 与 Store 中那一版撞号而内容不同: 节点报错 (记入 run_error), 整理出的例外与
+    函证都不写, 审计师那一版留着, 不静默丢掉回复金额."""
+    s = await at_manual(tmp_path, REPLY)
+    first = min((await s.runner.app.aget_state(CONFIG)).values["confirmations"], key=lambda c: c.id)
+    edited = first.model_copy(update={"version": first.version + 1, "confirmed_balance_cents": 111})
+    async with s.output_store.transaction(EID):
+        await s.output_store.put(EID, [edited], actor="U-1")
+
+    await s.submit.submit(EID, replied(4853))
+    await wait_idle(s.runner, EID)
+
+    error = s.runner.run_error(EID) or ""
+    assert f"{REPLY} 整理出的对象与 Store 中已有的同版本内容不同: {first.id} v{first.version + 1}" in error
+    assert [r for r in s.output_store.rows if isinstance(r, AuditException) and r.id == REPLY_EXCEPTION] == []
+    assert latest(s, Confirmation, first.id) == edited
+
+
+def test_collected_patch_checks_its_own_run() -> None:
+    """整理结果的片段 (check_collected) 照 check_patch 的 run_id 为 None 查, 另按派发的那次执行查只能由本次执行写的对象
+    (check_own_run): 关系图的 run_id 为别的执行被拒, 为派发的那次照收."""
+    state = initial_state(ENGAGEMENT, [make_procedure(REPLY, Phase.P3_Completion)], 1)
+    graph = OwnershipGraph(
+        id="OWNERSHIP",
+        version=1,
+        run_id="RUN-GEN-08-1",
+        reporting_entity_id="ACN-1",
+        nodes=[PartyNode.model_validate({"id": "ACN-1", "kind": "company", "name": "Numbat Pty Ltd"})],
+        links=[],
+    )
+    where: dict[str, Any] = {
+        "writer": AgentId.A5,
+        "procedure_id": REPLY,
+        "state": state,
+        "outputs": ["ownership_graph"],
+    }
+    with pytest.raises(
+        MergeRejected, match=f"ownership_graph 中 OWNERSHIP 的 run_id RUN-GEN-08-1 不是本次执行 {REPLY_RUN}"
+    ):
+        check_collected({"ownership_graph": graph}, run_id=REPLY_RUN, **where)
+    check_collected({"ownership_graph": graph.model_copy(update={"run_id": REPLY_RUN})}, run_id=REPLY_RUN, **where)
 
 
 # ── R93 验收 4, 5: 重放与恢复补做 ──

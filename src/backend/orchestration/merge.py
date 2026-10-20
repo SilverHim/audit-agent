@@ -312,8 +312,8 @@ def check_patch(
     patch: Agent.run 的返回; fan_in 时为暂存结果中的片段.
     writer: 产出片段的 Agent, 决定可写哪些字段, 如 AgentId.A2.
     procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id. run_id 为 None 时为人工
-    程序 owner 整理结果的片段 (需求 R93): 不能带派发片段的字段 (执行记录 procedure_runs 与 DISPATCH_FIELDS), 不查终态
-    与 check_own_run (没有本次执行), ID 与外键照查.
+    程序 owner 整理结果的片段 (需求 R93): 不能带派发片段的字段 (执行记录 procedure_runs 与 DISPATCH_FIELDS), 不查终态,
+    ID 与外键照查; check_own_run 由调用方按派发的那次执行查 (nodes.check_collected).
     state: 执行时的编排状态, 只读, 用来查外键与已有版本.
     outputs: 本程序模板声明的产出字段 (template.outputs); 片段只能含这些与 procedure_runs.
     先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键, 本次执行的终态
