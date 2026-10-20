@@ -42,6 +42,7 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "accounts": {"category", "category_basis"},
             "journal_entries": {"created_at", "created_by", "approved_by", "approved_at", "description", "source_doc"},
             "sales_invoices": {"customer_abn", "contract_id", "journal_entry_id"},
+            "supplier_bills": {"journal_entry_id"},
             "delivery_notes": {"shipped_date", "signed_date", "signed_by"},
             "bank_transactions": {"description", "reference"},
             "employees": {"employment_type"},
@@ -129,6 +130,12 @@ FINANCIAL = {
         "sales_invoices",
         "id:s invoice_no:s customer:s customer_abn:s contract_id:s invoice_date:d posting_date:d "
         "amount_cents:b journal_entry_id:s",
+        ("id",),
+    ),
+    # 应付账单的期末未付明细 (需求 R178, 迁移 0014): 随 Xero 快照写入 (同步, 演示数据导入, 数据集载入); Numbat 为空
+    "supplier_bills": table(
+        "supplier_bills",
+        "id:s bill_no:s supplier:s bill_date:d due_date:d amount_cents:b outstanding_cents:b journal_entry_id:s",
         ("id",),
     ),
     "delivery_notes": table(

@@ -10,9 +10,11 @@ import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import type { Messages } from '@/locales/en'
 
-const ROW_SOURCES = [
+// 能点开行明细的行指针来源 (同后端 SourceType); tests/table-kinds.test.ts 核对与接口一致
+export const ROW_SOURCES = [
   'journal_entry',
   'sales_invoice',
+  'supplier_bill',
   'delivery_note',
   'bank_transaction',
   'bank_account',

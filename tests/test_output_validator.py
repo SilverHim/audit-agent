@@ -571,6 +571,7 @@ async def test_xero_agreement_page_outside_and_statements_not_evidence() -> None
     [
         ("journal_entry", "CR-SI-2026-0547-1", (EvidenceType.voucher, Reliability.internal_original)),
         ("sales_invoice", "SI-2026-0612", (EvidenceType.invoice, Reliability.internal_original)),
+        ("supplier_bill", "PB-1", (EvidenceType.invoice, Reliability.internal_original)),  # 应付账单 (需求 R178)
         ("delivery_note", "DN-2026-0612", (EvidenceType.delivery, Reliability.internal_original)),
         ("bank_transaction", "BT-01-20260630-03", (EvidenceType.bank, Reliability.external_copy)),
         ("bank_account", "BA-01", (EvidenceType.bank, Reliability.external_copy)),
@@ -582,6 +583,7 @@ async def test_every_row_type_maps_per_rule_engine_table(
 ) -> None:
     validator, financial = make_validator()
     financial.records[("trial_balance", "1010")] = {"account_code": "1010", "balance_cents": 125840000}
+    financial.records[("supplier_bill", "PB-1")] = {"id": "PB-1", "outstanding_cents": 100}
     pointer = row(source_type, source_id).model_copy(update={"reliability": Reliability.internal_copy})
     draft = with_step(
         cutoff_draft(proposed_action=ProposedAction.accept, misstatement_draft=None), 0, evidence=[pointer]

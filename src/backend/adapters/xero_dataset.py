@@ -1,4 +1,4 @@
-"""Xero 快照映射成系统财务表: 科目, 试算表, 总账分录, 销售发票, 银行账户, 银行流水; 另给客户画像.
+"""Xero 快照映射成系统财务表: 科目, 试算表, 总账分录, 销售发票, 应付账单, 银行账户, 银行流水; 另给客户画像.
 
 科目: 每个科目映射到标准分类 (records.AccountCategory), 依次按 Xero 科目类型, 报告代码 (ReportingCode),
 科目名称关键词 (services.account_mapping), 都认不出的为 None.
@@ -18,6 +18,7 @@ Exclusive 与 NoTax 时即 LineAmount.
 API 不提供录入人与审批人: created_by 记 "xero", approved_by 为空; created_at 取 UpdatedDateUTC (接口没有创建时间).
 费用报销, 期初转换余额, 分位调整不在免费接口之内, 由这些来源产生的分录缺失, 由补齐分录按科目补上差额.
 银行流水: 取快照的 bank_statements.json (付费的 Bank Statements Plus, 或其模拟); 没有则为空. 发运单: Xero 没有, 为空.
+应付账单 (需求 R178): 截至期末仍有未付余额的 ACCPAY 账单, 由账单, 付款与各类分配算出, 见 map_supplier_bills.
 """
 
 import json
@@ -38,6 +39,7 @@ from backend.contracts.records import (
     CategoryBasis,
     JournalEntry,
     SalesInvoice,
+    SupplierBill,
     TrialBalanceRow,
 )
 from backend.services.account_mapping import classify_by_name
@@ -106,6 +108,10 @@ REPORTING_CODES: dict[str, AccountCategory] = {
     "EXP.INC": "income_tax",
 }
 MS_DATE = re.compile(r"/Date\((-?\d+)([+-]\d{4})?\)/")  # Xero 的 /Date(毫秒+时区)/
+# Xero 冲回分录的说明 (Journals 的 Reference) 里点名被冲回的原分录号, 格式固定 (如 "Reversed: SMART Agency -
+# Reversal of ID 547"); 冲回分录可能换了来源类型, 不带原单据的 SourceID, 号码也可能比原分录小. Xero 数据集声明的
+# reversal_reference_pattern (规则 SQL 认作废对用) 与它相同 (测试核对)
+REVERSAL_REFERENCE = r"Reversal of ID (\d+)"
 
 
 @dataclass(frozen=True)
@@ -532,18 +538,34 @@ def abn(value: Any) -> str | None:
     return digits if len(digits) == 11 else None
 
 
+def reversed_entries(entries: Iterable[Entry]) -> set[str]:
+    """已被冲回的分录号: 某笔分录的说明按 REVERSAL_REFERENCE 点名了它 (XJ-{n}). 冲回分录本身不在其中."""
+    pattern = re.compile(REVERSAL_REFERENCE)
+    return {f"XJ-{m.group(1)}" for e in entries if (m := pattern.search(e.description or ""))}
+
+
+def document_lines(entries: list[Entry], account: str | None, sign: int) -> dict[str, str]:
+    """各单据 (Entry.source_id) 最后过账且未被冲回的分录中记该科目的行 ID ({分录号}-{k}, k 只数非零行, 同
+    journal_rows): sign 为 1 取借方 (销售发票记应收), -1 取贷方 (应付账单记应付); 一笔分录有几行时取第一行.
+    单据改过会冲回再过账, 所以取最后一笔; 过账顺序按分录号 (Journals 的 JournalNumber), 不按日期 (重新过账可能改了
+    业务日期). 销售发票与应付账单共用 (需求 R178)."""
+    cancelled = reversed_entries(entries)
+    found: dict[str, str] = {}
+    for entry in sorted(entries, key=lambda e: (e.sequence, e.posting_date, e.entry_no)):
+        if not entry.source_id or entry.entry_no in cancelled:
+            continue
+        for n, line in enumerate((x for x in entry.lines if x.amount), 1):
+            if line.account_code == account and line.amount * sign > 0:
+                found[entry.source_id] = f"{entry.entry_no}-{n}"
+                break
+    return found
+
+
 def map_sales_invoices(snapshot: Snapshot, entries: list[Entry]) -> list[SalesInvoice]:
-    """已生效的销售发票; journal_entry_id 指向对应单据最后过账的分录里记应收的那一行 (发票改过会冲回再过账)."""
+    """已生效的销售发票; journal_entry_id 指向对应单据最后过账且未被冲回的分录里记应收的那一行 (document_lines)."""
     debtors = system_codes(snapshot.load("accounts")).get("DEBTORS")
     contacts = {c["ContactID"]: c for c in snapshot.load("contacts")}
-    receivable_line = {}
-    # 同一单据取最后过账的分录 (分录号即过账顺序; 重新过账可能改了业务日期, 不能按日期排)
-    for entry in sorted(entries, key=lambda e: (e.sequence, e.posting_date, e.entry_no)):
-        if entry.source_id:
-            for n, line in enumerate((x for x in entry.lines if x.amount), 1):
-                if line.account_code == debtors and line.amount > 0:
-                    receivable_line[entry.source_id] = f"{entry.entry_no}-{n}"
-                    break
+    receivable_line = document_lines(entries, debtors, 1)
     rows = []
     for doc in snapshot.load("invoices"):
         if doc["Type"] != "ACCREC" or doc["Status"] not in LIVE_DOCUMENTS:
@@ -565,6 +587,57 @@ def map_sales_invoices(snapshot: Snapshot, entries: list[Entry]) -> list[SalesIn
             )
         )
     return sorted(rows, key=lambda r: (r.invoice_date, r.id))
+
+
+def allocations(snapshot: Snapshot, resource: str) -> Iterator[tuple[str, date, int]]:
+    """一类单据 (贷项通知单, 预付款, 多付款) 中已生效的那些分配到发票或账单的金额: (发票 ID, 分配日, 金额分)."""
+    for doc in snapshot.load(resource):
+        if doc.get("Status") not in LIVE_DOCUMENTS:
+            continue
+        for item in doc.get("Allocations") or []:
+            invoice = (item.get("Invoice") or {}).get("InvoiceID")
+            if invoice:
+                yield invoice, xero_date(item), cents(item.get("Amount"))
+
+
+def map_supplier_bills(snapshot: Snapshot, entries: list[Entry], period_end: date) -> list[SupplierBill]:
+    """期末 (period_end) 仍有未付余额的应付账单 (需求 R178): ACCPAY, 已生效 (AUTHORISED, PAID), 账单日不晚于期末.
+    期末未付 = 含税总额 - 期末日 (含) 及以前的付款 (payments, 只计 AUTHORISED, 作废的 DELETED 不计) - 期末日 (含)
+    及以前的分配 (已生效的贷项通知单, 预付款与多付款的 Allocations); 付款日不设下限. 未付为 0 的不出.
+    金额按账单币种, 不换算 (同销售发票). 供应商取账单上的 Contact.Name, 不读联系人 (contacts). journal_entry_id
+    指向最后过账且未被冲回的分录里贷记应付的那一行 (document_lines). 按账单日与 ID 排序."""
+    creditors = system_codes(snapshot.load("accounts")).get("CREDITORS")
+    settled: dict[str, int] = {}
+    for pay in snapshot.load("payments"):
+        invoice = (pay.get("Invoice") or {}).get("InvoiceID")
+        if invoice and pay.get("Status") == "AUTHORISED" and xero_date(pay) <= period_end:
+            settled[invoice] = settled.get(invoice, 0) + cents(pay.get("Amount"))
+    for resource in ("credit_notes", "prepayments", "overpayments"):
+        for invoice, day, amount in allocations(snapshot, resource):
+            if day <= period_end:
+                settled[invoice] = settled.get(invoice, 0) + amount
+    payable_line = document_lines(entries, creditors, -1)
+    rows = []
+    for doc in snapshot.load("invoices"):
+        if doc["Type"] != "ACCPAY" or doc["Status"] not in LIVE_DOCUMENTS or xero_date(doc) > period_end:
+            continue
+        total = cents(doc["Total"])
+        outstanding = total - settled.get(doc["InvoiceID"], 0)
+        if outstanding == 0:
+            continue
+        rows.append(
+            SupplierBill(
+                id=f"PB-{doc['InvoiceID']}",
+                bill_no=doc.get("InvoiceNumber") or short(doc["InvoiceID"]),
+                supplier=doc["Contact"].get("Name", ""),
+                bill_date=xero_date(doc),
+                due_date=xero_date(doc, "DueDate"),
+                amount_cents=total,
+                outstanding_cents=outstanding,
+                journal_entry_id=payable_line.get(doc["InvoiceID"]),
+            )
+        )
+    return sorted(rows, key=lambda r: (r.bill_date, r.id))
 
 
 def map_bank_transactions(snapshot: Snapshot) -> list[BankTransaction]:
@@ -626,7 +699,7 @@ def snapshot_period(snapshot: Snapshot) -> Period:
 
 
 def build_tables(snapshot: Snapshot) -> dict[str, list[Any]]:
-    """快照 → 七张财务表的行. 总账分录有付费接口数据时按它, 否则单据反推加补齐分录."""
+    """快照 → 八张财务表的行 (含应付账单, 需求 R178). 总账分录有付费接口数据时按它, 否则单据反推加补齐分录."""
     period = snapshot_period(snapshot)
     accounts = snapshot.load("accounts")
     current = trial_balance_cents(snapshot.trial_balance(period.end))
@@ -646,6 +719,7 @@ def build_tables(snapshot: Snapshot) -> dict[str, list[Any]]:
         ],
         "journal_entries": list(journal_rows(entries)),
         "sales_invoices": map_sales_invoices(snapshot, entries),
+        "supplier_bills": map_supplier_bills(snapshot, entries, period.end),
         "delivery_notes": [],
         "bank_accounts": map_bank_accounts(accounts),
         "bank_transactions": map_bank_transactions(snapshot),

@@ -9,7 +9,7 @@ import openpyxl
 import pytest
 
 from backend.contracts.data import ApprovalLogRow, TableKind
-from backend.contracts.records import Account, JournalEntry
+from backend.contracts.records import Account, JournalEntry, SupplierBill
 from backend.persistence.stores import FINANCIAL_ROWS
 from backend.services import data_import as d
 from backend.services import table_plan as tp
@@ -200,6 +200,54 @@ def test_generated_ids_and_approval_log_only_mapped_fields() -> None:
         {"entry_no": "J2", "approved_by": None},
     ]
     assert all(isinstance(r, ApprovalLogRow) for r in rows)
+
+
+@pytest.mark.parametrize("file_name", ["aged_payables.csv", "export.csv"])
+def test_supplier_bills_export_is_recognised(file_name: str) -> None:
+    """需求 R178: 应付账单导出 (Xero Aged Payables 一类的表头) 按文件名或列名认作 supplier_bills, 列按别名对应,
+    没有编号列时 id 取账单号; 金额按元写的换成分."""
+    sheet = sheet_of(
+        "Bill Number,Supplier,Bill Date,Due Date,Total,Amount Due\n"
+        '945-ORC,Central Copiers,17/08/2026,15/09/2026,"1,063.56","1,063.56"\n'
+        "3395,PowerDirect,30/09/2026,16/10/2026,331.10,331.10\n",
+        file_name,
+    )
+    preview = d.preview("IMP-1", file_name, [file_name], sheet)
+    assert preview.suggested_kind is TableKind.supplier_bills
+    assert preview.suggested_mapping == {
+        "id": None,
+        "bill_no": "Bill Number",
+        "supplier": "Supplier",
+        "bill_date": "Bill Date",
+        "due_date": "Due Date",
+        "amount_cents": "Total",
+        "outstanding_cents": "Amount Due",
+        "journal_entry_id": None,
+    }
+    rows, failures = tp.convert(TableKind.supplier_bills, sheet, preview.suggested_mapping, "dmy")
+    assert failures == []
+    assert rows == [
+        SupplierBill(
+            id="945-ORC",
+            bill_no="945-ORC",
+            supplier="Central Copiers",
+            bill_date=date(2026, 8, 17),
+            due_date=date(2026, 9, 15),
+            amount_cents=106356,
+            outstanding_cents=106356,
+            journal_entry_id=None,
+        ),
+        SupplierBill(
+            id="3395",
+            bill_no="3395",
+            supplier="PowerDirect",
+            bill_date=date(2026, 9, 30),
+            due_date=date(2026, 10, 16),
+            amount_cents=33110,
+            outstanding_cents=33110,
+            journal_entry_id=None,
+        ),
+    ]
 
 
 def test_suggestions_for_unclear_files() -> None:

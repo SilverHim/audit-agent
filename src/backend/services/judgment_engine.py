@@ -73,6 +73,7 @@ Level = Literal["syntax", "structure", "reference", "semantic"]
 ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
     "journal_entry": (EvidenceType.voucher, Reliability.internal_original),
     "sales_invoice": (EvidenceType.invoice, Reliability.internal_original),
+    "supplier_bill": (EvidenceType.invoice, Reliability.internal_original),  # 应付账单 (需求 R178)
     "delivery_note": (EvidenceType.delivery, Reliability.internal_original),
     "bank_transaction": (EvidenceType.bank, Reliability.external_copy),
     "bank_account": (EvidenceType.bank, Reliability.external_copy),

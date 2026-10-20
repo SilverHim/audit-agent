@@ -7,11 +7,11 @@
   (invalid_grant) 或换得超过 60 天时连接为 expired, 同步被拒, 须重新连接. 命令行的令牌文件 (var/xero/token.json)
   与这里互不读写.
 - 同步: 按项目审计期间与上期期末 (起始日前一天) 取数, 原始响应只在内存中 (Q3), 经 build_tables 转成标准表, 以
-  write_tables (来源 xero) 写成一个新数据版本, 写完体检. 写六张表 (Q7: 科目, 试算表, 总账分录, 销售发票, 银行账户,
-  银行流水; 不写发运单与审批日志); 付费接口只在 XERO_PAID_ENDPOINTS=live 时申请并取 (Q5). 没取到银行对账单 (off,
-  mock, 或 live 下对账单接口 401, 403) 时银行账户与银行流水这一对都不写, 已导入的保留 (只写账户, 旧流水的
-  bank_account_id 可能对不上 Xero 生成的账户 ID; 也不拿空表盖掉已导入的流水). 同步与导入共用项目锁, 同步期间再同步
-  或导入报 ENGAGEMENT_BUSY.
+  write_tables (来源 xero) 写成一个新数据版本, 写完体检. 写七张表 (Q7: 科目, 试算表, 总账分录, 销售发票, 应付账单
+  (R178), 银行账户, 银行流水; 不写发运单与审批日志); 付费接口只在 XERO_PAID_ENDPOINTS=live 时申请并取 (Q5). 没取到
+  银行对账单 (off, mock, 或 live 下对账单接口 401, 403) 时银行账户与银行流水这一对都不写, 已导入的保留 (只写账户,
+  旧流水的 bank_account_id 可能对不上 Xero 生成的账户 ID; 也不拿空表盖掉已导入的流水). 同步与导入共用项目锁, 同步
+  期间再同步或导入报 ENGAGEMENT_BUSY.
 - 断开: 调 Xero 撤销接口, 删除本项目的连接与令牌; 撤销失败也删 (Q6), 响应与留痕记 revoked: false. 已同步的数据与
   版本不动. 锁定的项目也能断开.
 - 组织信息与客户画像的核对 (需求 R291): 同步成功时从取到的组织信息记下名称, 法定名称与 ABN (随 xero_synced 留痕,
@@ -534,8 +534,8 @@ class XeroLink:
     # ── 同步 ──
 
     def labels(self) -> list[TableKind]:
-        """同步计划写的表 (202 的 tables, 期间概览中为 converting): 取付费接口 (live) 时六张 (Q7); 不取时没有银行
-        对账单, 银行账户与银行流水都不写. live 下对账单接口 401, 403 时实际也不写这两张 (见 run_sync)."""
+        """同步计划写的表 (202 的 tables, 期间概览中为 converting): 取付费接口 (live) 时七张 (Q7, 含应付账单); 不取
+        时没有银行对账单, 银行账户与银行流水都不写. live 下对账单接口 401, 403 时实际也不写这两张 (见 run_sync)."""
         return [k for k in XERO_TABLES if self.paid or k not in BANK_TABLES]
 
     def skip_reason(self) -> XeroSkipReason:

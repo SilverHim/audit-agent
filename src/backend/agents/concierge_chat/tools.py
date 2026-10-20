@@ -132,7 +132,14 @@ class ProcedureArgs(NoArgs):
 
 
 EvidenceSource = Literal[
-    "journal_entry", "sales_invoice", "delivery_note", "bank_transaction", "bank_account", "trial_balance", "document"
+    "journal_entry",
+    "sales_invoice",
+    "supplier_bill",
+    "delivery_note",
+    "bank_transaction",
+    "bank_account",
+    "trial_balance",
+    "document",
 ]
 
 

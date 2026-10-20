@@ -2063,7 +2063,7 @@ export type EvidencePointer = {
     /**
      * Source Type
      */
-    source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail' | 'client_profile';
+    source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail' | 'client_profile';
     /**
      * Source Id
      */
@@ -4306,10 +4306,10 @@ export type TableField = {
 /**
  * TableKind
  *
- * 账表种类: 七张财务表, 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与
- * 审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入.
+ * 账表种类: 八张财务表 (含应付账单, 需求 R178), 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账
+ * 分录的录入人, 审批人与审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入.
  */
-export type TableKind = 'accounts' | 'trial_balance' | 'journal_entries' | 'sales_invoices' | 'bank_accounts' | 'bank_transactions' | 'delivery_notes' | 'approval_log' | 'employees';
+export type TableKind = 'accounts' | 'trial_balance' | 'journal_entries' | 'sales_invoices' | 'supplier_bills' | 'bank_accounts' | 'bank_transactions' | 'delivery_notes' | 'approval_log' | 'employees';
 
 /**
  * TablePage
@@ -6132,7 +6132,7 @@ export type EvidenceGetRecordData = {
         /**
          * Source Type
          */
-        source_type: 'journal_entry' | 'sales_invoice' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance';
+        source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance';
         /**
          * Source Id
          */

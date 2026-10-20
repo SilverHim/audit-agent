@@ -24,6 +24,7 @@ class SqlRuleEngine:
             "journal_entry": "voucher",
             "trial_balance": "voucher",
             "sales_invoice": "invoice",
+            "supplier_bill": "invoice",  # 应付账单 (需求 R178)
             "delivery_note": "delivery",
             "bank_transaction": "bank",
             "bank_account": "bank",

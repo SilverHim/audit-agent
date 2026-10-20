@@ -95,16 +95,19 @@ def test_supplement_samples() -> None:
 
 
 async def test_financial_store_holds_the_imported_tables(store: FakeFinancialStore) -> None:
-    """七张表 (行数同 R72 验收 2) 按真实读取方法取得到, 文件与合同按阶段预置."""
+    """八张表 (行数同 R72 验收 2; 应付账单 6 行, 需求 R178) 按真实读取方法取得到, 文件与合同按阶段预置."""
     assert {name: len(rows) for name, rows in x.xero_tables().items()} == {
         "accounts": 62,
         "trial_balance": 33,
         "journal_entries": 1017,
         "sales_invoices": 42,
+        "supplier_bills": 6,
         "delivery_notes": 24,
         "bank_accounts": 2,
         "bank_transactions": 146,
     }
+    bill = await store.record(EID, "supplier_bill", "PB-76bcb361-f93b-4513-b312-5a4af306d276")
+    assert (bill or {}).get("outstanding_cents") == 200000
     invoice = await store.record(EID, "sales_invoice", "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611")
     note = await store.record(EID, "delivery_note", "SR-ORC1026")
     assert (invoice or {}).get("contract_id") == "CON-X01"

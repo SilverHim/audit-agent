@@ -3,6 +3,7 @@
 import asyncio
 import csv
 import os
+import shutil
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -26,13 +27,14 @@ from backend.contracts.data import (
 )
 from backend.contracts.errors import EngagementLocked
 from backend.contracts.models import DocumentType, Reliability
-from backend.contracts.records import Account, JournalEntry
+from backend.contracts.records import Account, JournalEntry, SupplierBill
 from backend.orchestration.runner import GraphRunner
 from backend.persistence import models as m
 from backend.persistence.data_store import PostgresDataStore
 from backend.persistence.db import transaction
 from backend.persistence.stores import (
     FINANCIAL_ROWS,
+    OPTIONAL_CSV,
     CsvDatasetLoader,
     FileEvidenceStore,
     PostgresEngagementStore,
@@ -42,6 +44,7 @@ from backend.persistence.stores import (
 from backend.services.account_mapping import with_category
 from backend.services.data_service import DataService
 from tests.external import supplements_dir
+from tests.test_supplier_bills import Q1_BILLS
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,12 +282,36 @@ async def table_rows(engine: AsyncEngine, eid: str, name: str) -> list[dict[str,
         return [{k: v for k, v in r.items() if k != "engagement_id"} for r in rows]
 
 
+async def test_csv_dataset_may_omit_only_the_supplier_bills(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """CSV 数据集可以没有 supplier_bills.csv (Numbat 即是), 有就照样载入; 其余七张缺一张仍报错, 也不写入 (需求 R178)."""
+    engine, (e, _), _, _ = storage
+    copy = tmp_path / "datasets" / "demo"
+    copy.mkdir(parents=True)
+    for path in DEMO.glob("*.csv"):
+        shutil.copy(path, copy)
+    loader = CsvDatasetLoader(tmp_path / "datasets", engine, FileEvidenceStore(tmp_path / "evidence", engine))
+    (copy / "bank_accounts.csv").rename(copy / "bank_accounts.bak")
+    with pytest.raises(FileNotFoundError, match=r"bank_accounts\.csv"):
+        await loader.load(e.id, "demo")
+    assert await table_rows(engine, e.id, "accounts") == []
+    (copy / "bank_accounts.bak").rename(copy / "bank_accounts.csv")
+    with (copy / "supplier_bills.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(SupplierBill.model_fields))
+        writer.writeheader()
+        writer.writerows({k: "" if v is None else v for k, v in b.model_dump(mode="json").items()} for b in Q1_BILLS)
+    await loader.load(e.id, "demo")
+    assert [SupplierBill.model_validate(r) for r in await table_rows(engine, e.id, "supplier_bills")] == sorted(
+        Q1_BILLS, key=lambda b: b.id
+    )
+
+
 async def test_importing_demo_csvs_matches_dataset_loader(storage, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """验收: data/demo 的 7 个 CSV 依次经 POST /data/imports 与 commit 的流程导入 (按系统建议的表种类, 对应与日期写法),
     结果与 CsvDatasetLoader 载入的一致; 每次导入数据版本 +1, 原文件登记为证据文件."""
     engine, (imported, loaded), loader, _ = storage
     service = import_service(os.environ["TEST_DATABASE_URL"], tmp_path)
-    names = list(FINANCIAL_ROWS)
+    names = [name for name in FINANCIAL_ROWS if name not in OPTIONAL_CSV]  # Numbat 没有应付账单明细 (需求 R178)
+    assert len(names) == 7
     for number, name in enumerate(names, start=1):
         preview = await service.start_import(
             imported.id, f"{name}.csv", (DEMO / f"{name}.csv").read_bytes(), actor="U-1"
@@ -301,7 +328,7 @@ async def test_importing_demo_csvs_matches_dataset_loader(storage, tmp_path: Pat
         assert (await service.deps.data.readiness(imported.id)).data_version == number
     await loader.load(loaded.id, "demo")
 
-    for name in names:
+    for name in FINANCIAL_ROWS:
         assert await table_rows(engine, imported.id, name) == await table_rows(engine, loaded.id, name), name
     docs = await PostgresFinancialDataStore(engine).documents(imported.id)
     assert sorted((d.file_name, d.media_type, d.status, d.page_count) for d in docs) == sorted(
@@ -1426,12 +1453,31 @@ async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-un
         await engine.dispose()
 
 
-# ── 需求 R96: 工资册 ──
+# ── 需求 R96, R178: 新建的项目表 (工资册, 应付账单) ──
+
+NEW_TABLES = [
+    pytest.param(
+        "0013_employees",
+        "employees",
+        "INSERT INTO employees (engagement_id, employee_id, name, start_date, employment_type, pay_period_days, "
+        "gross_per_period_cents) VALUES (:e, 'E001', 'Oliver Gray', '2026-07-20', 'full_time', 14, 240000)",
+        id="employees",
+    ),
+    pytest.param(
+        "0014_supplier_bills",
+        "supplier_bills",
+        "INSERT INTO supplier_bills (engagement_id, id, bill_no, supplier, bill_date, due_date, amount_cents, "
+        "outstanding_cents) VALUES (:e, 'PB-1', '3395', 'PowerDirect', '2026-09-30', '2026-10-16', 33110, 33110)",
+        id="supplier_bills",
+    ),
+]
 
 
-async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
-    """需求 R96: 以属主角色在一个事务里走 0013 降级再升级 (两次), 最后回滚. 降级后没有 employees 表; 升级后开了并强制
-    行级安全, 有项目隔离策略, 应用角色可增删改查; 一个项目写的行另一项目看不到. 需另设 TEST_DATABASE_OWNER_URL."""
+@pytest.mark.parametrize(("name", "table", "insert_row"), NEW_TABLES)
+async def test_migration_of_a_new_table_round_trip(storage, name: str, table: str, insert_row: str) -> None:  # type: ignore[no-untyped-def]
+    """需求 R96 (0013 工资册), R178 (0014 应付账单): 以属主角色在一个事务里走该迁移降级再升级 (两次), 最后回滚.
+    降级后没有这张表; 升级后开了并强制行级安全, 有项目隔离策略, 应用角色可增删改查 (先撤掉 0001 的默认授权, 权限须来自
+    迁移的 GRANT); 一个项目写的行另一项目看不到. 需另设 TEST_DATABASE_OWNER_URL."""
     from alembic.operations import Operations
     from alembic.runtime.migration import MigrationContext
     from sqlalchemy import text
@@ -1440,7 +1486,7 @@ async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-un
     if not owner_url:
         pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
     _, (first, second), _, _ = storage
-    module = migration("0013_employees")
+    module = migration(name)
 
     def run(step: str) -> Any:
         def call(sync_conn: Any) -> None:
@@ -1457,38 +1503,42 @@ async def test_migration_0013_round_trip(storage) -> None:  # type: ignore[no-un
 
                 async def security() -> list[tuple[bool, bool]]:
                     found = await conn.execute(
-                        text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'employees'")
+                        text("SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = :t"),
+                        {"t": table},
                     )
                     return [(bool(a), bool(b)) for a, b in found]
 
                 async def count(eid: str) -> int:
                     await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
-                    return int((await conn.execute(text("SELECT count(*) FROM employees"))).scalar_one())
+                    return int((await conn.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one())
 
                 assert await security() == [(True, True)]  # 0001 按当前模型建库, 新库已有
+                # 0001 给属主新建的表设了默认授权; 先在本事务里撤掉, 应用角色的权限只能来自迁移自己的 GRANT
+                await conn.execute(
+                    text(
+                        "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                        "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM audit_app"
+                    )
+                )
                 await conn.run_sync(run("downgrade"))
                 assert await security() == []
                 await conn.run_sync(run("upgrade"))
                 await conn.run_sync(run("upgrade"))  # 可重复执行
                 assert await security() == [(True, True)]
-                policies = await conn.execute(text("SELECT policyname FROM pg_policies WHERE tablename = 'employees'"))
+                policies = await conn.execute(
+                    text("SELECT policyname FROM pg_policies WHERE tablename = :t"), {"t": table}
+                )
                 assert [row[0] for row in policies] == ["engagement_isolation"]
                 grants = await conn.execute(
                     text(
                         "SELECT privilege_type FROM information_schema.role_table_grants "
-                        "WHERE table_name = 'employees' AND grantee = 'audit_app'"
-                    )
+                        "WHERE table_name = :t AND grantee = 'audit_app'"
+                    ),
+                    {"t": table},
                 )
                 assert {row[0] for row in grants} == {"SELECT", "INSERT", "UPDATE", "DELETE"}
                 await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
-                await conn.execute(
-                    text(
-                        "INSERT INTO employees (engagement_id, employee_id, name, start_date, employment_type, "
-                        "pay_period_days, gross_per_period_cents) VALUES (:e, 'E001', 'Oliver Gray', '2026-07-20', "
-                        "'full_time', 14, 240000)"
-                    ),
-                    {"e": first.id},
-                )
+                await conn.execute(text(insert_row), {"e": first.id})
                 assert (await count(first.id), await count(second.id)) == (1, 0)
             finally:
                 await outer.rollback()

@@ -27,7 +27,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import ConfirmationRequest
-from backend.contracts.records import Account, JournalEntry
+from backend.contracts.records import Account, JournalEntry, SupplierBill
 from backend.persistence import models as m
 from backend.persistence.db import transaction
 from backend.persistence.stores import (
@@ -48,6 +48,7 @@ from backend.services.procedure_library import ProcedureLibrary
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
 from tests.test_fakes import demo_rows, trail_pages_hold
+from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[1]
@@ -1144,17 +1145,21 @@ async def test_xero_q1_seed_load_is_snapshot_only(tmp_path):
         "trial_balance": 33,
         "journal_entries": 1017,
         "sales_invoices": 42,
+        "supplier_bills": 6,  # 期末仍未付的应付账单 (需求 R178)
         "delivery_notes": 0,
         "bank_accounts": 2,
         "bank_transactions": 146,
         "employees": 0,  # 工资册不随数据集载入 (需求 R96)
     }
+    bills = await financial.query(e.id, SELECT_BILLS, {})
+    assert [SupplierBill.model_validate(b) for b in bills] == Q1_BILLS  # 数据集载入同样写入 (需求 R178 验收 6)
+    assert await financial.record(e.id, "supplier_bill", Q1_BILLS[1].id) == Q1_BILLS[1].model_dump()
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(e.id, "current")}
     assert {c: v for c, v in current.items() if v != await financial.gl_balance(e.id, c, date(2026, 9, 30))} == {}
     assert await financial.documents(e.id) == [] and await financial.contracts(e.id) == []
     linked = await financial.query(e.id, "SELECT count(*) AS n FROM sales_invoices WHERE contract_id IS NOT NULL", {})
     assert linked[0]["n"] == 0
-    snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的七张表, 不并补造表
+    snapshot = loader.merged("xero/20261017-q1", None)  # 快照映射出的八张表, 不并补造表
     banks = await financial.query(e.id, "SELECT id, bank_name FROM bank_accounts ORDER BY id", {})
     assert [(b["id"], b["bank_name"]) for b in banks] == sorted((b.id, b.bank_name) for b in snapshot["bank_accounts"])
     # 补造与快照不匹配时不载入: 各表, 载入标记与证据文件都没有写入

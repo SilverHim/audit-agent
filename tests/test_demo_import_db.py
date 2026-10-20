@@ -14,14 +14,16 @@ from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.agents.ingest import DETAILS
-from backend.contracts.data import XERO_TABLES
+from backend.contracts.data import XERO_TABLES, TableKind, TableStats
 from backend.contracts.errors import DataRejected
 from backend.contracts.models import DocumentType
+from backend.contracts.records import SupplierBill
 from backend.orchestration.runner import GraphRunner
 from backend.persistence import models as m
 from backend.persistence.stores import PostgresEngagementStore, RoutingDatasetLoader, now
 from backend.services.data_service import DataService
 from tests.external import snapshot_dir, supplements_dir
+from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
 from tests.xero_fakes import XERO_DATASET, xero_uploads
 from tests.xero_flow import demo_source, import_stage
 
@@ -29,9 +31,9 @@ pytestmark = [pytest.mark.slow, pytest.mark.external]
 
 
 async def test_demo_import_on_real_stores(tmp_path: Path) -> None:
-    """两阶段后: 行数 (含服务完成记录 24 与工资册 3), 每个科目 gl_balance 等于本期试算表, 版本行为快照六张 (v2) 与
-    补造四张 (v3-v6), 21 份文件的登记同清单, 抽取版本表中文件登记每份两版与合同各一版, 服务完成记录与带合同关联的
-    发票可按行取; 补造目录被改过时什么都不写."""
+    """两阶段后: 行数 (含服务完成记录 24 与工资册 3), 每个科目 gl_balance 等于本期试算表, 版本行为快照七张 (v2, 含
+    应付账单 6 行, 与 Q1_BILLS 逐字段相同, 未付合计等于试算表应付余额) 与补造四张 (v3-v6), 21 份文件的登记同清单,
+    抽取版本表中文件登记每份两版与合同各一版, 服务完成记录与带合同关联的发票可按行取; 补造目录被改过时什么都不写."""
     snapshot_dir("20261017-q1")  # 先核对数据: 跟踪了却找不到时失败, 不因没配库而跳过
     supplements_dir("20261017-q1")
     url = os.getenv("TEST_DATABASE_URL")
@@ -78,6 +80,7 @@ async def test_demo_import_on_real_stores(tmp_path: Path) -> None:
             "trial_balance": 33,
             "journal_entries": 1017,
             "sales_invoices": 42,
+            "supplier_bills": 6,
             "delivery_notes": 24,
             "bank_accounts": 2,
             "bank_transactions": 146,
@@ -85,6 +88,17 @@ async def test_demo_import_on_real_stores(tmp_path: Path) -> None:
         }
         current = {r.account_code: r.balance_cents for r in await financial.trial_balance(eid, "current")}
         assert {c: v for c, v in current.items() if v != await financial.gl_balance(eid, c, date(2026, 9, 30))} == {}
+        bills = await financial.query(eid, SELECT_BILLS, {})
+        assert [SupplierBill.model_validate(b) for b in bills] == Q1_BILLS  # 经 write_tables 写入 (需求 R178 验收 6)
+        assert sum(b.outstanding_cents for b in Q1_BILLS) == -current["800"]
+        # 数据管理页: 概览的日期范围取账单日, 表格按 (账单日, ID) 排, 可按供应商查
+        assert (await deps.data.stats(eid))[TableKind.supplier_bills] == TableStats(
+            records=6, period_from=date(2026, 8, 17), period_to=date(2026, 9, 30)
+        )
+        total, rows = await deps.data.table_rows(eid, TableKind.supplier_bills, None, 0, 50)
+        assert (total, [r["id"] for r in rows]) == (6, [b.id for b in Q1_BILLS])
+        total, rows = await deps.data.table_rows(eid, TableKind.supplier_bills, "mco", 0, 50)
+        assert [r["bill_no"] for r in rows] == ["4AD1EC01", "M000442", "M000456"]
         versions = await deps.data.versions(eid)
         assert sorted((v.data_version, v.kind.value, v.source, v.file_name) for v in versions) == sorted(
             [(2, k.value, "xero", None) for k in XERO_TABLES]

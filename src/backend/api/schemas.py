@@ -406,7 +406,7 @@ class XeroSyncStarted(Model):
     """开始同步 (POST /data/xero/sync, 202): 后台计划写的账表. 实际写了哪些表看完成后概览的 scope 与留痕
     xero_synced (live 下银行对账单接口拒绝时银行账户与银行流水都不写)."""
 
-    # 计划写的表: 取付费接口 (live) 时六张, 不取时四张 (没有银行这一对); 期间概览里为 converting
+    # 计划写的表: 取付费接口 (live) 时七张, 不取时五张 (没有银行这一对); 期间概览里为 converting
     tables: list[TableKind]
 
 

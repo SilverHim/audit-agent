@@ -56,6 +56,7 @@ from backend.services.data_quality import PLACEHOLDER_PREPARERS, request_order
 DATE_COLUMNS: dict[TableKind, str] = {
     TableKind.journal_entries: "posting_date",
     TableKind.sales_invoices: "invoice_date",
+    TableKind.supplier_bills: "bill_date",
     TableKind.bank_transactions: "txn_date",
     TableKind.delivery_notes: "shipped_date",
 }
@@ -68,6 +69,7 @@ TABLE_ORDER: dict[TableKind, tuple[str, ...]] = {
     TableKind.trial_balance: ("account_code", "period"),
     TableKind.journal_entries: ("posting_date", "entry_no", "id"),
     TableKind.sales_invoices: ("invoice_date", "invoice_no", "id"),
+    TableKind.supplier_bills: ("bill_date", "id"),
     TableKind.bank_accounts: ("id",),
     TableKind.bank_transactions: ("txn_date", "id"),
     TableKind.delivery_notes: ("delivery_no", "id"),

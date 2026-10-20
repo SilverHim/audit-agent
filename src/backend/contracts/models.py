@@ -390,6 +390,7 @@ class AgentId(StrEnum):
 PointerSource = Literal[
     "journal_entry",
     "sales_invoice",
+    "supplier_bill",  # 应付账单 (需求 R178)
     "delivery_note",
     "bank_transaction",
     "bank_account",
@@ -401,7 +402,13 @@ PointerSource = Literal[
 ]
 # 财务数据的行类型, PointerSource 的子集
 SourceType = Literal[
-    "journal_entry", "sales_invoice", "delivery_note", "bank_transaction", "bank_account", "trial_balance"
+    "journal_entry",
+    "sales_invoice",
+    "supplier_bill",  # 应付账单 (需求 R178)
+    "delivery_note",
+    "bank_transaction",
+    "bank_account",
+    "trial_balance",
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]

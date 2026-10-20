@@ -71,6 +71,7 @@ EXPECTED_ROWS = {  # 该快照作为数据集载入时各表的行数 (验收 2.
     TableKind.trial_balance: 38,
     TableKind.journal_entries: 1017,
     TableKind.sales_invoices: 42,
+    TableKind.supplier_bills: 11,  # 11-30 仍未付的应付账单 (需求 R178)
     TableKind.bank_accounts: 2,
     TableKind.bank_transactions: 146,
 }
@@ -454,10 +455,10 @@ async def test_callback_unexpected_error_still_redirects(
 
 
 @pytest.mark.external
-async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
-    """验收 2.3: 期间 2026-07-01 至 11-30 的项目同步后, 六张表的行与该快照作为数据集载入时一致 (行数 62, 38, 1017,
-    42, 2, 146); 数据版本加 1, 体检只跑一次, Xero 不提供录入人与审批人, 提出补交审批日志. 发运单不写. 同步期间这些表为
-    converting, processing 计数; 再同步或导入报 ENGAGEMENT_BUSY."""
+async def test_sync_writes_seven_tables_like_dataset_load(tmp_path: Path) -> None:
+    """验收 2.3: 期间 2026-07-01 至 11-30 的项目同步后, 七张表的行与该快照作为数据集载入时一致 (行数 62, 38, 1017,
+    42, 11, 2, 146; 应付账单为 R178 加的); 数据版本加 1, 体检只跑一次, Xero 不提供录入人与审批人, 提出补交审批日志.
+    发运单不写. 同步期间这些表为 converting, processing 计数; 再同步或导入报 ENGAGEMENT_BUSY."""
     c = case(tmp_path)
     expected = build_tables(xero_snapshot())
     before = c.data.data_version
@@ -469,7 +470,7 @@ async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
         await asyncio.sleep(0)
         summary = (await http.get(f"/api/v1/engagements/{c.eid}/data/summary")).json()
         converting = [t["kind"] for t in summary["tables"] if t["status"] == "converting"]
-        assert (converting, summary["processing"]) == ([k.value for k in XERO_TABLES], 6)
+        assert (converting, summary["processing"]) == ([k.value for k in XERO_TABLES], 7)
         assert summary["sources"]["xero"]["syncing"] is True  # 首次同步: 表的来源还不是 xero, 照样认得出
         again = await http.post(API.format(eid=c.eid) + "/sync")
         upload = await http.post(
@@ -522,8 +523,8 @@ def bank_state(c: Case) -> Any:
 async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: Path, mode: str) -> None:
     """付费接口 off 与 mock 时 (Q5, mock 在网页同步里同 off) 授权不申请付费 scope, 同步不取 Journals 与对账单:
     总账按单据反推并补齐; 没有对账单, 银行账户与银行流水这一对都不写 (只写账户, 已导入流水的账户 ID 可能对不上;
-    也不拿空表盖掉已导入的流水), 已有的两张银行表保留. 202 的计划写的表为四张; 留痕 xero_synced 写明这两张没写的
-    原因 paid_off; 同步期间概览也只把这四张显示为 converting."""
+    也不拿空表盖掉已导入的流水), 已有的两张银行表保留. 202 的计划写的表为五张; 留痕 xero_synced 写明这两张没写的
+    原因 paid_off; 同步期间概览也只把这五张显示为 converting."""
     c = case(tmp_path, XERO_PAID_ENDPOINTS=mode)
     before = bank_state(c)
     async with client(c) as http:
@@ -537,7 +538,7 @@ async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: 
         await asyncio.sleep(0)
         summary = (await http.get(f"/api/v1/engagements/{c.eid}/data/summary")).json()
         converting = [t["kind"] for t in summary["tables"] if t["status"] == "converting"]
-        assert (converting, summary["processing"]) == ([k.value for k in NOT_BANK], 4)
+        assert (converting, summary["processing"]) == ([k.value for k in NOT_BANK], 5)
         assert summary["sources"]["xero"]["syncing"] is True
         c.fake.gate.set()
         await c.drain()
@@ -557,7 +558,7 @@ async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: 
 
 @pytest.mark.external
 async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None:
-    """live 下对账单接口返回 403: 202 的计划写的表照列六张, 实际只写四张, 银行账户与银行流水都不写, 已有的两张银行
+    """live 下对账单接口返回 403: 202 的计划写的表照列七张, 实际只写五张, 银行账户与银行流水都不写, 已有的两张银行
     表保留; 概览 scope 照实列出写了的表; 总账仍按 Journals 取 (1017 行); 留痕 xero_synced 写明原因
     statements_forbidden."""
     c = case(tmp_path)
@@ -584,7 +585,7 @@ async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None
 @pytest.mark.external
 async def test_live_journals_forbidden_rebuilds_ledger_from_documents(tmp_path: Path) -> None:
     """live 下只有 Journals 返回 403 (应用开通了对账单而没有 Journals): 同步照常, 总账按单据反推并补齐 (行数不是
-    Journals 的 1017), 银行这一对按对账单照写, 六张都写; 不记同步失败, xero_synced 的 skipped 为空."""
+    Journals 的 1017), 银行这一对按对账单照写, 七张都写; 不记同步失败, xero_synced 的 skipped 为空."""
     c = case(tmp_path)
     async with client(c) as http:
         await connect(http, c)

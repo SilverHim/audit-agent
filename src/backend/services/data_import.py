@@ -42,6 +42,7 @@ from backend.contracts.records import (
     Employee,
     JournalEntry,
     SalesInvoice,
+    SupplierBill,
     TrialBalanceRow,
 )
 
@@ -72,7 +73,8 @@ def _fields(spec: str) -> list[TableField]:
 
 
 # 各账表可对应的字段, 名称与 persistence/models.py 中 FINANCIAL 的列一致 (科目分类由系统归类, 不导入).
-# 编号列 (journal_entries, sales_invoices, delivery_notes, bank_transactions 的 id) 可不对应, 按 GENERATED_IDS 生成
+# 编号列 (journal_entries, sales_invoices, supplier_bills, delivery_notes, bank_transactions 的 id) 可不对应, 按
+# GENERATED_IDS 生成
 SCHEMAS: dict[TableKind, TableSchema] = {
     kind: TableSchema(kind=kind, fields=_fields(spec))
     for kind, spec in {
@@ -85,6 +87,10 @@ SCHEMAS: dict[TableKind, TableSchema] = {
         TableKind.sales_invoices: (
             "id:t invoice_no:t! customer:t! customer_abn:t contract_id:t invoice_date:d! posting_date:d! "
             "amount_cents:a! journal_entry_id:t"
+        ),
+        TableKind.supplier_bills: (
+            "id:t bill_no:t! supplier:t! bill_date:d! due_date:d! amount_cents:a! outstanding_cents:a! "
+            "journal_entry_id:t"
         ),
         TableKind.bank_accounts: "id:t! bank_name:t! bsb:t! account_no:t! gl_account_code:t!",
         TableKind.bank_transactions: (
@@ -107,6 +113,7 @@ ROW_MODELS: dict[TableKind, type[BaseModel]] = {
     TableKind.trial_balance: TrialBalanceRow,
     TableKind.journal_entries: JournalEntry,
     TableKind.sales_invoices: SalesInvoice,
+    TableKind.supplier_bills: SupplierBill,
     TableKind.bank_accounts: BankAccount,
     TableKind.bank_transactions: BankTransaction,
     TableKind.delivery_notes: DeliveryNote,
@@ -119,6 +126,7 @@ KEYS: dict[TableKind, tuple[str, ...]] = {
     TableKind.trial_balance: ("period", "account_code"),
     TableKind.journal_entries: ("id",),
     TableKind.sales_invoices: ("id",),
+    TableKind.supplier_bills: ("id",),
     TableKind.bank_accounts: ("id",),
     TableKind.bank_transactions: ("id",),
     TableKind.delivery_notes: ("id",),
@@ -153,6 +161,11 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "invoice_date": ("issuedate", "date"),
     "amount_cents": ("amount", "total", "invoicetotal", "totalamount", "gross", "value"),
     "journal_entry_id": ("journalid", "journalline"),
+    "bill_no": ("billnumber", "billno", "invoicenumber", "invoiceno", "number", "reference"),
+    "supplier": ("suppliername", "vendor", "vendorname", "creditor", "contact", "contactname", "payee"),
+    "bill_date": ("billdate", "invoicedate", "issuedate", "date"),
+    "due_date": ("duedate", "paymentdue", "dueby"),
+    "outstanding_cents": ("outstanding", "amountdue", "balancedue", "due", "owing", "unpaid"),
     "delivery_no": ("deliverynumber", "dispatchno", "shipmentno", "dnno"),
     "invoice_id": ("invoice", "invoiceno", "invoicenumber"),
     "shipped_date": ("shipdate", "dispatchdate", "dispatched"),
@@ -178,6 +191,7 @@ NAME_HINTS: dict[TableKind, tuple[str, ...]] = {
     TableKind.trial_balance: ("trialbalance", "tb"),
     TableKind.journal_entries: ("journal", "generalledger", "gl"),
     TableKind.sales_invoices: ("invoice", "sales"),
+    TableKind.supplier_bills: ("supplierbills", "bills", "payable", "accountspayable", "agedpayables"),
     TableKind.bank_accounts: ("bankaccounts",),
     TableKind.bank_transactions: ("banktransactions", "bankstatement", "transactions", "statement"),
     TableKind.delivery_notes: ("delivery", "dispatch", "shipment"),
@@ -888,6 +902,7 @@ def _bank_line_id(values: Mapping[str, Any], counters: dict[str, int]) -> str:
 GENERATED_IDS: dict[TableKind, Callable[[Mapping[str, Any], dict[str, int]], str]] = {
     TableKind.journal_entries: _line_id,
     TableKind.sales_invoices: lambda values, _: str(values.get("invoice_no") or ""),
+    TableKind.supplier_bills: lambda values, _: str(values.get("bill_no") or ""),
     TableKind.delivery_notes: lambda values, _: str(values.get("delivery_no") or ""),
     TableKind.bank_transactions: _bank_line_id,
 }

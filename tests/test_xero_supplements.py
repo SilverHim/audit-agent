@@ -294,6 +294,7 @@ def test_tables_merge_supplements() -> None:
         "trial_balance": 33,
         "journal_entries": 1017,
         "sales_invoices": 42,
+        "supplier_bills": 6,
         "delivery_notes": 24,
         "bank_accounts": 2,
         "bank_transactions": 146,

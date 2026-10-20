@@ -23,13 +23,14 @@ from backend.contracts.records import AccountCategory, CategoryBasis
 
 
 class TableKind(StrEnum):
-    """账表种类: 七张财务表, 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账分录的录入人, 审批人与
-    审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入."""
+    """账表种类: 八张财务表 (含应付账单, 需求 R178), 审批日志与工资册. 审批日志不单独成表, 导入后按凭证号补进总账
+    分录的录入人, 审批人与审批时间. 工资册 (需求 R96) 不随数据集载入, 由审计师导入或演示数据导入写入."""
 
     accounts = "accounts"  # 科目表
     trial_balance = "trial_balance"  # 试算表 (本期与上期)
     journal_entries = "journal_entries"  # 总账分录
     sales_invoices = "sales_invoices"  # 销售发票
+    supplier_bills = "supplier_bills"  # 应付账单的期末未付明细 (需求 R178)
     bank_accounts = "bank_accounts"  # 银行账户
     bank_transactions = "bank_transactions"  # 银行流水
     delivery_notes = "delivery_notes"  # 发运单
@@ -38,7 +39,7 @@ class TableKind(StrEnum):
 
 
 class DataInput(StrEnum):
-    """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 九种账表 (取值同 TableKind),
+    """程序读的一类数据 (程序 YAML 的 reads, 数据变动记录 data_changes 的 input): 十种账表 (取值同 TableKind),
     加审计师修改过的合同与回函抽取结果, 审计师补登记的文件登记, 以及上传的 ASIC 摘录的抽取结果. 改科目分类改的是
     科目表, 记 accounts."""
 
@@ -46,6 +47,7 @@ class DataInput(StrEnum):
     trial_balance = "trial_balance"  # 试算表
     journal_entries = "journal_entries"  # 总账分录
     sales_invoices = "sales_invoices"  # 销售发票
+    supplier_bills = "supplier_bills"  # 应付账单 (需求 R178)
     bank_accounts = "bank_accounts"  # 银行账户
     bank_transactions = "bank_transactions"  # 银行流水
     delivery_notes = "delivery_notes"  # 发运单
@@ -306,13 +308,14 @@ class XeroTenant(Model):
     name: str  # 组织名称
 
 
-# 同步写的六张表 (需求 R279 Q7): Xero 没有发运单与审批日志, 不写, 已导入的保留; 没取到银行对账单时银行账户与
-# 银行流水这一对都不写 (services.xero_link)
+# 同步写的七张表 (需求 R279 Q7; 应付账单为 R178 加的, 同步, 演示数据导入与数据集载入同一张表单): Xero 没有发运单
+# 与审批日志, 不写, 已导入的保留; 没取到银行对账单时银行账户与银行流水这一对都不写 (services.xero_link)
 XERO_TABLES: tuple[TableKind, ...] = (
     TableKind.accounts,
     TableKind.trial_balance,
     TableKind.journal_entries,
     TableKind.sales_invoices,
+    TableKind.supplier_bills,
     TableKind.bank_accounts,
     TableKind.bank_transactions,
 )
