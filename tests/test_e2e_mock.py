@@ -14,7 +14,6 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import insert
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -91,7 +90,7 @@ from tests.test_p2_agents_demo import replies
 
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
-shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的演示 (demo_run) 的用例与它同一个事件循环
+shared_loop = pytest.mark.asyncio(loop_scope="session")  # 读会话共用的演示 (conftest 的 demo_run) 的用例与它同一个循环
 
 
 def real_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
@@ -137,15 +136,16 @@ async def start_demo(
 async def finish_demo(
     s: Started,
     reviews: Sequence[ReviewRecord] = REVIEWS,
-    before: Callable[[Started, ReviewRecord], Awaitable[None]] | None = None,
+    before_review: Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]] | None = None,
 ) -> None:
     """等后台停下, 按第 7 节提交 6 条复核 (reviews, 每次提交前停在 await_events), FIN-01 approve qualified,
-    RPT-01 先退回再批准, 到归档. before 在提交每条复核之前调 (如先呈递它的任务, 需求 R155)."""
+    RPT-01 先退回再批准, 到归档. before_review 在提交每条复核之前以 (runner, eid, 复核记录) 调 (如先呈递它的任务,
+    需求 R155; 同 xero_fakes.finish_xero17)."""
     await wait_idle(s.runner, EID)
     for decision in reviews:
         assert await s.next_nodes() == ("await_events",), (decision.task_id, s.runner.run_error(EID))
-        if before is not None:
-            await before(s, decision)
+        if before_review is not None:
+            await before_review(s.runner, EID, decision)
         await s.submit.submit(EID, decision)
         await wait_idle(s.runner, EID)
     assert await s.next_nodes() == ("gate_fin",), s.runner.run_error(EID)
@@ -163,18 +163,17 @@ async def run_demo() -> Started:
 
 @dataclass
 class Demo:
-    """模块共用的一次演示: 流程入口 s; 每次执行程序的 (程序, Agent 类名, 是否脚本 Agent); 每次四级校验的 (判断所属程序,
-    失败级别, 错误数, 无支撑步骤数)."""
+    """会话共用的一次演示 (conftest 的 demo_run): 流程入口 s; 每次执行程序的 (程序, Agent 类名, 是否脚本 Agent); 每次
+    四级校验的 (判断所属程序, 失败级别, 错误数, 无支撑步骤数)."""
 
     s: Started
     agents: list[tuple[str, str, bool]]
     validations: list[tuple[str, int | None, int, int]]
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def demo_run() -> Demo:
-    """整个模块只跑一次演示, 同时记下每次执行的 Agent 与每次四级校验的结果. 用例只读存储, 留痕与图状态; 签字后再提交
-    的决定在写入前就被拒绝, 也不改状态."""
+async def record_demo() -> Demo:
+    """跑一次演示 (run_demo), 同时记下每次执行的 Agent 与每次四级校验的结果. 会话里只跑一次, 见 conftest 的 demo_run:
+    用例只读存储, 留痕与图状态; 签字后再提交的决定在写入前就被拒绝, 也不改状态."""
     agents: list[tuple[str, str, bool]] = []
     validations: list[tuple[str, int | None, int, int]] = []
     run_agent, validate = GraphNodes.run_agent, OutputValidator.validate

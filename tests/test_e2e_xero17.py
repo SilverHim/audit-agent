@@ -61,7 +61,7 @@ from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
-from tests.test_e2e_mock import assert_pointers_resolve, real_storage, run_demo
+from tests.test_e2e_mock import Demo, assert_pointers_resolve, real_storage, trail_of
 from tests.xero_fakes import (
     XERO17_CONTRACTS,
     XERO17_FEATURES,
@@ -368,9 +368,9 @@ async def assert_report(x: Xero17) -> None:
 
 
 @shared_loop
-async def test_trail(xero17: Xero17) -> None:
-    numbat = await run_demo()  # Numbat 回归 (R55) 的同一套状态迁移, 离线约半秒
-    assert_trail(await entries_of(xero17), numbat.runner.deps.trail.entries)  # type: ignore[attr-defined]
+async def test_trail(xero17: Xero17, demo_run: Demo) -> None:
+    """状态迁移与 Numbat 回归 R55 的同一套比 (会话共用的那一次, conftest 的 demo_run)."""
+    assert_trail(await entries_of(xero17), trail_of(demo_run.s).entries)
 
 
 def transitions(entries: list[TrailEntry]) -> Counter[tuple[str, str, str]]:
@@ -539,7 +539,7 @@ XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.
 
 
 @pytest.mark.slow
-async def test_real_storage_variant(tmp_path: Path) -> None:
+async def test_real_storage_variant(tmp_path: Path, demo_run: Demo) -> None:
     """需求 R120: 同 R119 的步骤与决定, 换用真实 Postgres 存储与检查点, 规则 SQL, 组装根的数据集载入 (快照与补造目录),
     函证与登记 mock 读补造目录, 真实 DataService 做演示数据导入与确认数据已齐; 大模型仍为 xero17_client()
     (SwitchableLLMClient 换内部客户端). 项目为 xero/20261017-q1, 期间 07-01 至 09-30, 画像 CLIENT-XERO-3C1332BB-Q1
@@ -570,8 +570,7 @@ async def test_real_storage_variant(tmp_path: Path) -> None:
         await assert_results(x)
         await assert_materiality(x)
         await assert_report(x)
-        numbat = await run_demo()
-        assert_trail(await entries_of(x), numbat.runner.deps.trail.entries)  # type: ignore[attr-defined]
+        assert_trail(await entries_of(x), trail_of(demo_run.s).entries)
         pointers = await assert_pointers_and_reads(x, everything=True)
         assert [(pid, name) for pid, name, script in x.agents if script] == []
         assert {pid: name for pid, name, _ in x.agents} == AGENTS

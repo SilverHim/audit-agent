@@ -1886,13 +1886,11 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
         Procedure,
         ProcedureStatus,
         ReviewRecord,
-        ReviewTask,
         TrailKind,
     )
     from backend.orchestration.runner import GraphRunner
-    from backend.services.presentation import record_presentation
     from tests.fakes import wait_idle
-    from tests.test_collab_flow import COLLAB, CONSULTATION, PRESENTATION, REV02_TASK, SHOWN, TASK
+    from tests.test_collab_flow import COLLAB, CONSULTATION, PRESENTATION, REV02_TASK, SHOWN, TASK, presenting
     from tests.test_decisions import acc01_decision, pln_decision
     from tests.test_dispute import VARIANTS, resolve
     from tests.test_e2e_mock import assert_results, real_storage
@@ -1903,6 +1901,7 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
         cast(SwitchableLLMClient, deps.review_llm).reload(MockLLMClient(VARIANTS / "dispute"), "mock")
         arbitration = resolve(DisputeResolution.a6_upheld, consulted=True, consultation_record=CONSULTATION)
         reviews = [arbitration if r.task_id == TASK else r for r in REVIEWS]
+        present = presenting(SHOWN)
         await s.runner.start(eid)
         await wait_idle(s.runner, eid)
         for decision in [acc01_decision(GateVerdict.approve, id="D-ACC"), pln_decision(GateVerdict.approve)]:
@@ -1914,10 +1913,8 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
         for decision in [*reviews, FIN_APPROVE, RPT_REJECT, RPT_APPROVE]:
             actor = "reviewed_by" if isinstance(decision, ReviewRecord) else "decided_by"
             decision = decision.model_copy(update={actor: owner})
-            if isinstance(decision, ReviewRecord) and decision.task_id in SHOWN:
-                task = await deps.output_store.get(eid, ReviewTask, decision.task_id)
-                shown_at = decision.decided_at - timedelta(seconds=SHOWN[decision.task_id])
-                await record_presentation(deps.trail, eid, task, owner, shown_at)
+            if isinstance(decision, ReviewRecord):
+                await present(s.runner, eid, decision)
             await s.submit.submit(eid, decision)
             await wait_idle(s.runner, eid)
             assert s.runner.run_error(eid) is None, (decision.id, s.runner.run_error(eid))

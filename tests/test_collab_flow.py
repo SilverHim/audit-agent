@@ -6,8 +6,9 @@
   咨询, 之后同主流程.
 - Xero 只开现有 17 条 (设计稿第 7.3 节末段): A7 都跳过 (REV-03, REV-02 为 L2, BA-091 未命中触发规则), 呈递 BA-091 的
   任务后认定错报, 记录带停留时长; 结果同 R119.
-R55 的流程 (collab 关闭) 在模块里跑一次作参照, 比较状态迁移. 全部接入后的 GEN-09 口径 (验收 4) 由合并终验 X-10
-断言, 本条的算法与依据见确认材料. Numbat 回归 (R55, R56, R57, R59) 照旧显式关闭 collab (tests/fakes.NUMBAT_FEATURES).
+状态迁移的参照为会话共用的 R55 一次 (collab 关闭, conftest 的 demo_run, 只取留痕). 全部接入后的 GEN-09 口径 (验收 4)
+由合并终验 X-10 断言, 本条的算法与依据见确认材料. Numbat 回归 (R55, R56, R57, R59) 照旧显式关闭 collab
+(tests/fakes.NUMBAT_FEATURES). 呈递一律经 presenting (三个流程与连库变体共用).
 """
 
 from collections import Counter
@@ -15,7 +16,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 
 import pytest
-import pytest_asyncio
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.review import ReviewAgent, internal_copy_only
@@ -42,16 +42,16 @@ from backend.services.features import BASELINE
 from backend.services.presentation import PROCEDURE_ID as PRESENTATION
 from backend.services.presentation import record_presentation
 from backend.services.sampling import sample_point
-from tests.fakes import ENGAGEMENT, NUMBAT_FEATURES
+from tests.fakes import ENGAGEMENT
 from tests.test_decisions import Started
 from tests.test_dispute import JID, TASK, VARIANTS, resolve
 from tests.test_e2e_mock import (
+    Demo,
     assert_fixtures_used_once,
     assert_results,
     assert_trail_counts,
     enabled_programs,
     finish_demo,
-    run_demo,
     start_demo,
     trail_of,
 )
@@ -71,30 +71,28 @@ REV02_TASK = "T-J-REV-02-1-SI-2026-0612-v1"
 SHOWN = {TASK: 95, REV02_TASK: 40}  # 任务 → 复核人在决定时间前多少秒呈递它
 CONSULTATION = "Discussed the bank cut-off with the engagement quality reviewer; the receipt was banked on 30 June 2026"
 L2_SKIP = "L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"
-shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的参照 (reference) 的用例与它同一个事件循环
+BA091_TASK = "T-J-CSH-02-1-BA-091-v1"
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def reference() -> list[TrailEntry]:
-    """R55 的流程 (collab 关闭) 跑一次的留痕, 比较状态迁移用 (离线约半秒)."""
-    s = await run_demo()
-    return trail_of(s).entries
+def reference(demo_run: Demo) -> list[TrailEntry]:
+    """状态迁移的参照: 会话共用的 R55 一次 (collab 关闭) 的留痕."""
+    return trail_of(demo_run.s).entries
 
 
-def presenting(shown: Mapping[str, int]) -> Callable[[Started, ReviewRecord], Awaitable[None]]:
-    """finish_demo 的 before: 提交 shown 中任务的决定之前, 由复核人在决定时间前若干秒呈递该任务 (呈递接口写留痕用的
-    同一函数, 时间注入)."""
+def presenting(shown: Mapping[str, int]) -> Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]]:
+    """finish_demo, finish_xero17 的 before_review (连库变体的提交循环也用): 提交 shown 中任务的决定之前, 由复核人在
+    决定时间前若干秒呈递该任务 (呈递接口写留痕用的同一函数, 时间注入)."""
 
-    async def before(s: Started, decision: ReviewRecord) -> None:
-        seconds = shown.get(decision.task_id)
+    async def before_review(runner: GraphRunner, eid: str, record: ReviewRecord) -> None:
+        seconds = shown.get(record.task_id)
         if seconds is None:
             return
-        task = await s.output_store.get(EID, ReviewTask, decision.task_id)
+        task = await runner.deps.output_store.get(eid, ReviewTask, record.task_id)
         assert task is not None
-        shown_at = decision.decided_at - timedelta(seconds=seconds)
-        await record_presentation(s.runner.deps.trail, EID, task, decision.reviewed_by, shown_at)
+        shown_at = record.decided_at - timedelta(seconds=seconds)
+        await record_presentation(runner.deps.trail, eid, task, record.reviewed_by, shown_at)
 
-    return before
+    return before_review
 
 
 def transitions(entries: list[TrailEntry]) -> Counter[tuple[str, str, str]]:
@@ -119,21 +117,19 @@ def presentation_ids(entries: list[TrailEntry]) -> dict[str, str]:
     return {e.payload["task_id"]: e.id or "" for e in entries if e.kind is TrailKind.presentation}
 
 
-@shared_loop
-async def test_main_flow_records_presentations_and_dwell(reference: list[TrailEntry]) -> None:
+async def test_main_flow_records_presentations_and_dwell(demo_run: Demo) -> None:
     """验收 1: 例外, 判断, 任务, 函证, 错报 (1 条 14200000 overstated), 意见与 REPORT-2 同 R55 (assert_results);
     llm_call 15 行 (GEN-09 2 行), decision 11 行, external_call 4 行; 状态迁移同 R55; 新增 presentation 2 行 (GEN-11,
     U-1, 按提交顺序先 REV-02 后 CSH-02); D-CSH02 停留 95 秒, D-REV02-0612 40 秒, 各带那次呈递的留痕 ID, 其余 4 条为空;
     J-CSH-02-1-BA-01 (CSH-02 L3, 建议关闭) 置信度 0.65, critic_trigger main; REV-03, REV-02 的 5 条 (L2) skipped 且
     critic_trigger 为空; GEN-09 两轮读 BA-01-r1, -r2; 每份 fixture 读一次且一次通过. 没有争议中."""
-    assert "collab" not in NUMBAT_FEATURES  # 验收 6: Numbat 回归显式关闭本组开关
     s = await start_demo(features=COLLAB)
-    await finish_demo(s, before=presenting(SHOWN))
+    await finish_demo(s, before_review=presenting(SHOWN))
 
     await assert_results(s)
     entries = trail_of(s).entries
     assert_trail_counts(entries)
-    assert transitions(entries) == transitions(reference)
+    assert transitions(entries) == transitions(reference(demo_run))
     assert presentations(entries) == [(PRESENTATION, "U-1", REV02_TASK), (PRESENTATION, "U-1", TASK)]
     shown = presentation_ids(entries)
     assert await dwell(s) == {
@@ -165,8 +161,7 @@ async def test_main_flow_records_presentations_and_dwell(reference: list[TrailEn
     assert all(p.status is not ProcedureStatus.in_dispute for p in s.output_store.rows if isinstance(p, Procedure))
 
 
-@shared_loop
-async def test_dispute_variant_resolved_for_a6(reference: list[TrailEntry]) -> None:
+async def test_dispute_variant_resolved_for_a6(demo_run: Demo) -> None:
     """验收 2: 复核模型取 llm_variants/dispute, BA-01 判为不一致. CSH-02 经 planned → in_dispute → completed; 呈递
     争议任务 95 秒后裁决 a6_upheld (D-ARB, consulted 真, 带咨询记录): 判断 v2 confirmed, 两条例外由它归因, 不建错报;
     decision 留痕带 dispute_resolution, consulted, 咨询记录与 dwell_seconds 95. 之后同主流程: 结果同 R55 (错报只有
@@ -176,16 +171,14 @@ async def test_dispute_variant_resolved_for_a6(reference: list[TrailEntry]) -> N
     reviews = [arbitration if r.task_id == TASK else r for r in REVIEWS]
     await finish_demo(s, reviews, presenting(SHOWN))
 
-    entries = trail_of(s).entries
+    entries, before = trail_of(s).entries, transitions(reference(demo_run))
     moved = transitions(entries)
     assert [(old, new) for (pid, old, new) in moved.elements() if pid == "CSH-02"] == [
         ("planned", "in_dispute"),
         ("in_dispute", "completed"),
     ]
-    assert moved - transitions(reference) == Counter(
-        {("CSH-02", "planned", "in_dispute"): 1, ("CSH-02", "in_dispute", "completed"): 1}
-    )
-    assert moved.total() == transitions(reference).total()
+    assert moved - before == Counter({("CSH-02", "planned", "in_dispute"): 1, ("CSH-02", "in_dispute", "completed"): 1})
+    assert moved.total() == before.total()
     judgment = await s.output_store.get(EID, Judgment, JID)
     assert judgment is not None
     assert (judgment.version, judgment.review_status, judgment.critic_verdict) == (
@@ -213,23 +206,13 @@ async def test_dispute_variant_resolved_for_a6(reference: list[TrailEntry]) -> N
 
 
 @pytest.mark.external
-@shared_loop
-async def test_xero17_path_skips_a7_and_records_dwell(reference: list[TrailEntry]) -> None:
+async def test_xero17_path_skips_a7_and_records_dwell(demo_run: Demo) -> None:
     """验收 3 (设计稿第 7.3 节末段 "只开现有 17 条时", 本组开关打开): GEN-09 llm_call 0 行; 10 条判断 critic_verdict
     都是 skipped, critic_trigger 为空: REV-03 三条与 REV-02 六条为 L2 跳过, J-CSH-02-1-BA-091 为未命中触发规则
     (CSH-02 L3, 建议 misstatement 不中主规则; 第一轮证据不全是内部复印件; 推理链没有 assumption 与 unsupported 步骤;
     抽样点 0.1453 不小于 GEN-09 的 0.05). 复核任务仍 10 条; 复核人在决定前 60 秒呈递 T-J-CSH-02-1-BA-091-v1 后认定
     错报, 错报 M-D-CSH02 (4853) 的复核记录 dwell_seconds 60. 结果, 重要性, 报告与留痕同 R119 (状态迁移同 R55)."""
-    ba091 = "T-J-CSH-02-1-BA-091-v1"
-
-    async def present_ba091(runner: GraphRunner, eid: str, review: ReviewRecord) -> None:
-        if review.task_id == ba091:
-            task = await runner.deps.output_store.get(eid, ReviewTask, ba091)
-            assert task is not None
-            shown_at = review.decided_at - timedelta(seconds=60)
-            await record_presentation(runner.deps.trail, eid, task, review.reviewed_by, shown_at)
-
-    x = await run_xero17(COLLAB, present_ba091)
+    x = await run_xero17(COLLAB, presenting({BA091_TASK: 60}))
     deps = x.runner.deps
     engagement = await deps.engagement_store.get(x.eid)
     assert engagement is not None and engagement.version_snapshot["features"] == "collab,critic"
@@ -237,7 +220,7 @@ async def test_xero17_path_skips_a7_and_records_dwell(reference: list[TrailEntry
     await assert_materiality(x)
     await assert_report(x)
     entries = await entries_of(x)
-    assert_trail(entries, reference)
+    assert_trail(entries, reference(demo_run))
     assert [e for e in entries if e.kind is TrailKind.llm_call and e.procedure_id == "GEN-09"] == []
 
     judgments = {j.id: j for j in await deps.output_store.latest(x.eid, Judgment)}
@@ -255,7 +238,7 @@ async def test_xero17_path_skips_a7_and_records_dwell(reference: list[TrailEntry
 
     assert len(await deps.output_store.latest(x.eid, ReviewTask)) == 10
     [shown] = [e for e in entries if e.kind is TrailKind.presentation]
-    assert (shown.procedure_id, shown.actor, shown.payload["task_id"]) == (PRESENTATION, x.owner, ba091)
+    assert (shown.procedure_id, shown.actor, shown.payload["task_id"]) == (PRESENTATION, x.owner, BA091_TASK)
     [misstatement] = await deps.output_store.latest(x.eid, Misstatement)
     record = await deps.output_store.get(x.eid, ReviewRecord, misstatement.review_record_id)
     assert record is not None

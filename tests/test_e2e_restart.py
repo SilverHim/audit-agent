@@ -123,7 +123,7 @@ async def test_killed_during_doc06_recovers_without_resending(features: frozense
 
     s = await restart(s)
     collab = "collab" in features
-    await finish_demo(s, before=presenting(SHOWN) if collab else None)
+    await finish_demo(s, before_review=presenting(SHOWN) if collab else None)
 
     await assert_same_as_uninterrupted(s, channel)
     entries = trail_of(s).entries
