@@ -37,6 +37,7 @@ from backend.contracts.models import (
     MaterialityChoice,
     Misstatement,
     MisstatementDraft,
+    MisstatementUpdate,
     Model,
     NeitherAction,
     OpinionType,
@@ -138,6 +139,8 @@ class ReviewRecordIn(Model):
     reason: str | None = None
     override_conclusion: str | None = None
     misstatement_draft: MisstatementDraft | None = None
+    # 人给的错报更新载荷 (需求 R159): 带载荷的程序 (FIN-03, FIN-09) 中推翻, 人工给结果与对例外认定错报时必填
+    misstatement_update: MisstatementUpdate | None = None
     rerun_params: dict[str, Any] | None = None
     manual_result: ManualResult | None = None
     dispute_resolution: DisputeResolution | None = None

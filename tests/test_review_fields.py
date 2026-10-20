@@ -13,7 +13,13 @@ from backend.contracts.models import (
     ReviewRecord,
     TaskKind,
 )
-from backend.orchestration.decisions import REVIEW_FIELDS, ReviewFields, check_review_fields, review_fields
+from backend.orchestration.decisions import (
+    REVIEW_FIELDS,
+    UPDATE_BY_HUMAN,
+    ReviewFields,
+    check_review_fields,
+    review_fields,
+)
 from backend.services.review_queue import ALLOWED
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT
 from tests.test_decisions import Started
@@ -47,7 +53,7 @@ FILLED: dict[str, Any] = {
     "manual_result": {"conclusion": "人工执行的结果"},
     "dispute_resolution": DisputeResolution.neither,
     "neither_action": NeitherAction.human_conclusion,
-    # 需求 R156: 现有决定都不能带 (第 1 轮审核 R156-03)
+    # 需求 R156: 模板没有载荷类别时任何决定都不能带 (第 1 轮审核 R156-03); 有类别时见 test_update_required_where_human
     "misstatement_update": MisstatementUpdate(
         misstatement_id="M-D-1", base_version=1, kind="classification", origin="current_period"
     ),
@@ -159,3 +165,25 @@ async def test_submit_checks_fields_by_task_kind(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delitem(REVIEW_FIELDS, (TaskKind.failed, Decision.rerun))
     monkeypatch.setitem(REVIEW_FIELDS, (TaskKind.normal, Decision.rerun), strict)
     await s.submit.submit(EID, decision)
+
+
+def test_update_required_where_human_replaces_the_ai() -> None:
+    """R159: 模板带错报更新载荷类别时, 只有以人工判断取代 AI 判断的四种 (任务类型, 决定) 在原规则上另加必填
+    misstatement_update; 其余 (confirm, 对判断认定错报, 仲裁等) 规则不变, 带了照旧 FIELD_NOT_ALLOWED. 没有类别时
+    同原表."""
+    replacing = {
+        (TaskKind.normal, Decision.override),
+        (TaskKind.unattributed, Decision.override),
+        (TaskKind.unattributed, Decision.misstatement),
+        (TaskKind.failed, Decision.manual_result),
+    }
+    assert replacing == UPDATE_BY_HUMAN
+    for kind in TaskKind:
+        for decision in Decision:
+            base, rules = review_fields(kind, decision), review_fields(kind, decision, "verification")
+            added = {"misstatement_update"} if (kind, decision) in UPDATE_BY_HUMAN else set()
+            assert (set(rules.required), set(rules.allowed)) == (set(base.required) | added, set(base.allowed) | added)
+    confirm = record("T-1", misstatement_update=FILLED["misstatement_update"])
+    with pytest.raises(DecisionRejected) as e:
+        check_review_fields(confirm, TaskKind.normal, "classification")
+    assert (e.value.code, e.value.message) == ("FIELD_NOT_ALLOWED", "misstatement_update")

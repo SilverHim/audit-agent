@@ -28,6 +28,7 @@ from backend.contracts.models import (
     MisstatementDraft,
     MisstatementStatus,
     MisstatementType,
+    MisstatementUpdate,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
@@ -186,6 +187,12 @@ async def put(store: FakeOutputStore, *objs: Any) -> None:
         (record(decision=Decision.override), "MISSING_FIELD", "override_conclusion"),
         (record(decision=Decision.misstatement, reason=None, misstatement_draft=DRAFT), "MISSING_FIELD", "reason"),
         (record(misstatement_draft=DRAFT), "FIELD_NOT_ALLOWED", "misstatement_draft"),
+        # 需求 R159 验收 5: 模板没有错报更新载荷类别 (REV-03, 同 REV-02) 的任务不收载荷
+        (
+            record(misstatement_update=MisstatementUpdate(misstatement_id="M-1", base_version=1, kind="verification")),
+            "FIELD_NOT_ALLOWED",
+            "misstatement_update",
+        ),
         (
             record(FAILED, Decision.rerun, manual_result=ManualResult(conclusion="x")),
             "FIELD_NOT_ALLOWED",

@@ -2,10 +2,12 @@
 
 Xero 演示上直接调 A8 (不经主图: FIN-03 的节点由 R160 接入): 状态为进入 P2 时的 (xero_state) 加已认定而未分类的两条
 错报与其来源判断 (xero_identified_misstatements); 真实判断引擎, 主模型读 FIN-03 的 Xero fixture 正本 (R157), 假财务
-存储另登记 BA-091 的回函 (CSH-04 存档). 判断带分类载荷, 确认后写错报新版本由 R159 做.
+存储另登记 BA-091 的回函 (CSH-04 存档). 判断带分类载荷; 复核决定确认时写错报新版本见 test_misstatement_updates
+(R159), 自动确认 (L3) 时片段里带它见本文件末尾.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -17,14 +19,16 @@ from backend.agents.workpaper import WorkpaperAgent, misstatement_objective
 from backend.contracts.models import (
     AgentId,
     Assertion,
+    AuditException,
     AuditObjective,
     AutonomyLevel,
+    CriticVerdict,
     Decision,
+    Judgment,
     Misstatement,
     MisstatementStatus,
     MisstatementType,
     MisstatementUpdate,
-    OpinionType,
     Phase,
     RerunRequest,
     ReviewStatus,
@@ -34,10 +38,8 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TrailKind,
-    UncorrectedSchedule,
 )
 from backend.contracts.state import EngagementState, StatePatch
-from backend.orchestration.gates import fin01_view
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import build_run
 from backend.services.presentation import failure_of
@@ -52,11 +54,11 @@ SUBJECTS = ["M-D-XJ499", "M-D-CSH02-091"]  # 按认定的先后
 FIXTURE_KEYS = ["XJ-499", "BA-091"]  # 来源判断的对象
 
 
-def fin03_deps(trail: FakeTrail, llm: Any = None) -> AgentDeps:
-    """Xero 假实现, 主模型缺省读 Xero fixture 正本 (复核模型同; FIN-03 为 L2, A7 按跳过规则不调), 判断引擎外包一层
-    记下上下文; 财务存储另登记 BA-091 的回函."""
+def fin03_deps(trail: FakeTrail, llm: Any = None, **kwargs: Any) -> AgentDeps:
+    """Xero 假实现, 主模型缺省读 Xero fixture 正本 (复核模型同; FIN-03 为 L2, A7 按跳过规则不调); 财务存储另登记
+    BA-091 的回函. kwargs 原样转交 make_xero_deps (如 features, library)."""
     client = llm if llm is not None else MockLLMClient(XERO.fixtures)
-    deps = make_xero_deps(trail=trail, llm=client, review_llm=client)
+    deps = make_xero_deps(trail=trail, llm=client, review_llm=client, **kwargs)
     deps.financial_store.document_refs.append(xero_document(REPLY))  # type: ignore[attr-defined]
     return deps
 
@@ -308,8 +310,20 @@ async def test_payload_type_from_model_objective_from_rule() -> None:
     ]
 
 
-def classified(m: Misstatement) -> Misstatement:
-    return m.model_copy(update={"version": 2, "classification_judgment_id": f"J-FIN-03-1-{m.id}"})
+# Xero fixture 正本给两条错报的分类载荷 (验收 2): 类型与舞弊迹象取模型, 来源与审计目标取规则
+FACTUAL: dict[str, Any] = {
+    "type": MisstatementType.factual,
+    "fraud_indicative": False,
+    "fraud_reason": None,
+    "origin": "current_period",
+    "objective_id": None,
+}
+
+
+def classified(m: Misstatement, judgment_id: str | None = None, **changes: Any) -> Misstatement:
+    """已分类的下一版: 作分类的判断缺省为 FIN-03 第 1 次对它的判断, changes 为分类载荷写的字段 (R159 的预期值)."""
+    judgment_id = judgment_id or f"J-FIN-03-1-{m.id}"
+    return m.model_copy(update={"version": m.version + 1, "classification_judgment_id": judgment_id, **changes})
 
 
 @pytest.mark.external
@@ -412,42 +426,21 @@ def fixture_raw(name: str) -> str:
     return (XERO.fixtures / FIN03 / f"{name}.json").read_text(encoding="utf-8")
 
 
-@pytest.mark.external
-async def test_fraud_indicative_sample_is_flagged_and_visible_at_fin01() -> None:
-    """验收 6 (合成舞弊样例, 按协调者裁定拆分): 模型给 XJ-499 有舞弊迹象与理由时, 判断的载荷 fraud_indicative 为真并带
-    理由; 按载荷出的错报新版本 (确认时写出它由 R159 做, 这里按载荷构造) 在 FIN-01 闸门材料中带着标记, 材料照常生成,
-    不阻断流程 (规格书 12.2 "为真则进环 3 阻断" 本版不做)."""
+def fraud_llm() -> ScriptedLLM:
+    """合成舞弊样例: 模型给 XJ-499 有舞弊迹象与理由, BA-091 照 fixture 正本."""
     fraud = json.loads(fixture_raw("XJ-499"))
     fraud["nature"] = {"type": "factual", "fraud_indicative": True, "fraud_reason": FRAUD_REASON}
-    llm = ScriptedLLM({"XJ-499": [json.dumps(fraud)], "BA-091": [fixture_raw("BA-091")]})
-    trail = FakeTrail()
-    deps = fin03_deps(trail, llm)
-    state = fin03_state()
-    patch, _ = await run_fin03(deps, state)
+    return ScriptedLLM({"XJ-499": [json.dumps(fraud)], "BA-091": [fixture_raw("BA-091")]})
 
-    judgment = patch["judgments"][0]
-    update = judgment.misstatement_update
+
+@pytest.mark.external
+async def test_fraud_indicative_sample_is_flagged() -> None:
+    """验收 6 前半句 (合成舞弊样例): 判断的载荷 fraud_indicative 为真并带理由. 确认后错报带标记并在 FIN-01 闸门材料中
+    可见, 不阻断流程 (规格书 12.2 "为真则进环 3 阻断" 本版不做), 见 test_misstatement_updates (R159)."""
+    patch, _ = await run_fin03(fin03_deps(FakeTrail(), fraud_llm()), fin03_state())
+
+    update = patch["judgments"][0].misstatement_update
     assert update is not None and (update.fraud_indicative, update.fraud_reason) == (True, FRAUD_REASON)
-    source = state["misstatements"][0]
-    flagged = Misstatement.model_validate(
-        source.model_dump()
-        | update.model_dump(include={"type", "fraud_indicative", "fraud_reason", "origin", "objective_id"})
-        | {"version": 2, "classification_judgment_id": judgment.id}
-    )
-    schedule = UncorrectedSchedule(
-        id="SCHEDULE",
-        items=[],
-        excluded_trivial_ids=[],
-        total_cents=0,
-        materiality_cents=32431,
-        candidate_opinion=OpinionType.unqualified,
-    )
-    values = state | {"misstatements": [flagged, state["misstatements"][1]], "uncorrected_schedule": schedule}
-    _, material = await fin01_view(deps, xero_engagement().id, values)  # type: ignore[arg-type]
-    assert [(m.id, m.version, m.fraud_indicative, m.fraud_reason) for m in material.misstatements] == [  # type: ignore[union-attr]
-        ("M-D-XJ499", 2, True, FRAUD_REASON),
-        ("M-D-CSH02-091", 1, None, None),
-    ]
 
 
 @pytest.mark.external
@@ -494,3 +487,31 @@ async def test_failed_classification_creates_failed_task_allowing_manual_result(
     failure = failure_of(failed, run, llm_calls(trail))
     assert failure is not None
     assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, attempts, last.id)
+
+
+class Consistent:
+    """A7 的替身: 判断一律写上 consistent (合成 L3 的 FIN-03 要复核, Xero 没有 FIN-03 的复核 fixture)."""
+
+    async def review(self, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException] = ()) -> Judgment:
+        return judgment.model_copy(update={"critic_verdict": CriticVerdict.consistent, "critic_reason": "same"})
+
+
+@pytest.mark.external
+async def test_l3_classification_confirmed_with_misstatement_version() -> None:
+    """R159 验收 8: 合成 L3 的 FIN-03 (A7 一致): 两条判断第 1 版即 confirmed, 不建任务; 片段同时带按载荷写出的错报
+    新版本, 内容同复核确认时 (test_misstatement_updates 的 confirm), 经 A8 的合并校验通过."""
+    deps = fin03_deps(FakeTrail())
+    ctx = fin03_context(deps, fin03_state())
+    ctx = replace(ctx, procedure=ctx.procedure.model_copy(update={"autonomy_level": AutonomyLevel.L3}))
+    agent = WorkpaperAgent(deps)
+    agent.reviewer = Consistent()  # type: ignore[assignment]
+    patch = await agent.run(ctx)
+
+    assert set(patch) == {"procedure_runs", "judgments", "misstatements"}
+    check_patch(
+        patch, writer=AgentId.A8, procedure_id=FIN03, run_id=ctx.run.id, state=ctx.state, outputs=ctx.template.outputs
+    )
+    assert [(j.id, j.version, j.review_status) for j in patch["judgments"]] == [
+        (f"J-FIN-03-1-{m}", 1, ReviewStatus.confirmed) for m in SUBJECTS
+    ]
+    assert patch["misstatements"] == [classified(m, **FACTUAL) for m in ctx.state["misstatements"]]

@@ -24,7 +24,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome
 from backend.contracts.state import StatePatch
-from backend.services.review_queue import attribute_exceptions
+from backend.services.review_queue import attribute_exceptions, misstatement_updates
 
 
 @dataclass(frozen=True)
@@ -163,7 +163,9 @@ def judgments_patch(
     """判断程序的解读: 按 ReviewQueue.classify 逐个对象产出判断, 复核任务与例外新版本.
 
     - normal, dispute: 判断待复核 (dispute 为独立复核不一致, 由审计师仲裁), 以判断 v1 为目标建任务.
-    - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions).
+    - 不建任务: 判断第 1 版即 confirmed, 其解释的例外出新版本 attributed (attribute_exceptions); 判断带错报更新载荷
+      (FIN-03 的分类, 需求 R159) 时按载荷写出所指错报的新版本 (misstatement_updates, 错报取状态中的, 同复核决定确认时),
+      片段另有 misstatements (只在有时带, A6 的判断没有载荷).
     - unattributed: 第一条规则例外出新版本 unattributed, 以新版本为目标建任务 (带对象).
     - failed: 以本次执行 (成功终态) 为目标建带对象的 failed 任务.
     执行记录置成功终态: 个别对象失败不算整次失败; outcomes 为取对象时规则引擎没有执行的规则 (需求 R130), 记进终态.
@@ -196,4 +198,6 @@ def judgments_patch(
             tasks.append(queue.make_task(TaskKind.unattributed, marked, pid, run.id, now, subject_id=subject_id))
         else:
             tasks.append(queue.make_task(TaskKind.failed, run, pid, run.id, now, subject_id=subject_id))
-    return {"judgments": judgments, "exceptions": exceptions, "review_tasks": tasks, "procedure_runs": [run]}
+    patch: StatePatch = {"judgments": judgments, "exceptions": exceptions, "review_tasks": tasks}
+    updated = misstatement_updates(judgments, {m.id: m for m in ctx.state["misstatements"]})
+    return {**patch, **({"misstatements": updated} if updated else {}), "procedure_runs": [run]}

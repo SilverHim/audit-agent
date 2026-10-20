@@ -586,6 +586,8 @@ class MisstatementDraft(Model):
         return value
 
 
+# 错报更新载荷的两类 (需求 R156): 分类 (FIN-03) 或验证 (FIN-09); 模板的 misstatement_update_kind 取同一组值 (需求 R159)
+MisstatementUpdateKind = Literal["classification", "verification"]
 # 错报更新载荷两类各自能带的字段 (需求 R156): 分类 (FIN-03) 定类型, 舞弊迹象, 来源与审计目标; 验证 (FIN-09) 定更正结果
 CLASSIFICATION_FIELDS = ("type", "fraud_indicative", "fraud_reason", "origin", "objective_id")
 VERIFICATION_FIELDS = ("status", "adjustment_entry_nos", "corrected_cents", "residual_cents", "needs_recommunication")
@@ -599,13 +601,14 @@ VERIFICATION_STATUSES = (
 
 
 class MisstatementUpdate(Model):
-    """判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
+    """判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后按它出错报新版本
+    (review_queue.apply_misstatement_update, 需求 R159).
     base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
     时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFICATION_STATUSES."""
 
     misstatement_id: str  # 更新哪条错报
     base_version: int  # 依据的错报版本
-    kind: Literal["classification", "verification"]  # 分类 (FIN-03) 或验证 (FIN-09)
+    kind: MisstatementUpdateKind  # 分类 (FIN-03) 或验证 (FIN-09)
     type: MisstatementType | None = None  # 分类: 错报类型
     fraud_indicative: bool | None = None  # 分类: 是否有舞弊迹象 (ASA 240 第 36 段)
     fraud_reason: str | None = None  # 分类: 舞弊迹象的理由
@@ -644,7 +647,8 @@ class Judgment(Versioned):
     counter_argument: str  # 反方论证: 结论可能错在哪里
     proposed_action: ProposedAction  # 建议动作
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
-    # 对已有错报的更新载荷 (需求 R156): FIN-03 分类与 FIN-09 验证的判断携带, 确认后由 A8 写出错报新版本; 其余为空
+    # 对已有错报的更新载荷 (需求 R156): FIN-03 分类与 FIN-09 验证的判断, 以及取代它们的人工判断携带, 判断置 confirmed
+    # 时按它写出错报新版本 (复核决定的事务内, 或 A8 自动确认的片段中, 需求 R159); 其余为空
     misstatement_update: MisstatementUpdate | None = None
     exception_ids: list[str] = []  # 本判断解释的例外, 判断确认后这些例外置 attributed
     autonomy_level: AutonomyLevel  # 判断时的有效自主度
@@ -1384,7 +1388,9 @@ class ReviewRecord(Versioned):
     reason: str | None = None  # 理由, confirm 以外必填
     override_conclusion: str | None = None  # override 时的新结论
     misstatement_draft: MisstatementDraft | None = None  # misstatement 时的错报草稿
-    misstatement_update: MisstatementUpdate | None = None  # 对已有错报的更新载荷 (需求 R156); 现有决定都不能填
+    # 人给的错报更新载荷 (需求 R159): 模板 misstatement_update_kind 非空时, 以人工判断取代 AI 判断的决定 (override,
+    # manual_result, 对例外认定错报) 必填, 其余决定不能填 (decisions.review_fields)
+    misstatement_update: MisstatementUpdate | None = None
     rerun_params: dict[str, Any] | None = None  # rerun 时要改的参数
     manual_result: ManualResult | None = None  # manual_result 时人给的结果
     dispute_resolution: DisputeResolution | None = None  # dispute_resolution 时的仲裁结果
