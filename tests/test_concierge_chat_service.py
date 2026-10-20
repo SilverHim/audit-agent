@@ -295,8 +295,20 @@ async def rule_ask(text: str, lang: Literal["zh", "en"] = "zh", state: FixedStat
 async def test_rule_model_progress_matches_overview() -> None:
     answer = await rule_ask("现在到哪一步了？")
     assert answer == "项目目前处于执行阶段，2/3 个审计程序已完成，1 项复核任务待处理。"
-    gate = FixedState(view=make_overview(current_gate=GateId.FIN_01))
-    assert "流程停在意见类型决定" in await rule_ask("进度如何", state=gate)
+
+
+@pytest.mark.parametrize(
+    ("gate", "zh", "en"),
+    [
+        (GateId.FIN_01, "流程停在意见类型决定", "waiting for the opinion decision"),
+        (GateId.PLN_15, "流程停在总体审计计划审批", "waiting for the approval of the overall audit plan"),  # R315
+    ],
+)
+async def test_rule_model_names_the_gate(gate: GateId, zh: str, en: str) -> None:
+    """进度回答里的闸门名 (zh, en); 没登记的闸门会退回编号, 用例防新闸门漏登记话术."""
+    state = FixedState(view=make_overview(current_gate=gate))
+    assert zh in await rule_ask("进度如何", state=state)
+    assert en in await rule_ask("What stage are we at?", "en", state=state)
 
 
 async def test_rule_model_materiality_and_open_items() -> None:

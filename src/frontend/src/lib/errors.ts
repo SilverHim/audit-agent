@@ -55,7 +55,8 @@ export function parseFailures(error: unknown): ParseFailure[] | null {
   return detail.errors as ParseFailure[]
 }
 
-function apiDetail(error: unknown): ApiDetail | null {
+// 后端错误体的 detail; 不是后端错误体为 null
+export function apiDetail(error: unknown): ApiDetail | null {
   if (!error || typeof error !== 'object' || !('detail' in error)) return null
   const detail = (error as { detail: unknown }).detail
   if (!detail || typeof detail !== 'object' || Array.isArray(detail) || !('code' in detail)) return null

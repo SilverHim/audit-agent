@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -18,6 +19,7 @@ import type {
   MaterialityChoice,
   MonthlyFigures,
   OpinionType,
+  PlanConfirmation,
   ReportSection,
   RiskItem,
   RiskLevel,
@@ -44,9 +46,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
 import { invalidateEngagement } from '@/lib/engagement'
-import { apiMessage, isApiCode } from '@/lib/errors'
+import { apiMessage, errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud, formatPct } from '@/lib/money'
+import { planDecisionErrorText } from '@/lib/plan'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
@@ -368,13 +371,22 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
     )
   }
   if (material.kind === 'PLN-15') {
-    // 计划的叙述各段; 闸门页的完整呈现 (程序, 时间表, 确认项) 由需求 R212 做
+    // 计划的叙述各段; 程序表, 时间表与修订历史在审计计划页 (需求 R315)
     return (
-      <Panel title={t.gates['PLN-15']}>
+      <Panel
+        title={t.gates['PLN-15']}
+        aside={
+          <Link to="/engagements/$eid/plan" params={{ eid }} className="text-[13px] text-primary hover:underline">
+            {t.planPage.open}
+          </Link>
+        }
+      >
         <div className="flex flex-col gap-3 text-[14px]" lang="en">
           {material.plan.narrative.map((part) => (
             <section key={part.section} className="flex flex-col gap-1">
-              <Code className="w-fit text-[12px]">{part.section}</Code>
+              <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
+                {t.planPage.sections[part.section] ?? part.section}
+              </h3>
               <p className="m-0 whitespace-pre-wrap">{part.text}</p>
             </section>
           ))}
@@ -465,6 +477,12 @@ export function GateDecisionCard({
     view.material.kind === 'FIN-01' ? view.material.schedule.candidate_opinion : 'qualified',
   )
   const [notes, setNotes] = useState<NoteDraft[]>([newNote()])
+  // PLN-15 批准时的三项确认 (需求 R206, R315): 是否需要项目质量复核与依据默认取 AI 建议, 不需要审计师的专家须勾选
+  const [confirmation, setConfirmation] = useState<PlanConfirmation>(() => ({
+    eqr_required: view.material.kind === 'PLN-15' ? view.material.plan.eqr_recommendation.required : false,
+    eqr_basis: view.material.kind === 'PLN-15' ? view.material.plan.eqr_recommendation.basis : '',
+    auditor_expert_not_required: false,
+  }))
   const submit = useMutation({
     ...gatesSubmitGateDecisionMutation(),
     onSuccess: async () => {
@@ -472,17 +490,24 @@ export function GateDecisionCard({
       setReason('')
       await invalidateEngagement(queryClient, eid)
     },
-    onError: (error) => toast.error(apiMessage(error)),
+    onError: (error) =>
+      toast.error(view.material.kind === 'PLN-15' ? planDecisionErrorText(error, t) : errorText(error, t)),
   })
 
   const gate = view.gate
   const uncovered = view.material.kind === 'PLN-01/03' && view.material.uncovered_objective_ids.length > 0
   const busy = disabled || submit.isPending
   const required = verdict != null && (verdict !== 'approve' || gate === 'FIN-01')
+  const planApproval = view.material.kind === 'PLN-15' && verdict === 'approve'
 
   const send = () => {
     if (!verdict) return
-    const body = buildDecision(view, verdict, { reason, choice, levels, levelReasons, disposition, notes }, t)
+    const body = buildDecision(
+      view,
+      verdict,
+      { reason, choice, levels, levelReasons, disposition, notes, confirmation },
+      t,
+    )
     if (typeof body === 'string') {
       toast.error(body)
       return
@@ -510,7 +535,13 @@ export function GateDecisionCard({
           <Button
             type="button"
             size="lg"
-            disabled={busy || !verdict || (required && !reason.trim()) || (verdict === 'approve' && uncovered)}
+            disabled={
+              busy ||
+              !verdict ||
+              (required && !reason.trim()) ||
+              (verdict === 'approve' && uncovered) ||
+              (planApproval && !confirmation.eqr_basis.trim())
+            }
             onClick={send}
           >
             {t.card.record}
@@ -573,6 +604,14 @@ export function GateDecisionCard({
       ) : null}
       {view.material.kind === 'RPT-01' && verdict === 'reject' ? (
         <AnnotationFields notes={notes} onChange={setNotes} />
+      ) : null}
+      {view.material.kind === 'PLN-15' && planApproval ? (
+        <PlanConfirmationFields
+          suggested={view.material.plan.eqr_recommendation.required}
+          value={confirmation}
+          onChange={setConfirmation}
+          disabled={busy}
+        />
       ) : null}
 
       <ReasonField id={`gate-reason-${gate}`} value={reason} onChange={setReason} required={required} />
@@ -713,6 +752,76 @@ function PlanningFields({
   )
 }
 
+// PLN-15 批准时的确认: 是否需要项目质量复核 (默认取 AI 建议) 与依据 (必填), 不需要审计师的专家 (不勾时提示只作记录)
+function PlanConfirmationFields({
+  suggested,
+  value,
+  onChange,
+  disabled,
+}: {
+  suggested: boolean
+  value: PlanConfirmation
+  onChange: (value: PlanConfirmation) => void
+  disabled: boolean
+}) {
+  const { t } = useI18n()
+  const labels = t.planPage.confirm
+  return (
+    <div className="flex flex-col gap-3">
+      <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+        <legend className="pb-1 font-semibold text-[13px]">
+          {labels.eqr} <span className="font-normal text-muted-foreground">{t.planPage.eqrSuggested(suggested)}</span>
+        </legend>
+        <div className="flex flex-wrap gap-2.5">
+          {([true, false] as const).map((required) => (
+            <OptionCard
+              key={String(required)}
+              name="plan-eqr"
+              value={String(required)}
+              checked={value.eqr_required === required}
+              onSelect={() => onChange({ ...value, eqr_required: required })}
+              label={required ? labels.yes : labels.no}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+      </fieldset>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="plan-eqr-basis" className="font-semibold text-[13px]">
+          {labels.basis} <span className="font-normal text-muted-foreground">{t.card.reasonRequired}</span>
+        </label>
+        <Textarea
+          id="plan-eqr-basis"
+          rows={3}
+          lang="en"
+          value={value.eqr_basis}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, eqr_basis: event.target.value })}
+          className="text-[14px]"
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="flex items-center gap-2 text-[14px]">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={value.auditor_expert_not_required}
+            disabled={disabled}
+            aria-describedby={value.auditor_expert_not_required ? undefined : 'plan-expert-hint'}
+            onChange={(event) => onChange({ ...value, auditor_expert_not_required: event.target.checked })}
+          />
+          {labels.expert}
+        </label>
+        {value.auditor_expert_not_required ? null : (
+          <span id="plan-expert-hint" className="text-[13px] text-muted-foreground">
+            {labels.expertHint}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AnnotationFields({ notes, onChange }: { notes: NoteDraft[]; onChange: (notes: NoteDraft[]) => void }) {
   const { t } = useI18n()
   const update = (id: string, patch: Partial<NoteDraft>) =>
@@ -762,6 +871,7 @@ function buildDecision(
     levelReasons: Record<string, string>
     disposition: OpinionType
     notes: NoteDraft[]
+    confirmation: PlanConfirmation
   },
   t: Messages,
 ): GateDecisionIn | string {
@@ -797,6 +907,11 @@ function buildDecision(
     return { ...base, materiality: input.choice, edits }
   }
   if (view.material.kind === 'FIN-01' && decision === 'approve') return { ...base, disposition: input.disposition }
+  if (view.material.kind === 'PLN-15' && decision === 'approve') {
+    const basis = input.confirmation.eqr_basis.trim()
+    if (!basis) return t.planPage.confirm.basisRequired
+    return { ...base, plan_confirmation: { ...input.confirmation, eqr_basis: basis } }
+  }
   if (view.material.kind === 'RPT-01' && decision === 'reject') {
     const annotations = input.notes
       .map((note) => ({ section: note.section, quote: note.quote?.trim() || null, comment: note.comment.trim() }))
