@@ -103,6 +103,8 @@ async def test_load_rules_and_project_isolation(storage):
         ).one()
         assert role == (False, False)
     assert not await financial.sales_invoices("other-project", ["SI-2026-0612"])
+    # 待审财报的行 (需求 R216): 表由 R217 加, 之前一律查不到, 不报错
+    assert await financial.record(e.id, "financial_statement_line", "SOFP-OREC") is None
     library = ProcedureLibrary(ROOT / "src/backend/knowledge")
     import yaml
 

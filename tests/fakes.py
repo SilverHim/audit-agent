@@ -86,6 +86,8 @@ from backend.contracts.models import (
     Engagement,
     EvidencePointer,
     EvidenceType,
+    FinancialStatementLine,
+    FinancialStatements,
     GateDecision,
     GateId,
     GateVerdict,
@@ -3097,6 +3099,146 @@ async def api_client(
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
         yield client
+
+
+# ── Xero 演示公司的待审财报 fs_v1 (需求 R216 的表, 待审财报的唯一正本; R217 生成 fs_v1.json 照此) ──
+
+# 17 个损益科目
+PL_ACCOUNTS = [
+    *("200", "270", "400", "404", "408", "412", "420", "429", "445"),
+    *("449", "453", "461", "469", "477", "478", "489", "493"),
+]
+OPERATING_ACCOUNTS = [*PL_ACCOUNTS, "610", "620", "800", "801", "860", "820", "825", "804", "805", "826"]
+FS_V1_LINES: list[tuple[str, str, str, list[str], int, bool, int, int]] = [
+    # (行代码, 报表, 名称, 映射科目, sign, 小计, 本期金额, 比较数), 金额为分
+    ("SOFP-CASH", "financial_position", "Cash and cash equivalents", ["091"], 1, False, 1158123, 1508123),
+    ("SOFP-REC", "financial_position", "Trade receivables", ["610"], 1, False, 1019950, 0),
+    ("SOFP-OREC", "financial_position", "Other receivables (accrued interest)", ["620"], 1, False, 4853, 0),
+    ("SOFP-PPE", "financial_position", "Office equipment", ["710", "711"], 1, False, 0, 0),
+    ("SOFP-TA", "financial_position", "Total assets", ["091", "610", "620", "710", "711"], 1, True, 2182926, 1508123),
+    ("SOFP-OD", "financial_position", "Bank overdraft", ["090"], -1, False, 1090044, 457222),
+    ("SOFP-PAY", "financial_position", "Trade and other payables", ["800", "801", "860"], -1, False, 400507, 0),
+    ("SOFP-TAX", "financial_position", "GST and PAYG withholding", ["820", "825"], -1, False, 880197, -79120),
+    ("SOFP-EMP", "financial_position", "Employee benefit liabilities", ["804", "805", "826"], -1, False, 895856, 0),
+    ("SOFP-DLOAN", "financial_position", "Loan from director", ["840"], -1, False, 1921221, 1921221),
+    (
+        "SOFP-TL",
+        "financial_position",
+        "Total liabilities",
+        ["090", "800", "801", "860", "820", "825", "804", "805", "826", "840"],
+        -1,
+        True,
+        5187825,
+        2299323,
+    ),
+    ("SOFP-EQ", "financial_position", "Accumulated losses", ["960", *PL_ACCOUNTS], -1, False, -3004899, -791200),
+    ("PL-REV", "profit_or_loss", "Revenue", ["200"], -1, False, 3243100, 420000),
+    ("PL-OI", "profit_or_loss", "Interest income", ["270"], -1, False, 4853, 0),
+    ("PL-EMP", "profit_or_loss", "Employee benefits expense", ["477", "478"], 1, False, 4245856, 0),
+    ("PL-OCC", "profit_or_loss", "Occupancy expenses", ["408", "445", "469"], 1, False, 635600, 0),
+    (
+        "PL-OTH",
+        "profit_or_loss",
+        "Other expenses",
+        ["400", "404", "412", "420", "429", "449", "453", "461", "489", "493"],
+        1,
+        False,
+        580196,
+        1211200,
+    ),
+    ("PL-NP", "profit_or_loss", "Loss for the period", PL_ACCOUNTS, -1, True, -2213699, -791200),
+    (
+        "CE-OPEN",
+        "changes_in_equity",
+        "Balance at the beginning of the period",
+        ["960", *PL_ACCOUNTS],
+        -1,
+        False,
+        -791200,
+        0,
+    ),
+    ("CE-NP", "changes_in_equity", "Loss for the period", PL_ACCOUNTS, -1, False, -2213699, -791200),
+    ("CE-OCI", "changes_in_equity", "Other comprehensive income", [], -1, False, 0, 0),
+    (
+        "CE-TCI",
+        "changes_in_equity",
+        "Total comprehensive loss for the period",
+        PL_ACCOUNTS,
+        -1,
+        True,
+        -2213699,
+        -791200,
+    ),
+    (
+        "CE-CLOSE",
+        "changes_in_equity",
+        "Balance at the end of the period",
+        ["960", *PL_ACCOUNTS],
+        -1,
+        True,
+        -3004899,
+        -791200,
+    ),
+    ("CF-NP", "cash_flows", "Loss for the period", PL_ACCOUNTS, 1, False, -2213699, -791200),
+    ("CF-REC", "cash_flows", "Increase in trade receivables", ["610"], 1, False, -1019950, 0),
+    ("CF-OREC", "cash_flows", "Increase in other receivables", ["620"], 1, False, -4853, 0),
+    ("CF-PAY", "cash_flows", "Increase in trade and other payables", ["800", "801", "860"], 1, False, 400507, 0),
+    ("CF-TAX", "cash_flows", "Change in GST and PAYG withholding", ["820", "825"], 1, False, 959317, -79120),
+    (
+        "CF-EMP",
+        "cash_flows",
+        "Increase in employee benefit liabilities",
+        ["804", "805", "826"],
+        1,
+        False,
+        895856,
+        0,
+    ),
+    (
+        "CF-OP",
+        "cash_flows",
+        "Net cash used in operating activities",
+        OPERATING_ACCOUNTS,
+        1,
+        True,
+        -982822,
+        -870320,
+    ),
+    ("CF-INV", "cash_flows", "Net cash from investing activities", ["710", "711"], 1, False, 0, 0),
+    ("CF-FIN", "cash_flows", "Net cash from financing activities", ["840"], 1, False, 0, 0),
+    (
+        "CF-NET",
+        "cash_flows",
+        "Net decrease in cash and cash equivalents",
+        [*OPERATING_ACCOUNTS, "710", "711", "840"],
+        1,
+        True,
+        -982822,
+        -870320,
+    ),
+    ("CF-OPEN", "cash_flows", "Cash and cash equivalents at 1 July", ["090", "091"], 1, False, 1050901, 1921221),
+    ("CF-CLOSE", "cash_flows", "Cash and cash equivalents at end of period", ["090", "091"], 1, False, 68079, 1050901),
+]
+XERO_FS_V1 = FinancialStatements(
+    prepared_at=date(2026, 10, 22),
+    directors_declaration_date=date(2026, 10, 23),
+    comparative_restatement_entry_nos=["XJ-397"],
+    lines=[
+        FinancialStatementLine.model_validate(
+            dict(
+                code=code,
+                statement=statement,
+                name=name,
+                account_codes=codes,
+                sign=sign,
+                subtotal=subtotal,
+                amount_cents=amount,
+                prior_amount_cents=prior,
+            )
+        )
+        for code, statement, name, codes, sign, subtotal, amount, prior in FS_V1_LINES
+    ],
+)
 
 
 # ── Xero Demo Company 快照: xero pull 的输出 (本仓库已带); 找不到时跳过用到它的测试, 仓库跟踪了却找不到时失败 ──

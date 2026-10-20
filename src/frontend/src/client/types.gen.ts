@@ -2063,7 +2063,7 @@ export type EvidencePointer = {
     /**
      * Source Type
      */
-    source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail' | 'client_profile';
+    source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'document' | 'standard' | 'trail' | 'client_profile' | 'financial_statement_line';
     /**
      * Source Id
      */
@@ -6203,7 +6203,7 @@ export type EvidenceGetRecordData = {
         /**
          * Source Type
          */
-        source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance';
+        source_type: 'journal_entry' | 'sales_invoice' | 'supplier_bill' | 'delivery_note' | 'bank_transaction' | 'bank_account' | 'trial_balance' | 'financial_statement_line';
         /**
          * Source Id
          */

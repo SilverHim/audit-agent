@@ -20,6 +20,8 @@ from backend.contracts.models import (
     DocumentType,
     EvidencePointer,
     EvidenceType,
+    FinancialStatementLine,
+    FinancialStatements,
     GateId,
     Judgment,
     MisstatementDraft,
@@ -43,7 +45,7 @@ from backend.contracts.models import (
 from backend.contracts.state import staged, upsert_by_id
 from backend.contracts.views import GateView
 from backend.orchestration.checkpoint import checkpoint_serde
-from tests.fakes import ownership_graph
+from tests.fakes import XERO_FS_V1, ownership_graph
 
 
 def _exc(version: int) -> AuditException:
@@ -474,3 +476,74 @@ def test_full_name_split_and_company_node_id() -> None:
     for acn in ("", "90004302", "9000430211", "900-043-021"):
         with pytest.raises(ValueError, match="acn 须为 9 位数字"):
             company_node_id(acn)
+
+
+# ── R216: 待审财报 ──
+
+
+def lines_of(statement: str) -> dict[str, FinancialStatementLine]:
+    return {line.code: line for line in XERO_FS_V1.lines if line.statement == statement}
+
+
+def test_financial_statements_contract() -> None:
+    """验收 1: FS 固定 ID, 版本, 编制日, 董事声明日与比较数重述凭证号; 35 行分属四张报表 (财务状况表 12, 损益表 6,
+    权益变动表 5, 现金流量表 12); 行代码重复, sign 不是 ±1, 报表种类不认识或多给字段都被拒; JSON 往返不变."""
+    fs = XERO_FS_V1
+    assert (fs.id, fs.version, fs.prepared_at, fs.directors_declaration_date, fs.document_id) == (
+        "FS",
+        1,
+        date(2026, 10, 22),
+        date(2026, 10, 23),
+        None,
+    )
+    assert fs.comparative_restatement_entry_nos == ["XJ-397"]
+    counts = {kind: len(lines_of(kind)) for kind in ("financial_position", "profit_or_loss", "changes_in_equity")}
+    assert counts | {"cash_flows": len(lines_of("cash_flows"))} == {
+        "financial_position": 12,
+        "profit_or_loss": 6,
+        "changes_in_equity": 5,
+        "cash_flows": 12,
+    }
+    with pytest.raises(ValidationError, match="财报行代码重复: SOFP-CASH"):
+        FinancialStatements.model_validate(
+            {**fs.model_dump(), "lines": [*fs.model_dump()["lines"], fs.lines[0].model_dump()]}
+        )
+    line = fs.lines[0].model_dump()
+    for change in ({"sign": 0}, {"statement": "notes"}, {"extra": 1}):
+        with pytest.raises(ValidationError):
+            FinancialStatementLine.model_validate({**line, **change})
+    assert FinancialStatements.model_validate_json(fs.model_dump_json()) == fs
+
+
+@pytest.mark.parametrize("column", ["amount_cents", "prior_amount_cents"])
+def test_xero_fs_v1_ties(column: str) -> None:
+    """验收 2: XERO_FS_V1 表内勾稽 (本期与比较数各一例): 资产 = 负债 + 权益; 小计等于所列各行之和; 损益 = 收入 - 费用;
+    权益变动表期末 = 期初 + 综合收益 = 财务状况表的累计亏损; 现金流量表期末 = 期初 + 净变动 = 现金减透支."""
+    lines = {line.code: line for line in XERO_FS_V1.lines}
+
+    def a(code: str) -> int:
+        value = getattr(lines[code], column)
+        assert value is not None
+        return int(value)
+
+    assert a("SOFP-TA") == a("SOFP-TL") + a("SOFP-EQ")
+    assert a("SOFP-TA") == sum(a(c) for c in ("SOFP-CASH", "SOFP-REC", "SOFP-OREC", "SOFP-PPE"))
+    assert a("SOFP-TL") == sum(a(c) for c in ("SOFP-OD", "SOFP-PAY", "SOFP-TAX", "SOFP-EMP", "SOFP-DLOAN"))
+    assert a("PL-NP") == a("PL-REV") + a("PL-OI") - sum(a(c) for c in ("PL-EMP", "PL-OCC", "PL-OTH"))
+    assert a("CE-NP") == a("CF-NP") == a("PL-NP")
+    assert a("CE-TCI") == a("CE-NP") + a("CE-OCI")
+    assert a("CE-CLOSE") == a("CE-OPEN") + a("CE-TCI") == a("SOFP-EQ")
+    assert a("CF-OP") == sum(a(c) for c in ("CF-NP", "CF-REC", "CF-OREC", "CF-PAY", "CF-TAX", "CF-EMP"))
+    assert a("CF-NET") == a("CF-OP") + a("CF-INV") + a("CF-FIN")
+    assert a("CF-CLOSE") == a("CF-OPEN") + a("CF-NET") == a("SOFP-CASH") - a("SOFP-OD")
+
+
+def test_xero_fs_v1_figures_and_mapping() -> None:
+    """验收 2: 设计稿第 4.7 节的三个数 (资产 21,829.26, 负债 51,878.25, 权益 (30,048.99)); 比较数的 GST 应收 791.20 在
+    SOFP-TAX 中以 -79120 列示; 财务状况表非小计行的科目互不重叠 (820 只映射一次), 共 33 个科目 (09-30 试算表 27 行
+    加 804, 805, 826, 478, 620, 270)."""
+    pos = lines_of("financial_position")
+    assert [pos[c].amount_cents for c in ("SOFP-TA", "SOFP-TL", "SOFP-EQ")] == [2182926, 5187825, -3004899]
+    assert pos["SOFP-TAX"].prior_amount_cents == -79120
+    mapped = [code for line in pos.values() if not line.subtotal for code in line.account_codes]
+    assert len(mapped) == len(set(mapped)) == 33

@@ -160,6 +160,8 @@ class PostgresFinancialDataStore(Store):
             "bank_account": "bank_accounts",
             "bank_transaction": "bank_transactions",
         }
+        if source_type not in names:  # financial_statement_line: 待审财报的表由需求 R217 加, 之前一律查不到
+            return None
         t = m.FINANCIAL[names[source_type]]
         stmt = (
             select(t).where(t.c.account_code == source_id, t.c.period == "current")

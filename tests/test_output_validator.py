@@ -69,6 +69,7 @@ from tests.fakes import (
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_RECORDS,
     NUMBAT_REPLIES,
+    XERO_FS_V1,
     FakeFinancialStore,
     FakeTrail,
     ScriptedLLM,
@@ -1222,3 +1223,34 @@ def test_citation_keys_must_be_unique() -> None:
         citation_keys([first, second])
     odd = first.model_copy(update={"id": "J-CUSTOM"})
     assert judgment_key(odd) == "REV-02:SI-2026-0612:J-CUSTOM"
+
+
+# ── R216: 待审财报的行作证据. 端口与真实取行由 R217 实现, 这里用预置 XERO_FS_V1 各行的最小假存储 ──
+
+
+@pytest.mark.parametrize(("code", "reason"), [("SOFP-OREC", None), ("SOFP-XXX", "查无此行")])
+async def test_financial_statement_line_pointer(code: str, reason: str | None) -> None:
+    """验收 3: 指针 {voucher, financial_statement_line, SOFP-OREC, amount_cents} 经假存储解析, 引用级通过, 按内部凭证
+    改写 (voucher, internal_original; 模型填的可靠性不采信); 不存在的行代码该步 unsupported, 原因 "查无此行"."""
+    lines = {
+        ("financial_statement_line", line.code): {**line.model_dump(mode="json"), "fs_id": "FS", "fs_version": 1}
+        for line in XERO_FS_V1.lines
+    }
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), {**NUMBAT_RECORDS, **lines})
+    pointer = EvidencePointer(
+        type=EvidenceType.voucher,
+        source_type="financial_statement_line",
+        source_id=code,
+        locator="amount_cents",
+        reliability=Reliability.external_original,
+    )
+    validator = OutputValidator(financial, LIBRARY, FakeTrail())
+    draft = with_step(cutoff_draft(), 1, evidence=[pointer])
+    report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
+    if reason is None:
+        assert report.unsupported_steps == [] and report.errors == []
+        [resolved] = report.output.reasoning_chain[1].evidence
+        assert (resolved.type, resolved.reliability) == (EvidenceType.voucher, Reliability.internal_original)
+    else:
+        assert report.unsupported_steps == [1] and len(report.errors) == 1 and reason in report.errors[0]
+    assert ("financial_statement_line", code) in financial.record_calls
