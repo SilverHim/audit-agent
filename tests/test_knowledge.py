@@ -158,7 +158,8 @@ APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pd
 SOURCES: dict[str, Source] = {
     "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
     "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", None),)),
-    "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 32)),)),  # 现行版 (第 32 段至 A44); 2026-12-15 起的新版不用
+    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
+    "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
     "ASA320": Source((("01_审计准则_ASA/ASA_320.pdf", None),)),
     "ASA450": Source((("01_审计准则_ASA/ASA_450.pdf", None),)),
     "ASA505": Source((("01_审计准则_ASA/ASA_505.pdf", None),)),

@@ -1,6 +1,6 @@
 # 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_550.pdf (现行编译版, Compilation 4) 核对 (tests/test_knowledge.py
-# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 第 10(b)(i) 项原文在 "framework"
-# 与分号之间有一个空格 (PDF 文本层如此), 照录.
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 第 10(b)(i) 项 "framework" 后是上标
+# 脚注号 * (页底脚注 "See, for example, section 228 of the Corporations Act 2001."), 按抽取规则去掉, 原文为 "framework; or".
 standard: ASA 550
 title: Related Parties
 compiled: "2023-12-14"   # Compilation Number 4
@@ -12,7 +12,7 @@ fragments:
     text: |
       For the purposes of this Auditing Standard, the following terms have the meanings attributed below:
       (b) Related party means a party that is either:
-      (i) A related party as defined in the applicable financial reporting framework ; or
+      (i) A related party as defined in the applicable financial reporting framework; or
       (ii) Where the applicable financial reporting framework establishes minimal or no related party requirements:
       a. A person or other entity that has control or significant influence, directly or indirectly through one or more intermediaries, over the reporting entity;
       b. Another entity over which the reporting entity has control or significant influence, directly or indirectly through one or more intermediaries; or
