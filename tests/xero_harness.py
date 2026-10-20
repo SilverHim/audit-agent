@@ -6,8 +6,9 @@
   规则引擎为预置 XERO_RULES 的 FakeRuleEngine.
 - db_deps(case): 连 TEST_DATABASE_URL 的测试库, 组装根的真实实现; 数据集载入, 登记与函证 mock 指向副本; 经真实
   DataService 做演示数据导入 (acceptance, fieldwork) 并确认数据已齐.
-- run_programs(h, ids): 先跑 DOC-04, PLN-07, PLN-01 并按 MATERIALITY 定重要性, 再按依赖闭包分层跑 ids.
-- LayeredMockLLMClient, RoutedLLMClient: mock 输出分层覆盖; 指定的 (程序, fixture_key) 交真实模型 (经预算).
+- run_programs(h, ids): 先跑 DOC-04, PLN-07, PLN-01 并按 MATERIALITY 定重要性, 再按依赖闭包分层跑 ids; rerun 时
+  出了 failed 任务的程序照 rerun 决定重跑一次 (rerun_failed).
+- LayeredMockLLMClient, RoutedLLMClient: mock 输出分层覆盖; 指定的 (程序, fixture_key) 或整条程序交真实模型 (经预算).
 - imported_tables, table_diff: 导入后的各表, 两份之间按表按行 ID 的差异.
 
 大模型缺省读副本补造目录的运行副本 (llm/, 同原目录的; 生成脚本从 tests/fixtures/llm_xero 复制).
@@ -37,12 +38,14 @@ from backend.contracts.models import (
     MaterialityChoice,
     Procedure,
     ReviewStatus,
+    TaskKind,
+    TaskStatus,
 )
 from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.gates import materiality_amounts
-from backend.orchestration.nodes import GraphNodes, apply_patch, save_outputs
+from backend.orchestration.nodes import GraphNodes, apply_patch, rerun_subjects, save_outputs, update_procedure
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
@@ -215,18 +218,43 @@ async def confirm_upstream(h: XeroHarness, state: EngagementState, layer: Sequen
     return await commit(h.deps, state, patch, h.actor)
 
 
-async def run_programs(h: XeroHarness, ids: Sequence[str]) -> Ran:
-    """先跑 DOC-04 (合同已在导入时抽取, 不调大模型), PLN-07, PLN-01, 按 MATERIALITY 与 PLN-01 的候选定重要性 (同
+async def rerun_failed(h: XeroHarness, nodes: GraphNodes, state: EngagementState, pid: str) -> EngagementState:
+    """pid 有待决的 failed 任务时照审计师的 rerun 决定重跑一次: 整组任务置 decided, 程序出新版本, 只重判这组任务的对象
+    (rerun_subjects; 有整次失败的任务时整条重跑), 再执行一次并写入 (同 decisions 的 rerun_group 与 rerun_procedure,
+    以项目负责人写入). 没有时原样返回. 带规则例外的对象失败时建的是 unattributed 任务, 不在其中 (不能重跑)."""
+    failed = [
+        t
+        for t in state["review_tasks"]
+        if t.procedure_id == pid and t.kind is TaskKind.failed and t.status is TaskStatus.pending
+    ]
+    if not failed:
+        return state
+    patch: StatePatch = {
+        "procedure_pack": update_procedure(state["procedure_pack"], pid, rerun_subject_ids=rerun_subjects(failed)),
+        "review_tasks": [t.model_copy(update={"version": t.version + 1, "status": TaskStatus.decided}) for t in failed],
+    }
+    state = await commit(h.deps, state, patch, h.actor)
+    result = await nodes.perform(state, h.engagement, pid)
+    return await commit(h.deps, state, result["patch"], result["writer"])
+
+
+async def run_programs(h: XeroHarness, ids: Sequence[str], *, rerun: bool = False) -> Ran:
+    """先跑 DOC-04 (合同已在导入时抽取时不调大模型), PLN-07, PLN-01, 按 MATERIALITY 与 PLN-01 的候选定重要性 (同
     PLN-01/03 闸门的算法); 再把 ids 补齐依赖闭包 (除去以上三条), 程序第 1 版写入存储 (关联目标同 assemble_pack 的
     匹配), 按依赖分层执行: 每层先自动确认上游判断 (confirm_upstream), 同层的程序都以本层开始时的状态执行, 再逐个
     写入并入 (同 fan_in). 每次执行经 GraphNodes.perform (建执行记录, 调 Agent; Agent 出错时为 A1 的失败片段),
-    片段写入存储后经 apply_patch 并入状态."""
+    片段写入存储后经 apply_patch 并入状态. rerun 时每条程序写入后, 出了 failed 任务的重跑一次 (rerun_failed), 下游
+    看到的是重跑后的结果."""
     deps, library = h.deps, h.deps.library
     nodes = GraphNodes(deps, 2)
     state = h.state
+
+    async def settle(state: EngagementState, pid: str) -> EngagementState:
+        return await rerun_failed(h, nodes, state, pid) if rerun else state
+
     for pid in PLANNING_PROGRAMS:
         result = await nodes.perform(state, h.engagement, pid)
-        state = await commit(deps, state, result["patch"], result["writer"])
+        state = await settle(await commit(deps, state, result["patch"], result["writer"]), pid)
     candidates = state["materiality_candidates"]
     assert candidates is not None, "PLN-01 没有给出重要性候选"
     overall, performance, trivial = materiality_amounts(candidates, MATERIALITY)
@@ -256,6 +284,8 @@ async def run_programs(h: XeroHarness, ids: Sequence[str]) -> Ran:
         results = [await nodes.perform(state, h.engagement, pid) for pid in layer]
         for result in results:
             state = await commit(deps, state, result["patch"], result["writer"])
+        for pid in layer:
+            state = await settle(state, pid)
     return Ran(state, deps)
 
 
@@ -290,17 +320,26 @@ class LayeredMockLLMClient(LayeredMockLLM):
 
 
 class RoutedLLMClient:
-    """(程序, fixture_key) 在 live_keys 中的交 live (经 BudgetedLLMClient 计入 budget, 超限即停发), 其余交 mock.
-    记下每次的去向与请求全文 (requests: (live 或 mock, 请求))."""
+    """(程序, fixture_key) 在 live_keys 中的, 或程序在 programs 中的 (整条程序的调用) 交 live (经 BudgetedLLMClient
+    计入 budget, 超限即停发), 其余交 mock. 记下每次的去向与请求全文 (requests: (live 或 mock, 请求))."""
 
-    def __init__(self, mock: LLMClient, live: LLMClient, live_keys: Iterable[tuple[str, str]], budget: Budget) -> None:
+    def __init__(
+        self,
+        mock: LLMClient,
+        live: LLMClient,
+        live_keys: Iterable[tuple[str, str]],
+        budget: Budget,
+        *,
+        programs: Iterable[str] = (),
+    ) -> None:
         self.mock = mock
         self.live = BudgetedLLMClient(live, budget)
         self.live_keys = frozenset(live_keys)
+        self.programs = frozenset(programs)
         self.requests: list[tuple[str, LLMRequest]] = []
 
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
-        live = (req.procedure_id, req.fixture_key) in self.live_keys
+        live = req.procedure_id in self.programs or (req.procedure_id, req.fixture_key) in self.live_keys
         self.requests.append(("live" if live else "mock", req))
         return await (self.live if live else self.mock).complete(req, output_model)
 
