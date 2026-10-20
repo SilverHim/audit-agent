@@ -10,6 +10,7 @@ from backend.contracts.models import (
     CriticReasonType,
     DocumentType,
     EvidencePointer,
+    FinancialStatementLine,
     MisstatementDraft,
     Model,
     Officeholder,
@@ -19,6 +20,7 @@ from backend.contracts.models import (
     Shareholding,
     TermsFacts,
     TermType,
+    repeated_line_codes,
 )
 
 
@@ -107,6 +109,24 @@ class RegistryExtraction(Model):
         """REGISTRY_POINTED 中没有 locator 为该字段的指针的字段 (引用级校验与 ACC-04 取摘录共用)."""
         pointed = {p.locator for p in self.evidence}
         return [name for name in REGISTRY_POINTED if name not in pointed]
+
+
+class StatementsExtraction(Model):
+    """A3 从上传的财务报表 PDF 抽取的待审财报 (DOC-STATEMENTS, 需求 R217): FinancialStatements 去掉 id, version 与
+    document_id (由系统按项目, 已有版本与这份文件补上, ingest.build_statements). 行代码在一份财报内不重复 (结构级).
+    报表不作证据, 没有证据指针 (判断改引报表行)."""
+
+    prepared_at: date  # 编制日
+    directors_declaration_date: date | None = None  # 董事声明的日期; 还没签为空
+    comparative_restatement_entry_nos: list[str] = []  # 附注写明的比较数所依据的凭证号
+    lines: list[FinancialStatementLine]  # 各行, 按列示顺序
+
+    @model_validator(mode="after")
+    def unique_codes(self) -> Self:
+        repeated = repeated_line_codes(self.lines)
+        if repeated:
+            raise ValueError(f"财报行代码重复: {', '.join(repeated)}")
+        return self
 
 
 class DocumentClassification(Model):

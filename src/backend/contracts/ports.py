@@ -52,6 +52,7 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    FinancialStatements,
     LlmSettings,
     LlmSlot,
     Model,
@@ -100,7 +101,8 @@ class FinancialDataStore(Protocol):
     async def gl_balance(self, eid: str, account_code: str, as_of: date) -> int: ...
 
     async def record(self, eid: str, source_type: SourceType, source_id: str) -> dict[str, Any] | None:
-        """取一行明细; trial_balance 的 source_id 为 account_code."""
+        """取一行明细; trial_balance 的 source_id 为 account_code. financial_statement_line 的 source_id 为行代码, 取
+        当前版本 (financial_statements) 中该行, 键为 FinancialStatementLine 的字段加 fs_id, fs_version (需求 R217)."""
         ...
 
     async def journal_entries(
@@ -156,6 +158,30 @@ class FinancialDataStore(Protocol):
         ...
 
     async def data_version(self, eid: str) -> int: ...
+
+    async def financial_statements(self, eid: str) -> FinancialStatements | None:
+        """待审财报的当前版本 (需求 R217): 来源文件 (document_id) 现在仍登记为 financial_statements 的各版中版本最高的;
+        没有这样的版本 (没有已抽取的财务报表文件) 为 None. 数据集载入不写财报."""
+        ...
+
+    async def save_financial_statements(
+        self,
+        eid: str,
+        statements: FinancialStatements,
+        *,
+        changed_by: str = AgentId.A3,
+        field: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """A3 抽取与审计师修改共用 (需求 R217): 写这一版财报与各行 (同版本已有则覆盖, 抽取重做时幂等), 并在
+        extraction_versions 记这一版的完整内容 (target_type financial_statements, target_id 财报 ID). changed_by,
+        field, reason 为修改人, 改的字段与理由, 抽取所得为 A3 与空. 在 AuditOutputStore.transaction 块内调用时加入
+        该事务."""
+        ...
+
+    async def statements_history(self, eid: str) -> list[ExtractionRecord]:
+        """待审财报的各版 (extraction_versions 中 target_type financial_statements 的), 按版本升序; 没有为空."""
+        ...
 
 
 class AuditOutputStore(Protocol):

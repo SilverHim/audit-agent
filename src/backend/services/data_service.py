@@ -31,6 +31,7 @@ from backend.agents.ingest import (
     Requested,
     details_data,
     details_entry,
+    next_statements_version,
     record_registration,
     registered_reliability,
     retype,
@@ -38,6 +39,7 @@ from backend.agents.ingest import (
 )
 from backend.contracts.data import (
     DEMO_IMPORT_STAGES,
+    FS_TARGET,
     REGISTRY_TARGET,
     BatchFile,
     BatchItem,
@@ -81,6 +83,7 @@ from backend.contracts.models import (
     DocumentRef,
     DocumentType,
     Engagement,
+    FinancialStatements,
     GateId,
     Reliability,
     TrailEntry,
@@ -111,6 +114,7 @@ from backend.services.extraction_edits import (
     apply_confirmation_edit,
     apply_contract_edit,
     apply_registry_edit,
+    apply_statements_edit,
     ordered_terms,
 )
 from backend.services.import_batches import (
@@ -133,8 +137,13 @@ TARGET_NAMES = {
     DocumentType.contract: "合同",
     DocumentType.confirmation: "回函",
     DocumentType.registry_extract: "ASIC 摘录",
+    DocumentType.financial_statements: "待审财报",
 }
-EDITED_TYPES = {"contract": DocumentType.contract, REGISTRY_TARGET: DocumentType.registry_extract}  # 其余为函证
+EDITED_TYPES = {  # 抽取版本表的 target_type → 文件类型; 其余为函证
+    "contract": DocumentType.contract,
+    REGISTRY_TARGET: DocumentType.registry_extract,
+    FS_TARGET: DocumentType.financial_statements,
+}
 # 可上传的文件 (POST /documents), 单个不超过 data_import.MAX_BYTES
 DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg"}
 TABLE_NAMES: dict[TableKind, str] = {  # 留痕摘要里的表名
@@ -171,8 +180,8 @@ def version_entry(eid: str, version: TableVersion) -> TrailEntry:
 
 
 def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
-    """一次抽取结果修改或文件补登记的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同取
-    document_id, 函证取 reply_document_id, ASIC 摘录与补登记即该文件, 补登记的类型取该版登记的); 防重复键
+    """一次抽取结果修改或文件补登记的 data 留痕: action edit, payload 带 document_type, field, reason 与文件 ID (合同与
+    待审财报取 document_id, 函证取 reply_document_id, ASIC 摘录与补登记即该文件, 补登记的类型取该版登记的); 防重复键
     {eid}:data:edit:{类型}:{对象}:v{版本}, 写入与补写共用."""
     if record.target_type == DETAILS:
         return details_entry(eid, record)
@@ -186,7 +195,7 @@ def edit_entry(eid: str, record: ExtractionRecord) -> TrailEntry:
     if kind is DocumentType.registry_extract:  # ASIC 摘录的抽取结果按文件记 (需求 R290)
         document_id: object = record.target_id
     else:
-        document_id = record.data.get("document_id" if kind is DocumentType.contract else "reply_document_id")
+        document_id = record.data.get("reply_document_id" if kind is DocumentType.confirmation else "document_id")
     if document_id:
         payload["document_id"] = document_id
     summary = f"修改{TARGET_NAMES[kind]} {record.target_id} 的抽取结果 {record.field}, 第 {record.version} 版"
@@ -1179,7 +1188,7 @@ class DataService:
             if current[document_id].status == "staged"
         ]
         intake = DocumentIntake(self.deps)
-        written: dict[str, int] = {}  # 本批已排定的合同编号 → 版本
+        written: dict[str, int] = {}  # 本批已排定的合同编号 (与待审财报 ID) → 版本
         for item in documents:
             document = current[item.document_id]
             if document.status != "staged" or item.document_type is None:
@@ -1191,6 +1200,12 @@ class DataService:
                     last = last.model_copy(update={"version": written[last.id] + 1})
                     change = change.model_copy(update={"contracts": [last]})
                 written[last.id] = last.version
+            if change.financial_statements is not None:  # 同一批里两份财务报表: 后一份接在前一份之后
+                statements = change.financial_statements
+                if statements.id in written:
+                    statements = statements.model_copy(update={"version": written[statements.id] + 1})
+                    change = change.model_copy(update={"financial_statements": statements})
+                written[statements.id] = statements.version
             changes.append(change)
         chosen = {i.document_id for i in [*sheets, *documents]}
         elsewhere = {
@@ -1995,6 +2010,69 @@ class DataService:
         if not records:
             raise LookupError(f"文件 {document_id} 不是已抽取的 ASIC 摘录")
         return records
+
+    # ── 待审财报 (需求 R217) ──
+
+    async def statements_history(self, eid: str) -> list[ExtractionRecord]:
+        """待审财报的各版 (GET /financial-statements/history), 按版本升序; 还没有抽取过 404."""
+        history = await self.deps.financial_store.statements_history(eid)
+        if not history:
+            raise LookupError("还没有待审财报 (没有抽取过财务报表文件)")
+        return history
+
+    async def edit_financial_statements(self, eid: str, edit: ExtractionEdit, actor: str) -> FinancialStatements:
+        """修改待审财报的抽取结果 (PUT /financial-statements): 当前版本 (FinancialDataStore.financial_statements) 改一个
+        字段出新一版 (版本接在已有各版之后), extraction_versions 记修改人, 字段与理由, 数据版本 +1 记数据变动
+        financial_statements (读财报的程序据此标过期, 同修改合同), 一个事务内; 提交后写 data 留痕 (同 edit_contract).
+        字段见 extraction_edits.STATEMENTS_FIELDS. 不受闸门限制 (财报是客户数据, 不在编排状态里). 持项目锁 (锁定 423,
+        忙 409); 没有当前版本 404; 理由为空 MISSING_FIELD; 字段不认识, 没有该行, 值不合法或与当前相同 INVALID_VALUE.
+        同一修改的重试 (最新一版正是同一人以同一理由改同一字段, 由前一版改得) 返回当前版本, 不再写."""
+        reason = self._reason(edit)
+        async with self.locked(eid):
+            await self.backfill_trails(eid)
+            current = await self.deps.financial_store.financial_statements(eid)
+            if current is None:
+                raise LookupError("还没有待审财报 (没有已抽取的财务报表文件)")
+            history = await self.deps.financial_store.statements_history(eid)
+            try:
+                changed = apply_statements_edit(current, edit.field, edit.value)
+            except DataRejected:
+                if self._statements_retry(history, current, edit, actor, reason):
+                    return current
+                raise
+            updated = changed.model_copy(update={"version": next_statements_version(history)})
+            async with self.deps.output_store.transaction(eid):
+                await self.deps.financial_store.save_financial_statements(
+                    eid, updated, changed_by=actor, field=edit.field, reason=reason
+                )
+                await self.deps.data.bump_version(eid, DataInput.financial_statements)
+            record = ExtractionRecord(
+                target_type=FS_TARGET,
+                target_id=updated.id,
+                version=updated.version,
+                data=updated.model_dump(mode="json"),
+                field=edit.field,
+                reason=reason,
+                changed_by=actor,
+                changed_at=datetime.now(UTC),
+            )
+            await record_transitions(self.deps.trail, [edit_entry(eid, record)])
+        return updated
+
+    @staticmethod
+    def _statements_retry(
+        history: Sequence[ExtractionRecord], current: FinancialStatements, edit: ExtractionEdit, actor: str, reason: str
+    ) -> bool:
+        """当前版本是否正是这次修改上次写入的结果: 最新一版即当前版本, 同一人以同一理由改同一字段, 把修改套在前一版上
+        正得到它 (不比版本号)."""
+        if len(history) < 2 or not same_edit(history[-1], current.version, edit, actor, reason):
+            return False
+        previous = FinancialStatements.model_validate(history[-2].data)
+        try:
+            changed = apply_statements_edit(previous, edit.field, edit.value)
+        except DataRejected:
+            return False
+        return changed.model_copy(update={"version": current.version}) == current
 
     @staticmethod
     def _reason(edit: ExtractionEdit) -> str:

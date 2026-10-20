@@ -149,6 +149,7 @@ def changed(*inputs: DataInput, version: int = 2) -> list[DataChange]:
         (DataInput.contracts, {"REV-03", "REV-02"}),
         (DataInput.confirmations, {"CSH-02"}),
         (DataInput.documents, {"REV-03", "REV-02", "CSH-02"}),  # 补登记: 判断引用文件页的程序 (需求 R90)
+        (DataInput.financial_statements, set()),  # 待审财报 (需求 R217): Demo 程序库里还没有程序读它 (FIN-12 写 reads)
     ],
 )
 def test_stale_by_what_each_program_reads(data_input: DataInput, expected: set[str]) -> None:

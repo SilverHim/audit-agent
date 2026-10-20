@@ -10,7 +10,15 @@ from datetime import UTC, datetime
 
 from backend.agents.base import AgentDeps
 from backend.contracts.data import CheckId, CheckRun, DataRequest, TableKind
-from backend.contracts.models import AgentId, DocumentType, Procedure, ProcedureStatus, TrailEntry, TrailKind
+from backend.contracts.models import (
+    AgentId,
+    DocumentRef,
+    DocumentType,
+    Procedure,
+    ProcedureStatus,
+    TrailEntry,
+    TrailKind,
+)
 from backend.contracts.records import DatasetTraits
 from backend.orchestration.trail import record_transitions
 from backend.services.data_quality import (
@@ -24,6 +32,16 @@ from backend.services.data_quality import (
 )
 
 STATEMENT_READY = frozenset({"classified", "extracted"})  # 财务报表文件算已提供的状态 (分类完成)
+
+
+def statement_provided(document: DocumentRef) -> bool:
+    """一份 financial_statements 类文件算不算已提供: 分类完成 (STATEMENT_READY), 或类型已定而抽取没通过转了人工
+    (needs_manual, failed_step extract; 需求 R217 起 PDF 报表上传后要抽取): 客户已交, 抽取由审计师处理, 不再向客户要."""
+    return document.status in STATEMENT_READY or (
+        document.status == "needs_manual" and document.failed_step == "extract"
+    )
+
+
 # 还没执行完的程序状态: 这些程序 inputs 中还没有的资料才去要 (需求 R272)
 UNDONE = frozenset({ProcedureStatus.planned, ProcedureStatus.executing, ProcedureStatus.awaiting_data})
 
@@ -158,9 +176,9 @@ class DataCheckup:
         return program_requests(needs, have, now)
 
     async def statements(self, eid: str) -> int:
-        """已提供的财务报表文件数 (类型 financial_statements, 分类完成)."""
+        """已提供的财务报表文件数 (类型 financial_statements, 见 statement_provided)."""
         documents = await self.deps.financial_store.documents(eid, DocumentType.financial_statements)
-        return sum(d.status in STATEMENT_READY for d in documents)
+        return sum(statement_provided(d) for d in documents)
 
     async def run_if_stale(self, eid: str) -> CheckRun | None:
         """最近一次体检已不对应当前数据时跑一次, 否则不跑, 返回 None: 没体检过, 之后又写过数据 (数据版本变了), 或已

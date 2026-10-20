@@ -78,6 +78,8 @@ def table(name: str, fields: str, keys: tuple[str, ...], *, scoped: bool = True)
             "data_checks": {"request_id"},
             "account_category_history": {"category", "basis", "reason"},
             "extraction_versions": {"field", "reason"},
+            "financial_statements": {"directors_declaration_date", "document_id"},
+            "financial_statement_lines": {"prior_amount_cents"},
             "xero_connections": {"tenant_id", "tenant_name", "last_synced_at"},
             "import_batches": {"request_id", "committed_at", "committed_by", "data_version", "error"},
             "llm_settings": {"api_key_encrypted", "key_last4"},
@@ -202,6 +204,19 @@ account_category_history = table(
     "account_category_history",
     "account_code:s version:i category:s basis:s changed_by:s changed_at:t reason:s",
     ("account_code", "version"),
+)
+# 待审财报 (需求 R217, 迁移 0019): 每版一行, 各行另表 (按 line_no 为列示顺序); A3 从上传的财务报表抽取与审计师修改
+# 各写一版, 旧版本不删. 当前版本由 FinancialDataStore.financial_statements 按来源文件的登记选
+financial_statements = table(
+    "financial_statements",
+    "id:s version:i prepared_at:d directors_declaration_date:d document_id:s comparative_restatement_entry_nos:j",
+    ("id", "version"),
+)
+financial_statement_lines = table(
+    "financial_statement_lines",
+    "fs_id:s fs_version:i line_no:i code:s statement:s name:s amount_cents:b sign:i account_codes:j subtotal:z "
+    "prior_amount_cents:b",
+    ("fs_id", "fs_version", "code"),
 )
 # 抽取结果 (合同, 回函) 的各版本: 第 1 版为抽取所得, 之后每次审计师修改一版; data 为该版完整内容
 extraction_versions = table(

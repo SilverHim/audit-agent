@@ -2196,6 +2196,170 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/financial-statements": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Get Financial Statements",
+        "description": "待审财报的当前版本 (需求 R217): A3 从上传的财务报表文件抽取, 审计师可改; 没有已抽取的财务报表文件时为 null.",
+        "operationId": "evidence-get_financial_statements",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FinancialStatements"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Evidence-Get Financial Statements"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Financial Statements",
+        "description": "修改待审财报的抽取结果, 返回新的一版. field 为 prepared_at, directors_declaration_date, lines[行代码].name,\nlines[行代码].amount_cents, lines[行代码].prior_amount_cents (如 lines[SOFP-OREC].amount_cents). 还没有待审财报\n404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 没有该行, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.",
+        "operationId": "evidence-edit_financial_statements",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractionEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialStatements"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/financial-statements/history": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Financial Statements History",
+        "description": "待审财报的各版 (data 为该版 FinancialStatements), 按版本升序. 还没有抽取过 404.",
+        "operationId": "evidence-financial_statements_history",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionRecord"
+                  },
+                  "title": "Response Evidence-Financial Statements History"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/records/{source_type}/{source_id}": {
       "get": {
         "tags": [
@@ -5148,6 +5312,18 @@
               }
             ],
             "title": "Reply"
+          },
+          "statements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statements"
           },
           "issues": {
             "items": {
@@ -8447,7 +8623,7 @@
           "reason"
         ],
         "title": "ExtractionEdit",
-        "description": "修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id})."
+        "description": "修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id}, PUT /registry-extracts/{id},\nPUT /financial-statements)."
       },
       "ExtractionRecord": {
         "properties": {
@@ -8661,6 +8837,141 @@
         "type": "object",
         "title": "FieldSource",
         "description": "一个字段的取值, 三选一: 一列 (column); 借贷两列之差 (debit 减 credit, 两列都空为 0, 只用于金额字段); 分组标题的\n命名捕获组 (group)."
+      },
+      "FinancialStatementLine": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "statement": {
+            "type": "string",
+            "enum": [
+              "financial_position",
+              "profit_or_loss",
+              "changes_in_equity",
+              "cash_flows"
+            ],
+            "title": "Statement"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "prior_amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Amount Cents"
+          },
+          "sign": {
+            "type": "integer",
+            "enum": [
+              1,
+              -1
+            ],
+            "title": "Sign"
+          },
+          "account_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Account Codes"
+          },
+          "subtotal": {
+            "type": "boolean",
+            "title": "Subtotal",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "statement",
+          "name",
+          "amount_cents",
+          "sign",
+          "account_codes"
+        ],
+        "title": "FinancialStatementLine",
+        "description": "待审财报的一行 (需求 R216). 财务状况表与损益表的行满足 金额 = sign × Σ 映射科目的余额; 权益变动表与现金流量表\n的行 account_codes 只写出取自哪些科目."
+      },
+      "FinancialStatements": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "default": "FS"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version",
+            "default": 1
+          },
+          "prepared_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Prepared At"
+          },
+          "directors_declaration_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Directors Declaration Date"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "comparative_restatement_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Comparative Restatement Entry Nos",
+            "default": []
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialStatementLine"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "prepared_at",
+          "lines"
+        ],
+        "title": "FinancialStatements",
+        "description": "待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; A3 从上传的财务报表文件抽取, 存表\nfinancial_statements 与 financial_statement_lines, 审计师改抽取结果出新版本 (需求 R217). 规格书第 12.2 节."
       },
       "GateDecision": {
         "properties": {

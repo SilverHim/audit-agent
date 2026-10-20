@@ -429,6 +429,12 @@ export type BatchItem = {
         [key: string]: unknown;
     } | null;
     /**
+     * Statements
+     */
+    statements?: {
+        [key: string]: unknown;
+    } | null;
+    /**
      * Issues
      */
     issues?: Array<BatchIssue>;
@@ -2096,7 +2102,8 @@ export type ExceptionDisposition = 'open' | 'attributed' | 'unattributed';
 /**
  * ExtractionEdit
  *
- * 修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id}).
+ * 修改一个抽取字段 (PUT /contracts/{id}, PUT /confirmations/{id}, PUT /registry-extracts/{id},
+ * PUT /financial-statements).
  */
 export type ExtractionEdit = {
     /**
@@ -2236,6 +2243,84 @@ export type FieldSource = {
     values?: {
         [key: string]: string;
     };
+};
+
+/**
+ * FinancialStatementLine
+ *
+ * 待审财报的一行 (需求 R216). 财务状况表与损益表的行满足 金额 = sign × Σ 映射科目的余额; 权益变动表与现金流量表
+ * 的行 account_codes 只写出取自哪些科目.
+ */
+export type FinancialStatementLine = {
+    /**
+     * Code
+     */
+    code: string;
+    /**
+     * Statement
+     */
+    statement: 'financial_position' | 'profit_or_loss' | 'changes_in_equity' | 'cash_flows';
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    /**
+     * Prior Amount Cents
+     */
+    prior_amount_cents?: number | null;
+    /**
+     * Sign
+     */
+    sign: 1 | -1;
+    /**
+     * Account Codes
+     */
+    account_codes: Array<string>;
+    /**
+     * Subtotal
+     */
+    subtotal?: boolean;
+};
+
+/**
+ * FinancialStatements
+ *
+ * 待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; A3 从上传的财务报表文件抽取, 存表
+ * financial_statements 与 financial_statement_lines, 审计师改抽取结果出新版本 (需求 R217). 规格书第 12.2 节.
+ */
+export type FinancialStatements = {
+    /**
+     * Id
+     */
+    id?: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Prepared At
+     */
+    prepared_at: string;
+    /**
+     * Directors Declaration Date
+     */
+    directors_declaration_date?: string | null;
+    /**
+     * Document Id
+     */
+    document_id?: string | null;
+    /**
+     * Comparative Restatement Entry Nos
+     */
+    comparative_restatement_entry_nos?: Array<string>;
+    /**
+     * Lines
+     */
+    lines: Array<FinancialStatementLine>;
 };
 
 /**
@@ -6266,6 +6351,100 @@ export type EvidenceRegistryExtractHistoryResponses = {
 };
 
 export type EvidenceRegistryExtractHistoryResponse = EvidenceRegistryExtractHistoryResponses[keyof EvidenceRegistryExtractHistoryResponses];
+
+export type EvidenceGetFinancialStatementsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/financial-statements';
+};
+
+export type EvidenceGetFinancialStatementsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceGetFinancialStatementsError = EvidenceGetFinancialStatementsErrors[keyof EvidenceGetFinancialStatementsErrors];
+
+export type EvidenceGetFinancialStatementsResponses = {
+    /**
+     * Response Evidence-Get Financial Statements
+     *
+     * Successful Response
+     */
+    200: FinancialStatements | null;
+};
+
+export type EvidenceGetFinancialStatementsResponse = EvidenceGetFinancialStatementsResponses[keyof EvidenceGetFinancialStatementsResponses];
+
+export type EvidenceEditFinancialStatementsData = {
+    body: ExtractionEdit;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/financial-statements';
+};
+
+export type EvidenceEditFinancialStatementsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEditFinancialStatementsError = EvidenceEditFinancialStatementsErrors[keyof EvidenceEditFinancialStatementsErrors];
+
+export type EvidenceEditFinancialStatementsResponses = {
+    /**
+     * Successful Response
+     */
+    200: FinancialStatements;
+};
+
+export type EvidenceEditFinancialStatementsResponse = EvidenceEditFinancialStatementsResponses[keyof EvidenceEditFinancialStatementsResponses];
+
+export type EvidenceFinancialStatementsHistoryData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/financial-statements/history';
+};
+
+export type EvidenceFinancialStatementsHistoryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceFinancialStatementsHistoryError = EvidenceFinancialStatementsHistoryErrors[keyof EvidenceFinancialStatementsHistoryErrors];
+
+export type EvidenceFinancialStatementsHistoryResponses = {
+    /**
+     * Response Evidence-Financial Statements History
+     *
+     * Successful Response
+     */
+    200: Array<ExtractionRecord>;
+};
+
+export type EvidenceFinancialStatementsHistoryResponse = EvidenceFinancialStatementsHistoryResponses[keyof EvidenceFinancialStatementsHistoryResponses];
 
 export type EvidenceGetRecordData = {
     body?: never;

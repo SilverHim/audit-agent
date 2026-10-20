@@ -3,7 +3,8 @@
 预置的是演示数据导入 (R269) 之后的状态; 数据一律经载入器 (XeroDatasetLoader.tables), adapters.xero_supplements 与
 演示导入清单读出, 这里不重写映射. 两组函数:
 - 只需补造目录: xero_profile, xero_presets, xero_traits, xero_uploads, xero_documents, xero_pages, xero_adjustments,
-  xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对 (Supplements.verify),
+  xero_employees, xero_registry, xero_confirmations, xero_contracts, xero_financial_statements. 有快照时连快照一起核对
+  (Supplements.verify),
   没有快照时只核对补造文件 (verify_files).
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
   make_xero_deps. 快照按 tests.external.snapshot_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
@@ -46,6 +47,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    FinancialStatements,
     GateDecision,
     GateId,
     GateVerdict,
@@ -96,6 +98,7 @@ DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_con
 SNAPSHOT_REPO = REPO
 # 补造画像 id 须带的前缀 (快照组织 ID 推出, 见 Supplements.client_profile); 写成常量, 没有快照时也能读画像
 CLIENT_PREFIX = "CLIENT-XERO-3C1332BB-"
+EXTRACTED = {DocumentType.contract, DocumentType.financial_statements}  # 演示导入后已抽取的文件类型
 # 行类型 (FinancialDataStore.record 的 source_type) ← 账表; 试算表另按科目代码取本期行, 同真实实现
 RECORD_TYPES: dict[TableKind, str] = {
     TableKind.journal_entries: "journal_entry",
@@ -167,8 +170,8 @@ def xero_uploads(stage: DemoStage | None = None, loader: XeroDatasetLoader | Non
 
 def xero_documents(stage: DemoStage, loader: XeroDatasetLoader | None = None) -> list[DocumentRef]:
     """到 stage 为止 (含) 各阶段上传并补登记后的文件登记, 按清单顺序: 渠道 auditor_upload, 上传人为项目负责人,
-    类型, 可靠性, 文件日期与关联对象同清单, 哈希与页数取 manifest; 合同已抽取 (extracted), 其余 classified.
-    份数: acceptance 2, fieldwork 21, statements 22, manual 23."""
+    类型, 可靠性, 文件日期与关联对象同清单, 哈希与页数取 manifest; 合同与财务报表已抽取 (extracted, 需求 R217), 其余
+    classified. 份数: acceptance 2, fieldwork 21, statements 22, manual 23."""
     done = STAGES[: STAGES.index(stage) + 1]
     entries = manifest_documents(loader)
     return [
@@ -179,7 +182,7 @@ def xero_documents(stage: DemoStage, loader: XeroDatasetLoader | None = None) ->
             sha256=entries[u.document_id]["sha256"],
             page_count=entries[u.document_id]["page_count"],
             reliability=u.reliability,
-            status="extracted" if u.document_type is DocumentType.contract else "classified",
+            status="extracted" if u.document_type in EXTRACTED else "classified",
             uploaded_at=NOW,
             channel="auditor_upload",
             uploaded_by=ENGAGEMENT.owner_id,
@@ -255,6 +258,13 @@ def xero_confirmations(loader: XeroDatasetLoader | None = None) -> FakeConfirmat
     )
 
 
+def xero_financial_statements(loader: XeroDatasetLoader | None = None) -> FinancialStatements:
+    """待审财报第 1 版: 补造的 financial_statements/fs_v1.json (document_id 为 fs_v1.pdf), 同 statements 阶段上传后
+    A3 的抽取 (需求 R217)."""
+    path = supplement(loader).root / "financial_statements" / "fs_v1.json"
+    return FinancialStatements.model_validate_json(path.read_bytes())
+
+
 def xero_contracts(loader: XeroDatasetLoader | None = None) -> list[Contract]:
     """3 份收入合同第 1 版: 按 DOC-04 的 fixture (tests/fixtures/llm_xero/DOC-04) 组装, 同上传后 A3 的抽取 (指针的证据
     种类与可靠性按文件登记改写, 同输出校验的 document_pointer); 执行 ID 为 UPLOAD-{文件 ID}-JOB. 按合同编号."""
@@ -321,11 +331,15 @@ def xero_financial_store(
     stage: DemoStage = "fieldwork", contracts: bool = True, loader: XeroDatasetLoader | None = None
 ) -> FakeFinancialStore:
     """装好演示数据的假财务存储: 八张表 (put_rows) 与工资册, 到 stage 为止上传的文件; contracts 为真时预置
-    xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError)."""
+    xero_contracts() (合同在 fieldwork 上传, stage 为 acceptance 时抛 ValueError); stage 到 statements 时另预置
+    xero_financial_statements() (需求 R217)."""
     if contracts and stage == "acceptance":
         raise ValueError("合同在 fieldwork 阶段才上传, acceptance 阶段不能预置合同")
+    statements = [xero_financial_statements(loader)] if STAGES.index(stage) >= STAGES.index("statements") else []
     store = FakeFinancialStore(
-        documents=xero_documents(stage, loader), contracts=xero_contracts(loader) if contracts else None
+        documents=xero_documents(stage, loader),
+        contracts=xero_contracts(loader) if contracts else None,
+        statements=statements,
     )
     for name, rows in xero_tables(loader).items():
         put_rows(store, TableKind(name), rows)

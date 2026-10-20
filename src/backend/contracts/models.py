@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
@@ -452,7 +453,7 @@ SourceType = Literal[
     "bank_transaction",
     "bank_account",
     "trial_balance",
-    "financial_statement_line",  # 待审财报的一行 (需求 R216): 客户数据, 端口与表由需求 R217 实现
+    "financial_statement_line",  # 待审财报的一行 (需求 R216): 客户数据, 取当前版本中该行 (需求 R217)
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
@@ -1386,9 +1387,15 @@ class FinancialStatementLine(Model):
     subtotal: bool = False
 
 
+def repeated_line_codes(lines: Sequence[FinancialStatementLine]) -> list[str]:
+    """重复出现的行代码, 按代码排序; 待审财报与它的抽取结果 (llm_outputs.StatementsExtraction) 共用."""
+    codes = [line.code for line in lines]
+    return sorted({code for code in codes if codes.count(code) > 1})
+
+
 class FinancialStatements(Model):
-    """待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; 端口, 表与上传抽取由需求 R217 实现.
-    规格书第 12.2 节."""
+    """待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; A3 从上传的财务报表文件抽取, 存表
+    financial_statements 与 financial_statement_lines, 审计师改抽取结果出新版本 (需求 R217). 规格书第 12.2 节."""
 
     id: str = "FS"  # 每个项目固定 FS
     version: int = Field(default=1, ge=1)  # 版本, 审计师改抽取结果出新版本
@@ -1401,8 +1408,7 @@ class FinancialStatements(Model):
     @model_validator(mode="after")
     def unique_codes(self) -> Self:
         """行代码在一份财报内不重复 (证据指针按它取行)."""
-        codes = [line.code for line in self.lines]
-        repeated = sorted({code for code in codes if codes.count(code) > 1})
+        repeated = repeated_line_codes(self.lines)
         if repeated:
             raise ValueError(f"财报行代码重复: {', '.join(repeated)}")
         return self
