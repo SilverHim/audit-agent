@@ -1,7 +1,8 @@
 import type { ConciergeCitation, CorrectionNotice, GateId, Phase, TrailEntry, TrailKind } from '@/client/types.gen'
+import { WORKING_LANGUAGES, type WorkingLanguage } from '@/lib/working-language'
 
-// 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 更正通知, 稍后处理, 数据管理,
-// 历史问答
+// 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 更正通知, 工作语言的修改,
+// 稍后处理, 数据管理, 历史问答
 
 type TimelineEvent =
   | { kind: 'created'; at: string }
@@ -16,6 +17,7 @@ type TimelineEvent =
       entries: string[]
       reason: string | null
     }
+  | { kind: 'language'; at: string; from: WorkingLanguage; to: WorkingLanguage }
   | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null; xero: boolean }
   | {
       kind: 'qa'
@@ -73,6 +75,10 @@ function strings(value: unknown): string[] {
 
 const NOTICE_KINDS: CorrectionNotice['kind'][] = ['adjustments_posted', 'stop_waiting']
 
+function language(value: unknown): WorkingLanguage | null {
+  return WORKING_LANGUAGES.find((item) => item === value) ?? null
+}
+
 // 工作台按页取留痕: 先取最近的一页 (GET /trail?newest=true), "更早" 以已取到的最早一条为游标 (before) 往前翻一页.
 // 只取 buildTimeline 会变成事件的几类 (TIMELINE_KINDS), 呈递, 大模型调用等不显示的留痕不占每页的名额
 export const TRAIL_PAGE = 100
@@ -129,6 +135,12 @@ export function buildTimeline(entries: TrailEntry[], complete = true): TimelineI
     if (kind === 'decision') {
       flush()
       // 更正通知 (需求 R162): 载荷带通知种类, 所列错报与凭证号; 摘要不按 "对象 决定" 的格式, 不拆
+      // 改工作语言 (需求 R339, decisions.language_trail): 载荷带改前与改后的值, 显示为一行事件
+      const [from, to] = [language(payload.from), language(payload.to)]
+      if (payload.action === 'working_language' && from && to) {
+        items.push({ kind: 'language', key, at, from, to })
+        continue
+      }
       const notice = NOTICE_KINDS.find((item) => item === payload.kind)
       if (notice) {
         const [ids, entries] = [strings(payload.misstatement_ids), strings(payload.adjustment_entry_nos)]

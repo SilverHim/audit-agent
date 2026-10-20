@@ -1,6 +1,7 @@
-"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile; GET plan."""
+"""POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile; GET plan;
+PUT working-language."""
 
-from typing import Annotated
+from typing import Annotated, cast, get_args
 
 from fastapi import APIRouter, Depends, Response
 
@@ -8,7 +9,13 @@ from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_deps, get_query, get_runner, owned_engagement
 from backend.api.errors import api_error, catch_api
 from backend.api.routes.clients import dataset_clients
-from backend.api.schemas import ClientProfileView, EngagementCreate, EngagementSummary, ProfileVersionInfo
+from backend.api.schemas import (
+    ClientProfileView,
+    EngagementCreate,
+    EngagementSummary,
+    ProfileVersionInfo,
+    WorkingLanguageIn,
+)
 from backend.contracts.models import (
     AcceptanceScorecard,
     AuditException,
@@ -16,8 +23,10 @@ from backend.contracts.models import (
     Engagement,
     GateId,
     User,
+    WorkingLanguage,
 )
 from backend.contracts.views import EngagementOverview, PlanView
+from backend.orchestration.decisions import language_trail
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 
@@ -63,6 +72,7 @@ async def create_engagement(
             period_end=body.period_end,
             dataset=body.dataset,
             profile=profile,
+            working_language=body.working_language,
         )
     except ValueError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
@@ -92,6 +102,7 @@ async def create_for_client(
             period_end=body.period_end,
             dataset=None,
             profile=profile,
+            working_language=body.working_language,
         )
     except ValueError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
@@ -145,6 +156,30 @@ async def get_plan(
     照样返回; 功能 planning 关闭或还没起草计划时 current_plan_id 为空, 各列表为空. 项目不存在 404."""
     async with catch_api():
         return await query.plan(engagement.id)
+
+
+@router.put("/{eid}/working-language")
+async def set_working_language(
+    body: WorkingLanguageIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> Engagement:
+    """改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时
+    422 INVALID_VALUE; 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值相同不改,
+    不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户). 不取项目锁: 后台执行中照样可改,
+    改之后才建的执行记录取新值."""
+    if body.language not in get_args(WorkingLanguage):
+        raise api_error("INVALID_VALUE", f"工作语言须为 zh 或 en, 现为 {body.language!r}")
+    language = cast(WorkingLanguage, body.language)
+    async with catch_api():
+        before = await deps.engagement_store.set_working_language(engagement.id, language)
+        if before != language:
+            await deps.trail.record(language_trail(engagement.id, user.id, before, language))
+        updated = await deps.engagement_store.get(engagement.id)
+        if updated is None:
+            raise api_error("NOT_FOUND", engagement.id)
+    return updated
 
 
 @router.post("/{eid}/resume", status_code=202, response_model=None)

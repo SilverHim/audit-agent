@@ -169,6 +169,7 @@ class GraphStateQuery:
             clearly_trivial_cents=values["clearly_trivial_cents"],
             opinion_route=values["opinion_route"],
             features=sorted(frozen_features(engagement.version_snapshot, self.deps.features)),
+            run_languages={run.id: run.language for run in runs},
         )
 
     async def _resume_hint(self, eid: str) -> str | None:

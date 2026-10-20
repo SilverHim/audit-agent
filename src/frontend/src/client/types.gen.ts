@@ -449,6 +449,10 @@ export type AuditReportVersion = {
      * Approved At
      */
     approved_at?: string | null;
+    /**
+     * Language
+     */
+    language?: 'zh' | 'en';
 };
 
 /**
@@ -2217,6 +2221,10 @@ export type Engagement = {
         [key: string]: string;
     };
     /**
+     * Working Language
+     */
+    working_language?: 'zh' | 'en';
+    /**
      * Created At
      */
     created_at: string;
@@ -2249,6 +2257,10 @@ export type EngagementCreate = {
      * Client Id
      */
     client_id?: string | null;
+    /**
+     * Working Language
+     */
+    working_language?: 'zh' | 'en';
 };
 
 /**
@@ -2324,6 +2336,12 @@ export type EngagementOverview = {
      * Features
      */
     features?: Array<string>;
+    /**
+     * Run Languages
+     */
+    run_languages?: {
+        [key: string]: 'zh' | 'en';
+    };
 };
 
 /**
@@ -4354,6 +4372,10 @@ export type ProcedureRun = {
      * Rule Outcomes
      */
     rule_outcomes?: Array<RuleOutcome>;
+    /**
+     * Language
+     */
+    language?: 'zh' | 'en';
 };
 
 /**
@@ -5701,6 +5723,19 @@ export type ValidationError = {
 };
 
 /**
+ * WorkingLanguageIn
+ *
+ * 改项目的工作语言 (需求 R339). 取值在路由里查, 不在 zh, en 之中报 422 INVALID_VALUE (同其他决定的取值校验,
+ * 不走请求体校验的通用 422).
+ */
+export type WorkingLanguageIn = {
+    /**
+     * Language
+     */
+    language: string;
+};
+
+/**
  * XeroAuthorize
  *
  * 连接 Xero (GET /data/xero/connect): 前端跳去的授权地址.
@@ -6212,6 +6247,36 @@ export type EngagementsGetPlanResponses = {
 };
 
 export type EngagementsGetPlanResponse = EngagementsGetPlanResponses[keyof EngagementsGetPlanResponses];
+
+export type EngagementsSetWorkingLanguageData = {
+    body: WorkingLanguageIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/working-language';
+};
+
+export type EngagementsSetWorkingLanguageErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsSetWorkingLanguageError = EngagementsSetWorkingLanguageErrors[keyof EngagementsSetWorkingLanguageErrors];
+
+export type EngagementsSetWorkingLanguageResponses = {
+    /**
+     * Successful Response
+     */
+    200: Engagement;
+};
+
+export type EngagementsSetWorkingLanguageResponse = EngagementsSetWorkingLanguageResponses[keyof EngagementsSetWorkingLanguageResponses];
 
 export type EngagementsResumeEngagementData = {
     body?: never;

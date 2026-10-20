@@ -165,6 +165,7 @@ from backend.contracts.models import (
     UncorrectedItem,
     User,
     Versioned,
+    WorkingLanguage,
     WrittenRepresentationLetter,
 )
 from backend.contracts.ports import (
@@ -1000,6 +1001,7 @@ class FakeEngagementStore:
         period_end: date,
         dataset: str | None,
         profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
     ) -> Engagement:
         raise NotImplementedError
 
@@ -1038,6 +1040,24 @@ class FakeEngagementStore:
             txn.log.append(EngagementWrite("update", eid, kept))
         else:
             self._apply_engagement(updated)
+
+    async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage:
+        """改工作语言, 返回之前的值; 相同时不改. 不存在 LookupError, 已锁定 EngagementLocked (同 Postgres 的 writable);
+        在 output_store 的事务块内调用时加入该事务."""
+        current = await self.get(eid)
+        if current is None:
+            raise LookupError(f"Engagement {eid} not found")
+        if current.locked:
+            raise EngagementLocked(eid)
+        if current.working_language != language:
+            updated = current.model_copy(update={"working_language": language, "updated_at": datetime.now(UTC)})
+            txn = self._txn()
+            if txn is not None:
+                txn.engagements[eid] = updated
+                txn.log.append(EngagementWrite("update", eid, {"working_language": language}))
+            else:
+                self._apply_engagement(updated)
+        return current.working_language
 
     def _apply_engagement(self, engagement: Engagement) -> None:
         self.engagements = [engagement if e.id == engagement.id else e for e in self.engagements]
@@ -1128,7 +1148,14 @@ class CreatingEngagementStore(FakeEngagementStore):
     才出新版本 (同 PostgresEngagementStore.create 的效果)."""
 
     async def create(
-        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
+        self,
+        *,
+        owner_id: str,
+        period_start: date,
+        period_end: date,
+        dataset: str | None,
+        profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
@@ -1149,6 +1176,7 @@ class CreatingEngagementStore(FakeEngagementStore):
             owner_id=owner_id,
             client_profile_version=profile.version,
             phase=Phase.P0_Acceptance,
+            working_language=working_language,
             created_at=NOW,
             updated_at=NOW,
         )

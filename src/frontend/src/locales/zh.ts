@@ -255,6 +255,14 @@ export const zh: Messages = {
     evaluated: '已评价',
     closed: '已结束',
   },
+  workingLanguage: {
+    label: '工作语言',
+    hint: '修改之后执行的程序用新语言，已生成的内容不改写',
+    names: { zh: '中文', en: '英文' },
+    generatedIn: { zh: '以中文生成', en: '以英文生成' },
+    changed: (name) => `工作语言已改为${name}`,
+    changedEvent: (from, to) => `工作语言由${from}改为${to}`,
+  },
   lifecycle: {
     status: '状态',
     uncorrectedBasis: '未更正的依据',

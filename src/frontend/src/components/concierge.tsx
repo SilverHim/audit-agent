@@ -30,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { UpdateFields, UpdatePayload } from '@/components/update-fields'
+import { GeneratedLanguage } from '@/components/working-language'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -389,6 +390,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
         {view.task.procedure_id}
       </Code>
       <span className="font-semibold">{proc}</span>
+      {isJudgment(target) ? <GeneratedLanguage eid={eid} runId={target.run_id} /> : null}
       <span className="flex-1" />
       <StatusPill tone={tier === 'full_review' ? 'risk' : tier === 'check_evidence' ? 'warn' : 'accent'}>
         {t.tiers[tier]}

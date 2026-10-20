@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePath
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -48,6 +48,7 @@ from backend.contracts.models import (
     SourceType,
     User,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.ports import DatasetLoader
 from backend.contracts.records import (
@@ -1084,7 +1085,14 @@ def read_planning(directory: Path) -> tuple[list[AuditObjective], list[RiskItem]
 
 class PostgresEngagementStore(Store):
     async def create(
-        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
+        self,
+        *,
+        owner_id: str,
+        period_start: date,
+        period_end: date,
+        dataset: str | None,
+        profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
@@ -1107,6 +1115,7 @@ class PostgresEngagementStore(Store):
                 owner_id=owner_id,
                 client_profile_version=adopted.version,
                 phase=Phase.P0_Acceptance,
+                working_language=working_language,
                 created_at=now(),
                 updated_at=now(),
             )
@@ -1157,6 +1166,18 @@ class PostgresEngagementStore(Store):
             await conn.execute(
                 update(m.engagements).where(m.engagements.c.id == eid).values(**changes, updated_at=now())
             )
+
+    async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage:
+        """writable 锁住项目行 (FOR NO KEY UPDATE) 后读旧值再改, 并发的修改排队; 与旧值相同时不改."""
+        t = m.engagements
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            previous = cast(
+                WorkingLanguage, (await conn.execute(select(t.c.working_language).where(t.c.id == eid))).scalar_one()
+            )
+            if previous != language:
+                await conn.execute(update(t).where(t.c.id == eid).values(working_language=language, updated_at=now()))
+            return previous
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:
         eid = self._joined_eid()  # 画像是跨项目表, 并入当前项目事务而不改其 RLS 范围

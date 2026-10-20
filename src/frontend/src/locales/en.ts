@@ -268,6 +268,15 @@ export const en = {
     evaluated: 'Evaluated',
     closed: 'Closed',
   } as Record<string, string>,
+  // 工作语言 (需求 R339): 建项目与项目页的选择, 生成语言的标注, 对话流里的修改记录
+  workingLanguage: {
+    label: 'Working language',
+    hint: 'Procedures run after a change use the new language; content already generated is not rewritten',
+    names: { zh: 'Chinese', en: 'English' },
+    generatedIn: { zh: 'Generated in Chinese', en: 'Generated in English' },
+    changed: (name: string) => `Working language set to ${name}`,
+    changedEvent: (from: string, to: string) => `Working language changed from ${from} to ${to}`,
+  },
   lifecycle: {
     status: 'Status',
     uncorrectedBasis: 'Why uncorrected',

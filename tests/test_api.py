@@ -19,6 +19,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementUpdate,
     Phase,
+    ProcedureRun,
     ReviewRecord,
     TrailEntry,
     TrailKind,
@@ -28,7 +29,7 @@ from backend.core.security import create_access_token, decode_access_token, hash
 from backend.main import create_app
 from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
 from tests.external import REPO
-from tests.fakes import FakeFinancialStore, FakeOutputStore, FakeTrail
+from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail, api_client, wait_idle
 
 
 @functools.cache
@@ -624,3 +625,75 @@ MISSTATEMENT = Misstatement(  # 第 1 版 (identified), 由人对判断认定; �
     direction="overstated",
     account_code="710",
 )
+
+
+# ── 工作语言 (需求 R339) ──
+
+
+@pytest.mark.parametrize(("given", "expected"), [({"working_language": "zh"}, "zh"), ({}, "en")])
+async def test_engagement_created_with_working_language(given: dict[str, str], expected: str) -> None:
+    """验收 1, 3: POST /engagements 带 working_language zh 时项目为 zh, 不带为 en (与之前的输出一致); 建项目后跑到
+    ACC-01 的各次执行都记下这个语言."""
+    from tests.test_demo_default import demo_runner
+
+    runner = demo_runner()
+    async with api_client(runner) as client:
+        body = {"period_start": "2025-07-01", "period_end": "2026-06-30", "dataset": "demo", **given}
+        created = await client.post("/api/v1/engagements", json=body)
+        assert created.status_code == 201, created.text
+        eid = created.json()["engagement"]["id"]
+        await wait_idle(runner, eid)
+        overview = (await client.get(f"/api/v1/engagements/{eid}")).json()
+    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
+    assert overview["engagement"]["working_language"] == expected
+    assert runs and {run.language for run in runs} == {expected}
+    assert overview["run_languages"] == {run.id: expected for run in runs}
+
+
+def language_store(api: SimpleNamespace, **fields: Any) -> FakeEngagementStore:
+    """本人的项目 (改几个字段, 如锁定) 换成能改工作语言的假项目存储, 返回它."""
+    deps = api.client.app.state.deps
+    store = FakeEngagementStore(engagements=[deps.engagement_store.mine.model_copy(update=fields)])
+    deps.engagement_store = store
+    return store
+
+
+LANGUAGE_URL = "/api/v1/engagements/ENG-2026-001/working-language"
+
+
+def test_working_language_change_is_trailed_once(api: SimpleNamespace) -> None:
+    """验收 2: en 改为 zh 返回改后的项目, decision 留痕一行 (action working_language, from en, to zh, 写入人为当前
+    用户); 再提交 zh (与当前相同) 不改也不留痕; 改回 en 再留一行."""
+    store = language_store(api)
+    changed = api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
+    assert (changed.status_code, changed.json()["working_language"]) == (200, "zh")
+    assert store.engagements[0].working_language == "zh"
+    same = api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
+    assert (same.status_code, same.json()["working_language"]) == (200, "zh")
+    api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "en"})
+    rows = [(e.kind, e.actor, e.payload) for e in api.trail.entries]
+    assert rows == [
+        (TrailKind.decision, "USR-1", {"action": "working_language", "from": "en", "to": "zh"}),
+        (TrailKind.decision, "USR-1", {"action": "working_language", "from": "zh", "to": "en"}),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fields", "url", "language", "status", "code"),
+    [
+        ({}, LANGUAGE_URL, "fr", 422, "INVALID_VALUE"),
+        ({}, LANGUAGE_URL, "ZH", 422, "INVALID_VALUE"),
+        ({"locked": True}, LANGUAGE_URL, "zh", 423, "ENGAGEMENT_LOCKED"),
+        ({}, LANGUAGE_URL.replace("001", "002"), "zh", 404, "NOT_FOUND"),  # 不是本人的项目
+    ],
+    ids=["unknown", "case", "locked", "not_mine"],
+)
+def test_working_language_change_rejected(
+    api: SimpleNamespace, fields: dict[str, Any], url: str, language: str, status: int, code: str
+) -> None:
+    """验收 2: 取值不在 zh, en 422 INVALID_VALUE (区分大小写); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改
+    项目, 不留痕."""
+    store = language_store(api, **fields)
+    response = api.client.put(url, headers=_auth(api), json={"language": language})
+    assert (response.status_code, response.json()["detail"]["code"]) == (status, code)
+    assert store.engagements[0].working_language == "en" and api.trail.entries == []

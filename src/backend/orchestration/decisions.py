@@ -59,6 +59,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.ports import FinancialDataStore
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
@@ -885,6 +886,18 @@ def rerun_trail(eid: str, request: RerunRequest) -> TrailEntry:
             "closed_task_ids": request.closed_task_ids,
             "data_version": request.data_version,
         },
+    )
+
+
+def language_trail(eid: str, actor: str, before: WorkingLanguage, after: WorkingLanguage) -> TrailEntry:
+    """改工作语言 (需求 R339, PUT working-language) 的 decision 留痕: payload 的 action 为 working_language, from 与
+    to 为改前与改后的值. 没有决定对象 (不进 decisions 表), 不带防重复键; 与当前值相同不改时不写."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=actor,
+        summary=f"工作语言 {before} → {after}",
+        payload={"action": "working_language", "from": before, "to": after},
     )
 
 

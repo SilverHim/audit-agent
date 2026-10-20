@@ -902,6 +902,10 @@ class ClientEntry(Model):
     first_source: ProfileSource | None  # 第 1 版的来源; 老版本为空
 
 
+# 项目的工作语言 (需求 R339, Issue #51): 底稿与回答用的语言. en 为英文 (缺省, 与之前的输出一致), zh 为中文
+WorkingLanguage = Literal["zh", "en"]
+
+
 class Engagement(Model):
     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
 
@@ -915,6 +919,9 @@ class Engagement(Model):
     phase: Phase  # 当前阶段
     locked: bool = False  # 签字或拒绝承接后锁定, 拒绝一切写入
     version_snapshot: dict[str, str] = {}  # 启动时冻结: 程序库 commit, LLM 模式与模型, prompt 摘要, 功能集, 冻结时刻
+    # 工作语言 (需求 R339): 建项目时选, 之后可改 (PUT working-language, 留痕); 每次执行记下当时的值
+    # (ProcedureRun.language), 已生成的内容不随之改写. 之前建的项目为 en
+    working_language: WorkingLanguage = "en"
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
 
@@ -986,6 +993,9 @@ class ProcedureRun(Versioned):
     data_version: int | None = None
     # 规则引擎没有执行的规则 (需求 R130), 按 YAML 顺序; 全部执行或不经规则引擎为空. 旧记录读回时为空
     rule_outcomes: list[RuleOutcome] = []
+    # 建执行记录时项目的工作语言 (需求 R339, nodes.build_run): 本次执行生成的内容所用的语言, 页面据此标注. 之前的
+    # 执行记录 (Store 与检查点里没有这个键) 读回为 en: 那时的输出都是英文
+    language: WorkingLanguage = "en"
 
 
 class ScheduleRow(Model):
@@ -1861,6 +1871,9 @@ class AuditReportVersion(Versioned):
     report_date: date | None = None  # 报告日, 签字当天
     approved_by: str | None = None  # 签字人的用户 ID
     approved_at: datetime | None = None  # 签字时间
+    # 起草它的那次 RPT-03 执行的工作语言 (需求 R339, 同 ProcedureRun.language; 报告不记执行 ID, 语言随稿记下), 签字等
+    # 后续版本沿用; 之前的版本读回为 en
+    language: WorkingLanguage = "en"
 
 
 class RepresentationClause(Model):

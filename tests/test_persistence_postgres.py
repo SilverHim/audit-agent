@@ -580,6 +580,77 @@ async def test_migration_0015_round_trip(storage) -> None:
         await owner.dispose()
 
 
+async def test_working_language_on_postgres(storage) -> None:
+    """需求 R339: 建项目缺省 en, 带 zh 时为 zh; set_working_language 返回改之前的值, 相同时不改 (updated_at 不动);
+    项目锁定后抛 EngagementLocked, 不改."""
+    engine, e, loader, _ = storage
+    engagements = PostgresEngagementStore(engine)
+    assert e.working_language == "en"
+    assert await engagements.set_working_language(e.id, "zh") == "en"
+    changed = await engagements.get(e.id)
+    assert changed is not None and changed.working_language == "zh"
+    assert await engagements.set_working_language(e.id, "zh") == "zh"
+    assert await engagements.get(e.id) == changed
+    await engagements.update(e.id, locked=True)
+    with pytest.raises(EngagementLocked):
+        await engagements.set_working_language(e.id, "en")
+    assert (await engagements.get(e.id)).working_language == "zh"  # type: ignore[union-attr]
+    profile = loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex})
+    zh = await engagements.create(
+        owner_id=e.owner_id,
+        period_start=e.period_start,
+        period_end=e.period_end,
+        dataset="demo",
+        profile=profile,
+        working_language="zh",
+    )
+    assert (await engagements.get(zh.id)).working_language == "zh"  # type: ignore[union-attr]
+
+
+async def test_migration_0023_round_trip(storage) -> None:
+    """需求 R339 验收 5: 以属主角色在一个事务里走 0023 降级再升级 (两次), 最后回滚. 测试库的项目表已有行 (含一个 zh
+    的); 降级后没有这一列, 升级后各行为 en (旧库的项目都是英文), 缺省 en, 再升级一次不报错. 新库 0001 按当前模型
+    建表时已带这一列, 0023 跳过. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    engine, e, _, _ = storage
+    await PostgresEngagementStore(engine).set_working_language(e.id, "zh")
+    module = migration_module("0023_engagement_working_language")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    column = text(
+        "SELECT column_default, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'engagements' AND column_name = 'working_language'"
+    )
+    owner = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with owner.connect() as conn:
+            outer = await conn.begin()
+            try:
+                assert (await conn.execute(column)).all() == [("'en'::text", "NO")]
+                await conn.run_sync(run("downgrade"))
+                assert (await conn.execute(column)).all() == []
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert (await conn.execute(column)).all() == [("'en'::text", "NO")]
+                languages = await conn.execute(text("SELECT DISTINCT working_language FROM engagements"))
+                assert languages.scalars().all() == ["en"]
+            finally:
+                await outer.rollback()
+    finally:
+        await owner.dispose()
+
+
 async def test_ownership_graph_versions_on_postgres(storage) -> None:
     """R136 验收 6: OWNERSHIP v1, v2 写进 ownership_graphs 表, 按版本读回仍是 OwnershipGraph (节点与关系不丢); 最新为
     v2, 历史两版; 别的项目读不到 (行级安全). 迁移的往返与授权见 test_data_store_postgres 的新表用例, 迁移链只有一个头

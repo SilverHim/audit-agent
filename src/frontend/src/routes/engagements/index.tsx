@@ -20,6 +20,7 @@ import { clientNote, clientOptionLabel } from '@/lib/clients'
 import { invalidateEngagementList } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { WORKING_LANGUAGES, type WorkingLanguage } from '@/lib/working-language'
 import { useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
 
 export const Route = createFileRoute('/engagements/')({
@@ -146,7 +147,7 @@ const DEFAULT_PERIOD = { start: '2025-07-01', end: '2026-06-30' } // 不自带�
 const NEW_CLIENT = '__new__' // 下拉末项 "新建客户"
 
 function CreateForm({ onCancel }: { onCancel: () => void }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const clients = useQuery(clientsListClientsOptions())
@@ -154,6 +155,8 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
   const [adding, setAdding] = useState(false)
   const [periodStart, setPeriodStart] = useState(DEFAULT_PERIOD.start)
   const [periodEnd, setPeriodEnd] = useState(DEFAULT_PERIOD.end)
+  // 工作语言缺省取当前界面语言 (需求 R339), 可另选
+  const [language, setLanguage] = useState<WorkingLanguage>(lang)
   const create = useMutation({
     ...engagementsCreateEngagementMutation(),
     onSuccess: async (overview) => {
@@ -193,7 +196,7 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
         className="flex flex-col gap-4"
         onSubmit={(event) => {
           event.preventDefault()
-          const period = { period_start: periodStart, period_end: periodEnd }
+          const period = { period_start: periodStart, period_end: periodEnd, working_language: language }
           create.mutate({
             body: dataset ? { ...period, dataset: dataset.dataset } : { ...period, client_id: chosen },
           })
@@ -261,6 +264,23 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
               onChange={(event) => setPeriodEnd(event.target.value)}
               required
             />
+          </div>
+          <div className="flex flex-[1_1_140px] flex-col gap-1.5">
+            <label htmlFor="new-language" className="font-semibold text-[13px]">
+              {t.workingLanguage.label}
+            </label>
+            <select
+              id="new-language"
+              className="h-11 rounded-[10px] border border-input bg-card px-3 text-[14px]"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value as WorkingLanguage)}
+            >
+              {WORKING_LANGUAGES.map((item) => (
+                <option key={item} value={item}>
+                  {t.workingLanguage.names[item]}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2.5">

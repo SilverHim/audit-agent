@@ -8,6 +8,7 @@ import { GateDecisionCard, PlanNarrative, useGate } from '@/components/gate-form
 import { QueryState } from '@/components/query-state'
 import { StaleBadge } from '@/components/rerun'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { GeneratedLanguage } from '@/components/working-language'
 import { useActorName } from '@/lib/actor'
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
@@ -60,6 +61,7 @@ function Plan() {
                 {t.planPage.status[current.status ?? 'draft']}
               </StatusPill>
               {t.planPage.revision(current.revision)}
+              <GeneratedLanguage eid={eid} runId={current.run_id} />
             </span>
           ) : undefined
         }

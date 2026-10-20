@@ -31,6 +31,7 @@ import { EvidenceLink } from '@/components/evidence-link'
 import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
 import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { WorkingLanguageSelect } from '@/components/working-language'
 import { XeroProfileCard } from '@/components/xero-profile'
 import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-api'
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
@@ -271,6 +272,7 @@ function Workspace() {
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          <WorkingLanguageSelect eid={eid} />
           {overview?.running ? (
             <StatusPill tone="accent">
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -480,6 +482,10 @@ function HistoryItem({
         </span>
       </UserBubble>
     )
+  }
+  if (item.kind === 'language') {
+    const names = t.workingLanguage.names
+    return <EventLine>{t.workingLanguage.changedEvent(names[item.from], names[item.to])}</EventLine>
   }
   if (item.kind === 'correction') {
     return (

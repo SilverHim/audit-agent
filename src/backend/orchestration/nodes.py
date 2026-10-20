@@ -132,10 +132,11 @@ def build_run(
     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
     为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
     本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
-    记录.
+    记录. language 取项目当时的工作语言 (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
     """
     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
-    return next_run(procedure.id, state["procedure_runs"], params, started_at)
+    run = next_run(procedure.id, state["procedure_runs"], params, started_at)
+    return run.model_copy(update={"language": engagement.working_language})
 
 
 def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datetime) -> StatePatch:

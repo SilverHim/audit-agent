@@ -13,12 +13,13 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditPlan,
+    AuditReportVersion,
     AutonomyLevel,
     CheckItemStatus,
     ClauseStatus,
@@ -92,6 +93,7 @@ from tests.fakes import (
     make_deps,
     make_graph_nodes,
     make_procedure,
+    make_run,
     make_runner,
     numbat_all_p2_agents,
     ownership_graph,
@@ -713,6 +715,35 @@ def test_old_checkpoint_schedule_reads_back_with_new_defaults() -> None:
     back = serde.loads_typed(serde.dumps_typed(old))
     assert isinstance(back, UncorrectedSchedule) and back.corrected_ids == []
     assert isinstance(back.items[0], UncorrectedItem) and back.items[0].origin == "current_period"
+
+
+def without_field(model: type[BaseModel], dropped: str) -> type[BaseModel]:
+    """去掉一个字段的同名同模块类: 加这个字段之前写进检查点的样子 (按原类名序列化, 读回时取现在的类)."""
+    fields: dict[str, Any] = {
+        name: (info.annotation, info) for name, info in model.model_fields.items() if name != dropped
+    }
+    return create_model(model.__name__, __module__=model.__module__, **fields)
+
+
+REPORT = AuditReportVersion(
+    id="REPORT-1", version=1, revision=1, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
+)
+
+
+@pytest.mark.parametrize(
+    ("sample", "field"),
+    [(make_run("REV-02"), "language"), (REPORT, "language"), (ENGAGEMENT, "working_language")],
+    ids=["run", "report", "engagement"],
+)
+def test_records_from_before_working_language_read_back_as_en(sample: BaseModel, field: str) -> None:
+    """需求 R339 验收 3: 加字段之前写进检查点的执行记录与报告稿 (没有 language) 经白名单 serde 读回为现在的类, 取
+    en (那时的输出都是英文); 存储里的旧行 (JSON 没有这个键) 读回同样是 en. 项目的 working_language 同理."""
+    model = type(sample)
+    serde = checkpoint_serde()
+    old = without_field(model, field)(**sample.model_dump(exclude={field}))
+    back = serde.loads_typed(serde.dumps_typed(old))
+    assert type(back) is model and getattr(back, field) == "en"
+    assert getattr(model.model_validate(sample.model_dump(mode="json", exclude={field})), field) == "en"
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:

@@ -5,6 +5,7 @@ import { PageHeader, StatusPill } from '@/components/chrome'
 import { ReportPreview, RptSignForm } from '@/components/gate-form'
 import { QueryState } from '@/components/query-state'
 import { SubTabs } from '@/components/sub-tabs'
+import { GeneratedLanguage } from '@/components/working-language'
 import { decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
 import { useEngagement } from '@/lib/use-engagement'
@@ -48,6 +49,7 @@ function Report() {
                         {t.reportCard.revision(version.revision, t.opinions[version.opinion_type])}
                       </span>
                       {version.status === 'signed' ? <StatusPill tone="ok">{t.stageStatus.signed}</StatusPill> : null}
+                      <GeneratedLanguage eid={eid} language={version.language} />
                       {version.report_date ? (
                         <span className="text-muted-foreground">{formatDate(version.report_date)}</span>
                       ) : null}

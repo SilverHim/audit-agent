@@ -476,6 +476,64 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/working-language": {
+      "put": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Set Working Language",
+        "description": "改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时\n422 INVALID_VALUE; 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值相同不改,\n不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户). 不取项目锁: 后台执行中照样可改,\n改之后才建的执行记录取新值.",
+        "operationId": "engagements-set_working_language",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkingLanguageIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Engagement"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/resume": {
       "post": {
         "tags": [
@@ -5334,6 +5392,15 @@
               }
             ],
             "title": "Approved At"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Language",
+            "default": "en"
           }
         },
         "additionalProperties": false,
@@ -8776,6 +8843,15 @@
             "title": "Version Snapshot",
             "default": {}
           },
+          "working_language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Working Language",
+            "default": "en"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -8837,6 +8913,15 @@
               }
             ],
             "title": "Client Id"
+          },
+          "working_language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Working Language",
+            "default": "en"
           }
         },
         "additionalProperties": false,
@@ -8984,6 +9069,18 @@
             "type": "array",
             "title": "Features",
             "default": []
+          },
+          "run_languages": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "zh",
+                "en"
+              ]
+            },
+            "type": "object",
+            "title": "Run Languages",
+            "default": {}
           }
         },
         "additionalProperties": false,
@@ -12804,6 +12901,15 @@
             "type": "array",
             "title": "Rule Outcomes",
             "default": []
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Language",
+            "default": "en"
           }
         },
         "additionalProperties": false,
@@ -15318,6 +15424,21 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkingLanguageIn": {
+        "properties": {
+          "language": {
+            "type": "string",
+            "title": "Language"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "language"
+        ],
+        "title": "WorkingLanguageIn",
+        "description": "改项目的工作语言 (需求 R339). 取值在路由里查, 不在 zh, en 之中报 422 INVALID_VALUE (同其他决定的取值校验,\n不走请求体校验的通用 422)."
       },
       "XeroAuthorize": {
         "properties": {
