@@ -270,8 +270,11 @@ ACCRUED_RULES = {
     "客户欠银行为负": ("negative", "customer owes"),
     "nil 为 0": ("0", "nil"),
     "没提为 null": ("null", "not mention"),
+    "截至余额日已计的不论何时支付都取": ("whenever", "later date", "does not change"),
     "不取已入账的利息": ("not", "already credited"),
-    "不取以后应付的整期利息": ("not", "later date"),
+    "不取余额日之后才计的利息": ("not", "days after the balance date"),
+    "只写整期利息时为 null": ("only a whole period", "null"),
+    "不自行计算截至余额日的部分": ("not calculate",),
 }
 
 
