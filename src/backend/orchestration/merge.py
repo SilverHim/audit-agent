@@ -24,7 +24,7 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.contracts.state import EngagementState, StatePatch
-from backend.services.procedure_library import ProcedureLibrary
+from backend.services.procedure_library import ProcedureLibrary, judging_program
 
 # 各 Agent 可写的状态字段, 即第 6 节返回字段表; 另外都可写 procedure_runs (本次执行的终态)
 DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发, 需求 R92) 可写的字段, 另有本次执行记录
@@ -88,10 +88,18 @@ LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程�
 def output_problems(library: ProcedureLibrary) -> list[str]:
     """程序模板 outputs 声明的问题 (含未启用的模板), 每条含程序编号与字段: 字段不在 owner 的写入范围内, 没有登记
     取回方式, 或两条以上程序声明同一字段而其取回方式为 singleton (项目里只有一份, 分不清是谁写的);
-    声明了 documents 而没写 document_types (重放取不回文件), 或写了 document_types 而没声明 documents."""
+    声明了 documents 而没写 document_types (重放取不回文件), 或写了 document_types 而没声明 documents;
+    带错报更新类别 (misstatement_update_kind) 的不是判断程序, 或没声明 judgments 与 misstatements (复核确认写出的
+    错报新版本靠按 outputs 重放进状态, 自动确认的片段带它; 需求 R159 第 1 轮审核 R159-05)."""
     problems: list[str] = []
     declared: dict[str, list[str]] = {}
     for t in library.all(include_disabled=True):
+        if t.misstatement_update_kind is not None:
+            if not judging_program(t):
+                problems.append(f"{t.id}: 只有判断程序能带错报更新类别 (misstatement_update_kind)")
+            missing = [f for f in ("judgments", "misstatements") if f not in t.outputs]
+            if missing:
+                problems.append(f"{t.id}: 带错报更新类别而没声明产出 {', '.join(missing)}")
         if "documents" in t.outputs and not t.document_types:
             problems.append(f"{t.id}: 声明产出 documents 而没写 document_types")
         if t.document_types and "documents" not in t.outputs:

@@ -10,6 +10,7 @@ Xero 演示上把主图放在 FIN-03 之前 (R160 接入 misstatement_triage 前
 verification 的程序库副本.
 """
 
+import re
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from backend.contracts.errors import DecisionRejected
+from backend.contracts.errors import DecisionRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
     Assertion,
@@ -47,13 +48,14 @@ from backend.contracts.models import (
     Versioned,
 )
 from backend.core.config import get_settings
-from backend.orchestration.decisions import check_review_fields, review_effects
+from backend.orchestration.decisions import check_review_fields, check_update_payload, review_effects
 from backend.orchestration.gates import fin01_view
+from backend.orchestration.merge import check_outputs
 from backend.orchestration.nodes import NODE_PROCEDURES
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.features import BASELINE, MISSTATEMENT
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import misstatement_updates
+from backend.services.review_queue import apply_misstatement_update, misstatement_updates
 from tests.fakes import NOW, FakeTrail, ScriptedLLM, make_ctx, wait_idle
 from tests.test_decisions import Started, assert_rejected
 from tests.test_review_decisions import record
@@ -67,6 +69,7 @@ from tests.test_workpaper import (
     fixture_raw,
     fraud_llm,
     llm_calls,
+    objective,
 )
 from tests.xero_fakes import xero_engagement
 from tests.xero_flow import offline_runner
@@ -80,9 +83,8 @@ XJ499, CSH02 = "M-D-XJ499", "M-D-CSH02-091"
 XJ499_TASK, CSH02_TASK = (f"T-J-FIN-03-1-{m}-v1" for m in (XJ499, CSH02))
 FAILED_TASK = f"T-RUN-FIN-03-1-{XJ499}-v1"  # 分类模型对 XJ499 失败时的任务
 # 复核人对 CSH02 改判的分类 (验收 2): 年假之外, 应计利息也属估计
-JUDGMENTAL = MisstatementUpdate(
-    misstatement_id=CSH02, base_version=1, kind="classification", type="judgmental", fraud_indicative=False
-)
+JUDGMENTAL_FIELDS: dict[str, Any] = {"type": MisstatementType.judgmental, "fraud_indicative": False}
+JUDGMENTAL = MisstatementUpdate(misstatement_id=CSH02, base_version=1, kind="classification", **JUDGMENTAL_FIELDS)
 # 复核人对 XJ499 认定的错报 (验收 4): 与 M-D-XJ499 相同的重复情形
 DUPLICATE = MisstatementDraft(
     type=MisstatementType.factual,
@@ -94,6 +96,15 @@ DUPLICATE = MisstatementDraft(
 )
 
 
+# 与 CSH02 (Interest income (270), Completeness) 配得上的审计目标, 测人给载荷按规则补 objective_id
+INTEREST = objective("OBJ-INT", "Interest income", Assertion.Completeness)
+
+
+def failing_xj499() -> ScriptedLLM:
+    """分类模型对 XJ499 连续 3 次结构失败 (建 failed 任务), 对 CSH02 照常."""
+    return ScriptedLLM({"XJ-499": ["not json"] * 3, "BA-091": [fixture_raw("BA-091")]})
+
+
 @pytest.fixture(autouse=True)
 def completion_runs_fin03(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """完成节点只执行 FIN-03 (recovery 与 nodes 共用这张表)."""
@@ -101,10 +112,11 @@ def completion_runs_fin03(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None) -> Started:
-    """见模块 docstring: 停在完成节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES."""
+async def at_fin03(llm: Any = None, library: ProcedureLibrary | None = None, **changes: Any) -> Started:
+    """见模块 docstring: 停在完成节点内等 FIN-03 的复核. llm 为空时读 Xero fixture 正本; library 为空时按 FEATURES;
+    changes 覆盖 fin03_state 的键 (如审计目标)."""
     deps = fin03_deps(FakeTrail(), llm, features=FEATURES, library=library)
-    state = fin03_state()
+    state = fin03_state(**changes)
     procedure = make_ctx(deps, FIN03, engagement=xero_engagement()).procedure
     store = deps.output_store
     async with store.transaction(EID):
@@ -153,10 +165,23 @@ async def waiting() -> Started:
     return await at_fin03()
 
 
-async def test_confirm_writes_classified_misstatement_in_same_commit(waiting: Started) -> None:
+async def test_confirm_writes_classified_misstatement_in_same_commit(
+    waiting: Started, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """验收 1: confirm D-C1 (XJ499 的任务): 同一提交写判断 v2 confirmed, M-D-XJ499 v2 (按判断上的分类载荷: factual,
     无舞弊迹象, 本期, 无审计目标, 作分类的判断为它, 仍为 identified) 与任务 v2 decided; FIN-03 另有待决任务, 不出新版本;
-    1 行 decision 留痕."""
+    1 行 decision 留痕. 决定由复核人写, 其余 (含错报) 由 A1 写 (假存储不记写入者, 这里包一层 put 记下首次写入的;
+    节点之后重放时以 A8 再写同一版本, Store 不新增)."""
+    store = waiting.output_store
+    writers: dict[tuple[str, int], str] = {}
+    put = store.put
+
+    async def recording(eid: str, objs: Any, *, actor: str) -> Any:
+        for o in objs:
+            writers.setdefault((o.id, o.version), actor)
+        return await put(eid, objs, actor=actor)
+
+    monkeypatch.setattr(store, "put", recording)
     commit = await submit(waiting, record(XJ499_TASK, id="D-C1"))
 
     judgment = f"J-FIN-03-1-{XJ499}"
@@ -170,50 +195,80 @@ async def test_confirm_writes_classified_misstatement_in_same_commit(waiting: St
     assert one(commit, Misstatement, XJ499) == classified(misstatement_v1(XJ499), **FACTUAL)
     assert one(commit, Misstatement, XJ499).status is MisstatementStatus.identified
     assert len(decision_rows(waiting, "D-C1")) == 1
+    assert {key: writers[key] for key in [("D-C1", 1), (XJ499, 2), (judgment, 2)]} == {
+        ("D-C1", 1): "U-1",
+        (XJ499, 2): AgentId.A1,
+        (judgment, 2): AgentId.A1,
+    }
 
 
-async def test_override_takes_reviewers_update(waiting: Started) -> None:
+async def test_override_takes_reviewers_update() -> None:
     """验收 2: override CSH02 的判断须带人给的载荷 (缺了 MISSING_FIELD, 不写); 带了: 人工判断 -H1 (confirmed, L1, 载荷
-    取人给的), 原判断 v2 overridden 并记 superseded_by, M-D-CSH02-091 v2 按人给的载荷 (judgmental, 作分类的判断为 -H1;
-    载荷没写来源与审计目标, 不改)."""
+    取人给的), 原判断 v2 overridden 并记 superseded_by, M-D-CSH02-091 v2 按人给的载荷 (judgmental, 作分类的判断为 -H1).
+    来源与审计目标按规则定 (第 1 轮审核 R159-02): 人填的不用, 写入的决定与人工判断带补上的 (本期, 状态中配得上的
+    OBJ-INT)."""
+    waiting = await at_fin03(audit_objectives=[*fin03_state()["audit_objectives"], INTEREST])
     override = record(CSH02_TASK, Decision.override, id="D-O", override_conclusion="应计利息依赖银行的计息估计")
     await assert_rejected(waiting, override, "MISSING_FIELD", "misstatement_update")
 
-    commit = await submit(waiting, override.model_copy(update={"misstatement_update": JUDGMENTAL}))
+    given = JUDGMENTAL.model_copy(update={"origin": "prior_period", "objective_id": "OBJ-X"})
+    commit = await submit(waiting, override.model_copy(update={"misstatement_update": given}))
 
     human_id = f"J-FIN-03-1-{CSH02}-H1"
+    completed = JUDGMENTAL.model_copy(update={"origin": "current_period", "objective_id": INTEREST.id})
+    assert one(commit, ReviewRecord, "D-O").misstatement_update == completed
     human = one(commit, Judgment, human_id)
     assert (human.review_status, human.autonomy_level, human.misstatement_update) == (
         ReviewStatus.confirmed,
         AutonomyLevel.L1,
-        JUDGMENTAL,
+        completed,
     )
     original = one(commit, Judgment, f"J-FIN-03-1-{CSH02}")
     assert (original.version, original.review_status, original.superseded_by) == (2, ReviewStatus.overridden, human_id)
+    rule = {"origin": "current_period", "objective_id": INTEREST.id}
     expected = classified(misstatement_v1(CSH02), human_id, type=MisstatementType.judgmental, fraud_indicative=False)
-    assert one(commit, Misstatement, CSH02) == expected
+    assert one(commit, Misstatement, CSH02) == expected.model_copy(update=rule)
 
 
+OTHER = "另一条错报"  # CHECKED 中换成本任务以外的那条错报
+CHECKED = [  # (人给载荷相对合格载荷的改动, 错误码, 消息含; {subject} 为本任务的错报)
+    ({"base_version": 2}, "VERSION_MISMATCH", "当前为第 1 版"),
+    (
+        {"kind": "verification", "type": None, "fraud_indicative": None, "needs_recommunication": True},
+        "INVALID_VALUE",
+        "classification, 不是 verification",
+    ),
+    ({"misstatement_id": OTHER}, "INVALID_VALUE", "本任务的错报 {subject}"),
+    # 内容 (第 1 轮审核 R159-02): 分类须有类型与舞弊迹象, 舞弊迹象为真须有理由
+    (
+        {"type": None, "fraud_indicative": None},
+        "INVALID_VALUE",
+        "缺 misstatement_update.type, misstatement_update.fraud_indicative",
+    ),
+    ({"fraud_indicative": True, "fraud_reason": " "}, "INVALID_VALUE", "缺 misstatement_update.fraud_reason"),
+]
+
+
+@pytest.mark.parametrize("decision", [Decision.override, Decision.manual_result])
 @pytest.mark.parametrize(
-    ("update", "code", "detail"),
-    [
-        (JUDGMENTAL.model_copy(update={"base_version": 2}), "VERSION_MISMATCH", "当前为第 1 版"),
-        (
-            MisstatementUpdate(misstatement_id=CSH02, base_version=1, kind="verification", needs_recommunication=True),
-            "INVALID_VALUE",
-            "classification, 不是 verification",
-        ),
-        (JUDGMENTAL.model_copy(update={"misstatement_id": XJ499}), "INVALID_VALUE", f"本任务的错报 {CSH02}"),
-    ],
-    ids=["base_version", "kind", "other_misstatement"],
+    ("changes", "code", "detail"), CHECKED, ids=["base_version", "kind", "other_misstatement", "empty", "fraud_reason"]
 )
 async def test_reviewers_update_checked_before_writing(
-    waiting: Started, update: MisstatementUpdate, code: str, detail: str
+    decision: Decision, changes: dict[str, Any], code: str, detail: str
 ) -> None:
-    """验收 3: 人给的载荷依据的不是错报当前版本 → VERSION_MISMATCH; 类别与模板 misstatement_update_kind 不符, 或不是本
-    任务的错报 → INVALID_VALUE; 都不写."""
-    override = record(CSH02_TASK, Decision.override, id="D-O", override_conclusion="改判", misstatement_update=update)
-    await assert_rejected(waiting, override, code, detail)
+    """验收 3: 人给的载荷依据的不是错报当前版本 → VERSION_MISMATCH; 类别与模板 misstatement_update_kind 不符, 不是本
+    任务的错报, 或缺实质字段 → INVALID_VALUE; 都不写. 推翻 CSH02 的判断 (normal 任务, 对象取目标判断) 与 XJ499 失败后的
+    手工结果 (failed 任务, 对象取任务的 subject_id) 各一遍."""
+    if decision is Decision.override:
+        s, task, subject, other = await at_fin03(), CSH02_TASK, CSH02, XJ499
+        fields: dict[str, Any] = {"override_conclusion": "改判"}
+    else:
+        s, task, subject, other = await at_fin03(failing_xj499()), FAILED_TASK, XJ499, CSH02
+        fields = {"manual_result": ManualResult(conclusion="人工分类")}
+    base = {"misstatement_id": subject, "base_version": 1, "kind": "classification", **JUDGMENTAL_FIELDS}
+    update = MisstatementUpdate(**(base | {k: other if v == OTHER else v for k, v in changes.items()}))
+    decided = record(task, decision, id="D-H", misstatement_update=update, **fields)
+    await assert_rejected(s, decided, code, detail.format(subject=subject))
 
 
 async def test_confirm_rejected_when_misstatement_moved_on(waiting: Started) -> None:
@@ -260,8 +315,9 @@ async def test_misstatement_on_classification_applies_judgments_update(waiting: 
 
 async def test_manual_result_on_failed_classification_takes_reviewers_update() -> None:
     """验收 6: 分类模型对 XJ499 连续 3 次结构失败, 其 failed 任务提交 manual_result: 缺载荷 → MISSING_FIELD; 带了:
-    建人工判断 -H1 (带人给的载荷), M-D-XJ499 v2 的作分类的判断为它; 节点读回后仍等 CSH02 的任务."""
-    s = await at_fin03(ScriptedLLM({"XJ-499": ["not json"] * 3, "BA-091": [fixture_raw("BA-091")]}))
+    建人工判断 -H1 (带人给的载荷), M-D-XJ499 v2 的作分类的判断为它; 节点读回后仍等 CSH02 的任务. 再确认 CSH02 后节点
+    结束, 走到 FIN-01 闸门前, 状态中 XJ499 为 -H1 作分类的 v2 (按 outputs 重放取回)."""
+    s = await at_fin03(failing_xj499())
     manual = record(FAILED_TASK, Decision.manual_result, id="D-H", manual_result=ManualResult(conclusion="人工分类"))
     await assert_rejected(s, manual, "MISSING_FIELD", "misstatement_update")
 
@@ -273,6 +329,12 @@ async def test_manual_result_on_failed_classification_takes_reviewers_update() -
     assert one(commit, Misstatement, XJ499) == classified(misstatement_v1(XJ499), human_id, **FACTUAL)
     payload = {"awaiting": "human", "procedure_id": FIN03, "run_id": "RUN-FIN-03-1", "records": ["D-H"]}
     assert waiting_payloads(await s.runner.app.aget_state(CONFIG)) == [payload]
+
+    await submit(s, record(CSH02_TASK, id="D-C3"))
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    assert snapshot.next == ("gate_fin",)
+    by_id = {m.id: m for m in snapshot.values["misstatements"]}
+    assert by_id[XJ499] == classified(misstatement_v1(XJ499), human_id, **FACTUAL)
 
 
 async def test_both_confirmed_node_replays_latest_misstatements(waiting: Started) -> None:
@@ -467,6 +529,60 @@ def test_confirmed_verification_writes_misstatement(
     assert [(x.id, x.attributed_by) for x in attributed] == [(V02, judgment.id) for _ in exceptions]
 
 
+@pytest.mark.parametrize(
+    ("update", "detail"),
+    [
+        (RECOMMUNICATE, None),
+        (RECOMMUNICATE.model_copy(update={"misstatement_id": CSH02}), f"本任务的错报 {XJ499}"),
+        (verification(adjustment_entry_nos=["AJE-X01"]), "缺 misstatement_update.status"),  # 第 1 轮审核 R159-02
+    ],
+    ids=["ok", "other_misstatement", "no_status"],
+)
+def test_unattributed_update_checked(update: MisstatementUpdate, detail: str | None) -> None:
+    """例外任务 (目标为 V02) 的人给验证载荷: 须针对任务的 subject_id, 须带 status; 不过 INVALID_VALUE."""
+    exception = v02(ExceptionDisposition.unattributed)
+    task = fin09_task(exception, TaskKind.unattributed)
+    decided = record(task.id, Decision.override, id="D-U", override_conclusion="x", misstatement_update=update)
+    if detail is None:
+        check_update_payload(decided, task, exception, "verification")
+        return
+    with pytest.raises(DecisionRejected) as e:
+        check_update_payload(decided, task, exception, "verification")
+    assert e.value.code == "INVALID_VALUE" and detail in e.value.message
+
+
+def test_apply_rejects_update_for_another_misstatement() -> None:
+    """载荷所指的错报 ID 与给定的错报不同 (版本恰好相同) → VersionConflict."""
+    with pytest.raises(VersionConflict, match=XJ499):
+        apply_misstatement_update(VERIFYING.model_copy(update={"id": CSH02}), RECOMMUNICATE, "J-1")
+
+
+@pytest.mark.parametrize(
+    ("base", "update", "changes"),
+    [
+        (  # 显式给 None 的字段不清掉已有的值
+            misstatement_v1(XJ499).model_copy(update={"fraud_reason": "已有理由", "objective_id": "OBJ-1"}),
+            MisstatementUpdate(
+                misstatement_id=XJ499, base_version=1, kind="classification", type="judgmental", fraud_reason=None
+            ),
+            {"type": "judgmental", "classification_judgment_id": "J-1"},
+        ),
+        (  # 验证载荷不带状态: 不置重新沟通, 不记作验证的判断
+            VERIFYING,
+            verification(adjustment_entry_nos=["AJE-X01"]),
+            {"adjustment_entry_nos": ["AJE-X01"]},
+        ),
+    ],
+    ids=["explicit_none", "no_status"],
+)
+def test_apply_writes_only_given_fields(
+    base: Misstatement, update: MisstatementUpdate, changes: dict[str, Any]
+) -> None:
+    """载荷中为空的字段不改; 只有改为 corrected 类状态才记验证判断, 改为 communicated 才置重新沟通."""
+    expected = base.model_copy(update={"version": base.version + 1, **changes})
+    assert apply_misstatement_update(base, update, "J-1") == expected
+
+
 @pytest.mark.parametrize("decision", [Decision.override, Decision.misstatement])
 def test_unattributed_v02_takes_reviewers_verification(decision: Decision) -> None:
     """验收 7: FIN-09 的 unattributed 任务 (目标为 V02 例外) 的 override 与 misstatement 须带人给的载荷 (缺了
@@ -530,3 +646,41 @@ def test_update_needs_its_misstatement() -> None:
     confirmed = pending.model_copy(update={"version": 2, "review_status": ReviewStatus.confirmed})
     with pytest.raises(LookupError, match=XJ499):
         misstatement_updates([confirmed], {})
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "old", "new", "detail"),
+    [
+        (  # 第 1 轮审核 R159-03: 仲裁不收载荷, L3 起 A7 复核会出争议任务
+            FIN03,
+            "autonomy_level: L2",
+            "autonomy_level: L3",
+            "带错报更新类别的程序自主度不能高于 L2 (仲裁不收载荷): FIN-03",
+        ),
+        (  # 第 1 轮审核 R159-05: 复核确认写出的错报靠按 outputs 重放进状态
+            FIN03,
+            "outputs: [judgments, review_tasks, misstatements]",
+            "outputs: [judgments, review_tasks]",
+            "FIN-03: 带错报更新类别而没声明产出 misstatements",
+        ),
+        (
+            FIN03,
+            "outputs: [judgments, review_tasks, misstatements]",
+            "outputs: [review_tasks, misstatements]",
+            "FIN-03: 带错报更新类别而没声明产出 judgments",
+        ),
+        ("DOC-04", "engine: llm", "misstatement_update_kind: classification\nengine: llm", "DOC-04: 只有判断程序能"),
+    ],
+    ids=["autonomy", "no_misstatements", "no_judgments", "not_judging"],
+)
+def test_update_kind_guarded_at_startup(tmp_path: Path, procedure_id: str, old: str, new: str, detail: str) -> None:
+    """带错报更新类别的模板: 自主度不高于 L2 (程序库加载时), 判断程序且声明 judgments 与 misstatements (GraphNodes
+    构造时的 check_outputs); 不满足即报错, 消息带程序编号."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    path = root / "procedures" / f"{procedure_id}.yaml"
+    yaml = path.read_text(encoding="utf-8")
+    assert yaml.count(old) == 1
+    path.write_text(yaml.replace(old, new), encoding="utf-8")
+    with pytest.raises(ValueError, match=re.escape(detail)):
+        check_outputs(ProcedureLibrary(root, FEATURES))

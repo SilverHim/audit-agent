@@ -14,11 +14,13 @@ from langgraph.types import Command, StateSnapshot
 from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, RunContext
+from backend.agents.workpaper import rule_fields
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
@@ -266,10 +268,11 @@ async def check_account_code(financial: FinancialDataStore, eid: str, record: Re
 def check_update_payload(
     record: ReviewRecord, task: ReviewTask, target: Versioned | None, update_kind: MisstatementUpdateKind | None
 ) -> None:
-    """人给的错报更新载荷 (需求 R159) 的类别与对象, 不过抛 INVALID_VALUE: kind 须同模板的 misstatement_update_kind,
-    misstatement_id 须为本任务的错报 (目标判断的对象, 例外与失败任务为任务的 subject_id). 载荷是否依据错报的当前版本
-    (VERSION_MISMATCH) 与按它写出的新版本是否合格 (INVALID_VALUE) 在算效果时查 (见 GraphDecisionSubmit._apply_review).
-    没带载荷不查 (必填与不能填已由 check_review_fields 查过). 纯函数."""
+    """人给的错报更新载荷 (需求 R159) 的类别, 对象与内容, 不过抛 INVALID_VALUE: kind 须同模板的
+    misstatement_update_kind, misstatement_id 须为本任务的错报 (目标判断的对象, 例外与失败任务为任务的 subject_id);
+    内容不能是半成品 (update_problems, 第 1 轮审核 R159-02). 载荷是否依据错报的当前版本 (VERSION_MISMATCH) 与按它写出
+    的新版本是否合格 (INVALID_VALUE) 在算效果时查 (见 GraphDecisionSubmit._apply_review). 没带载荷不查 (必填与不能填
+    已由 check_review_fields 查过). 纯函数."""
     update = record.misstatement_update
     if update is None:
         return
@@ -278,6 +281,36 @@ def check_update_payload(
     subject = target.subject_id if isinstance(target, Judgment) else task.subject_id
     if update.misstatement_id != subject:
         raise DecisionRejected("INVALID_VALUE", f"错报更新须针对本任务的错报 {subject}, 不是 {update.misstatement_id}")
+    problems = update_problems(update)
+    if problems:
+        raise DecisionRejected("INVALID_VALUE", f"错报更新缺 {', '.join(problems)}")
+
+
+def update_problems(update: MisstatementUpdate) -> list[str]:
+    """人给的错报更新载荷缺的实质字段 (点路径): classification 须有 type 与 fraud_indicative, 舞弊迹象为真须有理由
+    (fraud_reason 去首尾空白后非空, 同大模型一路的语义校验); verification 须有 status. origin 与 objective_id 不靠人填,
+    由 with_rule_fields 按规则补. 例: 只有 ID, 版本与类别的分类载荷 → [misstatement_update.type,
+    misstatement_update.fraud_indicative]. 纯函数."""
+    if update.kind == "classification":
+        missing = [name for name in ("type", "fraud_indicative") if getattr(update, name) is None]
+        if update.fraud_indicative and not (update.fraud_reason or "").strip():
+            missing.append("fraud_reason")
+    else:
+        missing = ["status"] if update.status is None else []
+    return [f"misstatement_update.{name}" for name in missing]
+
+
+def with_rule_fields(
+    record: ReviewRecord, misstatements: Mapping[str, Misstatement], objectives: Sequence[AuditObjective]
+) -> ReviewRecord:
+    """人给的分类载荷补上按规则定的 origin 与 objective_id (workpaper.rule_fields, 同 FIN-03 的 AI 载荷; 人填的不用,
+    第 1 轮审核 R159-02): 推翻与手工结果之后不丢规则定的两项. misstatements: 载荷所指错报的当前版本; 没带载荷,
+    验证载荷, 或所指错报不在其中 (之后按 LookupError 报错) 时原样返回. 纯函数."""
+    update = record.misstatement_update
+    if update is None or update.kind != "classification" or update.misstatement_id not in misstatements:
+        return record
+    completed = update.model_copy(update=rule_fields(misstatements[update.misstatement_id], objectives))
+    return record.model_copy(update={"misstatement_update": completed})
 
 
 def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
@@ -662,7 +695,7 @@ def review_effects(
     初始状态, 见 new_misstatement).
     凡效果中置 confirmed 的判断带错报更新载荷 (被确认的 FIN-03, FIN-09 判断, 或带人给载荷的人工判断), 另按载荷写出
     所指错报的新版本 (review_queue.misstatement_updates, 需求 R159; 同 A8 的自动确认); misstatements 为载荷所指错报的
-    当前版本, 依据的版本不符抛 VersionConflict, 写出的新版本不合格抛 ValidationError.
+    当前版本, 依据的版本不符抛 VersionConflict, 写出的新版本不合格抛 DecisionRejected (INVALID_VALUE).
     """
     effects: list[Versioned]
     if record.decision is Decision.confirm:
@@ -680,7 +713,12 @@ def review_effects(
     else:
         assert record.decision is Decision.rerun  # rerun: 只改程序 (见 rerun_procedure), 不改判断与例外
         effects = []
-    return [*effects, *misstatement_updates(effects, misstatements or {})]
+    try:
+        updated = misstatement_updates(effects, misstatements or {})
+    except ValidationError as e:  # 依据的版本不符 (VersionConflict) 由 _deciding 转为 VERSION_MISMATCH
+        problems = "; ".join(error["msg"] for error in e.errors())
+        raise DecisionRejected("INVALID_VALUE", f"按错报更新写出的新版本不合格: {problems}") from None
+    return [*effects, *updated]
 
 
 def recompute_procedure(
@@ -991,7 +1029,8 @@ class GraphDecisionSubmit:
         rerun 时连同同程序其余待决的 failed 任务一并置 decided (一轮失败算一组, 见 rerun_group).
 
         效果按 Store 当前版本计算 (与校验读的一致), 错报更新载荷所指的错报也取 Store 当前版本: 载荷依据的不是它
-        (判断之后错报已出新版本) 抛 VersionConflict, 写出的新版本不合格报 INVALID_VALUE, 都不写 (需求 R159).
+        (判断之后错报已出新版本) 抛 VersionConflict, 写出的新版本不合格报 INVALID_VALUE, 都不写 (需求 R159). 人给的
+        分类载荷先按规则补上 origin 与 objective_id (with_rule_fields, 审计目标取检查点), 写入的决定带补全的载荷.
         决定的写入者为复核人, 其余为 A1. Store 若已有其中某个 (id, version) 而内容不同, put 会返回旧对象, 效果就丢了:
         此时抛 VersionConflict 整体回滚 (_deciding 转为 VERSION_MISMATCH). 不写检查点: 节点恢复后从 Store 读回
         (await_events, 第 7 节恢复机制).
@@ -1013,13 +1052,10 @@ class GraphDecisionSubmit:
         wanted = sorted({u.misstatement_id for u in payloads if u is not None})
         current = [await store.get(eid, Misstatement, mid) for mid in wanted]
         misstatements = {m.id: m for m in current if m is not None}
-        try:
-            effects = review_effects(
-                record, task, target, exceptions, taken, COLLAB in features, MISSTATEMENT in features, misstatements
-            )
-        except ValidationError as e:  # 依据的版本不符 (VersionConflict) 由 _deciding 转为 VERSION_MISMATCH
-            problems = "; ".join(error["msg"] for error in e.errors())
-            raise DecisionRejected("INVALID_VALUE", f"按错报更新写出的新版本不合格: {problems}") from None
+        record = with_rule_fields(record, misstatements, values["audit_objectives"])
+        effects = review_effects(
+            record, task, target, exceptions, taken, COLLAB in features, MISSTATEMENT in features, misstatements
+        )
         procedure = await store.get(eid, Procedure, task.procedure_id)
         assert procedure is not None  # 任务所属程序在程序包中, 已入库
         pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
