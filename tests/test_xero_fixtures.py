@@ -4,7 +4,8 @@
 xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记. REV-03 三份合同的 fixture 经真实
 判断引擎一次通过, 结论与证据按 Xero 演示数据集设计第 6.2 节 (需求 R109). DOC-06 两份回函与 CSH-02 BA-091 的 fixture
 经 CSH-04 → DOC-06 → CSH-02 一次执行验收 (需求 R111). REV-02 六张发票的 fixture 经 REV-08 → REV-03 → REV-02
-一次执行验收, 指针只引该发票上下文里有的来源 (需求 R110).
+一次执行验收, 指针只引该发票上下文里有的来源 (需求 R110). 只开现有 17 条路径的 RPT-03 两稿另放
+tests/fixtures/llm_xero_only17 (需求 R117), 不复制到运行副本, 不进 FIXTURE_SETS, 守卫见文末.
 
 正本与运行副本 (data/xero_demo/20261017-q1/llm) 相同由 tests/test_knowledge.py 按 FIXTURE_SETS 核对. 这里按集合包含
 断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里 (要核对文件对应的在
@@ -28,13 +29,14 @@ from pydantic import BaseModel, ValidationError
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, RunContext
+from backend.agents.concierge.report import report_date_text
 from backend.agents.evidence import EvidenceAgent
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import CLASSIFY, IngestAgent
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassification
+from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassification, ReportDraft
 from backend.contracts.models import (
     AuditException,
     ConfirmationResult,
@@ -42,6 +44,7 @@ from backend.contracts.models import (
     DocumentType,
     ExceptionDisposition,
     MisstatementDraft,
+    OpinionType,
     Phase,
     ProcedureRun,
     ProposedAction,
@@ -52,13 +55,13 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.services import JudgmentContext, JudgmentOutcome
+from backend.contracts.services import JudgmentContext, JudgmentOutcome, ValidationContext
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.nodes import apply_patch, build_run
 from backend.services.data_service import DataService
-from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model
+from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model, report_checks
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.sampling import sample_point
 from tests.external import supplements_dir
@@ -967,3 +970,47 @@ def test_rev02_confirm_attributes_the_receipt_finding(revenue: Revenue) -> None:
         ExceptionDisposition.attributed,
         j.id,
     )
+
+
+# ── 只开现有 17 条路径的 RPT-03 两稿 (需求 R117): 由 R118 的分层 mock 排在运行副本之前, 其余程序读运行副本 ──
+
+# 正本的另一个根; manifest 等同 XERO (补造目录)
+ONLY17 = replace(XERO, name="xero_only17", fixtures=XERO.fixtures.with_name("llm_xero_only17"))
+# r2 回应退回批注加的一句
+FRAMEWORK = (
+    "The financial report has been prepared in accordance with Australian Accounting Standards"
+    " - Simplified Disclosures. "
+)
+
+
+def only17_report(revision: int) -> ReportDraft:
+    path = ONLY17.fixtures / "RPT-03" / f"r{revision}.json"
+    return ReportDraft.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.external  # document 指针核对取补造的 manifest
+def test_only17_fixtures_are_valid() -> None:
+    """目录里恰为 RPT-03 的 r1, r2 两份, 按 fixture_problems 合格: 能按 RPT-03 的输出模型解析, document 指针在补造
+    manifest 中且页码不超过页数 (ReportDraft 现在没有指针字段, 防以后加了引错). 目录缺失时 fixture_problems 不报,
+    所以先核对文件清单."""
+    assert sorted(f"{p.parent.name}/{p.stem}" for p in ONLY17.fixtures.glob("*/*.json")) == ["RPT-03/r1", "RPT-03/r2"]
+    assert fixture_problems(ONLY17) == []
+
+
+@pytest.mark.external  # 单位名称与期末取补造画像与快照
+def test_only17_reports_are_unqualified() -> None:
+    """r1 为无保留意见的两段: 经 report_checks (引用与语义两级, 没有可引用的判断) 通过, 不引判断 (报告的
+    judgment_refs 为空); 单位名称与期末同补造画像与快照; 没有持续经营段与其他事项段. r2 回应 R119 的 RPT-01 退回
+    批注 (基础段写明编制框架): 只在基础段正文开头加 FRAMEWORK 一句, 意见段与其余文字不变 (同 Numbat r2 的写法)."""
+    r1, r2 = only17_report(1), only17_report(2)
+    ctx = ValidationContext(opinion=OpinionType.unqualified, standards_of=None)
+    assert [report_checks(r, ctx) for r in (r1, r2)] == [(None, [])] * 2
+    assert r1.judgment_keys == r2.judgment_keys == []
+    period = report_date_text(xero_engagement().period_end)
+    assert f"the financial report of {xero_profile().legal_name} (the Company)" in r1.opinion
+    assert r1.opinion.count(f"as at {period}") == 2
+    for text in (r1.opinion, r1.basis_for_opinion, r2.basis_for_opinion):
+        assert "going concern" not in text.lower() and "other matter" not in text.lower()
+    assert "Simplified Disclosures" not in r1.basis_for_opinion
+    assert r2.basis_for_opinion.startswith(f"Basis for Opinion\n\n{FRAMEWORK}We conducted")
+    assert r2.opinion == r1.opinion and r2.basis_for_opinion.replace(FRAMEWORK, "") == r1.basis_for_opinion
