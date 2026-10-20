@@ -403,32 +403,40 @@ OLD_PLANNING = frozenset({"critic", "misstatement", "planning"})  # R313 之前 
 
 
 @pytest.mark.parametrize(
-    ("started_with", "restarted_with", "error"),
+    ("started_with", "restarted_with", "error", "next_nodes"),
     [
         (
             PLANNING_FEATURES,
             OLD_PLANNING,
             "FEATURES_MISMATCH: 项目冻结 critic,planning, 当前 critic,misstatement,planning",
+            ("p0_intel",),
         ),
-        (OLD_PLANNING, OLD_PLANNING, None),
+        (OLD_PLANNING, OLD_PLANNING, None, ("gate_acc01",)),  # 对照: 同一功能集下 recover 确实往下推进
     ],
 )
 async def test_planning_split_keeps_frozen_features(
-    started_with: frozenset[str], restarted_with: frozenset[str], error: str | None
+    started_with: frozenset[str], restarted_with: frozenset[str], error: str | None, next_nodes: tuple[str, ...]
 ) -> None:
     """R313 验收 4: 拆分后 planning 不带 misstatement 也能启动, 冻结为 "critic,planning"; 换成拆分前常用的
     {critic, misstatement, planning} 重启即 FEATURES_MISMATCH, 不推进. 拆分前按 "critic,misstatement,planning"
-    冻结的项目在同一功能集下照常恢复 (功能名没改). 防的是拆分改了名字或冻结写法, 让在途项目误判或误推进."""
-    runner, _ = make_runner(engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]), features=started_with)
+    冻结的项目在同一功能集下照常恢复 (功能名没改). 防的是拆分改了名字或冻结写法, 让在途项目误判或误推进.
+    启动后停在 p0_intel 前 (闸门以外的中断; 停在闸门时 recover 本来就不推进, 看不出差别), 重启的进程不带这个中断:
+    功能集不符时仍停 p0_intel, 相符时推进到 gate_acc01 (审核意见 R313-02)."""
+    runner, _ = make_runner(
+        engagement_store=FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT]),
+        features=started_with,
+        interrupt_before=["p0_intel"],
+    )
     await runner.start(EID)
     await wait_idle(runner, EID)
+    assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("p0_intel",)
     engagement = await runner.deps.engagement_store.get(EID)
     assert engagement is not None and engagement.version_snapshot["features"] == features_text(started_with)
     other = rebuilt(runner, restarted_with)
     await other.recover()
     await wait_idle(other, EID)
     assert other.run_error(EID) == error and not other.is_running(EID)
-    assert (await other.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",)
+    assert (await other.app.aget_state(GraphRunner.config(EID))).next == next_nodes
 
 
 async def test_check_order_around_features_mismatch() -> None:
