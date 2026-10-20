@@ -24,6 +24,9 @@ from backend.contracts.models import (
     Judgment,
     MisstatementDraft,
     MisstatementType,
+    OwnershipGraph,
+    PartyLink,
+    PartyNode,
     Phase,
     Procedure,
     ProcedureStatus,
@@ -33,10 +36,14 @@ from backend.contracts.models import (
     ReviewStatus,
     TaskKind,
     TrailKind,
+    company_node_id,
+    person_node_id,
+    split_full_name,
 )
 from backend.contracts.state import staged, upsert_by_id
 from backend.contracts.views import GateView
 from backend.orchestration.checkpoint import checkpoint_serde
+from tests.fakes import ownership_graph
 
 
 def _exc(version: int) -> AuditException:
@@ -386,3 +393,50 @@ def test_confirmation_accrued_interest_reads_old_json_and_survives_checkpoint_se
     values = {"confirmations": [sent.model_copy(update={"accrued_interest_cents": v}) for v in (0, 4853, None)]}
     back = serde.loads_typed(serde.dumps_typed(values))
     assert back == values and [c.accrued_interest_cents for c in back["confirmations"]] == [0, 4853, None]
+
+
+# ── R136: 股权与任职关系图 ──
+
+
+def test_ownership_graph_is_frozen_and_strict() -> None:
+    """验收 1: OwnershipGraph, PartyNode, PartyLink 都不可改 (frozen), 不收多余字段; 关系的比例须在 0 至 1, 股数不为负,
+    种类只收三种; 存储 JSON 与检查点序列化往返不变, 读回仍是这些类."""
+    graph = ownership_graph()
+    with pytest.raises(ValidationError):
+        graph.nodes[0].name = "x"  # type: ignore[misc]
+    node = graph.nodes[0].model_dump()
+    with pytest.raises(ValidationError):
+        PartyNode.model_validate({**node, "extra": 1})
+    link = graph.links[1].model_dump()
+    for change in ({"pct": 1.5}, {"shares": -1}, {"relation": "auditor"}, {"extra": 1}):
+        with pytest.raises(ValidationError):
+            PartyLink.model_validate({**link, **change})
+    with pytest.raises(ValidationError):
+        OwnershipGraph.model_validate({**graph.model_dump(), "edges": []})
+    assert OwnershipGraph.model_validate_json(graph.model_dump_json()) == graph
+    serde = checkpoint_serde()
+    back = serde.loads_typed(serde.dumps_typed({"ownership_graph": graph}))["ownership_graph"]
+    assert back == graph and isinstance(back, OwnershipGraph) and isinstance(back.links[0], PartyLink)
+
+
+@pytest.mark.parametrize(
+    ("family", "given", "born", "expected"),
+    [
+        ("Morgan", "Alex", date(1979, 4, 12), "PER-MORGAN-ALEX-19790412"),
+        ("Whitfield", "Sam", None, "PER-WHITFIELD-SAM-NODOB"),  # 只持股不任职, 摘录股东栏没有出生日期
+        ("O'Connor", "Mary-Kate", date(1990, 1, 2), "PER-OCONNOR-MARYKATE-19900102"),  # 撇号, 连字符去掉
+        ("van der Berg", "Jo Ann", None, "PER-VANDERBERG-JOANN-NODOB"),  # 空格去掉
+    ],
+)
+def test_person_node_id(family: str, given: str, born: date | None, expected: str) -> None:
+    """验收 2: 个人节点 PER-{姓}-{名}-{yyyymmdd 或 NODOB}, 姓与名各自转大写并只留 A-Z 与 0-9."""
+    assert person_node_id(family, given, born) == expected
+
+
+def test_full_name_split_and_company_node_id() -> None:
+    """验收 2: 摘录中只有全名时姓取最后一个词, 名取其余词; 公司节点 ACN-{acn}."""
+    assert split_full_name("Sam Whitfield") == ("Whitfield", "Sam")
+    assert split_full_name("  Mary Ann  O'Connor ") == ("O'Connor", "Mary Ann")
+    assert person_node_id(*split_full_name("Mary Ann O'Connor"), None) == "PER-OCONNOR-MARYANN-NODOB"
+    assert split_full_name("Cher") == ("Cher", "")
+    assert company_node_id("900043021") == "ACN-900043021"

@@ -22,6 +22,7 @@ from backend.contracts.models import (
     Judgment,
     Misstatement,
     OpinionType,
+    OwnershipGraph,
     Phase,
     ReviewRecord,
     ReviewStatus,
@@ -31,7 +32,13 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import REQUIRED_KEYS, STATE_DEFAULTS, EngagementState, fill_defaults, initial_state
 from backend.contracts.views import CompletionMaterial
-from backend.orchestration.checkpoint import TOP_LEVEL_ENUMS, allowed_types, restore_enums, top_level_enums
+from backend.orchestration.checkpoint import (
+    TOP_LEVEL_ENUMS,
+    allowed_types,
+    checkpoint_serde,
+    restore_enums,
+    top_level_enums,
+)
 from backend.orchestration.graph import (
     build_graph,
     fieldwork_with_defaults,
@@ -57,6 +64,7 @@ from tests.fakes import (
     make_procedure,
     make_runner,
     numbat_all_p2_agents,
+    ownership_graph,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision
@@ -161,6 +169,7 @@ def test_initial_state_equals_previous_literal() -> None:
         judgments=[],
         review_tasks=[],
         confirmations=[],
+        ownership_graph=None,  # 需求 R136 加
         report_versions=[],
         review_records=[],
         gate_decisions=[],
@@ -377,6 +386,29 @@ class StateWithLocalTypes(EngagementState):
     plan_kind: LocalKind | None
 
 
+class GraphOnly(TypedDict):
+    ownership_graph: OwnershipGraph | None
+
+
+async def test_ownership_graph_survives_checkpoint_and_defaults_to_none() -> None:
+    """R136 验收 3, 4: 旧检查点没有 ownership_graph 键时读到 None; 经检查点白名单序列化的 InMemorySaver 存取一轮后
+    仍是 OwnershipGraph 实例 (不退化为 dict), 内容不变."""
+    assert fill_defaults({})["ownership_graph"] is None
+
+    async def write(state: GraphOnly) -> dict[str, Any]:
+        return {"ownership_graph": ownership_graph()}
+
+    graph = StateGraph(GraphOnly)
+    graph.add_node("a", write)
+    graph.add_edge(START, "a")
+    graph.add_edge("a", END)
+    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
+    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
+    await app.ainvoke({"ownership_graph": None}, config)
+    back = (await app.aget_state(config)).values["ownership_graph"]
+    assert isinstance(back, OwnershipGraph) and back == ownership_graph()
+
+
 def test_type_guard_names_classes_outside_state_modules() -> None:
     """验收 3: 新类型定义在 _STATE_MODULES 之外时报出类名, 含字段里套着的类型."""
     assert unregistered_types(StateWithLocalTypes) == ["LocalItem", "LocalKind", "LocalPlan"]
@@ -421,7 +453,7 @@ def unregistered_outputs(state: Any) -> list[str]:
 
 
 def test_versioned_state_fields_have_output_tables() -> None:
-    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 16 种全部在)."""
+    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 17 种全部在, R136 加 OwnershipGraph)."""
     names = {t.__name__ for t in versioned_fields(EngagementState).values()}
     assert names >= {
         "AcceptanceScorecard",
@@ -440,6 +472,7 @@ def test_versioned_state_fields_have_output_tables() -> None:
         "Confirmation",
         "Misstatement",
         "AuditReportVersion",
+        "OwnershipGraph",
     }
     assert unregistered_outputs(EngagementState) == []
 

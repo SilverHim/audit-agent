@@ -85,6 +85,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    EvidenceType,
     GateDecision,
     GateId,
     GateVerdict,
@@ -97,6 +98,9 @@ from backend.contracts.models import (
     MisstatementDraft,
     MisstatementType,
     OpinionType,
+    OwnershipGraph,
+    PartyLink,
+    PartyNode,
     PersonSearch,
     Phase,
     Procedure,
@@ -2449,6 +2453,59 @@ def make_run(procedure_id: str = "ACC-04", run_no: int = 1, params: dict[str, An
 def finished(run: ProcedureRun, status: RunStatus = RunStatus.succeeded) -> ProcedureRun:
     """执行记录的终态: 置 succeeded (或给定状态), 结束时间为 NOW."""
     return run.model_copy(update={"status": status, "ended_at": NOW})
+
+
+def ownership_graph(run_id: str = "RUN-GEN-08-1", version: int = 1) -> OwnershipGraph:
+    """合成的股权与任职关系图 (需求 R136, 只填契约用到的): 报告主体 ACN-900043021, Alex Morgan 任董事并持 85 股,
+    Sam Whitfield 只持 15 股 (没有出生日期). 关系的证据为一份摘录 (高管第 1 页, 股东第 2 页)."""
+
+    def row(page: int, locator: str) -> EvidencePointer:
+        return EvidencePointer(
+            type=EvidenceType.external,
+            source_type="document",
+            source_id="DOC-0123456789ab",
+            locator=locator,
+            page=page,
+            reliability=Reliability.external_original,
+        )
+
+    entity, alex, sam = "ACN-900043021", "PER-MORGAN-ALEX-19790412", "PER-WHITFIELD-SAM-NODOB"
+    return OwnershipGraph(
+        id="OWNERSHIP",
+        version=version,
+        run_id=run_id,
+        reporting_entity_id=entity,
+        nodes=[
+            PartyNode(id=entity, kind="company", name="Demo Company (AU) Pty Ltd", acn="900043021", abn="25900043021"),
+            PartyNode(id=alex, kind="person", name="Alex Morgan", birth_date=date(1979, 4, 12), searched=True),
+            PartyNode(id=sam, kind="person", name="Sam Whitfield"),
+        ],
+        links=[
+            PartyLink(
+                from_id=alex,
+                to_id=entity,
+                relation="director",
+                appointed=date(2015, 3, 2),
+                evidence=row(1, "officeholders[0]"),
+            ),
+            PartyLink(
+                from_id=alex,
+                to_id=entity,
+                relation="shareholder",
+                shares=85,
+                pct=0.85,
+                evidence=row(2, "shareholders[0]"),
+            ),
+            PartyLink(
+                from_id=sam,
+                to_id=entity,
+                relation="shareholder",
+                shares=15,
+                pct=0.15,
+                evidence=row(2, "shareholders[1]"),
+            ),
+        ],
+    )
 
 
 class ScriptAgent(ProcedureAgent[None]):

@@ -23,6 +23,7 @@ from backend.contracts.models import (
     ClientProfile,
     DocumentType,
     LlmSettings,
+    OwnershipGraph,
     ProfileSource,
     Reliability,
     TrailEntry,
@@ -48,7 +49,7 @@ from backend.services.account_mapping import with_category
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.procedure_library import ProcedureLibrary
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS
+from tests.fakes import NUMBAT_ACCOUNTS, NUMBAT_ROWS, ownership_graph
 from tests.test_data_store_postgres import migration as migration_module
 from tests.test_fakes import demo_rows, trail_pages_hold
 from tests.test_supplier_bills import Q1_BILLS, SELECT_BILLS
@@ -472,6 +473,31 @@ async def test_migration_0015_round_trip(storage) -> None:
                 await outer.rollback()
     finally:
         await owner.dispose()
+
+
+async def test_ownership_graph_versions_on_postgres(storage) -> None:
+    """R136 验收 6: OWNERSHIP v1, v2 写进 ownership_graphs 表, 按版本读回仍是 OwnershipGraph (节点与关系不丢); 最新为
+    v2, 历史两版; 别的项目读不到 (行级安全). 迁移链只有一个头, 含 0016 (迁移的往返与授权见 test_data_store_postgres
+    的新表用例)."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    v1 = ownership_graph()
+    v2 = v1.model_copy(update={"version": 2, "links": v1.links[:2]})
+    await store.put(e.id, [v1], actor="A5")
+    await store.put(e.id, [v2], actor="A5")
+
+    assert m.OUTPUTS["OwnershipGraph"].name == "ownership_graphs"
+    assert await store.get(e.id, OwnershipGraph, "OWNERSHIP", 1) == v1
+    assert await store.get(e.id, OwnershipGraph, "OWNERSHIP") == v2
+    assert await store.history(e.id, OwnershipGraph, "OWNERSHIP") == [v1, v2]
+    assert await store.latest(e.id, OwnershipGraph) == [v2]
+    assert await store.get("ENG-OTHER", OwnershipGraph, "OWNERSHIP") is None
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    [head] = script.get_heads()
+    assert "0016" in {r.revision for r in script.walk_revisions("base", head)}
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

@@ -29,7 +29,7 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
     AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
-    AgentId.A5: frozenset({"confirmations", "documents"}),
+    AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
     AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
     AgentId.A9: frozenset({"uncorrected_schedule"}),
@@ -62,6 +62,7 @@ FIELD_REPLAY: dict[str, Replay] = {
     "analytics": Replay.singleton,
     "materiality_candidates": Replay.singleton,
     "uncorrected_schedule": Replay.singleton,
+    "ownership_graph": Replay.singleton,
 }
 SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
 LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式

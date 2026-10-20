@@ -1038,6 +1038,68 @@ class Confirmation(Versioned):
     evidence: list[EvidencePointer] = []  # DOC-06 抽取字段的页码指针
 
 
+OWNERSHIP_GRAPH_ID = "OWNERSHIP"  # 股权与任职关系图在每个项目里的固定 ID (需求 R136)
+PartyRelation = Literal["director", "secretary", "shareholder"]  # 关系图中人或公司对一家公司的关系
+
+
+class PartyNode(Model):
+    """股权与任职关系图中的一个人或一家公司. ID 规则见接口文档第 0 节 (company_node_id, person_node_id)."""
+
+    id: str  # 公司 ACN-{acn}; 个人 PER-{姓}-{名}-{yyyymmdd}, 没有出生日期时 PER-{姓}-{名}-NODOB
+    kind: PartyKind  # 个人或公司
+    name: str  # 名称或姓名, 按登记摘录原样
+    acn: str | None = None  # ACN, 9 位数字; 个人为空
+    abn: str | None = None  # ABN, 11 位数字; 只有报告主体取画像的 ABN, 其余为空
+    birth_date: date | None = None  # 出生日期 (个人, 摘录高管栏有); 只持股不任职的没有
+    searched: bool = False  # 是否做过人员检索 (个人) 或取过公司摘录 (公司)
+
+
+class PartyLink(Model):
+    """关系图中的一条关系: from_id 对 to_id (公司) 的任职或持股, 证据为登记摘录中对应的那一行."""
+
+    from_id: str  # 任职或持股的人或公司 (PartyNode.id)
+    to_id: str  # 被任职或被持股的公司 (PartyNode.id)
+    relation: PartyRelation  # 董事, 秘书或股东
+    shares: int | None = Field(default=None, ge=0)  # 持股数 (股东); 任职为空
+    pct: Share | None = None  # 持股比例, 0 至 1 (股东); 任职为空
+    appointed: date | None = None  # 任职起始日 (高管)
+    ceased: date | None = None  # 离任日 (高管); 在任为空
+    evidence: EvidencePointer  # 登记摘录中这一行的 document 指针
+
+
+class OwnershipGraph(Versioned):
+    """股权与任职关系图 (A5 GEN-08 建, 需求 R136): 报告主体向上穿透的法人股东, 控制或关键人员, 以及他们任职或持股的
+    其他公司. 项目里只有一份, ID 固定为 OWNERSHIP; 重建出新版本."""
+
+    run_id: str  # 建它的那次执行
+    reporting_entity_id: str  # 报告主体的节点 ID (ACN-{acn})
+    nodes: list[PartyNode]  # 节点, ID 不重复
+    links: list[PartyLink]  # 关系, 端点都在 nodes 中
+
+
+def node_name_part(text: str) -> str:
+    """节点 ID 中的姓或名: 转大写, 去掉 A-Z 与 0-9 以外的字符 (空格, 撇号, 连字符等). 例 "O'Connor" → OCONNOR."""
+    return re.sub(r"[^A-Z0-9]", "", text.upper())
+
+
+def company_node_id(acn: str) -> str:
+    """公司节点的 ID: ACN-{acn}."""
+    return f"ACN-{acn}"
+
+
+def person_node_id(family_name: str, given_names: str, birth_date: date | None) -> str:
+    """个人节点的 ID: PER-{姓}-{名}-{yyyymmdd}; 没有出生日期 (只持股不任职, 摘录股东栏没有) 时末段为 NODOB.
+    姓与名各自经 node_name_part. 例: PER-MORGAN-ALEX-19790412, PER-WHITFIELD-SAM-NODOB."""
+    born = birth_date.strftime("%Y%m%d") if birth_date is not None else "NODOB"
+    return f"PER-{node_name_part(family_name)}-{node_name_part(given_names)}-{born}"
+
+
+def split_full_name(full_name: str) -> tuple[str, str]:
+    """摘录中只有全名时拆成 (姓, 名): 姓取最后一个词, 名取其余词 (以空格连接, 只有一个词时为空)."""
+    words = full_name.split()
+    return (words[-1], " ".join(words[:-1])) if words else ("", "")
+
+
 class DocumentRef(Model):
     """已存档的证据文件 (合同, 回函, 导入的账表原件等) 的登记信息."""
 

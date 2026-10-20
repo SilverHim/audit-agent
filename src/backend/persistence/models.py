@@ -238,6 +238,7 @@ OUTPUT_KINDS = {
     "misstatements": ["Misstatement"],
     "report_versions": ["AuditReportVersion"],
     "gate_materials": ["AcceptanceScorecard", "AnalyticsResult", "MaterialityCandidates", "UncorrectedSchedule"],
+    "ownership_graphs": ["OwnershipGraph"],  # 需求 R136, 迁移 0016
 }
 OUTPUTS = {}
 for name, kinds in OUTPUT_KINDS.items():

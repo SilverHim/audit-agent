@@ -1453,7 +1453,7 @@ async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-un
         await engine.dispose()
 
 
-# ── 需求 R96, R178: 新建的项目表 (工资册, 应付账单) ──
+# ── 需求 R96, R178, R136: 新建的项目表 (工资册, 应付账单, 股权与任职关系图) ──
 
 NEW_TABLES = [
     pytest.param(
@@ -1470,12 +1470,20 @@ NEW_TABLES = [
         "outstanding_cents) VALUES (:e, 'PB-1', '3395', 'PowerDirect', '2026-09-30', '2026-10-16', 33110, 33110)",
         id="supplier_bills",
     ),
+    pytest.param(
+        "0016_ownership_graphs",
+        "ownership_graphs",
+        "INSERT INTO ownership_graphs (engagement_id, id, version, kind, data, created_by, created_at) "
+        "VALUES (:e, 'OWNERSHIP', 1, 'OwnershipGraph', '{}', 'A5', now())",
+        id="ownership_graphs",
+    ),
 ]
 
 
 @pytest.mark.parametrize(("name", "table", "insert_row"), NEW_TABLES)
 async def test_migration_of_a_new_table_round_trip(storage, name: str, table: str, insert_row: str) -> None:  # type: ignore[no-untyped-def]
-    """需求 R96 (0013 工资册), R178 (0014 应付账单): 以属主角色在一个事务里走该迁移降级再升级 (两次), 最后回滚.
+    """需求 R96 (0013 工资册), R178 (0014 应付账单), R136 (0016 关系图): 以属主角色在一个事务里走该迁移降级再升级
+    (两次), 最后回滚.
     降级后没有这张表; 升级后开了并强制行级安全, 有项目隔离策略, 应用角色可增删改查 (先撤掉 0001 的默认授权, 权限须来自
     迁移的 GRANT); 一个项目写的行另一项目看不到. 需另设 TEST_DATABASE_OWNER_URL."""
     from alembic.operations import Operations
