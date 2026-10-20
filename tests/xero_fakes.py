@@ -82,6 +82,7 @@ from tests.fakes import (
     FakeTrail,
     csh02_subsequent_rows,
     csh02_window_rows,
+    gen05_exception,
     make_deps,
     wait_idle,
 )
@@ -608,13 +609,128 @@ def xero_rev08_exception(run: ProcedureRun) -> AuditException:
     )
 
 
+# GEN-05 R10 两笔贷项凭证配到的同额发票 (07-17 的 550.00 五张, ORC1003, 1008, 1009, 1010, 1011), 按 (开票日, ID)
+XERO_SAME_AMOUNT_INVOICES = [
+    "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",  # ORC1008
+    "SI-33e4123e-7cdd-4f05-9a0a-eb8adeb2b868",  # ORC1011
+    "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",  # ORC1003
+    "SI-5613938b-9e27-472e-92ae-3b038b669d10",  # ORC1010
+    "SI-76e3f056-479f-417c-a72b-f3d767899b87",  # ORC1009
+]
+
+
+def xero_gen05_exceptions(run: ProcedureRun) -> list[AuditException]:
+    """GEN-05 新规则对 Xero 演示的 7 条例外 (需求 R132 验收 3-6, 设计稿第 5.3 节): R09 转换余额与手工折旧; R10 两笔
+    全额冲减 550.00 的贷项凭证 (CR1003, CR1005; 07-31 的 XJ-449 另配上同日的 ORC1005); R11 作废后重记而对方名称改了的
+    两笔; R12 ORC1003 与 ORC1008 同为 Hamilton Smith 07-17 的 550.00, ORC1003 没有服务完成记录, 冲减它的是 XJ-430."""
+
+    def entry(no: str, day: str) -> dict[str, Any]:
+        return {"entry_no": no, "posting_date": day}
+
+    return [
+        gen05_exception(
+            run,
+            "R09",
+            "high",
+            "XJ-397-3",
+            1921221,
+            entry("XJ-397", "2026-07-16") | {"description": "Conversion Balance", "source_doc": "Conversion Balance"},
+        ),
+        gen05_exception(
+            run,
+            "R09",
+            "high",
+            "XJ-499-2",
+            82500,
+            entry("XJ-499", "2026-08-16")
+            | {
+                "description": "Office equipment depreciation",
+                "source_doc": "Being depreciation on office equipment - Manual",
+            },
+            number=2,
+        ),
+        gen05_exception(
+            run,
+            "R10",
+            "medium",
+            "XJ-430-2",
+            55000,
+            entry("XJ-430", "2026-07-26") | {"credited_cents": 55000, "matched_invoices": XERO_SAME_AMOUNT_INVOICES},
+        ),
+        gen05_exception(
+            run,
+            "R10",
+            "medium",
+            "XJ-449-2",
+            55000,
+            entry("XJ-449", "2026-07-31")
+            | {
+                "credited_cents": 55000,
+                "matched_invoices": [*XERO_SAME_AMOUNT_INVOICES, "SI-b75b3928-ab72-4424-8b93-9cdbbde4cd72"],  # ORC1005
+            },
+            number=2,
+        ),
+        gen05_exception(
+            run,
+            "R11",
+            "medium",
+            "XJ-575-1",
+            29695,
+            entry("XJ-575", "2026-09-16")
+            | {
+                "original_entry_no": "XJ-560",
+                "reversal_entry_no": "XJ-567",
+                "original_name": "Payment to Odette Grainger",
+                "repost_name": "Payment to Odette Garrison",
+            },
+        ),
+        gen05_exception(
+            run,
+            "R11",
+            "medium",
+            "XJ-601-1",
+            350000,
+            entry("XJ-601", "2026-09-26")
+            | {
+                "original_entry_no": "XJ-599",
+                "reversal_entry_no": "XJ-602",
+                "original_name": "Bank Transfer from Ridgeway Savings to NAB Business Account",
+                "repost_name": "Bank Transfer from Business Savings Account to Business Bank Account",
+            },
+            number=2,
+        ),
+        gen05_exception(
+            run,
+            "R12",
+            "high",
+            "XJ-405-2",
+            55000,
+            entry("XJ-405", "2026-07-17")
+            | {
+                "invoice_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+                "invoice_no": "ORC1003",
+                "customer": "Hamilton Smith Pty",
+                "paired_invoices": [
+                    {
+                        "invoice_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+                        "invoice_no": "ORC1008",
+                        "journal_entry_id": "XJ-408-2",
+                    }
+                ],
+                "full_credits": ["XJ-430"],
+            },
+        ),
+    ]
+
+
 def xero_gen05_result(run: ProcedureRun) -> RuleResult:
-    """GEN-05 对 Xero 演示的结果 (需求 R131 验收 5, 7, 取自连库跑一次的结果): 9 条规则 0 条例外; 录入时间不可靠, 看录入
-    时间的 R01, R06, R08, R13 不执行 (理由为数据集声明的说明); 分录都没有审批人, R04 不可执行; 录入人只有一个, R07 不可
-    执行. R02, R03 (审批限额 500000), R05 执行而没有命中."""
+    """GEN-05 对 Xero 演示的结果 (需求 R131 验收 5, 7 与 R132 验收 7, 取自连库跑一次的结果): 新规则 R09-R12 的 7 条
+    例外 (xero_gen05_exceptions), 原有规则 0 条; 录入时间不可靠, 看录入时间的 R01, R06, R08, R13 不执行 (理由为数据集
+    声明的说明); 分录都没有审批人, R04 不可执行; 录入人只有一个, R07 不可执行. R02, R03 (审批限额 500000), R05 执行
+    而没有命中."""
     note = xero_traits().entry_timestamps_note or ""
     return RuleResult(
-        exceptions=[],
+        exceptions=xero_gen05_exceptions(run),
         rows={},
         outcomes=[
             RuleOutcome(rule_id="R01", status="skipped", reason=note),

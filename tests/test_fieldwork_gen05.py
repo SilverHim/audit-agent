@@ -1,7 +1,7 @@
-"""需求 R131: A6 执行 GEN-05 全量分录扫描 (原有规则 R01-R08 与期末后补记 R13). 规则引擎的例外原样返回, 不作判断, 不建
-复核任务; 没有执行的规则 (执行前检查命中) 按 YAML 顺序记进执行记录. 规则引擎为预置结果的 FakeRuleEngine (Xero 与
-Numbat 的预置取自连库跑一次的结果, 连库一致见 tests/test_gen05_sql.py); 例外原样返回的通用写法见
-test_fieldwork_rules."""
+"""需求 R131, R132: A6 执行 GEN-05 全量分录扫描 (原有规则 R01-R08, 期末后补记 R13 与新规则 R09-R12). 规则引擎的例外
+原样返回, 不作判断, 不建复核任务; 没有执行的规则 (执行前检查命中) 按 YAML 顺序记进执行记录. 规则引擎为预置结果的
+FakeRuleEngine (Xero 与 Numbat 的预置取自连库跑一次的结果, 连库一致见 tests/test_gen05_sql.py); 例外原样返回的通用
+写法见 test_fieldwork_rules."""
 
 from datetime import date
 
@@ -20,9 +20,9 @@ from tests.xero_fakes import XERO_RULES, make_xero_deps
 
 @pytest.mark.external
 async def test_xero_records_the_rules_not_run_in_yaml_order() -> None:
-    """验收 5: Xero 演示上 9 条规则都没有例外; 不执行的 6 条按 YAML 顺序记进执行记录, 看录入时间的规则的理由为设计稿
-    第 5.2 节的 entry_timestamps_note. 规则引擎收到的参数就是参数快照 (按状态的重要性, 画像的审批限额与数据集声明
-    解析); 片段只有例外与执行记录, 没有判断与复核任务."""
+    """R131 验收 5, R132 验收 9: Xero 演示上新规则的 7 条例外原样返回 (原有规则没有例外); 不执行的 6 条按 YAML 顺序
+    记进执行记录 (R09-R12 都执行), 看录入时间的规则的理由为设计稿第 5.2 节的 entry_timestamps_note. 规则引擎收到的
+    参数就是参数快照 (按状态的重要性, 画像的审批限额与数据集声明解析); 片段只有例外与执行记录, 没有判断与复核任务."""
     rules = FakeRuleEngine(XERO_RULES)
     deps = make_xero_deps(rules=rules)
     ctx = xero_context(deps, xero_state(), "GEN-05", [])
@@ -38,7 +38,12 @@ async def test_xero_records_the_rules_not_run_in_yaml_order() -> None:
         ("R13", "skipped"),
     ]
     assert run.rule_outcomes[0].reason == design_traits().entry_timestamps_note
-    assert patch == {"exceptions": [], "procedure_runs": [run]}
+    exceptions = XERO_RULES["GEN-05"](run).exceptions
+    assert [x.id for x in exceptions] == [
+        *(f"X-GEN-05-1-{rule}-{n}" for rule in ("R09", "R10", "R11") for n in (1, 2)),
+        "X-GEN-05-1-R12-1",
+    ]
+    assert patch == {"exceptions": exceptions, "procedure_runs": [run]}
     assert rules.calls == [("GEN-05", run.id, run.params_snapshot)]
     params = run.params_snapshot
     assert (

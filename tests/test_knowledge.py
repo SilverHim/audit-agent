@@ -2030,6 +2030,31 @@ def test_dataset_traits_rejects_bad_declarations(change: dict[str, Any]) -> None
         DatasetTraits.model_validate({**json.loads(DESIGN_TRAITS), **change})
 
 
+VOIDED_CTE = re.compile(r"^-- 作废对共用段 起\n(.*?)^-- 作废对共用段 止$", re.MULTILINE | re.DOTALL)
+
+
+def voided_cte(sql: str) -> str | None:
+    """规则 SQL 中 "作废对共用段" 起止标记之间的 WITH reversal, voided 两段 (不含标记); 没有标记为 None."""
+    found = VOIDED_CTE.search(sql)
+    return found.group(1) if found else None
+
+
+def test_voided_pair_cte_is_one_text_everywhere() -> None:
+    """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
+    之间逐字相同 (CSH-02 D03, D04 与 GEN-05 的 R02, R09-R12). 防只改一处使两个程序认的作废对不同."""
+    marked = {
+        (t.id, rule.id): voided_cte(rule.sql)
+        for t in ProcedureLibrary(ROOT).all(include_disabled=True)
+        for rule in t.rules
+        if "reversal AS (" in rule.sql
+    }
+    assert {("CSH-02", "D03"), ("CSH-02", "D04"), *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12"))} <= set(
+        marked
+    )
+    [text] = set(marked.values())  # 没带标记的为 None, 也算不同
+    assert text is not None and text.startswith("WITH reversal AS (") and "), voided AS (" in text
+
+
 def test_dataset_refs_resolve(tmp_path: Path) -> None:
     """dataset. 的 ref 按声明的字段路径取值, 支持一层嵌套; 值为空时以 None 执行 (与状态 ref 不同); 结果深拷贝."""
     lib = ref_library(tmp_path)
@@ -2139,12 +2164,13 @@ DATASET_REFS = {
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
     },
-    "GEN-05": {  # 录入时间是否可信, 作废对, 审计更正分录的前缀 (需求 R131)
+    "GEN-05": {  # 录入时间是否可信, 作废对, 审计更正分录的前缀 (需求 R131), 对方名称的前缀 (需求 R132)
         "entry_timestamps_reliable": "entry_timestamps_reliable",
         "entry_timestamps_note": "entry_timestamps_note",
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
         "audit_adjustment_entry_prefix": "audit_adjustment_entry_prefix",
+        "counterparty_prefixes": "counterparty_prefixes",
     },
 }
 

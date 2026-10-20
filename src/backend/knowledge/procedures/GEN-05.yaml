@@ -1,7 +1,8 @@
 id: GEN-05
 name: 全量分录扫描
 # 规格书 6.3 GEN-05; ASA 240 第 32, 33(a) 段, A44 段. 对本期全部分录按规则取例外, 原样返回, 不作判断, 不建复核
-# 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08 与期末后补记 R13 (需求 R131); R09-R12 由 R132 加,
+# 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08, 期末后补记 R13 (需求 R131) 与不看录入时间的新规则
+# R09-R12 (需求 R132; 设计稿第 5.3 节, R09 依 ASA 240 A44 段的 nonstandard journal entries, R10-R12 是据此自定的口径);
 # 更正分录接入后的增量实例由 JR-6c 改 (entry_nos, audit_adjustment_start).
 #
 # 通用口径 (各规则的 SQL 都这样写):
@@ -14,8 +15,15 @@ name: 全量分录扫描
 #   detail).
 # - 摘要与单据号的匹配用 ILIKE; 录入时间 created_at 按 timezone 换成当地时间后再取星期, 时刻与日期; created_at 为空的
 #   行不命中看录入时间的规则.
-# - 作废对 (R02 剔除): 冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证, 原凭证为模板填入第一个
-#   捕获组; 两者都算作废对. WITH reversal, voided 两段与 CSH-02 的 D03, D04 逐字相同, 改口径时几处一起改.
+# - 作废对 (R02, R09, R10, R12 剔除; R11 由它找原凭证): 冲回凭证为任一行 description 匹配 reversal_reference_pattern
+#   的凭证, 原凭证为模板填入第一个捕获组; 两者都算作废对, 不看 is_adjustment (XJ-400 是 XJ-401 的冲回, 不是调整分录).
+#   WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02 的 D03, D04 逐字相同 (tests/test_knowledge.py
+#   守住), 改口径时几处一起改.
+# - 新规则 R09-R12 只出金额 (amount_cents) 超过明显微小的例外 (设计稿第 5.3 节的通用约定); 原有规则的门槛按各规则所写.
+# - 往来名称的比较 (R11, R12) 用 SQL 函数 party_name_key(名称, 前缀, 后缀) (迁移 0018, 步骤与 services/party_names.py
+#   相同): 转小写, 去开头的 counterparty_prefixes, 非字母数字换空格, 去首尾空格, 再去末尾的 entity_suffixes.
+# - 贷项凭证 (R10, R12 的 credits 段, 口径相同): 同一凭证借记 revenue 分类且贷记 receivables 分类, 不涉 cash 分类, 不是
+#   作废对; 应收净贷方 credited_cents = 该凭证 receivables 分类行的贷方减借方之和.
 # - 分录是否手工 (调整分录) 以数据给出的 is_adjustment 为准, 不按凭证号推断; R07 不分凭证类型.
 # - 金额门槛的比较: 超过 (>) 或不低于 (>=) 按各规则所写.
 #
@@ -25,13 +33,15 @@ name: 全量分录扫描
 # - R06 另在 audit_adjustment_start 为空 (还没发出错报沟通) 时 skipped: 本规则只在增量实例执行.
 # - R03 在客户画像没有审批限额时 not_executable; R04 在本期分录都没有审批人时 not_executable; R07 在本期分录的录入人
 #   少于 2 个时 not_executable (无从比较谁不常录入).
+# - R11 在数据集没有声明作废冲回格式 (reversal_reference_pattern 为空, 如 Numbat) 时 skipped; R12 在本期销售发票都没有
+#   发运或服务完成记录 (delivery_notes) 时 not_executable (无从区分哪张缺记录).
 phase: P2_Executing
 cycle: Pervasive
 owner: A6
 feature: journals                 # 功能开关 (services/features.py): 分录测试
 fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
 outputs: [exceptions]
-reads: [journal_entries, accounts]
+reads: [journal_entries, accounts, sales_invoices, delivery_notes]   # 后两者: R10, R12 的发票与发运或服务完成记录
 engine: rule
 autonomy_level: L3
 assertions: [Occurrence, Completeness, Accuracy]
@@ -46,11 +56,14 @@ params:
   reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}   # 写法要求见 CSH-02.yaml 的注释
   reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
   audit_adjustment_entry_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录, 由 FIN-09 验证
+  counterparty_prefixes: {ref: dataset.counterparty_prefixes}   # 对方名称前的说明前缀 (如 "payment to"), 名称比较时去掉
+  entity_suffixes: [pty ltd, pty limited, pty, ltd, limited]   # 公司后缀, R12 比较客户名时去掉 (R11 不去)
   timezone: Australia/Sydney      # 录入时间换算的时区
   business_hours: [7, 20]         # 工作时间 [起, 止) 的整点, 当地时间
   rare_user_max: 2                # 录入人本期凭证数不超过它即为非常规录入人
   round_unit_cents: 1000000       # 整数金额的单位 (10,000.00)
-  revenue_categories: [revenue]   # 分类参数须被规则 SQL 用到; R10 的 receivables_categories 由 R132 加
+  revenue_categories: [revenue]
+  receivables_categories: [receivables]
   cash_categories: [cash]
   entry_nos: null                 # 增量实例的凭证号 (JR-6c); 初始实例为空, 本文件的 SQL 不用
   audit_adjustment_start: null    # 首次发出错报沟通的时间 (JR-6c 改为派生引用); 为空时 R06 不执行
@@ -86,6 +99,7 @@ rules:
     name: 整数金额的调整分录
     severity: medium
     sql: |
+      -- 作废对共用段 起
       WITH reversal AS (
         SELECT DISTINCT r.entry_no,
                replace(CAST(:reversal_entry_no_template AS text), '{1}',
@@ -95,6 +109,7 @@ rules:
           AND r.description ~ CAST(:reversal_reference_pattern AS text)
       ), voided AS (
         SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
       ), hits AS (
         SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents
         FROM journal_entries j
@@ -292,6 +307,242 @@ rules:
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
                entry_no COLLATE "C"
+  - id: R09
+    name: 非标准分录
+    severity: high
+    # 手工录入的调整分录 (is_adjustment, 数据给出), 剔除作废对与审计更正分录 (凭证号前缀, 由 FIN-09 验证, 不当舞弊信号)
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), hits AS (
+        SELECT j.id, j.entry_no, j.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               j.description, j.source_doc
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND j.is_adjustment
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
+              <>CAST(:audit_adjustment_entry_prefix AS text)
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             description, source_doc
+      FROM picked
+      WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R10
+    name: 收入全额冲减
+    severity: medium
+    # 贷项凭证 (通用口径) 的应收净贷方等于某张开票日在 [period_start, 该凭证业务日期] 内的发票含税全额. 没有贷项分配数据,
+    # 只能按金额匹配, matched_invoices 列出全部同额发票 (按 (invoice_date, id)), 由 GEN-02 判断冲的是哪张; 命中行为
+    # 该凭证 receivables 分类的贷方行
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), lines AS (
+        SELECT j.id, j.entry_no, j.posting_date, j.debit_cents, j.credit_cents,
+               abs(j.debit_cents)+abs(j.credit_cents) AS line_cents, a.category
+        FROM journal_entries j LEFT JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ), credits AS (
+        SELECT entry_no, min(posting_date) AS posting_date,
+               CAST(sum(credit_cents-debit_cents) FILTER (WHERE category=ANY(CAST(:receivables_categories AS text[])))
+                    AS bigint) AS credited_cents
+        FROM lines
+        GROUP BY entry_no
+        HAVING bool_or(category=ANY(CAST(:revenue_categories AS text[])) AND debit_cents>0)
+           AND bool_or(category=ANY(CAST(:receivables_categories AS text[])) AND credit_cents>0)
+           AND NOT coalesce(bool_or(category=ANY(CAST(:cash_categories AS text[]))), false)
+      ), matched AS (
+        SELECT c.entry_no, c.credited_cents,
+               array_agg(i.id ORDER BY i.invoice_date, i.id COLLATE "C") AS matched_invoices
+        FROM credits c JOIN sales_invoices i ON i.engagement_id=:eid AND i.amount_cents=c.credited_cents
+          AND i.invoice_date BETWEEN CAST(:period_start AS date) AND c.posting_date
+        GROUP BY c.entry_no, c.credited_cents
+      ), hits AS (
+        SELECT l.id, l.entry_no, l.posting_date, l.line_cents, m.credited_cents, m.matched_invoices
+        FROM lines l JOIN matched m ON m.entry_no=l.entry_no
+        WHERE l.category=ANY(CAST(:receivables_categories AS text[])) AND l.credit_cents>0
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits ORDER BY entry_no, line_cents DESC, id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             credited_cents, matched_invoices
+      FROM picked
+      WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R11
+    name: 作废后重记且对方名称改变
+    severity: medium
+    checks:
+      - status: skipped
+        sql: SELECT '数据集没有声明作废冲回格式' AS reason WHERE CAST(:reversal_reference_pattern AS text) IS NULL
+    # 对原凭证在本期的作废对, 在未作废的凭证中找重记: 同一业务日期, 同一组 (科目, 借方, 贷方) 行 (多重集相等). 名称取
+    # 凭证 ID 最小一行的 source_doc, 按 party_name_key 规范化 (去前缀, 不去后缀). 第一步: 有名称相同的重记即为正常更正,
+    # 不命中; 第二步: 没有时取凭证号末段数字与原凭证最接近的一笔 (并列取凭证号字节序小的), 名称不同即命中. 重记的号码
+    # 可小于冲回凭证甚至原凭证 (XJ-572 → XJ-562). 一笔重记被几个原凭证选中时只出一条
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), vouchers AS (
+        SELECT j.entry_no, min(j.posting_date) AS posting_date,
+               (array_agg(j.source_doc ORDER BY j.id COLLATE "C"))[1] AS name,
+               string_agg(concat_ws('|', j.account_code, j.debit_cents, j.credit_cents), ','
+                          ORDER BY j.account_code COLLATE "C", j.debit_cents, j.credit_cents) AS line_set,
+               CAST(substring(j.entry_no FROM '([0-9]+)[^0-9]*$') AS numeric) AS number
+        FROM journal_entries j
+        WHERE j.engagement_id=:eid
+        GROUP BY j.entry_no
+      ), originals AS (
+        SELECT DISTINCT o.*, r.entry_no AS reversal_entry_no
+        FROM reversal r JOIN vouchers o ON o.entry_no=r.original_no
+        WHERE o.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+      ), reposts AS (
+        SELECT o.entry_no AS original_entry_no, o.reversal_entry_no, o.name AS original_name, p.entry_no,
+               p.posting_date, p.name AS repost_name, abs(p.number-o.number) AS distance,
+               party_name_key(p.name, CAST(:counterparty_prefixes AS text[]), CAST('{}' AS text[]))
+                 IS NOT DISTINCT FROM party_name_key(o.name, CAST(:counterparty_prefixes AS text[]), CAST('{}' AS text[]))
+                 AS same_name
+        FROM originals o JOIN vouchers p ON p.posting_date=o.posting_date AND p.line_set=o.line_set
+        WHERE NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=p.entry_no)
+      ), nearest AS (
+        SELECT DISTINCT ON (original_entry_no) *
+        FROM reposts r
+        WHERE NOT EXISTS (SELECT 1 FROM reposts s WHERE s.original_entry_no=r.original_entry_no AND s.same_name)
+        ORDER BY original_entry_no, distance NULLS LAST, entry_no COLLATE "C"
+      ), hits AS (
+        SELECT j.id, n.entry_no, n.posting_date, abs(j.debit_cents)+abs(j.credit_cents) AS line_cents,
+               n.original_entry_no, n.reversal_entry_no, n.original_name, n.repost_name, n.distance
+        FROM nearest n JOIN journal_entries j ON j.engagement_id=:eid AND j.entry_no=n.entry_no
+      ), picked AS (
+        SELECT DISTINCT ON (entry_no) * FROM hits
+        ORDER BY entry_no, line_cents DESC, id COLLATE "C", distance, original_entry_no COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+             original_entry_no, reversal_entry_no, original_name, repost_name
+      FROM picked
+      WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C"
+  - id: R12
+    name: 疑似重复开票
+    severity: high
+    checks:
+      - status: not_executable
+        sql: |
+          SELECT '本期销售发票都没有发运或服务完成记录, 无从区分哪张缺记录' AS reason
+          WHERE NOT EXISTS (
+            SELECT 1 FROM sales_invoices i JOIN delivery_notes d ON d.engagement_id=i.engagement_id AND d.invoice_id=i.id
+            WHERE i.engagement_id=:eid
+              AND i.invoice_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date))
+    # 同一客户 (customer 原文相同), 同一开票日, 同一含税金额的本期发票不少于 2 张, 其中没有发运或服务完成记录的每张出
+    # 一条例外 (按发票, 不按凭证合并), 指向其 journal_entry_id 的分录行 (发票没挂分录时指向发票). paired_invoices 为同组
+    # 其余发票 (按 ID); full_credits 为该发票开票日至期末之间的贷项凭证 (通用口径) 中应收净贷方等于该发票全额, 且有一行
+    # description 与客户名按 party_name_key (去前缀与后缀) 相等的凭证号, 供 GEN-02 取行
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), invoices AS (
+        SELECT i.id, i.invoice_no, i.customer, i.invoice_date, i.posting_date, i.amount_cents, i.journal_entry_id,
+               EXISTS (SELECT 1 FROM delivery_notes d WHERE d.engagement_id=i.engagement_id AND d.invoice_id=i.id)
+                 AS recorded,
+               count(*) OVER (PARTITION BY i.customer, i.invoice_date, i.amount_cents) AS group_size
+        FROM sales_invoices i
+        WHERE i.engagement_id=:eid
+          AND i.invoice_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+      ), lines AS (
+        SELECT j.entry_no, j.posting_date, j.debit_cents, j.credit_cents, j.description, a.category
+        FROM journal_entries j LEFT JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ), credits AS (
+        SELECT entry_no, min(posting_date) AS posting_date,
+               CAST(sum(credit_cents-debit_cents) FILTER (WHERE category=ANY(CAST(:receivables_categories AS text[])))
+                    AS bigint) AS credited_cents,
+               array_agg(DISTINCT party_name_key(description, CAST(:counterparty_prefixes AS text[]),
+                                                 CAST(:entity_suffixes AS text[]))) AS names
+        FROM lines
+        GROUP BY entry_no
+        HAVING bool_or(category=ANY(CAST(:revenue_categories AS text[])) AND debit_cents>0)
+           AND bool_or(category=ANY(CAST(:receivables_categories AS text[])) AND credit_cents>0)
+           AND NOT coalesce(bool_or(category=ANY(CAST(:cash_categories AS text[]))), false)
+      ), hits AS (
+        SELECT CASE WHEN j.id IS NULL THEN 'sales_invoice' ELSE 'journal_entry' END AS source_type,
+               coalesce(j.id, i.id) AS source_id,
+               coalesce(abs(j.debit_cents)+abs(j.credit_cents), abs(i.amount_cents)) AS amount_cents,
+               j.entry_no, coalesce(j.posting_date, i.posting_date) AS posting_date,
+               i.id AS invoice_id, i.invoice_no, i.customer,
+               (SELECT json_agg(json_build_object('invoice_id', p.id, 'invoice_no', p.invoice_no,
+                                                  'journal_entry_id', p.journal_entry_id) ORDER BY p.id COLLATE "C")
+                FROM invoices p
+                WHERE p.customer=i.customer AND p.invoice_date=i.invoice_date AND p.amount_cents=i.amount_cents
+                  AND p.id<>i.id) AS paired_invoices,
+               (SELECT coalesce(json_agg(c.entry_no ORDER BY c.posting_date,
+                         regexp_replace(regexp_replace(c.entry_no, '([0-9]+)', '0000000000\1', 'g'),
+                                        '0*([0-9]{10})', '\1', 'g') COLLATE "C"), '[]')
+                FROM credits c
+                WHERE c.posting_date BETWEEN i.invoice_date AND CAST(:period_end AS date)
+                  AND c.credited_cents=i.amount_cents
+                  AND party_name_key(i.customer, CAST(:counterparty_prefixes AS text[]),
+                                     CAST(:entity_suffixes AS text[]))=ANY(c.names)) AS full_credits
+        FROM invoices i LEFT JOIN journal_entries j ON j.engagement_id=:eid AND j.id=i.journal_entry_id
+        WHERE i.group_size>=2 AND NOT i.recorded
+      )
+      SELECT * FROM hits
+      WHERE amount_cents>CAST(:clearly_trivial_cents AS bigint)
+      ORDER BY posting_date,
+               regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               entry_no COLLATE "C", invoice_id COLLATE "C"
   - id: R13
     name: 期末后补记
     severity: medium

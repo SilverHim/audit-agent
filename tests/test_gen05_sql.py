@@ -1,16 +1,19 @@
-"""需求 R131 (slow): GEN-05 原有规则 R01-R08 与 R13 的 SQL 连库验收. Xero q1 按补造清单写进测试库 (R112 的
-build_xero_project), Numbat 经数据集载入, 两个项目各建一次 (module 级 fixture), 各用例共用; 用真实的
+"""需求 R131, R132 (slow): GEN-05 原有规则 R01-R08, R13 与新规则 R09-R12 的 SQL 连库验收. Xero q1 按补造清单写进
+测试库 (R112 的 build_xero_project), Numbat 经数据集载入, 两个项目各建一次 (module 级 fixture), 各用例共用; 用真实的
 PostgresFinancialDataStore 与 SqlRuleEngine 执行, 参数同 GraphNodes 用 build_run 解析. 缺省参数下结果等于离线预置
 (XERO_RULES, NUMBAT_RULES 的 GEN-05); 再以参数覆盖让缺省下 0 条或不执行的规则命中, 断言到刚好能区分口径 (审核
-R131-01). 没有 TEST_DATABASE_URL 时跳过."""
+R131-01). R132 另核对作废对的个数与删去一笔贷项凭证后 R10, R12 的变化. 没有 TEST_DATABASE_URL 时跳过."""
 
 from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import delete, insert, select
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
@@ -18,8 +21,11 @@ from backend.contracts.records import DatasetTraits
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
+from backend.persistence import models as m
+from backend.persistence.db import bind_engagement
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import NUMBAT_RULES
+from tests.test_knowledge import voided_cte
 from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
 from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
 
@@ -59,6 +65,47 @@ async def gen05(project: Gen05Project, **overrides: object) -> RuleResult:
     )
 
 
+# 作废对的个数 (需求 R132 验收 1): 接在 GEN-05 R02 的作废对共用段之后, 全部对数, 原凭证在期内的对数, 期内的作废凭证数
+VOIDED_COUNTS = """
+)
+SELECT (SELECT count(*) FROM reversal) AS pairs,
+       (SELECT count(*) FROM reversal r WHERE EXISTS (
+          SELECT 1 FROM journal_entries o WHERE o.engagement_id=:eid AND o.entry_no=r.original_no
+            AND o.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date))) AS in_period,
+       (SELECT count(DISTINCT j.entry_no) FROM journal_entries j JOIN voided v ON v.entry_no=j.entry_no
+        WHERE j.engagement_id=:eid
+          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)) AS vouchers
+"""
+
+
+async def voided_counts(project: Gen05Project) -> dict[str, object]:
+    """按 GEN-05 的作废对共用段 (与 CSH-02 逐字相同) 数作废对."""
+    [rule] = [r for r in project.deps.library.load("GEN-05").rules if r.id == "R02"]
+    shared = voided_cte(rule.sql)
+    assert shared is not None
+    [row] = await project.deps.financial_store.query(project.eid, shared + VOIDED_COUNTS, project.run.params_snapshot)
+    return row
+
+
+@asynccontextmanager
+async def without_rows(project: Gen05Project, table_name: str, column: str, value: str) -> AsyncIterator[int]:
+    """在测试库的项目中暂时删去一张账表里某列等于 value 的行 (测试库是副本, 原文件不改), 给出删去的行数; 退出时原样
+    写回, 共用项目的其余用例不受影响."""
+    engine = project.deps.data.engine  # type: ignore[attr-defined]
+    table = m.FINANCIAL[table_name]
+    where = (table.c.engagement_id == project.eid) & (table.c[column] == value)
+    async with engine.begin() as conn:
+        await bind_engagement(conn, project.eid)
+        rows = [dict(row) for row in (await conn.execute(select(table).where(where))).mappings()]
+        await conn.execute(delete(table).where(where))
+    try:
+        yield len(rows)
+    finally:
+        async with engine.begin() as conn:
+            await bind_engagement(conn, project.eid)
+            await conn.execute(insert(table), rows)
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def xero(tmp_path_factory: pytest.TempPathFactory) -> Gen05Project:
     project = await build_xero_project(
@@ -88,14 +135,22 @@ async def numbat(tmp_path_factory: pytest.TempPathFactory) -> Gen05Project:
 
 @pytest.mark.external
 async def test_xero_gen05_on_postgres(xero: Gen05Project) -> None:
-    """验收 7: Xero q1 上 9 条规则 0 条例外, 不执行的规则与理由同离线预置 (录入时间不可靠的 4 条, 没有审批人的 R04,
-    只有一个录入人的 R07); R02, R03 (审批限额 500000), R05 执行而没有命中. 覆盖为录入时间可信时 R01 24 笔, R08 49 笔,
-    R13 196 笔 (R06 仍因没有错报沟通不执行), 证明跳过改变了结果; 其中 R13-1 为 XJ-397 三行中金额最大的 XJ-397-3
-    (ID 最小的是 XJ-397-1), 守 "取凭证内金额最大的行"."""
+    """R131 验收 7, R132 验收 1, 7: Xero q1 上新规则 R09-R12 的 7 条例外, 原有规则 0 条, 不执行的规则与理由同离线
+    预置 (录入时间不可靠的 4 条, 没有审批人的 R04, 只有一个录入人的 R07); R02, R03 (审批限额 500000), R05, R11 执行.
+    作废对全部 65 对, 原凭证在期内的 33 对 (66 笔). 覆盖为录入时间可信时 R01 24 笔, R08 49 笔, R13 196 笔 (R06 仍因
+    没有错报沟通不执行), 证明跳过改变了结果; 其中 R13-1 为 XJ-397 三行中金额最大的 XJ-397-3 (ID 最小的是 XJ-397-1),
+    守 "取凭证内金额最大的行". 删去贷项凭证 XJ-430 的 3 行后 R10 只剩 XJ-449-2 (编号变为 R10-1), R12 的 ORC1003 没有
+    全额冲减的凭证 (XJ-449 是 Bank West 的)."""
     assert xero.run.params_snapshot["approval_limit_cents"] == 500000
     assert await gen05(xero) == XERO_RULES["GEN-05"](xero.run)
+    assert await voided_counts(xero) == {"pairs": 65, "in_period": 33, "vouchers": 66}
     reliable = await gen05(xero, entry_timestamps_reliable=True)
-    assert Counter(x.rule_id for x in reliable.exceptions) == {"R01": 24, "R08": 49, "R13": 196}
+    assert Counter(x.rule_id for x in reliable.exceptions) == {
+        "R01": 24,
+        "R08": 49,
+        "R13": 196,
+        **{"R09": 2, "R10": 2, "R11": 2, "R12": 1},
+    }
     assert [(o.rule_id, o.status) for o in reliable.outcomes] == [
         ("R04", "not_executable"),
         ("R06", "skipped"),
@@ -103,13 +158,32 @@ async def test_xero_gen05_on_postgres(xero: Gen05Project) -> None:
     ]
     [r13] = [x for x in reliable.exceptions if x.id == "X-GEN-05-1-R13-1"]
     assert (r13.source_ids, r13.amount_cents) == (["XJ-397-3"], 1921221)
+    async with without_rows(xero, "journal_entries", "entry_no", "XJ-430") as removed:
+        assert removed == 3
+        after = await gen05(xero)
+    assert [(x.id, x.source_ids) for x in after.exceptions if x.rule_id == "R10"] == [
+        ("X-GEN-05-1-R10-1", ["XJ-449-2"])
+    ]
+    [r12] = [x for x in after.exceptions if x.rule_id == "R12"]
+    assert (r12.source_ids, r12.detail["full_credits"]) == (["XJ-405-2"], [])
+
+
+@pytest.mark.external
+async def test_xero_r12_groups_invoices_by_customer(xero: Gen05Project) -> None:
+    """需求 R132 验收 6 的 "同一客户": 去掉 ORC1009 (Yarra Transport, 07-17 的 550.00) 的服务完成记录后, 它与 ORC1003,
+    ORC1008 同日同额而客户不同, 不算重复开票; R12 仍只有 ORC1003. 防分组漏掉客户."""
+    async with without_rows(xero, "delivery_notes", "invoice_id", "SI-76e3f056-479f-417c-a72b-f3d767899b87") as removed:
+        assert removed == 1
+        assert hits(await gen05(xero), "R12") == ["XJ-405-2"]
 
 
 async def test_numbat_gen05_on_postgres(numbat: Gen05Project) -> None:
-    """验收 8: Numbat 上只有 SJ-2026-0612 命中 R01, R04, R08, 其余同离线预置. 时区反例: SJ-2026-0612 录入于 11:14Z
+    """R131 验收 8, R132 验收 1, 8: Numbat 上只有 SJ-2026-0612 命中 R01, R04, R08, 其余同离线预置 (R09, R10, R12 执行
+    而 0 条; 没有作废冲回格式, R11 不执行, 也没有作废对). 时区反例: SJ-2026-0612 录入于 11:14Z
     (悉尼周日 21:14) 而命中 R08, CP-AP-2025-07-A 录入于 06:01Z (悉尼 16:01) 而不命中; 不换算时区时两者正好相反.
     GJ-202606-ECL-1 借 1000000 (不是付款), 供 R03 的限额覆盖 (test_numbat_overrides_make_rules_hit) 区分只取付款."""
     assert await gen05(numbat) == NUMBAT_RULES["GEN-05"](numbat.run)
+    assert await voided_counts(numbat) == {"pairs": 0, "in_period": 0, "vouchers": 0}
     lines = {
         line.id: line
         for line in await numbat.deps.financial_store.journal_entries(
@@ -157,18 +231,25 @@ async def test_numbat_overrides_make_rules_hit(
 
 @pytest.mark.external
 @pytest.mark.parametrize(
-    ("overrides", "rule_id", "expected"),
+    ("overrides", "rule_id", "expected", "outcome"),
     [
         # R02: 整数单位改为 100, 门槛 0: 调整分录中只剩手工折旧 XJ-499 (三行都是 100 的倍数, 取最大的贷方行);
         # 作废对 XJ-401, XJ-495, XJ-498 不剔除时会多出来
-        ({"round_unit_cents": 100, "performance_materiality_cents": 0}, "R02", ["XJ-499-2"]),
+        ({"round_unit_cents": 100, "performance_materiality_cents": 0}, "R02", ["XJ-499-2"], None),
         # R05: 期末改为 07-17, 前三日内的三笔作废冲回, 摘要以大写 "Reversed" 开头 (ILIKE)
-        ({"period_end": "2026-07-17"}, "R05", ["XJ-399-1", "XJ-400-1", "XJ-409-1"]),
+        ({"period_end": "2026-07-17"}, "R05", ["XJ-399-1", "XJ-400-1", "XJ-409-1"], None),
+        # R10 (需求 R132): 把 GST 科目也当作银行科目, 两笔贷项凭证就涉及银行科目, 不再算全额冲减
+        ({"cash_categories": ["cash", "tax_payable"]}, "R10", [], None),
+        # R12 (需求 R132): 期间只取 07-31, 期内只有没有服务完成记录的 ORC1005, 无从区分, 不执行
+        ({"period_start": "2026-07-31", "period_end": "2026-07-31"}, "R12", [], "not_executable"),
     ],
-    ids=["R02-round-unit", "R05-period-end"],
+    ids=["R02-round-unit", "R05-period-end", "R10-touches-cash", "R12-no-records"],
 )
 async def test_xero_overrides_make_rules_hit(
-    xero: Gen05Project, overrides: dict[str, object], rule_id: str, expected: list[str]
+    xero: Gen05Project, overrides: dict[str, object], rule_id: str, expected: list[str], outcome: str | None
 ) -> None:
-    """审核 R131-01: Xero 上缺省 0 条的 R02, R05 以参数覆盖造出命中, 断言全部命中行."""
-    assert hits(await gen05(xero, **overrides), rule_id) == expected
+    """审核 R131-01: Xero 上缺省 0 条的 R02, R05 以参数覆盖造出命中, 断言全部命中行; R10 的贷项凭证不涉银行科目; R12
+    的执行前检查在期内发票都没有记录时命中 (outcome 为该规则的执行记录状态, None 为执行了)."""
+    result = await gen05(xero, **overrides)
+    assert hits(result, rule_id) == expected
+    assert next((o.status for o in result.outcomes if o.rule_id == rule_id), None) == outcome

@@ -1483,11 +1483,12 @@ def gen05_exception(
     source_id: str,
     amount_cents: int,
     detail: dict[str, Any],
+    number: int = 1,
 ) -> AuditException:
-    """GEN-05 一条规则的第 1 条例外, 字段同 SqlRuleEngine 按 GEN-05.yaml 的输出列组装: detail 为 source_type,
+    """GEN-05 一条规则的第 number 条例外, 字段同 SqlRuleEngine 按 GEN-05.yaml 的输出列组装: detail 为 source_type,
     source_id, amount_cents 之外的列 (entry_no, posting_date 与规则特有的列), 证据指针指向该分录行."""
     return AuditException(
-        id=f"X-GEN-05-{run.run_no}-{rule_id}-1",
+        id=f"X-GEN-05-{run.run_no}-{rule_id}-{number}",
         version=1,
         procedure_id="GEN-05",
         run_id=run.id,
@@ -1509,8 +1510,10 @@ def gen05_exception(
 
 
 def numbat_gen05_result(run: ProcedureRun) -> RuleResult:
-    """GEN-05 对 Numbat 的结果 (需求 R131 验收 8, 取自连库跑一次的结果): SJ-2026-0612 悉尼周日 21:14 录入, 自审自批,
-    命中 R01 (收入行), R04 与 R08 (两行同额取 ID 小的); 画像没有审批限额, R03 不执行; 还没发出错报沟通, R06 不执行."""
+    """GEN-05 对 Numbat 的结果 (需求 R131 验收 8, R132 验收 8, 取自连库跑一次的结果): SJ-2026-0612 悉尼周日 21:14
+    录入, 自审自批, 命中 R01 (收入行), R04 与 R08 (两行同额取 ID 小的); 画像没有审批限额, R03 不执行; 还没发出错报
+    沟通, R06 不执行; 没有数据集声明, 也就没有作废冲回格式, R11 不执行. R09 (没有调整分录), R10, R12 (发票都有发运单)
+    执行而 0 条."""
     entry = {"entry_no": "SJ-2026-0612", "posting_date": "2026-06-28"}
     local = {"created_at_local": "2026-06-28T21:14:00"}
     return RuleResult(
@@ -1530,6 +1533,7 @@ def numbat_gen05_result(run: ProcedureRun) -> RuleResult:
         outcomes=[
             RuleOutcome(rule_id="R03", status="not_executable", reason="客户画像没有审批限额"),
             RuleOutcome(rule_id="R06", status="skipped", reason="尚未发出错报沟通, 本规则只在增量实例执行"),
+            RuleOutcome(rule_id="R11", status="skipped", reason="数据集没有声明作废冲回格式"),
         ],
     )
 

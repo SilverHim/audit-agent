@@ -162,6 +162,9 @@ async def test_load_rules_and_project_isolation(storage):
         rare_user_max=2,
         round_unit_cents=1000000,
         cash_categories=["cash"],
+        receivables_categories=["receivables"],  # 需求 R132: R10, R12 的贷项凭证与名称比较
+        counterparty_prefixes=["payment to", "payment from", "payment:"],
+        entity_suffixes=["pty ltd", "pty limited", "pty", "ltd", "limited"],
         entry_nos=None,
         audit_adjustment_start=None,
     )
