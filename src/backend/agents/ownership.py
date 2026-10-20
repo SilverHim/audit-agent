@@ -49,6 +49,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import StatePatch
 from backend.services.party_names import party_name_key
+from backend.services.staleness import current_exceptions, superseded_runs
 
 PROCEDURE_ID = "GEN-08"
 OFFICEHOLDER_PAGE = 1  # 公司摘录第 1 页为公司与高管, 第 2 页为股本与股东 (设计稿第 2.5 节)
@@ -154,7 +155,6 @@ class Penetrator:
         self.eid = ctx.engagement.id
         self.params = ctx.run.params_snapshot
         self.registered: dict[str, DocumentRef] | None = None  # 已登记的 registry_extract 文件, 重建时才取
-        self.person_rows = 0  # 本次执行写的人员检索留痕行数 (摘要的检索序号)
 
     async def run(self) -> Penetration:
         """按模块说明的顺序查完, 返回查询所得. 画像取本项目采用的那一版 (状态中的 client_profile_version), 查不到抛
@@ -323,7 +323,7 @@ class Penetrator:
             person, document = await self.query(
                 found,
                 f"person:{node_id.removeprefix('PER-')}",
-                f"ASIC person search #{self.person_rows + 1}",
+                f"ASIC person search #{len(found.searches) + 1}",  # 本次执行的检索顺序 (重建的也算)
                 params,
                 partial(self.deps.registry.asic_person, self.eid, family, given, birth_date),
                 PersonSearch,
@@ -357,8 +357,6 @@ class Penetrator:
         return document
 
     async def record(self, summary: str, key: str, payload: dict[str, Any]) -> None:
-        if key.startswith("person:"):
-            self.person_rows += 1
         await self.deps.trail.record(
             TrailEntry(
                 engagement_id=self.eid,
@@ -475,9 +473,15 @@ def relation_text(link: PartyLink) -> str:
 
 
 def gen08_exceptions(ctx: RunContext, found: Penetration, graph: OwnershipGraph) -> list[AuditException]:
-    """本次执行的例外: R01 (undeclared_leads) 在前, R02 (interrupted_leads) 在后, 各按发现顺序编号. 状态中本程序已有的
-    同 (rule_id, source_ids) 例外不再出 (重跑时不重复), 编号只数本次出的."""
-    existing = {(x.rule_id, tuple(x.source_ids)) for x in ctx.state["exceptions"] if x.procedure_id == PROCEDURE_ID}
+    """本次执行的例外: R01 (undeclared_leads) 在前, R02 (interrupted_leads) 在后, 各按发现顺序编号. 当前结果中本程序
+    已有的同 (rule_id, source_ids) 例外不再出 (rerun 决定重跑时不重复), 编号只数本次出的. 当前结果不含被过期重跑取代的
+    执行的例外 (staleness.current_exceptions): 过期重跑以新结果为准, 这些照常出在新执行下."""
+    superseded = superseded_runs(ctx.state["rerun_requests"])
+    existing = {
+        (x.rule_id, tuple(x.source_ids))
+        for x in current_exceptions(ctx.state["exceptions"], superseded)
+        if x.procedure_id == PROCEDURE_ID
+    }
     exceptions: list[AuditException] = []
     for rule_id, severity, leads in (
         ("R01", "high", undeclared_leads(ctx, found, graph)),

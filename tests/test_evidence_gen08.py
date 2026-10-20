@@ -1,7 +1,8 @@
-"""A5 GEN-08 股权穿透与关系图 (需求 R137): 查询顺序与留痕, 人员检索对象, 登记 PDF 存档, 关系图, R01 例外.
+"""A5 GEN-08 股权穿透与关系图 (需求 R137, R138): 查询顺序与留痕, 人员检索对象, 登记 PDF 存档, 关系图, R01 例外;
+按留痕幂等重建, 失败路径, R02 穿透中断, 重跑与过期重跑, 进程中断后的恢复 (R138, 见文末一节).
 
 Xero 用例的登记取补造目录 registry/ (xero_registry, 只读补造文件, 不改任何文件); 向上穿透, 没有 ACN 的法人股东与
-按名称比对申报清单另用合成的假登记 (FakeRegistry). 按留痕重建, 失败路径与 R02 由需求 R138 做.
+按名称比对申报清单另用合成的假登记 (FakeRegistry).
 """
 
 import asyncio
@@ -32,6 +33,7 @@ from backend.contracts.models import (
     Officeholder,
     OwnershipGraph,
     PersonRole,
+    PersonSearch,
     Phase,
     ProcedureStatus,
     Reliability,
@@ -42,10 +44,11 @@ from backend.contracts.models import (
     TrailKind,
     organisation_node_id,
 )
-from backend.contracts.state import StatePatch
+from backend.contracts.state import StatePatch, fill_defaults
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import GraphNodes, apply_patch
-from backend.services.staleness import stale_procedures
+from backend.orchestration.runner import GraphRunner
+from backend.services.staleness import current_results, stale_procedures
 from tests.external import needs
 from tests.fakes import (
     ENGAGEMENT,
@@ -53,6 +56,7 @@ from tests.fakes import (
     NUMBAT_ASIC,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
+    FakeDataStore,
     FakeEngagementStore,
     FakeFinancialStore,
     FakeRegistry,
@@ -460,12 +464,26 @@ async def test_upward_penetration_and_name_matching() -> None:
     assert (kiwi, f"ACN-{ENTITY_ACN}", "shareholder", 40, 0.4) in links_of(patch)
     assert (grand, f"ACN-{PARENT_ACN}", "shareholder", 1, 1.0) in links_of(patch)
     [found] = [x for x in patch["exceptions"] if x.rule_id == "R01"]
+    assert [x.rule_id for x in patch["exceptions"]] == ["R01", "R02", "R02"]  # R02 排在 R01 之后
     assert [
         (x.id, x.severity, x.source_ids, x.detail["reason"]) for x in patch["exceptions"] if x.rule_id == "R02"
     ] == [
         ("X-GEN-08-1-R02-1", "medium", [kiwi], "没有 ACN"),
         ("X-GEN-08-1-R02-2", "medium", [grand], "达到 max_depth"),
     ]
+    kiwi_r02 = patch["exceptions"][1]
+    assert kiwi_r02.detail == {
+        "name": "Kiwi Holdings Ltd",
+        "acn": None,
+        "via": f"ACN-{ENTITY_ACN}",
+        "reason": "没有 ACN",
+    }
+    assert patch["exceptions"][2].detail == {
+        "name": "Galah Group Pty Ltd",
+        "acn": GRAND_ACN,
+        "via": f"ACN-{PARENT_ACN}",
+        "reason": "达到 max_depth",
+    }
     assert found.source_ids == [grand]
     assert {k: found.detail[k] for k in ("acn", "via", "via_relations")} == {
         "acn": GRAND_ACN,
@@ -478,8 +496,9 @@ async def test_upward_penetration_and_name_matching() -> None:
 
 
 async def test_client_without_acn_fails_after_recording_the_lookup() -> None:
-    """客户 ABN 查不到, 或登记没有 ACN (不是公司): 写完 ABN 那行留痕后抛 LookupError, 不再查询 (A1 按执行失败处理;
-    失败路径的其余部分由需求 R138 做). 留痕先写 (审核意见 R137-02): 那一行的 result 为查到的记录或空."""
+    """客户 ABN 查不到, 或登记没有 ACN (不是公司): 写完 ABN 那行留痕后抛 LookupError, 不再查询 (A1 按执行失败处理,
+    见 test_client_not_penetrable_becomes_failed_run_and_rerun_task). 留痕先写 (审核意见 R137-02): 那一行的 result
+    为查到的记录或空."""
     no_acn = chain_registry().abn_records[NUMBAT_PROFILE.abn].model_copy(update={"acn": None})
     not_found = {"result": None, "success": False}  # 查不到记 success 为假, 之后的执行再查 (需求 R138)
     for records, result in (
@@ -658,16 +677,26 @@ async def test_small_corporate_shareholder_is_not_penetrated() -> None:
 
 def test_gen08_is_stale_after_registry_extracts_change() -> None:
     """10-20 补充: GEN-08 读 registry_extracts; 执行之后审计师上传或修改了 ASIC 摘录 (数据变动记 registry_extracts),
-    GEN-08 即过期, 可过期重跑出关系图的下一版 (见 test_rerun_outputs_v2_without_repeating_exceptions); 别的数据变动
-    不让它过期."""
+    GEN-08 即过期, 可过期重跑出关系图的下一版 (主流程见 test_stale_rerun_keeps_current_exceptions_under_the_new_run);
+    另读登记 PDF 的文件登记 (审核意见 R138-07: 关系的证据可靠性取它, 重建也按它取文件), 只看 registry_extract 一类
+    (R304 的写法); 别的数据变动或别类文件的登记变动不让它过期."""
     deps = make_deps(FakeRegistry(), FakeTrail(), features=FEATURES)
-    assert deps.library.load("GEN-08").reads == [DataInput.registry_extracts]
+    template = deps.library.load("GEN-08")
+    assert (template.reads, template.document_reads) == (
+        [DataInput.registry_extracts, DataInput.documents],
+        [DocumentType.registry_extract],
+    )
     pack = [make_procedure("GEN-08", Phase.P2_Executing, status=ProcedureStatus.completed)]
     run = make_run("GEN-08").model_copy(update={"status": RunStatus.succeeded, "data_version": 1})
-    later = [DataChange(data_version=2, input=DataInput.registry_extracts)]
-    assert stale_procedures(pack, [run], later, deps.library) == ["GEN-08"]
-    other = [DataChange(data_version=2, input=DataInput.trial_balance)]
-    assert stale_procedures(pack, [run], other, deps.library) == []
+
+    def change(data_input: DataInput, types: list[DocumentType] | None = None) -> list[DataChange]:
+        return [DataChange(data_version=2, input=data_input, document_types=types)]
+
+    assert stale_procedures(pack, [run], change(DataInput.registry_extracts), deps.library) == ["GEN-08"]
+    registered = change(DataInput.documents, [DocumentType.registry_extract])
+    assert stale_procedures(pack, [run], registered, deps.library) == ["GEN-08"]
+    for other in (change(DataInput.trial_balance), change(DataInput.documents, [DocumentType.contract])):
+        assert stale_procedures(pack, [run], other, deps.library) == []
 
 
 def kinds(registry: FakeRegistry) -> list[tuple[str, str]]:
@@ -702,22 +731,62 @@ async def test_preset_trail_rebuilds_without_queries() -> None:
     assert [r.idempotency_key for r in calls(partial_trail)] == [r.idempotency_key for r in calls(trail)]
 
 
+async def test_person_search_numbers_continue_after_recovery() -> None:
+    """人员检索摘要的序号按本次执行已检索的人数往下数, 查不到的也算 (审核意见 R138-08): 第 1 人查不到, 第 2 人查到时
+    为 #1, #2; 两人都查到时写完第 1 人那行后恢复, 补写的第 2 人那行仍为 #2."""
+    people = [("Shaw", "Riley", date(1970, 5, 6)), ("Lee", "Pat", date(1975, 1, 2))]
+    officers = [
+        Officeholder(name=f"{given} {family}", birth_date=born, role="director", appointed=date(2015, 1, 5))
+        for family, given, born in people
+    ]
+    entity = extract(ENTITY_ACN, "Bilby Tools Pty Ltd", officers, [])
+
+    def registry(searchable: list[tuple[str, str, date]]) -> FakeRegistry:
+        persons = [
+            PersonSearch(
+                family_name=family,
+                given_name=given,
+                birth_date=born,
+                roles=[],
+                file_name=f"{family}.pdf",
+                file_bytes=PDF + family.encode(),
+            )
+            for family, given, born in searchable
+        ]
+        return FakeRegistry(chain_registry().abn_records, extracts={ENTITY_ACN: entity}, persons=persons)
+
+    def searches(trail: FakeTrail) -> list[str]:
+        return [r.summary for r in calls(trail) if r.idempotency_key.startswith(f"{EID}:GEN-08:person:")]
+
+    _, _, partly, _ = await run_gen08(registry(people[1:]), NUMBAT_PROFILE, {"max_depth": 0})
+    assert searches(partly) == ["ASIC person search #1", "ASIC person search #2"]
+    _, _, clean, deps = await run_gen08(registry(people), NUMBAT_PROFILE, {"max_depth": 0})
+    cut = FakeTrail()
+    cut.entries = calls(clean)[:3]  # ABN, 报告主体摘录, 第 1 人的检索
+    await run_gen08(registry(people), NUMBAT_PROFILE, {"max_depth": 0}, trail=cut, financial=deps.financial_store)
+    assert searches(cut) == searches(clean) == ["ASIC person search #1", "ASIC person search #2"]
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [
         (lambda p: {k: v for k, v in p.items() if k != "result"}, "缺结构化结果"),
         (lambda p: {k: v for k, v in p.items() if k != "document_id"}, "缺 document_id"),
         (None, "未登记"),
+        ("retyped", "未登记"),
     ],
-    ids=["no_result", "no_document_id", "unregistered"],
+    ids=["no_result", "no_document_id", "unregistered", "retyped"],
 )
 async def test_rebuild_rejects_incomplete_payload(change: Any, message: str) -> None:
     """验收 2: 重建只读 payload 与已登记的 registry_extract 文件: 报告主体那行摘录留痕的 payload 缺 result, 缺
-    document_id, 或文件未登记 (换一个空的文件登记) 时抛 LookupError, 消息含幂等键."""
+    document_id, 文件未登记 (换一个空的文件登记), 或文件仍登记而类型已不是 registry_extract (审核意见 R138-04) 时抛
+    LookupError, 消息含幂等键."""
     _, _, trail, deps = await run_gen08(chain_registry(), NUMBAT_PROFILE, {"max_depth": 1})
     key = f"{EID}:GEN-08:extract:{ENTITY_ACN}"
     financial = deps.financial_store if change is not None else FakeFinancialStore()
-    if change is not None:
+    if change == "retyped":
+        financial.document_refs = [d.model_copy(update={"type": DocumentType.other}) for d in financial.document_refs]
+    elif change is not None:
         trail.entries = [
             e.model_copy(update={"payload": change(e.payload)}) if e.idempotency_key == key else e
             for e in trail.entries
@@ -795,13 +864,34 @@ async def test_missing_extract_gives_r02_and_is_queried_again() -> None:
     assert row.payload == {"acn": PARENT_ACN, "result": None, "document_id": None, "success": False}
 
     registry.extracts[PARENT_ACN] = parent
-    state = {"exceptions": patch["exceptions"], "ownership_graph": graph}
+    # 第 2 次执行的状态 (审核意见 R138-04): 第 1 次的例外去掉母公司那条 R01 (只留它的 R02, 看去重认不认 rule_id),
+    # 另加一条别的程序对 Galah 的同 (R01, source_ids) 例外 (看去重是否只限本程序)
+    grand = f"ACN-{GRAND_ACN}"
+    kept = [x for x in patch["exceptions"] if not (x.rule_id == "R01" and x.source_ids == [quoll])]
+    foreign = kept[0].model_copy(update={"id": "X-GEN-03-1-C01-1", "procedure_id": "GEN-03", "source_ids": [grand]})
+    state = {"exceptions": [*kept, foreign], "ownership_graph": graph}
     again, _, _, _ = await run_gen08(
         registry, profile, {"max_depth": 1}, trail=trail, financial=deps.financial_store, run_no=2, state=state
     )
     assert ("extract", PARENT_ACN) in registry.queries[-3:]
     assert quoll in {x.to_id for x in again["ownership_graph"].links}
-    assert not [x for x in again["exceptions"] if x.rule_id == "R02" and x.source_ids == [quoll]]
+    # 新出的只数本次的: 母公司的 R01 (状态里只有它的 R02), Galah 的 R01 (状态里那条是别的程序的) 与 R02 (达到 max_depth)
+    assert [(x.id, x.source_ids) for x in again["exceptions"]] == [
+        ("X-GEN-08-2-R01-1", [quoll]),
+        ("X-GEN-08-2-R01-2", [grand]),
+        ("X-GEN-08-2-R02-1", [grand]),
+    ]
+
+
+async def test_entity_extract_not_found_gives_r02_without_evidence() -> None:
+    """报告主体的摘录查不到: 主体节点出 R02 (reason 查不到摘录, 没有可指的股东行, 证据为空), 不再往上穿透, 执行成功."""
+    registry = chain_registry()
+    registry.extracts.pop(ENTITY_ACN)
+    patch, _, _, _ = await run_gen08(registry, NUMBAT_PROFILE, {"max_depth": 1})
+    r02 = [x for x in patch["exceptions"] if x.rule_id == "R02"]
+    assert [(x.source_ids, x.detail["reason"], x.evidence) for x in r02] == [([f"ACN-{ENTITY_ACN}"], "查不到摘录", [])]
+    assert ("extract", PARENT_ACN) not in registry.queries
+    assert patch["procedure_runs"][0].status is RunStatus.succeeded
 
 
 @needs("q1_supplements")
@@ -911,3 +1001,31 @@ async def test_restart_after_third_query_recovers_without_requery() -> None:
     assert len(rows) == 5 and len({r.idempotency_key for r in rows}) == 5
     [graph] = await s.output_store.latest(EID, OwnershipGraph)
     assert graph == expected
+
+
+async def test_stale_rerun_keeps_current_exceptions_under_the_new_run() -> None:
+    """审核意见 R138-01: Numbat 主流程 (功能 related_parties 打开) 跑到等复核后记一次 registry_extracts 变动, 过期重跑
+    GEN-08: Store 中关系图出 v2 (RUN-GEN-08-2); 第 1 次执行被取代, 其例外不再是当前结果, 新执行重新出同样的
+    (规则, source_ids) 例外, 当前结果中的 GEN-08 例外与重跑前一致, 都属新执行."""
+    s = await start_demo(features=NUMBAT_FEATURES | {"related_parties"}, registry=numbat_chain_registry())
+    await wait_idle(s.runner, EID)
+    assert await s.next_nodes() == ("await_events",), s.runner.run_error(EID)
+
+    async def current() -> list[tuple[str, tuple[str, ...], str]]:
+        values = fill_defaults((await s.runner.app.aget_state(GraphRunner.config(EID))).values)
+        xs = [x for x in current_results(values).exceptions if x.procedure_id == "GEN-08"]
+        return sorted((x.rule_id, tuple(x.source_ids), x.run_id) for x in xs)
+
+    before = await current()
+    assert {"R01", "R02"} <= {rule for rule, _, _ in before}
+    data = s.runner.deps.data
+    assert isinstance(data, FakeDataStore)
+    data.record(DataInput.registry_extracts)
+    request = await s.submit.rerun_stale(EID, "RR-1", ["GEN-08"], requested_by="U-1")
+    await wait_idle(s.runner, EID)
+    assert s.runner.run_error(EID) is None and "RUN-GEN-08-1" in request.superseded_run_ids
+    graphs = sorted((r for r in s.output_store.rows if isinstance(r, OwnershipGraph)), key=lambda g: g.version)
+    assert [(g.version, g.run_id) for g in graphs] == [(1, "RUN-GEN-08-1"), (2, "RUN-GEN-08-2")]
+    after = await current()
+    assert [(rule, ids) for rule, ids, _ in after] == [(rule, ids) for rule, ids, _ in before]
+    assert {run for _, _, run in after} == {"RUN-GEN-08-2"}
