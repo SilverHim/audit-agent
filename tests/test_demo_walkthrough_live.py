@@ -300,17 +300,25 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
     out["report_heading"] = [r.sections["opinion"].strip().splitlines()[:1] for r in signed]
     out["contracts"] = len(await deps.financial_store.contracts(eid))
     out["confirmations"] = len(await store.latest(eid, Confirmation))
+    out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
+    return out
+
+
+async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[str]]:
+    """项目的全部证据指针 (范围同 R56 的 everything: 判断, 合同, 函证, 例外, 评分卡, 人工结果) 经存储解析, 客户画像
+    指针按项目采用的画像解析; 返回指针数与解析不了的 (来源, 定位, 页与原因). R250 的程序级评测也用."""
+    deps = runner.deps
     engagement = await deps.engagement_store.get(eid)
     profile = await deps.engagement_store.client_profile(engagement.client_id) if engagement else None
     resolver = PointerResolver(deps.judgments.validator, eid, None, profile)
-    pointers = await evidence_pointers(Started(runner, store, deps.engagement_store), eid, everything=True)  # type: ignore[arg-type]
+    started = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
     unresolved = []
+    pointers = await evidence_pointers(started, eid, everything=True)
     for p in pointers:
         resolved, reason = await resolver.resolve(p)
         if resolved is None:
             unresolved.append(f"{p.source_type} {p.source_id} {p.locator} p{p.page}: {reason}")
-    out["pointers"], out["unresolved_pointers"] = len(pointers), unresolved
-    return out
+    return len(pointers), unresolved
 
 
 def assert_hard(data: dict[str, Any]) -> None:

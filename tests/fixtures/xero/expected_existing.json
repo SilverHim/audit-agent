@@ -1,0 +1,64 @@
+{
+  "hard": {
+    "DOC-04": {
+      "CON-X01": {"counterparty_abn": null},
+      "CON-X02": {"counterparty_abn": "19900043058"},
+      "CON-X03": {"counterparty_abn": "21900043067"}
+    },
+    "DOC-06": {
+      "BA-090": {"confirmed_balance_cents": -1090044, "balance_date": "2026-09-30", "accrued_interest_cents": 0},
+      "BA-091": {"confirmed_balance_cents": 1158123, "balance_date": "2026-09-30", "accrued_interest_cents": 4853}
+    },
+    "CSH-02": {
+      "BA-091": {
+        "judgment_id": "J-CSH-02-1-BA-091",
+        "proposed_action": "misstatement",
+        "amount_cents": 4853,
+        "direction": "understated"
+      }
+    },
+    "REV-02": {
+      "SI-3b28bf11-ed2f-4cf4-8e9e-fcae730cc292": {"misstatement": false},
+      "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45": {"misstatement": false},
+      "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9": {"misstatement": false},
+      "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611": {"misstatement": false},
+      "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b": {"misstatement": false},
+      "SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf": {"misstatement": false}
+    }
+  },
+  "soft": {
+    "DOC-04": {
+      "CON-X01": {
+        "amount_cents": 650000,
+        "sign_date": "2026-09-01",
+        "term_types": ["control_transfer", "payment", "termination"]
+      },
+      "CON-X02": {
+        "amount_cents": null,
+        "sign_date": "2026-06-24",
+        "term_types": ["control_transfer", "payment", "rebate", "termination"]
+      },
+      "CON-X03": {
+        "amount_cents": 420000,
+        "sign_date": "2026-08-10",
+        "term_types": ["control_transfer", "payment", "rebate", "termination"]
+      }
+    },
+    "REV-03": {
+      "CON-X01": {"proposed_action": "accept"},
+      "CON-X02": {"proposed_action": "accept"},
+      "CON-X03": {"proposed_action": "accept"}
+    },
+    "REV-02": {
+      "SI-3b28bf11-ed2f-4cf4-8e9e-fcae730cc292": {"proposed_action": "accept"},
+      "SI-5aadcd34-01a9-4b8d-a2bb-d7cc1de9fa45": {"proposed_action": "accept"},
+      "SI-5f6deadf-36a2-495a-9980-ceb11e8af9a9": {"proposed_action": "accept"},
+      "SI-77b338ef-ecc0-4b95-a0d7-2617b0054611": {
+        "proposed_action": "accept",
+        "not_cited": ["BT-090-0085", "XJ-720-2"]
+      },
+      "SI-a9f765e6-b9bc-4505-a47b-fb3ecb327e7b": {"proposed_action": "accept"},
+      "SI-bcd8a71f-aa31-4d0f-8a01-13ea26363ddf": {"proposed_action": "accept"}
+    }
+  }
+}

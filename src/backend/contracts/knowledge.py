@@ -1,8 +1,8 @@
 """知识文件的模型: 程序 YAML 与准则片段, 定义见 开发接口文档.md 第 8 节."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from backend.contracts.data import DataInput, TableKind
 from backend.contracts.models import (
@@ -10,6 +10,7 @@ from backend.contracts.models import (
     Assertion,
     AutonomyLevel,
     DocumentType,
+    DowngradeCondition,
     Engine,
     EvidenceType,
     GateId,
@@ -55,6 +56,42 @@ class RuleSpec(Model):
     emit: Literal["exception", "rows"] = "exception"  # exception 每行出一条例外, rows 原样返回行
     sql: str  # SQL, 参数用 :name 绑定; 由 B 编写
     checks: list[RuleCheck] = []  # 执行前检查, 按顺序执行, 第一个返回行的决定不执行 (需求 R130); 为空即总是执行
+    # 舞弊红旗 (需求 R168, 功能 autonomy): 判断解释的例外出自标了它的规则时, 判断级降级直接降到 L1 (fraud_flag 条件)
+    fraud_flag: bool = False
+
+
+DowngradeAt = Literal["assembly", "judgment"]  # 降级的时点: 装配 (写进 Procedure) 或判断 (写进 Judgment)
+# 各条件只在一个时点看 (规格书 7.4 "时点" 一列): 装配看风险等级, 判断看金额, 置信度, 推理链与舞弊迹象
+DOWNGRADE_AT: dict[DowngradeCondition, DowngradeAt] = {
+    DowngradeCondition.significant_risk: "assembly",
+    DowngradeCondition.high_risk: "assembly",
+    DowngradeCondition.amount_over_pm: "judgment",
+    DowngradeCondition.low_confidence: "judgment",
+    DowngradeCondition.unsupported_steps: "judgment",
+    DowngradeCondition.fraud_flag: "judgment",
+}
+
+
+class DowngradeRule(Model):
+    """自主度动态降级的一条规则 (规格书 7.4, 12.2 DowngradeRule; 需求 R168): 命中条件时降几级 (delta, 负数) 或直接降到
+    哪一级 (target_level), 二者恰给一个. 默认表在 knowledge/rules.json 的 autonomy 段, 程序 YAML 的 downgrade_rules
+    按条件覆盖. 只降不升: delta 须为负, target_level 高于当前级别时不改; 越过 L1 时截在 L1."""
+
+    condition: DowngradeCondition  # 条件
+    at: DowngradeAt  # 时点, 须与条件的时点一致 (DOWNGRADE_AT)
+    delta: int | None = None  # 降几级, 负数
+    target_level: AutonomyLevel | None = None  # 直接降到哪一级
+
+    @model_validator(mode="after")
+    def one_adjustment(self) -> Self:
+        """delta 与 target_level 恰给一个, delta 为负; 时点与条件一致."""
+        if (self.delta is None) == (self.target_level is None):
+            raise ValueError(f"{self.condition}: delta 与 target_level 须恰给一个")
+        if self.delta is not None and self.delta >= 0:
+            raise ValueError(f"{self.condition}: delta 须为负数 (只降不升), 不能为 {self.delta}")
+        if self.at != DOWNGRADE_AT[self.condition]:
+            raise ValueError(f"{self.condition} 在 {DOWNGRADE_AT[self.condition]} 时看, 不能写 at: {self.at}")
+        return self
 
 
 class LLMSpec(Model):
@@ -109,6 +146,17 @@ class ProcedureTemplate(Model):
     rules: list[RuleSpec] = []  # 规则 SQL, 规则与混合程序用
     llm: LLMSpec | None = None  # LLM 调用配置, LLM 与混合程序用
     manual: ManualSpec | None = None  # 人工程序交给人的要求, 人工程序须有, 其余程序不能写 (加载时校验)
+    # 按条件覆盖默认降级表 (rules.json 的 autonomy 段, 需求 R168); 同一条件只写一条, 没写的条件照默认
+    downgrade_rules: list[DowngradeRule] = []
+
+    @model_validator(mode="after")
+    def unique_downgrade_conditions(self) -> Self:
+        """downgrade_rules 中同一条件只写一条."""
+        conditions = [r.condition for r in self.downgrade_rules]
+        repeated = sorted({c for c in conditions if conditions.count(c) > 1})
+        if repeated:
+            raise ValueError(f"{self.id}: downgrade_rules 的条件重复: {', '.join(repeated)}")
+        return self
 
 
 class StandardFragment(Model):

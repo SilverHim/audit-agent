@@ -2067,6 +2067,15 @@ export type DocumentTypeIn = {
 };
 
 /**
+ * DowngradeCondition
+ *
+ * 自主度动态降级的条件 (规格书 7.4, 需求 R168; 功能 autonomy). 前两条在装配时看, 其余在判断时看; 各条降几级或
+ * 降到哪级见 knowledge/rules.json 的 autonomy 段 (模板 downgrade_rules 可按条件覆盖). 首次服务该客户, 财报层次风险,
+ * GEN-17 与按人机一致率的降级本版不做, 不在其中.
+ */
+export type DowngradeCondition = 'significant_risk' | 'high_risk' | 'amount_over_pm' | 'low_confidence' | 'unsupported_steps' | 'fraud_flag';
+
+/**
  * Engagement
  *
  * 审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取.
@@ -3080,6 +3089,10 @@ export type Judgment = {
      */
     exception_ids?: Array<string>;
     autonomy_level: AutonomyLevel;
+    /**
+     * Downgrade Reasons
+     */
+    downgrade_reasons?: Array<DowngradeCondition>;
     review_status?: ReviewStatus;
     /**
      * Superseded By
@@ -3149,7 +3162,7 @@ export type JudgmentDetail = {
 /**
  * JudgmentRef
  *
- * 报告中引用的一条判断.
+ * 引用的一条判断 (ID 与引用时的版本): 审计报告, 持续经营结论建议.
  */
 export type JudgmentRef = {
     /**
@@ -4117,6 +4130,10 @@ export type Procedure = {
         [key: string]: unknown;
     };
     autonomy_level: AutonomyLevel;
+    /**
+     * Downgrade Reasons
+     */
+    downgrade_reasons?: Array<DowngradeCondition>;
     status?: ProcedureStatus;
     /**
      * Rerun Subject Ids

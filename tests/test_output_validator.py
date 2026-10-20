@@ -18,6 +18,7 @@ from backend.contracts.llm_outputs import (
     CriticVerdictOut,
     DocumentClassification,
     ExtractedTerm,
+    GoingConcernAdvice,
     JudgmentDraft,
     MisstatementClassificationDraft,
     MisstatementNature,
@@ -35,7 +36,9 @@ from backend.contracts.models import (
     EqrRecommendation,
     EvidencePointer,
     EvidenceType,
+    GoingConcernOutcome,
     Judgment,
+    JudgmentRef,
     Milestone,
     MisstatementType,
     OpinionType,
@@ -59,12 +62,14 @@ from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
+    OUTCOME_STANDARDS,
     PLAN_REQUIRED_SECTIONS,
     CheckResult,
     JudgmentEngine,
     OutputValidator,
     check_plan,
     citation_keys,
+    going_concern_semantics,
     judgment_key,
     output_model,
     structure_only,
@@ -162,7 +167,7 @@ def cutoff_draft(**changes: Any) -> JudgmentDraft:
     return draft.model_copy(update=changes)
 
 
-def with_step(draft: JudgmentDraft, index: int, **changes: Any) -> JudgmentDraft:
+def with_step[M: JudgmentDraft | GoingConcernAdvice](draft: M, index: int, **changes: Any) -> M:
     chain = list(draft.reasoning_chain)
     chain[index] = chain[index].model_copy(update=changes)
     return draft.model_copy(update={"reasoning_chain": chain})
@@ -178,7 +183,7 @@ async def check(output: Any, raw: str | None = None, ctx: ValidationContext | No
 
 def test_validation_context_defaults() -> None:
     ctx = ValidationContext(standards_of=None)
-    assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == []
+    assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == [] and ctx.required_refs == []
 
 
 def test_output_model_resolves_every_llm_procedure() -> None:
@@ -229,11 +234,13 @@ def test_pending_checks_are_not_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 11 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
+    """现有 13 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
     StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
-    check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157)."""
+    check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157; FIN-02 的
+    GoingConcernAdvice 由 check_going_concern 校验, 需求 R183)."""
     assert set(OutputValidator.CHECKS) == {
         AuditPlanDraft,
+        GoingConcernAdvice,
         JudgmentDraft,
         MisstatementClassificationDraft,
         ContractExtraction,
@@ -1571,3 +1578,175 @@ async def test_fin03_judge_returns_the_classification_draft() -> None:
     failed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
     assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (None, None, "unattributed", 1)
     assert trail.entries[-1].payload["level_failed"] == "semantic"
+
+
+# ── 持续经营结论建议 (FIN-02, 需求 R183) ──
+
+GEN04_ID = "J-GEN-04-1-CLIENT-XERO-3C1332BB-Q1"  # Xero 的持续经营评价判断
+SUPPORT_LETTER = "documents/evidence/director_support_letter.pdf"  # 董事支持函, 1 页, correspondence, internal_original
+# FIN-02.yaml 由需求 R185 加; 校验只按模板取输出模型, 这里借 REV-02 的模板换成 GoingConcernAdvice
+FIN02 = REV02.model_copy(update={"llm": REV02.llm.model_copy(update={"output_model": "GoingConcernAdvice"})})  # type: ignore[union-attr]
+
+
+def gen04(version: int = 2, status: ReviewStatus = ReviewStatus.confirmed) -> Judgment:
+    """状态中的持续经营评价判断 (其余字段同 confirmed_judgment)."""
+    subject = "CLIENT-XERO-3C1332BB-Q1"
+    update = {"id": GEN04_ID, "procedure_id": "GEN-04", "run_id": "RUN-GEN-04-1", "subject_id": subject}
+    return confirmed_judgment(version, status).model_copy(update=update)
+
+
+def gc_pointer(source_type: str, source_id: str, page: int | None = None) -> EvidencePointer:
+    """模型填的 type 与 reliability 故意写错, 校验后应按来源改写."""
+    wrong = {"type": EvidenceType.external, "reliability": Reliability.external_original}
+    return EvidencePointer(source_type=source_type, source_id=source_id, locator="", page=page, **wrong)
+
+
+def gc_advice(**changes: Any) -> GoingConcernAdvice:
+    """Xero 的建议 (验收 2): 存在重大不确定性, 披露充分; 引用 GEN-04 判断第 2 版, 指针为试算表 840 (董事借款), 期后
+    流水 BT-090-0107, 董事支持函第 1 页与 ASA570-P18, P19, P22."""
+    loan, receipt = gc_pointer("trial_balance", "840"), gc_pointer("bank_transaction", "BT-090-0107")
+    letter = gc_pointer("document", xero_document(SUPPORT_LETTER).id, page=1)
+    p18, p19, p22 = (gc_pointer("standard", f"ASA570-P{n}") for n in (18, 19, 22))
+    fact, standard = StepKind.fact, StepKind.standard
+    advice = GoingConcernAdvice(
+        proposed_outcome=GoingConcernOutcome.material_uncertainty_disclosed,
+        conclusion="A material uncertainty exists; the going concern basis is appropriate and Note 2 discloses it.",
+        reasoning_chain=[
+            ReasoningStep(kind=fact, text="The director has lent 19,212.21 (account 840).", evidence=[loan]),
+            ReasoningStep(kind=fact, text="A deposit of 1,000.00 was received after year end.", evidence=[receipt]),
+            ReasoningStep(kind=fact, text="The director undertakes not to demand repayment.", evidence=[letter]),
+            ReasoningStep(kind=standard, text="Conclude on material uncertainty and disclosure.", evidence=[p18, p19]),
+            ReasoningStep(kind=standard, text="Adequate disclosure: unmodified opinion.", evidence=[p22]),
+            ReasoningStep(kind=StepKind.inference, text="Material uncertainty, disclosed.", from_steps=[0, 1, 2, 3, 4]),
+        ],
+        evidence=[loan, receipt, letter],
+        counter_argument="If the director cannot fund the shortfall, the going concern basis is inappropriate.",
+        judgment_refs=[JudgmentRef(id=GEN04_ID, version=2)],
+        self_confidence=0.8,
+    )
+    return advice.model_copy(update=changes)
+
+
+async def check_gc(
+    advice: GoingConcernAdvice | None, judgments: Sequence[Judgment] | None = None, raw: str | None = None
+) -> Any:
+    """FIN-02 的校验: Xero 演示的假财务存储, 状态中的判断缺省为 GEN-04 第 2 版已确认, 须引用它."""
+    ctx = ValidationContext(
+        judgments=[gen04()] if judgments is None else list(judgments), required_refs=[GEN04_ID], standards_of=None
+    )
+    return await xero_validator().validate(EID, FIN02, respond(advice, raw), ctx)
+
+
+@pytest.mark.external
+async def test_going_concern_advice_passes_and_rewrites_pointers() -> None:
+    """验收 2: 合法输出四级通过, 推理链与 evidence 列表的指针 type 与 reliability 都按来源改写 (模型填的不采信)."""
+    report = await check_gc(gc_advice())
+    assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
+    assert isinstance(report.output, GoingConcernAdvice)
+    pointers = [*report.output.evidence, *(p for step in report.output.reasoning_chain for p in step.evidence)]
+    rewritten = {(p.source_type, p.type, p.reliability) for p in pointers}
+    assert rewritten == {
+        ("trial_balance", EvidenceType.voucher, Reliability.internal_original),
+        ("bank_transaction", EvidenceType.bank, Reliability.external_copy),
+        ("document", EvidenceType.voucher, Reliability.internal_original),  # 支持函登记为 correspondence
+        ("standard", EvidenceType.standard, None),
+    }
+
+
+def unresolvable(advice: GoingConcernAdvice) -> GoingConcernAdvice:
+    """把全部指针换成查不到的行."""
+    bad = gc_pointer("bank_transaction", "BT-NONE")
+    steps = [step.model_copy(update={"evidence": [bad] if step.evidence else []}) for step in advice.reasoning_chain]
+    return advice.model_copy(update={"reasoning_chain": steps, "evidence": [bad]})
+
+
+NOT_FOUND = "指针 bank_transaction BT-NONE: 查无此行"
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("change", "judgments", "errors"),
+    [
+        (lambda a: a, [], [f"引用的判断 {GEN04_ID} 不在状态中"]),
+        (
+            lambda a: a.model_copy(update={"judgment_refs": [JudgmentRef(id=GEN04_ID, version=1)]}),
+            None,
+            [f"引用的判断 {GEN04_ID} 第 1 版不是当前版本 (第 2 版)"],
+        ),
+        (lambda a: a, [gen04(status=ReviewStatus.pending)], [f"引用的判断 {GEN04_ID} 尚未确认 (pending)"]),
+        (lambda a: a.model_copy(update={"judgment_refs": []}), None, [f"没有引用必须引用的判断 {GEN04_ID}"]),
+        (
+            unresolvable,
+            None,
+            [*(f"第 {i} 步{NOT_FOUND}" for i in range(5)), f"evidence 中{NOT_FOUND}", "没有一个能解析的证据指针"],
+        ),
+    ],
+)
+async def test_going_concern_reference_failures(
+    change: Any, judgments: list[Judgment] | None, errors: list[str]
+) -> None:
+    """验收 3: 引用的判断不在状态中, 不是当前版本, 未确认, 没引用 required_refs 中的判断, 或指针全部解析不了
+    → reference, 不重试, errors 恰为引用级的问题. 底稿另带一处语义缺陷 (第 3 步只引 P19, 语义级照查会报 P18), 引用级
+    不过时不查语义."""
+    advice = change(with_step(gc_advice(), 3, evidence=gc_advice().reasoning_chain[3].evidence[1:]))
+    assert going_concern_semantics(advice)  # 底稿确有语义缺陷
+    report = await check_gc(advice, judgments)
+    assert (report.level_failed, report.retryable, report.errors) == ("reference", False, errors)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda a: a.model_copy(update={"reasoning_chain": []}), "推理链为空"),
+        (lambda a: with_step(a, 0, evidence=[]), "第 0 步 fact 没有证据指针"),
+        (lambda a: with_step(a, 4, evidence=a.evidence[:1]), "第 4 步 standard 没有指向准则片段"),
+        (lambda a: with_step(a, 5, from_steps=[0, 5]), "第 5 步 inference 引用了非前序步骤 [5]"),
+    ],
+)
+async def test_going_concern_chain_semantic_failures(change: Any, error: str) -> None:
+    """验收 4 (推理链): 规则同判断草稿 (chain_semantics) → semantic, 不重试."""
+    report = await check_gc(change(gc_advice()))
+    assert (report.level_failed, report.retryable) == ("semantic", False)
+    assert error in report.errors
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("outcome", "required", "wrong"),
+    [
+        (GoingConcernOutcome.no_material_uncertainty, None, "ASA570-P17"),
+        (GoingConcernOutcome.material_uncertainty_disclosed, "ASA570-P18", "ASA570-P17"),
+        (GoingConcernOutcome.material_uncertainty_not_disclosed, "ASA570-P18", "ASA570-P17"),
+        (GoingConcernOutcome.basis_inappropriate, "ASA570-P17", "ASA570-P18"),
+    ],
+)
+async def test_going_concern_outcome_needs_its_standard_step(
+    outcome: GoingConcernOutcome, required: str | None, wrong: str
+) -> None:
+    """验收 4 (协调者 10-20 裁定, 审核 R183-03): 须引的准则按建议取值区分 (OUTCOME_STANDARDS 与本表一致):
+    basis_inappropriate 须有引用 ASA570-P17 的 standard 步骤, 两种存在重大不确定性的须引 ASA570-P18,
+    no_material_uncertainty 不另要求; 在 fact 步骤或 evidence 列表里引用不算. 第 3 步只引另一段 (wrong), 须引的片段挪进
+    第 2 步 (fact) 与 evidence: 除 no_material_uncertainty 外都判 semantic; 第 3 步改引须引的片段后都通过."""
+    assert OUTCOME_STANDARDS.get(outcome) == required
+    advice = gc_advice(proposed_outcome=outcome)
+    needed = gc_pointer("standard", required or "ASA570-P18")
+    [letter] = advice.reasoning_chain[2].evidence
+    misplaced = with_step(with_step(advice, 3, evidence=[gc_pointer("standard", wrong)]), 2, evidence=[letter, needed])
+    report = await check_gc(misplaced.model_copy(update={"evidence": [*advice.evidence, needed]}))
+    if required is None:
+        assert (report.level_failed, report.errors) == (None, [])
+    else:
+        error = f"建议 {outcome} 而推理链没有引用 {required} 的 standard 步骤"
+        assert (report.level_failed, report.errors) == ("semantic", [error])
+    assert (await check_gc(with_step(advice, 3, evidence=[needed]))).level_failed is None
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(("bad_outcome", "level"), [(False, "syntax"), (True, "structure")])
+async def test_going_concern_syntax_and_structure_are_retryable(bad_outcome: bool, level: str) -> None:
+    """验收 5: raw 不是 JSON → syntax; proposed_outcome 为 "ok" → structure; 两者都可重试 (call_llm 按 R34 最多
+    重试 2 次)."""
+    raw = json.dumps({**gc_advice().model_dump(mode="json"), "proposed_outcome": "ok"}) if bad_outcome else "not json"
+    report = await check_gc(None, raw=raw)
+    assert (report.level_failed, report.retryable, report.output) == (level, True, None)

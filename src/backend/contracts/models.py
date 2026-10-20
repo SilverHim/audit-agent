@@ -70,6 +70,19 @@ class AutonomyLevel(StrEnum):
     L4 = "L4"  # AI 全自主, 人事后抽查
 
 
+class DowngradeCondition(StrEnum):
+    """自主度动态降级的条件 (规格书 7.4, 需求 R168; 功能 autonomy). 前两条在装配时看, 其余在判断时看; 各条降几级或
+    降到哪级见 knowledge/rules.json 的 autonomy 段 (模板 downgrade_rules 可按条件覆盖). 首次服务该客户, 财报层次风险,
+    GEN-17 与按人机一致率的降级本版不做, 不在其中."""
+
+    significant_risk = "significant_risk"  # 装配: 程序关联的审计目标中最高风险为 significant
+    high_risk = "high_risk"  # 装配: 最高风险为 high
+    amount_over_pm = "amount_over_pm"  # 判断: 判断金额的绝对值超过执行重要性 (执行重要性未定时不适用)
+    low_confidence = "low_confidence"  # 判断: 置信度低于阈值 (rules.json 的 low_confidence_below)
+    unsupported_steps = "unsupported_steps"  # 判断: 推理链有 unsupported 步骤 (规格书第 14 节)
+    fraud_flag = "fraud_flag"  # 判断: 舞弊迹象 (FIN-03 认定 fraud_indicative, 或解释的例外所属规则标 fraud_flag)
+
+
 class ProcedureStatus(StrEnum):
     """程序状态."""
 
@@ -303,6 +316,15 @@ class OpinionType(StrEnum):
     qualified = "qualified"  # 保留
     adverse = "adverse"  # 否定
     disclaimer = "disclaimer"  # 无法表示意见
+
+
+class GoingConcernOutcome(StrEnum):
+    """持续经营结论 (FIN-02, 需求 R183; ASA 570 第 17, 18, 21-23 段)."""
+
+    no_material_uncertainty = "no_material_uncertainty"  # 持续经营基础适当, 不存在重大不确定性
+    material_uncertainty_disclosed = "material_uncertainty_disclosed"  # 存在重大不确定性, 披露充分 (第 22 段)
+    material_uncertainty_not_disclosed = "material_uncertainty_not_disclosed"  # 存在重大不确定性, 披露不充分 (第 23 段)
+    basis_inappropriate = "basis_inappropriate"  # 持续经营假设不恰当 (第 21 段, 否定意见); 闸门拒绝批准, 本版不支持
 
 
 class MisstatementType(StrEnum):
@@ -626,6 +648,9 @@ class Judgment(Versioned):
     misstatement_update: MisstatementUpdate | None = None
     exception_ids: list[str] = []  # 本判断解释的例外, 判断确认后这些例外置 attributed
     autonomy_level: AutonomyLevel  # 判断时的有效自主度
+    # 由模板级别降到有效自主度所命中的条件 (需求 R168, 功能 autonomy): 装配时的在前, 判断时的在后;
+    # 没有降级, 功能关闭, 人工建的判断与旧数据为空
+    downgrade_reasons: list[DowngradeCondition] = []
     review_status: ReviewStatus = ReviewStatus.pending  # 复核状态
     superseded_by: str | None = None  # 被推翻时为取代它的人工判断 ID; 被取代 (superseded) 时为取代它的新判断 ID
     performed_by: str  # 用户 ID: AI 生成的记项目负责人, 人工建的记决定人
@@ -900,7 +925,9 @@ class Procedure(Versioned):
     template_commit: str  # 实例化时程序库的 git commit
     objective_ids: list[str] = []  # 覆盖的审计目标
     params: dict[str, Any] = {}  # rerun 决定改的参数; 建执行记录时叠加在模板参数的解析结果上, 同名键以它为准
-    autonomy_level: AutonomyLevel  # 自主度
+    autonomy_level: AutonomyLevel  # 自主度 (运行时级别: 功能 autonomy 打开时为装配时降级后的)
+    # 装配时由模板级别降下来所命中的条件 (需求 R168, 功能 autonomy); 没有降级, 功能关闭与旧数据为空
+    downgrade_reasons: list[DowngradeCondition] = []
     status: ProcedureStatus = ProcedureStatus.planned  # 程序状态
     rerun_subject_ids: list[str] = []  # 重跑时只重判的对象 (rerun 关闭的那组失败任务的), 为空则整条重跑; 重跑后清空
     # 缺的资料对应的补交请求 ID (REQ-{表种类或文件类型}): awaiting_data 时为还缺的, no_data 时为客户无此类资料的;
@@ -1824,7 +1851,7 @@ class Contract(Model):
 
 
 class JudgmentRef(Model):
-    """报告中引用的一条判断."""
+    """引用的一条判断 (ID 与引用时的版本): 审计报告, 持续经营结论建议."""
 
     id: str  # 判断 ID
     version: int  # 引用时的版本

@@ -76,17 +76,6 @@ function Settings() {
           )}
           <p className="m-0 text-[13px] text-[#4a5262]">{t.settings.effect}</p>
         </main>
-        <aside className="flex flex-[1_1_260px] flex-col gap-3 rounded-[14px] border bg-card p-5">
-          <h2 className="m-0 font-semibold text-[14px]">{t.settings.dataTitle}</h2>
-          <ul className="m-0 flex flex-col gap-2 pl-[18px] text-[13px] text-secondary-foreground">
-            {t.settings.dataItems.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-          <p className="m-0 border-line-soft border-t pt-2.5 text-[12.5px] text-muted-foreground">
-            {t.settings.dataFoot}
-          </p>
-        </aside>
       </div>
     </div>
   )

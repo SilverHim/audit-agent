@@ -31,6 +31,7 @@ from backend.contracts.models import (
     Direction,
     DocumentRef,
     DocumentType,
+    DowngradeCondition,
     EngagementTerms,
     EvidencePointer,
     EvidenceType,
@@ -237,6 +238,17 @@ def test_old_judgment_json_reads_no_critic_trigger() -> None:
     assert Judgment.model_validate_json(json.dumps(old)).critic_trigger is None
 
 
+def test_old_procedure_and_judgment_json_read_no_downgrade_reasons() -> None:
+    """R168: 没有 downgrade_reasons 键的旧程序与旧判断读回为空."""
+    procedure = Procedure(
+        id="REV-02", phase=Phase.P2_Executing, template_commit="abc123", autonomy_level=AutonomyLevel.L2
+    )
+    for model in (procedure, JUDGMENT):
+        old = model.model_dump(mode="json")
+        del old["downgrade_reasons"]
+        assert type(model).model_validate_json(json.dumps(old)).downgrade_reasons == []
+
+
 # 第一个带别名的模型 (JSON 键 class): 检查点按字段名重建, 没有 populate_by_name 时 company_class 悄悄丢失
 EXTRACT = AsicExtract(
     acn="900043021",
@@ -259,10 +271,22 @@ def test_new_values_survive_checkpoint_serde() -> None:
     AsicExtract 读回相等."""
     serde = checkpoint_serde()
     judgment = JUDGMENT.model_copy(
-        update={"critic_trigger": CriticTrigger.internal_copy, "review_status": ReviewStatus.superseded}
+        update={
+            "critic_trigger": CriticTrigger.internal_copy,
+            "review_status": ReviewStatus.superseded,
+            "downgrade_reasons": [DowngradeCondition.significant_risk, DowngradeCondition.low_confidence],
+        }
+    )
+    procedure = Procedure(
+        id="REV-02",
+        phase=Phase.P2_Executing,
+        template_commit="abc123",
+        autonomy_level=AutonomyLevel.L1,
+        downgrade_reasons=[DowngradeCondition.significant_risk],
     )
     values = {
         "judgments": [judgment],
+        "procedure_pack": [procedure],
         "documents": [DOCUMENT.model_copy(update={"document_date": date(2026, 9, 22), "related_ids": ["XJ-613"]})],
         "kinds": [TaskKind.manual, ProcedureStatus.in_dispute, TrailKind.presentation],
         "extracts": [EXTRACT],
@@ -271,6 +295,8 @@ def test_new_values_survive_checkpoint_serde() -> None:
     assert back == values
     assert back["judgments"][0].critic_trigger is CriticTrigger.internal_copy
     assert back["judgments"][0].review_status is ReviewStatus.superseded
+    assert [type(c) for c in back["judgments"][0].downgrade_reasons] == [DowngradeCondition, DowngradeCondition]
+    assert back["procedure_pack"][0].downgrade_reasons[0] is DowngradeCondition.significant_risk
     assert back["documents"][0].type is DocumentType.agreement
     assert back["documents"][0].document_date == date(2026, 9, 22)
     assert [type(k) for k in back["kinds"]] == [TaskKind, ProcedureStatus, TrailKind]

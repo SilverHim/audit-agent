@@ -12,6 +12,8 @@ from backend.contracts.models import (
     EqrRecommendation,
     EvidencePointer,
     FinancialStatementLine,
+    GoingConcernOutcome,
+    JudgmentRef,
     Milestone,
     MisstatementDraft,
     MisstatementType,
@@ -193,6 +195,22 @@ class AuditPlanDraft(Model):
     eqr_recommendation: EqrRecommendation  # 是否需要项目质量复核的建议 (ASQM 1 第 34(f) 段)
     expert_assessment: str  # 是否需要审计师的专家 (ASA 620) 的评估
     standards_cited: list[str]  # 引用的准则片段 ID, 取提示词列出的
+
+
+class GoingConcernAdvice(Model):
+    """FIN-02 由大模型写的持续经营结论建议 (需求 R183): 汇总持续经营评价与期后事项的判断, 建议结论, 审计师在闸门
+    FIN-02 定结论. 推理链的规则同 JudgmentDraft; judgment_refs 须为当前版且已确认的判断, 含当前有效的持续经营评价判断
+    (ValidationContext.required_refs); 推理链须有引用该建议所需准则的 standard 步骤 (basis_inappropriate 为
+    ASA570-P17, 两种存在重大不确定性的为 ASA570-P18, judgment_engine.OUTCOME_STANDARDS). 校验见
+    judgment_engine.check_going_concern."""
+
+    proposed_outcome: GoingConcernOutcome  # 建议的结论
+    conclusion: str  # 结论
+    reasoning_chain: list[ReasoningStep]  # 推理链
+    evidence: list[EvidencePointer]  # 引用的证据
+    counter_argument: str  # 反方论证
+    judgment_refs: list[JudgmentRef]  # 引用的判断 (ID 与版本)
+    self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1
 
 
 class CriticIndependent(Model):
