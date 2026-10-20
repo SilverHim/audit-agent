@@ -22,7 +22,7 @@ from tests.e2e.harness import backend, frontend, out_dir, require_tools, run_wal
 from tests.external import LLM_KEYS, live_llm_settings
 from tests.fakes import PLAN_REJECT_REASON
 from tests.fixture_sets import XERO
-from tests.test_demo_walkthrough_live import (
+from tests.live_walk import (
     CONFIRM_CONCLUSION,
     MAX_CALLS,
     RERUN_REASON,

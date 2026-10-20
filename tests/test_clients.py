@@ -43,6 +43,7 @@ from tests.fakes import (
     FAKE_GUID,
     NUMBAT_AUDITOR,
     NUMBAT_PROFILE,
+    CreatingEngagementStore,
     FakeAbr,
     FakeDataStore,
     FakeRegistry,
@@ -52,7 +53,7 @@ from tests.fakes import (
     make_deps,
     wait_idle,
 )
-from tests.test_demo_default import SETTINGS, CreatingEngagementStore, demo_runner, needs_snapshot
+from tests.test_demo_default import SETTINGS, demo_runner, needs_snapshot
 
 CLIENTS = "/api/v1/clients"
 ENGAGEMENTS = "/api/v1/engagements"

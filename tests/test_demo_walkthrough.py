@@ -18,7 +18,7 @@ R146, FIN-01 仍按 R119 的决定); 总体审计计划的增量只在本模块�
 """
 
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,8 +27,6 @@ import pytest
 import pytest_asyncio
 
 from backend.adapters.llm import DatasetFixtureLLMClient, SwitchableLLMClient, make_llm_client
-from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.agents.base import AgentDeps
 from backend.agents.client_intel import check_directors
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -49,21 +47,17 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader
 from backend.services.abn import abn_problem
 from backend.services.data_service import DataService
-from backend.services.xero_link import XeroLink
 from tests.external import supplements_dir
 from tests.fakes import (
-    NUMBAT_AUDITOR,
     PLAN_REJECT_REASON,
-    FakeRuleEngine,
     FakeTrail,
-    FakeXeroConnectionStore,
     api_client,
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.test_demo_default import CreatingEngagementStore, demo_runner
-from tests.test_e2e_mock import real_storage
-from tests.test_e2e_xero17 import XERO_PERIOD, Xero17, assert_materiality, assert_report, assert_results
+from tests.test_demo_default import demo_runner  # 演示默认数据集的离线装配 (R79), 按客户排序的用例用
+from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用)
+from tests.test_e2e_xero17 import Xero17, assert_materiality, assert_report, assert_results  # R119 的计数与断言
 from tests.xero_fakes import (
     DEMO_FEATURES,
     FIXTURE_READS,
@@ -73,18 +67,16 @@ from tests.xero_fakes import (
     XERO17_BA091_DRAFT,
     XERO17_MATERIALITY,
     XERO_DATASET,
+    XERO_PERIOD,
     XERO_PLAN_ROWS,
-    XERO_RULES,
-    new_xero_deps,
     xero17_gates,
     xero_journal_reviews,
 )
-from tests.xero_flow import READY_REASON, demo_source, drain, entered_p2_by, offline_runner
+from tests.xero_flow import API, READY_REASON, demo_offline, drain, entered_p2_by, xero_link
 from tests.xero_harness import LayeredMockLLMClient
 
 pytestmark = pytest.mark.external
 shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走通 (walked) 的用例与它同一个事件循环
-API = "/api/v1"
 BA091 = "J-CSH-02-1-BA-091"
 REVIEW_ROUNDS = 5  # 复核循环的轮数上限 (本路径分三层出任务, 3 轮即完)
 DEMO_ABN = "25900043021"
@@ -228,34 +220,14 @@ def app_llm(store: Any) -> DatasetFixtureLLMClient:
     return client
 
 
-def xero_link(deps: AgentDeps, service: DataService) -> XeroLink:
-    """数据接口用的 Xero 连接服务 (假连接存储, 一律未连接; Xero 应用与主密钥置空, 同 tests.fakes.api_client)."""
-    blank = get_settings().model_copy(
-        update={"XERO_CLIENT_ID": "", "XERO_CLIENT_SECRET": "", "SETTINGS_SECRET_KEY": ""}
-    )
-    return XeroLink(deps, service, FakeXeroConnectionStore(), blank)
-
-
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def walked() -> Walk:
-    """离线: 空的 Xero 假存储, 能建项目的假项目存储, 规则引擎 FakeRuleEngine(XERO_RULES), 登记 mock 按数据集定位;
-    大模型为只读运行副本的 LayeredMockLLMClient (记下读取; 与组装根对这个项目选的目录相同, 见验收 4 的用例)."""
+    """离线 (tests.xero_flow.demo_offline: 空的 Xero 假存储, 能建项目的假项目存储, 规则引擎 FakeRuleEngine(XERO_RULES),
+    登记 mock 按数据集定位); 大模型为只读运行副本的 LayeredMockLLMClient (记下读取; 与组装根对这个项目选的目录相同,
+    见验收 4 的用例)."""
     XERO.ready()
-    store = CreatingEngagementStore()
     llm = LayeredMockLLMClient([XERO.runtime])
-    datasets = demo_source()
-    deps = new_xero_deps(
-        trail=FakeTrail(),
-        llm=llm,
-        review_llm=llm,
-        rules=FakeRuleEngine(dict(XERO_RULES)),
-        features=DEMO_FEATURES,
-        engagement_store=store,
-    )
-    deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
-    runner = offline_runner(deps)
-    service = DataService(deps, runner, demo=datasets)
-    async with api_client(runner, NUMBAT_AUDITOR.id, xero=xero_link(deps, service)) as client:
+    async with demo_offline(llm) as (runner, service, client):
         return await walk(client, runner, service, llm)
 
 

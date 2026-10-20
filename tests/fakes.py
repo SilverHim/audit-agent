@@ -65,6 +65,7 @@ from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
     AbnRecord,
+    AcceptanceScorecard,
     AgentId,
     AnalyticsResult,
     AsicCompanyRecord,
@@ -1115,6 +1116,63 @@ class FakeEngagementStore:
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
         """owner_id 为空列全部 (供 recover), 否则只列该用户的项目."""
         return [e for e in self.engagements if owner_id is None or e.owner_id == owner_id]
+
+
+class CreatingEngagementStore(FakeEngagementStore):
+    """能建项目的假项目存储: 编号 ENG-2026-001 起顺排; 画像与该客户的各版比较内容, 有一版相同就沿用最新一版, 都不同
+    才出新版本 (同 PostgresEngagementStore.create 的效果)."""
+
+    async def create(
+        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
+    ) -> Engagement:
+        if period_end < period_start:
+            raise ValueError("period_end precedes period_start")
+        versions = sorted((p for p in self.profiles if p.id == profile.id), key=lambda p: p.version)
+        if not versions:
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
+        elif any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
+            profile = versions[-1]
+        else:
+            profile = profile.model_copy(update={"version": versions[-1].version + 1})
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
+        engagement = Engagement(
+            id=f"ENG-2026-{len(self.engagements) + 1:03d}",
+            client_id=profile.id,
+            period_start=period_start,
+            period_end=period_end,
+            dataset=dataset,
+            owner_id=owner_id,
+            client_profile_version=profile.version,
+            phase=Phase.P0_Acceptance,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        self.engagements.append(engagement)
+        return engagement
+
+
+async def evidence_pointers(
+    deps: AgentDeps, eid: str = ENGAGEMENT.id, *, everything: bool = False
+) -> list[EvidencePointer]:
+    """项目里判断 (推理链与证据), 合同与函证的证据指针. everything 时另含例外, 承接评分卡的登记检查与复核决定的人工
+    结果, 即存储中全部带指针的对象 (R56 验收 2; 假存储只预置了部分试算表行, 例外指针在假实现下解析不全). 走通的
+    汇总 (tests/live_walk) 与 R56 的检查共用."""
+    store = deps.output_store
+    pointers: list[EvidencePointer] = []
+    for j in await store.latest(eid, Judgment):
+        pointers += [*j.evidence, *(p for step in j.reasoning_chain for p in step.evidence)]
+    if everything:
+        for x in await store.latest(eid, AuditException):
+            pointers += x.evidence
+        for card in await store.latest(eid, AcceptanceScorecard):
+            pointers += [check.evidence for check in card.registry_checks]
+        for r in await store.latest(eid, ReviewRecord):
+            pointers += r.manual_result.evidence if r.manual_result is not None else []
+    for c in await deps.financial_store.contracts(eid):
+        pointers += c.evidence
+    for c in await store.latest(eid, Confirmation):
+        pointers += c.evidence
+    return pointers
 
 
 T = TypeVar("T", bound=Versioned)

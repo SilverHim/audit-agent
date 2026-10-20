@@ -13,7 +13,6 @@ import json
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
@@ -74,6 +73,7 @@ from tests.xero_fakes import (
     XERO_DATASET,
     XERO_JOURNAL_VOUCHERS,
     XERO_JOURNALS_FEATURES,
+    XERO_PERIOD,
     XERO_RULES,
     finish_xero17,
     new_xero_deps,
@@ -656,8 +656,6 @@ async def test_journals_decisions_and_calls(journals: Xero17, xero17: Xero17) ->
 
 
 # ── R120: 连库变体 ──
-
-XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.json)
 
 
 @pytest.mark.slow

@@ -96,6 +96,7 @@ from tests.fixture_sets import XERO
 
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
+XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.json)
 SNAPSHOT_NAME = "20261017-q1"  # 快照目录名, data/external/xero/api/20261017-q1
 # 演示配置的功能集: 取 .env.example 的 FEATURES (演示走通, 真实模型变体与 PLN-15 固定输出的守卫共用这一处)
 DEMO_FEATURES = parse_features(

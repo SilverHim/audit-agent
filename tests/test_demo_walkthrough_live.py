@@ -3,8 +3,9 @@
 复核逐条决定, RPT-01 先退回再批准, 签字归档;
 全部大模型程序走真实模型 (组装根 LLM_MODE live), 功能集为演示配置, 存储为真实 Postgres (同 R287 的连库变体).
 
-真实模型的输出不固定, 所以驱动 (drive) 不按停点的固定顺序走, 每次停下按当时的状态办: 有待决任务先逐条决定, 概览建议
-导入就导入, 等数据就绪就确认数据已齐, 停在闸门就按闸门决定. 审计师的决定以演示决定表为准, 按决定表期望的结论下,
+驱动, 汇总与检查在 tests/live_walk (浏览器走查共用, 需求 R353). 真实模型的输出不固定, 所以驱动 (drive) 不按停点的
+固定顺序走, 每次停下按当时的状态办: 有待决任务先逐条决定, 概览建议导入就导入, 等数据就绪就确认数据已齐, 停在闸门
+就按闸门决定. 审计师的决定以演示决定表为准, 按决定表期望的结论下,
 不看模型的建议动作 (decision_table): BA-091 与 XJ-499 认定错报 (草稿同 R287), XJ-575 推翻为接受, 其余确认; 争议任务能
 维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 任务重跑, 每个对象
 至多一次. FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
@@ -20,352 +21,40 @@
 决定的请求体另有合成数据的单元用例.
 """
 
-import json
-import warnings
-from collections import Counter
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import httpx
 import pytest
 
 from backend.adapters.llm import SwitchableLLMClient
-from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.api.schemas import ReviewRecordIn
-from backend.contracts.models import (
-    AuditPlan,
-    AuditReportVersion,
-    Confirmation,
-    Judgment,
-    OpinionType,
-    ReportStatus,
-    TrailEntry,
-    TrailKind,
-)
-from backend.orchestration.runner import GraphRunner
-from backend.services.data_service import DataService
-from backend.services.judgment_engine import MAX_ATTEMPTS, REPORT_HEADINGS, PointerResolver
+from backend.contracts.models import OpinionType, TrailEntry, TrailKind
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import LLM_KEYS, live_llm_settings
-from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, api_client, wait_idle
+from tests.fakes import api_client
 from tests.fixture_sets import XERO
-from tests.test_decisions import Started
-from tests.test_demo_default import CreatingEngagementStore
-from tests.test_demo_walkthrough import API, xero_link
-from tests.test_e2e_mock import evidence_pointers, real_storage
-from tests.test_e2e_xero17 import XERO_PERIOD
-from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, summary, write_summary
-from tests.xero_fakes import (
-    DEMO_FEATURES,
+from tests.live_walk import (
     FIXED_CALLS,
-    FIXTURE_READS,
-    ORC1026,
-    PLAN_DECISIONS,
-    XERO17_ANNOTATION,
-    XERO17_BA091_DRAFT,
-    XERO17_INVOICES,
-    XERO17_MATERIALITY,
-    XERO_DATASET,
-    XERO_RULES,
-    new_xero_deps,
-    xero_journal_reviews,
+    JUDGED,
+    JUDGING,
+    MAX_CALLS,
+    FinPolicy,
+    LiveWalk,
+    assert_hard,
+    candidate_opinion,
+    decision_table,
+    drive,
+    evaluate,
+    review_body,
+    warn_soft,
 )
-from tests.xero_flow import READY_REASON, demo_source, drain, entered_p2_by, offline_runner
+from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用, 搬它不在需求 R353)
+from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, write_summary
+from tests.xero_fakes import DEMO_FEATURES, ORC1026, XERO17_INVOICES, XERO_DATASET, XERO_PERIOD
+from tests.xero_flow import demo_offline, xero_link
 from tests.xero_harness import FlakyLLM, LayeredMockLLMClient
 
-JUDGING = ("REV-03", "REV-02", "CSH-02", "GEN-02")  # 演示配置下出判断的大模型程序, 各对象的固定输出在运行副本里
-JUDGED = sum(FIXTURE_READS[pid] for pid in JUDGING)  # 判断对象数 (17)
-# 真实模型的用量余量: 每次调用都可能再回传重试 MAX_ATTEMPTS - 1 次 (需求 R34, R348), 另有 A7 两轮复核 (随模型输出
-# 触发, 每个判断对象至多一次). 重跑另算: 驱动每个对象至多重跑一次, 一般落在重试的余量里
-LIVE_MARGIN = (MAX_ATTEMPTS - 1) * FIXED_CALLS + 2 * JUDGED
-MAX_CALLS = FIXED_CALLS + LIVE_MARGIN  # 用量上限
-MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
 GATES = ["ACC-01", "PLN-01/03", "PLN-15", "PLN-15", "FIN-01", "RPT-01", "RPT-01"]  # 依次决定的闸门
-RERUN_REASON = "The model output did not pass validation; rerun."
-CONFIRM_CONCLUSION = "The original conclusion stands: no misstatement is identified for this item."
-BA091_REASON = "Accrued interest of AUD 48.53 confirmed by the bank was not recorded."
-
-
-@dataclass(frozen=True)
-class Expected:
-    """演示决定表中一个对象期望的结论: 认定错报 (带草稿), 推翻 (给出结论) 或确认."""
-
-    decision: str  # misstatement, override 或 confirm
-    reason: str | None = None
-    draft: dict[str, Any] | None = None  # 认定错报的草稿 (JSON)
-    conclusion: str | None = None  # 推翻或 "两者都不采用" 时的结论
-
-
-def decision_table(owner: str) -> dict[str, Expected]:
-    """演示决定表 (同 R287 的离线走法), 按判断对象: BA-091 认定错报; GEN-02 七笔同 R146 (XJ-499 认定错报, XJ-575 推翻
-    为接受, 其余确认). 表外的对象一律确认."""
-    table = {"BA-091": Expected("misstatement", BA091_REASON, XERO17_BA091_DRAFT.model_dump(exclude_none=True))}
-    for record in xero_journal_reviews(owner):
-        voucher = record.task_id.removeprefix("T-J-GEN-02-1-").removesuffix("-v1")
-        draft = record.misstatement_draft.model_dump(exclude_none=True) if record.misstatement_draft else None
-        table[voucher] = Expected(record.decision.value, record.reason, draft, record.override_conclusion)
-    return table
-
-
-FinPolicy = Callable[[dict[str, Any]], str]  # FIN-01 闸门的材料 (GET /gate 的 material) → 选定的意见类型
-
-
-def candidate_opinion(material: dict[str, Any]) -> str:
-    """按汇总表的候选意见决定 (需求 R311)."""
-    return cast(str, material["schedule"]["candidate_opinion"])
-
-
-@dataclass
-class LiveWalk:
-    """一次走法的记录, 驱动边走边写 (中途失败时汇总照样能写出已走到的部分)."""
-
-    eid: str | None = None
-    owner: str | None = None
-    gates: list[str] = field(default_factory=list)  # 依次决定过的闸门
-    fin: str | None = None  # FIN-01 选定的意见类型
-    candidate: str | None = None  # 汇总表的候选意见
-    failures: Counter[tuple[str, str]] = field(default_factory=Counter)  # (程序, 对象) → 出过的 failed 任务数
-    troubled: dict[str, tuple[str, str, str]] = field(default_factory=dict)  # 任务 ID → (程序, 对象, 类型), 非 normal
-    decisions: list[tuple[str, str]] = field(default_factory=list)  # (任务 ID, 决定)
-
-
-def subject_of(view: dict[str, Any]) -> str:
-    """任务所指的对象: 判断的 subject_id; 例外取 detail 的凭证号, 否则首个来源 (如回函应计利息的银行账户);
-    failed 任务取任务的 subject_id (整条程序失败为空串)."""
-    task, target = view["task"], view["target"]
-    if task["kind"] == "failed":
-        return cast(str, task.get("subject_id") or "")
-    if target.get("subject_id"):
-        return cast(str, target["subject_id"])
-    detail = target.get("detail") or {}
-    return cast(str, detail.get("entry_no") or (target.get("source_ids") or [""])[0])
-
-
-# 按闸门出修订的程序 → 它的闸门: 计划与报告退回一次就出下一修订 (r1, r2). 整条失败的任务没有对象, 按修订计重跑
-# 次数 (修订号为该闸门已决定的次数加一), 不然两个修订各失败一次会被误判为 "重跑后又失败" (需求 R317)
-REVISED_BY = {"PLN-15": "PLN-15", "RPT-03": "RPT-01"}
-
-
-def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk) -> dict[str, Any]:
-    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明)."""
-    task = view["task"]
-    kind, pid, subject = task["kind"], task["procedure_id"], subject_of(view)
-    if kind == "failed" and not subject and pid in REVISED_BY:
-        subject = f"r{walk.gates.count(REVISED_BY[pid]) + 1}"
-    body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
-    if kind != "normal":
-        walk.troubled[task["id"]] = (pid, subject, kind)
-    expected = table.get(subject, Expected("confirm"))
-    if kind == "failed":
-        walk.failures[pid, subject] += 1
-        if walk.failures[pid, subject] > 1:
-            pytest.fail(f"{pid} {subject or '(整条)'} 重跑后又失败: {task['id']}")
-        return body | {"decision": "rerun", "reason": RERUN_REASON}
-    if kind in ("normal", "unattributed"):  # 无解释的例外: 认定错报或推翻, 不能确认
-        if expected.decision == "misstatement":
-            return body | {"decision": "misstatement", "reason": expected.reason, "misstatement_draft": expected.draft}
-        if expected.decision == "override" or kind == "unattributed":
-            conclusion = expected.conclusion or CONFIRM_CONCLUSION
-            return body | {
-                "decision": "override",
-                "reason": expected.reason or conclusion,
-                "override_conclusion": conclusion,
-            }
-        return body | {"decision": "confirm"}
-    if kind == "dispute":
-        return body | dispute_fields(view, expected)
-    pytest.fail(f"没有预期的任务类型 {kind}: {task['id']}")
-
-
-def dispute_fields(view: dict[str, Any], expected: Expected) -> dict[str, Any]:
-    """争议任务的仲裁: 原判断 (A6) 与期望一致时维持原判断 (期望错报时须原判断也建议错报, 带草稿; 期望不认定错报时
-    原判断不建议错报); 否则 "两者都不采用" (neither), 给出期望的结论, 期望错报时附草稿. 期望为推翻的对象一律 neither."""
-    a6 = view["draft_rules"].get("a6_upheld")
-    want = expected.decision == "misstatement"
-    upheld = {"decision": "dispute_resolution", "dispute_resolution": "a6_upheld"}
-    if "a6_upheld" in view["allowed_resolutions"] and expected.decision != "override":
-        if want and a6 == "required":
-            return upheld | {"reason": expected.reason, "misstatement_draft": expected.draft}
-        if not want and a6 != "required":
-            return upheld | {"reason": CONFIRM_CONCLUSION}
-    conclusion = expected.conclusion or (expected.reason if want else CONFIRM_CONCLUSION)
-    fields: dict[str, Any] = {
-        "decision": "dispute_resolution",
-        "dispute_resolution": "neither",
-        "neither_action": "human_conclusion",
-        "override_conclusion": conclusion,
-        "reason": expected.reason or conclusion,
-    }
-    return fields | ({"misstatement_draft": expected.draft} if want else {})
-
-
-async def drive(
-    client: httpx.AsyncClient,
-    runner: GraphRunner,
-    service: DataService,
-    walk: LiveWalk,
-    *,
-    fin: FinPolicy = candidate_opinion,
-    budget: Budget | None = None,
-) -> LiveWalk:
-    """从新建项目走到归档 (见模块说明), 进度记在 walk. 每步之后等后台作业与图都停下, 后台始终没有错误; 每次提交前查
-    预算 (已超限即失败, 不再提交重跑)."""
-    walk.owner = (await client.get(f"{API}/users/me")).json()["id"]
-    table = decision_table(walk.owner)
-    clients = (await client.get(f"{API}/clients")).json()
-    [dataset] = [d for d in clients[0]["datasets"] if d["default"]]
-    created = await client.post(
-        f"{API}/engagements", json={k: dataset[k] for k in ("dataset", "period_start", "period_end")}
-    )
-    assert created.status_code == 201, created.text
-    eid = walk.eid = created.json()["engagement"]["id"]
-    base = f"{API}/engagements/{eid}"
-    ready_posted = False
-
-    async def post(path: str, body: dict[str, Any]) -> None:
-        if budget is not None:
-            budget.check()
-        posted = await client.post(f"{base}/{path}", json=body)
-        assert posted.status_code in (201, 202), (path, posted.text)
-
-    for _ in range(MAX_STEPS):
-        await drain(service)
-        await wait_idle(runner, eid)
-        overview = (await client.get(base)).json()
-        assert overview["run_error"] is None, overview["run_error"]
-        if overview["engagement"]["phase"] == "Archived":
-            return walk
-        pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
-        if pending:
-            body = review_body(pending[0], table, walk)
-            walk.decisions.append((body["task_id"], body["decision"]))
-            await post("review-records", body)
-            continue
-        suggested = (await client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
-        if suggested is not None:
-            await post("data/demo-import", {"stage": suggested})
-            continue
-        if overview["awaiting_data"]:
-            assert not ready_posted, f"确认数据已齐之后仍在等数据: {overview['missing_tables']}"
-            ready_posted = True
-            await post("data/ready", {"reason": READY_REASON})
-            continue
-        gate = overview["current_gate"]
-        assert gate is not None, f"没有待决任务, 不等数据也不在闸门, 流程停住: {overview['procedures']}"
-        got = await client.get(f"{base}/gate")
-        assert got.status_code == 200, got.text
-        view = got.json()
-        body = {k: view[k] for k in ("gate", "target_id", "target_version")}
-        if gate == "PLN-01/03":
-            body |= {"decision": "approve", "materiality": XERO17_MATERIALITY.model_dump()}
-        elif gate == "FIN-01":
-            walk.candidate = view["material"]["schedule"]["candidate_opinion"]
-            walk.fin = fin(view["material"])
-            reason = f"Opinion follows the schedule of uncorrected misstatements (candidate {walk.candidate})."
-            body |= {"decision": "approve", "disposition": walk.fin, "reason": reason}
-        elif gate == "PLN-15":  # 计划先退回一次再批准, 同 R317 的离线走法
-            body |= PLAN_DECISIONS[min(walk.gates.count("PLN-15"), 1)]
-        elif gate == "RPT-01" and "RPT-01" not in walk.gates:  # 先退回一次, 同 R287
-            reason = "The basis for opinion paragraph must name the financial reporting framework."
-            body |= {"decision": "reject", "annotations": [XERO17_ANNOTATION.model_dump()], "reason": reason}
-        else:
-            body |= {"decision": "approve"}
-        walk.gates.append(gate)
-        await post("gate-decisions", body)
-    pytest.fail(f"{MAX_STEPS} 步内未到归档")
-
-
-def latest_model_judgments(judgments: list[Judgment]) -> dict[tuple[str, str], Judgment]:
-    """模型自己给出的判断 (人工判断 -H 不算), 每个 (程序, 对象) 取最后一次执行的."""
-    latest: dict[tuple[str, str], Judgment] = {}
-    for j in sorted(judgments, key=lambda j: (j.run_id, j.version)):
-        if "-H" not in j.id:
-            latest[j.procedure_id, j.subject_id] = j
-    return latest
-
-
-def fixture_action(procedure_id: str, subject_id: str) -> str | None:
-    """演示运行副本里该对象固定输出的建议动作; 没有固定输出为空."""
-    path = XERO.runtime / procedure_id / f"{subject_id}.json"
-    return json.loads(path.read_text(encoding="utf-8"))["proposed_action"] if path.is_file() else None
-
-
-async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[str, Any]:
-    """汇总 (需求 R311 验收 4) 与两级检查的材料: 用量 (调用与 token 取预算, 尝试与失败级别取留痕), 各判断的建议动作与
-    固定输出的对照, 签字报告的意见类型, 解析不了的证据指针, 缺模型结论的判断对象, 重跑与非 normal 的任务."""
-    deps, eid = runner.deps, walk.eid
-    out: dict[str, Any] = {"engagement_id": eid, "gates": walk.gates, "fin_disposition": walk.fin}
-    out["candidate_opinion"] = walk.candidate
-    out["reruns"] = {f"{pid} {subject}": n for (pid, subject), n in sorted(walk.failures.items())}
-    out["troubled_tasks"] = [list(v) for _, v in sorted(walk.troubled.items())]
-    out["decisions"] = dict(sorted(Counter(decision for _, decision in walk.decisions).items()))
-    entries = await deps.trail.list(eid, TrailKind.llm_call, limit=10_000) if eid else []
-    out["usage"] = summary(entries, budget)
-    if eid is None:
-        return out
-    store = deps.output_store
-    judged = latest_model_judgments(await store.latest(eid, Judgment))
-    rows = []
-    for (pid, subject), j in sorted(judged.items()):
-        expected = fixture_action(pid, subject)
-        rows.append({"procedure_id": pid, "subject_id": subject, "proposed_action": j.proposed_action.value})
-        rows[-1] |= {"fixture": expected, "same": expected == j.proposed_action.value}
-    out["judgments"] = rows
-    out["differences"] = [r for r in rows if r["fixture"] is not None and not r["same"]]
-    expected_subjects = {(pid, p.stem) for pid in JUDGING for p in (XERO.runtime / pid).glob("*.json")}
-    out["missing_subjects"] = [f"{pid} {subject}" for pid, subject in sorted(expected_subjects - set(judged))]
-    signed = [r for r in await store.latest(eid, AuditReportVersion) if r.status is ReportStatus.signed]
-    out["report_opinion"] = [r.opinion_type.value for r in signed]
-    out["report_heading"] = [r.sections["opinion"].strip().splitlines()[:1] for r in signed]
-    out["contracts"] = len(await deps.financial_store.contracts(eid))
-    out["confirmations"] = len(await store.latest(eid, Confirmation))
-    out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
-    out["plans"] = sorted([p.id, p.status.value] for p in await store.latest(eid, AuditPlan))
-    out["entered_p2_by"] = entered_p2_by(await deps.trail.list(eid, TrailKind.transition, limit=10_000))
-    return out
-
-
-async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[str]]:
-    """项目的全部证据指针 (范围同 R56 的 everything: 判断, 合同, 函证, 例外, 评分卡, 人工结果) 经存储解析, 客户画像
-    指针按项目采用的画像解析; 返回指针数与解析不了的 (来源, 定位, 页与原因). R250 的程序级评测也用."""
-    deps = runner.deps
-    engagement = await deps.engagement_store.get(eid)
-    profile = await deps.engagement_store.client_profile(engagement.client_id) if engagement else None
-    resolver = PointerResolver(deps.judgments.validator, eid, None, profile)
-    started = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
-    unresolved = []
-    pointers = await evidence_pointers(started, eid, everything=True)
-    for p in pointers:
-        resolved, reason = await resolver.resolve(p)
-        if resolved is None:
-            unresolved.append(f"{p.source_type} {p.source_id} {p.locator} p{p.page}: {reason}")
-    return len(pointers), unresolved
-
-
-def assert_hard(data: dict[str, Any]) -> None:
-    """硬性检查 (需求 R311 验收 2): 走到归档 (调用方已由驱动保证, run_error 始终为空); 每个判断对象有模型结论, 重跑至多
-    一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见的标题; 合同 3 份
-    与函证 2 户都已抽取; 总体审计计划两个修订都出了 (每个修订一次通过, 或 failed 后重跑一次), PLAN-1 已取代, PLAN-2
-    批准后由它推进到执行阶段 (需求 R317). 软性的差异只告警 (warn_soft)."""
-    assert data["missing_subjects"] == [], data["missing_subjects"]
-    assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
-    assert data["pointers"] > 30
-    heading = REPORT_HEADINGS[OpinionType(data["fin_disposition"])][0]
-    assert (data["report_opinion"], data["report_heading"]) == ([data["fin_disposition"]], [[heading]])
-    assert (data["contracts"], data["confirmations"]) == (3, 2)
-    assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
-    assert data["plans"] == [["PLAN-1", "superseded"], ["PLAN-2", "approved"]], data["plans"]
-    assert data["entered_p2_by"] == ["PLN-15"], data["entered_p2_by"]
-
-
-def warn_soft(data: dict[str, Any]) -> None:
-    """软性检查 (需求 R311 验收 3): 判断的建议动作与固定输出不同的逐条告警 (如 BA-091, XJ-499 是否为 misstatement)."""
-    for row in data["differences"]:
-        warnings.warn(
-            f"{row['procedure_id']} {row['subject_id']}: 建议动作 {row['proposed_action']}, 固定输出 {row['fixture']}",
-            stacklevel=1,
-        )
 
 
 async def real_walk(
@@ -447,24 +136,11 @@ async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> t
     离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
     无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录."""
     XERO.ready()
-    store = CreatingEngagementStore()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
-    datasets = demo_source()
-    deps = new_xero_deps(
-        trail=FakeTrail(),
-        llm=llm,
-        review_llm=llm,
-        rules=FakeRuleEngine(dict(XERO_RULES)),
-        features=DEMO_FEATURES,
-        engagement_store=store,
-    )
-    deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
     budget = Budget(max_calls=MAX_CALLS)
-    install_budget(deps, budget)
-    runner = offline_runner(deps)
-    service = DataService(deps, runner, demo=datasets)
     walk = LiveWalk()
-    async with api_client(runner, NUMBAT_AUDITOR.id, xero=xero_link(deps, service)) as client:
+    async with demo_offline(llm) as (runner, service, client):
+        install_budget(runner.deps, budget)
         await drive(client, runner, service, walk, fin=lambda material: OpinionType.unqualified.value, budget=budget)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)

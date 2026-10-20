@@ -38,7 +38,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMClient
-from tests.test_demo_walkthrough_live import latest_model_judgments, unresolved_pointers
+from tests.live_walk import latest_model_judgments, unresolved_pointers
 from tests.test_xero_injections import Build, offline_build
 from tests.test_xero_injections_db import db_build, live_client
 from tests.tools.live_budget import EVAL_DIR, Budget, summary, write_summary
