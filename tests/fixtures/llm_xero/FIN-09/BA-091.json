@@ -1,0 +1,94 @@
+{
+  "conclusion": "Audit adjustment AJE-X05 credits 270 Interest Income AUD 48.53 and so records in full the interest accrued on the Business Savings Account (BA-091) to 30 September 2026 that the bank confirmed. Its other line debits 620 Prepayments AUD 48.53 as the interest receivable, the other side of the accrual. The residual amount is nil, so no misstatement remains.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "AJE-X05 (source BA-091) credits 270 Interest Income AUD 48.53 (AJE-X05-2), the interest accrued on the Business Savings Account to 30 September 2026 as confirmed by the bank.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X05-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "AJE-X05 debits 620 Prepayments AUD 48.53 (AJE-X05-1) as the interest receivable at 30 September 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X05-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "After management has corrected misstatements at the auditor's request, the auditor performs additional procedures to determine whether misstatements remain (ASA 450 para 7).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P07",
+          "locator": "para 7",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The adjustment records the understated interest income in full against a receivable, so no misstatement remains.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X05-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X05-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P07",
+      "locator": "para 7",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A later entry that reverses AJE-X05, or a difference between AJE-X05 and the amount of the misstatement, would show that a misstatement remains.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9,
+  "fully_corrected": true,
+  "other_accounts": [
+    "620"
+  ]
+}

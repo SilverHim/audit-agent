@@ -33,13 +33,14 @@ from backend.adapters.xero_supplements import STAGES, DemoStage, DemoUpload, Sup
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import build_contract, contract_id
 from backend.contracts.data import XERO_TABLES, CheckInputs, TableKind, TableStats
-from backend.contracts.llm_outputs import ContractExtraction
+from backend.contracts.llm_outputs import ContractExtraction, JudgmentDraft
 from backend.contracts.models import (
     AbnRecord,
     Annotation,
     AsicCompanyRecord,
     AuditException,
     AuditObjective,
+    AutonomyLevel,
     ClientProfile,
     Contract,
     Decision,
@@ -51,13 +52,16 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     GateVerdict,
+    Judgment,
     MaterialityChoice,
+    Misstatement,
     MisstatementDraft,
     OpinionType,
     ProcedureRun,
     ReceiptChannel,
     ReportSection,
     ReviewRecord,
+    ReviewStatus,
     RiskItem,
     RuleOutcome,
 )
@@ -88,6 +92,7 @@ from tests.fakes import (
     make_deps,
     wait_idle,
 )
+from tests.fixture_sets import XERO
 
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
@@ -1112,3 +1117,60 @@ async def finish_xero17(
     assert await at() == ("gate_rpt01",)
     await send(gates["rpt_approve"])
     assert await at() == ()
+
+
+# ── 错报闭环 (需求 R158): 已认定而未分类的两条错报与其来源判断, FIN-03 的判断对象 ──
+
+
+def fixture_judgment(procedure_id: str, subject_id: str, autonomy_level: AutonomyLevel) -> Judgment:
+    """某程序第 1 次执行对 subject_id 的判断, 内容取该程序 Xero fixture 正本的草稿 (结论, 推理链, 证据, 建议动作与
+    错报草稿), 已由审计师确认 (第 2 版 confirmed). 置信度给定值, 不重算."""
+    raw = (XERO.fixtures / procedure_id / f"{subject_id}.json").read_text(encoding="utf-8")
+    draft = JudgmentDraft.model_validate_json(raw)
+    return Judgment(
+        id=f"J-{procedure_id}-1-{subject_id}",
+        version=2,
+        procedure_id=procedure_id,
+        run_id=f"RUN-{procedure_id}-1",
+        subject_id=subject_id,
+        conclusion=draft.conclusion,
+        confidence=0.85,
+        confidence_parts={"evidence": 0.7, "rule": 1.0, "llm": draft.self_confidence},
+        reasoning_chain=draft.reasoning_chain,
+        evidence=draft.evidence,
+        counter_argument=draft.counter_argument,
+        proposed_action=draft.proposed_action,
+        misstatement_draft=draft.misstatement_draft,
+        autonomy_level=autonomy_level,
+        review_status=ReviewStatus.confirmed,
+        performed_by=ENGAGEMENT.owner_id,
+        created_at=NOW,
+    )
+
+
+def xero_identified_misstatements() -> dict[str, list[Any]]:
+    """FIN-03 前的状态片段 (需求 R158 验收 1): M-D-XJ499 v1 (来源 GEN-02 对 XJ-499 的判断, 科目代码 710) 与
+    M-D-CSH02-091 v1 (来源 CSH-02 对 BA-091 的判断, 草稿 XERO17_BA091_DRAFT 加科目代码 270), 都是 identified 且
+    未分类, 按认定的先后; 来源判断为第 2 版 confirmed; 另有 REV-03 对 CON-X01 的判断 (别的程序的, FIN-03 不给模型)."""
+    sources = [
+        fixture_judgment("GEN-02", "XJ-499", AutonomyLevel.L2),
+        fixture_judgment("CSH-02", "BA-091", AutonomyLevel.L3),
+    ]
+    drafts = [
+        XERO_XJ499_DRAFT.model_copy(update={"account_code": "710"}),
+        XERO17_BA091_DRAFT.model_copy(update={"account_code": "270"}),
+    ]
+    misstatements = [
+        Misstatement(
+            id=f"M-D-{record}",
+            judgment_id=source.id,
+            exception_id=None,
+            review_record_id=f"D-{record}",
+            **draft.model_dump(),
+        )
+        for record, source, draft in zip(("XJ499", "CSH02-091"), sources, drafts, strict=True)
+    ]
+    return {
+        "judgments": [*sources, fixture_judgment("REV-03", "CON-X01", AutonomyLevel.L2)],
+        "misstatements": misstatements,
+    }

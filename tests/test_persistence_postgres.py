@@ -186,6 +186,8 @@ async def test_load_rules_and_project_isolation(storage):
         data_as_of=None,
         materiality_cents=12000000,
         match_days=10,
+        # FIN-09 (需求 R164): V01 的审计更正分录前缀 (Numbat 没有数据集声明, 取缺省)
+        adjustment_prefix="AJE-",
     )
     for path in (
         (library.root / "procedures").glob("*.yaml")

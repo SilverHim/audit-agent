@@ -1,4 +1,4 @@
-"""判断公共流程: A6 的判断程序与之后的 A8 共用 (接口文档第 6 节 A6 判断公共流程).
+"""判断公共流程: A6 的判断程序与 A8 的 FIN-03 (需求 R158) 共用 (接口文档第 6 节 A6 判断公共流程).
 
 每个判断对象依次经过 judge → A7 复核 (critic) → 判断级降级 (downgrade) → classify → make_task.
 判断失败的对象不经中间两步; 规则程序 (REV-08, CSH-05) 不进本流程. 降级由对应需求实现, 缺省原样返回.
@@ -36,6 +36,8 @@ class Subject:
     rule_findings: list[AuditException] = field(default_factory=list)  # 该对象的规则例外 (当前版本)
     # 本项目采用版本的客户画像 (需求 R128): 给了时推理链可引用它 (client_profile 指针), 进 JudgmentContext; 缺省不给
     client_profile: ClientProfile | None = None
+    # mock 模式取固定输出的键, 缺省为对象 ID; FIN-03 的对象是错报, 取其来源判断的对象 (需求 R158)
+    fixture_key: str | None = None
 
 
 class Subjects(list[Subject]):
@@ -124,7 +126,8 @@ async def judge_all(
     """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级.
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
-    fixture_key 为对象 ID; 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile; performed_by 为项目负责人.
+    fixture_key 取对象的 (缺省为对象 ID); 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile;
+    performed_by 为项目负责人.
     一个对象失败 (引擎返回 failure) 不影响其他对象; 引擎抛异常时等其余对象结束再上抛.
     """
     subjects = [s for s in subjects if in_scope(ctx, s.subject_id)]
@@ -139,7 +142,7 @@ async def judge_all(
             task=task,
             data=subject.data,
             rule_findings=subject.rule_findings,
-            fixture_key=subject.subject_id,
+            fixture_key=subject.fixture_key or subject.subject_id,
             autonomy_level=ctx.procedure.autonomy_level,
             client_profile=subject.client_profile,
         )

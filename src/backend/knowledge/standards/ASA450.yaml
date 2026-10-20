@@ -10,6 +10,12 @@ fragments:
     text: |
       The auditor shall accumulate misstatements identified during the audit, other than those that are clearly trivial.
     procedures: [PLN-01, FIN-04, CSH-02]
+  - id: ASA450-P07
+    paragraph: "7"
+    topic: misstatements_remaining_after_correction
+    text: |
+      If, at the auditor’s request, management has examined a class of transactions, account balances or disclosures and corrected misstatements that were detected, the auditor shall perform additional audit procedures to determine whether misstatements remain.
+    procedures: [FIN-09]
   - id: ASA450-P10
     paragraph: "10"
     topic: reassess_materiality

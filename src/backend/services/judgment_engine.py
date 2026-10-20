@@ -18,6 +18,7 @@ from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
+    CorrectionVerificationDraft,
     CriticIndependent,
     CriticVerdictOut,
     DocumentClassification,
@@ -278,6 +279,35 @@ def going_concern_semantics(advice: GoingConcernAdvice) -> list[str]:
     )
     if required is not None and not cited:
         errors.append(f"建议 {advice.proposed_outcome} 而推理链没有引用 {required} 的 standard 步骤")
+    return errors
+
+
+def verification_context(ctx: ValidationContext) -> tuple[int, list[str]]:
+    """更正验证 (FIN-09) 的校验上下文: (规则算出的剩余额, 匹配凭证中错报科目以外的科目). 调用方漏传任一项时抛
+    ValueError; call_llm 在调用大模型之前先查, 不把调用方的错当成大模型失败."""
+    residual, codes = ctx.expected_residual_cents, ctx.entry_account_codes
+    if residual is None or codes is None:
+        raise ValueError(
+            "更正验证的校验须给出规则算出的剩余额与匹配凭证的科目 (ValidationContext.expected_residual_cents, "
+            "entry_account_codes)"
+        )
+    return residual, codes
+
+
+def verification_semantics(
+    draft: CorrectionVerificationDraft, residual_cents: int, entry_account_codes: Sequence[str]
+) -> list[str]:
+    """更正验证 (FIN-09, 需求 R164) 的语义校验, 返回错误 (空为通过): fully_corrected 须与规则算出的剩余额为 0 一致;
+    other_accounts 只能取 entry_account_codes (匹配凭证各行的科目中错报科目以外的), 不重复."""
+    errors = []
+    if draft.fully_corrected != (residual_cents == 0):
+        errors.append(f"fully_corrected 为 {draft.fully_corrected}, 与规则算出的剩余额 {residual_cents} 不符")
+    outside = [code for code in draft.other_accounts if code not in entry_account_codes]
+    if outside:
+        errors.append(f"other_accounts 只能列匹配凭证中错报科目以外的科目, 多了: {', '.join(outside)}")
+    repeated = sorted({code for code in draft.other_accounts if draft.other_accounts.count(code) > 1})
+    if repeated:
+        errors.append(f"other_accounts 的科目重复: {', '.join(repeated)}")
     return errors
 
 
@@ -772,6 +802,18 @@ async def check_classification(
     return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
 
 
+async def check_verification(
+    validator: OutputValidator, eid: str, output: CorrectionVerificationDraft, ctx: ValidationContext
+) -> CheckResult:
+    """更正验证草稿 (FIN-09, 需求 R164): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级
+    另查是否完整更正与其他科目 (verification_semantics). ctx 缺 expected_residual_cents 或 entry_account_codes 时抛
+    ValueError (verification_context)."""
+    residual, codes = verification_context(ctx)
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    extra = verification_semantics(output, residual, codes) if level != "reference" else []
+    return CheckResult(draft, "semantic" if extra else level, unsupported, errors + extra)
+
+
 async def check_extraction(
     validator: OutputValidator, eid: str, output: Extraction, ctx: ValidationContext
 ) -> CheckResult:
@@ -848,6 +890,7 @@ async def structure_only(
 for _model, _check in (
     (JudgmentDraft, check_judgment),
     (MisstatementClassificationDraft, check_classification),
+    (CorrectionVerificationDraft, check_verification),
     (ContractExtraction, check_extraction),
     (ConfirmationExtraction, check_extraction),
     (RegistryExtraction, check_extraction),
@@ -929,6 +972,7 @@ class JudgmentEngine:
         *,
         llm: LLMClient | None = None,
         system: str = SYSTEM_PROMPT,
+        subject_id: str | None = None,
     ) -> LLMCallResult[Any]:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
@@ -937,9 +981,13 @@ class JudgmentEngine:
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
+        subject_id: 判断对象 (judge 给; 需求 R158 起可与 fixture_key 不同, 如 FIN-03 的对象是错报, fixture_key 是
+        来源判断的对象), 记进留痕供失败任务的呈递按它找调用 (presentation.last_llm_call); 其余调用方不给.
         """
         model = output_model(template)
         assert template.llm is not None  # output_model 已确认
+        if model is CorrectionVerificationDraft:
+            verification_context(ctx)  # 漏传上下文在调用大模型之前报错 (同准则片段未注册的 LookupError)
         client = llm if llm is not None else self.llm
         system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
         # 先去掉个人信息再渲染 (接口文档第 0 节 "个人信息"): 出生日期字段 (需求 R310), 人员节点 ID 的出生日期一段
@@ -959,7 +1007,7 @@ class JudgmentEngine:
             )
             response = await client.complete(request, model)
             report = await self.validator.validate(eid, template, response, ctx)
-            trail_ids.append(await self.record(eid, actor, request, response, report, attempt))
+            trail_ids.append(await self.record(eid, actor, request, response, report, attempt, subject_id))
             if not report.retryable or attempt == MAX_ATTEMPTS:
                 break
             messages = [
@@ -977,8 +1025,10 @@ class JudgmentEngine:
         response: LLMResponse[Any],
         report: ValidationReport[Any],
         attempt: int,
+        subject_id: str | None = None,
     ) -> str:
-        """写一次尝试的 llm_call 留痕, 返回留痕 ID. payload 存提示词全文与原文, 供复查."""
+        """写一次尝试的 llm_call 留痕, 返回留痕 ID. payload 存提示词全文与原文, 供复查; 给了判断对象时另记
+        subject_id."""
         outcome = report.level_failed or "passed"
         return await self.trail.record(
             TrailEntry(
@@ -995,6 +1045,7 @@ class JudgmentEngine:
                 payload={
                     "attempt": attempt,
                     "fixture_key": request.fixture_key,
+                    **({"subject_id": subject_id} if subject_id is not None else {}),
                     "system": request.system,
                     "messages": [m.model_dump() for m in request.messages],
                     "raw": response.raw,
@@ -1036,10 +1087,15 @@ class JudgmentEngine:
             run,
             variables,
             ValidationContext(
-                rule_findings=ctx.rule_findings, client_profile=ctx.client_profile, standards_of=template.id
+                rule_findings=ctx.rule_findings,
+                client_profile=ctx.client_profile,
+                standards_of=template.id,
+                expected_residual_cents=ctx.expected_residual_cents,
+                entry_account_codes=ctx.entry_account_codes,
             ),
             template.owner,
             ctx.fixture_key,
+            subject_id=ctx.subject_id,
         )
         report = result.report
         if report.level_failed is not None:

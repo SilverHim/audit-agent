@@ -21,6 +21,7 @@ from backend.contracts.knowledge import LLMSpec
 from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ContractExtraction,
+    CorrectionVerificationDraft,
     EngagementTermsExtraction,
     MisstatementClassificationDraft,
 )
@@ -2055,7 +2056,7 @@ def test_pln15_template() -> None:
 def test_fin03_template_loads_only_with_misstatement() -> None:
     """R157 验收 1, 7: FIN-03 为完成阶段 A8 的混合程序, 挂功能 misstatement, 没有规则与前置 ("全部 P2 判断已复核" 由
     主图保证), 写判断, 复核任务与错报; 两个准则片段都已登记且各自的 procedures 列了 FIN-03; 输出模型为分类草稿.
-    manual_result_allowed 本条为假 (P2 以外的节点等人时失败任务只认 rerun, 由 R158 打开; 方案取舍). 基线下不启用,
+    manual_result_allowed 为真 (需求 R158 让 P2 以外的节点读回失败任务的 manual_result 后打开). 基线下不启用,
     不进项目启动实例化的程序 (基线启用集恰为 BASE_18 见 test_all_procedures_load); 打开 misstatement 时进."""
     base = ProcedureLibrary(ROOT)
     t = base.load("FIN-03")
@@ -2069,7 +2070,7 @@ def test_fin03_template_loads_only_with_misstatement() -> None:
         "misstatement",
         None,
     )
-    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, False)
+    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, True)
     assert (t.outputs, t.evidence_required) == (["judgments", "review_tasks", "misstatements"], [EvidenceType.voucher])
     assert t.standards == ["ASA450-A6", "ASA240-P36"]
     assert t.llm == LLMSpec(prompt="FIN-03.md.j2", output_model="MisstatementClassificationDraft")
@@ -2158,6 +2159,123 @@ def test_fin03_prompt_renders_with_its_header_variables() -> None:
     assert "- R-9: Occurrence, significant. Management override." in text
     assert '"id": "XJ-499-1"' in text and '"balance_cents": 75000' in text and '"id": "DOC-FAR"' in text
     assert "judgment J-GEN-02-1-XJ-499 (GEN-02, subject XJ-499)" in text
+    for f in variables["standards"]:
+        assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
+
+
+def test_fin09_template_loads_only_with_misstatement() -> None:
+    """R164 验收 1, 8: FIN-09 为完成阶段 A8 的混合程序 (L2), 挂功能 misstatement, 读分录与科目表; 参数 adjustment_prefix
+    取数据集声明 (没有数据集时为 "AJE-"), 规则只有 V01 (emit rows), 准则片段 ASA450-P07 (其 procedures 列了 FIN-09),
+    输出模型为更正验证草稿. 与验收字面的差异 (协调者裁定) 见 FIN-09.yaml 注释: depends_on 为空, manual_result_allowed
+    为假, outputs 不含 exceptions. 规则 SQL, 参数与提示词里没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开
+    misstatement 时进 P2 以外的固定集."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("FIN-09")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
+        "更正验证",
+        Phase.P3_Completion,
+        "Completion",
+        AgentId.A8,
+        Engine.hybrid,
+        AutonomyLevel.L2,
+        "misstatement",
+        None,
+    )
+    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], False, False)
+    assert (t.outputs, t.reads) == (["judgments", "review_tasks", "misstatements"], ["journal_entries", "accounts"])
+    assert t.evidence_required == [EvidenceType.voucher]
+    state = initial_state(ENGAGEMENT, [], 1)
+    resolved = base.resolve_params(t, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=NUMBAT_PROFILE)
+    assert resolved == {"adjustment_prefix": "AJE-"}
+    assert [(r.id, r.emit) for r in t.rules] == [("V01", "rows")]
+    fragment = base.fragment("ASA450-P07")
+    assert t.standards == ["ASA450-P07"] and fragment is not None and "FIN-09" in fragment.procedures
+    assert t.llm == LLMSpec(prompt="FIN-09.md.j2", output_model="CorrectionVerificationDraft")
+    assert output_model(t) is CorrectionVerificationDraft
+    prompt = (ROOT / "prompts" / "FIN-09.md.j2").read_text(encoding="utf-8")
+    assert re.findall(r"(?<![\w.])\d{3,4}(?![\w.])", t.rules[0].sql + json.dumps(t.params) + prompt) == []
+    assert "FIN-09" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
+    on = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement"}))
+    assert on.enabled("FIN-09") and "FIN-09" in {p.id for p in fixed_procedures(on)}
+
+
+def fin09_variables() -> dict[str, Any]:
+    """FIN-09 提示词的变量, 按头注释逐项给齐 (列表都非空), 模拟 R165 交给 judge 的上下文."""
+    library = ProcedureLibrary(ROOT)
+    fragments = [library.fragment(f) for f in library.load("FIN-09").standards]
+    misstatement = {
+        "id": "M-D-1",
+        "version": 4,
+        "judgment_id": "J-GEN-02-1-XJ-499",
+        "type": "factual",
+        "account": "Office equipment (710)",
+        "account_code": "710",
+        "assertion": "Existence",
+        "amount_cents": 75000,
+        "direction": "overstated",
+        "status": "verifying",
+    }
+    source = {"id": "J-GEN-02-1-XJ-499", "procedure_id": "GEN-02", "subject_id": "XJ-499", "conclusion": "No basis."}
+    line = {
+        "source_type": "journal_entry",
+        "id": "AJE-X01-2",
+        "entry_no": "AJE-X01",
+        "posting_date": "2026-09-30",
+        "account_code": "710",
+        "account_name": "Office Equipment",
+        "account_type": "asset",
+        "account_category": "property_plant_equipment",
+        "debit_cents": 0,
+        "credit_cents": 75000,
+        "description": "Audit adjustment AJE-X01",
+        "source_doc": "XJ-499",
+    }
+    data = {
+        "misstatement": misstatement,
+        "source_judgment": source,
+        "matched_line_ids": ["AJE-X01-2"],
+        "entry_lines": [line],
+        "corrected_cents": 75000,
+        "residual_cents": 0,
+    }
+    return {
+        "subject_id": "M-D-1",
+        "task": {"params": {"adjustment_prefix": "AJE-"}, "risks": []},
+        "data": data,
+        "rule_findings": [{"id": "X-FIN-09-1-V02-1", "rule_id": "V02", "amount_cents": 75000}],
+        "standards": [f.model_dump(mode="json") for f in fragments if f is not None],
+    }
+
+
+def test_fin09_prompt_renders_with_its_header_variables() -> None:
+    """R164: 头注释是 R165 的数据契约. 模板取用的顶层变量都在头注释里; 按头注释给齐变量渲染通过 (StrictUndefined),
+    前缀, 匹配行, 已更正额与剩余额, 凭证各行, 规则例外与片段正文都进了提示词. 审核 R164-02 (口径同 R165 验收 5, 6):
+    准则写明剩余额不为 0 的三种情形 (部分更正, 方向相反或没更正, 超额) 与 other_accounts 每个科目一次; 建议动作写明
+    部分更正可 accept 并写剩余额, 规则对不上时 more_evidence, 更正分录本身造成新错报 (含超额) 时 misstatement."""
+    source = (ROOT / "prompts" / "FIN-09.md.j2").read_text(encoding="utf-8")
+    header = source.split("#}", 1)[0]
+    used = meta.find_undeclared_variables(Environment().parse(source))
+    assert used and all(re.search(rf"^ +{name}\b", header, re.MULTILINE) for name in used), used
+    variables = fin09_variables()
+    text = prompt_env(ROOT / "prompts").get_template("FIN-09.md.j2").render(variables)
+    assert "with the prefix `AJE-`" in text and "judgment J-GEN-02-1-XJ-499 (GEN-02, subject XJ-499)" in text
+    assert "Matched adjustment lines: AJE-X01-2." in text
+    assert "Corrected amount (cents): 75000. Residual amount (cents): 0." in text
+    assert '"id": "AJE-X01-2"' in text and '"id": "X-FIN-09-1-V02-1"' in text
+    criteria = text.split("## Criteria", 1)[1].split("## proposed_action", 1)[0]
+    for phrase in (
+        "When the residual amount is not 0",
+        "partly corrected",
+        "posted in the direction that increases the misstatement",
+        "below 0: the matched lines correct more than the misstatement",
+        "each code once",
+    ):
+        assert phrase in criteria, phrase
+    actions = text.split("## proposed_action", 1)[1].split("## Output", 1)[0]
+    accept, more, misstatement = (line for line in actions.splitlines() if line.startswith("- `"))
+    assert "in part with the residual stated" in accept
+    assert "do not match the misstatement" in more and "Rule findings" in more
+    assert "another account" in misstatement and "correct beyond the misstatement amount" in misstatement
     for f in variables["standards"]:
         assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
 
@@ -2549,6 +2667,7 @@ DATASET_REFS = {
         "audit_adjustment_entry_prefix": "audit_adjustment_entry_prefix",
         "counterparty_prefixes": "counterparty_prefixes",
     },
+    "FIN-09": {"adjustment_prefix": "audit_adjustment_entry_prefix"},  # V01 的审计更正分录前缀 (需求 R164)
     "GEN-03": {  # 作废对与对方名称的前缀, 同 GEN-05 (需求 R139)
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",

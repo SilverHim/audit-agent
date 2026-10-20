@@ -1,0 +1,94 @@
+{
+  "conclusion": "Audit adjustment AJE-X04 credits 805 Accrued Liabilities AUD 2,687.36 and so accrues in full the annual leave to 30 September 2026. Its other line debits 477 Wages and Salaries AUD 2,687.36, the expense side of the provision. The residual amount is nil, so no misstatement remains.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "AJE-X04 (source 805) credits 805 Accrued Liabilities AUD 2,687.36 (AJE-X04-2), the annual leave accrued to 30 September 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X04-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "AJE-X04 debits 477 Wages and Salaries AUD 2,687.36 (AJE-X04-1), the expense for the same amount.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-X04-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "After management has corrected misstatements at the auditor's request, the auditor performs additional procedures to determine whether misstatements remain (ASA 450 para 7).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P07",
+          "locator": "para 7",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The adjustment records the understated annual leave provision in full against the expense, so no misstatement remains.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X04-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-X04-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P07",
+      "locator": "para 7",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A later entry that reverses AJE-X04, or a difference between AJE-X04 and the amount of the misstatement, would show that a misstatement remains.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9,
+  "fully_corrected": true,
+  "other_accounts": [
+    "477"
+  ]
+}

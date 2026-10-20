@@ -14,6 +14,7 @@ from backend.agents.ingest import IngestAgent
 from backend.agents.qc import QCAgent
 from backend.agents.review import ReviewAgent
 from backend.agents.risk_assessor import RiskAssessorAgent
+from backend.agents.workpaper import WorkpaperAgent
 from backend.services.procedure_library import manual_program
 
 AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
@@ -23,6 +24,7 @@ AGENT_CLASSES: tuple[type[ProcedureAgent[Any]], ...] = (
     EvidenceAgent,
     FieldworkAgent,
     ReviewAgent,
+    WorkpaperAgent,
     QCAgent,
     ConciergeAgent,
 )

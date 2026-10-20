@@ -62,6 +62,9 @@ from tests.test_dispute import JID, TASK, VARIANTS, resolve
 from tests.test_e2e_mock import start_demo, trail_of
 from tests.test_fieldwork_rev02 import setup
 from tests.test_flow import REVIEWS
+from tests.test_ingest_doc06 import raw as doc06_raw
+from tests.test_ingest_doc06 import scripted as doc06_scripted
+from tests.test_ingest_doc06 import setup as doc06_setup
 
 EID = ENGAGEMENT.id
 PRESENT = f"/api/v1/engagements/{EID}/review-tasks/{{task}}/presentations"
@@ -344,7 +347,7 @@ def test_failure_of_run_and_exception(case: Any, expected: dict[str, Any]) -> No
 
 async def test_failed_subject_takes_last_llm_call_of_that_subject(tmp_path: Path) -> None:
     """验收 5: 真实判断引擎跑 REV-02, SI-2026-0618 的输出连续 3 次结构不合 (测试临时目录里的固定输出): 建
-    T-RUN-REV-02-1-SI-2026-0618-v1, 失败原因取本次执行里 fixture_key 为 SI-2026-0618 的最后一行 llm_call (structure,
+    T-RUN-REV-02-1-SI-2026-0618-v1, 失败原因取本次执行里对象为 SI-2026-0618 的最后一行 llm_call (structure,
     errors, 3 次); 在它之后写的别的行 (同一执行的独立复核, 别的执行里同一对象) 不被取到. 正常的判断任务没有失败原因."""
     fixtures = tmp_path / "REV-02"
     fixtures.mkdir()
@@ -376,6 +379,25 @@ async def test_failed_subject_takes_last_llm_call_of_that_subject(tmp_path: Path
     )
     assert failure.errors == mine[-1].payload["errors"] and failure.errors
     assert failure_of(tasks["T-J-REV-02-1-SI-2026-0612-v1"], run, calls) is None
+    # 需求 R158 之前的旧行没有 subject_id, 按 fixture_key 找, 结果相同
+    legacy = [e.model_copy(update={"payload": {k: v for k, v in e.payload.items() if k != "subject_id"}}) for e in mine]
+    assert failure_of(task, run, legacy) == failure
+
+
+@pytest.mark.parametrize("recorded", [False, True], ids=["no_key", "none"])
+async def test_non_judge_failed_subject_found_by_fixture_key(recorded: bool) -> None:
+    """判断引擎以外的调用方 (A3 的 DOC-06 回函抽取, fixture_key 即账户) 不记对象: BA-01 账号不符 (语义失败, 只调 1
+    次) 时失败卡片按 fixture_key 找到这次调用; 留痕记了 subject_id 而为空时同样回落 (第 2 轮审核 R158-11)."""
+    agent, ctx, trail = doc06_setup(doc06_scripted(BA_01=[doc06_raw("BA-01", account_no="99999999")]))
+    patch = await agent.run(ctx)
+    [task] = patch["review_tasks"]
+    [run] = patch["procedure_runs"]
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    if recorded:
+        calls = [e.model_copy(update={"payload": {**e.payload, "subject_id": None}}) for e in calls]
+    failure = failure_of(task, run, calls)
+    assert failure is not None
+    assert (failure.subject_id, failure.level_failed, failure.attempts) == ("BA-01", "semantic", 1)
 
 
 def test_presentation_entry_time_is_injected() -> None:

@@ -1,6 +1,7 @@
 """R87 P2 以外节点的通用等待 (orchestration/waits.py, 接口文档第 7 节恢复机制).
 
-测试程序 TST-J01 放在临时 knowledge 目录 (完成阶段, owner A6, hybrid, L2), 完成节点改为先执行它再执行 FIN-04.
+测试程序 TST-J01 放在临时 knowledge 目录 (完成阶段, owner A6, hybrid, L2; 失败任务的 manual_result 一节 owner 改为 A8,
+同 FIN-03), 完成节点改为先执行它再执行 FIN-04.
 它的脚本 Agent 按轮次出判断与任务: 有待决任务时节点内等人, 决定读回后从 Store 整体并入, 与提交顺序无关;
 rerun 仍按 Q17 整组重跑. 另测恢复补做, DecisionSubmit 按载荷拒绝, 重放与载荷登记.
 """
@@ -17,12 +18,14 @@ from pydantic import BaseModel
 
 from backend.agents.base import AgentDeps, RunContext
 from backend.contracts.models import (
+    AgentId,
     AuditException,
     AutonomyLevel,
     Decision,
     DisputeResolution,
     GateVerdict,
     Judgment,
+    ManualResult,
     Misstatement,
     Phase,
     Procedure,
@@ -57,6 +60,7 @@ from tests.fakes import (
     FakeOutputStore,
     FakeTrail,
     ScriptA6,
+    ScriptA8,
     finished,
     make_procedure,
     make_runner,
@@ -93,12 +97,17 @@ def completion_runs_tst(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def tst_library(
-    root: Path, extra: str = "", outputs: str = TST_OUTPUTS, features: frozenset[str] | None = None
+    root: Path,
+    extra: str = "",
+    outputs: str = TST_OUTPUTS,
+    features: frozenset[str] | None = None,
+    owner: AgentId = AgentId.A6,
 ) -> ProcedureLibrary:
     """knowledge 目录的副本另加 TST-J01; extra 为追加到其 YAML 的行 (如 gate: FIN-01), outputs 为其产出声明一行;
-    features 为程序库按的功能集 (缺省为基线)."""
+    features 为程序库按的功能集 (缺省为基线); owner 为模板 owner."""
     shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
-    (root / "procedures" / f"{TST}.yaml").write_text(TST_YAML + outputs + extra, encoding="utf-8")
+    yaml = TST_YAML.replace("owner: A6", f"owner: {owner.value}")
+    (root / "procedures" / f"{TST}.yaml").write_text(yaml + outputs + extra, encoding="utf-8")
     return ProcedureLibrary(root) if features is None else ProcedureLibrary(root, features)
 
 
@@ -179,9 +188,11 @@ async def at_tst(
     explains: str | None = None,
     outputs: str = TST_OUTPUTS,
     features: frozenset[str] | None = None,
+    owner: AgentId = AgentId.A6,
 ) -> Case:
     """见 Case. output_store 可换成会在某次提交后出错的存储 (如 CrashAfterCommit). cited 中的对象另出一条规则例外,
-    由其判断引用; explains 为各判断另外解释的已有例外 (别的程序的); yaml, outputs 见 tst_library."""
+    由其判断引用; explains 为各判断另外解释的已有例外 (别的程序的); yaml, outputs 见 tst_library; owner 为模板 owner
+    与脚本 Agent 的身份 (A6 或 A8)."""
     seen: list[tuple[int, list[str]]] = []
     holder: dict[str, ScriptA6] = {}
 
@@ -206,7 +217,7 @@ async def at_tst(
             patch: StatePatch = {"procedure_runs": [run], "judgments": judgments, "review_tasks": tasks}
             return {**patch, "exceptions": exceptions} if exceptions else patch
 
-        holder["agent"] = ScriptA6(deps, script)
+        holder["agent"] = (ScriptA8 if owner is AgentId.A8 else ScriptA6)(deps, script)
         return {**numbat_all_p2_agents(deps), TST: holder["agent"]}
 
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
@@ -214,7 +225,7 @@ async def at_tst(
         engagement_store=engagement_store,
         output_store=output_store,
         agents=agents,
-        library=tst_library(tmp_path / "knowledge", yaml, outputs, features),
+        library=tst_library(tmp_path / "knowledge", yaml, outputs, features, owner),
         features=features,
     )
     case = Case(runner, store, engagement_store)
@@ -638,23 +649,96 @@ async def test_gate_program_stays_planned_after_its_tasks_decided(tmp_path: Path
     assert next(p for p in snapshot.values["procedure_pack"] if p.id == TST) == procedure
 
 
-PROCEDURE_PHASES = [Phase.P0_Acceptance, Phase.P1_Planning, Phase.P2_Executing, Phase.P3_Completion, Phase.P4_Reporting]
+# ── 需求 R158: P2 以外的程序开 manual_result_allowed, 节点读回失败任务的 manual_result ──
+
+TWO_FAILED: Plan = {1: [("S1", TaskKind.failed), ("S2", TaskKind.failed)], 2: [("S2", None)]}
+A8_OUTPUTS = "outputs: [judgments, review_tasks]\n"  # A8 不能写例外
+JUDGING_LLM = "llm:\n  prompt: REV-03.md.j2\n  output_model: JudgmentDraft\n"  # 判断程序的大模型配置
+MANUAL_ALLOWED = "manual_result_allowed: true\n" + JUDGING_LLM  # 只有判断程序能开 (第 1 轮审核 R158-07)
 
 
-@pytest.mark.parametrize("phase", PROCEDURE_PHASES, ids=[p.value for p in PROCEDURE_PHASES])
-def test_manual_result_not_allowed_outside_p2(tmp_path: Path, phase: Phase) -> None:
-    """P2 以外的程序在节点内等人, 失败任务只收 rerun: 开 manual_result_allowed 时程序库加载即报错, 消息含程序编号;
-    P2 程序由复核闸门处理失败任务, 可以开."""
-    root = tmp_path / "knowledge"
-    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
-    yaml = TST_YAML.replace("phase: P3_Completion", f"phase: {phase.value}")
-    assert yaml != TST_YAML or phase is Phase.P3_Completion
-    (root / "procedures" / f"{TST}.yaml").write_text(yaml + TST_OUTPUTS + "manual_result_allowed: true\n", "utf-8")
-    if phase is Phase.P2_Executing:
-        assert ProcedureLibrary(root).load(TST).manual_result_allowed
+@pytest.mark.parametrize(
+    ("llm", "loads"),
+    [
+        (JUDGING_LLM, True),
+        ("llm:\n  prompt: DOC-04.md.j2\n  output_model: ContractExtraction\n", False),
+        ("", False),
+    ],
+    ids=["judgment", "extraction", "no_llm"],
+)
+def test_manual_result_only_for_judging_programs(tmp_path: Path, llm: str, loads: bool) -> None:
+    """R158 (第 1 轮审核 R158-07): manual_result_allowed 只许判断程序开 (llm.output_model 为 JudgmentDraft 或其子类,
+    不论阶段): 人工结果建人工判断取代该对象的判断. 抽取程序 (如 DOC-04 的合同) 或规则程序误开时, 对象该产出的领域对象
+    没人补, 下游悄悄少一个对象, 所以程序库加载即报错, 消息含程序编号."""
+    extra = "manual_result_allowed: true\n" + llm
+    if loads:
+        assert tst_library(tmp_path / "knowledge", extra).load(TST).manual_result_allowed
     else:
-        with pytest.raises(ValueError, match=f"P2 以外的程序不能开 manual_result_allowed .*{TST}"):
-            ProcedureLibrary(root)
+        with pytest.raises(ValueError, match=f"只有判断程序能开 manual_result_allowed .*{TST}"):
+            tst_library(tmp_path / "knowledge", extra)
+
+
+def manual_result(task: ReviewTask, decision_id: str) -> ReviewRecord:
+    """对带对象的 failed 任务人工执行并提交结果."""
+    result = ManualResult(conclusion="人工执行的结论")
+    return record(task.id, Decision.manual_result, id=decision_id, manual_result=result)
+
+
+async def at_manual_tst(tmp_path: Path) -> Case:
+    """TST-J01 由 A8 所有 (同 FIN-03), 开 manual_result_allowed: 第 1 轮 S1, S2 都失败, 第 2 轮 S2 出判断 (自动关闭)."""
+    return await at_tst(tmp_path, TWO_FAILED, yaml=MANUAL_ALLOWED, outputs=A8_OUTPUTS, owner=AgentId.A8)
+
+
+async def test_manual_result_on_failed_task_read_back_in_node(tmp_path: Path) -> None:
+    """R158: P2 以外的程序 (A8 所有, 同 FIN-03) 开 manual_result_allowed 时程序库照常加载, 带对象的 failed 任务允许
+    {rerun, manual_result}. 对 S1 提交 manual_result: DecisionSubmit 建人工判断 -H1 (confirmed), 任务 decided; 节点
+    整体读回后仍等 S2 (载荷 records 带它). 再对 S2 rerun: S1 已出组, 第 2 轮只重跑 S2, 程序 completed, 走到 FIN-01
+    闸门."""
+    case = await at_manual_tst(tmp_path)
+    s1 = await case.task("S1")
+    assert case.runner.deps.queue.allowed(s1) == {Decision.rerun, Decision.manual_result}
+
+    await submit(case, manual_result(s1, "D-m"))
+    assert await case.waits() == [tst_payload(["D-m"])]
+    human = case.latest(Judgment, f"J-{TST}-1-S1-H1")
+    assert (human.review_status, human.conclusion, human.run_id) == (
+        ReviewStatus.confirmed,
+        "人工执行的结论",
+        f"RUN-{TST}-1",
+    )
+    assert case.latest(ReviewTask, s1.id).status is TaskStatus.decided
+    snapshot = await case.runner.app.aget_state(CONFIG)
+    assert human not in snapshot.values["judgments"]  # 节点还在等, 读回的对象在节点结束时并入状态
+
+    await submit(case, rerun(await case.task("S2"), "D-r"))
+    snapshot = await case.runner.app.aget_state(CONFIG)
+    assert snapshot.next == ("gate_fin",)
+    assert case.seen == [(1, []), (2, ["S2"])]
+    assert case.latest(Procedure, TST).status is ProcedureStatus.completed
+    assert human in snapshot.values["judgments"]
+    assert [r.id for r in snapshot.values["review_records"] if r.id in ("D-m", "D-r")] == ["D-m", "D-r"]
+
+
+async def test_manual_result_and_rerun_recovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R158: 两个决定 (S1 的 manual_result, S2 的 rerun) 都写了 Store 而检查点停在第一次等待: recover 按 rerun 以外的
+    决定在前交回 D-m, D-r, 节点读回 D-m 时把 S1 移出本轮的组, rerun 照样只重跑 S2; 结果与在线相同."""
+    online = await at_manual_tst(tmp_path / "online")
+    await submit(online, manual_result(await online.task("S1"), "D-m"))
+    await submit(online, rerun(await online.task("S2"), "D-r"))
+
+    case = await at_manual_tst(tmp_path / "lost")
+    await submit_unread(case, manual_result(await case.task("S1"), "D-m"), monkeypatch)
+    await submit_unread(case, rerun(await case.task("S2"), "D-r"), monkeypatch)
+    assert await case.waits() == [tst_payload([])]
+    order = delivered(case, monkeypatch)
+    await case.runner.recover()
+    await wait_idle(case.runner, EID)
+
+    assert case.runner.run_error(EID) is None
+    assert order == ["D-m", "D-r"]
+    assert case.seen == [(1, []), (2, ["S2"])]
+    assert store_state(case.output_store) == store_state(online.output_store)
+    assert await graph_state(case) == await graph_state(online)
 
 
 async def test_rerun_on_normal_task_delivered_to_node_is_a_node_error(tmp_path: Path) -> None:

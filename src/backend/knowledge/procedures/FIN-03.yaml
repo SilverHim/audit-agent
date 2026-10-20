@@ -24,10 +24,7 @@ document_reads: [contract, invoice, confirmation, bank_statement, minutes, regis
                  representation_letter, correspondence, governance_communication, agreement, internal_record]
 engine: hybrid
 autonomy_level: L2
-# 需求原文要求分类模型反复失败时允许审计师手工给结果 (manual_result_allowed 真). P2 以外的节点等人时失败任务现在只认
-# rerun (nodes.read_rerun), 程序库加载时拒绝 P2 以外的程序开这一项; 由 R158 (失败路径) 连同节点读回 manual_result
-# 一起打开 (需求 R157 方案取舍)
-manual_result_allowed: false
+manual_result_allowed: true       # 分类模型反复失败时, 审计师可手工给结果 (需求 R158 让 P2 以外的节点读回它)
 depends_on: []
 standards: [ASA450-A6, ASA240-P36]
 evidence_required: [voucher]
