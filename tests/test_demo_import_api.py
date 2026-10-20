@@ -17,6 +17,7 @@ from tests.external import supplements_dir
 from tests.fakes import NOW, api_client
 from tests.test_demo_import import EID, Env, env
 from tests.xero_fakes import PLANNING, SNAPSHOT_NAME, SNAPSHOT_REPO, XERO_DATASET, snapshot_root, xero_engagement
+from tests.xero_flow import to_acceptance_gate
 
 pytestmark = pytest.mark.external
 BASE = f"/api/v1/engagements/{EID}/data"
@@ -114,7 +115,12 @@ def test_supplement_needs_the_snapshot_too(tmp_path: Path) -> None:
 
 
 async def test_busy_is_409() -> None:
+    """停在 ACC-01 时建议导入承接资料; 图在后台跑 (runner 持锁) 时概览不建议, 导入报 409. 防图在跑时仍显示建议,
+    点了才报忙."""
     e = env()
+    await to_acceptance_gate(e.runner, EID)
+    assert (await e.service.demo_summary(EID)).suggested == "acceptance"
     e.runner.acquire(EID)
+    assert (await e.service.demo_summary(EID)).suggested is None
     [posted] = await call(e, (f"{BASE}/demo-import", {"stage": "acceptance"}))
     assert (posted.status_code, posted.json()["detail"]["code"]) == (409, "ENGAGEMENT_BUSY")

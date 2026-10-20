@@ -174,8 +174,8 @@ def fixture_problems(
     取, 别的名字永远用不上); 不含邮箱地址. fixture 根不存在或为空时没有问题."""
     problems: list[str] = []
     documents = fs.documents()
-    files = json.loads(fs.manifest.read_text(encoding="utf-8"))["files"]
-    stems = {Path(f["path"]).stem for f in files if f["path"].endswith(".pdf")}
+    listed = json.loads(fs.manifest.read_text(encoding="utf-8"))["files"]
+    stems = {Path(f["path"]).stem for f in listed if f["path"].endswith(".pdf")}
     programs = {t.id for t in library.all(include_disabled=True) if t.llm is not None} | INTAKE_TEMPLATES.keys()
     for folder in sorted(p for p in fs.fixtures.iterdir() if p.is_dir()) if fs.fixtures.is_dir() else []:
         if folder.name not in programs:
