@@ -160,9 +160,17 @@ async def test_xero_subjects_and_context() -> None:
         (ALEX, "shareholder", 0.5),
     ]
     assert all(x["to_id"] == VPA and x["evidence"]["source_type"] == "document" for x in vpa["links"])
-    assert vpa["persons"] == [
-        {"id": ALEX, "name": "Alex Morgan", "relations_with_entity": ["director", "secretary", "shareholder 0.85"]},
-        {"id": DANA, "name": "Dana Morgan", "relations_with_entity": []},
+    graph = ctx.state["ownership_graph"]
+    assert graph is not None
+    alex = [x.model_dump(mode="json") for x in graph.links if x.from_id == ALEX and x.to_id == DEMO]
+    assert [(x["relation"], x["pct"], x["evidence"]["page"]) for x in alex] == [
+        ("director", None, 1),
+        ("secretary", None, 1),
+        ("shareholder", 0.85, 2),
+    ]
+    assert vpa["persons"] == [  # 与报告主体的关系带报告主体摘录那一行的指针; Dana 不在报告主体任职或持股
+        {"id": ALEX, "name": "Alex Morgan", "links_with_entity": alex},
+        {"id": DANA, "name": "Dana Morgan", "links_with_entity": []},
     ]
     assert vpa["declared"] is None
     entries = vpa["transactions"]["entries"]
@@ -265,9 +273,7 @@ async def test_t6_isomorphic_case_takes_rows_by_party_key() -> None:
     assert "smart" not in design["description"].lower()
     assert ids(found[SMART].data["transactions"]["bank_lines"]) == ["BT-090-0097"]
     assert [x["entry_no"] for x in found[VPA].data["transactions"]["entries"]] == [no for no in RENT for _ in range(3)]
-    assert found[SMART].data["persons"] == [
-        {"id": ALEX, "name": "Alex Morgan", "relations_with_entity": ["director", "secretary", "shareholder 0.85"]}
-    ]
+    assert found[SMART].data["persons"] == found[VPA].data["persons"][:1]  # Alex
 
 
 @needs("q1_snapshot", "q1_supplements")

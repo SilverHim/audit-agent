@@ -11,8 +11,8 @@ GEN-03 关联方图谱研判 → JudgmentDraft，关系图（GEN-08）中报告�
   data.client_profile     本项目采用版本的客户画像：id（client_profile 指针的 source_id）、applicable_framework
   data.links              与本节点相连的关系（PartyLink）：from_id、to_id、relation（director、secretary、shareholder）、
                           shares、pct、appointed、ceased、evidence（登记摘录中那一行的 document 指针）
-  data.persons            与本节点相连的人员，按 ID：id、name、relations_with_entity（该人与报告主体的关系，如
-                          director、shareholder 0.85；没有为空列表）
+  data.persons            与本节点相连的人员，按 ID：id、name、links_with_entity（该人与报告主体之间的关系，写法同
+                          links，evidence 为报告主体摘录中那一行；没有为空列表）
   data.declared           画像申报清单中与本节点匹配的一项（DeclaredParty：name、kind、relationship、abn、acn、notes，
                           或 DeclaredHolding：holder、kind、shares、pct）；没有为 null
   data.transactions       规则 C01 中本节点的行，均带 source_type：
@@ -50,7 +50,7 @@ Ownership and office links of this company, from the registry extracts:
 None.
 {% endif %}
 
-People linked to this company and their relations with the reporting entity (person IDs are shown without dates of birth; two people with the same name may show the same ID, so tell them apart by their links and evidence):
+People linked to this company and their links with the reporting entity, each with the registry extract line as `evidence` (person IDs are shown without dates of birth; two people with the same name may show the same ID, so tell them apart by their links and evidence):
 {% if data.persons %}
 ```json
 {{ data.persons | tojson(indent=2) }}

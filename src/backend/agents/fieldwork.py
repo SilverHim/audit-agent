@@ -26,7 +26,7 @@ from backend.agents.judging import (
     judgments_patch,
     subjects_awaiting_review,
 )
-from backend.agents.ownership import declared, relation_text
+from backend.agents.ownership import declared
 from backend.agents.review import ReviewAgent
 from backend.contracts.models import (
     AgentId,
@@ -349,8 +349,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         """一个公司节点的 data, 字段按 GEN-03.md.j2 头注释 (均为 JSON 形式). 名称键为节点名称经 party_name_key (去
         entity_suffixes, 同规则 SQL), 规则 C01 中 party_key 等于它的行归本节点 (record 展开, 带 source_type).
 
-        - links: 一端为本节点的关系 (关系图的顺序); persons: 这些关系另一端的人员 (按 ID), 带与报告主体的关系
-          (ownership.relation_text), 不带出生日期; 人员节点 ID 的出生日期在渲染前由判断引擎遮蔽.
+        - links: 一端为本节点的关系 (关系图的顺序); persons: 这些关系另一端的人员 (按 ID), 带该人与报告主体之间的关系
+          (links_with_entity, 写法同 links, 带报告主体摘录那一行的证据指针), 不带出生日期; 人员节点 ID 的出生日期在
+          渲染前由判断引擎遮蔽.
         - declared: 画像申报清单中与本节点匹配的一项 (ownership.declared, 同 GEN-08 R01 的口径), 没有为 null.
         - equity_entries: 本节点直接持有报告主体股份时为规则 C02 的行, 否则为 [].
         - contracts: 对方 ABN (去非数字) 的末 9 位等于节点 ACN, 或对方名称的键等于名称键的合同 (按合同编号), 带合同
@@ -369,8 +370,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             {
                 "id": person,
                 "name": nodes[person].name,
-                "relations_with_entity": [
-                    relation_text(x) for x in graph.links if x.from_id == person and x.to_id == entity
+                "links_with_entity": [
+                    x.model_dump(mode="json") for x in graph.links if x.from_id == person and x.to_id == entity
                 ],
             }
             for person in sorted({x.from_id for x in links if nodes[x.from_id].kind == "person"})
