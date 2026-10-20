@@ -41,7 +41,8 @@ from tests.test_decisions import Started, acc01_decision, assert_rejected, at_pl
 EID = ENGAGEMENT.id
 # 装配结果的顺序: 匹配到的程序按编号排序后补依赖
 P2 = ["CSH-05", "CSH-04", "DOC-06", "CSH-02", "REV-03", "REV-08", "REV-02"]
-P2_JOURNALS = [*P2[:4], "GEN-05", *P2[4:]]  # 开 journals 时多固定集 GEN-05 (需求 R131), 按编号排在 REV 之前
+# 开 journals 时多固定集 GEN-05 (需求 R131) 与 GEN-02 (需求 R134, 依赖 GEN-05, 排在它之后), 按编号排在 REV 之前
+P2_JOURNALS = [*P2[:4], "GEN-05", "GEN-02", *P2[4:]]
 # 基线固定集 (P2 以外的程序): 新程序挂功能名, 基线下不进固定集, 所以这里是精确集合
 FIXED = {"ACC-04", "ACC-01", "DOC-04", "PLN-07", "PLN-01", "PLN-03", "FIN-04", "FIN-01", "RPT-03", "RPT-01"}
 
@@ -233,8 +234,8 @@ def fixed_library(tmp_path: Path, features: frozenset[str] = JOURNALS, **extra: 
 
 async def test_fixed_program_is_assembled_regardless_of_objectives(tmp_path: Path) -> None:
     """R81 验收 3: journals 开启时 X-FIX 不经 trigger 也加入, 排在按编号排序的末尾; v1 planned, objective_ids 为空,
-    自主度取模板; 9 条第 1 版 (含同属 journals 的固定集 GEN-05) 与阶段 P2_Executing 同一次提交. journals 关闭时仍为原
-    7 条."""
+    自主度取模板; 10 条第 1 版 (含同属 journals 的固定集 GEN-05, GEN-02) 与阶段 P2_Executing 同一次提交. journals
+    关闭时仍为原 7 条."""
     nodes, store, _, state = after_pln_approve(library=fixed_library(tmp_path, **{"X-FIX": X_FIX}))
     patch = await nodes.assemble_pack(state)
     added = added_programs(patch["procedure_pack"])

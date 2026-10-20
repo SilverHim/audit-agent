@@ -933,9 +933,9 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 22 条模板 (含功能 journals 的 GEN-05, related_parties 的 GEN-08, acceptance 的 ACC-08 与 planning
-    的 PLN-15) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式, 登记的都是
-    状态字段; 两条以上程序声明的共享字段都不是 singleton."""
+    """R85 验收 1-3: 23 条模板 (含功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, acceptance 的 ACC-08 与
+    planning 的 PLN-15) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式,
+    登记的都是状态字段; 两条以上程序声明的共享字段都不是 singleton."""
     assert output_problems(LIBRARY) == []
     assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
         "ACC-01": [],
@@ -948,6 +948,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "DOC-06": ["documents", "confirmations", "review_tasks"],
         "FIN-01": [],
         "FIN-04": ["uncorrected_schedule"],
+        "GEN-02": ["judgments", "exceptions", "review_tasks"],
         "GEN-05": ["exceptions"],
         "GEN-08": ["ownership_graph", "exceptions", "documents"],  # 需求 R137
         "GEN-09": [],

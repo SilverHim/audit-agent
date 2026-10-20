@@ -1,0 +1,34 @@
+id: GEN-02
+name: 分录例外归因
+# 规格书 6.4 (混合程序为异常归因), 7.2 GEN-02 L2, 8.5 (只送规则筛出的例外及其关联行); ASA 240 第 32, 33(a) 段,
+# A44 段 (需求 R134). 本程序没有规则 SQL: 判断对象是前置程序 GEN-05 尚未归因的例外, 按例外 detail 的 entry_no 分组,
+# 每笔凭证一个对象 (按凭证号自然序), 由 agents/fieldwork.py 的 gen02_subjects 组装上下文 (data 字段见
+# GEN-02.md.j2 头注释), 走 A6 判断公共流程. 固定集的 objective_ids 为空, 任务说明的 risks 为空, 舞弊风险另放进
+# data.fraud_risks (风险清单中 fraud_related 为真的全部风险). 建议动作不受限制 (同一笔可能被本程序与科目程序各建议一次).
+phase: P2_Executing
+cycle: Pervasive
+owner: A6
+feature: journals                 # 功能开关 (services/features.py): 分录测试
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [judgments, exceptions, review_tasks]
+# 凭证行, 科目与两期试算表, 银行账户与流水, detail 所指的发票, 发运或服务完成记录与合同, 凭证关联的文件
+reads: [journal_entries, accounts, trial_balance, bank_accounts, bank_transactions, sales_invoices, delivery_notes,
+        contracts, documents]
+# 读哪几类文件的登记 (需求 R304): 相关发票所挂合同的登记 (contract), 加关联对象含本凭证号的文件 (documents(related_id=
+# 凭证号)). 后者类型不定 (Xero 演示里有 agreement, correspondence, internal_record), 列出全部可作证据的类型, 即
+# judgment_engine.DOCUMENT_EVIDENCE 的键; 不作证据的 financial_statements 与 other 的登记变动不让本程序过期.
+document_reads: [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter,
+                 representation_letter, correspondence, governance_communication, agreement, internal_record]
+engine: hybrid
+autonomy_level: L2
+manual_result_allowed: true
+assertions: [Occurrence, Completeness, Accuracy]
+params:
+  bank_window_days: 3             # 凭证涉及货币资金科目时, 取凭证日前后几天的对账单行 (含两端)
+depends_on: [GEN-05]
+standards: [ASA240-P32, ASA240-P33, ASA240-A44]
+evidence_required: [voucher]
+rules: []
+llm:
+  prompt: GEN-02.md.j2
+  output_model: JudgmentDraft

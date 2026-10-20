@@ -59,6 +59,7 @@ from backend.core.config import get_settings
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.trail import phase_transition
 from backend.services.data_service import DataService
+from backend.services.judgment_engine import DOCUMENT_EVIDENCE
 from backend.services.procedure_library import ProcedureLibrary, document_read_problems
 from backend.services.staleness import current_results, rerunnable, stale_procedures
 from tests.fakes import (
@@ -187,6 +188,9 @@ def test_programs_reading_registrations_declare_the_document_types() -> None:
         "REV-03": [DocumentType.contract],
         "REV-02": [DocumentType.contract],
         "CSH-02": [DocumentType.confirmation],
+        # 需求 R134: 合同与凭证关联的文件; 后者类型不定, 列全部可作证据的类型 (加了新的证据类型须跟上, 否则该类文件的
+        # 补登记不让 GEN-02 过期)
+        "GEN-02": list(DOCUMENT_EVIDENCE),
     }
     rev03 = LIBRARY.load("REV-03")
     undeclared = rev03.model_copy(update={"document_reads": []})

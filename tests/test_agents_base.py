@@ -53,11 +53,12 @@ def test_select_procedures_filters_by_ownership() -> None:
 
 
 def test_build_agents_maps_every_declared_procedure() -> None:
-    """注册表映射 Agent 声明的全部启用的程序; 挂了未启用功能的 (基线下的 GEN-05, 功能 journals) 不映射."""
+    """注册表映射 Agent 声明的全部启用的程序; 挂了未启用功能的 (基线下的 GEN-05, GEN-02, 功能 journals) 不映射."""
     deps = make_plain_deps()
     agents = build_agents(deps)
     declared = {pid for cls in AGENT_CLASSES for pid in cls.procedures}
-    assert set(agents) == {pid for pid in declared if deps.library.enabled(pid)} and "GEN-05" in declared - set(agents)
+    assert set(agents) == {pid for pid in declared if deps.library.enabled(pid)}
+    assert {"GEN-05", "GEN-02"} <= declared - set(agents)
 
 
 def test_build_agents_rejects_procedure_without_template(monkeypatch: pytest.MonkeyPatch) -> None:

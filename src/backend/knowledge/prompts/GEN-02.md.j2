@@ -1,0 +1,174 @@
+{#
+GEN-02 分录例外归因 → JudgmentDraft，每笔有 GEN-05 尚未归因例外的凭证调用一次（需求 R134）。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
+变量：
+  subject_id              凭证号
+  task.params             bank_window_days（取凭证日前后几天的对账单行）
+  task.risks              本程序覆盖的 RiskItem；GEN-02 是固定集，没有审计目标，为空（舞弊风险见 data.fraud_risks）
+  data.entry_lines        本凭证的全部分录行：source_type journal_entry、JournalEntry 各列；按行 ID 排序
+  data.account_balances   本凭证各科目：source_type trial_balance、code、name、category（科目表里没有时 name、category
+                          为 null）、current_cents、prior_cents（本期、上期试算表余额，没有该科目的行为 null）；按代码排序
+  data.bank               本凭证涉及 cash 分类科目时为 {accounts, lines}，否则为 null：accounts 为总账科目在其中的
+                          bank_account 行（source_type、id、bank_name、bsb、account_no、gl_account_code，按 ID 排序）；
+                          lines 为这些账户的 bank_transaction 行（source_type、id、bank_account_id、txn_date、amount_cents
+                          （存入为正）、balance_after_cents、description、reference），取凭证日前后 bank_window_days 天内
+                          （含两端）的行与各账户本期第一行，按（账户，日期，ID）排序
+  data.related_entries    其他凭证的全部分录行（列同 entry_lines）：本凭证例外 detail 所指的凭证（original_entry_no、
+                          reversal_entry_no、full_credits，paired_invoices 的 journal_entry_id 所在凭证），以及 detail 指向
+                          本凭证的其他 GEN-05 例外所在的凭证；按凭证号自然序与行 ID 排序
+  data.related_invoices   本凭证例外 detail 所指的发票（matched_invoices、invoice_id、paired_invoices 的 invoice_id），
+                          按发票 ID 排序，每项为 {invoice, delivery_notes, contract, document}：invoice 为 sales_invoice 行，
+                          delivery_notes 为其 delivery_note 行（发运或服务完成记录，按 ID 排序，没有为空列表），contract 为
+                          DOC-04 抽取的 Contract、document 为合同 PDF 的 DocumentRef（发票没有合同时两项为 null）
+  data.related_findings   detail 指向本凭证的其他 GEN-05 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
+  data.documents          关联对象含本凭证号的已登记文件，每项为 {document, pages}：document 为 DocumentRef（id、type、
+                          file_name、page_count、reliability、document_date），pages 为各页文字（第 1 页在前）
+  data.fraud_risks        风险清单中 fraud_related 为真的全部 RiskItem：id、assertion、level、description
+  rule_findings           本凭证上 GEN-05 尚未归因的 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
+  standards               StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set contract_docs = data.related_invoices | selectattr("contract") | map(attribute="document") | list %}
+You assist a registered company auditor with the audit of an Australian financial report. The full journal-entry scan has flagged journal entry {{ subject_id }}.
+
+## Task
+
+Attribute the rule findings on journal entry {{ subject_id }}: decide from the inputs whether the entry is appropriate and supported, whether it misstates the financial report, or whether more evidence is needed (ASA240-P32, ASA240-P33, ASA240-A44).
+
+## Inputs
+
+Rule findings on this entry:
+{% for x in rule_findings %}
+- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, amount {{ x.amount_cents }} cents, detail {{ x.detail | tojson }}
+{% endfor %}
+
+Journal lines of this entry:
+```json
+{{ data.entry_lines | tojson(indent=2) }}
+```
+
+Balances of the accounts this entry posts to (current and prior period trial balance; null where the account has no balance):
+```json
+{{ data.account_balances | tojson(indent=2) }}
+```
+
+Bank:
+{% if data.bank %}
+Bank accounts behind the cash accounts this entry posts to:
+```json
+{{ data.bank.accounts | tojson(indent=2) }}
+```
+
+Statement lines from {{ task.params.bank_window_days }} days before to {{ task.params.bank_window_days }} days after the entry's posting date, and each account's first line in the period:
+{% if data.bank.lines %}
+```json
+{{ data.bank.lines | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+{% else %}
+The entry does not post to a cash account.
+{% endif %}
+
+Related journal entries (entries the findings refer to, and entries whose findings refer to this one):
+{% if data.related_entries %}
+```json
+{{ data.related_entries | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Related invoices (with shipping or service-completion records and contracts):
+{% if data.related_invoices %}
+```json
+{{ data.related_invoices | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Findings on other entries that refer to this entry:
+{% for x in data.related_findings %}
+- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, amount {{ x.amount_cents }} cents, detail {{ x.detail | tojson }}
+{% else %}
+None.
+{% endfor %}
+
+Documents linked to this entry:
+{% for d in data.documents %}
+Document {{ d.document.id }} ({{ d.document.type }}, {{ d.document.file_name }}, {{ d.document.page_count }} page(s), reliability {{ d.document.reliability }}{% if d.document.document_date %}, dated {{ d.document.document_date }}{% endif %}):
+{% for page in d.pages %}
+Page {{ loop.index }}:
+```text
+{{ page | trim }}
+```
+{% endfor %}
+{% else %}
+None.
+{% endfor %}
+
+Fraud risks identified at planning:
+{% for r in data.fraud_risks %}
+- {{ r.id }}: {{ r.assertion }}, {{ r.level }}. {{ r.description }}
+{% else %}
+None.
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. Address every rule finding in the reasoning chain: say what the rule flagged, and whether the inputs explain it.
+2. Nature of the entry (ASA240-A44): the accounts it posts to, its description and source document, whether it is a manual or non-standard entry, and whether it reverses, reposts or credits another entry listed under Related journal entries.
+3. Support: the entry is supported when the inputs show the underlying transaction or balance with the same amount, date and counterparty: an invoice with its shipping or service-completion record and contract, a bank statement line, a linked document, or the prior period balance for an opening or conversion balance. A bank statement line supports a cash line when the amounts agree and the dates fall within the window; an account's balance before its first line in the period is that line's `balance_after_cents` minus its `amount_cents`.
+4. Reversals and reposts: an entry reversed in full by another entry has no net effect. A repost of a reversed entry must be supported on its own; a change of counterparty name between the original and the repost needs an explanation in the inputs.
+5. Credits against revenue: a credit matched only by amount may relate to any listed invoice with that amount. Identify the invoice it cancels from the counterparty, dates and records, and decide whether cancelling it was appropriate, for example because the invoice duplicated another one for the same service.
+6. Fraud risks: consider whether the entry could be used to override controls or misstate an account that a listed fraud risk concerns (ASA240-P32, ASA240-P33). A missing explanation is a limitation, not proof of fraud.
+
+## proposed_action
+
+- `accept`: the findings are explained and the inputs show the entry is appropriate and supported, or its effect is reversed in full by a supported entry.
+- `misstatement`: the inputs show that the entry, or the entry together with an entry it relates to, misstates an account balance. Fill `misstatement_draft`: `type` factual; `account` the misstated account as `<name> (<code>)`; `assertion` Existence or Occurrence when the account is overstated by an amount that should not have been recorded, Completeness when an amount is missing, Accuracy when it is recorded at the wrong amount; `direction` overstated or understated; `amount_cents` equal to a referenced row's amount, the difference between two referenced rows, or a finding's amount. Cite the row the amount comes from. State in `conclusion` the other accounts the error affects.
+- `more_evidence`: the inputs do not show the underlying transaction or the reason for the entry, so the findings cannot be explained without further documents or enquiry.
+- Do not use `close`.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: what the entry records, whether the findings are explained, and for a misstatement the account, amount and direction.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Journal line (this entry or a related entry) | voucher | journal_entry | line `id` | column name, e.g. debit_cents | null | internal_original |
+| Account balance | voucher | trial_balance | account `code` | current_cents or prior_cents | null | internal_original |
+{% if data.bank %}
+| Bank account | bank | bank_account | account `id` | column name, e.g. gl_account_code | null | external_copy |
+| Bank statement line | bank | bank_transaction | line `id` | column name, e.g. amount_cents | null | external_copy |
+{% endif %}
+{% if data.related_invoices %}
+| Invoice row | invoice | sales_invoice | invoice `id` | column name, e.g. invoice_date | null | internal_original |
+| Shipping or service-completion record | delivery | delivery_note | record `id` | column name, e.g. signed_date | null | internal_original |
+{% endif %}
+{% for doc in contract_docs | unique(attribute="id") %}
+| Contract term | contract | document | {{ doc.id }} | term ID | the term's `page` | {{ doc.reliability }} |
+{% endfor %}
+{% for d in data.documents %}
+| Document {{ d.document.file_name }} | voucher | document | {{ d.document.id }} | a short quote from the page | page number, 1 to {{ d.document.page_count }} | {{ d.document.reliability }} |
+{% endfor %}
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

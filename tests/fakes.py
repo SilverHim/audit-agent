@@ -796,9 +796,9 @@ class FakeTrail:
 
 class FakeFinancialStore:
     """假财务数据存储: 目前只提供证据文件登记 (documents), 取一行明细 (record), 合同读写 (contracts, save_contract),
-    银行账户 (bank_accounts), 发票与发运单 (sales_invoices, delivery_notes), 分录行 (journal_entries), 科目 (accounts),
-    试算表 (trial_balance), 工资册 (employees) 与待审财报 (financial_statements, save_financial_statements,
-    statements_history; 需求 R217), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
+    银行账户与流水 (bank_accounts, bank_transactions), 发票与发运单 (sales_invoices, delivery_notes), 分录行
+    (journal_entries), 科目 (accounts), 试算表 (trial_balance), 工资册 (employees) 与待审财报 (financial_statements,
+    save_financial_statements, statements_history; 需求 R217), 其余方法用到时再补. B 的 Postgres 实现就绪前代替它."""
 
     def __init__(
         self,
@@ -900,6 +900,17 @@ class FakeFinancialStore:
     async def bank_accounts(self, eid: str) -> list[BankAccount]:
         """records 中的 bank_account 行, 按写入顺序."""
         return [BankAccount.model_validate(row) for (kind, _), row in self.records.items() if kind == "bank_account"]
+
+    async def bank_transactions(
+        self, eid: str, bank_account_id: str, date_from: date, date_to: date
+    ) -> list[BankTransaction]:
+        """records 中该账户交易日期在 [date_from, date_to] 内 (含两端) 的 bank_transaction 行, 按 (交易日期, ID) 排序,
+        同真实实现."""
+        rows = [
+            BankTransaction.model_validate(r) for (kind, _), r in self.records.items() if kind == "bank_transaction"
+        ]
+        found = [r for r in rows if r.bank_account_id == bank_account_id and date_from <= r.txn_date <= date_to]
+        return sorted(found, key=lambda r: (r.txn_date, r.id))
 
     async def sales_invoices(self, eid: str, ids: Sequence[str]) -> list[SalesInvoice]:
         """records 中 ID 在 ids 内的 sales_invoice 行, 按写入顺序 (真实实现的顺序没有约定, 调用方自行排序)."""
