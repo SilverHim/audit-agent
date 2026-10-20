@@ -43,7 +43,7 @@ from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.orchestration.decisions import confirm_effects
 from backend.orchestration.gates import materiality_amounts
 from backend.orchestration.nodes import GraphNodes, apply_patch, save_outputs
-from backend.orchestration.runner import GraphRunner, fixed_procedures
+from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
@@ -58,7 +58,7 @@ from tests.xero_fakes import (
     xero_engagement,
     xero_tables,
 )
-from tests.xero_flow import READY_REASON, import_stage
+from tests.xero_flow import READY_REASON, import_stage, offline_runner
 from tests.xero_injection import XeroCase
 
 PLANNING_PROGRAMS = ("DOC-04", "PLN-07", "PLN-01")  # run_programs 先跑的 P1 程序, 按图中的次序
@@ -168,7 +168,8 @@ async def db_deps(case: XeroCase, *, llm: LLMClient | None = None) -> XeroHarnes
         owner_id=user.id, period_start=period[0], period_end=period[1], dataset=case.dataset, profile=profile
     )
     eid = engagement.id
-    service = DataService(deps, GraphRunner(cast(Any, None), deps, {"mode": "mock", "model": "mock"}), demo=datasets)
+    # 项目锁取 runner; 主图配上但不启动 (内存检查点为空), 数据写入后 DataService 查图是否在等数据时照常读得到
+    service = DataService(deps, offline_runner(deps), demo=datasets)
     for stage in ("acceptance", "fieldwork"):
         result = await import_stage(service, eid, stage, user.id)
         assert result is not None and result.status == "imported", (stage, result)
