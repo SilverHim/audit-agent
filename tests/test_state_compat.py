@@ -14,6 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
+from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
     CheckItemStatus,
@@ -57,7 +58,7 @@ from backend.orchestration.graph import (
     node_with_defaults,
     route_with_defaults,
 )
-from backend.orchestration.nodes import FieldworkInput
+from backend.orchestration.nodes import FieldworkInput, apply_patch
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.recovery import catch_up_review
 from backend.orchestration.runner import GraphRunner, resume_required
@@ -420,6 +421,23 @@ class StateWithLocalTypes(EngagementState):
     plan_kind: LocalKind | None
 
 
+async def checkpoint_round_trip(state_type: Any, values: dict[str, Any]) -> dict[str, Any]:
+    """一个节点写出 values, 存进用检查点白名单 serde 的 InMemorySaver, 读回状态. state_type 为只含这些键 (无 reducer)
+    的 TypedDict, 输入各键为 None."""
+
+    async def write(state: Any) -> dict[str, Any]:
+        return values
+
+    graph = StateGraph(state_type)
+    graph.add_node("a", write)
+    graph.add_edge(START, "a")
+    graph.add_edge("a", END)
+    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
+    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
+    await app.ainvoke(dict.fromkeys(values), config)
+    return dict((await app.aget_state(config)).values)
+
+
 class GraphOnly(TypedDict):
     ownership_graph: OwnershipGraph | None
 
@@ -428,18 +446,7 @@ async def test_ownership_graph_survives_checkpoint_and_defaults_to_none() -> Non
     """R136 验收 3, 4: 旧检查点没有 ownership_graph 键时读到 None; 经检查点白名单序列化的 InMemorySaver 存取一轮后
     仍是 OwnershipGraph 实例 (不退化为 dict), 内容不变."""
     assert fill_defaults({})["ownership_graph"] is None
-
-    async def write(state: GraphOnly) -> dict[str, Any]:
-        return {"ownership_graph": ownership_graph()}
-
-    graph = StateGraph(GraphOnly)
-    graph.add_node("a", write)
-    graph.add_edge(START, "a")
-    graph.add_edge("a", END)
-    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
-    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
-    await app.ainvoke({"ownership_graph": None}, config)
-    back = (await app.aget_state(config)).values["ownership_graph"]
+    back = (await checkpoint_round_trip(GraphOnly, {"ownership_graph": ownership_graph()}))["ownership_graph"]
     assert isinstance(back, OwnershipGraph) and back == ownership_graph()
 
 
@@ -459,19 +466,7 @@ async def test_completion_records_survive_checkpoint_as_enums() -> None:
         "governance_communications": [governance_communication()],
         "independence_declaration": independence_declaration(),
     }
-
-    async def write(state: CompletionOnly) -> dict[str, Any]:
-        return written
-
-    graph = StateGraph(CompletionOnly)
-    graph.add_node("a", write)
-    graph.add_edge(START, "a")
-    graph.add_edge("a", END)
-    app = graph.compile(checkpointer=InMemorySaver(serde=checkpoint_serde()))
-    config: RunnableConfig = {"configurable": {"thread_id": "T-1"}}
-    empty = {"representation_letter": None, "compliance_checks": [], "governance_communications": []}
-    await app.ainvoke({**empty, "independence_declaration": None}, config)
-    back = (await app.aget_state(config)).values
+    back = await checkpoint_round_trip(CompletionOnly, written)
     assert back == written
     letter, [check], [communication], declaration = (back[k] for k in written)
     assert isinstance(letter, WrittenRepresentationLetter) and letter.status is RepresentationStatus.obtained
@@ -481,6 +476,22 @@ async def test_completion_records_survive_checkpoint_as_enums() -> None:
     assert isinstance(communication, GovernanceCommunication) and communication.form is CommunicationForm.written
     assert isinstance(declaration, IndependenceDeclaration) and declaration.form is DeclarationForm.no_contraventions
     assert declaration.status is ReportStatus.draft and isinstance(declaration.based_on, ObjectRef)
+
+
+def test_completion_list_fields_merge_by_id_and_version() -> None:
+    """R215 验收 5 (审核意见 01): compliance_checks 与 governance_communications 按 upsert_by_id 并入状态: 另一程序
+    (另一次执行) 的写入与已有的并存, 不整体替换; 同 ID 版本更低的抛 VersionConflict."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state = apply_patch(state, {"compliance_checks": [compliance_check(version=2)]})
+    state = apply_patch(state, {"compliance_checks": [compliance_check("FIN-12")]})
+    assert [(c.id, c.version) for c in state["compliance_checks"]] == [("CHECK-FIN-10", 2), ("CHECK-FIN-12", 1)]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"compliance_checks": [compliance_check()]})
+    state = apply_patch(state, {"governance_communications": [governance_communication(version=2)]})
+    state = apply_patch(state, {"governance_communications": [governance_communication(run_no=2)]})
+    assert [c.id for c in state["governance_communications"]] == ["GC-RPT-07-1", "GC-RPT-07-2"]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"governance_communications": [governance_communication()]})
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:

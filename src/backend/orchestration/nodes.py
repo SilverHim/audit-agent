@@ -302,8 +302,10 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
 
     # 项目里只有一份 (singleton) 或按程序取 (by_procedure) 的产出取的是最新版本, 回退到较早的检查点重放时可能来自
     # 本程序之后的执行 (如 FIN-01 驳回后 FIN-04 的第 2 次); 把之后的执行一并取回, 下一次执行才会接着取号,
-    # 不再撞上已有的执行而重放出同一版. 写这类产出的程序 (ACC-04, PLN-07, PLN-01, FIN-04) 不建单对象 failed 任务,
-    # 成功的执行不会在节点内等待, 之后的执行只可能来自之后的节点执行, 正常重放时没有.
+    # 不再撞上已有的执行而重放出同一版. 前提: 模板 outputs 含这类字段 (取回方式在 LATER_RUNS 中) 的程序, 成功的执行
+    # 不建单对象 failed 任务; 节点内 rerun 只由这种任务触发, 所以之后的执行只可能来自之后的节点执行, 正常重放时没有
+    # (成功后建别的任务并在节点内等人不影响). 否则 "第 1 次成功并留 failed 任务 → 节点内 rerun 出第 2 次 → 第 2 次
+    # 等人" 后恢复, 从头重放第 1 次会取回仍在等人的第 2 次, 报下面的错.
     # 之后的执行还有待决任务 (那次节点正在等人) 时, 重放恢复不了那次等待, 报错要求从最新的检查点恢复
     if any(field in patch and FIELD_REPLAY[field] in LATER_RUNS for field in fields):
         later = await store.latest(eid, ProcedureRun, procedure_id=run.procedure_id)

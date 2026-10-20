@@ -56,12 +56,15 @@ from tests.fakes import (
     ScriptAgent,
     compliance_check,
     finished,
+    governance_communication,
+    independence_declaration,
     make_deps,
     make_procedure,
     make_run,
     make_runner,
     ownership_graph,
     profile_update,
+    representation_letter,
     wait_idle,
 )
 from tests.test_fieldwork import assembled, dispatch
@@ -636,17 +639,18 @@ async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> No
 async def test_compliance_check_replay_brings_its_referenced_exceptions() -> None:
     """R215: 回退检查点后重放 FIN-10 第 1 次 (程序 YAML 由 R230 加, 这里用临时模板): CHECK-FIN-10 按 by_procedure
     取最新版本 (第 2 次写的 v2), 一并取回第 2 次执行, 以及 v2 的 exception_ids 所指而不属第 1 次的例外 (合规检查与
-    判断, 评分卡同在 merge.EXCEPTION_REFERRERS); 片段自成一体, 外键检查通过."""
+    判断, 评分卡同在 merge.EXCEPTION_REFERRERS); 片段自成一体, 外键检查通过. Store 里另有 FIN-12 写的 CHECK-FIN-12,
+    不取回 (by_procedure 只取本程序的)."""
     run1, run2 = finished(make_run("FIN-10")), finished(make_run("FIN-10", run_no=2))
+    run12 = finished(make_run("FIN-12"))
     found1 = exception(1).model_copy(update={"id": "X-FIN-10-1-E02-1", "procedure_id": "FIN-10", "run_id": run1.id})
     found2 = found1.model_copy(update={"id": "X-FIN-10-2-E02-1", "run_id": run2.id})
     check1 = compliance_check(exception_ids=[found1.id])
     check2 = compliance_check(run_no=2, version=2, exception_ids=[found2.id])
-    store = FakeOutputStore([run1, run2, found1, found2, check1, check2, exception(2)])
+    others = [run12, compliance_check("FIN-12"), exception(2)]
+    store = FakeOutputStore([run1, run2, found1, found2, check1, check2, *others])
     deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([]))
-    template = deps.library.load("CSH-04").model_copy(
-        update={"id": "FIN-10", "outputs": ["compliance_checks", "exceptions", "review_tasks"], "document_types": []}
-    )
+    template = temporary_template(deps, "FIN-10", ["compliance_checks", "exceptions", "review_tasks"])
 
     patch = await stored_outputs(deps, EID, template, run1)
 
@@ -657,3 +661,33 @@ async def test_compliance_check_replay_brings_its_referenced_exceptions() -> Non
         "exceptions": [found1, found2],
     }
     assert check_refs(patch, initial_state(ENGAGEMENT, [make_procedure("FIN-10", Phase.P3_Completion)], 1)) == []
+
+
+def temporary_template(deps: Any, procedure_id: str, outputs: list[str]) -> ProcedureTemplate:
+    """还没有 YAML 的程序的临时模板: 取 CSH-04 的, 换编号与 outputs, 不声明文件类型."""
+    template: ProcedureTemplate = deps.library.load("CSH-04")
+    return template.model_copy(update={"id": procedure_id, "outputs": outputs, "document_types": []})
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "field", "expected"),
+    [
+        ("FIN-07", "representation_letter", representation_letter()),
+        ("RPT-08", "independence_declaration", independence_declaration()),
+        ("RPT-07", "governance_communications", [governance_communication()]),
+    ],
+    ids=["representation_letter", "independence_declaration", "governance_communications"],
+)
+async def test_completion_records_replay_by_their_registered_way(procedure_id: str, field: str, expected: Any) -> None:
+    """R215 审核意见 01: 声明书与独立性声明按 singleton 取回为单个对象 (不是列表); 治理层沟通按 by_run 只取本次执行
+    的 GC-RPT-07-1, 不带回 RPT-07 第 2 次执行的 GC-RPT-07-2 (程序 YAML 由 R228, R233, R234 加, 这里用临时模板)."""
+    runs = [finished(make_run(p)) for p in ("FIN-07", "RPT-08", "RPT-07")]
+    second = finished(make_run("RPT-07", run_no=2))
+    records = [representation_letter(), independence_declaration(), governance_communication()]
+    store = FakeOutputStore([*runs, second, *records, governance_communication(run_no=2)])
+    deps = make_deps(FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([]))
+    run = next(r for r in runs if r.procedure_id == procedure_id)
+
+    patch = await stored_outputs(deps, EID, temporary_template(deps, procedure_id, [field]), run)
+
+    assert patch == {"procedure_runs": [run], field: expected}

@@ -15,6 +15,9 @@ from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     AutonomyLevel,
+    CheckItem,
+    CheckItemStatus,
+    ComplianceCheck,
     DocumentRef,
     DocumentType,
     ExceptionDisposition,
@@ -264,23 +267,38 @@ COMPLETION_PACK = [*PACK, *(make_procedure(p, Phase.P3_Completion) for p in ("FI
 COMPLETION_PACK += [make_procedure(p, Phase.P4_Reporting) for p in ("RPT-07", "RPT-08")]
 
 
-def fin10_patch(**fields: Any) -> tuple[StatePatch, ProcedureRun]:
-    """A9 执行 FIN-10 的合法片段: CHECK-FIN-10 (E02 不通过), E02 的例外与它的 unattributed 任务, 本次执行成功."""
-    run = make_run("FIN-10")
-    found = exception("X-FIN-10-1-E02-1", "FIN-10", run.id)
+def fs_check(exception_ids: list[str]) -> ComplianceCheck:
+    """CHECK-FIN-12 第 1 次: K01 一行 (SOFP-REC) 与调整后试算表不符, 不通过."""
+    item = CheckItem(
+        code="K01",
+        description="Line agrees to adjusted trial balance",
+        status=CheckItemStatus.failed,
+        standard_ref="ASA 330.20(a)",
+        detail={"line": "SOFP-REC"},
+    )
+    return ComplianceCheck(
+        id="CHECK-FIN-12", procedure_id="FIN-12", run_id="RUN-FIN-12-1", items=[item], exception_ids=exception_ids
+    )
+
+
+def fin12_patch(**fields: Any) -> tuple[StatePatch, ProcedureRun]:
+    """A9 执行 FIN-12 的合法片段: CHECK-FIN-12 (K01 不通过), K01 的例外与它的 unattributed 任务 (R224 验收 3),
+    本次执行成功."""
+    run = make_run("FIN-12")
+    found = exception("X-FIN-12-1-K01-1", "FIN-12", run.id)
     pending = ReviewTask(
         id=f"T-{found.id}-v1",
         kind=TaskKind.unattributed,
-        procedure_id="FIN-10",
+        procedure_id="FIN-12",
         target_type=TargetType.AuditException,
         target_id=found.id,
         target_version=1,
         run_id=run.id,
-        subject_id="E02",
+        subject_id="SOFP-REC",
         created_at=NOW,
     )
     patch: StatePatch = {
-        "compliance_checks": [compliance_check(exception_ids=[found.id])],
+        "compliance_checks": [fs_check([found.id])],
         "exceptions": [found],
         "review_tasks": [pending],
         "procedure_runs": [finished(run)],
@@ -295,14 +313,14 @@ def check_a9(patch: StatePatch, run: ProcedureRun, state: EngagementState | None
 
 
 def test_a9_writes_compliance_check_with_its_exceptions_and_tasks() -> None:
-    """R215 验收 6: A9 执行 FIN-10 的片段 (合规检查, 例外, unattributed 任务) 通过 check_patch."""
-    check_a9(*fin10_patch())
+    """R215 验收 6: A9 执行 FIN-12 的片段 (合规检查, 例外, unattributed 任务) 通过 check_patch."""
+    check_a9(*fin12_patch())
 
 
 def test_a9_may_not_write_governance_communications() -> None:
     """R215 验收 6: A9 片段含 governance_communications 时 check_patch 抛 MergeRejected, 原因含字段名; 在 outputs 里
     声明了也一样 (不在 A9 的写入范围)."""
-    patch, run = fin10_patch(governance_communications=[governance_communication()])
+    patch, run = fin12_patch(governance_communications=[governance_communication()])
     with pytest.raises(MergeRejected, match="merge_rejected: A9 不能写字段 governance_communications") as caught:
         check_patch(
             patch,
@@ -318,10 +336,10 @@ def test_a9_may_not_write_governance_communications() -> None:
 def test_compliance_check_references_are_checked() -> None:
     """R215 验收 6: ComplianceCheck.exception_ids 指向状态与片段中都没有的例外时 check_refs 报错; 例外只在状态中
     (之前的执行查出) 时通过. procedure_id 不在程序包, run_id 属于别的程序时也报错 (同判断与例外)."""
-    patch, _ = fin10_patch(compliance_checks=[compliance_check(exception_ids=["X-FIN-10-1-E02-1", "X-NONE"])])
+    patch, _ = fin12_patch(compliance_checks=[fs_check(["X-FIN-12-1-K01-1", "X-NONE"])])
     state = make_state(procedure_pack=COMPLETION_PACK)
-    assert check_refs(patch, state) == ["ComplianceCheck CHECK-FIN-10 引用的例外 X-NONE 不存在"]
-    earlier = exception("X-NONE", "FIN-10", "RUN-FIN-10-0")
+    assert check_refs(patch, state) == ["ComplianceCheck CHECK-FIN-12 引用的例外 X-NONE 不存在"]
+    earlier = exception("X-NONE", "FIN-12", "RUN-FIN-12-0")
     assert check_refs(patch, make_state(procedure_pack=COMPLETION_PACK, exceptions=[earlier])) == []
 
     foreign = compliance_check().model_copy(update={"run_id": "RUN-REV-08-1"})

@@ -2646,7 +2646,7 @@ def compliance_check(
                 code="E02",
                 description="Contingent fee",
                 status=CheckItemStatus.failed,
-                standard_ref="APES 110 R410.10",
+                standard_ref="APES 110 R410.9",
                 detail={"contingent": True},
                 requires_disposition=True,
             ),

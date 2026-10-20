@@ -351,6 +351,7 @@ class ReportSection(StrEnum):
     signature = "signature"  # 签名块: 审计师姓名, 事务所, 地址
 
 
+# IndependenceDeclaration.status (S307C, 随报告签字) 也用它 (需求 R215): 给报告加只属于报告的状态时另起枚举
 class ReportStatus(StrEnum):
     """报告版本状态."""
 
@@ -944,7 +945,8 @@ class ComplianceCheck(Versioned):
     must_disclaim: bool = False  # 检查结果要求出具无法表示意见, 如管理层不提供第 10, 11 段的声明 (ASA 580 第 20 段)
     subject_ref: ObjectRef | None = None  # 被检查的对象, 如财报 FS 或声明书 REPLETTER 的版本; 没有单一对象时为空
     # 所依据的输入及其版本, 如 {fs_version: 1, adjustment_entry_nos: [...]}, {client_profile_version: 3}; 节点再入时
-    # 与当前输入比对, 判断检查是否过期
+    # 与当前输入比对, 判断检查是否过期. 只放 JSON 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组
+    # 等经 Store 读回会变成字符串与列表, 与检查点读回的不相等
     basis: dict[str, Any] = {}
 
     @property

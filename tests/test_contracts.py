@@ -555,7 +555,7 @@ def test_xero_fs_v1_figures_and_mapping() -> None:
 
 def test_representation_letter_contract() -> None:
     """验收 1: REPLETTER 的字段与取值; 一项声明为 refused_accepted 而缺 acceptance_reason 或 opinion_effect (空串同),
-    或多给字段, 抛 ValidationError; 状态只收四种; 存储 JSON 往返不变."""
+    kind 不是 core 或 specific, 或多给字段, 抛 ValidationError; 状态只收四种; 存储 JSON 往返不变."""
     letter = representation_letter()
     assert (letter.id, letter.status, letter.period_end, letter.run_id) == (
         "REPLETTER",
@@ -566,7 +566,13 @@ def test_representation_letter_contract() -> None:
     assert letter.schedule_ref == ObjectRef(kind="UncorrectedSchedule", id="SCHEDULE", version=1)
     accepted = letter.representations[2].model_dump()
     assert accepted["status"] is ClauseStatus.refused_accepted
-    for change in ({"acceptance_reason": None}, {"opinion_effect": None}, {"opinion_effect": ""}, {"extra": 1}):
+    for change in (
+        {"acceptance_reason": None},
+        {"opinion_effect": None},
+        {"opinion_effect": ""},
+        {"kind": "other"},
+        {"extra": 1},
+    ):
         with pytest.raises(ValidationError):
             RepresentationClause.model_validate({**accepted, **change})
     present = letter.representations[0].model_dump()
@@ -581,7 +587,8 @@ def test_representation_letter_contract() -> None:
 
 def test_compliance_check_contract_and_failed_codes() -> None:
     """验收 2: CHECK-{procedure_id} 的字段; failed_codes 只读, 列出 failed 项的代号 (按首次出现的顺序, 逐行核对的
-    同一代号只列一次), 不进 JSON; 缺省 exception_ids 为空, must_disclaim 为假; 多给字段被拒; JSON 往返不变."""
+    同一代号只列一次; 数据里 K03 先于 K01 不通过, 不同于字典序), 不进 JSON; 缺省 exception_ids 为空, must_disclaim
+    与 requires_disposition 为假; 多给字段被拒; JSON 往返不变."""
     check = compliance_check(exception_ids=["X-FIN-10-1-E02-1"])
     assert (check.id, check.procedure_id, check.run_id, check.basis) == (
         "CHECK-FIN-10",
@@ -591,6 +598,7 @@ def test_compliance_check_contract_and_failed_codes() -> None:
     )
     assert check.failed_codes == ["E02"] and "failed_codes" not in check.model_dump()
     assert (check.must_disclaim, check.subject_ref, compliance_check().exception_ids) == (False, None, [])
+    assert [item.requires_disposition for item in check.items] == [False, True, False]  # 样例只给 E02 显式置真
     line = {"description": "Line agrees to adjusted trial balance", "standard_ref": "ASA 330.20(a)"}
     fs12 = ComplianceCheck(
         id="CHECK-FIN-12",
@@ -598,15 +606,15 @@ def test_compliance_check_contract_and_failed_codes() -> None:
         run_id="RUN-FIN-12-1",
         items=[
             CheckItem(code="K01", status=CheckItemStatus.passed, **line),
-            CheckItem(code="K01", status=CheckItemStatus.failed, **line),
             CheckItem(code="K03", status=CheckItemStatus.failed, **line),
             CheckItem(code="K01", status=CheckItemStatus.failed, **line),
+            CheckItem(code="K03", status=CheckItemStatus.failed, **line),
             CheckItem(code="K05", status=CheckItemStatus.attention, **line),
         ],
         subject_ref=ObjectRef(kind="FinancialStatements", id="FS", version=1),
         basis={"fs_version": 1, "adjustment_entry_nos": ["AJE-X01", "AJE-X05"]},
     )
-    assert fs12.failed_codes == ["K01", "K03"]
+    assert fs12.failed_codes == ["K03", "K01"]
     with pytest.raises(ValidationError, match="frozen"):
         fs12.failed_codes = []  # type: ignore[misc]
     for change in ({"extra": 1}, {"items": [{**check.items[0].model_dump(), "status": "skipped"}]}):
@@ -616,7 +624,8 @@ def test_compliance_check_contract_and_failed_codes() -> None:
 
 
 def test_governance_communication_contract() -> None:
-    """验收 3: GC-RPT-07-1 的字段; kind 只有 completion (缺省), form 只收 written, oral; 多给字段被拒; JSON 往返不变."""
+    """验收 3: GC-RPT-07-1 的字段; kind 只有 completion (缺省), form 只收 written, oral; communicated_at 必填; 多给字段
+    被拒; JSON 往返不变."""
     communication = governance_communication()
     assert (communication.id, communication.kind, communication.form, communication.run_id) == (
         "GC-RPT-07-1",
@@ -624,19 +633,20 @@ def test_governance_communication_contract() -> None:
         CommunicationForm.written,
         "RUN-RPT-07-1",
     )
-    assert [m.code for m in communication.matters if m.required and not m.covered] == []
     dumped = communication.model_dump()
     for change in ({"kind": "planning_scope"}, {"form": "email"}, {"extra": 1}):
         with pytest.raises(ValidationError):
             GovernanceCommunication.model_validate({**dumped, **change})
+    with pytest.raises(ValidationError, match="communicated_at"):
+        GovernanceCommunication.model_validate({k: v for k, v in dumped.items() if k != "communicated_at"})
     with pytest.raises(ValidationError):
         CommunicationMatter.model_validate({**communication.matters[0].model_dump(), "extra": 1})
     assert GovernanceCommunication.model_validate_json(communication.model_dump_json()) == communication
 
 
 def test_independence_declaration_form_matches_contraventions() -> None:
-    """验收 4: S307C 的字段与缺省 (draft, 日期, 报告与签字人为空); form 为 contraventions 而列表为空, 或
-    no_contraventions 而列表非空, 抛 ValidationError; 两者一致时通过; JSON 往返不变."""
+    """验收 4: S307C 的字段与缺省 (draft, 日期, 报告与签字人为空); based_on 必填; form 为 contraventions 而列表为空,
+    或 no_contraventions 而列表非空, 抛 ValidationError; 两者一致时通过; JSON 往返不变."""
     declaration = independence_declaration()
     assert (declaration.id, declaration.status, declaration.based_on.id, declaration.based_on.version) == (
         "S307C",
@@ -647,6 +657,8 @@ def test_independence_declaration_form_matches_contraventions() -> None:
     assert (declaration.declaration_date, declaration.report_id, declaration.signed_by) == (None, None, None)
     dumped = declaration.model_dump()
     listed = [Contravention(item_code="E02", text="A contingent fee was agreed for the audit.")]
+    with pytest.raises(ValidationError, match="based_on"):
+        IndependenceDeclaration.model_validate({k: v for k, v in dumped.items() if k != "based_on"})
     with pytest.raises(ValidationError, match="form 为 contraventions 时须列明违规"):
         IndependenceDeclaration.model_validate({**dumped, "form": "contraventions"})
     with pytest.raises(ValidationError, match="form 为 no_contraventions 时不能列明违规"):
