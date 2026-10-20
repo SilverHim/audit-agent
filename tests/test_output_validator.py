@@ -62,12 +62,14 @@ from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
+    OUTCOME_STANDARDS,
     PLAN_REQUIRED_SECTIONS,
     CheckResult,
     JudgmentEngine,
     OutputValidator,
     check_plan,
     citation_keys,
+    going_concern_semantics,
     judgment_key,
     output_model,
     structure_only,
@@ -181,7 +183,7 @@ async def check(output: Any, raw: str | None = None, ctx: ValidationContext | No
 
 def test_validation_context_defaults() -> None:
     ctx = ValidationContext(standards_of=None)
-    assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == []
+    assert ctx.rule_findings == [] and ctx.document is None and ctx.judgments == [] and ctx.required_refs == []
 
 
 def test_output_model_resolves_every_llm_procedure() -> None:
@@ -1637,12 +1639,12 @@ async def check_gc(
 
 @pytest.mark.external
 async def test_going_concern_advice_passes_and_rewrites_pointers() -> None:
-    """验收 2: 合法输出四级通过, 指针的 type 与 reliability 按来源改写 (模型填的不采信)."""
+    """验收 2: 合法输出四级通过, 推理链与 evidence 列表的指针 type 与 reliability 都按来源改写 (模型填的不采信)."""
     report = await check_gc(gc_advice())
     assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
     assert isinstance(report.output, GoingConcernAdvice)
-    chain = report.output.reasoning_chain
-    rewritten = {(p.source_type, p.type, p.reliability) for step in chain for p in step.evidence}
+    pointers = [*report.output.evidence, *(p for step in report.output.reasoning_chain for p in step.evidence)]
+    rewritten = {(p.source_type, p.type, p.reliability) for p in pointers}
     assert rewritten == {
         ("trial_balance", EvidenceType.voucher, Reliability.internal_original),
         ("bank_transaction", EvidenceType.bank, Reliability.external_copy),
@@ -1651,33 +1653,45 @@ async def test_going_concern_advice_passes_and_rewrites_pointers() -> None:
     }
 
 
-STALE_REF = f"引用的判断 {GEN04_ID} 第 1 版不是当前版本 (第 2 版)"
-
-
 def unresolvable(advice: GoingConcernAdvice) -> GoingConcernAdvice:
-    """把全部指针换成查不到的行 (标准步骤也没有了准则片段, 语义级若照查会报 ASA570-P18)."""
+    """把全部指针换成查不到的行."""
     bad = gc_pointer("bank_transaction", "BT-NONE")
     steps = [step.model_copy(update={"evidence": [bad] if step.evidence else []}) for step in advice.reasoning_chain]
     return advice.model_copy(update={"reasoning_chain": steps, "evidence": [bad]})
 
 
+NOT_FOUND = "指针 bank_transaction BT-NONE: 查无此行"
+
+
 @pytest.mark.external
 @pytest.mark.parametrize(
-    ("change", "judgments", "error"),
+    ("change", "judgments", "errors"),
     [
-        (lambda a: a, [], f"引用的判断 {GEN04_ID} 不在状态中"),
-        (lambda a: a.model_copy(update={"judgment_refs": [JudgmentRef(id=GEN04_ID, version=1)]}), None, STALE_REF),
-        (lambda a: a, [gen04(status=ReviewStatus.pending)], f"引用的判断 {GEN04_ID} 尚未确认 (pending)"),
-        (lambda a: a.model_copy(update={"judgment_refs": []}), None, f"没有引用必须引用的判断 {GEN04_ID}"),
-        (unresolvable, None, "没有一个能解析的证据指针"),
+        (lambda a: a, [], [f"引用的判断 {GEN04_ID} 不在状态中"]),
+        (
+            lambda a: a.model_copy(update={"judgment_refs": [JudgmentRef(id=GEN04_ID, version=1)]}),
+            None,
+            [f"引用的判断 {GEN04_ID} 第 1 版不是当前版本 (第 2 版)"],
+        ),
+        (lambda a: a, [gen04(status=ReviewStatus.pending)], [f"引用的判断 {GEN04_ID} 尚未确认 (pending)"]),
+        (lambda a: a.model_copy(update={"judgment_refs": []}), None, [f"没有引用必须引用的判断 {GEN04_ID}"]),
+        (
+            unresolvable,
+            None,
+            [*(f"第 {i} 步{NOT_FOUND}" for i in range(5)), f"evidence 中{NOT_FOUND}", "没有一个能解析的证据指针"],
+        ),
     ],
 )
-async def test_going_concern_reference_failures(change: Any, judgments: list[Judgment] | None, error: str) -> None:
+async def test_going_concern_reference_failures(
+    change: Any, judgments: list[Judgment] | None, errors: list[str]
+) -> None:
     """验收 3: 引用的判断不在状态中, 不是当前版本, 未确认, 没引用 required_refs 中的判断, 或指针全部解析不了
-    → reference, 不重试; 引用级不过时不查语义."""
-    report = await check_gc(change(gc_advice()), judgments)
-    assert (report.level_failed, report.retryable) == ("reference", False)
-    assert error in report.errors and not any("ASA570-P18" in e for e in report.errors)
+    → reference, 不重试, errors 恰为引用级的问题. 底稿另带一处语义缺陷 (第 3 步只引 P19, 语义级照查会报 P18), 引用级
+    不过时不查语义."""
+    advice = change(with_step(gc_advice(), 3, evidence=gc_advice().reasoning_chain[3].evidence[1:]))
+    assert going_concern_semantics(advice)  # 底稿确有语义缺陷
+    report = await check_gc(advice, judgments)
+    assert (report.level_failed, report.retryable, report.errors) == ("reference", False, errors)
 
 
 @pytest.mark.external
@@ -1698,23 +1712,34 @@ async def test_going_concern_chain_semantic_failures(change: Any, error: str) ->
 
 
 @pytest.mark.external
-@pytest.mark.parametrize("outcome", list(GoingConcernOutcome))
-async def test_going_concern_outcome_needs_p18_standard_step(outcome: GoingConcernOutcome) -> None:
-    """验收 4 (ASA 570 第 18 段): 建议不是 no_material_uncertainty 时, 推理链须有引用 ASA570-P18 的 standard 步骤; 在
-    fact 步骤或 evidence 列表里引用不算. 第 3 步去掉 P18 (留 P19), P18 挪进第 2 步 (fact) 与 evidence: 只有
-    no_material_uncertainty 通过."""
+@pytest.mark.parametrize(
+    ("outcome", "required", "wrong"),
+    [
+        (GoingConcernOutcome.no_material_uncertainty, None, "ASA570-P17"),
+        (GoingConcernOutcome.material_uncertainty_disclosed, "ASA570-P18", "ASA570-P17"),
+        (GoingConcernOutcome.material_uncertainty_not_disclosed, "ASA570-P18", "ASA570-P17"),
+        (GoingConcernOutcome.basis_inappropriate, "ASA570-P17", "ASA570-P18"),
+    ],
+)
+async def test_going_concern_outcome_needs_its_standard_step(
+    outcome: GoingConcernOutcome, required: str | None, wrong: str
+) -> None:
+    """验收 4 (协调者 10-20 裁定, 审核 R183-03): 须引的准则按建议取值区分 (OUTCOME_STANDARDS 与本表一致):
+    basis_inappropriate 须有引用 ASA570-P17 的 standard 步骤, 两种存在重大不确定性的须引 ASA570-P18,
+    no_material_uncertainty 不另要求; 在 fact 步骤或 evidence 列表里引用不算. 第 3 步只引另一段 (wrong), 须引的片段挪进
+    第 2 步 (fact) 与 evidence: 除 no_material_uncertainty 外都判 semantic; 第 3 步改引须引的片段后都通过."""
+    assert OUTCOME_STANDARDS.get(outcome) == required
     advice = gc_advice(proposed_outcome=outcome)
-    p18, p19 = advice.reasoning_chain[3].evidence
+    needed = gc_pointer("standard", required or "ASA570-P18")
     [letter] = advice.reasoning_chain[2].evidence
-    advice = with_step(with_step(advice, 3, evidence=[p19]), 2, evidence=[letter, p18])
-    advice = advice.model_copy(update={"evidence": [*advice.evidence, p18]})
-    report = await check_gc(advice)
-    if outcome is GoingConcernOutcome.no_material_uncertainty:
+    misplaced = with_step(with_step(advice, 3, evidence=[gc_pointer("standard", wrong)]), 2, evidence=[letter, needed])
+    report = await check_gc(misplaced.model_copy(update={"evidence": [*advice.evidence, needed]}))
+    if required is None:
         assert (report.level_failed, report.errors) == (None, [])
     else:
-        error = f"建议 {outcome} 而推理链没有引用 ASA570-P18 的 standard 步骤"
+        error = f"建议 {outcome} 而推理链没有引用 {required} 的 standard 步骤"
         assert (report.level_failed, report.errors) == ("semantic", [error])
-    assert (await check_gc(gc_advice(proposed_outcome=outcome))).level_failed is None  # 第 3 步引用 P18 时都通过
+    assert (await check_gc(with_step(advice, 3, evidence=[needed]))).level_failed is None
 
 
 @pytest.mark.external

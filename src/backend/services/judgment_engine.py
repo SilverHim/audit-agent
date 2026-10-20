@@ -256,20 +256,28 @@ def judgment_ref_errors(
     return errors
 
 
-UNCERTAINTY_STANDARD = "ASA570-P18"  # 审计师就是否存在重大不确定性下结论 (ASA 570 第 18 段)
+# 建议的结论 → 推理链须有引用它的 standard 步骤的准则片段 (需求 R183, 协调者 10-20 裁定): 持续经营假设不恰当引
+# ASA 570 第 17 段 (就持续经营基础是否恰当下结论), 存在重大不确定性 (不论披露是否充分) 引第 18 段 (就是否存在重大
+# 不确定性下结论); 不存在重大不确定性不另要求
+OUTCOME_STANDARDS: dict[GoingConcernOutcome, str] = {
+    GoingConcernOutcome.material_uncertainty_disclosed: "ASA570-P18",
+    GoingConcernOutcome.material_uncertainty_not_disclosed: "ASA570-P18",
+    GoingConcernOutcome.basis_inappropriate: "ASA570-P17",
+}
 
 
 def going_concern_semantics(advice: GoingConcernAdvice) -> list[str]:
-    """持续经营结论建议的语义校验, 返回错误 (空为通过): 推理链 (chain_semantics); 建议不是 no_material_uncertainty 时
-    推理链须有引用 UNCERTAINTY_STANDARD 的 standard 步骤 (只在 evidence 列表或别的步骤里引用不算)."""
+    """持续经营结论建议的语义校验, 返回错误 (空为通过): 推理链 (chain_semantics); 推理链须有引用 OUTCOME_STANDARDS 中该
+    建议的片段的 standard 步骤 (只在 evidence 列表或别的步骤里引用不算)."""
     errors = chain_semantics(advice.reasoning_chain)
-    cites_uncertainty = any(
+    required = OUTCOME_STANDARDS.get(advice.proposed_outcome)
+    cited = any(
         step.kind is StepKind.standard
-        and any(p.source_type == "standard" and p.source_id == UNCERTAINTY_STANDARD for p in step.evidence)
+        and any(p.source_type == "standard" and p.source_id == required for p in step.evidence)
         for step in advice.reasoning_chain
     )
-    if advice.proposed_outcome is not GoingConcernOutcome.no_material_uncertainty and not cites_uncertainty:
-        errors.append(f"建议 {advice.proposed_outcome} 而推理链没有引用 {UNCERTAINTY_STANDARD} 的 standard 步骤")
+    if required is not None and not cited:
+        errors.append(f"建议 {advice.proposed_outcome} 而推理链没有引用 {required} 的 standard 步骤")
     return errors
 
 

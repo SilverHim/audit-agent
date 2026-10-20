@@ -200,8 +200,9 @@ class AuditPlanDraft(Model):
 class GoingConcernAdvice(Model):
     """FIN-02 由大模型写的持续经营结论建议 (需求 R183): 汇总持续经营评价与期后事项的判断, 建议结论, 审计师在闸门
     FIN-02 定结论. 推理链的规则同 JudgmentDraft; judgment_refs 须为当前版且已确认的判断, 含当前有效的持续经营评价判断
-    (ValidationContext.required_refs); 建议不是 no_material_uncertainty 时推理链须有引用 ASA570-P18 的 standard 步骤.
-    校验见 judgment_engine.check_going_concern."""
+    (ValidationContext.required_refs); 推理链须有引用该建议所需准则的 standard 步骤 (basis_inappropriate 为
+    ASA570-P17, 两种存在重大不确定性的为 ASA570-P18, judgment_engine.OUTCOME_STANDARDS). 校验见
+    judgment_engine.check_going_concern."""
 
     proposed_outcome: GoingConcernOutcome  # 建议的结论
     conclusion: str  # 结论
