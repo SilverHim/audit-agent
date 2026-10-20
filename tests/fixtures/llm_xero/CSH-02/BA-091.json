@@ -1,0 +1,175 @@
+{
+  "conclusion": "The bank confirms AUD 11,581.23 for account 12345679 at 30 September 2026, which agrees with GL account 091, and accrued interest of AUD 48.53 earned up to 30 September 2026 that is not yet credited to the account. No GL entry on any account from 25 to 30 September 2026 records that amount (X-CSH-02-1-D04-1), so interest income and the interest receivable are understated by AUD 48.53. The amount exceeds the clearly trivial threshold of AUD 16.22 and is accumulated as a misstatement (ASA 450 para 5).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The bank confirms a balance of AUD 11,581.23 (credit) for account 12345679 as at 30 September 2026.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-66b0be79cdd4",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "GL account 091 shows AUD 11,581.23 at 30 September 2026, so the confirmed balance agrees with the book balance.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "091",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The reply states accrued interest of AUD 48.53 at 30 September 2026, in the customer's favour and not yet credited to the account.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-66b0be79cdd4",
+          "locator": "accrued_interest_cents",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The only GL entry on account 091 from 25 to 30 September 2026 is XJ-601-1, a transfer of AUD 3,500.00 to the Business Bank Account; rule D04 found no line of 4853 cents on any account in that window (X-CSH-02-1-D04-1).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-601-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "The auditor investigates exceptions to determine whether they indicate misstatements (ASA 505 para 14).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Misstatements identified during the audit, other than those that are clearly trivial, are accumulated (ASA 450 para 5).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P05",
+          "locator": "para 5",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Interest earned up to 30 September 2026 has not been accrued in the books, so interest income and the interest receivable are both understated by AUD 48.53 (4853 cents).",
+      "evidence": [],
+      "from_steps": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "AUD 48.53 exceeds the clearly trivial threshold of AUD 16.22 (1622 cents), so the unrecorded interest is a factual misstatement to be accumulated.",
+      "evidence": [],
+      "from_steps": [
+        4,
+        5,
+        6
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-66b0be79cdd4",
+      "locator": "confirmed_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "091",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-66b0be79cdd4",
+      "locator": "accrued_interest_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-601-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA505-P14",
+      "locator": "para 14",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P05",
+      "locator": "para 5",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A GL entry outside 25 to 30 September 2026 that accrues the AUD 48.53, or a corrected reply from the bank withdrawing the accrued interest, would show the interest is recorded or not receivable.",
+  "proposed_action": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Interest income",
+    "assertion": "Completeness",
+    "amount_cents": 4853,
+    "direction": "understated"
+  },
+  "self_confidence": 0.85
+}

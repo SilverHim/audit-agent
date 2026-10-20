@@ -376,6 +376,13 @@
       "xero_refs": []
     },
     {
+      "path": "llm/CSH-02/BA-091.json",
+      "sha256": "b1ac70c715a7d3d3506be97e9857d7941068b5003674f09f399125f2e5ac91f9",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "llm/DOC-04/CON-X01.json",
       "sha256": "1a20c44f75ea2d24e8401fe96ab8f3cb87916a03184783ac28f37b487c74c108",
       "synthetic": true,
@@ -392,6 +399,20 @@
     {
       "path": "llm/DOC-04/CON-X03.json",
       "sha256": "1b6179028092defe5c0a6a93bc183543fbd8df732869eb8930db8bb5f77cd587",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-06/BA-090.json",
+      "sha256": "94aca4fc7a1b8f748b4f52101c312accae1070a9b4d0fdb9703526538497ed38",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/DOC-06/BA-091.json",
+      "sha256": "f92bcbaf224ea14cf0cee9ebfb89923b038ae22f726e7de83ccfd3ea7e970886",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -651,6 +672,27 @@
     {
       "path": "llm/README.md",
       "sha256": "089e57cdbb3567660f39b8dfe6fc826bced897189eab017b95e1458de7ba36e0",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-03/CON-X01.json",
+      "sha256": "231a9369c7db65f1fa9cd261d72ea4dc704a211a6d623724ea52d3e1995eb315",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-03/CON-X02.json",
+      "sha256": "334a6614d1e9599a7d99dcdfb6c333096997649f8ac74056f96154c17cca6d5a",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/REV-03/CON-X03.json",
+      "sha256": "1719bd452297ebdf625bb633d62370e2b581a62c0c7f355933c37b084304e7de",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

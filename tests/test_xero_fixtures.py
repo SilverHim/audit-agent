@@ -1,7 +1,9 @@
 """Xero 演示的大模型 fixture 守卫 (R78 验收 4 (b) 至 (d)): tests/fixtures/llm_xero/<程序>/<对象>.json. 上传分类
 (DOC-CLASSIFY, 需求 R267) 的 fixture 按文件名主干取, 补造的每份要上传的 PDF 一份, 另有 mock 下 Xero 项目上传的分类.
 登记了对应的程序 (fixture_sets.expected_documents), document 指针还须指向对应的补造 PDF (需求 R108,
-xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记.
+xero_expected_document); 没登记的程序只做通用核对, 后续需求要核对应时再登记. REV-03 三份合同的 fixture 经真实
+判断引擎一次通过, 结论与证据按 Xero 演示数据集设计第 6.2 节 (需求 R109). DOC-06 两份回函与 CSH-02 BA-091 的 fixture
+经 CSH-04 → DOC-06 → CSH-02 一次执行验收 (需求 R111).
 
 正本与运行副本 (data/xero_demo/20261017-q1/llm) 相同由 tests/test_knowledge.py 按 FIXTURE_SETS 核对. 这里按集合包含
 断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里 (要核对文件对应的在
@@ -15,34 +17,71 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from backend.agents.ingest import CLASSIFY
+from backend.adapters.llm import MockLLMClient
+from backend.agents.base import AgentDeps, RunContext
+from backend.agents.evidence import EvidenceAgent
+from backend.agents.fieldwork import FieldworkAgent
+from backend.agents.ingest import CLASSIFY, IngestAgent
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
-from backend.contracts.llm_outputs import DocumentClassification
-from backend.contracts.models import DocumentType, TrailKind
+from backend.contracts.knowledge import ProcedureTemplate
+from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassification
+from backend.contracts.models import (
+    ConfirmationResult,
+    CriticVerdict,
+    DocumentType,
+    MisstatementDraft,
+    Phase,
+    ProcedureRun,
+    ProposedAction,
+    ReviewStatus,
+    RunStatus,
+    StepKind,
+    TaskKind,
+    TrailEntry,
+    TrailKind,
+)
+from backend.contracts.services import JudgmentContext, JudgmentOutcome
+from backend.contracts.state import EngagementState, StatePatch
 from backend.core.config import get_settings
+from backend.orchestration.nodes import apply_patch
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, output_model
 from backend.services.procedure_library import ProcedureLibrary
+from backend.services.sampling import sample_point
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_PROFILE,
     FakeDataStore,
     FakeEngagementStore,
     FakeFinancialStore,
+    FakeRuleEngine,
     FakeTrail,
+    make_ctx,
     make_runner,
 )
 from tests.fixture_sets import XERO, XERO_DEMO, ExpectedDocuments, FixtureSet, expected_documents
 from tests.test_knowledge import document_pointers
-from tests.xero_fakes import xero_tables, xero_uploads
+from tests.xero_fakes import (
+    XERO_RULES,
+    make_xero_deps,
+    xero_contracts,
+    xero_documents,
+    xero_engagement,
+    xero_presets,
+    xero_profile,
+    xero_tables,
+    xero_traits,
+    xero_uploads,
+)
 
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 EVIDENCE_TYPES = {t.value for t in DOCUMENT_EVIDENCE}  # 能作证据的文件类型, 判断引擎的文件指针映射为准
@@ -370,3 +409,329 @@ async def test_xero_upload_is_classified_by_the_runtime_copy() -> None:
         if e.kind is TrailKind.data and e.payload.get("document_id") == invoice.id and e.payload["action"] == "classify"
     ]
     assert classified["reason"] == runtime["reason"]
+
+
+# ── REV-03 (需求 R109): 三份收入合同的条款评价, 经真实判断引擎 ──
+
+REV03_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]
+
+
+@dataclass
+class Rev03:
+    patch: StatePatch  # A6 执行 REV-03 一次的片段
+    calls: list[TrailEntry]  # 大模型调用的留痕, 按调用顺序
+
+
+async def run_rev03() -> Rev03:
+    """A6 在 Xero 假存储上执行 REV-03 第 1 次 (同 test_fieldwork_rev03 的 setup): 合同与文件登记为演示导入之后的,
+    目标为 Xero 预置的收入两条; 主模型与复核模型都是读正本 (llm_xero) 的 MockLLMClient, A7 按自主度 L2 跳过."""
+    trail = FakeTrail()
+    client = MockLLMClient(XERO.fixtures)
+    deps = make_xero_deps(trail=trail, llm=client, review_llm=client)
+    engagement = xero_engagement()
+    ctx = make_ctx(deps, "REV-03", engagement=engagement)
+    procedure = ctx.procedure.model_copy(
+        update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"]}
+    )
+    objectives, risks = xero_presets()
+    params = deps.library.resolve_params(
+        ctx.template, engagement, ctx.state, None, traits=xero_traits(), profile=xero_profile()
+    )
+    state = ctx.state | {
+        "procedure_pack": [procedure],
+        "audit_objectives": objectives,
+        "risk_register": risks,
+        "documents": xero_documents("fieldwork"),
+    }
+    run = ctx.run.model_copy(update={"params_snapshot": params})
+    patch = await FieldworkAgent(deps).run(RunContext(engagement, procedure, ctx.template, run, state))  # type: ignore[arg-type]
+    return Rev03(patch, [e for e in trail.entries if e.kind is TrailKind.llm_call])
+
+
+@pytest.fixture(scope="module")
+def rev03() -> Rev03:
+    return asyncio.run(run_rev03())
+
+
+@pytest.mark.external
+def test_rev03_fixtures_pass_real_engine(rev03: Rev03) -> None:
+    """验收 1, 5: 三份合同各调一次大模型 (第 1 次就通过), 提示词的 Standards 依次列出 AASB15-P31, P35, P38; 三条判断
+    J-REV-03-1-CON-X01 至 X03 都是 accept, 没有错报草稿, 推理链没有 assumption 步骤, A7 按 L2 跳过; 三条 normal
+    任务, 没有 failed 任务; 执行成功."""
+    assert [(e.procedure_id, e.payload["fixture_key"]) for e in rev03.calls] == [("REV-03", c) for c in REV03_CONTRACTS]
+    assert {(e.payload["attempt"], e.payload["level_failed"]) for e in rev03.calls} == {(1, None)}
+    for entry in rev03.calls:
+        prompt = entry.payload["messages"][0]["content"]
+        listed = prompt.split("Standards (cite only these IDs):\n", 1)[1].split("\n## ", 1)[0].splitlines()
+        cited = [line.split(" ", 2)[1] for line in listed if line.startswith("- ")]
+        assert cited == ["AASB15-P31", "AASB15-P35", "AASB15-P38"], entry.payload["fixture_key"]
+    judgments = rev03.patch["judgments"]
+    assert [j.id for j in judgments] == [f"J-REV-03-1-{c}" for c in REV03_CONTRACTS]
+    for j in judgments:
+        assert (j.proposed_action, j.misstatement_draft, j.critic_verdict) == (
+            ProposedAction.accept,
+            None,
+            CriticVerdict.skipped,
+        )
+        assert j.critic_reason is not None and j.critic_reason.startswith("L2")
+        assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}, j.id
+    assert [(t.id, t.kind) for t in rev03.patch["review_tasks"]] == [
+        (f"T-J-REV-03-1-{c}-v1", TaskKind.normal) for c in REV03_CONTRACTS
+    ]
+    [run] = rev03.patch["procedure_runs"]
+    assert run.status is RunStatus.succeeded
+
+
+def sentence_with(text: str, anchor: str) -> str:
+    """结论中含 anchor (条款 ID) 的那一句."""
+    [found] = [s for s in re.split(r"(?<=\.)\s+", text) if anchor in s]
+    return found
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("contract", "transfer", "other", "standards"),
+    [
+        (  # 完工日 (部署且 Project Sponsor 签完工证书) 某一时点转移; 7.2 完工前终止无权收款, 第 35(b)(c) 段不满足
+            "CON-X01",
+            ("Completion Date", "deployed", "Project Sponsor", "Completion Certificate", "point in time", "AASB15-P38"),
+            ("7.2", "terminated before the Completion Date", "not entitled to payment", "35(b) and (c)", "not met"),
+            ["AASB15-P31", "AASB15-P35", "AASB15-P38"],
+        ),
+        (  # 每个自然月随服务提供取得利益, 随时间转移; 6.1 响应超时可索赔 10%, 取决于未来事件, 对价可变
+            "CON-X02",
+            ("each calendar month", "simultaneously receives and consumes", "over time", "35(a)"),
+            ("6.1", "10%", "4 business hours", "future event", "consideration variable"),
+            ["AASB15-P31", "AASB15-P35"],
+        ),
+        (  # 每个驻场日按客户签字的工时表确认, 随时间转移; 6.1 项目经理缺席每半日贷记 350, 取决于未来事件, 对价可变
+            "CON-X03",
+            ("On-site Day", "signs the timesheet", "over time", "35(a)"),
+            ("6.1", "$350.00", "half day", "absent", "future event", "consideration variable"),
+            ["AASB15-P31", "AASB15-P35"],
+        ),
+    ],
+)
+def test_rev03_conclusion_and_evidence(
+    rev03: Rev03, contract: str, transfer: tuple[str, ...], other: tuple[str, ...], standards: list[str]
+) -> None:
+    """验收 2 至 4: 结论里定转移的一句引 T1 (转移事件与方式), 另一句引 T3 (影响收入的其他条款); 证据含该合同文件
+    T1 (第 2 页), T3 (第 3 页) 两条款的指针与所列准则片段. 只查关键词, 不比整句. 推理链的指针也核对 (页面的推理链与
+    A7 第一轮证据都用它们, 判断引擎不查这几项): evidence 恰为推理链各步指针去重后的并集; 全部文件指针的 (条款 ID, 页)
+    与该合同的条款一致; 准则片段都在 REV-03 的 standards 内."""
+    [j] = [j for j in rev03.patch["judgments"] if j.subject_id == contract]
+    first, second = sentence_with(j.conclusion, f"{contract}-T1"), sentence_with(j.conclusion, f"{contract}-T3")
+    for text in transfer:
+        assert text in first, text
+    for text in other:
+        assert text in second, text
+    document = {c.id: c.document_id for c in xero_contracts()}[contract]
+    pointers = {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence}
+    assert {("document", document, f"{contract}-T1", 2), ("document", document, f"{contract}-T3", 3)} <= pointers
+    assert {(p.source_id, p.locator) for p in j.evidence if p.source_type == "standard"} >= {
+        (s, f"para {s.removeprefix('AASB15-P')}") for s in standards
+    }
+    chain = [p for step in j.reasoning_chain for p in step.evidence]
+    keys = [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence]
+    assert len(keys) == len(set(keys)) and set(keys) == {(p.source_type, p.source_id, p.locator, p.page) for p in chain}
+    [found] = [c for c in xero_contracts() if c.id == contract]
+    terms = {(t.id, t.page) for t in found.terms}
+    assert {(p.locator, p.page) for p in [*chain, *j.evidence] if p.source_type == "document"} <= terms
+    allowed = set(LIBRARY.load("REV-03").standards)
+    assert {p.source_id for p in [*chain, *j.evidence] if p.source_type == "standard"} <= allowed
+
+
+# ── 函证 (需求 R111): 两份回函抽取 (DOC-06) 与 BA-091 的函证判断 (CSH-02), 经真实判断引擎 ──
+
+REPLY_IDS = {"BA-090": "DOC-d111883a3741", "BA-091": "DOC-66b0be79cdd4"}  # confirmations/12345678.pdf, 12345679.pdf
+
+
+@dataclass
+class RecordingJudgments:
+    """真实判断引擎外包一层, 记下每次的判断上下文 (CSH-02 交给大模型的数据)."""
+
+    inner: Any
+    contexts: list[JudgmentContext] = field(default_factory=list)
+
+    async def judge(
+        self, eid: str, template: ProcedureTemplate, run: ProcedureRun, ctx: JudgmentContext, performed_by: str
+    ) -> JudgmentOutcome:
+        self.contexts.append(ctx)
+        outcome: JudgmentOutcome = await self.inner.judge(eid, template, run, ctx, performed_by)
+        return outcome
+
+
+@dataclass
+class Cash:
+    sent: StatePatch  # CSH-04 (A5 发函, 存回函, 建函证第 1 版)
+    extracted: StatePatch  # DOC-06 (A3 抽回函)
+    judged: StatePatch  # CSH-02 (A6 比对余额与应计利息, 判断)
+    calls: list[TrailEntry]  # 大模型调用的留痕, 按调用顺序
+    contexts: list[JudgmentContext]  # CSH-02 的判断上下文
+
+
+def cash_context(deps: AgentDeps, state: EngagementState, procedure_id: str) -> RunContext:
+    """Xero 项目上某条现金程序第 1 次执行的上下文: 关联 Xero 预置的现金目标, 参数按状态与数据集声明解析."""
+    engagement = xero_engagement()
+    ctx = make_ctx(deps, procedure_id, engagement=engagement)
+    procedure = ctx.procedure.model_copy(update={"phase": Phase.P2_Executing, "objective_ids": ["OBJ-CASH-EXI"]})
+    params = deps.library.resolve_params(
+        ctx.template, engagement, state, None, traits=xero_traits(), profile=xero_profile()
+    )
+    run = ctx.run.model_copy(update={"params_snapshot": params})
+    return RunContext(engagement, procedure, ctx.template, run, state | {"procedure_pack": [procedure]})  # type: ignore[arg-type]
+
+
+async def run_cash() -> Cash:
+    """CSH-04 → DOC-06 → CSH-02 依次执行一次, 后一条看前一条并入后的状态 (同 GraphNodes 的 apply_patch). Xero 假存储,
+    假函证平台回补造的回函 PDF; 规则引擎为 FakeRuleEngine(XERO_RULES), 明显微小为闸门定的 1622; 主模型与复核模型
+    都读正本 (llm_xero)."""
+    trail = FakeTrail()
+    client = MockLLMClient(XERO.fixtures)
+    deps = make_xero_deps(trail=trail, llm=client, review_llm=client, rules=FakeRuleEngine(XERO_RULES))
+    objectives, risks = xero_presets()
+    state = make_ctx(deps, "CSH-04", engagement=xero_engagement()).state | {
+        "audit_objectives": objectives,
+        "risk_register": risks,
+        "documents": xero_documents("fieldwork"),
+        "materiality_cents": 32431,
+        "performance_materiality_cents": 16216,
+        "clearly_trivial_cents": 1622,
+    }
+    sent = await EvidenceAgent(deps).run(cash_context(deps, state, "CSH-04"))  # type: ignore[arg-type]
+    state = apply_patch(state, sent)  # type: ignore[arg-type]
+    extracted = await IngestAgent(deps).run(cash_context(deps, state, "DOC-06"))
+    state = apply_patch(state, extracted)
+    judgments = RecordingJudgments(deps.judgments)  # 只为 CSH-02 记判断上下文 (DOC-06 经 call_llm 调大模型)
+    judging = replace(deps, judgments=judgments)
+    judged = await FieldworkAgent(judging).run(cash_context(judging, state, "CSH-02"))
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    return Cash(sent, extracted, judged, calls, judgments.contexts)
+
+
+@pytest.fixture(scope="module")
+def cash() -> Cash:
+    return asyncio.run(run_cash())
+
+
+@pytest.mark.external
+def test_doc06_fixtures_extract_both_replies(cash: Cash) -> None:
+    """验收 1, 2: CSH-04 建 C-BA-090, C-BA-091 第 1 版并存回函; DOC-06 读回函抽出第 2 版 (BA-090 透支为负, 回函写 nil
+    的应计利息为 0; BA-091 应计利息 4853, 在客户一方为正), 两份回函 extracted; 两次调用一次通过 (含账号的语义校验),
+    没有提示 (回函写明的渠道与回执相符). 抽取结果按 fixture 的输出 (留痕的 raw) 整组比对: 六个字段的值与各自的页
+    (渠道在第 2 页, 其余第 1 页), 都指向本户回函; 函证第 2 版只并入余额, 余额日, 应计利息与指针 (银行名与渠道是
+    CSH-04 写下的)."""
+    assert [(c.id, c.version, c.reply_document_id) for c in cash.sent["confirmations"]] == [
+        ("C-BA-090", 1, REPLY_IDS["BA-090"]),
+        ("C-BA-091", 1, REPLY_IDS["BA-091"]),
+    ]
+    extracted = {c.id: c for c in cash.extracted["confirmations"]}
+    assert {
+        c.id: (c.version, c.confirmed_balance_cents, c.balance_date, c.accrued_interest_cents)
+        for c in extracted.values()
+    } == {
+        "C-BA-090": (2, -1090044, date(2026, 9, 30), 0),
+        "C-BA-091": (2, 1158123, date(2026, 9, 30), 4853),
+    }
+    doc06 = {e.payload["fixture_key"]: e.payload for e in cash.calls if e.procedure_id == "DOC-06"}
+    expected = {
+        "BA-090": ("12345678", -1090044, 0),
+        "BA-091": ("12345679", 1158123, 4853),
+    }
+    for account, (account_no, balance, accrued) in expected.items():
+        output = ConfirmationExtraction.model_validate_json(doc06[account]["raw"])
+        fields = output.model_dump(mode="json", exclude={"evidence"})
+        assert fields == {
+            "confirming_party": "Wattlebrook Bank Limited",
+            "account_no": account_no,
+            "confirmed_balance_cents": balance,
+            "balance_date": "2026-09-30",
+            "receipt_channel": "direct_email",
+            "accrued_interest_cents": accrued,
+        }, account
+        reply = REPLY_IDS[account]
+        assert {p.locator: (p.source_id, p.page) for p in output.evidence} == {
+            name: (reply, 2 if name == "receipt_channel" else 1) for name in fields
+        }, account
+        assert doc06[account]["notes"] == [], account
+        assert [p.page for p in extracted[f"C-{account}"].evidence] == [p.page for p in output.evidence]
+    assert sorted((d.id, d.status) for d in cash.extracted["documents"]) == sorted(
+        (reply, "extracted") for reply in REPLY_IDS.values()
+    )
+    doc06 = [e for e in cash.calls if e.procedure_id == "DOC-06"]
+    assert [(e.payload["fixture_key"], e.payload["attempt"], e.payload["level_failed"]) for e in doc06] == [
+        ("BA-090", 1, None),
+        ("BA-091", 1, None),
+    ]
+
+
+@pytest.mark.external
+def test_csh02_judges_only_the_unaccrued_interest(cash: Cash) -> None:
+    """验收 3: 两户余额都相符 (第 3 版 agreed, 差额 0); 只有 BA-091 的 X-CSH-02-1-D04-1 (4853, 搜索区间 09-25 至 09-30,
+    没有匹配的行), 没有 D01; 只判断 BA-091 (BA-090 不调大模型). BA-091 的上下文: 差额 0, 期后没有本户流水, 期末前分录
+    只有 XJ-601-1 (091 贷 350000), 规则例外只有该 D04."""
+    confirmations = {c.id: c for c in cash.judged["confirmations"]}
+    assert {c.id: (c.version, c.book_balance_cents, c.difference_cents, c.result) for c in confirmations.values()} == {
+        "C-BA-090": (3, -1090044, 0, ConfirmationResult.agreed),
+        "C-BA-091": (3, 1158123, 0, ConfirmationResult.agreed),
+    }
+    [d04] = cash.judged["exceptions"]
+    assert (d04.id, d04.rule_id, d04.source_ids, d04.amount_cents) == ("X-CSH-02-1-D04-1", "D04", ["BA-091"], 4853)
+    assert d04.detail == {
+        "accrued_interest_cents": 4853,
+        "search_from": "2026-09-25",
+        "search_to": "2026-09-30",
+        "matched_line_ids": [],
+    }
+    assert [(e.procedure_id, e.payload["fixture_key"]) for e in cash.calls if e.procedure_id != "DOC-06"] == [
+        ("CSH-02", "BA-091")
+    ]
+    [jctx] = cash.contexts
+    assert (jctx.subject_id, jctx.data["difference_cents"], jctx.data["subsequent_transactions"]) == ("BA-091", 0, [])
+    assert [(r["id"], r["credit_cents"]) for r in jctx.data["period_end_entries"]] == [("XJ-601-1", 350000)]
+    assert [x.id for x in jctx.rule_findings] == ["X-CSH-02-1-D04-1"]
+
+
+@pytest.mark.external
+def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
+    """验收 4, 5: BA-091 的固定输出经真实判断引擎一次通过 (草稿金额 4853 等于归因例外的金额): misstatement, 草稿
+    {factual, Interest income, Completeness, 4853, understated}; 结论写明 09-30 已产生而尚未入账的利息 48.53, 窗口内
+    总账没有同额计提, 利息收入与应收少记, 高于明显微小 16.22 须累计; 证据为回函两处 (第 1 页), 试算表 091, XJ-601-1
+    与两段准则, 恰为推理链各步指针去重后的并集. 判断 pending, 解释该 D04; 因 always_review 建 normal 任务. A7 未命中
+    触发规则 (建议 misstatement 不中主规则, 没有 assumption 步骤, 抽样点不小于 0.05), 记 skipped."""
+    [call] = [e for e in cash.calls if e.procedure_id == "CSH-02"]
+    assert (call.payload["attempt"], call.payload["level_failed"]) == (1, None)
+    [j] = cash.judged["judgments"]
+    assert (j.id, j.proposed_action, j.review_status, j.exception_ids) == (
+        "J-CSH-02-1-BA-091",
+        ProposedAction.misstatement,
+        ReviewStatus.pending,
+        ["X-CSH-02-1-D04-1"],
+    )
+    assert j.misstatement_draft == MisstatementDraft(
+        type="factual", account="Interest income", assertion="Completeness", amount_cents=4853, direction="understated"
+    )
+    unaccrued = sentence_with(j.conclusion, "48.53 earned")
+    assert all(text in unaccrued for text in ("30 September 2026", "not yet credited")), unaccrued
+    understated = sentence_with(j.conclusion, "understated")
+    assert all(text in understated for text in ("25 to 30 September 2026", "interest income", "receivable"))
+    trivial = sentence_with(j.conclusion, "clearly trivial")
+    assert all(text in trivial for text in ("16.22", "accumulated", "ASA 450 para 5")), trivial
+    reply = REPLY_IDS["BA-091"]
+    assert {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence} == {
+        ("document", reply, "accrued_interest_cents", 1),
+        ("document", reply, "confirmed_balance_cents", 1),
+        ("trial_balance", "091", "balance_cents", None),
+        ("journal_entry", "XJ-601-1", "credit_cents", None),
+        ("standard", "ASA505-P14", "para 14", None),
+        ("standard", "ASA450-P05", "para 5", None),
+    }
+    chain = [(p.source_type, p.source_id, p.locator, p.page) for s in j.reasoning_chain for p in s.evidence]
+    keys = [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence]
+    assert len(keys) == len(set(keys)) and set(keys) == set(chain)  # evidence 为推理链指针去重后的并集
+    assert StepKind.assumption not in {s.kind for s in j.reasoning_chain}
+    assert [(t.id, t.kind) for t in cash.judged["review_tasks"]] == [("T-J-CSH-02-1-BA-091-v1", TaskKind.normal)]
+    assert (j.critic_verdict, j.critic_reason) == (CriticVerdict.skipped, "未命中独立复核的触发规则")
+    assert sample_point(j.id) >= 0.05  # GEN-09 的 sample_rate
+    [run] = cash.judged["procedure_runs"]
+    assert run.status is RunStatus.succeeded

@@ -1,0 +1,146 @@
+{
+  "conclusion": "Control of the project management services transfers over time: each On-site Day is accepted when the customer signs the timesheet for that day (CON-X03-T1), and the customer receives and consumes the benefit of each day's work as it is performed (paragraph 35(a)), so revenue is recognised for each On-site Day on its customer-signed timesheet. Clause 6.1 (CON-X03-T3) requires a credit of $350.00 for each half day the project manager is absent, a credit that depends on a future event and makes the consideration variable; the invoice is issued after the sixth On-site Day and is due within 10 days (CON-X03-T2).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Clause 4.1 (CON-X03-T1): each On-site Day is accepted when the customer signs the timesheet for that day.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-c90b3e398274",
+          "locator": "CON-X03-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 6.1 (CON-X03-T3): if the project manager is absent for part of an On-site Day, the Supplier will credit $350.00 for each half day of absence.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-c90b3e398274",
+          "locator": "CON-X03-T3",
+          "page": 3,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 (CON-X03-T2): the Supplier will issue a tax invoice after the sixth On-site Day, payable within 10 days.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-c90b3e398274",
+          "locator": "CON-X03-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Control transfers over time if the customer simultaneously receives and consumes the benefits provided by the entity's performance as the entity performs (AASB 15 para 35(a)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The customer accepts the services day by day on the signed timesheet, receiving and consuming the benefit of each On-site Day as it is performed, so paragraph 35(a) is met and control transfers over time.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Revenue is recognised for each On-site Day on the customer-signed timesheet, not on the invoice after the sixth day; the clause 6.1 absence credit depends on whether the project manager is absent, a future event, so the consideration is variable.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        2,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "CON-X03-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "CON-X03-T3",
+      "page": 3,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-c90b3e398274",
+      "locator": "CON-X03-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A timesheet left unsigned for an On-site Day, or a term making acceptance of all six days a condition of payment, would defer recognition for the days concerned.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85
+}

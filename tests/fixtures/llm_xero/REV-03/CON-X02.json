@@ -1,0 +1,155 @@
+{
+  "conclusion": "Control of the Support Services transfers over time: the services are provided throughout each calendar month and the customer simultaneously receives and consumes their benefit as the Supplier provides them (CON-X02-T1), meeting paragraph 35(a), so each month's Monthly Fee is recognised as that month's services are provided. Clause 6.1 (CON-X02-T3) lets the customer claim a credit of 10% of the Monthly Fee when a Priority 1 request is not answered within 4 business hours, a credit that depends on a future event and makes the consideration variable; the fee is invoiced on or about the 17th of each month and is due within 14 days (CON-X02-T2).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Clause 4.1 (CON-X02-T1): the Support Services are provided throughout each calendar month, and the customer simultaneously receives and consumes the benefit of the Support Services as the Supplier provides them.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 6.1 (CON-X02-T3): if the Supplier does not respond to a Priority 1 request within 4 business hours, the customer may claim a credit of 10% of the Monthly Fee for that month.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T3",
+          "page": 3,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 and 5.2 (CON-X02-T2): the Monthly Fee for each calendar month is invoiced on or about the 17th day of that month and is payable within 14 days.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Control transfers over time if the customer simultaneously receives and consumes the benefits provided by the entity's performance as the entity performs (AASB 15 para 35(a)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The customer receives and consumes the benefit of the support as it is provided, so paragraph 35(a) is met and control transfers over time, month by month.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The service-level credit arises only if a Priority 1 request is answered late in a month, a future event, so the consideration is variable; it may reduce that month's fee but does not change how control transfers.",
+      "evidence": [],
+      "from_steps": [
+        1,
+        5
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Each month's Monthly Fee is recognised over that month as the support is provided, whatever the invoice date; the clause 6.1 credit is the only term that may reduce it.",
+      "evidence": [],
+      "from_steps": [
+        2,
+        5,
+        6
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T3",
+      "page": 3,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A term requiring the customer to sign off each month's services before they count as provided would make that acceptance the transfer event instead.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}

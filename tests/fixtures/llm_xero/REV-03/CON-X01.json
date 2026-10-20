@@ -1,0 +1,171 @@
+{
+  "conclusion": "Control of the Module passes to DIISR - Small Business Services on the Completion Date, when the Module has been deployed to the customer's environment and the customer's Project Sponsor has signed the Completion Certificate (CON-X01-T1), so revenue is recognised at that point in time (AASB15-P38). Under clause 7.2 (CON-X01-T3) the Supplier is not entitled to payment for the Module if the Statement of Work is terminated before the Completion Date, so the over-time criteria in paragraph 35(b) and (c) are not met. The Supplier may invoice on or after the Completion Date, with payment due within 30 days (CON-X01-T2).",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Clause 4.1 (CON-X01-T1): the Services are complete when the Supplier has deployed the Module to the customer's environment and the customer's Project Sponsor has signed the Completion Certificate (the Completion Date); title to and control of the Module pass to the customer on the Completion Date.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-7795e9312e9f",
+          "locator": "CON-X01-T1",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 7.2 (CON-X01-T3): if the Statement of Work is terminated before the Completion Date, the Supplier is not entitled to payment for the Module.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-7795e9312e9f",
+          "locator": "CON-X01-T3",
+          "page": 3,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Clause 5.1 and 5.2 (CON-X01-T2): the Supplier may issue a tax invoice on or after the Completion Date, payable within 30 days of the invoice.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-7795e9312e9f",
+          "locator": "CON-X01-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when (or as) the customer obtains control of the promised good or service (AASB 15 para 31).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Control transfers over time only if the customer simultaneously receives and consumes the benefits as the entity performs (a), the entity's performance creates an asset the customer controls as it is created (b), or the asset has no alternative use and the entity has an enforceable right to payment for performance completed to date (c) (AASB 15 para 35).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The customer does not control the Module while it is developed, because title and control pass only on the Completion Date, and the Supplier has no right to payment for work done if the Statement of Work ends before completion; paragraph 35(b) and (c) are not met, and the customer obtains the benefit of the Module only once it is deployed, so (a) is not met either.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        4
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "An obligation not satisfied over time is satisfied at a point in time; indicators of control include a present right to payment, legal title and customer acceptance (AASB 15 para 38).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Legal title and control pass, the customer accepts the Module and the right to invoice arises on the Completion Date, so the obligation is satisfied at that point in time and revenue is recognised on the Completion Date.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        2,
+        3,
+        5,
+        6
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "CON-X01-T1",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "CON-X01-T3",
+      "page": 3,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-7795e9312e9f",
+      "locator": "CON-X01-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A side agreement giving the Supplier a right to payment for development completed to date, or giving the customer control of the Module during development, would make control transfer over time under paragraph 35.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.9
+}
