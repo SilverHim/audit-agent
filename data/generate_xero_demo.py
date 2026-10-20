@@ -37,17 +37,17 @@ LLM_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero"  # Xero 大模型 fixtur
 # 与数据集无关, Xero 演示项目里上传 Xero 网页导出时用得到 (需求 R277)
 UPLOAD_FIXTURES = REPO / "tests" / "fixtures" / "llm_variants" / "upload"
 UPLOAD_PROGRAMS = ("DOC-SHEET",)
-# 只开现有 17 条路径的固定输出 (需求 R117: RPT-03 两稿), 作运行副本的补位来源 (需求 R287): 两层按程序目录取, 正本
-# LLM_FIXTURES 在先, 某程序在正本里有目录就整个取正本的, 没有的才整个取这里的; 不按文件混用. 现在只有 RPT-03 由它补,
-# 应用里的演示项目只开现有程序时才走得到报告; 正本有了 RPT-03 (全接入的报告两稿, R189, R259) 即以正本为准, 不必改这里.
-# 测试里 R119 的分层客户端反过来把它排在运行副本之前 (tests/test_e2e_xero17), 两者对现有 17 条读到的文件相同
+# 只开现有 17 条路径的固定输出 (需求 R117), 作运行副本的补位来源 (需求 R287): 两层按程序取, 正本 LLM_FIXTURES 在先,
+# 正本有该程序的 fixture 文件 (<程序>/*.json) 就整个取正本的, 没有的程序才整个取这里的; 不按文件混用. 应用里的演示项目
+# 只开现有程序时靠它补上正本还没有的程序; 正本有了该程序 (如全接入的报告两稿) 即以正本为准, 不必改这里.
+# 测试里 R119 的分层客户端反过来把它排在运行副本之前 (tests/test_e2e_xero17)
 ONLY17_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero_only17"
 LLM_README = (
     "# Synthetic – for demonstration only\n\n"
     "Runtime copy of tests/fixtures/llm_xero for LLM_MODE=mock (Xero datasets read llm/<procedure>/<key>.json here).\n"
     "DOC-SHEET/ is copied from tests/fixtures/llm_variants/upload/DOC-SHEET (upload fixtures, keyed by file name).\n"
-    "Procedures missing from tests/fixtures/llm_xero (currently RPT-03) are copied from\n"
-    "tests/fixtures/llm_xero_only17 (the path with only the existing 17 procedures).\n"
+    "Procedures with no fixtures in tests/fixtures/llm_xero are copied whole from tests/fixtures/llm_xero_only17\n"
+    "(the path with only the existing 17 procedures).\n"
     "Written by data/generate_xero_demo.py; edit the fixtures under tests/fixtures and regenerate.\n"
 )
 CUAD_DIR = ROOT / "external" / "cuad" / "CUAD_v1"  # CUAD v1 (不入库), 只在校验底稿时读
@@ -310,9 +310,9 @@ def write_llm_fixtures(
     fill: Path = ONLY17_FIXTURES,
 ) -> None:
     """大模型 fixture 的运行副本: 清空 out/llm 后写 README.md, 再把 source 下的 <程序>/<对象>.json, fill 下 source
-    没有的程序目录的 <程序>/<对象>.json (按程序目录补位, 不按文件) 与 uploads 下 programs 各程序的 <程序>/<键>.json
-    原样复制过去 (正本删掉的文件不留副本). 不存在的目录跳过 (都不存在时只写 README). 正本根目录, 程序目录或文件是
-    符号链接时拒绝 (只复制仓库里的文件), 在清空之前查, 被拒时 out/llm 保持原样."""
+    里没有 fixture 文件的程序的 <程序>/<对象>.json (按程序补位, 不按文件) 与 uploads 下 programs 各程序的
+    <程序>/<键>.json 原样复制过去 (正本删掉的文件不留副本). 不存在的目录跳过 (都不存在时只写 README). 正本根目录,
+    程序目录或文件是符号链接时拒绝 (只复制仓库里的文件), 在清空之前查, 被拒时 out/llm 保持原样."""
     for root in (source, uploads, fill):
         if root.is_symlink():
             raise SystemExit(f"大模型 fixture 正本 {root} 是符号链接")

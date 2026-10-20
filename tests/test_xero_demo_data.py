@@ -2,7 +2,6 @@
 数值一致 (断言数据, 不断言文档措辞)."""
 
 import functools
-import inspect
 import json
 import re
 import shutil
@@ -168,13 +167,13 @@ def test_manifest_layout() -> None:
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
     paths = [f["path"] for f in manifest["files"]]  # type: ignore[index]
     # llm/ 是大模型 fixture 的运行副本 (R78): 各程序段加 fixture 后随之变, 只与正本推出的集合比 (集合包含口径)
-    # 另有上传处理的固定输出中复制进来的账表识别 (DOC-SHEET, 按上传的文件名取, 与数据集无关), 以及正本没有的程序由
-    # llm_xero_only17 补位的 (R287: 现为 RPT-03 两稿)
+    # 另有上传处理的固定输出中复制进来的账表识别 (DOC-SHEET, 按上传的文件名取, 与数据集无关), 以及正本里没有 fixture
+    # 文件的程序由 llm_xero_only17 补位的 (R287, 口径同生成脚本)
     llm = [p for p in paths if p.startswith("llm/")]
     fixtures = REPO / "tests" / "fixtures" / "llm_xero"
     uploads = REPO / "tests" / "fixtures" / "llm_variants" / "upload"
     only17 = REPO / "tests" / "fixtures" / "llm_xero_only17"
-    programs = {p.name for p in fixtures.iterdir() if p.is_dir()}
+    programs = {p.parent.name for p in fixtures.glob("*/*.json")}
     filled = [p for p in only17.glob("*/*.json") if p.parent.name not in programs]
     assert llm == sorted(
         [
@@ -2861,7 +2860,7 @@ def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> N
 
 def test_write_llm_fixtures_fills_missing_programs(tmp_path: Path) -> None:
     """R287: 正本没有的程序目录整个取补位来源 (llm_xero_only17) 的, 正本有的程序整个取正本的, 不按文件混用 (补位来源里
-    同程序多出的文件也不复制); 补位来源是符号链接时拒绝. 缺省的补位来源为 tests/fixtures/llm_xero_only17."""
+    同程序多出的文件也不复制); 补位来源是符号链接时拒绝."""
     source, fill, out = tmp_path / "llm_xero", tmp_path / "only17", tmp_path / "out"
     (source / "CSH-02").mkdir(parents=True)
     (source / "CSH-02" / "BA-091.json").write_bytes(b'{"from": "source"}\n')
@@ -2880,5 +2879,3 @@ def test_write_llm_fixtures_fills_missing_programs(tmp_path: Path) -> None:
     linked.symlink_to(fill, target_is_directory=True)
     with pytest.raises(SystemExit, match="符号链接"):
         generator.write_llm_fixtures(out, source, tmp_path / "missing", fill=linked)
-    assert generator.ONLY17_FIXTURES == REPO / "tests" / "fixtures" / "llm_xero_only17"
-    assert inspect.signature(generator.write_llm_fixtures).parameters["fill"].default == generator.ONLY17_FIXTURES

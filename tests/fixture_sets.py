@@ -45,8 +45,8 @@ class FixtureSet:
     # 上传文件处理用的固定输出根 ({程序}/{键}.json), 不进主固定输出 (主流程要求主固定输出各用一次); 没有为 None
     uploads: Path | None = None
     uploads_in_runtime: tuple[str, ...] = ()  # uploads 中也须在运行副本里的程序
-    # 补位来源: fixtures 没有的程序目录, 生成脚本从这里补进运行副本 (Xero 为只开现有 17 条的 RPT-03 两稿, 需求 R287);
-    # 没有为 None
+    # 补位来源: fixtures 里没有 fixture 文件的程序, 生成脚本整个从这里补进运行副本 (Xero 为只开现有 17 条路径的固定输出,
+    # 需求 R287); 没有为 None
     fill: Path | None = None
     # 数据目录在外部数据定位之下的 (Xero 补造): 读 runtime 与 manifest 之前调用, 经 tests.external 核对 (仓库跟踪了却
     # 找不到时失败, 没有时跳过); 随仓库的 data/demo 为 None
@@ -131,7 +131,7 @@ XERO = FixtureSet(
     manifest=XERO_DEMO / "manifest.json",
     uploads=UPLOADS,
     uploads_in_runtime=("DOC-SHEET",),  # 账表识别按上传的文件名取, Xero 演示项目里上传网页导出时用 (生成脚本复制)
-    fill=REPO / "tests" / "fixtures" / "llm_xero_only17",  # 应用里只开现有 17 条时的 RPT-03 两稿 (正本还没有 RPT-03)
+    fill=REPO / "tests" / "fixtures" / "llm_xero_only17",  # 只开现有 17 条路径的固定输出, 补正本还没有的程序
     locate=lambda: supplements_dir("20261017-q1", hashes=False),  # 只比固定输出与补造, 不核对快照哈希
 )
 FIXTURE_SETS: list[FixtureSet] = [NUMBAT, XERO]

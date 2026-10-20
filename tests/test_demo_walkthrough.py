@@ -5,10 +5,13 @@
 statements (方案取舍: 在 FIN-01 处导入会让读文件登记的程序过期, R304) → 闸门决定取 GET /gate 的材料 → 复核按任务
 列表逐条提交 (决定同 R119: BA-091 认定错报, 其余 confirm) → FIN-01 无保留意见 → RPT-01 先退回再批准, 到归档.
 
-大模型只读运行副本 data/xero_demo/20261017-q1/llm (应用里按项目数据集选的目录, 生成脚本从 llm_xero 复制, 正本没有的
-RPT-03 由 llm_xero_only17 补位), 不用 R119 的分层客户端; 登记 mock 按项目数据集定位 (DatasetRegistrySource). 新功能
-全关 (演示配置的基线). 断言: 例外, 判断, 复核任务, 错报同 R119 (复用其断言函数), 报告与归档同 R119; 三个阶段都已导入,
-补交请求只剩审批日志 open, 走完没有过期程序. 读快照与补造目录, 标 external; 连库变体标 slow.
+大模型只读运行副本 data/xero_demo/20261017-q1/llm (应用里按项目数据集选的目录, 生成脚本从 llm_xero 复制, 正本里没有
+fixture 文件的程序由 llm_xero_only17 补位), 不用 R119 的分层客户端; 登记 mock 按项目数据集定位 (DatasetRegistrySource).
+功能集为演示配置 (.env.example 的 FEATURES=critic,collab, R155; R119 仍按基线回归). 断言: 例外, 判断, 复核任务, 错报同
+R119 (复用其断言函数), 报告与归档同 R119; 三个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
+的 RPT-03 两稿放进正本后, 运行副本随之换成全接入两稿, 本模块的报告断言 (只开现有 17 条的两稿) 在同一提交里随之改.
+不与 R119 共用一次运行: 走 HTTP, 多导入 statements 阶段, 终态 (文件 22 份, 待审财报请求 received) 不同.
+读快照与补造目录, 标 external; 连库变体标 slow.
 """
 
 from collections import Counter
@@ -39,6 +42,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader
 from backend.services.abn import abn_problem
 from backend.services.data_service import DataService
+from backend.services.features import BASELINE, COLLAB
 from backend.services.xero_link import XeroLink
 from tests.external import supplements_dir
 from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, FakeXeroConnectionStore, api_client, wait_idle
@@ -50,7 +54,6 @@ from tests.xero_fakes import (
     SNAPSHOT_NAME,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,
-    XERO17_FEATURES,
     XERO17_MATERIALITY,
     XERO_DATASET,
     XERO_RULES,
@@ -64,6 +67,8 @@ pytestmark = pytest.mark.external
 shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走通 (walked) 的用例与它同一个事件循环
 API = "/api/v1"
 BA091 = "J-CSH-02-1-BA-091"
+DEMO_FEATURES = BASELINE | {COLLAB}  # 演示配置的功能集 (.env.example 的 FEATURES=critic,collab, R155)
+REVIEW_ROUNDS = 5  # 复核循环的轮数上限 (本路径分三层出任务, 3 轮即完)
 DEMO_ABN = "25900043021"
 # 每个停点: (总览的闸门, 是否等数据就绪, 是否等复核, 概览建议导入的阶段); 复核的停点只记第一次
 STOPS = [
@@ -123,8 +128,11 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
         return overview
 
     async def decide(verdict: str, **fields: Any) -> dict[str, Any]:
-        """对当前闸门的材料 (GET /gate 给的对象与版本) 提交决定, 返回 GET /gate 的视图."""
-        view = (await client.get(f"{base}/gate")).json()
+        """对当前闸门的材料 (GET /gate 给的对象与版本) 提交决定, 返回 GET /gate 的视图. 不在闸门 (如某条程序失败,
+        流程停下等人) 时报出 GET /gate 的响应."""
+        got = await client.get(f"{base}/gate")
+        assert got.status_code == 200, got.text
+        view = got.json()
         body = {k: view[k] for k in ("gate", "target_id", "target_version")}
         posted = await client.post(f"{base}/gate-decisions", json={**body, "decision": verdict, **fields})
         assert posted.status_code == 202, posted.text
@@ -138,8 +146,11 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
     await stop()
     pln = await decide("approve", materiality=XERO17_MATERIALITY.model_dump())
     overview = await stop()
-    while overview["awaiting_review"]:
+    for _ in range(REVIEW_ROUNDS):
+        if not overview["awaiting_review"]:
+            break
         pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
+        assert pending, "等复核却没有待复核任务"
         for view in pending:
             task = view["task"]
             body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
@@ -152,6 +163,7 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
             posted = await client.post(f"{base}/review-records", json=body)
             assert posted.status_code == 202, posted.text
             overview = await settle()
+    assert not overview["awaiting_review"], f"{REVIEW_ROUNDS} 轮之后仍在等复核"
     await stop()
     fin = xero17_gates(owner)["fin"]
     await decide("approve", disposition=fin.disposition, reason=fin.reason)
@@ -197,7 +209,7 @@ async def walked() -> Walk:
         llm=llm,
         review_llm=llm,
         rules=FakeRuleEngine(dict(XERO_RULES)),
-        features=XERO17_FEATURES,
+        features=DEMO_FEATURES,
         engagement_store=store,
     )
     deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
@@ -236,7 +248,7 @@ async def test_acc04_passes_on_the_dataset_registry(walked: Walk) -> None:
     engagement = await deps.engagement_store.get(x.eid)
     assert engagement is not None
     profile = await deps.engagement_store.client_profile(engagement.client_id)
-    assert profile is not None and profile.abn == DEMO_ABN
+    assert profile is not None and profile.abn == DEMO_ABN and profile.directors
     record = await deps.registry.abn(x.eid, profile.abn)
     assert record is not None and record.acn is not None
     extract = await deps.registry.asic_extract(x.eid, record.acn)
@@ -332,20 +344,23 @@ async def test_tables_and_documents_from_the_demo(walked: Walk) -> None:
 @shared_loop
 async def test_counts_and_report_match_r119(walked: Walk) -> None:
     """例外 11 条, 判断 10 条 (v2 confirmed), 复核任务 10 条 (decided), 错报 1 条 (BA-091, 4853), 函证两户, 重要性与
-    汇总表同 R119; REPORT-2 签字归档, 回应接口生成的 RPT-01 退回决定. 走完没有过期程序, 后台没有错误."""
+    汇总表同 R119; REPORT-2 签字归档, 回应接口生成的 RPT-01 退回决定. 走完没有过期程序, 后台没有错误; 功能集为演示
+    配置 (critic, collab)."""
     await assert_results(walked.x)
     await assert_materiality(walked.x)
     await assert_report(walked.x, walked.reject_id)
     assert (walked.overview["stale_procedure_ids"], walked.overview["run_error"]) == ([], None)
+    assert sorted(walked.overview["features"]) == sorted(DEMO_FEATURES)  # 项目冻结的是演示配置的功能集
 
 
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
-    """大模型 38 次都读运行副本 (RPT-03 两稿 r1, r2 也在里面), 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对
-    这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
+    """大模型 39 次都读运行副本里各自的 fixture (RPT-03 两稿 r1, r2 也在里面; 待审财报上传后 A3 抽取一次, 需求 R217;
+    没有回落到 default.json 或找不到), 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本
+    (应用里按项目数据集选目录)."""
     llm = walked.x.client
     reads = [(r.procedure_id, r.fixture_key, r.root) for r in llm.reads]
-    assert {root for *_, root in reads} == {XERO.runtime}
+    assert [r for r in llm.reads if r.file != f"{r.procedure_id}/{r.fixture_key}.json"] == []
     assert Counter(pid for pid, *_ in reads) == {
         "DOC-CLASSIFY": 21,
         "DOC-04": 3,
@@ -354,6 +369,7 @@ async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
         "REV-02": 6,
         "CSH-02": 1,
         "RPT-03": 2,
+        "DOC-STATEMENTS": 1,
     }
     assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["r1", "r2"]
     assert len(set(reads)) == len(reads)
@@ -375,7 +391,7 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         period=XERO_PERIOD,
         load_dataset=False,
         fresh_profile=False,
-        FEATURES=",".join(sorted(XERO17_FEATURES)),
+        FEATURES=",".join(sorted(DEMO_FEATURES)),
     ) as run:
         deps, runner = run.deps, run.s.runner
         assert isinstance(cast(SwitchableLLMClient, deps.llm).inner, DatasetFixtureLLMClient)
@@ -386,7 +402,7 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         await assert_results(w.x)
         await assert_materiality(w.x)
         await assert_report(w.x, w.reject_id)
-        assert w.overview["stale_procedure_ids"] == []
+        assert (w.overview["stale_procedure_ids"], sorted(w.overview["features"])) == ([], sorted(DEMO_FEATURES))
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
         assert Counter(e.procedure_id for e in calls)["RPT-03"] == 2
         assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}

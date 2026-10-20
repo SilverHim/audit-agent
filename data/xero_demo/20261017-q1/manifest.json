@@ -678,7 +678,7 @@
     },
     {
       "path": "llm/README.md",
-      "sha256": "0e23f96153724bb5a5a916219977009cab5990635e9b617eb641f49efe111d0c",
+      "sha256": "9820dae006d740339bc6a8f82cd58adb863d566e8843daac1d8acc4f6b61b77d",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
