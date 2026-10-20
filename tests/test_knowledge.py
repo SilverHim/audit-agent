@@ -153,22 +153,29 @@ class Source:
 
 
 CA_VOLUME = "04_法律_CorporationsAct/CorporationsAct2001_Compilation_C148_2026-08-27_Vol{}.pdf"
+CA2001_PAGES = ((83, 84), (119, 120), (151, 152), (163, 164), (242, 243), (249, 250))
 APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pdf"
 # knowledge/standards 下每个 YAML 一行; 其余 ASA, AASB 由各组首建该文件时加行
 SOURCES: dict[str, Source] = {
     "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
     "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", (12, 21)),)),  # 第 31 段至第 88 段
     # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
+    "ASA210": Source((("01_审计准则_ASA/ASA_210.pdf", (10, 12)),)),  # 第 6 段至第 10 段
     "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
+    "ASA300": Source((("01_审计准则_ASA/ASA_300.pdf", (10, 12)),)),  # 第 7 段至第 13 段
     "ASA320": Source((("01_审计准则_ASA/ASA_320.pdf", None),)),
     "ASA450": Source((("01_审计准则_ASA/ASA_450.pdf", None),)),
     "ASA505": Source((("01_审计准则_ASA/ASA_505.pdf", None),)),
+    "ASA510": Source((("01_审计准则_ASA/ASA_510.pdf", (9, 10)),)),  # 第 6 段
     "ASA550": Source((("01_审计准则_ASA/ASA_550.pdf", (10, 16)),)),  # 第 10 段至 Aus 27.2
     "ASA560": Source((("01_审计准则_ASA/ASA_560.pdf", (9, 11)),)),  # 第 6 段至第 9 段
     "ASA570": Source((("01_审计准则_ASA/ASA_570.pdf", (10, 20)),)),  # 第 10 段至 A19
     "ASA700": Source((("01_审计准则_ASA/ASA_700.pdf", None),)),
     "ASA705": Source((("01_审计准则_ASA/ASA_705.pdf", None),)),
-    "CA2001": Source(((CA_VOLUME.format(1), (505, 515)), (CA_VOLUME.format(2), (80, 260))), compiled="2026-08-27"),
+    "ASA710": Source((("01_审计准则_ASA/ASA_710.pdf", (11, 12)),)),  # 第 14 段
+    "ASQM1": Source((("02_质量管理_ASQM/ASQM_1.pdf", (22, 23)),)),  # 第 34 段
+    # 第 2 卷只读各条所在的两页: s293, s301(2), s315(4), s323D(2A), s325(1), s328A (条首与下一条或下一款在其内)
+    "CA2001": Source(tuple((CA_VOLUME.format(2), pages) for pages in CA2001_PAGES)),
     "APES110": Source(((APES110_PDF, (40, 210)),), cover="Compiled as at", compiled="2025-07"),
 }
 # 页眉页脚行: "ASA 505 – compiled - 10 - AUDITING STANDARD", "ASA 502 ─ compiled - 10 - AUDITING STANDARD",

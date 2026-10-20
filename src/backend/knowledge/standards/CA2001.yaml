@@ -1,0 +1,76 @@
+# 条文已对照 docs/参考资料/04_法律_CorporationsAct/CorporationsAct2001_Compilation_C148_2026-08-27_Vol2.pdf (编纂版
+# C148, 编纂日 2026-08-27, 第 2 卷) 核对 (tests/test_knowledge.py 自动比对); text 为该条或该款原文, 去掉条号与款号,
+# 页眉页脚与小字注释 (Note) 不收, 款, 项各占一行. 整条摘录时以条标题起首. 公司法的条只能整条摘录或单引一款
+# (开发接口文档第 8.2 节), 所以 s328A 整条摘录第 (1) 至 (4) 款, 判断引用时写明所依据的款.
+standard: Corporations Act 2001
+title: Corporations Act 2001
+compiled: "2026-08-27"   # Compilation No. 148
+fragments:
+  - id: CA2001-S293
+    paragraph: "s293"
+    topic: shareholder_direction_small_proprietary
+    text: |
+      Small proprietary company—shareholder direction
+      (1) Shareholders with at least 5% of the votes in a small proprietary company may give the company a direction to:
+      (a) prepare a financial report and directors’ report for a financial year; and
+      (b) send them to all shareholders.
+      (2) The direction must be:
+      (a) signed by the shareholders giving the direction; and
+      (b) made no later than 12 months after the end of the financial year concerned.
+      (3) The direction may specify all or any of the following:
+      (a) that the financial report does not have to comply with some or all of the accounting standards;
+      (b) that a directors’ report or a part of that report need not be prepared;
+      (c) that the financial report is to be audited.
+    procedures: [ACC-08, PLN-15]
+  - id: CA2001-S301-2
+    paragraph: "s301(2)"
+    topic: small_proprietary_audit_exemption
+    text: |
+      A small proprietary company’s financial report for a financial year does not have to be audited if:
+      (a) the report is required only because of:
+      (i) paragraph 292(2)(c) (about having CSF shareholders); or
+      (ii) a direction under section 293; or
+      (iii) both paragraph 292(2)(c) and a direction under section 293; and
+      (b) in a case where subparagraph (a)(i) or (iii) applies—as at the end of the financial year, the company has raised a total less than the CSF audit threshold from all the CSF offers it has ever made; and
+      (c) in a case where subparagraph (a)(ii) or (iii) applies—the direction did not ask for the financial report to be audited.
+    procedures: [ACC-08]
+  - id: CA2001-S315-4
+    paragraph: "s315(4)"
+    topic: proprietary_reporting_deadline
+    text: |
+      A proprietary company that is not covered by subsection (1) or (2) must report to members under section 314 within 4 months after the end of the financial year.
+    procedures: [PLN-15]
+  - id: CA2001-S323D-2A
+    paragraph: "s323D(2A)"
+    topic: shortened_financial_year
+    text: |
+      A subsequent financial year may last for a period of less than 12 months determined by the directors if:
+      (a) the subsequent financial year starts at the end of the previous financial year; and
+      (b) there has not been a period during the previous 5 financial years in which there was a financial year of less than 12 months in reliance on this subsection; and
+      (c) the change to the subsequent financial year is made in good faith in the best interests of the company, registered scheme or disclosing entity.
+    procedures: [ACC-08, PLN-15]
+  - id: CA2001-S325-1
+    paragraph: "s325(1)"
+    topic: directors_appoint_auditor
+    text: |
+      The directors of a proprietary company may appoint an auditor for the company if an auditor has not been appointed by the company in general meeting.
+    procedures: [ACC-08]
+  - id: CA2001-S328A
+    paragraph: "s328A"
+    topic: auditor_consent
+    text: |
+      Auditor’s consent to appointment
+      (1) A company, the directors of a company or the responsible entity of a registered scheme must not appoint an individual, firm or company as auditor of the company unless that individual, firm or company:
+      (a) has consented, before the appointment, to act as auditor; and
+      (b) has not withdrawn that consent before the appointment is made.
+      For the purposes of this section, a consent, or the withdrawal of a consent, must be given by written notice to the company, the directors or the responsible entity of the scheme.
+      (2) A notice under subsection (1) given by a firm must be signed by a member of the firm who is a registered company auditor both:
+      (a) in the firm name; and
+      (b) in his or her own name.
+      (3) A notice under subsection (1) given by a company must be signed by a director or senior manager of the company both:
+      (a) in the company’s name; and
+      (b) in his or her own name.
+      (4) If a company, the directors of a company or the responsible entity of a registered scheme appoints an individual, firm or company as auditor of a company in contravention of subsection (1):
+      (a) the purported appointment does not have any effect; and
+      (b) the company or responsible entity, and any officer of the company or responsible entity who is in default, are each guilty of an offence.
+    procedures: [ACC-08]

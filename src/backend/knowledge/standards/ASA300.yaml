@@ -1,0 +1,31 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_300.pdf (现行编译版, Compilation 6) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 第 9(b)(c) 项 "ASA 315", "ASA 330"
+# 后的上标脚注号 (5, 6) 按抽取规则去掉.
+standard: ASA 300
+title: Planning an Audit of a Financial Report
+compiled: "2023-12-14"   # Compilation Number 6
+fragments:
+  - id: ASA300-P07
+    paragraph: "7"
+    topic: overall_audit_strategy
+    text: |
+      The auditor shall establish an overall audit strategy that sets the scope, timing and direction of the audit, and that guides the development of the audit plan.
+    procedures: [PLN-15]
+  - id: ASA300-P09
+    paragraph: "9"
+    topic: audit_plan_contents
+    text: |
+      The auditor shall develop an audit plan that shall include a description of:
+      (a) The nature, timing and extent of the planned direction and supervision of engagement team members and the review of their work.
+      (b) The nature, timing and extent of planned risk assessment procedures, as determined under ASA 315.
+      (c) The nature, timing and extent of planned further audit procedures at the assertion level, as determined under ASA 330.
+      (d) Other planned audit procedures that are required to be carried out so that the engagement complies with the Australian Auditing Standards.
+    procedures: [PLN-15]
+  - id: ASA300-P13
+    paragraph: "13"
+    topic: initial_audit_activities
+    text: |
+      The auditor shall undertake the following activities prior to starting an initial audit:
+      (a) Performing procedures required by ASA 220 regarding the acceptance of client relationships and audit engagements; and
+      (b) Communicating with the predecessor auditor, where there has been a change of auditors, in compliance with relevant ethical requirements.
+    procedures: [PLN-15]

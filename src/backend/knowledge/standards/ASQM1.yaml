@@ -1,0 +1,16 @@
+# 段落号与正文已对照 docs/参考资料/02_质量管理_ASQM/ASQM_1.pdf (现行编译版, Compilation 2) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行. 第 34 段只摘 (f) 项及其 (i)-(iii),
+# paragraph 写 "34(f)", 片段 ID 按子项规则为 ASQM1-P34f.
+standard: ASQM 1
+title: Quality Management for Firms that Perform Audits or Reviews of Financial Reports and Other Financial Information, or Other Assurance or Related Services Engagements
+compiled: "2025-02-12"   # Compilation Number 2
+fragments:
+  - id: ASQM1-P34f
+    paragraph: "34(f)"
+    topic: engagement_quality_review_required
+    text: |
+      The firm establishes policies or procedures that address engagement quality reviews in accordance with ASQM 2, and require an engagement quality review for:
+      (i) Audits of financial reports of listed entities;
+      (ii) Audits or other engagements for which an engagement quality review is required by law or regulation; and
+      (iii) Audits or other engagements for which the firm determines that an engagement quality review is an appropriate response to address one or more quality risk(s).
+    procedures: [PLN-15]

@@ -1,0 +1,18 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_510.pdf (现行编译版, Compilation 4) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行.
+standard: ASA 510
+title: Initial Audit Engagements-Opening Balances
+compiled: "2023-03-22"   # Compilation Number 4
+fragments:
+  - id: ASA510-P06
+    paragraph: "6"
+    topic: opening_balances_evidence
+    text: |
+      The auditor shall obtain sufficient appropriate audit evidence about whether the opening balances contain misstatements that materially affect the current period’s financial report by:
+      (a) Determining whether the prior period’s closing balances have been correctly brought forward to the current period or, when appropriate, have been restated;
+      (b) Determining whether the opening balances reflect the application of appropriate accounting policies; and
+      (c) Performing one or more of the following:
+      (i) Where the prior year financial report was audited, reviewing the predecessor auditor’s working papers to obtain evidence regarding the opening balances;
+      (ii) Evaluating whether audit procedures performed in the current period provide evidence relevant to the opening balances; or
+      (iii) Performing specific audit procedures to obtain evidence regarding the opening balances.
+    procedures: [PLN-15]

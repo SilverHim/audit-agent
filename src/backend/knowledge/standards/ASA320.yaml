@@ -16,3 +16,15 @@ fragments:
     text: |
       The auditor shall determine performance materiality for purposes of assessing the risks of material misstatement and determining the nature, timing and extent of further audit procedures.
     procedures: [PLN-01]
+  - id: ASA320-P12
+    paragraph: "12"
+    topic: revise_materiality
+    text: |
+      The auditor shall revise materiality for the financial report as a whole (and, if applicable, the materiality level or levels for particular classes of transactions, account balances or disclosures) in the event of becoming aware of information during the audit that would have caused the auditor to have determined a different amount (or amounts) initially.
+    procedures: [PLN-19]
+  - id: ASA320-P13
+    paragraph: "13"
+    topic: lower_materiality_consequences
+    text: |
+      If the auditor concludes that a lower materiality for the financial report as a whole (and, if applicable, materiality level or levels for particular classes of transactions, account balances or disclosures) than that initially determined is appropriate, the auditor shall determine whether it is necessary to revise performance materiality, and whether the nature, timing and extent of the further audit procedures remain appropriate.
+    procedures: [PLN-19]
