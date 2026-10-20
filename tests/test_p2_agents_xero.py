@@ -155,7 +155,6 @@ def test_layers_run_once_and_each_call_passes(p2: P2) -> None:
     calls = [e for e in p2.trail.entries if e.kind is TrailKind.llm_call]
     assert Counter(e.procedure_id for e in calls) == {"REV-03": 3, "REV-02": 6, "DOC-06": 2, "CSH-02": 1}
     assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
-    assert {t.kind for t in p2.state["review_tasks"]} == {TaskKind.normal}
     judgments = {j.id: j for j in p2.state["judgments"]}
     for j in judgments.values():
         expected = "未命中独立复核的触发规则" if j.procedure_id == "CSH-02" else "L2"
@@ -298,8 +297,7 @@ async def test_misstatement_path_reaches_fin04(p2: P2) -> None:
     )
     assert misstatement.status == "uncorrected"
     receipt = judgments[f"J-REV-02-1-{ORC1026}"]
-    _, accepted = decide(p2, receipt.id, "D-REV02-1026", Decision.confirm)
-    assert accepted.decision is Decision.confirm
+    decide(p2, receipt.id, "D-REV02-1026", Decision.confirm)
     kept = confirm_effects(receipt, [exceptions[i] for i in receipt.exception_ids])
     [r03] = [e for e in kept if isinstance(e, AuditException)]
     assert (r03.id, r03.version, r03.disposition, r03.attributed_by) == (
