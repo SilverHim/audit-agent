@@ -17,17 +17,18 @@ GEN-02 分录例外归因 → JudgmentDraft，每笔有 GEN-05 尚未归因例�
                           reversal_entry_no、full_credits，paired_invoices 的 journal_entry_id 所在凭证），以及 detail 指向
                           本凭证的其他 GEN-05 例外所在的凭证；按凭证号自然序与行 ID 排序
   data.related_invoices   本凭证例外 detail 所指的发票（matched_invoices、invoice_id、paired_invoices 的 invoice_id），
-                          按发票 ID 排序，每项为 {invoice, delivery_notes, contract, document}：invoice 为 sales_invoice 行，
-                          delivery_notes 为其 delivery_note 行（发运或服务完成记录，按 ID 排序，没有为空列表），contract 为
-                          DOC-04 抽取的 Contract、document 为合同 PDF 的 DocumentRef（发票没有合同时两项为 null）
+                          按发票 ID 排序，每项为 {invoice, delivery_notes}：invoice 为 sales_invoice 行（contract_id 指向
+                          data.contracts 中的合同），delivery_notes 为其 delivery_note 行（发运或服务完成记录，按 ID 排序，
+                          没有为空列表）
+  data.contracts          这些发票所挂的合同，按文件 ID 去重（同一份合同只列一次），按合同编号排序，每项为
+                          {contract, document}：contract 为 DOC-04 抽取的 Contract，document 为合同 PDF 的 DocumentRef
   data.related_findings   detail 指向本凭证的其他 GEN-05 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
   data.documents          关联对象含本凭证号的已登记文件，每项为 {document, pages}：document 为 DocumentRef（id、type、
-                          file_name、page_count、reliability、document_date），pages 为各页文字（第 1 页在前）
+                          file_name、page_count、reliability、document_date），pages 为各页文字（第 1 页在前；整份送出，暂不设页数上限）
   data.fraud_risks        风险清单中 fraud_related 为真的全部 RiskItem：id、assertion、level、description
   rule_findings           本凭证上 GEN-05 尚未归因的 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
   standards               StandardFragment 列表：id、standard、paragraph、text
 #}
-{% set contract_docs = data.related_invoices | selectattr("contract") | map(attribute="document") | list %}
 You assist a registered company auditor with the audit of an Australian financial report. The full journal-entry scan has flagged journal entry {{ subject_id }}.
 
 ## Task
@@ -79,10 +80,19 @@ Related journal entries (entries the findings refer to, and entries whose findin
 None.
 {% endif %}
 
-Related invoices (with shipping or service-completion records and contracts):
+Related invoices (with shipping or service-completion records):
 {% if data.related_invoices %}
 ```json
 {{ data.related_invoices | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Contracts of the related invoices (each listed once; an invoice refers to its contract by `contract_id`):
+{% if data.contracts %}
+```json
+{{ data.contracts | tojson(indent=2) }}
 ```
 {% else %}
 None.
@@ -165,8 +175,8 @@ Evidence pointers. Every pointer must include `source_type`.
 | Invoice row | invoice | sales_invoice | invoice `id` | column name, e.g. invoice_date | null | internal_original |
 | Shipping or service-completion record | delivery | delivery_note | record `id` | column name, e.g. signed_date | null | internal_original |
 {% endif %}
-{% for doc in contract_docs | unique(attribute="id") %}
-| Contract term | contract | document | {{ doc.id }} | term ID | the term's `page` | {{ doc.reliability }} |
+{% for c in data.contracts %}
+| Contract term | contract | document | {{ c.document.id }} | term ID | the term's `page` | {{ c.document.reliability }} |
 {% endfor %}
 {% for d in data.documents %}
 | Document {{ d.document.file_name }} | voucher | document | {{ d.document.id }} | a short quote from the page | page number, 1 to {{ d.document.page_count }} | {{ d.document.reliability }} |

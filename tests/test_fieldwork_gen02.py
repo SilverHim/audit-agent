@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from backend.agents.base import RunContext
-from backend.agents.fieldwork import FieldworkAgent
+from backend.agents.fieldwork import FieldworkAgent, entry_order
 from backend.contracts.models import (
     Decision,
     ExceptionDisposition,
@@ -112,21 +112,26 @@ def test_related_entries_invoices_and_findings(flow: Flow) -> None:
     pair = {i["invoice"]["invoice_no"]: i for i in data["XJ-405"]["related_invoices"]}
     assert [n["id"] for n in pair["ORC1003"]["delivery_notes"]] == []
     assert [n["id"] for n in pair["ORC1008"]["delivery_notes"]] == ["SR-ORC1008"]
-    assert {(i["contract"]["id"], i["document"]["id"]) for i in pair.values()} == {("CON-X02", "DOC-02c5c90d4ffb")}
+    assert {i["invoice"]["contract_id"] for i in pair.values()} == {"CON-X02"}
+    contracts = {no: [(c["contract"]["id"], c["document"]["id"]) for c in d["contracts"]] for no, d in data.items()}
+    with_contracts = {no: c for no, c in contracts.items() if c}
+    # 同一份合同只送一次 (按文件 ID 去重), 发票以 contract_id 引用
+    assert with_contracts == {no: [("CON-X02", "DOC-02c5c90d4ffb")] for no in ("XJ-405", "XJ-430", "XJ-449")}
     findings = {no: ids(d["related_findings"]) for no, d in data.items() if d["related_findings"]}
     assert findings == {"XJ-430": ["X-GEN-05-1-R12-1"]}
 
 
 @pytest.mark.external
 def test_bank_balances_and_documents(flow: Flow) -> None:
-    """验收 3, 4: 涉及货币资金科目的凭证带银行账户与凭证日前后 3 天的对账单行加本期第一行, 不涉及的为 null; 科目余额
-    为两期试算表 (上期没有为 null); 文件为关联对象含本凭证号的登记, 带各页文字."""
+    """验收 3, 4: 涉及货币资金科目的凭证带银行账户与凭证日前后 3 天 (含两端) 的对账单行加本期第一行, 不涉及的为
+    null; 科目余额带科目名称, 分类与两期试算表 (上期没有为 null); 文件为关联对象含本凭证号的登记, 带各页文字.
+    XJ-397 (07-16) 的窗口到 07-19 为止, 恰含 BT-090-0002 (07-19); BT-091-0001 是 091 本期第一行."""
     data = {no: flow.contexts[no].data for no in VOUCHERS}
     assert [no for no, d in data.items() if d["bank"] is not None] == ["XJ-397", "XJ-575", "XJ-601"]
     lines = {
         no: {r["id"]: r["amount_cents"] for r in data[no]["bank"]["lines"]} for no in ("XJ-397", "XJ-575", "XJ-601")
     }
-    assert {"BT-090-0001", "BT-091-0001"} <= lines["XJ-397"].keys()
+    assert list(lines["XJ-397"]) == ["BT-090-0001", "BT-090-0002", "BT-091-0001"]
     assert lines["XJ-575"]["BT-090-0052"] == -88980 and "BT-090-0001" in lines["XJ-575"]
     assert (lines["XJ-601"]["BT-090-0065"], lines["XJ-601"]["BT-091-0001"]) == (350000, -350000)
     accounts = data["XJ-601"]["bank"]["accounts"]
@@ -134,18 +139,35 @@ def test_bank_balances_and_documents(flow: Flow) -> None:
         (f"BA-{gl}", "Wattlebrook Bank Limited") for gl in ("090", "091")
     ]
 
-    def balances(no: str) -> dict[str, tuple[int | None, int | None]]:
-        return {b["code"]: (b["current_cents"], b["prior_cents"]) for b in data[no]["account_balances"]}
+    def balances(no: str) -> dict[str, tuple[str | None, str | None, int | None, int | None]]:
+        rows = data[no]["account_balances"]
+        return {b["code"]: (b["name"], b["category"], b["current_cents"], b["prior_cents"]) for b in rows}
 
-    assert balances("XJ-397") == {"090": (-1090044, -870320), "091": (1158123, None), "840": (-1921221, None)}
-    assert balances("XJ-499") == {"710": (75000, None), "711": (-82500, None), "820": (-119197, 79120)}
-    documents = {no: {d["document"]["type"]: d["pages"] for d in data[no]["documents"]} for no in VOUCHERS}
-    assert {no: sorted(d) for no, d in documents.items() if d} == {
-        "XJ-397": ["agreement", "correspondence"],
-        "XJ-499": ["internal_record"],
+    assert balances("XJ-397") == {
+        "090": ("Business Bank Account", "cash", -1090044, -870320),
+        "091": ("Business Savings Account", "cash", 1158123, None),
+        "840": ("Historical Adjustment", "other_current_liabilities", -1921221, None),
     }
-    assert [len(d["pages"]) for d in data["XJ-499"]["documents"]] == [1, 1]  # 固定资产登记表与会计政策摘录
-    assert all(page.strip() for d in documents.values() for pages in d.values() for page in pages)
+    assert balances("XJ-499") == {
+        "710": ("Office Equipment", "property_plant_equipment", 75000, None),
+        "711": ("Less Accumulated Depreciation on Office Equipment", "property_plant_equipment", -82500, None),
+        "820": ("GST", "tax_payable", -119197, 79120),
+    }
+    documents = {
+        no: sorted((d["document"]["id"], d["document"]["file_name"], len(d["pages"])) for d in data[no]["documents"])
+        for no in VOUCHERS
+    }
+    assert {no: d for no, d in documents.items() if d} == {
+        "XJ-397": [
+            ("DOC-1f4bc9aec6b3", "director_loan_agreement.pdf", 2),
+            ("DOC-3738f404ca43", "director_loan_confirmation.pdf", 1),
+        ],
+        "XJ-499": [
+            ("DOC-4873d193e29f", "fixed_asset_register.pdf", 1),
+            ("DOC-4fa0cdebd609", "accounting_policies_extract.pdf", 1),
+        ],
+    }
+    assert all(page.strip() for no in ("XJ-397", "XJ-499") for d in data[no]["documents"] for page in d["pages"])
 
 
 @pytest.mark.external
@@ -196,6 +218,40 @@ async def test_rerun_and_vouchers_awaiting_review_are_filtered() -> None:
     state = state | {"review_tasks": [waiting]}
     _, _, engine = await run_gen02({no: passed() for no in VOUCHERS}, state, rerun=["XJ-499", "XJ-575"])
     assert [c.subject_id for _, c, _ in engine.calls] == ["XJ-499"]
+
+
+@pytest.mark.external
+async def test_attributed_findings_are_context_but_not_subjects() -> None:
+    """验收 2, 3 (审核 R134-01): R09-1 (XJ-397) 与 R12-1 (XJ-405) 已归因 (v2 attributed) 时, 这两笔凭证不再是判断对象;
+    XJ-430 的 related_findings 仍列已归因的 R12-1, related_entries 仍含 XJ-405 的行 (只作上下文)."""
+    state = await gen05_state()
+    attributed = {"X-GEN-05-1-R09-1", "X-GEN-05-1-R12-1"}
+    exceptions = [
+        x.model_copy(update={"version": x.version + 1, "disposition": ExceptionDisposition.attributed})
+        if x.id in attributed
+        else x
+        for x in state["exceptions"]
+    ]
+    _, _, engine = await run_gen02({no: passed() for no in VOUCHERS}, state | {"exceptions": exceptions})
+    contexts = {c.subject_id: c for _, c, _ in engine.calls}
+    assert list(contexts) == ["XJ-430", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]
+    data = contexts["XJ-430"].data
+    assert [x["id"] for x in data["related_findings"]] == ["X-GEN-05-1-R12-1"]
+    assert {r["entry_no"] for r in data["related_entries"]} == {"XJ-405"}
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        (["XJ-100", "XJ-10", "XJ-9"], ["XJ-9", "XJ-10", "XJ-100"]),  # 数字段按数值, 不按字典序
+        (["XJ-10", "XJ-9A", "XJ-9"], ["XJ-9", "XJ-9A", "XJ-10"]),  # 同一数字段后还有字符的排在后
+        (["XJ-9", "XJ-09"], ["XJ-09", "XJ-9"]),  # 自然序相等时按原文
+        (["XJ-1", "AJE-X01"], ["AJE-X01", "XJ-1"]),  # 前缀不同按前缀
+    ],
+)
+def test_vouchers_sort_in_natural_order(entries: list[str], expected: list[str]) -> None:
+    """验收 2 (审核 R134-02): 凭证号的自然序 (entry_order); Xero 的 7 个凭证号都是 3 位数, 区分不了自然序与字典序."""
+    assert sorted(entries, key=entry_order) == expected
 
 
 async def test_finding_without_entry_no_raises() -> None:

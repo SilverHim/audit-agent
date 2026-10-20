@@ -32,3 +32,4 @@ rules: []
 llm:
   prompt: GEN-02.md.j2
   output_model: JudgmentDraft
+  context_budget: 8000

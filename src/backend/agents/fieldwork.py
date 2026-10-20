@@ -342,8 +342,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         account_balances 为本凭证各科目的科目表信息与两期试算表余额; bank 见 voucher_bank; related_entries 为相关凭证
         的全部分录行: 本凭证例外 detail 所指的凭证 (detail_entries, detail_lines 所在凭证) 与 detail 指向本凭证的其他
         GEN-05 例外所在的凭证 (不含本凭证, 按自然序与行 ID); related_invoices 为本凭证例外 detail 所指的发票
-        (detail_invoices, 按 ID), 每张见 invoice_records; related_findings 为 detail 指向本凭证的其他 GEN-05 例外
-        (按 ID; 已归因的也算); documents 为关联对象含本凭证号的文件登记与各页文字 (EvidenceStore.pages);
+        (detail_invoices, 按 ID), 每张为 invoice_records 的 invoice 与 delivery_notes; contracts 为这些发票所挂的合同
+        与其文件登记 (invoice_records 的 contract 与 document), 按文件 ID 去重, 按合同编号排序, 同一份合同只送一次,
+        发票以 contract_id 引用; related_findings 为 detail 指向本凭证的其他 GEN-05 例外 (按 ID; 已归因的也算);
+        documents 为关联对象含本凭证号的文件登记与各页文字 (EvidenceStore.pages, 整份送出, 暂不设页数上限);
         fraud_risks 为风险清单中 fraud_related 为真的全部风险. 本凭证, 相关凭证或 detail 所指的分录行查不到抛
         LookupError, 发票与合同同 invoice_records. 没有规则 SQL, 不经规则引擎.
         """
@@ -411,14 +413,20 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
                 for d in await store.documents(eid, related_id=no)
             ]
+            records = [invoices[i][1] for i in sorted({i for x in groups[no] for i in detail_invoices(x.detail)})]
+            contracts: dict[str, dict[str, Any]] = {}  # 文件 ID -> {contract, document}, 同一份合同只送一次
+            for record in records:
+                if record["document"] is not None:
+                    contracts.setdefault(
+                        record["document"]["id"], {"contract": record["contract"], "document": record["document"]}
+                    )
             data = {
                 "entry_lines": journal_rows(own),
                 "account_balances": balances,
                 "bank": await self.voucher_bank(ctx, own, linked) if touched else None,
                 "related_entries": journal_rows([line for r in related[no] for line in lines[r]]),
-                "related_invoices": [
-                    invoices[i][1] for i in sorted({i for x in groups[no] for i in detail_invoices(x.detail)})
-                ],
+                "related_invoices": [{"invoice": r["invoice"], "delivery_notes": r["delivery_notes"]} for r in records],
+                "contracts": sorted(contracts.values(), key=lambda c: str(c["contract"]["id"])),
                 "related_findings": [x.model_dump(mode="json") for x in referencing[no]],
                 "documents": documents,
                 "fraud_risks": fraud_risks,
