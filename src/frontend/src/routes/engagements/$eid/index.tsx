@@ -32,7 +32,7 @@ import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { XeroProfileCard } from '@/components/xero-profile'
 import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-api'
-import { decisionsDisabled } from '@/lib/engagement'
+import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
@@ -619,7 +619,7 @@ function CurrentItem({
           <GateMaterial eid={eid} view={current.view} />
         </ConciergeMessage>
         <GateDecisionCard
-          key={`${current.view.gate}:${current.view.target_version}`}
+          key={decisionCardKey(current.view)}
           eid={eid}
           view={current.view}
           disabled={disabled}

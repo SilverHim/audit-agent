@@ -10,6 +10,7 @@ import {
 import type {
   Annotation,
   AuditException,
+  AuditPlan,
   ClientProfile,
   GateDecisionIn,
   GateEdit,
@@ -45,11 +46,11 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
-import { invalidateEngagement } from '@/lib/engagement'
-import { apiMessage, errorText, isApiCode } from '@/lib/errors'
+import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
+import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud, formatPct } from '@/lib/money'
-import { planDecisionErrorText } from '@/lib/plan'
+import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
@@ -381,20 +382,30 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           </Link>
         }
       >
-        <div className="flex flex-col gap-3 text-[14px]" lang="en">
-          {material.plan.narrative.map((part) => (
-            <section key={part.section} className="flex flex-col gap-1">
-              <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
-                {t.planPage.sections[part.section] ?? part.section}
-              </h3>
-              <p className="m-0 whitespace-pre-wrap">{part.text}</p>
-            </section>
-          ))}
-        </div>
+        <PlanNarrative plan={material.plan} />
       </Panel>
     )
   }
   return <ReportPreview report={material.report} decisions={material.previous_decisions} />
+}
+
+// 计划叙述各段 (计划页与 PLN-15 闸门材料共用): 段名本地化, 正文为 AI 写的英文
+export function PlanNarrative({ plan }: { plan: AuditPlan }) {
+  const { t } = useI18n()
+  return (
+    <div className="flex flex-col gap-3 text-[14px]">
+      {plan.narrative.map((part) => (
+        <section key={part.section} className="flex flex-col gap-1">
+          <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
+            {t.planPage.sections[part.section] ?? part.section}
+          </h3>
+          <p className="m-0 whitespace-pre-wrap" lang="en">
+            {part.text}
+          </p>
+        </section>
+      ))}
+    </div>
+  )
 }
 
 type ReportMaterial = Extract<GateView['material'], { kind: 'RPT-01' }>
@@ -477,12 +488,12 @@ export function GateDecisionCard({
     view.material.kind === 'FIN-01' ? view.material.schedule.candidate_opinion : 'qualified',
   )
   const [notes, setNotes] = useState<NoteDraft[]>([newNote()])
-  // PLN-15 批准时的三项确认 (需求 R206, R315): 是否需要项目质量复核与依据默认取 AI 建议, 不需要审计师的专家须勾选
-  const [confirmation, setConfirmation] = useState<PlanConfirmation>(() => ({
-    eqr_required: view.material.kind === 'PLN-15' ? view.material.plan.eqr_recommendation.required : false,
-    eqr_basis: view.material.kind === 'PLN-15' ? view.material.plan.eqr_recommendation.basis : '',
-    auditor_expert_not_required: false,
-  }))
+  // PLN-15 批准时的三项确认 (需求 R206, R315), 初值见 initialConfirmation; 别的闸门不用
+  const [confirmation, setConfirmation] = useState<PlanConfirmation>(() =>
+    view.material.kind === 'PLN-15'
+      ? initialConfirmation(view.material.plan)
+      : { eqr_required: false, eqr_basis: '', auditor_expert_not_required: false },
+  )
   const submit = useMutation({
     ...gatesSubmitGateDecisionMutation(),
     onSuccess: async () => {
@@ -491,7 +502,7 @@ export function GateDecisionCard({
       await invalidateEngagement(queryClient, eid)
     },
     onError: (error) =>
-      toast.error(view.material.kind === 'PLN-15' ? planDecisionErrorText(error, t) : errorText(error, t)),
+      toast.error(view.material.kind === 'PLN-15' ? planDecisionErrorText(error, t) : apiMessage(error)),
   })
 
   const gate = view.gate
@@ -907,11 +918,7 @@ function buildDecision(
     return { ...base, materiality: input.choice, edits }
   }
   if (view.material.kind === 'FIN-01' && decision === 'approve') return { ...base, disposition: input.disposition }
-  if (view.material.kind === 'PLN-15' && decision === 'approve') {
-    const basis = input.confirmation.eqr_basis.trim()
-    if (!basis) return t.planPage.confirm.basisRequired
-    return { ...base, plan_confirmation: { ...input.confirmation, eqr_basis: basis } }
-  }
+  if (view.material.kind === 'PLN-15' && decision === 'approve') return planApprovalBody(base, input.confirmation, t)
   if (view.material.kind === 'RPT-01' && decision === 'reject') {
     const annotations = input.notes
       .map((note) => ({ section: note.section, quote: note.quote?.trim() || null, comment: note.comment.trim() }))
@@ -948,7 +955,7 @@ export function GatePanel({ eid, disabled }: { eid: string; disabled: boolean })
           {gate.data.material.kind === 'ACC-01' ? (
             <ProfileForm eid={eid} profile={gate.data.material.client_profile} disabled={disabled} />
           ) : null}
-          <GateDecisionCard eid={eid} view={gate.data} disabled={disabled} />
+          <GateDecisionCard key={decisionCardKey(gate.data)} eid={eid} view={gate.data} disabled={disabled} />
         </div>
       ) : null}
     </QueryState>
@@ -959,7 +966,7 @@ export function RptSignForm({ eid, disabled }: { eid: string; disabled: boolean 
   const gate = useGate(eid)
   const view = gate.data
   if (view?.material.kind !== 'RPT-01') return null
-  return <GateDecisionCard eid={eid} view={view} disabled={disabled} />
+  return <GateDecisionCard key={decisionCardKey(view)} eid={eid} view={view} disabled={disabled} />
 }
 
 export function ProfileForm({

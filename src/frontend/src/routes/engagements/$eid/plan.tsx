@@ -4,12 +4,12 @@ import { type ReactNode, useEffect, useRef } from 'react'
 import { engagementsGetPlanOptions } from '@/client/@tanstack/react-query.gen'
 import type { AuditPlan, PlanStatus, PlanView } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
-import { GateDecisionCard, useGate } from '@/components/gate-form'
+import { GateDecisionCard, PlanNarrative, useGate } from '@/components/gate-form'
 import { QueryState } from '@/components/query-state'
 import { StaleBadge } from '@/components/rerun'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useActorName } from '@/lib/actor'
-import { decisionsDisabled } from '@/lib/engagement'
+import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { currentPlan, extentLabel, methodLabel, planTable, revisionHistory } from '@/lib/plan'
@@ -75,19 +75,24 @@ function Plan() {
               ) : null}
               {atGate && gate.data?.material.kind === 'PLN-15' ? (
                 <GateDecisionCard
-                  key={`${gate.data.target_id}:${gate.data.target_version}`}
+                  key={decisionCardKey(gate.data)}
                   eid={eid}
                   view={gate.data}
                   disabled={decisionsDisabled(overview)}
                 />
               ) : null}
               <Revisions view={view} />
-              <Narrative plan={current} />
+              <Panel title={t.planPage.strategy}>
+                <PlanNarrative plan={current} />
+              </Panel>
               <Facts plan={current} view={view} />
               <ProcedureTable eid={eid} view={view} />
             </>
           ) : (
-            <p className="text-muted-foreground text-sm">{t.planPage.none}</p>
+            // 功能 planning 关闭的项目永远不会起草计划 (导航里也没有这一项, 只有直接打开地址才到这里)
+            <p className="text-muted-foreground text-sm">
+              {overview && !overview.features?.includes('planning') ? t.planPage.disabled : t.planPage.none}
+            </p>
           )}
         </QueryState>
       </div>
@@ -126,24 +131,6 @@ function Revisions({ view }: { view: PlanView }) {
   )
 }
 
-function Narrative({ plan }: { plan: AuditPlan }) {
-  const { t } = useI18n()
-  return (
-    <Panel title={t.planPage.strategy}>
-      <div className="flex flex-col gap-3 text-[14px]" lang="en">
-        {plan.narrative.map((part) => (
-          <section key={part.section} className="flex flex-col gap-1">
-            <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
-              {t.planPage.sections[part.section] ?? part.section}
-            </h3>
-            <p className="m-0 whitespace-pre-wrap">{part.text}</p>
-          </section>
-        ))}
-      </div>
-    </Panel>
-  )
-}
-
 function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
   const { t } = useI18n()
   return (
@@ -163,7 +150,7 @@ function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
           {view.risks.map((risk) => (
             <li key={risk.id} className="flex flex-col gap-0.5">
               <Code className="font-semibold">{risk.id}</Code>
-              <span>{risk.description}</span>
+              <span lang="en">{risk.description}</span>
             </li>
           ))}
         </ul>
@@ -188,9 +175,15 @@ function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
           {plan.expert_assessment}
         </p>
         {plan.status === 'approved' ? (
-          <p className="m-0 text-[13px] text-muted-foreground">
-            {t.planPage.confirmed(Boolean(plan.eqr_required), Boolean(plan.auditor_expert_not_required))}
-          </p>
+          <>
+            <p className="m-0 text-[13px] text-muted-foreground">
+              {t.planPage.confirmed(Boolean(plan.eqr_required), Boolean(plan.auditor_expert_not_required))}
+            </p>
+            <p className="m-0 text-[13px] text-muted-foreground">
+              {t.planPage.confirmedBasis}
+              <span lang="en">{plan.eqr_basis}</span>
+            </p>
+          </>
         ) : null}
       </Panel>
     </div>
@@ -242,6 +235,14 @@ function ProcedureTable({ eid, view }: { eid: string; view: PlanView }) {
                   <Code className="font-semibold">{row.procedureId}</Code>
                   <span>{procedureName(t, row.procedureId, row.name ?? row.procedureId)}</span>
                 </Link>
+                {row.note ? (
+                  <details className="mt-1 max-w-[28rem] text-[13px]">
+                    <summary className="cursor-pointer text-muted-foreground">{t.planPage.note}</summary>
+                    <p className="m-0 mt-1 whitespace-pre-wrap" lang="en">
+                      {row.note}
+                    </p>
+                  </details>
+                ) : null}
               </td>
               <td className="px-4 py-2.5">{methodLabel(row.engine, t)}</td>
               <td className="px-4 py-2.5">{extentLabel(row, t)}</td>

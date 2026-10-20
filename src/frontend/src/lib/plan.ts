@@ -4,6 +4,8 @@ import type {
   AuditPlan,
   Engine,
   GateDecision,
+  GateDecisionIn,
+  PlanConfirmation,
   PlanRow,
   PlanStatus,
   PlanView,
@@ -27,6 +29,7 @@ export type PlanTableRow = {
   stale: boolean // 过期: 读的数据在执行后变过
   extent: PlanRow['extent']
   sampleSize: number | null
+  note: string | null // 当前计划对该程序的性质, 时间与范围说明 (AI 写的英文; ASA 300 第 9 段); 没有为空
 }
 
 // 当前计划 (后端第 0 节的取法, current_plan_id 指向它); 没有为 undefined
@@ -38,6 +41,9 @@ export function currentPlan(view: PlanView): AuditPlan | undefined {
 export function planTable(view: PlanView, procedures: ProcedureSummary[]): PlanTableRow[] {
   const objectives = new Map(view.objectives.map((item) => [item.id, item]))
   const rows = new Map(procedures.map((item) => [item.id, item]))
+  const notes = new Map(
+    (currentPlan(view)?.procedure_notes ?? []).map((item) => [item.procedure_id, item.nature_timing_extent]),
+  )
   return view.rows.map((row) => {
     const procedure = rows.get(row.procedure_id)
     return {
@@ -51,6 +57,7 @@ export function planTable(view: PlanView, procedures: ProcedureSummary[]): PlanT
       stale: procedure?.stale ?? false,
       extent: row.extent,
       sampleSize: row.sample_size ?? null,
+      note: notes.get(row.procedure_id) ?? null,
     }
   })
 }
@@ -82,12 +89,35 @@ export function extentLabel(row: Pick<PlanTableRow, 'extent' | 'sampleSize'>, t:
   return row.extent === 'sample' && row.sampleSize != null ? t.planPage.sample(row.sampleSize) : t.planPage.full
 }
 
+// PLN-15 批准时三项确认的初值 (需求 R206, R315): 是否需要项目质量复核与依据取 AI 建议; 不需要审计师的专家由审计师
+// 自己勾选, 初值为 false
+export function initialConfirmation(plan: AuditPlan): PlanConfirmation {
+  return {
+    eqr_required: plan.eqr_recommendation.required,
+    eqr_basis: plan.eqr_recommendation.basis,
+    auditor_expert_not_required: false,
+  }
+}
+
+// PLN-15 批准的提交体: base (闸门, 绑定的计划与版本, 理由) 加三项确认, 依据去掉首尾空白; 依据为空时返回提示文字
+export function planApprovalBody(
+  base: GateDecisionIn,
+  confirmation: PlanConfirmation,
+  t: Messages,
+): GateDecisionIn | string {
+  const basis = confirmation.eqr_basis.trim()
+  if (!basis) return t.planPage.confirm.basisRequired
+  return { ...base, plan_confirmation: { ...confirmation, eqr_basis: basis } }
+}
+
 // PLN-15 决定被拒的文字: 缺必填项 (MISSING_FIELD, 后端的说明为字段名) 与取值不合格 (INVALID_VALUE, 如依据为空, 附后端
-// 的说明) 各有文案; 其余 (VERSION_MISMATCH, ENGAGEMENT_BUSY 等) 同 errorText
+// 的说明) 各有文案; 版本不符 (VERSION_MISMATCH) 用闸门的说法 (呈报材料已更新), 全局文案是中性的; 其余
+// (ENGAGEMENT_BUSY 等) 同 errorText
 export function planDecisionErrorText(error: unknown, t: Messages): string {
   const code = apiCode(error)
   const message = apiDetail(error)?.message
   if (code === 'MISSING_FIELD') return t.planPage.errors.missing(message ?? '')
   if (code === 'INVALID_VALUE') return message ? t.planPage.errors.invalidWith(message) : t.planPage.errors.invalid
+  if (code === 'VERSION_MISMATCH') return t.planPage.errors.stale
   return errorText(error, t)
 }

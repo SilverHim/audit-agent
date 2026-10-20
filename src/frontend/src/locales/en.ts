@@ -516,7 +516,7 @@ export const en = {
       IMPORT_PARSE_ERROR: 'Some cells could not be read. Check the column matches and the date format.',
       FILE_TOO_LARGE: 'Each file must be 50 MB or smaller.',
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
-      VERSION_MISMATCH: 'The material has been updated. Refresh and decide again.',
+      VERSION_MISMATCH: 'This was updated elsewhere. Refresh and try again.',
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
       NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
       XERO_NOT_CONNECTED: 'Xero is not connected yet.',
@@ -627,6 +627,7 @@ export const en = {
     status: { draft: 'Awaiting approval', approved: 'Approved', superseded: 'Superseded' },
     revision: (n: number) => `Revision ${n}`,
     none: 'The overall audit plan has not been drafted yet. The AI drafts it after the risk and materiality decision is approved and the procedures are assembled.',
+    disabled: 'The overall audit plan is not enabled for this engagement.',
     stale:
       'The ledgers changed after this plan was drafted. You can send it back so the AI redrafts it on the new data.',
     history: 'Revision history',
@@ -657,6 +658,7 @@ export const en = {
       `Confirmed on approval: engagement quality review ${eqr ? 'required' : 'not required'}; ${
         noExpert ? "no auditor's expert needed" : "need for an auditor's expert not confirmed"
       }`,
+    confirmedBasis: 'Basis confirmed on approval: ',
     cols: {
       objective: 'Risk or assertion',
       procedure: 'Procedure',
@@ -670,6 +672,7 @@ export const en = {
     methods: { rule: 'Rule check', llm: 'AI judgment', hybrid: 'Rule check + AI judgment', manual: 'Manual' },
     full: 'Full population',
     sample: (n: number) => `Sample of ${n}`,
+    note: 'Nature, timing and extent',
     confirm: {
       eqr: 'Engagement quality review',
       yes: 'Required',
@@ -684,6 +687,7 @@ export const en = {
       missing: (fields: string) => `The decision is missing a required field: ${fields}.`,
       invalid: 'Part of the decision is not valid. Check the confirmations and the reason.',
       invalidWith: (message: string) => `Part of the decision is not valid: ${message}`,
+      stale: 'The material has been updated. Refresh and decide again.',
     },
   },
   proceduresPage: {

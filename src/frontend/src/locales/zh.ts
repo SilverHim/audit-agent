@@ -467,7 +467,7 @@ export const zh: Messages = {
       IMPORT_PARSE_ERROR: '有单元格无法解析，请核对列对应与日期格式。',
       FILE_TOO_LARGE: '单个文件不能超过 50 MB。',
       ENGAGEMENT_BUSY: '项目正在处理中，请稍后再试。',
-      VERSION_MISMATCH: '呈报材料已更新，请刷新后重新决定。',
+      VERSION_MISMATCH: '数据已被更新，请刷新后重试。',
       ENGAGEMENT_LOCKED: '项目已签字，只能查看。',
       NOT_RERUNNABLE: '只能在等待复核、FIN-01 或 RPT-01 阶段决定时重跑。',
       XERO_NOT_CONNECTED: '还没有连接 Xero。',
@@ -569,6 +569,7 @@ export const zh: Messages = {
     status: { draft: '待批准', approved: '已批准', superseded: '已被取代' },
     revision: (n) => `第 ${n} 修订`,
     none: '总体审计计划尚未起草。风险与重要性决定通过、程序装配后，由 AI 起草计划。',
+    disabled: '本项目未启用总体审计计划。',
     stale: '计划起草后账表有变动。可以退回，让 AI 按新数据重拟计划。',
     history: '修订历史',
     approvedBy: (who, at) => `${who} 于 ${at} 批准`,
@@ -595,6 +596,7 @@ export const zh: Messages = {
     expert: '审计师的专家',
     confirmed: (eqr, noExpert) =>
       `批准时确认：${eqr ? '需要' : '不需要'}项目质量复核；${noExpert ? '不需要审计师的专家' : '未确认不需要审计师的专家'}`,
+    confirmedBasis: '批准时确认的依据：',
     cols: {
       objective: '风险或认定',
       procedure: '程序',
@@ -608,6 +610,7 @@ export const zh: Messages = {
     methods: { rule: '规则核对', llm: 'AI 判断', hybrid: '规则核对 + AI 判断', manual: '人工' },
     full: '全量',
     sample: (n) => `抽样 ${n}`,
+    note: '性质、时间与范围',
     confirm: {
       eqr: '是否需要项目质量复核',
       yes: '需要',
@@ -622,6 +625,7 @@ export const zh: Messages = {
       missing: (fields) => `决定缺少必填项：${fields}。`,
       invalid: '决定内容不合要求，请检查三项确认与理由。',
       invalidWith: (message) => `决定内容不合要求：${message}`,
+      stale: '呈报材料已更新，请刷新后重新决定。',
     },
   },
   proceduresPage: {
