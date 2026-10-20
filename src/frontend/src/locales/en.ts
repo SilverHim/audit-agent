@@ -56,18 +56,21 @@ export const en = {
   },
   gates: {
     'ACC-01': 'Engagement acceptance',
+    'ACC-08': 'Engagement terms and appointment',
     'PLN-01/03': 'Materiality and risk register',
     'FIN-01': 'Uncorrected misstatements and opinion',
     'RPT-01': 'Report approval and sign-off',
   },
   gateQuestions: {
     'ACC-01': 'Accept this engagement?',
+    'ACC-08': 'Are the engagement terms and the appointment in order?',
     'PLN-01/03': 'Approve materiality and the risk register?',
     'FIN-01': 'Confirm the opinion type?',
     'RPT-01': 'Sign the audit report?',
   },
   verdicts: {
     'ACC-01': { approve: 'Accept', reject: 'Decline', insufficient_info: 'Need more information' },
+    'ACC-08': { approve: 'Approve', reject: 'Decline', insufficient_info: 'Need more information' },
     'PLN-01/03': { approve: 'Approve', reject: 'Send back', insufficient_info: 'Need more information' },
     'FIN-01': { approve: 'Confirm opinion', reject: 'Send back', insufficient_info: 'Need more information' },
     'RPT-01': {
@@ -81,6 +84,11 @@ export const en = {
       approve: 'Move on to planning (P1)',
       reject: 'Close the engagement as Declined',
       insufficient_info: 'Say what to check; ACC-04 runs again',
+    },
+    'ACC-08': {
+      approve: 'Move on to planning (P1)',
+      reject: 'Close the engagement as Declined',
+      insufficient_info: 'Say what the client must provide; ACC-08 reads the documents again',
     },
     'PLN-01/03': {
       approve: 'Assemble the procedure pack and start fieldwork',

@@ -2346,9 +2346,9 @@ export type GateEdit = {
 /**
  * GateId
  *
- * 四道闸门.
+ * 闸门. 基线四道; ACC-08 属功能 acceptance, 登记表 (orchestration/gates.GATES) 的行由需求 R201 加.
  */
-export type GateId = 'ACC-01' | 'PLN-01/03' | 'FIN-01' | 'RPT-01';
+export type GateId = 'ACC-01' | 'ACC-08' | 'PLN-01/03' | 'FIN-01' | 'RPT-01';
 
 /**
  * GateVerdict

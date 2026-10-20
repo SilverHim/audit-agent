@@ -58,6 +58,7 @@ from tests.fakes import (
     FakeTrail,
     ScriptA6,
     compliance_check,
+    engagement_terms,
     governance_communication,
     independence_declaration,
     make_ctx,
@@ -172,12 +173,13 @@ def test_valid_a6_patch_passes() -> None:
 # ── 验收 1: 字段归属 ──
 
 
-def test_a2_cannot_write_judgments() -> None:
-    patch = {"judgments": [judgment()], "procedure_runs": [finished(RUN)]}
+def test_a2_cannot_write_confirmations() -> None:
+    """A2 写不在其范围内的字段被拒 (R198 起 A2 可写 judgments, 改用 confirmations)."""
+    patch = {"confirmations": [], "procedure_runs": [finished(RUN)]}
 
     reasons = reasons_of(patch, writer=AgentId.A2)
 
-    assert reasons == ["A2 不能写字段 judgments"]
+    assert reasons == ["A2 不能写字段 confirmations"]
 
 
 def test_a6_cannot_write_acceptance_scorecard() -> None:
@@ -196,7 +198,13 @@ def test_agent_cannot_write_a1_or_unknown_fields(field: str) -> None:
 
 def test_agent_fields_match_section_6_table() -> None:
     """第 6 节返回字段表逐项对照; procedure_runs 另行允许, 不在表里."""
-    assert AGENT_FIELDS[AgentId.A2] == {"acceptance_scorecard", "exceptions"}
+    assert AGENT_FIELDS[AgentId.A2] == {
+        "acceptance_scorecard",
+        "exceptions",
+        "engagement_terms",
+        "judgments",
+        "documents",
+    }
     assert AGENT_FIELDS[AgentId.A3] == {"documents", "confirmations", "review_tasks"}
     assert AGENT_FIELDS[AgentId.A4] == {
         "analytics",
@@ -240,6 +248,39 @@ def test_a5_may_write_ownership_graph_and_a6_may_not() -> None:
             run_id=RUN.id,
             state=make_state(),
             outputs=[*declared("REV-03"), "ownership_graph"],
+        )
+
+
+def test_a2_may_write_engagement_terms_but_not_review_tasks() -> None:
+    """R198 验收 5: A2 执行 ACC-08 的片段 (约定条款 TERMS, 建议判断, 例外与读过的约定文件, outputs 取 ACC-08.yaml)
+    通过; 再带复核任务被拒 (闸门程序的判断不建任务, A2 的写入范围不含 review_tasks), 原因含字段名."""
+    acc08 = make_run("ACC-08")
+    advice = judgment("J-ACC-08-1-TERMS", "ACC-08", acc08.id).model_copy(update={"subject_id": "TERMS"})
+    letter = DocumentRef(
+        id="DOC-EL",
+        type=DocumentType.engagement_letter,
+        file_name="engagement_letter.pdf",
+        sha256="2" * 64,
+        page_count=3,
+        reliability=Reliability.external_copy,
+        status="extracted",
+        uploaded_at=NOW,
+    )
+    patch: StatePatch = {
+        "engagement_terms": engagement_terms(acc08.id),
+        "judgments": [advice],
+        "exceptions": [exception("X-ACC-08-1-T05-1", "ACC-08", acc08.id)],
+        "documents": [letter],
+        "procedure_runs": [finished(acc08)],
+    }
+    state = make_state(procedure_pack=[*PACK, make_procedure("ACC-08", Phase.P0_Acceptance)])
+    check = {"writer": AgentId.A2, "procedure_id": "ACC-08", "run_id": acc08.id, "state": state}
+    check_patch(patch, **check, outputs=declared("ACC-08"))  # type: ignore[arg-type]
+    with pytest.raises(MergeRejected, match="merge_rejected: A2 不能写字段 review_tasks"):
+        check_patch(
+            {**patch, "review_tasks": [task(advice.id, run_id=acc08.id)]},
+            **check,  # type: ignore[arg-type]
+            outputs=[*declared("ACC-08"), "review_tasks"],
         )
 
 
@@ -587,20 +628,42 @@ def test_exception_ids_must_exist() -> None:
     assert reasons == [f"Judgment {J1} 引用的例外 X-REV-08-1-R01-2 不存在"]
 
 
-def test_scorecard_exception_ids_must_exist() -> None:
-    acc04 = make_run("ACC-04")
-    scorecard = AcceptanceScorecard(
-        id="SCORECARD", registry_checks=[], exception_ids=["X-ACC-04-1-abn_active-1"], client_profile_version=1
-    )
-    patch = {"acceptance_scorecard": scorecard, "exceptions": [], "procedure_runs": [finished(acc04)]}
-    state = initial_state(ENGAGEMENT, [make_procedure("ACC-04")], 1)
+@pytest.mark.parametrize(
+    ("procedure_id", "field", "material", "dangling"),
+    [
+        (
+            "ACC-04",
+            "acceptance_scorecard",
+            AcceptanceScorecard(
+                id="SCORECARD", registry_checks=[], exception_ids=["X-ACC-04-1-abn_active-1"], client_profile_version=1
+            ),
+            "AcceptanceScorecard SCORECARD 引用的例外 X-ACC-04-1-abn_active-1 不存在",
+        ),
+        (
+            "ACC-08",
+            "engagement_terms",
+            engagement_terms().model_copy(update={"exception_ids": ["X-ACC-08-1-T05-1"]}),
+            "EngagementTerms TERMS 引用的例外 X-ACC-08-1-T05-1 不存在",
+        ),
+    ],
+)
+def test_gate_material_exception_ids_must_exist(procedure_id: str, field: str, material: Any, dangling: str) -> None:
+    """闸门材料 (评分卡; 约定条款, 审核 R198-01) 的 exception_ids 指向片段与状态中都没有的例外时拒绝, 原因含例外 ID."""
+    run = make_run(procedure_id)
+    patch = {field: material, "exceptions": [], "procedure_runs": [finished(run)]}
+    state = initial_state(ENGAGEMENT, [make_procedure(procedure_id)], 1)
 
     with pytest.raises(MergeRejected) as info:
         check_patch(
-            patch, writer=AgentId.A2, procedure_id="ACC-04", run_id=acc04.id, state=state, outputs=declared("ACC-04")
+            patch,  # type: ignore[arg-type]
+            writer=AgentId.A2,
+            procedure_id=procedure_id,
+            run_id=run.id,
+            state=state,
+            outputs=declared(procedure_id),
         )
 
-    assert info.value.reasons == ["AcceptanceScorecard SCORECARD 引用的例外 X-ACC-04-1-abn_active-1 不存在"]
+    assert info.value.reasons == [dangling]
 
 
 # ── 验收 4: 本次执行的终态 ──
@@ -834,12 +897,14 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 19 条模板 (含功能 journals 的 GEN-05) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个
-    可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序声明的共享字段都不是 singleton."""
+    """R85 验收 1-3: 21 条模板 (含功能 journals 的 GEN-05, related_parties 的 GEN-08 与 acceptance 的 ACC-08) 的 outputs
+    都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序
+    声明的共享字段都不是 singleton."""
     assert output_problems(LIBRARY) == []
     assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
         "ACC-01": [],
         "ACC-04": ["acceptance_scorecard", "exceptions"],
+        "ACC-08": ["engagement_terms", "judgments", "exceptions", "documents"],
         "CSH-02": ["judgments", "exceptions", "review_tasks", "confirmations"],
         "CSH-04": ["confirmations", "documents"],
         "CSH-05": ["exceptions"],
@@ -848,6 +913,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "FIN-01": [],
         "FIN-04": ["uncorrected_schedule"],
         "GEN-05": ["exceptions"],
+        "GEN-08": ["ownership_graph", "exceptions", "documents"],  # 需求 R137
         "GEN-09": [],
         "PLN-01": ["materiality_candidates", "audit_objectives", "risk_register"],
         "PLN-03": [],
@@ -859,9 +925,11 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "RPT-03": ["report_versions", "review_tasks"],
     }
     assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
+        "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],
         "CSH-04": [DocumentType.confirmation],
         "DOC-04": [DocumentType.contract],
         "DOC-06": [DocumentType.confirmation],
+        "GEN-08": [DocumentType.registry_extract],
     }
     assert set().union(*AGENT_FIELDS.values()) <= set(FIELD_REPLAY) <= set(STATE_HINTS)
     declared = Counter(f for t in LIBRARY.all(include_disabled=True) for f in t.outputs)

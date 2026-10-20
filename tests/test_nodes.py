@@ -496,9 +496,9 @@ def rule_error(ctx: RunContext) -> StatePatch:
     raise RuleError("REV-08.R01: SQL 超时")
 
 
-def scorecard_with_judgments(ctx: RunContext) -> StatePatch:
-    """A2 越权写 judgments: 合并校验不过."""
-    return {"acceptance_scorecard": scorecard([]), "judgments": [], "procedure_runs": [finished(ctx.run)]}
+def scorecard_with_confirmations(ctx: RunContext) -> StatePatch:
+    """A2 越权写 confirmations: 合并校验不过 (R198 起 A2 可写 judgments, 改用 confirmations)."""
+    return {"acceptance_scorecard": scorecard([]), "confirmations": [], "procedure_runs": [finished(ctx.run)]}
 
 
 def single_node(nodes: GraphNodes, procedure_id: str) -> CompiledStateGraph[EngagementState]:
@@ -565,7 +565,7 @@ async def test_run_agent_returns_valid_patch_as_is() -> None:
     [
         (boom, "RuntimeError: boom"),
         (rule_error, "RuleError: REV-08.R01: SQL 超时"),
-        (scorecard_with_judgments, "merge_rejected: A2 不能写字段 judgments"),
+        (scorecard_with_confirmations, "merge_rejected: A2 不能写字段 confirmations"),
     ],
 )
 async def test_failure_writes_failed_run_task_and_waits(script: Any, reason: str) -> None:

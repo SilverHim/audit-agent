@@ -22,6 +22,7 @@ from backend.contracts.models import (
     CommunicationForm,
     ComplianceCheck,
     DeclarationForm,
+    EngagementTerms,
     GateDecision,
     GateId,
     GateVerdict,
@@ -37,6 +38,7 @@ from backend.contracts.models import (
     RepresentationStatus,
     ReviewRecord,
     ReviewStatus,
+    TermsCheckStatus,
     TrailKind,
     UncorrectedSchedule,
     Versioned,
@@ -72,6 +74,7 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     compliance_check,
+    engagement_terms,
     governance_communication,
     independence_declaration,
     make_deps,
@@ -168,6 +171,7 @@ def test_initial_state_equals_previous_literal() -> None:
         phase=ENGAGEMENT.phase,
         version_snapshot=dict(ENGAGEMENT.version_snapshot),
         acceptance_scorecard=None,
+        engagement_terms=None,  # 需求 R198 加
         client_profile_version=3,
         analytics=None,
         materiality_candidates=None,
@@ -450,6 +454,19 @@ async def test_ownership_graph_survives_checkpoint_and_defaults_to_none() -> Non
     assert isinstance(back, OwnershipGraph) and back == ownership_graph()
 
 
+class TermsOnly(TypedDict):
+    engagement_terms: EngagementTerms | None
+
+
+async def test_engagement_terms_survive_checkpoint_and_default_to_none() -> None:
+    """R198 验收 4: 旧检查点没有 engagement_terms 键时读到 None; 经检查点白名单序列化的 InMemorySaver 存取一轮后仍是
+    EngagementTerms 实例, 内容不变, 核对结果的状态仍是 TermsCheckStatus (不退化为字符串)."""
+    assert fill_defaults({})["engagement_terms"] is None
+    back = (await checkpoint_round_trip(TermsOnly, {"engagement_terms": engagement_terms()}))["engagement_terms"]
+    assert type(back) is EngagementTerms and back == engagement_terms()
+    assert all(type(c.status) is TermsCheckStatus for c in back.checks)
+
+
 class CompletionOnly(TypedDict):
     representation_letter: WrittenRepresentationLetter | None
     compliance_checks: list[ComplianceCheck]
@@ -538,8 +555,8 @@ def unregistered_outputs(state: Any) -> list[str]:
 
 
 def test_versioned_state_fields_have_output_tables() -> None:
-    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 21 种全部在, R136 加 OwnershipGraph,
-    R215 加签字前提的四种)."""
+    """验收 4: 状态中元素为 Versioned 的字段, 其类型都在 OUTPUT_KINDS 中 (现有 22 种全部在, R136 加 OwnershipGraph,
+    R215 加签字前提的四种, R198 加 EngagementTerms)."""
     names = {t.__name__ for t in versioned_fields(EngagementState).values()}
     assert names >= {
         "AcceptanceScorecard",
@@ -563,6 +580,7 @@ def test_versioned_state_fields_have_output_tables() -> None:
         "ComplianceCheck",
         "GovernanceCommunication",
         "IndependenceDeclaration",
+        "EngagementTerms",
     }
     assert unregistered_outputs(EngagementState) == []
 

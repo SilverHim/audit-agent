@@ -187,10 +187,11 @@ def previous_allowed(gate: GateId, verdict: GateVerdict) -> set[str]:
     return set()
 
 
-@pytest.mark.parametrize("gate", list(GateId))
+@pytest.mark.parametrize("gate", [spec.gate for spec in GATES if spec.feature is None])
 @pytest.mark.parametrize("verdict", list(GateVerdict))
 def test_field_rules_equal_previous(gate: GateId, verdict: GateVerdict) -> None:
-    """每道闸门每种决定: 必填与只允许的字段同改造前."""
+    """基线的每道闸门每种决定: 必填与只允许的字段同改造前. 挂功能名的新闸门 (ACC-08 等) 没有 "改造前", 字段规则由
+    各自的需求另写用例 (ACC-08 为 R201, R202; 审核 R198-06)."""
     d = decision(gate, verdict, "X")
     assert required_fields(spec_of(gate), d) == previous_required(gate, verdict)
     assert allowed_fields(spec_of(gate), d) == previous_allowed(gate, verdict)

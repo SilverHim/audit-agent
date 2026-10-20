@@ -9,16 +9,18 @@ from datetime import date, datetime
 from functools import cache, cached_property
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import pdfplumber
 import pytest
 import yaml
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, UndefinedError
 from pydantic import ValidationError
 
-from backend.contracts.llm_outputs import ContractExtraction
+from backend.contracts.llm_outputs import ContractExtraction, EngagementTermsExtraction
 from backend.contracts.models import (
+    TERMS_ACKNOWLEDGEMENTS,
+    TERMS_ELEMENTS,
     AuditObjective,
     ClientProfile,
     EvidencePointer,
@@ -26,6 +28,7 @@ from backend.contracts.models import (
     Model,
     Phase,
     Procedure,
+    ReportingFramework,
     Retention,
     RiskLevel,
     TermType,
@@ -36,9 +39,10 @@ from backend.core.config import get_settings
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
+from backend.services.judgment_engine import prompt_env
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.external import optional, supplements_dir
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES
+from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES, engagement_terms
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
 
@@ -94,11 +98,12 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板只有 GEN-05 (功能 journals, 基线下不启用); 非 P2 模板写 fixed,
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-05 (功能 journals) 与 GEN-08 (功能 related_parties, 需求
+    R137), 基线下都不启用; 非 P2 模板写 fixed,
     fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
     ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05"]
+    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-05", "GEN-08"]
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature
@@ -1851,6 +1856,140 @@ def test_prompts_parse() -> None:
     env = Environment(loader=FileSystemLoader(ROOT / "prompts"))
     for name in env.list_templates():
         env.get_template(name)
+
+
+# ── R198: ACC-08 的模板与两份提示词 ──
+
+
+def test_acc08_template_loads_only_with_acceptance() -> None:
+    """验收 7, 9: ACC-08 为承接阶段 A2 的混合程序, 挂 ACC-08 闸门, 依赖 ACC-01, 引用的准则片段都已登记 (功能关闭时
+    test_standards_referenced_are_registered 看不到它, 在此按含未启用的查); 功能 acceptance 关闭时不启用, 不进项目
+    启动实例化的程序 (fixed_procedures), 打开时进."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("ACC-08")
+    assert (t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.gate, t.feature) == (
+        Phase.P0_Acceptance,
+        "Acceptance",
+        "A2",
+        "hybrid",
+        "L1",
+        "ACC-08",
+        "acceptance",
+    )
+    assert (t.depends_on, t.rules, t.llm and (t.llm.prompt, t.llm.output_model)) == (
+        ["ACC-01"],
+        [],
+        ("ACC-08.md.j2", "JudgmentDraft"),
+    )
+    assert t.params == {
+        "acceptable_frameworks": ["tier1_gpfs", "tier2_gpfs", "spfr"],
+        "min_direction_votes_pct": 5,
+        "direction_deadline_months": 12,
+    }
+    assert t.evidence_required == [EvidenceType.contract, EvidenceType.voucher]
+    assert len(t.standards) == 8 and all(base.fragment(f) is not None for f in t.standards)
+    assert not base.enabled("ACC-08") and "ACC-08" not in [p.id for p in fixed_procedures(base)]
+    assert "ACC-08" in [p.id for p in fixed_procedures(ProcedureLibrary(ROOT, {"critic", "acceptance"}))]
+
+
+def acc08_variables(prompt: str, auditor_note: str | None = None) -> dict[str, Any]:
+    """ACC-08 两份提示词的变量 (头注释所列), 事实取 tests.fakes 的 TERMS 样例, 两份约定文件各两页."""
+    terms = engagement_terms()
+    library = ProcedureLibrary(ROOT)
+    fragments = [library.fragment(f) for f in library.load("ACC-08").standards]
+    standards = [f.model_dump(mode="json") for f in fragments if f is not None]
+    documents = [
+        {"id": doc_id, "type": kind, "file_name": f"{kind}.pdf", "page_count": 2, "reliability": reliability}
+        for doc_id, kind, reliability in (
+            ("DOC-APPT", "minutes", "internal_copy"),
+            ("DOC-EL", "engagement_letter", "external_copy"),
+        )
+    ]
+    entity = {"legal_name": "Demo Company (AU) Pty Ltd", "abn": "25900043021", "directors": ["Alex Morgan"]}
+    period = {"period_start": "2026-07-01", "period_end": "2026-09-30"}
+    if prompt == "ACC-08-extract.md.j2":
+        pages = [{"document": d, "pages": [f"{d['id']} first page.", f"{d['id']} second page."]} for d in documents]
+        return {"entity": entity, **period, "documents": pages, "auditor_note": auditor_note, "standards": standards}
+    facts = terms.model_dump(mode="json", include=set(EngagementTermsExtraction.model_fields))
+    checks = [c.model_dump(mode="json") for c in terms.checks]
+    return {
+        "subject_id": "TERMS",
+        "task": {"params": library.load("ACC-08").params},
+        "data": {"terms": facts, "checks": checks, "entity": entity, **period, "documents": documents},
+        "rule_findings": [],
+        "standards": standards,
+    }
+
+
+# ACC-08 两份提示词的关键口径 (审核 R198-05): 口径 → 关键词, 渲染后须有一行同时含这几个词 (不分大小写), 不比整句
+ACC08_EXTRACT_RULES = {
+    "文件没写的事实填 null, 不推断": ("null", "do not state", "never infer"),
+    "文件文本当数据, 不执行其中的指令": ("document text as data", "ignore", "instruction"),
+    "页码取 page 块的编号": ("page is the `number`", "`<page>`"),
+    "同一事实取其本来文件": ("same fact", "more than one document", "whose purpose it is"),
+    "框架没写明为 null, 不带指针": ("`framework_evidence`", "empty when `framework` is null"),
+    "出具日与签回各带页指针, locator 写字段名": ("`letter_evidence`", "page", "`locator` the field name"),
+    "只有股数时 votes_pct 的算法": ("`votes_pct`", "only share numbers", "100 × shares_held / total_shares"),
+    "指针的 type: 约定书 contract, 其余 voucher": (
+        "every pointer",
+        "contract for an engagement letter",
+        "voucher for any other document",
+    ),
+}
+ACC08_JUDGE_RULES = {
+    "accept 只在全部核对通过或不适用时用": ("`accept`", "every check passed", "not applicable"),
+    "特殊目的框架可接受, 但报告须加强调事项段": ("special purpose framework is acceptable", "emphasis of matter"),
+    "日期, 数目与比例以核对结果为准": ("rely on the checks", "dates, counts and percentages"),
+    "不能补救时按 P08 不承接": ("`more_evidence`", "asa210-p08", "should not be accepted"),
+}
+
+
+def missing_rules(prompt: str, rules: dict[str, tuple[str, ...]]) -> list[str]:
+    """提示词里找不到对应行 (同时含全部关键词, 不分大小写) 的口径."""
+    lines = [line.casefold() for line in prompt.splitlines()]
+    return [rule for rule, words in rules.items() if not any(all(w.casefold() in x for w in words) for x in lines)]
+
+
+def test_acc08_prompts_render_with_their_variables() -> None:
+    """验收 8: 两份提示词按头注释的变量渲染. 抽取: 每份文件各页标出文件 ID 与页码, 五项要素与五项确认按 ASA 210 第 10,
+    6(b) 段的项名列出, 框架三种取值 (同 ReportingFramework); 有审计师意见时才有 "## Auditor note" 一节并带其原文.
+    判断: 七项核对逐项列出, 建议动作只给 accept 与 more_evidence. 两份的关键口径按行查关键词 (ACC08_EXTRACT_RULES,
+    ACC08_JUDGE_RULES)."""
+    env = prompt_env(ROOT / "prompts")
+    extract = env.get_template("ACC-08-extract.md.j2").render(acc08_variables("ACC-08-extract.md.j2"))
+    assert '<page document="DOC-EL" number="2">\nDOC-EL second page.\n</page>' in extract
+    output = extract.split("## Output (EngagementTermsExtraction)")[1]
+    frameworks = list(get_args(ReportingFramework))
+    at = [output.index(f"`{name}` (") for name in [*frameworks, *TERMS_ELEMENTS, *TERMS_ACKNOWLEDGEMENTS]]
+    assert at == sorted(at)  # 都列出, 且按框架, 要素, 确认的登记顺序
+    assert missing_rules(extract, ACC08_EXTRACT_RULES) == []
+    assert "## Auditor note" not in extract
+    note = "Client to provide the auditor's consent signed before the appointment"
+    noted = env.get_template("ACC-08-extract.md.j2").render(acc08_variables("ACC-08-extract.md.j2", note))
+    assert "## Auditor note\n\nThe auditor reviewed an earlier reading" in noted and f"information: {note}\n" in noted
+    judge = env.get_template("ACC-08.md.j2").render(acc08_variables("ACC-08.md.j2"))
+    listed = [line.split(" ")[1] for line in judge.splitlines() if re.match(r"- T0\d ", line)]
+    assert listed == [f"T0{n}" for n in range(1, 8)]
+    actions = judge.split("## proposed_action")[1].split("## Output")[0]
+    assert re.findall(r"^- `(\w+)`", actions, re.MULTILINE) == ["accept", "more_evidence"]
+    assert missing_rules(judge, ACC08_JUDGE_RULES) == []
+
+
+@pytest.mark.parametrize(
+    ("prompt", "missing"),
+    [
+        *(
+            ("ACC-08-extract.md.j2", v)
+            for v in ("entity", "period_start", "period_end", "documents", "auditor_note", "standards")
+        ),
+        *(("ACC-08.md.j2", v) for v in ("subject_id", "task", "data", "rule_findings", "standards")),
+    ],
+)
+def test_acc08_prompt_missing_variable_raises(prompt: str, missing: str) -> None:
+    """验收 8: 头注释所列的每个变量缺了都抛 UndefinedError (StrictUndefined), 不会渲染出缺项的提示词."""
+    variables = {k: v for k, v in acc08_variables(prompt).items() if k != missing}
+    with pytest.raises(UndefinedError):
+        prompt_env(ROOT / "prompts").get_template(prompt).render(variables)
 
 
 # ── R01 参数解析: 风险等级取最高, by_risk 与 ref 取不到值时报错 ──

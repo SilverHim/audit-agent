@@ -1,4 +1,5 @@
-"""A5: CSH-04. 返回字段: confirmations, documents, procedure_runs.
+"""A5: CSH-04 函证发起与 GEN-08 股权穿透 (需求 R137, agents/ownership.py), 按程序编号分派. CSH-04 返回字段:
+confirmations, documents, procedure_runs; GEN-08 见 ownership.ownership_patch.
 
 函证跟着当前的银行账户走 (需求 R274): 发函的幂等键含账户的识别信息 (开户行, BSB, 账号). 账户从银行账户表删了,
 或识别信息变了, 它原来的函证不再是当前的 (留作历史, DOC-06, CSH-02 不再处理, 见 current_confirmations); 识别信息
@@ -16,6 +17,7 @@ from datetime import UTC, date, datetime
 from typing import ClassVar
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.ownership import Penetration, Penetrator, ownership_patch
 from backend.contracts.data import DataInput
 from backend.contracts.models import (
     AgentId,
@@ -99,18 +101,24 @@ class Confirmed:
     document: DocumentRef  # 存档的回函
 
 
-class EvidenceAgent(ProcedureAgent[list[Confirmed]]):
-    """A5: 执行 CSH-04, 向银行发询证函并存档回函.
+Findings = list[Confirmed] | Penetration  # CSH-04 的各账户函证结果, GEN-08 的登记查询所得
+
+
+class EvidenceAgent(ProcedureAgent[Findings]):
+    """A5: 执行 CSH-04 (向银行发询证函并存档回函) 与 GEN-08 (股权穿透与关系图, 功能 related_parties, 未启用时注册表
+    不映射), 按程序编号分派.
 
     发函是外部动作, 按接口文档第 6 节三步保证不重复: 先按幂等键查成功留痕, 有则按留痕重建; 没有才发函,
-    存档回函, 再写带幂等键的 external_call 留痕.
+    存档回函, 再写带幂等键的 external_call 留痕. GEN-08 的登记查询同样写带幂等键的留痕, 按留痕重建由需求 R138 做.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A5  # 智能体编号
-    procedures: ClassVar[frozenset[str]] = frozenset({"CSH-04"})  # 负责的程序
+    procedures: ClassVar[frozenset[str]] = frozenset({"CSH-04", "GEN-08"})  # 负责的程序
 
-    async def execute(self, ctx: RunContext) -> list[Confirmed]:
-        """对每个银行账户 (按账户 ID 排序) 依次函证."""
+    async def execute(self, ctx: RunContext) -> Findings:
+        """GEN-08 交 ownership.Penetrator 查登记; CSH-04 对每个银行账户 (按账户 ID 排序) 依次函证."""
+        if ctx.procedure.id == "GEN-08":
+            return await Penetrator(self.deps, ctx).run()
         accounts = sorted(await self.deps.financial_store.bank_accounts(ctx.engagement.id), key=lambda a: a.id)
         return [await self.confirm(ctx, account) for account in accounts]
 
@@ -227,11 +235,14 @@ class EvidenceAgent(ProcedureAgent[list[Confirmed]]):
         )
         return Confirmed(confirmation, document)
 
-    async def interpret(self, ctx: RunContext, findings: list[Confirmed]) -> StatePatch:
-        """函证 (新发函的第 1 版, 已发过函的为 Store 中的最新版本) 与回函文件 (received) 交节点写入, 执行记录置成功终态.
+    async def interpret(self, ctx: RunContext, findings: Findings) -> StatePatch:
+        """GEN-08 见 ownership.ownership_patch. CSH-04: 函证 (新发函的第 1 版, 已发过函的为 Store 中的最新版本) 与
+        回函文件 (received) 交节点写入, 执行记录置成功终态.
 
         几个账户可能共用一份回函 (同一封信答复多个账户, 存档按哈希返回同一记录): 文件按 ID 去重, 保持首次出现的顺序.
         """
+        if isinstance(findings, Penetration):
+            return ownership_patch(ctx, findings)
         documents = {f.document.id: f.document for f in findings}
         return {
             "confirmations": [f.confirmation for f in findings],

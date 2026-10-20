@@ -1,0 +1,40 @@
+id: GEN-08
+name: 股权穿透与关联方关系图
+# 规格书 6.1.1 (A5 含 GEN-08), 7.2 节 (L4); ASA 550 第 15 段 (识别关联方关系时留意记录与文件中未申报的关联方).
+# 无 SQL, 不调大模型. A5 经 RegistrySource 查登记 (agents/ownership, 需求 R137):
+# 1. ABN Lookup 客户画像 (本项目采用的版本) 的 ABN, 取 ACN; 查不到或没有 ACN (不是公司) 抛 LookupError, 执行失败.
+# 2. 取报告主体的 ASIC 公司摘录, 再沿母公司链向上穿透 (逐层取其摘录), 至多 max_depth 层. 母公司链 = 持股不低于
+#    significant_pct 的法人股东逐层向上 (控制或重大影响); 持股更低的法人股东只按摘录建节点与关系, 不查其摘录, 不检索
+#    其高管, 也不出 R01 (GEN-03 照样研判这些节点).
+# 3. 人员检索: 报告主体及母公司链上的高管 (director, secretary), 且出生日期已知. 持股个人的出生日期只能来自同一摘录
+#    的高管栏, 所以 "持股不低于 significant_pct 且出生日期已知" 的个人必然已作为高管入选, 代码不另写这一支; 只持股
+#    不任职的个人没有出生日期, 不检索. 取检索结果中其任职或持股的其他公司的摘录; person_hops 为这样的轮数 (1 即不再
+#    检索新公司里的人员). 由某人的检索结果发现的公司, 其摘录里与该人规范化姓名相同的股东行并入该人的节点.
+# 每次查询写一行 external_call (幂等键 {eid}:GEN-08:abn:{abn}, :extract:{acn}, :person:{姓}-{名}-{yyyymmdd}; ACN 去空白),
+# payload 为查询参数, 结构化结果 (去掉 PDF 原件) 与存档文件的 ID (ABN 查询没有文件); 人员检索那行的摘要只写检索序号,
+# 不写姓名与出生日期. 摘录与检索结果的 PDF 存档为 registry_extract (external_original, 已抽取). 关系只取公司摘录
+# (人员检索只用来发现新公司); 节点与关系的写法见接口文档第 6 节.
+# 规则 (在代码中生成, 例外 ID X-GEN-08-{run_no}-{规则}-{n}):
+# - R01 关联候选未申报 (high): 关系图中报告主体以外的公司, 不在画像的申报清单 (related_parties 与 ownership 中的公司)
+#   中. 按 ACN 比对 (申报项的 acn, 或 abn 的后 9 位); 申报项两者都没有时按名称比对: 两边经 services/party_names
+#   .party_name_key 规范化 (不去前缀, 去 entity_suffixes), 键相等即算申报. 不引 AASB 段号 (决定 3).
+# - R02 穿透中断 (medium): 摘录查不到, 法人股东没有 ACN, 或法人股东链超过 max_depth; 由需求 R138 出例外. 本条起
+#   这些公司照样建节点 (searched 为假) 与关系, 不再往下穿透.
+phase: P2_Executing
+cycle: Pervasive
+owner: A5
+feature: related_parties          # 功能开关 (services/features.py): 关联方
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [ownership_graph, exceptions, documents]
+document_types: [registry_extract]
+# reads [registry_extracts] 由需求 R138 加: 本条重跑仍出关系图 v1 (Store 按 id 与版本返回旧的), 重跑出 v2 在 R138
+engine: rule
+autonomy_level: L4
+assertions: [Completeness]
+params:
+  max_depth: 3                    # 向上穿透法人股东的层数
+  person_hops: 1                  # 人员检索的轮数
+  significant_pct: 0.2            # 母公司链上法人股东的持股比例下限 (含)
+  entity_suffixes: [pty ltd, pty limited, pty, ltd, limited]   # 公司后缀, 申报清单按名称比对时去掉 (同 GEN-05)
+standards: [ASA550-P15]
+rules: []

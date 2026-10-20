@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from backend.contracts.errors import VersionConflict
+from backend.contracts.llm_outputs import EngagementTermsExtraction
 from backend.contracts.models import (
     AsicExtract,
     Assertion,
@@ -27,6 +28,7 @@ from backend.contracts.models import (
     Direction,
     DocumentRef,
     DocumentType,
+    EngagementTerms,
     EvidencePointer,
     EvidenceType,
     FinancialStatementLine,
@@ -52,9 +54,12 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     TaskKind,
+    TermsCheckStatus,
+    TermsItem,
     TrailKind,
     WrittenRepresentationLetter,
     company_node_id,
+    organisation_node_id,
     person_node_id,
     split_full_name,
 )
@@ -64,6 +69,7 @@ from backend.orchestration.checkpoint import checkpoint_serde
 from tests.fakes import (
     XERO_FS_V1,
     compliance_check,
+    engagement_terms,
     governance_communication,
     independence_declaration,
     ownership_graph,
@@ -88,6 +94,7 @@ def _exc(version: int) -> AuditException:
 def test_enum_values_equal_names() -> None:
     assert Phase.P2_Executing.value == "P2_Executing"
     assert GateId.PLN_01_03.value == "PLN-01/03"
+    assert GateId.ACC_08.value == "ACC-08"  # 需求 R198
 
 
 def test_upsert_by_id() -> None:
@@ -486,7 +493,7 @@ def test_person_node_id_rejects_empty_family_name() -> None:
 
 def test_full_name_split_and_company_node_id() -> None:
     """验收 2: 摘录中只有全名时姓取最后一个词, 名取其余词; 含逗号时按 "姓, 名" 拆 (R136 审核意见 03); 公司节点
-    ACN-{acn}, ACN 先去掉空白, 之后不是 9 位数字抛 ValueError (审核意见 04)."""
+    ACN-{acn}, ACN 先去掉空白, 之后不是 9 位数字抛 ValueError (审核意见 04); 没有 ACN 的公司 ORG-{名称}."""
     assert split_full_name("Sam Whitfield") == ("Whitfield", "Sam")
     assert split_full_name("  Mary Ann  O'Connor ") == ("O'Connor", "Mary Ann")
     assert person_node_id(*split_full_name("Mary Ann O'Connor"), None) == "PER-OCONNOR-MARYANN-NODOB"
@@ -499,6 +506,11 @@ def test_full_name_split_and_company_node_id() -> None:
     for acn in ("", "90004302", "9000430211", "900-043-021"):
         with pytest.raises(ValueError, match="acn 须为 9 位数字"):
             company_node_id(acn)
+    # 没有 ACN 的公司 (需求 R137; 审核意见 R137-02): ORG-{名称}, 名称规范化后为空时抛 ValueError
+    assert organisation_node_id("Galah Holdings (NZ) Limited") == "ORG-GALAHHOLDINGSNZLIMITED"
+    for name in ("", "  ", "株式会社", "—"):
+        with pytest.raises(ValueError, match="名称规范化后为空"):
+            organisation_node_id(name)
 
 
 # ── R216: 待审财报 ──
@@ -669,3 +681,34 @@ def test_independence_declaration_form_matches_contraventions() -> None:
         update={"version": 2, "status": ReportStatus.signed, "declaration_date": date(2026, 8, 25)}
     )
     assert IndependenceDeclaration.model_validate_json(signed.model_dump_json()) == signed
+
+
+# ── R198: ACC-08 约定条款与委任核验 ──
+
+
+def test_engagement_terms_contract() -> None:
+    """验收 2, 3: EngagementTerms (TERMS) 不可改, 不收多余字段, 框架 (取值同 ReportingFramework, 特殊目的为 spfr, 审核
+    R198-04) 与核对结果只收登记的取值, 存储 JSON 往返不变 (检查点往返见 test_state_compat); 要素与确认各只放自己
+    那一类的项, 放错抛 ValidationError 并写明项名.
+    EngagementTermsExtraction 的字段恰为 EngagementTerms 的 framework 至 year_change, 从 TERMS 的这部分解析回来不变."""
+    terms = engagement_terms()
+    with pytest.raises(ValidationError):
+        terms.consent.given_on = date(2026, 8, 27)  # type: ignore[union-attr, misc]
+    data = terms.model_dump()
+    for change in (
+        {"extra": 1},
+        {"framework": "special_purpose"},
+        {"checks": [{**data["checks"][0], "status": "warning"}]},
+    ):
+        with pytest.raises(ValidationError):
+            EngagementTerms.model_validate({**data, **change})
+    misplaced = TermsItem(item="prepare_fr", present=True).model_dump()
+    with pytest.raises(ValidationError, match="放错了类: prepare_fr"):
+        EngagementTerms.model_validate({**data, "elements": [*data["elements"][:4], misplaced]})
+    assert EngagementTerms.model_validate_json(terms.model_dump_json()) == terms
+    assert terms.checks[0].status is TermsCheckStatus.passed
+
+    facts = list(EngagementTermsExtraction.model_fields)
+    assert facts == list(EngagementTerms.model_fields)[2:14] and (facts[0], facts[-1]) == ("framework", "year_change")
+    extraction = EngagementTermsExtraction.model_validate(terms.model_dump(include=set(facts)))
+    assert extraction.model_dump() == terms.model_dump(include=set(facts))

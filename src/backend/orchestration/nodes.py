@@ -247,12 +247,12 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
     - documents: FinancialDataStore.documents 中本程序声明类型 (template.document_types) 的文件, 与第一次执行交回的
       同类 (上传的其他类文件与导入账表的原件不取). 只到类型粒度: CSH-04 存档按哈希取回审计师先上传的别类文件时,
       重放不带回它; 上传后分类为 confirmation 的副本不在 CSH-04, DOC-06 的在线片段里, 重放会带回;
-    - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图, 声明书, 独立性声明): 固定 ID 的最新版本; 模型带 run_id
-      (关系图, 声明书, 独立性声明) 时须属于本程序, 否则节点错误;
+    - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图, 声明书, 独立性声明, 约定条款): 固定 ID 的最新版本; 模型
+      带 run_id (关系图, 声明书, 独立性声明, 约定条款) 时须属于本程序, 否则节点错误;
     - by_procedure (合规检查): 各对象最新版本中 run_id 属于本程序的.
     本次执行的复核任务 (含 A1 代写的 failed 任务) 总按 run_id 取回.
-    再补齐引用, 使片段自成一体: 片段中对象 (merge.EXCEPTION_REFERRERS: 判断, 评分卡, 分析结果, 合规检查) 的
-    exception_ids 与任务的例外目标所指的例外, 取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id
+    再补齐引用, 使片段自成一体: 片段中对象 (merge.EXCEPTION_REFERRERS: 判断, 评分卡, 分析结果, 合规检查, 约定条款)
+    的 exception_ids 与任务的例外目标所指的例外, 取最新版本 (如 REV-02 把 REV-08 的例外置 attributed, 例外的 run_id
     仍是 REV-08 那次); 以片段中对象为目标的复核任务也取最新版本 (取回的例外是决定改出的新版本时, 以其旧版本为目标的
     任务在同一事务里已置 decided, 要一并取回, 否则状态中的旧任务看上去过期); 片段中对象所属的其他执行记录也取回
     (如回退检查点后重放第 1 次, 最新评分卡来自第 2 次, 其例外属于第 2 次执行).

@@ -57,18 +57,21 @@ export const zh: Messages = {
   },
   gates: {
     'ACC-01': '业务承接',
+    'ACC-08': '约定条款与委任核验',
     'PLN-01/03': '重要性与风险清单',
     'FIN-01': '未更正错报与审计意见',
     'RPT-01': '审计报告批准与签字',
   },
   gateQuestions: {
     'ACC-01': '是否承接本项目？',
+    'ACC-08': '约定条款与委任是否齐备？',
     'PLN-01/03': '是否批准重要性水平与风险清单？',
     'FIN-01': '是否确认审计意见类型？',
     'RPT-01': '是否签署审计报告？',
   },
   verdicts: {
     'ACC-01': { approve: '承接', reject: '不承接', insufficient_info: '信息不足' },
+    'ACC-08': { approve: '通过', reject: '不承接', insufficient_info: '信息不足' },
     'PLN-01/03': { approve: '批准', reject: '退回', insufficient_info: '信息不足' },
     'FIN-01': { approve: '确认意见', reject: '退回', insufficient_info: '信息不足' },
     'RPT-01': { approve: '签字并归档', reject: '附批注退回', insufficient_info: '信息不足' },
@@ -78,6 +81,11 @@ export const zh: Messages = {
       approve: '进入审计计划阶段（P1）',
       reject: '以"不承接"关闭本项目',
       insufficient_info: '说明需要补查什么，ACC-04 将重新运行',
+    },
+    'ACC-08': {
+      approve: '进入审计计划阶段（P1）',
+      reject: '以"不承接"关闭本项目',
+      insufficient_info: '说明需要客户补充什么，ACC-08 将重新读取约定文件',
     },
     'PLN-01/03': {
       approve: '据此装配审计程序并开始执行',
