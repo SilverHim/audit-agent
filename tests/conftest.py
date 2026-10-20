@@ -29,6 +29,33 @@ def xero_originals_unchanged():
     assert not moved, "原目录被改动: " + ", ".join(moved)
 
 
+# ── Xero 外部数据 (R294): 经 tests.external 定位核对, 没有时跳过, 跟踪了却找不到时失败; 用例经 external.needs 取 ──
+
+
+@pytest.fixture
+def q1_snapshot():
+    """Xero 快照 20261017-q1 的目录."""
+    from tests.external import snapshot_dir
+
+    return snapshot_dir("20261017-q1")
+
+
+@pytest.fixture
+def mock_snapshot():
+    """Xero 快照 20261017-mock (带付费接口模拟) 的目录."""
+    from tests.external import snapshot_dir
+
+    return snapshot_dir("20261017-mock")
+
+
+@pytest.fixture
+def q1_supplements():
+    """Xero 演示的补造目录 data/xero_demo/20261017-q1."""
+    from tests.external import supplements_dir
+
+    return supplements_dir("20261017-q1")
+
+
 @pytest.fixture
 def xero_case(tmp_path):
     """注入场景的副本: xero_case(场景名或补丁, base=None, **选项) → XeroCase (见 tests/xero_injection.py).

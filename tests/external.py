@@ -4,20 +4,27 @@
   require_external: 缺了就跳过.
 - require_xero_snapshot, require_xero_supplements: Xero 快照与补造目录. 仓库跟踪了的, git ls-files 列出的每个文件都
   得在, 缺一个就失败, 不静默跳过; 两者都在时按补造 manifest 记的快照哈希逐文件核对 (contacts.json 不在表内, 不打开),
-  不符时跳过 (EXTERNAL_STRICT=1 时失败).
+  不符时跳过 (Mismatch, EXTERNAL_STRICT=1 时失败); hashes=False 时不核对哈希 (校验数据本身的用例用, 不符由它们报出).
+- require_xero_raw: Xero 网页导出 data/external/xero/raw, 跟踪了的缺一个就失败, 没有又没跟踪时跳过.
+- snapshot_dir, supplements_dir, raw_dir: 上面三个对本仓库的会话缓存, 测试取本仓库的 Xero 数据一律经它们 (R294;
+  测定位函数本身或换仓库根的自测除外); optional 把 "没带数据" 的跳过换成 None, 给 "有数据才多断言几句" 的用例用,
+  哈希不符照旧跳过; snapshot_location, supplements_path 只给路径不核对, 给收集阶段的常量用 (用例运行时另经上面
+  几个核对); needs 是装饰器: 标 external 并取 conftest 里核对数据的 fixture.
 - live_llm_settings: 真实大模型的配置, 只取环境变量, LLM_ENV_FILE (显式指定的文件) 与本仓库的 .env, 不去别的目录
   找; 来源之间不合并; 没配全就跳过. 跳过原因与报错里不带取到的值.
 """
 
+import functools
 import hashlib
 import json
 import os
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 import pytest
+from _pytest.outcomes import Skipped
 from dotenv import dotenv_values
 
 from backend.core.config import Settings
@@ -28,6 +35,9 @@ REQUIRED = ("LLM_MODEL", "LLM_API_KEY")  # 两项须在同一来源配全
 NO_LLM = "未配置 LLM_MODEL 与 LLM_API_KEY"  # 没配真实大模型时的跳过原因 (之后可另附只配了一部分的来源)
 MISMATCH = "快照与补造不匹配, 预期值失效"
 NOT_FOUND = "仓库跟踪了快照却找不到"
+LOCATION_ENV = ("EXTERNAL_DATA_ROOT", "EXTERNAL_STRICT")  # 会改变定位与核对结果的环境变量 (会话缓存的键带上它们)
+T = TypeVar("T")
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def git_lines(repo: Path, *args: str) -> list[str] | None:
@@ -116,8 +126,15 @@ def snapshot_mismatches(snapshot: Path, supplements: Path) -> list[str]:
     return bad
 
 
+class Mismatch(Skipped):
+    """快照与补造哈希不符时的跳过: 数据带着, 只是对不上, optional 不把它当成没带数据."""
+
+    __module__ = "builtins"  # 同 pytest 的 Skipped: 跳过原因显示为 "Mismatch: ...", 不带模块路径
+
+
 def check_pair(snapshot: Path | None, supplements: Path) -> None:
-    """快照与补造都在时核对快照哈希; 不符时跳过 (预期值按补造写, 换了快照就不成立), EXTERNAL_STRICT=1 时失败."""
+    """快照与补造都在时核对快照哈希; 不符时跳过 (Mismatch: 预期值按补造写, 换了快照就不成立), EXTERNAL_STRICT=1
+    时失败."""
     if snapshot is None or not (supplements / "manifest.json").is_file():
         return
     bad = snapshot_mismatches(snapshot, supplements)
@@ -125,17 +142,17 @@ def check_pair(snapshot: Path | None, supplements: Path) -> None:
         reason = f"{MISMATCH}: {snapshot.name} 的 {', '.join(bad)}"
         if os.getenv("EXTERNAL_STRICT") == "1":
             pytest.fail(reason)
-        pytest.skip(reason)
+        raise Mismatch(reason)
 
 
 def snapshot_path(name: str) -> str:
     return f"api/{name}/organisation.json"
 
 
-def require_xero_snapshot(name: str, repo: Path = REPO) -> Path:
+def require_xero_snapshot(name: str, repo: Path = REPO, hashes: bool = True) -> Path:
     """Xero 快照 data/external/xero/api/<name>: 三个来源里第一个有这个快照 (organisation.json) 的. 仓库跟踪了这个
     快照时, git ls-files 列出的每个文件都得在, 缺一个即失败 ("仓库跟踪了快照却找不到"), 不静默跳过; 没跟踪又找不到
-    时跳过. 同名补造目录 data/xero_demo/<name> 也在时核对快照哈希 (check_pair)."""
+    时跳过. 同名补造目录 data/xero_demo/<name> 也在时核对快照哈希 (check_pair; hashes=False 时不核对)."""
     rel = f"data/external/xero/api/{name}"
     lost = missing_tracked(rel, repo)
     if lost:
@@ -146,13 +163,16 @@ def require_xero_snapshot(name: str, repo: Path = REPO) -> Path:
             pytest.fail(f"{NOT_FOUND}: {rel}/organisation.json")
         pytest.skip(f"没有 Xero 快照 {rel} (见 data/external/xero/README.md)")
     root = xero / "api" / name
-    check_pair(root, repo / "data" / "xero_demo" / name)
+    if hashes:
+        check_pair(root, repo / "data" / "xero_demo" / name)
     return root
 
 
-def require_xero_supplements(name: str, repo: Path = REPO) -> Path:
+def require_xero_supplements(name: str, repo: Path = REPO, hashes: bool = True) -> Path:
     """Xero 演示的补造目录 data/xero_demo/<name> (随仓库). 仓库跟踪了的, 列出的每个文件都得在, 缺一个即失败
-    ("仓库跟踪了补造目录却找不到"); 没有又没跟踪时跳过. 快照也在时核对快照哈希 (check_pair)."""
+    ("仓库跟踪了补造目录却找不到"); 没有又没跟踪时跳过. 快照也在时核对快照哈希 (check_pair; hashes=False 时不核对);
+    核对之前先看同名快照: 仓库跟踪了快照而工作区缺文件时同样失败 ("仓库跟踪了快照却找不到"), 不落到哈希不符的跳过
+    (R294)."""
     rel = f"data/xero_demo/{name}"
     lost = missing_tracked(rel, repo)
     if lost:
@@ -160,9 +180,102 @@ def require_xero_supplements(name: str, repo: Path = REPO) -> Path:
     root = repo / rel
     if not (root / "manifest.json").is_file():
         pytest.skip(f"没有 Xero 补造目录 {rel}")
+    if not hashes:
+        return root
+    lost = missing_tracked(f"data/external/xero/api/{name}", repo)
+    if lost:
+        pytest.fail(f"{NOT_FOUND}: {', '.join(lost)}")
     xero = external_dir("xero", repo, [snapshot_path(name)])
     check_pair(xero / "api" / name if xero is not None else None, root)
     return root
+
+
+RAW = "data/external/xero/raw"  # Xero 网页导出 (随仓库)
+XERO_SUPPLEMENTS = REPO / "data" / "xero_demo"  # Xero 演示的补造根, 补造目录为 XERO_SUPPLEMENTS/<快照名>
+
+
+def require_xero_raw(repo: Path = REPO) -> Path:
+    """Xero 网页导出 data/external/xero/raw: 三个来源里第一个有 raw 目录的. 仓库跟踪了的, git ls-files 列出的每个文件
+    都得在, 缺一个即失败 ("仓库跟踪了 Xero 网页导出却找不到"); 没有又没跟踪时跳过."""
+    lost = missing_tracked(RAW, repo)
+    if lost:
+        pytest.fail(f"仓库跟踪了 Xero 网页导出却找不到: {', '.join(lost)}")
+    xero = external_dir("xero", repo, ["raw"])
+    if xero is None:
+        pytest.skip(f"没有 Xero 网页导出 {RAW} (见 data/external/xero/README.md)")
+    return xero / "raw"
+
+
+# 本仓库的会话缓存: 快照, 补造与导出会话中不变 (conftest 逐文件核对哈希), 不必每个用例都跑 git 与算哈希 (一次十几毫秒).
+# 跳过与失败不缓存 (functools.cache 不记异常), 每次照常报出; 键带上 LOCATION_ENV 的取值, 用例改了它们 (如 monkeypatch
+# 掉 EXTERNAL_DATA_ROOT) 时另算, 结果不随用例顺序变.
+
+
+def location_env() -> tuple[str | None, ...]:
+    return tuple(os.getenv(key) for key in LOCATION_ENV)
+
+
+@functools.cache
+def cached_snapshot(name: str, hashes: bool, env: tuple[str | None, ...]) -> Path:
+    return require_xero_snapshot(name, hashes=hashes)
+
+
+@functools.cache
+def cached_supplements(name: str, hashes: bool, env: tuple[str | None, ...]) -> Path:
+    return require_xero_supplements(name, hashes=hashes)
+
+
+@functools.cache
+def cached_raw(env: tuple[str | None, ...]) -> Path:
+    return require_xero_raw()
+
+
+def snapshot_dir(name: str, hashes: bool = True) -> Path:
+    """本仓库的 Xero 快照 data/external/xero/api/<name>, 见 require_xero_snapshot."""
+    return cached_snapshot(name, hashes, location_env())
+
+
+def supplements_dir(name: str, hashes: bool = True) -> Path:
+    """本仓库的 Xero 补造目录 data/xero_demo/<name>, 见 require_xero_supplements."""
+    return cached_supplements(name, hashes, location_env())
+
+
+def raw_dir() -> Path:
+    """本仓库的 Xero 网页导出, 见 require_xero_raw."""
+    return cached_raw(location_env())
+
+
+def snapshot_location(name: str) -> Path:
+    """快照目录的路径, 不核对: 三个来源里第一个有这个快照的, 都没有时为仓库里的位置 (收集阶段的常量用; 用例运行时
+    另经 snapshot_dir 核对)."""
+    xero = external_dir("xero", REPO, [snapshot_path(name)])
+    return (xero if xero is not None else REPO / "data" / "external" / "xero") / "api" / name
+
+
+def supplements_path(name: str) -> Path:
+    """补造目录的路径, 不核对 (收集阶段的参数化与登记表用; 用例运行时另经 supplements_dir 核对)."""
+    return XERO_SUPPLEMENTS / name
+
+
+def needs(*fixtures: str) -> Callable[[F], F]:
+    """装饰器: 标 external, 并在用例开始前取 fixtures (conftest 里经本模块核对的快照, 补造与导出: 没有数据时跳过,
+    仓库跟踪了却找不到时失败)."""
+
+    def apply(func: F) -> F:
+        return cast(F, pytest.mark.external(pytest.mark.usefixtures(*fixtures)(func)))
+
+    return apply
+
+
+def optional(locate: Callable[..., T], *args: Any) -> T | None:
+    """locate(*args) 的结果; 没带数据 (定位跳过) 时为 None. 仓库跟踪了却找不到照常失败, 快照与补造哈希不符照常跳过
+    (Mismatch; EXTERNAL_STRICT=1 时失败), 不当成没带数据而少断言. 给 "有数据时多断言几句, 没有时其余照测" 的用例用."""
+    try:
+        return locate(*args)
+    except Mismatch:
+        raise
+    except Skipped:
+        return None
 
 
 def llm_env_files(repo: Path = REPO) -> list[tuple[str, Path]]:

@@ -6,7 +6,7 @@
   xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对 (Supplements.verify),
   没有快照时只核对补造文件 (verify_files).
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
-  make_xero_deps. 快照按 tests.external.require_xero_snapshot 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
+  make_xero_deps. 快照按 tests.external.snapshot_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
 读快照, 核对与文本层的结果按路径缓存, 一次测试运行里只算一次; 返回的列表与假存储每次新建, 测试可以改.
 另有规则引擎结果的预置 XERO_RULES (需求 R107, 同 tests.fakes 的 NUMBAT_RULES), 取自连库跑一次的结果, 不读快照.
 
@@ -50,7 +50,7 @@ from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
 from backend.services.judgment_engine import document_pointer
-from tests.external import external_dir, require_xero_snapshot, require_xero_supplements
+from tests.external import external_dir, require_xero_snapshot, snapshot_dir, supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -72,7 +72,6 @@ from tests.fakes import (
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
 SNAPSHOT_NAME = "20261017-q1"  # 快照目录名, data/external/xero/api/20261017-q1
-SUPPLEMENTS = REPO / "data" / "xero_demo"  # 补造根, 补造目录为 SUPPLEMENTS/20261017-q1
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"  # 通用计划模板 (载入器的构造参数)
 DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_contracts 的来源
 # 查快照用的仓库根 (require_xero_snapshot 的 repo); 测试把它指向空目录来模拟没有快照
@@ -101,7 +100,7 @@ def located_snapshot(repo: Path) -> Path | None:
 @functools.cache
 def verified(repo: Path) -> tuple[Supplements, dict[str, Any]]:
     """已核对的补造目录与它的 manifest: 有快照时 verify (补造文件与快照), 没有时 verify_files (只核补造文件)."""
-    root = require_xero_supplements(SNAPSHOT_NAME)
+    root = supplements_dir(SNAPSHOT_NAME)
     snapshot = located_snapshot(repo)
     found = Supplements(root, snapshot if snapshot is not None else root / "<没有快照>", XERO_DATASET)
     return found, found.verify() if snapshot is not None else found.verify_files()
@@ -244,20 +243,22 @@ def xero_contracts() -> list[Contract]:
 # ── 需要快照 ──
 
 
-@functools.cache
 def snapshot_root(repo: Path) -> Path:
-    return require_xero_snapshot(SNAPSHOT_NAME, repo)
+    """repo 下的快照目录: 本仓库经 tests.external.snapshot_dir (会话缓存); 自测把 SNAPSHOT_REPO 换成别的目录时
+    直接定位."""
+    return snapshot_dir(SNAPSHOT_NAME) if repo == REPO else require_xero_snapshot(SNAPSHOT_NAME, repo)
 
 
 def xero_loader() -> XeroDatasetLoader:
     """不连库的 Xero 载入器 (只用它的读取方法)."""
-    api = snapshot_root(SNAPSHOT_REPO).parent
-    return XeroDatasetLoader(api, PLANNING, cast(Any, object()), cast(Any, object()), supplements=SUPPLEMENTS)
+    api, supplements = snapshot_root(SNAPSHOT_REPO).parent, supplements_dir(SNAPSHOT_NAME).parent
+    return XeroDatasetLoader(api, PLANNING, cast(Any, object()), cast(Any, object()), supplements=supplements)
 
 
 @functools.cache
 def loaded_tables(api: Path) -> dict[str, tuple[Any, ...]]:
-    loader = XeroDatasetLoader(api, PLANNING, cast(Any, object()), cast(Any, object()), supplements=SUPPLEMENTS)
+    supplements = supplements_dir(SNAPSHOT_NAME).parent
+    loader = XeroDatasetLoader(api, PLANNING, cast(Any, object()), cast(Any, object()), supplements=supplements)
     return {name: tuple(rows) for name, rows in loader.tables(XERO_DATASET).items()}
 
 

@@ -11,7 +11,7 @@ import pytest
 
 from backend.adapters.xero_supplements import DemoPlan, SupplementMismatch, plan
 from backend.contracts.data import TableKind
-from tests.external import require_xero_snapshot, require_xero_supplements
+from tests.external import snapshot_dir, supplements_dir
 from tests.test_employees import EXPECTED as EMPLOYEES
 from tests.test_xero_supplements import DATASET, LINKED, copies, loader, rewrite_manifest
 
@@ -20,8 +20,8 @@ pytestmark = pytest.mark.external
 
 @pytest.fixture(scope="module")
 def q1() -> DemoPlan:
-    require_xero_snapshot("20261017-q1")
-    require_xero_supplements("20261017-q1")
+    snapshot_dir("20261017-q1")
+    supplements_dir("20261017-q1")
     return plan(loader(), DATASET)
 
 
@@ -51,7 +51,7 @@ def test_uploads_follow_stages_and_match_the_manifest(q1: DemoPlan) -> None:
     assert [(u.path, u.request_id) for u in q1.uploads if u.request_id] == [
         ("financial_statements/fs_v1.pdf", "REQ-financial_statements")
     ]
-    manifest = json.loads((require_xero_supplements("20261017-q1") / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((supplements_dir("20261017-q1") / "manifest.json").read_text(encoding="utf-8"))
     keep = ("reliability", "document_date", "related_ids", "document_id")  # 与 manifest 同名的项; type 改名
     recorded = {
         d["path"]: {"document_type": d["type"], **{k: d[k] for k in keep}}
@@ -135,7 +135,7 @@ def test_plan_rejects_bad_supplements(
     tmp_path: Path, change: Callable[[Path, Path], None], error: type[Exception], message: str
 ) -> None:
     """补造目录不匹配抛 SupplementMismatch; 清单内容不合规抛 ValueError (不是 SupplementMismatch), 消息含该文件."""
-    require_xero_snapshot("20261017-q1")
+    snapshot_dir("20261017-q1")
     api, demo = copies(tmp_path)
     change(api, demo)
     with pytest.raises(error, match=re.escape(message)) as raised:
@@ -144,6 +144,6 @@ def test_plan_rejects_bad_supplements(
 
 
 def test_plan_needs_a_supplement_directory() -> None:
-    require_xero_snapshot("20261017-mock")
+    snapshot_dir("20261017-mock")
     with pytest.raises(FileNotFoundError, match="xero/20261017-mock 没有补造目录"):
         plan(loader(), "xero/20261017-mock")

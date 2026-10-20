@@ -31,9 +31,9 @@ from backend.contracts.models import TrailEntry, TrailKind
 from backend.core.config import Settings
 from backend.services.data_service import DataService
 from backend.services.xero_link import CALLBACK_PATH, SYNC_JOB, XeroLink
+from tests.external import snapshot_dir
 from tests.fakes import (
     XERO_SNAPSHOT,
-    XERO_SNAPSHOTS,
     FakeDataStore,
     FakeEngagementStore,
     FakeTrail,
@@ -86,7 +86,7 @@ class FakeXero:
     (观察同步进行中的状态). requests 只记 (方法, 路径), 不记请求体."""
 
     def __init__(self, tenants: tuple[dict[str, str], ...] = (DEMO,)) -> None:
-        root = XERO_SNAPSHOTS / XERO_SNAPSHOT
+        root = snapshot_dir(XERO_SNAPSHOT)  # 经 tests.external 定位: 没有时跳过, 跟踪了却找不到时失败
         self.files = {p.stem: p for p in root.glob("*.json") if p.stem != "contacts"}
         self.contacts, _ = filtered_contacts(root / "contacts.json")
         self.tenants = list(tenants)
@@ -306,6 +306,7 @@ def error_page(c: Case, reason: str) -> str:
 # ── 验收 2.1, 2.2: 授权地址与回调 ──
 
 
+@pytest.mark.external
 async def test_connect_returns_web_app_authorize_url_with_state(tmp_path: Path) -> None:
     """有 client secret 时按 Web app (不带 PKCE); scope 含 offline_access, 付费接口为 live 时另申请 Journals 与
     Bank Statements Plus; 回调地址为后端回调 (XERO_REDIRECT_URI 缺省值)."""
@@ -321,6 +322,7 @@ async def test_connect_returns_web_app_authorize_url_with_state(tmp_path: Path) 
     assert "code_challenge" not in query and len(query["state"][0]) >= 32
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(("key", "code"), [("", "SETTINGS_KEY_MISSING"), ("not-a-fernet-key", "SETTINGS_KEY_INVALID")])
 async def test_connect_refused_without_usable_settings_key(tmp_path: Path, key: str, code: str) -> None:
     """主密钥没配或不对时 connect 当场报 503 (不等回调后才发现令牌存不了), 不登记 state."""
@@ -331,6 +333,7 @@ async def test_connect_refused_without_usable_settings_key(tmp_path: Path, key: 
     assert c.xero.states.pending == {}
 
 
+@pytest.mark.external
 async def test_pkce_when_no_client_secret(tmp_path: Path) -> None:
     """没配 secret 时按 PKCE: 授权地址带 code_challenge, 换令牌时不带 Basic, 表单带 client_id 与 verifier, verifier
     与授权地址的 challenge 对得上; 连接成功."""
@@ -345,6 +348,7 @@ async def test_pkce_when_no_client_secret(tmp_path: Path) -> None:
     assert form["client_id"] == [CLIENT_ID] and code_challenge(form["code_verifier"][0]) == query["code_challenge"][0]
 
 
+@pytest.mark.external
 async def test_callback_rejects_bad_expired_reused_state_and_denial(tmp_path: Path) -> None:
     """验收 2.1: 不认识的 state 回前端首页, 拒绝授权, 过期 (超过 10 分钟) 与重复使用的回该项目的数据管理页, 都带
     xero=error 与原因代码; 这些情形都不存连接."""
@@ -365,6 +369,7 @@ async def test_callback_rejects_bad_expired_reused_state_and_denial(tmp_path: Pa
     assert c.fake.issued == 1
 
 
+@pytest.mark.external
 async def test_callback_saves_connection_and_overview_connected(tmp_path: Path) -> None:
     """验收 2.2: 正确回调后保存连接 (令牌只存密文), 概览 sources.xero 为 connected, 组织名 Demo Company (AU);
     tenants 返回授权给到的组织; 写 data 留痕 xero_connect."""
@@ -392,6 +397,7 @@ async def test_callback_saves_connection_and_overview_connected(tmp_path: Path) 
     assert c.actions() == ["xero_connect"]
 
 
+@pytest.mark.external
 async def test_callback_reports_locked_busy_and_no_organisation(tmp_path: Path) -> None:
     """回调时项目忙 (另一写操作持锁) 报 busy, 已锁定报 locked, 授权里没有组织报 no_organisation, 换令牌失败报
     exchange_failed, 主密钥没配报 settings_key; 项目不存在了报 not_found (跳前端首页). 这些情形都不存连接."""
@@ -424,6 +430,7 @@ async def test_callback_reports_locked_busy_and_no_organisation(tmp_path: Path) 
     assert c.store.rows == {}
 
 
+@pytest.mark.external
 async def test_callback_unexpected_error_still_redirects(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -446,6 +453,7 @@ async def test_callback_unexpected_error_still_redirects(
 # ── 验收 2.3: 同步 ──
 
 
+@pytest.mark.external
 async def test_sync_writes_six_tables_like_dataset_load(tmp_path: Path) -> None:
     """验收 2.3: 期间 2026-07-01 至 11-30 的项目同步后, 六张表的行与该快照作为数据集载入时一致 (行数 62, 38, 1017,
     42, 2, 146); 数据版本加 1, 体检只跑一次, Xero 不提供录入人与审批人, 提出补交审批日志. 发运单不写. 同步期间这些表为
@@ -509,6 +517,7 @@ def bank_state(c: Case) -> Any:
     return [(c.data.table_stats.get(k), [v for v in c.data.table_versions if v.kind is k]) for k in BANK]
 
 
+@pytest.mark.external
 @pytest.mark.parametrize("mode", ["off", "mock"])
 async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: Path, mode: str) -> None:
     """付费接口 off 与 mock 时 (Q5, mock 在网页同步里同 off) 授权不申请付费 scope, 同步不取 Journals 与对账单:
@@ -546,6 +555,7 @@ async def test_sync_without_paid_endpoints_keeps_imported_bank_tables(tmp_path: 
     assert last["skipped"] == {k.value: "paid_off" for k in BANK}
 
 
+@pytest.mark.external
 async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None:
     """live 下对账单接口返回 403: 202 的计划写的表照列六张, 实际只写四张, 银行账户与银行流水都不写, 已有的两张银行
     表保留; 概览 scope 照实列出写了的表; 总账仍按 Journals 取 (1017 行); 留痕 xero_synced 写明原因
@@ -571,6 +581,7 @@ async def test_live_statements_forbidden_skips_bank_pair(tmp_path: Path) -> None
     assert source["last_sync"]["skipped"] == {k.value: "statements_forbidden" for k in BANK}
 
 
+@pytest.mark.external
 async def test_live_journals_forbidden_rebuilds_ledger_from_documents(tmp_path: Path) -> None:
     """live 下只有 Journals 返回 403 (应用开通了对账单而没有 Journals): 同步照常, 总账按单据反推并补齐 (行数不是
     Journals 的 1017), 银行这一对按对账单照写, 六张都写; 不记同步失败, xero_synced 的 skipped 为空."""
@@ -597,6 +608,7 @@ async def test_live_journals_forbidden_rebuilds_ledger_from_documents(tmp_path: 
     }
 
 
+@pytest.mark.external
 @pytest.mark.parametrize("refresh_status", [400, 401])
 async def test_background_invalid_grant_marks_expired(tmp_path: Path, refresh_status: int) -> None:
     """起作业时令牌有效, 后台取数时某资源返回 401, 再刷新得 invalid_grant: 连接置 expired, 留痕 xero_sync_failed 的
@@ -617,6 +629,7 @@ async def test_background_invalid_grant_marks_expired(tmp_path: Path, refresh_st
     assert c.data.written == [] and not c.xero.data.runner.is_running(c.eid)
 
 
+@pytest.mark.external
 async def test_free_resource_forbidden_fails_sync(tmp_path: Path) -> None:
     """付费接口以外的资源 (这里是发票) 返回 403: 不拿空表写入, 同步失败, 留痕 reason 为 forbidden 并带资源名."""
     c = case(tmp_path)
@@ -646,6 +659,7 @@ async def test_free_resource_forbidden_fails_sync(tmp_path: Path) -> None:
     assert len(c.data.written) == 1 and not c.xero.data.runner.is_running(c.eid)
 
 
+@pytest.mark.external
 async def test_last_sync_belongs_to_current_connection(tmp_path: Path) -> None:
     """上次结果属于当前连接, 与连接行的最近同步, 接入范围同口径: 授权失效后直接重新连接保留; 断开再连接为空
     (最近同步, 接入范围也为空), 之后的同步照常给出结果. 时间取留痕写入时间."""
@@ -681,6 +695,7 @@ async def test_last_sync_belongs_to_current_connection(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.external
 async def test_unknown_codes_in_sync_trail_do_not_break_summary(tmp_path: Path) -> None:
     """留痕里认不出的原因代码读成 unknown, 认不出的表跳过, 概览照常返回 (不 500)."""
     c = case(tmp_path)
@@ -716,6 +731,7 @@ async def test_unknown_codes_in_sync_trail_do_not_break_summary(tmp_path: Path) 
     assert synced["skipped"] == {"bank_accounts": "unknown", "bank_transactions": "paid_off"}
 
 
+@pytest.mark.external
 async def test_syncing_and_last_sync_only_for_this_engagement(tmp_path: Path) -> None:
     """另一个项目在同步 (登记着 Xero 同步作业) 并有更新的同步留痕时, 本项目的 syncing 与 last_sync 不受影响."""
     c = case(tmp_path)
@@ -736,6 +752,7 @@ async def test_syncing_and_last_sync_only_for_this_engagement(tmp_path: Path) ->
     assert (source["syncing"], source["last_sync"]) == (False, mine) and mine["ok"] is True
 
 
+@pytest.mark.external
 async def test_syncing_only_for_the_xero_job(tmp_path: Path) -> None:
     """概览的 syncing 只认本项目的 Xero 同步作业: 别的数据作业 (如导入提交) 占着项目锁时为假; 同步起作业前当场
     被拒 (连接已失效) 时也不留下."""
@@ -751,6 +768,7 @@ async def test_syncing_only_for_the_xero_job(tmp_path: Path) -> None:
         assert (await xero_source(http, c))["syncing"] is False and c.xero.data.kinds == {}
 
 
+@pytest.mark.external
 async def test_unexpected_errors_in_sync_are_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -790,6 +808,7 @@ async def test_unexpected_errors_in_sync_are_recorded(
     assert not c.xero.data.runner.is_running(c.eid)
 
 
+@pytest.mark.external
 async def test_sync_failure_writes_nothing_and_records_trail(tmp_path: Path) -> None:
     """Xero 一直报 5xx: 重试耗尽后不写数据, 写 data 留痕 xero_sync_failed (只有原因代码与状态码), 锁随之释放."""
     c = case(tmp_path)
@@ -806,6 +825,7 @@ async def test_sync_failure_writes_nothing_and_records_trail(tmp_path: Path) -> 
 # ── 验收 2.4: 刷新令牌失效 ──
 
 
+@pytest.mark.external
 async def test_invalid_grant_marks_expired_and_sync_rejected(tmp_path: Path) -> None:
     """验收 2.4: 访问令牌快到期, 刷新时假服务器返回 invalid_grant: 同步当场被拒 (409 XERO_RECONNECT_REQUIRED, 提示
     重新连接), 状态变 expired, 不起作业; 重新连接后恢复 connected."""
@@ -824,6 +844,7 @@ async def test_invalid_grant_marks_expired_and_sync_rejected(tmp_path: Path) -> 
     assert c.data.written == [] and not c.xero.data.runner.is_running(c.eid)
 
 
+@pytest.mark.external
 async def test_token_endpoint_down_before_sync_is_502(tmp_path: Path) -> None:
     """起作业前要刷新访问令牌, 令牌接口返回 503 (不是 invalid_grant): 同步当场报 502 XERO_UNAVAILABLE, 不起作业,
     连接仍为 connected, 锁已放."""
@@ -838,6 +859,7 @@ async def test_token_endpoint_down_before_sync_is_502(tmp_path: Path) -> None:
     assert source["status"] == "connected" and c.data.written == [] and not c.xero.data.runner.is_running(c.eid)
 
 
+@pytest.mark.external
 async def test_refresh_token_older_than_sixty_days_is_expired(tmp_path: Path) -> None:
     """刷新令牌换得超过 60 天: 概览为 expired, 同步被拒; 刷新过 (令牌轮换) 的从刷新时起算, 新令牌加密写库."""
     c = case(tmp_path)
@@ -858,6 +880,7 @@ async def test_refresh_token_older_than_sixty_days_is_expired(tmp_path: Path) ->
 # ── 验收 2.5: 断开 ──
 
 
+@pytest.mark.external
 async def test_disconnect_revokes_deletes_tokens_and_keeps_data(tmp_path: Path) -> None:
     """验收 2.5: 断开时调了撤销接口 (带当前的刷新令牌), 令牌与连接已删, 已同步的数据与版本保留, 概览回到
     not_connected; 撤销失败也删本地令牌, revoked 为 false. 锁定的项目也能断开."""
@@ -890,6 +913,7 @@ async def test_disconnect_revokes_deletes_tokens_and_keeps_data(tmp_path: Path) 
 # ── 验收 2.6: 两个组织 ──
 
 
+@pytest.mark.external
 async def test_two_organisations_require_choice_before_sync(tmp_path: Path) -> None:
     """验收 2.6: 授权给到两个组织时不自动选, 概览组织名为空; 同步被拒 (409 XERO_TENANT_REQUIRED); tenants 列出两个;
     选不在列表里的 422; 选定后概览显示组织名, 同步正常. 选定写 data 留痕 xero_tenant."""
@@ -916,6 +940,7 @@ async def test_two_organisations_require_choice_before_sync(tmp_path: Path) -> N
 # ── 验收 2.7: 密钥扫描 ──
 
 
+@pytest.mark.external
 @pytest.mark.parametrize("mode", ["web", "pkce"])
 async def test_tokens_code_and_secret_never_leak(tmp_path: Path, caplog: pytest.LogCaptureFixture, mode: str) -> None:
     """验收 2.7: Web app 与 PKCE 各走一遍连接 (含回显授权码与 secret 的换令牌失败, 拒绝, 重复使用), 同步 (中途刷新
@@ -978,6 +1003,7 @@ async def test_tokens_code_and_secret_never_leak(tmp_path: Path, caplog: pytest.
     assert leaked == [], f"有密钥出现在输出里 (只报类别): {leaked}"
 
 
+@pytest.mark.external
 async def test_stored_connection_holds_only_ciphertext(tmp_path: Path) -> None:
     """连接对象里没有令牌, 库里只有 Fernet 密文 (换了主密钥就解不开, 同步报 SETTINGS_KEY_INVALID, 要重新连接)."""
     c = case(tmp_path)
@@ -998,6 +1024,7 @@ async def test_stored_connection_holds_only_ciphertext(tmp_path: Path) -> None:
 # ── 其余 ──
 
 
+@pytest.mark.external
 async def test_cli_token_file_untouched_by_web_connection(tmp_path: Path) -> None:
     """命令行的令牌文件与网页连接互不读写: 网页连接, 同步, 断开前后文件内容不变."""
     c = case(tmp_path)
@@ -1069,6 +1096,7 @@ def test_settings_defaults_split_web_and_cli_redirects() -> None:
     assert defaults.frontend_url == defaults.FRONTEND_ORIGIN
 
 
+@pytest.mark.external
 async def test_states_belong_to_one_engagement_and_user(tmp_path: Path) -> None:
     """state 绑定发起时的项目与用户: 连接记在发起人名下 (不是回调时的登录用户), 回调不靠登录."""
     c = case(tmp_path)
@@ -1085,6 +1113,7 @@ async def test_states_belong_to_one_engagement_and_user(tmp_path: Path) -> None:
     assert [e.actor for e in c.trail.entries if e.payload.get("action") == "xero_connect"] == ["U-1", "U-7"]
 
 
+@pytest.mark.external
 async def test_reconnect_keeps_sync_record_and_chosen_organisation(tmp_path: Path) -> None:
     """重新连接 (如授权失效后) 整行替换令牌与组织列表: 原来选的组织仍在授权里时保留, 最近一次同步的时间与表保留;
     选的组织不在新授权里时清空, 等重新选."""

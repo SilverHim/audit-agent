@@ -11,17 +11,43 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
+from tests.external import needs, optional, snapshot_dir, snapshot_location, supplements_dir, supplements_path
+
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
-SNAPSHOT = REPO / "data" / "external" / "xero" / "api" / "20261017-q1"
-SUPPLEMENTS = REPO / "data" / "xero_demo" / "20261017-q1"
+SNAPSHOT = snapshot_location("20261017-q1")  # 只给路径; 读快照的用例经 needs_snapshot 或 snapshot_if_any 核对
+SUPPLEMENTS = supplements_path("20261017-q1")  # 只给路径; 读补造的用例经 needs_supplements 核对
 sys.path.insert(0, str(REPO / "data"))  # 生成与校验脚本在 data/, 以脚本方式互相导入
 
 import check_xero_demo as checker  # noqa: E402
 import generate_xero_demo as generator  # noqa: E402
 
 HEADER = "Synthetic – for demonstration only. Fictitious document based on Xero Demo Company (AU) data."
-needs_snapshot = pytest.mark.skipif(not SNAPSHOT.is_dir(), reason="没有本地 Xero 快照")
+
+
+# 本模块校验补造与快照本身: 定位只核对 "跟踪了的文件都在" (没带时跳过, 缺了失败), 不核对快照哈希, 不符时由用例自己
+# 报出 (同改前); 不读外部数据的用例 (生成脚本的守卫, 常量与纯函数) 不标 external.
+
+
+@pytest.fixture
+def supplements_files() -> Path:
+    """补造目录 data/xero_demo/20261017-q1, 不核对快照哈希."""
+    return supplements_dir("20261017-q1", hashes=False)
+
+
+@pytest.fixture
+def snapshot_files() -> Path:
+    """快照 20261017-q1, 不核对快照哈希."""
+    return snapshot_dir("20261017-q1", hashes=False)
+
+
+needs_supplements = needs("supplements_files")
+needs_snapshot = needs("snapshot_files", "supplements_files")
+
+
+def snapshot_if_any(name: str = "20261017-q1") -> Path | None:
+    """快照目录, 没带快照的检出为 None (仓库跟踪了却找不到照常失败; 不核对哈希). 给没有快照时另有走法的用例用."""
+    return optional(snapshot_dir, name, False)
 
 
 def doc() -> str:
@@ -104,6 +130,7 @@ def test_spec_layout() -> None:
     assert data["notes"].startswith("Synthetic – for demonstration only.")
 
 
+@needs_supplements
 def test_generated_values_match_design() -> None:
     text = doc()
     assert read("dataset_traits.json") == json_block(section(text, "### 5.2 数据集声明 dataset_traits.json"))
@@ -130,6 +157,7 @@ def test_generated_values_match_design() -> None:
     ]
 
 
+@needs_supplements
 def test_manifest_layout() -> None:
     manifest = read("manifest.json")
     assert list(manifest) == ["dataset", "generator", "spec_sha256", "snapshot", "files", "documents"]  # 无 injected
@@ -210,21 +238,24 @@ def test_manifest_layout() -> None:
     raw = (SUPPLEMENTS / "manifest.json").read_text(encoding="utf-8")
     assert str(REPO) not in raw and "/home/" not in raw and not re.search(r"\d{4}-\d{2}-\d{2}T\d", raw)
     assert not [p for p in SUPPLEMENTS.rglob("*") if "synthetic" in p.name.lower()]  # 文件名不写 synthetic
-    if SNAPSHOT.is_dir():
+    if snapshot_if_any() is not None:
         names = sorted(p.name for p in SNAPSHOT.iterdir() if p.is_file() and p.name != "contacts.json")
         assert [f["path"] for f in manifest["snapshot"]["files"]] == names  # type: ignore[index]
         assert len(names) == 16
 
 
+@needs_supplements
 def test_check_passes() -> None:
+    snapshot, mock = snapshot_if_any(), snapshot_if_any("20261017-mock")  # 先核对跟踪的文件都在
     notes = checker.check(SUPPLEMENTS, SNAPSHOT)  # 有快照时含确定性重生成与联系人扫描
-    if SNAPSHOT.is_dir():
-        mock = SNAPSHOT.parent / "20261017-mock"
-        assert notes == ([] if mock.is_dir() else [f"没有 20261017-mock ({checker.rel(mock)}): 跳过新旧快照比对"])
+    if snapshot is not None:
+        missing = SNAPSHOT.parent / "20261017-mock"
+        assert notes == ([] if mock is not None else [f"没有 20261017-mock ({checker.rel(missing)}): 跳过新旧快照比对"])
     else:
         assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0]
 
 
+@needs_supplements
 def test_check_without_snapshot_still_checks_files(tmp_path: Path) -> None:
     notes = checker.check(SUPPLEMENTS, tmp_path / "absent")
     assert len(notes) == 1 and "没有本地 Xero 快照" in notes[0] and "补造表与快照的核对" in notes[0]
@@ -233,6 +264,7 @@ def test_check_without_snapshot_still_checks_files(tmp_path: Path) -> None:
     assert "dataset_traits.json: sha256 与 manifest 不符" in check_error(copy, tmp_path / "absent")
 
 
+@needs_supplements
 @pytest.mark.parametrize(
     "name",
     ["client_profile.json", "dataset_traits.json", "planning/audit_objectives.json", "planning/risk_register.json"],
@@ -246,6 +278,7 @@ def test_one_byte_change_names_the_file(tmp_path: Path, name: str) -> None:
     assert f"{copy / name}: sha256 与 manifest 不符" in message.splitlines()
 
 
+@needs_supplements
 def test_unlisted_missing_and_unflagged_files(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     (copy / "extra.csv").write_text("a\n", encoding="utf-8")
@@ -259,6 +292,7 @@ def test_unlisted_missing_and_unflagged_files(tmp_path: Path) -> None:
     assert f"{copy / 'client_profile.json'}: manifest 中 synthetic 不为 true" in lines
 
 
+@needs_supplements
 def test_strict_models_including_dataset_traits(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     profile = json.loads((copy / "client_profile.json").read_text(encoding="utf-8"))
@@ -282,6 +316,7 @@ def test_strict_models_including_dataset_traits(tmp_path: Path) -> None:
     assert f"{copy / 'dataset_traits.json'}: dataset 不是 xero/20261017-q1" in lines
 
 
+@needs_supplements
 def test_login_contact_scan_reports_file_names_only(tmp_path: Path) -> None:
     contacts = [
         {"FirstName": "Zed", "LastName": "Example", "EmailAddress": "zed@example.invalid"},
@@ -326,6 +361,7 @@ def test_login_contact_scan_reports_file_names_only(tmp_path: Path) -> None:
     assert "zed example" not in message.lower() and "zed@example.invalid" not in message.lower()
 
 
+@needs_supplements
 def test_login_contact_must_be_unique(tmp_path: Path) -> None:
     contacts = [{"FirstName": n, "LastName": "Example", "EmailAddress": f"{n}@example.invalid"} for n in ("A", "B")]
     snapshot = fake_snapshot(tmp_path, contacts)
@@ -430,6 +466,7 @@ def no_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(checker, "check", refuse)
 
 
+@needs_supplements
 def test_inject_refuses_repository_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     no_writes(monkeypatch)
     before = {p: p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()}
@@ -439,9 +476,10 @@ def test_inject_refuses_repository_directory(tmp_path: Path, monkeypatch: pytest
     assert {p: p.read_bytes() for p in SUPPLEMENTS.rglob("*") if p.is_file()} == before
 
 
+@needs_supplements
 def test_inject_rewrites_copy_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     copy = copy_supplements(tmp_path)
-    snapshot = SNAPSHOT if SNAPSHOT.is_dir() else fake_snapshot(tmp_path, [])
+    snapshot = SNAPSHOT if snapshot_if_any() is not None else fake_snapshot(tmp_path, [])
     (copy / "dataset_traits.json").write_text('{"changed": true}\n', encoding="utf-8")
     assert generator.main(["--inject", "T1", "--out", str(copy), "--snapshot", str(snapshot)]) == 0
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -475,18 +513,20 @@ def test_pdf_layout_and_determinism(tmp_path: Path) -> None:
     assert problems == [f"{tmp_path / 'c' / 'bad.pdf'}: 第 1, 2 页文本层没有合成页眉"]
 
 
+@needs_supplements
 def test_output_guard_protects_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--inject 只许仓库外已存在且没有链接的副本; 普通生成只许 data/xero_demo/<快照名> 或仓库外. 拒绝时不写任何文件."""
     no_writes(monkeypatch)
     protected = [REPO / "data" / "demo" / "manifest.json", generator.SNAPSHOTS / "20261017-q1" / "manifest.json"]
     before = {p: p.read_bytes() for p in protected if p.exists()}
     monkeypatch.chdir(REPO)
+    snapshot = str((generator.SNAPSHOTS / "20261017-q1").relative_to(REPO))  # 相对仓库根的快照目录 (脚本的常量)
     for argv in (
         ["--inject", "T1", "--out", "data/demo"],
-        ["--inject", "T1", "--out", "data/external/xero/api/20261017-q1"],
+        ["--inject", "T1", "--out", snapshot],
         ["--inject", "T1", "--out", "data/xero_demo/../xero_demo/20261017-q1"],
         ["--out", "data/demo"],
-        ["--out", "data/external/xero/api/20261017-q1"],
+        ["--out", snapshot],
     ):
         assert generator.main(argv) == 2, argv
     link = tmp_path / "link"
@@ -504,6 +544,7 @@ def test_output_guard_protects_repository(tmp_path: Path, monkeypatch: pytest.Mo
     assert {p: p.read_bytes() for p in protected if p.exists()} == before
 
 
+@needs_supplements
 def test_malformed_inputs_are_reported_not_raised(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     absent = tmp_path / "absent"
@@ -519,6 +560,7 @@ def test_malformed_inputs_are_reported_not_raised(tmp_path: Path) -> None:
     assert check_error(copy, absent) == f"{copy / 'manifest.json'}: 没有 manifest.json 或不是合法的 JSON"
 
 
+@needs_supplements
 def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
@@ -542,6 +584,7 @@ def test_bad_snapshot_inputs_are_reported(tmp_path: Path) -> None:
     assert check_error(copy, snapshot, scan=[]) == message
 
 
+@needs_supplements
 def test_regeneration_failure_keeps_other_problems(tmp_path: Path) -> None:
     """Demo 重置后的新快照套上旧补造: 快照不符与无法重新生成都要报出."""
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
@@ -646,6 +689,7 @@ def test_normal_generation_refuses_links_in_existing_output(tmp_path: Path) -> N
     assert not (tmp_path / "elsewhere.json").exists()
 
 
+@needs_supplements
 def test_unexpected_error_in_one_step_keeps_others(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     copy = copy_supplements(tmp_path)
     (copy / "extra.csv").write_text("a\n", encoding="utf-8")
@@ -659,6 +703,7 @@ def test_unexpected_error_in_one_step_keeps_others(tmp_path: Path, monkeypatch: 
     assert "Zed" not in message
 
 
+@needs_supplements
 def test_regeneration_error_message_is_not_copied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
@@ -672,6 +717,7 @@ def test_regeneration_error_message_is_not_copied(tmp_path: Path, monkeypatch: p
     assert message == f"{copy}: 无法重新生成 (ValueError)"
 
 
+@needs_supplements
 def test_manifest_file_items_take_no_extra_keys(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -698,6 +744,7 @@ def original_pdf_texts(path: Path) -> tuple[str, ...]:
         return tuple(re.sub(r"\s+", " ", page.extract_text() or "") for page in pdf.pages)
 
 
+@needs_supplements
 def test_appointment_pages() -> None:
     pages = pdf_texts(SUPPLEMENTS / "documents" / "engagement" / "appointment.pdf")
     assert len(pages) == 4
@@ -718,6 +765,7 @@ def test_appointment_pages() -> None:
     assert "Signed in the firm name" in pages[2] and "Signed in the member's own name" in pages[2]
 
 
+@needs_supplements
 def test_engagement_letter_pages() -> None:
     pages = pdf_texts(SUPPLEMENTS / "documents" / "engagement" / "engagement_letter.pdf")
     assert len(pages) == 3
@@ -751,6 +799,7 @@ def registry_blocks() -> tuple[object, object]:
     return abn, asic
 
 
+@needs_supplements
 def test_registry_json_matches_design() -> None:
     from backend.contracts.models import AbnRecord, AsicCompanyRecord
 
@@ -764,6 +813,7 @@ def test_registry_json_matches_design() -> None:
         AsicCompanyRecord.model_validate(row)
 
 
+@needs_supplements
 def test_extracts_and_person_search() -> None:
     alex = {"name": "Alex Morgan", "birth_date": "1979-04-12"}
     demo = read("registry/extracts/900043021.json")
@@ -806,6 +856,7 @@ def test_extracts_and_person_search() -> None:
     assert person["file_name"] == "MORGAN-ALEX-19790412.pdf"  # type: ignore[index]
 
 
+@needs_supplements
 def test_registry_pdfs_follow_json(tmp_path: Path) -> None:
     for acn, name in (("900043021", "Demo Company (AU) Pty Ltd"), ("900043030", "Victoria Property Agency Pty Ltd")):
         pages = pdf_texts(SUPPLEMENTS / "registry" / "extracts" / f"{acn}.pdf")
@@ -845,6 +896,7 @@ def manifest_documents() -> dict[str, tuple[object, ...]]:
     }
 
 
+@needs_supplements
 def test_documents_in_manifest_and_index() -> None:
     docs = manifest_documents()
     expected = {
@@ -898,6 +950,7 @@ def test_registry_numbers_pass_check_digits() -> None:
     assert not checker.acn_valid("900043022") and not checker.acn_valid("90004302")
 
 
+@needs_supplements
 def test_registry_inconsistencies_are_reported(tmp_path: Path) -> None:
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
@@ -927,6 +980,7 @@ def test_registry_inconsistencies_are_reported(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_pdf_page_count_and_text_mismatch(tmp_path: Path) -> None:
     snapshot = fake_snapshot(tmp_path, [{"FirstName": "Zed", "LastName": "Example", "EmailAddress": "z@x.invalid"}])
     copy = copy_supplements(tmp_path)
@@ -954,6 +1008,7 @@ def edit_json(path: Path, change: object) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
+@needs_supplements
 def test_injected_registry_extract_gets_derived_metadata(tmp_path: Path) -> None:
     """注入测试 T6 在副本新增一份公司摘录: 重绘后 manifest 按目录规则登记, 不要求规格逐份写登记信息."""
     snapshot = zed_snapshot(tmp_path)
@@ -973,6 +1028,7 @@ def test_injected_registry_extract_gets_derived_metadata(tmp_path: Path) -> None
     assert added["page_count"] == 2
 
 
+@needs_supplements
 def test_numbers_outside_registry_are_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = zed_snapshot(tmp_path)
     copy = copy_supplements(tmp_path)
@@ -990,6 +1046,7 @@ def test_numbers_outside_registry_are_checked(tmp_path: Path, monkeypatch: pytes
     assert f"{patched}: documents/engagement/appointment.pdf 正文中的号码校验位不对: 900 043 022" in lines
 
 
+@needs_supplements
 def test_more_registry_inconsistencies(tmp_path: Path) -> None:
     snapshot = zed_snapshot(tmp_path)
     copy = copy_supplements(tmp_path)
@@ -1013,6 +1070,7 @@ def test_more_registry_inconsistencies(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_registry_key_names_and_broken_json(tmp_path: Path) -> None:
     """摘录键写成 company_class 报格式问题; 坏的登记 JSON 不妨碍其他 PDF 的内容核对."""
     snapshot = zed_snapshot(tmp_path)
@@ -1032,6 +1090,7 @@ def test_registry_key_names_and_broken_json(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_person_pdf_and_line_order(tmp_path: Path) -> None:
     snapshot = zed_snapshot(tmp_path)
     copy = copy_supplements(tmp_path)
@@ -1057,6 +1116,7 @@ def test_person_pdf_and_line_order(tmp_path: Path) -> None:
 # ── 收入合同, 服务完成记录, 合同关联与银行回函 ───────────────
 
 
+@needs_supplements
 def test_contract_pages() -> None:
     x01 = pdf_texts(SUPPLEMENTS / "contracts" / "CON-X01.pdf")
     assert len(x01) == 3 and not any("ABN" in page for page in x01)  # 决定 11: DIISR 保留原名, 不写 ABN
@@ -1241,6 +1301,7 @@ def test_contract_rewrite_keeps_key_terms() -> None:
     assert not any("ABN" in line for page in contract_spec("CON-X01")["pages"] for line in page)  # 决定 11
 
 
+@needs_supplements
 def test_contract_pdfs_credit_cuad_without_naming_the_base() -> None:
     for name in CONTRACTS:
         pages = pdf_texts(SUPPLEMENTS / "contracts" / f"{name}.pdf")
@@ -1248,6 +1309,7 @@ def test_contract_pdfs_credit_cuad_without_naming_the_base() -> None:
         assert not [c for c in BASE_COMPANIES if any(c in page for page in pages)], name
 
 
+@needs_supplements
 def test_contract_bases_in_spec_manifest_and_readme() -> None:
     from tests.tools import cuad_fetch
 
@@ -1280,6 +1342,7 @@ def test_contract_bases_in_spec_manifest_and_readme() -> None:
     assert generator.CUAD_DIR == cuad_fetch.DEFAULT_DEST / cuad_fetch.TARGET
 
 
+@needs_supplements
 def test_contract_base_records_are_checked(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -1295,6 +1358,7 @@ def test_contract_base_records_are_checked(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_spec_base_records_are_checked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data = spec()
     docs = {d["path"]: d for d in data["documents"]}
@@ -1317,6 +1381,7 @@ def test_spec_base_records_are_checked(tmp_path: Path, monkeypatch: pytest.Monke
     ]
 
 
+@needs_supplements
 def test_check_without_cuad_notes_the_fetch_command(tmp_path: Path) -> None:
     notes = checker.check(SUPPLEMENTS, tmp_path / "absent", cuad=tmp_path / "no-cuad")
     assert (
@@ -1367,6 +1432,7 @@ def test_cuad_source_problems_are_reported(tmp_path: Path, monkeypatch: pytest.M
     ]
 
 
+@pytest.mark.external  # CUAD 在 data/external/cuad, 不随仓库; 生成脚本按自己的常量读
 @needs_cuad
 def test_cuad_sources_match() -> None:
     assert checker.check_cuad_sources(CUAD) == []
@@ -1379,6 +1445,7 @@ def table(name: str) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
+@needs_supplements
 def test_contract_links_and_delivery_notes() -> None:
     assert [(r["invoice_no"], r["contract_id"]) for r in table("contract_links.csv")] == [
         ("ORC1026", "CON-X01"),
@@ -1414,6 +1481,7 @@ def test_contract_links_and_delivery_notes() -> None:
     assert f"{sponsor}, Project Sponsor" in x01  # 完工证书由 DIISR Project Sponsor 签
 
 
+@needs_supplements
 def test_bank_accounts_and_receipts() -> None:
     demo_header = (REPO / "data" / "demo" / "bank_accounts.csv").read_text(encoding="utf-8").splitlines()[0]
     assert (SUPPLEMENTS / "bank_accounts.csv").read_text(encoding="utf-8") == (
@@ -1427,6 +1495,7 @@ def test_bank_accounts_and_receipts() -> None:
     }
 
 
+@needs_supplements
 def test_confirmation_pages() -> None:
     overdraft = pdf_texts(SUPPLEMENTS / "confirmations" / "12345678.pdf")
     assert len(overdraft) == 2
@@ -1458,6 +1527,7 @@ def test_confirmation_pages() -> None:
     assert all("Wattlebrook Bank Limited | Ref WBL-AC-2026-093002" in page for page in savings)
 
 
+@needs_supplements
 def test_table_problems_are_reported(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     notes = (copy / "delivery_notes.csv").read_text(encoding="utf-8").splitlines()
@@ -1514,6 +1584,7 @@ def test_tables_agree_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     ]
 
 
+@needs_supplements
 def test_more_table_problems(tmp_path: Path) -> None:
     """坏日期不拖累别的表; 回函渠道少一个账号; 应计利息写成 10 月全额; 其他账户一节的余额与该账户回函不符."""
     copy = copy_supplements(tmp_path)
@@ -1557,6 +1628,7 @@ def test_bank_accounts_and_refs_against_snapshot(tmp_path: Path) -> None:
 # ── 关联方, 董事借款与持续经营文件 ──────────────────────────
 
 
+@needs_supplements
 def test_related_party_documents() -> None:
     rent = pdf_texts(SUPPLEMENTS / "documents" / "related_party" / "vpa_rent_letter.pdf")
     assert len(rent) == 1 and "25 June 2026" in rent[0] and "ACN 900 043 030" in rent[0]
@@ -1579,6 +1651,7 @@ def test_related_party_documents() -> None:
     assert round(1073.86 * 12, 2) == 12886.32  # 年租与月租对得上
 
 
+@needs_supplements
 def test_director_loan_and_support_documents() -> None:
     agreement = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "director_loan_agreement.pdf")
     assert len(agreement) == 2 and "Date: 10 September 2018" in agreement[0]
@@ -1609,6 +1682,7 @@ def amount(text: str) -> int:
     return -value if text.startswith("(") else value
 
 
+@needs_supplements
 def test_going_concern_memo_and_forecast() -> None:
     pages = pdf_texts(SUPPLEMENTS / "documents" / "evidence" / "going_concern_memo_forecast.pdf")
     assert len(pages) == 3 and "Date: 16 October 2026" in pages[0]
@@ -1660,6 +1734,7 @@ def test_memo_october_receipts_match_bank_statements() -> None:
     assert sum(t.amount_cents for t in window if t.id in others - {"BT-090-0107", "BT-090-0130"}) == 33655
 
 
+@needs_supplements
 def test_r66_index_rows_and_manifest() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
     assert rows[3:11] == [
@@ -1680,6 +1755,7 @@ def test_r66_index_rows_and_manifest() -> None:
     assert {docs[p][3] for p in new} == {"fieldwork"} and sum(int(docs[p][4]) for p in new) == 12  # type: ignore[call-overload]
 
 
+@needs_supplements
 def test_index_problems_are_reported(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     index = (copy / "documents" / "index.csv").read_text(encoding="utf-8")
@@ -1712,6 +1788,7 @@ def test_index_xero_objects_must_exist(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_more_index_problems(tmp_path: Path) -> None:
     """index.csv 换序, 缺列, 未知类型的关联对象; 删掉 index.csv 也要报."""
     copy = copy_supplements(tmp_path)
@@ -1742,6 +1819,7 @@ def evidence(name: str) -> list[str]:
     return pdf_texts(SUPPLEMENTS / "documents" / "evidence" / name)
 
 
+@needs_supplements
 def test_other_evidence_documents() -> None:
     register = evidence("fixed_asset_register.pdf")
     assert len(register) == 1 and "As at 30 September 2026" in register[0]
@@ -1792,6 +1870,7 @@ def test_other_evidence_documents() -> None:
     assert "A deposit of AUD 2,000.00 is payable on acceptance" in quote[0]
 
 
+@needs_supplements
 def test_r67_index_rows_and_manifest() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
     ev = "documents/evidence/"
@@ -1810,6 +1889,7 @@ def test_r67_index_rows_and_manifest() -> None:
     assert {docs[p][3] for p in new} == {"fieldwork"} and sum(int(docs[p][4]) for p in new) == 10  # type: ignore[call-overload]
 
 
+@needs_supplements
 def test_payroll_and_adjustments_tables() -> None:
     from backend.contracts.records import JournalEntry
 
@@ -1862,6 +1942,7 @@ def test_payroll_and_adjustments_tables() -> None:
         assert f'"{r["description"]}"' in s28, r["id"]  # 每一行都是第 2.8 节写出的原句
 
 
+@needs_supplements
 def test_payroll_self_check() -> None:
     staff = table("payroll/employees.csv")
     gross = sum(int(r["gross_per_period_cents"]) for r in staff)
@@ -1870,6 +1951,7 @@ def test_payroll_self_check() -> None:
     assert round((3350000 + 201000) * 0.12) == 426120
 
 
+@needs_supplements
 def test_adjustment_problems_are_reported(tmp_path: Path) -> None:
     copy = copy_supplements(tmp_path)
     path = copy / "adjustments" / "journal_entries.csv"
@@ -1942,6 +2024,7 @@ def test_adjustments_must_post_at_period_end(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_more_adjustment_problems(tmp_path: Path) -> None:
     """前缀, 行 ID, is_adjustment, 录入人与审批人, 入账日不一; 某行不合模型时只报一次."""
     copy = copy_supplements(tmp_path)
@@ -2083,6 +2166,7 @@ FS_LINES = [  # 需求清单 R216 的 XERO_FS_V1 (待审财报唯一正本): 代
 TB_LINES = [x for x in FS_LINES if x[1] in ("financial_position", "profit_or_loss")]  # 与试算表勾稽的 18 行
 
 
+@needs_supplements
 def test_financial_statements_json() -> None:
     fs = read(generator.FS_JSON)
     assert list(fs) == [  # type: ignore[arg-type]
@@ -2120,6 +2204,7 @@ def test_financial_statements_json() -> None:
     assert item["xero_refs"] == ["XJ-397"]
 
 
+@needs_supplements
 def test_financial_statements_pdf() -> None:
     pages = pdf_texts(SUPPLEMENTS / generator.FS_PDF)
     assert len(pages) == 6
@@ -2216,6 +2301,7 @@ def test_financial_statements_pdf() -> None:
     assert not any("AASB 1060" in p for p in pages)  # 财报正文不引准则编号与段号 (所依段号见定稿第 4.7 节)
 
 
+@needs_supplements
 def test_representation_letter() -> None:
     pages = pdf_texts(SUPPLEMENTS / "representation" / "representation_letter.pdf")
     assert len(pages) == 2
@@ -2262,6 +2348,7 @@ def test_representation_letter() -> None:
     )
 
 
+@needs_supplements
 def test_r68_index_rows_and_counts() -> None:
     rows = (SUPPLEMENTS / "documents" / "index.csv").read_text(encoding="utf-8").splitlines()
     assert len(rows) == 20 and rows[19] == (
@@ -2287,6 +2374,7 @@ def test_r68_index_rows_and_counts() -> None:
     assert "documents 段的份数, 页数或登记途径与第 9.5 节不符" in checker.check_document_counts(SUPPLEMENTS, fewer)[0]
 
 
+@needs_supplements
 def test_manual_submissions() -> None:
     first, second = read("manual/fin08_round1.json"), read("manual/fin08_round2.json")
     assert (
@@ -2366,6 +2454,7 @@ def fs_copy(tmp_path: Path) -> tuple[Path, Path, dict]:
     return copy, path, json.loads(path.read_text(encoding="utf-8"))
 
 
+@needs_supplements
 def test_financial_statement_problems(tmp_path: Path) -> None:
     copy, path, fs = fs_copy(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -2401,6 +2490,7 @@ def test_financial_statement_problems(tmp_path: Path) -> None:
     assert checker.check_financial_statements(copy, manifest) == [f"{where}: 文件不存在"]
 
 
+@needs_supplements
 def test_financial_statement_pages_swapped(tmp_path: Path) -> None:
     """财务状况表与损益表互换页码, 或权益变动表与现金流量表互换页码时报出 (各行只在该表所在页找)."""
     copy, _, fs = fs_copy(tmp_path)
@@ -2430,6 +2520,7 @@ def test_financial_statement_pages_swapped(tmp_path: Path) -> None:
     assert checker.check_financial_statements(copy, manifest) == [f"{pdf}: 文件不存在, 无法解析或不足 4 页"]
 
 
+@needs_supplements
 def test_financial_statement_totals_problems(tmp_path: Path) -> None:
     """规格本身算错时 (小计, 资产负债平衡, 累计亏损结转) 也能报出: 用改过的规格比对."""
     copy, path, fs = fs_copy(tmp_path)
@@ -2465,6 +2556,7 @@ def fs_items(**changes: dict) -> list:
     return items
 
 
+@needs_supplements
 def test_equity_and_cash_flow_problems() -> None:
     """权益变动表与现金流量表 (R293) 与财务状况表, 损益表对不上时报出; 正式目录的行全部一致 (10 组变异)."""
     check = checker.equity_and_cash_flow_problems
@@ -2564,6 +2656,7 @@ def write_manual(copy: Path, data: dict) -> None:
         (copy / "manual" / name).write_text(json.dumps(value), encoding="utf-8")
 
 
+@needs_supplements
 def test_manual_problems(tmp_path: Path) -> None:
     copy, data = manual_copy(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -2615,6 +2708,7 @@ def test_manual_problems(tmp_path: Path) -> None:
     )
 
 
+@needs_supplements
 def test_index_fs_reference(tmp_path: Path) -> None:
     copy, path, fs = fs_copy(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -2626,6 +2720,7 @@ def test_index_fs_reference(tmp_path: Path) -> None:
     ]
 
 
+@needs_supplements
 def test_manual_rounds_order_and_sources(tmp_path: Path) -> None:
     copy, data = manual_copy(tmp_path)
     manifest = json.loads((copy / "manifest.json").read_text(encoding="utf-8"))
@@ -2649,7 +2744,7 @@ def test_manual_rounds_order_and_sources(tmp_path: Path) -> None:
     ]
 
 
-MOCK = SNAPSHOT.parent / "20261017-mock"
+MOCK = snapshot_location("20261017-mock")
 
 
 def test_snapshot_key_constants() -> None:
@@ -2674,7 +2769,7 @@ def test_snapshot_key_constants() -> None:
 @needs_snapshot
 def test_snapshot_key_numbers() -> None:
     assert checker.check_snapshot_keys(SNAPSHOT, SUPPLEMENTS) == []
-    if not MOCK.is_dir():
+    if snapshot_if_any("20261017-mock") is None:
         pytest.skip("没有 20261017-mock")
     assert checker.compare_with_mock(SNAPSHOT, MOCK) == []
 
@@ -2683,7 +2778,7 @@ def snapshot_copies(tmp_path: Path) -> tuple[Path, Path]:
     """快照与 20261017-mock 复制到 tmp (篡改只在副本上做, 不动原目录)."""
     api = tmp_path / "api"
     shutil.copytree(SNAPSHOT, api / SNAPSHOT.name)
-    if MOCK.is_dir():
+    if snapshot_if_any("20261017-mock") is not None:
         shutil.copytree(MOCK, api / MOCK.name)
     return api / SNAPSHOT.name, api / MOCK.name
 

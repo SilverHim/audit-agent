@@ -12,9 +12,10 @@ from backend.adapters.xero_supplements import STAGE_REQUESTS
 from backend.contracts.data import DataRequest, RequestStatus
 from backend.contracts.models import DocumentType, Engagement
 from backend.persistence.stores import XeroDatasetLoader
+from tests.external import supplements_dir
 from tests.fakes import NOW, api_client
 from tests.test_demo_import import EID, Env, env
-from tests.xero_fakes import PLANNING, SNAPSHOT_REPO, SUPPLEMENTS, XERO_DATASET, snapshot_root, xero_engagement
+from tests.xero_fakes import PLANNING, SNAPSHOT_NAME, SNAPSHOT_REPO, XERO_DATASET, snapshot_root, xero_engagement
 
 pytestmark = pytest.mark.external
 BASE = f"/api/v1/engagements/{EID}/data"
@@ -99,8 +100,9 @@ async def test_statements_are_suggested_only_for_an_open_request_while_idle(
 def test_supplement_needs_the_snapshot_too(tmp_path: Path) -> None:
     """有没有演示资料看快照目录与补造目录是否都在 (不核对哈希): 快照不在时为假. 防只看补造目录, 显示了按钮而导入时
     才报错."""
-    found = XeroDatasetLoader(snapshot_root(SNAPSHOT_REPO).parent, PLANNING, supplements=SUPPLEMENTS)
-    missing = XeroDatasetLoader(tmp_path, PLANNING, supplements=SUPPLEMENTS)
+    supplements = supplements_dir(SNAPSHOT_NAME).parent  # 补造根, 经 tests.external 核对
+    found = XeroDatasetLoader(snapshot_root(SNAPSHOT_REPO).parent, PLANNING, supplements=supplements)
+    missing = XeroDatasetLoader(tmp_path, PLANNING, supplements=supplements)
     assert (found.has_supplement(XERO_DATASET), missing.has_supplement(XERO_DATASET)) == (True, False)
 
 

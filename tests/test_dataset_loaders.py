@@ -8,6 +8,7 @@ import pytest
 
 from backend.persistence import stores
 from backend.services.ledger import opening_balances, retained_earnings_code
+from tests.external import optional, snapshot_dir, snapshot_location, supplements_dir, supplements_path
 
 
 @asynccontextmanager
@@ -108,16 +109,15 @@ async def test_already_loaded_xero_survives_removed_snapshot(tmp_path: Path, mon
     await loader.load("E", "xero/removed")
 
 
+@pytest.mark.external
 def test_xero_without_supplements_tables_unchanged(tmp_path: Path) -> None:
     """R72: 没有补造目录的 Xero 快照 (20261017-mock) 载入的表与纯快照相同, 不登记合同; 服务完成记录为空,
     合同关联全空, 开户行为 Xero 科目名."""
     from backend.adapters.xero_dataset import Snapshot, build_tables
 
-    api = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"
-    if not (api / "20261017-mock").is_dir():
-        pytest.skip("没有本地 Xero 快照 20261017-mock")
+    api = snapshot_dir("20261017-mock").parent
     loader = stores.XeroDatasetLoader(
-        api, api, engine=object(), evidence_store=object(), supplements=api.parents[2] / "xero_demo"
+        api, api, engine=object(), evidence_store=object(), supplements=supplements_path("20261017-q1").parent
     )  # type: ignore[arg-type]
     tables = loader.tables("xero/20261017-mock")
     assert tables == build_tables(Snapshot(api / "20261017-mock"))
@@ -127,27 +127,29 @@ def test_xero_without_supplements_tables_unchanged(tmp_path: Path) -> None:
 
 
 REPO = Path(__file__).resolve().parents[1]
-XERO_API = REPO / "data" / "external" / "xero" / "api"
+XERO_API = snapshot_location("20261017-q1").parent  # 快照的上级 (只给路径; 用例经 snapshot_dir 核对)
 
 
 def routing() -> stores.RoutingDatasetLoader:
+    supplements = supplements_path("20261017-q1").parent
     xero = stores.XeroDatasetLoader(
-        XERO_API, XERO_API, engine=object(), evidence_store=object(), supplements=REPO / "data" / "xero_demo"
+        XERO_API, XERO_API, engine=object(), evidence_store=object(), supplements=supplements
     )  # type: ignore[arg-type]
     csv = stores.CsvDatasetLoader(REPO / "data", engine=object(), evidence_store=object())  # type: ignore[arg-type]
     return stores.RoutingDatasetLoader(csv, {"xero/": xero})
 
 
+@pytest.mark.external
 def test_adjustment_entries_and_numbers() -> None:
     """R73: 更正分录的凭证摘要与凭证号; 没有更正分录文件的数据集为空, 不抛错."""
     from datetime import date
 
     loader = routing()
     assert loader.adjustment_entries("demo") == [] and loader.adjustment_entry_nos("demo") == []
-    if (XERO_API / "20261017-mock").is_dir():
+    if optional(snapshot_dir, "20261017-mock") is not None:
         assert loader.adjustment_entry_nos("xero/20261017-mock") == []
-    if not (XERO_API / "20261017-q1").is_dir():
-        pytest.skip("没有本地 Xero 快照 20261017-q1")
+    snapshot_dir("20261017-q1")
+    supplements_dir("20261017-q1")
     summaries = loader.adjustment_entries("xero/20261017-q1")
     assert [s.entry_no for s in summaries] == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
     assert loader.adjustment_entry_nos("xero/20261017-q1") == [s.entry_no for s in summaries]
@@ -156,19 +158,20 @@ def test_adjustment_entries_and_numbers() -> None:
     assert summaries[0].description is not None and summaries[0].description.startswith("Audit adjustment AJE-X01")
 
 
+@pytest.mark.external
 async def test_load_adjustments_rejects_before_writing(tmp_path: Path) -> None:
     """R73: 凭证号不在文件中 (LookupError, 含编号), 数据集没有更正分录文件 (FileNotFoundError, 含路径), 某笔借贷不平
     (ValueError) 都在开事务之前拒绝 (本用例的载入器没有数据库, 走到写入就会出错)."""
     loader = routing()
     with pytest.raises(FileNotFoundError, match="adjustments"):
         await loader.load_adjustments("E", "demo", ["AJE-X01"])
-    if (XERO_API / "20261017-mock").is_dir():
+    if optional(snapshot_dir, "20261017-mock") is not None:
         with pytest.raises(FileNotFoundError, match="20261017-mock"):
             await loader.load_adjustments("E", "xero/20261017-mock")
-    if (XERO_API / "20261017-q1").is_dir():
+    source = supplements_dir("20261017-q1") / "adjustments" / "journal_entries.csv"
+    if optional(snapshot_dir, "20261017-q1") is not None:
         with pytest.raises(LookupError, match="AJE-X09"):
             await loader.load_adjustments("E", "xero/20261017-q1", ["AJE-X01", "AJE-X09"])
-    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
     target = tmp_path / "acme" / "adjustments" / "journal_entries.csv"
     target.parent.mkdir(parents=True)
     target.write_text(source.read_text(encoding="utf-8").replace(",478,426120,0,", ",478,426121,0,"), encoding="utf-8")
@@ -178,12 +181,11 @@ async def test_load_adjustments_rejects_before_writing(tmp_path: Path) -> None:
     assert [s.entry_no for s in acme.adjustment_entries("acme")][:2] == ["AJE-X01", "AJE-X02"]
 
 
+@pytest.mark.external
 async def test_fake_loader_adjustments() -> None:
     from tests.fakes import FakeDatasetLoader, FakeFinancialStore
 
-    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
-    if not source.is_file():
-        pytest.skip("没有补造的更正分录")
+    source = supplements_dir("20261017-q1") / "adjustments" / "journal_entries.csv"
     fake = FakeDatasetLoader(FakeFinancialStore(), adjustments=stores.read_adjustments(source))
     rows = await fake.load_adjustments("E", "xero/20261017-q1", ["AJE-X05", "AJE-X01"])
     assert [r.id for r in rows] == ["AJE-X01-1", "AJE-X01-2", "AJE-X01-3", "AJE-X05-1", "AJE-X05-2"]
@@ -217,11 +219,10 @@ async def test_adjustment_writer_is_passed_through(
     assert seen == [("demo", actor or "A1"), ("xero/x", actor or "A1")]
 
 
+@pytest.mark.external
 async def test_adjustment_inputs_are_checked(tmp_path: Path) -> None:
     """created_at 没有时区时拒绝 (写库读回带时区, 重放会被误判为内容不同); 单个字符串当凭证号列表时拒绝."""
-    source = REPO / "data" / "xero_demo" / "20261017-q1" / "adjustments" / "journal_entries.csv"
-    if not source.is_file():
-        pytest.skip("没有补造的更正分录")
+    source = supplements_dir("20261017-q1") / "adjustments" / "journal_entries.csv"
     target = tmp_path / "acme" / "adjustments" / "journal_entries.csv"
     target.parent.mkdir(parents=True)
     text = source.read_text(encoding="utf-8")
@@ -283,11 +284,10 @@ def test_dataset_traits_read_from_supplements() -> None:
     """R96 验收 2: 没有补造目录的快照 (20261017-mock) 取缺省值; xero/20261017-q1 读已核对的补造目录的
     dataset_traits.json (各值同设计第 5.2 节, 见 test_knowledge.test_dataset_traits_from_design)."""
     from backend.contracts.records import DatasetTraits
-    from tests.external import require_xero_snapshot, require_xero_supplements
 
-    require_xero_snapshot("20261017-mock")
-    require_xero_snapshot("20261017-q1")
-    declared = require_xero_supplements("20261017-q1") / "dataset_traits.json"
+    snapshot_dir("20261017-mock")
+    snapshot_dir("20261017-q1")
+    declared = supplements_dir("20261017-q1") / "dataset_traits.json"
     loaders = routing()
     assert loaders.dataset_traits("xero/20261017-mock") == DatasetTraits()
     q1 = loaders.dataset_traits("xero/20261017-q1")

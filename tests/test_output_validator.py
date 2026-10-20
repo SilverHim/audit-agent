@@ -478,6 +478,7 @@ XERO_TYPES = [
 ]
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(("path", "page", "evidence_type", "reliability"), XERO_TYPES)
 async def test_xero_document_pointer_takes_type_and_reliability_from_registration(
     path: str, page: int, evidence_type: EvidenceType, reliability: Reliability
@@ -502,6 +503,7 @@ async def test_bank_statement_pointer_is_bank() -> None:
     assert (pointer.type, pointer.reliability) == (EvidenceType.bank, Reliability.external_copy)
 
 
+@pytest.mark.external
 def test_xero_types_cover_every_evidence_document_type() -> None:
     """逐类样例, 加上另有用例的收入合同与回函, 没有补造文件的治理层沟通与用合成登记的对账单, 覆盖可作证据的类型."""
     covered = {xero_document(path).type for path, *_ in XERO_TYPES}
@@ -509,6 +511,7 @@ def test_xero_types_cover_every_evidence_document_type() -> None:
     assert covered | rest | {DocumentType.bank_statement} == set(DOCUMENT_EVIDENCE)
 
 
+@pytest.mark.external
 async def test_xero_agreement_page_outside_and_statements_not_evidence() -> None:
     loan = xero_document("documents/evidence/director_loan_agreement.pdf")  # 20, 2 页
     statements = xero_document("financial_statements/fs_v1.pdf")  # 28

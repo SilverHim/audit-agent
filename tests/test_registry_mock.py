@@ -13,11 +13,11 @@ from backend.adapters.registry import CompositeRegistrySource
 from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySource, person_stem
 from backend.contracts.errors import RegistryUnavailable
 from backend.contracts.models import AsicExtract, PersonSearch
-from tests.external import require_xero_supplements
+from tests.external import supplements_dir
 from tests.fakes import ENGAGEMENT, FakeAbr, FakeEngagementStore, FakeRegistry, no_uploads
 from tests.xero_fakes import XERO_DATASET
 
-EXTERNAL = pytest.mark.external  # 读补造目录的用例 (经 require_xero_supplements 定位); 纯函数用例不标
+EXTERNAL = pytest.mark.external  # 读补造目录的用例 (经 supplements_dir 定位); 纯函数用例不标
 DEMO = Path(__file__).resolve().parents[1] / "data" / "demo"
 BIRTH = date(1979, 4, 12)
 DATASETS = (XERO_DATASET, "demo", "xero/20261017-mock", None)  # 项目 E-0 至 E-3 的数据集 (E-3 为新建的客户)
@@ -25,7 +25,7 @@ DATASETS = (XERO_DATASET, "demo", "xero/20261017-mock", None)  # 项目 E-0 至 
 
 @pytest.fixture(scope="module")
 def root() -> Path:
-    return require_xero_supplements("20261017-q1")
+    return supplements_dir("20261017-q1")
 
 
 @pytest.fixture

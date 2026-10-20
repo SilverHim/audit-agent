@@ -18,6 +18,7 @@ from backend.orchestration.graph import compile_graph
 from backend.orchestration.runner import GraphRunner
 from backend.persistence import seed as seed_module
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
+from tests.external import needs, snapshot_location, supplements_path
 from tests.fakes import (
     NOW,
     NUMBAT_AUDITOR,
@@ -33,8 +34,8 @@ from tests.fakes import (
 
 SETTINGS = get_settings()
 DEFAULT = "xero/20261017-q1"
-SNAPSHOTS = SETTINGS.DATASET_ROOT / "external" / "xero" / "api"
-needs_snapshot = pytest.mark.skipif(not (SNAPSHOTS / "20261017-q1").is_dir(), reason="没有本地 Xero 快照 20261017-q1")
+SNAPSHOTS = snapshot_location("20261017-q1").parent  # 快照目录的上级 (只给路径; 要快照的用例经 needs_snapshot 核对)
+needs_snapshot = needs("q1_snapshot", "q1_supplements")  # 标 external, 没有快照或补造时跳过, 跟踪了却找不到时失败
 NO_DB: Any = object()  # 建项目与 ACC-04 不读写财务表
 
 
@@ -83,7 +84,7 @@ def demo_runner(registry: Callable[[Any, Callable[[str], Path | None], Any], Any
                 SETTINGS.KNOWLEDGE_ROOT / "planning",
                 NO_DB,
                 NO_DB,
-                supplements=SETTINGS.DATASET_ROOT / "xero_demo",
+                supplements=supplements_path("20261017-q1").parent,
             )
         },
     )

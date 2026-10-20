@@ -7,6 +7,7 @@
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 
 from backend.contracts.models import GateDecision, GateId, GateVerdict, ReviewTask, TrailEntry, TrailKind
 from backend.services.deferrals import active_deferrals
@@ -178,6 +179,7 @@ async def test_locked_engagement_rejects_marks() -> None:
 # ── 接口: 闸门 (Xero 项目停在 ACC-01) ──
 
 
+@pytest.mark.external
 async def test_xero_gate_mark_ends_with_gate_decision() -> None:
     """Xero 项目停在 ACC-01 (登记查询查不到它的 ABN, 评分卡带例外): 标记闸门后可读回;
     审计师作出"信息不足"决定后闸门原地重新呈报, 旧标记随那次决定失效, 可以重新标记."""

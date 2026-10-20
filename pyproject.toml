@@ -75,6 +75,6 @@ asyncio_mode = "auto"
 addopts = "-m 'not slow'"  # 慢测试用 uv run pytest -m slow 显式运行
 markers = [
     "slow: 连数据库或调真实 LLM，平时不跑",
-    "external: 依赖 data/external 下的外部数据，缺失时跳过 (tests/external.py)",
+    "external: 依赖 data/external 或 data/xero_demo 下的外部数据，经 tests/external.py 定位，没带时跳过，仓库跟踪了却找不到时失败",
     "live: 调真实大模型 (须同时标 slow, 并写上限 max_calls)，配置取环境变量或 .env 的 LLM_MODEL、LLM_API_KEY，没配时跳过",
 ]

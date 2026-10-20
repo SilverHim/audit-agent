@@ -4,10 +4,12 @@
 Xero 项目过 ACC-01 后的计划阶段在测试替身里取的是 Numbat 的财务数据, 两者混用说明不了问题.
 """
 
-from pathlib import Path
 from typing import Any
 
+import pytest
+
 from backend.contracts.models import ClientProfile
+from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
     FakeEngagementStore,
@@ -23,7 +25,6 @@ from tests.test_flow import start_numbat
 
 EID = ENGAGEMENT.id
 URL = f"/api/v1/engagements/{EID}/client-profile"
-Q1 = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "client_profile.json"
 PERIOD = (ENGAGEMENT.period_start, ENGAGEMENT.period_end)
 ORIGINAL = ("legal_name", "abn", "entity_type", "industry_anzsic", "listed", "directors", "notes")  # 扩展前的 7 个字段
 
@@ -44,6 +45,7 @@ def profile_body(profile: ClientProfile, **changes: Any) -> dict[str, Any]:
     return {**body, "version": profile.version + 1, **changes}
 
 
+@pytest.mark.external
 async def test_xero_profile_and_scorecard_at_acc01() -> None:
     s, profile = await xero_at_acc01()
     async with api_client(s.runner) as client:
@@ -62,6 +64,7 @@ async def test_xero_profile_and_scorecard_at_acc01() -> None:
     assert view["editable"] is True
 
 
+@pytest.mark.external
 async def test_xero_profile_update_adds_history_and_reruns_scorecard() -> None:
     s, profile = await xero_at_acc01()
     async with api_client(s.runner) as client:
@@ -90,7 +93,7 @@ async def test_not_editable_after_acc01() -> None:
 async def q1_at_acc01() -> tuple[Started, ClientProfile]:
     """补造画像 CLIENT-XERO-3C1332BB-Q1 v1 (带扩展字段: 审批限额 500000, 上期未审) 的项目跑完 ACC-04, 停在 ACC-01.
     项目存储能再建项目 (采用画像的规则同 PostgresEngagementStore.create)."""
-    profile = ClientProfile.model_validate_json(Q1.read_bytes())
+    profile = ClientProfile.model_validate_json((supplements_dir("20261017-q1") / "client_profile.json").read_bytes())
     _, engagement = xero_engagement(xero_snapshot())
     engagement = engagement.model_copy(update={"client_id": profile.id, "client_profile_version": profile.version})
     engagement_store = CreatingEngagementStore([profile], [engagement])
@@ -106,6 +109,7 @@ def original_body(profile: ClientProfile, version: int, **changes: Any) -> dict[
     return {**body, "version": version, **changes}
 
 
+@pytest.mark.external
 async def test_update_without_extension_fields_keeps_them() -> None:
     """请求体只给原有 7 个字段: 新版本画像的扩展字段等于被替代的那一版 (审批限额仍为 500000, 上期未审照旧)."""
     s, profile = await q1_at_acc01()
@@ -119,6 +123,7 @@ async def test_update_without_extension_fields_keeps_them() -> None:
     assert second.model_dump(exclude={"version", "directors"}) == profile.model_dump(exclude={"version", "directors"})
 
 
+@pytest.mark.external
 async def test_update_overrides_only_given_extension_fields() -> None:
     """给出的字段覆盖, 给 null 的可空字段清空, 没给的沿用; 再改一版时以第 2 版为底, 不回到第 1 版."""
     s, profile = await q1_at_acc01()
@@ -137,6 +142,7 @@ async def test_update_overrides_only_given_extension_fields() -> None:
     assert third is not None and third.model_dump(exclude={"version"}) == second.model_dump(exclude={"version"})
 
 
+@pytest.mark.external
 async def test_new_engagement_adopts_the_auditor_edited_profile() -> None:
     """审计师在项目 A 的 ACC-01 改过画像 (第 2 版) 后, 用同一数据集建项目 B: 数据集画像与第 1 版相同, B 采用改后的
     第 2 版, 不把数据集原样写成新一版; A 之后再改也以第 2 版为底 (R127 第 1 轮审核 R127-01)."""
@@ -163,6 +169,7 @@ async def test_new_engagement_adopts_the_auditor_edited_profile() -> None:
     assert third is not None and (third.approval_limit_cents, third.directors) == (600000, ["Owner A"])
 
 
+@pytest.mark.external
 async def test_update_rejects_invalid_merged_profile() -> None:
     """合并后不合 ClientProfile (财年末不是合法月日): 422 INVALID_VALUE, 不出新版本."""
     s, profile = await q1_at_acc01()

@@ -37,9 +37,10 @@ from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
+from tests.external import optional, supplements_dir
 from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_REPLIES
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
-from tests.fixture_sets import FIXTURE_SETS, NUMBAT, FixtureSet
+from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
 
 ROOT = get_settings().KNOWLEDGE_ROOT
 P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
@@ -1898,6 +1899,7 @@ def test_dataset_traits_defaults() -> None:
     }
 
 
+@pytest.mark.external
 def test_dataset_traits_from_design() -> None:
     traits = design_traits()
     assert (traits.prior_period_start, traits.data_as_of, traits.entry_timestamps_reliable) == (
@@ -1909,8 +1911,11 @@ def test_dataset_traits_from_design() -> None:
     assert traits.payroll_accounts is not None
     assert (traits.payroll_accounts.wages_expense, traits.payroll_accounts.leave_provision) == (["477"], ["805"])
     assert DatasetTraits.model_validate(json.loads(DESIGN_TRAITS)) == traits
-    supplements = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1"  # 声明同第 5.2 节
-    assert json.loads((supplements / "dataset_traits.json").read_text(encoding="utf-8")) == json.loads(DESIGN_TRAITS)
+    # 补造目录的声明同第 5.2 节 (没带补造目录的检出不比); 只比补造与设计, 不核对快照哈希
+    supplements = optional(supplements_dir, "20261017-q1", False)
+    if supplements is not None:
+        declared = json.loads((supplements / "dataset_traits.json").read_text(encoding="utf-8"))
+        assert declared == json.loads(DESIGN_TRAITS)
 
 
 @pytest.mark.parametrize(
@@ -2072,8 +2077,7 @@ PROFILE_TEMPLATE = REF_TEMPLATE.split("params:")[0] + (
 
 def xero_profile() -> ClientProfile:
     """补造的 Xero 演示画像 CLIENT-XERO-3C1332BB-Q1 v1 (审批限额 500000, 审计费 480000, 上期未审)."""
-    path = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "client_profile.json"
-    return ClientProfile.model_validate_json(path.read_bytes())
+    return ClientProfile.model_validate_json((supplements_dir("20261017-q1") / "client_profile.json").read_bytes())
 
 
 def resolve_profile(lib: ProcedureLibrary, profile: ClientProfile | None) -> dict[str, Any]:
@@ -2082,6 +2086,7 @@ def resolve_profile(lib: ProcedureLibrary, profile: ClientProfile | None) -> dic
     )
 
 
+@pytest.mark.external
 def test_profile_refs_resolve(tmp_path: Path) -> None:
     """profile. 按画像的字段路径取值, 支持一层嵌套 (fees.audit_fee_cents); 为 None 时抛 ValueError, 写了 optional 的
     以 None 执行; 没有画像时引用 profile. 也抛错; dataset. 不受影响."""
@@ -2106,6 +2111,7 @@ def test_profile_refs_resolve(tmp_path: Path) -> None:
         resolve_profile(lib, unset.model_copy(update={"prior_period_audited": None}))
 
 
+@pytest.mark.external
 def test_profile_ref_results_are_copies(tmp_path: Path) -> None:
     """profile. 的取值是新建的 JSON 兼容值: 列表里的模型也是字典, 改返回值不会改到画像."""
     template = REF_TEMPLATE.split("params:")[0] + "params:\n  people: {ref: profile.key_personnel}\n"
@@ -2119,6 +2125,7 @@ def test_profile_ref_results_are_copies(tmp_path: Path) -> None:
     assert len(profile.key_personnel) == 1 and profile.key_personnel[0].name == "Alex Morgan"
 
 
+@pytest.mark.external
 def test_profile_ref_snapshot_reads_back_equal(tmp_path: Path) -> None:
     """参数快照经检查点与 Store (JSON) 读回后与首次执行相等: 列表中的模型, 嵌套模型中的列表, 日期与枚举都已转成
     JSON 兼容的值 (R127 第 1 轮审核 R127-03)."""
@@ -2331,7 +2338,7 @@ EXPECTED_POINTERS = {
 }
 
 
-@pytest.mark.parametrize("fs", FIXTURE_SETS, ids=lambda fs: fs.name)
+@pytest.mark.parametrize("fs", FIXTURE_PARAMS)
 def test_fixture_document_ids_in_manifest(fs: FixtureSet) -> None:
     """验收 1: 每个 document 指针的 source_id 都在该数据集的 manifest.documents 中, 指向该 fixture 对应的 PDF
     (Numbat: 合同为 contracts/CON-00x.pdf, 回函为 confirmations/{账号}.pdf), 页码不超过该 PDF 的页数."""
@@ -2396,6 +2403,7 @@ def check_runtime(fs: FixtureSet) -> None:
     """运行副本与测试 fixture 文件相同, 内容相同 (JSON 比较); 运行副本根不存在时报 "运行副本未生成", 不跳过.
     登记了上传处理的固定输出 (uploads) 时, 其中 uploads_in_runtime 列出的程序 (演示也用的分类, 回函副本, 账表识别与
     ASIC 摘录抽取) 也须在运行副本中; 其余 (如 agreement, 只供 "人工指定类型后抽取" 的测试) 不进运行目录."""
+    fs.ready()
     if not fs.runtime.is_dir():
         raise AssertionError(f"{fs.name}: 运行副本未生成 ({fs.runtime})")
     test_files = {p.relative_to(fs.fixtures): p for p in fs.fixtures.rglob("*.json")}
@@ -2411,7 +2419,7 @@ def check_runtime(fs: FixtureSet) -> None:
         ), name
 
 
-@pytest.mark.parametrize("fs", FIXTURE_SETS, ids=lambda fs: fs.name)
+@pytest.mark.parametrize("fs", FIXTURE_PARAMS)
 def test_runtime_fixtures_match_test_fixtures(fs: FixtureSet) -> None:
     """运行副本 (Numbat 为 data/demo/llm, B 的生成器由测试 fixture 复制并映射文档 ID) 与测试 fixture 内容相同:
     文档 ID 已对齐, 映射不再改动内容; 改了测试 fixture 而未重新生成时在这里报出."""

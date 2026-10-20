@@ -16,7 +16,7 @@ from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.query import GraphStateQuery
 from backend.services.xero_link import StoredXeroConnections
 from backend.services.xero_profile import organisation_info, profile_differences
-from tests.external import require_xero_snapshot
+from tests.external import snapshot_dir
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -241,7 +241,7 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
        而与采用的版本 ABN 不同: 照写第 6 版, 内容同第 5 版.
     8. 再改名称同步后项目锁定: 待办里不列, 选择 423 ENGAGEMENT_LOCKED.
     """
-    require_xero_snapshot(XERO_SNAPSHOT)  # 假 Xero 回放这个快照
+    snapshot_dir(XERO_SNAPSHOT)  # 假 Xero 回放这个快照
     c = case(tmp_path)
     runner = c.xero.data.runner
     es = runner.deps.engagement_store

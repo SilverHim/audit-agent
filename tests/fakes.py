@@ -162,7 +162,7 @@ from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from backend.services.xero_link import XeroLink
-from tests.external import require_xero_snapshot
+from tests.external import snapshot_dir, supplements_dir
 
 NOW = datetime(2026, 9, 30, tzinfo=UTC)
 
@@ -261,15 +261,17 @@ def manifest_document(path: str, reliability: Reliability) -> DocumentRef:
     )
 
 
-XERO_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "xero_demo" / "20261017-q1" / "manifest.json"
-XERO_DOCUMENTS: dict[str, dict[str, Any]] = {  # Xero 补造目录登记的 PDF, 相对补造目录的路径 -> 条目 (设计第 4 节类型表)
-    d["path"]: d for d in json.loads(XERO_MANIFEST.read_text(encoding="utf-8"))["documents"]
-}
+@functools.cache
+def xero_documents() -> dict[str, dict[str, Any]]:
+    """Xero 补造目录登记的 PDF: 相对补造目录的路径 -> manifest 条目 (设计第 4 节类型表). 补造目录经
+    tests.external.supplements_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过)."""
+    manifest = json.loads((supplements_dir("20261017-q1") / "manifest.json").read_text(encoding="utf-8"))
+    return {d["path"]: d for d in manifest["documents"]}
 
 
 def xero_document(path: str) -> DocumentRef:
     """Xero 补造目录下 path 那份 PDF 的登记: ID, 类型, 可靠性, 页数, 文件日期与关联对象取 manifest, 状态 received."""
-    entry = XERO_DOCUMENTS[path]
+    entry = xero_documents()[path]
     return DocumentRef(
         id=entry["document_id"],
         type=DocumentType(entry["type"]),
@@ -3041,13 +3043,17 @@ async def api_client(
 
 # ── Xero Demo Company 快照: xero pull 的输出 (本仓库已带); 找不到时跳过用到它的测试, 仓库跟踪了却找不到时失败 ──
 
-XERO_SNAPSHOTS = Path(__file__).resolve().parents[1] / "data" / "external" / "xero" / "api"  # 快照目录的上级
 XERO_SNAPSHOT = "20261017-mock"  # 带付费接口模拟 (总账分录, 银行对账单) 的快照, 数据集名 xero/20261017-mock
 
 
 def xero_snapshot() -> Snapshot:
-    """Xero 快照 20261017-mock, 按 tests.external.require_xero_snapshot 定位与核对 (需求 R114)."""
-    return Snapshot(require_xero_snapshot(XERO_SNAPSHOT))
+    """Xero 快照 20261017-mock, 按 tests.external.snapshot_dir 定位与核对 (需求 R114, R294)."""
+    return Snapshot(snapshot_dir(XERO_SNAPSHOT))
+
+
+def xero_snapshots() -> Path:
+    """Xero 快照目录的上级 (data/external/xero/api, 载入器与假 Xero 的根), 经 20261017-mock 快照定位."""
+    return snapshot_dir(XERO_SNAPSHOT).parent
 
 
 def xero_engagement(snapshot: Snapshot) -> tuple[ClientProfile, Engagement]:

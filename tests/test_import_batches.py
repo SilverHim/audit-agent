@@ -36,6 +36,7 @@ from backend.services.data_import import MASK, cell_text, raw_rows
 from backend.services.data_service import DataService
 from backend.services.import_batches import BatchIntake, column_sample, period_issue, same_company
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from tests.external import needs, raw_dir
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -58,7 +59,6 @@ from tests.test_sheet_intake import personal_values
 EID = ENGAGEMENT.id
 REPO = Path(__file__).resolve().parents[1]
 DEMO = REPO / "data" / "demo"
-RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
 MAIN_FIXTURES = UPLOAD_FIXTURES.parents[1] / "llm"
 XERO_PROFILE = NUMBAT_PROFILE.model_copy(update={"legal_name": "Demo Company (AU) Pty Ltd"})  # 同 Xero 演示的画像名
 BASE = f"/api/v1/engagements/{EID}/data/batches"
@@ -113,7 +113,7 @@ def demo_csv(name: str) -> tuple[str, bytes]:
 
 
 def raw_file(name: str) -> tuple[str, bytes]:
-    return name, (RAW / name).read_bytes()
+    return name, (raw_dir() / name).read_bytes()  # Xero 网页导出, 只读
 
 
 def contract_pdf(n: int) -> tuple[str, bytes]:
@@ -226,6 +226,7 @@ def test_migrations_have_a_single_head() -> None:
     assert revision is not None and revision.down_revision == "0009"
 
 
+@pytest.mark.external
 async def test_issue_samples_one_to_five_on_the_confirmation_sheet() -> None:
     """issue 的样例 1 至 5 经批次 (前端 "上传资料" 走的路径) 在 mock 下的确认单: 识别为哪张表, 将写入的行数, 把握,
     读到的公司与截至日, 问题与缺省勾选. 截至 2026-06-30 的项目, 画像名同 Xero 演示公司. 样例 3 的科目表有一处
@@ -277,6 +278,7 @@ async def test_issue_samples_one_to_five_on_the_confirmation_sheet() -> None:
 # ── 样例 7 与确认单的问题 ──
 
 
+@pytest.mark.external
 async def test_period_mismatch_is_flagged_and_unselected() -> None:
     """截至 2026-06-30 的项目 (画像名同 Xero 演示公司) 拖入 11-30 的试算表: 标红期间不符, 缺省不勾; 06-30 的没有问题.
     两张试算表同在一批, 都记同一张表出现两次."""
@@ -300,6 +302,7 @@ async def test_period_mismatch_is_flagged_and_unselected() -> None:
     assert not first.selected and not second.selected
 
 
+@pytest.mark.external
 async def test_company_low_confidence_failures_and_replacement_are_flagged() -> None:
     """Numbat 项目里: Xero 试算表的公司名不符; 没有 fixture 的 CSV 退回按列名匹配 (把握低); 科目表有解析失败
     (803 的 Type 为空, 附失败处); 已有数据的表将被替换 (写明现有行数); 都缺省不勾."""
@@ -349,6 +352,7 @@ def test_period_rules_for_balances_and_period_reports() -> None:
     assert period_issue(reading(None, None), e) is None
 
 
+@pytest.mark.external
 async def test_table_items_carry_columns_and_a_masked_sample() -> None:
     """表格项带方案表头行的各列与每列的样例 (调整时列对应界面用): 日记账报表表头在第 5 行, Posted By 是导出账号本人的
     姓名, 样例已遮蔽; 换了表头行的方案按新表头重算列. 断言只比遮蔽与否, 不把取值写进测试输出."""
@@ -378,6 +382,7 @@ async def test_table_items_carry_columns_and_a_masked_sample() -> None:
     assert (edited.items[0].columns, edited.items[0].sample) == ([], {})
 
 
+@pytest.mark.external
 async def test_columns_and_sample_stay_masked_whatever_the_header_row() -> None:
     """列与样例的遮蔽同发给大模型的样本: 从第 1 行起整体遮蔽后再按表头行切. 日记账报表的表头行改到原表头之下
     (第 6 至 12 行) 时, 列名与样例里也没有导出账号本人的姓名与邮箱; 经调整单项返回的与存下的批次同样没有.
@@ -388,7 +393,7 @@ async def test_columns_and_sample_stay_masked_whatever_the_header_row() -> None:
         texts = " ".join([*columns, *sample.values()]).lower()
         return sum(v in texts for v in secrets)
 
-    _, rows = raw_rows("journal_report.xlsx", (RAW / "journal_report.xlsx").read_bytes())
+    _, rows = raw_rows("journal_report.xlsx", (raw_dir() / "journal_report.xlsx").read_bytes())
     raw = " ".join(cell_text(c) for _, cells in rows for c in cells).lower()
     assert sum(v in raw for v in secrets) > 0  # 原表里确有 (守卫有意义)
     for header_row in range(5, 13):
@@ -424,6 +429,7 @@ async def test_email_headers_are_masked_in_columns() -> None:
     assert "@" not in env.data.import_batches[batch.id].model_dump_json()
 
 
+@pytest.mark.external
 async def test_failure_values_are_masked_like_the_sample() -> None:
     """解析失败处的取值也遮蔽 (从已遮蔽的行里取): 把借方金额对应到 Posted By 列, 每行都解析失败; 确认单项的前 20 处,
     存下的批次与勾上后确认报的 IMPORT_PARSE_ERROR 里都没有导出账号本人的姓名与邮箱. 只比计数."""
@@ -576,6 +582,7 @@ async def test_edit_plan_type_and_selection() -> None:
     assert env.document(document.document_id).type is DocumentType.minutes
 
 
+@pytest.mark.external
 async def test_confirm_rejects_duplicates_failures_and_not_ready() -> None:
     """勾了同一张表两项 INVALID_VALUE; 勾了有解析失败的表 IMPORT_PARSE_ERROR (附前 20 处); 还在识别 INVALID_VALUE;
     都不写任何表."""
@@ -748,6 +755,7 @@ async def test_unselected_files_are_not_imported_and_can_be_uploaded_again(monke
     assert env.document(first.files[0].document_id).status == "extracted"
 
 
+@pytest.mark.external
 async def test_unselected_ledger_export_is_not_left_awaiting_review() -> None:
     """R278 审核的实例: 确认时没勾 journal_report.xlsx (另一张表照常导入): 确认后它是未导入, 不再算待确认导入,
     也不在任何还没写入的批次里."""
@@ -1012,6 +1020,7 @@ async def test_recover_resumes_a_processing_batch() -> None:
 # ── Xero 演示项目的运行副本 ──
 
 
+@needs("q1_supplements")  # 运行副本在补造目录下, 经 DATASET_ROOT 读
 async def test_xero_demo_runtime_has_the_sheet_fixtures() -> None:
     """Xero 演示项目 (mock) 读补造目录的运行副本, 那里有 DOC-SHEET (生成脚本从上传固定输出复制): 网页导出的试算表
     走大模型识别, 不退回按列名匹配."""

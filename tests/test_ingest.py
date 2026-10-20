@@ -138,6 +138,7 @@ async def test_llm_requests() -> None:
         assert "control of the goods passes to the customer |" not in prompt
 
 
+@pytest.mark.external
 async def test_only_contract_documents_extracted() -> None:
     """DOC-04 只取 contract 类文件: 新租约 (agreement) 与收入合同同在时, 只为 CON-X01 调大模型 (设计稿第 4 节类型表)."""
     con_x01 = xero_document("contracts/CON-X01.pdf")  # contract, 3 页

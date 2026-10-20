@@ -19,13 +19,11 @@ from backend.contracts.llm_outputs import SheetRecognition
 from backend.contracts.records import Account, JournalEntry, SalesInvoice, TrialBalanceRow
 from backend.services import data_import as d
 from backend.services import table_plan as tp
+from tests.external import raw_dir, snapshot_dir
 
 REPO = Path(__file__).resolve().parents[1]
-RAW = REPO / "data" / "external" / "xero" / "raw"  # Xero 网页导出, 只读
 # 方案样例: 账表识别 (DOC-SHEET) 的固定输出, 键为导出文件或 Numbat 表的文件名主干, 方案取其 plan (R276 复用, 只存一份)
 PLANS = Path(__file__).resolve().parent / "fixtures" / "llm_variants" / "upload" / "DOC-SHEET"
-Q1 = Snapshot(REPO / "data" / "external" / "xero" / "api" / "20261017-q1")
-MOCK = Snapshot(REPO / "data" / "external" / "xero" / "api" / "20261017-mock")
 PRIVATE_COLUMN = "Posted By"  # 导出账号的姓名, 读出即遮蔽
 
 
@@ -44,9 +42,9 @@ def masked(rows: d.RawRows) -> d.RawRows:
     return rows
 
 
-def raw(file_name: str, root: Path = RAW) -> tuple[str, d.RawRows]:
-    """原样读出的工作表 (遮蔽 Posted By)."""
-    name, rows = d.raw_rows(file_name, (root / file_name).read_bytes())
+def raw(file_name: str) -> tuple[str, d.RawRows]:
+    """Xero 网页导出 (只读) 原样读出的工作表 (遮蔽 Posted By)."""
+    name, rows = d.raw_rows(file_name, (raw_dir() / file_name).read_bytes())
     return name, masked(rows)
 
 
@@ -60,13 +58,20 @@ def edited(rows: d.RawRows, number: int, column: int, value: d.Cell) -> d.RawRow
 
 
 @cache
+def snapshot(name: str) -> Snapshot:
+    """Xero 快照 (经 tests.external 定位核对; 同原先模块级的对象, 几个用例共用)."""
+    return Snapshot(snapshot_dir(name))
+
+
+@cache
 def q1_tables() -> dict[str, list[Any]]:
-    return build_tables(Q1)
+    return build_tables(snapshot("20261017-q1"))
 
 
 # ── 验收 1: 试算表, 本期借贷两列, 上期一列 ──
 
 
+@pytest.mark.external
 def test_trial_balance_periods_from_columns() -> None:
     rows, failures = apply(plan_of("trial_balance_2026-06-30"), "trial_balance_2026-06-30.xlsx")
 
@@ -74,11 +79,13 @@ def test_trial_balance_periods_from_columns() -> None:
     current = {r.account_code: r.balance_cents for r in rows if r.period == "current"}
     prior = {r.account_code: r.balance_cents for r in rows if r.period == "prior"}
     assert len(rows) == 12 and set(current) == set(prior)  # 6 个科目, 本期上期各 6 行; 标题行与 Total 行不出行
-    assert current == trial_balance_cents(Q1.trial_balance(date(2026, 6, 30)))  # 与快照的 06-30 试算表一致
+    q1 = snapshot("20261017-q1")
+    assert current == trial_balance_cents(q1.trial_balance(date(2026, 6, 30)))  # 与快照的 06-30 试算表一致
     assert current == {"200": -420000, "412": 360000, "453": 800000, "461": 51200, "090": -870320, "820": 79120}
     assert set(prior.values()) == {0}  # 30 June 2025 一列全为 0
 
 
+@pytest.mark.external
 def test_trial_balance_plan_carries_over_to_another_period() -> None:
     """同一方案换上期列名 (30 June 2026) 套到 11-30 的试算表: 本期与上期都与快照一致, 上期有正负号的余额."""
     plan = plan_of("trial_balance_2026-06-30")
@@ -90,14 +97,16 @@ def test_trial_balance_plan_carries_over_to_another_period() -> None:
     assert failures == []
     current = {r.account_code: r.balance_cents for r in rows if r.period == "current"}
     earlier = {r.account_code: r.balance_cents for r in rows if r.period == "prior" and r.balance_cents}
-    assert current == trial_balance_cents(MOCK.trial_balance(date(2026, 11, 30))) and len(current) == 32
-    assert earlier == {k: v for k, v in trial_balance_cents(MOCK.trial_balance(date(2026, 6, 30))).items() if v}
+    mock = snapshot("20261017-mock")
+    assert current == trial_balance_cents(mock.trial_balance(date(2026, 11, 30))) and len(current) == 32
+    assert earlier == {k: v for k, v in trial_balance_cents(mock.trial_balance(date(2026, 6, 30))).items() if v}
     assert earlier["200"] == -420000 and earlier["412"] == 360000  # 贷方余额为负
 
 
 # ── 验收 2: 总账分录, 分组标题向下填充 ──
 
 
+@pytest.mark.external
 def test_journal_report_groups_fill_down() -> None:
     rows, failures = apply(plan_of("journal_report"), "journal_report.xlsx")
 
@@ -130,17 +139,19 @@ def test_journal_report_groups_fill_down() -> None:
 # ── 验收 3: 科目表, 类型取值映射 ──
 
 
+@pytest.mark.external
 def test_chart_of_accounts_maps_xero_types() -> None:
     rows, failures = apply(plan_of("chart_of_accounts"), "chart_of_accounts.csv")
 
     assert all(isinstance(r, Account) for r in rows)
     # 文件 59 个科目: 58 个映射到五类; 803 Wage Payables 的 Type 为空, 记为失败处 (第 44 行), 不猜也不丢
     assert len(rows) == 58 and failures == [ParseFailure(row=44, column="*Type", value="")]
-    api = {a["Code"]: account_class(a["Type"]) for a in Q1.load("accounts") if a.get("Code")}
+    api = {a["Code"]: account_class(a["Type"]) for a in snapshot("20261017-q1").load("accounts") if a.get("Code")}
     assert {r.code: r.type for r in rows} == {code: api[code] for code in {r.code for r in rows}}  # 与 API 的类别一致
     assert Counter(r.type for r in rows) == {"expense": 29, "liability": 16, "asset": 8, "revenue": 3, "equity": 2}
 
 
+@pytest.mark.external
 def test_value_outside_the_map_is_a_failure() -> None:
     """映射表外的值算失败, 即使类型转换本身认得它 ("asset" 是合法的科目类别, 但不是 Xero 的类型名)."""
     name, rows = raw("chart_of_accounts.csv")
@@ -172,6 +183,7 @@ def test_blank_value_with_a_map_is_empty() -> None:
 # ── 验收 4: 销售发票, 合计行跳过, 明细合并 ──
 
 
+@pytest.mark.external
 def test_receivable_invoice_detail_matches_snapshot() -> None:
     rows, failures = apply(plan_of("receivable_invoice_detail"), "receivable_invoice_detail.xlsx")
 
@@ -187,6 +199,7 @@ def test_receivable_invoice_detail_matches_snapshot() -> None:
     assert next(r for r in rows if r.invoice_no == "ORC1006").amount_cents == 148500
 
 
+@pytest.mark.external
 def test_dedupe_keeps_identical_lines_only() -> None:
     """明细行的发票合计不同 (方案外的情形) 时仍算重复键失败; 不开 dedupe 时相同的明细行也算失败."""
     name, rows = raw("receivable_invoice_detail.xlsx")
@@ -221,6 +234,7 @@ def test_numbat_identity_plans_equal_mapping(kind: TableKind) -> None:
 # ── 验收 6: 方案与表对不上, 解析失败的行号 ──
 
 
+@pytest.mark.external
 def test_plan_mismatches_are_reported() -> None:
     plan = plan_of("trial_balance_2026-06-30")
     with pytest.raises(d.MappingError) as e:
@@ -239,6 +253,7 @@ def test_plan_mismatches_are_reported() -> None:
     assert (e.value.code, e.value.message) == ("MISSING_FIELD", "必须对应的字段没有对应: account_code")
 
 
+@pytest.mark.external
 def test_failures_carry_file_line_numbers() -> None:
     name, rows = raw("trial_balance_2026-06-30.xlsx")
     changed = edited(edited(rows, 7, 3, "abc"), 9, 5, "n/a")  # 412 的本期借方, 461 的上期余额
@@ -251,6 +266,7 @@ def test_failures_carry_file_line_numbers() -> None:
     assert len(result) == 10  # 412 只出上期, 461 只出本期
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(
     ("update", "code", "message"),
     [
@@ -281,6 +297,7 @@ def test_plan_checks(update: dict[str, Any], code: str, message: str) -> None:
     assert (e.value.code, e.value.message) == (code, message)
 
 
+@pytest.mark.external
 @pytest.mark.parametrize(
     "update",
     [
@@ -399,6 +416,7 @@ def test_failures_from_a_group_title_point_at_the_title_row() -> None:
     assert failures == [ParseFailure(row=5, column="Date", value="notadate")]
 
 
+@pytest.mark.external
 def test_periods_only_for_trial_balance() -> None:
     plan = plan_of("chart_of_accounts")
     period = PeriodSource(period="current", balance=FieldSource(column="*Code"))

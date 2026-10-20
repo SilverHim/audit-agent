@@ -260,7 +260,8 @@ def test_tracked_snapshot_that_is_missing_fails(tmp_path: Path) -> None:
 
 def test_partly_missing_tracked_snapshot_fails(tmp_path: Path) -> None:
     """仓库跟踪了快照, 工作区只少了一个文件 (organisation.json 还在) 时失败, 不落到 "快照与补造不匹配" 的跳过
-    (第 1 轮审核 R114-01); 没有同名补造时同样失败."""
+    (第 1 轮审核 R114-01); 没有同名补造时同样失败. 有补造时只取补造目录的同样失败 (R294: 补造一侧核对快照哈希前
+    也先看快照跟踪的文件)."""
     for name, with_supplements in (("S6", True), ("S7", False)):
         repo = tmp_path / name
         repo.mkdir()
@@ -274,6 +275,9 @@ def test_partly_missing_tracked_snapshot_fails(tmp_path: Path) -> None:
         (snapshot / "journals.json").unlink()
         reason = fail_reason(require_xero_snapshot, name, repo)
         assert NOT_FOUND in reason and f"data/external/xero/api/{name}/journals.json" in reason
+        if with_supplements:
+            reason = fail_reason(require_xero_supplements, name, repo)
+            assert NOT_FOUND in reason and f"data/external/xero/api/{name}/journals.json" in reason
 
 
 def test_tracked_supplements_that_are_missing_fail(tmp_path: Path) -> None:
@@ -289,6 +293,59 @@ def test_tracked_supplements_that_are_missing_fail(tmp_path: Path) -> None:
     assert "仓库跟踪了补造目录却找不到" in reason and "data/xero_demo/S8/manifest.json" in reason
 
 
+def test_tracked_raw_exports_must_all_be_present(tmp_path: Path) -> None:
+    """Xero 网页导出 (R294): 跟踪了的都在时返回目录; 缺一个即失败 ("仓库跟踪了 Xero 网页导出却找不到", 写明文件);
+    没跟踪又没有时跳过."""
+    repo = tmp_path / "repo"
+    raw = repo / "data" / "external" / "xero" / "raw"
+    raw.mkdir(parents=True)
+    git(repo, "init", "-q")
+    for name in ("a.csv", "b.xlsx"):
+        (raw / name).write_bytes(b"x")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "raw")
+    assert ok(ext.require_xero_raw, repo) == raw
+    (raw / "b.xlsx").unlink()
+    reason = fail_reason(ext.require_xero_raw, repo)
+    assert "仓库跟踪了 Xero 网页导出却找不到" in reason and "data/external/xero/raw/b.xlsx" in reason
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    git(empty, "init", "-q")
+    assert "没有 Xero 网页导出" in skip_reason(ext.require_xero_raw, empty)
+
+
+def test_optional_takes_only_missing_data_as_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """optional 只把 "没带数据" 换成 None: 快照与补造哈希不符照常跳过 (EXTERNAL_STRICT=1 时失败), 不当成没带数据而
+    少断言; hashes=False 不核对哈希, 照常返回 (校验数据本身的用例用)."""
+    repo = tmp_path / "repo"
+    snapshot = fake_pair(repo)
+    supplements = repo / "data" / "xero_demo" / "S1"
+    assert ext.optional(require_xero_supplements, "S1", repo) == supplements
+    assert ext.optional(require_xero_supplements, "S9", repo) is None  # 没带
+    (snapshot / "accounts.json").write_bytes(b"changed")
+    for check in (require_xero_snapshot, require_xero_supplements):
+        assert MISMATCH in skip_reason(ext.optional, check, "S1", repo)
+        assert ok(check, "S1", repo, False) in (snapshot, supplements)
+    monkeypatch.setenv("EXTERNAL_STRICT", "1")
+    assert MISMATCH in fail_reason(ext.optional, require_xero_supplements, "S1", repo)
+
+
+def test_session_cache_is_keyed_by_location_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """会话缓存的键带上 EXTERNAL_DATA_ROOT 等: 两个来源各放一份同名快照 (名字不在仓库里), 先后在两种环境下取, 各得
+    各的位置, 与先后顺序无关 (R294). 不读仓库的数据."""
+    roots = [tmp_path / "a", tmp_path / "b"]
+    for root in roots:
+        (root / "xero" / "api" / "S-cache").mkdir(parents=True)
+        (root / "xero" / "api" / "S-cache" / "organisation.json").write_text("{}", encoding="utf-8")
+    for order in (roots, roots[::-1]):
+        found = []
+        for root in order:
+            monkeypatch.setenv("EXTERNAL_DATA_ROOT", str(root))
+            found.append(ok(ext.snapshot_dir, "S-cache"))
+        assert found == [root / "xero" / "api" / "S-cache" for root in order]
+
+
+@pytest.mark.external
 def test_repository_snapshots_are_found_and_match() -> None:
     """本仓库实测: 跟踪了 q1 快照的 journals.json, require_xero_snapshot 返回目录且与补造的哈希表相符 (不跳过);
     补造目录同样; fakes.xero_snapshot() 取 20261017-mock (验收 7). 不是 git 检出或不带快照的检出跳过 (R114-07)."""
