@@ -18,6 +18,7 @@ from backend.contracts.models import (
     DraftRule,
     Engagement,
     Judgment,
+    Misstatement,
     Procedure,
     ProcedureRun,
     RerunRequest,
@@ -71,6 +72,18 @@ class TaskParts:
     draft_rules: dict[DisputeResolution, DraftRule]
 
 
+async def updated_misstatement(
+    deps: AgentDeps, eid: str, target: Judgment | AuditException | ProcedureRun
+) -> dict[str, Misstatement]:
+    """判断携带错报更新 (FIN-03, FIN-09) 时所指错报的当前版本, 供 task_amount 取金额 (需求 R168, 与判断级降级同一
+    口径); 别的目标与查不到时为空."""
+    update = target.misstatement_update if isinstance(target, Judgment) else None
+    if update is None:
+        return {}
+    found = await deps.output_store.get(eid, Misstatement, update.misstatement_id)
+    return {found.id: found} if found is not None else {}
+
+
 async def task_parts(
     deps: AgentDeps,
     eid: str,
@@ -90,7 +103,8 @@ async def task_parts(
     target = await deps.output_store.get(eid, TARGET_MODELS[task.target_type], task.target_id, version)
     if not isinstance(target, Judgment | AuditException | ProcedureRun):
         raise api_error("NOT_FOUND", task.target_id)
-    amount = task_amount(target, exceptions, await subject_amount(deps, eid, target))
+    misstatements = await updated_misstatement(deps, eid, target)
+    amount = task_amount(target, exceptions, await subject_amount(deps, eid, target), misstatements)
     return TaskParts(
         procedure_name=template.name,
         target=target,

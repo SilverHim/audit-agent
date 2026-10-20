@@ -16,6 +16,7 @@ from backend.contracts.models import (
     ExceptionDisposition,
     Judgment,
     ManualRequest,
+    Misstatement,
     ProcedureRun,
     ProposedAction,
     ReviewTask,
@@ -89,31 +90,49 @@ def row_amount(source_type: str, row: Mapping[str, Any]) -> int | None:
     return int(amount) if amount is not None else None
 
 
-def task_amount(
-    target: Judgment | AuditException | ProcedureRun,
+def judgment_amount(
+    judgment: Judgment,
     exceptions: Mapping[str, AuditException],
     subject_amount: int | None = None,
+    misstatements: Mapping[str, Misstatement] | None = None,
 ) -> int | None:
-    """复核任务涉及的金额, 单位分, 保留正负号; 按顺序取到即止:
-    1. 判断有错报草稿, 取草稿金额; 2. 判断解释的例外中绝对值最大的金额; 3. 目标本身是例外, 取其金额;
-    4. 判断对象本身是交易行, 取该行金额 (subject_amount, 由调用方按 subject_row 读出); 5. 都没有为 None.
+    """判断涉及的金额, 单位分, 保留正负号; 复核档位 (经 task_amount) 与自主度判断级降级 (amount_over_pm, 需求 R168)
+    共用这一口径. 按顺序取到即止:
+    1. 判断携带错报更新 (FIN-03 分类, FIN-09 验证; misstatement_update), 取所指错报的金额; 2. 判断有错报草稿, 取草稿
+    金额; 3. 判断解释的例外中绝对值最大的金额; 4. 判断对象本身是交易行, 取该行金额 (subject_amount, 由调用方按
+    subject_row 读出); 5. 都没有为 None.
 
-    exceptions: 例外 ID -> 当前版本, 须含 target.exception_ids 中的 (缺的跳过). 纯函数.
+    exceptions: 例外 ID -> 当前版本, 须含 exception_ids 中的 (缺的跳过); misstatements: 错报 ID -> 当前版本, 所指错报
+    不在其中时跳过这一步. 纯函数.
     """
-    if isinstance(target, AuditException):
-        return target.amount_cents
-    if not isinstance(target, Judgment):
-        return None
-    if target.misstatement_draft is not None:
-        return target.misstatement_draft.amount_cents
+    update = judgment.misstatement_update
+    if update is not None and (found := (misstatements or {}).get(update.misstatement_id)) is not None:
+        return found.amount_cents
+    if judgment.misstatement_draft is not None:
+        return judgment.misstatement_draft.amount_cents
     amounts = [
         x.amount_cents
-        for i in target.exception_ids
+        for i in judgment.exception_ids
         if (x := exceptions.get(i)) is not None and x.amount_cents is not None
     ]
     if amounts:
         return max(amounts, key=abs)
     return subject_amount
+
+
+def task_amount(
+    target: Judgment | AuditException | ProcedureRun,
+    exceptions: Mapping[str, AuditException],
+    subject_amount: int | None = None,
+    misstatements: Mapping[str, Misstatement] | None = None,
+) -> int | None:
+    """复核任务涉及的金额, 单位分, 保留正负号: 目标是判断时为 judgment_amount (参数同它), 是例外时为其金额, 是执行
+    记录时为 None. 纯函数."""
+    if isinstance(target, AuditException):
+        return target.amount_cents
+    if not isinstance(target, Judgment):
+        return None
+    return judgment_amount(target, exceptions, subject_amount, misstatements)
 
 
 def review_tier(

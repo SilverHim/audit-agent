@@ -8555,6 +8555,19 @@
         "title": "DocumentTypeIn",
         "description": "人工指定文件类型."
       },
+      "DowngradeCondition": {
+        "type": "string",
+        "enum": [
+          "significant_risk",
+          "high_risk",
+          "amount_over_pm",
+          "low_confidence",
+          "unsupported_steps",
+          "fraud_flag"
+        ],
+        "title": "DowngradeCondition",
+        "description": "自主度动态降级的条件 (规格书 7.4, 需求 R168; 功能 autonomy). 前两条在装配时看, 其余在判断时看; 各条降几级或\n降到哪级见 knowledge/rules.json 的 autonomy 段 (模板 downgrade_rules 可按条件覆盖). 首次服务该客户, 财报层次风险,\nGEN-17 与按人机一致率的降级本版不做, 不在其中."
+      },
       "Engagement": {
         "properties": {
           "id": {
@@ -10438,6 +10451,14 @@
           },
           "autonomy_level": {
             "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "downgrade_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/DowngradeCondition"
+            },
+            "type": "array",
+            "title": "Downgrade Reasons",
+            "default": []
           },
           "review_status": {
             "$ref": "#/components/schemas/ReviewStatus",
@@ -12396,6 +12417,14 @@
           },
           "autonomy_level": {
             "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "downgrade_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/DowngradeCondition"
+            },
+            "type": "array",
+            "title": "Downgrade Reasons",
+            "default": []
           },
           "status": {
             "$ref": "#/components/schemas/ProcedureStatus",
