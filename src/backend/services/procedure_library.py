@@ -38,6 +38,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
+from backend.services.adjusted_tb import verified_entry_nos
 from backend.services.data_quality import REQUIRED_TABLES
 from backend.services.features import BASELINE, FEATURES, check_features
 
@@ -81,10 +82,11 @@ def first_misstatement_communicated_at(state: EngagementState) -> datetime | Non
 
 # 派生引用 (需求 R161): 名字 → 由图状态算出值的纯函数 (只收纯函数: 重放时重算得同一值). 值可为 None 并以 None 执行,
 # None 的语义由引用它的程序处理 (接口文档第 8.1 节; 如 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行); 值经
-# to_jsonable_python 转成 JSON 兼容的值 (同 JSON_NAMESPACES), 参数快照首次执行与经检查点, Store 读回后一致. R174 再加
-# verified_adjustment_entry_nos
+# to_jsonable_python 转成 JSON 兼容的值 (同 JSON_NAMESPACES), 参数快照首次执行与经检查点, Store 读回后一致
 DERIVED_REFS: dict[str, Callable[[EngagementState], Any]] = {
     "first_misstatement_communicated_at": first_misstatement_communicated_at,
+    # 已验证更正分录的凭证号 (需求 R174, services/adjusted_tb): 规则 SQL 传给 adjusted_trial_balance(:eid, :它)
+    "verified_adjustment_entry_nos": verified_entry_nos,
 }
 
 

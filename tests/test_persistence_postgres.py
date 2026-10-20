@@ -1727,6 +1727,139 @@ async def test_load_adjustments_two_rounds(tmp_path):
     await engine.dispose()
 
 
+# ── 试算表加已验证更正分录: 数据库函数 adjusted_trial_balance (需求 R174) ──
+
+ADJUSTED = "SELECT account_code, balance_cents FROM adjusted_trial_balance(:target, :entry_nos)"
+ADJUSTMENT_ROUNDS = (["AJE-X01", "AJE-X05"], ["AJE-X02", "AJE-X03", "AJE-X04"])  # 按 MD-8 两轮载入的凭证
+# PLN-01 M01 的余额来源: 本期试算表; 同口径换成更正后余额时只换这一段
+TB_BALANCES = (
+    "FROM trial_balance t\n JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code\n"
+    " WHERE t.engagement_id=:eid AND t.period='current')"
+)
+ADJUSTED_BALANCES = (
+    "FROM adjusted_trial_balance(:eid, :entry_nos) t\n"
+    " JOIN accounts a ON a.engagement_id=:eid AND a.code=t.account_code)"
+)
+
+
+@pytest.mark.external
+async def test_adjusted_trial_balance_on_xero(tmp_path):
+    """R174 验收 5: 真实库载入 xero/20261017-q1, 按 MD-8 (load_adjustments) 两轮载入更正分录. 数据库函数
+    adjusted_trial_balance 与 services/adjusted_tb.adjusted_balances (分录行按凭证号取自库) 逐科目相等, 按科目代码排序;
+    PLN-01 M01 同口径 (模板的 SQL 只把余额来源换成该函数) 得三个基准: 列表为空同 PLN-01, 第 1 轮 (AJE-X01, X05),
+    第 2 轮 (另加 X02 至 X04); 已载入而不在列表中的凭证不算; NULL 同空列表. 系统试算表不随更正改版. SECURITY INVOKER:
+    绑定别的项目时读不到本项目的行 (行级安全照常生效); 绑定本项目而 p_eid 为别的项目时也不取本项目的行."""
+    api, supplements = snapshot_dir("20261017-q1").parent, supplements_dir("20261017-q1").parent  # 先核对
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需要 TEST_DATABASE_URL")
+    from backend.services.adjusted_tb import adjusted_balances
+
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+psycopg://"))
+    user = "USR-" + uuid4().hex
+    async with engine.begin() as conn:
+        await conn.execute(
+            insert(m.users).values(
+                id=user, email=user + "@example.com", full_name="Xero", password_hash="x", created_at=now()
+            )
+        )
+    evidence = FileEvidenceStore(tmp_path, engine)
+    xero = XeroDatasetLoader(api, ROOT / "src/backend/knowledge/planning", engine, evidence, supplements=supplements)
+    store = PostgresEngagementStore(engine)
+
+    async def engagement():
+        return await store.create(
+            owner_id=user,
+            period_start=date(2026, 7, 1),
+            period_end=date(2026, 9, 30),
+            dataset="xero/20261017-q1",
+            profile=xero.client_profile("xero/20261017-q1"),
+        )
+
+    financial = PostgresFinancialDataStore(engine)
+    pln01 = ProcedureLibrary(ROOT / "src/backend/knowledge").load("PLN-01")
+    [original] = [r.sql for r in pln01.rules if r.id == "M01"]
+    assert original.count(TB_BALANCES) == 1
+    m01 = original.replace(TB_BALANCES, ADJUSTED_BALANCES)
+    categories = {k: pln01.params[k] for k in ("revenue_categories", "income_tax_categories")}
+    e = await engagement()
+    await xero.load(e.id, "xero/20261017-q1")
+    trial = await financial.trial_balance(e.id, "current")
+
+    async def bases(sql: str, entry_nos: list[str]) -> tuple[int, int, int]:
+        rows = {
+            r["basis"]: r["base_amount_cents"]
+            for r in await financial.query(e.id, sql, categories | {"entry_nos": entry_nos})
+        }
+        return rows["revenue"], rows["total_assets"], rows["profit_before_tax"]
+
+    async def agrees(entry_nos: list[str]) -> None:
+        found = await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": entry_nos})
+        lines = await financial.journal_entries(e.id, entry_nos=entry_nos)
+        assert [(r["account_code"], r["balance_cents"]) for r in found] == list(
+            adjusted_balances(trial, lines, entry_nos).items()
+        )
+
+    first, both = ADJUSTMENT_ROUNDS[0], sorted(ADJUSTMENT_ROUNDS[0] + ADJUSTMENT_ROUNDS[1])
+    unadjusted = (3243100, 1080529, -1322696)
+    assert await bases(original, []) == await bases(m01, []) == unadjusted  # 列表为空: 同 PLN-01
+    await agrees([])
+    none = await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": None})  # NULL 同空列表
+    assert none == await financial.query(e.id, ADJUSTED, {"target": e.id, "entry_nos": []})
+    await xero.load_adjustments(e.id, "xero/20261017-q1", first)
+    await agrees(first)
+    assert await bases(m01, first) == (3243100, 1092882, -1317843)
+    await xero.load_adjustments(e.id, "xero/20261017-q1", ADJUSTMENT_ROUNDS[1])
+    await agrees(both)
+    await agrees(first)  # 已载入的 X02 至 X04 不在列表中: 不算
+    assert await bases(m01, both) == (3243100, 1092882, -2213699)
+    assert await bases(m01, first) == (3243100, 1092882, -1317843)
+    assert await bases(m01, []) == await bases(original, []) == unadjusted
+    assert await financial.trial_balance(e.id, "current") == trial  # 系统试算表不随更正改版
+    other = await engagement()
+    assert await financial.query(other.id, ADJUSTED, {"target": e.id, "entry_nos": both}) == []
+    assert await financial.query(e.id, ADJUSTED, {"target": other.id, "entry_nos": both}) == []  # 只取 p_eid 的行
+    await engine.dispose()
+
+
+async def test_migration_0022_round_trip() -> None:
+    """R174 验收 4: 以属主角色在一个事务里走 0022 降级再升级两次, 最后回滚 (不动测试库): 降级后函数不在 (同停在 0021
+    的库), 升级后可调且不是 SECURITY DEFINER, 再升级一次照常 (CREATE OR REPLACE). 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    module = migration_module("0022_adjusted_trial_balance")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    definer = text("SELECT prosecdef FROM pg_proc WHERE proname = 'adjusted_trial_balance'")
+    call = text("SELECT count(*) FROM adjusted_trial_balance('ENG-none', ARRAY['AJE-X01'])")
+    owner = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with owner.connect() as conn:
+            outer = await conn.begin()
+            try:
+                assert (await conn.execute(definer)).scalars().all() == [False]
+                await conn.run_sync(run("downgrade"))
+                assert (await conn.execute(definer)).scalars().all() == []
+                for _ in range(2):
+                    await conn.run_sync(run("upgrade"))
+                    assert (await conn.execute(definer)).scalars().all() == [False]
+                    assert (await conn.execute(call)).scalar_one() == 0
+            finally:
+                await outer.rollback()
+    finally:
+        await owner.dispose()
+
+
 def synthetic_abn() -> str:
     """随机 9 位编号补上 ABR 算法的校验位 (测试库是共用的, 每次用不同的 ABN 免得撞上别的用例)."""
     from backend.services.abn import abn_problem

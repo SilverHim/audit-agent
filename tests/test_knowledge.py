@@ -2220,6 +2220,44 @@ def test_first_misstatement_communicated_at(changes: dict[str, Any], expected: s
     assert resolved == {"start": expected}
 
 
+def correcting(mid: str, status: MisstatementStatus, entry_no: str) -> Misstatement:
+    """RECOMMUNICATED 改成错报 mid 的更正阶段 (经模型校验): verifying 带更正通知与凭证号, corrected 另有 FIN-09 的
+    验证判断."""
+    fields = RECOMMUNICATED.model_dump() | {
+        "id": mid,
+        "status": status,
+        "correction_notice_id": "N-1",
+        "adjustment_entry_nos": [entry_no],
+    }
+    if status is MisstatementStatus.corrected:
+        fields |= {"corrected_cents": 100, "residual_cents": 0, "verified_by_judgment_id": f"J-FIN-09-1-{mid}"}
+    return Misstatement.model_validate(fields)
+
+
+XERO_ROUND_1 = [  # Xero 第 1 轮: M-1, M-5 验证为 corrected; 还在验证的不算
+    correcting("M-1", MisstatementStatus.corrected, "AJE-X01"),
+    correcting("M-2", MisstatementStatus.verifying, "AJE-X02"),
+    correcting("M-5", MisstatementStatus.corrected, "AJE-X05"),
+]
+
+
+@pytest.mark.parametrize(
+    ("misstatements", "expected"),
+    [(XERO_ROUND_1, ["AJE-X01", "AJE-X05"]), ([], [])],
+    ids=["round1", "none"],
+)
+def test_verified_adjustment_entry_nos(misstatements: list[Misstatement], expected: list[str]) -> None:
+    """R174 验收 2: 派生引用 verified_adjustment_entry_nos 解析为已验证更正分录的凭证号 (services/adjusted_tb 的
+    verified_entry_nos); 状态没有错报时为 [], 不是 None, 不抛错. ref 写法校验认得这个名字."""
+    library = ProcedureLibrary(ROOT)
+    param = {"ref": "verified_adjustment_entry_nos"}
+    assert ref_problem(param["ref"]) is None
+    template = library.load("FIN-04").model_copy(update={"params": {"entry_nos": param}})
+    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": misstatements}
+    resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
+    assert resolved == {"entry_nos": expected}
+
+
 def fin03_variables() -> dict[str, Any]:
     """FIN-03 提示词的变量, 按头注释逐项给齐 (data 的各列表都非空), 模拟 R158 交给 judge 的上下文."""
     library = ProcedureLibrary(ROOT)
