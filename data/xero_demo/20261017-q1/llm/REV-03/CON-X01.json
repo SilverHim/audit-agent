@@ -33,7 +33,7 @@
     },
     {
       "kind": "fact",
-      "text": "Clause 5.1 (CON-X01-T2): the Supplier may issue a tax invoice on or after the Completion Date, payable within 30 days of the invoice.",
+      "text": "Clause 5.1 and 5.2 (CON-X01-T2): the Supplier may issue a tax invoice on or after the Completion Date, payable within 30 days of the invoice.",
       "evidence": [
         {
           "type": "contract",

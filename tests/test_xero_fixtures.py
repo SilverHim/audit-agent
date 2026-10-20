@@ -482,19 +482,19 @@ def sentence_with(text: str, anchor: str) -> str:
         (  # 完工日 (部署且 Project Sponsor 签完工证书) 某一时点转移; 7.2 完工前终止无权收款, 第 35(b)(c) 段不满足
             "CON-X01",
             ("Completion Date", "deployed", "Project Sponsor", "Completion Certificate", "point in time", "AASB15-P38"),
-            ("7.2", "not entitled to payment", "35(b) and (c)", "not met"),
+            ("7.2", "terminated before the Completion Date", "not entitled to payment", "35(b) and (c)", "not met"),
             ["AASB15-P31", "AASB15-P35", "AASB15-P38"],
         ),
-        (  # 每个自然月随服务提供取得利益, 随时间转移; 6.1 响应超时可索赔 10%, 取决于未来事件
+        (  # 每个自然月随服务提供取得利益, 随时间转移; 6.1 响应超时可索赔 10%, 取决于未来事件, 对价可变
             "CON-X02",
             ("each calendar month", "simultaneously receives and consumes", "over time", "35(a)"),
-            ("6.1", "10%", "4 business hours", "future event"),
+            ("6.1", "10%", "4 business hours", "future event", "consideration variable"),
             ["AASB15-P31", "AASB15-P35"],
         ),
-        (  # 每个驻场日按客户签字的工时表确认, 随时间转移; 6.1 项目经理缺席每半日贷记 350
+        (  # 每个驻场日按客户签字的工时表确认, 随时间转移; 6.1 项目经理缺席每半日贷记 350, 取决于未来事件, 对价可变
             "CON-X03",
             ("On-site Day", "signs the timesheet", "over time", "35(a)"),
-            ("6.1", "$350.00", "half day", "absent"),
+            ("6.1", "$350.00", "half day", "absent", "future event", "consideration variable"),
             ["AASB15-P31", "AASB15-P35"],
         ),
     ],
@@ -503,7 +503,9 @@ def test_rev03_conclusion_and_evidence(
     rev03: Rev03, contract: str, transfer: tuple[str, ...], other: tuple[str, ...], standards: list[str]
 ) -> None:
     """验收 2 至 4: 结论里定转移的一句引 T1 (转移事件与方式), 另一句引 T3 (影响收入的其他条款); 证据含该合同文件
-    T1 (第 2 页), T3 (第 3 页) 两条款的指针与所列准则片段. 只查关键词, 不比整句."""
+    T1 (第 2 页), T3 (第 3 页) 两条款的指针与所列准则片段. 只查关键词, 不比整句. 推理链的指针也核对 (页面的推理链与
+    A7 第一轮证据都用它们, 判断引擎不查这几项): evidence 恰为推理链各步指针去重后的并集; 全部文件指针的 (条款 ID, 页)
+    与该合同的条款一致; 准则片段都在 REV-03 的 standards 内."""
     [j] = [j for j in rev03.patch["judgments"] if j.subject_id == contract]
     first, second = sentence_with(j.conclusion, f"{contract}-T1"), sentence_with(j.conclusion, f"{contract}-T3")
     for text in transfer:
@@ -516,3 +518,11 @@ def test_rev03_conclusion_and_evidence(
     assert {(p.source_id, p.locator) for p in j.evidence if p.source_type == "standard"} >= {
         (s, f"para {s.removeprefix('AASB15-P')}") for s in standards
     }
+    chain = [p for step in j.reasoning_chain for p in step.evidence]
+    keys = [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence]
+    assert len(keys) == len(set(keys)) and set(keys) == {(p.source_type, p.source_id, p.locator, p.page) for p in chain}
+    [found] = [c for c in xero_contracts() if c.id == contract]
+    terms = {(t.id, t.page) for t in found.terms}
+    assert {(p.locator, p.page) for p in [*chain, *j.evidence] if p.source_type == "document"} <= terms
+    allowed = set(LIBRARY.load("REV-03").standards)
+    assert {p.source_id for p in [*chain, *j.evidence] if p.source_type == "standard"} <= allowed

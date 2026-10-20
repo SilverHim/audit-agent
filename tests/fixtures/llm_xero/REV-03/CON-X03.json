@@ -1,5 +1,5 @@
 {
-  "conclusion": "Control of the project management services transfers over time: each On-site Day is accepted when the customer signs the timesheet for that day (CON-X03-T1), and the customer receives and consumes the benefit of each day's work as it is performed (paragraph 35(a)), so revenue is recognised for each On-site Day on its customer-signed timesheet. Clause 6.1 (CON-X03-T3) requires a credit of $350.00 for each half day the project manager is absent, which reduces the price; the invoice is issued after the sixth On-site Day and is due within 10 days (CON-X03-T2).",
+  "conclusion": "Control of the project management services transfers over time: each On-site Day is accepted when the customer signs the timesheet for that day (CON-X03-T1), and the customer receives and consumes the benefit of each day's work as it is performed (paragraph 35(a)), so revenue is recognised for each On-site Day on its customer-signed timesheet. Clause 6.1 (CON-X03-T3) requires a credit of $350.00 for each half day the project manager is absent, a credit that depends on a future event and makes the consideration variable; the invoice is issued after the sixth On-site Day and is due within 10 days (CON-X03-T2).",
   "reasoning_chain": [
     {
       "kind": "fact",
@@ -88,7 +88,7 @@
     },
     {
       "kind": "inference",
-      "text": "Revenue is recognised for each On-site Day on the customer-signed timesheet, not on the invoice after the sixth day; the clause 6.1 absence credit reduces the price for the days concerned.",
+      "text": "Revenue is recognised for each On-site Day on the customer-signed timesheet, not on the invoice after the sixth day; the clause 6.1 absence credit depends on whether the project manager is absent, a future event, so the consideration is variable.",
       "evidence": [],
       "from_steps": [
         1,
