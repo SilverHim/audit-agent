@@ -1,0 +1,43 @@
+id: ACC-08
+name: 约定条款与委任核验
+# 规格书 6.1.2 (ACC-08 前置 ACC-01, 承接后 P1 准入前, 闸门), 7.5; ASA 210 第 6, 8, 10 段; 公司法 s293, s301(2),
+# s323D(2A), s325(1), s328A. A2 读客户签回的约定书与委任文件 (董事决议, 股东指示, 审计师同意书), 逐项核对准则要求的
+# 要素与委任是否有效, 给出建议; 不起草约定书. 结果 EngagementTerms (TERMS) 为 ACC-08 闸门的呈报材料 (需求 R198).
+#
+# 执行 (A2, 需求 R200), 混合程序, 两次大模型调用:
+# - 第一次为抽取: 提示词 ACC-08-extract.md.j2, 输出 EngagementTermsExtraction (约定书与委任文件中的事实, 每份文件各页
+#   带文件 ID 与页码). A2 以 template.model_copy(update={"llm": EXTRACT_SPEC}) 换用这份规格, 同 agents/review.py 的
+#   VERDICT_SPEC; 本文件的 llm 是第二次调用的.
+# - 核对: 规则不写 SQL (rules 为空), T01-T07 在 services/engagement_terms.py (需求 R199), 不通过的各出一条例外
+#   X-ACC-08-{run_no}-T0n-1.
+# - 第二次为判断: 经 JudgmentEngine.judge, 提示词 ACC-08.md.j2, 输出 JudgmentDraft, 判断对象为 TERMS
+#   (J-ACC-08-{run_no}-TERMS). 闸门程序的判断不建复核任务, 由闸门决定定其状态.
+phase: P0_Acceptance
+cycle: Acceptance
+owner: A2
+feature: acceptance                # 功能开关 (services/features.py): 承接, ACC-08 与其闸门
+outputs: [engagement_terms, judgments, exceptions, documents]
+document_types: [engagement_letter, minutes]   # 读过的约定书与委任文件置 extracted 后交回
+reads: [documents]                 # 判断引用约定文件的页, 证据可靠性取自文件登记 (需求 R90); 承接阶段的执行不判过期
+engine: hybrid
+autonomy_level: L1
+gate: ACC-08
+depends_on: [ACC-01]
+params:
+  acceptable_frameworks: [tier1_gpfs, tier2_gpfs, special_purpose]   # 可接受的财务报告框架 (T01)
+  min_direction_votes_pct: 5       # s293(1): 发出指示的股东至少持 5% 表决权 (T04)
+  direction_deadline_months: 12    # s293(2)(b): 指示不晚于财年结束后 12 个月 (T04)
+standards:
+  - ASA210-P06
+  - ASA210-P08
+  - ASA210-P10
+  - CA2001-S293
+  - CA2001-S301-2
+  - CA2001-S323D-2A
+  - CA2001-S325-1
+  - CA2001-S328A
+evidence_required: [contract, voucher]   # 约定书 (engagement_letter → contract), 委任文件 (minutes → voucher)
+rules: []
+llm:
+  prompt: ACC-08.md.j2
+  output_model: JudgmentDraft

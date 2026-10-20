@@ -20,10 +20,12 @@ from backend.adapters.registry_mock import DatasetRegistrySource, MockRegistrySo
 from backend.adapters.xero_supplements import SupplementMismatch
 from backend.contracts.errors import EngagementLocked, VersionConflict
 from backend.contracts.models import (
+    AcceptanceScorecard,
     AuditObjective,
     ClientProfile,
     ComplianceCheck,
     DocumentType,
+    EngagementTerms,
     GovernanceCommunication,
     IndependenceDeclaration,
     LlmSettings,
@@ -32,6 +34,7 @@ from backend.contracts.models import (
     Reliability,
     ReportStatus,
     RepresentationStatus,
+    TermsCheckStatus,
     TrailEntry,
     TrailKind,
     Versioned,
@@ -61,6 +64,7 @@ from tests.fakes import (
     NUMBAT_ACCOUNTS,
     NUMBAT_ROWS,
     compliance_check,
+    engagement_terms,
     governance_communication,
     independence_declaration,
     ownership_graph,
@@ -562,6 +566,21 @@ async def test_completion_records_versions_on_postgres(storage, v1: Versioned, c
     kinds = (WrittenRepresentationLetter, ComplianceCheck, GovernanceCommunication, IndependenceDeclaration)
     assert [await store.latest(e.id, k) for k in kinds if k is not kind] == [[], [], []]
     assert await store.get("ENG-OTHER", kind, v1.id) is None
+
+
+async def test_engagement_terms_round_trip_on_postgres(storage) -> None:
+    """R198 验收 6: TERMS v1 写进 gate_materials 表 (kind 列区分, 不需迁移), 读回相等, 仍是 EngagementTerms (事实子
+    模型与核对结果的枚举不丢); 同表的评分卡不混进按类取的结果."""
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    terms = engagement_terms()
+    scorecard = AcceptanceScorecard(id="SCORECARD", registry_checks=[], exception_ids=[], client_profile_version=1)
+    await store.put(e.id, [terms, scorecard], actor="A2")
+
+    assert m.OUTPUTS["EngagementTerms"].name == m.OUTPUTS["AcceptanceScorecard"].name == "gate_materials"
+    back = await store.get(e.id, EngagementTerms, "TERMS")
+    assert type(back) is EngagementTerms and back == terms and back.checks[0].status is TermsCheckStatus.passed
+    assert await store.latest(e.id, EngagementTerms) == [terms]
 
 
 async def test_evidence_and_adapters(storage, tmp_path):

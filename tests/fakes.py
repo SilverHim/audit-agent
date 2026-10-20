@@ -62,6 +62,8 @@ from backend.contracts.errors import AbnTaken, EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
+    TERMS_ACKNOWLEDGEMENTS,
+    TERMS_ELEMENTS,
     AbnRecord,
     AgentId,
     AnalyticsResult,
@@ -70,6 +72,8 @@ from backend.contracts.models import (
     Assertion,
     AuditException,
     AuditObjective,
+    AuditorAppointment,
+    AuditorConsent,
     AuditReportVersion,
     AutonomyLevel,
     CheckItem,
@@ -92,10 +96,12 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    EngagementTerms,
     EvidencePointer,
     EvidenceType,
     FinancialStatementLine,
     FinancialStatements,
+    FinancialYearChange,
     GateDecision,
     GateId,
     GateVerdict,
@@ -134,9 +140,13 @@ from backend.contracts.models import (
     RuleOutcome,
     RunStatus,
     RunTrigger,
+    ShareholderDirection,
     StepKind,
     TaskKind,
     TaskStatus,
+    TermsCheck,
+    TermsCheckStatus,
+    TermsItem,
     TrailEntry,
     TrailKind,
     UncorrectedItem,
@@ -2535,6 +2545,86 @@ def make_run(procedure_id: str = "ACC-04", run_no: int = 1, params: dict[str, An
 def finished(run: ProcedureRun, status: RunStatus = RunStatus.succeeded) -> ProcedureRun:
     """执行记录的终态: 置 succeeded (或给定状态), 结束时间为 NOW."""
     return run.model_copy(update={"status": status, "ended_at": NOW})
+
+
+# 约定文件的别名: 委任文件 appointment.pdf 与约定书 engagement_letter.pdf (需求 R199)
+DOC_APPT, DOC_EL = "DOC-APPT", "DOC-EL"
+
+
+def engagement_terms(run_id: str = "RUN-ACC-08-1", version: int = 1) -> EngagementTerms:
+    """合成的约定条款与委任核验 TERMS (需求 R198, 只填契约用到的): 事实取 Xero 演示的两份约定文件 (Xero演示数据集
+    设计第 4.1, 4.2 节; 页码同 R199 验收 2), T01-T07 都通过, 没有例外, 建议判断 J-ACC-08-{run_no}-TERMS."""
+
+    def page(document: str, number: int, locator: str) -> list[EvidencePointer]:
+        letter = document == DOC_EL
+        return [
+            EvidencePointer(
+                type=EvidenceType.contract if letter else EvidenceType.voucher,
+                source_type="document",
+                source_id=document,
+                locator=locator,
+                page=number,
+                reliability=Reliability.external_copy if letter else Reliability.internal_copy,
+            )
+        ]
+
+    run_no = run_id.rsplit("-", 1)[1]
+    return EngagementTerms(
+        id="TERMS",
+        version=version,
+        run_id=run_id,
+        framework="tier2_gpfs",
+        framework_evidence=page(DOC_EL, 2, "framework"),
+        elements=[
+            TermsItem(item=item, present=True, evidence=page(DOC_EL, n, item))
+            for item, n in zip(TERMS_ELEMENTS, (1, 1, 2, 2, 3), strict=True)  # 要素所在页
+        ],
+        acknowledgements=[
+            TermsItem(item=item, present=True, evidence=page(DOC_EL, 2, item)) for item in TERMS_ACKNOWLEDGEMENTS
+        ],
+        letter_dated_on=date(2026, 8, 28),
+        letter_signed_by="Alex Morgan",
+        letter_signed_on=date(2026, 9, 2),
+        direction=ShareholderDirection(
+            signed_by="Sam Whitfield",
+            shares_held=15,
+            total_shares=100,
+            votes_pct=15.0,
+            made_on=date(2026, 8, 20),
+            requires_audit=True,
+            evidence=page(DOC_APPT, 2, "direction"),
+        ),
+        appointment=AuditorAppointment(
+            appointed_by="Alex Morgan",
+            resolution_on=date(2026, 8, 27),
+            auditor_name="Tessellate Audit Partners",
+            evidence=page(DOC_APPT, 4, "appointment"),
+        ),
+        consent=AuditorConsent(
+            given_on=date(2026, 8, 25),
+            signed_by="Jordan Ellis",
+            firm_name="Tessellate Audit Partners",
+            registered_auditor_no="300471",
+            firm_name_signed=True,
+            own_name_signed=True,
+            evidence=page(DOC_APPT, 3, "consent"),
+        ),
+        year_change=FinancialYearChange(
+            resolved_on=date(2026, 8, 14),
+            previous_year_end=date(2026, 6, 30),
+            new_year_end=date(2026, 9, 30),
+            prior_shortened_within_5_years=False,
+            good_faith_reason="Meets the shareholders agreement of 15 June 2026; aligns with the October renewals.",
+            evidence=page(DOC_APPT, 1, "year_change"),
+        ),
+        checks=[
+            TermsCheck(check=f"T0{n}", status=TermsCheckStatus.passed, blocking=n in (1, 3), basis="b", detail="d")
+            for n in range(1, 8)
+        ],
+        exception_ids=[],
+        judgment_id=f"J-ACC-08-{run_no}-TERMS",
+        document_ids=[DOC_APPT, DOC_EL],
+    )
 
 
 def ownership_graph(run_id: str = "RUN-GEN-08-1", version: int = 1) -> OwnershipGraph:

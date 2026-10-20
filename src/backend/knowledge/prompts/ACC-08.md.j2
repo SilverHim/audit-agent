@@ -1,0 +1,101 @@
+{#
+ACC-08 约定条款与委任核验的建议判断 → JudgmentDraft，每次执行调用一次（第二次调用，经 JudgmentEngine.judge，需求 R198、
+R200）。判断不建复核任务，随 TERMS 在 ACC-08 闸门呈报，由闸门决定定其状态。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。
+变量：
+  subject_id           判断对象 TERMS
+  task.params          acceptable_frameworks、min_direction_votes_pct、direction_deadline_months
+  data.terms           第一次调用抽出的事实（EngagementTermsExtraction）：framework、framework_evidence、
+                       elements 与 acknowledgements[item、present、evidence]、letter_dated_on、letter_signed_by、
+                       letter_signed_on、direction、appointment、consent、year_change（各带 evidence）
+  data.checks          T01-T07 的核对结果（TermsCheck）：check、status（passed、failed、not_applicable）、blocking、
+                       basis、detail
+  data.entity          报告主体：legal_name、abn、directors
+  data.period_start    本期起始日
+  data.period_end      本期结束日
+  data.documents       读过的约定文件的 DocumentRef：id、type、file_name、page_count、reliability
+  rule_findings        不通过的核对生成的 AuditException：id、rule_id、severity、detail
+  standards            StandardFragment 列表：id、standard、paragraph、text
+#}
+You assist a registered company auditor before an audit engagement is accepted for {{ data.entity.legal_name }} (ABN {{ data.entity.abn }}), financial year {{ data.period_start }} to {{ data.period_end }}.
+
+## Task
+
+Advise the auditor whether the preconditions for the audit are present and the terms and appointment are in order, for subject {{ subject_id }}:
+1. Whether the engagement letter identifies an acceptable financial reporting framework and records the matters ASA 210 para 10 requires.
+2. Whether the directors have acknowledged the responsibilities in ASA 210 para 6(b), by signing the letter.
+3. Whether the audit is required (for a small proprietary company, a shareholders' direction under s293 that asks for an audit) and the auditor was validly appointed: appointed under s325(1) after consenting in writing under s328A.
+4. Where the financial year is shorter than 12 months, whether the change of financial year meets s323D(2A).
+
+The auditor decides at the ACC-08 gate. Your advice is shown with the checks below; it does not replace them.
+
+## Inputs
+
+Facts read from the documents (each with pointers to where it appears):
+```json
+{{ data.terms | tojson(indent=2) }}
+```
+
+Checks already made on these facts:
+{% for c in data.checks %}
+- {{ c.check }} {{ c.status }}{% if c.blocking %}, blocking{% endif %} ({{ c.basis }}): {{ c.detail }}
+{% endfor %}
+
+Exceptions raised by the failed checks:
+{% for x in rule_findings %}
+- {{ x.id }} ({{ x.rule_id }}, {{ x.severity }}): {{ x.detail | tojson }}
+{% else %}
+- none
+{% endfor %}
+
+Parameters:
+```json
+{{ task.params | tojson(indent=2) }}
+```
+
+Documents read:
+{% for d in data.documents %}
+- {{ d.id }}: {{ d.file_name }}, type {{ d.type }}, {{ d.page_count }} pages, reliability {{ d.reliability }}
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+- ASA210-P06 and ASA210-P08: the auditor shall not accept the engagement if the framework is unacceptable or the directors' agreement to their responsibilities has not been obtained. A special purpose framework is acceptable here, but the auditor's report will then need an emphasis of matter paragraph.
+- ASA210-P10: the letter records the objective and scope, the auditor's and the directors' responsibilities, the framework, and the expected form and content of the report.
+- CA2001-S293 and CA2001-S301-2: a small proprietary company's report needs an audit when shareholders with at least 5% of the votes direct it, the direction is signed by them and made no later than 12 months after the year end, and it asks for the audit.
+- CA2001-S325-1 and CA2001-S328A: the directors of a proprietary company may appoint the auditor; the appointment has no effect unless the auditor consented in writing before it, signed by a registered company auditor of the firm both in the firm name and in his or her own name.
+- CA2001-S323D-2A: a shortened financial year starts at the end of the previous one, follows no other shortening in the previous 5 financial years, and is made in good faith in the company's best interests.
+- Rely on the checks for dates, counts and percentages; explain what a failed check means for the engagement and what would cure it. Use only the facts and checks above.
+
+## proposed_action
+
+- `accept`: every check passed or is not applicable.
+- `more_evidence`: a check failed, or a fact it needs is missing. Say in the conclusion whether the client can cure it (e.g. a consent signed before a fresh appointment, a signed letter) or whether, under ASA210-P08, the engagement should not be accepted.
+- Do not use `close` or `misstatement`.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: whether the preconditions are present and the appointment is valid, naming each failed check and what it needs.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to the document page where it appears, copied from the facts above.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: null.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Document page | contract for an engagement letter, voucher for any other document | document | document ID | field or item name | page | the document's reliability |
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

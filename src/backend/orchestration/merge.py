@@ -29,7 +29,8 @@ from backend.services.procedure_library import ProcedureLibrary
 DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发, 需求 R92) 可写的字段, 另有本次执行记录
 
 AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
-    AgentId.A2: frozenset({"acceptance_scorecard", "exceptions"}),
+    # A2: ACC-04 的评分卡与例外; ACC-08 (功能 acceptance) 另写约定条款, 建议判断与读过的约定文件, 不建复核任务
+    AgentId.A2: frozenset({"acceptance_scorecard", "exceptions", "engagement_terms", "judgments", "documents"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
     AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
     AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph", "representation_letter"}),
@@ -72,6 +73,7 @@ FIELD_REPLAY: dict[str, Replay] = {
     "independence_declaration": Replay.singleton,
     "governance_communications": Replay.by_run,
     "compliance_checks": Replay.by_procedure,
+    "engagement_terms": Replay.singleton,
 }
 SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
 LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式

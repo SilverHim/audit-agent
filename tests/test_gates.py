@@ -187,10 +187,10 @@ def previous_allowed(gate: GateId, verdict: GateVerdict) -> set[str]:
     return set()
 
 
-@pytest.mark.parametrize("gate", list(GateId))
+@pytest.mark.parametrize("gate", [spec.gate for spec in GATES])
 @pytest.mark.parametrize("verdict", list(GateVerdict))
 def test_field_rules_equal_previous(gate: GateId, verdict: GateVerdict) -> None:
-    """每道闸门每种决定: 必填与只允许的字段同改造前."""
+    """每道登记的闸门每种决定: 必填与只允许的字段同改造前 (GateId.ACC_08 由需求 R198 加, 登记行由 R201 加)."""
     d = decision(gate, verdict, "X")
     assert required_fields(spec_of(gate), d) == previous_required(gate, verdict)
     assert allowed_fields(spec_of(gate), d) == previous_allowed(gate, verdict)

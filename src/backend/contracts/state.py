@@ -16,6 +16,7 @@ from backend.contracts.models import (
     Confirmation,
     DocumentRef,
     Engagement,
+    EngagementTerms,
     GateDecision,
     GovernanceCommunication,
     IndependenceDeclaration,
@@ -105,6 +106,7 @@ class EngagementState(TypedDict):
     phase: Phase  # 当前阶段
     version_snapshot: dict[str, str]  # 程序库 commit, 模型, prompt, 功能集的版本快照
     acceptance_scorecard: AcceptanceScorecard | None  # 承接评分卡, A2 写
+    engagement_terms: EngagementTerms | None  # 约定条款与委任核验 (TERMS), A2 ACC-08 写 (功能 acceptance, 需求 R198)
     client_profile_version: int  # 本项目采用的画像版本; ACC-04 按它读画像, ACC-01 路由据此判断评分卡是否过期
     analytics: AnalyticsResult | None  # 初步分析结果, A4 写
     materiality_candidates: MaterialityCandidates | None  # 重要性候选, A4 写
@@ -146,6 +148,7 @@ REQUIRED_KEYS = ("engagement_id", "phase", "version_snapshot", "client_profile_v
 # 旧检查点没有该键时, 节点, 路由, 查询, 决定提交与恢复补做经 fill_defaults 读到缺省值
 STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "acceptance_scorecard": None,
+    "engagement_terms": None,
     "analytics": None,
     "materiality_candidates": None,
     "materiality_cents": None,

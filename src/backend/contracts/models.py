@@ -4,7 +4,7 @@ import re
 import unicodedata
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -149,7 +149,7 @@ class ReviewStatus(StrEnum):
     pending = "pending"  # 待复核
     confirmed = "confirmed"  # 已确认
     overridden = "overridden"  # 被推翻, 人另出结论
-    superseded = "superseded"  # 被取代: 重跑后旧的建议判断由新判断取代 (尚未使用)
+    superseded = "superseded"  # 被取代: 重跑后旧的建议判断由新判断取代, superseded_by 记新判断 (ACC-08 重读, 需求 R200)
 
 
 class ExceptionDisposition(StrEnum):
@@ -252,9 +252,10 @@ class Decision(StrEnum):
 
 
 class GateId(StrEnum):
-    """四道闸门."""
+    """闸门. 基线四道; ACC-08 属功能 acceptance, 登记表 (orchestration/gates.GATES) 的行由需求 R201 加."""
 
     ACC_01 = "ACC-01"  # 是否承接
+    ACC_08 = "ACC-08"  # 约定条款与委任 (需求 R198)
     PLN_01_03 = "PLN-01/03"  # 重要性与风险清单
     FIN_01 = "FIN-01"  # 错报与意见类型
     RPT_01 = "RPT-01"  # 报告批准与签字
@@ -523,7 +524,7 @@ class Judgment(Versioned):
     exception_ids: list[str] = []  # 本判断解释的例外, 判断确认后这些例外置 attributed
     autonomy_level: AutonomyLevel  # 判断时的有效自主度
     review_status: ReviewStatus = ReviewStatus.pending  # 复核状态
-    superseded_by: str | None = None  # 被推翻时, 取代它的人工判断 ID
+    superseded_by: str | None = None  # 被推翻时为取代它的人工判断 ID; 被取代 (superseded) 时为取代它的新判断 ID
     performed_by: str  # 用户 ID: AI 生成的记项目负责人, 人工建的记决定人
     created_at: datetime  # 生成时间
     trail_ref: str | None = None  # 生成它的那次大模型调用的留痕 ID
@@ -858,6 +859,139 @@ class AcceptanceScorecard(Versioned):
     registry_checks: list[RegistryCheck]  # 各项检查结果
     exception_ids: list[str]  # 未通过的检查生成的例外
     client_profile_version: int  # 核查时用的客户画像版本
+
+
+# ACC-08 约定条款与委任核验 (功能 acceptance, 需求 R198): A2 从约定书与委任文件抽出事实 (TermsFacts), 按
+# services/engagement_terms.py 的 T01-T07 核对 (R199), 再给出建议判断 (R200); 结果 EngagementTerms 为 ACC-08 闸门的材料
+TERMS_ID = "TERMS"  # EngagementTerms 在每个项目里的固定 ID
+TermsFramework = Literal["tier1_gpfs", "tier2_gpfs", "special_purpose", "unknown"]  # 财务报告框架; 文件没写明为 unknown
+TermsElement = Literal[  # 约定书须写明的五项 (ASA 210 第 10(a)-(e) 段)
+    "objective_scope",  # (a) 审计的目标与范围
+    "auditor_responsibilities",  # (b) 审计师的责任
+    "management_responsibilities",  # (c) 管理层的责任
+    "framework",  # (d) 适用的财务报告框架
+    "report_form",  # (e) 报告的预期形式与内容, 及报告可能不同于预期的说明
+]
+TermsAcknowledgement = Literal[  # 管理层须确认的五项责任 (ASA 210 第 6(b) 段)
+    "prepare_fr",  # (i) 按适用框架编制财务报告
+    "internal_control",  # (ii) 管理层认为必要的内部控制
+    "access_information",  # (iii)a 提供与编制财务报告有关的全部信息
+    "additional_information",  # (iii)b 提供审计师要求的其他信息
+    "unrestricted_access",  # (iii)c 不受限制地接触审计师认为必要的人员
+]
+TERMS_ELEMENTS: tuple[TermsElement, ...] = get_args(TermsElement)
+TERMS_ACKNOWLEDGEMENTS: tuple[TermsAcknowledgement, ...] = get_args(TermsAcknowledgement)
+TermsCheckId = Literal["T01", "T02", "T03", "T04", "T05", "T06", "T07"]  # 核对项, 口径见 services/engagement_terms.py
+
+
+class TermsItem(Model):
+    """约定书中的一项要素 (TermsElement) 或管理层的一项确认 (TermsAcknowledgement): 有没有写明, 写在哪."""
+
+    item: TermsElement | TermsAcknowledgement  # 哪一项
+    present: bool  # 文件是否写明
+    evidence: list[EvidencePointer] = []  # 写明之处的页指针; present 为真时须有 (引用级, 需求 R199)
+
+
+class ShareholderDirection(Model):
+    """股东依 s293 给小型私人公司的指示 (委任文件中): 谁签, 持多少股, 何时, 是否要求审计."""
+
+    signed_by: str | None  # 签署指示的股东
+    shares_held: int | None  # 其持股数; 文件没写为空
+    total_shares: int | None  # 公司已发行的股数; 文件没写为空
+    votes_pct: float | None  # 其表决权比例, 百分数 (100 股中 15 股为 15.0); 不在 0 至 100 内由校验判语义失败 (R199)
+    made_on: date | None  # 指示日期
+    requires_audit: bool  # 指示是否要求财务报告经审计 (s293(3)(c))
+    evidence: list[EvidencePointer] = []  # 上述事实的页指针
+
+
+class AuditorAppointment(Model):
+    """依 s325(1) 委任审计师的决议."""
+
+    appointed_by: str | None  # 作出委任的人或机构, 如唯一董事
+    resolution_on: date | None  # 决议日期
+    auditor_name: str | None  # 被委任的事务所或个人
+    evidence: list[EvidencePointer] = []  # 上述事实的页指针
+
+
+class AuditorConsent(Model):
+    """审计师依 s328A 给公司的书面同意."""
+
+    given_on: date | None  # 同意书日期
+    signed_by: str | None  # 签署人 (事务所中的注册公司审计师)
+    firm_name: str | None  # 事务所名称
+    registered_auditor_no: str | None  # 签署人的注册公司审计师编号; 文件没写为空
+    firm_name_signed: bool  # 是否以事务所名义签署 (s328A(2)(a))
+    own_name_signed: bool  # 是否以本人名义签署 (s328A(2)(b))
+    evidence: list[EvidencePointer] = []  # 上述事实的页指针
+
+
+class FinancialYearChange(Model):
+    """董事依 s323D(2A) 缩短财年的决议."""
+
+    resolved_on: date | None  # 决议日期
+    previous_year_end: date | None  # 上一财年的结束日
+    new_year_end: date | None  # 缩短后本财年的结束日
+    prior_shortened_within_5_years: bool | None  # 前 5 个财年内是否已依本款缩短过; 文件没写为空
+    good_faith_reason: str | None  # 决议写明的改动理由 (s323D(2A)(c)); 没写为空
+    evidence: list[EvidencePointer] = []  # 上述事实的页指针
+
+
+class TermsCheckStatus(StrEnum):
+    """ACC-08 一项核对的结果."""
+
+    passed = "passed"  # 通过
+    failed = "failed"  # 不通过
+    not_applicable = "not_applicable"  # 不适用, 如本期满 12 个月时的缩短财年核对
+
+
+class TermsCheck(Model):
+    """ACC-08 的一项核对 (T01-T07)."""
+
+    check: TermsCheckId  # 核对项
+    status: TermsCheckStatus  # 结果
+    blocking: bool  # 不通过时是否阻止通过闸门 (哪几项阻止见 services/engagement_terms.py, 需求 R199)
+    basis: str  # 依据的条文, 如 "ASA 210 para 6(b), 8(b)"
+    detail: str  # 给审计师看的说明
+
+
+class TermsFacts(Model):
+    """约定书与委任文件中的事实: ACC-08 第一次大模型调用抽出的部分 (llm_outputs.EngagementTermsExtraction 即此),
+    EngagementTerms 在此之上加核对与关联. elements 只放 TermsElement 的项, acknowledgements 只放 TermsAcknowledgement
+    的项; 各项恰好出现一次由 OutputValidator 查 (语义级, 需求 R199)."""
+
+    framework: TermsFramework  # 约定书写明的财务报告框架
+    framework_evidence: list[EvidencePointer] = []  # 写明框架之处的页指针
+    elements: list[TermsItem]  # ASA 210 第 10 段的五项要素
+    acknowledgements: list[TermsItem]  # ASA 210 第 6(b) 段的五项确认
+    letter_dated_on: date | None  # 约定书出具日
+    letter_signed_by: str | None  # 代表公司签回约定书的人
+    letter_signed_on: date | None  # 签回日期
+    direction: ShareholderDirection | None  # 股东指示 (s293); 文件中没有为空
+    appointment: AuditorAppointment | None  # 委任审计师的决议 (s325(1)); 没有为空
+    consent: AuditorConsent | None  # 审计师的同意书 (s328A); 没有为空
+    year_change: FinancialYearChange | None  # 缩短财年的决议 (s323D(2A)); 没有为空
+
+    @model_validator(mode="after")
+    def item_kinds(self) -> Self:
+        """elements 与 acknowledgements 各只放自己那一类的项."""
+        wrong = [i.item for i in self.elements if i.item not in TERMS_ELEMENTS] + [
+            i.item for i in self.acknowledgements if i.item not in TERMS_ACKNOWLEDGEMENTS
+        ]
+        if wrong:
+            raise ValueError(f"约定条款的项放错了类: {', '.join(wrong)}")
+        return self
+
+
+class EngagementTerms(TermsFacts, Versioned):
+    """约定条款与委任核验 (ACC-08): 抽出的事实, T01-T07 的核对, 例外与 AI 建议判断, ACC-08 闸门的呈报材料. 项目里
+    只有一份, ID 固定为 TERMS (TERMS_ID); 重读出新版本."""
+
+    run_id: str  # 产出它的那次执行
+    checks: list[TermsCheck]  # T01-T07 的核对结果, 按编号
+    exception_ids: list[str]  # 不通过的核对生成的例外
+    judgment_id: str | None  # AI 建议判断 (J-ACC-08-{run_no}-TERMS); 判断调用失败, 没有建议时为空
+    document_ids: list[str]  # 读的约定文件
+    addresses_decision_id: str | None = None  # 重读所回应的 insufficient_info 决定; 首次执行为空
 
 
 class MonthlyFigures(Model):

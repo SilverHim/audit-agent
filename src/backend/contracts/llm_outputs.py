@@ -17,6 +17,7 @@ from backend.contracts.models import (
     ReasoningStep,
     ReceiptChannel,
     Shareholding,
+    TermsFacts,
     TermType,
 )
 
@@ -50,6 +51,12 @@ class ContractExtraction(Model):
     sign_date: date | None  # 签订日
     evidence: list[EvidencePointer]  # 上述字段的页码指针
     terms: list[ExtractedTerm]  # 抽出的条款
+
+
+class EngagementTermsExtraction(TermsFacts):
+    """ACC-08 第一次调用从约定书与委任文件 (多份) 抽取的事实, 字段即 models.TermsFacts (EngagementTerms 的抽取部分,
+    子模型定义在 models.py, 两边共用). 指针指向各份文件的页; 引用与语义校验见 OutputValidator (需求 R199). 第二次
+    调用的建议判断用 JudgmentDraft."""
 
 
 class ConfirmationExtraction(Model):
